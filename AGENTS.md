@@ -81,6 +81,7 @@ cargo test --workspace
 - ❌ `git clone` ra ngoài workspace.
 - ❌ Bất kỳ lệnh nào thay đổi file ngoài `D:\TrungKFC-Research\Rust\myTerm2`.
 - ❌ `rm -rf` không có guard path.
+- X `find /` hay các lệnh tương tự với đường dẫn nằm ngoài thư mục dự án
 
 ### 3.2. Quy trình thêm tính năng
 
