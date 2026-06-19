@@ -1,11 +1,12 @@
 //! [`MyTermWorkspace`] — view chính của myTerm2.
 //!
 //! Mirror `reference/.../story/examples/dock.rs` `StoryWorkspace`, thay:
-//! - center = `DockItem::tabs([TerminalPanel, ...])`
+//! - center = `DockItem::v_split([tabs([TerminalPanel, ...])])` (wrap trong
+//!   StackPanel để DockArea subscribe zoom event của center TabPanel).
 //! - right_dock = `DockItem::v_split([SessionPanel, SftpPanel])`
 //! - bỏ left_dock + bottom_dock
 //! - status bar chỉ còn Toggle Right Dock + DateTimeClock
-//! - Add Panel menu chỉ còn "New Terminal Tab"
+//! - Add Panel menu: New Terminal Tab / Add Session / Add SFTP Browser
 
 use std::{sync::Arc, time::Duration};
 
@@ -16,17 +17,19 @@ use gpui::{
 };
 use gpui_component::{
     Root,
-    dock::{ClosePanel, DockArea, DockAreaState, DockEvent, DockItem, ToggleZoom},
+    dock::{
+        ClosePanel, DockArea, DockAreaState, DockEvent, DockItem, PanelStyle, ToggleZoom,
+    },
 };
 
 use crate::{
-    actions::{AddPanel, Quit, ToggleDockToggleButton},
+    actions::{AddPanel, AddSftpBrowser, AddSession, Quit, ToggleDockToggleButton},
     layout::{statusbar, title_bar::AppTitleBar},
     state::AppState,
     views::{SessionPanel, SftpPanel, TerminalPanel},
 };
 
-const MAIN_DOCK_VERSION: usize = 1;
+const MAIN_DOCK_VERSION: usize = 2;
 const MAIN_DOCK_ID: &str = "main-dock";
 
 #[cfg(debug_assertions)]
@@ -47,8 +50,12 @@ impl MyTermWorkspace {
     /// Tạo workspace mới: load layout cũ hoặc reset về mặc định.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         AppState::init(cx);
-        let dock_area =
-            cx.new(|cx| DockArea::new(MAIN_DOCK_ID, Some(MAIN_DOCK_VERSION), window, cx));
+        // Luôn render tab bar style (kể cả khi chỉ 1 tab) thay vì simple title,
+        // để highlight/look của 1 tab giống 2+ tab.
+        let dock_area = cx.new(|cx| {
+            DockArea::new(MAIN_DOCK_ID, Some(MAIN_DOCK_VERSION), window, cx)
+                .panel_style(PanelStyle::TabBar)
+        });
         let weak_dock_area = dock_area.downgrade();
 
         match Self::load_layout(dock_area.clone(), window, cx) {
@@ -180,8 +187,19 @@ impl MyTermWorkspace {
     ) {
         let weak = dock_area.clone();
 
-        let center = DockItem::tabs(
-            vec![Arc::new(TerminalPanel::new_entity(window, cx))],
+        // Center = v_split(tabs([TerminalPanel]))
+        //
+        // Wrap tabs trong v_split (StackPanel) để DockArea subscribe được
+        // PanelEvent::ZoomIn của center TabPanel — nếu dùng bare
+        // DockItem::tabs, `set_center` không subscribe zoom event cho center,
+        // dẫn tới nút Zoom In/Out không expand full (vẫn thấy right dock).
+        let center = DockItem::v_split(
+            vec![DockItem::tabs(
+                vec![Arc::new(TerminalPanel::new_entity(window, cx))],
+                &weak,
+                window,
+                cx,
+            )],
             &weak,
             window,
             cx,
@@ -227,6 +245,46 @@ impl MyTermWorkspace {
         });
     }
 
+    /// Action handler: thêm SessionPanel mới vào right dock.
+    fn on_action_add_session(
+        &mut self,
+        _: &AddSession,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let panel: Arc<dyn gpui_component::dock::PanelView> =
+            Arc::new(SessionPanel::new_entity(window, cx));
+        self.dock_area.update(cx, |dock_area, cx| {
+            dock_area.add_panel(
+                panel,
+                gpui_component::dock::DockPlacement::Right,
+                None,
+                window,
+                cx,
+            );
+        });
+    }
+
+    /// Action handler: thêm SftpPanel mới vào right dock.
+    fn on_action_add_sftp_browser(
+        &mut self,
+        _: &AddSftpBrowser,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let panel: Arc<dyn gpui_component::dock::PanelView> =
+            Arc::new(SftpPanel::new_entity(window, cx));
+        self.dock_area.update(cx, |dock_area, cx| {
+            dock_area.add_panel(
+                panel,
+                gpui_component::dock::DockPlacement::Right,
+                None,
+                window,
+                cx,
+            );
+        });
+    }
+
     /// Action handler: toggle nút dock toggle button.
     fn on_action_toggle_dock_toggle_button(
         &mut self,
@@ -263,6 +321,8 @@ impl Render for MyTermWorkspace {
         div()
             .id("myterm-workspace")
             .on_action(cx.listener(Self::on_action_add_panel))
+            .on_action(cx.listener(Self::on_action_add_session))
+            .on_action(cx.listener(Self::on_action_add_sftp_browser))
             .on_action(cx.listener(Self::on_action_toggle_dock_toggle_button))
             .on_action(cx.listener(Self::on_action_quit))
             .relative()

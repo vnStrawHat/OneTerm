@@ -1,15 +1,20 @@
 //! [`DateTimeClock`] — đồng hồ datetime hiển thị ở góc trái status bar.
 //!
-//! `Entity` + `Render` + `Focusable`, cập nhật mỗi 1s qua `cx.spawn` timer.
+//! `Entity` + `Render` + `Focusable`, cập nhật mỗi 1s qua timer.
+//!
+//! Dùng `cx.spawn_in(window, ...)` + `window.background_executor().timer(...)`
+//! để timer fire ổn định (không phụ thuộc focus/click). Spawn trên `AsyncApp`
+//! không giữ window có thể bị drop khiến timer không fire cho đến khi view
+//! được refresh bằng click.
 
 use std::time::Duration;
 
 use chrono::Local;
 use gpui::{
-    App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
-    ParentElement, Render, Styled, Task, div,
+    App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
+    IntoElement, ParentElement, Render, Styled, Task, Window, div,
 };
-use gpui_component::ActiveTheme;
+use gpui_component::ActiveTheme as _;
 
 /// Đồng hồ hiển thị thời gian local, refresh mỗi 1 giây.
 pub struct DateTimeClock {
@@ -20,13 +25,19 @@ pub struct DateTimeClock {
 
 impl DateTimeClock {
     /// Tạo đồng hồ mới, bắt đầu timer 1s.
-    pub fn new(_window: &mut gpui::Window, cx: &mut Context<Self>) -> Self {
+    ///
+    /// NOTE: spawn trên window context (qua `cx.spawn_in`) để timer fire đều
+    /// kể cả khi view chưa được focus.
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
-        let timer = cx.spawn(async move |this, cx| {
+        let timer = cx.spawn_in(window, async move |this, window| {
             loop {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
+                window
+                    .background_executor()
+                    .timer(Duration::from_secs(1))
+                    .await;
                 if let Some(this) = this.upgrade() {
-                    this.update(cx, |this, cx| {
+                    let _ = this.update_in(window, |this, _window, cx| {
                         this.now = Local::now();
                         cx.notify();
                     });
@@ -41,7 +52,7 @@ impl DateTimeClock {
     }
 
     /// Helper tạo `Entity<Self>`.
-    pub fn new_entity(window: &mut gpui::Window, cx: &mut App) -> Entity<Self> {
+    pub fn new_entity(window: &mut Window, cx: &mut App) -> Entity<Self> {
         cx.new(|cx| Self::new(window, cx))
     }
 
@@ -57,7 +68,7 @@ impl Focusable for DateTimeClock {
 }
 
 impl Render for DateTimeClock {
-    fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("datetime-clock")
             .track_focus(&self.focus_handle)
