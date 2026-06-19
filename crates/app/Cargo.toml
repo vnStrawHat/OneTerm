@@ -1,0 +1,23 @@
+[package]
+name = "myterm2-app"
+description = "Binary entry point for myTerm2."
+publish = false
+edition.workspace = true
+
+[[bin]]
+name = "myterm2"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+myterm2-ui.workspace = true
+myterm2-core.workspace = true
+
+gpui.workspace = true
+gpui_platform.workspace = true
+gpui-component.workspace = true
+gpui-component-assets.workspace = true
+
+anyhow.workspace = true

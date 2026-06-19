@@ -1,0 +1,11 @@
+[package]
+name = "myterm2-ssh"
+description = "SSH + SFTP implementation for myTerm2 (russh)."
+publish = false
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+myterm2-core.workspace = true

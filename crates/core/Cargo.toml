@@ -1,0 +1,13 @@
+[package]
+name = "myterm2-core"
+description = "Domain model & business logic for myTerm2 (no GPUI)."
+publish = false
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true

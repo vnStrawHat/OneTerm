@@ -1,0 +1,64 @@
+[workspace]
+members = [
+    "crates/app",
+    "crates/core",
+    "crates/local",
+    "crates/ssh",
+    "crates/ui",
+]
+resolver = "2"
+
+[workspace.package]
+publish = false
+edition = "2024"
+
+[workspace.dependencies]
+# GPUI core — cùng rev, cùng monorepo (xem docs/agents/dependencies.md §1)
+gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "ea6b194db04cc7c0474851f07c7d5b7a9df6a98b" }
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "ea6b194db04cc7c0474851f07c7d5b7a9df6a98b" }
+
+# Internal crates
+myterm2-core = { path = "crates/core" }
+myterm2-ui = { path = "crates/ui" }
+
+# Async / serialization / error
+anyhow = "1"
+smol = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+
+# UI helpers
+chrono = "0.4"
+rust-i18n = "4"
+
+[workspace.lints.clippy]
+# Giữ tương thích với gpui-component upstream (xem reference/Cargo.toml)
+almost_complete_range = "allow"
+arc_with_non_send_sync = "allow"
+borrowed_box = "allow"
+dbg_macro = "deny"
+let_underscore_future = "allow"
+manual_is_multiple_of = "allow"
+map_entry = "allow"
+module_inception = "allow"
+non_canonical_partial_ord_impl = "allow"
+reversed_empty_ranges = "allow"
+single_range_in_vec_init = "allow"
+style = { level = "allow", priority = -1 }
+todo = "deny"
+type_complexity = "allow"
+useless_conversion = "allow"
+
+[profile.dev]
+codegen-units = 16
+debug = "limited"
+split-debuginfo = "unpacked"
+
+[profile.dev.package]
+gpui = { opt-level = 3 }
+gpui_platform = { opt-level = 3 }
+smol = { opt-level = 3 }

@@ -1,0 +1,11 @@
+[package]
+name = "myterm2-local"
+description = "Local shell via PTY for myTerm2 (portable-pty)."
+publish = false
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+myterm2-core.workspace = true

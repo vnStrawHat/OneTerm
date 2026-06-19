@@ -1,0 +1,9 @@
+//! Các màn hình lớn của myTerm2.
+
+pub mod session_tabs;
+pub mod sftp;
+pub mod terminal;
+
+pub use session_tabs::SessionPanel;
+pub use sftp::SftpPanel;
+pub use terminal::TerminalPanel;

@@ -1,0 +1,22 @@
+[package]
+name = "myterm2-ui"
+description = "GPUI views, layout, theme, state for myTerm2."
+publish = false
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+myterm2-core.workspace = true
+
+gpui.workspace = true
+gpui_platform.workspace = true
+gpui-component.workspace = true
+gpui-component-assets.workspace = true
+
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+chrono.workspace = true
