@@ -76,7 +76,10 @@ fn encode(
         let button_byte = x11_code.saturating_add(32) + mod_mask;
         let col_byte = col.min(255) as u8;
         let row_byte = row.min(255) as u8;
-        format!("\x1b[M{}{}{}", button_byte as char, col_byte as char, row_byte as char)
+        format!(
+            "\x1b[M{}{}{}",
+            button_byte as char, col_byte as char, row_byte as char
+        )
     }
 }
 
@@ -142,32 +145,65 @@ mod tests {
 
     #[test]
     fn sgr_press_left() {
-        let s = encode_mouse_press(0, 0, TerminalMouseButton::Left, sgr_mode(), MouseModifiers::default());
+        let s = encode_mouse_press(
+            0,
+            0,
+            TerminalMouseButton::Left,
+            sgr_mode(),
+            MouseModifiers::default(),
+        );
         assert_eq!(s, "\x1b[<0;1;1M");
     }
 
     #[test]
     fn sgr_release_left() {
-        let s = encode_mouse_release(2, 3, TerminalMouseButton::Left, sgr_mode(), MouseModifiers::default());
+        let s = encode_mouse_release(
+            2,
+            3,
+            TerminalMouseButton::Left,
+            sgr_mode(),
+            MouseModifiers::default(),
+        );
         assert_eq!(s, "\x1b[<0;4;3m");
     }
 
     #[test]
     fn sgr_press_with_ctrl() {
-        let s = encode_mouse_press(0, 0, TerminalMouseButton::Left, sgr_mode(), MouseModifiers { ctrl: true, ..Default::default() });
+        let s = encode_mouse_press(
+            0,
+            0,
+            TerminalMouseButton::Left,
+            sgr_mode(),
+            MouseModifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+        );
         assert_eq!(s, "\x1b[<16;1;1M");
     }
 
     #[test]
     fn x11_press_left() {
-        let s = encode_mouse_press(0, 0, TerminalMouseButton::Left, x11_mode(), MouseModifiers::default());
+        let s = encode_mouse_press(
+            0,
+            0,
+            TerminalMouseButton::Left,
+            x11_mode(),
+            MouseModifiers::default(),
+        );
         // button = 0+32 = 32 (space), col/row = 1+... wait col=1 → 1 as char
         assert_eq!(s, "\x1b[M\x20\x01\x01");
     }
 
     #[test]
     fn x11_release_uses_button_3() {
-        let s = encode_mouse_release(0, 0, TerminalMouseButton::Left, x11_mode(), MouseModifiers::default());
+        let s = encode_mouse_release(
+            0,
+            0,
+            TerminalMouseButton::Left,
+            x11_mode(),
+            MouseModifiers::default(),
+        );
         // x11_code = 3 → 3+32 = 35 = '#'
         assert_eq!(s, "\x1b[M\x23\x01\x01");
     }

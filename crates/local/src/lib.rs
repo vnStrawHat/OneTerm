@@ -7,6 +7,6 @@ pub mod listener;
 pub mod session;
 pub mod state;
 
-pub use myterm2_core as core;
 pub use listener::LocalListener;
+pub use myterm2_core as core;
 pub use session::{LocalSession, PtySize};

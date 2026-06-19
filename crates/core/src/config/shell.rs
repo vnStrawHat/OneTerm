@@ -220,11 +220,7 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
     // Args thêm của user (sau args mặc định).
     args.extend(cfg.args.iter().cloned());
 
-    Ok(ResolvedShell {
-        program,
-        args,
-        env,
-    })
+    Ok(ResolvedShell { program, args, env })
 }
 
 #[cfg(test)]
@@ -289,7 +285,10 @@ mod tests {
         let r = resolve_shell(&cfg).unwrap();
         // Program là cmd.exe (COMSPEC).
         assert!(
-            r.program.to_string_lossy().to_ascii_lowercase().ends_with("cmd.exe"),
+            r.program
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .ends_with("cmd.exe"),
             "cmd resolve → cmd.exe, got {:?}",
             r.program
         );

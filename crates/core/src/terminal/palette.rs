@@ -101,26 +101,74 @@ mod tests {
 
     fn pal() -> TerminalPalette {
         TerminalPalette {
-            foreground: Rgb { r: 200, g: 200, b: 200 },
-            background: Rgb { r: 20, g: 20, b: 20 },
-            cursor: Rgb { r: 255, g: 255, b: 0 },
+            foreground: Rgb {
+                r: 200,
+                g: 200,
+                b: 200,
+            },
+            background: Rgb {
+                r: 20,
+                g: 20,
+                b: 20,
+            },
+            cursor: Rgb {
+                r: 255,
+                g: 255,
+                b: 0,
+            },
             ansi: [
-                Rgb { r: 0, g: 0, b: 0 },       // 0 black
-                Rgb { r: 200, g: 0, b: 0 },     // 1 red
-                Rgb { r: 0, g: 200, b: 0 },     // 2 green
-                Rgb { r: 200, g: 200, b: 0 },   // 3 yellow
-                Rgb { r: 0, g: 0, b: 200 },     // 4 blue
-                Rgb { r: 200, g: 0, b: 200 },   // 5 magenta
-                Rgb { r: 0, g: 200, b: 200 },   // 6 cyan
-                Rgb { r: 200, g: 200, b: 200 }, // 7 white
-                Rgb { r: 100, g: 100, b: 100 }, // 8 bright black
-                Rgb { r: 255, g: 0, b: 0 },     // 9 bright red
-                Rgb { r: 0, g: 255, b: 0 },     // 10 bright green
-                Rgb { r: 255, g: 255, b: 0 },   // 11 bright yellow
-                Rgb { r: 0, g: 0, b: 255 },     // 12 bright blue
-                Rgb { r: 255, g: 0, b: 255 },   // 13 bright magenta
-                Rgb { r: 0, g: 255, b: 255 },   // 14 bright cyan
-                Rgb { r: 255, g: 255, b: 255 }, // 15 bright white
+                Rgb { r: 0, g: 0, b: 0 },   // 0 black
+                Rgb { r: 200, g: 0, b: 0 }, // 1 red
+                Rgb { r: 0, g: 200, b: 0 }, // 2 green
+                Rgb {
+                    r: 200,
+                    g: 200,
+                    b: 0,
+                }, // 3 yellow
+                Rgb { r: 0, g: 0, b: 200 }, // 4 blue
+                Rgb {
+                    r: 200,
+                    g: 0,
+                    b: 200,
+                }, // 5 magenta
+                Rgb {
+                    r: 0,
+                    g: 200,
+                    b: 200,
+                }, // 6 cyan
+                Rgb {
+                    r: 200,
+                    g: 200,
+                    b: 200,
+                }, // 7 white
+                Rgb {
+                    r: 100,
+                    g: 100,
+                    b: 100,
+                }, // 8 bright black
+                Rgb { r: 255, g: 0, b: 0 }, // 9 bright red
+                Rgb { r: 0, g: 255, b: 0 }, // 10 bright green
+                Rgb {
+                    r: 255,
+                    g: 255,
+                    b: 0,
+                }, // 11 bright yellow
+                Rgb { r: 0, g: 0, b: 255 }, // 12 bright blue
+                Rgb {
+                    r: 255,
+                    g: 0,
+                    b: 255,
+                }, // 13 bright magenta
+                Rgb {
+                    r: 0,
+                    g: 255,
+                    b: 255,
+                }, // 14 bright cyan
+                Rgb {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                }, // 15 bright white
             ],
         }
     }
@@ -128,16 +176,43 @@ mod tests {
     #[test]
     fn named_ansi_index() {
         let p = pal();
-        assert_eq!(resolve_color(&Color::Named(NamedColor::Red), &p), Rgb { r: 200, g: 0, b: 0 });
-        assert_eq!(resolve_color(&Color::Named(NamedColor::BrightBlue), &p), Rgb { r: 0, g: 0, b: 255 });
+        assert_eq!(
+            resolve_color(&Color::Named(NamedColor::Red), &p),
+            Rgb { r: 200, g: 0, b: 0 }
+        );
+        assert_eq!(
+            resolve_color(&Color::Named(NamedColor::BrightBlue), &p),
+            Rgb { r: 0, g: 0, b: 255 }
+        );
     }
 
     #[test]
     fn named_fg_bg_cursor() {
         let p = pal();
-        assert_eq!(resolve_color(&Color::Named(NamedColor::Foreground), &p), Rgb { r: 200, g: 200, b: 200 });
-        assert_eq!(resolve_color(&Color::Named(NamedColor::Background), &p), Rgb { r: 20, g: 20, b: 20 });
-        assert_eq!(resolve_color(&Color::Named(NamedColor::Cursor), &p), Rgb { r: 255, g: 255, b: 0 });
+        assert_eq!(
+            resolve_color(&Color::Named(NamedColor::Foreground), &p),
+            Rgb {
+                r: 200,
+                g: 200,
+                b: 200
+            }
+        );
+        assert_eq!(
+            resolve_color(&Color::Named(NamedColor::Background), &p),
+            Rgb {
+                r: 20,
+                g: 20,
+                b: 20
+            }
+        );
+        assert_eq!(
+            resolve_color(&Color::Named(NamedColor::Cursor), &p),
+            Rgb {
+                r: 255,
+                g: 255,
+                b: 0
+            }
+        );
     }
 
     #[test]
@@ -145,7 +220,14 @@ mod tests {
         let p = pal();
         // DimRed = mix(red(200,0,0), bg(20,20,20), 0.5) = (110, 10, 10).
         let d = resolve_color(&Color::Named(NamedColor::DimRed), &p);
-        assert_eq!(d, Rgb { r: 110, g: 10, b: 10 });
+        assert_eq!(
+            d,
+            Rgb {
+                r: 110,
+                g: 10,
+                b: 10
+            }
+        );
     }
 
     #[test]
@@ -160,26 +242,48 @@ mod tests {
     #[test]
     fn indexed_low_maps_ansi() {
         let p = pal();
-        assert_eq!(resolve_color(&Color::Indexed(2), &p), Rgb { r: 0, g: 200, b: 0 });
+        assert_eq!(
+            resolve_color(&Color::Indexed(2), &p),
+            Rgb { r: 0, g: 200, b: 0 }
+        );
     }
 
     #[test]
     fn indexed_cube_16() {
         let p = pal();
         // n=16: r=g=b=0 → (0,0,0).
-        assert_eq!(resolve_color(&Color::Indexed(16), &p), Rgb { r: 0, g: 0, b: 0 });
+        assert_eq!(
+            resolve_color(&Color::Indexed(16), &p),
+            Rgb { r: 0, g: 0, b: 0 }
+        );
         // n=21: r=0,g=0,b=5 → (0,0,255). 21-16=5 → b=5 → conv(5)=255.
-        assert_eq!(resolve_color(&Color::Indexed(21), &p), Rgb { r: 0, g: 0, b: 255 });
+        assert_eq!(
+            resolve_color(&Color::Indexed(21), &p),
+            Rgb { r: 0, g: 0, b: 255 }
+        );
         // n=196: 196-16=180 → r=5,g=0,b=0 → (255,0,0).
-        assert_eq!(resolve_color(&Color::Indexed(196), &p), Rgb { r: 255, g: 0, b: 0 });
+        assert_eq!(
+            resolve_color(&Color::Indexed(196), &p),
+            Rgb { r: 255, g: 0, b: 0 }
+        );
     }
 
     #[test]
     fn indexed_grayscale() {
         let p = pal();
         // n=232: v=8.
-        assert_eq!(resolve_color(&Color::Indexed(232), &p), Rgb { r: 8, g: 8, b: 8 });
+        assert_eq!(
+            resolve_color(&Color::Indexed(232), &p),
+            Rgb { r: 8, g: 8, b: 8 }
+        );
         // n=255: v = 8 + 10*23 = 238.
-        assert_eq!(resolve_color(&Color::Indexed(255), &p), Rgb { r: 238, g: 238, b: 238 });
+        assert_eq!(
+            resolve_color(&Color::Indexed(255), &p),
+            Rgb {
+                r: 238,
+                g: 238,
+                b: 238
+            }
+        );
     }
 }

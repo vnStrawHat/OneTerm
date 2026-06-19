@@ -7,8 +7,8 @@ pub mod config;
 pub mod error;
 pub mod terminal;
 
-pub use error::AppError;
 pub use config::{LocalShellConfig, ShellKind};
+pub use error::AppError;
 pub use terminal::{CursorBounds, SessionEvent, TerminalSession};
 
 /// Result type dùng chung cho crate `core`.

@@ -4,8 +4,8 @@
 //! `TerminalSettingsPanel` cập nhật kind → notify.
 
 use gpui::{App, AppContext, Entity, Global};
-use myterm2_core::config::ShellKind;
 use myterm2_core::LocalShellConfig;
+use myterm2_core::config::ShellKind;
 
 /// Config terminal toàn cục (shell + tùy chọn sau này: font, scrollback…).
 pub struct TerminalSettings {

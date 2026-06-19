@@ -17,13 +17,11 @@ use gpui::{
 };
 use gpui_component::{
     Root,
-    dock::{
-        ClosePanel, DockArea, DockAreaState, DockEvent, DockItem, PanelStyle, ToggleZoom,
-    },
+    dock::{ClosePanel, DockArea, DockAreaState, DockEvent, DockItem, PanelStyle, ToggleZoom},
 };
 
 use crate::{
-    actions::{AddPanel, AddSftpBrowser, AddSession, Quit, ToggleDockToggleButton},
+    actions::{AddPanel, AddSession, AddSftpBrowser, Quit, ToggleDockToggleButton},
     components::DateTimeClock,
     layout::{statusbar, title_bar::AppTitleBar},
     state::AppState,

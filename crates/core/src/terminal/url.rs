@@ -112,12 +112,13 @@ mod tests {
     use alacritty_terminal::term::cell::Cell;
 
     fn row_from_str(s: &str) -> Vec<Cell> {
-        s.chars().map(|c| {
-            let mut cell = Cell::default();
-            cell.c = c;
-            cell
-        })
-        .collect()
+        s.chars()
+            .map(|c| {
+                let mut cell = Cell::default();
+                cell.c = c;
+                cell
+            })
+            .collect()
     }
 
     #[test]

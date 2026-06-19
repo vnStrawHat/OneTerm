@@ -117,7 +117,10 @@ mod tests {
     fn osc7_bel() {
         let p = sniff(&[b"\x1b]7;file:///home/marc\x07"]).unwrap();
         assert_eq!(p, OscPayload::Cwd("file:///home/marc".into()));
-        assert_eq!(parse_cwd_url("file:///home/marc"), PathBuf::from("/home/marc"));
+        assert_eq!(
+            parse_cwd_url("file:///home/marc"),
+            PathBuf::from("/home/marc")
+        );
     }
 
     #[test]

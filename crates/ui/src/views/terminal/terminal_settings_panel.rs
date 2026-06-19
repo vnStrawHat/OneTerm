@@ -4,18 +4,17 @@
 //! `TerminalPanel` đọc khi spawn terminal mới. Custom program + font/scrollback
 //! mở rộng sau.
 
-
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, StatefulInteractiveElement as _,
-    Styled, Window, div,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render,
+    StatefulInteractiveElement as _, Styled, Window, div,
 };
 use gpui_component::{
     ActiveTheme,
     dock::{Panel, PanelControl, PanelEvent},
 };
-use myterm2_core::config::ShellKind;
 use myterm2_core::LocalShellConfig;
+use myterm2_core::config::ShellKind;
 
 use crate::state::TerminalSettings;
 
@@ -100,11 +99,7 @@ impl Render for TerminalSettingsPanel {
             let label = Self::kind_label(&kind);
             let active = current_kind == kind;
             let settings = settings.clone();
-            let bg = if active {
-                theme.primary
-            } else {
-                theme.muted
-            };
+            let bg = if active { theme.primary } else { theme.muted };
             let fg = if active {
                 theme.primary_foreground
             } else {
@@ -158,5 +153,7 @@ pub fn current_shell_config(cx: &App) -> LocalShellConfig {
 /// (dự phòng) đọc program path tuỳ chỉnh.
 #[allow(dead_code)]
 fn _custom_program(cfg: &LocalShellConfig) -> Option<String> {
-    cfg.program.as_ref().map(|p| p.to_string_lossy().into_owned())
+    cfg.program
+        .as_ref()
+        .map(|p| p.to_string_lossy().into_owned())
 }

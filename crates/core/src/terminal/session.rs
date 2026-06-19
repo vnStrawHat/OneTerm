@@ -77,6 +77,10 @@ pub trait TerminalSession: Send + Sync + 'static {
     fn selection_text(&self) -> Option<String>;
     /// Xóa selection hiện tại.
     fn clear_selection(&self);
+    /// Select toàn bộ nội dung (scrollback + visible).
+    fn select_all(&self);
+    /// Clear screen + scrollback (gửi escape sequence clear tới PTY).
+    fn clear(&self);
 
     // ── IME ─────────────────────────────────────────────────
     fn set_marked_text(&self, text: String);

@@ -37,7 +37,10 @@ const EMBEDDED_THEME_FILES: &[(&str, &str)] = &[
     ("hybrid", include_str!("../themes/hybrid.json")),
     ("jellybeans", include_str!("../themes/jellybeans.json")),
     ("kibble", include_str!("../themes/kibble.json")),
-    ("macos-classic", include_str!("../themes/macos-classic.json")),
+    (
+        "macos-classic",
+        include_str!("../themes/macos-classic.json"),
+    ),
     ("matrix", include_str!("../themes/matrix.json")),
     ("mellifluous", include_str!("../themes/mellifluous.json")),
     ("molokai", include_str!("../themes/molokai.json")),
@@ -47,7 +50,10 @@ const EMBEDDED_THEME_FILES: &[(&str, &str)] = &[
     ("twilight", include_str!("../themes/twilight.json")),
     // Zed editor default themes (Atom One palette).
     ("zed-one-dark", include_str!("../themes/zed-one-dark.json")),
-    ("zed-one-light", include_str!("../themes/zed-one-light.json")),
+    (
+        "zed-one-light",
+        include_str!("../themes/zed-one-light.json"),
+    ),
 ];
 
 /// Khởi tạo theme: nạp embedded themes + wire action `SwitchTheme` / `SwitchThemeMode`.

@@ -41,6 +41,8 @@ pub struct TerminalContent {
     pub mode: TermMode,
     /// Offset scrollback hiện tại (0 = đang ở bottom).
     pub display_offset: usize,
+    /// Tổng số dòng (scrollback + visible) — cho scrollbar.
+    pub total_lines: usize,
     /// Vùng đang chọn, nếu có.
     pub selection: Option<SelectionRange>,
     /// Kích thước grid.
@@ -92,6 +94,7 @@ impl TerminalContent {
             cursor,
             mode,
             display_offset,
+            total_lines: term.total_lines(),
             selection,
             terminal_bounds,
         }
@@ -100,7 +103,10 @@ impl TerminalContent {
     /// true nếu cursor đang hiển thị (shape ≠ Hidden).
     pub fn cursor_visible(&self) -> bool {
         // RenderableCursor.shape là CursorShape; Hidden = ẩn.
-        !matches!(self.cursor.shape, alacritty_terminal::vte::ansi::CursorShape::Hidden)
+        !matches!(
+            self.cursor.shape,
+            alacritty_terminal::vte::ansi::CursorShape::Hidden
+        )
     }
 }
 

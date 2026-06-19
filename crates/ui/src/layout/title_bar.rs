@@ -8,9 +8,9 @@
 use std::rc::Rc;
 
 use gpui::{
-    Anchor, AnyElement, App, AppContext as _, Context, Entity, FocusHandle, IntoElement,
-    InteractiveElement as _, MouseButton, ParentElement as _, Render, Styled as _, Window, div,
-    px,
+    Anchor, AnyElement, App, AppContext as _, Context, Entity, FocusHandle,
+    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Render, Styled as _,
+    Window, div, px,
 };
 use gpui_component::{
     ActiveTheme as _, IconName, Side, Sizable as _, Theme, TitleBar,
@@ -20,7 +20,7 @@ use gpui_component::{
 };
 
 use crate::actions::{
-    AddPanel, AddSftpBrowser, AddSession, SelectFont, SelectRadius, SelectScrollbarShow,
+    AddPanel, AddSession, AddSftpBrowser, SelectFont, SelectRadius, SelectScrollbarShow,
     ToggleListActiveHighlight,
 };
 
@@ -93,12 +93,22 @@ impl FontSizeSelector {
         }
     }
 
-    fn on_select_font(&mut self, font_size: &SelectFont, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_select_font(
+        &mut self,
+        font_size: &SelectFont,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         Theme::global_mut(cx).font_size = px(font_size.0 as f32);
         window.refresh();
     }
 
-    fn on_select_radius(&mut self, radius: &SelectRadius, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_select_radius(
+        &mut self,
+        radius: &SelectRadius,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         Theme::global_mut(cx).radius = px(radius.0 as f32);
         Theme::global_mut(cx).radius_lg = if cx.theme().radius > px(0.) {
             cx.theme().radius + px(2.)
@@ -212,10 +222,13 @@ pub fn add_terminal_button() -> impl IntoElement + 'static {
         .small()
         .ghost()
         .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
-            menu.menu("New Terminal Tab", Box::new(AddPanel(gpui_component::dock::DockPlacement::Center)))
-                .separator()
-                .menu("Add Session", Box::new(AddSession))
-                .menu("Add SFTP Browser", Box::new(AddSftpBrowser))
-                .separator()
+            menu.menu(
+                "New Terminal Tab",
+                Box::new(AddPanel(gpui_component::dock::DockPlacement::Center)),
+            )
+            .separator()
+            .menu("Add Session", Box::new(AddSession))
+            .menu("Add SFTP Browser", Box::new(AddSftpBrowser))
+            .separator()
         })
 }

@@ -56,7 +56,11 @@ mod tests {
 
     #[test]
     fn spec_is_app_chosen() {
-        assert!(is_app_chosen_exact_color(&Color::Spec(Rgb { r: 1, g: 2, b: 3 })));
+        assert!(is_app_chosen_exact_color(&Color::Spec(Rgb {
+            r: 1,
+            g: 2,
+            b: 3
+        })));
     }
 
     #[test]
@@ -75,14 +79,24 @@ mod tests {
     #[test]
     fn named_is_not_app_chosen() {
         assert!(!is_app_chosen_exact_color(&Color::Named(NamedColor::Red)));
-        assert!(!is_app_chosen_exact_color(&Color::Named(NamedColor::Foreground)));
+        assert!(!is_app_chosen_exact_color(&Color::Named(
+            NamedColor::Foreground
+        )));
     }
 
     #[test]
     fn default_bg_is_named_background() {
-        assert!(is_default_background_color(&Color::Named(NamedColor::Background)));
-        assert!(!is_default_background_color(&Color::Named(NamedColor::Foreground)));
-        assert!(!is_default_background_color(&Color::Spec(Rgb { r: 0, g: 0, b: 0 })));
+        assert!(is_default_background_color(&Color::Named(
+            NamedColor::Background
+        )));
+        assert!(!is_default_background_color(&Color::Named(
+            NamedColor::Foreground
+        )));
+        assert!(!is_default_background_color(&Color::Spec(Rgb {
+            r: 0,
+            g: 0,
+            b: 0
+        })));
     }
 
     #[test]

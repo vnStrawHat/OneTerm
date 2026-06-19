@@ -15,12 +15,15 @@ use gpui::{
     Styled as _, Window, div, point, px, size,
 };
 use gpui_component::ActiveTheme as _;
+use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
+use gpui_component::scroll::Scrollbar;
 
-use myterm2_core::terminal::{encode_key, KeyMods, KeySpec, NamedKey, TerminalMouseButton};
+use myterm2_core::terminal::{KeyMods, KeySpec, NamedKey, TerminalMouseButton, encode_key};
 use myterm2_core::{SessionEvent, TerminalSession};
 
 use super::terminal_element::{GridMetrics, TerminalElement};
-use super::theme::{build_terminal_theme, TerminalTheme};
+use super::terminal_scrollbar::TerminalScrollHandle;
+use super::theme::{TerminalTheme, build_terminal_theme};
 
 /// View render 1 terminal session (local hoặc ssh — qua `dyn TerminalSession`).
 pub struct LocalTerminalView {
@@ -31,6 +34,8 @@ pub struct LocalTerminalView {
     line_height_factor: f32,
     /// Sink layout metrics (Element ghi ở prepaint, mouse handler đọc).
     metrics: Rc<RefCell<GridMetrics>>,
+    /// Scrollbar handle — cache scrollback state, apply drag → session.
+    scroll_handle: TerminalScrollHandle,
 }
 
 impl LocalTerminalView {
@@ -46,6 +51,8 @@ impl LocalTerminalView {
         let font_size = theme.mono_font_size;
 
         // Subscribe session events → cx.notify (re-render) + OSC 52 clipboard.
+        // Burst-coalescing: khi output dồn (vd `cat` file lớn), nhiều Wakeup
+        // liên tiếp → chỉ notify 1 lần, drain các Output event còn trong queue.
         let rx = session.read(cx).subscribe();
         cx.spawn(async move |this, cx| {
             while let Ok(ev) = rx.recv().await {
@@ -59,6 +66,34 @@ impl LocalTerminalView {
                         let _ = this.update(cx, |_, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
                         });
+                    }
+                    SessionEvent::Output => {
+                        // Notify 1 lần rồi drain tất cả Output event đang chờ
+                        // trong queue → tránh re-render từng event khi `cat`
+                        // file lớn (hàng nghìn Wakeup trong vài ms).
+                        let _ = this.update(cx, |_, cx| cx.notify());
+                        loop {
+                            match rx.try_recv() {
+                                Ok(SessionEvent::Output) => {} // coalesced
+                                Ok(SessionEvent::Clipboard(Some(t))) => {
+                                    let _ = this.update(cx, |_, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(t));
+                                    });
+                                }
+                                Ok(SessionEvent::Clipboard(None)) => {
+                                    let _ = this.update(cx, |_, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            String::new(),
+                                        ));
+                                    });
+                                }
+                                Ok(_) => {
+                                    // Title/Cwd/Exited/Closed → notify.
+                                    let _ = this.update(cx, |_, cx| cx.notify());
+                                }
+                                Err(_) => break,
+                            }
+                        }
                     }
                     _ => {
                         let _ = this.update(cx, |_, cx| cx.notify());
@@ -75,6 +110,7 @@ impl LocalTerminalView {
             font_size,
             line_height_factor: 1.2,
             metrics: Rc::new(RefCell::new(GridMetrics::default())),
+            scroll_handle: TerminalScrollHandle::new(),
         }
     }
 
@@ -92,10 +128,11 @@ impl LocalTerminalView {
             "delete" => Some(NamedKey::Delete),
             "tab" => Some(NamedKey::Tab),
             "escape" => Some(NamedKey::Escape),
-            "arrowup" => Some(NamedKey::ArrowUp),
-            "arrowdown" => Some(NamedKey::ArrowDown),
-            "arrowleft" => Some(NamedKey::ArrowLeft),
-            "arrowright" => Some(NamedKey::ArrowRight),
+            // GPUI uses "up"/"down"/"left"/"right" (not "arrowup"/...).
+            "up" => Some(NamedKey::ArrowUp),
+            "down" => Some(NamedKey::ArrowDown),
+            "left" => Some(NamedKey::ArrowLeft),
+            "right" => Some(NamedKey::ArrowRight),
             "home" => Some(NamedKey::Home),
             "end" => Some(NamedKey::End),
             "pageup" => Some(NamedKey::PageUp),
@@ -179,9 +216,29 @@ impl Render for LocalTerminalView {
         let font = self.font();
         let metrics = self.metrics.clone();
 
+        // Cập nhật scroll handle từ snapshot (frame trước — metrics đã có
+        // line_height từ prepaint lần trước).
+        let snap = session.read(cx).snapshot();
+        let m = *metrics.borrow();
+        self.scroll_handle.update(
+            snap.total_lines,
+            snap.terminal_bounds.num_lines,
+            snap.display_offset,
+            f32::from(m.line_height),
+        );
+
+        // Áp dụng future_display_offset từ scrollbar drag.
+        if let Some(new_offset) = self.scroll_handle.take_future_display_offset() {
+            let delta = new_offset as i32 - snap.display_offset as i32;
+            if delta != 0 {
+                session.update(cx, |s, _| s.scroll(delta));
+            }
+        }
+
         div()
             .id("local-terminal-view")
             .size_full()
+            .relative()
             .track_focus(&self.focus)
             .child(TerminalElement::new(
                 session.clone(),
@@ -194,6 +251,8 @@ impl Render for LocalTerminalView {
                 cx.entity(),
                 self.focus.clone(),
             ))
+            // Scrollbar dọc — overlay absolute, tự ẩn khi không có scrollback.
+            .child(Scrollbar::vertical(&self.scroll_handle))
             .on_mouse_down(MouseButton::Left, {
                 let s = session.clone();
                 let m = metrics.clone();
@@ -215,7 +274,12 @@ impl Render for LocalTerminalView {
                         }
                     }
                     s.update(cx, |s, _| {
-                        s.mouse_down(row, col, map_button(e.button), Self::sel_type(e.click_count, e.modifiers.alt))
+                        s.mouse_down(
+                            row,
+                            col,
+                            map_button(e.button),
+                            Self::sel_type(e.click_count, e.modifiers.alt),
+                        )
                     });
                 }
             })
@@ -269,9 +333,13 @@ impl Render for LocalTerminalView {
                     let line_h = f32::from(m.borrow().line_height);
                     let delta_y = match e.delta {
                         ScrollDelta::Pixels(p) => {
-                            if line_h > 0.0 { -f32::from(p.y) / line_h } else { 0.0 }
+                            if line_h > 0.0 {
+                                f32::from(p.y) / line_h
+                            } else {
+                                0.0
+                            }
                         }
-                        ScrollDelta::Lines(l) => -l.y,
+                        ScrollDelta::Lines(l) => l.y,
                     };
                     if delta_y.abs() >= 0.001 {
                         s.update(cx, |s, _| s.wheel(delta_y as f64, row, col));
@@ -325,6 +393,58 @@ impl Render for LocalTerminalView {
                         return;
                     };
                     s.update(cx, |s, _| s.write(&bytes));
+                    // Ngăn GPUI xử lý tiếp (vd Tab = focus traversal, arrow =
+                    // scroll). Nếu không stop_propagation, focus sẽ bị chuyển đi.
+                    cx.stop_propagation();
+                }
+            })
+            // Right-click context menu: Copy / Paste / Select All / Clear.
+            .context_menu({
+                let session = session.clone();
+                move |menu, _window, cx| {
+                    let has_selection = session
+                        .read(cx)
+                        .selection_text()
+                        .map(|t| !t.is_empty())
+                        .unwrap_or(false);
+
+                    menu.item(
+                        PopupMenuItem::new("Copy")
+                            .disabled(!has_selection)
+                            .on_click({
+                                let s = session.clone();
+                                move |_, _, cx| {
+                                    if let Some(text) = s.read(cx).selection_text() {
+                                        if !text.is_empty() {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(text));
+                                        }
+                                    }
+                                }
+                            }),
+                    )
+                    .item(PopupMenuItem::new("Paste").on_click({
+                        let s = session.clone();
+                        move |_, _, cx| {
+                            if let Some(item) = cx.read_from_clipboard() {
+                                if let Some(text) = item.text() {
+                                    s.update(cx, |s, _| s.write(text.as_bytes()));
+                                }
+                            }
+                        }
+                    }))
+                    .separator()
+                    .item(PopupMenuItem::new("Select All").on_click({
+                        let s = session.clone();
+                        move |_, _, cx| {
+                            s.update(cx, |s, _| s.select_all());
+                        }
+                    }))
+                    .item(PopupMenuItem::new("Clear").on_click({
+                        let s = session.clone();
+                        move |_, _, cx| {
+                            s.update(cx, |s, _| s.clear());
+                        }
+                    }))
                 }
             })
     }
@@ -356,7 +476,10 @@ impl EntityInputHandler for LocalTerminalView {
         if mode.contains(TermMode::ALT_SCREEN) {
             None
         } else {
-            Some(UTF16Selection { range: (0..0), reversed: false })
+            Some(UTF16Selection {
+                range: (0..0),
+                reversed: false,
+            })
         }
     }
 
@@ -431,10 +554,7 @@ impl EntityInputHandler for LocalTerminalView {
         None
     }
 
-    fn accepts_text_input(&self,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> bool {
+    fn accepts_text_input(&self, _window: &mut Window, _cx: &mut Context<Self>) -> bool {
         true
     }
 }

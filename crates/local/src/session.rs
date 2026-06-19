@@ -19,15 +19,15 @@ use alacritty_terminal::tty::{self, Options, Shell};
 use async_channel::Receiver;
 
 use myterm2_core::config::resolve_shell;
-use myterm2_core::terminal::mouse_encode::{
-    encode_mouse_move, encode_mouse_press, encode_mouse_release, encode_wheel_event,
-    MouseModifiers, TerminalMouseButton,
-};
 use myterm2_core::terminal::TerminalContent;
+use myterm2_core::terminal::mouse_encode::{
+    MouseModifiers, TerminalMouseButton, encode_mouse_move, encode_mouse_press,
+    encode_mouse_release, encode_wheel_event,
+};
 use myterm2_core::{AppError, CursorBounds, LocalShellConfig, SessionEvent, TerminalSession};
 
 use crate::listener::LocalListener;
-use crate::state::{new_shared, SharedState};
+use crate::state::{SharedState, new_shared};
 
 /// Kích thước PTY ban đầu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,7 +104,11 @@ impl LocalSession {
             scrolling_history: 10_000,
             ..Default::default()
         };
-        let term = Arc::new(FairMutex::new(Term::new(term_config, &size, listener.clone())));
+        let term = Arc::new(FairMutex::new(Term::new(
+            term_config,
+            &size,
+            listener.clone(),
+        )));
 
         let event_loop = EventLoop::new(term.clone(), listener.clone(), pty, false, false)
             .map_err(|e| AppError::msg(e.to_string()))?;
@@ -190,9 +194,10 @@ impl TerminalSession for LocalSession {
 
     fn resize(&self, rows: u16, cols: u16) {
         self.listener.pty_resize(rows, cols);
-        self.term
-            .lock()
-            .resize(TermSize { cols: cols as usize, lines: rows as usize });
+        self.term.lock().resize(TermSize {
+            cols: cols as usize,
+            lines: rows as usize,
+        });
     }
 
     fn scroll(&self, delta: i32) {
@@ -206,7 +211,13 @@ impl TerminalSession for LocalSession {
     fn mouse_down(&self, row: f32, col: f32, button: TerminalMouseButton, sel: SelectionType) {
         let mode = self.mode();
         if mode.intersects(TermMode::MOUSE_MODE) {
-            let s = encode_mouse_press(row as usize, col as usize, button, mode, MouseModifiers::default());
+            let s = encode_mouse_press(
+                row as usize,
+                col as usize,
+                button,
+                mode,
+                MouseModifiers::default(),
+            );
             self.write(s.as_bytes());
         } else {
             self.start_selection(row, col, sel);
@@ -216,11 +227,23 @@ impl TerminalSession for LocalSession {
     fn mouse_move(&self, row: f32, col: f32) {
         let mode = self.mode();
         if mode.contains(TermMode::MOUSE_MOTION) {
-            let s = encode_mouse_move(row as usize, col as usize, None, mode, MouseModifiers::default());
+            let s = encode_mouse_move(
+                row as usize,
+                col as usize,
+                None,
+                mode,
+                MouseModifiers::default(),
+            );
             self.write(s.as_bytes());
         } else if mode.contains(TermMode::MOUSE_DRAG) {
             // Button held không track ở trait signature — report hover (None).
-            let s = encode_mouse_move(row as usize, col as usize, None, mode, MouseModifiers::default());
+            let s = encode_mouse_move(
+                row as usize,
+                col as usize,
+                None,
+                mode,
+                MouseModifiers::default(),
+            );
             self.write(s.as_bytes());
         } else if !mode.intersects(TermMode::MOUSE_MODE) {
             self.update_selection(row, col);
@@ -230,7 +253,13 @@ impl TerminalSession for LocalSession {
     fn mouse_up(&self, row: f32, col: f32, button: TerminalMouseButton) {
         let mode = self.mode();
         if mode.intersects(TermMode::MOUSE_MODE) {
-            let s = encode_mouse_release(row as usize, col as usize, button, mode, MouseModifiers::default());
+            let s = encode_mouse_release(
+                row as usize,
+                col as usize,
+                button,
+                mode,
+                MouseModifiers::default(),
+            );
             self.write(s.as_bytes());
         }
         // Selection giữ nguyên để copy (clear khi click elsewhere — UI lo).
@@ -246,7 +275,13 @@ impl TerminalSession for LocalSession {
         if display_offset > 0 {
             self.scroll(scroll_delta);
         } else if mode.intersects(TermMode::MOUSE_MODE) {
-            let s = encode_wheel_event(row as usize, col as usize, delta_y, mode, MouseModifiers::default());
+            let s = encode_wheel_event(
+                row as usize,
+                col as usize,
+                delta_y,
+                mode,
+                MouseModifiers::default(),
+            );
             self.write(s.as_bytes());
         } else if mode.contains(TermMode::ALT_SCREEN) {
             // Alt-screen: wheel → arrow keys (app scroll, vd less/man).
@@ -272,6 +307,21 @@ impl TerminalSession for LocalSession {
 
     fn clear_selection(&self) {
         self.term.lock().selection = None;
+    }
+
+    fn select_all(&self) {
+        let mut term = self.term.lock();
+        let start = Point::new(term.topmost_line(), Column(0));
+        let end = Point::new(term.bottommost_line(), term.last_column());
+        let mut sel = Selection::new(SelectionType::Simple, start, Side::Left);
+        sel.update(end, Side::Right);
+        term.selection = Some(sel);
+    }
+
+    fn clear(&self) {
+        // Escape: clear visible screen + scrollback + home cursor.
+        self.write(b"\x1b[3J\x1b[2J\x1b[H");
+        self.clear_selection();
     }
 
     // ── IME ──────────────────────────────────────────────────────────
@@ -497,6 +547,9 @@ mod tests {
             found = text.contains(needle);
         }
         s.close();
-        assert!(found, "`echo myterm2_e2e` không xuất hiện trong snapshot sau 6s");
+        assert!(
+            found,
+            "`echo myterm2_e2e` không xuất hiện trong snapshot sau 6s"
+        );
     }
 }

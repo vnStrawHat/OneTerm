@@ -8,28 +8,92 @@ use alacritty_terminal::vte::ansi::{Color, Rgb as VteRgb};
 use gpui::{Hsla, Rgba};
 use gpui_component::Theme;
 
-use myterm2_core::terminal::{resolve_color, TerminalPalette};
+use myterm2_core::terminal::{TerminalPalette, resolve_color};
 
 /// ANSI 16-color palette cố định (GNOME/Tango default) — đọc tốt trên dark &
 /// light theme. bg/fg/cursor lấy từ active theme. (Sau này có thể derive
 /// per-theme nếu muốn tinh chỉnh.)
 const ANSI_16: [VteRgb; 16] = [
-    VteRgb { r: 0x00, g: 0x00, b: 0x00 }, // 0 black
-    VteRgb { r: 0xcc, g: 0x00, b: 0x00 }, // 1 red
-    VteRgb { r: 0x4e, g: 0x9a, b: 0x06 }, // 2 green
-    VteRgb { r: 0xc4, g: 0xa0, b: 0x00 }, // 3 yellow
-    VteRgb { r: 0x34, g: 0x65, b: 0xa4 }, // 4 blue
-    VteRgb { r: 0x75, g: 0x50, b: 0x7b }, // 5 magenta
-    VteRgb { r: 0x06, g: 0x98, b: 0x9a }, // 6 cyan
-    VteRgb { r: 0xd3, g: 0xd7, b: 0xcf }, // 7 white
-    VteRgb { r: 0x55, g: 0x57, b: 0x53 }, // 8 bright black
-    VteRgb { r: 0xef, g: 0x29, b: 0x29 }, // 9 bright red
-    VteRgb { r: 0x8a, g: 0xe2, b: 0x34 }, // 10 bright green
-    VteRgb { r: 0xfc, g: 0xe9, b: 0x4f }, // 11 bright yellow
-    VteRgb { r: 0x72, g: 0x9f, b: 0xcf }, // 12 bright blue
-    VteRgb { r: 0xad, g: 0x7f, b: 0xa8 }, // 13 bright magenta
-    VteRgb { r: 0x34, g: 0xe2, b: 0xe2 }, // 14 bright cyan
-    VteRgb { r: 0xee, g: 0xee, b: 0xec }, // 15 bright white
+    VteRgb {
+        r: 0x00,
+        g: 0x00,
+        b: 0x00,
+    }, // 0 black
+    VteRgb {
+        r: 0xcc,
+        g: 0x00,
+        b: 0x00,
+    }, // 1 red
+    VteRgb {
+        r: 0x4e,
+        g: 0x9a,
+        b: 0x06,
+    }, // 2 green
+    VteRgb {
+        r: 0xc4,
+        g: 0xa0,
+        b: 0x00,
+    }, // 3 yellow
+    VteRgb {
+        r: 0x34,
+        g: 0x65,
+        b: 0xa4,
+    }, // 4 blue
+    VteRgb {
+        r: 0x75,
+        g: 0x50,
+        b: 0x7b,
+    }, // 5 magenta
+    VteRgb {
+        r: 0x06,
+        g: 0x98,
+        b: 0x9a,
+    }, // 6 cyan
+    VteRgb {
+        r: 0xd3,
+        g: 0xd7,
+        b: 0xcf,
+    }, // 7 white
+    VteRgb {
+        r: 0x55,
+        g: 0x57,
+        b: 0x53,
+    }, // 8 bright black
+    VteRgb {
+        r: 0xef,
+        g: 0x29,
+        b: 0x29,
+    }, // 9 bright red
+    VteRgb {
+        r: 0x8a,
+        g: 0xe2,
+        b: 0x34,
+    }, // 10 bright green
+    VteRgb {
+        r: 0xfc,
+        g: 0xe9,
+        b: 0x4f,
+    }, // 11 bright yellow
+    VteRgb {
+        r: 0x72,
+        g: 0x9f,
+        b: 0xcf,
+    }, // 12 bright blue
+    VteRgb {
+        r: 0xad,
+        g: 0x7f,
+        b: 0xa8,
+    }, // 13 bright magenta
+    VteRgb {
+        r: 0x34,
+        g: 0xe2,
+        b: 0xe2,
+    }, // 14 bright cyan
+    VteRgb {
+        r: 0xee,
+        g: 0xee,
+        b: 0xec,
+    }, // 15 bright white
 ];
 
 /// Theme terminal đã build sẵn palette + bg/fg (Hsla) + ngưỡng contrast.
@@ -40,6 +104,8 @@ pub struct TerminalTheme {
     pub bg: Hsla,
     /// FG mặc định (theme foreground).
     pub fg: Hsla,
+    /// Màu nền selection (highlight text đang chọn).
+    pub selection: Hsla,
     /// Ngưỡng contrast tối thiểu (WCAG, mặc định 4.5 ≈ AA).
     pub min_contrast: f32,
 }
@@ -65,6 +131,7 @@ pub fn build_terminal_theme(theme: &Theme) -> TerminalTheme {
         palette,
         bg,
         fg,
+        selection: theme.selection,
         min_contrast: 4.5,
     }
 }
@@ -180,24 +247,49 @@ mod tests {
 
     fn pal() -> TerminalPalette {
         TerminalPalette {
-            foreground: VteRgb { r: 200, g: 200, b: 200 },
-            background: VteRgb { r: 20, g: 20, b: 20 },
-            cursor: VteRgb { r: 255, g: 255, b: 0 },
+            foreground: VteRgb {
+                r: 200,
+                g: 200,
+                b: 200,
+            },
+            background: VteRgb {
+                r: 20,
+                g: 20,
+                b: 20,
+            },
+            cursor: VteRgb {
+                r: 255,
+                g: 255,
+                b: 0,
+            },
             ansi: ANSI_16,
         }
     }
 
     #[test]
     fn rgb_roundtrip() {
-        let c = VteRgb { r: 12, g: 34, b: 56 };
+        let c = VteRgb {
+            r: 12,
+            g: 34,
+            b: 56,
+        };
         let rgba = rgba_from_vte(c);
         assert_eq!(vte_from_rgba(rgba), c);
     }
 
     #[test]
     fn resolve_named_red_to_hsla() {
-        let t = TerminalTheme { palette: pal(), bg: Hsla::black(), fg: Hsla::white(), min_contrast: 4.5 };
-        let h = resolve_cell_color(&Color::Named(alacritty_terminal::vte::ansi::NamedColor::Red), &t);
+        let t = TerminalTheme {
+            palette: pal(),
+            bg: Hsla::black(),
+            fg: Hsla::white(),
+            min_contrast: 4.5,
+            selection: gpui::hsla(0.6, 0.5, 0.5, 0.3),
+        };
+        let h = resolve_cell_color(
+            &Color::Named(alacritty_terminal::vte::ansi::NamedColor::Red),
+            &t,
+        );
         // Red ANSI = #cc0000 → r≈0.8.
         let rgba = h.to_rgb();
         assert!((rgba.r - 0xCC as f32 / 255.0).abs() < 0.01);
@@ -205,7 +297,13 @@ mod tests {
 
     #[test]
     fn resolve_spec_truecolor_passthrough() {
-        let t = TerminalTheme { palette: pal(), bg: Hsla::black(), fg: Hsla::white(), min_contrast: 4.5 };
+        let t = TerminalTheme {
+            palette: pal(),
+            bg: Hsla::black(),
+            fg: Hsla::white(),
+            min_contrast: 4.5,
+            selection: gpui::hsla(0.6, 0.5, 0.5, 0.3),
+        };
         let h = resolve_cell_color(&Color::Spec(VteRgb { r: 1, g: 2, b: 3 }), &t);
         let rgba = h.to_rgb();
         assert!((rgba.r - 1.0 / 255.0).abs() < 0.01);
