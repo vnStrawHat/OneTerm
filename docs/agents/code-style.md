@@ -53,7 +53,7 @@ pub trait TerminalSession: Send + Sync {
 }
 ```
 
-- `ui` chỉ biết trait này, không biết `russh` hay `portable-pty`.
+- `ui` chỉ biết trait này, không biết `russh` hay `alacritty_terminal::tty`.
 
 ## 5. Error handling
 

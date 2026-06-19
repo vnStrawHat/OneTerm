@@ -70,11 +70,13 @@ myTerm2/
 │   │       ├── known_hosts.rs      # OpenSSH known_hosts parser
 │   │       └── auth.rs             # password / pubkey / agent
 │   │
-│   ├── local/                      # Local shell qua PTY
+│   ├── local/                      # Local shell qua PTY (alacritty_terminal::tty)
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       └── shell.rs            # portable-pty wrapper
+│   │       ├── session.rs          # LocalSession: tty::new + EventLoop + snapshot
+│   │       ├── listener.rs         # LocalListener: EventListener
+│   │       └── shell.rs            # resolve_shell (chcp, COMSPEC, pwsh detect)
 │   │
 │   └── ui/                         # Toàn bộ GPUI + gpui-component
 │       ├── Cargo.toml
@@ -161,7 +163,7 @@ myTerm2/
 | `app` | `ui`, `ssh`, `local`, `core` | Binary entry point. Wire up state, mở window, kết nối event. |
 | `core` | _(không — leaf crate)_ | Domain types, traits (`TerminalSession`, `FileTransfer`), `AppError`. Không phụ thuộc `gpui`. |
 | `ssh` | `core` | Triển khai `russh`: client, channel, SFTP, known_hosts, auth. Implement `TerminalSession` + `FileTransfer`. |
-| `local` | `core` | Triển khai PTY (`portable-pty`). Implement `TerminalSession`. |
+| `local` | `core` | Triển khai PTY qua `alacritty_terminal::tty` + `EventLoop` (ConPTY trên Windows). Implement `TerminalSession`. Shell `cmd`/`powershell`/`pwsh`/custom config được. Xem [`docs/terminal-backend.md`](../terminal-backend.md). |
 | `ui` | `core` _(không `ssh`/`local`)_ | Toàn bộ gpui: view, layout, theme, state toàn cục. Giao tiếp với `ssh`/`local` qua trait. |
 
 > 🔗 **Quy tắc phụ thuộc**: `app → {ui, ssh, local, core}`, `ui → core`, `ssh → core`, `local → core`. Không có cycle, không peer-to-peer giữa `ssh` và `local`.

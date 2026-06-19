@@ -1,6 +1,6 @@
 [package]
 name = "myterm2-local"
-description = "Local shell via PTY for myTerm2 (portable-pty)."
+description = "Local shell via PTY for myTerm2 (alacritty_terminal::tty)."
 publish = false
 edition.workspace = true
 

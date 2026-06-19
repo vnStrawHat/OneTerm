@@ -46,8 +46,8 @@ gpui-component.workspace = true
 | Mục đích | Crate khuyến nghị |
 |---|---|
 | SSH protocol | `russh` + `russh-sftp` |
-| PTY (local shell) | `portable-pty` |
-| Terminal parser / grid | `alacritty_terminal` |
+| PTY local shell | `alacritty_terminal::tty` (KHÔNG dùng `portable-pty` — quyết định thiết kế, xem [`docs/terminal-backend.md`](../terminal-backend.md)) |
+| Terminal parser / grid | `alacritty_terminal` (lấy từ Zed repo cùng rev, bản patched có `TerminalContent`/`display_iter`) |
 | Async runtime (re-export) | `smol` / `futures` (đã có sẵn trong gpui) |
 | Serialization | `serde`, `serde_json`, `toml` |
 | Storage (host list, settings) | `directories` (XDG / AppData) |
@@ -137,7 +137,7 @@ grep -rn "Button::new" reference/gpui-component/examples/
 Chỉ dùng `web_search` / `fetch_content` / `code_search` cho gpui-component khi:
 
 - **Tìm GitHub issue / PR cụ thể** (vd. biết số #2484 → search để đọc full thread).
-- **Tra doc rust crate khác** (vd. `russh`, `portable-pty`, `alacritty_terminal`) — KHÔNG thuộc gpui-component.
+- **Tra doc rust crate khác** (vd. `russh`, `alacritty_terminal`, `tokio`) — KHÔNG thuộc gpui-component.
 - **Reference thiếu thông tin** (hiếm, vì reference là mirror đầy đủ).
 
 Khi dùng web search cho gpui-component, **luôn ghi rõ trong response** lý do tại sao không tra trong reference.

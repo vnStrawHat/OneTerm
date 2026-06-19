@@ -168,6 +168,7 @@ Nếu một trong ba lệnh trên fail → sửa trước khi báo cáo hoàn th
 | Cấu trúc dự án (cây thư mục, quy tắc, dependency graph) | [`docs/agents/structure.md`](docs/agents/structure.md) |
 | Quy tắc code (style, GPUI, async, error) | [`docs/agents/code-style.md`](docs/agents/code-style.md) |
 | Rev lock, dependencies, reference-first | [`docs/agents/dependencies.md`](docs/agents/dependencies.md) |
+| **Thiết kế terminal backend** (local + ssh, render alacritty) | [`docs/terminal-backend.md`](docs/terminal-backend.md) |
 | API overview gpui-component | `reference/gpui-component/CLAUDE.md` |
 | Component list & source | `reference/gpui-component/crates/ui/src/` |
 | Ví dụ app đơn giản | `reference/gpui-component/examples/hello_world/` |
