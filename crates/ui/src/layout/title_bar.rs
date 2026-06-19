@@ -62,6 +62,8 @@ impl AppTitleBar {
 impl Render for AppTitleBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         TitleBar::new()
+            // Sync border bottom color với Dock border (cx.theme().border)
+            .border_color(cx.theme().border)
             // left side
             .child(div().flex().items_center().child(self.app_menu_bar.clone()))
             .child(

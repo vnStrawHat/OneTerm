@@ -24,6 +24,7 @@ use gpui_component::{
 
 use crate::{
     actions::{AddPanel, AddSftpBrowser, AddSession, Quit, ToggleDockToggleButton},
+    components::DateTimeClock,
     layout::{statusbar, title_bar::AppTitleBar},
     state::AppState,
     views::{SessionPanel, SftpPanel, TerminalPanel},
@@ -41,6 +42,9 @@ const STATE_FILE: &str = "docks.json";
 pub struct MyTermWorkspace {
     pub title_bar: Entity<AppTitleBar>,
     pub dock_area: Entity<DockArea>,
+    /// Đồng hồ datetime — tạo 1 lần để timer 1s fire ổn định, không bị drop
+    /// khi workspace re-render (nếu tạo mới mỗi render, timer Task bị drop).
+    pub clock: Entity<DateTimeClock>,
     last_layout_state: Option<DockAreaState>,
     toggle_button_visible: bool,
     _save_layout_task: Option<Task<()>>,
@@ -94,9 +98,14 @@ impl MyTermWorkspace {
                 .child(|_window, _cx| crate::layout::title_bar::add_terminal_button())
         });
 
+        // Tạo clock entity 1 lần duy nhất — timer spawn_in sẽ fire đều mỗi 1s
+        // vì entity được giữ bởi workspace, không bị drop khi re-render.
+        let clock = DateTimeClock::new_entity(window, cx);
+
         Self {
             title_bar,
             dock_area,
+            clock,
             last_layout_state: None,
             toggle_button_visible: true,
             _save_layout_task: None,
@@ -331,7 +340,12 @@ impl Render for MyTermWorkspace {
             .flex_col()
             .child(self.title_bar.clone())
             .child(div().flex_1().min_h_0().child(self.dock_area.clone()))
-            .child(statusbar::build_status_bar(&self.dock_area, window, cx))
+            .child(statusbar::build_status_bar(
+                &self.dock_area,
+                self.clock.clone(),
+                window,
+                cx,
+            ))
             .children(sheet_layer)
             .children(dialog_layer)
             .children(notification_layer)

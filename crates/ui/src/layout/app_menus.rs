@@ -93,11 +93,6 @@ fn build_menus(title: impl Into<SharedString>, cx: &App) -> Vec<Menu> {
             disabled: false,
         },
         Menu {
-            name: "Window".into(),
-            items: vec![],
-            disabled: false,
-        },
-        Menu {
             name: "Help".into(),
             items: vec![MenuItem::action("About myTerm2", About)],
             disabled: false,
