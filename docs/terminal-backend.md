@@ -17,8 +17,9 @@
 > 1. **Local và SSH độc lập hoàn toàn** — không share trait pump, không biết nhau.
 > 2. **Render dùng chung `alacritty_terminal`** qua một custom GPUI `Element`.
 > 3. **Local dùng `alacritty_terminal::tty` + `EventLoop`** (không dùng `portable-pty`).
-> 4. **`alacritty_terminal` lấy từ Zed repo cùng rev** với `gpui` (bản patched có
->    `TerminalContent`/`display_iter`/`content()`).
+> 4. **`alacritty_terminal` lấy từ fork `zed-industries/alacritty`** @ rev `fcf32feacb367b75ec84dd40f041e4fd411d3cc1`
+>    (bản patched có `TerminalContent`/`display_iter`/`content()`). Đây là rev mà Zed
+>    dùng cho `gpui` rev `1d217ee39…`, nhưng repo riêng — không phải monorepo zed.
 > 5. **Concurrency model của alacritty**: `Arc<FairMutex<Term<EP>>>` + snapshot.
 > 6. **Kit thuần** (`core`) không phụ thuộc GPUI.
 
@@ -33,7 +34,7 @@
 | 3 | Render dùng chung | Một `TerminalElement` vẽ grid cho cả local và ssh — chỉ cần `&TerminalContent`. |
 | 4 | Snapshot, không lock-while-paint | Pump cập nhật snapshot; render đọc snapshot, không giữ `FairMutex` khi vẽ. |
 | 5 | Windows-first | Local ưu tiên ConPTY; shell `cmd`/`pwsh`/`powershell` config được. |
-| 6 | Rev lock nghiêm ngặt | `gpui` + `gpui_platform` + `alacritty_terminal` cùng rev Zed. |
+| 6 | Rev lock nghiêm ngặt | `gpui` + `gpui_platform` cùng rev monorepo zed; `alacritty_terminal` fork `zed-industries/alacritty` rev `fcf32fe…`. |
 
 ---
 
@@ -90,16 +91,18 @@
 
 ```toml
 # workspace Cargo.toml — thêm vào [workspace.dependencies]
-alacritty_terminal = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
+alacritty_terminal = { git = "https://github.com/zed-industries/alacritty", rev = "fcf32feacb367b75ec84dd40f041e4fd411d3cc1" }
 async-channel = "2"      # event sub (không tokio lộ ra)
 russh = "0.46"
 russh-keys = "0.46"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "io-util", "process", "net", "macros"] }
 ```
 
-> ⚠️ **Bắt buộc**: `alacritty_terminal` cùng rev `1d217ee39…` với `gpui`. Dùng crates.io
-> `0.26` sẽ **thiếu** `TerminalContent`/`display_iter`/`content()`/`Block` mà render cần
-> → không compile. Khi đổi rev `gpui` → đổi luôn `alacritty_terminal` (và `gpui_platform`).
+> ⚠️ **Bắt buộc**: `alacritty_terminal` lấy từ fork `zed-industries/alacritty` @
+> rev `fcf32fe…` (rev mà Zed dùng cho `gpui` rev `1d217ee39…`). KHÔNG phải monorepo
+> zed. Dùng crates.io `0.26` sẽ **thiếu** `TerminalContent`/`display_iter`/`content()`/`Block`
+> mà render cần → không compile. Khi đổi rev `gpui` → kiểm tra Zed workspace deps
+> để lấy rev `alacritty_terminal` tương ứng (hai rev có thể khác nhau).
 >
 > `portable-pty` **không dùng** cho local nữa (quyết định brainstorm). `ssh` không cần
 > PTY cục bộ — chỉ cần `alacritty_terminal` cho Term grid.
@@ -530,19 +533,27 @@ crates/
 
 ## 12. Thứ tự triển khai (roadmap)
 
-1. **`core`**: `TerminalSession` trait, `SessionEvent`, `TerminalContent`, `TerminalPalette`,
-   `key_encode`, `mouse_encode`, `ShellKind`/`LocalShellConfig` + `resolve_shell`.
-2. **`local`** (Windows-first): `LocalSession` spawn `cmd` (ConPTY, `chcp 65001`),
-   `LocalListener`, snapshot + event. Test: gõ lệnh, thấy output.
-3. **`ui`**: `TerminalElement` tối giản vẽ grid + cursor (chưa IME, chưa mouse mode).
-   `LocalTerminalView` (`Render`) wire vào DockArea. Font measure. Settings shell picker.
-4. **`ui`**: mouse (down/move/up/wheel), selection, scrollback, hyperlink (OSC 8),
-   copy/paste, minimum-contrast.
-5. **`ui`**: IME (`EntityInputHandler` + marked text).
-6. **`local`**: thêm `powershell`/`pwsh`/`custom`, child exit, resize, scrollback config.
-7. **`ssh`**: `SshSession` password + key, pty-req + shell + window_change + exit.
-8. **`ssh`**: known_hosts, agent, reconnect.
-9. Tuning perf (batch, snapshot diff, debounce notify).
+> **Trạng thái (bản terminal local đầy đủ):** các bước 1–6 đã hoàn thành.
+> Core 55 test + local 17 test (kèm E2E `echo` → snapshot) pass, `cargo build`
+> sạch 0 warning, `cargo run` mở terminal cmd thật (ConPTY) không panic.
+> SSH (bước 7–8) và perf tuning (bước 9) còn lại.
+
+1. ✅ **`core`**: `TerminalSession` trait, `SessionEvent`, `TerminalContent`, `TerminalPalette`,
+   `key_encode`, `mouse_encode`, `osc`/`url`, `ShellKind`/`LocalShellConfig` + `resolve_shell`.
+2. ✅ **`local`** (Windows-first): `LocalSession` spawn `cmd` (ConPTY, `chcp 65001`),
+   `LocalListener`, snapshot + event. E2E test: `echo myterm2_e2e` → snapshot chứa chuỗi.
+3. ✅ **`ui`**: `TerminalElement` vẽ grid + cursor + font measure + resize-on-layout.
+   `LocalTerminalView` (`Render`) wire vào DockArea. Settings shell picker (`TerminalSettingsPanel`).
+4. ✅ **`ui`**: mouse (down/move/up/wheel), selection (Simple/Semantic/Lines/Block),
+   scrollback, hyperlink OSC 8 (Ctrl+click), copy/paste (select-to-copy, middle-click,
+   Ctrl+Shift+C/V, OSC 52 clipboard), minimum-contrast.
+5. ✅ **`ui`**: IME (`EntityInputHandler` + marked text, `handle_input` ở paint,
+   alt-screen → tắt IME, `bounds_for_range` = cursor bounds).
+6. ✅ **`local`**: `powershell`/`pwsh`/`bash`/`zsh`/`sh`/`custom`, child exit detection,
+   resize, scrollback 10k dòng.
+7. ⬜ **`ssh`**: `SshSession` password + key, pty-req + shell + window_change + exit.
+8. ⬜ **`ssh`**: known_hosts, agent, reconnect.
+9. ⬜ Tuning perf (batch, snapshot diff, debounce notify).
 
 ---
 
@@ -570,5 +581,5 @@ crates/
 | IME + View | Zed `crates/terminal_view/src/terminal_view.rs` (`ImeState`) |
 | `Element`/`paint_quad`/`shape_line` | `reference/gpui-component` + GPUI docs (rev lock) |
 | `EntityInputHandler` | `gpui::EntityInputHandler` trait (docs.rs khớp rev) |
-| `alacritty_terminal` API | source tại rev `1d217ee39…` (`event_loop.rs`, `tty/`, `term.rs`, `sync.rs`) |
+| `alacritty_terminal` API | source tại rev `fcf32fe…` (`event_loop.rs`, `tty/`, `term.rs`, `sync.rs`) — fork `zed-industries/alacritty` |
 | freya key/mouse encode | `freya-terminal` `handle.rs`/`parser.rs` (tham khảo logic, thuần hoá vào `core`) |

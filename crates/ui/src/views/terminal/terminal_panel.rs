@@ -1,7 +1,8 @@
 //! [`TerminalPanel`] — leaf panel hiển thị 1 Terminal session.
 //!
-//! Skeleton: chỉ render placeholder text ở giữa. Sau này sẽ render
-//! terminal emulator (ANSI/VT, scrollback) qua `core::terminal`.
+//! MVP: tự tạo `LocalSession` (cmd mặc định) + `LocalTerminalView`.
+//! TODO: chuyển construction session ra app layer để SSH pluggable (View vẫn
+//! dùng `dyn TerminalSession`, chỉ đổi factory).
 
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
@@ -11,24 +12,35 @@ use gpui_component::{
     ActiveTheme,
     dock::{Panel, PanelControl, PanelEvent},
 };
+use myterm2_core::TerminalSession;
+use myterm2_local::{LocalSession, PtySize};
+
+use crate::state::TerminalSettings;
+
+use super::terminal_view::LocalTerminalView;
 
 /// Panel hiển thị 1 Terminal session.
-///
-/// `panel_name = "terminal"` — dùng để serialize/deserialize layout
-/// (xem `docs/gui-layout.md` §5).
 pub struct TerminalPanel {
     focus_handle: FocusHandle,
+    view: Entity<LocalTerminalView>,
 }
 
 impl TerminalPanel {
-    /// Tạo panel mới.
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self {
-            focus_handle: cx.focus_handle(),
-        }
+    /// Tạo panel + spawn session local mặc định (cmd trên Windows).
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let focus_handle = cx.focus_handle();
+        let shell = TerminalSettings::global(cx).read(cx).shell.clone();
+        let session: Entity<Box<dyn TerminalSession>> = cx.new(|_cx| {
+            Box::new(
+                LocalSession::spawn(shell, PtySize { rows: 24, cols: 80 })
+                    .expect("spawn local session"),
+            ) as Box<dyn TerminalSession>
+        });
+        let view = cx.new(|cx| LocalTerminalView::new(session, window, cx));
+        Self { focus_handle, view }
     }
 
-    /// Helper tạo `Entity<Self>` (dùng cho `DockItem::tab` + `register_panel`).
+    /// Helper tạo `Entity<Self>`.
     pub fn new_entity(window: &mut Window, cx: &mut App) -> Entity<Self> {
         cx.new(|cx| Self::new(window, cx))
     }
@@ -66,10 +78,7 @@ impl Render for TerminalPanel {
             .id("terminal-panel")
             .size_full()
             .track_focus(&self.focus_handle)
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_color(cx.theme().muted_foreground)
-            .child("No terminal session. Press Ctrl+N to open.")
+            .bg(cx.theme().background)
+            .child(self.view.clone())
     }
 }

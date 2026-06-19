@@ -21,7 +21,19 @@ gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", 
 
 # Internal crates
 myterm2-core = { path = "crates/core" }
+myterm2-local = { path = "crates/local" }
 myterm2-ui = { path = "crates/ui" }
+
+# Terminal engine — fork Zed của alacritty_terminal (bản patched có TerminalContent/display_iter)
+# Phải khớp rev mà GPUI dùng (xem docs/agents/dependencies.md §1)
+alacritty_terminal = { git = "https://github.com/zed-industries/alacritty", rev = "fcf32feacb367b75ec84dd40f041e4fd411d3cc1" }
+# Terminal helpers: URL detect + OSC 52 base64
+linkify = "0.10"
+base64 = "0.22"
+# Event channel (SessionEvent subscribe) — không tokio lộ ra
+async-channel = "2"
+# Logging (alacritty_terminal cũng dùng log)
+log = "0.4"
 
 # Async / serialization / error
 anyhow = "1"

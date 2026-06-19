@@ -47,7 +47,7 @@ gpui-component.workspace = true
 |---|---|
 | SSH protocol | `russh` + `russh-sftp` |
 | PTY local shell | `alacritty_terminal::tty` (KHÔNG dùng `portable-pty` — quyết định thiết kế, xem [`docs/terminal-backend.md`](../terminal-backend.md)) |
-| Terminal parser / grid | `alacritty_terminal` (lấy từ Zed repo cùng rev, bản patched có `TerminalContent`/`display_iter`) |
+| Terminal parser / grid | `alacritty_terminal` (fork `zed-industries/alacritty` @ rev `fcf32feacb367b75ec84dd40f041e4fd411d3cc1` — bản patched có `TerminalContent`/`display_iter`, xem `Cargo.toml` workspace) |
 | Async runtime (re-export) | `smol` / `futures` (đã có sẵn trong gpui) |
 | Serialization | `serde`, `serde_json`, `toml` |
 | Storage (host list, settings) | `directories` (XDG / AppData) |

@@ -6,4 +6,4 @@ pub mod terminal;
 
 pub use session_tabs::SessionPanel;
 pub use sftp::SftpPanel;
-pub use terminal::TerminalPanel;
+pub use terminal::{TerminalPanel, TerminalSettingsPanel};

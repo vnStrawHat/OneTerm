@@ -13,7 +13,7 @@ pub mod views;
 use gpui::App;
 use gpui_component::dock::register_panel;
 
-use crate::views::{SessionPanel, SftpPanel, TerminalPanel};
+use crate::views::{SessionPanel, SftpPanel, TerminalPanel, TerminalSettingsPanel};
 
 /// Khởi tạo UI: đăng ký 3 leaf panel cho PanelRegistry (deserialize layout).
 ///
@@ -22,9 +22,14 @@ use crate::views::{SessionPanel, SftpPanel, TerminalPanel};
 /// của myTerm2 vào registry để `DockArea::load` tái tạo được layout cũ.
 pub fn init(cx: &mut App) {
     theme::init(cx);
+    state::AppState::init(cx);
+    state::TerminalSettings::init(cx);
 
     register_panel(cx, "terminal", |_, _, _, window, cx| {
         Box::new(TerminalPanel::new_entity(window, cx))
+    });
+    register_panel(cx, "terminal-settings", |_, _, _, window, cx| {
+        Box::new(TerminalSettingsPanel::new_entity(window, cx))
     });
     register_panel(cx, "session", |_, _, _, window, cx| {
         Box::new(SessionPanel::new_entity(window, cx))

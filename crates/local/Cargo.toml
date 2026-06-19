@@ -9,3 +9,6 @@ workspace = true
 
 [dependencies]
 myterm2-core.workspace = true
+alacritty_terminal.workspace = true
+async-channel.workspace = true
+log.workspace = true

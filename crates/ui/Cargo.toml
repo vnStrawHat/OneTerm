@@ -10,12 +10,15 @@ workspace = true
 [dependencies]
 myterm2-core.workspace = true
 
+alacritty_terminal.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
 gpui-component.workspace = true
 gpui-component-assets.workspace = true
 
 anyhow.workspace = true
+itertools = "0.14"
+myterm2-local.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
