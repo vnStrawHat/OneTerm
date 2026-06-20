@@ -74,6 +74,7 @@ impl LocalTerminalView {
         // Burst-coalescing: khi output dồn (vd `cat` file lớn), nhiều Wakeup
         // liên tiếp → chỉ notify 1 lần, drain các Output event còn trong queue.
         let rx = session.read(cx).subscribe();
+        let session_for_spawn = session.clone();
         cx.spawn(async move |this, cx| {
             while let Ok(ev) = rx.recv().await {
                 match ev {
@@ -88,10 +89,14 @@ impl LocalTerminalView {
                         });
                     }
                     SessionEvent::Output => {
-                        // Notify 1 lần rồi drain tất cả Output event đang chờ
-                        // trong queue → tránh re-render từng event khi `cat`
-                        // file lớn (hàng nghìn Wakeup trong vài ms).
+                        // Scroll to bottom + Notify 1 lần rồi drain tất cả
+                        // Output event đang chờ trong queue → tránh re-render
+                        // từng event khi `cat` file lớn (hàng nghìn Wakeup).
                         let _ = this.update(cx, |_, cx| cx.notify());
+                        let s = session_for_spawn.clone();
+                        let _ = this.update(cx, |_, cx| {
+                            s.read(cx).scroll_to_bottom();
+                        });
                         loop {
                             match rx.try_recv() {
                                 Ok(SessionEvent::Output) => {} // coalesced

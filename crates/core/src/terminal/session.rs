@@ -65,6 +65,8 @@ pub trait TerminalSession: Send + Sync + 'static {
     fn resize(&self, rows: u16, cols: u16);
     /// Scroll scrollback (chỉ khi không alt-screen / không mouse mode).
     fn scroll(&self, delta: i32);
+    /// Scroll to bottom (display_offset = 0) — dùng khi có output mới.
+    fn scroll_to_bottom(&self);
 
     // ── Mouse ────────────────────────────────────────────────
     /// `sel` chọn loại selection khi không ở mouse mode: `Simple` (click),

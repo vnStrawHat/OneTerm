@@ -217,6 +217,13 @@ impl TerminalSession for LocalSession {
         }
     }
 
+    fn scroll_to_bottom(&self) {
+        let mut term = self.term.lock();
+        if !term.mode().contains(TermMode::ALT_SCREEN) {
+            term.scroll_display(Scroll::Bottom);
+        }
+    }
+
     // ── Mouse ────────────────────────────────────────────────────────
     fn mouse_down(&self, row: f32, col: f32, button: TerminalMouseButton, sel: SelectionType) {
         let mode = self.mode();
