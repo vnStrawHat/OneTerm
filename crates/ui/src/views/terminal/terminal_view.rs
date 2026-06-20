@@ -14,13 +14,13 @@ use std::time::Duration;
 use alacritty_terminal::selection::SelectionType;
 use gpui::{
     App, ClipboardItem, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
-    KeyBinding, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, MouseMoveEvent,
+    IntoElement, KeyBinding, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, NoAction, ParentElement as _, Pixels, Point, Render, ScrollDelta,
     ScrollWheelEvent, SharedString, Styled as _, Window, div, point, px, size,
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
-use gpui_component::scroll::{Scrollbar, ScrollbarShow};
+// Scrollbar: custom div implementation (không dùng gpui-component Scrollbar)
 
 use myterm2_core::terminal::{KeyMods, KeySpec, NamedKey, TerminalMouseButton, encode_key};
 use myterm2_core::{SessionEvent, TerminalSession};
@@ -48,6 +48,10 @@ pub struct LocalTerminalView {
     cursor_blink_visible: bool,
     /// Bell indicator — true khi nhận `\x07`, clear khi user gõ phím.
     has_bell: bool,
+    /// Scrollbar drag state: Some(drag_start_y) khi đang kéo thumb.
+    scrollbar_drag_start: Option<f32>,
+    /// Scrollbar last scroll time — để auto-hide sau 2s.
+    last_scroll_time: Option<std::time::Instant>,
 }
 
 impl LocalTerminalView {
@@ -185,6 +189,8 @@ impl LocalTerminalView {
             scroll_handle: TerminalScrollHandle::new(),
             cursor_blink_visible: true,
             has_bell: false,
+            scrollbar_drag_start: None,
+            last_scroll_time: None,
         }
     }
 
@@ -281,6 +287,129 @@ impl LocalTerminalView {
             TerminalBlink::On => self.cursor_blink_visible,
         }
     }
+
+    /// Render custom scrollbar — div overlay ở cạnh phải.
+    fn render_scrollbar(
+        &mut self, _theme: &TerminalTheme, cx: &mut Context<LocalTerminalView>) -> Option<impl IntoElement> {
+        let (total, viewport, display_offset, line_h) = self.scroll_handle.state_info();
+
+        // Không có scrollback → không hiện scrollbar.
+        if total <= viewport || line_h <= 0.0 {
+            return None;
+        }
+
+        let max_offset = total.saturating_sub(viewport);
+        let thumb_ratio = viewport as f32 / total as f32;
+        let track_height = viewport as f32 * line_h;
+        let thumb_height = (thumb_ratio * track_height).max(24.0);
+        let scroll_fraction = if max_offset > 0 {
+            display_offset as f32 / max_offset as f32
+        } else {
+            0.0
+        };
+        // display_offset=0 → bottom (thumb ở dưới)
+        let thumb_top = (1.0 - scroll_fraction) * (track_height - thumb_height);
+
+        // Auto-hide: hiện khi đang drag hoặc scroll gần đây (<2s)
+        let now = std::time::Instant::now();
+        let is_dragging = self.scrollbar_drag_start.is_some();
+        let is_visible = is_dragging
+            || self.last_scroll_time
+                .map(|t| now.duration_since(t).as_secs_f32() < 3.0)
+                .unwrap_or(false);
+
+        if !is_visible {
+            return None;
+        }
+
+        // Fade out: 2s-3s
+        let opacity = if is_dragging {
+            1.0
+        } else {
+            self.last_scroll_time
+                .map(|t| {
+                    let elapsed = now.duration_since(t).as_secs_f32();
+                    if elapsed < 2.0 {
+                        1.0
+                    } else if elapsed < 3.0 {
+                        1.0 - (elapsed - 2.0).powi(4)
+                    } else {
+                        0.0
+                    }
+                })
+                .unwrap_or(0.0)
+        };
+
+        let thumb_bg = gpui::hsla(0.0, 0.0, 0.5, opacity * 0.8);
+        let view = cx.entity();
+        let view_down = view.clone();
+        let view_up = view.clone();
+
+        Some(
+            div()
+                .id("terminal-scrollbar")
+                .absolute()
+                .top_0()
+                .right_0()
+                .bottom_0()
+                .w(px(12.0))
+                .on_mouse_move(move |e: &MouseMoveEvent, _w, cx: &mut App| {
+                    // Nếu đang drag, update scroll position theo mouse Y.
+                    let drag_start = match e.pressed_button {
+                        Some(MouseButton::Left) => true,
+                        _ => false,
+                    };
+                    if !drag_start { return; }
+                    let track_y = f32::from(e.position.y);
+                    let _ = view.update(cx, |v, cx| {
+                        let (_, vp, _, lh) = v.scroll_handle.state_info();
+                        if lh <= 0.0 { return; }
+                        let track_h = vp as f32 * lh;
+                        let max_off = v.scroll_handle.state_info().0.saturating_sub(vp);
+                        let frac = 1.0 - ((track_y / track_h).clamp(0.0, 1.0));
+                        let new_offset = (frac * max_off as f32).round() as usize;
+                        v.scroll_handle.future_display_offset.set(Some(new_offset));
+                        v.last_scroll_time = Some(std::time::Instant::now());
+                        cx.notify();
+                    });
+                    cx.stop_propagation();
+                })
+                .on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _w, cx: &mut App| {
+                    let track_y = f32::from(e.position.y);
+                    let _ = view_down.update(cx, |v, cx| {
+                        let (_, vp, _, lh) = v.scroll_handle.state_info();
+                        if lh <= 0.0 { return; }
+                        let track_h = vp as f32 * lh;
+                        let max_off = v.scroll_handle.state_info().0.saturating_sub(vp);
+                        // Click position → display_offset
+                        let frac = 1.0 - ((track_y / track_h).clamp(0.0, 1.0));
+                        let new_offset = (frac * max_off as f32).round() as usize;
+                        v.scroll_handle.future_display_offset.set(Some(new_offset));
+                        v.scrollbar_drag_start = Some(f32::from(e.position.y));
+                        v.last_scroll_time = Some(std::time::Instant::now());
+                        cx.notify();
+                    });
+                    cx.stop_propagation();
+                })
+                .on_mouse_up(MouseButton::Left, move |_e: &MouseUpEvent, _w, cx: &mut App| {
+                    let _ = view_up.update(cx, |v, cx| {
+                        v.scrollbar_drag_start = None;
+                        cx.notify();
+                    });
+                })
+                .child(
+                    div()
+                        .id("scrollbar-thumb")
+                        .absolute()
+                        .top(px(thumb_top))
+                        .right(px(2.0))
+                        .w(px(8.0))
+                        .h(px(thumb_height))
+                        .rounded_sm()
+                        .bg(thumb_bg)
+                )
+        )
+    }
 }
 
 fn map_button(b: MouseButton) -> TerminalMouseButton {
@@ -346,7 +475,7 @@ impl Render for LocalTerminalView {
             .key_context("Terminal")
             .child(TerminalElement::new(
                 session.clone(),
-                theme,
+                theme.clone(),
                 font,
                 self.font_size,
                 self.line_height_factor,
@@ -362,8 +491,8 @@ impl Render for LocalTerminalView {
             } else {
                 None
             })
-            // Scrollbar dọc — overlay absolute, tự ẩn khi không có scrollback.
-            .child(Scrollbar::vertical(&self.scroll_handle).scrollbar_show(ScrollbarShow::Always))
+            // ── Custom scrollbar ──
+            .children(self.render_scrollbar(&theme, cx))
             .on_mouse_down(MouseButton::Left, {
                 let s = session.clone();
                 let m = metrics.clone();
@@ -394,7 +523,7 @@ impl Render for LocalTerminalView {
                         )
                     });
                     // Trigger re-render để vẽ selection highlight.
-                    let _ = view.update(cx, |_, cx| cx.notify());
+                    let _ = view.update(cx, |v, cx| { v.last_scroll_time = Some(std::time::Instant::now()); cx.notify(); });
                 }
             })
             .on_mouse_down(MouseButton::Middle, {
@@ -423,7 +552,7 @@ impl Render for LocalTerminalView {
                     if e.pressed_button == Some(MouseButton::Left) {
                         // Drag: cập nhật selection.
                         s.update(cx, |s, _| s.mouse_drag(row, col));
-                        let _ = view.update(cx, |_, cx| cx.notify());
+                        let _ = view.update(cx, |v, cx| { v.last_scroll_time = Some(std::time::Instant::now()); cx.notify(); });
                     } else {
                         // Hover: encode mouse motion (cho app mode).
                         s.update(cx, |s, _| s.mouse_move(row, col));
@@ -447,7 +576,7 @@ impl Render for LocalTerminalView {
                         }
                     }
                     // Re-render để vẽ selection cuối cùng.
-                    let _ = view.update(cx, |_, cx| cx.notify());
+                    let _ = view.update(cx, |v, cx| { v.last_scroll_time = Some(std::time::Instant::now()); cx.notify(); });
                 }
             })
             .on_scroll_wheel({
@@ -475,9 +604,11 @@ impl Render for LocalTerminalView {
                     let delta_y = delta_y * multiplier;
                     if delta_y.abs() >= 0.001 {
                         s.update(cx, |s, _| s.wheel(delta_y as f64, row, col));
-                        // Re-render để cập nhật scroll handle state → scrollbar
-                        // hiện (offset thay đổi → scrollbar fade in).
-                        let _ = view.update(cx, |_, cx| cx.notify());
+                        // Re-render + update scrollbar visibility.
+                        let _ = view.update(cx, |v, cx| {
+                            v.last_scroll_time = Some(std::time::Instant::now());
+                            cx.notify();
+                        });
                     }
                 }
             })
@@ -495,26 +626,28 @@ impl Render for LocalTerminalView {
                         let viewport = snap.terminal_bounds.num_lines as i32;
                         match e.keystroke.key.as_str() {
                             "pageup" => {
-                                s.update(cx, |s, _| s.scroll(-viewport));
-                                let _ = view.update(cx, |_, cx| cx.notify());
+                                // Alacritty: Delta(+) = scroll UP (back in history).
+                                s.update(cx, |s, _| s.scroll(viewport));
+                                let _ = view.update(cx, |v, cx| { v.last_scroll_time = Some(std::time::Instant::now()); cx.notify(); });
                                 cx.stop_propagation();
                                 return;
                             }
                             "pagedown" => {
-                                s.update(cx, |s, _| s.scroll(viewport));
-                                let _ = view.update(cx, |_, cx| cx.notify());
+                                // Alacritty: Delta(-) = scroll DOWN (toward bottom).
+                                s.update(cx, |s, _| s.scroll(-viewport));
+                                let _ = view.update(cx, |v, cx| { v.last_scroll_time = Some(std::time::Instant::now()); cx.notify(); });
                                 cx.stop_propagation();
                                 return;
                             }
                             "home" => {
                                 s.update(cx, |s, _| s.scroll_to_top());
-                                let _ = view.update(cx, |_, cx| cx.notify());
+                                let _ = view.update(cx, |v, cx| { v.last_scroll_time = Some(std::time::Instant::now()); cx.notify(); });
                                 cx.stop_propagation();
                                 return;
                             }
                             "end" => {
                                 s.update(cx, |s, _| s.scroll_to_bottom());
-                                let _ = view.update(cx, |_, cx| cx.notify());
+                                let _ = view.update(cx, |v, cx| { v.last_scroll_time = Some(std::time::Instant::now()); cx.notify(); });
                                 cx.stop_propagation();
                                 return;
                             }
@@ -524,14 +657,14 @@ impl Render for LocalTerminalView {
                         if mods.control {
                             match e.keystroke.key.as_str() {
                                 "up" => {
-                                    s.update(cx, |s, _| s.scroll(-1));
-                                    let _ = view.update(cx, |_, cx| cx.notify());
+                                    s.update(cx, |s, _| s.scroll(1));
+                                    let _ = view.update(cx, |v, cx| { v.last_scroll_time = Some(std::time::Instant::now()); cx.notify(); });
                                     cx.stop_propagation();
                                     return;
                                 }
                                 "down" => {
-                                    s.update(cx, |s, _| s.scroll(1));
-                                    let _ = view.update(cx, |_, cx| cx.notify());
+                                    s.update(cx, |s, _| s.scroll(-1));
+                                    let _ = view.update(cx, |v, cx| { v.last_scroll_time = Some(std::time::Instant::now()); cx.notify(); });
                                     cx.stop_propagation();
                                     return;
                                 }

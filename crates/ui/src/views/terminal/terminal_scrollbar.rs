@@ -70,6 +70,12 @@ impl TerminalScrollHandle {
     pub fn take_future_display_offset(&self) -> Option<usize> {
         self.future_display_offset.take()
     }
+
+    /// Trả về (total_lines, viewport_lines, display_offset, line_height).
+    pub fn state_info(&self) -> (usize, usize, usize, f32) {
+        let s = self.state.borrow();
+        (s.total_lines, s.viewport_lines, s.display_offset, s.line_height)
+    }
 }
 
 impl Default for TerminalScrollHandle {
