@@ -14,9 +14,9 @@ use std::time::Duration;
 use alacritty_terminal::selection::SelectionType;
 use gpui::{
     App, ClipboardItem, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
-    KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ParentElement as _, Pixels, Point, Render, ScrollDelta, ScrollWheelEvent, SharedString,
-    Styled as _, Window, div, point, px, size,
+    KeyBinding, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, NoAction, ParentElement as _, Pixels, Point, Render, ScrollDelta,
+    ScrollWheelEvent, SharedString, Styled as _, Window, div, point, px, size,
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
@@ -61,6 +61,14 @@ impl LocalTerminalView {
         let theme = cx.theme().clone();
         let font_family = theme.mono_font_family.clone();
         let font_size = theme.mono_font_size;
+
+        // Tab/Shift+Tab: gpui-component root binds "tab" → focus_next.
+        // NoAction trong context "Terminal" (depth cao hơn "Root") → override →
+        // Tab rơi vào on_key_down → gửi \t vào PTY (shell auto-complete).
+        cx.bind_keys([
+            KeyBinding::new("tab", NoAction {}, Some("Terminal")),
+            KeyBinding::new("shift-tab", NoAction {}, Some("Terminal")),
+        ]);
 
         // Subscribe session events → cx.notify (re-render) + OSC 52 clipboard.
         // Burst-coalescing: khi output dồn (vd `cat` file lớn), nhiều Wakeup
@@ -311,6 +319,7 @@ impl Render for LocalTerminalView {
             .size_full()
             .relative()
             .track_focus(&self.focus)
+            .key_context("Terminal")
             .child(TerminalElement::new(
                 session.clone(),
                 theme,
