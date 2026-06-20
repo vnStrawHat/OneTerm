@@ -120,6 +120,18 @@ impl LocalTerminalView {
                                 Err(_) => break,
                             }
                         }
+                        // Follow-up renders: ConPTY (Windows) output có thể đến
+                        // thành nhiều đợt (bursty). Sau khi drain xong, data mới
+                        // có thể vẫn đang được background thread đọc từ ConPTY →
+                        // thêm 2 re-render trì hoãn để bắt data đến muộn.
+                        let this_a = this.clone();
+                        let this_b = this.clone();
+                        cx.spawn(async move |cx| {
+                            cx.background_executor().timer(Duration::from_millis(50)).await;
+                            let _ = this_a.update(cx, |_, cx| cx.notify());
+                            cx.background_executor().timer(Duration::from_millis(150)).await;
+                            let _ = this_b.update(cx, |_, cx| cx.notify());
+                        }).detach();
                     }
                     SessionEvent::Bell => {
                         let _ = this.update(cx, |view, cx| {

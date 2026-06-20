@@ -93,7 +93,7 @@ impl LocalSession {
         let state = new_shared();
         state.lock().unwrap().alive = true;
 
-        let (event_tx, event_rx) = async_channel::bounded::<SessionEvent>(256);
+        let (event_tx, event_rx) = async_channel::bounded::<SessionEvent>(4096);
         let listener = LocalListener::new(event_tx, state.clone());
 
         let size = TermSize {
