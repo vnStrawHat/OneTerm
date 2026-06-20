@@ -11,11 +11,13 @@
 use std::path::PathBuf;
 
 use alacritty_terminal::selection::SelectionType;
+use alacritty_terminal::term::TermMode;
 use async_channel::Receiver;
 
 use crate::terminal::content::TerminalContent;
 use crate::terminal::mouse_encode::TerminalMouseButton;
 use crate::terminal::osc::Osc133Kind;
+use crate::terminal::key_encode::{encode_key, KeyMods, KeySpec, NamedKey};
 
 /// Sự kiện session phát ra cho UI (subscribe qua channel).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,6 +124,41 @@ pub trait TerminalSession: Send + Sync + 'static {
     /// Cwd hiện tại (OSC 7).
     fn cwd(&self) -> Option<PathBuf>;
 
+    // ── Send Text / Keystroke ──────────────────────────────────
+    /// Gửi raw text vào PTY (cho automation, extension, task runner).
+    /// Tương đương Zed `SendText(String)`.
+    fn send_text(&self, text: &str) {
+        self.write(text.as_bytes());
+    }
+
+    /// Gửi keystroke encoded vào PTY (vd "Ctrl+C" → 0x03, "Enter" → \r).
+    /// Tương đương Zed `SendKeystroke(String)`.
+    /// Parse format: `Ctrl+Shift+V`, `Alt+Enter`, `F1`, `Up`, `a`.
+    fn send_keystroke(&self, keystroke: &str) {
+        if let Some((spec, mods)) = parse_keystroke(keystroke) {
+            if let Some(bytes) = encode_key(&spec, mods) {
+                self.write(&bytes);
+            }
+        }
+    }
+
+    /// Bracketed paste mode đang bật → wrap paste trong `\x1b[200~...\x1b[201~`.
+    /// Zed: kiểm `Modes::BRACKETED_PASTE` rồi wrap.
+    fn is_bracketed_paste(&self) -> bool {
+        self.snapshot().mode.contains(TermMode::BRACKETED_PASTE)
+    }
+
+    /// Paste text vào PTY. Tự động wrap trong bracketed paste markers nếu
+    /// terminal đang ở bracketed paste mode.
+    fn paste(&self, text: &str) {
+        if self.is_bracketed_paste() {
+            let wrapped = format!("\x1b[200~{}\x1b[201~", text);
+            self.write(wrapped.as_bytes());
+        } else {
+            self.write(text.as_bytes());
+        }
+    }
+
     // ── Shell Integration (OSC 133) ────────────────────────────
     /// Số dòng prompt markers đã capture (cho scroll-to-prompt).
     /// Mỗi marker là vị trí dòng nơi prompt bắt đầu (OSC 133;A).
@@ -139,5 +176,112 @@ pub trait TerminalSession: Send + Sync + 'static {
     /// Text hiển thị trong toolbar breadcrumb (vd cwd path).
     fn breadcrumb_text(&self) -> Option<String> {
         self.cwd().map(|p| p.display().to_string())
+    }
+}
+
+/// Parse keystroke string → (KeySpec, KeyMods).
+///
+/// Format: `Ctrl+Shift+V`, `Alt+Enter`, `Up`, `F1`, `a`, `Enter`, `Tab`.
+/// Modifiers cách nhau bằng `+`, case-insensitive.
+///
+/// Tương đương Zed `SendKeystroke(String)`.
+pub fn parse_keystroke(s: &str) -> Option<(KeySpec, KeyMods)> {
+    let parts: Vec<&str> = s.split('+').collect();
+    let mut mods = KeyMods::default();
+    let mut key_part = s;
+
+    // Parse modifiers (all parts except last).
+    if parts.len() > 1 {
+        for part in &parts[..parts.len() - 1] {
+            match part.to_lowercase().as_str() {
+                "ctrl" | "control" => mods.ctrl = true,
+                "shift" => mods.shift = true,
+                "alt" | "option" | "opt" => mods.alt = true,
+                _ => return None, // Unknown modifier
+            }
+        }
+        key_part = parts[parts.len() - 1];
+    }
+
+    let named = match key_part.to_lowercase().as_str() {
+        "enter" | "return" => Some(NamedKey::Enter),
+        "backspace" | "bs" => Some(NamedKey::Backspace),
+        "delete" | "del" => Some(NamedKey::Delete),
+        "tab" => Some(NamedKey::Tab),
+        "escape" | "esc" => Some(NamedKey::Escape),
+        "up" | "arrowup" => Some(NamedKey::ArrowUp),
+        "down" | "arrowdown" => Some(NamedKey::ArrowDown),
+        "left" | "arrowleft" => Some(NamedKey::ArrowLeft),
+        "right" | "arrowright" => Some(NamedKey::ArrowRight),
+        "home" => Some(NamedKey::Home),
+        "end" => Some(NamedKey::End),
+        "pageup" | "pgup" => Some(NamedKey::PageUp),
+        "pagedown" | "pgdn" => Some(NamedKey::PageDown),
+        "insert" | "ins" => Some(NamedKey::Insert),
+        _ => None,
+    };
+
+    let spec = if let Some(n) = named {
+        KeySpec::Named(n)
+    } else {
+        // Single character key.
+        if key_part.is_empty() || key_part.chars().count() > 1 {
+            return None;
+        }
+        KeySpec::Character(key_part.to_string())
+    };
+
+    Some((spec, mods))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_ctrl_c() {
+        let (spec, mods) = parse_keystroke("Ctrl+C").unwrap();
+        assert!(matches!(spec, KeySpec::Character(c) if c == "C"));
+        assert!(mods.ctrl);
+        assert!(!mods.shift);
+        assert!(!mods.alt);
+    }
+
+    #[test]
+    fn parse_ctrl_shift_v() {
+        let (spec, mods) = parse_keystroke("Ctrl+Shift+V").unwrap();
+        assert!(matches!(spec, KeySpec::Character(c) if c == "V"));
+        assert!(mods.ctrl);
+        assert!(mods.shift);
+    }
+
+    #[test]
+    fn parse_enter() {
+        let (spec, mods) = parse_keystroke("Enter").unwrap();
+        assert!(matches!(spec, KeySpec::Named(NamedKey::Enter)));
+        assert!(!mods.ctrl);
+    }
+
+    #[test]
+    fn parse_alt_enter() {
+        let (spec, mods) = parse_keystroke("Alt+Enter").unwrap();
+        assert!(matches!(spec, KeySpec::Named(NamedKey::Enter)));
+        assert!(mods.alt);
+    }
+
+    #[test]
+    fn parse_arrow_up() {
+        let (spec, _) = parse_keystroke("Up").unwrap();
+        assert!(matches!(spec, KeySpec::Named(NamedKey::ArrowUp)));
+    }
+
+    #[test]
+    fn parse_unknown_modifier() {
+        assert!(parse_keystroke("Foo+A").is_none());
+    }
+
+    #[test]
+    fn parse_empty() {
+        assert!(parse_keystroke("").is_none());
     }
 }

@@ -136,11 +136,11 @@
 | ✅ | **Alt-screen IME toggle** | Có | Có | Alt-screen → tắt IME (`selected_text_range` → None). |
 | ✅ | **Keyboard mapping (arrows, F-keys)** | Có | Có | `key_encode.rs` → escape sequences. |
 | ✅ | **Mouse mode encoding** | Có | Có | `mouse_encode.rs` → SGR/normal/X10 encoding. |
-| ❌ | **Vi mode** | Có — `ToggleViMode`, `ViMotion::Left/Right/Up/Down/WordRight/WordLeft` | Không | Zed: Ctrl+Shift+Space → vi mode → hjkl navigate, v select, y yank. myTerm2: không. **Ví dụ**: Vi mode → `w` jump word, `yy` yank line. |
-| ❌ | **Character palette** | Có — `ShowCharacterPalette` action | Không | Zed: Cmd+Ctrl+Space → character palette (emoji picker). |
-| ❌ | **Send text action** | Có — `SendText(String)` action | Không | Zed: programmatically send text to terminal. **Ví dụ**: Extension gửi `make build\r` vào terminal. |
-| ❌ | **Send keystroke action** | Có — `SendKeystroke(String)` | Không | Zed: programmatically send keystroke (vd `Ctrl+C`). |
-| ❌ | **Bracketed paste detection** | Có — `Modes::BRACKETED_PASTE` | Một phần — alacritty handles | Cả hai đều qua alacritty. Nhưng Zed wrap paste trong `\x1b[200~...\x1b[201~` khi bracketed mode on. |
+| ✅ | **Vi mode** | Có — `ToggleViMode`, `ViMotion::Left/Right/Up/Down/WordRight/WordLeft` | Có (fixed) | Ctrl+Shift+Space → toggle vi mode. hjkl/arrows navigate, v select, y yank, w/b word jump, gg/G top/bottom, 0/$ line start/end, q quit. Vi cursor overlay + indicator. |
+| ⚡ | **Character palette** | Có — `ShowCharacterPalette` action | Không | Zed: Cmd+Ctrl+Space → character palette (emoji picker). Platform-specific (macOS NSPasteboard). Windows dùng Win+. native. |
+| ✅ | **Send text action** | Có — `SendText(String)` action | Có (fixed) | `TerminalSession::send_text(text)` — ghi raw text vào PTY. Default impl trên trait. |
+| ✅ | **Send keystroke action** | Có — `SendKeystroke(String)` | Có (fixed) | `TerminalSession::send_keystroke(keystroke)` — parse format `Ctrl+C`/`Alt+Enter`/`Up` → encode → write PTY. `parse_keystroke()` public function. |
+| ✅ | **Bracketed paste detection** | Có — `Modes::BRACKETED_PASTE` | Có (fixed) | `TerminalSession::is_bracketed_paste()` checks `TermMode::BRACKETED_PASTE`. `paste(text)` auto-wraps trong `\x1b[200~...\x1b[201~`. Tất cả paste paths (middle-click, Ctrl+Shift+V, context menu) dùng `paste()`. |
 
 ---
 
@@ -220,14 +220,14 @@
 | C — Scrolling | 7 | 7 | 0 | 100% |
 | D — Search | 5 | 0 | 5 | 0% |
 | E — Hyperlinks & Navigation | 7 | 3 | 4 | 43% |
-| F — Shell Integration | 9 | 5 | 4 | 56% |
+| F — Shell Integration | 9 | 6 | 3 | 67% |
 | G — Task Integration | 5 | 0 | 5 | 0% |
-| H — Input & IME | 10 | 5 | 5 | 50% |
+| H — Input & IME | 10 | 9 | 1 | 90% |
 | I — Panel & Workspace | 9 | 1 | 8 | 11% |
 | J — Settings & Configuration | 16 | 3 | 13 | 19% |
 | K — Architecture & Backend | 10 | 5 | 5 | 50% |
 | L — Mouse & Interaction | 7 | 3 | 4 | 43% |
-| **Tổng** | 108 | **51** | **61** | **47%** |
+| **Tổng** | 108 | **55** | **53** | **51%** |
 
 ---
 

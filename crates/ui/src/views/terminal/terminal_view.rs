@@ -20,7 +20,6 @@ use gpui::{
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
-// Scrollbar: custom div implementation (không dùng gpui-component Scrollbar)
 
 use myterm2_core::terminal::{KeyMods, KeySpec, NamedKey, TerminalMouseButton, encode_key};
 use myterm2_core::{SessionEvent, TerminalSession};
@@ -52,6 +51,13 @@ pub struct LocalTerminalView {
     scrollbar_drag_start: Option<f32>,
     /// Scrollbar last scroll time — để auto-hide sau 2s.
     last_scroll_time: Option<std::time::Instant>,
+    /// Vi mode state — khi active, phím di chuyển cursor trong scrollback
+    /// thay vì gửi vào PTY. Tương đương Zed `ToggleViMode`.
+    vi_mode: bool,
+    /// Vi mode cursor position (display row, col) — 0-based từ top.
+    vi_cursor: (usize, usize),
+    /// Vi mode selection active (v pressed).
+    vi_selecting: bool,
 }
 
 impl LocalTerminalView {
@@ -191,6 +197,9 @@ impl LocalTerminalView {
             has_bell: false,
             scrollbar_drag_start: None,
             last_scroll_time: None,
+            vi_mode: false,
+            vi_cursor: (0, 0),
+            vi_selecting: false,
         }
     }
 
@@ -479,6 +488,31 @@ impl Render for LocalTerminalView {
             } else {
                 None
             })
+            // ── Vi mode indicator (góc trên-trái) ──
+            .children(if self.vi_mode {
+                Some(div().id("terminal-vi-mode").absolute().top_1().left_2().px_2().py_0p5().text_xs().rounded_sm().bg(theme_ref.accent.opacity(0.8)).text_color(theme_ref.foreground).child(if self.vi_selecting { "-- VISUAL --" } else { "-- NORMAL --" }))
+            } else {
+                None
+            })
+            // ── Vi mode cursor overlay ──
+            .children(if self.vi_mode {
+                let m = *metrics.borrow();
+                let cw = f32::from(m.cell_width);
+                let lh = f32::from(m.line_height);
+                if cw > 0.0 && lh > 0.0 {
+                    if let Some(bounds) = m.bounds {
+                        let x = f32::from(bounds.origin.x) + self.vi_cursor.1 as f32 * cw;
+                        let y = f32::from(bounds.origin.y) + self.vi_cursor.0 as f32 * lh;
+                        Some(div().id("vi-cursor").absolute().left(px(x)).top(px(y)).w(px(cw)).h(px(lh)).border_1().border_color(theme_ref.accent).rounded_sm())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            })
             // ── Custom scrollbar ──
             .children(self.render_scrollbar(&theme, &metrics, cx))
             // ── Breadcrumb bar (bottom) — cwd path từ OSC 7 ──
@@ -550,7 +584,7 @@ impl Render for LocalTerminalView {
                     // Middle-click = paste (X11 PRIMARY/CLIPBOARD).
                     if let Some(item) = cx.read_from_clipboard() {
                         if let Some(text) = item.text() {
-                            s.update(cx, |s, _| s.write(text.as_bytes()));
+                            s.update(cx, |s, _| s.paste(&text));
                         }
                     }
                 }
@@ -670,6 +704,235 @@ impl Render for LocalTerminalView {
                 let view = view.clone();
                 move |e: &KeyDownEvent, _w, cx: &mut App| {
                     let mods = e.keystroke.modifiers;
+
+                    // ── Vi mode (Group H) ──
+                    // Ctrl+Shift+Space: toggle vi mode.
+                    if mods.control && mods.shift && e.keystroke.key.as_str() == "space" {
+                        let _ = view.update(cx, |v, cx| {
+                            v.vi_mode = !v.vi_mode;
+                            if v.vi_mode {
+                                // Enter vi mode: set cursor to current cursor position.
+                                let snap = s.read(cx).snapshot();
+                                v.vi_cursor = (
+                                    snap.cursor.point.line.0 as usize,
+                                    snap.cursor.point.column.0 as usize,
+                                );
+                                v.vi_selecting = false;
+                            } else {
+                                // Exit vi mode: clear any selection.
+                                v.vi_selecting = false;
+                                s.update(cx, |s, _| s.clear_selection());
+                            }
+                            cx.notify();
+                        });
+                        cx.stop_propagation();
+                        return;
+                    }
+
+                    // Vi mode: intercept keys for navigation.
+                    if view.read(cx).vi_mode {
+                        let key = e.keystroke.key.as_str();
+                        let key_char = e.keystroke.key_char.as_deref().unwrap_or("");
+                        match (key, key_char) {
+                            ("escape", _) => {
+                                let _ = view.update(cx, |v, cx| {
+                                    v.vi_selecting = false;
+                                    s.update(cx, |s, _| s.clear_selection());
+                                    cx.notify();
+                                });
+                                cx.stop_propagation();
+                                return;
+                            }
+                            ("h", _) | ("left", _) => {
+                                let _ = view.update(cx, |v, cx| {
+                                    if v.vi_cursor.1 > 0 { v.vi_cursor.1 -= 1; }
+                                    cx.notify();
+                                });
+                                cx.stop_propagation();
+                                return;
+                            }
+                            ("l", _) | ("right", _) => {
+                                let _ = view.update(cx, |v, cx| {
+                                    let snap = s.read(cx).snapshot();
+                                    let max_col = snap.terminal_bounds.num_cols.saturating_sub(1);
+                                    if v.vi_cursor.1 < max_col { v.vi_cursor.1 += 1; }
+                                    cx.notify();
+                                });
+                                cx.stop_propagation();
+                                return;
+                            }
+                            ("k", _) | ("up", _) => {
+                                let _ = view.update(cx, |v, cx| {
+                                    if v.vi_cursor.0 > 0 { v.vi_cursor.0 -= 1; }
+                                    else { s.update(cx, |s, _| s.scroll(1)); }
+                                    cx.notify();
+                                });
+                                cx.stop_propagation();
+                                return;
+                            }
+                            ("j", _) | ("down", _) => {
+                                let _ = view.update(cx, |v, cx| {
+                                    let snap = s.read(cx).snapshot();
+                                    let max_row = snap.terminal_bounds.num_lines.saturating_sub(1);
+                                    if v.vi_cursor.0 < max_row { v.vi_cursor.0 += 1; }
+                                    else { s.update(cx, |s, _| s.scroll(-1)); }
+                                    cx.notify();
+                                });
+                                cx.stop_propagation();
+                                return;
+                            }
+                            ("0", _) | ("home", _) => {
+                                let _ = view.update(cx, |v, cx| { v.vi_cursor.1 = 0; cx.notify(); });
+                                cx.stop_propagation();
+                                return;
+                            }
+                            ("$", _) | ("end", _) => {
+                                let _ = view.update(cx, |v, cx| {
+                                    let snap = s.read(cx).snapshot();
+                                    v.vi_cursor.1 = snap.terminal_bounds.num_cols.saturating_sub(1);
+                                    cx.notify();
+                                });
+                                cx.stop_propagation();
+                                return;
+                            }
+                            ("g", _) => {
+                                // gg: scroll to top.
+                                s.update(cx, |s, _| s.scroll_to_top());
+                                let _ = view.update(cx, |v, cx| { v.vi_cursor.0 = 0; cx.notify(); });
+                                cx.stop_propagation();
+                                return;
+                            }
+                            ("G", _) => {
+                                s.update(cx, |s, _| s.scroll_to_bottom());
+                                let _ = view.update(cx, |v, cx| {
+                                    let snap = s.read(cx).snapshot();
+                                    v.vi_cursor.0 = snap.terminal_bounds.num_lines.saturating_sub(1);
+                                    cx.notify();
+                                });
+                                cx.stop_propagation();
+                                return;
+                            }
+                            ("w", _) => {
+                                // Jump word forward.
+                                let _ = view.update(cx, |v, cx| {
+                                    let snap = s.read(cx).snapshot();
+                                    let max_col = snap.terminal_bounds.num_cols;
+                                    let mut col = v.vi_cursor.1 + 1;
+                                    // Skip current word.
+                                    while col < max_col {
+                                        let idx = v.vi_cursor.0 * snap.terminal_bounds.num_cols + col;
+                                        if idx < snap.cells.len() {
+                                            let c = snap.cells[idx].cell.c;
+                                            if c == ' ' || c == '\t' { break; }
+                                        }
+                                        col += 1;
+                                    }
+                                    // Skip whitespace.
+                                    while col < max_col {
+                                        let idx = v.vi_cursor.0 * snap.terminal_bounds.num_cols + col;
+                                        if idx < snap.cells.len() {
+                                            let c = snap.cells[idx].cell.c;
+                                            if c != ' ' && c != '\t' { break; }
+                                        }
+                                        col += 1;
+                                    }
+                                    v.vi_cursor.1 = col.min(max_col.saturating_sub(1));
+                                    cx.notify();
+                                });
+                                cx.stop_propagation();
+                                return;
+                            }
+                            ("b", _) => {
+                                // Jump word backward.
+                                let _ = view.update(cx, |v, cx| {
+                                    if v.vi_cursor.1 > 0 {
+                                        let snap = s.read(cx).snapshot();
+                                        let mut col = v.vi_cursor.1.saturating_sub(1);
+                                        // Skip whitespace.
+                                        while col > 0 {
+                                            let idx = v.vi_cursor.0 * snap.terminal_bounds.num_cols + col;
+                                            if idx < snap.cells.len() {
+                                                let c = snap.cells[idx].cell.c;
+                                                if c != ' ' && c != '\t' { break; }
+                                            }
+                                            col -= 1;
+                                        }
+                                        // Skip word.
+                                        while col > 0 {
+                                            let idx = v.vi_cursor.0 * snap.terminal_bounds.num_cols + col;
+                                            if idx < snap.cells.len() {
+                                                let c = snap.cells[idx].cell.c;
+                                                if c == ' ' || c == '\t' { break; }
+                                            }
+                                            col -= 1;
+                                        }
+                                        v.vi_cursor.1 = col;
+                                    }
+                                    cx.notify();
+                                });
+                                cx.stop_propagation();
+                                return;
+                            }
+                            ("v", _) => {
+                                // Toggle selection mode.
+                                let _ = view.update(cx, |v, cx| {
+                                    v.vi_selecting = !v.vi_selecting;
+                                    if v.vi_selecting {
+                                        let (row, col) = v.vi_cursor;
+                                        s.update(cx, |s, _| {
+                                            s.mouse_down(row as f32, col as f32, TerminalMouseButton::Left, SelectionType::Simple);
+                                        });
+                                    } else {
+                                        s.update(cx, |s, _| s.clear_selection());
+                                    }
+                                    cx.notify();
+                                });
+                                cx.stop_propagation();
+                                return;
+                            }
+                            ("y", _) => {
+                                // Yank (copy) selection.
+                                if let Some(text) = s.read(cx).selection_text() {
+                                    if !text.is_empty() {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                                    }
+                                }
+                                let _ = view.update(cx, |v, cx| {
+                                    v.vi_selecting = false;
+                                    s.update(cx, |s, _| s.clear_selection());
+                                    cx.notify();
+                                });
+                                cx.stop_propagation();
+                                return;
+                            }
+                            ("q", _) => {
+                                // q: exit vi mode.
+                                let _ = view.update(cx, |v, cx| {
+                                    v.vi_mode = false;
+                                    v.vi_selecting = false;
+                                    s.update(cx, |s, _| s.clear_selection());
+                                    cx.notify();
+                                });
+                                cx.stop_propagation();
+                                return;
+                            }
+                            _ => {
+                                // Unknown vi key — swallow to prevent sending to PTY.
+                                cx.stop_propagation();
+                                return;
+                            }
+                        }
+                    }
+
+                    // Update vi selection if selecting.
+                    if view.read(cx).vi_selecting {
+                        let _ = view.update(cx, |v, cx| {
+                            let (row, col) = v.vi_cursor;
+                            s.update(cx, |s, _| s.mouse_drag(row as f32, col as f32));
+                            cx.notify();
+                        });
+                    }
+
                     // ── Scroll keyboard actions (Group C) ──
                     // Shift+PageUp/Down: scroll scrollback 1 viewport.
                     // Shift+Home/End: scroll to top/bottom.
@@ -740,7 +1003,7 @@ impl Render for LocalTerminalView {
                             "v" => {
                                 if let Some(item) = cx.read_from_clipboard() {
                                     if let Some(text) = item.text() {
-                                        s.update(cx, |s, _| s.write(text.as_bytes()));
+                                        s.update(cx, |s, _| s.paste(&text));
                                     }
                                 }
                                 return;
@@ -813,7 +1076,7 @@ impl Render for LocalTerminalView {
                         move |_, window, cx| {
                             if let Some(item) = cx.read_from_clipboard() {
                                 if let Some(text) = item.text() {
-                                    s.update(cx, |s, _| s.write(text.as_bytes()));
+                                    s.update(cx, |s, _| s.paste(&text));
                                 }
                             }
                             window.focus(&f, cx);
