@@ -342,8 +342,6 @@ impl LocalTerminalView {
 
         let thumb_bg = gpui::hsla(0.0, 0.0, 0.5, opacity * 0.8);
         let view = cx.entity();
-        let view_down = view.clone();
-        let view_up = view.clone();
 
         Some(
             div()
@@ -353,13 +351,9 @@ impl LocalTerminalView {
                 .right_0()
                 .bottom_0()
                 .w(px(12.0))
-                .on_mouse_move(move |e: &MouseMoveEvent, _w, cx: &mut App| {
-                    // Nếu đang drag, update scroll position theo mouse Y.
-                    let drag_start = match e.pressed_button {
-                        Some(MouseButton::Left) => true,
-                        _ => false,
-                    };
-                    if !drag_start { return; }
+                .on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _w, cx: &mut App| {
+                    // Click on scrollbar: set drag state + jump to position.
+                    // Parent on_mouse_move/up handles drag + clear.
                     let track_y = f32::from(e.position.y);
                     let _ = view.update(cx, |v, cx| {
                         let (_, vp, _, lh) = v.scroll_handle.state_info();
@@ -369,33 +363,11 @@ impl LocalTerminalView {
                         let frac = 1.0 - ((track_y / track_h).clamp(0.0, 1.0));
                         let new_offset = (frac * max_off as f32).round() as usize;
                         v.scroll_handle.future_display_offset.set(Some(new_offset));
+                        v.scrollbar_drag_start = Some(track_y);
                         v.last_scroll_time = Some(std::time::Instant::now());
                         cx.notify();
                     });
                     cx.stop_propagation();
-                })
-                .on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _w, cx: &mut App| {
-                    let track_y = f32::from(e.position.y);
-                    let _ = view_down.update(cx, |v, cx| {
-                        let (_, vp, _, lh) = v.scroll_handle.state_info();
-                        if lh <= 0.0 { return; }
-                        let track_h = vp as f32 * lh;
-                        let max_off = v.scroll_handle.state_info().0.saturating_sub(vp);
-                        // Click position → display_offset
-                        let frac = 1.0 - ((track_y / track_h).clamp(0.0, 1.0));
-                        let new_offset = (frac * max_off as f32).round() as usize;
-                        v.scroll_handle.future_display_offset.set(Some(new_offset));
-                        v.scrollbar_drag_start = Some(f32::from(e.position.y));
-                        v.last_scroll_time = Some(std::time::Instant::now());
-                        cx.notify();
-                    });
-                    cx.stop_propagation();
-                })
-                .on_mouse_up(MouseButton::Left, move |_e: &MouseUpEvent, _w, cx: &mut App| {
-                    let _ = view_up.update(cx, |v, cx| {
-                        v.scrollbar_drag_start = None;
-                        cx.notify();
-                    });
                 })
                 .child(
                     div()
@@ -537,24 +509,37 @@ impl Render for LocalTerminalView {
                     }
                 }
             })
-            // Mouse move — xử lý cả drag (left button held) và hover (no button).
-            // Drag: cập nhật selection end point (non-mouse mode) hoặc encode drag (mouse mode).
-            // Hover: encode mouse motion cho app mode (vim/less/htop).
+            // Mouse move — scrollbar drag HOẶC selection drag.
             .on_mouse_move({
                 let s = session.clone();
                 let m = metrics.clone();
                 let view = view.clone();
                 move |e: &MouseMoveEvent, _w, cx: &mut App| {
+                    // Scrollbar drag: check TRƯỚC selection.
+                    if view.read(cx).scrollbar_drag_start.is_some() {
+                        let track_y = f32::from(e.position.y);
+                        let _ = view.update(cx, |v, cx| {
+                            let (_, vp, _, lh) = v.scroll_handle.state_info();
+                            if lh <= 0.0 { return; }
+                            let track_h = vp as f32 * lh;
+                            let max_off = v.scroll_handle.state_info().0.saturating_sub(vp);
+                            let frac = 1.0 - ((track_y / track_h).clamp(0.0, 1.0));
+                            let new_offset = (frac * max_off as f32).round() as usize;
+                            v.scroll_handle.future_display_offset.set(Some(new_offset));
+                            v.last_scroll_time = Some(std::time::Instant::now());
+                            cx.notify();
+                        });
+                        return;
+                    }
+                    // Normal mouse move: selection drag / hover.
                     let (row, col) = match Self::pixel_to_grid(&m.borrow(), e.position) {
                         Some(rc) => rc,
                         None => return,
                     };
                     if e.pressed_button == Some(MouseButton::Left) {
-                        // Drag: cập nhật selection.
                         s.update(cx, |s, _| s.mouse_drag(row, col));
                         let _ = view.update(cx, |v, cx| { v.last_scroll_time = Some(std::time::Instant::now()); cx.notify(); });
                     } else {
-                        // Hover: encode mouse motion (cho app mode).
                         s.update(cx, |s, _| s.mouse_move(row, col));
                     }
                 }
@@ -564,18 +549,24 @@ impl Render for LocalTerminalView {
                 let m = metrics.clone();
                 let view = view.clone();
                 move |e: &MouseUpEvent, _w, cx: &mut App| {
+                    // Scrollbar drag: clear FIRST.
+                    if view.read(cx).scrollbar_drag_start.is_some() {
+                        let _ = view.update(cx, |v, cx| {
+                            v.scrollbar_drag_start = None;
+                            cx.notify();
+                        });
+                        return;
+                    }
                     let (row, col) = match Self::pixel_to_grid(&m.borrow(), e.position) {
                         Some(rc) => rc,
                         None => return,
                     };
                     s.update(cx, |s, _| s.mouse_up(row, col, map_button(e.button)));
-                    // Select-to-copy: có selection → clipboard.
                     if let Some(text) = s.read(cx).selection_text() {
                         if !text.is_empty() {
                             cx.write_to_clipboard(ClipboardItem::new_string(text));
                         }
                     }
-                    // Re-render để vẽ selection cuối cùng.
                     let _ = view.update(cx, |v, cx| { v.last_scroll_time = Some(std::time::Instant::now()); cx.notify(); });
                 }
             })
