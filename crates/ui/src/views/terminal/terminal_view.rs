@@ -508,6 +508,7 @@ impl Render for LocalTerminalView {
             // Right-click context menu: Copy / Paste / Select All / Clear.
             .context_menu({
                 let session = session.clone();
+                let focus = self.focus.clone();
                 move |menu, _window, cx| {
                     let has_selection = session
                         .read(cx)
@@ -520,36 +521,44 @@ impl Render for LocalTerminalView {
                             .disabled(!has_selection)
                             .on_click({
                                 let s = session.clone();
-                                move |_, _, cx| {
+                                let f = focus.clone();
+                                move |_, window, cx| {
                                     if let Some(text) = s.read(cx).selection_text() {
                                         if !text.is_empty() {
                                             cx.write_to_clipboard(ClipboardItem::new_string(text));
                                         }
                                     }
+                                    window.focus(&f, cx);
                                 }
                             }),
                     )
                     .item(PopupMenuItem::new("Paste").on_click({
                         let s = session.clone();
-                        move |_, _, cx| {
+                        let f = focus.clone();
+                        move |_, window, cx| {
                             if let Some(item) = cx.read_from_clipboard() {
                                 if let Some(text) = item.text() {
                                     s.update(cx, |s, _| s.write(text.as_bytes()));
                                 }
                             }
+                            window.focus(&f, cx);
                         }
                     }))
                     .separator()
                     .item(PopupMenuItem::new("Select All").on_click({
                         let s = session.clone();
-                        move |_, _, cx| {
+                        let f = focus.clone();
+                        move |_, window, cx| {
                             s.update(cx, |s, _| s.select_all());
+                            window.focus(&f, cx);
                         }
                     }))
                     .item(PopupMenuItem::new("Clear").on_click({
                         let s = session.clone();
-                        move |_, _, cx| {
+                        let f = focus.clone();
+                        move |_, window, cx| {
                             s.update(cx, |s, _| s.clear());
+                            window.focus(&f, cx);
                         }
                     }))
                 }
