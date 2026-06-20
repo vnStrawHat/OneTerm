@@ -290,7 +290,7 @@ impl LocalTerminalView {
 
     /// Render custom scrollbar — div overlay ở cạnh phải.
     fn render_scrollbar(
-        &mut self, _theme: &TerminalTheme, cx: &mut Context<LocalTerminalView>) -> Option<impl IntoElement> {
+        &mut self, _theme: &TerminalTheme, metrics: &Rc<RefCell<GridMetrics>>, cx: &mut Context<LocalTerminalView>) -> Option<impl IntoElement> {
         let (total, viewport, display_offset, line_h) = self.scroll_handle.state_info();
 
         // Không có scrollback → không hiện scrollbar.
@@ -342,6 +342,7 @@ impl LocalTerminalView {
 
         let thumb_bg = gpui::hsla(0.0, 0.0, 0.5, opacity * 0.8);
         let view = cx.entity();
+        let m_down = metrics.clone();
 
         Some(
             div()
@@ -352,16 +353,22 @@ impl LocalTerminalView {
                 .bottom_0()
                 .w(px(12.0))
                 .on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _w, cx: &mut App| {
-                    // Click on scrollbar: set drag state + jump to position.
-                    // Parent on_mouse_move/up handles drag + clear.
-                    let track_y = f32::from(e.position.y);
+                    // e.position = window coords -> subtract terminal origin.
+                    let track_y = {
+                        let gm = m_down.borrow();
+                        match gm.bounds {
+                            Some(b) => f32::from(e.position.y - b.origin.y),
+                            None => return,
+                        }
+                    };
                     let _ = view.update(cx, |v, cx| {
-                        let (_, vp, _, lh) = v.scroll_handle.state_info();
+                        let (total, vp, _, lh) = v.scroll_handle.state_info();
                         if lh <= 0.0 { return; }
                         let track_h = vp as f32 * lh;
-                        let max_off = v.scroll_handle.state_info().0.saturating_sub(vp);
+                        let max_off = total.saturating_sub(vp);
                         let frac = 1.0 - ((track_y / track_h).clamp(0.0, 1.0));
                         let new_offset = (frac * max_off as f32).round() as usize;
+                        v.scroll_handle.update(total, vp, new_offset, lh);
                         v.scroll_handle.future_display_offset.set(Some(new_offset));
                         v.scrollbar_drag_start = Some(track_y);
                         v.last_scroll_time = Some(std::time::Instant::now());
@@ -473,7 +480,7 @@ impl Render for LocalTerminalView {
                 None
             })
             // ── Custom scrollbar ──
-            .children(self.render_scrollbar(&theme, cx))
+            .children(self.render_scrollbar(&theme, &metrics, cx))
             .on_mouse_down(MouseButton::Left, {
                 let s = session.clone();
                 let m = metrics.clone();
@@ -526,7 +533,14 @@ impl Render for LocalTerminalView {
                 move |e: &MouseMoveEvent, _w, cx: &mut App| {
                     // Scrollbar drag: check TRƯỚC selection.
                     if view.read(cx).scrollbar_drag_start.is_some() {
-                        let track_y = f32::from(e.position.y);
+                        // e.position là tọa độ window → trừ terminal origin.
+                        let track_y = {
+                            let gm = m.borrow();
+                            match gm.bounds {
+                                Some(b) => f32::from(e.position.y - b.origin.y),
+                                None => return,
+                            }
+                        };
                         let _ = view.update(cx, |v, cx| {
                             let (total, vp, _, lh) = v.scroll_handle.state_info();
                             if lh <= 0.0 { return; }
@@ -534,9 +548,7 @@ impl Render for LocalTerminalView {
                             let max_off = total.saturating_sub(vp);
                             let frac = 1.0 - ((track_y / track_h).clamp(0.0, 1.0));
                             let new_offset = (frac * max_off as f32).round() as usize;
-                            // Update scroll_handle NGAY — thumb move cùng frame.
                             v.scroll_handle.update(total, vp, new_offset, lh);
-                            // future_display_offset để render() scroll Term thật.
                             v.scroll_handle.future_display_offset.set(Some(new_offset));
                             v.last_scroll_time = Some(std::time::Instant::now());
                             cx.notify();
