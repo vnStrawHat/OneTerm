@@ -533,6 +533,14 @@ impl Render for LocalTerminalView {
                 move |e: &MouseMoveEvent, _w, cx: &mut App| {
                     // Scrollbar drag: check TRƯỚC selection.
                     if view.read(cx).scrollbar_drag_start.is_some() {
+                        // Mouse ra ngoài terminal + nhả chuột → clear drag.
+                        if e.pressed_button != Some(MouseButton::Left) {
+                            let _ = view.update(cx, |v, cx| {
+                                v.scrollbar_drag_start = None;
+                                cx.notify();
+                            });
+                            return;
+                        }
                         // e.position là tọa độ window → trừ terminal origin.
                         let track_y = {
                             let gm = m.borrow();
