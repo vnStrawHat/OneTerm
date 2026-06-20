@@ -434,6 +434,15 @@ impl Render for LocalTerminalView {
             let delta = new_offset as i32 - snap.display_offset as i32;
             if delta != 0 {
                 session.update(cx, |s, _| s.scroll(delta));
+                // Re-snapshot để cập nhật scroll_handle với display_offset MỚI
+                // (trong cùng frame — tránh lag 1 frame).
+                let new_snap = session.read(cx).snapshot();
+                self.scroll_handle.update(
+                    new_snap.total_lines,
+                    new_snap.terminal_bounds.num_lines,
+                    new_snap.display_offset,
+                    f32::from(m.line_height),
+                );
             }
         }
 
@@ -519,12 +528,15 @@ impl Render for LocalTerminalView {
                     if view.read(cx).scrollbar_drag_start.is_some() {
                         let track_y = f32::from(e.position.y);
                         let _ = view.update(cx, |v, cx| {
-                            let (_, vp, _, lh) = v.scroll_handle.state_info();
+                            let (total, vp, _, lh) = v.scroll_handle.state_info();
                             if lh <= 0.0 { return; }
                             let track_h = vp as f32 * lh;
-                            let max_off = v.scroll_handle.state_info().0.saturating_sub(vp);
+                            let max_off = total.saturating_sub(vp);
                             let frac = 1.0 - ((track_y / track_h).clamp(0.0, 1.0));
                             let new_offset = (frac * max_off as f32).round() as usize;
+                            // Update scroll_handle NGAY — thumb move cùng frame.
+                            v.scroll_handle.update(total, vp, new_offset, lh);
+                            // future_display_offset để render() scroll Term thật.
                             v.scroll_handle.future_display_offset.set(Some(new_offset));
                             v.last_scroll_time = Some(std::time::Instant::now());
                             cx.notify();
