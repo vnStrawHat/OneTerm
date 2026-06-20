@@ -481,6 +481,36 @@ impl Render for LocalTerminalView {
             })
             // ── Custom scrollbar ──
             .children(self.render_scrollbar(&theme, &metrics, cx))
+            // ── Breadcrumb bar (bottom) — cwd path từ OSC 7 ──
+            .children({
+                let breadcrumb = session.read(cx).breadcrumb_text();
+                let fg_process = session.read(cx).foreground_process();
+                if let Some(bc) = breadcrumb {
+                    let label = if let Some(proc) = &fg_process {
+                        format!("{} — {}", proc, bc)
+                    } else {
+                        bc
+                    };
+                    Some(
+                        div()
+                            .id("terminal-breadcrumb")
+                            .absolute()
+                            .bottom_0()
+                            .left_0()
+                            .right_0()
+                            .h(px(20.0))
+                            .flex()
+                            .items_center()
+                            .px_2()
+                            .text_xs()
+                            .text_color(theme_ref.border)
+                            .bg(theme_ref.background.opacity(0.9))
+                            .child(label)
+                    )
+                } else {
+                    None
+                }
+            })
             .on_mouse_down(MouseButton::Left, {
                 let s = session.clone();
                 let m = metrics.clone();

@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::WindowSize;
-use alacritty_terminal::event_loop::EventLoop;
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
@@ -18,7 +17,7 @@ use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::tty::{self, Options, Shell};
 use async_channel::Receiver;
 
-use myterm2_core::config::resolve_shell;
+use myterm2_core::config::{resolve_shell, ShellKind};
 use myterm2_core::terminal::TerminalContent;
 use myterm2_core::terminal::mouse_encode::{
     MouseModifiers, TerminalMouseButton, encode_mouse_move, encode_mouse_press,
@@ -26,6 +25,7 @@ use myterm2_core::terminal::mouse_encode::{
 };
 use myterm2_core::{AppError, CursorBounds, LocalShellConfig, SessionEvent, TerminalSession};
 
+use crate::event_loop::ShellEventLoop;
 use crate::listener::LocalListener;
 use crate::state::{SharedState, new_shared};
 
@@ -110,11 +110,24 @@ impl LocalSession {
             listener.clone(),
         )));
 
-        let event_loop = EventLoop::new(term.clone(), listener.clone(), pty, false, false)
+        let (event_loop, notifier) = ShellEventLoop::new(pty, term.clone(), listener.clone(), state.clone())
             .map_err(|e| AppError::msg(e.to_string()))?;
-        let notifier = event_loop.channel();
         listener.set_notifier(notifier);
         let _join = event_loop.spawn();
+
+        // Inject shell integration script (OSC 7 + OSC 133) dựa trên shell kind.
+        // Shell phải sẵn sàng nhận input — chờ 100ms rồi write.
+        {
+            let listener = listener.clone();
+            let kind = cfg.kind;
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                let script = shell_integration_script(kind);
+                if !script.is_empty() {
+                    listener.pty_write(script.as_bytes());
+                }
+            });
+        }
 
         Ok(Self {
             term,
@@ -445,6 +458,69 @@ impl TerminalSession for LocalSession {
 
     fn cwd(&self) -> Option<PathBuf> {
         self.state.lock().unwrap().cwd.clone()
+    }
+
+    // ── Shell Integration (OSC 133) ────────────────────────────
+    fn prompt_count(&self) -> usize {
+        self.state.lock().unwrap().prompt_count
+    }
+    fn scroll_to_prompt(&self, n: usize) {
+        // TODO: implement scroll-to-prompt using prompt marker line positions.
+        // For now, this is a placeholder — markers need grid line tracking.
+        let _ = n;
+    }
+
+    // ── Foreground Process ─────────────────────────────────────
+    fn foreground_process(&self) -> Option<String> {
+        self.state.lock().unwrap().foreground_process.clone()
+    }
+}
+
+/// Shell integration script — emit OSC 7 (cwd) + OSC 133 (prompt markers).
+/// Inject vào PTY sau khi shell sẵn sàng nhận input.
+///
+/// PowerShell: override `prompt` function để emit markers mỗi prompt cycle.
+/// Cmd: dùng `prompt` command với `$E` escape.
+/// Bash/Zsh: dùng precmd/preexec hooks.
+fn shell_integration_script(kind: ShellKind) -> String {
+    match kind {
+        ShellKind::PowerShell | ShellKind::Pwsh => {
+            // PowerShell prompt function — emit OSC 7 + OSC 133;A (prompt start),
+            // OSC 133;B (prompt end/input start) mỗi cycle.
+            // [char]27 = ESC (works PowerShell 5.x + 7+).
+            r#"
+$e = [char]27
+function prompt {
+    $p = $PWD.Path -replace '\\','/'
+    "$e]7;file://$env:COMPUTERNAME/$p$e\$e]133;A$e\$e[32mPS $($PWD.Path)$e[0m> $e]133;B$e\"
+}
+"#.to_string()
+        }
+        ShellKind::Cmd => {
+            // cmd.exe: `prompt` command với $E escape.
+            // $E = ESC, $P = path, $G = >.
+            // OSC 133;A (prompt start) + prompt text + OSC 133;B (input start).
+            // Cmd không có OSC 7 (cwd) — chỉ OSC 133.
+            "prompt $E]133;A$E\\$P$G$E]133;B$E\\\r\n".to_string()
+        }
+        ShellKind::Bash | ShellKind::Zsh => {
+            // Bash/Zsh: precmd emits OSC 7 + OSC 133;A, preexec emits OSC 133;C.
+            r#"
+__myterm2_precmd() {
+    printf '\e]7;file://%s%s\e\\' "$HOSTNAME" "$PWD"
+    printf '\e]133;A\e\\'
+}
+__myterm2_preexec() {
+    printf '\e]133;C\e\\'
+}
+PROMPT_COMMAND="__myterm2_precmd; $PROMPT_COMMAND"
+trap '__myterm2_preexec' DEBUG
+"#.to_string()
+        }
+        ShellKind::Sh | ShellKind::Custom => {
+            // sh/Custom: không inject — user tự cấu hình.
+            String::new()
+        }
     }
 }
 

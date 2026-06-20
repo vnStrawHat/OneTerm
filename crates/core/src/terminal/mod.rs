@@ -21,7 +21,7 @@ pub use mouse_encode::{
     MouseModifiers, TerminalMouseButton, encode_mouse_move, encode_mouse_press,
     encode_mouse_release, encode_wheel_event,
 };
-pub use osc::{OscPayload, OscSink, decode_osc52, encode_osc52, parse_cwd_url};
+pub use osc::{Osc133Kind, OscPayload, OscSink, decode_osc52, encode_osc52, parse_cwd_url};
 pub use palette::{TerminalPalette, resolve_color};
 pub use session::{CursorBounds, SessionEvent, TerminalSession};
 pub use url::{link_ranges, url_at};

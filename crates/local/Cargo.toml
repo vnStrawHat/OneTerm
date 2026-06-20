@@ -11,4 +11,5 @@ workspace = true
 myterm2-core.workspace = true
 alacritty_terminal.workspace = true
 async-channel.workspace = true
+polling.workspace = true
 log.workspace = true

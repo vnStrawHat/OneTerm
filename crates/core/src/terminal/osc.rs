@@ -1,13 +1,27 @@
 //! Parse side-channel OSC sequences mà alacritty VTE drop hoặc route qua
-//! `EventListener`: OSC 7 (cwd), OSC 52 (clipboard). OSC 8 (hyperlink) được
-//! alacritty lưu trực tiếp vào cell → xem `url.rs`.
+//! `EventListener`: OSC 7 (cwd), OSC 52 (clipboard), OSC 133 (shell integration).
+//! OSC 8 (hyperlink) được alacritty lưu trực tiếp vào cell → xem `url.rs`.
 //!
-//! Tham chiếu: `freya-terminal/osc7.rs` + bổ sung OSC 52.
+//! Tham chiếu: `freya-terminal/osc7.rs` + bổ sung OSC 52 + OSC 133.
+//! OSC 133 spec: https://gitlab.freedesktop.org/Per_Bothner/specifications/blob/master/proposals/semantic-prompts.md
 
 use std::path::PathBuf;
 
 use alacritty_terminal::vte::Perform;
 use base64::Engine;
+
+/// OSC 133 marker kind — đánh dấu ranh giới prompt/command/output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Osc133Kind {
+    /// `OSC 133;A` — prompt start (shell sắp vẽ prompt).
+    PromptStart,
+    /// `OSC 133;B` — prompt end / command input start (user bắt đầu gõ).
+    PromptEnd,
+    /// `OSC 133;C` — command output start (user nhấn Enter, command chạy).
+    OutputStart,
+    /// `OSC 133;D[;exit_code]` — command finished (kèm exit code nếu có).
+    OutputEnd { exit_code: Option<i32> },
+}
 
 /// Payload OSC đã capture (loại + dữ liệu thô).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,10 +30,13 @@ pub enum OscPayload {
     Cwd(String),
     /// OSC 52 — clipboard base64 payload (tham số `?` = query).
     Clipboard { query: bool, base64: String },
+    /// OSC 133 — shell integration marker (prompt/command boundary).
+    ShellIntegration(Osc133Kind),
 }
 
-/// Sink chạy song song với `Term` để bắt OSC 7/52 (alacritty drop OSC 7,
-/// OSC 52 route qua EventListener — sink này dùng khi muốn parse trực tiếp).
+/// Sink chạy song song với `Term` để bắt OSC 7/52/133.
+/// Alacritty drop OSC 7 và OSC 133, route OSC 52 qua EventListener.
+/// Sink này parse trực tiếp byte stream PTY song song với alacritty's Processor.
 #[derive(Default)]
 pub struct OscSink {
     latest: Option<OscPayload>,
@@ -65,6 +82,31 @@ impl Perform for OscSink {
                             });
                         }
                     }
+                }
+            }
+            // OSC 133: shell integration markers
+            // params = ["133", "A" | "B" | "C" | "D"]
+            // params = ["133", "D", "exit_code"] (D với exit code)
+            "133" if params.len() >= 2 => {
+                let sub = match std::str::from_utf8(params[1]) {
+                    Ok(s) => s,
+                    Err(_) => return,
+                };
+                let marker = match sub {
+                    "A" => Some(Osc133Kind::PromptStart),
+                    "B" => Some(Osc133Kind::PromptEnd),
+                    "C" => Some(Osc133Kind::OutputStart),
+                    "D" => {
+                        // D;exit_code → params[2] = exit_code (nếu có).
+                        let exit_code = params.get(2).and_then(|p| {
+                            std::str::from_utf8(p).ok().and_then(|s| s.parse::<i32>().ok())
+                        });
+                        Some(Osc133Kind::OutputEnd { exit_code })
+                    }
+                    _ => None,
+                };
+                if let Some(m) = marker {
+                    self.latest = Some(OscPayload::ShellIntegration(m));
                 }
             }
             _ => {}
@@ -173,5 +215,70 @@ mod tests {
         let s = "Héllo, 世界";
         let enc = encode_osc52(s);
         assert_eq!(decode_osc52(&enc).as_deref(), Some(s));
+    }
+
+    // ── OSC 133 tests ──────────────────────────────────────────────
+    #[test]
+    fn osc133_prompt_start() {
+        let p = sniff(&[b"\x1b]133;A\x07"]).unwrap();
+        assert_eq!(p, OscPayload::ShellIntegration(Osc133Kind::PromptStart));
+    }
+
+    #[test]
+    fn osc133_prompt_end() {
+        let p = sniff(&[b"\x1b]133;B\x07"]).unwrap();
+        assert_eq!(p, OscPayload::ShellIntegration(Osc133Kind::PromptEnd));
+    }
+
+    #[test]
+    fn osc133_output_start() {
+        let p = sniff(&[b"\x1b]133;C\x07"]).unwrap();
+        assert_eq!(p, OscPayload::ShellIntegration(Osc133Kind::OutputStart));
+    }
+
+    #[test]
+    fn osc133_output_end_no_code() {
+        let p = sniff(&[b"\x1b]133;D\x07"]).unwrap();
+        assert_eq!(
+            p,
+            OscPayload::ShellIntegration(Osc133Kind::OutputEnd { exit_code: None })
+        );
+    }
+
+    #[test]
+    fn osc133_output_end_with_code() {
+        // BEL terminated
+        let p = sniff(&[b"\x1b]133;D;0\x07"]).unwrap();
+        assert_eq!(
+            p,
+            OscPayload::ShellIntegration(Osc133Kind::OutputEnd { exit_code: Some(0) })
+        );
+        // ST terminated
+        let p2 = sniff(&[b"\x1b]133;D;127\x1b\\"]).unwrap();
+        assert_eq!(
+            p2,
+            OscPayload::ShellIntegration(Osc133Kind::OutputEnd { exit_code: Some(127) })
+        );
+    }
+
+    #[test]
+    fn osc133_full_cycle() {
+        // Simulate a full prompt cycle: A → prompt text → B → command → C → output → D;0
+        let bytes = b"\x1b]133;A\x07$ \x1b]133;B\x07echo hi\r\x1b]133;C\x07hi\n\x1b]133;D;0\x07";
+        let mut parser = VteParser::new();
+        let mut sink = OscSink::default();
+        parser.advance(&mut sink, bytes);
+        // Should capture the LAST OSC 133 payload (D;0).
+        let p = sink.take().unwrap();
+        assert_eq!(
+            p,
+            OscPayload::ShellIntegration(Osc133Kind::OutputEnd { exit_code: Some(0) })
+        );
+    }
+
+    #[test]
+    fn osc133_ignores_unknown_sub() {
+        assert_eq!(sniff(&[b"\x1b]133;X\x07"]), None);
+        assert_eq!(sniff(&[b"\x1b]133;Z;foo\x07"]), None);
     }
 }

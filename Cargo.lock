@@ -3858,6 +3858,7 @@ dependencies = [
  "async-channel 2.5.0",
  "log",
  "myterm2-core",
+ "polling",
 ]
 
 [[package]]

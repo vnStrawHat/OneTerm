@@ -32,6 +32,8 @@ linkify = "0.10"
 base64 = "0.22"
 # Event channel (SessionEvent subscribe) — không tokio lộ ra
 async-channel = "2"
+# PTY polling (same version as alacritty_terminal)
+polling = "3.8"
 # Logging (alacritty_terminal cũng dùng log)
 log = "0.4"
 

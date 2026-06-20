@@ -12,12 +12,12 @@ use std::borrow::Cow;
 use std::sync::Mutex;
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
-use alacritty_terminal::event_loop::{EventLoopSender, Msg};
 use async_channel::Sender;
 use log::warn;
 
 use myterm2_core::SessionEvent;
 
+use crate::event_loop::{ShellMsg, ShellNotifier};
 use crate::state::SharedState;
 
 /// `EventListener` cho local shell. Clone-thân thiện (Arc fields) để chia sẻ
@@ -26,8 +26,8 @@ use crate::state::SharedState;
 pub struct LocalListener {
     /// Channel phát `SessionEvent` cho UI (sub qua `subscribe`).
     event_tx: Sender<SessionEvent>,
-    /// Notifier (EventLoopSender) để ghi PTY — set sau `EventLoop::new`.
-    notifier: std::sync::Arc<Mutex<Option<EventLoopSender>>>,
+    /// Notifier (ShellNotifier) để ghi PTY — set sau ShellEventLoop::new().
+    notifier: std::sync::Arc<Mutex<Option<ShellNotifier>>>,
     /// Cache state (title/clipboard/alive) — chia sẻ với `LocalSession`.
     state: SharedState,
 }
@@ -41,22 +41,22 @@ impl LocalListener {
         }
     }
 
-    /// Set notifier sau khi `event_loop.channel()` có sẵn. Gọi trên bất kỳ
+    /// Set notifier sau khi `ShellEventLoop::new()` có sẵn. Gọi trên bất kỳ
     /// clone nào (Arc-shared).
-    pub fn set_notifier(&self, sender: EventLoopSender) {
+    pub fn set_notifier(&self, sender: ShellNotifier) {
         *self.notifier.lock().unwrap() = Some(sender);
     }
 
-    /// Ghi byte vào PTY (qua Msg::Input).
+    /// Ghi byte vào PTY (qua ShellMsg::Input).
     pub fn pty_write(&self, bytes: &[u8]) {
         if let Some(sender) = self.notifier.lock().unwrap().as_ref() {
-            if let Err(e) = sender.send(Msg::Input(Cow::Owned(bytes.to_vec()))) {
-                warn!("LocalListener: pty_write Msg::Input fail: {e:?}");
+            if let Err(e) = sender.send(ShellMsg::Input(Cow::Owned(bytes.to_vec()))) {
+                warn!("LocalListener: pty_write fail: {e}");
             }
         }
     }
 
-    /// Resize PTY (qua Msg::Resize). Grid reflow do caller (`LocalSession`).
+    /// Resize PTY (qua ShellMsg::Resize).
     pub fn pty_resize(&self, rows: u16, cols: u16) {
         if let Some(sender) = self.notifier.lock().unwrap().as_ref() {
             let sz = WindowSize {
@@ -65,24 +65,24 @@ impl LocalListener {
                 cell_width: 0,
                 cell_height: 0,
             };
-            if let Err(e) = sender.send(Msg::Resize(sz)) {
-                warn!("LocalListener: pty_resize Msg::Resize fail: {e:?}");
+            if let Err(e) = sender.send(ShellMsg::Resize(sz)) {
+                warn!("LocalListener: pty_resize fail: {e}");
             }
         }
     }
 
-    /// Shutdown EventLoop (qua Msg::Shutdown).
+    /// Shutdown EventLoop (qua ShellMsg::Shutdown).
     pub fn pty_shutdown(&self) {
         if let Some(sender) = self.notifier.lock().unwrap().as_ref() {
-            if let Err(e) = sender.send(Msg::Shutdown) {
-                warn!("LocalListener: pty_shutdown fail: {e:?}");
+            if let Err(e) = sender.send(ShellMsg::Shutdown) {
+                warn!("LocalListener: pty_shutdown fail: {e}");
             }
         }
     }
 
     /// Forward `SessionEvent` (non-blocking). Bỏ qua nếu channel đầy/closed —
     /// `Output` debounce nên chấp nhận được.
-    fn forward(&self, ev: SessionEvent) {
+    pub fn forward(&self, ev: SessionEvent) {
         if let Err(e) = self.event_tx.try_send(ev) {
             warn!("LocalListener: drop event (channel đầy/closed): {e:?}");
         }

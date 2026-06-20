@@ -103,15 +103,15 @@
 
 | ✅/❌ | Gap | Zed có | myTerm2 có | Mô tả / Ví dụ |
 |---|---|---|---|---|
-| ✅ | **OSC 7 (cwd)** | Có | Có | `parse_cwd_url` → update cwd. |
+| ✅ | **OSC 7 (cwd)** | Có | Có (fixed) | `parse_cwd_url` → update cwd. **Đã wire up**: custom `ShellEventLoop` feed byte PTY cho cả `ansi::Processor` (Term) VÀ `vte::Parser` (OscSink) song song → OscSink bắt OSC 7 → update `SessionState.cwd` → forward `SessionEvent::Cwd`. |
 | ✅ | **OSC 52 (clipboard)** | Có | Có | `decode_osc52`/`encode_osc52` → clipboard set/get. |
 | ✅ | **OSC 0/2 (title)** | Có | Có | Title change → tab title update. |
-| ❌ | **OSC 133 (shell integration)** | Có — prompt start/end, command start/end markers | Không | Zed: shell integration (zsh/fish/bash) inject OSC 133 → detect prompt boundary, command boundaries. myTerm2: không. **Ví dụ**: Zed biết khi nào command kết thúc → scroll to bottom, mark prompt. myTerm2: không biết. |
-| ❌ | **Foreground process detection** | Có — `PtyProcessInfo` (sysinfo + pgid) | Không | Zed: biết `node`, `python`, `cargo` đang chạy → tab title hiện "cargo". myTerm2: tab title luôn "Terminal". **Ví dụ**: `cargo build` → Zed tab: "cargo build". myTerm2: tab: "Terminal". |
-| ❌ | **Shell environment detection** | Có — `ProjectEnvironment`, `capture_unix/windows`, `zed --printenv` | Không | Zed: spawn shell login mode → capture env JSON → inject vào terminal. myTerm2: inherit env trực tiếp. **Ví dụ**: Zed detect `.venv` → terminal tự activate venv. myTerm2: không. |
-| ❌ | **ShellBuilder (quoting/escaping)** | Có — `ShellKind::Posix/Fish/Nushell/PowerShell`, `format_task_for_activation` | Không | Zed: biết cách quote path cho từng shell type. myTerm2: không. |
-| ❌ | **Activation script** | Có — `activation_script: Vec<String>` | Không | Zed: task chạy → inject activation script trước command. myTerm2: không. |
-| ❌ | **Breadcrumb text** | Có — `breadcrumb_text: String`, show trong toolbar | Không | Zed: toolbar terminal hiện breadcrumb (cwd path). myTerm2: chỉ title. |
+| ✅ | **OSC 133 (shell integration)** | Có | Có (fixed) | Custom `ShellEventLoop` parse OSC 133 markers (A=prompt start, B=prompt end, C=output start, D;exit_code=output end). Shell integration script auto-inject cho PowerShell/Bash/Zsh. Markers track prompt boundaries + exit codes. |
+| ⚡ | **Foreground process detection** | Có — `PtyProcessInfo` (sysinfo + pgid) | Một phần | Tab title dùng OSC 0/2 (title) + OSC 133 markers (command running vs. prompt). Chưa có `sysinfo`-based process tree detection. |
+| ⚡ | **Shell environment detection** | Có — `ProjectEnvironment`, `capture_unix/windows`, `zed --printenv` | Không | Zed: spawn shell login mode → capture env JSON → inject vào terminal. myTerm2: inherit env trực tiếp. Shell integration script inject thay vì capture env. |
+| ⚡ | **ShellBuilder (quoting/escaping)** | Có — `ShellKind::Posix/Fish/Nushell/PowerShell`, `format_task_for_activation` | Một phần | `ShellKind` enum (Cmd/PowerShell/Pwsh/Bash/Zsh/Sh/Custom) + shell-specific integration script injection. Chưa có `format_task_for_activation`. |
+| ✅ | **Activation script** | Có — `activation_script: Vec<String>` | Có (fixed) | `shell_integration_script(kind)` → auto-inject OSC 7 + OSC 133 script vào PTY sau spawn. PowerShell: override `prompt` function. Bash/Zsh: precmd/preexec hooks. Cmd: `prompt` command. |
+| ✅ | **Breadcrumb text** | Có — `breadcrumb_text: String`, show trong toolbar | Có (fixed) | `TerminalSession::breadcrumb_text()` → returns cwd path (OSC 7). Terminal view hiển thị breadcrumb bar ở bottom (cwd + foreground process). |
 
 ---
 
@@ -220,14 +220,14 @@
 | C — Scrolling | 7 | 7 | 0 | 100% |
 | D — Search | 5 | 0 | 5 | 0% |
 | E — Hyperlinks & Navigation | 7 | 3 | 4 | 43% |
-| F — Shell Integration | 9 | 3 | 6 | 33% |
+| F — Shell Integration | 9 | 5 | 4 | 56% |
 | G — Task Integration | 5 | 0 | 5 | 0% |
 | H — Input & IME | 10 | 5 | 5 | 50% |
 | I — Panel & Workspace | 9 | 1 | 8 | 11% |
 | J — Settings & Configuration | 16 | 3 | 13 | 19% |
 | K — Architecture & Backend | 10 | 5 | 5 | 50% |
 | L — Mouse & Interaction | 7 | 3 | 4 | 43% |
-| **Tổng** | 108 | **49** | **63** | **45%** |
+| **Tổng** | 108 | **51** | **61** | **47%** |
 
 ---
 

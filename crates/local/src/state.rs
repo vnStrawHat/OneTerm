@@ -2,6 +2,7 @@
 //! (cập nhật khi nhận event) và `LocalSession` (đọc qua trait accessors).
 //!
 //! alacritty `Term` không expose `title`/`cwd`/clipboard → phải tự cache.
+//! OSC 133 (shell integration) cũng cache ở đây — prompt count + last exit code.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -19,6 +20,12 @@ pub struct SessionState {
     pub alive: bool,
     /// Exit code nếu đã thoát.
     pub exit_code: Option<i32>,
+    /// Số prompt markers (OSC 133;A) đã capture — cho scroll-to-prompt.
+    pub prompt_count: usize,
+    /// Exit code của command cuối (OSC 133;D;exit_code).
+    pub last_exit_code: Option<i32>,
+    /// Foreground process hiện tại (vd "cargo", "node").
+    pub foreground_process: Option<String>,
 }
 
 /// Arc-Mutex wrapper tiện lợi.
