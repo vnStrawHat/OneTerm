@@ -61,6 +61,8 @@ pub trait TerminalSession: Send + Sync + 'static {
     // ── Input ───────────────────────────────────────────────
     /// Ghi byte vào PTY/channel (keystroke, paste, OSC response).
     fn write(&self, bytes: &[u8]);
+    /// Flush PTY output buffer (Windows ConPTY workaround).
+    fn flush_pty(&self);
     /// Resize rows×cols (PTY resize / ssh window_change).
     fn resize(&self, rows: u16, cols: u16);
     /// Scroll scrollback (chỉ khi không alt-screen / không mouse mode).

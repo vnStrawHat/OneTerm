@@ -192,6 +192,13 @@ impl TerminalSession for LocalSession {
         self.listener.pty_write(bytes);
     }
 
+    fn flush_pty(&self) {
+        // Gửi DSR (Device Status Report) query → ConPTY xử lý escape sequence,
+        // respond với cursor position → flush output buffer.
+        // Windows ConPTY buffer output, chỉ flush khi có interaction.
+        self.listener.pty_write(b"\x1b[6n");
+    }
+
     fn resize(&self, rows: u16, cols: u16) {
         // Skip nếu size không đổi — tránh gửi pty_resize mỗi render (TerminalElement
         // được tạo lại mỗi frame, last_size luôn None). pty_resize không cần thiết

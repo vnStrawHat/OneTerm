@@ -125,17 +125,24 @@ impl LocalTerminalView {
                                 Err(_) => break,
                             }
                         }
-                        // Follow-up renders: ConPTY (Windows) output có thể đến
-                        // thành nhiều đợt (bursty). Sau khi drain xong, data mới
-                        // có thể vẫn đang được background thread đọc từ ConPTY →
-                        // thêm 2 re-render trì hoãn để bắt data đến muộn.
+                        // Follow-up: ConPTY (Windows) buffer output, chỉ flush
+                        // khi có interaction. Gửi DSR query (\x1b[6n) để force
+                        // ConPTY flush + re-render để bắt data đến muộn.
                         let this_a = this.clone();
                         let this_b = this.clone();
+                        let this_c = this.clone();
+                        let s_flush = session_for_spawn.clone();
                         cx.spawn(async move |cx| {
+                            // 50ms: flush ConPTY buffer + render
                             cx.background_executor().timer(Duration::from_millis(50)).await;
+                            let _ = cx.update(|cx| s_flush.read(cx).flush_pty());
                             let _ = this_a.update(cx, |_, cx| cx.notify());
-                            cx.background_executor().timer(Duration::from_millis(150)).await;
+                            // 150ms: render lại để bắt data flush
+                            cx.background_executor().timer(Duration::from_millis(100)).await;
                             let _ = this_b.update(cx, |_, cx| cx.notify());
+                            // 400ms: render cuối cùng (delay dài cho ConPTY chậm)
+                            cx.background_executor().timer(Duration::from_millis(250)).await;
+                            let _ = this_c.update(cx, |_, cx| cx.notify());
                         }).detach();
                     }
                     SessionEvent::Bell => {
