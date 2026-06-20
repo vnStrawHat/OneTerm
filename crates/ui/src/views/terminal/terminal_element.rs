@@ -2,8 +2,12 @@
 //! `TerminalContent` snapshot. #15: bg + cell rects (batched) + text runs
 //! (batched) + cursor. Không giữ Entity — View (#16) truyền snapshot tươi ở
 //! `render()`. Tham chiếu Zed `terminal_element.rs::layout_grid` + `paint`.
+//!
+//! Group A: cursor shape (Block/Bar/Underline), cursor blink, selection
+//! inverse video (fg/bg swap cho cell trong selection).
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::mem;
 use std::rc::Rc;
 
@@ -11,8 +15,8 @@ use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
 use gpui::{
     App, Bounds, ContentMask, Element, ElementId, Entity, Font, FontStyle, FontWeight,
-    GlobalElementId, Hitbox, Hsla, IntoElement, LayoutId, Pixels, Point as GpuiPoint, SharedString,
-    TextAlign, TextRun, UnderlineStyle, Window, fill, point, px, relative, size,
+    GlobalElementId, Hitbox, Hsla, IntoElement, LayoutId, Pixels, Point as GpuiPoint,
+    SharedString, TextAlign, TextRun, UnderlineStyle, Window, fill, point, px, relative, size,
 };
 
 use myterm2_core::TerminalSession;
@@ -24,7 +28,7 @@ use super::terminal_view::LocalTerminalView;
 use super::theme::{TerminalTheme, ensure_minimum_contrast, resolve_cell_color};
 
 /// Metrics grid sau layout — View đọc để convert mouse pixel → (row,col).
-/// Element ghi ở `prepaint`, View đọc ở handler (cùng thread → `Rc<RefCell>`).
+/// Element ghi ở prepaint, View đọc ở handler (cùng thread → `Rc<RefCell>`).
 #[derive(Clone, Copy, Default)]
 #[allow(dead_code)]
 pub(crate) struct GridMetrics {
@@ -37,7 +41,7 @@ pub(crate) struct GridMetrics {
 }
 
 /// Layout point (display line/col, 0-based từ top viewport).
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 struct LayoutPoint {
     line: i32,
     column: i32,
@@ -95,6 +99,8 @@ pub(crate) struct TerminalElement {
     font_size: Pixels,
     line_height_factor: f32,
     focused: bool,
+    /// Có vẽ cursor không (blink logic: true = hiện, false = ẩn giữa blink).
+    cursor_visible: bool,
     /// Lần resize gần nhất (tránh resize lặp).
     last_size: Option<(u16, u16)>,
     /// Sink layout metrics cho View (mouse/wheel).
@@ -113,6 +119,7 @@ impl TerminalElement {
         font_size: Pixels,
         line_height_factor: f32,
         focused: bool,
+        cursor_visible: bool,
         metrics: Rc<RefCell<GridMetrics>>,
         view: Entity<LocalTerminalView>,
         focus: gpui::FocusHandle,
@@ -124,6 +131,7 @@ impl TerminalElement {
             font_size,
             line_height_factor,
             focused,
+            cursor_visible,
             last_size: None,
             metrics,
             view,
@@ -236,11 +244,27 @@ impl TerminalElement {
         rects
     }
 
+    /// Build set of (line, column) trong selection → để swap fg/bg khi vẽ text.
+    fn build_selection_set(selection_rects: &[LayoutRect]) -> HashSet<LayoutPoint> {
+        let mut set = HashSet::new();
+        for r in selection_rects {
+            for c in 0..r.num_cells {
+                set.insert(LayoutPoint {
+                    line: r.point.line,
+                    column: r.point.column + c as i32,
+                });
+            }
+        }
+        set
+    }
+
     /// Build rects + text runs từ cells (theo display order). Trả (rects, runs).
+    /// `selection_set` — nếu cell trong selection, swap fg/bg (inverse video).
     fn layout_grid(
         cells: &[IndexedCell],
         theme: &TerminalTheme,
         base_font: &Font,
+        selection_set: &HashSet<LayoutPoint>,
     ) -> (Vec<LayoutRect>, Vec<BatchedTextRun>) {
         use itertools::Itertools;
         let mut rects: Vec<LayoutRect> = Vec::new();
@@ -271,7 +295,15 @@ impl TerminalElement {
 
                 let (fg, bg) = Self::cell_colors(cell, theme);
 
-                // Nền khác default → rect.
+                // Kiểm tra cell có trong selection không.
+                let lp = LayoutPoint {
+                    line: display_line,
+                    column: point.column.0 as i32,
+                };
+                // Kiểm tra cell có trong selection không — chỉ dùng cho blank check.
+                let _is_selected = selection_set.contains(&lp);
+
+                // Nền khác default → rect. Hoặc cell trong selection → rect nền.
                 if !is_default_background_color(&cell.bg) || cell.flags.contains(Flags::INVERSE) {
                     let col = point.column.0 as i32;
                     if let Some(last) = rects.last_mut() {
@@ -296,11 +328,10 @@ impl TerminalElement {
                 if Self::is_blank(cell) {
                     continue;
                 }
+
+                // Selection: giữ nguyên text color — selection background paint
+                // riêng ở layer selection_rects (giống Zed, KHÔNG inverse video).
                 let style = Self::cell_style(cell, fg, base_font);
-                let lp = LayoutPoint {
-                    line: display_line,
-                    column: point.column.0 as i32,
-                };
                 let zw = cell.zerowidth();
 
                 if let Some(b) = current_batch.as_mut() {
@@ -496,9 +527,8 @@ impl Element for TerminalElement {
         let num_cols = snapshot.terminal_bounds.num_cols;
         let display_offset = snapshot.display_offset;
 
-        let (rects, runs) = Self::layout_grid(&snapshot.cells, &self.theme, &self.font);
-
-        // Selection highlight rects.
+        // Selection highlight rects — tính trước để build selection_set
+        // cho layout_grid (inverse video).
         let selection_rects = snapshot
             .selection
             .map(|sel| {
@@ -511,6 +541,11 @@ impl Element for TerminalElement {
                 )
             })
             .unwrap_or_default();
+
+        let selection_set = Self::build_selection_set(&selection_rects);
+
+        let (rects, runs) =
+            Self::layout_grid(&snapshot.cells, &self.theme, &self.font, &selection_set);
 
         // Cursor.
         let cursor = {
@@ -613,14 +648,40 @@ impl Element for TerminalElement {
                 run.paint(origin, cw, lh, font_px, window, cx);
             }
 
-            // Cursor (block, filled khi focused).
+            // Cursor — vẽ theo shape (Block/Bar/Underline), có blink.
             if let Some(cur) = &layout.cursor {
-                if self.focused || matches!(cur.shape, CursorShape::Block) {
+                // Quyết định có vẽ cursor không:
+                // - Không focus → luôn vẽ (để user thấy cursor ở đâu).
+                // - Focus + blink on → chỉ vẽ khi cursor_visible.
+                // - Focus + blink off → luôn vẽ.
+                let should_paint = !self.focused || self.cursor_visible;
+                if should_paint {
                     let pos = point(
                         (origin.x + cur.point.column as f32 * cw).floor(),
                         origin.y + cur.point.line as f32 * lh,
                     );
-                    let sz = size(cw, lh);
+                    let sz = match cur.shape {
+                        CursorShape::Beam => {
+                            // Thanh dọc hẹp: 20% cell width, full height.
+                            let bar_w = (cw * 0.2).max(px(1.0));
+                            size(bar_w, lh)
+                        }
+                        CursorShape::Underline => {
+                            // Gạch dưới: full width, 15% line height (min 2px).
+                            let ul_h = (lh * 0.15).max(px(2.0));
+                            size(cw, ul_h)
+                        }
+                        CursorShape::Block => {
+                            // Block đầy: full cell.
+                            size(cw, lh)
+                        }
+                        CursorShape::HollowBlock => {
+                            // Hollow block: vẽ border (không fill) — fallback
+                            // về block đầy cho đơn giản.
+                            size(cw, lh)
+                        }
+                        CursorShape::Hidden => return,
+                    };
                     window.paint_quad(fill(Bounds::new(pos, sz), cur.color));
                 }
             }

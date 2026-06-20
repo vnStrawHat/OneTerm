@@ -2,20 +2,56 @@
 //!
 //! #20: shell picker. Entity dùng chung, `TerminalPanel` đọc khi spawn.
 //! `TerminalSettingsPanel` cập nhật kind → notify.
+//! Group A: cursor shape, cursor blink, font features, bell.
 
-use gpui::{App, AppContext, Entity, Global};
+use gpui::{App, AppContext, Entity, Global, SharedString};
 use myterm2_core::LocalShellConfig;
 use myterm2_core::config::ShellKind;
 
-/// Config terminal toàn cục (shell + tùy chọn sau này: font, scrollback…).
+/// Hình dáng con trỏ terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TerminalCursorShape {
+    /// Block đầy — mặc định.
+    #[default]
+    Block,
+    /// Thanh dọc hẹp `│`.
+    Bar,
+    /// Gạch dưới `_`.
+    Underline,
+}
+
+/// Chế độ nhấp nháy con trỏ.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TerminalBlink {
+    /// Nhấp nháy khi focus (mặc định).
+    #[default]
+    On,
+    /// Không nhấp nháy.
+    Off,
+}
+
+/// Config terminal toàn cục (shell + rendering options).
 pub struct TerminalSettings {
     pub shell: LocalShellConfig,
+    /// Hình dáng con trỏ (Block/Bar/Underline).
+    pub cursor_shape: TerminalCursorShape,
+    /// Bật/tắt nhấp nháy con trỏ.
+    pub cursor_blink: TerminalBlink,
+    /// Font features cho terminal (ligatures, stylistic sets…).
+    /// Vd: `["calt", "liga"]` → bật ligatures; `[]` → tắt.
+    pub font_features: Vec<SharedString>,
+    /// Bật/tắt bell indicator (🔔 trong tab khi nhận `\x07`).
+    pub bell_enabled: bool,
 }
 
 impl Default for TerminalSettings {
     fn default() -> Self {
         Self {
             shell: LocalShellConfig::default(),
+            cursor_shape: TerminalCursorShape::Block,
+            cursor_blink: TerminalBlink::On,
+            font_features: Vec::new(),
+            bell_enabled: true,
         }
     }
 }
@@ -50,5 +86,20 @@ impl TerminalSettings {
         } else {
             Some(program.into())
         };
+    }
+
+    /// Đặt hình dáng con trỏ.
+    pub fn set_cursor_shape(&mut self, shape: TerminalCursorShape) {
+        self.cursor_shape = shape;
+    }
+
+    /// Đặt chế độ nhấp nháy.
+    pub fn set_cursor_blink(&mut self, blink: TerminalBlink) {
+        self.cursor_blink = blink;
+    }
+
+    /// Đặt font features.
+    pub fn set_font_features(&mut self, features: Vec<SharedString>) {
+        self.font_features = features;
     }
 }

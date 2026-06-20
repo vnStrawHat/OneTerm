@@ -193,6 +193,16 @@ impl TerminalSession for LocalSession {
     }
 
     fn resize(&self, rows: u16, cols: u16) {
+        // Skip nếu size không đổi — tránh gửi pty_resize mỗi render (TerminalElement
+        // được tạo lại mỗi frame, last_size luôn None). pty_resize không cần thiết
+        // khi size giữ nguyên, và shell có thể redraw → clear selection.
+        let needs_resize = {
+            let term = self.term.lock();
+            term.columns() != cols as usize || term.screen_lines() != rows as usize
+        };
+        if !needs_resize {
+            return;
+        }
         self.listener.pty_resize(rows, cols);
         self.term.lock().resize(TermSize {
             cols: cols as usize,
@@ -245,7 +255,24 @@ impl TerminalSession for LocalSession {
                 MouseModifiers::default(),
             );
             self.write(s.as_bytes());
-        } else if !mode.intersects(TermMode::MOUSE_MODE) {
+        }
+        // Non-mouse mode: KHÔNG cập nhật selection — chỉ `mouse_drag` mới cập nhật.
+    }
+
+    fn mouse_drag(&self, row: f32, col: f32) {
+        let mode = self.mode();
+        if mode.intersects(TermMode::MOUSE_MODE) {
+            // Mouse mode: encode drag với button Left.
+            let s = encode_mouse_move(
+                row as usize,
+                col as usize,
+                Some(TerminalMouseButton::Left),
+                mode,
+                MouseModifiers::default(),
+            );
+            self.write(s.as_bytes());
+        } else {
+            // Non-mouse mode: cập nhật selection end point.
             self.update_selection(row, col);
         }
     }
@@ -476,7 +503,7 @@ mod tests {
         let s = spawn_default();
         // Cmd không bật mouse mode → selection (không panic, không encode).
         s.mouse_down(0.0, 0.0, TerminalMouseButton::Left, SelectionType::Simple);
-        s.mouse_move(0.0, 5.0);
+        s.mouse_drag(0.0, 5.0);
         s.mouse_up(0.0, 5.0, TerminalMouseButton::Left);
         s.close();
     }
@@ -490,10 +517,35 @@ mod tests {
         s.write(b"hello");
         std::thread::sleep(std::time::Duration::from_millis(50));
         s.mouse_down(0.0, 0.0, TerminalMouseButton::Left, SelectionType::Simple);
-        s.mouse_move(0.0, 4.0);
+        s.mouse_drag(0.0, 4.0);
         // selection_to_string có thể trả Some/None tùy trạng thái grid — chỉ kiểm không panic.
         let _ = s.selection_text();
         s.clear_selection();
+        s.close();
+    }
+
+    #[test]
+    fn mouse_drag_updates_selection_not_mouse_move() {
+        let s = spawn_default();
+        s.write(b"hello_world");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        // Start selection at col 0
+        s.mouse_down(0.0, 0.0, TerminalMouseButton::Left, SelectionType::Simple);
+        // mouse_move (hover, no button) should NOT update selection
+        s.mouse_move(0.0, 10.0);
+        let snap = s.snapshot();
+        // Selection should still be empty (start == end at col 0)
+        // to_range returns None for empty simple selection
+        assert!(snap.selection.is_none(), "mouse_move should not update selection");
+        // mouse_drag should update selection
+        s.mouse_drag(0.0, 5.0);
+        let snap2 = s.snapshot();
+        assert!(snap2.selection.is_some(), "mouse_drag should update selection");
+        if let Some(sel) = &snap2.selection {
+            assert_eq!(sel.start.column.0, 0);
+            assert!(sel.end.column.0 >= 4, "end col should be >= 4 after drag to col 5");
+        }
+        s.mouse_up(0.0, 5.0, TerminalMouseButton::Left);
         s.close();
     }
 

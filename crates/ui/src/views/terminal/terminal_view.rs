@@ -3,9 +3,13 @@
 //!
 //! Giữ `Entity<Box<dyn TerminalSession>>` (không biết local/ssh). #16: render +
 //! events + keyboard. #17: mouse/selection/wheel. IME ở #19.
+//!
+//! Group A: cursor blink (500ms timer), cursor shape config, bell indicator,
+//! font features.
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
 
 use alacritty_terminal::selection::SelectionType;
 use gpui::{
@@ -24,6 +28,10 @@ use myterm2_core::{SessionEvent, TerminalSession};
 use super::terminal_element::{GridMetrics, TerminalElement};
 use super::terminal_scrollbar::TerminalScrollHandle;
 use super::theme::{TerminalTheme, build_terminal_theme};
+use crate::state::{TerminalBlink, TerminalSettings};
+
+/// Khoảng thời gian nhấp nháy con trỏ (ms) — giống Zed `CURSOR_BLINK_INTERVAL`.
+const CURSOR_BLINK_INTERVAL_MS: u64 = 500;
 
 /// View render 1 terminal session (local hoặc ssh — qua `dyn TerminalSession`).
 pub struct LocalTerminalView {
@@ -36,6 +44,10 @@ pub struct LocalTerminalView {
     metrics: Rc<RefCell<GridMetrics>>,
     /// Scrollbar handle — cache scrollback state, apply drag → session.
     scroll_handle: TerminalScrollHandle,
+    /// Con trỏ có đang hiện không (blink toggle). True = vẽ, false = ẩn.
+    cursor_blink_visible: bool,
+    /// Bell indicator — true khi nhận `\x07`, clear khi user gõ phím.
+    has_bell: bool,
 }
 
 impl LocalTerminalView {
@@ -87,6 +99,12 @@ impl LocalTerminalView {
                                         ));
                                     });
                                 }
+                                Ok(SessionEvent::Bell) => {
+                                    let _ = this.update(cx, |view, cx| {
+                                        view.has_bell = true;
+                                        cx.notify();
+                                    });
+                                }
                                 Ok(_) => {
                                     // Title/Cwd/Exited/Closed → notify.
                                     let _ = this.update(cx, |_, cx| cx.notify());
@@ -95,10 +113,32 @@ impl LocalTerminalView {
                             }
                         }
                     }
+                    SessionEvent::Bell => {
+                        let _ = this.update(cx, |view, cx| {
+                            view.has_bell = true;
+                            cx.notify();
+                        });
+                    }
                     _ => {
                         let _ = this.update(cx, |_, cx| cx.notify());
                     }
                 }
+            }
+        })
+        .detach();
+
+        // Cursor blink timer — toggle visible mỗi 500ms.
+        // Chỉ nhấp nháy khi focus + blink on. Timer luôn chạy, View quyết định
+        // có vẽ không dựa trên focused + cursor_blink_visible.
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(CURSOR_BLINK_INTERVAL_MS))
+                    .await;
+                let _ = this.update(cx, |view, cx| {
+                    view.cursor_blink_visible = !view.cursor_blink_visible;
+                    cx.notify();
+                });
             }
         })
         .detach();
@@ -111,6 +151,8 @@ impl LocalTerminalView {
             line_height_factor: 1.2,
             metrics: Rc::new(RefCell::new(GridMetrics::default())),
             scroll_handle: TerminalScrollHandle::new(),
+            cursor_blink_visible: true,
+            has_bell: false,
         }
     }
 
@@ -153,13 +195,15 @@ impl LocalTerminalView {
         Some((spec, keymods))
     }
 
-    fn font(&self) -> gpui::Font {
+    fn font(&self, settings: &TerminalSettings) -> gpui::Font {
         gpui::Font {
             family: self.font_family.clone().into(),
             weight: gpui::FontWeight::default(),
             style: gpui::FontStyle::Normal,
             fallbacks: None,
-            features: Default::default(),
+            features: gpui::FontFeatures(std::sync::Arc::new(
+                settings.font_features.iter().map(|f| (f.to_string(), 1u32)).collect()
+            )),
         }
     }
 
@@ -191,6 +235,20 @@ impl LocalTerminalView {
             }
         }
     }
+
+    /// Quyết định có vẽ cursor không (blink logic).
+    /// - Không focus → luôn vẽ (để user thấy cursor ở đâu).
+    /// - Focus + blink off → luôn vẽ.
+    /// - Focus + blink on → vẽ khi cursor_blink_visible.
+    fn should_show_cursor(&self, focused: bool, settings: &TerminalSettings) -> bool {
+        if !focused {
+            return true;
+        }
+        match settings.cursor_blink {
+            TerminalBlink::Off => true,
+            TerminalBlink::On => self.cursor_blink_visible,
+        }
+    }
 }
 
 fn map_button(b: MouseButton) -> TerminalMouseButton {
@@ -213,8 +271,19 @@ impl Render for LocalTerminalView {
         let theme: TerminalTheme = build_terminal_theme(cx.theme());
         let focused = self.focus.is_focused(window);
         let session = self.session.clone();
-        let font = self.font();
+        // Đọc settings + extract dữ liệu cần thiết trước khi mutate session.
+        let settings_entity = TerminalSettings::global(cx);
+        let (font, cursor_visible, bell_enabled, has_bell) = {
+            let settings = settings_entity.read(cx);
+            (
+                self.font(settings),
+                self.should_show_cursor(focused, settings),
+                settings.bell_enabled,
+                self.has_bell,
+            )
+        };
         let metrics = self.metrics.clone();
+        let view = cx.entity();
 
         // Cập nhật scroll handle từ snapshot (frame trước — metrics đã có
         // line_height từ prepaint lần trước).
@@ -235,6 +304,8 @@ impl Render for LocalTerminalView {
             }
         }
 
+        let theme_ref = cx.theme().clone();
+
         div()
             .id("local-terminal-view")
             .size_full()
@@ -247,15 +318,23 @@ impl Render for LocalTerminalView {
                 self.font_size,
                 self.line_height_factor,
                 focused,
+                cursor_visible,
                 metrics.clone(),
                 cx.entity(),
                 self.focus.clone(),
             ))
+            // Bell indicator overlay (góc trên-phải).
+            .children(if has_bell && bell_enabled {
+                Some(div().id("terminal-bell").absolute().top_1().right_2().px_1().py_0().text_xs().text_color(theme_ref.warning).child("🔔"))
+            } else {
+                None
+            })
             // Scrollbar dọc — overlay absolute, tự ẩn khi không có scrollback.
             .child(Scrollbar::vertical(&self.scroll_handle))
             .on_mouse_down(MouseButton::Left, {
                 let s = session.clone();
                 let m = metrics.clone();
+                let view = view.clone();
                 move |e: &MouseDownEvent, _w, cx: &mut App| {
                     let (row, col) = match Self::pixel_to_grid(&m.borrow(), e.position) {
                         Some(rc) => rc,
@@ -281,6 +360,8 @@ impl Render for LocalTerminalView {
                             Self::sel_type(e.click_count, e.modifiers.alt),
                         )
                     });
+                    // Trigger re-render để vẽ selection highlight.
+                    let _ = view.update(cx, |_, cx| cx.notify());
                 }
             })
             .on_mouse_down(MouseButton::Middle, {
@@ -294,20 +375,32 @@ impl Render for LocalTerminalView {
                     }
                 }
             })
+            // Mouse move — xử lý cả drag (left button held) và hover (no button).
+            // Drag: cập nhật selection end point (non-mouse mode) hoặc encode drag (mouse mode).
+            // Hover: encode mouse motion cho app mode (vim/less/htop).
             .on_mouse_move({
                 let s = session.clone();
                 let m = metrics.clone();
+                let view = view.clone();
                 move |e: &MouseMoveEvent, _w, cx: &mut App| {
                     let (row, col) = match Self::pixel_to_grid(&m.borrow(), e.position) {
                         Some(rc) => rc,
                         None => return,
                     };
-                    s.update(cx, |s, _| s.mouse_move(row, col));
+                    if e.pressed_button == Some(MouseButton::Left) {
+                        // Drag: cập nhật selection.
+                        s.update(cx, |s, _| s.mouse_drag(row, col));
+                        let _ = view.update(cx, |_, cx| cx.notify());
+                    } else {
+                        // Hover: encode mouse motion (cho app mode).
+                        s.update(cx, |s, _| s.mouse_move(row, col));
+                    }
                 }
             })
             .on_mouse_up(MouseButton::Left, {
                 let s = session.clone();
                 let m = metrics.clone();
+                let view = view.clone();
                 move |e: &MouseUpEvent, _w, cx: &mut App| {
                     let (row, col) = match Self::pixel_to_grid(&m.borrow(), e.position) {
                         Some(rc) => rc,
@@ -320,11 +413,14 @@ impl Render for LocalTerminalView {
                             cx.write_to_clipboard(ClipboardItem::new_string(text));
                         }
                     }
+                    // Re-render để vẽ selection cuối cùng.
+                    let _ = view.update(cx, |_, cx| cx.notify());
                 }
             })
             .on_scroll_wheel({
                 let s = session.clone();
                 let m = metrics.clone();
+                let view = view.clone();
                 move |e: &ScrollWheelEvent, _w, cx: &mut App| {
                     let (row, col) = match Self::pixel_to_grid(&m.borrow(), e.position) {
                         Some(rc) => rc,
@@ -343,11 +439,15 @@ impl Render for LocalTerminalView {
                     };
                     if delta_y.abs() >= 0.001 {
                         s.update(cx, |s, _| s.wheel(delta_y as f64, row, col));
+                        // Re-render để cập nhật scroll handle state → scrollbar
+                        // hiện (offset thay đổi → scrollbar fade in).
+                        let _ = view.update(cx, |_, cx| cx.notify());
                     }
                 }
             })
             .on_key_down({
                 let s = session.clone();
+                let view = view.clone();
                 move |e: &KeyDownEvent, _w, cx: &mut App| {
                     let mods = e.keystroke.modifiers;
                     // Ctrl+Shift+C = copy, Ctrl+Shift+V = paste (terminal: Ctrl+C
@@ -393,6 +493,13 @@ impl Render for LocalTerminalView {
                         return;
                     };
                     s.update(cx, |s, _| s.write(&bytes));
+                    // Clear bell indicator khi user gõ phím.
+                    let _ = view.update(cx, |view, cx| {
+                        if view.has_bell {
+                            view.has_bell = false;
+                            cx.notify();
+                        }
+                    });
                     // Ngăn GPUI xử lý tiếp (vd Tab = focus traversal, arrow =
                     // scroll). Nếu không stop_propagation, focus sẽ bị chuyển đi.
                     cx.stop_propagation();
@@ -509,6 +616,10 @@ impl EntityInputHandler for LocalTerminalView {
         // Commit IME hoặc ký tự thường (normal mode). Đây là nguồn ghi tin cậy —
         // on_key_down skip ký tự thường khi IME active để tránh double (aa).
         self.session.update(cx, |s, _| s.commit_text(text));
+        // Clear bell khi user gõ.
+        if self.has_bell {
+            self.has_bell = false;
+        }
         cx.notify();
     }
 

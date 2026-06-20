@@ -31,6 +31,8 @@ pub enum SessionEvent {
     Exited(Option<i32>),
     /// Session đóng (PTY/SSH channel kết thúc).
     Closed,
+    /// Bell (`\x07`) — UI show 🔔 indicator, clear khi user gõ phím.
+    Bell,
 }
 
 /// Hình chữ nhật pixel của con trỏ — cho IME popup positioning.
@@ -68,7 +70,12 @@ pub trait TerminalSession: Send + Sync + 'static {
     /// `sel` chọn loại selection khi không ở mouse mode: `Simple` (click),
     /// `Semantic` (double-click), `Lines` (triple-click), `Block` (alt-select).
     fn mouse_down(&self, row: f32, col: f32, button: TerminalMouseButton, sel: SelectionType);
+    /// Hover (no button held) — encode mouse motion cho app mode (vim/less/htop).
+    /// KHÔNG cập nhật selection (chỉ `mouse_drag` mới cập nhật).
     fn mouse_move(&self, row: f32, col: f32);
+    /// Drag (left button held) — cập nhật selection end point (non-mouse mode)
+    /// hoặc encode mouse drag (mouse mode).
+    fn mouse_drag(&self, row: f32, col: f32);
     fn mouse_up(&self, row: f32, col: f32, button: TerminalMouseButton);
     fn wheel(&self, delta_y: f64, row: f32, col: f32);
 

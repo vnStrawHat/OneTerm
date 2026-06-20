@@ -141,10 +141,13 @@ impl EventListener for LocalListener {
             Event::Exit => {
                 // close() gửi Msg::Shutdown trực tiếp; Exit ở đây = info.
             }
+            // ── Bell ──────────────────────────────────────────────────
+            Event::Bell => {
+                self.forward(SessionEvent::Bell);
+            }
             // ── Bỏ qua (chưa cần) ──────────────────────────────────────
             Event::MouseCursorDirty
             | Event::CursorBlinkingChange
-            | Event::Bell
             | Event::ColorRequest(_, _)
             | Event::TextAreaSizeRequest(_) => {}
         }
