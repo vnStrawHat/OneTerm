@@ -69,6 +69,8 @@ pub trait TerminalSession: Send + Sync + 'static {
     fn scroll(&self, delta: i32);
     /// Scroll to bottom (display_offset = 0) — dùng khi có output mới.
     fn scroll_to_bottom(&self);
+    /// Scroll to top (display_offset = max) — Shift+Home.
+    fn scroll_to_top(&self);
 
     // ── Mouse ────────────────────────────────────────────────
     /// `sel` chọn loại selection khi không ở mouse mode: `Simple` (click),

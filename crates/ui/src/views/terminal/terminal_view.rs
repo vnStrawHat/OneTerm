@@ -20,7 +20,7 @@ use gpui::{
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
-use gpui_component::scroll::Scrollbar;
+use gpui_component::scroll::{Scrollbar, ScrollbarShow};
 
 use myterm2_core::terminal::{KeyMods, KeySpec, NamedKey, TerminalMouseButton, encode_key};
 use myterm2_core::{SessionEvent, TerminalSession};
@@ -363,7 +363,7 @@ impl Render for LocalTerminalView {
                 None
             })
             // Scrollbar dọc — overlay absolute, tự ẩn khi không có scrollback.
-            .child(Scrollbar::vertical(&self.scroll_handle))
+            .child(Scrollbar::vertical(&self.scroll_handle).scrollbar_show(ScrollbarShow::Always))
             .on_mouse_down(MouseButton::Left, {
                 let s = session.clone();
                 let m = metrics.clone();
@@ -470,6 +470,9 @@ impl Render for LocalTerminalView {
                         }
                         ScrollDelta::Lines(l) => l.y,
                     };
+                    // Apply scroll_multiplier setting.
+                    let multiplier = TerminalSettings::global(cx).read(cx).scroll_multiplier;
+                    let delta_y = delta_y * multiplier;
                     if delta_y.abs() >= 0.001 {
                         s.update(cx, |s, _| s.wheel(delta_y as f64, row, col));
                         // Re-render để cập nhật scroll handle state → scrollbar
@@ -483,6 +486,59 @@ impl Render for LocalTerminalView {
                 let view = view.clone();
                 move |e: &KeyDownEvent, _w, cx: &mut App| {
                     let mods = e.keystroke.modifiers;
+                    // ── Scroll keyboard actions (Group C) ──
+                    // Shift+PageUp/Down: scroll scrollback 1 viewport.
+                    // Shift+Home/End: scroll to top/bottom.
+                    // Ctrl+Shift+Up/Down: scroll 1 line.
+                    if mods.shift {
+                        let snap = s.read(cx).snapshot();
+                        let viewport = snap.terminal_bounds.num_lines as i32;
+                        match e.keystroke.key.as_str() {
+                            "pageup" => {
+                                s.update(cx, |s, _| s.scroll(-viewport));
+                                let _ = view.update(cx, |_, cx| cx.notify());
+                                cx.stop_propagation();
+                                return;
+                            }
+                            "pagedown" => {
+                                s.update(cx, |s, _| s.scroll(viewport));
+                                let _ = view.update(cx, |_, cx| cx.notify());
+                                cx.stop_propagation();
+                                return;
+                            }
+                            "home" => {
+                                s.update(cx, |s, _| s.scroll_to_top());
+                                let _ = view.update(cx, |_, cx| cx.notify());
+                                cx.stop_propagation();
+                                return;
+                            }
+                            "end" => {
+                                s.update(cx, |s, _| s.scroll_to_bottom());
+                                let _ = view.update(cx, |_, cx| cx.notify());
+                                cx.stop_propagation();
+                                return;
+                            }
+                            _ => {}
+                        }
+                        // Ctrl+Shift+Up/Down: scroll 1 line.
+                        if mods.control {
+                            match e.keystroke.key.as_str() {
+                                "up" => {
+                                    s.update(cx, |s, _| s.scroll(-1));
+                                    let _ = view.update(cx, |_, cx| cx.notify());
+                                    cx.stop_propagation();
+                                    return;
+                                }
+                                "down" => {
+                                    s.update(cx, |s, _| s.scroll(1));
+                                    let _ = view.update(cx, |_, cx| cx.notify());
+                                    cx.stop_propagation();
+                                    return;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                     // Ctrl+Shift+C = copy, Ctrl+Shift+V = paste (terminal: Ctrl+C
                     // là SIGINT nên dùng Shift).
                     if mods.control && mods.shift {

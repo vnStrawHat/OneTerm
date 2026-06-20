@@ -64,12 +64,12 @@
 | ✅/❌ | Gap | Zed có | myTerm2 có | Mô tả / Ví dụ |
 |---|---|---|---|---|
 | ✅ | **Mouse wheel scroll** | Có | Có | Wheel up/down scroll scrollback. |
-| ✅ | **Scrollbar (auto-hide)** | Có — `TerminalScrollHandle` | Có (fixed) | Scrollbar hiện khi scroll, fade out sau 2s. **Đã fix.** |
+| ✅ | **Scrollbar (auto-hide)** | Có — `TerminalScrollHandle` | Có (fixed) | Scrollbar luôn hiện khi có scrollback (ScrollbarShow::Always). Kéo scrollbar thumb → jump đến vị trí. |
 | ✅ | **Scrollbar drag** | Có | Có | Kéo scrollbar thumb → jump đến vị trí. |
-| ❌ | **Scroll keyboard actions** | Có — `ScrollLineUp/Down`, `ScrollPageUp/Down`, `ScrollHalfPageUp/Down`, `ScrollToTop`, `ScrollToBottom` | Một phần — PageUp/Down/Home/End gửi key trực tiếp | Zed: có action riêng cho scroll, bind được keybinding. myTerm2: PageUp/Down gửi escape sequence trực tiếp đến PTY (không scroll scrollback). **Ví dụ**: Shift+PageUp → Zed scroll scrollback lên 1 trang. myTerm2: gửi `\x1b[5~` (app tự xử lý). |
-| ❌ | **Scroll-to-top / Scroll-to-bottom** | Có — action `ScrollToTop/Bottom` | Không | Zed: Cmd+Home → jump top scrollback. myTerm2: không có. |
-| ❌ | **Scroll multiplier setting** | Có — `scroll_multiplier` trong TerminalSettings | Không | Zed: user set `scroll_multiplier: 3.0` → wheel nhanh hơn. myTerm2: fixed 1.0. |
-| ❌ | **Alternate scroll mode toggle** | Có — setting `alternate_scroll` | Không | Zed: toggle alt-screen mouse scroll. myTerm2: auto (alacritty default). |
+| ✅ | **Scroll keyboard actions** | Có — `ScrollLineUp/Down`, `ScrollPageUp/Down`, `ScrollHalfPageUp/Down`, `ScrollToTop`, `ScrollToBottom` | Có (fixed) | Shift+PageUp/Down: scroll 1 viewport. Shift+Home/End: scroll to top/bottom. Ctrl+Shift+Up/Down: scroll 1 line. |
+| ✅ | **Scroll-to-top / Scroll-to-bottom** | Có — action `ScrollToTop/Bottom` | Có (fixed) | Shift+Home → scroll_to_top, Shift+End → scroll_to_bottom. |
+| ✅ | **Scroll multiplier setting** | Có — `scroll_multiplier` trong TerminalSettings | Có (fixed) | Setting `scroll_multiplier: f32` (default 1.0). Mouse wheel delta × multiplier. |
+| ✅ | **Alternate scroll mode toggle** | Có — setting `alternate_scroll` | Có (fixed) | Setting `alternate_scroll: bool` (default true). Alacritty tự xử lý alt-screen mouse scroll. |
 
 ---
 
@@ -217,7 +217,7 @@
 |---|---|---|---|---|
 | A — Rendering & Display | 11 | 10 | 1 | 91% |
 | B — Selection & Clipboard | 12 | 8 | 4 | 67% |
-| C — Scrolling | 7 | 3 | 4 | 43% |
+| C — Scrolling | 7 | 7 | 0 | 100% |
 | D — Search | 5 | 0 | 5 | 0% |
 | E — Hyperlinks & Navigation | 7 | 3 | 4 | 43% |
 | F — Shell Integration | 9 | 3 | 6 | 33% |
@@ -227,7 +227,7 @@
 | J — Settings & Configuration | 16 | 3 | 13 | 19% |
 | K — Architecture & Backend | 10 | 5 | 5 | 50% |
 | L — Mouse & Interaction | 7 | 3 | 4 | 43% |
-| **Tổng** | **108** | **44** | **64** | **41%** |
+| **Tổng** | 108 | **49** | **63** | **45%** |
 
 ---
 
@@ -249,7 +249,7 @@
 8. Cursor shape config
 9. Font config (family/size riêng cho terminal)
 10. Scrollback history config
-11. Scroll keyboard actions (ScrollLineUp/Down, PageUp/Down scrollback)
+11. ✅ ~~Scroll keyboard actions (ScrollLineUp/Down, PageUp/Down scrollback)~~ (đã lấp — Shift+PageUp/Down, Shift+Home/End, Ctrl+Shift+Up/Down)
 12. Terminal rename
 13. Path-like hyperlink (file:line → mở editor)
 14. Hover tooltip + underline cho hyperlinks

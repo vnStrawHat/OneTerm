@@ -231,6 +231,15 @@ impl TerminalSession for LocalSession {
         }
     }
 
+    fn scroll_to_top(&self) {
+        let mut term = self.term.lock();
+        if !term.mode().contains(TermMode::ALT_SCREEN) {
+            // Scroll đến top: delta = total_lines (scroll hết scrollback lên).
+            let total = term.total_lines() as i32;
+            term.scroll_display(Scroll::Delta(total));
+        }
+    }
+
     // ── Mouse ────────────────────────────────────────────────────────
     fn mouse_down(&self, row: f32, col: f32, button: TerminalMouseButton, sel: SelectionType) {
         let mode = self.mode();

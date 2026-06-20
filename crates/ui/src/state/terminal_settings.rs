@@ -42,6 +42,11 @@ pub struct TerminalSettings {
     pub font_features: Vec<SharedString>,
     /// Bật/tắt bell indicator (🔔 trong tab khi nhận `\x07`).
     pub bell_enabled: bool,
+    /// Scroll multiplier cho mouse wheel (1.0 = default, 3.0 = nhanh 3x).
+    pub scroll_multiplier: f32,
+    /// Alternate scroll mode: trong alt-screen (vim/less/htop), mouse wheel
+    /// gửi arrow keys thay vì scroll scrollback.
+    pub alternate_scroll: bool,
 }
 
 impl Default for TerminalSettings {
@@ -52,6 +57,8 @@ impl Default for TerminalSettings {
             cursor_blink: TerminalBlink::On,
             font_features: Vec::new(),
             bell_enabled: true,
+            scroll_multiplier: 1.0,
+            alternate_scroll: true,
         }
     }
 }
