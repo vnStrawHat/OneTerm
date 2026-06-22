@@ -60,13 +60,13 @@ impl Default for TerminalConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FontConfig {
     /// Font family chính (null = dùng theme mono font).
-    #[serde(default)]
+    #[serde(default = "default_font_family")]
     pub family: Option<String>,
     /// Font fallback stack (rỗng = platform defaults).
     #[serde(default)]
     pub fallback_fonts: Vec<String>,
     /// Font size in px (null = dùng theme mono font size).
-    #[serde(default)]
+    #[serde(default = "default_font_size")]
     pub size: Option<f32>,
     /// Font weight: "thin" | "extra_light" | "light" | "normal" | "medium"
     /// | "semibold" | "bold" | "extra_bold" | "black".
@@ -81,13 +81,21 @@ pub struct FontConfig {
 impl Default for FontConfig {
     fn default() -> Self {
         Self {
-            family: None,
+            family: default_font_family(),
             fallback_fonts: Vec::new(),
-            size: None,
+            size: default_font_size(),
             weight: default_weight(),
             features: Vec::new(),
         }
     }
+}
+
+fn default_font_family() -> Option<String> {
+    Some("Cascadia Mono".into())
+}
+
+fn default_font_size() -> Option<f32> {
+    Some(15.0)
 }
 
 fn default_weight() -> String {
@@ -129,11 +137,11 @@ fn default_cursor_shape() -> String {
 /// Nhóm Layout: line height, cell width, padding.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LayoutConfig {
-    /// Line height multiplier (1.2 = 120% font size).
+    /// Line height multiplier (1.15 = 115% font size).
     #[serde(default = "default_line_height")]
     pub line_height: f32,
     /// Cell width override in px (null = auto từ font advance).
-    #[serde(default)]
+    #[serde(default = "default_cell_width")]
     pub cell_width: Option<f32>,
     /// Padding quanh terminal content (px).
     #[serde(default)]
@@ -144,27 +152,50 @@ impl Default for LayoutConfig {
     fn default() -> Self {
         Self {
             line_height: default_line_height(),
-            cell_width: None,
+            cell_width: default_cell_width(),
             padding: PaddingConfig::default(),
         }
     }
 }
 
 fn default_line_height() -> f32 {
-    1.2
+    1.15
+}
+
+fn default_cell_width() -> Option<f32> {
+    Some(8.0)
 }
 
 /// Padding 4 phía (px).
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct PaddingConfig {
     #[serde(default)]
     pub top: f32,
-    #[serde(default)]
+    #[serde(default = "default_padding_right")]
     pub right: f32,
     #[serde(default)]
     pub bottom: f32,
-    #[serde(default)]
+    #[serde(default = "default_padding_left")]
     pub left: f32,
+}
+
+impl Default for PaddingConfig {
+    fn default() -> Self {
+        Self {
+            top: 0.0,
+            right: default_padding_right(),
+            bottom: 0.0,
+            left: default_padding_left(),
+        }
+    }
+}
+
+fn default_padding_right() -> f32 {
+    5.0
+}
+
+fn default_padding_left() -> f32 {
+    10.0
 }
 
 // ── Scroll ───────────────────────────────────────────────────────────
@@ -217,7 +248,7 @@ impl Default for BellConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColorsConfig {
     /// Override foreground (null = theme foreground, "#RRGGBB" để override).
-    #[serde(default)]
+    #[serde(default = "default_color_foreground")]
     pub foreground: Option<String>,
     /// Override background.
     #[serde(default)]
@@ -226,7 +257,7 @@ pub struct ColorsConfig {
     #[serde(default)]
     pub cursor: Option<String>,
     /// Override selection highlight color (null = auto dark/light).
-    #[serde(default)]
+    #[serde(default = "default_color_selection")]
     pub selection: Option<String>,
     /// Override gutter text color (timestamp + line number). null = dim foreground.
     #[serde(default)]
@@ -238,9 +269,9 @@ pub struct ColorsConfig {
     #[serde(default)]
     pub clock_fg: Option<String>,
     /// Override line number color. null = gutter_fg.
-    #[serde(default)]
+    #[serde(default = "default_color_line_number_fg")]
     pub line_number_fg: Option<String>,
-    /// Ngưỡng contrast tối thiểu (WCAG, 4.5 ≈ AA).
+    /// Ngưỡng contrast tối thiểu (WCAG, 0.0 = tắt).
     #[serde(default = "default_min_contrast")]
     pub min_contrast: f32,
     /// Override ANSI 16 colors (tối đa 16, thiếu = dùng default).
@@ -252,22 +283,34 @@ pub struct ColorsConfig {
 impl Default for ColorsConfig {
     fn default() -> Self {
         Self {
-            foreground: None,
+            foreground: default_color_foreground(),
             background: None,
             cursor: None,
-            selection: None,
+            selection: default_color_selection(),
             gutter_fg: None,
             gutter_bg: None,
             clock_fg: None,
-            line_number_fg: None,
+            line_number_fg: default_color_line_number_fg(),
             min_contrast: default_min_contrast(),
             ansi: Vec::new(),
         }
     }
 }
 
+fn default_color_foreground() -> Option<String> {
+    Some("#efefef".into())
+}
+
+fn default_color_selection() -> Option<String> {
+    Some("#343b48".into())
+}
+
+fn default_color_line_number_fg() -> Option<String> {
+    Some("#2b7f99".into())
+}
+
 fn default_min_contrast() -> f32 {
-    4.5
+    0.0
 }
 
 // ── Load / Save ─────────────────────────────────────────────────────
@@ -417,9 +460,18 @@ mod tests {
         let json = "{}";
         let cfg: TerminalConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.cursor.shape, "block");
-        assert_eq!(cfg.layout.line_height, 1.2);
+        assert_eq!(cfg.font.family.as_deref(), Some("Cascadia Mono"));
+        assert_eq!(cfg.font.size, Some(15.0));
+        assert_eq!(cfg.layout.line_height, 1.15);
+        assert_eq!(cfg.layout.cell_width, Some(8.0));
+        assert_eq!(cfg.layout.padding.right, 5.0);
+        assert_eq!(cfg.layout.padding.left, 10.0);
         assert!(cfg.bell.enabled);
         assert_eq!(cfg.scroll.multiplier, 1.0);
+        assert_eq!(cfg.colors.foreground.as_deref(), Some("#efefef"));
+        assert_eq!(cfg.colors.selection.as_deref(), Some("#343b48"));
+        assert_eq!(cfg.colors.min_contrast, 0.0);
+        assert_eq!(cfg.colors.line_number_fg.as_deref(), Some("#2b7f99"));
     }
 
     #[test]
@@ -476,8 +528,10 @@ mod tests {
         let cfg: TerminalConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.font.size, Some(18.0));
         // Missing fields use defaults.
+        assert_eq!(cfg.font.family.as_deref(), Some("Cascadia Mono"));
         assert_eq!(cfg.font.weight, "normal");
         assert_eq!(cfg.cursor.shape, "block");
-        assert_eq!(cfg.layout.line_height, 1.2);
+        assert_eq!(cfg.layout.line_height, 1.15);
+        assert_eq!(cfg.colors.foreground.as_deref(), Some("#efefef"));
     }
 }
