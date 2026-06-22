@@ -70,6 +70,9 @@ pub trait TerminalSession: Send + Sync + 'static {
     fn write(&self, bytes: &[u8]);
     /// Flush PTY output buffer (Windows ConPTY workaround).
     fn flush_pty(&self);
+    /// Gửi Ctrl+C signal — Windows dùng GenerateConsoleCtrlEvent
+    /// (tránh ConPTY gửi CTRL_C_EVENT đến shell), fallback \x03.
+    fn send_ctrl_c(&self);
     /// Resize rows×cols (PTY resize / ssh window_change).
     fn resize(&self, rows: u16, cols: u16);
     /// Scroll scrollback (chỉ khi không alt-screen / không mouse mode).

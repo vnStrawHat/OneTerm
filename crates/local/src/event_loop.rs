@@ -120,6 +120,10 @@ impl ShellEventLoop {
             error!("ShellEventLoop: register error: {err}");
             return;
         }
+        // Lưu interest + poll_opts để reregister sau mỗi iteration.
+        // UnblockedReader::register() post completion packet nếu pipe còn data
+        // — cần reregister sau khi break MAX_LOCKED_READ để tránh data stuck.
+        let mut need_reregister = false;
 
         let mut events = Events::with_capacity(1024.try_into().unwrap());
 
@@ -250,6 +254,7 @@ impl ShellEventLoop {
                         unprocessed = 0;
 
                         if processed >= MAX_LOCKED_READ {
+                            need_reregister = true;
                             break;
                         }
                     }
@@ -258,6 +263,14 @@ impl ShellEventLoop {
                         self.listener.send_event(Event::Wakeup);
                     }
                 }
+            }
+
+            // Reregister sau mỗi iteration nếu cần — UnblockedReader::register()
+            // post completion packet khi pipe còn data, tránh data stuck sau
+            // khi break MAX_LOCKED_READ (vd cat file lớn > 64KB).
+            if need_reregister {
+                need_reregister = false;
+                let _ = self.pty.reregister(&self.poll, interest, poll_opts);
             }
         }
     }

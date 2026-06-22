@@ -1008,6 +1008,26 @@ impl Render for LocalTerminalView {
                     let Some((spec, mods)) = Self::map_key(&e.keystroke) else {
                         return;
                     };
+                    // Ctrl+C (không Shift) = SIGINT — dùng send_ctrl_c()
+                    // thay vì encode_key(\x03) để tránh ConPTY gửi
+                    // CTRL_C_EVENT đến shell (causes shell exit).
+                    // GenerateConsoleCtrlEvent đi qua console subsystem
+                    // → shell's SetConsoleCtrlHandler handle đúng.
+                    if mods.ctrl && !mods.shift {
+                        if let KeySpec::Character(ch) = &spec {
+                            if ch == "c" || ch == "C" {
+                                s.update(cx, |s, _| s.send_ctrl_c());
+                                let _ = view.update(cx, |view, cx| {
+                                    if view.has_bell {
+                                        view.has_bell = false;
+                                        cx.notify();
+                                    }
+                                });
+                                cx.stop_propagation();
+                                return;
+                            }
+                        }
+                    }
                     let Some(bytes) = encode_key(&spec, mods) else {
                         return;
                     };

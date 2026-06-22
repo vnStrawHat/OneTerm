@@ -66,6 +66,9 @@ pub struct LocalSession {
     line_height: Mutex<f32>,
     /// IME marked text (compose buffer).
     marked_text: Mutex<Option<String>>,
+    /// Shell process ID — dùng cho `GenerateConsoleCtrlEvent` (Ctrl+C fix).
+    #[cfg(windows)]
+    shell_pid: Option<u32>,
 }
 
 impl LocalSession {
@@ -110,6 +113,11 @@ impl LocalSession {
             listener.clone(),
         )));
 
+        // Lấy shell PID trước khi move pty vào event loop.
+        // Dùng cho GenerateConsoleCtrlEvent (Ctrl+C fix trên Windows).
+        #[cfg(windows)]
+        let shell_pid = pty.child_watcher().pid().map(|p| p.get());
+
         let (event_loop, notifier) = ShellEventLoop::new(pty, term.clone(), listener.clone(), state.clone())
             .map_err(|e| AppError::msg(e.to_string()))?;
         listener.set_notifier(notifier);
@@ -128,6 +136,8 @@ impl LocalSession {
             cell_width: Mutex::new(0.0),
             line_height: Mutex::new(0.0),
             marked_text: Mutex::new(None),
+            #[cfg(windows)]
+            shell_pid,
         })
     }
 
@@ -200,6 +210,41 @@ impl TerminalSession for LocalSession {
         // respond với cursor position → flush output buffer.
         // Windows ConPTY buffer output, chỉ flush khi có interaction.
         self.listener.pty_write(b"\x1b[6n");
+    }
+
+    /// Gửi Ctrl+C signal đến shell process qua Win32 API.
+    /// Dùng `GenerateConsoleCtrlEvent` thay vì gửi `\x03` qua PTY —
+    /// tránh ConPTY gửi `CTRL_C_EVENT` đến toàn bộ process group
+    /// (kể cả shell), gây exit shell.
+    #[cfg(windows)]
+    fn send_ctrl_c(&self) {
+        use windows_sys::Win32::System::Console as wincon;
+
+        if let Some(pid) = self.shell_pid {
+            unsafe {
+                // Attach to shell's console (ConPTY pseudoconsole).
+                wincon::FreeConsole();
+                if wincon::AttachConsole(pid as u32) != 0 {
+                    // Gửi CTRL_C_EVENT đến process group 0 (tất cả processes
+                    // trong console ngoại trừ những process có CREATE_NEW_PROCESS_GROUP).
+                    // Shell (cmd.exe) được tạo với CREATE_NEW_PROCESS_GROUP
+                    // nên không nhận signal — chỉ child process nhận.
+                    wincon::GenerateConsoleCtrlEvent(
+                        wincon::CTRL_C_EVENT,
+                        0, // process group 0 = tất cả processes mặc định
+                    );
+                    wincon::FreeConsole();
+                }
+            }
+        } else {
+            // Fallback: gửi \x03 qua PTY nếu không có PID.
+            self.listener.pty_write(b"\x03");
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn send_ctrl_c(&self) {
+        self.listener.pty_write(b"\x03");
     }
 
     fn resize(&self, rows: u16, cols: u16) {
