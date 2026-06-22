@@ -149,4 +149,3 @@ impl Render for TerminalSettingsPanel {
 pub fn current_shell_config(cx: &App) -> LocalShellConfig {
     TerminalSettings::global(cx).read(cx).shell.clone()
 }
-

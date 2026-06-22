@@ -81,7 +81,11 @@ pub fn detect_url_at(
     let chars: Vec<char> = line_cells
         .iter()
         .map(|ic| {
-            if ic.cell.flags.contains(alacritty_terminal::term::cell::Flags::WIDE_CHAR_SPACER) {
+            if ic
+                .cell
+                .flags
+                .contains(alacritty_terminal::term::cell::Flags::WIDE_CHAR_SPACER)
+            {
                 '\0'
             } else {
                 ic.cell.c
@@ -109,7 +113,10 @@ pub fn detect_url_at(
                 continue;
             }
             // Check prefix match.
-            let matches = prefix.iter().zip(&chars[start..start + plen]).all(|(a, b)| a == b);
+            let matches = prefix
+                .iter()
+                .zip(&chars[start..start + plen])
+                .all(|(a, b)| a == b);
             if !matches {
                 continue;
             }
@@ -154,7 +161,10 @@ pub fn detect_url_at(
 }
 
 fn is_trailing_punct(c: char) -> bool {
-    matches!(c, ')' | ']' | '}' | '>' | '.' | ',' | ';' | ':' | '!' | '?' | '\'' | '"' | '`')
+    matches!(
+        c,
+        ')' | ']' | '}' | '>' | '.' | ',' | ';' | ':' | '!' | '?' | '\'' | '"' | '`'
+    )
 }
 
 #[cfg(test)]

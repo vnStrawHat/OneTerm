@@ -22,11 +22,7 @@ fn main() {
 
         // Target directory = OUT_DIR lên 3 cấp (target/debug/build/<hash>/out → target/debug)
         let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-        let target_dir = out_dir
-            .ancestors()
-            .nth(3)
-            .unwrap()
-            .to_path_buf();
+        let target_dir = out_dir.ancestors().nth(3).unwrap().to_path_buf();
 
         // Copy conpty.dll → target/conpty.dll
         let conpty_src = assets_dir.join("conpty.dll");

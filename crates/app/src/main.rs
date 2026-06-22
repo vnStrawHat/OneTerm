@@ -14,9 +14,7 @@ fn main() {
     // trong trường hợp OpenConsole.exe không có → fallback system ConPTY.
     #[cfg(windows)]
     unsafe {
-        extern "system" fn ignore_handler(
-            ctrl_type: u32,
-        ) -> windows_sys::Win32::Foundation::BOOL {
+        extern "system" fn ignore_handler(ctrl_type: u32) -> windows_sys::Win32::Foundation::BOOL {
             match ctrl_type {
                 windows_sys::Win32::System::Console::CTRL_C_EVENT
                 | windows_sys::Win32::System::Console::CTRL_BREAK_EVENT => {

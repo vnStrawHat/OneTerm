@@ -15,13 +15,13 @@ use alacritty_terminal::event::{Event, EventListener, OnResize, WindowSize};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
 use alacritty_terminal::tty::{self, EventedPty, EventedReadWrite};
-use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use alacritty_terminal::vte::Parser as VteParser;
+use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use log::error;
 use polling::{Event as PollEvent, Events, PollMode, Poller};
 
-use myterm2_core::terminal::osc::{Osc133Kind, OscPayload, OscSink, parse_cwd_url};
 use myterm2_core::SessionEvent;
+use myterm2_core::terminal::osc::{Osc133Kind, OscPayload, OscSink, parse_cwd_url};
 
 use crate::listener::LocalListener;
 use crate::state::SharedState;
@@ -123,7 +123,10 @@ impl ShellEventLoop {
         loop {
             events.clear();
             // Timeout: short poll để check channel messages.
-            if let Err(err) = self.poll.wait(&mut events, Some(std::time::Duration::from_millis(50))) {
+            if let Err(err) = self
+                .poll
+                .wait(&mut events, Some(std::time::Duration::from_millis(50)))
+            {
                 if err.kind() == io::ErrorKind::Interrupted {
                     continue;
                 }

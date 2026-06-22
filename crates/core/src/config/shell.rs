@@ -244,8 +244,7 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
             if !env.contains_key("PS1") {
                 env.insert(
                     "PS1".into(),
-                    "%{\x1b]133;A\x1b\\\\%}%n@%m:%~ %# %{\x1b]133;B\x1b\\\\%}"
-                        .into(),
+                    "%{\x1b]133;A\x1b\\\\%}%n@%m:%~ %# %{\x1b]133;B\x1b\\\\%}".into(),
                 );
             }
         }

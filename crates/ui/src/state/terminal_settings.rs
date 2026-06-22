@@ -4,13 +4,12 @@
 //! `TerminalSettingsPanel` cập nhật shell kind → notify.
 //! Group A: cursor shape, cursor blink, font features, bell.
 
-use gpui::{App, AppContext, Entity, Global, Hsla, FontWeight, SharedString};
+use gpui::{App, AppContext, Entity, FontWeight, Global, Hsla, SharedString};
 use myterm2_core::LocalShellConfig;
 use myterm2_core::config::ShellKind;
 
 use crate::state::terminal_config::{
-    BellConfig, ColorsConfig, CursorConfig, FontConfig, LayoutConfig,
-    ScrollConfig, TerminalConfig,
+    BellConfig, ColorsConfig, CursorConfig, FontConfig, LayoutConfig, ScrollConfig, TerminalConfig,
 };
 
 /// Platform-specific default font fallback stack for the terminal. These
@@ -189,13 +188,15 @@ fn parse_hex_color(s: &str) -> Option<Hsla> {
     let r = u8::from_str_radix(&s[0..2], 16).ok()?;
     let g = u8::from_str_radix(&s[2..4], 16).ok()?;
     let b = u8::from_str_radix(&s[4..6], 16).ok()?;
-    Some(gpui::Rgba {
-        r: r as f32 / 255.0,
-        g: g as f32 / 255.0,
-        b: b as f32 / 255.0,
-        a: 1.0,
-    }
-    .into())
+    Some(
+        gpui::Rgba {
+            r: r as f32 / 255.0,
+            g: g as f32 / 255.0,
+            b: b as f32 / 255.0,
+            a: 1.0,
+        }
+        .into(),
+    )
 }
 
 /// Parse font weight từ string → FontWeight.
@@ -223,7 +224,11 @@ impl TerminalSettings {
             self.font_family = font.family.as_ref().map(|s| s.clone().into());
         }
         if !font.fallback_fonts.is_empty() {
-            self.font_fallbacks = font.fallback_fonts.iter().map(|s| s.clone().into()).collect();
+            self.font_fallbacks = font
+                .fallback_fonts
+                .iter()
+                .map(|s| s.clone().into())
+                .collect();
         }
         if font.size.is_some() {
             self.font_size = font.size;
@@ -234,7 +239,11 @@ impl TerminalSettings {
         // ── Cursor ──
         let cursor: &CursorConfig = &cfg.cursor;
         self.cursor_shape = TerminalCursorShape::from_str(&cursor.shape);
-        self.cursor_blink = if cursor.blink { TerminalBlink::On } else { TerminalBlink::Off };
+        self.cursor_blink = if cursor.blink {
+            TerminalBlink::On
+        } else {
+            TerminalBlink::Off
+        };
         self.cursor_color = cursor.color.as_deref().and_then(parse_hex_color);
 
         // ── Layout ──
@@ -272,7 +281,11 @@ impl TerminalSettings {
             clock_fg: colors.clock_fg.as_deref().and_then(parse_hex_color),
             line_number_fg: colors.line_number_fg.as_deref().and_then(parse_hex_color),
             min_contrast: colors.min_contrast,
-            ansi: colors.ansi.iter().filter_map(|s| parse_hex_color(s)).collect(),
+            ansi: colors
+                .ansi
+                .iter()
+                .filter_map(|s| parse_hex_color(s))
+                .collect(),
         };
     }
 }

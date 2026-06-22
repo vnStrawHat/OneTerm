@@ -99,7 +99,9 @@ impl Perform for OscSink {
                     "D" => {
                         // D;exit_code → params[2] = exit_code (nếu có).
                         let exit_code = params.get(2).and_then(|p| {
-                            std::str::from_utf8(p).ok().and_then(|s| s.parse::<i32>().ok())
+                            std::str::from_utf8(p)
+                                .ok()
+                                .and_then(|s| s.parse::<i32>().ok())
                         });
                         Some(Osc133Kind::OutputEnd { exit_code })
                     }
@@ -257,7 +259,9 @@ mod tests {
         let p2 = sniff(&[b"\x1b]133;D;127\x1b\\"]).unwrap();
         assert_eq!(
             p2,
-            OscPayload::ShellIntegration(Osc133Kind::OutputEnd { exit_code: Some(127) })
+            OscPayload::ShellIntegration(Osc133Kind::OutputEnd {
+                exit_code: Some(127)
+            })
         );
     }
 

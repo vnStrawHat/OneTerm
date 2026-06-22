@@ -74,7 +74,12 @@ impl TerminalScrollHandle {
     /// Trả về (total_lines, viewport_lines, display_offset, line_height).
     pub fn state_info(&self) -> (usize, usize, usize, f32) {
         let s = self.state.borrow();
-        (s.total_lines, s.viewport_lines, s.display_offset, s.line_height)
+        (
+            s.total_lines,
+            s.viewport_lines,
+            s.display_offset,
+            s.line_height,
+        )
     }
 }
 

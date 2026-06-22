@@ -195,11 +195,7 @@ impl MyTermWorkspace {
     }
 
     /// Reset chỉ center (terminal tabs) về 1 tab — giữ right dock + settings.
-    fn reset_center_only(
-        dock_area: gpui::WeakEntity<DockArea>,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
+    fn reset_center_only(dock_area: gpui::WeakEntity<DockArea>, window: &mut Window, cx: &mut App) {
         let weak = dock_area.clone();
         let center = DockItem::v_split(
             vec![DockItem::tabs(

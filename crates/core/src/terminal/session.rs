@@ -15,9 +15,9 @@ use alacritty_terminal::term::TermMode;
 use async_channel::Receiver;
 
 use crate::terminal::content::TerminalContent;
+use crate::terminal::key_encode::{KeyMods, KeySpec, NamedKey, encode_key};
 use crate::terminal::mouse_encode::TerminalMouseButton;
 use crate::terminal::osc::Osc133Kind;
-use crate::terminal::key_encode::{encode_key, KeyMods, KeySpec, NamedKey};
 
 /// Sự kiện session phát ra cho UI (subscribe qua channel).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,7 +165,9 @@ pub trait TerminalSession: Send + Sync + 'static {
     // ── Shell Integration (OSC 133) ────────────────────────────
     /// Số dòng prompt markers đã capture (cho scroll-to-prompt).
     /// Mỗi marker là vị trí dòng nơi prompt bắt đầu (OSC 133;A).
-    fn prompt_count(&self) -> usize { 0 }
+    fn prompt_count(&self) -> usize {
+        0
+    }
     /// Scroll đến prompt thứ `n` (0-based, từ cuối lên).
     /// `n=0` = prompt gần nhất, `n=1` = prompt trước đó, v.v.
     fn scroll_to_prompt(&self, _n: usize) {}
@@ -173,7 +175,9 @@ pub trait TerminalSession: Send + Sync + 'static {
     // ── Foreground Process ─────────────────────────────────────
     /// Foreground process hiện tại (vd "cargo", "node", "python").
     /// `None` = shell prompt (không có command chạy).
-    fn foreground_process(&self) -> Option<String> { None }
+    fn foreground_process(&self) -> Option<String> {
+        None
+    }
 
     // ── Breadcrumb ──────────────────────────────────────────────
     /// Text hiển thị trong toolbar breadcrumb (vd cwd path).

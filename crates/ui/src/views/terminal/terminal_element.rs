@@ -137,6 +137,9 @@ pub(crate) struct TerminalElement {
     cell_width_override: Option<f32>,
     /// Cursor color override (None = theme caret).
     cursor_color_override: Option<Hsla>,
+    /// Cursor shape override từ config (Block/Bar/Underline).
+    /// Override snapshot shape từ shell (trừ Hidden) — giống Windows Terminal.
+    cursor_shape_override: crate::state::TerminalCursorShape,
     /// Per-line timestamps for gutter (0 = oldest line).
     line_times: Vec<String>,
 }
@@ -160,6 +163,7 @@ impl TerminalElement {
         padding: crate::state::TerminalPadding,
         cell_width_override: Option<f32>,
         cursor_color_override: Option<Hsla>,
+        cursor_shape_override: crate::state::TerminalCursorShape,
     ) -> Self {
         Self {
             session,
@@ -179,6 +183,7 @@ impl TerminalElement {
             padding,
             cell_width_override,
             cursor_color_override,
+            cursor_shape_override,
         }
     }
 
@@ -881,14 +886,31 @@ impl Element for TerminalElement {
         let cell_width = if let Some(cw) = self.cell_width_override {
             px(snap_px(cw))
         } else {
+            // Windows Terminal / CSS ch unit: đo advance width của '0'
+            // thay vì 'm' — matches monospace cell width chính xác hơn.
             let raw = cx
                 .text_system()
-                .advance(font_id, font_px, 'm')
-                .map(|s| f32::from(s.width))
-                .unwrap_or(8.0);
+                .ch_advance(font_id, font_px)
+                .map(|s| f32::from(s))
+                .unwrap_or_else(|_| {
+                    // Fallback: đo 'm' advance nếu '0' không có glyph.
+                    cx.text_system()
+                        .advance(font_id, font_px, 'm')
+                        .map(|s| f32::from(s.width))
+                        .unwrap_or(8.0)
+                });
             px(snap_px(raw))
         };
-        let line_height = px(snap_px(f32::from(font_px) * self.line_height_factor));
+        // Line height — đảm bảo tối thiểu = ascent + descent (font metrics)
+        // để text không bị clip, giống Windows Terminal dùng DWRITE_FONT_METRICS.
+        // GPUI paint_line tự center text trong line_height dựa trên layout
+        // ascent/descent, nên chỉ cần đảm bảo line_height đủ lớn.
+        let font_ascent = cx.text_system().ascent(font_id, font_px);
+        let font_descent = cx.text_system().descent(font_id, font_px);
+        let natural_line_height = f32::from(font_ascent) + f32::from(font_descent);
+        let factor_height = f32::from(font_px) * self.line_height_factor;
+        // max(factor_height, natural_line_height) → không bao giờ clip.
+        let line_height = px(snap_px(factor_height.max(natural_line_height)));
 
         // ── Padding (config) ──
         let pad_left = px(self.padding.left);
@@ -976,6 +998,8 @@ impl Element for TerminalElement {
         );
 
         // Cursor.
+        // Override shape từ config (Block/Bar/Underline) — giống Windows Terminal
+        // tôn trọng user setting. Shell có thể set Hidden để ẩn cursor.
         let cursor = {
             let c = &snapshot.cursor;
             if c.shape == CursorShape::Hidden {
@@ -992,13 +1016,19 @@ impl Element for TerminalElement {
                             &self.theme,
                         )
                     });
+                    // Map config shape → alacritty CursorShape.
+                    let shape = match self.cursor_shape_override {
+                        crate::state::TerminalCursorShape::Block => CursorShape::Block,
+                        crate::state::TerminalCursorShape::Bar => CursorShape::Beam,
+                        crate::state::TerminalCursorShape::Underline => CursorShape::Underline,
+                    };
                     Some(CursorPaint {
                         point: LayoutPoint {
                             line: display_line,
                             column: col,
                         },
                         color,
-                        shape: c.shape,
+                        shape,
                     })
                 }
             }
@@ -1257,23 +1287,25 @@ impl Element for TerminalElement {
                     );
                     let sz = match cur.shape {
                         CursorShape::Beam => {
-                            // Thanh dọc hẹp: 20% cell width, full height.
+                            // Thanh dọc: 20% cell width, full height.
+                            // Snap width lên device pixel để tránh subpixel blur.
                             let bar_w = (cw * 0.2).max(px(1.0));
                             size(px(ceil_px(f32::from(bar_w))), lh)
                         }
                         CursorShape::Underline => {
                             // Gạch dưới: full width, 15% line height (min 2px).
                             let ul_h = (lh * 0.15).max(px(2.0));
-                            size(cw, px(ceil_px(f32::from(ul_h))))
+                            size(px(ceil_px(f32::from(cw))), px(ceil_px(f32::from(ul_h))))
                         }
                         CursorShape::Block => {
-                            // Block đầy: full cell.
-                            size(cw, lh)
+                            // Block đầy: full cell — snap width lên device pixel
+                            // để khít grid, không subpixel gap (giống Windows Terminal).
+                            size(px(ceil_px(f32::from(cw))), lh)
                         }
                         CursorShape::HollowBlock => {
                             // Hollow block: vẽ border (không fill) — fallback
                             // về block đầy cho đơn giản.
-                            size(cw, lh)
+                            size(px(ceil_px(f32::from(cw))), lh)
                         }
                         CursorShape::Hidden => return,
                     };

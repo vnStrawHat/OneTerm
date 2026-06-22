@@ -110,8 +110,9 @@ impl LocalSession {
             listener.clone(),
         )));
 
-        let (event_loop, notifier) = ShellEventLoop::new(pty, term.clone(), listener.clone(), state.clone())
-            .map_err(|e| AppError::msg(e.to_string()))?;
+        let (event_loop, notifier) =
+            ShellEventLoop::new(pty, term.clone(), listener.clone(), state.clone())
+                .map_err(|e| AppError::msg(e.to_string()))?;
         listener.set_notifier(notifier);
         let _join = event_loop.spawn();
 
@@ -595,14 +596,23 @@ mod tests {
         let snap = s.snapshot();
         // Selection should still be empty (start == end at col 0)
         // to_range returns None for empty simple selection
-        assert!(snap.selection.is_none(), "mouse_move should not update selection");
+        assert!(
+            snap.selection.is_none(),
+            "mouse_move should not update selection"
+        );
         // mouse_drag should update selection
         s.mouse_drag(0.0, 5.0);
         let snap2 = s.snapshot();
-        assert!(snap2.selection.is_some(), "mouse_drag should update selection");
+        assert!(
+            snap2.selection.is_some(),
+            "mouse_drag should update selection"
+        );
         if let Some(sel) = &snap2.selection {
             assert_eq!(sel.start.column.0, 0);
-            assert!(sel.end.column.0 >= 4, "end col should be >= 4 after drag to col 5");
+            assert!(
+                sel.end.column.0 >= 4,
+                "end col should be >= 4 after drag to col 5"
+            );
         }
         s.mouse_up(0.0, 5.0, TerminalMouseButton::Left);
         s.close();

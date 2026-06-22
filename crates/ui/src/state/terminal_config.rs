@@ -22,7 +22,7 @@ const CONFIG_FILE: &str = "terminal.json";
 // ── Top-level config ─────────────────────────────────────────────────
 
 /// Toàn bộ config terminal — parse từ `terminal.json`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TerminalConfig {
     #[serde(default)]
     pub font: FontConfig,
@@ -38,20 +38,6 @@ pub struct TerminalConfig {
     pub bell: BellConfig,
     #[serde(default)]
     pub colors: ColorsConfig,
-}
-
-impl Default for TerminalConfig {
-    fn default() -> Self {
-        Self {
-            font: FontConfig::default(),
-            cursor: CursorConfig::default(),
-            layout: LayoutConfig::default(),
-            shell: LocalShellConfig::default(),
-            scroll: ScrollConfig::default(),
-            bell: BellConfig::default(),
-            colors: ColorsConfig::default(),
-        }
-    }
 }
 
 // ── Font ─────────────────────────────────────────────────────────────
@@ -140,7 +126,8 @@ pub struct LayoutConfig {
     /// Line height multiplier (1.15 = 115% font size).
     #[serde(default = "default_line_height")]
     pub line_height: f32,
-    /// Cell width override in px (null = auto từ font advance).
+    /// Cell width override in px (null = auto từ advance width của '0',
+    /// giống Windows Terminal / CSS ch unit).
     #[serde(default = "default_cell_width")]
     pub cell_width: Option<f32>,
     /// Padding quanh terminal content (px).
@@ -163,7 +150,7 @@ fn default_line_height() -> f32 {
 }
 
 fn default_cell_width() -> Option<f32> {
-    Some(8.0)
+    None // auto: đo advance width của '0' (CSS ch unit, giống Windows Terminal)
 }
 
 /// Padding 4 phía (px).
@@ -377,21 +364,19 @@ impl TerminalConfig {
                 match serde_json::from_str::<TerminalConfig>(&json) {
                     Ok(cfg) => cfg,
                     Err(e) => {
-                        tracing::error!(
-                            "terminal.json parse error: {e} — using defaults"
-                        );
+                        tracing::error!("terminal.json parse error: {e} — using defaults");
                         Self::default()
                     }
                 }
-            },
+            }
             Err(_) => {
                 // File không tồn tại → tạo default file để user biết các option.
                 let cfg = Self::default();
-                    if let Ok(json) = serde_json::to_string_pretty(&cfg) {
-                        if std::fs::write(&path, json).is_ok() {
-                            tracing::info!("Created default terminal.json at {path:?}");
-                        }
+                if let Ok(json) = serde_json::to_string_pretty(&cfg) {
+                    if std::fs::write(&path, json).is_ok() {
+                        tracing::info!("Created default terminal.json at {path:?}");
                     }
+                }
                 cfg
             }
         }
@@ -463,7 +448,7 @@ mod tests {
         assert_eq!(cfg.font.family.as_deref(), Some("Cascadia Mono"));
         assert_eq!(cfg.font.size, Some(15.0));
         assert_eq!(cfg.layout.line_height, 1.15);
-        assert_eq!(cfg.layout.cell_width, Some(8.0));
+        assert_eq!(cfg.layout.cell_width, None);
         assert_eq!(cfg.layout.padding.right, 5.0);
         assert_eq!(cfg.layout.padding.left, 10.0);
         assert!(cfg.bell.enabled);

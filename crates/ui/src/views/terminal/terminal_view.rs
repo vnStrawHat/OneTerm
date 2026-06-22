@@ -493,7 +493,19 @@ impl Render for LocalTerminalView {
         let session = self.session.clone();
         // Đọc settings + extract dữ liệu cần thiết trước khi mutate session.
         let settings_entity = TerminalSettings::global(cx);
-        let (font, font_size, line_height_factor, cursor_visible, bell_enabled, has_bell, cursor_color, padding, cell_width_override, color_overrides) = {
+        let (
+            font,
+            font_size,
+            line_height_factor,
+            cursor_visible,
+            bell_enabled,
+            has_bell,
+            cursor_color,
+            padding,
+            cell_width_override,
+            color_overrides,
+            cursor_shape,
+        ) = {
             let settings = settings_entity.read(cx);
             let gpui_theme = cx.theme();
             // Effective font family: settings override → theme mono font.
@@ -516,6 +528,7 @@ impl Render for LocalTerminalView {
                 settings.padding,
                 settings.cell_width,
                 settings.color_overrides.clone(),
+                settings.cursor_shape,
             )
         };
         let metrics = self.metrics.clone();
@@ -633,6 +646,7 @@ impl Render for LocalTerminalView {
                 padding,
                 cell_width_override,
                 cursor_color,
+                cursor_shape,
             ))
             // Bell indicator overlay (góc trên-phải).
             .children(if has_bell && bell_enabled {
