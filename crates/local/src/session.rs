@@ -66,7 +66,8 @@ pub struct LocalSession {
     line_height: Mutex<f32>,
     /// IME marked text (compose buffer).
     marked_text: Mutex<Option<String>>,
-    /// Shell process ID — dùng cho `GenerateConsoleCtrlEvent` (Ctrl+C fix).
+    /// Shell process ID — lưu cho future use (vd GenerateConsoleCtrlEvent).
+    #[allow(dead_code)]
     #[cfg(windows)]
     shell_pid: Option<u32>,
 }
@@ -212,34 +213,18 @@ impl TerminalSession for LocalSession {
         self.listener.pty_write(b"\x1b[6n");
     }
 
-    /// Gửi Ctrl+C signal đến shell process qua Win32 API.
-    /// Dùng `GenerateConsoleCtrlEvent` thay vì gửi `\x03` qua PTY —
-    /// tránh ConPTY gửi `CTRL_C_EVENT` đến toàn bộ process group
-    /// (kể cả shell), gây exit shell.
+    /// Gửi Ctrl+C signal đến shell process.
+    /// 
+    /// Cách 1 (preferred): Gửi \x03 qua PTY — ConPTY xử lý signal,
+    /// myTerm2 không nhận CTRL_C_EVENT → không exit.
+    /// ConPTY có thể chuyển \x03 thành CTRL_C_EVENT cho shell + child,
+    /// nhưng cmd.exe handler cancel command (không exit shell).
+    ///
+    /// Cách 2 (GenerateConsoleCtrlEvent): Gửi signal qua Win32 API,
+    /// nhưng myTerm2 cũng nhận signal → exit app. Không dùng.
     #[cfg(windows)]
     fn send_ctrl_c(&self) {
-        use windows_sys::Win32::System::Console as wincon;
-
-        if let Some(pid) = self.shell_pid {
-            unsafe {
-                // Attach to shell's console (ConPTY pseudoconsole).
-                wincon::FreeConsole();
-                if wincon::AttachConsole(pid as u32) != 0 {
-                    // Gửi CTRL_C_EVENT đến process group 0 (tất cả processes
-                    // trong console ngoại trừ những process có CREATE_NEW_PROCESS_GROUP).
-                    // Shell (cmd.exe) được tạo với CREATE_NEW_PROCESS_GROUP
-                    // nên không nhận signal — chỉ child process nhận.
-                    wincon::GenerateConsoleCtrlEvent(
-                        wincon::CTRL_C_EVENT,
-                        0, // process group 0 = tất cả processes mặc định
-                    );
-                    wincon::FreeConsole();
-                }
-            }
-        } else {
-            // Fallback: gửi \x03 qua PTY nếu không có PID.
-            self.listener.pty_write(b"\x03");
-        }
+        self.listener.pty_write(b"\x03");
     }
 
     #[cfg(not(windows))]

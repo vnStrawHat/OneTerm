@@ -9,26 +9,30 @@ mod window;
 
 fn main() {
     // Windows: Install SetConsoleCtrlHandler để ignore CTRL_C_EVENT.
-    // Khi send_ctrl_c() dùng GenerateConsoleCtrlEvent, signal gửi đến ALL
-    // processes trong console (kể cả myTerm2). Handler này prevent myTerm2
-    // exit khi nhận CTRL_C_EVENT — chỉ shell/child process nhận signal.
+    // myTerm2 là console app — có thể nhận CTRL_C_EVENT từ ConPTY khi
+    // gửi \x03. Handler này prevent myTerm2 exit.
     #[cfg(windows)]
     unsafe {
-        extern "system" fn ignore_ctrl_c(
+        // 1. Ignore CTRL+C entirely (process-wide flag).
+        windows_sys::Win32::System::Console::SetConsoleCtrlHandler(
+            None,
+            windows_sys::Win32::Foundation::TRUE,
+        );
+        // 2. Also install handler function (belt & suspenders).
+        extern "system" fn ignore_handler(
             ctrl_type: u32,
         ) -> windows_sys::Win32::Foundation::BOOL {
-            // Ignore CTRL_C_EVENT and CTRL_BREAK_EVENT — return TRUE
-            // to indicate we handled it (prevent default handler = exit).
             match ctrl_type {
                 windows_sys::Win32::System::Console::CTRL_C_EVENT
-                | windows_sys::Win32::System::Console::CTRL_BREAK_EVENT => {
+                | windows_sys::Win32::System::Console::CTRL_BREAK_EVENT
+                | windows_sys::Win32::System::Console::CTRL_CLOSE_EVENT => {
                     windows_sys::Win32::Foundation::TRUE
                 }
                 _ => windows_sys::Win32::Foundation::FALSE,
             }
         }
         windows_sys::Win32::System::Console::SetConsoleCtrlHandler(
-            Some(ignore_ctrl_c),
+            Some(ignore_handler),
             windows_sys::Win32::Foundation::TRUE,
         );
     }
