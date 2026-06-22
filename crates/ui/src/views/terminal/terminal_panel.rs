@@ -21,14 +21,12 @@ use super::terminal_view::LocalTerminalView;
 
 /// Panel hiển thị 1 Terminal session.
 pub struct TerminalPanel {
-    focus_handle: FocusHandle,
     view: Entity<LocalTerminalView>,
 }
 
 impl TerminalPanel {
     /// Tạo panel + spawn session local mặc định (cmd trên Windows).
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let focus_handle = cx.focus_handle();
         let shell = TerminalSettings::global(cx).read(cx).shell.clone();
         let session: Entity<Box<dyn TerminalSession>> = cx.new(|_cx| {
             Box::new(
@@ -37,7 +35,9 @@ impl TerminalPanel {
             ) as Box<dyn TerminalSession>
         });
         let view = cx.new(|cx| LocalTerminalView::new(session, window, cx));
-        Self { focus_handle, view }
+        // Focus terminal view ngay khi tạo — app startup + new tab.
+        view.read(cx).focus_handle(cx).focus(window, cx);
+        Self { view }
     }
 
     /// Helper tạo `Entity<Self>`.
@@ -49,8 +49,10 @@ impl TerminalPanel {
 impl EventEmitter<PanelEvent> for TerminalPanel {}
 
 impl Focusable for TerminalPanel {
-    fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.focus_handle.clone()
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        // Delegate to terminal view — khi dock area focus panel,
+        // terminal view bên trong nhận focus.
+        self.view.read(cx).focus_handle(cx)
     }
 }
 
@@ -77,7 +79,6 @@ impl Render for TerminalPanel {
         div()
             .id("terminal-panel")
             .size_full()
-            .track_focus(&self.focus_handle)
             .bg(cx.theme().background)
             .child(self.view.clone())
     }

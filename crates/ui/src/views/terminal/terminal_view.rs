@@ -74,7 +74,7 @@ impl LocalTerminalView {
     /// Tạo view từ session entity. Subscribe events → re-render task.
     pub fn new(
         session: Entity<Box<dyn TerminalSession>>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let focus = cx.focus_handle();
@@ -175,6 +175,9 @@ impl LocalTerminalView {
             }
         })
         .detach();
+
+        // Focus terminal ngay khi tạo — app startup + new tab.
+        focus.focus(window, cx);
 
         Self {
             session,
