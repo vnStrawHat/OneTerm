@@ -214,7 +214,7 @@ impl Default for BellConfig {
 
 /// Nhóm Colors: override foreground, background, cursor, selection,
 /// ANSI 16 colors, min contrast.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColorsConfig {
     /// Override foreground (null = theme foreground, "#RRGGBB" để override).
     #[serde(default)]
@@ -249,28 +249,96 @@ pub struct ColorsConfig {
     pub ansi: Vec<String>,
 }
 
+impl Default for ColorsConfig {
+    fn default() -> Self {
+        Self {
+            foreground: None,
+            background: None,
+            cursor: None,
+            selection: None,
+            gutter_fg: None,
+            gutter_bg: None,
+            clock_fg: None,
+            line_number_fg: None,
+            min_contrast: default_min_contrast(),
+            ansi: Vec::new(),
+        }
+    }
+}
+
 fn default_min_contrast() -> f32 {
     4.5
 }
 
-// ── Load / Save ───────────────────────────────────────────────────────
+// ── Load / Save ─────────────────────────────────────────────────────
 
 fn default_true() -> bool {
     true
 }
 
+/// Strip `//` line comments và `/* */` block comments khỏi JSON string.
+/// JSON chuẩn không hỗ trợ comments, nhưng user thường thêm ghi chú.
+/// Phải xử lý cẩn thận để không strip `//` bên trong string values.
+fn strip_json_comments(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let chars: Vec<char> = input.chars().collect();
+    let mut i = 0;
+    let mut in_string = false;
+    while i < chars.len() {
+        let c = chars[i];
+        if in_string {
+            result.push(c);
+            if c == '\\' {
+                // Escape char — push next char blindly.
+                if i + 1 < chars.len() {
+                    result.push(chars[i + 1]);
+                    i += 2;
+                    continue;
+                }
+            } else if c == '"' {
+                in_string = false;
+            }
+            i += 1;
+        } else if c == '"' {
+            in_string = true;
+            result.push(c);
+            i += 1;
+        } else if c == '/' && i + 1 < chars.len() && chars[i + 1] == '/' {
+            // Line comment — skip to end of line.
+            while i < chars.len() && chars[i] != '\n' {
+                i += 1;
+            }
+        } else if c == '/' && i + 1 < chars.len() && chars[i + 1] == '*' {
+            // Block comment — skip to */.
+            i += 2;
+            while i + 1 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '/') {
+                i += 1;
+            }
+            i += 2; // skip */
+        } else {
+            result.push(c);
+            i += 1;
+        }
+    }
+    result
+}
+
 impl TerminalConfig {
     /// Load config từ file. Nếu file không tồn tại → tạo default + return default.
+    /// Hỗ trợ `//` và `/* */` comments trong JSON.
     pub fn load() -> Self {
         let path = PathBuf::from(CONFIG_FILE);
         match std::fs::read_to_string(&path) {
-            Ok(json) => match serde_json::from_str::<TerminalConfig>(&json) {
-                Ok(cfg) => cfg,
-                Err(e) => {
-                    tracing::error!(
-                        "terminal.json parse error: {e} — using defaults"
-                    );
-                    Self::default()
+            Ok(raw) => {
+                let json = strip_json_comments(&raw);
+                match serde_json::from_str::<TerminalConfig>(&json) {
+                    Ok(cfg) => cfg,
+                    Err(e) => {
+                        tracing::error!(
+                            "terminal.json parse error: {e} — using defaults"
+                        );
+                        Self::default()
+                    }
                 }
             },
             Err(_) => {
@@ -290,6 +358,45 @@ impl TerminalConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strip_line_comments() {
+        let input = r#"{ "a": 1, // this is a comment
+ "b": 2 }"#;
+        let stripped = strip_json_comments(input);
+        let parsed: serde_json::Value = serde_json::from_str(&stripped).unwrap();
+        assert_eq!(parsed["a"], 1);
+        assert_eq!(parsed["b"], 2);
+    }
+
+    #[test]
+    fn strip_block_comments() {
+        let input = r#"{ "a": 1 /* block */, "b": 2 }"#;
+        let stripped = strip_json_comments(input);
+        let parsed: serde_json::Value = serde_json::from_str(&stripped).unwrap();
+        assert_eq!(parsed["a"], 1);
+        assert_eq!(parsed["b"], 2);
+    }
+
+    #[test]
+    fn strip_comments_preserves_strings_with_slashes() {
+        let input = r#"{ "url": "https://example.com", "a": 1 // comment
+ }"#;
+        let stripped = strip_json_comments(input);
+        let parsed: serde_json::Value = serde_json::from_str(&stripped).unwrap();
+        assert_eq!(parsed["url"], "https://example.com");
+        assert_eq!(parsed["a"], 1);
+    }
+
+    #[test]
+    fn strip_comments_preserves_escaped_quotes() {
+        let input = r#"{ "a": "say \"hi\" // not a comment", "b": 2 // real comment
+ }"#;
+        let stripped = strip_json_comments(input);
+        let parsed: serde_json::Value = serde_json::from_str(&stripped).unwrap();
+        assert_eq!(parsed["a"], "say \"hi\" // not a comment");
+        assert_eq!(parsed["b"], 2);
+    }
 
     #[test]
     fn default_config_serializes_all_groups() {
