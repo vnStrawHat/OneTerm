@@ -88,8 +88,6 @@ pub struct LayoutState {
     gutter_fg: Hsla,
     /// Màu nền gutter.
     gutter_bg: Hsla,
-    /// Màu border (separator) — đồng bộ với Dock border.
-    dock_border: Hsla,
 }
 
 /// Con trỏ để paint.
@@ -125,8 +123,6 @@ pub(crate) struct TerminalElement {
     ctrl_held: bool,
     /// Per-line timestamps for gutter (0 = oldest line).
     line_times: Vec<String>,
-    /// Border color từ GPUI theme (đồng bộ với Dock border).
-    dock_border: Hsla,
 }
 
 impl TerminalElement {
@@ -145,7 +141,6 @@ impl TerminalElement {
         hovered_url: Option<super::url::DetectedUrl>,
         ctrl_held: bool,
         line_times: Vec<String>,
-        dock_border: Hsla,
     ) -> Self {
         Self {
             session,
@@ -162,7 +157,6 @@ impl TerminalElement {
             hovered_url,
             ctrl_held,
             line_times,
-            dock_border,
         }
     }
 
@@ -560,14 +554,17 @@ impl Element for TerminalElement {
 
         // ── Gutter: [HH:MM:SS] line_number ──
         // Chiều rộng gutter = chiều rộng template text + padding.
-        let gutter_template = "[00:00:00] 00000";
+        // Template width auto-expand theo số digit của total_lines (min 2 digit).
+        // line_times.len() == total_lines (view duy trì synced).
+        let num_digits = self.line_times.len().max(1).to_string().len().max(2);
+        let gutter_template = format!("[00:00:00] {}", "0".repeat(num_digits));
         let gutter_text_width = window
             .text_system()
             .shape_line(
                 SharedString::from(gutter_template),
                 font_px,
                 &[TextRun {
-                    len: gutter_template.len(),
+                    len: "[00:00:00] ".len() + num_digits,
                     color: gpui::black(),
                     background_color: None,
                     font: self.font.clone(),
@@ -598,6 +595,7 @@ impl Element for TerminalElement {
         let num_lines = snapshot.terminal_bounds.num_lines;
         let num_cols = snapshot.terminal_bounds.num_cols;
         let display_offset = snapshot.display_offset;
+        let total_lines = snapshot.total_lines;
 
         // Selection highlight rects — tính trước để build selection_set
         // cho layout_grid (inverse video).
@@ -657,7 +655,6 @@ impl Element for TerminalElement {
         // ── Gutter entries: [HH:MM:SS] line_number cho mỗi dòng hiển thị ──
         // Timestamp per-line: lấy từ line_times (tracked khi output mới).
         // Fallback "--:--:--" nếu chưa có data.
-        let total_lines = snapshot.total_lines;
         let gutter_fg = {
             // Dim foreground cho gutter text.
             let fg = self.theme.fg;
@@ -707,18 +704,10 @@ impl Element for TerminalElement {
                         y: bounds.origin.y + i as f32 * line_height,
                     };
                 }
-                // Line number 1-based. Offset = grid position của first content line,
-                // tính dynamic từ snapshot ( ổn định khi scroll vì grid position
-                // = scrollback - display_offset + first_content không đổi ).
-                let ln_offset = if let Some(fc) = first_content {
-                    (total_lines as i32 - num_lines as i32 - display_offset as i32 + fc as i32)
-                        .max(0)
-                } else {
-                    0
-                };
+                // Line number 1-based, absolute trong scrollback.
+                // abs_line (0-based) = total_lines - display_offset - num_lines + i
                 let line_num =
-                    total_lines as i32 - display_offset as i32 - num_lines as i32 + i as i32 + 1
-                        - ln_offset;
+                    total_lines as i32 - display_offset as i32 - num_lines as i32 + i as i32 + 1;
                 let line_num = line_num.max(1) as usize;
                 // 0-based index into line_times (absolute grid position, NOT adjusted by offset).
                 let abs_idx = (total_lines as i32 - display_offset as i32 - num_lines as i32
@@ -729,7 +718,7 @@ impl Element for TerminalElement {
                 } else {
                     "--:--:--"
                 };
-                let text = format!("[{}] {:>5}", time_str, line_num);
+                let text = format!("[{}] {:>width$}", time_str, line_num, width = num_digits);
                 GutterEntry {
                     text: SharedString::from(text),
                     y: bounds.origin.y + i as f32 * line_height,
@@ -765,7 +754,6 @@ impl Element for TerminalElement {
             gutter_entries,
             gutter_fg,
             gutter_bg,
-            dock_border: self.dock_border,
         }
     }
 
@@ -798,16 +786,6 @@ impl Element for TerminalElement {
                     size: size(gw, bounds.size.height),
                 };
                 window.paint_quad(fill(gutter_bounds, layout.gutter_bg));
-                // Separator line (1px) giữa gutter và terminal.
-                let sep_bounds = Bounds {
-                    origin: GpuiPoint {
-                        x: bounds.origin.x + gw - px(1.0),
-                        y: bounds.origin.y,
-                    },
-                    size: size(px(1.0), bounds.size.height),
-                };
-                let sep_color = layout.dock_border;
-                window.paint_quad(fill(sep_bounds, sep_color));
                 // Gutter text cho mỗi dòng.
                 let gfont_px = self.font_size;
                 let glh = layout.line_height;

@@ -119,6 +119,38 @@ impl LocalTerminalView {
                         // từng event khi `cat` file lớn (hàng nghìn Wakeup).
                         let _ = this.update(cx, |_, cx| cx.notify());
                         let s = session_for_spawn.clone();
+                        // Drain coalesced Output events BEFORE updating line_times,
+                        // để snapshot bắt được tất cả output đã dồn trong queue.
+                        loop {
+                            match rx.try_recv() {
+                                Ok(SessionEvent::Output) => {} // coalesced
+                                Ok(SessionEvent::Clipboard(Some(t))) => {
+                                    let _ = this.update(cx, |_, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(t));
+                                    });
+                                }
+                                Ok(SessionEvent::Clipboard(None)) => {
+                                    let _ = this.update(cx, |_, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            String::new(),
+                                        ));
+                                    });
+                                }
+                                Ok(SessionEvent::Bell) => {
+                                    let _ = this.update(cx, |view, cx| {
+                                        view.has_bell = true;
+                                        cx.notify();
+                                    });
+                                }
+                                Ok(_) => {
+                                    // Title/Cwd/Exited/Closed → notify.
+                                    let _ = this.update(cx, |_, cx| cx.notify());
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                        // NOW update line_times + scroll_to_bottom based on
+                        // final snapshot (sau khi drain hết coalesced output).
                         let _ = this.update(cx, |view, cx| {
                             s.read(cx).scroll_to_bottom();
                             // Track per-line timestamps for gutter display.
@@ -165,34 +197,6 @@ impl LocalTerminalView {
                             view.prev_total_lines = total;
                             view.prev_cursor_line = cur_line;
                         });
-                        loop {
-                            match rx.try_recv() {
-                                Ok(SessionEvent::Output) => {} // coalesced
-                                Ok(SessionEvent::Clipboard(Some(t))) => {
-                                    let _ = this.update(cx, |_, cx| {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(t));
-                                    });
-                                }
-                                Ok(SessionEvent::Clipboard(None)) => {
-                                    let _ = this.update(cx, |_, cx| {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(
-                                            String::new(),
-                                        ));
-                                    });
-                                }
-                                Ok(SessionEvent::Bell) => {
-                                    let _ = this.update(cx, |view, cx| {
-                                        view.has_bell = true;
-                                        cx.notify();
-                                    });
-                                }
-                                Ok(_) => {
-                                    // Title/Cwd/Exited/Closed → notify.
-                                    let _ = this.update(cx, |_, cx| cx.notify());
-                                }
-                                Err(_) => break,
-                            }
-                        }
                     }
                     SessionEvent::Bell => {
                         let _ = this.update(cx, |view, cx| {
@@ -540,6 +544,23 @@ impl Render for LocalTerminalView {
 
         let theme_ref = cx.theme().clone();
 
+        // Safety sync: đảm bảo line_times.len() == snap.total_lines.
+        // Output có thể đến giữa lần update cuối cùng của event handler và
+        // frame render này → line_times bị thiếu → gutter hiện --:--:--.
+        {
+            let total = snap.total_lines;
+            if self.line_times.len() != total {
+                let now = chrono::Local::now().format("%H:%M:%S").to_string();
+                while self.line_times.len() < total {
+                    self.line_times.push(now.clone());
+                }
+                while self.line_times.len() > total {
+                    self.line_times.pop();
+                }
+                self.prev_total_lines = total;
+            }
+        }
+
         div()
             .id("local-terminal-view")
             .size_full()
@@ -561,7 +582,6 @@ impl Render for LocalTerminalView {
                 self.hovered_url.clone(),
                 self.ctrl_held,
                 self.line_times.clone(),
-                theme_ref.border,
             ))
             // Bell indicator overlay (góc trên-phải).
             .children(if has_bell && bell_enabled {
