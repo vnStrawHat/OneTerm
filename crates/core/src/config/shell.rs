@@ -217,6 +217,41 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
         }
     };
 
+    // Shell integration qua env vars — hoàn toàn silent, không temp file,
+    // không viết script ra PTY. Shell đọc env var khi khởi động.
+    match cfg.kind {
+        ShellKind::Cmd => {
+            // cmd.exe đọc PROMPT env var khi khởi động.
+            // $E = ESC, $P = current path, $G = '>', $\ = literal backslash.
+            // Không ghi đè nếu user đã set PROMPT trong cfg.env.
+            if !env.contains_key("PROMPT") {
+                env.insert("PROMPT".into(), "$E]133;A$E\\$P$G$E]133;B$E\\".into());
+            }
+        }
+        ShellKind::Bash => {
+            // PROMPT_COMMAND chạy trước mỗi prompt — emit OSC 7 (cwd) + OSC 133 A.
+            if !env.contains_key("PROMPT_COMMAND") {
+                env.insert(
+                    "PROMPT_COMMAND".into(),
+                    "printf '\\x1b]7;file://%s%s\\x1b\\\\' \"$HOSTNAME\" \"$PWD\"; printf '\\x1b]133;A\\x1b\\\\'"
+                        .into(),
+                );
+            }
+        }
+        ShellKind::Zsh => {
+            // zsh không hỗ trợ PROMPT_COMMAND — set PS1 với OSC 133 markers.
+            // %{...%} wrapper để zsh không count escape chars cho cursor position.
+            if !env.contains_key("PS1") {
+                env.insert(
+                    "PS1".into(),
+                    "%{\x1b]133;A\x1b\\\\%}%n@%m:%~ %# %{\x1b]133;B\x1b\\\\%}"
+                        .into(),
+                );
+            }
+        }
+        _ => {}
+    }
+
     // Args thêm của user (sau args mặc định).
     args.extend(cfg.args.iter().cloned());
 

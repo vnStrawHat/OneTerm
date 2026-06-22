@@ -135,26 +135,6 @@ impl LocalTerminalView {
                                 Err(_) => break,
                             }
                         }
-                        // Follow-up: ConPTY (Windows) buffer output, cần
-                        // multiple re-renders để UI catch data đến muộn.
-                        // KHÔNG gửi DSR query (\x1b[6n) — tạo cascade:
-                        // shell respond → thêm Output event → thêm follow-up
-                        // → overflow. Chỉ re-render + scroll_to_bottom.
-                        let this_a = this.clone();
-                        let this_b = this.clone();
-                        let this_c = this.clone();
-                        let s_flush = session_for_spawn.clone();
-                        cx.spawn(async move |cx| {
-                            // 50ms: re-render + scroll to bottom
-                            cx.background_executor().timer(Duration::from_millis(50)).await;
-                            let _ = this_a.update(cx, |_, cx| { s_flush.read(cx).scroll_to_bottom(); cx.notify(); });
-                            // 200ms: re-render
-                            cx.background_executor().timer(Duration::from_millis(150)).await;
-                            let _ = this_b.update(cx, |_, cx| { s_flush.read(cx).scroll_to_bottom(); cx.notify(); });
-                            // 500ms: final re-render (delay dài cho ConPTY chậm)
-                            cx.background_executor().timer(Duration::from_millis(300)).await;
-                            let _ = this_c.update(cx, |_, cx| { s_flush.read(cx).scroll_to_bottom(); cx.notify(); });
-                        }).detach();
                     }
                     SessionEvent::Bell => {
                         let _ = this.update(cx, |view, cx| {

@@ -17,7 +17,7 @@ use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::tty::{self, Options, Shell};
 use async_channel::Receiver;
 
-use myterm2_core::config::{resolve_shell, ShellKind};
+use myterm2_core::config::resolve_shell;
 use myterm2_core::terminal::TerminalContent;
 use myterm2_core::terminal::mouse_encode::{
     MouseModifiers, TerminalMouseButton, encode_mouse_move, encode_mouse_press,
@@ -115,19 +115,9 @@ impl LocalSession {
         listener.set_notifier(notifier);
         let _join = event_loop.spawn();
 
-        // Inject shell integration script (OSC 7 + OSC 133) dựa trên shell kind.
-        // Shell phải sẵn sàng nhận input — chờ 100ms rồi write.
-        {
-            let listener = listener.clone();
-            let kind = cfg.kind;
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-                let script = shell_integration_script(kind);
-                if !script.is_empty() {
-                    listener.pty_write(script.as_bytes());
-                }
-            });
-        }
+        // Shell integration được inject qua env vars trong resolve_shell()
+        // — hoàn toàn silent, không temp file, không viết script ra PTY.
+        // Xem crates/core/src/config/shell.rs::resolve_shell().
 
         Ok(Self {
             term,
@@ -476,59 +466,6 @@ impl TerminalSession for LocalSession {
     }
 }
 
-/// Shell integration script — emit OSC 7 (cwd) + OSC 133 (prompt markers).
-/// Inject vào PTY sau khi shell sẵn sàng nhận input.
-///
-/// Viết script ra temp file rồi source/execute — tránh script bị echo
-/// trên màn hình (nếu viết thẳng vào PTY, shell echo toàn bộ script).
-///
-/// PowerShell: viết .ps1 → dot-source.
-/// Cmd: viết .bat (có `@echo off`) → `call`.
-/// Bash/Zsh: viết .sh → `source`.
-fn shell_integration_script(kind: ShellKind) -> String {
-    match kind {
-        ShellKind::PowerShell | ShellKind::Pwsh => {
-            let script = r#"
-$e = [char]27
-function prompt {
-    $p = $PWD.Path -replace '\\','/'
-    "$e]7;file://$env:COMPUTERNAME/$p$e\$e]133;A$e\$e[32mPS $($PWD.Path)$e[0m> $e]133;B$e\"
-}
-"#;
-            let path = std::env::temp_dir().join("myterm2_si.ps1");
-            let _ = std::fs::write(&path, script);
-            format!(". '{}'\r\n", path.display())
-        }
-        ShellKind::Cmd => {
-            // Batch file: @echo off suppresses echo inside bat.
-            // Cmd.exe dùng double quotes cho path (không hỗ trợ single quotes).
-            let script = "@echo off\r\nprompt $E]133;A$E\\$P$G$E]133;B$E\\\r\n";
-            let path = std::env::temp_dir().join("myterm2_si.bat");
-            let _ = std::fs::write(&path, script);
-            format!("call \"{}\"\r\n", path.display())
-        }
-        ShellKind::Bash | ShellKind::Zsh => {
-            let script = r#"
-__myterm2_precmd() {
-    printf '\e]7;file://%s%s\e\\' "$HOSTNAME" "$PWD"
-    printf '\e]133;A\e\\'
-}
-__myterm2_preexec() {
-    printf '\e]133;C\e\\'
-}
-PROMPT_COMMAND="__myterm2_precmd; $PROMPT_COMMAND"
-trap '__myterm2_preexec' DEBUG
-"#;
-            let path = std::env::temp_dir().join("myterm2_si.sh");
-            let _ = std::fs::write(&path, script);
-            format!("source '{}'\r\n", path.display())
-        }
-        ShellKind::Sh | ShellKind::Custom => {
-            // sh/Custom: không inject — user tự cấu hình.
-            String::new()
-        }
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;
