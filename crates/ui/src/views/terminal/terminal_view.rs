@@ -135,37 +135,25 @@ impl LocalTerminalView {
                                 Err(_) => break,
                             }
                         }
-                        // Follow-up: ConPTY (Windows) buffer output, chỉ flush
-                        // khi có interaction. Gửi DSR query (\x1b[6n) để force
-                        // ConPTY flush + re-render để bắt data đến muộn.
-                        // Multiple flushes + renders cho output lớn (vd cat Cargo.lock).
+                        // Follow-up: ConPTY (Windows) buffer output, cần
+                        // multiple re-renders để UI catch data đến muộn.
+                        // KHÔNG gửi DSR query (\x1b[6n) — tạo cascade:
+                        // shell respond → thêm Output event → thêm follow-up
+                        // → overflow. Chỉ re-render + scroll_to_bottom.
                         let this_a = this.clone();
                         let this_b = this.clone();
                         let this_c = this.clone();
-                        let this_d = this.clone();
-                        let this_e = this.clone();
                         let s_flush = session_for_spawn.clone();
                         cx.spawn(async move |cx| {
-                            // 50ms: flush ConPTY buffer + render + scroll to bottom
+                            // 50ms: re-render + scroll to bottom
                             cx.background_executor().timer(Duration::from_millis(50)).await;
-                            let _ = cx.update(|cx| s_flush.read(cx).flush_pty());
                             let _ = this_a.update(cx, |_, cx| { s_flush.read(cx).scroll_to_bottom(); cx.notify(); });
-                            // 100ms: flush again + render
-                            cx.background_executor().timer(Duration::from_millis(50)).await;
-                            let _ = cx.update(|cx| s_flush.read(cx).flush_pty());
+                            // 200ms: re-render
+                            cx.background_executor().timer(Duration::from_millis(150)).await;
                             let _ = this_b.update(cx, |_, cx| { s_flush.read(cx).scroll_to_bottom(); cx.notify(); });
-                            // 200ms: flush + render
-                            cx.background_executor().timer(Duration::from_millis(100)).await;
-                            let _ = cx.update(|cx| s_flush.read(cx).flush_pty());
+                            // 500ms: final re-render (delay dài cho ConPTY chậm)
+                            cx.background_executor().timer(Duration::from_millis(300)).await;
                             let _ = this_c.update(cx, |_, cx| { s_flush.read(cx).scroll_to_bottom(); cx.notify(); });
-                            // 400ms: flush + render
-                            cx.background_executor().timer(Duration::from_millis(200)).await;
-                            let _ = cx.update(|cx| s_flush.read(cx).flush_pty());
-                            let _ = this_d.update(cx, |_, cx| { s_flush.read(cx).scroll_to_bottom(); cx.notify(); });
-                            // 800ms: final flush + render (delay dài cho ConPTY chậm)
-                            cx.background_executor().timer(Duration::from_millis(400)).await;
-                            let _ = cx.update(|cx| s_flush.read(cx).flush_pty());
-                            let _ = this_e.update(cx, |_, cx| { s_flush.read(cx).scroll_to_bottom(); cx.notify(); });
                         }).detach();
                     }
                     SessionEvent::Bell => {

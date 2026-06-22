@@ -49,7 +49,8 @@ pub struct MyTermWorkspace {
 }
 
 impl MyTermWorkspace {
-    /// Tạo workspace mới: luôn reset về mặc định (1 terminal tab).
+    /// Tạo workspace mới: load layout cũ (giữ right dock + settings),
+    /// nhưng reset center (terminal tabs) về 1 tab mặc định.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         AppState::init(cx);
         // Luôn render tab bar style (kể cả khi chỉ 1 tab) thay vì simple title,
@@ -60,10 +61,18 @@ impl MyTermWorkspace {
         });
         let weak_dock_area = dock_area.downgrade();
 
-        // Luôn reset về layout mặc định — không load layout cũ.
-        // myTerm2 chỉ giữ 1 terminal tab khi mở lại, không restore số tab trước đó.
-        let _ = std::fs::remove_file(STATE_FILE);
-        Self::reset_default_layout(weak_dock_area, window, cx);
+        // Load layout cũ (giữ right dock, version check, etc.) nhưng luôn
+        // reset center về 1 terminal tab — không restore số tab trước đó.
+        match Self::load_layout(dock_area.clone(), window, cx) {
+            Ok(()) => {
+                // Layout loaded — reset center về 1 terminal tab.
+                Self::reset_center_only(weak_dock_area, window, cx);
+            }
+            Err(_) => {
+                // Không có layout cũ hoặc lỗi → full reset default.
+                Self::reset_default_layout(weak_dock_area, window, cx);
+            }
+        }
 
         // Save layout khi DockEvent::LayoutChanged (debounce 10s).
         // Chỉ save để version check hoạt động — nhưng KHÔNG load lại khi mở.
@@ -141,8 +150,7 @@ impl MyTermWorkspace {
         Ok(())
     }
 
-    /// Load layout từ file — không dùng mặc định (luôn reset).
-    #[allow(dead_code)]
+    /// Load layout từ file — dùng để giữ right dock + settings.
     fn load_layout(
         dock_area: Entity<DockArea>,
         window: &mut Window,
@@ -185,6 +193,30 @@ impl MyTermWorkspace {
             );
             Ok::<(), anyhow::Error>(())
         })
+    }
+
+    /// Reset chỉ center (terminal tabs) về 1 tab — giữ right dock + settings.
+    fn reset_center_only(
+        dock_area: gpui::WeakEntity<DockArea>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let weak = dock_area.clone();
+        let center = DockItem::v_split(
+            vec![DockItem::tabs(
+                vec![Arc::new(TerminalPanel::new_entity(window, cx))],
+                &weak,
+                window,
+                cx,
+            )],
+            &weak,
+            window,
+            cx,
+        );
+        _ = dock_area.update(cx, |view, cx| {
+            view.set_center(center, window, cx);
+            _ = Self::save_state(&view.dump(cx));
+        });
     }
 
     /// Dựng layout mặc định myTerm2: center = terminals, right_dock = Session/SFTP.

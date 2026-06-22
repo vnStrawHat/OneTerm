@@ -501,10 +501,11 @@ function prompt {
         }
         ShellKind::Cmd => {
             // Batch file: @echo off suppresses echo inside bat.
+            // Cmd.exe dùng double quotes cho path (không hỗ trợ single quotes).
             let script = "@echo off\r\nprompt $E]133;A$E\\$P$G$E]133;B$E\\\r\n";
             let path = std::env::temp_dir().join("myterm2_si.bat");
             let _ = std::fs::write(&path, script);
-            format!("call '{}'\r\n", path.display())
+            format!("call \"{}\"\r\n", path.display())
         }
         ShellKind::Bash | ShellKind::Zsh => {
             let script = r#"
