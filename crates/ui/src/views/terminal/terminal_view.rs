@@ -68,6 +68,12 @@ pub struct LocalTerminalView {
     /// Last mouse position — để re-detect URL khi Ctrl pressed/released
     /// mà không cần mouse move.
     last_mouse_pos: Option<Point<Pixels>>,
+    /// Per-line timestamps (gutter) — indexed by absolute line number (0 = oldest).
+    line_times: Vec<String>,
+    /// Previous total_lines — detect new lines added.
+    prev_total_lines: usize,
+    /// Previous cursor line (alacritty Line.0) — detect new line vs modification.
+    prev_cursor_line: i32,
 }
 
 impl LocalTerminalView {
@@ -114,8 +120,51 @@ impl LocalTerminalView {
                         // từng event khi `cat` file lớn (hàng nghìn Wakeup).
                         let _ = this.update(cx, |_, cx| cx.notify());
                         let s = session_for_spawn.clone();
-                        let _ = this.update(cx, |_, cx| {
+                        let _ = this.update(cx, |view, cx| {
                             s.read(cx).scroll_to_bottom();
+                            // Track per-line timestamps for gutter display.
+                            let snap = s.read(cx).snapshot();
+                            let total = snap.total_lines;
+                            let cur_line = snap.cursor.point.line.0;
+                            let now = chrono::Local::now().format("%H:%M:%S").to_string();
+                            if total > view.prev_total_lines {
+                                // New lines added — push timestamps for each new line.
+                                let delta = total - view.prev_total_lines;
+                                for _ in 0..delta {
+                                    view.line_times.push(now.clone());
+                                }
+                            } else if total == view.prev_total_lines {
+                                if total == 0 {
+                                    // nothing
+                                } else if cur_line < view.prev_cursor_line {
+                                    // Cursor moved down (new line at max scrollback).
+                                    // Oldest line dropped, new line at bottom.
+                                    if !view.line_times.is_empty() {
+                                        view.line_times.remove(0);
+                                    }
+                                    view.line_times.push(now.clone());
+                                } else if total > 0 {
+                                    // Same line modified — update cursor's line timestamp.
+                                    let abs = (cur_line + total as i32 - 1) as usize;
+                                    if abs < view.line_times.len() {
+                                        view.line_times[abs] = now.clone();
+                                    } else if abs == view.line_times.len() {
+                                        view.line_times.push(now.clone());
+                                    }
+                                }
+                            } else {
+                                // total < prev — terminal cleared (e.g. `clear` cmd).
+                                view.line_times.truncate(total);
+                            }
+                            // Ensure line_times has exactly `total` entries.
+                            while view.line_times.len() < total {
+                                view.line_times.push(now.clone());
+                            }
+                            while view.line_times.len() > total {
+                                view.line_times.pop();
+                            }
+                            view.prev_total_lines = total;
+                            view.prev_cursor_line = cur_line;
                         });
                         loop {
                             match rx.try_recv() {
@@ -197,6 +246,9 @@ impl LocalTerminalView {
             hovered_url: None,
             ctrl_held: false,
             last_mouse_pos: None,
+            line_times: Vec::new(),
+            prev_total_lines: 0,
+            prev_cursor_line: 0,
         }
     }
 
@@ -482,6 +534,7 @@ impl Render for LocalTerminalView {
                 self.focus.clone(),
                 self.hovered_url.clone(),
                 self.ctrl_held,
+                self.line_times.clone(),
             ))
             // Bell indicator overlay (góc trên-phải).
             .children(if has_bell && bell_enabled {

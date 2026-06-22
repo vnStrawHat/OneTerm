@@ -121,6 +121,8 @@ pub(crate) struct TerminalElement {
     hovered_url: Option<super::url::DetectedUrl>,
     /// Ctrl đang held.
     ctrl_held: bool,
+    /// Per-line timestamps for gutter (0 = oldest line).
+    line_times: Vec<String>,
 }
 
 impl TerminalElement {
@@ -137,6 +139,7 @@ impl TerminalElement {
         focus: gpui::FocusHandle,
         hovered_url: Option<super::url::DetectedUrl>,
         ctrl_held: bool,
+        line_times: Vec<String>,
     ) -> Self {
         Self {
             session,
@@ -152,6 +155,7 @@ impl TerminalElement {
             focus,
             hovered_url,
             ctrl_held,
+            line_times,
         }
     }
 
@@ -643,8 +647,8 @@ impl Element for TerminalElement {
         let _hitbox = window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal);
 
         // ── Gutter entries: [HH:MM:SS] line_number cho mỗi dòng hiển thị ──
-        let now = chrono::Local::now();
-        let time_str = now.format("%H:%M:%S").to_string();
+        // Timestamp per-line: lấy từ line_times (tracked khi output mới).
+        // Fallback "--:--:--" nếu chưa có data.
         let total_lines = snapshot.total_lines;
         let gutter_fg = {
             // Dim foreground cho gutter text.
@@ -656,12 +660,19 @@ impl Element for TerminalElement {
             let bg = self.theme.bg;
             gpui::hsla(bg.h, bg.s, (bg.l * 0.9).max(0.0), bg.a)
         };
+        let lt = &self.line_times;
         let gutter_entries: Vec<GutterEntry> = (0..num_lines)
             .map(|i| {
                 // Line number 1-based từ top of scrollback.
-                // display line i (0-based from top) → actual line number.
                 let line_num = total_lines as i32 - display_offset as i32 - num_lines as i32 + i as i32 + 1;
                 let line_num = line_num.max(1) as usize;
+                // 0-based index into line_times.
+                let abs_idx = line_num - 1;
+                let time_str = if abs_idx < lt.len() {
+                    lt[abs_idx].as_str()
+                } else {
+                    "--:--:--"
+                };
                 let text = format!("[{}] {:>5}", time_str, line_num);
                 GutterEntry {
                     text: SharedString::from(text),
