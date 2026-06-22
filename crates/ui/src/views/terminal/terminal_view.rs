@@ -74,6 +74,10 @@ pub struct LocalTerminalView {
     prev_total_lines: usize,
     /// Previous cursor line (alacritty Line.0) — detect new line vs modification.
     prev_cursor_line: i32,
+    /// Offset subtracted from line numbers — accounts for phantom scrollback
+    /// lines created by ConPTY at startup (e.g. initial newline).
+    /// -1 = not yet initialized.
+    line_number_offset: i32,
 }
 
 impl LocalTerminalView {
@@ -125,8 +129,17 @@ impl LocalTerminalView {
                             // Track per-line timestamps for gutter display.
                             let snap = s.read(cx).snapshot();
                             let total = snap.total_lines;
+                            let num_lines = snap.terminal_bounds.num_lines;
                             let cur_line = snap.cursor.point.line.0;
                             let now = chrono::Local::now().format("%H:%M:%S").to_string();
+                            // Initialize line_number_offset on first output:
+                            // capture initial scrollback (phantom ConPTY lines).
+                            if view.line_number_offset < 0 {
+                                view.line_number_offset = (total as i32) - (num_lines as i32);
+                                if view.line_number_offset < 0 {
+                                    view.line_number_offset = 0;
+                                }
+                            }
                             if total > view.prev_total_lines {
                                 // New lines added — push timestamps for each new line.
                                 let delta = total - view.prev_total_lines;
@@ -249,6 +262,7 @@ impl LocalTerminalView {
             line_times: Vec::new(),
             prev_total_lines: 0,
             prev_cursor_line: 0,
+            line_number_offset: -1,
         }
     }
 
@@ -536,6 +550,7 @@ impl Render for LocalTerminalView {
                 self.ctrl_held,
                 self.line_times.clone(),
                 theme_ref.border,
+                self.line_number_offset,
             ))
             // Bell indicator overlay (góc trên-phải).
             .children(if has_bell && bell_enabled {

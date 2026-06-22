@@ -127,6 +127,8 @@ pub(crate) struct TerminalElement {
     line_times: Vec<String>,
     /// Border color từ GPUI theme (đồng bộ với Dock border).
     dock_border: Hsla,
+    /// Offset trừ khỏi line number — accounts for phantom scrollback lines.
+    line_number_offset: i32,
 }
 
 impl TerminalElement {
@@ -145,6 +147,7 @@ impl TerminalElement {
         ctrl_held: bool,
         line_times: Vec<String>,
         dock_border: Hsla,
+        line_number_offset: i32,
     ) -> Self {
         Self {
             session,
@@ -162,6 +165,7 @@ impl TerminalElement {
             ctrl_held,
             line_times,
             dock_border,
+            line_number_offset,
         }
     }
 
@@ -707,8 +711,8 @@ impl Element for TerminalElement {
                         y: bounds.origin.y + i as f32 * line_height,
                     };
                 }
-                // Line number 1-based từ top of scrollback.
-                let line_num = total_lines as i32 - display_offset as i32 - num_lines as i32 + i as i32 + 1;
+                // Line number 1-based, trừ phantom scrollback offset.
+                let line_num = total_lines as i32 - display_offset as i32 - num_lines as i32 + i as i32 + 1 - self.line_number_offset;
                 let line_num = line_num.max(1) as usize;
                 // 0-based index into line_times.
                 let abs_idx = line_num - 1;
