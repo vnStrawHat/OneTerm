@@ -712,10 +712,16 @@ impl Element for TerminalElement {
                     };
                 }
                 // Line number 1-based, trừ phantom scrollback offset.
-                let line_num = total_lines as i32 - display_offset as i32 - num_lines as i32 + i as i32 + 1 - self.line_number_offset;
+                // Fallback: nếu offset chưa init (-1), tính từ snapshot.
+                let ln_offset = if self.line_number_offset < 0 {
+                    (total_lines as i32 - num_lines as i32).max(0)
+                } else {
+                    self.line_number_offset
+                };
+                let line_num = total_lines as i32 - display_offset as i32 - num_lines as i32 + i as i32 + 1 - ln_offset;
                 let line_num = line_num.max(1) as usize;
-                // 0-based index into line_times.
-                let abs_idx = line_num - 1;
+                // 0-based index into line_times (absolute grid position, NOT adjusted by offset).
+                let abs_idx = (total_lines as i32 - display_offset as i32 - num_lines as i32 + i as i32).max(0) as usize;
                 let time_str = if abs_idx < lt.len() {
                     lt[abs_idx].as_str()
                 } else {
