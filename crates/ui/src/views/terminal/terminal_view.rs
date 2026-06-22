@@ -12,6 +12,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use alacritty_terminal::selection::SelectionType;
+use alacritty_terminal::term::cell::Flags;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, ClipboardItem, Context, Entity, FocusHandle, Focusable,
@@ -133,12 +134,32 @@ impl LocalTerminalView {
                             let cur_line = snap.cursor.point.line.0;
                             let now = chrono::Local::now().format("%H:%M:%S").to_string();
                             // Initialize line_number_offset on first output:
-                            // capture initial scrollback (phantom ConPTY lines).
+                            // offset = scrollback + blank lines above first content.
+                            // This accounts for phantom ConPTY lines (both scrolled
+                            // off AND visible blank lines at top of viewport).
                             if view.line_number_offset < 0 {
-                                view.line_number_offset = (total as i32) - (num_lines as i32);
-                                if view.line_number_offset < 0 {
-                                    view.line_number_offset = 0;
+                                let display_offset = snap.display_offset as i32;
+                                let mut first_content: i32 = 0;
+                                for ic in &snap.cells {
+                                    let dl = ic.point.line.0 + display_offset;
+                                    if dl >= 0 && dl < num_lines as i32 {
+                                        let c = &ic.cell;
+                                        let blank = c.c == ' '
+                                            && c.hyperlink().is_none()
+                                            && !c.flags.intersects(
+                                                Flags::INVERSE
+                                                | Flags::ALL_UNDERLINES
+                                                | Flags::STRIKEOUT
+                                                | Flags::WIDE_CHAR_SPACER,
+                                            );
+                                        if !blank {
+                                            first_content = dl;
+                                            break;
+                                        }
+                                    }
                                 }
+                                let scrollback = (total as i32) - (num_lines as i32);
+                                view.line_number_offset = (scrollback + first_content).max(0);
                             }
                             if total > view.prev_total_lines {
                                 // New lines added — push timestamps for each new line.
