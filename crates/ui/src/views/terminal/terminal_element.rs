@@ -661,34 +661,38 @@ impl Element for TerminalElement {
             gpui::hsla(bg.h, bg.s, (bg.l * 0.9).max(0.0), bg.a)
         };
         let lt = &self.line_times;
-        // Max line number có content = dòng cursor (1-based).
-        // Line(0) = bottom = total_lines; Line(-(num_lines-1)) = top.
-        // Dòng trống dưới cursor không có line number.
-        let max_content_line = snapshot.cursor.point.line.0 + total_lines as i32;
+        // Scan cells để tìm display lines có content (non-blank).
+        // Chỉ những dòng có content mới hiển thị line number.
+        let mut has_content = vec![false; num_lines];
+        for ic in &snapshot.cells {
+            let display_line = (ic.point.line.0 + display_offset as i32) as usize;
+            if display_line < num_lines && !Self::is_blank(&ic.cell) {
+                has_content[display_line] = true;
+            }
+        }
         let gutter_entries: Vec<GutterEntry> = (0..num_lines)
             .map(|i| {
-                // Line number 1-based từ top of scrollback.
-                let line_num = total_lines as i32 - display_offset as i32 - num_lines as i32 + i as i32 + 1;
-                // Dòng ngoài content (empty lines dưới cursor) → gutter rỗng.
-                if line_num > max_content_line {
-                    GutterEntry {
+                if !has_content[i] {
+                    // Dòng trống → gutter rỗng.
+                    return GutterEntry {
                         text: SharedString::from(""),
                         y: bounds.origin.y + i as f32 * line_height,
-                    }
-                } else {
-                    let line_num = line_num.max(1) as usize;
-                    // 0-based index into line_times.
-                    let abs_idx = line_num - 1;
-                    let time_str = if abs_idx < lt.len() {
-                        lt[abs_idx].as_str()
-                    } else {
-                        "--:--:--"
                     };
-                    let text = format!("[{}] {:>5}", time_str, line_num);
-                    GutterEntry {
-                        text: SharedString::from(text),
-                        y: bounds.origin.y + i as f32 * line_height,
-                    }
+                }
+                // Line number 1-based từ top of scrollback.
+                let line_num = total_lines as i32 - display_offset as i32 - num_lines as i32 + i as i32 + 1;
+                let line_num = line_num.max(1) as usize;
+                // 0-based index into line_times.
+                let abs_idx = line_num - 1;
+                let time_str = if abs_idx < lt.len() {
+                    lt[abs_idx].as_str()
+                } else {
+                    "--:--:--"
+                };
+                let text = format!("[{}] {:>5}", time_str, line_num);
+                GutterEntry {
+                    text: SharedString::from(text),
+                    y: bounds.origin.y + i as f32 * line_height,
                 }
             })
             .collect();
