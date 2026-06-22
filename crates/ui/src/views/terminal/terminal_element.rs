@@ -121,6 +121,12 @@ pub(crate) struct TerminalElement {
     hovered_url: Option<super::url::DetectedUrl>,
     /// Ctrl đang held.
     ctrl_held: bool,
+    /// Padding quanh terminal content (top/right/bottom/left px).
+    padding: crate::state::TerminalPadding,
+    /// Cell width override (None = auto từ font advance).
+    cell_width_override: Option<f32>,
+    /// Cursor color override (None = theme caret).
+    cursor_color_override: Option<Hsla>,
     /// Per-line timestamps for gutter (0 = oldest line).
     line_times: Vec<String>,
 }
@@ -141,6 +147,9 @@ impl TerminalElement {
         hovered_url: Option<super::url::DetectedUrl>,
         ctrl_held: bool,
         line_times: Vec<String>,
+        padding: crate::state::TerminalPadding,
+        cell_width_override: Option<f32>,
+        cursor_color_override: Option<Hsla>,
     ) -> Self {
         Self {
             session,
@@ -157,6 +166,9 @@ impl TerminalElement {
             hovered_url,
             ctrl_held,
             line_times,
+            padding,
+            cell_width_override,
+            cursor_color_override,
         }
     }
 
@@ -545,12 +557,21 @@ impl Element for TerminalElement {
         // Font measure.
         let font_id = cx.text_system().resolve_font(&self.font);
         let font_px = self.font_size;
-        let cell_width = cx
-            .text_system()
-            .advance(font_id, font_px, 'm')
-            .map(|s| s.width)
-            .unwrap_or(px(8.0));
+        let cell_width = if let Some(cw) = self.cell_width_override {
+            px(cw)
+        } else {
+            cx.text_system()
+                .advance(font_id, font_px, 'm')
+                .map(|s| s.width)
+                .unwrap_or(px(8.0))
+        };
         let line_height = px(f32::from(font_px) * self.line_height_factor);
+
+        // ── Padding (config) ──
+        let pad_left = px(self.padding.left);
+        let pad_right = px(self.padding.right);
+        let pad_top = px(self.padding.top);
+        let pad_bottom = px(self.padding.bottom);
 
         // ── Gutter: [HH:MM:SS] line_number ──
         // Chiều rộng gutter = chiều rộng template text + padding.
@@ -574,17 +595,17 @@ impl Element for TerminalElement {
                 None,
             )
             .width();
-        let gutter_width = gutter_text_width + px(8.0); // 4px padding mỗi bên
-        // Padding trái cho terminal content — tránh text sát lề gutter separator.
-        let content_padding = px(6.0);
+        let gutter_width = gutter_text_width + px(8.0); // 4px padding mỗi bên gutter
 
         // Resize session theo bounds (race-free: chỉ khi đổi).
-        // Trừ gutter_width + content_padding khỏi chiều rộng có sẵn.
+        // Trừ gutter_width + pad_left + pad_right khỏi chiều rộng.
         let grid_width =
-            (f32::from(bounds.size.width) - f32::from(gutter_width) - f32::from(content_padding))
+            (f32::from(bounds.size.width) - f32::from(gutter_width) - f32::from(pad_left) - f32::from(pad_right))
                 .max(f32::from(cell_width));
         let cols = ((grid_width / f32::from(cell_width)).floor() as u16).max(1);
-        let rows = ((f32::from(bounds.size.height) / f32::from(line_height)).floor() as u16).max(1);
+        // Trừ pad_top + pad_bottom khỏi chiều cao.
+        let avail_height = f32::from(bounds.size.height) - f32::from(pad_top) - f32::from(pad_bottom);
+        let rows = ((avail_height / f32::from(line_height)).floor() as u16).max(1);
         if self.last_size != Some((rows, cols)) {
             self.session.update(cx, |s, _| s.resize(rows, cols));
             self.last_size = Some((rows, cols));
@@ -634,10 +655,12 @@ impl Element for TerminalElement {
                     None
                 } else {
                     let col = c.point.column.0 as i32;
-                    let color = resolve_cell_color(
-                        &alacritty_terminal::vte::ansi::Color::Named(NamedColor::Cursor),
-                        &self.theme,
-                    );
+                    let color = self.cursor_color_override.unwrap_or_else(|| {
+                        resolve_cell_color(
+                            &alacritty_terminal::vte::ansi::Color::Named(NamedColor::Cursor),
+                            &self.theme,
+                        )
+                    });
                     Some(CursorPaint {
                         point: LayoutPoint {
                             line: display_line,
@@ -726,20 +749,20 @@ impl Element for TerminalElement {
             })
             .collect();
 
-        // Grid origin = bên phải gutter + content_padding (left padding).
+        // Grid origin = bên phải gutter + pad_left, pad_top.
         let grid_origin = GpuiPoint {
-            x: bounds.origin.x + gutter_width + content_padding,
-            y: bounds.origin.y,
+            x: bounds.origin.x + gutter_width + pad_left,
+            y: bounds.origin.y + pad_top,
         };
 
         // Sink metrics cho View (mouse/wheel).
-        // gutter_width trong metrics bao gồm content_padding để pixel_to_grid
+        // gutter_width trong metrics bao gồm pad_left để pixel_to_grid
         // convert chính xác từ tọa độ mouse.
         *self.metrics.borrow_mut() = GridMetrics {
             bounds: Some(bounds),
             cell_width,
             line_height,
-            gutter_width: gutter_width + content_padding,
+            gutter_width: gutter_width + pad_left,
         };
         LayoutState {
             rects,

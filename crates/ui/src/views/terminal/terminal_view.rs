@@ -38,9 +38,6 @@ const CURSOR_BLINK_INTERVAL_MS: u64 = 500;
 pub struct LocalTerminalView {
     session: Entity<Box<dyn TerminalSession>>,
     focus: FocusHandle,
-    font_family: SharedString,
-    font_size: Pixels,
-    line_height_factor: f32,
     /// Sink layout metrics (Element ghi ở prepaint, mouse handler đọc).
     metrics: Rc<RefCell<GridMetrics>>,
     /// Scrollbar handle — cache scrollback state, apply drag → session.
@@ -83,9 +80,6 @@ impl LocalTerminalView {
         cx: &mut Context<Self>,
     ) -> Self {
         let focus = cx.focus_handle();
-        let theme = cx.theme().clone();
-        let font_family = theme.mono_font_family.clone();
-        let font_size = theme.mono_font_size;
 
         // Tab/Shift+Tab: gpui-component root binds "tab" → focus_next.
         // NoAction trong context "Terminal" (depth cao hơn "Root") → override →
@@ -234,9 +228,6 @@ impl LocalTerminalView {
         Self {
             session,
             focus,
-            font_family,
-            font_size,
-            line_height_factor: 1.2,
             metrics: Rc::new(RefCell::new(GridMetrics::default())),
             scroll_handle: TerminalScrollHandle::new(),
             cursor_blink_visible: true,
@@ -294,7 +285,7 @@ impl LocalTerminalView {
         Some((spec, keymods))
     }
 
-    fn font(&self, settings: &TerminalSettings) -> gpui::Font {
+    fn font(&self, settings: &TerminalSettings, font_family: &SharedString) -> gpui::Font {
         let fallbacks = if settings.font_fallbacks.is_empty() {
             None
         } else {
@@ -315,8 +306,8 @@ impl LocalTerminalView {
             features.push((f.to_string(), 1u32));
         }
         gpui::Font {
-            family: self.font_family.clone().into(),
-            weight: gpui::FontWeight::default(),
+            family: font_family.clone().into(),
+            weight: settings.font_weight,
             style: gpui::FontStyle::Normal,
             fallbacks,
             features: gpui::FontFeatures(std::sync::Arc::new(features)),
@@ -502,13 +493,29 @@ impl Render for LocalTerminalView {
         let session = self.session.clone();
         // Đọc settings + extract dữ liệu cần thiết trước khi mutate session.
         let settings_entity = TerminalSettings::global(cx);
-        let (font, cursor_visible, bell_enabled, has_bell) = {
+        let (font, font_size, line_height_factor, cursor_visible, bell_enabled, has_bell, cursor_color, padding, cell_width_override, color_overrides) = {
             let settings = settings_entity.read(cx);
+            let gpui_theme = cx.theme();
+            // Effective font family: settings override → theme mono font.
+            let effective_family: SharedString = settings
+                .font_family
+                .clone()
+                .unwrap_or_else(|| gpui_theme.mono_font_family.clone());
+            let effective_size = settings
+                .font_size
+                .map(gpui::px)
+                .unwrap_or(gpui_theme.mono_font_size);
             (
-                self.font(settings),
+                self.font(settings, &effective_family),
+                effective_size,
+                settings.line_height_factor,
                 self.should_show_cursor(focused, settings),
                 settings.bell_enabled,
                 self.has_bell,
+                settings.cursor_color,
+                settings.padding,
+                settings.cell_width,
+                settings.color_overrides.clone(),
             )
         };
         let metrics = self.metrics.clone();
@@ -561,6 +568,33 @@ impl Render for LocalTerminalView {
             }
         }
 
+        // Apply color overrides từ config → theme.
+        let theme = {
+            let mut t = theme;
+            let co = &color_overrides;
+            if let Some(fg) = co.foreground {
+                t.fg = fg;
+                t.palette.foreground = super::theme::vte_from_rgba(fg.to_rgb());
+            }
+            if let Some(bg) = co.background {
+                t.bg = bg;
+                t.palette.background = super::theme::vte_from_rgba(bg.to_rgb());
+            }
+            if let Some(c) = co.cursor {
+                t.palette.cursor = super::theme::vte_from_rgba(c.to_rgb());
+            }
+            if let Some(sel) = co.selection {
+                t.selection = sel;
+            }
+            t.min_contrast = co.min_contrast;
+            for (i, &color) in co.ansi.iter().enumerate() {
+                if i < 16 {
+                    t.palette.ansi[i] = super::theme::vte_from_rgba(color.to_rgb());
+                }
+            }
+            t
+        };
+
         div()
             .id("local-terminal-view")
             .size_full()
@@ -572,8 +606,8 @@ impl Render for LocalTerminalView {
                 session.clone(),
                 theme.clone(),
                 font,
-                self.font_size,
-                self.line_height_factor,
+                font_size,
+                line_height_factor,
                 focused,
                 cursor_visible,
                 metrics.clone(),
@@ -582,6 +616,9 @@ impl Render for LocalTerminalView {
                 self.hovered_url.clone(),
                 self.ctrl_held,
                 self.line_times.clone(),
+                padding,
+                cell_width_override,
+                cursor_color,
             ))
             // Bell indicator overlay (góc trên-phải).
             .children(if has_bell && bell_enabled {
