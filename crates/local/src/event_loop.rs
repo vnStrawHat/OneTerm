@@ -29,10 +29,6 @@ use crate::state::SharedState;
 /// Buffer size cho PTY read (1 MiB — same as alacritty).
 const READ_BUFFER_SIZE: usize = 0x10_0000;
 
-/// Maximum bytes processed per terminal lock (unused — đọc đến pipe empty).
-#[allow(dead_code)]
-const MAX_LOCKED_READ: usize = u16::MAX as usize;
-
 /// Message gửi tới event loop.
 #[derive(Debug)]
 pub enum ShellMsg {

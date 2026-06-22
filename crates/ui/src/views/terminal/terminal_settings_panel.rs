@@ -150,10 +150,3 @@ pub fn current_shell_config(cx: &App) -> LocalShellConfig {
     TerminalSettings::global(cx).read(cx).shell.clone()
 }
 
-/// (dự phòng) đọc program path tuỳ chỉnh.
-#[allow(dead_code)]
-fn _custom_program(cfg: &LocalShellConfig) -> Option<String> {
-    cfg.program
-        .as_ref()
-        .map(|p| p.to_string_lossy().into_owned())
-}

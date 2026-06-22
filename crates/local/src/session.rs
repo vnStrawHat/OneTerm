@@ -1,4 +1,4 @@
-//! `LocalSession` — spawn shell cục bộ qua `alacritty_terminal::tty` +
+//! `LocalSession` - spawn shell cục bộ qua `alacritty_terminal::tty` +
 //! `EventLoop` (ConPTY trên Windows).
 //!
 //! #11: spawn + struct + inherent methods. #12: `impl TerminalSession`
@@ -61,15 +61,11 @@ pub struct LocalSession {
     event_rx: Mutex<Option<Receiver<SessionEvent>>>,
     state: SharedState,
     config: LocalShellConfig,
-    /// Pixel cell metrics (UI set qua `set_cell_size`) — cho `cursor_bounds`.
+    /// Pixel cell metrics (UI set qua `set_cell_size`) - cho `cursor_bounds`.
     cell_width: Mutex<f32>,
     line_height: Mutex<f32>,
     /// IME marked text (compose buffer).
     marked_text: Mutex<Option<String>>,
-    /// Shell process ID — lưu cho future use.
-    #[allow(dead_code)]
-    #[cfg(windows)]
-    shell_pid: Option<u32>,
 }
 
 impl LocalSession {
@@ -114,18 +110,13 @@ impl LocalSession {
             listener.clone(),
         )));
 
-        // Lấy shell PID trước khi move pty vào event loop.
-        // Dùng cho GenerateConsoleCtrlEvent (Ctrl+C fix trên Windows).
-        #[cfg(windows)]
-        let shell_pid = pty.child_watcher().pid().map(|p| p.get());
-
         let (event_loop, notifier) = ShellEventLoop::new(pty, term.clone(), listener.clone(), state.clone())
             .map_err(|e| AppError::msg(e.to_string()))?;
         listener.set_notifier(notifier);
         let _join = event_loop.spawn();
 
         // Shell integration được inject qua env vars trong resolve_shell()
-        // — hoàn toàn silent, không temp file, không viết script ra PTY.
+        // - hoàn toàn silent, không temp file, không viết script ra PTY.
         // Xem crates/core/src/config/shell.rs::resolve_shell().
 
         Ok(Self {
@@ -137,8 +128,6 @@ impl LocalSession {
             cell_width: Mutex::new(0.0),
             line_height: Mutex::new(0.0),
             marked_text: Mutex::new(None),
-            #[cfg(windows)]
-            shell_pid,
         })
     }
 
@@ -215,12 +204,12 @@ impl TerminalSession for LocalSession {
 
     /// Gửi Ctrl+C signal đến shell process.
     ///
-    /// Gửi \x03 qua PTY — ConPTY (với OpenConsole.exe từ Windows Terminal)
+    /// Gửi \x03 qua PTY - ConPTY (với OpenConsole.exe từ Windows Terminal)
     /// xử lý signal routing đúng cách: CTRL_C_EVENT chỉ đến child process,
     /// không exit shell, không exit myTerm2.
     ///
     /// Yêu cầu: conpty.dll + OpenConsole.exe phải nằm cùng thư mục với exe.
-    /// Xem crates/app/build.rs — tự copy từ assets/ ra target directory.
+    /// Xem crates/app/build.rs - tự copy từ assets/ ra target directory.
     #[cfg(windows)]
     fn send_ctrl_c(&self) {
         self.listener.pty_write(b"\x03");
@@ -232,7 +221,7 @@ impl TerminalSession for LocalSession {
     }
 
     fn resize(&self, rows: u16, cols: u16) {
-        // Skip nếu size không đổi — tránh gửi pty_resize mỗi render (TerminalElement
+        // Skip nếu size không đổi - tránh gửi pty_resize mỗi render (TerminalElement
         // được tạo lại mỗi frame, last_size luôn None). pty_resize không cần thiết
         // khi size giữ nguyên, và shell có thể redraw → clear selection.
         let needs_resize = {
@@ -301,7 +290,7 @@ impl TerminalSession for LocalSession {
             );
             self.write(s.as_bytes());
         } else if mode.contains(TermMode::MOUSE_DRAG) {
-            // Button held không track ở trait signature — report hover (None).
+            // Button held không track ở trait signature - report hover (None).
             let s = encode_mouse_move(
                 row as usize,
                 col as usize,
@@ -311,7 +300,7 @@ impl TerminalSession for LocalSession {
             );
             self.write(s.as_bytes());
         }
-        // Non-mouse mode: KHÔNG cập nhật selection — chỉ `mouse_drag` mới cập nhật.
+        // Non-mouse mode: KHÔNG cập nhật selection - chỉ `mouse_drag` mới cập nhật.
     }
 
     fn mouse_drag(&self, row: f32, col: f32) {
@@ -344,7 +333,7 @@ impl TerminalSession for LocalSession {
             );
             self.write(s.as_bytes());
         }
-        // Selection giữ nguyên để copy (clear khi click elsewhere — UI lo).
+        // Selection giữ nguyên để copy (clear khi click elsewhere - UI lo).
     }
 
     fn wheel(&self, delta_y: f64, row: f32, col: f32) {
@@ -485,7 +474,7 @@ impl TerminalSession for LocalSession {
     }
     fn scroll_to_prompt(&self, n: usize) {
         // TODO: implement scroll-to-prompt using prompt marker line positions.
-        // For now, this is a placeholder — markers need grid line tracking.
+        // For now, this is a placeholder - markers need grid line tracking.
         let _ = n;
     }
 
@@ -588,7 +577,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(50));
         s.mouse_down(0.0, 0.0, TerminalMouseButton::Left, SelectionType::Simple);
         s.mouse_drag(0.0, 4.0);
-        // selection_to_string có thể trả Some/None tùy trạng thái grid — chỉ kiểm không panic.
+        // selection_to_string có thể trả Some/None tùy trạng thái grid - chỉ kiểm không panic.
         let _ = s.selection_text();
         s.clear_selection();
         s.close();

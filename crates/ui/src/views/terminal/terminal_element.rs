@@ -15,7 +15,7 @@ use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
 use gpui::{
     App, Bounds, ContentMask, Element, ElementId, Entity, Font, FontStyle, FontWeight,
-    GlobalElementId, Hitbox, Hsla, IntoElement, LayoutId, Pixels, Point as GpuiPoint,
+    GlobalElementId, Hsla, IntoElement, LayoutId, Pixels, Point as GpuiPoint,
     SharedString, TextAlign, TextRun, UnderlineStyle, Window, fill, point, px, relative, size,
 };
 
@@ -30,14 +30,10 @@ use super::theme::{TerminalTheme, ensure_minimum_contrast, resolve_cell_color};
 /// Metrics grid sau layout — View đọc để convert mouse pixel → (row,col).
 /// Element ghi ở prepaint, View đọc ở handler (cùng thread → `Rc<RefCell>`).
 #[derive(Clone, Copy, Default)]
-#[allow(dead_code)]
 pub(crate) struct GridMetrics {
     pub bounds: Option<Bounds<Pixels>>,
     pub cell_width: Pixels,
     pub line_height: Pixels,
-    pub display_offset: usize,
-    pub num_lines: usize,
-    pub num_cols: usize,
 }
 
 /// Layout point (display line/col, 0-based từ top viewport).
@@ -64,9 +60,7 @@ struct BatchedTextRun {
 }
 
 /// Thông tin layout computed ở prepaint → paint.
-#[allow(dead_code)]
 pub struct LayoutState {
-    hitbox: Hitbox,
     rects: Vec<LayoutRect>,
     /// Selection highlight rects (painted between bg rects and text).
     selection_rects: Vec<LayoutRect>,
@@ -78,8 +72,6 @@ pub struct LayoutState {
     line_height: Pixels,
     /// Origin của grid (sau gutter/canh).
     grid_origin: GpuiPoint<Pixels>,
-    num_lines: usize,
-    num_cols: usize,
 }
 
 /// Con trỏ để paint.
@@ -574,18 +566,14 @@ impl Element for TerminalElement {
             }
         };
 
-        let hitbox = window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal);
+        let _hitbox = window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal);
         // Sink metrics cho View (mouse/wheel).
         *self.metrics.borrow_mut() = GridMetrics {
             bounds: Some(bounds),
             cell_width,
             line_height,
-            display_offset,
-            num_lines,
-            num_cols,
         };
         LayoutState {
-            hitbox,
             rects,
             selection_rects,
             runs,
@@ -594,8 +582,6 @@ impl Element for TerminalElement {
             cell_width,
             line_height,
             grid_origin: bounds.origin,
-            num_lines,
-            num_cols,
         }
     }
 

@@ -76,7 +76,6 @@ impl MyTermWorkspace {
 
         // Save layout khi DockEvent::LayoutChanged (debounce 10s).
         // Chỉ save để version check hoạt động — nhưng KHÔNG load lại khi mở.
-        #[allow(unused_variables)]
         cx.subscribe_in(
             &dock_area,
             window,
