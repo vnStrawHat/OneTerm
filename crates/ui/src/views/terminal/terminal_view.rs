@@ -302,18 +302,20 @@ impl LocalTerminalView {
                     .collect(),
             ))
         };
+        // Match Zed: disable calt (ligatures) by default for terminal.
+        // User can override by adding "calt" to font_features.
+        let mut features: Vec<(String, u32)> = vec![("calt".to_string(), 0)];
+        for f in &settings.font_features {
+            // User-specified features override defaults.
+            features.retain(|(tag, _)| tag != f);
+            features.push((f.to_string(), 1u32));
+        }
         gpui::Font {
             family: self.font_family.clone().into(),
             weight: gpui::FontWeight::default(),
             style: gpui::FontStyle::Normal,
             fallbacks,
-            features: gpui::FontFeatures(std::sync::Arc::new(
-                settings
-                    .font_features
-                    .iter()
-                    .map(|f| (f.to_string(), 1u32))
-                    .collect(),
-            )),
+            features: gpui::FontFeatures(std::sync::Arc::new(features)),
         }
     }
 
