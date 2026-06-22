@@ -661,22 +661,34 @@ impl Element for TerminalElement {
             gpui::hsla(bg.h, bg.s, (bg.l * 0.9).max(0.0), bg.a)
         };
         let lt = &self.line_times;
+        // Max line number có content = dòng cursor (1-based).
+        // Line(0) = bottom = total_lines; Line(-(num_lines-1)) = top.
+        // Dòng trống dưới cursor không có line number.
+        let max_content_line = snapshot.cursor.point.line.0 + total_lines as i32;
         let gutter_entries: Vec<GutterEntry> = (0..num_lines)
             .map(|i| {
                 // Line number 1-based từ top of scrollback.
                 let line_num = total_lines as i32 - display_offset as i32 - num_lines as i32 + i as i32 + 1;
-                let line_num = line_num.max(1) as usize;
-                // 0-based index into line_times.
-                let abs_idx = line_num - 1;
-                let time_str = if abs_idx < lt.len() {
-                    lt[abs_idx].as_str()
+                // Dòng ngoài content (empty lines dưới cursor) → gutter rỗng.
+                if line_num > max_content_line {
+                    GutterEntry {
+                        text: SharedString::from(""),
+                        y: bounds.origin.y + i as f32 * line_height,
+                    }
                 } else {
-                    "--:--:--"
-                };
-                let text = format!("[{}] {:>5}", time_str, line_num);
-                GutterEntry {
-                    text: SharedString::from(text),
-                    y: bounds.origin.y + i as f32 * line_height,
+                    let line_num = line_num.max(1) as usize;
+                    // 0-based index into line_times.
+                    let abs_idx = line_num - 1;
+                    let time_str = if abs_idx < lt.len() {
+                        lt[abs_idx].as_str()
+                    } else {
+                        "--:--:--"
+                    };
+                    let text = format!("[{}] {:>5}", time_str, line_num);
+                    GutterEntry {
+                        text: SharedString::from(text),
+                        y: bounds.origin.y + i as f32 * line_height,
+                    }
                 }
             })
             .collect();
