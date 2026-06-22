@@ -3,6 +3,7 @@ name = "myterm2-app"
 description = "Binary entry point for myTerm2."
 publish = false
 edition.workspace = true
+build = "build.rs"
 
 [[bin]]
 name = "myterm2"

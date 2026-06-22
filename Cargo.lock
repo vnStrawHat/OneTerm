@@ -152,7 +152,8 @@ dependencies = [
 
 [[package]]
 name = "alacritty_terminal"
-version = "0.26.0"
+version = "0.26.1-dev"
+source = "git+https://github.com/zed-industries/alacritty?rev=fcf32feacb367b75ec84dd40f041e4fd411d3cc1#fcf32feacb367b75ec84dd40f041e4fd411d3cc1"
 dependencies = [
  "base64",
  "bitflags 2.13.0",
@@ -3859,7 +3860,6 @@ dependencies = [
  "log",
  "myterm2-core",
  "polling",
- "windows-sys 0.59.0",
 ]
 
 [[package]]

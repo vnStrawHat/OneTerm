@@ -49,12 +49,6 @@ tracing = "0.1"
 chrono = "0.4"
 rust-i18n = "4"
 
-# Vendor: patched alacritty_terminal với CREATE_NEW_PROCESS_GROUP cho ConPTY
-# → GenerateConsoleCtrlEvent(CTRL_C_EVENT, shell_pid) chỉ gửi signal đến shell's
-# process group, không gửi đến myTerm2 → Ctrl+C không exit myTerm2.
-[patch."https://github.com/zed-industries/alacritty"]
-alacritty_terminal = { path = "vendor/alacritty_terminal" }
-
 [workspace.lints.clippy]
 # Giữ tương thích với gpui-component upstream (xem reference/Cargo.toml)
 almost_complete_range = "allow"

@@ -8,24 +8,18 @@ use myterm2_ui::layout::MyTermWorkspace;
 mod window;
 
 fn main() {
-    // Windows: Install SetConsoleCtrlHandler để ignore CTRL_C_EVENT.
-    // myTerm2 là console app — có thể nhận CTRL_C_EVENT từ ConPTY khi
-    // gửi \x03. Handler này prevent myTerm2 exit.
+    // Windows: SetConsoleCtrlHandler safety net — ignore CTRL_C_EVENT.
+    // Với OpenConsole.exe (từ Windows Terminal), \x03 qua PTY được xử lý
+    // đúng cách → myTerm2 không nhận signal. Handler này là backup
+    // trong trường hợp OpenConsole.exe không có → fallback system ConPTY.
     #[cfg(windows)]
     unsafe {
-        // 1. Ignore CTRL+C entirely (process-wide flag).
-        windows_sys::Win32::System::Console::SetConsoleCtrlHandler(
-            None,
-            windows_sys::Win32::Foundation::TRUE,
-        );
-        // 2. Also install handler function (belt & suspenders).
         extern "system" fn ignore_handler(
             ctrl_type: u32,
         ) -> windows_sys::Win32::Foundation::BOOL {
             match ctrl_type {
                 windows_sys::Win32::System::Console::CTRL_C_EVENT
-                | windows_sys::Win32::System::Console::CTRL_BREAK_EVENT
-                | windows_sys::Win32::System::Console::CTRL_CLOSE_EVENT => {
+                | windows_sys::Win32::System::Console::CTRL_BREAK_EVENT => {
                     windows_sys::Win32::Foundation::TRUE
                 }
                 _ => windows_sys::Win32::Foundation::FALSE,
