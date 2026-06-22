@@ -12,15 +12,12 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use alacritty_terminal::selection::SelectionType;
-use alacritty_terminal::term::cell::Flags;
-use myterm2_core::terminal::is_default_background_color;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, ClipboardItem, Context, Entity, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, KeyBinding, KeyDownEvent, Keystroke, ModifiersChangedEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, NoAction, ParentElement as _,
-    Pixels, Point, Render, ScrollDelta, ScrollWheelEvent, SharedString, Styled as _, Window,
-    div, point, px, size,
+    App, ClipboardItem, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
+    IntoElement, KeyBinding, KeyDownEvent, Keystroke, ModifiersChangedEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, NoAction, ParentElement as _, Pixels, Point,
+    Render, ScrollDelta, ScrollWheelEvent, SharedString, Styled as _, Window, div, point, px, size,
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
@@ -76,10 +73,6 @@ pub struct LocalTerminalView {
     prev_total_lines: usize,
     /// Previous cursor line (alacritty Line.0) — detect new line vs modification.
     prev_cursor_line: i32,
-    /// Offset subtracted from line numbers — accounts for phantom scrollback
-    /// lines created by ConPTY at startup (e.g. initial newline).
-    /// -1 = not yet initialized.
-    line_number_offset: i32,
 }
 
 impl LocalTerminalView {
@@ -131,38 +124,8 @@ impl LocalTerminalView {
                             // Track per-line timestamps for gutter display.
                             let snap = s.read(cx).snapshot();
                             let total = snap.total_lines;
-                            let num_lines = snap.terminal_bounds.num_lines;
                             let cur_line = snap.cursor.point.line.0;
                             let now = chrono::Local::now().format("%H:%M:%S").to_string();
-                            // Initialize line_number_offset on first output:
-                            // offset = scrollback + blank lines above first content.
-                            // This accounts for phantom ConPTY lines (both scrolled
-                            // off AND visible blank lines at top of viewport).
-                            if view.line_number_offset < 0 {
-                                let display_offset = snap.display_offset as i32;
-                                let mut first_content: i32 = 0;
-                                for ic in &snap.cells {
-                                    let dl = ic.point.line.0 + display_offset;
-                                    if dl >= 0 && dl < num_lines as i32 {
-                                        let c = &ic.cell;
-                                        let blank = c.c == ' '
-                                            && is_default_background_color(&c.bg)
-                                            && c.hyperlink().is_none()
-                                            && !c.flags.intersects(
-                                                Flags::INVERSE
-                                                | Flags::ALL_UNDERLINES
-                                                | Flags::STRIKEOUT
-                                                | Flags::WIDE_CHAR_SPACER,
-                                            );
-                                        if !blank {
-                                            first_content = dl;
-                                            break;
-                                        }
-                                    }
-                                }
-                                let scrollback = (total as i32) - (num_lines as i32);
-                                view.line_number_offset = (scrollback + first_content).max(0);
-                            }
                             if total > view.prev_total_lines {
                                 // New lines added — push timestamps for each new line.
                                 let delta = total - view.prev_total_lines;
@@ -285,7 +248,6 @@ impl LocalTerminalView {
             line_times: Vec::new(),
             prev_total_lines: 0,
             prev_cursor_line: 0,
-            line_number_offset: -1,
         }
     }
 
@@ -329,13 +291,28 @@ impl LocalTerminalView {
     }
 
     fn font(&self, settings: &TerminalSettings) -> gpui::Font {
+        let fallbacks = if settings.font_fallbacks.is_empty() {
+            None
+        } else {
+            Some(gpui::FontFallbacks::from_fonts(
+                settings
+                    .font_fallbacks
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+            ))
+        };
         gpui::Font {
             family: self.font_family.clone().into(),
             weight: gpui::FontWeight::default(),
             style: gpui::FontStyle::Normal,
-            fallbacks: None,
+            fallbacks,
             features: gpui::FontFeatures(std::sync::Arc::new(
-                settings.font_features.iter().map(|f| (f.to_string(), 1u32)).collect()
+                settings
+                    .font_features
+                    .iter()
+                    .map(|f| (f.to_string(), 1u32))
+                    .collect(),
             )),
         }
     }
@@ -386,7 +363,11 @@ impl LocalTerminalView {
 
     /// Render custom scrollbar — div overlay ở cạnh phải.
     fn render_scrollbar(
-        &mut self, _theme: &TerminalTheme, metrics: &Rc<RefCell<GridMetrics>>, cx: &mut Context<LocalTerminalView>) -> Option<impl IntoElement> {
+        &mut self,
+        _theme: &TerminalTheme,
+        metrics: &Rc<RefCell<GridMetrics>>,
+        cx: &mut Context<LocalTerminalView>,
+    ) -> Option<impl IntoElement> {
         let (total, viewport, display_offset, line_h) = self.scroll_handle.state_info();
 
         // Không có scrollback → không hiện scrollbar.
@@ -410,7 +391,8 @@ impl LocalTerminalView {
         let now = std::time::Instant::now();
         let is_dragging = self.scrollbar_drag_start.is_some();
         let is_visible = is_dragging
-            || self.last_scroll_time
+            || self
+                .last_scroll_time
                 .map(|t| now.duration_since(t).as_secs_f32() < 3.0)
                 .unwrap_or(false);
 
@@ -448,30 +430,35 @@ impl LocalTerminalView {
                 .right_0()
                 .bottom_0()
                 .w(px(12.0))
-                .on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _w, cx: &mut App| {
-                    // e.position = window coords -> subtract terminal origin.
-                    let track_y = {
-                        let gm = m_down.borrow();
-                        match gm.bounds {
-                            Some(b) => f32::from(e.position.y - b.origin.y),
-                            None => return,
-                        }
-                    };
-                    let _ = view.update(cx, |v, cx| {
-                        let (total, vp, _, lh) = v.scroll_handle.state_info();
-                        if lh <= 0.0 { return; }
-                        let track_h = vp as f32 * lh;
-                        let max_off = total.saturating_sub(vp);
-                        let frac = 1.0 - ((track_y / track_h).clamp(0.0, 1.0));
-                        let new_offset = (frac * max_off as f32).round() as usize;
-                        v.scroll_handle.update(total, vp, new_offset, lh);
-                        v.scroll_handle.future_display_offset.set(Some(new_offset));
-                        v.scrollbar_drag_start = Some(track_y);
-                        v.last_scroll_time = Some(std::time::Instant::now());
-                        cx.notify();
-                    });
-                    cx.stop_propagation();
-                })
+                .on_mouse_down(
+                    MouseButton::Left,
+                    move |e: &MouseDownEvent, _w, cx: &mut App| {
+                        // e.position = window coords -> subtract terminal origin.
+                        let track_y = {
+                            let gm = m_down.borrow();
+                            match gm.bounds {
+                                Some(b) => f32::from(e.position.y - b.origin.y),
+                                None => return,
+                            }
+                        };
+                        let _ = view.update(cx, |v, cx| {
+                            let (total, vp, _, lh) = v.scroll_handle.state_info();
+                            if lh <= 0.0 {
+                                return;
+                            }
+                            let track_h = vp as f32 * lh;
+                            let max_off = total.saturating_sub(vp);
+                            let frac = 1.0 - ((track_y / track_h).clamp(0.0, 1.0));
+                            let new_offset = (frac * max_off as f32).round() as usize;
+                            v.scroll_handle.update(total, vp, new_offset, lh);
+                            v.scroll_handle.future_display_offset.set(Some(new_offset));
+                            v.scrollbar_drag_start = Some(track_y);
+                            v.last_scroll_time = Some(std::time::Instant::now());
+                            cx.notify();
+                        });
+                        cx.stop_propagation();
+                    },
+                )
                 .child(
                     div()
                         .id("scrollbar-thumb")
@@ -481,8 +468,8 @@ impl LocalTerminalView {
                         .w(px(8.0))
                         .h(px(thumb_height))
                         .rounded_sm()
-                        .bg(thumb_bg)
-                )
+                        .bg(thumb_bg),
+                ),
         )
     }
 }
@@ -573,17 +560,44 @@ impl Render for LocalTerminalView {
                 self.ctrl_held,
                 self.line_times.clone(),
                 theme_ref.border,
-                self.line_number_offset,
             ))
             // Bell indicator overlay (góc trên-phải).
             .children(if has_bell && bell_enabled {
-                Some(div().id("terminal-bell").absolute().top_1().right_2().px_1().py_0().text_xs().text_color(theme_ref.warning).child("🔔"))
+                Some(
+                    div()
+                        .id("terminal-bell")
+                        .absolute()
+                        .top_1()
+                        .right_2()
+                        .px_1()
+                        .py_0()
+                        .text_xs()
+                        .text_color(theme_ref.warning)
+                        .child("🔔"),
+                )
             } else {
                 None
             })
             // ── Vi mode indicator (góc trên-trái) ──
             .children(if self.vi_mode {
-                Some(div().id("terminal-vi-mode").absolute().top_1().left_2().px_2().py_0p5().text_xs().rounded_sm().bg(theme_ref.accent.opacity(0.8)).text_color(theme_ref.foreground).child(if self.vi_selecting { "-- VISUAL --" } else { "-- NORMAL --" }))
+                Some(
+                    div()
+                        .id("terminal-vi-mode")
+                        .absolute()
+                        .top_1()
+                        .left_2()
+                        .px_2()
+                        .py_0p5()
+                        .text_xs()
+                        .rounded_sm()
+                        .bg(theme_ref.accent.opacity(0.8))
+                        .text_color(theme_ref.foreground)
+                        .child(if self.vi_selecting {
+                            "-- VISUAL --"
+                        } else {
+                            "-- NORMAL --"
+                        }),
+                )
             } else {
                 None
             })
@@ -594,9 +608,21 @@ impl Render for LocalTerminalView {
                 let lh = f32::from(m.line_height);
                 if cw > 0.0 && lh > 0.0 {
                     if let Some(bounds) = m.bounds {
-                        let x = f32::from(bounds.origin.x + m.gutter_width) + self.vi_cursor.1 as f32 * cw;
+                        let x = f32::from(bounds.origin.x + m.gutter_width)
+                            + self.vi_cursor.1 as f32 * cw;
                         let y = f32::from(bounds.origin.y) + self.vi_cursor.0 as f32 * lh;
-                        Some(div().id("vi-cursor").absolute().left(px(x)).top(px(y)).w(px(cw)).h(px(lh)).border_1().border_color(theme_ref.accent).rounded_sm())
+                        Some(
+                            div()
+                                .id("vi-cursor")
+                                .absolute()
+                                .left(px(x))
+                                .top(px(y))
+                                .w(px(cw))
+                                .h(px(lh))
+                                .border_1()
+                                .border_color(theme_ref.accent)
+                                .rounded_sm(),
+                        )
                     } else {
                         None
                     }
@@ -632,7 +658,7 @@ impl Render for LocalTerminalView {
                             .text_xs()
                             .text_color(theme_ref.border)
                             .bg(theme_ref.background.opacity(0.9))
-                            .child(label)
+                            .child(label),
                     )
                 } else {
                     None
@@ -669,7 +695,10 @@ impl Render for LocalTerminalView {
                         )
                     });
                     // Trigger re-render để vẽ selection highlight.
-                    let _ = view.update(cx, |v, cx| { v.last_scroll_time = Some(std::time::Instant::now()); cx.notify(); });
+                    let _ = view.update(cx, |v, cx| {
+                        v.last_scroll_time = Some(std::time::Instant::now());
+                        cx.notify();
+                    });
                 }
             })
             .on_mouse_down(MouseButton::Middle, {
@@ -709,7 +738,9 @@ impl Render for LocalTerminalView {
                         };
                         let _ = view.update(cx, |v, cx| {
                             let (total, vp, _, lh) = v.scroll_handle.state_info();
-                            if lh <= 0.0 { return; }
+                            if lh <= 0.0 {
+                                return;
+                            }
                             let track_h = vp as f32 * lh;
                             let max_off = total.saturating_sub(vp);
                             let frac = 1.0 - ((track_y / track_h).clamp(0.0, 1.0));
@@ -739,7 +770,10 @@ impl Render for LocalTerminalView {
                     };
                     if e.pressed_button == Some(MouseButton::Left) {
                         s.update(cx, |s, _| s.mouse_drag(row, col));
-                        let _ = view.update(cx, |v, cx| { v.last_scroll_time = Some(std::time::Instant::now()); cx.notify(); });
+                        let _ = view.update(cx, |v, cx| {
+                            v.last_scroll_time = Some(std::time::Instant::now());
+                            cx.notify();
+                        });
                     } else {
                         s.update(cx, |s, _| s.mouse_move(row, col));
                     }
@@ -759,8 +793,12 @@ impl Render for LocalTerminalView {
                     let _ = view.update(cx, |v, cx| {
                         v.last_mouse_pos = Some(e.position);
                         let changed = v.ctrl_held != ctrl
-                            || v.hovered_url.as_ref().map(|u| (&u.url, u.row, u.start_col, u.end_col))
-                                != new_url.as_ref().map(|u| (&u.url, u.row, u.start_col, u.end_col));
+                            || v.hovered_url
+                                .as_ref()
+                                .map(|u| (&u.url, u.row, u.start_col, u.end_col))
+                                != new_url
+                                    .as_ref()
+                                    .map(|u| (&u.url, u.row, u.start_col, u.end_col));
                         if changed {
                             v.ctrl_held = ctrl;
                             v.hovered_url = new_url;
@@ -792,7 +830,10 @@ impl Render for LocalTerminalView {
                             cx.write_to_clipboard(ClipboardItem::new_string(text));
                         }
                     }
-                    let _ = view.update(cx, |v, cx| { v.last_scroll_time = Some(std::time::Instant::now()); cx.notify(); });
+                    let _ = view.update(cx, |v, cx| {
+                        v.last_scroll_time = Some(std::time::Instant::now());
+                        cx.notify();
+                    });
                 }
             })
             // Modifier changed (Ctrl pressed/released) — re-detect URL
@@ -824,8 +865,12 @@ impl Render for LocalTerminalView {
                     };
                     let _ = view.update(cx, |v, cx| {
                         let changed = v.ctrl_held != ctrl
-                            || v.hovered_url.as_ref().map(|u| (&u.url, u.row, u.start_col, u.end_col))
-                                != new_url.as_ref().map(|u| (&u.url, u.row, u.start_col, u.end_col));
+                            || v.hovered_url
+                                .as_ref()
+                                .map(|u| (&u.url, u.row, u.start_col, u.end_col))
+                                != new_url
+                                    .as_ref()
+                                    .map(|u| (&u.url, u.row, u.start_col, u.end_col));
                         if changed {
                             v.ctrl_held = ctrl;
                             v.hovered_url = new_url;
@@ -883,7 +928,7 @@ impl Render for LocalTerminalView {
                                 let snap = s.read(cx).snapshot();
                                 v.vi_cursor = (
                                     snap.cursor.point.line.0 as usize,
-                                    snap.cursor.point.column.0 as usize,
+                                    snap.cursor.point.column.0,
                                 );
                                 v.vi_selecting = false;
                             } else {
@@ -913,7 +958,9 @@ impl Render for LocalTerminalView {
                             }
                             ("h", _) | ("left", _) => {
                                 let _ = view.update(cx, |v, cx| {
-                                    if v.vi_cursor.1 > 0 { v.vi_cursor.1 -= 1; }
+                                    if v.vi_cursor.1 > 0 {
+                                        v.vi_cursor.1 -= 1;
+                                    }
                                     cx.notify();
                                 });
                                 cx.stop_propagation();
@@ -923,7 +970,9 @@ impl Render for LocalTerminalView {
                                 let _ = view.update(cx, |v, cx| {
                                     let snap = s.read(cx).snapshot();
                                     let max_col = snap.terminal_bounds.num_cols.saturating_sub(1);
-                                    if v.vi_cursor.1 < max_col { v.vi_cursor.1 += 1; }
+                                    if v.vi_cursor.1 < max_col {
+                                        v.vi_cursor.1 += 1;
+                                    }
                                     cx.notify();
                                 });
                                 cx.stop_propagation();
@@ -931,8 +980,11 @@ impl Render for LocalTerminalView {
                             }
                             ("k", _) | ("up", _) => {
                                 let _ = view.update(cx, |v, cx| {
-                                    if v.vi_cursor.0 > 0 { v.vi_cursor.0 -= 1; }
-                                    else { s.update(cx, |s, _| s.scroll(1)); }
+                                    if v.vi_cursor.0 > 0 {
+                                        v.vi_cursor.0 -= 1;
+                                    } else {
+                                        s.update(cx, |s, _| s.scroll(1));
+                                    }
                                     cx.notify();
                                 });
                                 cx.stop_propagation();
@@ -942,15 +994,21 @@ impl Render for LocalTerminalView {
                                 let _ = view.update(cx, |v, cx| {
                                     let snap = s.read(cx).snapshot();
                                     let max_row = snap.terminal_bounds.num_lines.saturating_sub(1);
-                                    if v.vi_cursor.0 < max_row { v.vi_cursor.0 += 1; }
-                                    else { s.update(cx, |s, _| s.scroll(-1)); }
+                                    if v.vi_cursor.0 < max_row {
+                                        v.vi_cursor.0 += 1;
+                                    } else {
+                                        s.update(cx, |s, _| s.scroll(-1));
+                                    }
                                     cx.notify();
                                 });
                                 cx.stop_propagation();
                                 return;
                             }
                             ("0", _) | ("home", _) => {
-                                let _ = view.update(cx, |v, cx| { v.vi_cursor.1 = 0; cx.notify(); });
+                                let _ = view.update(cx, |v, cx| {
+                                    v.vi_cursor.1 = 0;
+                                    cx.notify();
+                                });
                                 cx.stop_propagation();
                                 return;
                             }
@@ -966,7 +1024,10 @@ impl Render for LocalTerminalView {
                             ("g", _) => {
                                 // gg: scroll to top.
                                 s.update(cx, |s, _| s.scroll_to_top());
-                                let _ = view.update(cx, |v, cx| { v.vi_cursor.0 = 0; cx.notify(); });
+                                let _ = view.update(cx, |v, cx| {
+                                    v.vi_cursor.0 = 0;
+                                    cx.notify();
+                                });
                                 cx.stop_propagation();
                                 return;
                             }
@@ -974,7 +1035,8 @@ impl Render for LocalTerminalView {
                                 s.update(cx, |s, _| s.scroll_to_bottom());
                                 let _ = view.update(cx, |v, cx| {
                                     let snap = s.read(cx).snapshot();
-                                    v.vi_cursor.0 = snap.terminal_bounds.num_lines.saturating_sub(1);
+                                    v.vi_cursor.0 =
+                                        snap.terminal_bounds.num_lines.saturating_sub(1);
                                     cx.notify();
                                 });
                                 cx.stop_propagation();
@@ -988,19 +1050,25 @@ impl Render for LocalTerminalView {
                                     let mut col = v.vi_cursor.1 + 1;
                                     // Skip current word.
                                     while col < max_col {
-                                        let idx = v.vi_cursor.0 * snap.terminal_bounds.num_cols + col;
+                                        let idx =
+                                            v.vi_cursor.0 * snap.terminal_bounds.num_cols + col;
                                         if idx < snap.cells.len() {
                                             let c = snap.cells[idx].cell.c;
-                                            if c == ' ' || c == '\t' { break; }
+                                            if c == ' ' || c == '\t' {
+                                                break;
+                                            }
                                         }
                                         col += 1;
                                     }
                                     // Skip whitespace.
                                     while col < max_col {
-                                        let idx = v.vi_cursor.0 * snap.terminal_bounds.num_cols + col;
+                                        let idx =
+                                            v.vi_cursor.0 * snap.terminal_bounds.num_cols + col;
                                         if idx < snap.cells.len() {
                                             let c = snap.cells[idx].cell.c;
-                                            if c != ' ' && c != '\t' { break; }
+                                            if c != ' ' && c != '\t' {
+                                                break;
+                                            }
                                         }
                                         col += 1;
                                     }
@@ -1018,19 +1086,25 @@ impl Render for LocalTerminalView {
                                         let mut col = v.vi_cursor.1.saturating_sub(1);
                                         // Skip whitespace.
                                         while col > 0 {
-                                            let idx = v.vi_cursor.0 * snap.terminal_bounds.num_cols + col;
+                                            let idx =
+                                                v.vi_cursor.0 * snap.terminal_bounds.num_cols + col;
                                             if idx < snap.cells.len() {
                                                 let c = snap.cells[idx].cell.c;
-                                                if c != ' ' && c != '\t' { break; }
+                                                if c != ' ' && c != '\t' {
+                                                    break;
+                                                }
                                             }
                                             col -= 1;
                                         }
                                         // Skip word.
                                         while col > 0 {
-                                            let idx = v.vi_cursor.0 * snap.terminal_bounds.num_cols + col;
+                                            let idx =
+                                                v.vi_cursor.0 * snap.terminal_bounds.num_cols + col;
                                             if idx < snap.cells.len() {
                                                 let c = snap.cells[idx].cell.c;
-                                                if c == ' ' || c == '\t' { break; }
+                                                if c == ' ' || c == '\t' {
+                                                    break;
+                                                }
                                             }
                                             col -= 1;
                                         }
@@ -1048,7 +1122,12 @@ impl Render for LocalTerminalView {
                                     if v.vi_selecting {
                                         let (row, col) = v.vi_cursor;
                                         s.update(cx, |s, _| {
-                                            s.mouse_down(row as f32, col as f32, TerminalMouseButton::Left, SelectionType::Simple);
+                                            s.mouse_down(
+                                                row as f32,
+                                                col as f32,
+                                                TerminalMouseButton::Left,
+                                                SelectionType::Simple,
+                                            );
                                         });
                                     } else {
                                         s.update(cx, |s, _| s.clear_selection());
@@ -1112,26 +1191,38 @@ impl Render for LocalTerminalView {
                             "pageup" => {
                                 // Alacritty: Delta(+) = scroll UP (back in history).
                                 s.update(cx, |s, _| s.scroll(viewport));
-                                let _ = view.update(cx, |v, cx| { v.last_scroll_time = Some(std::time::Instant::now()); cx.notify(); });
+                                let _ = view.update(cx, |v, cx| {
+                                    v.last_scroll_time = Some(std::time::Instant::now());
+                                    cx.notify();
+                                });
                                 cx.stop_propagation();
                                 return;
                             }
                             "pagedown" => {
                                 // Alacritty: Delta(-) = scroll DOWN (toward bottom).
                                 s.update(cx, |s, _| s.scroll(-viewport));
-                                let _ = view.update(cx, |v, cx| { v.last_scroll_time = Some(std::time::Instant::now()); cx.notify(); });
+                                let _ = view.update(cx, |v, cx| {
+                                    v.last_scroll_time = Some(std::time::Instant::now());
+                                    cx.notify();
+                                });
                                 cx.stop_propagation();
                                 return;
                             }
                             "home" => {
                                 s.update(cx, |s, _| s.scroll_to_top());
-                                let _ = view.update(cx, |v, cx| { v.last_scroll_time = Some(std::time::Instant::now()); cx.notify(); });
+                                let _ = view.update(cx, |v, cx| {
+                                    v.last_scroll_time = Some(std::time::Instant::now());
+                                    cx.notify();
+                                });
                                 cx.stop_propagation();
                                 return;
                             }
                             "end" => {
                                 s.update(cx, |s, _| s.scroll_to_bottom());
-                                let _ = view.update(cx, |v, cx| { v.last_scroll_time = Some(std::time::Instant::now()); cx.notify(); });
+                                let _ = view.update(cx, |v, cx| {
+                                    v.last_scroll_time = Some(std::time::Instant::now());
+                                    cx.notify();
+                                });
                                 cx.stop_propagation();
                                 return;
                             }
@@ -1142,13 +1233,19 @@ impl Render for LocalTerminalView {
                             match e.keystroke.key.as_str() {
                                 "up" => {
                                     s.update(cx, |s, _| s.scroll(1));
-                                    let _ = view.update(cx, |v, cx| { v.last_scroll_time = Some(std::time::Instant::now()); cx.notify(); });
+                                    let _ = view.update(cx, |v, cx| {
+                                        v.last_scroll_time = Some(std::time::Instant::now());
+                                        cx.notify();
+                                    });
                                     cx.stop_propagation();
                                     return;
                                 }
                                 "down" => {
                                     s.update(cx, |s, _| s.scroll(-1));
-                                    let _ = view.update(cx, |v, cx| { v.last_scroll_time = Some(std::time::Instant::now()); cx.notify(); });
+                                    let _ = view.update(cx, |v, cx| {
+                                        v.last_scroll_time = Some(std::time::Instant::now());
+                                        cx.notify();
+                                    });
                                     cx.stop_propagation();
                                     return;
                                 }

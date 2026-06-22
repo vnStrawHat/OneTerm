@@ -8,6 +8,44 @@ use gpui::{App, AppContext, Entity, Global, SharedString};
 use myterm2_core::LocalShellConfig;
 use myterm2_core::config::ShellKind;
 
+/// Platform-specific default font fallback stack for the terminal. These
+/// families are tried (in order) when the primary mono font is missing a
+/// glyph. They are all monospace fonts with good Unicode block/shade/box
+/// coverage, so ASCII art / TUI glyphs render consistently.
+fn default_terminal_font_fallbacks() -> Vec<SharedString> {
+    #[cfg(target_os = "windows")]
+    {
+        vec![
+            "Cascadia Mono".into(),
+            "Cascadia Code".into(),
+            "DejaVu Sans Mono".into(),
+            "Lucida Console".into(),
+            "Courier New".into(),
+            "MS Gothic".into(),
+            "NSimSun".into(),
+        ]
+    }
+    #[cfg(target_os = "macos")]
+    {
+        vec![
+            "Menlo".into(),
+            "Monaco".into(),
+            "Courier New".into(),
+            "Apple Symbols".into(),
+        ]
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        vec![
+            "DejaVu Sans Mono".into(),
+            "Noto Sans Mono".into(),
+            "Ubuntu Mono".into(),
+            "Liberation Mono".into(),
+            "Courier New".into(),
+        ]
+    }
+}
+
 /// Hình dáng con trỏ terminal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TerminalCursorShape {
@@ -40,6 +78,9 @@ pub struct TerminalSettings {
     /// Font features cho terminal (ligatures, stylistic sets…).
     /// Vd: `["calt", "liga"]` → bật ligatures; `[]` → tắt.
     pub font_features: Vec<SharedString>,
+    /// Font fallback stack — dùng khi primary mono font thiếu glyph
+    /// (Unicode block/shade/box, ASCII art/TUI). Defaults tốt theo platform.
+    pub font_fallbacks: Vec<SharedString>,
     /// Bật/tắt bell indicator (🔔 trong tab khi nhận `\x07`).
     pub bell_enabled: bool,
     /// Scroll multiplier cho mouse wheel (1.0 = default, 3.0 = nhanh 3x).
@@ -56,6 +97,7 @@ impl Default for TerminalSettings {
             cursor_shape: TerminalCursorShape::Block,
             cursor_blink: TerminalBlink::On,
             font_features: Vec::new(),
+            font_fallbacks: default_terminal_font_fallbacks(),
             bell_enabled: true,
             scroll_multiplier: 1.0,
             alternate_scroll: true,

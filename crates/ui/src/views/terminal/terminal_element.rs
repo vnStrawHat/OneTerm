@@ -15,8 +15,8 @@ use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
 use gpui::{
     App, Bounds, ContentMask, Element, ElementId, Entity, Font, FontStyle, FontWeight,
-    GlobalElementId, Hsla, IntoElement, LayoutId, Pixels, Point as GpuiPoint,
-    SharedString, TextAlign, TextRun, UnderlineStyle, Window, fill, point, px, relative, size,
+    GlobalElementId, Hsla, IntoElement, LayoutId, Pixels, Point as GpuiPoint, SharedString,
+    TextAlign, TextRun, UnderlineStyle, Window, fill, point, px, relative, size,
 };
 
 use myterm2_core::TerminalSession;
@@ -127,11 +127,10 @@ pub(crate) struct TerminalElement {
     line_times: Vec<String>,
     /// Border color từ GPUI theme (đồng bộ với Dock border).
     dock_border: Hsla,
-    /// Offset trừ khỏi line number — accounts for phantom scrollback lines.
-    line_number_offset: i32,
 }
 
 impl TerminalElement {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         session: Entity<Box<dyn TerminalSession>>,
         theme: TerminalTheme,
@@ -147,7 +146,6 @@ impl TerminalElement {
         ctrl_held: bool,
         line_times: Vec<String>,
         dock_border: Hsla,
-        line_number_offset: i32,
     ) -> Self {
         Self {
             session,
@@ -165,7 +163,6 @@ impl TerminalElement {
             ctrl_held,
             line_times,
             dock_border,
-            line_number_offset,
         }
     }
 
@@ -587,8 +584,9 @@ impl Element for TerminalElement {
 
         // Resize session theo bounds (race-free: chỉ khi đổi).
         // Trừ gutter_width + content_padding khỏi chiều rộng có sẵn.
-        let grid_width = (f32::from(bounds.size.width) - f32::from(gutter_width) - f32::from(content_padding))
-            .max(f32::from(cell_width));
+        let grid_width =
+            (f32::from(bounds.size.width) - f32::from(gutter_width) - f32::from(content_padding))
+                .max(f32::from(cell_width));
         let cols = ((grid_width / f32::from(cell_width)).floor() as u16).max(1);
         let rows = ((f32::from(bounds.size.height) / f32::from(line_height)).floor() as u16).max(1);
         if self.last_size != Some((rows, cols)) {
@@ -619,15 +617,14 @@ impl Element for TerminalElement {
 
         let selection_set = Self::build_selection_set(&selection_rects);
 
-        let (rects, runs) =
-            Self::layout_grid(
-                &snapshot.cells,
-                &self.theme,
-                &self.font,
-                &selection_set,
-                self.hovered_url.as_ref(),
-                self.ctrl_held,
-            );
+        let (rects, runs) = Self::layout_grid(
+            &snapshot.cells,
+            &self.theme,
+            &self.font,
+            &selection_set,
+            self.hovered_url.as_ref(),
+            self.ctrl_held,
+        );
 
         // Cursor.
         let cursor = {
@@ -667,7 +664,7 @@ impl Element for TerminalElement {
             let fg = self.theme.fg;
             gpui::hsla(fg.h, fg.s, fg.l * 0.5, fg.a)
         };
-        let gutter_bg = self.theme.bg;  // Cùng nền với terminal.
+        let gutter_bg = self.theme.bg; // Cùng nền với terminal.
         let lt = &self.line_times;
         // Scan cells để tìm range content: từ dòng non-blank đầu tiên
         // đến dòng non-blank cuối cùng (hoặc cursor line). Blank lines
@@ -715,14 +712,19 @@ impl Element for TerminalElement {
                 // tính dynamic từ snapshot ( ổn định khi scroll vì grid position
                 // = scrollback - display_offset + first_content không đổi ).
                 let ln_offset = if let Some(fc) = first_content {
-                    (total_lines as i32 - num_lines as i32 - display_offset as i32 + fc as i32).max(0)
+                    (total_lines as i32 - num_lines as i32 - display_offset as i32 + fc as i32)
+                        .max(0)
                 } else {
                     0
                 };
-                let line_num = total_lines as i32 - display_offset as i32 - num_lines as i32 + i as i32 + 1 - ln_offset;
+                let line_num =
+                    total_lines as i32 - display_offset as i32 - num_lines as i32 + i as i32 + 1
+                        - ln_offset;
                 let line_num = line_num.max(1) as usize;
                 // 0-based index into line_times (absolute grid position, NOT adjusted by offset).
-                let abs_idx = (total_lines as i32 - display_offset as i32 - num_lines as i32 + i as i32).max(0) as usize;
+                let abs_idx = (total_lines as i32 - display_offset as i32 - num_lines as i32
+                    + i as i32)
+                    .max(0) as usize;
                 let time_str = if abs_idx < lt.len() {
                     lt[abs_idx].as_str()
                 } else {

@@ -134,9 +134,9 @@ pub fn build_terminal_theme(theme: &Theme) -> TerminalTheme {
         // Zed: blue().dark().step_3() = #0d2847 (dark) / blue().light().step_3() = #e6f4fe (light).
         // Solid color — text paint trên selection với màu gốc (không inverse video).
         selection: if bg.l < 0.5 {
-            gpui::hsla(0.589, 0.69, 0.165, 1.0)  // #0d2847 dark blue
+            gpui::hsla(0.589, 0.69, 0.165, 1.0) // #0d2847 dark blue
         } else {
-            gpui::hsla(0.569, 0.92, 0.949, 1.0)  // #e6f4fe light blue
+            gpui::hsla(0.569, 0.92, 0.949, 1.0) // #e6f4fe light blue
         },
         min_contrast: 4.5,
     }
@@ -332,7 +332,7 @@ mod tests {
         let fg = gpui::hsla(0.0, 0.0, 0.5, 1.0);
         let bg = gpui::hsla(0.0, 0.0, 0.5, 1.0);
         let out = ensure_minimum_contrast(fg, bg, 4.5);
-        assert!(out.l < 0.5 || out.l > 0.5, "lightness phải đổi");
+        assert!(out.l != 0.5, "lightness phải đổi");
         assert!(contrast_ratio(out, bg) >= 4.4);
     }
 
