@@ -3835,6 +3835,7 @@ dependencies = [
  "gpui_platform",
  "myterm2-core",
  "myterm2-ui",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

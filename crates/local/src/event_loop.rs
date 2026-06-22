@@ -29,7 +29,8 @@ use crate::state::SharedState;
 /// Buffer size cho PTY read (1 MiB — same as alacritty).
 const READ_BUFFER_SIZE: usize = 0x10_0000;
 
-/// Maximum bytes processed per terminal lock (same as alacritty).
+/// Maximum bytes processed per terminal lock (unused — đọc đến pipe empty).
+#[allow(dead_code)]
 const MAX_LOCKED_READ: usize = u16::MAX as usize;
 
 /// Message gửi tới event loop.
@@ -120,10 +121,6 @@ impl ShellEventLoop {
             error!("ShellEventLoop: register error: {err}");
             return;
         }
-        // Lưu interest + poll_opts để reregister sau mỗi iteration.
-        // UnblockedReader::register() post completion packet nếu pipe còn data
-        // — cần reregister sau khi break MAX_LOCKED_READ để tránh data stuck.
-        let mut need_reregister = false;
 
         let mut events = Events::with_capacity(1024.try_into().unwrap());
 
@@ -253,24 +250,17 @@ impl ShellEventLoop {
                         processed += unprocessed;
                         unprocessed = 0;
 
-                        if processed >= MAX_LOCKED_READ {
-                            need_reregister = true;
-                            break;
-                        }
+                        // KHÔNG break ở MAX_LOCKED_READ — đọc đến khi pipe empty.
+                        // Khi pipe empty, try_read() stores waker → reader thread
+                        // notify khi thêm data → không bị stuck.
+                        // Term lock được giữ trong khi đọc, nhưng FairMutex đảm bảo
+                        // UI acquire được lock sau khi event loop release.
                     }
 
                     if processed > 0 {
                         self.listener.send_event(Event::Wakeup);
                     }
                 }
-            }
-
-            // Reregister sau mỗi iteration nếu cần — UnblockedReader::register()
-            // post completion packet khi pipe còn data, tránh data stuck sau
-            // khi break MAX_LOCKED_READ (vd cat file lớn > 64KB).
-            if need_reregister {
-                need_reregister = false;
-                let _ = self.pty.reregister(&self.poll, interest, poll_opts);
             }
         }
     }

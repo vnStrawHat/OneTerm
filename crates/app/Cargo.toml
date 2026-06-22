@@ -21,3 +21,9 @@ gpui-component.workspace = true
 gpui-component-assets.workspace = true
 
 anyhow.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_System_Console",
+    "Win32_Foundation",
+] }
