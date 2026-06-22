@@ -661,13 +661,37 @@ impl Element for TerminalElement {
             gpui::hsla(bg.h, bg.s, (bg.l * 0.9).max(0.0), bg.a)
         };
         let lt = &self.line_times;
-        // Scan cells để tìm display lines có content (non-blank).
-        // Chỉ những dòng có content mới hiển thị line number.
-        let mut has_content = vec![false; num_lines];
+        // Scan cells để tìm range content: từ dòng non-blank đầu tiên
+        // đến dòng non-blank cuối cùng (hoặc cursor line). Blank lines
+        // trong range này vẫn hiển thị gutter (vd dòng trống giữa ls output
+        // và prompt tiếp theo).
+        let mut first_content: Option<usize> = None;
+        let mut last_content: Option<usize> = None;
         for ic in &snapshot.cells {
             let display_line = (ic.point.line.0 + display_offset as i32) as usize;
-            if display_line < num_lines && !Self::is_blank(&ic.cell) {
-                has_content[display_line] = true;
+            if display_line >= num_lines {
+                continue;
+            }
+            if !Self::is_blank(&ic.cell) {
+                if first_content.is_none() {
+                    first_content = Some(display_line);
+                }
+                last_content = Some(display_line);
+            }
+        }
+        // Include cursor line in content range (cursor có thể trên dòng trống).
+        let cursor_display = (snapshot.cursor.point.line.0 + display_offset as i32) as usize;
+        if cursor_display < num_lines {
+            if first_content.is_none() {
+                first_content = Some(cursor_display);
+            }
+            last_content = Some(last_content.map_or(cursor_display, |l| l.max(cursor_display)));
+        }
+        // Mark all lines from first to last as having content.
+        let mut has_content = vec![false; num_lines];
+        if let (Some(first), Some(last)) = (first_content, last_content) {
+            for i in first..=last.min(num_lines - 1) {
+                has_content[i] = true;
             }
         }
         let gutter_entries: Vec<GutterEntry> = (0..num_lines)
