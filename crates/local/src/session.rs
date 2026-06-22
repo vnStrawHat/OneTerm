@@ -479,33 +479,35 @@ impl TerminalSession for LocalSession {
 /// Shell integration script — emit OSC 7 (cwd) + OSC 133 (prompt markers).
 /// Inject vào PTY sau khi shell sẵn sàng nhận input.
 ///
-/// PowerShell: override `prompt` function để emit markers mỗi prompt cycle.
-/// Cmd: dùng `prompt` command với `$E` escape.
-/// Bash/Zsh: dùng precmd/preexec hooks.
+/// Viết script ra temp file rồi source/execute — tránh script bị echo
+/// trên màn hình (nếu viết thẳng vào PTY, shell echo toàn bộ script).
+///
+/// PowerShell: viết .ps1 → dot-source.
+/// Cmd: viết .bat (có `@echo off`) → `call`.
+/// Bash/Zsh: viết .sh → `source`.
 fn shell_integration_script(kind: ShellKind) -> String {
     match kind {
         ShellKind::PowerShell | ShellKind::Pwsh => {
-            // PowerShell prompt function — emit OSC 7 + OSC 133;A (prompt start),
-            // OSC 133;B (prompt end/input start) mỗi cycle.
-            // [char]27 = ESC (works PowerShell 5.x + 7+).
-            r#"
+            let script = r#"
 $e = [char]27
 function prompt {
     $p = $PWD.Path -replace '\\','/'
     "$e]7;file://$env:COMPUTERNAME/$p$e\$e]133;A$e\$e[32mPS $($PWD.Path)$e[0m> $e]133;B$e\"
 }
-"#.to_string()
+"#;
+            let path = std::env::temp_dir().join("myterm2_si.ps1");
+            let _ = std::fs::write(&path, script);
+            format!(". '{}'\r\n", path.display())
         }
         ShellKind::Cmd => {
-            // cmd.exe: `prompt` command với $E escape.
-            // $E = ESC, $P = path, $G = >.
-            // OSC 133;A (prompt start) + prompt text + OSC 133;B (input start).
-            // Cmd không có OSC 7 (cwd) — chỉ OSC 133.
-            "prompt $E]133;A$E\\$P$G$E]133;B$E\\\r\n".to_string()
+            // Batch file: @echo off suppresses echo inside bat.
+            let script = "@echo off\r\nprompt $E]133;A$E\\$P$G$E]133;B$E\\\r\n";
+            let path = std::env::temp_dir().join("myterm2_si.bat");
+            let _ = std::fs::write(&path, script);
+            format!("call '{}'\r\n", path.display())
         }
         ShellKind::Bash | ShellKind::Zsh => {
-            // Bash/Zsh: precmd emits OSC 7 + OSC 133;A, preexec emits OSC 133;C.
-            r#"
+            let script = r#"
 __myterm2_precmd() {
     printf '\e]7;file://%s%s\e\\' "$HOSTNAME" "$PWD"
     printf '\e]133;A\e\\'
@@ -515,7 +517,10 @@ __myterm2_preexec() {
 }
 PROMPT_COMMAND="__myterm2_precmd; $PROMPT_COMMAND"
 trap '__myterm2_preexec' DEBUG
-"#.to_string()
+"#;
+            let path = std::env::temp_dir().join("myterm2_si.sh");
+            let _ = std::fs::write(&path, script);
+            format!("source '{}'\r\n", path.display())
         }
         ShellKind::Sh | ShellKind::Custom => {
             // sh/Custom: không inject — user tự cấu hình.
@@ -523,7 +528,6 @@ trap '__myterm2_preexec' DEBUG
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
