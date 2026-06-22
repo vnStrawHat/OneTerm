@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::cell::Flags;
+use myterm2_core::terminal::is_default_background_color;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, ClipboardItem, Context, Entity, FocusHandle, Focusable,
@@ -145,6 +146,7 @@ impl LocalTerminalView {
                                     if dl >= 0 && dl < num_lines as i32 {
                                         let c = &ic.cell;
                                         let blank = c.c == ' '
+                                            && is_default_background_color(&c.bg)
                                             && c.hyperlink().is_none()
                                             && !c.flags.intersects(
                                                 Flags::INVERSE

@@ -720,6 +720,12 @@ impl Element for TerminalElement {
                 };
                 let line_num = total_lines as i32 - display_offset as i32 - num_lines as i32 + i as i32 + 1 - ln_offset;
                 let line_num = line_num.max(1) as usize;
+                // DEBUG: log first gutter entry with content
+                if i == first_content.unwrap_or(0) {
+                    let _ = std::fs::write("C:/tmp/term_render_debug.txt",
+                        format!("i={} ln_offset={} line_num={} total_lines={} num_lines={} display_offset={} self.offset={} first_content={:?}\n",
+                            i, ln_offset, line_num, total_lines, num_lines, display_offset, self.line_number_offset, first_content));
+                }
                 // 0-based index into line_times (absolute grid position, NOT adjusted by offset).
                 let abs_idx = (total_lines as i32 - display_offset as i32 - num_lines as i32 + i as i32).max(0) as usize;
                 let time_str = if abs_idx < lt.len() {
