@@ -711,21 +711,16 @@ impl Element for TerminalElement {
                         y: bounds.origin.y + i as f32 * line_height,
                     };
                 }
-                // Line number 1-based, trừ phantom scrollback offset.
-                // Fallback: nếu offset chưa init (-1), tính từ snapshot.
-                let ln_offset = if self.line_number_offset < 0 {
-                    (total_lines as i32 - num_lines as i32).max(0)
+                // Line number 1-based. Offset = grid position của first content line,
+                // tính dynamic từ snapshot ( ổn định khi scroll vì grid position
+                // = scrollback - display_offset + first_content không đổi ).
+                let ln_offset = if let Some(fc) = first_content {
+                    (total_lines as i32 - num_lines as i32 - display_offset as i32 + fc as i32).max(0)
                 } else {
-                    self.line_number_offset
+                    0
                 };
                 let line_num = total_lines as i32 - display_offset as i32 - num_lines as i32 + i as i32 + 1 - ln_offset;
                 let line_num = line_num.max(1) as usize;
-                // DEBUG: log first gutter entry with content
-                if i == first_content.unwrap_or(0) {
-                    let _ = std::fs::write("C:/tmp/term_render_debug.txt",
-                        format!("i={} ln_offset={} line_num={} total_lines={} num_lines={} display_offset={} self.offset={} first_content={:?}\n",
-                            i, ln_offset, line_num, total_lines, num_lines, display_offset, self.line_number_offset, first_content));
-                }
                 // 0-based index into line_times (absolute grid position, NOT adjusted by offset).
                 let abs_idx = (total_lines as i32 - display_offset as i32 - num_lines as i32 + i as i32).max(0) as usize;
                 let time_str = if abs_idx < lt.len() {
