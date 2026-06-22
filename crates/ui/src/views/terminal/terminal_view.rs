@@ -257,7 +257,8 @@ impl LocalTerminalView {
         if f32::from(metrics.cell_width) == 0.0 || f32::from(metrics.line_height) == 0.0 {
             return None;
         }
-        let x = f32::from(pos.x - b.origin.x);
+        // Trừ gutter_width để x tương đối với grid origin.
+        let x = f32::from(pos.x - b.origin.x - metrics.gutter_width);
         let y = f32::from(pos.y - b.origin.y);
         if x < 0.0 || y < 0.0 {
             return None;
@@ -501,7 +502,7 @@ impl Render for LocalTerminalView {
                 let lh = f32::from(m.line_height);
                 if cw > 0.0 && lh > 0.0 {
                     if let Some(bounds) = m.bounds {
-                        let x = f32::from(bounds.origin.x) + self.vi_cursor.1 as f32 * cw;
+                        let x = f32::from(bounds.origin.x + m.gutter_width) + self.vi_cursor.1 as f32 * cw;
                         let y = f32::from(bounds.origin.y) + self.vi_cursor.0 as f32 * lh;
                         Some(div().id("vi-cursor").absolute().left(px(x)).top(px(y)).w(px(cw)).h(px(lh)).border_1().border_color(theme_ref.accent).rounded_sm())
                     } else {

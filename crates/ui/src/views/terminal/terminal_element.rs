@@ -34,6 +34,8 @@ pub(crate) struct GridMetrics {
     pub bounds: Option<Bounds<Pixels>>,
     pub cell_width: Pixels,
     pub line_height: Pixels,
+    /// Chiều rộng gutter (time + line number) bên trái terminal.
+    pub gutter_width: Pixels,
 }
 
 /// Layout point (display line/col, 0-based từ top viewport).
@@ -59,6 +61,12 @@ struct BatchedTextRun {
     style: TextRun,
 }
 
+/// Một dòng gutter: text + vị trí pixel (top-left).
+struct GutterEntry {
+    text: SharedString,
+    y: Pixels,
+}
+
 /// Thông tin layout computed ở prepaint → paint.
 pub struct LayoutState {
     rects: Vec<LayoutRect>,
@@ -72,6 +80,14 @@ pub struct LayoutState {
     line_height: Pixels,
     /// Origin của grid (sau gutter/canh).
     grid_origin: GpuiPoint<Pixels>,
+    /// Chiều rộng gutter.
+    gutter_width: Pixels,
+    /// Mục gutter cho mỗi dòng hiển thị.
+    gutter_entries: Vec<GutterEntry>,
+    /// Màu text gutter.
+    gutter_fg: Hsla,
+    /// Màu nền gutter.
+    gutter_bg: Hsla,
 }
 
 /// Con trỏ để paint.
@@ -532,8 +548,32 @@ impl Element for TerminalElement {
             .unwrap_or(px(8.0));
         let line_height = px(f32::from(font_px) * self.line_height_factor);
 
+        // ── Gutter: [HH:MM:SS] line_number ──
+        // Chiều rộng gutter = chiều rộng template text + padding.
+        let gutter_template = "[00:00:00] 00000";
+        let gutter_text_width = window
+            .text_system()
+            .shape_line(
+                SharedString::from(gutter_template),
+                font_px,
+                &[TextRun {
+                    len: gutter_template.len(),
+                    color: gpui::black(),
+                    background_color: None,
+                    font: self.font.clone(),
+                    underline: None,
+                    strikethrough: None,
+                }],
+                None,
+            )
+            .width();
+        let gutter_width = gutter_text_width + px(8.0); // 4px padding mỗi bên
+
         // Resize session theo bounds (race-free: chỉ khi đổi).
-        let cols = ((f32::from(bounds.size.width) / f32::from(cell_width)).floor() as u16).max(1);
+        // Trừ gutter_width khỏi chiều rộng có sẵn cho terminal grid.
+        let grid_width = (f32::from(bounds.size.width) - f32::from(gutter_width))
+            .max(f32::from(cell_width));
+        let cols = ((grid_width / f32::from(cell_width)).floor() as u16).max(1);
         let rows = ((f32::from(bounds.size.height) / f32::from(line_height)).floor() as u16).max(1);
         if self.last_size != Some((rows, cols)) {
             self.session.update(cx, |s, _| s.resize(rows, cols));
@@ -601,11 +641,47 @@ impl Element for TerminalElement {
         };
 
         let _hitbox = window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal);
+
+        // ── Gutter entries: [HH:MM:SS] line_number cho mỗi dòng hiển thị ──
+        let now = chrono::Local::now();
+        let time_str = now.format("%H:%M:%S").to_string();
+        let total_lines = snapshot.total_lines;
+        let gutter_fg = {
+            // Dim foreground cho gutter text.
+            let fg = self.theme.fg;
+            gpui::hsla(fg.h, fg.s, fg.l * 0.5, fg.a)
+        };
+        let gutter_bg = {
+            // Nền gutter đậm hơn terminal bg một chút.
+            let bg = self.theme.bg;
+            gpui::hsla(bg.h, bg.s, (bg.l * 0.9).max(0.0), bg.a)
+        };
+        let gutter_entries: Vec<GutterEntry> = (0..num_lines)
+            .map(|i| {
+                // Line number 1-based từ top of scrollback.
+                // display line i (0-based from top) → actual line number.
+                let line_num = total_lines as i32 - display_offset as i32 - num_lines as i32 + i as i32 + 1;
+                let line_num = line_num.max(1) as usize;
+                let text = format!("[{}] {:>5}", time_str, line_num);
+                GutterEntry {
+                    text: SharedString::from(text),
+                    y: bounds.origin.y + i as f32 * line_height,
+                }
+            })
+            .collect();
+
+        // Grid origin = bên phải gutter.
+        let grid_origin = GpuiPoint {
+            x: bounds.origin.x + gutter_width,
+            y: bounds.origin.y,
+        };
+
         // Sink metrics cho View (mouse/wheel).
         *self.metrics.borrow_mut() = GridMetrics {
             bounds: Some(bounds),
             cell_width,
             line_height,
+            gutter_width,
         };
         LayoutState {
             rects,
@@ -615,7 +691,11 @@ impl Element for TerminalElement {
             background: self.theme.bg,
             cell_width,
             line_height,
-            grid_origin: bounds.origin,
+            grid_origin,
+            gutter_width,
+            gutter_entries,
+            gutter_fg,
+            gutter_bg,
         }
     }
 
@@ -636,8 +716,56 @@ impl Element for TerminalElement {
             cx,
         );
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
-            // Nền.
+            // Nền terminal.
             window.paint_quad(fill(bounds, layout.background));
+
+            // ── Gutter: [HH:MM:SS] line_number ──
+            let gw = layout.gutter_width;
+            if gw > px(0.0) {
+                // Nền gutter.
+                let gutter_bounds = Bounds {
+                    origin: bounds.origin,
+                    size: size(gw, bounds.size.height),
+                };
+                window.paint_quad(fill(gutter_bounds, layout.gutter_bg));
+                // Separator line (1px) giữa gutter và terminal.
+                let sep_bounds = Bounds {
+                    origin: GpuiPoint {
+                        x: bounds.origin.x + gw - px(1.0),
+                        y: bounds.origin.y,
+                    },
+                    size: size(px(1.0), bounds.size.height),
+                };
+                let sep_color = {
+                    let bg = layout.gutter_bg;
+                    gpui::hsla(bg.h, bg.s, (bg.l * 0.5).max(0.0), bg.a)
+                };
+                window.paint_quad(fill(sep_bounds, sep_color));
+                // Gutter text cho mỗi dòng.
+                let gfont_px = self.font_size;
+                let glh = layout.line_height;
+                for entry in &layout.gutter_entries {
+                    let line = window.text_system().shape_line(
+                        entry.text.clone(),
+                        gfont_px,
+                        std::slice::from_ref(&TextRun {
+                            len: entry.text.len(),
+                            color: layout.gutter_fg,
+                            background_color: None,
+                            font: self.font.clone(),
+                            underline: None,
+                            strikethrough: None,
+                        }),
+                        None,
+                    );
+                    let pos = GpuiPoint {
+                        x: bounds.origin.x + px(4.0),
+                        y: entry.y,
+                    };
+                    let _ = line.paint(pos, glh, TextAlign::Left, None, window, cx);
+                }
+            }
+
             let origin = layout.grid_origin;
             let cw = layout.cell_width;
             let lh = layout.line_height;
