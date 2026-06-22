@@ -535,6 +535,7 @@ impl Render for LocalTerminalView {
                 self.hovered_url.clone(),
                 self.ctrl_held,
                 self.line_times.clone(),
+                theme_ref.border,
             ))
             // Bell indicator overlay (góc trên-phải).
             .children(if has_bell && bell_enabled {

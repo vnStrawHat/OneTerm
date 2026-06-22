@@ -88,6 +88,8 @@ pub struct LayoutState {
     gutter_fg: Hsla,
     /// Màu nền gutter.
     gutter_bg: Hsla,
+    /// Màu border (separator) — đồng bộ với Dock border.
+    dock_border: Hsla,
 }
 
 /// Con trỏ để paint.
@@ -123,6 +125,8 @@ pub(crate) struct TerminalElement {
     ctrl_held: bool,
     /// Per-line timestamps for gutter (0 = oldest line).
     line_times: Vec<String>,
+    /// Border color từ GPUI theme (đồng bộ với Dock border).
+    dock_border: Hsla,
 }
 
 impl TerminalElement {
@@ -140,6 +144,7 @@ impl TerminalElement {
         hovered_url: Option<super::url::DetectedUrl>,
         ctrl_held: bool,
         line_times: Vec<String>,
+        dock_border: Hsla,
     ) -> Self {
         Self {
             session,
@@ -156,6 +161,7 @@ impl TerminalElement {
             hovered_url,
             ctrl_held,
             line_times,
+            dock_border,
         }
     }
 
@@ -572,10 +578,12 @@ impl Element for TerminalElement {
             )
             .width();
         let gutter_width = gutter_text_width + px(8.0); // 4px padding mỗi bên
+        // Padding trái cho terminal content — tránh text sát lề gutter separator.
+        let content_padding = px(6.0);
 
         // Resize session theo bounds (race-free: chỉ khi đổi).
-        // Trừ gutter_width khỏi chiều rộng có sẵn cho terminal grid.
-        let grid_width = (f32::from(bounds.size.width) - f32::from(gutter_width))
+        // Trừ gutter_width + content_padding khỏi chiều rộng có sẵn.
+        let grid_width = (f32::from(bounds.size.width) - f32::from(gutter_width) - f32::from(content_padding))
             .max(f32::from(cell_width));
         let cols = ((grid_width / f32::from(cell_width)).floor() as u16).max(1);
         let rows = ((f32::from(bounds.size.height) / f32::from(line_height)).floor() as u16).max(1);
@@ -655,11 +663,7 @@ impl Element for TerminalElement {
             let fg = self.theme.fg;
             gpui::hsla(fg.h, fg.s, fg.l * 0.5, fg.a)
         };
-        let gutter_bg = {
-            // Nền gutter đậm hơn terminal bg một chút.
-            let bg = self.theme.bg;
-            gpui::hsla(bg.h, bg.s, (bg.l * 0.9).max(0.0), bg.a)
-        };
+        let gutter_bg = self.theme.bg;  // Cùng nền với terminal.
         let lt = &self.line_times;
         // Scan cells để tìm range content: từ dòng non-blank đầu tiên
         // đến dòng non-blank cuối cùng (hoặc cursor line). Blank lines
@@ -721,18 +725,20 @@ impl Element for TerminalElement {
             })
             .collect();
 
-        // Grid origin = bên phải gutter.
+        // Grid origin = bên phải gutter + content_padding (left padding).
         let grid_origin = GpuiPoint {
-            x: bounds.origin.x + gutter_width,
+            x: bounds.origin.x + gutter_width + content_padding,
             y: bounds.origin.y,
         };
 
         // Sink metrics cho View (mouse/wheel).
+        // gutter_width trong metrics bao gồm content_padding để pixel_to_grid
+        // convert chính xác từ tọa độ mouse.
         *self.metrics.borrow_mut() = GridMetrics {
             bounds: Some(bounds),
             cell_width,
             line_height,
-            gutter_width,
+            gutter_width: gutter_width + content_padding,
         };
         LayoutState {
             rects,
@@ -747,6 +753,7 @@ impl Element for TerminalElement {
             gutter_entries,
             gutter_fg,
             gutter_bg,
+            dock_border: self.dock_border,
         }
     }
 
@@ -787,10 +794,7 @@ impl Element for TerminalElement {
                     },
                     size: size(px(1.0), bounds.size.height),
                 };
-                let sep_color = {
-                    let bg = layout.gutter_bg;
-                    gpui::hsla(bg.h, bg.s, (bg.l * 0.5).max(0.0), bg.a)
-                };
+                let sep_color = layout.dock_border;
                 window.paint_quad(fill(sep_bounds, sep_color));
                 // Gutter text cho mỗi dòng.
                 let gfont_px = self.font_size;
