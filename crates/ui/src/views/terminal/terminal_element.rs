@@ -677,13 +677,9 @@ impl Element for TerminalElement {
 
         // ── Gutter entries: [HH:MM:SS] line_number cho mỗi dòng hiển thị ──
         // Timestamp per-line: lấy từ line_times (tracked khi output mới).
-        // Fallback "--:--:--" nếu chưa có data.
-        let gutter_fg = {
-            // Dim foreground cho gutter text.
-            let fg = self.theme.fg;
-            gpui::hsla(fg.h, fg.s, fg.l * 0.5, fg.a)
-        };
-        let gutter_bg = self.theme.bg; // Cùng nền với terminal.
+        // Gutter colors — từ theme (có thể bị override bởi config colors.gutter_fg/bg).
+        let gutter_fg = self.theme.gutter_fg;
+        let gutter_bg = self.theme.gutter_bg;
         let lt = &self.line_times;
         // Scan cells để tìm range content: từ dòng non-blank đầu tiên
         // đến dòng non-blank cuối cùng (hoặc cursor line). Blank lines

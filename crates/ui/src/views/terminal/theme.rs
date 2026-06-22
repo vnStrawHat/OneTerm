@@ -108,6 +108,10 @@ pub struct TerminalTheme {
     pub selection: Hsla,
     /// Ngưỡng contrast tối thiểu (WCAG, mặc định 4.5 ≈ AA).
     pub min_contrast: f32,
+    /// Màu chữ gutter (timestamp + line number). Default = dim fg (50% lightness).
+    pub gutter_fg: Hsla,
+    /// Màu nền gutter. Default = cùng nền terminal.
+    pub gutter_bg: Hsla,
 }
 
 /// Build `TerminalTheme` từ gpui-component active `Theme`.
@@ -139,6 +143,9 @@ pub fn build_terminal_theme(theme: &Theme) -> TerminalTheme {
             gpui::hsla(0.569, 0.92, 0.949, 1.0) // #e6f4fe light blue
         },
         min_contrast: 4.5,
+        // Gutter defaults: dim fg (50% lightness) cho text, same bg cho nền.
+        gutter_fg: gpui::hsla(fg.h, fg.s, fg.l * 0.5, fg.a),
+        gutter_bg: bg,
     }
 }
 
@@ -291,6 +298,8 @@ mod tests {
             fg: Hsla::white(),
             min_contrast: 4.5,
             selection: gpui::hsla(0.6, 0.5, 0.5, 0.3),
+            gutter_fg: Hsla::white(),
+            gutter_bg: Hsla::black(),
         };
         let h = resolve_cell_color(
             &Color::Named(alacritty_terminal::vte::ansi::NamedColor::Red),
@@ -309,6 +318,8 @@ mod tests {
             fg: Hsla::white(),
             min_contrast: 4.5,
             selection: gpui::hsla(0.6, 0.5, 0.5, 0.3),
+            gutter_fg: Hsla::white(),
+            gutter_bg: Hsla::black(),
         };
         let h = resolve_cell_color(&Color::Spec(VteRgb { r: 1, g: 2, b: 3 }), &t);
         let rgba = h.to_rgb();

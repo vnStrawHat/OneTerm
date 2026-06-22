@@ -100,6 +100,8 @@ pub struct ColorOverrides {
     pub background: Option<Hsla>,
     pub cursor: Option<Hsla>,
     pub selection: Option<Hsla>,
+    pub gutter_fg: Option<Hsla>,
+    pub gutter_bg: Option<Hsla>,
     pub min_contrast: f32,
     pub ansi: Vec<Hsla>,
 }
@@ -263,6 +265,8 @@ impl TerminalSettings {
             background: colors.background.as_deref().and_then(parse_hex_color),
             cursor: colors.cursor.as_deref().and_then(parse_hex_color),
             selection: colors.selection.as_deref().and_then(parse_hex_color),
+            gutter_fg: colors.gutter_fg.as_deref().and_then(parse_hex_color),
+            gutter_bg: colors.gutter_bg.as_deref().and_then(parse_hex_color),
             min_contrast: colors.min_contrast,
             ansi: colors.ansi.iter().filter_map(|s| parse_hex_color(s)).collect(),
         };

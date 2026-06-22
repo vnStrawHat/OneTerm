@@ -228,6 +228,12 @@ pub struct ColorsConfig {
     /// Override selection highlight color (null = auto dark/light).
     #[serde(default)]
     pub selection: Option<String>,
+    /// Override gutter text color (timestamp + line number). null = dim foreground.
+    #[serde(default)]
+    pub gutter_fg: Option<String>,
+    /// Override gutter background color. null = same as terminal background.
+    #[serde(default)]
+    pub gutter_bg: Option<String>,
     /// Ngưỡng contrast tối thiểu (WCAG, 4.5 ≈ AA).
     #[serde(default = "default_min_contrast")]
     pub min_contrast: f32,

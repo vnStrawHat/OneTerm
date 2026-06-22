@@ -586,6 +586,12 @@ impl Render for LocalTerminalView {
             if let Some(sel) = co.selection {
                 t.selection = sel;
             }
+            if let Some(gf) = co.gutter_fg {
+                t.gutter_fg = gf;
+            }
+            if let Some(gb) = co.gutter_bg {
+                t.gutter_bg = gb;
+            }
             t.min_contrast = co.min_contrast;
             for (i, &color) in co.ansi.iter().enumerate() {
                 if i < 16 {
