@@ -234,6 +234,12 @@ pub struct ColorsConfig {
     /// Override gutter background color. null = same as terminal background.
     #[serde(default)]
     pub gutter_bg: Option<String>,
+    /// Override clock text color [HH:MM:SS]. null = gutter_fg.
+    #[serde(default)]
+    pub clock_fg: Option<String>,
+    /// Override line number color. null = gutter_fg.
+    #[serde(default)]
+    pub line_number_fg: Option<String>,
     /// Ngưỡng contrast tối thiểu (WCAG, 4.5 ≈ AA).
     #[serde(default = "default_min_contrast")]
     pub min_contrast: f32,

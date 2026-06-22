@@ -61,9 +61,11 @@ struct BatchedTextRun {
     style: TextRun,
 }
 
-/// Một dòng gutter: text + vị trí pixel (top-left).
+/// Một dòng gutter: text + vị trí pixel (top-left) + byte length của phần clock.
 struct GutterEntry {
     text: SharedString,
+    /// Byte length của phần clock "[HH:MM:SS] " (không bao gồm line number).
+    clock_len: usize,
     y: Pixels,
 }
 
@@ -84,8 +86,6 @@ pub struct LayoutState {
     gutter_width: Pixels,
     /// Mục gutter cho mỗi dòng hiển thị.
     gutter_entries: Vec<GutterEntry>,
-    /// Màu text gutter.
-    gutter_fg: Hsla,
     /// Màu nền gutter.
     gutter_bg: Hsla,
 }
@@ -677,8 +677,7 @@ impl Element for TerminalElement {
 
         // ── Gutter entries: [HH:MM:SS] line_number cho mỗi dòng hiển thị ──
         // Timestamp per-line: lấy từ line_times (tracked khi output mới).
-        // Gutter colors — từ theme (có thể bị override bởi config colors.gutter_fg/bg).
-        let gutter_fg = self.theme.gutter_fg;
+        // Gutter background — từ theme (có thể bị override bởi config colors.gutter_bg).
         let gutter_bg = self.theme.gutter_bg;
         let lt = &self.line_times;
         // Scan cells để tìm range content: từ dòng non-blank đầu tiên
@@ -720,6 +719,7 @@ impl Element for TerminalElement {
                     // Dòng trống → gutter rỗng.
                     return GutterEntry {
                         text: SharedString::from(""),
+                        clock_len: 0,
                         y: bounds.origin.y + i as f32 * line_height,
                     };
                 }
@@ -738,8 +738,11 @@ impl Element for TerminalElement {
                     "--:--:--"
                 };
                 let text = format!("[{}] {:>width$}", time_str, line_num, width = num_digits);
+                // Byte length của phần clock "[HH:MM:SS] " = 1 + time_str + 2 ("[" + "] ").
+                let clock_len = 1 + time_str.len() + 2;
                 GutterEntry {
                     text: SharedString::from(text),
+                    clock_len,
                     y: bounds.origin.y + i as f32 * line_height,
                 }
             })
@@ -771,7 +774,6 @@ impl Element for TerminalElement {
             grid_origin,
             gutter_width,
             gutter_entries,
-            gutter_fg,
             gutter_bg,
         }
     }
@@ -805,21 +807,46 @@ impl Element for TerminalElement {
                     size: size(gw, bounds.size.height),
                 };
                 window.paint_quad(fill(gutter_bounds, layout.gutter_bg));
-                // Gutter text cho mỗi dòng.
+                // Gutter text cho mỗi dòng — 2 TextRuns: clock + line number.
                 let gfont_px = self.font_size;
                 let glh = layout.line_height;
+                let clock_color = self.theme.clock_fg;
+                let ln_color = self.theme.line_number_fg;
                 for entry in &layout.gutter_entries {
-                    let line = window.text_system().shape_line(
-                        entry.text.clone(),
-                        gfont_px,
-                        std::slice::from_ref(&TextRun {
+                    let runs: Vec<TextRun> = if entry.clock_len > 0 && entry.clock_len < entry.text.len() {
+                        vec![
+                            TextRun {
+                                len: entry.clock_len,
+                                color: clock_color,
+                                background_color: None,
+                                font: self.font.clone(),
+                                underline: None,
+                                strikethrough: None,
+                            },
+                            TextRun {
+                                len: entry.text.len() - entry.clock_len,
+                                color: ln_color,
+                                background_color: None,
+                                font: self.font.clone(),
+                                underline: None,
+                                strikethrough: None,
+                            },
+                        ]
+                    } else {
+                        // Empty entry hoặc fallback — single run.
+                        vec![TextRun {
                             len: entry.text.len(),
-                            color: layout.gutter_fg,
+                            color: clock_color,
                             background_color: None,
                             font: self.font.clone(),
                             underline: None,
                             strikethrough: None,
-                        }),
+                        }]
+                    };
+                    let line = window.text_system().shape_line(
+                        entry.text.clone(),
+                        gfont_px,
+                        &runs,
                         None,
                     );
                     let pos = GpuiPoint {

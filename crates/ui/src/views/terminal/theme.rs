@@ -112,6 +112,10 @@ pub struct TerminalTheme {
     pub gutter_fg: Hsla,
     /// Màu nền gutter. Default = cùng nền terminal.
     pub gutter_bg: Hsla,
+    /// Màu chữ clock [HH:MM:SS]. Default = gutter_fg.
+    pub clock_fg: Hsla,
+    /// Màu chữ line number. Default = gutter_fg.
+    pub line_number_fg: Hsla,
 }
 
 /// Build `TerminalTheme` từ gpui-component active `Theme`.
@@ -146,6 +150,9 @@ pub fn build_terminal_theme(theme: &Theme) -> TerminalTheme {
         // Gutter defaults: dim fg (50% lightness) cho text, same bg cho nền.
         gutter_fg: gpui::hsla(fg.h, fg.s, fg.l * 0.5, fg.a),
         gutter_bg: bg,
+        // Clock + line number default = gutter_fg (override qua config nếu muốn).
+        clock_fg: gpui::hsla(fg.h, fg.s, fg.l * 0.5, fg.a),
+        line_number_fg: gpui::hsla(fg.h, fg.s, fg.l * 0.5, fg.a),
     }
 }
 
@@ -300,6 +307,8 @@ mod tests {
             selection: gpui::hsla(0.6, 0.5, 0.5, 0.3),
             gutter_fg: Hsla::white(),
             gutter_bg: Hsla::black(),
+            clock_fg: Hsla::white(),
+            line_number_fg: Hsla::white(),
         };
         let h = resolve_cell_color(
             &Color::Named(alacritty_terminal::vte::ansi::NamedColor::Red),
@@ -320,6 +329,8 @@ mod tests {
             selection: gpui::hsla(0.6, 0.5, 0.5, 0.3),
             gutter_fg: Hsla::white(),
             gutter_bg: Hsla::black(),
+            clock_fg: Hsla::white(),
+            line_number_fg: Hsla::white(),
         };
         let h = resolve_cell_color(&Color::Spec(VteRgb { r: 1, g: 2, b: 3 }), &t);
         let rgba = h.to_rgb();

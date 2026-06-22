@@ -588,9 +588,17 @@ impl Render for LocalTerminalView {
             }
             if let Some(gf) = co.gutter_fg {
                 t.gutter_fg = gf;
+                t.clock_fg = gf;
+                t.line_number_fg = gf;
             }
             if let Some(gb) = co.gutter_bg {
                 t.gutter_bg = gb;
+            }
+            if let Some(cf) = co.clock_fg {
+                t.clock_fg = cf;
+            }
+            if let Some(lnf) = co.line_number_fg {
+                t.line_number_fg = lnf;
             }
             t.min_contrast = co.min_contrast;
             for (i, &color) in co.ansi.iter().enumerate() {
