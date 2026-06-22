@@ -342,7 +342,6 @@ impl TerminalElement {
                             && last.point.column + last.num_cells as i32 == col
                         {
                             last.num_cells += 1;
-                            continue;
                         }
                     }
                     rects.push(LayoutRect {
