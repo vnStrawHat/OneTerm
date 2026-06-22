@@ -15,9 +15,10 @@ use alacritty_terminal::selection::SelectionType;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, ClipboardItem, Context, Entity, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, KeyBinding, KeyDownEvent, Keystroke, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, NoAction, ParentElement as _, Pixels, Point,
-    Render, ScrollDelta, ScrollWheelEvent, SharedString, Styled as _, Window, div, point, px, size,
+    InteractiveElement as _, IntoElement, KeyBinding, KeyDownEvent, Keystroke, ModifiersChangedEvent,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, NoAction, ParentElement as _,
+    Pixels, Point, Render, ScrollDelta, ScrollWheelEvent, SharedString, Styled as _, Window,
+    div, point, px, size,
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
@@ -64,6 +65,9 @@ pub struct LocalTerminalView {
     hovered_url: Option<super::url::DetectedUrl>,
     /// Ctrl đang held — track để toggle cursor style.
     ctrl_held: bool,
+    /// Last mouse position — để re-detect URL khi Ctrl pressed/released
+    /// mà không cần mouse move.
+    last_mouse_pos: Option<Point<Pixels>>,
 }
 
 impl LocalTerminalView {
@@ -189,6 +193,7 @@ impl LocalTerminalView {
             vi_selecting: false,
             hovered_url: None,
             ctrl_held: false,
+            last_mouse_pos: None,
         }
     }
 
@@ -624,8 +629,9 @@ impl Render for LocalTerminalView {
                     let (row, col) = match Self::pixel_to_grid(&m.borrow(), e.position) {
                         Some(rc) => rc,
                         None => {
-                            // Mouse outside grid — clear hover.
+                            // Mouse outside grid — clear hover + save pos.
                             let _ = view.update(cx, |v, cx| {
+                                v.last_mouse_pos = Some(e.position);
                                 if v.hovered_url.is_some() || v.ctrl_held {
                                     v.hovered_url = None;
                                     v.ctrl_held = false;
@@ -655,6 +661,7 @@ impl Render for LocalTerminalView {
                         None
                     };
                     let _ = view.update(cx, |v, cx| {
+                        v.last_mouse_pos = Some(e.position);
                         let changed = v.ctrl_held != ctrl
                             || v.hovered_url.as_ref().map(|u| (&u.url, u.row, u.start_col, u.end_col))
                                 != new_url.as_ref().map(|u| (&u.url, u.row, u.start_col, u.end_col));
@@ -690,6 +697,45 @@ impl Render for LocalTerminalView {
                         }
                     }
                     let _ = view.update(cx, |v, cx| { v.last_scroll_time = Some(std::time::Instant::now()); cx.notify(); });
+                }
+            })
+            // Modifier changed (Ctrl pressed/released) — re-detect URL
+            // tại last mouse position mà không cần mouse move.
+            .on_modifiers_changed({
+                let s = session.clone();
+                let m = metrics.clone();
+                let view = view.clone();
+                move |e: &ModifiersChangedEvent, _w, cx: &mut App| {
+                    let ctrl = e.modifiers.control;
+                    let pos = match view.read(cx).last_mouse_pos {
+                        Some(p) => p,
+                        None => return,
+                    };
+                    let new_url = if ctrl {
+                        let (row, col) = match Self::pixel_to_grid(&m.borrow(), pos) {
+                            Some(rc) => rc,
+                            None => return,
+                        };
+                        let snap = s.read(cx).snapshot();
+                        detect_url_at(
+                            &snap.cells,
+                            snap.terminal_bounds.num_cols,
+                            row as usize,
+                            col as usize,
+                        )
+                    } else {
+                        None
+                    };
+                    let _ = view.update(cx, |v, cx| {
+                        let changed = v.ctrl_held != ctrl
+                            || v.hovered_url.as_ref().map(|u| (&u.url, u.row, u.start_col, u.end_col))
+                                != new_url.as_ref().map(|u| (&u.url, u.row, u.start_col, u.end_col));
+                        if changed {
+                            v.ctrl_held = ctrl;
+                            v.hovered_url = new_url;
+                            cx.notify();
+                        }
+                    });
                 }
             })
             .on_scroll_wheel({
