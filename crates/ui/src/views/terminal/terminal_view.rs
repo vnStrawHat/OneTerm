@@ -12,11 +12,12 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use alacritty_terminal::selection::SelectionType;
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, ClipboardItem, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
-    IntoElement, KeyBinding, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, NoAction, ParentElement as _, Pixels, Point, Render, ScrollDelta,
-    ScrollWheelEvent, SharedString, Styled as _, Window, div, point, px, size,
+    App, ClipboardItem, Context, Entity, FocusHandle, Focusable,
+    InteractiveElement as _, IntoElement, KeyBinding, KeyDownEvent, Keystroke, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, NoAction, ParentElement as _, Pixels, Point,
+    Render, ScrollDelta, ScrollWheelEvent, SharedString, Styled as _, Window, div, point, px, size,
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
@@ -27,6 +28,7 @@ use myterm2_core::{SessionEvent, TerminalSession};
 use super::terminal_element::{GridMetrics, TerminalElement};
 use super::terminal_scrollbar::TerminalScrollHandle;
 use super::theme::{TerminalTheme, build_terminal_theme};
+use super::url::detect_url_at;
 use crate::state::{TerminalBlink, TerminalSettings};
 
 /// Khoảng thời gian nhấp nháy con trỏ (ms) — giống Zed `CURSOR_BLINK_INTERVAL`.
@@ -58,6 +60,10 @@ pub struct LocalTerminalView {
     vi_cursor: (usize, usize),
     /// Vi mode selection active (v pressed).
     vi_selecting: bool,
+    /// URL đang hover (Ctrl held) — để highlight + click mở URL.
+    hovered_url: Option<super::url::DetectedUrl>,
+    /// Ctrl đang held — track để toggle cursor style.
+    ctrl_held: bool,
 }
 
 impl LocalTerminalView {
@@ -181,6 +187,8 @@ impl LocalTerminalView {
             vi_mode: false,
             vi_cursor: (0, 0),
             vi_selecting: false,
+            hovered_url: None,
+            ctrl_held: false,
         }
     }
 
@@ -451,6 +459,7 @@ impl Render for LocalTerminalView {
             .relative()
             .track_focus(&self.focus)
             .key_context("Terminal")
+            .when(self.hovered_url.is_some(), |d| d.cursor_pointer())
             .child(TerminalElement::new(
                 session.clone(),
                 theme.clone(),
@@ -462,6 +471,8 @@ impl Render for LocalTerminalView {
                 metrics.clone(),
                 cx.entity(),
                 self.focus.clone(),
+                self.hovered_url.clone(),
+                self.ctrl_held,
             ))
             // Bell indicator overlay (góc trên-phải).
             .children(if has_bell && bell_enabled {
@@ -535,16 +546,17 @@ impl Render for LocalTerminalView {
                         Some(rc) => rc,
                         None => return,
                     };
-                    // Ctrl+click trên cell có hyperlink → mở URL.
+                    // Ctrl+click → mở URL (OSC 8 hyperlink hoặc plain text URL).
                     if e.modifiers.control {
                         let snap = s.read(cx).snapshot();
-                        let nc = snap.terminal_bounds.num_cols;
-                        let idx = (row as usize) * nc + (col as usize);
-                        if idx < snap.cells.len() {
-                            if let Some(h) = snap.cells[idx].cell.hyperlink() {
-                                cx.open_url(h.uri());
-                                return;
-                            }
+                        if let Some(url) = detect_url_at(
+                            &snap.cells,
+                            snap.terminal_bounds.num_cols,
+                            row as usize,
+                            col as usize,
+                        ) {
+                            cx.open_url(&url.url);
+                            return;
                         }
                     }
                     s.update(cx, |s, _| {
@@ -611,7 +623,17 @@ impl Render for LocalTerminalView {
                     // Normal mouse move: selection drag / hover.
                     let (row, col) = match Self::pixel_to_grid(&m.borrow(), e.position) {
                         Some(rc) => rc,
-                        None => return,
+                        None => {
+                            // Mouse outside grid — clear hover.
+                            let _ = view.update(cx, |v, cx| {
+                                if v.hovered_url.is_some() || v.ctrl_held {
+                                    v.hovered_url = None;
+                                    v.ctrl_held = false;
+                                    cx.notify();
+                                }
+                            });
+                            return;
+                        }
                     };
                     if e.pressed_button == Some(MouseButton::Left) {
                         s.update(cx, |s, _| s.mouse_drag(row, col));
@@ -619,6 +641,29 @@ impl Render for LocalTerminalView {
                     } else {
                         s.update(cx, |s, _| s.mouse_move(row, col));
                     }
+                    // Ctrl+hover URL detection — highlight + cursor pointer.
+                    let ctrl = e.modifiers.control;
+                    let new_url = if ctrl {
+                        let snap = s.read(cx).snapshot();
+                        detect_url_at(
+                            &snap.cells,
+                            snap.terminal_bounds.num_cols,
+                            row as usize,
+                            col as usize,
+                        )
+                    } else {
+                        None
+                    };
+                    let _ = view.update(cx, |v, cx| {
+                        let changed = v.ctrl_held != ctrl
+                            || v.hovered_url.as_ref().map(|u| (&u.url, u.row, u.start_col, u.end_col))
+                                != new_url.as_ref().map(|u| (&u.url, u.row, u.start_col, u.end_col));
+                        if changed {
+                            v.ctrl_held = ctrl;
+                            v.hovered_url = new_url;
+                            cx.notify();
+                        }
+                    });
                 }
             })
             .on_mouse_up(MouseButton::Left, {

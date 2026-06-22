@@ -101,6 +101,10 @@ pub(crate) struct TerminalElement {
     view: Entity<LocalTerminalView>,
     /// Focus handle cho `handle_input`.
     focus: gpui::FocusHandle,
+    /// URL đang hover (Ctrl held) — highlight cells trong range.
+    hovered_url: Option<super::url::DetectedUrl>,
+    /// Ctrl đang held.
+    ctrl_held: bool,
 }
 
 impl TerminalElement {
@@ -115,6 +119,8 @@ impl TerminalElement {
         metrics: Rc<RefCell<GridMetrics>>,
         view: Entity<LocalTerminalView>,
         focus: gpui::FocusHandle,
+        hovered_url: Option<super::url::DetectedUrl>,
+        ctrl_held: bool,
     ) -> Self {
         Self {
             session,
@@ -128,6 +134,8 @@ impl TerminalElement {
             metrics,
             view,
             focus,
+            hovered_url,
+            ctrl_held,
         }
     }
 
@@ -252,11 +260,14 @@ impl TerminalElement {
 
     /// Build rects + text runs từ cells (theo display order). Trả (rects, runs).
     /// `selection_set` — nếu cell trong selection, swap fg/bg (inverse video).
+    /// `hovered_url` — nếu cell trong URL range + Ctrl held, đổi fg → link color + underline.
     fn layout_grid(
         cells: &[IndexedCell],
         theme: &TerminalTheme,
         base_font: &Font,
         selection_set: &HashSet<LayoutPoint>,
+        hovered_url: Option<&super::url::DetectedUrl>,
+        ctrl_held: bool,
     ) -> (Vec<LayoutRect>, Vec<BatchedTextRun>) {
         use itertools::Itertools;
         let mut rects: Vec<LayoutRect> = Vec::new();
@@ -323,7 +334,23 @@ impl TerminalElement {
 
                 // Selection: giữ nguyên text color — selection background paint
                 // riêng ở layer selection_rects (giống Zed, KHÔNG inverse video).
-                let style = Self::cell_style(cell, fg, base_font);
+                let mut style = Self::cell_style(cell, fg, base_font);
+                // Ctrl+hover URL highlight — đổi fg → link blue + underline.
+                if ctrl_held {
+                    if let Some(url) = hovered_url {
+                        if url.row == display_line as usize
+                            && point.column.0 >= url.start_col
+                            && point.column.0 < url.end_col
+                        {
+                            style.color = gpui::hsla(0.6, 0.85, 0.65, 1.0);
+                            style.underline = Some(UnderlineStyle {
+                                color: Some(style.color),
+                                thickness: px(1.0),
+                                wavy: false,
+                            });
+                        }
+                    }
+                }
                 let zw = cell.zerowidth();
 
                 if let Some(b) = current_batch.as_mut() {
@@ -537,7 +564,14 @@ impl Element for TerminalElement {
         let selection_set = Self::build_selection_set(&selection_rects);
 
         let (rects, runs) =
-            Self::layout_grid(&snapshot.cells, &self.theme, &self.font, &selection_set);
+            Self::layout_grid(
+                &snapshot.cells,
+                &self.theme,
+                &self.font,
+                &selection_set,
+                self.hovered_url.as_ref(),
+                self.ctrl_held,
+            );
 
         // Cursor.
         let cursor = {

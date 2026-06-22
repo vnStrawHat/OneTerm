@@ -6,6 +6,7 @@ pub mod terminal_scrollbar;
 pub mod terminal_settings_panel;
 pub mod terminal_view;
 pub mod theme;
+pub mod url;
 
 pub use terminal_panel::TerminalPanel;
 pub use terminal_settings_panel::TerminalSettingsPanel;
