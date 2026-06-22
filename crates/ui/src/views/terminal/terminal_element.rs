@@ -75,6 +75,8 @@ pub struct LayoutState {
     /// Selection highlight rects (painted between bg rects and text).
     selection_rects: Vec<LayoutRect>,
     runs: Vec<BatchedTextRun>,
+    /// Box-drawing cells — vẽ primitive thay vì font glyph.
+    box_draws: Vec<BoxDrawCell>,
     cursor: Option<CursorPaint>,
     background: Hsla,
     /// Pixel metrics.
@@ -95,6 +97,14 @@ struct CursorPaint {
     point: LayoutPoint,
     color: Hsla,
     shape: CursorShape,
+}
+
+/// Một cell box-drawing (U+2500–U+257F) sẽ được vẽ bằng primitive fill
+/// thay vì rasterize font glyph → pixel-perfect, không anti-alias blur.
+struct BoxDrawCell {
+    point: LayoutPoint,
+    color: Hsla,
+    c: char,
 }
 
 /// Element paint terminal. Giữ `Entity<Box<dyn TerminalSession>>` để resize
@@ -291,6 +301,241 @@ impl TerminalElement {
         set
     }
 
+    /// Kiểm tra char có thuộc box-drawing block (U+2500–U+257F) — các ký tự
+    /// đường thẳng / khung mà Windows Terminal vẽ bằng primitive thay vì font.
+    fn is_box_drawing(c: char) -> bool {
+        matches!(c, '\u{2500}'..='\u{257F}')
+    }
+
+    /// Tính geometry (pixel-perfect) cho box-drawing char trong cell.
+    /// Trả list rect (x, y, w, h) tính bằng **device pixel** relative tới
+    /// cell origin. Caller convert sang logical px khi paint.
+    /// Giống AtlasEngine: light = 1 device px, heavy = 2, double = 2 line.
+    fn box_drawing_rects(c: char, cw_d: i32, lh_d: i32) -> Vec<(i32, i32, i32, i32)> {
+        let cx = cw_d / 2;
+        let cy = lh_d / 2;
+        let t = 1; // light thickness (device px)
+        let ht = 2; // heavy thickness
+        let dl = (cw_d / 6).max(1); // double-line horizontal offset
+        let dv = (lh_d / 6).max(1); // double-line vertical offset
+        macro_rules! h {
+            ($y:expr, $thick:expr) => {
+                (0, $y, cw_d, $thick)
+            };
+        }
+        macro_rules! v {
+            ($x:expr, $thick:expr) => {
+                ($x, 0, $thick, lh_d)
+            };
+        }
+        macro_rules! hr {
+            ($y:expr, $thick:expr) => {
+                (cx, $y, cw_d - cx, $thick)
+            };
+        }
+        macro_rules! hl {
+            ($y:expr, $thick:expr) => {
+                (0, $y, cx, $thick)
+            };
+        }
+        macro_rules! vd {
+            ($x:expr, $thick:expr) => {
+                ($x, cy, $thick, lh_d - cy)
+            };
+        }
+        macro_rules! vu {
+            ($x:expr, $thick:expr) => {
+                ($x, 0, $thick, cy)
+            };
+        }
+        match c {
+            '\u{2500}' => vec![h!(cy, t)],
+            '\u{2501}' => vec![h!(cy, ht)],
+            '\u{2502}' => vec![v!(cx, t)],
+            '\u{2503}' => vec![v!(cx, ht)],
+            '\u{250C}' => vec![vd!(cx, t), hr!(cy, t)],
+            '\u{250D}' => vec![vd!(cx, ht), hr!(cy, t)],
+            '\u{250E}' => vec![vd!(cx, t), hr!(cy, ht)],
+            '\u{250F}' => vec![vd!(cx, ht), hr!(cy, ht)],
+            '\u{2510}' => vec![vd!(cx, t), hl!(cy, t)],
+            '\u{2511}' => vec![vd!(cx, ht), hl!(cy, t)],
+            '\u{2512}' => vec![vd!(cx, t), hl!(cy, ht)],
+            '\u{2513}' => vec![vd!(cx, ht), hl!(cy, ht)],
+            '\u{2514}' => vec![vu!(cx, t), hr!(cy, t)],
+            '\u{2515}' => vec![vu!(cx, ht), hr!(cy, t)],
+            '\u{2516}' => vec![vu!(cx, t), hr!(cy, ht)],
+            '\u{2517}' => vec![vu!(cx, ht), hr!(cy, ht)],
+            '\u{2518}' => vec![vu!(cx, t), hl!(cy, t)],
+            '\u{2519}' => vec![vu!(cx, ht), hl!(cy, t)],
+            '\u{251A}' => vec![vu!(cx, t), hl!(cy, ht)],
+            '\u{251B}' => vec![vu!(cx, ht), hl!(cy, ht)],
+            '\u{251C}' => vec![v!(cx, t), hr!(cy, t)],
+            '\u{251D}' => vec![v!(cx, ht), hr!(cy, t)],
+            '\u{251E}' => vec![vu!(cx, ht), vd!(cx, t), hr!(cy, t)],
+            '\u{251F}' => vec![vu!(cx, t), vd!(cx, ht), hr!(cy, t)],
+            '\u{2520}' => vec![v!(cx, ht), hr!(cy, ht)],
+            '\u{2521}' => vec![vu!(cx, ht), vd!(cx, t), hr!(cy, ht)],
+            '\u{2522}' => vec![vu!(cx, t), vd!(cx, ht), hr!(cy, ht)],
+            '\u{2523}' => vec![v!(cx, ht), hr!(cy, ht)],
+            '\u{2524}' => vec![v!(cx, t), hl!(cy, t)],
+            '\u{2525}' => vec![v!(cx, ht), hl!(cy, t)],
+            '\u{2526}' => vec![vu!(cx, ht), vd!(cx, t), hl!(cy, t)],
+            '\u{2527}' => vec![vu!(cx, t), vd!(cx, ht), hl!(cy, t)],
+            '\u{2528}' => vec![v!(cx, ht), hl!(cy, ht)],
+            '\u{2529}' => vec![vu!(cx, ht), vd!(cx, t), hl!(cy, ht)],
+            '\u{252A}' => vec![vu!(cx, t), vd!(cx, ht), hl!(cy, ht)],
+            '\u{252B}' => vec![v!(cx, ht), hl!(cy, ht)],
+            '\u{252C}' => vec![h!(cy, t), vd!(cx, t)],
+            '\u{252D}' => vec![hl!(cy, ht), hr!(cy, t), vd!(cx, t)],
+            '\u{252E}' => vec![hl!(cy, t), hr!(cy, ht), vd!(cx, t)],
+            '\u{252F}' => vec![h!(cy, ht), vd!(cx, t)],
+            '\u{2530}' => vec![h!(cy, t), vd!(cx, ht)],
+            '\u{2531}' => vec![hl!(cy, ht), hr!(cy, t), vd!(cx, ht)],
+            '\u{2532}' => vec![hl!(cy, t), hr!(cy, ht), vd!(cx, ht)],
+            '\u{2533}' => vec![h!(cy, ht), vd!(cx, ht)],
+            '\u{2534}' => vec![h!(cy, t), vu!(cx, t)],
+            '\u{2535}' => vec![hl!(cy, ht), hr!(cy, t), vu!(cx, t)],
+            '\u{2536}' => vec![hl!(cy, t), hr!(cy, ht), vu!(cx, t)],
+            '\u{2537}' => vec![h!(cy, ht), vu!(cx, t)],
+            '\u{2538}' => vec![h!(cy, t), vu!(cx, ht)],
+            '\u{2539}' => vec![hl!(cy, ht), hr!(cy, t), vu!(cx, ht)],
+            '\u{253A}' => vec![hl!(cy, t), hr!(cy, ht), vu!(cx, ht)],
+            '\u{253B}' => vec![h!(cy, ht), vu!(cx, ht)],
+            '\u{253C}' => vec![h!(cy, t), v!(cx, t)],
+            '\u{253D}' => vec![hl!(cy, ht), hr!(cy, t), v!(cx, t)],
+            '\u{253E}' => vec![hl!(cy, t), hr!(cy, ht), v!(cx, t)],
+            '\u{253F}' => vec![h!(cy, ht), v!(cx, t)],
+            '\u{2540}' => vec![h!(cy, t), vu!(cx, ht), vd!(cx, t)],
+            '\u{2541}' => vec![h!(cy, t), vu!(cx, t), vd!(cx, ht)],
+            '\u{2542}' => vec![h!(cy, ht), v!(cx, ht)],
+            '\u{2543}' => vec![hl!(cy, ht), hr!(cy, t), vu!(cx, ht), vd!(cx, t)],
+            '\u{2544}' => vec![hl!(cy, t), hr!(cy, ht), vu!(cx, ht), vd!(cx, t)],
+            '\u{2545}' => vec![hl!(cy, ht), hr!(cy, t), vu!(cx, t), vd!(cx, ht)],
+            '\u{2546}' => vec![hl!(cy, t), hr!(cy, ht), vu!(cx, t), vd!(cx, ht)],
+            '\u{2547}' => vec![h!(cy, ht), vu!(cx, ht), vd!(cx, t)],
+            '\u{2548}' => vec![h!(cy, ht), vu!(cx, t), vd!(cx, ht)],
+            '\u{2549}' => vec![hl!(cy, ht), hr!(cy, ht), vu!(cx, ht), vd!(cx, t)],
+            '\u{254A}' => vec![hl!(cy, ht), hr!(cy, ht), vu!(cx, t), vd!(cx, ht)],
+            '\u{254B}' => vec![h!(cy, ht), v!(cx, ht)],
+            // dash — rải đoạn 2px on / 2px off
+            '\u{2504}' | '\u{2506}' => Self::dash_h(cy, cw_d, t),
+            '\u{2505}' | '\u{2507}' => Self::dash_h(cy, cw_d, ht),
+            '\u{2508}' => Self::dash_v(cx, lh_d, t),
+            '\u{2509}' => Self::dash_v(cx, lh_d, ht),
+            // double lines
+            '\u{2550}' => vec![h!(cy - dv, t), h!(cy + dv, t)],
+            '\u{2551}' => vec![v!(cx - dl, t), v!(cx + dl, t)],
+            '\u{2552}' => vec![vd!(cx - dl, t), hr!(cy, t)],
+            '\u{2553}' => vec![vd!(cx, t), hr!(cy - dv, t), hr!(cy + dv, t)],
+            '\u{2554}' => vec![
+                vd!(cx - dl, t),
+                vd!(cx + dl, t),
+                hr!(cy - dv, t),
+                hr!(cy + dv, t),
+            ],
+            '\u{2555}' => vec![vd!(cx + dl, t), hl!(cy, t)],
+            '\u{2556}' => vec![vd!(cx, t), hl!(cy - dv, t), hl!(cy + dv, t)],
+            '\u{2557}' => vec![
+                vd!(cx - dl, t),
+                vd!(cx + dl, t),
+                hl!(cy - dv, t),
+                hl!(cy + dv, t),
+            ],
+            '\u{2558}' => vec![vu!(cx - dl, t), hr!(cy, t)],
+            '\u{2559}' => vec![vu!(cx, t), hr!(cy - dv, t), hr!(cy + dv, t)],
+            '\u{255A}' => vec![
+                vu!(cx - dl, t),
+                vu!(cx + dl, t),
+                hr!(cy - dv, t),
+                hr!(cy + dv, t),
+            ],
+            '\u{255B}' => vec![vu!(cx + dl, t), hl!(cy, t)],
+            '\u{255C}' => vec![vu!(cx, t), hl!(cy - dv, t), hl!(cy + dv, t)],
+            '\u{255D}' => vec![
+                vu!(cx - dl, t),
+                vu!(cx + dl, t),
+                hl!(cy - dv, t),
+                hl!(cy + dv, t),
+            ],
+            '\u{255E}' => vec![v!(cx - dl, t), v!(cx + dl, t), hr!(cy, t)],
+            '\u{255F}' => vec![v!(cx, t), hr!(cy - dv, t), hr!(cy + dv, t)],
+            '\u{2560}' => vec![
+                v!(cx - dl, t),
+                v!(cx + dl, t),
+                hr!(cy - dv, t),
+                hr!(cy + dv, t),
+            ],
+            '\u{2561}' => vec![v!(cx - dl, t), v!(cx + dl, t), hl!(cy, t)],
+            '\u{2562}' => vec![v!(cx, t), hl!(cy - dv, t), hl!(cy + dv, t)],
+            '\u{2563}' => vec![
+                v!(cx - dl, t),
+                v!(cx + dl, t),
+                hl!(cy - dv, t),
+                hl!(cy + dv, t),
+            ],
+            '\u{2564}' => vec![h!(cy - dv, t), h!(cy + dv, t), vd!(cx, t)],
+            '\u{2565}' => vec![h!(cy, t), vd!(cx - dl, t), vd!(cx + dl, t)],
+            '\u{2566}' => vec![
+                h!(cy - dv, t),
+                h!(cy + dv, t),
+                vd!(cx - dl, t),
+                vd!(cx + dl, t),
+            ],
+            '\u{2567}' => vec![h!(cy - dv, t), h!(cy + dv, t), vu!(cx, t)],
+            '\u{2568}' => vec![h!(cy, t), vu!(cx - dl, t), vu!(cx + dl, t)],
+            '\u{2569}' => vec![
+                h!(cy - dv, t),
+                h!(cy + dv, t),
+                vu!(cx - dl, t),
+                vu!(cx + dl, t),
+            ],
+            '\u{256A}' => vec![h!(cy, t), v!(cx, t)],
+            '\u{256B}' => vec![v!(cx - dl, t), v!(cx + dl, t), h!(cy, t)],
+            '\u{256C}' => vec![
+                v!(cx - dl, t),
+                v!(cx + dl, t),
+                h!(cy - dv, t),
+                h!(cy + dv, t),
+            ],
+            '\u{256D}' => vec![vd!(cx, t), hr!(cy, t)],
+            '\u{256E}' => vec![vd!(cx, t), hl!(cy, t)],
+            '\u{256F}' => vec![vu!(cx, t), hl!(cy, t)],
+            '\u{2570}' => vec![vu!(cx, t), hr!(cy, t)],
+            '\u{2574}' => vec![hl!(cy, t)],
+            '\u{2575}' => vec![vu!(cx, t)],
+            '\u{2576}' => vec![hr!(cy, t)],
+            '\u{2577}' => vec![vd!(cx, t)],
+            '\u{2578}' => vec![hl!(cy, ht)],
+            '\u{2579}' => vec![vu!(cx, ht)],
+            '\u{257A}' => vec![hr!(cy, ht)],
+            '\u{257B}' => vec![vd!(cx, ht)],
+            // diagonal / quadruple-dash / blocks → fallback font
+            _ => vec![],
+        }
+    }
+
+    fn dash_h(y: i32, w: i32, thick: i32) -> Vec<(i32, i32, i32, i32)> {
+        let mut out = Vec::new();
+        let mut x = 0;
+        while x < w {
+            let ew = 2.min(w - x);
+            out.push((x, y, ew, thick));
+            x += 4;
+        }
+        out
+    }
+
+    fn dash_v(x: i32, h: i32, thick: i32) -> Vec<(i32, i32, i32, i32)> {
+        let mut out = Vec::new();
+        let mut y = 0;
+        while y < h {
+            let eh = 2.min(h - y);
+            out.push((x, y, thick, eh));
+            y += 4;
+        }
+        out
+    }
+
     /// Build rects + text runs từ cells (theo display order). Trả (rects, runs).
     /// `selection_set` — nếu cell trong selection, swap fg/bg (inverse video).
     /// `hovered_url` — nếu cell trong URL range + Ctrl held, đổi fg → link color + underline.
@@ -301,10 +546,11 @@ impl TerminalElement {
         selection_set: &HashSet<LayoutPoint>,
         hovered_url: Option<&super::url::DetectedUrl>,
         ctrl_held: bool,
-    ) -> (Vec<LayoutRect>, Vec<BatchedTextRun>) {
+    ) -> (Vec<LayoutRect>, Vec<BatchedTextRun>, Vec<BoxDrawCell>) {
         use itertools::Itertools;
         let mut rects: Vec<LayoutRect> = Vec::new();
         let mut runs: Vec<BatchedTextRun> = Vec::new();
+        let mut box_draws: Vec<BoxDrawCell> = Vec::new();
         let mut current_batch: Option<BatchedTextRun> = None;
 
         // Group cells theo grid line (display order), enumerate → display line.
@@ -385,6 +631,24 @@ impl TerminalElement {
                 }
                 let zw = cell.zerowidth();
 
+                // Box-drawing chars (U+2500–U+257F) — vẽ primitive thay vì
+                // rasterize font glyph → pixel-perfect, không anti-alias blur.
+                // Chỉ vẽ primitive nếu có geometry; còn lại (diagonal, block
+                // shade) fallback font.
+                if Self::is_box_drawing(cell.c)
+                    && !Self::box_drawing_rects(cell.c, 16, 16).is_empty()
+                {
+                    if let Some(b) = current_batch.take() {
+                        runs.push(b);
+                    }
+                    box_draws.push(BoxDrawCell {
+                        point: lp,
+                        color: style.color,
+                        c: cell.c,
+                    });
+                    continue;
+                }
+
                 if let Some(b) = current_batch.as_mut() {
                     if b.can_append(&style)
                         && b.start.line == lp.line
@@ -421,7 +685,7 @@ impl TerminalElement {
         if let Some(b) = current_batch {
             runs.push(b);
         }
-        (rects, runs)
+        (rects, runs, box_draws)
     }
 
     /// Build TextRun cho cell (bold/italic/underline/strikethrough).
@@ -504,9 +768,17 @@ impl BatchedTextRun {
         window: &mut Window,
         cx: &mut App,
     ) {
+        // Snap text origin sang device pixel grid để glyph rasterize khít
+        // pixel grid (tránh subpixel blur cho box-drawing / đường kẻ).
+        let scale_factor = window.scale_factor().max(1.0);
+        let snap_px = |value: f32| -> f32 { (value * scale_factor).floor() / scale_factor };
         let pos = point(
-            origin.x + self.start.column as f32 * cell_w,
-            origin.y + self.start.line as f32 * line_h,
+            px(snap_px(f32::from(
+                origin.x + self.start.column as f32 * cell_w,
+            ))),
+            px(snap_px(f32::from(
+                origin.y + self.start.line as f32 * line_h,
+            ))),
         );
         let line = window.text_system().shape_line(
             SharedString::from(self.text.clone()),
@@ -554,18 +826,29 @@ impl Element for TerminalElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
+        // ── Device-pixel snapping ──
+        // Terminal rendering là grid-based; nếu cell metrics là float
+        // logical px, các dòng/cột nằm ở tọa độ subpixel → glyph rasterize
+        // bị anti-alias không nhất quán → đường kẻ/box-drawing nhòe.
+        // Snap line_height + cell_width sang device pixel nguyên (giống
+        // Windows Terminal AtlasEngine + Zed terminal_element).
+        let scale_factor = window.scale_factor().max(1.0);
+        let snap_px = |value: f32| -> f32 { (value * scale_factor).round() / scale_factor };
+
         // Font measure.
         let font_id = cx.text_system().resolve_font(&self.font);
         let font_px = self.font_size;
         let cell_width = if let Some(cw) = self.cell_width_override {
-            px(cw)
+            px(snap_px(cw))
         } else {
-            cx.text_system()
+            let raw = cx
+                .text_system()
                 .advance(font_id, font_px, 'm')
-                .map(|s| s.width)
-                .unwrap_or(px(8.0))
+                .map(|s| f32::from(s.width))
+                .unwrap_or(8.0);
+            px(snap_px(raw))
         };
-        let line_height = px(f32::from(font_px) * self.line_height_factor);
+        let line_height = px(snap_px(f32::from(font_px) * self.line_height_factor));
 
         // ── Padding (config) ──
         let pad_left = px(self.padding.left);
@@ -599,13 +882,21 @@ impl Element for TerminalElement {
 
         // Resize session theo bounds (race-free: chỉ khi đổi).
         // Trừ gutter_width + pad_left + pad_right khỏi chiều rộng.
-        let grid_width =
-            (f32::from(bounds.size.width) - f32::from(gutter_width) - f32::from(pad_left) - f32::from(pad_right))
-                .max(f32::from(cell_width));
-        let cols = ((grid_width / f32::from(cell_width)).floor() as u16).max(1);
+        // Tính rows/cols bằng device pixels (snap) để grid khít pixel grid.
+        let grid_width = (f32::from(bounds.size.width)
+            - f32::from(gutter_width)
+            - f32::from(pad_left)
+            - f32::from(pad_right))
+        .max(f32::from(cell_width));
+        let grid_width_device = (grid_width * scale_factor).floor().max(1.0);
+        let cell_width_device = f32::from(cell_width) * scale_factor;
+        let cols = ((grid_width_device / cell_width_device).floor() as u16).max(1);
         // Trừ pad_top + pad_bottom khỏi chiều cao.
-        let avail_height = f32::from(bounds.size.height) - f32::from(pad_top) - f32::from(pad_bottom);
-        let rows = ((avail_height / f32::from(line_height)).floor() as u16).max(1);
+        let avail_height =
+            f32::from(bounds.size.height) - f32::from(pad_top) - f32::from(pad_bottom);
+        let avail_height_device = (avail_height * scale_factor).floor().max(0.0);
+        let line_height_device = f32::from(line_height) * scale_factor;
+        let rows = ((avail_height_device / line_height_device).floor() as u16).max(1);
         if self.last_size != Some((rows, cols)) {
             self.session.update(cx, |s, _| s.resize(rows, cols));
             self.last_size = Some((rows, cols));
@@ -635,7 +926,7 @@ impl Element for TerminalElement {
 
         let selection_set = Self::build_selection_set(&selection_rects);
 
-        let (rects, runs) = Self::layout_grid(
+        let (rects, runs, box_draws) = Self::layout_grid(
             &snapshot.cells,
             &self.theme,
             &self.font,
@@ -720,7 +1011,7 @@ impl Element for TerminalElement {
                     return GutterEntry {
                         text: SharedString::from(""),
                         clock_len: 0,
-                        y: bounds.origin.y + i as f32 * line_height,
+                        y: px(snap_px(f32::from(bounds.origin.y + i as f32 * line_height))),
                     };
                 }
                 // Line number 1-based, absolute trong scrollback.
@@ -743,15 +1034,18 @@ impl Element for TerminalElement {
                 GutterEntry {
                     text: SharedString::from(text),
                     clock_len,
-                    y: bounds.origin.y + i as f32 * line_height,
+                    y: px(snap_px(f32::from(bounds.origin.y + i as f32 * line_height))),
                 }
             })
             .collect();
 
         // Grid origin = bên phải gutter + pad_left, pad_top.
+        // Snap origin sang device pixel grid để tránh subpixel jitter.
         let grid_origin = GpuiPoint {
-            x: bounds.origin.x + gutter_width + pad_left,
-            y: bounds.origin.y + pad_top,
+            x: px(snap_px(f32::from(
+                bounds.origin.x + gutter_width + pad_left,
+            ))),
+            y: px(snap_px(f32::from(bounds.origin.y + pad_top))),
         };
 
         // Sink metrics cho View (mouse/wheel).
@@ -767,6 +1061,7 @@ impl Element for TerminalElement {
             rects,
             selection_rects,
             runs,
+            box_draws,
             cursor,
             background: self.theme.bg,
             cell_width,
@@ -813,42 +1108,41 @@ impl Element for TerminalElement {
                 let clock_color = self.theme.clock_fg;
                 let ln_color = self.theme.line_number_fg;
                 for entry in &layout.gutter_entries {
-                    let runs: Vec<TextRun> = if entry.clock_len > 0 && entry.clock_len < entry.text.len() {
-                        vec![
-                            TextRun {
-                                len: entry.clock_len,
+                    let runs: Vec<TextRun> =
+                        if entry.clock_len > 0 && entry.clock_len < entry.text.len() {
+                            vec![
+                                TextRun {
+                                    len: entry.clock_len,
+                                    color: clock_color,
+                                    background_color: None,
+                                    font: self.font.clone(),
+                                    underline: None,
+                                    strikethrough: None,
+                                },
+                                TextRun {
+                                    len: entry.text.len() - entry.clock_len,
+                                    color: ln_color,
+                                    background_color: None,
+                                    font: self.font.clone(),
+                                    underline: None,
+                                    strikethrough: None,
+                                },
+                            ]
+                        } else {
+                            // Empty entry hoặc fallback — single run.
+                            vec![TextRun {
+                                len: entry.text.len(),
                                 color: clock_color,
                                 background_color: None,
                                 font: self.font.clone(),
                                 underline: None,
                                 strikethrough: None,
-                            },
-                            TextRun {
-                                len: entry.text.len() - entry.clock_len,
-                                color: ln_color,
-                                background_color: None,
-                                font: self.font.clone(),
-                                underline: None,
-                                strikethrough: None,
-                            },
-                        ]
-                    } else {
-                        // Empty entry hoặc fallback — single run.
-                        vec![TextRun {
-                            len: entry.text.len(),
-                            color: clock_color,
-                            background_color: None,
-                            font: self.font.clone(),
-                            underline: None,
-                            strikethrough: None,
-                        }]
-                    };
-                    let line = window.text_system().shape_line(
-                        entry.text.clone(),
-                        gfont_px,
-                        &runs,
-                        None,
-                    );
+                            }]
+                        };
+                    let line =
+                        window
+                            .text_system()
+                            .shape_line(entry.text.clone(), gfont_px, &runs, None);
                     let pos = GpuiPoint {
                         x: bounds.origin.x + px(4.0),
                         y: entry.y,
@@ -862,29 +1156,51 @@ impl Element for TerminalElement {
             let lh = layout.line_height;
             let font_px = self.font_size;
 
-            // Cell bg rects.
+            // Snap helper cho paint — snap tọa độ logical sang device pixel grid.
+            let scale_factor = window.scale_factor().max(1.0);
+            let snap_px = |value: f32| -> f32 { (value * scale_factor).floor() / scale_factor };
+            let ceil_px = |value: f32| -> f32 { (value * scale_factor).ceil() / scale_factor };
+
+            // Cell bg rects — snap x/y/width/height sang device pixel grid.
             for r in &layout.rects {
                 let pos = point(
-                    (origin.x + r.point.column as f32 * cw).floor(),
-                    origin.y + r.point.line as f32 * lh,
+                    px(snap_px(f32::from(origin.x + r.point.column as f32 * cw))),
+                    px(snap_px(f32::from(origin.y + r.point.line as f32 * lh))),
                 );
-                let sz = size((cw * r.num_cells as f32).ceil(), lh);
+                let sz = size(px(ceil_px(f32::from(cw * r.num_cells as f32))), lh);
                 window.paint_quad(fill(Bounds::new(pos, sz), r.color));
             }
 
             // Selection highlight (sau bg rects, trước text để text hiện trên nền).
             for r in &layout.selection_rects {
                 let pos = point(
-                    (origin.x + r.point.column as f32 * cw).floor(),
-                    origin.y + r.point.line as f32 * lh,
+                    px(snap_px(f32::from(origin.x + r.point.column as f32 * cw))),
+                    px(snap_px(f32::from(origin.y + r.point.line as f32 * lh))),
                 );
-                let sz = size((cw * r.num_cells as f32).ceil(), lh);
+                let sz = size(px(ceil_px(f32::from(cw * r.num_cells as f32))), lh);
                 window.paint_quad(fill(Bounds::new(pos, sz), r.color));
             }
 
             // Text runs.
             for run in &layout.runs {
                 run.paint(origin, cw, lh, font_px, window, cx);
+            }
+
+            // Box-drawing primitive — vẽ bằng fill rects pixel-perfect (như
+            // Windows Terminal AtlasEngine) thay vì rasterize font glyph.
+            let cw_d = (f32::from(cw) * scale_factor).round() as i32;
+            let lh_d = (f32::from(lh) * scale_factor).round() as i32;
+            for bd in &layout.box_draws {
+                let cell_x_logical = snap_px(f32::from(origin.x + bd.point.column as f32 * cw));
+                let cell_y_logical = snap_px(f32::from(origin.y + bd.point.line as f32 * lh));
+                for (rx, ry, rw, rh) in Self::box_drawing_rects(bd.c, cw_d, lh_d) {
+                    let pos = point(
+                        px(cell_x_logical + rx as f32 / scale_factor),
+                        px(cell_y_logical + ry as f32 / scale_factor),
+                    );
+                    let sz = size(px(rw as f32 / scale_factor), px(rh as f32 / scale_factor));
+                    window.paint_quad(fill(Bounds::new(pos, sz), bd.color));
+                }
             }
 
             // Cursor — vẽ theo shape (Block/Bar/Underline), có blink.
@@ -896,19 +1212,19 @@ impl Element for TerminalElement {
                 let should_paint = !self.focused || self.cursor_visible;
                 if should_paint {
                     let pos = point(
-                        (origin.x + cur.point.column as f32 * cw).floor(),
-                        origin.y + cur.point.line as f32 * lh,
+                        px(snap_px(f32::from(origin.x + cur.point.column as f32 * cw))),
+                        px(snap_px(f32::from(origin.y + cur.point.line as f32 * lh))),
                     );
                     let sz = match cur.shape {
                         CursorShape::Beam => {
                             // Thanh dọc hẹp: 20% cell width, full height.
                             let bar_w = (cw * 0.2).max(px(1.0));
-                            size(bar_w, lh)
+                            size(px(ceil_px(f32::from(bar_w))), lh)
                         }
                         CursorShape::Underline => {
                             // Gạch dưới: full width, 15% line height (min 2px).
                             let ul_h = (lh * 0.15).max(px(2.0));
-                            size(cw, ul_h)
+                            size(cw, px(ceil_px(f32::from(ul_h))))
                         }
                         CursorShape::Block => {
                             // Block đầy: full cell.
