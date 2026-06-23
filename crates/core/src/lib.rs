@@ -9,7 +9,7 @@ pub mod terminal;
 
 pub use config::{LocalShellConfig, ShellKind};
 pub use error::AppError;
-pub use terminal::{CursorBounds, SessionEvent, TerminalSession};
+pub use terminal::{CursorBounds, SessionEvent, TerminalInfo, TerminalSession};
 
 /// Result type dùng chung cho crate `core`.
 pub type Result<T> = std::result::Result<T, AppError>;

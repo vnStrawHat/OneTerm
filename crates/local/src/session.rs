@@ -18,11 +18,11 @@ use alacritty_terminal::tty::{self, Options, Shell};
 use async_channel::Receiver;
 
 use myterm2_core::config::resolve_shell;
-use myterm2_core::terminal::TerminalContent;
 use myterm2_core::terminal::mouse_encode::{
     MouseModifiers, TerminalMouseButton, encode_mouse_move, encode_mouse_press,
     encode_mouse_release, encode_wheel_event,
 };
+use myterm2_core::terminal::{TerminalContent, TerminalInfo};
 use myterm2_core::{AppError, CursorBounds, LocalShellConfig, SessionEvent, TerminalSession};
 
 use crate::event_loop::ShellEventLoop;
@@ -185,6 +185,16 @@ impl TerminalSession for LocalSession {
     fn snapshot(&self) -> TerminalContent {
         let mut term = self.term.lock();
         TerminalContent::from(&mut *term)
+    }
+
+    fn terminal_info(&self) -> TerminalInfo {
+        let term = self.term.lock();
+        TerminalInfo {
+            total_lines: term.total_lines(),
+            cursor_line: term.grid().cursor.point.line.0,
+            num_lines: term.screen_lines(),
+            display_offset: term.grid().display_offset(),
+        }
     }
 
     fn is_alt_screen(&self) -> bool {

@@ -24,7 +24,7 @@ use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 
 use async_channel::Receiver;
 use myterm2_core::terminal::{KeyMods, KeySpec, NamedKey, TerminalMouseButton, encode_key};
-use myterm2_core::{SessionEvent, TerminalSession};
+use myterm2_core::{SessionEvent, TerminalInfo, TerminalSession};
 
 use super::terminal_element::{GridMetrics, RowLayoutCache, TerminalElement};
 use super::terminal_scrollbar::TerminalScrollHandle;
@@ -169,9 +169,12 @@ impl LocalTerminalView {
                             cx.notify();
                             s.read(cx).scroll_to_bottom();
                             // Track per-line timestamps for gutter display.
-                            let snap = s.read(cx).snapshot();
-                            let total = snap.total_lines;
-                            let cur_line = snap.cursor.point.line.0;
+                            // Dùng terminal_info() thay vì snapshot() để
+                            // KHÔNG clear damage — prepaint cần damage để
+                            // biết rows nào dirty để recompute colors.
+                            let info = s.read(cx).terminal_info();
+                            let total = info.total_lines;
+                            let cur_line = info.cursor_line;
                             let now = chrono::Local::now().format("%H:%M:%S").to_string();
                             if total > view.prev_total_lines {
                                 // New lines added — push timestamps for each new line.
@@ -556,29 +559,29 @@ impl Render for LocalTerminalView {
         let metrics = self.metrics.clone();
         let view = cx.entity();
 
-        // Cập nhật scroll handle từ snapshot (frame trước — metrics đã có
-        // line_height từ prepaint lần trước).
-        let snap = session.read(cx).snapshot();
+        // Cập nhật scroll handle từ terminal_info (KHÔNG clear damage —
+        // prepaint cần damage để biết rows nào dirty để recompute colors).
+        let info = session.read(cx).terminal_info();
         let m = *metrics.borrow();
         self.scroll_handle.update(
-            snap.total_lines,
-            snap.terminal_bounds.num_lines,
-            snap.display_offset,
+            info.total_lines,
+            info.num_lines,
+            info.display_offset,
             f32::from(m.line_height),
         );
 
         // Áp dụng future_display_offset từ scrollbar drag.
         if let Some(new_offset) = self.scroll_handle.take_future_display_offset() {
-            let delta = new_offset as i32 - snap.display_offset as i32;
+            let delta = new_offset as i32 - info.display_offset as i32;
             if delta != 0 {
                 session.update(cx, |s, _| s.scroll(delta));
-                // Re-snapshot để cập nhật scroll_handle với display_offset MỚI
+                // Re-info để cập nhật scroll handle với display_offset MỚI
                 // (trong cùng frame — tránh lag 1 frame).
-                let new_snap = session.read(cx).snapshot();
+                let new_info = session.read(cx).terminal_info();
                 self.scroll_handle.update(
-                    new_snap.total_lines,
-                    new_snap.terminal_bounds.num_lines,
-                    new_snap.display_offset,
+                    new_info.total_lines,
+                    new_info.num_lines,
+                    new_info.display_offset,
                     f32::from(m.line_height),
                 );
             }
@@ -586,11 +589,11 @@ impl Render for LocalTerminalView {
 
         let theme_ref = cx.theme().clone();
 
-        // Safety sync: đảm bảo line_times.len() == snap.total_lines.
+        // Safety sync: đảm bảo line_times.len() == info.total_lines.
         // Output có thể đến giữa lần update cuối cùng của event handler và
         // frame render này → line_times bị thiếu → gutter hiện --:--:--.
         {
-            let total = snap.total_lines;
+            let total = info.total_lines;
             if self.line_times.len() != total {
                 let now = chrono::Local::now().format("%H:%M:%S").to_string();
                 while self.line_times.len() < total {
@@ -1500,7 +1503,6 @@ impl Render for LocalTerminalView {
 }
 
 // ── IME (#19) ──────────────────────────────────────────────────────────────
-use alacritty_terminal::term::TermMode;
 use gpui::{EntityInputHandler, UTF16Selection};
 
 impl EntityInputHandler for LocalTerminalView {
@@ -1521,8 +1523,8 @@ impl EntityInputHandler for LocalTerminalView {
         cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
         // Alt-screen (vd vim/less): tắt IME.
-        let mode = self.session.read(cx).snapshot().mode;
-        if mode.contains(TermMode::ALT_SCREEN) {
+        // Dùng is_alt_screen() thay vì snapshot() để không clear damage.
+        if self.session.read(cx).is_alt_screen() {
             None
         } else {
             Some(UTF16Selection {

@@ -23,5 +23,5 @@ pub use mouse_encode::{
 };
 pub use osc::{Osc133Kind, OscPayload, OscSink, decode_osc52, encode_osc52, parse_cwd_url};
 pub use palette::{TerminalPalette, resolve_color};
-pub use session::{CursorBounds, SessionEvent, TerminalSession, parse_keystroke};
+pub use session::{CursorBounds, SessionEvent, TerminalInfo, TerminalSession, parse_keystroke};
 pub use url::{link_ranges, url_at};

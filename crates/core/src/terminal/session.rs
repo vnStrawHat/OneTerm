@@ -19,6 +19,21 @@ use crate::terminal::key_encode::{KeyMods, KeySpec, NamedKey, encode_key};
 use crate::terminal::mouse_encode::TerminalMouseButton;
 use crate::terminal::osc::Osc133Kind;
 
+/// Basic terminal info — lightweight, không clear damage.
+/// Dùng cho line_times update và scroll handle mà không ảnh hưởng
+/// damage tracking cho prepaint.
+#[derive(Debug, Clone, Copy)]
+pub struct TerminalInfo {
+    /// Tổng số dòng trong scrollback + viewport.
+    pub total_lines: usize,
+    /// Cursor line (alacritty Line.0).
+    pub cursor_line: i32,
+    /// Số dòng hiển thị (viewport height).
+    pub num_lines: usize,
+    /// Display offset (0 = bottom, >0 = scrolled up).
+    pub display_offset: usize,
+}
+
 /// Sự kiện session phát ra cho UI (subscribe qua channel).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionEvent {
@@ -61,6 +76,10 @@ pub trait TerminalSession: Send + Sync + 'static {
     // ── Render ───────────────────────────────────────────────
     /// Snapshot grid để render (không giữ lock khi vẽ).
     fn snapshot(&self) -> TerminalContent;
+
+    /// Basic info (total_lines, cursor_line) — KHÔNG gọi damage()/reset_damage().
+    /// Dùng cho line_times update mà không clear damage cho prepaint.
+    fn terminal_info(&self) -> TerminalInfo;
 
     /// Alt-screen đang bật (vd vim/less) → tắt IME, phím thường qua on_key_down.
     fn is_alt_screen(&self) -> bool;
