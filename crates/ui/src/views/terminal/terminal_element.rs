@@ -891,8 +891,12 @@ impl TerminalElement {
     /// Dirty sources:
     /// - `TermDamageInfo::Full` → invalidate all.
     /// - `TermDamageInfo::Partial(lines)` → invalidate those display lines.
-    /// - Grid size change / display_offset change / selection / hover / ctrl
-    ///   change → invalidate all (global state affect per-cell styling).
+    /// - Grid size change / selection / hover / ctrl change → invalidate all
+    ///   (global state affect per-cell styling).
+    /// - **Scroll-only change** (`display_offset` đổi, không có global change
+    ///   khác) → **shift cache rows** thay vì full invalidate. Chỉ recompute
+    ///   rows mới visible (top/bottom `|delta|` rows). Giống AtlasEngine
+    ///   `_p.rows` shift khi scroll.
     #[allow(clippy::too_many_arguments)]
     fn update_row_cache(
         cache: &mut RowLayoutCache,
@@ -912,20 +916,72 @@ impl TerminalElement {
 
         // ── Detect global state changes → full invalidate ──
         let size_changed = cache.prev_grid_size != Some(grid_size);
-        let scroll_changed = cache.prev_display_offset != display_offset;
+        let scroll_delta = display_offset as i32 - cache.prev_display_offset as i32;
+        let scroll_changed = scroll_delta != 0;
         let selection_changed = cache.prev_selection != selection;
         let hover_changed = cache.prev_hovered_url.as_ref() != hovered_url;
         let ctrl_changed = cache.prev_ctrl_held != ctrl_held;
-        let global_invalidate =
-            size_changed || scroll_changed || selection_changed || hover_changed || ctrl_changed;
+        // Scroll-only: chỉ display_offset đổi, không có size/selection/hover/ctrl
+        // → shift cache rows thay vì full invalidate.
+        let scroll_only = scroll_changed
+            && !size_changed
+            && !selection_changed
+            && !hover_changed
+            && !ctrl_changed;
+        let global_invalidate = size_changed
+            || (scroll_changed && !scroll_only)
+            || selection_changed
+            || hover_changed
+            || ctrl_changed;
 
         // Ensure cache has correct number of rows.
         cache.ensure_size(num_lines);
+
+        // ── Scroll shift: di chuyển cached rows thay vì recompute tất cả ──
+        // Giống AtlasEngine `_p.rows` shift khi scroll.
+        //
+        // scroll_delta > 0 (scroll UP): rotate_right(delta)
+        //   → rows[delta..] = old rows[0..num_lines-delta] (shifted down)
+        //   → top `delta` rows stale → cần recompute (mới visible)
+        // scroll_delta < 0 (scroll DOWN): rotate_left(|delta|)
+        //   → rows[0..num_lines-|delta|] = old rows[|delta|..] (shifted up)
+        //   → bottom |delta| rows stale → cần recompute (mới visible)
+        let mut scroll_dirty: Vec<usize> = Vec::new();
+        if scroll_only {
+            if scroll_delta > 0 {
+                let delta = (scroll_delta as usize).min(num_lines);
+                if delta < num_lines {
+                    cache.rows.rotate_right(delta);
+                    scroll_dirty = (0..delta).collect();
+                } else {
+                    scroll_dirty = (0..num_lines).collect();
+                }
+            } else if scroll_delta < 0 {
+                let delta = ((-scroll_delta) as usize).min(num_lines);
+                if delta < num_lines {
+                    cache.rows.rotate_left(delta);
+                    scroll_dirty = ((num_lines - delta)..num_lines).collect();
+                } else {
+                    scroll_dirty = (0..num_lines).collect();
+                }
+            }
+        }
 
         // Determine which rows are dirty.
         let full_dirty = global_invalidate || matches!(damage, TermDamageInfo::Full);
         let dirty_set: HashSet<usize> = if full_dirty {
             (0..num_lines).collect()
+        } else if scroll_only {
+            // Scroll shift: dirty = scroll_dirty + Term::damage() partial
+            let mut ds: HashSet<usize> = scroll_dirty.into_iter().collect();
+            if let TermDamageInfo::Partial(lines) = damage {
+                for &l in lines.iter() {
+                    if l < num_lines {
+                        ds.insert(l);
+                    }
+                }
+            }
+            ds
         } else if let TermDamageInfo::Partial(lines) = damage {
             lines.iter().copied().filter(|&l| l < num_lines).collect()
         } else {
@@ -1063,26 +1119,26 @@ impl BatchedTextRun {
     /// Paint text run dùng cached `ShapedLine` (đã shape ở prepaint).
     /// Không gọi `shape_line` ở đây — skip hoàn toàn cho non-dirty rows.
     /// Giống AtlasEngine `ShapedRow` — glyph data persisted, paint chỉ read.
+    ///
+    /// `x` = grid origin X, `y` = pre-computed Y cho display line này.
+    /// Dùng `y` truyền vào thay vì `self.start.line * line_h` →
+    /// cache position-independent, hỗ trợ scroll shift.
+    #[allow(clippy::too_many_arguments)]
     fn paint(
         &self,
         shaped: &ShapedLine,
-        origin: GpuiPoint<Pixels>,
+        x: Pixels,
+        y: Pixels,
         cell_w: Pixels,
         line_h: Pixels,
         window: &mut Window,
         cx: &mut App,
     ) {
-        // Snap text origin sang device pixel grid để glyph rasterize khít
-        // pixel grid (tránh subpixel blur cho box-drawing / đường kẻ).
         let scale_factor = window.scale_factor().max(1.0);
         let snap_px = |value: f32| -> f32 { (value * scale_factor).floor() / scale_factor };
         let pos = point(
-            px(snap_px(f32::from(
-                origin.x + self.start.column as f32 * cell_w,
-            ))),
-            px(snap_px(f32::from(
-                origin.y + self.start.line as f32 * line_h,
-            ))),
+            px(snap_px(f32::from(x + self.start.column as f32 * cell_w))),
+            y,
         );
         let _ = shaped.paint(pos, line_h, TextAlign::Left, None, window, cx);
     }
@@ -1533,11 +1589,14 @@ impl Element for TerminalElement {
             let lh_d = (f32::from(lh) * scale_factor).round() as i32;
 
             // Cell bg rects — per row.
+            // Dùng loop index `i` cho Y position (không dùng `r.point.line`)
+            // → cache position-independent, hỗ trợ scroll shift.
             for i in 0..num_lines {
+                let y = origin.y + px(snap_px(f32::from(i as f32 * lh)));
                 for r in &cache.rows[i].rects {
                     let pos = point(
                         px(snap_px(f32::from(origin.x + r.point.column as f32 * cw))),
-                        px(snap_px(f32::from(origin.y + r.point.line as f32 * lh))),
+                        y,
                     );
                     let sz = size(px(ceil_px(f32::from(cw * r.num_cells as f32))), lh);
                     window.paint_quad(fill(Bounds::new(pos, sz), r.color));
@@ -1559,21 +1618,24 @@ impl Element for TerminalElement {
             // Text runs — per row.
             // Dùng cached ShapedLine (đã shape ở prepaint) — skip shape_line
             // hoàn toàn cho non-dirty rows. Giống AtlasEngine `ShapedRow` paint.
+            // Dùng loop index `i` cho Y position → cache position-independent.
             for i in 0..num_lines {
+                let y = origin.y + px(snap_px(f32::from(i as f32 * lh)));
                 let row = &cache.rows[i];
                 for (j, run) in row.runs.iter().enumerate() {
                     if let Some(shaped) = row.shaped_lines.get(j).and_then(|s| s.as_ref()) {
-                        run.paint(shaped, origin, cw, lh, window, cx);
+                        run.paint(shaped, origin.x, y, cw, lh, window, cx);
                     }
                     run_count += 1;
                 }
             }
 
             // Box-drawing primitive — per row.
+            // Dùng loop index `i` cho Y position → cache position-independent.
             for i in 0..num_lines {
+                let cell_y_logical = snap_px(f32::from(origin.y + i as f32 * lh));
                 for bd in &cache.rows[i].box_draws {
                     let cell_x_logical = snap_px(f32::from(origin.x + bd.point.column as f32 * cw));
-                    let cell_y_logical = snap_px(f32::from(origin.y + bd.point.line as f32 * lh));
                     for (rx, ry, rw, rh) in Self::box_drawing_rects(bd.c, cw_d, lh_d) {
                         let pos = point(
                             px(cell_x_logical + rx as f32 / scale_factor),
