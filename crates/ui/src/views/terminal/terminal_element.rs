@@ -530,7 +530,7 @@ impl TerminalElement {
         }
         macro_rules! hl {
             ($y:expr, $thick:expr) => {
-                (0, $y, cx, $thick)
+                (0, $y, (cx + $thick).min(cw_d), $thick)
             };
         }
         macro_rules! vd {
@@ -540,7 +540,7 @@ impl TerminalElement {
         }
         macro_rules! vu {
             ($x:expr, $thick:expr) => {
-                ($x, 0, $thick, cy)
+                ($x, 0, $thick, (cy + $thick).min(lh_d))
             };
         }
         match c {
