@@ -1174,26 +1174,19 @@ impl BatchedTextRun {
     /// Không gọi `shape_line` ở đây — skip hoàn toàn cho non-dirty rows.
     /// Giống AtlasEngine `ShapedRow` — glyph data persisted, paint chỉ read.
     ///
-    /// `x` = grid origin X, `y` = pre-computed Y cho display line này.
-    /// Dùng `y` truyền vào thay vì `self.start.line * line_h` →
-    /// cache position-independent, hỗ trợ scroll shift.
+    /// `x`, `y` đã là device-pixel snapped logical coords — không re-snap.
     #[allow(clippy::too_many_arguments)]
     fn paint(
         &self,
         shaped: &ShapedLine,
         x: Pixels,
         y: Pixels,
-        cell_w: Pixels,
+        _cell_w: Pixels,
         line_h: Pixels,
         window: &mut Window,
         cx: &mut App,
     ) {
-        let scale_factor = window.scale_factor().max(1.0);
-        let snap_px = |value: f32| -> f32 { (value * scale_factor).floor() / scale_factor };
-        let pos = point(
-            px(snap_px(f32::from(x + self.start.column as f32 * cell_w))),
-            y,
-        );
+        let pos = point(x, y);
         let _ = shaped.paint(pos, line_h, TextAlign::Left, None, window, cx);
     }
 }
@@ -1636,18 +1629,31 @@ impl Element for TerminalElement {
             let cw = layout.cell_width;
             let lh = layout.line_height;
 
-            // Snap helper cho paint — snap tọa độ logical sang device pixel grid.
+            // Device-pixel grid coordinates — đảm bảo các cell liền kề khít
+            // nhau chính xác, không gap/overlap do round/floor mismatch.
+            // Mỗi cell có origin + col*cw_d / row*lh_d là device-pixel integer,
+            // convert ngược sang logical khi gọi paint_quad.
             let scale_factor = window.scale_factor().max(1.0);
-            let snap_px = |value: f32| -> f32 { (value * scale_factor).floor() / scale_factor };
-            let ceil_px = |value: f32| -> f32 { (value * scale_factor).ceil() / scale_factor };
+            let origin_x_d = (f32::from(origin.x) * scale_factor).round() as i32;
+            let origin_y_d = (f32::from(origin.y) * scale_factor).round() as i32;
+            let cw_d = (f32::from(cw) * scale_factor).round() as i32;
+            let lh_d = (f32::from(lh) * scale_factor).round() as i32;
+            let cell_x = |col: i32| -> Pixels {
+                px((origin_x_d + col * cw_d) as f32 / scale_factor)
+            };
+            let cell_y = |row: i32| -> Pixels {
+                px((origin_y_d + row * lh_d) as f32 / scale_factor)
+            };
+            let run_w = |cells: usize| -> Pixels {
+                px((cells as i32 * cw_d) as f32 / scale_factor)
+            };
+            let line_h_px = px(lh_d as f32 / scale_factor);
 
             // ── Per-row paint: đọc từ RowLayoutCache ──
             // Giống AtlasEngine `_p.rows` — iterate cached ShapedRow[],
             // paint rects + runs + box_draws cho mỗi row.
             let num_lines = layout.num_lines;
             let cache = self.row_cache.borrow();
-            let cw_d = (f32::from(cw) * scale_factor).round() as i32;
-            let lh_d = (f32::from(lh) * scale_factor).round() as i32;
 
             // Cell bg rects — per row.
             // Dùng loop index `i` cho Y position (không dùng `r.point.line`)
@@ -1656,13 +1662,10 @@ impl Element for TerminalElement {
             // trong layout_row → 1 paint_quad per contiguous run thay vì 1 per cell.
             let mut bg_rect_count: usize = 0;
             for i in 0..num_lines {
-                let y = origin.y + px(snap_px(f32::from(i as f32 * lh)));
+                let y = cell_y(i as i32);
                 for r in &cache.rows[i].rects {
-                    let pos = point(
-                        px(snap_px(f32::from(origin.x + r.point.column as f32 * cw))),
-                        y,
-                    );
-                    let sz = size(px(ceil_px(f32::from(cw * r.num_cells as f32))), lh);
+                    let pos = point(cell_x(r.point.column), y);
+                    let sz = size(run_w(r.num_cells), line_h_px);
                     window.paint_quad(fill(Bounds::new(pos, sz), r.color));
                     quad_count += 1;
                     bg_rect_count += 1;
@@ -1671,11 +1674,8 @@ impl Element for TerminalElement {
 
             // Selection highlight (sau bg rects, trước text để text hiện trên nền).
             for r in &layout.selection_rects {
-                let pos = point(
-                    px(snap_px(f32::from(origin.x + r.point.column as f32 * cw))),
-                    px(snap_px(f32::from(origin.y + r.point.line as f32 * lh))),
-                );
-                let sz = size(px(ceil_px(f32::from(cw * r.num_cells as f32))), lh);
+                let pos = point(cell_x(r.point.column), cell_y(r.point.line));
+                let sz = size(run_w(r.num_cells), line_h_px);
                 window.paint_quad(fill(Bounds::new(pos, sz), r.color));
                 quad_count += 1;
             }
@@ -1685,11 +1685,12 @@ impl Element for TerminalElement {
             // hoàn toàn cho non-dirty rows. Giống AtlasEngine `ShapedRow` paint.
             // Dùng loop index `i` cho Y position → cache position-independent.
             for i in 0..num_lines {
-                let y = origin.y + px(snap_px(f32::from(i as f32 * lh)));
+                let y = cell_y(i as i32);
                 let row = &cache.rows[i];
                 for (j, run) in row.runs.iter().enumerate() {
                     if let Some(shaped) = row.shaped_lines.get(j).and_then(|s| s.as_ref()) {
-                        run.paint(shaped, origin.x, y, cw, lh, window, cx);
+                        let x = cell_x(run.start.column);
+                        run.paint(shaped, x, y, cw, lh, window, cx);
                     }
                     run_count += 1;
                 }
@@ -1698,13 +1699,13 @@ impl Element for TerminalElement {
             // Box-drawing primitive — per row.
             // Dùng loop index `i` cho Y position → cache position-independent.
             for i in 0..num_lines {
-                let cell_y_logical = snap_px(f32::from(origin.y + i as f32 * lh));
+                let cell_y_logical = cell_y(i as i32);
                 for bd in &cache.rows[i].box_draws {
-                    let cell_x_logical = snap_px(f32::from(origin.x + bd.point.column as f32 * cw));
+                    let cell_x_logical = cell_x(bd.point.column);
                     for (rx, ry, rw, rh) in Self::box_drawing_rects(bd.c, cw_d, lh_d) {
                         let pos = point(
-                            px(cell_x_logical + rx as f32 / scale_factor),
-                            px(cell_y_logical + ry as f32 / scale_factor),
+                            px(f32::from(cell_x_logical) + rx as f32 / scale_factor),
+                            px(f32::from(cell_y_logical) + ry as f32 / scale_factor),
                         );
                         let sz = size(px(rw as f32 / scale_factor), px(rh as f32 / scale_factor));
                         window.paint_quad(fill(Bounds::new(pos, sz), bd.color));
@@ -1722,31 +1723,30 @@ impl Element for TerminalElement {
                 // - Focus + blink off → luôn vẽ.
                 let should_paint = !self.focused || self.cursor_visible;
                 if should_paint {
-                    let pos = point(
-                        px(snap_px(f32::from(origin.x + cur.point.column as f32 * cw))),
-                        px(snap_px(f32::from(origin.y + cur.point.line as f32 * lh))),
-                    );
+                    let pos = point(cell_x(cur.point.column), cell_y(cur.point.line));
                     let sz = match cur.shape {
                         CursorShape::Beam => {
                             // Thanh dọc: 20% cell width, full height.
                             // Snap width lên device pixel để tránh subpixel blur.
                             let bar_w = (cw * 0.2).max(px(1.0));
-                            size(px(ceil_px(f32::from(bar_w))), lh)
+                            let bar_w_d = (f32::from(bar_w) * scale_factor).ceil().max(1.0) as i32;
+                            size(px(bar_w_d as f32 / scale_factor), line_h_px)
                         }
                         CursorShape::Underline => {
                             // Gạch dưới: full width, 15% line height (min 2px).
                             let ul_h = (lh * 0.15).max(px(2.0));
-                            size(px(ceil_px(f32::from(cw))), px(ceil_px(f32::from(ul_h))))
+                            let ul_h_d = (f32::from(ul_h) * scale_factor).ceil().max(2.0) as i32;
+                            size(run_w(1), px(ul_h_d as f32 / scale_factor))
                         }
                         CursorShape::Block => {
                             // Block đầy: full cell — snap width lên device pixel
                             // để khít grid, không subpixel gap (giống Windows Terminal).
-                            size(px(ceil_px(f32::from(cw))), lh)
+                            size(run_w(1), line_h_px)
                         }
                         CursorShape::HollowBlock => {
                             // Hollow block: vẽ border (không fill) — fallback
                             // về block đầy cho đơn giản.
-                            size(px(ceil_px(f32::from(cw))), lh)
+                            size(run_w(1), line_h_px)
                         }
                         CursorShape::Hidden => return,
                     };
