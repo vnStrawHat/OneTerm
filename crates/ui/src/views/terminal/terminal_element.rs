@@ -788,19 +788,6 @@ impl TerminalElement {
             '\u{2579}' => vec![vu!(cx, ht)],
             '\u{257A}' => vec![hr!(cy, ht)],
             '\u{257B}' => vec![vd!(cx, ht)],
-            // Diagonals (U+2571–U+2573). Dùng per-row rects để tránh font
-            // glyph làm đứt/AA-blur, đặc biệt khi lặp liên tiếp trong ASCII
-            // art fonts (vd. slick font của OpenTUI).
-            // ╱ U+2571 rising (bottom-left → top-right).
-            '\u{2571}' => Self::diag_line(cw_d, lh_d, t, true),
-            // ╲ U+2572 falling (top-left → bottom-right).
-            '\u{2572}' => Self::diag_line(cw_d, lh_d, t, false),
-            // ╳ U+2573 cross (cả hai đường chéo).
-            '\u{2573}' => {
-                let mut v = Self::diag_line(cw_d, lh_d, t, true);
-                v.extend(Self::diag_line(cw_d, lh_d, t, false));
-                v
-            }
             // ── Geometric shapes used as TUI bars ──
             // ▬ U+25AC Black Medium Small Square — often repeated to draw
             // solid horizontal bars/underlines.  Drawn primitive so adjacent
@@ -957,30 +944,6 @@ impl TerminalElement {
             _ => {}
         }
         out
-    }
-
-    /// Diagonal light line (U+2571 / U+2572 / U+2573) approximated by
-    /// per-row pixel rects. `rising=true` = ╱ (bottom-left → top-right),
-    /// `false` = ╲ (top-left → bottom-right). Stroke width = `t` để khớp
-    /// với Windows Terminal AtlasEngine `lightLineWidth = cellWidth/6`.
-    fn diag_line(cw_d: i32, lh_d: i32, t: i32, rising: bool) -> Vec<(i32, i32, i32, i32)> {
-        if cw_d <= 0 || lh_d <= 0 {
-            return vec![];
-        }
-        let mut v = Vec::with_capacity(lh_d as usize);
-        let denom = (lh_d - 1).max(1);
-        let half = t / 2;
-        for y in 0..lh_d {
-            let ideal = if rising {
-                (cw_d - 1) * (lh_d - 1 - y) / denom
-            } else {
-                (cw_d - 1) * y / denom
-            };
-            let x = (ideal - half).max(0);
-            let w = t.min(cw_d - x);
-            v.push((x, y, w, t));
-        }
-        v
     }
 
     fn dash_h(y: i32, w: i32, thick: i32) -> Vec<(i32, i32, i32, i32)> {
