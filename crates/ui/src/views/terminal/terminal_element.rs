@@ -776,10 +776,15 @@ impl TerminalElement {
                 (0, y_out, cw_d, t),
                 (0, y_in, cw_d, t),
             ],
-            '\u{256D}' => vec![vd!(cx, t), hr!(cy, t)],
-            '\u{256E}' => vec![vd!(cx, t), hl!(cy, t)],
-            '\u{256F}' => vec![vu!(cx, t), hl!(cy, t)],
-            '\u{2570}' => vec![vu!(cx, t), hr!(cy, t)],
+            // Light arcs (U+256D–U+2570) — Windows Terminal vẽ bằng
+            // rounded-rectangle hollow với cornerRadius = lightLineWidth*5,
+            // tạo góc bo cong thay vì góc vuông.
+            // Giữ lại hai line thẳng để chúng tiếp xúc với đường kẻ láng giềng;
+            // vẽ thêm một phần ellipse để tạo cong ở góc ngoài.
+            '\u{256D}' => Self::arc_corner(cw_d, lh_d, t, false, true),
+            '\u{256E}' => Self::arc_corner(cw_d, lh_d, t, true, true),
+            '\u{256F}' => Self::arc_corner(cw_d, lh_d, t, true, false),
+            '\u{2570}' => Self::arc_corner(cw_d, lh_d, t, false, false),
             '\u{2574}' => vec![hl!(cy, t)],
             '\u{2575}' => vec![vu!(cx, t)],
             '\u{2576}' => vec![hr!(cy, t)],
@@ -944,6 +949,56 @@ impl TerminalElement {
             _ => {}
         }
         out
+    }
+
+    /// Light arc corners U+256D–U+2570. Mô phỏng Windows Terminal
+    /// `Shape_RoundRect` với cornerRadius = lightLineWidth * 5: vẽ hai cạnh
+    /// thẳng tiếp giáp neighbor cells + một phần ellipse quarter để bo cong góc.
+    ///
+    /// `right` = góc quay về phía bên phải (true cho ╮╯, false cho ╭╰).
+    /// `top`   = góc quay về phía trên (true cho ╭╮, false cho ╰╯).
+    fn arc_corner(
+        cw_d: i32,
+        lh_d: i32,
+        t: i32,
+        right: bool,
+        top: bool,
+    ) -> Vec<(i32, i32, i32, i32)> {
+        if cw_d <= 0 || lh_d <= 0 || t <= 0 {
+            return vec![];
+        }
+        let cx = cw_d / 2;
+        let cy = lh_d / 2;
+        let mut v = Vec::with_capacity((lh_d + cw_d) as usize);
+        // Cạnh thẳng nối với láng giềng: dọc (vu/vd) + ngang (hr/hl).
+        // Vì t = cellWidth/6, cạnh dọc/ngang chiếm nửa cell từ tâm ra viền.
+        if top {
+            v.push((cx, 0, t, cy.max(t))); // cạnh đứng nửa trên
+        } else {
+            v.push((cx, cy, t, (lh_d - cy).max(t))); // cạnh đứng nửa dưới
+        }
+        if right {
+            v.push((cx, cy, (cw_d - cx).max(t), t)); // cạnh ngang nửa phải
+        } else {
+            v.push((0, cy, cx.max(t), t)); // cạnh ngang nửa trái
+        }
+        // Góc bo cong: vẽ quarter ellipse ngoài (phần xa tâm nhất).
+        // Bán kính ellipse = min(cell) để vừa khít trong cell.
+        let r = cw_d.min(lh_d) / 2;
+        let r2 = r * r;
+        for y in 0..lh_d {
+            let dy = if top { y } else { lh_d - 1 - y };
+            for x in 0..cw_d {
+                let dx = if right { x } else { cw_d - 1 - x };
+                // Điểm (dx, dy) trong hệ tọa độ góc bo (gốc 0,0 ở góc ngoài).
+                // Nằm trong vùng cong ngoài: dx^2 + dy^2 <= r^2 và ngoài đường
+                // thẳng nối tâm (dx + dy >= r).
+                if dx * dx + dy * dy <= r2 && dx + dy > r {
+                    v.push((x, y, 1, 1));
+                }
+            }
+        }
+        v
     }
 
     fn dash_h(y: i32, w: i32, thick: i32) -> Vec<(i32, i32, i32, i32)> {
