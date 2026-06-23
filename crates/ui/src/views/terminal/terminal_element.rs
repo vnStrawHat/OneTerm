@@ -151,6 +151,9 @@ pub(crate) struct FrameStats {
     pub shape_line_calls: usize,
     /// Số text runs painted trong paint() — tất cả dùng cached ShapedLine.
     pub text_run_paints: usize,
+    /// Số background rects sau khi coalesce adjacent same-color cells.
+    /// AtlasEngine: 1 quad per contiguous same-color run thay vì 1 per cell.
+    pub bg_rect_count: usize,
     /// Frame counter — log mỗi 60 frame.
     pub frame_count: u64,
 }
@@ -785,24 +788,33 @@ impl TerminalElement {
             let _is_selected = selection_set.contains(&lp);
 
             // Nền khác default → rect.
+            // AtlasEngine: merge adjacent same-color cells thành 1 quad
+            // để giảm paint_quad calls (coalescing).
             if !is_default_background_color(&cell.bg) || cell.flags.contains(Flags::INVERSE) {
                 let col = point.column.0 as i32;
-                if let Some(last) = rects.last_mut() {
+                let merged = if let Some(last) = rects.last_mut() {
                     if last.color == bg
                         && last.point.line == display_line
                         && last.point.column + last.num_cells as i32 == col
                     {
                         last.num_cells += 1;
+                        true
+                    } else {
+                        false
                     }
+                } else {
+                    false
+                };
+                if !merged {
+                    rects.push(LayoutRect {
+                        point: LayoutPoint {
+                            line: display_line,
+                            column: col,
+                        },
+                        num_cells: 1,
+                        color: bg,
+                    });
                 }
-                rects.push(LayoutRect {
-                    point: LayoutPoint {
-                        line: display_line,
-                        column: col,
-                    },
-                    num_cells: 1,
-                    color: bg,
-                });
             }
 
             if Self::is_blank(cell) {
@@ -1591,6 +1603,9 @@ impl Element for TerminalElement {
             // Cell bg rects — per row.
             // Dùng loop index `i` cho Y position (không dùng `r.point.line`)
             // → cache position-independent, hỗ trợ scroll shift.
+            // AtlasEngine: adjacent same-color cells đã được coalesce thành 1 rect
+            // trong layout_row → 1 paint_quad per contiguous run thay vì 1 per cell.
+            let mut bg_rect_count: usize = 0;
             for i in 0..num_lines {
                 let y = origin.y + px(snap_px(f32::from(i as f32 * lh)));
                 for r in &cache.rows[i].rects {
@@ -1601,6 +1616,7 @@ impl Element for TerminalElement {
                     let sz = size(px(ceil_px(f32::from(cw * r.num_cells as f32))), lh);
                     window.paint_quad(fill(Bounds::new(pos, sz), r.color));
                     quad_count += 1;
+                    bg_rect_count += 1;
                 }
             }
 
@@ -1695,15 +1711,17 @@ impl Element for TerminalElement {
             {
                 let mut cache = self.row_cache.borrow_mut();
                 cache.stats.paint_quad_calls = quad_count;
+                cache.stats.bg_rect_count = bg_rect_count;
                 cache.stats.text_run_paints = run_count;
                 cache.stats.frame_count += 1;
                 if cache.stats.frame_count % 60 == 0 {
                     eprintln!(
-                        "[TerminalElement] frame={} lines={} dirty={} quads={} shapes={} runs={}",
+                        "[TerminalElement] frame={} lines={} dirty={} quads={} bg_rects={} shapes={} runs={}",
                         cache.stats.frame_count,
                         cache.stats.total_lines,
                         cache.stats.dirty_lines,
                         cache.stats.paint_quad_calls,
+                        cache.stats.bg_rect_count,
                         cache.stats.shape_line_calls,
                         cache.stats.text_run_paints,
                     );
