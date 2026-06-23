@@ -22,6 +22,7 @@ use gpui::{
 use gpui_component::ActiveTheme as _;
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 
+use async_channel::Receiver;
 use myterm2_core::terminal::{KeyMods, KeySpec, NamedKey, TerminalMouseButton, encode_key};
 use myterm2_core::{SessionEvent, TerminalSession};
 
@@ -76,6 +77,42 @@ pub struct LocalTerminalView {
 }
 
 impl LocalTerminalView {
+    /// Drain tất cả pending events trong channel — coalesce Output events,
+    /// xử lý Clipboard/Bell/Title ngay. Dùng cho frame coalescing:
+    /// drain → debounce 1ms → drain lại → notify 1 lần.
+    fn drain_coalesced_events(
+        rx: &Receiver<SessionEvent>,
+        this: &gpui::WeakEntity<Self>,
+        cx: &mut gpui::AsyncApp,
+    ) {
+        loop {
+            match rx.try_recv() {
+                Ok(SessionEvent::Output) => {} // coalesced
+                Ok(SessionEvent::Clipboard(Some(t))) => {
+                    let _ = this.update(cx, |_, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(t));
+                    });
+                }
+                Ok(SessionEvent::Clipboard(None)) => {
+                    let _ = this.update(cx, |_, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
+                    });
+                }
+                Ok(SessionEvent::Bell) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.has_bell = true;
+                        cx.notify();
+                    });
+                }
+                Ok(_) => {
+                    // Title/Cwd/Exited/Closed → notify.
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                }
+                Err(_) => break,
+            }
+        }
+    }
+
     /// Tạo view từ session entity. Subscribe events → re-render task.
     pub fn new(
         session: Entity<Box<dyn TerminalSession>>,
@@ -111,44 +148,25 @@ impl LocalTerminalView {
                         });
                     }
                     SessionEvent::Output => {
-                        // Scroll to bottom + Notify 1 lần rồi drain tất cả
-                        // Output event đang chờ trong queue → tránh re-render
-                        // từng event khi `cat` file lớn (hàng nghìn Wakeup).
-                        let _ = this.update(cx, |_, cx| cx.notify());
+                        // ── Frame coalescing (AtlasEngine-style) ──
+                        // Drain tất cả pending events, debounce 1ms để catch
+                        // rapid successive events, drain lại, rồi notify 1 lần.
+                        // → single render cho tất cả batched output, giảm render
+                        // frequency khi `cat` file lớn hoặc rapid PTY output.
                         let s = session_for_spawn.clone();
-                        // Drain coalesced Output events BEFORE updating line_times,
-                        // để snapshot bắt được tất cả output đã dồn trong queue.
-                        loop {
-                            match rx.try_recv() {
-                                Ok(SessionEvent::Output) => {} // coalesced
-                                Ok(SessionEvent::Clipboard(Some(t))) => {
-                                    let _ = this.update(cx, |_, cx| {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(t));
-                                    });
-                                }
-                                Ok(SessionEvent::Clipboard(None)) => {
-                                    let _ = this.update(cx, |_, cx| {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(
-                                            String::new(),
-                                        ));
-                                    });
-                                }
-                                Ok(SessionEvent::Bell) => {
-                                    let _ = this.update(cx, |view, cx| {
-                                        view.has_bell = true;
-                                        cx.notify();
-                                    });
-                                }
-                                Ok(_) => {
-                                    // Title/Cwd/Exited/Closed → notify.
-                                    let _ = this.update(cx, |_, cx| cx.notify());
-                                }
-                                Err(_) => break,
-                            }
-                        }
-                        // NOW update line_times + scroll_to_bottom based on
-                        // final snapshot (sau khi drain hết coalesced output).
+                        // Drain lần 1 — catch tất cả pending events.
+                        Self::drain_coalesced_events(&rx, &this, cx);
+                        // Debounce 1ms — catch events arrive ngay sau drain.
+                        // 1ms imperceptible cho interactive, nhưng batch được
+                        // nhiều rapid outputs hơn (vd network terminal).
+                        cx.background_executor()
+                            .timer(Duration::from_millis(1))
+                            .await;
+                        // Drain lần 2 — catch events arrive trong debounce window.
+                        Self::drain_coalesced_events(&rx, &this, cx);
+                        // NOW notify + update — single render cho tất cả batched output.
                         let _ = this.update(cx, |view, cx| {
+                            cx.notify();
                             s.read(cx).scroll_to_bottom();
                             // Track per-line timestamps for gutter display.
                             let snap = s.read(cx).snapshot();

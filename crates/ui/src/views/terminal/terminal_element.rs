@@ -154,6 +154,9 @@ pub(crate) struct FrameStats {
     /// Số background rects sau khi coalesce adjacent same-color cells.
     /// AtlasEngine: 1 quad per contiguous same-color run thay vì 1 per cell.
     pub bg_rect_count: usize,
+    /// Số `line_hash` calls trong update_row_cache — chỉ cursor line
+    /// thay vì tất cả non-dirty rows.
+    pub hash_calls: usize,
     /// Frame counter — log mỗi 60 frame.
     pub frame_count: u64,
 }
@@ -779,13 +782,22 @@ impl TerminalElement {
             }
             prev_had_extras = matches!(cell.zerowidth(), Some(c) if !c.is_empty());
 
-            let (fg, bg) = Self::cell_colors(cell, theme);
-
             let lp = LayoutPoint {
                 line: display_line,
                 column: point.column.0 as i32,
             };
             let _is_selected = selection_set.contains(&lp);
+
+            // ── AtlasEngine color bitmap caching ──
+            // Skip cell_colors() cho blank cells (space + default bg +
+            // no flags) — không cần fg hay bg → skip resolve_cell_color()
+            // + ensure_minimum_contrast() + DIM alpha.
+            // Tiết kiệm ~80% color resolution cho dòng prompt trống.
+            if Self::is_blank(cell) {
+                continue;
+            }
+
+            let (fg, bg) = Self::cell_colors(cell, theme);
 
             // Nền khác default → rect.
             // AtlasEngine: merge adjacent same-color cells thành 1 quad
@@ -817,10 +829,6 @@ impl TerminalElement {
                 }
             }
 
-            if Self::is_blank(cell) {
-                continue;
-            }
-
             let mut style = Self::cell_style(cell, fg, base_font);
             // Ctrl+hover URL highlight.
             if ctrl_held {
@@ -841,15 +849,34 @@ impl TerminalElement {
             let zw = cell.zerowidth();
 
             // Box-drawing chars — vẽ primitive thay vì font glyph.
+            // AtlasEngine: text run không bị interrupt bởi box-drawing —
+            // insert space placeholder vào batch để giữ position
+            // continuity, giảm số runs → giảm shape_line calls.
+            // Box-drawing primitive vẽ trên cùng, che space invisible.
             if Self::is_box_drawing(cell.c) && !Self::box_drawing_rects(cell.c, 16, 16).is_empty() {
-                if let Some(b) = current_batch.take() {
-                    runs.push(b);
-                }
                 box_draws.push(BoxDrawCell {
                     point: lp,
                     color: style.color,
                     c: cell.c,
                 });
+                // Insert space vào current batch (hoặc tạo batch mới)
+                // để giữ position continuity.
+                if let Some(b) = current_batch.as_mut() {
+                    if b.start.column + b.cell_count as i32 == lp.column {
+                        b.append_char(' ');
+                    } else {
+                        // Column gap — flush và tạo batch mới với space.
+                        let old = current_batch.take().unwrap();
+                        runs.push(old);
+                        let mut sp = style;
+                        sp.len = ' '.len_utf8();
+                        current_batch = Some(BatchedTextRun::new(lp, ' ', sp));
+                    }
+                } else {
+                    let mut sp = style;
+                    sp.len = ' '.len_utf8();
+                    current_batch = Some(BatchedTextRun::new(lp, ' ', sp));
+                }
                 continue;
             }
 
@@ -923,6 +950,7 @@ impl TerminalElement {
         theme: &TerminalTheme,
         base_font: &Font,
         selection_set: &HashSet<LayoutPoint>,
+        cursor_display_line: i32,
     ) {
         use itertools::Itertools;
 
@@ -1003,7 +1031,7 @@ impl TerminalElement {
         // Update stats.
         cache.stats.total_lines = num_lines;
         cache.stats.dirty_lines = dirty_set.len();
-
+        cache.stats.hash_calls = 0;
         // ── Group cells by display line ──
         // cells trong snapshot là display order (top → bottom),
         // group bằng grid line (point.line).
@@ -1017,13 +1045,22 @@ impl TerminalElement {
 
             // ── Dirty detection: damage + content hash ──
             // Term::damage() không track input()/write_at_cursor(),
-            // nên phải hash thêm để detect cell writes bị miss.
+            // nhưng những thay đổi này chỉ xảy ra tại dòng cursor.
+            // Chỉ hash cursor display line thay vì hash tất cả non-dirty
+            // rows mỗi frame → giảm từ ~24 hash ops/frame xuống ≤1.
             let is_dirty = if dirty_set.contains(&display_line) {
                 true
-            } else {
-                // Hash content và so với cache.
+            } else if display_line as i32 == cursor_display_line
+                && cursor_display_line >= 0
+                && cursor_display_line < num_lines as i32
+            {
+                // Hash cursor line — fallback cho input()/write_at_cursor().
+                cache.stats.hash_calls += 1;
                 let hashed = Self::line_hash(&line_vec);
                 hashed != cache.rows[display_line].prev_hash
+            } else {
+                // Non-dirty, non-cursor row → trust cache, skip hash.
+                false
             };
 
             if is_dirty {
@@ -1309,6 +1346,12 @@ impl Element for TerminalElement {
 
         let selection_set = Self::build_selection_set(&selection_rects);
 
+        // Cursor display line — dùng cho content hash fallback.
+        // Term::damage() không track input()/write_at_cursor() — những thay
+        // đổi này chỉ xảy ra tại dòng cursor. Chỉ hash dòng đó thay vì
+        // hash tất cả non-dirty rows mỗi frame.
+        let cursor_display_line = snapshot.cursor.point.line.0 + display_offset as i32;
+
         // ── Update row cache: chỉ recompute dirty rows ──
         // Giống AtlasEngine `_p.invalidatedRows` — skip layout cho non-dirty rows.
         // Cache persists qua frames trong Rc<RefCell<>>.
@@ -1325,6 +1368,7 @@ impl Element for TerminalElement {
             &self.theme,
             &self.font,
             &selection_set,
+            cursor_display_line,
         );
 
         // ── Fill cached ShapedLine cho runs chưa được shape ──
@@ -1716,7 +1760,7 @@ impl Element for TerminalElement {
                 cache.stats.frame_count += 1;
                 if cache.stats.frame_count % 60 == 0 {
                     eprintln!(
-                        "[TerminalElement] frame={} lines={} dirty={} quads={} bg_rects={} shapes={} runs={}",
+                        "[TerminalElement] frame={} lines={} dirty={} quads={} bg_rects={} shapes={} runs={} hashes={}",
                         cache.stats.frame_count,
                         cache.stats.total_lines,
                         cache.stats.dirty_lines,
@@ -1724,6 +1768,7 @@ impl Element for TerminalElement {
                         cache.stats.bg_rect_count,
                         cache.stats.shape_line_calls,
                         cache.stats.text_run_paints,
+                        cache.stats.hash_calls,
                     );
                 }
             }
