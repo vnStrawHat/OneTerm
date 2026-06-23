@@ -489,6 +489,12 @@ impl TerminalElement {
     /// Trả list rect (x, y, w, h) tính bằng **device pixel** relative tới
     /// cell origin. Caller convert sang logical px khi paint.
     /// Giống AtlasEngine: light = 1 device px, heavy = 2, double = 2 line.
+    /// Be day heavy line (device px). Tach ham de path AA goc bo tron dung
+    /// chung cong thuc voi `box_drawing_rects`.
+    fn heavy_thickness(cw_d: i32) -> i32 {
+        (cw_d as f32 / 3.0).round().max(2.0) as i32 + 1
+    }
+
     fn box_drawing_rects(c: char, cw_d: i32, lh_d: i32) -> Vec<(i32, i32, i32, i32)> {
         let cx = cw_d / 2;
         let cy = lh_d / 2;
@@ -496,7 +502,8 @@ impl TerminalElement {
         // cell width so adjacent single-line segments stay visually connected
         // (no hairline gaps) and corners remain solid.  Heavy is ~2x light.
         let t = (cw_d as f32 / 6.0).round().max(1.0) as i32; // light thickness
-        let ht = (cw_d as f32 / 3.0).round().max(2.0) as i32; // heavy thickness
+        // Heavy day hon light ~2x, da tang them 1 muc (+1px) cho net dam/ro hon.
+        let ht = Self::heavy_thickness(cw_d); // heavy thickness
         // Double-line stroke width.  Using cellWidth/8 keeps two distinct strokes
         // even on smaller cells while staying closer to font glyph proportions.
         let dt = (cw_d as f32 / 8.0).round().max(1.0) as i32;
@@ -776,10 +783,12 @@ impl TerminalElement {
                 (0, y_out, cw_d, t),
                 (0, y_in, cw_d, t),
             ],
-            '\u{256D}' => vec![vd!(cx, t), hr!(cy, t)],
-            '\u{256E}' => vec![vd!(cx, t), hl!(cy, t)],
-            '\u{256F}' => vec![vu!(cx, t), hl!(cy, t)],
-            '\u{2570}' => vec![vu!(cx, t), hr!(cy, t)],
+            // Rounded corners ╭╮╯╰ — vẽ cung tròn (quarter-circle) thay vì
+            // góc vuông, và canh tâm nét nối với heavy line (━/┃) để mối nối
+            // tiếp xúc ở chính giữa, không lệch. Xem `rounded_corner_rects`.
+            '\u{256D}' | '\u{256E}' | '\u{256F}' | '\u{2570}' => {
+                Self::rounded_corner_rects(c, cw_d, lh_d, t, ht)
+            }
             '\u{2574}' => vec![hl!(cy, t)],
             '\u{2575}' => vec![vu!(cx, t)],
             '\u{2576}' => vec![hr!(cy, t)],
@@ -904,6 +913,166 @@ impl TerminalElement {
             // diagonal / quadruple-dash → fallback font (hiếm trong TUI)
             _ => vec![],
         }
+    }
+
+    /// Ve goc bo tron (U+256D-U+2570) bang cung tron (quarter-circle)
+    /// rasterize per-pixel -> run-length rects moi dong.
+    ///
+    /// 1. Bo tron that: net di theo cung tron ban kinh `r` o vung re, thay vi
+    ///    gap nhau vuong goc.
+    /// 2. Moi noi dong do day + tiep xuc chinh giua: trong font SLICK goc bo
+    ///    tron noi voi heavy line (day `ht`). Heavy line ve edge-aligned tai
+    ///    `cx`/`cy` (chiem `[cx, cx+ht]`), tam o `cx + ht/2`. Ta ve net goc
+    ///    cung do day `ht` va canh tam vao tam heavy line -> arm trung khit
+    ///    `[cx, cx+ht]`, net lien mach, dong do day, khong lech.
+    fn rounded_corner_rects(
+        c: char,
+        cw_d: i32,
+        lh_d: i32,
+        t: i32,
+        ht: i32,
+    ) -> Vec<(i32, i32, i32, i32)> {
+        let _ = t;
+        let cx = cw_d / 2;
+        let cy = lh_d / 2;
+        // === KNOB do day net cong ===
+        // Be day net cong MONG HON HAN heavy line `ht` dung doc/ngang.
+        // Floor 2px de tranh net 1px bi rang cua (aliasing).
+        let w = (ht / 3).max(2);
+        // Net cong duoc canh GIUA trong dai pixel cua heavy line `[cx, cx+ht)`
+        // (va `[cy, cy+ht)`), tuc lui vao `(ht - w)/2` moi ben -> moi noi giua
+        // net cong va canh doc/ngang nam dung CHINH GIUA, khong lech.
+        let off = (ht - w) / 2;
+        let xlo = cx + off;
+        let xhi = xlo + w; // arm doc: x trong [xlo, xhi)
+        let ylo = cy + off;
+        let yhi = ylo + w; // arm ngang: y trong [ylo, yhi)
+        // Ban kinh ngoai cung: lon nhat ma arm van cham bien o ben canh.
+        let r_out = (cx.min(cy) - off).max(w + 1);
+        let r_in = (r_out - w).max(0);
+        let r_out_sq = r_out * r_out;
+        let r_in_sq = r_in * r_in;
+
+        // (arc_cx, arc_cy) = tam cung; `down`/`right` = huong keo dai arm.
+        // Tam dat sao cho bien ngoai cung trung bien ngoai cua arm.
+        let (arc_cx, arc_cy, down, right) = match c {
+            '\u{256D}' => (xlo + r_out, ylo + r_out, true, true), // bo goc tren-trai
+            '\u{256E}' => (xhi - r_out, ylo + r_out, true, false), // bo goc tren-phai
+            '\u{256F}' => (xhi - r_out, yhi - r_out, false, false), // bo goc duoi-phai
+            '\u{2570}' => (xlo + r_out, yhi - r_out, false, true), // bo goc duoi-trai
+            _ => return Vec::new(),
+        };
+
+        let mut out: Vec<(i32, i32, i32, i32)> = Vec::new();
+        for y in 0..lh_d {
+            let mut run_start: Option<i32> = None;
+            for x in 0..cw_d {
+                // Arm doc: dung be rong `w`, keo dai tu tiep tuyen cung.
+                let v_arm = x >= xlo && x < xhi && if down { y >= arc_cy } else { y <= arc_cy };
+                // Arm ngang: dung be rong `w`, keo dai tu tiep tuyen cung.
+                let h_arm = y >= ylo && y < yhi && if right { x >= arc_cx } else { x <= arc_cx };
+                // Cung tron: phan tu huong ve goc, khoang cach toi tam trong dai.
+                let dx = x - arc_cx;
+                let dy = y - arc_cy;
+                let x_side = if right { x <= arc_cx } else { x >= arc_cx };
+                let y_side = if down { y <= arc_cy } else { y >= arc_cy };
+                let dist2 = dx * dx + dy * dy;
+                let arc = x_side && y_side && dist2 >= r_in_sq && dist2 <= r_out_sq;
+
+                let filled = v_arm || h_arm || arc;
+                match (filled, run_start) {
+                    (true, None) => run_start = Some(x),
+                    (false, Some(start)) => {
+                        out.push((start, y, x - start, 1));
+                        run_start = None;
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(start) = run_start {
+                out.push((start, y, cw_d - start, 1));
+            }
+        }
+        out
+    }
+
+    /// Phien ban ANTI-ALIASED cua `rounded_corner_rects`: tra (x, y, w, h,
+    /// alpha) voi alpha = do phu (coverage) cua pixel (supersample 4x4).
+    fn rounded_corner_rects_aa(c: char, cw_d: i32, lh_d: i32) -> Vec<(i32, i32, i32, i32, f32)> {
+        let ht = Self::heavy_thickness(cw_d);
+        let cx = cw_d / 2;
+        let cy = lh_d / 2;
+        let w = (ht / 3).max(2);
+        let off = (ht - w) / 2;
+        let xlo = (cx + off) as f32;
+        let xhi = (cx + off + w) as f32;
+        let ylo = (cy + off) as f32;
+        let yhi = (cy + off + w) as f32;
+        let r_out = ((cx.min(cy) - off).max(w + 1)) as f32;
+        let r_in = (r_out - w as f32).max(0.0);
+
+        let (arc_cx, arc_cy, down, right) = match c {
+            '\u{256D}' => (xlo + r_out, ylo + r_out, true, true),
+            '\u{256E}' => (xhi - r_out, ylo + r_out, true, false),
+            '\u{256F}' => (xhi - r_out, yhi - r_out, false, false),
+            '\u{2570}' => (xlo + r_out, yhi - r_out, false, true),
+            _ => return Vec::new(),
+        };
+        let r_in_sq = r_in * r_in;
+        let r_out_sq = r_out * r_out;
+
+        let inside = |fx: f32, fy: f32| -> bool {
+            let v_arm = fx >= xlo && fx < xhi && if down { fy >= arc_cy } else { fy <= arc_cy };
+            let h_arm = fy >= ylo && fy < yhi && if right { fx >= arc_cx } else { fx <= arc_cx };
+            let dx = fx - arc_cx;
+            let dy = fy - arc_cy;
+            let x_side = if right { fx <= arc_cx } else { fx >= arc_cx };
+            let y_side = if down { fy <= arc_cy } else { fy >= arc_cy };
+            let dist2 = dx * dx + dy * dy;
+            let arc = x_side && y_side && dist2 >= r_in_sq && dist2 <= r_out_sq;
+            v_arm || h_arm || arc
+        };
+
+        const N: i32 = 4; // 4x4 = 16 sub-sample / pixel
+        let inv = 1.0 / N as f32;
+        let total = (N * N) as f32;
+        let coverage = |x: i32, y: i32| -> f32 {
+            let mut cnt = 0;
+            for j in 0..N {
+                let fy = y as f32 + (j as f32 + 0.5) * inv;
+                for i in 0..N {
+                    let fx = x as f32 + (i as f32 + 0.5) * inv;
+                    if inside(fx, fy) {
+                        cnt += 1;
+                    }
+                }
+            }
+            cnt as f32 / total
+        };
+
+        let mut out: Vec<(i32, i32, i32, i32, f32)> = Vec::new();
+        for y in 0..lh_d {
+            let mut run_start: Option<i32> = None;
+            for x in 0..cw_d {
+                let cov = coverage(x, y);
+                if cov >= 0.999 {
+                    if run_start.is_none() {
+                        run_start = Some(x);
+                    }
+                } else {
+                    if let Some(start) = run_start.take() {
+                        out.push((start, y, x - start, 1, 1.0));
+                    }
+                    if cov > 0.0 {
+                        out.push((x, y, 1, 1, cov));
+                    }
+                }
+            }
+            if let Some(start) = run_start {
+                out.push((start, y, cw_d - start, 1, 1.0));
+            }
+        }
+        out
     }
 
     /// Shade blocks (U+2591 light, U+2592 medium, U+2593 dark).
@@ -1925,6 +2094,22 @@ impl Element for TerminalElement {
                 let cell_y_logical = cell_y(i as i32);
                 for bd in &cache.rows[i].box_draws {
                     let cell_x_logical = cell_x(bd.point.column);
+                    // Goc bo tron -> path ANTI-ALIASED (alpha coverage) cho muot.
+                    if matches!(bd.c, '\u{256D}'..='\u{2570}') {
+                        for (rx, ry, rw, rh, a) in Self::rounded_corner_rects_aa(bd.c, cw_d, lh_d) {
+                            let pos = point(
+                                px(f32::from(cell_x_logical) + rx as f32 / scale_factor),
+                                px(f32::from(cell_y_logical) + ry as f32 / scale_factor),
+                            );
+                            let sz =
+                                size(px(rw as f32 / scale_factor), px(rh as f32 / scale_factor));
+                            let mut col = bd.color;
+                            col.a *= a;
+                            window.paint_quad(fill(Bounds::new(pos, sz), col));
+                            quad_count += 1;
+                        }
+                        continue;
+                    }
                     for (rx, ry, rw, rh) in Self::box_drawing_rects(bd.c, cw_d, lh_d) {
                         let pos = point(
                             px(f32::from(cell_x_logical) + rx as f32 / scale_factor),
