@@ -487,10 +487,31 @@ impl TerminalElement {
     fn box_drawing_rects(c: char, cw_d: i32, lh_d: i32) -> Vec<(i32, i32, i32, i32)> {
         let cx = cw_d / 2;
         let cy = lh_d / 2;
-        let t = 1; // light thickness (device px)
+        // Keep light/heavy thickness at 1/2 device px for crisp single lines.
+        // Double-line strokes use a separate thickness so they can be tuned
+        // independently (Windows Terminal AtlasEngine uses ~cellWidth/6).
+        let t = 1; // light thickness
         let ht = 2; // heavy thickness
-        let dl = (cw_d / 6).max(1); // double-line horizontal offset
-        let dv = (lh_d / 6).max(1); // double-line vertical offset
+        // Double-line stroke width.  Using cellWidth/8 keeps two distinct strokes
+        // even on smaller cells while staying closer to font glyph proportions.
+        let dt = (cw_d as f32 / 8.0).round().max(1.0) as i32;
+        let dl = dt; // offset from center to each double stroke
+        let dv = dt;
+        // Double-line stroke positions (device-pixel columns/rows).
+        // `out` = closer to the cell edge that forms the corner's outer serif,
+        // `in`  = closer to the cell center, forming the inner serif.
+        let x_out = (cx - dl).max(0);
+        let x_in = (cx + dl).min(cw_d - dt);
+        let y_out = (cy - dv).max(0);
+        let y_in = (cy + dv).min(lh_d - dt);
+        // For horizontal strokes the pixel row is the top of the rect, so
+        // we need the bottom row to sit on `y_out`/`y_in`.  Offset by dt
+        // so the 1-px thick stroke occupies exactly that row.
+        let y_out_top = (y_out - dt).max(0);
+        let y_in_top = (y_in - dt).max(0);
+        // Similarly, vertical strokes' left edge should sit on `x_out`/`x_in`.
+        let x_out_left = (x_out - dt).max(0);
+        let x_in_left = (x_in - dt).max(0);
         macro_rules! h {
             ($y:expr, $thick:expr) => {
                 (0, $y, cw_d, $thick)
@@ -501,6 +522,7 @@ impl TerminalElement {
                 ($x, 0, $thick, lh_d)
             };
         }
+        // half horizontal: bắt đầu từ tâm cell
         macro_rules! hr {
             ($y:expr, $thick:expr) => {
                 (cx, $y, cw_d - cx, $thick)
@@ -596,79 +618,158 @@ impl TerminalElement {
             '\u{2508}' => Self::dash_v(cx, lh_d, t),
             '\u{2509}' => Self::dash_v(cx, lh_d, ht),
             // double lines
-            '\u{2550}' => vec![h!(cy - dv, t), h!(cy + dv, t)],
-            '\u{2551}' => vec![v!(cx - dl, t), v!(cx + dl, t)],
-            '\u{2552}' => vec![vd!(cx - dl, t), hr!(cy, t)],
-            '\u{2553}' => vec![vd!(cx, t), hr!(cy - dv, t), hr!(cy + dv, t)],
+            '\u{2550}' => vec![(0, y_out_top, cw_d, dt), (0, y_in_top, cw_d, dt)],
+            '\u{2551}' => vec![(x_out_left, 0, dt, lh_d), (x_in_left, 0, dt, lh_d)],
+            // Corners: two nested empty rectangles.
+            // ╔ double down-and-right
             '\u{2554}' => vec![
-                vd!(cx - dl, t),
-                vd!(cx + dl, t),
-                hr!(cy - dv, t),
-                hr!(cy + dv, t),
+                (x_out_left, y_out_top, dt, lh_d - y_out_top),
+                (x_out_left, y_out_top, cw_d - x_out_left, dt),
+                (x_in_left, y_in_top, dt, lh_d - y_in_top),
+                (x_in_left, y_in_top, cw_d - x_in_left, dt),
             ],
-            '\u{2555}' => vec![vd!(cx + dl, t), hl!(cy, t)],
-            '\u{2556}' => vec![vd!(cx, t), hl!(cy - dv, t), hl!(cy + dv, t)],
+            // ╗ double down-and-left
             '\u{2557}' => vec![
-                vd!(cx - dl, t),
-                vd!(cx + dl, t),
-                hl!(cy - dv, t),
-                hl!(cy + dv, t),
+                (x_in_left, y_out_top, dt, lh_d - y_out_top),
+                (0, y_out_top, x_in_left + dt, dt),
+                (x_out_left, y_in_top, dt, lh_d - y_in_top),
+                (0, y_in_top, x_out_left + dt, dt),
             ],
-            '\u{2558}' => vec![vu!(cx - dl, t), hr!(cy, t)],
-            '\u{2559}' => vec![vu!(cx, t), hr!(cy - dv, t), hr!(cy + dv, t)],
+            // ╚ double up-and-right
             '\u{255A}' => vec![
-                vu!(cx - dl, t),
-                vu!(cx + dl, t),
-                hr!(cy - dv, t),
-                hr!(cy + dv, t),
+                (x_out_left, 0, dt, y_in),
+                (x_out_left, y_in_top, cw_d - x_out_left, dt),
+                (x_in_left, 0, dt, y_out),
+                (x_in_left, y_out_top, cw_d - x_in_left, dt),
             ],
-            '\u{255B}' => vec![vu!(cx + dl, t), hl!(cy, t)],
-            '\u{255C}' => vec![vu!(cx, t), hl!(cy - dv, t), hl!(cy + dv, t)],
+            // ╝ double up-and-left
             '\u{255D}' => vec![
-                vu!(cx - dl, t),
-                vu!(cx + dl, t),
-                hl!(cy - dv, t),
-                hl!(cy + dv, t),
+                (x_in_left, 0, dt, y_in),
+                (0, y_in_top, x_in_left + dt, dt),
+                (x_out_left, 0, dt, y_out),
+                (0, y_out_top, x_out_left + dt, dt),
             ],
-            '\u{255E}' => vec![v!(cx - dl, t), v!(cx + dl, t), hr!(cy, t)],
-            '\u{255F}' => vec![v!(cx, t), hr!(cy - dv, t), hr!(cy + dv, t)],
+            // Mixed-light double corners (best-effort, use center line for the light arm).
+            // ╒ down single-and-right-double
+            '\u{2552}' => vec![
+                (cx, 0, t, lh_d),
+                (cx, y_out, cw_d - cx, t),
+                (cx, y_in, cw_d - cx, t),
+            ],
+            // ╓ down double-and-right-single
+            '\u{2553}' => vec![
+                (x_out, 0, t, lh_d),
+                (x_in, 0, t, lh_d),
+                (cx, y_out, cw_d - cx, t),
+            ],
+            // ╕ down single-and-left-double
+            '\u{2555}' => vec![(cx, 0, t, lh_d), (0, y_out, cx, t), (0, y_in, cx, t)],
+            // ╖ down double-and-left-single
+            '\u{2556}' => vec![(x_out, 0, t, lh_d), (x_in, 0, t, lh_d), (0, y_out, cx, t)],
+            // ╘ up single-and-right-double
+            '\u{2558}' => vec![
+                (cx, 0, t, lh_d),
+                (cx, y_out, cw_d - cx, t),
+                (cx, y_in, cw_d - cx, t),
+            ],
+            // ╙ up double-and-right-single
+            '\u{2559}' => vec![
+                (x_out, 0, t, lh_d),
+                (x_in, 0, t, lh_d),
+                (cx, y_out, cw_d - cx, t),
+            ],
+            // ╛ up single-and-left-double
+            '\u{255B}' => vec![(cx, 0, t, lh_d), (0, y_out, cx, t), (0, y_in, cx, t)],
+            // ╜ up double-and-left-single
+            '\u{255C}' => vec![(x_out, 0, t, lh_d), (x_in, 0, t, lh_d), (0, y_out, cx, t)],
+            // Tee/cross pieces.
+            // ╞ single vertical and right double
+            '\u{255E}' => vec![
+                (cx, 0, t, lh_d),
+                (cx, y_out, cw_d - cx, t),
+                (cx, y_in, cw_d - cx, t),
+            ],
+            // ╟ double vertical and right single
+            '\u{255F}' => vec![
+                (x_out, 0, t, lh_d),
+                (x_in, 0, t, lh_d),
+                (x_in, y_out, cw_d - x_in, t),
+            ],
+            // ╠ double vertical and right double
             '\u{2560}' => vec![
-                v!(cx - dl, t),
-                v!(cx + dl, t),
-                hr!(cy - dv, t),
-                hr!(cy + dv, t),
+                (x_out, 0, t, lh_d),
+                (x_in, 0, t, lh_d),
+                (x_out + 1, y_out, cw_d - x_out - 1, t),
+                (x_in + 1, y_in, cw_d - x_in - 1, t),
             ],
-            '\u{2561}' => vec![v!(cx - dl, t), v!(cx + dl, t), hl!(cy, t)],
-            '\u{2562}' => vec![v!(cx, t), hl!(cy - dv, t), hl!(cy + dv, t)],
+            // ╡ single vertical and left double
+            '\u{2561}' => vec![(cx, 0, t, lh_d), (0, y_out, cx, t), (0, y_in, cx, t)],
+            // ╢ double vertical and left single
+            '\u{2562}' => vec![
+                (x_out, 0, t, lh_d),
+                (x_in, 0, t, lh_d),
+                (0, y_out, x_out + 1, t),
+            ],
+            // ╣ double vertical and left double
             '\u{2563}' => vec![
-                v!(cx - dl, t),
-                v!(cx + dl, t),
-                hl!(cy - dv, t),
-                hl!(cy + dv, t),
+                (x_out, 0, t, lh_d),
+                (x_in, 0, t, lh_d),
+                (0, y_out, x_out + 1, t),
+                (0, y_in, x_in + 1, t),
             ],
-            '\u{2564}' => vec![h!(cy - dv, t), h!(cy + dv, t), vd!(cx, t)],
-            '\u{2565}' => vec![h!(cy, t), vd!(cx - dl, t), vd!(cx + dl, t)],
+            // ╤ down single and horizontal double
+            '\u{2564}' => vec![
+                (cx, y_out, t, lh_d - y_out),
+                (0, y_out, cw_d, t),
+                (0, y_in, cw_d, t),
+            ],
+            // ╥ down double and horizontal single
+            '\u{2565}' => vec![
+                (x_out, y_out, t, lh_d - y_out),
+                (x_in, y_out, t, lh_d - y_out),
+                (0, cy, cw_d, t),
+            ],
+            // ╦ down double and horizontal double
             '\u{2566}' => vec![
-                h!(cy - dv, t),
-                h!(cy + dv, t),
-                vd!(cx - dl, t),
-                vd!(cx + dl, t),
+                (x_out, y_out, t, lh_d - y_out),
+                (x_in, y_out, t, lh_d - y_out),
+                (x_out, y_in, t, lh_d - y_in),
+                (x_in, y_in, t, lh_d - y_in),
+                (0, y_out, cw_d, t),
+                (0, y_in, cw_d, t),
             ],
-            '\u{2567}' => vec![h!(cy - dv, t), h!(cy + dv, t), vu!(cx, t)],
-            '\u{2568}' => vec![h!(cy, t), vu!(cx - dl, t), vu!(cx + dl, t)],
+            // ╧ up single and horizontal double
+            '\u{2567}' => vec![
+                (cx, 0, t, y_out + 1),
+                (0, y_out, cw_d, t),
+                (0, y_in, cw_d, t),
+            ],
+            // ╨ up double and horizontal single
+            '\u{2568}' => vec![
+                (x_out, 0, t, y_out + 1),
+                (x_in, 0, t, y_out + 1),
+                (0, cy, cw_d, t),
+            ],
+            // ╩ up double and horizontal double
             '\u{2569}' => vec![
-                h!(cy - dv, t),
-                h!(cy + dv, t),
-                vu!(cx - dl, t),
-                vu!(cx + dl, t),
+                (x_out, 0, t, y_out + 1),
+                (x_in, 0, t, y_out + 1),
+                (x_out, y_in, t, lh_d - y_in),
+                (x_in, y_in, t, lh_d - y_in),
+                (0, y_out, cw_d, t),
+                (0, y_in, cw_d, t),
             ],
-            '\u{256A}' => vec![h!(cy, t), v!(cx, t)],
-            '\u{256B}' => vec![v!(cx - dl, t), v!(cx + dl, t), h!(cy, t)],
+            // Crosses.
+            // ╪ vertical single and horizontal double
+            '\u{256A}' => vec![(cx, 0, t, lh_d), (0, y_out, cw_d, t), (0, y_in, cw_d, t)],
+            // ╫ vertical double and horizontal single
+            '\u{256B}' => vec![(x_out, 0, t, lh_d), (x_in, 0, t, lh_d), (0, cy, cw_d, t)],
+            // ╬ double vertical and horizontal double
             '\u{256C}' => vec![
-                v!(cx - dl, t),
-                v!(cx + dl, t),
-                h!(cy - dv, t),
-                h!(cy + dv, t),
+                (x_out, 0, t, lh_d),
+                (x_in, 0, t, lh_d),
+                (0, y_out, cw_d, t),
+                (0, y_in, cw_d, t),
             ],
             '\u{256D}' => vec![vd!(cx, t), hr!(cy, t)],
             '\u{256E}' => vec![vd!(cx, t), hl!(cy, t)],
