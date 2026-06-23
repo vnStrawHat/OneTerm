@@ -15,7 +15,7 @@ pub mod url;
 pub use colors_util::{
     is_app_chosen_exact_color, is_decorative_character, is_default_background_color,
 };
-pub use content::{IndexedCell, TerminalBounds, TerminalContent};
+pub use content::{IndexedCell, TermDamageInfo, TerminalBounds, TerminalContent};
 pub use key_encode::{KeyMods, KeySpec, NamedKey, encode_key};
 pub use mouse_encode::{
     MouseModifiers, TerminalMouseButton, encode_mouse_move, encode_mouse_press,

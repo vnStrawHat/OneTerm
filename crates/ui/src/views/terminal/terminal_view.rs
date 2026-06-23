@@ -25,7 +25,7 @@ use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 use myterm2_core::terminal::{KeyMods, KeySpec, NamedKey, TerminalMouseButton, encode_key};
 use myterm2_core::{SessionEvent, TerminalSession};
 
-use super::terminal_element::{GridMetrics, TerminalElement};
+use super::terminal_element::{GridMetrics, RowLayoutCache, TerminalElement};
 use super::terminal_scrollbar::TerminalScrollHandle;
 use super::theme::{TerminalTheme, build_terminal_theme};
 use super::url::detect_url_at;
@@ -70,6 +70,9 @@ pub struct LocalTerminalView {
     prev_total_lines: usize,
     /// Previous cursor line (alacritty Line.0) — detect new line vs modification.
     prev_cursor_line: i32,
+    /// Per-row layout cache — skip recompute cho non-dirty rows.
+    /// Giống AtlasEngine `_p.rows` (ShapedRow cache).
+    row_cache: Rc<RefCell<RowLayoutCache>>,
 }
 
 impl LocalTerminalView {
@@ -243,6 +246,7 @@ impl LocalTerminalView {
             line_times: Vec::new(),
             prev_total_lines: 0,
             prev_cursor_line: 0,
+            row_cache: Rc::new(RefCell::new(RowLayoutCache::new())),
         }
     }
 
@@ -647,6 +651,7 @@ impl Render for LocalTerminalView {
                 cell_width_override,
                 cursor_color,
                 cursor_shape,
+                self.row_cache.clone(),
             ))
             // Bell indicator overlay (góc trên-phải).
             .children(if has_bell && bell_enabled {

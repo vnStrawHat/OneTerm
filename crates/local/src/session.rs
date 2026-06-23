@@ -183,8 +183,8 @@ impl LocalSession {
 impl TerminalSession for LocalSession {
     // ── Render ──────────────────────────────────────────────────────
     fn snapshot(&self) -> TerminalContent {
-        let term = self.term.lock();
-        TerminalContent::from(&*term)
+        let mut term = self.term.lock();
+        TerminalContent::from(&mut *term)
     }
 
     fn is_alt_screen(&self) -> bool {

@@ -9,7 +9,7 @@
 use myterm2_core::terminal::IndexedCell;
 
 /// URL detected tại một vị trí trong terminal.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DetectedUrl {
     /// URL string (có thể thêm `https://` prefix nếu là `www.`).
     pub url: String,

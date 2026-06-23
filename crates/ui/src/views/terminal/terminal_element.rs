@@ -21,7 +21,8 @@ use gpui::{
 
 use myterm2_core::TerminalSession;
 use myterm2_core::terminal::{
-    IndexedCell, is_app_chosen_exact_color, is_decorative_character, is_default_background_color,
+    IndexedCell, TermDamageInfo, is_app_chosen_exact_color, is_decorative_character,
+    is_default_background_color,
 };
 
 use super::terminal_view::LocalTerminalView;
@@ -70,13 +71,10 @@ struct GutterEntry {
 }
 
 /// Thông tin layout computed ở prepaint → paint.
+/// Per-row artifacts (rects, runs, box_draws) lives trong `RowLayoutCache`
+/// (Rc<RefCell>) — paint đọc từ đó, không clone. Giống AtlasEngine `_p.rows`.
 pub struct LayoutState {
-    rects: Vec<LayoutRect>,
-    /// Selection highlight rects (painted between bg rects and text).
     selection_rects: Vec<LayoutRect>,
-    runs: Vec<BatchedTextRun>,
-    /// Box-drawing cells — vẽ primitive thay vì font glyph.
-    box_draws: Vec<BoxDrawCell>,
     cursor: Option<CursorPaint>,
     background: Hsla,
     /// Pixel metrics.
@@ -90,6 +88,8 @@ pub struct LayoutState {
     gutter_entries: Vec<GutterEntry>,
     /// Màu nền gutter.
     gutter_bg: Hsla,
+    /// Số display lines (để paint biết iterate bao nhiêu row trong cache).
+    num_lines: usize,
 }
 
 /// Con trỏ để paint.
@@ -105,6 +105,104 @@ struct BoxDrawCell {
     point: LayoutPoint,
     color: Hsla,
     c: char,
+}
+
+/// Layout artifacts cho 1 display row — cached qua frames để skip recompute.
+/// Giống AtlasEngine `ShapedRow` (dirtyTop/dirtyBottom + glyphIndices/Advances).
+struct RowLayout {
+    rects: Vec<LayoutRect>,
+    runs: Vec<BatchedTextRun>,
+    box_draws: Vec<BoxDrawCell>,
+    /// Content hash của dòng ở frame trước — dùng để detect thay đổi
+    /// mà Term::damage() không track (vd input()/write_at_cursor()
+    /// không gọi damage_line()).
+    prev_hash: u64,
+}
+
+impl RowLayout {
+    fn empty() -> Self {
+        Self {
+            rects: Vec::new(),
+            runs: Vec::new(),
+            box_draws: Vec::new(),
+            prev_hash: 0,
+        }
+    }
+}
+
+/// Thống kê render 1 frame — đếm paint calls để đo bottleneck.
+/// Log mỗi 60 frame (~1s) qua eprintln.
+#[derive(Clone, Copy, Default, Debug)]
+pub(crate) struct FrameStats {
+    /// Tổng số display lines trong viewport.
+    pub total_lines: usize,
+    /// Số lines thực sự recompute layout (dirty).
+    pub dirty_lines: usize,
+    /// Số `paint_quad` calls trong paint().
+    pub paint_quad_calls: usize,
+    /// Số `shape_line` calls trong paint().
+    pub shape_line_calls: usize,
+    /// Frame counter — log mỗi 60 frame.
+    pub frame_count: u64,
+}
+
+/// Per-row layout cache — persisted qua frames qua `Rc<RefCell>`.
+/// Giống AtlasEngine `_p.rows` (Vec<ShapedRow*>) + `_p.colorBitmapGenerations`.
+///
+/// Chỉ recompute layout cho dirty rows (từ `TermDamageInfo`).
+/// Non-dirty rows reuse cached `RowLayout` — skip cell iteration + color
+/// resolution + text batching.
+///
+/// Invalidate toàn bộ khi:
+/// - Grid size đổi (resize) — `prev_grid_size` mismatch.
+/// - `display_offset` đổi (scroll) — damage thường đã là `Full`.
+/// - Selection / hover URL / Ctrl state đổi — affect per-cell styling.
+pub(crate) struct RowLayoutCache {
+    /// Per-row layout artifacts, indexed by display line (0 = top viewport).
+    rows: Vec<RowLayout>,
+    /// Previous grid size — detect resize.
+    prev_grid_size: Option<(u16, u16)>,
+    /// Previous display_offset — detect scroll.
+    prev_display_offset: usize,
+    /// Previous selection — detect change (affects inverse video).
+    prev_selection: Option<alacritty_terminal::selection::SelectionRange>,
+    /// Previous hovered URL — detect change (affects link highlight).
+    prev_hovered_url: Option<super::url::DetectedUrl>,
+    /// Previous Ctrl held — detect change.
+    prev_ctrl_held: bool,
+    /// Frame stats — updated mỗi frame, log mỗi 60 frame.
+    pub stats: FrameStats,
+}
+
+impl RowLayoutCache {
+    pub(crate) fn new() -> Self {
+        Self {
+            rows: Vec::new(),
+            prev_grid_size: None,
+            prev_display_offset: 0,
+            prev_selection: None,
+            prev_hovered_url: None,
+            prev_ctrl_held: false,
+            stats: FrameStats::default(),
+        }
+    }
+
+    /// Đảm bảo `rows` có đúng `num_lines` entries — resize cache khi grid đổi.
+    fn ensure_size(&mut self, num_lines: usize) {
+        if self.rows.len() != num_lines {
+            self.rows.clear();
+            self.rows.reserve(num_lines);
+            for _ in 0..num_lines {
+                self.rows.push(RowLayout::empty());
+            }
+        }
+    }
+}
+
+impl Default for RowLayoutCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Element paint terminal. Giữ `Entity<Box<dyn TerminalSession>>` để resize
@@ -142,6 +240,9 @@ pub(crate) struct TerminalElement {
     cursor_shape_override: crate::state::TerminalCursorShape,
     /// Per-line timestamps for gutter (0 = oldest line).
     line_times: Vec<String>,
+    /// Per-row layout cache — skip recompute cho non-dirty rows.
+    /// Giống AtlasEngine `_p.rows` (ShapedRow cache).
+    row_cache: Rc<RefCell<RowLayoutCache>>,
 }
 
 impl TerminalElement {
@@ -164,6 +265,7 @@ impl TerminalElement {
         cell_width_override: Option<f32>,
         cursor_color_override: Option<Hsla>,
         cursor_shape_override: crate::state::TerminalCursorShape,
+        row_cache: Rc<RefCell<RowLayoutCache>>,
     ) -> Self {
         Self {
             session,
@@ -184,6 +286,7 @@ impl TerminalElement {
             cell_width_override,
             cursor_color_override,
             cursor_shape_override,
+            row_cache,
         }
     }
 
@@ -212,6 +315,56 @@ impl TerminalElement {
             && !cell.flags.intersects(
                 Flags::INVERSE | Flags::ALL_UNDERLINES | Flags::STRIKEOUT | Flags::WIDE_CHAR_SPACER,
             )
+    }
+
+    /// FNV-1a hash 1 display line — detect content change mà Term::damage()
+    /// không track (input()/write_at_cursor() không gọi damage_line()).
+    /// Hash bao gồm: char, fg, bg, flags, zerowidth, hyperlink.
+    fn line_hash(cells: &[&IndexedCell]) -> u64 {
+        const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+        const FNV_PRIME: u64 = 0x100_0000_01b3;
+        let mut h = FNV_OFFSET;
+        for ic in cells {
+            let cell = &ic.cell;
+            // char
+            h ^= cell.c as u64;
+            h = h.wrapping_mul(FNV_PRIME);
+            // fg color (Named/Spec/Indexed → u64)
+            h ^= Self::color_hash(cell.fg);
+            h = h.wrapping_mul(FNV_PRIME);
+            // bg color
+            h ^= Self::color_hash(cell.bg);
+            h = h.wrapping_mul(FNV_PRIME);
+            // flags
+            h ^= cell.flags.bits() as u64;
+            h = h.wrapping_mul(FNV_PRIME);
+            // zerowidth + hyperlink
+            if let Some(zw) = cell.zerowidth() {
+                for &c in zw {
+                    h ^= c as u64;
+                    h = h.wrapping_mul(FNV_PRIME);
+                }
+            }
+            if let Some(hl) = cell.hyperlink() {
+                for b in hl.uri().bytes() {
+                    h ^= b as u64;
+                    h = h.wrapping_mul(FNV_PRIME);
+                }
+            }
+        }
+        h
+    }
+
+    /// Convert alacritty Color → u64 cho hashing.
+    fn color_hash(c: alacritty_terminal::vte::ansi::Color) -> u64 {
+        use alacritty_terminal::vte::ansi::Color;
+        match c {
+            Color::Named(n) => n as u64,
+            Color::Spec(rgb) => {
+                0x1_0000 | (rgb.r as u64) | ((rgb.g as u64) << 8) | ((rgb.b as u64) << 16)
+            }
+            Color::Indexed(i) => 0x2_0000 | i as u64,
+        }
     }
 
     /// Build selection highlight rects từ `SelectionRange` (grid coords) →
@@ -581,142 +734,118 @@ impl TerminalElement {
         out
     }
 
-    /// Build rects + text runs từ cells (theo display order). Trả (rects, runs).
-    /// `selection_set` — nếu cell trong selection, swap fg/bg (inverse video).
-    /// `hovered_url` — nếu cell trong URL range + Ctrl held, đổi fg → link color + underline.
-    fn layout_grid(
-        cells: &[IndexedCell],
+    /// Layout 1 display row — build rects + text runs + box draws cho cells
+    /// trên cùng 1 dòng. Trích từ `layout_grid` cũ, tách per-row để cache.
+    ///
+    /// `line_cells` — cells thuộc 1 display line (cùng `point.line`).
+    /// `display_line` — index 0-based từ top viewport.
+    fn layout_row(
+        line_cells: Vec<&IndexedCell>,
+        display_line: i32,
         theme: &TerminalTheme,
         base_font: &Font,
         selection_set: &HashSet<LayoutPoint>,
         hovered_url: Option<&super::url::DetectedUrl>,
         ctrl_held: bool,
-    ) -> (Vec<LayoutRect>, Vec<BatchedTextRun>, Vec<BoxDrawCell>) {
-        use itertools::Itertools;
+    ) -> RowLayout {
         let mut rects: Vec<LayoutRect> = Vec::new();
         let mut runs: Vec<BatchedTextRun> = Vec::new();
         let mut box_draws: Vec<BoxDrawCell> = Vec::new();
         let mut current_batch: Option<BatchedTextRun> = None;
+        let mut prev_had_extras = false;
 
-        // Group cells theo grid line (display order), enumerate → display line.
-        let linegroups = cells.iter().chunk_by(|ic| ic.point.line);
-        for (line_index, (_, line)) in linegroups.into_iter().enumerate() {
-            let display_line = line_index as i32;
-            // Flush batch at line boundary.
-            if let Some(b) = current_batch.take() {
-                runs.push(b);
+        for ic in line_cells {
+            let point = ic.point;
+            let cell = &ic.cell;
+            if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                continue;
             }
-            let mut prev_had_extras = false;
-            for ic in line {
-                let point = ic.point;
-                let cell = &ic.cell;
-                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
-                    continue;
-                }
-                // Skip space theo emoji variation sequence.
-                if cell.c == ' ' && prev_had_extras {
-                    prev_had_extras = false;
-                    continue;
-                }
-                prev_had_extras = matches!(cell.zerowidth(), Some(c) if !c.is_empty());
+            // Skip space theo emoji variation sequence.
+            if cell.c == ' ' && prev_had_extras {
+                prev_had_extras = false;
+                continue;
+            }
+            prev_had_extras = matches!(cell.zerowidth(), Some(c) if !c.is_empty());
 
-                let (fg, bg) = Self::cell_colors(cell, theme);
+            let (fg, bg) = Self::cell_colors(cell, theme);
 
-                // Kiểm tra cell có trong selection không.
-                let lp = LayoutPoint {
-                    line: display_line,
-                    column: point.column.0 as i32,
-                };
-                // Kiểm tra cell có trong selection không — chỉ dùng cho blank check.
-                let _is_selected = selection_set.contains(&lp);
+            let lp = LayoutPoint {
+                line: display_line,
+                column: point.column.0 as i32,
+            };
+            let _is_selected = selection_set.contains(&lp);
 
-                // Nền khác default → rect. Hoặc cell trong selection → rect nền.
-                if !is_default_background_color(&cell.bg) || cell.flags.contains(Flags::INVERSE) {
-                    let col = point.column.0 as i32;
-                    if let Some(last) = rects.last_mut() {
-                        if last.color == bg
-                            && last.point.line == display_line
-                            && last.point.column + last.num_cells as i32 == col
-                        {
-                            last.num_cells += 1;
-                        }
-                    }
-                    rects.push(LayoutRect {
-                        point: LayoutPoint {
-                            line: display_line,
-                            column: col,
-                        },
-                        num_cells: 1,
-                        color: bg,
-                    });
-                }
-
-                if Self::is_blank(cell) {
-                    continue;
-                }
-
-                // Selection: giữ nguyên text color — selection background paint
-                // riêng ở layer selection_rects (giống Zed, KHÔNG inverse video).
-                let mut style = Self::cell_style(cell, fg, base_font);
-                // Ctrl+hover URL highlight — đổi fg → link blue + underline.
-                if ctrl_held {
-                    if let Some(url) = hovered_url {
-                        if url.row == display_line as usize
-                            && point.column.0 >= url.start_col
-                            && point.column.0 < url.end_col
-                        {
-                            style.color = gpui::hsla(0.6, 0.85, 0.65, 1.0);
-                            style.underline = Some(UnderlineStyle {
-                                color: Some(style.color),
-                                thickness: px(1.0),
-                                wavy: false,
-                            });
-                        }
-                    }
-                }
-                let zw = cell.zerowidth();
-
-                // Box-drawing chars (U+2500–U+257F) — vẽ primitive thay vì
-                // rasterize font glyph → pixel-perfect, không anti-alias blur.
-                // Chỉ vẽ primitive nếu có geometry; còn lại (diagonal, block
-                // shade) fallback font.
-                if Self::is_box_drawing(cell.c)
-                    && !Self::box_drawing_rects(cell.c, 16, 16).is_empty()
-                {
-                    if let Some(b) = current_batch.take() {
-                        runs.push(b);
-                    }
-                    box_draws.push(BoxDrawCell {
-                        point: lp,
-                        color: style.color,
-                        c: cell.c,
-                    });
-                    continue;
-                }
-
-                if let Some(b) = current_batch.as_mut() {
-                    if b.can_append(&style)
-                        && b.start.line == lp.line
-                        && b.start.column + b.cell_count as i32 == lp.column
+            // Nền khác default → rect.
+            if !is_default_background_color(&cell.bg) || cell.flags.contains(Flags::INVERSE) {
+                let col = point.column.0 as i32;
+                if let Some(last) = rects.last_mut() {
+                    if last.color == bg
+                        && last.point.line == display_line
+                        && last.point.column + last.num_cells as i32 == col
                     {
-                        b.append_char(cell.c);
-                        if let Some(cs) = zw {
-                            for &c in cs {
-                                b.append_zw(c);
-                            }
+                        last.num_cells += 1;
+                    }
+                }
+                rects.push(LayoutRect {
+                    point: LayoutPoint {
+                        line: display_line,
+                        column: col,
+                    },
+                    num_cells: 1,
+                    color: bg,
+                });
+            }
+
+            if Self::is_blank(cell) {
+                continue;
+            }
+
+            let mut style = Self::cell_style(cell, fg, base_font);
+            // Ctrl+hover URL highlight.
+            if ctrl_held {
+                if let Some(url) = hovered_url {
+                    if url.row == display_line as usize
+                        && point.column.0 >= url.start_col
+                        && point.column.0 < url.end_col
+                    {
+                        style.color = gpui::hsla(0.6, 0.85, 0.65, 1.0);
+                        style.underline = Some(UnderlineStyle {
+                            color: Some(style.color),
+                            thickness: px(1.0),
+                            wavy: false,
+                        });
+                    }
+                }
+            }
+            let zw = cell.zerowidth();
+
+            // Box-drawing chars — vẽ primitive thay vì font glyph.
+            if Self::is_box_drawing(cell.c) && !Self::box_drawing_rects(cell.c, 16, 16).is_empty() {
+                if let Some(b) = current_batch.take() {
+                    runs.push(b);
+                }
+                box_draws.push(BoxDrawCell {
+                    point: lp,
+                    color: style.color,
+                    c: cell.c,
+                });
+                continue;
+            }
+
+            if let Some(b) = current_batch.as_mut() {
+                if b.can_append(&style)
+                    && b.start.line == lp.line
+                    && b.start.column + b.cell_count as i32 == lp.column
+                {
+                    b.append_char(cell.c);
+                    if let Some(cs) = zw {
+                        for &c in cs {
+                            b.append_zw(c);
                         }
-                    } else {
-                        let old = current_batch.take().unwrap();
-                        runs.push(old);
-                        let mut nb = BatchedTextRun::new(lp, cell.c, style);
-                        if let Some(cs) = zw {
-                            for &c in cs {
-                                nb.append_zw(c);
-                            }
-                        }
-                        current_batch = Some(nb);
                     }
                 } else {
+                    let old = current_batch.take().unwrap();
+                    runs.push(old);
                     let mut nb = BatchedTextRun::new(lp, cell.c, style);
                     if let Some(cs) = zw {
                         for &c in cs {
@@ -725,12 +854,128 @@ impl TerminalElement {
                     }
                     current_batch = Some(nb);
                 }
+            } else {
+                let mut nb = BatchedTextRun::new(lp, cell.c, style);
+                if let Some(cs) = zw {
+                    for &c in cs {
+                        nb.append_zw(c);
+                    }
+                }
+                current_batch = Some(nb);
             }
         }
         if let Some(b) = current_batch {
             runs.push(b);
         }
-        (rects, runs, box_draws)
+        RowLayout {
+            rects,
+            runs,
+            box_draws,
+            prev_hash: 0,
+        }
+    }
+
+    /// Update row cache: chỉ recompute layout cho dirty rows, reuse cached
+    /// artifacts cho non-dirty rows. Giống AtlasEngine `_p.invalidatedRows`.
+    ///
+    /// Dirty sources:
+    /// - `TermDamageInfo::Full` → invalidate all.
+    /// - `TermDamageInfo::Partial(lines)` → invalidate those display lines.
+    /// - Grid size change / display_offset change / selection / hover / ctrl
+    ///   change → invalidate all (global state affect per-cell styling).
+    #[allow(clippy::too_many_arguments)]
+    fn update_row_cache(
+        cache: &mut RowLayoutCache,
+        cells: &[IndexedCell],
+        damage: &TermDamageInfo,
+        num_lines: usize,
+        display_offset: usize,
+        grid_size: (u16, u16),
+        selection: Option<alacritty_terminal::selection::SelectionRange>,
+        hovered_url: Option<&super::url::DetectedUrl>,
+        ctrl_held: bool,
+        theme: &TerminalTheme,
+        base_font: &Font,
+        selection_set: &HashSet<LayoutPoint>,
+    ) {
+        use itertools::Itertools;
+
+        // ── Detect global state changes → full invalidate ──
+        let size_changed = cache.prev_grid_size != Some(grid_size);
+        let scroll_changed = cache.prev_display_offset != display_offset;
+        let selection_changed = cache.prev_selection != selection;
+        let hover_changed = cache.prev_hovered_url.as_ref() != hovered_url;
+        let ctrl_changed = cache.prev_ctrl_held != ctrl_held;
+        let global_invalidate =
+            size_changed || scroll_changed || selection_changed || hover_changed || ctrl_changed;
+
+        // Ensure cache has correct number of rows.
+        cache.ensure_size(num_lines);
+
+        // Determine which rows are dirty.
+        let full_dirty = global_invalidate || matches!(damage, TermDamageInfo::Full);
+        let dirty_set: HashSet<usize> = if full_dirty {
+            (0..num_lines).collect()
+        } else if let TermDamageInfo::Partial(lines) = damage {
+            lines.iter().copied().filter(|&l| l < num_lines).collect()
+        } else {
+            HashSet::new()
+        };
+
+        // Update stats.
+        cache.stats.total_lines = num_lines;
+        cache.stats.dirty_lines = dirty_set.len();
+
+        // ── Group cells by display line ──
+        // cells trong snapshot là display order (top → bottom),
+        // group bằng grid line (point.line).
+        let linegroups = cells.iter().chunk_by(|ic| ic.point.line);
+        for (display_line, (_, line_cells)) in linegroups.into_iter().enumerate() {
+            if display_line >= num_lines {
+                break;
+            }
+            // Collect cells for this line (need Vec để iterate được).
+            let line_vec: Vec<&IndexedCell> = line_cells.collect();
+
+            // ── Dirty detection: damage + content hash ──
+            // Term::damage() không track input()/write_at_cursor(),
+            // nên phải hash thêm để detect cell writes bị miss.
+            let is_dirty = if dirty_set.contains(&display_line) {
+                true
+            } else {
+                // Hash content và so với cache.
+                let hashed = Self::line_hash(&line_vec);
+                hashed != cache.rows[display_line].prev_hash
+            };
+
+            if is_dirty {
+                // Compute hash mới + recompute layout.
+                let new_hash = Self::line_hash(&line_vec);
+                let layout = Self::layout_row(
+                    line_vec,
+                    display_line as i32,
+                    theme,
+                    base_font,
+                    selection_set,
+                    hovered_url,
+                    ctrl_held,
+                );
+                cache.rows[display_line] = RowLayout {
+                    rects: layout.rects,
+                    runs: layout.runs,
+                    box_draws: layout.box_draws,
+                    prev_hash: new_hash,
+                };
+            }
+            // Non-dirty row → giữ cached RowLayout nguyên.
+        }
+
+        // ── Update prev state ──
+        cache.prev_grid_size = Some(grid_size);
+        cache.prev_display_offset = display_offset;
+        cache.prev_selection = selection;
+        cache.prev_hovered_url = hovered_url.cloned();
+        cache.prev_ctrl_held = ctrl_held;
     }
 
     /// Build TextRun cho cell (bold/italic/underline/strikethrough).
@@ -988,13 +1233,22 @@ impl Element for TerminalElement {
 
         let selection_set = Self::build_selection_set(&selection_rects);
 
-        let (rects, runs, box_draws) = Self::layout_grid(
+        // ── Update row cache: chỉ recompute dirty rows ──
+        // Giống AtlasEngine `_p.invalidatedRows` — skip layout cho non-dirty rows.
+        // Cache persists qua frames trong Rc<RefCell<>>.
+        Self::update_row_cache(
+            &mut self.row_cache.borrow_mut(),
             &snapshot.cells,
+            &snapshot.damage,
+            num_lines,
+            display_offset,
+            (rows, cols),
+            snapshot.selection,
+            self.hovered_url.as_ref(),
+            self.ctrl_held,
             &self.theme,
             &self.font,
             &selection_set,
-            self.hovered_url.as_ref(),
-            self.ctrl_held,
         );
 
         // Cursor.
@@ -1128,10 +1382,7 @@ impl Element for TerminalElement {
             gutter_width: gutter_width + pad_left,
         };
         LayoutState {
-            rects,
             selection_rects,
-            runs,
-            box_draws,
             cursor,
             background: self.theme.bg,
             cell_width,
@@ -1140,6 +1391,7 @@ impl Element for TerminalElement {
             gutter_width,
             gutter_entries,
             gutter_bg,
+            num_lines,
         }
     }
 
@@ -1160,8 +1412,13 @@ impl Element for TerminalElement {
             cx,
         );
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            // ── Frame stats counters (Bước 3: measurement) ──
+            let mut quad_count: usize = 0;
+            let mut shape_count: usize = 0;
+
             // Nền terminal.
             window.paint_quad(fill(bounds, layout.background));
+            quad_count += 1;
 
             // ── Gutter: [HH:MM:SS] line_number ──
             let gw = layout.gutter_width;
@@ -1172,6 +1429,7 @@ impl Element for TerminalElement {
                     size: size(gw, bounds.size.height),
                 };
                 window.paint_quad(fill(gutter_bounds, layout.gutter_bg));
+                quad_count += 1;
                 // Gutter text cho mỗi dòng — 2 TextRuns: clock + line number.
                 let gfont_px = self.font_size;
                 let glh = layout.line_height;
@@ -1213,6 +1471,7 @@ impl Element for TerminalElement {
                         window
                             .text_system()
                             .shape_line(entry.text.clone(), gfont_px, &runs, None);
+                    shape_count += 1;
                     let pos = GpuiPoint {
                         x: bounds.origin.x + px(4.0),
                         y: entry.y,
@@ -1231,14 +1490,25 @@ impl Element for TerminalElement {
             let snap_px = |value: f32| -> f32 { (value * scale_factor).floor() / scale_factor };
             let ceil_px = |value: f32| -> f32 { (value * scale_factor).ceil() / scale_factor };
 
-            // Cell bg rects — snap x/y/width/height sang device pixel grid.
-            for r in &layout.rects {
-                let pos = point(
-                    px(snap_px(f32::from(origin.x + r.point.column as f32 * cw))),
-                    px(snap_px(f32::from(origin.y + r.point.line as f32 * lh))),
-                );
-                let sz = size(px(ceil_px(f32::from(cw * r.num_cells as f32))), lh);
-                window.paint_quad(fill(Bounds::new(pos, sz), r.color));
+            // ── Per-row paint: đọc từ RowLayoutCache ──
+            // Giống AtlasEngine `_p.rows` — iterate cached ShapedRow[],
+            // paint rects + runs + box_draws cho mỗi row.
+            let num_lines = layout.num_lines;
+            let cache = self.row_cache.borrow();
+            let cw_d = (f32::from(cw) * scale_factor).round() as i32;
+            let lh_d = (f32::from(lh) * scale_factor).round() as i32;
+
+            // Cell bg rects — per row.
+            for i in 0..num_lines {
+                for r in &cache.rows[i].rects {
+                    let pos = point(
+                        px(snap_px(f32::from(origin.x + r.point.column as f32 * cw))),
+                        px(snap_px(f32::from(origin.y + r.point.line as f32 * lh))),
+                    );
+                    let sz = size(px(ceil_px(f32::from(cw * r.num_cells as f32))), lh);
+                    window.paint_quad(fill(Bounds::new(pos, sz), r.color));
+                    quad_count += 1;
+                }
             }
 
             // Selection highlight (sau bg rects, trước text để text hiện trên nền).
@@ -1249,29 +1519,34 @@ impl Element for TerminalElement {
                 );
                 let sz = size(px(ceil_px(f32::from(cw * r.num_cells as f32))), lh);
                 window.paint_quad(fill(Bounds::new(pos, sz), r.color));
+                quad_count += 1;
             }
 
-            // Text runs.
-            for run in &layout.runs {
-                run.paint(origin, cw, lh, font_px, window, cx);
-            }
-
-            // Box-drawing primitive — vẽ bằng fill rects pixel-perfect (như
-            // Windows Terminal AtlasEngine) thay vì rasterize font glyph.
-            let cw_d = (f32::from(cw) * scale_factor).round() as i32;
-            let lh_d = (f32::from(lh) * scale_factor).round() as i32;
-            for bd in &layout.box_draws {
-                let cell_x_logical = snap_px(f32::from(origin.x + bd.point.column as f32 * cw));
-                let cell_y_logical = snap_px(f32::from(origin.y + bd.point.line as f32 * lh));
-                for (rx, ry, rw, rh) in Self::box_drawing_rects(bd.c, cw_d, lh_d) {
-                    let pos = point(
-                        px(cell_x_logical + rx as f32 / scale_factor),
-                        px(cell_y_logical + ry as f32 / scale_factor),
-                    );
-                    let sz = size(px(rw as f32 / scale_factor), px(rh as f32 / scale_factor));
-                    window.paint_quad(fill(Bounds::new(pos, sz), bd.color));
+            // Text runs — per row.
+            for i in 0..num_lines {
+                for run in &cache.rows[i].runs {
+                    run.paint(origin, cw, lh, font_px, window, cx);
+                    shape_count += 1;
                 }
             }
+
+            // Box-drawing primitive — per row.
+            for i in 0..num_lines {
+                for bd in &cache.rows[i].box_draws {
+                    let cell_x_logical = snap_px(f32::from(origin.x + bd.point.column as f32 * cw));
+                    let cell_y_logical = snap_px(f32::from(origin.y + bd.point.line as f32 * lh));
+                    for (rx, ry, rw, rh) in Self::box_drawing_rects(bd.c, cw_d, lh_d) {
+                        let pos = point(
+                            px(cell_x_logical + rx as f32 / scale_factor),
+                            px(cell_y_logical + ry as f32 / scale_factor),
+                        );
+                        let sz = size(px(rw as f32 / scale_factor), px(rh as f32 / scale_factor));
+                        window.paint_quad(fill(Bounds::new(pos, sz), bd.color));
+                        quad_count += 1;
+                    }
+                }
+            }
+            drop(cache); // Release borrow trước khi update stats.
 
             // Cursor — vẽ theo shape (Block/Bar/Underline), có blink.
             if let Some(cur) = &layout.cursor {
@@ -1310,6 +1585,26 @@ impl Element for TerminalElement {
                         CursorShape::Hidden => return,
                     };
                     window.paint_quad(fill(Bounds::new(pos, sz), cur.color));
+                    quad_count += 1;
+                }
+            }
+
+            // ── Update frame stats + log mỗi 60 frame (~1s) ──
+            // Bước 3: measurement — đếm paint calls để đo bottleneck.
+            {
+                let mut cache = self.row_cache.borrow_mut();
+                cache.stats.paint_quad_calls = quad_count;
+                cache.stats.shape_line_calls = shape_count;
+                cache.stats.frame_count += 1;
+                if cache.stats.frame_count % 60 == 0 {
+                    eprintln!(
+                        "[TerminalElement] frame={} lines={} dirty={} quads={} shapes={}",
+                        cache.stats.frame_count,
+                        cache.stats.total_lines,
+                        cache.stats.dirty_lines,
+                        cache.stats.paint_quad_calls,
+                        cache.stats.shape_line_calls,
+                    );
                 }
             }
         });
