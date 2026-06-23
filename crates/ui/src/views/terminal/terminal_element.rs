@@ -15,8 +15,8 @@ use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
 use gpui::{
     App, Bounds, ContentMask, Element, ElementId, Entity, Font, FontStyle, FontWeight,
-    GlobalElementId, Hsla, IntoElement, LayoutId, Pixels, Point as GpuiPoint, SharedString,
-    TextAlign, TextRun, UnderlineStyle, Window, fill, point, px, relative, size,
+    GlobalElementId, Hsla, IntoElement, LayoutId, Pixels, Point as GpuiPoint, ShapedLine,
+    SharedString, TextAlign, TextRun, UnderlineStyle, Window, fill, point, px, relative, size,
 };
 
 use myterm2_core::TerminalSession;
@@ -113,6 +113,11 @@ struct RowLayout {
     rects: Vec<LayoutRect>,
     runs: Vec<BatchedTextRun>,
     box_draws: Vec<BoxDrawCell>,
+    /// Cached `ShapedLine` cho mỗi `BatchedTextRun` — parallel vec với `runs`.
+    /// None = chưa shape (mới recompute), Some = đã shape (reuse qua frames).
+    /// Giống AtlasEngine `ShapedRow.glyphIndices` — glyph data persisted,
+    /// chỉ re-rasterize khi row dirty.
+    shaped_lines: Vec<Option<ShapedLine>>,
     /// Content hash của dòng ở frame trước — dùng để detect thay đổi
     /// mà Term::damage() không track (vd input()/write_at_cursor()
     /// không gọi damage_line()).
@@ -125,6 +130,7 @@ impl RowLayout {
             rects: Vec::new(),
             runs: Vec::new(),
             box_draws: Vec::new(),
+            shaped_lines: Vec::new(),
             prev_hash: 0,
         }
     }
@@ -140,8 +146,11 @@ pub(crate) struct FrameStats {
     pub dirty_lines: usize,
     /// Số `paint_quad` calls trong paint().
     pub paint_quad_calls: usize,
-    /// Số `shape_line` calls trong paint().
+    /// Số `shape_line` calls trong prepaint() — chỉ cho dirty rows.
+    /// Non-dirty rows reuse cached ShapedLine → không gọi shape_line.
     pub shape_line_calls: usize,
+    /// Số text runs painted trong paint() — tất cả dùng cached ShapedLine.
+    pub text_run_paints: usize,
     /// Frame counter — log mỗi 60 frame.
     pub frame_count: u64,
 }
@@ -871,6 +880,7 @@ impl TerminalElement {
             rects,
             runs,
             box_draws,
+            shaped_lines: Vec::new(),
             prev_hash: 0,
         }
     }
@@ -964,10 +974,11 @@ impl TerminalElement {
                     rects: layout.rects,
                     runs: layout.runs,
                     box_draws: layout.box_draws,
+                    shaped_lines: Vec::new(), // sẽ fill ở prepaint
                     prev_hash: new_hash,
                 };
             }
-            // Non-dirty row → giữ cached RowLayout nguyên.
+            // Non-dirty row → giữ cached RowLayout (incl. shaped_lines) nguyên.
         }
 
         // ── Update prev state ──
@@ -1049,12 +1060,15 @@ impl BatchedTextRun {
         self.style.len += c.len_utf8();
     }
 
+    /// Paint text run dùng cached `ShapedLine` (đã shape ở prepaint).
+    /// Không gọi `shape_line` ở đây — skip hoàn toàn cho non-dirty rows.
+    /// Giống AtlasEngine `ShapedRow` — glyph data persisted, paint chỉ read.
     fn paint(
         &self,
+        shaped: &ShapedLine,
         origin: GpuiPoint<Pixels>,
         cell_w: Pixels,
         line_h: Pixels,
-        font_size: Pixels,
         window: &mut Window,
         cx: &mut App,
     ) {
@@ -1070,13 +1084,7 @@ impl BatchedTextRun {
                 origin.y + self.start.line as f32 * line_h,
             ))),
         );
-        let line = window.text_system().shape_line(
-            SharedString::from(self.text.clone()),
-            font_size,
-            std::slice::from_ref(&self.style),
-            Some(cell_w),
-        );
-        let _ = line.paint(pos, line_h, TextAlign::Left, None, window, cx);
+        let _ = shaped.paint(pos, line_h, TextAlign::Left, None, window, cx);
     }
 }
 
@@ -1251,6 +1259,34 @@ impl Element for TerminalElement {
             &selection_set,
         );
 
+        // ── Fill cached ShapedLine cho runs chưa được shape ──
+        // Giống AtlasEngine `ShapedRow` — glyph data persisted qua frames.
+        // Non-dirty row: shaped_lines đã có từ frame trước → skip hoàn toàn.
+        // Dirty row: shaped_lines = empty → shape_line + cache.
+        // Chuyển shape_line cost từ paint → prepaint (paint chỉ read).
+        let mut shape_line_count: usize = 0;
+        {
+            let mut cache = self.row_cache.borrow_mut();
+            for i in 0..num_lines {
+                let row = &mut cache.rows[i];
+                if row.shaped_lines.len() != row.runs.len() {
+                    row.shaped_lines.clear();
+                    row.shaped_lines.reserve(row.runs.len());
+                    for run in &row.runs {
+                        let shaped = window.text_system().shape_line(
+                            SharedString::from(run.text.clone()),
+                            font_px,
+                            std::slice::from_ref(&run.style),
+                            Some(cell_width),
+                        );
+                        row.shaped_lines.push(Some(shaped));
+                        shape_line_count += 1;
+                    }
+                }
+            }
+            cache.stats.shape_line_calls = shape_line_count;
+        }
+
         // Cursor.
         // Override shape từ config (Block/Bar/Underline) — giống Windows Terminal
         // tôn trọng user setting. Shell có thể set Hidden để ẩn cursor.
@@ -1414,7 +1450,7 @@ impl Element for TerminalElement {
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             // ── Frame stats counters (Bước 3: measurement) ──
             let mut quad_count: usize = 0;
-            let mut shape_count: usize = 0;
+            let mut run_count: usize = 0;
 
             // Nền terminal.
             window.paint_quad(fill(bounds, layout.background));
@@ -1471,7 +1507,6 @@ impl Element for TerminalElement {
                         window
                             .text_system()
                             .shape_line(entry.text.clone(), gfont_px, &runs, None);
-                    shape_count += 1;
                     let pos = GpuiPoint {
                         x: bounds.origin.x + px(4.0),
                         y: entry.y,
@@ -1483,7 +1518,6 @@ impl Element for TerminalElement {
             let origin = layout.grid_origin;
             let cw = layout.cell_width;
             let lh = layout.line_height;
-            let font_px = self.font_size;
 
             // Snap helper cho paint — snap tọa độ logical sang device pixel grid.
             let scale_factor = window.scale_factor().max(1.0);
@@ -1523,10 +1557,15 @@ impl Element for TerminalElement {
             }
 
             // Text runs — per row.
+            // Dùng cached ShapedLine (đã shape ở prepaint) — skip shape_line
+            // hoàn toàn cho non-dirty rows. Giống AtlasEngine `ShapedRow` paint.
             for i in 0..num_lines {
-                for run in &cache.rows[i].runs {
-                    run.paint(origin, cw, lh, font_px, window, cx);
-                    shape_count += 1;
+                let row = &cache.rows[i];
+                for (j, run) in row.runs.iter().enumerate() {
+                    if let Some(shaped) = row.shaped_lines.get(j).and_then(|s| s.as_ref()) {
+                        run.paint(shaped, origin, cw, lh, window, cx);
+                    }
+                    run_count += 1;
                 }
             }
 
@@ -1594,16 +1633,17 @@ impl Element for TerminalElement {
             {
                 let mut cache = self.row_cache.borrow_mut();
                 cache.stats.paint_quad_calls = quad_count;
-                cache.stats.shape_line_calls = shape_count;
+                cache.stats.text_run_paints = run_count;
                 cache.stats.frame_count += 1;
                 if cache.stats.frame_count % 60 == 0 {
                     eprintln!(
-                        "[TerminalElement] frame={} lines={} dirty={} quads={} shapes={}",
+                        "[TerminalElement] frame={} lines={} dirty={} quads={} shapes={} runs={}",
                         cache.stats.frame_count,
                         cache.stats.total_lines,
                         cache.stats.dirty_lines,
                         cache.stats.paint_quad_calls,
                         cache.stats.shape_line_calls,
+                        cache.stats.text_run_paints,
                     );
                 }
             }
