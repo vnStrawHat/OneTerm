@@ -853,6 +853,11 @@ impl TerminalElement {
             // insert space placeholder vào batch để giữ position
             // continuity, giảm số runs → giảm shape_line calls.
             // Box-drawing primitive vẽ trên cùng, che space invisible.
+            //
+            // ⚠️ Space placeholder CHỈ dùng để giữ position — phải strip
+            // underline/strikethrough để tránh duplicate decoration khi
+            // box-drawing cell kế thừa style từ text có underline (vd tab
+            // title active trong TUI apps).
             if Self::is_box_drawing(cell.c) && !Self::box_drawing_rects(cell.c, 16, 16).is_empty() {
                 box_draws.push(BoxDrawCell {
                     point: lp,
@@ -860,21 +865,21 @@ impl TerminalElement {
                     c: cell.c,
                 });
                 // Insert space vào current batch (hoặc tạo batch mới)
-                // để giữ position continuity.
+                // với neutral decoration.
+                let mut sp = style;
+                sp.len = ' '.len_utf8();
+                sp.underline = None;
+                sp.strikethrough = None;
                 if let Some(b) = current_batch.as_mut() {
-                    if b.start.column + b.cell_count as i32 == lp.column {
+                    if b.start.column + b.cell_count as i32 == lp.column && b.can_append(&sp) {
                         b.append_char(' ');
                     } else {
-                        // Column gap — flush và tạo batch mới với space.
+                        // Column gap hoặc style incompatible — flush và tạo batch mới.
                         let old = current_batch.take().unwrap();
                         runs.push(old);
-                        let mut sp = style;
-                        sp.len = ' '.len_utf8();
                         current_batch = Some(BatchedTextRun::new(lp, ' ', sp));
                     }
                 } else {
-                    let mut sp = style;
-                    sp.len = ' '.len_utf8();
                     current_batch = Some(BatchedTextRun::new(lp, ' ', sp));
                 }
                 continue;

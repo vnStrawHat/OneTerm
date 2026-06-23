@@ -24,7 +24,7 @@ use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 
 use async_channel::Receiver;
 use myterm2_core::terminal::{KeyMods, KeySpec, NamedKey, TerminalMouseButton, encode_key};
-use myterm2_core::{SessionEvent, TerminalInfo, TerminalSession};
+use myterm2_core::{SessionEvent, TerminalSession};
 
 use super::terminal_element::{GridMetrics, RowLayoutCache, TerminalElement};
 use super::terminal_scrollbar::TerminalScrollHandle;
