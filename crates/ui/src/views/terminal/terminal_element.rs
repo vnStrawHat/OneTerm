@@ -474,10 +474,15 @@ impl TerminalElement {
         set
     }
 
-    /// Kiểm tra char có thuộc box-drawing block (U+2500–U+257F) — các ký tự
-    /// đường thẳng / khung mà Windows Terminal vẽ bằng primitive thay vì font.
+    /// Kiểm tra char có thuộc box-drawing / block / powerline glyphs mà
+    /// Windows Terminal AtlasEngine vẽ bằng primitive thay vì font glyph.
+    /// Bao gồm: U+2500–U+257F (box drawing), U+2580–U+259F (block elements),
+    /// U+25AC ▬ (TUI horizontal bar), U+E0B0–U+E0BF (powerline symbols).
     fn is_box_drawing(c: char) -> bool {
-        matches!(c, '\u{2500}'..='\u{257F}' | '\u{2580}'..='\u{259F}')
+        matches!(
+            c,
+            '\u{2500}'..='\u{257F}' | '\u{2580}'..='\u{259F}' | '\u{25AC}' | '\u{E0B0}'..='\u{E0BF}'
+        )
     }
 
     /// Tính geometry (pixel-perfect) cho box-drawing char trong cell.
@@ -487,11 +492,11 @@ impl TerminalElement {
     fn box_drawing_rects(c: char, cw_d: i32, lh_d: i32) -> Vec<(i32, i32, i32, i32)> {
         let cx = cw_d / 2;
         let cy = lh_d / 2;
-        // Keep light/heavy thickness at 1/2 device px for crisp single lines.
-        // Double-line strokes use a separate thickness so they can be tuned
-        // independently (Windows Terminal AtlasEngine uses ~cellWidth/6).
-        let t = 1; // light thickness
-        let ht = 2; // heavy thickness
+        // Windows Terminal AtlasEngine: light stroke width scales with the
+        // cell width so adjacent single-line segments stay visually connected
+        // (no hairline gaps) and corners remain solid.  Heavy is ~2x light.
+        let t = (cw_d as f32 / 6.0).round().max(1.0) as i32; // light thickness
+        let ht = (cw_d as f32 / 3.0).round().max(2.0) as i32; // heavy thickness
         // Double-line stroke width.  Using cellWidth/8 keeps two distinct strokes
         // even on smaller cells while staying closer to font glyph proportions.
         let dt = (cw_d as f32 / 8.0).round().max(1.0) as i32;
@@ -783,6 +788,11 @@ impl TerminalElement {
             '\u{2579}' => vec![vu!(cx, ht)],
             '\u{257A}' => vec![hr!(cy, ht)],
             '\u{257B}' => vec![vd!(cx, ht)],
+            // ── Geometric shapes used as TUI bars ──
+            // ▬ U+25AC Black Medium Small Square — often repeated to draw
+            // solid horizontal bars/underlines.  Drawn primitive so adjacent
+            // cells merge into a seamless line instead of leaving font gaps.
+            '\u{25AC}' => vec![(0, lh_d / 4, cw_d, lh_d / 2)],
             // ── Block elements (U+2580–U+259F) ──
             // pi dùng ▀▄ cho input box padding, ▌ cho diff marker, █ cho fill.
             // Vẽ primitive → pixel-perfect, không font AA blur.
@@ -825,7 +835,71 @@ impl TerminalElement {
             ], // ▟
             // ── Right half block (U+2590) — mirror của ▌ left half ──
             '\u{2590}' => vec![(cw_d - cx, 0, cx, lh_d)], // ▐ right half
-            // ── Shade blocks (U+2591–U+2593) — stipple bằng device pixel grid ──
+            // ── Powerline symbols (U+E0B0–U+E0BF) ──
+            // Vẽ primitive fill để statusline / prompt separators không bị
+            // font metrics làm méo hoặc hở giữa các cell.
+            '\u{E0B0}' => {
+                // Right triangle solid ▶ (filled, points right).
+                let mut v = vec![];
+                for y in 0..lh_d {
+                    let x_start = y * cw_d / lh_d;
+                    v.push((x_start, y, cw_d - x_start, 1));
+                }
+                v
+            }
+            '\u{E0B2}' => {
+                // Left triangle solid ◀ (filled, points left).
+                let mut v = vec![];
+                for y in 0..lh_d {
+                    let w = (lh_d - y) * cw_d / lh_d;
+                    v.push((0, y, w, 1));
+                }
+                v
+            }
+            '\u{E0B4}' => {
+                // Right semi-circle solid ▶ (filled half-ellipse on the right).
+                let r = cw_d.min(lh_d) / 2;
+                let cy = lh_d / 2;
+                let mut v = vec![];
+                for y in 0..lh_d {
+                    let dy = (y - cy).abs();
+                    if dy > r {
+                        v.push((0, y, cw_d, 1));
+                    } else {
+                        let x_cut = (cw_d as f32
+                            * (1.0 - ((1.0 - (dy as f32 / r as f32).powi(2)).sqrt())).max(0.0))
+                            as i32;
+                        v.push((0, y, cw_d - x_cut, 1));
+                    }
+                }
+                v
+            }
+            '\u{E0B6}' => {
+                // Left semi-circle solid ◀ (filled half-ellipse on the left).
+                let r = cw_d.min(lh_d) / 2;
+                let cy = lh_d / 2;
+                let mut v = vec![];
+                for y in 0..lh_d {
+                    let dy = (y - cy).abs();
+                    if dy > r {
+                        v.push((0, y, cw_d, 1));
+                    } else {
+                        let x_cut = (cw_d as f32
+                            * (1.0 - ((1.0 - (dy as f32 / r as f32).powi(2)).sqrt())).max(0.0))
+                            as i32;
+                        v.push((x_cut, y, cw_d - x_cut, 1));
+                    }
+                }
+                v
+            }
+            // Các powerline còn lại chưa có path custom → vẽ full block để
+            // tránh hiển thị glyph lạ hoặc ô trống trong prompt/statusline.
+            c @ ('\u{E0B1}' | '\u{E0B3}' | '\u{E0B5}' | '\u{E0B7}' | '\u{E0B8}' | '\u{E0B9}'
+            | '\u{E0BA}' | '\u{E0BB}' | '\u{E0BC}' | '\u{E0BD}' | '\u{E0BE}' | '\u{E0BF}') => {
+                let _ = c;
+                vec![(0, 0, cw_d, lh_d)]
+            }
+            // ── Shade blocks (U+2591 light, U+2592 medium, U+2593 dark). ──
             c @ ('\u{2591}' | '\u{2592}' | '\u{2593}') => Self::shade_rects(c, cw_d, lh_d),
             // diagonal / quadruple-dash → fallback font (hiếm trong TUI)
             _ => vec![],
