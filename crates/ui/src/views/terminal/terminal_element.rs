@@ -722,9 +722,53 @@ impl TerminalElement {
                 (cx, 0, cw_d - cx, cy),
                 (cx, cy, cw_d - cx, lh_d - cy),
             ], // ▟
-            // diagonal / quadruple-dash / blocks → fallback font
+            // ── Right half block (U+2590) — mirror của ▌ left half ──
+            '\u{2590}' => vec![(cw_d - cx, 0, cx, lh_d)], // ▐ right half
+            // ── Shade blocks (U+2591–U+2593) — stipple bằng device pixel grid ──
+            c @ ('\u{2591}' | '\u{2592}' | '\u{2593}') => Self::shade_rects(c, cw_d, lh_d),
+            // diagonal / quadruple-dash → fallback font (hiếm trong TUI)
             _ => vec![],
         }
+    }
+
+    /// Shade blocks (U+2591 light, U+2592 medium, U+2593 dark).
+    /// Vẽ stipple pattern bang 1x1 device pixel dots.
+    fn shade_rects(c: char, cw_d: i32, lh_d: i32) -> Vec<(i32, i32, i32, i32)> {
+        if cw_d * lh_d > 1024 {
+            return vec![];
+        }
+        let mut out = Vec::new();
+        match c {
+            '\u{2591}' => {
+                for y in 0..lh_d {
+                    for x in 0..cw_d {
+                        if (x + y) % 2 == 0 {
+                            out.push((x, y, 1, 1));
+                        }
+                    }
+                }
+            }
+            '\u{2592}' => {
+                for y in 0..lh_d {
+                    for x in 0..cw_d {
+                        if x % 2 == 0 {
+                            out.push((x, y, 1, 1));
+                        }
+                    }
+                }
+            }
+            '\u{2593}' => {
+                for y in 0..lh_d {
+                    for x in 0..cw_d {
+                        if (x + y) % 2 != 0 {
+                            out.push((x, y, 1, 1));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        out
     }
 
     fn dash_h(y: i32, w: i32, thick: i32) -> Vec<(i32, i32, i32, i32)> {
@@ -854,22 +898,26 @@ impl TerminalElement {
             // continuity, giảm số runs → giảm shape_line calls.
             // Box-drawing primitive vẽ trên cùng, che space invisible.
             //
-            // ⚠️ Space placeholder CHỈ dùng để giữ position — phải strip
-            // underline/strikethrough để tránh duplicate decoration khi
-            // box-drawing cell kế thừa style từ text có underline (vd tab
-            // title active trong TUI apps).
+            // ⚠️ GIỮ nguyên underline/strikethrough của space placeholder —
+            // không strip. Lý do:
+            //   1. Box-drawing primitive vẽ line ở cell CENTER (cy/cx),
+            //      text underline vẽ ở BASELINE — khác vị trí, không duplicate.
+            //   2. Nếu strip underline → can_append() fail (underline mismatch)
+            //      → batch bị SPLIT → text underline đứt đoạn tại mỗi
+            //      box-drawing position → "đường kẻ không liền mạch".
+            //   3. Giữ underline → text run liền mạch → underline liên tục.
+            //      Box-drawing primitive ở vị trí khác nên không xung đột.
             if Self::is_box_drawing(cell.c) && !Self::box_drawing_rects(cell.c, 16, 16).is_empty() {
                 box_draws.push(BoxDrawCell {
                     point: lp,
                     color: style.color,
                     c: cell.c,
                 });
-                // Insert space vào current batch (hoặc tạo batch mới)
-                // với neutral decoration.
+                // Insert space vào current batch — giữ nguyên style (incl.
+                // underline/strikethrough) để can_append() thành công,
+                // text run không bị split, underline liên tục.
                 let mut sp = style;
                 sp.len = ' '.len_utf8();
-                sp.underline = None;
-                sp.strikethrough = None;
                 if let Some(b) = current_batch.as_mut() {
                     if b.start.column + b.cell_count as i32 == lp.column && b.can_append(&sp) {
                         b.append_char(' ');
