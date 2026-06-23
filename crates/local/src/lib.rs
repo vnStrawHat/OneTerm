@@ -6,7 +6,11 @@
 pub mod event_loop;
 pub mod listener;
 pub mod session;
+pub mod session_terminal;
 pub mod state;
+
+#[cfg(test)]
+mod session_tests;
 
 pub use event_loop::{ShellEventLoop, ShellNotifier};
 pub use listener::LocalListener;

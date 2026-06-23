@@ -49,7 +49,9 @@ myTerm2/
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── lib.rs              # Re-export LocalSession + LocalListener + PtySize + core
-│   │       ├── session.rs          # LocalSession: tty::new + EventLoop + snapshot + resize (555 dòng)
+│   │       ├── session.rs          # LocalSession struct + spawn + helpers + lifecycle (~175 dòng)
+│   │       ├── session_terminal.rs # impl TerminalSession for LocalSession (~334 dòng)
+│   │       ├── session_tests.rs    # Tests for LocalSession (~192 dòng, #[cfg(test)])
 │   │       ├── listener.rs         # LocalListener: EventListener impl (forward → SessionEvent)
 │   │       └── state.rs            # State chia sẻ cho local session
 │   │
@@ -85,13 +87,21 @@ myTerm2/
 │           │   │   ├── mod.rs
 │           │   │   └── file_browser.rs  # SftpPanel (dock panel, placeholder)
 │           │   └── terminal/       # Terminal emulator view
-│           │       ├── mod.rs      # Re-export panel/view/theme
-│           │       ├── terminal_view.rs        # LocalTerminalView (Render — render TerminalContent)
-│           │       ├── terminal_panel.rs       # TerminalPanel (PanelView dock)
-│           │       ├── terminal_element.rs     # Custom element render (cells, cursor, selection)
-│           │       ├── terminal_scrollbar.rs   # Scrollbar tuỳ chỉnh cho terminal
-│           │       ├── terminal_settings_panel.rs  # TerminalSettingsPanel (dock panel cài đặt)
-│           │       └── theme.rs                # TerminalTheme + build_terminal_theme + resolve_cell_color
+│           │       ├── mod.rs              # Re-export panel/view/theme + handler modules
+│           │       ├── terminal_view.rs    # LocalTerminalView struct + inherent helpers (~502 dòng)
+│           │       ├── terminal_render.rs  # impl Render + Focusable for LocalTerminalView (~312 dòng)
+│           │       ├── terminal_handlers.rs # Mouse/wheel/key/context-menu handlers (~751 dòng)
+│           │       ├── terminal_input.rs   # Keyboard + vi-mode + scroll shortcuts (~480 dòng)
+│           │       ├── terminal_mouse.rs   # Mouse/selection/wheel helpers (~261 dòng)
+│           │       ├── terminal_ime.rs     # EntityInputHandler impl (~115 dòng)
+│           │       ├── terminal_element.rs        # TerminalElement orchestration (prepain/paint) (~633 dòng)
+│           │       ├── terminal_element_layout.rs # RowLayoutCache + update_row_cache + layout_selection
+│           │       ├── terminal_element_cell.rs   # Per-cell color/text-run helpers
+│           │       ├── terminal_element_box.rs  # Box-drawing / block / powerline primitives
+│           │       ├── terminal_panel.rs          # TerminalPanel (PanelView dock)
+│           │       ├── terminal_scrollbar.rs      # Scrollbar tuỳ chỉnh cho terminal
+│           │       ├── terminal_settings_panel.rs # TerminalSettingsPanel (dock panel cài đặt)
+│           │       └── theme.rs                 # TerminalTheme + build_terminal_theme + resolve_cell_color
 │           │
 │           ├── components/         # UI component tái sử dụng
 │           │   ├── mod.rs
@@ -100,7 +110,15 @@ myTerm2/
 │           └── state/              # AppState chia sẻ — Entity<T> state toàn cục
 │               ├── mod.rs
 │               ├── app_state.rs    # AppState (init global)
-│               └── terminal_settings.rs  # TerminalSettings (font, scrollback, ...)
+│               ├── terminal_settings.rs  # TerminalSettings (font, scrollback, ...)
+│               └── terminal_config/      # Terminal config JSON load/save
+│                   ├── mod.rs            # TerminalConfig + load/save + tests
+│                   ├── font.rs           # FontConfig
+│                   ├── cursor.rs         # CursorConfig
+│                   ├── layout.rs         # LayoutConfig + PaddingConfig
+│                   ├── scroll.rs         # ScrollConfig
+│                   ├── bell.rs           # BellConfig
+│                   └── colors.rs         # ColorsConfig
 │
 ├── docs/                           # Tài liệu phát triển
 │   ├── gui-layout.md              # Thiết kế layout GUI
