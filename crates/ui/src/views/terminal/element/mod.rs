@@ -18,8 +18,8 @@ use gpui::{
 use myterm2_core::TerminalSession;
 
 pub(crate) use super::layout::{GridMetrics, LayoutState, RowLayoutCache};
-use super::terminal_view::LocalTerminalView;
 use super::theme::TerminalTheme;
+use super::view::LocalTerminalView;
 
 pub(crate) mod gutter;
 pub(crate) mod measure;

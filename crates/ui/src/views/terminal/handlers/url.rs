@@ -8,8 +8,8 @@ use gpui::{App, Entity, InteractiveElement as _, ModifiersChangedEvent};
 use myterm2_core::TerminalSession;
 
 use super::super::element::GridMetrics;
-use super::super::terminal_view::LocalTerminalView;
 use super::super::url::{DetectedUrl, detect_url_at};
+use super::super::view::LocalTerminalView;
 
 /// Update `hovered_url` dựa trên position hiện tại và Ctrl state.
 pub(crate) fn update_hovered_url(

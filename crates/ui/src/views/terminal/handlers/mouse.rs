@@ -11,8 +11,8 @@ use gpui::{
 use myterm2_core::TerminalSession;
 
 use super::super::element::GridMetrics;
-use super::super::terminal_view::LocalTerminalView;
 use super::super::url::detect_url_at;
+use super::super::view::LocalTerminalView;
 use super::map_button;
 
 /// Gắn mouse handlers: down / move / up / modifiers.

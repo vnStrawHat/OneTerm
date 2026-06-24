@@ -17,7 +17,7 @@ use myterm2_local::{LocalSession, PtySize};
 
 use crate::state::TerminalSettings;
 
-use super::terminal_view::LocalTerminalView;
+use super::view::LocalTerminalView;
 
 /// Panel hiển thị 1 Terminal session.
 pub struct TerminalPanel {

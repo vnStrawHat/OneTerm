@@ -13,8 +13,8 @@ use myterm2_core::TerminalSession;
 
 use super::super::box_drawing::{box_drawing_rects, rounded_corner_rects_aa};
 use super::super::layout::{CursorPaint, LayoutState, RowLayoutCache};
-use super::super::terminal_view::LocalTerminalView;
 use super::super::theme::TerminalTheme;
+use super::super::view::LocalTerminalView;
 
 /// Paint terminal element từ `LayoutState` đã prepaint.
 #[allow(clippy::too_many_arguments)]

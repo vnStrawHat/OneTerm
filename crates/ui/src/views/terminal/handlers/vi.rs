@@ -9,7 +9,7 @@ use myterm2_core::terminal::TerminalMouseButton;
 /// Xử lý toggle vi mode.
 pub fn toggle_vi_mode(
     session: &Entity<Box<dyn TerminalSession>>,
-    view: &Entity<super::super::terminal_view::LocalTerminalView>,
+    view: &Entity<super::super::view::LocalTerminalView>,
     cx: &mut App,
 ) {
     let _ = view.update(cx, |v, cx| {
@@ -35,7 +35,7 @@ pub fn handle_vi_key(
     key: &str,
     _key_char: &str,
     session: &Entity<Box<dyn TerminalSession>>,
-    view: &Entity<super::super::terminal_view::LocalTerminalView>,
+    view: &Entity<super::super::view::LocalTerminalView>,
     cx: &mut App,
 ) -> bool {
     match key {
@@ -241,7 +241,7 @@ pub fn handle_vi_key(
 /// Update vi selection nếu đang selecting.
 pub fn update_vi_selection(
     session: &Entity<Box<dyn TerminalSession>>,
-    view: &Entity<super::super::terminal_view::LocalTerminalView>,
+    view: &Entity<super::super::view::LocalTerminalView>,
     cx: &mut App,
 ) {
     let _ = view.update(cx, |v, cx| {

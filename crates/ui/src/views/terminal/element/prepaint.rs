@@ -11,8 +11,8 @@ use myterm2_core::TerminalSession;
 use super::super::layout::{
     CursorPaint, GridMetrics, LayoutPoint, LayoutState, RowLayoutCache, update_row_cache,
 };
-use super::super::terminal_view::LocalTerminalView;
 use super::super::theme::{TerminalTheme, resolve_cell_color};
+use super::super::view::LocalTerminalView;
 use super::gutter::compute_gutter_width;
 use super::measure::FontMetrics;
 use super::{gutter, measure};

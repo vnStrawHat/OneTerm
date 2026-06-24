@@ -9,7 +9,7 @@ use myterm2_core::TerminalSession;
 use myterm2_core::terminal::{KeySpec, encode_key};
 
 use super::super::element::GridMetrics;
-use super::super::terminal_view::LocalTerminalView;
+use super::super::view::LocalTerminalView;
 use super::vi::{toggle_vi_mode, update_vi_selection};
 
 /// Gắn keyboard handler.

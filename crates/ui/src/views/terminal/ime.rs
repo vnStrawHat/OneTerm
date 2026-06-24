@@ -2,7 +2,7 @@
 
 use gpui::{EntityInputHandler, UTF16Selection, Window};
 
-use super::terminal_view::LocalTerminalView;
+use super::view::LocalTerminalView;
 
 impl EntityInputHandler for LocalTerminalView {
     fn text_for_range(

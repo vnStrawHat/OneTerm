@@ -8,7 +8,7 @@ use gpui::{App, Entity, InteractiveElement as _, ScrollDelta, ScrollWheelEvent};
 use myterm2_core::TerminalSession;
 
 use super::super::element::GridMetrics;
-use super::super::terminal_view::LocalTerminalView;
+use super::super::view::LocalTerminalView;
 use crate::state::TerminalSettings;
 
 /// Gắn scroll wheel handler.
