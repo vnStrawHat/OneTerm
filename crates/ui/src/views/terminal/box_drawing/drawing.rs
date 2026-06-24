@@ -48,34 +48,41 @@ pub(crate) fn box_drawing_rects(c: char, cw_d: i32, lh_d: i32) -> Vec<(i32, i32,
     let x_out_left = (x_out - half_dt).max(0);
     let x_in_left = (x_in - half_dt).min(cw_d - dt);
 
+    // Tất cả stroke được **căn giữa** quanh trục tâm cell: line dày
+    // `thick` chiếm [center - thick/2, center - thick/2 + thick). Nhờ vậy
+    // heavy line (ht ≈ 5px) không bị lệch sang phải (dọc) / xuống dưới
+    // (ngang) và điểm nối với góc bo tròn nằm đúng tâm.
+    //   - `$cy` / `$cx`: trục tâm của line (luôn là `cy` / `cx`).
+    //   - half-line (hr/hl/vd/vu) bắt đầu lùi `thick/2` về phía trục
+    //     vuông góc để khớp với line căn giữa, giữ góc liền khối.
     macro_rules! h {
-        ($y:expr, $thick:expr) => {
-            (0, $y, cw_d, $thick)
+        ($cy:expr, $thick:expr) => {
+            (0, $cy - $thick / 2, cw_d, $thick)
         };
     }
     macro_rules! v {
-        ($x:expr, $thick:expr) => {
-            ($x, 0, $thick, lh_d)
+        ($cx:expr, $thick:expr) => {
+            ($cx - $thick / 2, 0, $thick, lh_d)
         };
     }
     macro_rules! hr {
-        ($y:expr, $thick:expr) => {
-            (cx, $y, cw_d - cx, $thick)
+        ($cy:expr, $thick:expr) => {
+            (cx - $thick / 2, $cy - $thick / 2, cw_d - (cx - $thick / 2), $thick)
         };
     }
     macro_rules! hl {
-        ($y:expr, $thick:expr) => {
-            (0, $y, (cx + $thick).min(cw_d), $thick)
+        ($cy:expr, $thick:expr) => {
+            (0, $cy - $thick / 2, (cx + $thick - $thick / 2).min(cw_d), $thick)
         };
     }
     macro_rules! vd {
-        ($x:expr, $thick:expr) => {
-            ($x, cy, $thick, lh_d - cy)
+        ($cx:expr, $thick:expr) => {
+            ($cx - $thick / 2, cy - $thick / 2, $thick, lh_d - (cy - $thick / 2))
         };
     }
     macro_rules! vu {
-        ($x:expr, $thick:expr) => {
-            ($x, 0, $thick, (cy + $thick).min(lh_d))
+        ($cx:expr, $thick:expr) => {
+            ($cx - $thick / 2, 0, $thick, (cy + $thick - $thick / 2).min(lh_d))
         };
     }
 
