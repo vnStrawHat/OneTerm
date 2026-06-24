@@ -24,6 +24,7 @@ pub fn init(cx: &mut App) {
     theme::init(cx);
     state::AppState::init(cx);
     state::TerminalSettings::init(cx);
+    state::SshSessionStore::init(cx);
 
     register_panel(cx, "terminal", |_, _, _, window, cx| {
         Box::new(TerminalPanel::new_entity(window, cx))

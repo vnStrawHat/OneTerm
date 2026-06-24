@@ -13,7 +13,7 @@
 //! (thường = content background) và `tab_bar.background` (darker) — cho hiệu
 //! ứng "tab active nối với content" kiểu Zed/editor, không cần override.
 
-use gpui::App;
+use gpui::{Anchor, App};
 use gpui_component::{ActiveTheme as _, Theme, ThemeRegistry};
 
 use crate::actions::{SwitchTheme, SwitchThemeMode};
@@ -101,6 +101,11 @@ pub fn init(cx: &mut App) {
             Theme::change(gpui_component::ThemeMode::Dark, None, cx);
         }
     }
+
+    // Notification hiển thị ở góc dưới bên phải (mặc định gpui-component là TopRight).
+    // `notification` là field `#[serde(skip)]` — không bị `apply_config`/`change`
+    // reset nên chỉ cần set 1 lần ở init.
+    Theme::global_mut(cx).notification.placement = Anchor::BottomRight;
 
     // Observe theme changes — placeholder để sau này persist theme name.
     cx.observe_global::<Theme>(|_cx| {}).detach();

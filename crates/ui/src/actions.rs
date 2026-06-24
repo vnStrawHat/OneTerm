@@ -24,6 +24,8 @@ actions!(
         AddSession,
         /// Thêm một SftpPanel mới vào right dock.
         AddSftpBrowser,
+        /// Mở dialog tạo SSH session mới (lưu vào `ssh_session.json`).
+        NewSession,
     ]
 );
 
