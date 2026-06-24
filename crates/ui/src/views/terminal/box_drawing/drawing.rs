@@ -11,6 +11,13 @@ pub(crate) fn is_box_drawing(c: char) -> bool {
     )
 }
 
+/// Góc bo tròn (U+256D–U+2570) — được vẽ bằng path anti-aliased riêng
+/// (`rounded_corner_rects_aa`), không qua `box_drawing_rects`. Dùng để
+/// probe nhanh trong layout thay vì tính geometry chỉ để check rỗng.
+pub(crate) fn is_rounded_corner(c: char) -> bool {
+    matches!(c, '\u{256D}'..='\u{2570}')
+}
+
 /// Tính geometry (pixel-perfect) cho box-drawing char trong cell.
 /// Trả list rect (x, y, w, h) tính bằng **device pixel** relative tới
 /// cell origin. Caller convert sang logical px khi paint.
@@ -268,10 +275,8 @@ pub(crate) fn box_drawing_rects(c: char, cw_d: i32, lh_d: i32) -> Vec<(i32, i32,
             (0, y_out, cw_d, t),
             (0, y_in, cw_d, t),
         ],
-        // Rounded corners
-        '\u{256D}' | '\u{256E}' | '\u{256F}' | '\u{2570}' => {
-            super::rounded::rounded_corner_rects(c, cw_d, lh_d, t, ht)
-        }
+        // Rounded corners — handled by AA path in `paint`, not here.
+        '\u{256D}' | '\u{256E}' | '\u{256F}' | '\u{2570}' => Vec::new(),
         // Half lines
         '\u{2574}' => vec![hl!(cy, t)],
         '\u{2575}' => vec![vu!(cx, t)],

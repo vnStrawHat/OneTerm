@@ -1,68 +1,8 @@
-//! Rounded corner primitives (U+256D–U+2570) — non-AA + helper for AA.
+//! Rounded corner primitives (U+256D–U+2570) — anti-aliased.
 
 /// Vẽ góc bo tròn (U+256D-U+2570) bằng cung tròn (quarter-circle)
-/// rasterize per-pixel -> run-length rects mỗi dòng.
-pub(crate) fn rounded_corner_rects(
-    c: char,
-    cw_d: i32,
-    lh_d: i32,
-    t: i32,
-    ht: i32,
-) -> Vec<(i32, i32, i32, i32)> {
-    let _ = t;
-    let cx = cw_d / 2;
-    let cy = lh_d / 2;
-    let w = (ht / 3).max(2);
-    let off = (ht - w) / 2;
-    let xlo = cx + off;
-    let xhi = xlo + w;
-    let ylo = cy + off;
-    let yhi = ylo + w;
-    let r_out = (cx.min(cy) - off).max(w + 1);
-    let r_in = (r_out - w).max(0);
-    let r_out_sq = r_out * r_out;
-    let r_in_sq = r_in * r_in;
-
-    let (arc_cx, arc_cy, down, right) = match c {
-        '\u{256D}' => (xlo + r_out, ylo + r_out, true, true),
-        '\u{256E}' => (xhi - r_out, ylo + r_out, true, false),
-        '\u{256F}' => (xhi - r_out, yhi - r_out, false, false),
-        '\u{2570}' => (xlo + r_out, yhi - r_out, false, true),
-        _ => return Vec::new(),
-    };
-
-    let mut out: Vec<(i32, i32, i32, i32)> = Vec::new();
-    for y in 0..lh_d {
-        let mut run_start: Option<i32> = None;
-        for x in 0..cw_d {
-            let v_arm = x >= xlo && x < xhi && if down { y >= arc_cy } else { y <= arc_cy };
-            let h_arm = y >= ylo && y < yhi && if right { x >= arc_cx } else { x <= arc_cx };
-            let dx = x - arc_cx;
-            let dy = y - arc_cy;
-            let x_side = if right { x <= arc_cx } else { x >= arc_cx };
-            let y_side = if down { y <= arc_cy } else { y >= arc_cy };
-            let dist2 = dx * dx + dy * dy;
-            let arc = x_side && y_side && dist2 >= r_in_sq && dist2 <= r_out_sq;
-
-            let filled = v_arm || h_arm || arc;
-            match (filled, run_start) {
-                (true, None) => run_start = Some(x),
-                (false, Some(start)) => {
-                    out.push((start, y, x - start, 1));
-                    run_start = None;
-                }
-                _ => {}
-            }
-        }
-        if let Some(start) = run_start {
-            out.push((start, y, cw_d - start, 1));
-        }
-    }
-    out
-}
-
-/// Phiên bản ANTI-ALIASED của `rounded_corner_rects`: trả (x, y, w, h,
-/// alpha) với alpha = độ phủ (coverage) của pixel (supersample 4x4).
+/// với anti-aliasing (supersample 4x4). Trả (x, y, w, h, alpha) với
+/// alpha = độ phủ (coverage) của pixel.
 pub(crate) fn rounded_corner_rects_aa(
     c: char,
     cw_d: i32,

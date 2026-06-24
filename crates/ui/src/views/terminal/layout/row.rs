@@ -7,7 +7,7 @@ use gpui::TextRun;
 
 use myterm2_core::terminal::{IndexedCell, is_default_background_color};
 
-use super::super::box_drawing::drawing::{box_drawing_rects, is_box_drawing};
+use super::super::box_drawing::drawing::{box_drawing_rects, is_box_drawing, is_rounded_corner};
 use super::super::cell::{cell_colors, cell_style, is_blank};
 use super::super::theme::TerminalTheme;
 use super::super::url::DetectedUrl;
@@ -100,7 +100,9 @@ pub(crate) fn layout_row(
         }
         let zw = cell.zerowidth();
 
-        if is_box_drawing(cell.c) && !box_drawing_rects(cell.c, 16, 16).is_empty() {
+        if is_box_drawing(cell.c)
+            && (is_rounded_corner(cell.c) || !box_drawing_rects(cell.c, 16, 16).is_empty())
+        {
             box_draws.push(BoxDrawCell {
                 point: lp,
                 color: style.color,
