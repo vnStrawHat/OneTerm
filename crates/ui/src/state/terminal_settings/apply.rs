@@ -25,6 +25,7 @@ impl TerminalSettings {
         }
         if font.size.is_some() {
             self.font_size = font.size;
+            self.base_font_size = font.size;
         }
         self.font_weight = parse_weight(&font.weight);
         self.font_features = font.features.iter().map(|s| s.clone().into()).collect();

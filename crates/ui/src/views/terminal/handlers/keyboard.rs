@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{App, ClipboardItem, Entity, FocusHandle, InteractiveElement as _, KeyDownEvent};
+use gpui_component::ActiveTheme as _;
 
 use myterm2_core::TerminalSession;
 use myterm2_core::terminal::{KeySpec, encode_key};
@@ -11,6 +12,7 @@ use myterm2_core::terminal::{KeySpec, encode_key};
 use super::super::element::GridMetrics;
 use super::super::view::LocalTerminalView;
 use super::vi::{toggle_vi_mode, update_vi_selection};
+use crate::state::TerminalSettings;
 
 /// Gắn keyboard handler.
 pub(crate) fn attach_key(
@@ -32,6 +34,45 @@ pub(crate) fn attach_key(
                 toggle_vi_mode(&s, &view, cx);
                 cx.stop_propagation();
                 return;
+            }
+
+            // ── Zoom shortcuts (Ctrl +/−/0) ──
+            if mods.control && !mods.alt {
+                match e.keystroke.key.as_str() {
+                    "-" => {
+                        let settings_e = TerminalSettings::global(cx);
+                        let theme_default = f32::from(cx.theme().mono_font_size);
+                        settings_e.update(cx, |st, cx| {
+                            st.zoom_out(theme_default);
+                            cx.notify();
+                        });
+                        let _ = view.update(cx, |_, cx| cx.notify());
+                        cx.stop_propagation();
+                        return;
+                    }
+                    "=" | "+" => {
+                        let settings_e = TerminalSettings::global(cx);
+                        let theme_default = f32::from(cx.theme().mono_font_size);
+                        settings_e.update(cx, |st, cx| {
+                            st.zoom_in(theme_default);
+                            cx.notify();
+                        });
+                        let _ = view.update(cx, |_, cx| cx.notify());
+                        cx.stop_propagation();
+                        return;
+                    }
+                    "0" => {
+                        let settings_e = TerminalSettings::global(cx);
+                        settings_e.update(cx, |st, cx| {
+                            st.reset_zoom();
+                            cx.notify();
+                        });
+                        let _ = view.update(cx, |_, cx| cx.notify());
+                        cx.stop_propagation();
+                        return;
+                    }
+                    _ => {}
+                }
             }
 
             if view.read(cx).vi_mode {

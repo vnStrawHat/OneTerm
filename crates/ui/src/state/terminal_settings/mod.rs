@@ -88,7 +88,11 @@ pub struct TerminalSettings {
     /// Font fallback stack.
     pub font_fallbacks: Vec<SharedString>,
     /// Font size in px (None = dùng theme mono font size).
+    /// Có thể thay đổi runtime qua zoom shortcuts (Ctrl +/−/0).
     pub font_size: Option<f32>,
+    /// Font size gốc từ config (terminal.json) — dùng cho Ctrl+0 reset zoom.
+    /// Không bị zoom thay đổi.
+    pub base_font_size: Option<f32>,
     /// Font weight.
     pub font_weight: FontWeight,
     /// Font features (OpenType): vd ["calt", "liga"].
@@ -135,6 +139,7 @@ impl Default for TerminalSettings {
             font_family: None,
             font_fallbacks: default_terminal_font_fallbacks(),
             font_size: None,
+            base_font_size: None,
             font_weight: FontWeight::default(),
             font_features: Vec::new(),
             cursor_shape: TerminalCursorShape::Block,
