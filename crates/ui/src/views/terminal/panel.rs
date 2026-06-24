@@ -80,12 +80,27 @@ impl Panel for TerminalPanel {
         let theme = cx.theme().muted_foreground;
 
         h_flex()
+            .id("tab-title")
             .w_full()
             .min_w(px(100.))
             .items_center()
             .gap_1()
             // Bù padding phải 12px của Tab inner_h_flex để × sát viền phải.
             .mr(-px(5.))
+            // Middle-click trên tab → đóng tab đó (kể cả tab inactive).
+            .on_mouse_down(MouseButton::Middle, {
+                let tp = tab_panel.clone();
+                let pe = panel_entity.clone();
+                move |_, window, cx| {
+                    cx.stop_propagation();
+                    if let Some(tp) = tp.as_ref().and_then(|tp| tp.upgrade()) {
+                        let panel: Arc<dyn PanelView> = Arc::new(pe.clone());
+                        tp.update(cx, |tp, cx| {
+                            tp.remove_panel(panel, window, cx);
+                        });
+                    }
+                }
+            })
             // Tiêu đề "Terminal" — co giãn, cắt bớt bằng ellipsis nếu hẹp.
             .child(
                 div()
