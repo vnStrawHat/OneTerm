@@ -172,7 +172,7 @@ pub(crate) fn prepaint_terminal(
         .iter()
         .rev()
         .find(|ic| !is_blank(&ic.cell))
-        .map(|ic| ic.point.line.0)
+        .map(|ic| ic.point.line.0 + display_offset as i32)
         .unwrap_or(0)
         .max(0);
     let gutter_line_count = ((last_non_blank_display_line as usize) + 1)
