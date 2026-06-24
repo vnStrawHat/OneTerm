@@ -5,9 +5,8 @@
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext, Context, Entity, InteractiveElement as _, IntoElement,
-    KeyBinding, MouseButton, MouseDownEvent, ParentElement, Render, Styled, Task, Window,
-    div, px,
+    App, AppContext, Context, Entity, InteractiveElement as _, IntoElement, KeyBinding,
+    ParentElement, Render, Styled, Task, Window, div,
 };
 use gpui_component::{
     Root,
@@ -136,24 +135,7 @@ impl MyTermWorkspace {
         ]);
     }
 
-    /// Middle-click trên tab bar → close terminal tab.
-    ///
-    /// Kiểm tra Y position của click có nằm trong tab bar area
-    /// (top ~30px của dock area) hay không. Nếu đúng, dispatch `ClosePanel`.
-    fn on_middle_click_tab_bar(
-        &mut self,
-        e: &MouseDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let bounds = self.dock_area.read(cx).bounds();
-        let tab_bar_height = px(30.);
-        let tab_bar_bottom = bounds.origin.y + tab_bar_height;
 
-        if e.position.y >= bounds.origin.y && e.position.y <= tab_bar_bottom {
-            window.dispatch_action(Box::new(ClosePanel), cx);
-        }
-    }
 }
 
 impl Render for MyTermWorkspace {
@@ -174,16 +156,7 @@ impl Render for MyTermWorkspace {
             .flex()
             .flex_col()
             .child(self.title_bar.clone())
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .on_mouse_down(
-                        MouseButton::Middle,
-                        cx.listener(Self::on_middle_click_tab_bar),
-                    )
-                    .child(self.dock_area.clone()),
-            )
+            .child(div().flex_1().min_h_0().child(self.dock_area.clone()))
             .child(statusbar::build_status_bar(
                 &self.dock_area,
                 self.clock.clone(),
