@@ -3,11 +3,12 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use alacritty_terminal::term::TermMode;
 use alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
 use gpui::{App, Bounds, Pixels, SharedString, Window, px};
 
 use myterm2_core::TerminalSession;
+
+use super::super::cell::blank::is_blank;
 
 use super::super::layout::{
     CursorPaint, GridMetrics, LayoutPoint, LayoutState, RowLayoutCache, update_row_cache,
@@ -151,22 +152,21 @@ pub(crate) fn prepaint_terminal(
 
     let gutter_bg = theme.gutter_bg;
 
-    // Chỉ render gutter entries đến dòng con trỏ khi ở bottom (display_offset == 0)
-    // và không phải alt-screen — các row phía dưới con trỏ là empty (chưa có output).
-    // Khi scroll lên (display_offset > 0), tất cả visible lines đều là scrollback content.
-    // Khi alt-screen active (vim/less), toàn bộ viewport có nội dung.
-    let is_alt_screen = snapshot.mode.contains(TermMode::ALT_SCREEN);
-    let cursor_hidden = snapshot.cursor.shape == CursorShape::Hidden;
-    let gutter_line_count = if display_offset == 0
-        && !is_alt_screen
-        && !cursor_hidden
-        && cursor_display_line >= 0
-        && (cursor_display_line as usize) < num_lines
-    {
-        (cursor_display_line as usize) + 1
-    } else {
-        num_lines
-    };
+    // Render gutter cho đến dòng có nội dung thực tế cuối cùng trong
+    // viewport, nhưng luôn ít nhất 1 dòng. Điều này giữ được UX lúc khởi
+    // động (chỉ vài dòng đầu có output) mà không bỏ sót nội dung TUI ở các
+    // dòng dưới cursor.
+    let last_non_blank_display_line = snapshot
+        .cells
+        .iter()
+        .rev()
+        .find(|ic| !is_blank(&ic.cell))
+        .map(|ic| ic.point.line.0)
+        .unwrap_or(0)
+        .max(0);
+    let gutter_line_count = ((last_non_blank_display_line as usize) + 1)
+        .min(num_lines)
+        .max(1);
 
     let gutter_entries = gutter::compute_gutter_entries(
         line_times,

@@ -40,6 +40,7 @@ pub(crate) fn compute_gutter_width(
 /// `viewport_lines` là chiều cao viewport (grid rows) — dùng để tính absolute
 /// line number. `max_entries` giới hạn số entry thực tế render (vd chỉ đến dòng
 /// con trỏ khi ở bottom, bỏ qua các row rỗng phía dưới).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compute_gutter_entries(
     line_times: &[String],
     total_lines: usize,
