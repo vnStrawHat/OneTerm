@@ -80,6 +80,7 @@ impl Panel for TerminalPanel {
         let theme = cx.theme().muted_foreground;
 
         h_flex()
+            .w_full()
             .items_center()
             .gap_1()
             // Tiêu đề "Terminal" — co giãn, cắt bớt bằng ellipsis nếu hẹp.
