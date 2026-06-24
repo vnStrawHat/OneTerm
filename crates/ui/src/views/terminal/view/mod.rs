@@ -216,7 +216,9 @@ impl LocalTerminalView {
             }
             // Dropped lines = (absolute - total) - (prev_absolute - prev_total).
             // Khi scrollback đầy, total không đổi nhưng absolute tăng → dropped > 0.
-            let prev_dropped = self.prev_absolute_line_count.saturating_sub(self.prev_total_lines);
+            let prev_dropped = self
+                .prev_absolute_line_count
+                .saturating_sub(self.prev_total_lines);
             let curr_dropped = absolute.saturating_sub(total);
             let dropped_delta = curr_dropped.saturating_sub(prev_dropped);
             // O(n) thay vì O(n²): drain() shift 1 lần, remove(0) shift n lần.

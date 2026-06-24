@@ -65,9 +65,9 @@ pub(crate) fn compute_gutter_entries(
     for i in 0..max_entries {
         // Line number dùng absolute_line_count (monotonically increasing)
         // thay vì total_lines (bị cap bởi scrollback).
-        let line_num =
-            absolute_line_count as i32 - display_offset as i32 - viewport_lines as i32 + i as i32
-                + 1;
+        let line_num = absolute_line_count as i32 - display_offset as i32 - viewport_lines as i32
+            + i as i32
+            + 1;
         let line_num = line_num.max(1) as usize;
         // line_times index vẫn dùng total_lines (synced với buffer thực tế).
         let abs_idx = (total_lines as i32 - display_offset as i32 - viewport_lines as i32

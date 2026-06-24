@@ -67,22 +67,42 @@ pub(crate) fn box_drawing_rects(c: char, cw_d: i32, lh_d: i32) -> Vec<(i32, i32,
     }
     macro_rules! hr {
         ($cy:expr, $thick:expr) => {
-            (cx - $thick / 2, $cy - $thick / 2, cw_d - (cx - $thick / 2), $thick)
+            (
+                cx - $thick / 2,
+                $cy - $thick / 2,
+                cw_d - (cx - $thick / 2),
+                $thick,
+            )
         };
     }
     macro_rules! hl {
         ($cy:expr, $thick:expr) => {
-            (0, $cy - $thick / 2, (cx + $thick - $thick / 2).min(cw_d), $thick)
+            (
+                0,
+                $cy - $thick / 2,
+                (cx + $thick - $thick / 2).min(cw_d),
+                $thick,
+            )
         };
     }
     macro_rules! vd {
         ($cx:expr, $thick:expr) => {
-            ($cx - $thick / 2, cy - $thick / 2, $thick, lh_d - (cy - $thick / 2))
+            (
+                $cx - $thick / 2,
+                cy - $thick / 2,
+                $thick,
+                lh_d - (cy - $thick / 2),
+            )
         };
     }
     macro_rules! vu {
         ($cx:expr, $thick:expr) => {
-            ($cx - $thick / 2, 0, $thick, (cy + $thick - $thick / 2).min(lh_d))
+            (
+                $cx - $thick / 2,
+                0,
+                $thick,
+                (cy + $thick - $thick / 2).min(lh_d),
+            )
         };
     }
 
