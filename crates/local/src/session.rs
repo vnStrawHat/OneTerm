@@ -64,7 +64,11 @@ pub struct LocalSession {
 
 impl LocalSession {
     /// Spawn shell theo `cfg` với kích thước ban đầu `initial`.
-    pub fn spawn(cfg: LocalShellConfig, initial: PtySize) -> Result<Self, AppError> {
+    pub fn spawn(
+        cfg: LocalShellConfig,
+        initial: PtySize,
+        scrollback_history: usize,
+    ) -> Result<Self, AppError> {
         let resolved = resolve_shell(&cfg)?;
         let opts = Options {
             shell: Some(Shell::new(
@@ -95,7 +99,7 @@ impl LocalSession {
             lines: initial.rows as usize,
         };
         let term_config = Config {
-            scrolling_history: 10_000,
+            scrolling_history: scrollback_history,
             ..Default::default()
         };
         let term = Arc::new(FairMutex::new(Term::new(

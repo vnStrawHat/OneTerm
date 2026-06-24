@@ -203,6 +203,7 @@ mod tests {
         assert_eq!(cfg.layout.padding.left, 10.0);
         assert!(cfg.bell.enabled);
         assert_eq!(cfg.scroll.multiplier, 1.0);
+        assert_eq!(cfg.scroll.scrollback_history, 10_000);
         assert_eq!(cfg.colors.foreground.as_deref(), Some("#efefef"));
         assert_eq!(cfg.colors.selection.as_deref(), Some("#343b48"));
         assert_eq!(cfg.colors.min_contrast, 0.0);
@@ -230,7 +231,8 @@ mod tests {
             },
             "scroll": {
                 "multiplier": 3.0,
-                "alternate_scroll": false
+                "alternate_scroll": false,
+                "scrollback_history": 50000
             },
             "bell": { "enabled": false },
             "colors": {
@@ -251,6 +253,7 @@ mod tests {
         assert_eq!(cfg.layout.padding.top, 4.0);
         assert_eq!(cfg.scroll.multiplier, 3.0);
         assert!(!cfg.scroll.alternate_scroll);
+        assert_eq!(cfg.scroll.scrollback_history, 50000);
         assert!(!cfg.bell.enabled);
         assert_eq!(cfg.colors.foreground.as_deref(), Some("#cccccc"));
         assert_eq!(cfg.colors.min_contrast, 3.0);

@@ -53,6 +53,7 @@ impl TerminalSettings {
         let scroll: &ScrollConfig = &cfg.scroll;
         self.scroll_multiplier = scroll.multiplier;
         self.alternate_scroll = scroll.alternate_scroll;
+        self.scrollback_history = scroll.scrollback_history;
 
         let bell: &BellConfig = &cfg.bell;
         self.bell_enabled = bell.enabled;

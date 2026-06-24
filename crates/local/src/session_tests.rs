@@ -10,7 +10,7 @@ use crate::session::{LocalSession, PtySize};
 
 fn spawn_default() -> LocalSession {
     let cfg = myterm2_core::LocalShellConfig::default();
-    LocalSession::spawn(cfg, PtySize { rows: 24, cols: 80 }).expect("spawn")
+    LocalSession::spawn(cfg, PtySize { rows: 24, cols: 80 }, 10_000).expect("spawn")
 }
 
 #[test]

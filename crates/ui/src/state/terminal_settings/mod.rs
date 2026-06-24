@@ -115,6 +115,9 @@ pub struct TerminalSettings {
     pub scroll_multiplier: f32,
     /// Alternate scroll mode (alt-screen → arrow keys).
     pub alternate_scroll: bool,
+    /// Số dòng scrollback history tối đa (default 10000).
+    /// Tổng dòng trong gutter = scrollback_history + viewport lines.
+    pub scrollback_history: usize,
 
     // ── Bell ──
     /// Bật/tắt bell indicator.
@@ -142,6 +145,7 @@ impl Default for TerminalSettings {
             padding: TerminalPadding::default(),
             scroll_multiplier: 1.0,
             alternate_scroll: true,
+            scrollback_history: 10_000,
             bell_enabled: true,
             color_overrides: ColorOverrides::default(),
         }

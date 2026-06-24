@@ -27,10 +27,13 @@ pub struct TerminalPanel {
 impl TerminalPanel {
     /// Tạo panel + spawn session local mặc định (cmd trên Windows).
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let shell = TerminalSettings::global(cx).read(cx).shell.clone();
+        let (shell, scrollback_history) = {
+            let settings = TerminalSettings::global(cx).read(cx);
+            (settings.shell.clone(), settings.scrollback_history)
+        };
         let session: Entity<Box<dyn TerminalSession>> = cx.new(|_cx| {
             Box::new(
-                LocalSession::spawn(shell, PtySize { rows: 24, cols: 80 })
+                LocalSession::spawn(shell, PtySize { rows: 24, cols: 80 }, scrollback_history)
                     .expect("spawn local session"),
             ) as Box<dyn TerminalSession>
         });
