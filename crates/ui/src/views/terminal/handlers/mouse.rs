@@ -59,17 +59,6 @@ pub(crate) fn attach_mouse(
             });
         }
     })
-    .on_mouse_down(MouseButton::Middle, {
-        let s = session.clone();
-        move |_e: &MouseDownEvent, _w, cx: &mut App| {
-            // Middle-click = paste (X11 PRIMARY/CLIPBOARD).
-            if let Some(item) = cx.read_from_clipboard() {
-                if let Some(text) = item.text() {
-                    s.update(cx, |s, _| s.paste(&text));
-                }
-            }
-        }
-    })
     .on_mouse_move({
         let s = session.clone();
         let m = metrics.clone();
