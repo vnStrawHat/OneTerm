@@ -100,12 +100,7 @@ impl Render for LocalTerminalView {
             let absolute = info.absolute_line_count;
             if self.line_times.len() != total {
                 let now = chrono::Local::now().format("%H:%M:%S").to_string();
-                while self.line_times.len() < total {
-                    self.line_times.push(now.clone());
-                }
-                while self.line_times.len() > total {
-                    self.line_times.pop();
-                }
+                self.line_times.resize(total, now);
                 self.prev_total_lines = total;
             }
             self.prev_absolute_line_count = absolute;

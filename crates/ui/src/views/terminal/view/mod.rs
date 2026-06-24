@@ -209,7 +209,8 @@ impl LocalTerminalView {
         if absolute > self.prev_absolute_line_count {
             // New lines output.
             let new_lines = absolute - self.prev_absolute_line_count;
-            // Push new timestamps.
+            // Push new timestamps (reserve để tránh reallocate).
+            self.line_times.reserve(new_lines);
             for _ in 0..new_lines {
                 self.line_times.push(now.clone());
             }
@@ -218,10 +219,10 @@ impl LocalTerminalView {
             let prev_dropped = self.prev_absolute_line_count.saturating_sub(self.prev_total_lines);
             let curr_dropped = absolute.saturating_sub(total);
             let dropped_delta = curr_dropped.saturating_sub(prev_dropped);
-            for _ in 0..dropped_delta {
-                if !self.line_times.is_empty() {
-                    self.line_times.remove(0);
-                }
+            // O(n) thay vì O(n²): drain() shift 1 lần, remove(0) shift n lần.
+            if dropped_delta > 0 {
+                let drain_count = dropped_delta.min(self.line_times.len());
+                self.line_times.drain(0..drain_count);
             }
         } else if absolute < self.prev_absolute_line_count {
             // Reset (clear / alt-screen / resize) — rebuild from scratch.
@@ -233,12 +234,7 @@ impl LocalTerminalView {
         // absolute == prev_absolute: no new lines, không cần shift.
 
         // Ensure line_times synced với total_lines.
-        while self.line_times.len() < total {
-            self.line_times.push(now.clone());
-        }
-        while self.line_times.len() > total {
-            self.line_times.pop();
-        }
+        self.line_times.resize(total, now.clone());
 
         self.prev_total_lines = total;
         self.prev_absolute_line_count = absolute;
