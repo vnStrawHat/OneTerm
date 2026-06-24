@@ -134,8 +134,6 @@ impl MyTermWorkspace {
             KeyBinding::new("ctrl-w", ClosePanel, None),
         ]);
     }
-
-
 }
 
 impl Render for MyTermWorkspace {

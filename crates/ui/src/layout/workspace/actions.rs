@@ -50,18 +50,14 @@ impl super::MyTermWorkspace {
     /// Kiểm tra center DockItem có TabPanel còn panel nào không.
     fn center_has_no_visible_panel(center: &DockItem, cx: &gpui::App) -> bool {
         match center {
-            DockItem::Tabs { view, .. } => {
-                view.read(cx).active_panel(cx).is_none()
-            }
-            DockItem::Split { items, .. } => {
-                !items.iter().any(|item| {
-                    if let DockItem::Tabs { view, .. } = item {
-                        view.read(cx).active_panel(cx).is_some()
-                    } else {
-                        false
-                    }
-                })
-            }
+            DockItem::Tabs { view, .. } => view.read(cx).active_panel(cx).is_none(),
+            DockItem::Split { items, .. } => !items.iter().any(|item| {
+                if let DockItem::Tabs { view, .. } = item {
+                    view.read(cx).active_panel(cx).is_some()
+                } else {
+                    false
+                }
+            }),
             _ => false,
         }
     }

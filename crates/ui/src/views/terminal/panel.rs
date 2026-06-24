@@ -9,8 +9,7 @@ use std::sync::Arc;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, MouseButton, ParentElement, Render,
-    StatefulInteractiveElement, Styled, WeakEntity, Window, div, px,
-    prelude::FluentBuilder as _,
+    StatefulInteractiveElement, Styled, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable,
@@ -136,11 +135,7 @@ impl Panel for TerminalPanel {
                                 });
                             }
                         })
-                        .child(
-                            Icon::new(IconName::Close)
-                                .xsmall()
-                                .text_color(theme),
-                        ),
+                        .child(Icon::new(IconName::Close).xsmall().text_color(theme)),
                 )
             })
     }
