@@ -30,18 +30,23 @@ pub(crate) fn box_drawing_rects(c: char, cw_d: i32, lh_d: i32) -> Vec<(i32, i32,
     // (no hairline gaps) and corners remain solid.  Heavy is ~2x light.
     let t = (cw_d as f32 / 6.0).round().max(1.0) as i32; // light thickness
     let ht = super::heavy_thickness(cw_d); // heavy thickness
-    // Double-line stroke width.
-    let dt = (cw_d as f32 / 8.0).round().max(1.0) as i32;
+    // Double-line stroke: make the two parallel strokes as thick as light
+    // lines so they look solid instead of hairline. Center each stroke
+    // around its offset so the pair stays symmetric in the cell.
+    let dt = (cw_d as f32 / 5.0).round().max(1.0) as i32;
     let dl = dt;
     let dv = dt;
-    let x_out = (cx - dl).max(0);
-    let x_in = (cx + dl).min(cw_d - dt);
-    let y_out = (cy - dv).max(0);
-    let y_in = (cy + dv).min(lh_d - dt);
-    let y_out_top = (y_out - dt).max(0);
-    let y_in_top = (y_in - dt).max(0);
-    let x_out_left = (x_out - dt).max(0);
-    let x_in_left = (x_in - dt).max(0);
+    let half_dt = dt / 2;
+    let x_out = (cx - dl).max(half_dt);
+    let x_in = (cx + dl).min(cw_d - half_dt);
+    let y_out = (cy - dv).max(half_dt);
+    let y_in = (cy + dv).min(lh_d - half_dt);
+    let y_out_top = (y_out - half_dt).max(0);
+    let y_in_top = (y_in - half_dt).min(lh_d - dt);
+    let y_out_bot = y_out_top + dt;
+    let y_in_bot = y_in_top + dt;
+    let x_out_left = (x_out - half_dt).max(0);
+    let x_in_left = (x_in - half_dt).min(cw_d - dt);
 
     macro_rules! h {
         ($y:expr, $thick:expr) => {
@@ -165,15 +170,15 @@ pub(crate) fn box_drawing_rects(c: char, cw_d: i32, lh_d: i32) -> Vec<(i32, i32,
             (0, y_in_top, x_out_left + dt, dt),
         ],
         '\u{255A}' => vec![
-            (x_out_left, 0, dt, y_in),
+            (x_out_left, 0, dt, y_in_bot),
             (x_out_left, y_in_top, cw_d - x_out_left, dt),
-            (x_in_left, 0, dt, y_out),
+            (x_in_left, 0, dt, y_out_bot),
             (x_in_left, y_out_top, cw_d - x_in_left, dt),
         ],
         '\u{255D}' => vec![
-            (x_in_left, 0, dt, y_in),
+            (x_in_left, 0, dt, y_in_bot),
             (0, y_in_top, x_in_left + dt, dt),
-            (x_out_left, 0, dt, y_out),
+            (x_out_left, 0, dt, y_out_bot),
             (0, y_out_top, x_out_left + dt, dt),
         ],
         // Mixed-light double corners

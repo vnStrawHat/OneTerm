@@ -57,9 +57,9 @@ pub(crate) fn compute_gutter_entries(
         let line_num =
             total_lines as i32 - display_offset as i32 - viewport_lines as i32 + i as i32 + 1;
         let line_num = line_num.max(1) as usize;
-        let abs_idx =
-            (total_lines as i32 - display_offset as i32 - viewport_lines as i32 + i as i32)
-                .max(0) as usize;
+        let abs_idx = (total_lines as i32 - display_offset as i32 - viewport_lines as i32
+            + i as i32)
+            .max(0) as usize;
         let time_str = if abs_idx < line_times.len() {
             line_times[abs_idx].as_str()
         } else {

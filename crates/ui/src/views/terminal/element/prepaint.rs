@@ -3,8 +3,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
 use alacritty_terminal::term::TermMode;
+use alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
 use gpui::{App, Bounds, Pixels, SharedString, Window, px};
 
 use myterm2_core::TerminalSession;
