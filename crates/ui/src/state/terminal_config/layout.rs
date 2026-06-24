@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Nhóm Layout: line height, cell width, padding.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LayoutConfig {
-    /// Line height multiplier (1.15 = 115% font size).
+    /// Line height multiplier (1.2 = 120% font size).
     #[serde(default = "default_line_height")]
     pub line_height: f32,
     /// Cell width override in px (null = auto từ advance width của '0',
@@ -28,7 +28,7 @@ impl Default for LayoutConfig {
 }
 
 fn default_line_height() -> f32 {
-    1.15
+    1.2
 }
 
 fn default_cell_width() -> Option<f32> {

@@ -197,7 +197,7 @@ mod tests {
         assert_eq!(cfg.cursor.shape, "block");
         assert_eq!(cfg.font.family.as_deref(), Some("Cascadia Mono"));
         assert_eq!(cfg.font.size, Some(15.0));
-        assert_eq!(cfg.layout.line_height, 1.15);
+        assert_eq!(cfg.layout.line_height, 1.2);
         assert_eq!(cfg.layout.cell_width, None);
         assert_eq!(cfg.layout.padding.right, 5.0);
         assert_eq!(cfg.layout.padding.left, 10.0);
@@ -266,7 +266,7 @@ mod tests {
         assert_eq!(cfg.font.family.as_deref(), Some("Cascadia Mono"));
         assert_eq!(cfg.font.weight, "normal");
         assert_eq!(cfg.cursor.shape, "block");
-        assert_eq!(cfg.layout.line_height, 1.15);
+        assert_eq!(cfg.layout.line_height, 1.2);
         assert_eq!(cfg.colors.foreground.as_deref(), Some("#efefef"));
     }
 }

@@ -757,7 +757,7 @@ font, khớp Windows Terminal.
 
 ### 37.1. Vấn đề
 
-Cấu hình `layout.line_height` là multiplier (ví dụ `1.15`). Nếu tính đơn giản:
+Cấu hình `layout.line_height` là multiplier (ví dụ `1.2`). Nếu tính đơn giản:
 
 ```rust
 let line_height = px(font_size * line_height_factor);
@@ -784,7 +784,7 @@ let line_height = px(snap_px(factor_height.max(natural_line_height)));
 ### 37.3. Tại sao chỉ cần `ascent + descent`?
 
 Windows Terminal tính `advanceHeight = ascent + descent + lineGap`. GPUI
-không expose `lineGap`, nhưng `line_height_factor` mặc định (`1.15` ~ `1.2`)
+không expose `lineGap`, nhưng `line_height_factor` mặc định (`1.2`)
 bù khoảng trống line gap.
 
 Hơn nữa, GPUI `paint_line` tự center text trong `line_height` dựa trên
@@ -1013,7 +1013,7 @@ TerminalElement::paint()
     "color": null           // null = theme caret, "#RRGGBB" = override
   },
   "layout": {
-    "line_height": 1.15,    // factor × font_size, tối thiểu = ascent + descent
+    "line_height": 1.2,    // factor × font_size, tối thiểu = ascent + descent
     "cell_width": null,     // null = auto (advance '0'), số = override px
     "padding": { "top": 0, "right": 5, "bottom": 0, "left": 10 }
   }
@@ -1025,7 +1025,7 @@ TerminalElement::paint()
 | Tham số | Giá trị mặc định | Ghi chú |
 |---|---|---|
 | `cursor.shape` | `"block"` | Override shell `DECSCUSR` |
-| `layout.line_height` | `1.15` | Factor, bù lineGap |
+| `layout.line_height` | `1.2` | Factor, bù lineGap |
 | `layout.cell_width` | `null` | Auto = `ch_advance('0')` |
 | `cursor.blink` | `true` | 500ms interval |
 
@@ -1076,7 +1076,7 @@ terminal.json (user config)
     ▼
 TerminalConfig (serde deserialize)
     │  layout.cell_width: Option<f32>     (None = auto)
-    │  layout.line_height: f32            (factor, mặc định 1.15)
+    │  layout.line_height: f32            (factor, mặc định 1.2)
     │  cursor.shape: String               ("block" | "bar" | "underline")
     ▼
 TerminalSettings::apply_config
@@ -1138,7 +1138,7 @@ TerminalElement::paint()
     "color": null           // null = theme caret, "#RRGGBB" = override
   },
   "layout": {
-    "line_height": 1.15,    // factor × font_size, tối thiểu = ascent + descent
+    "line_height": 1.2,    // factor × font_size, tối thiểu = ascent + descent
     "cell_width": null,     // null = auto (advance '0'), số = override px
     "padding": { "top": 0, "right": 5, "bottom": 0, "left": 10 }
   }
@@ -1150,7 +1150,7 @@ TerminalElement::paint()
 | Tham số | Giá trị mặc định | Ghi chú |
 |---|---|---|
 | `cursor.shape` | `"block"` | Override shell `DECSCUSR` |
-| `layout.line_height` | `1.15` | Factor, bù lineGap |
+| `layout.line_height` | `1.2` | Factor, bù lineGap |
 | `layout.cell_width` | `null` | Auto = `ch_advance('0')` |
 | `cursor.blink` | `true` | 500ms interval |
 
