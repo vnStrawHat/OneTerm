@@ -181,6 +181,16 @@ pub(crate) fn attach_key(
                 }
             }
 
+            // ── Shift+Insert = paste (X11 convention) ──
+            if mods.shift && e.keystroke.key.as_str() == "insert" {
+                if let Some(item) = cx.read_from_clipboard() {
+                    if let Some(text) = item.text() {
+                        s.update(cx, |s, _| s.paste(&text));
+                    }
+                }
+                return;
+            }
+
             // IME active (không alt-screen): ký tự thường do
             // replace_text_in_range lo → skip on_key_down để tránh double.
             if !s.read(cx).is_alt_screen() {
