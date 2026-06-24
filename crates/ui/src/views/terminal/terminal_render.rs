@@ -8,7 +8,7 @@ use gpui::{
 };
 use gpui_component::ActiveTheme as _;
 
-use super::terminal_element::TerminalElement;
+use super::element::TerminalElement;
 use super::terminal_view::LocalTerminalView;
 use super::theme::{TerminalTheme, build_terminal_theme};
 use crate::state::TerminalSettings;

@@ -1,0 +1,193 @@
+//! Keyboard handler cho `LocalTerminalView`.
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use gpui::{App, ClipboardItem, Entity, FocusHandle, InteractiveElement as _, KeyDownEvent};
+
+use myterm2_core::TerminalSession;
+use myterm2_core::terminal::{KeySpec, encode_key};
+
+use super::super::element::GridMetrics;
+use super::super::terminal_view::LocalTerminalView;
+use super::vi::{toggle_vi_mode, update_vi_selection};
+
+/// Gắn keyboard handler.
+pub(crate) fn attach_key(
+    div: gpui::Stateful<gpui::Div>,
+    session: Entity<Box<dyn TerminalSession>>,
+    metrics: Rc<RefCell<GridMetrics>>,
+    view: Entity<LocalTerminalView>,
+    _focus: FocusHandle,
+) -> gpui::Stateful<gpui::Div> {
+    let _ = metrics;
+    div.on_key_down({
+        let s = session.clone();
+        let view = view.clone();
+        move |e: &KeyDownEvent, _w, cx: &mut App| {
+            let mods = e.keystroke.modifiers;
+
+            // ── Vi mode ──
+            if mods.control && mods.shift && e.keystroke.key.as_str() == "space" {
+                toggle_vi_mode(&s, &view, cx);
+                cx.stop_propagation();
+                return;
+            }
+
+            if view.read(cx).vi_mode {
+                let key = e.keystroke.key.as_str();
+                let key_char = e.keystroke.key_char.as_deref().unwrap_or("");
+                if super::vi::handle_vi_key(key, key_char, &s, &view, cx) {
+                    cx.stop_propagation();
+                    return;
+                }
+            }
+
+            // Update vi selection if selecting.
+            if view.read(cx).vi_selecting {
+                update_vi_selection(&s, &view, cx);
+            }
+
+            // ── Scroll keyboard actions ──
+            if mods.shift {
+                let snap = s.read(cx).snapshot();
+                let viewport = snap.terminal_bounds.num_lines as i32;
+                match e.keystroke.key.as_str() {
+                    "pageup" => {
+                        s.update(cx, |s, _| s.scroll(viewport));
+                        let _ = view.update(cx, |v, cx| {
+                            v.last_scroll_time = Some(std::time::Instant::now());
+                            cx.notify();
+                        });
+                        cx.stop_propagation();
+                        return;
+                    }
+                    "pagedown" => {
+                        s.update(cx, |s, _| s.scroll(-viewport));
+                        let _ = view.update(cx, |v, cx| {
+                            v.last_scroll_time = Some(std::time::Instant::now());
+                            cx.notify();
+                        });
+                        cx.stop_propagation();
+                        return;
+                    }
+                    "home" => {
+                        s.update(cx, |s, _| s.scroll_to_top());
+                        let _ = view.update(cx, |v, cx| {
+                            v.last_scroll_time = Some(std::time::Instant::now());
+                            cx.notify();
+                        });
+                        cx.stop_propagation();
+                        return;
+                    }
+                    "end" => {
+                        s.update(cx, |s, _| s.scroll_to_bottom());
+                        let _ = view.update(cx, |v, cx| {
+                            v.last_scroll_time = Some(std::time::Instant::now());
+                            cx.notify();
+                        });
+                        cx.stop_propagation();
+                        return;
+                    }
+                    _ => {}
+                }
+                // Ctrl+Shift+Up/Down: scroll 1 line.
+                if mods.control {
+                    match e.keystroke.key.as_str() {
+                        "up" => {
+                            s.update(cx, |s, _| s.scroll(1));
+                            let _ = view.update(cx, |v, cx| {
+                                v.last_scroll_time = Some(std::time::Instant::now());
+                                cx.notify();
+                            });
+                            cx.stop_propagation();
+                            return;
+                        }
+                        "down" => {
+                            s.update(cx, |s, _| s.scroll(-1));
+                            let _ = view.update(cx, |v, cx| {
+                                v.last_scroll_time = Some(std::time::Instant::now());
+                                cx.notify();
+                            });
+                            cx.stop_propagation();
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            // Ctrl+Shift+C/V copy/paste.
+            if mods.control && mods.shift {
+                match e.keystroke.key.as_str() {
+                    "c" => {
+                        if let Some(text) = s.read(cx).selection_text() {
+                            if !text.is_empty() {
+                                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                            }
+                        }
+                        return;
+                    }
+                    "v" => {
+                        if let Some(item) = cx.read_from_clipboard() {
+                            if let Some(text) = item.text() {
+                                s.update(cx, |s, _| s.paste(&text));
+                            }
+                        }
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+
+            // IME active (không alt-screen): ký tự thường do
+            // replace_text_in_range lo → skip on_key_down để tránh double.
+            if !s.read(cx).is_alt_screen() {
+                let m = e.keystroke.modifiers;
+                if !m.control && !m.alt && !m.platform {
+                    if let Some(ch) = e.keystroke.key_char.as_deref() {
+                        if !ch.is_empty() && !ch.chars().any(|c| c.is_control()) {
+                            return; // để replace_text_in_range ghi
+                        }
+                    }
+                }
+            }
+
+            let Some((spec, mods)) = LocalTerminalView::map_key(&e.keystroke) else {
+                return;
+            };
+
+            // Ctrl+C (không Shift) = SIGINT — dùng send_ctrl_c().
+            if mods.ctrl && !mods.shift {
+                if let KeySpec::Character(ch) = &spec {
+                    if ch == "c" || ch == "C" {
+                        s.update(cx, |s, _| s.send_ctrl_c());
+                        let _ = view.update(cx, |view, cx| {
+                            if view.has_bell {
+                                view.has_bell = false;
+                                cx.notify();
+                            }
+                        });
+                        cx.stop_propagation();
+                        return;
+                    }
+                }
+            }
+
+            let Some(bytes) = encode_key(&spec, mods) else {
+                return;
+            };
+            s.update(cx, |s, _| s.write(&bytes));
+
+            // Clear bell indicator khi user gõ phím.
+            let _ = view.update(cx, |view, cx| {
+                if view.has_bell {
+                    view.has_bell = false;
+                    cx.notify();
+                }
+            });
+
+            cx.stop_propagation();
+        }
+    })
+}

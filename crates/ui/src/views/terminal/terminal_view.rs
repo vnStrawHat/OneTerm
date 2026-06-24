@@ -22,7 +22,7 @@ use async_channel::Receiver;
 use myterm2_core::terminal::{KeyMods, KeySpec, NamedKey};
 use myterm2_core::{SessionEvent, TerminalSession};
 
-use super::terminal_element::{GridMetrics, RowLayoutCache};
+use super::element::{GridMetrics, RowLayoutCache};
 use super::terminal_scrollbar::TerminalScrollHandle;
 use super::theme::TerminalTheme;
 use crate::state::{TerminalBlink, TerminalSettings};
