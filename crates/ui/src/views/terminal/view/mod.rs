@@ -56,6 +56,8 @@ pub struct LocalTerminalView {
     pub(crate) line_times: Vec<String>,
     /// Previous total_lines — detect new lines added.
     pub(crate) prev_total_lines: usize,
+    /// Previous absolute_line_count — detect dropped lines (scrollback full).
+    pub(crate) prev_absolute_line_count: usize,
     /// Previous cursor line (alacritty Line.0) — detect new line vs modification.
     pub(crate) prev_cursor_line: i32,
     /// Per-row layout cache — skip recompute cho non-dirty rows.
@@ -150,6 +152,7 @@ impl LocalTerminalView {
             last_mouse_pos: None,
             line_times: Vec::new(),
             prev_total_lines: 0,
+            prev_absolute_line_count: 0,
             prev_cursor_line: 0,
             row_cache: Rc::new(RefCell::new(RowLayoutCache::new())),
         }
@@ -190,43 +193,55 @@ impl LocalTerminalView {
     }
 
     /// Cập nhật `line_times` khi output mới.
+    ///
+    /// Dùng `absolute_line_count` (monotonically increasing, từ event loop) để
+    /// detect cả new lines lẫn dropped lines (khi scrollback đầy). `line_times`
+    /// được synced với `total_lines` (buffer thực tế) — khi dòng bị drop khỏi
+    /// scrollback, timestamp cũ bị remove từ front, timestamp mới push vào back.
     fn update_line_times(&mut self, s: &Entity<Box<dyn TerminalSession>>, cx: &mut Context<Self>) {
         let _ = cx;
         let info = s.read(cx).terminal_info();
         let total = info.total_lines;
+        let absolute = info.absolute_line_count;
         let cur_line = info.cursor_line;
         let now = chrono::Local::now().format("%H:%M:%S").to_string();
-        if total > self.prev_total_lines {
-            let delta = total - self.prev_total_lines;
-            for _ in 0..delta {
+
+        if absolute > self.prev_absolute_line_count {
+            // New lines output.
+            let new_lines = absolute - self.prev_absolute_line_count;
+            // Push new timestamps.
+            for _ in 0..new_lines {
                 self.line_times.push(now.clone());
             }
-        } else if total == self.prev_total_lines {
-            if total != 0 {
-                if cur_line < self.prev_cursor_line {
-                    if !self.line_times.is_empty() {
-                        self.line_times.remove(0);
-                    }
-                    self.line_times.push(now.clone());
-                } else {
-                    let abs = (cur_line + total as i32 - 1) as usize;
-                    if abs < self.line_times.len() {
-                        self.line_times[abs] = now.clone();
-                    } else if abs == self.line_times.len() {
-                        self.line_times.push(now.clone());
-                    }
+            // Dropped lines = (absolute - total) - (prev_absolute - prev_total).
+            // Khi scrollback đầy, total không đổi nhưng absolute tăng → dropped > 0.
+            let prev_dropped = self.prev_absolute_line_count.saturating_sub(self.prev_total_lines);
+            let curr_dropped = absolute.saturating_sub(total);
+            let dropped_delta = curr_dropped.saturating_sub(prev_dropped);
+            for _ in 0..dropped_delta {
+                if !self.line_times.is_empty() {
+                    self.line_times.remove(0);
                 }
             }
-        } else {
-            self.line_times.truncate(total);
+        } else if absolute < self.prev_absolute_line_count {
+            // Reset (clear / alt-screen / resize) — rebuild from scratch.
+            self.line_times.clear();
+            for _ in 0..total {
+                self.line_times.push(now.clone());
+            }
         }
+        // absolute == prev_absolute: no new lines, không cần shift.
+
+        // Ensure line_times synced với total_lines.
         while self.line_times.len() < total {
             self.line_times.push(now.clone());
         }
         while self.line_times.len() > total {
             self.line_times.pop();
         }
+
         self.prev_total_lines = total;
+        self.prev_absolute_line_count = absolute;
         self.prev_cursor_line = cur_line;
     }
 }

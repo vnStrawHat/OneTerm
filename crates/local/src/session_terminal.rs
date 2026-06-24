@@ -27,8 +27,11 @@ impl TerminalSession for LocalSession {
 
     fn terminal_info(&self) -> TerminalInfo {
         let term = self.term.lock();
+        let total_lines = term.total_lines();
+        let st = self.state.lock().unwrap();
         TerminalInfo {
-            total_lines: term.total_lines(),
+            total_lines,
+            absolute_line_count: st.absolute_line_count.max(total_lines),
             cursor_line: term.grid().cursor.point.line.0,
             num_lines: term.screen_lines(),
             display_offset: term.grid().display_offset(),

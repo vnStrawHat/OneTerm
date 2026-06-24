@@ -24,8 +24,12 @@ use crate::terminal::osc::Osc133Kind;
 /// damage tracking cho prepaint.
 #[derive(Debug, Clone, Copy)]
 pub struct TerminalInfo {
-    /// Tổng số dòng trong scrollback + viewport.
+    /// Tổng số dòng trong scrollback + viewport (bị giới hạn bởi scrolling_history).
     pub total_lines: usize,
+    /// **Absolute** line count — tổng số dòng đã output từ lúc spawn,
+    /// kể cả khi scrollback đầy và drop dòng cũ. Monotonically increasing.
+    /// Gutter line number dùng giá trị này thay vì `total_lines`.
+    pub absolute_line_count: usize,
     /// Cursor line (alacritty Line.0).
     pub cursor_line: i32,
     /// Số dòng hiển thị (viewport height).

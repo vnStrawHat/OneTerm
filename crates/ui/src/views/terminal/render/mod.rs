@@ -97,6 +97,7 @@ impl Render for LocalTerminalView {
 
         {
             let total = info.total_lines;
+            let absolute = info.absolute_line_count;
             if self.line_times.len() != total {
                 let now = chrono::Local::now().format("%H:%M:%S").to_string();
                 while self.line_times.len() < total {
@@ -107,6 +108,7 @@ impl Render for LocalTerminalView {
                 }
                 self.prev_total_lines = total;
             }
+            self.prev_absolute_line_count = absolute;
         }
 
         let theme = self.apply_color_overrides(theme, &color_overrides);

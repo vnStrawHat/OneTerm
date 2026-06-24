@@ -61,7 +61,18 @@ pub(crate) fn prepaint_terminal(
     let pad_top = px(padding.top);
     let pad_bottom = px(padding.bottom);
 
-    let gutter_width = compute_gutter_width(line_times, font, font_size, theme, window);
+    // Read terminal_info early — cần absolute_line_count cho gutter width.
+    let info = session.read(cx).terminal_info();
+    let absolute_line_count = info.absolute_line_count;
+
+    let gutter_width = compute_gutter_width(
+        line_times,
+        absolute_line_count,
+        font,
+        font_size,
+        theme,
+        window,
+    );
 
     let (rows, cols) = measure::resize_session(
         session,
@@ -171,6 +182,7 @@ pub(crate) fn prepaint_terminal(
     let gutter_entries = gutter::compute_gutter_entries(
         line_times,
         total_lines,
+        absolute_line_count,
         display_offset,
         num_lines,
         gutter_line_count,

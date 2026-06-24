@@ -26,6 +26,11 @@ pub struct SessionState {
     pub last_exit_code: Option<i32>,
     /// Foreground process hiện tại (vd "cargo", "node").
     pub foreground_process: Option<String>,
+    /// **Absolute** line count — tổng số dòng đã output kể cả khi scrollback đầy.
+    /// Track ở event loop level, đọc qua terminal_info().
+    pub absolute_line_count: usize,
+    /// Previous total_lines — dùng ở event loop để detect dropped lines.
+    pub prev_total_lines: usize,
 }
 
 /// Arc-Mutex wrapper tiện lợi.

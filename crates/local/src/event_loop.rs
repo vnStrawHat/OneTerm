@@ -12,6 +12,7 @@ use std::io::{self, Read, Write};
 use std::sync::mpsc;
 
 use alacritty_terminal::event::{Event, EventListener, OnResize, WindowSize};
+use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
 use alacritty_terminal::tty::{self, EventedPty, EventedReadWrite};
@@ -208,6 +209,12 @@ impl ShellEventLoop {
                     let mut processed = 0;
                     let mut terminal = None;
 
+                    // Load absolute line count tracking state.
+                    let (mut absolute, mut prev_total) = {
+                        let st = self.state.lock().unwrap();
+                        (st.absolute_line_count, st.prev_total_lines)
+                    };
+
                     loop {
                         match self.pty.reader().read(&mut buf[unprocessed..]) {
                             Ok(0) if unprocessed == 0 => break,
@@ -237,6 +244,24 @@ impl ShellEventLoop {
 
                         // Feed bytes to Term (via ansi::Processor).
                         processor.advance(&mut **terminal, &buf[..unprocessed]);
+                        let total_after = terminal.total_lines();
+                        let screen_lines = terminal.screen_lines();
+
+                        // Track absolute line count (decoupled từ scrollback).
+                        if total_after > prev_total {
+                            // Scrollback chưa đầy — total_lines tăng.
+                            absolute += total_after - prev_total;
+                        } else if total_after == prev_total && total_after > screen_lines {
+                            // Scrollback đầy — total_lines không đổi nhưng có output mới.
+                            // Đếm \n trong buffer = số dòng bị drop.
+                            let newline_count =
+                                buf[..unprocessed].iter().filter(|&&b| b == b'\n').count();
+                            absolute += newline_count;
+                        } else if total_after < prev_total {
+                            // Clear / alt-screen / resize — reset absolute.
+                            absolute = total_after;
+                        }
+                        prev_total = total_after;
 
                         // Feed SAME bytes to OscSink (via vte::Parser) — song song.
                         vte_parser.advance(&mut osc_sink, &buf[..unprocessed]);
@@ -257,6 +282,12 @@ impl ShellEventLoop {
                     }
 
                     if processed > 0 {
+                        // Persist absolute line count tracking state.
+                        {
+                            let mut st = self.state.lock().unwrap();
+                            st.absolute_line_count = absolute;
+                            st.prev_total_lines = prev_total;
+                        }
                         self.listener.send_event(Event::Wakeup);
                     }
                 }
