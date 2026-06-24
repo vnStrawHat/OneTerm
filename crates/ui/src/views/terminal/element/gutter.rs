@@ -36,25 +36,30 @@ pub(crate) fn compute_gutter_width(
 }
 
 /// Build các `GutterEntry` cho từng display line.
+///
+/// `viewport_lines` là chiều cao viewport (grid rows) — dùng để tính absolute
+/// line number. `max_entries` giới hạn số entry thực tế render (vd chỉ đến dòng
+/// con trỏ khi ở bottom, bỏ qua các row rỗng phía dưới).
 pub(crate) fn compute_gutter_entries(
     line_times: &[String],
     total_lines: usize,
     display_offset: usize,
-    num_lines: usize,
+    viewport_lines: usize,
+    max_entries: usize,
     bounds_origin: gpui::Point<Pixels>,
     line_height: Pixels,
     scale_factor: f32,
 ) -> Vec<GutterEntry> {
     let num_digits = line_times.len().max(1).to_string().len().max(2);
 
-    // Xác định dòng nào có nội dung (từ snapshot cells) — simplified:
-    // caller đã biết từ phân tích cells, ở đây ta chỉ dựa trên total_lines.
-    let mut entries = Vec::with_capacity(num_lines);
-    for i in 0..num_lines {
-        let line_num = total_lines as i32 - display_offset as i32 - num_lines as i32 + i as i32 + 1;
+    let mut entries = Vec::with_capacity(max_entries);
+    for i in 0..max_entries {
+        let line_num =
+            total_lines as i32 - display_offset as i32 - viewport_lines as i32 + i as i32 + 1;
         let line_num = line_num.max(1) as usize;
-        let abs_idx = (total_lines as i32 - display_offset as i32 - num_lines as i32 + i as i32)
-            .max(0) as usize;
+        let abs_idx =
+            (total_lines as i32 - display_offset as i32 - viewport_lines as i32 + i as i32)
+                .max(0) as usize;
         let time_str = if abs_idx < line_times.len() {
             line_times[abs_idx].as_str()
         } else {
