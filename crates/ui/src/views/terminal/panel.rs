@@ -81,11 +81,11 @@ impl Panel for TerminalPanel {
 
         h_flex()
             .w_full()
-            .min_w(px(120.))
+            .min_w(px(100.))
             .items_center()
             .gap_1()
             // Bù padding phải 12px của Tab inner_h_flex để × sát viền phải.
-            .mr(-px(12.))
+            .mr(-px(5.))
             // Tiêu đề "Terminal" — co giãn, cắt bớt bằng ellipsis nếu hẹp.
             .child(
                 div()
