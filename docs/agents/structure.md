@@ -17,6 +17,14 @@ myTerm2/
 ├── crates/
 │   ├── app/                        # Binary: main.rs + wiring
 │   │   ├── Cargo.toml
+│   │   ├── build.rs             # Build script: nhúng app icon (.rc) + copy conpty.dll/OpenConsole.exe
+│   │   ├── assets/              # Runtime resources (Windows)
+│   │   │   ├── myterm2.rc        # Resource script: app icon (48+96) + VS_VERSION_INFO
+│   │   │   ├── conpty.dll       # ConPTY shim (alacritty_terminal LoadLibrary)
+│   │   │   ├── x64/OpenConsole.exe  # ConPTY host (Windows Terminal)
+│   │   │   └── icons/           # App icon (đa độ phân giải, nhúng vào exe)
+│   │   │       ├── terminal-48x48.ico
+│   │   │       └── terminal-96x96.ico
 │   │   └── src/
 │   │       ├── main.rs             # Entry point — init gpui-component + myterm2_ui, mở window
 │   │       └── window.rs           # open_window(cx) — tạo MainWindow + gắn MyTermWorkspace

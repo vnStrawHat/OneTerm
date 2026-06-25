@@ -3829,6 +3829,7 @@ name = "myterm2-app"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "embed-resource",
  "gpui",
  "gpui-component",
  "gpui-component-assets",

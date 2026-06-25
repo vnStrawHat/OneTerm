@@ -139,6 +139,34 @@ cargo build --workspace
 
 Nếu một trong ba lệnh trên fail → sửa trước khi báo cáo hoàn thành.
 
+### 5.1. Build bản release
+
+> myTerm2 là **binary**, không phải library → commit `Cargo.lock`.
+
+Profile release đã cấu hình sẵn trong workspace `Cargo.toml`:
+`opt-level=3`, `lto="fat"`, `codegen-units=1`, `strip="symbols"`, `overflow-checks=false`.
+
+**Windows** (native, có nhúng app icon + version info vào exe):
+
+```powershell
+pwsh scripts/build-release.ps1                      # build host triple, stage dist/
+pwsh scripts/build-release.ps1 -Target aarch64-pc-windows-msvc
+pwsh scripts/build-release.ps1 -NoDist               # chỉ build, không stage dist/
+```
+
+**Linux / macOS**:
+
+```bash
+./scripts/build-release.sh
+TARGET=aarch64-unknown-linux-gnu ./scripts/build-release.sh
+```
+
+Sau khi xong, bản đóng gói sạch nằm ở `dist/myterm2-<triple>/` gồm:
+`myterm2(.exe)` + `conpty.dll` + `x64/OpenConsole.exe` (Windows) + `terminal.json`/`docks.json`.
+
+> App icon (`assets/icons/terminal-48x48.ico`, `assets/icons/terminal-96x96.ico`)
+> được nhúng vào `myterm2.exe` qua `crates/app/assets/myterm2.rc` + `embed-resource`,
+> biên dịch trong `crates/app/build.rs`. Không cần bước post-build thủ công.
 > 📌 **Ghi nhớ**: Mọi lệnh phải chạy trong `D:\TrungKFC-Research\Rust\myTerm2`. Nếu agent cần kiểm tra file ở `reference/`, dùng **đường dẫn tương đối** từ workspace root, không `cd` ra ngoài.
 >
 > 📚 **Tra cứu gpui-component**: trước khi dùng `web_search` / `fetch_content` / `code_search` cho thông tin về gpui / gpui-component, **phải đọc trong `reference/gpui-component/` trước** — xem [`docs/agents/dependencies.md` § 5](docs/agents/dependencies.md).

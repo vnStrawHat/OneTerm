@@ -1,4 +1,9 @@
-//! Build script — copy conpty.dll + OpenConsole.exe ra target directory.
+//! Build script — nhúng app icon + copy runtime assets (conpty.dll, OpenConsole.exe).
+//!
+//! Trách nhiệm:
+//! 1. Biên dịch `assets/myterm2.rc` → file `.res` liên kết vào myterm2.exe,
+//!    nhúng app icon (48px + 96px) + VS_VERSION_INFO. Chỉ Windows.
+//! 2. Copy `conpty.dll` + `x64/OpenConsole.exe` ra thư mục target để chạy kèm exe.
 //!
 //! alacritty_terminal tự load conpty.dll (qua LoadLibraryW) nếu tìm thấy
 //! trong thư mục của exe hoặc PATH. conpty.dll dùng OpenConsole.exe
@@ -6,21 +11,38 @@
 //! ConPTY xử lý Ctrl+C đúng cách: signal chỉ đến child process,
 //! không exit shell, không exit myTerm2.
 //!
-//! Cấu trúc:
-//!   target/debug/myterm2.exe
-//!   target/debug/conpty.dll
-//!   target/debug/x64/OpenConsole.exe
+//! Cấu trúc sau build:
+//!   target/{debug,release}/myterm2.exe
+//!   target/{debug,release}/conpty.dll
+//!   target/{debug,release}/x64/OpenConsole.exe
 
 use std::path::PathBuf;
 
 fn main() {
-    // Chỉ chạy trên Windows.
+    // Toàn bộ logic chỉ chạy trên Windows.
     #[cfg(target_os = "windows")]
     {
         let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
         let assets_dir = manifest_dir.join("assets");
 
-        // Target directory = OUT_DIR lên 3 cấp (target/debug/build/<hash>/out → target/debug)
+        // ── 1. Nhúng app icon + version info qua resource script ───────────
+        //
+        // embed-resource tự tìm rc.exe (MSVC) hoặc windres (GNU).
+        // Path trong .rc là tương đối so với vị trí file .rc (assets/).
+        let rc = assets_dir.join("myterm2.rc");
+        if rc.exists() {
+            if let Err(e) = embed_resource::compile(&rc, embed_resource::NONE).manifest_required() {
+                println!(
+                    "cargo:warning=Failed to embed app icon from {}: {e}",
+                    rc.display()
+                );
+            }
+        }
+
+        // ── 2. Copy runtime assets ra thư mục target ───────────────────────
+        //
+        // Target directory = OUT_DIR lên 3 cấp
+        // (target/debug/build/<hash>/out → target/debug).
         let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
         let target_dir = out_dir.ancestors().nth(3).unwrap().to_path_buf();
 
@@ -43,7 +65,10 @@ fn main() {
             }
         }
 
-        // Re-run build script nếu assets thay đổi.
+        // Re-run build script khi assets / resource thay đổi.
+        println!("cargo:rerun-if-changed=assets/myterm2.rc");
+        println!("cargo:rerun-if-changed=assets/icons/terminal-48x48.ico");
+        println!("cargo:rerun-if-changed=assets/icons/terminal-96x96.ico");
         println!("cargo:rerun-if-changed=assets/conpty.dll");
         println!("cargo:rerun-if-changed=assets/x64/OpenConsole.exe");
     }

@@ -28,3 +28,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Console",
     "Win32_Foundation",
 ] }
+
+[target.'cfg(windows)'.build-dependencies]
+# Biên dịch assets/myterm2.rc → nhúng app icon + version info vào myterm2.exe.
+embed-resource = "3"

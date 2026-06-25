@@ -3,5 +3,7 @@ reference/
 .pi/
 nul
 opentui-examples.exe
+# Release staging output of scripts/build-release.*
+dist/
 docks.json
 terminal.json
