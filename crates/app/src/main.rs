@@ -7,9 +7,9 @@
 //! - ConPTY/OpenConsole tự tạo pseudo-console cho shell con, không cần console của process.
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 
-use gpui_component_assets::Assets;
 use myterm2_ui::layout::MyTermWorkspace;
-
+mod assets;
+use assets::CustomAssets;
 mod window;
 
 fn main() {
@@ -34,7 +34,7 @@ fn main() {
         );
     }
 
-    let app = gpui_platform::application().with_assets(Assets);
+    let app = gpui_platform::application().with_assets(CustomAssets);
 
     app.run(move |cx| {
         // Khởi tạo gpui-component (theme, dock, root, ...).

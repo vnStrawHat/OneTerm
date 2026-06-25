@@ -10,7 +10,7 @@ use std::rc::Rc;
 use gpui::{
     Anchor, AnyElement, App, AppContext as _, Context, Entity, FocusHandle,
     InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Render, Styled as _,
-    Window, div, px,
+    Window, div, px, rgb, svg,
 };
 use gpui_component::{
     ActiveTheme as _, IconName, Side, Sizable as _, Theme, TitleBar,
@@ -64,7 +64,19 @@ impl Render for AppTitleBar {
             // Sync border bottom color với Dock border (cx.theme().border)
             .border_color(cx.theme().border)
             // left side
-            .child(div().flex().items_center().child(self.app_menu_bar.clone()))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(
+                        svg()
+                            .text_color(rgb(0x58c4dc))
+                            .size_5()
+                            .flex_none()
+                            .path("icons/terminal.svg"),
+                    )
+                    .child(self.app_menu_bar.clone()),
+            )
             .child(
                 div()
                     .flex()
