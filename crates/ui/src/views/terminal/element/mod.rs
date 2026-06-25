@@ -10,10 +10,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gpui::{
-    App, Bounds, Element, ElementId, Entity, Font, GlobalElementId, Hsla, IntoElement, LayoutId,
-    Pixels, Window,
-};
+use gpui::{App, Bounds, Element, ElementId, Entity, Font, GlobalElementId, Hsla, IntoElement, LayoutId, Pixels, Window};
 
 use myterm2_core::TerminalSession;
 
@@ -38,8 +35,6 @@ pub(crate) struct TerminalElement {
     focused: bool,
     /// Có vẽ cursor không (blink logic: true = hiện, false = ẩn giữa blink).
     cursor_visible: bool,
-    /// Lần resize gần nhất (tránh resize lặp).
-    last_size: Option<(u16, u16)>,
     /// Sink layout metrics cho View (mouse/wheel).
     metrics: Rc<RefCell<GridMetrics>>,
     /// View entity — để đăng ký IME input handler ở paint.
@@ -65,6 +60,10 @@ pub(crate) struct TerminalElement {
     line_times: Vec<String>,
     /// Per-row layout cache — skip recompute cho non-dirty rows.
     row_cache: Rc<RefCell<RowLayoutCache>>,
+    /// Cached gutter (width, num_digits) — chỉ recompute khi num_digits đổi.
+    cached_gutter: Rc<RefCell<Option<(Pixels, usize)>>>,
+    /// Last grid size (rows, cols) — persist giữa các frame để tránh resize mỗi frame.
+    last_grid_size: Rc<RefCell<Option<(u16, u16)>>>,
 }
 
 impl TerminalElement {
@@ -89,6 +88,8 @@ impl TerminalElement {
         cursor_color_override: Option<Hsla>,
         cursor_shape_override: crate::state::TerminalCursorShape,
         row_cache: Rc<RefCell<RowLayoutCache>>,
+        cached_gutter: Rc<RefCell<Option<(Pixels, usize)>>>,
+        last_grid_size: Rc<RefCell<Option<(u16, u16)>>>,
     ) -> Self {
         Self {
             session,
@@ -98,7 +99,6 @@ impl TerminalElement {
             line_height_factor,
             focused,
             cursor_visible,
-            last_size: None,
             metrics,
             view,
             focus,
@@ -111,6 +111,8 @@ impl TerminalElement {
             cursor_shape_override,
             line_times,
             row_cache,
+            cached_gutter,
+            last_grid_size,
         }
     }
 }
@@ -165,7 +167,8 @@ impl Element for TerminalElement {
             &self.line_times,
             self.hovered_url.as_ref(),
             self.ctrl_held,
-            &mut self.last_size,
+            &self.cached_gutter,
+            &self.last_grid_size,
             &self.metrics,
             &self.row_cache,
             bounds,

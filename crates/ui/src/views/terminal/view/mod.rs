@@ -62,8 +62,13 @@ pub struct LocalTerminalView {
     pub(crate) prev_cursor_line: i32,
     /// Per-row layout cache — skip recompute cho non-dirty rows.
     pub(crate) row_cache: Rc<RefCell<RowLayoutCache>>,
+    /// Cached gutter width + num_digits — chỉ recompute khi num_digits đổi.
+    /// Tránh gọi shape_line mỗi frame → ngăn dao động gutter_width gây resize loop.
+    pub(crate) cached_gutter: Rc<RefCell<Option<(gpui::Pixels, usize)>>>,
+    /// Last terminal size (rows, cols) — persist giữa các frame để tránh
+    /// gọi s.resize() mỗi frame (TerminalElement tạo mới mỗi frame).
+    pub(crate) last_grid_size: Rc<RefCell<Option<(u16, u16)>>>,
 }
-
 impl LocalTerminalView {
     /// Tạo view từ session entity. Subscribe events → re-render task.
     pub fn new(
@@ -155,6 +160,8 @@ impl LocalTerminalView {
             prev_absolute_line_count: 0,
             prev_cursor_line: 0,
             row_cache: Rc::new(RefCell::new(RowLayoutCache::new())),
+            cached_gutter: Rc::new(RefCell::new(None)),
+            last_grid_size: Rc::new(RefCell::new(None)),
         }
     }
 

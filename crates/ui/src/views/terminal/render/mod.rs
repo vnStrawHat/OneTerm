@@ -137,6 +137,8 @@ impl Render for LocalTerminalView {
                 cursor_color,
                 cursor_shape,
                 self.row_cache.clone(),
+                self.cached_gutter.clone(),
+                self.last_grid_size.clone(),
             ))
             .children(self.bell_overlay(has_bell, bell_enabled, &theme_ref))
             .children(self.vi_mode_overlay(&theme_ref))

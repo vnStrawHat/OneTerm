@@ -1,5 +1,8 @@
 //! Font / cell measurement helpers cho `TerminalElement`.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use gpui::{App, Font, Pixels, Window, px};
 
 /// Metrics đo được từ font + config.
@@ -66,7 +69,7 @@ pub(crate) fn resize_session(
     pad_bottom: Pixels,
     cell_width: Pixels,
     line_height: Pixels,
-    last_size: &mut Option<(u16, u16)>,
+    last_grid_size: &Rc<RefCell<Option<(u16, u16)>>>,
     window: &mut Window,
     cx: &mut App,
 ) -> (u16, u16) {
@@ -85,9 +88,9 @@ pub(crate) fn resize_session(
     let line_height_device = f32::from(line_height) * scale_factor;
     let rows = ((avail_height_device / line_height_device).floor() as u16).max(1);
 
-    if last_size != &Some((rows, cols)) {
+    if last_grid_size.borrow().as_ref() != Some(&(rows, cols)) {
         session.update(cx, |s, _| s.resize(rows, cols));
-        *last_size = Some((rows, cols));
+        *last_grid_size.borrow_mut() = Some((rows, cols));
     }
     (rows, cols)
 }

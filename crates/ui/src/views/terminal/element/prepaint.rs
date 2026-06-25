@@ -36,7 +36,8 @@ pub(crate) fn prepaint_terminal(
     line_times: &[String],
     hovered_url: Option<&super::super::url::DetectedUrl>,
     ctrl_held: bool,
-    last_size: &mut Option<(u16, u16)>,
+    cached_gutter: &Rc<RefCell<Option<(Pixels, usize)>>>,
+    last_grid_size: &Rc<RefCell<Option<(u16, u16)>>>,
     metrics: &Rc<RefCell<GridMetrics>>,
     row_cache: &Rc<RefCell<RowLayoutCache>>,
     bounds: Bounds<Pixels>,
@@ -66,18 +67,44 @@ pub(crate) fn prepaint_terminal(
     let info = session.read(cx).terminal_info();
     let absolute_line_count = info.absolute_line_count;
 
-    let gutter_width = compute_gutter_width(
-        line_times,
-        absolute_line_count,
-        font,
-        font_size,
-        theme,
-        window,
-    );
-
-    // Khi gutter bị tắt, set width = 0 — paint sẽ skip gutter rendering
-    // (kiểm tra `if gw > px(0.0)`), và grid_origin dịch về bên trái.
-    let gutter_width = if show_gutter { gutter_width } else { px(0.) };
+    // ── Gutter width (cached) ──
+    // Chỉ recompute khi num_digits thay đổi để tránh dao động gutter_width
+    // gây resize loop với TUI apps. Khi show_gutter = false, gutter_width = 0.
+    let num_digits = absolute_line_count.max(1).to_string().len().max(2);
+    let gutter_width = if show_gutter {
+        let cg = cached_gutter.borrow_mut();
+        if let Some((cached_w, cached_digits)) = *cg {
+            if cached_digits == num_digits {
+                cached_w
+            } else {
+                drop(cg); // release borrow trước khi gọi shape_line
+                let w = compute_gutter_width(
+                    line_times,
+                    absolute_line_count,
+                    font,
+                    font_size,
+                    theme,
+                    window,
+                );
+                *cached_gutter.borrow_mut() = Some((w, num_digits));
+                w
+            }
+        } else {
+            drop(cg);
+            let w = compute_gutter_width(
+                line_times,
+                absolute_line_count,
+                font,
+                font_size,
+                theme,
+                window,
+            );
+            *cached_gutter.borrow_mut() = Some((w, num_digits));
+            w
+        }
+    } else {
+        px(0.)
+    };
 
     let (rows, cols) = measure::resize_session(
         session,
@@ -89,7 +116,7 @@ pub(crate) fn prepaint_terminal(
         pad_bottom,
         cell_width,
         line_height,
-        last_size,
+        last_grid_size,
         window,
         cx,
     );
