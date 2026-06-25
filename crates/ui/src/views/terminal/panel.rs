@@ -9,8 +9,7 @@ use std::sync::Arc;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, MouseButton, ParentElement, Render,
-    StatefulInteractiveElement, Styled, WeakEntity, Window, div, prelude::FluentBuilder as _,
-    px, rgb,
+    StatefulInteractiveElement, Styled, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable,
@@ -29,6 +28,12 @@ pub struct TerminalPanel {
     view: Entity<LocalTerminalView>,
     /// Tham chiếu tới `TabPanel` chứa panel này — dùng cho nút close tab.
     tab_panel: Option<WeakEntity<TabPanel>>,
+    /// Panel này có đang là tab được chọn trong `TabPanel` hay không.
+    ///
+    /// Không thể đọc `TabPanel` trong `title()` (lúc đó nó đang render) nên ta
+    /// mirror trạng thái này qua hook [`Panel::set_active`], được `TabPanel`
+    /// gọi mỗi khi tab active đổi.
+    is_active: bool,
 }
 
 impl TerminalPanel {
@@ -50,6 +55,7 @@ impl TerminalPanel {
         Self {
             view,
             tab_panel: None,
+            is_active: false,
         }
     }
 
@@ -78,17 +84,9 @@ impl Panel for TerminalPanel {
         let tab_panel = self.tab_panel.clone();
         let panel_entity = cx.entity().clone();
         let theme = cx.theme().muted_foreground;
-
-        // Kiểm tra panel này có đang active (tab được chọn) hay không.
-        let is_active = self
-            .tab_panel
-            .as_ref()
-            .and_then(|tp| tp.upgrade())
-            .map_or(false, |tp| {
-                tp.read(cx)
-                    .active_panel(cx)
-                    .map_or(false, |ap| ap.panel_id(cx) == cx.entity().entity_id())
-            });
+        // Màu highlight tab active — lấy từ theme (`table.active.border`).
+        let highlight = cx.theme().table_active_border;
+        let is_active = self.is_active;
 
         h_flex()
             .id("tab-title")
@@ -98,16 +96,20 @@ impl Panel for TerminalPanel {
             .min_w(px(100.))
             .items_center()
             .gap_1()
-            // Active tab highlight — đường border top 2px màu #58C4DC.
+            // Active tab highlight — đường border top 2px lấy màu từ theme.
+            // `Tab` bọc title trong 1 inner h_flex (cao 30px, căn giữa trong
+            // tab 32px) + `overflow_hidden`, nên đây là vị trí cao nhất có thể
+            // chạm tới từ `title()` (mép trên của inner box, ~1px dưới mép tab).
+            // Tràn left/right âm để phủ hết bề ngang; phần thừa bị cắt gọn.
             .when(is_active, |this| {
                 this.child(
                     div()
                         .absolute()
                         .top_0()
-                        .left_0()
-                        .right_0()
+                        .left(-px(20.))
+                        .right(-px(20.))
                         .h(px(2.))
-                        .bg(rgb(0x58c4dc)),
+                        .bg(highlight),
                 )
             })
             // Bù padding phải 12px của Tab inner_h_flex để × sát viền phải.
@@ -181,6 +183,14 @@ impl Panel for TerminalPanel {
         _: &mut Context<Self>,
     ) {
         self.tab_panel = Some(tab_panel);
+    }
+
+    fn set_active(&mut self, active: bool, _: &mut Window, cx: &mut Context<Self>) {
+        // `TabPanel` gọi hook này khi tab active đổi → mirror để `title()` dùng.
+        if self.is_active != active {
+            self.is_active = active;
+            cx.notify();
+        }
     }
 }
 
