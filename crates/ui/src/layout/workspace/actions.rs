@@ -1,6 +1,6 @@
 //! Action handlers cho `MyTermWorkspace`.
 
-use std::sync::Arc;
+use std::sync::{Arc, atomic::Ordering};
 
 use gpui::{Context, Window};
 use gpui_component::dock::{DockItem, DockPlacement};
@@ -90,16 +90,17 @@ impl super::MyTermWorkspace {
         });
     }
 
-    /// Action handler: toggle nút dock toggle button.
+    /// Action handler: toggle nút dock toggle button (expand/collapse button).
     pub(crate) fn on_action_toggle_dock_toggle_button(
         &mut self,
         _: &ToggleDockToggleButton,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.toggle_button_visible = !self.toggle_button_visible;
+        let new_val = !self.toggle_button_visible.load(Ordering::Relaxed);
+        self.toggle_button_visible.store(new_val, Ordering::Relaxed);
         self.dock_area.update(cx, |dock_area, cx| {
-            dock_area.set_toggle_button_visible(self.toggle_button_visible, cx);
+            dock_area.set_toggle_button_visible(new_val, cx);
         });
     }
 

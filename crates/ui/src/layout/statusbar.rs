@@ -7,7 +7,7 @@ use gpui::{Context, Entity, Styled, Window};
 use gpui_component::{
     ActiveTheme as _, IconName, Sizable,
     button::{Button, ButtonVariants as _},
-    dock::{DockArea, DockPlacement},
+    dock::{DockArea, DockEvent, DockPlacement},
     status_bar::StatusBar,
 };
 
@@ -41,6 +41,8 @@ pub fn build_status_bar(
                     move |_, window, cx| {
                         dock_area.update(cx, |area, cx| {
                             area.toggle_dock(DockPlacement::Right, window, cx);
+                            // Trigger save — toggle_dock không emit LayoutChanged.
+                            cx.emit(DockEvent::LayoutChanged);
                         });
                     }
                 }),

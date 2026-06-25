@@ -12,6 +12,7 @@ use super::MAIN_DOCK_VERSION;
 /// Reset chỉ center (terminal tabs) về 1 tab — giữ right dock + settings.
 pub(crate) fn reset_center_only(
     dock_area: gpui::WeakEntity<DockArea>,
+    toggle_button_visible: bool,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -29,7 +30,7 @@ pub(crate) fn reset_center_only(
     );
     _ = dock_area.update(cx, |view, cx| {
         view.set_center(center, window, cx);
-        _ = super::persistence::save_state(&view.dump(cx), None);
+        _ = super::persistence::save_state(&view.dump(cx), None, toggle_button_visible, "reset_center_only");
     });
 }
 
@@ -75,6 +76,6 @@ pub(crate) fn reset_default_layout(
             window,
             cx,
         );
-        _ = super::persistence::save_state(&view.dump(cx), None);
+        _ = super::persistence::save_state(&view.dump(cx), None, true, "reset_default_layout");
     });
 }

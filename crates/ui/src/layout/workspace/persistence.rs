@@ -56,10 +56,29 @@ impl super::MyTermWorkspace {
 ///
 /// `zoomed_panel`: tên panel đang zoom (fullscreen) — inject vào JSON value
 /// của `docks.json` (field `zoomed_panel`). `None` → xoá field (panel không zoom).
+/// `toggle_button_visible`: hiện/ẩn nút expand/collapse trên TabPanel — inject
+/// vào JSON (field `toggle_button_visible`).
 /// Không sửa struct `DockAreaState`.
-pub(crate) fn save_state(state: &DockAreaState, zoomed_panel: Option<&str>) -> Result<()> {
-    tracing::info!("Save layout...");
+/// `trigger`: chuỗi mô tả nguồn kích hoạt ghi (vd "debounce", "on_app_quit",
+/// "zoom_in", "zoom_out", "reset_center_only", "reset_default_layout").
+pub(crate) fn save_state(
+    state: &DockAreaState,
+    zoomed_panel: Option<&str>,
+    toggle_button_visible: bool,
+    trigger: &str,
+) -> Result<()> {
     let mut val = serde_json::to_value(state)?;
+    let right_dock_open = val
+        .get("right_dock")
+        .and_then(|d| d.get("open"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    tracing::info!(
+        "Save layout [trigger={trigger}] → zoomed_panel={zoomed_panel:?}, toggle_button_visible={toggle_button_visible}, right_dock_open={right_dock_open}",
+    );
+    eprintln!(
+        "[dock-save] trigger={trigger} | zoomed={zoomed_panel:?} | toggle_btn={toggle_button_visible} | right_open={right_dock_open}",
+    );
     if let Some(obj) = val.as_object_mut() {
         match zoomed_panel {
             Some(name) => {
@@ -72,6 +91,10 @@ pub(crate) fn save_state(state: &DockAreaState, zoomed_panel: Option<&str>) -> R
                 obj.remove(super::zoom::ZOOM_FIELD);
             }
         }
+        obj.insert(
+            super::TOGGLE_BUTTON_VISIBLE_FIELD.into(),
+            serde_json::Value::Bool(toggle_button_visible),
+        );
     }
     let json = serde_json::to_string_pretty(&val)?;
     std::fs::write(STATE_FILE, json)?;
@@ -87,6 +110,15 @@ pub(crate) fn read_zoomed_panel() -> Option<String> {
     val.get(super::zoom::ZOOM_FIELD)
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
+}
+
+/// Đọc `toggle_button_visible` từ `docks.json`. Trả về `None` nếu file không
+/// tồn tại hoặc chưa có field.
+pub(crate) fn read_toggle_button_visible() -> Option<bool> {
+    let raw = std::fs::read_to_string(STATE_FILE).ok()?;
+    let val: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    val.get(super::TOGGLE_BUTTON_VISIBLE_FIELD)
+        .and_then(|v| v.as_bool())
 }
 
 #[cfg(test)]
@@ -117,5 +149,27 @@ mod tests {
         let json = serde_json::to_string_pretty(&DockAreaState::default()).unwrap();
         let val: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert!(val.get(super::super::zoom::ZOOM_FIELD).is_none());
+    }
+
+    #[test]
+    fn toggle_button_visible_field_roundtrips() {
+        let state = DockAreaState::default();
+        let mut val = serde_json::to_value(&state).unwrap();
+        val.as_object_mut().unwrap().insert(
+            super::super::TOGGLE_BUTTON_VISIBLE_FIELD.into(),
+            serde_json::Value::Bool(false),
+        );
+        let json = serde_json::to_string_pretty(&val).unwrap();
+
+        // Extra field must NOT break DockAreaState deserialization.
+        let parsed: DockAreaState = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, state);
+
+        // Field readable back.
+        let val: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            val[super::super::TOGGLE_BUTTON_VISIBLE_FIELD].as_bool(),
+            Some(false)
+        );
     }
 }

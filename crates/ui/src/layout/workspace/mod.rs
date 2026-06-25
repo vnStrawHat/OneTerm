@@ -3,7 +3,10 @@
 //! Module gốc `workspace.rs` đã được tách thành `workspace/`.
 
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
 use gpui::{
@@ -30,6 +33,7 @@ pub(crate) mod zoom;
 
 pub const MAIN_DOCK_VERSION: usize = 2;
 pub const MAIN_DOCK_ID: &str = "main-dock";
+pub const TOGGLE_BUTTON_VISIBLE_FIELD: &str = "toggle_button_visible";
 
 #[cfg(debug_assertions)]
 pub const STATE_FILE: &str = "target/docks.json";
@@ -43,7 +47,7 @@ pub struct MyTermWorkspace {
     /// Đồng hồ datetime — tạo 1 lần để timer 1s fire ổn định.
     pub clock: Entity<DateTimeClock>,
     last_layout_state: Option<gpui_component::dock::DockAreaState>,
-    toggle_button_visible: bool,
+    toggle_button_visible: Arc<AtomicBool>,
     _save_layout_task: Option<Task<()>>,
 
     /// Mirror trạng thái zoom: tên panel đang zoom (fullscreen).
@@ -74,14 +78,27 @@ impl MyTermWorkspace {
         // Đọc tên panel đang zoom TRƯỚC khi layout bị reset (center luôn reset,
         // và reset_* ghi lại docks.json không kèm zoom → phải lưu trước).
         let saved_zoom = persistence::read_zoomed_panel();
+        // Đọc toggle_button_visible TRƯỚC khi reset_* ghi lại docks.json.
+        let saved_toggle_button_visible = persistence::read_toggle_button_visible().unwrap_or(true);
 
         match Self::load_layout(dock_area.clone(), window, cx) {
             Ok(()) => {
-                layout::reset_center_only(weak_dock_area, window, cx);
+                layout::reset_center_only(weak_dock_area, saved_toggle_button_visible, window, cx);
             }
             Err(_) => {
                 layout::reset_default_layout(weak_dock_area, window, cx);
             }
+        }
+
+        // Mirror toggle_button_visible — `Arc<AtomicBool>` chia sẻ giữa
+        // subscription callbacks và closure `on_app_quit`.
+        let toggle_button_visible = Arc::new(AtomicBool::new(saved_toggle_button_visible));
+
+        // Áp dụng toggle_button_visible đã lưu lên DockArea (mặc định = true).
+        if !saved_toggle_button_visible {
+            dock_area.update(cx, |dock_area, cx| {
+                dock_area.set_toggle_button_visible(false, cx);
+            });
         }
 
         // Mirror trạng thái zoom (tên panel đang zoom) — `Arc<Mutex<..>>` chia sẻ
@@ -106,6 +123,7 @@ impl MyTermWorkspace {
         cx.on_app_quit({
             let dock_area = dock_area.clone();
             let zoomed_panel = zoomed_panel.clone();
+            let toggle_button_visible = toggle_button_visible.clone();
             move |_, cx| {
                 let state = dock_area.read(cx).dump(cx);
                 // Đọc tên panel đang zoom từ `Arc<Mutex<..>>` — không phụ thuộc
@@ -116,8 +134,9 @@ impl MyTermWorkspace {
                     .and_then(|g| g.clone());
                 tracing::info!("on_app_quit → zoomed_name={zoomed_name:?}");
                 eprintln!("[zoom] on_app_quit → zoomed_name={zoomed_name:?}");
+                let tbv = toggle_button_visible.load(Ordering::Relaxed);
                 async move {
-                    _ = persistence::save_state(&state, zoomed_name.as_deref());
+                    _ = persistence::save_state(&state, zoomed_name.as_deref(), tbv, "on_app_quit");
                 }
             }
         })
@@ -135,7 +154,7 @@ impl MyTermWorkspace {
             dock_area,
             clock,
             last_layout_state: None,
-            toggle_button_visible: true,
+            toggle_button_visible,
             _save_layout_task: None,
             zoomed_panel,
             subscribed_tabs: HashSet::new(),
@@ -169,7 +188,7 @@ impl MyTermWorkspace {
         self._save_layout_task = Some(cx.spawn_in(window, async move |story, window| {
             window
                 .background_executor()
-                .timer(Duration::from_secs(5))
+                .timer(Duration::from_secs(2))
                 .await;
 
             _ = story.update_in(window, move |this, _, cx| {
@@ -177,7 +196,7 @@ impl MyTermWorkspace {
                 if Some(&state) == this.last_layout_state.as_ref() {
                     return;
                 }
-                _ = persistence::save_state(&state, zoomed_name.as_deref());
+                _ = persistence::save_state(&state, zoomed_name.as_deref(), this.toggle_button_visible.load(Ordering::Relaxed), "debounce");
                 this.last_layout_state = Some(state);
             });
         }));
@@ -194,6 +213,7 @@ impl MyTermWorkspace {
             if self.subscribed_tabs.insert(id) {
                 let zoomed_panel = self.zoomed_panel.clone();
                 let dock_area = self.dock_area.clone();
+                let toggle_button_visible = self.toggle_button_visible.clone();
                 cx.subscribe_in(
                     &tp,
                     window,
@@ -211,7 +231,7 @@ impl MyTermWorkspace {
                             }
                             // Lưu NGAY vào docks.json — không phụ thuộc quit/debounce.
                             let state = dock_area.read(cx).dump(cx);
-                            _ = persistence::save_state(&state, name.as_deref());
+                            _ = persistence::save_state(&state, name.as_deref(), toggle_button_visible.load(Ordering::Relaxed), "zoom_in");
                             cx.notify();
                         }
                         PanelEvent::ZoomOut => {
@@ -221,7 +241,7 @@ impl MyTermWorkspace {
                                 *g = None;
                             }
                             let state = dock_area.read(cx).dump(cx);
-                            _ = persistence::save_state(&state, None);
+                            _ = persistence::save_state(&state, None, toggle_button_visible.load(Ordering::Relaxed), "zoom_out");
                             cx.notify();
                         }
                         _ => {}
