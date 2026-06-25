@@ -30,7 +30,12 @@ pub(crate) fn reset_center_only(
     );
     _ = dock_area.update(cx, |view, cx| {
         view.set_center(center, window, cx);
-        _ = super::persistence::save_state(&view.dump(cx), None, toggle_button_visible, "reset_center_only");
+        _ = super::persistence::save_state(
+            &view.dump(cx),
+            None,
+            toggle_button_visible,
+            "reset_center_only",
+        );
     });
 }
 

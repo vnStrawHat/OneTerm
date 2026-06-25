@@ -22,7 +22,10 @@ use crate::actions::{SwitchTheme, SwitchThemeMode};
 /// `zed-one-dark` / `zed-one-light` — palette Atom One (Zed editor default).
 const EMBEDDED_THEME_FILES: &[(&str, &str)] = &[
     ("zed-one-dark", include_str!("../themes/zed-one-dark.json")),
-    ("zed-one-light", include_str!("../themes/zed-one-light.json")),
+    (
+        "zed-one-light",
+        include_str!("../themes/zed-one-light.json"),
+    ),
 ];
 
 /// Khởi tạo theme: nạp embedded themes + wire action `SwitchTheme` / `SwitchThemeMode`.

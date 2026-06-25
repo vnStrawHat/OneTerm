@@ -9,3 +9,9 @@ workspace = true
 
 [dependencies]
 myterm2-core.workspace = true
+alacritty_terminal.workspace = true
+async-channel.workspace = true
+russh.workspace = true
+tokio.workspace = true
+log.workspace = true
+anyhow.workspace = true

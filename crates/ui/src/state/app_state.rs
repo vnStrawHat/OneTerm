@@ -3,11 +3,17 @@
 //! Skeleton: chưa có state chia sẻ. Sau này chứa danh sách host,
 //! session state, ui_state (vd. `invisible_panels`).
 
-use gpui::{App, AppContext, Entity, Global};
+use gpui::{App, AppContext, Entity, Global, WeakEntity};
+use gpui_component::dock::DockArea;
 
 /// State toàn cục của ứng dụng.
 #[derive(Default)]
-pub struct AppState;
+pub struct AppState {
+    /// Tham chiếu yếu tới DockArea — dùng cho dialog connect SSH
+    /// (thêm terminal tab sau khi kết nối thành công).
+    /// Set trong `MyTermWorkspace::new` sau khi DockArea được tạo.
+    pub dock_area: Option<WeakEntity<DockArea>>,
+}
 
 /// Global wrapper cho `Entity<AppState>`.
 pub struct AppStateGlobal(pub Entity<AppState>);
@@ -22,7 +28,7 @@ impl AppState {
 
     /// Khởi tạo AppState toàn cục.
     pub fn init(cx: &mut App) {
-        let state = cx.new(|_| Self);
+        let state = cx.new(|_| Self::default());
         cx.set_global(AppStateGlobal(state));
     }
 }

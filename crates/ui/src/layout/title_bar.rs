@@ -18,9 +18,7 @@ use gpui_component::{
     menu::{AppMenuBar, DropdownMenu as _},
 };
 
-use crate::actions::{
-    AddPanel, AddSession, AddSftpBrowser, SelectFont, ToggleGutter,
-};
+use crate::actions::{AddPanel, AddSession, AddSftpBrowser, SelectFont, ToggleGutter};
 
 use crate::layout::app_menus;
 use crate::state::TerminalSettings;
@@ -116,12 +114,7 @@ impl FontSizeSelector {
         window.refresh();
     }
 
-    fn on_toggle_gutter(
-        &mut self,
-        _: &ToggleGutter,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn on_toggle_gutter(&mut self, _: &ToggleGutter, window: &mut Window, cx: &mut Context<Self>) {
         // Gutter — cột bên trái terminal hiển thị timestamp [HH:MM:SS] + line
         // number cho mỗi dòng. Bật = hiện (mặc định), tắt = ẩn, terminal dùng
         // toàn bộ chiều rộng. Lưu trong `TerminalSettings` toàn cục, ảnh hưởng

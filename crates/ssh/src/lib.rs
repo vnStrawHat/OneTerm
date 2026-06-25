@@ -1,6 +1,20 @@
 //! SSH + SFTP implementation for myTerm2.
 //!
-//! Placeholder crate — sẽ triển khai `russh` client, channel, SFTP subsystem,
-//! known_hosts, auth. Hiện chưa có code.
+//! Triển khai `russh` client + tokio runtime ẩn. `SshSession` implement
+//! `TerminalSession` — UI dùng qua trait, không biết internals.
+//!
+//! Tham chiếu `docs/terminal-backend.md` §7.
+
+pub mod config;
+pub mod handler;
+pub mod listener;
+pub mod session;
+pub mod session_terminal;
+pub mod state;
+pub mod task;
+
+pub use config::{SshAuthMethod, SshConfig};
+pub use listener::{Cmd, SshListener};
+pub use session::{PtySize, SshSession, connect};
 
 pub use myterm2_core as core;

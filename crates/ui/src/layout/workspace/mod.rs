@@ -10,14 +10,12 @@ use std::sync::{
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext, Context, Entity, EntityId, InteractiveElement as _, IntoElement,
-    KeyBinding, ParentElement, Render, Styled, Task, Window, div,
+    App, AppContext, Context, Entity, EntityId, InteractiveElement as _, IntoElement, KeyBinding,
+    ParentElement, Render, Styled, Task, Window, div,
 };
 use gpui_component::{
     Root,
-    dock::{
-        ClosePanel, DockArea, DockEvent, PanelEvent, ToggleZoom,
-    },
+    dock::{ClosePanel, DockArea, DockEvent, PanelEvent, ToggleZoom},
 };
 
 use crate::{
@@ -75,6 +73,13 @@ impl MyTermWorkspace {
         });
         let weak_dock_area = dock_area.downgrade();
 
+        // Lưu WeakEntity<DockArea> vào AppState — dialog connect SSH dùng
+        // để add terminal tab sau khi kết nối thành công.
+        AppState::global(cx).update(cx, |s, cx| {
+            s.dock_area = Some(weak_dock_area.clone());
+            cx.notify();
+        });
+
         // Đọc tên panel đang zoom TRƯỚC khi layout bị reset (center luôn reset,
         // và reset_* ghi lại docks.json không kèm zoom → phải lưu trước).
         let saved_zoom = persistence::read_zoomed_panel();
@@ -128,10 +133,7 @@ impl MyTermWorkspace {
                 let state = dock_area.read(cx).dump(cx);
                 // Đọc tên panel đang zoom từ `Arc<Mutex<..>>` — không phụ thuộc
                 // lifetime entity workspace (có thể đã bị drop khi shutdown).
-                let zoomed_name = zoomed_panel
-                    .lock()
-                    .ok()
-                    .and_then(|g| g.clone());
+                let zoomed_name = zoomed_panel.lock().ok().and_then(|g| g.clone());
                 tracing::info!("on_app_quit → zoomed_name={zoomed_name:?}");
                 eprintln!("[zoom] on_app_quit → zoomed_name={zoomed_name:?}");
                 let tbv = toggle_button_visible.load(Ordering::Relaxed);
@@ -180,11 +182,7 @@ impl MyTermWorkspace {
     ) {
         let dock_area = dock_area.clone();
         // Snapshot tên panel đang zoom tại thời điểm schedule (mirror state).
-        let zoomed_name = self
-            .zoomed_panel
-            .lock()
-            .ok()
-            .and_then(|g| g.clone());
+        let zoomed_name = self.zoomed_panel.lock().ok().and_then(|g| g.clone());
         self._save_layout_task = Some(cx.spawn_in(window, async move |story, window| {
             window
                 .background_executor()
@@ -196,7 +194,12 @@ impl MyTermWorkspace {
                 if Some(&state) == this.last_layout_state.as_ref() {
                     return;
                 }
-                _ = persistence::save_state(&state, zoomed_name.as_deref(), this.toggle_button_visible.load(Ordering::Relaxed), "debounce");
+                _ = persistence::save_state(
+                    &state,
+                    zoomed_name.as_deref(),
+                    this.toggle_button_visible.load(Ordering::Relaxed),
+                    "debounce",
+                );
                 this.last_layout_state = Some(state);
             });
         }));
@@ -207,7 +210,10 @@ impl MyTermWorkspace {
     fn sync_tab_subscriptions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tabs = zoom::collect_tab_panels(&self.dock_area.read(cx), cx);
         tracing::info!("sync_tab_subscriptions → found {} tab panel(s)", tabs.len());
-        eprintln!("[zoom] sync_tab_subscriptions → found {} tab panel(s)", tabs.len());
+        eprintln!(
+            "[zoom] sync_tab_subscriptions → found {} tab panel(s)",
+            tabs.len()
+        );
         for tp in tabs {
             let id = tp.entity_id();
             if self.subscribed_tabs.insert(id) {
@@ -231,7 +237,12 @@ impl MyTermWorkspace {
                             }
                             // Lưu NGAY vào docks.json — không phụ thuộc quit/debounce.
                             let state = dock_area.read(cx).dump(cx);
-                            _ = persistence::save_state(&state, name.as_deref(), toggle_button_visible.load(Ordering::Relaxed), "zoom_in");
+                            _ = persistence::save_state(
+                                &state,
+                                name.as_deref(),
+                                toggle_button_visible.load(Ordering::Relaxed),
+                                "zoom_in",
+                            );
                             cx.notify();
                         }
                         PanelEvent::ZoomOut => {
@@ -241,7 +252,12 @@ impl MyTermWorkspace {
                                 *g = None;
                             }
                             let state = dock_area.read(cx).dump(cx);
-                            _ = persistence::save_state(&state, None, toggle_button_visible.load(Ordering::Relaxed), "zoom_out");
+                            _ = persistence::save_state(
+                                &state,
+                                None,
+                                toggle_button_visible.load(Ordering::Relaxed),
+                                "zoom_out",
+                            );
                             cx.notify();
                         }
                         _ => {}

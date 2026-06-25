@@ -10,7 +10,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gpui::{App, Bounds, Element, ElementId, Entity, Font, GlobalElementId, Hsla, IntoElement, LayoutId, Pixels, Window};
+use gpui::{
+    App, Bounds, Element, ElementId, Entity, Font, GlobalElementId, Hsla, IntoElement, LayoutId,
+    Pixels, Window,
+};
 
 use myterm2_core::TerminalSession;
 

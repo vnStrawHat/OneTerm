@@ -34,6 +34,8 @@ pub struct TerminalPanel {
     /// mirror trạng thái này qua hook [`Panel::set_active`], được `TabPanel`
     /// gọi mỗi khi tab active đổi.
     is_active: bool,
+    /// Tiêu đề tab — "Terminal" cho local, session label cho SSH.
+    tab_title: String,
 }
 
 impl TerminalPanel {
@@ -56,10 +58,43 @@ impl TerminalPanel {
             view,
             tab_panel: None,
             is_active: false,
+            tab_title: "Terminal".to_string(),
         }
     }
 
-    /// Helper tạo `Entity<Self>`.
+    /// Tạo panel từ session có sẵn (SSH hoặc local).
+    ///
+    /// Session đã spawn/connect xong, panel chỉ wrap view. Dùng cho SSH
+    /// terminal tab — `session` là `Box<dyn TerminalSession>` từ
+    /// `SshSession::connect()`.
+    pub fn from_session(
+        session: Box<dyn TerminalSession>,
+        title: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let session_entity = cx.new(|_| session);
+        let view = cx.new(|cx| LocalTerminalView::new(session_entity, window, cx));
+        view.read(cx).focus_handle(cx).focus(window, cx);
+        Self {
+            view,
+            tab_panel: None,
+            is_active: false,
+            tab_title: title.to_string(),
+        }
+    }
+
+    /// Helper tạo `Entity<Self>` từ session có sẵn.
+    pub fn from_session_entity(
+        session: Box<dyn TerminalSession>,
+        title: &str,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<Self> {
+        cx.new(|cx| Self::from_session(session, title, window, cx))
+    }
+
+    /// Helper tạo `Entity<Self>` (local session mặc định).
     pub fn new_entity(window: &mut Window, cx: &mut App) -> Entity<Self> {
         cx.new(|cx| Self::new(window, cx))
     }
@@ -128,14 +163,14 @@ impl Panel for TerminalPanel {
                     }
                 }
             })
-            // Tiêu đề "Terminal" — co giãn, cắt bớt bằng ellipsis nếu hẹp.
+            // Tiêu đề tab — co giãn, cắt bớt bằng ellipsis nếu hẹp.
             .child(
                 div()
                     .flex_1()
                     .overflow_hidden()
                     .text_ellipsis()
                     .whitespace_nowrap()
-                    .child("Terminal"),
+                    .child(self.tab_title.clone()),
             )
             // Nút close (×) — sát bên phải tab.
             .when_some(tab_panel, |this, tp| {

@@ -141,7 +141,10 @@ mod tests {
 
         // Field readable back.
         let val: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(val[super::super::zoom::ZOOM_FIELD].as_str(), Some("session"));
+        assert_eq!(
+            val[super::super::zoom::ZOOM_FIELD].as_str(),
+            Some("session")
+        );
     }
 
     #[test]

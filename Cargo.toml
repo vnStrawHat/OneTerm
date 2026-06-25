@@ -22,6 +22,7 @@ gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", 
 # Internal crates
 myterm2-core = { path = "crates/core" }
 myterm2-local = { path = "crates/local" }
+myterm2-ssh = { path = "crates/ssh" }
 myterm2-ui = { path = "crates/ui" }
 
 # Terminal engine — fork Zed của alacritty_terminal (bản patched có TerminalContent/display_iter)
@@ -36,6 +37,10 @@ async-channel = "2"
 polling = "3.8"
 # Logging (alacritty_terminal cũng dùng log)
 log = "0.4"
+# SSH client
+russh = { version = "0.61", default-features = false, features = ["ring", "flate2", "rsa"] }
+# russh-keys đã merge vào russh >= 0.50
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "io-util", "net", "macros"] }
 
 # Async / serialization / error
 anyhow = "1"

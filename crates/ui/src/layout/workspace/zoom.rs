@@ -19,15 +19,16 @@ use gpui_component::dock::{DockArea, DockItem, TabPanel};
 pub(crate) const ZOOM_FIELD: &str = "zoomed_panel";
 
 /// Duyệt toàn bộ cây Dock (center + 3 docks) → collect mọi `Entity<TabPanel>`.
-pub(crate) fn collect_tab_panels(
-    dock_area: &DockArea,
-    cx: &App,
-) -> Vec<Entity<TabPanel>> {
+pub(crate) fn collect_tab_panels(dock_area: &DockArea, cx: &App) -> Vec<Entity<TabPanel>> {
     let mut out = Vec::new();
     visit_item(dock_area.center(), &mut out);
-    for dock in [dock_area.left_dock(), dock_area.right_dock(), dock_area.bottom_dock()]
-        .into_iter()
-        .flatten()
+    for dock in [
+        dock_area.left_dock(),
+        dock_area.right_dock(),
+        dock_area.bottom_dock(),
+    ]
+    .into_iter()
+    .flatten()
     {
         visit_item(dock.read(cx).panel(), &mut out);
     }
