@@ -2,15 +2,19 @@
 //!
 //! Module gốc `workspace.rs` đã được tách thành `workspace/`.
 
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext, Context, Entity, InteractiveElement as _, IntoElement, KeyBinding,
-    ParentElement, Render, Styled, Task, Window, div,
+    App, AppContext, Context, Entity, EntityId, InteractiveElement as _, IntoElement,
+    KeyBinding, ParentElement, Render, Styled, Task, Window, div,
 };
 use gpui_component::{
     Root,
-    dock::{ClosePanel, DockArea, DockEvent, ToggleZoom},
+    dock::{
+        ClosePanel, DockArea, DockEvent, PanelEvent, ToggleZoom,
+    },
 };
 
 use crate::{
@@ -22,6 +26,7 @@ use crate::{
 pub(crate) mod actions;
 pub(crate) mod layout;
 pub(crate) mod persistence;
+pub(crate) mod zoom;
 
 pub const MAIN_DOCK_VERSION: usize = 2;
 pub const MAIN_DOCK_ID: &str = "main-dock";
@@ -40,6 +45,17 @@ pub struct MyTermWorkspace {
     last_layout_state: Option<gpui_component::dock::DockAreaState>,
     toggle_button_visible: bool,
     _save_layout_task: Option<Task<()>>,
+
+    /// Mirror trạng thái zoom: tên panel đang zoom (fullscreen).
+    /// `gpui-component` giữ `TabPanel.zoomed` (private) + `DockArea.zoom_view`
+    /// (private) nên từ ngoài crate không đọc được → tự track qua subscription
+    /// `PanelEvent::ZoomIn`/`ZoomOut`. Dùng `Arc<Mutex<..>>` chia sẻ với closure
+    /// `on_app_quit` để đọc an toàn ngay cả khi entity workspace đã bị drop
+    /// trong quá trình shutdown.
+    zoomed_panel: Arc<Mutex<Option<String>>>,
+    /// Các `TabPanel` đã subscribe — tránh subscribe trùng (LayoutChanged fire
+    /// nhiều lần, và TabPanel có thể tái tạo).
+    subscribed_tabs: HashSet<EntityId>,
 }
 
 impl MyTermWorkspace {
@@ -55,6 +71,10 @@ impl MyTermWorkspace {
         });
         let weak_dock_area = dock_area.downgrade();
 
+        // Đọc tên panel đang zoom TRƯỚC khi layout bị reset (center luôn reset,
+        // và reset_* ghi lại docks.json không kèm zoom → phải lưu trước).
+        let saved_zoom = persistence::read_zoomed_panel();
+
         match Self::load_layout(dock_area.clone(), window, cx) {
             Ok(()) => {
                 layout::reset_center_only(weak_dock_area, window, cx);
@@ -64,11 +84,20 @@ impl MyTermWorkspace {
             }
         }
 
+        // Mirror trạng thái zoom (tên panel đang zoom) — `Arc<Mutex<..>>` chia sẻ
+        // giữa subscription callbacks và closure `on_app_quit` để đọc an toàn ngay
+        // cả khi entity workspace đã bị drop khi shutdown.
+        let zoomed_panel = Arc::new(Mutex::new(None::<String>));
+
         cx.subscribe_in(
             &dock_area,
             window,
-            |this, dock_area, ev: &DockEvent, window, cx| match ev {
-                DockEvent::LayoutChanged => this.save_layout(dock_area, window, cx),
+            move |this, dock_area, ev: &DockEvent, window, cx| match ev {
+                DockEvent::LayoutChanged => {
+                    // Subscribe mọi TabPanel mới (tab/panel thêm động).
+                    this.sync_tab_subscriptions(window, cx);
+                    this.save_layout(dock_area, window, cx);
+                }
                 _ => {}
             },
         )
@@ -76,11 +105,20 @@ impl MyTermWorkspace {
 
         cx.on_app_quit({
             let dock_area = dock_area.clone();
+            let zoomed_panel = zoomed_panel.clone();
             move |_, cx| {
                 let state = dock_area.read(cx).dump(cx);
-                cx.background_executor().spawn(async move {
-                    _ = persistence::save_state(&state);
-                })
+                // Đọc tên panel đang zoom từ `Arc<Mutex<..>>` — không phụ thuộc
+                // lifetime entity workspace (có thể đã bị drop khi shutdown).
+                let zoomed_name = zoomed_panel
+                    .lock()
+                    .ok()
+                    .and_then(|g| g.clone());
+                tracing::info!("on_app_quit → zoomed_name={zoomed_name:?}");
+                eprintln!("[zoom] on_app_quit → zoomed_name={zoomed_name:?}");
+                async move {
+                    _ = persistence::save_state(&state, zoomed_name.as_deref());
+                }
             }
         })
         .detach();
@@ -92,17 +130,29 @@ impl MyTermWorkspace {
 
         let clock = DateTimeClock::new_entity(window, cx);
 
-        Self {
+        let mut me = Self {
             title_bar,
             dock_area,
             clock,
             last_layout_state: None,
             toggle_button_visible: true,
             _save_layout_task: None,
+            zoomed_panel,
+            subscribed_tabs: HashSet::new(),
+        };
+
+        // Subscribe mọi TabPanel đang có (load từ docks.json / tạo ở reset_*).
+        me.sync_tab_subscriptions(window, cx);
+
+        // Khôi phục zoom (fullscreen) cho panel trùng tên đã lưu.
+        if let Some(name) = saved_zoom {
+            me.restore_zoom(&name, window, cx);
         }
+
+        me
     }
 
-    /// Debounce save 10s, skip khi state không đổi.
+    /// Debounce save 5s, skip khi state không đổi.
     fn save_layout(
         &mut self,
         dock_area: &Entity<DockArea>,
@@ -110,10 +160,16 @@ impl MyTermWorkspace {
         cx: &mut Context<Self>,
     ) {
         let dock_area = dock_area.clone();
+        // Snapshot tên panel đang zoom tại thời điểm schedule (mirror state).
+        let zoomed_name = self
+            .zoomed_panel
+            .lock()
+            .ok()
+            .and_then(|g| g.clone());
         self._save_layout_task = Some(cx.spawn_in(window, async move |story, window| {
             window
                 .background_executor()
-                .timer(Duration::from_secs(10))
+                .timer(Duration::from_secs(5))
                 .await;
 
             _ = story.update_in(window, move |this, _, cx| {
@@ -121,10 +177,73 @@ impl MyTermWorkspace {
                 if Some(&state) == this.last_layout_state.as_ref() {
                     return;
                 }
-                _ = persistence::save_state(&state);
+                _ = persistence::save_state(&state, zoomed_name.as_deref());
                 this.last_layout_state = Some(state);
             });
         }));
+    }
+
+    /// Subscribe `PanelEvent` trên mọi `TabPanel` chưa subscribe — cập nhật
+    /// mirror `zoomed_panel`. Gọi sau mỗi `DockEvent::LayoutChanged` và lúc init.
+    fn sync_tab_subscriptions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tabs = zoom::collect_tab_panels(&self.dock_area.read(cx), cx);
+        tracing::info!("sync_tab_subscriptions → found {} tab panel(s)", tabs.len());
+        eprintln!("[zoom] sync_tab_subscriptions → found {} tab panel(s)", tabs.len());
+        for tp in tabs {
+            let id = tp.entity_id();
+            if self.subscribed_tabs.insert(id) {
+                let zoomed_panel = self.zoomed_panel.clone();
+                let dock_area = self.dock_area.clone();
+                cx.subscribe_in(
+                    &tp,
+                    window,
+                    move |_this, tp, ev: &PanelEvent, _window, cx| match ev {
+                        PanelEvent::ZoomIn => {
+                            // Giải tên panel active tại lúc zoom.
+                            let name = tp
+                                .read(cx)
+                                .active_panel(cx)
+                                .map(|p| p.panel_name(cx).to_string());
+                            tracing::info!("PanelEvent::ZoomIn → name={name:?}");
+                            eprintln!("[zoom] PanelEvent::ZoomIn → name={name:?}");
+                            if let Ok(mut g) = zoomed_panel.lock() {
+                                *g = name.clone();
+                            }
+                            // Lưu NGAY vào docks.json — không phụ thuộc quit/debounce.
+                            let state = dock_area.read(cx).dump(cx);
+                            _ = persistence::save_state(&state, name.as_deref());
+                            cx.notify();
+                        }
+                        PanelEvent::ZoomOut => {
+                            tracing::info!("PanelEvent::ZoomOut");
+                            eprintln!("[zoom] PanelEvent::ZoomOut");
+                            if let Ok(mut g) = zoomed_panel.lock() {
+                                *g = None;
+                            }
+                            let state = dock_area.read(cx).dump(cx);
+                            _ = persistence::save_state(&state, None);
+                            cx.notify();
+                        }
+                        _ => {}
+                    },
+                )
+                .detach();
+            }
+        }
+    }
+
+    /// Khôi phục zoom: tìm `TabPanel` có active panel trùng `name` → focus +
+    /// dispatch `ToggleZoom` (qua đúng code path của gpui-component → toolbar
+    /// state nhất quán, `TabPanel.zoomed` được set đúng).
+    fn restore_zoom(&self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let target = zoom::find_tab_by_panel_name(&self.dock_area.read(cx), name, cx);
+        if let Some(tp) = target {
+            if let Some(panel) = tp.read(cx).active_panel(cx) {
+                panel.focus_handle(cx).focus(window, cx);
+                window.dispatch_action(Box::new(ToggleZoom), cx);
+                tracing::info!("Restored zoom for panel \"{name}\"");
+            }
+        }
     }
 
     /// Bind key bindings toàn cục cho workspace.

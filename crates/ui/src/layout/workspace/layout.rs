@@ -29,7 +29,7 @@ pub(crate) fn reset_center_only(
     );
     _ = dock_area.update(cx, |view, cx| {
         view.set_center(center, window, cx);
-        _ = super::persistence::save_state(&view.dump(cx));
+        _ = super::persistence::save_state(&view.dump(cx), None);
     });
 }
 
@@ -75,6 +75,6 @@ pub(crate) fn reset_default_layout(
             window,
             cx,
         );
-        _ = super::persistence::save_state(&view.dump(cx));
+        _ = super::persistence::save_state(&view.dump(cx), None);
     });
 }

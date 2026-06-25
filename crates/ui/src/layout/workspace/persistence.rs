@@ -53,9 +53,69 @@ impl super::MyTermWorkspace {
 }
 
 /// Save dock state ra file.
-pub(crate) fn save_state(state: &DockAreaState) -> Result<()> {
+///
+/// `zoomed_panel`: tên panel đang zoom (fullscreen) — inject vào JSON value
+/// của `docks.json` (field `zoomed_panel`). `None` → xoá field (panel không zoom).
+/// Không sửa struct `DockAreaState`.
+pub(crate) fn save_state(state: &DockAreaState, zoomed_panel: Option<&str>) -> Result<()> {
     tracing::info!("Save layout...");
-    let json = serde_json::to_string_pretty(state)?;
+    let mut val = serde_json::to_value(state)?;
+    if let Some(obj) = val.as_object_mut() {
+        match zoomed_panel {
+            Some(name) => {
+                obj.insert(
+                    super::zoom::ZOOM_FIELD.into(),
+                    serde_json::Value::String(name.into()),
+                );
+            }
+            None => {
+                obj.remove(super::zoom::ZOOM_FIELD);
+            }
+        }
+    }
+    let json = serde_json::to_string_pretty(&val)?;
     std::fs::write(STATE_FILE, json)?;
     Ok(())
+}
+
+/// Đọc tên panel đang zoom (fullscreen) từ `docks.json` trước khi layout bị
+/// reset (center luôn reset về 1 tab mới). Trả về `None` nếu file không tồn
+/// tại hoặc chưa có panel nào zoom.
+pub(crate) fn read_zoomed_panel() -> Option<String> {
+    let raw = std::fs::read_to_string(STATE_FILE).ok()?;
+    let val: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    val.get(super::zoom::ZOOM_FIELD)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_component::dock::DockAreaState;
+
+    #[test]
+    fn zoomed_panel_field_roundtrips_and_keeps_state_deserializable() {
+        let state = DockAreaState::default();
+        let mut val = serde_json::to_value(&state).unwrap();
+        val.as_object_mut().unwrap().insert(
+            super::super::zoom::ZOOM_FIELD.into(),
+            serde_json::Value::String("session".into()),
+        );
+        let json = serde_json::to_string_pretty(&val).unwrap();
+
+        // Extra field must NOT break DockAreaState deserialization.
+        let parsed: DockAreaState = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, state);
+
+        // Field readable back.
+        let val: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(val[super::super::zoom::ZOOM_FIELD].as_str(), Some("session"));
+    }
+
+    #[test]
+    fn absent_zoomed_panel_is_none() {
+        let json = serde_json::to_string_pretty(&DockAreaState::default()).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(val.get(super::super::zoom::ZOOM_FIELD).is_none());
+    }
 }
