@@ -9,7 +9,8 @@ use std::sync::Arc;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, MouseButton, ParentElement, Render,
-    StatefulInteractiveElement, Styled, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
+    StatefulInteractiveElement, Styled, WeakEntity, Window, div, prelude::FluentBuilder as _,
+    px, rgb,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable,
@@ -78,12 +79,37 @@ impl Panel for TerminalPanel {
         let panel_entity = cx.entity().clone();
         let theme = cx.theme().muted_foreground;
 
+        // Kiểm tra panel này có đang active (tab được chọn) hay không.
+        let is_active = self
+            .tab_panel
+            .as_ref()
+            .and_then(|tp| tp.upgrade())
+            .map_or(false, |tp| {
+                tp.read(cx)
+                    .active_panel(cx)
+                    .map_or(false, |ap| ap.panel_id(cx) == cx.entity().entity_id())
+            });
+
         h_flex()
             .id("tab-title")
+            .relative()
+            .h_full()
             .w_full()
             .min_w(px(100.))
             .items_center()
             .gap_1()
+            // Active tab highlight — đường border top 2px màu #58C4DC.
+            .when(is_active, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(px(2.))
+                        .bg(rgb(0x58c4dc)),
+                )
+            })
             // Bù padding phải 12px của Tab inner_h_flex để × sát viền phải.
             .mr(-px(5.))
             // Middle-click trên tab → đóng tab đó (kể cả tab inactive).
