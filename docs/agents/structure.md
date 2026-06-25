@@ -65,15 +65,9 @@ myTerm2/
 │   │
 │   └── ui/                         # Toàn bộ GPUI + gpui-component
 │       ├── Cargo.toml
-│       ├── themes/                 # JSON theme built-in (24 theme: catppuccin, gruvbox, tokyonight, ...)
-│       │   ├── adventure.json
-│       │   ├── catppuccin.json
-│       │   ├── gruvbox.json
-│       │   ├── solarized.json
-│       │   ├── tokyonight.json
+│       ├── themes/                 # JSON theme built-in (2 theme: Zed One Dark, Zed One Light)
 │       │   ├── zed-one-dark.json
-│       │   ├── zed-one-light.json
-│       │   └── ... (xem đầy đủ trong folder)
+│       │   └── zed-one-light.json
 │       └── src/
 │           ├── lib.rs              # init(cx): theme + AppState + TerminalSettings + register_panel x4
 │           ├── actions.rs          # UI-level actions (Zed action registration)
@@ -159,7 +153,7 @@ myTerm2/
 | `core` | _(không — leaf crate)_ | ✅ Đang triển khai | Domain types, `TerminalSession` trait, `SessionEvent`, `AppError`, `LocalShellConfig`/`ShellKind`, terminal helpers (content, palette, key/mouse encode, OSC, URL). Không phụ thuộc `gpui`. |
 | `ssh` | `core` | ⬜ Placeholder | Sẽ triển khai `russh`: client, channel, SFTP, known_hosts, auth. Hiện chỉ re-export `core`. |
 | `local` | `core` | ✅ Đang triển khai | PTY qua `alacritty_terminal::tty` + `EventLoop` (ConPTY trên Windows). `LocalSession` + `LocalListener`. Implement `TerminalSession`. Xem [`docs/terminal-backend.md`](../terminal-backend.md). |
-| `ui` | `core` _(không `ssh`/`local`)_ | ✅ Đang triển khai | Toàn bộ gpui: `MyTermWorkspace` (DockArea), title bar, app menus, statusbar, terminal view/element/scrollbar, session tabs, SFTP panel, AppState, TerminalSettings, theme + 24 built-in themes. Giao tiếp `ssh`/`local` qua trait. |
+| `ui` | `core` _(không `ssh`/`local`)_ | ✅ Đang triển khai | Toàn bộ gpui: `MyTermWorkspace` (DockArea), title bar, app menus, statusbar, terminal view/element/scrollbar, session tabs, SFTP panel, AppState, TerminalSettings, theme + 2 built-in themes (Zed One Dark/Light). Giao tiếp `ssh`/`local` qua trait. |
 
 > 🔗 **Quy tắc phụ thuộc**: `app → {ui, ssh, local, core}`, `ui → core`, `ssh → core`, `local → core`. Không có cycle, không peer-to-peer giữa `ssh` và `local`.
 
