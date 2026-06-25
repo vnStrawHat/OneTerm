@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Nhóm Layout: line height, cell width, padding.
+/// Nhóm Layout: line height, cell width, padding, gutter.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LayoutConfig {
     /// Line height multiplier (1.2 = 120% font size).
@@ -15,6 +15,9 @@ pub struct LayoutConfig {
     /// Padding quanh terminal content (px).
     #[serde(default)]
     pub padding: PaddingConfig,
+    /// Bật/tắt gutter (timestamp + line number bên trái terminal).
+    #[serde(default = "default_show_gutter")]
+    pub show_gutter: bool,
 }
 
 impl Default for LayoutConfig {
@@ -23,6 +26,7 @@ impl Default for LayoutConfig {
             line_height: default_line_height(),
             cell_width: default_cell_width(),
             padding: PaddingConfig::default(),
+            show_gutter: default_show_gutter(),
         }
     }
 }
@@ -33,6 +37,10 @@ fn default_line_height() -> f32 {
 
 fn default_cell_width() -> Option<f32> {
     None // auto: đo advance width của '0' (CSS ch unit, giống Windows Terminal)
+}
+
+fn default_show_gutter() -> bool {
+    true
 }
 
 /// Padding 4 phía (px).

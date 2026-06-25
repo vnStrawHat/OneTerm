@@ -67,7 +67,7 @@ StatusBar.
 | `StoryWorkspace { title_bar, dock_area, last_layout_state, toggle_button_visible, _save_layout_task }` | `MyTermWorkspace` (đổi tên, giữ field) | `app/src/app.rs` |
 | `AppTitleBar::new("Examples", ...)` | `AppTitleBar::new("myTerm2", ...)` | Đổi title |
 | `AppMenuBar` (`app_menus.rs`: Appearance/Theme/Language + Edit/Window/Help) | Giữ nguyên 100% | Themes + Language + Appearance |
-| `FontSizeSelector` (font-size, radius, scrollbar, list highlight) | Giữ nguyên | — |
+| `FontSizeSelector` (font-size, gutter toggle) | Giữ nguyên (bỏ radius/scrollbar/list-highlight) | radius=0px, scrollbar=Scrolling cố định ở `theme::init`; list.active_highlight=true cố định; gutter toggle → `TerminalSettings.show_gutter` |
 | `DockArea::new("main-dock", Some(version), window, cx)` | `version = 1` (bump) | Trigger reset prompt khi layout cũ khác version |
 | Center = `DockItem::v_split` chứa 19 story tabs | Center = `DockItem::tabs([TerminalPanel, ...])` | Chỉ terminal, không gì khác |
 | `set_left_dock(...)` | **Bỏ** | — |
@@ -595,7 +595,7 @@ fn reset_default_layout(dock_area: WeakEntity<DockArea>, window: &mut Window, cx
   - Window: Toggle Search.
   - Help: Documentation, Open Website.
 - `cx.observe_global::<Theme>` → refresh menu check-state khi theme đổi.
-- `FontSizeSelector` (font-size, radius, scrollbar, list highlight) — giữ.
+- `FontSizeSelector` (font-size, gutter toggle) — giữ; bỏ radius/scrollbar (mặc định radius=0px, scrollbar=Scrolling cố định ở `theme::init`) và list highlight (mặc định active_highlight=true, không toggle). Gutter toggle thay đổi `TerminalSettings.show_gutter` toàn cục.
 
 ### 7.2 Theme system — giữ nguyên 100%
 
@@ -774,7 +774,7 @@ Theo [`docs/agents/structure.md`](agents/structure.md):
 
 - [ ] `AppTitleBar::new("myTerm2", ...)` giữ nguyên cấu trúc.
 - [ ] `app_menus::init` (Appearance/Theme/Language/Edit/Window/Help) — giữ.
-- [ ] `FontSizeSelector` — giữ.
+- [ ] `FontSizeSelector` — giữ (chỉ font-size + Gutter toggle; radius=0px & scrollbar=Scrolling cố định; list.active_highlight=true cố định).
 - [ ] Add Panel dropdown → "New Terminal Tab" + "Show/Hide Dock Toggle Button".
 - [ ] `on_action_add_panel` → chỉ thêm TerminalPanel.
 

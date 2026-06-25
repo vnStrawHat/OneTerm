@@ -32,6 +32,7 @@ pub(crate) fn prepaint_terminal(
     cursor_color_override: Option<gpui::Hsla>,
     cursor_shape_override: crate::state::TerminalCursorShape,
     padding: crate::state::TerminalPadding,
+    show_gutter: bool,
     line_times: &[String],
     hovered_url: Option<&super::super::url::DetectedUrl>,
     ctrl_held: bool,
@@ -73,6 +74,10 @@ pub(crate) fn prepaint_terminal(
         theme,
         window,
     );
+
+    // Khi gutter bị tắt, set width = 0 — paint sẽ skip gutter rendering
+    // (kiểm tra `if gw > px(0.0)`), và grid_origin dịch về bên trái.
+    let gutter_width = if show_gutter { gutter_width } else { px(0.) };
 
     let (rows, cols) = measure::resize_session(
         session,

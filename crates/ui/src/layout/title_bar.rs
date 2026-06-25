@@ -16,15 +16,14 @@ use gpui_component::{
     ActiveTheme as _, IconName, Side, Sizable as _, Theme, TitleBar,
     button::{Button, ButtonVariants as _},
     menu::{AppMenuBar, DropdownMenu as _},
-    scroll::ScrollbarShow,
 };
 
 use crate::actions::{
-    AddPanel, AddSession, AddSftpBrowser, SelectFont, SelectRadius, SelectScrollbarShow,
-    ToggleListActiveHighlight,
+    AddPanel, AddSession, AddSftpBrowser, SelectFont, ToggleGutter,
 };
 
 use crate::layout::app_menus;
+use crate::state::TerminalSettings;
 
 pub struct AppTitleBar {
     app_menu_bar: Entity<AppMenuBar>,
@@ -80,8 +79,10 @@ impl Render for AppTitleBar {
     }
 }
 
-/// [`FontSizeSelector`] — dropdown chỉnh font size / radius / scrollbar / list
-/// highlight của theme UI (mirror reference `FontSizeSelector`).
+/// [`FontSizeSelector`] — dropdown chỉnh font size + bật/tắt Gutter
+/// (timestamp + line number) của terminal (mirror reference `FontSizeSelector`,
+/// đã bỏ Border Radius — mặc định 0px — Scrollbar — mặc định Scrolling to show
+/// — và List Active Highlight — mặc định bật, không toggle).
 struct FontSizeSelector {
     focus_handle: FocusHandle,
 }
@@ -103,39 +104,21 @@ impl FontSizeSelector {
         window.refresh();
     }
 
-    fn on_select_radius(
+    fn on_toggle_gutter(
         &mut self,
-        radius: &SelectRadius,
+        _: &ToggleGutter,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        Theme::global_mut(cx).radius = px(radius.0 as f32);
-        Theme::global_mut(cx).radius_lg = if cx.theme().radius > px(0.) {
-            cx.theme().radius + px(2.)
-        } else {
-            px(0.)
-        };
-        window.refresh();
-    }
-
-    fn on_select_scrollbar_show(
-        &mut self,
-        show: &SelectScrollbarShow,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        Theme::global_mut(cx).scrollbar_show = show.0;
-        window.refresh();
-    }
-
-    fn on_toggle_list_active_highlight(
-        &mut self,
-        _: &ToggleListActiveHighlight,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let theme = Theme::global_mut(cx);
-        theme.list.active_highlight = !theme.list.active_highlight;
+        // Gutter — cột bên trái terminal hiển thị timestamp [HH:MM:SS] + line
+        // number cho mỗi dòng. Bật = hiện (mặc định), tắt = ẩn, terminal dùng
+        // toàn bộ chiều rộng. Lưu trong `TerminalSettings` toàn cục, ảnh hưởng
+        // lên mọi terminal panel trong app.
+        let settings = TerminalSettings::global(cx);
+        settings.update(cx, |st, cx| {
+            st.show_gutter = !st.show_gutter;
+            cx.notify();
+        });
         window.refresh();
     }
 }
@@ -144,16 +127,12 @@ impl Render for FontSizeSelector {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focus_handle = self.focus_handle.clone();
         let font_size = cx.theme().font_size.as_f32() as i32;
-        let radius = cx.theme().radius.as_f32() as i32;
-        let scroll_show = cx.theme().scrollbar_show;
 
         div()
             .id("font-size-selector")
             .track_focus(&focus_handle)
             .on_action(cx.listener(Self::on_select_font))
-            .on_action(cx.listener(Self::on_select_radius))
-            .on_action(cx.listener(Self::on_select_scrollbar_show))
-            .on_action(cx.listener(Self::on_toggle_list_active_highlight))
+            .on_action(cx.listener(Self::on_toggle_gutter))
             .child(
                 Button::new("btn")
                     .small()
@@ -172,37 +151,11 @@ impl Render for FontSizeSelector {
                             )
                             .menu_with_check("Small", font_size == 14, Box::new(SelectFont(14)))
                             .separator()
-                            .label("Border Radius")
-                            .menu_with_check("8px", radius == 8, Box::new(SelectRadius(8)))
+                            // Gutter — bật/tắt cột timestamp + line number bên trái terminal.
                             .menu_with_check(
-                                "6px (default)",
-                                radius == 6,
-                                Box::new(SelectRadius(6)),
-                            )
-                            .menu_with_check("4px", radius == 4, Box::new(SelectRadius(4)))
-                            .menu_with_check("0px", radius == 0, Box::new(SelectRadius(0)))
-                            .separator()
-                            .label("Scrollbar")
-                            .menu_with_check(
-                                "Scrolling to show",
-                                scroll_show == ScrollbarShow::Scrolling,
-                                Box::new(SelectScrollbarShow(ScrollbarShow::Scrolling)),
-                            )
-                            .menu_with_check(
-                                "Hover to show",
-                                scroll_show == ScrollbarShow::Hover,
-                                Box::new(SelectScrollbarShow(ScrollbarShow::Hover)),
-                            )
-                            .menu_with_check(
-                                "Always show",
-                                scroll_show == ScrollbarShow::Always,
-                                Box::new(SelectScrollbarShow(ScrollbarShow::Always)),
-                            )
-                            .separator()
-                            .menu_with_check(
-                                "List Active Highlight",
-                                cx.theme().list.active_highlight,
-                                Box::new(ToggleListActiveHighlight),
+                                "Gutter",
+                                TerminalSettings::global(cx).read(cx).show_gutter,
+                                Box::new(ToggleGutter),
                             )
                     })
                     .anchor(Anchor::TopRight),

@@ -50,6 +50,8 @@ pub(crate) struct TerminalElement {
     hovered_url: Option<super::url::DetectedUrl>,
     /// Ctrl đang held.
     ctrl_held: bool,
+    /// Bật/tắt gutter (timestamp + line number bên trái terminal).
+    pub show_gutter: bool,
     /// Padding quanh terminal content (top/right/bottom/left px).
     padding: crate::state::TerminalPadding,
     /// Cell width override (None = auto từ font advance).
@@ -82,6 +84,7 @@ impl TerminalElement {
         ctrl_held: bool,
         line_times: Vec<String>,
         padding: crate::state::TerminalPadding,
+        show_gutter: bool,
         cell_width_override: Option<f32>,
         cursor_color_override: Option<Hsla>,
         cursor_shape_override: crate::state::TerminalCursorShape,
@@ -102,6 +105,7 @@ impl TerminalElement {
             hovered_url,
             ctrl_held,
             padding,
+            show_gutter,
             cell_width_override,
             cursor_color_override,
             cursor_shape_override,
@@ -157,6 +161,7 @@ impl Element for TerminalElement {
             self.cursor_color_override,
             self.cursor_shape_override,
             self.padding,
+            self.show_gutter,
             &self.line_times,
             self.hovered_url.as_ref(),
             self.ctrl_held,

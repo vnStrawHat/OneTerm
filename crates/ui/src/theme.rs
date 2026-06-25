@@ -13,8 +13,8 @@
 //! (thường = content background) và `tab_bar.background` (darker) — cho hiệu
 //! ứng "tab active nối với content" kiểu Zed/editor, không cần override.
 
-use gpui::{Anchor, App};
-use gpui_component::{ActiveTheme as _, Theme, ThemeRegistry};
+use gpui::{Anchor, App, px};
+use gpui_component::{ActiveTheme as _, Theme, ThemeRegistry, scroll::ScrollbarShow};
 
 use crate::actions::{SwitchTheme, SwitchThemeMode};
 
@@ -100,6 +100,21 @@ pub fn init(cx: &mut App) {
             // Khởi động ở Dark mode với Zed One Dark (Zed default iconic).
             Theme::change(gpui_component::ThemeMode::Dark, None, cx);
         }
+    }
+
+    // FontSizeSelector đã bỏ tùy chọn Border Radius và Scrollbar, nên set mặc
+    // định cố định ở đây (sau Theme::change để không bị apply_config override —
+    // theme JSON không khai báo radius, nên config.radius = None).
+    //
+    // - radius = 0px, radius_lg = 0px: bỏ bo góc, UI sharp/góc cạnh.
+    // - scrollbar_show = Scrolling: hiện scrollbar khi cuộn, tự ẩn khi idle.
+    //   (gpui_component::init có thể đã set = Hover qua sync_scrollbar_appearance,
+    //   nên ép lại = Scrolling ở đây.)
+    {
+        let theme = Theme::global_mut(cx);
+        theme.radius = px(0.);
+        theme.radius_lg = px(0.);
+        theme.scrollbar_show = ScrollbarShow::Scrolling;
     }
 
     // Notification hiển thị ở góc dưới bên phải (mặc định gpui-component là TopRight).

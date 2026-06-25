@@ -48,6 +48,7 @@ impl TerminalSettings {
             bottom: layout.padding.bottom,
             left: layout.padding.left,
         };
+        self.show_gutter = layout.show_gutter;
 
         self.shell = cfg.shell.clone();
 

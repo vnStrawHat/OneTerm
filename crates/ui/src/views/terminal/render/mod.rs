@@ -42,6 +42,7 @@ impl Render for LocalTerminalView {
             cell_width_override,
             color_overrides,
             cursor_shape,
+            show_gutter,
         ) = {
             let settings = settings_entity.read(cx);
             let gpui_theme = cx.theme();
@@ -65,6 +66,7 @@ impl Render for LocalTerminalView {
                 settings.cell_width,
                 settings.color_overrides.clone(),
                 settings.cursor_shape,
+                settings.show_gutter,
             )
         };
         let metrics = self.metrics.clone();
@@ -130,6 +132,7 @@ impl Render for LocalTerminalView {
                 self.ctrl_held,
                 self.line_times.clone(),
                 padding,
+                show_gutter,
                 cell_width_override,
                 cursor_color,
                 cursor_shape,

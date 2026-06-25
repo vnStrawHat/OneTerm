@@ -113,6 +113,8 @@ pub struct TerminalSettings {
     pub cell_width: Option<f32>,
     /// Padding quanh terminal content.
     pub padding: TerminalPadding,
+    /// Bật/tắt gutter (timestamp + line number bên trái terminal).
+    pub show_gutter: bool,
 
     // ── Scroll ──
     /// Scroll multiplier cho mouse wheel.
@@ -148,6 +150,7 @@ impl Default for TerminalSettings {
             line_height_factor: 1.2,
             cell_width: None,
             padding: TerminalPadding::default(),
+            show_gutter: true,
             scroll_multiplier: 1.0,
             alternate_scroll: true,
             scrollback_history: 10_000,
