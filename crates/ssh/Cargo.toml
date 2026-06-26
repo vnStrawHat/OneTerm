@@ -14,4 +14,5 @@ async-channel.workspace = true
 russh.workspace = true
 tokio.workspace = true
 log.workspace = true
+russh-sftp.workspace = true
 anyhow.workspace = true

@@ -9,11 +9,13 @@
 //! Tham chiếu `docs/terminal-backend.md` §9.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::TermMode;
 use async_channel::Receiver;
 
+use crate::sftp::SftpBackend;
 use crate::terminal::content::TerminalContent;
 use crate::terminal::key_encode::{KeyMods, KeySpec, NamedKey, encode_key};
 use crate::terminal::mouse_encode::TerminalMouseButton;
@@ -206,6 +208,13 @@ pub trait TerminalSession: Send + Sync + 'static {
     /// Text hiển thị trong toolbar breadcrumb (vd cwd path).
     fn breadcrumb_text(&self) -> Option<String> {
         self.cwd().map(|p| p.display().to_string())
+    }
+
+    // ── SFTP ─────────────────────────────────────────────────────
+    /// SFTP backend nếu session có SFTP channel (SSH only).
+    /// `None` cho local shell — không ép local session implement SFTP.
+    fn sftp(&self) -> Option<Arc<dyn SftpBackend>> {
+        None
     }
 }
 

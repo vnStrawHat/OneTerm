@@ -10,11 +10,15 @@ pub mod handler;
 pub mod listener;
 pub mod session;
 pub mod session_terminal;
+pub mod sftp;
+pub mod sftp_task;
 pub mod state;
 pub mod task;
 
 pub use config::{SshAuthMethod, SshConfig};
 pub use listener::{Cmd, SshListener};
+pub use myterm2_core::{FileEntry, FileStat};
+pub use sftp::{SftpCmd, SftpEvent, SftpSession};
 pub use session::{PtySize, SshSession, connect};
 
 pub use myterm2_core as core;

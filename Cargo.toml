@@ -37,10 +37,13 @@ async-channel = "2"
 polling = "3.8"
 # Logging (alacritty_terminal cũng dùng log)
 log = "0.4"
+env_logger = "0.11"
 # SSH client
 russh = { version = "0.61", default-features = false, features = ["ring", "flate2", "rsa"] }
+# SFTP subsystem cho russh — mở SFTP channel trên cùng SSH connection
+russh-sftp = "2.3"
 # russh-keys đã merge vào russh >= 0.50
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "io-util", "net", "macros"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "io-util", "net", "macros", "fs"] }
 
 # Async / serialization / error
 anyhow = "1"

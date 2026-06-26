@@ -16,7 +16,7 @@ use myterm2_core::terminal::mouse_encode::{
     encode_mouse_release, encode_wheel_event,
 };
 use myterm2_core::terminal::{TerminalContent, TerminalInfo};
-use myterm2_core::{CursorBounds, SessionEvent, TerminalSession};
+use myterm2_core::{CursorBounds, SessionEvent, SftpBackend, TerminalSession};
 
 use crate::session::{SshSession, TermSize};
 
@@ -343,5 +343,14 @@ impl TerminalSession for SshSession {
     // ── Foreground Process ───────────────────────────────────────────
     fn foreground_process(&self) -> Option<String> {
         self.state.lock().unwrap().foreground_process.clone()
+    }
+
+    // ── SFTP ────────────────────────────────────────────────────────
+    fn sftp(&self) -> Option<std::sync::Arc<dyn SftpBackend>> {
+        self.sftp
+            .lock()
+            .unwrap()
+            .clone()
+            .map(|s| s as std::sync::Arc<dyn SftpBackend>)
     }
 }

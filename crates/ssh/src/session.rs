@@ -7,7 +7,11 @@
 //! **Quan trọng**: `russh::client::Handle` phải giữ sống — drop = đóng kết nối.
 //! Handle được move vào `ssh_main_task` và giữ đến khi session đóng.
 //!
-//! Tham chiếu `docs/terminal-backend.md` §7.
+//! SFTP channel được mở **trước khi** spawn `ssh_main_task` (trong `block_on`),
+//! tách ra object riêng — không cần handle nữa. Hai channel (shell + sftp)
+//! chia sẻ cùng 1 TCP connection, multiplex bởi russh.
+//!
+//! Tham chiếu `docs/terminal-backend.md` §7, `docs/sftp-browser-design.md`.
 
 use std::sync::{Arc, Mutex};
 
@@ -24,6 +28,8 @@ use myterm2_core::SessionEvent;
 use crate::config::{SshAuthMethod, SshConfig};
 use crate::handler::SshClientHandler;
 use crate::listener::{Cmd, SshListener};
+use crate::sftp::{SftpCmd, SftpEvent, SftpSession};
+use crate::sftp_task::sftp_task;
 use crate::state::{SharedState, new_shared};
 use crate::task::ssh_main_task;
 
@@ -65,6 +71,8 @@ pub struct SshSession {
     pub(crate) cell_width: Mutex<f32>,
     pub(crate) line_height: Mutex<f32>,
     pub(crate) marked_text: Mutex<Option<String>>,
+    /// SFTP session (None = server không hỗ trợ SFTP).
+    pub(crate) sftp: Mutex<Option<Arc<SftpSession>>>,
 }
 
 /// Kết nối SSH tới server. API sync — dùng `block_on` cho connect.
@@ -185,6 +193,20 @@ pub fn connect(
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         log::info!("SshSession: shell requested");
 
+        // ── Mở SFTP channel (optional) ──────────────────────────────
+        // Mở TRƯỚC khi spawn ssh_main_task vì handle sẽ bị move vào task.
+        // SFTP channel tách ra object riêng — không cần handle nữa.
+        let sftp_session = match open_sftp(&handle).await {
+            Ok(sftp) => {
+                log::info!("SshSession: SFTP channel opened");
+                Some(sftp)
+            }
+            Err(e) => {
+                log::warn!("SshSession: SFTP not available: {e} — terminal only");
+                None
+            }
+        };
+
         // ── Spawn main SSH task ──────────────────────────────────────
         // QUAN TRỌNG: `handle` phải move vào task — drop handle = đóng kết nối.
         tokio::spawn(ssh_main_task(
@@ -197,11 +219,11 @@ pub fn connect(
         ));
         log::info!("SshSession: main task spawned");
 
-        Ok::<_, anyhow::Error>(())
+        Ok::<_, anyhow::Error>(sftp_session)
     });
 
     match connect_result {
-        Ok(()) => {
+        Ok(sftp_session) => {
             log::info!("SshSession: connect successful");
             // multi_thread runtime: worker thread tự chạy spawned tasks.
             let session = SshSession {
@@ -214,6 +236,7 @@ pub fn connect(
                 cell_width: Mutex::new(0.0),
                 line_height: Mutex::new(0.0),
                 marked_text: Mutex::new(None),
+                sftp: Mutex::new(sftp_session),
             };
             Ok(Box::new(session) as Box<dyn myterm2_core::TerminalSession>)
         }
@@ -222,6 +245,56 @@ pub fn connect(
             Err(myterm2_core::AppError::msg(e.to_string()))
         }
     }
+}
+
+/// Mở SFTP channel trên cùng `handle` + spawn `sftp_task`.
+///
+/// Flow:
+/// 1. `handle.channel_open_session()` → channel mới (cùng TCP connection)
+/// 2. `channel.request_subsystem("sftp")` → yêu cầu SFTP subsystem
+/// 3. `channel.into_stream()` → convert thành `AsyncRead + AsyncWrite`
+/// 4. `russh_sftp::client::SftpSession::new(stream)` → SFTP handshake
+/// 5. Tạo channels `(cmd_tx, cmd_rx)` + `(event_tx, event_rx)`
+/// 6. `tokio::spawn(sftp_task(...))` — task chạy nền
+/// 7. Return `Arc<SftpSession>` — bridge cho UI gọi sync
+async fn open_sftp(
+    handle: &russh::client::Handle<SshClientHandler>,
+) -> anyhow::Result<Arc<SftpSession>> {
+    // 1. Mở channel mới trên cùng handle.
+    let channel = handle
+        .channel_open_session()
+        .await
+        .map_err(|e| anyhow::anyhow!("SFTP channel_open_session: {e}"))?;
+
+    // 2. Request SFTP subsystem.
+    channel
+        .request_subsystem(true, "sftp")
+        .await
+        .map_err(|e| anyhow::anyhow!("SFTP request_subsystem: {e}"))?;
+
+    // 3. Convert channel → stream (AsyncRead + AsyncWrite).
+    let stream = channel.into_stream();
+
+    // 4. SFTP handshake — tạo SftpChannel.
+    let sftp_channel = russh_sftp::client::SftpSession::new(stream)
+        .await
+        .map_err(|e| anyhow::anyhow!("SFTP handshake: {e}"))?;
+
+    // 5. Tạo channels bridge sync (UI) ↔ async (tokio task).
+    let (sftp_cmd_tx, sftp_cmd_rx) = async_channel::bounded::<SftpCmd>(64);
+    let (sftp_event_tx, sftp_event_rx) = async_channel::bounded::<SftpEvent>(40);
+    let alive = Arc::new(Mutex::new(true));
+
+    // 6. Spawn sftp_task — chạy nền trên cùng tokio runtime.
+    tokio::spawn(sftp_task(
+        sftp_channel,
+        sftp_cmd_rx,
+        sftp_event_tx,
+        alive.clone(),
+    ));
+
+    // 7. Return Arc<SftpSession> — UI giữ handle này.
+    Ok(SftpSession::new(sftp_cmd_tx, sftp_event_rx, alive))
 }
 
 /// Tải private key từ file, giải mã bằng passphrase nếu cần.

@@ -5,10 +5,12 @@
 
 pub mod config;
 pub mod error;
+pub mod sftp;
 pub mod terminal;
 
 pub use config::{LocalShellConfig, ShellKind};
 pub use error::AppError;
+pub use sftp::{FileEntry, FileStat, SftpBackend};
 pub use terminal::{CursorBounds, SessionEvent, TerminalInfo, TerminalSession};
 
 /// Result type dùng chung cho crate `core`.

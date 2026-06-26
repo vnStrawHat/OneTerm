@@ -3,8 +3,11 @@
 //! Skeleton: chưa có state chia sẻ. Sau này chứa danh sách host,
 //! session state, ui_state (vd. `invisible_panels`).
 
+use std::sync::Arc;
+
 use gpui::{App, AppContext, Entity, Global, WeakEntity};
 use gpui_component::dock::DockArea;
+use myterm2_core::SftpBackend;
 
 /// State toàn cục của ứng dụng.
 #[derive(Default)]
@@ -13,6 +16,10 @@ pub struct AppState {
     /// (thêm terminal tab sau khi kết nối thành công).
     /// Set trong `MyTermWorkspace::new` sau khi DockArea được tạo.
     pub dock_area: Option<WeakEntity<DockArea>>,
+    /// SFTP backend của terminal tab đang active.
+    /// `None` = tab active không có SFTP (local shell hoặc SSH không hỗ trợ SFTP).
+    /// Set bởi `TerminalPanel::set_active(true)` — khi tab đổi, ghi đè giá trị cũ.
+    pub active_sftp: Option<Arc<dyn SftpBackend>>,
 }
 
 /// Global wrapper cho `Entity<AppState>`.

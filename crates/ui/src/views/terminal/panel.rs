@@ -19,7 +19,7 @@ use gpui_component::{
 use myterm2_core::TerminalSession;
 use myterm2_local::{LocalSession, PtySize};
 
-use crate::state::TerminalSettings;
+use crate::state::{AppState, TerminalSettings};
 
 use super::view::LocalTerminalView;
 
@@ -225,6 +225,17 @@ impl Panel for TerminalPanel {
         if self.is_active != active {
             self.is_active = active;
             cx.notify();
+        }
+
+        // Khi tab này thành active → trích SFTP từ session (nếu có)
+        // và set vào AppState.active_sftp cho SftpPanel observe.
+        // Tab mới active sẽ overwrite — không cần set None khi deactivate.
+        if active {
+            let sftp = self.view.read(cx).session.read(cx).sftp();
+            AppState::global(cx).update(cx, |state, cx| {
+                state.active_sftp = sftp;
+                cx.notify();
+            });
         }
     }
 }

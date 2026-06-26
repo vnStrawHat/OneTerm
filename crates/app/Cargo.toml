@@ -22,6 +22,8 @@ gpui-component.workspace = true
 gpui-component-assets.workspace = true
 
 anyhow.workspace = true
+env_logger.workspace = true
+log.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
