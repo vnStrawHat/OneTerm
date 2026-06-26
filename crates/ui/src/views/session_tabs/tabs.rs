@@ -3,11 +3,11 @@
 //! Render list label các SSH session load từ `ssh_session.json` (qua
 //! [`crate::state::SshSessionStore`]) khi khởi động.
 //!
-//! - Left-click vào session item → mở dialog connect SSH.
+//! - Double-click vào session item → mở dialog connect SSH.
 //! - Right-click vào khu vực panel (trống) → context menu "New Session".
 //! - Right-click vào 1 session item → context menu: Open, Delete, Property.
 //! - "New Session" / "Property" → mở dialog (xem [`super::session_dialog`]).
-//! - "Open" / left-click → mở dialog connect (xem [`super::connect_dialog`]).
+//! - "Open" / double-click → mở dialog connect (xem [`super::connect_dialog`]).
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
@@ -16,7 +16,7 @@ use gpui::{
     StatefulInteractiveElement as _, Styled, Window, div, relative,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable as _, WindowExt as _,
+    ActiveTheme, Icon, IconName, InteractiveElementExt as _, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dock::{Panel, PanelControl, PanelEvent},
     h_flex,
@@ -170,7 +170,7 @@ impl Render for SessionPanel {
 }
 
 /// Render 1 row trong danh sách session: icon + label (trên) + host:port (dưới)
-/// + left-click → connect + right-click → context menu Open / Delete / Property.
+/// + double-click → connect + right-click → context menu Open / Delete / Property.
 fn render_session_row(
     ix: usize,
     session: &SshSession,
@@ -193,8 +193,8 @@ fn render_session_row(
         .rounded_md()
         .cursor_pointer()
         .hover(|t| t.bg(theme.muted))
-        // Left-click → mở dialog connect SSH.
-        .on_click(move |_, window, cx| {
+        // Double-click → mở dialog connect SSH.
+        .on_double_click(move |_, window, cx| {
             let session = SshSessionStore::global(cx)
                 .read(cx)
                 .sessions()
