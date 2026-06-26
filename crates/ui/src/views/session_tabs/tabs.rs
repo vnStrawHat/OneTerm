@@ -314,7 +314,10 @@ impl Render for SessionPanel {
         )
         .context_menu({
             let focus = focus.clone();
-            move |_ix, entry, menu, _window, _cx| {
+            let right_clicked_ix = right_clicked_ix.clone();
+            move |ix, entry, menu, _window, _cx| {
+                // Clear highlight cũ, chỉ highlight item được right-click.
+                right_clicked_ix.set(Some(ix));
                 if entry.is_folder() {
                     // Group folder → context menu: New Session, Property.
                     let group = parse_group_id(&entry.item().id);
