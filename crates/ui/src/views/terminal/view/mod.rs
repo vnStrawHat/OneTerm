@@ -104,9 +104,15 @@ impl LocalTerminalView {
                             .timer(Duration::from_millis(1))
                             .await;
                         Self::drain_coalesced_events(&rx, &this, cx);
-                        let _ = this.update(cx, |_view, cx| {
+                        let _ = this.update(cx, |view, cx| {
                             cx.notify();
                             s.read(cx).scroll_to_bottom();
+                            // Stamp tại thời điểm OUTPUT (không chỉ render): task
+                            // subscribe chạy độc lập với render, nên tab inactive
+                            // (không render) vẫn cập nhật timestamp đúng giờ dòng
+                            // được tạo, thay vì dồn về giờ lúc active lại tab.
+                            let info = s.read(cx).terminal_info();
+                            view.update_line_times(&info);
                         });
                     }
                     SessionEvent::Bell => {
