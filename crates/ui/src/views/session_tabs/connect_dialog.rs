@@ -4,19 +4,21 @@
 //! - Nếu `SshSession.username = None` → dialog hỏi **username + password**.
 //! - Nếu `SshSession.username = Some` → dialog chỉ hỏi **password**.
 //!
-//! Footer: **Cancel** ([`DialogClose`]) + **Connect** ([`DialogAction`]),
-//! căn lề phải (mặc định `DialogFooter::justify_end`).
+//! Footer: **Cancel** + **Connect** — dùng direct on_click để bypass
+//! action dispatch qua focus chain (thống nhất với SSH Session dialog).
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext, IntoElement, ParentElement as _, SharedString, Styled, Window, div, px,
+    App, AppContext, ClickEvent, IntoElement, ParentElement as _, SharedString, Styled, Window,
+    div, px,
 };
 use gpui_component::{
     ActiveTheme, WindowExt as _,
     button::{Button, ButtonVariants as _},
-    dialog::{DialogAction, DialogButtonProps, DialogClose, DialogFooter},
+    dialog::{DialogButtonProps, DialogFooter},
     dock::{DockPlacement, PanelView},
     h_flex,
     input::{Input, InputState},
@@ -75,13 +77,33 @@ pub(crate) fn open_connect_dialog(
         None
     };
 
-    // Clone cho on_ok closure.
+    // Clone cho save_logic closure.
     let password_ok = password_state.clone();
     let username_ok = username_state.clone();
     let session_ok = session.clone();
     let title_ok = title.clone();
 
+    // ── Shared connect logic (dùng cho cả button on_click và keyboard on_ok) ──
+    let connect_logic: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool> = Rc::new({
+        let username_ok = username_ok.clone();
+        let password_ok = password_ok.clone();
+        let session_ok = session_ok.clone();
+        move |_, window, cx| {
+            on_connect_click(
+                &session_ok,
+                index,
+                &username_ok,
+                &password_ok,
+                window,
+                cx,
+            )
+        }
+    });
+
     window.open_dialog(cx, move |dialog, _window, _cx| {
+        // Clone connect_logic cho button on_click và keyboard on_ok
+        let connect_for_click = connect_logic.clone();
+        let connect_for_kb = connect_logic.clone();
         dialog
             .title(title_ok.clone())
             .w(px(440.))
@@ -104,33 +126,34 @@ pub(crate) fn open_connect_dialog(
                         .child(password_field(&password_state, cx))
                 }
             })
-            .footer(
+            // Footer: Cancel + Connect — dùng direct on_click thay vì DialogAction/DialogClose
+            // để bypass action dispatch qua focus chain.
+            .footer({
                 DialogFooter::new()
                     .child(
-                        DialogClose::new().child(Button::new("cancel").label("Cancel").outline()),
+                        Button::new("cancel")
+                            .label("Cancel")
+                            .outline()
+                            .on_click(|_, window, cx| {
+                                window.close_dialog(cx);
+                            }),
                     )
                     .child(
-                        DialogAction::new()
-                            .child(Button::new("connect").label("Connect").primary()),
-                    ),
-            )
+                        Button::new("connect")
+                            .label("Connect")
+                            .primary()
+                            .on_click(move |_, window, cx| {
+                                if connect_for_click(&ClickEvent::default(), window, cx) {
+                                    window.close_dialog(cx);
+                                }
+                            }),
+                    )
+            })
             .button_props(
                 DialogButtonProps::default()
                     .on_cancel(|_, _, _| true)
-                    .on_ok({
-                        let username_ok = username_ok.clone();
-                        let password_ok = password_ok.clone();
-                        let session_ok = session_ok.clone();
-                        move |_, window, cx| {
-                            on_connect_click(
-                                &session_ok,
-                                index,
-                                &username_ok,
-                                &password_ok,
-                                window,
-                                cx,
-                            )
-                        }
+                    .on_ok(move |_, window, cx| {
+                        connect_for_kb(&ClickEvent::default(), window, cx)
                     }),
             )
     });

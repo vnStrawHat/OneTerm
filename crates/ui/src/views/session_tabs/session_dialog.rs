@@ -1,7 +1,8 @@
 //! Dialog "New / Edit SSH Session" — tạo mới hoặc chỉnh sửa SSH session.
 //!
-//! Dialog có footer chứa 2 button: **Cancel** ([`DialogClose`]) và **Save**
-//! ([`DialogAction`]). Khi Save → validate (Label & Host bắt buộc) →
+//! Footer: **Cancel** + **Save** — dùng direct on_click để bypass
+//! action dispatch qua focus chain (thống nhất với Connect dialog).
+//! Khi Save → validate (Label & Host bắt buộc) →
 //! `store.add` (tạo mới) hoặc `store.update` (chỉnh sửa) → auto-save
 //! `ssh_session.json`.
 //!
@@ -24,7 +25,7 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     combobox::{Combobox, ComboboxState},
     color_picker::{ColorPicker, ColorPickerState},
-    dialog::{DialogAction, DialogButtonProps, DialogClose, DialogFooter},
+    dialog::{DialogButtonProps, DialogFooter},
     h_flex,
     input::{Input, InputState},
     searchable_list::{SearchableListDelegate, SearchableListItem, SearchableVec},
@@ -372,7 +373,28 @@ pub(crate) fn open_rename_group_dialog(
     let group_ok = group_state.clone();
     let old_name = group_name.clone();
 
+    // ── Shared save logic (dùng cho cả button on_click và keyboard on_ok) ──
+    let save_logic: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool> = Rc::new({
+        let group_ok = group_ok.clone();
+        let old_name = old_name.clone();
+        move |_, window, cx| {
+            let new_name = group_ok.read(cx).value().trim().to_string();
+            if new_name.is_empty() {
+                window.push_notification("Group name không được rỗng.", cx);
+                return false;
+            }
+            SshSessionStore::global(cx).update(cx, |s, cx| {
+                s.rename_group(&old_name, &new_name, cx);
+            });
+            window.push_notification("Group đã được đổi tên.", cx);
+            true
+        }
+    });
+
     window.open_dialog(cx, move |dialog, _window, _cx| {
+        // Clone save_logic cho button on_click và keyboard on_ok
+        let save_for_click = save_logic.clone();
+        let save_for_kb = save_logic.clone();
         dialog
             .title("Rename Group")
             .w(px(440.))
@@ -382,34 +404,34 @@ pub(crate) fn open_rename_group_dialog(
                     content.child(field("Group Name", true, Input::new(&group_state), cx))
                 }
             })
-            .footer(
+            // Footer: Cancel + Save — dùng direct on_click thay vì DialogAction/DialogClose
+            // để bypass action dispatch qua focus chain.
+            .footer({
                 DialogFooter::new()
                     .child(
-                        DialogClose::new()
-                            .child(Button::new("cancel").label("Cancel").outline()),
+                        Button::new("cancel")
+                            .label("Cancel")
+                            .outline()
+                            .on_click(|_, window, cx| {
+                                window.close_dialog(cx);
+                            }),
                     )
                     .child(
-                        DialogAction::new().child(Button::new("save").label("Save").primary()),
-                    ),
-            )
+                        Button::new("save")
+                            .label("Save")
+                            .primary()
+                            .on_click(move |_, window, cx| {
+                                if save_for_click(&ClickEvent::default(), window, cx) {
+                                    window.close_dialog(cx);
+                                }
+                            }),
+                    )
+            })
             .button_props(
                 DialogButtonProps::default()
                     .on_cancel(|_, _, _| true)
-                    .on_ok({
-                        let group_ok = group_ok.clone();
-                        let old_name = old_name.clone();
-                        move |_, window, cx| {
-                            let new_name = group_ok.read(cx).value().trim().to_string();
-                            if new_name.is_empty() {
-                                window.push_notification("Group name không được rỗng.", cx);
-                                return false;
-                            }
-                            SshSessionStore::global(cx).update(cx, |s, cx| {
-                                s.rename_group(&old_name, &new_name, cx);
-                            });
-                            window.push_notification("Group đã được đổi tên.", cx);
-                            true
-                        }
+                    .on_ok(move |_, window, cx| {
+                        save_for_kb(&ClickEvent::default(), window, cx)
                     }),
             )
     });
