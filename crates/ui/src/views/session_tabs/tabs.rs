@@ -180,6 +180,7 @@ impl Render for SessionPanel {
                         };
                         ListItem::new(ix)
                             .w_full()
+                            .py_0()
                             .pl(px(16.) * depth as f32 + px(12.))
                             .child(
                                 h_flex()
