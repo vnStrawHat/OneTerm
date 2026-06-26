@@ -35,8 +35,10 @@ pub struct SshSession {
     /// Username (optional — có thể nhập lúc connect).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
-    /// Nhóm (optional — dùng để gom session trong Tree).
+    /// Màu hiển thị (hex string, vd "#58c4dc"). Optional.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// Nhóm (optional — dùng để gom session trong Tree).
     pub group: Option<String>,
 }
 
@@ -205,6 +207,7 @@ mod tests {
             host: "b".into(),
             port: 22,
             username: None,
+            color: None,
             group: None,
         };
         let json = serde_json::to_string(&session).unwrap();
@@ -218,6 +221,7 @@ mod tests {
             host: "b".into(),
             port: 22,
             username: Some("root".into()),
+            color: None,
             group: None,
         };
         let json = serde_json::to_string(&session).unwrap();

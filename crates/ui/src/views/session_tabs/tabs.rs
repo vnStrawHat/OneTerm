@@ -18,11 +18,11 @@ use std::collections::BTreeMap;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
+    Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
     Styled, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable as _, WindowExt as _,
+    ActiveTheme, Colorize as _, Icon, IconName, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dock::{Panel, PanelControl, PanelEvent},
     h_flex,
@@ -201,10 +201,12 @@ impl Render for SessionPanel {
                     } else {
                         // Session leaf.
                         let store_ix = parse_session_id(&item.id);
-                        let subtitle = store_ix
-                            .and_then(|i| store.read(cx).sessions().get(i))
-                            .map(|s| session_subtitle(s))
-                            .unwrap_or_default();
+                        let session = store_ix.and_then(|i| store.read(cx).sessions().get(i));
+                        let subtitle = session.map(|s| session_subtitle(s)).unwrap_or_default();
+                        let color = session
+                            .and_then(|s| s.color.as_deref())
+                            .and_then(|hex| Hsla::parse_hex(hex).ok())
+                            .unwrap_or_else(|| Hsla::parse_hex("#56B6C2").unwrap_or(cx.theme().accent));
 
                         ListItem::new(ix)
                             .w_full()
@@ -217,13 +219,28 @@ impl Render for SessionPanel {
                                     .items_center()
                                     .justify_between()
                                     .gap_1()
-                                    // Label — căn trái, truncate nếu dài.
+                                    // Colored square + Label — căn trái.
                                     .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().foreground)
-                                            .truncate()
-                                            .child(item.label.clone()),
+                                        h_flex()
+                                            .gap_2()
+                                            .items_center()
+                                            .min_w_0()
+                                            // Ô vuông màu.
+                                            .child(
+                                                div()
+                                                    .w(px(8.))
+                                                    .h(px(8.))
+                                                    .bg(color)
+                                                    .flex_shrink_0(),
+                                            )
+                                            // Label — truncate nếu dài.
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(cx.theme().foreground)
+                                                    .truncate()
+                                                    .child(item.label.clone()),
+                                            ),
                                     )
                                     // user@host:port — căn phải, muted.
                                     .child(

@@ -14,12 +14,16 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
-use gpui::{App, AppContext, InteractiveElement as _, SharedString, Task, Window, div, px};
+use gpui::{
+    App, AppContext, ClickEvent, Hsla, InteractiveElement as _, SharedString,
+    Task, Window, div, px,
+};
 use gpui::{IntoElement, ParentElement as _, Styled};
 use gpui_component::{
-    ActiveTheme, Disableable as _, Icon, IconName, IndexPath, Sizable as _, WindowExt as _,
+    ActiveTheme, Colorize as _, Disableable as _, Icon, IconName, IndexPath, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     combobox::{Combobox, ComboboxState},
+    color_picker::{ColorPicker, ColorPickerState},
     dialog::{DialogAction, DialogButtonProps, DialogClose, DialogFooter},
     h_flex,
     input::{Input, InputState},
@@ -106,15 +110,23 @@ pub(crate) fn open_session_dialog(
     };
 
     // Giá trị prefill (rỗng nếu tạo mới).
-    let (label_val, host_val, port_val, user_val, group_val) = match &edit {
+    let (label_val, host_val, port_val, user_val, group_val, color_val) = match &edit {
         Some((_, s)) => (
             s.label.clone(),
             s.host.clone(),
             s.port.to_string(),
             s.username.clone().unwrap_or_default(),
             s.group.clone().unwrap_or_default(),
+            s.color.clone(),
         ),
-        None => (String::new(), String::new(), String::new(), String::new(), String::new()),
+        None => (
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            None,
+        ),
     };
 
     // ── Thu thập existing groups từ store ──────────────────────────
@@ -173,6 +185,18 @@ pub(crate) fn open_session_dialog(
         st
     });
 
+    // ── ColorPickerState ────────────────────────────────────────
+    // Default: #56B6C2 nếu tạo mới, giữ màu cũ nếu edit.
+    let default_color_hex = color_val
+        .clone()
+        .unwrap_or_else(|| "#56B6C2".to_string());
+    let default_color = Hsla::parse_hex(&default_color_hex).unwrap_or(cx.theme().accent);
+    let color_state = cx.new(|cx| {
+        let mut st = ColorPickerState::new(window, cx);
+        st.set_value(default_color, window, cx);
+        st
+    });
+
     // ── Tạo ComboboxState cho Group field ──────────────────────────
     let group_combo_state = cx.new(|cx| {
         let delegate = GroupComboDelegate::new(
@@ -189,13 +213,74 @@ pub(crate) fn open_session_dialog(
     let port_ok = port_state.clone();
     let user_ok = user_state.clone();
     let group_ok = group_value.clone();
+    let color_ok = color_state.clone();
+
+    // ── Shared save logic (dùng cho cả button on_click và keyboard on_ok) ──
+    let save_logic: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool> = Rc::new({
+        let label_ok = label_ok.clone();
+        let host_ok = host_ok.clone();
+        let port_ok = port_ok.clone();
+        let user_ok = user_ok.clone();
+        let group_ok = group_ok.clone();
+        let color_ok = color_ok.clone();
+        move |_, window, cx| {
+            let label = label_ok.read(cx).value().trim().to_string();
+            let host = host_ok.read(cx).value().trim().to_string();
+            if label.is_empty() || host.is_empty() {
+                window.push_notification("Label và Host là bắt buộc.", cx);
+                return false;
+            }
+            let port: u16 = port_ok
+                .read(cx)
+                .value()
+                .trim()
+                .parse()
+                .unwrap_or(SshSession::DEFAULT_PORT);
+            let username = {
+                let u = user_ok.read(cx).value().trim().to_string();
+                if u.is_empty() { None } else { Some(u) }
+            };
+            let group = {
+                let g = group_ok.borrow().trim().to_string();
+                if g.is_empty() { None } else { Some(g) }
+            };
+            let color = color_ok.read(cx).value().map(|h| h.to_hex());
+            let session = SshSession {
+                label,
+                host,
+                port,
+                username,
+                color,
+                group,
+            };
+            let store = SshSessionStore::global(cx);
+            match edit_index {
+                Some(ix) => store.update(cx, |s, cx| s.update(ix, session, cx)),
+                None => store.update(cx, |s, cx| s.add(session, cx)),
+            }
+            window.push_notification(
+                if is_edit {
+                    "SSH session đã được cập nhật."
+                } else {
+                    "SSH session đã được lưu."
+                },
+                cx,
+            );
+            true
+        }
+    });
+
 
     window.open_dialog(cx, move |dialog, _window, _cx| {
+        // Clone save_logic cho button on_click và keyboard on_ok
+        let save_for_click = save_logic.clone();
+        let save_for_kb = save_logic.clone();
         dialog
             .title(title)
             .w(px(440.))
             .content({
                 let label_state = label_state.clone();
+                let color_state = color_state.clone();
                 let host_state = host_state.clone();
                 let port_state = port_state.clone();
                 let user_state = user_state.clone();
@@ -204,7 +289,18 @@ pub(crate) fn open_session_dialog(
                 let query_cell = query_cell.clone();
                 move |content, _window, cx| {
                     content
-                        .child(field("Label", true, Input::new(&label_state), cx))
+                        .child(
+                            field(
+                                "Label",
+                                true,
+                                h_flex()
+                                    .gap_2()
+                                    .w_full()
+                                    .child(Input::new(&label_state).flex_1())
+                                    .child(ColorPicker::new(&color_state).small()),
+                                cx,
+                            ),
+                        )
                         .child(field("Host", true, Input::new(&host_state), cx))
                         .child(field("Port", false, Input::new(&port_state), cx))
                         .child(field("Username", false, Input::new(&user_state), cx))
@@ -221,66 +317,34 @@ pub(crate) fn open_session_dialog(
                         ))
                 }
             })
-            // Footer: Cancel (đóng dialog) + Save (dispatch ConfirmDialog → on_ok).
-            .footer(
+            // Footer: Cancel + Save — dùng direct on_click thay vì DialogAction/DialogClose
+            // để bypass action dispatch qua focus chain.
+            .footer({
                 DialogFooter::new()
                     .child(
-                        DialogClose::new().child(Button::new("cancel").label("Cancel").outline()),
+                        Button::new("cancel")
+                            .label("Cancel")
+                            .outline()
+                            .on_click(|_, window, cx| {
+                                window.close_dialog(cx);
+                            }),
                     )
-                    .child(DialogAction::new().child(Button::new("save").label("Save").primary())),
-            )
+                    .child(
+                        Button::new("save")
+                            .label("Save")
+                            .primary()
+                            .on_click(move |_, window, cx| {
+                                if save_for_click(&ClickEvent::default(), window, cx) {
+                                    window.close_dialog(cx);
+                                }
+                            }),
+                    )
+            })
             .button_props(
                 DialogButtonProps::default()
                     .on_cancel(|_, _, _| true)
-                    .on_ok({
-                        let label_ok = label_ok.clone();
-                        let host_ok = host_ok.clone();
-                        let port_ok = port_ok.clone();
-                        let user_ok = user_ok.clone();
-                        let group_ok = group_ok.clone();
-                        move |_, window, cx| {
-                            let label = label_ok.read(cx).value().trim().to_string();
-                            let host = host_ok.read(cx).value().trim().to_string();
-                            if label.is_empty() || host.is_empty() {
-                                window.push_notification("Label và Host là bắt buộc.", cx);
-                                return false;
-                            }
-                            let port: u16 = port_ok
-                                .read(cx)
-                                .value()
-                                .trim()
-                                .parse()
-                                .unwrap_or(SshSession::DEFAULT_PORT);
-                            let username = {
-                                let u = user_ok.read(cx).value().trim().to_string();
-                                if u.is_empty() { None } else { Some(u) }
-                            };
-                            let group = {
-                                let g = group_ok.borrow().trim().to_string();
-                                if g.is_empty() { None } else { Some(g) }
-                            };
-                            let session = SshSession {
-                                label,
-                                host,
-                                port,
-                                username,
-                                group,
-                            };
-                            let store = SshSessionStore::global(cx);
-                            match edit_index {
-                                Some(ix) => store.update(cx, |s, cx| s.update(ix, session, cx)),
-                                None => store.update(cx, |s, cx| s.add(session, cx)),
-                            }
-                            window.push_notification(
-                                if is_edit {
-                                    "SSH session đã được cập nhật."
-                                } else {
-                                    "SSH session đã được lưu."
-                                },
-                                cx,
-                            );
-                            true
-                        }
+                    .on_ok(move |_, window, cx| {
+                        save_for_kb(&ClickEvent::default(), window, cx)
                     }),
             )
     });
