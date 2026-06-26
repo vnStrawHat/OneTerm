@@ -83,6 +83,32 @@ impl SshSessionStore {
         }
     }
 
+    /// Đổi tên group — cập nhật tất cả session có `group == old_name`
+    /// thành `new_name` + lưu file + notify observers.
+    /// Nếu `new_name` rỗng (hoặc chỉ whitespace) → set group = None (ungroup).
+    pub fn rename_group(
+        &mut self,
+        old_name: &str,
+        new_name: &str,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let new_group = if new_name.trim().is_empty() {
+            None
+        } else {
+            Some(new_name.trim().to_string())
+        };
+        let mut changed = false;
+        for s in &mut self.sessions {
+            if s.group.as_deref() == Some(old_name) {
+                s.group = new_group.clone();
+                changed = true;
+            }
+        }
+        if changed {
+            cx.notify();
+            self.save();
+        }
+    }
     /// Xoá session tại `index` + lưu file + notify observers.
     /// Nếu `index` ngoài range thì no-op.
     pub fn remove(&mut self, index: usize, cx: &mut gpui::Context<Self>) {

@@ -9,6 +9,7 @@
 //! - Double-click vào session item → mở dialog connect SSH.
 //! - Right-click vào khu vực panel (trống) → context menu "New Session".
 //! - Right-click vào 1 session item → context menu: Open, Delete, Property.
+//! - Right-click vào 1 group folder → context menu: Property (rename group).
 //! - "New Session" / "Property" → mở dialog (xem [`super::session_dialog`]).
 //! - "Open" / double-click → mở dialog connect (xem [`super::connect_dialog`]).
 
@@ -34,7 +35,7 @@ use crate::actions::NewSession;
 use crate::state::{SshSession, SshSessionStore};
 
 use super::connect_dialog::open_connect_dialog;
-use super::session_dialog::open_session_dialog;
+use super::session_dialog::{open_rename_group_dialog, open_session_dialog};
 
 /// Prefix id cho leaf TreeItem (session) — encode store index.
 const SESSION_ID_PREFIX: &str = "session:";
@@ -248,44 +249,53 @@ impl Render for SessionPanel {
         .context_menu({
             let focus = focus.clone();
             move |_ix, entry, menu, _window, _cx| {
-                // Chỉ leaf (session) có context menu.
                 if entry.is_folder() {
-                    return menu;
-                }
-                let Some(store_ix) = parse_session_id(&entry.item().id) else {
-                    return menu;
-                };
-                let focus = focus.clone();
+                    // Group folder → context menu: Property (rename group).
+                    let group = parse_group_id(&entry.item().id);
+                    let focus = focus.clone();
+                    menu.action_context(focus)
+                        .item(PopupMenuItem::new("Property").on_click(move |_, window, cx| {
+                            if let Some(group_name) = &group {
+                                open_rename_group_dialog(window, cx, group_name.clone());
+                            }
+                        }))
+                } else {
+                    // Session leaf → context menu: Open, Delete, Property.
+                    let Some(store_ix) = parse_session_id(&entry.item().id) else {
+                        return menu;
+                    };
+                    let focus = focus.clone();
 
-                menu.action_context(focus)
-                    .item(PopupMenuItem::new("Open").on_click(move |_, window, cx| {
-                        if let Some(s) = SshSessionStore::global(cx)
-                            .read(cx)
-                            .sessions()
-                            .get(store_ix)
-                            .cloned()
-                        {
-                            open_connect_dialog(s, store_ix, window, cx);
-                        }
-                    }))
-                    .separator()
-                    .item(PopupMenuItem::new("Delete").on_click(move |_, window, cx| {
-                        SshSessionStore::global(cx).update(cx, |s, cx| {
-                            s.remove(store_ix, cx);
-                        });
-                        window.push_notification("SSH session đã bị xoá.", cx);
-                    }))
-                    .separator()
-                    .item(PopupMenuItem::new("Property").on_click(move |_, window, cx| {
-                        if let Some(s) = SshSessionStore::global(cx)
-                            .read(cx)
-                            .sessions()
-                            .get(store_ix)
-                            .cloned()
-                        {
-                            open_session_dialog(window, cx, Some((store_ix, s)));
-                        }
-                    }))
+                    menu.action_context(focus)
+                        .item(PopupMenuItem::new("Open").on_click(move |_, window, cx| {
+                            if let Some(s) = SshSessionStore::global(cx)
+                                .read(cx)
+                                .sessions()
+                                .get(store_ix)
+                                .cloned()
+                            {
+                                open_connect_dialog(s, store_ix, window, cx);
+                            }
+                        }))
+                        .separator()
+                        .item(PopupMenuItem::new("Delete").on_click(move |_, window, cx| {
+                            SshSessionStore::global(cx).update(cx, |s, cx| {
+                                s.remove(store_ix, cx);
+                            });
+                            window.push_notification("SSH session đã bị xoá.", cx);
+                        }))
+                        .separator()
+                        .item(PopupMenuItem::new("Property").on_click(move |_, window, cx| {
+                            if let Some(s) = SshSessionStore::global(cx)
+                                .read(cx)
+                                .sessions()
+                                .get(store_ix)
+                                .cloned()
+                            {
+                                open_session_dialog(window, cx, Some((store_ix, s)));
+                            }
+                        }))
+                }
             }
         });
 
@@ -323,6 +333,11 @@ impl Render for SessionPanel {
 fn parse_session_id(id: &SharedString) -> Option<usize> {
     id.strip_prefix(SESSION_ID_PREFIX)
         .and_then(|s| s.parse::<usize>().ok())
+}
+
+/// Parse group name từ TreeItem id (`group:{name}`).
+fn parse_group_id(id: &SharedString) -> Option<String> {
+    id.strip_prefix(GROUP_ID_PREFIX).map(|s| s.to_string())
 }
 
 /// Tạo subtitle cho session leaf: `user@host:port` hoặc `host:port`.
