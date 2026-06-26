@@ -184,6 +184,7 @@ impl Render for SessionPanel {
             {
                 let store = store.clone();
                 let right_clicked_ix = right_clicked_ix.clone();
+                let tree_state = tree_state.clone();
                 move |ix, entry, _selected, _window, cx| {
                     let item = entry.item();
                     let depth = entry.depth();
@@ -210,17 +211,26 @@ impl Render for SessionPanel {
                                     .child(item.label.clone()),
                             )
                             // Any click (left/right/middle) → highlight only this item.
+                            // Right/Middle cũng set selected_index để clear selection cũ.
                             .on_mouse_down(MouseButton::Left, {
                                 let right_clicked_ix = right_clicked_ix.clone();
                                 move |_, _, _| right_clicked_ix.set(Some(ix))
                             })
                             .on_mouse_down(MouseButton::Right, {
                                 let right_clicked_ix = right_clicked_ix.clone();
-                                move |_, _, _| right_clicked_ix.set(Some(ix))
+                                let tree_state = tree_state.clone();
+                                move |_, _, cx| {
+                                    right_clicked_ix.set(Some(ix));
+                                    tree_state.update(cx, |s, cx| s.set_selected_index(Some(ix), cx));
+                                }
                             })
                             .on_mouse_down(MouseButton::Middle, {
                                 let right_clicked_ix = right_clicked_ix.clone();
-                                move |_, _, _| right_clicked_ix.set(Some(ix))
+                                let tree_state = tree_state.clone();
+                                move |_, _, cx| {
+                                    right_clicked_ix.set(Some(ix));
+                                    tree_state.update(cx, |s, cx| s.set_selected_index(Some(ix), cx));
+                                }
                             })
                     } else {
                         // Session leaf.
@@ -293,17 +303,26 @@ impl Render for SessionPanel {
                                 }
                             })
                             // Any click (left/right/middle) → highlight only this item.
+                            // Right/Middle cũng set selected_index để clear selection cũ.
                             .on_mouse_down(MouseButton::Left, {
                                 let right_clicked_ix = right_clicked_ix.clone();
                                 move |_, _, _| right_clicked_ix.set(Some(ix))
                             })
                             .on_mouse_down(MouseButton::Right, {
                                 let right_clicked_ix = right_clicked_ix.clone();
-                                move |_, _, _| right_clicked_ix.set(Some(ix))
+                                let tree_state = tree_state.clone();
+                                move |_, _, cx| {
+                                    right_clicked_ix.set(Some(ix));
+                                    tree_state.update(cx, |s, cx| s.set_selected_index(Some(ix), cx));
+                                }
                             })
                             .on_mouse_down(MouseButton::Middle, {
                                 let right_clicked_ix = right_clicked_ix.clone();
-                                move |_, _, _| right_clicked_ix.set(Some(ix))
+                                let tree_state = tree_state.clone();
+                                move |_, _, cx| {
+                                    right_clicked_ix.set(Some(ix));
+                                    tree_state.update(cx, |s, cx| s.set_selected_index(Some(ix), cx));
+                                }
                             })
                     }
                 }
