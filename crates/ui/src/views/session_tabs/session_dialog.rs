@@ -6,20 +6,89 @@
 //! `ssh_session.json`.
 //!
 //! Form fields: Label, Host, Port, Username (optional), Group (optional).
+//!
+//! Group field dùng [`Combobox`] với `searchable(true)` + footer "Create" —
+//! user có thể **chọn group có sẵn** hoặc **gõ group mới**.
+
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
-use gpui::{App, AppContext, SharedString, Window, div, px};
+use gpui::{App, AppContext, InteractiveElement as _, SharedString, Task, Window, div, px};
 use gpui::{IntoElement, ParentElement as _, Styled};
 use gpui_component::{
-    ActiveTheme, WindowExt as _,
+    ActiveTheme, Disableable as _, Icon, IconName, IndexPath, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
+    combobox::{Combobox, ComboboxState},
     dialog::{DialogAction, DialogButtonProps, DialogClose, DialogFooter},
     h_flex,
     input::{Input, InputState},
+    searchable_list::{SearchableListDelegate, SearchableListItem, SearchableVec},
     v_flex,
 };
 
 use crate::state::{SshSession, SshSessionStore};
+
+// ── GroupComboDelegate ───────────────────────────────────────────────
+
+/// Shared mutable cell cho query text và group value.
+/// Dùng `Rc<RefCell<>>` để delegate (bên trong ComboboxState) và footer
+/// button (bên ngoài) cùng truy cập.
+type SharedCell = Rc<RefCell<String>>;
+
+/// Delegate cho Group Combobox — wraps [`SearchableVec`] + tracks query.
+struct GroupComboDelegate {
+    inner: SearchableVec<SharedString>,
+    /// Search query hiện tại (cập nhật trong `perform_search`).
+    query: SharedCell,
+    /// Group value cuối cùng (cập nhật trong `on_confirm` hoặc footer click).
+    group_value: SharedCell,
+}
+
+impl GroupComboDelegate {
+    fn new(items: Vec<SharedString>, query: SharedCell, group_value: SharedCell) -> Self {
+        Self {
+            inner: SearchableVec::new(items),
+            query,
+            group_value,
+        }
+    }
+}
+
+impl SearchableListDelegate for GroupComboDelegate {
+    type Item = SharedString;
+
+    fn items_count(&self, section: usize) -> usize {
+        self.inner.items_count(section)
+    }
+
+    fn item(&self, ix: IndexPath) -> Option<&SharedString> {
+        self.inner.item(ix)
+    }
+
+    fn position<V>(&self, value: &V) -> Option<IndexPath>
+    where
+        SharedString: SearchableListItem<Value = V>,
+        V: PartialEq,
+    {
+        self.inner.position(value)
+    }
+
+    fn perform_search(&mut self, query: &str, window: &mut Window, cx: &mut App) -> Task<()> {
+        *self.query.borrow_mut() = query.to_string();
+        self.inner.perform_search(query, window, cx)
+    }
+
+    fn on_confirm(&mut self, final_selection: &[(IndexPath, SharedString)]) {
+        if let Some((_, item)) = final_selection.first() {
+            *self.group_value.borrow_mut() = item.to_string();
+        } else {
+            *self.group_value.borrow_mut() = String::new();
+        }
+    }
+}
+
+// ── open_session_dialog ──────────────────────────────────────────────
 
 /// Mở dialog tạo mới (khi `edit` = `None`) hoặc chỉnh sửa (khi `edit` =
 /// `Some((index, session))`) SSH session.
@@ -48,7 +117,33 @@ pub(crate) fn open_session_dialog(
         None => (String::new(), String::new(), String::new(), String::new(), String::new()),
     };
 
-    // Tạo InputState (prefill nếu edit) — persist qua các lần re-render dialog.
+    // ── Thu thập existing groups từ store ──────────────────────────
+    let existing_groups: Vec<SharedString> = {
+        let store = SshSessionStore::global(cx);
+        let store = store.read(cx);
+        let mut groups: Vec<String> = store
+            .sessions()
+            .iter()
+            .filter_map(|s| s.group.as_ref().map(|g| g.trim().to_string()))
+            .filter(|g| !g.is_empty())
+            .collect();
+        groups.sort();
+        groups.dedup();
+        groups.into_iter().map(SharedString::from).collect()
+    };
+
+    // ── Shared cells cho Group Combobox ────────────────────────────
+    let group_value: SharedCell = Rc::new(RefCell::new(group_val.clone()));
+    let query_cell: SharedCell = Rc::new(RefCell::new(String::new()));
+
+    // Tìm selected index nếu group_val khớp với existing group.
+    let selected_indices: Vec<IndexPath> = existing_groups
+        .iter()
+        .position(|g| g.as_ref() == group_val)
+        .map(|i| vec![IndexPath::default().row(i)])
+        .unwrap_or_default();
+
+    // ── Tạo InputState cho các field text ──────────────────────────
     let label_state = cx.new(|cx| {
         let mut st = InputState::new(window, cx).placeholder("e.g. Production Server");
         if !label_val.is_empty() {
@@ -77,12 +172,15 @@ pub(crate) fn open_session_dialog(
         }
         st
     });
-    let group_state = cx.new(|cx| {
-        let mut st = InputState::new(window, cx).placeholder("e.g. Production, Dev");
-        if !group_val.is_empty() {
-            st.set_value(group_val, window, cx);
-        }
-        st
+
+    // ── Tạo ComboboxState cho Group field ──────────────────────────
+    let group_combo_state = cx.new(|cx| {
+        let delegate = GroupComboDelegate::new(
+            existing_groups.clone(),
+            query_cell.clone(),
+            group_value.clone(),
+        );
+        ComboboxState::new(delegate, selected_indices, window, cx).searchable(true)
     });
 
     // Clone cho on_ok closure (đọc value khi Save).
@@ -90,27 +188,37 @@ pub(crate) fn open_session_dialog(
     let host_ok = host_state.clone();
     let port_ok = port_state.clone();
     let user_ok = user_state.clone();
-    let group_ok = group_state.clone();
+    let group_ok = group_value.clone();
 
     window.open_dialog(cx, move |dialog, _window, _cx| {
         dialog
             .title(title)
             .w(px(440.))
             .content({
-                // Clone entity trước khi move vào inner `Fn` closure
-                // (outer closure là `Fn`, không thể move captured value ra).
                 let label_state = label_state.clone();
                 let host_state = host_state.clone();
                 let port_state = port_state.clone();
                 let user_state = user_state.clone();
-                let group_state = group_state.clone();
+                let group_combo_state = group_combo_state.clone();
+                let group_value = group_value.clone();
+                let query_cell = query_cell.clone();
                 move |content, _window, cx| {
                     content
                         .child(field("Label", true, Input::new(&label_state), cx))
                         .child(field("Host", true, Input::new(&host_state), cx))
                         .child(field("Port", false, Input::new(&port_state), cx))
                         .child(field("Username", false, Input::new(&user_state), cx))
-                        .child(field("Group", false, Input::new(&group_state), cx))
+                        .child(field(
+                            "Group",
+                            false,
+                            group_combobox(
+                                &group_combo_state,
+                                &group_value,
+                                &query_cell,
+                                cx,
+                            ),
+                            cx,
+                        ))
                 }
             })
             // Footer: Cancel (đóng dialog) + Save (dispatch ConfirmDialog → on_ok).
@@ -125,7 +233,6 @@ pub(crate) fn open_session_dialog(
                 DialogButtonProps::default()
                     .on_cancel(|_, _, _| true)
                     .on_ok({
-                        // Clone entity trước khi move vào on_ok `Fn` closure.
                         let label_ok = label_ok.clone();
                         let host_ok = host_ok.clone();
                         let port_ok = port_ok.clone();
@@ -149,7 +256,7 @@ pub(crate) fn open_session_dialog(
                                 if u.is_empty() { None } else { Some(u) }
                             };
                             let group = {
-                                let g = group_ok.read(cx).value().trim().to_string();
+                                let g = group_ok.borrow().trim().to_string();
                                 if g.is_empty() { None } else { Some(g) }
                             };
                             let session = SshSession {
@@ -178,6 +285,114 @@ pub(crate) fn open_session_dialog(
             )
     });
 }
+
+// ── group_combobox ───────────────────────────────────────────────────
+
+/// Render Group field as a searchable [`Combobox`] với:
+/// - **Trigger**: hiển thị `group_value` (hoặc placeholder nếu rỗng) +
+///   chevron-down + optional clear (×) button.
+/// - **Footer**: nút "Create '<query>'" — khi click → set `group_value`
+///   = query text (cho phép tạo group mới).
+fn group_combobox(
+    state: &gpui::Entity<ComboboxState<GroupComboDelegate>>,
+    group_value: &SharedCell,
+    query_cell: &SharedCell,
+    cx: &App,
+) -> impl IntoElement {
+    let group_value = group_value.clone();
+    let query_cell = query_cell.clone();
+    let muted_fg = cx.theme().muted_foreground;
+
+    Combobox::new(state)
+        .placeholder("Select or type group...")
+        .search_placeholder("Search or type group name...")
+        .w_full()
+        .render_trigger({
+            let group_value = group_value.clone();
+            move |ctx, _, cx| {
+                let val = group_value.borrow().clone();
+                let placeholder = ctx
+                    .placeholder
+                    .cloned()
+                    .unwrap_or_default();
+
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .w_full()
+                            .overflow_hidden()
+                            .truncate()
+                            .when(val.is_empty(), |this| {
+                                this.text_color(cx.theme().muted_foreground)
+                                    .child(placeholder)
+                            })
+                            .when(!val.is_empty(), |this| {
+                                this.child(SharedString::from(val))
+                            }),
+                    )
+                    .when(!ctx.open, |this| {
+                        // Clear (×) button — chỉ hiện khi dropdown đóng và có value.
+                        this.when(!group_value.borrow().is_empty(), |this| {
+                            let gv = group_value.clone();
+                            this.child(
+                                div()
+                                    .id("clear-group")
+                                    .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
+                                        cx.stop_propagation();
+                                        *gv.borrow_mut() = String::new();
+                                    })
+                                    .child(
+                                        Icon::new(IconName::CircleX)
+                                            .xsmall()
+                                            .text_color(muted_fg),
+                                    ),
+                            )
+                        })
+                    })
+                    .child(
+                        Icon::new(IconName::ChevronDown)
+                            .xsmall()
+                            .text_color(cx.theme().muted_foreground),
+                    )
+                    .into_any_element()
+            }
+        })
+        .footer({
+            let group_value = group_value.clone();
+            let query_cell = query_cell.clone();
+            move |_, cx| {
+                let query = query_cell.borrow().trim().to_string();
+                let label = if query.is_empty() {
+                    "Type to create new group".to_string()
+                } else {
+                    format!("Create \"{}\"", query)
+                };
+                let enabled = !query.is_empty();
+
+                Button::new("create-group")
+                    .ghost()
+                    .label(label)
+                    .icon(Icon::new(IconName::Plus))
+                    .text_color(cx.theme().foreground)
+                    .w_full()
+                    .justify_start()
+                    .when(!enabled, |this| this.disabled(true))
+                    .when(enabled, |this| {
+                        let gv = group_value.clone();
+                        let q = query.clone();
+                        this.on_click(move |_, _, _cx| {
+                            *gv.borrow_mut() = q.clone();
+                        })
+                    })
+                    .into_any_element()
+            }
+        })
+}
+
+// ── field helper ─────────────────────────────────────────────────────
 
 /// Render 1 field form: label (có dấu `*` nếu bắt buộc) + input element.
 pub(crate) fn field(
