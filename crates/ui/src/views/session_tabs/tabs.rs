@@ -1,26 +1,33 @@
-//! [`SessionPanel`] — leaf panel hiển thị danh sách SSH session.
+//! [`SessionPanel`] — leaf panel hiển thị danh sách SSH session dưới dạng Tree.
 //!
-//! Render list label các SSH session load từ `ssh_session.json` (qua
-//! [`crate::state::SshSessionStore`]) khi khởi động.
+//! Render Tree (1 level: Group → Item hoặc Item root) từ `ssh_session.json`
+//! (qua [`crate::state::SshSessionStore`]) khi khởi động.
 //!
+//! - Item không có group → hiển thị ở root, trên cùng (sort theo label).
+//! - Item có group → gom vào folder theo group name (sort theo group,
+//!   trong group sort theo label).
 //! - Double-click vào session item → mở dialog connect SSH.
 //! - Right-click vào khu vực panel (trống) → context menu "New Session".
 //! - Right-click vào 1 session item → context menu: Open, Delete, Property.
 //! - "New Session" / "Property" → mở dialog (xem [`super::session_dialog`]).
 //! - "Open" / double-click → mở dialog connect (xem [`super::connect_dialog`]).
 
+use std::collections::BTreeMap;
+
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Styled, Window, div, relative,
+    Styled, Window, div, px, relative,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, InteractiveElementExt as _, Sizable as _, WindowExt as _,
+    ActiveTheme, Icon, IconName, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dock::{Panel, PanelControl, PanelEvent},
     h_flex,
+    list::ListItem,
     menu::{ContextMenuExt, PopupMenuItem},
+    tree::{TreeItem, TreeState, tree},
     v_flex,
 };
 
@@ -30,23 +37,43 @@ use crate::state::{SshSession, SshSessionStore};
 use super::connect_dialog::open_connect_dialog;
 use super::session_dialog::open_session_dialog;
 
-/// Panel hiển thị danh sách SSH session.
+/// Prefix id cho leaf TreeItem (session) — encode store index.
+const SESSION_ID_PREFIX: &str = "session:";
+/// Prefix id cho folder TreeItem (group).
+const GROUP_ID_PREFIX: &str = "group:";
+
+/// Panel hiển thị danh sách SSH session dưới dạng Tree.
 ///
 /// `panel_name = "session"`.
 pub struct SessionPanel {
     focus_handle: FocusHandle,
     store: Entity<SshSessionStore>,
+    tree_state: Entity<TreeState>,
 }
 
 impl SessionPanel {
     /// Tạo panel mới — bind vào global [`SshSessionStore`] và observe để
-    /// re-render khi list session thay đổi.
+    /// rebuild tree khi list session thay đổi.
     pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         let store = SshSessionStore::global(cx);
-        cx.observe(&store, |_, _, cx| cx.notify()).detach();
+        let tree_state = cx.new(|cx| TreeState::new(cx));
+
+        // Build initial tree items.
+        let items = build_tree_items(store.read(cx).sessions());
+        tree_state.update(cx, |state, cx| state.set_items(items, cx));
+
+        // Observe store → rebuild tree khi sessions thay đổi.
+        cx.observe(&store, |this, store, cx| {
+            let items = build_tree_items(store.read(cx).sessions());
+            this.tree_state.update(cx, |state, cx| state.set_items(items, cx));
+            cx.notify();
+        })
+        .detach();
+
         Self {
             focus_handle: cx.focus_handle(),
             store,
+            tree_state,
         }
     }
 
@@ -97,6 +124,8 @@ impl Render for SessionPanel {
         let theme = cx.theme();
         let sessions = self.store.read(cx).sessions().to_vec();
         let focus = self.focus_handle.clone();
+        let store = self.store.clone();
+        let tree_state = self.tree_state.clone();
 
         // Header.
         let header = h_flex()
@@ -124,12 +153,6 @@ impl Render for SessionPanel {
                     })),
             );
 
-        // List rows.
-        let mut list = v_flex().w_full().gap_0p5().p_1();
-        for (ix, s) in sessions.iter().enumerate() {
-            list = list.child(render_session_row(ix, s, &focus, cx));
-        }
-
         // Empty state.
         let empty = h_flex()
             .w_full()
@@ -139,6 +162,129 @@ impl Render for SessionPanel {
             .text_color(theme.muted_foreground)
             .text_sm()
             .child("No SSH session yet. Right-click → New Session.");
+
+        // Tree widget.
+        let tree_widget = tree(
+            &tree_state,
+            {
+                let store = store.clone();
+                move |ix, entry, _selected, _window, cx| {
+                    let item = entry.item();
+                    let depth = entry.depth();
+
+                    if entry.is_folder() {
+                        // Group folder.
+                        let icon = if entry.is_expanded() {
+                            IconName::FolderOpen
+                        } else {
+                            IconName::Folder
+                        };
+                        ListItem::new(ix)
+                            .w_full()
+                            .pl(px(16.) * depth as f32 + px(12.))
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(Icon::new(icon).small().text_color(cx.theme().foreground))
+                                    .child(item.label.clone()),
+                            )
+                    } else {
+                        // Session leaf.
+                        let store_ix = parse_session_id(&item.id);
+                        let subtitle = store_ix
+                            .and_then(|i| store.read(cx).sessions().get(i))
+                            .map(|s| session_subtitle(s))
+                            .unwrap_or_default();
+
+                        ListItem::new(ix)
+                            .w_full()
+                            .pl(px(16.) * depth as f32 + px(12.))
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap_0()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().foreground)
+                                            .line_height(relative(1.3))
+                                            .truncate()
+                                            .child(item.label.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .line_height(relative(1.3))
+                                            .truncate()
+                                            .child(SharedString::from(subtitle)),
+                                    ),
+                            )
+                            // Double-click → mở dialog connect SSH.
+                            .on_click({
+                                let store = store.clone();
+                                let id = item.id.clone();
+                                move |event, window, cx| {
+                                    if event.click_count() == 2 {
+                                        if let Some(store_ix) = parse_session_id(&id) {
+                                            if let Some(s) =
+                                                store.read(cx).sessions().get(store_ix).cloned()
+                                            {
+                                                open_connect_dialog(s, store_ix, window, cx);
+                                            }
+                                        }
+                                    }
+                                }
+                            })
+                    }
+                }
+            },
+        )
+        .context_menu({
+            let focus = focus.clone();
+            move |_ix, entry, menu, _window, _cx| {
+                // Chỉ leaf (session) có context menu.
+                if entry.is_folder() {
+                    return menu;
+                }
+                let Some(store_ix) = parse_session_id(&entry.item().id) else {
+                    return menu;
+                };
+                let focus = focus.clone();
+
+                menu.action_context(focus)
+                    .item(PopupMenuItem::new("Open").on_click(move |_, window, cx| {
+                        if let Some(s) = SshSessionStore::global(cx)
+                            .read(cx)
+                            .sessions()
+                            .get(store_ix)
+                            .cloned()
+                        {
+                            open_connect_dialog(s, store_ix, window, cx);
+                        }
+                    }))
+                    .separator()
+                    .item(PopupMenuItem::new("Delete").on_click(move |_, window, cx| {
+                        SshSessionStore::global(cx).update(cx, |s, cx| {
+                            s.remove(store_ix, cx);
+                        });
+                        window.push_notification("SSH session đã bị xoá.", cx);
+                    }))
+                    .separator()
+                    .item(PopupMenuItem::new("Property").on_click(move |_, window, cx| {
+                        if let Some(s) = SshSessionStore::global(cx)
+                            .read(cx)
+                            .sessions()
+                            .get(store_ix)
+                            .cloned()
+                        {
+                            open_session_dialog(window, cx, Some((store_ix, s)));
+                        }
+                    }))
+            }
+        });
 
         div()
             .id("session-panel")
@@ -154,9 +300,8 @@ impl Render for SessionPanel {
                     .id("session-list")
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
                     .when(sessions.is_empty(), |t| t.child(empty))
-                    .when(!sessions.is_empty(), |t| t.child(list))
+                    .when(!sessions.is_empty(), |t| t.child(tree_widget))
                     // Right-click vào khu vực panel (không phải item) → New Session.
                     .context_menu({
                         let focus = focus.clone();
@@ -169,115 +314,76 @@ impl Render for SessionPanel {
     }
 }
 
-/// Render 1 row trong danh sách session: icon + label (trên) + host:port (dưới)
-/// + double-click → connect + right-click → context menu Open / Delete / Property.
-fn render_session_row(
-    ix: usize,
-    session: &SshSession,
-    focus: &FocusHandle,
-    cx: &App,
-) -> impl IntoElement {
-    let theme = cx.theme();
-    let title = SharedString::from(session.label.clone());
-    let subtitle = SharedString::from(match &session.username {
-        Some(u) => format!("{}@{}:{}", u, session.host, session.port),
-        None => format!("{}:{}", session.host, session.port),
-    });
-    let focus = focus.clone();
+// ── Helpers ──────────────────────────────────────────────────────────
 
-    div()
-        .id(("session-row", ix))
-        .w_full()
-        .px_2()
-        .py_1p5()
-        .rounded_md()
-        .cursor_pointer()
-        .hover(|t| t.bg(theme.muted))
-        // Double-click → mở dialog connect SSH.
-        .on_double_click(move |_, window, cx| {
-            let session = SshSessionStore::global(cx)
-                .read(cx)
-                .sessions()
-                .get(ix)
-                .cloned();
-            if let Some(s) = session {
-                open_connect_dialog(s, ix, window, cx);
+/// Parse store index từ TreeItem id (`session:{ix}`).
+fn parse_session_id(id: &SharedString) -> Option<usize> {
+    id.strip_prefix(SESSION_ID_PREFIX)
+        .and_then(|s| s.parse::<usize>().ok())
+}
+
+/// Tạo subtitle cho session leaf: `user@host:port` hoặc `host:port`.
+fn session_subtitle(s: &SshSession) -> String {
+    match &s.username {
+        Some(u) => format!("{}@{}:{}", u, s.host, s.port),
+        None => format!("{}:{}", s.host, s.port),
+    }
+}
+
+/// Build `Vec<TreeItem>` từ danh sách session — áp dụng grouping + sorting.
+///
+/// - Item không có group → root (trên cùng), sort theo label.
+/// - Item có group → folder theo group name (sort), trong folder sort theo label.
+fn build_tree_items(sessions: &[SshSession]) -> Vec<TreeItem> {
+    // 1. Tách ungrouped và grouped.
+    let mut ungrouped: Vec<(usize, &SshSession)> = Vec::new();
+    let mut groups: BTreeMap<String, Vec<(usize, &SshSession)>> = BTreeMap::new();
+
+    for (ix, s) in sessions.iter().enumerate() {
+        match &s.group {
+            Some(g) if !g.trim().is_empty() => {
+                groups
+                    .entry(g.trim().to_string())
+                    .or_default()
+                    .push((ix, s));
             }
-        })
-        .child(
-            h_flex()
-                .gap_2()
-                .items_center()
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .size_7()
-                        .rounded_md()
-                        .bg(theme.muted)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            Icon::new(IconName::SquareTerminal)
-                                .xsmall()
-                                .text_color(theme.foreground),
-                        ),
-                )
-                .child(
-                    v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .gap_0()
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(theme.foreground)
-                                .line_height(relative(1.3))
-                                .truncate()
-                                .child(title),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .line_height(relative(1.3))
-                                .truncate()
-                                .child(subtitle),
-                        ),
-                ),
-        )
-        // Right-click vào item → context menu Open / Delete / Property.
-        .context_menu(move |menu, _window, _cx| {
-            menu.action_context(focus.clone())
-                .item(PopupMenuItem::new("Open").on_click(move |_, window, cx| {
-                    let session = SshSessionStore::global(cx)
-                        .read(cx)
-                        .sessions()
-                        .get(ix)
-                        .cloned();
-                    if let Some(s) = session {
-                        open_connect_dialog(s, ix, window, cx);
-                    }
-                }))
-                .separator()
-                .item(PopupMenuItem::new("Delete").on_click(move |_, window, cx| {
-                    SshSessionStore::global(cx).update(cx, |s, cx| {
-                        s.remove(ix, cx);
-                    });
-                    window.push_notification("SSH session đã bị xoá.", cx);
-                }))
-                .separator()
-                .item(
-                    PopupMenuItem::new("Property").on_click(move |_, window, cx| {
-                        let session = SshSessionStore::global(cx)
-                            .read(cx)
-                            .sessions()
-                            .get(ix)
-                            .cloned();
-                        if let Some(s) = session {
-                            open_session_dialog(window, cx, Some((ix, s)));
-                        }
-                    }),
-                )
-        })
+            _ => {
+                ungrouped.push((ix, s));
+            }
+        }
+    }
+
+    // 2. Sort ungrouped theo label.
+    ungrouped.sort_by(|a, b| a.1.label.to_lowercase().cmp(&b.1.label.to_lowercase()));
+
+    // 3. Root items: ungrouped trước, rồi đến groups (BTreeMap đã sort theo key).
+    let mut items = Vec::new();
+
+    // Ungrouped sessions ở root.
+    for (ix, s) in &ungrouped {
+        items.push(TreeItem::new(
+            format!("{SESSION_ID_PREFIX}{ix}"),
+            s.label.clone(),
+        ));
+    }
+
+    // Groups.
+    for (group, mut group_sessions) in groups {
+        group_sessions.sort_by(|a, b| {
+            a.1.label
+                .to_lowercase()
+                .cmp(&b.1.label.to_lowercase())
+        });
+        let children = group_sessions
+            .iter()
+            .map(|(ix, s)| TreeItem::new(format!("{SESSION_ID_PREFIX}{ix}"), s.label.clone()))
+            .collect::<Vec<_>>();
+        items.push(
+            TreeItem::new(format!("{GROUP_ID_PREFIX}{group}"), group)
+                .expanded(true)
+                .children(children),
+        );
+    }
+
+    items
 }

@@ -1,9 +1,9 @@
 //! SSH session store — load/save `ssh_session.json`.
 //!
-//! Danh sách SSH session (label, host, port, username) được persist vào file
-//! `ssh_session.json`. Khi app khởi động, store load file để render list trong
-//! [`crate::views::SessionPanel`]. Khi user thêm session mới qua "New Session"
-//! dialog, store update + save lại file.
+//! Danh sách SSH session (label, host, port, username, group) được persist
+//! vào file `ssh_session.json`. Khi app khởi động, store load file để render
+//! list trong [`crate::views::SessionPanel`]. Khi user thêm session mới qua
+//! "New Session" dialog, store update + save lại file.
 //!
 //! Path: `target/ssh_session.json` (debug) / `ssh_session.json` (release)
 //! — cùng pattern với `terminal.json` và `docks.json`.
@@ -35,6 +35,9 @@ pub struct SshSession {
     /// Username (optional — có thể nhập lúc connect).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
+    /// Nhóm (optional — dùng để gom session trong Tree).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
 }
 
 fn default_port() -> u16 {
@@ -176,6 +179,7 @@ mod tests {
             host: "b".into(),
             port: 22,
             username: None,
+            group: None,
         };
         let json = serde_json::to_string(&session).unwrap();
         assert!(!json.contains("username"));
@@ -188,6 +192,7 @@ mod tests {
             host: "b".into(),
             port: 22,
             username: Some("root".into()),
+            group: None,
         };
         let json = serde_json::to_string(&session).unwrap();
         assert!(json.contains("\"username\":\"root\""));

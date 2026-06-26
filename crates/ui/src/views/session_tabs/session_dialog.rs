@@ -4,6 +4,8 @@
 //! ([`DialogAction`]). Khi Save → validate (Label & Host bắt buộc) →
 //! `store.add` (tạo mới) hoặc `store.update` (chỉnh sửa) → auto-save
 //! `ssh_session.json`.
+//!
+//! Form fields: Label, Host, Port, Username (optional), Group (optional).
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{App, AppContext, SharedString, Window, div, px};
@@ -35,14 +37,15 @@ pub(crate) fn open_session_dialog(
     };
 
     // Giá trị prefill (rỗng nếu tạo mới).
-    let (label_val, host_val, port_val, user_val) = match &edit {
+    let (label_val, host_val, port_val, user_val, group_val) = match &edit {
         Some((_, s)) => (
             s.label.clone(),
             s.host.clone(),
             s.port.to_string(),
             s.username.clone().unwrap_or_default(),
+            s.group.clone().unwrap_or_default(),
         ),
-        None => (String::new(), String::new(), String::new(), String::new()),
+        None => (String::new(), String::new(), String::new(), String::new(), String::new()),
     };
 
     // Tạo InputState (prefill nếu edit) — persist qua các lần re-render dialog.
@@ -74,12 +77,20 @@ pub(crate) fn open_session_dialog(
         }
         st
     });
+    let group_state = cx.new(|cx| {
+        let mut st = InputState::new(window, cx).placeholder("e.g. Production, Dev");
+        if !group_val.is_empty() {
+            st.set_value(group_val, window, cx);
+        }
+        st
+    });
 
     // Clone cho on_ok closure (đọc value khi Save).
     let label_ok = label_state.clone();
     let host_ok = host_state.clone();
     let port_ok = port_state.clone();
     let user_ok = user_state.clone();
+    let group_ok = group_state.clone();
 
     window.open_dialog(cx, move |dialog, _window, _cx| {
         dialog
@@ -92,12 +103,14 @@ pub(crate) fn open_session_dialog(
                 let host_state = host_state.clone();
                 let port_state = port_state.clone();
                 let user_state = user_state.clone();
+                let group_state = group_state.clone();
                 move |content, _window, cx| {
                     content
                         .child(field("Label", true, Input::new(&label_state), cx))
                         .child(field("Host", true, Input::new(&host_state), cx))
                         .child(field("Port", false, Input::new(&port_state), cx))
                         .child(field("Username", false, Input::new(&user_state), cx))
+                        .child(field("Group", false, Input::new(&group_state), cx))
                 }
             })
             // Footer: Cancel (đóng dialog) + Save (dispatch ConfirmDialog → on_ok).
@@ -117,6 +130,7 @@ pub(crate) fn open_session_dialog(
                         let host_ok = host_ok.clone();
                         let port_ok = port_ok.clone();
                         let user_ok = user_ok.clone();
+                        let group_ok = group_ok.clone();
                         move |_, window, cx| {
                             let label = label_ok.read(cx).value().trim().to_string();
                             let host = host_ok.read(cx).value().trim().to_string();
@@ -134,11 +148,16 @@ pub(crate) fn open_session_dialog(
                                 let u = user_ok.read(cx).value().trim().to_string();
                                 if u.is_empty() { None } else { Some(u) }
                             };
+                            let group = {
+                                let g = group_ok.read(cx).value().trim().to_string();
+                                if g.is_empty() { None } else { Some(g) }
+                            };
                             let session = SshSession {
                                 label,
                                 host,
                                 port,
                                 username,
+                                group,
                             };
                             let store = SshSessionStore::global(cx);
                             match edit_index {
