@@ -16,18 +16,20 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
+use std::time::Duration;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    Hsla, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Render, SharedString,
-    Styled, Window, div, px,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla,
+    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Render, SharedString,
+    Styled, Task, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, Colorize as _, Icon, IconName, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dock::{Panel, PanelControl, PanelEvent},
     h_flex,
+    input::{Input, InputState},
     list::ListItem,
     menu::{ContextMenuExt, PopupMenuItem},
     tree::{TreeItem, TreeState, tree},
@@ -51,6 +53,10 @@ pub struct SessionPanel {
     focus_handle: FocusHandle,
     store: Entity<SshSessionStore>,
     tree_state: Entity<TreeState>,
+    /// Search input state — filter sessions theo label/host/user/group.
+    search_state: Entity<InputState>,
+    /// Debounce task cho search — thay task cũ = cancel task cũ (debounce).
+    search_debounce_task: Option<Task<()>>,
     /// Track index bị click (bất kỳ button) để highlight — chỉ 1 item tại 1 thời điểm.
     right_clicked_ix: Rc<Cell<Option<usize>>>,
 }
@@ -58,20 +64,46 @@ pub struct SessionPanel {
 impl SessionPanel {
     /// Tạo panel mới — bind vào global [`SshSessionStore`] và observe để
     /// rebuild tree khi list session thay đổi.
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let store = SshSessionStore::global(cx);
         let tree_state = cx.new(|cx| TreeState::new(cx));
 
+        // Search input state.
+        let search_state = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("Search sessions...")
+        });
+
         // Build initial tree items.
-        let items = build_tree_items(store.read(cx).sessions());
+        let items = build_tree_items(store.read(cx).sessions(), "");
         tree_state.update(cx, |state, cx| state.set_items(items, cx));
 
-        // Observe store → rebuild tree khi sessions thay đổi.
+        // Observe store → rebuild tree khi sessions thay đổi (apply search filter).
         cx.observe(&store, |this, store, cx| {
-            let items = build_tree_items(store.read(cx).sessions());
+            let query = this.search_state.read(cx).value().to_string();
+            let items = build_tree_items(store.read(cx).sessions(), &query);
             this.tree_state.update(cx, |state, cx| state.set_items(items, cx));
             this.right_clicked_ix.set(None);
             cx.notify();
+        })
+        .detach();
+
+        // Observe search input → debounce 300ms → rebuild tree với filter.
+        cx.observe(&search_state, |this, _state, cx| {
+            // Thay task cũ = cancel (drop Task = cancel) → debounce.
+            this.search_debounce_task = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(300))
+                    .await;
+                _ = this.update(cx, |this, cx| {
+                    let query = this.search_state.read(cx).value().to_string();
+                    let items =
+                        build_tree_items(this.store.read(cx).sessions(), &query);
+                    this.tree_state
+                        .update(cx, |state, cx| state.set_items(items, cx));
+                    this.right_clicked_ix.set(None);
+                    cx.notify();
+                });
+            }));
         })
         .detach();
 
@@ -79,6 +111,8 @@ impl SessionPanel {
             focus_handle: cx.focus_handle(),
             store,
             tree_state,
+            search_state,
+            search_debounce_task: None,
             right_clicked_ix: Rc::new(Cell::new(None)),
         }
     }
@@ -133,8 +167,18 @@ impl Render for SessionPanel {
         let store = self.store.clone();
         let tree_state = self.tree_state.clone();
         let right_clicked_ix = self.right_clicked_ix.clone();
+        let search_state = self.search_state.clone();
 
-        // Header.
+        // Search query hiện tại — kiểm tra có results hay không.
+        let query = self.search_state.read(cx).value().to_string();
+        let q = query.trim().to_lowercase();
+        let has_results = if q.is_empty() {
+            !sessions.is_empty()
+        } else {
+            sessions.iter().any(|s| session_matches(s, &q))
+        };
+
+        // Header: search input + new-session button.
         let header = h_flex()
             .w_full()
             .px_3()
@@ -142,12 +186,20 @@ impl Render for SessionPanel {
             .border_b_1()
             .border_color(theme.border)
             .items_center()
-            .justify_between()
+            .gap_2()
             .child(
-                div()
-                    .text_sm()
-                    .text_color(theme.foreground)
-                    .child(format!("Sessions ({})", sessions.len())),
+                h_flex()
+                    .gap_1()
+                    .items_center()
+                    .flex_1()
+                    .min_w_0()
+                    .child(
+                        Icon::new(IconName::Search)
+                            .xsmall()
+                            .text_color(theme.muted_foreground)
+                            .flex_shrink_0(),
+                    )
+                    .child(Input::new(&search_state).small().flex_1()),
             )
             .child(
                 Button::new("new-session-btn")
@@ -160,7 +212,7 @@ impl Render for SessionPanel {
                     })),
             );
 
-        // Empty state.
+        // Empty state — không có session nào.
         let empty = h_flex()
             .id("empty-state")
             .w_full()
@@ -177,6 +229,17 @@ impl Render for SessionPanel {
                         .menu("New Session", Box::new(NewSession))
                 }
             });
+
+        // No-results state — có session nhưng search không match.
+        let no_results = h_flex()
+            .id("no-results")
+            .w_full()
+            .flex_1()
+            .items_center()
+            .justify_center()
+            .text_color(theme.muted_foreground)
+            .text_sm()
+            .child(format!("No sessions found for \"{}\".", query.trim()));
 
         // Tree widget.
         let tree_widget = tree(
@@ -403,7 +466,12 @@ impl Render for SessionPanel {
                     .flex_1()
                     .min_h_0()
                     .when(sessions.is_empty(), |t| t.child(empty))
-                    .when(!sessions.is_empty(), |t| t.child(tree_widget))
+                    .when(!sessions.is_empty() && !has_results, |t| {
+                        t.child(no_results)
+                    })
+                    .when(!sessions.is_empty() && has_results, |t| {
+                        t.child(tree_widget)
+                    })
             )
     }
 }
@@ -429,16 +497,49 @@ fn session_subtitle(s: &SshSession) -> String {
     }
 }
 
-/// Build `Vec<TreeItem>` từ danh sách session — áp dụng grouping + sorting.
+/// Kiểm tra session có khớp với search query (case-insensitive).
 ///
+/// Match trên: label, host, username, group name.
+fn session_matches(s: &SshSession, q: &str) -> bool {
+    s.label.to_lowercase().contains(q)
+        || s.host.to_lowercase().contains(q)
+        || s
+            .username
+            .as_ref()
+            .map(|u| u.to_lowercase().contains(q))
+            .unwrap_or(false)
+        || s
+            .group
+            .as_ref()
+            .map(|g| g.trim().to_lowercase().contains(q))
+            .unwrap_or(false)
+}
+
+/// Build `Vec<TreeItem>` từ danh sách session — áp dụng search filter + grouping + sorting.
+///
+/// - `query` rỗng → hiển thị tất cả.
+/// - `query` không rỗng → chỉ hiển thị session khớp (label/host/user/group).
 /// - Item không có group → root (trên cùng), sort theo label.
 /// - Item có group → folder theo group name (sort), trong folder sort theo label.
-fn build_tree_items(sessions: &[SshSession]) -> Vec<TreeItem> {
-    // 1. Tách ungrouped và grouped.
+fn build_tree_items(sessions: &[SshSession], query: &str) -> Vec<TreeItem> {
+    let q = query.trim().to_lowercase();
+
+    // 1. Filter sessions nếu có query.
+    let filtered: Vec<(usize, &SshSession)> = if q.is_empty() {
+        sessions.iter().enumerate().collect()
+    } else {
+        sessions
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| session_matches(s, &q))
+            .collect()
+    };
+
+    // 2. Tách ungrouped và grouped.
     let mut ungrouped: Vec<(usize, &SshSession)> = Vec::new();
     let mut groups: BTreeMap<String, Vec<(usize, &SshSession)>> = BTreeMap::new();
 
-    for (ix, s) in sessions.iter().enumerate() {
+    for (ix, s) in filtered {
         match &s.group {
             Some(g) if !g.trim().is_empty() => {
                 groups
@@ -452,10 +553,10 @@ fn build_tree_items(sessions: &[SshSession]) -> Vec<TreeItem> {
         }
     }
 
-    // 2. Sort ungrouped theo label.
+    // 3. Sort ungrouped theo label.
     ungrouped.sort_by(|a, b| a.1.label.to_lowercase().cmp(&b.1.label.to_lowercase()));
 
-    // 3. Root items: ungrouped trước, rồi đến groups (BTreeMap đã sort theo key).
+    // 4. Root items: ungrouped trước, rồi đến groups (BTreeMap đã sort theo key).
     let mut items = Vec::new();
 
     // Ungrouped sessions ở root.
