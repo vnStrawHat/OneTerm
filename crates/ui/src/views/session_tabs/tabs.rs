@@ -51,8 +51,7 @@ pub struct SessionPanel {
     focus_handle: FocusHandle,
     store: Entity<SshSessionStore>,
     tree_state: Entity<TreeState>,
-    /// Track index bị right-click để highlight (workaround library bug:
-    /// `secondary_selected` không apply background).
+    /// Track index bị click (bất kỳ button) để highlight — chỉ 1 item tại 1 thời điểm.
     right_clicked_ix: Rc<Cell<Option<usize>>>,
 }
 
@@ -210,19 +209,18 @@ impl Render for SessionPanel {
                                     .child(Icon::new(icon).small().text_color(icon_color))
                                     .child(item.label.clone()),
                             )
-                            // Right-click → track index for highlight.
-                            .on_mouse_down(MouseButton::Right, {
-                                let right_clicked_ix = right_clicked_ix.clone();
-                                move |_, _, _| {
-                                    right_clicked_ix.set(Some(ix));
-                                }
-                            })
-                            // Left-click → clear highlight.
+                            // Any click (left/right/middle) → highlight only this item.
                             .on_mouse_down(MouseButton::Left, {
                                 let right_clicked_ix = right_clicked_ix.clone();
-                                move |_, _, _| {
-                                    right_clicked_ix.set(None);
-                                }
+                                move |_, _, _| right_clicked_ix.set(Some(ix))
+                            })
+                            .on_mouse_down(MouseButton::Right, {
+                                let right_clicked_ix = right_clicked_ix.clone();
+                                move |_, _, _| right_clicked_ix.set(Some(ix))
+                            })
+                            .on_mouse_down(MouseButton::Middle, {
+                                let right_clicked_ix = right_clicked_ix.clone();
+                                move |_, _, _| right_clicked_ix.set(Some(ix))
                             })
                     } else {
                         // Session leaf.
@@ -294,19 +292,18 @@ impl Render for SessionPanel {
                                     }
                                 }
                             })
-                            // Right-click → track index for highlight.
-                            .on_mouse_down(MouseButton::Right, {
-                                let right_clicked_ix = right_clicked_ix.clone();
-                                move |_, _, _| {
-                                    right_clicked_ix.set(Some(ix));
-                                }
-                            })
-                            // Left-click → clear highlight.
+                            // Any click (left/right/middle) → highlight only this item.
                             .on_mouse_down(MouseButton::Left, {
                                 let right_clicked_ix = right_clicked_ix.clone();
-                                move |_, _, _| {
-                                    right_clicked_ix.set(None);
-                                }
+                                move |_, _, _| right_clicked_ix.set(Some(ix))
+                            })
+                            .on_mouse_down(MouseButton::Right, {
+                                let right_clicked_ix = right_clicked_ix.clone();
+                                move |_, _, _| right_clicked_ix.set(Some(ix))
+                            })
+                            .on_mouse_down(MouseButton::Middle, {
+                                let right_clicked_ix = right_clicked_ix.clone();
+                                move |_, _, _| right_clicked_ix.set(Some(ix))
                             })
                     }
                 }
