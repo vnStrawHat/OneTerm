@@ -28,6 +28,17 @@ const EMBEDDED_THEME_FILES: &[(&str, &str)] = &[
     ),
 ];
 
+/// Override list selection style: selected item trông giống hover (bg =
+/// `list_hover`, không border).
+///
+/// `apply_config` / `Theme::change` reset `list_active` + `list_active_border`
+/// từ theme JSON (hoặc fallback), nên phải gọi lại sau mỗi lần switch theme.
+fn apply_list_style_override(cx: &mut App) {
+    let theme = Theme::global_mut(cx);
+    theme.list_active = theme.list_hover;
+    theme.list_active_border = gpui::transparent_black();
+}
+
 /// Khởi tạo theme: nạp embedded themes + wire action `SwitchTheme` / `SwitchThemeMode`.
 pub fn init(cx: &mut App) {
     // Nạp embedded theme JSON vào ThemeRegistry (bổ sung cho 2 built-in theme).
@@ -44,6 +55,7 @@ pub fn init(cx: &mut App) {
         let theme_name = switch.0.clone();
         if let Some(theme_config) = ThemeRegistry::global(cx).themes().get(&theme_name).cloned() {
             Theme::global_mut(cx).apply_config(&theme_config);
+            apply_list_style_override(cx);
         }
         cx.refresh_windows();
     });
@@ -51,6 +63,7 @@ pub fn init(cx: &mut App) {
     cx.on_action(|switch: &SwitchThemeMode, cx| {
         let mode = switch.0;
         Theme::change(mode, None, cx);
+        apply_list_style_override(cx);
         cx.refresh_windows();
     });
 
@@ -88,6 +101,10 @@ pub fn init(cx: &mut App) {
         theme.radius_lg = px(0.);
         theme.scrollbar_show = ScrollbarShow::Scrolling;
     }
+
+    // Selected item = hover look: bg = list_hover, không border.
+    // Phải gọi sau Theme::change (apply_config reset các field này).
+    apply_list_style_override(cx);
 
     // Notification hiển thị ở góc dưới bên phải (mặc định gpui-component là TopRight).
     // `notification` là field `#[serde(skip)]` — không bị `apply_config`/`change`

@@ -183,9 +183,9 @@ impl Render for SessionPanel {
                     if entry.is_folder() {
                         // Group folder.
                         let (icon, icon_color) = if entry.is_expanded() {
-                            (IconName::Maximize, cx.theme().accent)
+                            (IconName::Maximize, gpui::rgb(0x58c4dc))
                         } else {
-                            (IconName::Minimize, cx.theme().muted_foreground)
+                            (IconName::Minimize, gpui::rgb(0x7c8a15))
                         };
                         ListItem::new(ix)
                             .w_full()
