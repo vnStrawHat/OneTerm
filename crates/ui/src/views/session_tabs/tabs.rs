@@ -182,10 +182,10 @@ impl Render for SessionPanel {
 
                     if entry.is_folder() {
                         // Group folder.
-                        let icon = if entry.is_expanded() {
-                            IconName::FolderOpen
+                        let (icon, icon_color) = if entry.is_expanded() {
+                            (IconName::Maximize, cx.theme().accent)
                         } else {
-                            IconName::Folder
+                            (IconName::Minimize, cx.theme().muted_foreground)
                         };
                         ListItem::new(ix)
                             .w_full()
@@ -195,7 +195,7 @@ impl Render for SessionPanel {
                                 h_flex()
                                     .gap_2()
                                     .items_center()
-                                    .child(Icon::new(icon).small().text_color(cx.theme().foreground))
+                                    .child(Icon::new(icon).small().text_color(icon_color))
                                     .child(item.label.clone()),
                             )
                     } else {
