@@ -9,7 +9,7 @@ use std::time::Duration;
 use gpui::{ClipboardItem, Context, Entity, FocusHandle, KeyBinding, NoAction, Window};
 
 use async_channel::Receiver;
-use myterm2_core::{SessionEvent, TerminalSession};
+use myterm2_core::{SessionEvent, TerminalInfo, TerminalSession};
 
 use super::element::{GridMetrics, RowLayoutCache};
 use super::scrollbar::TerminalScrollHandle;
@@ -52,14 +52,13 @@ pub struct LocalTerminalView {
     /// Last mouse position — để re-detect URL khi Ctrl pressed/released
     /// mà không cần mouse move.
     pub(crate) last_mouse_pos: Option<gpui::Point<gpui::Pixels>>,
-    /// Per-line timestamps (gutter) — indexed by absolute line number (0 = oldest).
+    /// Per-line timestamps (gutter). `line_times[j]` = giờ render của dòng có
+    /// **chỉ số absolute** (0-based) = `line_time_base + j`. Grow-only: mỗi dòng
+    /// được stamp đúng một lần và không bao giờ ghi đè (xem `update_line_times`).
     pub(crate) line_times: Vec<String>,
-    /// Previous total_lines — detect new lines added.
-    pub(crate) prev_total_lines: usize,
-    /// Previous absolute_line_count — detect dropped lines (scrollback full).
-    pub(crate) prev_absolute_line_count: usize,
-    /// Previous cursor line (alacritty Line.0) — detect new line vs modification.
-    pub(crate) prev_cursor_line: i32,
+    /// Chỉ số absolute (0-based) của `line_times[0]` — dòng cũ nhất còn track.
+    /// Tăng dần khi dòng cũ rời scrollback.
+    pub(crate) line_time_base: usize,
     /// Per-row layout cache — skip recompute cho non-dirty rows.
     pub(crate) row_cache: Rc<RefCell<RowLayoutCache>>,
     /// Cached gutter width + num_digits — chỉ recompute khi num_digits đổi.
@@ -105,10 +104,9 @@ impl LocalTerminalView {
                             .timer(Duration::from_millis(1))
                             .await;
                         Self::drain_coalesced_events(&rx, &this, cx);
-                        let _ = this.update(cx, |view, cx| {
+                        let _ = this.update(cx, |_view, cx| {
                             cx.notify();
                             s.read(cx).scroll_to_bottom();
-                            view.update_line_times(&s, cx);
                         });
                     }
                     SessionEvent::Bell => {
@@ -156,9 +154,7 @@ impl LocalTerminalView {
             ctrl_held: false,
             last_mouse_pos: None,
             line_times: Vec::new(),
-            prev_total_lines: 0,
-            prev_absolute_line_count: 0,
-            prev_cursor_line: 0,
+            line_time_base: 0,
             row_cache: Rc::new(RefCell::new(RowLayoutCache::new())),
             cached_gutter: Rc::new(RefCell::new(None)),
             last_grid_size: Rc::new(RefCell::new(None)),
@@ -199,54 +195,68 @@ impl LocalTerminalView {
         }
     }
 
-    /// Cập nhật `line_times` khi output mới.
+    /// Cập nhật `line_times` tại **thời điểm render**, theo model **grow-only**
+    /// keyed bằng chỉ số absolute của dòng.
     ///
-    /// Dùng `absolute_line_count` (monotonically increasing, từ event loop) để
-    /// detect cả new lines lẫn dropped lines (khi scrollback đầy). `line_times`
-    /// được synced với `total_lines` (buffer thực tế) — khi dòng bị drop khỏi
-    /// scrollback, timestamp cũ bị remove từ front, timestamp mới push vào back.
-    fn update_line_times(&mut self, s: &Entity<Box<dyn TerminalSession>>, cx: &mut Context<Self>) {
-        let _ = cx;
-        let info = s.read(cx).terminal_info();
+    /// Mỗi dòng được gán timestamp đúng **một lần** — tại frame đầu tiên nó xuất
+    /// hiện — và **không bao giờ bị ghi đè**. Đây là điểm mấu chốt để chống lại
+    /// ConPTY repaint / reflow: những thao tác này làm `total_lines` (và do đó
+    /// `absolute_line_count` qua `terminal_info`) dao động giảm tạm thời. Code
+    /// cũ phản ứng bằng cách clear + refill `now` → mọi dòng nhảy về cùng một
+    /// giờ. Ở đây giảm tạm thời chỉ đơn giản là "không thêm gì", timestamp đã có
+    /// được giữ nguyên.
+    ///
+    /// `line_times[j]` ↔ dòng có absolute index `line_time_base + j`.
+    pub(crate) fn update_line_times(&mut self, info: &TerminalInfo) {
         let total = info.total_lines;
         let absolute = info.absolute_line_count;
-        let cur_line = info.cursor_line;
         let now = chrono::Local::now().format("%H:%M:%S").to_string();
 
-        if absolute > self.prev_absolute_line_count {
-            // New lines output.
-            let new_lines = absolute - self.prev_absolute_line_count;
-            // Push new timestamps (reserve để tránh reallocate).
+        // Số dòng ĐÃ CÓ NỘI DUNG (high-water mark) = absolute index của cursor + 1.
+        //
+        // `absolute_line_count` bị "thổi phồng" tới đáy viewport vì
+        // `total_lines = history + screen_lines` luôn tính cả các dòng TRỐNG bên
+        // dưới cursor (lưới luôn cao `num_lines`). Nếu stamp tới `absolute`, các
+        // dòng trống đó bị gán giờ hiện tại; khi output sau này ghi đè vào chúng,
+        // chúng giữ giờ cũ → đúng triệu chứng "một khối dòng mang giờ sai".
+        //
+        // Cursor là nơi output đang được ghi, nên dừng stamp ở ngay sau cursor.
+        // Absolute index của cursor = absolute − num_lines + cursor_line.
+        let cursor_row = info.cursor_line.max(0) as usize;
+        let content_high = absolute
+            .saturating_sub(info.num_lines)
+            .saturating_add(cursor_row + 1)
+            .min(absolute);
+
+        // Reset cứng: chỉ khi nội dung mới bắt đầu TRƯỚC dòng cũ nhất đang track
+        // (counter absolute bị reset hẳn). ConPTY repaint/reflow chỉ làm dao
+        // động trong phạm vi nội dung hiện có nên KHÔNG kích hoạt nhánh này.
+        if absolute < self.line_time_base {
+            self.line_times.clear();
+            self.line_time_base = absolute.saturating_sub(total);
+        }
+        if self.line_times.is_empty() {
+            self.line_time_base = absolute.saturating_sub(total);
+        }
+
+        // Stamp các dòng mới CÓ NỘI DUNG (index ≥ covered) bằng giờ render hiện
+        // tại. Grow-only: dao động giảm tạm thời → không push gì; dòng trống dưới
+        // cursor chưa được stamp tới khi cursor (nội dung) thực sự chạm tới.
+        let covered = self.line_time_base + self.line_times.len();
+        if content_high > covered {
+            let new_lines = content_high - covered;
             self.line_times.reserve(new_lines);
             for _ in 0..new_lines {
                 self.line_times.push(now.clone());
             }
-            // Dropped lines = (absolute - total) - (prev_absolute - prev_total).
-            // Khi scrollback đầy, total không đổi nhưng absolute tăng → dropped > 0.
-            let prev_dropped = self
-                .prev_absolute_line_count
-                .saturating_sub(self.prev_total_lines);
-            let curr_dropped = absolute.saturating_sub(total);
-            let dropped_delta = curr_dropped.saturating_sub(prev_dropped);
-            // O(n) thay vì O(n²): drain() shift 1 lần, remove(0) shift n lần.
-            if dropped_delta > 0 {
-                let drain_count = dropped_delta.min(self.line_times.len());
-                self.line_times.drain(0..drain_count);
-            }
-        } else if absolute < self.prev_absolute_line_count {
-            // Reset (clear / alt-screen / resize) — rebuild from scratch.
-            self.line_times.clear();
-            for _ in 0..total {
-                self.line_times.push(now.clone());
-            }
         }
-        // absolute == prev_absolute: no new lines, không cần shift.
 
-        // Ensure line_times synced với total_lines.
-        self.line_times.resize(total, now.clone());
-
-        self.prev_total_lines = total;
-        self.prev_absolute_line_count = absolute;
-        self.prev_cursor_line = cur_line;
+        // Drop timestamp của dòng đã rời scrollback (front) để bound memory.
+        let oldest = absolute.saturating_sub(total);
+        if oldest > self.line_time_base {
+            let drop = (oldest - self.line_time_base).min(self.line_times.len());
+            self.line_times.drain(0..drop);
+            self.line_time_base += drop;
+        }
     }
 }

@@ -97,16 +97,9 @@ impl Render for LocalTerminalView {
 
         let theme_ref = cx.theme().clone();
 
-        {
-            let total = info.total_lines;
-            let absolute = info.absolute_line_count;
-            if self.line_times.len() != total {
-                let now = chrono::Local::now().format("%H:%M:%S").to_string();
-                self.line_times.resize(total, now);
-                self.prev_total_lines = total;
-            }
-            self.prev_absolute_line_count = absolute;
-        }
+        // Nguồn duy nhất cập nhật line_times — stamp timestamp cho dòng mới tại
+        // chính thời điểm render này (xem `update_line_times`).
+        self.update_line_times(&info);
 
         let theme = self.apply_color_overrides(theme, &color_overrides);
 
@@ -131,6 +124,7 @@ impl Render for LocalTerminalView {
                 self.hovered_url.clone(),
                 self.ctrl_held,
                 self.line_times.clone(),
+                self.line_time_base,
                 padding,
                 show_gutter,
                 cell_width_override,

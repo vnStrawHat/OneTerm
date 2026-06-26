@@ -59,8 +59,11 @@ pub(crate) struct TerminalElement {
     /// Cursor shape override từ config (Block/Bar/Underline).
     /// Override snapshot shape từ shell (trừ Hidden) — giống Windows Terminal.
     cursor_shape_override: crate::state::TerminalCursorShape,
-    /// Per-line timestamps for gutter (0 = oldest line).
+    /// Per-line timestamps for gutter. `line_times[j]` ↔ dòng có absolute index
+    /// `line_time_base + j`.
     line_times: Vec<String>,
+    /// Absolute index (0-based) của `line_times[0]`.
+    line_time_base: usize,
     /// Per-row layout cache — skip recompute cho non-dirty rows.
     row_cache: Rc<RefCell<RowLayoutCache>>,
     /// Cached gutter (width, num_digits) — chỉ recompute khi num_digits đổi.
@@ -85,6 +88,7 @@ impl TerminalElement {
         hovered_url: Option<super::url::DetectedUrl>,
         ctrl_held: bool,
         line_times: Vec<String>,
+        line_time_base: usize,
         padding: crate::state::TerminalPadding,
         show_gutter: bool,
         cell_width_override: Option<f32>,
@@ -113,6 +117,7 @@ impl TerminalElement {
             cursor_color_override,
             cursor_shape_override,
             line_times,
+            line_time_base,
             row_cache,
             cached_gutter,
             last_grid_size,
@@ -168,6 +173,7 @@ impl Element for TerminalElement {
             self.padding,
             self.show_gutter,
             &self.line_times,
+            self.line_time_base,
             self.hovered_url.as_ref(),
             self.ctrl_held,
             &self.cached_gutter,

@@ -41,16 +41,16 @@ pub(crate) fn compute_gutter_width(
 
 /// Build các `GutterEntry` cho từng display line.
 ///
-/// `total_lines` = số dòng trong buffer (scrollback + viewport) — dùng để index
-/// `line_times` (timestamps synced với buffer thực tế).
-/// `absolute_line_count` = tổng số dòng đã output kể cả khi scrollback đầy —
-/// dùng cho line number (monotonically increasing, độc lập với scrollback).
+/// `line_time_base` = absolute index (0-based) của `line_times[0]`. Time của một
+/// dòng được tra theo **absolute index** của chính dòng đó (bằng với line number
+/// − 1), nên không bị lệch khi `total_lines` dao động vì ConPTY repaint/reflow.
+/// `absolute_line_count` = tổng số dòng đã output (monotonically increasing).
 /// `viewport_lines` là chiều cao viewport (grid rows). `max_entries` giới hạn
 /// số entry thực tế render.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn compute_gutter_entries(
     line_times: &[String],
-    total_lines: usize,
+    line_time_base: usize,
     absolute_line_count: usize,
     display_offset: usize,
     viewport_lines: usize,
@@ -63,18 +63,15 @@ pub(crate) fn compute_gutter_entries(
 
     let mut entries = Vec::with_capacity(max_entries);
     for i in 0..max_entries {
-        // Line number dùng absolute_line_count (monotonically increasing)
-        // thay vì total_lines (bị cap bởi scrollback).
-        let line_num = absolute_line_count as i32 - display_offset as i32 - viewport_lines as i32
-            + i as i32
-            + 1;
-        let line_num = line_num.max(1) as usize;
-        // line_times index vẫn dùng total_lines (synced với buffer thực tế).
-        let abs_idx = (total_lines as i32 - display_offset as i32 - viewport_lines as i32
-            + i as i32)
-            .max(0) as usize;
-        let time_str = if abs_idx < line_times.len() {
-            line_times[abs_idx].as_str()
+        // Absolute index (0-based) của dòng tại display row `i`.
+        let abs_index =
+            absolute_line_count as i32 - display_offset as i32 - viewport_lines as i32 + i as i32;
+        let line_num = (abs_index + 1).max(1) as usize;
+        // Tra timestamp theo absolute index (qua base) — ổn định trước dao động
+        // total_lines.
+        let time_str = if abs_index >= 0 && (abs_index as usize) >= line_time_base {
+            let j = abs_index as usize - line_time_base;
+            line_times.get(j).map(|s| s.as_str()).unwrap_or("--:--:--")
         } else {
             "--:--:--"
         };

@@ -34,6 +34,7 @@ pub(crate) fn prepaint_terminal(
     padding: crate::state::TerminalPadding,
     show_gutter: bool,
     line_times: &[String],
+    line_time_base: usize,
     hovered_url: Option<&super::super::url::DetectedUrl>,
     ctrl_held: bool,
     cached_gutter: &Rc<RefCell<Option<(Pixels, usize)>>>,
@@ -125,7 +126,6 @@ pub(crate) fn prepaint_terminal(
     let num_lines = snapshot.terminal_bounds.num_lines;
     let num_cols = snapshot.terminal_bounds.num_cols;
     let display_offset = snapshot.display_offset;
-    let total_lines = snapshot.total_lines;
 
     let selection_rects = snapshot
         .selection
@@ -213,7 +213,7 @@ pub(crate) fn prepaint_terminal(
 
     let gutter_entries = gutter::compute_gutter_entries(
         line_times,
-        total_lines,
+        line_time_base,
         absolute_line_count,
         display_offset,
         num_lines,
