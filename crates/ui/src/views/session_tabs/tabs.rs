@@ -18,7 +18,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
-    Styled, Window, div, px, relative,
+    Styled, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable as _, WindowExt as _,
@@ -28,7 +28,6 @@ use gpui_component::{
     list::ListItem,
     menu::{ContextMenuExt, PopupMenuItem},
     tree::{TreeItem, TreeState, tree},
-    v_flex,
 };
 
 use crate::actions::NewSession;
@@ -199,26 +198,29 @@ impl Render for SessionPanel {
 
                         ListItem::new(ix)
                             .w_full()
+                            .py_0()
                             .pl(px(16.) * depth as f32 + px(12.))
                             .child(
-                                v_flex()
-                                    .flex_1()
+                                h_flex()
+                                    .w_full()
                                     .min_w_0()
-                                    .gap_0()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_1()
+                                    // Label — căn trái, truncate nếu dài.
                                     .child(
                                         div()
                                             .text_sm()
                                             .text_color(cx.theme().foreground)
-                                            .line_height(relative(1.3))
                                             .truncate()
                                             .child(item.label.clone()),
                                     )
+                                    // user@host:port — căn phải, muted.
                                     .child(
                                         div()
                                             .text_xs()
                                             .text_color(cx.theme().muted_foreground)
-                                            .line_height(relative(1.3))
-                                            .truncate()
+                                            .flex_shrink_0()
                                             .child(SharedString::from(subtitle)),
                                     ),
                             )
