@@ -16,10 +16,8 @@ edition = "2024"
 # GPUI core — cùng rev, cùng monorepo (xem docs/agents/dependencies.md §1)
 gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
-gpui-component = { path = "reference/gpui-component/crates/ui" }
-gpui-component-assets = { path = "reference/gpui-component/crates/assets" }
-gpui-component-macros = { path = "reference/gpui-component/crates/macros" }
-gpui_macros = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
+gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "ea6b194db04cc7c0474851f07c7d5b7a9df6a98b" }
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "ea6b194db04cc7c0474851f07c7d5b7a9df6a98b" }
 
 # Internal crates
 myterm2-core = { path = "crates/core" }
@@ -55,19 +53,6 @@ tracing = "0.1"
 # UI helpers
 chrono = "0.4"
 rust-i18n = "4"
-
-# gpui-component path-dep workspace inheritance
-sum-tree = { version = "0.2.0", package = "zed-sum-tree" }
-lsp-types = { version = "0.97.0", features = ["proposed"] }
-notify = "7.0.0"
-raw-window-handle = "0.6.2"
-ropey = { version = "=2.0.0-beta.1", features = ["metric_lines_lf", "metric_utf16"] }
-schemars = "1"
-serde_repr = "0.1"
-smallvec = "1"
-windows = { version = "0.58.0", features = ["Wdk", "Wdk_System", "Wdk_System_SystemServices"] }
-# reqwest (needed by gpui-component-assets for WASM target — Cargo still parses manifest)"
-reqwest = { git = "https://github.com/zed-industries/reqwest.git", rev = "c15662463bda39148ba154100dd44d3fba5873a4", default-features = false, features = ["charset", "http2", "macos-system-configuration", "multipart", "rustls-tls-native-roots", "socks", "stream"], package = "zed-reqwest", version = "0.12.15-zed" }
 
 [workspace.lints.clippy]
 # Giữ tương thích với gpui-component upstream (xem reference/Cargo.toml)
