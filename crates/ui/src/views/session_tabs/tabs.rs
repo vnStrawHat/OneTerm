@@ -155,13 +155,21 @@ impl Render for SessionPanel {
 
         // Empty state.
         let empty = h_flex()
+            .id("empty-state")
             .w_full()
             .flex_1()
             .items_center()
             .justify_center()
             .text_color(theme.muted_foreground)
             .text_sm()
-            .child("No SSH session yet. Right-click → New Session.");
+            .child("No SSH session yet. Right-click → New Session.")
+            .context_menu({
+                let focus = focus.clone();
+                move |menu, _window, _cx| {
+                    menu.action_context(focus.clone())
+                        .menu("New Session", Box::new(NewSession))
+                }
+            });
 
         // Tree widget.
         let tree_widget = tree(
@@ -250,23 +258,27 @@ impl Render for SessionPanel {
             let focus = focus.clone();
             move |_ix, entry, menu, _window, _cx| {
                 if entry.is_folder() {
-                    // Group folder → context menu: Property (rename group).
+                    // Group folder → context menu: New Session, Property.
                     let group = parse_group_id(&entry.item().id);
                     let focus = focus.clone();
                     menu.action_context(focus)
+                        .menu("New Session", Box::new(NewSession))
+                        .separator()
                         .item(PopupMenuItem::new("Property").on_click(move |_, window, cx| {
                             if let Some(group_name) = &group {
                                 open_rename_group_dialog(window, cx, group_name.clone());
                             }
                         }))
                 } else {
-                    // Session leaf → context menu: Open, Delete, Property.
+                    // Session leaf → context menu: New Session, Open, Delete, Property.
                     let Some(store_ix) = parse_session_id(&entry.item().id) else {
                         return menu;
                     };
                     let focus = focus.clone();
 
                     menu.action_context(focus)
+                        .menu("New Session", Box::new(NewSession))
+                        .separator()
                         .item(PopupMenuItem::new("Open").on_click(move |_, window, cx| {
                             if let Some(s) = SshSessionStore::global(cx)
                                 .read(cx)
@@ -315,14 +327,6 @@ impl Render for SessionPanel {
                     .min_h_0()
                     .when(sessions.is_empty(), |t| t.child(empty))
                     .when(!sessions.is_empty(), |t| t.child(tree_widget))
-                    // Right-click vào khu vực panel (không phải item) → New Session.
-                    .context_menu({
-                        let focus = focus.clone();
-                        move |menu, _window, _cx| {
-                            menu.action_context(focus.clone())
-                                .menu("New Session", Box::new(NewSession))
-                        }
-                    }),
             )
     }
 }
