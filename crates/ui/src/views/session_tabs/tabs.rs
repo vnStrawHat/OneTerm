@@ -13,12 +13,14 @@
 //! - "New Session" / "Property" → mở dialog (xem [`super::session_dialog`]).
 //! - "Open" / double-click → mở dialog connect (xem [`super::connect_dialog`]).
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
+    Hsla, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Render, SharedString,
     Styled, Window, div, px,
 };
 use gpui_component::{
@@ -49,6 +51,9 @@ pub struct SessionPanel {
     focus_handle: FocusHandle,
     store: Entity<SshSessionStore>,
     tree_state: Entity<TreeState>,
+    /// Track index bị right-click để highlight (workaround library bug:
+    /// `secondary_selected` không apply background).
+    right_clicked_ix: Rc<Cell<Option<usize>>>,
 }
 
 impl SessionPanel {
@@ -66,6 +71,7 @@ impl SessionPanel {
         cx.observe(&store, |this, store, cx| {
             let items = build_tree_items(store.read(cx).sessions());
             this.tree_state.update(cx, |state, cx| state.set_items(items, cx));
+            this.right_clicked_ix.set(None);
             cx.notify();
         })
         .detach();
@@ -74,6 +80,7 @@ impl SessionPanel {
             focus_handle: cx.focus_handle(),
             store,
             tree_state,
+            right_clicked_ix: Rc::new(Cell::new(None)),
         }
     }
 
@@ -126,6 +133,7 @@ impl Render for SessionPanel {
         let focus = self.focus_handle.clone();
         let store = self.store.clone();
         let tree_state = self.tree_state.clone();
+        let right_clicked_ix = self.right_clicked_ix.clone();
 
         // Header.
         let header = h_flex()
@@ -176,9 +184,12 @@ impl Render for SessionPanel {
             &tree_state,
             {
                 let store = store.clone();
+                let right_clicked_ix = right_clicked_ix.clone();
                 move |ix, entry, _selected, _window, cx| {
                     let item = entry.item();
                     let depth = entry.depth();
+                    let is_right_clicked = right_clicked_ix.get() == Some(ix);
+                    let hover_bg = cx.theme().tokens.list_hover;
 
                     if entry.is_folder() {
                         // Group folder.
@@ -191,6 +202,7 @@ impl Render for SessionPanel {
                             .w_full()
                             .py_0()
                             .pl(px(16.) * depth as f32 + px(12.))
+                            .when(is_right_clicked, |this| this.bg(hover_bg))
                             .child(
                                 h_flex()
                                     .gap_2()
@@ -198,6 +210,20 @@ impl Render for SessionPanel {
                                     .child(Icon::new(icon).small().text_color(icon_color))
                                     .child(item.label.clone()),
                             )
+                            // Right-click → track index for highlight.
+                            .on_mouse_down(MouseButton::Right, {
+                                let right_clicked_ix = right_clicked_ix.clone();
+                                move |_, _, _| {
+                                    right_clicked_ix.set(Some(ix));
+                                }
+                            })
+                            // Left-click → clear highlight.
+                            .on_mouse_down(MouseButton::Left, {
+                                let right_clicked_ix = right_clicked_ix.clone();
+                                move |_, _, _| {
+                                    right_clicked_ix.set(None);
+                                }
+                            })
                     } else {
                         // Session leaf.
                         let store_ix = parse_session_id(&item.id);
@@ -212,6 +238,7 @@ impl Render for SessionPanel {
                             .w_full()
                             .py_0()
                             .pl(px(16.) * depth as f32 + px(12.))
+                            .when(is_right_clicked, |this| this.bg(hover_bg))
                             .child(
                                 h_flex()
                                     .w_full()
@@ -265,6 +292,20 @@ impl Render for SessionPanel {
                                             }
                                         }
                                     }
+                                }
+                            })
+                            // Right-click → track index for highlight.
+                            .on_mouse_down(MouseButton::Right, {
+                                let right_clicked_ix = right_clicked_ix.clone();
+                                move |_, _, _| {
+                                    right_clicked_ix.set(Some(ix));
+                                }
+                            })
+                            // Left-click → clear highlight.
+                            .on_mouse_down(MouseButton::Left, {
+                                let right_clicked_ix = right_clicked_ix.clone();
+                                move |_, _, _| {
+                                    right_clicked_ix.set(None);
                                 }
                             })
                     }
