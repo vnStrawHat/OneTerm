@@ -10,6 +10,7 @@
 //! Tham chiếu `docs/sftp-browser-design.md` §4.
 
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -20,9 +21,11 @@ use gpui::{
     Styled, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable,
+    ActiveTheme, Icon, IconName, Sizable, WindowExt as _,
+    button::{Button, ButtonVariants as _},
+    dialog::{DialogButtonProps, DialogFooter},
     dock::{Panel, PanelControl, PanelEvent},
-    h_flex, v_flex,
+    h_flex, input::{Input, InputState}, v_flex,
 };
 use myterm2_core::{FileEntry, SftpBackend};
 
@@ -428,6 +431,481 @@ impl SftpPanel {
         cx.notify();
     }
 
+    // ── File operations (toolbar) ───────────────────────────
+
+    /// Get selected entry (if any).
+    fn selected_entry(&self) -> Option<&FileEntry> {
+        self.selected.and_then(|ix| self.entries.get(ix))
+    }
+
+    /// Rename selected entry.
+    /// Mở dialog với InputState pre-fill tên hiện tại → sftp.rename().
+    fn do_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let entry = match self.selected_entry() {
+            Some(e) => e.clone(),
+            None => {
+                log::warn!("SftpPanel::do_rename: no selection");
+                window.push_notification("Select a file or folder to rename.", cx);
+                return;
+            }
+        };
+
+        log::info!("SftpPanel::do_rename: \"{}\"", entry.name);
+
+        let sftp = self.sftp.clone().unwrap();
+        let panel = cx.entity();
+        let from_path = entry.path.clone();
+
+        let name_state = cx.new(|cx| {
+            let mut st = InputState::new(window, cx).placeholder("New name");
+            st.set_value(&entry.name, window, cx);
+            st
+        });
+
+        let name_ok = name_state.clone();
+
+        let save_logic: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool> = Rc::new({
+            let name_ok = name_ok.clone();
+            let sftp = sftp.clone();
+            let from_path = from_path.clone();
+            let panel = panel.clone();
+            move |_, window, cx| {
+                let new_name = name_ok.read(cx).value().trim().to_string();
+                if new_name.is_empty() {
+                    window.push_notification("Name cannot be empty.", cx);
+                    return false;
+                }
+
+                // Build new path: parent + new_name
+                let parent = from_path.parent().unwrap_or_else(|| std::path::Path::new("/"));
+                let to_path = parent.join(&new_name);
+
+                log::info!("SftpPanel: rename \"{}\" → \"{}\"", from_path.display(), to_path.display());
+
+                match sftp.rename(from_path.clone(), to_path) {
+                    Ok(()) => {
+                        log::info!("SftpPanel: rename OK");
+                        window.push_notification(format!("Renamed to \"{new_name}\"."), cx);
+                        panel.update(cx, |this, cx| this.refresh(cx));
+                        true
+                    }
+                    Err(e) => {
+                        log::error!("SftpPanel: rename failed: {e}");
+                        window.push_notification(format!("Rename failed: {e}"), cx);
+                        false
+                    }
+                }
+            }
+        });
+
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let save_for_click = save_logic.clone();
+            let save_for_kb = save_logic.clone();
+            dialog
+                .title("Rename")
+                .w(px(440.))
+                .content({
+                    let name_state = name_state.clone();
+                    move |content, _window, cx| {
+                        content.child(
+                            v_flex().gap_1().w_full()
+                                .child(div().text_sm().text_color(cx.theme().foreground).child("New name"))
+                                .child(Input::new(&name_state))
+                        )
+                    }
+                })
+                .footer({
+                    DialogFooter::new()
+                        .child(
+                            Button::new("cancel").label("Cancel").outline()
+                                .on_click(|_, window, cx| { window.close_dialog(cx); })
+                        )
+                        .child(
+                            Button::new("save").label("Rename").primary()
+                                .on_click(move |_, window, cx| {
+                                    if save_for_click(&ClickEvent::default(), window, cx) {
+                                        window.close_dialog(cx);
+                                    }
+                                })
+                        )
+                })
+                .button_props(
+                    DialogButtonProps::default()
+                        .on_cancel(|_, _, _| true)
+                        .on_ok(move |_, window, cx| { save_for_kb(&ClickEvent::default(), window, cx) }),
+                )
+        });
+    }
+
+    /// Delete selected entry (file or folder).
+    /// Mở alert dialog confirm → sftp.remove() hoặc sftp.rmdir().
+    fn do_delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let entry = match self.selected_entry() {
+            Some(e) => e.clone(),
+            None => {
+                log::warn!("SftpPanel::do_delete: no selection");
+                window.push_notification("Select a file or folder to delete.", cx);
+                return;
+            }
+        };
+
+        log::info!("SftpPanel::do_delete: \"{}\" (is_dir={})", entry.name, entry.is_dir);
+
+        let sftp = self.sftp.clone().unwrap();
+        let panel = cx.entity();
+        let path = entry.path.clone();
+        let is_dir = entry.is_dir;
+        let entry_name = entry.name.clone();
+        let kind_str = if is_dir { "folder" } else { "file" };
+        let desc = format!("Are you sure you want to delete {kind_str} \"{entry_name}\"?");
+
+        window.open_alert_dialog(cx, move |alert, _window, _cx| {
+            alert
+                .confirm()
+                .title("Confirm Delete")
+                .description(desc.clone())
+                .footer({
+                    let sftp = sftp.clone();
+                    let path = path.clone();
+                    let panel = panel.clone();
+                    DialogFooter::new()
+                        .child(
+                            Button::new("cancel").label("Cancel").outline()
+                                .on_click(|_, window, cx| { window.close_dialog(cx); })
+                        )
+                        .child(
+                            Button::new("delete").label("Delete").danger()
+                                .on_click(move |_, window, cx| {
+                                    log::info!("SftpPanel: deleting \"{}\"", path.display());
+                                    let result = if is_dir {
+                                        sftp.rmdir(path.clone())
+                                    } else {
+                                        sftp.remove(path.clone())
+                                    };
+                                    match result {
+                                        Ok(()) => {
+                                            log::info!("SftpPanel: delete OK");
+                                            window.push_notification("Deleted successfully.", cx);
+                                            panel.update(cx, |this, cx| this.refresh(cx));
+                                            window.close_dialog(cx);
+                                        }
+                                        Err(e) => {
+                                            log::error!("SftpPanel: delete failed: {e}");
+                                            window.push_notification(format!("Delete failed: {e}"), cx);
+                                        }
+                                    }
+                                })
+                        )
+                })
+                .button_props(
+                    DialogButtonProps::default()
+                        .on_cancel(|_, _, _| true)
+                        .on_ok(|_, _, _| false),
+                )
+        });
+    }
+
+    /// Tạo thư mục mới trong cwd.
+    /// Mở dialog với InputState → sftp.mkdir().
+    fn do_new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        log::info!("SftpPanel::do_new_folder: cwd=\"{}\"", self.cwd.display());
+
+        let sftp = self.sftp.clone().unwrap();
+        let panel = cx.entity();
+        let cwd = self.cwd.clone();
+
+        let name_state = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("Folder name")
+        });
+
+        let name_ok = name_state.clone();
+
+        let save_logic: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool> = Rc::new({
+            let name_ok = name_ok.clone();
+            let sftp = sftp.clone();
+            let cwd = cwd.clone();
+            let panel = panel.clone();
+            move |_, window, cx| {
+                let name = name_ok.read(cx).value().trim().to_string();
+                if name.is_empty() {
+                    window.push_notification("Folder name cannot be empty.", cx);
+                    return false;
+                }
+                let path = cwd.join(&name);
+                log::info!("SftpPanel: mkdir \"{}\"", path.display());
+                match sftp.mkdir(path) {
+                    Ok(()) => {
+                        log::info!("SftpPanel: mkdir OK");
+                        window.push_notification(format!("Folder \"{name}\" created."), cx);
+                        panel.update(cx, |this, cx| this.refresh(cx));
+                        true
+                    }
+                    Err(e) => {
+                        log::error!("SftpPanel: mkdir failed: {e}");
+                        window.push_notification(format!("Create folder failed: {e}"), cx);
+                        false
+                    }
+                }
+            }
+        });
+
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let save_for_click = save_logic.clone();
+            let save_for_kb = save_logic.clone();
+            dialog
+                .title("New Folder")
+                .w(px(440.))
+                .content({
+                    let name_state = name_state.clone();
+                    move |content, _window, cx| {
+                        content.child(
+                            v_flex().gap_1().w_full()
+                                .child(div().text_sm().text_color(cx.theme().foreground).child("Folder name"))
+                                .child(Input::new(&name_state))
+                        )
+                    }
+                })
+                .footer({
+                    DialogFooter::new()
+                        .child(
+                            Button::new("cancel").label("Cancel").outline()
+                                .on_click(|_, window, cx| { window.close_dialog(cx); })
+                        )
+                        .child(
+                            Button::new("create").label("Create").primary()
+                                .on_click(move |_, window, cx| {
+                                    if save_for_click(&ClickEvent::default(), window, cx) {
+                                        window.close_dialog(cx);
+                                    }
+                                })
+                        )
+                })
+                .button_props(
+                    DialogButtonProps::default()
+                        .on_cancel(|_, _, _| true)
+                        .on_ok(move |_, window, cx| { save_for_kb(&ClickEvent::default(), window, cx) }),
+                )
+        });
+    }
+
+    /// Upload file local → remote.
+    /// Mở dialog nhập local path → sftp.upload() → poll progress trong background.
+    fn do_upload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        log::info!("SftpPanel::do_upload: cwd=\"{}\"", self.cwd.display());
+
+        let sftp = self.sftp.clone().unwrap();
+        let panel = cx.entity();
+        let cwd = self.cwd.clone();
+
+        let path_state = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("C:\\path\\to\\local\\file.txt")
+        });
+
+        let path_ok = path_state.clone();
+
+        let save_logic: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool> = Rc::new({
+            let path_ok = path_ok.clone();
+            let sftp = sftp.clone();
+            let cwd = cwd.clone();
+            let panel = panel.clone();
+            move |_, window, cx| {
+                let local = path_ok.read(cx).value().trim().to_string();
+                if local.is_empty() {
+                    window.push_notification("Local file path cannot be empty.", cx);
+                    return false;
+                }
+                let local_path = PathBuf::from(&local);
+
+                // Remote path: cwd / filename
+                let filename = local_path.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "uploaded".to_string());
+                let remote_path = cwd.join(&filename);
+
+                log::info!("SftpPanel: upload \"{}\" → \"{}\"", local_path.display(), remote_path.display());
+
+                let (progress_rx, result_rx) = sftp.upload(local_path, remote_path.clone());
+
+                window.push_notification(format!("Uploading \"{filename}\"..."), cx);
+
+
+                // Clone panel for spawn — save_logic is Fn, can be called multiple times.
+                let panel = panel.clone();
+                // Poll progress trong background
+                cx.spawn(async move |cx| {
+                    while let Ok(progress) = progress_rx.recv().await {
+                        log::debug!("SftpPanel: upload progress {:.0}%", progress * 100.0);
+                    }
+                    match result_rx.recv().await {
+                        Ok(Ok(())) => {
+                            log::info!("SftpPanel: upload OK");
+                            cx.update(|cx| {
+                                panel.update(cx, |this, cx| this.refresh(cx));
+                            });
+                        }
+                        Ok(Err(e)) => {
+                            log::error!("SftpPanel: upload failed: {e}");
+                        }
+                        Err(_) => {
+                            log::error!("SftpPanel: upload result channel closed");
+                        }
+                    }
+                }).detach();
+
+                true
+            }
+        });
+
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let save_for_click = save_logic.clone();
+            let save_for_kb = save_logic.clone();
+            dialog
+                .title("Upload File")
+                .w(px(440.))
+                .content({
+                    let path_state = path_state.clone();
+                    move |content, _window, cx| {
+                        content.child(
+                            v_flex().gap_1().w_full()
+                                .child(div().text_sm().text_color(cx.theme().foreground).child("Local file path"))
+                                .child(Input::new(&path_state))
+                        )
+                    }
+                })
+                .footer({
+                    DialogFooter::new()
+                        .child(
+                            Button::new("cancel").label("Cancel").outline()
+                                .on_click(|_, window, cx| { window.close_dialog(cx); })
+                        )
+                        .child(
+                            Button::new("upload").label("Upload").primary()
+                                .on_click(move |_, window, cx| {
+                                    if save_for_click(&ClickEvent::default(), window, cx) {
+                                        window.close_dialog(cx);
+                                    }
+                                })
+                        )
+                })
+                .button_props(
+                    DialogButtonProps::default()
+                        .on_cancel(|_, _, _| true)
+                        .on_ok(move |_, window, cx| { save_for_kb(&ClickEvent::default(), window, cx) }),
+                )
+        });
+    }
+
+    /// Download file remote → local.
+    /// Mở dialog nhập local save path → sftp.download() → poll progress.
+    fn do_download(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let entry = match self.selected_entry() {
+            Some(e) => e.clone(),
+            None => {
+                log::warn!("SftpPanel::do_download: no selection");
+                window.push_notification("Select a file to download.", cx);
+                return;
+            }
+        };
+
+        if entry.is_dir {
+            log::warn!("SftpPanel::do_download: cannot download directory");
+            window.push_notification("Cannot download a folder. Select a file.", cx);
+            return;
+        }
+
+        log::info!("SftpPanel::do_download: \"{}\"", entry.name);
+
+        let sftp = self.sftp.clone().unwrap();
+        let remote_path = entry.path.clone();
+        let entry_name = entry.name.clone();
+
+        let path_state = cx.new(|cx| {
+            let mut st = InputState::new(window, cx).placeholder("C:\\path\\to\\save\\here");
+            st.set_value(&entry_name, window, cx);
+            st
+        });
+
+        let path_ok = path_state.clone();
+
+        let save_logic: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool> = Rc::new({
+            let path_ok = path_ok.clone();
+            let sftp = sftp.clone();
+            let remote_path = remote_path.clone();
+            let entry_name = entry_name.clone();
+            move |_, window, cx| {
+                let local = path_ok.read(cx).value().trim().to_string();
+                if local.is_empty() {
+                    window.push_notification("Local save path cannot be empty.", cx);
+                    return false;
+                }
+                let local_path = PathBuf::from(&local);
+
+                log::info!("SftpPanel: download \"{}\" → \"{}\"", remote_path.display(), local_path.display());
+
+                let (progress_rx, result_rx) = sftp.download(remote_path.clone(), local_path);
+
+                window.push_notification(format!("Downloading \"{entry_name}\"..."), cx);
+
+                cx.spawn(async move |_cx| {
+                    while let Ok(progress) = progress_rx.recv().await {
+                        log::debug!("SftpPanel: download progress {:.0}%", progress * 100.0);
+                    }
+                    match result_rx.recv().await {
+                        Ok(Ok(())) => {
+                            log::info!("SftpPanel: download OK");
+                        }
+                        Ok(Err(e)) => {
+                            log::error!("SftpPanel: download failed: {e}");
+                        }
+                        Err(_) => {
+                            log::error!("SftpPanel: download result channel closed");
+                        }
+                    }
+                }).detach();
+
+                true
+            }
+        });
+
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let save_for_click = save_logic.clone();
+            let save_for_kb = save_logic.clone();
+            dialog
+                .title("Download File")
+                .w(px(440.))
+                .content({
+                    let path_state = path_state.clone();
+                    move |content, _window, cx| {
+                        content.child(
+                            v_flex().gap_1().w_full()
+                                .child(div().text_sm().text_color(cx.theme().foreground).child("Local save path"))
+                                .child(Input::new(&path_state))
+                        )
+                    }
+                })
+                .footer({
+                    DialogFooter::new()
+                        .child(
+                            Button::new("cancel").label("Cancel").outline()
+                                .on_click(|_, window, cx| { window.close_dialog(cx); })
+                        )
+                        .child(
+                            Button::new("download").label("Download").primary()
+                                .on_click(move |_, window, cx| {
+                                    if save_for_click(&ClickEvent::default(), window, cx) {
+                                        window.close_dialog(cx);
+                                    }
+                                })
+                        )
+                })
+                .button_props(
+                    DialogButtonProps::default()
+                        .on_cancel(|_, _, _| true)
+                        .on_ok(move |_, window, cx| { save_for_kb(&ClickEvent::default(), window, cx) }),
+                )
+        });
+    }
+
     // ── Render helpers ────────────────────────────────────────
 
     /// Render khi không có SFTP connection.
@@ -491,6 +969,96 @@ impl SftpPanel {
                     .text_sm()
                     .text_color(muted)
                     .child(self.cwd.display().to_string()),
+            )
+    }
+
+    /// Render toolbar: Upload, Download, Rename, Delete, New Folder buttons.
+    fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let danger_fg = theme.danger_foreground;
+
+        h_flex()
+            .w_full()
+            .h_8()
+            .flex_shrink_0()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .border_b_1()
+            .border_color(theme.border)
+            // New Folder
+            .child(
+                Button::new("sftp-new-folder")
+                    .label("New Folder")
+                    .icon(Icon::new(IconName::Plus).xsmall())
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.do_new_folder(window, cx);
+                    })),
+            )
+            // Upload
+            .child(
+                Button::new("sftp-upload")
+                    .label("Upload")
+                    .icon(Icon::new(IconName::ArrowUp).xsmall())
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.do_upload(window, cx);
+                    })),
+            )
+            // Download
+            .child(
+                Button::new("sftp-download")
+                    .label("Download")
+                    .icon(Icon::new(IconName::ArrowDown).xsmall())
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.do_download(window, cx);
+                    })),
+            )
+            // Rename
+            .child(
+                Button::new("sftp-rename")
+                    .label("Rename")
+                    .icon(Icon::new(IconName::Replace).xsmall())
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.do_rename(window, cx);
+                    })),
+            )
+            // Delete (danger)
+            .child(
+                Button::new("sftp-delete")
+                    .label("Delete")
+                    .icon(Icon::new(IconName::Delete).xsmall())
+                    .small()
+                    .ghost()
+                    .text_color(danger_fg)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.do_delete(window, cx);
+                    })),
+            )
+            // Spacer
+            .child(div().flex_1())
+            // Selection info
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(
+                        self.selected
+                            .map(|ix| {
+                                self.entries.get(ix)
+                                    .map(|e| format!("{} selected", e.name))
+                                    .unwrap_or_else(|| "? selected".to_string())
+                            })
+                            .unwrap_or_else(|| "No selection".to_string()),
+                    ),
             )
     }
 
@@ -831,6 +1399,7 @@ impl Render for SftpPanel {
             .track_focus(&self.focus_handle)
             .bg(theme.background)
             .child(self.render_breadcrumb(cx))
+            .child(self.render_toolbar(cx))
             .child(self.render_file_list(cx))
             .into_any_element()
     }
