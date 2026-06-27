@@ -15,17 +15,18 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, ParentElement, Render, StatefulInteractiveElement,
     Styled, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, WindowExt as _,
+    ActiveTheme, Disableable as _, Icon, IconName, Sizable, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dialog::{DialogButtonProps, DialogFooter},
     dock::{Panel, PanelControl, PanelEvent},
-    h_flex, input::{Input, InputState}, v_flex,
+    h_flex, input::{Input, InputState}, progress::Progress, v_flex,
 };
 use myterm2_core::{FileEntry, SftpBackend};
 
@@ -226,6 +227,33 @@ const COLUMNS: &[ColumnDef] = &[
     ColumnDef { col: SortColumn::Group, label: "Group", width: Some(80.0), right_align: false },
 ];
 
+// ── Transfer queue ──────────────────────────────────────────
+
+/// Hướng transfer.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum TransferDirection {
+    Upload,
+    Download,
+}
+
+/// Trạng thái transfer.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum TransferStatus {
+    InProgress,
+    Completed,
+    Error,
+}
+
+/// Một item trong transfer queue.
+struct TransferItem {
+    id: usize,
+    direction: TransferDirection,
+    filename: String,
+    progress: f64,  // 0.0 – 1.0
+    status: TransferStatus,
+    error: Option<String>,
+}
+
 // ── SftpPanel ────────────────────────────────────────────────
 
 /// Panel hiển thị SFTP browser.
@@ -248,6 +276,10 @@ pub struct SftpPanel {
     // ── Sort state ───────────────────────────────────────────
     sort_col: SortColumn,
     sort_dir: SortDir,
+
+    // ── Transfer queue state ────────────────────────────────
+    transfers: Vec<TransferItem>,
+    next_transfer_id: usize,
 }
 
 impl SftpPanel {
@@ -271,6 +303,7 @@ impl SftpPanel {
                 this.selected = None;
                 this.error = None;
                 this.cwd = PathBuf::new();
+                this.transfers.clear();
                 if this.sftp.is_some() {
                     log::debug!("SftpPanel: loading initial dir \".\"");
                     this.load_dir(PathBuf::from("."), cx);
@@ -290,6 +323,8 @@ impl SftpPanel {
             error: None,
             sort_col: SortColumn::Name,
             sort_dir: SortDir::Asc,
+            transfers: Vec::new(),
+            next_transfer_id: 0,
         }
     }
 
@@ -724,30 +759,80 @@ impl SftpPanel {
 
                 log::info!("SftpPanel: upload \"{}\" → \"{}\"", local_path.display(), remote_path.display());
 
-                let (progress_rx, result_rx) = sftp.upload(local_path, remote_path.clone());
+                let (progress_rx, result_rx) = sftp.upload(local_path, remote_path);
 
                 window.push_notification(format!("Uploading \"{filename}\"..."), cx);
 
+                // Add TransferItem to panel — get transfer_id for spawn task.
+                let panel_clone = panel.clone();
+                let transfer_id = panel.update(cx, |this, cx| {
+                    let id = this.next_transfer_id;
+                    this.next_transfer_id += 1;
+                    this.transfers.push(TransferItem {
+                        id,
+                        direction: TransferDirection::Upload,
+                        filename: filename.clone(),
+                        progress: 0.0,
+                        status: TransferStatus::InProgress,
+                        error: None,
+                    });
+                    log::debug!("SftpPanel: added transfer #{id} upload \"{filename}\"");
+                    cx.notify();
+                    id
+                });
 
                 // Clone panel for spawn — save_logic is Fn, can be called multiple times.
-                let panel = panel.clone();
-                // Poll progress trong background
+                let panel = panel_clone.clone();
+                // Poll progress trong background → update TransferItem.
                 cx.spawn(async move |cx| {
                     while let Ok(progress) = progress_rx.recv().await {
-                        log::debug!("SftpPanel: upload progress {:.0}%", progress * 100.0);
+                        log::debug!("SftpPanel: upload #{transfer_id} progress {:.0}%", progress * 100.0);
+                        cx.update(|cx| {
+                            panel.update(cx, |this, cx| {
+                                if let Some(item) = this.transfers.iter_mut().find(|t| t.id == transfer_id) {
+                                    item.progress = progress;
+                                    cx.notify();
+                                }
+                            });
+                        });
                     }
                     match result_rx.recv().await {
                         Ok(Ok(())) => {
-                            log::info!("SftpPanel: upload OK");
+                            log::info!("SftpPanel: upload #{transfer_id} OK");
                             cx.update(|cx| {
-                                panel.update(cx, |this, cx| this.refresh(cx));
+                                panel.update(cx, |this, cx| {
+                                    if let Some(item) = this.transfers.iter_mut().find(|t| t.id == transfer_id) {
+                                        item.status = TransferStatus::Completed;
+                                        item.progress = 1.0;
+                                    }
+                                    this.refresh(cx);
+                                    cx.notify();
+                                });
                             });
                         }
                         Ok(Err(e)) => {
-                            log::error!("SftpPanel: upload failed: {e}");
+                            log::error!("SftpPanel: upload #{transfer_id} failed: {e}");
+                            cx.update(|cx| {
+                                panel.update(cx, |this, cx| {
+                                    if let Some(item) = this.transfers.iter_mut().find(|t| t.id == transfer_id) {
+                                        item.status = TransferStatus::Error;
+                                        item.error = Some(e.to_string());
+                                    }
+                                    cx.notify();
+                                });
+                            });
                         }
                         Err(_) => {
-                            log::error!("SftpPanel: upload result channel closed");
+                            log::error!("SftpPanel: upload #{transfer_id} result channel closed");
+                            cx.update(|cx| {
+                                panel.update(cx, |this, cx| {
+                                    if let Some(item) = this.transfers.iter_mut().find(|t| t.id == transfer_id) {
+                                        item.status = TransferStatus::Error;
+                                        item.error = Some("channel closed".to_string());
+                                    }
+                                    cx.notify();
+                                });
+                            });
                         }
                     }
                 }).detach();
@@ -816,6 +901,7 @@ impl SftpPanel {
         log::info!("SftpPanel::do_download: \"{}\"", entry.name);
 
         let sftp = self.sftp.clone().unwrap();
+        let panel = cx.entity();
         let remote_path = entry.path.clone();
         let entry_name = entry.name.clone();
 
@@ -830,6 +916,7 @@ impl SftpPanel {
         let save_logic: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool> = Rc::new({
             let path_ok = path_ok.clone();
             let sftp = sftp.clone();
+            let panel = panel.clone();
             let remote_path = remote_path.clone();
             let entry_name = entry_name.clone();
             move |_, window, cx| {
@@ -846,19 +933,73 @@ impl SftpPanel {
 
                 window.push_notification(format!("Downloading \"{entry_name}\"..."), cx);
 
-                cx.spawn(async move |_cx| {
+                // Add TransferItem to panel — get transfer_id for spawn task.
+                let transfer_id = panel.update(cx, |this, cx| {
+                    let id = this.next_transfer_id;
+                    this.next_transfer_id += 1;
+                    this.transfers.push(TransferItem {
+                        id,
+                        direction: TransferDirection::Download,
+                        filename: entry_name.clone(),
+                        progress: 0.0,
+                        status: TransferStatus::InProgress,
+                        error: None,
+                    });
+                    log::debug!("SftpPanel: added transfer #{id} download \"{entry_name}\"");
+                    cx.notify();
+                    id
+                });
+
+                // Clone panel for spawn — save_logic is Fn, can be called multiple times.
+                let panel = panel.clone();
+                cx.spawn(async move |cx| {
                     while let Ok(progress) = progress_rx.recv().await {
-                        log::debug!("SftpPanel: download progress {:.0}%", progress * 100.0);
+                        log::debug!("SftpPanel: download #{transfer_id} progress {:.0}%", progress * 100.0);
+                        cx.update(|cx| {
+                            panel.update(cx, |this, cx| {
+                                if let Some(item) = this.transfers.iter_mut().find(|t| t.id == transfer_id) {
+                                    item.progress = progress;
+                                    cx.notify();
+                                }
+                            });
+                        });
                     }
                     match result_rx.recv().await {
                         Ok(Ok(())) => {
-                            log::info!("SftpPanel: download OK");
+                            log::info!("SftpPanel: download #{transfer_id} OK");
+                            cx.update(|cx| {
+                                panel.update(cx, |this, cx| {
+                                    if let Some(item) = this.transfers.iter_mut().find(|t| t.id == transfer_id) {
+                                        item.status = TransferStatus::Completed;
+                                        item.progress = 1.0;
+                                    }
+                                    cx.notify();
+                                });
+                            });
                         }
                         Ok(Err(e)) => {
-                            log::error!("SftpPanel: download failed: {e}");
+                            log::error!("SftpPanel: download #{transfer_id} failed: {e}");
+                            cx.update(|cx| {
+                                panel.update(cx, |this, cx| {
+                                    if let Some(item) = this.transfers.iter_mut().find(|t| t.id == transfer_id) {
+                                        item.status = TransferStatus::Error;
+                                        item.error = Some(e.to_string());
+                                    }
+                                    cx.notify();
+                                });
+                            });
                         }
                         Err(_) => {
-                            log::error!("SftpPanel: download result channel closed");
+                            log::error!("SftpPanel: download #{transfer_id} result channel closed");
+                            cx.update(|cx| {
+                                panel.update(cx, |this, cx| {
+                                    if let Some(item) = this.transfers.iter_mut().find(|t| t.id == transfer_id) {
+                                        item.status = TransferStatus::Error;
+                                        item.error = Some("channel closed".to_string());
+                                    }
+                                    cx.notify();
+                                });
+                            });
                         }
                     }
                 }).detach();
@@ -1062,6 +1203,151 @@ impl SftpPanel {
             )
     }
 
+
+    /// Clear completed and errored transfers.
+    fn clear_completed_transfers(&mut self, cx: &mut Context<Self>) {
+        let before = self.transfers.len();
+        self.transfers.retain(|t| t.status == TransferStatus::InProgress);
+        let removed = before - self.transfers.len();
+        if removed > 0 {
+            log::debug!("SftpPanel: cleared {removed} completed/errored transfers");
+        }
+        cx.notify();
+    }
+
+    /// Render transfer queue — hiển thị progress cho ongoing transfers.
+    /// Chỉ render khi self.transfers không rỗng.
+    fn render_transfer_queue(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.transfers.is_empty() {
+            return div().into_any_element();
+        }
+
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let accent = theme.accent;
+        let danger = theme.danger;
+
+        // Count active vs completed
+        let active_count = self.transfers.iter().filter(|t| t.status == TransferStatus::InProgress).count();
+        let completed_count = self.transfers.len() - active_count;
+
+        let mut queue = v_flex()
+            .w_full()
+            .flex_shrink_0()
+            .max_h(px(200.0))
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.muted.opacity(0.15));
+
+        // Header: "Transfers" + count + Clear button
+        queue = queue.child(
+            h_flex()
+                .w_full()
+                .h_7()
+                .flex_shrink_0()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .child(
+                    div().text_xs().text_color(muted)
+                        .child("Transfers"),
+                )
+                .child(
+                    div().text_xs().text_color(muted)
+                        .child(format!("{active_count} active, {completed_count} done")),
+                )
+                .child(div().flex_1())
+                .child(
+                    Button::new("sftp-clear-transfers")
+                        .label("Clear")
+                        .xsmall()
+                        .ghost()
+                        .disabled(completed_count == 0)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.clear_completed_transfers(cx);
+                        })),
+                )
+        );
+
+        // Transfer items
+        let mut list = v_flex().id("sftp-transfer-list").w_full().overflow_y_scroll();
+
+        for item in &self.transfers {
+            // Direction icon
+            let dir_icon = match item.direction {
+                TransferDirection::Upload => Icon::new(IconName::ArrowUp).xsmall().text_color(accent),
+                TransferDirection::Download => Icon::new(IconName::ArrowDown).xsmall().text_color(accent),
+            };
+
+            // Status indicator color
+            let progress_color = match item.status {
+                TransferStatus::InProgress => accent,
+                TransferStatus::Completed => theme.success,
+                TransferStatus::Error => danger,
+            };
+
+            list = list.child(
+                h_flex()
+                    .w_full()
+                    .h_6()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    // Direction icon
+                    .child(div().w_4().flex_shrink_0().child(dir_icon))
+                    // Filename
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .truncate()
+                            .text_color(theme.foreground)
+                            .child(item.filename.clone()),
+                    )
+                    // Progress bar
+                    .child(
+                        div()
+                            .w(px(80.0))
+                            .flex_shrink_0()
+                            .child(
+                                Progress::new(gpui::ElementId::NamedInteger("sftp-transfer".into(), item.id as u64))
+                                    .xsmall()
+                                    .color(progress_color)
+                                    .value((item.progress * 100.0) as f32)
+                            ),
+                    )
+                    // Percentage + status
+                    .child(
+                        div()
+                            .w(px(50.0))
+                            .flex_shrink_0()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(match item.status {
+                                TransferStatus::InProgress => format!("{:.0}%", item.progress * 100.0),
+                                TransferStatus::Completed => "Done".to_string(),
+                                TransferStatus::Error => "Error".to_string(),
+                            }),
+                    )
+                    // Error message (if any)
+                    .when(item.error.is_some(), |this| {
+                        this.child(
+                            div()
+                                .flex_shrink_0()
+                                .text_xs()
+                                .text_color(danger)
+                                .truncate()
+                                .child(item.error.clone().unwrap_or_default()),
+                        )
+                    }),
+            );
+        }
+
+        queue = queue.child(list);
+        queue.into_any_element()
+    }
     /// Render column headers — clickable để sort, có sort indicator.
     fn render_column_headers(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let theme = cx.theme();
@@ -1400,6 +1686,7 @@ impl Render for SftpPanel {
             .bg(theme.background)
             .child(self.render_breadcrumb(cx))
             .child(self.render_toolbar(cx))
+            .child(self.render_transfer_queue(cx))
             .child(self.render_file_list(cx))
             .into_any_element()
     }

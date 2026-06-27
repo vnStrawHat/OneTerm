@@ -1323,14 +1323,14 @@ Bước 1: Dependency + types
 
 #### Bước 8: SftpPanel — transfer queue
 
-- [ ] `TransferItem` struct (direction, filename, progress, status, error)
-- [ ] Render transfer queue section (dưới action toolbar)
-- [ ] Progress bar cho mỗi transfer (0% – 100%)
-- [ ] Status icon: ⬆/⬇ + ✓/✗/⏳
-- [ ] Spawn task poll progress channel → update UI
-- [ ] Clear completed transfers (button hoặc auto-remove sau 5s)
-- [ ] Cancel transfer (nếu hỗ trợ — cần `sftp_task` xử lý cancel)
-- [ ] `cargo build` pass + manual test (upload file lớn + gõ lệnh terminal)
+- [x] `TransferItem` struct (direction, filename, progress, status, error)
+- [x] Render transfer queue section (dưới action toolbar)
+- [x] Progress bar cho mỗi transfer (0% – 100%)
+- [x] Status icon: ⬆/⬇ + ✓/✗/⏳
+- [x] Spawn task poll progress channel → update UI
+- [x] Clear completed transfers (button hoặc auto-remove sau 5s)
+- [ ] Cancel transfer (nếu hỗ trợ — cần `sftp_task` xử lý cancel) — *skipped: backend chưa hỗ trợ cancel channel*
+- [x] `cargo build` pass + manual test (upload file lớn + gõ lệnh terminal)
 
 #### Bước 9: SftpPanel — detail dialog + context menu
 
