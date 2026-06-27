@@ -1334,12 +1334,12 @@ Bước 1: Dependency + types
 
 #### Bước 9: SftpPanel — detail dialog + context menu
 
-- [ ] Context menu cho file: Download, Rename, Delete, Properties
-- [ ] Context menu cho folder: Open, Download, Rename, Delete, Properties
-- [ ] Context menu cho empty area: Upload, New Folder, Refresh
-- [ ] Detail dialog: `sftp.stat()` → hiển thị size, modified, permissions, uid, gid
-- [ ] Permissions hiển thị dạng `rwxr-xr-x (755)`
-- [ ] `cargo build` pass + manual test
+- [x] Context menu cho file: Download, Rename, Delete, Properties
+- [x] Context menu cho folder: Open, Rename, Delete, Properties (không Download — folder download bị block từ bước 7)
+- [x] Context menu cho empty area: Upload, New Folder, Refresh
+- [x] Detail dialog: `sftp.stat()` → hiển thị size, modified, permissions, uid, gid, accessed, owner, group, path
+- [x] Permissions hiển thị dạng `rwxr-xr-x (0775)`
+- [x] `cargo build` pass + manual test
 
 ### 5.3. Trait abstraction cho SFTP (giải quyết core ↔ ssh)
 

@@ -26,9 +26,9 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     dialog::{DialogButtonProps, DialogFooter},
     dock::{Panel, PanelControl, PanelEvent},
-    h_flex, input::{Input, InputState}, progress::Progress, v_flex,
+    h_flex, input::{Input, InputState}, menu::{ContextMenuExt as _, PopupMenuItem}, progress::Progress, v_flex,
 };
-use myterm2_core::{FileEntry, SftpBackend};
+use myterm2_core::{FileEntry, FileStat, SftpBackend};
 
 use crate::state::AppState;
 
@@ -60,6 +60,23 @@ impl SortDir {
             SortDir::Desc => SortDir::Asc,
         }
     }
+}
+
+// ── Pending action (for context menu → render execution) ─────
+
+/// Action được trigger từ context menu, thực thi trong `render()`.
+/// Context menu `on_click` chỉ có `&mut App`, không có `&mut Window`,
+/// nên dùng pattern: set flag → render() executes với full `&mut Window` + `&mut Context<Self>`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum PendingAction {
+    Open(usize),   // Navigate vào folder
+    Download,
+    Rename,
+    Delete,
+    Properties,
+    Upload,
+    NewFolder,
+    Refresh,
 }
 
 // ── Helpers: formatting ──────────────────────────────────────
@@ -280,6 +297,9 @@ pub struct SftpPanel {
     // ── Transfer queue state ────────────────────────────────
     transfers: Vec<TransferItem>,
     next_transfer_id: usize,
+
+    // ── Pending action (context menu → render) ──────────────
+    pending_action: Option<PendingAction>,
 }
 
 impl SftpPanel {
@@ -304,6 +324,7 @@ impl SftpPanel {
                 this.error = None;
                 this.cwd = PathBuf::new();
                 this.transfers.clear();
+                this.pending_action = None;
                 if this.sftp.is_some() {
                     log::debug!("SftpPanel: loading initial dir \".\"");
                     this.load_dir(PathBuf::from("."), cx);
@@ -325,6 +346,7 @@ impl SftpPanel {
             sort_dir: SortDir::Asc,
             transfers: Vec::new(),
             next_transfer_id: 0,
+            pending_action: None,
         }
     }
 
@@ -1047,7 +1069,130 @@ impl SftpPanel {
         });
     }
 
-    // ── Render helpers ────────────────────────────────────────
+
+    /// Show properties dialog — sftp.stat() → hiển thị metadata chi tiết.
+    fn do_properties(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let entry = match self.selected_entry() {
+            Some(e) => e.clone(),
+            None => {
+                log::warn!("SftpPanel::do_properties: no selection");
+                window.push_notification("Select a file or folder to view properties.", cx);
+                return;
+            }
+        };
+
+        log::info!("SftpPanel::do_properties: \"{}\"", entry.name);
+
+        let sftp = self.sftp.clone().unwrap();
+        let stat: FileStat = match sftp.stat(entry.path.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("SftpPanel: stat failed: {e}");
+                window.push_notification(format!("Failed to get properties: {e}"), cx);
+                return;
+            }
+        };
+
+        log::debug!("SftpPanel: stat OK — size={}, perm={:#o}, uid={:?}, gid={:?}",
+            stat.size, stat.permissions, stat.uid, stat.gid);
+
+        // Build detail rows — wrap in Rc for sharing across Fn closures.
+        let kind_str = if stat.is_dir { "Folder" } else { "File" };
+        let size_text = Rc::new(if stat.is_dir {
+            "-".to_string()
+        } else {
+            format!("{} ({} bytes)", format_size(stat.size), stat.size)
+        });
+        let modified_text = Rc::new(format_date(stat.modified));
+        let accessed_text = Rc::new(format_date(stat.accessed));
+        let perm_text = Rc::new(format_permissions(stat.permissions));
+        let owner_text = Rc::new(format_owner(stat.owner.as_deref(), stat.uid));
+        let group_text = Rc::new(format_owner(stat.group.as_deref(), stat.gid));
+        let path_text = Rc::new(stat.path.display().to_string());
+        let name_text = Rc::new(stat.name.clone());
+        let is_symlink = stat.is_symlink;
+
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            // Clone Rc values here so content closure can capture them by move.
+            let name_text = name_text.clone();
+            let size_text = size_text.clone();
+            let modified_text = modified_text.clone();
+            let accessed_text = accessed_text.clone();
+            let perm_text = perm_text.clone();
+            let owner_text = owner_text.clone();
+            let group_text = group_text.clone();
+            let path_text = path_text.clone();
+
+            dialog
+                .title("Properties")
+                .w(px(480.))
+                .content(move |content, _window, cx| {
+                    let theme = cx.theme();
+                    let label_w = px(100.0);
+                    let muted = theme.muted_foreground;
+
+                    // Helper: label + value row.
+                    let row = |label: &str, value: String| {
+                        h_flex()
+                            .w_full()
+                            .gap_2()
+                            .py_1()
+                            .child(
+                                div()
+                                    .w(label_w)
+                                    .flex_shrink_0()
+                                    .text_sm()
+                                    .text_color(muted)
+                                    .child(label.to_string()),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_sm()
+                                    .text_color(theme.foreground)
+                                    .truncate()
+                                    .child(value),
+                            )
+                    };
+
+                    content.child(
+                        v_flex()
+                            .gap_0()
+                            .w_full()
+                            .child(row("Name:", (*name_text).clone()))
+                            .child(row("Type:", format!("{kind_str}{}", if is_symlink { " (symlink)" } else { "" })))
+                            .child(row("Size:", (*size_text).clone()))
+                            .child(row("Modified:", (*modified_text).clone()))
+                            .child(row("Accessed:", (*accessed_text).clone()))
+                            .child(row("Permissions:", (*perm_text).clone()))
+                            .child(row("Owner:", (*owner_text).clone()))
+                            .child(row("Group:", (*group_text).clone()))
+                            .child(row("Path:", (*path_text).clone())),
+                    )
+                })
+                .footer({
+                    DialogFooter::new().child(
+                        Button::new("close")
+                            .label("Close")
+                            .primary()
+                            .on_click(|_, window, cx| {
+                                window.close_dialog(cx);
+                            }),
+                    )
+                })
+                .button_props(
+                    DialogButtonProps::default()
+                        .on_cancel(|_, _, _| true)
+                        .on_ok(|_, window, cx| {
+                            window.close_dialog(cx);
+                            true
+                        }),
+                )
+        });
+    }
+
+
 
     /// Render khi không có SFTP connection.
     fn render_no_connection(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1182,6 +1327,17 @@ impl SftpPanel {
                     .text_color(danger_fg)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.do_delete(window, cx);
+                    })),
+            )
+            // Properties
+            .child(
+                Button::new("sftp-properties")
+                    .label("Properties")
+                    .icon(Icon::new(IconName::Info).xsmall())
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.do_properties(window, cx);
                     })),
             )
             // Spacer
@@ -1506,6 +1662,102 @@ impl SftpPanel {
                 }
                 cx.notify();
             }))
+            // Context menu — right-click trên entry row.
+            .context_menu({
+                let panel = cx.entity();
+                let is_dir = entry.is_dir;
+                move |menu, _window: &mut Window, cx| {
+                    // Select entry on right-click.
+                    panel.update(cx, |this, cx| {
+                        this.selected = Some(idx);
+                        cx.notify();
+                    });
+
+                    log::debug!("SftpPanel: context menu for entry {idx} (is_dir={is_dir})");
+
+                    // Build menu — first item depends on type.
+                    let menu = if is_dir {
+                        menu.item(PopupMenuItem::new("Open").on_click({
+                            let panel = panel.clone();
+                            move |_, _window, cx| {
+                                panel.update(cx, |this, cx| {
+                                    this.pending_action = Some(PendingAction::Open(idx));
+                                    cx.notify();
+                                });
+                            }
+                        }))
+                    } else {
+                        menu.item(PopupMenuItem::new("Download").on_click({
+                            let panel = panel.clone();
+                            move |_, _window, cx| {
+                                panel.update(cx, |this, cx| {
+                                    this.pending_action = Some(PendingAction::Download);
+                                    cx.notify();
+                                });
+                            }
+                        }))
+                    };
+
+                    menu
+                        .separator()
+                        .item(PopupMenuItem::new("Rename").on_click({
+                            let panel = panel.clone();
+                            move |_, _window, cx| {
+                                panel.update(cx, |this, cx| {
+                                    this.pending_action = Some(PendingAction::Rename);
+                                    cx.notify();
+                                });
+                            }
+                        }))
+                        .item(PopupMenuItem::new("Delete").on_click({
+                            let panel = panel.clone();
+                            move |_, _window, cx| {
+                                panel.update(cx, |this, cx| {
+                                    this.pending_action = Some(PendingAction::Delete);
+                                    cx.notify();
+                                });
+                            }
+                        }))
+                        .separator()
+                        .item(PopupMenuItem::new("Properties").on_click({
+                            let panel = panel.clone();
+                            move |_, _window, cx| {
+                                panel.update(cx, |this, cx| {
+                                    this.pending_action = Some(PendingAction::Properties);
+                                    cx.notify();
+                                });
+                            }
+                        }))
+                        .separator()
+                        .item(PopupMenuItem::new("Upload").on_click({
+                            let panel = panel.clone();
+                            move |_, _window, cx| {
+                                panel.update(cx, |this, cx| {
+                                    this.pending_action = Some(PendingAction::Upload);
+                                    cx.notify();
+                                });
+                            }
+                        }))
+                        .item(PopupMenuItem::new("New Folder").on_click({
+                            let panel = panel.clone();
+                            move |_, _window, cx| {
+                                panel.update(cx, |this, cx| {
+                                    this.pending_action = Some(PendingAction::NewFolder);
+                                    cx.notify();
+                                });
+                            }
+                        }))
+                        .item(PopupMenuItem::new("Refresh").on_click({
+                            let panel = panel.clone();
+                            move |_, _window, cx| {
+                                panel.update(cx, |this, cx| {
+                                    this.pending_action = Some(PendingAction::Refresh);
+                                    cx.notify();
+                                });
+                            }
+                        }))
+                }
+            })
             // Row content: h_flex with all columns matching header widths.
             .child(
                 h_flex()
@@ -1609,13 +1861,50 @@ impl SftpPanel {
         }
 
         if self.entries.is_empty() {
+            let panel = cx.entity();
             return div()
+                .id("sftp-empty-area")
                 .flex_1()
                 .flex()
                 .items_center()
                 .justify_center()
                 .text_color(theme.muted_foreground)
                 .child("Empty directory.")
+                .context_menu({
+                    let panel = panel.clone();
+                    move |menu, _window: &mut Window, _cx| {
+                        log::debug!("SftpPanel: context menu for empty area");
+                        menu
+                            .item(PopupMenuItem::new("Upload").on_click({
+                                let panel = panel.clone();
+                                move |_, _window, cx| {
+                                    panel.update(cx, |this, cx| {
+                                        this.pending_action = Some(PendingAction::Upload);
+                                        cx.notify();
+                                    });
+                                }
+                            }))
+                            .item(PopupMenuItem::new("New Folder").on_click({
+                                let panel = panel.clone();
+                                move |_, _window, cx| {
+                                    panel.update(cx, |this, cx| {
+                                        this.pending_action = Some(PendingAction::NewFolder);
+                                        cx.notify();
+                                    });
+                                }
+                            }))
+                            .separator()
+                            .item(PopupMenuItem::new("Refresh").on_click({
+                                let panel = panel.clone();
+                                move |_, _window, cx| {
+                                    panel.update(cx, |this, cx| {
+                                        this.pending_action = Some(PendingAction::Refresh);
+                                        cx.notify();
+                                    });
+                                }
+                            }))
+                    }
+                })
                 .into_any_element();
         }
 
@@ -1673,6 +1962,21 @@ impl Panel for SftpPanel {
 
 impl Render for SftpPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Execute pending action from context menu.
+        if let Some(action) = self.pending_action.take() {
+            log::debug!("SftpPanel: executing pending action: {action:?}");
+            match action {
+                PendingAction::Open(idx) => self.navigate_into(idx, cx),
+                PendingAction::Download => self.do_download(_window, cx),
+                PendingAction::Rename => self.do_rename(_window, cx),
+                PendingAction::Delete => self.do_delete(_window, cx),
+                PendingAction::Properties => self.do_properties(_window, cx),
+                PendingAction::Upload => self.do_upload(_window, cx),
+                PendingAction::NewFolder => self.do_new_folder(_window, cx),
+                PendingAction::Refresh => self.refresh(cx),
+            }
+        }
+
         if self.sftp.is_none() {
             return self.render_no_connection(cx).into_any_element();
         }
