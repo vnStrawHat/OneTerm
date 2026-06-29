@@ -31,10 +31,10 @@ try {
         $releaseDir = Join-Path $repoRoot "target/release"
         $distName   = "myterm2-$hostTriple"
     }
-    if ($LASTEXITCODE -ne 0) { throw "Build thất bại." }
+    if ($LASTEXITCODE -ne 0) { throw "Build Error." }
 
     $exe = Join-Path $releaseDir "myterm2.exe"
-    if (-not (Test-Path $exe)) { throw "Không tìm thấy $exe." }
+    if (-not (Test-Path $exe)) { throw "$exe Not found." }
     Write-Host "OK: $exe" -ForegroundColor Green
 
     if ($NoDist) { return }
@@ -58,7 +58,7 @@ try {
         }
     }
 
-    Write-Host "==> dist staged tại: $distDir" -ForegroundColor Green
+    Write-Host "==> dist staged : $distDir" -ForegroundColor Green
     Get-ChildItem -Recurse $distDir | ForEach-Object { Write-Host "  $($_.FullName.Substring($distDir.Length+1))" }
 }
 finally {
