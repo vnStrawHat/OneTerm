@@ -207,6 +207,19 @@ impl TableDelegate for SftpTableDelegate {
     }
 
 
+    fn render_th(
+        &mut self,
+        col_ix: usize,
+        _: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        div()
+            .size_full()
+            .items_center()
+            .text_color(theme.foreground)
+            .child(self.visible_cfg(col_ix).map_or(String::new(), |cfg| cfg.label.to_string()))
+    }
     fn render_tr(
         &mut self,
         row_ix: usize,
