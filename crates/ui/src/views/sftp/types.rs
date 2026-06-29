@@ -295,8 +295,8 @@ pub(crate) fn default_column_configs() -> Vec<SftpColumnConfig> {
     vec![
         SftpColumnConfig::new(SortColumn::Name, "Name", 320.0, false),
         SftpColumnConfig::new(SortColumn::Modified, "Date Modified", 140.0, false),
-        SftpColumnConfig::new(SortColumn::Size, "Size", 80.0, true),
         SftpColumnConfig::new(SortColumn::Permissions, "Permissions", 150.0, false),
+        SftpColumnConfig::new(SortColumn::Size, "Size", 80.0, true),
         SftpColumnConfig::new(SortColumn::Owner, "Owner", 90.0, false),
         SftpColumnConfig::new(SortColumn::Group, "Group", 90.0, false),
     ]
