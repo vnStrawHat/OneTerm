@@ -8,7 +8,7 @@ use gpui::{
     Context, InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled, Window, div,
 };
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _,
+    ActiveTheme as _, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::Input,
@@ -41,8 +41,6 @@ impl Render for SessionPanel {
             .w_full()
             .px_3()
             .py_2()
-            .border_b_1()
-            .border_color(theme.border)
             .items_center()
             .gap_2()
             .child(
@@ -52,22 +50,17 @@ impl Render for SessionPanel {
                     .flex_1()
                     .min_w_0()
                     .child(
-                        Icon::new(IconName::Search)
-                            .xsmall()
-                            .text_color(theme.muted_foreground)
-                            .flex_shrink_0(),
-                    )
-                    .child(Input::new(&search_state).small().flex_1()),
-            )
-            .child(
-                Button::new("new-session-btn")
-                    .small()
-                    .ghost()
-                    .icon(IconName::Plus)
-                    .tooltip("New SSH Session")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.on_new_session(&NewSession, window, cx);
-                    })),
+                        Input::new(&search_state)
+                            .small()
+                            .flex_1()
+                            // Input mặc định border_1 (4 cạnh) → chỉ giữ border bottom.
+                            .border_b_1()
+                            .border_t_0()
+                            .border_l_0()
+                            .border_r_0()
+                            // Nền trong suốt — bỏ bg mặc định của Input.
+                            .bg(gpui::transparent_black()),
+                    ),
             );
 
         // Empty state — không có session nào.

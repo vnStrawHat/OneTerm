@@ -91,13 +91,21 @@ pub fn init(cx: &mut App) {
     // định cố định ở đây (sau Theme::change để không bị apply_config override —
     // theme JSON không khai báo radius, nên config.radius = None).
     //
-    // - radius = 0px, radius_lg = 0px: bỏ bo góc, UI sharp/góc cạnh.
+    // - radius = sub-pixel (0.001px), radius_lg = 0px: UI sharp/góc cạnh.
     // - scrollbar_show = Scrolling: hiện scrollbar khi cuộn, tự ẩn khi idle.
     //   (gpui_component::init có thể đã set = Hover qua sync_scrollbar_appearance,
     //   nên ép lại = Scrolling ở đây.)
+    //
+    // NOTE về radius ≠ 0:
+    // gpui-component ép thumb scrollbar vuông khi `theme.radius.is_zero()`
+    // (scroll/scrollbar.rs:765). Mục đích muốn thumb scrollbar bo tròn theo
+    // THUMB_RADIUS, nên dùng giá trị sub-pixel ≠ 0 → is_zero() = false → thumb
+    // được bo tròn. Mọi component khác dùng `.rounded(theme.radius)` vẫn render
+    // góc vuông (0.001px < sub-pixel, không nhìn thấy). Slider/PieChart cũng gate
+    // trên is_zero nhưng project không dùng → không ảnh hưởng.
     {
         let theme = Theme::global_mut(cx);
-        theme.radius = px(0.);
+        theme.radius = px(0.001);
         theme.radius_lg = px(0.);
         theme.scrollbar_show = ScrollbarShow::Scrolling;
     }
