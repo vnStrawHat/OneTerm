@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext, ClickEvent, IntoElement, ParentElement as _, SharedString, Styled, Window,
-    div, px,
+    App, AppContext, ClickEvent, Focusable as _, IntoElement, ParentElement as _, SharedString,
+    Styled, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, WindowExt as _,
@@ -108,7 +108,14 @@ pub(crate) fn open_connect_dialog(
         }
     });
 
-    window.open_dialog(cx, move |dialog, _window, _cx| {
+    window.open_dialog(cx, move |dialog, window, cx| {
+        // Focus username (nếu chưa có) hoặc password (nếu đã có username).
+        let focus_handle = if ask_username {
+            username_state.as_ref().unwrap().read(cx).focus_handle(cx)
+        } else {
+            password_state.read(cx).focus_handle(cx)
+        };
+        focus_handle.focus(window, cx);
         // Clone connect_logic cho button on_click và keyboard on_ok
         let connect_for_click = connect_logic.clone();
         let connect_for_kb = connect_logic.clone();
