@@ -20,6 +20,7 @@ use gpui::{
     Subscription, Task, Window,
 };
 use gpui_component::dock::{Panel, PanelControl, PanelEvent};
+use gpui_component::input::{InputEvent, InputState};
 use gpui_component::table::{TableEvent, TableState};
 
 use myterm2_core::{FileEntry, SftpBackend};
@@ -56,6 +57,12 @@ pub struct SftpPanel {
 
     // ── Pending action (context menu → render) ──────────────
     pub(crate) pending_action: Option<PendingAction>,
+
+    // ── Path input (toolbar) ────────────────────────────────
+    pub(crate) path_input: Entity<InputState>,
+    pub(crate) path_error: bool,
+    _path_sub: Subscription,
+
 
     // ── Debounce save table state ───────────────────────────
     _save_table_task: Option<Task<()>>,
@@ -115,6 +122,11 @@ impl SftpPanel {
         })
         .detach();
 
+        // Path input — display cwd, Enter → goto path.
+        let path_input = cx.new(|cx| InputState::new(window, cx).placeholder("Path"));
+        let _path_sub = cx.subscribe_in(&path_input, window, Self::on_path_input_event);
+
+
         Self {
             focus_handle,
             sftp: None,
@@ -125,6 +137,9 @@ impl SftpPanel {
             transfers: Vec::new(),
             next_transfer_id: 0,
             pending_action: None,
+            path_input,
+            path_error: false,
+            _path_sub,
             _save_table_task: None,
             _table_sub: table_sub,
         }
@@ -169,6 +184,60 @@ impl SftpPanel {
             _ => {}
         }
     }
+
+    /// Handler cho InputEvent từ path input.
+    fn on_path_input_event(
+        &mut self,
+        _: &Entity<InputState>,
+        event: &InputEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            InputEvent::PressEnter { .. } => {
+                let path = self.path_input.read(cx).value().trim().to_string();
+                if path.is_empty() {
+                    return;
+                }
+                self.goto_path(PathBuf::from(path), cx);
+            }
+            InputEvent::Change => {
+                // Reset error highlight khi user gõ lại.
+                if self.path_error {
+                    self.path_error = false;
+                    cx.notify();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Goto path — thử read_dir, nếu lỗi thì set path_error.
+    fn goto_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let sftp = match &self.sftp {
+            Some(s) => s.clone(),
+            None => return,
+        };
+        // Check path exists via stat — if fails or not a dir, highlight error.
+        match sftp.stat(path.clone()) {
+            Ok(stat) if stat.is_dir => {
+                self.path_error = false;
+                self.load_dir(path, cx);
+            }
+            Ok(_) => {
+                log::warn!("SftpPanel::goto_path: not a directory: \"{}\"", path.display());
+                self.path_error = true;
+                cx.notify();
+            }
+            Err(e) => {
+                log::warn!("SftpPanel::goto_path: invalid path \"{}\": {}", path.display(), e);
+                self.path_error = true;
+                cx.notify();
+            }
+        }
+    }
+
+
 
     /// Debounce 1s rồi persist column state (width + visibility) vào docks.json.
     fn schedule_save_table_state(&mut self, cx: &mut Context<Self>) {
