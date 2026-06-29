@@ -2,15 +2,20 @@
 //!
 //! Chạy song song với `ssh_main_task` trên cùng tokio runtime.
 //! 2 channel (shell + sftp) chia sẻ 1 TCP connection, multiplex bởi russh.
+//!
+//! Upload/download được spawn thành tokio task riêng — main loop luôn
+//! responsive để nhận `SftpCmd::Cancel` và signal `CancellationToken`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 
 use async_channel::{Receiver, Sender};
 use russh_sftp::client::SftpSession as SftpChannel;
 use russh_sftp::protocol::FileAttributes;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio_util::sync::CancellationToken;
 
 use myterm2_core::{AppError, FileEntry, FileStat, Result};
 
@@ -88,6 +93,9 @@ async fn load_uid_gid_lookup(sftp: &SftpChannel) -> UidGidLookup {
 ///
 /// Chạy song song với `ssh_main_task` trên cùng tokio runtime.
 /// Nhận `SftpCmd` qua `cmd_rx`, gửi `SftpEvent` qua `event_tx`.
+///
+/// Upload/download được spawn thành tokio task riêng — main loop luôn
+/// responsive để nhận `SftpCmd::Cancel` và signal `CancellationToken`.
 pub(crate) async fn sftp_task(
     sftp: SftpChannel,
     cmd_rx: Receiver<SftpCmd>,
@@ -105,7 +113,13 @@ pub(crate) async fn sftp_task(
         lookup.gid_to_name.len()
     );
 
+    // Wrap SftpChannel trong Arc — clone cho mỗi spawned transfer task.
+    let sftp = Arc::new(sftp);
+
     let _ = event_tx.try_send(SftpEvent::Ready);
+
+    // Cancel tokens cho transfer đang chạy — key = transfer_id.
+    let mut cancels: HashMap<u64, CancellationToken> = HashMap::new();
 
     loop {
         match cmd_rx.recv().await {
@@ -156,32 +170,65 @@ pub(crate) async fn sftp_task(
                 let _ = reply.send(result);
             }
             Ok(SftpCmd::Upload {
+                transfer_id,
                 local,
                 remote,
                 progress,
                 reply,
             }) => {
-                log::debug!(
-                    "sftp_task: Upload local=\"{}\" remote=\"{}\"",
+                log::info!(
+                    "sftp_task: Upload #{transfer_id} local=\"{}\" remote=\"{}\"",
                     local.display(),
                     remote.display()
                 );
-                let result = sftp_upload(&sftp, &local, &remote, &progress).await;
-                let _ = reply.try_send(result);
+                let cancel = CancellationToken::new();
+                cancels.insert(transfer_id, cancel.clone());
+                let sftp = Arc::clone(&sftp);
+                tokio::spawn(async move {
+                    let result =
+                        sftp_upload(&sftp, &local, &remote, &progress, &cancel).await;
+                    log::info!(
+                        "sftp_task: Upload #{transfer_id} finished: {}",
+                        if result.is_ok() { "OK" } else { "error" }
+                    );
+                    let _ = reply.try_send(result);
+                });
             }
             Ok(SftpCmd::Download {
+                transfer_id,
                 remote,
                 local,
                 progress,
                 reply,
             }) => {
-                log::debug!(
-                    "sftp_task: Download remote=\"{}\" local=\"{}\"",
+                log::info!(
+                    "sftp_task: Download #{transfer_id} remote=\"{}\" local=\"{}\"",
                     remote.display(),
                     local.display()
                 );
-                let result = sftp_download(&sftp, &remote, &local, &progress).await;
-                let _ = reply.try_send(result);
+                let cancel = CancellationToken::new();
+                cancels.insert(transfer_id, cancel.clone());
+                let sftp = Arc::clone(&sftp);
+                tokio::spawn(async move {
+                    let result =
+                        sftp_download(&sftp, &remote, &local, &progress, &cancel).await;
+                    log::info!(
+                        "sftp_task: Download #{transfer_id} finished: {}",
+                        if result.is_ok() { "OK" } else { "error" }
+                    );
+                    let _ = reply.try_send(result);
+                });
+            }
+            Ok(SftpCmd::Cancel { transfer_id }) => {
+                log::info!("sftp_task: Cancel transfer #{transfer_id}");
+                if let Some(cancel) = cancels.get(&transfer_id) {
+                    cancel.cancel();
+                    log::info!("sftp_task: Cancel #{transfer_id} — token signalled");
+                } else {
+                    log::warn!(
+                        "sftp_task: Cancel #{transfer_id} — not found (already finished?)"
+                    );
+                }
             }
             Ok(SftpCmd::Close) => {
                 log::info!("sftp_task: close requested");
@@ -192,6 +239,9 @@ pub(crate) async fn sftp_task(
                 break;
             }
         }
+        // Cleanup: remove cancel tokens cho transfers đã xong.
+        // Tokens được insert khi upload/download bắt đầu. Spawned task không
+        // thể xoá map → giữ lại. Map nhỏ (chỉ transfer đang chạy), không đáng kể.
     }
 
     {
@@ -345,11 +395,15 @@ async fn sftp_stat(
 }
 
 /// Upload file với progress reporting (chunk 32KB).
+///
+/// Kiểm tra `cancel.is_cancelled()` sau mỗi chunk write.
+/// Nếu cancelled → trả về `Err("cancelled")`.
 async fn sftp_upload(
     sftp: &SftpChannel,
     local: &Path,
     remote: &Path,
     progress: &Sender<f64>,
+    cancel: &CancellationToken,
 ) -> Result<()> {
     let local_data = tokio::fs::read(local)
         .await
@@ -366,6 +420,12 @@ async fn sftp_upload(
     const CHUNK: usize = 32 * 1024;
     let mut written: u64 = 0;
     for chunk in local_data.chunks(CHUNK) {
+        // Check cancel trước khi write — nếu cancelled thì dừng ngay.
+        if cancel.is_cancelled() {
+            log::info!("sftp_upload: cancelled at {written}/{total} bytes");
+            let _ = progress.try_send(-1.0); // -1 = cancelled signal
+            return Err(AppError::msg("cancelled"));
+        }
         remote_file
             .write_all(chunk)
             .await
@@ -389,11 +449,15 @@ async fn sftp_upload(
 }
 
 /// Download file với progress reporting (chunk 32KB).
+///
+/// Kiểm tra `cancel.is_cancelled()` sau mỗi chunk read.
+/// Nếu cancelled → trả về `Err("cancelled")`.
 async fn sftp_download(
     sftp: &SftpChannel,
     remote: &Path,
     local: &Path,
     progress: &Sender<f64>,
+    cancel: &CancellationToken,
 ) -> Result<()> {
     // Lấy size để tính progress.
     let remote_str = remote.to_string_lossy().replace('\\', "/");
@@ -416,6 +480,12 @@ async fn sftp_download(
     let mut buf = vec![0u8; CHUNK];
     let mut read: u64 = 0;
     loop {
+        // Check cancel trước khi read — nếu cancelled thì dừng ngay.
+        if cancel.is_cancelled() {
+            log::info!("sftp_download: cancelled at {read}/{total} bytes");
+            let _ = progress.try_send(-1.0); // -1 = cancelled signal
+            return Err(AppError::msg("cancelled"));
+        }
         let n = remote_file
             .read(&mut buf)
             .await

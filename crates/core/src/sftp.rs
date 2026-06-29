@@ -76,10 +76,12 @@ pub trait SftpBackend: Send + Sync + 'static {
     fn mkdir(&self, path: PathBuf) -> Result<()>;
 
     /// Upload file local → remote.
+    /// `transfer_id` — ID duy nhất do UI tạo, dùng để cancel.
     /// Trả về progress channel (0.0–1.0) + reply channel (Result<()>).
     /// UI spawn task poll progress — không block UI thread.
     fn upload(
         &self,
+        transfer_id: u64,
         local: PathBuf,
         remote: PathBuf,
     ) -> (Receiver<f64>, Receiver<Result<()>>);
@@ -88,9 +90,14 @@ pub trait SftpBackend: Send + Sync + 'static {
     /// Tương tự upload.
     fn download(
         &self,
+        transfer_id: u64,
         remote: PathBuf,
         local: PathBuf,
     ) -> (Receiver<f64>, Receiver<Result<()>>);
+
+    /// Hủy transfer đang chạy (upload/download).
+    /// `transfer_id` phải khớp với ID đã truyền vào `upload`/`download`.
+    fn cancel_transfer(&self, transfer_id: u64);
 
     /// Đóng SFTP session.
     fn close(&self);

@@ -258,6 +258,7 @@ enum TransferDirection {
 enum TransferStatus {
     InProgress,
     Completed,
+    Cancelled,
     Error,
 }
 
@@ -781,11 +782,7 @@ impl SftpPanel {
 
                 log::info!("SftpPanel: upload \"{}\" → \"{}\"", local_path.display(), remote_path.display());
 
-                let (progress_rx, result_rx) = sftp.upload(local_path, remote_path);
-
-                window.push_notification(format!("Uploading \"{filename}\"..."), cx);
-
-                // Add TransferItem to panel — get transfer_id for spawn task.
+                // Add TransferItem to panel — get transfer_id trước khi gọi upload.
                 let panel_clone = panel.clone();
                 let transfer_id = panel.update(cx, |this, cx| {
                     let id = this.next_transfer_id;
@@ -803,11 +800,29 @@ impl SftpPanel {
                     id
                 });
 
+                // Gọi upload với transfer_id (để có thể cancel).
+                let (progress_rx, result_rx) = sftp.upload(transfer_id as u64, local_path, remote_path);
+
+                window.push_notification(format!("Uploading \"{filename}\"..."), cx);
+
                 // Clone panel for spawn — save_logic is Fn, can be called multiple times.
                 let panel = panel_clone.clone();
                 // Poll progress trong background → update TransferItem.
                 cx.spawn(async move |cx| {
                     while let Ok(progress) = progress_rx.recv().await {
+                        // progress = -1.0 → cancelled signal.
+                        if progress < 0.0 {
+                            log::info!("SftpPanel: upload #{transfer_id} cancelled");
+                            cx.update(|cx| {
+                                panel.update(cx, |this, cx| {
+                                    if let Some(item) = this.transfers.iter_mut().find(|t| t.id == transfer_id) {
+                                        item.status = TransferStatus::Cancelled;
+                                    }
+                                    cx.notify();
+                                });
+                            });
+                            return; // ← exit spawn task, không đợi result.
+                        }
                         log::debug!("SftpPanel: upload #{transfer_id} progress {:.0}%", progress * 100.0);
                         cx.update(|cx| {
                             panel.update(cx, |this, cx| {
@@ -833,6 +848,10 @@ impl SftpPanel {
                             });
                         }
                         Ok(Err(e)) => {
+                            // Check nếu error là "cancelled" → đã handle ở trên, skip.
+                            if e.to_string() == "cancelled" {
+                                return;
+                            }
                             log::error!("SftpPanel: upload #{transfer_id} failed: {e}");
                             cx.update(|cx| {
                                 panel.update(cx, |this, cx| {
@@ -951,11 +970,7 @@ impl SftpPanel {
 
                 log::info!("SftpPanel: download \"{}\" → \"{}\"", remote_path.display(), local_path.display());
 
-                let (progress_rx, result_rx) = sftp.download(remote_path.clone(), local_path);
-
-                window.push_notification(format!("Downloading \"{entry_name}\"..."), cx);
-
-                // Add TransferItem to panel — get transfer_id for spawn task.
+                // Add TransferItem to panel — get transfer_id trước khi gọi download.
                 let transfer_id = panel.update(cx, |this, cx| {
                     let id = this.next_transfer_id;
                     this.next_transfer_id += 1;
@@ -972,10 +987,28 @@ impl SftpPanel {
                     id
                 });
 
+                // Gọi download với transfer_id (để có thể cancel).
+                let (progress_rx, result_rx) = sftp.download(transfer_id as u64, remote_path.clone(), local_path);
+
+                window.push_notification(format!("Downloading \"{entry_name}\"..."), cx);
+
                 // Clone panel for spawn — save_logic is Fn, can be called multiple times.
                 let panel = panel.clone();
                 cx.spawn(async move |cx| {
                     while let Ok(progress) = progress_rx.recv().await {
+                        // progress = -1.0 → cancelled signal.
+                        if progress < 0.0 {
+                            log::info!("SftpPanel: download #{transfer_id} cancelled");
+                            cx.update(|cx| {
+                                panel.update(cx, |this, cx| {
+                                    if let Some(item) = this.transfers.iter_mut().find(|t| t.id == transfer_id) {
+                                        item.status = TransferStatus::Cancelled;
+                                    }
+                                    cx.notify();
+                                });
+                            });
+                            return; // ← exit spawn task.
+                        }
                         log::debug!("SftpPanel: download #{transfer_id} progress {:.0}%", progress * 100.0);
                         cx.update(|cx| {
                             panel.update(cx, |this, cx| {
@@ -1000,6 +1033,9 @@ impl SftpPanel {
                             });
                         }
                         Ok(Err(e)) => {
+                            if e.to_string() == "cancelled" {
+                                return;
+                            }
                             log::error!("SftpPanel: download #{transfer_id} failed: {e}");
                             cx.update(|cx| {
                                 panel.update(cx, |this, cx| {
@@ -1439,6 +1475,7 @@ impl SftpPanel {
             let progress_color = match item.status {
                 TransferStatus::InProgress => accent,
                 TransferStatus::Completed => theme.success,
+                TransferStatus::Cancelled => muted,
                 TransferStatus::Error => danger,
             };
 
@@ -1484,6 +1521,7 @@ impl SftpPanel {
                             .child(match item.status {
                                 TransferStatus::InProgress => format!("{:.0}%", item.progress * 100.0),
                                 TransferStatus::Completed => "Done".to_string(),
+                                TransferStatus::Cancelled => "Cancelled".to_string(),
                                 TransferStatus::Error => "Error".to_string(),
                             }),
                     )
@@ -1496,6 +1534,31 @@ impl SftpPanel {
                                 .text_color(danger)
                                 .truncate()
                                 .child(item.error.clone().unwrap_or_default()),
+                        )
+                    })
+                    // Cancel button — chỉ hiển thị khi InProgress.
+                    .when(item.status == TransferStatus::InProgress, |this| {
+                        let cancel_id = item.id;
+                        this.child(
+                            div()
+                                .flex_shrink_0()
+                                .child(
+                                    Button::new(gpui::ElementId::NamedInteger("sftp-cancel-transfer".into(), item.id as u64))
+                                        .xsmall()
+                                        .ghost()
+                                        .icon(IconName::Close)
+                                        .tooltip("Cancel transfer")
+                                        .on_click(cx.listener(move |this_ref, _, _, cx| {
+                                            log::info!("SftpPanel: cancel transfer #{cancel_id}");
+                                            if let Some(ref sftp) = this_ref.sftp.clone() {
+                                                sftp.cancel_transfer(cancel_id as u64);
+                                            }
+                                            if let Some(t) = this_ref.transfers.iter_mut().find(|t| t.id == cancel_id) {
+                                                t.status = TransferStatus::Cancelled;
+                                                cx.notify();
+                                            }
+                                        })),
+                                ),
                         )
                     }),
             );

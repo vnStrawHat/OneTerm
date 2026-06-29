@@ -4584,6 +4584,7 @@ dependencies = [
  "russh",
  "russh-sftp",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

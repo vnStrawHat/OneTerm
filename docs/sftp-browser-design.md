@@ -1325,7 +1325,7 @@ Bước 1: Dependency + types
 - [x] Status icon: ⬆/⬇ + ✓/✗/⏳
 - [x] Spawn task poll progress channel → update UI
 - [x] Clear completed transfers (button hoặc auto-remove sau 5s)
-- [ ] Cancel transfer (nếu hỗ trợ — cần `sftp_task` xử lý cancel) — *skipped: backend chưa hỗ trợ cancel channel*
+- [x] Cancel transfer — `tokio_util::CancellationToken` + spawn upload/download thành task riêng, Cancel button (icon Close) trong transfer queue
 - [x] `cargo build` pass + manual test (upload file lớn + gõ lệnh terminal)
 
 #### Bước 9: SftpPanel — detail dialog + context menu

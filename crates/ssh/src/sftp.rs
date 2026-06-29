@@ -55,7 +55,9 @@ pub enum SftpCmd {
     },
     /// Upload file local → remote. Progress qua `progress` (0.0–1.0).
     /// Reply qua `async_channel::Sender` (không dùng oneshot để match trait).
+    /// `transfer_id` dùng để cancel — UI gửi `SftpCmd::Cancel { transfer_id }`.
     Upload {
+        transfer_id: u64,
         local: PathBuf,
         remote: PathBuf,
         progress: Sender<f64>,
@@ -64,11 +66,15 @@ pub enum SftpCmd {
     /// Download file remote → local. Progress qua `progress` (0.0–1.0).
     /// Reply qua `async_channel::Sender`.
     Download {
+        transfer_id: u64,
         remote: PathBuf,
         local: PathBuf,
         progress: Sender<f64>,
         reply: Sender<Result<()>>,
     },
+    /// Hủy transfer đang chạy (upload/download).
+    /// `transfer_id` phải khớp với ID đã gửi trong Upload/Download.
+    Cancel { transfer_id: u64 },
     /// Đóng SFTP session.
     Close,
 }
@@ -192,12 +198,14 @@ impl SftpBackend for SftpSession {
 
     fn upload(
         &self,
+        transfer_id: u64,
         local: PathBuf,
         remote: PathBuf,
     ) -> (Receiver<f64>, Receiver<Result<()>>) {
         let (progress_tx, progress_rx) = async_channel::bounded(100);
         let (reply_tx, reply_rx) = async_channel::bounded(1);
         let _ = self.cmd_tx.try_send(SftpCmd::Upload {
+            transfer_id,
             local,
             remote,
             progress: progress_tx,
@@ -208,18 +216,25 @@ impl SftpBackend for SftpSession {
 
     fn download(
         &self,
+        transfer_id: u64,
         remote: PathBuf,
         local: PathBuf,
     ) -> (Receiver<f64>, Receiver<Result<()>>) {
         let (progress_tx, progress_rx) = async_channel::bounded(100);
         let (reply_tx, reply_rx) = async_channel::bounded(1);
         let _ = self.cmd_tx.try_send(SftpCmd::Download {
+            transfer_id,
             remote,
             local,
             progress: progress_tx,
             reply: reply_tx,
         });
         (progress_rx, reply_rx)
+    }
+
+    fn cancel_transfer(&self, transfer_id: u64) {
+        log::info!("SftpSession: cancel transfer #{transfer_id}");
+        let _ = self.cmd_tx.try_send(SftpCmd::Cancel { transfer_id });
     }
 
     fn close(&self) {
