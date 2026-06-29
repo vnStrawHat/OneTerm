@@ -8,8 +8,7 @@ use gpui::{
     Context, InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled, Window, div,
 };
 use gpui_component::{
-    ActiveTheme as _, IconName, Sizable as _,
-    button::{Button, ButtonVariants as _},
+    ActiveTheme as _, Sizable as _,
     h_flex,
     input::Input,
     menu::ContextMenuExt,
