@@ -89,14 +89,7 @@ pub(crate) fn open_connect_dialog(
         let password_ok = password_ok.clone();
         let session_ok = session_ok.clone();
         move |_, window, cx| {
-            on_connect_click(
-                &session_ok,
-                index,
-                &username_ok,
-                &password_ok,
-                window,
-                cx,
-            )
+            on_connect_click(&session_ok, index, &username_ok, &password_ok, window, cx)
         }
     });
 
@@ -130,31 +123,23 @@ pub(crate) fn open_connect_dialog(
             // để bypass action dispatch qua focus chain.
             .footer({
                 DialogFooter::new()
-                    .child(
-                        Button::new("cancel")
-                            .label("Cancel")
-                            .outline()
-                            .on_click(|_, window, cx| {
+                    .child(Button::new("cancel").label("Cancel").outline().on_click(
+                        |_, window, cx| {
+                            window.close_dialog(cx);
+                        },
+                    ))
+                    .child(Button::new("connect").label("Connect").primary().on_click(
+                        move |_, window, cx| {
+                            if connect_for_click(&ClickEvent::default(), window, cx) {
                                 window.close_dialog(cx);
-                            }),
-                    )
-                    .child(
-                        Button::new("connect")
-                            .label("Connect")
-                            .primary()
-                            .on_click(move |_, window, cx| {
-                                if connect_for_click(&ClickEvent::default(), window, cx) {
-                                    window.close_dialog(cx);
-                                }
-                            }),
-                    )
+                            }
+                        },
+                    ))
             })
             .button_props(
                 DialogButtonProps::default()
                     .on_cancel(|_, _, _| true)
-                    .on_ok(move |_, window, cx| {
-                        connect_for_kb(&ClickEvent::default(), window, cx)
-                    }),
+                    .on_ok(move |_, window, cx| connect_for_kb(&ClickEvent::default(), window, cx)),
             )
     });
 }

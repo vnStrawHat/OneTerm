@@ -83,11 +83,24 @@ myTerm2/
 │           ├── views/              # Các màn hình lớn (PanelView cho DockArea)
 │           │   ├── mod.rs          # Re-export: SessionPanel, SftpPanel, TerminalPanel, TerminalSettingsPanel
 │           │   ├── session_tabs/   # Tab quản lý session
-│           │   │   ├── mod.rs
-│           │   │   └── tabs.rs     # SessionPanel (dock panel)
+│           │   │   ├── mod.rs              # Re-export SessionPanel
+│           │   │   ├── panel.rs            # SessionPanel struct + constructor + Panel/Focusable impls
+│           │   │   ├── render.rs           # impl Render — header/empty/no-results/final div
+│           │   │   ├── tree_render.rs      # Tree widget rendering — item renderer + context menu
+│           │   │   ├── tree_builder.rs     # build_tree_items + session_matches + helpers
+│           │   │   ├── connect_dialog.rs   # Dialog connect SSH
+│           │   │   ├── group_combo.rs      # GroupComboDelegate + group_combobox widget
+│           │   │   ├── session_dialog.rs   # open_session_dialog + field helper
+│           │   │   └── rename_group.rs     # open_rename_group_dialog
 │           │   ├── sftp/           # SFTP file browser
-│           │   │   ├── mod.rs
-│           │   │   └── file_browser.rs  # SftpPanel (dock panel, placeholder)
+│           │   │   ├── mod.rs              # Re-export SftpPanel
+│           │   │   ├── types.rs            # Sort/transfer types + format helpers + column defs
+│           │   │   ├── panel.rs            # SftpPanel struct + constructor + nav + Panel/Focusable impls
+│           │   │   ├── actions.rs          # Rename/delete/new-folder/properties dialogs
+│           │   │   ├── transfer.rs         # Upload/download với progress polling
+│           │   │   ├── render.rs           # impl Render + breadcrumb/toolbar/column-headers/file-list
+│           │   │   ├── render_list.rs      # Entry row rendering + context menu
+│           │   │   └── render_transfer.rs  # Transfer queue rendering + clear
 │           │   └── terminal/       # Terminal emulator view
 │           │       ├── mod.rs              # Re-export panel/view/theme + handler modules
 │           │       ├── terminal_view.rs    # LocalTerminalView struct + inherent helpers (~502 dòng)

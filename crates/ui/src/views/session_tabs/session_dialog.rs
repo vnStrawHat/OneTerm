@@ -11,89 +11,27 @@
 //! Group field dùng [`Combobox`] với `searchable(true)` + footer "Create" —
 //! user có thể **chọn group có sẵn** hoặc **gõ group mới**.
 
-use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext, ClickEvent, Hsla, InteractiveElement as _, SharedString,
-    Task, Window, div, px,
+    App, AppContext, ClickEvent, Hsla, IntoElement, ParentElement as _, SharedString, Styled,
+    Window, div, px,
 };
-use gpui::{IntoElement, ParentElement as _, Styled};
 use gpui_component::{
-    ActiveTheme, Colorize as _, Disableable as _, Icon, IconName, IndexPath, Sizable as _, WindowExt as _,
+    ActiveTheme, Colorize as _, IndexPath, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
-    combobox::{Combobox, ComboboxState},
     color_picker::{ColorPicker, ColorPickerState},
+    combobox::ComboboxState,
     dialog::{DialogButtonProps, DialogFooter},
     h_flex,
     input::{Input, InputState},
-    searchable_list::{SearchableListDelegate, SearchableListItem, SearchableVec},
     v_flex,
 };
 
 use crate::state::{SshSession, SshSessionStore};
 
-// ── GroupComboDelegate ───────────────────────────────────────────────
-
-/// Shared mutable cell cho query text và group value.
-/// Dùng `Rc<RefCell<>>` để delegate (bên trong ComboboxState) và footer
-/// button (bên ngoài) cùng truy cập.
-type SharedCell = Rc<RefCell<String>>;
-
-/// Delegate cho Group Combobox — wraps [`SearchableVec`] + tracks query.
-struct GroupComboDelegate {
-    inner: SearchableVec<SharedString>,
-    /// Search query hiện tại (cập nhật trong `perform_search`).
-    query: SharedCell,
-    /// Group value cuối cùng (cập nhật trong `on_confirm` hoặc footer click).
-    group_value: SharedCell,
-}
-
-impl GroupComboDelegate {
-    fn new(items: Vec<SharedString>, query: SharedCell, group_value: SharedCell) -> Self {
-        Self {
-            inner: SearchableVec::new(items),
-            query,
-            group_value,
-        }
-    }
-}
-
-impl SearchableListDelegate for GroupComboDelegate {
-    type Item = SharedString;
-
-    fn items_count(&self, section: usize) -> usize {
-        self.inner.items_count(section)
-    }
-
-    fn item(&self, ix: IndexPath) -> Option<&SharedString> {
-        self.inner.item(ix)
-    }
-
-    fn position<V>(&self, value: &V) -> Option<IndexPath>
-    where
-        SharedString: SearchableListItem<Value = V>,
-        V: PartialEq,
-    {
-        self.inner.position(value)
-    }
-
-    fn perform_search(&mut self, query: &str, window: &mut Window, cx: &mut App) -> Task<()> {
-        *self.query.borrow_mut() = query.to_string();
-        self.inner.perform_search(query, window, cx)
-    }
-
-    fn on_confirm(&mut self, final_selection: &[(IndexPath, SharedString)]) {
-        if let Some((_, item)) = final_selection.first() {
-            *self.group_value.borrow_mut() = item.to_string();
-        } else {
-            *self.group_value.borrow_mut() = String::new();
-        }
-    }
-}
-
-// ── open_session_dialog ──────────────────────────────────────────────
+use super::group_combo::{GroupComboDelegate, SharedCell, group_combobox};
 
 /// Mở dialog tạo mới (khi `edit` = `None`) hoặc chỉnh sửa (khi `edit` =
 /// `Some((index, session))`) SSH session.
@@ -146,8 +84,8 @@ pub(crate) fn open_session_dialog(
     };
 
     // ── Shared cells cho Group Combobox ────────────────────────────
-    let group_value: SharedCell = Rc::new(RefCell::new(group_val.clone()));
-    let query_cell: SharedCell = Rc::new(RefCell::new(String::new()));
+    let group_value: SharedCell = Rc::new(std::cell::RefCell::new(group_val.clone()));
+    let query_cell: SharedCell = Rc::new(std::cell::RefCell::new(String::new()));
 
     // Tìm selected index nếu group_val khớp với existing group.
     let selected_indices: Vec<IndexPath> = existing_groups
@@ -188,9 +126,7 @@ pub(crate) fn open_session_dialog(
 
     // ── ColorPickerState ────────────────────────────────────────
     // Default: #56B6C2 nếu tạo mới, giữ màu cũ nếu edit.
-    let default_color_hex = color_val
-        .clone()
-        .unwrap_or_else(|| "#56B6C2".to_string());
+    let default_color_hex = color_val.clone().unwrap_or_else(|| "#56B6C2".to_string());
     let default_color = Hsla::parse_hex(&default_color_hex).unwrap_or(cx.theme().accent);
     let color_state = cx.new(|cx| {
         let mut st = ColorPickerState::new(window, cx);
@@ -271,7 +207,6 @@ pub(crate) fn open_session_dialog(
         }
     });
 
-
     window.open_dialog(cx, move |dialog, _window, _cx| {
         // Clone save_logic cho button on_click và keyboard on_ok
         let save_for_click = save_logic.clone();
@@ -290,30 +225,23 @@ pub(crate) fn open_session_dialog(
                 let query_cell = query_cell.clone();
                 move |content, _window, cx| {
                     content
-                        .child(
-                            field(
-                                "Label",
-                                true,
-                                h_flex()
-                                    .gap_2()
-                                    .w_full()
-                                    .child(Input::new(&label_state).flex_1())
-                                    .child(ColorPicker::new(&color_state).small()),
-                                cx,
-                            ),
-                        )
+                        .child(field(
+                            "Label",
+                            true,
+                            h_flex()
+                                .gap_2()
+                                .w_full()
+                                .child(Input::new(&label_state).flex_1())
+                                .child(ColorPicker::new(&color_state).small()),
+                            cx,
+                        ))
                         .child(field("Host", true, Input::new(&host_state), cx))
                         .child(field("Port", false, Input::new(&port_state), cx))
                         .child(field("Username", false, Input::new(&user_state), cx))
                         .child(field(
                             "Group",
                             false,
-                            group_combobox(
-                                &group_combo_state,
-                                &group_value,
-                                &query_cell,
-                                cx,
-                            ),
+                            group_combobox(&group_combo_state, &group_value, &query_cell, cx),
                             cx,
                         ))
                 }
@@ -322,224 +250,25 @@ pub(crate) fn open_session_dialog(
             // để bypass action dispatch qua focus chain.
             .footer({
                 DialogFooter::new()
-                    .child(
-                        Button::new("cancel")
-                            .label("Cancel")
-                            .outline()
-                            .on_click(|_, window, cx| {
+                    .child(Button::new("cancel").label("Cancel").outline().on_click(
+                        |_, window, cx| {
+                            window.close_dialog(cx);
+                        },
+                    ))
+                    .child(Button::new("save").label("Save").primary().on_click(
+                        move |_, window, cx| {
+                            if save_for_click(&ClickEvent::default(), window, cx) {
                                 window.close_dialog(cx);
-                            }),
-                    )
-                    .child(
-                        Button::new("save")
-                            .label("Save")
-                            .primary()
-                            .on_click(move |_, window, cx| {
-                                if save_for_click(&ClickEvent::default(), window, cx) {
-                                    window.close_dialog(cx);
-                                }
-                            }),
-                    )
+                            }
+                        },
+                    ))
             })
             .button_props(
                 DialogButtonProps::default()
                     .on_cancel(|_, _, _| true)
-                    .on_ok(move |_, window, cx| {
-                        save_for_kb(&ClickEvent::default(), window, cx)
-                    }),
+                    .on_ok(move |_, window, cx| save_for_kb(&ClickEvent::default(), window, cx)),
             )
     });
-}
-
-
-// ── open_rename_group_dialog ─────────────────────────────────────────
-
-/// Mở dialog đổi tên group.
-///
-/// Hiển thị 1 input field với group name hiện tại. Khi Save →
-/// `store.rename_group(old, new)` — cập nhật tất cả session trong group.
-/// Nếu new name rỗng → ungroup (set group = None).
-pub(crate) fn open_rename_group_dialog(
-    window: &mut Window,
-    cx: &mut App,
-    group_name: String,
-) {
-    let group_state = cx.new(|cx| {
-        let mut st = InputState::new(window, cx).placeholder("Group name");
-        st.set_value(group_name.clone(), window, cx);
-        st
-    });
-
-    let group_ok = group_state.clone();
-    let old_name = group_name.clone();
-
-    // ── Shared save logic (dùng cho cả button on_click và keyboard on_ok) ──
-    let save_logic: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool> = Rc::new({
-        let group_ok = group_ok.clone();
-        let old_name = old_name.clone();
-        move |_, window, cx| {
-            let new_name = group_ok.read(cx).value().trim().to_string();
-            if new_name.is_empty() {
-                window.push_notification("Group name không được rỗng.", cx);
-                return false;
-            }
-            SshSessionStore::global(cx).update(cx, |s, cx| {
-                s.rename_group(&old_name, &new_name, cx);
-            });
-            window.push_notification("Group đã được đổi tên.", cx);
-            true
-        }
-    });
-
-    window.open_dialog(cx, move |dialog, _window, _cx| {
-        // Clone save_logic cho button on_click và keyboard on_ok
-        let save_for_click = save_logic.clone();
-        let save_for_kb = save_logic.clone();
-        dialog
-            .title("Rename Group")
-            .w(px(440.))
-            .content({
-                let group_state = group_state.clone();
-                move |content, _window, cx| {
-                    content.child(field("Group Name", true, Input::new(&group_state), cx))
-                }
-            })
-            // Footer: Cancel + Save — dùng direct on_click thay vì DialogAction/DialogClose
-            // để bypass action dispatch qua focus chain.
-            .footer({
-                DialogFooter::new()
-                    .child(
-                        Button::new("cancel")
-                            .label("Cancel")
-                            .outline()
-                            .on_click(|_, window, cx| {
-                                window.close_dialog(cx);
-                            }),
-                    )
-                    .child(
-                        Button::new("save")
-                            .label("Save")
-                            .primary()
-                            .on_click(move |_, window, cx| {
-                                if save_for_click(&ClickEvent::default(), window, cx) {
-                                    window.close_dialog(cx);
-                                }
-                            }),
-                    )
-            })
-            .button_props(
-                DialogButtonProps::default()
-                    .on_cancel(|_, _, _| true)
-                    .on_ok(move |_, window, cx| {
-                        save_for_kb(&ClickEvent::default(), window, cx)
-                    }),
-            )
-    });
-}
-// ── group_combobox ───────────────────────────────────────────────────
-
-/// Render Group field as a searchable [`Combobox`] với:
-/// - **Trigger**: hiển thị `group_value` (hoặc placeholder nếu rỗng) +
-///   chevron-down + optional clear (×) button.
-/// - **Footer**: nút "Create '<query>'" — khi click → set `group_value`
-///   = query text (cho phép tạo group mới).
-fn group_combobox(
-    state: &gpui::Entity<ComboboxState<GroupComboDelegate>>,
-    group_value: &SharedCell,
-    query_cell: &SharedCell,
-    cx: &App,
-) -> impl IntoElement {
-    let group_value = group_value.clone();
-    let query_cell = query_cell.clone();
-    let muted_fg = cx.theme().muted_foreground;
-
-    Combobox::new(state)
-        .placeholder("Select or type group...")
-        .search_placeholder("Search or type group name...")
-        .w_full()
-        .render_trigger({
-            let group_value = group_value.clone();
-            move |ctx, _, cx| {
-                let val = group_value.borrow().clone();
-                let placeholder = ctx
-                    .placeholder
-                    .cloned()
-                    .unwrap_or_default();
-
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        div()
-                            .w_full()
-                            .overflow_hidden()
-                            .truncate()
-                            .when(val.is_empty(), |this| {
-                                this.text_color(cx.theme().muted_foreground)
-                                    .child(placeholder)
-                            })
-                            .when(!val.is_empty(), |this| {
-                                this.child(SharedString::from(val))
-                            }),
-                    )
-                    .when(!ctx.open, |this| {
-                        // Clear (×) button — chỉ hiện khi dropdown đóng và có value.
-                        this.when(!group_value.borrow().is_empty(), |this| {
-                            let gv = group_value.clone();
-                            this.child(
-                                div()
-                                    .id("clear-group")
-                                    .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
-                                        cx.stop_propagation();
-                                        *gv.borrow_mut() = String::new();
-                                    })
-                                    .child(
-                                        Icon::new(IconName::CircleX)
-                                            .xsmall()
-                                            .text_color(muted_fg),
-                                    ),
-                            )
-                        })
-                    })
-                    .child(
-                        Icon::new(IconName::ChevronDown)
-                            .xsmall()
-                            .text_color(cx.theme().muted_foreground),
-                    )
-                    .into_any_element()
-            }
-        })
-        .footer({
-            let group_value = group_value.clone();
-            let query_cell = query_cell.clone();
-            move |_, cx| {
-                let query = query_cell.borrow().trim().to_string();
-                let label = if query.is_empty() {
-                    "Type to create new group".to_string()
-                } else {
-                    format!("Create \"{}\"", query)
-                };
-                let enabled = !query.is_empty();
-
-                Button::new("create-group")
-                    .ghost()
-                    .label(label)
-                    .icon(Icon::new(IconName::Plus))
-                    .text_color(cx.theme().foreground)
-                    .w_full()
-                    .justify_start()
-                    .when(!enabled, |this| this.disabled(true))
-                    .when(enabled, |this| {
-                        let gv = group_value.clone();
-                        let q = query.clone();
-                        this.on_click(move |_, _, _cx| {
-                            *gv.borrow_mut() = q.clone();
-                        })
-                    })
-                    .into_any_element()
-            }
-        })
 }
 
 // ── field helper ─────────────────────────────────────────────────────

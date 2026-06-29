@@ -56,14 +56,21 @@ async fn load_uid_gid_lookup(sftp: &SftpChannel) -> UidGidLookup {
             for line in text.lines() {
                 let fields: Vec<&str> = line.split(':').collect();
                 if fields.len() >= 4 {
-                    if let (Ok(uid), Ok(gid)) = (fields[2].parse::<u32>(), fields[3].parse::<u32>()) {
+                    if let (Ok(uid), Ok(gid)) = (fields[2].parse::<u32>(), fields[3].parse::<u32>())
+                    {
                         lookup.uid_to_name.insert(uid, fields[0].to_string());
                         // passwd cũng có gid → có thể dùng cho group lookup.
-                        lookup.gid_to_name.entry(gid).or_insert_with(|| fields[0].to_string());
+                        lookup
+                            .gid_to_name
+                            .entry(gid)
+                            .or_insert_with(|| fields[0].to_string());
                     }
                 }
             }
-            log::debug!("sftp_task: /etc/passwd loaded — {} uids", lookup.uid_to_name.len());
+            log::debug!(
+                "sftp_task: /etc/passwd loaded — {} uids",
+                lookup.uid_to_name.len()
+            );
         }
         Err(e) => log::debug!("sftp_task: /etc/passwd not readable: {e} — uid/gid sẽ hiển thị số"),
     }
@@ -81,7 +88,10 @@ async fn load_uid_gid_lookup(sftp: &SftpChannel) -> UidGidLookup {
                     }
                 }
             }
-            log::debug!("sftp_task: /etc/group loaded — {} gids", lookup.gid_to_name.len());
+            log::debug!(
+                "sftp_task: /etc/group loaded — {} gids",
+                lookup.gid_to_name.len()
+            );
         }
         Err(e) => log::debug!("sftp_task: /etc/group not readable: {e}"),
     }
@@ -185,8 +195,7 @@ pub(crate) async fn sftp_task(
                 cancels.insert(transfer_id, cancel.clone());
                 let sftp = Arc::clone(&sftp);
                 tokio::spawn(async move {
-                    let result =
-                        sftp_upload(&sftp, &local, &remote, &progress, &cancel).await;
+                    let result = sftp_upload(&sftp, &local, &remote, &progress, &cancel).await;
                     log::info!(
                         "sftp_task: Upload #{transfer_id} finished: {}",
                         if result.is_ok() { "OK" } else { "error" }
@@ -210,8 +219,7 @@ pub(crate) async fn sftp_task(
                 cancels.insert(transfer_id, cancel.clone());
                 let sftp = Arc::clone(&sftp);
                 tokio::spawn(async move {
-                    let result =
-                        sftp_download(&sftp, &remote, &local, &progress, &cancel).await;
+                    let result = sftp_download(&sftp, &remote, &local, &progress, &cancel).await;
                     log::info!(
                         "sftp_task: Download #{transfer_id} finished: {}",
                         if result.is_ok() { "OK" } else { "error" }
@@ -225,9 +233,7 @@ pub(crate) async fn sftp_task(
                     cancel.cancel();
                     log::info!("sftp_task: Cancel #{transfer_id} — token signalled");
                 } else {
-                    log::warn!(
-                        "sftp_task: Cancel #{transfer_id} — not found (already finished?)"
-                    );
+                    log::warn!("sftp_task: Cancel #{transfer_id} — not found (already finished?)");
                 }
             }
             Ok(SftpCmd::Close) => {
@@ -284,8 +290,12 @@ fn attrs_to_entry(
         is_dir: attrs.is_dir(),
         is_symlink: attrs.is_symlink(),
         size: attrs.size.unwrap_or(0),
-        modified: attrs.mtime.map(|t| UNIX_EPOCH + Duration::from_secs(t as u64)),
-        accessed: attrs.atime.map(|t| UNIX_EPOCH + Duration::from_secs(t as u64)),
+        modified: attrs
+            .mtime
+            .map(|t| UNIX_EPOCH + Duration::from_secs(t as u64)),
+        accessed: attrs
+            .atime
+            .map(|t| UNIX_EPOCH + Duration::from_secs(t as u64)),
         permissions: attrs.permissions.unwrap_or(0),
         uid,
         gid,
@@ -319,7 +329,9 @@ async fn sftp_read_dir(
                 resolved
             }
             Err(e) => {
-                log::warn!("sftp_read_dir: canonicalize(\"{path_str}\") failed: {e} — trying original path");
+                log::warn!(
+                    "sftp_read_dir: canonicalize(\"{path_str}\") failed: {e} — trying original path"
+                );
                 path_str
             }
         }
@@ -344,7 +356,10 @@ async fn sftp_read_dir(
     // Bỏ entry `.` và `..` (một số SFTP server trả về).
     entries.retain(|e| e.name != "." && e.name != "..");
 
-    log::debug!("sftp_read_dir: got {} entries for \"{abs_path}\"", entries.len());
+    log::debug!(
+        "sftp_read_dir: got {} entries for \"{abs_path}\"",
+        entries.len()
+    );
 
     // Sort: folder trước, rồi file theo tên (case-insensitive).
     entries.sort_by(|a, b| {
@@ -357,17 +372,10 @@ async fn sftp_read_dir(
 }
 
 /// Lấy metadata chi tiết.
-async fn sftp_stat(
-    sftp: &SftpChannel,
-    path: &Path,
-    lookup: &UidGidLookup,
-) -> Result<FileStat> {
+async fn sftp_stat(sftp: &SftpChannel, path: &Path, lookup: &UidGidLookup) -> Result<FileStat> {
     // Sanitize backslashes → forward slashes cho SFTP server.
     let path_str = path.to_string_lossy().replace('\\', "/");
-    let attrs = sftp
-        .metadata(&path_str)
-        .await
-        .map_err(map_sftp_err)?;
+    let attrs = sftp.metadata(&path_str).await.map_err(map_sftp_err)?;
 
     let name = path
         .file_name()
@@ -412,10 +420,7 @@ async fn sftp_upload(
 
     // Dùng `create` — mở file với WRITE|CREATE|TRUNCATE.
     let remote_str = remote.to_string_lossy().replace('\\', "/");
-    let mut remote_file = sftp
-        .create(&remote_str)
-        .await
-        .map_err(map_sftp_err)?;
+    let mut remote_file = sftp.create(&remote_str).await.map_err(map_sftp_err)?;
 
     const CHUNK: usize = 32 * 1024;
     let mut written: u64 = 0;
@@ -461,16 +466,10 @@ async fn sftp_download(
 ) -> Result<()> {
     // Lấy size để tính progress.
     let remote_str = remote.to_string_lossy().replace('\\', "/");
-    let attrs = sftp
-        .metadata(&remote_str)
-        .await
-        .map_err(map_sftp_err)?;
+    let attrs = sftp.metadata(&remote_str).await.map_err(map_sftp_err)?;
     let total = attrs.size.unwrap_or(0);
 
-    let mut remote_file = sftp
-        .open(&remote_str)
-        .await
-        .map_err(map_sftp_err)?;
+    let mut remote_file = sftp.open(&remote_str).await.map_err(map_sftp_err)?;
 
     let mut local_file = tokio::fs::File::create(local)
         .await

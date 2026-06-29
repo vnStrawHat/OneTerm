@@ -19,8 +19,7 @@ fn main() {
     // Khởi tạo logging — đọc RUST_LOG env var, mặc định: info cho app, warn cho deps.
     // VD: RUST_LOG=debug → thấy debug log; RUST_LOG=ssh=trace → trace SSH crate.
     env_logger::Builder::from_env(
-        env_logger::Env::default()
-            .default_filter_or("info,myterm2=debug"),
+        env_logger::Env::default().default_filter_or("info,myterm2=debug"),
     )
     .format_timestamp_secs()
     .init();

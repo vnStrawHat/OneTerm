@@ -18,7 +18,7 @@ pub mod task;
 pub use config::{SshAuthMethod, SshConfig};
 pub use listener::{Cmd, SshListener};
 pub use myterm2_core::{FileEntry, FileStat};
-pub use sftp::{SftpCmd, SftpEvent, SftpSession};
 pub use session::{PtySize, SshSession, connect};
+pub use sftp::{SftpCmd, SftpEvent, SftpSession};
 
 pub use myterm2_core as core;

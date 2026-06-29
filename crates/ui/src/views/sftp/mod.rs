@@ -1,5 +1,14 @@
 //! SFTP browser — panel duyệt file từ xa.
+//!
+//! Module gốc `file_browser.rs` đã được tách thành nhiều file con
+//! để tuân thủ rule ~400 dòng/file (xem `docs/agents/structure.md` §2).
 
-mod file_browser;
+mod actions;
+mod panel;
+mod render;
+mod render_list;
+mod render_transfer;
+mod transfer;
+mod types;
 
-pub use file_browser::SftpPanel;
+pub use panel::SftpPanel;

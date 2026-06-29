@@ -88,12 +88,7 @@ impl SshSessionStore {
     /// Đổi tên group — cập nhật tất cả session có `group == old_name`
     /// thành `new_name` + lưu file + notify observers.
     /// Nếu `new_name` rỗng (hoặc chỉ whitespace) → set group = None (ungroup).
-    pub fn rename_group(
-        &mut self,
-        old_name: &str,
-        new_name: &str,
-        cx: &mut gpui::Context<Self>,
-    ) {
+    pub fn rename_group(&mut self, old_name: &str, new_name: &str, cx: &mut gpui::Context<Self>) {
         let new_group = if new_name.trim().is_empty() {
             None
         } else {
