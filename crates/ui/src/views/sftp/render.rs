@@ -224,6 +224,7 @@ impl SftpPanel {
             .items_center()
             .gap_1()
             .px_2()
+            .py_5()
             .border_b_1()
             .border_color(theme.border)
             // Path input — flex-1, border-bottom only, transparent bg.
