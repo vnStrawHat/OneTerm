@@ -134,6 +134,13 @@ pub fn connect(
 
         // ── Authenticate ──────────────────────────────────────────────
         let auth_result = match &cfg.auth {
+            SshAuthMethod::None => {
+                log::info!("SshSession: authenticating with none (no password)");
+                handle
+                    .authenticate_none(&cfg.username)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{e}"))?
+            }
             SshAuthMethod::Password { password } => {
                 log::info!("SshSession: authenticating with password");
                 handle

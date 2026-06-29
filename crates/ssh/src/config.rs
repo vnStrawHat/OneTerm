@@ -9,6 +9,8 @@ use std::path::PathBuf;
 /// Phương thức xác thực SSH.
 #[derive(Clone)]
 pub enum SshAuthMethod {
+    /// Không xác thực (dành cho server không yêu cầu password).
+    None,
     /// Xác thực bằng password.
     Password {
         /// Password plaintext (chỉ trong RAM — không log, không serialize).
@@ -50,6 +52,7 @@ impl Debug for SshAuthMethod {
                 .debug_struct("Password")
                 .field("password", &"***")
                 .finish(),
+            Self::None => f.write_str("None"),
             Self::PrivateKey { key_path, .. } => f
                 .debug_struct("PrivateKey")
                 .field("key_path", key_path)
