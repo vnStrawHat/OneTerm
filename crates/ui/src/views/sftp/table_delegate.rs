@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use gpui::{
     App, Context, Div, InteractiveElement as _, IntoElement, ParentElement,
-    Stateful, Styled, TextAlign, Window, div,
+    Stateful, Styled, TextAlign, Window, div, rgb,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, Sizable as _,
@@ -251,11 +251,10 @@ impl TableDelegate for SftpTableDelegate {
         match cfg.col {
             SortColumn::Name => {
                 let icon = if entry.is_dir {
-                    Icon::new(IconName::Folder).xsmall().text_color(theme.foreground)
+                    Icon::new(IconName::Folder).xsmall().text_color(rgb(0xffd257))
                 } else {
-                    Icon::new(IconName::File).xsmall().text_color(muted)
+                    Icon::new(IconName::File).xsmall().text_color(theme.foreground)
                 };
-                let name_color = if entry.is_dir { theme.foreground } else { muted };
 
                 h_flex()
                     .w_full()
@@ -269,7 +268,7 @@ impl TableDelegate for SftpTableDelegate {
                             .flex_1()
                             .min_w_0()
                             .text_sm()
-                            .text_color(name_color)
+                            .text_color(theme.foreground)
                             .truncate()
                             .child(entry.name.clone()),
                     )
