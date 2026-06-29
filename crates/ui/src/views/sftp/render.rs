@@ -6,7 +6,7 @@
 
 use gpui::{
     Context, Focusable as _, InteractiveElement as _, IntoElement, ParentElement, Render,
-    StatefulInteractiveElement as _, Styled, Window, div, px,
+    Styled, Window, div,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, Sizable as _,
@@ -87,8 +87,6 @@ impl SftpPanel {
     /// Properties, separator, Columns config (checkbox).
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let muted = theme.muted_foreground;
-        let hover_bg = muted.opacity(0.1);
 
         // Border color cho path input — red nếu error, else theme border.
         let path_border = if self.path_error {
@@ -238,28 +236,20 @@ impl SftpPanel {
             )
             // Back button
             .child(
-                div()
-                    .id("sftp-back-btn")
-                    .cursor_pointer()
-                    .px_1()
-                    .py_0()
-                    .rounded(px(3.))
-                    .hover(move |t| t.bg(hover_bg))
-                    .child(Icon::new(IconName::ArrowLeft).xsmall().text_color(muted))
+                Button::new("sftp-back")
+                    .icon(Icon::new(IconName::ArrowLeft).xsmall())
+                    .small()
+                    .ghost()
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.navigate_parent(cx);
                     })),
             )
             // Refresh button
             .child(
-                div()
-                    .id("sftp-refresh-btn")
-                    .cursor_pointer()
-                    .px_1()
-                    .py_0()
-                    .rounded(px(3.))
-                    .hover(move |t| t.bg(hover_bg))
-                    .child(Icon::new(IconName::Redo).xsmall().text_color(muted))
+                Button::new("sftp-refresh")
+                    .icon(Icon::new(IconName::Redo).xsmall())
+                    .small()
+                    .ghost()
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.refresh(cx);
                     })),
