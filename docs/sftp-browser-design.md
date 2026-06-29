@@ -39,13 +39,13 @@ Terminal và SFTP **hoàn toàn song song** — upload file không block termina
 
 | # | Yêu cầu | Trạng thái |
 |---|---------|------------|
-| R1 | Mở SFTP channel cùng lúc shell, cùng 1 TCP connection | ⬜ Chưa triển khai |
+| R1 | Mở SFTP channel cùng lúc shell, cùng 1 TCP connection | ✅ Đã xong |
 | R2 | Terminal panel — shell tương tác (đã hoạt động) | ✅ Đã xong |
-| R3 | SFTP browser panel — hiển thị folder tree | ⬜ Skeleton placeholder |
-| R4 | File operations: open/rename/delete/upload/download | ⬜ Chưa triển khai |
-| R5 | File/folder detail dialog (size, perms, modified time) | ⬜ Chưa triển khai |
-| R6 | Song song: upload mientras gõ lệnh terminal | ⬜ Chưa triển khai |
-| R7 | SFTP optional — server không hỗ trợ thì terminal vẫn dùng được | ⬜ Chưa triển khai |
+| R3 | SFTP browser panel — hiển thị folder tree | ✅ Đã xong |
+| R4 | File operations: open/rename/delete/upload/download | ✅ Đã xong |
+| R5 | File/folder detail dialog (size, perms, modified time) | ✅ Đã xong |
+| R6 | Song song: upload mientras gõ lệnh terminal | ✅ Đã xong |
+| R7 | SFTP optional — server không hỗ trợ thì terminal vẫn dùng được | ✅ Đã xong |
 
 ### 1.3. Sơ đồ tổng quan
 
@@ -1246,80 +1246,76 @@ Bước 1: Dependency + types
 
 #### Bước 1: Dependency + core types
 
-- [ ] Thêm `russh-sftp = "2.0"` vào `Cargo.toml` `[workspace.dependencies]`
-- [ ] Thêm `russh-sftp.workspace = true` vào `crates/ssh/Cargo.toml`
-- [ ] Tạo `crates/ssh/src/sftp.rs` — `SftpCmd`, `SftpEvent`, `FileEntry`, `FileStat`
-- [ ] Thêm `pub mod sftp;` + re-export trong `crates/ssh/src/lib.rs`
-- [ ] `cargo build` pass
+- [x] Thêm `russh-sftp = "2.0"` vào `Cargo.toml` `[workspace.dependencies]` *(dùng 2.3)*
+- [x] Thêm `russh-sftp.workspace = true` vào `crates/ssh/Cargo.toml`
+- [x] Tạo `crates/ssh/src/sftp.rs` — `SftpCmd`, `SftpEvent`, `FileEntry`, `FileStat`
+- [x] Thêm `pub mod sftp;` + re-export trong `crates/ssh/src/lib.rs`
+- [x] `cargo build` pass
 
 #### Bước 2: SFTP backend — sftp.rs + sftp_task.rs
 
-- [ ] Implement `SftpSession` struct (cmd_tx, event_rx, alive)
-- [ ] Implement sync methods: `read_dir`, `stat`, `rename`, `remove`, `mkdir`
-- [ ] Implement async methods: `upload`, `download` (trả về progress + reply channels)
-- [ ] Tạo `crates/ssh/src/sftp_task.rs` — `sftp_task()` tokio task
-- [ ] Implement `sftp_read_dir`, `sftp_stat`, `sftp_upload`, `sftp_download` helpers
-- [ ] Thêm `pub mod sftp_task;` trong `lib.rs`
-- [ ] `cargo build` pass
+- [x] Implement `SftpSession` struct (cmd_tx, event_rx, alive)
+- [x] Implement sync methods: `read_dir`, `stat`, `rename`, `remove`, `mkdir`
+- [x] Implement async methods: `upload`, `download` (trả về progress + reply channels)
+- [x] Tạo `crates/ssh/src/sftp_task.rs` — `sftp_task()` tokio task
+- [x] Implement `sftp_read_dir`, `sftp_stat`, `sftp_upload`, `sftp_download` helpers
+- [x] Thêm `pub mod sftp_task;` trong `lib.rs`
+- [x] `cargo build` pass
 
 #### Bước 3: Modify connect() — mở SFTP channel
 
-- [ ] Thêm `sftp: Mutex<Option<SftpSession>>` field vào `SshSession` struct
-- [ ] Viết `open_sftp()` async helper — mở channel + request subsystem + spawn task
-- [ ] Trong `connect()` block_on: gọi `open_sftp(&handle)` sau khi shell channel opened
-- [ ] Xử lý `Err` → `sftp = None` (terminal vẫn hoạt động)
-- [ ] Spawn `sftp_task` (bên trong `open_sftp`)
-- [ ] Set `sftp` field trong `SshSession` return value
-- [ ] `cargo build` pass
-- [ ] `cargo run` — connect SSH, kiểm tra log "SFTP channel opened"
+- [x] Thêm `sftp: Mutex<Option<SftpSession>>` field vào `SshSession` struct
+- [x] Viết `open_sftp()` async helper — mở channel + request subsystem + spawn task
+- [x] Trong `connect()` block_on: gọi `open_sftp(&handle)` sau khi shell channel opened
+- [x] Xử lý `Err` → `sftp = None` (terminal vẫn hoạt động)
+- [x] Spawn `sftp_task` (bên trong `open_sftp`)
+- [x] Set `sftp` field trong `SshSession` return value
+- [x] `cargo build` pass
+- [x] `cargo run` — connect SSH, kiểm tra log "SFTP channel opened"
 
 #### Bước 4: TerminalSession trait — thêm fn sftp()
 
-- [ ] Thêm method `fn sftp(&self) -> Option<Arc<SftpSession>>` vào `TerminalSession`
+- [x] Thêm method `fn sftp(&self) -> Option<Arc<dyn SftpBackend>>` vào `TerminalSession`
   - Default implementation: `None`
-- [ ] Implement cho `SshSession`: trả về `self.sftp.lock().unwrap().clone()`
-  - Cần đổi `Mutex<Option<SftpSession>>` → `Mutex<Option<Arc<SftpSession>>>`
-- [ ] `LocalSession` — không cần impl (dùng default `None`)
-- [ ] Import `SftpSession` vào `core` crate (hoặc forward type)
-  - **Lưu ý**: `core` là leaf crate, không phụ thuộc `ssh`. Cần định nghĩa
-    `SftpSession` trong `core` (abstract) hoặc dùng trait object.
-  - **Giải pháp**: Định nghĩa `SftpCapable` trait trong `core` với method
-    `fn sftp(&self) -> Option<Arc<dyn SftpBackend>>`, implement `SftpBackend`
-    cho `SftpSession` trong `ssh` crate.
-- [ ] `cargo build` pass + `cargo test` pass
+- [x] Implement cho `SshSession`: trả về `self.sftp.lock().unwrap().clone()`
+  - Đã đổi `Mutex<Option<SftpSession>>` → `Mutex<Option<Arc<SftpSession>>>`
+- [x] `LocalSession` — không cần impl (dùng default `None`)
+- [x] Import `SftpBackend` vào `core` crate — định nghĩa trait trong `crates/core/src/sftp.rs`
+  - **Giải pháp**: Định nghĩa `SftpBackend` trait trong `core`, impl cho `SftpSession` trong `ssh` crate.
+- [x] `cargo build` pass + `cargo test` pass
 
 #### Bước 5: AppState — track active_sftp
 
-- [ ] Thêm `active_sftp: Option<Arc<dyn SftpBackend>>` vào `AppState`
-- [ ] Trong `TerminalPanel::set_active(true)`:
+- [x] Thêm `active_sftp: Option<Arc<dyn SftpBackend>>` vào `AppState`
+- [x] Trong `TerminalPanel::set_active(true)`:
   - Gọi `session.sftp()` → set `AppState.active_sftp`
-- [ ] `cargo build` pass
+- [x] `cargo build` pass
 
 #### Bước 6: SftpPanel — file tree + navigation
 
-- [ ] Thay `SftpPanel` struct: thêm state fields (sftp, cwd, entries, selected, loading, error)
-- [ ] Observe `AppState` — khi `active_sftp` đổi → update + load root dir
-- [ ] Implement `load_dir(path)` — gọi `sftp.read_dir()` trong `cx.spawn`
-- [ ] Render breadcrumb (path + `↑` parent + `⟳` refresh)
-- [ ] Render file list (folders trước, files sau, icon + name + size + date)
-- [ ] Double-click folder → navigate
-- [ ] Single-click → select
-- [ ] Render "No SFTP connection." khi `sftp = None`
-- [ ] Render "Loading..." khi `loading = true`
-- [ ] Render error inline khi `error = Some(...)`
-- [ ] `cargo build` pass + manual test
+- [x] Thay `SftpPanel` struct: thêm state fields (sftp, cwd, entries, selected, loading, error)
+- [x] Observe `AppState` — khi `active_sftp` đổi → update + load root dir
+- [x] Implement `load_dir(path)` — gọi `sftp.read_dir()` trong `cx.spawn`
+- [x] Render breadcrumb (path + `↑` parent + `⟳` refresh)
+- [x] Render file list (folders trước, files sau, icon + name + size + date)
+- [x] Double-click folder → navigate
+- [x] Single-click → select
+- [x] Render "No SFTP connection." khi `sftp = None`
+- [x] Render "Loading..." khi `loading = true`
+- [x] Render error inline khi `error = Some(...)`
+- [x] `cargo build` pass + manual test
 
 #### Bước 7: SftpPanel — file operations
 
-- [ ] Toolbar buttons: Upload, Download, Rename, Delete, New Folder
-- [ ] Rename: dialog (InputState) → `sftp.rename()`
-- [ ] Delete: confirm dialog → `sftp.remove()`
-- [ ] New Folder: dialog → `sftp.mkdir()`
-- [ ] Upload: file picker dialog → `sftp.upload()` → add to transfer queue
-- [ ] Download: file picker dialog → `sftp.download()` → add to transfer queue
-- [ ] Refresh file list sau mỗi operation thành công
-- [ ] Error handling: hiển thị dialog/toast khi operation fail
-- [ ] `cargo build` pass + manual test
+- [x] Toolbar buttons: Upload, Download, Rename, Delete, New Folder, Properties
+- [x] Rename: dialog (InputState) → `sftp.rename()`
+- [x] Delete: confirm dialog → `sftp.remove()` / `sftp.rmdir()`
+- [x] New Folder: dialog → `sftp.mkdir()`
+- [x] Upload: file picker dialog → `sftp.upload()` → add to transfer queue
+- [x] Download: file picker dialog → `sftp.download()` → add to transfer queue
+- [x] Refresh file list sau mỗi operation thành công
+- [x] Error handling: hiển thị dialog/toast khi operation fail
+- [x] `cargo build` pass + manual test
 
 #### Bước 8: SftpPanel — transfer queue
 
