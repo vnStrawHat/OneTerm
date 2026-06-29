@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result};
 use gpui::{Context, Edges, Entity, PromptLevel, Window};
 use gpui_component::dock::{DockArea, DockAreaState};
 
-use super::{MAIN_DOCK_VERSION, STATE_FILE};
+use super::{MAIN_DOCK_VERSION, SFTP_TABLE_STATE_FIELD, STATE_FILE};
 
 impl super::MyTermWorkspace {
     /// Load layout từ file — dùng để giữ right dock + settings.
@@ -68,6 +68,13 @@ pub(crate) fn save_state(
     trigger: &str,
 ) -> Result<()> {
     let mut val = serde_json::to_value(state)?;
+
+    // Preserve `sftp_table_state` từ file hiện có trước khi overwrite —
+    // `views/sftp/persistence.rs` quản lý field này độc lập với DockAreaState.
+    let mut raw_sftp_state: Option<serde_json::Value> = std::fs::read_to_string(STATE_FILE)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|v| v.get(SFTP_TABLE_STATE_FIELD).cloned());
     let right_dock_open = val
         .get("right_dock")
         .and_then(|d| d.get("open"))
@@ -95,6 +102,14 @@ pub(crate) fn save_state(
             super::TOGGLE_BUTTON_VISIBLE_FIELD.into(),
             serde_json::Value::Bool(toggle_button_visible),
         );
+
+        // Preserve `sftp_table_state` (column widths + visibility) nếu có sẵn
+        // trong file — tránh bị overwrite khi workspace save lại layout.
+        // (Ghi bởi `views/sftp/persistence.rs`.)
+        let preserved = raw_sftp_state.take();
+        if let Some(v) = preserved {
+            obj.insert(SFTP_TABLE_STATE_FIELD.into(), v);
+        }
     }
     let json = serde_json::to_string_pretty(&val)?;
     std::fs::write(STATE_FILE, json)?;
@@ -174,5 +189,29 @@ mod tests {
             val[super::super::TOGGLE_BUTTON_VISIBLE_FIELD].as_bool(),
             Some(false)
         );
+    }
+
+    #[test]
+    fn sftp_table_state_field_coexists_with_dock_state() {
+        // `sftp_table_state` là field JSON inject bởi `views/sftp/persistence.rs`.
+        // Phải không break deserialize `DockAreaState` và phải đọc lại được.
+        let state = DockAreaState::default();
+        let mut val = serde_json::to_value(&state).unwrap();
+        val.as_object_mut().unwrap().insert(
+            super::super::SFTP_TABLE_STATE_FIELD.into(),
+            serde_json::json!({
+                "column_widths": { "name": 320.0, "size": 80.0 },
+                "column_visibility": { "name": true, "permissions": false }
+            }),
+        );
+        let json = serde_json::to_string_pretty(&val).unwrap();
+
+        let parsed: DockAreaState = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, state);
+
+        let val: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let sftp = &val[super::super::SFTP_TABLE_STATE_FIELD];
+        assert_eq!(sftp["column_visibility"]["permissions"].as_bool(), Some(false));
+        assert_eq!(sftp["column_widths"]["name"].as_f64(), Some(320.0));
     }
 }

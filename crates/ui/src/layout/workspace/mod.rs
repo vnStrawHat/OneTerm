@@ -32,6 +32,9 @@ pub(crate) mod zoom;
 pub const MAIN_DOCK_VERSION: usize = 2;
 pub const MAIN_DOCK_ID: &str = "main-dock";
 pub const TOGGLE_BUTTON_VISIBLE_FIELD: &str = "toggle_button_visible";
+/// Field JSON lưu trạng thái bảng SFTP (column widths + visibility) trong
+/// `docks.json`. Đọc/ghi bởi `views/sftp/persistence.rs`.
+pub const SFTP_TABLE_STATE_FIELD: &str = "sftp_table_state";
 
 #[cfg(debug_assertions)]
 pub const STATE_FILE: &str = "target/docks.json";

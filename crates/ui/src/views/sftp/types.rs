@@ -3,10 +3,12 @@
 //!
 //! Tách từ `file_browser.rs` để giảm độ dài file.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 use myterm2_core::{FileEntry, SftpBackend};
 
@@ -32,6 +34,7 @@ pub(crate) enum SortDir {
 
 impl SortDir {
     /// Toggle asc ↔ desc.
+    #[allow(dead_code)]
     pub(crate) fn toggle(self) -> Self {
         match self {
             SortDir::Asc => SortDir::Desc,
@@ -179,8 +182,12 @@ pub(crate) fn sftp_changed(
     }
 }
 
-/// Sort entries: folder trước file, trong mỗi nhóm sort theo (col, dir).
-pub(crate) fn sort_entries(entries: &mut [FileEntry], col: SortColumn, dir: SortDir) {
+/// Sort entries: folder trước file, trong mỗi nhóm sort theo `sort` state.
+///
+/// `sort = None` → default: sort theo Name asc (folder-first). `Some((col, dir))`
+/// → sort theo cột đó. Folder luôn đứng trước file bất kể sort state.
+pub(crate) fn sort_entries(entries: &mut [FileEntry], sort: Option<(SortColumn, SortDir)>) {
+    let (col, dir) = sort.unwrap_or((SortColumn::Name, SortDir::Asc));
     entries.sort_by(|a, b| {
         // Luôn folder trước file.
         let folder_cmp = b.is_dir.cmp(&a.is_dir);
@@ -207,55 +214,114 @@ pub(crate) fn sort_entries(entries: &mut [FileEntry], col: SortColumn, dir: Sort
 
 // ── Column definitions ────────────────────────────────────────
 
-/// Định nghĩa 1 cột trong file list.
-pub(crate) struct ColumnDef {
-    pub col: SortColumn,
-    pub label: &'static str,
-    /// Chiều rộng cố định (px). None = flex (name).
-    pub width: Option<f32>,
-    /// Có right-align text không (size).
-    pub right_align: bool,
+impl SortColumn {
+    /// Stable string key — dùng cho persistence (docks.json) và Column key.
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            SortColumn::Name => "name",
+            SortColumn::Modified => "modified",
+            SortColumn::Size => "size",
+            SortColumn::Permissions => "permissions",
+            SortColumn::Owner => "owner",
+            SortColumn::Group => "group",
+        }
+    }
+
+    /// Parse key ngược lại `SortColumn`. `None` nếu key không hợp lệ.
+    #[allow(dead_code)]
+    pub(crate) fn from_key(key: &str) -> Option<Self> {
+        Some(match key {
+            "name" => SortColumn::Name,
+            "modified" => SortColumn::Modified,
+            "size" => SortColumn::Size,
+            "permissions" => SortColumn::Permissions,
+            "owner" => SortColumn::Owner,
+            "group" => SortColumn::Group,
+            _ => return None,
+        })
+    }
 }
 
-/// Danh sách cột hiển thị (thứ tự từ trái → phải).
-pub(crate) const COLUMNS: &[ColumnDef] = &[
-    ColumnDef {
-        col: SortColumn::Name,
-        label: "Name",
-        width: None,
-        right_align: false,
-    },
-    ColumnDef {
-        col: SortColumn::Modified,
-        label: "Date Modified",
-        width: Some(130.0),
-        right_align: false,
-    },
-    ColumnDef {
-        col: SortColumn::Size,
-        label: "Size",
-        width: Some(70.0),
-        right_align: true,
-    },
-    ColumnDef {
-        col: SortColumn::Permissions,
-        label: "Permissions",
-        width: Some(140.0),
-        right_align: false,
-    },
-    ColumnDef {
-        col: SortColumn::Owner,
-        label: "Owner",
-        width: Some(80.0),
-        right_align: false,
-    },
-    ColumnDef {
-        col: SortColumn::Group,
-        label: "Group",
-        width: Some(80.0),
-        right_align: false,
-    },
-];
+/// Định nghĩa 1 cột trong file list — bao gồm config hiển thị + trạng thái
+/// resize/visibility (được persist vào `docks.json`).
+#[derive(Clone, Debug)]
+pub(crate) struct SftpColumnConfig {
+    pub col: SortColumn,
+    /// Sortable key string — trùng `SortColumn::key`.
+    pub key: &'static str,
+    /// Nhãn header.
+    pub label: &'static str,
+    /// Chiều rộng mặc định (px) — dùng để reset.
+    #[allow(dead_code)]
+    pub default_width: f32,
+    /// Chiều rộng tối thiểu (px) — giới hạn resize.
+    pub min_width: f32,
+    /// Chiều rộng tối đa (px) — giới hạn resize.
+    pub max_width: f32,
+    /// Right-align text (Size).
+    pub right_align: bool,
+    /// Đang hiển thị hay không (config ẩn hiện cột).
+    pub visible: bool,
+    /// Chiều rộng hiện tại (px) — có thể thay đổi khi resize.
+    pub width: f32,
+}
+
+impl SftpColumnConfig {
+    fn new(
+        col: SortColumn,
+        label: &'static str,
+        default_width: f32,
+        right_align: bool,
+    ) -> Self {
+        Self {
+            key: col.key(),
+            col,
+            label,
+            default_width,
+            min_width: 40.0,
+            max_width: 800.0,
+            right_align,
+            visible: true,
+            width: default_width,
+        }
+    }
+}
+
+/// Danh sách cột canonical (thứ tự từ trái → phải). Name luôn visible.
+///
+/// Name được ưu tiên độ dài lớn nhất —DataTable dùng fixed-width columns,
+/// nên gán width lớn cho name để chiếm nhiều không gian nhất (resizable).
+pub(crate) fn default_column_configs() -> Vec<SftpColumnConfig> {
+    vec![
+        SftpColumnConfig::new(SortColumn::Name, "Name", 320.0, false),
+        SftpColumnConfig::new(SortColumn::Modified, "Date Modified", 140.0, false),
+        SftpColumnConfig::new(SortColumn::Size, "Size", 80.0, true),
+        SftpColumnConfig::new(SortColumn::Permissions, "Permissions", 150.0, false),
+        SftpColumnConfig::new(SortColumn::Owner, "Owner", 90.0, false),
+        SftpColumnConfig::new(SortColumn::Group, "Group", 90.0, false),
+    ]
+}
+
+/// Map `SortDir` sang `ColumnSort` của DataTable.
+pub(crate) fn sort_dir_to_column_sort(dir: SortDir) -> gpui_component::table::ColumnSort {
+    match dir {
+        SortDir::Asc => gpui_component::table::ColumnSort::Ascending,
+        SortDir::Desc => gpui_component::table::ColumnSort::Descending,
+    }
+}
+
+// ── Persistence (docks.json field `sftp_table_state`) ─────────
+
+/// Trạng thái bảng SFTP được persist vào `docks.json`.
+/// - `column_widths`: key = `SortColumn::key()`, value = px.
+/// - `column_visibility`: key = `SortColumn::key()`, value = visible?.
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct SftpTableStateJson {
+    #[serde(default)]
+    pub column_widths: HashMap<String, f32>,
+    #[serde(default)]
+    pub column_visibility: HashMap<String, bool>,
+}
 
 // ── Transfer queue ──────────────────────────────────────────
 

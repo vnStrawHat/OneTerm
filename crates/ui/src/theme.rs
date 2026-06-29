@@ -37,6 +37,10 @@ fn apply_list_style_override(cx: &mut App) {
     let theme = Theme::global_mut(cx);
     theme.list_active = theme.list_hover;
     theme.list_active_border = gpui::transparent_black();
+    // DataTable selected-row overlay: tắt cả bg lẫn border để highlight
+    // do `render_tr` vẽ (= `table_hover`, giống hover, không border).
+    theme.table_active = gpui::transparent_black();
+    theme.table_active_border = gpui::transparent_black();
 }
 
 /// Khởi tạo theme: nạp embedded themes + wire action `SwitchTheme` / `SwitchThemeMode`.

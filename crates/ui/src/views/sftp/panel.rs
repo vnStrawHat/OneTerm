@@ -3,25 +3,31 @@
 //! Hiển thị file tree từ remote SFTP server. 1 panel cho toàn app —
 //! observe `AppState.active_sftp` để biết SSH tab nào đang active.
 //!
-//! Columns: Name, Date Modified, Size, Permissions, Owner, Group.
-//! Tất cả sortable. Default: Name asc, folder trước file.
-//! Luôn hiện hidden files.
+//! File list render bằng `gpui_component::table::DataTable`:
+//! - Columns resizable, sortable, ẩn/hiện (config).
+//! - Name column pinned left + width lớn nhất (ưu tiên độ dài).
+//! - Trạng thái cột (width + visibility) persist vào `docks.json`
+//!   (field `sftp_table_state`).
 //!
 //! Tham chiếu `docs/sftp-browser-design.md` §4.
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, Window,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
+    Subscription, Task, Window,
 };
 use gpui_component::dock::{Panel, PanelControl, PanelEvent};
+use gpui_component::table::{TableEvent, TableState};
 
 use myterm2_core::{FileEntry, SftpBackend};
 
 use crate::state::AppState;
 
-use super::types::{PendingAction, SortColumn, SortDir, TransferItem, sftp_changed, sort_entries};
+use super::table_delegate::SftpTableDelegate;
+use super::types::{PendingAction, SortColumn, TransferItem, sftp_changed};
 
 // ── SftpPanel ────────────────────────────────────────────────
 
@@ -37,14 +43,12 @@ pub struct SftpPanel {
 
     // ── File tree state ─────────────────────────────────────
     pub(crate) cwd: PathBuf,
-    pub(crate) entries: Vec<FileEntry>,
+    /// Entries + sort + loading + column config sống trong delegate.
+    pub(crate) table: Entity<TableState<SftpTableDelegate>>,
+    /// Mirror index dòng đang chọn (sync từ `TableEvent::SelectRow` +
+    /// context menu right-click). Dùng cho toolbar actions.
     pub(crate) selected: Option<usize>,
-    pub(crate) loading: bool,
     pub(crate) error: Option<String>,
-
-    // ── Sort state ───────────────────────────────────────────
-    pub(crate) sort_col: SortColumn,
-    pub(crate) sort_dir: SortDir,
 
     // ── Transfer queue state ────────────────────────────────
     pub(crate) transfers: Vec<TransferItem>,
@@ -52,15 +56,35 @@ pub struct SftpPanel {
 
     // ── Pending action (context menu → render) ──────────────
     pub(crate) pending_action: Option<PendingAction>,
+
+    // ── Debounce save table state ───────────────────────────
+    _save_table_task: Option<Task<()>>,
+    _table_sub: Subscription,
 }
 
 impl SftpPanel {
-    /// Tạo panel mới — observe AppState ngay.
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+    /// Tạo panel mới — observe AppState, tạo DataTable state.
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
 
         let app_state = AppState::global(cx);
         log::debug!("SftpPanel::new: observing AppState for active_sftp changes");
+
+        // DataTable state — delegate owns entries + column config (persisted).
+        let panel_weak = cx.entity().downgrade();
+        let delegate = SftpTableDelegate::new(panel_weak);
+        let table = cx.new(|cx| {
+            TableState::new(delegate, window, cx)
+                .col_movable(false)
+                .col_resizable(true)
+                .sortable(true)
+                .col_selectable(false)
+                .row_selectable(true)
+        });
+
+        // Subscribe table events → mirror selection, handle double-click navigate,
+        // persist column widths on resize.
+        let table_sub = cx.subscribe_in(&table, window, Self::on_table_event);
 
         cx.observe(&app_state, |this, state, cx| {
             let new_sftp = state.read(cx).active_sftp.clone();
@@ -71,12 +95,17 @@ impl SftpPanel {
                     new_sftp.is_some()
                 );
                 this.sftp = new_sftp;
-                this.entries.clear();
                 this.selected = None;
                 this.error = None;
                 this.cwd = PathBuf::new();
                 this.transfers.clear();
                 this.pending_action = None;
+                this.table.update(cx, |t, cx| {
+                    t.delegate_mut().entries.clear();
+                    t.delegate_mut().loading = false;
+                    t.clear_selection(cx);
+                    cx.notify();
+                });
                 if this.sftp.is_some() {
                     log::debug!("SftpPanel: loading initial dir \".\"");
                     this.load_dir(PathBuf::from("."), cx);
@@ -90,21 +119,68 @@ impl SftpPanel {
             focus_handle,
             sftp: None,
             cwd: PathBuf::new(),
-            entries: Vec::new(),
+            table,
             selected: None,
-            loading: false,
             error: None,
-            sort_col: SortColumn::Name,
-            sort_dir: SortDir::Asc,
             transfers: Vec::new(),
             next_transfer_id: 0,
             pending_action: None,
+            _save_table_task: None,
+            _table_sub: table_sub,
         }
     }
 
     /// Helper tạo `Entity<Self>`.
     pub fn new_entity(window: &mut Window, cx: &mut App) -> Entity<Self> {
         cx.new(|cx| Self::new(window, cx))
+    }
+
+    // ── Table event handler ──────────────────────────────────
+
+    fn on_table_event(
+        &mut self,
+        _: &Entity<TableState<SftpTableDelegate>>,
+        event: &TableEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            TableEvent::SelectRow(idx) => {
+                self.selected = Some(*idx);
+                cx.notify();
+            }
+            TableEvent::DoubleClickedRow(idx) => {
+                log::debug!("SftpPanel: double-click row {idx} → navigate_into");
+                self.navigate_into(*idx, cx);
+            }
+            TableEvent::ClearSelection => {
+                self.selected = None;
+                cx.notify();
+            }
+            TableEvent::ColumnWidthsChanged(widths) => {
+                // Cập nhật width trong delegate + debounce persist.
+                let widths: Vec<_> = widths.iter().map(|p| *p).collect();
+                self.table.update(cx, |t, cx| {
+                    t.delegate_mut().apply_widths(&widths);
+                    cx.notify();
+                });
+                self.schedule_save_table_state(cx);
+            }
+            _ => {}
+        }
+    }
+
+    /// Debounce 1s rồi persist column state (width + visibility) vào docks.json.
+    fn schedule_save_table_state(&mut self, cx: &mut Context<Self>) {
+        self._save_table_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_secs(1))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.table.read(cx).delegate().persist();
+                cx.notify();
+            });
+        }));
     }
 
     // ── File operations ──────────────────────────────────────
@@ -117,15 +193,22 @@ impl SftpPanel {
             Some(s) => s.clone(),
             None => {
                 log::warn!("SftpPanel::load_dir: no SFTP connection — ignoring");
-                self.loading = false;
+                self.table.update(cx, |t, cx| {
+                    t.delegate_mut().loading = false;
+                    cx.notify();
+                });
                 return;
             }
         };
 
-        self.loading = true;
+        self.table.update(cx, |t, cx| {
+            t.delegate_mut().loading = true;
+            cx.notify();
+        });
         self.error = None;
         self.cwd = path.clone();
         self.selected = None;
+        self.table.update(cx, |t, cx| t.clear_selection(cx));
         cx.notify();
 
         cx.spawn(async move |this, cx| {
@@ -140,9 +223,12 @@ impl SftpPanel {
                 .await;
 
             this.update(cx, |this, cx| {
-                this.loading = false;
+                this.table.update(cx, |t, cx| {
+                    t.delegate_mut().loading = false;
+                    cx.notify();
+                });
                 match result {
-                    Ok(mut entries) => {
+                    Ok(entries) => {
                         log::info!(
                             "SftpPanel::load_dir: got {} entries for \"{}\"",
                             entries.len(),
@@ -150,27 +236,27 @@ impl SftpPanel {
                         );
 
                         // Update cwd với absolute path từ entry đầu tiên.
+                        let mut cwd = this.cwd.clone();
                         if let Some(first) = entries.first() {
                             if let Some(parent) = first.path.parent() {
-                                this.cwd = parent.to_path_buf();
+                                cwd = parent.to_path_buf();
                             }
                         }
+                        this.cwd = cwd;
 
-                        // Sort theo sort state hiện tại.
-                        sort_entries(&mut entries, this.sort_col, this.sort_dir);
-                        log::debug!(
-                            "SftpPanel::load_dir: sorted by {:?} {:?}",
-                            this.sort_col,
-                            this.sort_dir
-                        );
-
-                        this.entries = entries;
+                        this.table.update(cx, |t, cx| {
+                            t.delegate_mut().set_entries(entries);
+                            t.refresh(cx);
+                        });
                         this.error = None;
                     }
                     Err(e) => {
                         log::error!("SftpPanel::load_dir: read_dir failed: {e}");
                         this.error = Some(e.to_string());
-                        this.entries.clear();
+                        this.table.update(cx, |t, cx| {
+                            t.delegate_mut().entries.clear();
+                            t.refresh(cx);
+                        });
                     }
                 }
                 cx.notify();
@@ -204,7 +290,8 @@ impl SftpPanel {
 
     /// Navigate vào thư mục con (double-click folder).
     pub(crate) fn navigate_into(&mut self, idx: usize, cx: &mut Context<Self>) {
-        match self.entries.get(idx) {
+        let entry = self.table.read(cx).delegate().entries.get(idx).cloned();
+        match entry {
             Some(entry) if entry.is_dir => {
                 log::debug!(
                     "SftpPanel::navigate_into: \"{}\" → \"{}\"",
@@ -222,31 +309,25 @@ impl SftpPanel {
         }
     }
 
-    /// Click column header → sort theo cột đó.
-    /// Nếu click cùng cột → toggle direction. Nếu click cột khác → sort asc.
-    pub(crate) fn sort_by(&mut self, col: SortColumn, cx: &mut Context<Self>) {
-        if col == self.sort_col {
-            self.sort_dir = self.sort_dir.toggle();
-            log::debug!(
-                "SftpPanel::sort_by: same col {:?} → dir={:?}",
-                col,
-                self.sort_dir
-            );
-        } else {
-            self.sort_col = col;
-            self.sort_dir = SortDir::Asc;
-            log::debug!("SftpPanel::sort_by: new col {:?} → dir=Asc", col);
+    /// Toggle visibility của 1 cột (từ Columns dropdown). Name không thể ẩn.
+    pub(crate) fn toggle_column(&mut self, col: SortColumn, cx: &mut Context<Self>) {
+        let changed = self.table.update(cx, |t, cx| {
+            let changed = t.delegate_mut().toggle_visibility(col);
+            if changed {
+                t.refresh(cx);
+            }
+            changed
+        });
+        if changed {
+            self.schedule_save_table_state(cx);
+            cx.notify();
         }
-
-        // Re-sort entries đã có (không cần reload).
-        sort_entries(&mut self.entries, self.sort_col, self.sort_dir);
-        self.selected = None;
-        cx.notify();
     }
 
-    /// Get selected entry (if any).
-    pub(crate) fn selected_entry(&self) -> Option<&FileEntry> {
-        self.selected.and_then(|ix| self.entries.get(ix))
+    /// Get selected entry (if any) — clone để dùng trong dialog.
+    pub(crate) fn selected_entry(&self, cx: &App) -> Option<FileEntry> {
+        self.selected
+            .and_then(|ix| self.table.read(cx).delegate().entries.get(ix).cloned())
     }
 }
 

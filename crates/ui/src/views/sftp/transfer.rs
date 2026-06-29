@@ -225,7 +225,7 @@ impl SftpPanel {
     /// Download file remote → local.
     /// Mở dialog nhập local save path → sftp.download() → poll progress.
     pub(crate) fn do_download(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let entry = match self.selected_entry() {
+        let entry = match self.selected_entry(cx) {
             Some(e) => e.clone(),
             None => {
                 log::warn!("SftpPanel::do_download: no selection");

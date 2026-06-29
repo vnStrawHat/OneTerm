@@ -25,7 +25,7 @@ impl SftpPanel {
     /// Rename selected entry.
     /// Mở dialog với InputState pre-fill tên hiện tại → sftp.rename().
     pub(crate) fn do_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let entry = match self.selected_entry() {
+        let entry = match self.selected_entry(cx) {
             Some(e) => e.clone(),
             None => {
                 log::warn!("SftpPanel::do_rename: no selection");
@@ -137,7 +137,7 @@ impl SftpPanel {
     /// Delete selected entry (file or folder).
     /// Mở alert dialog confirm → sftp.remove() hoặc sftp.rmdir().
     pub(crate) fn do_delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let entry = match self.selected_entry() {
+        let entry = match self.selected_entry(cx) {
             Some(e) => e.clone(),
             None => {
                 log::warn!("SftpPanel::do_delete: no selection");
@@ -298,7 +298,7 @@ impl SftpPanel {
 
     /// Show properties dialog — sftp.stat() → hiển thị metadata chi tiết.
     pub(crate) fn do_properties(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let entry = match self.selected_entry() {
+        let entry = match self.selected_entry(cx) {
             Some(e) => e.clone(),
             None => {
                 log::warn!("SftpPanel::do_properties: no selection");
