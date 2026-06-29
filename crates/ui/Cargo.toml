@@ -3,6 +3,7 @@ name = "myterm2-ui"
 description = "GPUI views, layout, theme, state for myTerm2."
 publish = false
 edition.workspace = true
+build = "build.rs"
 
 [lints]
 workspace = true
@@ -26,3 +27,4 @@ serde_json.workspace = true
 tracing.workspace = true
 chrono.workspace = true
 async-channel.workspace = true
+rust-embed = "8.7"

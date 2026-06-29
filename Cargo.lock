@@ -4604,6 +4604,7 @@ dependencies = [
  "myterm2-core",
  "myterm2-local",
  "myterm2-ssh",
+ "rust-embed",
  "serde",
  "serde_json",
  "tracing",

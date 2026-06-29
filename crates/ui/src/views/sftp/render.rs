@@ -228,10 +228,10 @@ impl SftpPanel {
             // Path input — flex-1, border-bottom only, transparent bg.
             .child(
                 Input::new(&self.path_input)
-                    .appearance(false)
+                    // .appearance(false)
                     .border_b_1()
                     .border_color(path_border)
-                    .text_sm()
+                    // .text_sm()
                     .small(),
             )
             // Back button
