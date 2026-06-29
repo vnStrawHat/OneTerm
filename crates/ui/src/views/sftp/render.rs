@@ -107,7 +107,7 @@ impl SftpPanel {
             .collect::<Vec<_>>();
 
         let more_btn = Button::new("sftp-more")
-            .icon(Icon::new(IconName::Ellipsis).small())
+            .icon(Icon::new(IconName::EllipsisVertical).small())
             .small()
             .ghost()
             .dropdown_menu(move |menu, _window, _cx| {
@@ -237,7 +237,7 @@ impl SftpPanel {
             // Back button
             .child(
                 Button::new("sftp-back")
-                    .icon(Icon::new(IconName::ArrowLeft).xsmall())
+                    .icon(Icon::new(IconName::ArrowLeft).small())
                     .small()
                     .ghost()
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -247,7 +247,7 @@ impl SftpPanel {
             // Refresh button
             .child(
                 Button::new("sftp-refresh")
-                    .icon(Icon::new(IconName::Redo).xsmall())
+                    .icon(Icon::new(IconName::Redo).small())
                     .small()
                     .ghost()
                     .on_click(cx.listener(|this, _, _, cx| {
