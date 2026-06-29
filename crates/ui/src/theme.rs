@@ -111,7 +111,7 @@ pub fn init(cx: &mut App) {
         let theme = Theme::global_mut(cx);
         theme.radius = px(0.001);
         theme.radius_lg = px(0.);
-        theme.scrollbar_show = ScrollbarShow::Scrolling;
+        theme.scrollbar_show = ScrollbarShow::Always;
     }
 
     // Selected item = hover look: bg = list_hover, không border.
