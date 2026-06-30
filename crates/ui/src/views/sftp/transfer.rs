@@ -1,7 +1,8 @@
 //! Transfer operations cho SFTP browser — upload, download.
 //!
 //! Tách từ `file_browser.rs` để giảm độ dài file.
-//! Upload: mở OS native file/folder picker → gọi SFTP backend → poll progress.
+//! Upload: mở OS native file/folder picker HOẶC drag & drop external files
+//!         → gọi SFTP backend → poll progress.
 //! Download: mở OS native Save dialog (prompt_for_new_path) → gọi SFTP backend
 //!           → poll progress. Hỗ trợ cả file và folder (download đệ quy).
 
@@ -14,63 +15,38 @@ use super::panel::SftpPanel;
 use super::types::{TransferDirection, TransferItem, TransferStatus};
 
 impl SftpPanel {
-    /// Upload file hoặc thư mục local → remote.
-    /// Mở OS native open dialog (chọn files hoặc folder) → sftp.upload() → poll progress.
-    /// `pick_folders` — true: folder picker, false: file picker (multiple).
-    /// Windows không hỗ trợ mixed files+folders trong 1 dialog, nên tách 2 mode.
-    pub(crate) fn do_upload(
+    /// Upload một danh sách local paths → remote cwd.
+    ///
+    /// Core logic — dùng bởi cả file picker (`do_upload`) và drag & drop
+    /// (`on_drop` trong render). Upload từng path sequentially, add TransferItem,
+    /// poll progress, refresh sau khi xong.
+    pub(crate) fn do_upload_paths(
         &mut self,
-        pick_folders: bool,
-        _window: &mut Window,
+        local_paths: Vec<PathBuf>,
         cx: &mut Context<Self>,
     ) {
-        let mode_str = if pick_folders { "folder" } else { "files" };
-        log::info!("SftpPanel::do_upload ({mode_str}): cwd=\"{}\"", self.cwd.display());
+        if local_paths.is_empty() {
+            return;
+        }
 
-        let sftp = self.sftp.clone().unwrap();
+        let sftp = match self.sftp.clone() {
+            Some(s) => s,
+            None => {
+                log::warn!("SftpPanel::do_upload_paths: no SFTP connection");
+                return;
+            }
+        };
         let panel = cx.entity();
         let cwd = self.cwd.clone();
 
-        // Mở OS native file picker.
-        // Windows không hỗ trợ mixed files+folders (FOS_PICKFOLDERS toggles mode),
-        // nên tách 2 mode: files-only (multiple) hoặc folder-only (single).
-        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
-            files: !pick_folders,
-            directories: pick_folders,
-            multiple: !pick_folders,
-            prompt: Some(if pick_folders {
-                "Select a folder to upload"
-            } else {
-                "Select files to upload"
-            }
-            .into()),
-        });
+        log::info!(
+            "SftpPanel::do_upload_paths: {} path(s) → \"{}\"",
+            local_paths.len(),
+            cwd.display()
+        );
 
-        // Spawn task đợi user chọn path → upload từng path sequentially.
         cx.spawn(async move |_panel, cx| {
-            let paths = match rx.await {
-                Ok(Ok(Some(paths))) if !paths.is_empty() => paths,
-                Ok(Ok(Some(_))) => {
-                    log::debug!("SftpPanel: upload — no paths selected (empty)");
-                    return;
-                }
-                Ok(Ok(None)) => {
-                    log::debug!("SftpPanel: upload — user cancelled");
-                    return;
-                }
-                Ok(Err(e)) => {
-                    log::error!("SftpPanel: upload — file picker error: {e}");
-                    return;
-                }
-                Err(e) => {
-                    log::error!("SftpPanel: upload — channel error: {e}");
-                    return;
-                }
-            };
-
-            log::info!("SftpPanel: upload — {} path(s) selected", paths.len());
-
-            for local_path in paths {
+            for local_path in local_paths {
                 // Remote path: cwd / filename
                 let filename = local_path
                     .file_name()
@@ -199,6 +175,68 @@ impl SftpPanel {
                 panel.update(cx, |this, cx| {
                     this.refresh(cx);
                 })
+            });
+        })
+        .detach();
+    }
+
+    /// Upload file hoặc thư mục local → remote.
+    /// Mở OS native open dialog (chọn files hoặc folder) → gọi `do_upload_paths`.
+    /// `pick_folders` — true: folder picker, false: file picker (multiple).
+    /// Windows không hỗ trợ mixed files+folders trong 1 dialog, nên tách 2 mode.
+    pub(crate) fn do_upload(
+        &mut self,
+        pick_folders: bool,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mode_str = if pick_folders { "folder" } else { "files" };
+        log::info!("SftpPanel::do_upload ({mode_str}): cwd=\"{}\"", self.cwd.display());
+
+        // Mở OS native file picker.
+        // Windows không hỗ trợ mixed files+folders (FOS_PICKFOLDERS toggles mode),
+        // nên tách 2 mode: files-only (multiple) hoặc folder-only (single).
+        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: !pick_folders,
+            directories: pick_folders,
+            multiple: !pick_folders,
+            prompt: Some(if pick_folders {
+                "Select a folder to upload"
+            } else {
+                "Select files to upload"
+            }
+            .into()),
+        });
+
+        // Spawn task đợi user chọn path → delegate sang do_upload_paths.
+        let panel = cx.entity();
+        cx.spawn(async move |_panel, cx| {
+            let paths = match rx.await {
+                Ok(Ok(Some(paths))) if !paths.is_empty() => paths,
+                Ok(Ok(Some(_))) => {
+                    log::debug!("SftpPanel: upload — no paths selected (empty)");
+                    return;
+                }
+                Ok(Ok(None)) => {
+                    log::debug!("SftpPanel: upload — user cancelled");
+                    return;
+                }
+                Ok(Err(e)) => {
+                    log::error!("SftpPanel: upload — file picker error: {e}");
+                    return;
+                }
+                Err(e) => {
+                    log::error!("SftpPanel: upload — channel error: {e}");
+                    return;
+                }
+            };
+
+            log::info!("SftpPanel: upload — {} path(s) selected", paths.len());
+
+            cx.update(|cx| {
+                panel.update(cx, |this, cx| {
+                    this.do_upload_paths(paths, cx);
+                });
             });
         })
         .detach();

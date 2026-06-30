@@ -5,8 +5,8 @@
 //! render thủ công header + rows trong `render_list.rs` (đã xoá).
 
 use gpui::{
-    Context, Focusable as _, InteractiveElement as _, IntoElement, ParentElement, Render,
-    Styled, Window, div,
+    Context, ExternalPaths, Focusable as _, InteractiveElement as _, IntoElement,
+    ParentElement, Render, Styled, Window, div,
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui_component::{
@@ -302,6 +302,7 @@ impl SftpPanel {
         }
 
         v_flex()
+            .id("sftp-file-list")
             .flex_1()
             .min_h_0()
             .child(
@@ -310,6 +311,24 @@ impl SftpPanel {
                     .scrollbar_visible(true, true)
                     .small(),
             )
+            // Drag & drop external files → upload to remote cwd.
+            .can_drop(|drag, _window, _cx| {
+                drag.is::<ExternalPaths>()
+            })
+            .on_drop(cx.listener(
+                move |this, external_paths: &ExternalPaths, _window, cx| {
+                    let paths: Vec<_> = external_paths.paths().to_vec();
+                    log::info!(
+                        "SftpPanel: on_drop — {} external path(s) dropped",
+                        paths.len()
+                    );
+                    if this.sftp.is_some() {
+                        this.do_upload_paths(paths, cx);
+                    } else {
+                        log::warn!("SftpPanel: on_drop — no SFTP connection, ignoring");
+                    }
+                },
+            ))
             .into_any_element()
     }
 }
