@@ -65,6 +65,16 @@ pub enum SessionEvent {
 
 /// Hình chữ nhật pixel của con trỏ — cho IME popup positioning.
 /// UI map sang `gpui::Bounds<Pixels>`.
+
+/// Thống kê network của session (SSH only — local trả về `None`).
+/// Dùng cho StatusBar hiển thị tốc độ network.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NetStats {
+    /// Tổng bytes nhận (download direction: server → client).
+    pub rx_bytes: u64,
+    /// Tổng bytes gửi (upload direction: client → server).
+    pub tx_bytes: u64,
+}
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CursorBounds {
     pub x: f32,
@@ -210,7 +220,15 @@ pub trait TerminalSession: Send + Sync + 'static {
         self.cwd().map(|p| p.display().to_string())
     }
 
-    // ── SFTP ─────────────────────────────────────────────────────
+
+    // ── Network Stats ────────────────────────────────────────
+    /// Thống kê network (bytes rx/tx). `None` cho local shell.
+    /// Dùng cho StatusBar hiển thị tốc độ network (kbps).
+    fn network_stats(&self) -> Option<NetStats> {
+        None
+    }
+
+    // ── SFTP ─────────────────────────────────────────────
     /// SFTP backend nếu session có SFTP channel (SSH only).
     /// `None` cho local shell — không ép local session implement SFTP.
     fn sftp(&self) -> Option<Arc<dyn SftpBackend>> {

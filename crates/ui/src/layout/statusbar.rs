@@ -3,7 +3,7 @@
 //! Clock entity được tạo 1 lần trong `MyTermWorkspace::new` và truyền vào đây,
 //! tránh tạo mới mỗi render (sẽ drop timer Task → đồng hồ dừng).
 
-use gpui::{Context, Entity, Styled, Window};
+use gpui::{Context, Entity, Styled, Window, div, px};
 use gpui_component::{
     ActiveTheme as _, IconName, Sizable,
     button::{Button, ButtonVariants as _},
@@ -11,7 +11,7 @@ use gpui_component::{
     status_bar::StatusBar,
 };
 
-use crate::components::DateTimeClock;
+use crate::components::{DateTimeClock, NetSpeedIndicator};
 use crate::layout::MyTermWorkspace;
 
 /// Build `StatusBar` cho `MyTermWorkspace`.
@@ -21,6 +21,7 @@ use crate::layout::MyTermWorkspace;
 pub fn build_status_bar(
     dock_area: &Entity<DockArea>,
     clock: Entity<DateTimeClock>,
+    net_speed: Entity<NetSpeedIndicator>,
     _window: &mut Window,
     cx: &mut Context<MyTermWorkspace>,
 ) -> StatusBar {
@@ -30,6 +31,11 @@ pub fn build_status_bar(
         // Sync border top color với Dock border (cx.theme().border)
         .border_color(cx.theme().border)
         .left(clock)
+        .left(
+            // Separator + network speed indicator.
+            div().w(px(1.)).h(px(12.)).bg(cx.theme().border)
+        )
+        .left(net_speed)
         .right(
             Button::new("toggle-right-dock")
                 .ghost()

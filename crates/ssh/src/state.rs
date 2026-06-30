@@ -30,6 +30,10 @@ pub struct SessionState {
     pub absolute_line_count: usize,
     /// Previous total_lines — detect dropped lines.
     pub prev_total_lines: usize,
+    /// Tổng bytes nhận từ server (download direction).
+    pub rx_bytes: u64,
+    /// Tổng bytes gửi lên server (upload direction).
+    pub tx_bytes: u64,
 }
 
 /// Arc-Mutex wrapper.

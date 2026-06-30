@@ -40,7 +40,6 @@ impl SftpPanel {
 
         let theme = cx.theme();
         let muted = theme.muted_foreground;
-        let accent = theme.accent;
         let danger = theme.danger;
 
         // Count active vs completed

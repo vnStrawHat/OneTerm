@@ -94,6 +94,12 @@ impl TerminalPanel {
         cx.new(|cx| Self::from_session(session, title, window, cx))
     }
 
+    /// Network stats của session (SSH only — `None` cho local).
+    /// Dùng cho StatusBar hiển thị tốc độ network.
+    pub fn network_stats(&self, cx: &App) -> Option<myterm2_core::NetStats> {
+        self.view.read(cx).session.read(cx).network_stats()
+    }
+
     /// Helper tạo `Entity<Self>` (local session mặc định).
     pub fn new_entity(window: &mut Window, cx: &mut App) -> Entity<Self> {
         cx.new(|cx| Self::new(window, cx))

@@ -19,7 +19,7 @@ use gpui_component::{
 };
 
 use crate::{
-    components::DateTimeClock,
+    components::{DateTimeClock, NetSpeedIndicator},
     layout::{statusbar, title_bar::AppTitleBar},
     state::AppState,
 };
@@ -78,6 +78,8 @@ pub struct MyTermWorkspace {
     pub dock_area: Entity<DockArea>,
     /// Đồng hồ datetime — tạo 1 lần để timer 1s fire ổn định.
     pub clock: Entity<DateTimeClock>,
+    /// Network speed indicator — tạo 1 lần để timer 1s fire ổn định.
+    pub net_speed: Entity<NetSpeedIndicator>,
     last_layout_state: Option<gpui_component::dock::DockAreaState>,
     toggle_button_visible: Arc<AtomicBool>,
     _save_layout_task: Option<Task<()>>,
@@ -190,11 +192,13 @@ impl MyTermWorkspace {
         });
 
         let clock = DateTimeClock::new_entity(window, cx);
+        let net_speed = NetSpeedIndicator::new_entity(dock_area.downgrade(), window, cx);
 
         let mut me = Self {
             title_bar,
             dock_area: dock_area.clone(),
             clock,
+            net_speed,
             last_layout_state: None,
             toggle_button_visible,
             _save_layout_task: None,
@@ -374,6 +378,7 @@ impl Render for MyTermWorkspace {
             .child(statusbar::build_status_bar(
                 &self.dock_area,
                 self.clock.clone(),
+                self.net_speed.clone(),
                 window,
                 cx,
             ))

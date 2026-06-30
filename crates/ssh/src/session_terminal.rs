@@ -345,7 +345,17 @@ impl TerminalSession for SshSession {
         self.state.lock().unwrap().foreground_process.clone()
     }
 
-    // ── SFTP ────────────────────────────────────────────────────────
+
+    // ── Network Stats ───────────────────────────────────────────
+    fn network_stats(&self) -> Option<myterm2_core::NetStats> {
+        let st = self.state.lock().unwrap();
+        Some(myterm2_core::NetStats {
+            rx_bytes: st.rx_bytes,
+            tx_bytes: st.tx_bytes,
+        })
+    }
+
+    // ── SFTP ────────────────────────────────────────────────
     fn sftp(&self) -> Option<std::sync::Arc<dyn SftpBackend>> {
         self.sftp
             .lock()

@@ -45,6 +45,8 @@ pub(crate) async fn ssh_main_task(
                     Some(ChannelMsg::Data { data }) => {
                         let bytes: &[u8] = data.as_ref();
                         log::debug!("ssh_main_task: recv {} bytes", bytes.len());
+                        // Track network stats — bytes received from server.
+                        state.lock().unwrap().rx_bytes += bytes.len() as u64;
                         // Feed Term (ansi::Processor).
                         {
                             let mut term = term.lock();
@@ -135,6 +137,8 @@ pub(crate) async fn ssh_main_task(
                             bytes.len(),
                             String::from_utf8_lossy(&bytes)
                         );
+                        // Track network stats — bytes sent to server.
+                        state.lock().unwrap().tx_bytes += bytes.len() as u64;
                         if let Err(e) = channel.data(&bytes[..]).await {
                             log::warn!("ssh_main_task: channel.data fail: {e}");
                         }
