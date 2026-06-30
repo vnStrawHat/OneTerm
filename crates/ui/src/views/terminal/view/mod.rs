@@ -9,7 +9,7 @@ use std::time::Duration;
 use gpui::{ClipboardItem, Context, Entity, FocusHandle, KeyBinding, NoAction, Window};
 
 use async_channel::Receiver;
-use myterm2_core::{SessionEvent, TerminalInfo, TerminalSession};
+use oneterm_core::{SessionEvent, TerminalInfo, TerminalSession};
 
 use super::element::{GridMetrics, RowLayoutCache};
 use super::scrollbar::TerminalScrollHandle;

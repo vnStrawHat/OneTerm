@@ -1,4 +1,4 @@
-//! Các màn hình lớn của myTerm2.
+//! Các màn hình lớn của OneTerm.
 
 pub mod session_tabs;
 pub mod sftp;

@@ -16,8 +16,8 @@ use gpui_component::{
     dock::{Panel, PanelControl, PanelEvent, PanelView, TabPanel},
     h_flex,
 };
-use myterm2_core::TerminalSession;
-use myterm2_local::{LocalSession, PtySize};
+use oneterm_core::TerminalSession;
+use oneterm_local::{LocalSession, PtySize};
 
 use crate::state::{AppState, TerminalSettings};
 
@@ -96,7 +96,7 @@ impl TerminalPanel {
 
     /// Network stats của session (SSH only — `None` cho local).
     /// Dùng cho StatusBar hiển thị tốc độ network.
-    pub fn network_stats(&self, cx: &App) -> Option<myterm2_core::NetStats> {
+    pub fn network_stats(&self, cx: &App) -> Option<oneterm_core::NetStats> {
         self.view.read(cx).session.read(cx).network_stats()
     }
 

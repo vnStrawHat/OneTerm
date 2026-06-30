@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 
-use myterm2_core::{FileEntry, SftpBackend};
+use oneterm_core::{FileEntry, SftpBackend};
 
 // ── Sort state ───────────────────────────────────────────────
 

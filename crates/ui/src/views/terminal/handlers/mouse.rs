@@ -8,7 +8,7 @@ use gpui::{
     MouseMoveEvent, MouseUpEvent,
 };
 
-use myterm2_core::TerminalSession;
+use oneterm_core::TerminalSession;
 
 use super::super::element::GridMetrics;
 use super::super::url::detect_url_at;

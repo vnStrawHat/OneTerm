@@ -1,4 +1,4 @@
-# Thiết kế Terminal Backend — myTerm2
+# Thiết kế Terminal Backend — OneTerm
 
 > Tài liệu thiết kế cho phần terminal: **local shell** + **SSH session**, dùng chung
 > renderer dựa trên `alacritty_terminal`. Ưu tiên Windows-first. Shell cục bộ có thể
@@ -541,7 +541,7 @@ crates/
 1. ✅ **`core`**: `TerminalSession` trait, `SessionEvent`, `TerminalContent`, `TerminalPalette`,
    `key_encode`, `mouse_encode`, `osc`/`url`, `ShellKind`/`LocalShellConfig` + `resolve_shell`.
 2. ✅ **`local`** (Windows-first): `LocalSession` spawn `cmd` (ConPTY, `chcp 65001`),
-   `LocalListener`, snapshot + event. E2E test: `echo myterm2_e2e` → snapshot chứa chuỗi.
+   `LocalListener`, snapshot + event. E2E test: `echo oneterm_e2e` → snapshot chứa chuỗi.
 3. ✅ **`ui`**: `TerminalElement` vẽ grid + cursor + font measure + resize-on-layout.
    `LocalTerminalView` (`Render`) wire vào DockArea. Settings shell picker (`TerminalSettingsPanel`).
 4. ✅ **`ui`**: mouse (down/move/up/wheel), selection (Simple/Semantic/Lines/Block),

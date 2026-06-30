@@ -9,12 +9,12 @@ use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::TermMode;
 use async_channel::Receiver;
 
-use myterm2_core::terminal::mouse_encode::{
+use oneterm_core::terminal::mouse_encode::{
     MouseModifiers, TerminalMouseButton, encode_mouse_move, encode_mouse_press,
     encode_mouse_release, encode_wheel_event,
 };
-use myterm2_core::terminal::{TerminalContent, TerminalInfo};
-use myterm2_core::{CursorBounds, SessionEvent, TerminalSession};
+use oneterm_core::terminal::{TerminalContent, TerminalInfo};
+use oneterm_core::{CursorBounds, SessionEvent, TerminalSession};
 
 use crate::session::{LocalSession, TermSize};
 
@@ -58,7 +58,7 @@ impl TerminalSession for LocalSession {
     ///
     /// Gửi \x03 qua PTY - ConPTY (với OpenConsole.exe từ Windows Terminal)
     /// xử lý signal routing đúng cách: CTRL_C_EVENT chỉ đến child process,
-    /// không exit shell, không exit myTerm2.
+    /// không exit shell, không exit OneTerm.
     ///
     /// Yêu cầu: conpty.dll + OpenConsole.exe phải nằm cùng thư mục với exe.
     /// Xem crates/app/build.rs - tự copy từ assets/ ra target directory.

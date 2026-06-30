@@ -39,7 +39,7 @@ pub(crate) fn reset_center_only(
     });
 }
 
-/// Dựng layout mặc định myTerm2: center = terminals, right_dock = Session/SFTP.
+/// Dựng layout mặc định OneTerm: center = terminals, right_dock = Session/SFTP.
 pub(crate) fn reset_default_layout(
     dock_area: gpui::WeakEntity<DockArea>,
     window: &mut Window,

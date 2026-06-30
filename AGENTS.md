@@ -1,6 +1,6 @@
-# AGENTS.md — myTerm2
+# AGENTS.md — OneTerm
 
-> Hướng dẫn dành cho AI agent (và contributor) khi làm việc với project **myTerm2** — một SSH / SFTP / LocalShell GUI Client viết bằng Rust + [gpui-component](https://github.com/longbridge/gpui-component).
+> Hướng dẫn dành cho AI agent (và contributor) khi làm việc với project **OneTerm** — một SSH / SFTP / LocalShell GUI Client viết bằng Rust + [gpui-component](https://github.com/longbridge/gpui-component).
 
 ## Mục lục
 
@@ -23,7 +23,7 @@
 
 ## 1. Giới thiệu dự án
 
-**myTerm2** là một GUI client đa nền tảng (macOS / Linux / Windows) cung cấp:
+**OneTerm** là một GUI client đa nền tảng (macOS / Linux / Windows) cung cấp:
 
 - **SSH client** — kết nối shell từ xa (russh).
 - **SFTP client** — duyệt, upload, download file từ xa.
@@ -141,7 +141,7 @@ Nếu một trong ba lệnh trên fail → sửa trước khi báo cáo hoàn th
 
 ### 5.1. Build bản release
 
-> myTerm2 là **binary**, không phải library → commit `Cargo.lock`.
+> OneTerm là **binary**, không phải library → commit `Cargo.lock`.
 
 Profile release đã cấu hình sẵn trong workspace `Cargo.toml`:
 `opt-level=3`, `lto="fat"`, `codegen-units=1`, `strip="symbols"`, `overflow-checks=false`.
@@ -161,11 +161,12 @@ pwsh scripts/build-release.ps1 -NoDist               # chỉ build, không stage
 TARGET=aarch64-unknown-linux-gnu ./scripts/build-release.sh
 ```
 
-Sau khi xong, bản đóng gói sạch nằm ở `dist/myterm2-<triple>/` gồm:
-`myterm2(.exe)` + `conpty.dll` + `x64/OpenConsole.exe` (Windows) + `terminal.json`/`docks.json`.
+Sau khi xong, bản đóng gói sạch nằm ở `dist/oneterm-<triple>/` gồm:
+`oneterm(.exe)` + `conpty.dll` + `x64/OpenConsole.exe` (Windows) + `terminal.json`/`docks.json`.
+(Dev build ra `oneterm(.exe)`; build-release rename thành `oneterm(.exe)` khi stage dist.)
 
 > App icon (`assets/icons/terminal-48x48.ico`, `assets/icons/terminal-96x96.ico`)
-> được nhúng vào `myterm2.exe` qua `crates/app/assets/myterm2.rc` + `embed-resource`,
+> được nhúng vào exe qua `crates/app/assets/oneterm.rc` + `embed-resource`,
 > biên dịch trong `crates/app/build.rs`. Không cần bước post-build thủ công.
 > 📌 **Ghi nhớ**: Mọi lệnh phải chạy trong `D:\TrungKFC-Research\Rust\myTerm2`. Nếu agent cần kiểm tra file ở `reference/`, dùng **đường dẫn tương đối** từ workspace root, không `cd` ra ngoài.
 >

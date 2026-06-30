@@ -6,7 +6,7 @@
 //! 2. **Plain text URL** — `http://...`, `https://...`, `www.` xuất hiện
 //!    trong output text. Phải scan cells để detect.
 
-use myterm2_core::terminal::IndexedCell;
+use oneterm_core::terminal::IndexedCell;
 
 /// URL detected tại một vị trí trong terminal.
 #[derive(Clone, Debug, PartialEq)]

@@ -1,4 +1,4 @@
-//! [`MyTermWorkspace`] — view chính của myTerm2.
+//! [`OneTermWorkspace`] — view chính của OneTerm.
 //!
 //! Module gốc `workspace.rs` đã được tách thành `workspace/`.
 
@@ -73,7 +73,7 @@ pub const STATE_FILE: &str = "target/docks.json";
 pub const STATE_FILE: &str = "docks.json";
 
 /// Workspace chính: title bar + dock area + status bar.
-pub struct MyTermWorkspace {
+pub struct OneTermWorkspace {
     pub title_bar: Entity<AppTitleBar>,
     pub dock_area: Entity<DockArea>,
     /// Đồng hồ datetime — tạo 1 lần để timer 1s fire ổn định.
@@ -96,7 +96,7 @@ pub struct MyTermWorkspace {
     subscribed_tabs: HashSet<EntityId>,
 }
 
-impl MyTermWorkspace {
+impl OneTermWorkspace {
     /// Tạo workspace mới: load layout cũ (giữ right dock + settings),
     /// nhưng reset center (terminal tabs) về 1 tab mặc định.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -187,7 +187,7 @@ impl MyTermWorkspace {
         .detach();
 
         let title_bar = cx.new(|cx| {
-            AppTitleBar::new("myTerm2", window, cx)
+            AppTitleBar::new("OneTerm", window, cx)
                 .child(|_window, _cx| crate::layout::title_bar::add_terminal_button())
         });
 
@@ -356,14 +356,14 @@ impl MyTermWorkspace {
     }
 }
 
-impl Render for MyTermWorkspace {
+impl Render for OneTermWorkspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let sheet_layer = Root::render_sheet_layer(window, cx);
         let dialog_layer = Root::render_dialog_layer(window, cx);
         let notification_layer = Root::render_notification_layer(window, cx);
 
         div()
-            .id("myterm-workspace")
+            .id("oneterm-workspace")
             .on_action(cx.listener(Self::on_action_add_panel))
             .on_action(cx.listener(Self::on_action_add_session))
             .on_action(cx.listener(Self::on_action_add_sftp_browser))

@@ -1,6 +1,6 @@
 //! Status bar — góc trái: đồng hồ datetime, góc phải: Toggle Right Dock.
 //!
-//! Clock entity được tạo 1 lần trong `MyTermWorkspace::new` và truyền vào đây,
+//! Clock entity được tạo 1 lần trong `OneTermWorkspace::new` và truyền vào đây,
 //! tránh tạo mới mỗi render (sẽ drop timer Task → đồng hồ dừng).
 
 use gpui::{Context, Entity, Styled, Window, div, px};
@@ -12,9 +12,9 @@ use gpui_component::{
 };
 
 use crate::components::{DateTimeClock, NetSpeedIndicator};
-use crate::layout::MyTermWorkspace;
+use crate::layout::OneTermWorkspace;
 
-/// Build `StatusBar` cho `MyTermWorkspace`.
+/// Build `StatusBar` cho `OneTermWorkspace`.
 ///
 /// Clock entity (`clock`) được giữ bởi workspace, chỉ tạo 1 lần để timer
 /// 1s fire ổn định — không tạo mới mỗi render.
@@ -23,7 +23,7 @@ pub fn build_status_bar(
     clock: Entity<DateTimeClock>,
     net_speed: Entity<NetSpeedIndicator>,
     _window: &mut Window,
-    cx: &mut Context<MyTermWorkspace>,
+    cx: &mut Context<OneTermWorkspace>,
 ) -> StatusBar {
     let dock_area = dock_area.clone();
 

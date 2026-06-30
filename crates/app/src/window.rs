@@ -8,7 +8,7 @@ use gpui::{
 };
 use gpui_component::{Root, TitleBar};
 
-use myterm2_ui::layout::{MyTermWorkspace, save_dock_state_on_close};
+use oneterm_ui::layout::{OneTermWorkspace, save_dock_state_on_close};
 
 /// Mở window chính, trả về task handle.
 pub fn open_window(cx: &mut App) -> Task<anyhow::Result<WindowHandle<Root>>> {
@@ -39,14 +39,14 @@ pub fn open_window(cx: &mut App) -> Task<anyhow::Result<WindowHandle<Root>>> {
         };
 
         let window = cx.open_window(options, |window, cx| {
-            let workspace = cx.new(|cx| MyTermWorkspace::new(window, cx));
+            let workspace = cx.new(|cx| OneTermWorkspace::new(window, cx));
             cx.new(|cx| Root::new(workspace, window, cx))
         })?;
 
         window
             .update(cx, |_, window, cx| {
                 window.activate_window();
-                window.set_window_title("myTerm2");
+                window.set_window_title("OneTerm");
                 cx.on_release(|_, cx| {
                     save_dock_state_on_close(cx);
                     cx.quit();

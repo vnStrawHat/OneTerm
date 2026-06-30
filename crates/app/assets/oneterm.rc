@@ -1,11 +1,15 @@
-// Windows resource script cho myTerm2.
+// Windows resource script cho OneTerm.
 //
-// Nhúng app icon (đa độ phân giải) vào tài nguyên của myterm2.exe.
+// Nhúng app icon (đa độ phân giải) vào tài nguyên của exe (oneterm-debug ở dev, oneterm ở release).
 // Windows Explorer / taskbar / Alt-Tab sẽ chọn kích thước phù hợp nhất.
 //
 // Path trong .rc **phải** tương đối so với vị trí file .rc này.
-// File này nằm ở: crates/app/assets/myterm2.rc
+// File này nằm ở: crates/app/assets/oneterm.rc
 // Icon nằm ở:     crates/app/assets/icons/*.ico
+//
+// Hai bin target (xem crates/app/Cargo.toml): oneterm-debug (dev, feature dev-bin)
+// và oneterm (release, feature release-bin). Cả hai đều nhúng cùng resource này.
+// Version info dưới đây mô tả artifact release (OneTerm).
 
 // ID thấp nhất ⇒ icon mặc định của executable trong Explorer.
 APP_ICON_48 ICON "icons/terminal-48x48.ico"
@@ -32,12 +36,12 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "CompanyName",      "myTerm2"
-            VALUE "FileDescription",  "myTerm2 — SSH / SFTP / LocalShell GUI Client"
+            VALUE "CompanyName",      "OneTerm"
+            VALUE "FileDescription",  "OneTerm - SSH / SFTP / LocalShell GUI Client"
             VALUE "FileVersion",      VER_FILEVERSION_STR
-            VALUE "InternalName",     "myterm2"
-            VALUE "OriginalFilename", "myterm2.exe"
-            VALUE "ProductName",      "myTerm2"
+            VALUE "InternalName",     "oneterm"
+            VALUE "OriginalFilename", "oneterm.exe"
+            VALUE "ProductName",      "OneTerm"
             VALUE "ProductVersion",   VER_PRODUCTVERSION_STR
         END
     END

@@ -16,8 +16,8 @@ use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::tty::{self, Options, Shell};
 use async_channel::Receiver;
 
-use myterm2_core::config::resolve_shell;
-use myterm2_core::{AppError, LocalShellConfig, SessionEvent};
+use oneterm_core::config::resolve_shell;
+use oneterm_core::{AppError, LocalShellConfig, SessionEvent};
 
 use crate::event_loop::ShellEventLoop;
 use crate::listener::LocalListener;

@@ -1,4 +1,4 @@
-//! SSH + SFTP implementation for myTerm2.
+//! SSH + SFTP implementation for OneTerm.
 //!
 //! Triển khai `russh` client + tokio runtime ẩn. `SshSession` implement
 //! `TerminalSession` — UI dùng qua trait, không biết internals.
@@ -18,8 +18,8 @@ pub mod task;
 
 pub use config::{SshAuthMethod, SshConfig};
 pub use listener::{Cmd, SshListener};
-pub use myterm2_core::{FileEntry, FileStat};
+pub use oneterm_core::{FileEntry, FileStat};
 pub use session::{PtySize, SshSession, connect};
 pub use sftp::{SftpCmd, SftpEvent, SftpSession};
 
-pub use myterm2_core as core;
+pub use oneterm_core as core;

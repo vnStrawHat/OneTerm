@@ -1,4 +1,4 @@
-//! Custom icon enum — tương tự `gpui_component::IconName` nhưng cho riêng myTerm2.
+//! Custom icon enum — tương tự `gpui_component::IconName` nhưng cho riêng OneTerm.
 //!
 //! ## Thêm icon mới
 //!
@@ -28,8 +28,8 @@ use gpui::{AnyElement, App, AssetSource, ImageSource, IntoElement, RenderOnce, R
 use gpui_component::{Icon, IconNamed, icon_named};
 
 // Generate `AppIcon` enum from SVG files in `assets/icons/`.
-// The `$MYTERM2_UI_ICONS_DIR` env var is set by `build.rs`.
-icon_named!(AppIcon, "$MYTERM2_UI_ICONS_DIR", [Debug, PartialEq, Eq]);
+// The `$ONETERM_UI_ICONS_DIR` env var is set by `build.rs`.
+icon_named!(AppIcon, "$ONETERM_UI_ICONS_DIR", [Debug, PartialEq, Eq]);
 
 /// Cho phép `AppIcon` dùng trực tiếp như element: `div().child(AppIcon::Terminal)`.
 impl RenderOnce for AppIcon {

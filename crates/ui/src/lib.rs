@@ -1,4 +1,4 @@
-//! GPUI views, layout, theme, state cho myTerm2.
+//! GPUI views, layout, theme, state cho OneTerm.
 //!
 //! Crate này chứa toàn bộ gpui + gpui-component. Giao tiếp với `ssh`/`local`
 //! qua trait abstraction (chưa triển khai ở skeleton này).
@@ -20,7 +20,7 @@ use crate::views::{SessionPanel, SftpPanel, TerminalPanel, TerminalSettingsPanel
 ///
 /// `gpui_component::init(cx)` (gọi ở `app::main`) đã tự khởi tạo theme,
 /// dock, root, ... và `PanelRegistry::init`. Hàm này chỉ bổ sung 3 panel
-/// của myTerm2 vào registry để `DockArea::load` tái tạo được layout cũ.
+/// của OneTerm vào registry để `DockArea::load` tái tạo được layout cũ.
 pub fn init(cx: &mut App) {
     theme::init(cx);
     state::AppState::init(cx);

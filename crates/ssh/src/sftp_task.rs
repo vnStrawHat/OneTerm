@@ -17,7 +17,7 @@ use russh_sftp::protocol::FileAttributes;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
-use myterm2_core::{AppError, FileEntry, FileStat, Result};
+use oneterm_core::{AppError, FileEntry, FileStat, Result};
 
 use crate::sftp::{SftpCmd, SftpEvent};
 

@@ -3,7 +3,7 @@
 
 use alacritty_terminal::vte::ansi::Color;
 
-use myterm2_core::terminal::IndexedCell;
+use oneterm_core::terminal::IndexedCell;
 
 /// Hash bao gồm: char, fg, bg, flags, zerowidth, hyperlink.
 pub(crate) fn line_hash(cells: &[&IndexedCell]) -> u64 {

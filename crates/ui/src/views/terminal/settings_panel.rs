@@ -13,8 +13,8 @@ use gpui_component::{
     ActiveTheme,
     dock::{Panel, PanelControl, PanelEvent},
 };
-use myterm2_core::LocalShellConfig;
-use myterm2_core::config::ShellKind;
+use oneterm_core::LocalShellConfig;
+use oneterm_core::config::ShellKind;
 
 use crate::state::TerminalSettings;
 

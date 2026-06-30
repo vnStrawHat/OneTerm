@@ -6,8 +6,8 @@ use std::rc::Rc;
 use gpui::{App, ClipboardItem, Entity, FocusHandle, InteractiveElement as _, KeyDownEvent};
 use gpui_component::ActiveTheme as _;
 
-use myterm2_core::TerminalSession;
-use myterm2_core::terminal::{KeySpec, encode_key};
+use oneterm_core::TerminalSession;
+use oneterm_core::terminal::{KeySpec, encode_key};
 
 use super::super::element::GridMetrics;
 use super::super::view::LocalTerminalView;

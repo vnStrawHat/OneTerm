@@ -1,4 +1,4 @@
-//! App menu bar — dựng các menu native (myTerm2 / Edit / Window / Help).
+//! App menu bar — dựng các menu native (OneTerm / Edit / Window / Help).
 //!
 //! Mirror `reference/.../story/src/app_menus.rs`, giữ Appearance (Light/Dark),
 //! Theme submenu, Language, Edit, Window, Help.
@@ -94,7 +94,7 @@ fn build_menus(title: impl Into<SharedString>, cx: &App) -> Vec<Menu> {
         },
         Menu {
             name: "Help".into(),
-            items: vec![MenuItem::action("About myTerm2", About)],
+            items: vec![MenuItem::action("About OneTerm", About)],
             disabled: false,
         },
     ]

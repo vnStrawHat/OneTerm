@@ -20,10 +20,10 @@ gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "
 gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "ea6b194db04cc7c0474851f07c7d5b7a9df6a98b" }
 
 # Internal crates
-myterm2-core = { path = "crates/core" }
-myterm2-local = { path = "crates/local" }
-myterm2-ssh = { path = "crates/ssh" }
-myterm2-ui = { path = "crates/ui" }
+oneterm-core = { path = "crates/core" }
+oneterm-local = { path = "crates/local" }
+oneterm-ssh = { path = "crates/ssh" }
+oneterm-ui = { path = "crates/ui" }
 
 # Terminal engine — fork Zed của alacritty_terminal (bản patched có TerminalContent/display_iter)
 # Phải khớp rev mà GPUI dùng (xem docs/agents/dependencies.md §1)

@@ -18,7 +18,7 @@ use gpui_component::{
     table::{Column, ColumnFixed, ColumnSort, TableDelegate, TableState},
 };
 use crate::icon::AppIcon;
-use myterm2_core::FileEntry;
+use oneterm_core::FileEntry;
 
 use super::panel::SftpPanel;
 use super::persistence::{read_sftp_table_state, write_sftp_table_state};

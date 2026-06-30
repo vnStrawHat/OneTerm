@@ -23,7 +23,7 @@ use gpui_component::dock::{Panel, PanelControl, PanelEvent};
 use gpui_component::input::{InputEvent, InputState};
 use gpui_component::table::{TableEvent, TableState};
 
-use myterm2_core::{FileEntry, SftpBackend};
+use oneterm_core::{FileEntry, SftpBackend};
 
 use crate::state::AppState;
 

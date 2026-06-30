@@ -3,7 +3,7 @@
 use gpui::{Entity, FocusHandle, Window};
 use gpui_component::menu::{ContextMenu, ContextMenuExt as _, PopupMenuItem};
 
-use myterm2_core::TerminalSession;
+use oneterm_core::TerminalSession;
 
 use crate::actions::AddPanel;
 

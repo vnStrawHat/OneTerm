@@ -21,7 +21,7 @@ use gpui::{
     IntoElement, ParentElement, Render, Styled, Task, WeakEntity, Window, div,
 };
 use gpui_component::{ActiveTheme as _, dock::DockArea};
-use myterm2_core::NetStats;
+use oneterm_core::NetStats;
 
 use crate::layout::workspace::zoom::collect_tab_panels;
 use crate::views::terminal::panel::TerminalPanel;

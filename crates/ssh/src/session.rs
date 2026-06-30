@@ -23,7 +23,7 @@ use russh::client;
 use russh::client::AuthResult;
 use russh::keys::{PrivateKey, PrivateKeyWithHashAlg, load_secret_key};
 
-use myterm2_core::SessionEvent;
+use oneterm_core::SessionEvent;
 
 use crate::config::{SshAuthMethod, SshConfig};
 use crate::counting_stream::CountingStream;
@@ -83,7 +83,7 @@ pub fn connect(
     cfg: SshConfig,
     initial: PtySize,
     scrollback_history: usize,
-) -> myterm2_core::Result<Box<dyn myterm2_core::TerminalSession>> {
+) -> oneterm_core::Result<Box<dyn oneterm_core::TerminalSession>> {
     log::info!(
         "SshSession::connect: host={}, port={}, user={}, rows={}, cols={}",
         cfg.host,
@@ -98,7 +98,7 @@ pub fn connect(
         .enable_all()
         .thread_name("ssh-runtime")
         .build()
-        .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+        .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
 
     let (cmd_tx, cmd_rx) = async_channel::bounded::<Cmd>(64);
     let (event_tx, event_rx) = async_channel::bounded::<SessionEvent>(4096);
@@ -246,11 +246,11 @@ pub fn connect(
                 marked_text: Mutex::new(None),
                 sftp: Mutex::new(sftp_session),
             };
-            Ok(Box::new(session) as Box<dyn myterm2_core::TerminalSession>)
+            Ok(Box::new(session) as Box<dyn oneterm_core::TerminalSession>)
         }
         Err(e) => {
             log::error!("SshSession: connect failed: {e}");
-            Err(myterm2_core::AppError::msg(e.to_string()))
+            Err(oneterm_core::AppError::msg(e.to_string()))
         }
     }
 }

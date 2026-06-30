@@ -2,7 +2,7 @@
 
 use gpui::SharedString;
 
-use myterm2_core::config::ShellKind;
+use oneterm_core::config::ShellKind;
 
 use super::{TerminalBlink, TerminalCursorShape, TerminalSettings};
 

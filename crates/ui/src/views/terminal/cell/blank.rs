@@ -1,7 +1,7 @@
 //! Blank cell detection.
 
 use alacritty_terminal::term::cell::{Cell, Flags};
-use myterm2_core::terminal::is_default_background_color;
+use oneterm_core::terminal::is_default_background_color;
 
 /// Blank cell = space + default bg + no extras.
 pub(crate) fn is_blank(cell: &Cell) -> bool {

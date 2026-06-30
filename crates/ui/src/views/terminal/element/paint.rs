@@ -9,7 +9,7 @@ use gpui::{
     fill, point, px, size,
 };
 
-use myterm2_core::TerminalSession;
+use oneterm_core::TerminalSession;
 
 use super::super::box_drawing::{box_drawing_rects, rounded_corner_rects_aa};
 use super::super::layout::{CursorPaint, LayoutState, RowLayoutCache};

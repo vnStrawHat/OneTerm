@@ -5,7 +5,7 @@ use std::mem;
 use alacritty_terminal::term::cell::Cell;
 use gpui::Hsla;
 
-use myterm2_core::terminal::{is_app_chosen_exact_color, is_decorative_character};
+use oneterm_core::terminal::{is_app_chosen_exact_color, is_decorative_character};
 
 use super::super::theme::{TerminalTheme, ensure_minimum_contrast, resolve_cell_color};
 

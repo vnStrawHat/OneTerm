@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use async_channel::{Receiver, Sender};
 use tokio::sync::oneshot;
 
-use myterm2_core::{FileEntry, FileStat, Result, SftpBackend};
+use oneterm_core::{FileEntry, FileStat, Result, SftpBackend};
 
 // ── Re-export từ core ────────────────────────────────────────
 // FileEntry, FileStat đã định nghĩa trong core, re-export cho tiện.
@@ -142,18 +142,18 @@ impl SftpBackend for SftpSession {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(SftpCmd::ReadDir { path, reply: tx })
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
         rx.blocking_recv()
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?
     }
 
     fn stat(&self, path: PathBuf) -> Result<FileStat> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(SftpCmd::Stat { path, reply: tx })
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
         rx.blocking_recv()
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?
     }
 
     fn rename(&self, from: PathBuf, to: PathBuf) -> Result<()> {
@@ -164,36 +164,36 @@ impl SftpBackend for SftpSession {
                 to,
                 reply: tx,
             })
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
         rx.blocking_recv()
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?
     }
 
     fn remove(&self, path: PathBuf) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(SftpCmd::Remove { path, reply: tx })
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
         rx.blocking_recv()
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?
     }
 
     fn rmdir(&self, path: PathBuf) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(SftpCmd::Rmdir { path, reply: tx })
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
         rx.blocking_recv()
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?
     }
 
     fn mkdir(&self, path: PathBuf) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(SftpCmd::Mkdir { path, reply: tx })
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
         rx.blocking_recv()
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?
     }
 
     fn upload(

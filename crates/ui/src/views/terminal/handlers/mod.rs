@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{Entity, FocusHandle, MouseButton};
-use myterm2_core::TerminalSession;
+use oneterm_core::TerminalSession;
 
 use super::element::GridMetrics;
 use super::view::LocalTerminalView;
@@ -40,11 +40,11 @@ pub(crate) fn attach(
 }
 
 /// Map GPUI `MouseButton` sang `TerminalMouseButton`.
-pub(crate) fn map_button(b: MouseButton) -> myterm2_core::terminal::TerminalMouseButton {
+pub(crate) fn map_button(b: MouseButton) -> oneterm_core::terminal::TerminalMouseButton {
     match b {
-        MouseButton::Left => myterm2_core::terminal::TerminalMouseButton::Left,
-        MouseButton::Right => myterm2_core::terminal::TerminalMouseButton::Right,
-        MouseButton::Middle => myterm2_core::terminal::TerminalMouseButton::Middle,
-        MouseButton::Navigate(_) => myterm2_core::terminal::TerminalMouseButton::Left,
+        MouseButton::Left => oneterm_core::terminal::TerminalMouseButton::Left,
+        MouseButton::Right => oneterm_core::terminal::TerminalMouseButton::Right,
+        MouseButton::Middle => oneterm_core::terminal::TerminalMouseButton::Middle,
+        MouseButton::Navigate(_) => oneterm_core::terminal::TerminalMouseButton::Left,
     }
 }

@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use alacritty_terminal::term::cell::Flags;
 use gpui::TextRun;
 
-use myterm2_core::terminal::{IndexedCell, is_default_background_color};
+use oneterm_core::terminal::{IndexedCell, is_default_background_color};
 
 use super::super::box_drawing::drawing::{box_drawing_rects, is_box_drawing, is_rounded_corner};
 use super::super::cell::{cell_colors, cell_style, is_blank};

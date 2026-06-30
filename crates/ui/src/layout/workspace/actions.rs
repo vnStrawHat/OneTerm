@@ -1,4 +1,4 @@
-//! Action handlers cho `MyTermWorkspace`.
+//! Action handlers cho `OneTermWorkspace`.
 
 use std::sync::{Arc, atomic::Ordering};
 
@@ -10,7 +10,7 @@ use crate::{
     views::{SessionPanel, SftpPanel, TerminalPanel},
 };
 
-impl super::MyTermWorkspace {
+impl super::OneTermWorkspace {
     /// Action handler: thêm TerminalPanel mới.
     pub(crate) fn on_action_add_panel(
         &mut self,

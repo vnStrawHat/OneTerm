@@ -1,6 +1,6 @@
-# Quy ước code — myTerm2
+# Quy ước code — OneTerm
 
-> File tách từ `AGENTS.md` (section 4). Mọi rule ở đây là **bắt buộc** khi viết Rust cho project myTerm2.
+> File tách từ `AGENTS.md` (section 4). Mọi rule ở đây là **bắt buộc** khi viết Rust cho project OneTerm.
 
 ## 1. Style & format
 

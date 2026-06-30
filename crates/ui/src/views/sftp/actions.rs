@@ -16,7 +16,7 @@ use gpui_component::{
     v_flex,
 };
 
-use myterm2_core::FileStat;
+use oneterm_core::FileStat;
 
 use super::panel::SftpPanel;
 use super::types::{format_date, format_owner, format_permissions, format_size};

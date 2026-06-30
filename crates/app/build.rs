@@ -1,7 +1,7 @@
 //! Build script — nhúng app icon + copy runtime assets (conpty.dll, OpenConsole.exe).
 //!
 //! Trách nhiệm:
-//! 1. Biên dịch `assets/myterm2.rc` → file `.res` liên kết vào myterm2.exe,
+//! 1. Biên dịch `assets/oneterm.rc` → file `.res` liên kết vào exe (oneterm-debug ở dev, oneterm ở release),
 //!    nhúng app icon (48px + 96px) + VS_VERSION_INFO. Chỉ Windows.
 //! 2. Copy `conpty.dll` + `x64/OpenConsole.exe` ra thư mục target để chạy kèm exe.
 //!
@@ -9,10 +9,11 @@
 //! trong thư mục của exe hoặc PATH. conpty.dll dùng OpenConsole.exe
 //! (từ Windows Terminal project) thay cho system conhost.exe →
 //! ConPTY xử lý Ctrl+C đúng cách: signal chỉ đến child process,
-//! không exit shell, không exit myTerm2.
+//! không exit shell, không exit OneTerm.
 //!
 //! Cấu trúc sau build:
-//!   target/{debug,release}/myterm2.exe
+//!   target/debug/oneterm-debug.exe   (dev bin; gated bởi feature dev-bin)
+//!   target/release/oneterm.exe       (release bin; gated bởi feature release-bin)
 //!   target/{debug,release}/conpty.dll
 //!   target/{debug,release}/x64/OpenConsole.exe
 
@@ -29,7 +30,7 @@ fn main() {
         //
         // embed-resource tự tìm rc.exe (MSVC) hoặc windres (GNU).
         // Path trong .rc là tương đối so với vị trí file .rc (assets/).
-        let rc = assets_dir.join("myterm2.rc");
+        let rc = assets_dir.join("oneterm.rc");
         if rc.exists() {
             if let Err(e) = embed_resource::compile(&rc, embed_resource::NONE).manifest_required() {
                 println!(
@@ -66,7 +67,7 @@ fn main() {
         }
 
         // Re-run build script khi assets / resource thay đổi.
-        println!("cargo:rerun-if-changed=assets/myterm2.rc");
+        println!("cargo:rerun-if-changed=assets/oneterm.rc");
         println!("cargo:rerun-if-changed=assets/icons/terminal-48x48.ico");
         println!("cargo:rerun-if-changed=assets/icons/terminal-96x96.ico");
         println!("cargo:rerun-if-changed=assets/conpty.dll");

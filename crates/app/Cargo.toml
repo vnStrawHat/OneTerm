@@ -1,20 +1,36 @@
 [package]
-name = "myterm2-app"
-description = "Binary entry point for myTerm2."
+name = "oneterm-app"
+description = "Binary entry point for OneTerm."
 publish = false
 edition.workspace = true
 build = "build.rs"
+# Dev: cargo run → oneterm-debug (target/debug/oneterm-debug.exe)
+# Release: cargo build --release --no-default-features --features release-bin → oneterm (target/release/oneterm.exe)
+default-run = "oneterm-debug"
+
+[features]
+default = ["dev-bin"]
+# Bin target cho dev build — tên file có hậu tố `-debug` (vd. oneterm-debug.exe).
+dev-bin = []
+# Bin target cho release build — tên file sạch (oneterm.exe / oneterm).
+release-bin = []
 
 [[bin]]
-name = "myterm2"
+name = "oneterm-debug"
 path = "src/main.rs"
+required-features = ["dev-bin"]
+
+[[bin]]
+name = "oneterm"
+path = "src/main.rs"
+required-features = ["release-bin"]
 
 [lints]
 workspace = true
 
 [dependencies]
-myterm2-ui.workspace = true
-myterm2-core.workspace = true
+oneterm-ui.workspace = true
+oneterm-core.workspace = true
 
 gpui.workspace = true
 gpui_platform.workspace = true
@@ -32,5 +48,5 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [target.'cfg(windows)'.build-dependencies]
-# Biên dịch assets/myterm2.rc → nhúng app icon + version info vào myterm2.exe.
+# Biên dịch assets/oneterm.rc → nhúng app icon + version info vào exe (cả oneterm-debug lẫn oneterm).
 embed-resource = "3"

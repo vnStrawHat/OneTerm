@@ -1,4 +1,4 @@
-# Thiết kế SSH Client Connect — myTerm2
+# Thiết kế SSH Client Connect — OneTerm
 
 > Tài liệu thiết kế cho chức năng kết nối SSH: click vào item trong SSH Session →
 > mở phiên SSH tới server đích, kèm dialog nhập credentials khi cần.
@@ -400,7 +400,7 @@ div()
             // SshSession::connect là sync (block_on bên trong) — chạy trên
             // background executor để không block UI.
             let result = window.background_executor().spawn(async move {
-                myterm2_ssh::SshSession::connect(
+                oneterm_ssh::SshSession::connect(
                     cfg,
                     PtySize { rows: 24, cols: 80 },
                     10_000,  // scrollback
@@ -752,7 +752,7 @@ fn open_connect_dialog(
                         // Connect async
                         cx.spawn_in(window, async move |_this, window| {
                             let result = window.background_executor().spawn(async move {
-                                myterm2_ssh::SshSession::connect(
+                                oneterm_ssh::SshSession::connect(
                                     cfg,
                                     PtySize { rows: 24, cols: 80 },
                                     10_000,
@@ -834,7 +834,7 @@ pub struct AppState {
 }
 ```
 
-Set trong `MyTermWorkspace::new`:
+Set trong `OneTermWorkspace::new`:
 ```rust
 AppState::global(cx).update(cx, |s, cx| {
     s.dock_area = Some(dock_area.downgrade());
@@ -874,7 +874,7 @@ fn get_dock_area(cx: &App) -> WeakEntity<DockArea> {
 ```toml
 # crates/ui/Cargo.toml — thêm ssh dependency
 [dependencies]
-myterm2-ssh = { path = "../ssh" }
+oneterm-ssh = { path = "../ssh" }
 ```
 
 > ⚠️ **Quy tắc phụ thuộc**: `docs/agents/structure.md` ghi `ui` **không** import
@@ -884,7 +884,7 @@ myterm2-ssh = { path = "../ssh" }
 > **Giải pháp 1 (khuyến nghị MVP):** Cho phép `ui` phụ thuộc `ssh` để gọi
 > `SshSession::connect()`. Session trả về `Box<dyn TerminalSession>` — UI chỉ
 > dùng trait, không biết internals. Đây là pattern mà `panel.rs` **đã dùng** với
-> `myterm2_local::LocalSession`. Cập nhật quy tắc: `ui → {core, local, ssh}`.
+> `oneterm_local::LocalSession`. Cập nhật quy tắc: `ui → {core, local, ssh}`.
 >
 > **Giải pháp 2 (clean architecture):** Đẩy factory ra `app` crate. `app` tạo
 > `Box<dyn TerminalSession>` rồi truyền vào `ui`. `ui` giữ nguyên leaf (chỉ
@@ -893,7 +893,7 @@ myterm2-ssh = { path = "../ssh" }
 
 > **Quyết định MVP:** Giải pháp 1 — cập nhật `structure.md` quy tắc phụ thuộc
 > thành `ui → {core, local, ssh}`. Đã có tiền lệ (`panel.rs` import
-> `myterm2_local`).
+> `oneterm_local`).
 
 ---
 
@@ -903,7 +903,7 @@ myterm2-ssh = { path = "../ssh" }
 
 - [ ] Tạo `crates/ssh/src/config.rs` — define `SshConfig` + `SshAuthMethod`.
 - [ ] Cập nhật `crates/ssh/src/lib.rs` — `pub mod config;` + re-export.
-- [ ] Cập nhật `crates/ui/Cargo.toml` — thêm `myterm2-ssh` dependency.
+- [ ] Cập nhật `crates/ui/Cargo.toml` — thêm `oneterm-ssh` dependency.
 
 ### Bước 2 — `TerminalPanel`: hỗ trợ session từ ngoài
 
@@ -916,7 +916,7 @@ myterm2-ssh = { path = "../ssh" }
 ### Bước 3 — `AppState`: lưu `WeakEntity<DockArea>`
 
 - [ ] Thêm field `dock_area: Option<WeakEntity<DockArea>>` vào `AppState`.
-- [ ] Trong `MyTermWorkspace::new` — set `AppState.dock_area` sau khi tạo DockArea.
+- [ ] Trong `OneTermWorkspace::new` — set `AppState.dock_area` sau khi tạo DockArea.
 
 ### Bước 4 — `open_connect_dialog` trong `session_tabs/tabs.rs`
 

@@ -15,7 +15,7 @@ use gpui::{
     Pixels, Window,
 };
 
-use myterm2_core::TerminalSession;
+use oneterm_core::TerminalSession;
 
 pub(crate) use super::layout::{GridMetrics, LayoutState, RowLayoutCache};
 use super::theme::TerminalTheme;

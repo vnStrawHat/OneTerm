@@ -6,7 +6,7 @@ use std::rc::Rc;
 use alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
 use gpui::{App, Bounds, Pixels, SharedString, Window, px};
 
-use myterm2_core::TerminalSession;
+use oneterm_core::TerminalSession;
 
 use super::super::cell::blank::is_blank;
 
@@ -256,7 +256,7 @@ pub(crate) fn prepaint_terminal(
 }
 
 fn build_cursor(
-    snapshot: &myterm2_core::terminal::TerminalContent,
+    snapshot: &oneterm_core::terminal::TerminalContent,
     num_lines: usize,
     cursor_color_override: Option<gpui::Hsla>,
     cursor_shape_override: crate::state::TerminalCursorShape,

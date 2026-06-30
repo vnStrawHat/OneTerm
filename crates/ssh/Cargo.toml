@@ -1,6 +1,6 @@
 [package]
-name = "myterm2-ssh"
-description = "SSH + SFTP implementation for myTerm2 (russh)."
+name = "oneterm-ssh"
+description = "SSH + SFTP implementation for OneTerm (russh)."
 publish = false
 edition.workspace = true
 
@@ -8,7 +8,7 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
-myterm2-core.workspace = true
+oneterm-core.workspace = true
 alacritty_terminal.workspace = true
 async-channel.workspace = true
 russh.workspace = true

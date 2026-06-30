@@ -51,7 +51,7 @@ Terminal và SFTP **hoàn toàn song song** — upload file không block termina
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                        myTerm2 app                          │
+│                        OneTerm app                          │
 │  ┌────────────────────────┬──────────────────────────────┐  │
 │  │ Terminal Panel (center)│ SFTP Browser Panel (right)   │  │
 │  │  shell tương tác       │  folder tree + file ops      │  │
@@ -87,7 +87,7 @@ Terminal và SFTP **hoàn toàn song song** — upload file không block termina
 ### 2.1. Cấu trúc workspace
 
 ```
-myTerm2/
+OneTerm/
 ├── Cargo.toml                     # Workspace root — 5 crate members
 ├── crates/
 │   ├── app/                       # Binary: main.rs + window.rs
@@ -186,7 +186,7 @@ impl Render for SftpPanel {
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  TitleBar  [myTerm2 ▾] [Edit] [Window] [Help]               │
+│  TitleBar  [OneTerm ▾] [Edit] [Window] [Help]               │
 ├───────────────────────────────────────┬─────────────────────┤
 │  CENTER (tabs)                        │  RIGHT DOCK (480px)  │
 │  ┌──────────────────────────────────┐ │  ┌───────────────┐  │
@@ -301,7 +301,7 @@ use std::time::SystemTime;
 use async_channel::{Sender, Receiver};
 use tokio::sync::oneshot;
 
-use myterm2_core::Result;
+use oneterm_core::Result;
 
 // ── File entry cho UI rendering ──────────────────────────────
 
@@ -419,9 +419,9 @@ impl SftpSession {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(SftpCmd::ReadDir { path, reply: tx })
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
         rx.blocking_recv()
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?
     }
 
     /// Gửi lệnh Stat.
@@ -429,9 +429,9 @@ impl SftpSession {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(SftpCmd::Stat { path, reply: tx })
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
         rx.blocking_recv()
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?
     }
 
     /// Đổi tên.
@@ -439,9 +439,9 @@ impl SftpSession {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(SftpCmd::Rename { from, to, reply: tx })
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
         rx.blocking_recv()
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?
     }
 
     /// Xoá file.
@@ -449,9 +449,9 @@ impl SftpSession {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(SftpCmd::Remove { path, reply: tx })
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
         rx.blocking_recv()
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?
     }
 
     /// Tạo thư mục.
@@ -459,9 +459,9 @@ impl SftpSession {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(SftpCmd::Mkdir { path, reply: tx })
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
         rx.blocking_recv()
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?
     }
 
     /// Upload file — progress qua channel (non-blocking, fire-and-forget).
@@ -531,7 +531,7 @@ use russh_sftp::client::SftpSession as SftpChannel;
 use async_channel::{Sender, Receiver};
 use tokio::sync::oneshot;
 
-use myterm2_core::Result;
+use oneterm_core::Result;
 
 use crate::sftp::{SftpCmd, SftpEvent, FileEntry, FileStat};
 
@@ -559,22 +559,22 @@ pub(crate) async fn sftp_task(
             }
             Ok(SftpCmd::Rename { from, to, reply }) => {
                 let result = sftp.rename(&from, &to).await
-                    .map_err(|e| myterm2_core::AppError::msg(e.to_string()));
+                    .map_err(|e| oneterm_core::AppError::msg(e.to_string()));
                 let _ = reply.send(result);
             }
             Ok(SftpCmd::Remove { path, reply }) => {
                 let result = sftp.remove_file(&path).await
-                    .map_err(|e| myterm2_core::AppError::msg(e.to_string()));
+                    .map_err(|e| oneterm_core::AppError::msg(e.to_string()));
                 let _ = reply.send(result);
             }
             Ok(SftpCmd::Rmdir { path, reply }) => {
                 let result = sftp.remove_dir(&path).await
-                    .map_err(|e| myterm2_core::AppError::msg(e.to_string()));
+                    .map_err(|e| oneterm_core::AppError::msg(e.to_string()));
                 let _ = reply.send(result);
             }
             Ok(SftpCmd::Mkdir { path, reply }) => {
                 let result = sftp.create_dir(&path).await
-                    .map_err(|e| myterm2_core::AppError::msg(e.to_string()));
+                    .map_err(|e| oneterm_core::AppError::msg(e.to_string()));
                 let _ = reply.send(result);
             }
             Ok(SftpCmd::Upload { local, remote, progress, reply }) => {
@@ -610,11 +610,11 @@ async fn sftp_read_dir(
     path: &PathBuf,
 ) -> Result<Vec<FileEntry>> {
     let mut entries = sftp.read_dir(path).await
-        .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+        .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
 
     let mut result = Vec::new();
     while let Some(entry) = entries.next().await {
-        let entry = entry.map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+        let entry = entry.map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
         let name = entry.file_name();
         if name == "." || name == ".." {
             continue;
@@ -648,24 +648,24 @@ async fn sftp_upload(
     progress: &Sender<f64>,
 ) -> Result<()> {
     let local_data = tokio::fs::read(local).await
-        .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+        .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
     let total = local_data.len() as u64;
 
     let mut remote_file = sftp.open(remote).await
-        .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+        .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
 
     // Write theo chunk 32KB — gửi progress sau mỗi chunk.
     const CHUNK: usize = 32 * 1024;
     let mut written: u64 = 0;
     for chunk in local_data.chunks(CHUNK) {
         remote_file.write_all(chunk).await
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
         written += chunk.len() as u64;
         let pct = if total > 0 { written as f64 / total as f64 } else { 1.0 };
         let _ = progress.try_send(pct);
     }
     remote_file.flush().await
-        .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+        .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
     let _ = progress.try_send(1.0);
     Ok(())
 }
@@ -678,29 +678,29 @@ async fn sftp_download(
     progress: &Sender<f64>,
 ) -> Result<()> {
     let mut remote_file = sftp.open(remote).await
-        .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+        .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
     let metadata = sftp.metadata(remote).await
-        .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+        .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
     let total = metadata.len().unwrap_or(0);
 
     let mut local_file = tokio::fs::File::create(local).await
-        .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+        .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
 
     const CHUNK: usize = 32 * 1024;
     let mut buf = vec![0u8; CHUNK];
     let mut read: u64 = 0;
     loop {
         let n = remote_file.read(&mut buf).await
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
         if n == 0 { break; }
         local_file.write_all(&buf[..n]).await
-            .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
         read += n as u64;
         let pct = if total > 0 { read as f64 / total as f64 } else { 1.0 };
         let _ = progress.try_send(pct);
     }
     local_file.flush().await
-        .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+        .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
     let _ = progress.try_send(1.0);
     Ok(())
 }
@@ -711,7 +711,7 @@ async fn sftp_stat(
     path: &PathBuf,
 ) -> Result<FileStat> {
     let metadata = sftp.metadata(path).await
-        .map_err(|e| myterm2_core::AppError::msg(e.to_string()))?;
+        .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
     let name = path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
@@ -1376,7 +1376,7 @@ pub struct FileStat { /* ... */ }
 
 ```rust
 // crates/ssh/src/sftp.rs — impl SftpBackend cho SftpSession
-impl myterm2_core::SftpBackend for SftpSession {
+impl oneterm_core::SftpBackend for SftpSession {
     fn read_dir(&self, path: PathBuf) -> Result<Vec<FileEntry>> { ... }
     // ...
 }

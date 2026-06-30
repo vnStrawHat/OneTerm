@@ -1,4 +1,4 @@
-//! [`AppTitleBar`] — title bar của myTerm2.
+//! [`AppTitleBar`] — title bar của OneTerm.
 //!
 //! Mirror `reference/.../story/src/title_bar.rs`, giữ `AppMenuBar` + child
 //! (Add Terminal / Add Session / Add SFTP dropdown) + `FontSizeSelector`.

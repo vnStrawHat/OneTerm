@@ -3,13 +3,13 @@
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::selection::SelectionType;
-use myterm2_core::TerminalSession;
-use myterm2_core::terminal::mouse_encode::TerminalMouseButton;
+use oneterm_core::TerminalSession;
+use oneterm_core::terminal::mouse_encode::TerminalMouseButton;
 
 use crate::session::{LocalSession, PtySize};
 
 fn spawn_default() -> LocalSession {
-    let cfg = myterm2_core::LocalShellConfig::default();
+    let cfg = oneterm_core::LocalShellConfig::default();
     LocalSession::spawn(cfg, PtySize { rows: 24, cols: 80 }, 10_000).expect("spawn")
 }
 
@@ -165,7 +165,7 @@ fn spawn_cmd_exit_detected() {
     assert!(!s.alive(), "cmd exit không được phát hiện sau 4s");
 }
 
-/// End-to-end (Windows): spawn cmd → write `echo myterm2_e2e` → poll
+/// End-to-end (Windows): spawn cmd → write `echo oneterm_e2e` → poll
 /// snapshot → assert chuỗi xuất hiện trong grid cells (chứng minh toàn
 /// pipeline PTY→EventLoop→Term→snapshot hoạt động, không cần GUI).
 #[test]
@@ -173,8 +173,8 @@ fn e2e_echo_output_rendered_in_snapshot() {
     let s = spawn_default();
     // Chờ prompt hiện ra một chút rồi gõ.
     std::thread::sleep(Duration::from_millis(200));
-    s.write(b"echo myterm2_e2e\r");
-    let needle = "myterm2_e2e";
+    s.write(b"echo oneterm_e2e\r");
+    let needle = "oneterm_e2e";
     let start = Instant::now();
     let mut found = false;
     while start.elapsed() < Duration::from_secs(6) && !found {
@@ -187,6 +187,6 @@ fn e2e_echo_output_rendered_in_snapshot() {
     s.close();
     assert!(
         found,
-        "`echo myterm2_e2e` không xuất hiện trong snapshot sau 6s"
+        "`echo oneterm_e2e` không xuất hiện trong snapshot sau 6s"
     );
 }

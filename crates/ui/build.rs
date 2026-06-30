@@ -1,8 +1,8 @@
 //! Publish absolute path of `assets/icons/` so the `icon_named!` proc-macro
 //! (called from `src/icon.rs`) can scan SVG files at compile time.
 //!
-//! The env var `MYTERM2_UI_ICONS_DIR` is consumed by:
-//!   icon_named!(AppIcon, "$MYTERM2_UI_ICONS_DIR");
+//! The env var `ONETERM_UI_ICONS_DIR` is consumed by:
+//!   icon_named!(AppIcon, "$ONETERM_UI_ICONS_DIR");
 
 use std::{env, path::Path};
 
@@ -17,6 +17,6 @@ fn main() {
         );
     }
 
-    println!("cargo:rustc-env=MYTERM2_UI_ICONS_DIR={}", icons_dir.display());
+    println!("cargo:rustc-env=ONETERM_UI_ICONS_DIR={}", icons_dir.display());
     println!("cargo:rerun-if-changed=assets/icons");
 }

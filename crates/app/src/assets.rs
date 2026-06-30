@@ -1,13 +1,13 @@
-//! Custom AssetSource — gộp gpui-component Assets + myTerm2 UiAssets.
+//! Custom AssetSource — gộp gpui-component Assets + OneTerm UiAssets.
 //!
-//! `UiAssets` (từ `myterm2_ui::icon`) serve SVG từ `crates/ui/assets/icons/`,
+//! `UiAssets` (từ `oneterm_ui::icon`) serve SVG từ `crates/ui/assets/icons/`,
 //! cho phép `Icon::new(AppIcon::Terminal)` render đúng icon.
 //!
 //! Thứ tự load: UiAssets (custom icons) → gpui-component Assets (built-in icons).
 
 use gpui::{AssetSource, SharedString};
 use gpui_component_assets::Assets;
-use myterm2_ui::icon::UiAssets;
+use oneterm_ui::icon::UiAssets;
 
 pub struct CustomAssets;
 

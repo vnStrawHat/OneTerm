@@ -1,6 +1,6 @@
 [package]
-name = "myterm2-core"
-description = "Domain model & business logic for myTerm2 (no GPUI)."
+name = "oneterm-core"
+description = "Domain model & business logic for OneTerm (no GPUI)."
 publish = false
 edition.workspace = true
 

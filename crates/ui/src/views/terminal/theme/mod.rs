@@ -12,7 +12,7 @@ mod tests;
 use gpui::Hsla;
 use gpui_component::Theme;
 
-use myterm2_core::terminal::TerminalPalette;
+use oneterm_core::terminal::TerminalPalette;
 
 pub use contrast::{contrast_ratio, ensure_minimum_contrast};
 pub use palette::{ANSI_16, hsla_from_vte, rgba_from_vte, vte_from_rgba};

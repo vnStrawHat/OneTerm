@@ -1,4 +1,4 @@
-//! Domain model & business logic for myTerm2.
+//! Domain model & business logic for OneTerm.
 //!
 //! Leaf crate: không phụ thuộc `gpui`. Chứa types, traits
 //! (`TerminalSession`, `FileTransfer`), `AppError`.

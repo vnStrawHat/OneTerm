@@ -3,7 +3,7 @@
 use alacritty_terminal::vte::ansi::Color;
 
 use super::{TerminalTheme, hsla_from_vte};
-use myterm2_core::terminal::resolve_color;
+use oneterm_core::terminal::resolve_color;
 
 /// Resolve `Color` (alacritty) → `Hsla` theo palette.
 pub fn resolve_cell_color(c: &Color, theme: &TerminalTheme) -> gpui::Hsla {

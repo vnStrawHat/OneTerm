@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-/// Lỗi dùng chung cho myTerm2.
+/// Lỗi dùng chung cho OneTerm.
 #[derive(Debug, Error)]
 pub enum AppError {
     #[error("I/O error: {0}")]

@@ -1,13 +1,17 @@
-# scripts/build-release.ps1 — Build bản release cho myTerm2 (Windows).
+# scripts/build-release.ps1 — Build bản release cho OneTerm (Windows).
 #
 # Chạy:  pwsh scripts/build-release.ps1           # debug-host default (x86_64)
 #        pwsh scripts/build-release.ps1 -Target aarch64-pc-windows-msvc
 #
+# Bin release = `oneterm` (gated bởi feature `release-bin` trong crates/app/Cargo.toml).
+# Dev bin = `oneterm-debug` (feature `dev-bin`, default). Hai bin mutually-exclusive
+# qua --no-default-features --features release-bin để release chỉ build `oneterm`.
+#
 # Kết quả:
-#   - target/<triple>/release/myterm2.exe        (có nhúng app icon + version info)
+#   - target/<triple>/release/oneterm.exe        (release binary, đã nhúng icon + version info)
 #   - target/<triple>/release/conpty.dll          (build.rs tự copy)
 #   - target/<triple>/release/x64/OpenConsole.exe (build.rs tự copy)
-# Đồng thời stage thêm bản đóng gói sạch vào dist/myterm2-<triple>/ để phát hành.
+# Đồng thời stage thêm bản đóng gói sạch vào dist/oneterm-<triple>/ để phát hành.
 
 [CmdletBinding()]
 param(
@@ -19,21 +23,23 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $repoRoot
 try {
-    Write-Host "==> cargo build --release" -ForegroundColor Cyan
+    # Release build: chỉ build bin `oneterm` (bật release-bin, tắt dev-bin default).
+    $releaseArgs = @("build", "--release", "--no-default-features", "--features", "release-bin")
+    Write-Host "==> cargo $($releaseArgs -join ' ')" -ForegroundColor Cyan
     if ($Target) {
-        cargo build --release --target $Target
+        cargo @releaseArgs --target $Target
         $releaseDir = Join-Path $repoRoot "target/$Target/release"
-        $distName   = "myterm2-$Target"
+        $distName   = "oneterm-$Target"
     } else {
-        cargo build --release
+        cargo @releaseArgs
         $hostTriple = (& rustc -vV | Select-String "^host:").ToString().Split(" ")[1]
         # Khi không truyền --target, cargo ghi trực tiếp ra target/release (không có subdir triple).
         $releaseDir = Join-Path $repoRoot "target/release"
-        $distName   = "myterm2-$hostTriple"
+        $distName   = "oneterm-$hostTriple"
     }
     if ($LASTEXITCODE -ne 0) { throw "Build Error." }
 
-    $exe = Join-Path $releaseDir "myterm2.exe"
+    $exe = Join-Path $releaseDir "oneterm.exe"
     if (-not (Test-Path $exe)) { throw "$exe Not found." }
     Write-Host "OK: $exe" -ForegroundColor Green
 

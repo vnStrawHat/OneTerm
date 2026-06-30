@@ -1,6 +1,6 @@
-//! Theme registration cho myTerm2.
+//! Theme registration cho OneTerm.
 //!
-//! Giống reference `reference/.../story/src/themes.rs`, myTerm2:
+//! Giống reference `reference/.../story/src/themes.rs`, OneTerm:
 //! - Nạp 2 theme JSON (Zed One Dark + Zed One Light) embed sẵn vào binary qua
 //!   `ThemeRegistry::load_themes_from_str`. Không phụ thuộc working dir.
 //! - Wire action `SwitchTheme` / `SwitchThemeMode`.

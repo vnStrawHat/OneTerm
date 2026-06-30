@@ -15,7 +15,7 @@ use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use async_channel::Sender;
 use log::warn;
 
-use myterm2_core::SessionEvent;
+use oneterm_core::SessionEvent;
 
 use crate::event_loop::{ShellMsg, ShellNotifier};
 use crate::state::SharedState;

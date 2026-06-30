@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use gpui::Font;
 
-use myterm2_core::terminal::{IndexedCell, TermDamageInfo};
+use oneterm_core::terminal::{IndexedCell, TermDamageInfo};
 
 use super::super::cell::line_hash;
 use super::super::theme::TerminalTheme;

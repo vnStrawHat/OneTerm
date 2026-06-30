@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use myterm2_core::LocalShellConfig;
+use oneterm_core::LocalShellConfig;
 
 pub mod bell;
 pub mod colors;

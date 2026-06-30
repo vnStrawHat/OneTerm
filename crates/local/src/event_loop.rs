@@ -21,8 +21,8 @@ use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use log::error;
 use polling::{Event as PollEvent, Events, PollMode, Poller};
 
-use myterm2_core::SessionEvent;
-use myterm2_core::terminal::osc::{Osc133Kind, OscPayload, OscSink, parse_cwd_url};
+use oneterm_core::SessionEvent;
+use oneterm_core::terminal::osc::{Osc133Kind, OscPayload, OscSink, parse_cwd_url};
 
 use crate::listener::LocalListener;
 use crate::state::SharedState;

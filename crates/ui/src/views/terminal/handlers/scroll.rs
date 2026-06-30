@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use gpui::{App, Entity, InteractiveElement as _, ScrollDelta, ScrollWheelEvent};
 
-use myterm2_core::TerminalSession;
+use oneterm_core::TerminalSession;
 
 use super::super::element::GridMetrics;
 use super::super::view::LocalTerminalView;

@@ -1,4 +1,4 @@
-# Dependencies & gpui-component — myTerm2
+# Dependencies & gpui-component — OneTerm
 
 > File tách từ `AGENTS.md` (sections 2, 7, 11). Chứa thông tin về rev lock, dependency cho phép, cách tích hợp upstream và quy tắc **reference-first research**.
 

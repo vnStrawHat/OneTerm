@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use gpui::{App, Entity, InteractiveElement as _, ModifiersChangedEvent};
 
-use myterm2_core::TerminalSession;
+use oneterm_core::TerminalSession;
 
 use super::super::element::GridMetrics;
 use super::super::url::{DetectedUrl, detect_url_at};

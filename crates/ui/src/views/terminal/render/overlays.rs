@@ -90,7 +90,7 @@ impl LocalTerminalView {
     /// Breadcrumb bar (bottom) — cwd path từ OSC 7.
     pub(crate) fn breadcrumb_overlay(
         &self,
-        session: &gpui::Entity<Box<dyn myterm2_core::TerminalSession>>,
+        session: &gpui::Entity<Box<dyn oneterm_core::TerminalSession>>,
         theme_ref: &Theme,
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement> {

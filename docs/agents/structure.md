@@ -1,4 +1,4 @@
-# Cấu trúc dự án — myTerm2
+# Cấu trúc dự án — OneTerm
 
 > File tách từ `AGENTS.md` (section 2). Mô tả cấu trúc workspace, cây thư mục chuẩn, và quy tắc tổ chức file Rust.
 >
@@ -7,7 +7,7 @@
 ## 1. Cây thư mục (trạng thái thực tế)
 
 ```
-myTerm2/
+OneTerm/
 ├── Cargo.toml                      # Workspace root — members + workspace deps + lints
 ├── Cargo.lock
 ├── AGENTS.md                       # File entry point cho agent
@@ -19,15 +19,15 @@ myTerm2/
 │   │   ├── Cargo.toml
 │   │   ├── build.rs             # Build script: nhúng app icon (.rc) + copy conpty.dll/OpenConsole.exe
 │   │   ├── assets/              # Runtime resources (Windows)
-│   │   │   ├── myterm2.rc        # Resource script: app icon (48+96) + VS_VERSION_INFO
+│   │   │   ├── oneterm.rc        # Resource script: app icon (48+96) + VS_VERSION_INFO
 │   │   │   ├── conpty.dll       # ConPTY shim (alacritty_terminal LoadLibrary)
 │   │   │   ├── x64/OpenConsole.exe  # ConPTY host (Windows Terminal)
 │   │   │   └── icons/           # App icon (đa độ phân giải, nhúng vào exe)
 │   │   │       ├── terminal-48x48.ico
 │   │   │       └── terminal-96x96.ico
 │   │   └── src/
-│   │       ├── main.rs             # Entry point — init gpui-component + myterm2_ui, mở window
-│   │       └── window.rs           # open_window(cx) — tạo MainWindow + gắn MyTermWorkspace
+│   │       ├── main.rs             # Entry point — init gpui-component + oneterm_ui, mở window
+│   │       └── window.rs           # open_window(cx) — tạo MainWindow + gắn OneTermWorkspace
 │   │
 │   ├── core/                       # Domain model, business logic (no GPUI)
 │   │   ├── Cargo.toml
@@ -51,7 +51,7 @@ myTerm2/
 │   ├── ssh/                        # Triển khai SSH + SFTP — PLACEHOLDER
 │   │   ├── Cargo.toml
 │   │   └── src/
-│   │       └── lib.rs              # Re-export myterm2_core as core (chưa có triển khai russh)
+│   │       └── lib.rs              # Re-export oneterm_core as core (chưa có triển khai russh)
 │   │
 │   ├── local/                      # Local shell qua PTY (alacritty_terminal::tty + EventLoop/ConPTY)
 │   │   ├── Cargo.toml
@@ -75,7 +75,7 @@ myTerm2/
 │           │
 │           ├── layout/             # Layout chính của app
 │           │   ├── mod.rs
-│           │   ├── workspace.rs     # MyTermWorkspace: DockArea tổng + bind_keys
+│           │   ├── workspace.rs     # OneTermWorkspace: DockArea tổng + bind_keys
 │           │   ├── title_bar.rs     # Title bar (top)
 │           │   ├── app_menus.rs    # Menu bar (File/Edit/View/...)
 │           │   └── statusbar.rs    # Status bar (bottom)
@@ -162,11 +162,11 @@ myTerm2/
 
 | Crate | Phụ thuộc | Trạng thái | Trách nhiệm |
 |---|---|---|---|
-| `app` | `ui`, `ssh`, `local`, `core` | ✅ Skeleton | Binary entry point. `main.rs` init gpui-component + myterm2_ui, mở window. `window.rs` gắn `MyTermWorkspace`. |
+| `app` | `ui`, `ssh`, `local`, `core` | ✅ Skeleton | Binary entry point. `main.rs` init gpui-component + oneterm_ui, mở window. `window.rs` gắn `OneTermWorkspace`. |
 | `core` | _(không — leaf crate)_ | ✅ Đang triển khai | Domain types, `TerminalSession` trait, `SessionEvent`, `AppError`, `LocalShellConfig`/`ShellKind`, terminal helpers (content, palette, key/mouse encode, OSC, URL). Không phụ thuộc `gpui`. |
 | `ssh` | `core` | ⬜ Placeholder | Sẽ triển khai `russh`: client, channel, SFTP, known_hosts, auth. Hiện chỉ re-export `core`. |
 | `local` | `core` | ✅ Đang triển khai | PTY qua `alacritty_terminal::tty` + `EventLoop` (ConPTY trên Windows). `LocalSession` + `LocalListener`. Implement `TerminalSession`. Xem [`docs/terminal-backend.md`](../terminal-backend.md). |
-| `ui` | `core` _(không `ssh`/`local`)_ | ✅ Đang triển khai | Toàn bộ gpui: `MyTermWorkspace` (DockArea), title bar, app menus, statusbar, terminal view/element/scrollbar, session tabs, SFTP panel, AppState, TerminalSettings, theme + 2 built-in themes (Zed One Dark/Light). Giao tiếp `ssh`/`local` qua trait. |
+| `ui` | `core` _(không `ssh`/`local`)_ | ✅ Đang triển khai | Toàn bộ gpui: `OneTermWorkspace` (DockArea), title bar, app menus, statusbar, terminal view/element/scrollbar, session tabs, SFTP panel, AppState, TerminalSettings, theme + 2 built-in themes (Zed One Dark/Light). Giao tiếp `ssh`/`local` qua trait. |
 
 > 🔗 **Quy tắc phụ thuộc**: `app → {ui, ssh, local, core}`, `ui → core`, `ssh → core`, `local → core`. Không có cycle, không peer-to-peer giữa `ssh` và `local`.
 

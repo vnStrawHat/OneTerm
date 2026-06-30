@@ -11,12 +11,12 @@ use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::TermMode;
 use async_channel::Receiver;
 
-use myterm2_core::terminal::mouse_encode::{
+use oneterm_core::terminal::mouse_encode::{
     MouseModifiers, TerminalMouseButton, encode_mouse_move, encode_mouse_press,
     encode_mouse_release, encode_wheel_event,
 };
-use myterm2_core::terminal::{TerminalContent, TerminalInfo};
-use myterm2_core::{CursorBounds, SessionEvent, SftpBackend, TerminalSession};
+use oneterm_core::terminal::{TerminalContent, TerminalInfo};
+use oneterm_core::{CursorBounds, SessionEvent, SftpBackend, TerminalSession};
 
 use crate::session::{SshSession, TermSize};
 
@@ -347,9 +347,9 @@ impl TerminalSession for SshSession {
 
 
     // ── Network Stats ───────────────────────────────────────────
-    fn network_stats(&self) -> Option<myterm2_core::NetStats> {
+    fn network_stats(&self) -> Option<oneterm_core::NetStats> {
         let st = self.state.lock().unwrap();
-        Some(myterm2_core::NetStats {
+        Some(oneterm_core::NetStats {
             rx_bytes: st.rx_bytes,
             tx_bytes: st.tx_bytes,
         })

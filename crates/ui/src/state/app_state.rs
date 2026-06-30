@@ -1,4 +1,4 @@
-//! AppState — state toàn cục của myTerm2.
+//! AppState — state toàn cục của OneTerm.
 //!
 //! Skeleton: chưa có state chia sẻ. Sau này chứa danh sách host,
 //! session state, ui_state (vd. `invisible_panels`).
@@ -7,14 +7,14 @@ use std::sync::{Arc, Mutex};
 
 use gpui::{App, AppContext, Entity, Global, WeakEntity};
 use gpui_component::dock::DockArea;
-use myterm2_core::SftpBackend;
+use oneterm_core::SftpBackend;
 
 /// State toàn cục của ứng dụng.
 #[derive(Default)]
 pub struct AppState {
     /// Tham chiếu yếu tới DockArea — dùng cho dialog connect SSH
     /// (thêm terminal tab sau khi kết nối thành công).
-    /// Set trong `MyTermWorkspace::new` sau khi DockArea được tạo.
+    /// Set trong `OneTermWorkspace::new` sau khi DockArea được tạo.
     pub dock_area: Option<WeakEntity<DockArea>>,
     /// Mirror trạng thái zoom (tên panel đang fullscreen) — chia sẻ với
     /// `on_release` callback trong `window.rs` để save khi close window.

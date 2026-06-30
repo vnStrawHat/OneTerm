@@ -12,7 +12,7 @@ use log::warn;
 
 use alacritty_terminal::event::{Event, EventListener};
 
-use myterm2_core::SessionEvent;
+use oneterm_core::SessionEvent;
 
 use crate::state::SharedState;
 

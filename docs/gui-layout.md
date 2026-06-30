@@ -1,6 +1,6 @@
-# GUI Layout — myTerm2
+# GUI Layout — OneTerm
 
-> Tài liệu thiết kế layout GUI cho myTerm2, dựa trên reference
+> Tài liệu thiết kế layout GUI cho OneTerm, dựa trên reference
 > `reference/gpui-component/crates/story/examples/dock.rs`.
 >
 > Mọi API gpui-component được trích từ reference (xem
@@ -9,7 +9,7 @@
 ## Mục lục
 
 1. [Tổng quan & sơ đồ](#1-tổng-quan--sơ-đồ)
-2. [Ánh xạ reference → myTerm2](#2-ánh-xạ-reference--myterm2)
+2. [Ánh xạ reference → OneTerm](#2-ánh-xạ-reference--oneterm)
 3. [Kiến trúc DockArea](#3-kiến-trúc-dockarea)
 4. [Panel trait — yêu cầu triển khai](#4-panel-trait--yêu-cầu-triển-khai)
 5. [Panel serialization registry](#5-panel-serialization-registry)
@@ -24,13 +24,13 @@
 
 ## 1. Tổng quan & sơ đồ
 
-myTerm2 giữ nguyên khung 3 khối xếp dọc của reference `dock.rs`:
+OneTerm giữ nguyên khung 3 khối xếp dọc của reference `dock.rs`:
 **TitleBar → DockArea → StatusBar**, chỉ thay đổi *nội dung* của DockArea và
 StatusBar.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  TitleBar  [myTerm2 ▾] [Edit] [Window] [Help]   [⚙][🐙][🔔]      │
+│  TitleBar  [OneTerm ▾] [Edit] [Window] [Help]   [⚙][🐙][🔔]      │
 ├───────────────────────────────────────────────┬─────────────────┤
 │                                                │                 │
 │   CENTER  (70% width)                          │  RIGHT DOCK     │
@@ -60,12 +60,12 @@ StatusBar.
 
 ---
 
-## 2. Ánh xạ reference → myTerm2
+## 2. Ánh xạ reference → OneTerm
 
-| Thành phần reference `dock.rs` | myTerm2 | Ghi chú |
+| Thành phần reference `dock.rs` | OneTerm | Ghi chú |
 |---|---|---|
-| `StoryWorkspace { title_bar, dock_area, last_layout_state, toggle_button_visible, _save_layout_task }` | `MyTermWorkspace` (đổi tên, giữ field) | `app/src/app.rs` |
-| `AppTitleBar::new("Examples", ...)` | `AppTitleBar::new("myTerm2", ...)` | Đổi title |
+| `StoryWorkspace { title_bar, dock_area, last_layout_state, toggle_button_visible, _save_layout_task }` | `OneTermWorkspace` (đổi tên, giữ field) | `app/src/app.rs` |
+| `AppTitleBar::new("Examples", ...)` | `AppTitleBar::new("OneTerm", ...)` | Đổi title |
 | `AppMenuBar` (`app_menus.rs`: Appearance/Theme/Language + Edit/Window/Help) | Giữ nguyên 100% | Themes + Language + Appearance |
 | `FontSizeSelector` (font-size, gutter toggle) | Giữ nguyên (bỏ radius/scrollbar/list-highlight) | radius=0px, scrollbar=Scrolling cố định ở `theme::init`; list.active_highlight=true cố định; gutter toggle → `TerminalSettings.show_gutter` |
 | `DockArea::new("main-dock", Some(version), window, cx)` | `version = 1` (bump) | Trigger reset prompt khi layout cũ khác version |
@@ -374,7 +374,7 @@ pub fn build_panel(panel_name, dock_area, panel_state, panel_info, window, cx) -
 }
 ```
 
-**myTerm2 đăng ký 3** (trong `ui::init` hoặc `app::init`):
+**OneTerm đăng ký 3** (trong `ui::init` hoặc `app::init`):
 
 ```rust
 register_panel(cx, "terminal", |_, _, _, window, cx| {
@@ -439,14 +439,14 @@ pub version: Option<usize>,
 ```
 
 `dock.rs` `load_layout` so sánh `state.version != Some(MAIN_DOCK_AREA.version)` →
-prompt "reset to default?". myTerm2 đặt `version = 1`, bump khi thay đổi cấu trúc
+prompt "reset to default?". OneTerm đặt `version = 1`, bump khi thay đổi cấu trúc
 panel khiến JSON cũ không hợp lệ (vd. đổi `panel_name`, thêm trường bắt buộc).
 
 ---
 
 ## 6. Layout state save/load
 
-Giữ nguyên cơ chế `dock.rs`. Đặt trong `MyTermWorkspace` (`app/src/app.rs` hoặc
+Giữ nguyên cơ chế `dock.rs`. Đặt trong `OneTermWorkspace` (`app/src/app.rs` hoặc
 `ui/src/layout/workspace.rs`).
 
 ### 6.1 Const
@@ -463,7 +463,7 @@ const STATE_FILE: &str = "docks.json";
 ### 6.2 Constructor — load hoặc reset
 
 ```rust
-impl MyTermWorkspace {
+impl OneTermWorkspace {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let dock_area = cx.new(|cx| DockArea::new(MAIN_DOCK_AREA.id, Some(MAIN_DOCK_AREA.version), window, cx));
         let weak_dock_area = dock_area.downgrade();
@@ -493,7 +493,7 @@ impl MyTermWorkspace {
             }
         }).detach();
 
-        let title_bar = cx.new(|cx| AppTitleBar::new("myTerm2", window, cx).child(...));
+        let title_bar = cx.new(|cx| AppTitleBar::new("OneTerm", window, cx).child(...));
 
         Self { dock_area, title_bar, last_layout_state: None, toggle_button_visible: true, _save_layout_task: None }
     }
@@ -552,7 +552,7 @@ fn load_layout(dock_area: Entity<DockArea>, window: &mut Window, cx: &mut Contex
 }
 ```
 
-### 6.5 `reset_default_layout` — dựng layout mặc định myTerm2
+### 6.5 `reset_default_layout` — dựng layout mặc định OneTerm
 
 ```rust
 fn reset_default_layout(dock_area: WeakEntity<DockArea>, window: &mut Window, cx: &mut App) {
@@ -587,9 +587,9 @@ fn reset_default_layout(dock_area: WeakEntity<DockArea>, window: &mut Window, cx
 
 ### 7.1 Giữ nguyên `AppTitleBar` + `AppMenuBar`
 
-- `AppTitleBar::new("myTerm2", window, cx)` — cấu trúc giữ nguyên (`title_bar.rs`).
+- `AppTitleBar::new("OneTerm", window, cx)` — cấu trúc giữ nguyên (`title_bar.rs`).
 - `AppMenuBar` qua `app_menus::init(title, cx)` (`app_menus.rs`):
-  - Menu "myTerm2": About, Open..., Appearance (Light/Dark), **Theme submenu**
+  - Menu "OneTerm": About, Open..., Appearance (Light/Dark), **Theme submenu**
     (list từ `ThemeRegistry::global(cx).sorted_themes()`), Language, Quit.
   - Edit: Undo/Redo/Cut/Copy/Paste/Find/SelectAll.
   - Window: Toggle Search.
@@ -608,7 +608,7 @@ fn reset_default_layout(dock_area: WeakEntity<DockArea>, window: &mut Window, cx
 Child của `AppTitleBar` (thay cho nút "add-panel" random story):
 
 ```rust
-AppTitleBar::new("myTerm2", window, cx).child(move |_, cx| {
+AppTitleBar::new("OneTerm", window, cx).child(move |_, cx| {
     Button::new("add-panel")
         .icon(IconName::LayoutDashboard)
         .small()
@@ -731,13 +731,13 @@ Theo [`docs/agents/structure.md`](agents/structure.md):
 | File | Trách nhiệm |
 |---|---|
 | `crates/app/src/main.rs` | Entry point — gọi `run_app()` |
-| `crates/app/src/app.rs` | `MyTermWorkspace` (title_bar, dock_area, save_layout, reset_default_layout) |
+| `crates/app/src/app.rs` | `OneTermWorkspace` (title_bar, dock_area, save_layout, reset_default_layout) |
 | `crates/app/src/window.rs` | `new_local`, `WindowOptions`, titlebar options |
 | `crates/app/src/actions.rs` | Global actions / key bindings |
 | `crates/ui/src/lib.rs` | Re-exports + `init(cx)` (gọi `register_panel`) |
 | `crates/ui/src/root.rs` | Root view wrapper |
 | `crates/ui/src/theme.rs` | Đăng ký theme (pattern `themes.rs`) |
-| `crates/ui/src/layout/workspace.rs` | `MyTermWorkspace::render` (title_bar + dock_area + status_bar) |
+| `crates/ui/src/layout/workspace.rs` | `OneTermWorkspace::render` (title_bar + dock_area + status_bar) |
 | `crates/ui/src/layout/statusbar.rs` | StatusBar wiring |
 | `crates/ui/src/views/terminal/terminal_panel.rs` | `TerminalPanel` `impl Panel` + placeholder |
 | `crates/ui/src/views/session_tabs/tabs.rs` | `SessionPanel` `impl Panel` + placeholder |
@@ -751,7 +751,7 @@ Theo [`docs/agents/structure.md`](agents/structure.md):
 
 ### Bước 1 — Skeleton & registration
 
-- [ ] Tạo `MyTermWorkspace` struct (sao chép field từ `StoryWorkspace`).
+- [ ] Tạo `OneTermWorkspace` struct (sao chép field từ `StoryWorkspace`).
 - [ ] `register_panel("terminal"/"session"/"sftp", ...)` trong `ui::init`.
 - [ ] Const `MAIN_DOCK_AREA.version = 1`, `STATE_FILE`.
 
@@ -772,7 +772,7 @@ Theo [`docs/agents/structure.md`](agents/structure.md):
 
 ### Bước 4 — Title bar & menu
 
-- [ ] `AppTitleBar::new("myTerm2", ...)` giữ nguyên cấu trúc.
+- [ ] `AppTitleBar::new("OneTerm", ...)` giữ nguyên cấu trúc.
 - [ ] `app_menus::init` (Appearance/Theme/Language/Edit/Window/Help) — giữ.
 - [ ] `FontSizeSelector` — giữ (chỉ font-size + Gutter toggle; radius=0px & scrollbar=Scrolling cố định; list.active_highlight=true cố định).
 - [ ] Add Panel dropdown → "New Terminal Tab" + "Show/Hide Dock Toggle Button".
@@ -786,7 +786,7 @@ Theo [`docs/agents/structure.md`](agents/structure.md):
 
 ### Bước 6 — Window & entry
 
-- [ ] `new_local`: WindowOptions, titlebar options, `Root::new(MyTermWorkspace, ...)`.
+- [ ] `new_local`: WindowOptions, titlebar options, `Root::new(OneTermWorkspace, ...)`.
 - [ ] `main()`: `gpui_platform::application().with_assets(Assets).run(...)`.
 
 ### Bước 7 — Quality gate

@@ -1,6 +1,6 @@
 # Terminal Rendering Optimization — Technical Document
 
-> Tài liệu kỹ thuật toàn diện mô tả các phương pháp, công nghệ và kỹ thuật đã áp dụng trong `TerminalElement` của **myTerm2** để đạt chất lượng render terminal gần với **Windows Terminal AtlasEngine**.
+> Tài liệu kỹ thuật toàn diện mô tả các phương pháp, công nghệ và kỹ thuật đã áp dụng trong `TerminalElement` của **OneTerm** để đạt chất lượng render terminal gần với **Windows Terminal AtlasEngine**.
 >
 > **Commits áp dụng**:
 > - `1aab15c` — snap cell metrics to device-pixel grid + custom box-drawing primitive
@@ -39,7 +39,7 @@ Giải pháp gồm 3 trụ cột:
 - Text baseline khác nhau giữa các dòng → rasterize glyph lệch pixel grid.
 - Resize window làm cell metrics thay đổi 1 subpixel → toàn bộ grid *jitter*.
 
-**Windows Terminal** và **Zed terminal** giải quyết bằng cách snap mọi tọa độ/metrics sang device-pixel grid nguyên. `myTerm2` áp dụng tưng tự ở tầng GPUI logical pixel — kết quả glyph rasterize khít pixel grid.
+**Windows Terminal** và **Zed terminal** giải quyết bằng cách snap mọi tọa độ/metrics sang device-pixel grid nguyên. `OneTerm` áp dụng tưng tự ở tầng GPUI logical pixel — kết quả glyph rasterize khít pixel grid.
 
 ---
 
@@ -294,7 +294,7 @@ cell width 9.6 px, hinting / anti-alias làm méo nét.
 
 Windows Terminal AtlasEngine và Zed terminal đều có bộ vẽ box-drawing riêng:
 thay vì rasterize font, họ tính geometry các hình chữ nhật nhỏ trong cell và
-vẽ bằng fill rects khít device pixel. myTerm2 áp dụng cùng phương pháp.
+vẽ bằng fill rects khít device pixel. OneTerm áp dụng cùng phương pháp.
 
 ---
 
@@ -605,7 +605,7 @@ không có custom geometry, để lại cho text batch như bình thường.
 
 ## 14. Tại sao hiệu quả?
 
-| Khía cạnh | Font glyph | Custom primitive (myTerm2) |
+| Khía cạnh | Font glyph | Custom primitive (OneTerm) |
 |-----------|-----------|---------------------------|
 | Anti-alias | Có, theo font hinting | Không — rects axis-aligned |
 | Line 1 px | Có thể mờ nếu subpixel | Sharp 1 device px |
@@ -659,7 +659,7 @@ echo -e '\xe2\x96\x80\xe2\x96\x84\xe2\x96\x88\xe2\x96\x8c'
 | Zed terminal_element | `crates/terminal_ui/src/terminal_element.rs` | Inspiration for layout + paint split |
 | Unicode Box Drawing | `U+2500–U+257F` | 128 characters |
 | Unicode Block Elements | `U+2580–U+259F` | 32 characters |
-| myTerm2 `terminal_element.rs` | `crates/ui/src/views/terminal/terminal_element.rs` | Implementation |
+| OneTerm `terminal_element.rs` | `crates/ui/src/views/terminal/terminal_element.rs` | Implementation |
 
 ---
 
@@ -669,7 +669,7 @@ echo -e '\xe2\x96\x80\xe2\x96\x84\xe2\x96\x88\xe2\x96\x8c'
 
 ### Triệu chứng
 
-Prompt line / input area trong `myTerm2` trông khác Windows Terminal:
+Prompt line / input area trong `OneTerm` trông khác Windows Terminal:
 
 1. **Cursor mỏng thay vì block đầy.** Shell (Nushell / reedline) gửi `DECSCUSR`
    để set Beam cursor. `TerminalElement` trước đây dùng `snapshot.cursor.shape`
@@ -683,7 +683,7 @@ Prompt line / input area trong `myTerm2` trông khác Windows Terminal:
 
 ### So sánh với Windows Terminal
 
-| Khía cạnh | Windows Terminal | myTerm2 (trước) | myTerm2 (sau) |
+| Khía cạnh | Windows Terminal | OneTerm (trước) | OneTerm (sau) |
 |---|---|---|---|
 | Cell width | `round(advance('0'))` — CSS `ch` | `advance('m')` hoặc override `8.0` | `ch_advance('0')` ✅ |
 | Line height | `round(ascent + descent + lineGap)` | `font_size * factor` | `max(factor * font_size, ascent + descent)` ✅ |
@@ -812,7 +812,7 @@ shell vẫn buộc Beam.
 ### 38.2. Nguyên lý giống Windows Terminal
 
 Windows Terminal tôn trọng user setting `cursorShape` trong `profile.json` —
-shell không thể override. `myTerm2` áp dụng cùng nguyên lý:
+shell không thể override. `OneTerm` áp dụng cùng nguyên lý:
 
 - `snapshot.cursor.shape == Hidden` → ẩn cursor (shell explicitly hide).
 - Ngược lại → dùng `cursor_shape_override` từ config (Block / Bar / Underline).
@@ -1115,7 +1115,7 @@ TerminalElement::paint()
 
 ## 27. So sánh với Windows Terminal AtlasEngine
 
-| Khía cạnh | Windows Terminal | myTerm2 (sau commits) |
+| Khía cạnh | Windows Terminal | OneTerm (sau commits) |
 |---|---|---|
 | Device pixel snap | Tọa độ vertex integer device px | Snap logical px trước paint (tương đương) |
 | Box-drawing | Custom AtlasEngine primitive | Custom fill-rect primitives |

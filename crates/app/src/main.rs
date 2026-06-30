@@ -1,4 +1,4 @@
-//! Entry point của myTerm2.
+//! Entry point của OneTerm.
 //!
 //! Khởi tạo application, đăng ký UI, mở window chính.
 //!
@@ -10,7 +10,7 @@
     windows_subsystem = "windows"
 )]
 
-use myterm2_ui::layout::MyTermWorkspace;
+use oneterm_ui::layout::OneTermWorkspace;
 mod assets;
 use assets::CustomAssets;
 mod window;
@@ -19,15 +19,15 @@ fn main() {
     // Khởi tạo logging — đọc RUST_LOG env var, mặc định: info cho app, warn cho deps.
     // VD: RUST_LOG=debug → thấy debug log; RUST_LOG=ssh=trace → trace SSH crate.
     env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info,myterm2=debug"),
+        env_logger::Env::default().default_filter_or("info,oneterm=debug"),
     )
     .format_timestamp_secs()
     .init();
-    log::info!("myTerm2 starting up");
+    log::info!("OneTerm starting up");
 
     // Windows: SetConsoleCtrlHandler safety net — ignore CTRL_C_EVENT.
     // Với OpenConsole.exe (từ Windows Terminal), \x03 qua PTY được xử lý
-    // đúng cách → myTerm2 không nhận signal. Handler này là backup
+    // đúng cách → OneTerm không nhận signal. Handler này là backup
     // trong trường hợp OpenConsole.exe không có → fallback system ConPTY.
     #[cfg(windows)]
     unsafe {
@@ -51,10 +51,10 @@ fn main() {
     app.run(move |cx| {
         // Khởi tạo gpui-component (theme, dock, root, ...).
         gpui_component::init(cx);
-        // Khởi tạo UI myTerm2 (register_panel x3, theme action handlers).
-        myterm2_ui::init(cx);
+        // Khởi tạo UI OneTerm (register_panel x3, theme action handlers).
+        oneterm_ui::init(cx);
         // Bind key bindings cho workspace.
-        MyTermWorkspace::bind_keys(cx);
+        OneTermWorkspace::bind_keys(cx);
 
         cx.activate(true);
 

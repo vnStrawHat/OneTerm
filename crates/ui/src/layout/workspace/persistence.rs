@@ -6,7 +6,7 @@ use gpui_component::dock::{DockArea, DockAreaState};
 
 use super::{MAIN_DOCK_VERSION, SFTP_TABLE_STATE_FIELD, STATE_FILE};
 
-impl super::MyTermWorkspace {
+impl super::OneTermWorkspace {
     /// Load layout từ file — dùng để giữ right dock + settings.
     pub(crate) fn load_layout(
         dock_area: Entity<DockArea>,

@@ -3,8 +3,8 @@
 use gpui::{App, ClipboardItem, Entity};
 
 use alacritty_terminal::selection::SelectionType;
-use myterm2_core::TerminalSession;
-use myterm2_core::terminal::TerminalMouseButton;
+use oneterm_core::TerminalSession;
+use oneterm_core::terminal::TerminalMouseButton;
 
 /// Xử lý toggle vi mode.
 pub fn toggle_vi_mode(

@@ -1,6 +1,6 @@
 [package]
-name = "myterm2-local"
-description = "Local shell via PTY for myTerm2 (alacritty_terminal::tty)."
+name = "oneterm-local"
+description = "Local shell via PTY for OneTerm (alacritty_terminal::tty)."
 publish = false
 edition.workspace = true
 
@@ -8,7 +8,7 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
-myterm2-core.workspace = true
+oneterm-core.workspace = true
 alacritty_terminal.workspace = true
 async-channel.workspace = true
 polling.workspace = true

@@ -27,7 +27,7 @@ use gpui_component::{
     v_flex,
 };
 
-use myterm2_ssh::{PtySize, SshAuthMethod, SshConfig, connect as ssh_connect};
+use oneterm_ssh::{PtySize, SshAuthMethod, SshConfig, connect as ssh_connect};
 
 use crate::state::{AppState, SshSession, SshSessionStore};
 use crate::views::TerminalPanel;

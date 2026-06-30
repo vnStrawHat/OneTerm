@@ -12,8 +12,8 @@ use alacritty_terminal::vte::Parser as VteParser;
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use russh::ChannelMsg;
 
-use myterm2_core::SessionEvent;
-use myterm2_core::terminal::osc::{Osc133Kind, OscPayload, OscSink, parse_cwd_url};
+use oneterm_core::SessionEvent;
+use oneterm_core::terminal::osc::{Osc133Kind, OscPayload, OscSink, parse_cwd_url};
 
 use crate::handler::SshClientHandler;
 use crate::listener::{Cmd, SshListener};

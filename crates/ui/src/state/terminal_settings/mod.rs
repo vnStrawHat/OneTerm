@@ -7,7 +7,7 @@
 //! Module gốc `terminal_settings.rs` đã được tách thành `terminal_settings/`.
 
 use gpui::{App, AppContext, Entity, FontWeight, Global, Hsla, SharedString};
-use myterm2_core::LocalShellConfig;
+use oneterm_core::LocalShellConfig;
 
 use crate::state::terminal_config::TerminalConfig;
 

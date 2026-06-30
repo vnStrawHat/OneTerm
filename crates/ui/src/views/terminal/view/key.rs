@@ -1,6 +1,6 @@
 //! Map GPUI `Keystroke` → terminal `KeySpec` + `KeyMods`.
 
-use myterm2_core::terminal::{KeyMods, KeySpec, NamedKey};
+use oneterm_core::terminal::{KeyMods, KeySpec, NamedKey};
 
 impl super::LocalTerminalView {
     /// Map GPUI `Keystroke` → `KeySpec` + `KeyMods`.

@@ -60,7 +60,7 @@ pub(crate) fn snap(value: f32, scale_factor: f32) -> f32 {
 /// Resize session theo bounds đã measure.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resize_session(
-    session: &gpui::Entity<Box<dyn myterm2_core::TerminalSession>>,
+    session: &gpui::Entity<Box<dyn oneterm_core::TerminalSession>>,
     bounds_size: gpui::Size<Pixels>,
     gutter_width: Pixels,
     pad_left: Pixels,

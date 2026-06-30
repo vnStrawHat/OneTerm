@@ -1,6 +1,6 @@
 [package]
-name = "myterm2-ui"
-description = "GPUI views, layout, theme, state for myTerm2."
+name = "oneterm-ui"
+description = "GPUI views, layout, theme, state for OneTerm."
 publish = false
 edition.workspace = true
 build = "build.rs"
@@ -9,7 +9,7 @@ build = "build.rs"
 workspace = true
 
 [dependencies]
-myterm2-core.workspace = true
+oneterm-core.workspace = true
 log.workspace = true
 
 alacritty_terminal.workspace = true
@@ -20,8 +20,8 @@ gpui-component-assets.workspace = true
 
 anyhow.workspace = true
 itertools = "0.14"
-myterm2-local.workspace = true
-myterm2-ssh.workspace = true
+oneterm-local.workspace = true
+oneterm-ssh.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

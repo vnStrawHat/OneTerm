@@ -4532,85 +4532,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "myterm2-app"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "embed-resource",
- "env_logger",
- "gpui",
- "gpui-component",
- "gpui-component-assets",
- "gpui_platform",
- "log",
- "myterm2-core",
- "myterm2-ui",
- "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "myterm2-core"
-version = "0.0.0"
-dependencies = [
- "alacritty_terminal",
- "async-channel 2.5.0",
- "base64",
- "linkify",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "myterm2-local"
-version = "0.0.0"
-dependencies = [
- "alacritty_terminal",
- "async-channel 2.5.0",
- "log",
- "myterm2-core",
- "polling",
-]
-
-[[package]]
-name = "myterm2-ssh"
-version = "0.0.0"
-dependencies = [
- "alacritty_terminal",
- "anyhow",
- "async-channel 2.5.0",
- "log",
- "myterm2-core",
- "russh",
- "russh-sftp",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
-name = "myterm2-ui"
-version = "0.0.0"
-dependencies = [
- "alacritty_terminal",
- "anyhow",
- "async-channel 2.5.0",
- "chrono",
- "gpui",
- "gpui-component",
- "gpui-component-assets",
- "gpui_platform",
- "itertools 0.14.0",
- "log",
- "myterm2-core",
- "myterm2-local",
- "myterm2-ssh",
- "rust-embed",
- "serde",
- "serde_json",
- "tracing",
-]
-
-[[package]]
 name = "naga"
 version = "29.0.3"
 source = "git+https://github.com/zed-industries/wgpu.git?rev=357a0c56e0070480ad9daea5d2eaa83150b79e88#357a0c56e0070480ad9daea5d2eaa83150b79e88"
@@ -5202,6 +5123,85 @@ name = "once_cell_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
+
+[[package]]
+name = "oneterm-app"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "embed-resource",
+ "env_logger",
+ "gpui",
+ "gpui-component",
+ "gpui-component-assets",
+ "gpui_platform",
+ "log",
+ "oneterm-core",
+ "oneterm-ui",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "oneterm-core"
+version = "0.0.0"
+dependencies = [
+ "alacritty_terminal",
+ "async-channel 2.5.0",
+ "base64",
+ "linkify",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "oneterm-local"
+version = "0.0.0"
+dependencies = [
+ "alacritty_terminal",
+ "async-channel 2.5.0",
+ "log",
+ "oneterm-core",
+ "polling",
+]
+
+[[package]]
+name = "oneterm-ssh"
+version = "0.0.0"
+dependencies = [
+ "alacritty_terminal",
+ "anyhow",
+ "async-channel 2.5.0",
+ "log",
+ "oneterm-core",
+ "russh",
+ "russh-sftp",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "oneterm-ui"
+version = "0.0.0"
+dependencies = [
+ "alacritty_terminal",
+ "anyhow",
+ "async-channel 2.5.0",
+ "chrono",
+ "gpui",
+ "gpui-component",
+ "gpui-component-assets",
+ "gpui_platform",
+ "itertools 0.14.0",
+ "log",
+ "oneterm-core",
+ "oneterm-local",
+ "oneterm-ssh",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "tracing",
+]
 
 [[package]]
 name = "oo7"
