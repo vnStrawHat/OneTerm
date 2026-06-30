@@ -17,7 +17,7 @@ use gpui_component::{
     table::DataTable,
     v_flex,
 };
-
+use crate::icon::AppIcon;
 use super::panel::SftpPanel;
 use super::types::{PendingAction, SortColumn};
 
@@ -228,10 +228,8 @@ impl SftpPanel {
             // Path input — flex-1, border-bottom only, transparent bg.
             .child(
                 Input::new(&self.path_input)
-                    // .appearance(false)
                     .border_b_1()
                     .border_color(path_border)
-                    // .text_sm()
                     .small(),
             )
             // Back button
@@ -247,7 +245,7 @@ impl SftpPanel {
             // Refresh button
             .child(
                 Button::new("sftp-refresh")
-                    .icon(Icon::new(IconName::Redo).small())
+                    .icon(Icon::new(AppIcon::Refresh).small())
                     .small()
                     .ghost()
                     .on_click(cx.listener(|this, _, _, cx| {
