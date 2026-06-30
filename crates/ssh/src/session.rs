@@ -26,6 +26,7 @@ use russh::keys::{PrivateKey, PrivateKeyWithHashAlg, load_secret_key};
 use myterm2_core::SessionEvent;
 
 use crate::config::{SshAuthMethod, SshConfig};
+use crate::counting_stream::CountingStream;
 use crate::handler::SshClientHandler;
 use crate::listener::{Cmd, SshListener};
 use crate::sftp::{SftpCmd, SftpEvent, SftpSession};
@@ -203,7 +204,7 @@ pub fn connect(
         // ── Mở SFTP channel (optional) ──────────────────────────────
         // Mở TRƯỚC khi spawn ssh_main_task vì handle sẽ bị move vào task.
         // SFTP channel tách ra object riêng — không cần handle nữa.
-        let sftp_session = match open_sftp(&handle).await {
+        let sftp_session = match open_sftp(&handle, &state).await {
             Ok(sftp) => {
                 log::info!("SshSession: SFTP channel opened");
                 Some(sftp)
@@ -266,6 +267,7 @@ pub fn connect(
 /// 7. Return `Arc<SftpSession>` — bridge cho UI gọi sync
 async fn open_sftp(
     handle: &russh::client::Handle<SshClientHandler>,
+    state: &SharedState,
 ) -> anyhow::Result<Arc<SftpSession>> {
     // 1. Mở channel mới trên cùng handle.
     let channel = handle
@@ -280,7 +282,9 @@ async fn open_sftp(
         .map_err(|e| anyhow::anyhow!("SFTP request_subsystem: {e}"))?;
 
     // 3. Convert channel → stream (AsyncRead + AsyncWrite).
-    let stream = channel.into_stream();
+    //    Wrap với CountingStream để đếm bytes rx/tx — gộp vào cùng
+    //    SharedState với SSH shell channel → tổng network traffic.
+    let stream = CountingStream::new(channel.into_stream(), state.clone());
 
     // 4. SFTP handshake — tạo SftpChannel.
     let sftp_channel = russh_sftp::client::SftpSession::new(stream)

@@ -5,6 +5,7 @@
 //!
 //! Tham chiếu `docs/terminal-backend.md` §7.
 
+pub(crate) mod counting_stream;
 pub mod config;
 pub mod handler;
 pub mod listener;
