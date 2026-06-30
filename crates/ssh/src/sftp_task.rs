@@ -402,11 +402,34 @@ async fn sftp_stat(sftp: &SftpChannel, path: &Path, lookup: &UidGidLookup) -> Re
     })
 }
 
-/// Upload file với progress reporting (chunk 32KB).
+/// Upload file hoặc thư mục local → remote với progress reporting.
+///
+/// - File: đọc nội dung → write chunk 32KB → report progress 0.0–1.0.
+/// - Thư mục: walk đệ quy → tạo remote dirs → upload từng file,
+///   progress = cumulative bytes / total bytes.
 ///
 /// Kiểm tra `cancel.is_cancelled()` sau mỗi chunk write.
 /// Nếu cancelled → trả về `Err("cancelled")`.
 async fn sftp_upload(
+    sftp: &SftpChannel,
+    local: &Path,
+    remote: &Path,
+    progress: &Sender<f64>,
+    cancel: &CancellationToken,
+) -> Result<()> {
+    let metadata = tokio::fs::metadata(local)
+        .await
+        .map_err(|e| AppError::msg(format!("stat local: {e}")))?;
+
+    if metadata.is_dir() {
+        sftp_upload_dir(sftp, local, remote, progress, cancel).await
+    } else {
+        sftp_upload_file(sftp, local, remote, progress, cancel).await
+    }
+}
+
+/// Upload một file đơn lẻ — chunk 32KB, progress 0.0–1.0.
+async fn sftp_upload_file(
     sftp: &SftpChannel,
     local: &Path,
     remote: &Path,
@@ -427,7 +450,7 @@ async fn sftp_upload(
     for chunk in local_data.chunks(CHUNK) {
         // Check cancel trước khi write — nếu cancelled thì dừng ngay.
         if cancel.is_cancelled() {
-            log::info!("sftp_upload: cancelled at {written}/{total} bytes");
+            log::info!("sftp_upload_file: cancelled at {written}/{total} bytes");
             let _ = progress.try_send(-1.0); // -1 = cancelled signal
             return Err(AppError::msg("cancelled"));
         }
@@ -450,6 +473,126 @@ async fn sftp_upload(
         .map_err(|e| AppError::msg(format!("flush remote: {e}")))?;
     let _ = progress.try_send(1.0);
 
+    Ok(())
+}
+
+/// Upload một thư mục — walk đệ quy, tạo remote dirs, upload từng file.
+///
+/// Progress = cumulative bytes uploaded / total bytes across all files.
+async fn sftp_upload_dir(
+    sftp: &SftpChannel,
+    local: &Path,
+    remote: &Path,
+    progress: &Sender<f64>,
+    cancel: &CancellationToken,
+) -> Result<()> {
+    /// Thu thập tất cả file (local_path, remote_path, size) trong thư mục.
+    fn collect_files(
+        local: &Path,
+        remote: &Path,
+        files: &mut Vec<(PathBuf, PathBuf, u64)>,
+    ) -> std::io::Result<()> {
+        for entry in std::fs::read_dir(local)? {
+            let entry = entry?;
+            let path = entry.path();
+            let remote_child = remote.join(entry.file_name());
+            let metadata = entry.metadata()?;
+            if metadata.is_dir() {
+                collect_files(&path, &remote_child, files)?;
+            } else {
+                files.push((path, remote_child, metadata.len()));
+            }
+        }
+        Ok(())
+    }
+
+    // 1. Thu thập danh sách file + tính tổng dung lượng.
+    let mut files: Vec<(PathBuf, PathBuf, u64)> = Vec::new();
+    collect_files(local, remote, &mut files)
+        .map_err(|e| AppError::msg(format!("walk local dir: {e}")))?;
+    let total_bytes: u64 = files.iter().map(|(_, _, s)| *s).sum();
+    log::info!(
+        "sftp_upload_dir: \"{}\" → \"{}\" — {} files, {} bytes",
+        local.display(),
+        remote.display(),
+        files.len(),
+        total_bytes
+    );
+
+    // 2. Thu thập tất cả remote dirs cần tạo (DFS, parents trước).
+    fn collect_dirs(local: &Path, remote: &Path, dirs: &mut Vec<PathBuf>) {
+        dirs.push(remote.to_path_buf());
+        if let Ok(entries) = std::fs::read_dir(local) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let remote_child = remote.join(entry.file_name());
+                    collect_dirs(&path, &remote_child, dirs);
+                }
+            }
+        }
+    }
+
+    let mut remote_dirs: Vec<PathBuf> = Vec::new();
+    collect_dirs(local, remote, &mut remote_dirs);
+    for dir in &remote_dirs {
+        let dir_str = dir.to_string_lossy().replace('\\', "/");
+        // Tạo dir (ignore error nếu đã tồn tại).
+        if let Err(e) = sftp.create_dir(&dir_str).await {
+            log::debug!("sftp_upload_dir: create_dir \"{dir_str}\" → {e} (may already exist)");
+        }
+    }
+
+    // 3. Upload từng file, track cumulative progress.
+    let mut bytes_done: u64 = 0;
+    for (local_path, remote_path, file_size) in &files {
+        if cancel.is_cancelled() {
+            log::info!("sftp_upload_dir: cancelled at {bytes_done}/{total_bytes} bytes");
+            let _ = progress.try_send(-1.0);
+            return Err(AppError::msg("cancelled"));
+        }
+
+        log::debug!(
+            "sftp_upload_dir: uploading \"{}\" → \"{}\" ({file_size} bytes)",
+            local_path.display(),
+            remote_path.display()
+        );
+
+        // Upload file nội bộ — report progress dựa trên cumulative bytes.
+        let local_data = tokio::fs::read(local_path)
+            .await
+            .map_err(|e| AppError::msg(format!("read local: {e}")))?;
+
+        let remote_str = remote_path.to_string_lossy().replace('\\', "/");
+        let mut remote_file = sftp.create(&remote_str).await.map_err(map_sftp_err)?;
+
+        const CHUNK: usize = 32 * 1024;
+        for chunk in local_data.chunks(CHUNK) {
+            if cancel.is_cancelled() {
+                log::info!("sftp_upload_dir: cancelled mid-file at {bytes_done}/{total_bytes}");
+                let _ = progress.try_send(-1.0);
+                return Err(AppError::msg("cancelled"));
+            }
+            remote_file
+                .write_all(chunk)
+                .await
+                .map_err(|e| AppError::msg(format!("write remote: {e}")))?;
+            bytes_done += chunk.len() as u64;
+            let pct = if total_bytes > 0 {
+                bytes_done as f64 / total_bytes as f64
+            } else {
+                1.0
+            };
+            let _ = progress.try_send(pct);
+        }
+
+        remote_file
+            .flush()
+            .await
+            .map_err(|e| AppError::msg(format!("flush remote: {e}")))?;
+    }
+
+    let _ = progress.try_send(1.0);
     Ok(())
 }
 
