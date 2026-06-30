@@ -29,6 +29,37 @@ pub(crate) mod layout;
 pub(crate) mod persistence;
 pub(crate) mod zoom;
 
+/// Save dock state ra `docks.json` — dùng khi close window (`on_release`).
+/// Đọc `dock_area`, `zoomed_panel`, `toggle_button_visible` từ AppState global.
+pub fn save_dock_state_on_close(cx: &App) {
+    let (weak_dock, zoomed_name, tbv) = {
+        let state = AppState::global(cx).read(cx);
+        (
+            state.dock_area.clone(),
+            state
+                .zoomed_panel
+                .as_ref()
+                .and_then(|m| m.lock().ok())
+                .and_then(|g| g.clone()),
+            state
+                .toggle_button_visible
+                .as_ref()
+                .map(|a| a.load(Ordering::Relaxed))
+                .unwrap_or(true),
+        )
+    };
+    let Some(weak_dock) = weak_dock else {
+        return;
+    };
+    let Some(dock_area) = weak_dock.upgrade() else {
+        tracing::warn!("save_dock_state_on_close: dock_area already dropped");
+        return;
+    };
+    let dock_state = dock_area.read(cx).dump(cx);
+    tracing::info!("save_dock_state_on_close → saving dock state");
+    _ = persistence::save_state(&dock_state, zoomed_name.as_deref(), tbv, "on_close");
+}
+
 pub const MAIN_DOCK_VERSION: usize = 2;
 pub const MAIN_DOCK_ID: &str = "main-dock";
 pub const TOGGLE_BUTTON_VISIBLE_FIELD: &str = "toggle_button_visible";
@@ -114,6 +145,14 @@ impl MyTermWorkspace {
         // cả khi entity workspace đã bị drop khi shutdown.
         let zoomed_panel = Arc::new(Mutex::new(None::<String>));
 
+        // Lưu zoomed_panel + toggle_button_visible vào AppState — chia sẻ với
+        // `on_release` callback trong `window.rs` để save dock state khi close.
+        AppState::global(cx).update(cx, |s, cx| {
+            s.zoomed_panel = Some(zoomed_panel.clone());
+            s.toggle_button_visible = Some(toggle_button_visible.clone());
+            cx.notify();
+        });
+
         cx.subscribe_in(
             &dock_area,
             window,
@@ -128,17 +167,15 @@ impl MyTermWorkspace {
         )
         .detach();
 
+        // Fallback: on_app_quit có thể fire trong một số trường hợp (vd cx.shutdown),
+        // nhưng thường bị drop cùng entity khi window close (xem `save_dock_state_on_close`).
         cx.on_app_quit({
             let dock_area = dock_area.clone();
             let zoomed_panel = zoomed_panel.clone();
             let toggle_button_visible = toggle_button_visible.clone();
             move |_, cx| {
                 let state = dock_area.read(cx).dump(cx);
-                // Đọc tên panel đang zoom từ `Arc<Mutex<..>>` — không phụ thuộc
-                // lifetime entity workspace (có thể đã bị drop khi shutdown).
                 let zoomed_name = zoomed_panel.lock().ok().and_then(|g| g.clone());
-                tracing::info!("on_app_quit → zoomed_name={zoomed_name:?}");
-                eprintln!("[zoom] on_app_quit → zoomed_name={zoomed_name:?}");
                 let tbv = toggle_button_visible.load(Ordering::Relaxed);
                 async move {
                     _ = persistence::save_state(&state, zoomed_name.as_deref(), tbv, "on_app_quit");
@@ -156,7 +193,7 @@ impl MyTermWorkspace {
 
         let mut me = Self {
             title_bar,
-            dock_area,
+            dock_area: dock_area.clone(),
             clock,
             last_layout_state: None,
             toggle_button_visible,
@@ -164,6 +201,27 @@ impl MyTermWorkspace {
             zoomed_panel,
             subscribed_tabs: HashSet::new(),
         };
+
+        // Observe dock entities (left/right/bottom) for resize — Dock::resize()
+        // calls cx.notify() which fires observers, but does NOT emit
+        // DockEvent::LayoutChanged. Without this, dock width is lost on restart.
+        {
+            let (right, left, bottom) = {
+                let docks = dock_area.read(cx);
+                (
+                    docks.right_dock().cloned(),
+                    docks.left_dock().cloned(),
+                    docks.bottom_dock().cloned(),
+                )
+            };
+            for dock in right.into_iter().chain(left).chain(bottom) {
+                let da = dock_area.clone();
+                cx.observe_in(&dock, window, move |this, _, window, cx| {
+                    this.save_layout(&da, window, cx);
+                })
+                .detach();
+            }
+        }
 
         // Subscribe mọi TabPanel đang có (load từ docks.json / tạo ở reset_*).
         me.sync_tab_subscriptions(window, cx);

@@ -83,9 +83,6 @@ pub(crate) fn save_state(
     tracing::info!(
         "Save layout [trigger={trigger}] → zoomed_panel={zoomed_panel:?}, toggle_button_visible={toggle_button_visible}, right_dock_open={right_dock_open}",
     );
-    eprintln!(
-        "[dock-save] trigger={trigger} | zoomed={zoomed_panel:?} | toggle_btn={toggle_button_visible} | right_open={right_dock_open}",
-    );
     if let Some(obj) = val.as_object_mut() {
         match zoomed_panel {
             Some(name) => {

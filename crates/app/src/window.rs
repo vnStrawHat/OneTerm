@@ -8,7 +8,7 @@ use gpui::{
 };
 use gpui_component::{Root, TitleBar};
 
-use myterm2_ui::layout::MyTermWorkspace;
+use myterm2_ui::layout::{MyTermWorkspace, save_dock_state_on_close};
 
 /// Mở window chính, trả về task handle.
 pub fn open_window(cx: &mut App) -> Task<anyhow::Result<WindowHandle<Root>>> {
@@ -48,6 +48,7 @@ pub fn open_window(cx: &mut App) -> Task<anyhow::Result<WindowHandle<Root>>> {
                 window.activate_window();
                 window.set_window_title("myTerm2");
                 cx.on_release(|_, cx| {
+                    save_dock_state_on_close(cx);
                     cx.quit();
                 })
                 .detach();
