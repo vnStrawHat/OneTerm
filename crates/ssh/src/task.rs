@@ -83,6 +83,12 @@ pub(crate) async fn ssh_main_task(
                             handle_osc(&payload, &state, &listener);
                         }
 
+                        // Màn hình vừa bị xoá (clear/RIS) → tăng clear_epoch để
+                        // UI reset per-line timestamps (gutter).
+                        if osc_sink.take_clear() {
+                            state.lock().unwrap().clear_epoch += 1;
+                        }
+
                         // Notify UI.
                         listener.forward(SessionEvent::Output);
                     }

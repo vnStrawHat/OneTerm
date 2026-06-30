@@ -34,10 +34,19 @@ pub struct TerminalInfo {
     pub absolute_line_count: usize,
     /// Cursor line (alacritty Line.0).
     pub cursor_line: i32,
+    /// Chỉ số dòng (0-based, cùng hệ với `cursor_line`) của dòng **có nội dung**
+    /// cuối cùng trong viewport. Dùng cho `line_times` stamping để khớp với
+    /// vùng gutter thực sự render (tránh `[--:--:--]` ở dòng dưới cursor).
+    pub last_content_line: i32,
     /// Số dòng hiển thị (viewport height).
     pub num_lines: usize,
     /// Display offset (0 = bottom, >0 = scrolled up).
     pub display_offset: usize,
+    /// Số lần màn hình bị xoá (`clear`/`cls`/RIS). Monotonically increasing.
+    /// UI so sánh với giá trị lần trước để reset per-line timestamps (gutter):
+    /// sau `clear`, bộ đếm dòng absolute reset → nội dung mới tái sử dụng index
+    /// cũ, nên timestamp cũ phải bị bỏ để dòng mới được stamp giờ hiện tại.
+    pub clear_epoch: usize,
 }
 
 /// Sự kiện session phát ra cho UI (subscribe qua channel).
@@ -63,9 +72,6 @@ pub enum SessionEvent {
     Bell,
 }
 
-/// Hình chữ nhật pixel của con trỏ — cho IME popup positioning.
-/// UI map sang `gpui::Bounds<Pixels>`.
-
 /// Thống kê network của session (SSH only — local trả về `None`).
 /// Dùng cho StatusBar hiển thị tốc độ network.
 #[derive(Debug, Clone, Copy, Default)]
@@ -75,6 +81,8 @@ pub struct NetStats {
     /// Tổng bytes gửi (upload direction: client → server).
     pub tx_bytes: u64,
 }
+/// Hình chữ nhật pixel của con trỏ — cho IME popup positioning.
+/// UI map sang `gpui::Bounds<Pixels>`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CursorBounds {
     pub x: f32,

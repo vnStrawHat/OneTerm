@@ -271,6 +271,12 @@ impl ShellEventLoop {
                             self.handle_osc(payload);
                         }
 
+                        // Màn hình vừa bị xoá (clear/cls/RIS) → tăng clear_epoch
+                        // để UI reset per-line timestamps (gutter).
+                        if osc_sink.take_clear() {
+                            self.state.lock().unwrap().clear_epoch += 1;
+                        }
+
                         processed += unprocessed;
                         unprocessed = 0;
 

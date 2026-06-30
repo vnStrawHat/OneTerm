@@ -30,6 +30,8 @@ pub struct SessionState {
     pub absolute_line_count: usize,
     /// Previous total_lines — detect dropped lines.
     pub prev_total_lines: usize,
+    /// Số lần màn hình bị xoá (`clear`). Xem `local/src/state.rs`.
+    pub clear_epoch: usize,
     /// Tổng bytes nhận từ server (download direction).
     pub rx_bytes: u64,
     /// Tổng bytes gửi lên server (upload direction).

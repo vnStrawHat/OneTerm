@@ -31,6 +31,9 @@ pub struct SessionState {
     pub absolute_line_count: usize,
     /// Previous total_lines — dùng ở event loop để detect dropped lines.
     pub prev_total_lines: usize,
+    /// Số lần màn hình bị xoá (`clear`/`cls`). Tăng mỗi khi event loop thấy
+    /// chuỗi `CSI 2J`/`CSI 3J`/`ESC c`. UI dùng để reset per-line timestamps.
+    pub clear_epoch: usize,
 }
 
 /// Arc-Mutex wrapper tiện lợi.

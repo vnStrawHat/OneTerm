@@ -14,10 +14,44 @@
 
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::Point;
+use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::selection::SelectionRange;
-use alacritty_terminal::term::cell::Cell;
+use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{RenderableCursor, Term, TermDamage, TermMode};
+
+use super::colors_util::is_default_background_color;
+
+/// Cell trống = space + nền mặc định + không có trang trí (hyperlink, gạch
+/// chân, đảo màu…). Trùng định nghĩa với UI `is_blank` để gutter và stamping
+/// thống nhất khi xác định dòng có nội dung.
+pub fn is_blank_cell(cell: &Cell) -> bool {
+    cell.c == ' '
+        && is_default_background_color(&cell.bg)
+        && cell.hyperlink().is_none()
+        && !cell.flags.intersects(
+            Flags::INVERSE | Flags::ALL_UNDERLINES | Flags::STRIKEOUT | Flags::WIDE_CHAR_SPACER,
+        )
+}
+
+/// Chỉ số dòng (0-based, theo `Line` của vùng active/viewport — cùng hệ quy
+/// chiếu với `cursor.point.line.0`) của dòng **có nội dung** cuối cùng trong
+/// viewport. Trả `0` nếu toàn bộ viewport trống.
+///
+/// Dùng cho `line_times` stamping: gutter render tới dòng non-blank cuối cùng
+/// nên timestamp cũng phải được stamp tới đó, nếu không các dòng dưới cursor
+/// (TUI, progress bar dùng cursor-up…) sẽ hiện `[--:--:--]`.
+pub fn last_content_line<EP: EventListener>(term: &Term<EP>) -> i32 {
+    let screen_lines = term.screen_lines();
+    let cols = term.columns();
+    let grid = term.grid();
+    for i in (0..screen_lines).rev() {
+        let row = &grid[Line(i as i32)];
+        if (0..cols).any(|c| !is_blank_cell(&row[Column(c)])) {
+            return i as i32;
+        }
+    }
+    0
+}
 
 /// Một cell kèm vị trí grid (snapshot owned, không borrow grid).
 #[derive(Debug, Clone)]

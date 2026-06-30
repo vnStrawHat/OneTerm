@@ -67,13 +67,29 @@ pub(crate) fn compute_gutter_entries(
         let abs_index =
             absolute_line_count as i32 - display_offset as i32 - viewport_lines as i32 + i as i32;
         let line_num = (abs_index + 1).max(1) as usize;
-        // Tra timestamp theo absolute index (qua base) — ổn định trước dao động
-        // total_lines.
-        let time_str = if abs_index >= 0 && (abs_index as usize) >= line_time_base {
-            let j = abs_index as usize - line_time_base;
-            line_times.get(j).map(|s| s.as_str()).unwrap_or("--:--:--")
-        } else {
+        // Tra timestamp theo absolute index (qua base). Khi dòng CÓ NỘI DUNG được
+        // gutter render nhưng chưa có timestamp tương ứng — thường do lệch trạng
+        // thái giữa lần đọc `terminal_info` lúc stamp (render) và lúc dựng gutter
+        // (prepaint), đặc biệt sau `clear` khi ConPTY repaint khiến
+        // `absolute_line_count` dao động — ta KHÔNG hiện `[--:--:--]` mà fallback
+        // về timestamp gần nhất đã biết. `[--:--:--]` chỉ dành cho vùng phía TRÊN
+        // dòng đầu tiên (`abs_index < 0`) hoặc khi chưa có timestamp nào.
+        let time_str = if abs_index < 0 {
             "--:--:--"
+        } else {
+            let ai = abs_index as usize;
+            if ai >= line_time_base {
+                let j = ai - line_time_base;
+                line_times
+                    .get(j)
+                    .map(|s| s.as_str())
+                    // Dòng mới hơn vùng đã stamp (read skew) → giờ gần nhất.
+                    .or_else(|| line_times.last().map(|s| s.as_str()))
+                    .unwrap_or("--:--:--")
+            } else {
+                // Dòng cũ hơn vùng đang track → giờ cũ nhất còn lưu.
+                line_times.first().map(|s| s.as_str()).unwrap_or("--:--:--")
+            }
         };
         let text = format!("[{}] {:>width$}", time_str, line_num, width = num_digits);
         let clock_len = 1 + time_str.len() + 2;

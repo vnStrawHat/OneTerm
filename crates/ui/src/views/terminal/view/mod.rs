@@ -59,6 +59,9 @@ pub struct LocalTerminalView {
     /// Chỉ số absolute (0-based) của `line_times[0]` — dòng cũ nhất còn track.
     /// Tăng dần khi dòng cũ rời scrollback.
     pub(crate) line_time_base: usize,
+    /// `clear_epoch` lần cập nhật gần nhất — khi đổi (màn hình bị `clear`),
+    /// reset `line_times` để nội dung mới được stamp giờ hiện tại.
+    pub(crate) last_clear_epoch: usize,
     /// Per-row layout cache — skip recompute cho non-dirty rows.
     pub(crate) row_cache: Rc<RefCell<RowLayoutCache>>,
     /// Cached gutter width + num_digits — chỉ recompute khi num_digits đổi.
@@ -161,6 +164,7 @@ impl LocalTerminalView {
             last_mouse_pos: None,
             line_times: Vec::new(),
             line_time_base: 0,
+            last_clear_epoch: 0,
             row_cache: Rc::new(RefCell::new(RowLayoutCache::new())),
             cached_gutter: Rc::new(RefCell::new(None)),
             last_grid_size: Rc::new(RefCell::new(None)),
@@ -218,7 +222,17 @@ impl LocalTerminalView {
         let absolute = info.absolute_line_count;
         let now = chrono::Local::now().format("%H:%M:%S").to_string();
 
-        // Số dòng ĐÃ CÓ NỘI DUNG (high-water mark) = absolute index của cursor + 1.
+        // ── Reset khi màn hình bị xoá (`clear`/`cls`/RIS) ──
+        // `clear` reset bộ đếm dòng absolute trong event loop → nội dung mới TÁI
+        // SỬ DỤNG các index cũ. Nếu giữ `line_times` cũ, dòng mới sẽ tra trúng
+        // timestamp cũ (stale) → "giờ không đổi". Xoá để dòng mới được stamp lại.
+        if info.clear_epoch != self.last_clear_epoch {
+            self.last_clear_epoch = info.clear_epoch;
+            self.line_times.clear();
+            self.line_time_base = absolute.saturating_sub(total);
+        }
+
+        // Số dòng ĐÃ CÓ NỘI DUNG (high-water mark).
         //
         // `absolute_line_count` bị "thổi phồng" tới đáy viewport vì
         // `total_lines = history + screen_lines` luôn tính cả các dòng TRỐNG bên
@@ -226,12 +240,15 @@ impl LocalTerminalView {
         // dòng trống đó bị gán giờ hiện tại; khi output sau này ghi đè vào chúng,
         // chúng giữ giờ cũ → đúng triệu chứng "một khối dòng mang giờ sai".
         //
-        // Cursor là nơi output đang được ghi, nên dừng stamp ở ngay sau cursor.
-        // Absolute index của cursor = absolute − num_lines + cursor_line.
-        let cursor_row = info.cursor_line.max(0) as usize;
+        // Mốc nội dung phải khớp với vùng gutter thực sự render — tức tới dòng
+        // **có nội dung** cuối cùng (`last_content_line`), KHÔNG chỉ tới cursor.
+        // Với TUI / progress bar dùng cursor-up, nội dung nằm DƯỚI cursor; nếu
+        // dừng stamp ở cursor thì các dòng đó render `[--:--:--]`.
+        // Absolute index = absolute − num_lines + row.
+        let content_row = info.cursor_line.max(info.last_content_line).max(0) as usize;
         let content_high = absolute
             .saturating_sub(info.num_lines)
-            .saturating_add(cursor_row + 1)
+            .saturating_add(content_row + 1)
             .min(absolute);
 
         // Reset cứng: chỉ khi nội dung mới bắt đầu TRƯỚC dòng cũ nhất đang track

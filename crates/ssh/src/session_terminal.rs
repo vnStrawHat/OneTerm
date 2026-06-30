@@ -81,8 +81,10 @@ impl TerminalSession for SshSession {
             total_lines,
             absolute_line_count: st.absolute_line_count.max(total_lines),
             cursor_line: term.grid().cursor.point.line.0,
+            last_content_line: oneterm_core::terminal::last_content_line(&term),
             num_lines: term.screen_lines(),
             display_offset: term.grid().display_offset(),
+            clear_epoch: st.clear_epoch,
         }
     }
 

@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use alacritty_terminal::vte::Perform;
+use alacritty_terminal::vte::{Params, Perform};
 use base64::Engine;
 
 /// OSC 133 marker kind — đánh dấu ranh giới prompt/command/output.
@@ -40,11 +40,22 @@ pub enum OscPayload {
 #[derive(Default)]
 pub struct OscSink {
     latest: Option<OscPayload>,
+    /// Đã thấy chuỗi xoá toàn màn hình (`CSI 2J` / `CSI 3J` / `ESC c` = RIS)
+    /// kể từ lần `take_clear()` gần nhất. Dùng để báo cho lớp trên reset
+    /// per-line timestamps (gutter) vì `clear` reset bộ đếm dòng absolute →
+    /// nội dung mới TÁI SỬ DỤNG index cũ, nếu không sẽ hiện giờ cũ (stale).
+    clear_pending: bool,
 }
 
 impl OscSink {
     pub fn take(&mut self) -> Option<OscPayload> {
         self.latest.take()
+    }
+
+    /// Trả `true` (và reset cờ) nếu đã phát hiện chuỗi xoá toàn màn hình kể từ
+    /// lần gọi trước.
+    pub fn take_clear(&mut self) -> bool {
+        std::mem::take(&mut self.clear_pending)
     }
 }
 
@@ -112,6 +123,35 @@ impl Perform for OscSink {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Phát hiện `CSI 2J` (xoá toàn màn hình) và `CSI 3J` (xoá scrollback) —
+    /// các lệnh `clear` / `cls` / `tput clear` phát ra. `CSI 0J`/`CSI 1J`
+    /// (xoá một phần) KHÔNG tính là clear.
+    fn csi_dispatch(
+        &mut self,
+        params: &Params,
+        _intermediates: &[u8],
+        _ignore: bool,
+        action: char,
+    ) {
+        if action == 'J' {
+            let mode = params
+                .iter()
+                .next()
+                .and_then(|sub| sub.first().copied())
+                .unwrap_or(0);
+            if mode == 2 || mode == 3 {
+                self.clear_pending = true;
+            }
+        }
+    }
+
+    /// `ESC c` = RIS (Reset to Initial State) → xoá toàn bộ → coi như clear.
+    fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, byte: u8) {
+        if byte == b'c' {
+            self.clear_pending = true;
         }
     }
 }
@@ -284,5 +324,66 @@ mod tests {
     fn osc133_ignores_unknown_sub() {
         assert_eq!(sniff(&[b"\x1b]133;X\x07"]), None);
         assert_eq!(sniff(&[b"\x1b]133;Z;foo\x07"]), None);
+    }
+
+    // ── Clear detection tests ──────────────────────────────────────
+    fn sniff_clear(chunks: &[&[u8]]) -> bool {
+        let mut parser = VteParser::new();
+        let mut sink = OscSink::default();
+        for chunk in chunks {
+            parser.advance(&mut sink, chunk);
+        }
+        sink.take_clear()
+    }
+
+    #[test]
+    fn clear_csi_2j_detected() {
+        assert!(sniff_clear(&[b"\x1b[2J"]));
+    }
+
+    #[test]
+    fn clear_csi_3j_detected() {
+        assert!(sniff_clear(&[b"\x1b[3J"]));
+    }
+
+    #[test]
+    fn clear_full_sequence_detected() {
+        // Typical `clear`: home + erase display + erase scrollback.
+        assert!(sniff_clear(&[b"\x1b[H\x1b[2J\x1b[3J"]));
+    }
+
+    #[test]
+    fn clear_ris_detected() {
+        // ESC c = Reset to Initial State.
+        assert!(sniff_clear(&[b"\x1bc"]));
+    }
+
+    #[test]
+    fn clear_split_across_reads_detected() {
+        // Sequence split mid-CSI across read boundaries — vte parser holds state.
+        assert!(sniff_clear(&[b"\x1b[", b"2J"]));
+    }
+
+    #[test]
+    fn clear_partial_erase_not_detected() {
+        // CSI 0J / CSI 1J / CSI J (erase to end / to start) are NOT full clears.
+        assert!(!sniff_clear(&[b"\x1b[0J"]));
+        assert!(!sniff_clear(&[b"\x1b[1J"]));
+        assert!(!sniff_clear(&[b"\x1b[J"]));
+    }
+
+    #[test]
+    fn clear_flag_consumed_by_take() {
+        let mut parser = VteParser::new();
+        let mut sink = OscSink::default();
+        parser.advance(&mut sink, b"\x1b[2J");
+        assert!(sink.take_clear(), "first take should report clear");
+        assert!(!sink.take_clear(), "flag should reset after take");
+    }
+
+    #[test]
+    fn clear_does_not_leak_into_osc_payload() {
+        // A clear sequence must not produce an OscPayload.
+        assert_eq!(sniff(&[b"\x1b[2J"]), None);
     }
 }
