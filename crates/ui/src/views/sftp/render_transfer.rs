@@ -55,9 +55,9 @@ impl SftpPanel {
             .w_full()
             .flex_shrink_0()
             .max_h(px(200.0))
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.muted.opacity(0.15));
+            .border_t_1()
+            .border_color(theme.border);
+            // .bg(theme.muted.opacity(0.15));
 
         // Header: "Transfers" + count + Clear button
         queue = queue.child(
@@ -98,16 +98,16 @@ impl SftpPanel {
             // Direction icon
             let dir_icon = match item.direction {
                 TransferDirection::Upload => {
-                    Icon::new(IconName::ArrowUp).xsmall().text_color(accent)
+                    Icon::new(IconName::ArrowUp).small().text_color(theme.green)
                 }
                 TransferDirection::Download => {
-                    Icon::new(IconName::ArrowDown).xsmall().text_color(accent)
+                    Icon::new(IconName::ArrowDown).small().text_color(theme.cyan)
                 }
             };
 
             // Status indicator color
             let progress_color = match item.status {
-                TransferStatus::InProgress => accent,
+                TransferStatus::InProgress => theme.foreground,
                 TransferStatus::Completed => theme.success,
                 TransferStatus::Cancelled => muted,
                 TransferStatus::Error => danger,
@@ -135,7 +135,7 @@ impl SftpPanel {
                     )
                     // Progress bar
                     .child(
-                        div().w(px(80.0)).flex_shrink_0().child(
+                        div().w(px(100.0)).flex_shrink_0().child(
                             Progress::new(gpui::ElementId::NamedInteger(
                                 "sftp-transfer".into(),
                                 item.id as u64,
@@ -148,10 +148,10 @@ impl SftpPanel {
                     // Percentage + status
                     .child(
                         div()
-                            .w(px(50.0))
+                            .w(px(60.0))
                             .flex_shrink_0()
                             .text_xs()
-                            .text_color(muted)
+                            .text_color(theme.foreground)
                             .child(match item.status {
                                 TransferStatus::InProgress => {
                                     format!("{:.0}%", item.progress * 100.0)
@@ -181,8 +181,9 @@ impl SftpPanel {
                                     "sftp-cancel-transfer".into(),
                                     item.id as u64,
                                 ))
-                                .xsmall()
+                                .small()
                                 .ghost()
+                                .text_color(theme.foreground)
                                 .icon(IconName::Close)
                                 .tooltip("Cancel transfer")
                                 .on_click(cx.listener(

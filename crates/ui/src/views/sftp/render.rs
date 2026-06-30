@@ -62,8 +62,8 @@ impl Render for SftpPanel {
             .track_focus(&self.focus_handle)
             .bg(theme.background)
             .child(self.render_toolbar(window, cx))
-            .child(self.render_transfer_queue(cx))
             .child(self.render_file_list(cx))
+            .child(self.render_transfer_queue(cx))
             .into_any_element()
     }
 }
