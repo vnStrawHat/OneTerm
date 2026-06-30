@@ -7,7 +7,10 @@
 //! 1. Tìm active terminal panel trong DockArea (qua `collect_tab_panels`).
 //! 2. Downcast `AnyView` → `Entity<TerminalPanel>`.
 //! 3. Đọc `network_stats()` (rx/tx bytes) từ session.
-//! 4. Tính delta so với tick trước → tốc độ kbps (kilobits/s).
+//! 4. Tính delta so với tick trước → tốc độ bps (bits/s).
+//!
+//! Download (↓ rx) và upload (↑ tx) hiển thị riêng, đơn vị auto-scale:
+//! bps → Kbps → Mbps → Gbps.
 //!
 //! Chỉ hiển thị cho SSH session (local trả về `None` → ẩn indicator).
 
@@ -23,16 +26,16 @@ use myterm2_core::NetStats;
 use crate::layout::workspace::zoom::collect_tab_panels;
 use crate::views::terminal::panel::TerminalPanel;
 
-/// Indicator hiển thị tốc độ network (kbps) của SSH session active trong StatusBar.
+/// Indicator hiển thị tốc độ network (bps) của SSH session active trong StatusBar.
 pub struct NetSpeedIndicator {
     focus_handle: FocusHandle,
     dock_area: WeakEntity<DockArea>,
     /// Stats lần sample trước — để tính delta.
     last_stats: Option<NetStats>,
-    /// Tốc độ download (rx) hiện tại — kbps.
-    rx_kbps: f64,
-    /// Tốc độ upload (tx) hiện tại — kbps.
-    tx_kbps: f64,
+    /// Tốc độ download (rx) hiện tại — bits/s.
+    rx_bps: f64,
+    /// Tốc độ upload (tx) hiện tại — bits/s.
+    tx_bps: f64,
     /// Có đang hiển thị không (active panel là SSH terminal).
     visible: bool,
     _timer: Task<()>,
@@ -63,8 +66,8 @@ impl NetSpeedIndicator {
             focus_handle,
             dock_area,
             last_stats: None,
-            rx_kbps: 0.0,
-            tx_kbps: 0.0,
+            rx_bps: 0.0,
+            tx_bps: 0.0,
             visible: false,
             _timer: timer,
         }
@@ -96,12 +99,12 @@ impl NetSpeedIndicator {
 
         match (stats, self.last_stats) {
             (Some(curr), Some(prev)) => {
-                // Tính delta — nếu counter giảm (session đổi) → reset, không tính.
+                // Tính delta — nếu counter giảm (session đổi) → saturating_sub = 0.
                 let drx = curr.rx_bytes.saturating_sub(prev.rx_bytes);
                 let dtx = curr.tx_bytes.saturating_sub(prev.tx_bytes);
-                // bytes/s → kilobits/s: × 8 / 1000.
-                self.rx_kbps = drx as f64 * 8.0 / 1000.0;
-                self.tx_kbps = dtx as f64 * 8.0 / 1000.0;
+                // bytes/s → bits/s: × 8.
+                self.rx_bps = drx as f64 * 8.0;
+                self.tx_bps = dtx as f64 * 8.0;
                 self.last_stats = Some(curr);
                 if !self.visible {
                     self.visible = true;
@@ -110,8 +113,8 @@ impl NetSpeedIndicator {
             (Some(curr), None) => {
                 // Lần sample đầu — chưa có delta, chỉ lưu để tick sau tính.
                 self.last_stats = Some(curr);
-                self.rx_kbps = 0.0;
-                self.tx_kbps = 0.0;
+                self.rx_bps = 0.0;
+                self.tx_bps = 0.0;
                 if !self.visible {
                     self.visible = true;
                 }
@@ -119,8 +122,8 @@ impl NetSpeedIndicator {
             (None, _) => {
                 // Không có active SSH terminal → ẩn.
                 self.last_stats = None;
-                self.rx_kbps = 0.0;
-                self.tx_kbps = 0.0;
+                self.rx_bps = 0.0;
+                self.tx_bps = 0.0;
                 if self.visible {
                     self.visible = false;
                 }
@@ -130,9 +133,31 @@ impl NetSpeedIndicator {
         cx.notify();
     }
 
-    /// Format tốc độ: `↓ 1.2 ↑ 0.3 kbps`.
+    /// Format tốc độ: `↓ 1.2 Kbps  ↑ 300 bps`.
+    ///
+    /// Download (↓) và upload (↑) có đơn vị riêng, auto-scale.
     fn formatted(&self) -> String {
-        format!("↓ {:.1} ↑ {:.1} kbps", self.rx_kbps, self.tx_kbps)
+        format!(
+            "↓ {}  ↑ {}",
+            format_speed(self.rx_bps),
+            format_speed(self.tx_bps)
+        )
+    }
+}
+
+/// Auto-scale tốc độ bits/s sang đơn vị phù hợp.
+///
+/// < 1,000 → bps (nguyên) · < 1,000,000 → Kbps (1 số thập phân) ·
+/// < 1,000,000,000 → Mbps (1 số thập phân) · ≥ 1G → Gbps (2 số thập phân).
+fn format_speed(bps: f64) -> String {
+    if bps < 1000.0 {
+        format!("{} bps", bps.round() as u64)
+    } else if bps < 1_000_000.0 {
+        format!("{:.1} Kbps", bps / 1000.0)
+    } else if bps < 1_000_000_000.0 {
+        format!("{:.1} Mbps", bps / 1_000_000.0)
+    } else {
+        format!("{:.2} Gbps", bps / 1_000_000_000.0)
     }
 }
 
