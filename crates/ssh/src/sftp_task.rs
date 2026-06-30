@@ -641,7 +641,11 @@ async fn sftp_upload_dir(
     Ok(())
 }
 
-/// Download file với progress reporting (chunk 32KB).
+/// Download file hoặc thư mục remote → local với progress reporting.
+///
+/// - File: mở remote file → read chunk 32KB → write local file, progress 0.0–1.0.
+/// - Thư mục: walk đệ quy remote tree → tạo local dirs → download từng file,
+///   progress = cumulative bytes / total bytes.
 ///
 /// Kiểm tra `cancel.is_cancelled()` sau mỗi chunk read.
 /// Nếu cancelled → trả về `Err("cancelled")`.
@@ -652,12 +656,29 @@ async fn sftp_download(
     progress: &Sender<f64>,
     cancel: &CancellationToken,
 ) -> Result<()> {
-    // Lấy size để tính progress.
     let remote_str = remote.to_string_lossy().replace('\\', "/");
     let attrs = sftp.metadata(&remote_str).await.map_err(map_sftp_err)?;
+
+    if attrs.is_dir() {
+        sftp_download_dir(sftp, &remote_str, local, progress, cancel).await
+    } else {
+        sftp_download_file(sftp, &remote_str, local, progress, cancel).await
+    }
+}
+
+/// Download một file đơn lẻ — chunk 32KB, progress 0.0–1.0.
+async fn sftp_download_file(
+    sftp: &SftpChannel,
+    remote_str: &str,
+    local: &Path,
+    progress: &Sender<f64>,
+    cancel: &CancellationToken,
+) -> Result<()> {
+    // Lấy size để tính progress.
+    let attrs = sftp.metadata(remote_str).await.map_err(map_sftp_err)?;
     let total = attrs.size.unwrap_or(0);
 
-    let mut remote_file = sftp.open(&remote_str).await.map_err(map_sftp_err)?;
+    let mut remote_file = sftp.open(remote_str).await.map_err(map_sftp_err)?;
 
     let mut local_file = tokio::fs::File::create(local)
         .await
@@ -669,7 +690,7 @@ async fn sftp_download(
     loop {
         // Check cancel trước khi read — nếu cancelled thì dừng ngay.
         if cancel.is_cancelled() {
-            log::info!("sftp_download: cancelled at {read}/{total} bytes");
+            log::info!("sftp_download_file: cancelled at {read}/{total} bytes");
             let _ = progress.try_send(-1.0); // -1 = cancelled signal
             return Err(AppError::msg("cancelled"));
         }
@@ -699,5 +720,129 @@ async fn sftp_download(
         .map_err(|e| AppError::msg(format!("flush local: {e}")))?;
     let _ = progress.try_send(1.0);
 
+    Ok(())
+}
+
+/// Download một thư mục — walk đệ quy remote tree, tạo local dirs, download từng file.
+///
+/// Progress = cumulative bytes downloaded / total bytes across all files.
+async fn sftp_download_dir(
+    sftp: &SftpChannel,
+    remote_str: &str,
+    local: &Path,
+    progress: &Sender<f64>,
+    cancel: &CancellationToken,
+) -> Result<()> {
+    /// Thu thập tất cả file (remote_path, local_path, size) trong thư mục remote.
+    async fn collect_files(
+        sftp: &SftpChannel,
+        remote: &str,
+        local: &Path,
+        files: &mut Vec<(String, PathBuf, u64)>,
+    ) -> Result<()> {
+        let read_dir = sftp.read_dir(remote).await.map_err(map_sftp_err)?;
+        let entries: Vec<(String, bool, u64)> = read_dir
+            .filter_map(|e| {
+                let name = e.file_name();
+                if name == "." || name == ".." {
+                    return None;
+                }
+                let metadata = e.metadata();
+                let is_dir = metadata.is_dir();
+                let size = metadata.size.unwrap_or(0);
+                Some((name, is_dir, size))
+            })
+            .collect();
+
+        for (name, is_dir, size) in entries {
+            // Dùng string concat với '/' thay vì Path::join (tránh '\' trên Windows).
+            let remote_child = format!("{remote}/{name}");
+            let local_child = local.join(&name);
+            if is_dir {
+                Box::pin(collect_files(sftp, &remote_child, &local_child, files)).await?;
+            } else {
+                files.push((remote_child, local_child, size));
+            }
+        }
+        Ok(())
+    }
+
+    // 1. Thu thập danh sách file + tính tổng dung lượng.
+    let mut files: Vec<(String, PathBuf, u64)> = Vec::new();
+    collect_files(sftp, remote_str, local, &mut files).await?;
+    let total_bytes: u64 = files.iter().map(|(_, _, s)| *s).sum();
+    log::info!(
+        "sftp_download_dir: \"{remote_str}\" → \"{}\" — {} files, {} bytes",
+        local.display(),
+        files.len(),
+        total_bytes
+    );
+
+    // 2. Tạo thư mục gốc local.
+    tokio::fs::create_dir_all(local)
+        .await
+        .map_err(|e| AppError::msg(format!("create local dir: {e}")))?;
+
+    // 3. Download từng file, track cumulative progress.
+    let mut bytes_done: u64 = 0;
+    for (remote_path, local_path, _file_size) in &files {
+        if cancel.is_cancelled() {
+            log::info!("sftp_download_dir: cancelled at {bytes_done}/{total_bytes} bytes");
+            let _ = progress.try_send(-1.0);
+            return Err(AppError::msg("cancelled"));
+        }
+
+        log::debug!(
+            "sftp_download_dir: downloading \"{remote_path}\" → \"{}\"",
+            local_path.display()
+        );
+
+        // Đảm bảo thư mục cha của file đã tồn tại locally.
+        if let Some(parent) = local_path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| AppError::msg(format!("create local parent dir: {e}")))?;
+        }
+
+        let mut remote_file = sftp.open(remote_path).await.map_err(map_sftp_err)?;
+        let mut local_file = tokio::fs::File::create(local_path)
+            .await
+            .map_err(|e| AppError::msg(format!("create local: {e}")))?;
+
+        const CHUNK: usize = 32 * 1024;
+        let mut buf = vec![0u8; CHUNK];
+        loop {
+            if cancel.is_cancelled() {
+                log::info!("sftp_download_dir: cancelled mid-file at {bytes_done}/{total_bytes}");
+                let _ = progress.try_send(-1.0);
+                return Err(AppError::msg("cancelled"));
+            }
+            let n = remote_file
+                .read(&mut buf)
+                .await
+                .map_err(|e| AppError::msg(format!("read remote: {e}")))?;
+            if n == 0 {
+                break;
+            }
+            local_file
+                .write_all(&buf[..n])
+                .await
+                .map_err(|e| AppError::msg(format!("write local: {e}")))?;
+            bytes_done += n as u64;
+            let pct = if total_bytes > 0 {
+                bytes_done as f64 / total_bytes as f64
+            } else {
+                1.0
+            };
+            let _ = progress.try_send(pct);
+        }
+
+        local_file
+            .flush()
+            .await
+            .map_err(|e| AppError::msg(format!("flush local: {e}")))?;
+    }
+
+    let _ = progress.try_send(1.0);
     Ok(())
 }

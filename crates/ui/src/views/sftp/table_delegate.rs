@@ -369,7 +369,7 @@ impl TableDelegate for SftpTableDelegate {
 
         let panel = self.panel.clone();
 
-        // First item: Open (dir) hoặc Download (file).
+        // First item: Open (dir only), sau đó Download (cả file và folder).
         let menu = if is_dir {
             menu.item(PopupMenuItem::new("Open").on_click({
                 let panel = panel.clone();
@@ -377,6 +377,17 @@ impl TableDelegate for SftpTableDelegate {
                     if let Some(panel) = panel.upgrade() {
                         panel.update(cx, |this, cx| {
                             this.pending_action = Some(super::types::PendingAction::Open(row_ix));
+                            cx.notify();
+                        });
+                    }
+                }
+            }))
+            .item(PopupMenuItem::new("Download").on_click({
+                let panel = panel.clone();
+                move |_, _, cx| {
+                    if let Some(panel) = panel.upgrade() {
+                        panel.update(cx, |this, cx| {
+                            this.pending_action = Some(super::types::PendingAction::Download);
                             cx.notify();
                         });
                     }
