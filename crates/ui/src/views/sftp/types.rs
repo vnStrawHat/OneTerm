@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 
 use myterm2_core::{FileEntry, SftpBackend};
@@ -81,7 +81,7 @@ pub(crate) fn format_size(bytes: u64) -> String {
     }
 }
 
-/// Format SystemTime thành `YYYY-MM-DD HH:MM` (UTC).
+/// Format SystemTime thành `YYYY-MM-DD HH:MM` (local time).
 pub(crate) fn format_date(time: Option<SystemTime>) -> String {
     let time = match time {
         Some(t) => t,
@@ -96,7 +96,8 @@ pub(crate) fn format_date(time: Option<SystemTime>) -> String {
         Some(dt) => dt,
         None => return String::new(),
     };
-    dt.format("%Y-%m-%d %H:%M").to_string()
+    let local = dt.with_timezone(&Local);
+    local.format("%Y-%m-%d %H:%M").to_string()
 }
 
 /// Format permissions thành `drwxr-xr-x (0775)` — type + text + octal.
