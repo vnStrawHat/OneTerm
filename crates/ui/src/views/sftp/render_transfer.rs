@@ -68,7 +68,7 @@ impl SftpPanel {
                 .items_center()
                 .gap_2()
                 .px_2()
-                .child(div().text_xs().text_color(muted).child("Transfers"))
+                .child(div().text_xs().text_color(theme.foreground).child("Transfers"))
                 .child(
                     div()
                         .text_xs()

@@ -432,12 +432,23 @@ impl TableDelegate for SftpTableDelegate {
                 }
             }))
             .separator()
-            .item(PopupMenuItem::new("Upload").on_click({
+            .item(PopupMenuItem::new("Upload Files").on_click({
                 let panel = panel.clone();
                 move |_, _, cx| {
                     if let Some(panel) = panel.upgrade() {
                         panel.update(cx, |this, cx| {
-                            this.pending_action = Some(super::types::PendingAction::Upload);
+                            this.pending_action = Some(super::types::PendingAction::UploadFiles);
+                            cx.notify();
+                        });
+                    }
+                }
+            }))
+            .item(PopupMenuItem::new("Upload Folder").on_click({
+                let panel = panel.clone();
+                move |_, _, cx| {
+                    if let Some(panel) = panel.upgrade() {
+                        panel.update(cx, |this, cx| {
+                            this.pending_action = Some(super::types::PendingAction::UploadFolder);
                             cx.notify();
                         });
                     }
@@ -485,12 +496,23 @@ impl TableDelegate for SftpTableDelegate {
             .child("Empty directory.")
             .context_menu(move |menu, _window, _cx| {
                 let panel = panel.clone();
-                menu.item(PopupMenuItem::new("Upload").on_click({
+                menu.item(PopupMenuItem::new("Upload Files").on_click({
                     let panel = panel.clone();
                     move |_, _, cx| {
                         if let Some(panel) = panel.upgrade() {
                             panel.update(cx, |this, cx| {
-                                this.pending_action = Some(super::types::PendingAction::Upload);
+                                this.pending_action = Some(super::types::PendingAction::UploadFiles);
+                                cx.notify();
+                            });
+                        }
+                    }
+                }))
+                .item(PopupMenuItem::new("Upload Folder").on_click({
+                    let panel = panel.clone();
+                    move |_, _, cx| {
+                        if let Some(panel) = panel.upgrade() {
+                            panel.update(cx, |this, cx| {
+                                this.pending_action = Some(super::types::PendingAction::UploadFolder);
                                 cx.notify();
                             });
                         }

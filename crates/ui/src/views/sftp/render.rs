@@ -33,7 +33,8 @@ impl Render for SftpPanel {
                 PendingAction::Rename => self.do_rename(window, cx),
                 PendingAction::Delete => self.do_delete(window, cx),
                 PendingAction::Properties => self.do_properties(window, cx),
-                PendingAction::Upload => self.do_upload(window, cx),
+                PendingAction::UploadFiles => self.do_upload(false, window, cx),
+                PendingAction::UploadFolder => self.do_upload(true, window, cx),
                 PendingAction::NewFolder => self.do_new_folder(window, cx),
                 PendingAction::Refresh => self.refresh(cx),
             }
@@ -133,13 +134,26 @@ impl SftpPanel {
                             }),
                     )
                     .item(
-                        PopupMenuItem::new("Upload")
+                        PopupMenuItem::new("Upload Files")
                             .icon(Icon::new(IconName::ArrowUp))
                             .on_click({
                                 let panel = panel.clone();
                                 move |_, _, cx| {
                                     panel.update(cx, |this, cx| {
-                                        this.pending_action = Some(PendingAction::Upload);
+                                        this.pending_action = Some(PendingAction::UploadFiles);
+                                        cx.notify();
+                                    });
+                                }
+                            }),
+                    )
+                    .item(
+                        PopupMenuItem::new("Upload Folder")
+                            .icon(Icon::new(IconName::ArrowUp))
+                            .on_click({
+                                let panel = panel.clone();
+                                move |_, _, cx| {
+                                    panel.update(cx, |this, cx| {
+                                        this.pending_action = Some(PendingAction::UploadFolder);
                                         cx.notify();
                                     });
                                 }

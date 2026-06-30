@@ -55,7 +55,8 @@ pub(crate) enum PendingAction {
     Rename,
     Delete,
     Properties,
-    Upload,
+    UploadFiles,
+    UploadFolder,
     NewFolder,
     Refresh,
 }

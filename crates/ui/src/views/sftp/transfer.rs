@@ -20,20 +20,35 @@ use super::types::{TransferDirection, TransferItem, TransferStatus};
 
 impl SftpPanel {
     /// Upload file hoặc thư mục local → remote.
-    /// Mở OS native open dialog (chọn file hoặc folder) → sftp.upload() → poll progress.
-    pub(crate) fn do_upload(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        log::info!("SftpPanel::do_upload: cwd=\"{}\"", self.cwd.display());
+    /// Mở OS native open dialog (chọn files hoặc folder) → sftp.upload() → poll progress.
+    /// `pick_folders` — true: folder picker, false: file picker (multiple).
+    /// Windows không hỗ trợ mixed files+folders trong 1 dialog, nên tách 2 mode.
+    pub(crate) fn do_upload(
+        &mut self,
+        pick_folders: bool,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mode_str = if pick_folders { "folder" } else { "files" };
+        log::info!("SftpPanel::do_upload ({mode_str}): cwd=\"{}\"", self.cwd.display());
 
         let sftp = self.sftp.clone().unwrap();
         let panel = cx.entity();
         let cwd = self.cwd.clone();
 
-        // Mở OS native file picker — cho phép chọn files và folders, multiple.
+        // Mở OS native file picker.
+        // Windows không hỗ trợ mixed files+folders (FOS_PICKFOLDERS toggles mode),
+        // nên tách 2 mode: files-only (multiple) hoặc folder-only (single).
         let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
-            files: true,
-            directories: true,
-            multiple: true,
-            prompt: Some("Select files or folders to upload".into()),
+            files: !pick_folders,
+            directories: pick_folders,
+            multiple: !pick_folders,
+            prompt: Some(if pick_folders {
+                "Select a folder to upload"
+            } else {
+                "Select files to upload"
+            }
+            .into()),
         });
 
         // Spawn task đợi user chọn path → upload từng path sequentially.
