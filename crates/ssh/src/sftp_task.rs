@@ -165,11 +165,11 @@ pub(crate) async fn sftp_task(
             }
             Ok(SftpCmd::Rmdir { path, reply }) => {
                 log::debug!("sftp_task: Rmdir path=\"{}\"", path.display());
-                let result = sftp
-                    .remove_dir(path.to_string_lossy())
-                    .await
-                    .map_err(map_sftp_err);
-                let _ = reply.send(result);
+                let sftp = Arc::clone(&sftp);
+                tokio::spawn(async move {
+                    let result = sftp_remove_recursive(&sftp, &path).await;
+                    let _ = reply.send(result);
+                });
             }
             Ok(SftpCmd::Mkdir { path, reply }) => {
                 log::debug!("sftp_task: Mkdir path=\"{}\"", path.display());
@@ -400,6 +400,51 @@ async fn sftp_stat(sftp: &SftpChannel, path: &Path, lookup: &UidGidLookup) -> Re
         owner: lookup.uid_name(attrs.uid),
         group: lookup.gid_name(attrs.gid),
     })
+}
+
+
+/// Xoá file/thư mục đệ quy — nếu là thư mục, đọc contents → xoá từng entry → xoá dir.
+/// Dùng cho `SftpCmd::Rmdir` — hỗ trợ xoá thư mục không rỗng.
+async fn sftp_remove_recursive(sftp: &SftpChannel, path: &Path) -> Result<()> {
+    let path_str = path.to_string_lossy().replace('\\', "/");
+
+    // Đọc thư mục — nếu read_dir fail, có thể path là file → thử remove_file.
+    let read_dir = match sftp.read_dir(&path_str).await {
+        Ok(rd) => rd,
+        Err(_) => {
+            // Path có thể là file → thử remove_file.
+            log::debug!("sftp_remove_recursive: \"{path_str}\" not a dir, trying remove_file");
+            return sftp.remove_file(&path_str).await.map_err(map_sftp_err);
+        }
+    };
+
+    let entries: Vec<(String, bool)> = read_dir
+        .filter_map(|e| {
+            let name = e.file_name();
+            if name == "." || name == ".." {
+                return None;
+            }
+            let is_dir = e.metadata().is_dir();
+            Some((name, is_dir))
+        })
+        .collect();
+
+    for (name, is_dir) in entries {
+        // Dùng string concat với '/' thay vì Path::join (tránh '\' trên Windows).
+        let child_path = format!("{path_str}/{name}");
+        if is_dir {
+            Box::pin(sftp_remove_recursive(sftp, &PathBuf::from(&child_path))).await?;
+        } else {
+            log::debug!("sftp_remove_recursive: remove_file \"{child_path}\"");
+            sftp.remove_file(&child_path)
+                .await
+                .map_err(map_sftp_err)?;
+        }
+    }
+
+    // Thư mục đã rỗng → remove_dir.
+    log::debug!("sftp_remove_recursive: remove_dir \"{path_str}\"");
+    sftp.remove_dir(&path_str).await.map_err(map_sftp_err)
 }
 
 /// Upload file hoặc thư mục local → remote với progress reporting.
