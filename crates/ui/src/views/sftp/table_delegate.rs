@@ -9,15 +9,15 @@ use std::collections::HashMap;
 
 use gpui::{
     App, Context, Div, InteractiveElement as _, IntoElement, ParentElement,
-    Stateful, Styled, TextAlign, Window, div, rgb,
+    Stateful, Styled, TextAlign, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _,
+    ActiveTheme as _,
     h_flex,
     menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
     table::{Column, ColumnFixed, ColumnSort, TableDelegate, TableState},
 };
-
+use crate::icon::AppIcon;
 use myterm2_core::FileEntry;
 
 use super::panel::SftpPanel;
@@ -264,9 +264,9 @@ impl TableDelegate for SftpTableDelegate {
         match cfg.col {
             SortColumn::Name => {
                 let icon = if entry.is_dir {
-                    Icon::new(IconName::Folder).xsmall().text_color(rgb(0xffd257))
+                    AppIcon::FolderA.colored().size(px(16.)).bg(gpui::transparent_black())
                 } else {
-                    Icon::new(IconName::File).xsmall().text_color(theme.foreground)
+                    AppIcon::File3.colored().size(px(16.)).bg(gpui::transparent_black())
                 };
 
                 h_flex()
