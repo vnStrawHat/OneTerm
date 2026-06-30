@@ -99,10 +99,21 @@ pub(crate) fn format_date(time: Option<SystemTime>) -> String {
     dt.format("%Y-%m-%d %H:%M").to_string()
 }
 
-/// Format permissions thành `rwxr-xr-x (0775)` — text + octal.
-/// Bit layout: owner(rwx) | group(rwx) | other(rwx) | special(sst).
+/// Format permissions thành `drwxr-xr-x (0775)` — type + text + octal.
+/// Bit layout: file type (high bits) | owner(rwx) | group(rwx) | other(rwx) | special(sst).
 pub(crate) fn format_permissions(perm: u32) -> String {
     let mode = perm & 0o7777; // Chỉ quan tâm 12 bit thấp.
+
+    // File type prefix từ high bits (S_IFMT).
+    let type_char = match perm & 0o170000 {
+        0o040000 => 'd',  // S_IFDIR  — directory
+        0o120000 => 'l',  // S_IFLNK  — symlink
+        0o020000 => 'c',  // S_IFCHR  — char device
+        0o060000 => 'b',  // S_IFBLK  — block device
+        0o010000 => 'p',  // S_IFIFO  — pipe/FIFO
+        0o140000 => 's',  // S_IFSOCK — socket
+        _ => '-',         // S_IFREG hoặc không xác định
+    };
 
     // Special bits: setuid (4000), setgid (2000), sticky (1000).
     let setuid = mode & 0o4000 != 0;
@@ -126,7 +137,8 @@ pub(crate) fn format_permissions(perm: u32) -> String {
     let c = |flag: bool, ch: char| if flag { ch } else { '-' };
 
     let text = format!(
-        "{}{}{}{}{}{}{}{}{}",
+        "{}{}{}{}{}{}{}{}{}{}",
+        type_char,
         c(owner_r, 'r'),
         c(owner_w, 'w'),
         if owner_x {
