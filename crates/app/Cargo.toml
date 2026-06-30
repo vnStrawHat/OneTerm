@@ -15,14 +15,19 @@ dev-bin = []
 # Bin target cho release build — tên file sạch (oneterm.exe / oneterm).
 release-bin = []
 
+# Logic dùng chung — cả hai bin shim đều gọi `oneterm_app::run()`.
+[lib]
+name = "oneterm_app"
+path = "src/lib.rs"
+
 [[bin]]
 name = "oneterm-debug"
-path = "src/main.rs"
+path = "src/bin/oneterm-debug.rs"
 required-features = ["dev-bin"]
 
 [[bin]]
 name = "oneterm"
-path = "src/main.rs"
+path = "src/bin/oneterm.rs"
 required-features = ["release-bin"]
 
 [lints]

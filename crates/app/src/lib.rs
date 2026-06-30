@@ -1,21 +1,20 @@
-//! Entry point của OneTerm.
+//! OneTerm application core.
 //!
 //! Khởi tạo application, đăng ký UI, mở window chính.
+//! Logic dùng chung cho cả hai binary: `oneterm` (release) và `oneterm-debug` (dev).
 //!
-//! Subsystem: WINDOWS (ẩn console) ở release; giữ console ở dev để xem log/println!.
-//! - `windows_subsystem` là attribute riêng Windows → phải gate `target_os`.
-//! - ConPTY/OpenConsole tự tạo pseudo-console cho shell con, không cần console của process.
-#![cfg_attr(
-    all(target_os = "windows", not(debug_assertions)),
-    windows_subsystem = "windows"
-)]
+//! Hai bin chỉ là shim mỏng gọi [`run`]; nhờ đó mỗi bin có file nguồn riêng
+//! (tránh warning "file present in multiple build targets").
 
 use oneterm_ui::layout::OneTermWorkspace;
-mod assets;
-use assets::CustomAssets;
-mod window;
 
-fn main() {
+pub mod assets;
+pub mod window;
+
+use assets::CustomAssets;
+
+/// Khởi chạy OneTerm: init logging, app, UI rồi mở window chính.
+pub fn run() {
     // Khởi tạo logging — đọc RUST_LOG env var, mặc định: info cho app, warn cho deps.
     // VD: RUST_LOG=debug → thấy debug log; RUST_LOG=ssh=trace → trace SSH crate.
     env_logger::Builder::from_env(
