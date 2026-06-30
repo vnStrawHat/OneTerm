@@ -8,6 +8,7 @@ use gpui::{
     Context, Focusable as _, InteractiveElement as _, IntoElement, ParentElement, Render,
     Styled, Window, div,
 };
+use gpui::prelude::FluentBuilder as _;
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
@@ -59,7 +60,7 @@ impl Render for SftpPanel {
             .size_full()
             .track_focus(&self.focus_handle)
             .bg(theme.background)
-            .child(self.render_toolbar(cx))
+            .child(self.render_toolbar(window, cx))
             .child(self.render_transfer_queue(cx))
             .child(self.render_file_list(cx))
             .into_any_element()
@@ -85,10 +86,16 @@ impl SftpPanel {
     /// Path input hiển thị cwd, Enter → goto path (highlight lỗi nếu không tồn tại).
     /// "..." button mở popup menu: New Folder, Upload, Download, Rename, Delete,
     /// Properties, separator, Columns config (checkbox).
-    fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
-        // Border color cho path input — red nếu error, else theme border.
+        // Border color cho path input:
+        // - Error → theme.danger (luôn, ngay cả khi focus)
+        // - Focused (no error) → KHÔNG override, để Input.focused_border(cx)
+        //   tự set border_color = theme.ring (focus highlight)
+        // - Default → theme.border
+        let path_focused = self.path_input.read(cx).focus_handle(cx).is_focused(window);
+        let show_custom_border = self.path_error || !path_focused;
         let path_border = if self.path_error {
             theme.danger
         } else {
@@ -228,9 +235,14 @@ impl SftpPanel {
             // Path input — flex-1, border-bottom only, transparent bg.
             .child(
                 Input::new(&self.path_input)
+                    .flex_1()
                     .border_b_1()
-                    .border_color(path_border)
-                    .small(),
+                    .border_t_0()
+                    .border_l_0()
+                    .border_r_0()
+                    .when(show_custom_border, |input| input.border_color(path_border))
+                    .small()
+                    .bg(gpui::transparent_black()),
             )
             // Back button
             .child(
