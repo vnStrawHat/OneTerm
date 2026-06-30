@@ -264,9 +264,9 @@ impl TableDelegate for SftpTableDelegate {
         match cfg.col {
             SortColumn::Name => {
                 let icon = if entry.is_dir {
-                    AppIcon::FolderA.colored().size(px(16.)).bg(gpui::transparent_black())
+                    AppIcon::Folder.colored().size(px(19.))
                 } else {
-                    AppIcon::File3.colored().size(px(16.)).bg(gpui::transparent_black())
+                    AppIcon::File.colored().size(px(19.))
                 };
 
                 h_flex()
