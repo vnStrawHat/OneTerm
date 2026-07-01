@@ -7,6 +7,7 @@
 - Chạy `cargo fmt` trước khi commit. Config trong `.rustfmt.toml`.
 - `cargo clippy --workspace --all-targets -- -D warnings` **phải pass** trước khi merge.
 - Tên: `snake_case` (function, variable, module), `PascalCase` (type, trait, enum variant), `SCREAMING_SNAKE_CASE` (const).
+- Code Comments luôn dùng tiếng Anh
 - Import gộp theo nhóm, cách nhau 1 dòng trống:
 
 ```rust
