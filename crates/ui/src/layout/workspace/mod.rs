@@ -369,6 +369,7 @@ impl Render for OneTermWorkspace {
             .on_action(cx.listener(Self::on_action_add_sftp_browser))
             .on_action(cx.listener(Self::on_action_toggle_dock_toggle_button))
             .on_action(cx.listener(Self::on_action_quit))
+            .on_action(cx.listener(Self::on_action_about))
             .relative()
             .size_full()
             .flex()

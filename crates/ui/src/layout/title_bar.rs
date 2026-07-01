@@ -1,31 +1,29 @@
 //! [`AppTitleBar`] — OneTerm's title bar.
 //!
 //! Mirrors `reference/.../story/src/title_bar.rs`, keeping `AppMenuBar` + child
-//! (Add Terminal / Add Session / Add SFTP dropdown) + `FontSizeSelector`.
+//! (Add Terminal / Add Session / Add SFTP dropdown). Font Size + Gutter moved to the
+//! AppMenuBar "View" menu (see `app_menus.rs`).
 //!
 //! Drops GitHub / Bell (not used in a terminal app).
 
 use std::rc::Rc;
 
 use gpui::{
-    Anchor, AnyElement, App, AppContext as _, Context, Entity, FocusHandle,
-    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Render, Styled as _,
-    Window, div, px, rgb, svg,
+    Anchor, AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement, MouseButton,
+    ParentElement as _, Render, Styled as _, Window, div, rgb, svg,
 };
 use gpui_component::{
-    ActiveTheme as _, IconName, Side, Sizable as _, Theme, TitleBar,
+    ActiveTheme as _, IconName, Sizable as _, TitleBar,
     button::{Button, ButtonVariants as _},
     menu::{AppMenuBar, DropdownMenu as _},
 };
 
-use crate::actions::{AddPanel, AddSession, AddSftpBrowser, SelectFont, ToggleGutter};
+use crate::actions::{AddPanel, AddSession, AddSftpBrowser};
 
 use crate::layout::app_menus;
-use crate::state::TerminalSettings;
 
 pub struct AppTitleBar {
     app_menu_bar: Entity<AppMenuBar>,
-    font_size_selector: Entity<FontSizeSelector>,
     child: Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>,
 }
 
@@ -33,14 +31,12 @@ impl AppTitleBar {
     /// Create a new title bar.
     pub fn new(
         title: impl Into<gpui::SharedString>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let app_menu_bar = app_menus::init(title, cx);
-        let font_size_selector = cx.new(|cx| FontSizeSelector::new(window, cx));
         Self {
             app_menu_bar,
-            font_size_selector,
             child: Rc::new(|_, _| div().into_any_element()),
         }
     }
@@ -83,87 +79,7 @@ impl Render for AppTitleBar {
                     .px_2()
                     .gap_2()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child((self.child.clone())(window, cx))
-                    .child(self.font_size_selector.clone()),
-            )
-    }
-}
-
-/// [`FontSizeSelector`] — dropdown to adjust font size + toggle the terminal Gutter
-/// (timestamp + line number) (mirrors the reference `FontSizeSelector`, with Border
-/// Radius removed — default 0px — Scrollbar removed — default Scrolling to show — and
-/// List Active Highlight removed — default on, not toggleable).
-struct FontSizeSelector {
-    focus_handle: FocusHandle,
-}
-
-impl FontSizeSelector {
-    pub fn new(_: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self {
-            focus_handle: cx.focus_handle(),
-        }
-    }
-
-    fn on_select_font(
-        &mut self,
-        font_size: &SelectFont,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        Theme::global_mut(cx).font_size = px(font_size.0 as f32);
-        window.refresh();
-    }
-
-    fn on_toggle_gutter(&mut self, _: &ToggleGutter, window: &mut Window, cx: &mut Context<Self>) {
-        // Gutter — the left column of the terminal showing the timestamp [HH:MM:SS]
-        // + line number for each line. On = shown (default), off = hidden and the
-        // terminal uses the full width. Stored in the global `TerminalSettings`,
-        // affecting every terminal panel in the app.
-        let settings = TerminalSettings::global(cx);
-        settings.update(cx, |st, cx| {
-            st.show_gutter = !st.show_gutter;
-            cx.notify();
-        });
-        window.refresh();
-    }
-}
-
-impl Render for FontSizeSelector {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let focus_handle = self.focus_handle.clone();
-        let font_size = cx.theme().font_size.as_f32() as i32;
-
-        div()
-            .id("font-size-selector")
-            .track_focus(&focus_handle)
-            .on_action(cx.listener(Self::on_select_font))
-            .on_action(cx.listener(Self::on_toggle_gutter))
-            .child(
-                Button::new("btn")
-                    .small()
-                    .ghost()
-                    .icon(IconName::Settings2)
-                    .dropdown_menu(move |this, _, cx| {
-                        this.scrollable(true)
-                            .check_side(Side::Right)
-                            .max_h(px(480.))
-                            .label("Font Size")
-                            .menu_with_check("Large", font_size == 18, Box::new(SelectFont(18)))
-                            .menu_with_check(
-                                "Medium (default)",
-                                font_size == 16,
-                                Box::new(SelectFont(16)),
-                            )
-                            .menu_with_check("Small", font_size == 14, Box::new(SelectFont(14)))
-                            .separator()
-                            // Gutter — toggle the timestamp + line number column on the left of the terminal.
-                            .menu_with_check(
-                                "Gutter",
-                                TerminalSettings::global(cx).read(cx).show_gutter,
-                                Box::new(ToggleGutter),
-                            )
-                    })
-                    .anchor(Anchor::TopRight),
+                    .child((self.child.clone())(window, cx)),
             )
     }
 }

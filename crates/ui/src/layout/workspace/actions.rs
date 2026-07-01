@@ -3,10 +3,14 @@
 use std::sync::{Arc, atomic::Ordering};
 
 use gpui::{Context, Window};
-use gpui_component::dock::{DockItem, DockPlacement};
+use gpui_component::{
+    WindowExt as _,
+    dialog::DialogButtonProps,
+    dock::{DockItem, DockPlacement},
+};
 
 use crate::{
-    actions::{AddPanel, AddSession, AddSftpBrowser, Quit, ToggleDockToggleButton},
+    actions::{About, AddPanel, AddSession, AddSftpBrowser, Quit, ToggleDockToggleButton},
     views::{SessionPanel, SftpPanel, TerminalPanel},
 };
 
@@ -107,5 +111,26 @@ impl super::OneTermWorkspace {
     /// Action handler: Quit.
     pub(crate) fn on_action_quit(&mut self, _: &Quit, _: &mut Window, cx: &mut Context<Self>) {
         cx.quit();
+    }
+
+    /// Action handler: About — open the About dialog.
+    ///
+    /// Triggered by OneTerm ▸ About and Help ▸ About OneTerm in the AppMenuBar.
+    pub(crate) fn on_action_about(
+        &mut self,
+        _: &About,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        window.open_alert_dialog(cx, |alert, _, _| {
+            alert
+                .title("About OneTerm")
+                .description(format!(
+                    "OneTerm v{}\n\nA terminal application for local and SSH sessions.\n\
+                     Built with GPUI + alacritty_terminal.",
+                    env!("CARGO_PKG_VERSION")
+                ))
+                .button_props(DialogButtonProps::default().ok_text("Close"))
+        });
     }
 }
