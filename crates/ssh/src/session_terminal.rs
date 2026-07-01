@@ -1,7 +1,7 @@
 //! `impl TerminalSession for SshSession` — render, input, mouse/selection,
-//! clipboard, scroll, IME, và lifecycle query methods.
+//! clipboard, scroll, IME, and lifecycle query methods.
 //!
-//! Tương tự `local/src/session_terminal.rs` nhưng cho SSH session.
+//! Similar to `local/src/session_terminal.rs` but for the SSH session.
 
 use std::path::PathBuf;
 
@@ -21,7 +21,7 @@ use oneterm_core::{CursorBounds, SessionEvent, SftpBackend, TerminalSession};
 use crate::session::{SshSession, TermSize};
 
 impl SshSession {
-    /// UI set pixel cell metrics (sau khi measure font) cho `cursor_bounds`.
+    /// UI sets pixel cell metrics (after measuring the font) for `cursor_bounds`.
     pub fn set_cell_size(&self, cell_width: f32, line_height: f32) {
         *self.cell_width.lock().unwrap() = cell_width;
         *self.line_height.lock().unwrap() = line_height;
@@ -103,7 +103,7 @@ impl TerminalSession for SshSession {
     }
 
     fn flush_pty(&self) {
-        // SSH không cần ConPTY workaround — gửi DSR query.
+        // SSH needs no ConPTY workaround — send a DSR query.
         self.listener.pty_write(b"\x1b[6n");
     }
 
@@ -346,7 +346,6 @@ impl TerminalSession for SshSession {
     fn foreground_process(&self) -> Option<String> {
         self.state.lock().unwrap().foreground_process.clone()
     }
-
 
     // ── Network Stats ───────────────────────────────────────────
     fn network_stats(&self) -> Option<oneterm_core::NetStats> {

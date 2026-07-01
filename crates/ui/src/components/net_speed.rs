@@ -1,18 +1,18 @@
-//! [`NetSpeedIndicator`] — hiển thị tốc độ network của SSH session active.
+//! [`NetSpeedIndicator`] — displays the network speed of the active SSH session.
 //!
-//! Tương tự `DateTimeClock`: `Entity` + `Render` + `Focusable`, cập nhật mỗi 1s
-//! qua timer. Timer spawn trên window context (`cx.spawn_in`) để fire ổn định.
+//! Like `DateTimeClock`: `Entity` + `Render` + `Focusable`, updated every 1s
+//! via a timer. The timer spawns on the window context (`cx.spawn_in`) to fire reliably.
 //!
-//! Mỗi tick:
-//! 1. Tìm active terminal panel trong DockArea (qua `collect_tab_panels`).
+//! Each tick:
+//! 1. Find the active terminal panel in the DockArea (via `collect_tab_panels`).
 //! 2. Downcast `AnyView` → `Entity<TerminalPanel>`.
-//! 3. Đọc `network_stats()` (rx/tx bytes) từ session.
-//! 4. Tính delta so với tick trước → tốc độ bps (bits/s).
+//! 3. Read `network_stats()` (rx/tx bytes) from the session.
+//! 4. Compute the delta against the previous tick → speed in bps (bits/s).
 //!
-//! Download (↓ rx) và upload (↑ tx) hiển thị riêng, đơn vị auto-scale:
+//! Download (↓ rx) and upload (↑ tx) are shown separately, with auto-scaled units:
 //! bps → Kbps → Mbps → Gbps.
 //!
-//! Chỉ hiển thị cho SSH session (local trả về `None` → ẩn indicator).
+//! Only shown for SSH sessions (local returns `None` → indicator hidden).
 
 use std::time::Duration;
 
@@ -26,23 +26,23 @@ use oneterm_core::NetStats;
 use crate::layout::workspace::zoom::collect_tab_panels;
 use crate::views::terminal::panel::TerminalPanel;
 
-/// Indicator hiển thị tốc độ network (bps) của SSH session active trong StatusBar.
+/// Indicator showing the network speed (bps) of the active SSH session in the StatusBar.
 pub struct NetSpeedIndicator {
     focus_handle: FocusHandle,
     dock_area: WeakEntity<DockArea>,
-    /// Stats lần sample trước — để tính delta.
+    /// Stats from the previous sample — used to compute the delta.
     last_stats: Option<NetStats>,
-    /// Tốc độ download (rx) hiện tại — bits/s.
+    /// Current download (rx) speed — bits/s.
     rx_bps: f64,
-    /// Tốc độ upload (tx) hiện tại — bits/s.
+    /// Current upload (tx) speed — bits/s.
     tx_bps: f64,
-    /// Có đang hiển thị không (active panel là SSH terminal).
+    /// Whether the indicator is shown (active panel is an SSH terminal).
     visible: bool,
     _timer: Task<()>,
 }
 
 impl NetSpeedIndicator {
-    /// Tạo indicator mới, bắt đầu timer 1s.
+    /// Create a new indicator and start the 1s timer.
     pub fn new(
         dock_area: WeakEntity<DockArea>,
         window: &mut Window,
@@ -73,7 +73,7 @@ impl NetSpeedIndicator {
         }
     }
 
-    /// Helper tạo `Entity<Self>`.
+    /// Helper to create an `Entity<Self>`.
     pub fn new_entity(
         dock_area: WeakEntity<DockArea>,
         window: &mut Window,
@@ -82,7 +82,7 @@ impl NetSpeedIndicator {
         cx.new(|cx| Self::new(dock_area, window, cx))
     }
 
-    /// Sample network stats từ active terminal panel, tính tốc độ.
+    /// Sample network stats from the active terminal panel and compute the speed.
     fn tick(&mut self, cx: &mut Context<Self>) {
         let dock_area = match self.dock_area.upgrade() {
             Some(da) => da,
@@ -99,7 +99,7 @@ impl NetSpeedIndicator {
 
         match (stats, self.last_stats) {
             (Some(curr), Some(prev)) => {
-                // Tính delta — nếu counter giảm (session đổi) → saturating_sub = 0.
+                // Compute delta — if the counter dropped (session changed) → saturating_sub = 0.
                 let drx = curr.rx_bytes.saturating_sub(prev.rx_bytes);
                 let dtx = curr.tx_bytes.saturating_sub(prev.tx_bytes);
                 // bytes/s → bits/s: × 8.
@@ -111,7 +111,7 @@ impl NetSpeedIndicator {
                 }
             }
             (Some(curr), None) => {
-                // Lần sample đầu — chưa có delta, chỉ lưu để tick sau tính.
+                // First sample — no delta yet, just store it for the next tick.
                 self.last_stats = Some(curr);
                 self.rx_bps = 0.0;
                 self.tx_bps = 0.0;
@@ -120,7 +120,7 @@ impl NetSpeedIndicator {
                 }
             }
             (None, _) => {
-                // Không có active SSH terminal → ẩn.
+                // No active SSH terminal → hide.
                 self.last_stats = None;
                 self.rx_bps = 0.0;
                 self.tx_bps = 0.0;
@@ -133,9 +133,9 @@ impl NetSpeedIndicator {
         cx.notify();
     }
 
-    /// Format tốc độ: `↓ 1.2 Kbps  ↑ 300 bps`.
+    /// Format the speed: `↓ 1.2 Kbps  ↑ 300 bps`.
     ///
-    /// Download (↓) và upload (↑) có đơn vị riêng, auto-scale.
+    /// Download (↓) and upload (↑) have separate, auto-scaled units.
     fn formatted(&self) -> String {
         format!(
             "↓ {}  ↑ {}",
@@ -145,10 +145,10 @@ impl NetSpeedIndicator {
     }
 }
 
-/// Auto-scale tốc độ bits/s sang đơn vị phù hợp.
+/// Auto-scale a bits/s speed to a suitable unit.
 ///
-/// < 1,000 → bps (nguyên) · < 1,000,000 → Kbps (1 số thập phân) ·
-/// < 1,000,000,000 → Mbps (1 số thập phân) · ≥ 1G → Gbps (2 số thập phân).
+/// < 1,000 → bps (integer) · < 1,000,000 → Kbps (1 decimal) ·
+/// < 1,000,000,000 → Mbps (1 decimal) · ≥ 1G → Gbps (2 decimals).
 fn format_speed(bps: f64) -> String {
     if bps < 1000.0 {
         format!("{} bps", bps.round() as u64)
@@ -161,14 +161,11 @@ fn format_speed(bps: f64) -> String {
     }
 }
 
-/// Tìm active terminal panel trong DockArea, đọc network stats.
+/// Find the active terminal panel in the DockArea and read its network stats.
 ///
-/// Duyệt tất cả TabPanel → tìm active panel có `panel_name == "terminal"` →
-/// downcast `AnyView` → `Entity<TerminalPanel>` → gọi `network_stats()`.
-fn active_terminal_net_stats(
-    dock_area: &Entity<DockArea>,
-    cx: &App,
-) -> Option<NetStats> {
+/// Walk all TabPanels → find the active panel with `panel_name == "terminal"` →
+/// downcast `AnyView` → `Entity<TerminalPanel>` → call `network_stats()`.
+fn active_terminal_net_stats(dock_area: &Entity<DockArea>, cx: &App) -> Option<NetStats> {
     let tab_panels = collect_tab_panels(dock_area.read(cx), cx);
     for tp in tab_panels {
         if let Some(panel) = tp.read(cx).active_panel(cx) {
@@ -195,7 +192,7 @@ impl Focusable for NetSpeedIndicator {
 impl Render for NetSpeedIndicator {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.visible {
-            // Ẩn hoàn toàn khi không có SSH session active.
+            // Hidden completely when no SSH session is active.
             return div().id("net-speed");
         }
 

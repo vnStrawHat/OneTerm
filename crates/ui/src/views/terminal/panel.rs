@@ -1,8 +1,8 @@
-//! [`TerminalPanel`] — leaf panel hiển thị 1 Terminal session.
+//! [`TerminalPanel`] — leaf panel displaying one Terminal session.
 //!
-//! MVP: tự tạo `LocalSession` (cmd mặc định) + `LocalTerminalView`.
-//! TODO: chuyển construction session ra app layer để SSH pluggable (View vẫn
-//! dùng `dyn TerminalSession`, chỉ đổi factory).
+//! MVP: creates its own `LocalSession` (default cmd) + `LocalTerminalView`.
+//! TODO: move session construction to the app layer to make SSH pluggable (the
+//! View still uses `dyn TerminalSession`, only the factory changes).
 
 use std::sync::Arc;
 
@@ -23,23 +23,23 @@ use crate::state::{AppState, TerminalSettings};
 
 use super::view::LocalTerminalView;
 
-/// Panel hiển thị 1 Terminal session.
+/// Panel displaying one Terminal session.
 pub struct TerminalPanel {
     view: Entity<LocalTerminalView>,
-    /// Tham chiếu tới `TabPanel` chứa panel này — dùng cho nút close tab.
+    /// Reference to the `TabPanel` containing this panel — used for the close-tab button.
     tab_panel: Option<WeakEntity<TabPanel>>,
-    /// Panel này có đang là tab được chọn trong `TabPanel` hay không.
+    /// Whether this panel is the currently selected tab in the `TabPanel`.
     ///
-    /// Không thể đọc `TabPanel` trong `title()` (lúc đó nó đang render) nên ta
-    /// mirror trạng thái này qua hook [`Panel::set_active`], được `TabPanel`
-    /// gọi mỗi khi tab active đổi.
+    /// We can't read the `TabPanel` inside `title()` (it is rendering at that
+    /// point), so we mirror this state via the [`Panel::set_active`] hook, which
+    /// the `TabPanel` calls whenever the active tab changes.
     is_active: bool,
-    /// Tiêu đề tab — "Terminal" cho local, session label cho SSH.
+    /// Tab title — "Terminal" for local, session label for SSH.
     tab_title: String,
 }
 
 impl TerminalPanel {
-    /// Tạo panel + spawn session local mặc định (cmd trên Windows).
+    /// Create a panel + spawn the default local session (cmd on Windows).
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (shell, scrollback_history) = {
             let settings = TerminalSettings::global(cx).read(cx);
@@ -52,7 +52,7 @@ impl TerminalPanel {
             ) as Box<dyn TerminalSession>
         });
         let view = cx.new(|cx| LocalTerminalView::new(session, window, cx));
-        // Focus terminal view ngay khi tạo — app startup + new tab.
+        // Focus the terminal view right after creation — app startup + new tab.
         view.read(cx).focus_handle(cx).focus(window, cx);
         Self {
             view,
@@ -62,11 +62,11 @@ impl TerminalPanel {
         }
     }
 
-    /// Tạo panel từ session có sẵn (SSH hoặc local).
+    /// Create a panel from an existing session (SSH or local).
     ///
-    /// Session đã spawn/connect xong, panel chỉ wrap view. Dùng cho SSH
-    /// terminal tab — `session` là `Box<dyn TerminalSession>` từ
-    /// `SshSession::connect()`.
+    /// The session is already spawned/connected, the panel just wraps the view.
+    /// Used for SSH terminal tabs — `session` is a `Box<dyn TerminalSession>`
+    /// from `SshSession::connect()`.
     pub fn from_session(
         session: Box<dyn TerminalSession>,
         title: &str,
@@ -84,7 +84,7 @@ impl TerminalPanel {
         }
     }
 
-    /// Helper tạo `Entity<Self>` từ session có sẵn.
+    /// Helper to create an `Entity<Self>` from an existing session.
     pub fn from_session_entity(
         session: Box<dyn TerminalSession>,
         title: &str,
@@ -94,13 +94,13 @@ impl TerminalPanel {
         cx.new(|cx| Self::from_session(session, title, window, cx))
     }
 
-    /// Network stats của session (SSH only — `None` cho local).
-    /// Dùng cho StatusBar hiển thị tốc độ network.
+    /// Session network stats (SSH only — `None` for local).
+    /// Used by the StatusBar to show network speed.
     pub fn network_stats(&self, cx: &App) -> Option<oneterm_core::NetStats> {
         self.view.read(cx).session.read(cx).network_stats()
     }
 
-    /// Helper tạo `Entity<Self>` (local session mặc định).
+    /// Helper to create an `Entity<Self>` (default local session).
     pub fn new_entity(window: &mut Window, cx: &mut App) -> Entity<Self> {
         cx.new(|cx| Self::new(window, cx))
     }
@@ -110,8 +110,8 @@ impl EventEmitter<PanelEvent> for TerminalPanel {}
 
 impl Focusable for TerminalPanel {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
-        // Delegate to terminal view — khi dock area focus panel,
-        // terminal view bên trong nhận focus.
+        // Delegate to the terminal view — when the dock area focuses the panel,
+        // the terminal view inside receives focus.
         self.view.read(cx).focus_handle(cx)
     }
 }
@@ -125,7 +125,7 @@ impl Panel for TerminalPanel {
         let tab_panel = self.tab_panel.clone();
         let panel_entity = cx.entity().clone();
         let theme = cx.theme().muted_foreground;
-        // Màu highlight tab active — lấy từ theme (`table.active.border`).
+        // Active tab highlight color — taken from theme (`table.active.border`).
         let highlight = cx.theme().table_active_border;
         let is_active = self.is_active;
 
@@ -137,11 +137,11 @@ impl Panel for TerminalPanel {
             .min_w(px(100.))
             .items_center()
             .gap_1()
-            // Active tab highlight — đường border top 2px lấy màu từ theme.
-            // `Tab` bọc title trong 1 inner h_flex (cao 30px, căn giữa trong
-            // tab 32px) + `overflow_hidden`, nên đây là vị trí cao nhất có thể
-            // chạm tới từ `title()` (mép trên của inner box, ~1px dưới mép tab).
-            // Tràn left/right âm để phủ hết bề ngang; phần thừa bị cắt gọn.
+            // Active tab highlight — a 2px top border colored from the theme.
+            // `Tab` wraps the title in an inner h_flex (30px tall, centered in the
+            // 32px tab) + `overflow_hidden`, so this is the highest point reachable
+            // from `title()` (the top edge of the inner box, ~1px below the tab edge).
+            // Overflow left/right negatively to cover the full width; the excess is clipped.
             .when(is_active, |this| {
                 this.child(
                     div()
@@ -153,9 +153,9 @@ impl Panel for TerminalPanel {
                         .bg(highlight),
                 )
             })
-            // Bù padding phải 12px của Tab inner_h_flex để × sát viền phải.
+            // Compensate for the Tab inner_h_flex's 12px right padding so the × sits against the right edge.
             .mr(-px(5.))
-            // Middle-click trên tab → đóng tab đó (kể cả tab inactive).
+            // Middle-click on a tab → close that tab (even an inactive tab).
             .on_mouse_down(MouseButton::Middle, {
                 let tp = tab_panel.clone();
                 let pe = panel_entity.clone();
@@ -169,7 +169,7 @@ impl Panel for TerminalPanel {
                     }
                 }
             })
-            // Tiêu đề tab — co giãn, cắt bớt bằng ellipsis nếu hẹp.
+            // Tab title — flexible, truncated with ellipsis when narrow.
             .child(
                 div()
                     .flex_1()
@@ -178,7 +178,7 @@ impl Panel for TerminalPanel {
                     .whitespace_nowrap()
                     .child(self.tab_title.clone()),
             )
-            // Nút close (×) — sát bên phải tab.
+            // Close button (×) — against the right edge of the tab.
             .when_some(tab_panel, |this, tp| {
                 this.child(
                     div()
@@ -191,7 +191,7 @@ impl Panel for TerminalPanel {
                         .justify_center()
                         .rounded(px(3.))
                         .hover(move |this| this.bg(theme.opacity(0.15)))
-                        // Ngăn click lan ra Tab (tránh activate tab).
+                        // Prevent the click from propagating to the Tab (avoid activating the tab).
                         .on_mouse_down(MouseButton::Left, |_, _, cx| {
                             cx.stop_propagation();
                         })
@@ -227,15 +227,15 @@ impl Panel for TerminalPanel {
     }
 
     fn set_active(&mut self, active: bool, _: &mut Window, cx: &mut Context<Self>) {
-        // `TabPanel` gọi hook này khi tab active đổi → mirror để `title()` dùng.
+        // `TabPanel` calls this hook when the active tab changes → mirror it for `title()` to use.
         if self.is_active != active {
             self.is_active = active;
             cx.notify();
         }
 
-        // Khi tab này thành active → trích SFTP từ session (nếu có)
-        // và set vào AppState.active_sftp cho SftpPanel observe.
-        // Tab mới active sẽ overwrite — không cần set None khi deactivate.
+        // When this tab becomes active → extract SFTP from the session (if any)
+        // and set it into AppState.active_sftp for SftpPanel to observe.
+        // The next active tab will overwrite it — no need to set None on deactivate.
         if active {
             let sftp = self.view.read(cx).session.read(cx).sftp();
             AppState::global(cx).update(cx, |state, cx| {

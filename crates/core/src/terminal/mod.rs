@@ -1,7 +1,7 @@
 //! Terminal rendering & input helpers (framework-agnostic).
 //!
-//! Phụ thuộc `alacritty_terminal` (types: `TermMode`, `Cell`, colors) nhưng
-//! **không** phụ thuộc GPUI. UI crate map các type này sang GPUI khi render.
+//! Depends on `alacritty_terminal` (types: `TermMode`, `Cell`, colors) but does
+//! **not** depend on GPUI. The UI crate maps these types to GPUI when rendering.
 
 pub mod colors_util;
 pub mod content;
@@ -25,5 +25,7 @@ pub use mouse_encode::{
 };
 pub use osc::{Osc133Kind, OscPayload, OscSink, decode_osc52, encode_osc52, parse_cwd_url};
 pub use palette::{TerminalPalette, resolve_color};
-pub use session::{CursorBounds, NetStats, SessionEvent, TerminalInfo, TerminalSession, parse_keystroke};
+pub use session::{
+    CursorBounds, NetStats, SessionEvent, TerminalInfo, TerminalSession, parse_keystroke,
+};
 pub use url::{link_ranges, url_at};

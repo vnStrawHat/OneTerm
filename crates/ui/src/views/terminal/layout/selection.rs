@@ -6,9 +6,9 @@ use gpui::Hsla;
 
 use super::types::{LayoutPoint, LayoutRect};
 
-/// Build selection highlight rects từ `SelectionRange` (grid coords) →
-/// display coords. Mỗi dòng trong selection → 1 rect. Block selection →
-/// rect cột đều; Simple/Lines → full width (trừ dòng đầu/cuối).
+/// Build selection highlight rects from `SelectionRange` (grid coords) →
+/// display coords. Each line in the selection → one rect. Block selection →
+/// even column rects; Simple/Lines → full width (except first/last line).
 pub(crate) fn layout_selection(
     selection: &alacritty_terminal::selection::SelectionRange,
     display_offset: usize,
@@ -76,7 +76,8 @@ pub(crate) fn layout_selection(
     rects
 }
 
-/// Build set of (line, column) trong selection → để swap fg/bg khi vẽ text.
+/// Build the set of (line, column) points in the selection → used to swap
+/// fg/bg when drawing text.
 pub(crate) fn build_selection_set(selection_rects: &[LayoutRect]) -> HashSet<LayoutPoint> {
     let mut set = HashSet::new();
     for r in selection_rects {

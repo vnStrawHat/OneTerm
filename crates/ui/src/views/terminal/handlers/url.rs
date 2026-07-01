@@ -1,4 +1,4 @@
-//! URL hover / click helpers cho `LocalTerminalView`.
+//! URL hover / click helpers for `LocalTerminalView`.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -11,7 +11,7 @@ use super::super::element::GridMetrics;
 use super::super::url::{DetectedUrl, detect_url_at};
 use super::super::view::LocalTerminalView;
 
-/// Update `hovered_url` dựa trên position hiện tại và Ctrl state.
+/// Update `hovered_url` based on the current position and Ctrl state.
 pub(crate) fn update_hovered_url(
     session: &Entity<Box<dyn TerminalSession>>,
     metrics: &Rc<RefCell<GridMetrics>>,
@@ -47,7 +47,7 @@ pub(crate) fn update_hovered_url(
     });
 }
 
-/// Handler `on_modifiers_changed` — re-detect URL khi Ctrl pressed/released.
+/// `on_modifiers_changed` handler — re-detect the URL when Ctrl is pressed/released.
 pub(crate) fn attach_modifiers_changed(
     div: gpui::Stateful<gpui::Div>,
     session: Entity<Box<dyn TerminalSession>>,

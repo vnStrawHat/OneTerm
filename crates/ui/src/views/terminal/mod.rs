@@ -1,4 +1,4 @@
-//! Terminal panel — mỗi tab là 1 Terminal.
+//! Terminal panel — each tab is one Terminal.
 
 pub mod box_drawing;
 pub mod cell;

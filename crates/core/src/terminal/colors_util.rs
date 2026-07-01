@@ -1,40 +1,40 @@
-//! Tiện ích màu & ký tự cho render terminal.
+//! Color & character utilities for terminal rendering.
 //!
-//! Tham chiếu: Zed `crates/terminal_view/src/terminal_element.rs`
+//! Reference: Zed `crates/terminal_view/src/terminal_element.rs`
 //! (`is_decorative_character`, `is_app_chosen_exact_color`) +
 //! `crates/terminal/src/terminal.rs` (`is_default_background_color`).
-//! Làm việc với raw `vte::ansi::Color` (không bọc thêm layer như Zed).
+//! Works with raw `vte::ansi::Color` (no extra wrapping layer like Zed).
 
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 
-/// Ký tự trang trí (box-drawing, block, geometric, powerline) — giữ nguyên
-/// màu chính xác, KHÔNG điều chỉnh contrast (vì cần khớp nền kề cạnh).
+/// Decorative characters (box-drawing, block, geometric, powerline) — keep their
+/// exact color, do NOT adjust contrast (they must match the adjacent background).
 ///
-/// Sửa lỗi zed#34234: icon thường (git, folder…) bị loại trừ để vẫn đọc được.
+/// Fixes zed#34234: regular icons (git, folder…) are excluded so they stay readable.
 pub fn is_decorative_character(ch: char) -> bool {
     matches!(
         ch as u32,
         // Box Drawing & Block Elements
         0x2500..=0x257F // └ ┐ ─ │ …
         | 0x2580..=0x259F // ▀ ▄ █ ░ ▒ ▓ …
-        | 0x25A0..=0x25FF // ■ ▶ ● … (tam giác/tròn separator)
+        | 0x25A0..=0x25FF // ■ ▶ ● … (triangle/circle separators)
 
         // Powerline separator symbols (Private Use Area)
-        | 0xE0B0..=0xE0B7 // tam giác + nửa tròn
-        | 0xE0B8..=0xE0BF // tam giác góc
+        | 0xE0B0..=0xE0B7 // triangles + half circles
+        | 0xE0B8..=0xE0BF // angled triangles
         | 0xE0C0..=0xE0CA // flame / pixelated / ice
         | 0xE0CC..=0xE0D1 // honeycomb / lego
         | 0xE0D2..=0xE0D7 // trapezoid / inverted triangle
     )
 }
 
-/// App đã tự chọn màu fg chính xác, KHÔNG muốn điều chỉnh contrast:
+/// The app already chose an exact fg color and we do NOT want to adjust contrast:
 /// - 24-bit true color `\e[38;2;R;G;Bm` → `Color::Spec(_)`.
-/// - 256-color palette `\e[38;5;Nm` với `N >= 16` (cube 6×6×6 ở 16..=231 +
-///   grayscale 24 bước ở 232..=255).
+/// - 256-color palette `\e[38;5;Nm` with `N >= 16` (6×6×6 cube at 16..=231 +
+///   24-step grayscale at 232..=255).
 ///
-/// Index 0..=15 (ANSI 16 màu theme) vẫn qua contrast adjustment vì có thể
-/// đụng nền theme.
+/// Index 0..=15 (the ANSI 16-color theme) still goes through contrast adjustment
+/// because it may clash with the theme background.
 pub fn is_app_chosen_exact_color(fg: &Color) -> bool {
     match fg {
         Color::Spec(_) => true,
@@ -43,8 +43,8 @@ pub fn is_app_chosen_exact_color(fg: &Color) -> bool {
     }
 }
 
-/// Màu nền mặc định của terminal (`Color::Named(NamedColor::Background)`).
-/// Dùng để skip vẽ rect nền (để nền element cha xuyên qua).
+/// The terminal's default background color (`Color::Named(NamedColor::Background)`).
+/// Used to skip drawing the background rect (letting the parent element's background show through).
 pub fn is_default_background_color(bg: &Color) -> bool {
     matches!(bg, Color::Named(NamedColor::Background))
 }
@@ -121,7 +121,7 @@ mod tests {
         assert!(!is_decorative_character('a'));
         assert!(!is_decorative_character(' '));
         assert!(!is_decorative_character('$'));
-        // Icon thường (git/folder) không phải decorative → vẫn qua contrast.
-        assert!(!is_decorative_character('\u{F1D3}')); // Devicons git-ish (Nerd Font PUA khác range)
+        // Regular icons (git/folder) are not decorative → still go through contrast.
+        assert!(!is_decorative_character('\u{F1D3}')); // Devicons git-ish (Nerd Font PUA, different range)
     }
 }

@@ -37,7 +37,7 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName",      "OneTerm"
-            VALUE "FileDescription",  "OneTerm - SSH / SFTP / LocalShell GUI Client"
+            VALUE "FileDescription",  "OneTerm - SSH/SFTP/LocalShell GUI Client"
             VALUE "FileVersion",      VER_FILEVERSION_STR
             VALUE "InternalName",     "oneterm"
             VALUE "OriginalFilename", "oneterm.exe"

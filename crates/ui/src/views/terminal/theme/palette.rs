@@ -3,7 +3,7 @@
 use alacritty_terminal::vte::ansi::Rgb as VteRgb;
 use gpui::Rgba;
 
-/// ANSI 16-color palette cố định (GNOME/Tango default).
+/// Fixed ANSI 16-color palette (GNOME/Tango default).
 pub const ANSI_16: [VteRgb; 16] = [
     VteRgb {
         r: 0x00,

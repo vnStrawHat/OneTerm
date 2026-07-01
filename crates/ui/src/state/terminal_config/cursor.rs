@@ -1,17 +1,17 @@
-//! Nhóm Cursor: shape, color, blink.
+//! Cursor group: shape, color, blink.
 
 use serde::{Deserialize, Serialize};
 
-/// Nhóm Cursor: shape, color, blink.
+/// Cursor group: shape, color, blink.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CursorConfig {
-    /// Hình dáng: "block" | "bar" | "underline".
+    /// Shape: "block" | "bar" | "underline".
     #[serde(default = "default_cursor_shape")]
     pub shape: String,
-    /// Màu con trỏ (null = theme caret, "#RRGGBB" để override).
+    /// Cursor color (null = theme caret, "#RRGGBB" to override).
     #[serde(default)]
     pub color: Option<String>,
-    /// Có nhấp nháy khi focus không.
+    /// Whether the cursor blinks when focused.
     #[serde(default = "default_true")]
     pub blink: bool,
 }

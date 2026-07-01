@@ -1,11 +1,11 @@
-//! [`DateTimeClock`] — đồng hồ datetime hiển thị ở góc trái status bar.
+//! [`DateTimeClock`] — a datetime clock shown on the left side of the status bar.
 //!
-//! `Entity` + `Render` + `Focusable`, cập nhật mỗi 1s qua timer.
+//! `Entity` + `Render` + `Focusable`, updated every 1s via a timer.
 //!
-//! Dùng `cx.spawn_in(window, ...)` + `window.background_executor().timer(...)`
-//! để timer fire ổn định (không phụ thuộc focus/click). Spawn trên `AsyncApp`
-//! không giữ window có thể bị drop khiến timer không fire cho đến khi view
-//! được refresh bằng click.
+//! Uses `cx.spawn_in(window, ...)` + `window.background_executor().timer(...)`
+//! so the timer fires reliably (independent of focus/click). Spawning on `AsyncApp`
+//! without holding the window can be dropped, leaving the timer unfired until the
+//! view is refreshed by a click.
 
 use std::time::Duration;
 
@@ -16,7 +16,7 @@ use gpui::{
 };
 use gpui_component::ActiveTheme as _;
 
-/// Đồng hồ hiển thị thời gian local, refresh mỗi 1 giây.
+/// Clock that shows the local time, refreshed every 1 second.
 pub struct DateTimeClock {
     focus_handle: FocusHandle,
     now: chrono::DateTime<Local>,
@@ -24,10 +24,10 @@ pub struct DateTimeClock {
 }
 
 impl DateTimeClock {
-    /// Tạo đồng hồ mới, bắt đầu timer 1s.
+    /// Create a new clock and start the 1s timer.
     ///
-    /// NOTE: spawn trên window context (qua `cx.spawn_in`) để timer fire đều
-    /// kể cả khi view chưa được focus.
+    /// NOTE: spawn on the window context (via `cx.spawn_in`) so the timer fires
+    /// steadily even when the view is not focused.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
         let timer = cx.spawn_in(window, async move |this, window| {
@@ -51,7 +51,7 @@ impl DateTimeClock {
         }
     }
 
-    /// Helper tạo `Entity<Self>`.
+    /// Helper to create an `Entity<Self>`.
     pub fn new_entity(window: &mut Window, cx: &mut App) -> Entity<Self> {
         cx.new(|cx| Self::new(window, cx))
     }

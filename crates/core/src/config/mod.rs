@@ -1,6 +1,6 @@
-//! Cấu hình terminal (shell cục bộ, …).
+//! Terminal configuration (local shell, …).
 //!
-//! Thuần logic, không phụ thuộc GPUI.
+//! Pure logic, no GPUI dependency.
 
 pub mod shell;
 

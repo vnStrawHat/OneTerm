@@ -1,11 +1,11 @@
 //! SFTP types — commands, events, file entries.
 //!
-//! Được gửi giữa UI thread (sync) và tokio task (async) qua `async_channel`.
-//! Tương tự pattern `Cmd`/`SessionEvent` trong `listener.rs`.
+//! Sent between the UI thread (sync) and the tokio task (async) via
+//! `async_channel`. Similar to the `Cmd`/`SessionEvent` pattern in `listener.rs`.
 //!
-//! `FileEntry`, `FileStat` định nghĩa trong `core` crate (leaf crate, không
-//! phụ thuộc `ssh`). `SftpBackend` trait cũng trong `core`. `SftpSession`
-//! implement `SftpBackend` ở đây.
+//! `FileEntry`, `FileStat` are defined in the `core` crate (a leaf crate that
+//! does not depend on `ssh`). The `SftpBackend` trait is also in `core`.
+//! `SftpSession` implements `SftpBackend` here.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -15,47 +15,47 @@ use tokio::sync::oneshot;
 
 use oneterm_core::{FileEntry, FileStat, Result, SftpBackend};
 
-// ── Re-export từ core ────────────────────────────────────────
-// FileEntry, FileStat đã định nghĩa trong core, re-export cho tiện.
+// ── Re-export from core ──────────────────────────────────────
+// FileEntry, FileStat are defined in core; re-exported here for convenience.
 
-// ── Lệnh SFTP: UI → tokio task ───────────────────────────────
+// ── SFTP commands: UI → tokio task ───────────────────────────
 
-/// Lệnh SFTP từ UI thread gửi tới tokio task qua `async_channel`.
+/// SFTP command sent from the UI thread to the tokio task via `async_channel`.
 pub enum SftpCmd {
-    /// Đọc thư mục → trả về danh sách entry.
+    /// Read a directory → returns the list of entries.
     ReadDir {
         path: PathBuf,
         reply: oneshot::Sender<Result<Vec<FileEntry>>>,
     },
-    /// Lấy metadata của 1 file/folder.
+    /// Get metadata for a single file/folder.
     Stat {
         path: PathBuf,
         reply: oneshot::Sender<Result<FileStat>>,
     },
-    /// Đổi tên file/folder.
+    /// Rename a file/folder.
     Rename {
         from: PathBuf,
         to: PathBuf,
         reply: oneshot::Sender<Result<()>>,
     },
-    /// Xoá file.
+    /// Remove a file.
     Remove {
         path: PathBuf,
         reply: oneshot::Sender<Result<()>>,
     },
-    /// Xoá thư mục rỗng.
+    /// Remove an empty directory.
     Rmdir {
         path: PathBuf,
         reply: oneshot::Sender<Result<()>>,
     },
-    /// Tạo thư mục.
+    /// Create a directory.
     Mkdir {
         path: PathBuf,
         reply: oneshot::Sender<Result<()>>,
     },
-    /// Upload file local → remote. Progress qua `progress` (0.0–1.0).
-    /// Reply qua `async_channel::Sender` (không dùng oneshot để match trait).
-    /// `transfer_id` dùng để cancel — UI gửi `SftpCmd::Cancel { transfer_id }`.
+    /// Upload a local file → remote. Progress via `progress` (0.0–1.0).
+    /// Reply via `async_channel::Sender` (not oneshot, to match the trait).
+    /// `transfer_id` is used to cancel — the UI sends `SftpCmd::Cancel { transfer_id }`.
     Upload {
         transfer_id: u64,
         local: PathBuf,
@@ -63,8 +63,8 @@ pub enum SftpCmd {
         progress: Sender<f64>,
         reply: Sender<Result<()>>,
     },
-    /// Download file remote → local. Progress qua `progress` (0.0–1.0).
-    /// Reply qua `async_channel::Sender`.
+    /// Download a remote file → local. Progress via `progress` (0.0–1.0).
+    /// Reply via `async_channel::Sender`.
     Download {
         transfer_id: u64,
         remote: PathBuf,
@@ -72,45 +72,46 @@ pub enum SftpCmd {
         progress: Sender<f64>,
         reply: Sender<Result<()>>,
     },
-    /// Hủy transfer đang chạy (upload/download).
-    /// `transfer_id` phải khớp với ID đã gửi trong Upload/Download.
+    /// Cancel a running transfer (upload/download).
+    /// `transfer_id` must match the ID sent in Upload/Download.
     Cancel { transfer_id: u64 },
-    /// Đóng SFTP session.
+    /// Close the SFTP session.
     Close,
 }
 
 // ── SFTP event: tokio task → UI ──────────────────────────────
 
-/// Event từ SFTP task gửi tới UI (qua `async_channel`).
+/// Event sent from the SFTP task to the UI (via `async_channel`).
 #[derive(Debug, Clone)]
 pub enum SftpEvent {
-    /// SFTP session đã sẵn sàng (sau khi handshake).
+    /// SFTP session is ready (after the handshake).
     Ready,
-    /// SFTP session bị lỗi/ngắt.
+    /// SFTP session errored/disconnected.
     Error(String),
-    /// SFTP session đã đóng.
+    /// SFTP session is closed.
     Closed,
 }
 
 // ── SftpSession — bridge sync (UI) ↔ async (tokio task) ──────
 
-/// SFTP session — gửi lệnh qua channel, nhận event qua channel.
+/// SFTP session — sends commands over a channel, receives events over a channel.
 ///
-/// Tương tự `SshSession` pattern: UI gọi sync, tokio task xử lý async.
-/// `SftpSession` là handle mà UI giữ; `sftp_task` chạy nền trong tokio.
+/// Similar to the `SshSession` pattern: the UI calls sync, the tokio task handles
+/// async. `SftpSession` is the handle the UI holds; `sftp_task` runs in the
+/// background within tokio.
 pub struct SftpSession {
-    /// Channel gửi `SftpCmd` tới tokio task.
+    /// Channel sending `SftpCmd` to the tokio task.
     cmd_tx: Sender<SftpCmd>,
-    /// Channel nhận `SftpEvent` từ tokio task (UI subscribe).
-    /// `Mutex<Option<...>>` — chỉ lấy 1 lần khi subscribe.
+    /// Channel receiving `SftpEvent` from the tokio task (UI subscribes).
+    /// `Mutex<Option<...>>` — taken only once on subscribe.
     event_rx: Mutex<Option<Receiver<SftpEvent>>>,
-    /// SFTP có alive không (channel chưa đóng).
+    /// Whether SFTP is alive (channel not yet closed).
     alive: Arc<Mutex<bool>>,
 }
 
 impl SftpSession {
-    /// Tạo `SftpSession` từ channels đã được thiết lập bởi `sftp_task`.
-    /// Dùng `Arc` để share giữa nhiều panel (terminal + sftp browser).
+    /// Create an `SftpSession` from channels already set up by `sftp_task`.
+    /// Uses `Arc` to share across multiple panels (terminal + sftp browser).
     pub(crate) fn new(
         cmd_tx: Sender<SftpCmd>,
         event_rx: Receiver<SftpEvent>,
@@ -125,17 +126,17 @@ impl SftpSession {
 
     // ── Lifecycle ────────────────────────────────────────────
 
-    /// Subscribe event (Ready/Error/Closed). Chỉ lấy được 1 lần.
+    /// Subscribe to events (Ready/Error/Closed). Can be taken only once.
     pub fn subscribe(&self) -> Option<Receiver<SftpEvent>> {
         self.event_rx.lock().unwrap().take()
     }
 }
 
-// ── impl SftpBackend cho SftpSession ─────────────────────────
+// ── impl SftpBackend for SftpSession ─────────────────────────
 //
-// `SftpBackend` trait định nghĩa trong `core` crate.
-// `SftpSession` implement tại đây — bridge sync (UI) → async (tokio task).
-// Sync methods gửi `SftpCmd` qua channel, `sftp_task` xử lý async.
+// The `SftpBackend` trait is defined in the `core` crate.
+// `SftpSession` implements it here — bridging sync (UI) → async (tokio task).
+// Sync methods send `SftpCmd` over the channel; `sftp_task` handles it async.
 
 impl SftpBackend for SftpSession {
     fn read_dir(&self, path: PathBuf) -> Result<Vec<FileEntry>> {

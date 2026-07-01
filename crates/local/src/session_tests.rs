@@ -36,7 +36,7 @@ fn trait_alive_is_local_close() {
 fn trait_subscribe_returns_receiver() {
     let s = spawn_default();
     let _rx = s.subscribe();
-    // subscribe lần 2 → channel đóng (recv →Err Closed) nhưng không panic.
+    // 2nd subscribe → closed channel (recv → Err Closed) but no panic.
     let rx2 = s.subscribe();
     assert!(rx2.recv_blocking().is_err());
     s.close();
@@ -64,12 +64,12 @@ fn trait_ime_commit_writes_and_clears_marked() {
 #[test]
 fn trait_cursor_bounds_needs_cell_size() {
     let s = spawn_default();
-    // Chưa set_cell_size → None.
+    // Cell size not set yet → None.
     assert_eq!(s.cursor_bounds(), None);
     s.set_cell_size(8.0, 16.0);
     let b = s.cursor_bounds();
-    // Cursor visible default (mock có show cursor). Có thể None nếu Hidden.
-    // Ít nhất không panic và trả dạng đúng khi có.
+    // Cursor is visible by default (mock shows the cursor). May be None if Hidden.
+    // At minimum it must not panic and must return the correct shape when present.
     if let Some(cb) = b {
         assert_eq!(cb.width, 8.0);
         assert_eq!(cb.height, 16.0);
@@ -80,7 +80,7 @@ fn trait_cursor_bounds_needs_cell_size() {
 #[test]
 fn trait_mouse_in_normal_mode_starts_selection() {
     let s = spawn_default();
-    // Cmd không bật mouse mode → selection (không panic, không encode).
+    // Cmd does not enable mouse mode → selection (no panic, no encoding).
     s.mouse_down(0.0, 0.0, TerminalMouseButton::Left, SelectionType::Simple);
     s.mouse_drag(0.0, 5.0);
     s.mouse_up(0.0, 5.0, TerminalMouseButton::Left);
@@ -90,14 +90,14 @@ fn trait_mouse_in_normal_mode_starts_selection() {
 #[test]
 fn selection_text_and_clear() {
     let s = spawn_default();
-    // Bàn trống → chưa có selection.
+    // Empty buffer → no selection yet.
     assert!(s.selection_text().is_none() || s.selection_text().as_deref() == Some(""));
-    // Viết vài ký tự rồi select.
+    // Write a few characters then select.
     s.write(b"hello");
     std::thread::sleep(std::time::Duration::from_millis(50));
     s.mouse_down(0.0, 0.0, TerminalMouseButton::Left, SelectionType::Simple);
     s.mouse_drag(0.0, 4.0);
-    // selection_to_string có thể trả Some/None tùy trạng thái grid - chỉ kiểm không panic.
+    // selection_to_string may return Some/None depending on grid state — just check no panic.
     let _ = s.selection_text();
     s.clear_selection();
     s.close();
@@ -162,16 +162,16 @@ fn spawn_cmd_exit_detected() {
     while s.alive() && start.elapsed() < Duration::from_secs(4) {
         std::thread::sleep(Duration::from_millis(50));
     }
-    assert!(!s.alive(), "cmd exit không được phát hiện sau 4s");
+    assert!(!s.alive(), "cmd exit not detected after 4s");
 }
 
-/// End-to-end (Windows): spawn cmd → write `echo oneterm_e2e` → poll
-/// snapshot → assert chuỗi xuất hiện trong grid cells (chứng minh toàn
-/// pipeline PTY→EventLoop→Term→snapshot hoạt động, không cần GUI).
+/// End-to-end (Windows): spawn cmd → write `echo oneterm_e2e` → poll the
+/// snapshot → assert the string appears in the grid cells (proving the whole
+/// PTY→EventLoop→Term→snapshot pipeline works, no GUI needed).
 #[test]
 fn e2e_echo_output_rendered_in_snapshot() {
     let s = spawn_default();
-    // Chờ prompt hiện ra một chút rồi gõ.
+    // Wait a moment for the prompt to appear, then type.
     std::thread::sleep(Duration::from_millis(200));
     s.write(b"echo oneterm_e2e\r");
     let needle = "oneterm_e2e";
@@ -180,13 +180,13 @@ fn e2e_echo_output_rendered_in_snapshot() {
     while start.elapsed() < Duration::from_secs(6) && !found {
         std::thread::sleep(Duration::from_millis(40));
         let snap = s.snapshot();
-        // Gom ký tự từ tất cả cell (bỏ qua cell ' ' liên tiếp không cần).
+        // Collect characters from all cells (ignore runs of ' ' as needed).
         let text: String = snap.cells.iter().map(|ic| ic.cell.c).collect();
         found = text.contains(needle);
     }
     s.close();
     assert!(
         found,
-        "`echo oneterm_e2e` không xuất hiện trong snapshot sau 6s"
+        "`echo oneterm_e2e` did not appear in the snapshot after 6s"
     );
 }

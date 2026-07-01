@@ -1,4 +1,4 @@
-//! Các màn hình lớn của OneTerm.
+//! OneTerm's major screens.
 
 pub mod session_tabs;
 pub mod sftp;

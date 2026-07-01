@@ -1,10 +1,10 @@
-//! russh client handler — tối thiểu cho MVP.
+//! russh client handler — minimal for MVP.
 //!
-//! Roadmap: known_hosts + prompt accept/reject (xem design doc §9.3).
+//! Roadmap: known_hosts + prompt accept/reject (see design doc §9.3).
 
 use russh::client;
 
-/// Handler tối thiểu — MVP chấp nhận mọi host key (KHÔNG an toàn production).
+/// Minimal handler — MVP accepts every host key (NOT production-safe).
 pub(crate) struct SshClientHandler;
 
 impl client::Handler for SshClientHandler {
@@ -14,7 +14,7 @@ impl client::Handler for SshClientHandler {
         &mut self,
         _server_key: &russh::keys::PublicKey,
     ) -> Result<bool, Self::Error> {
-        // MVP: chấp nhận mọi host key. TODO: known_hosts verification.
+        // MVP: accept every host key. TODO: known_hosts verification.
         Ok(true)
     }
 }

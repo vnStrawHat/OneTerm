@@ -1,11 +1,11 @@
-//! Dialog "Connect to SSH" — nhập credentials + kết nối SSH.
+//! "Connect to SSH" dialog — enter credentials and connect over SSH.
 //!
-//! Khi user click vào session item (hoặc chọn "Open" trong context menu):
-//! - Nếu `SshSession.username = None` → dialog hỏi **username + password**.
-//! - Nếu `SshSession.username = Some` → dialog chỉ hỏi **password**.
+//! When the user clicks a session item (or selects "Open" in the context menu):
+//! - If `SshSession.username = None` → the dialog asks for **username + password**.
+//! - If `SshSession.username = Some` → the dialog asks for **password** only.
 //!
-//! Footer: **Cancel** + **Connect** — dùng direct on_click để bypass
-//! action dispatch qua focus chain (thống nhất với SSH Session dialog).
+//! Footer: **Cancel** + **Connect** — uses direct on_click to bypass
+//! action dispatch through the focus chain (consistent with the SSH Session dialog).
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -32,14 +32,14 @@ use oneterm_ssh::{PtySize, SshAuthMethod, SshConfig, connect as ssh_connect};
 use crate::state::{AppState, SshSession, SshSessionStore};
 use crate::views::TerminalPanel;
 
-/// Mở dialog connect SSH.
+/// Open the SSH connect dialog.
 ///
-/// - `session`: thông tin SSH session từ store.
-/// - `index`: vị trí trong store (để update username nếu user nhập mới).
+/// - `session`: SSH session info from the store.
+/// - `index`: position in the store (used to update the username if the user enters a new one).
 ///
-/// Logic phân nhánh:
-/// - `session.username = None` → dialog hỏi username + password.
-/// - `session.username = Some` → dialog chỉ hỏi password.
+/// Branching logic:
+/// - `session.username = None` → dialog asks for username + password.
+/// - `session.username = Some` → dialog asks for password only.
 pub(crate) fn open_connect_dialog(
     session: SshSession,
     index: usize,
@@ -65,30 +65,31 @@ pub(crate) fn open_connect_dialog(
         None => format!("ssh://{}:{}", session.host, session.port),
     };
 
-    // Password state — luôn cần, masked.
+    // Password state — always needed, masked.
     let password_state = cx.new(|cx| {
         InputState::new(window, cx)
             .placeholder("Enter password")
             .masked(true)
     });
 
-    // Username state — chỉ tạo khi cần hỏi.
+    // Username state — only created when needed.
     let username_state: Option<gpui::Entity<InputState>> = if ask_username {
-        Some(cx.new(|cx| InputState::new(window, cx).placeholder("e.g. root, ubuntu, admin — hoặc root@host:port")))
+        Some(cx.new(|cx| {
+            InputState::new(window, cx).placeholder("e.g. root, ubuntu, admin — or root@host:port")
+        }))
     } else {
         None
     };
 
-
-    // Save username flag — default KHÔNG lưu (user phải tick checkbox).
+    // Save-username flag — defaults to NOT saving (the user must tick the checkbox).
     let save_username = Rc::new(Cell::new(false));
-    // Clone cho save_logic closure.
+    // Clone for the save_logic closure.
     let password_ok = password_state.clone();
     let username_ok = username_state.clone();
     let session_ok = session.clone();
     let title_ok = title.clone();
 
-    // ── Shared connect logic (dùng cho cả button on_click và keyboard on_ok) ──
+    // ── Shared connect logic (used by both the button on_click and keyboard on_ok) ──
     let connect_logic: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool> = Rc::new({
         let username_ok = username_ok.clone();
         let password_ok = password_ok.clone();
@@ -109,14 +110,14 @@ pub(crate) fn open_connect_dialog(
     });
 
     window.open_dialog(cx, move |dialog, window, cx| {
-        // Focus username (nếu chưa có) hoặc password (nếu đã có username).
+        // Focus username (if not yet set) or password (if username already exists).
         let focus_handle = if ask_username {
             username_state.as_ref().unwrap().read(cx).focus_handle(cx)
         } else {
             password_state.read(cx).focus_handle(cx)
         };
         focus_handle.focus(window, cx);
-        // Clone connect_logic cho button on_click và keyboard on_ok
+        // Clone connect_logic for the button on_click and keyboard on_ok.
         let connect_for_click = connect_logic.clone();
         let connect_for_kb = connect_logic.clone();
         dialog
@@ -134,34 +135,32 @@ pub(crate) fn open_connect_dialog(
                             SharedString::from(server_info.clone()),
                             cx,
                         ))
-                        // Username field (chỉ khi ask_username).
+                        // Username field (only when ask_username).
                         .when_some(username_state.as_ref(), |content, st| {
                             content.child(field("Username", true, Input::new(st), cx))
                         })
-                        // Password field (luôn).
+                        // Password field (always).
                         .child(password_field(&password_state, cx))
-                        // Checkbox "Lưu username" — chỉ hiện khi ask_username.
+                        // "Save username" checkbox — only shown when ask_username.
                         .when_some(username_state.as_ref(), |content, _st| {
                             content.child(
-                                div()
-                                    .pt_1()
-                                    .child(
-                                        Checkbox::new("save-username")
-                                            .label("Lưu username vào session")
-                                            .checked(save_username.get())
-                                            .on_click({
-                                                let save_username = save_username.clone();
-                                                move |checked: &bool, _window, _cx| {
-                                                    save_username.set(*checked);
-                                                }
-                                            }),
-                                    ),
+                                div().pt_1().child(
+                                    Checkbox::new("save-username")
+                                        .label("Save username to session")
+                                        .checked(save_username.get())
+                                        .on_click({
+                                            let save_username = save_username.clone();
+                                            move |checked: &bool, _window, _cx| {
+                                                save_username.set(*checked);
+                                            }
+                                        }),
+                                ),
                             )
                         })
                 }
             })
-            // Footer: Cancel + Connect — dùng direct on_click thay vì DialogAction/DialogClose
-            // để bypass action dispatch qua focus chain.
+            // Footer: Cancel + Connect — uses direct on_click instead of DialogAction/DialogClose
+            // to bypass action dispatch through the focus chain.
             .footer({
                 DialogFooter::new()
                     .child(Button::new("cancel").label("Cancel").outline().on_click(
@@ -185,7 +184,7 @@ pub(crate) fn open_connect_dialog(
     });
 }
 
-/// Handler cho nút Connect — validate inputs, tạo SshConfig, kết nối.
+/// Handler for the Connect button — validates inputs, builds SshConfig, connects.
 fn on_connect_click(
     session: &SshSession,
     index: usize,
@@ -195,14 +194,14 @@ fn on_connect_click(
     window: &mut Window,
     cx: &mut App,
 ) -> bool {
-    // 1. Đọc + parse username field.
-    //    Chấp nhận: "username", "username@host", "username@host:port".
-    //    User input cái nào thì overwrite cái đó.
+    // 1. Read + parse the username field.
+    //    Accepts: "username", "username@host", "username@host:port".
+    //    Whatever the user types overwrites the corresponding value.
     let (username, host, port) = match username_state {
         Some(st) => {
             let raw = st.read(cx).value().trim().to_string();
             if raw.is_empty() {
-                window.push_notification("Username là bắt buộc.", cx);
+                window.push_notification("Username is required.", cx);
                 return false;
             }
             parse_user_host_port(&raw, &session.host, session.port)
@@ -214,10 +213,10 @@ fn on_connect_click(
         ),
     };
 
-    // 2. Đọc password (không bắt buộc — có thể để trống).
+    // 2. Read password (optional — may be left empty).
     let password = password_state.read(cx).value().to_string();
 
-    // 3. (Tuỳ chọn) Lưu username/host/port vào store — chỉ khi user tick checkbox.
+    // 3. (Optional) Save username/host/port to the store — only when the user ticks the checkbox.
     if save_username && username_state.is_some() {
         let mut updated = session.clone();
         updated.username = Some(username.clone());
@@ -228,8 +227,8 @@ fn on_connect_click(
         });
     }
 
-    // 4. Tạo SshConfig + kết nối async (không block UI).
-    //    Password rỗng → None auth (server không yêu cầu password).
+    // 4. Build SshConfig + connect asynchronously (does not block the UI).
+    //    Empty password → None auth (server does not require a password).
     let auth = if password.is_empty() {
         SshAuthMethod::None
     } else {
@@ -245,8 +244,8 @@ fn on_connect_click(
 
     window
         .spawn(cx, async move |cx| {
-            // Chạy connect trên background executor — connect() dùng block_on
-            // bên trong nên cần thread riêng.
+            // Run connect on the background executor — connect() uses block_on
+            // internally, so it needs its own thread.
             let result = cx
                 .background_executor()
                 .spawn(async move { ssh_connect(cfg, PtySize { rows: 24, cols: 80 }, 10_000) })
@@ -268,15 +267,15 @@ fn on_connect_click(
         })
         .detach();
 
-    true // đóng dialog
+    true // close the dialog
 }
 
-/// Thêm SSH terminal panel vào DockArea center.
+/// Add the SSH terminal panel to the DockArea center.
 fn add_ssh_terminal_to_dock(panel: &Arc<dyn PanelView>, window: &mut Window, cx: &mut App) {
     let dock_area = match AppState::global(cx).read(cx).dock_area.clone() {
         Some(d) => d,
         None => {
-            tracing::error!("AppState.dock_area chưa khởi tạo — không thể add SSH terminal tab");
+            tracing::error!("AppState.dock_area not initialized — cannot add SSH terminal tab");
             return;
         }
     };
@@ -288,16 +287,16 @@ fn add_ssh_terminal_to_dock(panel: &Arc<dyn PanelView>, window: &mut Window, cx:
         .ok();
 }
 
-/// Parse input username field — chấp nhận 3 dạng:
+/// Parse the username field input — accepts 3 forms:
 /// - `username`
 /// - `username@host`
 /// - `username@host:port`
 ///
-/// Trả về (username, host, port). Phần nào không có trong input thì giữ default.
+/// Returns (username, host, port). Any part missing from the input keeps its default.
 fn parse_user_host_port(raw: &str, default_host: &str, default_port: u16) -> (String, String, u16) {
     match raw.split_once('@') {
         Some((user, rest)) => {
-            // rest = "host" hoặc "host:port"
+            // rest = "host" or "host:port"
             match rest.rsplit_once(':') {
                 Some((h, p_str)) => {
                     let port = p_str.parse::<u16>().unwrap_or(default_port);
@@ -312,7 +311,7 @@ fn parse_user_host_port(raw: &str, default_host: &str, default_port: u16) -> (St
 
 // ── UI helpers ───────────────────────────────────────────────────────
 
-/// Banner hiển thị thông tin server (read-only).
+/// Server info banner (read-only).
 fn server_info_banner(info: SharedString, cx: &App) -> impl IntoElement {
     let theme = cx.theme();
     div()
@@ -326,7 +325,7 @@ fn server_info_banner(info: SharedString, cx: &App) -> impl IntoElement {
         .child(info)
 }
 
-/// Field form: label (có dấu `*`) + input element.
+/// Form field: label (with `*`) + input element.
 fn field(
     label: &'static str,
     required: bool,
@@ -347,7 +346,7 @@ fn field(
         .child(input)
 }
 
-/// Password field: label + masked input với mask_toggle + cleanable.
+/// Password field: label + masked input with mask_toggle + cleanable.
 fn password_field(state: &gpui::Entity<InputState>, _cx: &App) -> impl IntoElement {
     v_flex()
         .gap_1()

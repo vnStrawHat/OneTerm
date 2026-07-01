@@ -1,7 +1,7 @@
-//! `impl Render + Focusable for LocalTerminalView` — tách từ
-//! `view.rs` để giảm độ dài file.
+//! `impl Render + Focusable for LocalTerminalView` — split out from
+//! `view.rs` to keep file length down.
 //!
-//! Module gốc `render.rs` đã được tách thành `render/`.
+//! The original `render.rs` module was split into `render/`.
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
@@ -97,8 +97,8 @@ impl Render for LocalTerminalView {
 
         let theme_ref = cx.theme().clone();
 
-        // Nguồn duy nhất cập nhật line_times — stamp timestamp cho dòng mới tại
-        // chính thời điểm render này (xem `update_line_times`).
+        // The single source that updates line_times — stamp the timestamp for new
+        // lines at the exact moment of this render (see `update_line_times`).
         self.update_line_times(&info);
 
         let theme = self.apply_color_overrides(theme, &color_overrides);

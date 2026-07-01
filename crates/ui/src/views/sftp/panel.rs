@@ -1,15 +1,15 @@
-//! [`SftpPanel`] — leaf panel hiển thị SFTP browser.
+//! [`SftpPanel`] — leaf panel displaying the SFTP browser.
 //!
-//! Hiển thị file tree từ remote SFTP server. 1 panel cho toàn app —
-//! observe `AppState.active_sftp` để biết SSH tab nào đang active.
+//! Shows a file tree from a remote SFTP server. One panel for the whole app —
+//! observes `AppState.active_sftp` to know which SSH tab is active.
 //!
-//! File list render bằng `gpui_component::table::DataTable`:
-//! - Columns resizable, sortable, ẩn/hiện (config).
-//! - Name column pinned left + width lớn nhất (ưu tiên độ dài).
-//! - Trạng thái cột (width + visibility) persist vào `docks.json`
-//!   (field `sftp_table_state`).
+//! The file list is rendered with `gpui_component::table::DataTable`:
+//! - Columns are resizable, sortable, and can be shown/hidden (config).
+//! - The Name column is pinned left with the largest width (length priority).
+//! - Column state (width + visibility) is persisted to `docks.json`
+//!   (the `sftp_table_state` field).
 //!
-//! Tham chiếu `docs/sftp-browser-design.md` §4.
+//! See `docs/sftp-browser-design.md` §4.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -32,10 +32,10 @@ use super::types::{PendingAction, SortColumn, TransferItem, sftp_changed};
 
 // ── SftpPanel ────────────────────────────────────────────────
 
-/// Panel hiển thị SFTP browser.
+/// Panel displaying the SFTP browser.
 ///
-/// `panel_name = "sftp"`. 1 panel cho toàn app ở right dock.
-/// Observe `AppState.active_sftp` — khi SSH tab đổi, swap SFTP backend.
+/// `panel_name = "sftp"`. One panel for the whole app in the right dock.
+/// Observes `AppState.active_sftp` — when the SSH tab changes, swap the SFTP backend.
 pub struct SftpPanel {
     pub(crate) focus_handle: FocusHandle,
 
@@ -44,10 +44,10 @@ pub struct SftpPanel {
 
     // ── File tree state ─────────────────────────────────────
     pub(crate) cwd: PathBuf,
-    /// Entries + sort + loading + column config sống trong delegate.
+    /// Entries + sort + loading + column config live in the delegate.
     pub(crate) table: Entity<TableState<SftpTableDelegate>>,
-    /// Mirror index dòng đang chọn (sync từ `TableEvent::SelectRow` +
-    /// context menu right-click). Dùng cho toolbar actions.
+    /// Mirror of the selected row index (synced from `TableEvent::SelectRow` +
+    /// context-menu right-click). Used by toolbar actions.
     pub(crate) selected: Option<usize>,
     pub(crate) error: Option<String>,
 
@@ -63,14 +63,13 @@ pub struct SftpPanel {
     pub(crate) path_error: bool,
     _path_sub: Subscription,
 
-
     // ── Debounce save table state ───────────────────────────
     _save_table_task: Option<Task<()>>,
     _table_sub: Subscription,
 }
 
 impl SftpPanel {
-    /// Tạo panel mới — observe AppState, tạo DataTable state.
+    /// Create a new panel — observe AppState, create DataTable state.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
 
@@ -126,7 +125,6 @@ impl SftpPanel {
         let path_input = cx.new(|cx| InputState::new(window, cx).placeholder("Path"));
         let _path_sub = cx.subscribe_in(&path_input, window, Self::on_path_input_event);
 
-
         Self {
             focus_handle,
             sftp: None,
@@ -145,7 +143,7 @@ impl SftpPanel {
         }
     }
 
-    /// Helper tạo `Entity<Self>`.
+    /// Helper to create an `Entity<Self>`.
     pub fn new_entity(window: &mut Window, cx: &mut App) -> Entity<Self> {
         cx.new(|cx| Self::new(window, cx))
     }
@@ -173,7 +171,7 @@ impl SftpPanel {
                 cx.notify();
             }
             TableEvent::ColumnWidthsChanged(widths) => {
-                // Cập nhật width trong delegate + debounce persist.
+                // Update widths in the delegate + debounce persist.
                 let widths: Vec<_> = widths.iter().map(|p| *p).collect();
                 self.table.update(cx, |t, cx| {
                     t.delegate_mut().apply_widths(&widths);
@@ -185,7 +183,7 @@ impl SftpPanel {
         }
     }
 
-    /// Handler cho InputEvent từ path input.
+    /// Handler for InputEvent from the path input.
     fn on_path_input_event(
         &mut self,
         _: &Entity<InputState>,
@@ -202,7 +200,7 @@ impl SftpPanel {
                 self.goto_path(PathBuf::from(path), cx);
             }
             InputEvent::Change => {
-                // Reset error highlight khi user gõ lại.
+                // Reset the error highlight when the user types again.
                 if self.path_error {
                     self.path_error = false;
                     cx.notify();
@@ -212,7 +210,7 @@ impl SftpPanel {
         }
     }
 
-    /// Goto path — thử read_dir, nếu lỗi thì set path_error.
+    /// Goto path — try read_dir; on error, set path_error.
     fn goto_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         let sftp = match &self.sftp {
             Some(s) => s.clone(),
@@ -225,26 +223,29 @@ impl SftpPanel {
                 self.load_dir(path, cx);
             }
             Ok(_) => {
-                log::warn!("SftpPanel::goto_path: not a directory: \"{}\"", path.display());
+                log::warn!(
+                    "SftpPanel::goto_path: not a directory: \"{}\"",
+                    path.display()
+                );
                 self.path_error = true;
                 cx.notify();
             }
             Err(e) => {
-                log::warn!("SftpPanel::goto_path: invalid path \"{}\": {}", path.display(), e);
+                log::warn!(
+                    "SftpPanel::goto_path: invalid path \"{}\": {}",
+                    path.display(),
+                    e
+                );
                 self.path_error = true;
                 cx.notify();
             }
         }
     }
 
-
-
-    /// Debounce 1s rồi persist column state (width + visibility) vào docks.json.
+    /// Debounce 1s then persist column state (width + visibility) to docks.json.
     fn schedule_save_table_state(&mut self, cx: &mut Context<Self>) {
         self._save_table_task = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_secs(1))
-                .await;
+            cx.background_executor().timer(Duration::from_secs(1)).await;
             let _ = this.update(cx, |this, cx| {
                 this.table.read(cx).delegate().persist();
                 cx.notify();
@@ -254,7 +255,7 @@ impl SftpPanel {
 
     // ── File operations ──────────────────────────────────────
 
-    /// Đọc thư mục — spawn background task, không block UI.
+    /// Read a directory — spawn a background task, does not block the UI.
     pub fn load_dir(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         log::debug!("SftpPanel::load_dir: path=\"{}\"", path.display());
 
@@ -304,7 +305,7 @@ impl SftpPanel {
                             this.cwd.display()
                         );
 
-                        // Update cwd với absolute path từ entry đầu tiên.
+                        // Update cwd with the absolute path from the first entry.
                         let mut cwd = this.cwd.clone();
                         if let Some(first) = entries.first() {
                             if let Some(parent) = first.path.parent() {
@@ -334,7 +335,7 @@ impl SftpPanel {
         .detach();
     }
 
-    /// Navigate lên thư mục cha.
+    /// Navigate up to the parent directory.
     pub(crate) fn navigate_parent(&mut self, cx: &mut Context<Self>) {
         let parent = match self.cwd.parent() {
             Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
@@ -351,13 +352,13 @@ impl SftpPanel {
         self.load_dir(parent, cx);
     }
 
-    /// Refresh thư mục hiện tại.
+    /// Refresh the current directory.
     pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
         log::debug!("SftpPanel::refresh: refreshing \"{}\"", self.cwd.display());
         self.load_dir(self.cwd.clone(), cx);
     }
 
-    /// Navigate vào thư mục con (double-click folder).
+    /// Navigate into a subdirectory (double-click a folder).
     pub(crate) fn navigate_into(&mut self, idx: usize, cx: &mut Context<Self>) {
         let entry = self.table.read(cx).delegate().entries.get(idx).cloned();
         match entry {
@@ -378,7 +379,7 @@ impl SftpPanel {
         }
     }
 
-    /// Toggle visibility của 1 cột (từ Columns dropdown). Name không thể ẩn.
+    /// Toggle the visibility of a column (from the Columns dropdown). Name cannot be hidden.
     pub(crate) fn toggle_column(&mut self, col: SortColumn, cx: &mut Context<Self>) {
         let changed = self.table.update(cx, |t, cx| {
             let changed = t.delegate_mut().toggle_visibility(col);
@@ -393,7 +394,7 @@ impl SftpPanel {
         }
     }
 
-    /// Get selected entry (if any) — clone để dùng trong dialog.
+    /// Get selected entry (if any) — cloned for use in a dialog.
     pub(crate) fn selected_entry(&self, cx: &App) -> Option<FileEntry> {
         self.selected
             .and_then(|ix| self.table.read(cx).delegate().entries.get(ix).cloned())

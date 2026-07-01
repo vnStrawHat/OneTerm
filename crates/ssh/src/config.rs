@@ -1,45 +1,45 @@
-//! Cấu hình kết nối SSH — input cho [`crate::SshSession::connect`].
+//! SSH connection config — input for [`crate::SshSession::connect`].
 //!
-//! `SshConfig` chứa thông tin host + credentials. Password **không** persist
-//! ra disk — chỉ tồn tại trong RAM trong thời gian kết nối.
+//! `SshConfig` holds host info + credentials. Passwords are **not** persisted
+//! to disk — they live in RAM only for the duration of the connection.
 
 use std::fmt::{self, Debug, Formatter};
 use std::path::PathBuf;
 
-/// Phương thức xác thực SSH.
+/// SSH authentication method.
 #[derive(Clone)]
 pub enum SshAuthMethod {
-    /// Không xác thực (dành cho server không yêu cầu password).
+    /// No authentication (for servers that require no password).
     None,
-    /// Xác thực bằng password.
+    /// Password authentication.
     Password {
-        /// Password plaintext (chỉ trong RAM — không log, không serialize).
+        /// Plaintext password (RAM only — never logged or serialized).
         password: String,
     },
-    /// Xác thực bằng private key file.
+    /// Private key file authentication.
     PrivateKey {
-        /// Đường dẫn tới file private key.
+        /// Path to the private key file.
         key_path: PathBuf,
-        /// Passphrase giải mã key (nếu key có mã hoá).
+        /// Passphrase to decrypt the key (if the key is encrypted).
         passphrase: Option<String>,
     },
-    /// Xác thực qua SSH agent.
+    /// Authentication via SSH agent.
     Agent,
 }
 
-/// Cấu hình kết nối SSH.
+/// SSH connection config.
 ///
-/// Tạo từ thông tin `SshSession` (UI store) + credentials do user nhập trong
-/// connect dialog. Truyền vào [`crate::SshSession::connect`].
+/// Built from `SshSession` info (UI store) + credentials the user enters in the
+/// connect dialog. Passed to [`crate::SshSession::connect`].
 #[derive(Clone)]
 pub struct SshConfig {
-    /// Hostname hoặc IP.
+    /// Hostname or IP.
     pub host: String,
-    /// Cổng SSH (mặc định 22).
+    /// SSH port (default 22).
     pub port: u16,
-    /// Username SSH.
+    /// SSH username.
     pub username: String,
-    /// Phương thức xác thực.
+    /// Authentication method.
     pub auth: SshAuthMethod,
 }
 
@@ -69,7 +69,7 @@ impl Debug for SshConfig {
             .field("host", &self.host)
             .field("port", &self.port)
             .field("username", &self.username)
-            .field("auth", &self.auth) // mask password qua impl ở trên
+            .field("auth", &self.auth) // password masked via the impl above
             .finish()
     }
 }

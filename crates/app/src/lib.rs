@@ -1,10 +1,10 @@
 //! OneTerm application core.
 //!
-//! Khởi tạo application, đăng ký UI, mở window chính.
-//! Logic dùng chung cho cả hai binary: `oneterm` (release) và `oneterm-debug` (dev).
+//! Initializes the application, registers the UI, and opens the main window.
+//! Shared logic for both binaries: `oneterm` (release) and `oneterm-debug` (dev).
 //!
-//! Hai bin chỉ là shim mỏng gọi [`run`]; nhờ đó mỗi bin có file nguồn riêng
-//! (tránh warning "file present in multiple build targets").
+//! The two binaries are thin shims that call [`run`]; this gives each binary its own
+//! source file (avoiding the "file present in multiple build targets" warning).
 
 use oneterm_ui::layout::OneTermWorkspace;
 
@@ -13,10 +13,10 @@ pub mod window;
 
 use assets::CustomAssets;
 
-/// Khởi chạy OneTerm: init logging, app, UI rồi mở window chính.
+/// Launch OneTerm: initialize logging, the app, the UI, then open the main window.
 pub fn run() {
-    // Khởi tạo logging — đọc RUST_LOG env var, mặc định: info cho app, warn cho deps.
-    // VD: RUST_LOG=debug → thấy debug log; RUST_LOG=ssh=trace → trace SSH crate.
+    // Initialize logging — reads the RUST_LOG env var, default: info for the app, warn for deps.
+    // E.g. RUST_LOG=debug → show debug logs; RUST_LOG=ssh=trace → trace the SSH crate.
     env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("info,oneterm=debug"),
     )
@@ -25,9 +25,9 @@ pub fn run() {
     log::info!("OneTerm starting up");
 
     // Windows: SetConsoleCtrlHandler safety net — ignore CTRL_C_EVENT.
-    // Với OpenConsole.exe (từ Windows Terminal), \x03 qua PTY được xử lý
-    // đúng cách → OneTerm không nhận signal. Handler này là backup
-    // trong trường hợp OpenConsole.exe không có → fallback system ConPTY.
+    // With OpenConsole.exe (from Windows Terminal), \x03 over the PTY is handled
+    // correctly, so OneTerm never receives the signal. This handler is a backup
+    // for the case where OpenConsole.exe is missing → fallback to system ConPTY.
     #[cfg(windows)]
     unsafe {
         extern "system" fn ignore_handler(ctrl_type: u32) -> windows_sys::Win32::Foundation::BOOL {
@@ -48,16 +48,16 @@ pub fn run() {
     let app = gpui_platform::application().with_assets(CustomAssets);
 
     app.run(move |cx| {
-        // Khởi tạo gpui-component (theme, dock, root, ...).
+        // Initialize gpui-component (theme, dock, root, ...).
         gpui_component::init(cx);
-        // Khởi tạo UI OneTerm (register_panel x3, theme action handlers).
+        // Initialize the OneTerm UI (register_panel x3, theme action handlers).
         oneterm_ui::init(cx);
-        // Bind key bindings cho workspace.
+        // Bind key bindings for the workspace.
         OneTermWorkspace::bind_keys(cx);
 
         cx.activate(true);
 
-        // Mở window chính.
+        // Open the main window.
         crate::window::open_window(cx).detach();
     });
 }

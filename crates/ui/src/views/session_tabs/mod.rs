@@ -1,7 +1,7 @@
-//! Session tabs — panel hiển thị danh sách session.
+//! Session tabs — panel displaying the list of sessions.
 //!
-//! Module gốc `tabs.rs` đã được tách thành nhiều file con
-//! để tuân thủ rule ~400 dòng/file (xem `docs/agents/structure.md` §2).
+//! The original `tabs.rs` module was split into several submodules
+//! to comply with the ~400 lines/file rule (see `docs/agents/structure.md` §2).
 
 mod connect_dialog;
 mod group_combo;

@@ -1,4 +1,4 @@
-//! Keyboard handler cho `LocalTerminalView`.
+//! Keyboard handler for `LocalTerminalView`.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -14,7 +14,7 @@ use super::super::view::LocalTerminalView;
 use super::vi::{toggle_vi_mode, update_vi_selection};
 use crate::state::TerminalSettings;
 
-/// Gắn keyboard handler.
+/// Attach the keyboard handler.
 pub(crate) fn attach_key(
     div: gpui::Stateful<gpui::Div>,
     session: Entity<Box<dyn TerminalSession>>,
@@ -191,14 +191,14 @@ pub(crate) fn attach_key(
                 return;
             }
 
-            // IME active (không alt-screen): ký tự thường do
-            // replace_text_in_range lo → skip on_key_down để tránh double.
+            // IME active (not alt-screen): normal characters are handled by
+            // replace_text_in_range, so skip on_key_down to avoid double input.
             if !s.read(cx).is_alt_screen() {
                 let m = e.keystroke.modifiers;
                 if !m.control && !m.alt && !m.platform {
                     if let Some(ch) = e.keystroke.key_char.as_deref() {
                         if !ch.is_empty() && !ch.chars().any(|c| c.is_control()) {
-                            return; // để replace_text_in_range ghi
+                            return; // let replace_text_in_range write it
                         }
                     }
                 }
@@ -208,7 +208,7 @@ pub(crate) fn attach_key(
                 return;
             };
 
-            // Ctrl+C (không Shift) = SIGINT — dùng send_ctrl_c().
+            // Ctrl+C (without Shift) = SIGINT — use send_ctrl_c().
             if mods.ctrl && !mods.shift {
                 if let KeySpec::Character(ch) = &spec {
                     if ch == "c" || ch == "C" {
@@ -230,7 +230,7 @@ pub(crate) fn attach_key(
             };
             s.update(cx, |s, _| s.write(&bytes));
 
-            // Clear bell indicator khi user gõ phím.
+            // Clear the bell indicator when the user presses a key.
             let _ = view.update(cx, |view, cx| {
                 if view.has_bell {
                     view.has_bell = false;

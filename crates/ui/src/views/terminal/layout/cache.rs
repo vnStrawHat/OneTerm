@@ -11,8 +11,8 @@ use super::super::theme::TerminalTheme;
 use super::row::layout_row;
 use super::types::{LayoutPoint, RowLayout, RowLayoutCache};
 
-/// Update row cache: chỉ recompute layout cho dirty rows, reuse cached
-/// artifacts cho non-dirty rows.
+/// Update the row cache: only recompute layout for dirty rows, reuse cached
+/// artifacts for non-dirty rows.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn update_row_cache(
     cache: &mut RowLayoutCache,

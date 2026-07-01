@@ -1,7 +1,7 @@
-//! Types + helpers cho SFTP browser — sort state, transfer queue,
+//! Types + helpers for the SFTP browser — sort state, transfer queue,
 //! column definitions, formatting.
 //!
-//! Tách từ `file_browser.rs` để giảm độ dài file.
+//! Split out from `file_browser.rs` to keep the file shorter.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,7 +14,7 @@ use oneterm_core::{FileEntry, SftpBackend};
 
 // ── Sort state ───────────────────────────────────────────────
 
-/// Cột để sort.
+/// Column to sort by.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum SortColumn {
     Name,
@@ -25,7 +25,7 @@ pub(crate) enum SortColumn {
     Group,
 }
 
-/// Hướng sort.
+/// Sort direction.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum SortDir {
     Asc,
@@ -45,12 +45,12 @@ impl SortDir {
 
 // ── Pending action (for context menu → render execution) ─────
 
-/// Action được trigger từ context menu, thực thi trong `render()`.
-/// Context menu `on_click` chỉ có `&mut App`, không có `&mut Window`,
-/// nên dùng pattern: set flag → render() executes với full `&mut Window` + `&mut Context<Self>`.
+/// Action triggered from the context menu, executed in `render()`.
+/// The context menu's `on_click` only has `&mut App`, not `&mut Window`,
+/// so use the pattern: set a flag → render() executes with full `&mut Window` + `&mut Context<Self>`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum PendingAction {
-    Open(usize), // Navigate vào folder
+    Open(usize), // Navigate into a folder
     Download,
     Rename,
     Delete,
@@ -63,7 +63,7 @@ pub(crate) enum PendingAction {
 
 // ── Helpers: formatting ──────────────────────────────────────
 
-/// Format bytes thành human-readable (B, KB, MB, GB, TB).
+/// Format bytes into human-readable form (B, KB, MB, GB, TB).
 pub(crate) fn format_size(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{bytes} B")
@@ -81,7 +81,7 @@ pub(crate) fn format_size(bytes: u64) -> String {
     }
 }
 
-/// Format SystemTime thành `YYYY-MM-DD HH:MM` (local time).
+/// Format SystemTime into `YYYY-MM-DD HH:MM` (local time).
 pub(crate) fn format_date(time: Option<SystemTime>) -> String {
     let time = match time {
         Some(t) => t,
@@ -100,20 +100,20 @@ pub(crate) fn format_date(time: Option<SystemTime>) -> String {
     local.format("%Y-%m-%d %H:%M").to_string()
 }
 
-/// Format permissions thành `drwxr-xr-x (0775)` — type + text + octal.
+/// Format permissions into `drwxr-xr-x (0775)` — type + text + octal.
 /// Bit layout: file type (high bits) | owner(rwx) | group(rwx) | other(rwx) | special(sst).
 pub(crate) fn format_permissions(perm: u32) -> String {
-    let mode = perm & 0o7777; // Chỉ quan tâm 12 bit thấp.
+    let mode = perm & 0o7777; // Only the low 12 bits matter.
 
-    // File type prefix từ high bits (S_IFMT).
+    // File type prefix from the high bits (S_IFMT).
     let type_char = match perm & 0o170000 {
-        0o040000 => 'd',  // S_IFDIR  — directory
-        0o120000 => 'l',  // S_IFLNK  — symlink
-        0o020000 => 'c',  // S_IFCHR  — char device
-        0o060000 => 'b',  // S_IFBLK  — block device
-        0o010000 => 'p',  // S_IFIFO  — pipe/FIFO
-        0o140000 => 's',  // S_IFSOCK — socket
-        _ => '-',         // S_IFREG hoặc không xác định
+        0o040000 => 'd', // S_IFDIR  — directory
+        0o120000 => 'l', // S_IFLNK  — symlink
+        0o020000 => 'c', // S_IFCHR  — char device
+        0o060000 => 'b', // S_IFBLK  — block device
+        0o010000 => 'p', // S_IFIFO  — pipe/FIFO
+        0o140000 => 's', // S_IFSOCK — socket
+        _ => '-',        // S_IFREG or unknown
     };
 
     // Special bits: setuid (4000), setgid (2000), sticky (1000).
@@ -174,7 +174,7 @@ pub(crate) fn format_permissions(perm: u32) -> String {
     format!("{text} ({octal})")
 }
 
-/// Format owner/group thành `name (id)`. Nếu không có name → chỉ hiển thị `id`.
+/// Format owner/group into `name (id)`. If there is no name → display only the `id`.
 pub(crate) fn format_owner(name: Option<&str>, id: Option<u32>) -> String {
     match (name, id) {
         (Some(n), Some(id)) => format!("{n} ({id})"),
@@ -184,7 +184,7 @@ pub(crate) fn format_owner(name: Option<&str>, id: Option<u32>) -> String {
     }
 }
 
-/// So sánh 2 `Option<Arc<dyn SftpBackend>>` bằng pointer identity.
+/// Compare two `Option<Arc<dyn SftpBackend>>` by pointer identity.
 pub(crate) fn sftp_changed(
     old: &Option<Arc<dyn SftpBackend>>,
     new: &Option<Arc<dyn SftpBackend>>,
@@ -196,20 +196,20 @@ pub(crate) fn sftp_changed(
     }
 }
 
-/// Sort entries: folder trước file, trong mỗi nhóm sort theo `sort` state.
+/// Sort entries: folders before files; within each group sort by the `sort` state.
 ///
-/// `sort = None` → default: sort theo Name asc (folder-first). `Some((col, dir))`
-/// → sort theo cột đó. Folder luôn đứng trước file bất kể sort state.
+/// `sort = None` → default: sort by Name asc (folder-first). `Some((col, dir))`
+/// → sort by that column. Folders always come before files regardless of sort state.
 pub(crate) fn sort_entries(entries: &mut [FileEntry], sort: Option<(SortColumn, SortDir)>) {
     let (col, dir) = sort.unwrap_or((SortColumn::Name, SortDir::Asc));
     entries.sort_by(|a, b| {
-        // Luôn folder trước file.
+        // Always folders before files.
         let folder_cmp = b.is_dir.cmp(&a.is_dir);
         if folder_cmp != std::cmp::Ordering::Equal {
             return folder_cmp;
         }
 
-        // Cùng loại (cả folder hoặc cả file) → sort theo col.
+        // Same type (both folders or both files) → sort by col.
         let col_cmp = match col {
             SortColumn::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
             SortColumn::Modified => a.modified.cmp(&b.modified),
@@ -229,7 +229,7 @@ pub(crate) fn sort_entries(entries: &mut [FileEntry], sort: Option<(SortColumn, 
 // ── Column definitions ────────────────────────────────────────
 
 impl SortColumn {
-    /// Stable string key — dùng cho persistence (docks.json) và Column key.
+    /// Stable string key — used for persistence (docks.json) and the Column key.
     pub(crate) fn key(self) -> &'static str {
         match self {
             SortColumn::Name => "name",
@@ -241,7 +241,7 @@ impl SortColumn {
         }
     }
 
-    /// Parse key ngược lại `SortColumn`. `None` nếu key không hợp lệ.
+    /// Parse a key back into a `SortColumn`. `None` if the key is invalid.
     #[allow(dead_code)]
     pub(crate) fn from_key(key: &str) -> Option<Self> {
         Some(match key {
@@ -256,37 +256,32 @@ impl SortColumn {
     }
 }
 
-/// Định nghĩa 1 cột trong file list — bao gồm config hiển thị + trạng thái
-/// resize/visibility (được persist vào `docks.json`).
+/// Definition of a column in the file list — display config + resize/visibility
+/// state (persisted to `docks.json`).
 #[derive(Clone, Debug)]
 pub(crate) struct SftpColumnConfig {
     pub col: SortColumn,
-    /// Sortable key string — trùng `SortColumn::key`.
+    /// Sortable key string — matches `SortColumn::key`.
     pub key: &'static str,
-    /// Nhãn header.
+    /// Header label.
     pub label: &'static str,
-    /// Chiều rộng mặc định (px) — dùng để reset.
+    /// Default width (px) — used to reset.
     #[allow(dead_code)]
     pub default_width: f32,
-    /// Chiều rộng tối thiểu (px) — giới hạn resize.
+    /// Minimum width (px) — resize limit.
     pub min_width: f32,
-    /// Chiều rộng tối đa (px) — giới hạn resize.
+    /// Maximum width (px) — resize limit.
     pub max_width: f32,
     /// Right-align text (Size).
     pub right_align: bool,
-    /// Đang hiển thị hay không (config ẩn hiện cột).
+    /// Whether the column is currently shown (show/hide config).
     pub visible: bool,
-    /// Chiều rộng hiện tại (px) — có thể thay đổi khi resize.
+    /// Current width (px) — may change on resize.
     pub width: f32,
 }
 
 impl SftpColumnConfig {
-    fn new(
-        col: SortColumn,
-        label: &'static str,
-        default_width: f32,
-        right_align: bool,
-    ) -> Self {
+    fn new(col: SortColumn, label: &'static str, default_width: f32, right_align: bool) -> Self {
         Self {
             key: col.key(),
             col,
@@ -301,10 +296,10 @@ impl SftpColumnConfig {
     }
 }
 
-/// Danh sách cột canonical (thứ tự từ trái → phải). Name luôn visible.
+/// Canonical column list (order left → right). Name is always visible.
 ///
-/// Name được ưu tiên độ dài lớn nhất —DataTable dùng fixed-width columns,
-/// nên gán width lớn cho name để chiếm nhiều không gian nhất (resizable).
+/// Name gets the largest width priority — DataTable uses fixed-width columns,
+/// so assign Name a large width to take up the most space (resizable).
 pub(crate) fn default_column_configs() -> Vec<SftpColumnConfig> {
     vec![
         SftpColumnConfig::new(SortColumn::Name, "Name", 320.0, false),
@@ -316,7 +311,7 @@ pub(crate) fn default_column_configs() -> Vec<SftpColumnConfig> {
     ]
 }
 
-/// Map `SortDir` sang `ColumnSort` của DataTable.
+/// Map `SortDir` to the DataTable's `ColumnSort`.
 pub(crate) fn sort_dir_to_column_sort(dir: SortDir) -> gpui_component::table::ColumnSort {
     match dir {
         SortDir::Asc => gpui_component::table::ColumnSort::Ascending,
@@ -326,7 +321,7 @@ pub(crate) fn sort_dir_to_column_sort(dir: SortDir) -> gpui_component::table::Co
 
 // ── Persistence (docks.json field `sftp_table_state`) ─────────
 
-/// Trạng thái bảng SFTP được persist vào `docks.json`.
+/// SFTP table state persisted to `docks.json`.
 /// - `column_widths`: key = `SortColumn::key()`, value = px.
 /// - `column_visibility`: key = `SortColumn::key()`, value = visible?.
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
@@ -339,14 +334,14 @@ pub(crate) struct SftpTableStateJson {
 
 // ── Transfer queue ──────────────────────────────────────────
 
-/// Hướng transfer.
+/// Transfer direction.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum TransferDirection {
     Upload,
     Download,
 }
 
-/// Trạng thái transfer.
+/// Transfer status.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum TransferStatus {
     InProgress,
@@ -355,7 +350,7 @@ pub(crate) enum TransferStatus {
     Error,
 }
 
-/// Một item trong transfer queue.
+/// An item in the transfer queue.
 pub(crate) struct TransferItem {
     pub id: usize,
     pub direction: TransferDirection,

@@ -1,42 +1,44 @@
-//! Trạng thái session cache — shared (`Arc<Mutex<...>>`) giữa `LocalListener`
-//! (cập nhật khi nhận event) và `LocalSession` (đọc qua trait accessors).
+//! Session state cache — shared (`Arc<Mutex<...>>`) between `LocalListener`
+//! (updated on incoming events) and `LocalSession` (read via trait accessors).
 //!
-//! alacritty `Term` không expose `title`/`cwd`/clipboard → phải tự cache.
-//! OSC 133 (shell integration) cũng cache ở đây — prompt count + last exit code.
+//! alacritty `Term` does not expose `title`/`cwd`/clipboard → we cache them
+//! ourselves. OSC 133 (shell integration) is also cached here — prompt count +
+//! last exit code.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-/// Trạng thái session được listener cập nhật + session đọc.
+/// Session state updated by the listener and read by the session.
 #[derive(Debug, Default)]
 pub struct SessionState {
-    /// Tiêu đề (OSC 0/2). `None` = reset/default.
+    /// Title (OSC 0/2). `None` = reset/default.
     pub title: Option<String>,
-    /// Cwd (OSC 7 — set bởi side-channel parser, không phải alacritty event).
+    /// Cwd (OSC 7 — set by the side-channel parser, not an alacritty event).
     pub cwd: Option<PathBuf>,
-    /// Clipboard cuối qua OSC 52 store.
+    /// Last clipboard value via OSC 52 store.
     pub clipboard: Option<String>,
-    /// Process còn sống?
+    /// Is the process still alive?
     pub alive: bool,
-    /// Exit code nếu đã thoát.
+    /// Exit code if it has exited.
     pub exit_code: Option<i32>,
-    /// Số prompt markers (OSC 133;A) đã capture — cho scroll-to-prompt.
+    /// Number of prompt markers (OSC 133;A) captured — for scroll-to-prompt.
     pub prompt_count: usize,
-    /// Exit code của command cuối (OSC 133;D;exit_code).
+    /// Exit code of the last command (OSC 133;D;exit_code).
     pub last_exit_code: Option<i32>,
-    /// Foreground process hiện tại (vd "cargo", "node").
+    /// Current foreground process (e.g. "cargo", "node").
     pub foreground_process: Option<String>,
-    /// **Absolute** line count — tổng số dòng đã output kể cả khi scrollback đầy.
-    /// Track ở event loop level, đọc qua terminal_info().
+    /// **Absolute** line count — total lines output even when scrollback is full.
+    /// Tracked at the event loop level, read via terminal_info().
     pub absolute_line_count: usize,
-    /// Previous total_lines — dùng ở event loop để detect dropped lines.
+    /// Previous total_lines — used by the event loop to detect dropped lines.
     pub prev_total_lines: usize,
-    /// Số lần màn hình bị xoá (`clear`/`cls`). Tăng mỗi khi event loop thấy
-    /// chuỗi `CSI 2J`/`CSI 3J`/`ESC c`. UI dùng để reset per-line timestamps.
+    /// Number of times the screen was cleared (`clear`/`cls`). Bumped whenever the
+    /// event loop sees `CSI 2J`/`CSI 3J`/`ESC c`. The UI uses it to reset per-line
+    /// timestamps.
     pub clear_epoch: usize,
 }
 
-/// Arc-Mutex wrapper tiện lợi.
+/// Convenient Arc-Mutex wrapper.
 pub type SharedState = Arc<Mutex<SessionState>>;
 
 pub fn new_shared() -> SharedState {

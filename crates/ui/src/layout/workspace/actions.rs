@@ -1,4 +1,4 @@
-//! Action handlers cho `OneTermWorkspace`.
+//! Action handlers for `OneTermWorkspace`.
 
 use std::sync::{Arc, atomic::Ordering};
 
@@ -11,7 +11,7 @@ use crate::{
 };
 
 impl super::OneTermWorkspace {
-    /// Action handler: thêm TerminalPanel mới.
+    /// Action handler: add a new TerminalPanel.
     pub(crate) fn on_action_add_panel(
         &mut self,
         action: &AddPanel,
@@ -21,9 +21,9 @@ impl super::OneTermWorkspace {
         let panel: Arc<dyn gpui_component::dock::PanelView> =
             Arc::new(TerminalPanel::new_entity(window, cx));
 
-        // Khi tất cả tab đã đóng, center DockItem vẫn giữ entry cũ nhưng
-        // TabPanel bên trong không còn panel nào → add_panel thêm vào
-        // TabPanel "ma" không được render.  Phát hiện và recreate center.
+        // When all tabs are closed, the center DockItem still keeps the old entry but
+        // the inner TabPanel has no panels left → add_panel would add to a "ghost"
+        // TabPanel that is not rendered. Detect this and recreate the center.
         let center_empty = {
             let dock = self.dock_area.read(cx);
             Self::center_has_no_visible_panel(&dock.center(), cx)
@@ -47,7 +47,7 @@ impl super::OneTermWorkspace {
         }
     }
 
-    /// Kiểm tra center DockItem có TabPanel còn panel nào không.
+    /// Check whether the center DockItem has any TabPanel with panels left.
     fn center_has_no_visible_panel(center: &DockItem, cx: &gpui::App) -> bool {
         match center {
             DockItem::Tabs { view, .. } => view.read(cx).active_panel(cx).is_none(),
@@ -62,7 +62,7 @@ impl super::OneTermWorkspace {
         }
     }
 
-    /// Action handler: thêm SessionPanel mới vào right dock.
+    /// Action handler: add a new SessionPanel to the right dock.
     pub(crate) fn on_action_add_session(
         &mut self,
         _: &AddSession,
@@ -76,7 +76,7 @@ impl super::OneTermWorkspace {
         });
     }
 
-    /// Action handler: thêm SftpPanel mới vào right dock.
+    /// Action handler: add a new SftpPanel to the right dock.
     pub(crate) fn on_action_add_sftp_browser(
         &mut self,
         _: &AddSftpBrowser,
@@ -90,7 +90,7 @@ impl super::OneTermWorkspace {
         });
     }
 
-    /// Action handler: toggle nút dock toggle button (expand/collapse button).
+    /// Action handler: toggle the dock toggle button (expand/collapse button).
     pub(crate) fn on_action_toggle_dock_toggle_button(
         &mut self,
         _: &ToggleDockToggleButton,

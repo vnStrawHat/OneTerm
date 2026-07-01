@@ -1,17 +1,17 @@
-//! [`SessionPanel`] — leaf panel hiển thị danh sách SSH session dưới dạng Tree.
+//! [`SessionPanel`] — leaf panel displaying the list of SSH sessions as a Tree.
 //!
-//! Render Tree (1 level: Group → Item hoặc Item root) từ `ssh_session.json`
-//! (qua [`crate::state::SshSessionStore`]) khi khởi động.
+//! Renders a Tree (1 level: Group → Item, or Item at root) from `ssh_session.json`
+//! (via [`crate::state::SshSessionStore`]) at startup.
 //!
-//! - Item không có group → hiển thị ở root, trên cùng (sort theo label).
-//! - Item có group → gom vào folder theo group name (sort theo group,
-//!   trong group sort theo label).
-//! - Double-click vào session item → mở dialog connect SSH.
-//! - Right-click vào khu vực panel (trống) → context menu "New Session".
-//! - Right-click vào 1 session item → context menu: Open, Delete, Property.
-//! - Right-click vào 1 group folder → context menu: Property (rename group).
-//! - "New Session" / "Property" → mở dialog (xem [`super::session_dialog`]).
-//! - "Open" / double-click → mở dialog connect (xem [`super::connect_dialog`]).
+//! - Items without a group → shown at the root, on top (sorted by label).
+//! - Items with a group → grouped into a folder by group name (sorted by group,
+//!   then by label within the group).
+//! - Double-click a session item → open the SSH connect dialog.
+//! - Right-click an empty area of the panel → "New Session" context menu.
+//! - Right-click a session item → context menu: Open, Delete, Property.
+//! - Right-click a group folder → context menu: Property (rename group).
+//! - "New Session" / "Property" → open a dialog (see [`super::session_dialog`]).
+//! - "Open" / double-click → open the connect dialog (see [`super::connect_dialog`]).
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -33,29 +33,29 @@ use crate::state::SshSessionStore;
 use super::session_dialog::open_session_dialog;
 use super::tree_builder::build_tree_items;
 
-/// Prefix id cho leaf TreeItem (session) — encode store index.
+/// Id prefix for leaf TreeItems (sessions) — encodes the store index.
 pub(crate) const SESSION_ID_PREFIX: &str = "session:";
-/// Prefix id cho folder TreeItem (group).
+/// Id prefix for folder TreeItems (groups).
 pub(crate) const GROUP_ID_PREFIX: &str = "group:";
 
-/// Panel hiển thị danh sách SSH session dưới dạng Tree.
+/// Panel displaying the list of SSH sessions as a Tree.
 ///
 /// `panel_name = "session"`.
 pub struct SessionPanel {
     pub(crate) focus_handle: FocusHandle,
     pub(crate) store: Entity<SshSessionStore>,
     pub(crate) tree_state: Entity<TreeState>,
-    /// Search input state — filter sessions theo label/host/user/group.
+    /// Search input state — filters sessions by label/host/user/group.
     pub(crate) search_state: Entity<InputState>,
-    /// Debounce task cho search — thay task cũ = cancel task cũ (debounce).
+    /// Debounce task for search — replacing the old task cancels it (debounce).
     pub(crate) search_debounce_task: Option<Task<()>>,
-    /// Track index bị click (bất kỳ button) để highlight — chỉ 1 item tại 1 thời điểm.
+    /// Tracks the clicked index (any button) for highlighting — only one item at a time.
     pub(crate) right_clicked_ix: Rc<Cell<Option<usize>>>,
 }
 
 impl SessionPanel {
-    /// Tạo panel mới — bind vào global [`SshSessionStore`] và observe để
-    /// rebuild tree khi list session thay đổi.
+    /// Create a new panel — bind to the global [`SshSessionStore`] and observe it
+    /// to rebuild the tree when the session list changes.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let store = SshSessionStore::global(cx);
         let tree_state = cx.new(|cx| TreeState::new(cx));
@@ -68,7 +68,7 @@ impl SessionPanel {
         let items = build_tree_items(store.read(cx).sessions(), "");
         tree_state.update(cx, |state, cx| state.set_items(items, cx));
 
-        // Observe store → rebuild tree khi sessions thay đổi (apply search filter).
+        // Observe the store → rebuild the tree when sessions change (apply the search filter).
         cx.observe(&store, |this, store, cx| {
             let query = this.search_state.read(cx).value().to_string();
             let items = build_tree_items(store.read(cx).sessions(), &query);
@@ -79,9 +79,9 @@ impl SessionPanel {
         })
         .detach();
 
-        // Observe search input → debounce 300ms → rebuild tree với filter.
+        // Observe the search input → debounce 300ms → rebuild the tree with the filter.
         cx.observe(&search_state, |this, _state, cx| {
-            // Thay task cũ = cancel (drop Task = cancel) → debounce.
+            // Replacing the old task cancels it (dropping a Task = cancel) → debounce.
             this.search_debounce_task = Some(cx.spawn(async move |this, cx| {
                 cx.background_executor()
                     .timer(Duration::from_millis(300))
@@ -108,12 +108,12 @@ impl SessionPanel {
         }
     }
 
-    /// Helper tạo `Entity<Self>`.
+    /// Helper to create an `Entity<Self>`.
     pub fn new_entity(window: &mut Window, cx: &mut App) -> Entity<Self> {
         cx.new(|cx| Self::new(window, cx))
     }
 
-    /// Action handler: mở dialog "New SSH Session" (tạo mới).
+    /// Action handler: open the "New SSH Session" dialog (create new).
     pub(crate) fn on_new_session(
         &mut self,
         _: &NewSession,

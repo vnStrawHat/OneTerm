@@ -17,6 +17,9 @@ fn main() {
         );
     }
 
-    println!("cargo:rustc-env=ONETERM_UI_ICONS_DIR={}", icons_dir.display());
+    println!(
+        "cargo:rustc-env=ONETERM_UI_ICONS_DIR={}",
+        icons_dir.display()
+    );
     println!("cargo:rerun-if-changed=assets/icons");
 }

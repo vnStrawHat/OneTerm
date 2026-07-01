@@ -1,9 +1,9 @@
-//! SFTP abstraction — trait + types dùng chung cho UI và backend.
+//! SFTP abstraction — trait + types shared by the UI and the backend.
 //!
-//! `core` là leaf crate (không phụ thuộc `ssh`). Trait `SftpBackend` định nghĩa
-//! abstract interface; `ssh` crate implement cho `SftpSession`.
+//! `core` is a leaf crate (does not depend on `ssh`). The `SftpBackend` trait defines
+//! the abstract interface; the `ssh` crate implements it for `SftpSession`.
 //!
-//! UI dùng qua `dyn SftpBackend`, không biết `russh-sftp`.
+//! The UI uses it via `dyn SftpBackend`, with no knowledge of `russh-sftp`.
 
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -12,9 +12,9 @@ use async_channel::Receiver;
 
 use crate::Result;
 
-// ── File entry cho UI rendering ──────────────────────────────
+// ── File entry for UI rendering ──────────────────────────────
 
-/// Một entry trong thư mục (file hoặc folder).
+/// A single entry in a directory (file or folder).
 #[derive(Debug, Clone)]
 pub struct FileEntry {
     pub name: String,
@@ -27,13 +27,13 @@ pub struct FileEntry {
     pub permissions: u32,
     pub uid: Option<u32>,
     pub gid: Option<u32>,
-    /// Owner name (resolved từ /etc/passwd). None nếu không resolve được.
+    /// Owner name (resolved from /etc/passwd). None if it cannot be resolved.
     pub owner: Option<String>,
-    /// Group name (resolved từ /etc/group). None nếu không resolve được.
+    /// Group name (resolved from /etc/group). None if it cannot be resolved.
     pub group: Option<String>,
 }
 
-/// File/folder metadata — cho detail dialog.
+/// File/folder metadata — for the detail dialog.
 #[derive(Debug, Clone)]
 pub struct FileStat {
     pub name: String,
@@ -52,33 +52,33 @@ pub struct FileStat {
 
 // ── SftpBackend trait ────────────────────────────────────────
 
-/// Abstract SFTP backend — implement bởi `ssh` crate.
+/// Abstract SFTP backend — implemented by the `ssh` crate.
 ///
-/// UI dùng qua `dyn SftpBackend`, không biết `russh-sftp`.
-/// Methods sync — bridge sang async bên trong implementation.
+/// The UI uses it via `dyn SftpBackend`, with no knowledge of `russh-sftp`.
+/// Methods are sync — they bridge to async inside the implementation.
 pub trait SftpBackend: Send + Sync + 'static {
-    /// Đọc thư mục — trả về danh sách entry.
+    /// Read a directory — returns the list of entries.
     fn read_dir(&self, path: PathBuf) -> Result<Vec<FileEntry>>;
 
-    /// Lấy metadata chi tiết.
+    /// Get detailed metadata.
     fn stat(&self, path: PathBuf) -> Result<FileStat>;
 
-    /// Đổi tên file/folder.
+    /// Rename a file/folder.
     fn rename(&self, from: PathBuf, to: PathBuf) -> Result<()>;
 
-    /// Xoá file.
+    /// Remove a file.
     fn remove(&self, path: PathBuf) -> Result<()>;
 
-    /// Xoá thư mục rỗng.
+    /// Remove an empty directory.
     fn rmdir(&self, path: PathBuf) -> Result<()>;
 
-    /// Tạo thư mục.
+    /// Create a directory.
     fn mkdir(&self, path: PathBuf) -> Result<()>;
 
-    /// Upload file local → remote.
-    /// `transfer_id` — ID duy nhất do UI tạo, dùng để cancel.
-    /// Trả về progress channel (0.0–1.0) + reply channel (Result<()>).
-    /// UI spawn task poll progress — không block UI thread.
+    /// Upload a file from local → remote.
+    /// `transfer_id` — a unique ID created by the UI, used to cancel.
+    /// Returns a progress channel (0.0–1.0) and a reply channel (Result<()>).
+    /// The UI spawns a task to poll progress — it does not block the UI thread.
     fn upload(
         &self,
         transfer_id: u64,
@@ -86,8 +86,8 @@ pub trait SftpBackend: Send + Sync + 'static {
         remote: PathBuf,
     ) -> (Receiver<f64>, Receiver<Result<()>>);
 
-    /// Download file remote → local.
-    /// Tương tự upload.
+    /// Download a file from remote → local.
+    /// Same as upload.
     fn download(
         &self,
         transfer_id: u64,
@@ -95,13 +95,13 @@ pub trait SftpBackend: Send + Sync + 'static {
         local: PathBuf,
     ) -> (Receiver<f64>, Receiver<Result<()>>);
 
-    /// Hủy transfer đang chạy (upload/download).
-    /// `transfer_id` phải khớp với ID đã truyền vào `upload`/`download`.
+    /// Cancel a running transfer (upload/download).
+    /// `transfer_id` must match the ID passed to `upload`/`download`.
     fn cancel_transfer(&self, transfer_id: u64);
 
-    /// Đóng SFTP session.
+    /// Close the SFTP session.
     fn close(&self);
 
-    /// SFTP còn sống?
+    /// Is the SFTP session still alive?
     fn alive(&self) -> bool;
 }

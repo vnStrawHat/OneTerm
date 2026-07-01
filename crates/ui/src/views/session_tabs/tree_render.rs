@@ -1,6 +1,6 @@
-//! Tree widget rendering — item renderer + context menu cho SessionPanel.
+//! Tree widget rendering — item renderer + context menu for SessionPanel.
 //!
-//! Tách từ `tabs.rs` để giảm độ dài file.
+//! Split out from `tabs.rs` to keep the file shorter.
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{Hsla, IntoElement, MouseButton, ParentElement as _, SharedString, Styled, div, px};
@@ -19,12 +19,12 @@ use super::session_dialog::open_session_dialog;
 use super::tree_builder::{parse_group_id, parse_session_id, session_subtitle};
 
 impl SessionPanel {
-    /// Render tree widget — item renderer + context menu.
+    /// Render the tree widget — item renderer + context menu.
     ///
-    /// Gồm 2 closure lớn:
-    /// 1. Item renderer — render folder (group) hoặc leaf (session) với
-    ///    icon, label, subtitle, mouse handlers.
-    /// 2. Context menu — right-click trên item → menu phù hợp (Open/Delete/Property).
+    /// Contains 2 large closures:
+    /// 1. Item renderer — renders a folder (group) or leaf (session) with
+    ///    icon, label, subtitle, and mouse handlers.
+    /// 2. Context menu — right-click on an item → the appropriate menu (Open/Delete/Property).
     pub(crate) fn render_tree_widget(&self) -> impl IntoElement {
         let store = self.store.clone();
         let right_clicked_ix = self.right_clicked_ix.clone();
@@ -61,7 +61,7 @@ impl SessionPanel {
                                 .child(item.label.clone()),
                         )
                         // Any click (left/right/middle) → highlight only this item.
-                        // Right/Middle cũng set selected_index để clear selection cũ.
+                        // Right/Middle also set selected_index to clear the previous selection.
                         .on_mouse_down(MouseButton::Left, {
                             let right_clicked_ix = right_clicked_ix.clone();
                             move |_, _, _| right_clicked_ix.set(Some(ix))
@@ -104,15 +104,15 @@ impl SessionPanel {
                                 .items_center()
                                 .justify_between()
                                 .gap_1()
-                                // Colored square + Label — căn trái.
+                                // Colored square + Label — left aligned.
                                 .child(
                                     h_flex()
                                         .gap_2()
                                         .items_center()
                                         .min_w_0()
-                                        // Ô vuông màu.
+                                        // Colored square.
                                         .child(div().w(px(8.)).h(px(8.)).bg(color).flex_shrink_0())
-                                        // Label — truncate nếu dài.
+                                        // Label — truncate if long.
                                         .child(
                                             div()
                                                 .text_sm()
@@ -121,7 +121,7 @@ impl SessionPanel {
                                                 .child(item.label.clone()),
                                         ),
                                 )
-                                // user@host:port — căn phải, muted.
+                                // user@host:port — right aligned, muted.
                                 .child(
                                     div()
                                         .text_xs()
@@ -130,7 +130,7 @@ impl SessionPanel {
                                         .child(SharedString::from(subtitle)),
                                 ),
                         )
-                        // Double-click → mở dialog connect SSH.
+                        // Double-click → open the SSH connect dialog.
                         .on_click({
                             let store = store.clone();
                             let id = item.id.clone();
@@ -147,7 +147,7 @@ impl SessionPanel {
                             }
                         })
                         // Any click (left/right/middle) → highlight only this item.
-                        // Right/Middle cũng set selected_index để clear selection cũ.
+                        // Right/Middle also set selected_index to clear the previous selection.
                         .on_mouse_down(MouseButton::Left, {
                             let right_clicked_ix = right_clicked_ix.clone();
                             move |_, _, _| right_clicked_ix.set(Some(ix))
@@ -175,7 +175,7 @@ impl SessionPanel {
             let focus = focus.clone();
             let right_clicked_ix = right_clicked_ix.clone();
             move |ix, entry, menu, _window, _cx| {
-                // Clear highlight cũ, chỉ highlight item được right-click.
+                // Clear the old highlight, highlight only the right-clicked item.
                 right_clicked_ix.set(Some(ix));
                 if entry.is_folder() {
                     // Group folder → context menu: New Session, Property.
@@ -216,7 +216,7 @@ impl SessionPanel {
                             SshSessionStore::global(cx).update(cx, |s, cx| {
                                 s.remove(store_ix, cx);
                             });
-                            window.push_notification("SSH session đã bị xoá.", cx);
+                            window.push_notification("SSH session deleted.", cx);
                         }))
                         .separator()
                         .item(

@@ -1,4 +1,4 @@
-//! Scroll wheel handler cho `LocalTerminalView`.
+//! Scroll wheel handler for `LocalTerminalView`.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -11,7 +11,7 @@ use super::super::element::GridMetrics;
 use super::super::view::LocalTerminalView;
 use crate::state::TerminalSettings;
 
-/// Gắn scroll wheel handler.
+/// Attach the scroll wheel handler.
 pub(crate) fn attach_scroll(
     div: gpui::Stateful<gpui::Div>,
     session: Entity<Box<dyn TerminalSession>>,

@@ -1,11 +1,11 @@
-//! FNV-1a hash 1 display line — detect content change mà Term::damage()
-//! không track.
+//! FNV-1a hash of one display line — detects content changes that
+//! Term::damage() doesn't track.
 
 use alacritty_terminal::vte::ansi::Color;
 
 use oneterm_core::terminal::IndexedCell;
 
-/// Hash bao gồm: char, fg, bg, flags, zerowidth, hyperlink.
+/// Hash includes: char, fg, bg, flags, zerowidth, hyperlink.
 pub(crate) fn line_hash(cells: &[&IndexedCell]) -> u64 {
     const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x100_0000_01b3;

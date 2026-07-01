@@ -1,11 +1,11 @@
-//! `TerminalElement` — custom `gpui::Element` paint grid terminal từ
-//! `TerminalContent` snapshot.
+//! `TerminalElement` — custom `gpui::Element` that paints the terminal grid from
+//! a `TerminalContent` snapshot.
 //!
-//! Module này là orchestrator; chi tiết render nằm trong:
-//! - `element::prepaint` — tính layout state
-//! - `element::paint` — vẽ grid
-//! - `element::measure` — đo font / cell metrics
-//! - `element::gutter` — tính gutter width / entries
+//! This module is the orchestrator; render details live in:
+//! - `element::prepaint` — compute layout state
+//! - `element::paint` — draw the grid
+//! - `element::measure` — measure font / cell metrics
+//! - `element::gutter` — compute gutter width / entries
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -26,9 +26,9 @@ pub(crate) mod measure;
 pub(crate) mod paint;
 pub(crate) mod prepaint;
 
-/// Element paint terminal. Giữ `Entity<Box<dyn TerminalSession>>` để resize
-/// trong prepaint (theo bounds) + snapshot tươi. View truyền entity
-/// clone + theme + font.
+/// Element that paints the terminal. Holds `Entity<Box<dyn TerminalSession>>` to
+/// resize in prepaint (per bounds) + get a fresh snapshot. The View passes a
+/// cloned entity + theme + font.
 pub(crate) struct TerminalElement {
     session: Entity<Box<dyn TerminalSession>>,
     theme: TerminalTheme,
@@ -36,39 +36,39 @@ pub(crate) struct TerminalElement {
     font_size: Pixels,
     line_height_factor: f32,
     focused: bool,
-    /// Có vẽ cursor không (blink logic: true = hiện, false = ẩn giữa blink).
+    /// Whether to draw the cursor (blink logic: true = visible, false = hidden mid-blink).
     cursor_visible: bool,
-    /// Sink layout metrics cho View (mouse/wheel).
+    /// Sink for layout metrics used by the View (mouse/wheel).
     metrics: Rc<RefCell<GridMetrics>>,
-    /// View entity — để đăng ký IME input handler ở paint.
+    /// View entity — to register the IME input handler in paint.
     view: Entity<LocalTerminalView>,
-    /// Focus handle cho `handle_input`.
+    /// Focus handle for `handle_input`.
     focus: gpui::FocusHandle,
-    /// URL đang hover (Ctrl held) — highlight cells trong range.
+    /// URL currently hovered (Ctrl held) — highlight cells in range.
     hovered_url: Option<super::url::DetectedUrl>,
-    /// Ctrl đang held.
+    /// Whether Ctrl is held.
     ctrl_held: bool,
-    /// Bật/tắt gutter (timestamp + line number bên trái terminal).
+    /// Toggle the gutter (timestamp + line number on the left of the terminal).
     pub show_gutter: bool,
-    /// Padding quanh terminal content (top/right/bottom/left px).
+    /// Padding around the terminal content (top/right/bottom/left px).
     padding: crate::state::TerminalPadding,
-    /// Cell width override (None = auto từ font advance).
+    /// Cell width override (None = auto from font advance).
     cell_width_override: Option<f32>,
     /// Cursor color override (None = theme caret).
     cursor_color_override: Option<Hsla>,
-    /// Cursor shape override từ config (Block/Bar/Underline).
-    /// Override snapshot shape từ shell (trừ Hidden) — giống Windows Terminal.
+    /// Cursor shape override from config (Block/Bar/Underline).
+    /// Overrides the snapshot shape from the shell (except Hidden) — like Windows Terminal.
     cursor_shape_override: crate::state::TerminalCursorShape,
-    /// Per-line timestamps for gutter. `line_times[j]` ↔ dòng có absolute index
+    /// Per-line timestamps for gutter. `line_times[j]` ↔ line with absolute index
     /// `line_time_base + j`.
     line_times: Vec<String>,
-    /// Absolute index (0-based) của `line_times[0]`.
+    /// Absolute index (0-based) of `line_times[0]`.
     line_time_base: usize,
-    /// Per-row layout cache — skip recompute cho non-dirty rows.
+    /// Per-row layout cache — skip recompute for non-dirty rows.
     row_cache: Rc<RefCell<RowLayoutCache>>,
-    /// Cached gutter (width, num_digits) — chỉ recompute khi num_digits đổi.
+    /// Cached gutter (width, num_digits) — recompute only when num_digits changes.
     cached_gutter: Rc<RefCell<Option<(Pixels, usize)>>>,
-    /// Last grid size (rows, cols) — persist giữa các frame để tránh resize mỗi frame.
+    /// Last grid size (rows, cols) — persisted between frames to avoid resizing every frame.
     last_grid_size: Rc<RefCell<Option<(u16, u16)>>>,
 }
 

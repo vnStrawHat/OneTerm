@@ -1,8 +1,8 @@
 //! Core box-drawing rect computation (light / heavy / double / tees / crosses).
 
-/// Kiểm tra char có thuộc box-drawing / block / powerline glyphs mà
-/// Windows Terminal AtlasEngine vẽ bằng primitive thay vì font glyph.
-/// Bao gồm: U+2500–U+257F (box drawing), U+2580–U+259F (block elements),
+/// Check whether a char belongs to the box-drawing / block / powerline glyphs
+/// that Windows Terminal AtlasEngine draws with primitives instead of font glyphs.
+/// Includes: U+2500–U+257F (box drawing), U+2580–U+259F (block elements),
 /// U+25AC ▬ (TUI horizontal bar), U+E0B0–U+E0BF (powerline symbols).
 pub(crate) fn is_box_drawing(c: char) -> bool {
     matches!(
@@ -11,17 +11,17 @@ pub(crate) fn is_box_drawing(c: char) -> bool {
     )
 }
 
-/// Góc bo tròn (U+256D–U+2570) — được vẽ bằng path anti-aliased riêng
-/// (`rounded_corner_rects_aa`), không qua `box_drawing_rects`. Dùng để
-/// probe nhanh trong layout thay vì tính geometry chỉ để check rỗng.
+/// Rounded corners (U+256D–U+2570) — drawn with a separate anti-aliased path
+/// (`rounded_corner_rects_aa`), not via `box_drawing_rects`. Used for a quick
+/// probe in layout instead of computing geometry just to check for emptiness.
 pub(crate) fn is_rounded_corner(c: char) -> bool {
     matches!(c, '\u{256D}'..='\u{2570}')
 }
 
-/// Tính geometry (pixel-perfect) cho box-drawing char trong cell.
-/// Trả list rect (x, y, w, h) tính bằng **device pixel** relative tới
-/// cell origin. Caller convert sang logical px khi paint.
-/// Giống AtlasEngine: light = 1 device px, heavy = 2, double = 2 line.
+/// Compute pixel-perfect geometry for a box-drawing char within a cell.
+/// Returns a list of rects (x, y, w, h) in **device pixels** relative to the
+/// cell origin. The caller converts to logical px when painting.
+/// Like AtlasEngine: light = 1 device px, heavy = 2, double = 2 lines.
 pub(crate) fn box_drawing_rects(c: char, cw_d: i32, lh_d: i32) -> Vec<(i32, i32, i32, i32)> {
     let cx = cw_d / 2;
     let cy = lh_d / 2;
@@ -48,13 +48,13 @@ pub(crate) fn box_drawing_rects(c: char, cw_d: i32, lh_d: i32) -> Vec<(i32, i32,
     let x_out_left = (x_out - half_dt).max(0);
     let x_in_left = (x_in - half_dt).min(cw_d - dt);
 
-    // Tất cả stroke được **căn giữa** quanh trục tâm cell: line dày
-    // `thick` chiếm [center - thick/2, center - thick/2 + thick). Nhờ vậy
-    // heavy line (ht ≈ 5px) không bị lệch sang phải (dọc) / xuống dưới
-    // (ngang) và điểm nối với góc bo tròn nằm đúng tâm.
-    //   - `$cy` / `$cx`: trục tâm của line (luôn là `cy` / `cx`).
-    //   - half-line (hr/hl/vd/vu) bắt đầu lùi `thick/2` về phía trục
-    //     vuông góc để khớp với line căn giữa, giữ góc liền khối.
+    // All strokes are **centered** around the cell's center axis: a line of
+    // thickness `thick` occupies [center - thick/2, center - thick/2 + thick).
+    // This keeps a heavy line (ht ≈ 5px) from drifting right (vertical) or
+    // down (horizontal), and the join with a rounded corner sits exactly at center.
+    //   - `$cy` / `$cx`: the line's center axis (always `cy` / `cx`).
+    //   - half-lines (hr/hl/vd/vu) start `thick/2` back toward the
+    //     perpendicular axis to match the centered line, keeping corners solid.
     macro_rules! h {
         ($cy:expr, $thick:expr) => {
             (0, $cy - $thick / 2, cw_d, $thick)

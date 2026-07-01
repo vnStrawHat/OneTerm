@@ -7,7 +7,7 @@ use gpui_component::dock::{DockArea, DockAreaState};
 use super::{MAIN_DOCK_VERSION, SFTP_TABLE_STATE_FIELD, STATE_FILE};
 
 impl super::OneTermWorkspace {
-    /// Load layout từ file — dùng để giữ right dock + settings.
+    /// Load the layout from a file — used to keep right dock + settings.
     pub(crate) fn load_layout(
         dock_area: Entity<DockArea>,
         window: &mut Window,
@@ -52,14 +52,14 @@ impl super::OneTermWorkspace {
     }
 }
 
-/// Save dock state ra file.
+/// Save the dock state to a file.
 ///
-/// `zoomed_panel`: tên panel đang zoom (fullscreen) — inject vào JSON value
-/// của `docks.json` (field `zoomed_panel`). `None` → xoá field (panel không zoom).
-/// `toggle_button_visible`: hiện/ẩn nút expand/collapse trên TabPanel — inject
-/// vào JSON (field `toggle_button_visible`).
-/// Không sửa struct `DockAreaState`.
-/// `trigger`: chuỗi mô tả nguồn kích hoạt ghi (vd "debounce", "on_app_quit",
+/// `zoomed_panel`: name of the panel currently zoomed (fullscreen) — injected into the
+/// JSON value of `docks.json` (field `zoomed_panel`). `None` → removes the field (no panel zoomed).
+/// `toggle_button_visible`: show/hide the expand/collapse button on the TabPanel — injected
+/// into the JSON (field `toggle_button_visible`).
+/// Does not modify the `DockAreaState` struct.
+/// `trigger`: a string describing what triggered the write (e.g. "debounce", "on_app_quit",
 /// "zoom_in", "zoom_out", "reset_center_only", "reset_default_layout").
 pub(crate) fn save_state(
     state: &DockAreaState,
@@ -69,8 +69,8 @@ pub(crate) fn save_state(
 ) -> Result<()> {
     let mut val = serde_json::to_value(state)?;
 
-    // Preserve `sftp_table_state` từ file hiện có trước khi overwrite —
-    // `views/sftp/persistence.rs` quản lý field này độc lập với DockAreaState.
+    // Preserve `sftp_table_state` from the existing file before overwriting —
+    // `views/sftp/persistence.rs` manages this field independently of DockAreaState.
     let mut raw_sftp_state: Option<serde_json::Value> = std::fs::read_to_string(STATE_FILE)
         .ok()
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
@@ -100,9 +100,9 @@ pub(crate) fn save_state(
             serde_json::Value::Bool(toggle_button_visible),
         );
 
-        // Preserve `sftp_table_state` (column widths + visibility) nếu có sẵn
-        // trong file — tránh bị overwrite khi workspace save lại layout.
-        // (Ghi bởi `views/sftp/persistence.rs`.)
+        // Preserve `sftp_table_state` (column widths + visibility) if present in the
+        // file — avoid overwriting it when the workspace re-saves the layout.
+        // (Written by `views/sftp/persistence.rs`.)
         let preserved = raw_sftp_state.take();
         if let Some(v) = preserved {
             obj.insert(SFTP_TABLE_STATE_FIELD.into(), v);
@@ -113,9 +113,9 @@ pub(crate) fn save_state(
     Ok(())
 }
 
-/// Đọc tên panel đang zoom (fullscreen) từ `docks.json` trước khi layout bị
-/// reset (center luôn reset về 1 tab mới). Trả về `None` nếu file không tồn
-/// tại hoặc chưa có panel nào zoom.
+/// Read the name of the zoomed panel (fullscreen) from `docks.json` before the layout
+/// is reset (the center always resets to a new single tab). Returns `None` if the file
+/// does not exist or no panel is zoomed.
 pub(crate) fn read_zoomed_panel() -> Option<String> {
     let raw = std::fs::read_to_string(STATE_FILE).ok()?;
     let val: serde_json::Value = serde_json::from_str(&raw).ok()?;
@@ -124,8 +124,8 @@ pub(crate) fn read_zoomed_panel() -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// Đọc `toggle_button_visible` từ `docks.json`. Trả về `None` nếu file không
-/// tồn tại hoặc chưa có field.
+/// Read `toggle_button_visible` from `docks.json`. Returns `None` if the file does
+/// not exist or the field is missing.
 pub(crate) fn read_toggle_button_visible() -> Option<bool> {
     let raw = std::fs::read_to_string(STATE_FILE).ok()?;
     let val: serde_json::Value = serde_json::from_str(&raw).ok()?;
@@ -190,8 +190,8 @@ mod tests {
 
     #[test]
     fn sftp_table_state_field_coexists_with_dock_state() {
-        // `sftp_table_state` là field JSON inject bởi `views/sftp/persistence.rs`.
-        // Phải không break deserialize `DockAreaState` và phải đọc lại được.
+        // `sftp_table_state` is a JSON field injected by `views/sftp/persistence.rs`.
+        // It must not break `DockAreaState` deserialization and must be readable back.
         let state = DockAreaState::default();
         let mut val = serde_json::to_value(&state).unwrap();
         val.as_object_mut().unwrap().insert(
@@ -208,7 +208,10 @@ mod tests {
 
         let val: serde_json::Value = serde_json::from_str(&json).unwrap();
         let sftp = &val[super::super::SFTP_TABLE_STATE_FIELD];
-        assert_eq!(sftp["column_visibility"]["permissions"].as_bool(), Some(false));
+        assert_eq!(
+            sftp["column_visibility"]["permissions"].as_bool(),
+            Some(false)
+        );
         assert_eq!(sftp["column_widths"]["name"].as_f64(), Some(320.0));
     }
 }

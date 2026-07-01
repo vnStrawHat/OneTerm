@@ -1,4 +1,4 @@
-//! Vi mode key handling cho `LocalTerminalView`.
+//! Vi mode key handling for `LocalTerminalView`.
 
 use gpui::{App, ClipboardItem, Entity};
 
@@ -6,7 +6,7 @@ use alacritty_terminal::selection::SelectionType;
 use oneterm_core::TerminalSession;
 use oneterm_core::terminal::TerminalMouseButton;
 
-/// Xử lý toggle vi mode.
+/// Toggle vi mode.
 pub fn toggle_vi_mode(
     session: &Entity<Box<dyn TerminalSession>>,
     view: &Entity<super::super::view::LocalTerminalView>,
@@ -29,8 +29,8 @@ pub fn toggle_vi_mode(
     });
 }
 
-/// Xử lý phím trong vi mode.
-/// Trả `true` nếu key đã được consume.
+/// Handle a key press in vi mode.
+/// Returns `true` if the key was consumed.
 pub fn handle_vi_key(
     key: &str,
     _key_char: &str,
@@ -238,7 +238,7 @@ pub fn handle_vi_key(
     }
 }
 
-/// Update vi selection nếu đang selecting.
+/// Update the vi selection while selecting.
 pub fn update_vi_selection(
     session: &Entity<Box<dyn TerminalSession>>,
     view: &Entity<super::super::view::LocalTerminalView>,

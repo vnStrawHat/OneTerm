@@ -13,8 +13,8 @@ use super::super::theme::TerminalTheme;
 use super::super::url::DetectedUrl;
 use super::types::{BatchedTextRun, BoxDrawCell, LayoutPoint, LayoutRect, RowLayout};
 
-/// Layout 1 display row — build rects + text runs + box draws cho cells
-/// trên cùng 1 dòng.
+/// Lay out a single display row — build rects + text runs + box draws for the
+/// cells on one line.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn layout_row(
     line_cells: Vec<&IndexedCell>,

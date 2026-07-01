@@ -1,11 +1,11 @@
-//! Build terminal GPUI font từ settings.
+//! Build the terminal GPUI font from settings.
 
 use gpui::SharedString;
 
 use crate::state::TerminalSettings;
 
 impl super::LocalTerminalView {
-    /// Build GPUI Font từ terminal settings.
+    /// Build a GPUI Font from terminal settings.
     pub(crate) fn font(
         &self,
         settings: &TerminalSettings,

@@ -1,4 +1,4 @@
-//! Mouse handlers cho `LocalTerminalView`.
+//! Mouse handlers for `LocalTerminalView`.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -15,7 +15,7 @@ use super::super::url::detect_url_at;
 use super::super::view::LocalTerminalView;
 use super::map_button;
 
-/// Gắn mouse handlers: down / move / up / modifiers.
+/// Attach mouse handlers: down / move / up / modifiers.
 pub(crate) fn attach_mouse(
     div: gpui::Stateful<gpui::Div>,
     session: Entity<Box<dyn TerminalSession>>,
@@ -31,7 +31,7 @@ pub(crate) fn attach_mouse(
                 Some(rc) => rc,
                 None => return,
             };
-            // Ctrl+click → mở URL (OSC 8 hyperlink hoặc plain text URL).
+            // Ctrl+click → open URL (OSC 8 hyperlink or plain-text URL).
             if e.modifiers.control {
                 let snap = s.read(cx).snapshot();
                 if let Some(url) = detect_url_at(
@@ -52,7 +52,7 @@ pub(crate) fn attach_mouse(
                     LocalTerminalView::sel_type(e.click_count, e.modifiers.alt),
                 )
             });
-            // Trigger re-render để vẽ selection highlight.
+            // Trigger a re-render to draw the selection highlight.
             let _ = view.update(cx, |v, cx| {
                 v.last_scroll_time = Some(std::time::Instant::now());
                 cx.notify();
@@ -64,9 +64,9 @@ pub(crate) fn attach_mouse(
         let m = metrics.clone();
         let view = view.clone();
         move |e: &MouseMoveEvent, _w, cx: &mut App| {
-            // Scrollbar drag: check TRƯỚC selection.
+            // Scrollbar drag: check this BEFORE selection.
             if view.read(cx).scrollbar_drag_start.is_some() {
-                // Mouse ra ngoài terminal + nhả chuột → clear drag.
+                // Mouse left the terminal and button released → clear drag.
                 if e.pressed_button != Some(MouseButton::Left) {
                     let _ = view.update(cx, |v, cx| {
                         v.scrollbar_drag_start = None;
@@ -74,7 +74,7 @@ pub(crate) fn attach_mouse(
                     });
                     return;
                 }
-                // e.position là tọa độ window → trừ terminal origin.
+                // e.position is window coordinates → subtract the terminal origin.
                 let track_y = {
                     let gm = m.borrow();
                     match gm.bounds {

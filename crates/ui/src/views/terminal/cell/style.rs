@@ -1,4 +1,4 @@
-//! Build `TextRun` cho cell (bold/italic/underline/strikethrough).
+//! Build a `TextRun` for a cell (bold/italic/underline/strikethrough).
 
 use alacritty_terminal::term::cell::Cell;
 use gpui::{Font, FontStyle, FontWeight, TextRun, UnderlineStyle};

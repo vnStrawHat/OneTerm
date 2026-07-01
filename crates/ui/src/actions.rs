@@ -1,10 +1,10 @@
-//! UI-level actions cho OneTerm.
+//! UI-level actions for OneTerm.
 
 use gpui::{SharedString, actions};
 use gpui_component::{ThemeMode, dock::DockPlacement};
 use serde::Deserialize;
 
-/// Thêm một panel mới vào dock ở placement đã cho.
+/// Add a new panel to the dock at the given placement.
 #[derive(Clone, PartialEq, Eq, Deserialize, gpui::Action)]
 #[action(namespace = oneterm, no_json)]
 pub struct AddPanel(pub DockPlacement);
@@ -12,39 +12,39 @@ pub struct AddPanel(pub DockPlacement);
 actions!(
     oneterm,
     [
-        /// Thoát ứng dụng.
+        /// Quit the application.
         Quit,
-        /// Mở hộp thoại About.
+        /// Open the About dialog.
         About,
-        /// Bật/tắt dock toggle button.
+        /// Toggle the dock toggle button.
         ToggleDockToggleButton,
-        /// Bật/tắt gutter (timestamp + line number) trong terminal.
+        /// Toggle the gutter (timestamp + line number) in the terminal.
         ToggleGutter,
-        /// Thêm một SessionPanel mới vào right dock.
+        /// Add a new SessionPanel to the right dock.
         AddSession,
-        /// Thêm một SftpPanel mới vào right dock.
+        /// Add a new SftpPanel to the right dock.
         AddSftpBrowser,
-        /// Mở dialog tạo SSH session mới (lưu vào `ssh_session.json`).
+        /// Open the dialog to create a new SSH session (saved to `ssh_session.json`).
         NewSession,
     ]
 );
 
-/// Action chọn cỡ font UI (dùng cho `FontSizeSelector`).
+/// Action to select the UI font size (used by `FontSizeSelector`).
 #[derive(Clone, PartialEq, Eq, Deserialize, gpui::Action)]
 #[action(namespace = oneterm, no_json)]
 pub struct SelectFont(pub usize);
 
-/// Đổi ngôn ngữ UI.
+/// Change the UI language.
 #[derive(Clone, PartialEq, Eq, Deserialize, gpui::Action)]
 #[action(namespace = oneterm, no_json)]
 pub struct SelectLocale(pub SharedString);
 
-/// Đổi theme (theo tên đăng ký trong `ThemeRegistry`).
+/// Switch theme (by name registered in `ThemeRegistry`).
 #[derive(Clone, PartialEq, gpui::Action)]
 #[action(namespace = oneterm, no_json)]
 pub struct SwitchTheme(pub SharedString);
 
-/// Đổi mode theme (Light/Dark).
+/// Switch theme mode (Light/Dark).
 #[derive(Clone, PartialEq, gpui::Action)]
 #[action(namespace = oneterm, no_json)]
 pub struct SwitchThemeMode(pub ThemeMode);

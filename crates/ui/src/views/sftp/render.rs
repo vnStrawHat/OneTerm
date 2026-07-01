@@ -1,14 +1,17 @@
-//! `impl Render for SftpPanel` + render helpers cho layout chính
+//! `impl Render for SftpPanel` + render helpers for the main layout
 //! (toolbar, transfer queue, file list).
 //!
-//! File list render bằng `gpui_component::table::DataTable` — thay thế
-//! render thủ công header + rows trong `render_list.rs` (đã xoá).
+//! The file list is rendered with `gpui_component::table::DataTable` — replacing
+//! the manual header + rows rendering in `render_list.rs` (removed).
 
-use gpui::{
-    Context, ExternalPaths, Focusable as _, InteractiveElement as _, IntoElement,
-    ParentElement, Render, Styled, Window, div,
-};
+use super::panel::SftpPanel;
+use super::types::{PendingAction, SortColumn};
+use crate::icon::AppIcon;
 use gpui::prelude::FluentBuilder as _;
+use gpui::{
+    Context, ExternalPaths, Focusable as _, InteractiveElement as _, IntoElement, ParentElement,
+    Render, Styled, Window, div,
+};
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
@@ -18,9 +21,6 @@ use gpui_component::{
     table::DataTable,
     v_flex,
 };
-use crate::icon::AppIcon;
-use super::panel::SftpPanel;
-use super::types::{PendingAction, SortColumn};
 
 impl Render for SftpPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -44,7 +44,7 @@ impl Render for SftpPanel {
             return self.render_no_connection(cx).into_any_element();
         }
 
-        // Sync path input value với cwd (chỉ khi input không đang focus).
+        // Sync the path input value with cwd (only when the input is not focused).
         let cwd_display = self.cwd.display().to_string();
         let path_focused = self.path_input.read(cx).focus_handle(cx).is_focused(window);
         let path_value = self.path_input.read(cx).value().to_string();
@@ -69,7 +69,7 @@ impl Render for SftpPanel {
 }
 
 impl SftpPanel {
-    /// Render khi không có SFTP connection.
+    /// Render when there is no SFTP connection.
     fn render_no_connection(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("sftp-panel")
@@ -84,16 +84,16 @@ impl SftpPanel {
 
     /// Render toolbar — path input (flex-1) + back, refresh, "..." (right-aligned).
     ///
-    /// Path input hiển thị cwd, Enter → goto path (highlight lỗi nếu không tồn tại).
-    /// "..." button mở popup menu: New Folder, Upload, Download, Rename, Delete,
+    /// The path input shows cwd; Enter → goto path (highlights an error if it doesn't exist).
+    /// The "..." button opens a popup menu: New Folder, Upload, Download, Rename, Delete,
     /// Properties, separator, Columns config (checkbox).
     fn render_toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
-        // Border color cho path input:
-        // - Error → theme.danger (luôn, ngay cả khi focus)
-        // - Focused (no error) → KHÔNG override, để Input.focused_border(cx)
-        //   tự set border_color = theme.ring (focus highlight)
+        // Border color for the path input:
+        // - Error → theme.danger (always, even when focused)
+        // - Focused (no error) → do NOT override, so Input.focused_border(cx)
+        //   sets border_color = theme.ring (focus highlight)
         // - Default → theme.border
         let path_focused = self.path_input.read(cx).focus_handle(cx).is_focused(window);
         let show_custom_border = self.path_error || !path_focused;
@@ -213,7 +213,7 @@ impl SftpPanel {
                     )
                     .separator();
 
-                // Columns config — checkbox cho mỗi cột (Name luôn checked + disabled).
+                // Columns config — a checkbox for each column (Name is always checked + disabled).
                 for (col, label, visible) in &col_configs {
                     let is_name = *col == SortColumn::Name;
                     let item = PopupMenuItem::new(label.clone())
@@ -278,13 +278,13 @@ impl SftpPanel {
                         this.refresh(cx);
                     })),
             )
-            // "..." button — popup menu với toolbar actions + Columns config.
+            // "..." button — popup menu with toolbar actions + Columns config.
             .child(more_btn)
     }
 
-    /// Render file list — DataTable (hoặc error message).
+    /// Render file list — DataTable (or error message).
     ///
-    /// Loading + empty state được DataTable tự xử lý qua delegate
+    /// Loading + empty states are handled by DataTable itself via the delegate
     /// (`loading()`, `render_empty`).
     fn render_file_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
@@ -312,11 +312,9 @@ impl SftpPanel {
                     .small(),
             )
             // Drag & drop external files → upload to remote cwd.
-            .can_drop(|drag, _window, _cx| {
-                drag.is::<ExternalPaths>()
-            })
-            .on_drop(cx.listener(
-                move |this, external_paths: &ExternalPaths, _window, cx| {
+            .can_drop(|drag, _window, _cx| drag.is::<ExternalPaths>())
+            .on_drop(
+                cx.listener(move |this, external_paths: &ExternalPaths, _window, cx| {
                     let paths: Vec<_> = external_paths.paths().to_vec();
                     log::info!(
                         "SftpPanel: on_drop — {} external path(s) dropped",
@@ -327,8 +325,8 @@ impl SftpPanel {
                     } else {
                         log::warn!("SftpPanel: on_drop — no SFTP connection, ignoring");
                     }
-                },
-            ))
+                }),
+            )
             .into_any_element()
     }
 }

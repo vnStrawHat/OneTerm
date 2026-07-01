@@ -1,35 +1,35 @@
-//! Build script — nhúng app icon + copy runtime assets (conpty.dll, OpenConsole.exe).
+//! Build script — embeds the app icon and copies runtime assets (conpty.dll, OpenConsole.exe).
 //!
-//! Trách nhiệm:
-//! 1. Biên dịch `assets/oneterm.rc` → file `.res` liên kết vào exe (oneterm-debug ở dev, oneterm ở release),
-//!    nhúng app icon (48px + 96px) + VS_VERSION_INFO. Chỉ Windows.
-//! 2. Copy `conpty.dll` + `x64/OpenConsole.exe` ra thư mục target để chạy kèm exe.
+//! Responsibilities:
+//! 1. Compile `assets/oneterm.rc` into a `.res` file linked into the exe
+//!    (oneterm-debug in dev, oneterm in release), embedding the app icon
+//!    (48px + 96px) and VS_VERSION_INFO. Windows only.
+//! 2. Copy `conpty.dll` + `x64/OpenConsole.exe` to the target directory so they ship with the exe.
 //!
-//! alacritty_terminal tự load conpty.dll (qua LoadLibraryW) nếu tìm thấy
-//! trong thư mục của exe hoặc PATH. conpty.dll dùng OpenConsole.exe
-//! (từ Windows Terminal project) thay cho system conhost.exe →
-//! ConPTY xử lý Ctrl+C đúng cách: signal chỉ đến child process,
-//! không exit shell, không exit OneTerm.
+//! alacritty_terminal loads conpty.dll itself (via LoadLibraryW) if found in the exe's
+//! directory or on PATH. conpty.dll uses OpenConsole.exe (from the Windows Terminal
+//! project) instead of the system conhost.exe, so ConPTY handles Ctrl+C correctly:
+//! the signal reaches only the child process and does not exit the shell or OneTerm.
 //!
-//! Cấu trúc sau build:
-//!   target/debug/oneterm-debug.exe   (dev bin; gated bởi feature dev-bin)
-//!   target/release/oneterm.exe       (release bin; gated bởi feature release-bin)
+//! Layout after build:
+//!   target/debug/oneterm-debug.exe   (dev bin; gated by the dev-bin feature)
+//!   target/release/oneterm.exe       (release bin; gated by the release-bin feature)
 //!   target/{debug,release}/conpty.dll
 //!   target/{debug,release}/x64/OpenConsole.exe
 
 use std::path::PathBuf;
 
 fn main() {
-    // Toàn bộ logic chỉ chạy trên Windows.
+    // All logic runs on Windows only.
     #[cfg(target_os = "windows")]
     {
         let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
         let assets_dir = manifest_dir.join("assets");
 
-        // ── 1. Nhúng app icon + version info qua resource script ───────────
+        // ── 1. Embed app icon + version info via the resource script ───────
         //
-        // embed-resource tự tìm rc.exe (MSVC) hoặc windres (GNU).
-        // Path trong .rc là tương đối so với vị trí file .rc (assets/).
+        // embed-resource finds rc.exe (MSVC) or windres (GNU) automatically.
+        // Paths in the .rc file are relative to the .rc file's location (assets/).
         let rc = assets_dir.join("oneterm.rc");
         if rc.exists() {
             if let Err(e) = embed_resource::compile(&rc, embed_resource::NONE).manifest_required() {
@@ -40,9 +40,9 @@ fn main() {
             }
         }
 
-        // ── 2. Copy runtime assets ra thư mục target ───────────────────────
+        // ── 2. Copy runtime assets to the target directory ────────────────
         //
-        // Target directory = OUT_DIR lên 3 cấp
+        // Target directory = OUT_DIR up 3 levels
         // (target/debug/build/<hash>/out → target/debug).
         let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
         let target_dir = out_dir.ancestors().nth(3).unwrap().to_path_buf();
@@ -66,7 +66,7 @@ fn main() {
             }
         }
 
-        // Re-run build script khi assets / resource thay đổi.
+        // Re-run the build script when assets / resources change.
         println!("cargo:rerun-if-changed=assets/oneterm.rc");
         println!("cargo:rerun-if-changed=assets/icons/terminal-48x48.ico");
         println!("cargo:rerun-if-changed=assets/icons/terminal-96x96.ico");

@@ -1,6 +1,6 @@
-//! Mở window chính + gắn Root.
+//! Open the main window and attach the Root.
 //!
-//! Mirror `reference/.../story/examples/dock.rs` `StoryWorkspace::new_local`.
+//! Mirrors `reference/.../story/examples/dock.rs` `StoryWorkspace::new_local`.
 
 use gpui::{
     App, AppContext, Bounds, Size, Task, WindowBounds, WindowHandle, WindowKind, WindowOptions, px,
@@ -10,7 +10,7 @@ use gpui_component::{Root, TitleBar};
 
 use oneterm_ui::layout::{OneTermWorkspace, save_dock_state_on_close};
 
-/// Mở window chính, trả về task handle.
+/// Open the main window and return its task handle.
 pub fn open_window(cx: &mut App) -> Task<anyhow::Result<WindowHandle<Root>>> {
     let mut window_size = size(px(1600.0), px(1000.0));
     if let Some(display) = cx.primary_display() {

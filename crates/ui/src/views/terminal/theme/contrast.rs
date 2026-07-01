@@ -1,6 +1,6 @@
 //! WCAG contrast helpers.
 
-/// Relative luminance (WCAG) từ `Hsla`.
+/// Relative luminance (WCAG) from `Hsla`.
 fn relative_luminance(c: gpui::Hsla) -> f32 {
     let rgba = c.to_rgb();
     let lin = |ch: f32| {
@@ -16,7 +16,7 @@ fn relative_luminance(c: gpui::Hsla) -> f32 {
     0.2126 * r + 0.7152 * g + 0.0722 * b
 }
 
-/// WCAG contrast ratio giữa hai màu (≥1.0).
+/// WCAG contrast ratio between two colors (≥1.0).
 pub fn contrast_ratio(a: gpui::Hsla, b: gpui::Hsla) -> f32 {
     let la = relative_luminance(a);
     let lb = relative_luminance(b);
@@ -24,7 +24,7 @@ pub fn contrast_ratio(a: gpui::Hsla, b: gpui::Hsla) -> f32 {
     (hi + 0.05) / (lo + 0.05)
 }
 
-/// Điều chỉnh `fg` để đạt contrast ≥ `min` với `bg`.
+/// Adjust `fg` to reach a contrast ≥ `min` against `bg`.
 pub fn ensure_minimum_contrast(fg: gpui::Hsla, bg: gpui::Hsla, min: f32) -> gpui::Hsla {
     if contrast_ratio(fg, bg) >= min || min <= 1.0 {
         return fg;

@@ -1,6 +1,6 @@
-//! Per-cell rendering helpers cho `TerminalElement`.
+//! Per-cell rendering helpers for `TerminalElement`.
 //!
-//! Module gốc `terminal_element_cell.rs` đã được tách thành các file con.
+//! The original `terminal_element_cell.rs` module has been split into submodules.
 
 pub(crate) mod batch;
 pub(crate) mod blank;

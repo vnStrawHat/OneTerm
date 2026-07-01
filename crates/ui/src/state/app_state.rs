@@ -1,7 +1,7 @@
-//! AppState — state toàn cục của OneTerm.
+//! AppState — OneTerm's global state.
 //!
-//! Skeleton: chưa có state chia sẻ. Sau này chứa danh sách host,
-//! session state, ui_state (vd. `invisible_panels`).
+//! Skeleton: no shared state yet. Will later hold the host list,
+//! session state, and ui_state (e.g. `invisible_panels`).
 
 use std::sync::{Arc, Mutex};
 
@@ -9,36 +9,36 @@ use gpui::{App, AppContext, Entity, Global, WeakEntity};
 use gpui_component::dock::DockArea;
 use oneterm_core::SftpBackend;
 
-/// State toàn cục của ứng dụng.
+/// The application's global state.
 #[derive(Default)]
 pub struct AppState {
-    /// Tham chiếu yếu tới DockArea — dùng cho dialog connect SSH
-    /// (thêm terminal tab sau khi kết nối thành công).
-    /// Set trong `OneTermWorkspace::new` sau khi DockArea được tạo.
+    /// Weak reference to the DockArea — used by the SSH connect dialog
+    /// (adds a terminal tab after a successful connection).
+    /// Set in `OneTermWorkspace::new` after the DockArea is created.
     pub dock_area: Option<WeakEntity<DockArea>>,
-    /// Mirror trạng thái zoom (tên panel đang fullscreen) — chia sẻ với
-    /// `on_release` callback trong `window.rs` để save khi close window.
+    /// Mirror of the zoom state (name of the fullscreen panel) — shared with the
+    /// `on_release` callback in `window.rs` to save on window close.
     pub zoomed_panel: Option<Arc<Mutex<Option<String>>>>,
-    /// Mirror toggle_button_visible — chia sẻ với `on_release` callback.
+    /// Mirror of toggle_button_visible — shared with the `on_release` callback.
     pub toggle_button_visible: Option<Arc<std::sync::atomic::AtomicBool>>,
-    /// SFTP backend của terminal tab đang active.
-    /// `None` = tab active không có SFTP (local shell hoặc SSH không hỗ trợ SFTP).
-    /// Set bởi `TerminalPanel::set_active(true)` — khi tab đổi, ghi đè giá trị cũ.
+    /// SFTP backend of the active terminal tab.
+    /// `None` = the active tab has no SFTP (local shell or an SSH that does not support SFTP).
+    /// Set by `TerminalPanel::set_active(true)` — overwrites the old value when the tab changes.
     pub active_sftp: Option<Arc<dyn SftpBackend>>,
 }
 
-/// Global wrapper cho `Entity<AppState>`.
+/// Global wrapper for `Entity<AppState>`.
 pub struct AppStateGlobal(pub Entity<AppState>);
 
 impl Global for AppStateGlobal {}
 
 impl AppState {
-    /// Lấy `Entity<AppState>` toàn cục (panic nếu chưa init).
+    /// Get the global `Entity<AppState>` (panics if not initialized).
     pub fn global(cx: &App) -> Entity<Self> {
         cx.global::<AppStateGlobal>().0.clone()
     }
 
-    /// Khởi tạo AppState toàn cục.
+    /// Initialize the global AppState.
     pub fn init(cx: &mut App) {
         let state = cx.new(|_| Self::default());
         cx.set_global(AppStateGlobal(state));

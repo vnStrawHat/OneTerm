@@ -1,16 +1,17 @@
 //! Rounded corner primitives (U+256D–U+2570) — anti-aliased.
 
-/// Vẽ góc bo tròn (U+256D-U+2570) bằng cung tròn (quarter-circle)
-/// với anti-aliasing (supersample 4x4). Trả (x, y, w, h, alpha) với
-/// alpha = độ phủ (coverage) của pixel.
+/// Draw a rounded corner (U+256D-U+2570) using a quarter-circle arc with
+/// anti-aliasing (4x4 supersampling). Returns (x, y, w, h, alpha) where
+/// alpha = the pixel's coverage.
 ///
-/// Stroke của góc bo tròn phải **trùng khít** với đường thẳng light
-/// trong `box_drawing_rects`: cùng độ dày `w = round(cw/6)` và cùng vị
-/// trí bắt đầu tại tâm cell (`cx`, `cy`). Cụ thể line thẳng dùng:
-///   - dọc  │ : x ∈ [cx, cx + w)
-///   - ngang ─: y ∈ [cy, cy + w)
-/// Nếu góc lệch vị trí/độ dày so với line, cạnh ngang/dọc của các cell
-/// kề bên sẽ không nối liền với góc (xuất hiện khe hở / gấp khúc).
+/// The rounded-corner stroke must **align exactly** with the light straight
+/// line in `box_drawing_rects`: same thickness `w = round(cw/6)` and same
+/// start position at the cell center (`cx`, `cy`). Specifically the straight
+/// line uses:
+///   - vertical   │ : x ∈ [cx, cx + w)
+///   - horizontal ─ : y ∈ [cy, cy + w)
+/// If the corner's position/thickness differs from the line, the horizontal/
+/// vertical edges of adjacent cells won't connect to the corner (gaps / kinks appear).
 pub(crate) fn rounded_corner_rects_aa(
     c: char,
     cw_d: i32,
@@ -18,20 +19,20 @@ pub(crate) fn rounded_corner_rects_aa(
 ) -> Vec<(i32, i32, i32, i32, f32)> {
     let cx = cw_d / 2;
     let cy = lh_d / 2;
-    // Độ dày light — giống hệt `t` trong `box_drawing_rects` để arm
-    // dọc/ngang của góc khớp với line │ ─ ở cell kề.
+    // Light thickness — identical to `t` in `box_drawing_rects` so the corner's
+    // vertical/horizontal arms align with the │ ─ lines of adjacent cells.
     let w = (cw_d as f32 / 6.0).round().max(1.0) as i32;
-    // Arm **căn giữa** quanh trục tâm cell, giống hệt vd!/hr! của line
-    // thẳng (đều dùng `center - thick/2`). Nhờ vậy điểm nối góc bo tròn
-    // với line dọc/ngang nằm đúng tâm.
+    // Arms **centered** around the cell's center axis, identical to the vd!/hr!
+    // of the straight line (both use `center - thick/2`). This makes the join
+    // between the rounded corner and the vertical/horizontal line sit exactly at center.
     let hw = w / 2;
     let xlo = (cx - hw) as f32;
     let xhi = (cx - hw + w) as f32;
     let ylo = (cy - hw) as f32;
     let yhi = (cy - hw + w) as f32;
-    // Bán kính ngoài: đủ nhỏ để chừa arm thẳng chạm mép phải/dưới cell
-    // (arc_c{x,y} = {xlo,ylo} + r_out phải < {cw_d, lh_d}), đủ lớn để
-    // còn annulus dày `w`.
+    // Outer radius: small enough to leave the straight arm reaching the right/bottom
+    // edge of the cell (arc_c{x,y} = {xlo,ylo} + r_out must be < {cw_d, lh_d}), large
+    // enough to still leave an annulus of thickness `w`.
     let r_out = ((cx.min(cy) - 1).max(w + 1)) as f32;
     let r_in = (r_out - w as f32).max(0.0);
 

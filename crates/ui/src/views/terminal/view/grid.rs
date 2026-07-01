@@ -7,7 +7,7 @@ use super::LocalTerminalView;
 use crate::views::terminal::element::GridMetrics;
 
 impl LocalTerminalView {
-    /// Convert pixel position → (row, col) display (0-based từ top viewport).
+    /// Convert a pixel position → (row, col) display coords (0-based from top of viewport).
     pub(crate) fn pixel_to_grid(metrics: &GridMetrics, pos: Point<Pixels>) -> Option<(f32, f32)> {
         let b = metrics.bounds?;
         if f32::from(metrics.cell_width) == 0.0 || f32::from(metrics.line_height) == 0.0 {
@@ -23,7 +23,7 @@ impl LocalTerminalView {
         Some((row, col))
     }
 
-    /// Selection type theo click count + alt.
+    /// Selection type based on click count + alt.
     pub(crate) fn sel_type(click_count: usize, alt: bool) -> SelectionType {
         if alt {
             SelectionType::Block

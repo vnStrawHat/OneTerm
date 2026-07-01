@@ -89,7 +89,7 @@ mod tests {
         let fg = gpui::hsla(0.0, 0.0, 0.5, 1.0);
         let bg = gpui::hsla(0.0, 0.0, 0.5, 1.0);
         let out = ensure_minimum_contrast(fg, bg, 4.5);
-        assert!(out.l != 0.5, "lightness phải đổi");
+        assert!(out.l != 0.5, "lightness must change");
         assert!(contrast_ratio(out, bg) >= 4.4);
     }
 
@@ -98,6 +98,6 @@ mod tests {
         let fg = Hsla::white();
         let bg = Hsla::black();
         let out = ensure_minimum_contrast(fg, bg, 4.5);
-        assert_eq!(out, fg, "đã đủ contrast → giữ nguyên");
+        assert_eq!(out, fg, "already enough contrast → unchanged");
     }
 }

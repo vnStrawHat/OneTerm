@@ -37,7 +37,7 @@ pub fn default_terminal_font_fallbacks() -> Vec<SharedString> {
     }
 }
 
-/// Parse font weight từ string → FontWeight.
+/// Parse a font weight from a string → FontWeight.
 pub fn parse_weight(s: &str) -> FontWeight {
     match s.to_ascii_lowercase().as_str() {
         "thin" => FontWeight::THIN,

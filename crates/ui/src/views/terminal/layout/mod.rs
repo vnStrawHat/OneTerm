@@ -1,6 +1,6 @@
-//! Layout state + cache + per-row layout cho `TerminalElement`.
+//! Layout state + cache + per-row layout for `TerminalElement`.
 //!
-//! File gốc `terminal_element_layout.rs` đã được tách thành `terminal/layout/`.
+//! The original `terminal_element_layout.rs` was split into `terminal/layout/`.
 
 pub(crate) mod cache;
 pub(crate) mod row;

@@ -1,12 +1,12 @@
 //! SSH session store — load/save `ssh_session.json`.
 //!
-//! Danh sách SSH session (label, host, port, username, group) được persist
-//! vào file `ssh_session.json`. Khi app khởi động, store load file để render
-//! list trong [`crate::views::SessionPanel`]. Khi user thêm session mới qua
-//! "New Session" dialog, store update + save lại file.
+//! The list of SSH sessions (label, host, port, username, group) is persisted to
+//! `ssh_session.json`. On startup, the store loads the file to render the list in
+//! [`crate::views::SessionPanel`]. When the user adds a new session via the
+//! "New Session" dialog, the store updates and re-saves the file.
 //!
 //! Path: `target/ssh_session.json` (debug) / `ssh_session.json` (release)
-//! — cùng pattern với `terminal.json` và `docks.json`.
+//! — same pattern as `terminal.json` and `docks.json`.
 
 use std::path::PathBuf;
 
@@ -22,23 +22,23 @@ const SESSION_FILE: &str = "ssh_session.json";
 
 // ── SshSession ───────────────────────────────────────────────────────
 
-/// Một SSH session entry — lưu trong `ssh_session.json`.
+/// A single SSH session entry — stored in `ssh_session.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SshSession {
-    /// Nhãn hiển thị trong SessionPanel.
+    /// Display label in the SessionPanel.
     pub label: String,
-    /// Hostname hoặc IP.
+    /// Hostname or IP.
     pub host: String,
-    /// Cổng SSH (mặc định 22).
+    /// SSH port (default 22).
     #[serde(default = "default_port")]
     pub port: u16,
-    /// Username (optional — có thể nhập lúc connect).
+    /// Username (optional — can be entered at connect time).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
-    /// Màu hiển thị (hex string, vd "#58c4dc"). Optional.
+    /// Display color (hex string, e.g. "#58c4dc"). Optional.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
-    /// Nhóm (optional — dùng để gom session trong Tree).
+    /// Group (optional — used to group sessions in the Tree).
     pub group: Option<String>,
 }
 
@@ -47,36 +47,36 @@ fn default_port() -> u16 {
 }
 
 impl SshSession {
-    /// Port mặc định của SSH.
+    /// Default SSH port.
     pub const DEFAULT_PORT: u16 = 22;
 }
 
 // ── Store ────────────────────────────────────────────────────────────
 
-/// Store toàn cục chứa danh sách [`SshSession`].
+/// Global store holding the list of [`SshSession`].
 ///
-/// Load từ `ssh_session.json` lúc `init`, save khi thêm session mới.
-/// Render qua [`crate::views::SessionPanel`] — panel `observe` entity này
-/// để re-render khi list thay đổi.
+/// Loaded from `ssh_session.json` at `init`, saved when a new session is added.
+/// Rendered via [`crate::views::SessionPanel`] — the panel observes this entity
+/// to re-render when the list changes.
 pub struct SshSessionStore {
     sessions: Vec<SshSession>,
 }
 
 impl SshSessionStore {
-    /// Danh sách session (immutable).
+    /// The session list (immutable).
     pub fn sessions(&self) -> &[SshSession] {
         &self.sessions
     }
 
-    /// Thêm 1 session mới + lưu file + notify observers.
+    /// Add a new session + save the file + notify observers.
     pub fn add(&mut self, session: SshSession, cx: &mut gpui::Context<Self>) {
         self.sessions.push(session);
         cx.notify();
         self.save();
     }
 
-    /// Cập nhật session tại `index` + lưu file + notify observers.
-    /// Nếu `index` ngoài range thì no-op.
+    /// Update the session at `index` + save the file + notify observers.
+    /// No-op if `index` is out of range.
     pub fn update(&mut self, index: usize, session: SshSession, cx: &mut gpui::Context<Self>) {
         if let Some(slot) = self.sessions.get_mut(index) {
             *slot = session;
@@ -85,9 +85,9 @@ impl SshSessionStore {
         }
     }
 
-    /// Đổi tên group — cập nhật tất cả session có `group == old_name`
-    /// thành `new_name` + lưu file + notify observers.
-    /// Nếu `new_name` rỗng (hoặc chỉ whitespace) → set group = None (ungroup).
+    /// Rename a group — update all sessions with `group == old_name` to `new_name`
+    /// + save the file + notify observers.
+    /// If `new_name` is empty (or whitespace only) → set group = None (ungroup).
     pub fn rename_group(&mut self, old_name: &str, new_name: &str, cx: &mut gpui::Context<Self>) {
         let new_group = if new_name.trim().is_empty() {
             None
@@ -106,8 +106,8 @@ impl SshSessionStore {
             self.save();
         }
     }
-    /// Xoá session tại `index` + lưu file + notify observers.
-    /// Nếu `index` ngoài range thì no-op.
+    /// Remove the session at `index` + save the file + notify observers.
+    /// No-op if `index` is out of range.
     pub fn remove(&mut self, index: usize, cx: &mut gpui::Context<Self>) {
         if index < self.sessions.len() {
             self.sessions.remove(index);
@@ -116,8 +116,8 @@ impl SshSessionStore {
         }
     }
 
-    /// Load danh sách session từ `ssh_session.json`.
-    /// Nếu file không tồn tại hoặc parse lỗi → return empty list.
+    /// Load the session list from `ssh_session.json`.
+    /// If the file does not exist or fails to parse → return an empty list.
     fn load() -> Vec<SshSession> {
         let path = PathBuf::from(SESSION_FILE);
         match std::fs::read_to_string(&path) {
@@ -129,14 +129,14 @@ impl SshSessionStore {
                 }
             },
             Err(_) => {
-                // File chưa tồn tại — chưa có session nào, không tạo file rỗng
-                // để tránh ghi file trắng khi user chưa thêm session nào.
+                // File does not exist yet — no sessions; don't create an empty file
+                // to avoid writing a blank file before the user adds any session.
                 Vec::new()
             }
         }
     }
 
-    /// Save danh sách session ra `ssh_session.json` (pretty-print).
+    /// Save the session list to `ssh_session.json` (pretty-printed).
     fn save(&self) {
         let path = PathBuf::from(SESSION_FILE);
         match serde_json::to_string_pretty(&self.sessions) {
@@ -150,20 +150,20 @@ impl SshSessionStore {
     }
 }
 
-// ── Global wrapper (pattern như `AppStateGlobal` / `TerminalSettingsGlobal`) ──
+// ── Global wrapper (same pattern as `AppStateGlobal` / `TerminalSettingsGlobal`) ──
 
-/// Global wrapper cho `Entity<SshSessionStore>`.
+/// Global wrapper for `Entity<SshSessionStore>`.
 pub struct SshSessionStoreGlobal(pub Entity<SshSessionStore>);
 
 impl Global for SshSessionStoreGlobal {}
 
 impl SshSessionStore {
-    /// Lấy `Entity<SshSessionStore>` toàn cục (panic nếu chưa init).
+    /// Get the global `Entity<SshSessionStore>` (panics if not initialized).
     pub fn global(cx: &App) -> Entity<Self> {
         cx.global::<SshSessionStoreGlobal>().0.clone()
     }
 
-    /// Khởi tạo store toàn cục — load `ssh_session.json` (gọi ở `ui::init`).
+    /// Initialize the global store — load `ssh_session.json` (called from `ui::init`).
     pub fn init(cx: &mut App) {
         let sessions = Self::load();
         let entity = cx.new(|_| Self { sessions });

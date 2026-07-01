@@ -1,8 +1,8 @@
 //! Terminal config JSON — load/save `terminal.json`.
 //!
-//! Config file được nhóm thành các nhóm logic: font, cursor, layout, shell,
-//! scroll, bell, colors. Nếu file không tồn tại → tạo file default để user
-//! biết các option có thể config.
+//! The config file is organized into logical groups: font, cursor, layout, shell,
+//! scroll, bell, colors. If the file does not exist → create a default file so the
+//! user can see the available options.
 //!
 //! Path: `target/terminal.json` (debug) / `terminal.json` (release).
 
@@ -35,7 +35,7 @@ const CONFIG_FILE: &str = "terminal.json";
 
 // ── Top-level config ─────────────────────────────────────────────────
 
-/// Toàn bộ config terminal — parse từ `terminal.json`.
+/// The full terminal config — parsed from `terminal.json`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TerminalConfig {
     #[serde(default)]
@@ -56,9 +56,9 @@ pub struct TerminalConfig {
 
 // ── Load / Save ─────────────────────────────────────────────────────
 
-/// Strip `//` line comments và `/* */` block comments khỏi JSON string.
-/// JSON chuẩn không hỗ trợ comments, nhưng user thường thêm ghi chú.
-/// Phải xử lý cẩn thận để không strip `//` bên trong string values.
+/// Strip `//` line comments and `/* */` block comments from a JSON string.
+/// Standard JSON does not support comments, but users often add notes.
+/// Must handle this carefully so `//` inside string values is not stripped.
 fn strip_json_comments(input: &str) -> String {
     let mut result = String::with_capacity(input.len());
     let chars: Vec<char> = input.chars().collect();
@@ -104,8 +104,8 @@ fn strip_json_comments(input: &str) -> String {
 }
 
 impl TerminalConfig {
-    /// Load config từ file. Nếu file không tồn tại → tạo default + return default.
-    /// Hỗ trợ `//` và `/* */` comments trong JSON.
+    /// Load the config from file. If the file does not exist → create a default + return default.
+    /// Supports `//` and `/* */` comments in the JSON.
     pub fn load() -> Self {
         let path = PathBuf::from(CONFIG_FILE);
         match std::fs::read_to_string(&path) {
@@ -120,7 +120,7 @@ impl TerminalConfig {
                 }
             }
             Err(_) => {
-                // File không tồn tại → tạo default file để user biết các option.
+                // File does not exist → create a default file so the user can see the options.
                 let cfg = Self::default();
                 if let Ok(json) = serde_json::to_string_pretty(&cfg) {
                     if std::fs::write(&path, json).is_ok() {

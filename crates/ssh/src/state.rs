@@ -1,40 +1,40 @@
-//! Trạng thái session cache — shared (`Arc<Mutex<...>>`) giữa `SshListener`
-//! (cập nhật khi nhận event) và `SshSession` (đọc qua trait accessors).
+//! Session state cache — shared (`Arc<Mutex<...>>`) between `SshListener`
+//! (updated on incoming events) and `SshSession` (read via trait accessors).
 //!
-//! Tương tự `local/src/state.rs` — alacritty `Term` không expose `title`/`cwd`/
-//! clipboard → phải tự cache.
+//! Similar to `local/src/state.rs` — alacritty `Term` does not expose
+//! `title`/`cwd`/clipboard → we cache them ourselves.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-/// Trạng thái session được listener cập nhật + session đọc.
+/// Session state updated by the listener and read by the session.
 #[derive(Debug, Default)]
 pub struct SessionState {
-    /// Tiêu đề (OSC 0/2). `None` = reset/default.
+    /// Title (OSC 0/2). `None` = reset/default.
     pub title: Option<String>,
-    /// Cwd (OSC 7 — set bởi side-channel parser).
+    /// Cwd (OSC 7 — set by the side-channel parser).
     pub cwd: Option<PathBuf>,
-    /// Clipboard cuối qua OSC 52 store.
+    /// Last clipboard value via OSC 52 store.
     pub clipboard: Option<String>,
-    /// Process còn sống?
+    /// Is the process still alive?
     pub alive: bool,
-    /// Exit code nếu đã thoát.
+    /// Exit code if it has exited.
     pub exit_code: Option<i32>,
-    /// Số prompt markers (OSC 133;A).
+    /// Number of prompt markers (OSC 133;A).
     pub prompt_count: usize,
-    /// Exit code của command cuối (OSC 133;D;exit_code).
+    /// Exit code of the last command (OSC 133;D;exit_code).
     pub last_exit_code: Option<i32>,
-    /// Foreground process hiện tại.
+    /// Current foreground process.
     pub foreground_process: Option<String>,
-    /// Absolute line count (xem local crate).
+    /// Absolute line count (see the local crate).
     pub absolute_line_count: usize,
-    /// Previous total_lines — detect dropped lines.
+    /// Previous total_lines — to detect dropped lines.
     pub prev_total_lines: usize,
-    /// Số lần màn hình bị xoá (`clear`). Xem `local/src/state.rs`.
+    /// Number of times the screen was cleared (`clear`). See `local/src/state.rs`.
     pub clear_epoch: usize,
-    /// Tổng bytes nhận từ server (download direction).
+    /// Total bytes received from the server (download direction).
     pub rx_bytes: u64,
-    /// Tổng bytes gửi lên server (upload direction).
+    /// Total bytes sent to the server (upload direction).
     pub tx_bytes: u64,
 }
 

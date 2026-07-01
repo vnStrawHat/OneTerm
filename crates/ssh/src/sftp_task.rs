@@ -1,10 +1,10 @@
-//! SFTP tokio task — xử lý `SftpCmd` từ UI, gọi `russh_sftp` API.
+//! SFTP tokio task — handles `SftpCmd` from the UI, calls the `russh_sftp` API.
 //!
-//! Chạy song song với `ssh_main_task` trên cùng tokio runtime.
-//! 2 channel (shell + sftp) chia sẻ 1 TCP connection, multiplex bởi russh.
+//! Runs alongside `ssh_main_task` on the same tokio runtime.
+//! The two channels (shell + sftp) share one TCP connection, multiplexed by russh.
 //!
-//! Upload/download được spawn thành tokio task riêng — main loop luôn
-//! responsive để nhận `SftpCmd::Cancel` và signal `CancellationToken`.
+//! Upload/download are spawned as separate tokio tasks — the main loop stays
+//! responsive to receive `SftpCmd::Cancel` and signal the `CancellationToken`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -23,8 +23,9 @@ use crate::sftp::{SftpCmd, SftpEvent};
 
 // ── UID/GID lookup ────────────────────────────────────────────
 
-/// Lookup uid → username và gid → groupname, parse từ /etc/passwd + /etc/group.
-/// Cache 1 lần khi SFTP task start, dùng cho mọi `attrs_to_entry`.
+/// Looks up uid → username and gid → groupname, parsed from /etc/passwd +
+/// /etc/group. Cached once when the SFTP task starts, used by every
+/// `attrs_to_entry`.
 #[derive(Default)]
 struct UidGidLookup {
     uid_to_name: HashMap<u32, String>,
@@ -32,19 +33,19 @@ struct UidGidLookup {
 }
 
 impl UidGidLookup {
-    /// Resolve uid → username. None nếu không có trong map.
+    /// Resolve uid → username. None if not in the map.
     fn uid_name(&self, uid: Option<u32>) -> Option<String> {
         uid.and_then(|u| self.uid_to_name.get(&u).cloned())
     }
 
-    /// Resolve gid → groupname. None nếu không có trong map.
+    /// Resolve gid → groupname. None if not in the map.
     fn gid_name(&self, gid: Option<u32>) -> Option<String> {
         gid.and_then(|g| self.gid_to_name.get(&g).cloned())
     }
 }
 
-/// Đọc /etc/passwd + /etc/group qua SFTP, parse uid→name và gid→name maps.
-/// Best-effort: nếu không đọc được → map rỗng (hiển thị số thay).
+/// Read /etc/passwd + /etc/group over SFTP, parse uid→name and gid→name maps.
+/// Best-effort: if unreadable → empty map (numbers shown instead).
 async fn load_uid_gid_lookup(sftp: &SftpChannel) -> UidGidLookup {
     let mut lookup = UidGidLookup::default();
 
@@ -59,7 +60,7 @@ async fn load_uid_gid_lookup(sftp: &SftpChannel) -> UidGidLookup {
                     if let (Ok(uid), Ok(gid)) = (fields[2].parse::<u32>(), fields[3].parse::<u32>())
                     {
                         lookup.uid_to_name.insert(uid, fields[0].to_string());
-                        // passwd cũng có gid → có thể dùng cho group lookup.
+                        // passwd also has gid → can be used for group lookup.
                         lookup
                             .gid_to_name
                             .entry(gid)
@@ -72,7 +73,9 @@ async fn load_uid_gid_lookup(sftp: &SftpChannel) -> UidGidLookup {
                 lookup.uid_to_name.len()
             );
         }
-        Err(e) => log::debug!("sftp_task: /etc/passwd not readable: {e} — uid/gid sẽ hiển thị số"),
+        Err(e) => {
+            log::debug!("sftp_task: /etc/passwd not readable: {e} — uid/gid shown as numbers")
+        }
     }
 
     // /etc/group: `root:x:0:`
@@ -99,13 +102,13 @@ async fn load_uid_gid_lookup(sftp: &SftpChannel) -> UidGidLookup {
     lookup
 }
 
-/// Tokio task xử lý SFTP commands.
+/// Tokio task that handles SFTP commands.
 ///
-/// Chạy song song với `ssh_main_task` trên cùng tokio runtime.
-/// Nhận `SftpCmd` qua `cmd_rx`, gửi `SftpEvent` qua `event_tx`.
+/// Runs alongside `ssh_main_task` on the same tokio runtime.
+/// Receives `SftpCmd` via `cmd_rx`, sends `SftpEvent` via `event_tx`.
 ///
-/// Upload/download được spawn thành tokio task riêng — main loop luôn
-/// responsive để nhận `SftpCmd::Cancel` và signal `CancellationToken`.
+/// Upload/download are spawned as separate tokio tasks — the main loop stays
+/// responsive to receive `SftpCmd::Cancel` and signal the `CancellationToken`.
 pub(crate) async fn sftp_task(
     sftp: SftpChannel,
     cmd_rx: Receiver<SftpCmd>,
@@ -114,8 +117,8 @@ pub(crate) async fn sftp_task(
 ) {
     log::info!("sftp_task: started");
 
-    // Load uid→name và gid→name maps từ /etc/passwd + /etc/group.
-    // Best-effort: nếu không đọc được → map rỗng, hiển thị số.
+    // Load uid→name and gid→name maps from /etc/passwd + /etc/group.
+    // Best-effort: if unreadable → empty map, numbers shown.
     let lookup = load_uid_gid_lookup(&sftp).await;
     log::info!(
         "sftp_task: uid/gid lookup loaded ({} uids, {} gids)",
@@ -123,12 +126,12 @@ pub(crate) async fn sftp_task(
         lookup.gid_to_name.len()
     );
 
-    // Wrap SftpChannel trong Arc — clone cho mỗi spawned transfer task.
+    // Wrap SftpChannel in Arc — cloned for each spawned transfer task.
     let sftp = Arc::new(sftp);
 
     let _ = event_tx.try_send(SftpEvent::Ready);
 
-    // Cancel tokens cho transfer đang chạy — key = transfer_id.
+    // Cancel tokens for running transfers — key = transfer_id.
     let mut cancels: HashMap<u64, CancellationToken> = HashMap::new();
 
     loop {
@@ -245,9 +248,10 @@ pub(crate) async fn sftp_task(
                 break;
             }
         }
-        // Cleanup: remove cancel tokens cho transfers đã xong.
-        // Tokens được insert khi upload/download bắt đầu. Spawned task không
-        // thể xoá map → giữ lại. Map nhỏ (chỉ transfer đang chạy), không đáng kể.
+        // Cleanup: remove cancel tokens for finished transfers.
+        // Tokens are inserted when an upload/download begins. The spawned task
+        // cannot remove them from the map → they stay. The map is small (only
+        // running transfers), so this is negligible.
     }
 
     {
@@ -260,23 +264,23 @@ pub(crate) async fn sftp_task(
 
 // ── Helpers ──────────────────────────────────────────────────
 
-/// Chuyển lỗi russh-sftp sang `AppError`.
+/// Convert a russh-sftp error to `AppError`.
 fn map_sftp_err(e: russh_sftp::client::error::Error) -> AppError {
     AppError::msg(e.to_string())
 }
 
-/// Chuyển `FileAttributes` (russh-sftp) sang `FileEntry`.
+/// Convert `FileAttributes` (russh-sftp) to a `FileEntry`.
 ///
-/// QUAN TRỌNG: SFTP path luôn dùng `/` (Unix style), kể cả khi client chạy
-/// trên Windows. `PathBuf::join` trên Windows dùng `\` → SFTP server không
-/// hiểu. Nên dùng string concatenation với `/` thay vì `Path::join`.
+/// IMPORTANT: SFTP paths always use `/` (Unix style), even when the client runs
+/// on Windows. `PathBuf::join` on Windows uses `\` → the SFTP server won't
+/// understand it. So use string concatenation with `/` instead of `Path::join`.
 fn attrs_to_entry(
     name: String,
     parent: &str,
     attrs: &FileAttributes,
     lookup: &UidGidLookup,
 ) -> FileEntry {
-    // Nối parent + name bằng `/` — đảm bảo path Unix style cho SFTP.
+    // Join parent + name with `/` — ensures a Unix-style path for SFTP.
     let path = if parent.ends_with('/') {
         format!("{parent}{name}")
     } else {
@@ -304,22 +308,23 @@ fn attrs_to_entry(
     }
 }
 
-/// Đọc thư mục — trả về danh sách entry đã sort (folder trước, rồi file theo tên).
+/// Read a directory — returns the sorted list of entries (folders first, then
+/// files by name).
 ///
-/// Nếu `path` là relative (vd `"."`), dùng `canonicalize` để resolve thành
-/// absolute path trước — một số SFTP server không hiểu relative path.
+/// If `path` is relative (e.g. `"."`), use `canonicalize` to resolve it to an
+/// absolute path first — some SFTP servers don't understand relative paths.
 async fn sftp_read_dir(
     sftp: &SftpChannel,
     path: &Path,
     lookup: &UidGidLookup,
 ) -> Result<Vec<FileEntry>> {
-    // to_string_lossy() có thể trả về `\` trên Windows → convert sang `/`.
+    // to_string_lossy() may return `\` on Windows → convert to `/`.
     let path_str = path.to_string_lossy().replace('\\', "/");
     log::debug!("sftp_read_dir: path=\"{path_str}\"");
 
-    // Resolve relative path → absolute path qua SFTP realpath.
-    // Dùng starts_with('/') thay vì Path::is_absolute() vì Windows không
-    // xem `/root` là absolute (cần drive letter).
+    // Resolve relative path → absolute path via SFTP realpath.
+    // Use starts_with('/') instead of Path::is_absolute() because Windows does
+    // not treat `/root` as absolute (it needs a drive letter).
     let abs_path = if path_str.starts_with('/') {
         path_str
     } else {
@@ -337,8 +342,8 @@ async fn sftp_read_dir(
         }
     };
 
-    // abs_path đã là string với `/` separator (từ canonicalize hoặc input).
-    // KHÔNG dùng Path::new — PathBuf trên Windows sẽ convert `/` → `\`.
+    // abs_path is already a string with `/` separators (from canonicalize or input).
+    // Do NOT use Path::new — PathBuf on Windows would convert `/` → `\`.
 
     let read_dir = sftp.read_dir(&abs_path).await.map_err(|e| {
         log::error!("sftp_read_dir: read_dir(\"{abs_path}\") failed: {e}");
@@ -353,7 +358,7 @@ async fn sftp_read_dir(
         })
         .collect();
 
-    // Bỏ entry `.` và `..` (một số SFTP server trả về).
+    // Drop `.` and `..` entries (returned by some SFTP servers).
     entries.retain(|e| e.name != "." && e.name != "..");
 
     log::debug!(
@@ -361,7 +366,7 @@ async fn sftp_read_dir(
         entries.len()
     );
 
-    // Sort: folder trước, rồi file theo tên (case-insensitive).
+    // Sort: folders first, then files by name (case-insensitive).
     entries.sort_by(|a, b| {
         b.is_dir
             .cmp(&a.is_dir)
@@ -371,9 +376,9 @@ async fn sftp_read_dir(
     Ok(entries)
 }
 
-/// Lấy metadata chi tiết.
+/// Get detailed metadata.
 async fn sftp_stat(sftp: &SftpChannel, path: &Path, lookup: &UidGidLookup) -> Result<FileStat> {
-    // Sanitize backslashes → forward slashes cho SFTP server.
+    // Sanitize backslashes → forward slashes for the SFTP server.
     let path_str = path.to_string_lossy().replace('\\', "/");
     let attrs = sftp.metadata(&path_str).await.map_err(map_sftp_err)?;
 
@@ -402,17 +407,17 @@ async fn sftp_stat(sftp: &SftpChannel, path: &Path, lookup: &UidGidLookup) -> Re
     })
 }
 
-
-/// Xoá file/thư mục đệ quy — nếu là thư mục, đọc contents → xoá từng entry → xoá dir.
-/// Dùng cho `SftpCmd::Rmdir` — hỗ trợ xoá thư mục không rỗng.
+/// Remove a file/directory recursively — if a directory, read its contents →
+/// remove each entry → remove the dir.
+/// Used for `SftpCmd::Rmdir` — supports removing non-empty directories.
 async fn sftp_remove_recursive(sftp: &SftpChannel, path: &Path) -> Result<()> {
     let path_str = path.to_string_lossy().replace('\\', "/");
 
-    // Đọc thư mục — nếu read_dir fail, có thể path là file → thử remove_file.
+    // Read the directory — if read_dir fails, the path may be a file → try remove_file.
     let read_dir = match sftp.read_dir(&path_str).await {
         Ok(rd) => rd,
         Err(_) => {
-            // Path có thể là file → thử remove_file.
+            // Path may be a file → try remove_file.
             log::debug!("sftp_remove_recursive: \"{path_str}\" not a dir, trying remove_file");
             return sftp.remove_file(&path_str).await.map_err(map_sftp_err);
         }
@@ -430,31 +435,29 @@ async fn sftp_remove_recursive(sftp: &SftpChannel, path: &Path) -> Result<()> {
         .collect();
 
     for (name, is_dir) in entries {
-        // Dùng string concat với '/' thay vì Path::join (tránh '\' trên Windows).
+        // Use string concat with '/' instead of Path::join (avoids '\' on Windows).
         let child_path = format!("{path_str}/{name}");
         if is_dir {
             Box::pin(sftp_remove_recursive(sftp, &PathBuf::from(&child_path))).await?;
         } else {
             log::debug!("sftp_remove_recursive: remove_file \"{child_path}\"");
-            sftp.remove_file(&child_path)
-                .await
-                .map_err(map_sftp_err)?;
+            sftp.remove_file(&child_path).await.map_err(map_sftp_err)?;
         }
     }
 
-    // Thư mục đã rỗng → remove_dir.
+    // Directory is now empty → remove_dir.
     log::debug!("sftp_remove_recursive: remove_dir \"{path_str}\"");
     sftp.remove_dir(&path_str).await.map_err(map_sftp_err)
 }
 
-/// Upload file hoặc thư mục local → remote với progress reporting.
+/// Upload a local file or directory → remote with progress reporting.
 ///
-/// - File: đọc nội dung → write chunk 32KB → report progress 0.0–1.0.
-/// - Thư mục: walk đệ quy → tạo remote dirs → upload từng file,
+/// - File: read contents → write 32KB chunks → report progress 0.0–1.0.
+/// - Directory: walk recursively → create remote dirs → upload each file,
 ///   progress = cumulative bytes / total bytes.
 ///
-/// Kiểm tra `cancel.is_cancelled()` sau mỗi chunk write.
-/// Nếu cancelled → trả về `Err("cancelled")`.
+/// Checks `cancel.is_cancelled()` after each chunk write.
+/// If cancelled → returns `Err("cancelled")`.
 async fn sftp_upload(
     sftp: &SftpChannel,
     local: &Path,
@@ -473,7 +476,7 @@ async fn sftp_upload(
     }
 }
 
-/// Upload một file đơn lẻ — chunk 32KB, progress 0.0–1.0.
+/// Upload a single file — 32KB chunks, progress 0.0–1.0.
 async fn sftp_upload_file(
     sftp: &SftpChannel,
     local: &Path,
@@ -486,14 +489,14 @@ async fn sftp_upload_file(
         .map_err(|e| AppError::msg(format!("read local: {e}")))?;
     let total = local_data.len() as u64;
 
-    // Dùng `create` — mở file với WRITE|CREATE|TRUNCATE.
+    // Use `create` — open the file with WRITE|CREATE|TRUNCATE.
     let remote_str = remote.to_string_lossy().replace('\\', "/");
     let mut remote_file = sftp.create(&remote_str).await.map_err(map_sftp_err)?;
 
     const CHUNK: usize = 32 * 1024;
     let mut written: u64 = 0;
     for chunk in local_data.chunks(CHUNK) {
-        // Check cancel trước khi write — nếu cancelled thì dừng ngay.
+        // Check cancel before writing — stop immediately if cancelled.
         if cancel.is_cancelled() {
             log::info!("sftp_upload_file: cancelled at {written}/{total} bytes");
             let _ = progress.try_send(-1.0); // -1 = cancelled signal
@@ -521,7 +524,7 @@ async fn sftp_upload_file(
     Ok(())
 }
 
-/// Upload một thư mục — walk đệ quy, tạo remote dirs, upload từng file.
+/// Upload a directory — walk recursively, create remote dirs, upload each file.
 ///
 /// Progress = cumulative bytes uploaded / total bytes across all files.
 async fn sftp_upload_dir(
@@ -531,7 +534,7 @@ async fn sftp_upload_dir(
     progress: &Sender<f64>,
     cancel: &CancellationToken,
 ) -> Result<()> {
-    /// Thu thập tất cả file (local_path, remote_path, size) trong thư mục.
+    /// Collect all files (local_path, remote_path, size) in the directory.
     fn collect_files(
         local: &Path,
         remote: &Path,
@@ -551,7 +554,7 @@ async fn sftp_upload_dir(
         Ok(())
     }
 
-    // 1. Thu thập danh sách file + tính tổng dung lượng.
+    // 1. Collect the file list + compute total size.
     let mut files: Vec<(PathBuf, PathBuf, u64)> = Vec::new();
     collect_files(local, remote, &mut files)
         .map_err(|e| AppError::msg(format!("walk local dir: {e}")))?;
@@ -564,7 +567,7 @@ async fn sftp_upload_dir(
         total_bytes
     );
 
-    // 2. Thu thập tất cả remote dirs cần tạo (DFS, parents trước).
+    // 2. Collect all remote dirs to create (DFS, parents first).
     fn collect_dirs(local: &Path, remote: &Path, dirs: &mut Vec<PathBuf>) {
         dirs.push(remote.to_path_buf());
         if let Ok(entries) = std::fs::read_dir(local) {
@@ -582,13 +585,13 @@ async fn sftp_upload_dir(
     collect_dirs(local, remote, &mut remote_dirs);
     for dir in &remote_dirs {
         let dir_str = dir.to_string_lossy().replace('\\', "/");
-        // Tạo dir (ignore error nếu đã tồn tại).
+        // Create the dir (ignore error if it already exists).
         if let Err(e) = sftp.create_dir(&dir_str).await {
             log::debug!("sftp_upload_dir: create_dir \"{dir_str}\" → {e} (may already exist)");
         }
     }
 
-    // 3. Upload từng file, track cumulative progress.
+    // 3. Upload each file, tracking cumulative progress.
     let mut bytes_done: u64 = 0;
     for (local_path, remote_path, file_size) in &files {
         if cancel.is_cancelled() {
@@ -603,7 +606,7 @@ async fn sftp_upload_dir(
             remote_path.display()
         );
 
-        // Upload file nội bộ — report progress dựa trên cumulative bytes.
+        // Upload the file inline — report progress based on cumulative bytes.
         let local_data = tokio::fs::read(local_path)
             .await
             .map_err(|e| AppError::msg(format!("read local: {e}")))?;
@@ -641,14 +644,15 @@ async fn sftp_upload_dir(
     Ok(())
 }
 
-/// Download file hoặc thư mục remote → local với progress reporting.
+/// Download a remote file or directory → local with progress reporting.
 ///
-/// - File: mở remote file → read chunk 32KB → write local file, progress 0.0–1.0.
-/// - Thư mục: walk đệ quy remote tree → tạo local dirs → download từng file,
-///   progress = cumulative bytes / total bytes.
+/// - File: open the remote file → read 32KB chunks → write the local file,
+///   progress 0.0–1.0.
+/// - Directory: walk the remote tree recursively → create local dirs → download
+///   each file, progress = cumulative bytes / total bytes.
 ///
-/// Kiểm tra `cancel.is_cancelled()` sau mỗi chunk read.
-/// Nếu cancelled → trả về `Err("cancelled")`.
+/// Checks `cancel.is_cancelled()` after each chunk read.
+/// If cancelled → returns `Err("cancelled")`.
 async fn sftp_download(
     sftp: &SftpChannel,
     remote: &Path,
@@ -666,7 +670,7 @@ async fn sftp_download(
     }
 }
 
-/// Download một file đơn lẻ — chunk 32KB, progress 0.0–1.0.
+/// Download a single file — 32KB chunks, progress 0.0–1.0.
 async fn sftp_download_file(
     sftp: &SftpChannel,
     remote_str: &str,
@@ -674,7 +678,7 @@ async fn sftp_download_file(
     progress: &Sender<f64>,
     cancel: &CancellationToken,
 ) -> Result<()> {
-    // Lấy size để tính progress.
+    // Get the size to compute progress.
     let attrs = sftp.metadata(remote_str).await.map_err(map_sftp_err)?;
     let total = attrs.size.unwrap_or(0);
 
@@ -688,7 +692,7 @@ async fn sftp_download_file(
     let mut buf = vec![0u8; CHUNK];
     let mut read: u64 = 0;
     loop {
-        // Check cancel trước khi read — nếu cancelled thì dừng ngay.
+        // Check cancel before reading — stop immediately if cancelled.
         if cancel.is_cancelled() {
             log::info!("sftp_download_file: cancelled at {read}/{total} bytes");
             let _ = progress.try_send(-1.0); // -1 = cancelled signal
@@ -723,7 +727,8 @@ async fn sftp_download_file(
     Ok(())
 }
 
-/// Download một thư mục — walk đệ quy remote tree, tạo local dirs, download từng file.
+/// Download a directory — walk the remote tree recursively, create local dirs,
+/// download each file.
 ///
 /// Progress = cumulative bytes downloaded / total bytes across all files.
 async fn sftp_download_dir(
@@ -733,7 +738,7 @@ async fn sftp_download_dir(
     progress: &Sender<f64>,
     cancel: &CancellationToken,
 ) -> Result<()> {
-    /// Thu thập tất cả file (remote_path, local_path, size) trong thư mục remote.
+    /// Collect all files (remote_path, local_path, size) in the remote directory.
     async fn collect_files(
         sftp: &SftpChannel,
         remote: &str,
@@ -755,7 +760,7 @@ async fn sftp_download_dir(
             .collect();
 
         for (name, is_dir, size) in entries {
-            // Dùng string concat với '/' thay vì Path::join (tránh '\' trên Windows).
+            // Use string concat with '/' instead of Path::join (avoids '\' on Windows).
             let remote_child = format!("{remote}/{name}");
             let local_child = local.join(&name);
             if is_dir {
@@ -767,7 +772,7 @@ async fn sftp_download_dir(
         Ok(())
     }
 
-    // 1. Thu thập danh sách file + tính tổng dung lượng.
+    // 1. Collect the file list + compute total size.
     let mut files: Vec<(String, PathBuf, u64)> = Vec::new();
     collect_files(sftp, remote_str, local, &mut files).await?;
     let total_bytes: u64 = files.iter().map(|(_, _, s)| *s).sum();
@@ -778,12 +783,12 @@ async fn sftp_download_dir(
         total_bytes
     );
 
-    // 2. Tạo thư mục gốc local.
+    // 2. Create the local root directory.
     tokio::fs::create_dir_all(local)
         .await
         .map_err(|e| AppError::msg(format!("create local dir: {e}")))?;
 
-    // 3. Download từng file, track cumulative progress.
+    // 3. Download each file, tracking cumulative progress.
     let mut bytes_done: u64 = 0;
     for (remote_path, local_path, _file_size) in &files {
         if cancel.is_cancelled() {
@@ -797,7 +802,7 @@ async fn sftp_download_dir(
             local_path.display()
         );
 
-        // Đảm bảo thư mục cha của file đã tồn tại locally.
+        // Ensure the file's parent directory exists locally.
         if let Some(parent) = local_path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await

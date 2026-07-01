@@ -1,4 +1,4 @@
-//! Layout chính của OneTerm.
+//! Main layout for OneTerm.
 
 pub mod app_menus;
 pub mod statusbar;

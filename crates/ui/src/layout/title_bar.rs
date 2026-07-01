@@ -1,9 +1,9 @@
-//! [`AppTitleBar`] — title bar của OneTerm.
+//! [`AppTitleBar`] — OneTerm's title bar.
 //!
-//! Mirror `reference/.../story/src/title_bar.rs`, giữ `AppMenuBar` + child
+//! Mirrors `reference/.../story/src/title_bar.rs`, keeping `AppMenuBar` + child
 //! (Add Terminal / Add Session / Add SFTP dropdown) + `FontSizeSelector`.
 //!
-//! Bỏ GitHub / Bell (không dùng cho terminal app).
+//! Drops GitHub / Bell (not used in a terminal app).
 
 use std::rc::Rc;
 
@@ -30,7 +30,7 @@ pub struct AppTitleBar {
 }
 
 impl AppTitleBar {
-    /// Tạo title bar mới.
+    /// Create a new title bar.
     pub fn new(
         title: impl Into<gpui::SharedString>,
         window: &mut Window,
@@ -45,7 +45,7 @@ impl AppTitleBar {
         }
     }
 
-    /// Set child element (nút Add Terminal dropdown).
+    /// Set the child element (the Add Terminal dropdown button).
     pub fn child<F, E>(mut self, f: F) -> Self
     where
         E: IntoElement,
@@ -59,7 +59,7 @@ impl AppTitleBar {
 impl Render for AppTitleBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         TitleBar::new()
-            // Sync border bottom color với Dock border (cx.theme().border)
+            // Sync the bottom border color with the Dock border (cx.theme().border)
             .border_color(cx.theme().border)
             // left side
             .child(
@@ -89,10 +89,10 @@ impl Render for AppTitleBar {
     }
 }
 
-/// [`FontSizeSelector`] — dropdown chỉnh font size + bật/tắt Gutter
-/// (timestamp + line number) của terminal (mirror reference `FontSizeSelector`,
-/// đã bỏ Border Radius — mặc định 0px — Scrollbar — mặc định Scrolling to show
-/// — và List Active Highlight — mặc định bật, không toggle).
+/// [`FontSizeSelector`] — dropdown to adjust font size + toggle the terminal Gutter
+/// (timestamp + line number) (mirrors the reference `FontSizeSelector`, with Border
+/// Radius removed — default 0px — Scrollbar removed — default Scrolling to show — and
+/// List Active Highlight removed — default on, not toggleable).
 struct FontSizeSelector {
     focus_handle: FocusHandle,
 }
@@ -115,10 +115,10 @@ impl FontSizeSelector {
     }
 
     fn on_toggle_gutter(&mut self, _: &ToggleGutter, window: &mut Window, cx: &mut Context<Self>) {
-        // Gutter — cột bên trái terminal hiển thị timestamp [HH:MM:SS] + line
-        // number cho mỗi dòng. Bật = hiện (mặc định), tắt = ẩn, terminal dùng
-        // toàn bộ chiều rộng. Lưu trong `TerminalSettings` toàn cục, ảnh hưởng
-        // lên mọi terminal panel trong app.
+        // Gutter — the left column of the terminal showing the timestamp [HH:MM:SS]
+        // + line number for each line. On = shown (default), off = hidden and the
+        // terminal uses the full width. Stored in the global `TerminalSettings`,
+        // affecting every terminal panel in the app.
         let settings = TerminalSettings::global(cx);
         settings.update(cx, |st, cx| {
             st.show_gutter = !st.show_gutter;
@@ -156,7 +156,7 @@ impl Render for FontSizeSelector {
                             )
                             .menu_with_check("Small", font_size == 14, Box::new(SelectFont(14)))
                             .separator()
-                            // Gutter — bật/tắt cột timestamp + line number bên trái terminal.
+                            // Gutter — toggle the timestamp + line number column on the left of the terminal.
                             .menu_with_check(
                                 "Gutter",
                                 TerminalSettings::global(cx).read(cx).show_gutter,
@@ -168,12 +168,12 @@ impl Render for FontSizeSelector {
     }
 }
 
-/// Build nút "Add Terminal Tab" dropdown dùng trong title bar.
+/// Build the "Add Terminal Tab" dropdown button used in the title bar.
 ///
-/// Menu gồm:
-/// - New Terminal Tab (thêm TerminalPanel vào center)
-/// - Add Session (thêm SessionPanel vào right dock)
-/// - Add SFTP Browser (thêm SftpPanel vào right dock)
+/// The menu contains:
+/// - New Terminal Tab (adds a TerminalPanel to the center)
+/// - Add Session (adds a SessionPanel to the right dock)
+/// - Add SFTP Browser (adds an SftpPanel to the right dock)
 pub fn add_terminal_button() -> impl IntoElement + 'static {
     Button::new("add-panel")
         .icon(IconName::LayoutDashboard)

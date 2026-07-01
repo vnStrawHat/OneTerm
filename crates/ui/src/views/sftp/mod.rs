@@ -1,7 +1,7 @@
-//! SFTP browser — panel duyệt file từ xa.
+//! SFTP browser — panel for browsing remote files.
 //!
-//! Module gốc `file_browser.rs` đã được tách thành nhiều file con
-//! để tuân thủ rule ~400 dòng/file (xem `docs/agents/structure.md` §2).
+//! The original `file_browser.rs` module was split into several submodules
+//! to comply with the ~400 lines/file rule (see `docs/agents/structure.md` §2).
 
 mod actions;
 mod panel;

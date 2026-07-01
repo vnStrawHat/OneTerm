@@ -1,11 +1,11 @@
-//! `CountingStream` — wrapper đếm bytes read/written qua SFTP channel.
+//! `CountingStream` — wrapper that counts bytes read/written over the SFTP channel.
 //!
-//! Wrap `ChannelStream` (từ `channel.into_stream()`) trước khi truyền vào
-//! `SftpSession::new()`. Mỗi byte read/write qua stream → cập nhật
-//! `rx_bytes`/`tx_bytes` trong `SharedState` — gộp chung với SSH shell channel.
+//! Wrap `ChannelStream` (from `channel.into_stream()`) before passing it to
+//! `SftpSession::new()`. Each byte read/written through the stream updates
+//! `rx_bytes`/`tx_bytes` in `SharedState` — combined with the SSH shell channel.
 //!
-//! Cả 2 channel (shell + sftp) chia sẻ 1 TCP connection, multiplex bởi russh,
-//! nên tổng bytes = SSH shell bytes + SFTP bytes = full network traffic.
+//! Both channels (shell + sftp) share one TCP connection, multiplexed by russh,
+//! so the total bytes = SSH shell bytes + SFTP bytes = full network traffic.
 
 use std::io;
 use std::pin::Pin;
@@ -15,7 +15,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::state::SharedState;
 
-/// Wrapper đếm bytes rx/tx qua `AsyncRead + AsyncWrite` stream.
+/// Wrapper that counts rx/tx bytes over an `AsyncRead + AsyncWrite` stream.
 pub(crate) struct CountingStream<S> {
     inner: S,
     state: SharedState,

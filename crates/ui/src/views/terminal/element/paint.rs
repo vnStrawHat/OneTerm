@@ -16,7 +16,7 @@ use super::super::layout::{CursorPaint, LayoutState, RowLayoutCache};
 use super::super::theme::TerminalTheme;
 use super::super::view::LocalTerminalView;
 
-/// Paint terminal element từ `LayoutState` đã prepaint.
+/// Paint the terminal element from the prepainted `LayoutState`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn paint_terminal(
     _session: &Entity<Box<dyn TerminalSession>>,

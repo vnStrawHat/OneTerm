@@ -36,7 +36,7 @@ impl BatchedTextRun {
         self.style.len += c.len_utf8();
     }
 
-    /// Paint text run dùng cached `ShapedLine`.
+    /// Paint the text run using the cached `ShapedLine`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn paint(
         &self,

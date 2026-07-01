@@ -1,6 +1,6 @@
-//! `LocalTerminalView` — GPUI view render 1 terminal session (local/ssh).
+//! `LocalTerminalView` — GPUI view that renders one terminal session (local/ssh).
 //!
-//! Module gốc `view.rs` đã được tách thành `view/`.
+//! The original `view.rs` module was split into `view/`.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -22,57 +22,58 @@ pub(crate) mod scrollbar;
 
 const CURSOR_BLINK_INTERVAL_MS: u64 = 500;
 
-/// View render 1 terminal session (local hoặc ssh — qua `dyn TerminalSession`).
+/// View that renders one terminal session (local or ssh — via `dyn TerminalSession`).
 pub struct LocalTerminalView {
     pub(crate) session: Entity<Box<dyn TerminalSession>>,
     pub(crate) focus: FocusHandle,
-    /// Sink layout metrics (Element ghi ở prepaint, mouse handler đọc).
+    /// Layout metrics sink (Element writes in prepaint, mouse handler reads).
     pub(crate) metrics: Rc<RefCell<GridMetrics>>,
-    /// Scrollbar handle — cache scrollback state, apply drag → session.
+    /// Scrollbar handle — caches scrollback state, applies drag → session.
     pub(crate) scroll_handle: TerminalScrollHandle,
-    /// Con trỏ có đang hiện không (blink toggle). True = vẽ, false = ẩn.
+    /// Whether the cursor is currently shown (blink toggle). True = draw, false = hide.
     pub(crate) cursor_blink_visible: bool,
-    /// Bell indicator — true khi nhận `\x07`, clear khi user gõ phím.
+    /// Bell indicator — true when `\x07` is received, cleared when the user presses a key.
     pub(crate) has_bell: bool,
-    /// Scrollbar drag state: Some(drag_start_y) khi đang kéo thumb.
+    /// Scrollbar drag state: Some(drag_start_y) while dragging the thumb.
     pub(crate) scrollbar_drag_start: Option<f32>,
-    /// Scrollbar last scroll time — để auto-hide sau 2s.
+    /// Last scroll time — used to auto-hide the scrollbar after 2s.
     pub(crate) last_scroll_time: Option<std::time::Instant>,
-    /// Vi mode state — khi active, phím di chuyển cursor trong scrollback
-    /// thay vì gửi vào PTY.
+    /// Vi mode state — when active, keys move the cursor within the scrollback
+    /// instead of being sent to the PTY.
     pub(crate) vi_mode: bool,
-    /// Vi mode cursor position (display row, col) — 0-based từ top.
+    /// Vi mode cursor position (display row, col) — 0-based from the top.
     pub(crate) vi_cursor: (usize, usize),
     /// Vi mode selection active (v pressed).
     pub(crate) vi_selecting: bool,
-    /// URL đang hover (Ctrl held) — để highlight + click mở URL.
+    /// URL currently hovered (Ctrl held) — for highlight + click to open URL.
     pub(crate) hovered_url: Option<super::url::DetectedUrl>,
-    /// Ctrl đang held — track để toggle cursor style.
+    /// Ctrl currently held — tracked to toggle the cursor style.
     pub(crate) ctrl_held: bool,
-    /// Last mouse position — để re-detect URL khi Ctrl pressed/released
-    /// mà không cần mouse move.
+    /// Last mouse position — used to re-detect the URL when Ctrl is pressed/released
+    /// without a mouse move.
     pub(crate) last_mouse_pos: Option<gpui::Point<gpui::Pixels>>,
-    /// Per-line timestamps (gutter). `line_times[j]` = giờ render của dòng có
-    /// **chỉ số absolute** (0-based) = `line_time_base + j`. Grow-only: mỗi dòng
-    /// được stamp đúng một lần và không bao giờ ghi đè (xem `update_line_times`).
+    /// Per-line timestamps (gutter). `line_times[j]` = render time of the line whose
+    /// **absolute index** (0-based) = `line_time_base + j`. Grow-only: each line is
+    /// stamped exactly once and never overwritten (see `update_line_times`).
     pub(crate) line_times: Vec<String>,
-    /// Chỉ số absolute (0-based) của `line_times[0]` — dòng cũ nhất còn track.
-    /// Tăng dần khi dòng cũ rời scrollback.
+    /// Absolute index (0-based) of `line_times[0]` — the oldest line still tracked.
+    /// Increases as old lines leave the scrollback.
     pub(crate) line_time_base: usize,
-    /// `clear_epoch` lần cập nhật gần nhất — khi đổi (màn hình bị `clear`),
-    /// reset `line_times` để nội dung mới được stamp giờ hiện tại.
+    /// `clear_epoch` from the most recent update — when it changes (screen `clear`),
+    /// reset `line_times` so new content is stamped with the current time.
     pub(crate) last_clear_epoch: usize,
-    /// Per-row layout cache — skip recompute cho non-dirty rows.
+    /// Per-row layout cache — skip recompute for non-dirty rows.
     pub(crate) row_cache: Rc<RefCell<RowLayoutCache>>,
-    /// Cached gutter width + num_digits — chỉ recompute khi num_digits đổi.
-    /// Tránh gọi shape_line mỗi frame → ngăn dao động gutter_width gây resize loop.
+    /// Cached gutter width + num_digits — only recompute when num_digits changes.
+    /// Avoids calling shape_line every frame → prevents gutter_width oscillation that
+    /// causes a resize loop.
     pub(crate) cached_gutter: Rc<RefCell<Option<(gpui::Pixels, usize)>>>,
-    /// Last terminal size (rows, cols) — persist giữa các frame để tránh
-    /// gọi s.resize() mỗi frame (TerminalElement tạo mới mỗi frame).
+    /// Last terminal size (rows, cols) — persisted across frames to avoid calling
+    /// s.resize() every frame (TerminalElement is recreated each frame).
     pub(crate) last_grid_size: Rc<RefCell<Option<(u16, u16)>>>,
 }
 impl LocalTerminalView {
-    /// Tạo view từ session entity. Subscribe events → re-render task.
+    /// Create the view from a session entity. Subscribe to events → re-render task.
     pub fn new(
         session: Entity<Box<dyn TerminalSession>>,
         window: &mut Window,
@@ -110,10 +111,11 @@ impl LocalTerminalView {
                         let _ = this.update(cx, |view, cx| {
                             cx.notify();
                             s.read(cx).scroll_to_bottom();
-                            // Stamp tại thời điểm OUTPUT (không chỉ render): task
-                            // subscribe chạy độc lập với render, nên tab inactive
-                            // (không render) vẫn cập nhật timestamp đúng giờ dòng
-                            // được tạo, thay vì dồn về giờ lúc active lại tab.
+                            // Stamp at the OUTPUT moment (not just at render): the
+                            // subscribe task runs independently of render, so an
+                            // inactive tab (not rendering) still updates timestamps to
+                            // the time the line was created, instead of bunching them at
+                            // the time the tab becomes active again.
                             let info = s.read(cx).terminal_info();
                             view.update_line_times(&info);
                         });
@@ -171,8 +173,8 @@ impl LocalTerminalView {
         }
     }
 
-    /// Drain tất cả pending events trong channel — coalesce Output events,
-    /// xử lý Clipboard/Bell/Title ngay.
+    /// Drain all pending events in the channel — coalesce Output events,
+    /// handle Clipboard/Bell/Title immediately.
     pub(crate) fn drain_coalesced_events(
         rx: &Receiver<SessionEvent>,
         this: &gpui::WeakEntity<Self>,
@@ -205,45 +207,48 @@ impl LocalTerminalView {
         }
     }
 
-    /// Cập nhật `line_times` tại **thời điểm render**, theo model **grow-only**
-    /// keyed bằng chỉ số absolute của dòng.
+    /// Update `line_times` at **render time**, using a **grow-only** model keyed
+    /// by each line's absolute index.
     ///
-    /// Mỗi dòng được gán timestamp đúng **một lần** — tại frame đầu tiên nó xuất
-    /// hiện — và **không bao giờ bị ghi đè**. Đây là điểm mấu chốt để chống lại
-    /// ConPTY repaint / reflow: những thao tác này làm `total_lines` (và do đó
-    /// `absolute_line_count` qua `terminal_info`) dao động giảm tạm thời. Code
-    /// cũ phản ứng bằng cách clear + refill `now` → mọi dòng nhảy về cùng một
-    /// giờ. Ở đây giảm tạm thời chỉ đơn giản là "không thêm gì", timestamp đã có
-    /// được giữ nguyên.
+    /// Each line is assigned a timestamp exactly **once** — on the first frame it
+    /// appears — and is **never overwritten**. This is the key to resisting ConPTY
+    /// repaint / reflow: those operations make `total_lines` (and therefore
+    /// `absolute_line_count` via `terminal_info`) temporarily dip. The old code
+    /// reacted by clearing + refilling with `now` → every line jumped to the same
+    /// time. Here a temporary dip simply means "add nothing", so existing
+    /// timestamps are kept.
     ///
-    /// `line_times[j]` ↔ dòng có absolute index `line_time_base + j`.
+    /// `line_times[j]` ↔ the line with absolute index `line_time_base + j`.
     pub(crate) fn update_line_times(&mut self, info: &TerminalInfo) {
         let total = info.total_lines;
         let absolute = info.absolute_line_count;
         let now = chrono::Local::now().format("%H:%M:%S").to_string();
 
-        // ── Reset khi màn hình bị xoá (`clear`/`cls`/RIS) ──
-        // `clear` reset bộ đếm dòng absolute trong event loop → nội dung mới TÁI
-        // SỬ DỤNG các index cũ. Nếu giữ `line_times` cũ, dòng mới sẽ tra trúng
-        // timestamp cũ (stale) → "giờ không đổi". Xoá để dòng mới được stamp lại.
+        // ── Reset when the screen is cleared (`clear`/`cls`/RIS) ──
+        // `clear` resets the absolute line counter in the event loop → new content
+        // REUSES old indices. If we keep the old `line_times`, new lines would hit
+        // stale timestamps → "time doesn't change". Clear so new lines are stamped
+        // again.
         if info.clear_epoch != self.last_clear_epoch {
             self.last_clear_epoch = info.clear_epoch;
             self.line_times.clear();
             self.line_time_base = absolute.saturating_sub(total);
         }
 
-        // Số dòng ĐÃ CÓ NỘI DUNG (high-water mark).
+        // Number of lines that ALREADY HAVE CONTENT (high-water mark).
         //
-        // `absolute_line_count` bị "thổi phồng" tới đáy viewport vì
-        // `total_lines = history + screen_lines` luôn tính cả các dòng TRỐNG bên
-        // dưới cursor (lưới luôn cao `num_lines`). Nếu stamp tới `absolute`, các
-        // dòng trống đó bị gán giờ hiện tại; khi output sau này ghi đè vào chúng,
-        // chúng giữ giờ cũ → đúng triệu chứng "một khối dòng mang giờ sai".
+        // `absolute_line_count` is "inflated" to the bottom of the viewport because
+        // `total_lines = history + screen_lines` always includes the EMPTY lines
+        // below the cursor (the grid is always `num_lines` tall). If we stamped up
+        // to `absolute`, those empty lines would get the current time; when later
+        // output overwrites them, they keep the old time → exactly the symptom
+        // "a block of lines carries the wrong time".
         //
-        // Mốc nội dung phải khớp với vùng gutter thực sự render — tức tới dòng
-        // **có nội dung** cuối cùng (`last_content_line`), KHÔNG chỉ tới cursor.
-        // Với TUI / progress bar dùng cursor-up, nội dung nằm DƯỚI cursor; nếu
-        // dừng stamp ở cursor thì các dòng đó render `[--:--:--]`.
+        // The content mark must match the gutter region actually rendered — i.e. up
+        // to the last line **with content** (`last_content_line`), NOT just up to
+        // the cursor. For TUI / progress bars that use cursor-up, content is BELOW
+        // the cursor; if we stopped stamping at the cursor, those lines would render
+        // `[--:--:--]`.
         // Absolute index = absolute − num_lines + row.
         let content_row = info.cursor_line.max(info.last_content_line).max(0) as usize;
         let content_high = absolute
@@ -251,9 +256,9 @@ impl LocalTerminalView {
             .saturating_add(content_row + 1)
             .min(absolute);
 
-        // Reset cứng: chỉ khi nội dung mới bắt đầu TRƯỚC dòng cũ nhất đang track
-        // (counter absolute bị reset hẳn). ConPTY repaint/reflow chỉ làm dao
-        // động trong phạm vi nội dung hiện có nên KHÔNG kích hoạt nhánh này.
+        // Hard reset: only when new content starts BEFORE the oldest tracked line
+        // (the absolute counter was fully reset). ConPTY repaint/reflow only
+        // fluctuates within existing content, so it does NOT trigger this branch.
         if absolute < self.line_time_base {
             self.line_times.clear();
             self.line_time_base = absolute.saturating_sub(total);
@@ -262,9 +267,9 @@ impl LocalTerminalView {
             self.line_time_base = absolute.saturating_sub(total);
         }
 
-        // Stamp các dòng mới CÓ NỘI DUNG (index ≥ covered) bằng giờ render hiện
-        // tại. Grow-only: dao động giảm tạm thời → không push gì; dòng trống dưới
-        // cursor chưa được stamp tới khi cursor (nội dung) thực sự chạm tới.
+        // Stamp the new lines WITH CONTENT (index ≥ covered) with the current render
+        // time. Grow-only: a temporary dip → push nothing; empty lines below the
+        // cursor are not stamped until the cursor (content) actually reaches them.
         let covered = self.line_time_base + self.line_times.len();
         if content_high > covered {
             let new_lines = content_high - covered;
@@ -274,7 +279,7 @@ impl LocalTerminalView {
             }
         }
 
-        // Drop timestamp của dòng đã rời scrollback (front) để bound memory.
+        // Drop timestamps of lines that have left the scrollback (front) to bound memory.
         let oldest = absolute.saturating_sub(total);
         if oldest > self.line_time_base {
             let drop = (oldest - self.line_time_base).min(self.line_times.len());

@@ -1,12 +1,12 @@
-//! `TerminalSession` trait — render/lifecycle interface dùng chung cho local
-//! shell và SSH. Hai backend implement độc lập, không biết nhau.
+//! `TerminalSession` trait — render/lifecycle interface shared by the local
+//! shell and SSH. The two backends implement it independently, unaware of each other.
 //!
-//! Thuần: không phụ thuộc GPUI. Dùng type trung tính — UI crate map sang GPUI:
-//! - `TerminalMouseButton` (thay `gpui::MouseButton`).
-//! - `CursorBounds` (thay `gpui::Bounds<Pixels>`).
-//! - `Receiver<SessionEvent>` từ `async-channel` (thay GPUI channel).
+//! Pure: no GPUI dependency. Uses neutral types — the UI crate maps them to GPUI:
+//! - `TerminalMouseButton` (instead of `gpui::MouseButton`).
+//! - `CursorBounds` (instead of `gpui::Bounds<Pixels>`).
+//! - `Receiver<SessionEvent>` from `async-channel` (instead of a GPUI channel).
 //!
-//! Tham chiếu `docs/terminal-backend.md` §9.
+//! See `docs/terminal-backend.md` §9.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,68 +21,68 @@ use crate::terminal::key_encode::{KeyMods, KeySpec, NamedKey, encode_key};
 use crate::terminal::mouse_encode::TerminalMouseButton;
 use crate::terminal::osc::Osc133Kind;
 
-/// Basic terminal info — lightweight, không clear damage.
-/// Dùng cho line_times update và scroll handle mà không ảnh hưởng
-/// damage tracking cho prepaint.
+/// Basic terminal info — lightweight, does not clear damage.
+/// Used for line_times updates and the scroll handle without affecting
+/// damage tracking for prepaint.
 #[derive(Debug, Clone, Copy)]
 pub struct TerminalInfo {
-    /// Tổng số dòng trong scrollback + viewport (bị giới hạn bởi scrolling_history).
+    /// Total lines in scrollback + viewport (capped by scrolling_history).
     pub total_lines: usize,
-    /// **Absolute** line count — tổng số dòng đã output từ lúc spawn,
-    /// kể cả khi scrollback đầy và drop dòng cũ. Monotonically increasing.
-    /// Gutter line number dùng giá trị này thay vì `total_lines`.
+    /// **Absolute** line count — total lines output since spawn, including when
+    /// scrollback is full and old lines are dropped. Monotonically increasing.
+    /// The gutter line number uses this value instead of `total_lines`.
     pub absolute_line_count: usize,
     /// Cursor line (alacritty Line.0).
     pub cursor_line: i32,
-    /// Chỉ số dòng (0-based, cùng hệ với `cursor_line`) của dòng **có nội dung**
-    /// cuối cùng trong viewport. Dùng cho `line_times` stamping để khớp với
-    /// vùng gutter thực sự render (tránh `[--:--:--]` ở dòng dưới cursor).
+    /// Index (0-based, same frame as `cursor_line`) of the last line **with
+    /// content** in the viewport. Used for `line_times` stamping to match the
+    /// gutter region actually rendered (avoids `[--:--:--]` on lines below the cursor).
     pub last_content_line: i32,
-    /// Số dòng hiển thị (viewport height).
+    /// Number of visible lines (viewport height).
     pub num_lines: usize,
     /// Display offset (0 = bottom, >0 = scrolled up).
     pub display_offset: usize,
-    /// Số lần màn hình bị xoá (`clear`/`cls`/RIS). Monotonically increasing.
-    /// UI so sánh với giá trị lần trước để reset per-line timestamps (gutter):
-    /// sau `clear`, bộ đếm dòng absolute reset → nội dung mới tái sử dụng index
-    /// cũ, nên timestamp cũ phải bị bỏ để dòng mới được stamp giờ hiện tại.
+    /// Number of times the screen was cleared (`clear`/`cls`/RIS). Monotonically increasing.
+    /// The UI compares it with the previous value to reset per-line timestamps (gutter):
+    /// after `clear`, the absolute line counter resets → new content reuses old
+    /// indices, so old timestamps must be dropped so new lines are stamped with the current time.
     pub clear_epoch: usize,
 }
 
-/// Sự kiện session phát ra cho UI (subscribe qua channel).
+/// Session events emitted to the UI (subscribed via channel).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionEvent {
-    /// Có output mới → UI re-render (debounce ở UI).
+    /// New output → the UI re-renders (debounced in the UI).
     Output,
-    /// Tiêu đề cửa sổ đổi (OSC 0/2).
+    /// The window title changed (OSC 0/2).
     Title(String),
-    /// Thư mục làm việc đổi (OSC 7).
+    /// The working directory changed (OSC 7).
     Cwd(PathBuf),
-    /// Clipboard đổi qua OSC 52 (`None` = clear, `Some` = set).
+    /// Clipboard changed via OSC 52 (`None` = clear, `Some` = set).
     Clipboard(Option<String>),
     /// Shell integration marker (OSC 133) — prompt start/end, output start/end.
     ShellIntegration(Osc133Kind),
-    /// Foreground process đổi (tab title update).
+    /// Foreground process changed (tab title update).
     ForegroundProcess(Option<String>),
-    /// Process thoát (`None` = không có exit code).
+    /// Process exited (`None` = no exit code).
     Exited(Option<i32>),
-    /// Session đóng (PTY/SSH channel kết thúc).
+    /// Session closed (PTY/SSH channel ended).
     Closed,
-    /// Bell (`\x07`) — UI show 🔔 indicator, clear khi user gõ phím.
+    /// Bell (`\x07`) — the UI shows a 🔔 indicator, cleared when the user presses a key.
     Bell,
 }
 
-/// Thống kê network của session (SSH only — local trả về `None`).
-/// Dùng cho StatusBar hiển thị tốc độ network.
+/// Network statistics for a session (SSH only — local returns `None`).
+/// Used by the StatusBar to display network speed.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NetStats {
-    /// Tổng bytes nhận (download direction: server → client).
+    /// Total bytes received (download direction: server → client).
     pub rx_bytes: u64,
-    /// Tổng bytes gửi (upload direction: client → server).
+    /// Total bytes sent (upload direction: client → server).
     pub tx_bytes: u64,
 }
-/// Hình chữ nhật pixel của con trỏ — cho IME popup positioning.
-/// UI map sang `gpui::Bounds<Pixels>`.
+/// Pixel rectangle of the cursor — for IME popup positioning.
+/// The UI maps it to `gpui::Bounds<Pixels>`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CursorBounds {
     pub x: f32,
@@ -91,61 +91,61 @@ pub struct CursorBounds {
     pub height: f32,
 }
 
-/// Render/lifecycle interface chung cho terminal session.
+/// Common render/lifecycle interface for a terminal session.
 ///
-/// Chỉ snapshot + input + lifecycle — **không** ép pump/transport chung.
-/// `LocalSession` (alacritty tty + EventLoop) và `SshSession` (russh) implement
-/// độc lập. Hai backend không phụ thuộc lẫn nhau.
+/// Snapshot + input + lifecycle only — does **not** force a shared pump/transport.
+/// `LocalSession` (alacritty tty + EventLoop) and `SshSession` (russh) implement
+/// it independently. The two backends do not depend on each other.
 pub trait TerminalSession: Send + Sync + 'static {
     // ── Render ───────────────────────────────────────────────
-    /// Snapshot grid để render (không giữ lock khi vẽ).
+    /// Snapshot the grid for rendering (does not hold the lock while drawing).
     fn snapshot(&self) -> TerminalContent;
 
-    /// Basic info (total_lines, cursor_line) — KHÔNG gọi damage()/reset_damage().
-    /// Dùng cho line_times update mà không clear damage cho prepaint.
+    /// Basic info (total_lines, cursor_line) — does NOT call damage()/reset_damage().
+    /// Used for line_times updates without clearing damage for prepaint.
     fn terminal_info(&self) -> TerminalInfo;
 
-    /// Alt-screen đang bật (vd vim/less) → tắt IME, phím thường qua on_key_down.
+    /// Alt-screen is on (e.g. vim/less) → disable IME, plain keys go through on_key_down.
     fn is_alt_screen(&self) -> bool;
 
     // ── Input ───────────────────────────────────────────────
-    /// Ghi byte vào PTY/channel (keystroke, paste, OSC response).
+    /// Write bytes to the PTY/channel (keystroke, paste, OSC response).
     fn write(&self, bytes: &[u8]);
-    /// Flush PTY output buffer (Windows ConPTY workaround).
+    /// Flush the PTY output buffer (Windows ConPTY workaround).
     fn flush_pty(&self);
-    /// Gửi Ctrl+C signal — Windows dùng GenerateConsoleCtrlEvent
-    /// (tránh ConPTY gửi CTRL_C_EVENT đến shell), fallback \x03.
+    /// Send a Ctrl+C signal — Windows uses GenerateConsoleCtrlEvent
+    /// (to avoid ConPTY sending CTRL_C_EVENT to the shell), falls back to \x03.
     fn send_ctrl_c(&self);
     /// Resize rows×cols (PTY resize / ssh window_change).
     fn resize(&self, rows: u16, cols: u16);
-    /// Scroll scrollback (chỉ khi không alt-screen / không mouse mode).
+    /// Scroll the scrollback (only when not alt-screen / not mouse mode).
     fn scroll(&self, delta: i32);
-    /// Scroll to bottom (display_offset = 0) — dùng khi có output mới.
+    /// Scroll to bottom (display_offset = 0) — used when there is new output.
     fn scroll_to_bottom(&self);
     /// Scroll to top (display_offset = max) — Shift+Home.
     fn scroll_to_top(&self);
 
     // ── Mouse ────────────────────────────────────────────────
-    /// `sel` chọn loại selection khi không ở mouse mode: `Simple` (click),
+    /// `sel` picks the selection type when not in mouse mode: `Simple` (click),
     /// `Semantic` (double-click), `Lines` (triple-click), `Block` (alt-select).
     fn mouse_down(&self, row: f32, col: f32, button: TerminalMouseButton, sel: SelectionType);
-    /// Hover (no button held) — encode mouse motion cho app mode (vim/less/htop).
-    /// KHÔNG cập nhật selection (chỉ `mouse_drag` mới cập nhật).
+    /// Hover (no button held) — encode mouse motion for app mode (vim/less/htop).
+    /// Does NOT update the selection (only `mouse_drag` updates it).
     fn mouse_move(&self, row: f32, col: f32);
-    /// Drag (left button held) — cập nhật selection end point (non-mouse mode)
-    /// hoặc encode mouse drag (mouse mode).
+    /// Drag (left button held) — update the selection end point (non-mouse mode)
+    /// or encode mouse drag (mouse mode).
     fn mouse_drag(&self, row: f32, col: f32);
     fn mouse_up(&self, row: f32, col: f32, button: TerminalMouseButton);
     fn wheel(&self, delta_y: f64, row: f32, col: f32);
 
     // ── Selection / clipboard ──────────────────────────────
-    /// Text đang được chọn (cho copy). `None` nếu không selection.
+    /// The currently selected text (for copy). `None` if there is no selection.
     fn selection_text(&self) -> Option<String>;
-    /// Xóa selection hiện tại.
+    /// Clear the current selection.
     fn clear_selection(&self);
-    /// Select toàn bộ nội dung (scrollback + visible).
+    /// Select all content (scrollback + visible).
     fn select_all(&self);
-    /// Clear screen + scrollback (gửi escape sequence clear tới PTY).
+    /// Clear screen + scrollback (send a clear escape sequence to the PTY).
     fn clear(&self);
 
     // ── IME ─────────────────────────────────────────────────
@@ -153,32 +153,32 @@ pub trait TerminalSession: Send + Sync + 'static {
     fn clear_marked_text(&self);
     fn commit_text(&self, text: &str);
     fn marked_text(&self) -> Option<String>;
-    /// Vị trí con trỏ (pixel) cho IME popup.
+    /// Cursor position (pixels) for the IME popup.
     fn cursor_bounds(&self) -> Option<CursorBounds>;
 
     // ── Lifecycle ───────────────────────────────────────────
-    /// Subscribe sự kiện session (Output/Title/Cwd/Clipboard/ShellIntegration/ForegroundProcess/Exited/Closed).
+    /// Subscribe to session events (Output/Title/Cwd/Clipboard/ShellIntegration/ForegroundProcess/Exited/Closed).
     fn subscribe(&self) -> Receiver<SessionEvent>;
-    /// Process còn sống (chưa exit/close).
+    /// Whether the process is still alive (not exited/closed).
     fn alive(&self) -> bool;
-    /// Đóng session (shutdown PTY / close channel).
+    /// Close the session (shut down PTY / close channel).
     fn close(&self);
     /// true = local shell, false = SSH.
     fn is_local(&self) -> bool;
-    /// Tiêu đề hiện tại (OSC 0/2).
+    /// The current title (OSC 0/2).
     fn title(&self) -> Option<String>;
-    /// Cwd hiện tại (OSC 7).
+    /// The current cwd (OSC 7).
     fn cwd(&self) -> Option<PathBuf>;
 
     // ── Send Text / Keystroke ──────────────────────────────────
-    /// Gửi raw text vào PTY (cho automation, extension, task runner).
-    /// Tương đương Zed `SendText(String)`.
+    /// Send raw text to the PTY (for automation, extensions, task runners).
+    /// Equivalent to Zed `SendText(String)`.
     fn send_text(&self, text: &str) {
         self.write(text.as_bytes());
     }
 
-    /// Gửi keystroke encoded vào PTY (vd "Ctrl+C" → 0x03, "Enter" → \r).
-    /// Tương đương Zed `SendKeystroke(String)`.
+    /// Send an encoded keystroke to the PTY (e.g. "Ctrl+C" → 0x03, "Enter" → \r).
+    /// Equivalent to Zed `SendKeystroke(String)`.
     /// Parse format: `Ctrl+Shift+V`, `Alt+Enter`, `F1`, `Up`, `a`.
     fn send_keystroke(&self, keystroke: &str) {
         if let Some((spec, mods)) = parse_keystroke(keystroke) {
@@ -188,14 +188,14 @@ pub trait TerminalSession: Send + Sync + 'static {
         }
     }
 
-    /// Bracketed paste mode đang bật → wrap paste trong `\x1b[200~...\x1b[201~`.
-    /// Zed: kiểm `Modes::BRACKETED_PASTE` rồi wrap.
+    /// Bracketed paste mode is on → wrap the paste in `\x1b[200~...\x1b[201~`.
+    /// Zed: checks `Modes::BRACKETED_PASTE` then wraps.
     fn is_bracketed_paste(&self) -> bool {
         self.snapshot().mode.contains(TermMode::BRACKETED_PASTE)
     }
 
-    /// Paste text vào PTY. Tự động wrap trong bracketed paste markers nếu
-    /// terminal đang ở bracketed paste mode.
+    /// Paste text into the PTY. Automatically wraps it in bracketed paste markers
+    /// if the terminal is in bracketed paste mode.
     fn paste(&self, text: &str) {
         if self.is_bracketed_paste() {
             let wrapped = format!("\x1b[200~{}\x1b[201~", text);
@@ -206,50 +206,49 @@ pub trait TerminalSession: Send + Sync + 'static {
     }
 
     // ── Shell Integration (OSC 133) ────────────────────────────
-    /// Số dòng prompt markers đã capture (cho scroll-to-prompt).
-    /// Mỗi marker là vị trí dòng nơi prompt bắt đầu (OSC 133;A).
+    /// Number of prompt markers captured (for scroll-to-prompt).
+    /// Each marker is the line position where a prompt starts (OSC 133;A).
     fn prompt_count(&self) -> usize {
         0
     }
-    /// Scroll đến prompt thứ `n` (0-based, từ cuối lên).
-    /// `n=0` = prompt gần nhất, `n=1` = prompt trước đó, v.v.
+    /// Scroll to the `n`-th prompt (0-based, from the bottom up).
+    /// `n=0` = the most recent prompt, `n=1` = the previous one, etc.
     fn scroll_to_prompt(&self, _n: usize) {}
 
     // ── Foreground Process ─────────────────────────────────────
-    /// Foreground process hiện tại (vd "cargo", "node", "python").
-    /// `None` = shell prompt (không có command chạy).
+    /// The current foreground process (e.g. "cargo", "node", "python").
+    /// `None` = shell prompt (no command running).
     fn foreground_process(&self) -> Option<String> {
         None
     }
 
     // ── Breadcrumb ──────────────────────────────────────────────
-    /// Text hiển thị trong toolbar breadcrumb (vd cwd path).
+    /// Text shown in the toolbar breadcrumb (e.g. the cwd path).
     fn breadcrumb_text(&self) -> Option<String> {
         self.cwd().map(|p| p.display().to_string())
     }
 
-
     // ── Network Stats ────────────────────────────────────────
-    /// Thống kê network (bytes rx/tx). `None` cho local shell.
-    /// Dùng cho StatusBar hiển thị tốc độ network (kbps).
+    /// Network statistics (rx/tx bytes). `None` for a local shell.
+    /// Used by the StatusBar to display network speed (kbps).
     fn network_stats(&self) -> Option<NetStats> {
         None
     }
 
     // ── SFTP ─────────────────────────────────────────────
-    /// SFTP backend nếu session có SFTP channel (SSH only).
-    /// `None` cho local shell — không ép local session implement SFTP.
+    /// SFTP backend if the session has an SFTP channel (SSH only).
+    /// `None` for a local shell — does not force local sessions to implement SFTP.
     fn sftp(&self) -> Option<Arc<dyn SftpBackend>> {
         None
     }
 }
 
-/// Parse keystroke string → (KeySpec, KeyMods).
+/// Parse a keystroke string → (KeySpec, KeyMods).
 ///
 /// Format: `Ctrl+Shift+V`, `Alt+Enter`, `Up`, `F1`, `a`, `Enter`, `Tab`.
-/// Modifiers cách nhau bằng `+`, case-insensitive.
+/// Modifiers are separated by `+`, case-insensitive.
 ///
-/// Tương đương Zed `SendKeystroke(String)`.
+/// Equivalent to Zed `SendKeystroke(String)`.
 pub fn parse_keystroke(s: &str) -> Option<(KeySpec, KeyMods)> {
     let parts: Vec<&str> = s.split('+').collect();
     let mut mods = KeyMods::default();

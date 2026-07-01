@@ -1,7 +1,7 @@
 //! Domain model & business logic for OneTerm.
 //!
-//! Leaf crate: không phụ thuộc `gpui`. Chứa types, traits
-//! (`TerminalSession`, `FileTransfer`), `AppError`.
+//! Leaf crate: does not depend on `gpui`. Contains types and traits
+//! (`TerminalSession`, `FileTransfer`), and `AppError`.
 
 pub mod config;
 pub mod error;
@@ -13,5 +13,5 @@ pub use error::AppError;
 pub use sftp::{FileEntry, FileStat, SftpBackend};
 pub use terminal::{CursorBounds, NetStats, SessionEvent, TerminalInfo, TerminalSession};
 
-/// Result type dùng chung cho crate `core`.
+/// Shared result type for the `core` crate.
 pub type Result<T> = std::result::Result<T, AppError>;

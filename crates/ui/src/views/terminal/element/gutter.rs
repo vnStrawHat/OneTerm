@@ -1,4 +1,4 @@
-//! Gutter (line timestamps + line numbers) helpers cho `TerminalElement`.
+//! Gutter (line timestamps + line numbers) helpers for `TerminalElement`.
 
 use gpui::{Font, Pixels, SharedString, TextRun, Window, px};
 
@@ -6,10 +6,10 @@ use super::super::layout::GutterEntry;
 use super::super::theme::TerminalTheme;
 use super::measure::snap;
 
-/// Tính chiều rộng gutter theo số line hiện tại.
+/// Compute the gutter width from the current line count.
 ///
-/// Dùng `absolute_line_count` (monotonically increasing) thay vì `line_times.len()`
-/// (bị cap bởi scrollback) để gutter rộng đủ cho line number lớn.
+/// Uses `absolute_line_count` (monotonically increasing) instead of `line_times.len()`
+/// (capped by scrollback) so the gutter is wide enough for large line numbers.
 pub(crate) fn compute_gutter_width(
     _line_times: &[String],
     absolute_line_count: usize,
@@ -39,14 +39,14 @@ pub(crate) fn compute_gutter_width(
     gutter_text_width + px(8.0)
 }
 
-/// Build các `GutterEntry` cho từng display line.
+/// Build the `GutterEntry` for each display line.
 ///
-/// `line_time_base` = absolute index (0-based) của `line_times[0]`. Time của một
-/// dòng được tra theo **absolute index** của chính dòng đó (bằng với line number
-/// − 1), nên không bị lệch khi `total_lines` dao động vì ConPTY repaint/reflow.
-/// `absolute_line_count` = tổng số dòng đã output (monotonically increasing).
-/// `viewport_lines` là chiều cao viewport (grid rows). `max_entries` giới hạn
-/// số entry thực tế render.
+/// `line_time_base` = the absolute index (0-based) of `line_times[0]`. A line's
+/// time is looked up by its own **absolute index** (equal to line number − 1),
+/// so it doesn't drift when `total_lines` fluctuates due to ConPTY repaint/reflow.
+/// `absolute_line_count` = total lines output so far (monotonically increasing).
+/// `viewport_lines` is the viewport height (grid rows). `max_entries` caps the
+/// number of entries actually rendered.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn compute_gutter_entries(
     line_times: &[String],
@@ -63,17 +63,17 @@ pub(crate) fn compute_gutter_entries(
 
     let mut entries = Vec::with_capacity(max_entries);
     for i in 0..max_entries {
-        // Absolute index (0-based) của dòng tại display row `i`.
+        // Absolute index (0-based) of the line at display row `i`.
         let abs_index =
             absolute_line_count as i32 - display_offset as i32 - viewport_lines as i32 + i as i32;
         let line_num = (abs_index + 1).max(1) as usize;
-        // Tra timestamp theo absolute index (qua base). Khi dòng CÓ NỘI DUNG được
-        // gutter render nhưng chưa có timestamp tương ứng — thường do lệch trạng
-        // thái giữa lần đọc `terminal_info` lúc stamp (render) và lúc dựng gutter
-        // (prepaint), đặc biệt sau `clear` khi ConPTY repaint khiến
-        // `absolute_line_count` dao động — ta KHÔNG hiện `[--:--:--]` mà fallback
-        // về timestamp gần nhất đã biết. `[--:--:--]` chỉ dành cho vùng phía TRÊN
-        // dòng đầu tiên (`abs_index < 0`) hoặc khi chưa có timestamp nào.
+        // Look up the timestamp by absolute index (via base). When a line WITH CONTENT
+        // is rendered in the gutter but has no corresponding timestamp yet — usually a
+        // state skew between reading `terminal_info` at stamp time (render) and building
+        // the gutter (prepaint), especially after `clear` when ConPTY repaint makes
+        // `absolute_line_count` fluctuate — we do NOT show `[--:--:--]` but fall back to
+        // the most recent known timestamp. `[--:--:--]` is reserved only for the region
+        // ABOVE the first line (`abs_index < 0`) or when there is no timestamp yet.
         let time_str = if abs_index < 0 {
             "--:--:--"
         } else {
@@ -83,11 +83,11 @@ pub(crate) fn compute_gutter_entries(
                 line_times
                     .get(j)
                     .map(|s| s.as_str())
-                    // Dòng mới hơn vùng đã stamp (read skew) → giờ gần nhất.
+                    // Line newer than the stamped region (read skew) → most recent time.
                     .or_else(|| line_times.last().map(|s| s.as_str()))
                     .unwrap_or("--:--:--")
             } else {
-                // Dòng cũ hơn vùng đang track → giờ cũ nhất còn lưu.
+                // Line older than the tracked region → oldest time still stored.
                 line_times.first().map(|s| s.as_str()).unwrap_or("--:--:--")
             }
         };

@@ -1,7 +1,7 @@
-//! GPUI views, layout, theme, state cho OneTerm.
+//! GPUI views, layout, theme, and state for OneTerm.
 //!
-//! Crate này chứa toàn bộ gpui + gpui-component. Giao tiếp với `ssh`/`local`
-//! qua trait abstraction (chưa triển khai ở skeleton này).
+//! This crate contains all gpui + gpui-component code. It communicates with
+//! `ssh`/`local` through trait abstractions (not yet implemented in this skeleton).
 
 pub mod actions;
 pub mod components;
@@ -16,11 +16,11 @@ use gpui_component::dock::register_panel;
 
 use crate::views::{SessionPanel, SftpPanel, TerminalPanel, TerminalSettingsPanel};
 
-/// Khởi tạo UI: đăng ký 3 leaf panel cho PanelRegistry (deserialize layout).
+/// Initialize the UI: register the 3 leaf panels with the PanelRegistry (for layout deserialization).
 ///
-/// `gpui_component::init(cx)` (gọi ở `app::main`) đã tự khởi tạo theme,
-/// dock, root, ... và `PanelRegistry::init`. Hàm này chỉ bổ sung 3 panel
-/// của OneTerm vào registry để `DockArea::load` tái tạo được layout cũ.
+/// `gpui_component::init(cx)` (called in `app::main`) already initializes the theme,
+/// dock, root, etc. and `PanelRegistry::init`. This function only adds OneTerm's 3
+/// panels to the registry so `DockArea::load` can restore the previous layout.
 pub fn init(cx: &mut App) {
     theme::init(cx);
     state::AppState::init(cx);

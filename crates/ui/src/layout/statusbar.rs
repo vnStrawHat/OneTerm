@@ -1,7 +1,7 @@
-//! Status bar — góc trái: đồng hồ datetime, góc phải: Toggle Right Dock.
+//! Status bar — left side: datetime clock; right side: Toggle Right Dock.
 //!
-//! Clock entity được tạo 1 lần trong `OneTermWorkspace::new` và truyền vào đây,
-//! tránh tạo mới mỗi render (sẽ drop timer Task → đồng hồ dừng).
+//! The clock entity is created once in `OneTermWorkspace::new` and passed in here,
+//! avoiding a fresh one each render (which would drop the timer Task → clock stops).
 
 use gpui::{Context, Entity, Styled, Window, div, px};
 use gpui_component::{
@@ -14,10 +14,10 @@ use gpui_component::{
 use crate::components::{DateTimeClock, NetSpeedIndicator};
 use crate::layout::OneTermWorkspace;
 
-/// Build `StatusBar` cho `OneTermWorkspace`.
+/// Build the `StatusBar` for `OneTermWorkspace`.
 ///
-/// Clock entity (`clock`) được giữ bởi workspace, chỉ tạo 1 lần để timer
-/// 1s fire ổn định — không tạo mới mỗi render.
+/// The clock entity (`clock`) is held by the workspace and created only once so the
+/// 1s timer fires reliably — not recreated each render.
 pub fn build_status_bar(
     dock_area: &Entity<DockArea>,
     clock: Entity<DateTimeClock>,
@@ -28,12 +28,12 @@ pub fn build_status_bar(
     let dock_area = dock_area.clone();
 
     StatusBar::new()
-        // Sync border top color với Dock border (cx.theme().border)
+        // Sync the top border color with the Dock border (cx.theme().border)
         .border_color(cx.theme().border)
         .left(clock)
         .left(
             // Separator + network speed indicator.
-            div().w(px(1.)).h(px(12.)).bg(cx.theme().border)
+            div().w(px(1.)).h(px(12.)).bg(cx.theme().border),
         )
         .left(net_speed)
         .right(
@@ -47,7 +47,7 @@ pub fn build_status_bar(
                     move |_, window, cx| {
                         dock_area.update(cx, |area, cx| {
                             area.toggle_dock(DockPlacement::Right, window, cx);
-                            // Trigger save — toggle_dock không emit LayoutChanged.
+                            // Trigger a save — toggle_dock does not emit LayoutChanged.
                             cx.emit(DockEvent::LayoutChanged);
                         });
                     }

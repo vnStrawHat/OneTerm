@@ -1,44 +1,47 @@
-//! Custom icon enum — tương tự `gpui_component::IconName` nhưng cho riêng OneTerm.
+//! Custom icon enum — similar to `gpui_component::IconName` but specific to OneTerm.
 //!
-//! ## Thêm icon mới
+//! ## Adding a new icon
 //!
-//! 1. Thả file `.svg` vào `crates/ui/assets/icons/` (ví dụ `my-icon.svg`)
-//! 2. Build — variant `AppIcon::MyIcon` tự động sinh ra
-//! 3. Sử dụng: `Icon::new(AppIcon::MyIcon)` hoặc `.icon(AppIcon::MyIcon)`
+//! 1. Drop a `.svg` file into `crates/ui/assets/icons/` (e.g. `my-icon.svg`)
+//! 2. Build — the `AppIcon::MyIcon` variant is generated automatically
+//! 3. Use it: `Icon::new(AppIcon::MyIcon)` or `.icon(AppIcon::MyIcon)`
 //!
-//! Tên variant = PascalCase của filename:
+//! The variant name is the PascalCase of the filename:
 //! - `arrow-right.svg` → `AppIcon::ArrowRight`
 //! - `my_icon.svg`     → `AppIcon::MyIcon`
 //!
-//! File SVG phẳng cần có `width="16" height="16"` (hoặc 24) + `stroke="currentColor"`
-//! để nhận text_color từ theme.
+//! A flat SVG file needs `width="16" height="16"` (or 24) plus `stroke="currentColor"`
+//! to pick up `text_color` from the theme.
 //!
-//! ## Giữ màu sắc SVG (multi-color)
+//! ## Preserving SVG colors (multi-color)
 //!
-//! `Icon::new(AppIcon::...)` render SVG qua **alpha mask** → tất cả màu bị mất,
-//! chỉ giữ 1 màu `text_color`.
+//! `Icon::new(AppIcon::...)` renders the SVG through an **alpha mask**, so all colors
+//! are lost and only the single `text_color` remains.
 //!
-//! Để giữ nguyên màu trong SVG file, dùng `.colored()` thay vì `Icon::new()`:
+//! To keep the colors in the SVG file, use `.colored()` instead of `Icon::new()`:
 //! ```ignore
 //! AppIcon::File3.colored().size(px(16.))   // full-color image
 //! Icon::new(AppIcon::Terminal).small()       // monochrome (theme-aware)
 //! ```
 
-use gpui::{AnyElement, App, AssetSource, ImageSource, IntoElement, RenderOnce, Resource, Result, SharedString, Styled as _, Window, img};
+use gpui::{
+    AnyElement, App, AssetSource, ImageSource, IntoElement, RenderOnce, Resource, Result,
+    SharedString, Styled as _, Window, img,
+};
 use gpui_component::{Icon, IconNamed, icon_named};
 
 // Generate `AppIcon` enum from SVG files in `assets/icons/`.
 // The `$ONETERM_UI_ICONS_DIR` env var is set by `build.rs`.
 icon_named!(AppIcon, "$ONETERM_UI_ICONS_DIR", [Debug, PartialEq, Eq]);
 
-/// Cho phép `AppIcon` dùng trực tiếp như element: `div().child(AppIcon::Terminal)`.
+/// Allows `AppIcon` to be used directly as an element: `div().child(AppIcon::Terminal)`.
 impl RenderOnce for AppIcon {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         Icon::new(self)
     }
 }
 
-/// Cho phép `.into_any_element()`.
+/// Enables `.into_any_element()`.
 impl From<AppIcon> for AnyElement {
     fn from(val: AppIcon) -> Self {
         Icon::new(val).into_any_element()
@@ -55,8 +58,7 @@ impl AppIcon {
     ///
     /// Chain `.size(px(16.))` or `.w(px(16.)).h(px(16.))` to set dimensions.
     pub fn colored(self) -> gpui::Img {
-        img(ImageSource::Resource(Resource::Embedded(self.path())))
-            .flex_none()
+        img(ImageSource::Resource(Resource::Embedded(self.path()))).flex_none()
     }
 }
 

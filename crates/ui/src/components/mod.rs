@@ -1,4 +1,4 @@
-//! UI component tái sử dụng (widget thuần, không phụ thuộc domain).
+//! Reusable UI components (pure widgets, no domain dependencies).
 
 pub mod datetime_clock;
 pub mod net_speed;

@@ -1,24 +1,24 @@
-//! Persist trạng thái Zoom (fullscreen) của các panel trong Dock.
+//! Persist the Zoom (fullscreen) state of panels in the Dock.
 //!
-//! `gpui-component` không serialize `TabPanel.zoomed` (private field) vào
-//! `DockAreaState`, nên zoom bị mất khi restart. Module này bù bằng cách:
+//! `gpui-component` does not serialize `TabPanel.zoomed` (a private field) into
+//! `DockAreaState`, so the zoom is lost on restart. This module compensates by:
 //!
-//! 1. Subscribe `PanelEvent::ZoomIn`/`ZoomOut` trên mỗi `TabPanel` để theo dõi
-//!    panel nào đang zoom (mirror state — vì `zoomed` không đọc được từ ngoài).
-//! 2. Khi save (`save_layout` / `on_app_quit`), ghi `panel_name` của panel đang
-//!    zoom vào `docks.json` (field `zoomed_panel`, inject vào JSON value — không
-//!    động tới struct `DockAreaState`).
-//! 3. Khi load, đọc `zoomed_panel` → tìm TabPanel có active panel trùng tên →
-//!    focus + dispatch `ToggleZoom` để zoom lại (qua đúng code path, toolbar state
-//!    nhất quán).
+//! 1. Subscribing to `PanelEvent::ZoomIn`/`ZoomOut` on each `TabPanel` to track
+//!    which panel is zoomed (a mirror state — since `zoomed` is not readable from outside).
+//! 2. On save (`save_layout` / `on_app_quit`), writing the `panel_name` of the zoomed
+//!    panel into `docks.json` (field `zoomed_panel`, injected into the JSON value — without
+//!    touching the `DockAreaState` struct).
+//! 3. On load, reading `zoomed_panel` → finding the TabPanel whose active panel matches the
+//!    name → focus + dispatch `ToggleZoom` to zoom it again (via the proper code path, with
+//!    consistent toolbar state).
 
 use gpui::{App, Entity};
 use gpui_component::dock::{DockArea, DockItem, TabPanel};
 
-/// Tên field JSON lưu panel đang zoom trong `docks.json`.
+/// Name of the JSON field storing the zoomed panel in `docks.json`.
 pub(crate) const ZOOM_FIELD: &str = "zoomed_panel";
 
-/// Duyệt toàn bộ cây Dock (center + 3 docks) → collect mọi `Entity<TabPanel>`.
+/// Walk the entire Dock tree (center + 3 docks) → collect every `Entity<TabPanel>`.
 pub(crate) fn collect_tab_panels(dock_area: &DockArea, cx: &App) -> Vec<Entity<TabPanel>> {
     let mut out = Vec::new();
     visit_item(dock_area.center(), &mut out);
@@ -47,7 +47,7 @@ fn visit_item(item: &DockItem, out: &mut Vec<Entity<TabPanel>>) {
     }
 }
 
-/// Tìm TabPanel đầu tiên có active panel trùng `name`.
+/// Find the first TabPanel whose active panel matches `name`.
 pub(crate) fn find_tab_by_panel_name(
     dock_area: &DockArea,
     name: &str,

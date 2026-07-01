@@ -1,7 +1,7 @@
-//! [`GroupComboDelegate`] + [`group_combobox`] — Combobox delegate và widget
-//! cho Group field trong session dialog.
+//! [`GroupComboDelegate`] + [`group_combobox`] — Combobox delegate and widget
+//! for the Group field in the session dialog.
 //!
-//! Tách từ `session_dialog.rs` để giảm độ dài file.
+//! Split out from `session_dialog.rs` to keep the file shorter.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -19,17 +19,17 @@ use gpui_component::{
     searchable_list::{SearchableListDelegate, SearchableListItem, SearchableVec},
 };
 
-/// Shared mutable cell cho query text và group value.
-/// Dùng `Rc<RefCell<>>` để delegate (bên trong ComboboxState) và footer
-/// button (bên ngoài) cùng truy cập.
+/// Shared mutable cell for the query text and group value.
+/// Uses `Rc<RefCell<>>` so the delegate (inside ComboboxState) and the footer
+/// button (outside) can both access it.
 pub(crate) type SharedCell = Rc<RefCell<String>>;
 
-/// Delegate cho Group Combobox — wraps [`SearchableVec`] + tracks query.
+/// Delegate for the Group Combobox — wraps [`SearchableVec`] + tracks the query.
 pub(crate) struct GroupComboDelegate {
     inner: SearchableVec<SharedString>,
-    /// Search query hiện tại (cập nhật trong `perform_search`).
+    /// Current search query (updated in `perform_search`).
     query: SharedCell,
-    /// Group value cuối cùng (cập nhật trong `on_confirm` hoặc footer click).
+    /// Last group value (updated in `on_confirm` or on footer click).
     group_value: SharedCell,
 }
 
@@ -80,11 +80,11 @@ impl SearchableListDelegate for GroupComboDelegate {
     }
 }
 
-/// Render Group field as a searchable [`Combobox`] với:
-/// - **Trigger**: hiển thị `group_value` (hoặc placeholder nếu rỗng) +
-///   chevron-down + optional clear (×) button.
-/// - **Footer**: nút "Create '<query>'" — khi click → set `group_value`
-///   = query text (cho phép tạo group mới).
+/// Render the Group field as a searchable [`Combobox`] with:
+/// - **Trigger**: shows `group_value` (or the placeholder if empty) +
+///   chevron-down + an optional clear (×) button.
+/// - **Footer**: a "Create '<query>'" button — on click → sets `group_value`
+///   = query text (allows creating a new group).
 pub(crate) fn group_combobox(
     state: &gpui::Entity<ComboboxState<GroupComboDelegate>>,
     group_value: &SharedCell,
@@ -121,7 +121,7 @@ pub(crate) fn group_combobox(
                             .when(!val.is_empty(), |this| this.child(SharedString::from(val))),
                     )
                     .when(!ctx.open, |this| {
-                        // Clear (×) button — chỉ hiện khi dropdown đóng và có value.
+                        // Clear (×) button — only shown when the dropdown is closed and a value exists.
                         this.when(!group_value.borrow().is_empty(), |this| {
                             let gv = group_value.clone();
                             this.child(

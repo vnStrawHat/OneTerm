@@ -1,10 +1,10 @@
-//! Custom event loop — thay thế `alacritty_terminal::event_loop::EventLoop`.
+//! Custom event loop — replacement for `alacritty_terminal::event_loop::EventLoop`.
 //!
-//! Khác alacritty EventLoop: feed byte PTY cho **cả** `ansi::Processor` (Term)
-//! VÀ `vte::Parser` (OscSink) song song → bắt OSC 7 (cwd) + OSC 133 (shell
-//! integration markers) mà alacritty drop.
+//! Unlike the alacritty EventLoop, this feeds PTY bytes to **both**
+//! `ansi::Processor` (Term) AND `vte::Parser` (OscSink) in parallel, capturing
+//! OSC 7 (cwd) and OSC 133 (shell integration markers) that alacritty drops.
 //!
-//! Tham chiếu: `alacritty_terminal::event_loop::EventLoop` (để tham khảo).
+//! Reference: `alacritty_terminal::event_loop::EventLoop`.
 
 use std::borrow::Cow;
 use std::collections::VecDeque;
@@ -27,21 +27,22 @@ use oneterm_core::terminal::osc::{Osc133Kind, OscPayload, OscSink, parse_cwd_url
 use crate::listener::LocalListener;
 use crate::state::SharedState;
 
-/// Buffer size cho PTY read (1 MiB — same as alacritty).
+/// PTY read buffer size (1 MiB — same as alacritty).
 const READ_BUFFER_SIZE: usize = 0x10_0000;
 
-/// Message gửi tới event loop.
+/// Message sent to the event loop.
 #[derive(Debug)]
 pub enum ShellMsg {
-    /// Data ghi vào PTY (keystroke, paste).
+    /// Data written to the PTY (keystroke, paste).
     Input(Cow<'static, [u8]>),
-    /// Resize PTY.
+    /// Resize the PTY.
     Resize(WindowSize),
-    /// Shutdown event loop.
+    /// Shut down the event loop.
     Shutdown,
 }
 
-/// Notifier để UI gửi message tới event loop (thay `EventLoopSender`).
+/// Notifier for the UI to send messages to the event loop (replaces
+/// `EventLoopSender`).
 #[derive(Clone)]
 pub struct ShellNotifier {
     sender: mpsc::Sender<ShellMsg>,
@@ -68,7 +69,7 @@ pub struct ShellEventLoop {
 }
 
 impl ShellEventLoop {
-    /// Tạo event loop mới. Gọi `spawn()` để chạy thread.
+    /// Create a new event loop. Call `spawn()` to run the thread.
     pub fn new(
         pty: tty::Pty,
         term: std::sync::Arc<FairMutex<Term<LocalListener>>>,
@@ -94,7 +95,7 @@ impl ShellEventLoop {
         ))
     }
 
-    /// Spawn event loop thread. Trả join handle.
+    /// Spawn the event loop thread. Returns the join handle.
     pub fn spawn(mut self) -> std::thread::JoinHandle<()> {
         std::thread::Builder::new()
             .name("PTY reader".into())
@@ -123,7 +124,7 @@ impl ShellEventLoop {
 
         loop {
             events.clear();
-            // Timeout: short poll để check channel messages.
+            // Timeout: short poll to check channel messages.
             if let Err(err) = self
                 .poll
                 .wait(&mut events, Some(std::time::Duration::from_millis(50)))
@@ -247,13 +248,13 @@ impl ShellEventLoop {
                         let total_after = terminal.total_lines();
                         let screen_lines = terminal.screen_lines();
 
-                        // Track absolute line count (decoupled từ scrollback).
+                        // Track absolute line count (decoupled from scrollback).
                         if total_after > prev_total {
-                            // Scrollback chưa đầy — total_lines tăng.
+                            // Scrollback not yet full — total_lines grows.
                             absolute += total_after - prev_total;
                         } else if total_after == prev_total && total_after > screen_lines {
-                            // Scrollback đầy — total_lines không đổi nhưng có output mới.
-                            // Đếm \n trong buffer = số dòng bị drop.
+                            // Scrollback full — total_lines unchanged but there is new output.
+                            // Count \n in the buffer = number of dropped lines.
                             let newline_count =
                                 buf[..unprocessed].iter().filter(|&&b| b == b'\n').count();
                             absolute += newline_count;
@@ -263,7 +264,7 @@ impl ShellEventLoop {
                         }
                         prev_total = total_after;
 
-                        // Feed SAME bytes to OscSink (via vte::Parser) — song song.
+                        // Feed the SAME bytes to OscSink (via vte::Parser), in parallel.
                         vte_parser.advance(&mut osc_sink, &buf[..unprocessed]);
 
                         // Process OSC payloads (OSC 7, OSC 133, etc.).
@@ -271,8 +272,8 @@ impl ShellEventLoop {
                             self.handle_osc(payload);
                         }
 
-                        // Màn hình vừa bị xoá (clear/cls/RIS) → tăng clear_epoch
-                        // để UI reset per-line timestamps (gutter).
+                        // Screen was just cleared (clear/cls/RIS) → bump clear_epoch
+                        // so the UI resets per-line timestamps (gutter).
                         if osc_sink.take_clear() {
                             self.state.lock().unwrap().clear_epoch += 1;
                         }
@@ -280,11 +281,11 @@ impl ShellEventLoop {
                         processed += unprocessed;
                         unprocessed = 0;
 
-                        // KHÔNG break ở MAX_LOCKED_READ — đọc đến khi pipe empty.
-                        // Khi pipe empty, try_read() stores waker → reader thread
-                        // notify khi thêm data → không bị stuck.
-                        // Term lock được giữ trong khi đọc, nhưng FairMutex đảm bảo
-                        // UI acquire được lock sau khi event loop release.
+                        // Do NOT break at MAX_LOCKED_READ — read until the pipe is empty.
+                        // When the pipe is empty, try_read() stores a waker → the reader
+                        // thread notifies when more data arrives → no stalling.
+                        // The Term lock is held while reading, but FairMutex ensures the
+                        // UI can acquire the lock once the event loop releases it.
                     }
 
                     if processed > 0 {

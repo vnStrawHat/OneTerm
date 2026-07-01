@@ -1,32 +1,32 @@
-//! URL detection trong terminal grid — Ctrl+hover highlight + Ctrl+click mở URL.
+//! URL detection in the terminal grid — Ctrl+hover highlight + Ctrl+click to open URL.
 //!
-//! Hai loại URL:
-//! 1. **OSC 8 hyperlink** — shell gửi escape sequence `\e]8;;URL\e\\` →
-//!    alacritty_terminal gắn `Hyperlink` vào cell. Có sẵn `cell.hyperlink()`.
-//! 2. **Plain text URL** — `http://...`, `https://...`, `www.` xuất hiện
-//!    trong output text. Phải scan cells để detect.
+//! Two kinds of URL:
+//! 1. **OSC 8 hyperlink** — the shell sends the escape sequence `\e]8;;URL\e\\` →
+//!    alacritty_terminal attaches a `Hyperlink` to the cell. Available via `cell.hyperlink()`.
+//! 2. **Plain text URL** — `http://...`, `https://...`, `www.` appearing in
+//!    output text. Must scan cells to detect.
 
 use oneterm_core::terminal::IndexedCell;
 
-/// URL detected tại một vị trí trong terminal.
+/// A URL detected at a position in the terminal.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DetectedUrl {
-    /// URL string (có thể thêm `https://` prefix nếu là `www.`).
+    /// URL string (may add an `https://` prefix when it is `www.`).
     pub url: String,
-    /// Display row (0-based từ top viewport).
+    /// Display row (0-based from top of viewport).
     pub row: usize,
-    /// Cột bắt đầu (0-based, inclusive).
+    /// Start column (0-based, inclusive).
     pub start_col: usize,
-    /// Cột kết thúc (0-based, exclusive).
+    /// End column (0-based, exclusive).
     pub end_col: usize,
 }
 
-/// Tìm URL tại (row, col) trong terminal snapshot.
+/// Find a URL at (row, col) in the terminal snapshot.
 ///
-/// Thứ tự kiểm tra:
-/// 1. OSC 8 hyperlink — cell có `hyperlink()` → tìm tất cả cell cùng hyperlink ID
-///    trên cùng dòng.
-/// 2. Plain text URL — scan dòng tìm `http://`, `https://`, `ftp://`, `www.`.
+/// Check order:
+/// 1. OSC 8 hyperlink — cell has `hyperlink()` → find all cells with the same
+///    hyperlink ID on the same line.
+/// 2. Plain text URL — scan the line for `http://`, `https://`, `ftp://`, `www.`.
 pub fn detect_url_at(
     cells: &[IndexedCell],
     num_cols: usize,
@@ -44,7 +44,7 @@ pub fn detect_url_at(
         return None;
     }
 
-    // 1. OSC 8 hyperlink — cell có hyperlink() → tìm range cùng ID trên dòng.
+    // 1. OSC 8 hyperlink — cell has hyperlink() → find the range with the same ID on the line.
     if let Some(h) = line_cells[col].cell.hyperlink() {
         let target_id = h.id();
         let mut start = col;
@@ -93,7 +93,7 @@ pub fn detect_url_at(
         })
         .collect();
 
-    // Skip nếu char tại col là whitespace hoặc null.
+    // Skip if the char at col is whitespace or null.
     if chars[col].is_whitespace() || chars[col] == '\0' {
         return None;
     }
@@ -105,7 +105,7 @@ pub fn detect_url_at(
         &['w', 'w', 'w', '.'],
     ];
 
-    // Search backwards từ col để tìm URL prefix.
+    // Search backwards from col to find a URL prefix.
     for start in (0..=col).rev() {
         for prefix in PREFIXES {
             let plen = prefix.len();
@@ -121,13 +121,13 @@ pub fn detect_url_at(
                 continue;
             }
 
-            // Found prefix at `start`. Extend URL đến whitespace hoặc end of line.
+            // Found prefix at `start`. Extend the URL to whitespace or end of line.
             let mut end = start + plen;
             while end < n && !chars[end].is_whitespace() && chars[end] != '\0' {
                 end += 1;
             }
 
-            // col phải nằm trong [start, end).
+            // col must lie within [start, end).
             if col < start || col >= end {
                 continue;
             }
@@ -138,7 +138,7 @@ pub fn detect_url_at(
             }
 
             if end <= start + plen {
-                continue; // URL chỉ có prefix, không có nội dung.
+                continue; // URL has only a prefix, no content.
             }
 
             let url: String = chars[start..end].iter().collect();

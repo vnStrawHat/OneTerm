@@ -1,7 +1,8 @@
 //! Local shell via PTY for OneTerm.
 //!
-//! Dùng `alacritty_terminal::tty` + `EventLoop` (ConPTY trên Windows).
-//! Shell `cmd`/`powershell`/`pwsh`/custom config được. Xem `docs/terminal-backend.md`.
+//! Uses `alacritty_terminal::tty` + `EventLoop` (ConPTY on Windows).
+//! Supports `cmd`/`powershell`/`pwsh`/custom shell config. See
+//! `docs/terminal-backend.md`.
 
 pub mod event_loop;
 pub mod listener;

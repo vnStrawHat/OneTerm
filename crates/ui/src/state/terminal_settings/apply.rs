@@ -10,7 +10,7 @@ use super::{
 };
 
 impl TerminalSettings {
-    /// Apply config từ `terminal.json` vào settings.
+    /// Apply config from `terminal.json` into the settings.
     pub(crate) fn apply_config(&mut self, cfg: &TerminalConfig) {
         let font: &FontConfig = &cfg.font;
         if font.family.is_some() {

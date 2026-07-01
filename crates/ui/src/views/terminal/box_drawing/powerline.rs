@@ -60,7 +60,7 @@ pub(crate) fn rects(c: char, cw_d: i32, lh_d: i32) -> Vec<(i32, i32, i32, i32)> 
             }
             v
         }
-        // Các powerline còn lại chưa có path custom → vẽ full block.
+        // Remaining powerline glyphs have no custom path yet → draw a full block.
         _ => vec![(0, 0, cw_d, lh_d)],
     }
 }

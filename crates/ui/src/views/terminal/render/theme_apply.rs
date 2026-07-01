@@ -1,11 +1,11 @@
-//! Apply color overrides từ config → `TerminalTheme`.
+//! Apply color overrides from config → `TerminalTheme`.
 
 use super::super::theme::{TerminalTheme, vte_from_rgba};
 use super::LocalTerminalView;
 use crate::state::ColorOverrides;
 
 impl LocalTerminalView {
-    /// Apply color overrides từ config → theme.
+    /// Apply color overrides from config → theme.
     pub(crate) fn apply_color_overrides(
         &self,
         theme: TerminalTheme,

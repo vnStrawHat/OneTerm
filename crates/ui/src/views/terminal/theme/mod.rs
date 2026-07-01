@@ -1,7 +1,7 @@
-//! Terminal theme: map gpui-component `Theme` → `core::TerminalPalette`,
-//! resolve `Color` → `gpui::Hsla`, và `ensure_minimum_contrast`.
+//! Terminal theme: maps the gpui-component `Theme` → `core::TerminalPalette`,
+//! resolves `Color` → `gpui::Hsla`, and `ensure_minimum_contrast`.
 //!
-//! Thuần tiện ích (không GPUI Element).
+//! Pure utilities (no GPUI Element).
 
 pub mod contrast;
 pub mod palette;
@@ -18,29 +18,29 @@ pub use contrast::{contrast_ratio, ensure_minimum_contrast};
 pub use palette::{ANSI_16, hsla_from_vte, rgba_from_vte, vte_from_rgba};
 pub use resolve::resolve_cell_color;
 
-/// Theme terminal đã build sẵn palette + bg/fg (Hsla) + ngưỡng contrast.
+/// Terminal theme with a prebuilt palette + bg/fg (Hsla) + contrast threshold.
 #[derive(Clone)]
 pub struct TerminalTheme {
     pub palette: TerminalPalette,
-    /// Nền mặc định (theme background) — để paint nền element.
+    /// Default background (theme background) — for painting the element background.
     pub bg: Hsla,
-    /// FG mặc định (theme foreground).
+    /// Default FG (theme foreground).
     pub fg: Hsla,
-    /// Màu nền selection (highlight text đang chọn).
+    /// Selection background color (highlights the selected text).
     pub selection: Hsla,
-    /// Ngưỡng contrast tối thiểu (WCAG, mặc định 4.5 ≈ AA).
+    /// Minimum contrast threshold (WCAG, default 4.5 ≈ AA).
     pub min_contrast: f32,
-    /// Màu chữ gutter (timestamp + line number). Default = dim fg (50% lightness).
+    /// Gutter text color (timestamp + line number). Default = dim fg (50% lightness).
     pub gutter_fg: Hsla,
-    /// Màu nền gutter. Default = cùng nền terminal.
+    /// Gutter background color. Default = same as terminal background.
     pub gutter_bg: Hsla,
-    /// Màu chữ clock [HH:MM:SS]. Default = gutter_fg.
+    /// Clock text color [HH:MM:SS]. Default = gutter_fg.
     pub clock_fg: Hsla,
-    /// Màu chữ line number. Default = gutter_fg.
+    /// Line number text color. Default = gutter_fg.
     pub line_number_fg: Hsla,
 }
 
-/// Build `TerminalTheme` từ gpui-component active `Theme`.
+/// Build a `TerminalTheme` from the gpui-component active `Theme`.
 pub fn build_terminal_theme(theme: &Theme) -> TerminalTheme {
     let c = &theme.colors;
     let fg = c.foreground;

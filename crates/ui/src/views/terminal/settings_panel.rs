@@ -1,8 +1,8 @@
-//! `TerminalSettingsPanel` — dock panel chọn shell kind cho terminal.
+//! `TerminalSettingsPanel` — dock panel for choosing the terminal shell kind.
 //!
-//! #20: shell picker (6 preset). Cập nhật `TerminalSettings` global →
-//! `TerminalPanel` đọc khi spawn terminal mới. Custom program + font/scrollback
-//! mở rộng sau.
+//! #20: shell picker (6 presets). Updates the global `TerminalSettings` →
+//! `TerminalPanel` reads it when spawning a new terminal. Custom program +
+//! font/scrollback come later.
 
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
@@ -18,7 +18,7 @@ use oneterm_core::config::ShellKind;
 
 use crate::state::TerminalSettings;
 
-/// Panel cài đặt terminal (chọn shell).
+/// Terminal settings panel (shell picker).
 pub struct TerminalSettingsPanel {
     focus_handle: FocusHandle,
     settings: Entity<TerminalSettings>,
@@ -125,10 +125,10 @@ impl Render for TerminalSettingsPanel {
             );
         }
 
-        // Hint: program path chỉ áp dụng khi Custom (chỉnh qua file config sau).
+        // Hint: program path only applies for Custom (edit via config file later).
         let hint = div().text_color(theme.muted_foreground).text_xs().child(
-            "Chọn shell mặc định cho terminal mới. \
-             Custom: đặt `program` qua config file.",
+            "Choose the default shell for new terminals. \
+             Custom: set `program` via the config file.",
         );
 
         div()
@@ -145,7 +145,7 @@ impl Render for TerminalSettingsPanel {
     }
 }
 
-/// Trả `LocalShellConfig` hiện tại từ settings global (dùng khi spawn).
+/// Return the current `LocalShellConfig` from global settings (used when spawning).
 pub fn current_shell_config(cx: &App) -> LocalShellConfig {
     TerminalSettings::global(cx).read(cx).shell.clone()
 }

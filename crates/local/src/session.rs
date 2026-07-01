@@ -1,8 +1,8 @@
-//! `LocalSession` - spawn shell cục bộ qua `alacritty_terminal::tty` +
-//! `EventLoop` (ConPTY trên Windows).
+//! `LocalSession` — spawn a local shell via `alacritty_terminal::tty` +
+//! `EventLoop` (ConPTY on Windows).
 //!
 //! #11: spawn + struct + inherent methods. #12: `impl TerminalSession`
-//! (mouse/selection/wheel + IME + cursor_bounds). Tham chiếu
+//! (mouse/selection/wheel + IME + cursor_bounds). See
 //! `docs/terminal-backend.md` §6.2 + freya `handle.rs`.
 
 use std::sync::{Arc, Mutex};
@@ -23,14 +23,14 @@ use crate::event_loop::ShellEventLoop;
 use crate::listener::LocalListener;
 use crate::state::{SharedState, new_shared};
 
-/// Kích thước PTY ban đầu.
+/// Initial PTY size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PtySize {
     pub rows: u16,
     pub cols: u16,
 }
 
-/// Dimensions cho `Term::new` / `Term::resize`.
+/// Dimensions for `Term::new` / `Term::resize`.
 pub(crate) struct TermSize {
     pub(crate) cols: usize,
     pub(crate) lines: usize,
@@ -48,14 +48,14 @@ impl Dimensions for TermSize {
     }
 }
 
-/// Một session shell cục bộ.
+/// A local shell session.
 pub struct LocalSession {
     pub(crate) term: Arc<FairMutex<Term<LocalListener>>>,
     pub(crate) listener: LocalListener,
     pub(crate) event_rx: Mutex<Option<Receiver<SessionEvent>>>,
     pub(crate) state: SharedState,
     pub(crate) config: LocalShellConfig,
-    /// Pixel cell metrics (UI set qua `set_cell_size`) - cho `cursor_bounds`.
+    /// Pixel cell metrics (set by the UI via `set_cell_size`) — for `cursor_bounds`.
     pub(crate) cell_width: Mutex<f32>,
     pub(crate) line_height: Mutex<f32>,
     /// IME marked text (compose buffer).
@@ -63,7 +63,7 @@ pub struct LocalSession {
 }
 
 impl LocalSession {
-    /// Spawn shell theo `cfg` với kích thước ban đầu `initial`.
+    /// Spawn a shell from `cfg` with the initial size `initial`.
     pub fn spawn(
         cfg: LocalShellConfig,
         initial: PtySize,
@@ -114,9 +114,9 @@ impl LocalSession {
         listener.set_notifier(notifier);
         let _join = event_loop.spawn();
 
-        // Shell integration được inject qua env vars trong resolve_shell()
-        // - hoàn toàn silent, không temp file, không viết script ra PTY.
-        // Xem crates/core/src/config/shell.rs::resolve_shell().
+        // Shell integration is injected via env vars in resolve_shell()
+        // — fully silent, no temp file, no script written to the PTY.
+        // See crates/core/src/config/shell.rs::resolve_shell().
 
         Ok(Self {
             term,
@@ -130,19 +130,19 @@ impl LocalSession {
         })
     }
 
-    /// UI set pixel cell metrics (sau khi measure font) cho `cursor_bounds`.
+    /// UI sets pixel cell metrics (after measuring the font) for `cursor_bounds`.
     pub fn set_cell_size(&self, cell_width: f32, line_height: f32) {
         *self.cell_width.lock().unwrap() = cell_width;
         *self.line_height.lock().unwrap() = line_height;
     }
 
-    /// Config đã spawn.
+    /// The config this session was spawned with.
     pub fn config(&self) -> &LocalShellConfig {
         &self.config
     }
 
     // ── Helpers ──────────────────────────────────────────────────────
-    /// Chuyển (row, col) pixel-cell → (Point, Side) để thao tác selection.
+    /// Convert a (row, col) pixel-cell to (Point, Side) for selection operations.
     fn point_and_side(term: &Term<LocalListener>, row: f32, col: f32) -> (Point, Side) {
         let col = col.max(0.0);
         let row_idx = (row.max(0.0) as usize).min(term.screen_lines().saturating_sub(1));
@@ -160,17 +160,17 @@ impl LocalSession {
         *self.term.lock().mode()
     }
 
-    /// Bắt đầu selection (khi không ở mouse mode).
+    /// Start a selection (when not in mouse mode).
     pub(crate) fn start_selection(&self, row: f32, col: f32, sel: SelectionType) {
         let mut term = self.term.lock();
         let (point, side) = Self::point_and_side(&term, row, col);
         term.selection = Some(Selection::new(sel, point, side));
     }
 
-    /// Cập nhật selection đang có (khi kéo).
+    /// Update the existing selection (while dragging).
     pub(crate) fn update_selection(&self, row: f32, col: f32) {
         let mut term = self.term.lock();
-        // Compute point/side (immutable borrow) trước, rồi mới mutate selection.
+        // Compute point/side (immutable borrow) first, then mutate the selection.
         let (point, side) = Self::point_and_side(&term, row, col);
         if let Some(selection) = term.selection.as_mut() {
             selection.update(point, side);

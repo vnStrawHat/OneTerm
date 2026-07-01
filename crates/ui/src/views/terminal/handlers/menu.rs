@@ -1,4 +1,4 @@
-//! Context menu cho `LocalTerminalView`.
+//! Context menu for `LocalTerminalView`.
 
 use gpui::{Entity, FocusHandle, Window};
 use gpui_component::menu::{ContextMenu, ContextMenuExt as _, PopupMenuItem};
@@ -7,7 +7,7 @@ use oneterm_core::TerminalSession;
 
 use crate::actions::AddPanel;
 
-/// Gắn right-click context menu.
+/// Attach the right-click context menu.
 ///
 /// Layout:
 /// 1. New Terminal
@@ -36,7 +36,7 @@ where
                 .map(|t| !t.is_empty())
                 .unwrap_or(false);
 
-            // 1. New Terminal — thêm TerminalPanel mới vào center dock.
+            // 1. New Terminal — add a new TerminalPanel to the center dock.
             menu.item(PopupMenuItem::new("New Terminal").on_click({
                 let f = focus.clone();
                 move |_, window, cx| {
@@ -99,7 +99,7 @@ where
             }))
             // 7. ── separator ──
             .separator()
-            // 8. Close Terminal Tab — dispatch ClosePanel action.
+            // 8. Close Terminal Tab — dispatch the ClosePanel action.
             .item(PopupMenuItem::new("Close Terminal Tab").on_click({
                 let f = focus.clone();
                 move |_, window, cx| {

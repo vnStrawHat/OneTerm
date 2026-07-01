@@ -9,7 +9,7 @@ use crate::views::{SessionPanel, SftpPanel, TerminalPanel};
 
 use super::MAIN_DOCK_VERSION;
 
-/// Reset chỉ center (terminal tabs) về 1 tab — giữ right dock + settings.
+/// Reset only the center (terminal tabs) to a single tab — keep the right dock + settings.
 pub(crate) fn reset_center_only(
     dock_area: gpui::WeakEntity<DockArea>,
     toggle_button_visible: bool,
@@ -39,7 +39,7 @@ pub(crate) fn reset_center_only(
     });
 }
 
-/// Dựng layout mặc định OneTerm: center = terminals, right_dock = Session/SFTP.
+/// Build the default OneTerm layout: center = terminals, right_dock = Session/SFTP.
 pub(crate) fn reset_default_layout(
     dock_area: gpui::WeakEntity<DockArea>,
     window: &mut Window,

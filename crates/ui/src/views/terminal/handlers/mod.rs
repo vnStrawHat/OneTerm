@@ -1,7 +1,7 @@
-//! Event handlers cho `LocalTerminalView`.
+//! Event handlers for `LocalTerminalView`.
 //!
-//! Tách từ `terminal_handlers.rs` để giảm độ dài file.
-//! `attach` ở đây là facade gắn tất cả handlers vào terminal div.
+//! Split out from `terminal_handlers.rs` to keep file length down.
+//! `attach` here is a facade that wires all handlers into the terminal div.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -24,7 +24,7 @@ pub(crate) use menu::attach_context_menu;
 pub(crate) use mouse::attach_mouse;
 pub(crate) use scroll::attach_scroll;
 
-/// Gắn tất cả event handlers + context menu vào terminal div.
+/// Attach all event handlers plus the context menu to the terminal div.
 pub(crate) fn attach(
     div: gpui::Stateful<gpui::Div>,
     session: Entity<Box<dyn TerminalSession>>,
@@ -39,7 +39,7 @@ pub(crate) fn attach(
     attach_context_menu(div, session, focus)
 }
 
-/// Map GPUI `MouseButton` sang `TerminalMouseButton`.
+/// Map a GPUI `MouseButton` to a `TerminalMouseButton`.
 pub(crate) fn map_button(b: MouseButton) -> oneterm_core::terminal::TerminalMouseButton {
     match b {
         MouseButton::Left => oneterm_core::terminal::TerminalMouseButton::Left,

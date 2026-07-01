@@ -19,7 +19,7 @@ use super::gutter::compute_gutter_width;
 use super::measure::FontMetrics;
 use super::{gutter, measure};
 
-/// Prepaint terminal element — tính layout state cho paint.
+/// Prepaint the terminal element — compute layout state for paint.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn prepaint_terminal(
     session: &gpui::Entity<Box<dyn TerminalSession>>,
@@ -64,13 +64,13 @@ pub(crate) fn prepaint_terminal(
     let pad_top = px(padding.top);
     let pad_bottom = px(padding.bottom);
 
-    // Read terminal_info early — cần absolute_line_count cho gutter width.
+    // Read terminal_info early — need absolute_line_count for the gutter width.
     let info = session.read(cx).terminal_info();
     let absolute_line_count = info.absolute_line_count;
 
     // ── Gutter width (cached) ──
-    // Chỉ recompute khi num_digits thay đổi để tránh dao động gutter_width
-    // gây resize loop với TUI apps. Khi show_gutter = false, gutter_width = 0.
+    // Recompute only when num_digits changes, to avoid gutter_width fluctuations
+    // that cause a resize loop with TUI apps. When show_gutter = false, gutter_width = 0.
     let num_digits = absolute_line_count.max(1).to_string().len().max(2);
     let gutter_width = if show_gutter {
         let cg = cached_gutter.borrow_mut();
@@ -78,7 +78,7 @@ pub(crate) fn prepaint_terminal(
             if cached_digits == num_digits {
                 cached_w
             } else {
-                drop(cg); // release borrow trước khi gọi shape_line
+                drop(cg); // release the borrow before calling shape_line
                 let w = compute_gutter_width(
                     line_times,
                     absolute_line_count,
@@ -159,7 +159,7 @@ pub(crate) fn prepaint_terminal(
         cursor_display_line,
     );
 
-    // Fill cached ShapedLine cho runs chưa được shape.
+    // Fill the cached ShapedLine for runs not yet shaped.
     let mut shape_line_count: usize = 0;
     {
         let mut cache = row_cache.borrow_mut();
@@ -195,10 +195,9 @@ pub(crate) fn prepaint_terminal(
 
     let gutter_bg = theme.gutter_bg;
 
-    // Render gutter cho đến dòng có nội dung thực tế cuối cùng trong
-    // viewport, nhưng luôn ít nhất 1 dòng. Điều này giữ được UX lúc khởi
-    // động (chỉ vài dòng đầu có output) mà không bỏ sót nội dung TUI ở các
-    // dòng dưới cursor.
+    // Render the gutter up to the last line with actual content in the viewport,
+    // but always at least 1 line. This preserves the UX at startup (only the first
+    // few lines have output) without missing TUI content on lines below the cursor.
     let last_non_blank_display_line = snapshot
         .cells
         .iter()

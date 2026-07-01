@@ -1,15 +1,15 @@
-//! Dialog "New / Edit SSH Session" — tạo mới hoặc chỉnh sửa SSH session.
+//! "New / Edit SSH Session" dialog — create or edit an SSH session.
 //!
-//! Footer: **Cancel** + **Save** — dùng direct on_click để bypass
-//! action dispatch qua focus chain (thống nhất với Connect dialog).
-//! Khi Save → validate (Label & Host bắt buộc) →
-//! `store.add` (tạo mới) hoặc `store.update` (chỉnh sửa) → auto-save
+//! Footer: **Cancel** + **Save** — uses direct on_click to bypass
+//! action dispatch through the focus chain (consistent with the Connect dialog).
+//! On Save → validate (Label & Host required) →
+//! `store.add` (create) or `store.update` (edit) → auto-saves
 //! `ssh_session.json`.
 //!
 //! Form fields: Label, Host, Port, Username (optional), Group (optional).
 //!
-//! Group field dùng [`Combobox`] với `searchable(true)` + footer "Create" —
-//! user có thể **chọn group có sẵn** hoặc **gõ group mới**.
+//! The Group field uses a [`Combobox`] with `searchable(true)` + a "Create" footer —
+//! the user can **pick an existing group** or **type a new one**.
 
 use std::rc::Rc;
 
@@ -33,8 +33,8 @@ use crate::state::{SshSession, SshSessionStore};
 
 use super::group_combo::{GroupComboDelegate, SharedCell, group_combobox};
 
-/// Mở dialog tạo mới (khi `edit` = `None`) hoặc chỉnh sửa (khi `edit` =
-/// `Some((index, session))`) SSH session.
+/// Open the dialog to create (when `edit` = `None`) or edit (when `edit` =
+/// `Some((index, session))`) an SSH session.
 pub(crate) fn open_session_dialog(
     window: &mut Window,
     cx: &mut App,
@@ -48,7 +48,7 @@ pub(crate) fn open_session_dialog(
         "New SSH Session"
     };
 
-    // Giá trị prefill (rỗng nếu tạo mới).
+    // Prefill values (empty when creating new).
     let (label_val, host_val, port_val, user_val, group_val, color_val) = match &edit {
         Some((_, s)) => (
             s.label.clone(),
@@ -68,7 +68,7 @@ pub(crate) fn open_session_dialog(
         ),
     };
 
-    // ── Thu thập existing groups từ store ──────────────────────────
+    // ── Collect existing groups from the store ──────────────────────────
     let existing_groups: Vec<SharedString> = {
         let store = SshSessionStore::global(cx);
         let store = store.read(cx);
@@ -83,18 +83,18 @@ pub(crate) fn open_session_dialog(
         groups.into_iter().map(SharedString::from).collect()
     };
 
-    // ── Shared cells cho Group Combobox ────────────────────────────
+    // ── Shared cells for the Group Combobox ────────────────────────────
     let group_value: SharedCell = Rc::new(std::cell::RefCell::new(group_val.clone()));
     let query_cell: SharedCell = Rc::new(std::cell::RefCell::new(String::new()));
 
-    // Tìm selected index nếu group_val khớp với existing group.
+    // Find the selected index if group_val matches an existing group.
     let selected_indices: Vec<IndexPath> = existing_groups
         .iter()
         .position(|g| g.as_ref() == group_val)
         .map(|i| vec![IndexPath::default().row(i)])
         .unwrap_or_default();
 
-    // ── Tạo InputState cho các field text ──────────────────────────
+    // ── Create InputState for the text fields ──────────────────────────
     let label_state = cx.new(|cx| {
         let mut st = InputState::new(window, cx).placeholder("e.g. Production Server");
         if !label_val.is_empty() {
@@ -125,7 +125,7 @@ pub(crate) fn open_session_dialog(
     });
 
     // ── ColorPickerState ────────────────────────────────────────
-    // Default: #56B6C2 nếu tạo mới, giữ màu cũ nếu edit.
+    // Default: #56B6C2 when creating new, keep the old color when editing.
     let default_color_hex = color_val.clone().unwrap_or_else(|| "#56B6C2".to_string());
     let default_color = Hsla::parse_hex(&default_color_hex).unwrap_or(cx.theme().accent);
     let color_state = cx.new(|cx| {
@@ -134,7 +134,7 @@ pub(crate) fn open_session_dialog(
         st
     });
 
-    // ── Tạo ComboboxState cho Group field ──────────────────────────
+    // ── Create ComboboxState for the Group field ──────────────────────────
     let group_combo_state = cx.new(|cx| {
         let delegate = GroupComboDelegate::new(
             existing_groups.clone(),
@@ -144,7 +144,7 @@ pub(crate) fn open_session_dialog(
         ComboboxState::new(delegate, selected_indices, window, cx).searchable(true)
     });
 
-    // Clone cho on_ok closure (đọc value khi Save).
+    // Clone for the on_ok closure (reads the value on Save).
     let label_ok = label_state.clone();
     let host_ok = host_state.clone();
     let port_ok = port_state.clone();
@@ -152,7 +152,7 @@ pub(crate) fn open_session_dialog(
     let group_ok = group_value.clone();
     let color_ok = color_state.clone();
 
-    // ── Shared save logic (dùng cho cả button on_click và keyboard on_ok) ──
+    // ── Shared save logic (used by both the button on_click and keyboard on_ok) ──
     let save_logic: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool> = Rc::new({
         let label_ok = label_ok.clone();
         let host_ok = host_ok.clone();
@@ -164,7 +164,7 @@ pub(crate) fn open_session_dialog(
             let label = label_ok.read(cx).value().trim().to_string();
             let host = host_ok.read(cx).value().trim().to_string();
             if label.is_empty() || host.is_empty() {
-                window.push_notification("Label và Host là bắt buộc.", cx);
+                window.push_notification("Label and Host are required.", cx);
                 return false;
             }
             let port: u16 = port_ok
@@ -197,9 +197,9 @@ pub(crate) fn open_session_dialog(
             }
             window.push_notification(
                 if is_edit {
-                    "SSH session đã được cập nhật."
+                    "SSH session updated."
                 } else {
-                    "SSH session đã được lưu."
+                    "SSH session saved."
                 },
                 cx,
             );
@@ -208,7 +208,7 @@ pub(crate) fn open_session_dialog(
     });
 
     window.open_dialog(cx, move |dialog, _window, _cx| {
-        // Clone save_logic cho button on_click và keyboard on_ok
+        // Clone save_logic for the button on_click and keyboard on_ok.
         let save_for_click = save_logic.clone();
         let save_for_kb = save_logic.clone();
         dialog
@@ -246,8 +246,8 @@ pub(crate) fn open_session_dialog(
                         ))
                 }
             })
-            // Footer: Cancel + Save — dùng direct on_click thay vì DialogAction/DialogClose
-            // để bypass action dispatch qua focus chain.
+            // Footer: Cancel + Save — uses direct on_click instead of DialogAction/DialogClose
+            // to bypass action dispatch through the focus chain.
             .footer({
                 DialogFooter::new()
                     .child(Button::new("cancel").label("Cancel").outline().on_click(
@@ -273,7 +273,7 @@ pub(crate) fn open_session_dialog(
 
 // ── field helper ─────────────────────────────────────────────────────
 
-/// Render 1 field form: label (có dấu `*` nếu bắt buộc) + input element.
+/// Render one form field: label (with `*` if required) + input element.
 pub(crate) fn field(
     label: &'static str,
     required: bool,

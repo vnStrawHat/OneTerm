@@ -1,6 +1,6 @@
-//! Shell cục bộ: chọn kind, resolve ra `(program, args, env)`.
+//! Local shell: pick a kind and resolve it to `(program, args, env)`.
 //!
-//! Windows-first. Tham chiếu `docs/terminal-backend.md` §6.1.
+//! Windows-first. See `docs/terminal-backend.md` §6.1.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -9,23 +9,23 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
 
-/// Loại shell cục bộ có thể config được từ settings.
+/// Kinds of local shell configurable from settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ShellKind {
-    /// `cmd.exe` (Windows). Mặc định trên Windows.
+    /// `cmd.exe` (Windows). Default on Windows.
     Cmd,
     /// Windows PowerShell 5.x (`powershell.exe`).
     PowerShell,
     /// PowerShell 7+ (`pwsh.exe`) — cross-platform.
     Pwsh,
-    /// Bash (Unix; hoặc Git-Bash trên Windows nếu `program` trỏ tới).
+    /// Bash (Unix; or Git-Bash on Windows if `program` points to it).
     Bash,
     /// Zsh (Unix).
     Zsh,
     /// Sh (Unix).
     Sh,
-    /// Lệnh tùy chỉnh — bắt buộc set `LocalShellConfig::program`.
+    /// Custom command — requires setting `LocalShellConfig::program`.
     Custom,
 }
 
@@ -37,24 +37,24 @@ impl Default for ShellKind {
 
     #[cfg(not(windows))]
     fn default() -> Self {
-        // $SHELL thường là bash/zsh; fallback bash.
+        // $SHELL is usually bash/zsh; fall back to bash.
         Self::Bash
     }
 }
 
-/// Cấu hình spawn shell cục bộ.
+/// Configuration for spawning a local shell.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalShellConfig {
     pub kind: ShellKind,
-    /// Đường dẫn executable (None → tự detect theo kind + nền tảng).
+    /// Executable path (None → auto-detect from kind + platform).
     pub program: Option<PathBuf>,
-    /// Tham số dòng lệnh thêm (sau args mặc định của kind).
+    /// Extra command-line arguments (appended after the kind's default args).
     pub args: Vec<String>,
-    /// Env override (TERM, COLORTERM, LANG…). Mặc định đã set TERM=xterm-256color.
+    /// Env overrides (TERM, COLORTERM, LANG…). TERM=xterm-256color is set by default.
     pub env: HashMap<String, String>,
-    /// Thư mục làm việc (None → cwd hiện tại của app).
+    /// Working directory (None → the app's current cwd).
     pub cwd: Option<PathBuf>,
-    /// Ép UTF-8 codepage (Windows cmd). Mặc định true.
+    /// Force the UTF-8 codepage (Windows cmd). Default true.
     #[serde(default = "default_utf8")]
     pub utf8: bool,
 }
@@ -76,19 +76,19 @@ impl Default for LocalShellConfig {
     }
 }
 
-/// Kết quả resolve: chương trình + args + env để spawn.
+/// Result of resolution: program + args + env to spawn.
 pub struct ResolvedShell {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
 }
 
-/// Mặc định env cho mọi shell.
+/// Default env for every shell.
 fn base_env() -> HashMap<String, String> {
     let mut env = HashMap::new();
     env.insert("TERM".into(), "xterm-256color".into());
     env.insert("COLORTERM".into(), "truecolor".into());
-    // LANG: ưu tiên env hiện tại, fallback en_US.UTF-8.
+    // LANG: prefer the current env, fall back to en_US.UTF-8.
     let lang = std::env::var("LANG").unwrap_or_else(|_| "en_US.UTF-8".into());
     env.insert("LANG".into(), lang);
     env
@@ -101,10 +101,10 @@ fn comspec() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(r"C:\Windows\System32\cmd.exe"))
 }
 
-/// Tìm executable trong PATH (Windows: dùng `where`, fallback PATHEXT scan).
-/// Trả None nếu không thấy — caller quyết định fallback.
+/// Find an executable in PATH (Windows: uses `where`, falls back to a PATHEXT scan).
+/// Returns None if not found — the caller decides the fallback.
 fn find_in_path(name: &str) -> Option<PathBuf> {
-    // Ưu tiên dùng crate `which` nếu có; đây là impl thủ công không thêm dep.
+    // Prefer the `which` crate if available; this is a manual impl that adds no dep.
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
         let candidate = dir.join(name);
@@ -113,7 +113,7 @@ fn find_in_path(name: &str) -> Option<PathBuf> {
         }
         #[cfg(windows)]
         {
-            // Thử thêm đuôi .exe nếu thiếu.
+            // Try adding the .exe suffix if missing.
             let with_exe = dir.join(format!("{name}.exe"));
             if with_exe.is_file() {
                 return Some(with_exe);
@@ -123,12 +123,12 @@ fn find_in_path(name: &str) -> Option<PathBuf> {
     None
 }
 
-/// Resolve `LocalShellConfig` → `(program, args, env)` sẵn sàng spawn.
+/// Resolve `LocalShellConfig` → `(program, args, env)` ready to spawn.
 ///
-/// Trả lỗi nếu `Custom` mà không có `program`, hoặc không tìm thấy shell mặc định.
+/// Returns an error if `Custom` has no `program`, or the default shell cannot be found.
 pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> {
     let mut env = base_env();
-    // Env override của user (ghi đè base).
+    // User env overrides (override the base).
     for (k, v) in &cfg.env {
         env.insert(k.clone(), v.clone());
     }
@@ -140,7 +140,7 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
                 let prog = cfg.program.clone().unwrap_or_else(comspec);
                 let mut a = Vec::new();
                 if cfg.utf8 {
-                    // /K chcp 65001 >nul — giữ prompt mở, set codepage UTF-8.
+                    // /K chcp 65001 >nul — keep the prompt open, set the UTF-8 codepage.
                     a.push("/K".into());
                     a.push("chcp".into());
                     a.push("65001".into());
@@ -150,7 +150,7 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
             }
             #[cfg(not(windows))]
             {
-                // cmd không tồn tại ngoài Windows → fallback sh.
+                // cmd does not exist outside Windows → fall back to sh.
                 let prog = cfg
                     .program
                     .clone()
@@ -165,10 +165,10 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
                 .clone()
                 .or_else(|| find_in_path("powershell"))
                 .or_else(|| find_in_path("powershell.exe"))
-                .ok_or_else(|| AppError::msg("powershell.exe không tìm thấy trong PATH"))?;
+                .ok_or_else(|| AppError::msg("powershell.exe not found in PATH"))?;
             let mut a = vec!["-NoLogo".into()];
             if cfg.utf8 {
-                // Ép OutputEncoding UTF-8 ngay khi khởi động.
+                // Force OutputEncoding to UTF-8 at startup.
                 a.push("-Command".into());
                 a.push("[Console]::OutputEncoding=[Text.UTF8Encoding]::new()".into());
             }
@@ -180,7 +180,7 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
                 .clone()
                 .or_else(|| find_in_path("pwsh"))
                 .or_else(|| find_in_path("pwsh.exe"))
-                .ok_or_else(|| AppError::msg("pwsh không tìm thấy trong PATH"))?;
+                .ok_or_else(|| AppError::msg("pwsh not found in PATH"))?;
             let mut a = vec!["-NoLogo".into()];
             if cfg.utf8 {
                 a.push("-Command".into());
@@ -200,7 +200,7 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
                 .clone()
                 .or_else(|| std::env::var_os("SHELL").map(PathBuf::from))
                 .unwrap_or_else(|| PathBuf::from(format!("/bin/{name}")));
-            // Login shell cho bash/zsh để load profile.
+            // Login shell for bash/zsh so the profile is loaded.
             let a = if matches!(cfg.kind, ShellKind::Bash | ShellKind::Zsh) {
                 vec!["-l".into()]
             } else {
@@ -212,24 +212,24 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
             let prog = cfg
                 .program
                 .clone()
-                .ok_or_else(|| AppError::msg("ShellKind::Custom bắt buộc có `program`"))?;
+                .ok_or_else(|| AppError::msg("ShellKind::Custom requires `program`"))?;
             (prog, Vec::new())
         }
     };
 
-    // Shell integration qua env vars — hoàn toàn silent, không temp file,
-    // không viết script ra PTY. Shell đọc env var khi khởi động.
+    // Shell integration via env vars — fully silent, no temp files,
+    // no script written to the PTY. The shell reads the env var at startup.
     match cfg.kind {
         ShellKind::Cmd => {
-            // cmd.exe đọc PROMPT env var khi khởi động.
+            // cmd.exe reads the PROMPT env var at startup.
             // $E = ESC, $P = current path, $G = '>', $\ = literal backslash.
-            // Không ghi đè nếu user đã set PROMPT trong cfg.env.
+            // Do not override if the user already set PROMPT in cfg.env.
             if !env.contains_key("PROMPT") {
                 env.insert("PROMPT".into(), "$E]133;A$E\\$P$G$E]133;B$E\\".into());
             }
         }
         ShellKind::Bash => {
-            // PROMPT_COMMAND chạy trước mỗi prompt — emit OSC 7 (cwd) + OSC 133 A.
+            // PROMPT_COMMAND runs before each prompt — emit OSC 7 (cwd) + OSC 133 A.
             if !env.contains_key("PROMPT_COMMAND") {
                 env.insert(
                     "PROMPT_COMMAND".into(),
@@ -239,8 +239,8 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
             }
         }
         ShellKind::Zsh => {
-            // zsh không hỗ trợ PROMPT_COMMAND — set PS1 với OSC 133 markers.
-            // %{...%} wrapper để zsh không count escape chars cho cursor position.
+            // zsh does not support PROMPT_COMMAND — set PS1 with OSC 133 markers.
+            // The %{...%} wrapper stops zsh from counting escape chars for cursor position.
             if !env.contains_key("PS1") {
                 env.insert(
                     "PS1".into(),
@@ -251,7 +251,7 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
         _ => {}
     }
 
-    // Args thêm của user (sau args mặc định).
+    // User's extra args (after the default args).
     args.extend(cfg.args.iter().cloned());
 
     Ok(ResolvedShell { program, args, env })
@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn default_kind_windows() {
-        // Trên máy build (Windows) → Cmd.
+        // On the build machine (Windows) → Cmd.
         let cfg = LocalShellConfig::default();
         if cfg!(windows) {
             assert_eq!(cfg.kind, ShellKind::Cmd);
@@ -317,7 +317,7 @@ mod tests {
             ..Default::default()
         };
         let r = resolve_shell(&cfg).unwrap();
-        // Program là cmd.exe (COMSPEC).
+        // Program is cmd.exe (COMSPEC).
         assert!(
             r.program
                 .to_string_lossy()
@@ -326,7 +326,7 @@ mod tests {
             "cmd resolve → cmd.exe, got {:?}",
             r.program
         );
-        // Args phải có chcp 65001 (ép UTF-8).
+        // Args must include chcp 65001 (force UTF-8).
         assert!(r.args.iter().any(|a| a == "chcp"));
         assert!(r.args.iter().any(|a| a == "65001"));
     }

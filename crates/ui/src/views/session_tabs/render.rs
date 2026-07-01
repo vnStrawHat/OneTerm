@@ -1,18 +1,13 @@
 //! `impl Render for SessionPanel` — header (search + new-session button),
-//! empty/no-results states, và final div assembly.
+//! empty/no-results states, and final div assembly.
 //!
-//! Tách từ `tabs.rs` để giảm độ dài file.
+//! Split out from `tabs.rs` to keep the file shorter.
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Context, InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled, Window, div,
 };
-use gpui_component::{
-    ActiveTheme as _, Sizable as _,
-    h_flex,
-    input::Input,
-    menu::ContextMenuExt,
-};
+use gpui_component::{ActiveTheme as _, Sizable as _, h_flex, input::Input, menu::ContextMenuExt};
 
 use crate::actions::NewSession;
 
@@ -26,7 +21,7 @@ impl Render for SessionPanel {
         let focus = self.focus_handle.clone();
         let search_state = self.search_state.clone();
 
-        // Search query hiện tại — kiểm tra có results hay không.
+        // Current search query — check whether there are any results.
         let query = self.search_state.read(cx).value().to_string();
         let q = query.trim().to_lowercase();
         let has_results = if q.is_empty() {
@@ -43,26 +38,21 @@ impl Render for SessionPanel {
             .items_center()
             .gap_2()
             .child(
-                h_flex()
-                    .gap_1()
-                    .items_center()
-                    .flex_1()
-                    .min_w_0()
-                    .child(
-                        Input::new(&search_state)
-                            .small()
-                            .flex_1()
-                            // Input mặc định border_1 (4 cạnh) → chỉ giữ border bottom.
-                            .border_b_1()
-                            .border_t_0()
-                            .border_l_0()
-                            .border_r_0()
-                            // Nền trong suốt — bỏ bg mặc định của Input.
-                            .bg(gpui::transparent_black()),
-                    ),
+                h_flex().gap_1().items_center().flex_1().min_w_0().child(
+                    Input::new(&search_state)
+                        .small()
+                        .flex_1()
+                        // Input defaults to border_1 (all 4 sides) → keep only the bottom border.
+                        .border_b_1()
+                        .border_t_0()
+                        .border_l_0()
+                        .border_r_0()
+                        // Transparent background — drop the Input's default bg.
+                        .bg(gpui::transparent_black()),
+                ),
             );
 
-        // Empty state — không có session nào.
+        // Empty state — no sessions at all.
         let empty = h_flex()
             .id("empty-state")
             .w_full()
@@ -80,7 +70,7 @@ impl Render for SessionPanel {
                 }
             });
 
-        // No-results state — có session nhưng search không match.
+        // No-results state — sessions exist but the search matches none.
         let no_results = h_flex()
             .id("no-results")
             .w_full()

@@ -1,8 +1,8 @@
-//! Parse side-channel OSC sequences mà alacritty VTE drop hoặc route qua
+//! Parse side-channel OSC sequences that the alacritty VTE drops or routes through
 //! `EventListener`: OSC 7 (cwd), OSC 52 (clipboard), OSC 133 (shell integration).
-//! OSC 8 (hyperlink) được alacritty lưu trực tiếp vào cell → xem `url.rs`.
+//! OSC 8 (hyperlink) is stored by alacritty directly in the cell → see `url.rs`.
 //!
-//! Tham chiếu: `freya-terminal/osc7.rs` + bổ sung OSC 52 + OSC 133.
+//! Reference: `freya-terminal/osc7.rs` + additions for OSC 52 and OSC 133.
 //! OSC 133 spec: https://gitlab.freedesktop.org/Per_Bothner/specifications/blob/master/proposals/semantic-prompts.md
 
 use std::path::PathBuf;
@@ -10,40 +10,41 @@ use std::path::PathBuf;
 use alacritty_terminal::vte::{Params, Perform};
 use base64::Engine;
 
-/// OSC 133 marker kind — đánh dấu ranh giới prompt/command/output.
+/// OSC 133 marker kind — marks prompt/command/output boundaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Osc133Kind {
-    /// `OSC 133;A` — prompt start (shell sắp vẽ prompt).
+    /// `OSC 133;A` — prompt start (the shell is about to draw the prompt).
     PromptStart,
-    /// `OSC 133;B` — prompt end / command input start (user bắt đầu gõ).
+    /// `OSC 133;B` — prompt end / command input start (the user starts typing).
     PromptEnd,
-    /// `OSC 133;C` — command output start (user nhấn Enter, command chạy).
+    /// `OSC 133;C` — command output start (the user pressed Enter, command runs).
     OutputStart,
-    /// `OSC 133;D[;exit_code]` — command finished (kèm exit code nếu có).
+    /// `OSC 133;D[;exit_code]` — command finished (with exit code if present).
     OutputEnd { exit_code: Option<i32> },
 }
 
-/// Payload OSC đã capture (loại + dữ liệu thô).
+/// A captured OSC payload (kind + raw data).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OscPayload {
     /// OSC 7 — `file://host/path`.
     Cwd(String),
-    /// OSC 52 — clipboard base64 payload (tham số `?` = query).
+    /// OSC 52 — clipboard base64 payload (the `?` parameter = query).
     Clipboard { query: bool, base64: String },
     /// OSC 133 — shell integration marker (prompt/command boundary).
     ShellIntegration(Osc133Kind),
 }
 
-/// Sink chạy song song với `Term` để bắt OSC 7/52/133.
-/// Alacritty drop OSC 7 và OSC 133, route OSC 52 qua EventListener.
-/// Sink này parse trực tiếp byte stream PTY song song với alacritty's Processor.
+/// A sink that runs alongside `Term` to capture OSC 7/52/133.
+/// Alacritty drops OSC 7 and OSC 133, and routes OSC 52 through the EventListener.
+/// This sink parses the PTY byte stream directly, in parallel with alacritty's Processor.
 #[derive(Default)]
 pub struct OscSink {
     latest: Option<OscPayload>,
-    /// Đã thấy chuỗi xoá toàn màn hình (`CSI 2J` / `CSI 3J` / `ESC c` = RIS)
-    /// kể từ lần `take_clear()` gần nhất. Dùng để báo cho lớp trên reset
-    /// per-line timestamps (gutter) vì `clear` reset bộ đếm dòng absolute →
-    /// nội dung mới TÁI SỬ DỤNG index cũ, nếu không sẽ hiện giờ cũ (stale).
+    /// Whether a full-screen clear sequence (`CSI 2J` / `CSI 3J` / `ESC c` = RIS)
+    /// has been seen since the last `take_clear()`. Used to tell the upper layer
+    /// to reset per-line timestamps (gutter), because a `clear` resets the
+    /// absolute line counter → new content REUSES old indices, otherwise it
+    /// would show stale times.
     clear_pending: bool,
 }
 
@@ -52,8 +53,8 @@ impl OscSink {
         self.latest.take()
     }
 
-    /// Trả `true` (và reset cờ) nếu đã phát hiện chuỗi xoá toàn màn hình kể từ
-    /// lần gọi trước.
+    /// Returns `true` (and resets the flag) if a full-screen clear sequence has
+    /// been detected since the previous call.
     pub fn take_clear(&mut self) -> bool {
         std::mem::take(&mut self.clear_pending)
     }
@@ -78,7 +79,7 @@ impl Perform for OscSink {
             // OSC 52: params = ["52", "c", "<base64>" | "?"]
             "52" if params.len() >= 2 => {
                 if let Ok(target) = std::str::from_utf8(params[1]) {
-                    // Chỉ quan tâm clipboard 'c' (system clipboard).
+                    // Only care about clipboard 'c' (system clipboard).
                     if target.contains('c') {
                         let payload = params.get(2).copied().unwrap_or(&[]);
                         if payload == b"?" {
@@ -97,7 +98,7 @@ impl Perform for OscSink {
             }
             // OSC 133: shell integration markers
             // params = ["133", "A" | "B" | "C" | "D"]
-            // params = ["133", "D", "exit_code"] (D với exit code)
+            // params = ["133", "D", "exit_code"] (D with exit code)
             "133" if params.len() >= 2 => {
                 let sub = match std::str::from_utf8(params[1]) {
                     Ok(s) => s,
@@ -108,7 +109,7 @@ impl Perform for OscSink {
                     "B" => Some(Osc133Kind::PromptEnd),
                     "C" => Some(Osc133Kind::OutputStart),
                     "D" => {
-                        // D;exit_code → params[2] = exit_code (nếu có).
+                        // D;exit_code → params[2] = exit_code (if present).
                         let exit_code = params.get(2).and_then(|p| {
                             std::str::from_utf8(p)
                                 .ok()
@@ -126,9 +127,9 @@ impl Perform for OscSink {
         }
     }
 
-    /// Phát hiện `CSI 2J` (xoá toàn màn hình) và `CSI 3J` (xoá scrollback) —
-    /// các lệnh `clear` / `cls` / `tput clear` phát ra. `CSI 0J`/`CSI 1J`
-    /// (xoá một phần) KHÔNG tính là clear.
+    /// Detect `CSI 2J` (clear whole screen) and `CSI 3J` (clear scrollback) —
+    /// emitted by `clear` / `cls` / `tput clear`. `CSI 0J`/`CSI 1J`
+    /// (partial erase) do NOT count as a clear.
     fn csi_dispatch(
         &mut self,
         params: &Params,
@@ -148,7 +149,7 @@ impl Perform for OscSink {
         }
     }
 
-    /// `ESC c` = RIS (Reset to Initial State) → xoá toàn bộ → coi như clear.
+    /// `ESC c` = RIS (Reset to Initial State) → clears everything → treated as a clear.
     fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, byte: u8) {
         if byte == b'c' {
             self.clear_pending = true;
@@ -156,8 +157,8 @@ impl Perform for OscSink {
     }
 }
 
-/// Parse URL payload OSC 7 → `PathBuf`. Chấp nhận `file:///path`,
-/// `file://host/path`, và path thường.
+/// Parse an OSC 7 URL payload → `PathBuf`. Accepts `file:///path`,
+/// `file://host/path`, and a plain path.
 pub fn parse_cwd_url(url: &str) -> PathBuf {
     let Some(stripped) = url.strip_prefix("file://") else {
         return PathBuf::from(url);
@@ -168,16 +169,16 @@ pub fn parse_cwd_url(url: &str) -> PathBuf {
     }
 }
 
-/// Decode payload base64 OSC 52 → text clipboard. Trả None nếu base64 sai.
+/// Decode an OSC 52 base64 payload → clipboard text. Returns None if base64 is invalid.
 pub fn decode_osc52(base64: &str) -> Option<String> {
-    // OSC 52 cho phép bỏ qua các ký tự không hợp lệ; dùng engine standard.
+    // OSC 52 allows skipping invalid characters; use the standard engine.
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(base64.trim())
         .ok()?;
     String::from_utf8(decoded).ok()
 }
 
-/// Encode text → payload base64 OSC 52 (cho reply clipboard).
+/// Encode text → an OSC 52 base64 payload (for a clipboard reply).
 pub fn encode_osc52(text: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(text.as_bytes())
 }

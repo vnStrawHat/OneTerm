@@ -1,16 +1,16 @@
-//! Palette terminal + resolve `Color` → `Rgb` (không GPUI).
+//! Terminal palette + resolve `Color` → `Rgb` (no GPUI).
 //!
-//! UI crate (`ui::TerminalTheme`) build `TerminalPalette` từ gpui-component
-//! `Theme` rồi map `Rgb` → `gpui::Hsla` khi render. Tham chiếu Zed
-//! `convert_color` (`terminal_element.rs`) nhưng core trả `Rgb` thuần.
+//! The UI crate (`ui::TerminalTheme`) builds a `TerminalPalette` from the
+//! gpui-component `Theme`, then maps `Rgb` → `gpui::Hsla` when rendering.
+//! See Zed `convert_color` (`terminal_element.rs`), but core returns plain `Rgb`.
 
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
 
-/// Palette 16-màu ANSI + fg/bg/cursor để resolve `Color::Named`/`Indexed`.
+/// 16-color ANSI palette + fg/bg/cursor to resolve `Color::Named`/`Indexed`.
 ///
 /// `ansi[0..8]` = normal, `ansi[8..16]` = bright. Dim variants (DimBlack…)
-/// được tính bằng cách mix màu normal với `background` ở 50% — không cần
-/// khai báo riêng (theme ít khi cung cấp dim).
+/// are computed by mixing the normal color with `background` at 50% — no need to
+/// declare them separately (themes rarely provide dim colors).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerminalPalette {
     pub foreground: Rgb,
@@ -20,7 +20,7 @@ pub struct TerminalPalette {
 }
 
 impl TerminalPalette {
-    /// Mix `c` với `bg` theo tỷ lệ `t` (0.0 = c, 1.0 = bg). Dùng cho dim.
+    /// Mix `c` with `bg` by ratio `t` (0.0 = c, 1.0 = bg). Used for dim.
     fn mix(c: Rgb, bg: Rgb, t: f32) -> Rgb {
         let lerp = |a: u8, b: u8| (a as f32 * (1.0 - t) + b as f32 * t).round() as u8;
         Rgb {
@@ -30,19 +30,19 @@ impl TerminalPalette {
         }
     }
 
-    /// Dim version của `c` (mix 50% với background).
+    /// Dim version of `c` (mix 50% with the background).
     fn dim(&self, c: Rgb) -> Rgb {
         Self::mix(c, self.background, 0.5)
     }
 }
 
-/// Resolve `Color` → `Rgb` theo palette.
+/// Resolve `Color` → `Rgb` using the palette.
 ///
-/// - `Named`: 0-15 → `ansi[i]`; `Foreground`/`Background`/`Cursor` trực tiếp;
+/// - `Named`: 0-15 → `ansi[i]`; `Foreground`/`Background`/`Cursor` directly;
 ///   `Dim*` → dim(normal); `BrightForeground` → `foreground`;
 ///   `DimForeground` → dim(foreground).
-/// - `Spec(rgb)`: trả nguyên bản (truecolor).
-/// - `Indexed(n)`: 0-15 → `ansi`; 16-231 → cube 6×6×6; 232-255 → grayscale.
+/// - `Spec(rgb)`: returned verbatim (truecolor).
+/// - `Indexed(n)`: 0-15 → `ansi`; 16-231 → 6×6×6 cube; 232-255 → grayscale.
 pub fn resolve_color(c: &Color, palette: &TerminalPalette) -> Rgb {
     match c {
         Color::Named(nc) => resolve_named(*nc, palette),
@@ -54,15 +54,15 @@ pub fn resolve_color(c: &Color, palette: &TerminalPalette) -> Rgb {
 fn resolve_named(nc: NamedColor, palette: &TerminalPalette) -> Rgb {
     let idx = nc as u32;
     match idx {
-        // 16 màu ANSI (0-15).
+        // 16 ANSI colors (0-15).
         0..=15 => palette.ansi[idx as usize],
         // Foreground / Background / Cursor.
         256 => palette.foreground,
         257 => palette.background,
         258 => palette.cursor,
-        // Dim variants (259-266) → dim của màu normal tương ứng.
+        // Dim variants (259-266) → dim of the corresponding normal color.
         259..=266 => palette.dim(palette.ansi[(idx - 259) as usize]),
-        // BrightForeground → foreground (không có bright fg riêng trong palette).
+        // BrightForeground → foreground (no separate bright fg in the palette).
         267 => palette.foreground,
         // DimForeground → dim(foreground).
         268 => palette.dim(palette.foreground),
@@ -72,7 +72,7 @@ fn resolve_named(nc: NamedColor, palette: &TerminalPalette) -> Rgb {
 
 fn resolve_indexed(n: u8, palette: &TerminalPalette) -> Rgb {
     match n {
-        // 16 màu đầu map vào ANSI palette.
+        // First 16 colors map to the ANSI palette.
         0..=15 => palette.ansi[n as usize],
         // 6×6×6 RGB cube (16..=231).
         16..=231 => {
@@ -87,7 +87,7 @@ fn resolve_indexed(n: u8, palette: &TerminalPalette) -> Rgb {
                 b: conv(b),
             }
         }
-        // Grayscale ramp (232..=255): 24 bước từ gần đen đến gần trắng.
+        // Grayscale ramp (232..=255): 24 steps from near-black to near-white.
         232..=255 => {
             let v = 8 + 10 * (n - 232);
             Rgb { r: v, g: v, b: v }

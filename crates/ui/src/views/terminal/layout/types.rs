@@ -1,25 +1,25 @@
-//! Core layout types cho `TerminalElement`.
+//! Core layout types for `TerminalElement`.
 
 use gpui::{Bounds, Hsla, Pixels, SharedString, TextRun};
 
-/// Metrics grid sau layout — View đọc để convert mouse pixel → (row,col).
+/// Grid metrics after layout — read by the View to convert mouse pixels → (row, col).
 #[derive(Clone, Copy, Default)]
 pub(crate) struct GridMetrics {
     pub bounds: Option<Bounds<Pixels>>,
     pub cell_width: Pixels,
     pub line_height: Pixels,
-    /// Chiều rộng gutter (time + line number) bên trái terminal.
+    /// Width of the gutter (time + line number) on the left of the terminal.
     pub gutter_width: Pixels,
 }
 
-/// Layout point (display line/col, 0-based từ top viewport).
+/// Layout point (display line/col, 0-based from top of viewport).
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) struct LayoutPoint {
     pub line: i32,
     pub column: i32,
 }
 
-/// Rect nền (1 dòng, batch ngang).
+/// Background rect (one line, horizontal batch).
 #[derive(Clone, Debug)]
 pub(crate) struct LayoutRect {
     pub point: LayoutPoint,
@@ -27,7 +27,7 @@ pub(crate) struct LayoutRect {
     pub color: Hsla,
 }
 
-/// Text run batch (các cell liên tiếp cùng style, cùng dòng).
+/// Batched text run (consecutive cells with the same style on the same line).
 pub(crate) struct BatchedTextRun {
     pub start: LayoutPoint,
     pub text: String,
@@ -35,15 +35,15 @@ pub(crate) struct BatchedTextRun {
     pub style: TextRun,
 }
 
-/// Một dòng gutter: text + vị trí pixel (top-left) + byte length của phần clock.
+/// One gutter line: text + pixel position (top-left) + byte length of the clock part.
 pub(crate) struct GutterEntry {
     pub text: SharedString,
-    /// Byte length của phần clock "[HH:MM:SS] " (không bao gồm line number).
+    /// Byte length of the clock part "[HH:MM:SS] " (excluding the line number).
     pub clock_len: usize,
     pub y: Pixels,
 }
 
-/// Thông tin layout computed ở prepaint → paint.
+/// Layout info computed in prepaint → paint.
 pub(crate) struct LayoutState {
     pub selection_rects: Vec<LayoutRect>,
     pub cursor: Option<CursorPaint>,
@@ -57,21 +57,21 @@ pub(crate) struct LayoutState {
     pub num_lines: usize,
 }
 
-/// Con trỏ để paint.
+/// Cursor to paint.
 pub(crate) struct CursorPaint {
     pub point: LayoutPoint,
     pub color: Hsla,
     pub shape: alacritty_terminal::vte::ansi::CursorShape,
 }
 
-/// Một cell box-drawing sẽ được vẽ bằng primitive fill.
+/// A box-drawing cell that will be drawn with a primitive fill.
 pub(crate) struct BoxDrawCell {
     pub point: LayoutPoint,
     pub color: Hsla,
     pub c: char,
 }
 
-/// Layout artifacts cho 1 display row — cached qua frames.
+/// Layout artifacts for one display row — cached across frames.
 pub(crate) struct RowLayout {
     pub rects: Vec<LayoutRect>,
     pub runs: Vec<BatchedTextRun>,
@@ -92,7 +92,7 @@ impl RowLayout {
     }
 }
 
-/// Thống kê render 1 frame — đếm paint calls để đo bottleneck.
+/// Per-frame render stats — count paint calls to find bottlenecks.
 #[derive(Clone, Copy, Default, Debug)]
 pub(crate) struct FrameStats {
     pub total_lines: usize,
@@ -105,7 +105,7 @@ pub(crate) struct FrameStats {
     pub frame_count: u64,
 }
 
-/// Per-row layout cache — persisted qua frames.
+/// Per-row layout cache — persisted across frames.
 pub(crate) struct RowLayoutCache {
     pub rows: Vec<RowLayout>,
     pub prev_grid_size: Option<(u16, u16)>,

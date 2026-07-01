@@ -1,12 +1,13 @@
 //! SSH + SFTP implementation for OneTerm.
 //!
-//! Triển khai `russh` client + tokio runtime ẩn. `SshSession` implement
-//! `TerminalSession` — UI dùng qua trait, không biết internals.
+//! Implements a `russh` client with a hidden tokio runtime. `SshSession`
+//! implements `TerminalSession` — the UI uses it through the trait, unaware of
+//! the internals.
 //!
-//! Tham chiếu `docs/terminal-backend.md` §7.
+//! See `docs/terminal-backend.md` §7.
 
-pub(crate) mod counting_stream;
 pub mod config;
+pub(crate) mod counting_stream;
 pub mod handler;
 pub mod listener;
 pub mod session;

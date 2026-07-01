@@ -1,13 +1,13 @@
-//! Encode sự kiện bàn phím → escape sequence cho terminal.
+//! Encode keyboard events → escape sequences for the terminal.
 //!
-//! Tham chiếu: `freya-terminal/handle.rs::write_key`, thuần hoá:
-//! - Tự định nghĩa type trung tính (`KeySpec`/`KeyMods`/`NamedKey`) — không phụ
-//!   thuộc `keyboard_types` hay GPUI. UI crate map key event GPUI → `KeySpec`.
-//! - Chỉ trả bytes, KHÔNG làm side-effect (scroll/selection/shift-track là việc
-//!   của view/session, không thuộc encoder).
-//! - Trả `None` khi không nhận diện → caller quyết định bỏ qua.
+//! Reference: `freya-terminal/handle.rs::write_key`, refined:
+//! - Defines neutral types (`KeySpec`/`KeyMods`/`NamedKey`) — no dependency on
+//!   `keyboard_types` or GPUI. The UI crate maps GPUI key events → `KeySpec`.
+//! - Returns bytes only, with NO side effects (scroll/selection/shift-tracking
+//!   belong to the view/session, not the encoder).
+//! - Returns `None` when unrecognized → the caller decides to ignore it.
 
-/// Modifier state khi encode key (bit-agnostic, dùng bool cho rõ ràng).
+/// Modifier state when encoding a key (bit-agnostic, uses bool for clarity).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct KeyMods {
     pub shift: bool,
@@ -15,7 +15,7 @@ pub struct KeyMods {
     pub alt: bool,
 }
 
-/// Tên key đặc biệt (không phải ký tự in được).
+/// Special key names (not printable characters).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NamedKey {
     Enter,
@@ -34,12 +34,12 @@ pub enum NamedKey {
     Insert,
 }
 
-/// Đặc tả một key event — framework-agnostic.
+/// Specification of a key event — framework-agnostic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeySpec {
-    /// Ký tự (có thể nhiều codepoint, vd phím compose).
+    /// A character (may be multiple codepoints, e.g. a compose key).
     Character(String),
-    /// Key đặc biệt.
+    /// A special key.
     Named(NamedKey),
 }
 
@@ -48,14 +48,14 @@ fn modifier_byte(mods: KeyMods) -> u8 {
     1 + mods.shift as u8 + (mods.alt as u8) * 2 + (mods.ctrl as u8) * 4
 }
 
-/// Encode một key event → escape sequence. Trả `None` nếu không nhận diện.
+/// Encode a single key event → escape sequence. Returns `None` if unrecognized.
 ///
-/// Quy ước:
+/// Conventions:
 /// - `Character` + `ctrl` + 1 byte → `& 0x1f` (control code).
-/// - `Enter` shift/ctrl → CSI u; thường → `\r`.
-/// - `Backspace`: ctrl → `0x08`, alt → `ESC DEL`, thường → `0x7f`.
-/// - Arrow + (shift|ctrl) → `CSI 1;{mod}{ch}`; thường → `ESC [ {ch}`.
-/// - `Home`/`End` + (shift|ctrl) → `CSI 1;{mod}H/F`; thường → `ESC [ H/F`.
+/// - `Enter` shift/ctrl → CSI u; plain → `\r`.
+/// - `Backspace`: ctrl → `0x08`, alt → `ESC DEL`, plain → `0x7f`.
+/// - Arrow + (shift|ctrl) → `CSI 1;{mod}{ch}`; plain → `ESC [ {ch}`.
+/// - `Home`/`End` + (shift|ctrl) → `CSI 1;{mod}H/F`; plain → `ESC [ H/F`.
 pub fn encode_key(key: &KeySpec, mods: KeyMods) -> Option<Vec<u8>> {
     let shift = mods.shift;
     let ctrl = mods.ctrl;
@@ -64,7 +64,7 @@ pub fn encode_key(key: &KeySpec, mods: KeyMods) -> Option<Vec<u8>> {
     let seq: Vec<u8> = match key {
         KeySpec::Character(ch) if ctrl && ch.len() == 1 => vec![ch.as_bytes()[0] & 0x1f],
         KeySpec::Character(ch) if alt => {
-            // Alt-prefix: ESC + ký tự (gần đúng cho ASCII).
+            // Alt-prefix: ESC + character (approximation for ASCII).
             let mut v = vec![0x1b];
             v.extend_from_slice(ch.as_bytes());
             v

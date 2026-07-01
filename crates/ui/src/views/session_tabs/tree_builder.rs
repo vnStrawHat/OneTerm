@@ -1,7 +1,7 @@
-//! Tree builder helpers — build `Vec<TreeItem>` từ danh sách session,
-//! áp dụng search filter + grouping + sorting.
+//! Tree builder helpers — build `Vec<TreeItem>` from the session list,
+//! applying the search filter + grouping + sorting.
 //!
-//! Tách từ `tabs.rs` để giảm độ dài file.
+//! Split out from `tabs.rs` to keep the file shorter.
 
 use std::collections::BTreeMap;
 
@@ -13,18 +13,18 @@ use crate::state::SshSession;
 
 use super::panel::{GROUP_ID_PREFIX, SESSION_ID_PREFIX};
 
-/// Parse store index từ TreeItem id (`session:{ix}`).
+/// Parse the store index from a TreeItem id (`session:{ix}`).
 pub(crate) fn parse_session_id(id: &SharedString) -> Option<usize> {
     id.strip_prefix(SESSION_ID_PREFIX)
         .and_then(|s| s.parse::<usize>().ok())
 }
 
-/// Parse group name từ TreeItem id (`group:{name}`).
+/// Parse the group name from a TreeItem id (`group:{name}`).
 pub(crate) fn parse_group_id(id: &SharedString) -> Option<String> {
     id.strip_prefix(GROUP_ID_PREFIX).map(|s| s.to_string())
 }
 
-/// Tạo subtitle cho session leaf: `user@host:port` hoặc `host:port`.
+/// Build the subtitle for a session leaf: `user@host:port` or `host:port`.
 pub(crate) fn session_subtitle(s: &SshSession) -> String {
     match &s.username {
         Some(u) => format!("{}@{}:{}", u, s.host, s.port),
@@ -32,9 +32,9 @@ pub(crate) fn session_subtitle(s: &SshSession) -> String {
     }
 }
 
-/// Kiểm tra session có khớp với search query (case-insensitive).
+/// Check whether a session matches the search query (case-insensitive).
 ///
-/// Match trên: label, host, username, group name.
+/// Matches on: label, host, username, group name.
 pub(crate) fn session_matches(s: &SshSession, q: &str) -> bool {
     s.label.to_lowercase().contains(q)
         || s.host.to_lowercase().contains(q)
@@ -48,16 +48,16 @@ pub(crate) fn session_matches(s: &SshSession, q: &str) -> bool {
             .unwrap_or(false)
 }
 
-/// Build `Vec<TreeItem>` từ danh sách session — áp dụng search filter + grouping + sorting.
+/// Build `Vec<TreeItem>` from the session list — applies search filter + grouping + sorting.
 ///
-/// - `query` rỗng → hiển thị tất cả.
-/// - `query` không rỗng → chỉ hiển thị session khớp (label/host/user/group).
-/// - Item không có group → root (trên cùng), sort theo label.
-/// - Item có group → folder theo group name (sort), trong folder sort theo label.
+/// - Empty `query` → show everything.
+/// - Non-empty `query` → show only matching sessions (label/host/user/group).
+/// - Items without a group → root (on top), sorted by label.
+/// - Items with a group → a folder per group name (sorted), sorted by label within the folder.
 pub(crate) fn build_tree_items(sessions: &[SshSession], query: &str) -> Vec<TreeItem> {
     let q = query.trim().to_lowercase();
 
-    // 1. Filter sessions nếu có query.
+    // 1. Filter sessions if there is a query.
     let filtered: Vec<(usize, &SshSession)> = if q.is_empty() {
         sessions.iter().enumerate().collect()
     } else {
@@ -68,7 +68,7 @@ pub(crate) fn build_tree_items(sessions: &[SshSession], query: &str) -> Vec<Tree
             .collect()
     };
 
-    // 2. Tách ungrouped và grouped.
+    // 2. Split into ungrouped and grouped.
     let mut ungrouped: Vec<(usize, &SshSession)> = Vec::new();
     let mut groups: BTreeMap<String, Vec<(usize, &SshSession)>> = BTreeMap::new();
 
@@ -86,13 +86,13 @@ pub(crate) fn build_tree_items(sessions: &[SshSession], query: &str) -> Vec<Tree
         }
     }
 
-    // 3. Sort ungrouped theo label.
+    // 3. Sort ungrouped by label.
     ungrouped.sort_by_key(|a| a.1.label.to_lowercase());
 
-    // 4. Root items: ungrouped trước, rồi đến groups (BTreeMap đã sort theo key).
+    // 4. Root items: ungrouped first, then the groups (BTreeMap is already sorted by key).
     let mut items = Vec::new();
 
-    // Ungrouped sessions ở root.
+    // Ungrouped sessions at the root.
     for (ix, s) in &ungrouped {
         items.push(TreeItem::new(
             format!("{SESSION_ID_PREFIX}{ix}"),

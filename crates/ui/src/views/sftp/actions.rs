@@ -1,7 +1,7 @@
-//! File operations cho SFTP browser — rename, delete, new folder, properties.
+//! File operations for the SFTP browser — rename, delete, new folder, properties.
 //!
-//! Tách từ `file_browser.rs` để giảm độ dài file.
-//! Các method này mở dialog (input/confirm) rồi gọi SFTP backend.
+//! Split out from `file_browser.rs` to keep the file shorter.
+//! These methods open a dialog (input/confirm) and then call the SFTP backend.
 
 use std::path::Path;
 use std::rc::Rc;
@@ -23,7 +23,7 @@ use super::types::{format_date, format_owner, format_permissions, format_size};
 
 impl SftpPanel {
     /// Rename selected entry.
-    /// Mở dialog với InputState pre-fill tên hiện tại → sftp.rename().
+    /// Opens a dialog with an InputState pre-filled with the current name → sftp.rename().
     pub(crate) fn do_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let entry = match self.selected_entry(cx) {
             Some(e) => e.clone(),
@@ -135,7 +135,7 @@ impl SftpPanel {
     }
 
     /// Delete selected entry (file or folder).
-    /// Mở alert dialog confirm → sftp.remove() hoặc sftp.rmdir().
+    /// Opens a confirm alert dialog → sftp.remove() or sftp.rmdir().
     pub(crate) fn do_delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let entry = match self.selected_entry(cx) {
             Some(e) => e.clone(),
@@ -206,8 +206,8 @@ impl SftpPanel {
         });
     }
 
-    /// Tạo thư mục mới trong cwd.
-    /// Mở dialog với InputState → sftp.mkdir().
+    /// Create a new folder in the cwd.
+    /// Opens a dialog with an InputState → sftp.mkdir().
     pub(crate) fn do_new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         log::info!("SftpPanel::do_new_folder: cwd=\"{}\"", self.cwd.display());
 
@@ -296,7 +296,7 @@ impl SftpPanel {
         });
     }
 
-    /// Show properties dialog — sftp.stat() → hiển thị metadata chi tiết.
+    /// Show properties dialog — sftp.stat() → display detailed metadata.
     pub(crate) fn do_properties(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let entry = match self.selected_entry(cx) {
             Some(e) => e.clone(),

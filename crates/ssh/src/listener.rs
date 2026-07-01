@@ -1,10 +1,10 @@
-//! `SshListener` — `EventListener` cho SSH session.
+//! `SshListener` — `EventListener` for the SSH session.
 //!
-//! Forward event alacritty → `SessionEvent` (qua `async_channel`, non-blocking
-//! `try_send`) VÀ cập nhật `SessionState` cache (title/clipboard/alive).
-//! Route `PtyWrite` → `cmd_tx` (channel data đi ra SSH).
+//! Forwards alacritty events → `SessionEvent` (via `async_channel`, non-blocking
+//! `try_send`) AND updates the `SessionState` cache (title/clipboard/alive).
+//! Routes `PtyWrite` → `cmd_tx` (channel data going out to SSH).
 //!
-//! Tương tự `local/src/listener.rs` nhưng thay `Notifier` bằng `cmd_tx`
+//! Similar to `local/src/listener.rs` but replaces `Notifier` with `cmd_tx`
 //! (async_channel::Sender<Cmd>).
 
 use async_channel::Sender;
@@ -16,26 +16,26 @@ use oneterm_core::SessionEvent;
 
 use crate::state::SharedState;
 
-/// Lệnh gửi từ main thread → tokio task (qua async_channel).
+/// Command sent from the main thread → tokio task (via async_channel).
 #[derive(Debug)]
 pub enum Cmd {
-    /// Ghi byte vào SSH channel (keystroke, paste, OSC response).
+    /// Write bytes to the SSH channel (keystroke, paste, OSC response).
     Write(Vec<u8>),
-    /// Resize PTY (window_change).
+    /// Resize the PTY (window_change).
     Resize(u16, u16),
-    /// Đóng channel.
+    /// Close the channel.
     Close,
 }
 
-/// `EventListener` cho SSH session. Clone-thân thiện (Arc fields) để chia sẻ
-/// giữa `Term` và tokio task.
+/// `EventListener` for the SSH session. Clone-friendly (Arc fields) for sharing
+/// between `Term` and the tokio task.
 #[derive(Clone)]
 pub struct SshListener {
-    /// Channel phát `SessionEvent` cho UI (sub qua `subscribe`).
+    /// Channel emitting `SessionEvent` to the UI (subscribe via `subscribe`).
     event_tx: Sender<SessionEvent>,
-    /// Channel gửi `Cmd` tới tokio task (bridge sync→async).
+    /// Channel sending `Cmd` to the tokio task (sync→async bridge).
     cmd_tx: Sender<Cmd>,
-    /// Cache state — chia sẻ với `SshSession`.
+    /// State cache — shared with `SshSession`.
     state: SharedState,
 }
 
@@ -48,7 +48,7 @@ impl SshListener {
         }
     }
 
-    /// Ghi byte vào SSH channel (qua cmd_tx → tokio task → channel.data).
+    /// Write bytes to the SSH channel (via cmd_tx → tokio task → channel.data).
     pub fn pty_write(&self, bytes: &[u8]) {
         log::debug!(
             "SshListener::pty_write: {} bytes: {:?}",
@@ -60,24 +60,24 @@ impl SshListener {
         }
     }
 
-    /// Resize SSH channel (qua cmd_tx → tokio task → channel.window_change).
+    /// Resize the SSH channel (via cmd_tx → tokio task → channel.window_change).
     pub fn pty_resize(&self, rows: u16, cols: u16) {
         if let Err(e) = self.cmd_tx.try_send(Cmd::Resize(rows, cols)) {
             warn!("SshListener: pty_resize fail: {e}");
         }
     }
 
-    /// Đóng SSH channel.
+    /// Close the SSH channel.
     pub fn pty_close(&self) {
         if let Err(e) = self.cmd_tx.try_send(Cmd::Close) {
             warn!("SshListener: pty_close fail: {e}");
         }
     }
 
-    /// Forward `SessionEvent` (non-blocking). Bỏ qua nếu channel đầy/closed.
+    /// Forward a `SessionEvent` (non-blocking). Drops it if the channel is full/closed.
     pub fn forward(&self, ev: SessionEvent) {
         if let Err(e) = self.event_tx.try_send(ev) {
-            warn!("SshListener: drop event (channel đầy/closed): {e:?}");
+            warn!("SshListener: drop event (channel full/closed): {e:?}");
         }
     }
 
@@ -111,11 +111,11 @@ impl EventListener for SshListener {
                 self.forward(SessionEvent::Clipboard(Some(text)));
             }
             Event::ClipboardLoad(_, _) => {
-                warn!("SshListener: ClipboardLoad (OSC 52 read) chưa hỗ trợ");
+                warn!("SshListener: ClipboardLoad (OSC 52 read) not supported yet");
             }
-            // ── Ghi channel (OSC/DA response) ───────────────────────────
+            // ── Channel write (OSC/DA response) ─────────────────────────
             Event::PtyWrite(s) => self.pty_write(s.as_bytes()),
-            // ── Process exit — SSH dùng ChannelMsg::ExitStatus, không qua đây ──
+            // ── Process exit — SSH uses ChannelMsg::ExitStatus, not this path ──
             Event::ChildExit(_) => {}
             // ── Shutdown ────────────────────────────────────────────────
             Event::Exit => {}
@@ -123,7 +123,7 @@ impl EventListener for SshListener {
             Event::Bell => {
                 self.forward(SessionEvent::Bell);
             }
-            // ── Bỏ qua ──────────────────────────────────────────────────
+            // ── Ignored ─────────────────────────────────────────────────
             Event::MouseCursorDirty
             | Event::CursorBlinkingChange
             | Event::ColorRequest(_, _)

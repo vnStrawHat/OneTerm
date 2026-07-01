@@ -1,4 +1,4 @@
-//! AppState chia sẻ — Entity<T> state toàn cục.
+//! Shared AppState — global Entity<T> state.
 
 pub mod app_state;
 pub mod session_state;

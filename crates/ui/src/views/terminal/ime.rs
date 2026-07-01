@@ -1,4 +1,4 @@
-//! IME (`EntityInputHandler`) cho `LocalTerminalView`.
+//! IME (`EntityInputHandler`) for `LocalTerminalView`.
 
 use gpui::{EntityInputHandler, UTF16Selection, Window};
 
@@ -21,7 +21,7 @@ impl EntityInputHandler for LocalTerminalView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Option<UTF16Selection> {
-        // Alt-screen (vd vim/less): tắt IME.
+        // Alt-screen (e.g. vim/less): disable IME.
         if self.session.read(cx).is_alt_screen() {
             None
         } else {
@@ -55,8 +55,8 @@ impl EntityInputHandler for LocalTerminalView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        // Commit IME hoặc ký tự thường (normal mode). Đây là nguồn ghi tin cậy —
-        // on_key_down skip ký tự thường khi IME active để tránh double (aa).
+        // Commit IME or normal character (normal mode). This is the trusted write source —
+        // on_key_down skips normal characters while IME is active to avoid doubling (aa).
         self.session.update(cx, |s, _| s.commit_text(text));
         if self.has_bell {
             self.has_bell = false;

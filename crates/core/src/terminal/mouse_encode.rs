@@ -1,12 +1,12 @@
 //! Encode mouse events → CSI escape sequences (X10 / X11 / SGR-1006).
 //!
-//! Tham chiếu: `freya-terminal/parser.rs`, thuần hoá + thêm modifier support.
-//! Mode flag (`TermMode::MOUSE_REPORT_CLICK` / `MOUSE_DRAG` / `MOUSE_MOTION` /
-//! `SGR_MOUSE`) quyết định caller có gửi không; module này chỉ lo encoding.
+//! Reference: `freya-terminal/parser.rs`, refined + added modifier support.
+//! Mode flags (`TermMode::MOUSE_REPORT_CLICK` / `MOUSE_DRAG` / `MOUSE_MOTION` /
+//! `SGR_MOUSE`) decide whether the caller sends; this module only handles encoding.
 
 use alacritty_terminal::term::TermMode;
 
-/// Nút chuột cho terminal encoding.
+/// Mouse button for terminal encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalMouseButton {
     Left,
@@ -15,7 +15,7 @@ pub enum TerminalMouseButton {
 }
 
 impl TerminalMouseButton {
-    /// Mã X11/SGR (chưa tính modifier bits).
+    /// X11/SGR code (before modifier bits).
     fn code(self) -> u8 {
         match self {
             Self::Left => 0,
@@ -25,7 +25,7 @@ impl TerminalMouseButton {
     }
 }
 
-/// Modifier kèm theo sự kiện chuột — cộng thêm vào button code.
+/// Modifiers accompanying a mouse event — added to the button code.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MouseModifiers {
     pub shift: bool,
@@ -34,7 +34,7 @@ pub struct MouseModifiers {
 }
 
 impl MouseModifiers {
-    /// Mask bit: shift=4, alt=8, ctrl=16 (theo chuẩn XTerm).
+    /// Bit mask: shift=4, alt=8, ctrl=16 (per the XTerm standard).
     fn mask(self) -> u8 {
         let mut m = 0;
         if self.shift {
@@ -50,11 +50,11 @@ impl MouseModifiers {
     }
 }
 
-/// Encode một sự kiện chuột → chuỗi escape mà app đang chạy nhận được.
+/// Encode a single mouse event → the escape sequence the running app receives.
 ///
-/// `sgr_code`: mã cho SGR (1006); `x11_code`: mã cho classic X11 (trước khi
-/// cộng offset +32 bắt buộc). `release_in_sgr` chỉ ảnh hưởng SGR (chữ `m` vs
-/// `M`); X11 release dùng button byte cố định = 3.
+/// `sgr_code`: code for SGR (1006); `x11_code`: code for classic X11 (before the
+/// mandatory +32 offset). `release_in_sgr` only affects SGR (`m` vs `M`);
+/// X11 release uses a fixed button byte = 3.
 fn encode(
     sgr_code: u8,
     x11_code: u8,
@@ -64,7 +64,7 @@ fn encode(
     mods: MouseModifiers,
     release_in_sgr: bool,
 ) -> String {
-    // row/col là 0-indexed từ caller → terminal 1-indexed.
+    // row/col are 0-indexed from the caller → terminal is 1-indexed.
     let row = row.saturating_add(1);
     let col = col.saturating_add(1);
     let mod_mask = mods.mask();
@@ -72,7 +72,7 @@ fn encode(
         let action = if release_in_sgr { 'm' } else { 'M' };
         format!("\x1b[<{};{};{}{}", sgr_code + mod_mask, col, row, action)
     } else {
-        // X10/X11: button+32, col+32, row+32 (giới hạn 255 do byte đơn).
+        // X10/X11: button+32, col+32, row+32 (capped at 255 due to single byte).
         let button_byte = x11_code.saturating_add(32) + mod_mask;
         let col_byte = col.min(255) as u8;
         let row_byte = row.min(255) as u8;
@@ -102,12 +102,12 @@ pub fn encode_mouse_release(
     mode: TermMode,
     mods: MouseModifiers,
 ) -> String {
-    // X11 gộp release thành một button byte cố định = 3; SGR giữ mã nút gốc
-    // nhưng đổi `M` → `m`.
+    // X11 collapses release into a fixed button byte = 3; SGR keeps the original
+    // button code but changes `M` → `m`.
     encode(button.code(), 3, row, col, mode, mods, true)
 }
 
-/// Mouse motion. `button = None` → hover (không nút, mã 3).
+/// Mouse motion. `button = None` → hover (no button, code 3).
 pub fn encode_mouse_move(
     row: usize,
     col: usize,
@@ -119,7 +119,7 @@ pub fn encode_mouse_move(
     encode(code, code, row, col, mode, mods, false)
 }
 
-/// Wheel. `delta_y > 0` = scroll up (mã 64), `< 0` = scroll down (mã 65).
+/// Wheel. `delta_y > 0` = scroll up (code 64), `< 0` = scroll down (code 65).
 pub fn encode_wheel_event(
     row: usize,
     col: usize,

@@ -1,12 +1,12 @@
-//! `LocalListener` — `EventListener` cho local PTY.
+//! `LocalListener` — `EventListener` for the local PTY.
 //!
-//! Forward event alacritty → `SessionEvent` (qua `async_channel`, non-blocking
-//! `try_send`) VÀ cập nhật `SessionState` cache (title/clipboard/alive).
-//! Route `PtyWrite` → `Notifier` (EventLoopSender, set sau `EventLoop::new`).
+//! Forwards alacritty events → `SessionEvent` (via `async_channel`, non-blocking
+//! `try_send`) AND updates the `SessionState` cache (title/clipboard/alive).
+//! Routes `PtyWrite` → `Notifier` (EventLoopSender, set after `EventLoop::new`).
 //!
-//! Cả `Term<U>` và `EventLoop` đều nhận **clone** của cùng listener (Arc-shared)
-//! — Term gửi Title/PtyWrite/ClipboardStore khi parse, EventLoop gửi
-//! Wakeup/ChildExit sau khi read. Tham chiếu `docs/terminal-backend.md` §5.
+//! Both `Term<U>` and `EventLoop` receive a **clone** of the same listener
+//! (Arc-shared) — Term sends Title/PtyWrite/ClipboardStore while parsing, and
+//! EventLoop sends Wakeup/ChildExit after reading. See `docs/terminal-backend.md` §5.
 
 use std::borrow::Cow;
 use std::sync::Mutex;
@@ -20,15 +20,15 @@ use oneterm_core::SessionEvent;
 use crate::event_loop::{ShellMsg, ShellNotifier};
 use crate::state::SharedState;
 
-/// `EventListener` cho local shell. Clone-thân thiện (Arc fields) để chia sẻ
-/// giữa `Term` và `EventLoop`.
+/// `EventListener` for the local shell. Clone-friendly (Arc fields) for sharing
+/// between `Term` and `EventLoop`.
 #[derive(Clone)]
 pub struct LocalListener {
-    /// Channel phát `SessionEvent` cho UI (sub qua `subscribe`).
+    /// Channel emitting `SessionEvent` to the UI (subscribe via `subscribe`).
     event_tx: Sender<SessionEvent>,
-    /// Notifier (ShellNotifier) để ghi PTY — set sau ShellEventLoop::new().
+    /// Notifier (ShellNotifier) for PTY writes — set after ShellEventLoop::new().
     notifier: std::sync::Arc<Mutex<Option<ShellNotifier>>>,
-    /// Cache state (title/clipboard/alive) — chia sẻ với `LocalSession`.
+    /// State cache (title/clipboard/alive) — shared with `LocalSession`.
     state: SharedState,
 }
 
@@ -41,13 +41,13 @@ impl LocalListener {
         }
     }
 
-    /// Set notifier sau khi `ShellEventLoop::new()` có sẵn. Gọi trên bất kỳ
-    /// clone nào (Arc-shared).
+    /// Set the notifier once `ShellEventLoop::new()` is available. Can be called
+    /// on any clone (Arc-shared).
     pub fn set_notifier(&self, sender: ShellNotifier) {
         *self.notifier.lock().unwrap() = Some(sender);
     }
 
-    /// Ghi byte vào PTY (qua ShellMsg::Input).
+    /// Write bytes to the PTY (via ShellMsg::Input).
     pub fn pty_write(&self, bytes: &[u8]) {
         if let Some(sender) = self.notifier.lock().unwrap().as_ref() {
             if let Err(e) = sender.send(ShellMsg::Input(Cow::Owned(bytes.to_vec()))) {
@@ -56,7 +56,7 @@ impl LocalListener {
         }
     }
 
-    /// Resize PTY (qua ShellMsg::Resize).
+    /// Resize the PTY (via ShellMsg::Resize).
     pub fn pty_resize(&self, rows: u16, cols: u16) {
         if let Some(sender) = self.notifier.lock().unwrap().as_ref() {
             let sz = WindowSize {
@@ -71,7 +71,7 @@ impl LocalListener {
         }
     }
 
-    /// Shutdown EventLoop (qua ShellMsg::Shutdown).
+    /// Shut down the EventLoop (via ShellMsg::Shutdown).
     pub fn pty_shutdown(&self) {
         if let Some(sender) = self.notifier.lock().unwrap().as_ref() {
             if let Err(e) = sender.send(ShellMsg::Shutdown) {
@@ -80,17 +80,17 @@ impl LocalListener {
         }
     }
 
-    /// Forward `SessionEvent` (non-blocking). Bỏ qua nếu channel đầy/closed —
-    /// `Output` debounce nên chấp nhận được.
+    /// Forward a `SessionEvent` (non-blocking). Drops it if the channel is
+    /// full/closed — acceptable since `Output` is debounced.
     pub fn forward(&self, ev: SessionEvent) {
         if let Err(e) = self.event_tx.try_send(ev) {
-            warn!("LocalListener: drop event (channel đầy/closed): {e:?}");
+            warn!("LocalListener: drop event (channel full/closed): {e:?}");
         }
     }
 
     fn set_title(&self, title: String) {
         let mut st = self.state.lock().unwrap();
-        // Chuỗi rỗng = reset (ResetTitle) → None.
+        // Empty string = reset (ResetTitle) → None.
         st.title = if title.is_empty() { None } else { Some(title) };
     }
 
@@ -124,12 +124,12 @@ impl EventListener for LocalListener {
                 self.set_clipboard(text.clone());
                 self.forward(SessionEvent::Clipboard(Some(text)));
             }
-            // OSC 52 load (query clipboard) — cần callback clipboard từ UI,
-            // chưa wire → bỏ qua (log).
+            // OSC 52 load (query clipboard) — needs a clipboard callback from the
+            // UI, not wired yet → ignore (log).
             Event::ClipboardLoad(_, _) => {
-                warn!("LocalListener: ClipboardLoad (OSC 52 read) chưa hỗ trợ");
+                warn!("LocalListener: ClipboardLoad (OSC 52 read) not supported yet");
             }
-            // ── Ghi PTY (OSC/DA response) ───────────────────────────────
+            // ── PTY write (OSC/DA response) ─────────────────────────────
             Event::PtyWrite(s) => self.pty_write(s.as_bytes()),
             // ── Process exit ────────────────────────────────────────────
             Event::ChildExit(status) => {
@@ -139,13 +139,13 @@ impl EventListener for LocalListener {
             }
             // ── Shutdown ────────────────────────────────────────────────
             Event::Exit => {
-                // close() gửi Msg::Shutdown trực tiếp; Exit ở đây = info.
+                // close() sends Msg::Shutdown directly; Exit here = info.
             }
             // ── Bell ──────────────────────────────────────────────────
             Event::Bell => {
                 self.forward(SessionEvent::Bell);
             }
-            // ── Bỏ qua (chưa cần) ──────────────────────────────────────
+            // ── Ignored (not needed yet) ───────────────────────────────
             Event::MouseCursorDirty
             | Event::CursorBlinkingChange
             | Event::ColorRequest(_, _)

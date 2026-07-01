@@ -1,13 +1,13 @@
-//! Nhóm Colors: override foreground, background, cursor, selection,
-//! ANSI 16 colors, min contrast.
+//! Colors group: override foreground, background, cursor, selection,
+//! the 16 ANSI colors, and min contrast.
 
 use serde::{Deserialize, Serialize};
 
-/// Nhóm Colors: override foreground, background, cursor, selection,
-/// ANSI 16 colors, min contrast.
+/// Colors group: override foreground, background, cursor, selection,
+/// the 16 ANSI colors, and min contrast.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColorsConfig {
-    /// Override foreground (null = theme foreground, "#RRGGBB" để override).
+    /// Override foreground (null = theme foreground, "#RRGGBB" to override).
     #[serde(default = "default_color_foreground")]
     pub foreground: Option<String>,
     /// Override background.
@@ -31,11 +31,11 @@ pub struct ColorsConfig {
     /// Override line number color. null = gutter_fg.
     #[serde(default = "default_color_line_number_fg")]
     pub line_number_fg: Option<String>,
-    /// Ngưỡng contrast tối thiểu (WCAG, 0.0 = tắt).
+    /// Minimum contrast threshold (WCAG, 0.0 = off).
     #[serde(default = "default_min_contrast")]
     pub min_contrast: f32,
-    /// Override ANSI 16 colors (tối đa 16, thiếu = dùng default).
-    /// Vd: ["#000000", "#cc0000", ...]
+    /// Override the 16 ANSI colors (up to 16; missing ones use the default).
+    /// E.g.: ["#000000", "#cc0000", ...]
     #[serde(default)]
     pub ansi: Vec<String>,
 }

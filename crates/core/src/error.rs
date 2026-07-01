@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-/// Lỗi dùng chung cho OneTerm.
+/// Shared error type for OneTerm.
 #[derive(Debug, Error)]
 pub enum AppError {
     #[error("I/O error: {0}")]
@@ -14,7 +14,7 @@ pub enum AppError {
 }
 
 impl AppError {
-    /// Tạo lỗi từ chuỗi thông điệp bất kỳ.
+    /// Build an error from an arbitrary message string.
     pub fn msg(message: impl Into<String>) -> Self {
         Self::Other(message.into())
     }

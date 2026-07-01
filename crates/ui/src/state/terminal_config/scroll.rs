@@ -1,20 +1,20 @@
-//! Nhóm Scroll: multiplier, alternate scroll, scrollback history.
+//! Scroll group: multiplier, alternate scroll, scrollback history.
 
 use serde::{Deserialize, Serialize};
 
-/// Nhóm Scroll: multiplier, alternate scroll, scrollback history.
+/// Scroll group: multiplier, alternate scroll, scrollback history.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScrollConfig {
-    /// Scroll multiplier cho mouse wheel (1.0 = default, 3.0 = nhanh 3x).
+    /// Scroll multiplier for the mouse wheel (1.0 = default, 3.0 = 3x faster).
     #[serde(default = "default_scroll_multiplier")]
     pub multiplier: f32,
-    /// Alternate scroll: trong alt-screen (vim/less/htop), mouse wheel
-    /// gửi arrow keys thay vì scroll scrollback.
+    /// Alternate scroll: in alt-screen (vim/less/htop), the mouse wheel sends
+    /// arrow keys instead of scrolling the scrollback.
     #[serde(default = "default_true")]
     pub alternate_scroll: bool,
-    /// Số dòng scrollback history tối đa (default 10000).
-    /// Tổng dòng trong gutter = scrollback_history + viewport lines.
-    /// Tăng giá trị này để gutter line number có thể lên cao hơn.
+    /// Maximum number of scrollback history lines (default 10000).
+    /// Total lines in the gutter = scrollback_history + viewport lines.
+    /// Increase this so the gutter line number can go higher.
     #[serde(default = "default_scrollback_history")]
     pub scrollback_history: usize,
 }

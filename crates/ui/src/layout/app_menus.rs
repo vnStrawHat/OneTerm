@@ -1,14 +1,14 @@
-//! App menu bar — dựng các menu native (OneTerm / Edit / Window / Help).
+//! App menu bar — builds the native menus (OneTerm / Edit / Window / Help).
 //!
-//! Mirror `reference/.../story/src/app_menus.rs`, giữ Appearance (Light/Dark),
-//! Theme submenu, Language, Edit, Window, Help.
+//! Mirrors `reference/.../story/src/app_menus.rs`, keeping Appearance (Light/Dark),
+//! Theme submenu, Language, Edit, Window, and Help.
 
 use gpui::{App, Entity, Menu, MenuItem, SharedString};
 use gpui_component::{ActiveTheme, GlobalState, Theme, ThemeRegistry, menu::AppMenuBar};
 
 use crate::actions::{About, Quit, SelectLocale, SwitchTheme, SwitchThemeMode};
 
-/// Khởi tạo `AppMenuBar` + wire observe theme để refresh check-state.
+/// Initialize the `AppMenuBar` and wire up theme observation to refresh check states.
 pub fn init(title: impl Into<SharedString>, cx: &mut App) -> Entity<AppMenuBar> {
     let app_menu_bar = AppMenuBar::new(cx);
     let title: SharedString = title.into();
@@ -18,12 +18,12 @@ pub fn init(title: impl Into<SharedString>, cx: &mut App) -> Entity<AppMenuBar> 
         let title = title.clone();
         let app_menu_bar = app_menu_bar.clone();
         move |_: &SelectLocale, cx: &mut App| {
-            // rust-i18n chưa wire ở skeleton — chỉ refresh menu.
+            // rust-i18n is not wired up in the skeleton yet — just refresh the menu.
             update_app_menu(title.clone(), app_menu_bar.clone(), cx);
         }
     });
 
-    // Observe theme changes để refresh check-state Light/Dark + Theme.
+    // Observe theme changes to refresh the Light/Dark + Theme check states.
     cx.observe_global::<Theme>({
         let title = title.clone();
         let app_menu_bar = app_menu_bar.clone();

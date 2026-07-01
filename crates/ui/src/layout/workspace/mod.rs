@@ -1,6 +1,6 @@
-//! [`OneTermWorkspace`] — view chính của OneTerm.
+//! [`OneTermWorkspace`] — OneTerm's main view.
 //!
-//! Module gốc `workspace.rs` đã được tách thành `workspace/`.
+//! The original `workspace.rs` module has been split into `workspace/`.
 
 use std::collections::HashSet;
 use std::sync::{
@@ -29,8 +29,8 @@ pub(crate) mod layout;
 pub(crate) mod persistence;
 pub(crate) mod zoom;
 
-/// Save dock state ra `docks.json` — dùng khi close window (`on_release`).
-/// Đọc `dock_area`, `zoomed_panel`, `toggle_button_visible` từ AppState global.
+/// Save the dock state to `docks.json` — used when the window closes (`on_release`).
+/// Reads `dock_area`, `zoomed_panel`, and `toggle_button_visible` from the global AppState.
 pub fn save_dock_state_on_close(cx: &App) {
     let (weak_dock, zoomed_name, tbv) = {
         let state = AppState::global(cx).read(cx);
@@ -63,8 +63,8 @@ pub fn save_dock_state_on_close(cx: &App) {
 pub const MAIN_DOCK_VERSION: usize = 2;
 pub const MAIN_DOCK_ID: &str = "main-dock";
 pub const TOGGLE_BUTTON_VISIBLE_FIELD: &str = "toggle_button_visible";
-/// Field JSON lưu trạng thái bảng SFTP (column widths + visibility) trong
-/// `docks.json`. Đọc/ghi bởi `views/sftp/persistence.rs`.
+/// JSON field storing the SFTP table state (column widths + visibility) in
+/// `docks.json`. Read/written by `views/sftp/persistence.rs`.
 pub const SFTP_TABLE_STATE_FIELD: &str = "sftp_table_state";
 
 #[cfg(debug_assertions)]
@@ -72,33 +72,33 @@ pub const STATE_FILE: &str = "target/docks.json";
 #[cfg(not(debug_assertions))]
 pub const STATE_FILE: &str = "docks.json";
 
-/// Workspace chính: title bar + dock area + status bar.
+/// Main workspace: title bar + dock area + status bar.
 pub struct OneTermWorkspace {
     pub title_bar: Entity<AppTitleBar>,
     pub dock_area: Entity<DockArea>,
-    /// Đồng hồ datetime — tạo 1 lần để timer 1s fire ổn định.
+    /// Datetime clock — created once so the 1s timer fires reliably.
     pub clock: Entity<DateTimeClock>,
-    /// Network speed indicator — tạo 1 lần để timer 1s fire ổn định.
+    /// Network speed indicator — created once so the 1s timer fires reliably.
     pub net_speed: Entity<NetSpeedIndicator>,
     last_layout_state: Option<gpui_component::dock::DockAreaState>,
     toggle_button_visible: Arc<AtomicBool>,
     _save_layout_task: Option<Task<()>>,
 
-    /// Mirror trạng thái zoom: tên panel đang zoom (fullscreen).
-    /// `gpui-component` giữ `TabPanel.zoomed` (private) + `DockArea.zoom_view`
-    /// (private) nên từ ngoài crate không đọc được → tự track qua subscription
-    /// `PanelEvent::ZoomIn`/`ZoomOut`. Dùng `Arc<Mutex<..>>` chia sẻ với closure
-    /// `on_app_quit` để đọc an toàn ngay cả khi entity workspace đã bị drop
-    /// trong quá trình shutdown.
+    /// Mirror of the zoom state: name of the panel currently zoomed (fullscreen).
+    /// `gpui-component` keeps `TabPanel.zoomed` (private) + `DockArea.zoom_view`
+    /// (private), so they cannot be read from outside the crate → track it ourselves
+    /// via the `PanelEvent::ZoomIn`/`ZoomOut` subscription. Uses `Arc<Mutex<..>>`
+    /// shared with the `on_app_quit` closure to read safely even after the workspace
+    /// entity has been dropped during shutdown.
     zoomed_panel: Arc<Mutex<Option<String>>>,
-    /// Các `TabPanel` đã subscribe — tránh subscribe trùng (LayoutChanged fire
-    /// nhiều lần, và TabPanel có thể tái tạo).
+    /// `TabPanel`s already subscribed — avoids duplicate subscriptions (LayoutChanged
+    /// fires multiple times, and TabPanels can be recreated).
     subscribed_tabs: HashSet<EntityId>,
 }
 
 impl OneTermWorkspace {
-    /// Tạo workspace mới: load layout cũ (giữ right dock + settings),
-    /// nhưng reset center (terminal tabs) về 1 tab mặc định.
+    /// Create a new workspace: load the old layout (keep right dock + settings),
+    /// but reset the center (terminal tabs) to a single default tab.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         AppState::init(cx);
 
@@ -109,17 +109,17 @@ impl OneTermWorkspace {
         });
         let weak_dock_area = dock_area.downgrade();
 
-        // Lưu WeakEntity<DockArea> vào AppState — dialog connect SSH dùng
-        // để add terminal tab sau khi kết nối thành công.
+        // Save WeakEntity<DockArea> into AppState — the SSH connect dialog uses it
+        // to add a terminal tab after a successful connection.
         AppState::global(cx).update(cx, |s, cx| {
             s.dock_area = Some(weak_dock_area.clone());
             cx.notify();
         });
 
-        // Đọc tên panel đang zoom TRƯỚC khi layout bị reset (center luôn reset,
-        // và reset_* ghi lại docks.json không kèm zoom → phải lưu trước).
+        // Read the name of the zoomed panel BEFORE the layout is reset (the center
+        // always resets, and reset_* rewrites docks.json without the zoom → must save first).
         let saved_zoom = persistence::read_zoomed_panel();
-        // Đọc toggle_button_visible TRƯỚC khi reset_* ghi lại docks.json.
+        // Read toggle_button_visible BEFORE reset_* rewrites docks.json.
         let saved_toggle_button_visible = persistence::read_toggle_button_visible().unwrap_or(true);
 
         match Self::load_layout(dock_area.clone(), window, cx) {
@@ -131,24 +131,24 @@ impl OneTermWorkspace {
             }
         }
 
-        // Mirror toggle_button_visible — `Arc<AtomicBool>` chia sẻ giữa
-        // subscription callbacks và closure `on_app_quit`.
+        // Mirror toggle_button_visible — `Arc<AtomicBool>` shared between
+        // subscription callbacks and the `on_app_quit` closure.
         let toggle_button_visible = Arc::new(AtomicBool::new(saved_toggle_button_visible));
 
-        // Áp dụng toggle_button_visible đã lưu lên DockArea (mặc định = true).
+        // Apply the saved toggle_button_visible to the DockArea (default = true).
         if !saved_toggle_button_visible {
             dock_area.update(cx, |dock_area, cx| {
                 dock_area.set_toggle_button_visible(false, cx);
             });
         }
 
-        // Mirror trạng thái zoom (tên panel đang zoom) — `Arc<Mutex<..>>` chia sẻ
-        // giữa subscription callbacks và closure `on_app_quit` để đọc an toàn ngay
-        // cả khi entity workspace đã bị drop khi shutdown.
+        // Mirror the zoom state (name of the zoomed panel) — `Arc<Mutex<..>>` shared
+        // between subscription callbacks and the `on_app_quit` closure to read safely
+        // even after the workspace entity has been dropped during shutdown.
         let zoomed_panel = Arc::new(Mutex::new(None::<String>));
 
-        // Lưu zoomed_panel + toggle_button_visible vào AppState — chia sẻ với
-        // `on_release` callback trong `window.rs` để save dock state khi close.
+        // Save zoomed_panel + toggle_button_visible into AppState — shared with the
+        // `on_release` callback in `window.rs` to save the dock state on close.
         AppState::global(cx).update(cx, |s, cx| {
             s.zoomed_panel = Some(zoomed_panel.clone());
             s.toggle_button_visible = Some(toggle_button_visible.clone());
@@ -160,7 +160,7 @@ impl OneTermWorkspace {
             window,
             move |this, dock_area, ev: &DockEvent, window, cx| match ev {
                 DockEvent::LayoutChanged => {
-                    // Subscribe mọi TabPanel mới (tab/panel thêm động).
+                    // Subscribe every new TabPanel (dynamically added tab/panel).
                     this.sync_tab_subscriptions(window, cx);
                     this.save_layout(dock_area, window, cx);
                 }
@@ -169,8 +169,8 @@ impl OneTermWorkspace {
         )
         .detach();
 
-        // Fallback: on_app_quit có thể fire trong một số trường hợp (vd cx.shutdown),
-        // nhưng thường bị drop cùng entity khi window close (xem `save_dock_state_on_close`).
+        // Fallback: on_app_quit may fire in some cases (e.g. cx.shutdown), but is usually
+        // dropped with the entity when the window closes (see `save_dock_state_on_close`).
         cx.on_app_quit({
             let dock_area = dock_area.clone();
             let zoomed_panel = zoomed_panel.clone();
@@ -227,10 +227,10 @@ impl OneTermWorkspace {
             }
         }
 
-        // Subscribe mọi TabPanel đang có (load từ docks.json / tạo ở reset_*).
+        // Subscribe every existing TabPanel (loaded from docks.json / created in reset_*).
         me.sync_tab_subscriptions(window, cx);
 
-        // Khôi phục zoom (fullscreen) cho panel trùng tên đã lưu.
+        // Restore zoom (fullscreen) for the panel matching the saved name.
         if let Some(name) = saved_zoom {
             me.restore_zoom(&name, window, cx);
         }
@@ -238,7 +238,7 @@ impl OneTermWorkspace {
         me
     }
 
-    /// Debounce save 5s, skip khi state không đổi.
+    /// Debounce the save by 5s, skip when the state is unchanged.
     fn save_layout(
         &mut self,
         dock_area: &Entity<DockArea>,
@@ -246,7 +246,7 @@ impl OneTermWorkspace {
         cx: &mut Context<Self>,
     ) {
         let dock_area = dock_area.clone();
-        // Snapshot tên panel đang zoom tại thời điểm schedule (mirror state).
+        // Snapshot the zoomed panel name at schedule time (mirror state).
         let zoomed_name = self.zoomed_panel.lock().ok().and_then(|g| g.clone());
         self._save_layout_task = Some(cx.spawn_in(window, async move |story, window| {
             window
@@ -270,8 +270,8 @@ impl OneTermWorkspace {
         }));
     }
 
-    /// Subscribe `PanelEvent` trên mọi `TabPanel` chưa subscribe — cập nhật
-    /// mirror `zoomed_panel`. Gọi sau mỗi `DockEvent::LayoutChanged` và lúc init.
+    /// Subscribe to `PanelEvent` on every not-yet-subscribed `TabPanel` — updates the
+    /// `zoomed_panel` mirror. Called after each `DockEvent::LayoutChanged` and at init.
     fn sync_tab_subscriptions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tabs = zoom::collect_tab_panels(&self.dock_area.read(cx), cx);
         tracing::info!("sync_tab_subscriptions → found {} tab panel(s)", tabs.len());
@@ -290,7 +290,7 @@ impl OneTermWorkspace {
                     window,
                     move |_this, tp, ev: &PanelEvent, _window, cx| match ev {
                         PanelEvent::ZoomIn => {
-                            // Giải tên panel active tại lúc zoom.
+                            // Resolve the active panel's name at zoom time.
                             let name = tp
                                 .read(cx)
                                 .active_panel(cx)
@@ -300,7 +300,7 @@ impl OneTermWorkspace {
                             if let Ok(mut g) = zoomed_panel.lock() {
                                 *g = name.clone();
                             }
-                            // Lưu NGAY vào docks.json — không phụ thuộc quit/debounce.
+                            // Save to docks.json IMMEDIATELY — independent of quit/debounce.
                             let state = dock_area.read(cx).dump(cx);
                             _ = persistence::save_state(
                                 &state,
@@ -333,9 +333,9 @@ impl OneTermWorkspace {
         }
     }
 
-    /// Khôi phục zoom: tìm `TabPanel` có active panel trùng `name` → focus +
-    /// dispatch `ToggleZoom` (qua đúng code path của gpui-component → toolbar
-    /// state nhất quán, `TabPanel.zoomed` được set đúng).
+    /// Restore zoom: find the `TabPanel` whose active panel matches `name` → focus +
+    /// dispatch `ToggleZoom` (through gpui-component's proper code path → consistent
+    /// toolbar state, `TabPanel.zoomed` set correctly).
     fn restore_zoom(&self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
         let target = zoom::find_tab_by_panel_name(&self.dock_area.read(cx), name, cx);
         if let Some(tp) = target {
@@ -347,7 +347,7 @@ impl OneTermWorkspace {
         }
     }
 
-    /// Bind key bindings toàn cục cho workspace.
+    /// Bind global key bindings for the workspace.
     pub fn bind_keys(cx: &mut App) {
         cx.bind_keys(vec![
             KeyBinding::new("shift-escape", ToggleZoom, None),

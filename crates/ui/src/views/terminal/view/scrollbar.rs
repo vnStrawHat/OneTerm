@@ -1,4 +1,4 @@
-//! Custom scrollbar overlay cho `LocalTerminalView`.
+//! Custom scrollbar overlay for `LocalTerminalView`.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -13,7 +13,7 @@ use crate::views::terminal::element::GridMetrics;
 use crate::views::terminal::theme::TerminalTheme;
 
 impl LocalTerminalView {
-    /// Render custom scrollbar — div overlay ở cạnh phải.
+    /// Render the custom scrollbar — a div overlay on the right edge.
     pub(crate) fn render_scrollbar(
         &mut self,
         _theme: &TerminalTheme,

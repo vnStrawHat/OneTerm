@@ -1,23 +1,22 @@
-//! [`SftpTableDelegate`] — data source + cell rendering cho DataTable của SFTP.
+//! [`SftpTableDelegate`] — data source + cell rendering for the SFTP DataTable.
 //!
-//! Thay thế render thủ công trong `render_list.rs`/`render.rs` bằng
-//! `gpui_component::table::DataTable`: columns resizable, sortable, virtual
-//! scroll. Trạng thái cột (width + visibility) được persist qua
+//! Replaces the manual rendering in `render_list.rs`/`render.rs` with
+//! `gpui_component::table::DataTable`: resizable, sortable columns and virtual
+//! scroll. Column state (width + visibility) is persisted via
 //! `persistence.rs` → `docks.json`.
 
 use std::collections::HashMap;
 
+use crate::icon::AppIcon;
 use gpui::{
-    App, Context, Div, InteractiveElement as _, IntoElement, ParentElement,
-    Stateful, Styled, TextAlign, Window, div, px,
+    App, Context, Div, InteractiveElement as _, IntoElement, ParentElement, Stateful, Styled,
+    TextAlign, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme as _,
-    h_flex,
+    ActiveTheme as _, h_flex,
     menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
     table::{Column, ColumnFixed, ColumnSort, TableDelegate, TableState},
 };
-use crate::icon::AppIcon;
 use oneterm_core::FileEntry;
 
 use super::panel::SftpPanel;
@@ -27,14 +26,14 @@ use super::types::{
     format_permissions, format_size, sort_dir_to_column_sort, sort_entries,
 };
 
-/// Index trong `col_configs` của các cột đang visible (thứ tự hiển thị).
+/// Indices into `col_configs` of the currently visible columns (display order).
 type VisibleIndices = Vec<usize>;
 
-/// DataTable delegate cho SFTP file list.
+/// DataTable delegate for the SFTP file list.
 ///
-/// Sở hữu `entries` (dữ liệu), `col_configs` (config + width + visibility),
-/// `sort` state, `loading` flag. Tham chiếu ngược `SftpPanel` qua `WeakEntity`
-/// để trigger action từ context menu (rename, delete, ...).
+/// Owns `entries` (data), `col_configs` (config + width + visibility),
+/// `sort` state, and the `loading` flag. Holds a back-reference to `SftpPanel`
+/// via `WeakEntity` to trigger actions from the context menu (rename, delete, ...).
 pub(crate) struct SftpTableDelegate {
     pub(crate) entries: Vec<FileEntry>,
     pub(crate) col_configs: Vec<SftpColumnConfig>,
@@ -62,7 +61,7 @@ impl SftpTableDelegate {
 
     // ── Config / persistence ──────────────────────────────────────
 
-    /// Indices vào `col_configs` cho các cột đang visible.
+    /// Indices into `col_configs` for the currently visible columns.
     fn rebuild_visible_indices(&mut self) {
         self.visible_indices = self
             .col_configs
@@ -73,8 +72,8 @@ impl SftpTableDelegate {
             .collect();
     }
 
-    /// Áp dụng trạng thái đã persist (width + visibility) từ `docks.json`.
-    /// Bỏ qua key không hợp lệ; Name luôn visible.
+    /// Apply the persisted state (width + visibility) from `docks.json`.
+    /// Ignores invalid keys; Name is always visible.
     fn apply_persisted_state(&mut self) {
         let Some(state) = read_sftp_table_state() else {
             return;
@@ -91,13 +90,13 @@ impl SftpTableDelegate {
                 }
             }
             if let Some(&visible) = state.column_visibility.get(cfg.key) {
-                // Name luôn visible — bỏ qua hidden cho Name.
+                // Name is always visible — ignore hidden for Name.
                 cfg.visible = visible || cfg.col == SortColumn::Name;
             }
         }
     }
 
-    /// Đọc config hiện tại → `SftpTableStateJson` để persist.
+    /// Read the current config → `SftpTableStateJson` for persistence.
     pub(crate) fn to_persisted_state(&self) -> SftpTableStateJson {
         let mut column_widths = HashMap::new();
         let mut column_visibility = HashMap::new();
@@ -111,15 +110,15 @@ impl SftpTableDelegate {
         }
     }
 
-    /// Persist trạng thái cột hiện tại vào `docks.json`.
+    /// Persist the current column state to `docks.json`.
     pub(crate) fn persist(&self) {
         if let Err(e) = write_sftp_table_state(&self.to_persisted_state()) {
             log::warn!("SftpTableDelegate: persist failed: {e}");
         }
     }
 
-    /// Cập nhật width cho các cột visible từ danh sách width của DataTable
-    /// (theo thứ tự visible). Dùng cho `TableEvent::ColumnWidthsChanged`.
+    /// Update widths for the visible columns from the DataTable's width list
+    /// (in visible order). Used for `TableEvent::ColumnWidthsChanged`.
     pub(crate) fn apply_widths(&mut self, widths: &[gpui::Pixels]) {
         for (vis_ix, w) in widths.iter().enumerate() {
             if let Some(&cfg_ix) = self.visible_indices.get(vis_ix) {
@@ -129,15 +128,19 @@ impl SftpTableDelegate {
         }
     }
 
-    /// Toggle visibility của 1 cột. Name không thể ẩn. Trả về `false` nếu
-    /// cố ẩn Name.
+    /// Toggle the visibility of a column. Name cannot be hidden. Returns `false`
+    /// if attempting to hide Name.
     pub(crate) fn toggle_visibility(&mut self, col: SortColumn) -> bool {
         if col == SortColumn::Name {
             return false;
         }
         if let Some(cfg) = self.col_configs.iter_mut().find(|c| c.col == col) {
             cfg.visible = !cfg.visible;
-            log::debug!("SftpTableDelegate: toggle {:?} → visible={}", col, cfg.visible);
+            log::debug!(
+                "SftpTableDelegate: toggle {:?} → visible={}",
+                col,
+                cfg.visible
+            );
             self.rebuild_visible_indices();
             true
         } else {
@@ -147,18 +150,18 @@ impl SftpTableDelegate {
 
     // ── Entries / sort ────────────────────────────────────────────
 
-    /// Thay thế entries + re-sort theo sort state hiện tại.
+    /// Replace entries + re-sort by the current sort state.
     pub(crate) fn set_entries(&mut self, mut entries: Vec<FileEntry>) {
         sort_entries(&mut entries, self.sort);
         self.entries = entries;
     }
 
-    /// Re-sort entries hiện tại (dùng sau khi đổi sort state).
+    /// Re-sort the current entries (used after changing the sort state).
     fn resort(&mut self) {
         sort_entries(&mut self.entries, self.sort);
     }
 
-    /// Config cột visible tại `col_ix` (index trong visible order).
+    /// Config for the visible column at `col_ix` (index in visible order).
     fn visible_cfg(&self, col_ix: usize) -> Option<&SftpColumnConfig> {
         self.visible_indices
             .get(col_ix)
@@ -198,14 +201,13 @@ impl TableDelegate for SftpTableDelegate {
             _ => col.sort(ColumnSort::Default),
         };
 
-        // Pin Name column ở bên trái (không scroll ra khỏi view khi horizontal scroll).
+        // Pin the Name column to the left (won't scroll out of view on horizontal scroll).
         if cfg.col == SortColumn::Name {
             col = col.fixed(ColumnFixed::Left);
         }
 
         col
     }
-
 
     fn render_th(
         &mut self,
@@ -218,7 +220,10 @@ impl TableDelegate for SftpTableDelegate {
             .size_full()
             .items_center()
             .text_color(theme.foreground)
-            .child(self.visible_cfg(col_ix).map_or(String::new(), |cfg| cfg.label.to_string()))
+            .child(
+                self.visible_cfg(col_ix)
+                    .map_or(String::new(), |cfg| cfg.label.to_string()),
+            )
     }
     fn render_tr(
         &mut self,
@@ -226,17 +231,14 @@ impl TableDelegate for SftpTableDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> Stateful<Div> {
-        // Highlight dòng đang chọn = `table_hover` (giống hover, không border).
-        // Border/overlay mặc định của DataTable đã bị tắt qua theme override
+        // Highlight the selected row = `table_hover` (same as hover, no border).
+        // DataTable's default border/overlay is disabled via theme override
         // (`table_active` + `table_active_border` = transparent).
         //
-        // Đọc `selected` trực tiếp từ SftpPanel (single source of truth) thay vì
-        // sync qua event — tránh re-entrancy khi `clear_selection` emit trong
+        // Read `selected` directly from SftpPanel (single source of truth) instead of
+        // syncing via events — avoids re-entrancy when `clear_selection` emits inside
         // `table.update`.
-        let selected = self
-            .panel
-            .upgrade()
-            .and_then(|p| p.read(cx).selected);
+        let selected = self.panel.upgrade().and_then(|p| p.read(cx).selected);
         let row = div().id(("row", row_ix));
         if selected == Some(row_ix) {
             row.bg(cx.theme().tokens.table_hover)
@@ -339,7 +341,11 @@ impl TableDelegate for SftpTableDelegate {
             ColumnSort::Ascending => Some((col, SortDir::Asc)),
             ColumnSort::Descending => Some((col, SortDir::Desc)),
         };
-        log::debug!("SftpTableDelegate: perform_sort {:?} → {:?}", col, self.sort);
+        log::debug!(
+            "SftpTableDelegate: perform_sort {:?} → {:?}",
+            col,
+            self.sort
+        );
         self.resort();
     }
 
@@ -354,7 +360,7 @@ impl TableDelegate for SftpTableDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
-        // Select row trên right-click (mirror sang SftpPanel để toolbar actions dùng).
+        // Select the row on right-click (mirror to SftpPanel so toolbar actions can use it).
         if let Some(panel) = self.panel.upgrade() {
             panel.update(cx, |this, cx| {
                 this.selected = Some(row_ix);
@@ -369,7 +375,7 @@ impl TableDelegate for SftpTableDelegate {
 
         let panel = self.panel.clone();
 
-        // First item: Open (dir only), sau đó Download (cả file và folder).
+        // First item: Open (dir only), then Download (both file and folder).
         let menu = if is_dir {
             menu.item(PopupMenuItem::new("Open").on_click({
                 let panel = panel.clone();
@@ -512,7 +518,8 @@ impl TableDelegate for SftpTableDelegate {
                     move |_, _, cx| {
                         if let Some(panel) = panel.upgrade() {
                             panel.update(cx, |this, cx| {
-                                this.pending_action = Some(super::types::PendingAction::UploadFiles);
+                                this.pending_action =
+                                    Some(super::types::PendingAction::UploadFiles);
                                 cx.notify();
                             });
                         }
@@ -523,7 +530,8 @@ impl TableDelegate for SftpTableDelegate {
                     move |_, _, cx| {
                         if let Some(panel) = panel.upgrade() {
                             panel.update(cx, |this, cx| {
-                                this.pending_action = Some(super::types::PendingAction::UploadFolder);
+                                this.pending_action =
+                                    Some(super::types::PendingAction::UploadFolder);
                                 cx.notify();
                             });
                         }

@@ -1,4 +1,4 @@
-//! Overlay helpers cho `LocalTerminalView::render`.
+//! Overlay helpers for `LocalTerminalView::render`.
 
 use gpui::{
     Context, InteractiveElement as _, IntoElement, ParentElement as _, Styled as _, div, px,
@@ -8,7 +8,7 @@ use gpui_component::Theme;
 use super::LocalTerminalView;
 
 impl LocalTerminalView {
-    /// Bell indicator overlay (góc trên-phải).
+    /// Bell indicator overlay (top-right corner).
     pub(crate) fn bell_overlay(
         &self,
         has_bell: bool,
@@ -33,7 +33,7 @@ impl LocalTerminalView {
         }
     }
 
-    /// Vi mode indicator (góc trên-trái).
+    /// Vi mode indicator (top-left corner).
     pub(crate) fn vi_mode_overlay(&self, theme_ref: &Theme) -> Option<impl IntoElement> {
         if self.vi_mode {
             Some(
@@ -87,7 +87,7 @@ impl LocalTerminalView {
         )
     }
 
-    /// Breadcrumb bar (bottom) — cwd path từ OSC 7.
+    /// Breadcrumb bar (bottom) — cwd path from OSC 7.
     pub(crate) fn breadcrumb_overlay(
         &self,
         session: &gpui::Entity<Box<dyn oneterm_core::TerminalSession>>,

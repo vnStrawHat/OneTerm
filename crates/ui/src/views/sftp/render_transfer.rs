@@ -1,6 +1,6 @@
-//! Render transfer queue — hiển thị progress cho ongoing transfers.
+//! Render transfer queue — show progress for ongoing transfers.
 //!
-//! Tách từ `file_browser.rs` để giảm độ dài file.
+//! Split out from `file_browser.rs` to keep the file shorter.
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
@@ -31,8 +31,8 @@ impl SftpPanel {
         cx.notify();
     }
 
-    /// Render transfer queue — hiển thị progress cho ongoing transfers.
-    /// Chỉ render khi self.transfers không rỗng.
+    /// Render transfer queue — show progress for ongoing transfers.
+    /// Only renders when self.transfers is not empty.
     pub(crate) fn render_transfer_queue(&self, cx: &mut Context<Self>) -> impl IntoElement {
         if self.transfers.is_empty() {
             return div().into_any_element();
@@ -56,7 +56,7 @@ impl SftpPanel {
             .max_h(px(200.0))
             .border_t_1()
             .border_color(theme.border);
-            // .bg(theme.muted.opacity(0.15));
+        // .bg(theme.muted.opacity(0.15));
 
         // Header: "Transfers" + count + Clear button
         queue = queue.child(
@@ -67,7 +67,12 @@ impl SftpPanel {
                 .items_center()
                 .gap_2()
                 .px_2()
-                .child(div().text_xs().text_color(theme.foreground).child("Transfers"))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.foreground)
+                        .child("Transfers"),
+                )
                 .child(
                     div()
                         .text_xs()
@@ -99,9 +104,9 @@ impl SftpPanel {
                 TransferDirection::Upload => {
                     Icon::new(IconName::ArrowUp).small().text_color(theme.green)
                 }
-                TransferDirection::Download => {
-                    Icon::new(IconName::ArrowDown).small().text_color(theme.cyan)
-                }
+                TransferDirection::Download => Icon::new(IconName::ArrowDown)
+                    .small()
+                    .text_color(theme.cyan),
             };
 
             // Status indicator color
@@ -171,7 +176,7 @@ impl SftpPanel {
                                 .child(item.error.clone().unwrap_or_default()),
                         )
                     })
-                    // Cancel button — chỉ hiển thị khi InProgress.
+                    // Cancel button — only shown when InProgress.
                     .when(item.status == TransferStatus::InProgress, |this| {
                         let cancel_id = item.id;
                         this.child(

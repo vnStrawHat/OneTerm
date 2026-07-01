@@ -1,5 +1,5 @@
 //! `impl TerminalSession for LocalSession` — render, input, mouse/selection,
-//! clipboard, scroll, IME, và lifecycle query methods.
+//! clipboard, scroll, IME, and lifecycle query methods.
 
 use std::path::PathBuf;
 
@@ -50,20 +50,21 @@ impl TerminalSession for LocalSession {
     }
 
     fn flush_pty(&self) {
-        // Gửi DSR (Device Status Report) query → ConPTY xử lý escape sequence,
-        // respond với cursor position → flush output buffer.
-        // Windows ConPTY buffer output, chỉ flush khi có interaction.
+        // Send a DSR (Device Status Report) query → ConPTY processes the escape
+        // sequence and responds with the cursor position → flushes the output buffer.
+        // Windows ConPTY buffers output and only flushes on interaction.
         self.listener.pty_write(b"\x1b[6n");
     }
 
-    /// Gửi Ctrl+C signal đến shell process.
+    /// Send a Ctrl+C signal to the shell process.
     ///
-    /// Gửi \x03 qua PTY - ConPTY (với OpenConsole.exe từ Windows Terminal)
-    /// xử lý signal routing đúng cách: CTRL_C_EVENT chỉ đến child process,
-    /// không exit shell, không exit OneTerm.
+    /// Sends \x03 over the PTY — ConPTY (with OpenConsole.exe from Windows
+    /// Terminal) routes the signal correctly: CTRL_C_EVENT reaches only the child
+    /// process, without exiting the shell or OneTerm.
     ///
-    /// Yêu cầu: conpty.dll + OpenConsole.exe phải nằm cùng thư mục với exe.
-    /// Xem crates/app/build.rs - tự copy từ assets/ ra target directory.
+    /// Requirement: conpty.dll + OpenConsole.exe must sit in the same directory as
+    /// the exe. See crates/app/build.rs — they are copied from assets/ to the
+    /// target directory automatically.
     #[cfg(windows)]
     fn send_ctrl_c(&self) {
         self.listener.pty_write(b"\x03");
@@ -75,9 +76,10 @@ impl TerminalSession for LocalSession {
     }
 
     fn resize(&self, rows: u16, cols: u16) {
-        // Skip nếu size không đổi - tránh gửi pty_resize mỗi render (TerminalElement
-        // được tạo lại mỗi frame, last_size luôn None). pty_resize không cần thiết
-        // khi size giữ nguyên, và shell có thể redraw → clear selection.
+        // Skip if the size is unchanged — avoids sending pty_resize on every render
+        // (TerminalElement is recreated each frame, so last_size is always None).
+        // pty_resize is unnecessary when the size stays the same, and the shell may
+        // redraw → clearing the selection.
         let needs_resize = {
             let term = self.term.lock();
             term.columns() != cols as usize || term.screen_lines() != rows as usize
@@ -109,7 +111,7 @@ impl TerminalSession for LocalSession {
     fn scroll_to_top(&self) {
         let mut term = self.term.lock();
         if !term.mode().contains(TermMode::ALT_SCREEN) {
-            // Scroll đến top: delta = total_lines (scroll hết scrollback lên).
+            // Scroll to top: delta = total_lines (scroll all scrollback up).
             let total = term.total_lines() as i32;
             term.scroll_display(Scroll::Delta(total));
         }
@@ -144,7 +146,7 @@ impl TerminalSession for LocalSession {
             );
             self.write(s.as_bytes());
         } else if mode.contains(TermMode::MOUSE_DRAG) {
-            // Button held không track ở trait signature - report hover (None).
+            // Held button is not tracked in the trait signature — report hover (None).
             let s = encode_mouse_move(
                 row as usize,
                 col as usize,
@@ -154,13 +156,13 @@ impl TerminalSession for LocalSession {
             );
             self.write(s.as_bytes());
         }
-        // Non-mouse mode: KHÔNG cập nhật selection - chỉ `mouse_drag` mới cập nhật.
+        // Non-mouse mode: do NOT update selection — only `mouse_drag` does that.
     }
 
     fn mouse_drag(&self, row: f32, col: f32) {
         let mode = self.mode();
         if mode.intersects(TermMode::MOUSE_MODE) {
-            // Mouse mode: encode drag với button Left.
+            // Mouse mode: encode drag with the Left button.
             let s = encode_mouse_move(
                 row as usize,
                 col as usize,
@@ -170,7 +172,7 @@ impl TerminalSession for LocalSession {
             );
             self.write(s.as_bytes());
         } else {
-            // Non-mouse mode: cập nhật selection end point.
+            // Non-mouse mode: update the selection end point.
             self.update_selection(row, col);
         }
     }
@@ -187,7 +189,7 @@ impl TerminalSession for LocalSession {
             );
             self.write(s.as_bytes());
         }
-        // Selection giữ nguyên để copy (clear khi click elsewhere - UI lo).
+        // Selection is kept for copying (cleared on click elsewhere — UI handles it).
     }
 
     fn wheel(&self, delta_y: f64, row: f32, col: f32) {
@@ -209,7 +211,7 @@ impl TerminalSession for LocalSession {
             );
             self.write(s.as_bytes());
         } else if mode.contains(TermMode::ALT_SCREEN) {
-            // Alt-screen: wheel → arrow keys (app scroll, vd less/man).
+            // Alt-screen: wheel → arrow keys (app scroll, e.g. less/man).
             let app_cursor = mode.contains(TermMode::APP_CURSOR);
             let key = match (delta_y > 0.0, app_cursor) {
                 (true, true) => "\x1bOA",
@@ -293,7 +295,7 @@ impl TerminalSession for LocalSession {
 
     // ── Lifecycle ────────────────────────────────────────────────────
     fn subscribe(&self) -> Receiver<SessionEvent> {
-        // Single-consumer: trả receiver nếu còn, không thì channel đóng.
+        // Single-consumer: return the receiver if present, otherwise a closed channel.
         self.event_rx
             .lock()
             .unwrap()

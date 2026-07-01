@@ -1,16 +1,16 @@
-//! Snapshot nội dung terminal để render — framework-agnostic.
+//! Terminal content snapshot for rendering — framework-agnostic.
 //!
-//! `TerminalContent::from(&mut Term)` lock `Term` ngắn, collect `RenderableContent`
-//! (display_iter + cursor + selection + mode + display_offset) thành dữ liệu
-//! owned. Render chỉ đọc snapshot, không giữ `FairMutex` khi vẽ.
+//! `TerminalContent::from(&mut Term)` locks `Term` briefly, collects `RenderableContent`
+//! (display_iter + cursor + selection + mode + display_offset) into owned data.
+//! Rendering only reads the snapshot and never holds the `FairMutex` while drawing.
 //!
-//! Từ AtlasEngine: tích hợp `Term::damage()` + `Term::reset_damage()` để expose
-//! per-row dirty info (`TermDamageInfo`) — renderer chỉ recompute layout cho dirty
-//! rows thay vì toàn bộ viewport mỗi frame.
+//! From AtlasEngine: integrates `Term::damage()` + `Term::reset_damage()` to expose
+//! per-row dirty info (`TermDamageInfo`) — the renderer only recomputes layout for
+//! dirty rows instead of the entire viewport every frame.
 //!
-//! Type lộ ra (`Cell`, `RenderableCursor`, `TermMode`, `SelectionRange`,
-//! `Point`) là type `alacritty_terminal` — UI crate cũng phụ thuộc
-//! `alacritty_terminal` nên map trực tiếp. Tham chiếu Zed `terminal::Content`.
+//! The exposed types (`Cell`, `RenderableCursor`, `TermMode`, `SelectionRange`,
+//! `Point`) are `alacritty_terminal` types — the UI crate also depends on
+//! `alacritty_terminal`, so they map directly. See Zed `terminal::Content`.
 
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
@@ -21,9 +21,9 @@ use alacritty_terminal::term::{RenderableCursor, Term, TermDamage, TermMode};
 
 use super::colors_util::is_default_background_color;
 
-/// Cell trống = space + nền mặc định + không có trang trí (hyperlink, gạch
-/// chân, đảo màu…). Trùng định nghĩa với UI `is_blank` để gutter và stamping
-/// thống nhất khi xác định dòng có nội dung.
+/// A blank cell = space + default background + no decoration (hyperlink, underline,
+/// inverse…). Matches the UI's `is_blank` definition so the gutter and stamping
+/// agree on which lines have content.
 pub fn is_blank_cell(cell: &Cell) -> bool {
     cell.c == ' '
         && is_default_background_color(&cell.bg)
@@ -33,13 +33,13 @@ pub fn is_blank_cell(cell: &Cell) -> bool {
         )
 }
 
-/// Chỉ số dòng (0-based, theo `Line` của vùng active/viewport — cùng hệ quy
-/// chiếu với `cursor.point.line.0`) của dòng **có nội dung** cuối cùng trong
-/// viewport. Trả `0` nếu toàn bộ viewport trống.
+/// Index (0-based, in the active/viewport `Line` frame — same reference as
+/// `cursor.point.line.0`) of the last line **with content** in the viewport.
+/// Returns `0` if the entire viewport is blank.
 ///
-/// Dùng cho `line_times` stamping: gutter render tới dòng non-blank cuối cùng
-/// nên timestamp cũng phải được stamp tới đó, nếu không các dòng dưới cursor
-/// (TUI, progress bar dùng cursor-up…) sẽ hiện `[--:--:--]`.
+/// Used for `line_times` stamping: the gutter renders up to the last non-blank
+/// line, so timestamps must be stamped up to there too; otherwise lines below
+/// the cursor (TUI, progress bars using cursor-up…) show `[--:--:--]`.
 pub fn last_content_line<EP: EventListener>(term: &Term<EP>) -> i32 {
     let screen_lines = term.screen_lines();
     let cols = term.columns();
@@ -53,55 +53,55 @@ pub fn last_content_line<EP: EventListener>(term: &Term<EP>) -> i32 {
     0
 }
 
-/// Một cell kèm vị trí grid (snapshot owned, không borrow grid).
+/// A cell together with its grid position (owned snapshot, does not borrow the grid).
 #[derive(Debug, Clone)]
 pub struct IndexedCell {
     pub point: Point,
     pub cell: Cell,
 }
 
-/// Thông tin dirty rows từ `Term::damage()` — đã convert sang display line
-/// indices (0-based từ top viewport). Renderer dùng để skip layout cho rows
-/// không đổi — giống AtlasEngine `invalidatedRows`.
+/// Dirty-row info from `Term::damage()` — converted to display line indices
+/// (0-based from the top of the viewport). The renderer uses it to skip layout
+/// for unchanged rows — like AtlasEngine's `invalidatedRows`.
 ///
-/// AtlasEngine dùng `range<u16> { start, end }` (row range). Ta dùng
-/// `Vec<usize>` vì `Term::damage()` cho per-line damage (có thể skip cả columns
-/// trong line, nhưng hiện chỉ track line-level).
+/// AtlasEngine uses `range<u16> { start, end }` (a row range). We use `Vec<usize>`
+/// because `Term::damage()` gives per-line damage (it could skip columns within a
+/// line, but we currently track only at line level).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TermDamageInfo {
-    /// Toàn bộ viewport dirty — repaint all rows.
+    /// The entire viewport is dirty — repaint all rows.
     Full,
-    /// Chỉ các display line indices (0-based từ top) này dirty.
+    /// Only these display line indices (0-based from the top) are dirty.
     Partial(Vec<usize>),
 }
 
-/// Kích thước grid (số dòng/cột hiển thị). Pixel cell_width/line_height do UI
-/// tính từ font, không thuộc snapshot này.
+/// Grid size (number of displayed lines/columns). Pixel cell_width/line_height
+/// are computed by the UI from the font and are not part of this snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerminalBounds {
     pub num_lines: usize,
     pub num_cols: usize,
 }
 
-/// Snapshot toàn bộ nội dung hiển thị được của terminal.
+/// Snapshot of all displayable terminal content.
 #[derive(Clone)]
 pub struct TerminalContent {
-    /// Tất cả cell hiển thị (display order, đã tính display_offset).
+    /// All displayed cells (in display order, display_offset already applied).
     pub cells: Vec<IndexedCell>,
-    /// Con trỏ (shape có thể `Hidden`).
+    /// The cursor (shape may be `Hidden`).
     pub cursor: RenderableCursor,
-    /// Mode hiện hành (mouse, alt-screen, bracketed paste…).
+    /// The current mode (mouse, alt-screen, bracketed paste…).
     pub mode: TermMode,
-    /// Offset scrollback hiện tại (0 = đang ở bottom).
+    /// The current scrollback offset (0 = at the bottom).
     pub display_offset: usize,
-    /// Tổng số dòng (scrollback + visible) — cho scrollbar.
+    /// Total number of lines (scrollback + visible) — for the scrollbar.
     pub total_lines: usize,
-    /// Vùng đang chọn, nếu có.
+    /// The current selection, if any.
     pub selection: Option<SelectionRange>,
-    /// Kích thước grid.
+    /// Grid size.
     pub terminal_bounds: TerminalBounds,
-    /// Dirty rows từ `Term::damage()` — đã convert sang display line indices.
-    /// Renderer skip layout cho rows không trong danh sách này.
+    /// Dirty rows from `Term::damage()` — converted to display line indices.
+    /// The renderer skips layout for rows not in this list.
     pub damage: TermDamageInfo,
 }
 
@@ -120,34 +120,34 @@ impl std::fmt::Debug for TerminalContent {
 }
 
 impl TerminalContent {
-    /// Build snapshot từ `Term` (lock caller lo — truyền `&mut Term`).
+    /// Build a snapshot from `Term` (the caller handles locking — pass `&mut Term`).
     ///
-    /// Gọi `Term::damage()` để collect dirty rows, `reset_damage()` để clear,
-    /// rồi đọc `renderable_content()` (display_iter + cursor + selection +
-    /// mode + display_offset) + `Dimensions` để lấy num_lines/num_cols.
+    /// Calls `Term::damage()` to collect dirty rows, `reset_damage()` to clear them,
+    /// then reads `renderable_content()` (display_iter + cursor + selection +
+    /// mode + display_offset) + `Dimensions` to get num_lines/num_cols.
     ///
-    /// `&mut Term` cần thiết vì `damage()` yêu cầu `&mut self` — khác
-    /// `renderable_content()` chỉ cần `&self`. FairMutex lock cho cả hai.
+    /// `&mut Term` is required because `damage()` needs `&mut self` — unlike
+    /// `renderable_content()`, which needs only `&self`. The FairMutex locks both.
     pub fn from<EP: EventListener>(term: &mut Term<EP>) -> Self {
-        // ── Collect damage trước khi reset ──
-        // Term::damage() trả TermDamage::Full (toàn bộ) hoặc Partial (iterator
-        // các LineDamageBounds). Iterator đã thêm display_offset vào ldb.line,
-        // nên ldb.line chính là display line (0-based từ top viewport).
+        // ── Collect damage before resetting ──
+        // Term::damage() returns TermDamage::Full (everything) or Partial (an iterator
+        // of LineDamageBounds). The iterator already adds display_offset to ldb.line,
+        // so ldb.line is the display line (0-based from the top of the viewport).
         let num_lines = term.screen_lines();
         let damage = match term.damage() {
             TermDamage::Full => TermDamageInfo::Full,
             TermDamage::Partial(iter) => {
-                // TermDamageIterator đã thêm display_offset vào ldb.line,
-                // nên ldb.line chính là display line (0-based từ top viewport).
+                // TermDamageIterator already adds display_offset to ldb.line,
+                // so ldb.line is the display line (0-based from the top of the viewport).
                 // Line(0) = top visible, Line(num_lines-1) = bottom visible.
-                // display_line = ldb.line (KHÔNG cần convert thêm).
+                // display_line = ldb.line (no further conversion needed).
                 let dirty: Vec<usize> = iter
                     .map(|ldb| ldb.line)
                     .filter(|&dl| dl < num_lines)
                     .collect();
                 if dirty.is_empty() {
-                    // Không có damage nào visible — vẫn return Partial rỗng
-                    // để renderer biết không cần recompute gì.
+                    // No visible damage — still return an empty Partial so the
+                    // renderer knows there is nothing to recompute.
                     TermDamageInfo::Partial(Vec::new())
                 } else {
                     TermDamageInfo::Partial(dirty)
@@ -156,7 +156,7 @@ impl TerminalContent {
         };
         term.reset_damage();
 
-        // ── Snapshot content (renderable_content chỉ cần &self) ──
+        // ── Snapshot content (renderable_content needs only &self) ──
         let content = term.renderable_content();
         let RenderableContentParts {
             display_iter,
@@ -190,9 +190,9 @@ impl TerminalContent {
         }
     }
 
-    /// true nếu cursor đang hiển thị (shape ≠ Hidden).
+    /// true if the cursor is visible (shape ≠ Hidden).
     pub fn cursor_visible(&self) -> bool {
-        // RenderableCursor.shape là CursorShape; Hidden = ẩn.
+        // RenderableCursor.shape is CursorShape; Hidden = hidden.
         !matches!(
             self.cursor.shape,
             alacritty_terminal::vte::ansi::CursorShape::Hidden
@@ -200,8 +200,8 @@ impl TerminalContent {
     }
 }
 
-/// Helper tách các phần Copy/move của `RenderableContent` (tránh partial-move
-/// lằng nhằng trong `from`).
+/// Helper that extracts the Copy/move parts of `RenderableContent` (avoids
+/// messy partial-moves in `from`).
 struct RenderableContentParts<'a> {
     display_iter: alacritty_terminal::grid::GridIterator<'a, Cell>,
     cursor: RenderableCursor,
@@ -240,7 +240,7 @@ mod tests {
         let mut term = mock_term("hello\r\nworld");
         let snap = TerminalContent::from(&mut term);
         assert_eq!(snap.terminal_bounds.num_cols, 5);
-        // screen_lines mặc định của mock_term.
+        // mock_term's default screen_lines.
         assert!(snap.terminal_bounds.num_lines > 0);
         assert!(!snap.cells.is_empty());
     }
@@ -250,7 +250,7 @@ mod tests {
         let mut term = mock_term("ab");
         let snap = TerminalContent::from(&mut term);
         let _clone = snap.clone();
-        // Clone không cần borrow term → snapshot thực sự owned.
+        // Clone does not borrow term → the snapshot is truly owned.
         drop(term);
         assert!(!_clone.cells.is_empty());
     }
@@ -259,14 +259,14 @@ mod tests {
     fn cursor_visible_default() {
         let mut term = mock_term("x");
         let snap = TerminalContent::from(&mut term);
-        // mock_term mặc định show cursor.
+        // mock_term shows the cursor by default.
         assert!(snap.cursor_visible());
     }
 
     #[test]
     fn damage_full_on_first_snapshot() {
-        // Snapshot đầu tiên sau khi tạo term → damage phải là Full
-        // (Term::damage() luôn full khi chưa reset_damage).
+        // The first snapshot after creating the term → damage must be Full
+        // (Term::damage() is always full until reset_damage).
         let mut term = mock_term("hello");
         let snap = TerminalContent::from(&mut term);
         assert_eq!(snap.damage, TermDamageInfo::Full);
@@ -274,14 +274,14 @@ mod tests {
 
     #[test]
     fn damage_partial_on_unchanged() {
-        // Snapshot thứ 2 khi không có output mới → damage phải Partial
-        // (chỉ cursor line dirty do cursor movement).
+        // The second snapshot with no new output → damage must be Partial
+        // (only the cursor line is dirty due to cursor movement).
         let mut term = mock_term("hello");
         let _snap1 = TerminalContent::from(&mut term);
-        // Snapshot thứ 2 — không có thay đổi nào, chỉ cursor damage.
+        // Second snapshot — no changes, only cursor damage.
         let snap2 = TerminalContent::from(&mut term);
-        // Có thể Full hoặc Partial tùy cursor movement detection.
-        // Quan trọng: không panic, damage field tồn tại.
+        // May be Full or Partial depending on cursor movement detection.
+        // The key point: no panic, and the damage field exists.
         assert!(matches!(
             &snap2.damage,
             TermDamageInfo::Full | TermDamageInfo::Partial(_)

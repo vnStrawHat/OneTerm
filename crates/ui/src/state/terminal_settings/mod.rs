@@ -1,10 +1,10 @@
-//! `TerminalSettings` — config shell toàn cục + rendering options.
+//! `TerminalSettings` — global shell config + rendering options.
 //!
-//! Config được load từ `terminal.json` (xem `terminal_config.rs`) tại init.
-//! `TerminalSettingsPanel` cập nhật shell kind → notify.
+//! The config is loaded from `terminal.json` (see `terminal_config.rs`) at init.
+//! `TerminalSettingsPanel` updates the shell kind → notify.
 //! Group A: cursor shape, cursor blink, font features, bell.
 //!
-//! Module gốc `terminal_settings.rs` đã được tách thành `terminal_settings/`.
+//! The original `terminal_settings.rs` module has been split into `terminal_settings/`.
 
 use gpui::{App, AppContext, Entity, FontWeight, Global, Hsla, SharedString};
 use oneterm_core::LocalShellConfig;
@@ -19,20 +19,20 @@ pub(crate) mod mutators;
 pub use color::parse_hex_color;
 pub use font::{default_terminal_font_fallbacks, parse_weight};
 
-/// Hình dáng con trỏ terminal.
+/// Terminal cursor shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TerminalCursorShape {
-    /// Block đầy — mặc định.
+    /// Filled block — default.
     #[default]
     Block,
-    /// Thanh dọc hẹp `│`.
+    /// Narrow vertical bar `│`.
     Bar,
-    /// Gạch dưới `_`.
+    /// Underline `_`.
     Underline,
 }
 
 impl TerminalCursorShape {
-    /// Parse từ string ("block" | "bar" | "underline").
+    /// Parse from a string ("block" | "bar" | "underline").
     fn from_str(s: &str) -> Self {
         match s.to_ascii_lowercase().as_str() {
             "bar" => Self::Bar,
@@ -42,17 +42,17 @@ impl TerminalCursorShape {
     }
 }
 
-/// Chế độ nhấp nháy con trỏ.
+/// Cursor blink mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TerminalBlink {
-    /// Nhấp nháy khi focus (mặc định).
+    /// Blink when focused (default).
     #[default]
     On,
-    /// Không nhấp nháy.
+    /// Do not blink.
     Off,
 }
 
-/// Padding 4 phía cho terminal content (px).
+/// Padding on all 4 sides for the terminal content (px).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TerminalPadding {
     pub top: f32,
@@ -61,7 +61,7 @@ pub struct TerminalPadding {
     pub left: f32,
 }
 
-/// Color overrides — nếu `Some` thì ghi đè theme, `None` = dùng theme.
+/// Color overrides — if `Some`, override the theme; `None` = use the theme.
 #[derive(Debug, Clone, Default)]
 pub struct ColorOverrides {
     pub foreground: Option<Hsla>,
@@ -76,61 +76,61 @@ pub struct ColorOverrides {
     pub ansi: Vec<Hsla>,
 }
 
-/// Config terminal toàn cục (shell + rendering options).
-/// Load từ `terminal.json` lúc init.
+/// Global terminal config (shell + rendering options).
+/// Loaded from `terminal.json` at init.
 pub struct TerminalSettings {
     // ── Shell ──
     pub shell: LocalShellConfig,
 
     // ── Font ──
-    /// Font family chính (None = dùng theme mono font).
+    /// Primary font family (None = use the theme mono font).
     pub font_family: Option<SharedString>,
     /// Font fallback stack.
     pub font_fallbacks: Vec<SharedString>,
-    /// Font size in px (None = dùng theme mono font size).
-    /// Có thể thay đổi runtime qua zoom shortcuts (Ctrl +/−/0).
+    /// Font size in px (None = use the theme mono font size).
+    /// Can change at runtime via zoom shortcuts (Ctrl +/−/0).
     pub font_size: Option<f32>,
-    /// Font size gốc từ config (terminal.json) — dùng cho Ctrl+0 reset zoom.
-    /// Không bị zoom thay đổi.
+    /// Original font size from the config (terminal.json) — used for Ctrl+0 reset zoom.
+    /// Not changed by zooming.
     pub base_font_size: Option<f32>,
     /// Font weight.
     pub font_weight: FontWeight,
-    /// Font features (OpenType): vd ["calt", "liga"].
+    /// Font features (OpenType): e.g. ["calt", "liga"].
     pub font_features: Vec<SharedString>,
 
     // ── Cursor ──
-    /// Hình dáng con trỏ (Block/Bar/Underline).
+    /// Cursor shape (Block/Bar/Underline).
     pub cursor_shape: TerminalCursorShape,
-    /// Bật/tắt nhấp nháy con trỏ.
+    /// Enable/disable cursor blinking.
     pub cursor_blink: TerminalBlink,
-    /// Màu con trỏ (None = theme caret).
+    /// Cursor color (None = theme caret).
     pub cursor_color: Option<Hsla>,
 
     // ── Layout ──
-    /// Line height multiplier (1.2 = 120% font size).
+    /// Line height multiplier (1.2 = 120% of font size).
     pub line_height_factor: f32,
-    /// Cell width override in px (None = auto từ font advance).
+    /// Cell width override in px (None = auto from font advance).
     pub cell_width: Option<f32>,
-    /// Padding quanh terminal content.
+    /// Padding around the terminal content.
     pub padding: TerminalPadding,
-    /// Bật/tắt gutter (timestamp + line number bên trái terminal).
+    /// Enable/disable the gutter (timestamp + line number on the left of the terminal).
     pub show_gutter: bool,
 
     // ── Scroll ──
-    /// Scroll multiplier cho mouse wheel.
+    /// Scroll multiplier for the mouse wheel.
     pub scroll_multiplier: f32,
     /// Alternate scroll mode (alt-screen → arrow keys).
     pub alternate_scroll: bool,
-    /// Số dòng scrollback history tối đa (default 10000).
-    /// Tổng dòng trong gutter = scrollback_history + viewport lines.
+    /// Maximum number of scrollback history lines (default 10000).
+    /// Total lines in the gutter = scrollback_history + viewport lines.
     pub scrollback_history: usize,
 
     // ── Bell ──
-    /// Bật/tắt bell indicator.
+    /// Enable/disable the bell indicator.
     pub bell_enabled: bool,
 
     // ── Colors ──
-    /// Color overrides cho terminal theme.
+    /// Color overrides for the terminal theme.
     pub color_overrides: ColorOverrides,
 }
 
@@ -160,18 +160,18 @@ impl Default for TerminalSettings {
     }
 }
 
-/// Global wrapper (pattern như `AppStateGlobal`).
+/// Global wrapper (same pattern as `AppStateGlobal`).
 pub struct TerminalSettingsGlobal(pub Entity<TerminalSettings>);
 
 impl Global for TerminalSettingsGlobal {}
 
 impl TerminalSettings {
-    /// `Entity<TerminalSettings>` toàn cục (panic nếu chưa init).
+    /// The global `Entity<TerminalSettings>` (panics if not initialized).
     pub fn global(cx: &App) -> Entity<Self> {
         cx.global::<TerminalSettingsGlobal>().0.clone()
     }
 
-    /// Khởi tạo global — load `terminal.json` và apply (gọi ở `ui::init`).
+    /// Initialize the global — load `terminal.json` and apply it (called from `ui::init`).
     pub fn init(cx: &mut App) {
         let cfg = TerminalConfig::load();
         let entity = cx.new(|_| {

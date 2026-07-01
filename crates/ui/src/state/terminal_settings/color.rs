@@ -1,8 +1,8 @@
-//! Hex color parsing cho `TerminalSettings`.
+//! Hex color parsing for `TerminalSettings`.
 
 use gpui::Hsla;
 
-/// Parse "#RRGGBB" → Hsla. Trả None nếu parse fail.
+/// Parse "#RRGGBB" → Hsla. Returns None if parsing fails.
 pub fn parse_hex_color(s: &str) -> Option<Hsla> {
     let s = s.trim_start_matches('#');
     if s.len() != 6 {

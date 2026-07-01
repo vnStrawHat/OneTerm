@@ -1,17 +1,17 @@
-//! Font / cell measurement helpers cho `TerminalElement`.
+//! Font / cell measurement helpers for `TerminalElement`.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{App, Font, Pixels, Window, px};
 
-/// Metrics đo được từ font + config.
+/// Metrics measured from font + config.
 pub(crate) struct FontMetrics {
     pub cell_width: Pixels,
     pub line_height: Pixels,
 }
 
-/// Đo cell width và line height theo font hiện tại.
+/// Measure cell width and line height for the current font.
 pub(crate) fn measure_font(
     font: &Font,
     font_size: Pixels,
@@ -52,12 +52,12 @@ pub(crate) fn measure_font(
     }
 }
 
-/// Snap một giá trị pixel theo device scale.
+/// Snap a pixel value to the device scale.
 pub(crate) fn snap(value: f32, scale_factor: f32) -> f32 {
     (value * scale_factor).round() / scale_factor
 }
 
-/// Resize session theo bounds đã measure.
+/// Resize the session to the measured bounds.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resize_session(
     session: &gpui::Entity<Box<dyn oneterm_core::TerminalSession>>,

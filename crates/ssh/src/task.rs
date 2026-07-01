@@ -1,7 +1,7 @@
-//! Tokio task chính cho SSH session — đọc data từ channel + xử lý lệnh.
+//! Main tokio task for the SSH session — reads data from the channel + handles commands.
 //!
-//! **`handle` phải giữ sống** — drop `russh::client::Handle` = đóng kết nối.
-//! Handle được move vào task và giữ đến khi session đóng.
+//! **`handle` must be kept alive** — dropping `russh::client::Handle` closes the
+//! connection. The handle is moved into the task and held until the session closes.
 
 use std::sync::Arc;
 
@@ -20,10 +20,11 @@ use crate::listener::{Cmd, SshListener};
 use crate::session::TermSize;
 use crate::state::SharedState;
 
-/// Tokio task chính: đọc data từ SSH channel + nhận lệnh từ main thread.
-/// Feed byte vào `Term` (via ansi::Processor) + `OscSink` (via vte::Parser).
+/// Main tokio task: reads data from the SSH channel + receives commands from the
+/// main thread. Feeds bytes to `Term` (via ansi::Processor) + `OscSink` (via
+/// vte::Parser).
 ///
-/// **`handle` phải giữ sống** — drop = đóng kết nối SSH.
+/// **`handle` must be kept alive** — dropping it closes the SSH connection.
 pub(crate) async fn ssh_main_task(
     _handle: russh::client::Handle<SshClientHandler>,
     mut channel: russh::Channel<russh::client::Msg>,
@@ -39,7 +40,7 @@ pub(crate) async fn ssh_main_task(
 
     loop {
         tokio::select! {
-            // ── Đọc data từ SSH channel ───────────────────────────────
+            // ── Read data from the SSH channel ────────────────────────
             msg = channel.wait() => {
                 match msg {
                     Some(ChannelMsg::Data { data }) => {
@@ -77,14 +78,14 @@ pub(crate) async fn ssh_main_task(
                             st.prev_total_lines = prev_total;
                         }
 
-                        // Feed OscSink (vte::Parser) — song song.
+                        // Feed OscSink (vte::Parser) — in parallel.
                         vte_parser.advance(&mut osc_sink, bytes);
                         while let Some(payload) = osc_sink.take() {
                             handle_osc(&payload, &state, &listener);
                         }
 
-                        // Màn hình vừa bị xoá (clear/RIS) → tăng clear_epoch để
-                        // UI reset per-line timestamps (gutter).
+                        // Screen was just cleared (clear/RIS) → bump clear_epoch so
+                        // the UI resets per-line timestamps (gutter).
                         if osc_sink.take_clear() {
                             state.lock().unwrap().clear_epoch += 1;
                         }
@@ -134,7 +135,7 @@ pub(crate) async fn ssh_main_task(
                     }
                 }
             }
-            // ── Nhận lệnh từ main thread ──────────────────────────────
+            // ── Receive commands from the main thread ─────────────────
             cmd = cmd_rx.recv() => {
                 match cmd {
                     Ok(Cmd::Write(bytes)) => {
@@ -209,7 +210,7 @@ fn handle_osc(payload: &OscPayload, state: &SharedState, listener: &SshListener)
             listener.forward(SessionEvent::ShellIntegration(*kind));
         }
         OscPayload::Clipboard { .. } => {
-            // OSC 52 đã handle bởi alacritty EventListener.
+            // OSC 52 already handled by alacritty's EventListener.
         }
     }
 }

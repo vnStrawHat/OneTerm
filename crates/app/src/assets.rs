@@ -1,9 +1,9 @@
-//! Custom AssetSource — gộp gpui-component Assets + OneTerm UiAssets.
+//! Custom AssetSource — merges the gpui-component Assets with OneTerm's UiAssets.
 //!
-//! `UiAssets` (từ `oneterm_ui::icon`) serve SVG từ `crates/ui/assets/icons/`,
-//! cho phép `Icon::new(AppIcon::Terminal)` render đúng icon.
+//! `UiAssets` (from `oneterm_ui::icon`) serves SVGs from `crates/ui/assets/icons/`,
+//! letting `Icon::new(AppIcon::Terminal)` render the correct icon.
 //!
-//! Thứ tự load: UiAssets (custom icons) → gpui-component Assets (built-in icons).
+//! Load order: UiAssets (custom icons) → gpui-component Assets (built-in icons).
 
 use gpui::{AssetSource, SharedString};
 use gpui_component_assets::Assets;
@@ -13,7 +13,7 @@ pub struct CustomAssets;
 
 impl AssetSource for CustomAssets {
     fn load(&self, path: &str) -> Result<Option<std::borrow::Cow<'static, [u8]>>, anyhow::Error> {
-        // Ưu tiên custom icons từ UiAssets, fallback sang gpui-component Assets.
+        // Prefer custom icons from UiAssets, fall back to gpui-component Assets.
         if let Ok(Some(data)) = UiAssets.load(path) {
             return Ok(Some(data));
         }
@@ -22,7 +22,7 @@ impl AssetSource for CustomAssets {
 
     fn list(&self, prefix: &str) -> Result<Vec<SharedString>, anyhow::Error> {
         let mut entries = Assets.list(prefix)?;
-        // Merge custom icons vào list.
+        // Merge custom icons into the list.
         for p in UiAssets.list(prefix)? {
             if !entries.contains(&p) {
                 entries.push(p);
