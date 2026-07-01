@@ -17,7 +17,7 @@ use alacritty_terminal::tty::{self, Options, Shell};
 use async_channel::Receiver;
 
 use oneterm_core::config::resolve_shell;
-use oneterm_core::{AppError, LocalShellConfig, SessionEvent};
+use oneterm_core::{AppError, LocalShellConfig, SessionEvent, home_dir};
 
 use crate::event_loop::ShellEventLoop;
 use crate::listener::LocalListener;
@@ -75,7 +75,7 @@ impl LocalSession {
                 resolved.program.to_string_lossy().into_owned(),
                 resolved.args,
             )),
-            working_directory: cfg.cwd.clone(),
+            working_directory: cfg.cwd.clone().or_else(home_dir),
             drain_on_exit: false,
             env: resolved.env,
             ..Default::default()

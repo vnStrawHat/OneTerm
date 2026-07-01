@@ -52,7 +52,7 @@ pub struct LocalShellConfig {
     pub args: Vec<String>,
     /// Env overrides (TERM, COLORTERM, LANG…). TERM=xterm-256color is set by default.
     pub env: HashMap<String, String>,
-    /// Working directory (None → the app's current cwd).
+    /// Working directory (None → the user's home directory).
     pub cwd: Option<PathBuf>,
     /// Force the UTF-8 codepage (Windows cmd). Default true.
     #[serde(default = "default_utf8")]
@@ -61,6 +61,17 @@ pub struct LocalShellConfig {
 
 fn default_utf8() -> bool {
     true
+}
+
+/// Return the user's home directory.
+///
+/// On Windows we prefer `USERPROFILE`; on Unix we use `HOME`. Returns `None`
+/// if neither env var is set (the caller falls back to the process cwd).
+pub fn home_dir() -> Option<PathBuf> {
+    std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .ok()
+        .map(PathBuf::from)
 }
 
 impl Default for LocalShellConfig {
