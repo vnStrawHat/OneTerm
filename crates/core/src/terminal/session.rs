@@ -19,7 +19,7 @@ use crate::sftp::SftpBackend;
 use crate::terminal::content::TerminalContent;
 use crate::terminal::key_encode::{KeyMods, KeySpec, NamedKey, encode_key};
 use crate::terminal::mouse_encode::TerminalMouseButton;
-use crate::terminal::osc::Osc133Kind;
+use crate::terminal::osc::{Osc133Kind, TerminalProgress};
 use crate::terminal::osc_color::DynamicColors;
 
 use alacritty_terminal::vte::ansi::Rgb;
@@ -63,8 +63,16 @@ pub enum SessionEvent {
     Cwd(PathBuf),
     /// Clipboard changed via OSC 52 (`None` = clear, `Some` = set).
     Clipboard(Option<String>),
+    /// A program requested a clipboard read via OSC 52 (`52;c;?`). The UI should
+    /// reply with the current clipboard content (see the security note: this
+    /// exposes the local clipboard to programs, including remote ones over SSH).
+    ClipboardRead,
     /// Shell integration marker (OSC 133) — prompt start/end, output start/end.
     ShellIntegration(Osc133Kind),
+    /// Desktop notification (OSC 9) — the UI shows a toast.
+    Notification(String),
+    /// Taskbar progress (OSC 9;4) — the UI shows a progress indicator.
+    Progress(TerminalProgress),
     /// Foreground process changed (tab title update).
     ForegroundProcess(Option<String>),
     /// Process exited (`None` = no exit code).

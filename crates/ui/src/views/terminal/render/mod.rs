@@ -9,6 +9,7 @@ use gpui::{
     SharedString, Styled as _, Window, div,
 };
 use gpui_component::ActiveTheme as _;
+use gpui_component::WindowExt as _;
 
 use super::element::TerminalElement;
 use super::theme::{TerminalTheme, build_terminal_theme};
@@ -26,6 +27,14 @@ impl Focusable for LocalTerminalView {
 
 impl Render for LocalTerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl gpui::IntoElement {
+        // Drain OSC 9 notifications here (needs a `Window`, unavailable in the
+        // async subscribe task where they are queued).
+        if !self.pending_notifications.is_empty() {
+            for msg in std::mem::take(&mut self.pending_notifications) {
+                window.push_notification(msg, cx);
+            }
+        }
+
         let theme: TerminalTheme = build_terminal_theme(cx.theme());
         let focused = self.focus.is_focused(window);
         let session = self.session.clone();
@@ -151,6 +160,7 @@ impl Render for LocalTerminalView {
                 self.last_grid_size.clone(),
             ))
             .children(self.bell_overlay(has_bell, bell_enabled, &theme_ref))
+            .children(self.progress_overlay(&theme_ref))
             .children(self.vi_mode_overlay(&theme_ref))
             .children(self.vi_cursor_overlay(&theme_ref))
             .children(self.render_scrollbar(&theme, &metrics, cx))

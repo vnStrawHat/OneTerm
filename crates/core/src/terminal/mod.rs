@@ -24,7 +24,9 @@ pub use mouse_encode::{
     MouseModifiers, TerminalMouseButton, encode_mouse_move, encode_mouse_press,
     encode_mouse_release, encode_wheel_event,
 };
-pub use osc::{Osc133Kind, OscPayload, OscSink, decode_osc52, encode_osc52, parse_cwd_url};
+pub use osc::{
+    Osc133Kind, OscPayload, OscSink, TerminalProgress, decode_osc52, encode_osc52, parse_cwd_url,
+};
 pub use osc_color::{
     BACKGROUND_INDEX, CURSOR_INDEX, ColorFormatter, DynamicColors, FOREGROUND_INDEX,
     PendingColorQuery, SharedColorQueries, default_color_for_index, new_color_queries,

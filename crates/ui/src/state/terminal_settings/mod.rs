@@ -129,6 +129,12 @@ pub struct TerminalSettings {
     /// Enable/disable the bell indicator.
     pub bell_enabled: bool,
 
+    // ── Security ──
+    /// Allow programs to read the system clipboard via OSC 52 (`52;c;?`).
+    /// Default `false`: reading is refused because it exposes the local
+    /// clipboard to programs, including remote ones over SSH.
+    pub allow_clipboard_read: bool,
+
     // ── Colors ──
     /// Color overrides for the terminal theme.
     pub color_overrides: ColorOverrides,
@@ -155,6 +161,7 @@ impl Default for TerminalSettings {
             alternate_scroll: true,
             scrollback_history: 10_000,
             bell_enabled: true,
+            allow_clipboard_read: false,
             color_overrides: ColorOverrides::default(),
         }
     }

@@ -9,7 +9,7 @@ use std::time::Duration;
 use gpui::{ClipboardItem, Context, Entity, FocusHandle, KeyBinding, NoAction, Window};
 
 use async_channel::Receiver;
-use oneterm_core::{SessionEvent, TerminalInfo, TerminalSession};
+use oneterm_core::{SessionEvent, TerminalInfo, TerminalProgress, TerminalSession};
 
 use super::element::{GridMetrics, RowLayoutCache};
 use super::scrollbar::TerminalScrollHandle;
@@ -34,6 +34,12 @@ pub struct LocalTerminalView {
     pub(crate) cursor_blink_visible: bool,
     /// Bell indicator — true when `\x07` is received, cleared when the user presses a key.
     pub(crate) has_bell: bool,
+    /// Pending OSC 9 desktop notifications — drained in `render` via
+    /// `window.push_notification` (which needs a `Window`, unavailable in the
+    /// async subscribe task).
+    pub(crate) pending_notifications: Vec<String>,
+    /// Current OSC 9;4 taskbar progress (`None` = no progress / removed).
+    pub(crate) progress: Option<TerminalProgress>,
     /// Scrollbar drag state: Some(drag_start_y) while dragging the thumb.
     pub(crate) scrollbar_drag_start: Option<f32>,
     /// Last scroll time — used to auto-hide the scrollbar after 2s.
@@ -126,6 +132,21 @@ impl LocalTerminalView {
                             cx.notify();
                         });
                     }
+                    SessionEvent::Notification(msg) => {
+                        let _ = this.update(cx, |view, cx| {
+                            view.pending_notifications.push(msg);
+                            cx.notify();
+                        });
+                    }
+                    SessionEvent::ClipboardRead => {
+                        let _ = this.update(cx, |view, cx| view.reply_clipboard_read(cx));
+                    }
+                    SessionEvent::Progress(p) => {
+                        let _ = this.update(cx, |view, cx| {
+                            view.set_progress(p);
+                            cx.notify();
+                        });
+                    }
                     _ => {
                         let _ = this.update(cx, |_, cx| cx.notify());
                     }
@@ -156,6 +177,8 @@ impl LocalTerminalView {
             scroll_handle: TerminalScrollHandle::new(),
             cursor_blink_visible: true,
             has_bell: false,
+            pending_notifications: Vec::new(),
+            progress: None,
             scrollbar_drag_start: None,
             last_scroll_time: None,
             vi_mode: false,
@@ -171,6 +194,37 @@ impl LocalTerminalView {
             cached_gutter: Rc::new(RefCell::new(None)),
             last_grid_size: Rc::new(RefCell::new(None)),
         }
+    }
+
+    /// Update the OSC 9;4 progress state. `Remove` clears it (`None`).
+    pub(crate) fn set_progress(&mut self, progress: TerminalProgress) {
+        self.progress = match progress {
+            TerminalProgress::Remove => None,
+            other => Some(other),
+        };
+    }
+
+    /// Reply to an OSC 52 clipboard-read request (`52;c;?`) with the current
+    /// system clipboard content, base64-encoded. Gated behind the
+    /// `allow_clipboard_read` setting (default off): reading exposes the local
+    /// clipboard to the requesting program — including remote ones over SSH.
+    pub(crate) fn reply_clipboard_read(&self, cx: &mut Context<Self>) {
+        let allowed = crate::state::TerminalSettings::global(cx)
+            .read(cx)
+            .allow_clipboard_read;
+        if !allowed {
+            log::debug!("OSC 52 clipboard read refused (allow_clipboard_read = false)");
+            return;
+        }
+        let text = cx
+            .read_from_clipboard()
+            .and_then(|c| c.text())
+            .unwrap_or_default();
+        let reply = format!(
+            "\x1b]52;c;{}\x07",
+            oneterm_core::terminal::encode_osc52(&text)
+        );
+        self.session.read(cx).write(reply.as_bytes());
     }
 
     /// Drain all pending events in the channel — coalesce Output events,
@@ -196,6 +250,21 @@ impl LocalTerminalView {
                 Ok(SessionEvent::Bell) => {
                     let _ = this.update(cx, |view, cx| {
                         view.has_bell = true;
+                        cx.notify();
+                    });
+                }
+                Ok(SessionEvent::Notification(msg)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.pending_notifications.push(msg);
+                        cx.notify();
+                    });
+                }
+                Ok(SessionEvent::ClipboardRead) => {
+                    let _ = this.update(cx, |view, cx| view.reply_clipboard_read(cx));
+                }
+                Ok(SessionEvent::Progress(p)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.set_progress(p);
                         cx.notify();
                     });
                 }

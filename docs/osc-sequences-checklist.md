@@ -147,7 +147,7 @@ Ghostty/Kitty **không** phản hồi OSC 52 read — chỉ write).
 
 | Check | OSC | Mục đích | Format | Ghi chú |
 |:-----:|-----|----------|--------|---------|
-| ☐ | **52** | Đặt/query clipboard (base64) | `ESC]52;c;base64 ST` | `c`=clipboard, `p`=primary. Query: `c?`. |
+| ☑ | **52** | Đặt/query clipboard (base64) | `ESC]52;c;base64 ST` | `c`=clipboard, `p`=primary. Query: `c?`. ✅ OneTerm (write+read). |
 
 ### D.1 Lưu ý bảo mật & mức hỗ trợ
 
@@ -157,7 +157,11 @@ OSC 52 gây tranh cãi bảo mật (đọc clipboard). Nhiều terminal **chỉ 
 |:----:|:-------:|:------------:|:---:|:-------:|:------:|:-----:|:---------:|:-----:|:---:|:-------:|
 | 52 | ✅ | ✅ | ❌ | ◐ | ✅ | ◐ | ✅ | ✅ | ✅ | ✅ |
 
-- **OneTerm**: ✅ — `OscSink` parse base64 + query `?`; `decode_osc52`/`encode_osc52`.
+- **OneTerm**: ✅ write (luôn bật), ◐ read (mặc định **tắt**). `OscSink` parse base64 (set) + query `?`;
+  set đi qua alacritty `ClipboardStore` → `SessionEvent::Clipboard`; read (`52;c;?`) →
+  `SessionEvent::ClipboardRead` → UI trả lời `52;c;<base64>` (`encode_osc52`) **chỉ khi** setting
+  `security.allow_clipboard_read = true` (mặc định `false`, vì read để lộ clipboard local cho chương trình,
+  kể cả remote qua SSH).
 - **Windows Terminal**: ✅ — merged (PR #18449/#5823); có setting disable.
 - **Zed**: ❌ — vẫn là feature request mở (issue #17848), chưa implement.
 - **Ghostty**: ◐ — **write ✅, read ❌** (terminfo: "No OSC 52 read response").
@@ -219,8 +223,8 @@ ESC ] 8 ; ; ST               ← đóng link
 
 | Check | OSC | Mục đích | Format | Ghi chú |
 |:-----:|-----|----------|--------|---------|
-| ☐ | **9** | Desktop notification (iTerm2/WT) | `ESC]9;msg ST` | iTerm2 origin. |
-| ☐ | **9;4** | Progress bar (ConEmu/WT) | `ESC]9;4;state;pct ST` | state: 0/1/2/3/4. WT 1.18+. |
+| ☑ | **9** | Desktop notification (iTerm2/WT) | `ESC]9;msg ST` | iTerm2 origin. ✅ OneTerm. |
+| ☑ | **9;4** | Progress bar (ConEmu/WT) | `ESC]9;4;state;pct ST` | state: 0/1/2/3/4. WT 1.18+. ✅ OneTerm. |
 | ☐ | **9;1/2/3** | ConEmu misc (sleep/msgbox/tabtitle) | `ESC]9;1;ms ST` v.v. | ConEmu-specific. |
 | ☐ | **99** | Kitty notification (extended) | `ESC]99;i=ID;payload ST` | icon/focus/urgency. |
 | ☐ | **777** | urxvt notification | `ESC]777;notify;title;body ST` | urxvt origin. |
@@ -229,15 +233,19 @@ ESC ] 8 ; ; ST               ← đóng link
 
 | OSC | OneTerm | Win Terminal | Zed | Ghostty | iTerm2 | Kitty | Alacritty | xterm | VTE | VS Code |
 |:----:|:-------:|:------------:|:---:|:-------:|:------:|:-----:|:---------:|:-----:|:---:|:-------:|
-| 9 (notif) | ❌ | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ | ❌ | ◐ | ✅ |
-| 9;4 (progress) | ❌ | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ | ❌ | ◐ | ✅ |
+| 9 (notif) | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ | ❌ | ◐ | ✅ |
+| 9;4 (progress) | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ | ❌ | ◐ | ✅ |
 | 9;1/2/3 (ConEmu) | ❌ | ◐ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 99 (kitty) | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ |
 | 777 (urxvt) | ❌ | ◐ | ❌ | ✅ | ✅ | ✅ | ❌ | ❌ | ◐ | ✅ |
 
-- **Ghostty**: ✅ tất cả (osc.zig có `conemu_*` cho 9;1–9;11 + `show_desktop_notification` cho 9/777/99).
-- **VS Code**: ✅ 9/9;4/99/777 (terminfo); 9;1/2/3 ❌.
-- **OneTerm/Alacritty/Zed**: ❌ toàn bộ notification.
+> ✅ **OneTerm** (từ bản mới): OSC 9 (notification → toast qua `window.push_notification`) và OSC 9;4
+> (progress → thanh progress mỏng ở mép trên terminal, state 0-4). Parse song song trong `OscSink`
+> (alacritty drop OSC 9) → `OscPayload::Notification`/`Progress` → `SessionEvent`. Còn ❌: 9;1/2/3
+> (ConEmu misc), 99 (kitty), 777 (urxvt).
+> - **Ghostty**: ✅ tất cả (osc.zig có `conemu_*` cho 9;1–9;11 + `show_desktop_notification` cho 9/777/99).
+> - **VS Code**: ✅ 9/9;4/99/777 (terminfo); 9;1/2/3 ❌.
+> - **Alacritty/Zed**: ❌ toàn bộ notification.
 
 ---
 
@@ -334,9 +342,9 @@ ESC]133;D;exit ST ← Block end (exit code tuỳ chọn)
 | ☐ | 8 | Hyperlinks | ⭐⭐⭐⭐ |
 | ☑ | 4 | Color palette set/query | ⭐⭐⭐⭐ |
 | ☑ | 10/11/12 | Default FG/BG/cursor | ⭐⭐⭐⭐ |
-| ☐ | 52 | Clipboard | ⭐⭐⭐ |
+| ☑ | 52 | Clipboard | ⭐⭐⭐ |
 | ☐ | 133 | Shell integration markers | ⭐⭐⭐⭐ |
-| ☐ | 9 | Desktop notification | ⭐⭐⭐ |
+| ☑ | 9 | Desktop notification | ⭐⭐⭐ |
 | ☑ | 104/110-112 | Reset colors | ⭐⭐⭐ |
 | ☐ | 633 | VS Code shell integration | ⭐⭐⭐ |
 
@@ -352,13 +360,14 @@ ESC]133;D;exit ST ← Block end (exit code tuỳ chọn)
 | 10/11/12 + 110–112 colors | ✅ | OK (set + query + reset fg/bg/cursor) |
 | 4 + 104 palette colors | ✅ | OK (set + query + reset index 0–255) |
 | 5/13–19/105/117–119 colors | ❌ | **Gap** — special/pointer/selection chưa map |
-| 9/99/777 notifications | ❌ | **Gap** |
+| 9 + 9;4 notification/progress | ✅ | OK (toast + progress bar) |
+| 99/777 notifications | ❌ | **Gap** (kitty/urxvt) |
 | 633 VS Code | ❌ | **Gap** (chỉ 133) |
 | 1337 image | ❌ | **Gap** |
 
 > OneTerm hiện **đủ** 5 nhóm cốt lõi (title/CWD/hyperlink/clipboard/shell-integration) **+ default colors
-> (OSC 10/11/12/110-112) + color palette (OSC 4/104)**, nhưng **thiếu** special colors (5), pointer/selection
-> (13–19), notification, VS Code 633, inline image so với Windows Terminal/Ghostty/Kitty.
+> (OSC 10/11/12/110-112) + color palette (OSC 4/104) + notification/progress (OSC 9, 9;4)**, nhưng **thiếu**
+> special colors (5), pointer/selection (13–19), kitty/urxvt notification (99/777), VS Code 633, inline image.
 
 ---
 
@@ -402,15 +411,18 @@ ESC]133;D;exit ST ← Block end (exit code tuỳ chọn)
 15. **VS Code (xterm.js)**: hỗ trợ rộng bất ngờ (4/7/8/9/9;4/10-12/52/99/104/110-119/133+P/633/777/1337/3008...).
     **Không** OSC 5/17/19, **không** Kitty graphics display, **không** Sixel.
 16. **OneTerm** (VTE = `alacritty_terminal`): Hỗ trợ **OSC 0/2, 7, 8, 52 (base64+query), 133 (A/B/C/D+exit),
-    4 (set+query) + 104 (reset), 10/11/12 (set+query) + 110/111/112 (reset)**.
-    - 133 được parse song song qua `OscSink` (alacritty VTE drop OSC 7/133);
+    4 (set+query) + 104 (reset), 10/11/12 (set+query) + 110/111/112 (reset), 9 (notification), 9;4 (progress)**.
+    - 133/9/9;4 được parse song song qua `OscSink` (alacritty VTE drop OSC 7/9/133); `OscSink` dùng queue
+      FIFO nên nhiều OSC trong cùng một batch đọc đều được giữ + xử lý theo thứ tự.
     - OSC 8 lưu vào cell; OSC 52 đi qua `EventListener` + OscSink.
     - OSC 4/104 + 10/11/12/110-112: alacritty parse sẵn (set → `Term.colors`, reset → clear); OneTerm render
       qua `dynamic_colors()` (`TerminalPalette.indexed` cho index 0-255) và trả lời query qua
       `Event::ColorRequest` (enqueue → reply sau parse batch, fallback default palette qua `set_default_colors`
       + `default_color_for_index`).
+    - OSC 9 → `SessionEvent::Notification` → toast `window.push_notification`; OSC 9;4 →
+      `SessionEvent::Progress(TerminalProgress)` → thanh progress mỏng ở mép trên terminal view.
     - **Không** special colors (5/105), pointer/selection (13–19/113–119): chưa map;
-    - **Không** notification (9/99/777), font (50), 633, 1337.
+    - **Không** notification 99 (kitty) / 777 (urxvt) / 9;1-3 (ConEmu misc), font (50), 633, 1337.
     - Tự sinh OSC 7 + 133 A qua `PROMPT_COMMAND` (bash) / `PS1` (zsh) / `PROMPT` (cmd).
 
 ---

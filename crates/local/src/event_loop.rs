@@ -365,8 +365,18 @@ impl ShellEventLoop {
                 }
                 self.listener.forward(SessionEvent::ShellIntegration(kind));
             }
-            OscPayload::Clipboard { .. } => {
-                // OSC 52 already handled by alacritty's EventListener.
+            OscPayload::Clipboard { query, .. } => {
+                // Set (query=false) is handled by alacritty's ClipboardStore.
+                // Read (query=true) → ask the UI to reply with the clipboard.
+                if query {
+                    self.listener.forward(SessionEvent::ClipboardRead);
+                }
+            }
+            OscPayload::Notification(msg) => {
+                self.listener.forward(SessionEvent::Notification(msg));
+            }
+            OscPayload::Progress(progress) => {
+                self.listener.forward(SessionEvent::Progress(progress));
             }
         }
     }

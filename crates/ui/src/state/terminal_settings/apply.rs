@@ -1,7 +1,8 @@
 //! Apply `TerminalConfig` → `TerminalSettings`.
 
 use crate::state::terminal_config::{
-    BellConfig, ColorsConfig, CursorConfig, FontConfig, LayoutConfig, ScrollConfig, TerminalConfig,
+    BellConfig, ColorsConfig, CursorConfig, FontConfig, LayoutConfig, ScrollConfig, SecurityConfig,
+    TerminalConfig,
 };
 
 use super::{
@@ -59,6 +60,9 @@ impl TerminalSettings {
 
         let bell: &BellConfig = &cfg.bell;
         self.bell_enabled = bell.enabled;
+
+        let security: &SecurityConfig = &cfg.security;
+        self.allow_clipboard_read = security.allow_clipboard_read;
 
         let colors: &ColorsConfig = &cfg.colors;
         self.color_overrides = ColorOverrides {

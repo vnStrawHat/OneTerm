@@ -18,6 +18,7 @@ pub mod cursor;
 pub mod font;
 pub mod layout;
 pub mod scroll;
+pub mod security;
 
 pub use bell::BellConfig;
 pub use colors::ColorsConfig;
@@ -25,6 +26,7 @@ pub use cursor::CursorConfig;
 pub use font::FontConfig;
 pub use layout::{LayoutConfig, PaddingConfig};
 pub use scroll::ScrollConfig;
+pub use security::SecurityConfig;
 
 // ── Config path ──────────────────────────────────────────────────────
 
@@ -52,6 +54,8 @@ pub struct TerminalConfig {
     pub bell: BellConfig,
     #[serde(default)]
     pub colors: ColorsConfig,
+    #[serde(default)]
+    pub security: SecurityConfig,
 }
 
 // ── Load / Save ─────────────────────────────────────────────────────
