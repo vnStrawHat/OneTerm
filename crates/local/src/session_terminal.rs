@@ -13,7 +13,9 @@ use oneterm_core::terminal::mouse_encode::{
     MouseModifiers, TerminalMouseButton, encode_mouse_move, encode_mouse_press,
     encode_mouse_release, encode_wheel_event,
 };
-use oneterm_core::terminal::{TerminalContent, TerminalInfo};
+use oneterm_core::terminal::{
+    BACKGROUND_INDEX, CURSOR_INDEX, DynamicColors, FOREGROUND_INDEX, TerminalContent, TerminalInfo,
+};
 use oneterm_core::{CursorBounds, SessionEvent, TerminalSession};
 
 use crate::session::{LocalSession, TermSize};
@@ -23,6 +25,35 @@ impl TerminalSession for LocalSession {
     fn snapshot(&self) -> TerminalContent {
         let mut term = self.term.lock();
         TerminalContent::from(&mut *term)
+    }
+
+    fn dynamic_colors(&self) -> DynamicColors {
+        let term = self.term.lock();
+        let colors = term.colors();
+        let mut indexed = [None; 256];
+        for (i, slot) in indexed.iter_mut().enumerate() {
+            *slot = colors[i];
+        }
+        DynamicColors {
+            foreground: colors[FOREGROUND_INDEX],
+            background: colors[BACKGROUND_INDEX],
+            cursor: colors[CURSOR_INDEX],
+            indexed,
+        }
+    }
+
+    fn set_default_colors(
+        &self,
+        foreground: alacritty_terminal::vte::ansi::Rgb,
+        background: alacritty_terminal::vte::ansi::Rgb,
+        cursor: alacritty_terminal::vte::ansi::Rgb,
+        ansi: [alacritty_terminal::vte::ansi::Rgb; 16],
+    ) {
+        let mut st = self.state.lock().unwrap();
+        st.default_foreground = Some(foreground);
+        st.default_background = Some(background);
+        st.default_cursor = Some(cursor);
+        st.default_ansi = Some(ansi);
     }
 
     fn terminal_info(&self) -> TerminalInfo {

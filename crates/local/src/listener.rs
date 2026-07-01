@@ -16,6 +16,9 @@ use async_channel::Sender;
 use log::warn;
 
 use oneterm_core::SessionEvent;
+use oneterm_core::terminal::{
+    ColorFormatter, PendingColorQuery, SharedColorQueries, new_color_queries,
+};
 
 use crate::event_loop::{ShellMsg, ShellNotifier};
 use crate::state::SharedState;
@@ -30,6 +33,9 @@ pub struct LocalListener {
     notifier: std::sync::Arc<Mutex<Option<ShellNotifier>>>,
     /// State cache (title/clipboard/alive) — shared with `LocalSession`.
     state: SharedState,
+    /// Pending OSC 10/11/12 color queries — enqueued here, answered by the event
+    /// loop after each parse batch (when the `Term` lock is free to read colors).
+    color_queries: SharedColorQueries,
 }
 
 impl LocalListener {
@@ -38,6 +44,7 @@ impl LocalListener {
             event_tx,
             notifier: std::sync::Arc::new(Mutex::new(None)),
             state,
+            color_queries: new_color_queries(),
         }
     }
 
@@ -86,6 +93,20 @@ impl LocalListener {
         if let Err(e) = self.event_tx.try_send(ev) {
             warn!("LocalListener: drop event (channel full/closed): {e:?}");
         }
+    }
+
+    /// Enqueue an OSC 10/11/12 color query (from `Event::ColorRequest`). Answered
+    /// by the event loop after the current parse batch.
+    pub fn queue_color_query(&self, index: usize, format: ColorFormatter) {
+        self.color_queries
+            .lock()
+            .unwrap()
+            .push(PendingColorQuery { index, format });
+    }
+
+    /// Drain all pending color queries (called by the event loop).
+    pub fn take_color_queries(&self) -> Vec<PendingColorQuery> {
+        std::mem::take(&mut *self.color_queries.lock().unwrap())
     }
 
     fn set_title(&self, title: String) {
@@ -145,10 +166,15 @@ impl EventListener for LocalListener {
             Event::Bell => {
                 self.forward(SessionEvent::Bell);
             }
+            // ── OSC 10/11/12 color query (`?`) ─────────────────────────
+            // Enqueue; the event loop reads the current color from `Term`
+            // after the parse batch and writes the reply back to the PTY.
+            Event::ColorRequest(index, format) => {
+                self.queue_color_query(index, format);
+            }
             // ── Ignored (not needed yet) ───────────────────────────────
             Event::MouseCursorDirty
             | Event::CursorBlinkingChange
-            | Event::ColorRequest(_, _)
             | Event::TextAreaSizeRequest(_) => {}
         }
     }

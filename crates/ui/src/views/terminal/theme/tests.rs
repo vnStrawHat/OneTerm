@@ -23,6 +23,7 @@ mod tests {
                 b: 0,
             },
             ansi: ANSI_16,
+            indexed: [None; 256],
         }
     }
 

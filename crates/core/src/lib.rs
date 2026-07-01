@@ -11,7 +11,9 @@ pub mod terminal;
 pub use config::{LocalShellConfig, ShellKind, home_dir};
 pub use error::AppError;
 pub use sftp::{FileEntry, FileStat, SftpBackend};
-pub use terminal::{CursorBounds, NetStats, SessionEvent, TerminalInfo, TerminalSession};
+pub use terminal::{
+    CursorBounds, DynamicColors, NetStats, SessionEvent, TerminalInfo, TerminalSession,
+};
 
 /// Shared result type for the `core` crate.
 pub type Result<T> = std::result::Result<T, AppError>;

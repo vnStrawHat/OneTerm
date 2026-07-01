@@ -8,6 +8,7 @@ pub mod content;
 pub mod key_encode;
 pub mod mouse_encode;
 pub mod osc;
+pub mod osc_color;
 pub mod palette;
 pub mod session;
 pub mod url;
@@ -24,7 +25,11 @@ pub use mouse_encode::{
     encode_mouse_release, encode_wheel_event,
 };
 pub use osc::{Osc133Kind, OscPayload, OscSink, decode_osc52, encode_osc52, parse_cwd_url};
-pub use palette::{TerminalPalette, resolve_color};
+pub use osc_color::{
+    BACKGROUND_INDEX, CURSOR_INDEX, ColorFormatter, DynamicColors, FOREGROUND_INDEX,
+    PendingColorQuery, SharedColorQueries, default_color_for_index, new_color_queries,
+};
+pub use palette::{TerminalPalette, extended_indexed_color, indexed_default_color, resolve_color};
 pub use session::{
     CursorBounds, NetStats, SessionEvent, TerminalInfo, TerminalSession, parse_keystroke,
 };

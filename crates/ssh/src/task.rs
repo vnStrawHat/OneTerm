@@ -13,6 +13,7 @@ use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use russh::ChannelMsg;
 
 use oneterm_core::SessionEvent;
+use oneterm_core::terminal::default_color_for_index;
 use oneterm_core::terminal::osc::{Osc133Kind, OscPayload, OscSink, parse_cwd_url};
 
 use crate::handler::SshClientHandler;
@@ -76,6 +77,43 @@ pub(crate) async fn ssh_main_task(
                             let mut st = state.lock().unwrap();
                             st.absolute_line_count = absolute;
                             st.prev_total_lines = prev_total;
+                        }
+
+                        // Answer OSC 10/11/12 color queries collected during
+                        // advance: read the current color from `Term`, fall back
+                        // to the theme default, then write the reply to the channel.
+                        let queries = listener.take_color_queries();
+                        if !queries.is_empty() {
+                            let (def_fg, def_bg, def_cursor, def_ansi) = {
+                                let st = state.lock().unwrap();
+                                (
+                                    st.default_foreground,
+                                    st.default_background,
+                                    st.default_cursor,
+                                    st.default_ansi,
+                                )
+                            };
+                            let mut replies: Vec<String> = Vec::new();
+                            {
+                                let term = term.lock();
+                                for q in queries {
+                                    let color = term.colors()[q.index].or_else(|| {
+                                        default_color_for_index(
+                                            q.index,
+                                            def_fg,
+                                            def_bg,
+                                            def_cursor,
+                                            def_ansi.as_ref(),
+                                        )
+                                    });
+                                    if let Some(color) = color {
+                                        replies.push((q.format)(color));
+                                    }
+                                }
+                            }
+                            for reply in replies {
+                                listener.pty_write(reply.as_bytes());
+                            }
                         }
 
                         // Feed OscSink (vte::Parser) — in parallel.

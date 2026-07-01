@@ -103,6 +103,22 @@ impl Render for LocalTerminalView {
 
         let theme = self.apply_color_overrides(theme, &color_overrides);
 
+        // Push the effective default fg/bg/cursor + ANSI palette to the backend
+        // so OSC 10/11/12 and OSC 4 *queries* can be answered, then apply OSC-set
+        // dynamic colors on top so OSC *sets* (OSC 4/10/11/12) and *resets*
+        // (OSC 104/110/111/112) take effect.
+        {
+            let session_ref = session.read(cx);
+            session_ref.set_default_colors(
+                theme.palette.foreground,
+                theme.palette.background,
+                theme.palette.cursor,
+                theme.palette.ansi,
+            );
+        }
+        let dynamic_colors = session.read(cx).dynamic_colors();
+        let theme = theme_apply::apply_dynamic_colors(theme, &dynamic_colors);
+
         let terminal_div = div()
             .id("local-terminal-view")
             .size_full()

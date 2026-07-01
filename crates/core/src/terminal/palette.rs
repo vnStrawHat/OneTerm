@@ -17,6 +17,10 @@ pub struct TerminalPalette {
     pub background: Rgb,
     pub cursor: Rgb,
     pub ansi: [Rgb; 16],
+    /// OSC 4 dynamic overrides for palette indices 0-255 (`None` = use the
+    /// default: `ansi[i]` for 0-15, computed cube/grayscale for 16-255).
+    /// OSC 104 clears an entry back to `None`.
+    pub indexed: [Option<Rgb>; 256],
 }
 
 impl TerminalPalette {
@@ -33,6 +37,54 @@ impl TerminalPalette {
     /// Dim version of `c` (mix 50% with the background).
     fn dim(&self, c: Rgb) -> Rgb {
         Self::mix(c, self.background, 0.5)
+    }
+
+    /// Effective ANSI color for index 0-15: an OSC 4 override if set, else the
+    /// theme's `ansi[i]`.
+    fn ansi_color(&self, i: usize) -> Rgb {
+        self.indexed[i].unwrap_or(self.ansi[i])
+    }
+}
+
+/// Color for the extended palette (indices 16-255): 6×6×6 RGB cube (16-231)
+/// and 24-step grayscale ramp (232-255). These are theme-independent. For
+/// indices 0-15 this returns black — callers must use the ANSI palette instead.
+pub fn extended_indexed_color(n: u8) -> Rgb {
+    match n {
+        // 6×6×6 RGB cube (16..=231).
+        16..=231 => {
+            let n = n - 16;
+            let r = n / 36;
+            let g = (n / 6) % 6;
+            let b = n % 6;
+            let conv = |c: u8| if c == 0 { 0 } else { 55 + 40 * c };
+            Rgb {
+                r: conv(r),
+                g: conv(g),
+                b: conv(b),
+            }
+        }
+        // Grayscale ramp (232..=255): 24 steps from near-black to near-white.
+        232..=255 => {
+            let v = 8 + 10 * (n - 232);
+            Rgb { r: v, g: v, b: v }
+        }
+        // 0-15 are theme colors — not handled here.
+        _ => Rgb { r: 0, g: 0, b: 0 },
+    }
+}
+
+/// Default (non-OSC-overridden) color for palette index `n`:
+/// - `0..=15` → `ansi[n]` (the theme's 16-color palette).
+/// - `16..=231` → 6×6×6 RGB cube.
+/// - `232..=255` → 24-step grayscale ramp.
+///
+/// Used both by `resolve_indexed` (fallback when no OSC 4 override) and to
+/// answer OSC 4 queries for indices never set via OSC.
+pub fn indexed_default_color(n: u8, ansi: &[Rgb; 16]) -> Rgb {
+    match n {
+        0..=15 => ansi[n as usize],
+        _ => extended_indexed_color(n),
     }
 }
 
@@ -54,14 +106,15 @@ pub fn resolve_color(c: &Color, palette: &TerminalPalette) -> Rgb {
 fn resolve_named(nc: NamedColor, palette: &TerminalPalette) -> Rgb {
     let idx = nc as u32;
     match idx {
-        // 16 ANSI colors (0-15).
-        0..=15 => palette.ansi[idx as usize],
+        // 16 ANSI colors (0-15) — honor OSC 4 overrides.
+        0..=15 => palette.ansi_color(idx as usize),
         // Foreground / Background / Cursor.
         256 => palette.foreground,
         257 => palette.background,
         258 => palette.cursor,
-        // Dim variants (259-266) → dim of the corresponding normal color.
-        259..=266 => palette.dim(palette.ansi[(idx - 259) as usize]),
+        // Dim variants (259-266) → dim of the corresponding normal color
+        // (using the OSC 4 override if present).
+        259..=266 => palette.dim(palette.ansi_color((idx - 259) as usize)),
         // BrightForeground → foreground (no separate bright fg in the palette).
         267 => palette.foreground,
         // DimForeground → dim(foreground).
@@ -71,28 +124,8 @@ fn resolve_named(nc: NamedColor, palette: &TerminalPalette) -> Rgb {
 }
 
 fn resolve_indexed(n: u8, palette: &TerminalPalette) -> Rgb {
-    match n {
-        // First 16 colors map to the ANSI palette.
-        0..=15 => palette.ansi[n as usize],
-        // 6×6×6 RGB cube (16..=231).
-        16..=231 => {
-            let n = n - 16;
-            let r = n / 36;
-            let g = (n / 6) % 6;
-            let b = n % 6;
-            let conv = |c: u8| if c == 0 { 0 } else { 55 + 40 * c };
-            Rgb {
-                r: conv(r),
-                g: conv(g),
-                b: conv(b),
-            }
-        }
-        // Grayscale ramp (232..=255): 24 steps from near-black to near-white.
-        232..=255 => {
-            let v = 8 + 10 * (n - 232);
-            Rgb { r: v, g: v, b: v }
-        }
-    }
+    // An OSC 4 override wins over the default for any index.
+    palette.indexed[n as usize].unwrap_or_else(|| indexed_default_color(n, &palette.ansi))
 }
 
 #[cfg(test)]
@@ -170,6 +203,7 @@ mod tests {
                     b: 255,
                 }, // 15 bright white
             ],
+            indexed: [None; 256],
         }
     }
 

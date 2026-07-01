@@ -13,6 +13,9 @@ use log::warn;
 use alacritty_terminal::event::{Event, EventListener};
 
 use oneterm_core::SessionEvent;
+use oneterm_core::terminal::{
+    ColorFormatter, PendingColorQuery, SharedColorQueries, new_color_queries,
+};
 
 use crate::state::SharedState;
 
@@ -37,6 +40,9 @@ pub struct SshListener {
     cmd_tx: Sender<Cmd>,
     /// State cache — shared with `SshSession`.
     state: SharedState,
+    /// Pending OSC 10/11/12 color queries — enqueued here, answered by the tokio
+    /// task after each parse batch (when the `Term` lock is free to read colors).
+    color_queries: SharedColorQueries,
 }
 
 impl SshListener {
@@ -45,6 +51,7 @@ impl SshListener {
             event_tx,
             cmd_tx,
             state,
+            color_queries: new_color_queries(),
         }
     }
 
@@ -79,6 +86,20 @@ impl SshListener {
         if let Err(e) = self.event_tx.try_send(ev) {
             warn!("SshListener: drop event (channel full/closed): {e:?}");
         }
+    }
+
+    /// Enqueue an OSC 10/11/12 color query (from `Event::ColorRequest`). Answered
+    /// by the tokio task after the current parse batch.
+    pub fn queue_color_query(&self, index: usize, format: ColorFormatter) {
+        self.color_queries
+            .lock()
+            .unwrap()
+            .push(PendingColorQuery { index, format });
+    }
+
+    /// Drain all pending color queries (called by the tokio task).
+    pub fn take_color_queries(&self) -> Vec<PendingColorQuery> {
+        std::mem::take(&mut *self.color_queries.lock().unwrap())
     }
 
     fn set_title(&self, title: String) {
@@ -123,10 +144,15 @@ impl EventListener for SshListener {
             Event::Bell => {
                 self.forward(SessionEvent::Bell);
             }
+            // ── OSC 10/11/12 color query (`?`) ─────────────────────────
+            // Enqueue; the tokio task reads the current color from `Term` after
+            // the parse batch and writes the reply back to the SSH channel.
+            Event::ColorRequest(index, format) => {
+                self.queue_color_query(index, format);
+            }
             // ── Ignored ─────────────────────────────────────────────────
             Event::MouseCursorDirty
             | Event::CursorBlinkingChange
-            | Event::ColorRequest(_, _)
             | Event::TextAreaSizeRequest(_) => {}
         }
     }

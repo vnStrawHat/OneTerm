@@ -20,6 +20,9 @@ use crate::terminal::content::TerminalContent;
 use crate::terminal::key_encode::{KeyMods, KeySpec, NamedKey, encode_key};
 use crate::terminal::mouse_encode::TerminalMouseButton;
 use crate::terminal::osc::Osc133Kind;
+use crate::terminal::osc_color::DynamicColors;
+
+use alacritty_terminal::vte::ansi::Rgb;
 
 /// Basic terminal info — lightweight, does not clear damage.
 /// Used for line_times updates and the scroll handle without affecting
@@ -107,6 +110,27 @@ pub trait TerminalSession: Send + Sync + 'static {
 
     /// Alt-screen is on (e.g. vim/less) → disable IME, plain keys go through on_key_down.
     fn is_alt_screen(&self) -> bool;
+
+    /// Dynamic OSC-set foreground/background/cursor colors (OSC 10/11/12).
+    /// Read from the live `Term` color table so the renderer can apply them on
+    /// top of the theme. Default = none set (use the theme).
+    fn dynamic_colors(&self) -> DynamicColors {
+        DynamicColors::default()
+    }
+
+    /// Provide the theme's default colors: foreground/background/cursor plus the
+    /// 16-color ANSI palette. Used to answer OSC 10/11/12 and OSC 4 *queries*
+    /// when the color was never set via OSC (so a bare query still reports a
+    /// sensible color, e.g. for background detection). Called by the UI whenever
+    /// the theme changes. Default = no-op.
+    fn set_default_colors(
+        &self,
+        _foreground: Rgb,
+        _background: Rgb,
+        _cursor: Rgb,
+        _ansi: [Rgb; 16],
+    ) {
+    }
 
     // ── Input ───────────────────────────────────────────────
     /// Write bytes to the PTY/channel (keystroke, paste, OSC response).

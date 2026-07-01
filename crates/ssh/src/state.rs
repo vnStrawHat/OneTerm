@@ -7,6 +7,8 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use alacritty_terminal::vte::ansi::Rgb;
+
 /// Session state updated by the listener and read by the session.
 #[derive(Debug, Default)]
 pub struct SessionState {
@@ -36,6 +38,16 @@ pub struct SessionState {
     pub rx_bytes: u64,
     /// Total bytes sent to the server (upload direction).
     pub tx_bytes: u64,
+    /// Theme default foreground — used to answer OSC 10 queries when the program
+    /// never set it via OSC. Set by the UI via `set_default_colors`.
+    pub default_foreground: Option<Rgb>,
+    /// Theme default background — used to answer OSC 11 queries.
+    pub default_background: Option<Rgb>,
+    /// Theme default cursor color — used to answer OSC 12 queries.
+    pub default_cursor: Option<Rgb>,
+    /// Theme default 16-color ANSI palette — used to answer OSC 4 queries for
+    /// indices 0-15 that were never set via OSC.
+    pub default_ansi: Option<[Rgb; 16]>,
 }
 
 /// Arc-Mutex wrapper.

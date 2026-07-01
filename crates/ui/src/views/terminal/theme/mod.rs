@@ -56,6 +56,7 @@ pub fn build_terminal_theme(theme: &Theme) -> TerminalTheme {
         background: palette::vte_from_rgba(c.background.to_rgb()),
         cursor: palette::vte_from_rgba(cursor_rgba),
         ansi: palette::ANSI_16,
+        indexed: [None; 256],
     };
     TerminalTheme {
         palette,

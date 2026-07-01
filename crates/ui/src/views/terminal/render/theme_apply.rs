@@ -1,8 +1,32 @@
 //! Apply color overrides from config → `TerminalTheme`.
 
-use super::super::theme::{TerminalTheme, vte_from_rgba};
+use super::super::theme::{TerminalTheme, hsla_from_vte, vte_from_rgba};
 use super::LocalTerminalView;
 use crate::state::ColorOverrides;
+use oneterm_core::DynamicColors;
+
+/// Apply dynamic OSC-set colors (OSC 10/11/12 + OSC 4 palette) on top of
+/// `theme`, so a program changing fg/bg/cursor/palette at runtime takes visual
+/// effect. OSC-set colors win over the theme + static config overrides (they are
+/// explicit runtime requests). OSC 104 clears an override back to `None`, which
+/// makes resolution fall back to the theme automatically.
+pub(crate) fn apply_dynamic_colors(mut theme: TerminalTheme, dc: &DynamicColors) -> TerminalTheme {
+    if let Some(fg) = dc.foreground {
+        theme.palette.foreground = fg;
+        theme.fg = hsla_from_vte(fg);
+    }
+    if let Some(bg) = dc.background {
+        theme.palette.background = bg;
+        theme.bg = hsla_from_vte(bg);
+        theme.gutter_bg = theme.bg;
+    }
+    if let Some(cursor) = dc.cursor {
+        theme.palette.cursor = cursor;
+    }
+    // OSC 4 palette overrides (indices 0-255) — resolution consults these first.
+    theme.palette.indexed = dc.indexed;
+    theme
+}
 
 impl LocalTerminalView {
     /// Apply color overrides from config → theme.

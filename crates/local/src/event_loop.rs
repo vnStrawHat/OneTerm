@@ -22,6 +22,7 @@ use log::error;
 use polling::{Event as PollEvent, Events, PollMode, Poller};
 
 use oneterm_core::SessionEvent;
+use oneterm_core::terminal::default_color_for_index;
 use oneterm_core::terminal::osc::{Osc133Kind, OscPayload, OscSink, parse_cwd_url};
 
 use crate::listener::LocalListener;
@@ -296,6 +297,42 @@ impl ShellEventLoop {
                             st.prev_total_lines = prev_total;
                         }
                         self.listener.send_event(Event::Wakeup);
+                    }
+
+                    // Answer OSC 10/11/12 color queries collected during parsing.
+                    // Read the current color from `Term` (reusing the lock guard
+                    // if still held), fall back to the theme default, then reply.
+                    let queries = self.listener.take_color_queries();
+                    if !queries.is_empty() {
+                        let (def_fg, def_bg, def_cursor, def_ansi) = {
+                            let st = self.state.lock().unwrap();
+                            (
+                                st.default_foreground,
+                                st.default_background,
+                                st.default_cursor,
+                                st.default_ansi,
+                            )
+                        };
+                        let guard = terminal.take().unwrap_or_else(|| self.term.lock_unfair());
+                        let mut replies: Vec<String> = Vec::new();
+                        for q in queries {
+                            let color = guard.colors()[q.index].or_else(|| {
+                                default_color_for_index(
+                                    q.index,
+                                    def_fg,
+                                    def_bg,
+                                    def_cursor,
+                                    def_ansi.as_ref(),
+                                )
+                            });
+                            if let Some(color) = color {
+                                replies.push((q.format)(color));
+                            }
+                        }
+                        drop(guard);
+                        for reply in replies {
+                            self.listener.pty_write(reply.as_bytes());
+                        }
                     }
                 }
             }
