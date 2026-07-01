@@ -10,12 +10,12 @@ default-run = "oneterm-debug"
 
 [features]
 default = ["dev-bin"]
-# Bin target cho dev build — tên file có hậu tố `-debug` (vd. oneterm-debug.exe).
+# Bin target for dev build — filename has `-debug` suffix (e.g. oneterm-debug.exe).
 dev-bin = []
-# Bin target cho release build — tên file sạch (oneterm.exe / oneterm).
+# Bin target for release build — clean filename (oneterm.exe / oneterm).
 release-bin = []
 
-# Logic dùng chung — cả hai bin shim đều gọi `oneterm_app::run()`.
+# Shared logic — both bin shims call `oneterm_app::run()`.
 [lib]
 name = "oneterm_app"
 path = "src/lib.rs"
@@ -53,5 +53,5 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [target.'cfg(windows)'.build-dependencies]
-# Biên dịch assets/oneterm.rc → nhúng app icon + version info vào exe (cả oneterm-debug lẫn oneterm).
+# Compile assets/oneterm.rc → embed app icon + version info into the exe (both oneterm-debug and oneterm).
 embed-resource = "3"

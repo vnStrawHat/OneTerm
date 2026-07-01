@@ -1,9 +1,10 @@
 //! Theme registration for OneTerm.
 //!
-//! Like the reference `reference/.../story/src/themes.rs`, OneTerm:
-//! - Loads 2 JSON themes (Zed One Dark + Zed One Light) embedded into the binary via
-//!   `ThemeRegistry::load_themes_from_str`. Does not depend on the working directory.
-//! - Wires up the `SwitchTheme` / `SwitchThemeMode` actions.
+//! OneTerm embeds 24 theme JSON files (2 Zed defaults + 22 from the gpui-component
+//! collection) into the binary via `ThemeRegistry::load_themes_from_str`.
+//! Does not depend on the working directory.
+//!
+//! Wires up the `SwitchTheme` / `SwitchThemeMode` actions.
 //!
 //! The built-in themes (`Default Light` / `Default Dark`) are registered by
 //! `gpui_component::init`. The theme menu (app_menus) lists every theme in `ThemeRegistry`.
@@ -17,15 +18,46 @@ use gpui_component::{ActiveTheme as _, Theme, ThemeRegistry, scroll::ScrollbarSh
 
 use crate::actions::{SwitchTheme, SwitchThemeMode};
 
-/// List of embedded JSON themes.
+/// List of embedded JSON theme files.
 ///
-/// `zed-one-dark` / `zed-one-light` — the Atom One palette (Zed editor default).
+/// Each file may contain one or more theme variants (e.g. a dark and a light variant).
+/// The `&str` label is used only for log messages on load failure.
+///
+/// - `zed-one-dark` / `zed-one-light` — the Atom One palette (Zed editor default).
+/// - 22 additional themes from the gpui-component collection (iTerm2-Color-Schemes, etc.).
 const EMBEDDED_THEME_FILES: &[(&str, &str)] = &[
+    // Zed defaults
     ("zed-one-dark", include_str!("../themes/zed-one-dark.json")),
     (
         "zed-one-light",
         include_str!("../themes/zed-one-light.json"),
     ),
+    // gpui-component theme collection
+    ("adventure", include_str!("../themes/adventure.json")),
+    ("alduin", include_str!("../themes/alduin.json")),
+    ("asciinema", include_str!("../themes/asciinema.json")),
+    ("aurora", include_str!("../themes/aurora.json")),
+    ("ayu", include_str!("../themes/ayu.json")),
+    ("catppuccin", include_str!("../themes/catppuccin.json")),
+    ("everforest", include_str!("../themes/everforest.json")),
+    ("fahrenheit", include_str!("../themes/fahrenheit.json")),
+    ("flexoki", include_str!("../themes/flexoki.json")),
+    ("gruvbox", include_str!("../themes/gruvbox.json")),
+    ("harper", include_str!("../themes/harper.json")),
+    ("hybrid", include_str!("../themes/hybrid.json")),
+    ("jellybeans", include_str!("../themes/jellybeans.json")),
+    ("kibble", include_str!("../themes/kibble.json")),
+    (
+        "macos-classic",
+        include_str!("../themes/macos-classic.json"),
+    ),
+    ("matrix", include_str!("../themes/matrix.json")),
+    ("mellifluous", include_str!("../themes/mellifluous.json")),
+    ("molokai", include_str!("../themes/molokai.json")),
+    ("solarized", include_str!("../themes/solarized.json")),
+    ("spaceduck", include_str!("../themes/spaceduck.json")),
+    ("tokyonight", include_str!("../themes/tokyonight.json")),
+    ("twilight", include_str!("../themes/twilight.json")),
 ];
 
 /// Override list selection style: the selected item looks like hover (bg =
