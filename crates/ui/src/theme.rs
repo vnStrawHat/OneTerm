@@ -82,9 +82,9 @@ pub fn init(cx: &mut App) {
     let registry = ThemeRegistry::global_mut(cx);
     for (name, content) in EMBEDDED_THEME_FILES {
         if let Err(err) = registry.load_themes_from_str(content) {
-            tracing::warn!("failed to load embedded theme {}: {}", name, err);
+            log::warn!("failed to load embedded theme {}: {}", name, err);
         } else {
-            tracing::debug!("loaded embedded theme: {}", name);
+            log::debug!("loaded embedded theme: {}", name);
         }
     }
 

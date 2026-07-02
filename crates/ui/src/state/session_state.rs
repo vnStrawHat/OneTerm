@@ -124,7 +124,7 @@ impl SshSessionStore {
             Ok(raw) => match serde_json::from_str::<Vec<SshSession>>(&raw) {
                 Ok(list) => list,
                 Err(e) => {
-                    tracing::error!("ssh_session.json parse error: {e} — starting empty");
+                    log::error!("ssh_session.json parse error: {e} — starting empty");
                     Vec::new()
                 }
             },
@@ -142,10 +142,10 @@ impl SshSessionStore {
         match serde_json::to_string_pretty(&self.sessions) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&path, json) {
-                    tracing::error!("Failed to write ssh_session.json: {e}");
+                    log::error!("Failed to write ssh_session.json: {e}");
                 }
             }
-            Err(e) => tracing::error!("Failed to serialize ssh sessions: {e}"),
+            Err(e) => log::error!("Failed to serialize ssh sessions: {e}"),
         }
     }
 }

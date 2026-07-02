@@ -118,7 +118,7 @@ impl TerminalConfig {
                 match serde_json::from_str::<TerminalConfig>(&json) {
                     Ok(cfg) => cfg,
                     Err(e) => {
-                        tracing::error!("terminal.json parse error: {e} — using defaults");
+                        log::error!("terminal.json parse error: {e} — using defaults");
                         Self::default()
                     }
                 }
@@ -128,7 +128,7 @@ impl TerminalConfig {
                 let cfg = Self::default();
                 if let Ok(json) = serde_json::to_string_pretty(&cfg) {
                     if std::fs::write(&path, json).is_ok() {
-                        tracing::info!("Created default terminal.json at {path:?}");
+                        log::info!("Created default terminal.json at {path:?}");
                     }
                 }
                 cfg

@@ -52,11 +52,11 @@ pub fn save_dock_state_on_close(cx: &App) {
         return;
     };
     let Some(dock_area) = weak_dock.upgrade() else {
-        tracing::warn!("save_dock_state_on_close: dock_area already dropped");
+        log::warn!("save_dock_state_on_close: dock_area already dropped");
         return;
     };
     let dock_state = dock_area.read(cx).dump(cx);
-    tracing::info!("save_dock_state_on_close → saving dock state");
+    log::info!("save_dock_state_on_close → saving dock state");
     _ = persistence::save_state(&dock_state, zoomed_name.as_deref(), tbv, "on_close");
 }
 
@@ -274,11 +274,7 @@ impl OneTermWorkspace {
     /// `zoomed_panel` mirror. Called after each `DockEvent::LayoutChanged` and at init.
     fn sync_tab_subscriptions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tabs = zoom::collect_tab_panels(&self.dock_area.read(cx), cx);
-        tracing::info!("sync_tab_subscriptions → found {} tab panel(s)", tabs.len());
-        eprintln!(
-            "[zoom] sync_tab_subscriptions → found {} tab panel(s)",
-            tabs.len()
-        );
+        log::info!("sync_tab_subscriptions → found {} tab panel(s)", tabs.len());
         for tp in tabs {
             let id = tp.entity_id();
             if self.subscribed_tabs.insert(id) {
@@ -295,8 +291,7 @@ impl OneTermWorkspace {
                                 .read(cx)
                                 .active_panel(cx)
                                 .map(|p| p.panel_name(cx).to_string());
-                            tracing::info!("PanelEvent::ZoomIn → name={name:?}");
-                            eprintln!("[zoom] PanelEvent::ZoomIn → name={name:?}");
+                            log::info!("PanelEvent::ZoomIn → name={name:?}");
                             if let Ok(mut g) = zoomed_panel.lock() {
                                 *g = name.clone();
                             }
@@ -311,8 +306,7 @@ impl OneTermWorkspace {
                             cx.notify();
                         }
                         PanelEvent::ZoomOut => {
-                            tracing::info!("PanelEvent::ZoomOut");
-                            eprintln!("[zoom] PanelEvent::ZoomOut");
+                            log::info!("PanelEvent::ZoomOut");
                             if let Ok(mut g) = zoomed_panel.lock() {
                                 *g = None;
                             }
@@ -342,7 +336,7 @@ impl OneTermWorkspace {
             if let Some(panel) = tp.read(cx).active_panel(cx) {
                 panel.focus_handle(cx).focus(window, cx);
                 window.dispatch_action(Box::new(ToggleZoom), cx);
-                tracing::info!("Restored zoom for panel \"{name}\"");
+                log::info!("Restored zoom for panel \"{name}\"");
             }
         }
     }

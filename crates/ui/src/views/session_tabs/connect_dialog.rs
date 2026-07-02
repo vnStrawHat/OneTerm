@@ -275,7 +275,7 @@ fn add_ssh_terminal_to_dock(panel: &Arc<dyn PanelView>, window: &mut Window, cx:
     let dock_area = match AppState::global(cx).read(cx).dock_area.clone() {
         Some(d) => d,
         None => {
-            tracing::error!("AppState.dock_area not initialized — cannot add SSH terminal tab");
+            log::error!("AppState.dock_area not initialized — cannot add SSH terminal tab");
             return;
         }
     };

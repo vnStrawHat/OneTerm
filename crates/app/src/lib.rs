@@ -20,6 +20,9 @@ pub fn run() {
     env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("info,oneterm=debug"),
     )
+    // Suppress framework noise: GPUI's a11y subsystem sends a debug log every frame
+    // when accessibility is active — keep it at info even if RUST_LOG=debug.
+    .filter_module("gpui", log::LevelFilter::Info)
     .format_timestamp_secs()
     .init();
     log::info!("OneTerm starting up");

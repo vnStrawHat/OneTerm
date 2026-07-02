@@ -80,7 +80,7 @@ pub(crate) fn save_state(
         .and_then(|d| d.get("open"))
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    tracing::info!(
+    log::info!(
         "Save layout [trigger={trigger}] → zoomed_panel={zoomed_panel:?}, toggle_button_visible={toggle_button_visible}, right_dock_open={right_dock_open}",
     );
     if let Some(obj) = val.as_object_mut() {

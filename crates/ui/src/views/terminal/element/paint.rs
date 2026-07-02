@@ -150,7 +150,7 @@ pub(crate) fn paint_terminal(
             cache.stats.text_run_paints = run_count;
             cache.stats.frame_count += 1;
             if cache.stats.frame_count % 60 == 0 {
-                eprintln!(
+                log::debug!(
                     "[TerminalElement] frame={} lines={} dirty={} quads={} bg_rects={} shapes={} runs={} hashes={}",
                     cache.stats.frame_count,
                     cache.stats.total_lines,
