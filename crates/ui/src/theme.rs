@@ -142,8 +142,8 @@ pub fn init(cx: &mut App) {
     // not use them → no impact.
     {
         let theme = Theme::global_mut(cx);
-        theme.radius = px(0.001);
-        theme.radius_lg = px(0.);
+        theme.radius = px(4.);
+        theme.radius_lg = px(6.);
         theme.scrollbar_show = ScrollbarShow::Always;
     }
 
