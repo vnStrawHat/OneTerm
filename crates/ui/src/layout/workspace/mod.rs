@@ -19,7 +19,7 @@ use gpui_component::{
 };
 
 use crate::{
-    components::{DateTimeClock, NetSpeedIndicator},
+    components::{DateTimeClock, NetSpeedIndicator, ResourceIndicator},
     layout::{statusbar, title_bar::AppTitleBar},
     state::AppState,
 };
@@ -80,6 +80,8 @@ pub struct OneTermWorkspace {
     pub clock: Entity<DateTimeClock>,
     /// Network speed indicator — created once so the 1s timer fires reliably.
     pub net_speed: Entity<NetSpeedIndicator>,
+    /// CPU/memory resource indicator — created once so the 2s timer fires reliably.
+    pub resource: Entity<ResourceIndicator>,
     last_layout_state: Option<gpui_component::dock::DockAreaState>,
     toggle_button_visible: Arc<AtomicBool>,
     _save_layout_task: Option<Task<()>>,
@@ -193,12 +195,14 @@ impl OneTermWorkspace {
 
         let clock = DateTimeClock::new_entity(window, cx);
         let net_speed = NetSpeedIndicator::new_entity(dock_area.downgrade(), window, cx);
+        let resource = ResourceIndicator::new_entity(window, cx);
 
         let mut me = Self {
             title_bar,
             dock_area: dock_area.clone(),
             clock,
             net_speed,
+            resource,
             last_layout_state: None,
             toggle_button_visible,
             _save_layout_task: None,
@@ -374,6 +378,7 @@ impl Render for OneTermWorkspace {
                 &self.dock_area,
                 self.clock.clone(),
                 self.net_speed.clone(),
+                self.resource.clone(),
                 window,
                 cx,
             ))

@@ -25,5 +25,6 @@ oneterm-ssh.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
+sysinfo.workspace = true
 async-channel.workspace = true
 rust-embed = "8.7"

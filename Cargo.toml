@@ -55,6 +55,8 @@ thiserror = "2"
 
 # UI helpers
 chrono = "0.4"
+# System resource monitoring (CPU/memory of the OneTerm process)
+sysinfo = "0.37"
 rust-i18n = "4"
 
 [workspace.lints.clippy]
