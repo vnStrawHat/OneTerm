@@ -24,6 +24,7 @@ use gpui_component::{
     dock::{DockPlacement, PanelView},
     h_flex,
     input::{Input, InputState},
+    notification::NotificationType,
     v_flex,
 };
 
@@ -201,7 +202,7 @@ fn on_connect_click(
         Some(st) => {
             let raw = st.read(cx).value().trim().to_string();
             if raw.is_empty() {
-                window.push_notification("Username is required.", cx);
+                window.push_notification((NotificationType::Warning, "Username is required."), cx);
                 return false;
             }
             parse_user_host_port(&raw, &session.host, session.port)
@@ -259,10 +260,16 @@ fn on_connect_click(
                             TerminalPanel::from_session_entity(ssh_session, &label, window, cx),
                         );
                         add_ssh_terminal_to_dock(&panel, window, cx);
-                        window.push_notification(format!("Connected to \"{}\".", label), cx);
+                        window.push_notification(
+                            (NotificationType::Success, format!("Connected to \"{}\".", label)),
+                            cx,
+                        );
                     }
                     Err(e) => {
-                        window.push_notification(format!("SSH connect failed: {e}"), cx);
+                        window.push_notification(
+                            (NotificationType::Error, format!("SSH connect failed: {e}")),
+                            cx,
+                        );
                     }
                 });
         })

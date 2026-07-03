@@ -8,8 +8,7 @@ use gpui::{
     App, Context, FocusHandle, Focusable, InteractiveElement as _, ParentElement as _, Render,
     SharedString, Styled as _, Window, div,
 };
-use gpui_component::ActiveTheme as _;
-use gpui_component::WindowExt as _;
+use gpui_component::{ActiveTheme as _, WindowExt as _, notification::NotificationType};
 
 use super::element::TerminalElement;
 use super::theme::{TerminalTheme, build_terminal_theme};
@@ -31,7 +30,7 @@ impl Render for LocalTerminalView {
         // async subscribe task where they are queued).
         if !self.pending_notifications.is_empty() {
             for msg in std::mem::take(&mut self.pending_notifications) {
-                window.push_notification(msg, cx);
+                window.push_notification((NotificationType::Info, msg), cx);
             }
         }
 

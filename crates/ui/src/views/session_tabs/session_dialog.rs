@@ -26,6 +26,7 @@ use gpui_component::{
     dialog::{DialogButtonProps, DialogFooter},
     h_flex,
     input::{Input, InputState},
+    notification::NotificationType,
     v_flex,
 };
 
@@ -164,7 +165,7 @@ pub(crate) fn open_session_dialog(
             let label = label_ok.read(cx).value().trim().to_string();
             let host = host_ok.read(cx).value().trim().to_string();
             if label.is_empty() || host.is_empty() {
-                window.push_notification("Label and Host are required.", cx);
+                window.push_notification((NotificationType::Warning, "Label and Host are required."), cx);
                 return false;
             }
             let port: u16 = port_ok
@@ -196,11 +197,14 @@ pub(crate) fn open_session_dialog(
                 None => store.update(cx, |s, cx| s.add(session, cx)),
             }
             window.push_notification(
-                if is_edit {
-                    "SSH session updated."
-                } else {
-                    "SSH session saved."
-                },
+                (
+                    NotificationType::Success,
+                    if is_edit {
+                        "SSH session updated."
+                    } else {
+                        "SSH session saved."
+                    },
+                ),
                 cx,
             );
             true

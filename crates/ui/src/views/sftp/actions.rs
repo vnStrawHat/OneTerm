@@ -13,6 +13,7 @@ use gpui_component::{
     dialog::{DialogButtonProps, DialogFooter},
     h_flex,
     input::{Input, InputState},
+    notification::NotificationType,
     v_flex,
 };
 
@@ -29,7 +30,7 @@ impl SftpPanel {
             Some(e) => e.clone(),
             None => {
                 log::warn!("SftpPanel::do_rename: no selection");
-                window.push_notification("Select a file or folder to rename.", cx);
+                window.push_notification((NotificationType::Warning, "Select a file or folder to rename."), cx);
                 return;
             }
         };
@@ -56,7 +57,7 @@ impl SftpPanel {
             move |_, window, cx| {
                 let new_name = name_ok.read(cx).value().trim().to_string();
                 if new_name.is_empty() {
-                    window.push_notification("Name cannot be empty.", cx);
+                    window.push_notification((NotificationType::Warning, "Name cannot be empty."), cx);
                     return false;
                 }
 
@@ -73,13 +74,13 @@ impl SftpPanel {
                 match sftp.rename(from_path.clone(), to_path) {
                     Ok(()) => {
                         log::info!("SftpPanel: rename OK");
-                        window.push_notification(format!("Renamed to \"{new_name}\"."), cx);
+                        window.push_notification((NotificationType::Success, format!("Renamed to \"{new_name}\".")), cx);
                         panel.update(cx, |this, cx| this.refresh(cx));
                         true
                     }
                     Err(e) => {
                         log::error!("SftpPanel: rename failed: {e}");
-                        window.push_notification(format!("Rename failed: {e}"), cx);
+                        window.push_notification((NotificationType::Error, format!("Rename failed: {e}")), cx);
                         false
                     }
                 }
@@ -141,7 +142,7 @@ impl SftpPanel {
             Some(e) => e.clone(),
             None => {
                 log::warn!("SftpPanel::do_delete: no selection");
-                window.push_notification("Select a file or folder to delete.", cx);
+                window.push_notification((NotificationType::Warning, "Select a file or folder to delete."), cx);
                 return;
             }
         };
@@ -186,13 +187,13 @@ impl SftpPanel {
                                 match result {
                                     Ok(()) => {
                                         log::info!("SftpPanel: delete OK");
-                                        window.push_notification("Deleted successfully.", cx);
+                                        window.push_notification((NotificationType::Success, "Deleted successfully."), cx);
                                         panel.update(cx, |this, cx| this.refresh(cx));
                                         window.close_dialog(cx);
                                     }
                                     Err(e) => {
                                         log::error!("SftpPanel: delete failed: {e}");
-                                        window.push_notification(format!("Delete failed: {e}"), cx);
+                                        window.push_notification((NotificationType::Error, format!("Delete failed: {e}")), cx);
                                     }
                                 }
                             },
@@ -227,7 +228,7 @@ impl SftpPanel {
             move |_, window, cx| {
                 let name = name_ok.read(cx).value().trim().to_string();
                 if name.is_empty() {
-                    window.push_notification("Folder name cannot be empty.", cx);
+                    window.push_notification((NotificationType::Warning, "Folder name cannot be empty."), cx);
                     return false;
                 }
                 let path = cwd.join(&name);
@@ -235,13 +236,13 @@ impl SftpPanel {
                 match sftp.mkdir(path) {
                     Ok(()) => {
                         log::info!("SftpPanel: mkdir OK");
-                        window.push_notification(format!("Folder \"{name}\" created."), cx);
+                        window.push_notification((NotificationType::Success, format!("Folder \"{name}\" created.")), cx);
                         panel.update(cx, |this, cx| this.refresh(cx));
                         true
                     }
                     Err(e) => {
                         log::error!("SftpPanel: mkdir failed: {e}");
-                        window.push_notification(format!("Create folder failed: {e}"), cx);
+                        window.push_notification((NotificationType::Error, format!("Create folder failed: {e}")), cx);
                         false
                     }
                 }
@@ -302,7 +303,7 @@ impl SftpPanel {
             Some(e) => e.clone(),
             None => {
                 log::warn!("SftpPanel::do_properties: no selection");
-                window.push_notification("Select a file or folder to view properties.", cx);
+                window.push_notification((NotificationType::Warning, "Select a file or folder to view properties."), cx);
                 return;
             }
         };
@@ -314,7 +315,7 @@ impl SftpPanel {
             Ok(s) => s,
             Err(e) => {
                 log::error!("SftpPanel: stat failed: {e}");
-                window.push_notification(format!("Failed to get properties: {e}"), cx);
+                window.push_notification((NotificationType::Error, format!("Failed to get properties: {e}")), cx);
                 return;
             }
         };

@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 
 use gpui::{Context, Window};
-use gpui_component::WindowExt as _;
+use gpui_component::{WindowExt as _, notification::NotificationType};
 
 use super::panel::SftpPanel;
 use super::types::{TransferDirection, TransferItem, TransferStatus};
@@ -253,7 +253,7 @@ impl SftpPanel {
             Some(e) => e.clone(),
             None => {
                 log::warn!("SftpPanel::do_download: no selection");
-                window.push_notification("Select a file or folder to download.", cx);
+                window.push_notification((NotificationType::Warning, "Select a file or folder to download."), cx);
                 return;
             }
         };

@@ -6,7 +6,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::{Hsla, IntoElement, MouseButton, ParentElement as _, SharedString, Styled, div, px};
 use gpui_component::{
     ActiveTheme as _, Colorize as _, Icon, IconName, Sizable as _, WindowExt as _, h_flex,
-    list::ListItem, menu::PopupMenuItem, tree::tree,
+    list::ListItem, menu::PopupMenuItem, notification::NotificationType, tree::tree,
 };
 
 use crate::actions::NewSession;
@@ -216,7 +216,7 @@ impl SessionPanel {
                             SshSessionStore::global(cx).update(cx, |s, cx| {
                                 s.remove(store_ix, cx);
                             });
-                            window.push_notification("SSH session deleted.", cx);
+                            window.push_notification((NotificationType::Success, "SSH session deleted."), cx);
                         }))
                         .separator()
                         .item(
