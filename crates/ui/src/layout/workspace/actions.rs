@@ -128,7 +128,7 @@ impl super::OneTermWorkspace {
                 .description(format!(
                     "OneTerm v{}\n\nA terminal application for local and SSH sessions.\n\
                      Built with GPUI + alacritty_terminal.",
-                    env!("CARGO_PKG_VERSION")
+                    env!("ONETERM_VERSION")
                 ))
                 .button_props(DialogButtonProps::default().ok_text("Close"))
         });

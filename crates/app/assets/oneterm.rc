@@ -1,27 +1,26 @@
-// Windows resource script cho OneTerm.
+// Windows resource script template for OneTerm.
 //
-// Nhúng app icon (đa độ phân giải) vào tài nguyên của exe (oneterm-debug ở dev, oneterm ở release).
-// Windows Explorer / taskbar / Alt-Tab sẽ chọn kích thước phù hợp nhất.
+// WARNING: This is a TEMPLATE — it is NOT compiled directly. build.rs
+// (crates/app/build.rs) reads this file, substitutes the {{...}} placeholders
+// with real values (version from the repo-root VERSION file, absolute icon
+// paths), writes the result to OUT_DIR, and compiles that generated file.
 //
-// Path trong .rc **phải** tương đối so với vị trí file .rc này.
-// File này nằm ở: crates/app/assets/oneterm.rc
-// Icon nằm ở:     crates/app/assets/icons/*.ico
+// Placeholders:
+//   {{ASSETS_DIR}}    -> absolute path to crates/app/assets (for icon paths)
+//   {{VERSION_COMMA}} -> 4 comma-separated ints, e.g. "0,1,0,0" (FILEVERSION/PRODUCTVERSION)
+//   {{VERSION_STR}}   -> 4 dot-separated ints,   e.g. "0.1.0.0" (FileVersion/ProductVersion string)
 //
-// Hai bin target (xem crates/app/Cargo.toml): oneterm-debug (dev, feature dev-bin)
-// và oneterm (release, feature release-bin). Cả hai đều nhúng cùng resource này.
-// Version info dưới đây mô tả artifact release (OneTerm).
-
-// ID thấp nhất ⇒ icon mặc định của executable trong Explorer.
-APP_ICON_48 ICON "icons/terminal-48x48.ico"
-APP_ICON_96 ICON "icons/terminal-96x96.ico"
+// Lowest ID => default executable icon in Explorer.
+APP_ICON_48 ICON "{{ASSETS_DIR}}/icons/terminal-48x48.ico"
+APP_ICON_96 ICON "{{ASSETS_DIR}}/icons/terminal-96x96.ico"
 
 #include <windows.h>
 
-// Version info — hiển thị trong Properties > Details của exe.
-#define VER_FILEVERSION            0,0,1,0
-#define VER_FILEVERSION_STR        "0.0.1.0"
-#define VER_PRODUCTVERSION         0,0,1,0
-#define VER_PRODUCTVERSION_STR     "0.0.1.0"
+// Version info — shown in the exe's Properties > Details tab.
+#define VER_FILEVERSION            {{VERSION_COMMA}}
+#define VER_FILEVERSION_STR        "{{VERSION_STR}}"
+#define VER_PRODUCTVERSION         {{VERSION_COMMA}}
+#define VER_PRODUCTVERSION_STR     "{{VERSION_STR}}"
 
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION    VER_FILEVERSION
