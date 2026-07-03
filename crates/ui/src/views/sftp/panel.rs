@@ -23,7 +23,7 @@ use gpui_component::dock::{Panel, PanelControl, PanelEvent};
 use gpui_component::input::{InputEvent, InputState};
 use gpui_component::table::{TableEvent, TableState};
 
-use oneterm_core::{FileEntry, SftpBackend};
+use oneterm_core::{CwdSource, FileEntry, SftpBackend};
 
 use crate::state::AppState;
 
@@ -41,6 +41,10 @@ pub struct SftpPanel {
 
     // ── SFTP backend state ──────────────────────────────────
     pub(crate) sftp: Option<Arc<dyn SftpBackend>>,
+
+    /// Live cwd source of the active terminal tab (OSC 7). Read on demand by the
+    /// "sync to terminal cwd" toolbar button. `None` = no cwd available.
+    pub(crate) cwd_source: Option<Arc<dyn CwdSource>>,
 
     // ── File tree state ─────────────────────────────────────
     pub(crate) cwd: PathBuf,
@@ -94,6 +98,9 @@ impl SftpPanel {
 
         cx.observe(&app_state, |this, state, cx| {
             let new_sftp = state.read(cx).active_sftp.clone();
+            // Always track the active terminal's cwd source (may change with the tab
+            // even when the SFTP backend does not).
+            this.cwd_source = state.read(cx).active_cwd_source.clone();
             if sftp_changed(&this.sftp, &new_sftp) {
                 log::info!(
                     "SftpPanel: SFTP backend changed — old={}, new={}",
@@ -128,6 +135,7 @@ impl SftpPanel {
         Self {
             focus_handle,
             sftp: None,
+            cwd_source: None,
             cwd: PathBuf::new(),
             table,
             selected: None,
@@ -356,6 +364,34 @@ impl SftpPanel {
     pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
         log::debug!("SftpPanel::refresh: refreshing \"{}\"", self.cwd.display());
         self.load_dir(self.cwd.clone(), cx);
+    }
+
+    /// The current working directory of the active terminal (OSC 7), read live.
+    /// Used to compute the "sync" button's enabled state + tooltip.
+    pub(crate) fn terminal_cwd(&self) -> Option<PathBuf> {
+        self.cwd_source.as_ref().and_then(|s| s.cwd())
+    }
+
+    /// Navigate the SFTP browser to the active terminal's current directory.
+    /// No-op if there is no SFTP connection or the terminal has not reported a cwd.
+    pub(crate) fn sync_to_terminal_cwd(&mut self, cx: &mut Context<Self>) {
+        if self.sftp.is_none() {
+            return;
+        }
+        let cwd = match self.terminal_cwd() {
+            Some(p) => p,
+            None => {
+                log::debug!("SftpPanel::sync_to_terminal_cwd: terminal cwd unavailable");
+                return;
+            }
+        };
+        log::info!(
+            "SftpPanel::sync_to_terminal_cwd: \"{}\" → \"{}\"",
+            self.cwd.display(),
+            cwd.display()
+        );
+        // `goto_path` stats the path (dir check) + handles errors + load_dir.
+        self.goto_path(cwd, cx);
     }
 
     /// Navigate into a subdirectory (double-click a folder).

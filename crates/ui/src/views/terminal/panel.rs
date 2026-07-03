@@ -237,9 +237,12 @@ impl Panel for TerminalPanel {
         // and set it into AppState.active_sftp for SftpPanel to observe.
         // The next active tab will overwrite it — no need to set None on deactivate.
         if active {
-            let sftp = self.view.read(cx).session.read(cx).sftp();
+            let session = self.view.read(cx).session.read(cx);
+            let sftp = session.sftp();
+            let cwd_source = session.cwd_source();
             AppState::global(cx).update(cx, |state, cx| {
                 state.active_sftp = sftp;
+                state.active_cwd_source = cwd_source;
                 cx.notify();
             });
         }

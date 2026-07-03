@@ -200,11 +200,32 @@ pub fn connect(
             initial.rows
         );
 
-        channel
-            .request_shell(true)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-        log::info!("SshSession: shell requested");
+        // ── Shell integration (OSC 7 cwd) — silent, via exec ──────
+        // Instead of `request_shell`, run an exec request that:
+        //   1. defines a prompt hook emitting OSC 7 (cwd) + OSC 133;A,
+        //   2. exports it (function + PROMPT_COMMAND) into the environment,
+        //   3. `exec`s the user's interactive login shell, which inherits it.
+        //
+        // Steps 1–2 run in a NON-interactive shell (sshd runs `$SHELL -c <cmd>`),
+        // so there is no readline/PTY echo → completely silent. Unlike the `env`
+        // channel request, this does not depend on sshd `AcceptEnv`.
+        //
+        // bash-oriented (`export -f` + `PROMPT_COMMAND`); zsh/others: no OSC 7 but
+        // harmless. `.bashrc` that overwrites `PROMPT_COMMAND` would defeat it.
+        // Disable via `SshConfig::shell_integration = false`.
+        if cfg.shell_integration {
+            channel
+                .exec(true, SHELL_INTEGRATION_EXEC)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            log::info!("SshSession: shell started via exec (shell integration)");
+        } else {
+            channel
+                .request_shell(true)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            log::info!("SshSession: shell requested");
+        }
 
         // ── Open SFTP channel (optional) ────────────────────────────
         // Open it BEFORE spawning ssh_main_task because the handle is moved into
@@ -313,6 +334,24 @@ async fn open_sftp(
     // 7. Return Arc<SftpSession> — the UI holds this handle.
     Ok(SftpSession::new(sftp_cmd_tx, sftp_event_rx, alive))
 }
+
+/// Exec command used instead of `request_shell` to enable shell integration
+/// **silently**. sshd runs it as `$SHELL -c <cmd>` (non-interactive → no echo):
+///
+/// 1. define `__oneterm_osc7` — emits **OSC 7** (cwd) + **OSC 133;A** (prompt marker),
+/// 2. `export -f __oneterm_osc7` + `PROMPT_COMMAND=__oneterm_osc7` → inherited by the child shell,
+/// 3. print the MOTD (which sshd/PAM only shows for `request_shell`, not `exec`),
+/// 4. `exec` the user's interactive login shell.
+///
+/// Step 3 restores the login banner: PAM caches the dynamic MOTD to
+/// `/run/motd.dynamic` (Ubuntu) plus static `/etc/motd`; we print both, guarded so
+/// missing files are skipped. Absent on non-Ubuntu → simply nothing printed.
+///
+/// bash `printf` expands `\x1b...\x1b\\` (ESC ... ST) at runtime. This is
+/// bash-oriented (`export -f`/`PROMPT_COMMAND`); zsh and other shells simply
+/// won't emit OSC 7 (harmless). A `.bashrc` that overwrites `PROMPT_COMMAND`
+/// would defeat it. Disable via `SshConfig::shell_integration = false`.
+const SHELL_INTEGRATION_EXEC: &str = r#"__oneterm_osc7() { printf '\x1b]7;file://%s%s\x1b\\' "${HOSTNAME:-$(hostname)}" "$PWD"; printf '\x1b]133;A\x1b\\'; }; export -f __oneterm_osc7 2>/dev/null; export PROMPT_COMMAND='__oneterm_osc7'; [ -f /run/motd.dynamic ] && cat /run/motd.dynamic 2>/dev/null; [ -r /etc/motd ] && cat /etc/motd 2>/dev/null; exec "${SHELL:-/bin/bash}" -il"#;
 
 /// Load a private key from a file, decrypting with the passphrase if needed.
 fn load_private_key(

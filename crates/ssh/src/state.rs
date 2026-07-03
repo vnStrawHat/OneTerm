@@ -56,3 +56,24 @@ pub type SharedState = Arc<Mutex<SessionState>>;
 pub fn new_shared() -> SharedState {
     Arc::new(Mutex::new(SessionState::default()))
 }
+
+/// Live cwd reader shared with the UI — reads `SessionState.cwd` (OSC 7) on demand.
+///
+/// Clones cheaply (`Arc`) and points at the same state the listener updates when
+/// it parses OSC 7, so reads always reflect the latest `cd`. Used by the SFTP
+/// browser's "sync to terminal cwd" button. See `docs/sftp-follow-terminal-cwd.md`.
+pub struct SshCwdSource {
+    state: SharedState,
+}
+
+impl SshCwdSource {
+    pub fn new(state: SharedState) -> Self {
+        Self { state }
+    }
+}
+
+impl oneterm_core::CwdSource for SshCwdSource {
+    fn cwd(&self) -> Option<PathBuf> {
+        self.state.lock().unwrap().cwd.clone()
+    }
+}

@@ -395,4 +395,11 @@ impl TerminalSession for SshSession {
             .clone()
             .map(|s| s as std::sync::Arc<dyn SftpBackend>)
     }
+
+    // ── Cwd source ──────────────────────────────────────────
+    fn cwd_source(&self) -> Option<std::sync::Arc<dyn oneterm_core::CwdSource>> {
+        Some(std::sync::Arc::new(crate::state::SshCwdSource::new(
+            self.state.clone(),
+        )))
+    }
 }

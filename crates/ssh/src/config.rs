@@ -41,6 +41,11 @@ pub struct SshConfig {
     pub username: String,
     /// Authentication method.
     pub auth: SshAuthMethod,
+    /// Inject shell integration (OSC 7 cwd + OSC 133 prompt markers) into the
+    /// remote shell right after the shell starts. Enables the SFTP "sync to
+    /// terminal cwd" button on servers whose shell does not emit OSC 7 by default.
+    /// Idempotent + shell-guarded (bash/zsh); no-op on unrecognized shells.
+    pub shell_integration: bool,
 }
 
 // ── Debug impl (mask password) ──────────────────────────────────────

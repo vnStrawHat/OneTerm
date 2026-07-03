@@ -33,6 +33,6 @@ pub use osc_color::{
 };
 pub use palette::{TerminalPalette, extended_indexed_color, indexed_default_color, resolve_color};
 pub use session::{
-    CursorBounds, NetStats, SessionEvent, TerminalInfo, TerminalSession, parse_keystroke,
+    CursorBounds, CwdSource, NetStats, SessionEvent, TerminalInfo, TerminalSession, parse_keystroke,
 };
 pub use url::{link_ranges, url_at};

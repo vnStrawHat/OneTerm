@@ -13,7 +13,7 @@ use gpui::{
     Render, Styled, Window, div,
 };
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::Input,
@@ -101,6 +101,15 @@ impl SftpPanel {
             theme.danger
         } else {
             theme.border
+        };
+
+        // "Sync to terminal cwd" button state — read the terminal's live cwd.
+        let terminal_cwd = self.terminal_cwd();
+        let sync_enabled = terminal_cwd.is_some();
+        let sync_tooltip = match &terminal_cwd {
+            Some(p) => format!("Go to terminal's current directory: {}", p.display()),
+            None => "Terminal has not reported a directory (needs shell integration / OSC 7)"
+                .to_string(),
         };
 
         // Build "..." menu — toolbar actions + Columns config.
@@ -266,6 +275,18 @@ impl SftpPanel {
                     .ghost()
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.navigate_parent(cx);
+                    })),
+            )
+            // Sync-to-terminal-cwd button — jump SFTP to the SSH shell's cwd.
+            .child(
+                Button::new("sftp-sync-cwd")
+                    .icon(Icon::new(AppIcon::FolderSync).small())
+                    .small()
+                    .ghost()
+                    .disabled(!sync_enabled)
+                    .tooltip(sync_tooltip)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.sync_to_terminal_cwd(cx);
                     })),
             )
             // Refresh button

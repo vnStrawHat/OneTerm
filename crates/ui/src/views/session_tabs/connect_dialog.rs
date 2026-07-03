@@ -239,6 +239,7 @@ fn on_connect_click(
         port,
         username,
         auth,
+        shell_integration: true,
     };
     let label = session.label.clone();
 

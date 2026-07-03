@@ -12,7 +12,7 @@ pub use config::{LocalShellConfig, ShellKind, home_dir};
 pub use error::AppError;
 pub use sftp::{FileEntry, FileStat, SftpBackend};
 pub use terminal::{
-    CursorBounds, DynamicColors, NetStats, SessionEvent, TerminalInfo, TerminalProgress,
+    CursorBounds, CwdSource, DynamicColors, NetStats, SessionEvent, TerminalInfo, TerminalProgress,
     TerminalSession,
 };
 

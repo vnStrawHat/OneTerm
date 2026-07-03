@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use gpui::{App, AppContext, Entity, Global, WeakEntity};
 use gpui_component::dock::DockArea;
-use oneterm_core::SftpBackend;
+use oneterm_core::{CwdSource, SftpBackend};
 
 /// The application's global state.
 #[derive(Default)]
@@ -25,6 +25,11 @@ pub struct AppState {
     /// `None` = the active tab has no SFTP (local shell or an SSH that does not support SFTP).
     /// Set by `TerminalPanel::set_active(true)` — overwrites the old value when the tab changes.
     pub active_sftp: Option<Arc<dyn SftpBackend>>,
+    /// Live cwd source of the active terminal tab (OSC 7).
+    /// `None` = the active tab does not expose a cwd (local shell, or SSH without OSC 7 yet).
+    /// Set by `TerminalPanel::set_active(true)` alongside `active_sftp`.
+    /// Used by the SFTP browser's "sync to terminal cwd" button.
+    pub active_cwd_source: Option<Arc<dyn CwdSource>>,
 }
 
 /// Global wrapper for `Entity<AppState>`.

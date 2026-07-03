@@ -83,6 +83,18 @@ pub enum SessionEvent {
     Bell,
 }
 
+/// Live source of a session's current working directory (OSC 7).
+///
+/// Lets the UI read the cwd on demand without holding a reference to the session
+/// entity or importing the `ssh`/`local` crates. Backends provide an `Arc<dyn CwdSource>`
+/// that shares the same state the OSC 7 parser updates, so reads are always live.
+///
+/// Used by the SFTP browser's "sync to terminal cwd" button.
+pub trait CwdSource: Send + Sync {
+    /// The current working directory (OSC 7). `None` if no OSC 7 has been received.
+    fn cwd(&self) -> Option<PathBuf>;
+}
+
 /// Network statistics for a session (SSH only — local returns `None`).
 /// Used by the StatusBar to display network speed.
 #[derive(Debug, Clone, Copy, Default)]
@@ -271,6 +283,16 @@ pub trait TerminalSession: Send + Sync + 'static {
     /// SFTP backend if the session has an SFTP channel (SSH only).
     /// `None` for a local shell — does not force local sessions to implement SFTP.
     fn sftp(&self) -> Option<Arc<dyn SftpBackend>> {
+        None
+    }
+
+    // ── Cwd source ───────────────────────────────────────
+    /// A live handle for reading this session's cwd (OSC 7), shared with the UI.
+    /// `None` = the session does not expose a cwd source (default). SSH/local
+    /// override this to return an `Arc` wrapping their shared state.
+    ///
+    /// Used by the SFTP browser to jump to the terminal's current directory.
+    fn cwd_source(&self) -> Option<Arc<dyn CwdSource>> {
         None
     }
 }
