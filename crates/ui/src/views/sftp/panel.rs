@@ -67,6 +67,16 @@ pub struct SftpPanel {
     pub(crate) path_error: bool,
     _path_sub: Subscription,
 
+    // ── Auto-follow terminal cwd ────────────────────────────
+    /// When enabled, the SFTP browser automatically navigates to the terminal's
+    /// cwd whenever it changes (OSC 7). Toggled via the "..." menu checkbox.
+    pub(crate) follow_terminal_cwd: bool,
+    /// The last terminal cwd we followed to — used by the polling timer to
+    /// detect changes (avoids redundant `read_dir` when the cwd hasn't moved).
+    pub(crate) last_followed_cwd: Option<PathBuf>,
+    /// Handle for the auto-follow polling task so we can detach it.
+    _follow_task: Option<Task<()>>,
+
     // ── Debounce save table state ───────────────────────────
     _save_table_task: Option<Task<()>>,
     _table_sub: Subscription,
@@ -128,6 +138,19 @@ impl SftpPanel {
         })
         .detach();
 
+        // Auto-follow polling timer — checks terminal cwd every 500ms and
+        // syncs the SFTP browser if follow is enabled and the cwd changed.
+        let _follow_task = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(500))
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    this.maybe_follow_terminal_cwd(cx);
+                });
+            }
+        });
+
         // Path input — display cwd, Enter → goto path.
         let path_input = cx.new(|cx| InputState::new(window, cx).placeholder("Path"));
         let _path_sub = cx.subscribe_in(&path_input, window, Self::on_path_input_event);
@@ -146,6 +169,9 @@ impl SftpPanel {
             path_input,
             path_error: false,
             _path_sub,
+            follow_terminal_cwd: false,
+            last_followed_cwd: None,
+            _follow_task: Some(_follow_task),
             _save_table_task: None,
             _table_sub: table_sub,
         }
@@ -391,6 +417,50 @@ impl SftpPanel {
             cwd.display()
         );
         // `goto_path` stats the path (dir check) + handles errors + load_dir.
+        self.goto_path(cwd, cx);
+    }
+
+    /// Toggle the auto-follow-terminal-cwd flag (from the "..." menu checkbox).
+    pub(crate) fn toggle_follow_terminal_cwd(&mut self, cx: &mut Context<Self>) {
+        self.follow_terminal_cwd = !self.follow_terminal_cwd;
+        log::info!(
+            "SftpPanel: auto-follow terminal cwd {}",
+            if self.follow_terminal_cwd { "enabled" } else { "disabled" }
+        );
+        // When enabling, immediately attempt a follow so the browser jumps to
+        // the terminal's cwd right away (instead of waiting up to 500ms).
+        if self.follow_terminal_cwd {
+            self.maybe_follow_terminal_cwd(cx);
+        }
+        cx.notify();
+    }
+
+    /// Polling hook — called by the auto-follow timer. If follow is enabled and
+    /// the terminal's cwd has changed (and differs from the browser's cwd),
+    /// navigate the SFTP browser to the new cwd.
+    fn maybe_follow_terminal_cwd(&mut self, cx: &mut Context<Self>) {
+        if !self.follow_terminal_cwd || self.sftp.is_none() {
+            return;
+        }
+        let cwd = match self.terminal_cwd() {
+            Some(p) => p,
+            None => return,
+        };
+        // Skip if we already followed this exact cwd (no change since last poll).
+        if self.last_followed_cwd.as_ref() == Some(&cwd) {
+            return;
+        }
+        // Skip if the browser is already showing this directory.
+        if self.cwd == cwd {
+            self.last_followed_cwd = Some(cwd);
+            return;
+        }
+        log::debug!(
+            "SftpPanel::maybe_follow_terminal_cwd: auto-follow \"{}\" → \"{}\"",
+            self.cwd.display(),
+            cwd.display()
+        );
+        self.last_followed_cwd = Some(cwd.clone());
         self.goto_path(cwd, cx);
     }
 

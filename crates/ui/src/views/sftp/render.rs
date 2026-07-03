@@ -17,6 +17,7 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     h_flex,
     input::Input,
+    checkbox::Checkbox,
     menu::{DropdownMenu as _, PopupMenuItem},
     table::DataTable,
     v_flex,
@@ -123,6 +124,8 @@ impl SftpPanel {
             .map(|c| (c.col, c.label.to_string(), c.visible))
             .collect::<Vec<_>>();
 
+        let follow_terminal_cwd = self.follow_terminal_cwd;
+
         let more_btn = Button::new("sftp-more")
             .icon(Icon::new(IconName::EllipsisVertical).small())
             .small()
@@ -220,6 +223,30 @@ impl SftpPanel {
                                 }
                             }),
                     )
+                    .separator()
+                    .item({
+                        let panel = panel.clone();
+                        PopupMenuItem::element(move |_, _cx| {
+                            let panel = panel.clone();
+                            // The popup menu renders an empty icon placeholder (12px) + gap (4px)
+                            // to the left of every ElementItem when other menu items have icons.
+                            // Negate that 16px offset so the Checkbox aligns flush left.
+                            div().w_full().ml_neg_4().child(
+                                Checkbox::new("sftp-follow-cwd")
+                                    .small()
+                                    .label("Follow Terminal Cwd")
+                                    .checked(follow_terminal_cwd)
+                                    .on_click(move |checked: &bool, _, cx| {
+                                        panel.update(cx, |this, cx| {
+                                            // Sync the flag to the checkbox's new state.
+                                            if this.follow_terminal_cwd != *checked {
+                                                this.toggle_follow_terminal_cwd(cx);
+                                            }
+                                        });
+                                    }),
+                            )
+                        })
+                    })
                     .separator();
 
                 // Columns config — a checkbox for each column (Name is always checked + disabled).
