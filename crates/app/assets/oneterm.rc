@@ -10,9 +10,13 @@
 //   {{VERSION_COMMA}} -> 4 comma-separated ints, e.g. "0,1,0,0" (FILEVERSION/PRODUCTVERSION)
 //   {{VERSION_STR}}   -> 4 dot-separated ints,   e.g. "0.1.0.0" (FileVersion/ProductVersion string)
 //
-// Lowest ID => default executable icon in Explorer.
-APP_ICON_48 ICON "{{ASSETS_DIR}}/icons/terminal-48x48.ico"
-APP_ICON_96 ICON "{{ASSETS_DIR}}/icons/terminal-96x96.ico"
+// Numeric resource ID 1 => the default executable icon in Explorer AND the
+// icon gpui's Windows backend loads for every window class (it calls
+// LoadImageW(.., PCWSTR(1), ..) — a NAMED resource like APP_ICON_48 will NOT
+// match, leaving windows with a null/default icon). So the primary icon must
+// use numeric ID 1.
+1 ICON "{{ASSETS_DIR}}/icons/terminal-48x48.ico"
+2 ICON "{{ASSETS_DIR}}/icons/terminal-96x96.ico"
 
 #include <windows.h>
 

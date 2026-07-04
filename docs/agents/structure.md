@@ -21,7 +21,7 @@ OneTerm/
 │   │   ├── Cargo.toml              # name = "oneterm-app", default-run = "oneterm-debug"
 │   │   ├── build.rs                # Build script: embed app icon (.rc) + copy conpty.dll/OpenConsole.exe
 │   │   ├── assets/                 # Runtime resources (Windows)
-│   │   │   ├── oneterm.rc          # Resource script: app icon (48+96) + VS_VERSION_INFO
+│   │   │   ├── oneterm.rc          # Resource script: app icon (numeric ID 1 = gpui window icon + Explorer default) + VS_VERSION_INFO
 │   │   │   ├── conpty.dll         # ConPTY shim (alacritty_terminal LoadLibrary)
 │   │   │   ├── x64/OpenConsole.exe # ConPTY host (Windows Terminal)
 │   │   │   └── icons/             # App icon (multi-resolution, embedded into the exe)
@@ -113,7 +113,7 @@ OneTerm/
 │           │       └── zoom.rs        # Zoom / font-size actions
 │           │
 │           ├── views/              # Major screens (PanelView for the DockArea)
-│           │   ├── mod.rs          # Re-export: SessionPanel, SftpPanel, TerminalPanel
+│           │   ├── mod.rs          # Re-export: SessionPanel, SettingsPanel, SftpPanel, TerminalPanel
 │           │   ├── session_tabs/   # Session management tabs
 │           │   │   ├── mod.rs              # Re-export SessionPanel
 │           │   │   ├── panel.rs            # SessionPanel struct + constructor + Panel/Focusable impls
@@ -134,6 +134,16 @@ OneTerm/
 │           │   │   ├── table_delegate.rs   # TableDelegate for the file list
 │           │   │   ├── render.rs           # impl Render + breadcrumb/toolbar/column-headers/file-list
 │           │   │   └── render_transfer.rs  # Transfer queue rendering + clear
+│           │   ├── settings/       # General Settings UI (opens in a separate window; font, theme, key bindings, terminal, about)
+│           │   │   ├── mod.rs              # Re-export SettingsPanel + open_settings_window
+│           │   │   ├── panel.rs            # SettingsPanel (Render view wrapped in Root by window.rs)
+│           │   │   ├── window.rs           # open_settings_window — standalone WindowHandle<Root>
+│           │   │   ├── general.rs          # General page — UI font size + configurable key bindings group
+│           │   │   ├── key_bindings.rs      # Configurable key bindings (press-to-rebind + reset; persists to ui_config.json)
+│           │   │   ├── terminal.rs         # Terminal page — shell/font groups + page assembly + persist()
+│           │   │   ├── terminal_options.rs  # Terminal page — cursor/layout/scroll/bell/security groups
+│           │   │   ├── appearance.rs       # Appearance page — theme mode + theme list
+│           │   │   └── about.rs            # About page — version + links
 │           │   └── terminal/       # Terminal emulator view (split into themed submodules)
 │           │       ├── mod.rs              # Re-export panel/view + submodules
 │           │       ├── panel.rs            # TerminalPanel (PanelView dock)
@@ -212,11 +222,13 @@ OneTerm/
 │               │   ├── bell.rs           # BellConfig
 │               │   ├── colors.rs         # ColorsConfig
 │               │   └── security.rs       # SecurityConfig (trusted host opts, etc.)
+│               ├── ui_config.rs        # UiConfig (ui_font_size, theme_name, key_bindings) → ui_config.json
 │               └── terminal_settings/    # Live TerminalSettings + mutators applied to sessions
 │                   ├── mod.rs            # TerminalSettings
-│                   ├── apply.rs         # Apply settings to running sessions
-│                   ├── font.rs           # Font live-update
-│                   ├── color.rs         # Color live-update
+│                   ├── apply.rs         # Apply config → settings (config → live)
+│                   ├── persist.rs       # Reverse: settings → config + save() (write terminal.json)
+│                   ├── font.rs           # Font defaults + weight parsing
+│                   ├── color.rs         # Hex color parse/serialize (parse_hex_color + hsla_to_hex)
 │                   └── mutators.rs       # Mutator helpers
 │
 ├── docs/                           # Development documentation
@@ -297,12 +309,6 @@ The items below **do not yet exist** on disk; they are recorded as a roadmap for
         │   │   ├── host_list.rs
         │   │   ├── host_form.rs
         │   │   └── host_card.rs
-        │   └── settings/          # General Settings UI (not yet — only terminal settings_panel exists)
-        │       ├── mod.rs
-        │       ├── general.rs
-        │       ├── terminal.rs
-        │       ├── appearance.rs
-        │       └── about.rs
         └── components/
             ├── confirm_dialog.rs   # Confirm dialog (not yet)
             ├── empty_state.rs      # Empty-state widget (not yet)

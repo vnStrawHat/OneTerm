@@ -11,7 +11,7 @@ use gpui_component::{
 
 use crate::{
     actions::{
-        About, AddPanel, AddSession, AddSftpBrowser, Quit, ToggleAutoHideRightDock,
+        About, AddPanel, AddSession, AddSftpBrowser, OpenSettings, Quit, ToggleAutoHideRightDock,
         ToggleDockToggleButton,
     },
     state::{AppState, TerminalSettings},
@@ -144,6 +144,21 @@ impl super::OneTermWorkspace {
 
         super::set_right_dock_open(&self.dock_area, want_open, window, cx);
         cx.refresh_windows();
+    }
+
+    /// Action handler: open the General Settings UI in a separate window.
+    ///
+    /// The settings window is a standalone `WindowHandle<Root>` wrapping a
+    /// [`SettingsPanel`] (see [`crate::views::settings::open_settings_window`]).
+    /// Closing it does not quit the app — only the main window's `on_release`
+    /// hook does that.
+    pub(crate) fn on_action_open_settings(
+        &mut self,
+        _: &OpenSettings,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        crate::views::settings::open_settings_window(cx).detach();
     }
 
     /// Action handler: Quit.

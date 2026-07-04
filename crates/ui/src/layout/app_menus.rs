@@ -7,8 +7,8 @@ use gpui::{App, Entity, Menu, MenuItem, SharedString, px};
 use gpui_component::{ActiveTheme as _, GlobalState, Theme, ThemeRegistry, menu::AppMenuBar};
 
 use crate::actions::{
-    About, Quit, SelectFont, SelectLocale, SwitchTheme, SwitchThemeMode, ToggleAutoHideRightDock,
-    ToggleGutter,
+    About, OpenSettings, Quit, SelectFont, SelectLocale, SwitchTheme, SwitchThemeMode,
+    ToggleAutoHideRightDock, ToggleGutter,
 };
 use crate::state::TerminalSettings;
 
@@ -101,6 +101,8 @@ fn build_menus(title: impl Into<SharedString>, cx: &App) -> Vec<Menu> {
                 }),
                 theme_menu(cx),
                 language_menu(),
+                MenuItem::Separator,
+                MenuItem::action("Settings...", OpenSettings),
                 MenuItem::Separator,
                 MenuItem::action("Quit", Quit),
             ],

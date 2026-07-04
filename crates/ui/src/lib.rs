@@ -23,6 +23,7 @@ use crate::views::{SessionPanel, SftpPanel, TerminalPanel, TerminalSettingsPanel
 /// dock, root, etc. and `PanelRegistry::init`. This function only adds OneTerm's 3
 /// panels to the registry so `DockArea::load` can restore the previous layout.
 pub fn init(cx: &mut App) {
+    state::UiConfig::init(cx);
     theme::init(cx);
     state::AppState::init(cx);
     state::TerminalSettings::init(cx);

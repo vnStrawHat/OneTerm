@@ -15,7 +15,7 @@ use gpui::{
 };
 use gpui_component::{
     Root,
-    dock::{ClosePanel, DockArea, DockEvent, PanelEvent, ToggleZoom},
+    dock::{DockArea, DockEvent, PanelEvent, ToggleZoom},
 };
 
 use crate::{
@@ -392,10 +392,16 @@ impl OneTermWorkspace {
 
     /// Bind global key bindings for the workspace.
     pub fn bind_keys(cx: &mut App) {
-        cx.bind_keys(vec![
-            KeyBinding::new("shift-escape", ToggleZoom, None),
-            KeyBinding::new("ctrl-w", ClosePanel, None),
-        ]);
+        // Snapshot every key binding registered so far (gpui-component's input /
+        // combobox / dialog bindings, registered during `gpui_component::init`).
+        // `apply_key_bindings` uses this to restore them after `clear_key_bindings`
+        // when a binding is rebound (gpui has no per-binding remove API).
+        let snapshot: Vec<KeyBinding> = cx.key_bindings().borrow().bindings().cloned().collect();
+        cx.set_global(crate::views::settings::KeyBindingsSnapshotGlobal(snapshot));
+        // Build the live key-binding state from the persisted config, then apply
+        // the effective set (snapshot + OneTerm overrides).
+        crate::views::settings::init_state(cx);
+        crate::views::settings::apply_key_bindings(cx);
     }
 }
 
@@ -414,6 +420,7 @@ impl Render for OneTermWorkspace {
             .on_action(cx.listener(Self::on_action_toggle_auto_hide_right_dock))
             .on_action(cx.listener(Self::on_action_quit))
             .on_action(cx.listener(Self::on_action_about))
+            .on_action(cx.listener(Self::on_action_open_settings))
             .relative()
             .size_full()
             .flex()

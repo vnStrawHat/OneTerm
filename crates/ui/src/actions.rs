@@ -28,6 +28,8 @@ actions!(
         AddSftpBrowser,
         /// Open the dialog to create a new SSH session (saved to `ssh_session.json`).
         NewSession,
+        /// Open the General Settings panel (font, theme, key bindings).
+        OpenSettings,
     ]
 );
 

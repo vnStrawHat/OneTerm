@@ -183,7 +183,7 @@ When done, the clean packaged build lives in `dist/oneterm-<triple>/` containing
 - [x] `ssh/sftp`: list / upload / download (via `SftpSession`).
 - [x] `ui`: layout (dock + statusbar + title bar + app menus) + session tabs + SFTP panel + terminal view/settings.
 - [ ] `ui`: host manager + host-list sidebar (host list currently lives in `session_tabs`).
-- [ ] General Settings UI (font, theme, key bindings) — only the terminal settings panel exists so far.
+- [x] General Settings UI (font, theme, key bindings) — wraps the gpui-component `Settings` widget (General / Terminal / Appearance / About pages); UI font size + theme persist to `ui_config.json` (via a `Theme` observer), key bindings are press-to-rebind (persist to `ui_config.json`); opens in a separate window (Ctrl-,). The exe icon uses numeric resource ID 1 so gpui's Windows window-icon loader resolves it (all windows get the app icon).
 - [ ] i18n (en, vi) — `rust-i18n` is wired in the workspace, but no locale files yet.
 - [ ] CI: build & test on macOS / Linux / Windows (a `release.yml` workflow exists; full cross-platform CI matrix pending).
 - [ ] Package an installer (cargo-bundle or cargo-dist).

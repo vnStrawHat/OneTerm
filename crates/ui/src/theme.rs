@@ -66,7 +66,7 @@ const EMBEDDED_THEME_FILES: &[(&str, &str)] = &[
 /// `apply_config` / `Theme::change` reset `list_active` + `list_active_border`
 /// from the theme JSON (or fallback), so this must be called again after each
 /// theme switch.
-fn apply_list_style_override(cx: &mut App) {
+pub(crate) fn apply_list_style_override(cx: &mut App) {
     let theme = Theme::global_mut(cx);
     theme.list_active = theme.list_hover;
     theme.list_active_border = gpui::transparent_black();
@@ -119,8 +119,30 @@ pub fn init(cx: &mut App) {
             let theme = Theme::global_mut(cx);
             theme.dark_theme = dark;
             theme.light_theme = light;
-            // Start in Dark mode with Zed One Dark (the iconic Zed default).
+            // Default startup: Dark mode with Zed One Dark (the iconic Zed default).
             Theme::change(gpui_component::ThemeMode::Dark, None, cx);
+        }
+
+        // Restore the persisted theme (from ui_config.json), if any. This overrides
+        // the Zed default above so the user's last theme choice survives restart.
+        let (saved_theme, saved_font) = {
+            let saved = crate::state::UiConfig::global(cx).read(cx);
+            (saved.theme_name.clone(), saved.ui_font_size)
+        };
+        if let Some(name) = saved_theme.as_ref() {
+            if let Some(theme_config) = ThemeRegistry::global(cx)
+                .themes()
+                .get(name.as_str())
+                .cloned()
+            {
+                Theme::global_mut(cx).apply_config(&theme_config);
+                apply_list_style_override(cx);
+            } else {
+                log::warn!("Saved theme {name:?} not found — using default");
+            }
+        }
+        if let Some(size) = saved_font {
+            Theme::global_mut(cx).font_size = px(size);
         }
     }
 
@@ -156,8 +178,24 @@ pub fn init(cx: &mut App) {
     // so it only needs to be set once at init.
     Theme::global_mut(cx).notification.placement = Anchor::BottomRight;
 
-    // Observe theme changes — placeholder for persisting the theme name later.
-    cx.observe_global::<Theme>(|_cx| {}).detach();
+    // Observe theme changes — persist the theme name + UI font size to ui_config.json
+    // whenever the global Theme is mutated (View ▸ Font Size menu, Appearance page, theme
+    // menus, …). Registered last so the init mutations above don't trigger a save.
+    cx.observe_global::<Theme>(|cx| {
+        let (name, size) = {
+            let theme = cx.theme();
+            (
+                theme.theme_name().to_string(),
+                theme.font_size.as_f32() as f32,
+            )
+        };
+        crate::state::UiConfig::global(cx).update(cx, |cfg, _cx| {
+            cfg.theme_name = Some(name);
+            cfg.ui_font_size = Some(size);
+        });
+        crate::state::UiConfig::persist(cx);
+    })
+    .detach();
 
     let _ = cx.theme();
 }

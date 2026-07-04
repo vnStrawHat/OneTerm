@@ -15,8 +15,9 @@ pub(crate) mod apply;
 pub(crate) mod color;
 pub(crate) mod font;
 pub(crate) mod mutators;
+pub(crate) mod persist;
 
-pub use color::parse_hex_color;
+pub use color::{hsla_to_hex, parse_hex_color};
 pub use font::{default_terminal_font_fallbacks, parse_weight};
 
 /// Terminal cursor shape.
