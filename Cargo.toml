@@ -106,4 +106,3 @@ panic = "unwind"
 gpui = { opt-level = 3 }
 gpui_platform = { opt-level = 3 }
 smol = { opt-level = 3 }
-

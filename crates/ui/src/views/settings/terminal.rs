@@ -9,10 +9,16 @@
 //! The cursor / layout / scroll / bell / security groups live in
 //! [`super::terminal_options`] (split for the ~400-line file guideline).
 
-use gpui::{App, FontWeight, SharedString};
+use gpui::{
+    App, AppContext as _, Entity, FontWeight, IntoElement, SharedString, Styled, Subscription,
+    Window, prelude::FluentBuilder as _,
+};
 use gpui_component::{
-    Icon, IconName,
-    setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage},
+    AxisExt, Disableable, Icon, IconName, Sizable,
+    input::{InputEvent, InputState, NumberInput},
+    setting::{
+        NumberFieldOptions, RenderOptions, SettingField, SettingGroup, SettingItem, SettingPage,
+    },
 };
 use oneterm_core::config::ShellKind;
 
@@ -34,6 +40,7 @@ const FONT_FAMILIES: &[&str] = &[
     "Cascadia Mono",
     "JetBrains Mono",
     "Fira Code",
+    "Lilex",
     "Menlo",
     "Consolas",
     "DejaVu Sans Mono",
@@ -237,25 +244,8 @@ fn font_group() -> SettingGroup {
             .description("Weight of the terminal font."),
         )
         .item(
-            SettingItem::new(
-                "Line Height",
-                SettingField::number_input(
-                    NumberFieldOptions {
-                        min: 1.0,
-                        max: 3.0,
-                        step: 0.1,
-                    },
-                    |cx: &App| TerminalSettings::global(cx).read(cx).line_height_factor as f64,
-                    |val: f64, cx: &mut App| {
-                        TerminalSettings::global(cx).update(cx, |s, cx| {
-                            s.line_height_factor = val as f32;
-                            cx.notify();
-                        });
-                        persist(cx);
-                    },
-                ),
-            )
-            .description("Line height multiplier (1.2 = 120% of the font size)."),
+            SettingItem::new("Line Height", line_height_field())
+                .description("Line height multiplier (1.2 = 120% of the font size)."),
         )
 }
 
@@ -283,4 +273,119 @@ fn weight_to_string(cx: &App) -> String {
 /// helper in `terminal_settings::font`).
 fn parse_weight(s: &str) -> FontWeight {
     crate::state::terminal_settings::parse_weight(s)
+}
+
+// ── Line Height custom number field ─────────────────────────────────────
+//
+// `SettingField::number_input` from gpui-component does NOT propagate
+// `NumberFieldOptions.step` to the internal `InputState` (it defaults to
+// 1.0).  The increment/decrement buttons therefore step by 1 instead of the
+// configured 0.1.
+//
+// To fix this we use `SettingField::render` with a custom `NumberInput` that
+// calls `.step(0.1).min(1.0).max(3.0)` directly on the `InputState`.
+
+/// State held across renders for the custom Line Height number input.
+struct LineHeightInputState {
+    input: Entity<InputState>,
+    initial_value: f64,
+    _subscription: Subscription,
+}
+
+/// Build the "Line Height" setting field using a custom-rendered `NumberInput`
+/// whose increment/decrement buttons step by 0.1 (not the library default of
+/// 1.0).
+///
+/// The displayed value is rounded to 1 decimal place to avoid f32→f64
+/// precision artifacts (e.g. `1.2f32` → `1.2000000476837158f64`).
+fn line_height_field() -> SettingField<SharedString> {
+    SettingField::render(
+        move |options: &RenderOptions, window: &mut Window, cx: &mut App| {
+            // Current value from settings, rounded to 1 decimal place.
+            let value = {
+                let v = TerminalSettings::global(cx).read(cx).line_height_factor as f64;
+                (v * 10.0).round() / 10.0
+            };
+
+            let key = SharedString::from(format!(
+                "line-height-input-{}-{}-{}",
+                options.page_ix, options.group_ix, options.item_ix
+            ));
+
+            let state_entity = window.use_keyed_state(key, cx, |window, cx| {
+                let input = cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .default_value(value.to_string())
+                        .step(0.1)
+                        .min(1.0)
+                        .max(3.0)
+                });
+
+                let _subscription = cx.subscribe_in(&input, window, {
+                    move |state: &mut LineHeightInputState,
+                          input,
+                          event: &InputEvent,
+                          window,
+                          cx| {
+                        if !matches!(event, InputEvent::Change) {
+                            return;
+                        }
+                        input.update(cx, |input, cx| {
+                            let val_str = input.value();
+                            if val_str == state.initial_value.to_string() {
+                                return;
+                            }
+                            if let Ok(val) = val_str.parse::<f64>() {
+                                let rounded = (val * 10.0).round() / 10.0;
+                                let clamped = rounded.clamp(1.0, 3.0);
+                                TerminalSettings::global(cx).update(cx, |s, cx| {
+                                    s.line_height_factor = clamped as f32;
+                                    cx.notify();
+                                });
+                                persist(cx);
+                                state.initial_value = clamped;
+                                if clamped.to_string() != val_str {
+                                    input.set_value(
+                                        SharedString::from(clamped.to_string()),
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            }
+                        });
+                    }
+                });
+
+                LineHeightInputState {
+                    input,
+                    initial_value: value,
+                    _subscription,
+                }
+            });
+
+            // Sync external changes (e.g. config file reload).
+            state_entity.update(cx, |state, cx| {
+                if state.initial_value != value {
+                    state.initial_value = value;
+                    state.input.update(cx, |input, cx| {
+                        input.set_value(SharedString::from(value.to_string()), window, cx);
+                    });
+                }
+            });
+
+            let state = state_entity.read(cx);
+
+            NumberInput::new(&state.input)
+                .disabled(options.disabled)
+                .with_size(options.size)
+                .map(|this| {
+                    if options.layout.is_horizontal() {
+                        this.w_32()
+                    } else {
+                        this.w_full()
+                    }
+                })
+                .into_any_element()
+        },
+    )
 }
