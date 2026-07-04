@@ -68,8 +68,8 @@ cargo build --workspace
 # Release build
 cargo build --workspace --release
 
-# Run the app
-cargo run -p app
+# Run the app (dev binary = oneterm-debug, keeps the console for logs)
+cargo run -p oneterm-app
 
 # Test
 cargo test --workspace
@@ -103,9 +103,9 @@ cargo test --workspace
 
 ### 3.4. Theme & icon
 
-- Theme: create a JSON file in `config/themes/`, register it via `crates/ui/src/theme.rs`.
-- Icon: use [Lucide](https://lucide.dev). Place the SVG at `assets/icons/<name>.svg` where `<name>` matches the name in `IconName` (see `reference/gpui-component/crates/ui/src/icon.rs`).
-- Do not hardcode colors in a component — read from `cx.theme()`.
+- Theme: create a JSON file in `crates/ui/themes/`, then add it to the `BUILTIN_THEMES` list in `crates/ui/src/theme.rs`.
+- Icon: OneTerm ships its own `AppIcon` enum (see `crates/ui/src/icon.rs`). Drop an SVG into `crates/ui/assets/icons/<name>.svg` — `build.rs` + the `icon_named!` macro auto-generate the `AppIcon::<PascalName>` variant (e.g. `arrow-right.svg` → `AppIcon::ArrowRight`). The gpui-component `IconName` (Lucide) set is also available for built-in icons (see `reference/gpui-component/crates/ui/src/icon.rs`).
+- Do not hardcode colors in a component — read from `cx.theme()` / `TerminalTheme`.
 
 ---
 
@@ -174,17 +174,18 @@ When done, the clean packaged build lives in `dist/oneterm-<triple>/` containing
 
 ---
 
-## 6. Expansion roadmap (suggested)
+## 6. Expansion roadmap (status)
 
-- [ ] Workspace skeleton + Cargo.toml + .gitignore + .rustfmt.toml + clippy.toml.
-- [ ] `core`: types + traits (`TerminalSession`, `FileTransfer`).
-- [ ] `local`: a PTY shell that works inside a gpui view.
-- [ ] `ssh`: connect with password + pubkey, shell channel.
-- [ ] `ssh/sftp`: list / upload / download.
-- [ ] `ui`: layout (sidebar + dock + statusbar) + host manager + session tabs.
-- [ ] Settings UI (font, theme, key bindings).
-- [ ] i18n (en, vi).
-- [ ] CI: build & test on macOS / Linux / Windows.
+- [x] Workspace skeleton + Cargo.toml + .gitignore + .rustfmt.toml + workspace lints.
+- [x] `core`: types + traits (`TerminalSession`, `SftpBackend`, `AppError`).
+- [x] `local`: a PTY shell that works inside a gpui view.
+- [x] `ssh`: connect with password + pubkey + agent, shell channel.
+- [x] `ssh/sftp`: list / upload / download (via `SftpSession`).
+- [x] `ui`: layout (dock + statusbar + title bar + app menus) + session tabs + SFTP panel + terminal view/settings.
+- [ ] `ui`: host manager + host-list sidebar (host list currently lives in `session_tabs`).
+- [ ] General Settings UI (font, theme, key bindings) — only the terminal settings panel exists so far.
+- [ ] i18n (en, vi) — `rust-i18n` is wired in the workspace, but no locale files yet.
+- [ ] CI: build & test on macOS / Linux / Windows (a `release.yml` workflow exists; full cross-platform CI matrix pending).
 - [ ] Package an installer (cargo-bundle or cargo-dist).
 
 ---
@@ -199,6 +200,12 @@ When done, the clean packaged build lives in `dist/oneterm-<triple>/` containing
 | Code conventions (style, GPUI, async, error) | [`docs/agents/code-style.md`](docs/agents/code-style.md) |
 | Rev lock, dependencies, reference-first | [`docs/agents/dependencies.md`](docs/agents/dependencies.md) |
 | **Terminal backend design** (local + ssh, alacritty render) | [`docs/terminal-backend.md`](docs/terminal-backend.md) |
+| SSH client connect / auth design | [`docs/ssh-client-connect.md`](docs/ssh-client-connect.md) |
+| SFTP file browser design | [`docs/sftp-browser-design.md`](docs/sftp-browser-design.md) |
+| SFTP-follows-terminal-CWD design | [`docs/sftp-follow-terminal-cwd.md`](docs/sftp-follow-terminal-cwd.md) |
+| OSC sequence support checklist | [`docs/osc-sequences-checklist.md`](docs/osc-sequences-checklist.md) |
+| Terminal rendering optimization | [`docs/terminal-rendering-optimization.md`](docs/terminal-rendering-optimization.md) |
+| Terminal feature gap analysis | [`docs/terminal-gap-analysis.md`](docs/terminal-gap-analysis.md) |
 | gpui-component API overview | `reference/gpui-component/CLAUDE.md` |
 | Component list & source | `reference/gpui-component/crates/ui/src/` |
 | Simple app example | `reference/gpui-component/examples/hello_world/` |

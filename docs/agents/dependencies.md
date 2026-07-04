@@ -13,12 +13,14 @@ The workspace is pinned to the exact rev set verified as compatible by `referenc
 | `gpui` | `https://github.com/zed-industries/zed` | `1d217ee39d381ac101b7cf49d3d22451ac1093fe` | `0.2.2` |
 | `gpui_platform` | `https://github.com/zed-industries/zed` | `1d217ee39d381ac101b7cf49d3d22451ac1093fe` | (same rev — monorepo) |
 | `gpui-component` | `https://github.com/longbridge/gpui-component` | `ea6b194db04cc7c0474851f07c7d5b7a9df6a98b` | `0.5.2` (not tagged yet, currently at HEAD between `v0.5.1` → `v0.5.2`) |
+| `gpui-component-assets` | `https://github.com/longbridge/gpui-component` | `ea6b194db04cc7c0474851f07c7d5b7a9df6a98b` | (same repo/rev as `gpui-component` — built-in icon/font assets) |
 
 > 📌 **Inviolable rules**:
 >
 > 1. `gpui` and `gpui_platform` **must share the same rev** (same `zed-industries/zed` monorepo).
-> 2. Do not add `gpui` from crates.io or any other git source. If you need a feature beyond the 3 crates above → patch upstream or fork locally; do not swap dependencies on a whim.
-> 3. When upstream tags `gpui-component` `v0.5.2`, consider switching the rev → tag for long-term stability.
+> 2. `gpui-component` and `gpui-component-assets` **must share the same rev** (same `longbridge/gpui-component` repo).
+> 3. Do not add `gpui` from crates.io or any other git source. If you need a feature beyond the 4 crates above → patch upstream or fork locally; do not swap dependencies on a whim.
+> 4. When upstream tags `gpui-component` `v0.5.2`, consider switching the rev → tag for long-term stability.
 
 ## 2. Declaration in the workspace `Cargo.toml`
 
@@ -26,8 +28,9 @@ The workspace is pinned to the exact rev set verified as compatible by `referenc
 [workspace.dependencies]
 # GPUI core — same rev, same monorepo
 gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe", features = ["font-kit"] }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "ea6b194db04cc7c0474851f07c7d5b7a9df6a98b" }
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "ea6b194db04cc7c0474851f07c7d5b7a9df6a98b" }
 ```
 
 In each sub-crate (e.g. `crates/ui/Cargo.toml`):
@@ -37,6 +40,7 @@ In each sub-crate (e.g. `crates/ui/Cargo.toml`):
 gpui.workspace = true
 gpui_platform.workspace = true
 gpui-component.workspace = true
+gpui-component-assets.workspace = true
 ```
 
 > ⚠️ **Exact crate name**: in Cargo, the crate name is `gpui_platform` (with an underscore) — not `gpui-platform`. The `use gpui_platform::...` declaration also uses the underscore. See `reference/gpui-component/examples/hello_world/Cargo.toml` for reference (`gpui_platform = { workspace = true }`).
