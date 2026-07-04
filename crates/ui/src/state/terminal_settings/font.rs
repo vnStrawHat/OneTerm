@@ -7,6 +7,7 @@ pub fn default_terminal_font_fallbacks() -> Vec<SharedString> {
     #[cfg(target_os = "windows")]
     {
         vec![
+            "Lilex".into(),
             "Cascadia Mono".into(),
             "Cascadia Code".into(),
             "DejaVu Sans Mono".into(),
@@ -19,6 +20,7 @@ pub fn default_terminal_font_fallbacks() -> Vec<SharedString> {
     #[cfg(target_os = "macos")]
     {
         vec![
+            "Lilex".into(),
             "Menlo".into(),
             "Monaco".into(),
             "Courier New".into(),
@@ -28,6 +30,7 @@ pub fn default_terminal_font_fallbacks() -> Vec<SharedString> {
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         vec![
+            "Lilex".into(),
             "DejaVu Sans Mono".into(),
             "Noto Sans Mono".into(),
             "Ubuntu Mono".into(),
