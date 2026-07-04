@@ -1,14 +1,14 @@
-# Quy ước code — OneTerm
+# Code conventions — OneTerm
 
-> File tách từ `AGENTS.md` (section 4). Mọi rule ở đây là **bắt buộc** khi viết Rust cho project OneTerm.
+> File split from `AGENTS.md` (section 4). Every rule here is **mandatory** when writing Rust for the OneTerm project.
 
 ## 1. Style & format
 
-- Chạy `cargo fmt` trước khi commit. Config trong `.rustfmt.toml`.
-- `cargo clippy --workspace --all-targets -- -D warnings` **phải pass** trước khi merge.
-- Tên: `snake_case` (function, variable, module), `PascalCase` (type, trait, enum variant), `SCREAMING_SNAKE_CASE` (const).
-- Code Comments luôn dùng tiếng Anh
-- Import gộp theo nhóm, cách nhau 1 dòng trống:
+- Run `cargo fmt` before committing. Config lives in `.rustfmt.toml`.
+- `cargo clippy --workspace --all-targets -- -D warnings` **must pass** before merging.
+- Naming: `snake_case` (function, variable, module), `PascalCase` (type, trait, enum variant), `SCREAMING_SNAKE_CASE` (const).
+- Code comments must always be in English.
+- Group imports, separated by a blank line:
 
 ```rust
 use std::sync::Arc;
@@ -19,29 +19,29 @@ use gpui_component::{button::*, *};
 use crate::state::AppState;
 ```
 
-## 2. Quy tắc GPUI
+## 2. GPUI rules
 
-> Chi tiết xem `reference/gpui-component/CLAUDE.md` — đây là nguồn chuẩn cho mọi quyết định về gpui.
+> See `reference/gpui-component/CLAUDE.md` for details — this is the authoritative source for every gpui decision.
 
-- **Entry point bắt buộc**: gọi `gpui_component::init(cx)` trước khi dùng component.
-- **Mọi window** phải bọc view trong `Root::new(view, window, cx)`.
-- **Component stateless ưu tiên `RenderOnce`**, chỉ `Render` khi cần state nội bộ hoặc subscribe event.
-- **Size**: dùng `Sizable` (`xs`/`sm`/`md`/`lg`).
-- **Cursor**: button mặc định `default` cursor (theo desktop convention), chỉ `pointer` khi là link button.
-- **Không** gọi `cx.spawn(...).detach()` mà quên cleanup — track task trong `AppState` nếu cần hủy theo session.
-- **Global state**: dùng `cx.global::<AppState>()` cho data share toàn app; dùng `cx.new(|_| T)` cho entity riêng của view.
+- **Required entry point**: call `gpui_component::init(cx)` before using any component.
+- **Every window** must wrap the view in `Root::new(view, window, cx)`.
+- **Stateless components prefer `RenderOnce`**; use `Render` only when internal state or event subscription is needed.
+- **Size**: use `Sizable` (`xs`/`sm`/`md`/`lg`).
+- **Cursor**: buttons default to the `default` cursor (desktop convention); use `pointer` only for link buttons.
+- **Do not** call `cx.spawn(...).detach()` and forget to clean up — track the task in `AppState` if it needs to be cancelled with the session.
+- **Global state**: use `cx.global::<AppState>()` for data shared across the whole app; use `cx.new(|_| T)` for a view-specific entity.
 
-## 3. Quy tắc async & I/O
+## 3. Async & I/O rules
 
-- Mọi network I/O chạy trong `cx.spawn(async move |cx| { ... })`.
-- Kết quả trả về UI phải đi qua `cx.update(|cx| ...)` hoặc `cx.notify()`.
-- **Không block** main thread. Không `std::sync::Mutex` chứa GPUI entity — dùng channel (`async-channel`) hoặc `smol::lock::Mutex` cho data chia sẻ.
-- Logging dùng `tracing`, không `println!` (trừ khi debug nhanh, xóa trước khi commit).
+- All network I/O runs inside `cx.spawn(async move |cx| { ... })`.
+- Results returned to the UI must go through `cx.update(|cx| ...)` or `cx.notify()`.
+- **Never block** the main thread. Do not put a GPUI entity inside `std::sync::Mutex` — use a channel (`async-channel`) or `smol::lock::Mutex` for shared data.
+- Logging uses `tracing`, not `println!` (except for quick debugging, removed before commit).
 
-## 4. Quy tắc domain
+## 4. Domain rules
 
-- `core` crate **không** phụ thuộc `gpui`, `ssh`, `local`. Nó chỉ chứa struct + trait.
-- `ssh` và `local` đều implement một trait chung, ví dụ:
+- The `core` crate **does not** depend on `gpui`, `ssh`, or `local`. It only holds structs + traits.
+- Both `ssh` and `local` implement a shared trait, for example:
 
 ```rust
 // crates/core/src/terminal/session.rs
@@ -54,10 +54,10 @@ pub trait TerminalSession: Send + Sync {
 }
 ```
 
-- `ui` chỉ biết trait này, không biết `russh` hay `alacritty_terminal::tty`.
+- `ui` only knows this trait; it does not know about `russh` or `alacritty_terminal::tty`.
 
 ## 5. Error handling
 
-- Library crates (`core`, `ssh`, `local`, `ui`) trả `Result<T, AppError>` qua `thiserror`.
-- Binary (`app`) dùng `anyhow` cho `main()`.
-- Không `unwrap()` trong code production. Trong test/example thì được.
+- Library crates (`core`, `ssh`, `local`, `ui`) return `Result<T, AppError>` via `thiserror`.
+- The binary (`app`) uses `anyhow` for `main()`.
+- No `unwrap()` in production code. In tests/examples it is allowed.

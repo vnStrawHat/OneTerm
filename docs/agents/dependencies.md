@@ -1,36 +1,36 @@
 # Dependencies & gpui-component — OneTerm
 
-> File tách từ `AGENTS.md` (sections 2, 7, 11). Chứa thông tin về rev lock, dependency cho phép, cách tích hợp upstream và quy tắc **reference-first research**.
+> File split from `AGENTS.md` (sections 2, 7, 11). Contains information about rev lock, allowed dependencies, how to integrate upstream, and the **reference-first research** rule.
 
 ---
 
-## 1. Rev đã lock (cố định — chỉ đổi khi chủ động upgrade)
+## 1. Locked revs (fixed — only change on an intentional upgrade)
 
-Workspace đang lock đúng bộ rev đã được `reference/gpui-component` (upstream) verify tương thích:
+The workspace is pinned to the exact rev set verified as compatible by `reference/gpui-component` (upstream):
 
 | Crate | Source | Rev | Resolved version |
 |---|---|---|---|
 | `gpui` | `https://github.com/zed-industries/zed` | `1d217ee39d381ac101b7cf49d3d22451ac1093fe` | `0.2.2` |
-| `gpui_platform` | `https://github.com/zed-industries/zed` | `1d217ee39d381ac101b7cf49d3d22451ac1093fe` | (cùng rev — monorepo) |
-| `gpui-component` | `https://github.com/longbridge/gpui-component` | `ea6b194db04cc7c0474851f07c7d5b7a9df6a98b` | `0.5.2` (chưa tag, đang ở HEAD giữa `v0.5.1` → `v0.5.2`) |
+| `gpui_platform` | `https://github.com/zed-industries/zed` | `1d217ee39d381ac101b7cf49d3d22451ac1093fe` | (same rev — monorepo) |
+| `gpui-component` | `https://github.com/longbridge/gpui-component` | `ea6b194db04cc7c0474851f07c7d5b7a9df6a98b` | `0.5.2` (not tagged yet, currently at HEAD between `v0.5.1` → `v0.5.2`) |
 
-> 📌 **Quy tắc bất di bất dịch**:
+> 📌 **Inviolable rules**:
 >
-> 1. `gpui` và `gpui_platform` **phải cùng rev** (cùng monorepo `zed-industries/zed`).
-> 2. Không thêm `gpui` từ crates.io hoặc git khác. Nếu cần tính năng ngoài 3 crate trên → patch upstream hoặc fork cục bộ, đừng tự ý swap dependency.
-> 3. Khi upstream tag `gpui-component` `v0.5.2`, cân nhắc đổi rev → tag để ổn định dài hạn.
+> 1. `gpui` and `gpui_platform` **must share the same rev** (same `zed-industries/zed` monorepo).
+> 2. Do not add `gpui` from crates.io or any other git source. If you need a feature beyond the 3 crates above → patch upstream or fork locally; do not swap dependencies on a whim.
+> 3. When upstream tags `gpui-component` `v0.5.2`, consider switching the rev → tag for long-term stability.
 
-## 2. Khai báo trong `Cargo.toml` workspace
+## 2. Declaration in the workspace `Cargo.toml`
 
 ```toml
 [workspace.dependencies]
-# GPUI core — cùng rev, cùng monorepo
+# GPUI core — same rev, same monorepo
 gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe", features = ["font-kit"] }
 gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "ea6b194db04cc7c0474851f07c7d5b7a9df6a98b" }
 ```
 
-Trong mỗi crate con (vd. `crates/ui/Cargo.toml`):
+In each sub-crate (e.g. `crates/ui/Cargo.toml`):
 
 ```toml
 [dependencies]
@@ -39,36 +39,36 @@ gpui_platform.workspace = true
 gpui-component.workspace = true
 ```
 
-> ⚠️ **Tên crate chính xác**: trong Cargo, tên crate là `gpui_platform` (gạch dưới) — không phải `gpui-platform`. Khai báo `use gpui_platform::...` cũng theo gạch dưới. Xem `reference/gpui-component/examples/hello_world/Cargo.toml` để tham chiếu (`gpui_platform = { workspace = true }`).
+> ⚠️ **Exact crate name**: in Cargo, the crate name is `gpui_platform` (with an underscore) — not `gpui-platform`. The `use gpui_platform::...` declaration also uses the underscore. See `reference/gpui-component/examples/hello_world/Cargo.toml` for reference (`gpui_platform = { workspace = true }`).
 
-## 3. Crate phụ trợ được phép dùng
+## 3. Allowed auxiliary crates
 
-| Mục đích | Crate khuyến nghị |
+| Purpose | Recommended crate |
 |---|---|
 | SSH protocol | `russh` + `russh-sftp` |
-| PTY local shell | `alacritty_terminal::tty` (KHÔNG dùng `portable-pty` — quyết định thiết kế, xem [`docs/terminal-backend.md`](../terminal-backend.md)) |
-| Terminal parser / grid | `alacritty_terminal` (fork `zed-industries/alacritty` @ rev `fcf32feacb367b75ec84dd40f041e4fd411d3cc1` — bản patched có `TerminalContent`/`display_iter`, xem `Cargo.toml` workspace) |
-| Async runtime (re-export) | `smol` / `futures` (đã có sẵn trong gpui) |
+| Local shell PTY | `alacritty_terminal::tty` (do NOT use `portable-pty` — design decision, see [`docs/terminal-backend.md`](../terminal-backend.md)) |
+| Terminal parser / grid | `alacritty_terminal` (fork `zed-industries/alacritty` @ rev `fcf32feacb367b75ec84dd40f041e4fd411d3cc1` — patched build with `TerminalContent`/`display_iter`, see the workspace `Cargo.toml`) |
+| Async runtime (re-export) | `smol` / `futures` (already available in gpui) |
 | Serialization | `serde`, `serde_json`, `toml` |
 | Storage (host list, settings) | `directories` (XDG / AppData) |
 | Logging | `tracing` + `tracing-subscriber` |
 | Error | `anyhow` (binary), `thiserror` (library) |
-| Crypto bổ sung | `russh-cryptovec`, `ssh-key` |
-| i18n | `rust-i18n` (khớp với gpui-component) |
+| Extra crypto | `russh-cryptovec`, `ssh-key` |
+| i18n | `rust-i18n` (matches gpui-component) |
 
-Trước khi thêm crate mới, hỏi: "crate này đã có trong `reference/gpui-component/Cargo.toml` chưa?" Nếu có → dùng luôn rev đã lock. Nếu chưa và là crate mới → mở issue trước khi thêm.
+Before adding a new crate, ask: "is this crate already in `reference/gpui-component/Cargo.toml`?" If yes → use the locked rev. If not and it is a new crate → open an issue before adding it.
 
 ---
 
-## 4. Tích hợp với gpui-component upstream
+## 4. Integrating with gpui-component upstream
 
-Project này dùng gpui-component trực tiếp từ git. Khi upstream đổi API:
+This project uses gpui-component directly from git. When upstream changes its API:
 
-1. Đọc release note / PR diff trong `reference/gpui-component/`.
-2. Cập nhật code tương ứng trong `crates/ui/`.
-3. Nếu thay đổi breaking → cập nhật `CHANGELOG.md` (nếu có) + `docs/architecture.md`.
+1. Read the release note / PR diff in `reference/gpui-component/`.
+2. Update the corresponding code in `crates/ui/`.
+3. If the change is breaking → update `CHANGELOG.md` (if any) + `docs/architecture.md`.
 
-### Tham chiếu nhanh các entry point quan trọng của gpui-component
+### Quick reference for important gpui-component entry points
 
 - `crates/ui/src/dock/` — `DockArea`, `Panel`, `StackPanel`, `TabPanel`.
 - `crates/ui/src/input/` — `InputState`, `Input`.
@@ -79,45 +79,45 @@ Project này dùng gpui-component trực tiếp từ git. Khi upstream đổi AP
 
 ---
 
-## 5. Reference-first research (QUAN TRỌNG)
+## 5. Reference-first research (IMPORTANT)
 
-> 🚨 **RÀNG BUỘC CỨNG**: Khi cần thông tin liên quan đến `gpui` / `gpui-component` (API, pattern, code example, doc, theme, icon, skill, changelog), **agent PHẢI đọc từ `D:\TrungKFC-Research\Rust\myTerm2\reference\gpui-component\` trước tiên**. **Không** dùng `web_search` / `fetch_content` / `code_search` để tra cứu thông tin gpui-component trừ khi đã đọc reference mà vẫn thiếu.
+> 🚨 **HARD CONSTRAINT**: When you need information related to `gpui` / `gpui-component` (API, patterns, code examples, docs, themes, icons, skills, changelogs), **the agent MUST read from `D:\TrungKFC-Research\Rust\myTerm2\reference\gpui-component\` first**. **Do not** use `web_search` / `fetch_content` / `code_search` to look up gpui-component information unless you have already read the reference and it is still missing what you need.
 
-### 5.1. Tại sao
+### 5.1. Why
 
-1. **Khớp version**: `reference/gpui-component` được pin đúng tại rev `ea6b194d...` (khớp `Cargo.lock` của project). Web search có thể trả về docs/code của version cũ / mới hơn → lỗi compile khó debug.
-2. **Đầy đủ tài nguyên**: reference chứa `CLAUDE.md` (agent guide), `crates/ui/src/` (source đầy đủ), `examples/` (11 ví dụ chạy được), `skills/` (knowledge base), `docs/` (en + zh-CN), `.theme-schema.json`, icons, …
-3. **Nhanh hơn**: đọc file local không cần network, không phải parse HTML, có thể `grep` chính xác.
-4. **Tránh hallucination**: web search trả về snippet có thể sai tên method / signature; đọc source thật thì chính xác tuyệt đối.
+1. **Version match**: `reference/gpui-component` is pinned exactly at rev `ea6b194d...` (matches the project's `Cargo.lock`). Web search may return docs/code of an older / newer version → hard-to-debug compile errors.
+2. **Complete resources**: the reference contains `CLAUDE.md` (agent guide), `crates/ui/src/` (full source), `examples/` (11 runnable examples), `skills/` (knowledge base), `docs/` (en + zh-CN), `.theme-schema.json`, icons, …
+3. **Faster**: reading a local file needs no network, no HTML parsing, and you can `grep` precisely.
+4. **Avoid hallucination**: web search returns snippets that may have wrong method names / signatures; reading the real source is absolutely accurate.
 
-### 5.2. Công cụ tra cứu trong reference
+### 5.2. Lookup tools inside the reference
 
 ```bash
-# Tìm file / module liên quan
+# Find files / modules related to something
 find reference/gpui-component -name "*.rs" | xargs grep -l "DockArea"
 find reference/gpui-component -name "*.rs" -path "*dock/*"
 
-# Tìm struct / trait / method
+# Find a struct / trait / method
 grep -rn "pub trait Panel" reference/gpui-component/crates/ui/src/
 grep -rn "fn on_click" reference/gpui-component/crates/ui/src/button/
 
-# Đọc file nguồn
+# Read the source file
 read reference/gpui-component/crates/ui/src/dock/dock.rs
 read reference/gpui-component/CLAUDE.md
 
-# Xem story example cho một component cụ thể
+# Look at the story example for a specific component
 ls reference/gpui-component/crates/story/src/
 grep -rn "Button::new" reference/gpui-component/examples/
 ```
 
-**Tip**: dùng `read` + `grep` + `find` với **đường dẫn tương đối từ `D:\TrungKFC-Research\Rust\myTerm2`** (vd. `reference/gpui-component/...`).
+**Tip**: use `read` + `grep` + `find` with **relative paths from `D:\TrungKFC-Research\Rust\myTerm2`** (e.g. `reference/gpui-component/...`).
 
-### 5.3. Bảng tra cứu nhanh trong reference
+### 5.3. Quick lookup table inside the reference
 
-| Cần biết gì | File cụ thể trong reference |
+| What you need to know | Specific file in the reference |
 |---|---|
 | API overview, init pattern | `reference/gpui-component/CLAUDE.md` |
-| Component list & API | `reference/gpui-component/crates/ui/src/` (chia theo file: `button.rs`, `input/`, `dialog/`, `dock/`, …) |
+| Component list & API | `reference/gpui-component/crates/ui/src/` (split by file: `button.rs`, `input/`, `dialog/`, `dock/`, …) |
 | Icon names | `reference/gpui-component/crates/ui/src/icon.rs` |
 | Theme schema & color tokens | `reference/gpui-component/.theme-schema.json` + `crates/ui/src/theme.rs` |
 | Dock / Panel / Tab system | `reference/gpui-component/crates/ui/src/dock/` |
@@ -125,33 +125,33 @@ grep -rn "Button::new" reference/gpui-component/examples/
 | Form | `reference/gpui-component/crates/ui/src/form/` |
 | Chart | `reference/gpui-component/crates/ui/src/chart/` |
 | WebView | `reference/gpui-component/crates/webview/` + `examples/webview/` |
-| Ví dụ hello world | `reference/gpui-component/examples/hello_world/src/main.rs` |
-| Ví dụ DockArea | `reference/gpui-component/examples/sidebar/src/main.rs` |
-| Skill agent (gpui, gpui-component) | `reference/gpui-component/skills/` |
-| Tài liệu (en) | `reference/gpui-component/docs/docs/` |
-| Tài liệu (zh-CN) | `reference/gpui-component/docs/zh-CN/docs/` |
+| Hello world example | `reference/gpui-component/examples/hello_world/src/main.rs` |
+| DockArea example | `reference/gpui-component/examples/sidebar/src/main.rs` |
+| Agent skills (gpui, gpui-component) | `reference/gpui-component/skills/` |
+| Documentation (en) | `reference/gpui-component/docs/docs/` |
+| Documentation (zh-CN) | `reference/gpui-component/docs/zh-CN/docs/` |
 | Story gallery source | `reference/gpui-component/crates/story/src/` |
 
-### 5.4. Khi nào ĐƯỢC dùng web search
+### 5.4. When you ARE allowed to use web search
 
-Chỉ dùng `web_search` / `fetch_content` / `code_search` cho gpui-component khi:
+Only use `web_search` / `fetch_content` / `code_search` for gpui-component when:
 
-- **Tìm GitHub issue / PR cụ thể** (vd. biết số #2484 → search để đọc full thread).
-- **Tra doc rust crate khác** (vd. `russh`, `alacritty_terminal`, `tokio`) — KHÔNG thuộc gpui-component.
-- **Reference thiếu thông tin** (hiếm, vì reference là mirror đầy đủ).
+- **Looking up a specific GitHub issue / PR** (e.g. you know #2484 → search to read the full thread).
+- **Looking up docs for a different Rust crate** (e.g. `russh`, `alacritty_terminal`, `tokio`) — not part of gpui-component.
+- **The reference is missing information** (rare, since the reference is a complete mirror).
 
-Khi dùng web search cho gpui-component, **luôn ghi rõ trong response** lý do tại sao không tra trong reference.
+When you use web search for gpui-component, **always state clearly in your response** why you could not look it up in the reference.
 
-### 5.5. Cập nhật reference
+### 5.5. Updating the reference
 
-Nếu cần reference mới hơn (vd. upstream ra tag mới):
+If you need a newer reference (e.g. upstream released a new tag):
 
 ```bash
-# Trong D:\TrungKFC-Research\Rust\myTerm2\reference\gpui-component\
+# Inside D:\TrungKFC-Research\Rust\myTerm2\reference\gpui-component\
 git fetch origin
 git checkout <tag-or-rev>
 ```
 
-Sau đó cập nhật rev trong `Cargo.toml` workspace (section 1) cho khớp, và chạy lại `cargo build` để refresh `Cargo.lock`.
+Then update the rev in the workspace `Cargo.toml` (section 1) to match, and re-run `cargo build` to refresh `Cargo.lock`.
 
-> ⚠️ Lệnh `git fetch` / `git checkout` trên reference chỉ chạy trong thư mục `D:\TrungKFC-Research\Rust\myTerm2\reference\gpui-component\` — vẫn nằm trong workspace, không vi phạm ràng buộc "không cd ra ngoài project".
+> ⚠️ The `git fetch` / `git checkout` commands on the reference only run inside the `D:\TrungKFC-Research\Rust\myTerm2\reference\gpui-component\` directory — still inside the workspace, so this does not violate the "do not cd outside the project" constraint.

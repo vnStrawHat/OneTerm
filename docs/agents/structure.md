@@ -1,44 +1,44 @@
-# Cấu trúc dự án — OneTerm
+# Project structure — OneTerm
 
-> File tách từ `AGENTS.md` (section 2). Mô tả cấu trúc workspace, cây thư mục chuẩn, và quy tắc tổ chức file Rust.
+> File split from `AGENTS.md` (section 2). Describes the workspace structure, the canonical directory tree, and the Rust file organization conventions.
 >
-> 📌 Cây thư mục ở §1 phản ánh **trạng thái thực tế trên disk** (commit hiện tại). Các phần **kế hoạch** (chưa tạo) được liệt kê riêng ở §5 để làm roadmap.
+> 📌 The tree in §1 reflects the **actual on-disk state** (current commit). **Planned** parts (not yet created) are listed separately in §5 as a roadmap.
 
-## 1. Cây thư mục (trạng thái thực tế)
+## 1. Directory tree (actual state)
 
 ```
 OneTerm/
 ├── Cargo.toml                      # Workspace root — members + workspace deps + lints
 ├── Cargo.lock
-├── AGENTS.md                       # File entry point cho agent
+├── AGENTS.md                       # Entry-point file for the agent
 ├── .gitignore
 ├── .rustfmt.toml
 │
 ├── crates/
 │   ├── app/                        # Binary: main.rs + wiring
 │   │   ├── Cargo.toml
-│   │   ├── build.rs             # Build script: nhúng app icon (.rc) + copy conpty.dll/OpenConsole.exe
+│   │   ├── build.rs             # Build script: embed app icon (.rc) + copy conpty.dll/OpenConsole.exe
 │   │   ├── assets/              # Runtime resources (Windows)
 │   │   │   ├── oneterm.rc        # Resource script: app icon (48+96) + VS_VERSION_INFO
 │   │   │   ├── conpty.dll       # ConPTY shim (alacritty_terminal LoadLibrary)
 │   │   │   ├── x64/OpenConsole.exe  # ConPTY host (Windows Terminal)
-│   │   │   └── icons/           # App icon (đa độ phân giải, nhúng vào exe)
+│   │   │   └── icons/           # App icon (multi-resolution, embedded into the exe)
 │   │   │       ├── terminal-48x48.ico
 │   │   │       └── terminal-96x96.ico
 │   │   └── src/
-│   │       ├── main.rs             # Entry point — init gpui-component + oneterm_ui, mở window
-│   │       └── window.rs           # open_window(cx) — tạo MainWindow + gắn OneTermWorkspace
+│   │       ├── main.rs             # Entry point — init gpui-component + oneterm_ui, open window
+│   │       └── window.rs           # open_window(cx) — create MainWindow + attach OneTermWorkspace
 │   │
 │   ├── core/                       # Domain model, business logic (no GPUI)
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── lib.rs              # Re-export: AppError, LocalShellConfig, ShellKind, TerminalSession...
 │   │       ├── error.rs            # AppError (thiserror) + Result<T>
-│   │       ├── config/             # Cấu hình terminal (shell cục bộ)
+│   │       ├── config/             # Terminal configuration (local shell)
 │   │       │   ├── mod.rs
 │   │       │   └── shell.rs        # LocalShellConfig + ShellKind + resolve_shell (cmd/pwsh/COMSPEC/chcp)
 │   │       └── terminal/           # Terminal rendering & input helpers (framework-agnostic)
-│   │           ├── mod.rs          # Re-export tất cả submodule
+│   │           ├── mod.rs          # Re-export all submodules
 │   │           ├── session.rs      # TerminalSession trait + SessionEvent + CursorBounds
 │   │           ├── content.rs      # TerminalContent + IndexedCell + TerminalBounds (display iter)
 │   │           ├── palette.rs      # TerminalPalette + resolve_color (ANSI 16/256/truecolor)
@@ -46,49 +46,49 @@ OneTerm/
 │   │           ├── key_encode.rs   # encode_key + KeySpec + NamedKey + KeyMods (keyboard input → ANSI)
 │   │           ├── mouse_encode.rs # encode_mouse_press/release/move/wheel (mouse → ANSI)
 │   │           ├── osc.rs         # OSC 52 (clipboard base64) + parse_cwd_url + OscSink
-│   │           └── url.rs         # link_ranges + url_at (URL detection qua linkify)
+│   │           └── url.rs         # link_ranges + url_at (URL detection via linkify)
 │   │
-│   ├── ssh/                        # Triển khai SSH + SFTP — PLACEHOLDER
+│   ├── ssh/                        # SSH + SFTP implementation — PLACEHOLDER
 │   │   ├── Cargo.toml
 │   │   └── src/
-│   │       └── lib.rs              # Re-export oneterm_core as core (chưa có triển khai russh)
+│   │       └── lib.rs              # Re-export oneterm_core as core (no russh implementation yet)
 │   │
-│   ├── local/                      # Local shell qua PTY (alacritty_terminal::tty + EventLoop/ConPTY)
+│   ├── local/                      # Local shell over PTY (alacritty_terminal::tty + EventLoop/ConPTY)
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── lib.rs              # Re-export LocalSession + LocalListener + PtySize + core
-│   │       ├── session.rs          # LocalSession struct + spawn + helpers + lifecycle (~175 dòng)
-│   │       ├── session_terminal.rs # impl TerminalSession for LocalSession (~334 dòng)
-│   │       ├── session_tests.rs    # Tests for LocalSession (~192 dòng, #[cfg(test)])
+│   │       ├── session.rs          # LocalSession struct + spawn + helpers + lifecycle (~175 lines)
+│   │       ├── session_terminal.rs # impl TerminalSession for LocalSession (~334 lines)
+│   │       ├── session_tests.rs    # Tests for LocalSession (~192 lines, #[cfg(test)])
 │   │       ├── listener.rs         # LocalListener: EventListener impl (forward → SessionEvent)
-│   │       └── state.rs            # State chia sẻ cho local session
+│   │       └── state.rs            # Shared state for the local session
 │   │
-│   └── ui/                         # Toàn bộ GPUI + gpui-component
+│   └── ui/                         # All GPUI + gpui-component
 │       ├── Cargo.toml
-│       ├── themes/                 # JSON theme built-in (2 theme: Zed One Dark, Zed One Light)
+│       ├── themes/                 # Built-in JSON themes (2 themes: Zed One Dark, Zed One Light)
 │       │   ├── zed-one-dark.json
 │       │   └── zed-one-light.json
 │       └── src/
 │           ├── lib.rs              # init(cx): theme + AppState + TerminalSettings + register_panel x4
 │           ├── actions.rs          # UI-level actions (Zed action registration)
-│           ├── theme.rs            # Theme registration + load built-in themes từ crates/ui/themes
+│           ├── theme.rs            # Theme registration + load built-in themes from crates/ui/themes
 │           │
-│           ├── layout/             # Layout chính của app
+│           ├── layout/             # Main app layout
 │           │   ├── mod.rs
-│           │   ├── workspace.rs     # OneTermWorkspace: DockArea tổng + bind_keys
+│           │   ├── workspace.rs     # OneTermWorkspace: DockArea overall + bind_keys
 │           │   ├── title_bar.rs     # Title bar (top)
 │           │   ├── app_menus.rs    # Menu bar (File/Edit/View/...)
 │           │   └── statusbar.rs    # Status bar (bottom)
 │           │
-│           ├── views/              # Các màn hình lớn (PanelView cho DockArea)
+│           ├── views/              # Major screens (PanelView for the DockArea)
 │           │   ├── mod.rs          # Re-export: SessionPanel, SftpPanel, TerminalPanel, TerminalSettingsPanel
-│           │   ├── session_tabs/   # Tab quản lý session
+│           │   ├── session_tabs/   # Session management tabs
 │           │   │   ├── mod.rs              # Re-export SessionPanel
 │           │   │   ├── panel.rs            # SessionPanel struct + constructor + Panel/Focusable impls
 │           │   │   ├── render.rs           # impl Render — header/empty/no-results/final div
 │           │   │   ├── tree_render.rs      # Tree widget rendering — item renderer + context menu
 │           │   │   ├── tree_builder.rs     # build_tree_items + session_matches + helpers
-│           │   │   ├── connect_dialog.rs   # Dialog connect SSH
+│           │   │   ├── connect_dialog.rs   # SSH connect dialog
 │           │   │   ├── group_combo.rs      # GroupComboDelegate + group_combobox widget
 │           │   │   ├── session_dialog.rs   # open_session_dialog + field helper
 │           │   │   └── rename_group.rs     # open_rename_group_dialog
@@ -97,32 +97,32 @@ OneTerm/
 │           │   │   ├── types.rs            # Sort/transfer types + format helpers + column defs
 │           │   │   ├── panel.rs            # SftpPanel struct + constructor + nav + Panel/Focusable impls
 │           │   │   ├── actions.rs          # Rename/delete/new-folder/properties dialogs
-│           │   │   ├── transfer.rs         # Upload/download với progress polling
+│           │   │   ├── transfer.rs         # Upload/download with progress polling
 │           │   │   ├── render.rs           # impl Render + breadcrumb/toolbar/column-headers/file-list
 │           │   │   ├── render_list.rs      # Entry row rendering + context menu
 │           │   │   └── render_transfer.rs  # Transfer queue rendering + clear
 │           │   └── terminal/       # Terminal emulator view
 │           │       ├── mod.rs              # Re-export panel/view/theme + handler modules
-│           │       ├── terminal_view.rs    # LocalTerminalView struct + inherent helpers (~502 dòng)
-│           │       ├── terminal_render.rs  # impl Render + Focusable for LocalTerminalView (~312 dòng)
-│           │       ├── terminal_handlers.rs # Mouse/wheel/key/context-menu handlers (~751 dòng)
-│           │       ├── terminal_input.rs   # Keyboard + vi-mode + scroll shortcuts (~480 dòng)
-│           │       ├── terminal_mouse.rs   # Mouse/selection/wheel helpers (~261 dòng)
-│           │       ├── terminal_ime.rs     # EntityInputHandler impl (~115 dòng)
-│           │       ├── terminal_element.rs        # TerminalElement orchestration (prepain/paint) (~633 dòng)
+│           │       ├── terminal_view.rs    # LocalTerminalView struct + inherent helpers (~502 lines)
+│           │       ├── terminal_render.rs  # impl Render + Focusable for LocalTerminalView (~312 lines)
+│           │       ├── terminal_handlers.rs # Mouse/wheel/key/context-menu handlers (~751 lines)
+│           │       ├── terminal_input.rs   # Keyboard + vi-mode + scroll shortcuts (~480 lines)
+│           │       ├── terminal_mouse.rs   # Mouse/selection/wheel helpers (~261 lines)
+│           │       ├── terminal_ime.rs     # EntityInputHandler impl (~115 lines)
+│           │       ├── terminal_element.rs        # TerminalElement orchestration (prepain/paint) (~633 lines)
 │           │       ├── terminal_element_layout.rs # RowLayoutCache + update_row_cache + layout_selection
 │           │       ├── terminal_element_cell.rs   # Per-cell color/text-run helpers
 │           │       ├── terminal_element_box.rs  # Box-drawing / block / powerline primitives
 │           │       ├── terminal_panel.rs          # TerminalPanel (PanelView dock)
-│           │       ├── terminal_scrollbar.rs      # Scrollbar tuỳ chỉnh cho terminal
-│           │       ├── terminal_settings_panel.rs # TerminalSettingsPanel (dock panel cài đặt)
+│           │       ├── terminal_scrollbar.rs      # Custom scrollbar for the terminal
+│           │       ├── terminal_settings_panel.rs # TerminalSettingsPanel (settings dock panel)
 │           │       └── theme.rs                 # TerminalTheme + build_terminal_theme + resolve_cell_color
 │           │
-│           ├── components/         # UI component tái sử dụng
+│           ├── components/         # Reusable UI components
 │           │   ├── mod.rs
-│           │   └── datetime_clock.rs  # Đồng hồ hiển thị trong statusbar
+│           │   └── datetime_clock.rs  # Clock displayed in the statusbar
 │           │
-│           └── state/              # AppState chia sẻ — Entity<T> state toàn cục
+│           └── state/              # Shared AppState — global Entity<T> state
 │               ├── mod.rs
 │               ├── app_state.rs    # AppState (init global)
 │               ├── terminal_settings.rs  # TerminalSettings (font, scrollback, ...)
@@ -135,62 +135,62 @@ OneTerm/
 │                   ├── bell.rs           # BellConfig
 │                   └── colors.rs         # ColorsConfig
 │
-├── docs/                           # Tài liệu phát triển
-│   ├── gui-layout.md              # Thiết kế layout GUI
-│   ├── terminal-backend.md       # Thiết kế terminal backend (local + ssh, render alacritty)
-│   └── agents/                    # AGENTS files (tách nhỏ)
-│       ├── code-style.md           # Quy ước code
+├── docs/                           # Development documentation
+│   ├── gui-layout.md              # GUI layout design
+│   ├── terminal-backend.md       # Terminal backend design (local + ssh, alacritty render)
+│   └── agents/                    # AGENTS files (split into smaller ones)
+│       ├── code-style.md           # Code conventions
 │       ├── dependencies.md         # Deps + rev lock + reference-first
-│       └── structure.md            # File này
+│       └── structure.md            # This file
 │
-└── reference/                      # Clone local của gpui-component (gitignored)
+└── reference/                      # Local clone of gpui-component (gitignored)
     └── gpui-component/
 ```
 
-## 2. Quy tắc cấu trúc
+## 2. Structure conventions
 
-- **Mỗi file Rust tối đa ~400 dòng.** Nếu vượt → tách module con ngay. Ngược lại, **không tách quá nhỏ** dẫn đến 1 file chỉ có 5–10 dòng. Mỗi file phải có đủ "khối lượng trách nhiệm" để tồn tại độc lập.
-- **Một module, một trách nhiệm.** Tên file = tên module chính (snake_case).
-- **Folder `views/<feature>/`** cho mỗi màn hình lớn: `mod.rs` (re-export + state), `<feature>_view.rs` (Render), `<feature>_panel.rs` (nếu cần dock), `<feature>_element.rs` (nếu custom element).
-- **Folder `components/`** chỉ chứa widget thuần, không phụ thuộc domain.
-- **Folder `state/`** chứa `Entity<T>` state toàn cục; UI chỉ đọc/ghi qua `cx.global::<AppState>()` hoặc `cx.entity::<T>()`.
-- **Theme JSON** đặt tại `crates/ui/themes/<name>.json` (built-in), load qua `crates/ui/src/theme.rs`. Không hardcode màu trong component — đọc từ `cx.theme()` / `TerminalTheme`.
-- **Không** đặt logic giao thức (ssh, local) trong crate `ui`. UI chỉ gọi qua trait abstraction (vd. `TerminalSession`).
-- Shell detection (`resolve_shell`, `ShellKind`, `LocalShellConfig`) thuộc về `core::config::shell`, **không** đặt trong `local` crate.
+- **Each Rust file is at most ~400 lines.** If it exceeds that → split into a submodule immediately. Conversely, **do not split too small** such that a file ends up with only 5–10 lines. Each file must have enough "responsibility mass" to stand on its own.
+- **One module, one responsibility.** The file name = the main module name (snake_case).
+- **Folder `views/<feature>/`** for each major screen: `mod.rs` (re-export + state), `<feature>_view.rs` (Render), `<feature>_panel.rs` (if a dock is needed), `<feature>_element.rs` (if a custom element is needed).
+- **Folder `components/`** holds only pure widgets, with no domain dependency.
+- **Folder `state/`** holds global `Entity<T>` state; the UI only reads/writes it via `cx.global::<AppState>()` or `cx.entity::<T>()`.
+- **Theme JSON** lives at `crates/ui/themes/<name>.json` (built-in), loaded via `crates/ui/src/theme.rs`. Do not hardcode colors in a component — read from `cx.theme()` / `TerminalTheme`.
+- **Do not** put protocol logic (ssh, local) in the `ui` crate. The UI only calls through trait abstractions (e.g. `TerminalSession`).
+- Shell detection (`resolve_shell`, `ShellKind`, `LocalShellConfig`) belongs in `core::config::shell`, **not** in the `local` crate.
 
-## 3. Trách nhiệm từng crate (trạng thái hiện tại)
+## 3. Responsibility of each crate (current state)
 
-| Crate | Phụ thuộc | Trạng thái | Trách nhiệm |
+| Crate | Depends on | Status | Responsibility |
 |---|---|---|---|
-| `app` | `ui`, `ssh`, `local`, `core` | ✅ Skeleton | Binary entry point. `main.rs` init gpui-component + oneterm_ui, mở window. `window.rs` gắn `OneTermWorkspace`. |
-| `core` | _(không — leaf crate)_ | ✅ Đang triển khai | Domain types, `TerminalSession` trait, `SessionEvent`, `AppError`, `LocalShellConfig`/`ShellKind`, terminal helpers (content, palette, key/mouse encode, OSC, URL). Không phụ thuộc `gpui`. |
-| `ssh` | `core` | ⬜ Placeholder | Sẽ triển khai `russh`: client, channel, SFTP, known_hosts, auth. Hiện chỉ re-export `core`. |
-| `local` | `core` | ✅ Đang triển khai | PTY qua `alacritty_terminal::tty` + `EventLoop` (ConPTY trên Windows). `LocalSession` + `LocalListener`. Implement `TerminalSession`. Xem [`docs/terminal-backend.md`](../terminal-backend.md). |
-| `ui` | `core` _(không `ssh`/`local`)_ | ✅ Đang triển khai | Toàn bộ gpui: `OneTermWorkspace` (DockArea), title bar, app menus, statusbar, terminal view/element/scrollbar, session tabs, SFTP panel, AppState, TerminalSettings, theme + 2 built-in themes (Zed One Dark/Light). Giao tiếp `ssh`/`local` qua trait. |
+| `app` | `ui`, `ssh`, `local`, `core` | ✅ Skeleton | Binary entry point. `main.rs` inits gpui-component + oneterm_ui, opens a window. `window.rs` attaches `OneTermWorkspace`. |
+| `core` | _(none — leaf crate)_ | ✅ In progress | Domain types, `TerminalSession` trait, `SessionEvent`, `AppError`, `LocalShellConfig`/`ShellKind`, terminal helpers (content, palette, key/mouse encode, OSC, URL). Does not depend on `gpui`. |
+| `ssh` | `core` | ⬜ Placeholder | Will implement `russh`: client, channel, SFTP, known_hosts, auth. Currently only re-exports `core`. |
+| `local` | `core` | ✅ In progress | PTY via `alacritty_terminal::tty` + `EventLoop` (ConPTY on Windows). `LocalSession` + `LocalListener`. Implements `TerminalSession`. See [`docs/terminal-backend.md`](../terminal-backend.md). |
+| `ui` | `core` _(not `ssh`/`local`)_ | ✅ In progress | All gpui: `OneTermWorkspace` (DockArea), title bar, app menus, statusbar, terminal view/element/scrollbar, session tabs, SFTP panel, AppState, TerminalSettings, theme + 2 built-in themes (Zed One Dark/Light). Talks to `ssh`/`local` via traits. |
 
-> 🔗 **Quy tắc phụ thuộc**: `app → {ui, ssh, local, core}`, `ui → core`, `ssh → core`, `local → core`. Không có cycle, không peer-to-peer giữa `ssh` và `local`.
+> 🔗 **Dependency rule**: `app → {ui, ssh, local, core}`, `ui → core`, `ssh → core`, `local → core`. No cycles, no peer-to-peer between `ssh` and `local`.
 
-## 4. Khi thêm crate / module mới
+## 4. When adding a new crate / module
 
-- Mở issue / TODO trước khi thêm crate mới ngoài 5 crate trên.
-- Tên crate dùng `snake_case`.
-- Mỗi crate mới phải có `Cargo.toml` riêng và là thành viên của workspace (`members = [...]` trong `Cargo.toml` root).
-- Thêm crate vào bảng phụ thuộc ở §3.
-- Cập nhật cây thư mục ở §1.
+- Open an issue / TODO before adding a crate beyond the 5 above.
+- Crate names use `snake_case`.
+- Each new crate must have its own `Cargo.toml` and be a workspace member (`members = [...]` in the root `Cargo.toml`).
+- Add the crate to the dependency table in §3.
+- Update the directory tree in §1.
 
-## 5. Kế hoạch mở rộng cấu trúc (chưa tạo)
+## 5. Planned structure expansion (not yet created)
 
-Các phần dưới đây **chưa tồn tại** trên disk, ghi lại để làm roadmap khi triển khai:
+The sections below **do not yet exist** on disk; they are recorded as a roadmap for implementation:
 
 ```
-# Sẽ thêm khi cần
-├── README.md                       # Chưa có
-├── clippy.toml                     # Chưa có (workspace lints đang设在 Cargo.toml [workspace.lints])
-├── config/                         # Chưa có — file cấu hình mặc định
+# To be added when needed
+├── README.md                       # Not yet
+├── clippy.toml                     # Not yet (workspace lints live in Cargo.toml [workspace.lints])
+├── config/                         # Not yet — default config files
 │   ├── default.toml
-│   └── themes/                      # (built-in themes hiện nằm trong crates/ui/themes/)
-├── assets/                         # Chưa có — tài nguyên tĩnh
-│   ├── icons/                      # SVG icon theo Lucide (đặt tên trùng IconName)
+│   └── themes/                      # (built-in themes currently live in crates/ui/themes/)
+├── assets/                         # Not yet — static assets
+│   ├── icons/                      # Lucide SVG icons (named to match IconName)
 │   ├── fonts/
 │   └── locales/
 │       ├── en.yml                  # i18n (rust-i18n)
@@ -198,10 +198,10 @@ Các phần dưới đây **chưa tồn tại** trên disk, ghi lại để làm
 │
 └── crates/
     ├── app/src/
-    │   ├── app.rs                  # Application struct, global state (chưa tách riêng)
-    │   └── actions.rs             # Global actions / key bindings (hiện gộp trong main.rs)
+    │   ├── app.rs                  # Application struct, global state (not yet split out)
+    │   └── actions.rs             # Global actions / key bindings (currently merged into main.rs)
     │
-    ├── ssh/src/                    # Triển khai russh
+    ├── ssh/src/                    # russh implementation
     │   ├── client.rs              # russh::client wrapper
     │   ├── channel.rs             # Shell channel + resize
     │   ├── sftp.rs                # SFTP subsystem
@@ -209,12 +209,12 @@ Các phần dưới đây **chưa tồn tại** trên disk, ghi lại để làm
     │   └── auth.rs                # password / pubkey / agent
     │
     └── ui/src/
-        ├── root.rs                # Root view wrapper (chưa tách)
+        ├── root.rs                # Root view wrapper (not yet split out)
         ├── icons.rs               # IconName constants
         ├── layout/
-        │   └── sidebar.rs         # Sidebar host list (chưa có)
+        │   └── sidebar.rs         # Host list sidebar (not yet)
         ├── views/
-        │   ├── host_manager/       # Quản lý host
+        │   ├── host_manager/       # Host management
         │   │   ├── mod.rs
         │   │   ├── host_list.rs
         │   │   ├── host_form.rs
@@ -235,4 +235,4 @@ Các phần dưới đây **chưa tồn tại** trên disk, ghi lại để làm
             └── ui_state.rs
 ```
 
-> ⚠️ Khi triển khai các phần trong §5, **cập nhật §1** (chuyển từ "kế hoạch" sang "thực tế") và xoá khỏi §5.
+> ⚠️ When implementing parts of §5, **update §1** (move them from "planned" to "actual") and remove them from §5.
