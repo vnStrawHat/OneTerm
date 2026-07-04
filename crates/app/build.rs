@@ -42,10 +42,15 @@ fn main() {
             let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
             let generated_rc = out_dir.join("oneterm-generated.rc");
 
-            match generate_rc(&rc_template, &generated_rc, &assets_dir, manifest_dir.as_path()) {
+            match generate_rc(
+                &rc_template,
+                &generated_rc,
+                &assets_dir,
+                manifest_dir.as_path(),
+            ) {
                 Ok(()) => {
-                    if let Err(e) =
-                        embed_resource::compile(&generated_rc, embed_resource::NONE).manifest_required()
+                    if let Err(e) = embed_resource::compile(&generated_rc, embed_resource::NONE)
+                        .manifest_required()
                     {
                         println!(
                             "cargo:warning=Failed to embed app icon from {}: {e}",
@@ -101,7 +106,12 @@ fn main() {
 /// template. Writes the generated script to `out`.
 ///
 /// Example: VERSION="0.1.0"  →  comma="0,1,0,0", str="0.1.0.0".
-fn generate_rc(template: &Path, out: &Path, assets_dir: &Path, manifest_dir: &Path) -> std::io::Result<()> {
+fn generate_rc(
+    template: &Path,
+    out: &Path,
+    assets_dir: &Path,
+    manifest_dir: &Path,
+) -> std::io::Result<()> {
     // VERSION lives at the repo root (two levels up from crates/app).
     let repo_root = manifest_dir.ancestors().nth(2).unwrap();
     let version_file = repo_root.join("VERSION");
@@ -137,7 +147,15 @@ fn parse_version_for_rc(version: &str) -> (String, String) {
         parts.push(0);
     }
     parts.truncate(4);
-    let comma = parts.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(",");
-    let dotted = parts.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(".");
+    let comma = parts
+        .iter()
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let dotted = parts
+        .iter()
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(".");
     (comma, dotted)
 }

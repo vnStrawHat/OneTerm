@@ -425,7 +425,11 @@ impl SftpPanel {
         self.follow_terminal_cwd = !self.follow_terminal_cwd;
         log::info!(
             "SftpPanel: auto-follow terminal cwd {}",
-            if self.follow_terminal_cwd { "enabled" } else { "disabled" }
+            if self.follow_terminal_cwd {
+                "enabled"
+            } else {
+                "disabled"
+            }
         );
         // When enabling, immediately attempt a follow so the browser jumps to
         // the terminal's cwd right away (instead of waiting up to 500ms).

@@ -33,7 +33,10 @@ fn main() {
 
     // ── 2. Project version from the repo-root VERSION file ───────────────────
     // crates/ui → crates → repo root (two levels up).
-    let repo_root = manifest.ancestors().nth(2).expect("could not resolve repo root");
+    let repo_root = manifest
+        .ancestors()
+        .nth(2)
+        .expect("could not resolve repo root");
     let version_file = repo_root.join("VERSION");
     let version = fs::read_to_string(&version_file)
         .unwrap_or_else(|e| panic!("failed to read {}: {}", version_file.display(), e))

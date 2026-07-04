@@ -15,9 +15,9 @@ use gpui::{
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
+    checkbox::Checkbox,
     h_flex,
     input::Input,
-    checkbox::Checkbox,
     menu::{DropdownMenu as _, PopupMenuItem},
     table::DataTable,
     v_flex,
