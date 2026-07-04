@@ -74,6 +74,34 @@ pub fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// Root directory holding all JSON settings files.
+///
+/// - **Debug**   → `target/`        (handy for dev — files live inside the repo,
+///   easy to git-ignore, easy to wipe/rebuild).
+/// - **Release** → `~/.OneTerm/`    (standard app location — independent of cwd).
+///   The directory is auto-created (`create_dir_all`) if it does not yet exist,
+///   so the first run after install does not fail to write.
+///
+/// All config files (`terminal.json`, `ssh_session.json`, `ui_config.json`,
+/// `docks.json`) use `config_dir().join("<file>.json")` instead of hardcoding
+/// the path, centralizing path logic in one place.
+pub fn config_dir() -> PathBuf {
+    #[cfg(debug_assertions)]
+    {
+        PathBuf::from("target")
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let home = home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let dir = home.join(".OneTerm");
+        // Create the directory if missing (first release run).
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            log::error!("Failed to create config dir {:?}: {e}", dir);
+        }
+        dir
+    }
+}
+
 impl Default for LocalShellConfig {
     fn default() -> Self {
         Self {

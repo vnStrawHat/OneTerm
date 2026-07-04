@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result};
 use gpui::{Context, Edges, Entity, PromptLevel, Window};
 use gpui_component::dock::{DockArea, DockAreaState};
 
-use super::{MAIN_DOCK_VERSION, SFTP_TABLE_STATE_FIELD, STATE_FILE};
+use super::{MAIN_DOCK_VERSION, SFTP_TABLE_STATE_FIELD, state_file};
 
 impl super::OneTermWorkspace {
     /// Load the layout from a file — used to keep right dock + settings.
@@ -13,7 +13,7 @@ impl super::OneTermWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<()> {
-        let json = std::fs::read_to_string(STATE_FILE)?;
+        let json = std::fs::read_to_string(state_file())?;
         let state = serde_json::from_str::<DockAreaState>(&json)?;
 
         if state.version != Some(MAIN_DOCK_VERSION) {
@@ -71,7 +71,7 @@ pub(crate) fn save_state(
 
     // Preserve `sftp_table_state` from the existing file before overwriting —
     // `views/sftp/persistence.rs` manages this field independently of DockAreaState.
-    let mut raw_sftp_state: Option<serde_json::Value> = std::fs::read_to_string(STATE_FILE)
+    let mut raw_sftp_state: Option<serde_json::Value> = std::fs::read_to_string(state_file())
         .ok()
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
         .and_then(|v| v.get(SFTP_TABLE_STATE_FIELD).cloned());
@@ -109,7 +109,7 @@ pub(crate) fn save_state(
         }
     }
     let json = serde_json::to_string_pretty(&val)?;
-    std::fs::write(STATE_FILE, json)?;
+    std::fs::write(state_file(), json)?;
     Ok(())
 }
 
@@ -117,7 +117,7 @@ pub(crate) fn save_state(
 /// is reset (the center always resets to a new single tab). Returns `None` if the file
 /// does not exist or no panel is zoomed.
 pub(crate) fn read_zoomed_panel() -> Option<String> {
-    let raw = std::fs::read_to_string(STATE_FILE).ok()?;
+    let raw = std::fs::read_to_string(state_file()).ok()?;
     let val: serde_json::Value = serde_json::from_str(&raw).ok()?;
     val.get(super::zoom::ZOOM_FIELD)
         .and_then(|v| v.as_str())
@@ -127,7 +127,7 @@ pub(crate) fn read_zoomed_panel() -> Option<String> {
 /// Read `toggle_button_visible` from `docks.json`. Returns `None` if the file does
 /// not exist or the field is missing.
 pub(crate) fn read_toggle_button_visible() -> Option<bool> {
-    let raw = std::fs::read_to_string(STATE_FILE).ok()?;
+    let raw = std::fs::read_to_string(state_file()).ok()?;
     let val: serde_json::Value = serde_json::from_str(&raw).ok()?;
     val.get(super::TOGGLE_BUTTON_VISIBLE_FIELD)
         .and_then(|v| v.as_bool())

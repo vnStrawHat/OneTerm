@@ -4,13 +4,11 @@
 //! scroll, bell, colors. If the file does not exist → create a default file so the
 //! user can see the available options.
 //!
-//! Path: `target/terminal.json` (debug) / `terminal.json` (release).
-
-use std::path::PathBuf;
+//! Path: `target/terminal.json` (debug) / `~/.OneTerm/terminal.json` (release).
 
 use serde::{Deserialize, Serialize};
 
-use oneterm_core::LocalShellConfig;
+use oneterm_core::{LocalShellConfig, config_dir};
 
 pub mod bell;
 pub mod colors;
@@ -28,12 +26,8 @@ pub use layout::{LayoutConfig, PaddingConfig};
 pub use scroll::ScrollConfig;
 pub use security::SecurityConfig;
 
-// ── Config path ──────────────────────────────────────────────────────
-
-#[cfg(debug_assertions)]
-const CONFIG_FILE: &str = "target/terminal.json";
-#[cfg(not(debug_assertions))]
-const CONFIG_FILE: &str = "terminal.json";
+// File path is resolved at runtime via config_dir().join("terminal.json") —
+// debug → target/, release → ~/.OneTerm/ (see oneterm_core::config_dir).
 
 // ── Top-level config ─────────────────────────────────────────────────
 
@@ -111,7 +105,7 @@ impl TerminalConfig {
     /// Load the config from file. If the file does not exist → create a default + return default.
     /// Supports `//` and `/* */` comments in the JSON.
     pub fn load() -> Self {
-        let path = PathBuf::from(CONFIG_FILE);
+        let path = config_dir().join("terminal.json");
         match std::fs::read_to_string(&path) {
             Ok(raw) => {
                 let json = strip_json_comments(&raw);
@@ -138,7 +132,7 @@ impl TerminalConfig {
 
     /// Save the config to `terminal.json` (pretty-printed, no comments).
     pub fn save(&self) -> std::io::Result<()> {
-        let path = PathBuf::from(CONFIG_FILE);
+        let path = config_dir().join("terminal.json");
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
         std::fs::write(&path, json)?;

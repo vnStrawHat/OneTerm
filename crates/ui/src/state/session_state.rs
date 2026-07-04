@@ -5,20 +5,16 @@
 //! [`crate::views::SessionPanel`]. When the user adds a new session via the
 //! "New Session" dialog, the store updates and re-saves the file.
 //!
-//! Path: `target/ssh_session.json` (debug) / `ssh_session.json` (release)
+//! Path: `target/ssh_session.json` (debug) / `~/.OneTerm/ssh_session.json` (release)
 //! — same pattern as `terminal.json` and `docks.json`.
 
-use std::path::PathBuf;
+use oneterm_core::config_dir;
 
 use gpui::{App, AppContext, Entity, Global};
 use serde::{Deserialize, Serialize};
 
-// ── Config path ──────────────────────────────────────────────────────
-
-#[cfg(debug_assertions)]
-const SESSION_FILE: &str = "target/ssh_session.json";
-#[cfg(not(debug_assertions))]
-const SESSION_FILE: &str = "ssh_session.json";
+// File path is resolved at runtime via config_dir().join("ssh_session.json") —
+// debug → target/, release → ~/.OneTerm/ (see oneterm_core::config_dir).
 
 // ── SshSession ───────────────────────────────────────────────────────
 
@@ -119,7 +115,7 @@ impl SshSessionStore {
     /// Load the session list from `ssh_session.json`.
     /// If the file does not exist or fails to parse → return an empty list.
     fn load() -> Vec<SshSession> {
-        let path = PathBuf::from(SESSION_FILE);
+        let path = config_dir().join("ssh_session.json");
         match std::fs::read_to_string(&path) {
             Ok(raw) => match serde_json::from_str::<Vec<SshSession>>(&raw) {
                 Ok(list) => list,
@@ -138,7 +134,7 @@ impl SshSessionStore {
 
     /// Save the session list to `ssh_session.json` (pretty-printed).
     fn save(&self) {
-        let path = PathBuf::from(SESSION_FILE);
+        let path = config_dir().join("ssh_session.json");
         match serde_json::to_string_pretty(&self.sessions) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&path, json) {

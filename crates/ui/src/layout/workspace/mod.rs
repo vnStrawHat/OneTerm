@@ -94,10 +94,13 @@ pub const TOGGLE_BUTTON_VISIBLE_FIELD: &str = "toggle_button_visible";
 /// `docks.json`. Read/written by `views/sftp/persistence.rs`.
 pub const SFTP_TABLE_STATE_FIELD: &str = "sftp_table_state";
 
-#[cfg(debug_assertions)]
-pub const STATE_FILE: &str = "target/docks.json";
-#[cfg(not(debug_assertions))]
-pub const STATE_FILE: &str = "docks.json";
+/// Path to `docks.json` — resolved at runtime via `config_dir().join(...)`:
+/// debug → `target/docks.json`, release → `~/.OneTerm/docks.json`
+/// (see `oneterm_core::config_dir`). Returns a `PathBuf` so it can be passed
+/// directly to `std::fs::read_to_string` / `std::fs::write` (accepts `AsRef<Path>`).
+pub fn state_file() -> std::path::PathBuf {
+    oneterm_core::config_dir().join("docks.json")
+}
 
 /// Main workspace: title bar + dock area + status bar.
 pub struct OneTermWorkspace {

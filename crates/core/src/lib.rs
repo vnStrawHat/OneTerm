@@ -8,7 +8,7 @@ pub mod error;
 pub mod sftp;
 pub mod terminal;
 
-pub use config::{LocalShellConfig, ShellKind, home_dir};
+pub use config::{LocalShellConfig, ShellKind, config_dir, home_dir};
 pub use error::AppError;
 pub use sftp::{FileEntry, FileStat, SftpBackend};
 pub use terminal::{

@@ -13,5 +13,6 @@ async-channel.workspace = true
 linkify.workspace = true
 base64.workspace = true
 thiserror.workspace = true
+log.workspace = true
 serde.workspace = true
 serde_json.workspace = true

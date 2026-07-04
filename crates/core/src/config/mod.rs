@@ -4,4 +4,4 @@
 
 pub mod shell;
 
-pub use shell::{LocalShellConfig, ShellKind, home_dir, resolve_shell};
+pub use shell::{LocalShellConfig, ShellKind, config_dir, home_dir, resolve_shell};

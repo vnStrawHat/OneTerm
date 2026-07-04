@@ -1,7 +1,7 @@
 //! Persistent UI-level settings — UI font size, theme name, and key bindings.
 //!
 //! Stored in `ui_config.json` (dev: `target/ui_config.json`, release:
-//! `ui_config.json`), mirroring the `terminal.json` pattern. Loaded at startup
+//! `~/.OneTerm/ui_config.json`), mirroring the `terminal.json` pattern. Loaded at startup
 //! (`UiConfig::init`) and applied in `theme::init` (theme name + font size) and
 //! `OneTermWorkspace::bind_keys` (key bindings). Changes are persisted back by:
 //!
@@ -18,13 +18,10 @@ use std::collections::HashMap;
 
 use gpui::{App, AppContext, Entity, Global};
 use serde::{Deserialize, Serialize};
+use oneterm_core::config_dir;
 
-// ── Config path ──────────────────────────────────────────────────────
-
-#[cfg(debug_assertions)]
-const CONFIG_FILE: &str = "target/ui_config.json";
-#[cfg(not(debug_assertions))]
-const CONFIG_FILE: &str = "ui_config.json";
+// File path is resolved at runtime via config_dir().join("ui_config.json") —
+// debug → target/, release → ~/.OneTerm/ (see oneterm_core::config_dir).
 
 // ── Config struct ────────────────────────────────────────────────────
 
@@ -51,7 +48,7 @@ impl UiConfig {
     /// Load the config from file. Missing/unparseable → default (and a default
     /// file is written if absent, like `TerminalConfig::load`).
     pub fn load() -> Self {
-        let path = std::path::PathBuf::from(CONFIG_FILE);
+        let path = config_dir().join("ui_config.json");
         match std::fs::read_to_string(&path) {
             Ok(raw) => serde_json::from_str::<UiConfig>(&raw).unwrap_or_else(|e| {
                 log::error!("ui_config.json parse error: {e} — using defaults");
@@ -71,7 +68,7 @@ impl UiConfig {
 
     /// Save the config to `ui_config.json` (pretty-printed).
     pub fn save(&self) -> std::io::Result<()> {
-        let path = std::path::PathBuf::from(CONFIG_FILE);
+        let path = config_dir().join("ui_config.json");
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
         std::fs::write(&path, json)?;

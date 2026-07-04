@@ -5159,6 +5159,7 @@ dependencies = [
  "async-channel 2.5.0",
  "base64",
  "linkify",
+ "log",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
