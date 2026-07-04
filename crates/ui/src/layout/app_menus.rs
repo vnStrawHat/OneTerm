@@ -155,7 +155,7 @@ fn view_menu_items(cx: &App) -> Vec<MenuItem> {
         // Auto-hide the Right Dock (Session/SFTP browser) when the active tab is a
         // local shell — the dock is only useful for SSH sessions.
         MenuItem::action(
-            "Auto-hide Right Dock on Local Shell",
+            "Auto-hide Right Dock",
             ToggleAutoHideRightDock,
         )
         .checked(
