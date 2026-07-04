@@ -62,6 +62,33 @@ pub fn save_dock_state_on_close(cx: &App) {
 
 pub const MAIN_DOCK_VERSION: usize = 2;
 pub const MAIN_DOCK_ID: &str = "main-dock";
+
+/// Set the Right Dock open/closed (no-op if there is no right dock).
+///
+/// Used by the "Auto-hide Right Dock on Local Shell" feature: when the active
+/// tab is a local shell the right dock (Session/SFTP browser) is collapsed, and
+/// restored when an SSH tab becomes active.
+///
+/// Generic over a [`gpui::AppContext`] so it can be called from both the
+/// workspace action handler and a terminal panel's `set_active` hook. The
+/// `window` is passed explicitly (same pattern as `DockArea::toggle_dock`) so
+/// `Dock::set_open` can defer its collapse on the right window.
+pub(crate) fn set_right_dock_open<C: gpui::AppContext>(
+    dock_area: &Entity<DockArea>,
+    open: bool,
+    window: &mut gpui::Window,
+    cx: &mut C,
+) {
+    let right = cx.read_entity(dock_area, |da, _| da.right_dock().cloned());
+    if let Some(right) = right {
+        right.update(cx, |dock, cx| {
+            if dock.is_open() != open {
+                dock.set_open(open, window, cx);
+            }
+        });
+    }
+}
+
 pub const TOGGLE_BUTTON_VISIBLE_FIELD: &str = "toggle_button_visible";
 /// JSON field storing the SFTP table state (column widths + visibility) in
 /// `docks.json`. Read/written by `views/sftp/persistence.rs`.
@@ -131,6 +158,24 @@ impl OneTermWorkspace {
             Err(_) => {
                 layout::reset_default_layout(weak_dock_area, window, cx);
             }
+        }
+
+        // The initial center tab is always a local shell: the "terminal" panel
+        // registry constructor (`lib.rs::init`) spawns a `LocalSession`, and SSH
+        // sessions don't persist across restarts. `TabPanel::set_active_ix` no-ops
+        // for the first tab (ix == active_ix == 0), so `TerminalPanel::set_active(true)`
+        // never fires at startup — leaving `AppState::active_is_local` at its default
+        // `false` and the Right Dock open. Mirror the real state here and apply the
+        // auto-hide rule immediately so the setting takes effect on launch.
+        let auto_hide = crate::state::TerminalSettings::global(cx)
+            .read(cx)
+            .auto_hide_right_dock_on_local;
+        AppState::global(cx).update(cx, |s, cx| {
+            s.active_is_local = true;
+            cx.notify();
+        });
+        if auto_hide {
+            set_right_dock_open(&dock_area, false, window, cx);
         }
 
         // Mirror toggle_button_visible — `Arc<AtomicBool>` shared between
@@ -366,6 +411,7 @@ impl Render for OneTermWorkspace {
             .on_action(cx.listener(Self::on_action_add_session))
             .on_action(cx.listener(Self::on_action_add_sftp_browser))
             .on_action(cx.listener(Self::on_action_toggle_dock_toggle_button))
+            .on_action(cx.listener(Self::on_action_toggle_auto_hide_right_dock))
             .on_action(cx.listener(Self::on_action_quit))
             .on_action(cx.listener(Self::on_action_about))
             .relative()

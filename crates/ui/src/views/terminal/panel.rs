@@ -226,7 +226,7 @@ impl Panel for TerminalPanel {
         self.tab_panel = Some(tab_panel);
     }
 
-    fn set_active(&mut self, active: bool, _: &mut Window, cx: &mut Context<Self>) {
+    fn set_active(&mut self, active: bool, window: &mut Window, cx: &mut Context<Self>) {
         // `TabPanel` calls this hook when the active tab changes → mirror it for `title()` to use.
         if self.is_active != active {
             self.is_active = active;
@@ -237,14 +237,35 @@ impl Panel for TerminalPanel {
         // and set it into AppState.active_sftp for SftpPanel to observe.
         // The next active tab will overwrite it — no need to set None on deactivate.
         if active {
-            let session = self.view.read(cx).session.read(cx);
-            let sftp = session.sftp();
-            let cwd_source = session.cwd_source();
+            let (sftp, cwd_source, is_local) = {
+                let session = self.view.read(cx).session.read(cx);
+                (session.sftp(), session.cwd_source(), session.is_local())
+            };
             AppState::global(cx).update(cx, |state, cx| {
                 state.active_sftp = sftp;
                 state.active_cwd_source = cwd_source;
+                state.active_is_local = is_local;
                 cx.notify();
             });
+
+            // Auto-hide the Right Dock when this tab is a local shell.
+            // The right dock hosts the Session/SFTP browser, which is only useful
+            // for SSH sessions — hide it on local tabs to reclaim space.
+            let auto_hide = TerminalSettings::global(cx)
+                .read(cx)
+                .auto_hide_right_dock_on_local;
+            if auto_hide {
+                let dock_area = AppState::global(cx)
+                    .read(cx)
+                    .dock_area
+                    .as_ref()
+                    .and_then(|w| w.upgrade());
+                if let Some(dock_area) = dock_area {
+                    crate::layout::workspace::set_right_dock_open(
+                        &dock_area, !is_local, window, cx,
+                    );
+                }
+            }
         }
     }
 }

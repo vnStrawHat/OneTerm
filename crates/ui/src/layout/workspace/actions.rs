@@ -10,7 +10,11 @@ use gpui_component::{
 };
 
 use crate::{
-    actions::{About, AddPanel, AddSession, AddSftpBrowser, Quit, ToggleDockToggleButton},
+    actions::{
+        About, AddPanel, AddSession, AddSftpBrowser, Quit, ToggleAutoHideRightDock,
+        ToggleDockToggleButton,
+    },
+    state::{AppState, TerminalSettings},
     views::{SessionPanel, SftpPanel, TerminalPanel},
 };
 
@@ -106,6 +110,40 @@ impl super::OneTermWorkspace {
         self.dock_area.update(cx, |dock_area, cx| {
             dock_area.set_toggle_button_visible(new_val, cx);
         });
+    }
+
+    /// Action handler: toggle the "Auto-hide Right Dock on Local Shell" setting.
+    ///
+    /// Flips `TerminalSettings::auto_hide_right_dock_on_local` and immediately
+    /// applies the rule based on the currently active tab (`AppState::active_is_local`):
+    ///   - enabled  → open the right dock for SSH tabs, close it for local shells.
+    ///   - disabled → restore the right dock (open).
+    pub(crate) fn on_action_toggle_auto_hide_right_dock(
+        &mut self,
+        _: &ToggleAutoHideRightDock,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let new_val = !TerminalSettings::global(cx)
+            .read(cx)
+            .auto_hide_right_dock_on_local;
+        TerminalSettings::global(cx).update(cx, |st, cx| {
+            st.auto_hide_right_dock_on_local = new_val;
+            cx.notify();
+        });
+
+        let is_local = AppState::global(cx).read(cx).active_is_local;
+        let want_open = if new_val { !is_local } else { true };
+        // Persist to terminal.json (load → mutate only this field → save) so the
+        // preference survives restarts; other fields in the file are preserved.
+        let mut cfg = crate::state::terminal_config::TerminalConfig::load();
+        cfg.layout.auto_hide_right_dock_on_local = new_val;
+        if let Err(e) = cfg.save() {
+            log::warn!("Failed to persist terminal.json: {e}");
+        }
+
+        super::set_right_dock_open(&self.dock_area, want_open, window, cx);
+        cx.refresh_windows();
     }
 
     /// Action handler: Quit.

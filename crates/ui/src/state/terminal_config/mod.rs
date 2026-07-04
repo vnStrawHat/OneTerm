@@ -135,6 +135,16 @@ impl TerminalConfig {
             }
         }
     }
+
+    /// Save the config to `terminal.json` (pretty-printed, no comments).
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = PathBuf::from(CONFIG_FILE);
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        std::fs::write(&path, json)?;
+        log::info!("Saved terminal.json to {path:?}");
+        Ok(())
+    }
 }
 
 #[cfg(test)]

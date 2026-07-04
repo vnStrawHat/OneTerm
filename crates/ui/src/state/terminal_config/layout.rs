@@ -18,6 +18,9 @@ pub struct LayoutConfig {
     /// Enable/disable the gutter (timestamp + line number on the left of the terminal).
     #[serde(default = "default_show_gutter")]
     pub show_gutter: bool,
+    /// Auto-hide the Right Dock when the active tab is a Local Shell.
+    #[serde(default)]
+    pub auto_hide_right_dock_on_local: bool,
 }
 
 impl Default for LayoutConfig {
@@ -27,6 +30,7 @@ impl Default for LayoutConfig {
             cell_width: default_cell_width(),
             padding: PaddingConfig::default(),
             show_gutter: default_show_gutter(),
+            auto_hide_right_dock_on_local: false,
         }
     }
 }

@@ -50,6 +50,7 @@ impl TerminalSettings {
             left: layout.padding.left,
         };
         self.show_gutter = layout.show_gutter;
+        self.auto_hide_right_dock_on_local = layout.auto_hide_right_dock_on_local;
 
         self.shell = cfg.shell.clone();
 
