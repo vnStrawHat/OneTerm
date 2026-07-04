@@ -40,6 +40,8 @@
 3. **Async-first** — all I/O (network, PTY, file) runs asynchronously via `cx.spawn` / `smol` / `tokio`.
 4. **Type-safe state** — use GPUI's `Entity<T>`; avoid sharing `Rc<RefCell<…>>` at the application layer.
 5. **Reference-first research** — when you need to understand APIs, code examples, or docs for `gpui` / `gpui-component`, **always read from `D:\TrungKFC-Research\Rust\myTerm2\reference\gpui-component\`**. See [`docs/agents/dependencies.md` § 5](docs/agents/dependencies.md) for details.
+6. **English-only** — all code, comments, doc comments, commit messages, docs, and any written content in the repository **must be in English**. Do not write Vietnamese (or any other non-English language) anywhere in the codebase. This rule has **zero exceptions**; if you catch yourself writing a non-English comment, rewrite it in English before continuing.
+7. **Scoped searches only** — every filesystem/search-tool invocation **must be scoped to a specific directory or path** (`crates/`, `reference/`, `docs/`, a single file, …). Never run a rootless or disk-wide search: `find /`, `grep -r /`, `rg` from the filesystem root, or any tool that scans the entire disk. These are extremely slow and can be destructive. Pick a concrete project-relative path before searching.
 
 > 📂 **Project structure** (directory tree, file organization conventions, and the inter-crate dependency graph) is split into a separate file: see [`docs/agents/structure.md`](docs/agents/structure.md).
 
@@ -81,7 +83,7 @@ cargo test --workspace
 - ❌ `git clone` outside the workspace.
 - ❌ Any command that modifies files outside `D:\TrungKFC-Research\Rust\myTerm2`.
 - ❌ `rm -rf` without a guard path.
-- ❌ DO NOT use `find /`. ALWAYS SPECIFY THE DIRECTORY TO SEARCH.
+- ❌ **Rootless / disk-wide searches** — `find /`, `grep -r /`, `rg` from the FS root, or any tool called without an explicit scope. **ALWAYS pass a concrete directory path** (e.g. `find crates/ui/src -name '*.rs'`, `grep -rn 'foo' crates/`). This is a hard rule — see Core principle 7.
 
 ### 3.2. Feature workflow
 

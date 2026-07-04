@@ -7,7 +7,7 @@
 - Run `cargo fmt` before committing. Config lives in `.rustfmt.toml`.
 - `cargo clippy --workspace --all-targets -- -D warnings` **must pass** before merging.
 - Naming: `snake_case` (function, variable, module), `PascalCase` (type, trait, enum variant), `SCREAMING_SNAKE_CASE` (const).
-- Code comments must always be in English.
+- **English-only** — all code comments, doc comments (`///`), and any written content in the codebase **must be in English**. Do not write Vietnamese (or any other non-English language) in code. This is a hard rule with zero exceptions (see AGENTS.md Core principle 6).
 - Group imports, separated by a blank line:
 
 ```rust
