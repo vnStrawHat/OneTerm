@@ -13,6 +13,7 @@ use gpui_component::{
     notification::NotificationType,
 };
 
+use crate::notif_ext::notify;
 use crate::state::SshSessionStore;
 
 use super::session_dialog::field;
@@ -39,13 +40,16 @@ pub(crate) fn open_rename_group_dialog(window: &mut Window, cx: &mut App, group_
         move |_, window, cx| {
             let new_name = group_ok.read(cx).value().trim().to_string();
             if new_name.is_empty() {
-                window.push_notification((NotificationType::Warning, "Group name cannot be empty."), cx);
+                window.push_notification(
+                    notify(NotificationType::Warning, "Group name cannot be empty.", cx),
+                    cx,
+                );
                 return false;
             }
             SshSessionStore::global(cx).update(cx, |s, cx| {
                 s.rename_group(&old_name, &new_name, cx);
             });
-            window.push_notification((NotificationType::Success, "Group renamed."), cx);
+            window.push_notification(notify(NotificationType::Success, "Group renamed.", cx), cx);
             true
         }
     });

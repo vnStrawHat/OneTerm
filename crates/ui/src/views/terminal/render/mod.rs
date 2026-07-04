@@ -13,6 +13,7 @@ use gpui_component::{ActiveTheme as _, WindowExt as _, notification::Notificatio
 use super::element::TerminalElement;
 use super::theme::{TerminalTheme, build_terminal_theme};
 use super::view::LocalTerminalView;
+use crate::notif_ext::notify;
 use crate::state::TerminalSettings;
 
 pub(crate) mod overlays;
@@ -30,7 +31,7 @@ impl Render for LocalTerminalView {
         // async subscribe task where they are queued).
         if !self.pending_notifications.is_empty() {
             for msg in std::mem::take(&mut self.pending_notifications) {
-                window.push_notification((NotificationType::Info, msg), cx);
+                window.push_notification(notify(NotificationType::Info, msg, cx), cx);
             }
         }
 

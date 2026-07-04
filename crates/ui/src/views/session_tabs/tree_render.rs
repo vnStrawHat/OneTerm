@@ -10,6 +10,7 @@ use gpui_component::{
 };
 
 use crate::actions::NewSession;
+use crate::notif_ext::notify;
 use crate::state::SshSessionStore;
 
 use super::connect_dialog::open_connect_dialog;
@@ -216,7 +217,10 @@ impl SessionPanel {
                             SshSessionStore::global(cx).update(cx, |s, cx| {
                                 s.remove(store_ix, cx);
                             });
-                            window.push_notification((NotificationType::Success, "SSH session deleted."), cx);
+                            window.push_notification(
+                                notify(NotificationType::Success, "SSH session deleted.", cx),
+                                cx,
+                            );
                         }))
                         .separator()
                         .item(

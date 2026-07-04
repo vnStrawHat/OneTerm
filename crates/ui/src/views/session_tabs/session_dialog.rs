@@ -30,6 +30,7 @@ use gpui_component::{
     v_flex,
 };
 
+use crate::notif_ext::notify;
 use crate::state::{SshSession, SshSessionStore};
 
 use super::group_combo::{GroupComboDelegate, SharedCell, group_combobox};
@@ -165,7 +166,14 @@ pub(crate) fn open_session_dialog(
             let label = label_ok.read(cx).value().trim().to_string();
             let host = host_ok.read(cx).value().trim().to_string();
             if label.is_empty() || host.is_empty() {
-                window.push_notification((NotificationType::Warning, "Label and Host are required."), cx);
+                window.push_notification(
+                    notify(
+                        NotificationType::Warning,
+                        "Label and Host are required.",
+                        cx,
+                    ),
+                    cx,
+                );
                 return false;
             }
             let port: u16 = port_ok
@@ -197,13 +205,14 @@ pub(crate) fn open_session_dialog(
                 None => store.update(cx, |s, cx| s.add(session, cx)),
             }
             window.push_notification(
-                (
+                notify(
                     NotificationType::Success,
                     if is_edit {
                         "SSH session updated."
                     } else {
                         "SSH session saved."
                     },
+                    cx,
                 ),
                 cx,
             );

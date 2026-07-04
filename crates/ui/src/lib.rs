@@ -7,6 +7,7 @@ pub mod actions;
 pub mod components;
 pub mod icon;
 pub mod layout;
+pub mod notif_ext;
 pub mod state;
 pub mod theme;
 pub mod views;

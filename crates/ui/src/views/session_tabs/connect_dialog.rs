@@ -30,7 +30,9 @@ use gpui_component::{
 
 use oneterm_ssh::{PtySize, SshAuthMethod, SshConfig, connect as ssh_connect};
 
+use crate::notif_ext::notify;
 use crate::state::{AppState, SshSession, SshSessionStore};
+
 use crate::views::TerminalPanel;
 
 /// Open the SSH connect dialog.
@@ -202,7 +204,10 @@ fn on_connect_click(
         Some(st) => {
             let raw = st.read(cx).value().trim().to_string();
             if raw.is_empty() {
-                window.push_notification((NotificationType::Warning, "Username is required."), cx);
+                window.push_notification(
+                    notify(NotificationType::Warning, "Username is required.", cx),
+                    cx,
+                );
                 return false;
             }
             parse_user_host_port(&raw, &session.host, session.port)
@@ -261,13 +266,21 @@ fn on_connect_click(
                         );
                         add_ssh_terminal_to_dock(&panel, window, cx);
                         window.push_notification(
-                            (NotificationType::Success, format!("Connected to \"{}\".", label)),
+                            notify(
+                                NotificationType::Success,
+                                format!("Connected to \"{}\".", label),
+                                cx,
+                            ),
                             cx,
                         );
                     }
                     Err(e) => {
                         window.push_notification(
-                            (NotificationType::Error, format!("SSH connect failed: {e}")),
+                            notify(
+                                NotificationType::Error,
+                                format!("SSH connect failed: {e}"),
+                                cx,
+                            ),
                             cx,
                         );
                     }
