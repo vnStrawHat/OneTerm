@@ -87,6 +87,7 @@ impl OscSink {
 
     /// Enqueue a captured payload.
     fn push(&mut self, payload: OscPayload) {
+        log::debug!("OSC captured: {payload:?}");
         self.queue.push(payload);
     }
 
@@ -98,7 +99,7 @@ impl OscSink {
 }
 
 impl Perform for OscSink {
-    fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
+    fn osc_dispatch(&mut self, params: &[&[u8]], bell_terminated: bool) {
         if params.is_empty() {
             return;
         }
@@ -106,6 +107,13 @@ impl Perform for OscSink {
             Ok(s) => s,
             Err(_) => return,
         };
+        let params_debug: Vec<String> = params
+            .iter()
+            .map(|p| String::from_utf8_lossy(p).into_owned())
+            .collect();
+        log::debug!(
+            "OSC dispatch: kind={kind:?}, params={params_debug:?}, bell_terminated={bell_terminated}"
+        );
         match kind {
             // OSC 7: params = ["7", "file://..."]
             "7" if params.len() >= 2 => {
