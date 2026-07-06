@@ -89,6 +89,14 @@ pub(crate) fn paint_terminal(
             }
         }
 
+        // ── Search highlights (under the text, above cell backgrounds) ──
+        for r in &layout.search_rects {
+            let pos = point(cell_x(r.point.column), cell_y(r.point.line));
+            let sz = size(run_w(r.num_cells), line_h_px);
+            window.paint_quad(fill(Bounds::new(pos, sz), r.color));
+            quad_count += 1;
+        }
+
         for r in &layout.selection_rects {
             let pos = point(cell_x(r.point.column), cell_y(r.point.line));
             let sz = size(run_w(r.num_cells), line_h_px);

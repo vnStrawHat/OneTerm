@@ -9,6 +9,7 @@ pub mod layout;
 pub mod panel;
 pub mod render;
 pub mod scrollbar;
+pub mod search;
 pub mod settings_panel;
 pub mod theme;
 pub mod url;

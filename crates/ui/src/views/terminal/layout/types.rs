@@ -46,6 +46,9 @@ pub(crate) struct GutterEntry {
 /// Layout info computed in prepaint → paint.
 pub(crate) struct LayoutState {
     pub selection_rects: Vec<LayoutRect>,
+    /// Search highlight rects (display coordinates). Painted under the text,
+    /// above the cell background.
+    pub search_rects: Vec<LayoutRect>,
     pub cursor: Option<CursorPaint>,
     pub background: Hsla,
     pub cell_width: Pixels,

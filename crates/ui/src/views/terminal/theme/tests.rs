@@ -50,6 +50,8 @@ mod tests {
             gutter_bg: Hsla::black(),
             clock_fg: Hsla::white(),
             line_number_fg: Hsla::white(),
+            search_match: gpui::hsla(0.13, 0.85, 0.5, 0.35),
+            search_active: gpui::hsla(0.13, 0.9, 0.55, 0.7),
         };
         let h = resolve_cell_color(&Color::Named(NamedColor::Red), &t);
         let rgba = h.to_rgb();
@@ -68,6 +70,8 @@ mod tests {
             gutter_bg: Hsla::black(),
             clock_fg: Hsla::white(),
             line_number_fg: Hsla::white(),
+            search_match: gpui::hsla(0.13, 0.85, 0.5, 0.35),
+            search_active: gpui::hsla(0.13, 0.9, 0.55, 0.7),
         };
         let h = resolve_cell_color(&Color::Spec(VteRgb { r: 1, g: 2, b: 3 }), &t);
         let rgba = h.to_rgb();

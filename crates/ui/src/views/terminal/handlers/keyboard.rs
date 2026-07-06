@@ -29,6 +29,19 @@ pub(crate) fn attach_key(
         move |e: &KeyDownEvent, _w, cx: &mut App| {
             let mods = e.keystroke.modifiers;
 
+            // ── Search (Ctrl+F) ──
+            if mods.control && !mods.shift && !mods.alt && e.keystroke.key.as_str() == "f" {
+                let _ = view.update(cx, |v, cx| {
+                    if v.search_active {
+                        v.close_search(cx);
+                    } else {
+                        v.open_search(_w, cx);
+                    }
+                });
+                cx.stop_propagation();
+                return;
+            }
+
             // ── Vi mode ──
             if mods.control && mods.shift && e.keystroke.key.as_str() == "space" {
                 toggle_vi_mode(&s, &view, cx);

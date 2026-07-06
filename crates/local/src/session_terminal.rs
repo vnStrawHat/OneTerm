@@ -16,7 +16,7 @@ use oneterm_core::terminal::mouse_encode::{
 use oneterm_core::terminal::{
     BACKGROUND_INDEX, CURSOR_INDEX, DynamicColors, FOREGROUND_INDEX, TerminalContent, TerminalInfo,
 };
-use oneterm_core::{CursorBounds, SessionEvent, TerminalSession};
+use oneterm_core::{CursorBounds, SearchMatch, SearchOptions, SessionEvent, TerminalSession};
 
 use crate::session::{LocalSession, TermSize};
 
@@ -66,6 +66,7 @@ impl TerminalSession for LocalSession {
             cursor_line: term.grid().cursor.point.line.0,
             last_content_line: oneterm_core::terminal::last_content_line(&term),
             num_lines: term.screen_lines(),
+            num_cols: term.columns(),
             display_offset: term.grid().display_offset(),
             clear_epoch: st.clear_epoch,
         }
@@ -280,6 +281,12 @@ impl TerminalSession for LocalSession {
         // Escape: clear visible screen + scrollback + home cursor.
         self.write(b"\x1b[3J\x1b[2J\x1b[H");
         self.clear_selection();
+    }
+
+    // ── Search ─────────────────────────────────────────────────────
+    fn search(&self, query: &str, options: SearchOptions) -> Vec<SearchMatch> {
+        let term = self.term.lock();
+        oneterm_core::terminal::search_term(&*term, query, options)
     }
 
     // ── IME ──────────────────────────────────────────────────────────

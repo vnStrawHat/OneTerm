@@ -21,6 +21,7 @@ use crate::terminal::key_encode::{KeyMods, KeySpec, NamedKey, encode_key};
 use crate::terminal::mouse_encode::TerminalMouseButton;
 use crate::terminal::osc::{Osc133Kind, TerminalProgress};
 use crate::terminal::osc_color::DynamicColors;
+use crate::terminal::search::{SearchMatch, SearchOptions};
 
 use alacritty_terminal::vte::ansi::Rgb;
 
@@ -43,6 +44,8 @@ pub struct TerminalInfo {
     pub last_content_line: i32,
     /// Number of visible lines (viewport height).
     pub num_lines: usize,
+    /// Number of columns (viewport width).
+    pub num_cols: usize,
     /// Display offset (0 = bottom, >0 = scrolled up).
     pub display_offset: usize,
     /// Number of times the screen was cleared (`clear`/`cls`/RIS). Monotonically increasing.
@@ -191,6 +194,17 @@ pub trait TerminalSession: Send + Sync + 'static {
     fn select_all(&self);
     /// Clear screen + scrollback (send a clear escape sequence to the PTY).
     fn clear(&self);
+
+    // ── Search ──────────────────────────────────────────────
+    /// Search the full scrollback + viewport for `query` and return matches in
+    /// grid coordinates (top-to-bottom order). Empty query → empty result.
+    ///
+    /// Default = no matches (sessions that don't implement search just return
+    /// an empty vec). Backends lock their `Term` and call
+    /// [`crate::terminal::search::search_term`].
+    fn search(&self, _query: &str, _options: SearchOptions) -> Vec<SearchMatch> {
+        Vec::new()
+    }
 
     // ── IME ─────────────────────────────────────────────────
     fn set_marked_text(&self, text: String);

@@ -128,6 +128,10 @@ impl Render for LocalTerminalView {
         let dynamic_colors = session.read(cx).dynamic_colors();
         let theme = theme_apply::apply_dynamic_colors(theme, &dynamic_colors);
 
+        // ── Search highlights (display coordinates, visible only) ──
+        let search_highlights =
+            self.visible_search_highlights(info.display_offset, info.num_lines, info.num_cols);
+
         let terminal_div = div()
             .id("local-terminal-view")
             .size_full()
@@ -158,13 +162,15 @@ impl Render for LocalTerminalView {
                 self.row_cache.clone(),
                 self.cached_gutter.clone(),
                 self.last_grid_size.clone(),
+                search_highlights,
             ))
             .children(self.bell_overlay(has_bell, bell_enabled, &theme_ref))
             .children(self.progress_overlay(&theme_ref))
             .children(self.vi_mode_overlay(&theme_ref))
             .children(self.vi_cursor_overlay(&theme_ref))
             .children(self.render_scrollbar(&theme, &metrics, cx))
-            .children(self.breadcrumb_overlay(&session, &theme_ref, cx));
+            .children(self.breadcrumb_overlay(&session, &theme_ref, cx))
+            .children(self.render_search_bar(window, cx));
 
         super::handlers::attach(terminal_div, session, metrics, view, self.focus.clone())
     }

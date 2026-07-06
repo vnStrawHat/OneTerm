@@ -38,6 +38,10 @@ pub struct TerminalTheme {
     pub clock_fg: Hsla,
     /// Line number text color. Default = gutter_fg.
     pub line_number_fg: Hsla,
+    /// Search match highlight (non-active). Semi-transparent accent.
+    pub search_match: Hsla,
+    /// Active search match highlight (the current next/prev target).
+    pub search_active: Hsla,
 }
 
 /// Build a `TerminalTheme` from the gpui-component active `Theme`.
@@ -72,5 +76,9 @@ pub fn build_terminal_theme(theme: &Theme) -> TerminalTheme {
         gutter_bg: bg,
         clock_fg: gpui::hsla(fg.h, fg.s, fg.l * 0.5, fg.a),
         line_number_fg: gpui::hsla(fg.h, fg.s, fg.l * 0.5, fg.a),
+        // Search highlights: yellow-ish, semi-transparent for non-active,
+        // more opaque for the active match. Tuned for both light/dark backgrounds.
+        search_match: gpui::hsla(0.13, 0.85, 0.5, 0.35),
+        search_active: gpui::hsla(0.13, 0.9, 0.55, 0.7),
     }
 }

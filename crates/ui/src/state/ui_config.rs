@@ -17,8 +17,8 @@
 use std::collections::HashMap;
 
 use gpui::{App, AppContext, Entity, Global};
-use serde::{Deserialize, Serialize};
 use oneterm_core::config_dir;
+use serde::{Deserialize, Serialize};
 
 // File path is resolved at runtime via config_dir().join("ui_config.json") —
 // debug → target/, release → ~/.OneTerm/ (see oneterm_core::config_dir).

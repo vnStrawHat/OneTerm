@@ -10,6 +10,7 @@ pub mod mouse_encode;
 pub mod osc;
 pub mod osc_color;
 pub mod palette;
+pub mod search;
 pub mod session;
 pub mod url;
 
@@ -32,6 +33,7 @@ pub use osc_color::{
     PendingColorQuery, SharedColorQueries, default_color_for_index, new_color_queries,
 };
 pub use palette::{TerminalPalette, extended_indexed_color, indexed_default_color, resolve_color};
+pub use search::{SearchMatch, SearchOptions, search_term};
 pub use session::{
     CursorBounds, CwdSource, NetStats, SessionEvent, TerminalInfo, TerminalSession, parse_keystroke,
 };

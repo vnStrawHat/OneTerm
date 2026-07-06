@@ -9,7 +9,10 @@ use std::time::Duration;
 use gpui::{ClipboardItem, Context, Entity, FocusHandle, KeyBinding, NoAction, Window};
 
 use async_channel::Receiver;
-use oneterm_core::{SessionEvent, TerminalInfo, TerminalProgress, TerminalSession};
+use gpui_component::input::InputState;
+use oneterm_core::{
+    SearchMatch, SearchOptions, SessionEvent, TerminalInfo, TerminalProgress, TerminalSession,
+};
 
 use super::element::{GridMetrics, RowLayoutCache};
 use super::scrollbar::TerminalScrollHandle;
@@ -77,6 +80,19 @@ pub struct LocalTerminalView {
     /// Last terminal size (rows, cols) — persisted across frames to avoid calling
     /// s.resize() every frame (TerminalElement is recreated each frame).
     pub(crate) last_grid_size: Rc<RefCell<Option<(u16, u16)>>>,
+    // ── In-buffer search (Ctrl+F) ──────────────────────────────
+    /// Whether the search bar is open.
+    pub(crate) search_active: bool,
+    /// The search query (kept in sync with the `InputState`).
+    pub(crate) search_query: String,
+    /// Search options (case-sensitivity, whole-word).
+    pub(crate) search_options: SearchOptions,
+    /// Matches in grid coordinates (top-to-bottom order).
+    pub(crate) search_matches: Vec<SearchMatch>,
+    /// Index into `search_matches` of the active (current) match.
+    pub(crate) search_active_idx: Option<usize>,
+    /// The `InputState` for the search bar input.
+    pub(crate) search_input: Option<gpui::Entity<InputState>>,
 }
 impl LocalTerminalView {
     /// Create the view from a session entity. Subscribe to events → re-render task.
@@ -193,6 +209,12 @@ impl LocalTerminalView {
             row_cache: Rc::new(RefCell::new(RowLayoutCache::new())),
             cached_gutter: Rc::new(RefCell::new(None)),
             last_grid_size: Rc::new(RefCell::new(None)),
+            search_active: false,
+            search_query: String::new(),
+            search_options: SearchOptions::default(),
+            search_matches: Vec::new(),
+            search_active_idx: None,
+            search_input: None,
         }
     }
 

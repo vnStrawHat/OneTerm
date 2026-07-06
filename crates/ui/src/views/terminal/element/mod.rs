@@ -70,6 +70,9 @@ pub(crate) struct TerminalElement {
     cached_gutter: Rc<RefCell<Option<(Pixels, usize)>>>,
     /// Last grid size (rows, cols) — persisted between frames to avoid resizing every frame.
     last_grid_size: Rc<RefCell<Option<(u16, u16)>>>,
+    /// Search highlights to paint (display coordinates, already filtered to the
+    /// visible viewport).
+    search_highlights: Vec<super::search::SearchHighlight>,
 }
 
 impl TerminalElement {
@@ -97,6 +100,7 @@ impl TerminalElement {
         row_cache: Rc<RefCell<RowLayoutCache>>,
         cached_gutter: Rc<RefCell<Option<(Pixels, usize)>>>,
         last_grid_size: Rc<RefCell<Option<(u16, u16)>>>,
+        search_highlights: Vec<super::search::SearchHighlight>,
     ) -> Self {
         Self {
             session,
@@ -121,6 +125,7 @@ impl TerminalElement {
             row_cache,
             cached_gutter,
             last_grid_size,
+            search_highlights,
         }
     }
 }
@@ -180,6 +185,7 @@ impl Element for TerminalElement {
             &self.last_grid_size,
             &self.metrics,
             &self.row_cache,
+            &self.search_highlights,
             bounds,
             window,
             cx,

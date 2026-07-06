@@ -184,10 +184,7 @@ pub fn init(cx: &mut App) {
     cx.observe_global::<Theme>(|cx| {
         let (name, size) = {
             let theme = cx.theme();
-            (
-                theme.theme_name().to_string(),
-                theme.font_size.as_f32() as f32,
-            )
+            (theme.theme_name().to_string(), theme.font_size.as_f32())
         };
         crate::state::UiConfig::global(cx).update(cx, |cfg, _cx| {
             cfg.theme_name = Some(name);

@@ -9,9 +9,11 @@ use gpui::{App, Bounds, Pixels, SharedString, Window, px};
 use oneterm_core::TerminalSession;
 
 use super::super::cell::blank::is_blank;
+use super::super::search::SearchHighlight;
 
 use super::super::layout::{
-    CursorPaint, GridMetrics, LayoutPoint, LayoutState, RowLayoutCache, update_row_cache,
+    CursorPaint, GridMetrics, LayoutPoint, LayoutRect, LayoutState, RowLayoutCache,
+    update_row_cache,
 };
 use super::super::theme::{TerminalTheme, resolve_cell_color};
 use super::super::view::LocalTerminalView;
@@ -41,6 +43,7 @@ pub(crate) fn prepaint_terminal(
     last_grid_size: &Rc<RefCell<Option<(u16, u16)>>>,
     metrics: &Rc<RefCell<GridMetrics>>,
     row_cache: &Rc<RefCell<RowLayoutCache>>,
+    search_highlights: &[SearchHighlight],
     bounds: Bounds<Pixels>,
     window: &mut Window,
     cx: &mut App,
@@ -240,8 +243,26 @@ pub(crate) fn prepaint_terminal(
         gutter_width: gutter_width + pad_left,
     };
 
+    // ── Search highlight rects (display coordinates → LayoutRect) ──
+    let search_rects: Vec<LayoutRect> = search_highlights
+        .iter()
+        .map(|h| LayoutRect {
+            point: LayoutPoint {
+                line: h.display_line,
+                column: h.start_col,
+            },
+            num_cells: (h.end_col - h.start_col).max(0) as usize,
+            color: if h.active {
+                theme.search_active
+            } else {
+                theme.search_match
+            },
+        })
+        .collect();
+
     LayoutState {
         selection_rects,
+        search_rects,
         cursor,
         background: theme.bg,
         cell_width,
