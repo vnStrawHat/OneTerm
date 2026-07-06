@@ -427,6 +427,7 @@ impl Render for OneTermWorkspace {
             .on_action(cx.listener(Self::on_action_toggle_dock_toggle_button))
             .on_action(cx.listener(Self::on_action_toggle_auto_hide_right_dock))
             .on_action(cx.listener(Self::on_action_quit))
+            .on_action(cx.listener(Self::on_action_find))
             .on_action(cx.listener(Self::on_action_about))
             .on_action(cx.listener(Self::on_action_open_settings))
             .relative()

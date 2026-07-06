@@ -11,8 +11,8 @@ use gpui_component::{
 
 use crate::{
     actions::{
-        About, AddPanel, AddSession, AddSftpBrowser, OpenSettings, Quit, ToggleAutoHideRightDock,
-        ToggleDockToggleButton,
+        About, AddPanel, AddSession, AddSftpBrowser, Find, OpenSettings, Quit,
+        ToggleAutoHideRightDock, ToggleDockToggleButton,
     },
     state::{AppState, TerminalSettings},
     views::{SessionPanel, SftpPanel, TerminalPanel},
@@ -164,6 +164,37 @@ impl super::OneTermWorkspace {
     /// Action handler: Quit.
     pub(crate) fn on_action_quit(&mut self, _: &Quit, _: &mut Window, cx: &mut Context<Self>) {
         cx.quit();
+    }
+
+    /// Action handler: Find — activate the in-terminal search bar on the
+    /// active terminal panel.
+    ///
+    /// Triggered by Edit ▸ Find in the AppMenuBar. Walks the DockArea to find
+    /// the active terminal panel, then calls `open_search` on its
+    /// `LocalTerminalView`. If the search bar is already open, toggles it
+    /// closed (same behavior as Ctrl+F).
+    pub(crate) fn on_action_find(&mut self, _: &Find, window: &mut Window, cx: &mut Context<Self>) {
+        let dock_area = self.dock_area.clone();
+        let tab_panels = super::zoom::collect_tab_panels(dock_area.read(cx), cx);
+        for tp in tab_panels {
+            if let Some(panel) = tp.read(cx).active_panel(cx) {
+                if panel.panel_name(cx) == "terminal" {
+                    let any_view = panel.view();
+                    if let Ok(entity) = any_view.downcast::<TerminalPanel>() {
+                        entity.update(cx, |tp, cx| {
+                            tp.view().update(cx, |v, cx| {
+                                if v.search_active {
+                                    v.close_search(cx);
+                                } else {
+                                    v.open_search(window, cx);
+                                }
+                            });
+                        });
+                        return;
+                    }
+                }
+            }
+        }
     }
 
     /// Action handler: About — open the About dialog.

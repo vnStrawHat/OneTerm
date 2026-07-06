@@ -30,6 +30,8 @@ actions!(
         NewSession,
         /// Open the General Settings panel (font, theme, key bindings).
         OpenSettings,
+        /// Activate the in-terminal search bar (Find).
+        Find,
     ]
 );
 

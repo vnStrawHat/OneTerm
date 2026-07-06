@@ -94,6 +94,12 @@ impl TerminalPanel {
         cx.new(|cx| Self::from_session(session, title, window, cx))
     }
 
+    /// Access the inner `LocalTerminalView` (used by the Edit ▸ Find menu
+    /// action to toggle the in-terminal search bar).
+    pub(crate) fn view(&self) -> &Entity<LocalTerminalView> {
+        &self.view
+    }
+
     /// Session network stats (SSH only — `None` for local).
     /// Used by the StatusBar to show network speed.
     pub fn network_stats(&self, cx: &App) -> Option<oneterm_core::NetStats> {

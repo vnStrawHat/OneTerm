@@ -7,7 +7,7 @@ use gpui::{App, Entity, Menu, MenuItem, SharedString, px};
 use gpui_component::{ActiveTheme as _, GlobalState, Theme, ThemeRegistry, menu::AppMenuBar};
 
 use crate::actions::{
-    About, OpenSettings, Quit, SelectFont, SelectLocale, SwitchTheme, SwitchThemeMode,
+    About, Find, OpenSettings, Quit, SelectFont, SelectLocale, SwitchTheme, SwitchThemeMode,
     ToggleAutoHideRightDock, ToggleGutter,
 };
 use crate::state::TerminalSettings;
@@ -117,6 +117,8 @@ fn build_menus(title: impl Into<SharedString>, cx: &App) -> Vec<Menu> {
                 MenuItem::action("Cut", gpui_component::input::Cut),
                 MenuItem::action("Copy", gpui_component::input::Copy),
                 MenuItem::action("Paste", gpui_component::input::Paste),
+                MenuItem::separator(),
+                MenuItem::action("Find", Find),
                 MenuItem::separator(),
                 MenuItem::action("Select All", gpui_component::input::SelectAll),
             ],
