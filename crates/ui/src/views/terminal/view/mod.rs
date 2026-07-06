@@ -149,6 +149,10 @@ impl LocalTerminalView {
                             // the time the tab becomes active again.
                             let info = s.read(cx).terminal_info();
                             view.update_line_times(&info);
+                            // New output shifts the alacritty grid coordinate
+                            // system, so stored search matches would point at the
+                            // wrong rows — refresh them (keeps the active index).
+                            view.refresh_search(cx);
                         });
                     }
                     SessionEvent::Bell => {

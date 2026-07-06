@@ -20,7 +20,7 @@
 //! Navigation wraps around (last → first, first → last).
 
 use gpui::{
-    App, AppContext, Context, InteractiveElement as _, IntoElement, KeyDownEvent,
+    App, AppContext, Context, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
     ParentElement as _, SharedString, Styled, Window, div, px,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -110,6 +110,33 @@ impl LocalTerminalView {
         };
         // Scroll the first active match into view.
         self.scroll_to_active_match(cx);
+    }
+
+    /// Re-run the search against the current terminal content **without**
+    /// resetting the active match index.
+    ///
+    /// This is called when new terminal output arrives: the alacritty grid
+    /// coordinate system shifts as lines scroll into history, so the `line`
+    /// values stored in [`search_matches`](LocalTerminalView::search_matches)
+    /// would otherwise point at the wrong visual rows. Re-running the search
+    /// refreshes them with the current grid coordinates so highlights stay
+    /// aligned with their content.
+    ///
+    /// Unlike [`run_search`](Self::run_search) this does **not** scroll the
+    /// viewport — new output should keep following the bottom, not jump to the
+    /// active match. The active index is kept (clamped to the new length) so the
+    /// user does not lose their navigation position.
+    pub(crate) fn refresh_search(&mut self, cx: &mut Context<Self>) {
+        if !self.search_active || self.search_query.is_empty() {
+            return;
+        }
+        let query = self.search_query.clone();
+        let opts = self.search_options;
+        self.search_matches = self.session.read(cx).search(&query, opts);
+        // Keep the active index valid against the refreshed match list.
+        self.search_active_idx = self
+            .search_active_idx
+            .filter(|&i| i < self.search_matches.len());
     }
 
     /// Navigate to the next (`forward = false`) or previous (`forward = true`)
@@ -235,6 +262,15 @@ impl LocalTerminalView {
                 .border_1()
                 .border_color(theme.border)
                 .shadow_sm()
+                // The search bar overlays the terminal grid. Stop left-button
+                // mouse down/up from bubbling into the terminal's mouse handlers,
+                // otherwise rapid clicks on the nav buttons accumulate click_count
+                // in the terminal (triple-click → select line) and mouse_up would
+                // copy the terminal selection to the clipboard. Button on_click
+                // still fires: click synthesis runs on the (deeper) button hitbox
+                // before propagation is stopped here.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 // Case-sensitivity toggle (Ghost style).
                 .child(
                     Toggle::new("search-case")
