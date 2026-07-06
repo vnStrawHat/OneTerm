@@ -169,7 +169,6 @@ impl Render for LocalTerminalView {
             .children(self.vi_mode_overlay(&theme_ref))
             .children(self.vi_cursor_overlay(&theme_ref))
             .children(self.render_scrollbar(&theme, &metrics, cx))
-            .children(self.breadcrumb_overlay(&session, &theme_ref, cx))
             .children(self.render_search_bar(window, cx));
 
         super::handlers::attach(terminal_div, session, metrics, view, self.focus.clone())

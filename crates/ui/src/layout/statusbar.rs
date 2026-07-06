@@ -1,7 +1,7 @@
-//! Status bar — left side: datetime clock + network speed;
+//! Status bar — left side: datetime clock + network speed + breadcrumb;
 //! right side: resource indicator (CPU/memory) + toggle Right Dock.
 //!
-//! The clock, net-speed, and resource entities are created once in
+//! The clock, net-speed, breadcrumb, and resource entities are created once in
 //! `OneTermWorkspace::new` and passed in here, avoiding a fresh one each render
 //! (which would drop the timer Task → updates stop).
 
@@ -13,7 +13,7 @@ use gpui_component::{
     status_bar::StatusBar,
 };
 
-use crate::components::{DateTimeClock, NetSpeedIndicator, ResourceIndicator};
+use crate::components::{BreadcrumbIndicator, DateTimeClock, NetSpeedIndicator, ResourceIndicator};
 use crate::layout::OneTermWorkspace;
 
 /// Build the `StatusBar` for `OneTermWorkspace`.
@@ -24,6 +24,7 @@ pub fn build_status_bar(
     dock_area: &Entity<DockArea>,
     clock: Entity<DateTimeClock>,
     net_speed: Entity<NetSpeedIndicator>,
+    breadcrumb: Entity<BreadcrumbIndicator>,
     resource: Entity<ResourceIndicator>,
     _window: &mut Window,
     cx: &mut Context<OneTermWorkspace>,
@@ -35,10 +36,15 @@ pub fn build_status_bar(
         .border_color(cx.theme().border)
         .left(clock)
         .left(
-            // Separator + network speed indicator.
+            // Separator + breadcrumb (cwd + foreground process).
             div().w(px(1.)).h(px(12.)).bg(cx.theme().border),
         )
-        .left(net_speed)
+        .left(breadcrumb)
+        .right(net_speed)
+        .right(
+            // Separator before the toggle button.
+            div().w(px(1.)).h(px(12.)).bg(cx.theme().border),
+        )
         .right(resource)
         .right(
             // Separator before the toggle button.

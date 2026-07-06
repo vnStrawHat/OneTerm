@@ -19,7 +19,7 @@ use gpui_component::{
 };
 
 use crate::{
-    components::{DateTimeClock, NetSpeedIndicator, ResourceIndicator},
+    components::{BreadcrumbIndicator, DateTimeClock, NetSpeedIndicator, ResourceIndicator},
     layout::{statusbar, title_bar::AppTitleBar},
     state::AppState,
 };
@@ -110,6 +110,9 @@ pub struct OneTermWorkspace {
     pub clock: Entity<DateTimeClock>,
     /// Network speed indicator — created once so the 1s timer fires reliably.
     pub net_speed: Entity<NetSpeedIndicator>,
+    /// Breadcrumb (cwd + foreground process) indicator — created once so the
+    /// 500ms timer fires reliably.
+    pub breadcrumb: Entity<BreadcrumbIndicator>,
     /// CPU/memory resource indicator — created once so the 2s timer fires reliably.
     pub resource: Entity<ResourceIndicator>,
     last_layout_state: Option<gpui_component::dock::DockAreaState>,
@@ -243,6 +246,7 @@ impl OneTermWorkspace {
 
         let clock = DateTimeClock::new_entity(window, cx);
         let net_speed = NetSpeedIndicator::new_entity(dock_area.downgrade(), window, cx);
+        let breadcrumb = BreadcrumbIndicator::new_entity(dock_area.downgrade(), window, cx);
         let resource = ResourceIndicator::new_entity(window, cx);
 
         let mut me = Self {
@@ -250,6 +254,7 @@ impl OneTermWorkspace {
             dock_area: dock_area.clone(),
             clock,
             net_speed,
+            breadcrumb,
             resource,
             last_layout_state: None,
             toggle_button_visible,
@@ -434,6 +439,7 @@ impl Render for OneTermWorkspace {
                 &self.dock_area,
                 self.clock.clone(),
                 self.net_speed.clone(),
+                self.breadcrumb.clone(),
                 self.resource.clone(),
                 window,
                 cx,

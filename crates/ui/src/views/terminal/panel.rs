@@ -100,6 +100,23 @@ impl TerminalPanel {
         self.view.read(cx).session.read(cx).network_stats()
     }
 
+    /// Breadcrumb label for the active session — `"<process> — <cwd>"` (or just
+    /// the cwd when no foreground process is running). `None` when the session
+    /// has no cwd yet.
+    /// Used by the StatusBar to show the active terminal's breadcrumb.
+    pub fn breadcrumb_label(&self, cx: &App) -> Option<String> {
+        let s = self.view.read(cx).session.read(cx);
+        let breadcrumb = s.breadcrumb_text();
+        let fg = s.foreground_process();
+        breadcrumb.map(|bc| {
+            if let Some(proc) = fg {
+                format!("{} — {}", proc, bc)
+            } else {
+                bc
+            }
+        })
+    }
+
     /// Helper to create an `Entity<Self>` (default local session).
     pub fn new_entity(window: &mut Window, cx: &mut App) -> Entity<Self> {
         cx.new(|cx| Self::new(window, cx))

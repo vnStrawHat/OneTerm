@@ -1,8 +1,7 @@
 //! Overlay helpers for `LocalTerminalView::render`.
 
 use gpui::{
-    Context, InteractiveElement as _, IntoElement, ParentElement as _, Styled as _, div, px,
-    relative,
+    InteractiveElement as _, IntoElement, ParentElement as _, Styled as _, div, px, relative,
 };
 use gpui_component::Theme;
 use oneterm_core::TerminalProgress;
@@ -119,38 +118,5 @@ impl LocalTerminalView {
                 .border_color(theme_ref.accent)
                 .rounded_sm(),
         )
-    }
-
-    /// Breadcrumb bar (bottom) — cwd path from OSC 7.
-    pub(crate) fn breadcrumb_overlay(
-        &self,
-        session: &gpui::Entity<Box<dyn oneterm_core::TerminalSession>>,
-        theme_ref: &Theme,
-        cx: &mut Context<Self>,
-    ) -> Option<impl IntoElement> {
-        let _ = self;
-        let breadcrumb = session.read(cx).breadcrumb_text();
-        let fg_process = session.read(cx).foreground_process();
-        breadcrumb.map(|bc| {
-            let label = if let Some(proc) = &fg_process {
-                format!("{} — {}", proc, bc)
-            } else {
-                bc
-            };
-            div()
-                .id("terminal-breadcrumb")
-                .absolute()
-                .bottom_0()
-                .left_0()
-                .right_0()
-                .h(px(20.0))
-                .flex()
-                .items_center()
-                .px_2()
-                .text_xs()
-                .text_color(theme_ref.border)
-                .bg(theme_ref.background.opacity(0.9))
-                .child(label)
-        })
     }
 }
