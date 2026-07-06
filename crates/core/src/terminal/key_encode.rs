@@ -50,13 +50,20 @@ fn modifier_byte(mods: KeyMods) -> u8 {
 
 /// Encode a single key event → escape sequence. Returns `None` if unrecognized.
 ///
+/// `app_cursor` mirrors the terminal's DECCKM state (`TermMode::APP_CURSOR`):
+/// when the program has enabled Application Cursor Keys (e.g. vim/less/man
+/// send `CSI ?1h`), the plain cursor keys (arrows, Home, End) must use the
+/// `ESC O{ch}` form instead of `ESC [{ch}` so the program recognizes them.
+///
 /// Conventions:
 /// - `Character` + `ctrl` + 1 byte → `& 0x1f` (control code).
 /// - `Enter` shift/ctrl → CSI u; plain → `\r`.
 /// - `Backspace`: ctrl → `0x08`, alt → `ESC DEL`, plain → `0x7f`.
-/// - Arrow + (shift|ctrl) → `CSI 1;{mod}{ch}`; plain → `ESC [ {ch}`.
-/// - `Home`/`End` + (shift|ctrl) → `CSI 1;{mod}H/F`; plain → `ESC [ H/F`.
-pub fn encode_key(key: &KeySpec, mods: KeyMods) -> Option<Vec<u8>> {
+/// - Arrow + (shift|ctrl) → `CSI 1;{mod}{ch}`; plain → `ESC O{ch}` when
+///   `app_cursor`, else `ESC [{ch}`.
+/// - `Home`/`End` + (shift|ctrl) → `CSI 1;{mod}H/F`; plain → `ESC OH/F`
+///   when `app_cursor`, else `ESC [H/F`.
+pub fn encode_key(key: &KeySpec, mods: KeyMods, app_cursor: bool) -> Option<Vec<u8>> {
     let shift = mods.shift;
     let ctrl = mods.ctrl;
     let alt = mods.alt;
@@ -105,6 +112,8 @@ pub fn encode_key(key: &KeySpec, mods: KeyMods) -> Option<Vec<u8>> {
             };
             if shift || ctrl {
                 format!("\x1b[1;{}{ch}", modifier_byte(mods)).into_bytes()
+            } else if app_cursor {
+                vec![0x1b, b'O', ch as u8]
             } else {
                 vec![0x1b, b'[', ch as u8]
             }
@@ -113,11 +122,13 @@ pub fn encode_key(key: &KeySpec, mods: KeyMods) -> Option<Vec<u8>> {
         KeySpec::Named(NamedKey::Home) if shift || ctrl => {
             format!("\x1b[1;{}H", modifier_byte(mods)).into_bytes()
         }
+        KeySpec::Named(NamedKey::Home) if app_cursor => b"\x1bOH".to_vec(),
         KeySpec::Named(NamedKey::Home) => b"\x1b[H".to_vec(),
 
         KeySpec::Named(NamedKey::End) if shift || ctrl => {
             format!("\x1b[1;{}F", modifier_byte(mods)).into_bytes()
         }
+        KeySpec::Named(NamedKey::End) if app_cursor => b"\x1bOF".to_vec(),
         KeySpec::Named(NamedKey::End) => b"\x1b[F".to_vec(),
 
         KeySpec::Named(NamedKey::PageUp) => b"\x1b[5~".to_vec(),
@@ -138,69 +149,169 @@ mod tests {
 
     #[test]
     fn ctrl_c_is_0x03() {
-        let s = encode_key(&KeySpec::Character("c".into()), m(false, true, false)).unwrap();
+        let s = encode_key(
+            &KeySpec::Character("c".into()),
+            m(false, true, false),
+            false,
+        )
+        .unwrap();
         assert_eq!(s, vec![0x03]);
     }
 
     #[test]
     fn enter_plain_cr() {
-        let s = encode_key(&KeySpec::Named(NamedKey::Enter), m(false, false, false)).unwrap();
+        let s = encode_key(
+            &KeySpec::Named(NamedKey::Enter),
+            m(false, false, false),
+            false,
+        )
+        .unwrap();
         assert_eq!(s, b"\r");
     }
 
     #[test]
     fn enter_shift_csiu() {
-        let s = encode_key(&KeySpec::Named(NamedKey::Enter), m(true, false, false)).unwrap();
+        let s = encode_key(
+            &KeySpec::Named(NamedKey::Enter),
+            m(true, false, false),
+            false,
+        )
+        .unwrap();
         assert_eq!(s, b"\x1b[13;2u");
     }
 
     #[test]
     fn backspace_plain_del() {
-        let s = encode_key(&KeySpec::Named(NamedKey::Backspace), m(false, false, false)).unwrap();
+        let s = encode_key(
+            &KeySpec::Named(NamedKey::Backspace),
+            m(false, false, false),
+            false,
+        )
+        .unwrap();
         assert_eq!(s, vec![0x7f]);
     }
 
     #[test]
     fn backspace_ctrl_bs() {
-        let s = encode_key(&KeySpec::Named(NamedKey::Backspace), m(false, true, false)).unwrap();
+        let s = encode_key(
+            &KeySpec::Named(NamedKey::Backspace),
+            m(false, true, false),
+            false,
+        )
+        .unwrap();
         assert_eq!(s, vec![0x08]);
     }
 
     #[test]
     fn arrow_up_plain() {
-        let s = encode_key(&KeySpec::Named(NamedKey::ArrowUp), m(false, false, false)).unwrap();
+        let s = encode_key(
+            &KeySpec::Named(NamedKey::ArrowUp),
+            m(false, false, false),
+            false,
+        )
+        .unwrap();
         assert_eq!(s, b"\x1b[A");
     }
 
     #[test]
+    fn arrow_up_app_cursor() {
+        // DECCKM on (e.g. vim) → application-mode arrow keys use `ESC O{ch}`.
+        let s = encode_key(
+            &KeySpec::Named(NamedKey::ArrowUp),
+            m(false, false, false),
+            true,
+        )
+        .unwrap();
+        assert_eq!(s, b"\x1bOA");
+    }
+
+    #[test]
     fn arrow_up_ctrl() {
-        let s = encode_key(&KeySpec::Named(NamedKey::ArrowUp), m(false, true, false)).unwrap();
+        // Modifiers force the numeric CSI form regardless of DECCKM.
+        let s = encode_key(
+            &KeySpec::Named(NamedKey::ArrowUp),
+            m(false, true, false),
+            true,
+        )
+        .unwrap();
         // modifier_byte(ctrl only) = 1+0+0+4 = 5
         assert_eq!(s, b"\x1b[1;5A");
     }
 
     #[test]
     fn tab_shift_backtab() {
-        let s = encode_key(&KeySpec::Named(NamedKey::Tab), m(true, false, false)).unwrap();
+        let s = encode_key(&KeySpec::Named(NamedKey::Tab), m(true, false, false), false).unwrap();
         assert_eq!(s, b"\x1b[Z");
     }
 
     #[test]
     fn home_plain() {
-        let s = encode_key(&KeySpec::Named(NamedKey::Home), m(false, false, false)).unwrap();
+        let s = encode_key(
+            &KeySpec::Named(NamedKey::Home),
+            m(false, false, false),
+            false,
+        )
+        .unwrap();
         assert_eq!(s, b"\x1b[H");
     }
 
     #[test]
+    fn home_app_cursor() {
+        // DECCKM on (e.g. vim) → Home must be `ESC OH` so vim recognizes it.
+        let s = encode_key(
+            &KeySpec::Named(NamedKey::Home),
+            m(false, false, false),
+            true,
+        )
+        .unwrap();
+        assert_eq!(s, b"\x1bOH");
+    }
+
+    #[test]
+    fn home_ctrl_ignores_app_cursor() {
+        // Modifiers force the numeric CSI form regardless of DECCKM.
+        let s = encode_key(&KeySpec::Named(NamedKey::Home), m(false, true, false), true).unwrap();
+        assert_eq!(s, b"\x1b[1;5H");
+    }
+
+    #[test]
+    fn end_plain() {
+        let s = encode_key(
+            &KeySpec::Named(NamedKey::End),
+            m(false, false, false),
+            false,
+        )
+        .unwrap();
+        assert_eq!(s, b"\x1b[F");
+    }
+
+    #[test]
+    fn end_app_cursor() {
+        // DECCKM on (e.g. vim) → End must be `ESC OF` so vim recognizes it.
+        let s = encode_key(&KeySpec::Named(NamedKey::End), m(false, false, false), true).unwrap();
+        assert_eq!(s, b"\x1bOF");
+    }
+
+    #[test]
     fn delete_ctrl_csiu_tilde() {
-        let s = encode_key(&KeySpec::Named(NamedKey::Delete), m(false, true, false)).unwrap();
+        let s = encode_key(
+            &KeySpec::Named(NamedKey::Delete),
+            m(false, true, false),
+            false,
+        )
+        .unwrap();
         // modifier_byte(ctrl) = 5
         assert_eq!(s, b"\x1b[3;5~");
     }
 
     #[test]
     fn alt_char_prefix() {
-        let s = encode_key(&KeySpec::Character("a".into()), m(false, false, true)).unwrap();
+        let s = encode_key(
+            &KeySpec::Character("a".into()),
+            m(false, false, true),
+            false,
+        )
+        .unwrap();
         assert_eq!(s, b"\x1ba");
     }
 }

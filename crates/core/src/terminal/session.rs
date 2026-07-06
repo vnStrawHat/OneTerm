@@ -240,7 +240,8 @@ pub trait TerminalSession: Send + Sync + 'static {
     /// Parse format: `Ctrl+Shift+V`, `Alt+Enter`, `F1`, `Up`, `a`.
     fn send_keystroke(&self, keystroke: &str) {
         if let Some((spec, mods)) = parse_keystroke(keystroke) {
-            if let Some(bytes) = encode_key(&spec, mods) {
+            let app_cursor = self.snapshot().mode.contains(TermMode::APP_CURSOR);
+            if let Some(bytes) = encode_key(&spec, mods, app_cursor) {
                 self.write(&bytes);
             }
         }

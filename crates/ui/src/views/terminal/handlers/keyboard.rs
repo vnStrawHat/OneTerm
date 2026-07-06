@@ -6,6 +6,7 @@ use std::rc::Rc;
 use gpui::{App, ClipboardItem, Entity, FocusHandle, InteractiveElement as _, KeyDownEvent};
 use gpui_component::ActiveTheme as _;
 
+use alacritty_terminal::term::TermMode;
 use oneterm_core::TerminalSession;
 use oneterm_core::terminal::{KeySpec, encode_key};
 
@@ -238,7 +239,8 @@ pub(crate) fn attach_key(
                 }
             }
 
-            let Some(bytes) = encode_key(&spec, mods) else {
+            let app_cursor = s.read(cx).snapshot().mode.contains(TermMode::APP_CURSOR);
+            let Some(bytes) = encode_key(&spec, mods, app_cursor) else {
                 return;
             };
             s.update(cx, |s, _| s.write(&bytes));
