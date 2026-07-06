@@ -175,11 +175,11 @@ pub(crate) fn box_drawing_rects(c: char, cw_d: i32, lh_d: i32) -> Vec<(i32, i32,
         '\u{2549}' => vec![hl!(cy, ht), hr!(cy, ht), vu!(cx, ht), vd!(cx, t)],
         '\u{254A}' => vec![hl!(cy, ht), hr!(cy, ht), vu!(cx, t), vd!(cx, ht)],
         '\u{254B}' => vec![h!(cy, ht), v!(cx, ht)],
-        // dash
-        '\u{2504}' | '\u{2506}' => dash_h(cy, cw_d, t),
-        '\u{2505}' | '\u{2507}' => dash_h(cy, cw_d, ht),
-        '\u{2508}' => dash_v(cx, lh_d, t),
-        '\u{2509}' => dash_v(cx, lh_d, ht),
+        // Triple / quadruple dash lines.
+        '\u{2504}' | '\u{2508}' => dash_h(cy, cw_d, t),
+        '\u{2505}' | '\u{2509}' => dash_h(cy, cw_d, ht),
+        '\u{2506}' | '\u{250A}' => dash_v(cx, lh_d, t),
+        '\u{2507}' | '\u{250B}' => dash_v(cx, lh_d, ht),
         // double lines
         '\u{2550}' => vec![(0, y_out_top, cw_d, dt), (0, y_in_top, cw_d, dt)],
         '\u{2551}' => vec![(x_out_left, 0, dt, lh_d), (x_in_left, 0, dt, lh_d)],
@@ -351,4 +351,48 @@ fn dash_v(x: i32, h: i32, thick: i32) -> Vec<(i32, i32, i32, i32)> {
         y += 4;
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::box_drawing_rects;
+
+    #[test]
+    fn dash_lines_keep_orientation() {
+        let cw = 24;
+        let lh = 36;
+        let cx = cw / 2;
+        let cy = lh / 2;
+
+        for (ch, expected_axis) in [
+            ('\u{2504}', "h"), // light triple dash horizontal
+            ('\u{2505}', "h"), // heavy triple dash horizontal
+            ('\u{2508}', "h"), // light quadruple dash horizontal
+            ('\u{2509}', "h"), // heavy quadruple dash horizontal
+            ('\u{2506}', "v"), // light triple dash vertical
+            ('\u{2507}', "v"), // heavy triple dash vertical
+            ('\u{250A}', "v"), // light quadruple dash vertical
+            ('\u{250B}', "v"), // heavy quadruple dash vertical
+        ] {
+            let rects = box_drawing_rects(ch, cw, lh);
+            assert!(
+                !rects.is_empty(),
+                "char {:04X} should produce rects",
+                ch as u32
+            );
+            if expected_axis == "h" {
+                assert!(
+                    rects.iter().all(|r| r.1 == cy),
+                    "char {:04X} should be a horizontal dash line",
+                    ch as u32
+                );
+            } else {
+                assert!(
+                    rects.iter().all(|r| r.0 == cx),
+                    "char {:04X} should be a vertical dash line",
+                    ch as u32
+                );
+            }
+        }
+    }
 }
