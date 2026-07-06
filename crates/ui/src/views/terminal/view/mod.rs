@@ -6,7 +6,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use gpui::{ClipboardItem, Context, Entity, FocusHandle, KeyBinding, NoAction, Window};
+use gpui::{
+    ClipboardItem, Context, Entity, EventEmitter, FocusHandle, KeyBinding, NoAction, Window,
+};
 
 use async_channel::Receiver;
 use gpui_component::input::InputState;
@@ -24,6 +26,17 @@ pub(crate) mod key;
 pub(crate) mod scrollbar;
 
 const CURSOR_BLINK_INTERVAL_MS: u64 = 500;
+
+/// GPUI events emitted by [`LocalTerminalView`] for its containing panel to
+/// observe. The dock's tab title is rendered by `TerminalPanel::title()`, which
+/// only re-runs when the panel (or its `TabPanel`) re-renders — so the view
+/// emits these to let the panel `cx.notify()` and refresh the tab strip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalViewEvent {
+    /// The OSC 0/2 window title changed (or was reset via `ResetTitle`). The
+    /// panel should re-read the live title via `TerminalSession::title()`.
+    TitleChanged,
+}
 
 /// View that renders one terminal session (local or ssh — via `dyn TerminalSession`).
 pub struct LocalTerminalView {
@@ -87,6 +100,9 @@ pub struct LocalTerminalView {
     /// The `InputState` for the search bar input.
     pub(crate) search_input: Option<gpui::Entity<InputState>>,
 }
+
+impl EventEmitter<TerminalViewEvent> for LocalTerminalView {}
+
 impl LocalTerminalView {
     /// Create the view from a session entity. Subscribe to events → re-render task.
     pub fn new(
@@ -149,6 +165,15 @@ impl LocalTerminalView {
                     }
                     SessionEvent::ClipboardRead => {
                         let _ = this.update(cx, |view, cx| view.reply_clipboard_read(cx));
+                    }
+                    SessionEvent::Title(_) => {
+                        // OSC 0/2 title changed — notify the containing panel
+                        // so its `title()` (which reads the live session title)
+                        // re-runs and the tab strip refreshes.
+                        let _ = this.update(cx, |_, cx| {
+                            cx.emit(TerminalViewEvent::TitleChanged);
+                            cx.notify();
+                        });
                     }
                     SessionEvent::Progress(p) => {
                         let _ = this.update(cx, |view, cx| {
@@ -273,6 +298,14 @@ impl LocalTerminalView {
                 }
                 Ok(SessionEvent::ClipboardRead) => {
                     let _ = this.update(cx, |view, cx| view.reply_clipboard_read(cx));
+                }
+                Ok(SessionEvent::Title(_)) => {
+                    // OSC 0/2 title arrived in the same batch as Output —
+                    // emit so the containing panel refreshes its tab title.
+                    let _ = this.update(cx, |_, cx| {
+                        cx.emit(TerminalViewEvent::TitleChanged);
+                        cx.notify();
+                    });
                 }
                 Ok(SessionEvent::Progress(p)) => {
                     let _ = this.update(cx, |view, cx| {

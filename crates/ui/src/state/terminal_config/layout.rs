@@ -2,7 +2,25 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Layout group: line height, cell width, padding, gutter.
+/// How the terminal tab title is determined.
+///
+/// - `Default` — always show the static label ("Terminal" for local shells,
+///   the SSH session label for remote sessions).
+/// - `Osc` — use the live OSC 0/2 window title set by the shell (e.g. the
+///   running command / cwd), falling back to the static label when the shell
+///   hasn't set one. Long executable paths are shortened to their basename
+///   (e.g. `C:\Windows\system32\cmd.exe` → `cmd.exe`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TabTitleMode {
+    /// Static label: "Terminal" (local) / SSH session label.
+    #[default]
+    Default,
+    /// Live OSC 0/2 window title from the shell.
+    Osc,
+}
+
+/// Layout group: line height, cell width, padding, gutter, tab title.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LayoutConfig {
     /// Line height multiplier (1.2 = 120% of font size).
@@ -21,6 +39,9 @@ pub struct LayoutConfig {
     /// Auto-hide the Right Dock when the active tab is a Local Shell.
     #[serde(default)]
     pub auto_hide_right_dock_on_local: bool,
+    /// How the terminal tab title is determined (static label vs OSC 0/2).
+    #[serde(default)]
+    pub tab_title: TabTitleMode,
 }
 
 impl Default for LayoutConfig {
@@ -31,6 +52,7 @@ impl Default for LayoutConfig {
             padding: PaddingConfig::default(),
             show_gutter: default_show_gutter(),
             auto_hide_right_dock_on_local: false,
+            tab_title: TabTitleMode::default(),
         }
     }
 }

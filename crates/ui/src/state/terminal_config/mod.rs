@@ -22,7 +22,7 @@ pub use bell::BellConfig;
 pub use colors::ColorsConfig;
 pub use cursor::CursorConfig;
 pub use font::FontConfig;
-pub use layout::{LayoutConfig, PaddingConfig};
+pub use layout::{LayoutConfig, PaddingConfig, TabTitleMode};
 pub use scroll::ScrollConfig;
 pub use security::SecurityConfig;
 
@@ -279,5 +279,24 @@ mod tests {
         assert_eq!(cfg.cursor.shape, "block");
         assert_eq!(cfg.layout.line_height, 1.2);
         assert_eq!(cfg.colors.foreground.as_deref(), Some("#efefef"));
+    }
+
+    #[test]
+    fn tab_title_defaults_to_default() {
+        // An empty/missing layout group → TabTitleMode::Default ("default").
+        let cfg: TerminalConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.layout.tab_title, super::layout::TabTitleMode::Default);
+    }
+
+    #[test]
+    fn tab_title_osc_parses_and_round_trips() {
+        let cfg: TerminalConfig =
+            serde_json::from_str(r#"{ "layout": { "tab_title": "osc" } }"#).unwrap();
+        assert_eq!(cfg.layout.tab_title, super::layout::TabTitleMode::Osc);
+        // Round-trip back to JSON and parse again.
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains("\"tab_title\":\"osc\""), "got: {json}");
+        let again: TerminalConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(again.layout.tab_title, super::layout::TabTitleMode::Osc);
     }
 }

@@ -9,7 +9,8 @@ use std::sync::Arc;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, MouseButton, ParentElement, Render,
-    StatefulInteractiveElement, Styled, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
+    StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable,
@@ -19,9 +20,9 @@ use gpui_component::{
 use oneterm_core::TerminalSession;
 use oneterm_local::{LocalSession, PtySize};
 
-use crate::state::{AppState, TerminalSettings};
+use crate::state::{AppState, TabTitleMode, TerminalSettings};
 
-use super::view::LocalTerminalView;
+use super::view::{LocalTerminalView, TerminalViewEvent};
 
 /// Panel displaying one Terminal session.
 pub struct TerminalPanel {
@@ -36,6 +37,49 @@ pub struct TerminalPanel {
     is_active: bool,
     /// Tab title — "Terminal" for local, session label for SSH.
     tab_title: String,
+    /// Subscription to the view's `TerminalViewEvent::TitleChanged` — re-renders
+    /// the panel so the dock's tab strip picks up the live OSC 0/2 title.
+    _title_sub: Subscription,
+    /// Subscription to global `TerminalSettings` changes — re-renders the panel
+    /// so the tab title picks up a `tab_title_mode` switch immediately (and other
+    /// settings propagate to the live terminal).
+    _settings_sub: Subscription,
+}
+
+/// Resolve the tab label from the live OSC 0/2 title and the static fallback.
+///
+/// Uses the live title (`TerminalSession::title()`, cached by the listener
+/// from `Event::Title`) when the shell has set one, otherwise falls back to the
+/// static label ("Terminal" for local, the SSH session label for remote). An
+/// empty/absent title — e.g. after `ResetTitle` (the listener maps it to
+/// `None`) — also falls back, so the tab is never blank.
+pub(crate) fn resolve_tab_label(live: Option<&str>, fallback: &str) -> String {
+    match live.filter(|s| !s.is_empty()).map(trim_path_title) {
+        Some(t) => t.to_string(),
+        None => fallback.to_string(),
+    }
+}
+
+/// Shorten a title that is just an absolute path (a Windows drive path like
+/// `C:\Windows\system32\cmd.exe` or a POSIX path like `/usr/bin/bash`) to its
+/// last path component, so the tab stays compact. Titles that don't look like
+/// an absolute path (e.g. `user@host: ~/repo`, `vim — main.rs`, `cmd.exe`) are
+/// returned unchanged — only full paths are shortened.
+fn trim_path_title(title: &str) -> &str {
+    let t = title.trim();
+    let bytes = t.as_bytes();
+    let is_abs = t.starts_with('/')
+        || (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && (bytes[2] == b'\\' || bytes[2] == b'/'));
+    if !is_abs {
+        return title;
+    }
+    match t.rsplit(|c| c == '\\' || c == '/').next() {
+        Some(last) if !last.is_empty() => last,
+        _ => title,
+    }
 }
 
 impl TerminalPanel {
@@ -52,6 +96,15 @@ impl TerminalPanel {
             ) as Box<dyn TerminalSession>
         });
         let view = cx.new(|cx| LocalTerminalView::new(session, window, cx));
+        // Refresh the tab title when the session emits an OSC 0/2 title change.
+        let _title_sub = cx.subscribe(&view, |_this, _view, _ev: &TerminalViewEvent, cx| {
+            cx.notify();
+        });
+        // Re-render when the global terminal settings change (e.g. the user
+        // switches Tab Title mode in Settings) so the tab picks it up at once.
+        let _settings_sub = cx.observe(&TerminalSettings::global(cx), |_this, _settings, cx| {
+            cx.notify();
+        });
         // Focus the terminal view right after creation — app startup + new tab.
         view.read(cx).focus_handle(cx).focus(window, cx);
         Self {
@@ -59,6 +112,8 @@ impl TerminalPanel {
             tab_panel: None,
             is_active: false,
             tab_title: "Terminal".to_string(),
+            _title_sub,
+            _settings_sub,
         }
     }
 
@@ -75,12 +130,23 @@ impl TerminalPanel {
     ) -> Self {
         let session_entity = cx.new(|_| session);
         let view = cx.new(|cx| LocalTerminalView::new(session_entity, window, cx));
+        // Refresh the tab title when the session emits an OSC 0/2 title change.
+        let _title_sub = cx.subscribe(&view, |_this, _view, _ev: &TerminalViewEvent, cx| {
+            cx.notify();
+        });
+        // Re-render when the global terminal settings change (e.g. the user
+        // switches Tab Title mode in Settings) so the tab picks it up at once.
+        let _settings_sub = cx.observe(&TerminalSettings::global(cx), |_this, _settings, cx| {
+            cx.notify();
+        });
         view.read(cx).focus_handle(cx).focus(window, cx);
         Self {
             view,
             tab_panel: None,
             is_active: false,
             tab_title: title.to_string(),
+            _title_sub,
+            _settings_sub,
         }
     }
 
@@ -151,6 +217,18 @@ impl Panel for TerminalPanel {
         // Active tab highlight color — taken from theme (`table.active.border`).
         let highlight = cx.theme().table_active_border;
         let is_active = self.is_active;
+        // Live OSC 0/2 title from the session: alacritty caches it in
+        // `SessionState.title` via the listener. Only used when the user chose
+        // the "OSC 0/2" Tab Title mode; "Default" always shows the static
+        // label. Long executable paths are shortened to the basename inside
+        // `resolve_tab_label` (e.g. `C:\Windows\system32\cmd.exe` → `cmd.exe`).
+        let mode = TerminalSettings::global(cx).read(cx).tab_title_mode;
+        let session_title = self.view.read(cx).session.read(cx).title();
+        let live = match mode {
+            TabTitleMode::Osc => session_title.as_deref(),
+            TabTitleMode::Default => None,
+        };
+        let tab_label = resolve_tab_label(live, &self.tab_title);
 
         h_flex()
             .id("tab-title")
@@ -199,7 +277,7 @@ impl Panel for TerminalPanel {
                     .overflow_hidden()
                     .text_ellipsis()
                     .whitespace_nowrap()
-                    .child(self.tab_title.clone()),
+                    .child(tab_label),
             )
             // Close button (×) — against the right edge of the tab.
             .when_some(tab_panel, |this, tp| {
@@ -300,5 +378,98 @@ impl Render for TerminalPanel {
             .size_full()
             .bg(cx.theme().background)
             .child(self.view.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_title_is_used() {
+        // A descriptive title (not an absolute path) is kept verbatim.
+        assert_eq!(
+            resolve_tab_label(Some("vim — main.rs"), "Terminal"),
+            "vim — main.rs"
+        );
+        assert_eq!(
+            resolve_tab_label(Some("user@host: ~/repo"), "user@host:24"),
+            "user@host: ~/repo"
+        );
+        // A bare shell name (no path separators / drive) is unchanged.
+        assert_eq!(resolve_tab_label(Some("cmd.exe"), "Terminal"), "cmd.exe");
+    }
+
+    #[test]
+    fn none_falls_back_to_static_label() {
+        // No title set yet (e.g. right after spawn, before any prompt).
+        assert_eq!(resolve_tab_label(None, "Terminal"), "Terminal");
+        assert_eq!(resolve_tab_label(None, "prod-server"), "prod-server");
+    }
+
+    #[test]
+    fn empty_title_falls_back_to_static_label() {
+        // `ResetTitle` → the listener maps an empty title to `None`, but even if
+        // a backend leaked an empty string we still fall back so the tab is
+        // never blank.
+        assert_eq!(resolve_tab_label(Some(""), "Terminal"), "Terminal");
+    }
+
+    #[test]
+    fn fallback_is_returned_by_value() {
+        // The fallback is cloned into the result (not borrowed) — verifies the
+        // returned `String` is independent of the input lifetime.
+        let label = resolve_tab_label(None, "Terminal");
+        assert_eq!(label, "Terminal");
+    }
+
+    // ── trim_path_title (via resolve_tab_label) ───────────────────────
+
+    #[test]
+    fn windows_drive_path_shortened_to_basename() {
+        // The classic Windows case: cmd sets the title to its full path.
+        assert_eq!(
+            resolve_tab_label(Some("C:\\Windows\\system32\\cmd.exe"), "Terminal"),
+            "cmd.exe"
+        );
+        // Forward-slash drive paths are treated the same.
+        assert_eq!(
+            resolve_tab_label(
+                Some("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"),
+                "Terminal"
+            ),
+            "powershell.exe"
+        );
+    }
+
+    #[test]
+    fn posix_path_shortened_to_basename() {
+        assert_eq!(resolve_tab_label(Some("/usr/bin/bash"), "Terminal"), "bash");
+        assert_eq!(resolve_tab_label(Some("/bin/sh"), "Terminal"), "sh");
+    }
+
+    #[test]
+    fn relative_or_descriptive_titles_not_trimmed() {
+        // Titles that don't start with `/` or a `X:\` drive are left alone.
+        assert_eq!(resolve_tab_label(Some("~/repo"), "Terminal"), "~/repo");
+        assert_eq!(
+            resolve_tab_label(Some("user@host: ~/repo"), "Terminal"),
+            "user@host: ~/repo"
+        );
+        assert_eq!(
+            resolve_tab_label(Some("vim — main.rs"), "Terminal"),
+            "vim — main.rs"
+        );
+    }
+
+    #[test]
+    fn trim_path_title_helper_directly() {
+        // Direct unit tests for the helper (returns a borrowed slice of input).
+        assert_eq!(trim_path_title("C:\\Windows\\system32\\cmd.exe"), "cmd.exe");
+        assert_eq!(trim_path_title("/usr/bin/bash"), "bash");
+        assert_eq!(trim_path_title("cmd.exe"), "cmd.exe");
+        assert_eq!(trim_path_title("user@host: ~/repo"), "user@host: ~/repo");
+        // Surrounding whitespace is ignored when detecting/trimming.
+        assert_eq!(trim_path_title("  /usr/bin/zsh  "), "zsh");
     }
 }

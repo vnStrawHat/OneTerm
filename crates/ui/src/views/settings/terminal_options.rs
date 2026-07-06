@@ -10,7 +10,7 @@ use gpui::{App, SharedString};
 use gpui_component::setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem};
 
 use crate::state::terminal_settings::{hsla_to_hex, parse_hex_color};
-use crate::state::{TerminalBlink, TerminalCursorShape, TerminalSettings};
+use crate::state::{TabTitleMode, TerminalBlink, TerminalCursorShape, TerminalSettings};
 
 /// "Cursor" group — shape, blink, and color.
 pub(super) fn cursor_group() -> SettingGroup {
@@ -151,6 +151,48 @@ pub(super) fn layout_group() -> SettingGroup {
             )
             .description(
                 "Collapse the Right Dock (Session/SFTP) when a local shell tab is active.",
+            ),
+        )
+        .item(
+            SettingItem::new(
+                "Tab Title",
+                SettingField::dropdown(
+                    // (key, label) — key is the config value, label is shown.
+                    vec![
+                        (
+                            SharedString::from("default"),
+                            SharedString::from("Default (label)"),
+                        ),
+                        (
+                            SharedString::from("osc"),
+                            SharedString::from("OSC 0/2 (shell title)"),
+                        ),
+                    ],
+                    |cx: &App| {
+                        SharedString::from(
+                            match TerminalSettings::global(cx).read(cx).tab_title_mode {
+                                TabTitleMode::Osc => "osc",
+                                TabTitleMode::Default => "default",
+                            },
+                        )
+                    },
+                    |val: SharedString, cx: &mut App| {
+                        let mode = match val.as_ref() {
+                            "osc" => TabTitleMode::Osc,
+                            _ => TabTitleMode::Default,
+                        };
+                        TerminalSettings::global(cx).update(cx, |s, cx| {
+                            s.tab_title_mode = mode;
+                            cx.notify();
+                        });
+                        super::terminal::persist(cx);
+                    },
+                ),
+            )
+            .description(
+                "How the tab title is determined. \"Default\" shows the static label \
+                (\"Terminal\" for local, the SSH session label). \"OSC 0/2\" uses the \
+                live title set by the shell (paths are shortened to the file name).",
             ),
         )
         .item(
