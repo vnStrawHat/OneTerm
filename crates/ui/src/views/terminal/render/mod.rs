@@ -166,8 +166,6 @@ impl Render for LocalTerminalView {
             ))
             .children(self.bell_overlay(has_bell, bell_enabled, &theme_ref))
             .children(self.progress_overlay(&theme_ref))
-            .children(self.vi_mode_overlay(&theme_ref))
-            .children(self.vi_cursor_overlay(&theme_ref))
             .children(self.render_scrollbar(&theme, &metrics, cx))
             .children(self.render_search_bar(window, cx));
 

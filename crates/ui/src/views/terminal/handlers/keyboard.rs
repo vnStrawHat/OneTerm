@@ -12,7 +12,6 @@ use oneterm_core::terminal::{KeySpec, encode_key};
 
 use super::super::element::GridMetrics;
 use super::super::view::LocalTerminalView;
-use super::vi::{toggle_vi_mode, update_vi_selection};
 use crate::state::TerminalSettings;
 
 /// Attach the keyboard handler.
@@ -39,13 +38,6 @@ pub(crate) fn attach_key(
                         v.open_search(_w, cx);
                     }
                 });
-                cx.stop_propagation();
-                return;
-            }
-
-            // ── Vi mode ──
-            if mods.control && mods.shift && e.keystroke.key.as_str() == "space" {
-                toggle_vi_mode(&s, &view, cx);
                 cx.stop_propagation();
                 return;
             }
@@ -87,20 +79,6 @@ pub(crate) fn attach_key(
                     }
                     _ => {}
                 }
-            }
-
-            if view.read(cx).vi_mode {
-                let key = e.keystroke.key.as_str();
-                let key_char = e.keystroke.key_char.as_deref().unwrap_or("");
-                if super::vi::handle_vi_key(key, key_char, &s, &view, cx) {
-                    cx.stop_propagation();
-                    return;
-                }
-            }
-
-            // Update vi selection if selecting.
-            if view.read(cx).vi_selecting {
-                update_vi_selection(&s, &view, cx);
             }
 
             // ── Scroll keyboard actions ──

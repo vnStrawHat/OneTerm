@@ -17,7 +17,6 @@ pub mod menu;
 pub mod mouse;
 pub mod scroll;
 pub mod url;
-pub mod vi;
 
 pub(crate) use keyboard::attach_key;
 pub(crate) use menu::attach_context_menu;

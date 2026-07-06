@@ -47,13 +47,6 @@ pub struct LocalTerminalView {
     pub(crate) scrollbar_drag_start: Option<f32>,
     /// Last scroll time — used to auto-hide the scrollbar after 2s.
     pub(crate) last_scroll_time: Option<std::time::Instant>,
-    /// Vi mode state — when active, keys move the cursor within the scrollback
-    /// instead of being sent to the PTY.
-    pub(crate) vi_mode: bool,
-    /// Vi mode cursor position (display row, col) — 0-based from the top.
-    pub(crate) vi_cursor: (usize, usize),
-    /// Vi mode selection active (v pressed).
-    pub(crate) vi_selecting: bool,
     /// URL currently hovered (Ctrl held) — for highlight + click to open URL.
     pub(crate) hovered_url: Option<super::url::DetectedUrl>,
     /// Ctrl currently held — tracked to toggle the cursor style.
@@ -197,9 +190,6 @@ impl LocalTerminalView {
             progress: None,
             scrollbar_drag_start: None,
             last_scroll_time: None,
-            vi_mode: false,
-            vi_cursor: (0, 0),
-            vi_selecting: false,
             hovered_url: None,
             ctrl_held: false,
             last_mouse_pos: None,
