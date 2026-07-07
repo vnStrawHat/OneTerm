@@ -182,13 +182,15 @@ impl super::OneTermWorkspace {
                     let any_view = panel.view();
                     if let Ok(entity) = any_view.downcast::<TerminalPanel>() {
                         entity.update(cx, |tp, cx| {
-                            tp.view().update(cx, |v, cx| {
-                                if v.search_active {
-                                    v.close_search(cx);
-                                } else {
-                                    v.open_search(window, cx);
-                                }
-                            });
+                            if let Some(view) = tp.active_view() {
+                                view.update(cx, |v, cx| {
+                                    if v.search_active {
+                                        v.close_search(cx);
+                                    } else {
+                                        v.open_search(window, cx);
+                                    }
+                                });
+                            }
                         });
                         return;
                     }

@@ -30,12 +30,13 @@ pub(crate) fn attach(
     metrics: Rc<RefCell<GridMetrics>>,
     view: Entity<LocalTerminalView>,
     focus: FocusHandle,
+    split_ctx: Option<super::space::SplitContext>,
 ) -> impl gpui::IntoElement {
     let div = attach_mouse(div, session.clone(), metrics.clone(), view.clone());
     let div = attach_scroll(div, session.clone(), metrics.clone(), view.clone());
     let div = url::attach_modifiers_changed(div, session.clone(), metrics.clone(), view.clone());
     let div = attach_key(div, session.clone(), metrics, view, focus.clone());
-    attach_context_menu(div, session, focus)
+    attach_context_menu(div, session, focus, split_ctx)
 }
 
 /// Map a GPUI `MouseButton` to a `TerminalMouseButton`.

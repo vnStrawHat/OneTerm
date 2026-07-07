@@ -169,6 +169,14 @@ impl Render for LocalTerminalView {
             .children(self.render_scrollbar(&theme, &metrics, cx))
             .children(self.render_search_bar(window, cx));
 
-        super::handlers::attach(terminal_div, session, metrics, view, self.focus.clone())
+        let split_ctx = self.split_ctx.clone();
+        super::handlers::attach(
+            terminal_div,
+            session,
+            metrics,
+            view,
+            self.focus.clone(),
+            split_ctx,
+        )
     }
 }

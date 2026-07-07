@@ -11,6 +11,7 @@ pub mod render;
 pub mod scrollbar;
 pub mod search;
 pub mod settings_panel;
+pub mod space;
 pub mod theme;
 pub mod url;
 pub mod view;

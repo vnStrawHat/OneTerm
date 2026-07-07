@@ -99,6 +99,10 @@ pub struct LocalTerminalView {
     pub(crate) search_active_idx: Option<usize>,
     /// The `InputState` for the search bar input.
     pub(crate) search_input: Option<gpui::Entity<InputState>>,
+    /// Split context — set by the owning `TerminalPanel` so this terminal's
+    /// context menu can dispatch Split / Close-Space to the right Space. `None`
+    /// until the panel wires it up (always set for a live terminal leaf).
+    pub(crate) split_ctx: Option<super::space::SplitContext>,
 }
 
 impl EventEmitter<TerminalViewEvent> for LocalTerminalView {}
@@ -234,6 +238,7 @@ impl LocalTerminalView {
             search_matches: Vec::new(),
             search_active_idx: None,
             search_input: None,
+            split_ctx: None,
         }
     }
 
