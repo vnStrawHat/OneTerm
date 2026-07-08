@@ -31,6 +31,14 @@ use crate::state::SharedState;
 /// PTY read buffer size (1 MiB — same as alacritty).
 const READ_BUFFER_SIZE: usize = 0x10_0000;
 
+/// Token used by `alacritty_terminal`'s PTY to signal child (signal) events.
+///
+/// `alacritty_terminal::tty::PTY_CHILD_EVENT_TOKEN` is `pub(crate)` on Unix (only
+/// `pub` on Windows), so it is not accessible from this crate. Its value is fixed
+/// at `1` in alacritty's `tty/unix.rs` and `tty/windows/mod.rs`; the read/write
+/// token is `0`. We mirror that value here.
+const PTY_CHILD_EVENT_TOKEN: usize = 1;
+
 /// Message sent to the event loop.
 #[derive(Debug)]
 pub enum ShellMsg {
@@ -187,7 +195,7 @@ impl ShellEventLoop {
                     continue;
                 }
 
-                if event.key == tty::PTY_CHILD_EVENT_TOKEN {
+                if event.key == PTY_CHILD_EVENT_TOKEN {
                     if let Some(tty::ChildEvent::Exited(status)) = self.pty.next_child_event() {
                         if let Some(status) = status {
                             let code = status.code();
