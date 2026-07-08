@@ -85,7 +85,7 @@ This project uses gpui-component directly from git. When upstream changes its AP
 
 ## 5. Reference-first research (IMPORTANT)
 
-> 🚨 **HARD CONSTRAINT**: When you need information related to `gpui` / `gpui-component` (API, patterns, code examples, docs, themes, icons, skills, changelogs), **the agent MUST read from `D:\TrungKFC-Research\Rust\myTerm2\reference\gpui-component\` first**. **Do not** use `web_search` / `fetch_content` / `code_search` to look up gpui-component information unless you have already read the reference and it is still missing what you need.
+> 🚨 **HARD CONSTRAINT**: When you need information related to `gpui` / `gpui-component` (API, patterns, code examples, docs, themes, icons, skills, changelogs), **the agent MUST read from `.\reference\gpui-component\` first**. **Do not** use `web_search` / `fetch_content` / `code_search` to look up gpui-component information unless you have already read the reference and it is still missing what you need.
 
 ### 5.1. Why
 
@@ -114,7 +114,7 @@ ls reference/gpui-component/crates/story/src/
 grep -rn "Button::new" reference/gpui-component/examples/
 ```
 
-**Tip**: use `read` + `grep` + `find` with **relative paths from `D:\TrungKFC-Research\Rust\myTerm2`** (e.g. `reference/gpui-component/...`).
+**Tip**: use `read` + `grep` + `find` with **relative paths from project directory** (e.g. `reference/gpui-component/...`).
 
 ### 5.3. Quick lookup table inside the reference
 
@@ -151,11 +151,11 @@ When you use web search for gpui-component, **always state clearly in your respo
 If you need a newer reference (e.g. upstream released a new tag):
 
 ```bash
-# Inside D:\TrungKFC-Research\Rust\myTerm2\reference\gpui-component\
+# Inside .\reference\gpui-component\
 git fetch origin
 git checkout <tag-or-rev>
 ```
 
 Then update the rev in the workspace `Cargo.toml` (section 1) to match, and re-run `cargo build` to refresh `Cargo.lock`.
 
-> ⚠️ The `git fetch` / `git checkout` commands on the reference only run inside the `D:\TrungKFC-Research\Rust\myTerm2\reference\gpui-component\` directory — still inside the workspace, so this does not violate the "do not cd outside the project" constraint.
+> ⚠️ The `git fetch` / `git checkout` commands on the reference only run inside the `.\reference\gpui-component\` directory — still inside the workspace, so this does not violate the "do not cd outside the project" constraint.

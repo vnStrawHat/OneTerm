@@ -39,7 +39,7 @@
 2. **One crate per domain** — each crate has a single responsibility.
 3. **Async-first** — all I/O (network, PTY, file) runs asynchronously via `cx.spawn` / `smol` / `tokio`.
 4. **Type-safe state** — use GPUI's `Entity<T>`; avoid sharing `Rc<RefCell<…>>` at the application layer.
-5. **Reference-first research** — when you need to understand APIs, code examples, or docs for `gpui` / `gpui-component`, **always read from `D:\TrungKFC-Research\Rust\myTerm2\reference\gpui-component\`**. See [`docs/agents/dependencies.md` § 5](docs/agents/dependencies.md) for details.
+5. **Reference-first research** — when you need to understand APIs, code examples, or docs for `gpui` / `gpui-component`, **always read from `.\reference\gpui-component\`**. See [`docs/agents/dependencies.md` § 5](docs/agents/dependencies.md) for details.
 6. **English-only** — all code, comments, doc comments, commit messages, docs, and any written content in the repository **must be in English**. Do not write Vietnamese (or any other non-English language) anywhere in the codebase. This rule has **zero exceptions**; if you catch yourself writing a non-English comment, rewrite it in English before continuing.
 7. **Scoped searches only** — every filesystem/search-tool invocation **must be scoped to a specific directory or path** (`crates/`, `reference/`, `docs/`, a single file, …). Never run a rootless or disk-wide search: `find /`, `grep -r /`, `rg` from the filesystem root, or any tool that scans the entire disk. These are extremely slow and can be destructive. Pick a concrete project-relative path before searching.
 
@@ -51,11 +51,11 @@
 
 ### 3.0. Learning the gpui-component API — read the reference first
 
-Before writing UI code, use `find` / `grep` / `read` on `D:\TrungKFC-Research\Rust\myTerm2\reference\gpui-component\` to look up APIs. See [`docs/agents/dependencies.md` § 5](docs/agents/dependencies.md) for the detailed lookup table. **Do not** use `web_search` for gpui-component unless the reference is missing something.
+Before writing UI code, use `find` / `grep` / `read` on `.\reference\gpui-component\` to look up APIs. See [`docs/agents/dependencies.md` § 5](docs/agents/dependencies.md) for the detailed lookup table. **Do not** use `web_search` for gpui-component unless the reference is missing something.
 
 ### 3.1. Common commands
 
-> ⚠️ **Safety boundary**: Every command below **must only be run inside** `D:\TrungKFC-Research\Rust\myTerm2`. Do not `cd` outside it, and do not run `cargo init` / `git clone` in any other directory.
+> ⚠️ **Safety boundary**: Every command below **must only be run inside** project directory. Do not `cd` outside it, and do not run `cargo init` / `git clone` in any other directory.
 
 ```bash
 # Format
@@ -81,7 +81,7 @@ cargo test --workspace
 
 - ❌ `cargo init` / `cargo new` (the project already exists).
 - ❌ `git clone` outside the workspace.
-- ❌ Any command that modifies files outside `D:\TrungKFC-Research\Rust\myTerm2`.
+- ❌ Any command that modifies files outside project directory.
 - ❌ `rm -rf` without a guard path.
 - ❌ **Rootless / disk-wide searches** — `find /`, `grep -r /`, `rg` from the FS root, or any tool called without an explicit scope. **ALWAYS pass a concrete directory path** (e.g. `find crates/ui/src -name '*.rs'`, `grep -rn 'foo' crates/`). This is a hard rule — see Core principle 7.
 
@@ -170,7 +170,7 @@ When done, the clean packaged build lives in `dist/oneterm-<triple>/` containing
 > The app icon (`assets/icons/terminal-48x48.ico`, `assets/icons/terminal-96x96.ico`)
 > is embedded into the exe via `crates/app/assets/oneterm.rc` + `embed-resource`,
 > compiled in `crates/app/build.rs`. No manual post-build step is needed.
-> 📌 **Reminder**: All commands must be run inside `D:\TrungKFC-Research\Rust\myTerm2`. If the agent needs to inspect files in `reference/`, use a **relative path** from the workspace root; do not `cd` outside it.
+> 📌 **Reminder**: All commands must be run inside project directory. If the agent needs to inspect files in `reference/`, use a **relative path** from the workspace root; do not `cd` outside it.
 >
 > 📚 **gpui-component lookup**: before using `web_search` / `fetch_content` / `code_search` for information about gpui / gpui-component, **you must read inside `reference/gpui-component/` first** — see [`docs/agents/dependencies.md` § 5](docs/agents/dependencies.md).
 
