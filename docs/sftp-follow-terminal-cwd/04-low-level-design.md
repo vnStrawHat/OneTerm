@@ -1,12 +1,12 @@
-# SFTP theo Terminal CWD — Phần 4: Thiết kế chi tiết (Low-Level Design)
+# SFTP follow Terminal CWD — Part 4: Low-Level Design
 
-> Chi tiết struct, chữ ký hàm, và code mẫu cho từng crate. Code mẫu minh hoạ ý
-> tưởng, có thể tinh chỉnh khi implement thực tế. Thứ tự sửa: `core` → `ssh`/`local`
-> → `ui`.
+> Detailed structs, function signatures, and sample code per crate. The sample code
+> illustrates the idea and may be refined during actual implementation. Edit order:
+> `core` → `ssh`/`local` → `ui`.
 
 ---
 
-## 4.1. `core` — trait `CwdSource` + accessor trên `TerminalSession`
+## 4.1. `core` — `CwdSource` trait + accessor on `TerminalSession`
 
 `crates/core/src/terminal/session.rs`:
 
@@ -14,29 +14,29 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Nguồn đọc "thư mục hiện tại" (OSC 7) của một session — đọc live, không lộ
-/// chi tiết implementation của session. Cho phép UI lấy cwd mà không cần giữ
-/// tham chiếu tới `Entity` hay import crate `ssh`/`local`.
+/// A source to read the "current directory" (OSC 7) of a session — read live, without
+/// exposing the session's implementation details. Lets the UI get cwd without holding
+/// a reference to `Entity` or importing the `ssh`/`local` crate.
 pub trait CwdSource: Send + Sync {
-    /// Thư mục hiện tại (OSC 7). `None` nếu chưa nhận được OSC 7.
+    /// The current directory (OSC 7). `None` if OSC 7 hasn't been received yet.
     fn cwd(&self) -> Option<PathBuf>;
 }
 
 pub trait TerminalSession {
-    // ── (đã có) ──
+    // ── (existing) ──
     fn cwd(&self) -> Option<PathBuf>;
     fn sftp(&self) -> Option<Arc<dyn SftpBackend>> { None }
 
-    // ── MỚI ──
-    /// Handle đọc cwd live, chia sẻ với UI. `None` = session không cung cấp
-    /// (mặc định). SSH/local override để trả `Arc` bọc quanh state chia sẻ.
+    // ── NEW ──
+    /// Handle to read cwd live, shared with the UI. `None` = the session doesn't provide
+    /// one (default). SSH/local override to return an `Arc` wrapping the shared state.
     fn cwd_source(&self) -> Option<Arc<dyn CwdSource>> {
         None
     }
 }
 ```
 
-Re-export ở `crates/core/src/lib.rs`:
+Re-export in `crates/core/src/lib.rs`:
 
 ```rust
 pub use terminal::{
@@ -45,25 +45,25 @@ pub use terminal::{
 };
 ```
 
-**Vì sao trait riêng thay vì trả `Arc<Mutex<SessionState>>`?** `SessionState` nằm
-trong `ssh`/`local`, không nên lộ ra `core`/`ui`. `CwdSource` là interface tối giản
-(1 method) → UI chỉ thấy đúng thứ cần.
+**Why a separate trait instead of returning `Arc<Mutex<SessionState>>`?** `SessionState`
+lives in `ssh`/`local`, it shouldn't leak to `core`/`ui`. `CwdSource` is a minimal interface
+(1 method) → the UI only sees what it needs.
 
 ---
 
-## 4.2. `ssh` — implement `CwdSource` chia sẻ `SharedState`
+## 4.2. `ssh` — implement `CwdSource` sharing `SharedState`
 
-`crates/ssh/src/state.rs` — `SharedState = Arc<Mutex<SessionState>>` đã có `cwd`.
-Thêm một newtype cung cấp `CwdSource`:
+`crates/ssh/src/state.rs` — `SharedState = Arc<Mutex<SessionState>>` already has `cwd`.
+Add a newtype providing `CwdSource`:
 
 ```rust
-// crates/ssh/src/state.rs (hoặc session_terminal.rs)
+// crates/ssh/src/state.rs (or session_terminal.rs)
 use std::path::PathBuf;
 use std::sync::Arc;
 use oneterm_core::CwdSource;
 
-/// Đọc `cwd` live từ `SharedState`. Clone rẻ (Arc), chia sẻ đúng state mà
-/// listener cập nhật khi nhận OSC 7.
+/// Reads `cwd` live from `SharedState`. Clone is cheap (Arc), shares the exact state the
+/// listener updates when it receives OSC 7.
 pub struct SshCwdSource {
     state: SharedState,
 }
@@ -81,7 +81,7 @@ impl CwdSource for SshCwdSource {
 }
 ```
 
-`crates/ssh/src/session_terminal.rs` — override accessor:
+`crates/ssh/src/session_terminal.rs` — override the accessor:
 
 ```rust
 fn cwd_source(&self) -> Option<Arc<dyn CwdSource>> {
@@ -89,17 +89,17 @@ fn cwd_source(&self) -> Option<Arc<dyn CwdSource>> {
 }
 ```
 
-> `self.state` là `SharedState` (`Arc<Mutex<SessionState>>`) — clone chỉ tăng
-> refcount, cùng trỏ tới state mà `handle_osc`/listener ghi `cwd`. Do đó
-> `cwd_source().cwd()` luôn phản ánh OSC 7 mới nhất.
+> `self.state` is `SharedState` (`Arc<Mutex<SessionState>>`) — cloning only increases the
+> refcount, pointing to the same state that `handle_osc`/listener writes `cwd` to. So
+> `cwd_source().cwd()` always reflects the latest OSC 7.
 
-`crates/local/src/session_terminal.rs` — tương tự (tùy chọn; local shell cũng có
-`cwd`, nhưng SFTP không áp dụng cho local nên có thể bỏ qua override — SFTP panel
-sẽ ẩn với local tab). Để nhất quán có thể vẫn implement.
+`crates/local/src/session_terminal.rs` — similar (optional; the local shell also has
+`cwd`, but SFTP doesn't apply to local so you can skip the override — the SFTP panel will
+hide on a local tab). For consistency you may still implement it.
 
 ---
 
-## 4.3. `ui` — `AppState` thêm `active_cwd_source`
+## 4.3. `ui` — `AppState` adds `active_cwd_source`
 
 `crates/ui/src/state/app_state.rs`:
 
@@ -110,17 +110,17 @@ use oneterm_core::{CwdSource, SftpBackend};
 pub struct AppState {
     pub dock_area: Option<WeakEntity<DockArea>>,
     pub active_sftp: Option<Arc<dyn SftpBackend>>,
-    /// MỚI: nguồn cwd của session active — để SFTP "sync theo terminal".
-    /// None = tab active không cung cấp cwd (local, hoặc chưa hỗ trợ).
+    /// NEW: cwd source of the active session — for SFTP "sync to terminal".
+    /// None = the active tab doesn't provide cwd (local, or not supported yet).
     pub active_cwd_source: Option<Arc<dyn CwdSource>>,
 }
 ```
 
-Cập nhật khởi tạo `Default`/`new` của `AppState` để thêm field `active_cwd_source: None`.
+Update `AppState`'s `Default`/`new` init to add the field `active_cwd_source: None`.
 
 ---
 
-## 4.4. `ui` — `TerminalPanel::set_active` set thêm cwd source
+## 4.4. `ui` — `TerminalPanel::set_active` also sets the cwd source
 
 `crates/ui/src/views/terminal/panel.rs`:
 
@@ -134,54 +134,54 @@ fn set_active(&mut self, active: bool, _: &mut Window, cx: &mut Context<Self>) {
     if active {
         let session = self.view.read(cx).session.read(cx);
         let sftp = session.sftp();
-        let cwd_source = session.cwd_source();   // ← MỚI
+        let cwd_source = session.cwd_source();   // ← NEW
         AppState::global(cx).update(cx, |state, cx| {
             state.active_sftp = sftp;
-            state.active_cwd_source = cwd_source;  // ← MỚI
+            state.active_cwd_source = cwd_source;  // ← NEW
             cx.notify();
         });
     }
 }
 ```
 
-> Lưu ý mượn `session` một lần rồi lấy cả 2 giá trị để tránh gọi `.read(cx)` hai
-> lần. Nếu borrow checker phàn nàn, tách thành 2 câu `let sftp = ...; let cwd_source = ...;`
-> mỗi câu tự `read`.
+> Note: borrow `session` once then fetch both values to avoid calling `.read(cx)` twice.
+> If the borrow checker complains, split into two `let sftp = ...; let cwd_source = ...;`
+> statements, each with its own `read`.
 
 ---
 
-## 4.5. `ui` — `SftpPanel` giữ `cwd_source` + observe
+## 4.5. `ui` — `SftpPanel` keeps `cwd_source` + observe
 
-`crates/ui/src/views/sftp/panel.rs` — thêm field:
+`crates/ui/src/views/sftp/panel.rs` — add the field:
 
 ```rust
 use oneterm_core::{CwdSource, FileEntry, SftpBackend};
 
 pub struct SftpPanel {
-    // ... các field cũ ...
+    // ... existing fields ...
     pub(crate) sftp: Option<Arc<dyn SftpBackend>>,
-    /// MỚI: nguồn cwd của terminal active (để nút Sync đọc live).
+    /// NEW: cwd source of the active terminal (for the Sync button to read live).
     pub(crate) cwd_source: Option<Arc<dyn CwdSource>>,
     // ...
 }
 ```
 
-Khởi tạo trong `new`: `cwd_source: None`.
+Init in `new`: `cwd_source: None`.
 
-Cập nhật trong observe (cùng block đang xử lý `active_sftp`):
+Update in the observe (same block that handles `active_sftp`):
 
 ```rust
 cx.observe(&app_state, |this, state, cx| {
     let st = state.read(cx);
     let new_sftp = st.active_sftp.clone();
-    let new_cwd_source = st.active_cwd_source.clone();   // ← MỚI
+    let new_cwd_source = st.active_cwd_source.clone();   // ← NEW
 
-    // Luôn cập nhật cwd_source theo tab active (kể cả khi sftp không đổi).
-    this.cwd_source = new_cwd_source;                    // ← MỚI
+    // Always update cwd_source per the active tab (even when sftp is unchanged).
+    this.cwd_source = new_cwd_source;                    // ← NEW
 
     if sftp_changed(&this.sftp, &new_sftp) {
         this.sftp = new_sftp;
-        // ... reset như cũ ...
+        // ... reset as before ...
         if this.sftp.is_some() {
             this.load_dir(PathBuf::from("."), cx);
         }
@@ -190,12 +190,12 @@ cx.observe(&app_state, |this, state, cx| {
 }).detach();
 ```
 
-Handler sync:
+Sync handler:
 
 ```rust
 impl SftpPanel {
-    /// Chuyển SFTP Browser tới thư mục hiện tại của terminal active.
-    /// No-op nếu không có SFTP hoặc terminal chưa báo cwd.
+    /// Navigate the SFTP Browser to the active terminal's current directory.
+    /// No-op if there's no SFTP or the terminal hasn't reported cwd.
     pub(crate) fn sync_to_terminal_cwd(&mut self, cx: &mut Context<Self>) {
         if self.sftp.is_none() {
             return;
@@ -212,46 +212,46 @@ impl SftpPanel {
             self.cwd.display(),
             cwd.display()
         );
-        // goto_path đã stat + xử lý lỗi + load_dir.
+        // goto_path already stats + handles errors + load_dir.
         self.goto_path(cwd, cx);
     }
 
-    /// Cwd hiện tại của terminal (để render tính trạng thái nút + tooltip).
+    /// The terminal's current cwd (to render button state + tooltip).
     pub(crate) fn terminal_cwd(&self) -> Option<PathBuf> {
         self.cwd_source.as_ref().and_then(|s| s.cwd())
     }
 }
 ```
 
-> `goto_path` hiện là `fn` private (không `pub(crate)`) — cần giữ nguyên vì
-> `sync_to_terminal_cwd` cùng `impl`/module nên gọi được. Nếu tách module, đổi
-> visibility thành `pub(crate)`.
+> `goto_path` is currently a private `fn` (not `pub(crate)`) — keep it as-is because
+> `sync_to_terminal_cwd` is in the same `impl`/module so it can call it. If you split the
+> module, change its visibility to `pub(crate)`.
 
 ---
 
-## 4.6. `ui` — nút trên toolbar
+## 4.6. `ui` — the toolbar button
 
-`crates/ui/src/views/sftp/render.rs`, trong `render_toolbar`, chèn nút giữa Back và
-Refresh (hoặc cạnh Refresh). Tính trạng thái trước khi build hàng:
+`crates/ui/src/views/sftp/render.rs`, in `render_toolbar`, insert the button between Back and
+Refresh (or next to Refresh). Compute the state before building the row:
 
 ```rust
-// Trong render_toolbar, trước khi build h_flex():
+// In render_toolbar, before building h_flex():
 let terminal_cwd = self.terminal_cwd();          // Option<PathBuf>
 let sync_enabled = terminal_cwd.is_some();
 let sync_tooltip = match &terminal_cwd {
-    Some(p) => format!("Đến thư mục hiện tại của terminal: {}", p.display()),
-    None => "Terminal chưa báo thư mục hiện tại (cần shell integration / OSC 7)"
+    Some(p) => format!("Go to the terminal's current directory: {}", p.display()),
+    None => "Terminal hasn't reported its current directory (needs shell integration / OSC 7)"
         .to_string(),
 };
 ```
 
-Nút (đặt trong chuỗi `.child(...)` của toolbar `h_flex`):
+The button (inside the toolbar `h_flex`'s `.child(...)` chain):
 
 ```rust
 // Sync-to-terminal-cwd button
 .child(
     Button::new("sftp-sync-cwd")
-        .icon(Icon::new(IconName::FolderSync).small())   // xem 4.7 về icon
+        .icon(Icon::new(IconName::FolderSync).small())   // see 4.7 for the icon
         .small()
         .ghost()
         .disabled(!sync_enabled)
@@ -262,50 +262,51 @@ Nút (đặt trong chuỗi `.child(...)` của toolbar `h_flex`):
 )
 ```
 
-> `Button` của gpui-component hỗ trợ `.disabled(bool)` và `.tooltip(impl Into<SharedString>)`.
-> Xác nhận API chính xác trong `reference/gpui-component/crates/ui/src/button/`. Nếu
-> `.tooltip` nhận closure/`Tooltip`, chỉnh theo signature thực tế (tra reference-first
-> theo AGENTS.md §3.0).
+> gpui-component's `Button` supports `.disabled(bool)` and `.tooltip(impl Into<SharedString>)`.
+> Confirm the exact API in `reference/gpui-component/crates/ui/src/button/`. If
+> `.tooltip` takes a closure/`Tooltip`, adjust to the real signature (reference-first per
+> AGENTS.md §3.0).
 
 ---
 
 ## 4.7. Icon
 
-Cần một icon gợi ý "đồng bộ thư mục / nhảy theo". Ưu tiên tên có sẵn trong
-`IconName` (tra `reference/gpui-component/crates/ui/src/icon.rs`). Ứng viên:
+Need an icon suggesting "sync directory / follow". Prefer an existing name in
+`IconName` (check `reference/gpui-component/crates/ui/src/icon.rs`). Candidates:
 `FolderSync`, `FolderInput`, `LocateFixed`, `Crosshair`, `RefreshCw`.
 
-- Nếu tên chưa có trong `IconName` của gpui-component → thêm SVG Lucide vào
-  `crates/ui/assets/icons/<name>.svg` và đăng ký qua `AppIcon` (giống `AppIcon::Refresh`
-  đang dùng cho nút Refresh). Xem AGENTS.md §3.4 (Theme & icon).
-- Đặt tên file SVG trùng tên biến trong `AppIcon`/`IconName`.
+- If the name isn't in gpui-component's `IconName` yet → add a Lucide SVG to
+  `crates/ui/assets/icons/<name>.svg` and register it via `AppIcon` (like `AppIcon::Refresh`
+  used by the Refresh button). See AGENTS.md §3.4 (Theme & icon).
+- Name the SVG file the same as the variable name in `AppIcon`/`IconName`.
 
-Đề xuất: dùng `AppIcon::FolderSync` (thêm mới) hoặc tái dùng một icon "target/locate"
-sẵn có để giảm việc thêm asset.
+Suggestion: use `AppIcon::FolderSync` (new) or reuse an existing "target/locate" icon
+to reduce asset additions.
 
 ---
 
-## 4.8. Tổng hợp thay đổi theo file
+## 4.8. Consolidated changes per file
 
-| Crate | File | Thay đổi |
-|-------|------|----------|
-| core | `terminal/session.rs` | + trait `CwdSource`; + `fn cwd_source()` (default `None`) trên `TerminalSession` |
+| Crate | File | Change |
+|-------|------|--------|
+| core | `terminal/session.rs` | + `CwdSource` trait; + `fn cwd_source()` (default `None`) on `TerminalSession` |
 | core | `lib.rs` | + re-export `CwdSource` |
-| ssh | `state.rs` (hoặc `session_terminal.rs`) | + struct `SshCwdSource` impl `CwdSource` |
+| ssh | `state.rs` (or `session_terminal.rs`) | + struct `SshCwdSource` impl `CwdSource` |
 | ssh | `session_terminal.rs` | + override `fn cwd_source()` |
-| local | `session_terminal.rs` | *(tùy chọn)* + override `fn cwd_source()` |
-| ui | `state/app_state.rs` | + field `active_cwd_source` + cập nhật khởi tạo |
+| local | `session_terminal.rs` | *(optional)* + override `fn cwd_source()` |
+| ui | `state/app_state.rs` | + field `active_cwd_source` + update init |
 | ui | `views/terminal/panel.rs` | `set_active`: set `active_cwd_source` |
-| ui | `views/sftp/panel.rs` | + field `cwd_source`; observe cập nhật; + `sync_to_terminal_cwd`, `terminal_cwd` |
-| ui | `views/sftp/render.rs` | `render_toolbar`: + nút Sync (disabled/tooltip theo trạng thái) |
-| ui | `assets/icons/` + `icon.rs` | *(nếu cần)* + icon mới |
+| ui | `views/sftp/panel.rs` | + field `cwd_source`; observe update; + `sync_to_terminal_cwd`, `terminal_cwd` |
+| ui | `views/sftp/render.rs` | `render_toolbar`: + Sync button (disabled/tooltip by state) |
+| ui | `assets/icons/` + `icon.rs` | *(if needed)* + new icon |
 
 ---
 
-## 4.9. Phương án thay thế cho §4.1–4.2 (không thêm trait mới)
+## 4.9. Alternative for §4.1–4.2 (no new trait)
 
-Nếu team muốn tránh trait `CwdSource`, có thể lưu **`WeakEntity<Box<dyn TerminalSession>>`**
-vào `AppState` (phương án B ở phần 03) và trong `SftpPanel` gọi:
+If the team wants to avoid the `CwdSource` trait, you can store
+**`WeakEntity<Box<dyn TerminalSession>>`** in `AppState` (option B in part 03) and in
+`SftpPanel` call:
 
 ```rust
 let cwd = self.active_session
@@ -314,10 +315,11 @@ let cwd = self.active_session
     .and_then(|e| e.read(cx).cwd());
 ```
 
-- **Ưu:** không thêm type ở `core`; dùng thẳng `cwd()` đã có.
-- **Nhược:** `AppState`/`SftpPanel` phải biết kiểu `Entity<Box<dyn TerminalSession>>`
-  (đây là kiểu `ui`-side nên vẫn hợp lệ về layering); cần `cx` để `read` (đã có trong
-  handler); phải quản lý `WeakEntity` lifetime.
+- **Pros:** no new type in `core`; uses the existing `cwd()` directly.
+- **Cons:** `AppState`/`SftpPanel` must know the `Entity<Box<dyn TerminalSession>>` type
+  (this is a `ui`-side type so it's still valid layering-wise); needs `cx` to `read`
+  (available in the handler); must manage `WeakEntity` lifetime.
 
-Khuyến nghị: **phương án C (`CwdSource`)** cho ranh giới sạch và mở đường auto-follow;
-phương án B nếu muốn thay đổi tối thiểu và chấp nhận `SftpPanel` giữ weak-ref session.
+Recommendation: **option C (`CwdSource`)** for a clean boundary and to open the auto-follow
+path; option B if you want minimal change and accept `SftpPanel` holding a weak-ref to the
+session.

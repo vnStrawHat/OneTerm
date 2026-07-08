@@ -1,107 +1,107 @@
-# SFTP theo Terminal CWD — Phần 1: Tổng quan & mục tiêu
+# SFTP follow Terminal CWD — Part 1: Overview & goals
 
-> Tài liệu thiết kế cho tính năng: **nút "Sync SFTP Browser theo thư mục hiện tại
-> của SSH session"**. Khi user `cd` sang thư mục khác trong terminal, nhấn nút này
-> để SFTP Browser tự nhảy tới đúng thư mục đó.
+> Design document for the feature: **a "Sync SFTP Browser to the current directory of the
+> SSH session" button**. When the user `cd`s to another directory in the terminal, clicking
+> this button makes the SFTP Browser jump to that exact directory.
 >
-> **Tham chiếu liên quan:**
-> - [`docs/sftp-browser-design.md`](../sftp-browser-design.md) — thiết kế SFTP browser + `SftpPanel`
+> **Related references:**
+> - [`docs/sftp-browser-design.md`](../sftp-browser-design.md) — SFTP browser design + `SftpPanel`
 > - [`docs/osc-sequences-checklist.md`](../osc-sequences-checklist.md) §F — OSC 7 (CWD)
 > - [`docs/terminal-backend.md`](../terminal-backend.md) — `SshSession`, `TerminalSession`
-> - [`docs/agents/structure.md`](../agents/structure.md) — cấu trúc crate & dependency graph
+> - [`docs/agents/structure.md`](../agents/structure.md) — crate structure & dependency graph
 >
-> **Các phần của tài liệu này** (chia nhỏ để dễ đọc, gộp lại sau):
-> 1. `01-overview.md` — tổng quan & mục tiêu (file này)
-> 2. `02-current-state.md` — hiện trạng codebase liên quan
-> 3. `03-high-level-design.md` — thiết kế cấp cao (kiến trúc, luồng dữ liệu)
-> 4. `04-low-level-design.md` — thiết kế chi tiết (struct, hàm, code)
-> 5. `05-edge-cases-roadmap.md` — edge case, rủi ro, roadmap triển khai
+> **Parts of this document** (split for readability, merged back later):
+> 1. `01-overview.md` — overview & goals (this file)
+> 2. `02-current-state.md` — related codebase current state
+> 3. `03-high-level-design.md` — high-level design (architecture, data flow)
+> 4. `04-low-level-design.md` — detailed design (structs, functions, code)
+> 5. `05-edge-cases-roadmap.md` — edge cases, risks, implementation roadmap
 
 ---
 
-## 1.1. Mô tả chức năng
+## 1.1. Feature description
 
-SFTP Browser (panel bên phải) và Terminal (SSH shell, panel giữa) hiện là **hai
-luồng độc lập** chạy trên cùng 1 kết nối SSH. Thư mục mà SFTP đang duyệt (`cwd`
-của `SftpPanel`) **không liên quan** tới thư mục mà shell đang đứng (`pwd` phía
-remote). User `cd /var/log` trong terminal thì SFTP vẫn ở `~`.
+The SFTP Browser (right panel) and the Terminal (SSH shell, center panel) are currently **two
+independent streams** running on the same SSH connection. The directory the SFTP is browsing
+(`cwd` of `SftpPanel`) is **unrelated** to the directory the shell is in (`pwd` on the
+remote side). If the user runs `cd /var/log` in the terminal, SFTP stays at `~`.
 
-Tính năng này thêm **một nút trên toolbar của SFTP Browser**. Khi user click:
+This feature adds **one button on the SFTP Browser toolbar**. When the user clicks:
 
-1. Đọc thư mục hiện tại (`cwd`) của SSH session gắn với tab terminal đang active.
-2. Điều hướng SFTP Browser tới đúng thư mục đó (`load_dir`).
+1. Read the current directory (`cwd`) of the SSH session attached to the active terminal tab.
+2. Navigate the SFTP Browser to that exact directory (`load_dir`).
 
-Đây là hành vi **manual sync** (đồng bộ theo yêu cầu): mỗi lần user muốn SFTP
-"đuổi theo" vị trí shell thì bấm nút. Không auto-follow theo mặc định (xem
-§1.4 để biết lý do và phương án mở rộng auto-follow tùy chọn).
+This is **manual sync** (sync on demand): each time the user wants SFTP to "follow" the shell
+location, they click the button. No auto-follow by default (see §1.4 for the rationale and the
+optional auto-follow extension).
 
-### Ví dụ luồng sử dụng
+### Example usage flow
 
 ```
 Terminal:  user@host:~$ cd /var/www/html
-SFTP:      vẫn đang ở /home/user
+SFTP:      still at /home/user
            │
-           └─ user click nút [⤢ Sync to terminal] trên SFTP toolbar
+           └─ user clicks the [⤢ Sync to terminal] button on the SFTP toolbar
                      │
-                     └─ SFTP Browser nhảy tới /var/www/html
+                     └─ SFTP Browser jumps to /var/www/html
 ```
 
 ---
 
-## 1.2. Yêu cầu chức năng
+## 1.2. Functional requirements
 
-| # | Yêu cầu | Ghi chú |
+| # | Requirement | Notes |
 |---|---------|---------|
-| R1 | SFTP toolbar có 1 nút "sync theo cwd của terminal" | Icon + tooltip rõ nghĩa |
-| R2 | Click nút → SFTP điều hướng tới `cwd` của SSH session active | Dùng `load_dir` sẵn có |
-| R3 | `cwd` lấy live tại thời điểm click (không phải snapshot cũ) | Phản ánh đúng lần `cd` gần nhất |
-| R4 | Nếu `cwd` không có (chưa nhận OSC 7) → nút disabled + tooltip giải thích | Không crash, không nhảy sai |
-| R5 | Local shell tab hoặc SSH không có SFTP → không hiện nút (hoặc disabled) | Nhất quán với `render_no_connection` |
-| R6 | Không phá kiến trúc crate: `ui` không import `ssh`/`local` | Giao tiếp qua trait `TerminalSession` |
-| R7 | (Mở rộng, tùy chọn) Toggle "auto-follow" — tự sync mỗi lần cwd đổi | Không bắt buộc cho bản đầu |
+| R1 | The SFTP toolbar has a "sync to terminal cwd" button | Clear icon + tooltip |
+| R2 | Click the button → SFTP navigates to the `cwd` of the active SSH session | Use the existing `load_dir` |
+| R3 | `cwd` is read live at click time (not a stale snapshot) | Reflects the most recent `cd` |
+| R4 | If `cwd` is unavailable (no OSC 7 received yet) → button disabled + explanatory tooltip | No crash, no wrong jump |
+| R5 | Local shell tab or SSH without SFTP → button not shown (or disabled) | Consistent with `render_no_connection` |
+| R6 | Don't break the crate architecture: `ui` doesn't import `ssh`/`local` | Communicate via the `TerminalSession` trait |
+| R7 | (Extension, optional) Toggle "auto-follow" — auto-sync each time cwd changes | Not required for the first version |
 
 ---
 
-## 1.3. Điều kiện tiên quyết: OSC 7 phải hoạt động
+## 1.3. Prerequisite: OSC 7 must work
 
-`cwd` của terminal được xác định qua **OSC 7** (`ESC]7;file://host/path ST`). Theo
-[`osc-sequences-checklist.md`](../osc-sequences-checklist.md) §F, OneTerm **đã hỗ trợ**
-parse OSC 7 (tự parse song song vì `alacritty_terminal` drop nó), lưu vào
-`SessionState.cwd` và expose qua `TerminalSession::cwd() -> Option<PathBuf>`.
+The terminal `cwd` is determined via **OSC 7** (`ESC]7;file://host/path ST`). Per
+[`osc-sequences-checklist.md`](../osc-sequences-checklist.md) §F, OneTerm **already supports**
+parsing OSC 7 (self-parses in parallel because `alacritty_terminal` drops it), stores it in
+`SessionState.cwd`, and exposes it via `TerminalSession::cwd() -> Option<PathBuf>`.
 
-**Điểm mấu chốt cho SSH:** OSC 7 do **shell phía remote** phát ra. Nó chỉ có mặt khi
-remote shell được cấu hình phát OSC 7 (qua `PROMPT_COMMAND` của bash, `precmd`/`PS1`
-của zsh, hoặc VTE integration mà nhiều distro cài sẵn ở `/etc/profile.d/`). Nếu
-remote shell **không** phát OSC 7 thì `cwd()` trả về `None` và tính năng không thể
-"đuổi theo".
+**Key point for SSH:** OSC 7 is emitted by the **remote-side shell**. It is only present when
+the remote shell is configured to emit OSC 7 (via bash's `PROMPT_COMMAND`, zsh's `precmd`/`PS1`,
+or the VTE integration that many distros preinstall at `/etc/profile.d/`). If the remote shell
+does **not** emit OSC 7, then `cwd()` returns `None` and the feature cannot "follow".
 
-→ Đây là **giả định nền tảng** của thiết kế. Xử lý khi thiếu OSC 7 nằm ở R4
-(nút disabled + tooltip) và được bàn kỹ trong `05-edge-cases-roadmap.md`. Việc
-**chủ động inject shell integration khi SSH login** để đảm bảo OSC 7 luôn có là một
-hướng mở rộng, cũng bàn trong phần 05.
+→ This is the **foundational assumption** of the design. Handling the missing-OSC-7 case is
+in R4 (disabled button + tooltip) and is discussed in depth in `05-edge-cases-roadmap.md`.
+**Actively injecting shell integration on SSH login** to guarantee OSC 7 is always present is
+an extension direction, also discussed in part 05.
 
 ---
 
 ## 1.4. Manual sync vs Auto-follow
 
-| Phương án | Ưu | Nhược |
+| Option | Pros | Cons |
 |-----------|-----|-------|
-| **Manual (nút bấm)** — bản đầu | Đơn giản, không tốn read_dir thừa, user chủ động | Phải bấm mỗi lần |
-| **Auto-follow (toggle)** — mở rộng | SFTP luôn khớp shell tự động | Mỗi `cd` → 1 `read_dir` (tốn băng thông), có thể gây "nhảy" ngoài ý muốn khi đang thao tác file |
+| **Manual (button)** — first version | Simple, no wasted read_dir, user-driven | Must click each time |
+| **Auto-follow (toggle)** — extension | SFTP always matches the shell automatically | Each `cd` → 1 `read_dir` (bandwidth cost), can cause unwanted "jumps" while manipulating files |
 
-Yêu cầu gốc của user là "**nhấn button thì SFTP tự chuyển theo**" → đúng bản chất
-**manual sync**. Auto-follow để dành làm tùy chọn bật/tắt sau (R7), vì nó thay đổi
-UX đáng kể và tốn tài nguyên khi user gõ nhiều lệnh `cd` liên tiếp.
+The user's original request is "click a button and SFTP follows automatically" → this is
+**manual sync** by nature. Auto-follow is left as an optional on/off toggle for later (R7),
+because it changes UX significantly and costs resources when the user types many `cd` commands
+in a row.
 
 ---
 
-## 1.5. Nguyên tắc thiết kế
+## 1.5. Design principles
 
-1. **Tái sử dụng hạ tầng sẵn có** — `cwd()` (trait), `load_dir()` (SftpPanel),
-   pattern `AppState.active_sftp` đã tồn tại. Không phát minh lại.
-2. **Live read** — đọc `cwd` tại thời điểm click, không cache snapshot lỗi thời.
-3. **Tôn trọng layering** — `ui` chỉ chạm `dyn TerminalSession` (ở `core`), không
+1. **Reuse existing infrastructure** — `cwd()` (trait), `load_dir()` (SftpPanel),
+   the `AppState.active_sftp` pattern already exist. Don't reinvent.
+2. **Live read** — read `cwd` at click time, don't cache a stale snapshot.
+3. **Respect layering** — `ui` only touches `dyn TerminalSession` (in `core`), does not
    import `ssh`/`local`.
-4. **Fail an toàn** — thiếu OSC 7 / không có SFTP → disabled, không nhảy sai chỗ.
-5. **Không đụng SFTP backend** — tính năng thuần UI + 1 kênh dữ liệu `cwd`; không
-   sửa `sftp_task`, `SftpCmd`, giao thức.
+4. **Fail safe** — missing OSC 7 / no SFTP → disabled, don't jump to the wrong place.
+5. **Don't touch the SFTP backend** — the feature is pure UI + 1 `cwd` data channel; don't
+   modify `sftp_task`, `SftpCmd`, the protocol.

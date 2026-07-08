@@ -1,14 +1,14 @@
-# SFTP theo Terminal CWD — Phần 2: Hiện trạng codebase
+# SFTP follow Terminal CWD — Part 2: Codebase current state
 
-> Phần này ghi lại chính xác các mảnh code liên quan **đã tồn tại**, để thiết kế
-> ở phần 03/04 chỉ cần "nối dây" chứ không xây lại. Tất cả trích dẫn dưới đây
-> verify từ code hiện tại (không phải giả định).
+> This part records the exact pieces of related code that **already exist**, so the design
+> in parts 03/04 only needs to "wire up" rather than rebuild. All excerpts below are
+> verified from the current code (not assumptions).
 
 ---
 
-## 2.1. `cwd` đã được track và expose sẵn
+## 2.1. `cwd` is already tracked and exposed
 
-### Ở `core` — trait `TerminalSession`
+### In `core` — the `TerminalSession` trait
 
 `crates/core/src/terminal/session.rs`:
 
@@ -26,9 +26,9 @@ pub trait TerminalSession {
 }
 ```
 
-→ **`cwd()` đã có sẵn trên trait.** UI có thể gọi mà không cần import `ssh`/`local`.
+→ **`cwd()` is already on the trait.** UI can call it without importing `ssh`/`local`.
 
-### Ở `ssh` — nguồn của `cwd`
+### In `ssh` — the source of `cwd`
 
 `crates/ssh/src/state.rs` — `SessionState`:
 
@@ -41,7 +41,7 @@ pub struct SessionState {
 }
 ```
 
-`crates/ssh/src/task.rs` — parse OSC 7 từ luồng shell rồi ghi vào state:
+`crates/ssh/src/task.rs` — parses OSC 7 from the shell stream then writes it to state:
 
 ```rust
 fn handle_osc(payload: &OscPayload, state: &SharedState, listener: &SshListener) {
@@ -49,14 +49,14 @@ fn handle_osc(payload: &OscPayload, state: &SharedState, listener: &SshListener)
         OscPayload::Cwd(url) => {
             let cwd = parse_cwd_url(url);          // file://host/path → PathBuf
             { /* state.lock().cwd = cwd.clone() */ }
-            listener.forward(SessionEvent::Cwd(cwd));   // ← có event Cwd!
+            listener.forward(SessionEvent::Cwd(cwd));   // ← there is a Cwd event!
         }
         // ...
     }
 }
 ```
 
-`crates/ssh/src/session_terminal.rs` — accessor đọc lại:
+`crates/ssh/src/session_terminal.rs` — the accessor reads it back:
 
 ```rust
 fn cwd(&self) -> Option<PathBuf> {
@@ -64,16 +64,16 @@ fn cwd(&self) -> Option<PathBuf> {
 }
 ```
 
-**Hai điểm quan trọng:**
-- `cwd` cập nhật **live** mỗi lần remote shell phát OSC 7 (thường sau mỗi prompt).
-- Đã có **`SessionEvent::Cwd(...)`** được `forward` — đây là hook sẵn có cho phương
-  án auto-follow (phần 03/05) mà không cần polling.
+**Two important points:**
+- `cwd` updates **live** each time the remote shell emits OSC 7 (usually after each prompt).
+- There is already a **`SessionEvent::Cwd(...)`** being `forward`ed — this is a ready-made hook
+  for the auto-follow option (parts 03/05) without needing polling.
 
-`crates/local/src/session_terminal.rs` có `fn cwd()` tương tự cho local shell.
+`crates/local/src/session_terminal.rs` has a similar `fn cwd()` for the local shell.
 
 ---
 
-## 2.2. `SftpPanel` — đã có `load_dir` / `goto_path`
+## 2.2. `SftpPanel` — already has `load_dir` / `goto_path`
 
 `crates/ui/src/views/sftp/panel.rs`:
 
@@ -85,10 +85,10 @@ pub struct SftpPanel {
 }
 
 impl SftpPanel {
-    /// Read a directory — spawn background task, không block UI.
+    /// Read a directory — spawn background task, doesn't block UI.
     pub fn load_dir(&mut self, path: PathBuf, cx: &mut Context<Self>) { /* ... */ }
 
-    /// Goto path — stat trước; nếu là dir thì load_dir, nếu lỗi → path_error.
+    /// Goto path — stat first; if it's a dir then load_dir, on error → path_error.
     fn goto_path(&mut self, path: PathBuf, cx: &mut Context<Self>) { /* ... */ }
 
     pub(crate) fn navigate_parent(&mut self, cx: &mut Context<Self>) { /* ... */ }
@@ -97,29 +97,29 @@ impl SftpPanel {
 }
 ```
 
-→ Điều hướng SFTP tới 1 path bất kỳ **đã có** (`load_dir` / `goto_path`). Tính năng
-chỉ cần gọi `load_dir(cwd_cua_terminal)`.
+→ Navigating SFTP to an arbitrary path **already exists** (`load_dir` / `goto_path`). The
+feature just needs to call `load_dir(terminal_cwd)`.
 
-Lưu ý về **kiểu path**: `goto_path` gọi `sftp.stat(path)` để kiểm tra path tồn tại
-+ là thư mục trước khi load. `cwd` từ OSC 7 là **đường dẫn tuyệt đối phía remote**
-(POSIX, ví dụ `/var/www/html`) — dùng trực tiếp cho SFTP `read_dir`/`stat` được.
+Note on the **path type**: `goto_path` calls `sftp.stat(path)` to check the path exists
++ is a directory before loading. The `cwd` from OSC 7 is an **absolute remote-side path**
+(POSIX, e.g. `/var/www/html`) — usable directly for SFTP `read_dir`/`stat`.
 
 ---
 
-## 2.3. `AppState.active_sftp` — pattern "panel global, session per-tab"
+## 2.3. `AppState.active_sftp` — the "global panel, per-tab session" pattern
 
 `crates/ui/src/state/app_state.rs`:
 
 ```rust
 pub struct AppState {
     pub dock_area: Option<WeakEntity<DockArea>>,
-    /// SFTP backend của active SSH tab.
-    /// None = local shell hoặc SSH không hỗ trợ SFTP.
+    /// SFTP backend of the active SSH tab.
+    /// None = local shell or SSH without SFTP support.
     pub active_sftp: Option<Arc<dyn SftpBackend>>,
 }
 ```
 
-`SftpPanel` **observe** `AppState` và swap backend khi tab đổi:
+`SftpPanel` **observes** `AppState` and swaps the backend when the tab changes:
 
 ```rust
 cx.observe(&app_state, |this, state, cx| {
@@ -133,7 +133,7 @@ cx.observe(&app_state, |this, state, cx| {
 }).detach();
 ```
 
-Ai set `active_sftp`? — `TerminalPanel::set_active`
+Who sets `active_sftp`? — `TerminalPanel::set_active`
 (`crates/ui/src/views/terminal/panel.rs`):
 
 ```rust
@@ -149,9 +149,9 @@ fn set_active(&mut self, active: bool, _: &mut Window, cx: &mut Context<Self>) {
 }
 ```
 
-**Đây là chỗ chốt của thiết kế:** cùng thời điểm lấy `sftp()`, ta cũng có `session`
-— tức có thể lấy được `cwd()`. Session lưu dưới dạng
-`Entity<Box<dyn TerminalSession>>` trong `LocalTerminalView`:
+**This is the crux of the design:** at the same time we fetch `sftp()`, we also have `session`
+— so we can get `cwd()`. The session is stored as
+`Entity<Box<dyn TerminalSession>>` in `LocalTerminalView`:
 
 ```rust
 // crates/ui/src/views/terminal/view/mod.rs
@@ -163,11 +163,12 @@ pub struct LocalTerminalView {
 
 ---
 
-## 2.4. Toolbar SFTP — nơi đặt nút mới
+## 2.4. SFTP toolbar — where the new button goes
 
-`crates/ui/src/views/sftp/render.rs` — `render_toolbar` hiện có: path input (flex-1)
-+ nút Back + nút Refresh + nút "..." (menu). Các nút dùng `gpui_component::button::Button`
-với `.icon(...).small().ghost().on_click(cx.listener(...))`. Ví dụ nút Refresh:
+`crates/ui/src/views/sftp/render.rs` — `render_toolbar` currently has: a path input (flex-1)
++ a Back button + a Refresh button + a "..." (menu) button. The buttons use
+`gpui_component::button::Button` with `.icon(...).small().ghost().on_click(cx.listener(...))`.
+Example, the Refresh button:
 
 ```rust
 .child(
@@ -181,16 +182,16 @@ với `.icon(...).small().ghost().on_click(cx.listener(...))`. Ví dụ nút Ref
 )
 ```
 
-→ Nút mới sẽ chèn vào đúng hàng toolbar này, cùng style.
+→ The new button will be inserted into this same toolbar row, with the same style.
 
 ---
 
-## 2.5. Khoảng trống cần lấp (gap analysis)
+## 2.5. The gap to fill (gap analysis)
 
-| # | Gap | Chi tiết | Hướng giải quyết (phần 03/04) |
+| # | Gap | Detail | Resolution direction (parts 03/04) |
 |---|-----|----------|-------------------------------|
-| G1 | **SftpPanel không có đường lấy `cwd` của terminal** | Panel chỉ giữ `Arc<dyn SftpBackend>`, không có tham chiếu tới session/terminal. | Bổ sung 1 kênh cung cấp `cwd` live vào `AppState` (song song với `active_sftp`). |
-| G2 | **`cwd` cần đọc live tại thời điểm click** | Không thể snapshot lúc `set_active` vì user `cd` sau đó. | Lưu cách "hỏi cwd" (một provider callable) chứ không lưu giá trị `cwd`. |
-| G3 | **Chưa có nút trên toolbar** | `render_toolbar` chưa có nút sync. | Thêm `Button` + handler `sync_to_terminal_cwd`. |
-| G4 | **Trạng thái disabled khi thiếu cwd/SFTP** | Cần biết "có cwd hay không" để bật/tắt nút. | Provider trả `Option<PathBuf>`; `None` → disable. |
-| G5 | *(mở rộng)* **Auto-follow chưa có kênh sự kiện tới SFTP** | `SessionEvent::Cwd` có ở ssh nhưng chưa nối tới `SftpPanel`. | Tùy chọn: forward event → observe trong SftpPanel. |
+| G1 | **SftpPanel has no way to get the terminal's `cwd`** | The panel only holds `Arc<dyn SftpBackend>`, no reference to the session/terminal. | Add a channel supplying live `cwd` to `AppState` (parallel to `active_sftp`). |
+| G2 | **`cwd` must be read live at click time** | Can't snapshot at `set_active` because the user `cd`s afterward. | Store a "ask for cwd" (a callable provider) rather than storing the `cwd` value. |
+| G3 | **No button on the toolbar yet** | `render_toolbar` has no sync button. | Add a `Button` + handler `sync_to_terminal_cwd`. |
+| G4 | **Disabled state when cwd/SFTP missing** | Need to know "is there a cwd" to toggle the button. | Provider returns `Option<PathBuf>`; `None` → disable. |
+| G5 | *(extension)* **Auto-follow has no event channel to SFTP yet** | `SessionEvent::Cwd` exists in ssh but isn't wired to `SftpPanel`. | Optional: forward the event → observe in SftpPanel. |

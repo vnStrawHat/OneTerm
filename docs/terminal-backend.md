@@ -1,57 +1,57 @@
-# Thiết kế Terminal Backend — OneTerm
+# Terminal Backend Design — OneTerm
 
-> Tài liệu thiết kế cho phần terminal: **local shell** + **SSH session**, dùng chung
-> renderer dựa trên `alacritty_terminal`. Ưu tiên Windows-first. Shell cục bộ có thể
-> chọn `cmd` / `powershell` / `pwsh` / custom.
+> Design document for the terminal part: **local shell** + **SSH session**, sharing a
+> renderer based on `alacritty_terminal`. Windows-first priority. Local shell can be
+> `cmd` / `powershell` / `pwsh` / custom.
 >
-> **Tham chiếu chính**: Zed (`zed-industries/zed`) dùng đúng `alacritty_terminal`
-> (tty + `EventLoop` + `FairMutex`) và render bằng GPUI custom Element. Thiết kế này
-> map 1:1 sang Zed, thay layer chrome bằng `gpui-component`.
+> **Primary reference**: Zed (`zed-industries/zed`) uses exactly `alacritty_terminal`
+> (tty + `EventLoop` + `FairMutex`) and renders via a custom GPUI Element. This design
+> maps 1:1 to Zed, replacing the chrome layer with `gpui-component`.
 >
-> File nguồn Zed tham chiếu (cùng rev lock `1d217ee39…`):
+> Zed source files referenced (same rev lock `1d217ee39…`):
 > - `crates/terminal/src/terminal.rs` — model + EventLoop + PTY.
-> - `crates/terminal_view/src/terminal_element.rs` — custom `Element` render grid.
+> - `crates/terminal_view/src/terminal_element.rs` — custom `Element` rendering the grid.
 > - `crates/terminal_view/src/terminal_view.rs` — View + IME (`ImeState`).
 >
-> **Quyết định cốt lõi** (xem lịch sử brainstorm):
-> 1. **Local và SSH độc lập hoàn toàn** — không share trait pump, không biết nhau.
-> 2. **Render dùng chung `alacritty_terminal`** qua một custom GPUI `Element`.
-> 3. **Local dùng `alacritty_terminal::tty` + `EventLoop`** (không dùng `portable-pty`).
-> 4. **`alacritty_terminal` lấy từ fork `zed-industries/alacritty`** @ rev `fcf32feacb367b75ec84dd40f041e4fd411d3cc1`
->    (bản patched có `TerminalContent`/`display_iter`/`content()`). Đây là rev mà Zed
->    dùng cho `gpui` rev `1d217ee39…`, nhưng repo riêng — không phải monorepo zed.
-> 5. **Concurrency model của alacritty**: `Arc<FairMutex<Term<EP>>>` + snapshot.
-> 6. **Kit thuần** (`core`) không phụ thuộc GPUI.
+> **Core decisions** (see brainstorm history):
+> 1. **Local and SSH are fully independent** — they do not share a pump trait, they do not know about each other.
+> 2. **Rendering shares `alacritty_terminal`** via a custom GPUI `Element`.
+> 3. **Local uses `alacritty_terminal::tty` + `EventLoop`** (not `portable-pty`).
+> 4. **`alacritty_terminal` is taken from the `zed-industries/alacritty` fork** @ rev `fcf32feacb367b75ec84dd40f041e4fd411d3cc1`
+>    (patched version with `TerminalContent`/`display_iter`/`content()`). This is the rev Zed
+>    uses for `gpui` rev `1d217ee39…`, but it is a separate repo — not the zed monorepo.
+> 5. **alacritty concurrency model**: `Arc<FairMutex<Term<EP>>>` + snapshot.
+> 6. **The pure kit** (`core`) does not depend on GPUI.
 
 ---
 
-## 1. Nguyên tắc
+## 1. Principles
 
-| # | Nguyên tắc | Hệ quả |
+| # | Principle | Consequence |
 |---|---|---|
-| 1 | Tách lớp rõ ràng | UI không chứa logic giao thức; giao thức không biết UI. |
-| 2 | Local & SSH độc lập | Hai backend không share trait pump, không phụ thuộc lẫn nhau. |
-| 3 | Render dùng chung | Một `TerminalElement` vẽ grid cho cả local và ssh — chỉ cần `&TerminalContent`. |
-| 4 | Snapshot, không lock-while-paint | Pump cập nhật snapshot; render đọc snapshot, không giữ `FairMutex` khi vẽ. |
-| 5 | Windows-first | Local ưu tiên ConPTY; shell `cmd`/`pwsh`/`powershell` config được. |
-| 6 | Rev lock nghiêm ngặt | `gpui` + `gpui_platform` cùng rev monorepo zed; `alacritty_terminal` fork `zed-industries/alacritty` rev `fcf32fe…`. |
+| 1 | Clear layer separation | UI contains no protocol logic; protocol knows nothing about UI. |
+| 2 | Local & SSH independent | The two backends do not share a pump trait, do not depend on each other. |
+| 3 | Shared rendering | A single `TerminalElement` paints the grid for both local and ssh — only needs `&TerminalContent`. |
+| 4 | Snapshot, no lock-while-paint | The pump updates the snapshot; render reads the snapshot, does not hold `FairMutex` while painting. |
+| 5 | Windows-first | Local prefers ConPTY; `cmd`/`pwsh`/`powershell` shells are configurable. |
+| 6 | Strict rev lock | `gpui` + `gpui_platform` at the same zed monorepo rev; `alacritty_terminal` fork `zed-industries/alacritty` rev `fcf32fe…`. |
 
 ---
 
-## 2. Sơ đồ kiến trúc
+## 2. Architecture diagram
 
 ```
 ┌─────────────────── ui crate (GPUI + gpui-component) ───────────────────┐
 │  LocalTerminalView / SshTerminalView  (impl Render)                    │
 │   ├─ chrome: Button, Tabs, Dock… (gpui-component)                        │
-│   └─ child: TerminalElement  (custom gpui::Element, dùng chung)        │
-│          • đọc TerminalContent snapshot → paint_quad / shape_line      │
+│   └─ child: TerminalElement  (custom gpui::Element, shared)            │
+│          • reads TerminalContent snapshot → paint_quad / shape_line      │
 │          • EntityInputHandler (IME) + mouse + wheel                   │
 └───────▲─────────────────────────────────────────▲──────────────────────┘
         │ TerminalSession trait (core)           │
    ┌────┴────────────────┐               ┌────────┴───────────────┐
-   │  local crate        │               │  ssh crate             │  ← ĐỘC LẬP
-   │  alacritty_terminal │               │  russh + tokio (ẩn)     │     không biết nhau
+   │  local crate        │               │  ssh crate             │  ← INDEPENDENT
+   │  alacritty_terminal │               │  russh + tokio (hidden) │     don't know each other
    │   ::tty + EventLoop │               │  channel + pty-req      │
    │  ConPTY / chcp      │               │  window_change / exit   │
    │  Arc<FairMutex<     │               │  Arc<FairMutex<         │
@@ -66,104 +66,104 @@
                 └──────────────┘
 ```
 
-**Luồng dữ liệu**:
-- Đầu vào: `Keystroke` (GPUI) → `core::key_encode` → `Vec<u8>` → `session.write(bytes)` → PTY/channel.
-- Đầu ra: PTY/channel → pump (`EventLoop` local / tokio ssh) → `Term.advance(bytes)` → rebuild `last_content` snapshot → event → View `cx.notify()` → `TerminalElement::paint` đọc snapshot.
+**Data flow**:
+- Input: `Keystroke` (GPUI) → `core::key_encode` → `Vec<u8>` → `session.write(bytes)` → PTY/channel.
+- Output: PTY/channel → pump (`EventLoop` local / tokio ssh) → `Term.advance(bytes)` → rebuild `last_content` snapshot → event → View `cx.notify()` → `TerminalElement::paint` reads the snapshot.
 
 ---
 
-## 3. Trách nhiệm từng crate
+## 3. Responsibilities per crate
 
-| Crate | Vai trò terminal |
+| Crate | Terminal role |
 |---|---|
-| `core` | `TerminalSession` trait, `TerminalContent` snapshot struct, `TerminalPalette`, `key_encode`/`mouse_encode`/`osc`/`url` (pure, không GPUI), `ShellKind` + `LocalShellConfig` (config), `SessionEvent`. |
-| `local` | `LocalSession` implement `TerminalSession`. Spawn shell qua `alacritty_terminal::tty::new` + `EventLoop`. ConPTY trên Windows. Detect/chọn shell, `chcp 65001`, env. `LocalListener: EventListener`. |
-| `ssh` | `SshSession` implement `TerminalSession`. russh client + tokio runtime ẩn. pty-req + shell + `window_change` + exit-status. `SshListener: EventListener`. |
+| `core` | `TerminalSession` trait, `TerminalContent` snapshot struct, `TerminalPalette`, `key_encode`/`mouse_encode`/`osc`/`url` (pure, no GPUI), `ShellKind` + `LocalShellConfig` (config), `SessionEvent`. |
+| `local` | `LocalSession` implementing `TerminalSession`. Spawns a shell via `alacritty_terminal::tty::new` + `EventLoop`. ConPTY on Windows. Detects/chooses shell, `chcp 65001`, env. `LocalListener: EventListener`. |
+| `ssh` | `SshSession` implementing `TerminalSession`. russh client + hidden tokio runtime. pty-req + shell + `window_change` + exit-status. `SshListener: EventListener`. |
 | `ui` | `TerminalElement` (custom `gpui::Element`), `LocalTerminalView`/`SshTerminalView` (`Render`), IME (`EntityInputHandler`), mouse/wheel, font measure, theme → `TerminalPalette`. |
-| `app` | Wire views vào DockArea, settings, host manager. |
+| `app` | Wire views into DockArea, settings, host manager. |
 
-> Quy tắc phụ thuộc giữ nguyên: `app → {ui, ssh, local, core}`, `ui → core`, `ssh → core`,
-> `local → core`. `ui` **không** import `ssh`/`local` trực tiếp — gọi qua `TerminalSession`.
+> Dependency rules unchanged: `app → {ui, ssh, local, core}`, `ui → core`, `ssh → core`,
+> `local → core`. `ui` does **not** import `ssh`/`local` directly — calls via `TerminalSession`.
 
 ---
 
 ## 4. Dependencies & rev lock
 
 ```toml
-# workspace Cargo.toml — thêm vào [workspace.dependencies]
+# workspace Cargo.toml — add to [workspace.dependencies]
 alacritty_terminal = { git = "https://github.com/zed-industries/alacritty", rev = "fcf32feacb367b75ec84dd40f041e4fd411d3cc1" }
-async-channel = "2"      # event sub (không tokio lộ ra)
+async-channel = "2"      # event sub (no tokio leaked out)
 russh = "0.46"
 russh-keys = "0.46"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "io-util", "process", "net", "macros"] }
 ```
 
-> ⚠️ **Bắt buộc**: `alacritty_terminal` lấy từ fork `zed-industries/alacritty` @
-> rev `fcf32fe…` (rev mà Zed dùng cho `gpui` rev `1d217ee39…`). KHÔNG phải monorepo
-> zed. Dùng crates.io `0.26` sẽ **thiếu** `TerminalContent`/`display_iter`/`content()`/`Block`
-> mà render cần → không compile. Khi đổi rev `gpui` → kiểm tra Zed workspace deps
-> để lấy rev `alacritty_terminal` tương ứng (hai rev có thể khác nhau).
+> ⚠️ **Mandatory**: `alacritty_terminal` must be taken from the `zed-industries/alacritty` fork @
+> rev `fcf32fe…` (the rev Zed uses for `gpui` rev `1d217ee39…`). NOT the zed monorepo.
+> Using crates.io `0.26` will be **missing** `TerminalContent`/`display_iter`/`content()`/`Block`
+> that rendering needs → won't compile. When changing the `gpui` rev → check the Zed workspace deps
+> to get the matching `alacritty_terminal` rev (the two revs can differ).
 >
-> `portable-pty` **không dùng** cho local nữa (quyết định brainstorm). `ssh` không cần
-> PTY cục bộ — chỉ cần `alacritty_terminal` cho Term grid.
+> `portable-pty` is **no longer used** for local (brainstorm decision). `ssh` doesn't need a
+> local PTY — only needs `alacritty_terminal` for the Term grid.
 
 ---
 
 ## 5. Concurrency model: `Arc<FairMutex<Term<EP>>>` + snapshot
 
-### 5.1. Vì sao
+### 5.1. Why
 
-- **Pump** (local `EventLoop` thread / ssh tokio task) advance Term ở thread khác.
-- **Render** (`TerminalElement::paint`) chạy ở main thread GPUI.
-- Cả hai cần truy cập cùng `Term` ⇒ dùng `alacritty_terminal::sync::FairMutex`
-  (fair = không bị main thread "đói" lock khi pump bận).
+- The **pump** (local `EventLoop` thread / ssh tokio task) advances Term on another thread.
+- **Render** (`TerminalElement::paint`) runs on the GPUI main thread.
+- Both need access to the same `Term` ⇒ use `alacritty_terminal::sync::FairMutex`
+  (fair = the main thread doesn't starve for the lock while the pump is busy).
 
-### 5.2. Snapshot vs live borrow (QUAN TRỌNG)
+### 5.2. Snapshot vs live borrow (IMPORTANT)
 
-| | Live borrow (SAI) | Snapshot (ĐÚNG — Zed làm vậy) |
+| | Live borrow (WRONG) | Snapshot (CORRECT — what Zed does) |
 |---|---|---|
-| Paint | `let g = term.lock();` rồi vẽ **giữ guard** | `let snap = { let g = term.lock(); build content }; drop(g);` rồi vẽ |
-| Vấn đề | paint chậm (nghìn lệnh GPU) → pump `term.lock().advance()` **bị block** → jitter khi output dồn (`yes`, `cat file lớn`) | Lock chỉ trong µs để copy, pump chạy song song paint |
-| Chi phí | 0 | 1 copy ~nghìn cell/frame (rẻ hơn paint rất nhiều) |
+| Paint | `let g = term.lock();` then paint **holding the guard** | `let snap = { let g = term.lock(); build content }; drop(g);` then paint |
+| Problem | slow paint (thousands of GPU calls) → pump `term.lock().advance()` **blocks** → jitter under output bursts (`yes`, `cat large file`) | Lock only for µs to copy, pump runs in parallel with paint |
+| Cost | 0 | 1 copy ~thousand cells/frame (far cheaper than paint) |
 
-**Quy ước**: backend giữ `last_content: TerminalContent` (cache, build sau mỗi tick
-pump). `TerminalElement::paint` chỉ đọc `session.snapshot()` — **không bao giờ lock
-`FairMutex` trong paint**.
+**Convention**: the backend keeps `last_content: TerminalContent` (cache, built after each pump
+tick). `TerminalElement::paint` only reads `session.snapshot()` — **never locks the
+`FairMutex` inside paint**.
 
 ```rust
-// Pump (local EventLoop callback / ssh task) — sau khi advance Term:
-let content = TerminalContent::from(&*term.lock());   // lock ngắn
-last_content.store(content);                          // ArcSwap hoặc Mutex<TerminalContent>
+// Pump (local EventLoop callback / ssh task) — after advancing Term:
+let content = TerminalContent::from(&*term.lock());   // short lock
+last_content.store(content);                          // ArcSwap or Mutex<TerminalContent>
 event_tx.send(SessionEvent::Output).ok();              // → View cx.notify()
 
 // Render (TerminalElement::paint):
-let content = session.snapshot();                     // đọc cache, không lock Term
-// vẽ từ content.cells / content.cursor / content.mode ...
+let content = session.snapshot();                     // read cache, no Term lock
+// paint from content.cells / content.cursor / content.mode ...
 ```
 
-> Dùng `arc-swap` cho `last_content` (lock-free read) hoặc `Mutex<TerminalContent>`
-> (lock ngắn). KHÔNG giữ `FairMutex<Term>` khi đọc snapshot trong paint.
+> Use `arc-swap` for `last_content` (lock-free read) or `Mutex<TerminalContent>`
+> (short lock). Do NOT hold the `FairMutex<Term>` while reading the snapshot in paint.
 
-### 5.3. `EventListener` riêng mỗi backend
+### 5.3. `EventListener` per backend
 
-`EventProxy` (impl `alacritty_terminal::event::EventListener`) route side-effect:
-- `PtyWrite(text)` → **local**: EventLoop tự ghi PTY; **ssh**: `channel.data(text)`.
+`EventProxy` (impl `alacritty_terminal::event::EventListener`) routes side-effects:
+- `PtyWrite(text)` → **local**: EventLoop writes to PTY itself; **ssh**: `channel.data(text)`.
 - `Title(t)` → `last_title` + `SessionEvent::Title`.
 - `ClipboardStore(_, t)` → `SessionEvent::Clipboard`.
-- `Bell` / `ChildExit` / `ResetTitle` → event tương ứng.
+- `Bell` / `ChildExit` / `ResetTitle` → corresponding event.
 
-Mỗi backend có `EP` riêng (`LocalListener` / `SshListener`). Không route xuyên backend.
+Each backend has its own `EP` (`LocalListener` / `SshListener`). No cross-backend routing.
 
 ---
 
 ## 6. Local backend (`local` crate, Windows-first)
 
-### 6.1. Shell có thể config
+### 6.1. Configurable shell
 
-`core` định nghĩa:
+`core` defines:
 
 ```rust
-/// Loại shell cục bộ.
+/// Local shell kind.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum ShellKind {
@@ -177,41 +177,41 @@ pub enum ShellKind {
     Bash,
     Zsh,
     Sh,
-    /// Lệnh tùy chỉnh.
+    /// Custom command.
     Custom,
 }
 
-/// Cấu hình spawn shell cục bộ.
+/// Local shell spawn configuration.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LocalShellConfig {
     pub kind: ShellKind,
-    /// Đường dẫn executable (None → tự detect theo kind + nền tảng).
+    /// Executable path (None → auto-detect by kind + platform).
     pub program: Option<PathBuf>,
-    /// Tham số dòng lệnh thêm.
+    /// Extra command-line args.
     pub args: Vec<String>,
-    /// Env override (TERM, COLORTERM, LANG…). Mặc định đã set TERM=xterm-256color.
+    /// Env overrides (TERM, COLORTERM, LANG…). TERM=xterm-256color is set by default.
     pub env: HashMap<String, String>,
-    /// Thư mục làm việc (None → cwd hiện tại của app).
+    /// Working directory (None → current app cwd).
     pub cwd: Option<PathBuf>,
-    /// Ép UTF-8 codepage (Windows cmd). Mặc định true.
+    /// Force UTF-8 codepage (Windows cmd). Default true.
     pub utf8: bool,
 }
 ```
 
-Giải quyết `ShellKind` → executable + args + env (Windows-first):
+Resolving `ShellKind` → executable + args + env (Windows-first):
 
-| Kind | Default program | Args mặc định | UTF-8 |
+| Kind | Default program | Default args | UTF-8 |
 |---|---|---|---|
-| `Cmd` | `%COMSPEC%` (cmd.exe) | `/K chcp 65001 >nul` (nếu `utf8`) | `chcp 65001` |
-| `PowerShell` | `powershell.exe` (tìm trong PATH / `where`) | `-NoLogo` | env `LANG=en_US.UTF-8`; `[Console]::OutputEncoding=UTF8` qua profile/arg |
-| `Pwsh` | `pwsh.exe` | `-NoLogo` | như PowerShell |
-| `Bash`/`Zsh`/`Sh` | `$SHELL` / `/bin/bash`… | `-l` (login) tuỳ config | env `LANG`/`LC_ALL` |
-| `Custom` | `program` (bắt buộc) | `args` | theo `env`/`utf8` |
+| `Cmd` | `%COMSPEC%` (cmd.exe) | `/K chcp 65001 >nul` (if `utf8`) | `chcp 65001` |
+| `PowerShell` | `powershell.exe` (found in PATH / `where`) | `-NoLogo` | env `LANG=en_US.UTF-8`; `[Console]::OutputEncoding=UTF8` via profile/arg |
+| `Pwsh` | `pwsh.exe` | `-NoLogo` | like PowerShell |
+| `Bash`/`Zsh`/`Sh` | `$SHELL` / `/bin/bash`… | `-l` (login) per config | env `LANG`/`LC_ALL` |
+| `Custom` | `program` (required) | `args` | per `env`/`utf8` |
 
-> Settings UI (`ui/views/settings/terminal.rs`) cho user chọn `kind`, gõ `program`
-> custom, thêm `args`, set `cwd`, toggle `utf8`. Persist qua `core::config::store`.
+> The settings UI (`ui/views/settings/terminal.rs`) lets the user pick `kind`, type a custom
+> `program`, add `args`, set `cwd`, toggle `utf8`. Persisted via `core::config::store`.
 
-### 6.2. Spawn qua `alacritty_terminal::tty`
+### 6.2. Spawn via `alacritty_terminal::tty`
 
 ```rust
 use alacritty_terminal::{event_loop::EventLoop, sync::FairMutex, term::{Config, Term}, tty::{self, Options, Shell, WindowSize}};
@@ -244,8 +244,8 @@ impl LocalSession {
         )));
         let mut event_loop = EventLoop::new(term.clone(), LocalListener::default(), pty, false, false)
             .map_err(|e| AppError::msg(e.to_string()))?;
-        let notifier = event_loop.channel();           // để write/resize
-        event_loop.run().detach();                      // spawn thread pump
+        let notifier = event_loop.channel();           // for write/resize
+        event_loop.run().detach();                      // spawn pump thread
         // … child exit watcher (ChildExitWatcher) → SessionEvent::Exited
         Ok(Self { term, notifier, last_content: Arc::new(ArcSwap::from_pointee(default())), event_tx, config: cfg })
     }
@@ -256,43 +256,43 @@ impl LocalSession {
 }
 ```
 
-> Tham chiếu chính xác `Notifier` API: đọc
-> `reference/gpui-component` **không có** — đây là API nội bộ Zed; xem trực tiếp
-> `alacritty_terminal` source tại rev lock: `event_loop.rs` (`Notifier`, `Msg`),
-> `tty/{mod,unix,windows}.rs`. Khi triển khai, mở source crate đó để khớp signature.
+> For the exact `Notifier` API: note that
+> `reference/gpui-component` **does not have it** — this is Zed's internal API; read directly
+> from the `alacritty_terminal` source at the rev lock: `event_loop.rs` (`Notifier`, `Msg`),
+> `tty/{mod,unix,windows}.rs`. When implementing, open that crate's source to match signatures.
 
 ### 6.3. Windows-specific
 
-- **ConPTY**: `alacritty_terminal::tty` tự chọn ConPTY trên Win10 1809+. Không cần
-  code `CreatePseudoConsole` thủ công.
-- **UTF-8**: `Cmd` → `chcp 65001` (qua args `/K`). `pwsh`/`powershell` → set env
-  `LANG`/`LC_ALL` + (tuỳ chọn) arg khởi tạo `[Console]::OutputEncoding`.
-- **TERM**: luôn `xterm-256color`, `COLORTERM=truecolor`.
-- **Resize**: `Notifier::notify_resize` → ConPTY xử lý (không SIGWINCH trên Windows).
-- **Ctrl-C**: byte `0x03` → shell tự xử lý. OK.
-- **Child exit**: `tty::Pty` cung cấp `ChildExitWatcher` (race-free) → `SessionEvent::Exited(code)`.
+- **ConPTY**: `alacritty_terminal::tty` picks ConPTY automatically on Win10 1809+. No need
+  to hand-code `CreatePseudoConsole`.
+- **UTF-8**: `Cmd` → `chcp 65001` (via `/K` args). `pwsh`/`powershell` → set env
+  `LANG`/`LC_ALL` + (optionally) an init arg `[Console]::OutputEncoding`.
+- **TERM**: always `xterm-256color`, `COLORTERM=truecolor`.
+- **Resize**: `Notifier::notify_resize` → ConPTY handles it (no SIGWINCH on Windows).
+- **Ctrl-C**: byte `0x03` → shell handles it. OK.
+- **Child exit**: `tty::Pty` provides `ChildExitWatcher` (race-free) → `SessionEvent::Exited(code)`.
 
-### 6.4. Re-render perf (theo Zed)
+### 6.4. Re-render perf (per Zed)
 
-- Pump không `notify` từng byte — `EventLoop` đã coalesce; ta rebuild `last_content`
-  sau mỗi tick và gửi **một** `SessionEvent::Output`.
-- View `cx.notify()` chỉ khi `display_offset`/`mode`/`cursor`/cells thực sự đổi
-  (compare snapshot cũ vs mới). Tránh redraw liên tục khi `yes`.
-- Log `layout took {:?}` để tune (copy Zed `log::debug!`).
+- The pump doesn't `notify` per byte — `EventLoop` already coalesces; we rebuild `last_content`
+  after each tick and send a **single** `SessionEvent::Output`.
+- The View `cx.notify()` only when `display_offset`/`mode`/`cursor`/cells actually change
+  (compare old vs new snapshot). Avoids continuous redraw under `yes`.
+- Log `layout took {:?}` for tuning (copy Zed's `log::debug!`).
 
 ---
 
 ## 7. SSH backend (`ssh` crate)
 
-Tokio runtime **ẩn** (current-thread, `enable_all`); API lộ ra ngoài là sync.
+Tokio runtime is **hidden** (current-thread, `enable_all`); the exposed API is sync.
 
 ```rust
 pub struct SshSession {
     term: Arc<FairMutex<Term<SshListener>>>,
     last_content: Arc<ArcSwap<TerminalContent>>,
-    cmd_tx: std::sync::mpsc::SyncSender<Cmd>,   // bridge sync→tokio
+    cmd_tx: std::sync::mpsc::SyncSender<Cmd>,   // sync→tokio bridge
     event_tx: Sender<SessionEvent>,
-    runtime: tokio::runtime::Runtime,           // ẩn, drop khi close
+    runtime: tokio::runtime::Runtime,           // hidden, dropped on close
     alive: Arc<AtomicBool>,
 }
 
@@ -311,7 +311,7 @@ impl SshSession {
             let mut ch = handle.channel_open_session().await?;
             ch.request_pty("xterm-256color", initial.cols, initial.rows, 0, 0, &[]).await?;
             ch.request_shell(true).await?;
-            // spawn 2 task: data reader + cmd consumer
+            // spawn 2 tasks: data reader + cmd consumer
             tokio::spawn(async move { /* reader: ch.wait() → term.lock().advance(data) → last_content → event_tx */ });
             tokio::spawn(async move { /* cmd: while let Ok(c)=cmd_rx.recv() { match c { Write→ch.data, Resize→ch.window_change, Close→ch.close } } */ });
             Ok::<_, anyhow::Error>(())
@@ -326,26 +326,26 @@ impl SshSession {
 ```
 
 - `SshListener: EventListener` — `PtyWrite(text)` → `cmd_tx.send(Cmd::Write(text.into_bytes()))`.
-- `is_local() == false` (cho OSC 7 cwd semantics: ssh có thể là `file://host/…`).
+- `is_local() == false` (for OSC 7 cwd semantics: ssh can be `file://host/…`).
 - Exit: `ChannelMsg::ExitStatus { exit_status }` → `SessionEvent::Exited(Some(code))`;
   `Eof`/`Close` → `SessionEvent::Closed`.
-- Auth (MVP): password + key file. Agent sau.
+- Auth (MVP): password + key file. Agent later.
 
-> Bridge sync→async: `std::sync::mpsc::SyncSender` gửi từ main thread, tokio task
-> `recv()` (blocking) trong runtime. Tránh `block_on` lồng. Event ra ngoài dùng
-> `async_channel` (sender Send+Sync, recv trong smol/GPUI task).
+> Sync→async bridge: `std::sync::mpsc::SyncSender` sends from the main thread, a tokio task
+> `recv()` (blocking) inside the runtime. Avoids nested `block_on`. Outgoing events use
+> `async_channel` (sender Send+Sync, recv in a smol/GPUI task).
 
 ---
 
-## 8. Render (`ui` crate) — `TerminalElement`
+## 8. Rendering (`ui` crate) — `TerminalElement`
 
-Custom `gpui::Element` (pattern Zed `terminal_element.rs`). Vẽ từ **snapshot**.
+Custom `gpui::Element` (Zed `terminal_element.rs` pattern). Paints from the **snapshot**.
 
-### 8.1. Cấu trúc
+### 8.1. Structure
 
 ```rust
 pub struct TerminalElement {
-    session: Entity<dyn TerminalSession>,   // hoặc generic
+    session: Entity<dyn TerminalSession>,   // or generic
     bounds: TerminalBounds,                  // cell_width, line_height, rows, cols
     theme: TerminalTheme,                    // bg/fg/16 ANSI/cursor → gpui::Hsla
     focus: FocusHandle,
@@ -360,12 +360,12 @@ impl StatefulInteractiveElement for TerminalElement {}
 impl Element for TerminalElement {
     type RequestLayoutState = ();
     type PrepaintState = LayoutState;       // hitbox, bg_rects, text_runs, cursor, ime_bounds
-    fn request_layout(&mut self, …) -> (LayoutId, ()) { /* size_full hoặc size theo rows×cols */ }
+    fn request_layout(&mut self, …) -> (LayoutId, ()) { /* size_full or size by rows×cols */ }
     fn paint(&mut self, …, layout: &mut LayoutState, window, cx) {
-        let content = self.session.read(cx).snapshot();      // không lock FairMutex
+        let content = self.session.read(cx).snapshot();      // no FairMutex lock
         window.with_content_mask(Some(ContentMask { bounds }), |w| {
             w.paint_quad(fill(bounds, self.theme.bg));
-            for rect in &layout.bg_rects { rect.paint(origin, &self.bounds, w); }   // batch nền
+            for rect in &layout.bg_rects { rect.paint(origin, &self.bounds, w); }   // batch background
             for run in &layout.text_runs { run.paint(origin, &self.bounds, w, cx); } // ShapedLine.paint
             // cursor + selection + ime marked text
         });
@@ -374,26 +374,26 @@ impl Element for TerminalElement {
 }
 ```
 
-### 8.2. `layout_grid` (batch — copy Zed)
+### 8.2. `layout_grid` (batched — copy Zed)
 
-Duyệt `content.display_iter` (`IndexedCell`):
-- **Background**: gom cell liên tiếp cùng màu nền (skip default bg) → `Vec<LayoutRect>`
-  + `merge_background_regions` (gộp ngang/dọc) để giảm `paint_quad`.
-- **Text**: gom cell liên tiếp cùng `TextRun` (fg + bold/italic/underline + font) →
-  `Vec<BatchedTextRun>`. Mỗi run: `window.text_system().shape_line(text, font_size,
+Iterate `content.display_iter` (`IndexedCell`):
+- **Background**: group consecutive cells with the same background color (skip default bg) → `Vec<LayoutRect>`
+  + `merge_background_regions` (merge horizontally/vertically) to reduce `paint_quad`.
+- **Text**: group consecutive cells with the same `TextRun` (fg + bold/italic/underline + font) →
+  `Vec<BatchedTextRun>`. Each run: `window.text_system().shape_line(text, font_size,
   &[run], Some(cell_width)).paint(pos, line_height, Left, None, window, cx)`.
-- **Wide char spacers** + **zero-width chars** (emoji variation sequences): xử lý đúng
-  (copy logic `is_wide_char_spacer` / `append_zero_width_chars` của Zed).
-- **Contrast**: `ensure_minimum_contrast(fg, bg, min)` — bỏ qua nếu
-  `is_app_chosen_exact_color` (truecolor/256≥16) hoặc `is_decorative_character`
-  (box-drawing/powerline). Các hàm này ở `core` (pure).
+- **Wide char spacers** + **zero-width chars** (emoji variation sequences): handle correctly
+  (copy Zed's `is_wide_char_spacer` / `append_zero_width_chars` logic).
+- **Contrast**: `ensure_minimum_contrast(fg, bg, min)` — skip if
+  `is_app_chosen_exact_color` (truecolor/256≥16) or `is_decorative_character`
+  (box-drawing/powerline). These functions live in `core` (pure).
 
-### 8.3. Font measure (font riêng cho terminal)
+### 8.3. Font measure (terminal-specific font)
 
-`TerminalSettings` (font riêng, không phụ thuộc gpui-component theme):
+`TerminalSettings` (own font, independent of gpui-component theme):
 ```rust
 pub struct TerminalSettings {
-    pub font_family: String,         // vd "Cascadia Mono", "JetBrains Mono"
+    pub font_family: String,         // e.g. "Cascadia Mono", "JetBrains Mono"
     pub font_size: f32,               // px
     pub font_weight: u32,
     pub line_height: f32,             // multiplier (1.0 = default)
@@ -403,19 +403,19 @@ pub struct TerminalSettings {
     pub shell: LocalShellConfig,     // §6.1
 }
 ```
-Measure (cache, re-measure khi đổi font/size):
+Measure (cached, re-measure on font/size change):
 ```rust
 let probe = window.text_system().shape_line("M".repeat(cols).into(), font_size, &[base_run], Some(target_cell_w));
 let cell_width = probe.width() / cols as f32;
-let line_height = font_size * settings.line_height;     // hoặc ascent+descent+leading
+let line_height = font_size * settings.line_height;     // or ascent+descent+leading
 ```
 
 ### 8.4. Colors (`core` + `ui`)
 
 - `core::TerminalPalette { default_fg, default_bg, ansi: [Rgba; 16], cursor }` (pure, `Rgba<u8>`).
-- `ui` build `TerminalPalette` từ `cx.theme()` (gpui-component) → convert `Rgba→Hsla`.
+- `ui` builds `TerminalPalette` from `cx.theme()` (gpui-component) → converts `Rgba→Hsla`.
 - `core::resolve_color(fg: &AnsiColor, palette) -> Rgba` (named/indexed/truecolor).
-- `ui::ensure_minimum_contrast(fg: Hsla, bg: Hsla, min: f32) -> Hsla` (copy từ Zed/UI util).
+- `ui::ensure_minimum_contrast(fg: Hsla, bg: Hsla, min: f32) -> Hsla` (copy from Zed/UI util).
 
 ---
 
@@ -423,13 +423,13 @@ let line_height = font_size * settings.line_height;     // hoặc ascent+descent
 
 ```rust
 pub trait TerminalSession: Send + Sync + 'static {
-    /// Snapshot grid để render (không lock FairMutex trong lúc gọi).
+    /// Grid snapshot for rendering (no FairMutex lock held during the call).
     fn snapshot(&self) -> TerminalContent;
-    /// Ghi byte vào PTY/channel (keystroke, paste, OSC response).
+    /// Write bytes to the PTY/channel (keystroke, paste, OSC response).
     fn write(&self, bytes: &[u8]);
     /// Resize rows×cols (PTY resize / ssh window_change).
     fn resize(&self, rows: u16, cols: u16);
-    /// Scroll scrollback (chỉ khi không alt-screen / không mouse mode).
+    /// Scroll scrollback (only when not alt-screen / not mouse mode).
     fn scroll(&self, delta: i32);
     // Mouse
     fn mouse_down(&self, row: f32, col: f32, button: MouseButton, sel: SelectionType);
@@ -441,7 +441,7 @@ pub trait TerminalSession: Send + Sync + 'static {
     fn clear_marked_text(&self);
     fn commit_text(&self, text: &str);
     fn marked_text(&self) -> Option<String>;
-    fn cursor_bounds(&self) -> Option<Bounds<Pixels>>;     // cho IME popup
+    fn cursor_bounds(&self) -> Option<Bounds<Pixels>>;     // for IME popup
     // Lifecycle
     fn subscribe(&self) -> Receiver<SessionEvent>;
     fn alive(&self) -> bool;
@@ -452,8 +452,8 @@ pub trait TerminalSession: Send + Sync + 'static {
 }
 ```
 
-> Trait này chỉ là **render/lifecycle interface** — không ép pump/transport chung.
-> `LocalSession` và `SshSession` implement độc lập. Hai backend vẫn không biết nhau.
+> This trait is only a **render/lifecycle interface** — it does not force a shared pump/transport.
+> `LocalSession` and `SshSession` implement it independently. The two backends still don't know each other.
 
 `SessionEvent`: `Output | Title(String) | Cwd(PathBuf) | Clipboard(Option<String>) |
 Exited(Option<i32>) | Closed`.
@@ -462,32 +462,32 @@ Exited(Option<i32>) | Closed`.
 
 ## 10. Input: keystroke → byte + IME
 
-Theo Zed README (4 đường input):
+Per the Zed README (4 input paths):
 
-1. **Raw keystroke** (`on_key_down` trong element): `try_keystroke(keystroke, mods)`
-   → `core::key_encode` → `session.write(bytes)`. Ánh xạ: Ctrl+char → `& 0x1f`, F-key /
+1. **Raw keystroke** (`on_key_down` in the element): `try_keystroke(keystroke, mods)`
+   → `core::key_encode` → `session.write(bytes)`. Mapping: Ctrl+char → `& 0x1f`, F-key /
    arrow → ANSI escape, Enter → `\r`, Backspace → `0x7f`, Tab → `\t` / `\x1b[Z`…
-   (copy logic `freya-terminal::write_key`, thuần hoá thành `core::key_encode`).
-2. **GPUI action** (Ctrl-Shift-C/V copy/paste, Ctrl-Tab…): map → `try_keystroke` hoặc
+   (copy `freya-terminal::write_key` logic, purify into `core::key_encode`).
+2. **GPUI action** (Ctrl-Shift-C/V copy/paste, Ctrl-Tab…): map → `try_keystroke` or
    clipboard.
-3. **IME**: keystroke không map → nhường GPUI IME → `EntityInputHandler` gọi lại
+3. **IME**: keystroke not mapped → yield to GPUI IME → `EntityInputHandler` calls back
    `replace_text_in_range(text)` → `session.commit_text(text)`. Pre-edit:
-   `replace_and_mark_text_in_range` → `session.set_marked_text` → vẽ marked text tại
-   cursor với underline.
-4. **Paste**: `session.commit_text(text)` (bracketed paste nếu `TermMode::BRACKETED_PASTE`).
+   `replace_and_mark_text_in_range` → `session.set_marked_text` → paint marked text at
+   the cursor with an underline.
+4. **Paste**: `session.commit_text(text)` (bracketed paste if `TermMode::BRACKETED_PASTE`).
 
 IME impl (`ui`):
 - `LocalTerminalView`/`SshTerminalView` impl `gpui::EntityInputHandler`:
   `selected_text_range`, `marked_text_range`, `replace_text_in_range`,
   `replace_and_mark_text_in_range`, `unmark_text`, `bounds_for_range`,
   `text_for_range`, `character_index_for_point`.
-- `ImeState { marked_text: String }` giữ trên View.
-- Trong `paint`: `window.handle_input(&ElementInputHandler::new(view_handle))`.
-- Vẽ marked text: shape riêng, paint tại `ime_cursor_bounds` + underline.
+- `ImeState { marked_text: String }` kept on the View.
+- In `paint`: `window.handle_input(&ElementInputHandler::new(view_handle))`.
+- Paint marked text: shape separately, paint at `ime_cursor_bounds` + underline.
 
 ---
 
-## 11. Layout file dự kiến
+## 11. Expected file layout
 
 ```
 crates/
@@ -511,11 +511,11 @@ crates/
 │   ├── session.rs            # LocalSession: tty + EventLoop
 │   ├── listener.rs           # LocalListener: EventListener
 │   ├── shell.rs              # resolve_shell (Windows: chcp, COMSPEC, where pwsh)
-│   └── win.rs                # (cfg windows) ConPTY quirks nếu cần
+│   └── win.rs                # (cfg windows) ConPTY quirks if needed
 │
 ├── ssh/src/
 │   ├── lib.rs
-│   ├── session.rs            # SshSession: russh + tokio runtime ẩn
+│   ├── session.rs            # SshSession: russh + hidden tokio runtime
 │   ├── listener.rs          # SshListener: EventListener (PtyWrite → channel.data)
 │   ├── auth.rs              # password / key / agent
 │   └── runtime.rs           # tokio runtime + sync→async bridge
@@ -531,55 +531,55 @@ crates/
 
 ---
 
-## 12. Thứ tự triển khai (roadmap)
+## 12. Implementation order (roadmap)
 
-> **Trạng thái (bản terminal local đầy đủ):** các bước 1–6 đã hoàn thành.
-> Core 55 test + local 17 test (kèm E2E `echo` → snapshot) pass, `cargo build`
-> sạch 0 warning, `cargo run` mở terminal cmd thật (ConPTY) không panic.
-> SSH (bước 7–8) và perf tuning (bước 9) còn lại.
+> **Status (full local terminal version):** steps 1–6 are complete.
+> Core 55 tests + local 17 tests (incl. E2E `echo` → snapshot) pass, `cargo build`
+> is clean with 0 warnings, `cargo run` opens a real cmd terminal (ConPTY) without panic.
+> SSH (steps 7–8) and perf tuning (step 9) remain.
 
 1. ✅ **`core`**: `TerminalSession` trait, `SessionEvent`, `TerminalContent`, `TerminalPalette`,
    `key_encode`, `mouse_encode`, `osc`/`url`, `ShellKind`/`LocalShellConfig` + `resolve_shell`.
-2. ✅ **`local`** (Windows-first): `LocalSession` spawn `cmd` (ConPTY, `chcp 65001`),
-   `LocalListener`, snapshot + event. E2E test: `echo oneterm_e2e` → snapshot chứa chuỗi.
-3. ✅ **`ui`**: `TerminalElement` vẽ grid + cursor + font measure + resize-on-layout.
-   `LocalTerminalView` (`Render`) wire vào DockArea. Settings shell picker (`TerminalSettingsPanel`).
+2. ✅ **`local`** (Windows-first): `LocalSession` spawns `cmd` (ConPTY, `chcp 65001`),
+   `LocalListener`, snapshot + event. E2E test: `echo oneterm_e2e` → snapshot contains the string.
+3. ✅ **`ui`**: `TerminalElement` paints grid + cursor + font measure + resize-on-layout.
+   `LocalTerminalView` (`Render`) wired into DockArea. Settings shell picker (`TerminalSettingsPanel`).
 4. ✅ **`ui`**: mouse (down/move/up/wheel), selection (Simple/Semantic/Lines/Block),
    scrollback, hyperlink OSC 8 (Ctrl+click), copy/paste (select-to-copy, middle-click,
    Ctrl+Shift+C/V, OSC 52 clipboard), minimum-contrast.
-5. ✅ **`ui`**: IME (`EntityInputHandler` + marked text, `handle_input` ở paint,
-   alt-screen → tắt IME, `bounds_for_range` = cursor bounds).
+5. ✅ **`ui`**: IME (`EntityInputHandler` + marked text, `handle_input` in paint,
+   alt-screen → disable IME, `bounds_for_range` = cursor bounds).
 6. ✅ **`local`**: `powershell`/`pwsh`/`bash`/`zsh`/`sh`/`custom`, child exit detection,
-   resize, scrollback 10k dòng.
+   resize, 10k-line scrollback.
 7. ⬜ **`ssh`**: `SshSession` password + key, pty-req + shell + window_change + exit.
 8. ⬜ **`ssh`**: known_hosts, agent, reconnect.
-9. ⬜ Tuning perf (batch, snapshot diff, debounce notify).
+9. ⬜ Perf tuning (batch, snapshot diff, debounce notify).
 
 ---
 
-## 13. Rủi ro
+## 13. Risks
 
-| Rủi ro | Giải pháp |
+| Risk | Mitigation |
 |---|---|
-| `alacritty_terminal` API nội bộ Zed đổi giữa rev | Pin rev; mở source crate tại rev khi triển khai để khớp signature. |
-| Giữ `FairMutex` trong paint → jitter | Snapshot pattern (§5.2). |
-| Tokio (ssh) vs smol (gpui) xung đột runtime | Tokio runtime ẩn trong `ssh`, API sync, bridge `std::mpsc` + `async_channel`. |
-| Windows cmd codepage không UTF-8 | `chcp 65001` (cmd), env `LANG` (pwsh). Document yêu cầu Win10 1903+ cho ConPTY tốt. |
-| `yes` spam → redraw liên tục | Snapshot diff + debounce notify (§6.4). |
-| Backpressure channel | `async_channel` bounded + drop-oldest cho output; cmd channel `sync_channel(64)`. |
-| IME trên Windows/Linux khác nhau | Dùng `EntityInputHandler` của GPUI ( abstraction sẵn), test cả hai nền tảng. |
-| Host key SSH chưa verify | Bắt buộc known_hosts + prompt accept, không disable mặc định. |
+| `alacritty_terminal` Zed-internal API changes between revs | Pin rev; open the crate source at the rev when implementing to match signatures. |
+| Holding `FairMutex` in paint → jitter | Snapshot pattern (§5.2). |
+| Tokio (ssh) vs smol (gpui) runtime conflict | Hidden tokio runtime inside `ssh`, sync API, bridge via `std::mpsc` + `async_channel`. |
+| Windows cmd codepage not UTF-8 | `chcp 65001` (cmd), env `LANG` (pwsh). Document requires Win10 1903+ for good ConPTY. |
+| `yes` spam → continuous redraw | Snapshot diff + debounce notify (§6.4). |
+| Channel backpressure | `async_channel` bounded + drop-oldest for output; cmd channel `sync_channel(64)`. |
+| IME differs on Windows/Linux | Use GPUI's `EntityInputHandler` (ready abstraction), test both platforms. |
+| SSH host key not verified | Require known_hosts + accept prompt, don't disable by default. |
 
 ---
 
-## 14. Tham chiếu nhanh
+## 14. Quick reference
 
-| Cần | Đọc |
+| Need | Read |
 |---|---|
 | Model + EventLoop + PTY (local) | Zed `crates/terminal/src/terminal.rs` (rev `1d217ee39…`) |
-| Render grid | Zed `crates/terminal_view/src/terminal_element.rs` |
+| Grid rendering | Zed `crates/terminal_view/src/terminal_element.rs` |
 | IME + View | Zed `crates/terminal_view/src/terminal_view.rs` (`ImeState`) |
 | `Element`/`paint_quad`/`shape_line` | `reference/gpui-component` + GPUI docs (rev lock) |
-| `EntityInputHandler` | `gpui::EntityInputHandler` trait (docs.rs khớp rev) |
-| `alacritty_terminal` API | source tại rev `fcf32fe…` (`event_loop.rs`, `tty/`, `term.rs`, `sync.rs`) — fork `zed-industries/alacritty` |
-| freya key/mouse encode | `freya-terminal` `handle.rs`/`parser.rs` (tham khảo logic, thuần hoá vào `core`) |
+| `EntityInputHandler` | `gpui::EntityInputHandler` trait (docs.rs matching rev) |
+| `alacritty_terminal` API | source at rev `fcf32fe…` (`event_loop.rs`, `tty/`, `term.rs`, `sync.rs`) — fork `zed-industries/alacritty` |
+| freya key/mouse encode | `freya-terminal` `handle.rs`/`parser.rs` (reference the logic, purify into `core`) |

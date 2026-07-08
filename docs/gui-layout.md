@@ -1,31 +1,31 @@
 # GUI Layout — OneTerm
 
-> Tài liệu thiết kế layout GUI cho OneTerm, dựa trên reference
+> Design document for the OneTerm GUI layout, based on the reference
 > `reference/gpui-component/crates/story/examples/dock.rs`.
 >
-> Mọi API gpui-component được trích từ reference (xem
-> [`docs/agents/dependencies.md` § 5](agents/dependencies.md)), không dùng web_search.
+> All gpui-component APIs are extracted from the reference (see
+> [`docs/agents/dependencies.md` § 5](agents/dependencies.md)), no web_search used.
 
-## Mục lục
+## Table of contents
 
-1. [Tổng quan & sơ đồ](#1-tổng-quan--sơ-đồ)
-2. [Ánh xạ reference → OneTerm](#2-ánh-xạ-reference--oneterm)
-3. [Kiến trúc DockArea](#3-kiến-trúc-dockarea)
-4. [Panel trait — yêu cầu triển khai](#4-panel-trait--yêu-cầu-triển-khai)
+1. [Overview & diagram](#1-overview--diagram)
+2. [Reference → OneTerm mapping](#2-reference--oneterm-mapping)
+3. [DockArea architecture](#3-dockarea-architecture)
+4. [Panel trait — implementation requirements](#4-panel-trait--implementation-requirements)
 5. [Panel serialization registry](#5-panel-serialization-registry)
 6. [Layout state save/load](#6-layout-state-saveload)
 7. [Title bar & App menu bar](#7-title-bar--app-menu-bar)
 8. [Status bar & DateTimeClock](#8-status-bar--datetimeclock)
 9. [Resizable behavior](#9-resizable-behavior)
-10. [Cấu trúc file](#10-cấu-trúc-file)
+10. [File structure](#10-file-structure)
 11. [Implementation checklist](#11-implementation-checklist)
 
 ---
 
-## 1. Tổng quan & sơ đồ
+## 1. Overview & diagram
 
-OneTerm giữ nguyên khung 3 khối xếp dọc của reference `dock.rs`:
-**TitleBar → DockArea → StatusBar**, chỉ thay đổi *nội dung* của DockArea và
+OneTerm keeps the reference `dock.rs` three-block vertical frame:
+**TitleBar → DockArea → StatusBar**, only changing the *contents* of DockArea and
 StatusBar.
 
 ```
@@ -39,7 +39,7 @@ StatusBar.
 │   ├──────────────────────────────────────────┤ │  │ Session    │  │
 │   │                                          │ │  │ [placeholder]│  │
 │   │           [Terminal view]                │ │  └────────────┘  │
-│   │      (chỉ terminal, không gì khác)       │ │  ↕ v_split       │
+│   │      (terminal only, nothing else)       │ │  ↕ v_split       │
 │   │                                          │ │  ┌────────────┐  │
 │   │                                          │ │  │ SFTP       │  │
 │   └──────────────────────────────────────────┘ │  │ [placeholder]│  │
@@ -50,46 +50,46 @@ StatusBar.
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Quyết định thiết kế đã chốt
+### Finalized design decisions
 
-| # | Quyết định | Lý do |
+| # | Decision | Rationale |
 |---|---|---|
-| 1 | **Right = `set_right_dock`** (side dock) = `v_split([Session, SFTP])` | Khớp "như hiện tại (Image/Icon)" — reference cũng dùng `right_dock` = `v_split([Image, Icon])`. Giữ được toggle button + collapse/resize native. |
-| 2 | **Bỏ `set_left_dock` và `set_bottom_dock`** hoàn toàn | Chỉ cần Center (Terminals) + Right (Session/SFTP). StatusBar chỉ còn toggle Right + datetime. |
-| 3 | **Add Panel menu** → chỉ "New Terminal Tab" + "Show/Hide Dock Toggle Button" | Giữ tinh thần "title bar chức năng giữ nguyên", nội dung hợp lý hóa cho "terminals only". |
+| 1 | **Right = `set_right_dock`** (side dock) = `v_split([Session, SFTP])` | Matches "as currently (Image/Icon)" — reference also uses `right_dock` = `v_split([Image, Icon])`. Keeps the native toggle button + collapse/resize. |
+| 2 | **Drop `set_left_dock` and `set_bottom_dock`** entirely | Only need Center (Terminals) + Right (Session/SFTP). StatusBar keeps only toggle Right + datetime. |
+| 3 | **Add Panel menu** → only "New Terminal Tab" + "Show/Hide Dock Toggle Button" | Keeps the "title bar functionality unchanged" spirit, with content rationalized for "terminals only". |
 
 ---
 
-## 2. Ánh xạ reference → OneTerm
+## 2. Reference → OneTerm mapping
 
-| Thành phần reference `dock.rs` | OneTerm | Ghi chú |
+| Reference `dock.rs` component | OneTerm | Notes |
 |---|---|---|
-| `StoryWorkspace { title_bar, dock_area, last_layout_state, toggle_button_visible, _save_layout_task }` | `OneTermWorkspace` (đổi tên, giữ field) | `app/src/app.rs` |
-| `AppTitleBar::new("Examples", ...)` | `AppTitleBar::new("OneTerm", ...)` | Đổi title |
-| `AppMenuBar` (`app_menus.rs`: Appearance/Theme/Language + Edit/Window/Help) | Giữ nguyên 100% | Themes + Language + Appearance |
-| `FontSizeSelector` (font-size, gutter toggle) | Giữ nguyên (bỏ radius/scrollbar/list-highlight) | radius=0px, scrollbar=Scrolling cố định ở `theme::init`; list.active_highlight=true cố định; gutter toggle → `TerminalSettings.show_gutter` |
-| `DockArea::new("main-dock", Some(version), window, cx)` | `version = 1` (bump) | Trigger reset prompt khi layout cũ khác version |
-| Center = `DockItem::v_split` chứa 19 story tabs | Center = `DockItem::tabs([TerminalPanel, ...])` | Chỉ terminal, không gì khác |
-| `set_left_dock(...)` | **Bỏ** | — |
-| `set_bottom_dock(...)` | **Bỏ** | — |
-| `set_right_dock(DockItem::v_split([Image, Icon]), Some(px(320.)), true, ...)` | `set_right_dock(DockItem::v_split([Session, Sftp]), Some(px(480.)), true, ...)` | 30% của ~1600px window |
-| `set_dock_collapsible(Edges{left:true,bottom:true,right:true})` | `set_dock_collapsible(Edges{right:true, ..Default::default()})` | Chỉ còn right_dock |
-| `DockAreaState` save/load `STATE_FILE`, version check, prompt reset | Giữ nguyên | `STATE_FILE = "target/docks.json"` (debug) |
-| `AddPanel` action + dropdown (thêm random story) | Dropdown chỉ "New Terminal Tab" + "Show/Hide Dock Toggle Button" | Bỏ Add to Left/Bottom/Right + menu check Sidebar/Dialog/... |
-| StatusBar: 3 toggle button (left/bottom/right) | StatusBar: `.left(DateTimeClock)` + `.right(toggle-right-dock)` | — |
+| `StoryWorkspace { title_bar, dock_area, last_layout_state, toggle_button_visible, _save_layout_task }` | `OneTermWorkspace` (rename, keep fields) | `app/src/app.rs` |
+| `AppTitleBar::new("Examples", ...)` | `AppTitleBar::new("OneTerm", ...)` | Change title |
+| `AppMenuBar` (`app_menus.rs`: Appearance/Theme/Language + Edit/Window/Help) | Keep 100% | Themes + Language + Appearance |
+| `FontSizeSelector` (font-size, gutter toggle) | Keep (drop radius/scrollbar/list-highlight) | radius=0px, scrollbar=Scrolling fixed in `theme::init`; list.active_highlight=true fixed; gutter toggle → `TerminalSettings.show_gutter` |
+| `DockArea::new("main-dock", Some(version), window, cx)` | `version = 1` (bump) | Triggers reset prompt when old layout differs from version |
+| Center = `DockItem::v_split` with 19 story tabs | Center = `DockItem::tabs([TerminalPanel, ...])` | Terminal only, nothing else |
+| `set_left_dock(...)` | **Drop** | — |
+| `set_bottom_dock(...)` | **Drop** | — |
+| `set_right_dock(DockItem::v_split([Image, Icon]), Some(px(320.)), true, ...)` | `set_right_dock(DockItem::v_split([Session, Sftp]), Some(px(480.)), true, ...)` | 30% of ~1600px window |
+| `set_dock_collapsible(Edges{left:true,bottom:true,right:true})` | `set_dock_collapsible(Edges{right:true, ..Default::default()})` | Only right_dock remains |
+| `DockAreaState` save/load `STATE_FILE`, version check, reset prompt | Keep | `STATE_FILE = "target/docks.json"` (debug) |
+| `AddPanel` action + dropdown (add random story) | Dropdown only "New Terminal Tab" + "Show/Hide Dock Toggle Button" | Drop Add to Left/Bottom/Right + menu check Sidebar/Dialog/... |
+| StatusBar: 3 toggle buttons (left/bottom/right) | StatusBar: `.left(DateTimeClock)` + `.right(toggle-right-dock)` | — |
 
 ---
 
-## 3. Kiến trúc DockArea
+## 3. DockArea architecture
 
-### 3.1 Cấu trúc DockItem
+### 3.1 DockItem structure
 
 ```
 DockArea (id="main-dock", version=1)
 ├── center:  DockItem::tabs([TerminalPanel, TerminalPanel, ...])
-│            • mỗi tab = 1 Terminal, không thêm panel nào khác
-│            • zoom/close/info/collapse giữ nguyên (qua Panel trait)
-│            • placeholder "No terminal session" khi rỗng
+│            • each tab = 1 Terminal, no other panel added
+│            • zoom/close/info/collapse unchanged (via Panel trait)
+│            • placeholder "No terminal session" when empty
 │
 └── right_dock: DockItem::v_split([
         DockItem::tab(SessionPanel),    size auto   ← top half
@@ -97,24 +97,24 @@ DockArea (id="main-dock", version=1)
     ])
     • set_right_dock(panel, Some(window_w * 0.30), true, window, cx)
     • set_dock_collapsible(Edges{ right:true, .. })
-    • nút collapse/expand ở góc + toggle button ở status bar
-    • v_split resizable (draggable divider giữa Session/SFTP)
+    • collapse/expand button in corner + toggle button in status bar
+    • v_split resizable (draggable divider between Session/SFTP)
     • placeholder "No active session" / "No SFTP connection"
 ```
 
-### 3.2 Constructor API (trích từ reference)
+### 3.2 Constructor API (extracted from reference)
 
 `DockItem` constructors (`reference/.../dock/mod.rs`):
 
 ```rust
-// Tabs — center (nhiều terminal)
+// Tabs — center (multiple terminals)
 DockItem::tabs(
     items: Vec<Arc<dyn PanelView>>,
     dock_area: &WeakEntity<DockArea>,
     window: &mut Window, cx: &mut App,
 ) -> DockItem
 
-// Tab đơn — dùng cho leaf trong v_split
+// Single tab — used for leaf inside v_split
 DockItem::tab<P: Panel>(
     item: Entity<P>,
     dock_area: &WeakEntity<DockArea>,
@@ -122,7 +122,7 @@ DockItem::tab<P: Panel>(
 ) -> DockItem
 // = DockItem::new_tabs(vec![Arc::new(item.clone())], None, ...)
 
-// Vertical split — right_dock (Session trên, SFTP dưới)
+// Vertical split — right_dock (Session on top, SFTP on bottom)
 DockItem::v_split(
     items: Vec<DockItem>,
     dock_area: &WeakEntity<DockArea>,
@@ -147,16 +147,16 @@ dock_area.load(state: DockAreaState, window, cx) -> Result<()>
 
 ---
 
-## 4. Panel trait — yêu cầu triển khai
+## 4. Panel trait — implementation requirements
 
-Terminal/Session/Sftp phải implement `Panel` trait (`reference/.../dock/panel.rs:46`).
-`Panel` yêu cầu 3 super-trait: `EventEmitter<PanelEvent> + Render + Focusable`.
+Terminal/Session/Sftp must implement the `Panel` trait (`reference/.../dock/panel.rs:46`).
+`Panel` requires 3 super-traits: `EventEmitter<PanelEvent> + Render + Focusable`.
 
-### 4.1 Trait signature (rút gọn)
+### 4.1 Trait signature (abbreviated)
 
 ```rust
 pub trait Panel: EventEmitter<PanelEvent> + Render + Focusable {
-    fn panel_name(&self) -> &'static str;                    // ⭐ stable, dùng deserialize
+    fn panel_name(&self) -> &'static str;                    // ⭐ stable, used for deserialize
     fn tab_name(&self, cx: &App) -> Option<SharedString> { None }
     fn title(&mut self, window, cx) -> impl IntoElement { t!("Dock.Unnamed") }
     fn title_style(&self, cx: &App) -> Option<TitleStyle> { None }
@@ -175,39 +175,39 @@ pub trait Panel: EventEmitter<PanelEvent> + Render + Focusable {
 }
 ```
 
-### 4.2 `PanelControl` — kiểm soát zoom/menu/toolbar
+### 4.2 `PanelControl` — controls zoom/menu/toolbar
 
 ```rust
 pub enum PanelControl { Both, Menu, Toolbar }
-// Both    → hiện dropdown menu + toolbar buttons
-// Menu    → chỉ dropdown menu (mặc định)
-// Toolbar → chỉ toolbar buttons
+// Both    → show dropdown menu + toolbar buttons
+// Menu    → dropdown menu only (default)
+// Toolbar → toolbar buttons only
 ```
 
-`zoomable` trả `Some(PanelControl::...)` để bật zoom. `None` → tắt zoom.
-Tab panel render toolbar (zoom/info/close) khi `PanelControl::Both | Toolbar`,
-render dropdown menu khi `PanelControl::Both | Menu` (xem `tab_panel.rs:479`).
+`zoomable` returns `Some(PanelControl::...)` to enable zoom. `None` → zoom disabled.
+Tab panel renders toolbar (zoom/info/close) when `PanelControl::Both | Toolbar`,
+renders dropdown menu when `PanelControl::Both | Menu` (see `tab_panel.rs:479`).
 
-### 4.3 Actions giữ nguyên
+### 4.3 Actions kept as-is
 
 ```rust
 // dock/mod.rs
 actions!(dock, [ToggleZoom, ClosePanel]);
 
-// Bind trong init()
+// Bind in init()
 KeyBinding::new("shift-escape", ToggleZoom, None)
 KeyBinding::new("ctrl-w", ClosePanel, None)
 ```
 
-`TabPanel` tự handle `ToggleZoom` (zoom fullscreen) và `ClosePanel` (đóng tab).
-Panel chỉ cần khai báo `zoomable()` + `closable()`.
+`TabPanel` handles `ToggleZoom` (fullscreen zoom) and `ClosePanel` (close tab) itself.
+Panel only needs to declare `zoomable()` + `closable()`.
 
-### 4.4 Implement mẫu cho TerminalPanel
+### 4.4 Sample implementation for TerminalPanel
 
 ```rust
 pub struct TerminalPanel {
     focus_handle: FocusHandle,
-    // TODO: TerminalSession handle, scrollback grid, v.v.
+    // TODO: TerminalSession handle, scrollback grid, etc.
 }
 
 impl TerminalPanel {
@@ -231,7 +231,7 @@ impl Panel for TerminalPanel {
     }
     fn closable(&self, _: &App) -> bool { true }
     fn zoomable(&self, _: &App) -> Option<PanelControl> { Some(PanelControl::Both) }
-    // dump dùng default (PanelState::new) — chưa có state phụ
+    // dump uses default (PanelState::new) — no auxiliary state yet
 }
 
 impl Render for TerminalPanel {
@@ -249,49 +249,49 @@ impl Render for TerminalPanel {
 }
 ```
 
-SessionPanel/SftpPanel tương tự, đổi `panel_name` thành `"session"`/`"sftp"` và
-placeholder text.
+SessionPanel/SftpPanel are similar, change `panel_name` to `"session"`/`"sftp"` and
+the placeholder text.
 
 ---
 
 ## 5. Panel serialization registry
 
-> Phần này là kết quả đọc `reference/.../dock/state.rs` + `panel.rs:293` +
-> fixture `layout.json`. Đây là cơ chế **cốt lõi** cần hiểu đúng.
+> This section is the result of reading `reference/.../dock/state.rs` + `panel.rs:293` +
+> the `layout.json` fixture. This is the **core** mechanism that must be understood correctly.
 
-### 5.1 Luồng deserialize
+### 5.1 Deserialize flow
 
 ```
 DockAreaState (JSON)
-   │  dock_area.load(state, window, cx)
-   ▼
+    │  dock_area.load(state, window, cx)
+    ▼
 DockArea::load
-   ├── center:     state.center.to_item(dock_area, window, cx)  → DockItem
-   ├── left_dock:  state.left_dock.map(DockState::to_dock)        → Entity<Dock>  (bỏ)
-   ├── right_dock: state.right_dock.map(DockState::to_dock)       → Entity<Dock>
-   └── bottom_dock: state.bottom_dock.map(DockState::to_dock)     (bỏ)
+    ├── center:     state.center.to_item(dock_area, window, cx)  → DockItem
+    ├── left_dock:  state.left_dock.map(DockState::to_dock)        → Entity<Dock>  (dropped)
+    ├── right_dock: state.right_dock.map(DockState::to_dock)       → Entity<Dock>
+    └── bottom_dock: state.bottom_dock.map(DockState::to_dock)     (dropped)
 ```
 
-`DockState::to_dock` (`state.rs:36`) gọi `self.panel.to_item(...)` rồi dựng
+`DockState::to_dock` (`state.rs:36`) calls `self.panel.to_item(...)` then builds
 `Dock::from_state(placement, size, item, open, ...)`.
 
-### 5.2 `PanelState::to_item` — dispatch theo `PanelInfo` (KHÔNG theo `panel_name`)
+### 5.2 `PanelState::to_item` — dispatch by `PanelInfo` (NOT by `panel_name`)
 
 ```rust
 // state.rs:168
 match info {
     PanelInfo::Stack { sizes, axis } => {
-        // TÁI TẠO DockItem::split_with_sizes — KHÔNG qua registry
+        // RECREATE DockItem::split_with_sizes — NOT via registry
         // children = self.children.iter().map(|c| c.to_item(...))
         DockItem::split_with_sizes(axis, items, sizes, dock_area, window, cx)
     }
     PanelInfo::Tabs { active_index } => {
-        // TÁI TẠO DockItem::tabs — KHÔNG qua registry
-        // Nếu chỉ 1 child → return items[0].clone() (unwrap tab wrapper)
+        // RECREATE DockItem::tabs — NOT via registry
+        // If only 1 child → return items[0].clone() (unwrap tab wrapper)
         DockItem::tabs(items, dock_area, window, cx).active_index(active_index, cx)
     }
     PanelInfo::Panel(value) => {
-        // ⭐ CHỈ đây mới gọi PanelRegistry::build_panel(panel_name, ...)
+        // ⭐ ONLY here does it call PanelRegistry::build_panel(panel_name, ...)
         let view = PanelRegistry::build_panel(&self.panel_name, dock_area, self, &info, window, cx);
         DockItem::tabs(vec![view.into()], dock_area, window, cx)
     }
@@ -299,18 +299,18 @@ match info {
 }
 ```
 
-**Hệ quả quan trọng:**
+**Important consequences:**
 
-- Cấu trúc **ngôi nhà** (split/tabs/tiles) được gpui-component **tự tái tạo** dựa vào
-  `PanelInfo` — không cần đăng ký gì.
-- `panel_name = "StackPanel"` / `"TabPanel"` **chỉ là nhãn** trong JSON (dùng debug/test);
-  chúng **không** đi qua `PanelRegistry`. `to_item` bỏ qua `panel_name` ở nhánh
-  Stack/Tabs/Tiles.
-- **Chỉ leaf panel** (`PanelInfo::Panel`) mới cần đăng ký qua `register_panel`.
+- The **house structure** (split/tabs/tiles) is **recreated automatically** by gpui-component based on
+  `PanelInfo` — no registration needed.
+- `panel_name = "StackPanel"` / `"TabPanel"` are **only labels** in JSON (used for debug/test);
+  they **do not** go through `PanelRegistry`. `to_item` ignores `panel_name` on the
+  Stack/Tabs/Tiles branches.
+- **Only leaf panels** (`PanelInfo::Panel`) need to be registered via `register_panel`.
 
-### 5.3 Cấu trúc JSON khi save
+### 5.3 JSON structure on save
 
-Right dock dạng `DockItem::v_split([tab(Session), tab(Sftp)])` serialize thành:
+Right dock of form `DockItem::v_split([tab(Session), tab(Sftp)])` serializes to:
 
 ```json
 "right_dock": {
@@ -343,7 +343,7 @@ Right dock dạng `DockItem::v_split([tab(Session), tab(Sftp)])` serialize thàn
 }
 ```
 
-Center dạng `DockItem::tabs([TerminalPanel, TerminalPanel])`:
+Center of form `DockItem::tabs([TerminalPanel, TerminalPanel])`:
 
 ```json
 "center": {
@@ -356,7 +356,7 @@ Center dạng `DockItem::tabs([TerminalPanel, TerminalPanel])`:
 }
 ```
 
-### 5.4 `PanelRegistry` — đăng ký 3 leaf panel
+### 5.4 `PanelRegistry` — register 3 leaf panels
 
 `panel.rs:293`:
 
@@ -369,12 +369,12 @@ pub fn register_panel<F>(cx: &mut App, panel_name: &str, deserialize: F)
 where F: Fn(...) -> Box<dyn PanelView> + 'static
 
 pub fn build_panel(panel_name, dock_area, panel_state, panel_info, window, cx) -> Box<dyn PanelView> {
-    // nếu có trong registry → gọi fn
-    // else → InvalidPanel (hiện "The `{}` panel type is not registered")
+    // if in registry → call fn
+    // else → InvalidPanel (shows "The `{}` panel type is not registered")
 }
 ```
 
-**OneTerm đăng ký 3** (trong `ui::init` hoặc `app::init`):
+**OneTerm registers 3** (in `ui::init` or `app::init`):
 
 ```rust
 register_panel(cx, "terminal", |_, _, _, window, cx| {
@@ -388,13 +388,13 @@ register_panel(cx, "sftp", |_, _, _, window, cx| {
 });
 ```
 
-Các panel này ban đầu **không có state phụ** (chỉ placeholder) nên bỏ qua `PanelInfo`
-— constructor trả panel mới.
+These panels initially have **no auxiliary state** (only placeholder) so they ignore `PanelInfo`
+— the constructor returns a fresh panel.
 
-> `PanelRegistry::init` đã được `gpui_component::init(cx)` tự gọi (`mod.rs:27`).
-> Không cần gọi thêm.
+> `PanelRegistry::init` is already called by `gpui_component::init(cx)` (`mod.rs:27`).
+> No need to call it again.
 
-### 5.5 `Panel::dump` — leaf panel tự serialize
+### 5.5 `Panel::dump` — leaf panel serializes itself
 
 Default (`panel.rs`):
 
@@ -404,7 +404,7 @@ fn dump(&self, cx: &App) -> PanelState {
 }
 ```
 
-Khi TerminalPanel có state (host_id, cwd, scrollback hash...) — override:
+When TerminalPanel has state (host_id, cwd, scrollback hash...) — override:
 
 ```rust
 fn dump(&self, _cx: &App) -> PanelState {
@@ -417,7 +417,7 @@ fn dump(&self, _cx: &App) -> PanelState {
 }
 ```
 
-và parse trong registry constructor:
+and parse in the registry constructor:
 
 ```rust
 register_panel(cx, "terminal", |_, _, info, window, cx| {
@@ -426,8 +426,8 @@ register_panel(cx, "terminal", |_, _, info, window, cx| {
 });
 ```
 
-Pattern này giống `StoryContainer::dump` + `StoryState::to_value`/`from_value`
-trong `reference/.../story/src/lib.rs:603,242`.
+This pattern mirrors `StoryContainer::dump` + `StoryState::to_value`/`from_value`
+in `reference/.../story/src/lib.rs:603,242`.
 
 ### 5.6 Version check
 
@@ -438,18 +438,18 @@ trong `reference/.../story/src/lib.rs:603,242`.
 pub version: Option<usize>,
 ```
 
-`dock.rs` `load_layout` so sánh `state.version != Some(MAIN_DOCK_AREA.version)` →
-prompt "reset to default?". OneTerm đặt `version = 1`, bump khi thay đổi cấu trúc
-panel khiến JSON cũ không hợp lệ (vd. đổi `panel_name`, thêm trường bắt buộc).
+`dock.rs` `load_layout` compares `state.version != Some(MAIN_DOCK_AREA.version)` →
+prompts "reset to default?". OneTerm sets `version = 1`, bumps it when the panel structure
+changes in a way that invalidates old JSON (e.g. changing `panel_name`, adding a required field).
 
 ---
 
 ## 6. Layout state save/load
 
-Giữ nguyên cơ chế `dock.rs`. Đặt trong `OneTermWorkspace` (`app/src/app.rs` hoặc
+Keep the `dock.rs` mechanism as-is. Place it in `OneTermWorkspace` (`app/src/app.rs` or
 `ui/src/layout/workspace.rs`).
 
-### 6.1 Const
+### 6.1 Constants
 
 ```rust
 const MAIN_DOCK_AREA: DockAreaTab = DockAreaTab { id: "main-dock", version: 1 };
@@ -460,7 +460,7 @@ const STATE_FILE: &str = "target/docks.json";
 const STATE_FILE: &str = "docks.json";
 ```
 
-### 6.2 Constructor — load hoặc reset
+### 6.2 Constructor — load or reset
 
 ```rust
 impl OneTermWorkspace {
@@ -482,7 +482,7 @@ impl OneTermWorkspace {
             _ => {}
         }).detach();
 
-        // Save layout trước khi quit
+        // Save layout before quit
         cx.on_app_quit({
             let dock_area = dock_area.clone();
             move |_, cx| {
@@ -500,7 +500,7 @@ impl OneTermWorkspace {
 }
 ```
 
-### 6.3 `save_layout` — debounce 10s, skip khi không đổi
+### 6.3 `save_layout` — debounce 10s, skip when unchanged
 
 ```rust
 fn save_layout(&mut self, dock_area: &Entity<DockArea>, window: &mut Window, cx: &mut Context<Self>) {
@@ -523,7 +523,7 @@ fn save_state(state: &DockAreaState) -> Result<()> {
 }
 ```
 
-### 6.4 `load_layout` — version check + prompt reset
+### 6.4 `load_layout` — version check + reset prompt
 
 ```rust
 fn load_layout(dock_area: Entity<DockArea>, window: &mut Window, cx: &mut Context<Self>) -> Result<()> {
@@ -552,14 +552,14 @@ fn load_layout(dock_area: Entity<DockArea>, window: &mut Window, cx: &mut Contex
 }
 ```
 
-### 6.5 `reset_default_layout` — dựng layout mặc định OneTerm
+### 6.5 `reset_default_layout` — build the default OneTerm layout
 
 ```rust
 fn reset_default_layout(dock_area: WeakEntity<DockArea>, window: &mut Window, cx: &mut App) {
     let weak = dock_area.clone();
 
     let center = DockItem::tabs(
-        vec![ Arc::new(TerminalPanel::new_entity(window, cx)) ],   // 1 terminal mặc định
+        vec![ Arc::new(TerminalPanel::new_entity(window, cx)) ],   // 1 default terminal
         &weak, window, cx,
     );
 
@@ -574,7 +574,7 @@ fn reset_default_layout(dock_area: WeakEntity<DockArea>, window: &mut Window, cx
     _ = dock_area.update(cx, |view, cx| {
         view.set_version(MAIN_DOCK_AREA.version, window, cx);
         view.set_center(center, window, cx);
-        view.set_right_dock(right, Some(px(480.)), true, window, cx);  // 30% của 1600
+        view.set_right_dock(right, Some(px(480.)), true, window, cx);  // 30% of 1600
         view.set_dock_collapsible(Edges { right: true, ..Default::default() }, window, cx);
         Self::save_state(&view.dump(cx)).unwrap();
     });
@@ -585,27 +585,27 @@ fn reset_default_layout(dock_area: WeakEntity<DockArea>, window: &mut Window, cx
 
 ## 7. Title bar & App menu bar
 
-### 7.1 Giữ nguyên `AppTitleBar` + `AppMenuBar`
+### 7.1 Keep `AppTitleBar` + `AppMenuBar` as-is
 
-- `AppTitleBar::new("OneTerm", window, cx)` — cấu trúc giữ nguyên (`title_bar.rs`).
-- `AppMenuBar` qua `app_menus::init(title, cx)` (`app_menus.rs`):
-  - Menu "OneTerm": About, Open..., Appearance (Light/Dark), **Theme submenu**
-    (list từ `ThemeRegistry::global(cx).sorted_themes()`), Language, Quit.
+- `AppTitleBar::new("OneTerm", window, cx)` — structure unchanged (`title_bar.rs`).
+- `AppMenuBar` via `app_menus::init(title, cx)` (`app_menus.rs`):
+  - "OneTerm" menu: About, Open..., Appearance (Light/Dark), **Theme submenu**
+    (list from `ThemeRegistry::global(cx).sorted_themes()`), Language, Quit.
   - Edit: Undo/Redo/Cut/Copy/Paste/Find/SelectAll.
   - Window: Toggle Search.
   - Help: Documentation, Open Website.
-- `cx.observe_global::<Theme>` → refresh menu check-state khi theme đổi.
-- `FontSizeSelector` (font-size, gutter toggle) — giữ; bỏ radius/scrollbar (mặc định radius=0px, scrollbar=Scrolling cố định ở `theme::init`) và list highlight (mặc định active_highlight=true, không toggle). Gutter toggle thay đổi `TerminalSettings.show_gutter` toàn cục.
+- `cx.observe_global::<Theme>` → refresh menu check-state when theme changes.
+- `FontSizeSelector` (font-size, gutter toggle) — keep; drop radius/scrollbar (default radius=0px, scrollbar=Scrolling fixed in `theme::init`) and list highlight (default active_highlight=true, not toggleable). Gutter toggle changes the global `TerminalSettings.show_gutter`.
 
-### 7.2 Theme system — giữ nguyên 100%
+### 7.2 Theme system — keep 100%
 
 - `Theme::global_mut(cx)` + `ThemeRegistry` + `SwitchTheme`/`SwitchThemeMode` action.
-- Đăng ký theme qua `crates/ui/src/theme.rs` (pattern như `reference/.../story/src/themes.rs`).
-- Không hardcode màu — đọc từ `cx.theme()`.
+- Register themes via `crates/ui/src/theme.rs` (pattern like `reference/.../story/src/themes.rs`).
+- No hardcoded colors — read from `cx.theme()`.
 
-### 7.3 Add Panel dropdown — đơn giản hóa
+### 7.3 Add Panel dropdown — simplified
 
-Child của `AppTitleBar` (thay cho nút "add-panel" random story):
+Child of `AppTitleBar` (replacing the random-story "add-panel" button):
 
 ```rust
 AppTitleBar::new("OneTerm", window, cx).child(move |_, cx| {
@@ -622,7 +622,7 @@ AppTitleBar::new("OneTerm", window, cx).child(move |_, cx| {
 })
 ```
 
-`on_action_add_panel` chỉ thêm TerminalPanel:
+`on_action_add_panel` only adds a TerminalPanel:
 
 ```rust
 fn on_action_add_panel(&mut self, action: &AddPanel, window, cx) {
@@ -641,7 +641,7 @@ fn on_action_add_panel(&mut self, action: &AddPanel, window, cx) {
 
 ```rust
 StatusBar::new()
-    .left(DateTimeClock::new(window, cx))                     // góc trái: đồng hồ
+    .left(DateTimeClock::new(window, cx))                     // left corner: clock
     .right(
         Button::new("toggle-right-dock").ghost().xsmall()
             .icon(IconName::PanelRight)
@@ -654,14 +654,14 @@ StatusBar::new()
     )
 ```
 
-> `StatusBar` (`reference/.../ui/src/status_bar.rs`): `.left(...)` pin trái,
-> `.right(...)` pin phải, `.child(...)` thêm center. Có cả left+right → center
-> justify_center; chỉ left → center justify_end.
+> `StatusBar` (`reference/.../ui/src/status_bar.rs`): `.left(...)` pins left,
+> `.right(...)` pins right, `.child(...)` adds center. With both left+right → center
+> justify_center; left only → center justify_end.
 
 ### 8.2 `DateTimeClock` component
 
 File `crates/ui/src/components/datetime_clock.rs`. `Entity` + `Render` + `Focusable`,
-cập nhật qua `cx.spawn` interval 1s.
+updates via a `cx.spawn` 1s interval.
 
 ```rust
 pub struct DateTimeClock {
@@ -700,43 +700,43 @@ impl Render for DateTimeClock {
 }
 ```
 
-> **Dep**: thêm `chrono` vào `crates/ui/Cargo.toml` (hoặc `time` crate).
-> Đề xuất `chrono` (phổ biến, format string dễ).
+> **Dep**: add `chrono` to `crates/ui/Cargo.toml` (or the `time` crate).
+> Recommended `chrono` (popular, easy format string).
 
 ---
 
 ## 9. Resizable behavior
 
-GPUI Dock tự handle resize — **không cần code thêm**:
+GPUI Dock handles resize itself — **no extra code needed**:
 
-- **Center ↔ right_dock**: draggable divider dọc giữa 2 vùng. right_dock width
-  khởi tạo `Some(px(480.))`, user kéo thay đổi runtime → được save vào
+- **Center ↔ right_dock**: draggable vertical divider between the two regions. right_dock width
+  initialized to `Some(px(480.))`, user drags to change at runtime → saved into
   `DockState.size`.
-- **v_split trong right_dock** (Session ↔ SFTP): `DockItem::v_split` tạo
-  `StackPanel` axis Vertical, divider ngang draggable. `sizes` auto (50/50) hoặc
-  set qua `DockItem::split_with_sizes`. Kéo thay đổi → save vào
+- **v_split inside right_dock** (Session ↔ SFTP): `DockItem::v_split` creates a
+  `StackPanel` with Vertical axis, draggable horizontal divider. `sizes` auto (50/50) or
+  set via `DockItem::split_with_sizes`. Drag changes → saved into
   `PanelInfo::Stack.sizes`.
-- **Collapse/expand right_dock**: nút mũi tên ở góc right_dock (do
-  `set_dock_collapsible(Edges{right:true})`) + toggle button ở status bar
+- **Collapse/expand right_dock**: arrow button in the right_dock corner (from
+  `set_dock_collapsible(Edges{right:true})`) + toggle button in status bar
   (`toggle_dock(DockPlacement::Right)`).
 
-Tab panel cũng có toolbar zoom (ToggleZoom → fullscreen tạm thời) + close (ClosePanel).
+Tab panel also has toolbar zoom (ToggleZoom → temporary fullscreen) + close (ClosePanel).
 
 ---
 
-## 10. Cấu trúc file
+## 10. File structure
 
-Theo [`docs/agents/structure.md`](agents/structure.md):
+Per [`docs/agents/structure.md`](agents/structure.md):
 
-| File | Trách nhiệm |
+| File | Responsibility |
 |---|---|
-| `crates/app/src/main.rs` | Entry point — gọi `run_app()` |
+| `crates/app/src/main.rs` | Entry point — calls `run_app()` |
 | `crates/app/src/app.rs` | `OneTermWorkspace` (title_bar, dock_area, save_layout, reset_default_layout) |
 | `crates/app/src/window.rs` | `new_local`, `WindowOptions`, titlebar options |
 | `crates/app/src/actions.rs` | Global actions / key bindings |
-| `crates/ui/src/lib.rs` | Re-exports + `init(cx)` (gọi `register_panel`) |
+| `crates/ui/src/lib.rs` | Re-exports + `init(cx)` (calls `register_panel`) |
 | `crates/ui/src/root.rs` | Root view wrapper |
-| `crates/ui/src/theme.rs` | Đăng ký theme (pattern `themes.rs`) |
+| `crates/ui/src/theme.rs` | Theme registration (pattern `themes.rs`) |
 | `crates/ui/src/layout/workspace.rs` | `OneTermWorkspace::render` (title_bar + dock_area + status_bar) |
 | `crates/ui/src/layout/statusbar.rs` | StatusBar wiring |
 | `crates/ui/src/views/terminal/terminal_panel.rs` | `TerminalPanel` `impl Panel` + placeholder |
@@ -749,55 +749,55 @@ Theo [`docs/agents/structure.md`](agents/structure.md):
 
 ## 11. Implementation checklist
 
-### Bước 1 — Skeleton & registration
+### Step 1 — Skeleton & registration
 
-- [ ] Tạo `OneTermWorkspace` struct (sao chép field từ `StoryWorkspace`).
-- [ ] `register_panel("terminal"/"session"/"sftp", ...)` trong `ui::init`.
-- [ ] Const `MAIN_DOCK_AREA.version = 1`, `STATE_FILE`.
+- [ ] Create the `OneTermWorkspace` struct (copy fields from `StoryWorkspace`).
+- [ ] `register_panel("terminal"/"session"/"sftp", ...)` in `ui::init`.
+- [ ] Constants `MAIN_DOCK_AREA.version = 1`, `STATE_FILE`.
 
-### Bước 2 — Panels (placeholder)
+### Step 2 — Panels (placeholder)
 
 - [ ] `TerminalPanel`: `impl Panel + Render + Focusable + EventEmitter<PanelEvent>`,
       `panel_name = "terminal"`, placeholder "No terminal session...".
 - [ ] `SessionPanel`: `panel_name = "session"`, placeholder "No active session...".
 - [ ] `SftpPanel`: `panel_name = "sftp"`, placeholder "No SFTP connection...".
-- [ ] Helper `new_entity(window, cx) -> Entity<Self>` cho mỗi panel.
+- [ ] Helper `new_entity(window, cx) -> Entity<Self>` for each panel.
 
-### Bước 3 — Layout wiring
+### Step 3 — Layout wiring
 
 - [ ] `reset_default_layout`: center = tabs([TerminalPanel]), right_dock = v_split([Session, Sftp]).
 - [ ] `set_dock_collapsible(Edges{right:true, ..})`.
-- [ ] `load_layout` + version check + prompt reset.
+- [ ] `load_layout` + version check + reset prompt.
 - [ ] `save_layout` (debounce 10s) + `save_state` + `on_app_quit` save.
 
-### Bước 4 — Title bar & menu
+### Step 4 — Title bar & menu
 
-- [ ] `AppTitleBar::new("OneTerm", ...)` giữ nguyên cấu trúc.
-- [ ] `app_menus::init` (Appearance/Theme/Language/Edit/Window/Help) — giữ.
-- [ ] `FontSizeSelector` — giữ (chỉ font-size + Gutter toggle; radius=0px & scrollbar=Scrolling cố định; list.active_highlight=true cố định).
+- [ ] `AppTitleBar::new("OneTerm", ...)` keep structure.
+- [ ] `app_menus::init` (Appearance/Theme/Language/Edit/Window/Help) — keep.
+- [ ] `FontSizeSelector` — keep (only font-size + Gutter toggle; radius=0px & scrollbar=Scrolling fixed; list.active_highlight=true fixed).
 - [ ] Add Panel dropdown → "New Terminal Tab" + "Show/Hide Dock Toggle Button".
-- [ ] `on_action_add_panel` → chỉ thêm TerminalPanel.
+- [ ] `on_action_add_panel` → only adds TerminalPanel.
 
-### Bước 5 — Status bar
+### Step 5 — Status bar
 
-- [ ] `DateTimeClock` component (chrono, timer 1s).
+- [ ] `DateTimeClock` component (chrono, 1s timer).
 - [ ] `StatusBar::new().left(clock).right(toggle-right-dock button)`.
-- [ ] Thêm `chrono` vào `crates/ui/Cargo.toml`.
+- [ ] Add `chrono` to `crates/ui/Cargo.toml`.
 
-### Bước 6 — Window & entry
+### Step 6 — Window & entry
 
 - [ ] `new_local`: WindowOptions, titlebar options, `Root::new(OneTermWorkspace, ...)`.
 - [ ] `main()`: `gpui_platform::application().with_assets(Assets).run(...)`.
 
-### Bước 7 — Quality gate
+### Step 7 — Quality gate
 
 - [ ] `cargo fmt --all -- --check`
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings`
 - [ ] `cargo build --workspace`
 
-### Lưu ý version bump
+### Version bump notes
 
-Bump `MAIN_DOCK_AREA.version` (1 → 2 → ...) khi:
-- Đổi `panel_name` của leaf panel.
-- Thêm trường bắt buộc vào `Panel::dump` khiến JSON cũ không deserialize được.
-- Thay đổi cấu trúc dock (vd. thêm left_dock trở lại).
+Bump `MAIN_DOCK_AREA.version` (1 → 2 → ...) when:
+- Changing the `panel_name` of a leaf panel.
+- Adding a required field to `Panel::dump` that breaks deserializing old JSON.
+- Changing the dock structure (e.g. re-adding left_dock).

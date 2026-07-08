@@ -1,173 +1,172 @@
-# SFTP theo Terminal CWD — Phần 3: Thiết kế cấp cao (High-Level Design)
+# SFTP follow Terminal CWD — Part 3: High-Level Design
 
-> Phần này mô tả kiến trúc tổng thể: các thành phần, luồng dữ liệu, và cách nối
-> `cwd` của terminal tới `SftpPanel` mà vẫn tôn trọng layering. Chi tiết code ở
-> phần 04.
-
----
-
-## 3.1. Ý tưởng cốt lõi
-
-`SftpPanel` cần trả lời được câu hỏi **"thư mục hiện tại của SSH session đang active
-là gì?"** ngay tại thời điểm user click nút. Vì user có thể `cd` sau khi mở tab,
-ta **không** snapshot `cwd` một lần, mà lưu một **"cwd provider"** — một thứ có thể
-gọi để lấy `cwd` mới nhất bất kỳ lúc nào.
-
-Có sẵn 2 mảnh:
-- `TerminalSession::cwd() -> Option<PathBuf>` đọc live từ `SessionState`.
-- `AppState` là điểm giao tiếp giữa `TerminalPanel` (per-tab) và `SftpPanel` (global).
-
-→ **Mở rộng pattern `active_sftp`**: đặt thêm vào `AppState` một handle cho phép đọc
-`cwd` của session đang active. `TerminalPanel::set_active` set handle này cùng lúc
-với `active_sftp`.
+> This part describes the overall architecture: components, data flow, and how to wire the
+> terminal's `cwd` to `SftpPanel` while respecting layering. Code details are in part 04.
 
 ---
 
-## 3.2. Lựa chọn cơ chế "cwd provider"
+## 3.1. Core idea
 
-Ba phương án, cân nhắc theo layering + tính "live":
+`SftpPanel` needs to answer the question **"what is the current directory of the active SSH
+session?"** right when the user clicks the button. Since the user can `cd` after opening the
+tab, we **don't** snapshot `cwd` once; instead we store a **"cwd provider"** — something we
+can call to get the latest `cwd` at any time.
 
-| PA | Mô tả | Live? | Layering | Đánh giá |
+Two pieces already exist:
+- `TerminalSession::cwd() -> Option<PathBuf>` reads live from `SessionState`.
+- `AppState` is the interface point between `TerminalPanel` (per-tab) and `SftpPanel` (global).
+
+→ **Extend the `active_sftp` pattern**: add to `AppState` a handle that allows reading the
+`cwd` of the active session. `TerminalPanel::set_active` sets this handle at the same time as
+`active_sftp`.
+
+---
+
+## 3.2. Choosing the "cwd provider" mechanism
+
+Three options, considered by layering + "live"-ness:
+
+| Option | Description | Live? | Layering | Assessment |
 |----|-------|:-----:|----------|----------|
-| **A. Snapshot `PathBuf`** | Lưu `active_cwd: Option<PathBuf>` vào AppState lúc `set_active` | ❌ | OK | Sai — không đuổi theo `cd` sau đó |
-| **B. Weak handle tới session entity** | Lưu `WeakEntity<...>` rồi `.read(cx).cwd()` khi click | ✅ | ⚠️ cần kiểu session | Tốt nhưng cần lộ kiểu `Entity<Box<dyn TerminalSession>>` |
-| **C. Closure provider** | Lưu `Arc<dyn Fn() -> Option<PathBuf>>` bọc quanh session state | ✅ | ✅ sạch | **Chọn** — không phụ thuộc gpui entity, thuần `core` type |
+| **A. Snapshot `PathBuf`** | Store `active_cwd: Option<PathBuf>` in AppState at `set_active` | ❌ | OK | Wrong — doesn't follow later `cd` |
+| **B. Weak handle to session entity** | Store `WeakEntity<...>` then `.read(cx).cwd()` on click | ✅ | ⚠️ needs the session type | Good but requires exposing the `Entity<Box<dyn TerminalSession>>` type |
+| **C. Closure provider** | Store `Arc<dyn Fn() -> Option<PathBuf>>` wrapping session state | ✅ | ✅ clean | **Chosen** — doesn't depend on gpui entity, pure `core` type |
 
-**Chọn phương án C** với tinh chỉnh: thay vì closure khó lưu/khó so sánh, ta expose
-**cùng nguồn dữ liệu mà `cwd()` đọc** — tức là một handle tới phần state chia sẻ.
-Nhưng state đó nằm trong crate `ssh`/`local` (không được để UI import). Vì vậy ta
-gói nó sau một **trait nhỏ trong `core`**:
+**Choose option C** with a refinement: instead of a closure that's hard to store/compare, we
+expose **the same data source that `cwd()` reads** — i.e. a handle to the shared state.
+But that state lives in the `ssh`/`local` crate (UI must not import it). So we wrap it behind
+a **small trait in `core`**:
 
 ```rust
-// core: một "nguồn cwd" có thể đọc live, không lộ chi tiết session
+// core: a "cwd source" that can be read live, without exposing session details
 pub trait CwdSource: Send + Sync {
     fn cwd(&self) -> Option<PathBuf>;
 }
 ```
 
-`SshSession`/`LocalSession` có thể cung cấp một `Arc<dyn CwdSource>` chia sẻ cùng
-`SharedState` (chỉ đọc field `cwd`). UI giữ `Arc<dyn CwdSource>` trong `AppState`.
+`SshSession`/`LocalSession` can provide an `Arc<dyn CwdSource>` sharing the same
+`SharedState` (read-only the `cwd` field). UI keeps `Arc<dyn CwdSource>` in `AppState`.
 
-> **Lưu ý cân nhắc:** nếu thấy thêm trait `CwdSource` là thừa, có thể tái dùng luôn
-> `Arc<dyn SftpBackend>` bằng cách... không — `SftpBackend` không biết `cwd`. Giữ
-> `CwdSource` tách bạch đúng trách nhiệm. Chi phí: 1 trait + 1 accessor. Xem phần 04
-> để so sánh với phương án "đọc qua entity" (B) nếu muốn tránh trait mới.
-
----
-
-## 3.3. Sơ đồ thành phần
-
-```
-                         crates/core
-        ┌───────────────────────────────────────────────┐
-        │ trait TerminalSession { fn cwd() -> Option<..> │
-        │                         fn cwd_source() -> ..  │  ← MỚI (default None)
-        │ trait CwdSource { fn cwd() -> Option<PathBuf> }│  ← MỚI
-        └───────────────────────────────────────────────┘
-              ▲                                   ▲
-              │ impl                              │ impl (chia sẻ SharedState.cwd)
-     ┌────────┴─────────┐              ┌──────────┴───────────┐
-     │ crates/ssh       │              │ crates/local         │
-     │  SshSession      │              │  LocalSession        │
-     │  SharedState.cwd │              │  SharedState.cwd     │
-     └──────────────────┘              └──────────────────────┘
-
-                         crates/ui
-   ┌──────────────────────────────────────────────────────────────┐
-   │ TerminalPanel::set_active(active)                             │
-   │   if active {                                                 │
-   │     state.active_sftp   = session.sftp();          (đã có)    │
-   │     state.active_cwd_source = session.cwd_source();  ← MỚI    │
-   │   }                                                           │
-   │                                                               │
-   │ AppState { active_sftp, active_cwd_source }   ← thêm field    │
-   │                                                               │
-   │ SftpPanel (observe AppState)                                  │
-   │   - lưu cwd_source: Option<Arc<dyn CwdSource>>                │
-   │   - toolbar: nút [Sync to terminal cwd]                       │
-   │       on_click → sync_to_terminal_cwd():                      │
-   │           match cwd_source.cwd() {                            │
-   │             Some(p) => self.goto_path(p)  // stat + load_dir  │
-   │             None    => (nút đã disabled)                      │
-   │           }                                                   │
-   └──────────────────────────────────────────────────────────────┘
-```
+> **Consideration note:** if the `CwdSource` trait feels redundant, one could reuse
+> `Arc<dyn SftpBackend>` by... no — `SftpBackend` doesn't know `cwd`. Keep `CwdSource`
+> separate, that's the correct separation of concerns. Cost: 1 trait + 1 accessor. See part 04
+> for a comparison with the "read via entity" option (B) if you want to avoid a new trait.
 
 ---
 
-## 3.4. Luồng dữ liệu — Manual sync (bản đầu)
+## 3.3. Component diagram
 
 ```
-User click nút [Sync]  ─────────────────────────────────────────┐
-                                                                 ▼
-SftpPanel::sync_to_terminal_cwd(cx)                              │
+                          crates/core
+         ┌───────────────────────────────────────────────┐
+         │ trait TerminalSession { fn cwd() -> Option<..> │
+         │                         fn cwd_source() -> ..  │  ← NEW (default None)
+         │ trait CwdSource { fn cwd() -> Option<PathBuf> }│  ← NEW
+         └───────────────────────────────────────────────┘
+               ▲                                   ▲
+               │ impl                              │ impl (shares SharedState.cwd)
+      ┌────────┴─────────┐              ┌──────────┴───────────┐
+      │ crates/ssh       │              │ crates/local         │
+      │  SshSession      │              │  LocalSession        │
+      │  SharedState.cwd │              │  SharedState.cwd     │
+      └──────────────────┘              └──────────────────────┘
+
+                          crates/ui
+    ┌──────────────────────────────────────────────────────────────┐
+    │ TerminalPanel::set_active(active)                             │
+    │   if active {                                                 │
+    │     state.active_sftp   = session.sftp();          (existing) │
+    │     state.active_cwd_source = session.cwd_source();  ← NEW    │
+    │   }                                                           │
+    │                                                               │
+    │ AppState { active_sftp, active_cwd_source }   ← add field     │
+    │                                                               │
+    │ SftpPanel (observe AppState)                                  │
+    │   - keep cwd_source: Option<Arc<dyn CwdSource>>                │
+    │   - toolbar: [Sync to terminal cwd] button                    │
+    │       on_click → sync_to_terminal_cwd():                      │
+    │           match cwd_source.cwd() {                            │
+    │             Some(p) => self.goto_path(p)  // stat + load_dir  │
+    │             None    => (button already disabled)               │
+    │           }                                                   │
+    └──────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 3.4. Data flow — Manual sync (first version)
+
+```
+User clicks [Sync]  ─────────────────────────────────────────┐
+                                                              ▼
+SftpPanel::sync_to_terminal_cwd(cx)                          │
   1. let src = self.cwd_source.clone()?          // None → return│
   2. let cwd = src.cwd()?                         // None → return
-  3. self.goto_path(cwd, cx)                                     │
-        │                                                        │
-        ├─ sftp.stat(cwd)  (background)                          │
-        │     ├─ Ok(dir)  → load_dir(cwd) → read_dir → render    │
-        │     ├─ Ok(file) → path_error (hiếm, cwd luôn là dir)   │
-        │     └─ Err      → path_error / thông báo               │
-        ▼                                                        │
-   SFTP Browser hiển thị nội dung thư mục = pwd của shell ───────┘
+  3. self.goto_path(cwd, cx)                                   │
+        │                                                      │
+        ├─ sftp.stat(cwd)  (background)                        │
+        │     ├─ Ok(dir)  → load_dir(cwd) → read_dir → render  │
+        │     ├─ Ok(file) → path_error (rare, cwd is always a dir)│
+        │     └─ Err      → path_error / notify                 │
+        ▼                                                      │
+   SFTP Browser shows the contents of the dir = shell's pwd ──┘
 ```
 
-Ghi chú:
-- `goto_path` **đã** làm bước `stat` + xử lý lỗi → tái dùng, không viết mới.
-- Toàn bộ I/O (`stat`, `read_dir`) chạy nền như `load_dir` hiện tại → không block UI.
+Notes:
+- `goto_path` **already** does the `stat` step + error handling → reuse, don't rewrite.
+- All I/O (`stat`, `read_dir`) runs in the background like the existing `load_dir` → no UI block.
 
 ---
 
-## 3.5. Trạng thái của nút (enabled / disabled / hidden)
+## 3.5. Button state (enabled / disabled / hidden)
 
-Nút quyết định trạng thái dựa trên 2 điều kiện, đọc tại `render_toolbar`:
+The button decides its state based on 2 conditions, read in `render_toolbar`:
 
-| Điều kiện | Kết quả nút |
-|-----------|-------------|
-| `self.sftp.is_none()` (local shell / không SFTP) | Toolbar không render (đã có `render_no_connection`) → nút không xuất hiện |
-| Có SFTP nhưng `cwd_source` là `None` hoặc `cwd_source.cwd() == None` | Nút **disabled** + tooltip: "Terminal chưa báo thư mục hiện tại (cần shell integration / OSC 7)" |
-| Có SFTP và `cwd_source.cwd() == Some(p)` | Nút **enabled**; tooltip: "Chuyển tới thư mục hiện tại của terminal: {p}" |
+| Condition | Button result |
+|-----------|---------------|
+| `self.sftp.is_none()` (local shell / no SFTP) | Toolbar doesn't render (existing `render_no_connection`) → button doesn't appear |
+| Has SFTP but `cwd_source` is `None` or `cwd_source.cwd() == None` | Button **disabled** + tooltip: "Terminal hasn't reported its current directory (needs shell integration / OSC 7)" |
+| Has SFTP and `cwd_source.cwd() == Some(p)` | Button **enabled**; tooltip: "Jump to the terminal's current directory: {p}" |
 
-> Đọc `cwd_source.cwd()` trong `render` là thao tác nhẹ (lock + clone `PathBuf`),
-> chấp nhận được. Nếu muốn tránh gọi mỗi frame, có thể cache và cập nhật qua
-> observe (xem auto-follow §3.6).
+> Reading `cwd_source.cwd()` in `render` is a light operation (lock + clone `PathBuf`),
+> acceptable. If you want to avoid calling it every frame, you can cache and update via
+> observe (see auto-follow §3.6).
 
 ---
 
-## 3.6. (Mở rộng tùy chọn) Auto-follow
+## 3.6. (Optional extension) Auto-follow
 
-Nếu triển khai R7, tận dụng **`SessionEvent::Cwd`** đã được `ssh` `forward`:
+If implementing R7, leverage the **`SessionEvent::Cwd`** already `forward`ed by `ssh`:
 
 ```
 remote shell `cd` → OSC 7 → ssh task → SessionEvent::Cwd(path)
-    → (đã có) cập nhật SharedState.cwd
-    → (MỚI) UI forward tới SftpPanel khi auto-follow bật
-        → SftpPanel.load_dir(path)  (chỉ khi khác cwd hiện tại + panel active)
+    → (existing) updates SharedState.cwd
+    → (NEW) UI forwards to SftpPanel when auto-follow is on
+        → SftpPanel.load_dir(path)  (only when path differs from current cwd + panel active)
 ```
 
-Thiết kế auto-follow:
-- Thêm cờ `auto_follow: bool` trong `SftpPanel` (toggle trên toolbar, persist vào
-  `docks.json` như các setting SFTP khác).
-- Kênh sự kiện: hoặc (a) `LocalTerminalView` vốn đã subscribe `SessionEvent` để
-  re-render — bổ sung: khi nhận `Cwd`, nếu tab active + auto-follow, gọi vào
-  `SftpPanel`; hoặc (b) đẩy `cwd` mới vào `AppState` (thêm `active_cwd: Option<PathBuf>`
-  cập nhật realtime) và `SftpPanel` observe.
-- Chống nhiễu: debounce + chỉ load khi `path != self.cwd` để tránh `read_dir` dồn dập
-  khi user gõ nhiều `cd`.
+Auto-follow design:
+- Add an `auto_follow: bool` flag in `SftpPanel` (toggle on the toolbar, persisted to
+  `docks.json` like other SFTP settings).
+- Event channel: either (a) `LocalTerminalView` already subscribes to `SessionEvent` to
+  re-render — add: on receiving `Cwd`, if the tab is active + auto-follow, call into
+  `SftpPanel`; or (b) push the new `cwd` into `AppState` (add `active_cwd: Option<PathBuf>`
+  updated in realtime) and `SftpPanel` observes.
+- Anti-jitter: debounce + only load when `path != self.cwd` to avoid a flood of `read_dir`
+  when the user types many `cd`s.
 
-Auto-follow **không thuộc phạm vi bản đầu**; ghi ở đây để thiết kế manual không chặn
-đường mở rộng (ví dụ `CwdSource` + `SessionEvent::Cwd` đều dùng lại được).
+Auto-follow is **out of scope for the first version**; recorded here so the manual design
+doesn't block the extension path (e.g. `CwdSource` + `SessionEvent::Cwd` are both reusable).
 
 ---
 
-## 3.7. Vì sao không đặt nút ở phía Terminal?
+## 3.7. Why not put the button on the Terminal side?
 
-Có thể đặt nút "mở thư mục này trong SFTP" ở toolbar/breadcrumb của terminal. Nhưng:
-- SFTP Browser là nơi user đang nhìn danh sách file → đặt nút ở đó trực quan hơn
-  ("kéo SFTP theo tôi").
-- Toolbar SFTP đã có sẵn cụm nút điều hướng (Back/Refresh) → nút Sync cùng nhóm ngữ
-  nghĩa "điều hướng".
-- Tránh phụ thuộc ngược: terminal view không cần biết về SFTP panel.
+One could put an "open this directory in SFTP" button in the terminal toolbar/breadcrumb. But:
+- The SFTP Browser is where the user is looking at the file list → placing the button there is
+  more intuitive ("pull SFTP toward me").
+- The SFTP toolbar already has the navigation button cluster (Back/Refresh) → the Sync button
+  joins the same "navigation" semantic group.
+- Avoids a reverse dependency: the terminal view doesn't need to know about the SFTP panel.
 
-→ Đặt nút ở **SFTP toolbar**. Phù hợp yêu cầu gốc của user.
+→ Put the button on the **SFTP toolbar**. Matches the user's original request.

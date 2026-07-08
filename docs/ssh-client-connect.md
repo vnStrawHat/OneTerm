@@ -1,193 +1,192 @@
-# Thiết kế SSH Client Connect — OneTerm
+# SSH Client Connect Design — OneTerm
 
-> Tài liệu thiết kế cho chức năng kết nối SSH: click vào item trong SSH Session →
-> mở phiên SSH tới server đích, kèm dialog nhập credentials khi cần.
+> Design document for the SSH connect feature: click an item in the SSH Session list →
+> open an SSH session to the target server, with a credential-entry dialog when needed.
 >
-> **Tham chiếu liên quan:**
-> - [`docs/terminal-backend.md`](terminal-backend.md) §7 — thiết kế `SshSession`
->   (russh + tokio runtime ẩn, `SshConfig`, auth).
+> **Related references:**
+> - [`docs/terminal-backend.md`](terminal-backend.md) §7 — `SshSession` design
+>   (russh + hidden tokio runtime, `SshConfig`, auth).
 > - [`docs/gui-layout.md`](gui-layout.md) — DockArea, Panel trait, TerminalPanel.
-> - [`docs/agents/structure.md`](agents/structure.md) — quy tắc crate, cây thư mục.
+> - [`docs/agents/structure.md`](agents/structure.md) — crate rules, directory tree.
 
-## Mục lục
+## Table of contents
 
-1. [Tổng quan & flow](#1-tổng-quan--flow)
-2. [Cấu trúc dữ liệu](#2-cấu-trúc-dữ-liệu)
-3. [Logic phân nhánh credential dialog](#3-logic-phân-nhánh-credential-dialog)
+1. [Overview & flow](#1-overview--flow)
+2. [Data structures](#2-data-structures)
+3. [Credential dialog branching logic](#3-credential-dialog-branching-logic)
 4. [Dialog UI — Connect SSH](#4-dialog-ui--connect-ssh)
-5. [Connection flow — tạo SshSession + mở tab](#5-connection-flow--tạo-sshsession--mở-tab)
-6. [Tích hợp vào SessionPanel](#6-tích-hợp-vào-sessionpanel)
-7. [Cấu trúc file](#7-cấu-trúc-file)
+5. [Connection flow — create SshSession + open tab](#5-connection-flow--create-sshsession--open-tab)
+6. [Integration into SessionPanel](#6-integration-into-sessionpanel)
+7. [File structure](#7-file-structure)
 8. [Implementation checklist](#8-implementation-checklist)
 
 ---
 
-## 1. Tổng quan & flow
+## 1. Overview & flow
 
-### 1.1. Mô tả chức năng
+### 1.1. Feature description
 
-Khi user click (left-click) vào 1 item trong danh sách SSH Session ở
-`SessionPanel` (right dock), app mở phiên SSH tới server đích theo thông tin
-trong `SshSession` (host, port, username). Trước khi kết nối, nếu thiếu
-credentials (username hoặc password), app hiển thị dialog để user nhập.
+When the user left-clicks an item in the SSH Session list in `SessionPanel` (right dock),
+the app opens an SSH session to the target server using the info in `SshSession` (host, port,
+username). Before connecting, if credentials are missing (username or password), the app shows
+a dialog for the user to enter them.
 
-### 1.2. Sơ đồ flow
+### 1.2. Flow diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  User click vào session item trong SessionPanel                     │
+│  User clicks a session item in SessionPanel                          │
 │  (render_session_row → on_click)                                    │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
                                ▼
-                    ┌─────────────────────┐
-                    │  Đọc SshSession     │
-                    │  từ SshSessionStore │
-                    │  (label, host,      │
-                    │   port, username)   │
-                    └──────────┬──────────┘
+                     ┌─────────────────────┐
+                     │  Read SshSession     │
+                     │  from SshSessionStore│
+                     │  (label, host,      │
+                     │   port, username)   │
+                     └──────────┬──────────┘
                                │
                                ▼
-                    ┌─────────────────────┐      username = None
-                    │  username có không? │──────────────────┐
-                    └──────────┬──────────┘                  │
+                     ┌─────────────────────┐      username = None
+                     │  Is there a username?│──────────────────┐
+                     └──────────┬──────────┘                  │
                                │ Some                         │ No
                                ▼                              │
-                    ┌─────────────────────┐                  │
-                    │  Dialog nhập        │                  ▼
-                    │  PASSWORD only      │         ┌────────────────────┐
-                    │  (1 field masked)   │         │  Dialog nhập       │
-                    └──────────┬──────────┘         │  USERNAME + PASSWORD│
-                               │                    │  (2 fields)        │
+                     ┌─────────────────────┐                  ▼
+                     │  Dialog for         │         ┌────────────────────┐
+                     │  PASSWORD only      │         │  Dialog for        │
+                     │  (1 masked field)   │         │  USERNAME + PASSWORD│
+                     └──────────┬──────────┘         │  (2 fields)        │
                                │                    └────────┬───────────┘
                                │                             │
                                ▼                             ▼
-                    ┌──────────────────────────────────────────────┐
-                    │  User click Connect                           │
-                    │  (hoặc Cancel → hủy)                          │
-                    └──────────────────────┬───────────────────────┘
-                                           │ Connect
-                                           ▼
-                    ┌──────────────────────────────────────────────┐
-                    │  Tạo SshConfig { host, port, username,        │
-                    │    password, auth_method: Password }          │
-                    └──────────────────────┬───────────────────────┘
-                                           │
-                                           ▼
-                    ┌──────────────────────────────────────────────┐
-                    │  SshSession::connect(cfg, pty_size)           │
-                    │  → russh connect + auth + pty-req + shell     │
-                    │  (xem terminal-backend.md §7)                 │
-                    └──────────────────────┬───────────────────────┘
-                                           │ Ok(session)
-                                           ▼
-                    ┌──────────────────────────────────────────────┐
-                    │  Tạo TerminalPanel mới với SshSession         │
-                    │  (thay vì LocalSession mặc định)              │
-                    │  → add_panel vào DockArea center              │
-                    │  → tab title = session.label                 │
-                    └──────────────────────────────────────────────┘
+                     ┌──────────────────────────────────────────────┐
+                     │  User clicks Connect                         │
+                     │  (or Cancel → abort)                          │
+                     └──────────────────────┬───────────────────────┘
+                                            │ Connect
+                                            ▼
+                     ┌──────────────────────────────────────────────┐
+                     │  Create SshConfig { host, port, username,      │
+                     │    password, auth_method: Password }         │
+                     └──────────────────────┬───────────────────────┘
+                                            │
+                                            ▼
+                     ┌──────────────────────────────────────────────┐
+                     │  SshSession::connect(cfg, pty_size)           │
+                     │  → russh connect + auth + pty-req + shell     │
+                     │  (see terminal-backend.md §7)                 │
+                     └──────────────────────┬───────────────────────┘
+                                            │ Ok(session)
+                                            ▼
+                     ┌──────────────────────────────────────────────┐
+                     │  Create a new TerminalPanel with SshSession   │
+                     │  (instead of the default LocalSession)       │
+                     │  → add_panel into the DockArea center         │
+                     │  → tab title = session.label                 │
+                     └──────────────────────────────────────────────┘
 ```
 
-### 1.3. Quyết định thiết kế
+### 1.3. Design decisions
 
-| # | Quyết định | Lý do |
+| # | Decision | Rationale |
 |---|---|---|
-| 1 | **Password KHÔNG persist** vào `ssh_session.json` | Bảo mật — password chỉ giữ trong RAM trong phiên làm việc, không ghi ra disk. |
-| 2 | **Username persist** vào `ssh_session.json` (đã có sẵn field) | Tiện lợi — user chỉ nhập password lần sau. Username không nhạy cảm như password. |
-| 3 | **Dùng `LocalTerminalView`** cho cả SSH (qua `dyn TerminalSession`) | View đã thiết kế backend-agnostic — chỉ cần `Entity<Box<dyn TerminalSession>>`. Không cần `SshTerminalView` riêng. |
-| 4 | **Dialog dùng `window.open_dialog`** (gpui-component Dialog) | Khớp pattern đã dùng cho "New/Edit SSH Session" dialog trong `session_tabs/tabs.rs`. |
-| 5 | **Password field dùng `InputState::masked(true)` + `.mask_toggle()`** | Hiển thị `•••••`, có nút eye-icon reveal/hide. API sẵn có trong gpui-component. |
-| 6 | **Footer: Cancel (trái) + Connect (phải), căn lề phải** | `DialogFooter` mặc định `justify_end` → button tự căn phải. Khớp yêu cầu. |
-| 7 | **Connect chạy async** — dialog đóng ngay, kết nối chạy nền | Tránh block UI. Nếu lỗi connect → `window.push_notification` báo lỗi. |
-| 8 | **Left-click = Open**, right-click giữ context menu (Open/Delete/Property) | Giữ hành vi hiện tại của context menu, thêm left-click shortcut. |
+| 1 | **Password is NOT persisted** to `ssh_session.json` | Security — the password lives only in RAM during the session, never written to disk. |
+| 2 | **Username is persisted** to `ssh_session.json` (the field already exists) | Convenience — the user only enters a password next time. The username is less sensitive than the password. |
+| 3 | **Use `LocalTerminalView`** for SSH too (via `dyn TerminalSession`) | The view is already backend-agnostic — it only needs `Entity<Box<dyn TerminalSession>>`. No separate `SshTerminalView` needed. |
+| 4 | **Dialog uses `window.open_dialog`** (gpui-component Dialog) | Matches the pattern already used for the "New/Edit SSH Session" dialog in `session_tabs/tabs.rs`. |
+| 5 | **Password field uses `InputState::masked(true)` + `.mask_toggle()`** | Shows `•••••`, with an eye-icon button to reveal/hide. API already available in gpui-component. |
+| 6 | **Footer: Cancel (left) + Connect (right), right-aligned** | `DialogFooter` defaults to `justify_end` → buttons auto-align right. Matches the requirement. |
+| 7 | **Connect runs async** — the dialog closes immediately, the connection runs in the background | Avoids blocking the UI. If connect fails → `window.push_notification` reports the error. |
+| 8 | **Left-click = Open**, right-click keeps the context menu (Open/Delete/Property) | Keeps the current context-menu behavior, adds a left-click shortcut. |
 
 ---
 
-## 2. Cấu trúc dữ liệu
+## 2. Data structures
 
-### 2.1. `SshConfig` — cấu hình kết nối (crate `ssh`)
+### 2.1. `SshConfig` — connection config (`ssh` crate)
 
-Định nghĩa trong `crates/ssh/src/config.rs`, re-export qua `ssh::lib.rs`.
-Đây là input cho `SshSession::connect()`.
+Defined in `crates/ssh/src/config.rs`, re-exported via `ssh::lib.rs`.
+This is the input for `SshSession::connect()`.
 
 ```rust
 use std::path::PathBuf;
 
-/// Phương thức xác thực SSH.
+/// SSH authentication method.
 #[derive(Debug, Clone)]
 pub enum SshAuthMethod {
-    /// Xác thực bằng password.
+    /// Password authentication.
     Password { password: String },
-    /// Xác thực bằng private key file (sẽ triển khai sau).
+    /// Private key file authentication (to be implemented later).
     PrivateKey {
         key_path: PathBuf,
         passphrase: Option<String>,
     },
-    /// SSH agent (sẽ triển khai sau).
+    /// SSH agent (to be implemented later).
     Agent,
 }
 
-/// Cấu hình kết nối SSH — input cho [`crate::SshSession::connect`].
+/// SSH connection config — input for [`crate::SshSession::connect`].
 #[derive(Debug, Clone)]
 pub struct SshConfig {
-    /// Hostname hoặc IP.
+    /// Hostname or IP.
     pub host: String,
-    /// Cổng SSH (mặc định 22).
+    /// SSH port (default 22).
     pub port: u16,
-    /// Username SSH.
+    /// SSH username.
     pub username: String,
-    /// Phương thức xác thực.
+    /// Authentication method.
     pub auth: SshAuthMethod,
 }
 ```
 
-> **Lưu ý:** `SshConfig` chứa `password` ở dạng `String` (plaintext trong RAM).
-> Không serialize `SshConfig` ra disk. Password chỉ tồn tại trong memory trong
-> thời gian kết nối + phiên làm việc.
+> **Note:** `SshConfig` holds the `password` as a `String` (plaintext in RAM).
+> Do not serialize `SshConfig` to disk. The password only exists in memory during
+> the connection + the working session.
 
-### 2.2. Mở rộng `SshSession` (state) — thêm field `password`?
+### 2.2. Extending `SshSession` (state) — add a `password` field?
 
-**KHÔNG.** `SshSession` trong `session_state.rs` (UI store) giữ nguyên 4 field:
-`label, host, port, username`. Password không lưu vào store — nó chỉ là input
-ephemeral cho `SshConfig` khi connect.
+**NO.** `SshSession` in `session_state.rs` (UI store) keeps its 4 fields:
+`label, host, port, username`. The password is not stored — it's only an ephemeral
+input for `SshConfig` when connecting.
 
 ```rust
-// session_state.rs — KHÔNG đổi
+// session_state.rs — UNCHANGED
 pub struct SshSession {
     pub label: String,
     pub host: String,
     pub port: u16,
-    pub username: Option<String>,  // None → dialog sẽ hỏi
+    pub username: Option<String>,  // None → the dialog will ask
 }
 ```
 
-### 2.3. `SshConnectParams` — bundle thông tin connect (UI crate)
+### 2.3. `SshConnectParams` — bundle of connect info (UI crate)
 
-Struct trung gian chứa mọi thứ cần để mở dialog + connect, tạo từ `SshSession`
-khi user click.
+An intermediate struct holding everything needed to open the dialog + connect, created
+from `SshSession` when the user clicks.
 
 ```rust
-/// Thông tin cần thiết để mở dialog connect + tạo SshConfig.
-/// Tạo từ `SshSession` khi user click vào item.
+/// Info needed to open the connect dialog + create an SshConfig.
+/// Created from `SshSession` when the user clicks an item.
 pub(crate) struct SshConnectParams {
-    pub label: String,       // cho tab title + dialog title
+    pub label: String,       // for the tab title + dialog title
     pub host: String,
     pub port: u16,
-    pub username: Option<String>,  // None → dialog hỏi username
+    pub username: Option<String>,  // None → the dialog asks for the username
 }
 ```
 
 ---
 
-## 3. Logic phân nhánh credential dialog
+## 3. Credential dialog branching logic
 
-### 3.1. Bảng quyết định
+### 3.1. Decision table
 
-| `SshSession.username` | Dialog hiển thị | Fields |
+| `SshSession.username` | Dialog shown | Fields |
 |---|---|---|
-| `None` (chưa có username) | **Username + Password** | 2 input: username (text) + password (masked) |
-| `Some(u)` (đã có username) | **Password only** | 1 input: password (masked), username hiển thị read-only |
+| `None` (no username yet) | **Username + Password** | 2 inputs: username (text) + password (masked) |
+| `Some(u)` (username present) | **Password only** | 1 input: password (masked), username shown read-only |
 
 ### 3.2. Pseudocode
 
@@ -200,18 +199,18 @@ fn on_session_click(session: &SshSession):
 
 ### 3.3. Dialog title
 
-- Khi hỏi username + password: `"Connect to {label}"` (vd `"Connect to Production Server"`)
-- Khi chỉ hỏi password: `"Connect to {label} ({username}@{host}:{port})"`
+- When asking for username + password: `"Connect to {label}"` (e.g. `"Connect to Production Server"`)
+- When asking only for password: `"Connect to {label} ({username}@{host}:{port})"`
 
-Subtitle trong dialog content hiển thị thông tin server:
-- `"ssh://{username}@{host}:{port}"` (khi có username)
-- `"ssh://{host}:{port}"` (khi chưa có username)
+The subtitle in the dialog content shows the server info:
+- `"ssh://{username}@{host}:{port}"` (when there's a username)
+- `"ssh://{host}:{port}"` (when there's no username yet)
 
 ---
 
 ## 4. Dialog UI — Connect SSH
 
-### 4.1. Layout dialog
+### 4.1. Dialog layout
 
 ```
 ┌─ Connect to Production Server ──────────────────────────┐
@@ -220,7 +219,7 @@ Subtitle trong dialog content hiển thị thông tin server:
 │  │  ssh://ubuntu@10.0.0.1:22                        │   │  ← server info (read-only)
 │  └──────────────────────────────────────────────────┘   │
 │                                                          │
-│  Username *                          ← chỉ hiện khi ask_username=true
+│  Username *                          ← only shown when ask_username=true
 │  ┌──────────────────────────────────────────────────┐   │
 │  │  [input text]                                    │   │
 │  └──────────────────────────────────────────────────┘   │
@@ -235,8 +234,8 @@ Subtitle trong dialog content hiển thị thông tin server:
 └──────────────────────────────────────────────────────────┘
 ```
 
-**Khi `ask_username = false`** (đã có username), field Username bị ẩn,
-dialog ngắn hơn:
+**When `ask_username = false`** (username present), the Username field is hidden,
+the dialog is shorter:
 
 ```
 ┌─ Connect to Production Server (ubuntu@10.0.0.1:22) ─────┐
@@ -255,10 +254,10 @@ dialog ngắn hơn:
 └──────────────────────────────────────────────────────────┘
 ```
 
-### 4.2. Footer — Connect + Cancel, căn lề phải
+### 4.2. Footer — Connect + Cancel, right-aligned
 
-`DialogFooter` (gpui-component) mặc định `h_flex().gap_2().justify_end()` —
-tức là children tự căn **phải**. Thứ tự: Cancel (trái) → Connect (phải).
+`DialogFooter` (gpui-component) defaults to `h_flex().gap_2().justify_end()` —
+so children auto-align **right**. Order: Cancel (left) → Connect (right).
 
 ```rust
 .footer(
@@ -280,35 +279,35 @@ tức là children tự căn **phải**. Thứ tự: Cancel (trái) → Connect 
 )
 ```
 
-- **Cancel** = `DialogClose` → dispatch `CancelDialog` → đóng dialog, không
-  thực hiện gì. `on_cancel` trả `true` (cho phép đóng).
-- **Connect** = `DialogAction` → dispatch `ConfirmDialog` → gọi `on_ok`
-  closure. `on_ok` đọc input values, validate, tạo `SshConfig`, gọi
-  `connect_and_open_terminal()`. Trả `true` để đóng dialog.
+- **Cancel** = `DialogClose` → dispatches `CancelDialog` → closes the dialog, does
+  nothing. `on_cancel` returns `true` (allows closing).
+- **Connect** = `DialogAction` → dispatches `ConfirmDialog` → calls the `on_ok`
+  closure. `on_ok` reads the input values, validates, creates an `SshConfig`, calls
+  `connect_and_open_terminal()`. Returns `true` to close the dialog.
 
 ### 4.3. Password input — masked + mask_toggle
 
 ```rust
-// InputState cho password — masked ngay từ đầu.
+// InputState for the password — masked from the start.
 let password_state = cx.new(|cx| {
     InputState::new(window, cx)
         .placeholder("Enter password")
-        .masked(true)             // ← hiển thị ••••••
+        .masked(true)             // ← shows ••••••
 });
 
-// Input element — mask_toggle thêm nút eye-icon reveal/hide.
+// Input element — mask_toggle adds an eye-icon reveal/hide button.
 Input::new(&password_state)
-    .mask_toggle()                 // ← nút 👁 toggle reveal
-    .cleanable(true)               // ← nút × clear
+    .mask_toggle()                 // ← 👁 button toggles reveal
+    .cleanable(true)               // ← × clear button
 ```
 
-API tham chiếu (gpui-component):
+API reference (gpui-component):
 - `InputState::masked(bool)` — `reference/.../input/state.rs:874`
 - `Input::mask_toggle()` — `reference/.../input/input.rs:144`
 - Example: `reference/.../stories/input_story.rs:73` (`.masked(true)` +
   `.placeholder("Enter your password...")`)
 
-### 4.4. Username input (khi `ask_username = true`)
+### 4.4. Username input (when `ask_username = true`)
 
 ```rust
 let username_state = cx.new(|cx| {
@@ -316,13 +315,13 @@ let username_state = cx.new(|cx| {
         .placeholder("e.g. root, ubuntu, admin")
 });
 
-Input::new(&username_state)  // text thường, không masked
+Input::new(&username_state)  // plain text, not masked
 ```
 
 ### 4.5. Server info banner (read-only)
 
-Hiển thị thông tin server phía trên fields, dùng `div` + text, không phải input.
-Giúp user xác nhận đang kết nối tới server đúng.
+Shows server info above the fields, using `div` + text, not an input.
+Helps the user confirm they're connecting to the right server.
 
 ```rust
 // Server info banner
@@ -344,30 +343,30 @@ div()
 
 ### 4.6. Validation
 
-| Field | Điều kiện | Khi fail |
+| Field | Condition | On failure |
 |---|---|---|
-| Username (nếu hỏi) | Không rỗng sau trim | `window.push_notification("Username là bắt buộc.")`, trả `false` (không đóng dialog) |
-| Password | Không rỗng sau trim | `window.push_notification("Password là bắt buộc.")`, trả `false` |
+| Username (if asked) | Not empty after trim | `window.push_notification("Username is required.")`, return `false` (don't close dialog) |
+| Password | Not empty after trim | `window.push_notification("Password is required.")`, return `false` |
 
 ---
 
-## 5. Connection flow — tạo SshSession + mở tab
+## 5. Connection flow — create SshSession + open tab
 
-### 5.1. `on_ok` closure — khi user click Connect
+### 5.1. `on_ok` closure — when the user clicks Connect
 
 ```rust
 .on_ok({
     let params = params.clone();
-    let username_state = username_state.clone();  // None nếu không hỏi
+    let username_state = username_state.clone();  // None if not asked
     let password_state = password_state.clone();
     let dock_area = dock_area.clone();            // WeakEntity<DockArea>
     move |_, window, cx| {
-        // 1. Đọc + validate inputs
+        // 1. Read + validate inputs
         let username = match &username_state {
             Some(st) => {
                 let u = st.read(cx).value().trim().to_string();
                 if u.is_empty() {
-                    window.push_notification("Username là bắt buộc.", cx);
+                    window.push_notification("Username is required.", cx);
                     return false;
                 }
                 u
@@ -377,11 +376,11 @@ div()
 
         let password = password_state.read(cx).value().to_string();
         if password.is_empty() {
-            window.push_notification("Password là bắt buộc.", cx);
+            window.push_notification("Password is required.", cx);
             return false;
         }
 
-        // 2. Tạo SshConfig
+        // 2. Create SshConfig
         let cfg = SshConfig {
             host: params.host.clone(),
             port: params.port,
@@ -389,16 +388,16 @@ div()
             auth: SshAuthMethod::Password { password },
         };
 
-        // 3. (Tuỳ chọn) Lưu username lại vào store nếu user nhập mới
+        // 3. (Optional) save the username back to the store if the user entered a new one
         if username_state.is_some() {
-            // params.session_index → store.update(index, session với username mới)
-            // Tiện lợi cho lần connect sau
+            // params.session_index → store.update(index, session with the new username)
+            // Convenient for the next connect
         }
 
-        // 4. Connect async + mở tab
+        // 4. Connect async + open tab
         cx.spawn_in(window, async move |_this, window| {
-            // SshSession::connect là sync (block_on bên trong) — chạy trên
-            // background executor để không block UI.
+            // SshSession::connect is sync (block_on inside) — run on the
+            // background executor so it doesn't block the UI.
             let result = window.background_executor().spawn(async move {
                 oneterm_ssh::SshSession::connect(
                     cfg,
@@ -427,21 +426,21 @@ div()
             }).ok();
         }).detach();
 
-        true  // đóng dialog
+        true  // close dialog
     }
 })
 ```
 
-### 5.2. Tạo TerminalPanel với SSH session
+### 5.2. Creating a TerminalPanel with an SSH session
 
-`TerminalPanel` hiện tại tự tạo `LocalSession` trong `new()`. Cần thêm
-constructor nhận `Box<dyn TerminalSession>` từ ngoài (factory pattern —
-đã được TODO ghi nhận trong `panel.rs`).
+`TerminalPanel` currently creates a `LocalSession` inside `new()`. We need a constructor
+that accepts a `Box<dyn TerminalSession>` from outside (factory pattern — already noted as a
+TODO in `panel.rs`).
 
 ```rust
 impl TerminalPanel {
-    /// Tạo panel từ session có sẵn (SSH hoặc local).
-    /// Session đã spawn/connect xong, panel chỉ wrap view.
+    /// Create a panel from an existing session (SSH or local).
+    /// The session is already spawned/connected; the panel just wraps the view.
     pub fn from_session(
         session: Box<dyn TerminalSession>,
         title: &str,
@@ -455,7 +454,7 @@ impl TerminalPanel {
             view,
             tab_panel: None,
             is_active: false,
-            tab_title: title.to_string(),  // ← thêm field mới
+            tab_title: title.to_string(),  // ← new field
         }
     }
 
@@ -470,30 +469,30 @@ impl TerminalPanel {
 }
 ```
 
-**Thay đổi `TerminalPanel`:**
-- Thêm field `tab_title: String` (mặc định `"Terminal"` cho local).
-- `title()` trong `impl Panel` dùng `self.tab_title` thay vì hardcode `"Terminal"`.
+**Changes to `TerminalPanel`:**
+- Add a field `tab_title: String` (default `"Terminal"` for local).
+- `title()` in `impl Panel` uses `self.tab_title` instead of hardcoding `"Terminal"`.
 
 ```rust
 pub struct TerminalPanel {
     view: Entity<LocalTerminalView>,
     tab_panel: Option<WeakEntity<TabPanel>>,
     is_active: bool,
-    tab_title: String,  // ← MỚI
+    tab_title: String,  // ← NEW
 }
 
-// Trong Panel::title()
+// In Panel::title()
 .child(div()
     .flex_1()
     .overflow_hidden()
     .text_ellipsis()
     .whitespace_nowrap()
-    .child(self.tab_title.clone()),  // ← thay "Terminal"
+    .child(self.tab_title.clone()),  // ← instead of "Terminal"
 ```
 
-### 5.3. Thêm SSH terminal tab vào DockArea
+### 5.3. Adding an SSH terminal tab to the DockArea
 
-Dùng cùng logic như `on_action_add_panel` (xem `workspace/actions.rs`):
+Use the same logic as `on_action_add_panel` (see `workspace/actions.rs`):
 
 ```rust
 fn add_ssh_terminal_to_dock(
@@ -502,7 +501,7 @@ fn add_ssh_terminal_to_dock(
     window: &mut Window,
     cx: &mut App,
 ) {
-    // Kiểm tra center có tab nào không (xử lý edge case tất cả tab đã đóng).
+    // Check whether the center has any visible tab (handle the edge case where all tabs were closed).
     let center_empty = dock_area.read_with(cx, |dock, cx| {
         super::center_has_no_visible_panel(&dock.center(), cx)
     }).unwrap_or(false);
@@ -526,12 +525,12 @@ fn add_ssh_terminal_to_dock(
 
 ---
 
-## 6. Tích hợp vào SessionPanel
+## 6. Integration into SessionPanel
 
-### 6.1. Thêm left-click handler vào `render_session_row`
+### 6.1. Add a left-click handler to `render_session_row`
 
-Hiện tại `render_session_row` chỉ có `context_menu` (right-click). Thêm
-`.on_click` cho left-click:
+Currently `render_session_row` only has a `context_menu` (right-click). Add an `.on_click`
+for left-click:
 
 ```rust
 fn render_session_row(
@@ -540,7 +539,7 @@ fn render_session_row(
     focus: &FocusHandle,
     cx: &App,
 ) -> impl IntoElement {
-    // ... (giữ nguyên code hiện tại)
+    // ... (keep existing code)
 
     div()
         .id(("session-row", ix))
@@ -550,7 +549,7 @@ fn render_session_row(
         .rounded_md()
         .cursor_pointer()
         .hover(|t| t.bg(theme.muted))
-        // ← MỚI: left-click → open SSH session
+        // ← NEW: left-click → open the SSH session
         .on_click(move |_, window, cx| {
             let session = SshSessionStore::global(cx)
                 .read(cx)
@@ -561,14 +560,14 @@ fn render_session_row(
                 open_connect_dialog(s, ix, window, cx);
             }
         })
-        // ... (giữ nguyên children + context_menu)
+        // ... (keep children + context_menu)
 }
 ```
 
-### 6.2. Cập nhật context menu "Open"
+### 6.2. Update the "Open" context menu
 
-Context menu "Open" hiện tại chỉ push notification "chưa triển khai".
-Thay bằng gọi cùng `open_connect_dialog`:
+The "Open" context menu currently just pushes a "not implemented" notification.
+Replace it with a call to the same `open_connect_dialog`:
 
 ```rust
 .item(PopupMenuItem::new("Open").on_click(move |_, window, cx| {
@@ -583,20 +582,20 @@ Thay bằng gọi cùng `open_connect_dialog`:
 }))
 ```
 
-### 6.3. `open_connect_dialog` — hàm chính
+### 6.3. `open_connect_dialog` — main function
 
-Đặt trong `session_tabs/tabs.rs` (cùng file với `open_session_dialog`).
-Cần tham chiếu `WeakEntity<DockArea>` — lấy từ `SessionPanel` hoặc global.
+Place it in `session_tabs/tabs.rs` (same file as `open_session_dialog`).
+It needs a `WeakEntity<DockArea>` reference — get it from `SessionPanel` or a global.
 
 ```rust
-/// Mở dialog connect SSH.
+/// Open the SSH connect dialog.
 ///
-/// - `session`: thông tin SSH session từ store.
-/// - `index`: vị trí trong store (để update username nếu user nhập mới).
+/// - `session`: the SSH session info from the store.
+/// - `index`: its position in the store (to update the username if the user enters a new one).
 ///
-/// Logic phân nhánh:
-/// - `session.username = None` → dialog hỏi username + password.
-/// - `session.username = Some` → dialog chỉ hỏi password.
+/// Branching logic:
+/// - `session.username = None` → the dialog asks for username + password.
+/// - `session.username = Some` → the dialog asks only for the password.
 fn open_connect_dialog(
     session: SshSession,
     index: usize,
@@ -619,14 +618,14 @@ fn open_connect_dialog(
         None => format!("ssh://{}:{}", session.host, session.port),
     };
 
-    // Password state — luôn cần, masked.
+    // Password state — always needed, masked.
     let password_state = cx.new(|cx| {
         InputState::new(window, cx)
             .placeholder("Enter password")
             .masked(true)
     });
 
-    // Username state — chỉ tạo khi cần hỏi.
+    // Username state — only create when we need to ask.
     let username_state: Option<Entity<InputState>> = if ask_username {
         Some(cx.new(|cx| {
             InputState::new(window, cx).placeholder("e.g. root, ubuntu, admin")
@@ -635,11 +634,11 @@ fn open_connect_dialog(
         None
     };
 
-    // DockArea weak ref — cần để add terminal tab sau khi connect.
-    // Lấy qua AppState hoặc truyền vào từ SessionPanel.
-    let dock_area = get_dock_area(cx);  // helper — xem §6.4
+    // DockArea weak ref — needed to add a terminal tab after connecting.
+    // Get it via AppState or pass it in from SessionPanel.
+    let dock_area = get_dock_area(cx);  // helper — see §6.4
 
-    // Clone cho on_ok closure
+    // Clone for the on_ok closure
     let password_ok = password_state.clone();
     let username_ok = username_state.clone();
     let session_ok = session.clone();
@@ -647,7 +646,7 @@ fn open_connect_dialog(
 
     window.open_dialog(cx, move |dialog, _window, _cx| {
         dialog
-            .title(title.as_str())  // NOTE: cần clone title vào closure
+            .title(title.as_str())  // NOTE: clone title into the closure
             .w(px(440.))
             .content({
                 let server_info = server_info.clone();
@@ -668,11 +667,11 @@ fn open_connect_dialog(
                                 .text_color(theme.muted_foreground)
                                 .child(server_info),
                         )
-                        // Username field (chỉ khi ask_username)
+                        // Username field (only when ask_username)
                         .when_some(username_state, |content, st| {
                             content.child(field("Username", true, Input::new(&st), cx))
                         })
-                        // Password field (luôn)
+                        // Password field (always)
                         .child(
                             v_flex()
                                 .gap_1()
@@ -709,12 +708,12 @@ fn open_connect_dialog(
                 DialogButtonProps::default()
                     .on_cancel(|_, _, _| true)
                     .on_ok(move |_, window, cx| {
-                        // Đọc username
+                        // Read username
                         let username = match &username_ok {
                             Some(st) => {
                                 let u = st.read(cx).value().trim().to_string();
                                 if u.is_empty() {
-                                    window.push_notification("Username là bắt buộc.", cx);
+                                    window.push_notification("Username is required.", cx);
                                     return false;
                                 }
                                 u
@@ -722,14 +721,14 @@ fn open_connect_dialog(
                             None => session_ok.username.clone().unwrap_or_default(),
                         };
 
-                        // Đọc password
+                        // Read password
                         let password = password_ok.read(cx).value().to_string();
                         if password.is_empty() {
-                            window.push_notification("Password là bắt buộc.", cx);
+                            window.push_notification("Password is required.", cx);
                             return false;
                         }
 
-                        // (Tuỳ chọn) Lưu username vào store nếu user nhập mới
+                        // (Optional) save the username to the store if the user entered a new one
                         if username_ok.is_some() {
                             let mut updated = session_ok.clone();
                             updated.username = Some(username.clone());
@@ -738,7 +737,7 @@ fn open_connect_dialog(
                             });
                         }
 
-                        // Tạo SshConfig
+                        // Create SshConfig
                         let cfg = SshConfig {
                             host: session_ok.host.clone(),
                             port: session_ok.port,
@@ -787,24 +786,24 @@ fn open_connect_dialog(
                             });
                         }).detach();
 
-                        true  // đóng dialog
+                        true  // close dialog
                     }),
             )
     });
 }
 ```
 
-### 6.4. Lấy `WeakEntity<DockArea>` trong dialog
+### 6.4. Getting `WeakEntity<DockArea>` inside the dialog
 
-`SessionPanel` hiện không持有 `DockArea` reference. Có 2 cách:
+`SessionPanel` doesn't currently hold a `DockArea` reference. Two options:
 
-**Cách A (khuyến nghị): Lưu `WeakEntity<DockArea>` vào `SessionPanel`**
+**Option A (recommended): store `WeakEntity<DockArea>` in `SessionPanel`**
 
 ```rust
 pub struct SessionPanel {
     focus_handle: FocusHandle,
     store: Entity<SshSessionStore>,
-    dock_area: WeakEntity<DockArea>,  // ← MỚI
+    dock_area: WeakEntity<DockArea>,  // ← NEW
 }
 
 impl SessionPanel {
@@ -814,27 +813,27 @@ impl SessionPanel {
         Self {
             focus_handle: cx.focus_handle(),
             store,
-            dock_area: cx.dock_area(),  // helper — xem ghi chú
+            dock_area: cx.dock_area(),  // helper — see note
         }
     }
 }
 ```
 
-> **Ghi chú `cx.dock_area()`:** GPUI không có API trực tiếp lấy DockArea từ
-> Context. Cần truyền `WeakEntity<DockArea>` vào `SessionPanel::new` từ
-> `register_panel` hoặc `reset_default_layout`. Tham chiếu:
-> `DockItem::tab(SessionPanel::new_entity(window, cx), ...)` — truyền thêm
-> `dock_area` param.
+> **Note on `cx.dock_area()`:** GPUI has no direct API to get the DockArea from a
+> Context. You need to pass `WeakEntity<DockArea>` into `SessionPanel::new` from
+> `register_panel` or `reset_default_layout`. Reference:
+> `DockItem::tab(SessionPanel::new_entity(window, cx), ...)` — add a `dock_area`
+> param.
 
-**Cách B: Lưu `WeakEntity<DockArea>` vào `AppState` global**
+**Option B: store `WeakEntity<DockArea>` in the global `AppState`**
 
 ```rust
 pub struct AppState {
-    pub dock_area: Option<WeakEntity<DockArea>>,  // set sau khi DockArea tạo
+    pub dock_area: Option<WeakEntity<DockArea>>,  // set after DockArea is created
 }
 ```
 
-Set trong `OneTermWorkspace::new`:
+Set in `OneTermWorkspace::new`:
 ```rust
 AppState::global(cx).update(cx, |s, cx| {
     s.dock_area = Some(dock_area.downgrade());
@@ -842,7 +841,7 @@ AppState::global(cx).update(cx, |s, cx| {
 });
 ```
 
-Đọc trong `open_connect_dialog`:
+Read in `open_connect_dialog`:
 ```rust
 fn get_dock_area(cx: &App) -> WeakEntity<DockArea> {
     AppState::global(cx).read(cx).dock_area.clone()
@@ -850,142 +849,142 @@ fn get_dock_area(cx: &App) -> WeakEntity<DockArea> {
 }
 ```
 
-> **Khuyến nghị Cách B** — đơn giản hơn, không cần thay đổi signature
-> `SessionPanel::new` + `register_panel` + `reset_default_layout`.
+> **Recommend Option B** — simpler, doesn't require changing the
+> `SessionPanel::new` + `register_panel` + `reset_default_layout` signatures.
 
 ---
 
-## 7. Cấu trúc file
+## 7. File structure
 
-### 7.1. File mới / thay đổi
+### 7.1. New / changed files
 
-| File | Trạng thái | Trách nhiệm |
+| File | Status | Responsibility |
 |---|---|---|
-| `crates/ssh/src/config.rs` | **MỚI** | `SshConfig` + `SshAuthMethod` struct |
-| `crates/ssh/src/lib.rs` | **Sửa** | Re-export `config::*` |
-| `crates/ssh/src/session.rs` | **MỚI** (roadmap) | `SshSession::connect()` — xem `terminal-backend.md` §7 |
-| `crates/ui/src/views/session_tabs/tabs.rs` | **Sửa** | Thêm `open_connect_dialog()` + left-click handler + cập nhật context menu "Open" |
-| `crates/ui/src/views/terminal/panel.rs` | **Sửa** | Thêm `tab_title` field + `from_session()` / `from_session_entity()` constructor |
-| `crates/ui/src/state/app_state.rs` | **Sửa** | Thêm `dock_area: Option<WeakEntity<DockArea>>` |
-| `crates/ui/src/layout/workspace/mod.rs` | **Sửa** | Set `AppState.dock_area` sau khi tạo DockArea |
+| `crates/ssh/src/config.rs` | **NEW** | `SshConfig` + `SshAuthMethod` structs |
+| `crates/ssh/src/lib.rs` | **Edit** | Re-export `config::*` |
+| `crates/ssh/src/session.rs` | **NEW** (roadmap) | `SshSession::connect()` — see `terminal-backend.md` §7 |
+| `crates/ui/src/views/session_tabs/tabs.rs` | **Edit** | Add `open_connect_dialog()` + left-click handler + update the "Open" context menu |
+| `crates/ui/src/views/terminal/panel.rs` | **Edit** | Add `tab_title` field + `from_session()` / `from_session_entity()` constructor |
+| `crates/ui/src/state/app_state.rs` | **Edit** | Add `dock_area: Option<WeakEntity<DockArea>>` |
+| `crates/ui/src/layout/workspace/mod.rs` | **Edit** | Set `AppState.dock_area` after creating the DockArea |
 
-### 7.2. Dependency thay đổi
+### 7.2. Dependency changes
 
 ```toml
-# crates/ui/Cargo.toml — thêm ssh dependency
+# crates/ui/Cargo.toml — add the ssh dependency
 [dependencies]
 oneterm-ssh = { path = "../ssh" }
 ```
 
-> ⚠️ **Quy tắc phụ thuộc**: `docs/agents/structure.md` ghi `ui` **không** import
-> `ssh`/`local` trực tiếp — gọi qua `TerminalSession` trait. Tuy nhiên, để tạo
-> `SshSession` cần gọi `SshSession::connect()` (factory). Hai giải pháp:
+> ⚠️ **Dependency rule**: `docs/agents/structure.md` says `ui` **does not** import
+> `ssh`/`local` directly — it calls through the `TerminalSession` trait. However, to
+> create an `SshSession` you need to call `SshSession::connect()` (a factory). Two solutions:
 >
-> **Giải pháp 1 (khuyến nghị MVP):** Cho phép `ui` phụ thuộc `ssh` để gọi
-> `SshSession::connect()`. Session trả về `Box<dyn TerminalSession>` — UI chỉ
-> dùng trait, không biết internals. Đây là pattern mà `panel.rs` **đã dùng** với
-> `oneterm_local::LocalSession`. Cập nhật quy tắc: `ui → {core, local, ssh}`.
+> **Solution 1 (recommended MVP):** Allow `ui` to depend on `ssh` to call
+> `SshSession::connect()`. The session returns `Box<dyn TerminalSession>` — the UI only
+> uses the trait, unaware of internals. This is the pattern `panel.rs` **already uses** with
+> `oneterm_local::LocalSession`. Update the rule: `ui → {core, local, ssh}`.
 >
-> **Giải pháp 2 (clean architecture):** Đẩy factory ra `app` crate. `app` tạo
-> `Box<dyn TerminalSession>` rồi truyền vào `ui`. `ui` giữ nguyên leaf (chỉ
-> `core`). Cần thêm callback/registry pattern: `ui` gọi `app` qua trait khi cần
-> connect. Phức tạp hơn — để sau.
+> **Solution 2 (clean architecture):** Push the factory into the `app` crate. `app`
+> creates `Box<dyn TerminalSession>` then passes it into `ui`. `ui` stays a leaf (only
+> `core`). Needs an extra callback/registry pattern: `ui` calls `app` via a trait when it
+> needs to connect. More complex — defer.
 
-> **Quyết định MVP:** Giải pháp 1 — cập nhật `structure.md` quy tắc phụ thuộc
-> thành `ui → {core, local, ssh}`. Đã có tiền lệ (`panel.rs` import
+> **MVP decision:** Solution 1 — update `structure.md`'s dependency rule
+> to `ui → {core, local, ssh}`. There's precedent (`panel.rs` imports
 > `oneterm_local`).
 
 ---
 
 ## 8. Implementation checklist
 
-### Bước 1 — `ssh` crate: `SshConfig` + `SshAuthMethod`
+### Step 1 — `ssh` crate: `SshConfig` + `SshAuthMethod`
 
-- [ ] Tạo `crates/ssh/src/config.rs` — define `SshConfig` + `SshAuthMethod`.
-- [ ] Cập nhật `crates/ssh/src/lib.rs` — `pub mod config;` + re-export.
-- [ ] Cập nhật `crates/ui/Cargo.toml` — thêm `oneterm-ssh` dependency.
+- [ ] Create `crates/ssh/src/config.rs` — define `SshConfig` + `SshAuthMethod`.
+- [ ] Update `crates/ssh/src/lib.rs` — `pub mod config;` + re-export.
+- [ ] Update `crates/ui/Cargo.toml` — add the `oneterm-ssh` dependency.
 
-### Bước 2 — `TerminalPanel`: hỗ trợ session từ ngoài
+### Step 2 — `TerminalPanel`: support an external session
 
-- [ ] Thêm field `tab_title: String` vào `TerminalPanel`.
+- [ ] Add field `tab_title: String` to `TerminalPanel`.
 - [ ] `new()` — set `tab_title = "Terminal"`.
-- [ ] Thêm `from_session(session, title, window, cx)` + `from_session_entity(...)`.
-- [ ] `Panel::title()` — dùng `self.tab_title` thay vì hardcode `"Terminal"`.
-- [ ] `register_panel("terminal", ...)` — giữ `new_entity` (local mặc định).
+- [ ] Add `from_session(session, title, window, cx)` + `from_session_entity(...)`.
+- [ ] `Panel::title()` — use `self.tab_title` instead of hardcoding `"Terminal"`.
+- [ ] `register_panel("terminal", ...)` — keep `new_entity` (local default).
 
-### Bước 3 — `AppState`: lưu `WeakEntity<DockArea>`
+### Step 3 — `AppState`: store `WeakEntity<DockArea>`
 
-- [ ] Thêm field `dock_area: Option<WeakEntity<DockArea>>` vào `AppState`.
-- [ ] Trong `OneTermWorkspace::new` — set `AppState.dock_area` sau khi tạo DockArea.
+- [ ] Add field `dock_area: Option<WeakEntity<DockArea>>` to `AppState`.
+- [ ] In `OneTermWorkspace::new` — set `AppState.dock_area` after creating the DockArea.
 
-### Bước 4 — `open_connect_dialog` trong `session_tabs/tabs.rs`
+### Step 4 — `open_connect_dialog` in `session_tabs/tabs.rs`
 
-- [ ] Thêm `open_connect_dialog(session, index, window, cx)` function.
-- [ ] Logic phân nhánh: `ask_username = session.username.is_none()`.
-- [ ] Dialog title + server info banner theo `ask_username`.
-- [ ] Username input (chỉ khi `ask_username = true`).
+- [ ] Add `open_connect_dialog(session, index, window, cx)` function.
+- [ ] Branching logic: `ask_username = session.username.is_none()`.
+- [ ] Dialog title + server info banner per `ask_username`.
+- [ ] Username input (only when `ask_username = true`).
 - [ ] Password input: `InputState::masked(true)` + `Input::mask_toggle()`.
 - [ ] Footer: `DialogFooter` → Cancel (`DialogClose`) + Connect (`DialogAction`), `justify_end`.
-- [ ] `on_ok`: validate → tạo `SshConfig` → (tuỳ chọn) lưu username → connect async.
-- [ ] Connect thành công → `TerminalPanel::from_session_entity` → add to dock.
-- [ ] Connect lỗi → `window.push_notification`.
+- [ ] `on_ok`: validate → create `SshConfig` → (optional) save username → connect async.
+- [ ] Connect succeeds → `TerminalPanel::from_session_entity` → add to dock.
+- [ ] Connect fails → `window.push_notification`.
 
-### Bước 5 — Tích hợp click handler vào `render_session_row`
+### Step 5 — Integrate the click handler into `render_session_row`
 
-- [ ] Thêm `.on_click` left-click → `open_connect_dialog`.
-- [ ] Cập nhật context menu "Open" → gọi `open_connect_dialog` (thay vì
-      `push_notification("chưa triển khai")`).
+- [ ] Add `.on_click` left-click → `open_connect_dialog`.
+- [ ] Update the "Open" context menu → call `open_connect_dialog` (instead of
+      `push_notification("not implemented")`).
 
-### Bước 6 — `ssh` crate: `SshSession::connect()` (roadmap terminal-backend §7)
+### Step 6 — `ssh` crate: `SshSession::connect()` (roadmap terminal-backend §7)
 
-- [ ] `crates/ssh/src/session.rs` — russh client + tokio runtime ẩn.
+- [ ] `crates/ssh/src/session.rs` — russh client + hidden tokio runtime.
 - [ ] `crates/ssh/src/listener.rs` — `SshListener: EventListener`.
 - [ ] `crates/ssh/src/auth.rs` — password auth (MVP).
 - [ ] `impl TerminalSession for SshSession`.
-- [ ] Re-export `SshSession`, `PtySize` qua `lib.rs`.
+- [ ] Re-export `SshSession`, `PtySize` via `lib.rs`.
 
-### Bước 7 — Cập nhật docs
+### Step 7 — Update docs
 
-- [ ] Cập nhật `docs/agents/structure.md` — quy tắc phụ thuộc `ui → {core, local, ssh}`.
-- [ ] Cập nhật `AGENTS.md` — roadmap SSH check.
+- [ ] Update `docs/agents/structure.md` — dependency rule `ui → {core, local, ssh}`.
+- [ ] Update `AGENTS.md` — SSH roadmap check.
 
-### Bước 8 — Quality gate
+### Step 8 — Quality gate
 
 - [ ] `cargo fmt --all -- --check`
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings`
 - [ ] `cargo build --workspace`
-- [ ] `cargo run -p app` — click vào SSH session item → dialog hiện → nhập
-      credentials → terminal tab mở (cần server SSH thật để test end-to-end).
+- [ ] `cargo run -p app` — click an SSH session item → the dialog appears → enter
+      credentials → a terminal tab opens (needs a real SSH server for end-to-end testing).
 
 ---
 
-## 9. Edge cases & ghi chú
+## 9. Edge cases & notes
 
 ### 9.1. Reconnect / duplicate session
 
-Khi user click vào cùng 1 session item nhiều lần → mở nhiều tab SSH riêng biệt
-(mỗi tab = 1 connection độc lập). Đây là behavior mong muốn — giống Tabby,
-Termius. Không cache/reuse connection.
+When the user clicks the same session item multiple times → opens multiple separate SSH tabs
+(each tab = an independent connection). This is the desired behavior — like Tabby, Termius.
+No connection caching/reuse.
 
 ### 9.2. Connection timeout
 
-`SshSession::connect` nên có timeout (vd 30s). Nếu server unreachable →
+`SshSession::connect` should have a timeout (e.g. 30s). If the server is unreachable →
 `Err` → `push_notification("SSH connect failed: connection timed out")`.
-Xem `terminal-backend.md` §13 (rủi ro).
+See `terminal-backend.md` §13 (risks).
 
 ### 9.3. Host key verification
 
-MVP: chấp nhận mọi host key (KHÔNG khuyến nghị production). Roadmap: thêm
-known_hosts + prompt accept/reject (xem `terminal-backend.md` §8, bước 8).
-Khi triển khai known_hosts, dialog connect cần thêm bước:
-- Host key chưa know → dialog "Accept host key? (fingerprint: xx:xx:...)"
+MVP: accept any host key (NOT recommended for production). Roadmap: add
+known_hosts + an accept/reject prompt (see `terminal-backend.md` §8, step 8).
+When known_hosts is implemented, the connect dialog needs an extra step:
+- Unknown host key → dialog "Accept host key? (fingerprint: xx:xx:...)"
 - Host key mismatch → dialog "WARNING: host key changed!"
 
-### 9.4. Password input — không log
+### 9.4. Password input — don't log it
 
-`InputState::masked(true)` đảm bảo text hiển thị `•••••`. Tuy nhiên, cần đảm
- bảo password không bị log ra console/tracing. KHÔNG `tracing::info!` raw
- password. Trong `SshConfig` debug impl, mask password:
+`InputState::masked(true)` ensures the text shows `•••••`. However, make sure the password
+isn't logged to console/tracing. Do NOT `tracing::info!` the raw password. In the `SshConfig`
+Debug impl, mask the password:
 
 ```rust
 impl Debug for SshConfig {
@@ -1000,21 +999,21 @@ impl Debug for SshConfig {
 }
 ```
 
-### 9.5. Keyboard focus trong dialog
+### 9.5. Keyboard focus in the dialog
 
-- Khi dialog mở, focus vào field đầu tiên (username nếu hỏi, password nếu không).
-- Enter trong password field → trigger Connect (gọi `on_ok`).
-- Esc → trigger Cancel (gọi `on_cancel`).
+- When the dialog opens, focus the first field (username if asked, password if not).
+- Enter in the password field → trigger Connect (call `on_ok`).
+- Esc → trigger Cancel (call `on_cancel`).
 
-> gpui-component Dialog tự handle Esc (dispatch `CancelDialog`). Enter trong
-> `DialogAction` button → dispatch `ConfirmDialog`. Cần bind Enter key trong
-> input field → dispatch `ConfirmDialog` (xem Dialog API).
+> gpui-component Dialog handles Esc itself (dispatches `CancelDialog`). Enter on the
+> `DialogAction` button → dispatches `ConfirmDialog`. You need to bind the Enter key in
+> the input field → dispatch `ConfirmDialog` (see the Dialog API).
 
-### 9.6. Auth method khác (roadmap)
+### 9.6. Other auth methods (roadmap)
 
-Hiện MVP chỉ support password. Roadmap thêm:
-- **Private key**: dialog thêm field "Key file path" + "Passphrase (optional)".
+The MVP only supports password. Roadmap additions:
+- **Private key**: the dialog adds a "Key file path" + "Passphrase (optional)" field.
   `SshAuthMethod::PrivateKey { key_path, passphrase }`.
-- **SSH agent**: tự detect agent, không cần dialog. `SshAuthMethod::Agent`.
-- Khi có nhiều auth method, dialog thêm dropdown "Authentication method" →
-  show/hide fields tương ứng.
+- **SSH agent**: auto-detect the agent, no dialog needed. `SshAuthMethod::Agent`.
+- With multiple auth methods, the dialog adds an "Authentication method" dropdown →
+  show/hide the corresponding fields.

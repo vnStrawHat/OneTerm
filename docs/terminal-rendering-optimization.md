@@ -1,81 +1,81 @@
 # Terminal Rendering Optimization — Technical Document
 
-> Tài liệu kỹ thuật toàn diện mô tả các phương pháp, công nghệ và kỹ thuật đã áp dụng trong `TerminalElement` của **OneTerm** để đạt chất lượng render terminal gần với **Windows Terminal AtlasEngine**.
+> A comprehensive technical document describing the methods, technologies, and techniques applied in OneTerm's `TerminalElement` to achieve terminal rendering quality close to **Windows Terminal AtlasEngine**.
 >
-> **Commits áp dụng**:
+> **Applied commits**:
 > - `1aab15c` — snap cell metrics to device-pixel grid + custom box-drawing primitive
 > - `cae796d` — extend custom renderer for block elements U+2580-U+259F
 > - `e8269ba` — Windows Terminal-grade cell metrics + cursor shape override
 >
-> **File triển khai chính**: `crates/ui/src/views/terminal/terminal_element.rs`  
-> **Ngày áp dụng**: 2026-06-22
+> **Main implementation file**: `crates/ui/src/views/terminal/terminal_element.rs`  
+> **Date applied**: 2026-06-22
 
 ---
 
-## Tổng quan
+## Overview
 
-`TerminalElement` là custom `gpui::Element` render terminal grid từ `TerminalContent` snapshot. Vấn đề ban đầu:
-- Cell metrics (width/height) là float logical px → subpixel jitter, đường kẻ nhòe.
-- Box-drawing / block element dùng font glyph → anti-alias blur, không khít cell.
-- Cell width auto đo `'m'` thay vì `'0'` → cell rộng hơn Windows Terminal.
-- Line height factor có thể nhỏ hơn `ascent + descent` → clip glyph.
-- Shell `DECSCUSR` override user config cursor shape.
+`TerminalElement` is a custom `gpui::Element` that renders the terminal grid from a `TerminalContent` snapshot. The initial problems:
+- Cell metrics (width/height) were float logical px → subpixel jitter, blurry lines.
+- Box-drawing / block elements used font glyphs → anti-alias blur, didn't fill the cell.
+- Cell width auto-measured from `'m'` instead of `'0'` → cell wider than Windows Terminal.
+- Line height factor could be smaller than `ascent + descent` → clipped glyphs.
+- The shell `DECSCUSR` overrode the user-configured cursor shape.
 
-Giải pháp gồm 3 trụ cột:
-1. **Device-pixel grid snapping** — snap mọi metric/tọa độ sang device pixel.
-2. **Custom primitive renderer** — vẽ box-drawing/block bằng fill rects thay vì font glyph.
-3. **Font-metrics-based cell metrics + cursor override** — `ch_advance('0')`, line height ≥ `ascent+descent`, config shape thắng shell.
-
----
-
-
-
-## 1. Tại sao cần snap?
-
-`TerminalElement` vẽ một grid monospace: mỗi cell có width/height cố định, text được đặt tại `origin + (col * cell_width, line * line_height)`. Nếu `cell_width`/`line_height` là float logical px (ví dụ 9.0 px ở scale 1.5 → 13.5 device px), thì:
-
-- Các đường kẻ (`─`, `│`, `┌` … U+2500–U+257F) nằm giữa hai device pixel → anti-alias theo chiều ngang/dọc → nhòe.
-- Block cursor (`█`) rộng 13.5 px → khe hở subpixel giữa cursor và cell kế bên.
-- Text baseline khác nhau giữa các dòng → rasterize glyph lệch pixel grid.
-- Resize window làm cell metrics thay đổi 1 subpixel → toàn bộ grid *jitter*.
-
-**Windows Terminal** và **Zed terminal** giải quyết bằng cách snap mọi tọa độ/metrics sang device-pixel grid nguyên. `OneTerm` áp dụng tưng tự ở tầng GPUI logical pixel — kết quả glyph rasterize khít pixel grid.
+The solution has three pillars:
+1. **Device-pixel grid snapping** — snap every metric/coordinate to device pixels.
+2. **Custom primitive renderer** — draw box-drawing/block via fill rects instead of font glyphs.
+3. **Font-metrics-based cell metrics + cursor override** — `ch_advance('0')`, line height ≥ `ascent+descent`, config shape wins over shell.
 
 ---
 
-## 2. Công thức snap
 
-GPUI dùng logical pixel; window cung cấp `scale_factor` (1.0 = 96 dpi, 1.5/2.0 trên HiDPI).
+
+## 1. Why snap?
+
+`TerminalElement` paints a monospace grid: each cell has a fixed width/height, text is placed at `origin + (col * cell_width, line * line_height)`. If `cell_width`/`line_height` are float logical px (e.g. 9.0 px at scale 1.5 → 13.5 device px), then:
+
+- Line characters (`─`, `│`, `┌` … U+2500–U+257F) fall between two device pixels → horizontal/vertical anti-aliasing → blur.
+- A block cursor (`█`) 13.5 px wide → subpixel gap between the cursor and the neighboring cell.
+- Text baselines differ between rows → glyph rasterization is off the pixel grid.
+- Resizing the window changes cell metrics by a subpixel → the entire grid *jitters*.
+
+**Windows Terminal** and **Zed terminal** solve this by snapping every coordinate/metric to an integer device-pixel grid. `OneTerm` applies the same approach at the GPUI logical-pixel layer — the result is glyphs rasterized on the pixel grid.
+
+---
+
+## 2. Snap formulas
+
+GPUI uses logical px; the window provides `scale_factor` (1.0 = 96 dpi, 1.5/2.0 on HiDPI).
 
 ```rust
 let scale_factor = window.scale_factor().max(1.0);
 
-// Round sang device pixel gần nhất — dùng cho cell_width/line_height.
+// Round to nearest device pixel — used for cell_width/line_height.
 let snap_px = |value: f32| -> f32 { (value * scale_factor).round() / scale_factor };
 
-// Floor — dùng cho origin, tọa độ bắt đầu (align trái/trên).
+// Floor — used for origins, start coordinates (align left/top).
 let snap_px_floor = |value: f32| -> f32 { (value * scale_factor).floor() / scale_factor };
 
-// Ceil — dùng cho width/height cần fill đầy cell/khít cell kế bên.
+// Ceil — used for width/height that must fill the cell / meet the next cell.
 let ceil_px = |value: f32| -> f32 { (value * scale_factor).ceil() / scale_factor };
 ```
 
-- `value * scale_factor` chuyển logical px → device px.
-- `round()` / `floor()` / `ceil()` snap sang integer device px.
-- `/ scale_factor` chuyển ngược về logical px (vẫn nằm trên device-pixel grid).
+- `value * scale_factor` converts logical px → device px.
+- `round()` / `floor()` / `ceil()` snap to integer device px.
+- `/ scale_factor` converts back to logical px (still on the device-pixel grid).
 
-Ví dụ với `scale_factor = 1.5`:
+Example with `scale_factor = 1.5`:
 
-| Logical | Device | Snap round | Snap floor | Snap ceil | Logical sau snap |
+| Logical | Device | Snap round | Snap floor | Snap ceil | Logical after snap |
 |---|---|---|---|---|---|
 | 9.0 | 13.5 | 14.0 | 13.0 | 14.0 | 9.333 (round/ceil) / 8.667 (floor) |
 | 16.4 | 24.6 | 25.0 | 24.0 | 25.0 | 16.667 / 16.0 / 16.667 |
 
 ---
 
-## 3. Áp dụng trong `prepaint`
+## 3. Application in `prepaint`
 
-### 3.1. `cell_width` và `line_height`
+### 3.1. `cell_width` and `line_height`
 
 ```rust
 let scale_factor = window.scale_factor().max(1.0);
@@ -97,7 +97,7 @@ let cell_width = if let Some(cw) = self.cell_width_override {
                 .map(|s| f32::from(s.width))
                 .unwrap_or(8.0)
         });
-    px(snap_px(raw))        // round sang device pixel
+    px(snap_px(raw))        // round to device pixel
 };
 
 let font_ascent = cx.text_system().ascent(font_id, font_px);
@@ -107,9 +107,9 @@ let factor_height = f32::from(font_px) * self.line_height_factor;
 let line_height = px(snap_px(factor_height.max(natural_line_height)));
 ```
 
-**Lý do**: `cell_width` và `line_height` là nền tảng của toàn bộ grid. Round sang device pixel đảm bảo mỗi dòng/cột nằm chính xác trên device-pixel grid.
+**Reason**: `cell_width` and `line_height` are the foundation of the entire grid. Rounding to device pixel ensures each row/column lands exactly on the device-pixel grid.
 
-### 3.2. Tính `rows` / `cols` bằng device pixel
+### 3.2. Compute `rows` / `cols` in device pixels
 
 ```rust
 let grid_width = (f32::from(bounds.size.width)
@@ -130,7 +130,7 @@ let line_height_device = f32::from(line_height) * scale_factor;
 let rows = ((avail_height_device / line_height_device).floor() as u16).max(1);
 ```
 
-**Lý do**: tính số hàng/cột trong device-pixel space (integer) tránh lỗi làm tròn khi chia logical px. Kết quả `rows`/`cols` là số nguyên cell vừa khít viewport.
+**Reason**: computing the number of rows/columns in device-pixel space (integer) avoids rounding errors when dividing logical px. The resulting `rows`/`cols` is an integer number of cells that exactly fit the viewport.
 
 ### 3.3. Grid origin
 
@@ -141,7 +141,7 @@ let grid_origin = GpuiPoint {
 };
 ```
 
-Grid origin là điểm bắt đầu của vùng terminal (bên phải gutter). Snap sang device pixel đảm bảo dòng đầu tiên và cột đầu tiên khít grid — đặc biệt quan trọng khi gutter width không phải bội số của device pixel.
+The grid origin is the start point of the terminal region (right of the gutter). Snapping to device pixel ensures the first row and first column land on the grid — especially important when the gutter width is not a multiple of a device pixel.
 
 ### 3.4. Gutter entry Y
 
@@ -149,13 +149,13 @@ Grid origin là điểm bắt đầu của vùng terminal (bên phải gutter). 
 y: px(snap_px(f32::from(bounds.origin.y + i as f32 * line_height))),
 ```
 
-Mỗi dòng gutter text cũng snap Y theo `line_height` đã snap, tránh lệch baseline giữa các dòng.
+Each gutter text row also snaps Y to the snapped `line_height`, avoiding baseline drift between rows.
 
 ---
 
-## 4. Áp dụng trong `paint`
+## 4. Application in `paint`
 
-Trong `paint` dùng `floor` cho origin, `ceil` cho size để fill đầy cell.
+In `paint`, use `floor` for the origin, `ceil` for the size, to fill the cell completely.
 
 ```rust
 let scale_factor = window.scale_factor().max(1.0);
@@ -176,17 +176,17 @@ for r in &layout.rects {
 }
 ```
 
-- `pos`: floor để align trái/trên.
-- `sz.width`: ceil để background fill đến tận cạnh phải cell cuối, không để khe hở subpixel.
+- `pos`: floor to align left/top.
+- `sz.width`: ceil so the background fills up to the right edge of the last cell, leaving no subpixel gap.
 
 ### 4.2. Selection rects
 
-Tương tự background, dùng `floor` + `ceil`.
+Same as background, using `floor` + `ceil`.
 
 ### 4.3. Text runs
 
 ```rust
-// Trong BatchedTextRun::paint
+// In BatchedTextRun::paint
 let snap_px = |value: f32| -> f32 { (value * scale_factor).floor() / scale_factor };
 let pos = point(
     px(snap_px(f32::from(origin.x + self.start.column as f32 * cell_w))),
@@ -194,7 +194,7 @@ let pos = point(
 );
 ```
 
-Snap text origin để glyph rasterize khít pixel grid. GPUI `paint_line` sau đó tự center text trong `line_height` dựa trên font metrics của shaped line.
+Snap the text origin so glyphs rasterize on the pixel grid. GPUI `paint_line` then centers the text within `line_height` based on the shaped line's font metrics.
 
 ### 4.4. Box-drawing primitives
 
@@ -215,8 +215,8 @@ for bd in &layout.box_draws {
 }
 ```
 
-- Geometry box-drawing được tính trong **device pixel integer** (xem Phần 2).
-- Tọa độ cell origin snap floor; kích thước sub-rect chuyển từ device px về logical px bằng `/ scale_factor`.
+- Box-drawing geometry is computed in **integer device pixels** (see Part 2).
+- The cell origin is snapped with floor; sub-rect dimensions are converted from device px back to logical px via `/ scale_factor`.
 
 ### 4.5. Cursor
 
@@ -235,70 +235,70 @@ let sz = match cur.shape {
         size(px(ceil_px(f32::from(cw))), px(ceil_px(f32::from(ul_h))))
     }
     CursorShape::Block => {
-        size(px(ceil_px(f32::from(cw))), lh)   // ceil width khít cell
+        size(px(ceil_px(f32::from(cw))), lh)   // ceil width to fill cell
     }
     ...
 };
 ```
 
-- Block cursor: `ceil_px(cw)` đảm bảo width ≥ cell width, lấp đầy khoảng trống subpixel giữa các cell.
-- Bar/Underline: `ceil_px` cho thickness tránh mất hình thanh mỏng.
+- Block cursor: `ceil_px(cw)` ensures width ≥ cell width, filling the subpixel gap between cells.
+- Bar/Underline: `ceil_px` for thickness avoids losing a thin bar.
 
 ---
 
-## 5. Tóm tắt quy tắc snap
+## 5. Snap rule summary
 
-| Đại lượng | Hàm snap | Lý do |
+| Quantity | Snap function | Reason |
 |---|---|---|
-| `cell_width` | `round` | Metric nền tảng, cần gần đúng nhất device px |
-| `line_height` | `round` | Metric nền tảng, cần gần đúng nhất device px |
-| `rows`/`cols` | tính trong device px + `floor` | Số nguyên cell vừa khít viewport |
-| `grid_origin` | `round` | Điểm neo grid |
-| `bg`/`selection` pos | `floor` | Align trái/trên |
-| `bg`/`selection` width | `ceil` | Fill đến cạnh cell kế, không khe hở |
-| `text run` origin | `floor` | Glyph khít pixel grid |
-| `box-drawing` geometry | integer device px | Primitive line 1 px sharp |
-| `cursor` pos | `floor` | Align trong cell |
-| `cursor` size | `ceil` | Khít/không khe hở |
+| `cell_width` | `round` | Foundational metric, needs closest device px |
+| `line_height` | `round` | Foundational metric, needs closest device px |
+| `rows`/`cols` | compute in device px + `floor` | Integer cells exactly fit the viewport |
+| `grid_origin` | `round` | Grid anchor point |
+| `bg`/`selection` pos | `floor` | Align left/top |
+| `bg`/`selection` width | `ceil` | Fill to the next cell edge, no gap |
+| `text run` origin | `floor` | Glyphs land on pixel grid |
+| `box-drawing` geometry | integer device px | Primitive lines stay sharp at 1 px |
+| `cursor` pos | `floor` | Align inside the cell |
+| `cursor` size | `ceil` | Fills / no gap |
 
 ---
 
-## 6. Hiệu quả
+## 6. Effects
 
-- **HiDPI (scale 1.5, 2.0)**: đường kẻ 1 device px sharp, không anti-alias blur.
-- **Resize liên tục**: grid không jitter vì metrics luôn nằm trên device-pixel grid.
-- **Block cursor**: khít cell, không subpixel gap.
-- **Consistency**: background, selection, text, cursor, box-drawing dùng chung origin snap → không lệch nhau.
-
----
-
-## 7. Vấn đề: Box-drawing từ font glyph bị mờ / không khít
-
-### Triệu chứng
-
-Các ký tự đường khung `┌─┐`, `├┤`, `║` hay các khối `▀▄▌█` trong terminal:
-
-- Bị anti-alias blur dọc theo cạnh.
-- Đường nét mỏng có độ dày không nhất quán giữa các ký tự liền kề.
-- Ở scale factor không nguyên (vd 1.25×, 1.5×) các đường nằm giữa pixel grid → mờ.
-- Các khối `▀` và `▄` trong prompt (Nushell / pi CLI) không khít, để lại khe hở.
-
-### Nguyên nhân
-
-Mặc định renderer đưa box-drawing char vào text run, GPUI shape + rasterize
-font glyph theo logical coordinate. Glyph của monospace font thường thiết kế
-cho em-square chứ không phải cell device pixel cụ thể → khi rasterize với
-cell width 9.6 px, hinting / anti-alias làm méo nét.
-
-### Giải pháp: custom primitive renderer
-
-Windows Terminal AtlasEngine và Zed terminal đều có bộ vẽ box-drawing riêng:
-thay vì rasterize font, họ tính geometry các hình chữ nhật nhỏ trong cell và
-vẽ bằng fill rects khít device pixel. OneTerm áp dụng cùng phương pháp.
+- **HiDPI (scale 1.5, 2.0)**: lines are sharp at 1 device px, no anti-alias blur.
+- **Continuous resize**: the grid doesn't jitter because metrics always sit on the device-pixel grid.
+- **Block cursor**: fills the cell, no subpixel gap.
+- **Consistency**: background, selection, text, cursor, box-drawing all share the same origin snap → they don't drift apart.
 
 ---
 
-## 8. Kiến trúc data flow
+## 7. Problem: box-drawing from font glyphs is blurry / doesn't fill
+
+### Symptoms
+
+Frame-line characters `┌─┐`, `├┤`, `║` or blocks `▀▄▌█` in the terminal:
+
+- Suffer from anti-alias blur along the edges.
+- Thin strokes have inconsistent thickness between adjacent characters.
+- At non-integer scale factors (e.g. 1.25×, 1.5×) lines fall between the pixel grid → blurry.
+- `▀` and `▄` blocks in prompts (Nushell / pi CLI) don't fill, leaving gaps.
+
+### Cause
+
+By default the renderer puts box-drawing chars into a text run, and GPUI shapes + rasterizes
+the font glyph by logical coordinate. A monospace font's glyph is usually designed for the
+em-square, not a specific cell device pixel → when rasterized with a cell width of 9.6 px,
+hinting / anti-aliasing distorts the strokes.
+
+### Solution: custom primitive renderer
+
+Windows Terminal AtlasEngine and Zed terminal both have their own box-drawing renderer:
+instead of rasterizing the font, they compute the geometry of small rectangles inside the cell
+and draw them with fill rects aligned to device pixels. OneTerm applies the same approach.
+
+---
+
+## 8. Architecture data flow
 
 ```
 TerminalContent::cells
@@ -306,11 +306,11 @@ TerminalContent::cells
         ▼
 TerminalElement::layout_grid()
         │
-        ├─ cell có char ∈ U+2500–U+259F?
+        ├─ cell char ∈ U+2500–U+259F?
         │      └─ push BoxDrawCell { point, color, c }
-        │         (không đưa vào BatchedTextRun)
+        │         (not put into BatchedTextRun)
         │
-        └─ trả về (rects, runs, box_draws)
+        └─ returns (rects, runs, box_draws)
                   │
                   ▼
         LayoutState (stored in prepaint)
@@ -320,27 +320,27 @@ TerminalElement::layout_grid()
             │
             ├─ paint background rects
             ├─ paint text runs
-            ├─ paint box-drawing primitives  ← phần này
+            ├─ paint box-drawing primitives  ← this part
             └─ paint cursor
 ```
 
-### Struct `BoxDrawCell`
+### `BoxDrawCell` struct
 
 ```rust
 struct BoxDrawCell {
     point: LayoutPoint, // (display_line, column)
-    color: Hsla,        // fg color đã resolve
-    c: char,            // ký tự cần vẽ
+    color: Hsla,        // resolved fg color
+    c: char,            // the char to draw
 }
 ```
 
-Khi layout gặp box-drawing char, nó flush text batch hiện tại (nếu có),
-đẩy `BoxDrawCell` vào vec riêng, rồi `continue`. Đảm bảo text run không chứa
-box-drawing, và box-drawing được vẽ **trên nền, dưới cursor**.
+When layout encounters a box-drawing char, it flushes the current text batch (if any),
+pushes a `BoxDrawCell` into a separate vec, then `continue`. This ensures text runs never
+contain box-drawing, and box-drawing is painted **above the background, below the cursor**.
 
 ---
 
-## 9. Nhận diện ký tự cần custom render
+## 9. Detecting chars that need custom rendering
 
 ```rust
 fn is_box_drawing(c: char) -> bool {
@@ -348,49 +348,48 @@ fn is_box_drawing(c: char) -> bool {
 }
 ```
 
-Phạm vi:
+Ranges:
 
-- `U+2500–U+257F`: 128 ký tự **Box Drawing** — đường thẳng, góc, ngã tư,
-  đường đôi, đường nét đứt, góc bo.
-- `U+2580–U+259F`: 32 ký tự **Block Elements** — nửa khối, phần tám khối,
-  khối góc phần tư.
+- `U+2500–U+257F`: 128 **Box Drawing** characters — lines, corners, tees,
+  double lines, dashed lines, rounded corners.
+- `U+2580–U+259F`: 32 **Block Elements** — half blocks, eighths blocks,
+  quadrant blocks.
 
-Tất cả đều là ký tự “geometric” — có thể biểu diễn chính xác bằng hình chữ
-nhật axis-aligned.
+All are "geometric" characters — representable exactly by axis-aligned rectangles.
 
 ---
 
-## 10. Tính geometry: `box_drawing_rects`
+## 10. Computing geometry: `box_drawing_rects`
 
-Hàm trả về `Vec<(i32, i32, i32, i32)>` — mỗi tuple là `(x, y, w, h)` tính
-bằng **device pixel** relative đến gốc cell. Hệ tọa độ device pixel là integer,
-nên các nét line luôn dày đúng 1 px vật lý, không blur.
+The function returns `Vec<(i32, i32, i32, i32)>` — each tuple is `(x, y, w, h)` in
+**device pixels** relative to the cell origin. The device-pixel coordinate system is integer,
+so strokes are always exactly 1 physical px thick, no blur.
 
-### Tham số
+### Parameters
 
 ```rust
 fn box_drawing_rects(c: char, cw_d: i32, lh_d: i32) -> Vec<(i32, i32, i32, i32)>
 ```
 
-| Tham số | Ý nghĩa |
+| Parameter | Meaning |
 |---------|---------|
-| `cw_d`  | Cell width làm tròn sang device pixel |
-| `lh_d`  | Line height làm tròn sang device pixel |
+| `cw_d`  | Cell width rounded to device pixels |
+| `lh_d`  | Line height rounded to device pixels |
 
-### Các điểm gốc nhanh
+### Quick anchor points
 
 ```rust
-let cx = cw_d / 2;          // tâm ngang
-let cy = lh_d / 2;          // tâm dọc
-let t  = 1;                 // độ dày nét mảnh (light) = 1 device px
-let ht = 2;                 // độ dày nét đậm (heavy)  = 2 device px
-let dl = (cw_d / 6).max(1); // khoảng cách 2 đường đôi theo ngang
-let dv = (lh_d / 6).max(1); // khoảng cách 2 đường đôi theo dọc
+let cx = cw_d / 2;          // horizontal center
+let cy = lh_d / 2;          // vertical center
+let t  = 1;                 // light stroke thickness = 1 device px
+let ht = 2;                 // heavy stroke thickness = 2 device px
+let dl = (cw_d / 6).max(1); // horizontal gap between double lines
+let dv = (lh_d / 6).max(1); // vertical gap between double lines
 ```
 
-### Macro helper
+### Macro helpers
 
-Các macro sinh rect theo hướng và vị trí, giúp code gọn và không sai số copy-paste:
+Macros generate rects by direction and position, keeping the code compact and avoiding copy-paste errors:
 
 ```rust
 macro_rules! h  { ($y:expr, $thick:expr) => { (0, $y, cw_d, $thick) }; }
@@ -401,28 +400,28 @@ macro_rules! vd { ($x:expr, $thick:expr) => { ($x, cy, $thick, lh_d - cy) }; }
 macro_rules! vu { ($x:expr, $thick:expr) => { ($x, 0, $thick, cy) }; }
 ```
 
-| Macro | Ý nghĩa | Ví dụ |
+| Macro | Meaning | Example |
 |-------|---------|-------|
-| `h!(y, thick)`  | Đường ngang toàn cell | `━` `─` |
-| `v!(x, thick)`  | Đường dọc toàn cell   | `┃` `│` |
-| `hr!(y, thick)` | Nửa phải đường ngang  | góc `┌` |
-| `hl!(y, thick)` | Nửa trái đường ngang   | góc `┐` |
-| `vd!(x, thick)` | Nửa dưới đường dọc     | góc `┌` |
-| `vu!(x, thick)` | Nửa trên đường dọc     | góc `└` |
+| `h!(y, thick)`  | Full-cell horizontal line | `━` `─` |
+| `v!(x, thick)`  | Full-cell vertical line   | `┃` `│` |
+| `hr!(y, thick)` | Right-half horizontal line  | corner `┌` |
+| `hl!(y, thick)` | Left-half horizontal line   | corner `┐` |
+| `vd!(x, thick)` | Lower-half vertical line     | corner `┌` |
+| `vu!(x, thick)` | Upper-half vertical line     | corner `└` |
 
-Ví dụ `┌` (U+250C): nét dọc xuống từ tâm + nét ngang sang phải từ tâm:
+Example `┌` (U+250C): vertical line down from center + horizontal line right from center:
 
 ```rust
 '\u{250C}' => vec![vd!(cx, t), hr!(cy, t)],
 ```
 
-Ví dụ `┼` (U+253C): nét ngang toàn cell + nét dọc toàn cell:
+Example `┼` (U+253C): full-cell horizontal + full-cell vertical:
 
 ```rust
 '\u{253C}' => vec![h!(cy, t), v!(cx, t)],
 ```
 
-Ví dụ `╋` (U+254B): nét đậm cả hai chiều:
+Example `╋` (U+254B): heavy both directions:
 
 ```rust
 '\u{254B}' => vec![h!(cy, ht), v!(cx, ht)],
@@ -430,21 +429,21 @@ Ví dụ `╋` (U+254B): nét đậm cả hai chiều:
 
 ---
 
-## 11. Các nhóm ký tự được hỗ trợ
+## 11. Supported character groups
 
 ### 19.1 Light / Heavy / Double lines
 
-- **Light** (`U+2500–U+254B`): nét 1 device px.
-- **Heavy** (`U+2501`, `U+2503`, `U+2513`…): nét 2 device px.
-- **Double** (`U+2550–U+256C`): hai nét song song, offset `dl` / `dv`.
+- **Light** (`U+2500–U+254B`): 1 device px stroke.
+- **Heavy** (`U+2501`, `U+2503`, `U+2513`…): 2 device px stroke.
+- **Double** (`U+2550–U+256C`): two parallel lines, offset `dl` / `dv`.
 
-Ví dụ đường đôi ngang `═`:
+Example double horizontal line `═`:
 
 ```rust
 '\u{2550}' => vec![h!(cy - dv, t), h!(cy + dv, t)],
 ```
 
-Ví dụ góc đôi `╔`:
+Example double corner `╔`:
 
 ```rust
 '\u{2554}' => vec![
@@ -455,14 +454,13 @@ Ví dụ góc đôi `╔`:
 
 ### 19.2 Corners, tees, crosses
 
-Tất cả 128 ký tự U+2500–U+257F được map thành tổ hợp các macro trên. Các ký tự
-phức tạp như ngã tư nặng/phải/trên/dưới (`├┤┬┴┼`) đều được xử lý bằng cách
-kết hợp nét toàn cell + nét nửa cell với độ dày khác nhau.
+All 128 characters U+2500–U+257F are mapped to combinations of the macros above. Complex
+characters like heavy left/right/top/bottom tees (`├┤┬┴┼`) are handled by combining
+full-cell strokes with half-cell strokes of varying thickness.
 
 ### 19.3 Dashed lines (`U+2504–U+2509`)
 
-Các đường nét đứt không thể vẽ một rect liền. Dùng helper rải đoạn 2 px on,
-2 px off:
+Dashed lines can't be drawn as one continuous rect. A helper scatters 2 px on, 2 px off segments:
 
 ```rust
 fn dash_h(y: i32, w: i32, thick: i32) -> Vec<(i32, i32, i32, i32)> {
@@ -488,7 +486,7 @@ fn dash_v(x: i32, h: i32, thick: i32) -> Vec<(i32, i32, i32, i32)> {
 }
 ```
 
-Áp dụng:
+Applied:
 
 ```rust
 '\u{2504}' | '\u{2506}' => Self::dash_h(cy, cw_d, t),   // light dash
@@ -497,14 +495,13 @@ fn dash_v(x: i32, h: i32, thick: i32) -> Vec<(i32, i32, i32, i32)> {
 '\u{2509}' => Self::dash_v(cx, lh_d, ht),
 ```
 
-> ⚠️ Chú ý: pattern 2-on/2-off là xấp xỉ; Windows Terminal có thể dùng pattern
-> phức tạp hơn. Hiện tại phù hợp cho terminal TUI đơn giản.
+> ⚠️ Note: the 2-on/2-off pattern is an approximation; Windows Terminal may use a more complex
+> pattern. Currently adequate for simple TUI terminals.
 
 ### 19.4 Block Elements `U+2580–U+259F`
 
-Commit `cae796d` mở rộng phạm vi sang 32 ký tự block. Các ký tự này được dùng
-rất nhiều bởi các CLI hiện đại (pi, Nushell, lazygit, …) để vẽ progress bar,
-input box padding, diff markers.
+Commit `cae796d` extended the range to 32 block characters. These are heavily used by modern
+CLIs (pi, Nushell, lazygit, …) to draw progress bars, input box padding, diff markers.
 
 #### Full / Half / Quarter / Eighth blocks
 
@@ -520,14 +517,14 @@ input box padding, diff markers.
 
 #### Quadrant blocks
 
-Các ký tự góc phần tư dùng tâm cell làm ranh giới:
+Quadrant characters use the cell center as the boundary:
 
 ```rust
 '\u{2596}' => vec![(0, cy, cx, lh_d - cy)],           // ▖ lower-left
 '\u{2597}' => vec![(cx, cy, cw_d - cx, lh_d - cy)],  // ▗ lower-right
 '\u{2598}' => vec![(0, 0, cx, cy)],                  // ▘ upper-left
 '\u{259D}' => vec![(cx, 0, cw_d - cx, cy)],          // ▝ upper-right
-'\u{2599}' => vec![                                // ▙ 3 góc
+'\u{2599}' => vec![                                // ▙ 3 quadrants
     (0, 0, cx, cy),
     (0, cy, cx, lh_d - cy),
     (cx, 0, cw_d - cx, cy),
@@ -536,20 +533,20 @@ Các ký tự góc phần tư dùng tâm cell làm ranh giới:
 
 ---
 
-## 12. Paint loop: từ device pixel về logical pixel
+## 12. Paint loop: from device pixel back to logical pixel
 
-Trong `TerminalElement::paint`, sau khi text runs đã vẽ xong:
+In `TerminalElement::paint`, after text runs are done:
 
 ```rust
 let cw_d = (f32::from(cw) * scale_factor).round() as i32;
 let lh_d = (f32::from(lh) * scale_factor).round() as i32;
 
 for bd in &layout.box_draws {
-    // Snap cell origin sang device pixel grid.
+    // Snap cell origin to the device-pixel grid.
     let cell_x_logical = snap_px(f32::from(origin.x + bd.point.column as f32 * cw));
     let cell_y_logical = snap_px(f32::from(origin.y + bd.point.line as f32 * lh));
 
-    // Mỗi rect là device px → convert về logical px để paint_quad.
+    // Each rect is device px → convert to logical px for paint_quad.
     for (rx, ry, rw, rh) in Self::box_drawing_rects(bd.c, cw_d, lh_d) {
         let pos = point(
             px(cell_x_logical + rx as f32 / scale_factor),
@@ -561,33 +558,32 @@ for bd in &layout.box_draws {
 }
 ```
 
-Tại sao tính trong device pixel rồi convert ngược?
+Why compute in device pixels then convert back?
 
-- `cw_d`, `lh_d` là integer → chia cell làm các phần integer (cx, cy, dl, dv).
-- Các rect nằm khít pixel grid vật lý.
-- Convert sang logical px bằng `/ scale_factor` để GPUI nhận tọa độ không bị lỗi
-  rounding ngầm.
+- `cw_d`, `lh_d` are integers → the cell is split into integer parts (cx, cy, dl, dv).
+- The rects sit flush on the physical pixel grid.
+- Converting to logical px via `/ scale_factor` gives GPUI coordinates without hidden rounding.
 
 ---
 
-## 13. Fallback font cho ký tự không hỗ trợ
+## 13. Font fallback for unsupported characters
 
-Các ký tự box-drawing sau **không được custom render** và fallback về font glyph:
+These box-drawing characters are **not custom-rendered** and fall back to font glyphs:
 
-- Đường chéo (`╱` U+2571, `╲` U+2572, `╳` U+2573).
+- Diagonals (`╱` U+2571, `╲` U+2572, `╳` U+2573).
 - Quadruple-dash (`U+250A`, `U+250B`).
-- Các ký tự shade block (`U+2591–U+2593` ░▒▓) — vì cần pattern, không phải fill.
+- Shade blocks (`U+2591–U+2593` ░▒▓) — because they need a pattern, not a fill.
 
-Trong code:
+In code:
 
 ```rust
 match c {
-    // ... các trường hợp đã xử lý ...
-    _ => vec![],  // empty → layout_grid sẽ không đẩy BoxDrawCell
+    // ... handled cases ...
+    _ => vec![],  // empty → layout_grid won't push a BoxDrawCell
 }
 ```
 
-Và trong `layout_grid`:
+And in `layout_grid`:
 
 ```rust
 if Self::is_box_drawing(cell.c)
@@ -598,26 +594,26 @@ if Self::is_box_drawing(cell.c)
 }
 ```
 
-`box_drawing_rects(cell.c, 16, 16)` là probe nhanh: nếu trả về empty thì char
-không có custom geometry, để lại cho text batch như bình thường.
+`box_drawing_rects(cell.c, 16, 16)` is a fast probe: if it returns empty the char has no
+custom geometry, so it's left to the text batch as usual.
 
 ---
 
-## 14. Tại sao hiệu quả?
+## 14. Why it works
 
-| Khía cạnh | Font glyph | Custom primitive (OneTerm) |
+| Aspect | Font glyph | Custom primitive (OneTerm) |
 |-----------|-----------|---------------------------|
-| Anti-alias | Có, theo font hinting | Không — rects axis-aligned |
-| Line 1 px | Có thể mờ nếu subpixel | Sharp 1 device px |
-| Heavy 2 px | Font-dependent | Luôn 2 device px |
-| Double line | Có thể chồng chéo | Hai rects tách biệt |
-| Block halves | Có thể hở gap | Khít cell grid |
-| HiDPI (1.5×) | Dễ bị blur | Snap device px |
-| Batch | GPUI shape_line batch | Nhiều paint_quad nhỏ |
+| Anti-alias | Yes, per font hinting | No — axis-aligned rects |
+| 1 px line | Can be blurry on subpixel | Sharp 1 device px |
+| Heavy 2 px | Font-dependent | Always 2 device px |
+| Double line | May overlap | Two separate rects |
+| Block halves | May have gaps | Flush with cell grid |
+| HiDPI (1.5×) | Prone to blur | Device-px snap |
+| Batching | GPUI shape_line batch | Many small paint_quad calls |
 
-Mặc dù custom primitive sinh thêm draw call, nhưng đối với terminal TUI hiện đại
-số lượng box-drawing/block cell trên màn hình thường rất nhỏ so với text thường.
-Đánh đổi sharpness rất đáng giá.
+Although custom primitives add draw calls, in modern TUI terminals the number of
+box-drawing/block cells on screen is usually tiny compared to regular text. The sharpness
+trade-off is well worth it.
 
 ---
 
@@ -639,15 +635,15 @@ echo -e '\xe2\x95\x9a\xe2\x95\x90\xe2\x95\x9d'
 # Block elements
 echo -e '\xe2\x96\x80\xe2\x96\x84\xe2\x96\x88\xe2\x96\x8c'
 
-# Nushell prompt / pi CLI — sử dụng ▀ ▄ ▌ trong thực tế
+# Nushell prompt / pi CLI — use ▀ ▄ ▌ in practice
 ```
 
-### Kiểm tra
+### Checks
 
-1. Các đường khung thẳng, không mờ.
-2. Góc `┌` và `└` khít nhau khi ghép.
-3. `▀` và `▄` không để lại khe hở.
-4. Ở scale factor 1.5× hoặc 2.0×, đường 1 px vẫn sharp.
+1. Frame lines are straight, not blurry.
+2. Corners `┌` and `└` meet flush when joined.
+3. `▀` and `▄` leave no gaps.
+4. At scale factor 1.5× or 2.0×, 1 px lines stay sharp.
 
 ---
 
@@ -665,46 +661,46 @@ echo -e '\xe2\x96\x80\xe2\x96\x84\xe2\x96\x88\xe2\x96\x8c'
 
 ---
 
-## 17. Bối cảnh — Vấn đề cần giải quyết
+## 17. Context — The problem to solve
 
-### Triệu chứng
+### Symptoms
 
-Prompt line / input area trong `OneTerm` trông khác Windows Terminal:
+The prompt line / input area in `OneTerm` looked different from Windows Terminal:
 
-1. **Cursor mỏng thay vì block đầy.** Shell (Nushell / reedline) gửi `DECSCUSR`
-   để set Beam cursor. `TerminalElement` trước đây dùng `snapshot.cursor.shape`
-   từ shell → luôn Beam, bỏ qua `cursor.shape = "block"` trong `terminal.json`.
-2. **Cell width sai.** Auto width đo advance của `'m'` (CSS `em`), thay vì `'0'`
-   (CSS `ch`). `'m'` thường rộng hơn `'0'` ~10% → cell quá rộng, text bị co.
-3. **Line height có thể clip text.** `line_height = font_size * factor` không
-   đảm bảo ≥ `ascent + descent` → nếu factor thấp, glyph bị cắt đỉnh/đáy.
-4. **Cursor block có subpixel gap.** `size(cw, lh)` không snap width lên device
-   pixel → để lại khe hở giữa cursor và cell kế bên.
+1. **Thin cursor instead of a full block.** The shell (Nushell / reedline) sends `DECSCUSR`
+   to set a Beam cursor. `TerminalElement` previously used `snapshot.cursor.shape`
+   from the shell → always Beam, ignoring `cursor.shape = "block"` in `terminal.json`.
+2. **Wrong cell width.** Auto width measured the advance of `'m'` (CSS `em`), instead of `'0'`
+   (CSS `ch`). `'m'` is usually ~10% wider than `'0'` → cell too wide, text got squeezed.
+3. **Line height could clip text.** `line_height = font_size * factor` doesn't
+   guarantee ≥ `ascent + descent` → if the factor is low, glyphs get clipped at top/bottom.
+4. **Block cursor had subpixel gap.** `size(cw, lh)` didn't snap width up to device
+   pixels → left a gap between the cursor and the neighboring cell.
 
-### So sánh với Windows Terminal
+### Comparison with Windows Terminal
 
-| Khía cạnh | Windows Terminal | OneTerm (trước) | OneTerm (sau) |
+| Aspect | Windows Terminal | OneTerm (before) | OneTerm (after) |
 |---|---|---|---|
-| Cell width | `round(advance('0'))` — CSS `ch` | `advance('m')` hoặc override `8.0` | `ch_advance('0')` ✅ |
+| Cell width | `round(advance('0'))` — CSS `ch` | `advance('m')` or override `8.0` | `ch_advance('0')` ✅ |
 | Line height | `round(ascent + descent + lineGap)` | `font_size * factor` | `max(factor * font_size, ascent + descent)` ✅ |
-| Cursor shape | User config override shell | Shell snapshot (Beam) | Config override (trừ Hidden) ✅ |
+| Cursor shape | User config overrides shell | Shell snapshot (Beam) | Config override (except Hidden) ✅ |
 | Cursor block fill | `ceil_px(cell_width)` snap | `cw` (logical, subpixel gap) | `ceil_px(cw)` ✅ |
-| Baseline center | `round(ascent + (lineGap + adjustedHeight - advanceHeight) / 2)` | GPUI `paint_line` tự center | Không đổi ✅ |
+| Baseline center | `round(ascent + (lineGap + adjustedHeight - advanceHeight) / 2)` | GPUI `paint_line` centers itself | Unchanged ✅ |
 
 ---
 
-## 18. Cell Width — CSS `ch` Unit (Advance Width của `'0'`)
+## 18. Cell Width — CSS `ch` Unit (advance width of `'0'`)
 
-### 36.1. Tại sao `'0'` thay vì `'m'`?
+### 36.1. Why `'0'` instead of `'m'`?
 
-- CSS `ch` unit = advance width của `'0'` (CSS Values and Units § 4).
-- Windows Terminal AtlasEngine dùng cùng ký tự `'0'` (comment trong
+- CSS `ch` unit = advance width of `'0'` (CSS Values and Units § 4).
+- Windows Terminal AtlasEngine uses the same `'0'` character (comment in
   `AtlasEngine.api.cpp`).
-- Monospace font: `'0'` advance = cell width chuẩn; `'m'` có thể rộng hơn
-  do stem dày.
-- `'0'` luôn tồn tại trong mọi monospace font (ASCII 0x30).
+- Monospace font: `'0'` advance = standard cell width; `'m'` can be wider
+  due to thick stems.
+- `'0'` always exists in every monospace font (ASCII 0x30).
 
-### 36.2. Triển khai trong `TerminalElement::prepaint`
+### 36.2. Implementation in `TerminalElement::prepaint`
 
 ```rust
 let scale_factor = window.scale_factor().max(1.0);
@@ -714,16 +710,16 @@ let font_id = cx.text_system().resolve_font(&self.font);
 let font_px = self.font_size;
 
 let cell_width = if let Some(cw) = self.cell_width_override {
-    // User override trong terminal.json → snap sang device pixel.
+    // User override in terminal.json → snap to device pixel.
     px(snap_px(cw))
 } else {
-    // Windows Terminal / CSS ch unit: đo advance width của '0'.
+    // Windows Terminal / CSS ch unit: measure the advance width of '0'.
     let raw = cx
         .text_system()
         .ch_advance(font_id, font_px)
         .map(|s| f32::from(s))
         .unwrap_or_else(|_| {
-            // Fallback: đo 'm' advance nếu '0' không có glyph.
+            // Fallback: measure 'm' advance if '0' has no glyph.
             cx.text_system()
                 .advance(font_id, font_px, 'm')
                 .map(|s| f32::from(s.width))
@@ -735,40 +731,40 @@ let cell_width = if let Some(cw) = self.cell_width_override {
 
 ### 36.3. Config default
 
-Trong `crates/ui/src/state/terminal_config.rs`:
+In `crates/ui/src/state/terminal_config.rs`:
 
 ```rust
-/// Cell width override in px (null = auto từ advance width của '0',
-/// giống Windows Terminal / CSS ch unit).
+/// Cell width override in px (null = auto from advance width of '0',
+/// like Windows Terminal / CSS ch unit).
 #[serde(default = "default_cell_width")]
 pub cell_width: Option<f32>,
 
 fn default_cell_width() -> Option<f32> {
-    None // auto: đo advance width của '0' (CSS ch unit, giống Windows Terminal)
+    None // auto: measure advance width of '0' (CSS ch unit, like Windows Terminal)
 }
 ```
 
-Mặc định cũ là `Some(8.0)` — bị xóa. Giờ user config `null` sẽ tự động đo
-font, khớp Windows Terminal.
+The old default was `Some(8.0)` — removed. Now a user config of `null` auto-measures
+the font, matching Windows Terminal.
 
 ---
 
-## 19. Line Height — Font Metrics Minimum
+## 19. Line Height — font metrics minimum
 
-### 37.1. Vấn đề
+### 37.1. The problem
 
-Cấu hình `layout.line_height` là multiplier (ví dụ `1.2`). Nếu tính đơn giản:
+The `layout.line_height` config is a multiplier (e.g. `1.2`). A naive computation:
 
 ```rust
 let line_height = px(font_size * line_height_factor);
 ```
 
-với factor nhỏ (ví dụ `1.0`) có thể nhỏ hơn `ascent + descent` của glyph →
-text bị cắt đỉnh/đáy.
+with a small factor (e.g. `1.0`) can be smaller than the glyph's `ascent + descent` →
+text gets clipped at top/bottom.
 
-### 37.2. Giải pháp: `max(factor, natural)`
+### 37.2. Solution: `max(factor, natural)`
 
-GPUI expose `TextSystem::ascent` / `TextSystem::descent` (tương đương
+GPUI exposes `TextSystem::ascent` / `TextSystem::descent` (equivalent to
 `DWRITE_FONT_METRICS::ascent` / `descent`):
 
 ```rust
@@ -777,45 +773,43 @@ let font_descent = cx.text_system().descent(font_id, font_px);
 let natural_line_height = f32::from(font_ascent) + f32::from(font_descent);
 let factor_height = f32::from(font_px) * self.line_height_factor;
 
-// max(factor_height, natural_line_height) → không bao giờ clip.
+// max(factor_height, natural_line_height) → never clips.
 let line_height = px(snap_px(factor_height.max(natural_line_height)));
 ```
 
-### 37.3. Tại sao chỉ cần `ascent + descent`?
+### 37.3. Why only `ascent + descent`?
 
-Windows Terminal tính `advanceHeight = ascent + descent + lineGap`. GPUI
-không expose `lineGap`, nhưng `line_height_factor` mặc định (`1.2`)
-bù khoảng trống line gap.
+Windows Terminal computes `advanceHeight = ascent + descent + lineGap`. GPUI
+doesn't expose `lineGap`, but the default `line_height_factor` (`1.2`)
+covers the line gap.
 
-Hơn nữa, GPUI `paint_line` tự center text trong `line_height` dựa trên
-`layout.ascent` / `layout.descent` của shaped line:
+Furthermore, GPUI `paint_line` centers text within `line_height` based on
+the shaped line's `layout.ascent` / `layout.descent`:
 
 ```rust
 let padding_top = (line_height - layout.ascent - layout.descent) / 2.;
 let baseline_offset = point(px(0.), padding_top + layout.ascent);
 ```
 
-→ Chỉ cần `line_height >= ascent + descent` là text không bị clip và baseline
-căn giữa tự động.
+→ As long as `line_height >= ascent + descent`, text isn't clipped and the baseline
+is centered automatically.
 
 ---
 
-## 20. Cursor Shape Override — User Config Thắng Shell
+## 20. Cursor Shape Override — user config wins over shell
 
-### 38.1. Vấn đề
+### 38.1. The problem
 
-`alacritty_terminal` nhận escape sequence `DECSCUSR` (`\x1b[5 q`) từ shell và
-lưu shape vào `TerminalContent::cursor.shape`. `TerminalElement` dùng shape
-này để paint. Kết quả: `terminal.json` đặt `cursor.shape = "block"` nhưng
-shell vẫn buộc Beam.
+`alacritty_terminal` receives the `DECSCUSR` escape sequence (`\x1b[5 q`) from the shell and
+stores the shape in `TerminalContent::cursor.shape`. `TerminalElement` used this shape to paint.
+Result: `terminal.json` set `cursor.shape = "block"` but the shell still forced Beam.
 
-### 38.2. Nguyên lý giống Windows Terminal
+### 38.2. Same principle as Windows Terminal
 
-Windows Terminal tôn trọng user setting `cursorShape` trong `profile.json` —
-shell không thể override. `OneTerm` áp dụng cùng nguyên lý:
+Windows Terminal respects the user setting `cursorShape` in `profile.json` — the shell cannot override it. `OneTerm` applies the same principle:
 
-- `snapshot.cursor.shape == Hidden` → ẩn cursor (shell explicitly hide).
-- Ngược lại → dùng `cursor_shape_override` từ config (Block / Bar / Underline).
+- `snapshot.cursor.shape == Hidden` → hide the cursor (shell explicitly hides it).
+- Otherwise → use `cursor_shape_override` from config (Block / Bar / Underline).
 
 ### 38.3. Data flow
 
@@ -873,7 +867,7 @@ let (
     let settings = settings_entity.read(cx);
     (
         ...,
-        settings.cursor_shape,  // truyền xuống element
+        settings.cursor_shape,  // passed down to the element
     )
 };
 // ...
@@ -894,7 +888,7 @@ pub(crate) struct TerminalElement {
     cursor_shape_override: crate::state::TerminalCursorShape,
 }
 
-// Trong prepaint:
+// In prepaint:
 let cursor = {
     let c = &snapshot.cursor;
     if c.shape == CursorShape::Hidden {
@@ -911,17 +905,17 @@ let cursor = {
 };
 ```
 
-### 38.5. Lưu ý quan trọng
+### 38.5. Important notes
 
-- Shell vẫn có thể **ẩn** cursor qua `Hidden`.
-- Shell **không thể** set Beam / Block / Underline — quyền này thuộc về user config.
-- Điều này khớp Windows Terminal: `cursorShape` trong profile là canonical.
+- The shell can still **hide** the cursor via `Hidden`.
+- The shell **cannot** set Beam / Block / Underline — that right belongs to user config.
+- This matches Windows Terminal: `cursorShape` in the profile is canonical.
 
 ---
 
-## 21. Cursor Paint — Device Pixel Snap cho Block/Bar/Underline
+## 21. Cursor Paint — device pixel snap for Block/Bar/Underline
 
-Trong `TerminalElement::paint`:
+In `TerminalElement::paint`:
 
 ```rust
 let scale_factor = window.scale_factor().max(1.0);
@@ -950,16 +944,16 @@ let sz = match cur.shape {
 window.paint_quad(fill(Bounds::new(pos, sz), cur.color));
 ```
 
-### Tại sao `ceil_px` cho width?
+### Why `ceil_px` for width?
 
-- `snap_px` = `floor(x * scale) / scale` → align trái.
-- `ceil_px` = `ceil(x * scale) / scale` → width ≥ logical width, khít cell bên
-  phải, không subpixel gap.
-- Đặc biệt quan trọng với cursor **Block** để fill đầy cell và khớp grid.
+- `snap_px` = `floor(x * scale) / scale` → align left.
+- `ceil_px` = `ceil(x * scale) / scale` → width ≥ logical width, flush with the right
+  neighbor, no subpixel gap.
+- Especially important for the **Block** cursor to fill the cell and match the grid.
 
 ---
 
-## 22. Cấu trúc Code — Data Flow Tổng Hợp
+## 22. Code structure — consolidated data flow
 
 ```
 terminal.json (user config)
@@ -967,7 +961,7 @@ terminal.json (user config)
     ▼
 TerminalConfig (serde deserialize)
     │  layout.cell_width: Option<f32>     (None = auto)
-    │  layout.line_height: f32            (factor, mặc định 1.15)
+    │  layout.line_height: f32            (factor, default 1.15)
     │  cursor.shape: String               ("block" | "bar" | "underline")
     ▼
 TerminalSettings::apply_config
@@ -988,33 +982,33 @@ TerminalElement::prepaint()
     ├─ cell_width = override ?? ch_advance(font_id, font_px) // '0'
     ├─ line_height = max(font_px * factor, ascent + descent)
     ├─ cursor.shape = match cursor_shape_override { ... }  // config override
-    └─ snap all metrics → device pixel grid (Phần 1)
+    └─ snap all metrics → device pixel grid (Part 1)
     ▼
 TerminalElement::paint()
     │
     ├─ bg rects (snap origin + ceil width)
     ├─ selection rects
-    ├─ text runs (shape_line + paint, GPUI tự center)
-    ├─ box-drawing primitives (Phần 2)
+    ├─ text runs (shape_line + paint, GPUI centers itself)
+    ├─ box-drawing primitives (Part 2)
     └─ cursor (snap origin + ceil width)
 ```
 
 ---
 
-## 23. Config Reference
+## 23. Config reference
 
 ### `terminal.json` — Layout + Cursor
 
 ```jsonc
 {
   "cursor": {
-    "shape": "block",      // "block" | "bar" | "underline" — override shell
-    "blink": true,          // nhấp nháy khi focus
+    "shape": "block",      // "block" | "bar" | "underline" — overrides shell
+    "blink": true,          // blinks when focused
     "color": null           // null = theme caret, "#RRGGBB" = override
   },
   "layout": {
-    "line_height": 1.2,    // factor × font_size, tối thiểu = ascent + descent
-    "cell_width": null,     // null = auto (advance '0'), số = override px
+    "line_height": 1.2,    // factor × font_size, minimum = ascent + descent
+    "cell_width": null,     // null = auto (advance '0'), number = override px
     "padding": { "top": 0, "right": 5, "bottom": 0, "left": 10 }
   }
 }
@@ -1022,10 +1016,10 @@ TerminalElement::paint()
 
 ### Defaults
 
-| Tham số | Giá trị mặc định | Ghi chú |
+| Parameter | Default value | Notes |
 |---|---|---|
-| `cursor.shape` | `"block"` | Override shell `DECSCUSR` |
-| `layout.line_height` | `1.2` | Factor, bù lineGap |
+| `cursor.shape` | `"block"` | Overrides shell `DECSCUSR` |
+| `layout.line_height` | `1.2` | Factor, covers lineGap |
 | `layout.cell_width` | `null` | Auto = `ch_advance('0')` |
 | `cursor.blink` | `true` | 500ms interval |
 
@@ -1039,7 +1033,7 @@ TerminalElement::paint()
 // Default cell_width = None (auto)
 assert_eq!(cfg.layout.cell_width, None);
 
-// Custom override vẫn hoạt động
+// Custom override still works
 let json = r#"{ "layout": { "cell_width": 8.0 } }"#;
 let cfg: TerminalConfig = serde_json::from_str(json).unwrap();
 assert_eq!(cfg.layout.cell_width, Some(8.0));
@@ -1047,17 +1041,17 @@ assert_eq!(cfg.layout.cell_width, Some(8.0));
 
 ### Visual verification
 
-1. Cursor shape: set `cursor.shape = "block"` → cursor là block đầy, không
-   phải Beam do shell set.
-2. Cell width: set `cell_width = null` → cell khớp font advance, text không bị co.
-3. Line height: set `line_height = 1.0` → text không bị clip.
-4. Scale 1.5: tất cả metrics snap device pixel → không jitter khi resize.
+1. Cursor shape: set `cursor.shape = "block"` → cursor is a full block, not
+   Beam as the shell set.
+2. Cell width: set `cell_width = null` → cell matches font advance, text isn't squeezed.
+3. Line height: set `line_height = 1.0` → text isn't clipped.
+4. Scale 1.5: all metrics snap to device pixels → no jitter on resize.
 
 ---
 
-## 25. Tham chiếu
+## 25. References
 
-| Nguồn | Path / URL | Phần liên quan |
+| Source | Path / URL | Relevant part |
 |---|---|---|
 | Windows Terminal AtlasEngine | `src/renderer/atlas/AtlasEngine.api.cpp` | `_resolveFontMetrics()` |
 | GPUI TextSystem | `crates/gpui/src/text_system.rs` | `ch_advance`, `ascent`, `descent` |
@@ -1068,7 +1062,7 @@ assert_eq!(cfg.layout.cell_width, Some(8.0));
 
 ---
 
-## 26. Data flow tổng hợp
+## 26. Consolidated data flow
 
 ```
 terminal.json (user config)
@@ -1076,7 +1070,7 @@ terminal.json (user config)
     ▼
 TerminalConfig (serde deserialize)
     │  layout.cell_width: Option<f32>     (None = auto)
-    │  layout.line_height: f32            (factor, mặc định 1.2)
+    │  layout.line_height: f32            (factor, default 1.2)
     │  cursor.shape: String               ("block" | "bar" | "underline")
     ▼
 TerminalSettings::apply_config
@@ -1098,33 +1092,33 @@ TerminalElement::prepaint()
     ├─ cell_width = override ?? ch_advance(font_id, font_px)
     ├─ line_height = max(font_px * factor, ascent + descent)
     ├─ cursor.shape = match cursor_shape_override { ... }
-    ├─ rows/cols tính trong device pixels
-    ├─ grid_origin snap sang device pixel
+    ├─ rows/cols computed in device pixels
+    ├─ grid_origin snapped to device pixels
     └─ all metrics snap → device pixel grid
     ▼
 TerminalElement::paint()
     │
     ├─ bg rects (floor origin + ceil width)
     ├─ selection rects
-    ├─ text runs (shape_line + paint, GPUI tự center)
+    ├─ text runs (shape_line + paint, GPUI centers itself)
     ├─ box-drawing / block primitives (integer device px)
     └─ cursor (floor origin + ceil width)
 ```
 
 ---
 
-## 27. So sánh với Windows Terminal AtlasEngine
+## 27. Comparison with Windows Terminal AtlasEngine
 
-| Khía cạnh | Windows Terminal | OneTerm (sau commits) |
+| Aspect | Windows Terminal | OneTerm (after commits) |
 |---|---|---|
-| Device pixel snap | Tọa độ vertex integer device px | Snap logical px trước paint (tương đương) |
+| Device pixel snap | Integer device px vertex coordinates | Snap logical px before paint (equivalent) |
 | Box-drawing | Custom AtlasEngine primitive | Custom fill-rect primitives |
 | Block elements | Custom AtlasEngine primitive | Custom fill-rect primitives |
 | Cell width | `round(advance('0'))` | `ch_advance('0')` + round |
 | Line height | `round(ascent+descent+lineGap)` | `max(factor*font_size, ascent+descent)` |
-| Cursor shape | User config override shell | Config override (trừ Hidden) |
+| Cursor shape | User config overrides shell | Config override (except Hidden) |
 | Cursor block fill | `ceil_px(cell_width)` | `ceil_px(cell_width)` |
-| Baseline center | `round(ascent + ...)` | GPUI `paint_line` tự center |
+| Baseline center | `round(ascent + ...)` | GPUI `paint_line` centers itself |
 
 ---
 
@@ -1133,13 +1127,13 @@ TerminalElement::paint()
 ```jsonc
 {
   "cursor": {
-    "shape": "block",      // "block" | "bar" | "underline" — override shell
-    "blink": true,          // nhấp nháy khi focus
+    "shape": "block",      // "block" | "bar" | "underline" — overrides shell
+    "blink": true,          // blinks when focused
     "color": null           // null = theme caret, "#RRGGBB" = override
   },
   "layout": {
-    "line_height": 1.2,    // factor × font_size, tối thiểu = ascent + descent
-    "cell_width": null,     // null = auto (advance '0'), số = override px
+    "line_height": 1.2,    // factor × font_size, minimum = ascent + descent
+    "cell_width": null,     // null = auto (advance '0'), number = override px
     "padding": { "top": 0, "right": 5, "bottom": 0, "left": 10 }
   }
 }
@@ -1147,10 +1141,10 @@ TerminalElement::paint()
 
 ### Defaults
 
-| Tham số | Giá trị mặc định | Ghi chú |
+| Parameter | Default value | Notes |
 |---|---|---|
-| `cursor.shape` | `"block"` | Override shell `DECSCUSR` |
-| `layout.line_height` | `1.2` | Factor, bù lineGap |
+| `cursor.shape` | `"block"` | Overrides shell `DECSCUSR` |
+| `layout.line_height` | `1.2` | Factor, covers lineGap |
 | `layout.cell_width` | `null` | Auto = `ch_advance('0')` |
 | `cursor.blink` | `true` | 500ms interval |
 
@@ -1169,22 +1163,22 @@ $ echo -e '\xe2\x95\x94\xe2\x95\x90\xe2\x95\x97\n\xe2\x95\x91 \xe2\x95\x91\n\xe2
 $ echo -e '\xe2\x96\x80\xe2\x96\x84\xe2\x96\x88\xe2\x96\x8c'
 
 # Cursor shape
-# Set cursor.shape = "block" → cursor phải là block đầy dù shell set Beam.
+# Set cursor.shape = "block" → cursor must be a full block even if the shell sets Beam.
 ```
 
-### Kiểm tra
+### Checks
 
-1. Đường khung sharp, không mờ ở scale 1.5×/2.0×.
-2. `▀`/`▄`/`▌` khít cell, không khe hở.
-3. `cell_width = null` → cell khớp font advance, text không bị co.
-4. `line_height = 1.0` → text không bị clip.
-5. `cursor.shape = "block"` → block cursor, shell không override.
+1. Frame lines sharp, not blurry at scale 1.5×/2.0×.
+2. `▀`/`▄`/`▌` fill the cell, no gaps.
+3. `cell_width = null` → cell matches font advance, text isn't squeezed.
+4. `line_height = 1.0` → text isn't clipped.
+5. `cursor.shape = "block"` → block cursor, shell doesn't override.
 
 ---
 
 ## 30. References
 
-| Nguồn | Path / URL | Phần liên quan |
+| Source | Path / URL | Relevant part |
 |---|---|---|
 | Windows Terminal AtlasEngine | `src/renderer/atlas/AtlasEngine.api.cpp` | `_resolveFontMetrics()`, box-drawing primitive |
 | Zed terminal_element | `crates/terminal_ui/src/terminal_element.rs` | Layout + paint split |
