@@ -1,10 +1,22 @@
 # OneTerm
 
-> Cross-platform GUI client for **SSH / SFTP / Local Shell**, written in **Rust** with [GPUI](https://github.com/zed-industries/zed) & [gpui-component](https://github.com/longbridge/gpui-component).
+> GUI client for **SSH / SFTP / Local Shell**, written in **Rust** with [GPUI](https://github.com/zed-industries/zed) & [gpui-component](https://github.com/longbridge/gpui-component).
 
-OneTerm is a terminal emulator plus host/session manager: connect to remote shells over SSH, browse and transfer files over SFTP, and open local shells (ConPTY on Windows). Terminal rendering is powered by `alacritty_terminal` and drawn with GPUI.
+OneTerm is a terminal emulator plus host/session manager: connect to remote shells over SSH, browse and transfer files over SFTP, and open local shells. Terminal rendering is powered by `alacritty_terminal` and drawn with GPUI.
 
-**Version:** 0.1.0 · **Platforms:** Windows / Linux / macOS · **Edition:** Rust 2024
+**Version:** 0.1.0 · **Edition:** Rust 2024
+
+> ### 🪟 Platform support
+>
+> OneTerm is **developed and tested primarily on Windows** — that is the
+> first-class, fully-supported platform (local shells use Windows ConPTY,
+> the release build embeds an app icon + version info, and runtime assets
+> such as `conpty.dll` / `OpenConsole.exe` are bundled).
+>
+> Linux and macOS **compile** and the cross-platform code paths are in
+> place, but they are **not yet tested**. Expect rough edges on those
+> platforms (local PTY, packaging, theming) until they receive a proper
+> QA pass. PRs improving Linux/macOS support are welcome.
 
 ---
 
@@ -88,13 +100,15 @@ OneTerm is a terminal emulator plus host/session manager: connect to remote shel
 
 ### 💻 Local shell
 
-- Local PTY via `alacritty_terminal::tty` + `EventLoop`
-- ConPTY on Windows (bundled `OpenConsole.exe` + `conpty.dll`)
-- Shell auto-detection (`cmd` / `pwsh` / `COMSPEC`)
+- Local PTY via `alacritty_terminal::tty` + custom `EventLoop`
+- **Windows:** ConPTY (bundled `OpenConsole.exe` + `conpty.dll`) — fully tested
+- Unix local PTY code path compiles but is **not yet tested** on Linux/macOS
+- Shell auto-detection (`cmd` / `pwsh` / `COMSPEC` on Windows)
 
 ### 📦 Packaging & platforms
 
-- Cross-platform: Windows / Linux / macOS
+- **Windows** is the primary, fully-supported platform
+- Linux / macOS compile but are **not yet tested** (see Platform support above)
 - Optimized release build (fat LTO, single codegen unit, stripped symbols)
 - Embedded app icon + version info in `.exe` (Windows)
 
@@ -126,7 +140,7 @@ pwsh scripts/build-release.ps1 -Target aarch64-pc-windows-msvc
 ```
 
 ```bash
-# Linux / macOS
+# Linux / macOS — untested; see Platform support note
 ./scripts/build-release.sh
 TARGET=aarch64-unknown-linux-gnu ./scripts/build-release.sh
 ```
