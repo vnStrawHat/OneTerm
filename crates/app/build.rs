@@ -19,6 +19,7 @@
 //!   target/{debug,release}/conpty.dll
 //!   target/{debug,release}/x64/OpenConsole.exe
 
+#[cfg(target_os = "windows")]
 use std::path::{Path, PathBuf};
 
 fn main() {
@@ -106,6 +107,7 @@ fn main() {
 /// template. Writes the generated script to `out`.
 ///
 /// Example: VERSION="0.1.0"  →  comma="0,1,0,0", str="0.1.0.0".
+#[cfg(target_os = "windows")]
 fn generate_rc(
     template: &Path,
     out: &Path,
