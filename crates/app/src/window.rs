@@ -6,7 +6,9 @@ use gpui::{
     App, AppContext, Bounds, Size, Task, WindowBounds, WindowHandle, WindowKind, WindowOptions, px,
     size,
 };
-use gpui_component::{Root, TitleBar};
+use gpui_component::Root;
+#[cfg(not(target_os = "linux"))]
+use gpui_component::TitleBar;
 
 use oneterm_ui::layout::{OneTermWorkspace, save_dock_state_on_close};
 
