@@ -4,119 +4,107 @@
 
 OneTerm is a terminal emulator plus host/session manager: connect to remote shells over SSH, browse and transfer files over SFTP, and open local shells (ConPTY on Windows). Terminal rendering is powered by `alacritty_terminal` and drawn with GPUI.
 
+**Version:** 0.1.0 · **Platforms:** Windows / Linux / macOS · **Edition:** Rust 2024
+
 ---
 
 ## ✨ Features
 
 ### 🖥️ Terminal emulator
 
-- [x] Full ANSI / VT rendering via `alacritty_terminal`
-- [x] 16 / 256 / truecolor (24-bit) colors
-- [x] Hand-drawn box-drawing, block elements & powerline (crisp at any font size)
-- [x] Multiple cursor styles (block / bar / underline) + blink
-- [x] Mouse selection + copy/paste
-- [x] **Vi mode** — keyboard-driven motion & selection (Ctrl+Shift+Space)
-- [x] Scrollback history (10,000 lines by default, configurable)
-- [x] Custom terminal-specific scrollbar
-- [x] URL detection with click-to-open
-- [x] IME support (Vietnamese / CJK input)
-- [x] Bell (toggleable)
-- [x] Minimum-contrast — auto-boosts text/background contrast for readability
-- [x] Clipboard via OSC 52
-- [x] Shell integration (OSC 7 cwd, OSC 133 prompt / exit code)
+- Full ANSI / VT rendering via `alacritty_terminal`
+- 16 / 256 / truecolor (24-bit) colors
+- Hand-drawn box-drawing, block elements & powerline (crisp at any font size)
+- Multiple cursor styles (block / bar / underline) + blink
+- Mouse selection + copy/paste, right-click context menu
+- **In-buffer search** (Ctrl+F) — match highlighting, next / previous (Enter / Shift+Enter), wrap-around
+- Scrollback history (configurable, 10,000 lines by default) + custom terminal scrollbar
+- URL detection (plain-text + OSC 8 hyperlinks) with hover highlight and click-to-open
+- IME support (Vietnamese / CJK input)
+- Bell (toggleable)
+- Minimum-contrast — auto-boosts text/background contrast for readability
+- Clipboard via OSC 52
+- Desktop notifications (OSC 9) shown as toasts; taskbar progress (OSC 9;4)
+- Shell integration: OSC 7 (cwd), OSC 133 (prompt markers / exit code), OSC 0/2 (title), OSC 4/104 palette overrides, OSC 10/11/12 dynamic colors
+
+### 🪟 Terminal split (Spaces)
+
+- Split a single terminal tab into resizable **Spaces** — Right / Left / Up / Down
+- Recursive nesting (binary pane tree), like tmux / Zed panes
+- Resizable split handles; the active Space is highlighted
+- Fill an empty Space by dragging a terminal tab onto it (move semantics)
+- "New Terminal Here" spawns a local shell in an empty Space
+- Context-menu driven; closing down to one Space reverts the tab to a plain single terminal
 
 ### 🔌 SSH connectivity
 
-- [x] SSH client based on `russh`
-- [x] **Password** authentication
-- [x] **Private key** authentication (with passphrase)
-- [x] **SSH agent** authentication
-- [x] No-auth (None) connections
-- [x] Interactive shell channel with auto-resize to the window
-- [x] Passwords kept in RAM only, **never** written to disk (masked in logs)
+- SSH client based on `russh` (hidden tokio runtime)
+- **Password**, **private key** (with passphrase), **SSH agent**, and **no-auth** authentication
+- Interactive shell channel with auto-resize to the window
+- Optional shell-integration injection (OSC 7 cwd + OSC 133 markers) for servers whose shell doesn't emit them
+- Bandwidth accounting (network speed indicator)
+- Passwords kept in RAM only, **never** written to disk (masked in logs)
 
 ### 📁 SFTP file browser
 
-- [x] Browse remote directories with breadcrumb navigation
-- [x] Columns: Name / Date Modified / Permissions / Size / Owner / Group
-- [x] Sort by column (folders always listed before files)
-- [x] Resize & show/hide columns (persisted across sessions)
-- [x] Upload files & folders
-- [x] Download files
-- [x] Rename / Delete / Create new folder
-- [x] View properties — permissions shown as `drwxr-xr-x (0775)`
-- [x] Transfer queue with progress bars & cancellation
-- [x] SFTP runs over the same open SSH connection
+- Browse remote directories with breadcrumb navigation
+- Columns: Name / Date Modified / Permissions / Size / Owner / Group
+- Sort by column (folders always listed before files)
+- Resize & show/hide columns (persisted across sessions)
+- Upload files & folders, download files
+- Rename / Delete / Create new folder
+- View properties — permissions shown as `drwxr-xr-x (0775)`
+- Transfer queue with progress bars & cancellation
+- **Sync to terminal CWD** — one click jumps the browser to the active SSH session's current directory (via OSC 7)
+- SFTP runs over the same open SSH connection
 
 ### 🗂️ Session management
 
-- [x] Tree-based session list with groups
-- [x] Connect / add-new-session dialog
-- [x] Rename groups, assign colors to sessions
-- [x] Search / filter sessions
-- [x] Persisted to `ssh_session.json` (passwords never stored)
+- Tree-based session list with groups
+- Connect / add-new-session dialog
+- Rename groups, assign colors to sessions
+- Search / filter sessions
+- Persisted to `ssh_session.json` (passwords never stored)
 
 ### 🧩 Layout & UI
 
-- [x] Flexible DockArea (left / right / bottom docks + center tabs)
-- [x] Multiple concurrent sessions across tabs
-- [x] Title bar + menu bar (File / Edit / View / ...)
-- [x] Status bar with a date/time clock + network speed indicator
-- [x] Zoom / fullscreen a panel (Shift+Esc)
-- [x] Quick close panel (Ctrl+W)
-- [x] Remembers dock layout across sessions (`docks.json`)
+- Flexible DockArea (left / right / bottom docks + center tabs)
+- Multiple concurrent sessions across tabs
+- Title bar + menu bar (File / Edit / View / ...)
+- Status bar with a date/time clock, network speed indicator, and CPU/memory resource indicator
+- Zoom / fullscreen the active panel (Shift+Esc)
+- Quick close panel (Ctrl+W)
+- Remembers dock layout across sessions (`docks.json`)
 
-### ⚙️ Configuration & theming
+### ⚙️ Settings & theming
 
-- [x] Terminal configuration via `terminal.json` (supports `//` and `/* */` comments)
-- [x] Config groups: font, cursor, layout, shell, scroll, bell, colors
-- [x] In-app terminal settings panel
-- [x] 2 built-in themes: **Zed One Dark** & **Zed One Light**
-- [x] Colors read from the theme, never hardcoded in components
+- **Settings window** (Ctrl+,) with pages: General / Terminal / Appearance / About
+- General: UI font size + configurable, press-to-rebind key bindings (persisted to `ui_config.json`)
+- Terminal: font, cursor, layout/padding, shell, scroll, bell, colors, security groups
+- Appearance: theme mode + theme picker
+- **24 built-in themes** (2 Zed + 22 from the gpui-component collection: adventure, alduin, asciinema, aurora, ayu, catppuccin, everforest, fahrenheit, flexoki, gruvbox, harper, hybrid, jellybeans, kibble, macos-classic, matrix, mellifluous, molokai, solarized, spaceduck, tokyonight, twilight)
+- Terminal configuration via `terminal.json` (supports `//` and `/* */` comments)
+- Colors read from the theme, never hardcoded in components
 
 ### 💻 Local shell
 
-- [x] Local PTY via `alacritty_terminal::tty`
-- [x] ConPTY on Windows (bundled `OpenConsole.exe` + `conpty.dll`)
-- [x] Shell auto-detection (`cmd` / `pwsh` / `COMSPEC`)
+- Local PTY via `alacritty_terminal::tty` + `EventLoop`
+- ConPTY on Windows (bundled `OpenConsole.exe` + `conpty.dll`)
+- Shell auto-detection (`cmd` / `pwsh` / `COMSPEC`)
 
 ### 📦 Packaging & platforms
 
-- [x] Cross-platform: Windows / Linux / macOS
-- [x] Optimized release build (fat LTO, stripped symbols)
-- [x] Embedded app icon + version info in `.exe` (Windows)
-- [ ] Full settings UI (general / appearance / about)
-- [ ] i18n (en / vi)
-- [ ] CI build & test across platforms
-- [ ] Installer (cargo-bundle / cargo-dist)
-
----
-
-## 🏗️ Architecture
-
-The workspace consists of 5 crates with strict layering (the UI holds no protocol logic):
-
-| Crate | Responsibility |
-|---|---|
-| `app` | Binary entry point — init GPUI, open the window, mount the workspace |
-| `core` | Domain types & traits (`TerminalSession`, `SftpBackend`), terminal helpers — no GPUI dependency |
-| `local` | Local shell over PTY / ConPTY |
-| `ssh` | SSH + SFTP client based on `russh` (hidden tokio runtime) |
-| `ui` | All GPUI: layout, views, theme, state |
-
-> Dependency rule: `app → {ui, ssh, local, core}`, and `ui / ssh / local → core`. The `ui` crate does **not** import `ssh` / `local` directly — it communicates only through traits.
-
-See [`docs/agents/structure.md`](docs/agents/structure.md) and [`docs/terminal-backend.md`](docs/terminal-backend.md) for details.
-
----
+- Cross-platform: Windows / Linux / macOS
+- Optimized release build (fat LTO, single codegen unit, stripped symbols)
+- Embedded app icon + version info in `.exe` (Windows)
 
 ## 🚀 Build & run
 
 Requires: Rust toolchain (edition 2024).
 
 ```bash
-# Run the app (dev)
-cargo run -p app
+# Run the app (dev binary = oneterm-debug, keeps the console for logs)
+cargo run -p oneterm-app
 
 # Build the whole workspace
 cargo build --workspace
@@ -134,21 +122,29 @@ cargo test --workspace
 ```powershell
 # Windows (embeds icon + version info, stages into dist/)
 pwsh scripts/build-release.ps1
+pwsh scripts/build-release.ps1 -Target aarch64-pc-windows-msvc
 ```
 
 ```bash
 # Linux / macOS
 ./scripts/build-release.sh
+TARGET=aarch64-unknown-linux-gnu ./scripts/build-release.sh
 ```
 
-Packaged output lands in `dist/oneterm-<triple>/`.
+Packaged output lands in `dist/oneterm-<triple>/`, containing `oneterm(.exe)` plus the
+runtime assets (`conpty.dll` + `x64/OpenConsole.exe` on Windows, `terminal.json` / `docks.json`).
 
 ---
 
 ## 📚 Documentation
 
 - [`AGENTS.md`](AGENTS.md) — developer & AI-agent guide
-- [`docs/agents/structure.md`](docs/agents/structure.md) — project structure
+- [`docs/agents/structure.md`](docs/agents/structure.md) — project structure & dependency graph
 - [`docs/agents/code-style.md`](docs/agents/code-style.md) — code conventions
 - [`docs/agents/dependencies.md`](docs/agents/dependencies.md) — dependencies & rev lock
-- [`docs/terminal-backend.md`](docs/terminal-backend.md) — terminal backend design
+- [`docs/terminal-backend.md`](docs/terminal-backend.md) — terminal backend design (local + ssh)
+- [`docs/terminal-split.md`](docs/terminal-split.md) — terminal split (Spaces) design
+- [`docs/ssh-client-connect.md`](docs/ssh-client-connect.md) — SSH connection / auth design
+- [`docs/sftp-browser-design.md`](docs/sftp-browser-design.md) — SFTP file browser design
+- [`docs/sftp-follow-terminal-cwd.md`](docs/sftp-follow-terminal-cwd.md) — SFTP-follows-terminal-CWD design
+- [`docs/osc-sequences-checklist.md`](docs/osc-sequences-checklist.md) — OSC sequence support checklist
