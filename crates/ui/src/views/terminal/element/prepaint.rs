@@ -48,6 +48,7 @@ pub(crate) fn prepaint_terminal(
     window: &mut Window,
     cx: &mut App,
 ) -> LayoutState {
+    let prepaint_start = std::time::Instant::now();
     let scale_factor = window.scale_factor().max(1.0);
 
     let FontMetrics {
@@ -184,6 +185,7 @@ pub(crate) fn prepaint_terminal(
             }
         }
         cache.stats.shape_line_calls = shape_line_count;
+        cache.stats.prepaint_us = prepaint_start.elapsed().as_micros();
     }
 
     let cursor = build_cursor(

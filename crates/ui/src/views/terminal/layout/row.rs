@@ -7,7 +7,7 @@ use gpui::TextRun;
 
 use oneterm_core::terminal::{IndexedCell, is_default_background_color};
 
-use super::super::box_drawing::drawing::{box_drawing_rects, is_box_drawing, is_rounded_corner};
+use super::super::box_drawing::drawing::{has_box_geometry, is_box_drawing};
 use super::super::cell::{cell_colors, cell_style, is_blank};
 use super::super::theme::TerminalTheme;
 use super::super::url::DetectedUrl;
@@ -31,6 +31,10 @@ pub(crate) fn layout_row(
     let mut box_draws: Vec<BoxDrawCell> = Vec::new();
     let mut current_batch: Option<BatchedTextRun> = None;
     let mut prev_had_extras = false;
+    // Reusable scratch buffer for the box-geometry probe — cleared and refilled
+    // per cell, but keeps its backing allocation across all cells in this row
+    // (no per-cell `Vec` allocation on full-screen block workloads).
+    let mut box_probe: Vec<(i32, i32, i32, i32)> = Vec::new();
 
     for ic in line_cells {
         let point = ic.point;
@@ -100,26 +104,22 @@ pub(crate) fn layout_row(
         }
         let zw = cell.zerowidth();
 
-        if is_box_drawing(cell.c)
-            && (is_rounded_corner(cell.c) || !box_drawing_rects(cell.c, 16, 16).is_empty())
-        {
+        if is_box_drawing(cell.c) && has_box_geometry(&mut box_probe, cell.c) {
             box_draws.push(BoxDrawCell {
                 point: lp,
                 color: style.color,
                 c: cell.c,
             });
-            let mut sp = style;
-            sp.len = ' '.len_utf8();
-            if let Some(b) = current_batch.as_mut() {
-                if b.start.column + b.cell_count as i32 == lp.column && b.can_append(&sp) {
-                    b.append_char(' ');
-                } else {
-                    let old = current_batch.take().unwrap();
-                    runs.push(old);
-                    current_batch = Some(BatchedTextRun::new(lp, ' ', sp));
-                }
-            } else {
-                current_batch = Some(BatchedTextRun::new(lp, ' ', sp));
+            // Flush the active text batch so the next real-text segment starts a
+            // fresh run at its own absolute column. Do NOT emit a space-only run
+            // for the block cell: each run is painted at an absolute column
+            // origin (`cell_x(run.start.column)` in paint), so terminating the
+            // run here keeps positioning correct. A space filler would instead
+            // force one `shape_line` per block cell — the dominant cost on
+            // full-screen block workloads (DOOM-fire), where the fire gradient
+            // gives every cell a unique color so the spaces never batch.
+            if let Some(old) = current_batch.take() {
+                runs.push(old);
             }
             continue;
         }

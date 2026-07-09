@@ -190,6 +190,52 @@ impl TerminalContent {
         }
     }
 
+    /// Build a snapshot for **auxiliary queries** (cursor bounds, mouse hit-test,
+    /// URL detection, mode checks) — **without** touching `Term::damage()` /
+    /// `reset_damage()`.
+    ///
+    /// This is critical: `from()` *consumes* the accumulated damage (and resets
+    /// it), so calling it outside the render would silently discard the dirty-row
+    /// info the renderer needs, leaving stale rows on screen. Query callers ignore
+    /// the `damage` field, so it is set to `Full` (a safe "don't trust for
+    /// incremental" value). Needs only `&Term` (no `&mut`), since it never calls
+    /// `damage()`.
+    pub fn from_query<EP: EventListener>(term: &Term<EP>) -> Self {
+        let content = term.renderable_content();
+        let RenderableContentParts {
+            display_iter,
+            cursor,
+            mode,
+            display_offset,
+            selection,
+        } = RenderableContentParts::take(content);
+
+        let cells: Vec<IndexedCell> = display_iter
+            .map(|indexed| IndexedCell {
+                point: indexed.point,
+                cell: indexed.cell.clone(),
+            })
+            .collect();
+
+        let terminal_bounds = TerminalBounds {
+            num_lines: term.screen_lines(),
+            num_cols: term.columns(),
+        };
+
+        Self {
+            cells,
+            cursor,
+            mode,
+            display_offset,
+            total_lines: term.total_lines(),
+            selection,
+            terminal_bounds,
+            // Auxiliary callers ignore damage; the render path never uses this
+            // constructor, so it must not consume/reset the real damage state.
+            damage: TermDamageInfo::Full,
+        }
+    }
+
     /// true if the cursor is visible (shape ≠ Hidden).
     pub fn cursor_visible(&self) -> bool {
         // RenderableCursor.shape is CursorShape; Hidden = hidden.

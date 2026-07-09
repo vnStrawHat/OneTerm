@@ -106,6 +106,10 @@ pub(crate) struct FrameStats {
     pub bg_rect_count: usize,
     pub hash_calls: usize,
     pub frame_count: u64,
+    /// Wall-clock time of the prepaint phase (layout + shaping + snapshot), µs.
+    pub prepaint_us: u128,
+    /// Wall-clock time of the paint phase (quad emission), µs.
+    pub paint_us: u128,
 }
 
 /// Per-row layout cache — persisted across frames.

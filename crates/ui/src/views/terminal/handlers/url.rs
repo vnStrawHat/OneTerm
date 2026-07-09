@@ -25,7 +25,7 @@ pub(crate) fn update_hovered_url(
             Some(rc) => rc,
             None => return,
         };
-        let snap = session.read(cx).snapshot();
+        let snap = session.read(cx).snapshot_query();
         detect_url_at(
             &snap.cells,
             snap.terminal_bounds.num_cols,

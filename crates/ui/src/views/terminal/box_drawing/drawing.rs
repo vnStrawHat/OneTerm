@@ -18,6 +18,45 @@ pub(crate) fn is_rounded_corner(c: char) -> bool {
     matches!(c, '\u{256D}'..='\u{2570}')
 }
 
+/// Append the primitive rects for `c` into `out` (cleared first).
+///
+/// Allocation-free variant of [`box_drawing_rects`] for the render hot loop.
+/// Block elements (the DOOM-fire hot path — nearly every cell is `▀` U+2580)
+/// are filled directly into `out` with no intermediate allocation. Rarer
+/// glyphs (lines, corners, powerline, shade, dashes) fall back to the tested
+/// match; the caller's reusable buffer still avoids re-allocating across cells.
+pub(crate) fn box_drawing_rects_into(
+    out: &mut Vec<(i32, i32, i32, i32)>,
+    c: char,
+    cw_d: i32,
+    lh_d: i32,
+) {
+    out.clear();
+    // Fast path: block elements — no allocation (see `block::rects_into`).
+    if super::block::is_block_element(c) {
+        let cx = cw_d / 2;
+        let cy = lh_d / 2;
+        super::block::rects_into(out, c, cw_d, lh_d, cx, cy);
+        return;
+    }
+    // Cold path: lines / corners / powerline / shade / dashes. These are rare
+    // compared to the block hot path, so a transient `Vec` here is acceptable.
+    out.extend_from_slice(&box_drawing_rects(c, cw_d, lh_d));
+}
+
+/// Whether `c` has custom primitive geometry (box-drawing / block / powerline /
+/// shade / rounded). Used by layout to decide whether a cell is drawn with
+/// primitives or falls back to a font glyph — without allocating a throwaway
+/// `Vec` per cell. Reuses `out` (a caller-owned scratch buffer) so the block
+/// hot path stays allocation-free.
+pub(crate) fn has_box_geometry(out: &mut Vec<(i32, i32, i32, i32)>, c: char) -> bool {
+    if is_rounded_corner(c) {
+        return true;
+    }
+    box_drawing_rects_into(out, c, 16, 16);
+    !out.is_empty()
+}
+
 /// Compute pixel-perfect geometry for a box-drawing char within a cell.
 /// Returns a list of rects (x, y, w, h) in **device pixels** relative to the
 /// cell origin. The caller converts to logical px when painting.
@@ -355,7 +394,72 @@ fn dash_v(x: i32, h: i32, thick: i32) -> Vec<(i32, i32, i32, i32)> {
 
 #[cfg(test)]
 mod tests {
-    use super::box_drawing_rects;
+    use super::{box_drawing_rects, box_drawing_rects_into, has_box_geometry, is_rounded_corner};
+
+    /// Every char that `box_drawing_rects` (the tested match) can emit.
+    fn all_primitive_chars() -> impl Iterator<Item = char> {
+        (0x2500u32..=0x259F)
+            .chain(0x25ACu32..=0x25AC)
+            .chain(0xE0B0u32..=0xE0BF)
+            .filter_map(char::from_u32)
+    }
+
+    #[test]
+    fn rects_into_matches_vec_variant() {
+        // The allocation-free hot path (`box_drawing_rects_into`, including the
+        // block fast path) must produce exactly the same geometry as the
+        // Vec-returning reference for every supported glyph and cell size.
+        let mut buf = Vec::new();
+        for cw_d in [8, 16, 24, 33] {
+            for lh_d in [12, 24, 36, 40] {
+                for c in all_primitive_chars() {
+                    box_drawing_rects_into(&mut buf, c, cw_d, lh_d);
+                    let reference = box_drawing_rects(c, cw_d, lh_d);
+                    assert_eq!(
+                        buf, reference,
+                        "geometry mismatch for U+{:04X} at {cw_d}x{lh_d}",
+                        c as u32
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rects_into_clears_previous_contents() {
+        // Reused across cells: a glyph with no geometry must leave an empty buf
+        // even after a prior glyph filled it.
+        let mut buf = Vec::new();
+        box_drawing_rects_into(&mut buf, '\u{2588}', 16, 24); // █ full block
+        assert!(!buf.is_empty());
+        box_drawing_rects_into(&mut buf, '\u{2571}', 16, 24); // ╱ diagonal → font fallback
+        assert!(buf.is_empty(), "buffer must be cleared for empty glyphs");
+    }
+
+    #[test]
+    fn has_box_geometry_matches_old_predicate() {
+        // `has_box_geometry` replaced the old layout guard
+        // `is_rounded_corner(c) || !box_drawing_rects(c, 16, 16).is_empty()`.
+        // It must be identical so no glyph flips between primitive and font.
+        let mut buf = Vec::new();
+        for c in all_primitive_chars() {
+            let expected = is_rounded_corner(c) || !box_drawing_rects(c, 16, 16).is_empty();
+            assert_eq!(
+                has_box_geometry(&mut buf, c),
+                expected,
+                "has_box_geometry disagrees for U+{:04X}",
+                c as u32
+            );
+        }
+    }
+
+    #[test]
+    fn upper_half_block_is_upper_half() {
+        // The DOOM-fire workhorse glyph ▀ (U+2580) covers the top half only.
+        let mut buf = Vec::new();
+        box_drawing_rects_into(&mut buf, '\u{2580}', 16, 24);
+        assert_eq!(buf, vec![(0, 0, 16, 12)]);
+    }
 
     #[test]
     fn dash_lines_keep_orientation() {

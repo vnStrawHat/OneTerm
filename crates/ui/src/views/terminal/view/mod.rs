@@ -138,10 +138,13 @@ impl LocalTerminalView {
                     }
                     SessionEvent::Output => {
                         let s = session_for_spawn.clone();
-                        Self::drain_coalesced_events(&rx, &this, cx);
-                        cx.background_executor()
-                            .timer(Duration::from_millis(1))
-                            .await;
+                        // Coalesce every Output event already queued behind this
+                        // one into a single render. `drain_coalesced_events`
+                        // merges them via `try_recv`, so no wall-clock sleep is
+                        // needed — the previous fixed 1ms timer only added
+                        // latency (capping the frame period at 1ms + render time)
+                        // without adding coalescing. GPUI merges the resulting
+                        // `notify()`s into one paint per frame.
                         Self::drain_coalesced_events(&rx, &this, cx);
                         let _ = this.update(cx, |view, cx| {
                             cx.notify();

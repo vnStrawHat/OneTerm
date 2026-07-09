@@ -33,7 +33,7 @@ pub(crate) fn attach_mouse(
             };
             // Ctrl+click → open URL (OSC 8 hyperlink or plain-text URL).
             if e.modifiers.control {
-                let snap = s.read(cx).snapshot();
+                let snap = s.read(cx).snapshot_query();
                 if let Some(url) = detect_url_at(
                     &snap.cells,
                     snap.terminal_bounds.num_cols,

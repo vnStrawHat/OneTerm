@@ -125,7 +125,22 @@ pub struct CursorBounds {
 pub trait TerminalSession: Send + Sync + 'static {
     // ── Render ───────────────────────────────────────────────
     /// Snapshot the grid for rendering (does not hold the lock while drawing).
+    ///
+    /// **Consumes and resets** the terminal damage — call this **only** from the
+    /// render/prepaint path, exactly once per frame. For any other read
+    /// (cursor bounds, mouse hit-test, URL detection, mode checks) use
+    /// [`snapshot_query`](Self::snapshot_query), which does not touch damage.
     fn snapshot(&self) -> TerminalContent;
+
+    /// Snapshot for auxiliary (non-render) reads — does **not** consume/reset the
+    /// terminal damage, so it cannot starve the renderer of dirty-row info and
+    /// leave stale rows on screen.
+    ///
+    /// Default falls back to [`snapshot`](Self::snapshot); real backends override
+    /// it with a damage-free snapshot.
+    fn snapshot_query(&self) -> TerminalContent {
+        self.snapshot()
+    }
 
     /// Basic info (total_lines, cursor_line) — does NOT call damage()/reset_damage().
     /// Used for line_times updates without clearing damage for prepaint.
@@ -240,7 +255,7 @@ pub trait TerminalSession: Send + Sync + 'static {
     /// Parse format: `Ctrl+Shift+V`, `Alt+Enter`, `F1`, `Up`, `a`.
     fn send_keystroke(&self, keystroke: &str) {
         if let Some((spec, mods)) = parse_keystroke(keystroke) {
-            let app_cursor = self.snapshot().mode.contains(TermMode::APP_CURSOR);
+            let app_cursor = self.snapshot_query().mode.contains(TermMode::APP_CURSOR);
             if let Some(bytes) = encode_key(&spec, mods, app_cursor) {
                 self.write(&bytes);
             }
@@ -250,7 +265,9 @@ pub trait TerminalSession: Send + Sync + 'static {
     /// Bracketed paste mode is on → wrap the paste in `\x1b[200~...\x1b[201~`.
     /// Zed: checks `Modes::BRACKETED_PASTE` then wraps.
     fn is_bracketed_paste(&self) -> bool {
-        self.snapshot().mode.contains(TermMode::BRACKETED_PASTE)
+        self.snapshot_query()
+            .mode
+            .contains(TermMode::BRACKETED_PASTE)
     }
 
     /// Paste text into the PTY. Automatically wraps it in bracketed paste markers

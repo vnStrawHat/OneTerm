@@ -86,6 +86,29 @@ split-debuginfo = "unpacked"
 gpui = { opt-level = 3 }
 gpui_platform = { opt-level = 3 }
 smol = { opt-level = 3 }
+# Hot render/parse path — keep DOOM-fire (and other full-screen high-fps TUIs)
+# usable and correct under `cargo run`. At opt-level = 0 the per-frame cost is
+# 20-100x slower, so the UI thread never returns to the Windows message pump
+# (window goes "Not Responding") and the render can't keep pace with the pump.
+#
+# The hot path spans FOUR of our crates, not just the UI:
+#   - oneterm-ui:        the ~13k-quad paint loop + box-drawing geometry + layout.
+#   - alacritty_terminal: Term::advance() parsing the fire's escape stream.
+#   - oneterm-core:      TerminalContent::from() clones ~5.4k cells per snapshot
+#                        (held under the Term FairMutex) — unoptimized this
+#                        starves the PTY pump thread.
+#   - oneterm-local / -ssh: the PTY pump loop + OSC side-parser + state locks.
+# Leaving any of these at opt-level = 0 leaves a slow link in the chain that
+# blocks the whole pipeline, so DOOM-fire renders choppily / incompletely in
+# debug even after the UI crate is optimized.
+#
+# Trade-off: stepping through the terminal backend in a debugger is less precise.
+# Drop the crate you need to step through back to opt-level = 0 temporarily.
+oneterm-ui = { opt-level = 3 }
+oneterm-core = { opt-level = 3 }
+oneterm-local = { opt-level = 3 }
+oneterm-ssh = { opt-level = 3 }
+alacritty_terminal = { opt-level = 3 }
 
 [profile.release]
 # Optimised cho distributable binary.

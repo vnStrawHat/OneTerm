@@ -131,9 +131,19 @@ impl ShellEventLoop {
 
         let mut events = Events::with_capacity(1024.try_into().unwrap());
 
+        // ── Pump throughput instrumentation ──
+        // Distinguishes "OneTerm parse-bound" (most time in parse) from
+        // "ConPTY/producer-bound" (most time waiting for PTY data). Logged every
+        // ~2s at INFO so it lines up with the [TerminalElement] render stats.
+        let mut stat_bytes: u64 = 0;
+        let mut stat_wait = std::time::Duration::ZERO;
+        let mut stat_parse = std::time::Duration::ZERO;
+        let mut stat_since = std::time::Instant::now();
+
         loop {
             events.clear();
             // Timeout: short poll to check channel messages.
+            let wait_start = std::time::Instant::now();
             if let Err(err) = self
                 .poll
                 .wait(&mut events, Some(std::time::Duration::from_millis(50)))
@@ -144,6 +154,7 @@ impl ShellEventLoop {
                 error!("ShellEventLoop: poll error: {err}");
                 break;
             }
+            stat_wait += wait_start.elapsed();
 
             // Drain channel messages (non-blocking).
             let mut shutdown = false;
@@ -215,6 +226,7 @@ impl ShellEventLoop {
                 }
 
                 if event.readable {
+                    let parse_start = std::time::Instant::now();
                     let mut unprocessed = 0;
                     let mut processed = 0;
                     let mut terminal = None;
@@ -342,7 +354,39 @@ impl ShellEventLoop {
                             self.listener.pty_write(reply.as_bytes());
                         }
                     }
+
+                    stat_parse += parse_start.elapsed();
+                    stat_bytes += processed as u64;
                 }
+            }
+
+            // ── Periodic pump-throughput report (~every 2s) ──
+            let since = stat_since.elapsed();
+            if since >= std::time::Duration::from_secs(2) {
+                let secs = since.as_secs_f64();
+                let mib_s = stat_bytes as f64 / (1024.0 * 1024.0) / secs;
+                let parse_ms = stat_parse.as_secs_f64() * 1000.0;
+                let wait_ms = stat_wait.as_secs_f64() * 1000.0;
+                let busy = stat_parse.as_secs_f64() / secs * 100.0;
+                log::info!(
+                    "[PTY pump] {:.1} MiB/s parsed | parse={:.0}ms wait={:.0}ms over {:.1}s | pump {:.0}% busy ({})",
+                    mib_s,
+                    parse_ms,
+                    wait_ms,
+                    secs,
+                    busy,
+                    if busy > 50.0 {
+                        "parse-bound: OneTerm parse/grid-update is the limiter"
+                    } else if mib_s < 1.0 {
+                        "idle"
+                    } else {
+                        "wait-bound: ConPTY/producer is the limiter"
+                    },
+                );
+                stat_bytes = 0;
+                stat_wait = std::time::Duration::ZERO;
+                stat_parse = std::time::Duration::ZERO;
+                stat_since = std::time::Instant::now();
             }
         }
     }

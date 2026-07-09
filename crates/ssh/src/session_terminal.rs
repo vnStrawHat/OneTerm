@@ -77,6 +77,12 @@ impl TerminalSession for SshSession {
         TerminalContent::from(&mut *term)
     }
 
+    fn snapshot_query(&self) -> TerminalContent {
+        // Non-render read: must NOT reset damage (see trait docs).
+        let term = self.term.lock();
+        TerminalContent::from_query(&*term)
+    }
+
     fn dynamic_colors(&self) -> DynamicColors {
         let term = self.term.lock();
         let colors = term.colors();
@@ -329,7 +335,7 @@ impl TerminalSession for SshSession {
         if cw <= 0.0 || lh <= 0.0 {
             return None;
         }
-        let snap = self.snapshot();
+        let snap = self.snapshot_query();
         let cursor = snap.cursor;
         if matches!(
             cursor.shape,

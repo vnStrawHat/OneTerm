@@ -11,7 +11,7 @@ use gpui::{
 
 use oneterm_core::TerminalSession;
 
-use super::super::box_drawing::{box_drawing_rects, rounded_corner_rects_aa};
+use super::super::box_drawing::{box_drawing_rects_into, rounded_corner_rects_aa};
 use super::super::layout::{CursorPaint, LayoutState, RowLayoutCache};
 use super::super::theme::TerminalTheme;
 use super::super::view::LocalTerminalView;
@@ -35,6 +35,7 @@ pub(crate) fn paint_terminal(
 ) {
     window.handle_input(focus, ElementInputHandler::new(bounds, view.clone()), cx);
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
+        let paint_start = std::time::Instant::now();
         let mut quad_count: usize = 0;
         let mut run_count: usize = 0;
 
@@ -116,6 +117,10 @@ pub(crate) fn paint_terminal(
             }
         }
 
+        // Reusable scratch buffer for box-draw geometry — one allocation for the
+        // whole frame instead of one `Vec` per block cell (DOOM-fire draws a
+        // primitive for nearly every cell on screen).
+        let mut box_scratch: Vec<(i32, i32, i32, i32)> = Vec::new();
         for i in 0..num_lines {
             let cell_y_logical = cell_y(i as i32);
             for bd in &cache.rows[i].box_draws {
@@ -134,7 +139,8 @@ pub(crate) fn paint_terminal(
                     }
                     continue;
                 }
-                for (rx, ry, rw, rh) in box_drawing_rects(bd.c, cw_d, lh_d) {
+                box_drawing_rects_into(&mut box_scratch, bd.c, cw_d, lh_d);
+                for &(rx, ry, rw, rh) in &box_scratch {
                     let pos = point(
                         px(f32::from(cell_x_logical) + rx as f32 / scale_factor),
                         px(f32::from(cell_y_logical) + ry as f32 / scale_factor),
@@ -156,10 +162,11 @@ pub(crate) fn paint_terminal(
             cache.stats.paint_quad_calls = quad_count;
             cache.stats.bg_rect_count = bg_rect_count;
             cache.stats.text_run_paints = run_count;
+            cache.stats.paint_us = paint_start.elapsed().as_micros();
             cache.stats.frame_count += 1;
             if cache.stats.frame_count % 60 == 0 {
-                log::debug!(
-                    "[TerminalElement] frame={} lines={} dirty={} quads={} bg_rects={} shapes={} runs={} hashes={}",
+                log::info!(
+                    "[TerminalElement] frame={} lines={} dirty={} quads={} bg_rects={} shapes={} runs={} hashes={} prepaint_us={} paint_us={}",
                     cache.stats.frame_count,
                     cache.stats.total_lines,
                     cache.stats.dirty_lines,
@@ -168,6 +175,8 @@ pub(crate) fn paint_terminal(
                     cache.stats.shape_line_calls,
                     cache.stats.text_run_paints,
                     cache.stats.hash_calls,
+                    cache.stats.prepaint_us,
+                    cache.stats.paint_us,
                 );
             }
         }

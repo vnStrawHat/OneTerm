@@ -8,7 +8,7 @@ pub(crate) mod powerline;
 pub(crate) mod rounded;
 pub(crate) mod shade;
 
-pub(crate) use drawing::box_drawing_rects;
+pub(crate) use drawing::box_drawing_rects_into;
 pub(crate) use rounded::rounded_corner_rects_aa;
 
 /// Heavy line thickness (device px). Extracted as a function so the rounded-corner
