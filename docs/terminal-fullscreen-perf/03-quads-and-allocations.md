@@ -1,9 +1,18 @@
 # 3. Tier 2 — Per-Cell Allocations & Quad Count
 
-> **STATUS: §3.1 ✅ IMPLEMENTED, §3.3 ⏳ OPEN.** The allocation-free box-drawing
-> path (`block::rects_into`, `box_drawing_rects_into`, `has_box_geometry`) + reusable
-> probe/paint buffers are done (~10.7k `Vec` allocs/frame → 0). Quad instancing
-> (§3.3) is **not** done — it is the only thing that would cut the ~15 ms `paint_us`.
+> **STATUS: §3.1 ✅ IMPLEMENTED, §3.2 ✅ (bg + block run-merge), §3.3 ⏳ OPEN.** The
+> allocation-free box-drawing path (`block::rects_into`, `box_drawing_rects_into`,
+> `has_box_geometry`) + reusable probe/paint buffers are done (~10.7k `Vec` allocs/frame
+> → 0). **Quad-count reduction via run-merging is now done on both sides**: background
+> rects (existing) *and* full-width band block glyphs (`▀▁▂▃▄▅▆▇█▔`) — consecutive
+> same-glyph/same-colour cells coalesce into one stretched rect (`BoxDrawCell.num_cells`,
+> gated by `block::is_full_width_band`). This cuts `paint_quad` calls for any block/bar
+> content with colour runs (btop, borders, progress bars); for DOOM-fire the per-cell
+> gradient limits merging, so its gain depends on adjacent-cell colour coherence
+> (re-measure `quads`/`paint_us`). True GPU **quad instancing** (§3.3) is still **not**
+> done — it is the only thing that would cut `paint_us` when colours genuinely vary
+> per cell. Note (06 §6.3): render is decoupled from the PTY pump / delivered throughput,
+> so this mainly buys render smoothness / CPU headroom.
 > See [`06-results-and-ceiling.md`](06-results-and-ceiling.md) §6.6.B.
 >
 > After Tier 1 removes the shaping cost, the next bottleneck is ~13216

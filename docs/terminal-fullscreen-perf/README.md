@@ -1,21 +1,36 @@
 # Full-Screen Animation Rendering Performance — OneTerm
 
-> Investigation **and implementation record** for rendering high-frame-rate,
-> full-screen TUI animations (benchmarked with **DOOM-fire-zig**) in OneTerm's
-> `TerminalElement`.
+> Investigation **and implementation record** for **optimizing** heavy full-screen TUI
+> animation rendering (benchmarked with **DOOM-fire-zig**) in OneTerm's `TerminalElement`.
 >
-> **Original baseline**: OneTerm ~160-170 fps vs Windows Terminal ~400 fps on the
-> same DOOM-fire-zig workload. The **debug** build rendered one frame and then hung
-> ("Not Responding").
+> **This is an optimization / tuning record.** The goal is to cut the per-frame cost of
+> the render and PTY-parse hot paths — CPU time per frame (`paint_us` / `prepaint_us`),
+> transient allocations, text-shaping (`shape_line`) calls, quad/rect counts, and parse
+> throughput (MiB/s) — for the pathological *full-screen, every-cell-changes, truecolor*
+> workload. It is **not** a chase for any single headline throughput number: the
+> end-to-end frame-delivery rate is bounded by the **producer (DOOM-fire) + Windows
+> ConPTY transport** (outside OneTerm — see
+> [`06-results-and-ceiling.md`](06-results-and-ceiling.md) §6.7) and scales with window
+> size (cell count) anyway. What OneTerm controls — and what these tunings move — is
+> per-frame CPU, allocations, lock hold time, and parse headroom.
+>
+> **Original baseline**: OneTerm rendered this DOOM-fire-zig workload far more slowly than
+> Windows Terminal on the same machine, and the **debug** build rendered a single frame and
+> then hung ("Not Responding").
 >
 > **Current status (after the work in this folder was implemented)**:
-> - **Debug** build now renders the fire smoothly (~260 fps counter) instead of hanging.
-> - **Release** build ~235-260 fps counter (up from ~197).
-> - The `shape_line` bottleneck is gone (`shapes`/`runs` 5389 → 46 per frame).
-> - The remaining ceiling is now understood and **measured** (see
->   [`06-results-and-ceiling.md`](06-results-and-ceiling.md)): DOOM-fire's fps counter
->   is **pump-bound** by `alacritty_terminal`'s per-frame grid mutation (a pinned
->   dependency), not by the renderer.
+> - **Debug** build now renders the fire continuously instead of hanging.
+> - **Release** render cost dropped sharply: text-shaping is gone (`shapes`/`runs`
+>   5389 → ~1 per frame), transient allocations are gone (~10.7k `Vec`/frame → 0), and
+>   the render phase is now purely quad-emission bound (`paint_us` ≈ 15 ms,
+>   `prepaint_us` ≈ 1 ms).
+> - The PTY pump moved from **parse-bound (72% busy)** to **wait-bound (~44% busy)**;
+>   parse capacity rose ~+70% (R1 single-pass OSC; see
+>   [`09-patch-alacritty-fork.md`](09-patch-alacritty-fork.md)).
+> - The remaining end-to-end limit is **measured** (see
+>   [`06-results-and-ceiling.md`](06-results-and-ceiling.md)): it is the producer +
+>   ConPTY transport, not OneTerm's parse or render — so no OneTerm-side change lifts it.
+>   What OneTerm optimization *does* move is per-frame CPU, allocations, and parse headroom.
 >
 > **Primary implementation files**:
 > - `crates/ui/src/views/terminal/layout/row.rs`
@@ -33,17 +48,21 @@
 
 | Item | Before | After | Notes |
 |---|---|---|---|
-| Debug build under DOOM-fire | 1 frame → "Not Responding" | renders ~260 fps | fixed by extending the debug `opt-level=3` overrides to the *whole* hot path |
-| `shapes` / `runs` per frame | ~5389 | **46** | Tier 1: no space-only runs for block cells |
+| Debug build under DOOM-fire | 1 frame → "Not Responding" | renders continuously | fixed by extending the debug `opt-level=3` overrides to the *whole* hot path |
+| `shapes` / `runs` per frame | ~5389 | **~1** | Tier 1: no space-only runs for block cells |
 | Per-frame `Vec` allocs (box-draw) | ~10.7k | ~0 | Tier 2: allocation-free block path + reusable buffers |
 | `Output` handler delay | fixed 1 ms/batch | removed | Tier 3 |
-| Release fps counter | ~197 | ~235-260 | Tier 1 + Tier 3 |
-| **Render phase cost** | shaping-dominated | `paint_us`≈15 ms, `prepaint_us`≈1.1 ms | render is now **quad-emission bound** |
-| **fps-counter bottleneck** | unknown | **pump parse/grid-mutation, 72% busy @ 29 MiB/s** | measured; alacritty grid mutation dominates |
+| **Render phase cost** | shaping-dominated | `paint_us` ≈ 15 ms, `prepaint_us` ≈ 1 ms | render is now **quad-emission bound** |
+| **PTY pump** | 72% busy, **parse-bound** | ~44% busy, **wait-bound** | R1 single-pass OSC; parse capacity ~40 → ~69 MiB/s (~+70%) |
+| **End-to-end delivery limiter** | unknown | **producer (DOOM-fire) + ConPTY transport** | measured 4 ways (§6.7); *not* OneTerm parse/render |
 
-**The 500 fps target is not reachable by tuning OneTerm** — it is bounded by the
-pinned `alacritty_terminal` grid-mutation cost plus ConPTY. Full analysis + the
-options to go further are in [`06-results-and-ceiling.md`](06-results-and-ceiling.md).
+**There is no single throughput target to hit here.** The end-to-end delivery rate is set
+by the **producer + ConPTY** (outside OneTerm, proven in
+[`06-results-and-ceiling.md`](06-results-and-ceiling.md) §6.7) and it scales with window
+size (more cells ⇒ more bytes/frame). So this folder is scoped as **optimization** —
+reducing per-frame CPU, allocations, parse time, and quad/lock overhead — which improves
+smoothness and headroom at any window size. Full analysis in
+[`06-results-and-ceiling.md`](06-results-and-ceiling.md).
 
 ---
 
@@ -88,14 +107,14 @@ Interpretation:
 
 | Metric | Value | Meaning |
 |---|---|---|
-| `shapes` / `runs` | **1** | Tier 1 succeeded — no per-cell `shape_line`. |
+| `shapes` / `runs` | **1** | Tier 1 succeeded — no per-cell `shape_line` (the `1` is the on-screen HUD text line). |
 | `prepaint_us` | ~1000 | Layout + shaping + snapshot is cheap now. |
 | `paint_us` | ~15000 | **~12k `paint_quad` calls ≈ 15 ms** — the render bottleneck. |
-| pump busy | **72%** | The **fps counter** is limited by the PTY pump's parse/grid-mutation, not the renderer. |
+| pump busy | **72%** | Then parse-bound. **Later disproven as the delivery limiter** — after R1 the pump went wait-bound (~44%) yet end-to-end throughput was unchanged. The limiter is the producer + ConPTY (§6.7), not parse/render. |
 
-The render (`~1 ms + 15 ms` ≈ 62 fps) is **decoupled** from the fps counter
-(~250 fps): the pump runs on a separate thread and they share the `Term` lock only
-for the ~200 µs snapshot (~1% contention). See
+Each render costs ~16 ms (`prepaint_us` + `paint_us`) and runs on the UI thread,
+**decoupled** from the PTY pump (which runs on a separate thread). The two share the
+`Term` lock only for the ~200 µs snapshot clone (~1% contention). See
 [`06-results-and-ceiling.md`](06-results-and-ceiling.md).
 
 ---
@@ -109,8 +128,10 @@ for the ~200 µs snapshot (~1% contention). See
 | 3 | **Tier 2** — kill per-cell allocations + reduce quad count | [`03-quads-and-allocations.md`](03-quads-and-allocations.md) | ✅ §3.1 done; §3.3 open |
 | 4 | **Tier 3** — notify cadence & channel backpressure | [`04-notify-and-backpressure.md`](04-notify-and-backpressure.md) | ✅ timer removed |
 | 5 | Why the debug build hangs but release runs steadily | [`05-debug-vs-release.md`](05-debug-vs-release.md) | ✅ fixed (see below) |
-| 6 | **Results, measurements, the 500 fps ceiling & next plan** | [`06-results-and-ceiling.md`](06-results-and-ceiling.md) | current |
-| 7 | **RFC — custom single-pass engine** (the only path toward 500 fps) | [`07-custom-engine-rfc.md`](07-custom-engine-rfc.md) | proposal |
+| 6 | **Results, measurements, the practical ceiling & next plan** | [`06-results-and-ceiling.md`](06-results-and-ceiling.md) | current |
+| 7 | **RFC — custom single-pass engine** (kept as an architecture reference; its premise — that a faster engine raises the delivery rate — is superseded, see §6.7) | [`07-custom-engine-rfc.md`](07-custom-engine-rfc.md) | superseded / reference |
+| 8 | **Evaluation — `libghostty-vt`** as the engine (vs custom vs alacritty) | [`08-libghostty-vt-evaluation.md`](08-libghostty-vt-evaluation.md) | evaluation |
+| 9 | **Design — patch the `alacritty_terminal` fork in place** (low-risk middle path) | [`09-patch-alacritty-fork.md`](09-patch-alacritty-fork.md) | R1 shipped · R2/R3 proposed |
 
 ---
 
@@ -126,7 +147,7 @@ for the ~200 µs snapshot (~1% contention). See
    (`box_drawing/{drawing.rs,block.rs}`, `element/paint.rs`, `layout/row.rs`)
 3. ✅ **Tier 3 — dropped the fixed 1 ms delay** in the `Output` handler. **Done.**
    Channel backpressure was **not** needed (the pump `try_send`s into a 4096-slot
-   channel and never blocks; the render is not the fps limiter). (`view/mod.rs`)
+   channel and never blocks; the render is not the delivery-rate limiter). (`view/mod.rs`)
 4. ✅ **Debug ergonomics — `[profile.dev.package]` `opt-level=3`** now covers the
    **whole** hot path (`oneterm-ui`, `oneterm-core`, `oneterm-local`, `oneterm-ssh`,
    `alacritty_terminal`), not just the UI crate. This is what actually fixed the
@@ -168,12 +189,15 @@ flips between primitive and font rendering.
 
 ## The ceiling, in one paragraph
 
-After Tier 1/2/3, DOOM-fire's fps counter (~250) is gated by the PTY pump spending
-**72% of its time** parsing + mutating the alacritty grid (29 MiB/s, ~5.4k cell writes
-per frame). That grid mutation lives in `alacritty_terminal`, a **rev-pinned**
-dependency (locked to gpui's fork — see `docs/agents/dependencies.md`), so it cannot
-be optimized here. At 250 fps alacritty already mutates ~1.35M cells/s; 500 fps needs
-~2.7M cells/s, which exceeds its single-threaded rate for this cell count. **500 fps is
-therefore an architectural limit, not a tuning gap.** The full breakdown, the render
-vs counter decoupling, and the concrete paths that *could* raise it are in
-[`06-results-and-ceiling.md`](06-results-and-ceiling.md).
+After Tier 1/2/3 + R1, OneTerm's parse and render optimizations do **not** raise the
+end-to-end rate at which the fire's frames are delivered. The PTY pump became
+**wait-bound** on ConPTY (it spends >50% of the time blocked in `read()` waiting for
+bytes), and a **bare-ConPTY probe with no OneTerm at all** — no `Term`, no parse, no
+render — sees the same **~30 MiB/s / ~126 KiB per frame** the fire produces. So the
+delivery limit is the **producer (DOOM-fire) + ConPTY transport**, outside OneTerm; it
+also scales with window size (more cells ⇒ more bytes/frame). What the tunings *did* bank
+is real and durable: `shape_line` 5389 → ~1/frame, ~10.7k `Vec` allocs/frame → 0, parse
+capacity ~+70% (R1), and the debug hang fixed. The point of this folder is exactly that —
+**optimize per-frame CPU / throughput / smoothness, which OneTerm controls.** The full
+breakdown, the render-vs-pump decoupling, and the remaining (engine/transport) levers are
+in [`06-results-and-ceiling.md`](06-results-and-ceiling.md).

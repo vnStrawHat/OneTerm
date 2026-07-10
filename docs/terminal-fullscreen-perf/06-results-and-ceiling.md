@@ -1,7 +1,17 @@
-# 6. Results, Measurements, the 500 fps Ceiling & Next Plan
+# 6. Results, Measurements, the Practical Ceiling & Next Plan
 
-> What was implemented, what the numbers say after implementation, why the
-> DOOM-fire fps counter caps at ~250, and the concrete options to go further.
+> What was implemented, what the numbers say after implementation, why OneTerm's
+> parse/render tunings do **not** move the end-to-end rate at which the fire's frames are
+> delivered (that rate is bound by the producer + ConPTY transport), why the cost is
+> inherently window-size dependent, and the concrete optimization options that remain.
+>
+> **Framing note.** An earlier version of this document was written around a target
+> throughput and attributed the ceiling to `alacritty_terminal`'s grid mutation. Both were
+> **disproven by measurement** (§6.7). The operative conclusions are: (1) end-to-end
+> delivery is bound by the **producer (DOOM-fire) + ConPTY**, outside OneTerm; (2) the cost
+> per frame **scales with window size** (§6.4.1), so there is no single fixed number to
+> hit; (3) the goal is therefore **optimization** — per-frame CPU / allocations / parse
+> headroom — which is what the tunings below actually move.
 
 ---
 
@@ -14,6 +24,7 @@
 | **Tier 3** — removed the fixed 1 ms `Output`-handler delay | `view/mod.rs` | −1 ms/frame latency; relies on `drain_coalesced_events` + GPUI frame scheduling |
 | **Debug profile** — `opt-level=3` for the full hot path | `Cargo.toml` | debug renders normally instead of hanging (see §6.5) |
 | **Damage-reset fix** — `snapshot_query()` for non-render reads | `core/session.rs`, `core/content.rs`, `{local,ssh}/session_terminal.rs`, `ui/.../handlers/*` | non-render snapshots no longer discard the renderer's dirty-row info |
+| **R1 — single-pass OSC** (fork) | `vendor/{vte,alacritty_terminal}`, `core/osc.rs`, `{local,ssh}/listener.rs`, `local/event_loop.rs`, `ssh/task.rs` | removed the second `vte::Parser`; pump parse-bound → wait-bound (§6.7) |
 | **Instrumentation** — `prepaint_us`/`paint_us` + `[PTY pump]` line | `layout/types.rs`, `element/{prepaint,paint}.rs`, `local/event_loop.rs` | made the real bottleneck measurable |
 
 Correctness of the box-drawing refactor is locked by unit tests
@@ -24,12 +35,12 @@ Correctness of the box-drawing refactor is locked by unit tests
 
 ## 6.2. Measured results
 
-DOOM-fire fps counter (the number shown by DOOM-fire itself):
+**Behaviour:**
 
 | Build | Before | After |
 |---|---|---|
-| Debug (`cargo run`) | 1 frame, then "Not Responding" | **~260 fps**, renders normally |
-| Release | ~197 fps | **~235-260 fps** |
+| Debug (`cargo run`) | 1 frame, then "Not Responding" | renders continuously |
+| Release | choppy; shaping-dominated frames | smooth; quad-emission-bound frames |
 
 Per-frame render stats (release, steady state):
 
@@ -37,7 +48,7 @@ Per-frame render stats (release, steady state):
 [TerminalElement] frame=300 lines=45 dirty=45 quads=13124 bg_rects=5267 shapes=1 runs=1 hashes=0 prepaint_us=1025 paint_us=15161
 ```
 
-- `shapes`/`runs` = **1** → Tier 1 confirmed (the `1` is the on-screen `mem: … fps` text line).
+- `shapes`/`runs` = **1** → Tier 1 confirmed (the `1` is the on-screen HUD text line).
 - `prepaint_us` ≈ **1.0 ms** (layout + shaping + snapshot).
 - `paint_us` ≈ **15 ms** (~12-13k `paint_quad` calls) → the render phase is now
   entirely **quad-emission bound**.
@@ -49,14 +60,16 @@ PTY pump throughput (the busy pump; a second idle session logs `0% busy`):
 ```
 
 - **72% busy** parsing + mutating the grid, **28%** waiting for PTY data.
-- ~29 MiB/s of escape stream at ~250 fps ≈ ~116-190 KB/frame for a ~45×160 grid of
-  truecolor `▀` cells.
+- ~29 MiB/s of escape stream ≈ **~126 KiB per frame** for a ~45×160 grid of truecolor
+  `▀` cells.
+
+*(This is the pre-R1 reading; R1 later flips the pump to wait-bound — see §6.7.)*
 
 ---
 
-## 6.3. Root cause: render is decoupled from the fps counter
+## 6.3. Root cause: the render is decoupled from the PTY pump
 
-Two independent pipelines:
+Two independent pipelines on separate threads:
 
 ```
  PTY reader thread                         Main (UI) thread
@@ -71,50 +84,61 @@ Two independent pipelines:
 
 Key facts established by the instrumentation:
 
-1. The **render** runs at ~62 fps (`1 ms + 15 ms`), but the **fps counter shows
-   ~250** — they are different numbers. The counter is DOOM-fire's own
-   write/flush rate, gated by how fast the **pump** drains the PTY.
-2. The render holds the `Term` lock **only** during the ~200 µs snapshot clone.
-   At 62 render-fps that is ~1% contention — the render does **not** gate the pump.
-3. The event channel is **bounded at 4096** and the pump uses non-blocking
-   `try_send`, so a slow/backed-up renderer never throttles the pump. (This is why
-   the Tier-3 channel-backpressure idea was unnecessary.)
+1. Each **render** costs ~16 ms (`prepaint_us` + `paint_us`) and runs on the UI thread;
+   the **pump** parses and mutates the grid on its own thread. They are independent —
+   the fire's frames are delivered as fast as the **pump** drains the PTY, regardless of
+   how long a render takes.
+2. The render holds the `Term` lock **only** during the ~200 µs snapshot clone —
+   ~1% of the pump's time — so the render does **not** gate the pump.
+3. The event channel is **bounded at 4096** and the pump uses non-blocking `try_send`,
+   so a slow/backed-up renderer never throttles the pump. (This is why the Tier-3
+   channel-backpressure idea was unnecessary.)
 
-**Conclusion:** optimizing `paint_us` improves *display smoothness* and frees
-main-thread CPU, but it does **not** move the fps counter. The counter is the pump.
+**Conclusion:** optimizing `paint_us` improves *display smoothness* and frees main-thread
+CPU, but it does **not** change how fast the fire's output is delivered. That is set by
+the pump draining ConPTY.
 
 ---
 
-## 6.4. The 500 fps ceiling (why it is not a tuning gap)
+## 6.4. The practical ceiling (why it is not a tuning gap, and why there is no single target)
 
-The pump's 72% busy time decomposes as:
+### 6.4.1. Cost scales with window size (cell count)
+
+The more basic point before the transport analysis: **the per-frame cost is a function of
+the grid size, not a constant.** The window (and font size) fix the grid dimensions
+`rows × cols`, and essentially every per-frame cost scales with the cell count
+`N = rows × cols`:
+
+- **Producer:** DOOM-fire recomputes the fire for every cell each frame and writes a
+  full-screen truecolor frame — so bytes/frame ≈ `O(N)`. A bigger window makes each frame
+  more expensive for the fire program itself, and it emits fewer, larger frames.
+- **ConPTY transport:** more bytes/frame ⇒ more data conhost must parse into its screen
+  buffer and re-serialise to the pipe ⇒ lower delivered throughput headroom.
+- **OneTerm pump:** parse + grid-mutate cost ≈ `O(N)`.
+- **OneTerm render:** ~2 quads/cell ⇒ `paint_us` ≈ `O(N)`.
+
+So a small window is cheap per frame and a maximised one is expensive; the numbers in this
+folder (`~45×120`, ~126 KiB/frame, ~30 MiB/s) are **one point on that curve**, not a fixed
+capability. The meaningful, size-independent goal is **headroom** — how much CPU/parse
+budget a frame leaves — which is what the optimizations move.
+
+### 6.4.2. Where the pump time went (historical analysis)
+
+Pre-R1, the pump's 72% busy time decomposed as:
 
 1. **`alacritty_terminal::Processor::advance`** — VT parse **plus mutating ~5.4k grid
-   cells every frame** (SGR state, per-cell fg/bg, damage tracking). This is the bulk.
-2. **OSC double-parse** (`vte_parser` + `OscSink`) — the same bytes are parsed a
-   second time to capture OSC 7/9/52/133 and to detect `CSI 2J/3J` screen clears.
+   cells every frame** (SGR state, per-cell fg/bg, damage tracking). The bulk.
+2. **OSC double-parse** (`vte_parser` + `OscSink`) — the same bytes parsed a second time
+   to capture OSC 7/9/52/133 and to detect `CSI 2J/3J` screen clears.
 3. Read syscalls + `Term` lock acquisition — minor.
 
-Why #1 cannot be optimized here: `alacritty_terminal` is a **rev-pinned** dependency,
-locked to the exact revision gpui's fork uses (see `docs/agents/dependencies.md` §1).
-Changing it breaks the lock and the shared type compatibility with gpui.
-
-The arithmetic:
-
-- At ~250 fps, alacritty mutates ~250 × 5.4k ≈ **1.35M cells/s**, consuming most of the
-  1.45 s/2 s of pump-busy time.
-- 500 fps would require ~**2.7M cells/s**, i.e. roughly **2×** the grid-mutation
-  throughput, on a single thread, for this exact worst-case (every cell truecolor,
-  full-screen damage).
-- That exceeds what alacritty's single-threaded `advance` delivers for this cell
-  count, **before** adding OSC parse and ConPTY overhead.
-
-Windows Terminal reaches ~400 fps on the same workload because it uses a fundamentally
-different stack (its own DirectWrite/AtlasEngine renderer + a bespoke VT parser +
-tighter ConPTY integration), not because of a tunable OneTerm parameter.
-
-**Therefore 500 fps on the counter is an architectural limit for this
-workload, not a remaining optimization.**
+This *looked* like the delivery limiter, and #1 could not be optimized in-tree because
+`alacritty_terminal` was a rev-pinned dependency. That attribution was **wrong** — see
+§6.7: R1 removed the #2 double-parse (~40% of parse time), and delivery did **not**
+change, because the pump was never parse-bound in the first place at steady state — it is
+wait-bound on ConPTY. (Windows Terminal renders this workload faster than OneTerm did, but
+via a fundamentally different stack — its own DirectWrite/AtlasEngine renderer, a bespoke
+VT parser, and tighter ConPTY integration — not via any tunable OneTerm parameter.)
 
 ---
 
@@ -138,41 +162,48 @@ back to `opt-level=0` temporarily if you need to.
 
 ## 6.6. Next plan (options, in order of recommendation)
 
-### A. Accept the ceiling (recommended)
+> These options were originally written as "raise the delivered rate". §6.7 shows that is
+> not OneTerm's to raise (producer + ConPTY bound). The corrected framing is: optimize for
+> **headroom** — per-frame CPU, allocations, parse budget — which OneTerm does control.
 
-~250-260 fps is close to what `alacritty_terminal` + ConPTY allow for this
-pathological full-screen truecolor workload. Normal TUIs (mostly static, few block
+### A. Accept the ceiling; optimize for headroom (recommended)
+
+At the benchmark size the delivered throughput (~30 MiB/s) is close to what the producer +
+ConPTY allow for this pathological full-screen truecolor workload (§6.7), and the cost per
+frame grows with window size by design (§6.4.1). Normal TUIs (mostly static, few block
 cells) were never the problem and are unaffected. The high-leverage, low-risk wins
-(Tier 1/2/3 + debug + damage fix) are already banked.
+(Tier 1/2/3 + debug + damage fix + R1 parse headroom) are already banked; further work
+should target per-frame CPU / allocations / parse budget, which OneTerm controls.
 
-### B. Reduce render `paint_us` for display smoothness (does *not* raise the counter)
+### B. Reduce render `paint_us` for display smoothness (does *not* change delivery)
 
-The render is ~62 fps because of ~12k `paint_quad` calls. Options:
+The render costs ~16 ms because of ~12k `paint_quad` calls. Options:
 
 - **Two-stop-gradient half-blocks** — paint `▀`/`▄` as **one** quad with a hard 50/50
   vertical gradient (`gpui::linear_gradient`, stops at ~0.499/0.501) instead of a
   full-cell bg quad + an upper-half fg quad. Halves the quads for the dominant glyph
-  (~12k → ~7k), so `paint_us` ≈ 15 ms → ~9 ms, render ~110 fps. **Risk:** the hard
-  edge depends on shader behaviour with near-coincident stops; must be verified
-  visually (fire must stay crisp, not blurry). Only helps `▀`/`▄`.
+  (~12k → ~7k), so `paint_us` ≈ 15 ms → ~9 ms. **Risk:** the hard edge depends on shader
+  behaviour with near-coincident stops; must be verified visually (fire must stay crisp,
+  not blurry). Only helps `▀`/`▄`.
 - **§3.3 quad instancing / glyph atlas** — the real fix for `paint_us`, but a large,
   separately-scoped change to how primitives are submitted to GPUI's scene.
 
-Neither moves the fps counter (render is decoupled — §6.3).
+Neither changes the delivered throughput (render is decoupled — §6.3); both buy smoothness
+and main-thread CPU headroom.
 
-### C. Raise the counter (large / risky)
+### C. Reduce pump CPU / raise parse capacity further (mostly shipped)
 
-- **Remove the OSC double-parse** (~+25%, to ~310 fps). **Blocked by** clear
-  detection: `OscSink` needs to see `CSI 2J/3J` to reset gutter timestamps, and
-  DOOM-fire's stream is entirely CSI, so the second parser cannot be cheaply/safely
-  gated without decoupling clear-detection first (risk to the gutter-timestamp
-  feature). Still would not reach 500.
+- **Remove the OSC double-parse** — **done** (R1, doc [`09`](09-patch-alacritty-fork.md)):
+  parse capacity ~+70%, pump parse-bound → wait-bound. This freed pump CPU but did not
+  change delivered throughput (§6.7).
 - **Replace the terminal engine** with a custom single-pass parser+renderer (parse +
-  grid-mutate + OSC + clear in one pass, replacing both alacritty's `Processor` and
-  the OSC `vte_parser`). This is the only path that could genuinely approach 500 fps,
-  but it breaks the alacritty rev-lock and is a major undertaking. **Full design in
-  [`07-custom-engine-rfc.md`](07-custom-engine-rfc.md).**
-- **A non-ConPTY local backend** — would only address the ~28% `wait` component.
+  grid-mutate + OSC + clear in one pass, replacing both alacritty's `Processor` and the
+  OSC `vte_parser`). This would add further parse/CPU headroom but, per §6.7, would **not**
+  change delivered throughput for this workload; it also breaks the alacritty rev-lock and
+  is a major undertaking. Design kept for reference in
+  [`07-custom-engine-rfc.md`](07-custom-engine-rfc.md).
+- **A non-ConPTY local backend** — the only lever that could touch the `wait` component,
+  i.e. the actual limiter.
 
 ### How to re-measure after any change
 
@@ -183,6 +214,61 @@ Run with `RUST_LOG=info` and capture both lines at steady state:
 [PTY pump] … MiB/s parsed | parse=…ms wait=…ms | pump …% busy (…)
 ```
 
-- `paint_us` ↓ → render-side change worked (smoothness).
-- `[PTY pump]` % busy ↓ **and** MiB/s ↑ → counter-side change worked.
-- If `[PTY pump]` stays ~72% busy, the change did not touch the actual limiter.
+- `paint_us` ↓ → render-side change worked (smoothness / main-thread CPU).
+- `[PTY pump]` % busy ↓ at the same MiB/s → parse-side change worked (pump CPU headroom).
+- If `[PTY pump]` is **wait-bound** (a large `wait=` share), the limiter is ConPTY
+  delivery — a parse/render change will not move throughput.
+
+---
+
+## 6.7. Empirical update (R1 shipped) — the ceiling is ConPTY, not parse
+
+Two changes were then implemented and measured on hardware:
+
+- **R1 — single-pass OSC** (doc [`09`](09-patch-alacritty-fork.md)): forked
+  `alacritty_terminal` + `vte` so OSC 7/9/133 + clears come from the *single*
+  `Processor::advance` pass; deleted the second `vte::Parser`.
+- **Block-rect run coalescing** (doc [`03`](03-quads-and-allocations.md)): full-width band
+  glyphs (`▀…█`) merge like bg rects.
+
+**Measured outcome:**
+
+| Signal | Before (§6.2) | After R1 |
+|---|---|---|
+| Pump busy | **72% (parse-bound)** | **~44% (wait-bound)** |
+| Parse capacity | ~40 MiB/s | **~69 MiB/s (~+70%)** |
+| **End-to-end delivered throughput** | **~30 MiB/s** | **~30 MiB/s (unchanged)** |
+
+**Interpretation — this overturns §6.3/§6.4.2's attribution.** Delivered throughput did
+**not** change even though we (a) removed ~40% of parse time and (b) reduced render quads.
+So delivery is gated by **neither parse nor render**. The pump is now *wait-bound* — it
+spends >50% of the time blocked in `read()` waiting for ConPTY to hand over bytes. The
+limiter is therefore **ConPTY delivery** (conhost parses the child's output into a screen
+buffer and re-serialises VT to the pipe — a known Windows ConPTY cost) plus the fire
+program's own write rate into ConPTY.
+
+R1 was still worth shipping: it freed ~40% of pump CPU (headroom for multiple sessions,
+lower power) and removed the double-parse. But **no amount of parse/render optimisation
+raises the delivered throughput** — the data cannot leave ConPTY faster.
+
+**Confirmed by a bare-ConPTY probe.** A standalone probe spawned the real `DOOM-fire.exe`
+in a pseudoconsole via the same `alacritty_terminal::tty` path, with **no `Term`, no
+parse, no render** — just draining the pipe. The fire's own byte readout reports:
+
+```
+126.27 KiB max/frame   (≈ 30 MiB/s produced)
+```
+
+i.e. **~126 KiB per frame at ~30 MiB/s — the same byte production as inside OneTerm**,
+with zero OneTerm involvement. So that throughput is the **fire program's own
+compute/production rate plus ConPTY's transport**, not a limit OneTerm's parse or render
+imposes. (Aside: a *passive* reader lets conhost coalesce frames — the bare probe only
+*read* ~7.5 MiB/s — but the fire still produces ~30 MiB/s regardless; OneTerm, which drains
+continuously, ingests the full ~30 MiB/s. Neither changes the fire's production rate.)
+
+**Conclusion, proven four independent ways** (pump wait-bound; R1 −40% parse → no delivery
+change; render coalescing → no delivery change; the fire produces the same ~30 MiB/s with
+no OneTerm at all): the limiter is the **producer (DOOM-fire) + ConPTY**, fully outside
+OneTerm's parse/render. **§6.6 option A (accept the ceiling) is confirmed** — no
+OneTerm-side parse or render optimisation raises delivered throughput. The only theoretical
+levers are a faster producer (the fire itself) or a non-ConPTY transport.

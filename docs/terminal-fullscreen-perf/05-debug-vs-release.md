@@ -4,11 +4,11 @@
 > **and extended** to the full hot path — `oneterm-ui`, `oneterm-core`,
 > `oneterm-local`, `oneterm-ssh`, `alacritty_terminal`. The snapshot clone
 > (`oneterm-core`) and PTY pump (`oneterm-local`) had been overlooked and were still
-> at `opt-level=0`. Remedy B (Tier 1/2) also landed. Debug now renders ~260 fps.
+> at `opt-level=0`. Remedy B (Tier 1/2) also landed. Debug now renders continuously.
 > See [`06-results-and-ceiling.md`](06-results-and-ceiling.md) §6.5.
 >
 > The debug build renders one frame and then goes "Not Responding"; release
-> holds ~170 fps. This is **not a logic bug** (a deadlock would hang release
+> renders steadily. This is **not a logic bug** (a deadlock would hang release
 > too) — it is a performance threshold being crossed.
 
 ---
@@ -74,11 +74,11 @@ never converge — the backlog only grows.
 ## 5.3. Why release is fine
 
 With `opt-level = 3`, `lto = "fat"`, `codegen-units = 1`, and
-`overflow-checks = false`, each render is ~6 ms (~170 fps). The main thread finishes
+`overflow-checks = false`, each render is ~6 ms. The main thread finishes
 quickly and returns to the message pump every frame → the window stays responsive.
-Consumption (~6 ms/frame) keeps pace with production (the fire self-caps around
-~170 fps, and coalescing merges multiple `Output` events into one render). The workload
-is identical; only the per-frame CPU cost differs by the debug/release factor.
+Consumption (~6 ms/frame) keeps pace with production (coalescing merges multiple
+`Output` events into one render). The workload is identical; only the per-frame CPU
+cost differs by the debug/release factor.
 
 ---
 
@@ -117,8 +117,8 @@ disproportionately**, because they remove exactly the unoptimized work:
 - ~10.7k transient `Vec` allocations per frame → ~0.
 
 Once per-frame cost drops below the point where the main thread can return to the
-message pump each frame, the debug hang disappears and release comfortably exceeds
-170 fps.
+message pump each frame, the debug hang disappears and release renders the fire
+comfortably.
 
 ---
 
@@ -130,7 +130,7 @@ message pump each frame, the debug hang disappears and release comfortably excee
 | Overflow checks | on | off |
 | Per-frame time | hundreds of ms – seconds | ~6 ms |
 | Main thread returns to message pump | effectively never under load | every frame |
-| Result | one frame, then "Not Responding" | steady ~170 fps |
+| Result | one frame, then "Not Responding" | steady, responsive |
 
 The hang is a symptom of frame time crossing the message-pump-starvation threshold, not
 a concurrency bug. Fix per-frame cost (Tier 1/2) and/or optimize the hot crates in debug

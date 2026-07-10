@@ -1,21 +1,41 @@
 # 7. RFC — Custom Single-Pass Terminal Engine
 
-> **STATUS: PROPOSAL / NOT SCHEDULED.** This is the "Option C, path 3" from
+> **STATUS: SUPERSEDED PREMISE · KEPT AS ARCHITECTURE REFERENCE · NOT SCHEDULED.**
+> This RFC was written as "Option C, path 3" from
 > [`06-results-and-ceiling.md`](06-results-and-ceiling.md) §6.6: replace
-> `alacritty_terminal` with an in-house parser + grid + renderer bridge that does the
-> whole PTY→pixels pipeline in a single pass. It is the **only** path that could
-> genuinely approach the 500 fps DOOM-fire target, and also the **largest and
-> riskiest** change in this folder. Read §7.9 (decision criteria) before committing.
+> `alacritty_terminal` with an in-house parser + grid + renderer bridge doing the whole
+> PTY→pixels pipeline in a single pass, originally justified as *"the only path that could
+> genuinely raise the delivered throughput of the DOOM-fire workload."*
 >
-> This document is a design/RFC, not an implementation record. Nothing here is built.
+> ⚠️ **That justification no longer holds.** [`06`](06-results-and-ceiling.md) §6.7
+> proved (four independent ways) that the end-to-end delivered throughput is bound by the
+> **producer (DOOM-fire) + Windows ConPTY transport**, *not* by OneTerm's parser / grid /
+> render. A faster in-house engine would therefore **not raise delivered throughput** for
+> this workload — it would only add parse/CPU **headroom**, which the far cheaper R1 patch
+> ([`09`](09-patch-alacritty-fork.md)) already delivered (~+70% parse capacity). And
+> because the per-frame cost is **window-size dependent** (§6.4.1), there was never a
+> single throughput figure to target in the first place.
+>
+> **What this document is now:** a design/architecture reference for a from-scratch VT
+> engine (storage layout, snapshot bridge, migration seam, correctness plan), useful if a
+> rewrite is ever motivated by *other* goals (owning the engine, dropping the rev-pinned
+> fork, non-ConPTY transports). It is **not** a route to higher delivered throughput.
+> Nothing here is built. Read §7.9 before treating any of it as scheduled work.
 
 ---
 
 ## 7.1. Goal & non-goals
 
-**Goal.** Raise the DOOM-fire fps counter from ~250 toward ~500 by removing the three
-structural costs that a third-party engine forces on us, and by choosing data
-structures tuned for the worst case (full-screen, every-cell-changes, truecolor).
+> **Correction (see the status banner + [`06`](06-results-and-ceiling.md) §6.7):** the
+> throughput goal below is **retained only as the original RFC text**. It is disproven —
+> delivered throughput is producer/ConPTY-bound and window-size dependent, so this engine
+> could not raise it. Read the goal as "the historical motivation"; the durable value of
+> the design is **CPU/parse headroom** and **dropping the rev-pinned fork**, not a
+> throughput number.
+
+**Goal (as originally written — superseded).** Cut the per-frame pump+render cost by
+removing the three structural costs a third-party engine forces on us, and by choosing
+data structures tuned for the worst case (full-screen, every-cell-changes, truecolor).
 
 **Non-goals.**
 - Not a rewrite of the UI, SSH/SFTP, or session layers — only the parse+grid+render
@@ -25,7 +45,10 @@ structures tuned for the worst case (full-screen, every-cell-changes, truecolor)
   not with xterm's full historical surface.
 
 **Success criteria (must all hold to justify the effort):**
-1. DOOM-fire counter ≥ ~450 fps in release on the reference machine.
+1. A Phase-0 spike shows a **large per-frame pump+render CPU reduction** — parse capacity
+   clearly above the R1 baseline (~69 MiB/s) plus the render-clone eliminated — enough to
+   justify the migration on **headroom** grounds. *(It will not raise delivered
+   throughput — §6.7 — so a throughput number is explicitly **not** a criterion.)*
 2. Zero visible regressions vs the alacritty path on a differential test corpus
    (§7.7): same bytes in → same rendered grid out.
 3. All existing features intact: scrollback, selection, search, URL/OSC 8, OSC
@@ -44,9 +67,9 @@ Today the PTY→pixels path pays three redundant costs (measured in 06 §6.2–6
 
 | # | Redundancy | Where | Cost |
 |---|---|---|---|
-| R1 | **Double parse** — every byte runs through `alacritty::Processor::advance` *and* a second `vte::Parser` for OSC 7/9/52/133 + `CSI 2J/3J` clear detection | `local/event_loop.rs`, `ssh/task.rs`, `core/osc.rs` | part of the 72%-busy pump |
+| R1 | **Double parse** — every byte runs through `alacritty::Processor::advance` *and* a second `vte::Parser` for OSC 7/9/52/133 + `CSI 2J/3J` clear detection | `local/event_loop.rs`, `ssh/task.rs`, `core/osc.rs` | part of the 72%-busy pump (pre-R1) |
 | R2 | **Snapshot clone** — `TerminalContent::from()` copies ~5.4k cells out of `Term` under the `FairMutex` every render | `core/content.rs` | ~200 µs lock hold + alloc/copy per frame |
-| R3 | **Opaque grid** — alacritty's `Grid<Cell>` is general-purpose (scrollback ring, wide-char spacers, per-cell `Flags`/`Hyperlink`); its per-cell mutation cost is fixed and unmodifiable (rev-pinned) | `alacritty_terminal` | the dominant part of the 72% |
+| R3 | **Opaque grid** — alacritty's `Grid<Cell>` is general-purpose (scrollback ring, wide-char spacers, per-cell `Flags`/`Hyperlink`); its per-cell mutation cost is fixed and unmodifiable (rev-pinned) | `alacritty_terminal` | the dominant part of the pump's parse+mutate time |
 
 A single-pass engine collapses all three:
 
@@ -58,10 +81,11 @@ A single-pass engine collapses all three:
   "overwrite the whole screen with truecolor cells every frame", killing R3's
   fixed cost and enabling SIMD/bulk fills.
 
-The arithmetic from 06 §6.4: at 250 fps we mutate ~1.35M cells/s; 500 fps needs
-~2.7M cells/s. Removing R1 (~20%) + R2 (clone + lock) + a cache-friendly R3 layout is
-the only combination that plausibly reaches ~2× on a single thread. **Plausibly, not
-provably** — hence the Phase-0 spike gate.
+Removing R1 (the double-parse) + R2 (the clone + lock hold) + a cache-friendly R3 layout
+is the combination that would most reduce per-frame pump+render CPU on a single thread.
+**Per §6.7 this buys CPU/parse headroom (lower power, room for more concurrent sessions),
+not higher delivered throughput** — the latter is producer/ConPTY-bound. The Phase-0
+spike (§7.8) therefore measures the CPU/parse-capacity delta, not a delivery figure.
 
 ---
 
@@ -162,7 +186,8 @@ One `vte`-style state machine. On each dispatch it (a) mutates the grid **and** 
 routes OSC/DCS/mode/clear to the side channel — so OSC 7/9/52/133 and `CSI 2J/3J`
 clear detection come for free, no second pass. (We can keep the `vte` crate itself —
 it is a tiny, dependency-light state machine and is *not* the alacritty fork; only the
-`Term`/`Grid`/`Processor` layer is being replaced.)
+`Term`/`Grid`/`Processor` layer is being replaced. Indeed R1 in doc 09 already added the
+OSC hook to our vendored `vte`.)
 
 ### 7.4.4. Threading model
 
@@ -221,7 +246,9 @@ battle-tested emulator is the real cost.
 > **tty caveat.** `alacritty_terminal::tty` (ConPTY on Windows) is a *separate* concern
 > from the parser/grid. It can be kept even after replacing the engine, or replaced
 > independently. Decouple these two decisions — the engine RFC does **not** require
-> touching the PTY backend.
+> touching the PTY backend. (And note: the PTY backend is exactly where the delivered-
+> throughput limit lives — §6.7 — so replacing the engine while keeping ConPTY changes
+> CPU cost, not delivery.)
 
 ---
 
@@ -239,7 +266,8 @@ Correctness is the dominant risk (VT is a large, edge-case-ridden spec). Plan:
   bytes; resize never loses/duplicates rows.
 - **Fuzzing:** `cargo fuzz` the parser on arbitrary bytes (must never panic/OOM).
 - **Perf gate:** the `[TerminalElement]` + `[PTY pump]` instrumentation (already in
-  the tree) is the acceptance meter — re-measure per 06 §6.6.
+  the tree) is the acceptance meter — re-measure per 06 §6.6 (`paint_us`, pump % busy,
+  parse capacity).
 
 ---
 
@@ -247,7 +275,7 @@ Correctness is the dominant risk (VT is a large, edge-case-ridden spec). Plan:
 
 | Phase | Work | Rough size | Gate |
 |---|---|---|---|
-| **0. Spike** | Minimal parser + SoA grid + double-buffer, DOOM-fire path only, no features | ~1–2 wk | **Does it hit ≥450 fps?** If no → stop. |
+| **0. Spike** | Minimal parser + SoA grid + double-buffer, DOOM-fire path only, no features | ~1–2 wk | **Does it materially cut per-frame pump+render CPU (parse capacity well above the R1 ~69 MiB/s baseline, clone eliminated)?** If no → stop. |
 | 1. Type seam + `TerminalEngine` trait, adapt alacritty | decoupling | ~1 wk | gate stays green, no behaviour change |
 | 2. Full parser (CSI/OSC/DCS/ESC/modes) + differential corpus | the bulk | ~3–5 wk | parity on corpus |
 | 3. Scrollback, selection, search, resize/reflow parity | | ~2–3 wk | feature parity |
@@ -262,14 +290,16 @@ Ranges are indicative, not commitments.
 ## 7.9. Decision criteria & recommendation
 
 **Pursue only if all are true:**
-- 500 fps on the DOOM-fire worst case is a **hard product requirement** (not a
-  curiosity), AND
-- The Phase-0 spike demonstrates ≥450 fps is actually reachable, AND
+- The motivation is **not** delivered throughput — a Phase-0 spike would *not* raise it
+  (§6.7: producer/ConPTY-bound, size-dependent). Valid motivations are owning the
+  engine, dropping the rev-pinned alacritty fork, or enabling a non-ConPTY transport, AND
+- Those goals are a **hard product requirement** (not a curiosity), AND
 - There is appetite to own a VT emulator's long-tail correctness + maintenance.
 
-**Otherwise: don't.** Per 06 §6.6 option A, ~250–260 fps is near the practical ceiling
-for this pathological workload with the current stack, and normal terminal usage is
-unaffected. The high-value work (Tier 1/2/3, debug fix, damage fix) is already banked.
+**Otherwise: don't.** Per 06 §6.6 option A / §6.7, the delivered throughput at the
+benchmark size is the practical ceiling for this pathological workload with *any* engine
+(the limiter is outside OneTerm), and normal terminal usage is unaffected. The high-value
+work (Tier 1/2/3, debug fix, damage fix, R1 parse headroom) is already banked.
 
 ### 7.9.1. Lower-risk alternative — patch the fork instead of replacing it
 
@@ -282,9 +312,9 @@ cheaper middle path exists:
 - Keep OneTerm's ~110 call sites **unchanged** (types don't move).
 
 This captures most of R2 + R3 with a fraction of the migration risk, at the cost of
-maintaining a heavier fork delta. It will not remove R1 (the double-parse) unless the
-fork also exposes an OSC/clear hook, but it is the pragmatic first step if the Phase-0
-numbers are promising but a full rewrite is too big to fund.
+maintaining a heavier fork delta. R1 (the double-parse) is already removed this way —
+doc 09 added the OSC/clear hook to the vendored fork. It is the pragmatic first step if
+the headroom is worth it but a full rewrite is too big to fund.
 
 ---
 
@@ -292,21 +322,26 @@ numbers are promising but a full rewrite is too big to fund.
 
 | Alternative | Verdict |
 |---|---|
-| Optimize within OneTerm only (done: Tier 1/2/3) | ✅ done; tops out ~250–260, cannot reach 500 |
-| Remove only the OSC double-parse (R1) | ~+25% (~310); blocked by clear-detection coupling (06 §6.6.C); not enough alone |
-| GPU quad instancing (render side) | improves `paint_us`/smoothness only; **does not move the counter** (06 §6.3) |
+| Optimize within OneTerm only (done: Tier 1/2/3) | ✅ done; buys per-frame CPU/alloc headroom; delivered throughput is outside OneTerm (§6.7) |
+| Remove only the OSC double-parse (R1) | ✅ done (doc 09): ~+70% parse capacity, pump parse-bound → wait-bound; buys pump-CPU headroom, not delivered throughput |
+| GPU quad instancing (render side) | improves `paint_us`/smoothness only; **does not change delivered throughput** (06 §6.3) |
 | Multi-thread alacritty's grid mutation | not possible without forking; alacritty's `Term` is single-writer |
-| **Custom single-pass engine (this RFC)** | the only path that can approach 500 — but largest cost/risk |
-| **Patch the existing fork (§7.9.1)** | pragmatic middle ground; captures R2+R3, keeps types |
+| **Custom single-pass engine (this RFC)** | the only *pure-Rust* path that removes all three structural costs — but largest cost/risk, and does not raise delivered throughput (§6.7) |
+| **Patch the existing fork (§7.9.1)** | pragmatic middle ground; captures R2+R3, keeps types (R1 already done). Full design in [`09-patch-alacritty-fork.md`](09-patch-alacritty-fork.md). |
+| **Adopt `libghostty-vt`** (Ghostty's VT lib, via FFI) | inherits a fast, battle-tested engine — no parser to write; but adds Zig+FFI+Windows-MSVC build risk and an FFI read boundary. Full evaluation in [`08-libghostty-vt-evaluation.md`](08-libghostty-vt-evaluation.md). |
+| **Adopt `termwiz`** (WezTerm's VT lib, pure Rust) | lower-risk Rust-native baseline to benchmark; cost structure vs alacritty measured favourable (see doc 08 §8.5) |
 
 ---
 
 ## 7.11. Summary
 
-A custom single-pass engine is the *only* design that removes all three structural
-costs (double-parse, snapshot clone, opaque fixed-cost grid) and could plausibly
-double single-thread grid-mutation throughput to reach ~500 fps. It is also a
-multi-month, correctness-critical rewrite that decouples OneTerm from the pinned
-alacritty fork and touches ~110 sites. **Gate it behind a Phase-0 spike**; if the
-spike does not clear ~450 fps, accept the ceiling. If the appetite is "faster but not a
-rewrite", prefer patching the existing fork (§7.9.1) first.
+A custom single-pass engine removes all three structural costs (double-parse, snapshot
+clone, opaque fixed-cost grid) and would decouple OneTerm from the pinned alacritty fork.
+It was originally pitched as the path to higher delivered throughput — but
+[`06`](06-results-and-ceiling.md) §6.7 disproves that: delivery is producer/ConPTY-bound
+and window-size dependent, so this engine would add parse/CPU **headroom**, not delivered
+throughput. It remains a multi-month, correctness-critical rewrite touching ~110 sites.
+**Do not pursue it for throughput.** If the motivation is instead "own the engine / drop
+the fork / enable a non-ConPTY transport", treat this as the reference design and still
+gate it behind a Phase-0 spike. For pure headroom with far less risk, R1 (shipped) and the
+rest of [`09`](09-patch-alacritty-fork.md) are the pragmatic path.

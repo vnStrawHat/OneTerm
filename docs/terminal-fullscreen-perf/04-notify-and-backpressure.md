@@ -3,7 +3,7 @@
 > **STATUS: ✅ 1 ms timer REMOVED; backpressure NOT needed.** The fixed 1 ms delay
 > in the `Output` handler is gone. Channel backpressure turned out to be unnecessary:
 > the pump `try_send`s into a 4096-slot channel and never blocks, and the render is
-> **not** the fps limiter (the pump is — see
+> **not** the delivery-rate limiter (the pump is — see
 > [`06-results-and-ceiling.md`](06-results-and-ceiling.md) §6.3).
 >
 > The `Output` event handler adds a fixed 1 ms delay per batch, and the
@@ -34,8 +34,8 @@ SessionEvent::Output => {
 }
 ```
 
-The minimum frame period is therefore `1 ms + render time`. At a 6.25 ms budget
-(160 fps) the 1 ms is ~16% of the frame. Once Tier 1/2 shrink render time, this fixed
+The minimum frame period is therefore `1 ms + render time`. At a ~6 ms render budget
+the 1 ms is ~16% of the frame. Once Tier 1/2 shrink render time, this fixed
 cost dominates a larger fraction.
 
 The delay's intent is to **coalesce** bursts of output into a single render. But
@@ -45,7 +45,7 @@ happens without the sleep — the timer mostly adds latency.
 ### Options (in order of preference)
 
 1. **Remove the timer entirely** and rely on `drain_coalesced_events` + GPUI's own
-   frame scheduling to coalesce. Simplest; re-measure fps.
+   frame scheduling to coalesce. Simplest; re-measure `paint_us` / pump busy.
 2. **Coalesce on the frame boundary** instead of a wall-clock sleep: request a redraw
    and let GPUI merge multiple `notify()`s into one paint per vsync/frame, rather than
    pacing with `timer(1ms)`.
