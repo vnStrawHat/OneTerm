@@ -17,7 +17,8 @@ use log::warn;
 
 use oneterm_core::SessionEvent;
 use oneterm_core::terminal::{
-    ColorFormatter, PendingColorQuery, SharedColorQueries, new_color_queries,
+    ColorFormatter, Osc133Kind, OscPayload, PendingColorQuery, SharedColorQueries,
+    new_color_queries, parse_cwd_url, parse_osc,
 };
 
 use crate::event_loop::{ShellMsg, ShellNotifier};
@@ -124,6 +125,36 @@ impl LocalListener {
         st.alive = false;
         st.exit_code = code;
     }
+
+    /// Handle an OSC forwarded by the engine (`Event::Osc`, OSC 7/9/133) — update
+    /// the state cache and forward the matching `SessionEvent`. Called on the pump
+    /// thread during `Processor::advance` (the `Term` lock is held, `state` is not).
+    fn handle_osc_payload(&self, payload: OscPayload) {
+        match payload {
+            OscPayload::Cwd(url) => {
+                let cwd = parse_cwd_url(&url);
+                self.state.lock().unwrap().cwd = Some(cwd.clone());
+                self.forward(SessionEvent::Cwd(cwd));
+            }
+            OscPayload::ShellIntegration(kind) => {
+                {
+                    let mut st = self.state.lock().unwrap();
+                    match kind {
+                        Osc133Kind::PromptStart => {
+                            st.prompt_count = st.prompt_count.saturating_add(1);
+                        }
+                        Osc133Kind::OutputEnd { exit_code } => {
+                            st.last_exit_code = exit_code;
+                        }
+                        _ => {}
+                    }
+                }
+                self.forward(SessionEvent::ShellIntegration(kind));
+            }
+            OscPayload::Notification(msg) => self.forward(SessionEvent::Notification(msg)),
+            OscPayload::Progress(progress) => self.forward(SessionEvent::Progress(progress)),
+        }
+    }
 }
 
 impl EventListener for LocalListener {
@@ -145,10 +176,11 @@ impl EventListener for LocalListener {
                 self.set_clipboard(text.clone());
                 self.forward(SessionEvent::Clipboard(Some(text)));
             }
-            // OSC 52 load (query clipboard) — needs a clipboard callback from the
-            // UI, not wired yet → ignore (log).
+            // OSC 52 load (query clipboard) — the program asked us to send the
+            // clipboard back. Forward so the UI replies (see security note: this
+            // exposes the local clipboard to programs, including remote via SSH).
             Event::ClipboardLoad(_, _) => {
-                warn!("LocalListener: ClipboardLoad (OSC 52 read) not supported yet");
+                self.forward(SessionEvent::ClipboardRead);
             }
             // ── PTY write (OSC/DA response) ─────────────────────────────
             Event::PtyWrite(s) => self.pty_write(s.as_bytes()),
@@ -165,6 +197,19 @@ impl EventListener for LocalListener {
             // ── Bell ──────────────────────────────────────────────────
             Event::Bell => {
                 self.forward(SessionEvent::Bell);
+            }
+            // ── OSC 7/9/133 (fork: Handler::report_osc → Event::Osc) ────
+            // Parse once from the single VT pass — no second vte::Parser.
+            Event::Osc { params, .. } => {
+                let refs: Vec<&[u8]> = params.iter().map(|p| p.as_slice()).collect();
+                if let Some(payload) = parse_osc(&refs) {
+                    self.handle_osc_payload(payload);
+                }
+            }
+            // ── Screen cleared (CSI 2J/3J, RIS) ─────────────────────────
+            // Bump clear_epoch so the UI resets per-line gutter timestamps.
+            Event::ClearScreen => {
+                self.state.lock().unwrap().clear_epoch += 1;
             }
             // ── OSC 10/11/12 color query (`?`) ─────────────────────────
             // Enqueue; the event loop reads the current color from `Term`
@@ -244,5 +289,53 @@ mod tests {
     fn pty_write_without_notifier_logs_not_panics() {
         let (l, _rx) = listener();
         l.send_event(Event::PtyWrite("x".into()));
+    }
+
+    #[test]
+    fn clear_screen_bumps_clear_epoch() {
+        let (l, _rx) = listener();
+        let before = l.state.lock().unwrap().clear_epoch;
+        l.send_event(Event::ClearScreen);
+        assert_eq!(l.state.lock().unwrap().clear_epoch, before + 1);
+    }
+
+    #[test]
+    fn osc7_cwd_forwards_and_caches() {
+        let (l, rx) = listener();
+        l.send_event(Event::Osc {
+            params: vec![b"7".to_vec(), b"file:///tmp".to_vec()],
+            bell_terminated: true,
+        });
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            SessionEvent::Cwd(std::path::PathBuf::from("/tmp"))
+        );
+        assert_eq!(
+            l.state.lock().unwrap().cwd.as_deref(),
+            Some(std::path::Path::new("/tmp"))
+        );
+    }
+
+    #[test]
+    fn osc133_prompt_forwards() {
+        let (l, rx) = listener();
+        l.send_event(Event::Osc {
+            params: vec![b"133".to_vec(), b"A".to_vec()],
+            bell_terminated: true,
+        });
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionEvent::ShellIntegration(_)
+        ));
+    }
+
+    #[test]
+    fn clipboard_load_forwards_read_request() {
+        let (l, rx) = listener();
+        l.send_event(Event::ClipboardLoad(
+            alacritty_terminal::term::ClipboardType::Clipboard,
+            std::sync::Arc::new(|s: &str| s.to_string()),
+        ));
+        assert_eq!(rx.try_recv().unwrap(), SessionEvent::ClipboardRead);
     }
 }

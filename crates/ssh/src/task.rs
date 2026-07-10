@@ -8,13 +8,11 @@ use std::sync::Arc;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
-use alacritty_terminal::vte::Parser as VteParser;
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use russh::ChannelMsg;
 
 use oneterm_core::SessionEvent;
 use oneterm_core::terminal::default_color_for_index;
-use oneterm_core::terminal::osc::{Osc133Kind, OscPayload, OscSink, parse_cwd_url};
 
 use crate::handler::SshClientHandler;
 use crate::listener::{Cmd, SshListener};
@@ -22,8 +20,9 @@ use crate::session::TermSize;
 use crate::state::SharedState;
 
 /// Main tokio task: reads data from the SSH channel + receives commands from the
-/// main thread. Feeds bytes to `Term` (via ansi::Processor) + `OscSink` (via
-/// vte::Parser).
+/// main thread. Feeds bytes to `Term` (via ansi::Processor) in a **single pass**;
+/// OSC 7/9/133 and screen clears arrive via `Event::Osc` / `Event::ClearScreen`
+/// (OneTerm alacritty fork) and are handled in `SshListener` — no second parser.
 ///
 /// **`handle` must be kept alive** — dropping it closes the SSH connection.
 pub(crate) async fn ssh_main_task(
@@ -36,8 +35,6 @@ pub(crate) async fn ssh_main_task(
 ) {
     log::info!("ssh_main_task: started");
     let mut processor = Processor::<StdSyncHandler>::new();
-    let mut vte_parser = VteParser::new();
-    let mut osc_sink = OscSink::default();
 
     loop {
         tokio::select! {
@@ -114,18 +111,6 @@ pub(crate) async fn ssh_main_task(
                             for reply in replies {
                                 listener.pty_write(reply.as_bytes());
                             }
-                        }
-
-                        // Feed OscSink (vte::Parser) — in parallel.
-                        vte_parser.advance(&mut osc_sink, bytes);
-                        while let Some(payload) = osc_sink.take() {
-                            handle_osc(&payload, &state, &listener);
-                        }
-
-                        // Screen was just cleared (clear/RIS) → bump clear_epoch so
-                        // the UI resets per-line timestamps (gutter).
-                        if osc_sink.take_clear() {
-                            state.lock().unwrap().clear_epoch += 1;
                         }
 
                         // Notify UI.
@@ -219,46 +204,4 @@ pub(crate) async fn ssh_main_task(
         }
     }
     log::info!("ssh_main_task: exiting");
-}
-
-/// Handle OSC payload — update state + forward events.
-fn handle_osc(payload: &OscPayload, state: &SharedState, listener: &SshListener) {
-    match payload {
-        OscPayload::Cwd(url) => {
-            let cwd = parse_cwd_url(url);
-            {
-                let mut st = state.lock().unwrap();
-                st.cwd = Some(cwd.clone());
-            }
-            listener.forward(SessionEvent::Cwd(cwd));
-        }
-        OscPayload::ShellIntegration(kind) => {
-            {
-                let mut st = state.lock().unwrap();
-                match kind {
-                    Osc133Kind::PromptStart => {
-                        st.prompt_count = st.prompt_count.saturating_add(1);
-                    }
-                    Osc133Kind::OutputEnd { exit_code } => {
-                        st.last_exit_code = *exit_code;
-                    }
-                    _ => {}
-                }
-            }
-            listener.forward(SessionEvent::ShellIntegration(*kind));
-        }
-        OscPayload::Clipboard { query, .. } => {
-            // Set (query=false) is handled by alacritty's ClipboardStore.
-            // Read (query=true) → ask the UI to reply with the clipboard.
-            if *query {
-                listener.forward(SessionEvent::ClipboardRead);
-            }
-        }
-        OscPayload::Notification(msg) => {
-            listener.forward(SessionEvent::Notification(msg.clone()));
-        }
-        OscPayload::Progress(progress) => {
-            listener.forward(SessionEvent::Progress(*progress));
-        }
-    }
 }

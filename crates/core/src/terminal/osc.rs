@@ -1,13 +1,18 @@
-//! Parse side-channel OSC sequences that the alacritty VTE drops or routes through
-//! `EventListener`: OSC 7 (cwd), OSC 52 (clipboard), OSC 133 (shell integration).
-//! OSC 8 (hyperlink) is stored by alacritty directly in the cell → see `url.rs`.
+//! Parse side-channel OSC sequences the terminal engine forwards via
+//! `Event::Osc` (OSC 7 cwd, OSC 9 notification/progress, OSC 133 shell
+//! integration). These are the OSCs vte does not dispatch to a dedicated
+//! `Handler` method; the OneTerm alacritty fork routes them through
+//! `Handler::report_osc` → `Event::Osc`, so we parse the VT stream **once**
+//! (no second `vte::Parser`). See `docs/terminal-fullscreen-perf/09-*.md`.
 //!
-//! Reference: `freya-terminal/osc7.rs` + additions for OSC 52 and OSC 133.
+//! OSC 0/2 (title), OSC 4/10/11/12 (colors), OSC 8 (hyperlink) and OSC 52
+//! (clipboard) are handled by the engine itself and surface via their own
+//! events. Screen clears (`CSI 2J/3J`, RIS) arrive as `Event::ClearScreen`.
+//!
 //! OSC 133 spec: https://gitlab.freedesktop.org/Per_Bothner/specifications/blob/master/proposals/semantic-prompts.md
 
 use std::path::PathBuf;
 
-use alacritty_terminal::vte::{Params, Perform};
 use base64::Engine;
 
 /// OSC 133 marker kind — marks prompt/command/output boundaries.
@@ -42,13 +47,11 @@ pub enum TerminalProgress {
     Paused(u8),
 }
 
-/// A captured OSC payload (kind + raw data).
+/// A captured OSC payload (kind + parsed data).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OscPayload {
     /// OSC 7 — `file://host/path`.
     Cwd(String),
-    /// OSC 52 — clipboard base64 payload (the `?` parameter = query).
-    Clipboard { query: bool, base64: String },
     /// OSC 133 — shell integration marker (prompt/command boundary).
     ShellIntegration(Osc133Kind),
     /// OSC 9 — desktop notification (iTerm2 / Windows Terminal). Payload = message.
@@ -57,180 +60,77 @@ pub enum OscPayload {
     Progress(TerminalProgress),
 }
 
-/// A sink that runs alongside `Term` to capture OSCs that alacritty drops or
-/// routes elsewhere: OSC 7 (cwd), OSC 52 (clipboard), OSC 133 (shell
-/// integration), OSC 9 (notification), OSC 9;4 (progress). It parses the PTY
-/// byte stream directly, in parallel with alacritty's Processor.
-#[derive(Default)]
-pub struct OscSink {
-    /// FIFO queue of captured payloads. A queue (not a single slot) so multiple
-    /// OSCs arriving in the same read batch are all preserved and handled in
-    /// order (e.g. a prompt draw emitting OSC 133 A/B in one write).
-    queue: Vec<OscPayload>,
-    /// Whether a full-screen clear sequence (`CSI 2J` / `CSI 3J` / `ESC c` = RIS)
-    /// has been seen since the last `take_clear()`. Used to tell the upper layer
-    /// to reset per-line timestamps (gutter), because a `clear` resets the
-    /// absolute line counter → new content REUSES old indices, otherwise it
-    /// would show stale times.
-    clear_pending: bool,
-}
-
-impl OscSink {
-    /// Pop the oldest captured payload (FIFO), or `None` if empty.
-    pub fn take(&mut self) -> Option<OscPayload> {
-        if self.queue.is_empty() {
-            None
-        } else {
-            Some(self.queue.remove(0))
+/// Parse the OSC parameters forwarded by the engine (`Event::Osc { params, .. }`)
+/// into an [`OscPayload`]. `params[0]` is the OSC number; the rest are the raw
+/// semicolon-separated parameter fields. Returns `None` for OSCs we don't handle.
+///
+/// Only OSC 7 / 9 / 133 are recognised here — every other OSC is either handled
+/// by the engine directly (title/colors/clipboard/hyperlink) or ignored.
+pub fn parse_osc(params: &[&[u8]]) -> Option<OscPayload> {
+    if params.is_empty() {
+        return None;
+    }
+    let kind = std::str::from_utf8(params[0]).ok()?;
+    match kind {
+        // OSC 7: params = ["7", "file://..."]
+        "7" if params.len() >= 2 => {
+            let url = std::str::from_utf8(params[1]).ok()?;
+            Some(OscPayload::Cwd(url.to_owned()))
         }
-    }
-
-    /// Enqueue a captured payload.
-    fn push(&mut self, payload: OscPayload) {
-        log::debug!("OSC captured: {payload:?}");
-        self.queue.push(payload);
-    }
-
-    /// Returns `true` (and resets the flag) if a full-screen clear sequence has
-    /// been detected since the previous call.
-    pub fn take_clear(&mut self) -> bool {
-        std::mem::take(&mut self.clear_pending)
-    }
-}
-
-impl Perform for OscSink {
-    fn osc_dispatch(&mut self, params: &[&[u8]], bell_terminated: bool) {
-        if params.is_empty() {
-            return;
-        }
-        let kind = match std::str::from_utf8(params[0]) {
-            Ok(s) => s,
-            Err(_) => return,
-        };
-        let params_debug: Vec<String> = params
-            .iter()
-            .map(|p| String::from_utf8_lossy(p).into_owned())
-            .collect();
-        log::debug!(
-            "OSC dispatch: kind={kind:?}, params={params_debug:?}, bell_terminated={bell_terminated}"
-        );
-        match kind {
-            // OSC 7: params = ["7", "file://..."]
-            "7" if params.len() >= 2 => {
-                if let Ok(url) = std::str::from_utf8(params[1]) {
-                    self.push(OscPayload::Cwd(url.to_owned()));
-                }
-            }
-            // OSC 9: notification (`9;msg`) OR taskbar progress (`9;4;st;pr`).
-            // Windows Terminal disambiguates: sub-param "4" = progress, else notify.
-            "9" if params.len() >= 2 => {
-                if params[1] == b"4" {
-                    // OSC 9;4;state;percent — taskbar progress.
-                    let parse = |p: &[u8]| std::str::from_utf8(p).ok()?.parse::<u8>().ok();
-                    let state = params.get(2).and_then(|p| parse(p)).unwrap_or(0);
-                    let pct = params.get(3).and_then(|p| parse(p)).unwrap_or(0).min(100);
-                    let progress = match state {
-                        0 => Some(TerminalProgress::Remove),
-                        1 => Some(TerminalProgress::Set(pct)),
-                        2 => Some(TerminalProgress::Error(pct)),
-                        3 => Some(TerminalProgress::Indeterminate),
-                        4 => Some(TerminalProgress::Paused(pct)),
-                        _ => None,
-                    };
-                    if let Some(p) = progress {
-                        self.push(OscPayload::Progress(p));
-                    }
+        // OSC 9: notification (`9;msg`) OR taskbar progress (`9;4;st;pr`).
+        // Windows Terminal disambiguates: sub-param "4" = progress, else notify.
+        "9" if params.len() >= 2 => {
+            if params[1] == b"4" {
+                // OSC 9;4;state;percent — taskbar progress.
+                let parse = |p: &[u8]| std::str::from_utf8(p).ok()?.parse::<u8>().ok();
+                let state = params.get(2).and_then(|p| parse(p)).unwrap_or(0);
+                let pct = params.get(3).and_then(|p| parse(p)).unwrap_or(0).min(100);
+                let progress = match state {
+                    0 => TerminalProgress::Remove,
+                    1 => TerminalProgress::Set(pct),
+                    2 => TerminalProgress::Error(pct),
+                    3 => TerminalProgress::Indeterminate,
+                    4 => TerminalProgress::Paused(pct),
+                    _ => return None,
+                };
+                Some(OscPayload::Progress(progress))
+            } else {
+                // OSC 9;message — desktop notification. The message may itself
+                // contain ';', so rejoin the remaining params.
+                let body = params[1..]
+                    .iter()
+                    .map(|p| String::from_utf8_lossy(p))
+                    .collect::<Vec<_>>()
+                    .join(";");
+                if body.is_empty() {
+                    None
                 } else {
-                    // OSC 9;message — desktop notification. The message may itself
-                    // contain ';', so rejoin the remaining params.
-                    let body = params[1..]
-                        .iter()
-                        .map(|p| String::from_utf8_lossy(p))
-                        .collect::<Vec<_>>()
-                        .join(";");
-                    if !body.is_empty() {
-                        self.push(OscPayload::Notification(body));
-                    }
+                    Some(OscPayload::Notification(body))
                 }
             }
-            // OSC 52: params = ["52", "c", "<base64>" | "?"]
-            "52" if params.len() >= 2 => {
-                if let Ok(target) = std::str::from_utf8(params[1]) {
-                    // Only care about clipboard 'c' (system clipboard).
-                    if target.contains('c') {
-                        let payload = params.get(2).copied().unwrap_or(&[]);
-                        if payload == b"?" {
-                            self.push(OscPayload::Clipboard {
-                                query: true,
-                                base64: String::new(),
-                            });
-                        } else if let Ok(b64) = std::str::from_utf8(payload) {
-                            self.push(OscPayload::Clipboard {
-                                query: false,
-                                base64: b64.to_owned(),
-                            });
-                        }
-                    }
+        }
+        // OSC 133: shell integration markers.
+        // params = ["133", "A" | "B" | "C" | "D"] or ["133", "D", "exit_code"].
+        "133" if params.len() >= 2 => {
+            let sub = std::str::from_utf8(params[1]).ok()?;
+            let marker = match sub {
+                "A" => Osc133Kind::PromptStart,
+                "B" => Osc133Kind::PromptEnd,
+                "C" => Osc133Kind::OutputStart,
+                "D" => {
+                    // D;exit_code → params[2] = exit_code (if present).
+                    let exit_code = params.get(2).and_then(|p| {
+                        std::str::from_utf8(p)
+                            .ok()
+                            .and_then(|s| s.parse::<i32>().ok())
+                    });
+                    Osc133Kind::OutputEnd { exit_code }
                 }
-            }
-            // OSC 133: shell integration markers
-            // params = ["133", "A" | "B" | "C" | "D"]
-            // params = ["133", "D", "exit_code"] (D with exit code)
-            "133" if params.len() >= 2 => {
-                let sub = match std::str::from_utf8(params[1]) {
-                    Ok(s) => s,
-                    Err(_) => return,
-                };
-                let marker = match sub {
-                    "A" => Some(Osc133Kind::PromptStart),
-                    "B" => Some(Osc133Kind::PromptEnd),
-                    "C" => Some(Osc133Kind::OutputStart),
-                    "D" => {
-                        // D;exit_code → params[2] = exit_code (if present).
-                        let exit_code = params.get(2).and_then(|p| {
-                            std::str::from_utf8(p)
-                                .ok()
-                                .and_then(|s| s.parse::<i32>().ok())
-                        });
-                        Some(Osc133Kind::OutputEnd { exit_code })
-                    }
-                    _ => None,
-                };
-                if let Some(m) = marker {
-                    self.push(OscPayload::ShellIntegration(m));
-                }
-            }
-            _ => {}
+                _ => return None,
+            };
+            Some(OscPayload::ShellIntegration(marker))
         }
-    }
-
-    /// Detect `CSI 2J` (clear whole screen) and `CSI 3J` (clear scrollback) —
-    /// emitted by `clear` / `cls` / `tput clear`. `CSI 0J`/`CSI 1J`
-    /// (partial erase) do NOT count as a clear.
-    fn csi_dispatch(
-        &mut self,
-        params: &Params,
-        _intermediates: &[u8],
-        _ignore: bool,
-        action: char,
-    ) {
-        if action == 'J' {
-            let mode = params
-                .iter()
-                .next()
-                .and_then(|sub| sub.first().copied())
-                .unwrap_or(0);
-            if mode == 2 || mode == 3 {
-                self.clear_pending = true;
-            }
-        }
-    }
-
-    /// `ESC c` = RIS (Reset to Initial State) → clears everything → treated as a clear.
-    fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, byte: u8) {
-        if byte == b'c' {
-            self.clear_pending = true;
-        }
+        _ => None,
     }
 }
 
@@ -262,22 +162,12 @@ pub fn encode_osc52(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use alacritty_terminal::vte::Parser as VteParser;
-
     use super::*;
 
-    fn sniff(chunks: &[&[u8]]) -> Option<OscPayload> {
-        let mut parser = VteParser::new();
-        let mut sink = OscSink::default();
-        for chunk in chunks {
-            parser.advance(&mut sink, chunk);
-        }
-        sink.take()
-    }
-
+    // ── OSC 7 (cwd) ────────────────────────────────────────────────
     #[test]
-    fn osc7_bel() {
-        let p = sniff(&[b"\x1b]7;file:///home/marc\x07"]).unwrap();
+    fn osc7_cwd() {
+        let p = parse_osc(&[b"7", b"file:///home/marc"]).unwrap();
         assert_eq!(p, OscPayload::Cwd("file:///home/marc".into()));
         assert_eq!(
             parse_cwd_url("file:///home/marc"),
@@ -299,161 +189,111 @@ mod tests {
     }
 
     #[test]
-    fn osc7_split() {
-        let p = sniff(&[b"\x1b]7;file://", b"/var", b"/log\x07"]).unwrap();
-        assert_eq!(p, OscPayload::Cwd("file:///var/log".into()));
-    }
-
-    #[test]
     fn ignores_other_oscs() {
-        assert_eq!(sniff(&[b"\x1b]0;hello\x07"]), None);
-        assert_eq!(sniff(&[b"\x1b]70;nope\x07"]), None);
+        // OSC 0 (title) and unknown OSC 70 are not our concern.
+        assert_eq!(parse_osc(&[b"0", b"hello"]), None);
+        assert_eq!(parse_osc(&[b"70", b"nope"]), None);
+        // OSC 52 is handled by the engine, not here.
+        assert_eq!(parse_osc(&[b"52", b"c", b"aGk="]), None);
+        // Empty / lone number.
+        assert_eq!(parse_osc(&[]), None);
+        assert_eq!(parse_osc(&[b"7"]), None);
     }
 
     #[test]
-    fn osc52_set_clipboard() {
-        // "hi" → base64 "aGk="
-        let p = sniff(&[b"\x1b]52;c;aGk=\x07"]).unwrap();
-        assert_eq!(
-            p,
-            OscPayload::Clipboard {
-                query: false,
-                base64: "aGk=".into()
-            }
-        );
-        assert_eq!(decode_osc52("aGk=").as_deref(), Some("hi"));
-    }
-
-    #[test]
-    fn osc52_query() {
-        let p = sniff(&[b"\x1b]52;c;?\x07"]).unwrap();
-        assert!(matches!(p, OscPayload::Clipboard { query: true, .. }));
-    }
-
-    #[test]
-    fn osc52_roundtrip() {
+    fn osc52_codec_roundtrip() {
+        // The OSC 52 base64 helpers remain (used for clipboard replies).
         let s = "Héllo, 世界";
         let enc = encode_osc52(s);
         assert_eq!(decode_osc52(&enc).as_deref(), Some(s));
+        // "hi" → "aGk="
+        assert_eq!(decode_osc52("aGk=").as_deref(), Some("hi"));
     }
 
-    // ── OSC 133 tests ──────────────────────────────────────────────
+    // ── OSC 133 shell integration ──────────────────────────────────
     #[test]
-    fn osc133_prompt_start() {
-        let p = sniff(&[b"\x1b]133;A\x07"]).unwrap();
-        assert_eq!(p, OscPayload::ShellIntegration(Osc133Kind::PromptStart));
-    }
-
-    #[test]
-    fn osc133_prompt_end() {
-        let p = sniff(&[b"\x1b]133;B\x07"]).unwrap();
-        assert_eq!(p, OscPayload::ShellIntegration(Osc133Kind::PromptEnd));
-    }
-
-    #[test]
-    fn osc133_output_start() {
-        let p = sniff(&[b"\x1b]133;C\x07"]).unwrap();
-        assert_eq!(p, OscPayload::ShellIntegration(Osc133Kind::OutputStart));
-    }
-
-    #[test]
-    fn osc133_output_end_no_code() {
-        let p = sniff(&[b"\x1b]133;D\x07"]).unwrap();
+    fn osc133_markers() {
         assert_eq!(
-            p,
-            OscPayload::ShellIntegration(Osc133Kind::OutputEnd { exit_code: None })
+            parse_osc(&[b"133", b"A"]),
+            Some(OscPayload::ShellIntegration(Osc133Kind::PromptStart))
+        );
+        assert_eq!(
+            parse_osc(&[b"133", b"B"]),
+            Some(OscPayload::ShellIntegration(Osc133Kind::PromptEnd))
+        );
+        assert_eq!(
+            parse_osc(&[b"133", b"C"]),
+            Some(OscPayload::ShellIntegration(Osc133Kind::OutputStart))
         );
     }
 
     #[test]
-    fn osc133_output_end_with_code() {
-        // BEL terminated
-        let p = sniff(&[b"\x1b]133;D;0\x07"]).unwrap();
+    fn osc133_output_end() {
         assert_eq!(
-            p,
-            OscPayload::ShellIntegration(Osc133Kind::OutputEnd { exit_code: Some(0) })
+            parse_osc(&[b"133", b"D"]),
+            Some(OscPayload::ShellIntegration(Osc133Kind::OutputEnd {
+                exit_code: None
+            }))
         );
-        // ST terminated
-        let p2 = sniff(&[b"\x1b]133;D;127\x1b\\"]).unwrap();
         assert_eq!(
-            p2,
-            OscPayload::ShellIntegration(Osc133Kind::OutputEnd {
+            parse_osc(&[b"133", b"D", b"0"]),
+            Some(OscPayload::ShellIntegration(Osc133Kind::OutputEnd {
+                exit_code: Some(0)
+            }))
+        );
+        assert_eq!(
+            parse_osc(&[b"133", b"D", b"127"]),
+            Some(OscPayload::ShellIntegration(Osc133Kind::OutputEnd {
                 exit_code: Some(127)
-            })
+            }))
         );
     }
 
     #[test]
-    fn osc133_full_cycle() {
-        // Simulate a full prompt cycle: A → prompt text → B → command → C → output → D;0
-        let bytes = b"\x1b]133;A\x07$ \x1b]133;B\x07echo hi\r\x1b]133;C\x07hi\n\x1b]133;D;0\x07";
-        let mut parser = VteParser::new();
-        let mut sink = OscSink::default();
-        parser.advance(&mut sink, bytes);
-        // The queue preserves ALL markers in order (FIFO): A, B, C, D;0.
-        let mut got = Vec::new();
-        while let Some(p) = sink.take() {
-            got.push(p);
-        }
-        assert_eq!(
-            got,
-            vec![
-                OscPayload::ShellIntegration(Osc133Kind::PromptStart),
-                OscPayload::ShellIntegration(Osc133Kind::PromptEnd),
-                OscPayload::ShellIntegration(Osc133Kind::OutputStart),
-                OscPayload::ShellIntegration(Osc133Kind::OutputEnd { exit_code: Some(0) }),
-            ]
-        );
+    fn osc133_unknown_sub() {
+        assert_eq!(parse_osc(&[b"133", b"X"]), None);
+        assert_eq!(parse_osc(&[b"133", b"Z", b"foo"]), None);
     }
 
-    #[test]
-    fn osc133_ignores_unknown_sub() {
-        assert_eq!(sniff(&[b"\x1b]133;X\x07"]), None);
-        assert_eq!(sniff(&[b"\x1b]133;Z;foo\x07"]), None);
-    }
-
-    // ── OSC 9 notification tests ───────────────────────────────────
+    // ── OSC 9 notification ─────────────────────────────────────────
     #[test]
     fn osc9_notification() {
-        let p = sniff(&[b"\x1b]9;Build finished\x07"]).unwrap();
-        assert_eq!(p, OscPayload::Notification("Build finished".into()));
+        assert_eq!(
+            parse_osc(&[b"9", b"Build finished"]),
+            Some(OscPayload::Notification("Build finished".into()))
+        );
     }
 
     #[test]
     fn osc9_notification_with_semicolons() {
-        // A message containing ';' is rejoined verbatim.
-        let p = sniff(&[b"\x1b]9;done: 3 tests; 0 failed\x07"]).unwrap();
+        // A message split on ';' by the parser is rejoined verbatim.
         assert_eq!(
-            p,
-            OscPayload::Notification("done: 3 tests; 0 failed".into())
+            parse_osc(&[b"9", b"done: 3 tests", b" 0 failed"]),
+            Some(OscPayload::Notification("done: 3 tests; 0 failed".into()))
         );
     }
 
-    // ── OSC 9;4 progress tests ─────────────────────────────────────
+    // ── OSC 9;4 progress ───────────────────────────────────────────
     #[test]
-    fn osc9_4_progress_set() {
-        let p = sniff(&[b"\x1b]9;4;1;42\x07"]).unwrap();
-        assert_eq!(p, OscPayload::Progress(TerminalProgress::Set(42)));
-    }
-
-    #[test]
-    fn osc9_4_progress_remove() {
-        let p = sniff(&[b"\x1b]9;4;0\x07"]).unwrap();
-        assert_eq!(p, OscPayload::Progress(TerminalProgress::Remove));
-    }
-
-    #[test]
-    fn osc9_4_progress_error_paused_indeterminate() {
+    fn osc9_4_progress() {
         assert_eq!(
-            sniff(&[b"\x1b]9;4;2;80\x07"]),
+            parse_osc(&[b"9", b"4", b"1", b"42"]),
+            Some(OscPayload::Progress(TerminalProgress::Set(42)))
+        );
+        assert_eq!(
+            parse_osc(&[b"9", b"4", b"0"]),
+            Some(OscPayload::Progress(TerminalProgress::Remove))
+        );
+        assert_eq!(
+            parse_osc(&[b"9", b"4", b"2", b"80"]),
             Some(OscPayload::Progress(TerminalProgress::Error(80)))
         );
         assert_eq!(
-            sniff(&[b"\x1b]9;4;3\x07"]),
+            parse_osc(&[b"9", b"4", b"3"]),
             Some(OscPayload::Progress(TerminalProgress::Indeterminate))
         );
         assert_eq!(
-            sniff(&[b"\x1b]9;4;4;10\x07"]),
+            parse_osc(&[b"9", b"4", b"4", b"10"]),
             Some(OscPayload::Progress(TerminalProgress::Paused(10)))
         );
     }
@@ -461,74 +301,13 @@ mod tests {
     #[test]
     fn osc9_4_progress_clamps_percent() {
         assert_eq!(
-            sniff(&[b"\x1b]9;4;1;250\x07"]),
+            parse_osc(&[b"9", b"4", b"1", b"250"]),
             Some(OscPayload::Progress(TerminalProgress::Set(100)))
         );
     }
 
     #[test]
     fn osc9_4_unknown_state_ignored() {
-        assert_eq!(sniff(&[b"\x1b]9;4;9;50\x07"]), None);
-    }
-
-    // ── Clear detection tests ──────────────────────────────────────
-    fn sniff_clear(chunks: &[&[u8]]) -> bool {
-        let mut parser = VteParser::new();
-        let mut sink = OscSink::default();
-        for chunk in chunks {
-            parser.advance(&mut sink, chunk);
-        }
-        sink.take_clear()
-    }
-
-    #[test]
-    fn clear_csi_2j_detected() {
-        assert!(sniff_clear(&[b"\x1b[2J"]));
-    }
-
-    #[test]
-    fn clear_csi_3j_detected() {
-        assert!(sniff_clear(&[b"\x1b[3J"]));
-    }
-
-    #[test]
-    fn clear_full_sequence_detected() {
-        // Typical `clear`: home + erase display + erase scrollback.
-        assert!(sniff_clear(&[b"\x1b[H\x1b[2J\x1b[3J"]));
-    }
-
-    #[test]
-    fn clear_ris_detected() {
-        // ESC c = Reset to Initial State.
-        assert!(sniff_clear(&[b"\x1bc"]));
-    }
-
-    #[test]
-    fn clear_split_across_reads_detected() {
-        // Sequence split mid-CSI across read boundaries — vte parser holds state.
-        assert!(sniff_clear(&[b"\x1b[", b"2J"]));
-    }
-
-    #[test]
-    fn clear_partial_erase_not_detected() {
-        // CSI 0J / CSI 1J / CSI J (erase to end / to start) are NOT full clears.
-        assert!(!sniff_clear(&[b"\x1b[0J"]));
-        assert!(!sniff_clear(&[b"\x1b[1J"]));
-        assert!(!sniff_clear(&[b"\x1b[J"]));
-    }
-
-    #[test]
-    fn clear_flag_consumed_by_take() {
-        let mut parser = VteParser::new();
-        let mut sink = OscSink::default();
-        parser.advance(&mut sink, b"\x1b[2J");
-        assert!(sink.take_clear(), "first take should report clear");
-        assert!(!sink.take_clear(), "flag should reset after take");
-    }
-
-    #[test]
-    fn clear_does_not_leak_into_osc_payload() {
-        // A clear sequence must not produce an OscPayload.
-        assert_eq!(sniff(&[b"\x1b[2J"]), None);
+        assert_eq!(parse_osc(&[b"9", b"4", b"9", b"50"]), None);
     }
 }

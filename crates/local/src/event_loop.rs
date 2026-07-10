@@ -1,8 +1,9 @@
 //! Custom event loop — replacement for `alacritty_terminal::event_loop::EventLoop`.
 //!
-//! Unlike the alacritty EventLoop, this feeds PTY bytes to **both**
-//! `ansi::Processor` (Term) AND `vte::Parser` (OscSink) in parallel, capturing
-//! OSC 7 (cwd) and OSC 133 (shell integration markers) that alacritty drops.
+//! Feeds PTY bytes to `ansi::Processor` (Term) in a **single pass**. OSC 7/9/133
+//! and screen clears (`CSI 2J/3J`, RIS) are surfaced by the OneTerm alacritty fork
+//! via `Event::Osc` / `Event::ClearScreen` and handled in `LocalListener` — there
+//! is no longer a second `vte::Parser`. See docs/terminal-fullscreen-perf/09-*.md.
 //!
 //! Reference: `alacritty_terminal::event_loop::EventLoop`.
 
@@ -16,14 +17,12 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
 use alacritty_terminal::tty::{self, EventedPty, EventedReadWrite};
-use alacritty_terminal::vte::Parser as VteParser;
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use log::error;
 use polling::{Event as PollEvent, Events, PollMode, Poller};
 
 use oneterm_core::SessionEvent;
 use oneterm_core::terminal::default_color_for_index;
-use oneterm_core::terminal::osc::{Osc133Kind, OscPayload, OscSink, parse_cwd_url};
 
 use crate::listener::LocalListener;
 use crate::state::SharedState;
@@ -67,7 +66,8 @@ impl ShellNotifier {
     }
 }
 
-/// Custom event loop — PTY I/O + byte routing (Term + OscSink).
+/// Custom event loop — PTY I/O + byte routing (single `Term` parse pass; OSC/clear
+/// surfaced via `Event::Osc` / `Event::ClearScreen`, no second parser).
 pub struct ShellEventLoop {
     pty: tty::Pty,
     term: std::sync::Arc<FairMutex<Term<LocalListener>>>,
@@ -117,8 +117,6 @@ impl ShellEventLoop {
     fn run(&mut self) {
         let mut buf = [0u8; READ_BUFFER_SIZE];
         let mut processor = Processor::<StdSyncHandler>::new();
-        let mut vte_parser = VteParser::new();
-        let mut osc_sink = OscSink::default();
         let mut write_queue: VecDeque<Cow<'static, [u8]>> = VecDeque::new();
 
         // Register PTY with poller.
@@ -285,20 +283,6 @@ impl ShellEventLoop {
                         }
                         prev_total = total_after;
 
-                        // Feed the SAME bytes to OscSink (via vte::Parser), in parallel.
-                        vte_parser.advance(&mut osc_sink, &buf[..unprocessed]);
-
-                        // Process OSC payloads (OSC 7, OSC 133, etc.).
-                        while let Some(payload) = osc_sink.take() {
-                            self.handle_osc(payload);
-                        }
-
-                        // Screen was just cleared (clear/cls/RIS) → bump clear_epoch
-                        // so the UI resets per-line timestamps (gutter).
-                        if osc_sink.take_clear() {
-                            self.state.lock().unwrap().clear_epoch += 1;
-                        }
-
                         processed += unprocessed;
                         unprocessed = 0;
 
@@ -387,48 +371,6 @@ impl ShellEventLoop {
                 stat_wait = std::time::Duration::ZERO;
                 stat_parse = std::time::Duration::ZERO;
                 stat_since = std::time::Instant::now();
-            }
-        }
-    }
-
-    /// Handle OSC payload from OscSink — update state + forward events.
-    fn handle_osc(&self, payload: OscPayload) {
-        match payload {
-            OscPayload::Cwd(url) => {
-                let cwd = parse_cwd_url(&url);
-                {
-                    let mut st = self.state.lock().unwrap();
-                    st.cwd = Some(cwd.clone());
-                }
-                self.listener.forward(SessionEvent::Cwd(cwd));
-            }
-            OscPayload::ShellIntegration(kind) => {
-                {
-                    let mut st = self.state.lock().unwrap();
-                    match kind {
-                        Osc133Kind::PromptStart => {
-                            st.prompt_count = st.prompt_count.saturating_add(1);
-                        }
-                        Osc133Kind::OutputEnd { exit_code } => {
-                            st.last_exit_code = exit_code;
-                        }
-                        _ => {}
-                    }
-                }
-                self.listener.forward(SessionEvent::ShellIntegration(kind));
-            }
-            OscPayload::Clipboard { query, .. } => {
-                // Set (query=false) is handled by alacritty's ClipboardStore.
-                // Read (query=true) → ask the UI to reply with the clipboard.
-                if query {
-                    self.listener.forward(SessionEvent::ClipboardRead);
-                }
-            }
-            OscPayload::Notification(msg) => {
-                self.listener.forward(SessionEvent::Notification(msg));
-            }
-            OscPayload::Progress(progress) => {
-                self.listener.forward(SessionEvent::Progress(progress));
             }
         }
     }

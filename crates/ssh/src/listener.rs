@@ -14,7 +14,8 @@ use alacritty_terminal::event::{Event, EventListener};
 
 use oneterm_core::SessionEvent;
 use oneterm_core::terminal::{
-    ColorFormatter, PendingColorQuery, SharedColorQueries, new_color_queries,
+    ColorFormatter, Osc133Kind, OscPayload, PendingColorQuery, SharedColorQueries,
+    new_color_queries, parse_cwd_url, parse_osc,
 };
 
 use crate::state::SharedState;
@@ -110,6 +111,35 @@ impl SshListener {
     fn set_clipboard(&self, text: String) {
         self.state.lock().unwrap().clipboard = Some(text);
     }
+
+    /// Handle an OSC forwarded by the engine (`Event::Osc`, OSC 7/9/133) — update
+    /// the state cache and forward the matching `SessionEvent`.
+    fn handle_osc_payload(&self, payload: OscPayload) {
+        match payload {
+            OscPayload::Cwd(url) => {
+                let cwd = parse_cwd_url(&url);
+                self.state.lock().unwrap().cwd = Some(cwd.clone());
+                self.forward(SessionEvent::Cwd(cwd));
+            }
+            OscPayload::ShellIntegration(kind) => {
+                {
+                    let mut st = self.state.lock().unwrap();
+                    match kind {
+                        Osc133Kind::PromptStart => {
+                            st.prompt_count = st.prompt_count.saturating_add(1);
+                        }
+                        Osc133Kind::OutputEnd { exit_code } => {
+                            st.last_exit_code = exit_code;
+                        }
+                        _ => {}
+                    }
+                }
+                self.forward(SessionEvent::ShellIntegration(kind));
+            }
+            OscPayload::Notification(msg) => self.forward(SessionEvent::Notification(msg)),
+            OscPayload::Progress(progress) => self.forward(SessionEvent::Progress(progress)),
+        }
+    }
 }
 
 impl EventListener for SshListener {
@@ -132,7 +162,7 @@ impl EventListener for SshListener {
                 self.forward(SessionEvent::Clipboard(Some(text)));
             }
             Event::ClipboardLoad(_, _) => {
-                warn!("SshListener: ClipboardLoad (OSC 52 read) not supported yet");
+                self.forward(SessionEvent::ClipboardRead);
             }
             // ── Channel write (OSC/DA response) ─────────────────────────
             Event::PtyWrite(s) => self.pty_write(s.as_bytes()),
@@ -143,6 +173,17 @@ impl EventListener for SshListener {
             // ── Bell ──────────────────────────────────────────────────
             Event::Bell => {
                 self.forward(SessionEvent::Bell);
+            }
+            // ── OSC 7/9/133 (fork: Handler::report_osc → Event::Osc) ────
+            Event::Osc { params, .. } => {
+                let refs: Vec<&[u8]> = params.iter().map(|p| p.as_slice()).collect();
+                if let Some(payload) = parse_osc(&refs) {
+                    self.handle_osc_payload(payload);
+                }
+            }
+            // ── Screen cleared (CSI 2J/3J, RIS) ─────────────────────────
+            Event::ClearScreen => {
+                self.state.lock().unwrap().clear_epoch += 1;
             }
             // ── OSC 10/11/12 color query (`?`) ─────────────────────────
             // Enqueue; the tokio task reads the current color from `Term` after
