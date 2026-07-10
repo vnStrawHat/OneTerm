@@ -72,6 +72,10 @@ pub(crate) struct BoxDrawCell {
     pub point: LayoutPoint,
     pub color: Hsla,
     pub c: char,
+    /// Number of horizontally-adjacent cells this run covers. `1` for all glyphs
+    /// except full-width band blocks (`is_full_width_band`), where consecutive
+    /// same-glyph/same-colour cells are coalesced into one stretched rect.
+    pub num_cells: usize,
 }
 
 /// Layout artifacts for one display row — cached across frames.

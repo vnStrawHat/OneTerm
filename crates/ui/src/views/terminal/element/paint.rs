@@ -140,12 +140,16 @@ pub(crate) fn paint_terminal(
                     continue;
                 }
                 box_drawing_rects_into(&mut box_scratch, bd.c, cw_d, lh_d);
+                // Coalesced full-width band run: stretch the (full-width) rect
+                // across `num_cells`. `num_cells > 1` only for `is_full_width_band`
+                // glyphs (rx == 0, rw == cw_d), so widening rw is exact.
+                let n = bd.num_cells.max(1) as i32;
                 for &(rx, ry, rw, rh) in &box_scratch {
                     let pos = point(
                         px(f32::from(cell_x_logical) + rx as f32 / scale_factor),
                         px(f32::from(cell_y_logical) + ry as f32 / scale_factor),
                     );
-                    let sz = size(px(rw as f32 / scale_factor), px(rh as f32 / scale_factor));
+                    let sz = size(px((rw * n) as f32 / scale_factor), px(rh as f32 / scale_factor));
                     window.paint_quad(fill(Bounds::new(pos, sz), bd.color));
                     quad_count += 1;
                 }

@@ -7,6 +7,7 @@ use gpui::TextRun;
 
 use oneterm_core::terminal::{IndexedCell, is_default_background_color};
 
+use super::super::box_drawing::block::is_full_width_band;
 use super::super::box_drawing::drawing::{has_box_geometry, is_box_drawing};
 use super::super::cell::{cell_colors, cell_style, is_blank};
 use super::super::theme::TerminalTheme;
@@ -105,11 +106,35 @@ pub(crate) fn layout_row(
         let zw = cell.zerowidth();
 
         if is_box_drawing(cell.c) && has_box_geometry(&mut box_probe, cell.c) {
-            box_draws.push(BoxDrawCell {
-                point: lp,
-                color: style.color,
-                c: cell.c,
-            });
+            // Coalesce runs of identical full-width band glyphs (▀▄█…) sharing the
+            // same colour into one stretched rect — the block analogue of the bg
+            // run merge above. Partial-width/quadrant glyphs are never merged.
+            let merged = if is_full_width_band(cell.c) {
+                if let Some(last) = box_draws.last_mut() {
+                    if last.c == cell.c
+                        && last.color == style.color
+                        && last.point.line == display_line
+                        && last.point.column + last.num_cells as i32 == lp.column
+                    {
+                        last.num_cells += 1;
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            if !merged {
+                box_draws.push(BoxDrawCell {
+                    point: lp,
+                    color: style.color,
+                    c: cell.c,
+                    num_cells: 1,
+                });
+            }
             // Flush the active text batch so the next real-text segment starts a
             // fresh run at its own absolute column. Do NOT emit a space-only run
             // for the block cell: each run is painted at an absolute column

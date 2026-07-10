@@ -4,6 +4,18 @@ pub(crate) fn is_block_element(c: char) -> bool {
     matches!(c, '\u{2580}'..='\u{259F}')
 }
 
+/// True for block glyphs whose geometry is a single **full-cell-width** horizontal
+/// band (`rx == 0`, `rw == cw_d`): `▀▁▂▃▄▅▆▇█` (U+2580–2588) and `▔` (U+2594).
+///
+/// Such glyphs are horizontally tileable, so a run of the *same* glyph with the
+/// *same* colour can be painted as one rect stretched across N cells instead of
+/// one quad per cell — the block-glyph analogue of the background-rect run merge.
+/// Partial-width blocks (left/right eighths, quadrants) are deliberately excluded:
+/// stretching them would leave gaps or overpaint.
+pub(crate) fn is_full_width_band(c: char) -> bool {
+    matches!(c, '\u{2580}'..='\u{2588}' | '\u{2594}')
+}
+
 /// Append the block-element rects for `c` into `out` (cleared first).
 ///
 /// Allocation-free: this is the DOOM-fire hot path (nearly every cell is a
@@ -68,4 +80,41 @@ pub(crate) fn rects(c: char, cw_d: i32, lh_d: i32, cx: i32, cy: i32) -> Vec<(i32
     let mut out = Vec::new();
     rects_into(&mut out, c, cw_d, lh_d, cx, cy);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn full_width_band_membership() {
+        // Coalescable full-width horizontal bands.
+        for c in ['\u{2580}', '\u{2581}', '\u{2584}', '\u{2587}', '\u{2588}', '\u{2594}'] {
+            assert!(is_full_width_band(c), "{c:?} should be a full-width band");
+        }
+        // Partial-width / quadrant blocks must NOT be coalesced.
+        for c in ['\u{2589}', '\u{258C}', '\u{2590}', '\u{2595}', '\u{2596}', '\u{259F}'] {
+            assert!(!is_full_width_band(c), "{c:?} must not be coalesced");
+        }
+        // Non-block chars.
+        assert!(!is_full_width_band('A'));
+        assert!(!is_full_width_band('\u{2500}')); // ─ box-drawing line
+    }
+
+    #[test]
+    fn full_width_band_rects_span_full_width() {
+        // Invariant the paint-side stretch relies on: every coalescable glyph
+        // produces a single rect with rx == 0 and rw == cw_d, so widening rw by
+        // num_cells tiles exactly across the run.
+        let (cw_d, lh_d, cx, cy) = (16, 32, 8, 16);
+        for u in (0x2580u32..=0x2588).chain(std::iter::once(0x2594)) {
+            let c = char::from_u32(u).unwrap();
+            assert!(is_full_width_band(c));
+            let rs = rects(c, cw_d, lh_d, cx, cy);
+            assert_eq!(rs.len(), 1, "{c:?} should be one band rect");
+            let (rx, _ry, rw, _rh) = rs[0];
+            assert_eq!(rx, 0, "{c:?} rx must be 0");
+            assert_eq!(rw, cw_d, "{c:?} rw must span the full cell width");
+        }
+    }
 }
