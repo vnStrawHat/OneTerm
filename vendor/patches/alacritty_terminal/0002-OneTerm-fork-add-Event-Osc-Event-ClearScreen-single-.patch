@@ -1,0 +1,101 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OneTerm <oneterm@local>
+Date: Fri, 10 Jul 2026 00:00:00 +0000
+Subject: [PATCH 2/2] OneTerm fork: add Event::Osc + Event::ClearScreen
+ single-pass OSC/clear hook
+
+Adds Event::Osc { params, bell_terminated } and Event::ClearScreen. Term forwards
+vte report_osc -> Event::Osc, and emits Event::ClearScreen from clear_screen
+(CSI 2J/3J) and reset_state (RIS). Lets the embedder capture OSC 7/9/133 and
+screen clears from the single Processor::advance pass instead of a second parser.
+See docs/terminal-fullscreen-perf/09-patch-alacritty-fork.md.
+---
+ src/event.rs    | 14 ++++++++++++++
+ src/term/mod.rs | 21 +++++++++++++++++++++
+ 2 files changed, 35 insertions(+)
+
+diff --git a/src/event.rs b/src/event.rs
+index 922cf1d..223cdfd 100644
+--- a/src/event.rs
++++ b/src/event.rs
+@@ -56,6 +56,16 @@ pub enum Event {
+ 
+     /// Child process exited.
+     ChildExit(ExitStatus),
++
++    /// OSC sequence the terminal does not handle itself (OSC 7 cwd, OSC 9
++    /// notification/progress, OSC 133 shell integration, …), forwarded to the
++    /// embedder. `params` are the raw semicolon-separated OSC parameters.
++    /// OneTerm fork addition — see docs/terminal-fullscreen-perf/09-*.md.
++    Osc { params: Vec<Vec<u8>>, bell_terminated: bool },
++
++    /// Screen was cleared (`CSI 2J` / `CSI 3J` / RIS). Lets the embedder reset
++    /// per-line state such as gutter timestamps. OneTerm fork addition.
++    ClearScreen,
+ }
+ 
+ impl Debug for Event {
+@@ -74,6 +84,10 @@ impl Debug for Event {
+             Event::Bell => write!(f, "Bell"),
+             Event::Exit => write!(f, "Exit"),
+             Event::ChildExit(status) => write!(f, "ChildExit({status:?})"),
++            Event::Osc { params, bell_terminated } => {
++                write!(f, "Osc({} params, bell_terminated={bell_terminated})", params.len())
++            },
++            Event::ClearScreen => write!(f, "ClearScreen"),
+         }
+     }
+ }
+diff --git a/src/term/mod.rs b/src/term/mod.rs
+index 8eb6797..4ef7a88 100644
+--- a/src/term/mod.rs
++++ b/src/term/mod.rs
+@@ -1749,6 +1749,9 @@ impl<T: EventListener> Handler for Term<T> {
+     #[inline]
+     fn clear_screen(&mut self, mode: ansi::ClearMode) {
+         trace!("Clearing screen: {mode:?}");
++        // OneTerm fork: CSI 2J (All) / CSI 3J (Saved) count as a full clear for the
++        // embedder's per-line reset (e.g. gutter timestamps).
++        let notify_clear = matches!(mode, ansi::ClearMode::All | ansi::ClearMode::Saved);
+         let bg = self.grid.cursor.template.bg;
+ 
+         let screen_lines = self.screen_lines();
+@@ -1814,6 +1817,11 @@ impl<T: EventListener> Handler for Term<T> {
+             ansi::ClearMode::Saved => (),
+         }
+ 
++        // OneTerm fork: notify the embedder of a full clear (see notify_clear above).
++        if notify_clear {
++            self.event_proxy.send_event(Event::ClearScreen);
++        }
++
+         self.mark_fully_damaged();
+     }
+ 
+@@ -1854,6 +1862,8 @@ impl<T: EventListener> Handler for Term<T> {
+         self.mode.insert(TermMode::default());
+ 
+         self.event_proxy.send_event(Event::CursorBlinkingChange);
++        // OneTerm fork: RIS (ESC c) clears the screen — notify the embedder.
++        self.event_proxy.send_event(Event::ClearScreen);
+         self.mark_fully_damaged();
+     }
+ 
+@@ -2231,6 +2241,17 @@ impl<T: EventListener> Handler for Term<T> {
+         self.event_proxy.send_event(title_event);
+     }
+ 
++    /// OneTerm fork: forward OSC sequences vte does not handle itself (OSC 7 cwd,
++    /// OSC 9 notification/progress, OSC 133 shell integration, …) to the embedder,
++    /// so it need not run a second VT parser. See docs/terminal-fullscreen-perf/09-*.md.
++    #[inline]
++    fn report_osc(&mut self, params: &[&[u8]], bell_terminated: bool) {
++        self.event_proxy.send_event(Event::Osc {
++            params: params.iter().map(|p| p.to_vec()).collect(),
++            bell_terminated,
++        });
++    }
++
+     #[inline]
+     fn push_title(&mut self) {
+         trace!("Pushing '{:?}' onto title stack", self.title);

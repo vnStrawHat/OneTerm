@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OneTerm <oneterm@local>
+Date: Fri, 10 Jul 2026 00:00:00 +0000
+Subject: [PATCH 1/2] OneTerm fork: standalone Cargo manifest for vendored
+ [patch] build
+
+Inlines edition/rust-version from the upstream alacritty workspace so the crate
+builds standalone when consumed via [patch] under vendor/ (no workspace parent).
+Drops the workspace-relative readme path.
+---
+ Cargo.toml | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/Cargo.toml b/Cargo.toml
+index c5868de..53083ed 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -4,11 +4,12 @@ version = "0.26.1-dev"
+ authors = ["Christian Duerr <contact@christianduerr.com>", "Joe Wilm <joe@jwilm.com>"]
+ license = "Apache-2.0"
+ description = "Library for writing terminal emulators"
+-readme = "../README.md"
+ homepage = "https://alacritty.org"
+ repository = "https://github.com/alacritty/alacritty"
+-edition.workspace = true
+-rust-version.workspace = true
++# OneTerm fork (vendored under vendor/). Inlined from the upstream workspace so the
++# crate builds standalone via [patch]. See docs/terminal-fullscreen-perf/09-*.md.
++edition = "2024"
++rust-version = "1.85.0"
+ 
+ [features]
+ default = ["serde"]
