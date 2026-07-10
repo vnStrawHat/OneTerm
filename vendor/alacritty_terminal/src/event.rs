@@ -56,6 +56,16 @@ pub enum Event {
 
     /// Child process exited.
     ChildExit(ExitStatus),
+
+    /// OSC sequence the terminal does not handle itself (OSC 7 cwd, OSC 9
+    /// notification/progress, OSC 133 shell integration, …), forwarded to the
+    /// embedder. `params` are the raw semicolon-separated OSC parameters.
+    /// OneTerm fork addition — see docs/terminal-fullscreen-perf/09-*.md.
+    Osc { params: Vec<Vec<u8>>, bell_terminated: bool },
+
+    /// Screen was cleared (`CSI 2J` / `CSI 3J` / RIS). Lets the embedder reset
+    /// per-line state such as gutter timestamps. OneTerm fork addition.
+    ClearScreen,
 }
 
 impl Debug for Event {
@@ -74,6 +84,10 @@ impl Debug for Event {
             Event::Bell => write!(f, "Bell"),
             Event::Exit => write!(f, "Exit"),
             Event::ChildExit(status) => write!(f, "ChildExit({status:?})"),
+            Event::Osc { params, bell_terminated } => {
+                write!(f, "Osc({} params, bell_terminated={bell_terminated})", params.len())
+            },
+            Event::ClearScreen => write!(f, "ClearScreen"),
         }
     }
 }

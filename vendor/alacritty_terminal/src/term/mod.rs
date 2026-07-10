@@ -1749,6 +1749,9 @@ impl<T: EventListener> Handler for Term<T> {
     #[inline]
     fn clear_screen(&mut self, mode: ansi::ClearMode) {
         trace!("Clearing screen: {mode:?}");
+        // OneTerm fork: CSI 2J (All) / CSI 3J (Saved) count as a full clear for the
+        // embedder's per-line reset (e.g. gutter timestamps).
+        let notify_clear = matches!(mode, ansi::ClearMode::All | ansi::ClearMode::Saved);
         let bg = self.grid.cursor.template.bg;
 
         let screen_lines = self.screen_lines();
@@ -1814,6 +1817,11 @@ impl<T: EventListener> Handler for Term<T> {
             ansi::ClearMode::Saved => (),
         }
 
+        // OneTerm fork: notify the embedder of a full clear (see notify_clear above).
+        if notify_clear {
+            self.event_proxy.send_event(Event::ClearScreen);
+        }
+
         self.mark_fully_damaged();
     }
 
@@ -1854,6 +1862,8 @@ impl<T: EventListener> Handler for Term<T> {
         self.mode.insert(TermMode::default());
 
         self.event_proxy.send_event(Event::CursorBlinkingChange);
+        // OneTerm fork: RIS (ESC c) clears the screen — notify the embedder.
+        self.event_proxy.send_event(Event::ClearScreen);
         self.mark_fully_damaged();
     }
 
@@ -2229,6 +2239,17 @@ impl<T: EventListener> Handler for Term<T> {
         };
 
         self.event_proxy.send_event(title_event);
+    }
+
+    /// OneTerm fork: forward OSC sequences vte does not handle itself (OSC 7 cwd,
+    /// OSC 9 notification/progress, OSC 133 shell integration, …) to the embedder,
+    /// so it need not run a second VT parser. See docs/terminal-fullscreen-perf/09-*.md.
+    #[inline]
+    fn report_osc(&mut self, params: &[&[u8]], bell_terminated: bool) {
+        self.event_proxy.send_event(Event::Osc {
+            params: params.iter().map(|p| p.to_vec()).collect(),
+            bell_terminated,
+        });
     }
 
     #[inline]

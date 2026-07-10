@@ -618,6 +618,15 @@ pub trait Handler {
     /// Reset terminal state.
     fn reset_state(&mut self) {}
 
+    /// Report an OSC sequence the parser does not otherwise dispatch to a
+    /// dedicated handler method (e.g. OSC 7 cwd, OSC 9 notification/progress,
+    /// OSC 133 shell integration). `params` are the raw semicolon-separated OSC
+    /// parameters; `bell_terminated` is true for BEL, false for ST termination.
+    ///
+    /// OneTerm fork addition — lets the embedder capture these OSCs from the
+    /// single VT pass instead of running a second parser. Default: ignored.
+    fn report_osc(&mut self, _params: &[&[u8]], _bell_terminated: bool) {}
+
     /// Reverse Index.
     ///
     /// Move the active position to the same horizontal position on the
@@ -1520,7 +1529,12 @@ where
             // Reset text cursor color.
             b"112" => self.handler.reset_color(NamedColor::Cursor as usize),
 
-            _ => unhandled(params),
+            // OneTerm fork: forward any OSC vte does not handle (7/9/133/…) to the
+            // embedder so it can capture them from this single VT pass.
+            _ => {
+                self.handler.report_osc(params, bell_terminated);
+                unhandled(params);
+            },
         }
     }
 
