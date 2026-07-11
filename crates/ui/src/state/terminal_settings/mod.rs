@@ -165,7 +165,7 @@ impl Default for TerminalSettings {
             line_height_factor: 1.2,
             cell_width: None,
             padding: TerminalPadding::default(),
-            show_gutter: true,
+            show_gutter: false,
             auto_hide_right_dock_on_local: false,
             tab_title_mode: TabTitleMode::Default,
             scroll_multiplier: 1.0,

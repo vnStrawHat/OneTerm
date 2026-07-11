@@ -66,7 +66,7 @@ fn default_cell_width() -> Option<f32> {
 }
 
 fn default_show_gutter() -> bool {
-    true
+    false
 }
 
 /// Padding on all 4 sides (px).

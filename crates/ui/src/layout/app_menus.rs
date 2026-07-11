@@ -55,10 +55,18 @@ pub fn init(title: impl Into<SharedString>, cx: &mut App) -> Entity<AppMenuBar> 
 
     // Gutter — toggle the timestamp + line number column (View ▸ Gutter).
     cx.on_action(|_: &ToggleGutter, cx| {
+        let new_val = !TerminalSettings::global(cx).read(cx).show_gutter;
         TerminalSettings::global(cx).update(cx, |st, cx| {
-            st.show_gutter = !st.show_gutter;
+            st.show_gutter = new_val;
             cx.notify();
         });
+        // Persist to terminal.json (load → mutate only this field → save) so the
+        // preference survives restarts; other fields in the file are preserved.
+        let mut cfg = crate::state::terminal_config::TerminalConfig::load();
+        cfg.layout.show_gutter = new_val;
+        if let Err(e) = cfg.save() {
+            log::warn!("Failed to persist terminal.json: {e}");
+        }
         cx.refresh_windows();
     });
     app_menu_bar
