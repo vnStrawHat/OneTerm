@@ -12,8 +12,10 @@
 # qua --no-default-features --features release-bin để release chỉ build `oneterm`.
 #
 # Kết quả:
-#   - target/<triple>/release/oneterm (release binary, đã strip + LTO)
-#   - dist/oneterm-<triple>/oneterm  (bản đóng gói sạch để phát hành)
+#   - target/<triple>/release/oneterm       (release binary, đã strip + LTO)
+#   - dist/oneterm-<triple>/oneterm          (Linux: bản đóng gói sạch để phát hành)
+#   - dist/oneterm-<triple>/OneTerm.app      (macOS: .app bundle — double-click mà
+#                                            không mở thêm cửa sổ Terminal)
 
 set -euo pipefail
 
@@ -51,12 +53,29 @@ fi
 DIST_DIR="dist/oneterm-$TRIPLE"
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR"
-cp "$EXE" "$DIST_DIR/"
 
-# Copy config mặc định nếu có.
-for cfg in terminal.json docks.json; do
-  [[ -f "$REPO_ROOT/$cfg" ]] && cp "$REPO_ROOT/$cfg" "$DIST_DIR/" || true
-done
+OS_FAMILY="$(uname -s)"
+if [[ "$OS_FAMILY" == "Darwin" ]]; then
+  # macOS: package the release binary into a proper OneTerm.app bundle.
+  #
+  # A raw GUI binary on macOS is treated by LaunchServices as a plain CLI
+  # tool, so double-clicking it in Finder routes it through Terminal.app and
+  # opens an extra Terminal window alongside the GUI (the macOS analog of
+  # the Windows console-window problem fixed with `windows_subsystem =
+  # "windows"`). Bundling it inside OneTerm.app with an Info.plist declaring
+  # it a GUI app (NSPrincipalClass=NSApplication, CFBundlePackageType=APPL)
+  # makes LaunchServices launch it directly. Shared with CI via this script.
+  bash scripts/bundle-macos.sh "$REPO_ROOT" "$RELEASE_DIR" "$DIST_DIR"
+
+  # Config files are NOT bundled: release builds read/write ~/.OneTerm/ (auto
+  # created on first run), so no shipped config is needed inside the .app.
+else
+  # Linux: ship the raw binary + optional default config next to it.
+  cp "$EXE" "$DIST_DIR/"
+  for cfg in terminal.json docks.json; do
+    [[ -f "$REPO_ROOT/$cfg" ]] && cp "$REPO_ROOT/$cfg" "$DIST_DIR/" || true
+  done
+fi
 
 echo "==> dist staged tại: $DIST_DIR"
 ( cd "$DIST_DIR" && find . -type f | sort )

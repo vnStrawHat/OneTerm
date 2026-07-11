@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  macOS app bundle descriptor for OneTerm.
+
+  This is a TEMPLATE: `{{VERSION}}` is substituted by scripts/build-release.sh
+  (read from the repo-root VERSION file) before being placed at
+  OneTerm.app/Contents/Info.plist.
+
+  Why this exists: on macOS a GUI binary that is NOT inside a .app bundle is
+  treated by LaunchServices as a plain command-line tool. Double-clicking it in
+  Finder therefore routes it through Terminal.app, which opens an extra Terminal
+  window alongside the GUI — the macOS analog of the Windows "console window"
+  problem (fixed there with `#![windows_subsystem = "windows"`]).
+
+  Bundling the executable inside OneTerm.app with this Info.plist tells
+  LaunchServices it is a regular GUI application:
+    - CFBundlePackageType = APPL  -> application (not a tool)
+    - NSPrincipalClass = NSApplication -> uses the AppKit event loop
+    - LSUIElement absent         -> normal foreground app (shows in the Dock)
+  so double-clicking launches it directly without Terminal.app.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>OneTerm</string>
+    <key>CFBundleDisplayName</key>
+    <string>OneTerm</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.oneterm.app</string>
+    <key>CFBundleVersion</key>
+    <string>{{VERSION}}</string>
+    <key>CFBundleShortVersionString</key>
+    <string>{{VERSION}}</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleSignature</key>
+    <string>????</string>
+    <key>CFBundleExecutable</key>
+    <string>oneterm</string>
+    <key>CFBundleIconFile</key>
+    <string>oneterm</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+    <key>LSRequiresCarbon</key>
+    <true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+</dict>
+</plist>

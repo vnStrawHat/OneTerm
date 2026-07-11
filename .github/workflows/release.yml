@@ -155,19 +155,27 @@ jobs:
           REL="target/${TARGET}/release"
           STAGE="dist/oneterm-${VERSION}-${TARGET}"
           mkdir -p "${STAGE}"
-          # Binary: oneterm.exe (Windows) or oneterm (Linux/macOS).
-          if [ -f "${REL}/oneterm.exe" ]; then
-            cp "${REL}/oneterm.exe" "${STAGE}/"
+          # macOS: package into a proper OneTerm.app bundle so double-clicking
+          # launches it directly (no Terminal.app window). See
+          # scripts/bundle-macos.sh for details. sips + iconutil are present
+          # on the macOS runner, so the .icns is generated too.
+          if [[ "${TARGET}" == *darwin* ]]; then
+            bash scripts/bundle-macos.sh "${PWD}" "${REL}" "${STAGE}"
           else
-            cp "${REL}/oneterm" "${STAGE}/"
-          fi
-          # Windows runtime assets (build.rs already copied them into target/release).
-          if [ -f "${REL}/conpty.dll" ]; then
-            cp "${REL}/conpty.dll" "${STAGE}/"
-          fi
-          if [ -d "${REL}/x64" ]; then
-            mkdir -p "${STAGE}/x64"
-            cp "${REL}/x64/OpenConsole.exe" "${STAGE}/x64/"
+            # Binary: oneterm.exe (Windows) or oneterm (Linux).
+            if [ -f "${REL}/oneterm.exe" ]; then
+              cp "${REL}/oneterm.exe" "${STAGE}/"
+            else
+              cp "${REL}/oneterm" "${STAGE}/"
+            fi
+            # Windows runtime assets (build.rs already copied them into target/release).
+            if [ -f "${REL}/conpty.dll" ]; then
+              cp "${REL}/conpty.dll" "${STAGE}/"
+            fi
+            if [ -d "${REL}/x64" ]; then
+              mkdir -p "${STAGE}/x64"
+              cp "${REL}/x64/OpenConsole.exe" "${STAGE}/x64/"
+            fi
           fi
           echo "==> Staged files:"
           find "${STAGE}" -type f | sort

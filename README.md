@@ -145,8 +145,16 @@ pwsh scripts/build-release.ps1 -Target aarch64-pc-windows-msvc
 TARGET=aarch64-unknown-linux-gnu ./scripts/build-release.sh
 ```
 
-Packaged output lands in `dist/oneterm-<triple>/`, containing `oneterm(.exe)` plus the
-runtime assets (`conpty.dll` + `x64/OpenConsole.exe` on Windows, `terminal.json` / `docks.json`).
+Packaged output lands in `dist/oneterm-<triple>/`:
+- **Windows** — `oneterm.exe` plus the runtime assets (`conpty.dll` + `x64/OpenConsole.exe`);
+  the exe has the app icon + version info embedded (build.rs).
+- **macOS** — `OneTerm.app` bundle (double-click to launch **without** an extra
+  Terminal.app window). On macOS a raw GUI binary is treated as a CLI tool, so
+  Finder opens Terminal.app to run it; packaging it inside a `.app` bundle with
+  an `Info.plist` (`NSPrincipalClass=NSApplication`) makes LaunchServices launch
+  it directly — the macOS analog of the Windows `windows_subsystem = "windows"`
+  fix. The `.icns` icon is generated best-effort from the Windows `.ico`.
+- **Linux** — `oneterm` plus optional `terminal.json` / `docks.json` defaults.
 
 ---
 

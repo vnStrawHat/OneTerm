@@ -20,13 +20,15 @@ OneTerm/
 │   ├── app/                        # Binary: lib + two bin shims + wiring
 │   │   ├── Cargo.toml              # name = "oneterm-app", default-run = "oneterm-debug"
 │   │   ├── build.rs                # Build script: embed app icon (.rc) + copy conpty.dll/OpenConsole.exe
-│   │   ├── assets/                 # Runtime resources (Windows)
+│   │   ├── assets/                 # Runtime resources (Windows + macOS)
 │   │   │   ├── oneterm.rc          # Resource script: app icon (numeric ID 1 = gpui window icon + Explorer default) + VS_VERSION_INFO
 │   │   │   ├── conpty.dll         # ConPTY shim (alacritty_terminal LoadLibrary)
 │   │   │   ├── x64/OpenConsole.exe # ConPTY host (Windows Terminal)
 │   │   │   └── icons/             # App icon (multi-resolution, embedded into the exe)
 │   │   │       ├── terminal-48x48.ico
 │   │   │       └── terminal-96x96.ico
+│   │   ├── macos/                 # macOS .app bundle resources
+│   │   │   └── Info.plist         # Bundle descriptor template ({{VERSION}}); declares GUI app (NSPrincipalClass=NSApplication) so double-clicking in Finder doesn't open Terminal.app
 │   │   └── src/
 │   │       ├── lib.rs              # oneterm_app::run() — init app + UI, open window (shared by both bins)
 │   │       ├── assets.rs           # CustomAssets (asset source for fonts/icons)
