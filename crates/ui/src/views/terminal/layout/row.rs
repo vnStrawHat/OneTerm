@@ -11,7 +11,6 @@ use super::super::box_drawing::block::is_full_width_band;
 use super::super::box_drawing::drawing::{has_box_geometry, is_box_drawing};
 use super::super::cell::{cell_colors, cell_style, is_blank};
 use super::super::theme::TerminalTheme;
-use super::super::url::DetectedUrl;
 use super::types::{BatchedTextRun, BoxDrawCell, LayoutPoint, LayoutRect, RowLayout};
 
 /// Lay out a single display row — build rects + text runs + box draws for the
@@ -23,8 +22,7 @@ pub(crate) fn layout_row(
     theme: &TerminalTheme,
     base_font: &gpui::Font,
     selection_set: &HashSet<LayoutPoint>,
-    hovered_url: Option<&DetectedUrl>,
-    ctrl_held: bool,
+    url_mask: &[bool],
 ) -> RowLayout {
     let _ = selection_set;
     let mut rects: Vec<LayoutRect> = Vec::new();
@@ -88,20 +86,13 @@ pub(crate) fn layout_row(
         }
 
         let mut style: TextRun = cell_style(cell, fg, base_font);
-        if ctrl_held {
-            if let Some(url) = hovered_url {
-                if url.row == display_line as usize
-                    && point.column.0 >= url.start_col
-                    && point.column.0 < url.end_col
-                {
-                    style.color = gpui::hsla(0.6, 0.85, 0.65, 1.0);
-                    style.underline = Some(gpui::UnderlineStyle {
-                        color: Some(style.color),
-                        thickness: gpui::px(1.0),
-                        wavy: false,
-                    });
-                }
-            }
+        if url_mask.get(point.column.0 as usize).copied().unwrap_or(false) {
+            style.color = gpui::hsla(0.6, 0.85, 0.65, 1.0);
+            style.underline = Some(gpui::UnderlineStyle {
+                color: Some(style.color),
+                thickness: gpui::px(1.0),
+                wavy: false,
+            });
         }
         let zw = cell.zerowidth();
 

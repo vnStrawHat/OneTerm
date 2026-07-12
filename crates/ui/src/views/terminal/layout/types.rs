@@ -122,8 +122,6 @@ pub(crate) struct RowLayoutCache {
     pub prev_grid_size: Option<(u16, u16)>,
     pub prev_display_offset: usize,
     pub prev_selection: Option<alacritty_terminal::selection::SelectionRange>,
-    pub prev_hovered_url: Option<super::super::url::DetectedUrl>,
-    pub prev_ctrl_held: bool,
     pub stats: FrameStats,
 }
 
@@ -134,8 +132,6 @@ impl RowLayoutCache {
             prev_grid_size: None,
             prev_display_offset: 0,
             prev_selection: None,
-            prev_hovered_url: None,
-            prev_ctrl_held: false,
             stats: FrameStats::default(),
         }
     }

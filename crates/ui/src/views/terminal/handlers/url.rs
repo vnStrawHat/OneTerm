@@ -11,7 +11,11 @@ use super::super::element::GridMetrics;
 use super::super::url::{DetectedUrl, detect_url_at};
 use super::super::view::LocalTerminalView;
 
-/// Update `hovered_url` based on the current position and Ctrl state.
+/// Update `hovered_url` based on the current position.
+///
+/// URLs are always detected on hover (no Ctrl required). The `ctrl` parameter
+/// is still tracked in `ctrl_held` so the view knows when a click would open
+/// the URL, but it no longer gates the highlight.
 pub(crate) fn update_hovered_url(
     session: &Entity<Box<dyn TerminalSession>>,
     metrics: &Rc<RefCell<GridMetrics>>,
@@ -20,21 +24,17 @@ pub(crate) fn update_hovered_url(
     ctrl: bool,
     cx: &mut App,
 ) {
-    let new_url = if ctrl {
-        let (row, col) = match LocalTerminalView::pixel_to_grid(&metrics.borrow(), position) {
-            Some(rc) => rc,
-            None => return,
-        };
-        let snap = session.read(cx).snapshot_query();
-        detect_url_at(
-            &snap.cells,
-            snap.terminal_bounds.num_cols,
-            row as usize,
-            col as usize,
-        )
-    } else {
-        None
+    let (row, col) = match LocalTerminalView::pixel_to_grid(&metrics.borrow(), position) {
+        Some(rc) => rc,
+        None => return,
     };
+    let snap = session.read(cx).snapshot_query();
+    let new_url = detect_url_at(
+        &snap.cells,
+        snap.terminal_bounds.num_cols,
+        row as usize,
+        col as usize,
+    );
     let _ = view.update(cx, |v, cx| {
         v.last_mouse_pos = Some(position);
         let changed = v.ctrl_held != ctrl

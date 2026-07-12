@@ -123,7 +123,7 @@ pub(crate) fn attach_mouse(
             } else {
                 s.update(cx, |s, _| s.mouse_move(row, col));
             }
-            // Ctrl+hover URL detection — highlight + cursor pointer.
+            // URL detection on hover — highlight + cursor pointer (Ctrl+click to open).
             super::url::update_hovered_url(&s, &m, &view, e.position, e.modifiers.control, cx);
         }
     })

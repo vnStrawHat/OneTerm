@@ -8,6 +8,7 @@ use oneterm_core::terminal::{IndexedCell, TermDamageInfo};
 
 use super::super::cell::line_hash;
 use super::super::theme::TerminalTheme;
+use super::super::url::url_masks_wrapped;
 use super::row::layout_row;
 use super::types::{LayoutPoint, RowLayout, RowLayoutCache};
 
@@ -22,8 +23,8 @@ pub(crate) fn update_row_cache(
     display_offset: usize,
     grid_size: (u16, u16),
     selection: Option<alacritty_terminal::selection::SelectionRange>,
-    hovered_url: Option<&super::super::url::DetectedUrl>,
-    ctrl_held: bool,
+    _hovered_url: Option<&super::super::url::DetectedUrl>,
+    _ctrl_held: bool,
     theme: &TerminalTheme,
     base_font: &Font,
     selection_set: &HashSet<LayoutPoint>,
@@ -35,15 +36,11 @@ pub(crate) fn update_row_cache(
     let scroll_delta = display_offset as i32 - cache.prev_display_offset as i32;
     let scroll_changed = scroll_delta != 0;
     let selection_changed = cache.prev_selection != selection;
-    let hover_changed = cache.prev_hovered_url.as_ref() != hovered_url;
-    let ctrl_changed = cache.prev_ctrl_held != ctrl_held;
-    let scroll_only =
-        scroll_changed && !size_changed && !selection_changed && !hover_changed && !ctrl_changed;
-    let global_invalidate = size_changed
-        || (scroll_changed && !scroll_only)
-        || selection_changed
-        || hover_changed
-        || ctrl_changed;
+    // hover/ctrl no longer affect layout (URLs are always highlighted via
+    // url_masks_wrapped), so they are excluded from cache invalidation.
+    let scroll_only = scroll_changed && !size_changed && !selection_changed;
+    let global_invalidate =
+        size_changed || (scroll_changed && !scroll_only) || selection_changed;
 
     cache.ensure_size(num_lines);
 
@@ -91,6 +88,10 @@ pub(crate) fn update_row_cache(
     cache.stats.dirty_lines = dirty_set.len();
     cache.stats.hash_calls = 0;
 
+    // Pre-compute URL masks for all lines (handles wrapped URLs).
+    let num_cols = grid_size.1 as usize;
+    let url_masks = url_masks_wrapped(cells, num_lines, num_cols);
+
     let linegroups = cells.iter().chunk_by(|ic| ic.point.line);
     for (display_line, (_, line_cells)) in linegroups.into_iter().enumerate() {
         if display_line >= num_lines {
@@ -113,14 +114,17 @@ pub(crate) fn update_row_cache(
 
         if is_dirty {
             let new_hash = line_hash(&line_vec);
+            let mask = url_masks
+                .get(display_line)
+                .map(|m| m.as_slice())
+                .unwrap_or(&[]);
             let layout = layout_row(
                 line_vec,
                 display_line as i32,
                 theme,
                 base_font,
                 selection_set,
-                hovered_url,
-                ctrl_held,
+                mask,
             );
             cache.rows[display_line] = RowLayout {
                 rects: layout.rects,
@@ -135,6 +139,4 @@ pub(crate) fn update_row_cache(
     cache.prev_grid_size = Some(grid_size);
     cache.prev_display_offset = display_offset;
     cache.prev_selection = selection;
-    cache.prev_hovered_url = hovered_url.cloned();
-    cache.prev_ctrl_held = ctrl_held;
 }
