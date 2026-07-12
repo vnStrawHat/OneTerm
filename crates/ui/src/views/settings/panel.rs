@@ -1,11 +1,11 @@
 //! [`SettingsPanel`] — the General Settings dock panel.
 //!
 //! Wraps the gpui-component [`Settings`] widget (a sidebar + page layout) with
-//! four pages: General (UI font + key bindings), Terminal (shell/font/cursor/
-//! layout/scroll/bell/security), Appearance (theme mode + theme list), and
-//! About. The Terminal page reads/writes the global [`TerminalSettings`] and
-//! persists changes to `terminal.json`; the Appearance page drives the
-//! gpui-component [`Theme`] / [`ThemeRegistry`].
+//! five pages: General (UI font), Key Bindings (configurable shortcuts grouped by
+//! origin), Terminal (shell/font/cursor/layout/scroll/bell/security), Appearance
+//! (theme mode + theme list), and About. The Terminal page reads/writes the global
+//! [`TerminalSettings`] and persists changes to `terminal.json`; the Appearance
+//! page drives the gpui-component [`Theme`] / [`ThemeRegistry`].
 
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, Render,
@@ -14,7 +14,7 @@ use gpui::{
 use gpui_component::dock::{Panel, PanelControl, PanelEvent};
 use gpui_component::setting::{SettingPage, Settings};
 
-use super::{about, appearance, general, terminal};
+use super::{about, appearance, general, key_bindings, terminal};
 
 /// General Settings panel (font, theme, key bindings, terminal options, about).
 pub struct SettingsPanel {
@@ -46,6 +46,7 @@ impl SettingsPanel {
     fn pages(&self, cx: &App) -> Vec<SettingPage> {
         vec![
             general::page(),
+            key_bindings::page(),
             terminal::page(cx),
             appearance::page(cx),
             about::page(),

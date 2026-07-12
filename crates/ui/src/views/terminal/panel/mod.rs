@@ -4,12 +4,18 @@
 //! [`SpaceTree`] whose leaves are terminals or empty placeholders. A tree with a
 //! single leaf renders exactly like the old single-terminal panel. See
 //! `docs/terminal-split/`.
+//!
+//! Space operations live in [`ops`] and the context-menu action handlers +
+//! [`Render`] impl live in [`actions`].
+
+mod actions;
+mod ops;
 
 use std::sync::Arc;
 
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, MouseButton, ParentElement, Render, SharedString,
+    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement as _, IntoElement, MouseButton, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div,
     prelude::FluentBuilder as _, px,
 };
@@ -17,35 +23,31 @@ use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable,
     dock::{Panel, PanelControl, PanelEvent, PanelView, TabPanel},
     h_flex,
-    resizable::ResizableState,
 };
 use oneterm_core::TerminalSession;
 use oneterm_local::{LocalSession, PtySize};
 
-use crate::state::{AppState, TabTitleMode, TerminalSettings};
+use crate::state::{TabTitleMode, TerminalSettings};
 
-use super::space::{
-    CloseOutcome, DragTerminalTab, SpaceContent, SpaceId, SpaceLeaf, SpaceTree, SplitContext,
-    SplitDir, render_node,
-};
+use super::space::{DragTerminalTab, SpaceId, SpaceTree, SplitContext};
 use super::view::{LocalTerminalView, TerminalViewEvent};
 
 /// Panel displaying a Terminal Tab (a tree of Spaces).
 pub struct TerminalPanel {
     /// The pane tree — leaves are terminals or empty placeholders.
-    tree: SpaceTree,
+    pub(super) tree: SpaceTree,
     /// Reference to the `TabPanel` containing this panel — used for the close-tab
     /// button and to remove the tab when the last Space closes.
-    tab_panel: Option<WeakEntity<TabPanel>>,
+    pub(super) tab_panel: Option<WeakEntity<TabPanel>>,
     /// Whether this panel is the currently selected tab in the `TabPanel`.
-    is_active: bool,
+    pub(super) is_active: bool,
     /// Tab title — "Terminal" for local, session label for SSH.
-    tab_title: String,
+    pub(super) tab_title: String,
     /// Subscriptions to every terminal leaf's `TitleChanged` — rebuilt whenever
     /// the set of terminals changes (split / close / drop / fill).
-    _title_subs: Vec<Subscription>,
+    pub(super) _title_subs: Vec<Subscription>,
     /// Subscription to global `TerminalSettings` changes.
-    _settings_sub: Subscription,
+    pub(super) _settings_sub: Subscription,
 }
 
 /// Resolve the tab label from the live OSC 0/2 title and the static fallback.
@@ -149,7 +151,10 @@ impl TerminalPanel {
     }
 
     /// Spawn a fresh default local session + view.
-    fn spawn_local_view(window: &mut Window, cx: &mut Context<Self>) -> Entity<LocalTerminalView> {
+    pub(super) fn spawn_local_view(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<LocalTerminalView> {
         let (shell, scrollback_history) = {
             let settings = TerminalSettings::global(cx).read(cx);
             (settings.shell.clone(), settings.scrollback_history)
@@ -164,7 +169,7 @@ impl TerminalPanel {
     }
 
     /// Point `view`'s context menu at Space `space_id` in this panel.
-    fn attach_split_ctx(
+    pub(super) fn attach_split_ctx(
         &self,
         view: &Entity<LocalTerminalView>,
         space_id: SpaceId,
@@ -178,7 +183,7 @@ impl TerminalPanel {
 
     /// (Re)subscribe to `TitleChanged` on every terminal leaf so the tab strip
     /// refreshes on OSC 0/2 title changes regardless of which leaf changed.
-    fn rebuild_title_subs(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn rebuild_title_subs(&mut self, cx: &mut Context<Self>) {
         let views = self.tree.terminal_views();
         self._title_subs = views
             .into_iter()
@@ -231,183 +236,6 @@ impl TerminalPanel {
     /// Whether this tab has no terminal Spaces left (all empty).
     pub fn has_no_terminals(&self, _cx: &App) -> bool {
         self.tree.has_no_terminals()
-    }
-
-    // ── Space operations ────────────────────────────────────────────
-
-    /// Split Space `space_id` in `dir`; the new empty Space becomes active.
-    pub fn split_active_at(
-        &mut self,
-        space_id: SpaceId,
-        dir: SplitDir,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let new_id = self.tree.alloc_id();
-        let empty = SpaceLeaf {
-            id: new_id,
-            content: SpaceContent::Empty,
-            focus: cx.focus_handle(),
-        };
-        let state = cx.new(|_| ResizableState::default());
-        self.tree.split(space_id, dir, empty, state);
-        self.set_active_space(new_id, window, cx);
-        cx.notify();
-    }
-
-    /// Close Space `space_id`. Closes the whole tab if it was the last Space.
-    pub fn close_space(&mut self, space_id: SpaceId, window: &mut Window, cx: &mut Context<Self>) {
-        let (outcome, removed) = self.tree.close(space_id);
-        if let Some(view) = removed {
-            view.read(cx).session.read(cx).close();
-        }
-        if outcome == CloseOutcome::LastSpaceClosed {
-            if let Some(tp) = self.tab_panel.as_ref().and_then(|w| w.upgrade()) {
-                let panel: Arc<dyn PanelView> = Arc::new(cx.entity());
-                tp.update(cx, |tp, cx| {
-                    tp.remove_panel(panel, window, cx);
-                });
-            }
-            return;
-        }
-        self.rebuild_title_subs(cx);
-        let active = self.tree.active();
-        self.set_active_space(active, window, cx);
-        cx.notify();
-    }
-
-    /// Spawn a local shell directly into empty Space `space_id`.
-    pub fn new_terminal_here(
-        &mut self,
-        space_id: SpaceId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let view = Self::spawn_local_view(window, cx);
-        self.attach_split_ctx(&view, space_id, cx);
-        self.tree.fill_empty(space_id, view);
-        self.rebuild_title_subs(cx);
-        self.set_active_space(space_id, window, cx);
-        cx.notify();
-    }
-
-    /// Make Space `space_id` the active Space (focus it + refresh status bar).
-    pub fn set_active_space(
-        &mut self,
-        space_id: SpaceId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.tree.has_leaf(space_id) {
-            return;
-        }
-        let changed = self.tree.active() != space_id;
-        self.tree.set_active(space_id);
-        if let Some(fh) = self.tree.active_focus_handle(cx) {
-            fh.focus(window, cx);
-        }
-        if changed {
-            if self.is_active {
-                self.publish_active_session(window, cx);
-            }
-            cx.notify();
-        }
-    }
-
-    /// Take the active Space's terminal view out of this tree, leaving it empty
-    /// (and collapsing that Space if other Spaces remain). Used by drag-drop.
-    pub fn take_active_terminal_view(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<Entity<LocalTerminalView>> {
-        let id = self.tree.active();
-        let view = self.tree.take_leaf_terminal(id)?;
-        if self.tree.leaf_count() > 1 {
-            let _ = self.tree.close(id);
-            self.rebuild_title_subs(cx);
-            let active = self.tree.active();
-            self.set_active_space(active, window, cx);
-            cx.notify();
-        }
-        Some(view)
-    }
-
-    /// Handle a Terminal Tab dropped onto empty Space `target`: move the source
-    /// tab's active terminal into this Space (see `docs/terminal-split/03`).
-    pub fn handle_tab_drop(
-        &mut self,
-        target: SpaceId,
-        drag: &DragTerminalTab,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(src) = drag.panel.upgrade() else {
-            return;
-        };
-        let is_self = src == cx.entity();
-
-        let view = if is_self {
-            // Dropping within the same tab: no-op for a single Space.
-            if self.tree.leaf_count() == 1 {
-                return;
-            }
-            self.take_active_terminal_view(window, cx)
-        } else {
-            src.update(cx, |sp, cx| sp.take_active_terminal_view(window, cx))
-        };
-        let Some(view) = view else {
-            return;
-        };
-
-        self.attach_split_ctx(&view, target, cx);
-        self.tree.fill_empty(target, view);
-        self.rebuild_title_subs(cx);
-        self.set_active_space(target, window, cx);
-
-        // Remove the emptied source tab (only when the source is a different,
-        // now-terminal-less panel).
-        if !is_self && src.read(cx).has_no_terminals(cx) {
-            if let Some(tp) = drag.tab_panel.upgrade() {
-                let panel: Arc<dyn PanelView> = Arc::new(src.clone());
-                tp.update(cx, |tp, cx| {
-                    tp.remove_panel(panel, window, cx);
-                });
-            }
-        }
-        cx.notify();
-    }
-
-    /// Publish the active Space's session into `AppState` (SFTP / cwd / locality)
-    /// and apply the auto-hide-right-dock rule.
-    fn publish_active_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (sftp, cwd_source, is_local) = match self.tree.active_terminal() {
-            Some(view) => {
-                let s = view.read(cx).session.read(cx);
-                (s.sftp(), s.cwd_source(), s.is_local())
-            }
-            None => (None, None, true),
-        };
-        AppState::global(cx).update(cx, |state, cx| {
-            state.active_sftp = sftp;
-            state.active_cwd_source = cwd_source;
-            state.active_is_local = is_local;
-            cx.notify();
-        });
-
-        let auto_hide = TerminalSettings::global(cx)
-            .read(cx)
-            .auto_hide_right_dock_on_local;
-        if auto_hide {
-            let dock_area = AppState::global(cx)
-                .read(cx)
-                .dock_area
-                .as_ref()
-                .and_then(|w| w.upgrade());
-            if let Some(dock_area) = dock_area {
-                crate::layout::workspace::set_right_dock_open(&dock_area, !is_local, window, cx);
-            }
-        }
     }
 }
 
@@ -558,97 +386,5 @@ impl Panel for TerminalPanel {
         if active {
             self.publish_active_session(window, cx);
         }
-    }
-}
-
-impl Render for TerminalPanel {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let active = self.tree.active();
-        let single = self.tree.is_single();
-        let panel = cx.entity().downgrade();
-        let body = render_node(self.tree.root(), active, single, panel, window, cx);
-        div()
-            .id("terminal-panel")
-            .size_full()
-            .bg(cx.theme().background)
-            .child(body)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn live_title_is_used() {
-        assert_eq!(
-            resolve_tab_label(Some("vim — main.rs"), "Terminal"),
-            "vim — main.rs"
-        );
-        assert_eq!(
-            resolve_tab_label(Some("user@host: ~/repo"), "user@host:24"),
-            "user@host: ~/repo"
-        );
-        assert_eq!(resolve_tab_label(Some("cmd.exe"), "Terminal"), "cmd.exe");
-    }
-
-    #[test]
-    fn none_falls_back_to_static_label() {
-        assert_eq!(resolve_tab_label(None, "Terminal"), "Terminal");
-        assert_eq!(resolve_tab_label(None, "prod-server"), "prod-server");
-    }
-
-    #[test]
-    fn empty_title_falls_back_to_static_label() {
-        assert_eq!(resolve_tab_label(Some(""), "Terminal"), "Terminal");
-    }
-
-    #[test]
-    fn fallback_is_returned_by_value() {
-        let label = resolve_tab_label(None, "Terminal");
-        assert_eq!(label, "Terminal");
-    }
-
-    #[test]
-    fn windows_drive_path_shortened_to_basename() {
-        assert_eq!(
-            resolve_tab_label(Some("C:\\Windows\\system32\\cmd.exe"), "Terminal"),
-            "cmd.exe"
-        );
-        assert_eq!(
-            resolve_tab_label(
-                Some("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"),
-                "Terminal"
-            ),
-            "powershell.exe"
-        );
-    }
-
-    #[test]
-    fn posix_path_shortened_to_basename() {
-        assert_eq!(resolve_tab_label(Some("/usr/bin/bash"), "Terminal"), "bash");
-        assert_eq!(resolve_tab_label(Some("/bin/sh"), "Terminal"), "sh");
-    }
-
-    #[test]
-    fn relative_or_descriptive_titles_not_trimmed() {
-        assert_eq!(resolve_tab_label(Some("~/repo"), "Terminal"), "~/repo");
-        assert_eq!(
-            resolve_tab_label(Some("user@host: ~/repo"), "Terminal"),
-            "user@host: ~/repo"
-        );
-        assert_eq!(
-            resolve_tab_label(Some("vim — main.rs"), "Terminal"),
-            "vim — main.rs"
-        );
-    }
-
-    #[test]
-    fn trim_path_title_helper_directly() {
-        assert_eq!(trim_path_title("C:\\Windows\\system32\\cmd.exe"), "cmd.exe");
-        assert_eq!(trim_path_title("/usr/bin/bash"), "bash");
-        assert_eq!(trim_path_title("cmd.exe"), "cmd.exe");
-        assert_eq!(trim_path_title("user@host: ~/repo"), "user@host: ~/repo");
-        assert_eq!(trim_path_title("  /usr/bin/zsh  "), "zsh");
     }
 }

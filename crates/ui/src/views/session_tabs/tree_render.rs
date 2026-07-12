@@ -9,7 +9,7 @@ use gpui_component::{
     list::ListItem, menu::PopupMenuItem, notification::NotificationType, tree::tree,
 };
 
-use crate::actions::NewSession;
+use crate::actions::{DeleteSession, NewSession, OpenSession, SessionProperty};
 use crate::notif_ext::notify;
 use crate::state::SshSessionStore;
 
@@ -202,38 +202,52 @@ impl SessionPanel {
                     menu.action_context(focus)
                         .menu("New Session", Box::new(NewSession))
                         .separator()
-                        .item(PopupMenuItem::new("Open").on_click(move |_, window, cx| {
-                            if let Some(s) = SshSessionStore::global(cx)
-                                .read(cx)
-                                .sessions()
-                                .get(store_ix)
-                                .cloned()
-                            {
-                                open_connect_dialog(s, store_ix, window, cx);
-                            }
-                        }))
-                        .separator()
-                        .item(PopupMenuItem::new("Delete").on_click(move |_, window, cx| {
-                            SshSessionStore::global(cx).update(cx, |s, cx| {
-                                s.remove(store_ix, cx);
-                            });
-                            window.push_notification(
-                                notify(NotificationType::Success, "SSH session deleted.", cx),
-                                cx,
-                            );
-                        }))
+                        .item(
+                            PopupMenuItem::new("Open")
+                                .action(Box::new(OpenSession))
+                                .on_click(move |_, window, cx| {
+                                    if let Some(s) = SshSessionStore::global(cx)
+                                        .read(cx)
+                                        .sessions()
+                                        .get(store_ix)
+                                        .cloned()
+                                    {
+                                        open_connect_dialog(s, store_ix, window, cx);
+                                    }
+                                }),
+                        )
                         .separator()
                         .item(
-                            PopupMenuItem::new("Property").on_click(move |_, window, cx| {
-                                if let Some(s) = SshSessionStore::global(cx)
-                                    .read(cx)
-                                    .sessions()
-                                    .get(store_ix)
-                                    .cloned()
-                                {
-                                    open_session_dialog(window, cx, Some((store_ix, s)));
-                                }
-                            }),
+                            PopupMenuItem::new("Delete")
+                                .action(Box::new(DeleteSession))
+                                .on_click(move |_, window, cx| {
+                                    SshSessionStore::global(cx).update(cx, |s, cx| {
+                                        s.remove(store_ix, cx);
+                                    });
+                                    window.push_notification(
+                                        notify(
+                                            NotificationType::Success,
+                                            "SSH session deleted.",
+                                            cx,
+                                        ),
+                                        cx,
+                                    );
+                                }),
+                        )
+                        .separator()
+                        .item(
+                            PopupMenuItem::new("Property")
+                                .action(Box::new(SessionProperty))
+                                .on_click(move |_, window, cx| {
+                                    if let Some(s) = SshSessionStore::global(cx)
+                                        .read(cx)
+                                        .sessions()
+                                        .get(store_ix)
+                                        .cloned()
+                                    {
+                                        open_session_dialog(window, cx, Some((store_ix, s)));
+                                    }
+                                }),
                         )
                 }
             }

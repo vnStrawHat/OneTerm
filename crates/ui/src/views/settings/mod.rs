@@ -5,7 +5,8 @@
 //! module is the full General Settings (font, theme, key bindings, terminal
 //! options, about), split into one file per page:
 //!
-//! - [`general`] — UI font size + key bindings reference.
+//! - [`general`] — UI font size.
+//! - [`key_bindings`] — configurable key bindings (grouped by origin).
 //! - [`terminal`] — shell, font, cursor, layout, scroll, bell, security.
 //! - [`appearance`] — theme mode + theme list.
 //! - [`about`] — version info + links.

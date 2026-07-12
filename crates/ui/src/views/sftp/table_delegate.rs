@@ -14,7 +14,7 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme as _, h_flex,
-    menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
+    menu::{ContextMenuExt as _, PopupMenu},
     table::{Column, ColumnFixed, ColumnSort, TableDelegate, TableState},
 };
 use oneterm_core::FileEntry;
@@ -373,126 +373,7 @@ impl TableDelegate for SftpTableDelegate {
         };
         let is_dir = entry.is_dir;
 
-        let panel = self.panel.clone();
-
-        // First item: Open (dir only), then Download (both file and folder).
-        let menu = if is_dir {
-            menu.item(PopupMenuItem::new("Open").on_click({
-                let panel = panel.clone();
-                move |_, _, cx| {
-                    if let Some(panel) = panel.upgrade() {
-                        panel.update(cx, |this, cx| {
-                            this.pending_action = Some(super::types::PendingAction::Open(row_ix));
-                            cx.notify();
-                        });
-                    }
-                }
-            }))
-            .item(PopupMenuItem::new("Download").on_click({
-                let panel = panel.clone();
-                move |_, _, cx| {
-                    if let Some(panel) = panel.upgrade() {
-                        panel.update(cx, |this, cx| {
-                            this.pending_action = Some(super::types::PendingAction::Download);
-                            cx.notify();
-                        });
-                    }
-                }
-            }))
-        } else {
-            menu.item(PopupMenuItem::new("Download").on_click({
-                let panel = panel.clone();
-                move |_, _, cx| {
-                    if let Some(panel) = panel.upgrade() {
-                        panel.update(cx, |this, cx| {
-                            this.pending_action = Some(super::types::PendingAction::Download);
-                            cx.notify();
-                        });
-                    }
-                }
-            }))
-        };
-
-        menu.separator()
-            .item(PopupMenuItem::new("Rename").on_click({
-                let panel = panel.clone();
-                move |_, _, cx| {
-                    if let Some(panel) = panel.upgrade() {
-                        panel.update(cx, |this, cx| {
-                            this.pending_action = Some(super::types::PendingAction::Rename);
-                            cx.notify();
-                        });
-                    }
-                }
-            }))
-            .item(PopupMenuItem::new("Delete").on_click({
-                let panel = panel.clone();
-                move |_, _, cx| {
-                    if let Some(panel) = panel.upgrade() {
-                        panel.update(cx, |this, cx| {
-                            this.pending_action = Some(super::types::PendingAction::Delete);
-                            cx.notify();
-                        });
-                    }
-                }
-            }))
-            .separator()
-            .item(PopupMenuItem::new("Properties").on_click({
-                let panel = panel.clone();
-                move |_, _, cx| {
-                    if let Some(panel) = panel.upgrade() {
-                        panel.update(cx, |this, cx| {
-                            this.pending_action = Some(super::types::PendingAction::Properties);
-                            cx.notify();
-                        });
-                    }
-                }
-            }))
-            .separator()
-            .item(PopupMenuItem::new("Upload Files").on_click({
-                let panel = panel.clone();
-                move |_, _, cx| {
-                    if let Some(panel) = panel.upgrade() {
-                        panel.update(cx, |this, cx| {
-                            this.pending_action = Some(super::types::PendingAction::UploadFiles);
-                            cx.notify();
-                        });
-                    }
-                }
-            }))
-            .item(PopupMenuItem::new("Upload Folder").on_click({
-                let panel = panel.clone();
-                move |_, _, cx| {
-                    if let Some(panel) = panel.upgrade() {
-                        panel.update(cx, |this, cx| {
-                            this.pending_action = Some(super::types::PendingAction::UploadFolder);
-                            cx.notify();
-                        });
-                    }
-                }
-            }))
-            .item(PopupMenuItem::new("New Folder").on_click({
-                let panel = panel.clone();
-                move |_, _, cx| {
-                    if let Some(panel) = panel.upgrade() {
-                        panel.update(cx, |this, cx| {
-                            this.pending_action = Some(super::types::PendingAction::NewFolder);
-                            cx.notify();
-                        });
-                    }
-                }
-            }))
-            .item(PopupMenuItem::new("Refresh").on_click({
-                let panel = panel;
-                move |_, _, cx| {
-                    if let Some(panel) = panel.upgrade() {
-                        panel.update(cx, |this, cx| {
-                            this.pending_action = Some(super::types::PendingAction::Refresh);
-                            cx.notify();
-                        });
-                    }
-                }
-            }))
+        super::table_delegate_menu::build_entry_menu(menu, &self.panel, row_ix, is_dir)
     }
 
     fn render_empty(
@@ -512,54 +393,7 @@ impl TableDelegate for SftpTableDelegate {
             .text_color(theme.muted_foreground)
             .child("Empty directory.")
             .context_menu(move |menu, _window, _cx| {
-                let panel = panel.clone();
-                menu.item(PopupMenuItem::new("Upload Files").on_click({
-                    let panel = panel.clone();
-                    move |_, _, cx| {
-                        if let Some(panel) = panel.upgrade() {
-                            panel.update(cx, |this, cx| {
-                                this.pending_action =
-                                    Some(super::types::PendingAction::UploadFiles);
-                                cx.notify();
-                            });
-                        }
-                    }
-                }))
-                .item(PopupMenuItem::new("Upload Folder").on_click({
-                    let panel = panel.clone();
-                    move |_, _, cx| {
-                        if let Some(panel) = panel.upgrade() {
-                            panel.update(cx, |this, cx| {
-                                this.pending_action =
-                                    Some(super::types::PendingAction::UploadFolder);
-                                cx.notify();
-                            });
-                        }
-                    }
-                }))
-                .item(PopupMenuItem::new("New Folder").on_click({
-                    let panel = panel.clone();
-                    move |_, _, cx| {
-                        if let Some(panel) = panel.upgrade() {
-                            panel.update(cx, |this, cx| {
-                                this.pending_action = Some(super::types::PendingAction::NewFolder);
-                                cx.notify();
-                            });
-                        }
-                    }
-                }))
-                .separator()
-                .item(PopupMenuItem::new("Refresh").on_click({
-                    let panel = panel;
-                    move |_, _, cx| {
-                        if let Some(panel) = panel.upgrade() {
-                            panel.update(cx, |this, cx| {
-                                this.pending_action = Some(super::types::PendingAction::Refresh);
-                                cx.notify();
-                            });
-                        }
-                    }
-                }))
+                super::table_delegate_menu::build_empty_menu(menu, &panel)
             })
     }
 }

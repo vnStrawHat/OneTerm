@@ -16,7 +16,6 @@ pub(crate) fn page() -> SettingPage {
     SettingPage::new("General")
         .icon(Icon::new(IconName::Settings2))
         .group(interface_group())
-        .group(super::key_bindings::key_bindings_group())
 }
 
 /// "Interface" group — the UI (non-terminal) font size.

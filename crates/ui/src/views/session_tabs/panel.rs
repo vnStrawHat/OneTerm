@@ -22,12 +22,14 @@ use gpui::{
     Window,
 };
 use gpui_component::{
+    WindowExt,
     dock::{Panel, PanelControl, PanelEvent},
     input::InputState,
+    notification::NotificationType,
     tree::TreeState,
 };
 
-use crate::actions::NewSession;
+use crate::actions::{DeleteSession, NewSession, OpenSession, SessionProperty};
 use crate::state::SshSessionStore;
 
 use super::session_dialog::open_session_dialog;
@@ -121,6 +123,58 @@ impl SessionPanel {
         cx: &mut Context<Self>,
     ) {
         open_session_dialog(window, cx, None);
+    }
+
+    /// Resolve the store index of the currently selected session in the tree.
+    fn selected_session_ix(&self, cx: &App) -> Option<usize> {
+        let item = self.tree_state.read(cx).selected_item()?;
+        super::tree_builder::parse_session_id(&item.id)
+    }
+
+    /// Action handler: open the connect dialog for the selected session.
+    pub(crate) fn on_open_session(
+        &mut self,
+        _: &OpenSession,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(ix) = self.selected_session_ix(cx) {
+            if let Some(s) = self.store.read(cx).sessions().get(ix).cloned() {
+                super::connect_dialog::open_connect_dialog(s, ix, window, cx);
+            }
+        }
+    }
+
+    /// Action handler: delete the selected session from the store.
+    pub(crate) fn on_delete_session(
+        &mut self,
+        _: &DeleteSession,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(ix) = self.selected_session_ix(cx) {
+            self.store.update(cx, |s, cx| {
+                s.remove(ix, cx);
+            });
+            window.push_notification(
+                crate::notif_ext::notify(NotificationType::Success, "SSH session deleted.", cx),
+                cx,
+            );
+        }
+    }
+
+    /// Action handler: open the property dialog for the selected session.
+    pub(crate) fn on_session_property(
+        &mut self,
+        _: &SessionProperty,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(ix) = self.selected_session_ix(cx) {
+            if let Some(s) = self.store.read(cx).sessions().get(ix).cloned() {
+                open_session_dialog(window, cx, Some((ix, s)));
+            }
+        }
     }
 }
 

@@ -32,6 +32,51 @@ actions!(
         OpenSettings,
         /// Activate the in-terminal search bar (Find).
         Find,
+        // ── Terminal context-menu actions ───────────────────────────
+        /// Split the active terminal Space to the right.
+        SplitRight,
+        /// Split the active terminal Space to the left.
+        SplitLeft,
+        /// Split the active terminal Space upward.
+        SplitUp,
+        /// Split the active terminal Space downward.
+        SplitDown,
+        /// Copy the terminal selection to the clipboard.
+        TerminalCopy,
+        /// Paste the clipboard contents into the active terminal.
+        TerminalPaste,
+        /// Select all text in the active terminal.
+        TerminalSelectAll,
+        /// Clear the active terminal screen.
+        TerminalClear,
+        /// Close the active terminal Space (not the whole tab).
+        CloseSpace,
+        // ── Session tabs context-menu actions ───────────────────────
+        /// Open the connect dialog for the selected session.
+        OpenSession,
+        /// Delete the selected session from the store.
+        DeleteSession,
+        /// Open the property dialog for the selected session.
+        SessionProperty,
+        // ── SFTP context-menu actions ───────────────────────────────
+        /// Open the selected file/folder in the SFTP browser.
+        SftpOpen,
+        /// Download the selected file/folder from the remote.
+        SftpDownload,
+        /// Rename the selected file/folder.
+        SftpRename,
+        /// Delete the selected file/folder.
+        SftpDelete,
+        /// Show properties of the selected file/folder.
+        SftpProperties,
+        /// Upload files to the current remote directory.
+        SftpUploadFiles,
+        /// Upload a folder to the current remote directory.
+        SftpUploadFolder,
+        /// Create a new folder in the current remote directory.
+        SftpNewFolder,
+        /// Refresh the SFTP file listing.
+        SftpRefresh,
     ]
 );
 

@@ -5,11 +5,21 @@ use gpui_component::menu::{ContextMenu, ContextMenuExt as _, PopupMenuItem};
 
 use oneterm_core::TerminalSession;
 
-use crate::actions::AddPanel;
+use crate::actions::{
+    AddPanel, CloseSpace, SplitDown, SplitLeft, SplitRight, SplitUp, TerminalClear, TerminalCopy,
+    TerminalPaste, TerminalSelectAll,
+};
 
 use super::super::space::{SplitContext, SplitDir};
 
 /// Attach the right-click context menu.
+///
+/// Each item carries both an `.action()` (for keyboard-shortcut display + global
+/// key-binding dispatch) and an `.on_click()` handler (for the direct click
+/// behaviour, which has access to local state like `has_selection` or the owning
+/// panel entity). When the item is clicked the `on_click` handler runs; when the
+/// global key binding fires, the action is dispatched to the focused element's
+/// action chain, which reaches the `TerminalPanel`'s `on_action` handlers.
 ///
 /// Layout for a terminal Space (with `split_ctx`):
 /// 1. New Terminal
@@ -40,16 +50,22 @@ where
                 .unwrap_or(false);
 
             // 1. New Terminal — add a new TerminalPanel to the center dock.
-            let mut menu = menu.item(PopupMenuItem::new("New Terminal").on_click({
-                let f = focus.clone();
-                move |_, window, cx| {
-                    window.dispatch_action(
-                        Box::new(AddPanel(gpui_component::dock::DockPlacement::Center)),
-                        cx,
-                    );
-                    window.focus(&f, cx);
-                }
-            }));
+            let mut menu = menu.item(
+                PopupMenuItem::new("New Terminal")
+                    .action(Box::new(AddPanel(
+                        gpui_component::dock::DockPlacement::Center,
+                    )))
+                    .on_click({
+                        let f = focus.clone();
+                        move |_, window, cx| {
+                            window.dispatch_action(
+                                Box::new(AddPanel(gpui_component::dock::DockPlacement::Center)),
+                                cx,
+                            );
+                            window.focus(&f, cx);
+                        }
+                    }),
+            );
 
             // 2–3. Split Right / Left / Up / Down (only inside a Space tree).
             if let Some(ctx) = split_ctx.clone() {
@@ -67,6 +83,7 @@ where
                 // 5. Copy
                 .item(
                     PopupMenuItem::new("Copy")
+                        .action(Box::new(TerminalCopy))
                         .disabled(!has_selection)
                         .on_click({
                             let s = session.clone();
@@ -84,46 +101,65 @@ where
                         }),
                 )
                 // 6. Paste
-                .item(PopupMenuItem::new("Paste").on_click({
-                    let s = session.clone();
-                    let f = focus.clone();
-                    move |_, window, cx| {
-                        if let Some(item) = cx.read_from_clipboard() {
-                            if let Some(text) = item.text() {
-                                s.update(cx, |s, _| s.paste(&text));
+                .item(
+                    PopupMenuItem::new("Paste")
+                        .action(Box::new(TerminalPaste))
+                        .on_click({
+                            let s = session.clone();
+                            let f = focus.clone();
+                            move |_, window, cx| {
+                                if let Some(item) = cx.read_from_clipboard() {
+                                    if let Some(text) = item.text() {
+                                        s.update(cx, |s, _| s.paste(&text));
+                                    }
+                                }
+                                window.focus(&f, cx);
                             }
-                        }
-                        window.focus(&f, cx);
-                    }
-                }))
+                        }),
+                )
                 // 7. Select All
-                .item(PopupMenuItem::new("Select All").on_click({
-                    let s = session.clone();
-                    let f = focus.clone();
-                    move |_, window, cx| {
-                        s.update(cx, |s, _| s.select_all());
-                        window.focus(&f, cx);
-                    }
-                }))
+                .item(
+                    PopupMenuItem::new("Select All")
+                        .action(Box::new(TerminalSelectAll))
+                        .on_click({
+                            let s = session.clone();
+                            let f = focus.clone();
+                            move |_, window, cx| {
+                                s.update(cx, |s, _| s.select_all());
+                                window.focus(&f, cx);
+                            }
+                        }),
+                )
                 // 8. Clear
-                .item(PopupMenuItem::new("Clear").on_click({
-                    let s = session.clone();
-                    let f = focus.clone();
-                    move |_, window, cx| {
-                        s.update(cx, |s, _| s.clear());
-                        window.focus(&f, cx);
-                    }
-                }))
+                .item(
+                    PopupMenuItem::new("Clear")
+                        .action(Box::new(TerminalClear))
+                        .on_click({
+                            let s = session.clone();
+                            let f = focus.clone();
+                            move |_, window, cx| {
+                                s.update(cx, |s, _| s.clear());
+                                window.focus(&f, cx);
+                            }
+                        }),
+                )
                 // 9. ── separator ──
                 .separator()
                 // 10. Close Terminal Tab — dispatch the ClosePanel action.
-                .item(PopupMenuItem::new("Close Terminal Tab").on_click({
-                    let f = focus.clone();
-                    move |_, window, cx| {
-                        window.dispatch_action(Box::new(gpui_component::dock::ClosePanel), cx);
-                        window.focus(&f, cx);
-                    }
-                }));
+                .item(
+                    PopupMenuItem::new("Close Terminal Tab")
+                        .action(Box::new(gpui_component::dock::ClosePanel))
+                        .on_click({
+                            let f = focus.clone();
+                            move |_, window, cx| {
+                                window.dispatch_action(
+                                    Box::new(gpui_component::dock::ClosePanel),
+                                    cx,
+                                );
+                                window.focus(&f, cx);
+                            }
+                        }),
+                );
 
             // 11. Close Space — directly below Close Terminal Tab, only when the
             // tab has more than one Space.
@@ -134,17 +170,23 @@ where
                     .map(|p| p.read(cx).leaf_count() > 1)
                     .unwrap_or(false);
                 if can_close_space {
-                    menu = menu.item(PopupMenuItem::new("Close Space").on_click({
-                        let f = focus.clone();
-                        let panel = ctx.panel.clone();
-                        let space_id = ctx.space_id;
-                        move |_, window, cx| {
-                            if let Some(panel) = panel.upgrade() {
-                                panel.update(cx, |p, cx| p.close_space(space_id, window, cx));
-                            }
-                            window.focus(&f, cx);
-                        }
-                    }));
+                    menu = menu.item(
+                        PopupMenuItem::new("Close Space")
+                            .action(Box::new(CloseSpace))
+                            .on_click({
+                                let f = focus.clone();
+                                let panel = ctx.panel.clone();
+                                let space_id = ctx.space_id;
+                                move |_, window, cx| {
+                                    if let Some(panel) = panel.upgrade() {
+                                        panel.update(cx, |p, cx| {
+                                            p.close_space(space_id, window, cx);
+                                        });
+                                    }
+                                    window.focus(&f, cx);
+                                }
+                            }),
+                    );
                 }
             }
 
@@ -163,10 +205,17 @@ fn split_item(
     let panel = ctx.panel.clone();
     let space_id = ctx.space_id;
     let f = focus.clone();
-    PopupMenuItem::new(label).on_click(move |_, window, cx| {
-        if let Some(panel) = panel.upgrade() {
-            panel.update(cx, |p, cx| p.split_active_at(space_id, dir, window, cx));
-        }
-        window.focus(&f, cx);
-    })
+    PopupMenuItem::new(label)
+        .action(match dir {
+            SplitDir::Right => Box::new(SplitRight),
+            SplitDir::Left => Box::new(SplitLeft),
+            SplitDir::Up => Box::new(SplitUp),
+            SplitDir::Down => Box::new(SplitDown),
+        })
+        .on_click(move |_, window, cx| {
+            if let Some(panel) = panel.upgrade() {
+                panel.update(cx, |p, cx| p.split_active_at(space_id, dir, window, cx));
+            }
+            window.focus(&f, cx);
+        })
 }

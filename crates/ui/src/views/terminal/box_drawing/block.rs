@@ -89,11 +89,15 @@ mod tests {
     #[test]
     fn full_width_band_membership() {
         // Coalescable full-width horizontal bands.
-        for c in ['\u{2580}', '\u{2581}', '\u{2584}', '\u{2587}', '\u{2588}', '\u{2594}'] {
+        for c in [
+            '\u{2580}', '\u{2581}', '\u{2584}', '\u{2587}', '\u{2588}', '\u{2594}',
+        ] {
             assert!(is_full_width_band(c), "{c:?} should be a full-width band");
         }
         // Partial-width / quadrant blocks must NOT be coalesced.
-        for c in ['\u{2589}', '\u{258C}', '\u{2590}', '\u{2595}', '\u{2596}', '\u{259F}'] {
+        for c in [
+            '\u{2589}', '\u{258C}', '\u{2590}', '\u{2595}', '\u{2596}', '\u{259F}',
+        ] {
             assert!(!is_full_width_band(c), "{c:?} must not be coalesced");
         }
         // Non-block chars.

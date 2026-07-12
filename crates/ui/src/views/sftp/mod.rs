@@ -5,10 +5,13 @@
 
 mod actions;
 mod panel;
+mod panel_actions;
+mod panel_ops;
 mod persistence;
 mod render;
 mod render_transfer;
 mod table_delegate;
+mod table_delegate_menu;
 mod transfer;
 mod types;
 
