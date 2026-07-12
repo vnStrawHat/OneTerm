@@ -301,7 +301,8 @@ impl TerminalSession for SshSession {
     }
 
     fn clear(&self) {
-        self.write(b"\x1b[3J\x1b[2J\x1b[H");
+        // Send the `clear` command to the shell, exactly as if the user typed it.
+        self.write(b"clear\r");
         self.clear_selection();
     }
 
