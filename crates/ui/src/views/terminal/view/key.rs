@@ -55,12 +55,75 @@ impl super::LocalTerminalView {
         let spec = if let Some(n) = named {
             KeySpec::Named(n)
         } else {
-            // Only use key_char for character input. If there's no key_char
-            // (e.g. a named key we don't recognize like "f1"), return None
-            // to prevent sending the key name as literal text.
-            let ch = keystroke.key_char.clone().filter(|s| !s.is_empty())?;
+            // Use key_char for character input. When modifiers (ctrl/alt/platform)
+            // are held, key_char is typically None (e.g. Ctrl+C doesn't produce
+            // a printable character), so fall back to keystroke.key — which IS
+            // the character name for letter keys.
+            //
+            // When NO modifiers are held and key_char is None, return None to
+            // prevent unrecognized named keys (e.g. "f25") from being sent as
+            // literal text.
+            let ch = keystroke
+                .key_char
+                .clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| keystroke.key.clone());
+            // If the fallback key is a single character, it's a real key press.
+            // If it's multi-character (like "f25") and no modifiers are held,
+            // it's an unrecognized named key — return None.
+            if ch.chars().count() != 1 && !mods.control && !mods.alt && !mods.platform {
+                return None;
+            }
             KeySpec::Character(ch)
         };
         Some((spec, keymods))
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::needless_update)]
+mod tests {
+    use super::super::LocalTerminalView;
+    use gpui::{Keystroke, Modifiers};
+    use oneterm_core::terminal::KeySpec;
+
+    fn ks(key: &str, key_char: Option<&str>, mods: Modifiers) -> Keystroke {
+        Keystroke {
+            key: key.into(),
+            key_char: key_char.map(|s| s.into()),
+            modifiers: mods,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn ctrl_c_maps_to_character() {
+        // Ctrl+C: key_char is None, but control modifier is held.
+        // Must return Some(Character("c")) so the SIGINT handler can match it.
+        let (spec, mods) = LocalTerminalView::map_key(&ks(
+            "c",
+            None,
+            Modifiers {
+                control: true,
+                ..Default::default()
+            },
+        ))
+        .expect("Ctrl+C must map to a key");
+        assert!(matches!(spec, KeySpec::Character(ref ch) if ch == "c"));
+        assert!(mods.ctrl);
+    }
+
+    #[test]
+    fn unknown_named_key_without_modifiers_returns_none() {
+        // An unrecognized named key like "f25" with no modifiers should
+        // return None to prevent it being sent as literal text.
+        assert!(LocalTerminalView::map_key(&ks("f25", None, Modifiers::default())).is_none());
+    }
+
+    #[test]
+    fn plain_a_maps_to_character() {
+        let (spec, _) =
+            LocalTerminalView::map_key(&ks("a", Some("a"), Modifiers::default())).unwrap();
+        assert!(matches!(spec, KeySpec::Character(ref ch) if ch == "a"));
     }
 }
