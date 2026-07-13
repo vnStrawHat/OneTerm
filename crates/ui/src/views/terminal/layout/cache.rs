@@ -90,6 +90,17 @@ pub(crate) fn update_row_cache(
     cache.stats.total_lines = num_lines;
     cache.stats.dirty_lines = dirty_set.len();
     cache.stats.hash_calls = 0;
+    cache.stats.row_layout_calls = 0;
+    cache.stats.allocation_buffer_sites = if num_lines == 0 {
+        0
+    } else {
+        // `url_masks_wrapped`: masks + wrap flags + chars/mask per row.
+        2 + 2 * num_lines
+    };
+    if !dirty_set.is_empty() {
+        // The dirty-row HashSet.
+        cache.stats.allocation_buffer_sites += 1;
+    }
 
     // Pre-compute URL masks for all lines (handles wrapped URLs).
     let num_cols = grid_size.1 as usize;
@@ -101,6 +112,9 @@ pub(crate) fn update_row_cache(
             break;
         }
         let line_vec: Vec<&IndexedCell> = line_cells.collect();
+        if !line_vec.is_empty() {
+            cache.stats.allocation_buffer_sites += 1;
+        }
 
         let is_dirty = if dirty_set.contains(&display_line) {
             true
@@ -116,6 +130,9 @@ pub(crate) fn update_row_cache(
         };
 
         if is_dirty {
+            cache.stats.row_layout_calls += 1;
+            // Cell classes, text/column maps, and row artifact scratch buffers.
+            cache.stats.allocation_buffer_sites += 7;
             let new_hash = line_hash(&line_vec);
             let url_mask = url_masks
                 .get(display_line)

@@ -71,7 +71,9 @@ pub(crate) fn prepaint_terminal(
     let pad_bottom = px(padding.bottom);
 
     // Read terminal_info early — need absolute_line_count for the gutter width.
+    let terminal_info_start = std::time::Instant::now();
     let info = session.read(cx).terminal_info();
+    let terminal_info_us = terminal_info_start.elapsed().as_micros();
     let absolute_line_count = info.absolute_line_count;
 
     // ── Gutter width (cached) ──
@@ -128,7 +130,9 @@ pub(crate) fn prepaint_terminal(
         cx,
     );
 
+    let snapshot_start = std::time::Instant::now();
     let snapshot = session.read(cx).snapshot();
+    let snapshot_us = snapshot_start.elapsed().as_micros();
     let num_lines = snapshot.terminal_bounds.num_lines;
     let num_cols = snapshot.terminal_bounds.num_cols;
     let display_offset = snapshot.display_offset;
@@ -168,6 +172,7 @@ pub(crate) fn prepaint_terminal(
 
     // Fill the cached ShapedLine for runs not yet shaped.
     let mut shape_line_count: usize = 0;
+    let mut shape_buffer_allocations: usize = 0;
     {
         let mut cache = row_cache.borrow_mut();
         for i in 0..num_lines {
@@ -175,6 +180,9 @@ pub(crate) fn prepaint_terminal(
             if row.shaped_lines.len() != row.runs.len() {
                 row.shaped_lines.clear();
                 row.shaped_lines.reserve(row.runs.len());
+                if !row.runs.is_empty() {
+                    shape_buffer_allocations += 1;
+                }
                 for run in &row.runs {
                     let shaped = window.text_system().shape_line(
                         SharedString::from(run.text.clone()),
@@ -187,7 +195,10 @@ pub(crate) fn prepaint_terminal(
                 }
             }
         }
+        cache.stats.allocation_buffer_sites += shape_buffer_allocations;
         cache.stats.shape_line_calls = shape_line_count;
+        cache.stats.terminal_info_us = terminal_info_us;
+        cache.stats.snapshot_us = snapshot_us;
         cache.stats.prepaint_us = prepaint_start.elapsed().as_micros();
     }
 

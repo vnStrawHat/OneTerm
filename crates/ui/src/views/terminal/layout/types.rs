@@ -104,14 +104,20 @@ impl RowLayout {
 pub(crate) struct FrameStats {
     pub total_lines: usize,
     pub dirty_lines: usize,
+    pub row_layout_calls: usize,
     pub paint_quad_calls: usize,
     pub shape_line_calls: usize,
     pub text_run_paints: usize,
     pub bg_rect_count: usize,
     pub hash_calls: usize,
+    pub allocation_buffer_sites: usize,
     pub frame_count: u64,
     /// Wall-clock time of the prepaint phase (layout + shaping + snapshot), µs.
     pub prepaint_us: u128,
+    /// Wall-clock time spent in `terminal_info`, including backend locking, µs.
+    pub terminal_info_us: u128,
+    /// Wall-clock time spent cloning the render snapshot under the backend lock, µs.
+    pub snapshot_us: u128,
     /// Wall-clock time of the paint phase (quad emission), µs.
     pub paint_us: u128,
 }

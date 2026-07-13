@@ -17,3 +17,22 @@ pub struct SecurityConfig {
 fn default_false() -> bool {
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn phase0_clipboard_read_permission_defaults_to_denied() {
+        assert!(!SecurityConfig::default().allow_clipboard_read);
+        let config: SecurityConfig = serde_json::from_str("{}").unwrap();
+        assert!(!config.allow_clipboard_read);
+    }
+
+    #[test]
+    fn phase0_clipboard_read_permission_can_be_enabled_explicitly() {
+        let config: SecurityConfig =
+            serde_json::from_str(r#"{ "allow_clipboard_read": true }"#).unwrap();
+        assert!(config.allow_clipboard_read);
+    }
+}

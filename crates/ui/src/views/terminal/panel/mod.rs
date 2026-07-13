@@ -8,6 +8,9 @@
 //! Space operations live in [`ops`] and the context-menu action handlers +
 //! [`Render`] impl live in [`actions`].
 
+#[cfg(test)]
+mod tests;
+
 mod actions;
 mod ops;
 

@@ -4,6 +4,9 @@ description = "SSH + SFTP implementation for OneTerm (russh)."
 publish = false
 edition.workspace = true
 
+[features]
+terminal-diagnostics = []
+
 [lints]
 workspace = true
 
@@ -17,3 +20,6 @@ log.workspace = true
 russh-sftp.workspace = true
 anyhow.workspace = true
 tokio-util.workspace = true
+
+[dev-dependencies]
+oneterm-core = { workspace = true, features = ["test-support"] }

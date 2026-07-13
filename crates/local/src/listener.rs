@@ -9,10 +9,16 @@
 //! EventLoop sends Wakeup/ChildExit after reading. See `docs/terminal-backend.md` §5.
 
 use std::borrow::Cow;
+#[cfg(any(test, feature = "terminal-diagnostics"))]
+use std::sync::Arc;
 use std::sync::Mutex;
+#[cfg(any(test, feature = "terminal-diagnostics"))]
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use async_channel::Sender;
+#[cfg(any(test, feature = "terminal-diagnostics"))]
+use async_channel::TrySendError;
 use log::warn;
 
 use oneterm_core::SessionEvent;
@@ -23,6 +29,23 @@ use oneterm_core::terminal::{
 
 use crate::event_loop::{ShellMsg, ShellNotifier};
 use crate::state::SharedState;
+
+/// Snapshot of local session-event queue failures.
+#[cfg(any(test, feature = "terminal-diagnostics"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LocalQueueDiagnostics {
+    /// Session events rejected because the event queue was full.
+    pub event_full: u64,
+    /// Session events rejected because the event queue was closed.
+    pub event_closed: u64,
+}
+
+#[cfg(any(test, feature = "terminal-diagnostics"))]
+#[derive(Default)]
+struct LocalQueueCounters {
+    event_full: AtomicU64,
+    event_closed: AtomicU64,
+}
 
 /// `EventListener` for the local shell. Clone-friendly (Arc fields) for sharing
 /// between `Term` and `EventLoop`.
@@ -37,6 +60,9 @@ pub struct LocalListener {
     /// Pending OSC 10/11/12 color queries — enqueued here, answered by the event
     /// loop after each parse batch (when the `Term` lock is free to read colors).
     color_queries: SharedColorQueries,
+    /// Diagnostic counters for bounded event-queue failures.
+    #[cfg(any(test, feature = "terminal-diagnostics"))]
+    queue_counters: Arc<LocalQueueCounters>,
 }
 
 impl LocalListener {
@@ -46,7 +72,27 @@ impl LocalListener {
             notifier: std::sync::Arc::new(Mutex::new(None)),
             state,
             color_queries: new_color_queries(),
+            #[cfg(any(test, feature = "terminal-diagnostics"))]
+            queue_counters: Arc::new(LocalQueueCounters::default()),
         }
+    }
+
+    /// Return bounded event-queue failure counters.
+    #[cfg(any(test, feature = "terminal-diagnostics"))]
+    pub fn queue_diagnostics(&self) -> LocalQueueDiagnostics {
+        LocalQueueDiagnostics {
+            event_full: self.queue_counters.event_full.load(Ordering::Relaxed),
+            event_closed: self.queue_counters.event_closed.load(Ordering::Relaxed),
+        }
+    }
+
+    #[cfg(any(test, feature = "terminal-diagnostics"))]
+    fn record_event_failure<T>(&self, error: &TrySendError<T>) {
+        let counter = match error {
+            TrySendError::Full(_) => &self.queue_counters.event_full,
+            TrySendError::Closed(_) => &self.queue_counters.event_closed,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Set the notifier once `ShellEventLoop::new()` is available. Can be called
@@ -92,6 +138,8 @@ impl LocalListener {
     /// full/closed — acceptable since `Output` is debounced.
     pub fn forward(&self, ev: SessionEvent) {
         if let Err(e) = self.event_tx.try_send(ev) {
+            #[cfg(any(test, feature = "terminal-diagnostics"))]
+            self.record_event_failure(&e);
             warn!("LocalListener: drop event (channel full/closed): {e:?}");
         }
     }
@@ -337,5 +385,32 @@ mod tests {
             std::sync::Arc::new(|s: &str| s.to_string()),
         ));
         assert_eq!(rx.try_recv().unwrap(), SessionEvent::ClipboardRead);
+    }
+}
+
+#[cfg(test)]
+mod phase0_tests {
+    use oneterm_core::SessionEvent;
+    use oneterm_core::terminal::test_support::FakeTransport;
+
+    use super::*;
+    use crate::state::new_shared;
+
+    #[test]
+    fn phase0_bounded_local_event_queue_drops_new_items_and_counts_failures() {
+        let events = FakeTransport::bounded(1);
+        let listener = LocalListener::new(events.sender(), new_shared());
+        events
+            .try_send(SessionEvent::Title("first".into()))
+            .unwrap();
+
+        listener.forward(SessionEvent::Bell);
+
+        assert_eq!(listener.queue_diagnostics().event_full, 1);
+        assert_eq!(events.len(), 1);
+
+        events.close();
+        listener.forward(SessionEvent::Bell);
+        assert_eq!(listener.queue_diagnostics().event_closed, 1);
     }
 }

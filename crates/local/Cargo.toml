@@ -4,6 +4,9 @@ description = "Local shell via PTY for OneTerm (alacritty_terminal::tty)."
 publish = false
 edition.workspace = true
 
+[features]
+terminal-diagnostics = []
+
 [lints]
 workspace = true
 
@@ -17,6 +20,7 @@ log.workspace = true
 [dev-dependencies]
 # DOOM-fire example: terminal size detection + Windows VT processing.
 libc = "0.2"
+oneterm-core = { workspace = true, features = ["test-support"] }
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",

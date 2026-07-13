@@ -12,6 +12,8 @@ pub mod osc_color;
 pub mod palette;
 pub mod search;
 pub mod session;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 pub mod url;
 
 pub use colors_util::{

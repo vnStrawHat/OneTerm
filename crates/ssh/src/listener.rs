@@ -7,7 +7,14 @@
 //! Similar to `local/src/listener.rs` but replaces `Notifier` with `cmd_tx`
 //! (async_channel::Sender<Cmd>).
 
+#[cfg(any(test, feature = "terminal-diagnostics"))]
+use std::sync::Arc;
+#[cfg(any(test, feature = "terminal-diagnostics"))]
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use async_channel::Sender;
+#[cfg(any(test, feature = "terminal-diagnostics"))]
+use async_channel::TrySendError;
 use log::warn;
 
 use alacritty_terminal::event::{Event, EventListener};
@@ -31,6 +38,29 @@ pub enum Cmd {
     Close,
 }
 
+/// Snapshot of SSH command/event queue failures.
+#[cfg(any(test, feature = "terminal-diagnostics"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SshQueueDiagnostics {
+    /// Command writes rejected because the command queue was full.
+    pub command_full: u64,
+    /// Command writes rejected because the command queue was closed.
+    pub command_closed: u64,
+    /// Session events rejected because the event queue was full.
+    pub event_full: u64,
+    /// Session events rejected because the event queue was closed.
+    pub event_closed: u64,
+}
+
+#[cfg(any(test, feature = "terminal-diagnostics"))]
+#[derive(Default)]
+struct SshQueueCounters {
+    command_full: AtomicU64,
+    command_closed: AtomicU64,
+    event_full: AtomicU64,
+    event_closed: AtomicU64,
+}
+
 /// `EventListener` for the SSH session. Clone-friendly (Arc fields) for sharing
 /// between `Term` and the tokio task.
 #[derive(Clone)]
@@ -44,6 +74,9 @@ pub struct SshListener {
     /// Pending OSC 10/11/12 color queries — enqueued here, answered by the tokio
     /// task after each parse batch (when the `Term` lock is free to read colors).
     color_queries: SharedColorQueries,
+    /// Diagnostic counters for bounded queue failures.
+    #[cfg(any(test, feature = "terminal-diagnostics"))]
+    queue_counters: Arc<SshQueueCounters>,
 }
 
 impl SshListener {
@@ -53,7 +86,38 @@ impl SshListener {
             cmd_tx,
             state,
             color_queries: new_color_queries(),
+            #[cfg(any(test, feature = "terminal-diagnostics"))]
+            queue_counters: Arc::new(SshQueueCounters::default()),
         }
+    }
+
+    /// Return bounded-queue failure counters.
+    #[cfg(any(test, feature = "terminal-diagnostics"))]
+    pub fn queue_diagnostics(&self) -> SshQueueDiagnostics {
+        SshQueueDiagnostics {
+            command_full: self.queue_counters.command_full.load(Ordering::Relaxed),
+            command_closed: self.queue_counters.command_closed.load(Ordering::Relaxed),
+            event_full: self.queue_counters.event_full.load(Ordering::Relaxed),
+            event_closed: self.queue_counters.event_closed.load(Ordering::Relaxed),
+        }
+    }
+
+    #[cfg(any(test, feature = "terminal-diagnostics"))]
+    fn record_command_failure<T>(&self, error: &TrySendError<T>) {
+        let counter = match error {
+            TrySendError::Full(_) => &self.queue_counters.command_full,
+            TrySendError::Closed(_) => &self.queue_counters.command_closed,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[cfg(any(test, feature = "terminal-diagnostics"))]
+    fn record_event_failure<T>(&self, error: &TrySendError<T>) {
+        let counter = match error {
+            TrySendError::Full(_) => &self.queue_counters.event_full,
+            TrySendError::Closed(_) => &self.queue_counters.event_closed,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Write bytes to the SSH channel (via cmd_tx → tokio task → channel.data).
@@ -64,6 +128,8 @@ impl SshListener {
             String::from_utf8_lossy(bytes)
         );
         if let Err(e) = self.cmd_tx.try_send(Cmd::Write(bytes.to_vec())) {
+            #[cfg(any(test, feature = "terminal-diagnostics"))]
+            self.record_command_failure(&e);
             warn!("SshListener::pty_write: try_send fail: {e}");
         }
     }
@@ -71,6 +137,8 @@ impl SshListener {
     /// Resize the SSH channel (via cmd_tx → tokio task → channel.window_change).
     pub fn pty_resize(&self, rows: u16, cols: u16) {
         if let Err(e) = self.cmd_tx.try_send(Cmd::Resize(rows, cols)) {
+            #[cfg(any(test, feature = "terminal-diagnostics"))]
+            self.record_command_failure(&e);
             warn!("SshListener: pty_resize fail: {e}");
         }
     }
@@ -78,6 +146,8 @@ impl SshListener {
     /// Close the SSH channel.
     pub fn pty_close(&self) {
         if let Err(e) = self.cmd_tx.try_send(Cmd::Close) {
+            #[cfg(any(test, feature = "terminal-diagnostics"))]
+            self.record_command_failure(&e);
             warn!("SshListener: pty_close fail: {e}");
         }
     }
@@ -85,6 +155,8 @@ impl SshListener {
     /// Forward a `SessionEvent` (non-blocking). Drops it if the channel is full/closed.
     pub fn forward(&self, ev: SessionEvent) {
         if let Err(e) = self.event_tx.try_send(ev) {
+            #[cfg(any(test, feature = "terminal-diagnostics"))]
+            self.record_event_failure(&e);
             warn!("SshListener: drop event (channel full/closed): {e:?}");
         }
     }
@@ -196,5 +268,107 @@ impl EventListener for SshListener {
             | Event::CursorBlinkingChange
             | Event::TextAreaSizeRequest(_) => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Mutex, Once};
+
+    use log::{LevelFilter, Log, Metadata, Record};
+    use oneterm_core::SessionEvent;
+    use oneterm_core::terminal::test_support::FakeTransport;
+
+    use super::*;
+    use crate::state::new_shared;
+
+    struct CaptureLogger {
+        records: Mutex<Vec<String>>,
+    }
+
+    impl Log for CaptureLogger {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn log(&self, record: &Record<'_>) {
+            self.records.lock().unwrap().push(format!(
+                "{} {} {}",
+                record.level(),
+                record.target(),
+                record.args()
+            ));
+        }
+
+        fn flush(&self) {}
+    }
+
+    static LOGGER: CaptureLogger = CaptureLogger {
+        records: Mutex::new(Vec::new()),
+    };
+    static INSTALL_LOGGER: Once = Once::new();
+
+    fn capture_logs() {
+        INSTALL_LOGGER.call_once(|| {
+            log::set_logger(&LOGGER).expect("test logger should install once");
+            log::set_max_level(LevelFilter::Trace);
+        });
+        LOGGER.records.lock().unwrap().clear();
+    }
+
+    fn make_listener(
+        event_capacity: usize,
+        command_capacity: usize,
+    ) -> (SshListener, FakeTransport<SessionEvent>, FakeTransport<Cmd>) {
+        let events = FakeTransport::bounded(event_capacity);
+        let commands = FakeTransport::bounded(command_capacity);
+        let listener = SshListener::new(events.sender(), commands.sender(), new_shared());
+        (listener, events, commands)
+    }
+
+    #[test]
+    fn phase0_baseline_ssh_input_is_present_in_debug_logs() {
+        capture_logs();
+        let (listener, _events, commands) = make_listener(4, 4);
+        let sentinel = b"PHASE0_DO_NOT_LOG_SECRET_7fd65c";
+
+        listener.pty_write(sentinel);
+
+        let records = LOGGER.records.lock().unwrap().clone();
+        assert!(
+            records
+                .iter()
+                .any(|record| record.contains("PHASE0_DO_NOT_LOG_SECRET_7fd65c"))
+        );
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(Cmd::Write(bytes)) if bytes == sentinel
+        ));
+    }
+
+    #[test]
+    fn phase0_bounded_ssh_queues_drop_new_items_and_count_failures() {
+        let (listener, events, commands) = make_listener(1, 1);
+        commands.try_send(Cmd::Close).unwrap();
+        events
+            .try_send(SessionEvent::Title("first".into()))
+            .unwrap();
+
+        listener.pty_write(b"dropped command");
+        listener.forward(SessionEvent::Bell);
+
+        let diagnostics = listener.queue_diagnostics();
+        assert_eq!(diagnostics.command_full, 1);
+        assert_eq!(diagnostics.event_full, 1);
+        assert_eq!(commands.len(), 1);
+        assert_eq!(events.len(), 1);
+
+        commands.close();
+        events.close();
+        listener.pty_resize(24, 80);
+        listener.forward(SessionEvent::Bell);
+        let diagnostics = listener.queue_diagnostics();
+        assert_eq!(diagnostics.command_closed, 1);
+        assert_eq!(diagnostics.event_closed, 1);
     }
 }

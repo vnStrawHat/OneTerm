@@ -24,6 +24,8 @@ pub(crate) mod font;
 pub(crate) mod grid;
 pub(crate) mod key;
 pub(crate) mod scrollbar;
+#[cfg(test)]
+mod tests;
 
 const CURSOR_BLINK_INTERVAL_MS: u64 = 500;
 
@@ -243,6 +245,12 @@ impl LocalTerminalView {
             search_input: None,
             split_ctx: None,
         }
+    }
+
+    /// Return a snapshot of the most recently painted renderer counters.
+    #[cfg(any(test, feature = "terminal-diagnostics"))]
+    pub fn render_diagnostics(&self) -> super::diagnostics::TerminalRenderDiagnostics {
+        self.row_cache.borrow().stats.into()
     }
 
     /// Update the OSC 9;4 progress state. `Remove` clears it (`None`).

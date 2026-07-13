@@ -5,6 +5,12 @@ publish = false
 edition.workspace = true
 build = "build.rs"
 
+[features]
+terminal-diagnostics = [
+    "oneterm-local/terminal-diagnostics",
+    "oneterm-ssh/terminal-diagnostics",
+]
+
 [lints]
 workspace = true
 
@@ -29,3 +35,7 @@ chrono.workspace = true
 sysinfo.workspace = true
 async-channel.workspace = true
 rust-embed = "8.7"
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+oneterm-core = { workspace = true, features = ["test-support"] }

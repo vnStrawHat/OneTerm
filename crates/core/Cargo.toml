@@ -4,6 +4,9 @@ description = "Domain model & business logic for OneTerm (no GPUI)."
 publish = false
 edition.workspace = true
 
+[features]
+test-support = []
+
 [lints]
 workspace = true
 

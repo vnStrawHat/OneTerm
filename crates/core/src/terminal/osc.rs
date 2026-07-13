@@ -273,6 +273,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn phase0_baseline_osc_payloads_have_no_application_cap() {
+        let notification = vec![b'x'; 256 * 1024];
+        let parsed = parse_osc(&[b"9", notification.as_slice()]);
+        assert_eq!(
+            parsed,
+            Some(OscPayload::Notification("x".repeat(notification.len())))
+        );
+
+        let clipboard = "c".repeat(256 * 1024);
+        let encoded = encode_osc52(&clipboard);
+        assert_eq!(decode_osc52(&encoded).as_deref(), Some(clipboard.as_str()));
+    }
+
     // ── OSC 9;4 progress ───────────────────────────────────────────
     #[test]
     fn osc9_4_progress() {

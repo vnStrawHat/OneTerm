@@ -24,6 +24,17 @@ fn make_cells(text: &str, num_cols: usize) -> Vec<IndexedCell> {
     cells
 }
 
+fn make_osc8_cells(display: &str, target: &str) -> Vec<IndexedCell> {
+    use alacritty_terminal::term::cell::Hyperlink;
+
+    let mut cells = make_cells(display, display.chars().count().max(1));
+    let hyperlink = Hyperlink::new(Some("phase0-vector"), target.to_string());
+    for cell in &mut cells {
+        cell.cell.set_hyperlink(Some(hyperlink.clone()));
+    }
+    cells
+}
+
 // --- detect_url_at tests ---
 
 #[test]
@@ -66,6 +77,32 @@ fn no_url_in_plain_text() {
 fn no_url_on_whitespace() {
     let cells2 = make_cells("text https://x.com ", 20);
     assert!(detect_url_at(&cells2, 20, 0, 19).is_none());
+}
+
+#[test]
+fn phase0_baseline_osc8_targets_are_returned_without_policy() {
+    let vectors = [
+        ("click me", "custom-app://run?action=delete"),
+        ("HTTPS link", "HtTpS://Example.COM/Path"),
+        ("Unicode host", "https://例え.テスト/path"),
+        (
+            "credential target",
+            "https://user:secret@example.com/private",
+        ),
+        ("safe label", "file:///C:/Windows/System32/cmd.exe"),
+        ("safe label", "https://example.com/\u{0007}control"),
+    ];
+
+    for (display, target) in vectors {
+        let cells = make_osc8_cells(display, target);
+        let detected = detect_url_at(&cells, cells.len(), 0, 0).unwrap();
+        assert_eq!(detected.url, target);
+    }
+
+    let oversized = format!("https://example.com/{}", "x".repeat(256 * 1024));
+    let cells = make_osc8_cells("short display text", &oversized);
+    let detected = detect_url_at(&cells, cells.len(), 0, 3).unwrap();
+    assert_eq!(detected.url, oversized);
 }
 
 // --- url_column_mask tests ---

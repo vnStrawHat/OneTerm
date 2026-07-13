@@ -2,6 +2,8 @@
 
 pub mod box_drawing;
 pub mod cell;
+#[cfg(any(test, feature = "terminal-diagnostics"))]
+pub mod diagnostics;
 pub mod element;
 pub mod handlers;
 pub mod highlight;
@@ -17,6 +19,8 @@ pub mod theme;
 pub mod url;
 pub mod view;
 
+#[cfg(any(test, feature = "terminal-diagnostics"))]
+pub use diagnostics::TerminalRenderDiagnostics;
 pub use panel::TerminalPanel;
 pub use settings_panel::TerminalSettingsPanel;
 pub use theme::{TerminalTheme, build_terminal_theme, ensure_minimum_contrast, resolve_cell_color};

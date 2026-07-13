@@ -222,4 +222,13 @@ mod tests {
         assert_eq!(trim_path_title("user@host: ~/repo"), "user@host: ~/repo");
         assert_eq!(trim_path_title("  /usr/bin/zsh  "), "zsh");
     }
+
+    #[test]
+    fn phase0_baseline_terminal_titles_are_not_sanitized_or_capped() {
+        let controlled = "safe\u{0007}\u{001b}[31m\u{202e}txt.exe";
+        assert_eq!(resolve_tab_label(Some(controlled), "Terminal"), controlled);
+
+        let oversized = "x".repeat(256 * 1024);
+        assert_eq!(resolve_tab_label(Some(&oversized), "Terminal"), oversized);
+    }
 }

@@ -434,4 +434,47 @@ mod tests {
     fn parse_empty() {
         assert!(parse_keystroke("").is_none());
     }
+
+    #[test]
+    fn phase0_baseline_bracketed_paste_preserves_security_vectors() {
+        use crate::terminal::test_support::FakeTerminalSession;
+
+        let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
+        probe.set_mode(TermMode::SHOW_CURSOR | TermMode::BRACKETED_PASTE);
+
+        let vectors = [
+            "",
+            "line one\nline two",
+            "unicode: Héllo, 世界",
+            "nul:\0control:\u{0001}",
+            "embedded-end:\x1b[201~remainder",
+        ];
+        for text in vectors {
+            session.paste(text);
+            let writes = probe.take_writes();
+            assert_eq!(writes.len(), 1);
+            let expected = [
+                b"\x1b[200~".as_slice(),
+                text.as_bytes(),
+                b"\x1b[201~".as_slice(),
+            ]
+            .concat();
+            assert_eq!(writes[0], expected);
+        }
+
+        let large = "x".repeat(1024 * 1024);
+        session.paste(&large);
+        let writes = probe.take_writes();
+        assert_eq!(writes[0].len(), large.len() + 12);
+    }
+
+    #[test]
+    fn phase0_baseline_plain_paste_preserves_unicode_and_controls() {
+        use crate::terminal::test_support::FakeTerminalSession;
+
+        let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
+        let text = "Héllo\n世界\0\u{0001}";
+        session.paste(text);
+        assert_eq!(probe.writes(), vec![text.as_bytes().to_vec()]);
+    }
 }
