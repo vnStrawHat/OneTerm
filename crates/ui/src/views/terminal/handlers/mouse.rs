@@ -61,12 +61,18 @@ pub(crate) fn attach_mouse(
                     return;
                 }
             }
+            let mods = oneterm_core::terminal::mouse_encode::MouseModifiers {
+                shift: e.modifiers.shift,
+                alt: e.modifiers.alt,
+                ctrl: e.modifiers.control,
+            };
             s.update(cx, |s, _| {
                 s.mouse_down(
                     row,
                     col,
                     map_button(e.button),
                     LocalTerminalView::sel_type(e.click_count, e.modifiers.alt),
+                    mods,
                 )
             });
             // Trigger a re-render to draw the selection highlight.
@@ -132,13 +138,23 @@ pub(crate) fn attach_mouse(
                 }
             };
             if e.pressed_button == Some(MouseButton::Left) {
-                s.update(cx, |s, _| s.mouse_drag(row, col));
+                let mods = oneterm_core::terminal::mouse_encode::MouseModifiers {
+                    shift: e.modifiers.shift,
+                    alt: e.modifiers.alt,
+                    ctrl: e.modifiers.control,
+                };
+                s.update(cx, |s, _| s.mouse_drag(row, col, mods));
                 let _ = view.update(cx, |v, cx| {
                     v.last_scroll_time = Some(std::time::Instant::now());
                     cx.notify();
                 });
             } else {
-                s.update(cx, |s, _| s.mouse_move(row, col));
+                let mods = oneterm_core::terminal::mouse_encode::MouseModifiers {
+                    shift: e.modifiers.shift,
+                    alt: e.modifiers.alt,
+                    ctrl: e.modifiers.control,
+                };
+                s.update(cx, |s, _| s.mouse_move(row, col, mods));
             }
             // URL detection on hover — highlight + cursor pointer (Ctrl+click to open).
             super::url::update_hovered_url(&s, &m, &view, e.position, e.modifiers.control, cx);
@@ -161,7 +177,12 @@ pub(crate) fn attach_mouse(
                 Some(rc) => rc,
                 None => return,
             };
-            s.update(cx, |s, _| s.mouse_up(row, col, map_button(e.button)));
+            let mods = oneterm_core::terminal::mouse_encode::MouseModifiers {
+                shift: e.modifiers.shift,
+                alt: e.modifiers.alt,
+                ctrl: e.modifiers.control,
+            };
+            s.update(cx, |s, _| s.mouse_up(row, col, map_button(e.button), mods));
             if let Some(text) = s.read(cx).selection_text() {
                 if !text.is_empty() {
                     cx.write_to_clipboard(ClipboardItem::new_string(text));

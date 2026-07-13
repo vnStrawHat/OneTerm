@@ -74,8 +74,8 @@ fn encode(
     } else {
         // X10/X11: button+32, col+32, row+32 (capped at 255 due to single byte).
         let button_byte = x11_code.saturating_add(32) + mod_mask;
-        let col_byte = col.min(255) as u8;
-        let row_byte = row.min(255) as u8;
+        let col_byte = (col + 32).min(255) as u8;
+        let row_byte = (row + 32).min(255) as u8;
         format!(
             "\x1b[M{}{}{}",
             button_byte as char, col_byte as char, row_byte as char
@@ -191,8 +191,8 @@ mod tests {
             x11_mode(),
             MouseModifiers::default(),
         );
-        // button = 0+32 = 32 (space), col/row = 1+... wait col=1 → 1 as char
-        assert_eq!(s, "\x1b[M\x20\x01\x01");
+        // button = 0+32 = 32 (space), col = 1+32 = 33 ('!'), row = 1+32 = 33 ('!')
+        assert_eq!(s, "\x1b[M\x20\x21\x21");
     }
 
     #[test]
@@ -204,8 +204,8 @@ mod tests {
             x11_mode(),
             MouseModifiers::default(),
         );
-        // x11_code = 3 → 3+32 = 35 = '#'
-        assert_eq!(s, "\x1b[M\x23\x01\x01");
+        // x11_code = 3 → 3+32 = 35 = '#', col = 1+32 = 33 ('!'), row = 1+32 = 33 ('!')
+        assert_eq!(s, "\x1b[M\x23\x21\x21");
     }
 
     #[test]
@@ -225,5 +225,117 @@ mod tests {
         let s = encode_mouse_move(0, 0, None, sgr_mode(), MouseModifiers::default());
         // hover: code 3+32 = 35
         assert_eq!(s, "\x1b[<35;1;1M");
+    }
+
+    #[test]
+    fn x11_press_with_ctrl() {
+        let s = encode_mouse_press(
+            0,
+            0,
+            TerminalMouseButton::Left,
+            x11_mode(),
+            MouseModifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+        );
+        // button = 0+32+16(ctrl) = 48 ('0'), col = 1+32 = 33 ('!'), row = 1+32 = 33 ('!')
+        assert_eq!(s, "\x1b[M0!!");
+    }
+
+    #[test]
+    fn x11_press_with_shift_alt() {
+        let s = encode_mouse_press(
+            5,
+            10,
+            TerminalMouseButton::Right,
+            x11_mode(),
+            MouseModifiers {
+                shift: true,
+                alt: true,
+                ..Default::default()
+            },
+        );
+        // button = 2+32+4(shift)+8(alt) = 46 ('.'), col = 11+32 = 43 ('+'), row = 6+32 = 38 ('&')
+        assert_eq!(s, "\x1b[M.+&");
+    }
+
+    #[test]
+    fn x11_coordinates_above_127() {
+        // Coordinates above 95 (1-indexed) still fit in a byte after +32.
+        // col=200 → 201+32 = 233.
+        let s = encode_mouse_press(
+            200,
+            200,
+            TerminalMouseButton::Left,
+            x11_mode(),
+            MouseModifiers::default(),
+        );
+        // button = 32 (space), col = 201+32 = 233, row = 201+32 = 233
+        let expected: String = format!(
+            "\x1b[M{}{}{}",
+            ' ',
+            char::from_u32(233).unwrap(),
+            char::from_u32(233).unwrap()
+        );
+        assert_eq!(s, expected);
+    }
+
+    #[test]
+    fn x11_coordinates_at_boundary_95() {
+        // col=94 → 95+32 = 127 (DEL) — last coordinate before overflow.
+        let s = encode_mouse_press(
+            94,
+            94,
+            TerminalMouseButton::Left,
+            x11_mode(),
+            MouseModifiers::default(),
+        );
+        // button = 32, col = 95+32 = 127, row = 95+32 = 127
+        assert_eq!(s, "\x1b[M\x20\x7f\x7f");
+    }
+
+    #[test]
+    fn sgr_preserves_large_coordinates() {
+        // SGR has no +32 offset and supports large coordinates as decimal.
+        let s = encode_mouse_press(
+            500,
+            1000,
+            TerminalMouseButton::Left,
+            sgr_mode(),
+            MouseModifiers::default(),
+        );
+        assert_eq!(s, "\x1b[<0;1001;501M");
+    }
+
+    #[test]
+    fn sgr_release_right_with_modifiers() {
+        let s = encode_mouse_release(
+            3,
+            7,
+            TerminalMouseButton::Right,
+            sgr_mode(),
+            MouseModifiers {
+                shift: true,
+                ctrl: true,
+                ..Default::default()
+            },
+        );
+        // button = 2+4(shift)+16(ctrl) = 22, col = 8, row = 4
+        assert_eq!(s, "\x1b[<22;8;4m");
+    }
+
+    #[test]
+    fn wheel_x11_mode() {
+        let s = encode_wheel_event(5, 5, 1.0, x11_mode(), MouseModifiers::default());
+        // code = 64+32 = 96 ('`'), col = 6+32 = 38 ('&'), row = 6+32 = 38 ('&')
+        assert_eq!(s, "\x1b[M`&&");
+    }
+
+    #[test]
+    fn move_hover_x11() {
+        let s = encode_mouse_move(2, 3, None, x11_mode(), MouseModifiers::default());
+        // code = 3+32+32 = 67 ('C'), col = 4+32 = 36 ('$'), row = 3+32 = 35 ('#')
+        assert_eq!(s, "\x1b[MC$#");
     }
 }

@@ -18,7 +18,7 @@ use async_channel::Receiver;
 use crate::sftp::SftpBackend;
 use crate::terminal::content::TerminalContent;
 use crate::terminal::key_encode::{KeyMods, KeySpec, NamedKey, encode_key};
-use crate::terminal::mouse_encode::TerminalMouseButton;
+use crate::terminal::mouse_encode::{MouseModifiers, TerminalMouseButton};
 use crate::terminal::osc::{Osc133Kind, TerminalProgress};
 use crate::terminal::osc_color::DynamicColors;
 use crate::terminal::paste::{PastePolicy, PasteResult, encode_paste};
@@ -191,15 +191,22 @@ pub trait TerminalSession: Send + Sync + 'static {
     // ── Mouse ────────────────────────────────────────────────
     /// `sel` picks the selection type when not in mouse mode: `Simple` (click),
     /// `Semantic` (double-click), `Lines` (triple-click), `Block` (alt-select).
-    fn mouse_down(&self, row: f32, col: f32, button: TerminalMouseButton, sel: SelectionType);
+    fn mouse_down(
+        &self,
+        row: f32,
+        col: f32,
+        button: TerminalMouseButton,
+        sel: SelectionType,
+        mods: MouseModifiers,
+    );
     /// Hover (no button held) — encode mouse motion for app mode (vim/less/htop).
     /// Does NOT update the selection (only `mouse_drag` updates it).
-    fn mouse_move(&self, row: f32, col: f32);
+    fn mouse_move(&self, row: f32, col: f32, mods: MouseModifiers);
     /// Drag (left button held) — update the selection end point (non-mouse mode)
     /// or encode mouse drag (mouse mode).
-    fn mouse_drag(&self, row: f32, col: f32);
-    fn mouse_up(&self, row: f32, col: f32, button: TerminalMouseButton);
-    fn wheel(&self, delta_y: f64, row: f32, col: f32);
+    fn mouse_drag(&self, row: f32, col: f32, mods: MouseModifiers);
+    fn mouse_up(&self, row: f32, col: f32, button: TerminalMouseButton, mods: MouseModifiers);
+    fn wheel(&self, delta_y: f64, row: f32, col: f32, mods: MouseModifiers);
 
     // ── Selection / clipboard ──────────────────────────────
     /// The currently selected text (for copy). `None` if there is no selection.
@@ -374,6 +381,30 @@ pub fn parse_keystroke(s: &str) -> Option<(KeySpec, KeyMods)> {
         "pageup" | "pgup" => Some(NamedKey::PageUp),
         "pagedown" | "pgdn" => Some(NamedKey::PageDown),
         "insert" | "ins" => Some(NamedKey::Insert),
+        "f1" => Some(NamedKey::F1),
+        "f2" => Some(NamedKey::F2),
+        "f3" => Some(NamedKey::F3),
+        "f4" => Some(NamedKey::F4),
+        "f5" => Some(NamedKey::F5),
+        "f6" => Some(NamedKey::F6),
+        "f7" => Some(NamedKey::F7),
+        "f8" => Some(NamedKey::F8),
+        "f9" => Some(NamedKey::F9),
+        "f10" => Some(NamedKey::F10),
+        "f11" => Some(NamedKey::F11),
+        "f12" => Some(NamedKey::F12),
+        "f13" => Some(NamedKey::F13),
+        "f14" => Some(NamedKey::F14),
+        "f15" => Some(NamedKey::F15),
+        "f16" => Some(NamedKey::F16),
+        "f17" => Some(NamedKey::F17),
+        "f18" => Some(NamedKey::F18),
+        "f19" => Some(NamedKey::F19),
+        "f20" => Some(NamedKey::F20),
+        "f21" => Some(NamedKey::F21),
+        "f22" => Some(NamedKey::F22),
+        "f23" => Some(NamedKey::F23),
+        "f24" => Some(NamedKey::F24),
         _ => None,
     };
 

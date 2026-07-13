@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use alacritty_terminal::selection::SelectionType;
 use oneterm_core::TerminalSession;
-use oneterm_core::terminal::mouse_encode::TerminalMouseButton;
+use oneterm_core::terminal::mouse_encode::{MouseModifiers, TerminalMouseButton};
 
 use crate::session::{LocalSession, PtySize};
 
@@ -81,9 +81,20 @@ fn trait_cursor_bounds_needs_cell_size() {
 fn trait_mouse_in_normal_mode_starts_selection() {
     let s = spawn_default();
     // Cmd does not enable mouse mode → selection (no panic, no encoding).
-    s.mouse_down(0.0, 0.0, TerminalMouseButton::Left, SelectionType::Simple);
-    s.mouse_drag(0.0, 5.0);
-    s.mouse_up(0.0, 5.0, TerminalMouseButton::Left);
+    s.mouse_down(
+        0.0,
+        0.0,
+        TerminalMouseButton::Left,
+        SelectionType::Simple,
+        MouseModifiers::default(),
+    );
+    s.mouse_drag(0.0, 5.0, MouseModifiers::default());
+    s.mouse_up(
+        0.0,
+        5.0,
+        TerminalMouseButton::Left,
+        MouseModifiers::default(),
+    );
     s.close();
 }
 
@@ -95,8 +106,14 @@ fn selection_text_and_clear() {
     // Write a few characters then select.
     s.write(b"hello");
     std::thread::sleep(std::time::Duration::from_millis(50));
-    s.mouse_down(0.0, 0.0, TerminalMouseButton::Left, SelectionType::Simple);
-    s.mouse_drag(0.0, 4.0);
+    s.mouse_down(
+        0.0,
+        0.0,
+        TerminalMouseButton::Left,
+        SelectionType::Simple,
+        MouseModifiers::default(),
+    );
+    s.mouse_drag(0.0, 4.0, MouseModifiers::default());
     // selection_to_string may return Some/None depending on grid state — just check no panic.
     let _ = s.selection_text();
     s.clear_selection();
@@ -109,9 +126,15 @@ fn mouse_drag_updates_selection_not_mouse_move() {
     s.write(b"hello_world");
     std::thread::sleep(std::time::Duration::from_millis(50));
     // Start selection at col 0
-    s.mouse_down(0.0, 0.0, TerminalMouseButton::Left, SelectionType::Simple);
+    s.mouse_down(
+        0.0,
+        0.0,
+        TerminalMouseButton::Left,
+        SelectionType::Simple,
+        MouseModifiers::default(),
+    );
     // mouse_move (hover, no button) should NOT update selection
-    s.mouse_move(0.0, 10.0);
+    s.mouse_move(0.0, 10.0, MouseModifiers::default());
     let snap = s.snapshot();
     // Selection should still be empty (start == end at col 0)
     // to_range returns None for empty simple selection
@@ -120,7 +143,7 @@ fn mouse_drag_updates_selection_not_mouse_move() {
         "mouse_move should not update selection"
     );
     // mouse_drag should update selection
-    s.mouse_drag(0.0, 5.0);
+    s.mouse_drag(0.0, 5.0, MouseModifiers::default());
     let snap2 = s.snapshot();
     assert!(
         snap2.selection.is_some(),
@@ -133,15 +156,20 @@ fn mouse_drag_updates_selection_not_mouse_move() {
             "end col should be >= 4 after drag to col 5"
         );
     }
-    s.mouse_up(0.0, 5.0, TerminalMouseButton::Left);
+    s.mouse_up(
+        0.0,
+        5.0,
+        TerminalMouseButton::Left,
+        MouseModifiers::default(),
+    );
     s.close();
 }
 
 #[test]
 fn trait_wheel_scroll_does_not_panic() {
     let s = spawn_default();
-    s.wheel(3.0, 0.0, 0.0);
-    s.wheel(-3.0, 0.0, 0.0);
+    s.wheel(3.0, 0.0, 0.0, MouseModifiers::default());
+    s.wheel(-3.0, 0.0, 0.0, MouseModifiers::default());
     s.close();
 }
 

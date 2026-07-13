@@ -15,6 +15,7 @@ use super::{
     CursorBounds, IndexedCell, SessionEvent, TermDamageInfo, TerminalBounds, TerminalContent,
     TerminalInfo, TerminalMouseButton, TerminalSession,
 };
+use crate::terminal::mouse_encode::MouseModifiers;
 
 /// Shared observation and control handle for a [`FakeTerminalSession`].
 #[derive(Clone)]
@@ -271,16 +272,17 @@ impl TerminalSession for FakeTerminalSession {
         _col: f32,
         _button: TerminalMouseButton,
         _selection: SelectionType,
+        _mods: MouseModifiers,
     ) {
     }
 
-    fn mouse_move(&self, _row: f32, _col: f32) {}
+    fn mouse_move(&self, _row: f32, _col: f32, _mods: MouseModifiers) {}
 
-    fn mouse_drag(&self, _row: f32, _col: f32) {}
+    fn mouse_drag(&self, _row: f32, _col: f32, _mods: MouseModifiers) {}
 
-    fn mouse_up(&self, _row: f32, _col: f32, _button: TerminalMouseButton) {}
+    fn mouse_up(&self, _row: f32, _col: f32, _button: TerminalMouseButton, _mods: MouseModifiers) {}
 
-    fn wheel(&self, _delta_y: f64, _row: f32, _col: f32) {}
+    fn wheel(&self, _delta_y: f64, _row: f32, _col: f32, _mods: MouseModifiers) {}
 
     fn selection_text(&self) -> Option<String> {
         None

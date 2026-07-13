@@ -31,8 +31,11 @@ pub(crate) fn attach_key(
         move |e: &KeyDownEvent, _w, cx: &mut App| {
             let mods = e.keystroke.modifiers;
 
-            // ── Search (Ctrl+F) ──
-            if mods.control && !mods.shift && !mods.alt && e.keystroke.key.as_str() == "f" {
+            // Platform modifier: Cmd on macOS, Ctrl on Windows/Linux.
+            let plat = mods.control || mods.platform;
+
+            // ── Search (platform+F) ──
+            if plat && !mods.shift && !mods.alt && e.keystroke.key.as_str() == "f" {
                 let _ = view.update(cx, |v, cx| {
                     if v.search_active {
                         v.close_search(cx);
@@ -57,8 +60,8 @@ pub(crate) fn attach_key(
                 }
             }
 
-            // ── Zoom shortcuts (Ctrl +/−/0) ──
-            if mods.control && !mods.alt {
+            // ── Zoom shortcuts (platform +/−/0) ──
+            if plat && !mods.alt {
                 match e.keystroke.key.as_str() {
                     "-" => {
                         let settings_e = TerminalSettings::global(cx);
@@ -139,8 +142,8 @@ pub(crate) fn attach_key(
                     }
                     _ => {}
                 }
-                // Ctrl+Shift+Up/Down: scroll 1 line.
-                if mods.control {
+                // Platform+Shift+Up/Down: scroll 1 line.
+                if plat {
                     match e.keystroke.key.as_str() {
                         "up" => {
                             s.update(cx, |s, _| s.scroll(1));
@@ -165,8 +168,9 @@ pub(crate) fn attach_key(
                 }
             }
 
-            // Ctrl+Shift+C/V copy/paste.
-            if mods.control && mods.shift {
+            // Copy/paste: Ctrl+Shift+C/V (Linux/Windows) or Cmd+C/V (macOS).
+            let copy_paste = (mods.control && mods.shift) || (mods.platform && !mods.shift);
+            if copy_paste {
                 match e.keystroke.key.as_str() {
                     "c" => {
                         if let Some(text) = s.read(cx).selection_text() {
@@ -174,6 +178,7 @@ pub(crate) fn attach_key(
                                 cx.write_to_clipboard(ClipboardItem::new_string(text));
                             }
                         }
+                        cx.stop_propagation();
                         return;
                     }
                     "v" => {
@@ -182,6 +187,7 @@ pub(crate) fn attach_key(
                                 s.update(cx, |s, _| s.paste(&text));
                             }
                         }
+                        cx.stop_propagation();
                         return;
                     }
                     _ => {}
@@ -195,6 +201,7 @@ pub(crate) fn attach_key(
                         s.update(cx, |s, _| s.paste(&text));
                     }
                 }
+                cx.stop_propagation();
                 return;
             }
 

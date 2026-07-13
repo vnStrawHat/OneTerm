@@ -42,7 +42,12 @@ pub(crate) fn attach_scroll(
             let multiplier = TerminalSettings::global(cx).read(cx).scroll_multiplier;
             let delta_y = delta_y * multiplier;
             if delta_y.abs() >= 0.001 {
-                s.update(cx, |s, _| s.wheel(delta_y as f64, row, col));
+                let mods = oneterm_core::terminal::mouse_encode::MouseModifiers {
+                    shift: e.modifiers.shift,
+                    alt: e.modifiers.alt,
+                    ctrl: e.modifiers.control,
+                };
+                s.update(cx, |s, _| s.wheel(delta_y as f64, row, col, mods));
                 // Re-render + update scrollbar visibility.
                 let _ = view.update(cx, |v, cx| {
                     v.last_scroll_time = Some(std::time::Instant::now());

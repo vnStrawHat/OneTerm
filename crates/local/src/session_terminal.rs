@@ -156,48 +156,37 @@ impl TerminalSession for LocalSession {
     }
 
     // ── Mouse ────────────────────────────────────────────────────────
-    fn mouse_down(&self, row: f32, col: f32, button: TerminalMouseButton, sel: SelectionType) {
+    fn mouse_down(
+        &self,
+        row: f32,
+        col: f32,
+        button: TerminalMouseButton,
+        sel: SelectionType,
+        mods: MouseModifiers,
+    ) {
         let mode = self.mode();
         if mode.intersects(TermMode::MOUSE_MODE) {
-            let s = encode_mouse_press(
-                row as usize,
-                col as usize,
-                button,
-                mode,
-                MouseModifiers::default(),
-            );
+            let s = encode_mouse_press(row as usize, col as usize, button, mode, mods);
             self.write(s.as_bytes());
         } else {
             self.start_selection(row, col, sel);
         }
     }
 
-    fn mouse_move(&self, row: f32, col: f32) {
+    fn mouse_move(&self, row: f32, col: f32, mods: MouseModifiers) {
         let mode = self.mode();
         if mode.contains(TermMode::MOUSE_MOTION) {
-            let s = encode_mouse_move(
-                row as usize,
-                col as usize,
-                None,
-                mode,
-                MouseModifiers::default(),
-            );
+            let s = encode_mouse_move(row as usize, col as usize, None, mode, mods);
             self.write(s.as_bytes());
         } else if mode.contains(TermMode::MOUSE_DRAG) {
             // Held button is not tracked in the trait signature — report hover (None).
-            let s = encode_mouse_move(
-                row as usize,
-                col as usize,
-                None,
-                mode,
-                MouseModifiers::default(),
-            );
+            let s = encode_mouse_move(row as usize, col as usize, None, mode, mods);
             self.write(s.as_bytes());
         }
         // Non-mouse mode: do NOT update selection — only `mouse_drag` does that.
     }
 
-    fn mouse_drag(&self, row: f32, col: f32) {
+    fn mouse_drag(&self, row: f32, col: f32, mods: MouseModifiers) {
         let mode = self.mode();
         if mode.intersects(TermMode::MOUSE_MODE) {
             // Mouse mode: encode drag with the Left button.
@@ -206,7 +195,7 @@ impl TerminalSession for LocalSession {
                 col as usize,
                 Some(TerminalMouseButton::Left),
                 mode,
-                MouseModifiers::default(),
+                mods,
             );
             self.write(s.as_bytes());
         } else {
@@ -215,22 +204,16 @@ impl TerminalSession for LocalSession {
         }
     }
 
-    fn mouse_up(&self, row: f32, col: f32, button: TerminalMouseButton) {
+    fn mouse_up(&self, row: f32, col: f32, button: TerminalMouseButton, mods: MouseModifiers) {
         let mode = self.mode();
         if mode.intersects(TermMode::MOUSE_MODE) {
-            let s = encode_mouse_release(
-                row as usize,
-                col as usize,
-                button,
-                mode,
-                MouseModifiers::default(),
-            );
+            let s = encode_mouse_release(row as usize, col as usize, button, mode, mods);
             self.write(s.as_bytes());
         }
         // Selection is kept for copying (cleared on click elsewhere — UI handles it).
     }
 
-    fn wheel(&self, delta_y: f64, row: f32, col: f32) {
+    fn wheel(&self, delta_y: f64, row: f32, col: f32, mods: MouseModifiers) {
         let lines = (delta_y.abs().ceil() as i32).clamp(1, 10);
         let scroll_delta = if delta_y > 0.0 { lines } else { -lines };
 
@@ -240,13 +223,7 @@ impl TerminalSession for LocalSession {
         if display_offset > 0 {
             self.scroll(scroll_delta);
         } else if mode.intersects(TermMode::MOUSE_MODE) {
-            let s = encode_wheel_event(
-                row as usize,
-                col as usize,
-                delta_y,
-                mode,
-                MouseModifiers::default(),
-            );
+            let s = encode_wheel_event(row as usize, col as usize, delta_y, mode, mods);
             self.write(s.as_bytes());
         } else if mode.contains(TermMode::ALT_SCREEN) {
             // Alt-screen: wheel → arrow keys (app scroll, e.g. less/man).

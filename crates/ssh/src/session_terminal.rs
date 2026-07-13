@@ -185,37 +185,32 @@ impl TerminalSession for SshSession {
     }
 
     // ── Mouse ────────────────────────────────────────────────────────
-    fn mouse_down(&self, row: f32, col: f32, button: TerminalMouseButton, sel: SelectionType) {
+    fn mouse_down(
+        &self,
+        row: f32,
+        col: f32,
+        button: TerminalMouseButton,
+        sel: SelectionType,
+        mods: MouseModifiers,
+    ) {
         let mode = self.mode();
         if mode.intersects(TermMode::MOUSE_MODE) {
-            let s = encode_mouse_press(
-                row as usize,
-                col as usize,
-                button,
-                mode,
-                MouseModifiers::default(),
-            );
+            let s = encode_mouse_press(row as usize, col as usize, button, mode, mods);
             self.write(s.as_bytes());
         } else {
             self.start_selection(row, col, sel);
         }
     }
 
-    fn mouse_move(&self, row: f32, col: f32) {
+    fn mouse_move(&self, row: f32, col: f32, mods: MouseModifiers) {
         let mode = self.mode();
         if mode.contains(TermMode::MOUSE_MOTION) || mode.contains(TermMode::MOUSE_DRAG) {
-            let s = encode_mouse_move(
-                row as usize,
-                col as usize,
-                None,
-                mode,
-                MouseModifiers::default(),
-            );
+            let s = encode_mouse_move(row as usize, col as usize, None, mode, mods);
             self.write(s.as_bytes());
         }
     }
 
-    fn mouse_drag(&self, row: f32, col: f32) {
+    fn mouse_drag(&self, row: f32, col: f32, mods: MouseModifiers) {
         let mode = self.mode();
         if mode.intersects(TermMode::MOUSE_MODE) {
             let s = encode_mouse_move(
@@ -223,7 +218,7 @@ impl TerminalSession for SshSession {
                 col as usize,
                 Some(TerminalMouseButton::Left),
                 mode,
-                MouseModifiers::default(),
+                mods,
             );
             self.write(s.as_bytes());
         } else {
@@ -231,21 +226,15 @@ impl TerminalSession for SshSession {
         }
     }
 
-    fn mouse_up(&self, row: f32, col: f32, button: TerminalMouseButton) {
+    fn mouse_up(&self, row: f32, col: f32, button: TerminalMouseButton, mods: MouseModifiers) {
         let mode = self.mode();
         if mode.intersects(TermMode::MOUSE_MODE) {
-            let s = encode_mouse_release(
-                row as usize,
-                col as usize,
-                button,
-                mode,
-                MouseModifiers::default(),
-            );
+            let s = encode_mouse_release(row as usize, col as usize, button, mode, mods);
             self.write(s.as_bytes());
         }
     }
 
-    fn wheel(&self, delta_y: f64, row: f32, col: f32) {
+    fn wheel(&self, delta_y: f64, row: f32, col: f32, mods: MouseModifiers) {
         let lines = (delta_y.abs().ceil() as i32).clamp(1, 10);
         let scroll_delta = if delta_y > 0.0 { lines } else { -lines };
         let mode = self.mode();
@@ -254,13 +243,7 @@ impl TerminalSession for SshSession {
         if display_offset > 0 {
             self.scroll(scroll_delta);
         } else if mode.intersects(TermMode::MOUSE_MODE) {
-            let s = encode_wheel_event(
-                row as usize,
-                col as usize,
-                delta_y,
-                mode,
-                MouseModifiers::default(),
-            );
+            let s = encode_wheel_event(row as usize, col as usize, delta_y, mode, mods);
             self.write(s.as_bytes());
         } else if mode.contains(TermMode::ALT_SCREEN) {
             let app_cursor = mode.contains(TermMode::APP_CURSOR);
