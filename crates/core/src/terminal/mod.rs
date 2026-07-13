@@ -5,6 +5,7 @@
 
 pub mod colors_util;
 pub mod content;
+pub mod contracts;
 pub mod key_encode;
 pub mod mouse_encode;
 pub mod osc;
@@ -25,6 +26,7 @@ pub use colors_util::{
 pub use content::{
     IndexedCell, TermDamageInfo, TerminalBounds, TerminalContent, is_blank_cell, last_content_line,
 };
+pub use contracts::{TerminalError, TerminalInput, TerminalLifecycle, TerminalRenderer};
 pub use key_encode::{KeyMods, KeySpec, NamedKey, encode_key};
 pub use mouse_encode::{
     MouseModifiers, TerminalMouseButton, encode_mouse_move, encode_mouse_press,
@@ -42,7 +44,8 @@ pub use paste::{PastePolicy, PasteResult, encode_paste};
 pub use search::{SearchMatch, SearchOptions, search_term};
 pub use security_policy::TerminalSecurityPolicy;
 pub use session::{
-    CursorBounds, CwdSource, NetStats, SessionEvent, TerminalInfo, TerminalSession, parse_keystroke,
+    CursorBounds, CwdSource, NetStats, SessionEvent, TerminalInfo, TerminalQueryState,
+    TerminalSession, parse_keystroke,
 };
 pub use url::{link_ranges, url_at};
 pub use url_policy::{ConfirmReason, DenyReason, ExternalTargetPolicy, TargetDecision};

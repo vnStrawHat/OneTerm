@@ -17,6 +17,7 @@ use oneterm_core::terminal::mouse_encode::{
 };
 use oneterm_core::terminal::{
     BACKGROUND_INDEX, CURSOR_INDEX, DynamicColors, FOREGROUND_INDEX, TerminalContent, TerminalInfo,
+    TerminalQueryState,
 };
 use oneterm_core::{
     CursorBounds, SearchMatch, SearchOptions, SessionEvent, SftpBackend, TerminalSession,
@@ -81,6 +82,22 @@ impl TerminalSession for SshSession {
         // Non-render read: must NOT reset damage (see trait docs).
         let term = self.term.lock();
         TerminalContent::from_query(&*term)
+    }
+
+    fn query_state(&self) -> TerminalQueryState {
+        let term = self.term.lock();
+        let content = term.renderable_content();
+        TerminalQueryState {
+            mode: content.mode,
+            cursor_line: content.cursor.point.line.0,
+            cursor_col: content.cursor.point.column.0,
+            cursor_shape: content.cursor.shape,
+            display_offset: content.display_offset,
+            rows: term.screen_lines(),
+            cols: term.columns(),
+            total_lines: term.total_lines(),
+            alive: self.alive(),
+        }
     }
 
     fn dynamic_colors(&self) -> DynamicColors {

@@ -257,6 +257,10 @@ pub(crate) fn prepaint_terminal(
         cell_width,
         line_height,
         gutter_width: gutter_width + pad_left,
+        pad_top: px(measure::snap(f32::from(pad_top), scale_factor)),
+        grid_origin,
+        rows: num_lines,
+        cols: num_cols,
     };
 
     // ── Search highlight rects (display coordinates → LayoutRect) ──

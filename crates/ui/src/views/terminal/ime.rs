@@ -84,18 +84,24 @@ impl EntityInputHandler for LocalTerminalView {
     fn bounds_for_range(
         &mut self,
         range_utf16: std::ops::Range<usize>,
-        element_bounds: gpui::Bounds<gpui::Pixels>,
+        _element_bounds: gpui::Bounds<gpui::Pixels>,
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Option<gpui::Bounds<gpui::Pixels>> {
-        let cur = self.session.read(cx).cursor_bounds()?;
+        // Compute the IME cursor rectangle from the terminal cursor's grid
+        // position + UI metrics, instead of relying on backend pixel cursor
+        // bounds (which start at zero in production and are never wired).
         let m = *self.metrics.borrow();
         let cw = f32::from(m.cell_width).max(1.0);
         let lh = f32::from(m.line_height).max(1.0);
-        let x = f32::from(element_bounds.origin.x) + cur.x + cw * range_utf16.start as f32;
-        let y = f32::from(element_bounds.origin.y) + cur.y;
+        // Read the cursor's display position from the session snapshot.
+        let qs = self.session.read(cx).query_state();
+        let cursor_col = qs.cursor_col as f32;
+        let cursor_row = qs.cursor_line as f32;
+        let x = f32::from(m.grid_origin.x) + cursor_col * cw;
+        let y = f32::from(m.grid_origin.y) + cursor_row * lh;
         Some(gpui::Bounds::new(
-            gpui::point(gpui::px(x), gpui::px(y)),
+            gpui::point(gpui::px(x + cw * range_utf16.start as f32), gpui::px(y)),
             gpui::size(gpui::px(cw), gpui::px(lh)),
         ))
     }
@@ -109,7 +115,9 @@ impl EntityInputHandler for LocalTerminalView {
         None
     }
 
-    fn accepts_text_input(&self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> bool {
-        true
+    fn accepts_text_input(&self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> bool {
+        // Disable IME in alt-screen (vim/less/etc.) — the program manages its
+        // own input handling and IME composition doesn't make sense there.
+        !self.session.read(cx).is_alt_screen()
     }
 }

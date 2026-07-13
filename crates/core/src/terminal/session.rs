@@ -56,6 +56,29 @@ pub struct TerminalInfo {
     pub clear_epoch: usize,
 }
 
+/// Compact query state for non-render reads — does NOT clone the full grid.
+///
+/// Used for mode checks, cursor positioning, viewport size, and scroll info
+/// without the O(rows×cols) cost of [`TerminalContent`].
+#[derive(Debug, Clone, Copy)]
+pub struct TerminalQueryState {
+    /// Terminal mode (mouse, alt-screen, bracketed paste, app cursor…).
+    pub mode: TermMode,
+    /// Cursor display position (line.0 = top of viewport, column.0 = left).
+    pub cursor_line: i32,
+    pub cursor_col: usize,
+    /// Cursor shape (Hidden, Block, Beam, Underline).
+    pub cursor_shape: alacritty_terminal::vte::ansi::CursorShape,
+    /// Display offset (0 = at bottom, >0 = scrolled up).
+    pub display_offset: usize,
+    /// Viewport dimensions.
+    pub rows: usize,
+    pub cols: usize,
+    /// Total lines (scrollback + viewport).
+    pub total_lines: usize,
+    /// Whether the process is alive.
+    pub alive: bool,
+}
 /// Session events emitted to the UI (subscribed via channel).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionEvent {
@@ -137,10 +160,28 @@ pub trait TerminalSession: Send + Sync + 'static {
     /// terminal damage, so it cannot starve the renderer of dirty-row info and
     /// leave stale rows on screen.
     ///
-    /// Default falls back to [`snapshot`](Self::snapshot); real backends override
-    /// it with a damage-free snapshot.
-    fn snapshot_query(&self) -> TerminalContent {
-        self.snapshot()
+    /// Real backends override this with a damage-free snapshot.
+    fn snapshot_query(&self) -> TerminalContent;
+
+    /// Compact query state for non-render reads — mode, cursor, viewport size.
+    /// Does NOT clone the full grid (O(1) vs O(rows×cols) for `snapshot_query`).
+    /// Use this for mode checks, cursor positioning, and viewport-size reads.
+    ///
+    /// Default falls back to `snapshot_query()` for compatibility; real backends
+    /// override it with a damage-free, cell-free query.
+    fn query_state(&self) -> TerminalQueryState {
+        let snap = self.snapshot_query();
+        TerminalQueryState {
+            mode: snap.mode,
+            cursor_line: snap.cursor.point.line.0,
+            cursor_col: snap.cursor.point.column.0,
+            cursor_shape: snap.cursor.shape,
+            display_offset: snap.display_offset,
+            rows: snap.terminal_bounds.num_lines,
+            cols: snap.terminal_bounds.num_cols,
+            total_lines: snap.total_lines,
+            alive: self.alive(),
+        }
     }
 
     /// Basic info (total_lines, cursor_line) — does NOT call damage()/reset_damage().
@@ -263,7 +304,7 @@ pub trait TerminalSession: Send + Sync + 'static {
     /// Parse format: `Ctrl+Shift+V`, `Alt+Enter`, `F1`, `Up`, `a`.
     fn send_keystroke(&self, keystroke: &str) {
         if let Some((spec, mods)) = parse_keystroke(keystroke) {
-            let app_cursor = self.snapshot_query().mode.contains(TermMode::APP_CURSOR);
+            let app_cursor = self.query_state().mode.contains(TermMode::APP_CURSOR);
             if let Some(bytes) = encode_key(&spec, mods, app_cursor) {
                 self.write(&bytes);
             }
@@ -273,9 +314,7 @@ pub trait TerminalSession: Send + Sync + 'static {
     /// Bracketed paste mode is on → wrap the paste in `\x1b[200~...\x1b[201~`.
     /// Zed: checks `Modes::BRACKETED_PASTE` then wraps.
     fn is_bracketed_paste(&self) -> bool {
-        self.snapshot_query()
-            .mode
-            .contains(TermMode::BRACKETED_PASTE)
+        self.query_state().mode.contains(TermMode::BRACKETED_PASTE)
     }
 
     /// Paste text into the PTY. Automatically wraps it in bracketed paste markers

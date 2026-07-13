@@ -101,8 +101,8 @@ pub(crate) fn attach_key(
 
             // ── Scroll keyboard actions ──
             if mods.shift {
-                let snap = s.read(cx).snapshot_query();
-                let viewport = snap.terminal_bounds.num_lines as i32;
+                let qs = s.read(cx).query_state();
+                let viewport = qs.rows as i32;
                 match e.keystroke.key.as_str() {
                     "pageup" => {
                         s.update(cx, |s, _| s.scroll(viewport));
@@ -239,11 +239,7 @@ pub(crate) fn attach_key(
                 }
             }
 
-            let app_cursor = s
-                .read(cx)
-                .snapshot_query()
-                .mode
-                .contains(TermMode::APP_CURSOR);
+            let app_cursor = s.read(cx).query_state().mode.contains(TermMode::APP_CURSOR);
             let Some(bytes) = encode_key(&spec, mods, app_cursor) else {
                 return;
             };

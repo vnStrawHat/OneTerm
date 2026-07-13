@@ -13,7 +13,7 @@ use async_channel::{Receiver, Sender, TryRecvError, TrySendError};
 
 use super::{
     CursorBounds, IndexedCell, SessionEvent, TermDamageInfo, TerminalBounds, TerminalContent,
-    TerminalInfo, TerminalMouseButton, TerminalSession,
+    TerminalInfo, TerminalMouseButton, TerminalQueryState, TerminalSession,
 };
 use crate::terminal::mouse_encode::MouseModifiers;
 
@@ -61,6 +61,11 @@ impl FakeSessionProbe {
         self.state.query_snapshot_calls.load(Ordering::SeqCst)
     }
 
+    /// Return the number of compact query-state reads requested.
+    pub fn query_state_calls(&self) -> usize {
+        self.state.query_state_calls.load(Ordering::SeqCst)
+    }
+
     /// Return the number of terminal-info reads requested.
     pub fn terminal_info_calls(&self) -> usize {
         self.state.terminal_info_calls.load(Ordering::SeqCst)
@@ -98,6 +103,7 @@ struct FakeSessionState {
     alive: AtomicBool,
     snapshot_calls: AtomicUsize,
     query_snapshot_calls: AtomicUsize,
+    query_state_calls: AtomicUsize,
     terminal_info_calls: AtomicUsize,
     close_calls: AtomicUsize,
     drop_calls: AtomicUsize,
@@ -117,6 +123,7 @@ impl FakeTerminalSession {
             alive: AtomicBool::new(true),
             snapshot_calls: AtomicUsize::new(0),
             query_snapshot_calls: AtomicUsize::new(0),
+            query_state_calls: AtomicUsize::new(0),
             terminal_info_calls: AtomicUsize::new(0),
             close_calls: AtomicUsize::new(0),
             drop_calls: AtomicUsize::new(0),
@@ -211,6 +218,23 @@ impl TerminalSession for FakeTerminalSession {
             .query_snapshot_calls
             .fetch_add(1, Ordering::SeqCst);
         self.content(false)
+    }
+
+    fn query_state(&self) -> TerminalQueryState {
+        self.state.query_state_calls.fetch_add(1, Ordering::SeqCst);
+        let mode = *self.state.mode.lock().unwrap();
+        let snap = self.content(false);
+        TerminalQueryState {
+            mode,
+            cursor_line: snap.cursor.point.line.0,
+            cursor_col: snap.cursor.point.column.0,
+            cursor_shape: snap.cursor.shape,
+            display_offset: snap.display_offset,
+            rows: snap.terminal_bounds.num_lines,
+            cols: snap.terminal_bounds.num_cols,
+            total_lines: snap.total_lines,
+            alive: self.alive(),
+        }
     }
 
     fn terminal_info(&self) -> TerminalInfo {

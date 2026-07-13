@@ -1,15 +1,23 @@
 //! Core layout types for `TerminalElement`.
 
-use gpui::{Bounds, Hsla, Pixels, SharedString, TextRun};
+use gpui::{Bounds, Hsla, Pixels, Point, SharedString, TextRun};
 
 /// Grid metrics after layout — read by the View to convert mouse pixels → (row, col).
 #[derive(Clone, Copy, Default)]
+#[allow(dead_code)]
 pub(crate) struct GridMetrics {
     pub bounds: Option<Bounds<Pixels>>,
     pub cell_width: Pixels,
     pub line_height: Pixels,
     /// Width of the gutter (time + line number) on the left of the terminal.
     pub gutter_width: Pixels,
+    /// Top padding above the grid (snapped).
+    pub pad_top: Pixels,
+    /// Origin of the cell grid (after gutter + pad_left + pad_top, snapped).
+    pub grid_origin: Point<Pixels>,
+    /// Number of rows and columns in the grid.
+    pub rows: usize,
+    pub cols: usize,
 }
 
 /// Layout point (display line/col, 0-based from top of viewport).
