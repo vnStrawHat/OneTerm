@@ -24,7 +24,7 @@ use log::warn;
 use oneterm_core::SessionEvent;
 use oneterm_core::terminal::{
     ColorFormatter, Osc133Kind, OscPayload, PendingColorQuery, SharedColorQueries,
-    new_color_queries, parse_cwd_url, parse_osc,
+    TerminalSecurityPolicy, new_color_queries, parse_cwd_url, parse_osc,
 };
 
 use crate::event_loop::{ShellMsg, ShellNotifier};
@@ -60,6 +60,8 @@ pub struct LocalListener {
     /// Pending OSC 10/11/12 color queries — enqueued here, answered by the event
     /// loop after each parse batch (when the `Term` lock is free to read colors).
     color_queries: SharedColorQueries,
+    /// Security policy for terminal-controlled data (title, clipboard, etc).
+    security: TerminalSecurityPolicy,
     /// Diagnostic counters for bounded event-queue failures.
     #[cfg(any(test, feature = "terminal-diagnostics"))]
     queue_counters: Arc<LocalQueueCounters>,
@@ -72,6 +74,7 @@ impl LocalListener {
             notifier: std::sync::Arc::new(Mutex::new(None)),
             state,
             color_queries: new_color_queries(),
+            security: TerminalSecurityPolicy::default(),
             #[cfg(any(test, feature = "terminal-diagnostics"))]
             queue_counters: Arc::new(LocalQueueCounters::default()),
         }
@@ -144,6 +147,18 @@ impl LocalListener {
         }
     }
 
+    /// Forward a lifecycle `SessionEvent` (`Exited`/`Closed`) using
+    /// `send_blocking` to ensure it is never silently dropped.
+    pub fn forward_lifecycle(&self, ev: SessionEvent) {
+        if let Err(e) = self.event_tx.send_blocking(ev) {
+            #[cfg(any(test, feature = "terminal-diagnostics"))]
+            self.queue_counters
+                .event_closed
+                .fetch_add(1, Ordering::Relaxed);
+            warn!("LocalListener: lifecycle event lost (channel closed): {e:?}");
+        }
+    }
+
     /// Enqueue an OSC 10/11/12 color query (from `Event::ColorRequest`). Answered
     /// by the event loop after the current parse batch.
     pub fn queue_color_query(&self, index: usize, format: ColorFormatter) {
@@ -160,12 +175,15 @@ impl LocalListener {
 
     fn set_title(&self, title: String) {
         let mut st = self.state.lock().unwrap();
-        // Empty string = reset (ResetTitle) → None.
-        st.title = if title.is_empty() { None } else { Some(title) };
+        // Sanitize: strip control chars, BiDi overrides, cap length.
+        st.title = self.security.sanitize_title(&title);
     }
 
     fn set_clipboard(&self, text: String) {
-        self.state.lock().unwrap().clipboard = Some(text);
+        // Local session: is_remote = false.
+        if let Some(validated) = self.security.validate_clipboard_write(&text, false) {
+            self.state.lock().unwrap().clipboard = Some(validated.to_string());
+        }
     }
 
     fn set_exit(&self, code: Option<i32>) {
@@ -181,8 +199,11 @@ impl LocalListener {
         match payload {
             OscPayload::Cwd(url) => {
                 let cwd = parse_cwd_url(&url);
-                self.state.lock().unwrap().cwd = Some(cwd.clone());
-                self.forward(SessionEvent::Cwd(cwd));
+                if let Some(sanitized) = self.security.sanitize_cwd(&cwd.to_string_lossy()) {
+                    let path = std::path::PathBuf::from(&sanitized);
+                    self.state.lock().unwrap().cwd = Some(path.clone());
+                    self.forward(SessionEvent::Cwd(path));
+                }
             }
             OscPayload::ShellIntegration(kind) => {
                 {
@@ -199,7 +220,11 @@ impl LocalListener {
                 }
                 self.forward(SessionEvent::ShellIntegration(kind));
             }
-            OscPayload::Notification(msg) => self.forward(SessionEvent::Notification(msg)),
+            OscPayload::Notification(msg) => {
+                if let Some(sanitized) = self.security.sanitize_notification(&msg) {
+                    self.forward(SessionEvent::Notification(sanitized));
+                }
+            }
             OscPayload::Progress(progress) => self.forward(SessionEvent::Progress(progress)),
         }
     }
@@ -212,8 +237,10 @@ impl EventListener for LocalListener {
             Event::Wakeup => self.forward(SessionEvent::Output),
             // ── Title (OSC 0/2) ─────────────────────────────────────────
             Event::Title(t) => {
-                self.set_title(t.clone());
-                self.forward(SessionEvent::Title(t));
+                // Sanitize before storing and forwarding.
+                let sanitized = self.security.sanitize_title(&t).unwrap_or_default();
+                self.set_title(t);
+                self.forward(SessionEvent::Title(sanitized));
             }
             Event::ResetTitle => {
                 self.set_title(String::new());
@@ -221,8 +248,12 @@ impl EventListener for LocalListener {
             }
             // ── Clipboard (OSC 52 set) ─────────────────────────────────
             Event::ClipboardStore(_, text) => {
-                self.set_clipboard(text.clone());
-                self.forward(SessionEvent::Clipboard(Some(text)));
+                // Validate before forwarding.
+                if let Some(validated) = self.security.validate_clipboard_write(&text, false) {
+                    let validated = validated.to_string();
+                    self.set_clipboard(text);
+                    self.forward(SessionEvent::Clipboard(Some(validated)));
+                }
             }
             // OSC 52 load (query clipboard) — the program asked us to send the
             // clipboard back. Forward so the UI replies (see security note: this
@@ -236,7 +267,7 @@ impl EventListener for LocalListener {
             Event::ChildExit(status) => {
                 let code = status.code();
                 self.set_exit(code);
-                self.forward(SessionEvent::Exited(code));
+                self.forward_lifecycle(SessionEvent::Exited(code));
             }
             // ── Shutdown ────────────────────────────────────────────────
             Event::Exit => {

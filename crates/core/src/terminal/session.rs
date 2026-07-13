@@ -21,6 +21,7 @@ use crate::terminal::key_encode::{KeyMods, KeySpec, NamedKey, encode_key};
 use crate::terminal::mouse_encode::TerminalMouseButton;
 use crate::terminal::osc::{Osc133Kind, TerminalProgress};
 use crate::terminal::osc_color::DynamicColors;
+use crate::terminal::paste::{PastePolicy, PasteResult, encode_paste};
 use crate::terminal::search::{SearchMatch, SearchOptions};
 
 use alacritty_terminal::vte::ansi::Rgb;
@@ -274,8 +275,13 @@ pub trait TerminalSession: Send + Sync + 'static {
     /// if the terminal is in bracketed paste mode.
     fn paste(&self, text: &str) {
         if self.is_bracketed_paste() {
-            let wrapped = format!("\x1b[200~{}\x1b[201~", text);
-            self.write(wrapped.as_bytes());
+            let policy = PastePolicy::default();
+            match encode_paste(text, true, &policy) {
+                PasteResult::Ok(bytes) => self.write(&bytes),
+                PasteResult::TooLarge(_) => {
+                    log::warn!("paste rejected: exceeded max paste size");
+                }
+            }
         } else {
             self.write(text.as_bytes());
         }
@@ -436,36 +442,43 @@ mod tests {
     }
 
     #[test]
-    fn phase0_baseline_bracketed_paste_preserves_security_vectors() {
+    fn phase1_bracketed_paste_strips_embedded_markers() {
         use crate::terminal::test_support::FakeTerminalSession;
 
         let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
         probe.set_mode(TermMode::SHOW_CURSOR | TermMode::BRACKETED_PASTE);
 
+        // Embedded end marker must be stripped so it cannot terminate paste mode.
         let vectors = [
-            "",
-            "line one\nline two",
-            "unicode: Héllo, 世界",
-            "nul:\0control:\u{0001}",
-            "embedded-end:\x1b[201~remainder",
+            ("", b"\x1b[200~\x1b[201~".as_slice()),
+            (
+                "line one\nline two",
+                b"\x1b[200~line one\nline two\x1b[201~",
+            ),
+            (
+                "unicode: Héllo, 世界",
+                "\x1b[200~unicode: Héllo, 世界\x1b[201~".as_bytes(),
+            ),
+            (
+                "nul:\0control:\u{0001}",
+                b"\x1b[200~nul:\0control:\x01\x1b[201~",
+            ),
+            // The key fix: embedded ESC[201~ must be stripped.
+            ("safe\x1b[201~malicious", b"\x1b[200~safemalicious\x1b[201~"),
+            // Embedded start marker also stripped.
+            ("text\x1b[200~more", b"\x1b[200~textmore\x1b[201~"),
+            // Multiple embedded markers.
+            ("a\x1b[201~b\x1b[200~c\x1b[201~d", b"\x1b[200~abcd\x1b[201~"),
+            // Partial marker (no ~) is NOT stripped.
+            ("text\x1b[201x", b"\x1b[200~text\x1b[201x\x1b[201~"),
         ];
-        for text in vectors {
+
+        for (text, expected) in vectors {
             session.paste(text);
             let writes = probe.take_writes();
-            assert_eq!(writes.len(), 1);
-            let expected = [
-                b"\x1b[200~".as_slice(),
-                text.as_bytes(),
-                b"\x1b[201~".as_slice(),
-            ]
-            .concat();
-            assert_eq!(writes[0], expected);
+            assert_eq!(writes.len(), 1, "for text: {text:?}");
+            assert_eq!(writes[0], expected, "for text: {text:?}");
         }
-
-        let large = "x".repeat(1024 * 1024);
-        session.paste(&large);
-        let writes = probe.take_writes();
-        assert_eq!(writes[0].len(), large.len() + 12);
     }
 
     #[test]

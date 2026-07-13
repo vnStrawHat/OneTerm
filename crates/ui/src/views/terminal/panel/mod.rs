@@ -84,15 +84,29 @@ impl TerminalPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let view = Self::spawn_local_view(window, cx);
         let focus = cx.focus_handle();
-        let tree = SpaceTree::new_terminal(view.clone(), focus);
-        let active = tree.active();
+        let (tree, active) = match view {
+            Some(ref view) => {
+                let tree = SpaceTree::new_terminal(view.clone(), focus);
+                let active = tree.active();
+                // Focus the terminal view right after creation.
+                view.read(cx).focus_handle(cx).focus(window, cx);
+                (tree, active)
+            }
+            None => {
+                // Spawn failed — create an empty tree.
+                // The user will see an empty terminal and can retry.
+                log::warn!("TerminalPanel::new: spawn failed, creating empty tree");
+                let tree = SpaceTree::new_empty(focus.clone());
+                let active = tree.active();
+                (tree, active)
+            }
+        };
 
         let _settings_sub = cx.observe(&TerminalSettings::global(cx), |_this, _settings, cx| {
             cx.notify();
         });
 
-        // Focus the terminal view right after creation — app startup + new tab.
-        view.read(cx).focus_handle(cx).focus(window, cx);
+        // Focus is handled inside the match above (only when spawn succeeds).
 
         let mut this = Self {
             tree,
@@ -102,7 +116,9 @@ impl TerminalPanel {
             _title_subs: Vec::new(),
             _settings_sub,
         };
-        this.attach_split_ctx(&view, active, cx);
+        if let Some(view) = &view {
+            this.attach_split_ctx(view, active, cx);
+        }
         this.rebuild_title_subs(cx);
         this
     }
@@ -154,21 +170,27 @@ impl TerminalPanel {
     }
 
     /// Spawn a fresh default local session + view.
+    /// Returns `None` if the session could not be spawned (e.g. missing shell).
+    /// The caller should handle the `None` case by showing an error state.
     pub(super) fn spawn_local_view(
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Entity<LocalTerminalView> {
+    ) -> Option<Entity<LocalTerminalView>> {
         let (shell, scrollback_history) = {
             let settings = TerminalSettings::global(cx).read(cx);
             (settings.shell.clone(), settings.scrollback_history)
         };
-        let session: Entity<Box<dyn TerminalSession>> = cx.new(|_cx| {
-            Box::new(
-                LocalSession::spawn(shell, PtySize { rows: 24, cols: 80 }, scrollback_history)
-                    .expect("spawn local session"),
-            ) as Box<dyn TerminalSession>
-        });
-        cx.new(|cx| LocalTerminalView::new(session, window, cx))
+        let session_result =
+            LocalSession::spawn(shell, PtySize { rows: 24, cols: 80 }, scrollback_history);
+        let session: Box<dyn TerminalSession> = match session_result {
+            Ok(s) => Box::new(s),
+            Err(e) => {
+                log::error!("Failed to spawn local terminal session: {e}");
+                return None;
+            }
+        };
+        let session_entity = cx.new(|_| session);
+        Some(cx.new(|cx| LocalTerminalView::new(session_entity, window, cx)))
     }
 
     /// Point `view`'s context menu at Space `space_id` in this panel.
@@ -240,6 +262,15 @@ impl TerminalPanel {
     pub fn has_no_terminals(&self, _cx: &App) -> bool {
         self.tree.has_no_terminals()
     }
+
+    /// Shut down all terminal sessions and cancel all tasks.
+    /// Called by `Panel::on_removed`, last-space close, and error paths.
+    /// Idempotent.
+    pub fn shutdown(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        for view in self.tree.terminal_views() {
+            view.update(cx, |v, cx| v.shutdown(cx));
+        }
+    }
 }
 
 impl EventEmitter<PanelEvent> for TerminalPanel {}
@@ -257,6 +288,12 @@ impl Focusable for TerminalPanel {
 impl Panel for TerminalPanel {
     fn panel_name(&self) -> &'static str {
         "terminal"
+    }
+
+    fn on_removed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Close all sessions and cancel all tasks when the panel is removed
+        // from the TabPanel (tab close button, middle-click, drag removal).
+        self.shutdown(window, cx);
     }
 
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

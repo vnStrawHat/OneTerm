@@ -134,11 +134,7 @@ impl TerminalSession for SshSession {
 
     // ── Input ───────────────────────────────────────────────────────
     fn write(&self, bytes: &[u8]) {
-        log::trace!(
-            "SshSession::write: {} bytes: {:?}",
-            bytes.len(),
-            String::from_utf8_lossy(bytes)
-        );
+        log::trace!("SshSession::write: {} bytes", bytes.len());
         self.listener.pty_write(bytes);
     }
 

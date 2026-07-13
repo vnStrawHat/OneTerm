@@ -10,11 +10,14 @@ pub mod mouse_encode;
 pub mod osc;
 pub mod osc_color;
 pub mod palette;
+pub mod paste;
 pub mod search;
+pub mod security_policy;
 pub mod session;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 pub mod url;
+pub mod url_policy;
 
 pub use colors_util::{
     is_app_chosen_exact_color, is_decorative_character, is_default_background_color,
@@ -35,8 +38,11 @@ pub use osc_color::{
     PendingColorQuery, SharedColorQueries, default_color_for_index, new_color_queries,
 };
 pub use palette::{TerminalPalette, extended_indexed_color, indexed_default_color, resolve_color};
+pub use paste::{PastePolicy, PasteResult, encode_paste};
 pub use search::{SearchMatch, SearchOptions, search_term};
+pub use security_policy::TerminalSecurityPolicy;
 pub use session::{
     CursorBounds, CwdSource, NetStats, SessionEvent, TerminalInfo, TerminalSession, parse_keystroke,
 };
 pub use url::{link_ranges, url_at};
+pub use url_policy::{ConfirmReason, DenyReason, ExternalTargetPolicy, TargetDecision};

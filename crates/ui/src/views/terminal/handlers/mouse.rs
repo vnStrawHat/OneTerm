@@ -9,6 +9,7 @@ use gpui::{
 };
 
 use oneterm_core::TerminalSession;
+use oneterm_core::terminal::url_policy::{ExternalTargetPolicy, TargetDecision};
 
 use super::super::element::GridMetrics;
 use super::super::url::detect_url_at;
@@ -31,8 +32,8 @@ pub(crate) fn attach_mouse(
                 Some(rc) => rc,
                 None => return,
             };
-            // Ctrl+click → open URL (OSC 8 hyperlink or plain-text URL).
-            if e.modifiers.control {
+            // Platform-modifier+click (Cmd on macOS, Ctrl on others) → open URL.
+            if e.modifiers.control || e.modifiers.platform {
                 let snap = s.read(cx).snapshot_query();
                 if let Some(url) = detect_url_at(
                     &snap.cells,
@@ -40,7 +41,23 @@ pub(crate) fn attach_mouse(
                     row as usize,
                     col as usize,
                 ) {
-                    cx.open_url(&url.url);
+                    let policy = ExternalTargetPolicy::default();
+                    match policy.validate(&url.url) {
+                        TargetDecision::Allow => {
+                            cx.open_url(&url.url);
+                        }
+                        TargetDecision::Confirm(reason) => {
+                            log::warn!(
+                                "terminal: URL requires confirmation: {:?} — {}",
+                                reason,
+                                url.url
+                            );
+                            // TODO: show confirmation dialog with the target URL.
+                        }
+                        TargetDecision::Deny(reason) => {
+                            log::warn!("terminal: URL denied: {:?} — {}", reason, url.url);
+                        }
+                    }
                     return;
                 }
             }

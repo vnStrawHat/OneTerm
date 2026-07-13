@@ -79,6 +79,21 @@ pub struct SpaceTree {
 }
 
 impl SpaceTree {
+    /// Create a tree with a single empty leaf (no terminal session).
+    pub fn new_empty(focus: FocusHandle) -> Self {
+        let id = SpaceId(0);
+        let root = SpaceNode::Leaf(SpaceLeaf {
+            id,
+            content: SpaceContent::Empty,
+            focus,
+        });
+        Self {
+            root: Some(root),
+            next_id: 1,
+            active: id,
+        }
+    }
+
     /// Create a tree with a single terminal leaf wrapping `view`.
     pub fn new_terminal(view: Entity<LocalTerminalView>, focus: FocusHandle) -> Self {
         let id = SpaceId(0);

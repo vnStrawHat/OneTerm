@@ -80,29 +80,64 @@ fn no_url_on_whitespace() {
 }
 
 #[test]
-fn phase0_baseline_osc8_targets_are_returned_without_policy() {
-    let vectors = [
-        ("click me", "custom-app://run?action=delete"),
-        ("HTTPS link", "HtTpS://Example.COM/Path"),
-        ("Unicode host", "https://例え.テスト/path"),
-        (
-            "credential target",
-            "https://user:secret@example.com/private",
-        ),
-        ("safe label", "file:///C:/Windows/System32/cmd.exe"),
-        ("safe label", "https://example.com/\u{0007}control"),
-    ];
+fn phase1_osc8_targets_are_policy_validated() {
+    use oneterm_core::terminal::url_policy::{ExternalTargetPolicy, TargetDecision};
 
-    for (display, target) in vectors {
-        let cells = make_osc8_cells(display, target);
-        let detected = detect_url_at(&cells, cells.len(), 0, 0).unwrap();
-        assert_eq!(detected.url, target);
-    }
+    let policy = ExternalTargetPolicy::default();
 
+    // Denied: custom application scheme.
+    let cells = make_osc8_cells("click me", "custom-app://run?action=delete");
+    let detected = detect_url_at(&cells, cells.len(), 0, 0).unwrap();
+    assert!(matches!(
+        policy.validate(&detected.url),
+        TargetDecision::Deny(_)
+    ));
+
+    // Allowed: mixed-case HTTPS (case-insensitive scheme).
+    let cells = make_osc8_cells("HTTPS link", "HtTpS://Example.COM/Path");
+    let detected = detect_url_at(&cells, cells.len(), 0, 0).unwrap();
+    assert_eq!(policy.validate(&detected.url), TargetDecision::Allow);
+
+    // Allowed: Unicode host.
+    let cells = make_osc8_cells("Unicode host", "https://例え.テスト/path");
+    let detected = detect_url_at(&cells, cells.len(), 0, 0).unwrap();
+    assert_eq!(policy.validate(&detected.url), TargetDecision::Allow);
+
+    // Denied: credentials in authority.
+    let cells = make_osc8_cells(
+        "credential target",
+        "https://user:secret@example.com/private",
+    );
+    let detected = detect_url_at(&cells, cells.len(), 0, 0).unwrap();
+    assert!(matches!(
+        policy.validate(&detected.url),
+        TargetDecision::Deny(_)
+    ));
+
+    // Denied: file scheme.
+    let cells = make_osc8_cells("safe label", "file:///C:/Windows/System32/cmd.exe");
+    let detected = detect_url_at(&cells, cells.len(), 0, 0).unwrap();
+    assert!(matches!(
+        policy.validate(&detected.url),
+        TargetDecision::Deny(_)
+    ));
+
+    // Denied: control character in URL.
+    let cells = make_osc8_cells("safe label", "https://example.com/\u{0007}control");
+    let detected = detect_url_at(&cells, cells.len(), 0, 0).unwrap();
+    assert!(matches!(
+        policy.validate(&detected.url),
+        TargetDecision::Deny(_)
+    ));
+
+    // Denied: oversized URL.
     let oversized = format!("https://example.com/{}", "x".repeat(256 * 1024));
     let cells = make_osc8_cells("short display text", &oversized);
     let detected = detect_url_at(&cells, cells.len(), 0, 3).unwrap();
-    assert_eq!(detected.url, oversized);
+    assert!(matches!(
+        policy.validate(&detected.url),
+        TargetDecision::Deny(_)
+    ));
 }
 
 // --- url_column_mask tests ---

@@ -37,6 +37,18 @@ pub(crate) async fn ssh_main_task(
     let mut processor = Processor::<StdSyncHandler>::new();
 
     loop {
+        // If close was requested (even if Cmd::Close was dropped due to a
+        // full queue), honor the closing flag immediately.
+        if listener.is_closing() {
+            log::info!("ssh_main_task: closing flag set, exiting");
+            let _ = channel.close().await;
+            {
+                let mut st = state.lock().unwrap();
+                st.alive = false;
+            }
+            listener.forward_lifecycle(SessionEvent::Closed);
+            break;
+        }
         tokio::select! {
             // ── Read data from the SSH channel ────────────────────────
             msg = channel.wait() => {
@@ -124,7 +136,7 @@ pub(crate) async fn ssh_main_task(
                             st.alive = false;
                             st.exit_code = Some(code);
                         }
-                        listener.forward(SessionEvent::Exited(Some(code)));
+                        listener.forward_lifecycle(SessionEvent::Exited(Some(code)));
                     }
                     Some(ChannelMsg::Eof) => {
                         log::info!("ssh_main_task: EOF received");
@@ -132,7 +144,7 @@ pub(crate) async fn ssh_main_task(
                             let mut st = state.lock().unwrap();
                             st.alive = false;
                         }
-                        listener.forward(SessionEvent::Closed);
+                        listener.forward_lifecycle(SessionEvent::Closed);
                         break;
                     }
                     Some(ChannelMsg::Close) => {
@@ -141,7 +153,7 @@ pub(crate) async fn ssh_main_task(
                             let mut st = state.lock().unwrap();
                             st.alive = false;
                         }
-                        listener.forward(SessionEvent::Closed);
+                        listener.forward_lifecycle(SessionEvent::Closed);
                         break;
                     }
                     None => {
@@ -150,7 +162,7 @@ pub(crate) async fn ssh_main_task(
                             let mut st = state.lock().unwrap();
                             st.alive = false;
                         }
-                        listener.forward(SessionEvent::Closed);
+                        listener.forward_lifecycle(SessionEvent::Closed);
                         break;
                     }
                     Some(other) => {
@@ -162,11 +174,7 @@ pub(crate) async fn ssh_main_task(
             cmd = cmd_rx.recv() => {
                 match cmd {
                     Ok(Cmd::Write(bytes)) => {
-                        log::debug!(
-                            "ssh_main_task: write {} bytes: {:?}",
-                            bytes.len(),
-                            String::from_utf8_lossy(&bytes)
-                        );
+                        log::debug!("ssh_main_task: write {} bytes", bytes.len());
                         // Track network stats — bytes sent to server.
                         state.lock().unwrap().tx_bytes += bytes.len() as u64;
                         if let Err(e) = channel.data(&bytes[..]).await {

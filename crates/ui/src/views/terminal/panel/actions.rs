@@ -224,11 +224,23 @@ mod tests {
     }
 
     #[test]
-    fn phase0_baseline_terminal_titles_are_not_sanitized_or_capped() {
-        let controlled = "safe\u{0007}\u{001b}[31m\u{202e}txt.exe";
-        assert_eq!(resolve_tab_label(Some(controlled), "Terminal"), controlled);
+    fn phase1_terminal_titles_are_sanitized_by_policy() {
+        use oneterm_core::terminal::security_policy::TerminalSecurityPolicy;
 
+        let policy = TerminalSecurityPolicy::default();
+
+        // Control characters stripped.
+        let controlled = "safe\u{0007}\u{001b}[31m\u{202e}txt.exe";
+        let sanitized = policy.sanitize_title(controlled).unwrap();
+        assert_eq!(sanitized, "safe[31mtxt.exe");
+
+        // Oversized title truncated.
         let oversized = "x".repeat(256 * 1024);
-        assert_eq!(resolve_tab_label(Some(&oversized), "Terminal"), oversized);
+        let sanitized = policy.sanitize_title(&oversized).unwrap();
+        assert!(sanitized.len() <= 4 * 1024);
+
+        // resolve_tab_label still passes through what it receives.
+        let clean = "vim — main.rs";
+        assert_eq!(resolve_tab_label(Some(clean), "Terminal"), clean);
     }
 }

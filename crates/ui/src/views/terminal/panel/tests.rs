@@ -22,7 +22,7 @@ fn phase0_close_last_space_calls_session_close(cx: &mut TestAppContext) {
 
     // The panel starts with one leaf; closing it triggers LastSpaceClosed.
     let active = panel.read_with(cx, |p, _| p.tree.active());
-    panel.update_in(cx, |p, window, cx| {
+    panel.update_in(cx, |p, window, _cx| {
         let (outcome, view) = p.tree.close(active);
         assert_eq!(outcome, CloseOutcome::LastSpaceClosed);
         assert!(view.is_none()); // last-space path does not return the view
@@ -88,4 +88,79 @@ fn phase0_close_non_last_space_closes_removed_session(cx: &mut TestAppContext) {
     assert!(!probe_a.alive());
     assert!(probe_b.alive());
     assert_eq!(probe_b.close_calls(), 0);
+}
+
+#[gpui::test]
+fn phase1_shutdown_cancels_tasks_and_closes_session(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    cx.update(crate::init);
+
+    let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
+    let (panel, cx) = cx.add_window_view(move |window, cx| {
+        TerminalPanel::from_session(session, "Phase1", window, cx)
+    });
+    let cx: &mut VisualTestContext = cx;
+
+    cx.run_until_parked();
+
+    // Verify the view starts alive with active tasks.
+    let (alive, has_event, has_blink) = panel.read_with(cx, |p, cx| {
+        let view = p.tree.terminal_views().into_iter().next().unwrap();
+        (
+            view.read(cx).alive,
+            view.read(cx).event_task.is_some(),
+            view.read(cx).blink_task.is_some(),
+        )
+    });
+    assert!(alive);
+    assert!(has_event);
+    assert!(has_blink);
+
+    // Shut down the panel — should close all sessions and cancel tasks.
+    panel.update_in(cx, |p, window, cx| {
+        p.shutdown(window, cx);
+    });
+    cx.run_until_parked();
+
+    // Session is closed.
+    assert_eq!(probe.close_calls(), 1);
+    assert!(!probe.alive());
+
+    // View is no longer alive and tasks are taken (cancelled).
+    let (alive, no_event, no_blink) = panel.read_with(cx, |p, cx| {
+        let view = p.tree.terminal_views().into_iter().next().unwrap();
+        (
+            view.read(cx).alive,
+            view.read(cx).event_task.is_none(),
+            view.read(cx).blink_task.is_none(),
+        )
+    });
+    assert!(!alive);
+    assert!(no_event);
+    assert!(no_blink);
+}
+
+#[gpui::test]
+fn phase1_shutdown_is_idempotent(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    cx.update(crate::init);
+
+    let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
+    let (panel, cx) = cx.add_window_view(move |window, cx| {
+        TerminalPanel::from_session(session, "Phase1", window, cx)
+    });
+    let cx: &mut VisualTestContext = cx;
+
+    cx.run_until_parked();
+
+    // Call shutdown twice — only one close call should happen.
+    panel.update_in(cx, |p, window, cx| {
+        p.shutdown(window, cx);
+    });
+    panel.update_in(cx, |p, window, cx| {
+        p.shutdown(window, cx);
+    });
+    cx.run_until_parked();
+
+    assert_eq!(probe.close_calls(), 1);
 }

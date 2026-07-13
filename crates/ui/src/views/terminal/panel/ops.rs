@@ -48,7 +48,7 @@ impl TerminalPanel {
     ) {
         let (outcome, removed) = self.tree.close(space_id);
         if let Some(view) = removed {
-            view.read(cx).session.read(cx).close();
+            view.update(cx, |v, cx| v.shutdown(cx));
         }
         if outcome == CloseOutcome::LastSpaceClosed {
             if let Some(tp) = self.tab_panel.as_ref().and_then(|w| w.upgrade()) {
@@ -72,7 +72,13 @@ impl TerminalPanel {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let view = TerminalPanel::spawn_local_view(window, cx);
+        let view = match TerminalPanel::spawn_local_view(window, cx) {
+            Some(v) => v,
+            None => {
+                log::warn!("new_terminal_here: spawn failed");
+                return;
+            }
+        };
         self.attach_split_ctx(&view, space_id, cx);
         self.tree.fill_empty(space_id, view);
         self.rebuild_title_subs(cx);

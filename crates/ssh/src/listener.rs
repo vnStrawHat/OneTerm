@@ -7,10 +7,11 @@
 //! Similar to `local/src/listener.rs` but replaces `Notifier` with `cmd_tx`
 //! (async_channel::Sender<Cmd>).
 
-#[cfg(any(test, feature = "terminal-diagnostics"))]
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
+
 #[cfg(any(test, feature = "terminal-diagnostics"))]
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 
 use async_channel::Sender;
 #[cfg(any(test, feature = "terminal-diagnostics"))]
@@ -22,7 +23,7 @@ use alacritty_terminal::event::{Event, EventListener};
 use oneterm_core::SessionEvent;
 use oneterm_core::terminal::{
     ColorFormatter, Osc133Kind, OscPayload, PendingColorQuery, SharedColorQueries,
-    new_color_queries, parse_cwd_url, parse_osc,
+    TerminalSecurityPolicy, new_color_queries, parse_cwd_url, parse_osc,
 };
 
 use crate::state::SharedState;
@@ -74,6 +75,12 @@ pub struct SshListener {
     /// Pending OSC 10/11/12 color queries — enqueued here, answered by the tokio
     /// task after each parse batch (when the `Term` lock is free to read colors).
     color_queries: SharedColorQueries,
+    /// Security policy for terminal-controlled data (title, clipboard, etc).
+    /// SSH is remote: clipboard read/write default off.
+    security: TerminalSecurityPolicy,
+    /// Set when close has been requested — the tokio task checks this flag
+    /// to ensure close is always honored even if Cmd::Close is dropped.
+    closing: Arc<std::sync::atomic::AtomicBool>,
     /// Diagnostic counters for bounded queue failures.
     #[cfg(any(test, feature = "terminal-diagnostics"))]
     queue_counters: Arc<SshQueueCounters>,
@@ -86,6 +93,8 @@ impl SshListener {
             cmd_tx,
             state,
             color_queries: new_color_queries(),
+            security: TerminalSecurityPolicy::default(),
+            closing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             #[cfg(any(test, feature = "terminal-diagnostics"))]
             queue_counters: Arc::new(SshQueueCounters::default()),
         }
@@ -122,16 +131,18 @@ impl SshListener {
 
     /// Write bytes to the SSH channel (via cmd_tx → tokio task → channel.data).
     pub fn pty_write(&self, bytes: &[u8]) {
-        log::debug!(
-            "SshListener::pty_write: {} bytes: {:?}",
-            bytes.len(),
-            String::from_utf8_lossy(bytes)
-        );
+        log::debug!("SshListener::pty_write: {} bytes", bytes.len());
         if let Err(e) = self.cmd_tx.try_send(Cmd::Write(bytes.to_vec())) {
             #[cfg(any(test, feature = "terminal-diagnostics"))]
             self.record_command_failure(&e);
             warn!("SshListener::pty_write: try_send fail: {e}");
         }
+    }
+
+    /// Whether close has been requested. The tokio task checks this flag to
+    /// ensure it exits even if `Cmd::Close` was dropped due to a full queue.
+    pub fn is_closing(&self) -> bool {
+        self.closing.load(Ordering::Relaxed)
     }
 
     /// Resize the SSH channel (via cmd_tx → tokio task → channel.window_change).
@@ -143,21 +154,41 @@ impl SshListener {
         }
     }
 
-    /// Close the SSH channel.
+    /// Close the SSH channel. Close is lifecycle-critical and must never be
+    /// silently dropped. Uses a closing flag + try_send to ensure the task
+    /// exits even if the command is dropped due to a full queue.
     pub fn pty_close(&self) {
+        // Close is lifecycle-critical and must never be silently dropped.
+        // Set the closing flag (checked by the tokio task) AND send Cmd::Close.
+        // If try_send fails (queue full), the flag ensures the task exits.
+        self.closing.store(true, Ordering::Relaxed);
         if let Err(e) = self.cmd_tx.try_send(Cmd::Close) {
             #[cfg(any(test, feature = "terminal-diagnostics"))]
             self.record_command_failure(&e);
-            warn!("SshListener: pty_close fail: {e}");
+            warn!("SshListener: pty_close queued via flag (try_send: {e})");
         }
     }
 
-    /// Forward a `SessionEvent` (non-blocking). Drops it if the channel is full/closed.
+    /// Forward a `SessionEvent` (non-blocking). Drops it if the channel is
+    /// full/closed — acceptable since `Output` is debounced.
     pub fn forward(&self, ev: SessionEvent) {
         if let Err(e) = self.event_tx.try_send(ev) {
             #[cfg(any(test, feature = "terminal-diagnostics"))]
             self.record_event_failure(&e);
             warn!("SshListener: drop event (channel full/closed): {e:?}");
+        }
+    }
+
+    /// Forward a lifecycle `SessionEvent` (`Exited`/`Closed`) using
+    /// `send_blocking` to ensure it is never silently dropped.
+    pub fn forward_lifecycle(&self, ev: SessionEvent) {
+        if let Err(e) = self.event_tx.send_blocking(ev) {
+            // send_blocking only fails if the channel is closed.
+            #[cfg(any(test, feature = "terminal-diagnostics"))]
+            self.queue_counters
+                .event_closed
+                .fetch_add(1, Ordering::Relaxed);
+            warn!("SshListener: lifecycle event lost (channel closed): {e:?}");
         }
     }
 
@@ -177,11 +208,14 @@ impl SshListener {
 
     fn set_title(&self, title: String) {
         let mut st = self.state.lock().unwrap();
-        st.title = if title.is_empty() { None } else { Some(title) };
+        st.title = self.security.sanitize_title(&title);
     }
 
     fn set_clipboard(&self, text: String) {
-        self.state.lock().unwrap().clipboard = Some(text);
+        // SSH is remote: clipboard writes default off.
+        if let Some(validated) = self.security.validate_clipboard_write(&text, true) {
+            self.state.lock().unwrap().clipboard = Some(validated.to_string());
+        }
     }
 
     /// Handle an OSC forwarded by the engine (`Event::Osc`, OSC 7/9/133) — update
@@ -190,8 +224,11 @@ impl SshListener {
         match payload {
             OscPayload::Cwd(url) => {
                 let cwd = parse_cwd_url(&url);
-                self.state.lock().unwrap().cwd = Some(cwd.clone());
-                self.forward(SessionEvent::Cwd(cwd));
+                if let Some(sanitized) = self.security.sanitize_cwd(&cwd.to_string_lossy()) {
+                    let path = std::path::PathBuf::from(&sanitized);
+                    self.state.lock().unwrap().cwd = Some(path.clone());
+                    self.forward(SessionEvent::Cwd(path));
+                }
             }
             OscPayload::ShellIntegration(kind) => {
                 {
@@ -208,7 +245,11 @@ impl SshListener {
                 }
                 self.forward(SessionEvent::ShellIntegration(kind));
             }
-            OscPayload::Notification(msg) => self.forward(SessionEvent::Notification(msg)),
+            OscPayload::Notification(msg) => {
+                if let Some(sanitized) = self.security.sanitize_notification(&msg) {
+                    self.forward(SessionEvent::Notification(sanitized));
+                }
+            }
             OscPayload::Progress(progress) => self.forward(SessionEvent::Progress(progress)),
         }
     }
@@ -221,20 +262,30 @@ impl EventListener for SshListener {
             Event::Wakeup => self.forward(SessionEvent::Output),
             // ── Title (OSC 0/2) ─────────────────────────────────────────
             Event::Title(t) => {
-                self.set_title(t.clone());
-                self.forward(SessionEvent::Title(t));
+                let sanitized = self.security.sanitize_title(&t).unwrap_or_default();
+                self.set_title(t);
+                self.forward(SessionEvent::Title(sanitized));
             }
             Event::ResetTitle => {
                 self.set_title(String::new());
                 self.forward(SessionEvent::Title(String::new()));
             }
-            // ── Clipboard (OSC 52 set) ─────────────────────────────────
+            // ── Clipboard (OSC 52 set) ─────────────────────────────
             Event::ClipboardStore(_, text) => {
-                self.set_clipboard(text.clone());
-                self.forward(SessionEvent::Clipboard(Some(text)));
+                // SSH is remote: clipboard writes default off.
+                if let Some(validated) = self.security.validate_clipboard_write(&text, true) {
+                    let validated = validated.to_string();
+                    self.set_clipboard(text);
+                    self.forward(SessionEvent::Clipboard(Some(validated)));
+                }
             }
             Event::ClipboardLoad(_, _) => {
-                self.forward(SessionEvent::ClipboardRead);
+                // SSH is remote: clipboard reads default off.
+                if self.security.allow_clipboard_read(true) {
+                    self.forward(SessionEvent::ClipboardRead);
+                } else {
+                    log::debug!("SSH: OSC 52 clipboard read refused (remote default off)");
+                }
             }
             // ── Channel write (OSC/DA response) ─────────────────────────
             Event::PtyWrite(s) => self.pty_write(s.as_bytes()),
@@ -327,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn phase0_baseline_ssh_input_is_present_in_debug_logs() {
+    fn phase1_ssh_input_is_not_logged() {
         capture_logs();
         let (listener, _events, commands) = make_listener(4, 4);
         let sentinel = b"PHASE0_DO_NOT_LOG_SECRET_7fd65c";
@@ -335,15 +386,23 @@ mod tests {
         listener.pty_write(sentinel);
 
         let records = LOGGER.records.lock().unwrap().clone();
+        // No log record may contain the sentinel secret.
         assert!(
             records
                 .iter()
-                .any(|record| record.contains("PHASE0_DO_NOT_LOG_SECRET_7fd65c"))
+                .all(|record| !record.contains("PHASE0_DO_NOT_LOG_SECRET_7fd65c")),
+            "sentinel secret leaked into log records: {records:?}"
         );
+        // The write itself must still be delivered.
         assert!(matches!(
             commands.try_recv(),
             Ok(Cmd::Write(bytes)) if bytes == sentinel
         ));
+        // Byte count may be logged, but not content.
+        assert!(
+            records.iter().any(|record| record.contains("31 bytes")),
+            "expected byte-count log, got: {records:?}"
+        );
     }
 
     #[test]
@@ -370,5 +429,29 @@ mod tests {
         let diagnostics = listener.queue_diagnostics();
         assert_eq!(diagnostics.command_closed, 1);
         assert_eq!(diagnostics.event_closed, 1);
+    }
+
+    #[test]
+    fn phase1_close_is_honored_even_when_command_queue_is_full() {
+        let (listener, _events, commands) = make_listener(2, 1);
+        // Fill the command queue to capacity.
+        commands.try_send(Cmd::Write(b"x".to_vec())).unwrap();
+        assert_eq!(commands.len(), 1);
+
+        // A regular write would be dropped (queue full)...
+        listener.pty_write(b"dropped");
+        assert_eq!(commands.len(), 1);
+
+        // ...but close sets the closing flag even if Cmd::Close is dropped.
+        // The tokio task checks is_closing() to ensure it exits.
+        listener.pty_close();
+        assert!(listener.is_closing());
+        // Cmd::Close was dropped (queue full), but the flag is set.
+        assert_eq!(commands.len(), 1);
+
+        // Now drain the queue and try again — Cmd::Close fits.
+        assert!(matches!(commands.try_recv(), Ok(Cmd::Write(_))));
+        listener.pty_close();
+        assert!(matches!(commands.try_recv(), Ok(Cmd::Close)));
     }
 }

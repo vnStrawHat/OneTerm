@@ -213,7 +213,7 @@ impl ShellEventLoop {
                                 st.alive = false;
                                 st.exit_code = code;
                             }
-                            self.listener.forward(SessionEvent::Exited(code));
+                            self.listener.forward_lifecycle(SessionEvent::Exited(code));
                         }
                         self.term.lock().exit();
                         self.listener.send_event(Event::Wakeup);

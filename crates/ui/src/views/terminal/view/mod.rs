@@ -105,6 +105,21 @@ pub struct LocalTerminalView {
     /// context menu can dispatch Split / Close-Space to the right Space. `None`
     /// until the panel wires it up (always set for a live terminal leaf).
     pub(crate) split_ctx: Option<super::space::SplitContext>,
+    /// Handle to the event-loop task — stored so it can be cancelled on drop/close.
+    pub(crate) event_task: Option<gpui::Task<()>>,
+    /// Handle to the cursor-blink task — stored so it can be cancelled on drop/close.
+    pub(crate) blink_task: Option<gpui::Task<()>>,
+    /// Whether the view is alive (not yet closed). Used to gate the blink task.
+    pub(crate) alive: bool,
+}
+
+impl Drop for LocalTerminalView {
+    fn drop(&mut self) {
+        // Cancel tasks by dropping them (GPUI cancels on drop).
+        // If shutdown() was already called, these are None — no-op.
+        drop(self.event_task.take());
+        drop(self.blink_task.take());
+    }
 }
 
 impl EventEmitter<TerminalViewEvent> for LocalTerminalView {}
@@ -125,7 +140,7 @@ impl LocalTerminalView {
 
         let rx = session.read(cx).subscribe();
         let session_for_spawn = session.clone();
-        cx.spawn(async move |this, cx| {
+        let event_task = cx.spawn(async move |this, cx| {
             while let Ok(ev) = rx.recv().await {
                 match ev {
                     SessionEvent::Clipboard(Some(t)) => {
@@ -199,21 +214,29 @@ impl LocalTerminalView {
                     }
                 }
             }
-        })
-        .detach();
+        });
 
-        cx.spawn(async move |this, cx| {
+        let blink_task = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
                     .timer(Duration::from_millis(CURSOR_BLINK_INTERVAL_MS))
                     .await;
-                let _ = this.update(cx, |view, cx| {
+                // Only blink while the view is alive. The task is also
+                // cancelled when the view is dropped/closed via the stored
+                // Task handle.
+                let continue_blinking = this.update(cx, |view, cx| {
+                    if !view.alive {
+                        return false;
+                    }
                     view.cursor_blink_visible = !view.cursor_blink_visible;
                     cx.notify();
+                    true
                 });
+                if !continue_blinking.unwrap_or(false) {
+                    break;
+                }
             }
-        })
-        .detach();
+        });
 
         focus.focus(window, cx);
 
@@ -244,7 +267,25 @@ impl LocalTerminalView {
             search_active_idx: None,
             search_input: None,
             split_ctx: None,
+            event_task: Some(event_task),
+            blink_task: Some(blink_task),
+            alive: true,
         }
+    }
+
+    /// Shut down this view: cancel tasks, close the session, mark as not alive.
+    /// Idempotent — safe to call multiple times.
+    pub(crate) fn shutdown(&mut self, cx: &mut Context<Self>) {
+        if !self.alive {
+            return;
+        }
+        self.alive = false;
+        // Cancel the event-loop and blink tasks by dropping them.
+        // GPUI Task cancellation happens on drop (not detach).
+        drop(self.event_task.take());
+        drop(self.blink_task.take());
+        // Close the session (PTY/SSH channel).
+        self.session.update(cx, |s, _| s.close());
     }
 
     /// Return a snapshot of the most recently painted renderer counters.

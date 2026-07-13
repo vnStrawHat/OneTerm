@@ -274,7 +274,8 @@ mod tests {
     }
 
     #[test]
-    fn phase0_baseline_osc_payloads_have_no_application_cap() {
+    fn phase1_osc_payloads_are_capped_by_security_policy() {
+        // parse_osc itself doesn't cap — the TerminalSecurityPolicy does.
         let notification = vec![b'x'; 256 * 1024];
         let parsed = parse_osc(&[b"9", notification.as_slice()]);
         assert_eq!(
@@ -282,7 +283,29 @@ mod tests {
             Some(OscPayload::Notification("x".repeat(notification.len())))
         );
 
-        let clipboard = "c".repeat(256 * 1024);
+        // The policy caps notification size.
+        let policy = crate::terminal::security_policy::TerminalSecurityPolicy::default();
+        let large_notification = "x".repeat(256 * 1024);
+        let sanitized = policy.sanitize_notification(&large_notification);
+        assert!(sanitized.is_some());
+        assert!(sanitized.unwrap().len() <= 8 * 1024);
+
+        // The policy caps clipboard write size (256 KiB limit).
+        let large_clipboard = "c".repeat(256 * 1024 + 1);
+        assert_eq!(
+            policy.validate_clipboard_write(&large_clipboard, false),
+            None
+        );
+
+        // Normal-sized clipboard write is allowed.
+        let small_clipboard = "c".repeat(100);
+        assert_eq!(
+            policy.validate_clipboard_write(&small_clipboard, false),
+            Some(small_clipboard.as_str())
+        );
+
+        // encode_osc52/decode_osc52 still work for normal sizes.
+        let clipboard = "c".repeat(100);
         let encoded = encode_osc52(&clipboard);
         assert_eq!(decode_osc52(&encoded).as_deref(), Some(clipboard.as_str()));
     }
