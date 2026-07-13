@@ -6,8 +6,8 @@
 //! then persists the full snapshot to `terminal.json` via
 //! [`super::terminal::persist`].
 
-use gpui::{App, SharedString};
 use super::items_with_separators;
+use gpui::{App, SharedString};
 use gpui_component::setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem};
 
 use crate::state::terminal_settings::{hsla_to_hex, parse_hex_color};

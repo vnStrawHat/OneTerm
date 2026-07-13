@@ -3,7 +3,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gpui::{App, ClipboardItem, Entity, FocusHandle, InteractiveElement as _, KeyDownEvent};
+use gpui::{
+    App, ClipboardItem, Entity, FocusHandle, Focusable as _, InteractiveElement as _, KeyDownEvent,
+};
 use gpui_component::ActiveTheme as _;
 
 use alacritty_terminal::term::TermMode;
@@ -40,6 +42,19 @@ pub(crate) fn attach_key(
                 });
                 cx.stop_propagation();
                 return;
+            }
+
+            // The search input emits PressEnter to navigate matches, then
+            // propagates Enter by design. Do not let that propagated key reach
+            // the terminal while the search input owns focus.
+            if matches!(e.keystroke.key.as_str(), "enter" | "return") {
+                let search_input = view.read(cx).search_input.clone();
+                let search_focused = search_input
+                    .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(_w));
+                if search_focused {
+                    cx.stop_propagation();
+                    return;
+                }
             }
 
             // ── Zoom shortcuts (Ctrl +/−/0) ──

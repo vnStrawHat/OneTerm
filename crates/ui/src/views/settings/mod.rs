@@ -40,16 +40,21 @@ pub(crate) use key_bindings::{KeyBindingsSnapshotGlobal, apply_key_bindings, ini
 // empty (see `SettingItem::is_match`).
 
 use gpui::{App, Styled, Window, div, px};
-use gpui_component::{ActiveTheme as _, setting::{RenderOptions, SettingItem}};
+use gpui_component::{
+    ActiveTheme as _,
+    setting::{RenderOptions, SettingItem},
+};
 
 /// A thin horizontal divider line rendered between setting items.
 ///
 /// Slots into the standard `SettingGroup::item` pipeline as a custom-element
 /// `SettingItem`. Hidden during search (no keywords → only matches empty query).
 pub(super) fn separator() -> SettingItem {
-    SettingItem::render(|_options: &RenderOptions, _window: &mut Window, cx: &mut App| {
-        div().w_full().h(px(1.)).bg(cx.theme().border)
-    })
+    SettingItem::render(
+        |_options: &RenderOptions, _window: &mut Window, cx: &mut App| {
+            div().w_full().h(px(1.)).bg(cx.theme().border)
+        },
+    )
 }
 
 /// Interleave the given items with `separator()` between each consecutive pair.

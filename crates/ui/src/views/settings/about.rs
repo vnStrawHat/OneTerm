@@ -53,44 +53,46 @@ fn about_group() -> SettingGroup {
 
 /// The "Links" group — GitHub repository and documentation.
 fn links_group() -> SettingGroup {
-    SettingGroup::new().title("Links").items(items_with_separators(vec![
-        SettingItem::new(
-            "GitHub Repository",
-            SettingField::render(|_options, _window, _cx| {
-                h_flex()
-                    .w_full()
-                    .justify_between()
-                    .child("Source code and releases.")
-                    .child(
-                        Button::new("open-repo")
-                            .outline()
-                            .label("Repository...")
-                            .on_click(|_, _, cx| {
-                                cx.open_url("https://github.com/longbridge/gpui-component");
-                            }),
-                    )
-                    .into_any_element()
-            }),
-        )
-        .description("Open the GitHub repository in your default browser."),
-        SettingItem::new(
-            "Built With",
-            SettingField::render(|_options, _window, _cx| {
-                h_flex()
-                    .w_full()
-                    .justify_between()
-                    .child("GPUI + alacritty_terminal + gpui-component.")
-                    .child(
-                        Button::new("open-gpui")
-                            .outline()
-                            .label("gpui-component...")
-                            .on_click(|_, _, cx| {
-                                cx.open_url("https://github.com/longbridge/gpui-component");
-                            }),
-                    )
-                    .into_any_element()
-            }),
-        )
-        .description("The GUI framework and component library powering OneTerm."),
-    ]))
+    SettingGroup::new()
+        .title("Links")
+        .items(items_with_separators(vec![
+            SettingItem::new(
+                "GitHub Repository",
+                SettingField::render(|_options, _window, _cx| {
+                    h_flex()
+                        .w_full()
+                        .justify_between()
+                        .child("Source code and releases.")
+                        .child(
+                            Button::new("open-repo")
+                                .outline()
+                                .label("Repository...")
+                                .on_click(|_, _, cx| {
+                                    cx.open_url("https://github.com/longbridge/gpui-component");
+                                }),
+                        )
+                        .into_any_element()
+                }),
+            )
+            .description("Open the GitHub repository in your default browser."),
+            SettingItem::new(
+                "Built With",
+                SettingField::render(|_options, _window, _cx| {
+                    h_flex()
+                        .w_full()
+                        .justify_between()
+                        .child("GPUI + alacritty_terminal + gpui-component.")
+                        .child(
+                            Button::new("open-gpui")
+                                .outline()
+                                .label("gpui-component...")
+                                .on_click(|_, _, cx| {
+                                    cx.open_url("https://github.com/longbridge/gpui-component");
+                                }),
+                        )
+                        .into_any_element()
+                }),
+            )
+            .description("The GUI framework and component library powering OneTerm."),
+        ]))
 }

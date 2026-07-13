@@ -28,9 +28,8 @@ use std::sync::LazyLock;
 /// prompts. Used as a fallback when the profile's own prompt regex doesn't
 /// match (e.g. user runs `wsl` inside `cmd.exe` — prompt changes to Unix but
 /// the profile stays `Cmd`).
-static UNIVERSAL_PROMPT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(?:[A-Za-z]:[^\s>]*>[ ]|[^\s]*[\$#%][ ])").unwrap()
-});
+static UNIVERSAL_PROMPT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(?:[A-Za-z]:[^\s>]*>[ ]|[^\s]*[\$#%][ ])").unwrap());
 
 /// Scan one line of terminal text → `Vec<u8>` of `Class` (one per char).
 ///
