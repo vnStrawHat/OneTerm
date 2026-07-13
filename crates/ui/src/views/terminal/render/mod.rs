@@ -139,8 +139,14 @@ impl Render for LocalTerminalView {
 
         // Semantic overlay (Layer 2) -- Auto/On = enabled; Off = disabled.
         let semantic_enabled = !matches!(semantic_highlighting, SemanticHighlightingMode::Off);
-        let shell_kind = settings_entity.read(cx).shell.kind;
-        let profile = shell_kind_to_profile(shell_kind);
+        // Select the shell profile for semantic highlighting:
+        // - Local session: use the configured ShellKind (Cmd/PowerShell/Unix/...)
+        // - SSH session: always Unix (remote hosts are virtually always Unix)
+        let profile = if session.read(cx).is_local() {
+            shell_kind_to_profile(settings_entity.read(cx).shell.kind)
+        } else {
+            ShellProfile::Unix
+        };
         let overlay = SemanticOverlay::new(profile, semantic_enabled);
 
         let terminal_div = div()

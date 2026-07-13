@@ -21,6 +21,17 @@ use crate::profile::ShellProfile;
 use crate::role::RowRole;
 use crate::rules::RuleSet;
 
+use regex::Regex;
+use std::sync::LazyLock;
+
+/// Universal prompt detector — matches both Unix (`$`/`#`) and Windows (`>`)
+/// prompts. Used as a fallback when the profile's own prompt regex doesn't
+/// match (e.g. user runs `wsl` inside `cmd.exe` — prompt changes to Unix but
+/// the profile stays `Cmd`).
+static UNIVERSAL_PROMPT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:[A-Za-z]:[^\s>]*>[ ]|[^\s]*[\$#%][ ])").unwrap()
+});
+
 /// Scan one line of terminal text → `Vec<u8>` of `Class` (one per char).
 ///
 /// `line` is the display text of one row (cells joined, spacers skipped). The
@@ -35,7 +46,9 @@ pub fn scan_line(line: &str, rules: &RuleSet, profile: &ShellProfile, role: RowR
         RowRole::Command => scan_command_mode(&chars, &mut classes, profile),
         RowRole::Output => {
             // Fallback: if the prompt regex matches, treat as a prompt line.
-            if profile.prompt_regex().is_match(line) {
+            // Try the profile's own regex first, then a universal fallback that
+            // handles cross-shell prompts (e.g. `wsl` inside `cmd.exe`).
+            if profile.prompt_regex().is_match(line) || UNIVERSAL_PROMPT.is_match(line) {
                 scan_prompt_line(&chars, &mut classes, profile);
             } else {
                 output::scan_output(&chars, &mut classes, rules, profile);
@@ -56,10 +69,8 @@ fn scan_prompt_line(chars: &[char], classes: &mut [u8], profile: &ShellProfile) 
     let mut sign_end = None;
     for (i, &c) in chars.iter().enumerate() {
         if profile.is_prompt_sign(c) {
-            // Tag everything up to and including the sign as PromptSign.
-            for j in 0..=i {
-                classes[j] = Class::PromptSign as u8;
-            }
+            // Tag only the sign glyph itself as PromptSign.
+            classes[i] = Class::PromptSign as u8;
             sign_end = Some(i);
             break;
         }

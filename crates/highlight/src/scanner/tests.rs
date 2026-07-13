@@ -324,3 +324,93 @@ fn priority_string_over_keyword() {
         assert_eq!(*cls, Class::String);
     }
 }
+fn scan_with_profile(line: &str, role: RowRole, profile: ShellProfile) -> Vec<Class> {
+    let rules = RuleSet::global();
+    scan_line(line, rules, &profile, role)
+        .into_iter()
+        .map(Class::from_u8)
+        .collect()
+}
+
+#[test]
+fn prompt_sign_only_is_tagged() {
+    // Only the sign char itself should be PromptSign, not the preceding path.
+    let line = "user@host:~/dir$ ls";
+    let c = scan(line, RowRole::Output);
+    let dollar = line.find('$').unwrap();
+    for i in 0..dollar {
+        assert_ne!(c[i], Class::PromptSign, "char {i} '{line}'");
+    }
+    assert_eq!(c[dollar], Class::PromptSign);
+}
+
+#[test]
+fn windows_prompt_sign_only_is_tagged() {
+    let line = r"C:\Users\foo> dir";
+    let c = scan_with_profile(line, RowRole::Output, ShellProfile::Cmd);
+    let gt = line.find('>').unwrap();
+    for i in 0..gt {
+        assert_ne!(c[i], Class::PromptSign, "char {i} of '{line}'");
+    }
+    assert_eq!(c[gt], Class::PromptSign);
+}
+
+#[test]
+fn output_option_long_and_short() {
+    // --help output: both long and short options should be Option.
+    let line = " -d, --data <data>  HTTP POST data";
+    let c = scan(line, RowRole::Output);
+    let d_pos = line.find(" -d").unwrap() + 1;
+    let data_pos = line.find("--data").unwrap();
+    assert_eq!(c[d_pos], Class::Option);
+    assert_eq!(c[d_pos + 1], Class::Option);
+    assert_eq!(c[data_pos], Class::Option);
+    assert_eq!(c[data_pos + 5], Class::Option);
+}
+
+#[test]
+fn option_not_tagged_inside_filename() {
+    // Filenames with hyphens must not have embedded segments highlighted as options.
+    let line = "drwxr-xr-x 2 root root 4.0K May 21 2025 container-diff-linux-amd64";
+    let c = scan(line, RowRole::Output);
+    for (i, cls) in c.iter().enumerate() {
+        assert_ne!(*cls, Class::Option, "char {i} of '{line}'");
+    }
+}
+
+#[test]
+fn number_not_tagged_inside_identifier() {
+    // `math-2`, `file_v2`, `step-1` must not highlight the trailing digit.
+    for line in ["result: math-2 ok", "read file_v2 now", "stage step-1 done"] {
+        let c = scan(line, RowRole::Output);
+        for (i, cls) in c.iter().enumerate() {
+            assert_ne!(*cls, Class::Number, "char {i} of '{line}'");
+        }
+    }
+}
+
+#[test]
+fn standalone_number_still_tagged() {
+    let line = "error -1 happened at 89%";
+    let c = scan(line, RowRole::Output);
+    let minus_one = line.find("-1").unwrap();
+    let percent = line.find("89").unwrap();
+    assert_eq!(c[minus_one], Class::Number);
+    assert_eq!(c[minus_one + 1], Class::Number);
+    assert_eq!(c[percent], Class::Number);
+    assert_eq!(c[percent + 1], Class::Number);
+    assert_eq!(c[percent + 2], Class::Number); // %
+}
+
+#[test]
+fn cross_shell_prompt_unix_inside_cmd() {
+    // Running `wsl` inside cmd.exe: prompt becomes Unix ($) but the terminal
+    // profile may still be Cmd. The universal fallback should detect it.
+    let line = "user@host:~$ echo hi";
+    let c = scan_with_profile(line, RowRole::Output, ShellProfile::Cmd);
+    let dollar = line.find('$').unwrap();
+    assert_eq!(c[dollar], Class::PromptSign);
+    // echo should be command
+    let echo_pos = line.find("echo").unwrap();
+    assert_eq!(c[echo_pos], Class::Command);
+}

@@ -144,9 +144,16 @@ fn option_probe(chars: &[char], classes: &mut [u8], profile: &ShellProfile) {
             continue;
         }
 
-        // For `/` prefix (Windows cmd), require it to be at a word boundary
-        // (preceded by space or start-of-line) to avoid matching paths.
-        if chars[i] == '/' && i > 0 && chars[i - 1] != ' ' {
+        // For `-` and `/` prefixes, require a word boundary before the prefix
+        // (start-of-line or a non-word char) so that hyphens inside filenames
+        // such as `container-diff-linux-amd64` are not highlighted as options.
+        if i > 0 && is_word_char(chars[i - 1]) {
+            i += 1;
+            continue;
+        }
+
+        // A leading `-` followed by a digit is a negative number, not an option.
+        if chars[i] == '-' && i + 1 < n && chars[i + 1].is_ascii_digit() {
             i += 1;
             continue;
         }

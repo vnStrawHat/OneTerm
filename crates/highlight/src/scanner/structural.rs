@@ -276,11 +276,20 @@ pub(super) fn number_probe(chars: &[char], classes: &mut [u8]) {
             }
             continue;
         }
-        // Decimal/integer: digits[.digits][e[+-]digits]
+        // Decimal/integer: digits[.digits][e[+-]digits], or a leading `-`
+        // followed by digits when it forms a standalone negative number token.
+        let is_negative_number = chars[i] == '-'
+            && i + 1 < n
+            && chars[i + 1].is_ascii_digit()
+            && (i == 0 || is_number_boundary(chars[i - 1]));
         if chars[i].is_ascii_digit()
             || (chars[i] == '.' && i + 1 < n && chars[i + 1].is_ascii_digit())
+            || is_negative_number
         {
             let start = i;
+            if is_negative_number {
+                i += 1; // skip the leading '-'
+            }
             // Integer part.
             while i < n && chars[i].is_ascii_digit() {
                 i += 1;
@@ -312,9 +321,11 @@ pub(super) fn number_probe(chars: &[char], classes: &mut [u8]) {
             if i < n && chars[i] == '%' {
                 i += 1;
             }
-            // Boundary check: preceding and following chars must not be word chars.
-            let before_ok = start == 0 || !is_word_char(chars[start - 1]);
-            let after_ok = i >= n || !is_word_char(chars[i]);
+            // Boundary check: the number token must be surrounded by whitespace
+            // or common separators, not embedded in an identifier or filename
+            // like `math-2` or `file_v2`.
+            let before_ok = start == 0 || is_number_boundary(chars[start - 1]);
+            let after_ok = i >= n || is_number_boundary(chars[i]);
             if before_ok && after_ok && i > start {
                 for j in start..i {
                     classes[j] = Class::Number as u8;
@@ -351,4 +362,14 @@ fn is_operator(c: char) -> bool {
 /// Whether a char is a bracket.
 fn is_bracket(c: char) -> bool {
     matches!(c, '(' | ')' | '[' | ']' | '{' | '}')
+}
+
+/// Whether a char can border a numeric literal without being part of it.
+fn is_number_boundary(c: char) -> bool {
+    c.is_whitespace()
+        || matches!(
+            c,
+            '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';' | '|' | '<' | '>' | '"' | '\''
+                | '+' | '*' | '\\' | '=' | '!' | '?' | '@' | '#' | '$' | '%' | '^' | '&'
+        )
 }
