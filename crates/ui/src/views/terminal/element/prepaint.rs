@@ -11,6 +11,7 @@ use oneterm_core::TerminalSession;
 use super::super::cell::blank::is_blank;
 use super::super::search::SearchHighlight;
 
+use super::super::highlight::SemanticOverlay;
 use super::super::layout::{
     CursorPaint, GridMetrics, LayoutPoint, LayoutRect, LayoutState, RowLayoutCache,
     update_row_cache,
@@ -44,6 +45,7 @@ pub(crate) fn prepaint_terminal(
     metrics: &Rc<RefCell<GridMetrics>>,
     row_cache: &Rc<RefCell<RowLayoutCache>>,
     search_highlights: &[SearchHighlight],
+    overlay: &SemanticOverlay,
     bounds: Bounds<Pixels>,
     window: &mut Window,
     cx: &mut App,
@@ -161,6 +163,7 @@ pub(crate) fn prepaint_terminal(
         font,
         &selection_set,
         cursor_display_line,
+        overlay,
     );
 
     // Fill the cached ShapedLine for runs not yet shaped.

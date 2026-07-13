@@ -3,9 +3,10 @@
 use std::collections::HashSet;
 
 use alacritty_terminal::term::cell::Flags;
-use gpui::TextRun;
+use gpui::{FontStyle, FontWeight, TextRun};
 
 use oneterm_core::terminal::{IndexedCell, is_default_background_color};
+use oneterm_highlight::{Class, Decoration};
 
 use super::super::box_drawing::block::is_full_width_band;
 use super::super::box_drawing::drawing::{has_box_geometry, is_box_drawing};
@@ -15,6 +16,9 @@ use super::types::{BatchedTextRun, BoxDrawCell, LayoutPoint, LayoutRect, RowLayo
 
 /// Lay out a single display row — build rects + text runs + box draws for the
 /// cells on one line.
+///
+/// `cell_class` is the per-column semantic class (from the scanner + URL mask).
+/// It replaces the old `url_mask: &[bool]` — `Class::Url` is one variant.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn layout_row(
     line_cells: Vec<&IndexedCell>,
@@ -22,7 +26,7 @@ pub(crate) fn layout_row(
     theme: &TerminalTheme,
     base_font: &gpui::Font,
     selection_set: &HashSet<LayoutPoint>,
-    url_mask: &[bool],
+    cell_class: &[u8],
 ) -> RowLayout {
     let _ = selection_set;
     let mut rects: Vec<LayoutRect> = Vec::new();
@@ -56,7 +60,14 @@ pub(crate) fn layout_row(
             continue;
         }
 
-        let (fg, bg) = cell_colors(cell, theme);
+        // ── Semantic class for this column ──
+        let cls_byte = cell_class
+            .get(point.column.0)
+            .copied()
+            .unwrap_or(Class::Default as u8);
+        let class_style = theme.class_styles.style(cls_byte);
+
+        let (fg, bg) = cell_colors(cell, theme, cls_byte);
 
         if !is_default_background_color(&cell.bg) || cell.flags.contains(Flags::INVERSE) {
             let col = point.column.0 as i32;
@@ -86,14 +97,25 @@ pub(crate) fn layout_row(
         }
 
         let mut style: TextRun = cell_style(cell, fg, base_font);
-        if url_mask.get(point.column.0 as usize).copied().unwrap_or(false) {
-            style.color = gpui::hsla(0.6, 0.85, 0.65, 1.0);
+
+        // ── Apply class decorations (additive) ──
+        // Underline for Error/Warn/Url etc. — additive on top of ANSI fg.
+        if class_style.deco == Decoration::Underline && style.underline.is_none() {
             style.underline = Some(gpui::UnderlineStyle {
                 color: Some(style.color),
                 thickness: gpui::px(1.0),
                 wavy: false,
             });
         }
+
+        // ── Apply class font style (additive OR, never removes) ──
+        if class_style.font.bold {
+            style.font.weight = FontWeight::BOLD;
+        }
+        if class_style.font.italic {
+            style.font.style = FontStyle::Italic;
+        }
+
         let zw = cell.zerowidth();
 
         if is_box_drawing(cell.c) && has_box_geometry(&mut box_probe, cell.c) {

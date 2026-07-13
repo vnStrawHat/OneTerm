@@ -128,8 +128,10 @@ pub fn detect_url_at(
             if start + plen > chars.len() {
                 continue;
             }
-            let matches =
-                prefix.iter().zip(&chars[start..start + plen]).all(|(a, b)| *a == *b);
+            let matches = prefix
+                .iter()
+                .zip(&chars[start..start + plen])
+                .all(|(a, b)| *a == *b);
             if !matches {
                 continue;
             }

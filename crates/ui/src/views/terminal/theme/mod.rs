@@ -14,6 +14,10 @@ use gpui_component::Theme;
 
 use oneterm_core::terminal::TerminalPalette;
 
+use oneterm_highlight::ClassStyles;
+
+use super::highlight::load_default_styles;
+
 pub use contrast::{contrast_ratio, ensure_minimum_contrast};
 pub use palette::{ANSI_16, hsla_from_vte, rgba_from_vte, vte_from_rgba};
 pub use resolve::resolve_cell_color;
@@ -42,6 +46,10 @@ pub struct TerminalTheme {
     pub search_match: Hsla,
     /// Active search match highlight (the current next/prev target).
     pub search_active: Hsla,
+    /// Pre-resolved semantic class styles (Layer 2 — see `highlight`).
+    /// Populated from the default semantic asset; themes without a
+    /// `terminal.semantic` block → all `None` → Layer 2 is a no-op.
+    pub class_styles: ClassStyles,
 }
 
 /// Build a `TerminalTheme` from the gpui-component active `Theme`.
@@ -80,5 +88,6 @@ pub fn build_terminal_theme(theme: &Theme) -> TerminalTheme {
         // more opaque for the active match. Tuned for both light/dark backgrounds.
         search_match: gpui::hsla(0.13, 0.85, 0.5, 0.35),
         search_active: gpui::hsla(0.13, 0.9, 0.55, 0.7),
+        class_styles: load_default_styles(),
     }
 }

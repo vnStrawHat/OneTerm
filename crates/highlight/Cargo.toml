@@ -1,0 +1,12 @@
+[package]
+name = "oneterm-highlight"
+description = "Semantic highlighting for plain-text terminal output (pure Rust, no GPUI)."
+publish = false
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+aho-corasick.workspace = true
+regex.workspace = true

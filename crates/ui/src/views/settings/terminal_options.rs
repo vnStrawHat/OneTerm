@@ -10,7 +10,9 @@ use gpui::{App, SharedString};
 use gpui_component::setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem};
 
 use crate::state::terminal_settings::{hsla_to_hex, parse_hex_color};
-use crate::state::{TabTitleMode, TerminalBlink, TerminalCursorShape, TerminalSettings};
+use crate::state::{
+    SemanticHighlightingMode, TabTitleMode, TerminalBlink, TerminalCursorShape, TerminalSettings,
+};
 
 /// "Cursor" group — shape, blink, and color.
 pub(super) fn cursor_group() -> SettingGroup {
@@ -130,6 +132,51 @@ pub(super) fn layout_group() -> SettingGroup {
                 ),
             )
             .description("Show the timestamp + line number column on the left of the terminal."),
+        )
+        .item(
+            SettingItem::new(
+                "Semantic Highlighting",
+                SettingField::dropdown(
+                    vec![
+                        (
+                            SharedString::from("auto"),
+                            SharedString::from("Auto"),
+                        ),
+                        (
+                            SharedString::from("on"),
+                            SharedString::from("On"),
+                        ),
+                        (
+                            SharedString::from("off"),
+                            SharedString::from("Off"),
+                        ),
+                    ],
+                    |cx: &App| {
+                        SharedString::from(
+                            match TerminalSettings::global(cx).read(cx).semantic_highlighting {
+                                SemanticHighlightingMode::Auto => "auto",
+                                SemanticHighlightingMode::On => "on",
+                                SemanticHighlightingMode::Off => "off",
+                            },
+                        )
+                    },
+                    |val: SharedString, cx: &mut App| {
+                        let mode = match val.as_ref() {
+                            "on" => SemanticHighlightingMode::On,
+                            "off" => SemanticHighlightingMode::Off,
+                            _ => SemanticHighlightingMode::Auto,
+                        };
+                        TerminalSettings::global(cx).update(cx, |s, cx| {
+                            s.semantic_highlighting = mode;
+                            cx.notify();
+                        });
+                        super::terminal::persist(cx);
+                    },
+                ),
+            )
+            .description(
+                "Colorize plain-text terminal output (paths, numbers, commands, options, URLs). \n                \"Auto\" uses OSC 133 row roles when available, regex fallback otherwise.",
+            ),
         )
         .item(
             SettingItem::new(

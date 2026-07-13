@@ -82,6 +82,7 @@ impl TerminalSettings {
                     left: self.padding.left,
                 },
                 show_gutter: self.show_gutter,
+                semantic_highlighting: self.semantic_highlighting,
                 auto_hide_right_dock_on_local: self.auto_hide_right_dock_on_local,
                 tab_title: self.tab_title_mode,
             },

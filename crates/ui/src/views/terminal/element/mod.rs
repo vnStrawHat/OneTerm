@@ -17,6 +17,7 @@ use gpui::{
 
 use oneterm_core::TerminalSession;
 
+use super::highlight::SemanticOverlay;
 pub(crate) use super::layout::{GridMetrics, LayoutState, RowLayoutCache};
 use super::theme::TerminalTheme;
 use super::view::LocalTerminalView;
@@ -73,6 +74,8 @@ pub(crate) struct TerminalElement {
     /// Search highlights to paint (display coordinates, already filtered to the
     /// visible viewport).
     search_highlights: Vec<super::search::SearchHighlight>,
+    /// Semantic overlay — produces per-cell Class for the visible viewport.
+    overlay: SemanticOverlay,
 }
 
 impl TerminalElement {
@@ -101,6 +104,7 @@ impl TerminalElement {
         cached_gutter: Rc<RefCell<Option<(Pixels, usize)>>>,
         last_grid_size: Rc<RefCell<Option<(u16, u16)>>>,
         search_highlights: Vec<super::search::SearchHighlight>,
+        overlay: SemanticOverlay,
     ) -> Self {
         Self {
             session,
@@ -126,6 +130,7 @@ impl TerminalElement {
             cached_gutter,
             last_grid_size,
             search_highlights,
+            overlay,
         }
     }
 }
@@ -186,6 +191,7 @@ impl Element for TerminalElement {
             &self.metrics,
             &self.row_cache,
             &self.search_highlights,
+            &self.overlay,
             bounds,
             window,
             cx,

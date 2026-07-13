@@ -24,6 +24,7 @@ gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", 
 
 # Internal crates
 oneterm-core = { path = "crates/core" }
+oneterm-highlight = { path = "crates/highlight" }
 oneterm-local = { path = "crates/local" }
 oneterm-ssh = { path = "crates/ssh" }
 oneterm-ui = { path = "crates/ui" }
@@ -33,6 +34,8 @@ oneterm-ui = { path = "crates/ui" }
 alacritty_terminal = { git = "https://github.com/zed-industries/alacritty", rev = "fcf32feacb367b75ec84dd40f041e4fd411d3cc1" }
 # Terminal helpers: URL detect + OSC 52 base64
 linkify = "0.10"
+aho-corasick = "1"
+regex = "1"
 base64 = "0.22"
 # Event channel (SessionEvent subscribe) — không tokio lộ ra
 async-channel = "2"

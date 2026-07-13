@@ -22,7 +22,7 @@ pub use bell::BellConfig;
 pub use colors::ColorsConfig;
 pub use cursor::CursorConfig;
 pub use font::FontConfig;
-pub use layout::{LayoutConfig, PaddingConfig, TabTitleMode};
+pub use layout::{LayoutConfig, PaddingConfig, SemanticHighlightingMode, TabTitleMode};
 pub use scroll::ScrollConfig;
 pub use security::SecurityConfig;
 

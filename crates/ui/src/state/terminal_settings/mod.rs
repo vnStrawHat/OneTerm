@@ -9,7 +9,7 @@
 use gpui::{App, AppContext, Entity, FontWeight, Global, Hsla, SharedString};
 use oneterm_core::LocalShellConfig;
 
-use crate::state::terminal_config::{TabTitleMode, TerminalConfig};
+use crate::state::terminal_config::{SemanticHighlightingMode, TabTitleMode, TerminalConfig};
 
 pub(crate) mod apply;
 pub(crate) mod color;
@@ -116,6 +116,8 @@ pub struct TerminalSettings {
     pub padding: TerminalPadding,
     /// Enable/disable the gutter (timestamp + line number on the left of the terminal).
     pub show_gutter: bool,
+    /// Semantic highlighting mode for plain-text terminal output.
+    pub semantic_highlighting: SemanticHighlightingMode,
 
     /// Auto-hide the Right Dock when the active tab is a Local Shell.
     pub auto_hide_right_dock_on_local: bool,
@@ -166,6 +168,7 @@ impl Default for TerminalSettings {
             cell_width: None,
             padding: TerminalPadding::default(),
             show_gutter: false,
+            semantic_highlighting: SemanticHighlightingMode::Auto,
             auto_hide_right_dock_on_local: false,
             tab_title_mode: TabTitleMode::Default,
             scroll_multiplier: 1.0,

@@ -11,10 +11,12 @@ use gpui::{
 use gpui_component::{ActiveTheme as _, WindowExt as _, notification::NotificationType};
 
 use super::element::TerminalElement;
+use super::highlight::SemanticOverlay;
 use super::theme::{TerminalTheme, build_terminal_theme};
 use super::view::LocalTerminalView;
 use crate::notif_ext::notify;
-use crate::state::TerminalSettings;
+use crate::state::{SemanticHighlightingMode, TerminalSettings};
+use oneterm_highlight::ShellProfile;
 
 pub(crate) mod overlays;
 pub(crate) mod theme_apply;
@@ -52,6 +54,7 @@ impl Render for LocalTerminalView {
             color_overrides,
             cursor_shape,
             show_gutter,
+            semantic_highlighting,
         ) = {
             let settings = settings_entity.read(cx);
             let gpui_theme = cx.theme();
@@ -76,6 +79,7 @@ impl Render for LocalTerminalView {
                 settings.color_overrides.clone(),
                 settings.cursor_shape,
                 settings.show_gutter,
+                settings.semantic_highlighting,
             )
         };
         let metrics = self.metrics.clone();
@@ -132,6 +136,10 @@ impl Render for LocalTerminalView {
         let search_highlights =
             self.visible_search_highlights(info.display_offset, info.num_lines, info.num_cols);
 
+        // Semantic overlay (Layer 2) -- Auto/On = enabled; Off = disabled.
+        let semantic_enabled = !matches!(semantic_highlighting, SemanticHighlightingMode::Off);
+        let overlay = SemanticOverlay::new(ShellProfile::Unix, semantic_enabled);
+
         let terminal_div = div()
             .id("local-terminal-view")
             .size_full()
@@ -163,6 +171,7 @@ impl Render for LocalTerminalView {
                 self.cached_gutter.clone(),
                 self.last_grid_size.clone(),
                 search_highlights,
+                overlay,
             ))
             .children(self.bell_overlay(has_bell, bell_enabled, &theme_ref))
             .children(self.progress_overlay(&theme_ref))

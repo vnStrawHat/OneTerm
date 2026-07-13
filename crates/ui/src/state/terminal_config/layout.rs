@@ -20,6 +20,23 @@ pub enum TabTitleMode {
     Osc,
 }
 
+/// Semantic highlighting mode for plain-text terminal output.
+///
+/// - `Auto` — on (uses OSC 133 row roles when available, regex fallback otherwise).
+/// - `On`   — always on.
+/// - `Off`  — disabled (URL highlighting still works — it is always-on).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SemanticHighlightingMode {
+    /// On — uses OSC 133 row roles when available, regex fallback otherwise.
+    #[default]
+    Auto,
+    /// Always on.
+    On,
+    /// Disabled (URL highlighting still works — always-on).
+    Off,
+}
+
 /// Layout group: line height, cell width, padding, gutter, tab title.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LayoutConfig {
@@ -42,6 +59,9 @@ pub struct LayoutConfig {
     /// How the terminal tab title is determined (static label vs OSC 0/2).
     #[serde(default)]
     pub tab_title: TabTitleMode,
+    /// Semantic highlighting mode for plain-text terminal output.
+    #[serde(default = "default_semantic_highlighting")]
+    pub semantic_highlighting: SemanticHighlightingMode,
 }
 
 impl Default for LayoutConfig {
@@ -53,6 +73,7 @@ impl Default for LayoutConfig {
             show_gutter: default_show_gutter(),
             auto_hide_right_dock_on_local: false,
             tab_title: TabTitleMode::default(),
+            semantic_highlighting: default_semantic_highlighting(),
         }
     }
 }
@@ -67,6 +88,10 @@ fn default_cell_width() -> Option<f32> {
 
 fn default_show_gutter() -> bool {
     false
+}
+
+fn default_semantic_highlighting() -> SemanticHighlightingMode {
+    SemanticHighlightingMode::Auto
 }
 
 /// Padding on all 4 sides (px).

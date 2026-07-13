@@ -19,7 +19,7 @@ pub fn url_column_mask(line_cells: &[&IndexedCell]) -> Vec<bool> {
     let max_col = line_cells
         .iter()
         .filter(|ic| !ic.cell.flags.contains(Flags::WIDE_CHAR_SPACER))
-        .map(|ic| ic.point.column.0 as usize)
+        .map(|ic| ic.point.column.0)
         .max()
         .unwrap_or(0);
     let n = max_col + 1;
@@ -31,7 +31,7 @@ pub fn url_column_mask(line_cells: &[&IndexedCell]) -> Vec<bool> {
         if ic.cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
             continue;
         }
-        let col = ic.point.column.0 as usize;
+        let col = ic.point.column.0;
         if col >= n {
             continue;
         }
@@ -59,7 +59,10 @@ pub fn url_column_mask(line_cells: &[&IndexedCell]) -> Vec<bool> {
             if i + plen > n {
                 continue;
             }
-            let matches = prefix.iter().zip(&chars[i..i + plen]).all(|(a, b)| *a == *b);
+            let matches = prefix
+                .iter()
+                .zip(&chars[i..i + plen])
+                .all(|(a, b)| *a == *b);
             if !matches {
                 continue;
             }
@@ -151,8 +154,10 @@ pub fn url_masks_wrapped(
                 if i + plen > n {
                     continue;
                 }
-                let matches =
-                    prefix.iter().zip(&chars[i..i + plen]).all(|(a, b)| *a == *b);
+                let matches = prefix
+                    .iter()
+                    .zip(&chars[i..i + plen])
+                    .all(|(a, b)| *a == *b);
                 if !matches {
                     continue;
                 }

@@ -2,11 +2,14 @@
 
 use std::collections::HashSet;
 
+use alacritty_terminal::term::cell::Flags;
 use gpui::Font;
 
 use oneterm_core::terminal::{IndexedCell, TermDamageInfo};
+use oneterm_highlight::Class;
 
 use super::super::cell::line_hash;
+use super::super::highlight::SemanticOverlay;
 use super::super::theme::TerminalTheme;
 use super::super::url::url_masks_wrapped;
 use super::row::layout_row;
@@ -29,6 +32,7 @@ pub(crate) fn update_row_cache(
     base_font: &Font,
     selection_set: &HashSet<LayoutPoint>,
     cursor_display_line: i32,
+    overlay: &SemanticOverlay,
 ) {
     use itertools::Itertools;
 
@@ -39,8 +43,7 @@ pub(crate) fn update_row_cache(
     // hover/ctrl no longer affect layout (URLs are always highlighted via
     // url_masks_wrapped), so they are excluded from cache invalidation.
     let scroll_only = scroll_changed && !size_changed && !selection_changed;
-    let global_invalidate =
-        size_changed || (scroll_changed && !scroll_only) || selection_changed;
+    let global_invalidate = size_changed || (scroll_changed && !scroll_only) || selection_changed;
 
     cache.ensure_size(num_lines);
 
@@ -114,17 +117,23 @@ pub(crate) fn update_row_cache(
 
         if is_dirty {
             let new_hash = line_hash(&line_vec);
-            let mask = url_masks
+            let url_mask = url_masks
                 .get(display_line)
                 .map(|m| m.as_slice())
                 .unwrap_or(&[]);
+
+            // ── Semantic scan (Layer 2) ──
+            // Build the line text from cells (skip spacers, map \0/\t to space),
+            // scan it, flatten to per-column cell_class, then overlay URL mask.
+            let cell_class = build_cell_class(&line_vec, num_cols, url_mask, overlay, display_line);
+
             let layout = layout_row(
                 line_vec,
                 display_line as i32,
                 theme,
                 base_font,
                 selection_set,
-                mask,
+                &cell_class,
             );
             cache.rows[display_line] = RowLayout {
                 rects: layout.rects,
@@ -139,4 +148,64 @@ pub(crate) fn update_row_cache(
     cache.prev_grid_size = Some(grid_size);
     cache.prev_display_offset = display_offset;
     cache.prev_selection = selection;
+}
+
+/// Build the per-column `cell_class` array for one display row.
+///
+/// 1. Build the line text from non-spacer cells (one char per cell).
+/// 2. Scan the text → `char_class` (one `Class` per char).
+/// 3. Flatten to per-column `cell_class` (wide chars → both columns).
+/// 4. Overlay the URL mask → `Class::Url` (URL is authoritative — Q3).
+fn build_cell_class(
+    line_cells: &[&IndexedCell],
+    num_cols: usize,
+    url_mask: &[bool],
+    overlay: &SemanticOverlay,
+    display_line: usize,
+) -> Vec<u8> {
+    let mut cell_class = vec![Class::Default as u8; num_cols];
+
+    // Build the line text + char-to-column mapping.
+    let mut line_text = String::new();
+    let mut char_cols: Vec<usize> = Vec::new(); // char index -> column
+    for ic in line_cells {
+        if ic.cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+            continue;
+        }
+        let col = ic.point.column.0;
+        char_cols.push(col);
+        line_text.push(match ic.cell.c {
+            '\0' | '\t' => ' ',
+            c => c,
+        });
+    }
+
+    // Scan the line text.
+    let char_class = overlay.scan(&line_text, display_line);
+
+    // Flatten: char index -> column (wide chars → both columns).
+    for (i, &col) in char_cols.iter().enumerate() {
+        let cls = char_class.get(i).copied().unwrap_or(Class::Default as u8);
+        if col < num_cols {
+            cell_class[col] = cls;
+        }
+        // Wide char: the 2nd column (spacer column) gets the same class.
+        let is_wide = line_cells
+            .iter()
+            .find(|ic| ic.point.column.0 == col)
+            .map(|ic| ic.cell.flags.contains(Flags::WIDE_CHAR))
+            .unwrap_or(false);
+        if is_wide && col + 1 < num_cols {
+            cell_class[col + 1] = cls;
+        }
+    }
+
+    // Overlay URL mask → Class::Url (URL is authoritative — see Q3).
+    for col in 0..num_cols.min(url_mask.len()) {
+        if url_mask[col] {
+            cell_class[col] = Class::Url as u8;
+        }
+    }
+
+    cell_class
 }

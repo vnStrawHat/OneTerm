@@ -4,6 +4,7 @@ pub mod box_drawing;
 pub mod cell;
 pub mod element;
 pub mod handlers;
+pub mod highlight;
 pub mod ime;
 pub mod layout;
 pub mod panel;

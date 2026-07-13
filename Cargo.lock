@@ -5165,6 +5165,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "oneterm-highlight"
+version = "0.0.0"
+dependencies = [
+ "aho-corasick",
+ "regex",
+]
+
+[[package]]
 name = "oneterm-local"
 version = "0.0.0"
 dependencies = [
@@ -5207,6 +5215,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "oneterm-core",
+ "oneterm-highlight",
  "oneterm-local",
  "oneterm-ssh",
  "rust-embed",

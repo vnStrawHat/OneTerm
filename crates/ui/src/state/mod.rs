@@ -8,7 +8,7 @@ pub mod ui_config;
 
 pub use app_state::AppState;
 pub use session_state::{SshSession, SshSessionStore};
-pub use terminal_config::TabTitleMode;
+pub use terminal_config::{SemanticHighlightingMode, TabTitleMode};
 pub use terminal_settings::{
     ColorOverrides, TerminalBlink, TerminalCursorShape, TerminalPadding, TerminalSettings,
 };

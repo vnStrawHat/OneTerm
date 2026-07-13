@@ -1,0 +1,29 @@
+{
+  "promptLineBg": "#1a1a1a",
+  "styles": {
+    "promptSign": { "foreground": "#56B6C2" },
+    "command": { "foreground": "#61AFEF" },
+    "option": { "foreground": "#C678DD" },
+    "error": { "foreground": "#E06C75" },
+    "success": { "foreground": "#98C379" },
+    "warn": { "foreground": "#E5C07B" },
+    "info": { "foreground": "#4EC9B0" },
+    "debug": { "foreground": "#7F848E" },
+    "path": { "foreground": "#D19A66" },
+    "ip": { "foreground": "#CE9178" },
+    "mac": { "foreground": "#F78C6C" },
+    "dateTime": { "foreground": "#6A9955" },
+    "number": { "foreground": "#AB9DF2" },
+    "string": { "foreground": "#F2C14E" },
+    "operator": { "foreground": "#ABB2BF" },
+    "bracket": { "foreground": "#C678DD" },
+    "url": { "foreground": "#4FC1FF", "decoration": "underline" },
+    "permission": { "foreground": "#F2C14E" },
+    "permType": { "foreground": "#56B6C2" },
+    "permRead": { "foreground": "#98C379" },
+    "permWrite": { "foreground": "#E5C07B" },
+    "permExec": { "foreground": "#E06C75" },
+    "permSpecial": { "foreground": "#C678DD" },
+    "permNone": { "foreground": "#7F848E" }
+  }
+}
