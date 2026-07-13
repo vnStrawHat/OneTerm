@@ -43,6 +43,9 @@ pub(super) fn scan_output(
     structural::path_probe(chars, classes, profile);
     structural::number_probe(chars, classes);
 
+    // 5b. Option probe — detect --flag / -x tokens in output (e.g. curl --help).
+    option_probe(chars, classes, profile);
+
     // 6. Single-char classes (last, only on default cells).
     structural::single_char_scan(chars, classes);
 }
@@ -112,6 +115,88 @@ fn tag_permission_block(chars: &[char], classes: &mut [u8]) -> bool {
         };
     }
     true
+}
+
+/// 5b. Option probe — detect `--flag` / `-x` / `/flag` tokens in output mode.
+///
+/// This runs after structural probes (paths, numbers) so that option-like
+/// tokens that are still `Default` get tagged as `Option`. It must run *before*
+/// `single_char_scan` which would otherwise tag `-` as `Operator`.
+///
+/// In output mode (e.g. `curl --help`), option tokens appear in usage lines
+/// and option descriptions. We detect:
+/// - `--word` (long options: `--help`, `--url URL`)
+/// - `-x` (short options: `-x`, `-X`)
+/// - `/flag` (Windows cmd-style — only when the profile accepts `/` as an
+///   option prefix and the `/` is at a word boundary)
+fn option_probe(chars: &[char], classes: &mut [u8], profile: &ShellProfile) {
+    let n = chars.len();
+    let mut i = 0;
+    while i < n {
+        if classes[i] != Class::Default as u8 {
+            i += 1;
+            continue;
+        }
+
+        // Check for option prefix: `-` or (for Cmd/Dumb) `/`.
+        if !profile.is_option_prefix(chars[i]) {
+            i += 1;
+            continue;
+        }
+
+        // For `/` prefix (Windows cmd), require it to be at a word boundary
+        // (preceded by space or start-of-line) to avoid matching paths.
+        if chars[i] == '/' && i > 0 && chars[i - 1] != ' ' {
+            i += 1;
+            continue;
+        }
+
+        let start = i;
+        // Consume the prefix char.
+        i += 1;
+
+        // Long option: `--word`
+        if i < n && chars[i] == '-' {
+            i += 1;
+            // Consume word chars (letters, digits, `-`, `_`, `=`, `.`).
+            let had_word = i < n && is_word_char(chars[i]);
+            while i < n
+                && (is_word_char(chars[i]) || chars[i] == '-' || chars[i] == '=' || chars[i] == '.')
+            {
+                i += 1;
+            }
+            if had_word {
+                for j in start..i {
+                    if classes[j] == Class::Default as u8 {
+                        classes[j] = Class::Option as u8;
+                    }
+                }
+            }
+            continue;
+        }
+
+        // Short option: `-x` (letters, possibly combined like `-vx`).
+        if i < n && is_word_char(chars[i]) {
+            while i < n && is_word_char(chars[i]) {
+                i += 1;
+            }
+            // Also consume `=value` suffix (e.g. `-x=type`).
+            if i < n && chars[i] == '=' {
+                i += 1;
+                while i < n && (is_word_char(chars[i]) || chars[i] == '.') {
+                    i += 1;
+                }
+            }
+            for j in start..i {
+                if classes[j] == Class::Default as u8 {
+                    classes[j] = Class::Option as u8;
+                }
+            }
+            continue;
+        }
+
+        // Not a valid option token — let single_char_scan handle the `-`.
+    }
 }
 
 /// 3. Keyword scanning — one Aho-Corasick pass with word-boundary checking.

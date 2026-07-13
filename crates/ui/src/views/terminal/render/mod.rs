@@ -16,6 +16,7 @@ use super::theme::{TerminalTheme, build_terminal_theme};
 use super::view::LocalTerminalView;
 use crate::notif_ext::notify;
 use crate::state::{SemanticHighlightingMode, TerminalSettings};
+use oneterm_core::config::ShellKind;
 use oneterm_highlight::ShellProfile;
 
 pub(crate) mod overlays;
@@ -138,7 +139,9 @@ impl Render for LocalTerminalView {
 
         // Semantic overlay (Layer 2) -- Auto/On = enabled; Off = disabled.
         let semantic_enabled = !matches!(semantic_highlighting, SemanticHighlightingMode::Off);
-        let overlay = SemanticOverlay::new(ShellProfile::Unix, semantic_enabled);
+        let shell_kind = settings_entity.read(cx).shell.kind;
+        let profile = shell_kind_to_profile(shell_kind);
+        let overlay = SemanticOverlay::new(profile, semantic_enabled);
 
         let terminal_div = div()
             .id("local-terminal-view")
@@ -187,5 +190,19 @@ impl Render for LocalTerminalView {
             self.focus.clone(),
             split_ctx,
         )
+    }
+}
+
+/// Map the session's [`ShellKind`] to the scanner's [`ShellProfile`].
+///
+/// The scanner uses the profile's prompt regex to detect prompt lines (when
+/// OSC 133 row roles are absent). A mismatch causes the scanner to treat
+/// prompt+command lines as plain output — losing command/option highlighting.
+fn shell_kind_to_profile(kind: ShellKind) -> ShellProfile {
+    match kind {
+        ShellKind::Cmd => ShellProfile::Cmd,
+        ShellKind::PowerShell | ShellKind::Pwsh => ShellProfile::PowerShell,
+        ShellKind::Bash | ShellKind::Zsh | ShellKind::Sh => ShellProfile::Unix,
+        ShellKind::Custom => ShellProfile::Dumb,
     }
 }
