@@ -7,6 +7,7 @@
 //! [`super::terminal::persist`].
 
 use gpui::{App, SharedString};
+use super::items_with_separators;
 use gpui_component::setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem};
 
 use crate::state::terminal_settings::{hsla_to_hex, parse_hex_color};
@@ -28,7 +29,7 @@ pub(super) fn cursor_group() -> SettingGroup {
     SettingGroup::new()
         .title("Cursor")
         .description("Cursor shape, blink, and color.")
-        .item(
+        .items(items_with_separators(vec![
             SettingItem::new(
                 "Cursor Shape",
                 SettingField::dropdown(
@@ -56,8 +57,6 @@ pub(super) fn cursor_group() -> SettingGroup {
                 ),
             )
             .description("The terminal cursor shape."),
-        )
-        .item(
             SettingItem::new(
                 "Cursor Blink",
                 SettingField::switch(
@@ -82,8 +81,6 @@ pub(super) fn cursor_group() -> SettingGroup {
                 ),
             )
             .description("Blink the cursor when the terminal is focused."),
-        )
-        .item(
             SettingItem::new(
                 "Cursor Color",
                 SettingField::input(
@@ -109,7 +106,7 @@ pub(super) fn cursor_group() -> SettingGroup {
                 ),
             )
             .description("Override the cursor color as #RRGGBB (blank = theme caret)."),
-        )
+        ]))
 }
 
 /// "Layout" group — gutter, dock auto-hide, and scrollback size.
@@ -117,7 +114,7 @@ pub(super) fn layout_group() -> SettingGroup {
     SettingGroup::new()
         .title("Layout")
         .description("Gutter, dock auto-hide, and scrollback size.")
-        .item(
+        .items(items_with_separators(vec![
             SettingItem::new(
                 "Show Gutter",
                 SettingField::switch(
@@ -132,8 +129,6 @@ pub(super) fn layout_group() -> SettingGroup {
                 ),
             )
             .description("Show the timestamp + line number column on the left of the terminal."),
-        )
-        .item(
             SettingItem::new(
                 "Semantic Highlighting",
                 SettingField::dropdown(
@@ -177,8 +172,6 @@ pub(super) fn layout_group() -> SettingGroup {
             .description(
                 "Colorize plain-text terminal output (paths, numbers, commands, options, URLs). \n                \"Auto\" uses OSC 133 row roles when available, regex fallback otherwise.",
             ),
-        )
-        .item(
             SettingItem::new(
                 "Auto-hide Right Dock",
                 SettingField::switch(
@@ -199,8 +192,6 @@ pub(super) fn layout_group() -> SettingGroup {
             .description(
                 "Collapse the Right Dock (Session/SFTP) when a local shell tab is active.",
             ),
-        )
-        .item(
             SettingItem::new(
                 "Tab Title",
                 SettingField::dropdown(
@@ -241,8 +232,6 @@ pub(super) fn layout_group() -> SettingGroup {
                 (\"Terminal\" for local, the SSH session label). \"OSC 0/2\" uses the \
                 live title set by the shell (paths are shortened to the file name).",
             ),
-        )
-        .item(
             SettingItem::new(
                 "Scrollback History",
                 SettingField::number_input(
@@ -262,7 +251,7 @@ pub(super) fn layout_group() -> SettingGroup {
                 ),
             )
             .description("Maximum number of scrollback history lines."),
-        )
+        ]))
 }
 
 /// "Scroll" group — mouse wheel speed and alternate-screen scroll mode.
@@ -270,7 +259,7 @@ pub(super) fn scroll_group() -> SettingGroup {
     SettingGroup::new()
         .title("Scroll")
         .description("Mouse wheel speed and alternate-screen scroll mode.")
-        .item(
+        .items(items_with_separators(vec![
             SettingItem::new(
                 "Scroll Multiplier",
                 SettingField::number_input(
@@ -290,8 +279,6 @@ pub(super) fn scroll_group() -> SettingGroup {
                 ),
             )
             .description("Mouse wheel scroll speed (1.0 = default)."),
-        )
-        .item(
             SettingItem::new(
                 "Alternate Scroll",
                 SettingField::switch(
@@ -308,7 +295,7 @@ pub(super) fn scroll_group() -> SettingGroup {
             .description(
                 "In alt-screen (vim/less/htop), send arrow keys instead of scrolling scrollback.",
             ),
-        )
+        ]))
 }
 
 /// "Bell" group — enable/disable the bell indicator.

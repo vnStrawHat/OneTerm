@@ -16,6 +16,8 @@ use gpui_component::{
     setting::{SettingGroup, SettingItem, SettingPage},
 };
 
+use super::super::separator;
+
 use super::key_bindings_actions::{BINDABLE_ACTIONS, BindableAction};
 use super::{KeyBindingsState, apply_key_bindings, save_key_bindings};
 use super::{is_modifier_only, keystroke_to_string};
@@ -32,6 +34,7 @@ pub(crate) fn page() -> SettingPage {
     // the same `group` field into one `SettingGroup` per unique group title.
     let mut current_title: Option<&str> = None;
     let mut current_group = SettingGroup::new();
+    let mut group_item_count = 0;
     for a in BINDABLE_ACTIONS {
         let a: &'static BindableAction = a;
         let label = a.label;
@@ -43,7 +46,13 @@ pub(crate) fn page() -> SettingPage {
             }
             current_title = Some(a.group);
             current_group = current_group.title(a.group);
+            group_item_count = 0;
         }
+        // Insert a separator between consecutive items in the same group.
+        if group_item_count > 0 {
+            current_group = current_group.item(separator());
+        }
+        group_item_count += 1;
         current_group = current_group
             .item(
                 SettingItem::render(move |_, window, cx| render_binding_row(a, window, cx))

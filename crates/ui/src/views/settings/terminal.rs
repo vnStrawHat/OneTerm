@@ -22,6 +22,7 @@ use gpui_component::{
 };
 use oneterm_core::config::ShellKind;
 
+use super::items_with_separators;
 use crate::state::TerminalSettings;
 
 /// Shell presets shown in the dropdown (label is used as both key and value).
@@ -84,7 +85,7 @@ fn shell_group() -> SettingGroup {
     SettingGroup::new()
         .title("Shell")
         .description("The default shell launched for new local terminals.")
-        .item(
+        .items(items_with_separators(vec![
             SettingItem::new(
                 "Shell",
                 SettingField::dropdown(
@@ -112,8 +113,6 @@ fn shell_group() -> SettingGroup {
                 ),
             )
             .description("Choose the shell kind. For Custom, set the program path below."),
-        )
-        .item(
             SettingItem::new(
                 "Custom Program",
                 SettingField::input(
@@ -136,7 +135,7 @@ fn shell_group() -> SettingGroup {
                 ),
             )
             .description("Used only when Shell is set to Custom (e.g. /usr/bin/fish)."),
-        )
+        ]))
 }
 
 fn font_group() -> SettingGroup {
@@ -167,7 +166,7 @@ fn font_group() -> SettingGroup {
     SettingGroup::new()
         .title("Font")
         .description("Terminal font family, size, and weight.")
-        .item(
+        .items(items_with_separators(vec![
             SettingItem::new(
                 "Font Family",
                 SettingField::dropdown(
@@ -196,8 +195,6 @@ fn font_group() -> SettingGroup {
             .description(
                 "The terminal text font. \"Default (theme)\" uses the active theme's mono font.",
             ),
-        )
-        .item(
             SettingItem::new(
                 "Font Size",
                 SettingField::number_input(
@@ -224,8 +221,6 @@ fn font_group() -> SettingGroup {
                 ),
             )
             .description("Terminal font size in px (6–72)."),
-        )
-        .item(
             SettingItem::new(
                 "Font Weight",
                 SettingField::dropdown(
@@ -242,11 +237,9 @@ fn font_group() -> SettingGroup {
                 ),
             )
             .description("Weight of the terminal font."),
-        )
-        .item(
             SettingItem::new("Line Height", line_height_field())
                 .description("Line height multiplier (1.2 = 120% of the font size)."),
-        )
+        ]))
 }
 
 // ── Weight helpers ───────────────────────────────────────────────────

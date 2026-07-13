@@ -13,6 +13,8 @@ use gpui_component::{
     v_flex,
 };
 
+use super::items_with_separators;
+
 /// Build the "About" settings page.
 pub(crate) fn page() -> SettingPage {
     SettingPage::new("About")
@@ -51,7 +53,7 @@ fn about_group() -> SettingGroup {
 
 /// The "Links" group — GitHub repository and documentation.
 fn links_group() -> SettingGroup {
-    SettingGroup::new().title("Links").items([
+    SettingGroup::new().title("Links").items(items_with_separators(vec![
         SettingItem::new(
             "GitHub Repository",
             SettingField::render(|_options, _window, _cx| {
@@ -90,5 +92,5 @@ fn links_group() -> SettingGroup {
             }),
         )
         .description("The GUI framework and component library powering OneTerm."),
-    ])
+    ]))
 }
