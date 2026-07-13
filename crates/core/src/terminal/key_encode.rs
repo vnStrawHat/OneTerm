@@ -217,6 +217,18 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_space_is_nul() {
+        // Ctrl+Space = NUL (0x00): ' ' (0x20) & 0x1f = 0x00.
+        let s = encode_key(
+            &KeySpec::Character(" ".into()),
+            m(false, true, false),
+            false,
+        )
+        .unwrap();
+        assert_eq!(s, vec![0x00]);
+    }
+
+    #[test]
     fn enter_plain_cr() {
         let s = encode_key(
             &KeySpec::Named(NamedKey::Enter),

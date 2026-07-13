@@ -60,6 +60,10 @@ impl super::LocalTerminalView {
             // a printable character), so fall back to keystroke.key — which IS
             // the character name for letter keys.
             //
+            // "space" is a special case: its key name is multi-char but the
+            // actual character is " " (single space). Translate it so that
+            // Ctrl+Space produces NUL (0x00) via encode_key, not literal "space".
+            //
             // When NO modifiers are held and key_char is None, return None to
             // prevent unrecognized named keys (e.g. "f25") from being sent as
             // literal text.
@@ -67,12 +71,26 @@ impl super::LocalTerminalView {
                 .key_char
                 .clone()
                 .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| keystroke.key.clone());
-            // If the fallback key is a single character, it's a real key press.
-            // If it's multi-character (like "f25") and no modifiers are held,
-            // it's an unrecognized named key — return None.
-            if ch.chars().count() != 1 && !mods.control && !mods.alt && !mods.platform {
-                return None;
+                .unwrap_or_else(|| {
+                    if keystroke.key == "space" {
+                        " ".to_string()
+                    } else {
+                        keystroke.key.clone()
+                    }
+                });
+            // Single-char fallback: always valid (real key press like "a", " ").
+            // Multi-char fallback with modifiers: valid only for "space" (now
+            // translated to " "). Other multi-char names (e.g. "print", "pause")
+            // have no terminal encoding — return None to avoid sending literal text.
+            // Multi-char fallback without modifiers: unrecognized named key — None.
+            if ch.chars().count() != 1 {
+                if !mods.control && !mods.alt && !mods.platform {
+                    return None;
+                }
+                // Modifiers held but key is multi-char and not "space" — drop it.
+                if ch != " " {
+                    return None;
+                }
             }
             KeySpec::Character(ch)
         };
@@ -125,5 +143,76 @@ mod tests {
         let (spec, _) =
             LocalTerminalView::map_key(&ks("a", Some("a"), Modifiers::default())).unwrap();
         assert!(matches!(spec, KeySpec::Character(ref ch) if ch == "a"));
+    }
+
+    #[test]
+    fn ctrl_space_maps_to_space_char() {
+        // Ctrl+Space: key_char is None, key is "space" (multi-char).
+        // Must translate to Character(" ") so encode_key produces NUL (0x00),
+        // not literal "space" text.
+        let (spec, mods) = LocalTerminalView::map_key(&ks(
+            "space",
+            None,
+            Modifiers {
+                control: true,
+                ..Default::default()
+            },
+        ))
+        .expect("Ctrl+Space must map to a key");
+        assert!(matches!(spec, KeySpec::Character(ref ch) if ch == " "));
+        assert!(mods.ctrl);
+    }
+
+    #[test]
+    fn ctrl_print_screen_returns_none() {
+        // Ctrl+PrintScreen: key is "print" (multi-char), key_char is None.
+        // No terminal encoding exists — must return None, not literal "print".
+        assert!(
+            LocalTerminalView::map_key(&ks(
+                "print",
+                None,
+                Modifiers {
+                    control: true,
+                    ..Default::default()
+                },
+            ))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn alt_c_maps_to_character() {
+        // Alt+C: key_char is None, alt modifier held.
+        // Must return Some(Character("c")) for Alt-prefix encoding.
+        let (spec, mods) = LocalTerminalView::map_key(&ks(
+            "c",
+            None,
+            Modifiers {
+                alt: true,
+                ..Default::default()
+            },
+        ))
+        .expect("Alt+C must map to a key");
+        assert!(matches!(spec, KeySpec::Character(ref ch) if ch == "c"));
+        assert!(mods.alt);
+    }
+
+    #[test]
+    fn ctrl_shift_c_maps_to_character() {
+        // Ctrl+Shift+C: key is uppercase "C" when shift is held.
+        // Must still map to a character (for copy/paste handler / encode_key).
+        let (spec, mods) = LocalTerminalView::map_key(&ks(
+            "C",
+            None,
+            Modifiers {
+                control: true,
+                shift: true,
+                ..Default::default()
+            },
+        ))
+        .expect("Ctrl+Shift+C must map to a key");
+        assert!(matches!(spec, KeySpec::Character(ref ch) if ch == "C"));
+        assert!(mods.ctrl);
+        assert!(mods.shift);
     }
 }
