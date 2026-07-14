@@ -6,6 +6,8 @@
 //! The two binaries are thin shims that call [`run`]; this gives each binary its own
 //! source file (avoiding the "file present in multiple build targets" warning).
 
+use std::borrow::Cow;
+
 use oneterm_ui::layout::OneTermWorkspace;
 
 pub mod assets;
@@ -51,6 +53,19 @@ pub fn run() {
     let app = gpui_platform::application().with_assets(CustomAssets);
 
     app.run(move |cx| {
+        // Embed Lilex font (terminal default).
+        cx.text_system()
+            .add_fonts(vec![
+                Cow::Borrowed(include_bytes!("../fonts/Lilex-Regular.ttf").as_slice()),
+                Cow::Borrowed(include_bytes!("../fonts/Lilex-Bold.ttf").as_slice()),
+                Cow::Borrowed(include_bytes!("../fonts/Lilex-Italic.ttf").as_slice()),
+                Cow::Borrowed(include_bytes!("../fonts/Lilex-BoldItalic.ttf").as_slice()),
+            ])
+            .expect("Failed to load Lilex fonts");
+
+        // Set Lilex as the theme's default monospace font.
+        cx.global_mut::<gpui_component::Theme>().mono_font_family = "Lilex".into();
+
         // Initialize gpui-component (theme, dock, root, ...).
         gpui_component::init(cx);
         // Initialize the OneTerm UI (register_panel x3, theme action handlers).

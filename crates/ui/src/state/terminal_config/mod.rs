@@ -203,7 +203,7 @@ mod tests {
         let json = "{}";
         let cfg: TerminalConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.cursor.shape, "block");
-        assert_eq!(cfg.font.family.as_deref(), Some("Cascadia Mono"));
+        assert_eq!(cfg.font.family.as_deref(), Some("Lilex"));
         assert_eq!(cfg.font.size, Some(15.0));
         assert_eq!(cfg.layout.line_height, 1.2);
         assert_eq!(cfg.layout.cell_width, None);
@@ -274,7 +274,7 @@ mod tests {
         let cfg: TerminalConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.font.size, Some(18.0));
         // Missing fields use defaults.
-        assert_eq!(cfg.font.family.as_deref(), Some("Cascadia Mono"));
+        assert_eq!(cfg.font.family.as_deref(), Some("Lilex"));
         assert_eq!(cfg.font.weight, "normal");
         assert_eq!(cfg.cursor.shape, "block");
         assert_eq!(cfg.layout.line_height, 1.2);

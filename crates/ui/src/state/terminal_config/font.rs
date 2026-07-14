@@ -37,7 +37,7 @@ impl Default for FontConfig {
 }
 
 fn default_font_family() -> Option<String> {
-    Some("Cascadia Mono".into())
+    Some("Lilex".into())
 }
 
 fn default_font_size() -> Option<f32> {

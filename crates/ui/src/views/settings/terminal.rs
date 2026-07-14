@@ -38,10 +38,10 @@ const SHELL_KINDS: &[(ShellKind, &str)] = &[
 
 /// Curated monospace font families (plus a "Default" sentinel).
 const FONT_FAMILIES: &[&str] = &[
+    "Lilex",
     "Cascadia Mono",
     "JetBrains Mono",
     "Fira Code",
-    "Lilex",
     "Menlo",
     "Consolas",
     "DejaVu Sans Mono",
