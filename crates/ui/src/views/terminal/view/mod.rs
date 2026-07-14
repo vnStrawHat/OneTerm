@@ -2,6 +2,8 @@
 //!
 //! The original `view.rs` module was split into `view/`.
 
+use std::collections::VecDeque;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
@@ -12,11 +14,13 @@ use gpui::{
 
 use async_channel::Receiver;
 use gpui_component::input::InputState;
+use oneterm_core::terminal::TerminalPalette;
 use oneterm_core::{
     SearchMatch, SearchOptions, SessionEvent, TerminalInfo, TerminalProgress, TerminalSession,
 };
 
 use super::element::{GridMetrics, RowLayoutCache};
+use super::highlight::SemanticOverlay;
 use super::scrollbar::TerminalScrollHandle;
 
 pub(crate) mod cursor;
@@ -72,13 +76,19 @@ pub struct LocalTerminalView {
     /// Per-line timestamps (gutter). `line_times[j]` = render time of the line whose
     /// **absolute index** (0-based) = `line_time_base + j`. Grow-only: each line is
     /// stamped exactly once and never overwritten (see `update_line_times`).
-    pub(crate) line_times: Vec<String>,
+    pub(crate) line_times: Rc<VecDeque<String>>,
     /// Absolute index (0-based) of `line_times[0]` — the oldest line still tracked.
     /// Increases as old lines leave the scrollback.
     pub(crate) line_time_base: usize,
     /// `clear_epoch` from the most recent update — when it changes (screen `clear`),
     /// reset `line_times` so new content is stamped with the current time.
     pub(crate) last_clear_epoch: usize,
+    /// Persisted semantic overlay — updated when settings change instead of
+    /// recreated every frame (PERF-06).
+    pub(crate) semantic_overlay: SemanticOverlay,
+    /// Last theme palette pushed to the backend — skip `set_default_colors`
+    /// when the palette hasn't changed (PERF-06).
+    pub(crate) last_pushed_palette: Option<TerminalPalette>,
     /// Per-row layout cache — skip recompute for non-dirty rows.
     pub(crate) row_cache: Rc<RefCell<RowLayoutCache>>,
     /// Cached gutter width + num_digits — only recompute when num_digits changes.
@@ -254,9 +264,11 @@ impl LocalTerminalView {
             hovered_url: None,
             ctrl_held: false,
             last_mouse_pos: None,
-            line_times: Vec::new(),
+            line_times: Rc::new(VecDeque::new()),
             line_time_base: 0,
             last_clear_epoch: 0,
+            semantic_overlay: SemanticOverlay::default(),
+            last_pushed_palette: None,
             row_cache: Rc::new(RefCell::new(RowLayoutCache::new())),
             cached_gutter: Rc::new(RefCell::new(None)),
             last_grid_size: Rc::new(RefCell::new(None)),
@@ -399,6 +411,10 @@ impl LocalTerminalView {
         let absolute = info.absolute_line_count;
         let now = chrono::Local::now().format("%H:%M:%S").to_string();
 
+        // Use Rc::make_mut to get mutable access — O(1) if the Rc is unique
+        // (the previous frame's element has been dropped by render time).
+        let line_times = Rc::make_mut(&mut self.line_times);
+
         // ── Reset when the screen is cleared (`clear`/`cls`/RIS) ──
         // `clear` resets the absolute line counter in the event loop → new content
         // REUSES old indices. If we keep the old `line_times`, new lines would hit
@@ -406,7 +422,7 @@ impl LocalTerminalView {
         // again.
         if info.clear_epoch != self.last_clear_epoch {
             self.last_clear_epoch = info.clear_epoch;
-            self.line_times.clear();
+            line_times.clear();
             self.line_time_base = absolute.saturating_sub(total);
         }
 
@@ -435,30 +451,33 @@ impl LocalTerminalView {
         // (the absolute counter was fully reset). ConPTY repaint/reflow only
         // fluctuates within existing content, so it does NOT trigger this branch.
         if absolute < self.line_time_base {
-            self.line_times.clear();
+            line_times.clear();
             self.line_time_base = absolute.saturating_sub(total);
         }
-        if self.line_times.is_empty() {
+        if line_times.is_empty() {
             self.line_time_base = absolute.saturating_sub(total);
         }
 
         // Stamp the new lines WITH CONTENT (index ≥ covered) with the current render
         // time. Grow-only: a temporary dip → push nothing; empty lines below the
         // cursor are not stamped until the cursor (content) actually reaches them.
-        let covered = self.line_time_base + self.line_times.len();
+        let covered = self.line_time_base + line_times.len();
         if content_high > covered {
             let new_lines = content_high - covered;
-            self.line_times.reserve(new_lines);
+            line_times.reserve(new_lines);
             for _ in 0..new_lines {
-                self.line_times.push(now.clone());
+                line_times.push_back(now.clone());
             }
         }
 
         // Drop timestamps of lines that have left the scrollback (front) to bound memory.
+        // VecDeque::pop_front is O(1) amortized — no O(n) shift like Vec::drain.
         let oldest = absolute.saturating_sub(total);
         if oldest > self.line_time_base {
-            let drop = (oldest - self.line_time_base).min(self.line_times.len());
-            self.line_times.drain(0..drop);
+            let drop = (oldest - self.line_time_base).min(line_times.len());
+            for _ in 0..drop {
+                line_times.pop_front();
+            }
             self.line_time_base += drop;
         }
     }

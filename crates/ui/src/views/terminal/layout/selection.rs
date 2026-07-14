@@ -1,7 +1,5 @@
 //! Selection highlight layout.
 
-use std::collections::HashSet;
-
 use gpui::Hsla;
 
 use super::types::{LayoutPoint, LayoutRect};
@@ -74,19 +72,4 @@ pub(crate) fn layout_selection(
         }
     }
     rects
-}
-
-/// Build the set of (line, column) points in the selection → used to swap
-/// fg/bg when drawing text.
-pub(crate) fn build_selection_set(selection_rects: &[LayoutRect]) -> HashSet<LayoutPoint> {
-    let mut set = HashSet::new();
-    for r in selection_rects {
-        for c in 0..r.num_cells {
-            set.insert(LayoutPoint {
-                line: r.point.line,
-                column: r.point.column + c as i32,
-            });
-        }
-    }
-    set
 }

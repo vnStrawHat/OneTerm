@@ -1,6 +1,7 @@
 //! `TerminalElement::prepaint` implementation.
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::rc::Rc;
 
 use alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
@@ -36,7 +37,7 @@ pub(crate) fn prepaint_terminal(
     cursor_shape_override: crate::state::TerminalCursorShape,
     padding: crate::state::TerminalPadding,
     show_gutter: bool,
-    line_times: &[String],
+    line_times: &VecDeque<String>,
     line_time_base: usize,
     hovered_url: Option<&super::super::url::DetectedUrl>,
     ctrl_held: bool,
@@ -149,9 +150,17 @@ pub(crate) fn prepaint_terminal(
             )
         })
         .unwrap_or_default();
-    let selection_set = super::super::layout::build_selection_set(&selection_rects);
 
     let cursor_display_line = snapshot.cursor.point.line.0 + display_offset as i32;
+
+    let style_key = super::super::layout::RenderStyleKey {
+        font: font.clone(),
+        font_size_bits: f32::from(font_size).to_bits(),
+        palette: theme.palette,
+        min_contrast_bits: theme.min_contrast.to_bits(),
+        semantic_enabled: overlay.is_enabled(),
+        shell_profile: overlay.profile(),
+    };
 
     update_row_cache(
         &mut row_cache.borrow_mut(),
@@ -160,12 +169,11 @@ pub(crate) fn prepaint_terminal(
         num_lines,
         display_offset,
         (rows, cols),
-        snapshot.selection,
         hovered_url,
         ctrl_held,
         theme,
         font,
-        &selection_set,
+        &style_key,
         cursor_display_line,
         overlay,
     );

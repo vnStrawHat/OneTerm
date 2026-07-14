@@ -8,6 +8,7 @@
 //! - `element::gutter` — compute gutter width / entries
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::rc::Rc;
 
 use gpui::{
@@ -62,7 +63,7 @@ pub(crate) struct TerminalElement {
     cursor_shape_override: crate::state::TerminalCursorShape,
     /// Per-line timestamps for gutter. `line_times[j]` ↔ line with absolute index
     /// `line_time_base + j`.
-    line_times: Vec<String>,
+    line_times: Rc<VecDeque<String>>,
     /// Absolute index (0-based) of `line_times[0]`.
     line_time_base: usize,
     /// Per-row layout cache — skip recompute for non-dirty rows.
@@ -93,7 +94,7 @@ impl TerminalElement {
         focus: gpui::FocusHandle,
         hovered_url: Option<super::url::DetectedUrl>,
         ctrl_held: bool,
-        line_times: Vec<String>,
+        line_times: Rc<VecDeque<String>>,
         line_time_base: usize,
         padding: crate::state::TerminalPadding,
         show_gutter: bool,

@@ -44,6 +44,11 @@ impl SemanticOverlay {
         self.enabled
     }
 
+    /// Get the current shell profile.
+    pub fn profile(&self) -> oneterm_highlight::ShellProfile {
+        self.profile
+    }
+
     /// Enable or disable the overlay (from the `semantic_highlighting` setting).
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;

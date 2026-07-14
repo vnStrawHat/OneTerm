@@ -11,7 +11,7 @@ use gpui::{
 use gpui_component::{ActiveTheme as _, WindowExt as _, notification::NotificationType};
 
 use super::element::TerminalElement;
-use super::highlight::SemanticOverlay;
+
 use super::theme::{TerminalTheme, build_terminal_theme};
 use super::view::LocalTerminalView;
 use crate::notif_ext::notify;
@@ -113,7 +113,10 @@ impl Render for LocalTerminalView {
 
         // The single source that updates line_times — stamp the timestamp for new
         // lines at the exact moment of this render (see `update_line_times`).
-        self.update_line_times(&info);
+        // Skip when the gutter is disabled to avoid unnecessary work.
+        if show_gutter {
+            self.update_line_times(&info);
+        }
 
         let theme = self.apply_color_overrides(theme, &color_overrides);
 
@@ -121,7 +124,9 @@ impl Render for LocalTerminalView {
         // so OSC 10/11/12 and OSC 4 *queries* can be answered, then apply OSC-set
         // dynamic colors on top so OSC *sets* (OSC 4/10/11/12) and *resets*
         // (OSC 104/110/111/112) take effect.
-        {
+        //
+        // PERF-06: Skip when the palette hasn't changed since the last push.
+        if self.last_pushed_palette != Some(theme.palette) {
             let session_ref = session.read(cx);
             session_ref.set_default_colors(
                 theme.palette.foreground,
@@ -129,6 +134,7 @@ impl Render for LocalTerminalView {
                 theme.palette.cursor,
                 theme.palette.ansi,
             );
+            self.last_pushed_palette = Some(theme.palette);
         }
         let dynamic_colors = session.read(cx).dynamic_colors();
         let theme = theme_apply::apply_dynamic_colors(theme, &dynamic_colors);
@@ -138,6 +144,7 @@ impl Render for LocalTerminalView {
             self.visible_search_highlights(info.display_offset, info.num_lines, info.num_cols);
 
         // Semantic overlay (Layer 2) -- Auto/On = enabled; Off = disabled.
+        // PERF-06: Update the persisted overlay instead of recreating it every frame.
         let semantic_enabled = !matches!(semantic_highlighting, SemanticHighlightingMode::Off);
         // Select the shell profile for semantic highlighting:
         // - Local session: use the configured ShellKind (Cmd/PowerShell/Unix/...)
@@ -147,7 +154,9 @@ impl Render for LocalTerminalView {
         } else {
             ShellProfile::Unix
         };
-        let overlay = SemanticOverlay::new(profile, semantic_enabled);
+        self.semantic_overlay.set_enabled(semantic_enabled);
+        self.semantic_overlay.set_profile(profile);
+        let overlay = self.semantic_overlay.clone();
 
         let terminal_div = div()
             .id("local-terminal-view")

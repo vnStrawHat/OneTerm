@@ -1,5 +1,7 @@
 //! Gutter (line timestamps + line numbers) helpers for `TerminalElement`.
 
+use std::collections::VecDeque;
+
 use gpui::{Font, Pixels, SharedString, TextRun, Window, px};
 
 use super::super::layout::GutterEntry;
@@ -11,7 +13,7 @@ use super::measure::snap;
 /// Uses `absolute_line_count` (monotonically increasing) instead of `line_times.len()`
 /// (capped by scrollback) so the gutter is wide enough for large line numbers.
 pub(crate) fn compute_gutter_width(
-    _line_times: &[String],
+    _line_times: &VecDeque<String>,
     absolute_line_count: usize,
     font: &Font,
     font_size: Pixels,
@@ -49,7 +51,7 @@ pub(crate) fn compute_gutter_width(
 /// number of entries actually rendered.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn compute_gutter_entries(
-    line_times: &[String],
+    line_times: &VecDeque<String>,
     line_time_base: usize,
     absolute_line_count: usize,
     display_offset: usize,
@@ -84,11 +86,11 @@ pub(crate) fn compute_gutter_entries(
                     .get(j)
                     .map(|s| s.as_str())
                     // Line newer than the stamped region (read skew) → most recent time.
-                    .or_else(|| line_times.last().map(|s| s.as_str()))
+                    .or_else(|| line_times.back().map(|s| s.as_str()))
                     .unwrap_or("--:--:--")
             } else {
                 // Line older than the tracked region → oldest time still stored.
-                line_times.first().map(|s| s.as_str()).unwrap_or("--:--:--")
+                line_times.front().map(|s| s.as_str()).unwrap_or("--:--:--")
             }
         };
         let text = format!("[{}] {:>width$}", time_str, line_num, width = num_digits);

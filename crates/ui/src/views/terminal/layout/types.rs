@@ -130,12 +130,34 @@ pub(crate) struct FrameStats {
     pub paint_us: u128,
 }
 
+/// Key inputs that affect row layout output. If any of these change,
+/// every cached row must be invalidated (re-layout + re-shape).
+///
+/// Captures font identity, theme palette, min-contrast, and semantic
+/// overlay state. `class_styles` is loaded from a static asset and never
+/// changes at runtime, so it is excluded.
+#[derive(Clone, PartialEq)]
+pub(crate) struct RenderStyleKey {
+    /// Font family, weight, style, features (affects text shaping).
+    pub font: gpui::Font,
+    /// Font size in device pixels (affects shaping + cell metrics).
+    pub font_size_bits: u32,
+    /// Terminal palette (affects fg/bg color resolution in `layout_row`).
+    pub palette: oneterm_core::terminal::TerminalPalette,
+    /// Minimum contrast threshold (affects color correction).
+    pub min_contrast_bits: u32,
+    /// Whether semantic highlighting is enabled.
+    pub semantic_enabled: bool,
+    /// Shell profile for the semantic scanner.
+    pub shell_profile: oneterm_highlight::ShellProfile,
+}
+
 /// Per-row layout cache — persisted across frames.
 pub(crate) struct RowLayoutCache {
     pub rows: Vec<RowLayout>,
     pub prev_grid_size: Option<(u16, u16)>,
     pub prev_display_offset: usize,
-    pub prev_selection: Option<alacritty_terminal::selection::SelectionRange>,
+    pub prev_style_key: Option<RenderStyleKey>,
     pub stats: FrameStats,
 }
 
@@ -145,7 +167,7 @@ impl RowLayoutCache {
             rows: Vec::new(),
             prev_grid_size: None,
             prev_display_offset: 0,
-            prev_selection: None,
+            prev_style_key: None,
             stats: FrameStats::default(),
         }
     }

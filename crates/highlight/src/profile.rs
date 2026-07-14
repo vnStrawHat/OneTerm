@@ -19,7 +19,7 @@ pub enum PathSep {
 ///
 /// Selected from session settings (shell kind). Unknown → `Dumb` (most
 /// permissive prompt regex). See §6.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub enum ShellProfile {
     /// bash/sh/zsh/fish — Linux/macOS/WSL local + SSH on Linux.
     #[default]

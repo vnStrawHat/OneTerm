@@ -13,7 +13,7 @@ use super::super::highlight::SemanticOverlay;
 use super::super::theme::TerminalTheme;
 use super::super::url::url_masks_wrapped;
 use super::row::layout_row;
-use super::types::{LayoutPoint, RowLayout, RowLayoutCache};
+use super::types::{RenderStyleKey, RowLayout, RowLayoutCache};
 
 /// Update the row cache: only recompute layout for dirty rows, reuse cached
 /// artifacts for non-dirty rows.
@@ -25,12 +25,11 @@ pub(crate) fn update_row_cache(
     num_lines: usize,
     display_offset: usize,
     grid_size: (u16, u16),
-    selection: Option<alacritty_terminal::selection::SelectionRange>,
     _hovered_url: Option<&super::super::url::DetectedUrl>,
     _ctrl_held: bool,
     theme: &TerminalTheme,
     base_font: &Font,
-    selection_set: &HashSet<LayoutPoint>,
+    style_key: &RenderStyleKey,
     cursor_display_line: i32,
     overlay: &SemanticOverlay,
 ) {
@@ -39,11 +38,13 @@ pub(crate) fn update_row_cache(
     let size_changed = cache.prev_grid_size != Some(grid_size);
     let scroll_delta = display_offset as i32 - cache.prev_display_offset as i32;
     let scroll_changed = scroll_delta != 0;
-    let selection_changed = cache.prev_selection != selection;
+    let style_changed = cache.prev_style_key.as_ref() != Some(style_key);
     // hover/ctrl no longer affect layout (URLs are always highlighted via
     // url_masks_wrapped), so they are excluded from cache invalidation.
-    let scroll_only = scroll_changed && !size_changed && !selection_changed;
-    let global_invalidate = size_changed || (scroll_changed && !scroll_only) || selection_changed;
+    // Selection is painted as separate rectangles, not baked into row layout,
+    // so selection changes do NOT invalidate cached rows.
+    let scroll_only = scroll_changed && !size_changed && !style_changed;
+    let global_invalidate = size_changed || (scroll_changed && !scroll_only) || style_changed;
 
     cache.ensure_size(num_lines);
 
@@ -144,14 +145,8 @@ pub(crate) fn update_row_cache(
             // scan it, flatten to per-column cell_class, then overlay URL mask.
             let cell_class = build_cell_class(&line_vec, num_cols, url_mask, overlay, display_line);
 
-            let layout = layout_row(
-                line_vec,
-                display_line as i32,
-                theme,
-                base_font,
-                selection_set,
-                &cell_class,
-            );
+            let layout = layout_row(line_vec, display_line as i32, theme, base_font, &cell_class);
+
             cache.rows[display_line] = RowLayout {
                 rects: layout.rects,
                 runs: layout.runs,
@@ -164,7 +159,7 @@ pub(crate) fn update_row_cache(
 
     cache.prev_grid_size = Some(grid_size);
     cache.prev_display_offset = display_offset;
-    cache.prev_selection = selection;
+    cache.prev_style_key = Some(style_key.clone());
 }
 
 /// Build the per-column `cell_class` array for one display row.
@@ -225,4 +220,283 @@ fn build_cell_class(
     }
 
     cell_class
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::views::terminal::theme::build_terminal_theme;
+    use gpui_component::Theme;
+
+    fn test_style_key(
+        font_family: &str,
+        palette: oneterm_core::terminal::TerminalPalette,
+    ) -> RenderStyleKey {
+        RenderStyleKey {
+            font: gpui::Font {
+                family: font_family.into(),
+                weight: gpui::FontWeight::NORMAL,
+                style: gpui::FontStyle::Normal,
+                fallbacks: None,
+                features: gpui::FontFeatures(std::sync::Arc::new(vec![])),
+            },
+            font_size_bits: 14.0f32.to_bits(),
+            palette,
+            min_contrast_bits: 4.5f32.to_bits(),
+            semantic_enabled: true,
+            shell_profile: oneterm_highlight::ShellProfile::Unix,
+        }
+    }
+
+    fn test_overlay() -> SemanticOverlay {
+        SemanticOverlay::new(oneterm_highlight::ShellProfile::Unix, true)
+    }
+
+    fn test_font() -> gpui::Font {
+        gpui::Font {
+            family: "monospace".into(),
+            weight: gpui::FontWeight::NORMAL,
+            style: gpui::FontStyle::Normal,
+            fallbacks: None,
+            features: gpui::FontFeatures(std::sync::Arc::new(vec![])),
+        }
+    }
+
+    /// Same style key + Partial([]) damage → 0 dirty lines (cache hit).
+    #[test]
+    fn same_style_key_no_dirty() {
+        let mut cache = RowLayoutCache::new();
+        let theme = build_terminal_theme(&Theme::default());
+        let font = test_font();
+        let overlay = test_overlay();
+        let key = test_style_key("monospace", theme.palette);
+
+        // First call: establish cache state with 0 lines.
+        update_row_cache(
+            &mut cache,
+            &[],
+            &TermDamageInfo::Partial(vec![]),
+            0,
+            0,
+            (24, 80),
+            None,
+            false,
+            &theme,
+            &font,
+            &key,
+            -1,
+            &overlay,
+        );
+        assert_eq!(cache.stats.dirty_lines, 0);
+
+        // Second call: same key, same damage → still 0 dirty lines.
+        update_row_cache(
+            &mut cache,
+            &[],
+            &TermDamageInfo::Partial(vec![]),
+            0,
+            0,
+            (24, 80),
+            None,
+            false,
+            &theme,
+            &font,
+            &key,
+            -1,
+            &overlay,
+        );
+        assert_eq!(cache.stats.dirty_lines, 0);
+    }
+
+    /// Different style key (font change) → global invalidate (all lines dirty).
+    #[test]
+    fn style_key_change_global_invalidate() {
+        let mut cache = RowLayoutCache::new();
+        let theme = build_terminal_theme(&Theme::default());
+        let font = test_font();
+        let overlay = test_overlay();
+        let key1 = test_style_key("monospace", theme.palette);
+        let key2 = test_style_key("courier", theme.palette);
+
+        // First call: establish cache with 2 lines.
+        update_row_cache(
+            &mut cache,
+            &[],
+            &TermDamageInfo::Full,
+            2,
+            0,
+            (24, 80),
+            None,
+            false,
+            &theme,
+            &font,
+            &key1,
+            -1,
+            &overlay,
+        );
+
+        // Second call: font changed → all 2 lines dirty.
+        update_row_cache(
+            &mut cache,
+            &[],
+            &TermDamageInfo::Partial(vec![]),
+            2,
+            0,
+            (24, 80),
+            None,
+            false,
+            &theme,
+            &font,
+            &key2,
+            -1,
+            &overlay,
+        );
+        assert_eq!(cache.stats.dirty_lines, 2);
+    }
+
+    /// Palette change (e.g. dynamic OSC color) → global invalidate.
+    #[test]
+    fn palette_change_global_invalidate() {
+        let mut cache = RowLayoutCache::new();
+        let theme = build_terminal_theme(&Theme::default());
+        let font = test_font();
+        let overlay = test_overlay();
+        let key1 = test_style_key("monospace", theme.palette);
+
+        update_row_cache(
+            &mut cache,
+            &[],
+            &TermDamageInfo::Full,
+            2,
+            0,
+            (24, 80),
+            None,
+            false,
+            &theme,
+            &font,
+            &key1,
+            -1,
+            &overlay,
+        );
+
+        // Second call: palette foreground changed → all dirty.
+        let mut new_palette = theme.palette;
+        new_palette.foreground = alacritty_terminal::vte::ansi::Rgb { r: 255, g: 0, b: 0 };
+        let key2 = test_style_key("monospace", new_palette);
+
+        update_row_cache(
+            &mut cache,
+            &[],
+            &TermDamageInfo::Partial(vec![]),
+            2,
+            0,
+            (24, 80),
+            None,
+            false,
+            &theme,
+            &font,
+            &key2,
+            -1,
+            &overlay,
+        );
+        assert_eq!(cache.stats.dirty_lines, 2);
+    }
+
+    /// Semantic toggle (enabled→disabled) → global invalidate.
+    #[test]
+    fn semantic_toggle_global_invalidate() {
+        let mut cache = RowLayoutCache::new();
+        let theme = build_terminal_theme(&Theme::default());
+        let font = test_font();
+        let overlay = test_overlay();
+        let key1 = test_style_key("monospace", theme.palette);
+
+        update_row_cache(
+            &mut cache,
+            &[],
+            &TermDamageInfo::Full,
+            2,
+            0,
+            (24, 80),
+            None,
+            false,
+            &theme,
+            &font,
+            &key1,
+            -1,
+            &overlay,
+        );
+
+        // Disable semantic highlighting in the key.
+        let key2 = RenderStyleKey {
+            semantic_enabled: false,
+            ..key1.clone()
+        };
+
+        update_row_cache(
+            &mut cache,
+            &[],
+            &TermDamageInfo::Partial(vec![]),
+            2,
+            0,
+            (24, 80),
+            None,
+            false,
+            &theme,
+            &font,
+            &key2,
+            -1,
+            &overlay,
+        );
+        assert_eq!(cache.stats.dirty_lines, 2);
+    }
+
+    /// Selection change does NOT cause row invalidation — selection is painted
+    /// as separate rectangles, not baked into row layout.
+    #[test]
+    fn selection_change_no_invalidation() {
+        let mut cache = RowLayoutCache::new();
+        let theme = build_terminal_theme(&Theme::default());
+        let font = test_font();
+        let overlay = test_overlay();
+        let key = test_style_key("monospace", theme.palette);
+
+        // Establish cache: Full damage → all 2 lines dirty.
+        update_row_cache(
+            &mut cache,
+            &[],
+            &TermDamageInfo::Full,
+            2,
+            0,
+            (24, 80),
+            None,
+            false,
+            &theme,
+            &font,
+            &key,
+            -1,
+            &overlay,
+        );
+        assert_eq!(cache.stats.dirty_lines, 2);
+
+        // Second call: same key + Partial([]) → 0 dirty.
+        // Previously, a selection change would invalidate all rows.
+        // Now selection is not part of the cache key at all.
+        update_row_cache(
+            &mut cache,
+            &[],
+            &TermDamageInfo::Partial(vec![]),
+            2,
+            0,
+            (24, 80),
+            None,
+            false,
+            &theme,
+            &font,
+            &key,
+            -1,
+            &overlay,
+        );
+        assert_eq!(cache.stats.dirty_lines, 0);
+    }
 }

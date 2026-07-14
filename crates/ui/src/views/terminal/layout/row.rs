@@ -1,7 +1,5 @@
 //! Per-row layout computation.
 
-use std::collections::HashSet;
-
 use alacritty_terminal::term::cell::Flags;
 use gpui::{FontStyle, FontWeight, TextRun};
 
@@ -19,16 +17,13 @@ use super::types::{BatchedTextRun, BoxDrawCell, LayoutPoint, LayoutRect, RowLayo
 ///
 /// `cell_class` is the per-column semantic class (from the scanner + URL mask).
 /// It replaces the old `url_mask: &[bool]` — `Class::Url` is one variant.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn layout_row(
     line_cells: Vec<&IndexedCell>,
     display_line: i32,
     theme: &TerminalTheme,
     base_font: &gpui::Font,
-    selection_set: &HashSet<LayoutPoint>,
     cell_class: &[u8],
 ) -> RowLayout {
-    let _ = selection_set;
     let mut rects: Vec<LayoutRect> = Vec::new();
     let mut runs: Vec<BatchedTextRun> = Vec::new();
     let mut box_draws: Vec<BoxDrawCell> = Vec::new();
