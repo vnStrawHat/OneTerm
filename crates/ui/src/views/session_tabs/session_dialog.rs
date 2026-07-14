@@ -13,10 +13,9 @@
 
 use std::rc::Rc;
 
-use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext, ClickEvent, Hsla, IntoElement, ParentElement as _, SharedString, Styled,
-    Window, div, px,
+    App, AppContext, ClickEvent, Hsla, ParentElement as _, SharedString, Styled,
+    Window, px,
 };
 use gpui_component::{
     ActiveTheme, Colorize as _, IndexPath, Sizable as _, WindowExt as _,
@@ -27,7 +26,7 @@ use gpui_component::{
     h_flex,
     input::{Input, InputState},
     notification::NotificationType,
-    v_flex,
+    
 };
 
 use crate::notif_ext::notify;
@@ -284,25 +283,4 @@ pub(crate) fn open_session_dialog(
     });
 }
 
-// ── field helper ─────────────────────────────────────────────────────
-
-/// Render one form field: label (with `*` if required) + input element.
-pub(crate) fn field(
-    label: &'static str,
-    required: bool,
-    input: impl IntoElement,
-    cx: &App,
-) -> impl IntoElement {
-    let danger = cx.theme().danger;
-    v_flex()
-        .gap_1()
-        .w_full()
-        .child(
-            h_flex()
-                .gap_1()
-                .text_sm()
-                .child(SharedString::from(label))
-                .when(required, |t| t.child(div().text_color(danger).child("*"))),
-        )
-        .child(input)
-}
+pub(crate) use super::common::field;
