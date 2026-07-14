@@ -74,9 +74,14 @@ impl TerminalSession for SshSession {
     }
 
     fn terminal_info(&self) -> TerminalInfo {
-        let st = self.state.lock().unwrap();
-        self.model()
-            .terminal_info(st.absolute_line_count, st.clear_epoch)
+        // Read state fields FIRST, then release the state lock BEFORE locking
+        // the terminal. Holding both locks simultaneously can block the event
+        // loop (which needs the state lock after processing output).
+        let (absolute_line_count, clear_epoch) = {
+            let st = self.state.lock().unwrap();
+            (st.absolute_line_count, st.clear_epoch)
+        };
+        self.model().terminal_info(absolute_line_count, clear_epoch)
     }
 
     fn is_alt_screen(&self) -> bool {
@@ -99,8 +104,11 @@ impl TerminalSession for SshSession {
     }
 
     fn resize(&self, rows: u16, cols: u16) {
-        if self.model().resize(rows, cols) {
+        // PTY resize FIRST, then grid resize — ensures the process knows
+        // the new size before it sends output to the new grid.
+        if self.model().needs_resize(rows, cols) {
             self.listener.pty_resize(rows, cols);
+            self.model().resize_grid(rows, cols);
         }
     }
 

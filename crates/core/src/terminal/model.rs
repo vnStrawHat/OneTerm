@@ -171,19 +171,20 @@ impl<EP: EventListener> TerminalModel<EP> {
 
     // ── Resize / scroll ────────────────────────────────────────────
 
-    /// Resize the terminal grid. Returns `true` if the size changed.
-    pub fn resize(&self, rows: u16, cols: u16) -> bool {
-        let needs_resize = {
-            let term = self.term.lock();
-            term.columns() != cols as usize || term.screen_lines() != rows as usize
-        };
-        if needs_resize {
-            self.term.lock().resize(TerminalSize {
-                cols: cols as usize,
-                lines: rows as usize,
-            });
-        }
-        needs_resize
+    /// Check whether the terminal grid needs resizing (without performing it).
+    /// The caller should call `pty_resize` **before** `resize_grid` to ensure
+    /// the PTY/process knows the new size before output arrives.
+    pub fn needs_resize(&self, rows: u16, cols: u16) -> bool {
+        let term = self.term.lock();
+        term.columns() != cols as usize || term.screen_lines() != rows as usize
+    }
+
+    /// Actually resize the terminal grid. Should be called **after** `pty_resize`.
+    pub fn resize_grid(&self, rows: u16, cols: u16) {
+        self.term.lock().resize(TerminalSize {
+            cols: cols as usize,
+            lines: rows as usize,
+        });
     }
 
     /// Scroll the scrollback by `delta` lines (no-op in alt-screen).
