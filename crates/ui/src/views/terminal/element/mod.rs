@@ -13,7 +13,7 @@ use std::rc::Rc;
 
 use gpui::{
     App, Bounds, Element, ElementId, Entity, Font, GlobalElementId, Hsla, IntoElement, LayoutId,
-    Pixels, Window,
+    Pixels, SharedString, Window,
 };
 
 use oneterm_core::TerminalSession;
@@ -69,7 +69,7 @@ pub(crate) struct TerminalElement {
     /// Per-row layout cache — skip recompute for non-dirty rows.
     row_cache: Rc<RefCell<RowLayoutCache>>,
     /// Cached gutter (width, num_digits) — recompute only when num_digits changes.
-    cached_gutter: Rc<RefCell<Option<(Pixels, usize)>>>,
+    cached_gutter: Rc<RefCell<Option<(Pixels, usize, Pixels, SharedString)>>>,
     /// Last grid size (rows, cols) — persisted between frames to avoid resizing every frame.
     last_grid_size: Rc<RefCell<Option<(u16, u16)>>>,
     /// Search highlights to paint (display coordinates, already filtered to the
@@ -102,7 +102,7 @@ impl TerminalElement {
         cursor_color_override: Option<Hsla>,
         cursor_shape_override: crate::state::TerminalCursorShape,
         row_cache: Rc<RefCell<RowLayoutCache>>,
-        cached_gutter: Rc<RefCell<Option<(Pixels, usize)>>>,
+        cached_gutter: Rc<RefCell<Option<(Pixels, usize, Pixels, SharedString)>>>,
         last_grid_size: Rc<RefCell<Option<(u16, u16)>>>,
         search_highlights: Vec<super::search::SearchHighlight>,
         overlay: SemanticOverlay,

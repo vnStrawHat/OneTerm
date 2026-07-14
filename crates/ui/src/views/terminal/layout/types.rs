@@ -158,6 +158,9 @@ pub(crate) struct RowLayoutCache {
     pub prev_grid_size: Option<(u16, u16)>,
     pub prev_display_offset: usize,
     pub prev_style_key: Option<RenderStyleKey>,
+    /// Cached URL masks from the last frame with dirty rows (PERF-09).
+    /// Reused when the terminal is idle to avoid scanning all cells.
+    pub cached_url_masks: Vec<Vec<bool>>,
     pub stats: FrameStats,
 }
 
@@ -168,6 +171,7 @@ impl RowLayoutCache {
             prev_grid_size: None,
             prev_display_offset: 0,
             prev_style_key: None,
+            cached_url_masks: Vec::new(),
             stats: FrameStats::default(),
         }
     }

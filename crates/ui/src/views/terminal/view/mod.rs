@@ -94,7 +94,8 @@ pub struct LocalTerminalView {
     /// Cached gutter width + num_digits — only recompute when num_digits changes.
     /// Avoids calling shape_line every frame → prevents gutter_width oscillation that
     /// causes a resize loop.
-    pub(crate) cached_gutter: Rc<RefCell<Option<(gpui::Pixels, usize)>>>,
+    pub(crate) cached_gutter:
+        Rc<RefCell<Option<(gpui::Pixels, usize, gpui::Pixels, gpui::SharedString)>>>,
     /// Last terminal size (rows, cols) — persisted across frames to avoid calling
     /// s.resize() every frame (TerminalElement is recreated each frame).
     pub(crate) last_grid_size: Rc<RefCell<Option<(u16, u16)>>>,
@@ -111,6 +112,9 @@ pub struct LocalTerminalView {
     pub(crate) search_active_idx: Option<usize>,
     /// The `InputState` for the search bar input.
     pub(crate) search_input: Option<gpui::Entity<InputState>>,
+    /// PERF-12: Debounce task for search — delays the full-grid scan by 150ms
+    /// after the last keystroke so typing doesn't fire a search per character.
+    pub(crate) search_debounce_task: Option<gpui::Task<()>>,
     /// Split context — set by the owning `TerminalPanel` so this terminal's
     /// context menu can dispatch Split / Close-Space to the right Space. `None`
     /// until the panel wires it up (always set for a live terminal leaf).
@@ -278,6 +282,7 @@ impl LocalTerminalView {
             search_matches: Vec::new(),
             search_active_idx: None,
             search_input: None,
+            search_debounce_task: None,
             split_ctx: None,
             event_task: Some(event_task),
             blink_task: Some(blink_task),

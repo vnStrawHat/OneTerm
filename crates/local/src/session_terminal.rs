@@ -14,8 +14,8 @@ use oneterm_core::terminal::mouse_encode::{
     encode_mouse_release, encode_wheel_event,
 };
 use oneterm_core::terminal::{
-    BACKGROUND_INDEX, CURSOR_INDEX, DynamicColors, FOREGROUND_INDEX, TerminalContent, TerminalInfo,
-    TerminalQueryState,
+    BACKGROUND_INDEX, CURSOR_INDEX, DynamicColors, FOREGROUND_INDEX, IndexedCell, TerminalContent,
+    TerminalInfo, TerminalQueryState,
 };
 use oneterm_core::{CursorBounds, SearchMatch, SearchOptions, SessionEvent, TerminalSession};
 
@@ -48,6 +48,29 @@ impl TerminalSession for LocalSession {
             total_lines: term.total_lines(),
             alive: self.alive(),
         }
+    }
+
+    fn query_line_range_cells(&self, start_line: usize, count: usize) -> (Vec<IndexedCell>, usize) {
+        let term = self.term.lock();
+        let num_cols = term.columns();
+        let num_lines = term.screen_lines();
+        if start_line >= num_lines || count == 0 {
+            return (Vec::new(), num_cols);
+        }
+        let actual_count = count.min(num_lines - start_line);
+        let content = term.renderable_content();
+        let start = start_line * num_cols;
+        let end = start + actual_count * num_cols;
+        let cells: Vec<IndexedCell> = content
+            .display_iter
+            .skip(start)
+            .take(end - start)
+            .map(|indexed| IndexedCell {
+                point: indexed.point,
+                cell: indexed.cell.clone(),
+            })
+            .collect();
+        (cells, num_cols)
     }
 
     fn dynamic_colors(&self) -> DynamicColors {

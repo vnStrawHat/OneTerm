@@ -28,13 +28,20 @@ pub(crate) fn update_hovered_url(
         Some(rc) => rc,
         None => return,
     };
-    let snap = session.read(cx).snapshot_query();
-    let new_url = detect_url_at(
-        &snap.cells,
-        snap.terminal_bounds.num_cols,
-        row as usize,
-        col as usize,
-    );
+    // PERF-09: Query only a small window of lines around the hovered row instead
+    // of cloning the entire grid (O(window×cols) vs O(rows×cols)). The window
+    // covers wrapped URL detection (URLs rarely span more than 2-3 lines).
+    const URL_WINDOW: usize = 5;
+    let row_u = row as usize;
+    let window_start = row_u.saturating_sub(URL_WINDOW);
+    let (cells, num_cols) = session
+        .read(cx)
+        .query_line_range_cells(window_start, URL_WINDOW * 2 + 1);
+    let adjusted_row = row_u - window_start;
+    let new_url = detect_url_at(&cells, num_cols, adjusted_row, col as usize).map(|mut u| {
+        u.row += window_start;
+        u
+    });
     let _ = view.update(cx, |v, cx| {
         v.last_mouse_pos = Some(position);
         let changed = v.ctrl_held != ctrl

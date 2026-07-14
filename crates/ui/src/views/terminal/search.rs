@@ -19,6 +19,8 @@
 //!
 //! Navigation wraps around (last → first, first → last).
 
+use std::time::Duration;
+
 use gpui::{
     App, AppContext, Context, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
     ParentElement as _, SharedString, Styled, Window, div, px,
@@ -67,8 +69,19 @@ impl LocalTerminalView {
             InputEvent::Change => {
                 let query = state.read(cx).value().to_string();
                 this.search_query = query;
-                this.run_search(cx);
-                cx.notify();
+                // PERF-12: Debounce the search — cancel any pending search
+                // and schedule a new one 150ms later. This prevents a full-grid
+                // scan on every keystroke while typing.
+                this.search_debounce_task = Some(cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(150))
+                        .await;
+                    this.update(cx, |this, cx| {
+                        this.run_search(cx);
+                        cx.notify();
+                    })
+                    .ok();
+                }));
             }
             InputEvent::PressEnter { shift, .. } => {
                 this.goto_match(*shift, cx);
@@ -89,6 +102,8 @@ impl LocalTerminalView {
         self.search_query.clear();
         self.search_matches.clear();
         self.search_active_idx = None;
+        // PERF-12: Cancel any pending debounced search.
+        self.search_debounce_task = None;
         cx.notify();
     }
 

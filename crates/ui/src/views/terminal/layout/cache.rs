@@ -104,8 +104,13 @@ pub(crate) fn update_row_cache(
     }
 
     // Pre-compute URL masks for all lines (handles wrapped URLs).
+    // PERF-09: Skip recomputation when no rows are dirty (idle terminal) —
+    // reuse cached masks from the last frame with dirty rows.
     let num_cols = grid_size.1 as usize;
-    let url_masks = url_masks_wrapped(cells, num_lines, num_cols);
+    if !dirty_set.is_empty() {
+        cache.cached_url_masks = url_masks_wrapped(cells, num_lines, num_cols);
+    }
+    let url_masks = &cache.cached_url_masks;
 
     let linegroups = cells.iter().chunk_by(|ic| ic.point.line);
     for (display_line, (_, line_cells)) in linegroups.into_iter().enumerate() {
@@ -178,14 +183,18 @@ fn build_cell_class(
     let mut cell_class = vec![Class::Default as u8; num_cols];
 
     // Build the line text + char-to-column mapping.
+    // PERF-11: Record wide flags in the same pass to avoid O(n²) linear
+    // search for each character's wide flag during flattening.
     let mut line_text = String::new();
     let mut char_cols: Vec<usize> = Vec::new(); // char index -> column
+    let mut char_wide: Vec<bool> = Vec::new(); // char index -> is wide
     for ic in line_cells {
         if ic.cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
             continue;
         }
         let col = ic.point.column.0;
         char_cols.push(col);
+        char_wide.push(ic.cell.flags.contains(Flags::WIDE_CHAR));
         line_text.push(match ic.cell.c {
             '\0' | '\t' => ' ',
             c => c,
@@ -202,12 +211,7 @@ fn build_cell_class(
             cell_class[col] = cls;
         }
         // Wide char: the 2nd column (spacer column) gets the same class.
-        let is_wide = line_cells
-            .iter()
-            .find(|ic| ic.point.column.0 == col)
-            .map(|ic| ic.cell.flags.contains(Flags::WIDE_CHAR))
-            .unwrap_or(false);
-        if is_wide && col + 1 < num_cols {
+        if char_wide[i] && col + 1 < num_cols {
             cell_class[col + 1] = cls;
         }
     }

@@ -16,6 +16,7 @@ use alacritty_terminal::term::TermMode;
 use async_channel::Receiver;
 
 use crate::sftp::SftpBackend;
+use crate::terminal::IndexedCell;
 use crate::terminal::content::TerminalContent;
 use crate::terminal::key_encode::{KeyMods, KeySpec, NamedKey, encode_key};
 use crate::terminal::mouse_encode::{MouseModifiers, TerminalMouseButton};
@@ -182,6 +183,25 @@ pub trait TerminalSession: Send + Sync + 'static {
             total_lines: snap.total_lines,
             alive: self.alive(),
         }
+    }
+
+    /// Read cells for a range of display lines (0-based from top of viewport).
+    /// Cheaper than `snapshot_query` (O(window×cols) vs O(rows×cols)) — used for
+    /// URL hover detection where only the lines near the cursor are needed.
+    ///
+    /// Returns `(cells, num_cols)` where `cells` has up to `count × num_cols` entries,
+    /// starting from `start_line`. Default falls back to `snapshot_query` for compatibility.
+    fn query_line_range_cells(&self, start_line: usize, count: usize) -> (Vec<IndexedCell>, usize) {
+        let snap = self.snapshot_query();
+        let num_cols = snap.terminal_bounds.num_cols;
+        let start = start_line * num_cols;
+        let end = (start + count * num_cols).min(snap.cells.len());
+        let cells = if start <= snap.cells.len() {
+            snap.cells[start..end].to_vec()
+        } else {
+            Vec::new()
+        };
+        (cells, num_cols)
     }
 
     /// Basic info (total_lines, cursor_line) — does NOT call damage()/reset_damage().

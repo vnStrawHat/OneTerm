@@ -41,7 +41,7 @@ pub(crate) fn prepaint_terminal(
     line_time_base: usize,
     hovered_url: Option<&super::super::url::DetectedUrl>,
     ctrl_held: bool,
-    cached_gutter: &Rc<RefCell<Option<(Pixels, usize)>>>,
+    cached_gutter: &Rc<RefCell<Option<(Pixels, usize, Pixels, SharedString)>>>,
     last_grid_size: &Rc<RefCell<Option<(u16, u16)>>>,
     metrics: &Rc<RefCell<GridMetrics>>,
     row_cache: &Rc<RefCell<RowLayoutCache>>,
@@ -78,14 +78,19 @@ pub(crate) fn prepaint_terminal(
     let absolute_line_count = info.absolute_line_count;
 
     // ── Gutter width (cached) ──
-    // Recompute only when num_digits changes, to avoid gutter_width fluctuations
-    // that cause a resize loop with TUI apps. When show_gutter = false, gutter_width = 0.
+    // Recompute only when num_digits *or* font *or* font_size changes, to avoid
+    // gutter_width fluctuations that cause a resize loop with TUI apps.
+    // When show_gutter = false, gutter_width = 0.
+    // PERF-08: cache key includes font family + size so font setting changes
+    // invalidate the cache (not just num_digits changes).
     let num_digits = absolute_line_count.max(1).to_string().len().max(2);
+    let font_family = font.family.clone();
     let gutter_width = if show_gutter {
-        let cg = cached_gutter.borrow_mut();
-        if let Some((cached_w, cached_digits)) = *cg {
-            if cached_digits == num_digits {
-                cached_w
+        let cg = cached_gutter.borrow();
+        if let Some((cached_w, cached_digits, cached_fs, cached_ff)) = cg.as_ref() {
+            if *cached_digits == num_digits && *cached_fs == font_size && *cached_ff == font_family
+            {
+                *cached_w
             } else {
                 drop(cg); // release the borrow before calling shape_line
                 let w = compute_gutter_width(
@@ -96,7 +101,7 @@ pub(crate) fn prepaint_terminal(
                     theme,
                     window,
                 );
-                *cached_gutter.borrow_mut() = Some((w, num_digits));
+                *cached_gutter.borrow_mut() = Some((w, num_digits, font_size, font_family.clone()));
                 w
             }
         } else {
@@ -109,7 +114,7 @@ pub(crate) fn prepaint_terminal(
                 theme,
                 window,
             );
-            *cached_gutter.borrow_mut() = Some((w, num_digits));
+            *cached_gutter.borrow_mut() = Some((w, num_digits, font_size, font_family.clone()));
             w
         }
     } else {

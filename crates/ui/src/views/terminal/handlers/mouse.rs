@@ -34,13 +34,16 @@ pub(crate) fn attach_mouse(
             };
             // Platform-modifier+click (Cmd on macOS, Ctrl on others) → open URL.
             if e.modifiers.control || e.modifiers.platform {
-                let snap = s.read(cx).snapshot_query();
-                if let Some(url) = detect_url_at(
-                    &snap.cells,
-                    snap.terminal_bounds.num_cols,
-                    row as usize,
-                    col as usize,
-                ) {
+                // PERF-09: Query only a small window around the click.
+                const URL_WINDOW: usize = 5;
+                let row_u = row as usize;
+                let window_start = row_u.saturating_sub(URL_WINDOW);
+                let (cells, num_cols) = s
+                    .read(cx)
+                    .query_line_range_cells(window_start, URL_WINDOW * 2 + 1);
+                let adjusted_row = row_u - window_start;
+                if let Some(mut url) = detect_url_at(&cells, num_cols, adjusted_row, col as usize) {
+                    url.row += window_start;
                     let policy = ExternalTargetPolicy::default();
                     match policy.validate(&url.url) {
                         TargetDecision::Allow => {
