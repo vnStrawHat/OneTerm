@@ -63,11 +63,12 @@ pub fn run() {
             ])
             .expect("Failed to load Lilex fonts");
 
-        // Set Lilex as the theme's default monospace font.
-        cx.global_mut::<gpui_component::Theme>().mono_font_family = "Lilex".into();
-
         // Initialize gpui-component (theme, dock, root, ...).
         gpui_component::init(cx);
+
+        // Set Lilex as the theme's default monospace font (after init registers Theme).
+        cx.global_mut::<gpui_component::Theme>().mono_font_family = "Lilex".into();
+
         // Initialize the OneTerm UI (register_panel x3, theme action handlers).
         oneterm_ui::init(cx);
         // Bind key bindings for the workspace.
