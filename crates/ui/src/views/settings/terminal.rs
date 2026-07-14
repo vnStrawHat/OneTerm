@@ -36,8 +36,8 @@ const SHELL_KINDS: &[(ShellKind, &str)] = &[
     (ShellKind::Custom, "Custom"),
 ];
 
-/// Curated monospace font families (plus a "Default" sentinel).
-const FONT_FAMILIES: &[&str] = &[
+/// Curated monospace font families shown when OS font enumeration is unavailable.
+const FALLBACK_FONT_LIST: &[&str] = &[
     "Lilex",
     "Cascadia Mono",
     "JetBrains Mono",
@@ -52,11 +52,11 @@ const FONT_FAMILIES: &[&str] = &[
 const DEFAULT_FONT_SENTINEL: &str = "Default (theme)";
 
 /// Build the "Terminal" settings page.
-pub(crate) fn page(_cx: &App) -> SettingPage {
+pub(crate) fn page(cx: &App) -> SettingPage {
     SettingPage::new("Terminal")
         .icon(Icon::new(IconName::SquareTerminal))
         .group(shell_group())
-        .group(font_group())
+        .group(font_group(cx))
         .group(super::terminal_options::cursor_group())
         .group(super::terminal_options::layout_group())
         .group(super::terminal_options::scroll_group())
@@ -138,12 +138,20 @@ fn shell_group() -> SettingGroup {
         ]))
 }
 
-fn font_group() -> SettingGroup {
-    // Build the font family options: the "Default" sentinel + the curated list.
+fn font_group(cx: &App) -> SettingGroup {
+    // Build the font family options: the "Default" sentinel + OS fonts.
     let mut family_options: Vec<(SharedString, SharedString)> =
         vec![(DEFAULT_FONT_SENTINEL.into(), DEFAULT_FONT_SENTINEL.into())];
+
+    // Query the OS for all available font names (includes embedded fonts like Lilex).
+    let os_fonts: Vec<String> = cx.text_system().all_font_names();
+    let font_list: Vec<&str> = if os_fonts.is_empty() {
+        FALLBACK_FONT_LIST.iter().copied().collect()
+    } else {
+        os_fonts.iter().map(|s| s.as_str()).collect()
+    };
     family_options.extend(
-        FONT_FAMILIES
+        font_list
             .iter()
             .map(|f| (SharedString::from(*f), SharedString::from(*f))),
     );
