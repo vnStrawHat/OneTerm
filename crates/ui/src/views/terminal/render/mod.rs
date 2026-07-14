@@ -173,7 +173,6 @@ impl Render for LocalTerminalView {
                 line_height_factor,
                 focused,
                 cursor_visible,
-                metrics.clone(),
                 cx.entity(),
                 self.focus.clone(),
                 self.hovered_url.clone(),
@@ -185,9 +184,12 @@ impl Render for LocalTerminalView {
                 cell_width_override,
                 cursor_color,
                 cursor_shape,
-                self.row_cache.clone(),
-                self.cached_gutter.clone(),
-                self.last_grid_size.clone(),
+                super::layout::types::TerminalRenderCache {
+                    row_cache: self.row_cache.clone(),
+                    cached_gutter: self.cached_gutter.clone(),
+                    last_grid_size: self.last_grid_size.clone(),
+                    metrics: self.metrics.clone(),
+                },
                 search_highlights,
                 overlay,
             ))

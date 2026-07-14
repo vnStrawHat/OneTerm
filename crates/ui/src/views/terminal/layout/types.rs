@@ -192,3 +192,13 @@ impl Default for RowLayoutCache {
         Self::new()
     }
 }
+
+/// Bundle of render cache state — persisted across frames on `LocalTerminalView`,
+/// passed to prepaint as a single unit (ARCH-06).
+pub(crate) struct TerminalRenderCache {
+    pub row_cache: std::rc::Rc<std::cell::RefCell<RowLayoutCache>>,
+    pub cached_gutter:
+        std::rc::Rc<std::cell::RefCell<Option<(Pixels, usize, Pixels, SharedString)>>>,
+    pub last_grid_size: std::rc::Rc<std::cell::RefCell<Option<(u16, u16)>>>,
+    pub metrics: std::rc::Rc<std::cell::RefCell<GridMetrics>>,
+}

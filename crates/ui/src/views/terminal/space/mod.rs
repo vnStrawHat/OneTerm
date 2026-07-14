@@ -13,6 +13,8 @@ mod node;
 pub(crate) mod ops;
 pub(crate) mod placeholder;
 pub(crate) mod render;
+#[cfg(test)]
+mod tests;
 
 pub(crate) use node::{SpaceContent, SpaceId, SpaceLeaf, SpaceNode};
 pub(crate) use render::render_node;

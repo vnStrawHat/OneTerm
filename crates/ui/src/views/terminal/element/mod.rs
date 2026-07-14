@@ -7,13 +7,12 @@
 //! - `element::measure` — measure font / cell metrics
 //! - `element::gutter` — compute gutter width / entries
 
-use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
 use gpui::{
     App, Bounds, Element, ElementId, Entity, Font, GlobalElementId, Hsla, IntoElement, LayoutId,
-    Pixels, SharedString, Window,
+    Pixels, Window,
 };
 
 use oneterm_core::TerminalSession;
@@ -41,7 +40,7 @@ pub(crate) struct TerminalElement {
     /// Whether to draw the cursor (blink logic: true = visible, false = hidden mid-blink).
     cursor_visible: bool,
     /// Sink for layout metrics used by the View (mouse/wheel).
-    metrics: Rc<RefCell<GridMetrics>>,
+
     /// View entity — to register the IME input handler in paint.
     view: Entity<LocalTerminalView>,
     /// Focus handle for `handle_input`.
@@ -66,12 +65,8 @@ pub(crate) struct TerminalElement {
     line_times: Rc<VecDeque<String>>,
     /// Absolute index (0-based) of `line_times[0]`.
     line_time_base: usize,
-    /// Per-row layout cache — skip recompute for non-dirty rows.
-    row_cache: Rc<RefCell<RowLayoutCache>>,
-    /// Cached gutter (width, num_digits) — recompute only when num_digits changes.
-    cached_gutter: Rc<RefCell<Option<(Pixels, usize, Pixels, SharedString)>>>,
-    /// Last grid size (rows, cols) — persisted between frames to avoid resizing every frame.
-    last_grid_size: Rc<RefCell<Option<(u16, u16)>>>,
+    /// Render cache bundle — row layout, gutter width, grid size, metrics.
+    render_cache: super::layout::types::TerminalRenderCache,
     /// Search highlights to paint (display coordinates, already filtered to the
     /// visible viewport).
     search_highlights: Vec<super::search::SearchHighlight>,
@@ -89,7 +84,6 @@ impl TerminalElement {
         line_height_factor: f32,
         focused: bool,
         cursor_visible: bool,
-        metrics: Rc<RefCell<GridMetrics>>,
         view: Entity<LocalTerminalView>,
         focus: gpui::FocusHandle,
         hovered_url: Option<super::url::DetectedUrl>,
@@ -101,9 +95,8 @@ impl TerminalElement {
         cell_width_override: Option<f32>,
         cursor_color_override: Option<Hsla>,
         cursor_shape_override: crate::state::TerminalCursorShape,
-        row_cache: Rc<RefCell<RowLayoutCache>>,
-        cached_gutter: Rc<RefCell<Option<(Pixels, usize, Pixels, SharedString)>>>,
-        last_grid_size: Rc<RefCell<Option<(u16, u16)>>>,
+        render_cache: super::layout::types::TerminalRenderCache,
+
         search_highlights: Vec<super::search::SearchHighlight>,
         overlay: SemanticOverlay,
     ) -> Self {
@@ -115,7 +108,7 @@ impl TerminalElement {
             line_height_factor,
             focused,
             cursor_visible,
-            metrics,
+            render_cache,
             view,
             focus,
             hovered_url,
@@ -127,9 +120,7 @@ impl TerminalElement {
             cursor_shape_override,
             line_times,
             line_time_base,
-            row_cache,
-            cached_gutter,
-            last_grid_size,
+
             search_highlights,
             overlay,
         }
@@ -187,10 +178,10 @@ impl Element for TerminalElement {
             self.line_time_base,
             self.hovered_url.as_ref(),
             self.ctrl_held,
-            &self.cached_gutter,
-            &self.last_grid_size,
-            &self.metrics,
-            &self.row_cache,
+            &self.render_cache.cached_gutter,
+            &self.render_cache.last_grid_size,
+            &self.render_cache.metrics,
+            &self.render_cache.row_cache,
             &self.search_highlights,
             &self.overlay,
             bounds,
@@ -218,7 +209,7 @@ impl Element for TerminalElement {
             self.font_size,
             self.focused,
             self.cursor_visible,
-            &self.row_cache,
+            &self.render_cache.row_cache,
             bounds,
             layout,
             window,
