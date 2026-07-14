@@ -207,7 +207,9 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
                 .ok_or_else(|| AppError::msg("powershell.exe not found in PATH"))?;
             let mut a = vec!["-NoLogo".into()];
             if cfg.utf8 {
-                // Force OutputEncoding to UTF-8 at startup.
+                // -NoExit keeps the session interactive after -Command runs.
+                // Without it PowerShell exits immediately → tab appears dead.
+                a.push("-NoExit".into());
                 a.push("-Command".into());
                 a.push("[Console]::OutputEncoding=[Text.UTF8Encoding]::new()".into());
             }
@@ -222,6 +224,7 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
                 .ok_or_else(|| AppError::msg("pwsh not found in PATH"))?;
             let mut a = vec!["-NoLogo".into()];
             if cfg.utf8 {
+                a.push("-NoExit".into());
                 a.push("-Command".into());
                 a.push("[Console]::OutputEncoding=[Text.UTF8Encoding]::new()".into());
             }

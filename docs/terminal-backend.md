@@ -203,7 +203,7 @@ Resolving `ShellKind` → executable + args + env (Windows-first):
 | Kind | Default program | Default args | UTF-8 |
 |---|---|---|---|
 | `Cmd` | `%COMSPEC%` (cmd.exe) | `/K chcp 65001 >nul` (if `utf8`) | `chcp 65001` |
-| `PowerShell` | `powershell.exe` (found in PATH / `where`) | `-NoLogo` | env `LANG=en_US.UTF-8`; `[Console]::OutputEncoding=UTF8` via profile/arg |
+| `PowerShell` | `powershell.exe` (found in PATH / `where`) | `-NoLogo` | env `LANG=en_US.UTF-8`; `[Console]::OutputEncoding=UTF8` via `-NoExit -Command` arg |
 | `Pwsh` | `pwsh.exe` | `-NoLogo` | like PowerShell |
 | `Bash`/`Zsh`/`Sh` | `$SHELL` / `/bin/bash`… | `-l` (login) per config | env `LANG`/`LC_ALL` |
 | `Custom` | `program` (required) | `args` | per `env`/`utf8` |
