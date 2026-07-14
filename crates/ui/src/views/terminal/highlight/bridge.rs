@@ -7,7 +7,7 @@
 
 use gpui::Hsla as GpHsla;
 
-use oneterm_highlight::{Class, ClassStyles, Decoration, Hsla, Rgba, parse_hex};
+use oneterm_highlight::{Class, ClassStyles, Decoration, Hsla, parse_hex};
 
 /// Convert a `highlight::Hsla` → `gpui::Hsla` (same field layout → trivial copy).
 pub fn to_gpui_hsla(c: Hsla) -> GpHsla {
@@ -113,12 +113,6 @@ fn class_from_key(key: &str) -> Option<Class> {
         "permNone" => Class::PermNone,
         _ => return None,
     })
-}
-
-// Rgba is unused for now but re-exported for future theme-color bridging.
-#[allow(dead_code)]
-fn _ensure_rgba_used() -> Rgba {
-    Rgba::default()
 }
 
 #[cfg(test)]

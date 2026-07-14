@@ -7,6 +7,7 @@ pub mod colors_util;
 pub mod content;
 pub mod contracts;
 pub mod key_encode;
+pub mod model;
 pub mod mouse_encode;
 pub mod osc;
 pub mod osc_color;

@@ -9,10 +9,9 @@ use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::WindowSize;
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Line, Point, Side};
-use alacritty_terminal::selection::{Selection, SelectionType};
+
 use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::{Config, Term, TermMode};
+use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::tty::{self, Options, Shell};
 use async_channel::Receiver;
 
@@ -142,38 +141,10 @@ impl LocalSession {
     }
 
     // ── Helpers ──────────────────────────────────────────────────────
-    /// Convert a (row, col) pixel-cell to (Point, Side) for selection operations.
-    fn point_and_side(term: &Term<LocalListener>, row: f32, col: f32) -> (Point, Side) {
-        let col = col.max(0.0);
-        let row_idx = (row.max(0.0) as usize).min(term.screen_lines().saturating_sub(1));
-        let column = (col as usize).min(term.columns().saturating_sub(1));
-        let line = row_idx as i32 - term.grid().display_offset() as i32;
-        let side = if col.fract() < 0.5 {
-            Side::Left
-        } else {
-            Side::Right
-        };
-        (Point::new(Line(line), Column(column)), side)
-    }
 
-    pub(crate) fn mode(&self) -> TermMode {
-        *self.term.lock().mode()
-    }
-
-    /// Start a selection (when not in mouse mode).
-    pub(crate) fn start_selection(&self, row: f32, col: f32, sel: SelectionType) {
-        let mut term = self.term.lock();
-        let (point, side) = Self::point_and_side(&term, row, col);
-        term.selection = Some(Selection::new(sel, point, side));
-    }
-
-    /// Update the existing selection (while dragging).
-    pub(crate) fn update_selection(&self, row: f32, col: f32) {
-        let mut term = self.term.lock();
-        // Compute point/side (immutable borrow) first, then mutate the selection.
-        let (point, side) = Self::point_and_side(&term, row, col);
-        if let Some(selection) = term.selection.as_mut() {
-            selection.update(point, side);
-        }
+    /// Get a `TerminalModel` adapter for the shared terminal-model operations.
+    /// Cheap to create — just wraps the existing `Arc<FairMutex<Term>>`.
+    pub(crate) fn model(&self) -> oneterm_core::terminal::model::TerminalModel<LocalListener> {
+        oneterm_core::terminal::model::TerminalModel::new(self.term.clone())
     }
 }
