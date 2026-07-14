@@ -14,4 +14,5 @@ mod tree_render;
 
 pub use panel::SessionPanel;
 
-pub(crate) use session_dialog::open_session_dialog;
+pub(crate) use connect_dialog::open_quick_connect_dialog;
+

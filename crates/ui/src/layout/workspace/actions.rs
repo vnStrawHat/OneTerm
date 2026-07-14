@@ -116,7 +116,7 @@ impl super::OneTermWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        crate::views::session_tabs::open_session_dialog(window, cx, None);
+        crate::views::session_tabs::open_quick_connect_dialog(window, cx);
     }
 
     /// Action handler: add a new SessionPanel to the right dock.
