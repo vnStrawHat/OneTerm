@@ -9,6 +9,11 @@ use serde::Deserialize;
 #[action(namespace = oneterm, no_json)]
 pub struct AddPanel(pub DockPlacement);
 
+/// Add a new TerminalPanel to the center dock with a specific shell kind.
+#[derive(Clone, PartialEq, Eq, Deserialize, gpui::Action)]
+#[action(namespace = oneterm, no_json)]
+pub struct AddPanelWithShell(pub oneterm_core::ShellKind);
+
 actions!(
     oneterm,
     [

@@ -17,19 +17,22 @@ mod ops;
 use std::sync::Arc;
 
 use gpui::{
-    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    Anchor, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, MouseButton, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div,
     prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable,
+    button::{Button, ButtonVariants as _},
     dock::{Panel, PanelControl, PanelEvent, PanelView, TabPanel},
     h_flex,
+    menu::DropdownMenu as _,
 };
-use oneterm_core::TerminalSession;
+use oneterm_core::{ShellKind, TerminalSession};
 use oneterm_local::{LocalSession, PtySize};
 
+use crate::actions::{AddPanelWithShell, NewSession};
 use crate::state::{TabTitleMode, TerminalSettings};
 
 use super::space::{DragTerminalTab, SpaceId, SpaceTree, SplitContext};
@@ -82,7 +85,20 @@ fn trim_path_title(title: &str) -> &str {
 impl TerminalPanel {
     /// Create a panel + spawn the default local session (cmd on Windows).
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let view = Self::spawn_local_view(window, cx);
+        Self::new_internal(None, window, cx)
+    }
+
+    /// Create a panel + spawn a local session with the given shell kind.
+    pub fn new_with_shell(kind: ShellKind, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_internal(Some(kind), window, cx)
+    }
+
+    fn new_internal(
+        shell_kind_override: Option<ShellKind>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let view = Self::spawn_local_view(shell_kind_override, window, cx);
         let focus = cx.focus_handle();
         let (tree, active) = match view {
             Some(ref view) => {
@@ -169,16 +185,37 @@ impl TerminalPanel {
         cx.new(|cx| Self::new(window, cx))
     }
 
+    /// Helper to create an `Entity<Self>` with a specific shell kind.
+    pub fn new_with_shell_entity(
+        kind: ShellKind,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<Self> {
+        cx.new(|cx| Self::new_with_shell(kind, window, cx))
+    }
+
     /// Spawn a fresh default local session + view.
     /// Returns `None` if the session could not be spawned (e.g. missing shell).
     /// The caller should handle the `None` case by showing an error state.
     pub(super) fn spawn_local_view(
+        shell_kind_override: Option<ShellKind>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Entity<LocalTerminalView>> {
         let (shell, scrollback_history) = {
             let settings = TerminalSettings::global(cx).read(cx);
-            (settings.shell.clone(), settings.scrollback_history)
+            let shell = match shell_kind_override {
+                Some(kind) => {
+                    // Override the shell kind but keep other settings (utf8, cwd, env, args).
+                    let mut s = settings.shell.clone();
+                    s.kind = kind;
+                    // Clear program so resolve_shell auto-detects for the new kind.
+                    s.program = None;
+                    s
+                }
+                None => settings.shell.clone(),
+            };
+            (shell, settings.scrollback_history)
         };
         let session_result =
             LocalSession::spawn(shell, PtySize { rows: 24, cols: 80 }, scrollback_history);
@@ -407,6 +444,60 @@ impl Panel for TerminalPanel {
 
     fn zoomable(&self, _: &App) -> Option<PanelControl> {
         Some(PanelControl::Both)
+    }
+
+    /// "+" button next to the zoom button — dropdown to spawn a new terminal tab
+    /// with a specific shell, or open the New SSH Session dialog.
+    fn title_suffix(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement> {
+        let btn = Button::new("add-shell-tab")
+            .icon(IconName::Plus)
+            .xsmall()
+            .ghost()
+            .tab_stop(false)
+            .tooltip("New Terminal")
+            .dropdown_menu_with_anchor(Anchor::BottomLeft, |menu, _, _| {
+                let mut menu = menu;
+                // Platform-specific shells.
+                #[cfg(windows)]
+                {
+                    menu = menu
+                        .menu(
+                            "Command Prompt",
+                            Box::new(AddPanelWithShell(ShellKind::Cmd)),
+                        )
+                        .menu(
+                            "PowerShell",
+                            Box::new(AddPanelWithShell(ShellKind::PowerShell)),
+                        )
+                        .menu(
+                            "PowerShell 7",
+                            Box::new(AddPanelWithShell(ShellKind::Pwsh)),
+                        );
+                }
+                #[cfg(not(windows))]
+                {
+                    menu = menu
+                        .menu(
+                            "Bash",
+                            Box::new(AddPanelWithShell(ShellKind::Bash)),
+                        )
+                        .menu(
+                            "Sh",
+                            Box::new(AddPanelWithShell(ShellKind::Sh)),
+                        )
+                        .menu(
+                            "Zsh",
+                            Box::new(AddPanelWithShell(ShellKind::Zsh)),
+                        );
+                }
+                menu.separator()
+                    .menu("New SSH Session", Box::new(NewSession))
+            });
+        Some(btn)
     }
 
     fn on_added_to(

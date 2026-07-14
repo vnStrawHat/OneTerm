@@ -72,7 +72,7 @@ impl TerminalPanel {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let view = match TerminalPanel::spawn_local_view(window, cx) {
+        let view = match TerminalPanel::spawn_local_view(None, window, cx) {
             Some(v) => v,
             None => {
                 log::warn!("new_terminal_here: spawn failed");

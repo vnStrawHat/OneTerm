@@ -11,8 +11,8 @@ use gpui_component::{
 
 use crate::{
     actions::{
-        About, AddPanel, AddSession, AddSftpBrowser, Find, OpenSettings, Quit,
-        ToggleAutoHideRightDock, ToggleDockToggleButton,
+        About, AddPanel, AddPanelWithShell, AddSession, AddSftpBrowser, Find, NewSession,
+        OpenSettings, Quit, ToggleAutoHideRightDock, ToggleDockToggleButton,
     },
     state::{AppState, TerminalSettings},
     views::{SessionPanel, SftpPanel, TerminalPanel},
@@ -68,6 +68,55 @@ impl super::OneTermWorkspace {
             }),
             _ => false,
         }
+    }
+
+    /// Action handler: add a new TerminalPanel with a specific shell kind.
+    ///
+    /// Same as `on_action_add_panel` but spawns the terminal with the given
+    /// `ShellKind` instead of the default from settings.
+    pub(crate) fn on_action_add_panel_with_shell(
+        &mut self,
+        action: &AddPanelWithShell,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let panel: Arc<dyn gpui_component::dock::PanelView> =
+            Arc::new(TerminalPanel::new_with_shell_entity(action.0, window, cx));
+
+        let center_empty = {
+            let dock = self.dock_area.read(cx);
+            Self::center_has_no_visible_panel(&dock.center(), cx)
+        };
+
+        if center_empty {
+            let weak = self.dock_area.downgrade();
+            let center = DockItem::v_split(
+                vec![DockItem::tabs(vec![panel], &weak, window, cx)],
+                &weak,
+                window,
+                cx,
+            );
+            self.dock_area.update(cx, |dock_area, cx| {
+                dock_area.set_center(center, window, cx);
+            });
+        } else {
+            self.dock_area.update(cx, |dock_area, cx| {
+                dock_area.add_panel(panel, DockPlacement::Center, None, window, cx);
+            });
+        }
+    }
+
+    /// Action handler: open the "New SSH Session" dialog.
+    ///
+    /// Opens the session creation dialog at the workspace level so it works
+    /// even when no SessionPanel is open.
+    pub(crate) fn on_action_new_session(
+        &mut self,
+        _: &NewSession,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        crate::views::session_tabs::open_session_dialog(window, cx, None);
     }
 
     /// Action handler: add a new SessionPanel to the right dock.

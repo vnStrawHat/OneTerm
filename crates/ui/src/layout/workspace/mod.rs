@@ -424,6 +424,8 @@ impl Render for OneTermWorkspace {
             .on_action(cx.listener(Self::on_action_add_panel))
             .on_action(cx.listener(Self::on_action_add_session))
             .on_action(cx.listener(Self::on_action_add_sftp_browser))
+            .on_action(cx.listener(Self::on_action_add_panel_with_shell))
+            .on_action(cx.listener(Self::on_action_new_session))
             .on_action(cx.listener(Self::on_action_toggle_dock_toggle_button))
             .on_action(cx.listener(Self::on_action_toggle_auto_hide_right_dock))
             .on_action(cx.listener(Self::on_action_quit))
