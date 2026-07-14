@@ -459,7 +459,7 @@ impl Panel for TerminalPanel {
             .ghost()
             .tab_stop(false)
             .tooltip("New Terminal")
-            .dropdown_menu_with_anchor(Anchor::BottomLeft, |menu, _, _| {
+            .dropdown_menu(|menu, _, _| {
                 let mut menu = menu;
                 // Platform-specific shells.
                 #[cfg(windows)]
@@ -496,7 +496,8 @@ impl Panel for TerminalPanel {
                 }
                 menu.separator()
                     .menu("New SSH Session", Box::new(NewSession))
-            });
+            })
+            .anchor(Anchor::TopRight);
         Some(btn)
     }
 
