@@ -17,13 +17,6 @@ impl TerminalSettings {
         if font.family.is_some() {
             self.font_family = font.family.as_ref().map(|s| s.clone().into());
         }
-        if !font.fallback_fonts.is_empty() {
-            self.font_fallbacks = font
-                .fallback_fonts
-                .iter()
-                .map(|s| s.clone().into())
-                .collect();
-        }
         if font.size.is_some() {
             self.font_size = font.size;
             self.base_font_size = font.size;

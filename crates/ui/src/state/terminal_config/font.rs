@@ -8,9 +8,6 @@ pub struct FontConfig {
     /// Primary font family (null = use the theme mono font).
     #[serde(default = "default_font_family")]
     pub family: Option<String>,
-    /// Font fallback stack (empty = platform defaults).
-    #[serde(default)]
-    pub fallback_fonts: Vec<String>,
     /// Font size in px (null = use the theme mono font size).
     #[serde(default = "default_font_size")]
     pub size: Option<f32>,
@@ -28,7 +25,6 @@ impl Default for FontConfig {
     fn default() -> Self {
         Self {
             family: default_font_family(),
-            fallback_fonts: Vec::new(),
             size: default_font_size(),
             weight: default_weight(),
             features: Vec::new(),

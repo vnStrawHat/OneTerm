@@ -1,44 +1,6 @@
-//! Font defaults + weight parsing.
+//! Font weight parsing.
 
-use gpui::{FontWeight, SharedString};
-
-/// Platform-specific default font fallback stack for the terminal.
-pub fn default_terminal_font_fallbacks() -> Vec<SharedString> {
-    #[cfg(target_os = "windows")]
-    {
-        vec![
-            "Lilex".into(),
-            "Cascadia Mono".into(),
-            "Cascadia Code".into(),
-            "DejaVu Sans Mono".into(),
-            "Lucida Console".into(),
-            "Courier New".into(),
-            "MS Gothic".into(),
-            "NSimSun".into(),
-        ]
-    }
-    #[cfg(target_os = "macos")]
-    {
-        vec![
-            "Lilex".into(),
-            "Menlo".into(),
-            "Monaco".into(),
-            "Courier New".into(),
-            "Apple Symbols".into(),
-        ]
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        vec![
-            "Lilex".into(),
-            "DejaVu Sans Mono".into(),
-            "Noto Sans Mono".into(),
-            "Ubuntu Mono".into(),
-            "Liberation Mono".into(),
-            "Courier New".into(),
-        ]
-    }
-}
+use gpui::FontWeight;
 
 /// Parse a font weight from a string → FontWeight.
 pub fn parse_weight(s: &str) -> FontWeight {

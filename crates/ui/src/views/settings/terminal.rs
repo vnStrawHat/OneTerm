@@ -10,14 +10,16 @@
 //! [`super::terminal_options`] (split for the ~400-line file guideline).
 
 use gpui::{
-    App, AppContext as _, Entity, FontWeight, IntoElement, SharedString, Styled, Subscription,
-    Window, prelude::FluentBuilder as _,
+    App, AppContext as _, Entity, FontWeight, IntoElement, ParentElement, SharedString, Styled,
+    Subscription, Window, div, px, rems, prelude::FluentBuilder as _,
 };
 use gpui_component::{
-    AxisExt, Disableable, Icon, IconName, Sizable,
+    AxisExt, Disableable, Icon, IconName, IndexPath, Sizable,
     input::{InputEvent, InputState, NumberInput},
+    select::{SearchableVec, Select, SelectEvent, SelectState},
     setting::{
-        NumberFieldOptions, RenderOptions, SettingField, SettingGroup, SettingItem, SettingPage,
+        NumberFieldOptions, RenderOptions, SettingField, SettingGroup, SettingItem,
+        SettingPage,
     },
 };
 use oneterm_core::config::ShellKind;
@@ -36,27 +38,14 @@ const SHELL_KINDS: &[(ShellKind, &str)] = &[
     (ShellKind::Custom, "Custom"),
 ];
 
-/// Curated monospace font families shown when OS font enumeration is unavailable.
-const FALLBACK_FONT_LIST: &[&str] = &[
-    "Lilex",
-    "Cascadia Mono",
-    "JetBrains Mono",
-    "Fira Code",
-    "Menlo",
-    "Consolas",
-    "DejaVu Sans Mono",
-    "Ubuntu Mono",
-    "Courier New",
-];
-
 const DEFAULT_FONT_SENTINEL: &str = "Default (theme)";
 
 /// Build the "Terminal" settings page.
-pub(crate) fn page(cx: &App) -> SettingPage {
+pub(crate) fn page() -> SettingPage {
     SettingPage::new("Terminal")
         .icon(Icon::new(IconName::SquareTerminal))
         .group(shell_group())
-        .group(font_group(cx))
+        .group(font_group())
         .group(super::terminal_options::cursor_group())
         .group(super::terminal_options::layout_group())
         .group(super::terminal_options::scroll_group())
@@ -138,24 +127,139 @@ fn shell_group() -> SettingGroup {
         ]))
 }
 
-fn font_group(cx: &App) -> SettingGroup {
-    // Build the font family options: the "Default" sentinel + OS fonts.
-    let mut family_options: Vec<(SharedString, SharedString)> =
-        vec![(DEFAULT_FONT_SENTINEL.into(), DEFAULT_FONT_SENTINEL.into())];
+// ── Font Family Select field ─────────────────────────────────────────────
+//
+// The font family list can be very long (hundreds of OS fonts). Instead of
+// a plain `SettingField::dropdown` that renders every item, we use a
+// searchable, scrollable `Select` from gpui-component with `menu_max_h` set
+// to show roughly five items at a time.  The `SelectState` entity is created
+// once via `window::use_keyed_state` (same pattern as `line_height_field`)
+// and reused across renders.
 
-    // Query the OS for all available font names (includes embedded fonts like Lilex).
-    let os_fonts: Vec<String> = cx.text_system().all_font_names();
-    let font_list: Vec<&str> = if os_fonts.is_empty() {
-        FALLBACK_FONT_LIST.iter().copied().collect()
-    } else {
-        os_fonts.iter().map(|s| s.as_str()).collect()
-    };
-    family_options.extend(
-        font_list
-            .iter()
-            .map(|f| (SharedString::from(*f), SharedString::from(*f))),
-    );
+/// Build the font family list shown in the Select: the "Default (theme)" sentinel
+/// followed by all OS-available font names. When font enumeration returns
+/// nothing, only the sentinel is shown.
+fn font_name_list(cx: &App) -> Vec<SharedString> {
+    let mut list = vec![SharedString::from(DEFAULT_FONT_SENTINEL)];
+    list.extend(cx.text_system().all_font_names().into_iter().map(SharedString::from));
+    list
+}
 
+/// Find the index in `list` that corresponds to the currently-selected font
+/// family (or the "Default" sentinel when `font_family` is `None`).
+fn initial_font_index(list: &[SharedString], cx: &App) -> Option<usize> {
+    let current = TerminalSettings::global(cx)
+        .read(cx)
+        .font_family
+        .clone()
+        .unwrap_or_else(|| DEFAULT_FONT_SENTINEL.into());
+    list.iter().position(|f| *f == current)
+}
+
+/// State held across renders for the font-family `Select`.
+struct FontSelectState {
+    select: Entity<SelectState<SearchableVec<SharedString>>>,
+    /// Last value applied to `TerminalSettings` — used to detect external
+    /// changes (config reload / reset) that need to be synced back into the
+    /// `Select`.
+    initial_value: Option<SharedString>,
+    _subscription: Subscription,
+}
+
+/// Build the "Font Family" setting field using a searchable, scrollable
+/// `Select` from gpui-component.
+///
+/// The dropdown shows ~5 items at a time (`menu_max_h(rems(10.))`) with a
+/// search input for filtering the full OS font list.
+fn font_family_field() -> SettingField<SharedString> {
+    SettingField::render(
+        move |options: &RenderOptions, window: &mut Window, cx: &mut App| {
+            let key = SharedString::from(format!(
+                "font-family-select-{}-{}-{}",
+                options.page_ix, options.group_ix, options.item_ix
+            ));
+
+            let state_entity = window.use_keyed_state(key, cx, |window, cx| {
+                let list = font_name_list(cx);
+                let selected_ix = initial_font_index(&list, cx);
+
+                let select = cx.new(|cx| {
+                    SelectState::new(
+                        SearchableVec::new(list),
+                        selected_ix.map(|i| IndexPath::default().row(i)),
+                        window,
+                        cx,
+                    )
+                    .searchable(true)
+                });
+
+                let _subscription = cx.subscribe_in(&select, window, {
+                    move |state: &mut FontSelectState,
+                          _,
+                          event: &SelectEvent<SearchableVec<SharedString>>,
+                          _,
+                          cx| {
+                        match event {
+                            SelectEvent::Confirm(value) => {
+                                let family = value.as_ref().and_then(|v| {
+                                    if v.as_ref() == DEFAULT_FONT_SENTINEL {
+                                        None
+                                    } else {
+                                        Some(v.clone())
+                                    }
+                                });
+                                state.initial_value = family.clone();
+                                TerminalSettings::global(cx).update(cx, |s, cx| {
+                                    s.font_family = family;
+                                    cx.notify();
+                                });
+                                persist(cx);
+                            }
+                        }
+                    }
+                });
+
+                FontSelectState {
+                    select,
+                    initial_value: TerminalSettings::global(cx).read(cx).font_family.clone(),
+                    _subscription,
+                }
+            });
+
+            // Sync external changes (e.g. config file reload or reset).
+            let current = TerminalSettings::global(cx).read(cx).font_family.clone();
+            state_entity.update(cx, |state, cx| {
+                if state.initial_value != current {
+                    state.initial_value = current.clone();
+                    let select_value =
+                        current.clone().unwrap_or_else(|| DEFAULT_FONT_SENTINEL.into());
+                    state.select.update(cx, |select, cx| {
+                        select.set_selected_value(&select_value, window, cx);
+                    });
+                }
+            });
+
+            let select = state_entity.read(cx).select.clone();
+
+            div()
+                .map(|this| {
+                    if options.layout.is_horizontal() {
+                        this.w(px(240.))
+                    } else {
+                        this.w_full()
+                    }
+                })
+                .child(
+                    Select::new(&select)
+                        .search_placeholder("Search fonts...")
+                        .menu_max_h(rems(10.)),
+                )
+                .into_any_element()
+        },
+    )
+}
+
+fn font_group() -> SettingGroup {
     let weight_options: Vec<(SharedString, SharedString)> = [
         ("thin", "Thin"),
         ("extra_light", "Extra Light"),
@@ -175,32 +279,7 @@ fn font_group(cx: &App) -> SettingGroup {
         .title("Font")
         .description("Terminal font family, size, and weight.")
         .items(items_with_separators(vec![
-            SettingItem::new(
-                "Font Family",
-                SettingField::dropdown(
-                    family_options,
-                    |cx: &App| {
-                        TerminalSettings::global(cx)
-                            .read(cx)
-                            .font_family
-                            .clone()
-                            .unwrap_or_else(|| DEFAULT_FONT_SENTINEL.into())
-                    },
-                    |val: SharedString, cx: &mut App| {
-                        let family = if val.as_ref() == DEFAULT_FONT_SENTINEL {
-                            None
-                        } else {
-                            Some(val)
-                        };
-                        TerminalSettings::global(cx).update(cx, |s, cx| {
-                            s.font_family = family;
-                            cx.notify();
-                        });
-                        persist(cx);
-                    },
-                ),
-            )
-            .description(
+            SettingItem::new("Font Family", font_family_field()).description(
                 "The terminal text font. \"Default (theme)\" uses the active theme's mono font.",
             ),
             SettingItem::new(

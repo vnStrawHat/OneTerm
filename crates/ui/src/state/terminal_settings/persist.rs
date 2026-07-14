@@ -62,7 +62,6 @@ impl TerminalSettings {
         TerminalConfig {
             font: FontConfig {
                 family: self.font_family.as_ref().map(|s| s.to_string()),
-                fallback_fonts: self.font_fallbacks.iter().map(|s| s.to_string()).collect(),
                 size: self.font_size,
                 weight: weight_to_string(self.font_weight),
                 features: self.font_features.iter().map(|s| s.to_string()).collect(),

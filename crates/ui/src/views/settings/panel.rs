@@ -47,7 +47,7 @@ impl SettingsPanel {
         vec![
             general::page(),
             key_bindings::page(),
-            terminal::page(cx),
+            terminal::page(),
             appearance::page(cx),
             about::page(),
         ]

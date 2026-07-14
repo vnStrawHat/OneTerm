@@ -18,7 +18,7 @@ pub(crate) mod mutators;
 pub(crate) mod persist;
 
 pub use color::{hsla_to_hex, parse_hex_color};
-pub use font::{default_terminal_font_fallbacks, parse_weight};
+pub use font::parse_weight;
 
 /// Terminal cursor shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -86,8 +86,6 @@ pub struct TerminalSettings {
     // ── Font ──
     /// Primary font family (None = use the theme mono font).
     pub font_family: Option<SharedString>,
-    /// Font fallback stack.
-    pub font_fallbacks: Vec<SharedString>,
     /// Font size in px (None = use the theme mono font size).
     /// Can change at runtime via zoom shortcuts (Ctrl +/−/0).
     pub font_size: Option<f32>,
@@ -156,7 +154,6 @@ impl Default for TerminalSettings {
         Self {
             shell: LocalShellConfig::default(),
             font_family: None,
-            font_fallbacks: default_terminal_font_fallbacks(),
             font_size: None,
             base_font_size: None,
             font_weight: FontWeight::default(),
