@@ -345,6 +345,21 @@ fn prompt_sign_only_is_tagged() {
 }
 
 #[test]
+fn unix_prompt_path_before_sign_is_highlighted() {
+    // The path `~/dir` before `$` should be tagged as Path.
+    let line = "user@host:~/dir$ ls";
+    let c = scan(line, RowRole::Output);
+    let tilde = line.find('~').unwrap();
+    let dollar = line.find('$').unwrap();
+    assert_eq!(c[tilde], Class::Path, "'~' should be Path");
+    assert_eq!(
+        c[dollar - 1],
+        Class::Path,
+        "last path char before '$' should be Path"
+    );
+}
+
+#[test]
 fn windows_prompt_sign_only_is_tagged() {
     let line = r"C:\Users\foo> dir";
     let c = scan_with_profile(line, RowRole::Output, ShellProfile::Cmd);
@@ -353,6 +368,95 @@ fn windows_prompt_sign_only_is_tagged() {
         assert_ne!(c[i], Class::PromptSign, "char {i} of '{line}'");
     }
     assert_eq!(c[gt], Class::PromptSign);
+}
+
+#[test]
+fn windows_prompt_path_before_sign_is_highlighted() {
+    // The path before the `>` in a cmd prompt should be tagged as `Path`,
+    // not left as `Default` (white). This was the root cause of the bug where
+    // the path was white initially but became highlighted when the user typed.
+    let line = r"C:\Users\foo> dir";
+    let c = scan_with_profile(line, RowRole::Output, ShellProfile::Cmd);
+    let gt = line.find('>').unwrap();
+    // The path `C:\Users\foo` should be tagged as Path.
+    assert_eq!(c[0], Class::Path, "drive letter 'C' should be Path");
+    assert_eq!(c[1], Class::Path, "colon ':' should be Path");
+    assert_eq!(
+        c[gt - 1],
+        Class::Path,
+        "last path char before '>' should be Path"
+    );
+}
+
+#[test]
+fn windows_prompt_path_highlighted_without_trailing_space() {
+    // When the user types right after `>` (no trailing space), the prompt regex
+    // should still match and the path should be highlighted as Path, with `>`
+    // tagged as PromptSign (not Operator).
+    let line = r"D:\TrungKFC-Research\Rust\myTerm2>dir";
+    let c = scan_with_profile(line, RowRole::Output, ShellProfile::Cmd);
+    let gt = line.find('>').unwrap();
+    // Path before `>` should be tagged as Path.
+    assert_eq!(c[0], Class::Path, "drive letter should be Path");
+    assert_eq!(
+        c[gt - 1],
+        Class::Path,
+        "last path char before '>' should be Path"
+    );
+    // `>` should be PromptSign, not Operator.
+    assert_eq!(c[gt], Class::PromptSign);
+    // `dir` should be Command.
+    let dir_pos = line.find("dir").unwrap();
+    assert_eq!(c[dir_pos], Class::Command);
+}
+
+#[test]
+fn windows_prompt_path_highlighted_at_end_of_line() {
+    // `D:\path>` at end of line (no trailing space, no user input) — the prompt
+    // regex should still match so the path is highlighted and `>` is PromptSign.
+    let line = r"D:\TrungKFC-Research\Rust\myTerm2>";
+    let c = scan_with_profile(line, RowRole::Output, ShellProfile::Cmd);
+    let gt = line.find('>').unwrap();
+    assert_eq!(c[0], Class::Path, "drive letter should be Path");
+    assert_eq!(
+        c[gt - 1],
+        Class::Path,
+        "last path char before '>' should be Path"
+    );
+    assert_eq!(c[gt], Class::PromptSign);
+}
+
+#[test]
+fn windows_prompt_path_highlighted_with_trailing_space() {
+    // `D:\path> ` (with trailing space — initial state when no user input).
+    // The blank cell after `>` is converted to space, so the prompt regex matches.
+    let line = r"D:\TrungKFC-Research\Rust\myTerm2> ";
+    let c = scan_with_profile(line, RowRole::Output, ShellProfile::Cmd);
+    let gt = line.find('>').unwrap();
+    assert_eq!(c[0], Class::Path, "drive letter should be Path");
+    assert_eq!(
+        c[gt - 1],
+        Class::Path,
+        "last path char before '>' should be Path"
+    );
+    assert_eq!(c[gt], Class::PromptSign);
+}
+
+#[test]
+fn windows_prompt_path_highlighted_with_input_after_space() {
+    // `D:\path> x` (with trailing space + user input).
+    let line = r"D:\TrungKFC-Research\Rust\myTerm2> x";
+    let c = scan_with_profile(line, RowRole::Output, ShellProfile::Cmd);
+    let gt = line.find('>').unwrap();
+    assert_eq!(c[0], Class::Path, "drive letter should be Path");
+    assert_eq!(
+        c[gt - 1],
+        Class::Path,
+        "last path char before '>' should be Path"
+    );
+    assert_eq!(c[gt], Class::PromptSign);
+    let x_pos = line.find('x').unwrap();
+    assert_eq!(c[x_pos], Class::Command);
 }
 
 #[test]

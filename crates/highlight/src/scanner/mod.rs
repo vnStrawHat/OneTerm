@@ -29,7 +29,7 @@ use std::sync::LazyLock;
 /// match (e.g. user runs `wsl` inside `cmd.exe` — prompt changes to Unix but
 /// the profile stays `Cmd`).
 static UNIVERSAL_PROMPT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(?:[A-Za-z]:[^\s>]*>[ ]|[^\s]*[\$#%][ ])").unwrap());
+    LazyLock::new(|| Regex::new(r"^(?:[A-Za-z]:[^\s>]*>[ ]?|[^\s]*[\$#%][ ]?)").unwrap());
 
 /// Scan one line of terminal text → `Vec<u8>` of `Class` (one per char).
 ///
@@ -83,6 +83,13 @@ fn scan_prompt_line(chars: &[char], classes: &mut [u8], profile: &ShellProfile) 
         Some(e) => e,
         None => return, // No sign found — leave as default.
     };
+
+    // Tag the path before the prompt sign (e.g. `D:\path` in `D:\path>`).
+    // The prompt text typically contains a filesystem path — run the path probe
+    // so it gets `Class::Path` instead of staying `Default` (white).
+    if sign_end > 0 {
+        structural::path_probe(&chars[..sign_end], &mut classes[..sign_end], profile);
+    }
 
     // Skip the space(s) after the sign, then switch to CommandMode.
     let mut start = sign_end + 1;

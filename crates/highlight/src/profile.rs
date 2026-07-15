@@ -80,26 +80,28 @@ impl ShellProfile {
 
 use std::sync::LazyLock;
 
-/// Unix prompt: line starts with optional path/user text, ends with `$ ` or
-/// `# ` or `% ` before the command. We match the *sign + trailing space*
+/// Unix prompt: line starts with optional path/user text, ends with `$` or
+/// `#` or `%` before the command. We match the *sign + optional trailing space*
 /// pattern at a reasonable position from the start of the line.
 static PROMPT_UNIX: LazyLock<Regex> = LazyLock::new(|| {
     // Accept leading non-whitespace (user@host:path) then a sign + space.
     // Also accept a bare sign at column 0.
-    Regex::new(r"^(?:[^\s]*[\$#%][ ])|(?:^[#\$%][ ])").unwrap()
+    Regex::new(r"^(?:[^\s]*[\$#%][ ]?)|(?:^[#\$%][ ]?)").unwrap()
 });
 
-/// cmd.exe prompt: `C:\path>` or `>`.
+/// cmd.exe prompt: `C:\path>` or `>`. The trailing space is optional so the
+/// prompt is detected even when the user has typed right after `>` (the blank
+/// cell after `>` is replaced by the typed char, removing the trailing space).
 static PROMPT_CMD: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(?:[A-Za-z]:[^\s>]*>[ ])|(?:^>[ ])").unwrap());
+    LazyLock::new(|| Regex::new(r"^(?:[A-Za-z]:[^\s>]*>[ ]?)|(?:^>[ ]?)").unwrap());
 
 /// PowerShell prompt: `PS C:\path>` or `>>`.
 static PROMPT_PWSH: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(?:PS[^\s>]*>[ ])|(?:^>+[ ])").unwrap());
+    LazyLock::new(|| Regex::new(r"^(?:PS[^\s>]*>[ ]?)|(?:^>+[ ]?)").unwrap());
 
-/// Dumb / serial / router — most permissive: any of `$ # % > → »` + space.
+/// Dumb / serial / router — most permissive: any of `$ # % > → »` + optional space.
 static PROMPT_DUMB: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(?:[^\s]*[\$#%>»][ ])|(?:^[\$#%>»][ ])").unwrap());
+    LazyLock::new(|| Regex::new(r"^(?:[^\s]*[\$#%>»][ ]?)|(?:^[\$#%>»][ ]?)").unwrap());
 
 #[cfg(test)]
 mod tests {
