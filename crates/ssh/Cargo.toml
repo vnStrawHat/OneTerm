@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 oneterm-core.workspace = true
+oneterm-terminal.workspace = true
 alacritty_terminal.workspace = true
 async-channel.workspace = true
 russh.workspace = true
@@ -22,4 +23,4 @@ anyhow.workspace = true
 tokio-util.workspace = true
 
 [dev-dependencies]
-oneterm-core = { workspace = true, features = ["test-support"] }
+oneterm-terminal = { workspace = true, features = ["test-support"] }

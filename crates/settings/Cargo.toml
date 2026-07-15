@@ -1,0 +1,15 @@
+[package]
+name = "oneterm-settings"
+description = "OneTerm settings: terminal.json / ui_config.json schema + live global settings entities."
+publish = false
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+oneterm-core.workspace = true
+gpui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true

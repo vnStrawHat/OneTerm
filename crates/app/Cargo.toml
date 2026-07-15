@@ -14,6 +14,12 @@ default = ["dev-bin"]
 dev-bin = []
 # Bin target for release build — clean filename (oneterm.exe / oneterm).
 release-bin = []
+# Enable terminal render diagnostics across the terminal view + both backends.
+terminal-diagnostics = [
+    "oneterm-terminal-view/terminal-diagnostics",
+    "oneterm-local-shell/terminal-diagnostics",
+    "oneterm-ssh/terminal-diagnostics",
+]
 
 # Shared logic — both bin shims call `oneterm_app::run()`.
 [lib]
@@ -34,8 +40,20 @@ required-features = ["release-bin"]
 workspace = true
 
 [dependencies]
-oneterm-ui.workspace = true
 oneterm-core.workspace = true
+oneterm-terminal.workspace = true
+oneterm-ssh.workspace = true
+oneterm-local-shell.workspace = true
+
+# UI layer: the feature-agnostic shell + the four feature crates + shared layers.
+oneterm-workspace.workspace = true
+oneterm-theme.workspace = true
+oneterm-settings.workspace = true
+oneterm-state.workspace = true
+oneterm-terminal-view.workspace = true
+oneterm-sftp-ui.workspace = true
+oneterm-session-ui.workspace = true
+oneterm-settings-ui.workspace = true
 
 gpui.workspace = true
 gpui_platform.workspace = true

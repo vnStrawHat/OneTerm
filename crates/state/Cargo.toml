@@ -1,0 +1,14 @@
+[package]
+name = "oneterm-state"
+description = "OneTerm cross-cutting global application state (AppState) + notification helpers."
+publish = false
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+oneterm-core.workspace = true
+oneterm-terminal.workspace = true
+gpui.workspace = true
+gpui-component.workspace = true

@@ -1,0 +1,19 @@
+[package]
+name = "oneterm-terminal"
+description = "Terminal engine for OneTerm: TerminalSession trait + content/palette/encode/osc/url/search. Owns alacritty_terminal (no GPUI)."
+publish = false
+edition.workspace = true
+
+[features]
+test-support = []
+
+[lints]
+workspace = true
+
+[dependencies]
+oneterm-core.workspace = true
+alacritty_terminal.workspace = true
+async-channel.workspace = true
+linkify.workspace = true
+base64.workspace = true
+log.workspace = true

@@ -1,0 +1,22 @@
+[package]
+name = "oneterm-settings-ui"
+description = "OneTerm settings feature: the General Settings window (general, terminal, appearance, key bindings, about)."
+publish = false
+edition.workspace = true
+build = "build.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+oneterm-core.workspace = true
+oneterm-settings.workspace = true
+oneterm-theme.workspace = true
+oneterm-actions.workspace = true
+
+gpui.workspace = true
+gpui-component.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true

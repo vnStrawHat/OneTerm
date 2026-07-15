@@ -10,7 +10,7 @@ use gpui_component::Root;
 #[cfg(not(target_os = "linux"))]
 use gpui_component::TitleBar;
 
-use oneterm_ui::layout::{OneTermWorkspace, save_dock_state_on_close};
+use oneterm_workspace::{OneTermWorkspace, save_dock_state_on_close};
 
 /// Open the main window and return its task handle.
 pub fn open_window(cx: &mut App) -> Task<anyhow::Result<WindowHandle<Root>>> {

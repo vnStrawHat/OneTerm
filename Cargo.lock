@@ -5160,6 +5160,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
+name = "oneterm-actions"
+version = "0.0.0"
+dependencies = [
+ "gpui",
+ "gpui-component",
+ "oneterm-core",
+ "serde",
+]
+
+[[package]]
 name = "oneterm-app"
 version = "0.0.0"
 dependencies = [
@@ -5172,7 +5182,17 @@ dependencies = [
  "gpui_platform",
  "log",
  "oneterm-core",
- "oneterm-ui",
+ "oneterm-local-shell",
+ "oneterm-session-ui",
+ "oneterm-settings",
+ "oneterm-settings-ui",
+ "oneterm-sftp-ui",
+ "oneterm-ssh",
+ "oneterm-state",
+ "oneterm-terminal",
+ "oneterm-terminal-view",
+ "oneterm-theme",
+ "oneterm-workspace",
  "windows-sys 0.59.0",
 ]
 
@@ -5180,10 +5200,7 @@ dependencies = [
 name = "oneterm-core"
 version = "0.0.0"
 dependencies = [
- "alacritty_terminal",
  "async-channel 2.5.0",
- "base64",
- "linkify",
  "log",
  "serde",
  "serde_json",
@@ -5199,7 +5216,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "oneterm-local"
+name = "oneterm-local-shell"
 version = "0.0.0"
 dependencies = [
  "alacritty_terminal",
@@ -5207,8 +5224,71 @@ dependencies = [
  "libc",
  "log",
  "oneterm-core",
+ "oneterm-terminal",
  "polling",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "oneterm-session-ui"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "gpui-component",
+ "log",
+ "oneterm-actions",
+ "oneterm-core",
+ "oneterm-state",
+ "oneterm-terminal",
+ "oneterm-terminal-view",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "oneterm-settings"
+version = "0.0.0"
+dependencies = [
+ "gpui",
+ "log",
+ "oneterm-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "oneterm-settings-ui"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "gpui-component",
+ "log",
+ "oneterm-actions",
+ "oneterm-core",
+ "oneterm-settings",
+ "oneterm-theme",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "oneterm-sftp-ui"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "gpui",
+ "gpui-component",
+ "log",
+ "oneterm-actions",
+ "oneterm-core",
+ "oneterm-state",
+ "oneterm-terminal",
+ "oneterm-theme",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -5220,6 +5300,7 @@ dependencies = [
  "async-channel 2.5.0",
  "log",
  "oneterm-core",
+ "oneterm-terminal",
  "russh",
  "russh-sftp",
  "tokio",
@@ -5227,24 +5308,76 @@ dependencies = [
 ]
 
 [[package]]
-name = "oneterm-ui"
+name = "oneterm-state"
+version = "0.0.0"
+dependencies = [
+ "gpui",
+ "gpui-component",
+ "oneterm-core",
+ "oneterm-terminal",
+]
+
+[[package]]
+name = "oneterm-terminal"
 version = "0.0.0"
 dependencies = [
  "alacritty_terminal",
- "anyhow",
+ "async-channel 2.5.0",
+ "base64",
+ "linkify",
+ "log",
+ "oneterm-core",
+]
+
+[[package]]
+name = "oneterm-terminal-view"
+version = "0.0.0"
+dependencies = [
+ "alacritty_terminal",
  "async-channel 2.5.0",
  "chrono",
  "gpui",
  "gpui-component",
- "gpui-component-assets",
- "gpui_platform",
  "itertools 0.14.0",
  "log",
+ "oneterm-actions",
  "oneterm-core",
  "oneterm-highlight",
- "oneterm-local",
- "oneterm-ssh",
+ "oneterm-settings",
+ "oneterm-state",
+ "oneterm-terminal",
+ "oneterm-theme",
+ "serde_json",
+]
+
+[[package]]
+name = "oneterm-theme"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "gpui-component",
+ "log",
+ "oneterm-actions",
+ "oneterm-settings",
  "rust-embed",
+]
+
+[[package]]
+name = "oneterm-workspace"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "gpui",
+ "gpui-component",
+ "log",
+ "oneterm-actions",
+ "oneterm-core",
+ "oneterm-settings",
+ "oneterm-state",
+ "oneterm-terminal",
+ "oneterm-theme",
  "serde",
  "serde_json",
  "sysinfo 0.37.2",

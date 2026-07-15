@@ -83,30 +83,31 @@ cargo test --workspace
 - ❌ `git clone` outside the workspace.
 - ❌ Any command that modifies files outside project directory.
 - ❌ `rm -rf` without a guard path.
-- ❌ **Rootless / disk-wide searches** — `find /`, `grep -r /`, `rg` from the FS root, or any tool called without an explicit scope. **ALWAYS pass a concrete directory path** (e.g. `find crates/ui/src -name '*.rs'`, `grep -rn 'foo' crates/`). This is a hard rule — see Core principle 7.
+- ❌ **Rootless / disk-wide searches** — `find /`, `grep -r /`, `rg` from the FS root, or any tool called without an explicit scope. **ALWAYS pass a concrete directory path** (e.g. `find crates/terminal-view/src -name '*.rs'`, `grep -rn 'foo' crates/`). This is a hard rule — see Core principle 7.
 
 ### 3.2. Feature workflow
 
 1. **Read first** `reference/gpui-component/CLAUDE.md` and the corresponding code in `reference/gpui-component/` before writing UI.
 2. **Read** [`docs/agents/structure.md`](docs/agents/structure.md) to know which crate contains what + the dependency rules.
 3. **Read** [`docs/agents/code-style.md`](docs/agents/code-style.md) to grasp the code conventions.
-4. **Update `core` first** if you need to add a domain type / trait.
-5. **Implement** in the appropriate crate (`ssh` / `local` / `ui`).
-6. **Wire it** into `ui::state::AppState` and `layout::workspace`.
+4. **Update `core` first** if you need to add a domain type / trait (or `terminal` for an engine type).
+5. **Implement** in the appropriate crate: a backend in `ssh` / `local`; a feature in `terminal-view` / `sftp-ui` / `session-ui` / `settings-ui`; shared state in `state` / `settings`.
+6. **Wire it** into `oneterm_state::AppState` and the feature's `init()`; the app shell (`oneterm-workspace`) drives features via the `WorkspaceCommands` registry — never add a shell→feature or UI→backend dependency.
 7. Run `cargo fmt && cargo clippy --workspace --all-targets -- -D warnings`.
 8. Commit with a Conventional Commits message (see section 4).
 
 ### 3.3. When adding a new gpui-component
 
-- Place the file in `crates/ui/src/components/<name>.rs`.
+- A **feature-specific** view goes in that feature crate (`crates/terminal-view`, `crates/sftp-ui`, `crates/session-ui`, `crates/settings-ui`).
+- A **shared statusbar/shell widget** goes in `crates/workspace/src/widgets/<name>.rs`.
 - If it is a stateless widget → prefer `RenderOnce`.
 - If it needs state → `Render` + `Entity<T>` for the state, exposed via `cx.new(|_| State::new())`.
 - Write a `///` doc comment for every public item.
 
 ### 3.4. Theme & icon
 
-- Theme: create a JSON file in `crates/ui/themes/`, then add it to the `BUILTIN_THEMES` list in `crates/ui/src/theme.rs`.
-- Icon: OneTerm ships its own `AppIcon` enum (see `crates/ui/src/icon.rs`). Drop an SVG into `crates/ui/assets/icons/<name>.svg` — `build.rs` + the `icon_named!` macro auto-generate the `AppIcon::<PascalName>` variant (e.g. `arrow-right.svg` → `AppIcon::ArrowRight`). The gpui-component `IconName` (Lucide) set is also available for built-in icons (see `reference/gpui-component/crates/ui/src/icon.rs`).
+- Theme: create a JSON file in `crates/theme/themes/`, then add it to the `BUILTIN_THEMES` list in `crates/theme/src/theme.rs`.
+- Icon: OneTerm ships its own `AppIcon` enum (see `crates/theme/src/icon.rs`). Drop an SVG into `crates/theme/assets/icons/<name>.svg` — `crates/theme/build.rs` + the `icon_named!` macro auto-generate the `AppIcon::<PascalName>` variant (e.g. `arrow-right.svg` → `AppIcon::ArrowRight`). The gpui-component `IconName` (Lucide) set is also available for built-in icons (see `reference/gpui-component/crates/ui/src/icon.rs`).
 - Do not hardcode colors in a component — read from `cx.theme()` / `TerminalTheme`.
 
 ---
@@ -221,7 +222,7 @@ When done, the clean packaged build lives in `dist/oneterm-<triple>/` containing
 ### 7.2. FAQ
 
 **Q: Where should a new Rust file go?**
-A: See [`docs/agents/structure.md`](docs/agents/structure.md). There are 5 crates (`app`, `core`, `ssh`, `local`, `ui`) with strict dependency rules; the UI must not import from `ssh`/`local`.
+A: See [`docs/agents/structure.md`](docs/agents/structure.md). The workspace is layered: low crates (`core`, `terminal`, `actions`, `settings`, `state`, `theme`, `highlight`), the feature-agnostic shell (`workspace`), four feature crates (`terminal-view`, `sftp-ui`, `session-ui`, `settings-ui`), two backends (`ssh`, `local`), and the `app` binary. The dependency rules are strict: no cycle, no feature→backend edge (features create sessions via `oneterm_terminal::SessionFactory`), and the shell never depends on a feature.
 
 **Q: I need to add a new gpui component — where do I start?**
 A: Read [`docs/agents/code-style.md` § 2](docs/agents/code-style.md), then `grep -rn "<component name>" reference/gpui-component/crates/ui/src/` to find the API.

@@ -72,7 +72,7 @@ impl SshCwdSource {
     }
 }
 
-impl oneterm_core::CwdSource for SshCwdSource {
+impl oneterm_terminal::CwdSource for SshCwdSource {
     fn cwd(&self) -> Option<PathBuf> {
         self.state.lock().unwrap().cwd.clone()
     }

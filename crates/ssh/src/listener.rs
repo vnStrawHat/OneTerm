@@ -20,8 +20,8 @@ use log::warn;
 
 use alacritty_terminal::event::{Event, EventListener};
 
-use oneterm_core::SessionEvent;
-use oneterm_core::terminal::{
+use oneterm_terminal::SessionEvent;
+use oneterm_terminal::{
     ColorFormatter, Osc133Kind, OscPayload, PendingColorQuery, SharedColorQueries,
     TerminalSecurityPolicy, new_color_queries, parse_cwd_url, parse_osc,
 };
@@ -327,8 +327,8 @@ mod tests {
     use std::sync::{Mutex, Once};
 
     use log::{LevelFilter, Log, Metadata, Record};
-    use oneterm_core::SessionEvent;
-    use oneterm_core::terminal::test_support::FakeTransport;
+    use oneterm_terminal::SessionEvent;
+    use oneterm_terminal::test_support::FakeTransport;
 
     use super::*;
     use crate::state::new_shared;

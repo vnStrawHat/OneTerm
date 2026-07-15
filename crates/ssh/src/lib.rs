@@ -20,7 +20,8 @@ pub mod task;
 pub use config::{SshAuthMethod, SshConfig};
 pub use listener::{Cmd, SshListener};
 pub use oneterm_core::{FileEntry, FileStat};
-pub use session::{PtySize, SshSession, connect};
+pub use oneterm_terminal::PtySize;
+pub use session::{SshSession, connect};
 pub use sftp::{SftpCmd, SftpEvent, SftpSession};
 
 pub use oneterm_core as core;

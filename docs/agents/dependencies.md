@@ -33,7 +33,7 @@ gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "
 gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "ea6b194db04cc7c0474851f07c7d5b7a9df6a98b" }
 ```
 
-In each sub-crate (e.g. `crates/ui/Cargo.toml`):
+In each sub-crate that uses gpui (e.g. `crates/terminal-view/Cargo.toml`):
 
 ```toml
 [dependencies]
@@ -69,7 +69,7 @@ Before adding a new crate, ask: "is this crate already in `reference/gpui-compon
 This project uses gpui-component directly from git. When upstream changes its API:
 
 1. Read the release note / PR diff in `reference/gpui-component/`.
-2. Update the corresponding code in `crates/ui/`.
+2. Update the corresponding code in the UI crates (`crates/workspace`, `crates/terminal-view`, `crates/sftp-ui`, `crates/session-ui`, `crates/settings-ui`, or the shared `crates/theme` / `crates/state`).
 3. If the change is breaking → update `CHANGELOG.md` (if any) + `docs/architecture.md`.
 
 ### Quick reference for important gpui-component entry points

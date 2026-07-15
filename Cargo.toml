@@ -2,9 +2,18 @@
 members = [
     "crates/app",
     "crates/core",
-    "crates/local",
+    "crates/terminal",
+    "crates/actions",
+    "crates/settings",
+    "crates/state",
+    "crates/theme",
+    "crates/workspace",
+    "crates/terminal-view",
+    "crates/sftp-ui",
+    "crates/session-ui",
+    "crates/settings-ui",
+    "crates/local-shell",
     "crates/ssh",
-    "crates/ui",
 ]
 resolver = "3"
 # Vendored OneTerm fork of alacritty_terminal + vte (patched below). Excluded as
@@ -24,10 +33,19 @@ gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", 
 
 # Internal crates
 oneterm-core = { path = "crates/core" }
+oneterm-terminal = { path = "crates/terminal" }
+oneterm-actions = { path = "crates/actions" }
+oneterm-settings = { path = "crates/settings" }
+oneterm-state = { path = "crates/state" }
+oneterm-theme = { path = "crates/theme" }
+oneterm-workspace = { path = "crates/workspace" }
+oneterm-terminal-view = { path = "crates/terminal-view" }
+oneterm-sftp-ui = { path = "crates/sftp-ui" }
+oneterm-session-ui = { path = "crates/session-ui" }
+oneterm-settings-ui = { path = "crates/settings-ui" }
 oneterm-highlight = { path = "crates/highlight" }
-oneterm-local = { path = "crates/local" }
+oneterm-local-shell = { path = "crates/local-shell" }
 oneterm-ssh = { path = "crates/ssh" }
-oneterm-ui = { path = "crates/ui" }
 
 # Terminal engine — fork Zed của alacritty_terminal (bản patched có TerminalContent/display_iter)
 # Phải khớp rev mà GPUI dùng (xem docs/agents/dependencies.md §1)
@@ -97,22 +115,24 @@ smol = { opt-level = 3 }
 # 20-100x slower, so the UI thread never returns to the Windows message pump
 # (window goes "Not Responding") and the render can't keep pace with the pump.
 #
-# The hot path spans FOUR of our crates, not just the UI:
-#   - oneterm-ui:        the ~13k-quad paint loop + box-drawing geometry + layout.
+# The hot path spans FOUR of our crates, not just the terminal view:
+#   - oneterm-terminal-view: the ~13k-quad paint loop + box-drawing geometry + layout.
 #   - alacritty_terminal: Term::advance() parsing the fire's escape stream.
-#   - oneterm-core:      TerminalContent::from() clones ~5.4k cells per snapshot
+#   - oneterm-terminal:  TerminalContent::from() clones ~5.4k cells per snapshot
 #                        (held under the Term FairMutex) — unoptimized this
 #                        starves the PTY pump thread.
-#   - oneterm-local / -ssh: the PTY pump loop + OSC side-parser + state locks.
+#   - oneterm-local-shell / -ssh: the PTY pump loop + OSC side-parser + state locks.
 # Leaving any of these at opt-level = 0 leaves a slow link in the chain that
 # blocks the whole pipeline, so DOOM-fire renders choppily / incompletely in
-# debug even after the UI crate is optimized.
+# debug even after the view crate is optimized.
 #
 # Trade-off: stepping through the terminal backend in a debugger is less precise.
 # Drop the crate you need to step through back to opt-level = 0 temporarily.
-oneterm-ui = { opt-level = 3 }
+oneterm-terminal-view = { opt-level = 3 }
 oneterm-core = { opt-level = 3 }
-oneterm-local = { opt-level = 3 }
+oneterm-terminal = { opt-level = 3 }
+oneterm-settings = { opt-level = 3 }
+oneterm-local-shell = { opt-level = 3 }
 oneterm-ssh = { opt-level = 3 }
 alacritty_terminal = { opt-level = 3 }
 

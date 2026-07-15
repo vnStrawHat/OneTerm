@@ -8,9 +8,11 @@
 
 use std::borrow::Cow;
 
-use oneterm_ui::layout::OneTermWorkspace;
+use oneterm_workspace::OneTermWorkspace;
 
 pub mod assets;
+pub mod init;
+pub mod session_factory;
 pub mod window;
 
 use assets::CustomAssets;
@@ -69,8 +71,12 @@ pub fn run() {
         // Set Lilex as the theme's default monospace font (after init registers Theme).
         cx.global_mut::<gpui_component::Theme>().mono_font_family = "Lilex".into();
 
-        // Initialize the OneTerm UI (register_panel x3, theme action handlers).
-        oneterm_ui::init(cx);
+        // Install the session factory (local + SSH backends) before the UI can
+        // create any terminal session. Keeps the UI→backend edge out of the graph.
+        crate::session_factory::install();
+
+        // Initialize the OneTerm UI (globals + feature panel registration + commands).
+        crate::init::init(cx);
         // Bind key bindings for the workspace.
         OneTermWorkspace::bind_keys(cx);
 

@@ -11,8 +11,8 @@ use alacritty_terminal::term::Term;
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use russh::ChannelMsg;
 
-use oneterm_core::SessionEvent;
-use oneterm_core::terminal::default_color_for_index;
+use oneterm_terminal::SessionEvent;
+use oneterm_terminal::default_color_for_index;
 
 use crate::handler::SshClientHandler;
 use crate::listener::{Cmd, SshListener};

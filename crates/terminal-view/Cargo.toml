@@ -1,0 +1,35 @@
+[package]
+name = "oneterm-terminal-view"
+description = "OneTerm terminal feature: the GPUI terminal panel, rendering, input, split spaces, and terminal settings panel."
+publish = false
+edition.workspace = true
+
+[features]
+# UI-side diagnostics overlay (frame timing). Backend diagnostics are enabled
+# from the app crate.
+terminal-diagnostics = []
+
+[lints]
+workspace = true
+
+[dependencies]
+oneterm-core.workspace = true
+oneterm-terminal.workspace = true
+oneterm-settings.workspace = true
+oneterm-state.workspace = true
+oneterm-theme.workspace = true
+oneterm-actions.workspace = true
+oneterm-highlight.workspace = true
+
+gpui.workspace = true
+gpui-component.workspace = true
+alacritty_terminal.workspace = true
+async-channel.workspace = true
+itertools = "0.14"
+log.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+oneterm-terminal = { workspace = true, features = ["test-support"] }

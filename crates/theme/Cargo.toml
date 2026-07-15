@@ -1,0 +1,18 @@
+[package]
+name = "oneterm-theme"
+description = "OneTerm theme registry + AppIcon icon set + embedded icon assets."
+publish = false
+edition.workspace = true
+build = "build.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+oneterm-settings.workspace = true
+oneterm-actions.workspace = true
+gpui.workspace = true
+gpui-component.workspace = true
+anyhow.workspace = true
+log.workspace = true
+rust-embed = "8.7"

@@ -1,20 +1,14 @@
 [package]
 name = "oneterm-core"
-description = "Domain model & business logic for OneTerm (no GPUI)."
+description = "Domain model & business logic for OneTerm (no GPUI, no alacritty)."
 publish = false
 edition.workspace = true
-
-[features]
-test-support = []
 
 [lints]
 workspace = true
 
 [dependencies]
-alacritty_terminal.workspace = true
 async-channel.workspace = true
-linkify.workspace = true
-base64.workspace = true
 thiserror.workspace = true
 log.workspace = true
 serde.workspace = true

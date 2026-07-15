@@ -1,13 +1,14 @@
 //! Custom AssetSource — merges the gpui-component Assets with OneTerm's UiAssets.
 //!
-//! `UiAssets` (from `oneterm_ui::icon`) serves SVGs from `crates/ui/assets/icons/`,
-//! letting `Icon::new(AppIcon::Terminal)` render the correct icon.
+//! `UiAssets` (from `oneterm_theme::icon`) serves SVGs from
+//! `crates/theme/assets/icons/`, letting `Icon::new(AppIcon::Terminal)` render
+//! the correct icon.
 //!
 //! Load order: UiAssets (custom icons) → gpui-component Assets (built-in icons).
 
 use gpui::{AssetSource, SharedString};
 use gpui_component_assets::Assets;
-use oneterm_ui::icon::UiAssets;
+use oneterm_theme::icon::UiAssets;
 
 pub struct CustomAssets;
 

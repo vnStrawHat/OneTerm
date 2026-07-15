@@ -10,12 +10,11 @@ use std::path::PathBuf;
 use alacritty_terminal::selection::SelectionType;
 use async_channel::Receiver;
 
-use oneterm_core::terminal::model::TerminalModel;
-use oneterm_core::terminal::mouse_encode::{MouseModifiers, TerminalMouseButton};
-use oneterm_core::terminal::{DynamicColors, TerminalContent, TerminalInfo, TerminalQueryState};
-use oneterm_core::{
-    CursorBounds, SearchMatch, SearchOptions, SessionEvent, SftpBackend, TerminalSession,
-};
+use oneterm_core::SftpBackend;
+use oneterm_terminal::model::TerminalModel;
+use oneterm_terminal::mouse_encode::{MouseModifiers, TerminalMouseButton};
+use oneterm_terminal::{CursorBounds, SearchMatch, SearchOptions, SessionEvent, TerminalSession};
+use oneterm_terminal::{DynamicColors, TerminalContent, TerminalInfo, TerminalQueryState};
 
 use crate::session::SshSession;
 
@@ -51,7 +50,7 @@ impl TerminalSession for SshSession {
         &self,
         start_line: usize,
         count: usize,
-    ) -> (Vec<oneterm_core::terminal::IndexedCell>, usize) {
+    ) -> (Vec<oneterm_terminal::IndexedCell>, usize) {
         self.model().query_line_range_cells(start_line, count)
     }
 
@@ -251,9 +250,9 @@ impl TerminalSession for SshSession {
     }
 
     // ── Network Stats ───────────────────────────────────────────────
-    fn network_stats(&self) -> Option<oneterm_core::NetStats> {
+    fn network_stats(&self) -> Option<oneterm_terminal::NetStats> {
         let st = self.state.lock().unwrap();
-        Some(oneterm_core::NetStats {
+        Some(oneterm_terminal::NetStats {
             rx_bytes: st.rx_bytes,
             tx_bytes: st.tx_bytes,
         })
@@ -269,7 +268,7 @@ impl TerminalSession for SshSession {
     }
 
     // ── Cwd source ──────────────────────────────────────────────────
-    fn cwd_source(&self) -> Option<std::sync::Arc<dyn oneterm_core::CwdSource>> {
+    fn cwd_source(&self) -> Option<std::sync::Arc<dyn oneterm_terminal::CwdSource>> {
         Some(std::sync::Arc::new(crate::state::SshCwdSource::new(
             self.state.clone(),
         )))

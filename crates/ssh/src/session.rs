@@ -26,7 +26,7 @@ use russh::client;
 use russh::client::AuthResult;
 use russh::keys::{PrivateKey, PrivateKeyWithHashAlg, load_secret_key};
 
-use oneterm_core::SessionEvent;
+use oneterm_terminal::{PtySize, SessionEvent};
 
 use crate::config::{SshAuthMethod, SshConfig};
 use crate::counting_stream::CountingStream;
@@ -36,13 +36,6 @@ use crate::sftp::{SftpCmd, SftpEvent, SftpSession};
 use crate::sftp_task::sftp_task;
 use crate::state::{SharedState, new_shared};
 use crate::task::ssh_main_task;
-
-/// Initial PTY size.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PtySize {
-    pub rows: u16,
-    pub cols: u16,
-}
 
 /// Dimensions for `Term::new` / `Term::resize`.
 pub(crate) struct TermSize {
@@ -86,7 +79,7 @@ pub fn connect(
     cfg: SshConfig,
     initial: PtySize,
     scrollback_history: usize,
-) -> oneterm_core::Result<Box<dyn oneterm_core::TerminalSession>> {
+) -> oneterm_core::Result<Box<dyn oneterm_terminal::TerminalSession>> {
     log::info!(
         "SshSession::connect: host={}, port={}, user={}, rows={}, cols={}",
         cfg.host,
@@ -273,7 +266,7 @@ pub fn connect(
                 marked_text: Mutex::new(None),
                 sftp: Mutex::new(sftp_session),
             };
-            Ok(Box::new(session) as Box<dyn oneterm_core::TerminalSession>)
+            Ok(Box::new(session) as Box<dyn oneterm_terminal::TerminalSession>)
         }
         Err(e) => {
             log::error!("SshSession: connect failed: {e}");

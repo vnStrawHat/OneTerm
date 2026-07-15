@@ -1,0 +1,23 @@
+[package]
+name = "oneterm-sftp-ui"
+description = "OneTerm SFTP feature: the file-browser panel, transfer queue, and table rendering."
+publish = false
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+oneterm-core.workspace = true
+oneterm-terminal.workspace = true
+oneterm-state.workspace = true
+oneterm-theme.workspace = true
+oneterm-actions.workspace = true
+
+gpui.workspace = true
+gpui-component.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
