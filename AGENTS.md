@@ -8,6 +8,7 @@
 |---|---|---|
 | 1 | Project introduction & core principles | `AGENTS.md` (this file) |
 | 2 | Project structure (directory tree, conventions, dependency graph) | [`docs/agents/structure.md`](docs/agents/structure.md) |
+| 2a | **Crate & dependency rules (R1–R12)** | [`docs/agents/crate-dependency-rules.md`](docs/agents/crate-dependency-rules.md) |
 | 3 | Development guide (workflow, commands, git) | `AGENTS.md` |
 | 4 | Code conventions (style, GPUI, async, error) | [`docs/agents/code-style.md`](docs/agents/code-style.md) |
 | 5 | Dependencies, rev lock, gpui-component integration, reference-first research | [`docs/agents/dependencies.md`](docs/agents/dependencies.md) |
@@ -15,7 +16,7 @@
 
 > 📚 **Required reading** before writing code:
 > 1. `AGENTS.md` (this file) — to understand the overview, workflow, git, and quality gate.
-> 2. [`docs/agents/structure.md`](docs/agents/structure.md) — to learn the crate structure, directory tree, and dependency graph.
+> 2. [`docs/agents/structure.md`](docs/agents/structure.md) — to learn the crate structure, directory tree, and dependency graph; and [`docs/agents/crate-dependency-rules.md`](docs/agents/crate-dependency-rules.md) for the **hard crate & dependency rules (R1–R12)**.
 > 3. [`docs/agents/code-style.md`](docs/agents/code-style.md) — to learn the code conventions (GPUI, async, error).
 > 4. [`docs/agents/dependencies.md`](docs/agents/dependencies.md) — to learn the rev lock & reference-first research.
 
@@ -92,7 +93,7 @@ cargo test --workspace
 3. **Read** [`docs/agents/code-style.md`](docs/agents/code-style.md) to grasp the code conventions.
 4. **Update `core` first** if you need to add a domain type / trait (or `terminal` for an engine type).
 5. **Implement** in the appropriate crate: a backend in `ssh` / `local`; a feature in `terminal-view` / `sftp-ui` / `session-ui` / `settings-ui`; shared state in `state` / `settings`.
-6. **Wire it** into `oneterm_state::AppState` and the feature's `init()`; the app shell (`oneterm-workspace`) drives features via the `WorkspaceCommands` registry — never add a shell→feature or UI→backend dependency.
+6. **Wire it** into `oneterm_state::AppState` and the feature's `init()`; the app shell (`oneterm-workspace`) drives features via the `WorkspaceCommands` registry — never add a shell→feature or UI→backend dependency. **Obey the hard crate & dependency rules (R1–R12)** in [`docs/agents/crate-dependency-rules.md`](docs/agents/crate-dependency-rules.md); after touching crate deps, run that doc's "full-graph verification" `cargo tree` commands.
 7. Run `cargo fmt && cargo clippy --workspace --all-targets -- -D warnings`.
 8. Commit with a Conventional Commits message (see section 4).
 
@@ -200,6 +201,7 @@ When done, the clean packaged build lives in `dist/oneterm-<triple>/` containing
 | What you need to know | Where to read |
 |---|---|
 | Project structure (directory tree, conventions, dependency graph) | [`docs/agents/structure.md`](docs/agents/structure.md) |
+| **Crate & dependency rules (R1–R12)** | [`docs/agents/crate-dependency-rules.md`](docs/agents/crate-dependency-rules.md) |
 | Code conventions (style, GPUI, async, error) | [`docs/agents/code-style.md`](docs/agents/code-style.md) |
 | Rev lock, dependencies, reference-first | [`docs/agents/dependencies.md`](docs/agents/dependencies.md) |
 | **Terminal backend design** (local + ssh, alacritty render) | [`docs/terminal-backend.md`](docs/terminal-backend.md) |
@@ -222,7 +224,7 @@ When done, the clean packaged build lives in `dist/oneterm-<triple>/` containing
 ### 7.2. FAQ
 
 **Q: Where should a new Rust file go?**
-A: See [`docs/agents/structure.md`](docs/agents/structure.md). The workspace is layered: low crates (`core`, `terminal`, `actions`, `settings`, `state`, `theme`, `highlight`), the feature-agnostic shell (`workspace`), four feature crates (`terminal-view`, `sftp-ui`, `session-ui`, `settings-ui`), two backends (`ssh`, `local`), and the `app` binary. The dependency rules are strict: no cycle, no feature→backend edge (features create sessions via `oneterm_terminal::SessionFactory`), and the shell never depends on a feature.
+A: See [`docs/agents/structure.md`](docs/agents/structure.md) — the crate map is in § 3 and the **hard crate & dependency rules (R1–R12)** are in [`docs/agents/crate-dependency-rules.md`](docs/agents/crate-dependency-rules.md). The workspace is layered: low crates (`core`, `terminal`, `actions`, `settings`, `state`, `theme`, `highlight`), the feature-agnostic shell (`workspace`), four feature crates (`terminal-view`, `sftp-ui`, `session-ui`, `settings-ui`), two backends (`ssh`, `local-shell`), and the `app` binary. The dependency rules are strict: no cycle, no feature→backend edge (features create sessions via `oneterm_terminal::SessionFactory`), and the shell never depends on a feature.
 
 **Q: I need to add a new gpui component — where do I start?**
 A: Read [`docs/agents/code-style.md` § 2](docs/agents/code-style.md), then `grep -rn "<component name>" reference/gpui-component/crates/ui/src/` to find the API.

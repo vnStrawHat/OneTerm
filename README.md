@@ -162,6 +162,7 @@ Packaged output lands in `dist/oneterm-<triple>/`:
 
 - [`AGENTS.md`](AGENTS.md) — developer & AI-agent guide
 - [`docs/agents/structure.md`](docs/agents/structure.md) — project structure & dependency graph
+- [`docs/agents/crate-dependency-rules.md`](docs/agents/crate-dependency-rules.md) — hard crate & dependency rules (R1–R12)
 - [`docs/agents/code-style.md`](docs/agents/code-style.md) — code conventions
 - [`docs/agents/dependencies.md`](docs/agents/dependencies.md) — dependencies & rev lock
 - [`docs/terminal-backend.md`](docs/terminal-backend.md) — terminal backend design (local + ssh)

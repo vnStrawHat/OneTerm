@@ -162,11 +162,21 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 | `local-shell` (`oneterm-local-shell`) | `core`, `terminal` | backend | Local PTY (`alacritty_terminal::tty` + ConPTY); `LocalSession` (impl `TerminalSession`). |
 | `app` (`oneterm-app`) | shell + all four features + `settings`/`theme`/`state` + `ssh` + `local-shell` | binary | Only crate that knows every layer. Installs `AppSessionFactory` (→ `ssh`/`local-shell`), runs `init()` (globals + feature `init()` + `WorkspaceCommands`), opens the window. Owns the `terminal-diagnostics` feature forwarding. |
 
-> 🔗 **Dependency rules (verified):**
-> - **No dependency cycle** — the graph is a DAG (low → shared → shell/feature → app).
-> - **No UI→backend edge** — `ssh`/`local` are depended on **only** by `app` (verify: `cargo tree -i oneterm-ssh -e normal`). UI features create sessions via `oneterm_terminal::SessionFactory`, installed by `app`.
-> - `core` has **no alacritty** (verify: `cargo tree -p oneterm-core` shows no `alacritty_terminal`).
-> - The shell (`workspace`) has **no feature/backend deps**; it builds panels by name and drives features via the command registry.
+## 3.1 Crate & dependency rules
+
+The **hard crate & dependency rules** — the layer diagram, the invariants
+**R1–R12** (no cycle, no UI→backend edge, feature-agnostic shell, no feature
+cross-deps except `session-ui → terminal-view`, `core`/`terminal` stay
+gpui/alacritty-free, …), and the one-shot `cargo tree` verification — live in a
+dedicated file:
+
+> 📐 **[`docs/agents/crate-dependency-rules.md`](crate-dependency-rules.md)** — read
+> and obey it before touching any crate's dependencies.
+
+Quick summary: dependencies point **down only** (L0 → L4), the graph is a DAG, the
+shell (`workspace`) never depends on a feature or backend, and UI crates create
+sessions via `oneterm_terminal::SessionFactory` instead of depending on
+`ssh`/`local-shell`. See the doc for the full table and verification commands.
 
 ## 4. When adding a new crate / module
 
@@ -174,7 +184,7 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 - Crate package names use the `oneterm-<name>` form; the `core` re-export inside each backend crate is aliased as `core` (e.g. `use oneterm_core as core`).
 - Path dependencies under the workspace directory are automatically workspace members; still list new crates in the root `members = [...]` for clarity.
 - Add the crate to the dependency table in §3 and the tree in §1.
-- **Respect the layering**: a new shared type goes in the lowest crate that needs it; a new feature is its own `*-ui` crate that depends on the shared layers only; keep `ssh`/`local` out of every UI crate (route through `SessionFactory`).
+- **Respect the layering** (see the hard rules in [`crate-dependency-rules.md`](crate-dependency-rules.md)): a new shared type goes in the lowest crate that needs it (R10); a new feature is its own `*-ui` crate that depends on the shared layers only (R2, R5); keep `ssh`/`local-shell` out of every UI crate — route through `SessionFactory` (R3). After adding a crate, re-run that doc's "full-graph verification" commands.
 
 ## 5. Planned structure expansion (not yet created)
 
