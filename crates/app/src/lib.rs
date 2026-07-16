@@ -13,6 +13,7 @@ use oneterm_workspace::OneTermWorkspace;
 pub mod assets;
 pub mod init;
 pub mod session_factory;
+pub mod side_panel;
 pub mod window;
 
 use assets::CustomAssets;

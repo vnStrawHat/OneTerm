@@ -121,30 +121,30 @@ impl super::OneTermWorkspace {
         }
     }
 
-    /// Action handler: add a new SessionPanel to the right dock.
+    /// Action handler: ensure the right dock (which hosts the combined Side
+    /// panel) is open. The Side panel always contains the Session section, so
+    /// "Add Session" simply reveals the right dock rather than adding a new
+    /// panel — the right dock is now a single `DockItem::Panel`, and
+    /// `DockArea::add_panel(Right)` is a no-op on `DockItem::Panel`.
     pub(crate) fn on_action_add_session(
         &mut self,
         _: &AddSession,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let panel = super::build_named_panel("session", &self.dock_area.downgrade(), window, cx);
-        self.dock_area.update(cx, |dock_area, cx| {
-            dock_area.add_panel(panel, DockPlacement::Right, None, window, cx);
-        });
+        super::set_right_dock_open(&self.dock_area, true, window, cx);
     }
 
-    /// Action handler: add a new SftpPanel to the right dock.
+    /// Action handler: ensure the right dock (which hosts the combined Side
+    /// panel) is open. The Side panel always contains the SFTP section, so
+    /// "Add SFTP Browser" simply reveals the right dock.
     pub(crate) fn on_action_add_sftp_browser(
         &mut self,
         _: &AddSftpBrowser,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let panel = super::build_named_panel("sftp", &self.dock_area.downgrade(), window, cx);
-        self.dock_area.update(cx, |dock_area, cx| {
-            dock_area.add_panel(panel, DockPlacement::Right, None, window, cx);
-        });
+        super::set_right_dock_open(&self.dock_area, true, window, cx);
     }
 
     /// Action handler: toggle the dock toggle button (expand/collapse button).

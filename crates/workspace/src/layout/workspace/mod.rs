@@ -59,7 +59,7 @@ pub fn save_dock_state_on_close(cx: &App) {
     _ = persistence::save_state(&dock_state, zoomed_name.as_deref(), tbv, "on_close");
 }
 
-pub const MAIN_DOCK_VERSION: usize = 2;
+pub const MAIN_DOCK_VERSION: usize = 3;
 pub const MAIN_DOCK_ID: &str = "main-dock";
 
 /// Set the Right Dock open/closed (no-op if there is no right dock).

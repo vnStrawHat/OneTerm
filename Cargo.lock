@@ -5193,6 +5193,7 @@ dependencies = [
  "oneterm-terminal-view",
  "oneterm-theme",
  "oneterm-workspace",
+ "serde_json",
  "windows-sys 0.59.0",
 ]
 
