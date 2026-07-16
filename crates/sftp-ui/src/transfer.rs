@@ -42,6 +42,8 @@ impl SftpPanel {
             cwd.display()
         );
 
+        let backend_key = super::browser_state::backend_key(&Some(sftp.clone()));
+
         cx.spawn(async move |_panel, cx| {
             for local_path in local_paths {
                 // Remote path: cwd / filename
@@ -57,24 +59,29 @@ impl SftpPanel {
                     remote_path.display()
                 );
 
-                // Add a TransferItem to the panel — get transfer_id before calling upload.
+                // Add a TransferItem — allocate the id from the per-backend store,
+                // push into both the store (source of truth) and the active view.
                 let transfer_id = cx.update(|cx| {
                     panel.update(cx, |this, cx| {
-                        let id = this.next_transfer_id;
-                        this.next_transfer_id += 1;
-                        this.transfers.push(TransferItem {
-                            id,
-                            direction: TransferDirection::Upload,
-                            filename: filename.clone(),
-                            progress: 0.0,
-                            status: TransferStatus::InProgress,
-                            error: None,
-                        });
+                        let id = this.alloc_transfer_id(cx)?;
+                        this.push_transfer(
+                            TransferItem {
+                                id,
+                                direction: TransferDirection::Upload,
+                                filename: filename.clone(),
+                                progress: 0.0,
+                                status: TransferStatus::InProgress,
+                                error: None,
+                            },
+                            cx,
+                        );
                         log::debug!("SftpPanel: added transfer #{id} upload \"{filename}\"");
-                        cx.notify();
-                        id
+                        Some(id)
                     })
                 });
+                let Some(transfer_id) = transfer_id else {
+                    return;
+                };
 
                 // Call upload with transfer_id.
                 let (progress_rx, result_rx) =
@@ -85,88 +92,111 @@ impl SftpPanel {
                     // progress = -1.0 → cancelled signal.
                     if progress < 0.0 {
                         log::info!("SftpPanel: upload #{transfer_id} cancelled");
-                        cx.update(|cx| {
-                            panel.update(cx, |this, cx| {
-                                if let Some(item) =
-                                    this.transfers.iter_mut().find(|t| t.id == transfer_id)
-                                {
-                                    item.status = TransferStatus::Cancelled;
-                                }
-                                cx.notify();
-                            })
-                        });
+                        if let Some(key) = backend_key {
+                            cx.update(|cx| {
+                                panel.update(cx, |this, cx| {
+                                    this.update_transfer_for(
+                                        key,
+                                        transfer_id,
+                                        |item| {
+                                            item.status = TransferStatus::Cancelled;
+                                        },
+                                        cx,
+                                    );
+                                })
+                            });
+                        }
                         return; // ← exit task, do not upload the next file.
                     }
                     log::debug!(
                         "SftpPanel: upload #{transfer_id} progress {:.0}%",
                         progress * 100.0
                     );
-                    cx.update(|cx| {
-                        panel.update(cx, |this, cx| {
-                            if let Some(item) =
-                                this.transfers.iter_mut().find(|t| t.id == transfer_id)
-                            {
-                                item.progress = progress;
-                                cx.notify();
-                            }
-                        })
-                    });
+                    if let Some(key) = backend_key {
+                        cx.update(|cx| {
+                            panel.update(cx, |this, cx| {
+                                this.update_transfer_for(
+                                    key,
+                                    transfer_id,
+                                    |item| {
+                                        item.progress = progress;
+                                    },
+                                    cx,
+                                );
+                            })
+                        });
+                    }
                 }
 
                 // Wait for the result.
                 match result_rx.recv().await {
                     Ok(Ok(())) => {
                         log::info!("SftpPanel: upload #{transfer_id} OK");
-                        cx.update(|cx| {
-                            panel.update(cx, |this, cx| {
-                                if let Some(item) =
-                                    this.transfers.iter_mut().find(|t| t.id == transfer_id)
-                                {
-                                    item.status = TransferStatus::Completed;
-                                    item.progress = 1.0;
-                                }
-                                cx.notify();
-                            })
-                        });
+                        if let Some(key) = backend_key {
+                            cx.update(|cx| {
+                                panel.update(cx, |this, cx| {
+                                    this.update_transfer_for(
+                                        key,
+                                        transfer_id,
+                                        |item| {
+                                            item.status = TransferStatus::Completed;
+                                            item.progress = 1.0;
+                                        },
+                                        cx,
+                                    );
+                                })
+                            });
+                        }
                     }
                     Ok(Err(e)) => {
                         if e.to_string() == "cancelled" {
                             return;
                         }
                         log::error!("SftpPanel: upload #{transfer_id} failed: {e}");
-                        cx.update(|cx| {
-                            panel.update(cx, |this, cx| {
-                                if let Some(item) =
-                                    this.transfers.iter_mut().find(|t| t.id == transfer_id)
-                                {
-                                    item.status = TransferStatus::Error;
-                                    item.error = Some(e.to_string());
-                                }
-                                cx.notify();
-                            })
-                        });
+                        if let Some(key) = backend_key {
+                            cx.update(|cx| {
+                                panel.update(cx, |this, cx| {
+                                    this.update_transfer_for(
+                                        key,
+                                        transfer_id,
+                                        |item| {
+                                            item.status = TransferStatus::Error;
+                                            item.error = Some(e.to_string());
+                                        },
+                                        cx,
+                                    );
+                                })
+                            });
+                        }
                     }
                     Err(_) => {
                         log::error!("SftpPanel: upload #{transfer_id} result channel closed");
-                        cx.update(|cx| {
-                            panel.update(cx, |this, cx| {
-                                if let Some(item) =
-                                    this.transfers.iter_mut().find(|t| t.id == transfer_id)
-                                {
-                                    item.status = TransferStatus::Error;
-                                    item.error = Some("channel closed".to_string());
-                                }
-                                cx.notify();
-                            })
-                        });
+                        if let Some(key) = backend_key {
+                            cx.update(|cx| {
+                                panel.update(cx, |this, cx| {
+                                    this.update_transfer_for(
+                                        key,
+                                        transfer_id,
+                                        |item| {
+                                            item.status = TransferStatus::Error;
+                                            item.error = Some("channel closed".to_string());
+                                        },
+                                        cx,
+                                    );
+                                })
+                            });
+                        }
                     }
                 }
             }
 
-            // Refresh after all files have been uploaded.
+            // Refresh after all files have been uploaded (only if this backend
+            // is still the active one — otherwise the user will refresh on switch).
             cx.update(|cx| {
                 panel.update(cx, |this, cx| {
-                    this.refresh(cx);
+                    if this.active_key == backend_key {
+                        this.refresh(cx);
+                    }
                 })
             });
         })
@@ -273,6 +303,7 @@ impl SftpPanel {
         );
 
         let sftp = self.sftp.clone().unwrap();
+        let backend_key = super::browser_state::backend_key(&Some(sftp.clone()));
         let panel = cx.entity();
         let remote_path = entry.path.clone();
         let entry_name = entry.name.clone();
@@ -310,24 +341,29 @@ impl SftpPanel {
                 local_path.display()
             );
 
-            // Add a TransferItem to the panel — get transfer_id before calling download.
+            // Add a TransferItem — allocate the id from the per-backend store,
+            // push into both the store (source of truth) and the active view.
             let transfer_id = cx.update(|cx| {
                 panel.update(cx, |this, cx| {
-                    let id = this.next_transfer_id;
-                    this.next_transfer_id += 1;
-                    this.transfers.push(TransferItem {
-                        id,
-                        direction: TransferDirection::Download,
-                        filename: entry_name.clone(),
-                        progress: 0.0,
-                        status: TransferStatus::InProgress,
-                        error: None,
-                    });
+                    let id = this.alloc_transfer_id(cx)?;
+                    this.push_transfer(
+                        TransferItem {
+                            id,
+                            direction: TransferDirection::Download,
+                            filename: entry_name.clone(),
+                            progress: 0.0,
+                            status: TransferStatus::InProgress,
+                            error: None,
+                        },
+                        cx,
+                    );
                     log::debug!("SftpPanel: added transfer #{id} download \"{entry_name}\"");
-                    cx.notify();
-                    id
+                    Some(id)
                 })
             });
+            let Some(transfer_id) = transfer_id else {
+                return;
+            };
 
             // Call download with transfer_id (so it can be cancelled).
             let (progress_rx, result_rx) =
@@ -338,79 +374,100 @@ impl SftpPanel {
                 // progress = -1.0 → cancelled signal.
                 if progress < 0.0 {
                     log::info!("SftpPanel: download #{transfer_id} cancelled");
-                    cx.update(|cx| {
-                        panel.update(cx, |this, cx| {
-                            if let Some(item) =
-                                this.transfers.iter_mut().find(|t| t.id == transfer_id)
-                            {
-                                item.status = TransferStatus::Cancelled;
-                            }
-                            cx.notify();
+                    if let Some(key) = backend_key {
+                        cx.update(|cx| {
+                            panel.update(cx, |this, cx| {
+                                this.update_transfer_for(
+                                    key,
+                                    transfer_id,
+                                    |item| {
+                                        item.status = TransferStatus::Cancelled;
+                                    },
+                                    cx,
+                                );
+                            });
                         });
-                    });
+                    }
                     return; // ← exit spawn task.
                 }
                 log::debug!(
                     "SftpPanel: download #{transfer_id} progress {:.0}%",
                     progress * 100.0
                 );
-                cx.update(|cx| {
-                    panel.update(cx, |this, cx| {
-                        if let Some(item) = this.transfers.iter_mut().find(|t| t.id == transfer_id)
-                        {
-                            item.progress = progress;
-                            cx.notify();
-                        }
+                if let Some(key) = backend_key {
+                    cx.update(|cx| {
+                        panel.update(cx, |this, cx| {
+                            this.update_transfer_for(
+                                key,
+                                transfer_id,
+                                |item| {
+                                    item.progress = progress;
+                                },
+                                cx,
+                            );
+                        });
                     });
-                });
+                }
             }
 
             // Wait for the result.
             match result_rx.recv().await {
                 Ok(Ok(())) => {
                     log::info!("SftpPanel: download #{transfer_id} OK");
-                    cx.update(|cx| {
-                        panel.update(cx, |this, cx| {
-                            if let Some(item) =
-                                this.transfers.iter_mut().find(|t| t.id == transfer_id)
-                            {
-                                item.status = TransferStatus::Completed;
-                                item.progress = 1.0;
-                            }
-                            cx.notify();
+                    if let Some(key) = backend_key {
+                        cx.update(|cx| {
+                            panel.update(cx, |this, cx| {
+                                this.update_transfer_for(
+                                    key,
+                                    transfer_id,
+                                    |item| {
+                                        item.status = TransferStatus::Completed;
+                                        item.progress = 1.0;
+                                    },
+                                    cx,
+                                );
+                            });
                         });
-                    });
+                    }
                 }
                 Ok(Err(e)) => {
                     if e.to_string() == "cancelled" {
                         return;
                     }
                     log::error!("SftpPanel: download #{transfer_id} failed: {e}");
-                    cx.update(|cx| {
-                        panel.update(cx, |this, cx| {
-                            if let Some(item) =
-                                this.transfers.iter_mut().find(|t| t.id == transfer_id)
-                            {
-                                item.status = TransferStatus::Error;
-                                item.error = Some(e.to_string());
-                            }
-                            cx.notify();
+                    if let Some(key) = backend_key {
+                        cx.update(|cx| {
+                            panel.update(cx, |this, cx| {
+                                this.update_transfer_for(
+                                    key,
+                                    transfer_id,
+                                    |item| {
+                                        item.status = TransferStatus::Error;
+                                        item.error = Some(e.to_string());
+                                    },
+                                    cx,
+                                );
+                            });
                         });
-                    });
+                    }
                 }
                 Err(_) => {
                     log::error!("SftpPanel: download #{transfer_id} result channel closed");
-                    cx.update(|cx| {
-                        panel.update(cx, |this, cx| {
-                            if let Some(item) =
-                                this.transfers.iter_mut().find(|t| t.id == transfer_id)
-                            {
-                                item.status = TransferStatus::Error;
-                                item.error = Some("channel closed".to_string());
-                            }
-                            cx.notify();
+                    if let Some(key) = backend_key {
+                        cx.update(|cx| {
+                            panel.update(cx, |this, cx| {
+                                this.update_transfer_for(
+                                    key,
+                                    transfer_id,
+                                    |item| {
+                                        item.status = TransferStatus::Error;
+                                        item.error = Some("channel closed".to_string());
+                                    },
+                                    cx,
+                                );
+                            });
                         });
-                    });
+                    }
                 }
             }
         })

@@ -4,6 +4,7 @@
 //! to comply with the ~400 lines/file rule (see `docs/agents/structure.md` §2).
 
 mod actions;
+mod browser_state;
 mod panel;
 mod panel_actions;
 mod panel_ops;

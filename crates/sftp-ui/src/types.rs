@@ -4,13 +4,12 @@
 //! Split out from `file_browser.rs` to keep the file shorter.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 
-use oneterm_core::{FileEntry, SftpBackend};
+use oneterm_core::FileEntry;
 
 // ── Sort state ───────────────────────────────────────────────
 
@@ -184,18 +183,6 @@ pub(crate) fn format_owner(name: Option<&str>, id: Option<u32>) -> String {
     }
 }
 
-/// Compare two `Option<Arc<dyn SftpBackend>>` by pointer identity.
-pub(crate) fn sftp_changed(
-    old: &Option<Arc<dyn SftpBackend>>,
-    new: &Option<Arc<dyn SftpBackend>>,
-) -> bool {
-    match (old, new) {
-        (Some(a), Some(b)) => Arc::as_ptr(a) as *const () != Arc::as_ptr(b) as *const (),
-        (None, None) => false,
-        _ => true,
-    }
-}
-
 /// Sort entries: folders before files; within each group sort by the `sort` state.
 ///
 /// `sort = None` → default: sort by Name asc (folder-first). `Some((col, dir))`
@@ -351,6 +338,7 @@ pub(crate) enum TransferStatus {
 }
 
 /// An item in the transfer queue.
+#[derive(Clone)]
 pub(crate) struct TransferItem {
     pub id: usize,
     pub direction: TransferDirection,
