@@ -162,45 +162,53 @@ impl super::OneTermWorkspace {
         let new_mode = action.0;
         let current = oneterm_settings::UiConfig::global(cx)
             .read(cx)
-            .right_dock_mode
-            .unwrap_or_default();
+            .right_dock_mode;
         if current == new_mode {
-            // Still reveal the dock — the click is an explicit user action.
-            super::set_right_dock_open(&self.dock_area, true, window, cx);
+            // Same mode clicked — still apply the requested visibility: hide for
+            // None, force-open for SSH Client / Agent (the click is explicit).
+            super::set_right_dock_open(&self.dock_area, !new_mode.is_none(), window, cx);
             return;
         }
         Self::switch_right_dock_mode(&self.dock_area, new_mode, window, cx);
 
         // Persist the new mode to ui_config.json.
         oneterm_settings::UiConfig::global(cx).update(cx, |cfg, _cx| {
-            cfg.right_dock_mode = Some(new_mode);
+            cfg.right_dock_mode = new_mode;
         });
         oneterm_settings::UiConfig::persist(cx);
     }
 
-    /// Rebuild the right dock as a `DockItem::Panel` for `mode`, preserving the
-    /// current dock width + open/collapsed state. Used by the action handler
-    /// above and by the startup apply in `OneTermWorkspace::new`.
+    /// Apply `mode` to the right dock. For `None` the dock is hidden (collapsed)
+    /// without rebuilding its panel, so the previous content is restored when the
+    /// user switches back. For `SshClient`/`Agent` the dock is rebuilt as a fresh
+    /// `DockItem::Panel` of the mode's registered panel, preserving the dock
+    /// width and forcing the dock open. Used by the action handler above and by
+    /// the startup apply in `OneTermWorkspace::new`.
     pub(crate) fn switch_right_dock_mode(
         dock_area: &Entity<DockArea>,
         mode: RightDockMode,
         window: &mut Window,
         cx: &mut App,
     ) {
+        if mode.is_none() {
+            // None mode — hide the right dock without rebuilding its panel, so
+            // switching back to SSH Client / Agent restores the previous content.
+            super::set_right_dock_open(dock_area, false, window, cx);
+            return;
+        }
         let weak = dock_area.downgrade();
         let panel = super::build_named_panel(mode.panel_name(), &weak, window, cx);
         let right = DockItem::panel(panel);
         dock_area.update(cx, |view, cx| {
-            // Snapshot the current right dock's size + open state so the swap
-            // preserves the user's last dock width + collapsed state.
-            let (right_size, right_open) = view
+            // Snapshot the current right dock's size so the swap preserves the
+            // user's last dock width. Force the dock open — selecting SSH Client /
+            // Agent is an explicit request to show the right dock, even if it was
+            // collapsed by the dock toggle button or by a previous None selection.
+            let right_size = view
                 .right_dock()
-                .map(|dock| {
-                    let d = dock.read(cx);
-                    (Some(d.size()), d.is_open())
-                })
-                .unwrap_or((Some(gpui::px(480.)), true));
-            view.set_right_dock(right, right_size, right_open, window, cx);
+                .map(|dock| Some(dock.read(cx).size()))
+                .unwrap_or(Some(gpui::px(480.)));
+            view.set_right_dock(right, right_size, true, window, cx);
         });
     }
 

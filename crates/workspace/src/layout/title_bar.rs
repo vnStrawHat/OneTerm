@@ -85,26 +85,31 @@ impl Render for AppTitleBar {
 
 /// Build the right-dock mode toggle group used in the title bar.
 ///
-/// Two segmented toggles — "SSH Client" and "Agent" — that switch the right
-/// dock content (see [`RightDockMode`]). The active one mirrors the mode
-/// persisted in `ui_config.json`; clicking dispatches [`SetRightDockMode`],
-/// which the workspace turns into a live right-dock swap.
+/// Three segmented toggles — "SSH Client", "Agent", and "None" — that switch
+/// the right dock content (see [`RightDockMode`]). "None" hides the right dock
+/// entirely; "SSH Client"/"Agent" rebuild and force-open the dock. The active
+/// one mirrors the mode persisted in `ui_config.json`; clicking dispatches
+/// [`SetRightDockMode`], which the workspace turns into a live right-dock swap.
 ///
 /// This replaces the former `add_terminal_button` dropdown. The "New Terminal
 /// Tab" action it used to host is still reachable via its key binding
 /// (`Ctrl-T`) and the terminal context menu.
 ///
-/// The two toggles act as a single-select segmented control: clicking either
+/// The three toggles act as a single-select segmented control: clicking any
 /// dispatches `SetRightDockMode` for that mode. (`ToggleGroup` is multi-select
 /// by nature, so the click handler ignores the check vector and instead keys
 /// off *which* toggle was clicked via the group's outer `on_click`.)
 pub fn mode_toggle_group(cx: &App) -> AnyElement {
     let current = oneterm_settings::UiConfig::global(cx)
         .read(cx)
-        .right_dock_mode
-        .unwrap_or_default();
-    // Index 0 = SshClient, 1 = Agent — kept in sync with the `child` order below.
-    let modes = [RightDockMode::SshClient, RightDockMode::Agent];
+        .right_dock_mode;
+    // Index 0 = SshClient, 1 = Agent, 2 = None — kept in sync with the `child`
+    // order below.
+    let modes = [
+        RightDockMode::SshClient,
+        RightDockMode::Agent,
+        RightDockMode::None,
+    ];
     let current_ix = modes.iter().position(|m| *m == current).unwrap_or(0);
     ToggleGroup::new("right-dock-mode")
         .xsmall()
@@ -121,6 +126,12 @@ pub fn mode_toggle_group(cx: &App) -> AnyElement {
                 .label("Agent")
                 .w(px(70.))
                 .checked(current_ix == 1),
+        )
+        .child(
+            Toggle::new("none-mode")
+                .label("None")
+                .w(px(50.))
+                .checked(current_ix == 2),
         )
         .on_click(move |checks, window, cx| {
             // Single-select: pick the first toggle that is now checked and

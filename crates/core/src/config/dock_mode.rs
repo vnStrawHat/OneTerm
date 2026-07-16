@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 ///
 /// `SshClient` is the classic OneTerm right dock: a vertical split of the
 /// Session panel (SSH host list) and the SFTP browser. `Agent` is reserved
-/// for a future Agent Mode that will host a different set of panels.
+/// for a future Agent Mode that will host a different set of panels. `None`
+/// hides the right dock entirely (no panel is hosted).
 ///
 /// Persisted in `ui_config.json` (as the serde name of the variant) and applied
 /// at startup by `OneTermWorkspace::new`.
@@ -22,6 +23,9 @@ pub enum RightDockMode {
     SshClient,
     /// Right dock hosts the Agent Mode panels (placeholder for now).
     Agent,
+    /// Hide the right dock entirely. The dock is kept collapsed and no panel
+    /// is built for it; switching back to `SshClient`/`Agent` reveals it.
+    None,
 }
 
 impl RightDockMode {
@@ -29,11 +33,17 @@ impl RightDockMode {
     ///
     /// The panel names (`"ssh_client_panel"`, `"agent_panel"`) are registered by the
     /// `app` crate; this only returns the string, so `core` stays free of any
-    /// UI/dock dependency.
+    /// UI/dock dependency. Returns `""` for [`RightDockMode::None`] (no panel).
     pub fn panel_name(self) -> &'static str {
         match self {
             RightDockMode::SshClient => "ssh_client_panel",
             RightDockMode::Agent => "agent_panel",
+            RightDockMode::None => "",
         }
+    }
+
+    /// Whether this mode hides the right dock entirely.
+    pub fn is_none(self) -> bool {
+        matches!(self, RightDockMode::None)
     }
 }

@@ -169,13 +169,13 @@ impl OneTermWorkspace {
         }
 
         // Apply the persisted right-dock mode. Both layout builders above set the
-        // right dock to the SSH Client `ssh_client_panel`; if the user last chose Agent
-        // Mode, swap the right dock to the `agent_panel` now (preserving the dock
-        // width + open state just loaded).
+        // right dock to the SSH Client `ssh_client_panel`; if the user last chose
+        // Agent Mode or None, apply that now (Agent swaps the panel, None hides
+        // the dock). Preserves the dock width; for Agent it keeps the open state
+        // just loaded, for None it collapses the dock.
         let saved_mode = oneterm_settings::UiConfig::global(cx)
             .read(cx)
-            .right_dock_mode
-            .unwrap_or_default();
+            .right_dock_mode;
         if saved_mode != oneterm_actions::RightDockMode::SshClient {
             Self::switch_right_dock_mode(&dock_area, saved_mode, window, cx);
         }

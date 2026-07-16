@@ -43,12 +43,12 @@ pub struct UiConfig {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub key_bindings: HashMap<String, String>,
 
-    /// Which set of panels the right dock displays (SSH Client vs Agent).
-    /// `None` = the default ([`RightDockMode::SshClient`]).
+    /// Which set of panels the right dock displays (SSH Client vs Agent vs None).
+    /// Defaults to [`RightDockMode::SshClient`] when absent in an old config file.
     /// Written by the title bar mode toggle group, read at startup by
     /// `OneTermWorkspace::new`.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub right_dock_mode: Option<RightDockMode>,
+    #[serde(default)]
+    pub right_dock_mode: RightDockMode,
 }
 
 impl UiConfig {
