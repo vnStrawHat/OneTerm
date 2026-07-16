@@ -7,9 +7,7 @@
 
 use gpui::{Action, KeyBinding, Keystroke};
 
-use oneterm_actions::{
-    About, AddPanel, NewSession, OpenSettings, Quit, ToggleAutoHideRightDock, ToggleGutter,
-};
+use oneterm_actions::{About, AddPanel, NewSession, OpenSettings, Quit, ToggleGutter};
 
 // ── Bindable action registry ─────────────────────────────────────────
 
@@ -97,15 +95,6 @@ pub(super) const BINDABLE_ACTIONS: &[BindableAction] = &[
         context: None,
         make: |ks, ctx| make_binding(ks, ToggleGutter, ctx),
         name_fn: <ToggleGutter as Action>::name_for_type,
-    },
-    BindableAction {
-        id: "auto_hide_right_dock",
-        label: "Auto-hide Right Dock",
-        group: "App Menu",
-        default: Some("ctrl-h"),
-        context: None,
-        make: |ks, ctx| make_binding(ks, ToggleAutoHideRightDock, ctx),
-        name_fn: <ToggleAutoHideRightDock as Action>::name_for_type,
     },
     BindableAction {
         id: "about",

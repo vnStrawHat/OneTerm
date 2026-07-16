@@ -32,8 +32,7 @@ pub struct AppState {
     /// Used by the SFTP browser's "sync to terminal cwd" button.
     pub active_cwd_source: Option<Arc<dyn CwdSource>>,
     /// Whether the active terminal tab is a local shell (`true`) or SSH (`false`).
-    /// Mirrored by `TerminalPanel::set_active(true)` — read by the
-    /// "Auto-hide Right Dock on Local Shell" toggle to apply the rule immediately.
+    /// Mirrored by `TerminalPanel::set_active(true)`.
     pub active_is_local: bool,
 }
 

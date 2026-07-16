@@ -44,7 +44,6 @@ impl TerminalSettings {
         };
         self.show_gutter = layout.show_gutter;
         self.semantic_highlighting = layout.semantic_highlighting;
-        self.auto_hide_right_dock_on_local = layout.auto_hide_right_dock_on_local;
         self.tab_title_mode = layout.tab_title;
 
         self.shell = cfg.shell.clone();

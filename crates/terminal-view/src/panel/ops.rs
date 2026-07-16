@@ -10,7 +10,6 @@ use gpui::{AppContext as _, Entity, Window};
 
 use gpui_component::{dock::PanelView, resizable::ResizableState};
 
-use oneterm_settings::TerminalSettings;
 use oneterm_state::AppState;
 
 use super::super::space::{
@@ -174,11 +173,10 @@ impl TerminalPanel {
         cx.notify();
     }
 
-    /// Publish the active Space's session into `AppState` (SFTP / cwd / locality)
-    /// and apply the auto-hide-right-dock rule.
+    /// Publish the active Space's session into `AppState` (SFTP / cwd / locality).
     pub(super) fn publish_active_session(
         &mut self,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         let (sftp, cwd_source, is_local) = match self.tree.active_terminal() {
@@ -194,19 +192,5 @@ impl TerminalPanel {
             state.active_is_local = is_local;
             cx.notify();
         });
-
-        let auto_hide = TerminalSettings::global(cx)
-            .read(cx)
-            .auto_hide_right_dock_on_local;
-        if auto_hide {
-            let dock_area = AppState::global(cx)
-                .read(cx)
-                .dock_area
-                .as_ref()
-                .and_then(|w| w.upgrade());
-            if let Some(dock_area) = dock_area {
-                oneterm_state::dock_util::set_right_dock_open(&dock_area, !is_local, window, cx);
-            }
-        }
     }
 }

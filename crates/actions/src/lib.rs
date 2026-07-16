@@ -39,8 +39,6 @@ actions!(
         ToggleDockToggleButton,
         /// Toggle the gutter (timestamp + line number) in the terminal.
         ToggleGutter,
-        /// Auto-hide the Right Dock when the active tab is a Local Shell.
-        ToggleAutoHideRightDock,
         /// Add a new SessionPanel to the right dock.
         AddSession,
         /// Add a new SftpPanel to the right dock.

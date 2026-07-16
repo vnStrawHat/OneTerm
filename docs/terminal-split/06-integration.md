@@ -46,9 +46,8 @@ new active view (dropping the old `Subscription`).
 ## 3. `Panel::set_active` (the SFTP / cwd / right-dock hook)
 
 `set_active` currently reads `self.view.read(cx).session` to publish
-`AppState.active_sftp / active_cwd_source / active_is_local` and to drive the
-auto-hide-right-dock rule. After the change it must read the **active leaf's**
-session:
+`AppState.active_sftp / active_cwd_source / active_is_local`. After the change
+it must read the **active leaf's** session:
 
 ```rust
 fn set_active(&mut self, active: bool, window, cx) {
@@ -60,7 +59,6 @@ fn set_active(&mut self, active: bool, window, cx) {
             None => (None, None, true),   // empty active Space → treat as local/no-sftp
         };
         AppState::global(cx).update(cx, |st, cx| { /* set fields */ cx.notify(); });
-        // …auto-hide right dock rule unchanged, using is_local…
     }
 }
 ```

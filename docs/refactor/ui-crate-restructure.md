@@ -339,7 +339,7 @@ Handlers that move out of the shell into features/binary:
 `AddPanel`, `AddPanelWithShell` → `terminal-view`; `AddSession`, `NewSession` →
 `session-ui`; `AddSftpBrowser` → `sftp-ui`; `OpenSettings` → `settings-ui`.
 The shell keeps only feature-agnostic handlers: `Quit`, `About`,
-`ToggleDockToggleButton`, `ToggleAutoHideRightDock`, and `Find` (delegated).
+`ToggleDockToggleButton`, and `Find` (delegated).
 
 ### 5.2 Key-binding cycle (Vòng 2) also gone
 

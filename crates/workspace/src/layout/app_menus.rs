@@ -8,7 +8,7 @@ use gpui_component::{ActiveTheme as _, GlobalState, Theme, ThemeRegistry, menu::
 
 use oneterm_actions::{
     About, Find, OpenSettings, Quit, SelectFont, SelectLocale, SwitchTheme, SwitchThemeMode,
-    ToggleAutoHideRightDock, ToggleGutter,
+    ToggleGutter,
 };
 use oneterm_settings::TerminalSettings;
 
@@ -159,13 +159,6 @@ fn view_menu_items(cx: &App) -> Vec<MenuItem> {
         // Gutter — toggle the timestamp + line number column on the left of the terminal.
         MenuItem::action("Gutter", ToggleGutter)
             .checked(TerminalSettings::global(cx).read(cx).show_gutter),
-        // Auto-hide the Right Dock (Session/SFTP browser) when the active tab is a
-        // local shell — the dock is only useful for SSH sessions.
-        MenuItem::action("Auto-hide Right Dock", ToggleAutoHideRightDock).checked(
-            TerminalSettings::global(cx)
-                .read(cx)
-                .auto_hide_right_dock_on_local,
-        ),
     ]
 }
 

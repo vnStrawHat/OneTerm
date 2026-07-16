@@ -10,9 +10,9 @@ use gpui_component::dock::{DockArea, DockItem, TabPanel};
 
 /// Set the Right Dock open/closed (no-op if there is no right dock).
 ///
-/// Used by the "Auto-hide Right Dock on Local Shell" feature: the shell's action
-/// handler and a terminal panel's `set_active` hook both call this. Generic over
-/// [`gpui::AppContext`] so it works from a `Context<T>` or an `App`.
+/// Used by action handlers that reveal the right dock (Add Session, Add SFTP
+/// Browser, mode toggle). Generic over [`gpui::AppContext`] so it works from a
+/// `Context<T>` or an `App`.
 pub fn set_right_dock_open<C: gpui::AppContext>(
     dock_area: &Entity<DockArea>,
     open: bool,

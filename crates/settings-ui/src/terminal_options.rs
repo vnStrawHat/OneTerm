@@ -109,11 +109,11 @@ pub(super) fn cursor_group() -> SettingGroup {
         ]))
 }
 
-/// "Layout" group — gutter, dock auto-hide, and scrollback size.
+/// "Layout" group — gutter and scrollback size.
 pub(super) fn layout_group() -> SettingGroup {
     SettingGroup::new()
         .title("Layout")
-        .description("Gutter, dock auto-hide, and scrollback size.")
+        .description("Gutter and scrollback size.")
         .items(items_with_separators(vec![
             SettingItem::new(
                 "Show Gutter",
@@ -171,26 +171,6 @@ pub(super) fn layout_group() -> SettingGroup {
             )
             .description(
                 "Colorize plain-text terminal output (paths, numbers, commands, options, URLs). \n                \"Auto\" uses OSC 133 row roles when available, regex fallback otherwise.",
-            ),
-            SettingItem::new(
-                "Auto-hide Right Dock",
-                SettingField::switch(
-                    |cx: &App| {
-                        TerminalSettings::global(cx)
-                            .read(cx)
-                            .auto_hide_right_dock_on_local
-                    },
-                    |val: bool, cx: &mut App| {
-                        TerminalSettings::global(cx).update(cx, |s, cx| {
-                            s.auto_hide_right_dock_on_local = val;
-                            cx.notify();
-                        });
-                        super::terminal::persist(cx);
-                    },
-                ),
-            )
-            .description(
-                "Collapse the Right Dock (Session/SFTP) when a local shell tab is active.",
             ),
             SettingItem::new(
                 "Tab Title",
