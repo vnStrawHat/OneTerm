@@ -1,14 +1,14 @@
-//! App menu bar — builds the native menus (OneTerm / Edit / View / Help).
+//! App menu bar — builds the native menu (OneTerm).
 //!
 //! Mirrors `reference/.../story/src/app_menus.rs`, keeping Appearance (Light/Dark),
-//! Theme submenu, Language, Edit, View (Font Size + Gutter), and Help.
+//! Theme submenu, and Language. The Edit / View / Help menus were removed; their
+//! actions remain reachable via key bindings and the in-app UI.
 
 use gpui::{App, Entity, Menu, MenuItem, SharedString, px};
 use gpui_component::{ActiveTheme as _, GlobalState, Theme, ThemeRegistry, menu::AppMenuBar};
 
 use oneterm_actions::{
-    About, Find, OpenSettings, Quit, SelectFont, SelectLocale, SwitchTheme, SwitchThemeMode,
-    ToggleGutter,
+    About, OpenSettings, Quit, SelectFont, SelectLocale, SwitchTheme, SwitchThemeMode, ToggleGutter,
 };
 use oneterm_settings::TerminalSettings;
 
@@ -47,13 +47,13 @@ pub fn init(title: impl Into<SharedString>, cx: &mut App) -> Entity<AppMenuBar> 
     })
     .detach();
 
-    // Font Size — set the global theme font size (View ▸ Font Size).
+    // Font Size — set the global theme font size (kept for key-binding reachability).
     cx.on_action(|select: &SelectFont, cx| {
         Theme::global_mut(cx).font_size = px(select.0 as f32);
         cx.refresh_windows();
     });
 
-    // Gutter — toggle the timestamp + line number column (View ▸ Gutter).
+    // Gutter — toggle the timestamp + line number column (kept for key-binding reachability).
     cx.on_action(|_: &ToggleGutter, cx| {
         let new_val = !TerminalSettings::global(cx).read(cx).show_gutter;
         TerminalSettings::global(cx).update(cx, |st, cx| {
@@ -88,78 +88,30 @@ fn update_app_menu(title: impl Into<SharedString>, app_menu_bar: Entity<AppMenuB
 }
 
 fn build_menus(title: impl Into<SharedString>, cx: &App) -> Vec<Menu> {
-    vec![
-        Menu {
-            name: title.into(),
-            items: vec![
-                MenuItem::action("About", About),
-                MenuItem::Separator,
-                MenuItem::Submenu(Menu {
-                    name: "Appearance".into(),
-                    items: vec![
-                        MenuItem::action(
-                            "Light",
-                            SwitchThemeMode(gpui_component::ThemeMode::Light),
-                        )
+    vec![Menu {
+        name: title.into(),
+        items: vec![
+            MenuItem::action("About", About),
+            MenuItem::Separator,
+            MenuItem::Submenu(Menu {
+                name: "Appearance".into(),
+                items: vec![
+                    MenuItem::action("Light", SwitchThemeMode(gpui_component::ThemeMode::Light))
                         .checked(!cx.theme().mode.is_dark()),
-                        MenuItem::action("Dark", SwitchThemeMode(gpui_component::ThemeMode::Dark))
-                            .checked(cx.theme().mode.is_dark()),
-                    ],
-                    disabled: false,
-                }),
-                theme_menu(cx),
-                language_menu(),
-                MenuItem::Separator,
-                MenuItem::action("Settings...", OpenSettings),
-                MenuItem::Separator,
-                MenuItem::action("Quit", Quit),
-            ],
-            disabled: false,
-        },
-        Menu {
-            name: "Edit".into(),
-            items: vec![
-                MenuItem::action("Copy", oneterm_actions::TerminalCopy),
-                MenuItem::action("Paste", oneterm_actions::TerminalPaste),
-                MenuItem::separator(),
-                MenuItem::action("Find", Find),
-                MenuItem::separator(),
-                MenuItem::action("Select All", oneterm_actions::TerminalSelectAll),
-                MenuItem::action("Clear", oneterm_actions::TerminalClear),
-            ],
-            disabled: false,
-        },
-        Menu {
-            name: "View".into(),
-            items: view_menu_items(cx),
-            disabled: false,
-        },
-        Menu {
-            name: "Help".into(),
-            items: vec![MenuItem::action("About OneTerm", About)],
-            disabled: false,
-        },
-    ]
-}
-
-/// Build the items for the "View" menu: Font Size submenu + Gutter toggle.
-fn view_menu_items(cx: &App) -> Vec<MenuItem> {
-    let font_size = cx.theme().font_size.as_f32() as i32;
-    vec![
-        MenuItem::Submenu(Menu {
-            name: "Font Size".into(),
-            items: vec![
-                MenuItem::action("Large", SelectFont(18)).checked(font_size == 18),
-                MenuItem::action("Medium (default)", SelectFont(16)).checked(font_size == 16),
-                MenuItem::action("Small", SelectFont(14)).checked(font_size == 14),
-            ],
-            disabled: false,
-        }),
-        MenuItem::Separator,
-        // Gutter — toggle the timestamp + line number column on the left of the terminal.
-        MenuItem::action("Gutter", ToggleGutter)
-            .checked(TerminalSettings::global(cx).read(cx).show_gutter),
-    ]
+                    MenuItem::action("Dark", SwitchThemeMode(gpui_component::ThemeMode::Dark))
+                        .checked(cx.theme().mode.is_dark()),
+                ],
+                disabled: false,
+            }),
+            theme_menu(cx),
+            language_menu(),
+            MenuItem::Separator,
+            MenuItem::action("Settings...", OpenSettings),
+            MenuItem::Separator,
+            MenuItem::action("Quit", Quit),
+        ],
+        disabled: false,
+    }]
 }
 
 fn language_menu() -> MenuItem {

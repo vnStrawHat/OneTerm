@@ -1,8 +1,7 @@
 //! [`AppTitleBar`] — OneTerm's title bar.
 //!
 //! Mirrors `reference/.../story/src/title_bar.rs`, keeping `AppMenuBar` + child
-//! (right-dock mode toggle group: SSH Client / Agent). Font Size + Gutter moved to
-//! the AppMenuBar "View" menu (see `app_menus.rs`).
+//! (right-dock mode toggle group: SSH Client / Agent).
 //!
 //! Drops GitHub / Bell (not used in a terminal app).
 

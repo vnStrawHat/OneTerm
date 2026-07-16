@@ -243,7 +243,7 @@ impl super::OneTermWorkspace {
     /// Action handler: Find — activate the in-terminal search bar on the
     /// active terminal panel.
     ///
-    /// Triggered by Edit ▸ Find in the AppMenuBar. Walks the DockArea to find
+    /// Triggered by the Find key binding (e.g. Ctrl+F). Walks the DockArea to find
     /// the active terminal panel, then calls `open_search` on its
     /// `LocalTerminalView`. If the search bar is already open, toggles it
     /// closed (same behavior as Ctrl+F).
@@ -256,7 +256,7 @@ impl super::OneTermWorkspace {
 
     /// Action handler: About — open the About dialog.
     ///
-    /// Triggered by OneTerm ▸ About and Help ▸ About OneTerm in the AppMenuBar.
+    /// Triggered by OneTerm ▸ About in the AppMenuBar.
     pub(crate) fn on_action_about(
         &mut self,
         _: &About,
