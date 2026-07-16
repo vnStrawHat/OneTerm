@@ -1,24 +1,24 @@
 //! [`AppTitleBar`] — OneTerm's title bar.
 //!
 //! Mirrors `reference/.../story/src/title_bar.rs`, keeping `AppMenuBar` + child
-//! (Add Terminal / Add Session / Add SFTP dropdown). Font Size + Gutter moved to the
-//! AppMenuBar "View" menu (see `app_menus.rs`).
+//! (right-dock mode toggle group: SSH Client / Agent). Font Size + Gutter moved to
+//! the AppMenuBar "View" menu (see `app_menus.rs`).
 //!
 //! Drops GitHub / Bell (not used in a terminal app).
 
 use std::rc::Rc;
 
 use gpui::{
-    Anchor, AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement, MouseButton,
-    ParentElement as _, Render, Styled as _, Window, div, rgb, svg,
+    AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement, MouseButton,
+    ParentElement as _, Render, Styled as _, Window, div, px, rgb, svg,
 };
 use gpui_component::{
-    ActiveTheme as _, IconName, Sizable as _, TitleBar,
-    button::{Button, ButtonVariants as _},
-    menu::{AppMenuBar, DropdownMenu as _},
+    ActiveTheme as _, Sizable as _, TitleBar,
+    button::{Toggle, ToggleGroup, ToggleVariants as _},
+    menu::AppMenuBar,
 };
 
-use oneterm_actions::{AddPanel, AddSession, AddSftpBrowser};
+use oneterm_actions::{RightDockMode, SetRightDockMode};
 
 use crate::layout::app_menus;
 
@@ -41,7 +41,7 @@ impl AppTitleBar {
         }
     }
 
-    /// Set the child element (the Add Terminal dropdown button).
+    /// Set the child element (the right-dock mode toggle group).
     pub fn child<F, E>(mut self, f: F) -> Self
     where
         E: IntoElement,
@@ -84,25 +84,55 @@ impl Render for AppTitleBar {
     }
 }
 
-/// Build the "Add Terminal Tab" dropdown button used in the title bar.
+/// Build the right-dock mode toggle group used in the title bar.
 ///
-/// The menu contains:
-/// - New Terminal Tab (adds a TerminalPanel to the center)
-/// - Add Session (adds a SessionPanel to the right dock)
-/// - Add SFTP Browser (adds an SftpPanel to the right dock)
-pub fn add_terminal_button() -> impl IntoElement + 'static {
-    Button::new("add-panel")
-        .icon(IconName::LayoutDashboard)
-        .small()
-        .ghost()
-        .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
-            menu.menu(
-                "New Terminal Tab",
-                Box::new(AddPanel(gpui_component::dock::DockPlacement::Center)),
-            )
-            .separator()
-            .menu("Add Session", Box::new(AddSession))
-            .menu("Add SFTP Browser", Box::new(AddSftpBrowser))
-            .separator()
+/// Two segmented toggles — "SSH Client" and "Agent" — that switch the right
+/// dock content (see [`RightDockMode`]). The active one mirrors the mode
+/// persisted in `ui_config.json`; clicking dispatches [`SetRightDockMode`],
+/// which the workspace turns into a live right-dock swap.
+///
+/// This replaces the former `add_terminal_button` dropdown. The "New Terminal
+/// Tab" action it used to host is still reachable via its key binding
+/// (`Ctrl-T`) and the terminal context menu.
+///
+/// The two toggles act as a single-select segmented control: clicking either
+/// dispatches `SetRightDockMode` for that mode. (`ToggleGroup` is multi-select
+/// by nature, so the click handler ignores the check vector and instead keys
+/// off *which* toggle was clicked via the group's outer `on_click`.)
+pub fn mode_toggle_group(cx: &App) -> AnyElement {
+    let current = oneterm_settings::UiConfig::global(cx)
+        .read(cx)
+        .right_dock_mode
+        .unwrap_or_default();
+    // Index 0 = SshClient, 1 = Agent — kept in sync with the `child` order below.
+    let modes = [RightDockMode::SshClient, RightDockMode::Agent];
+    let current_ix = modes.iter().position(|m| *m == current).unwrap_or(0);
+    ToggleGroup::new("right-dock-mode")
+        .xsmall()
+        .outline()
+        .segmented()
+        .child(
+            Toggle::new("ssh-client-mode")
+                .label("SSH Client")
+                .w(px(70.))
+                .checked(current_ix == 0),
+        )
+        .child(
+            Toggle::new("agent-mode")
+                .label("Agent")
+                .w(px(70.))
+                .checked(current_ix == 1),
+        )
+        .on_click(move |checks, window, cx| {
+            // Single-select: pick the first toggle that is now checked and
+            // differs from the current mode. `checks` is the post-click state
+            // of every toggle in the group.
+            for (ix, &checked) in checks.iter().enumerate() {
+                if checked && ix != current_ix {
+                    window.dispatch_action(Box::new(SetRightDockMode(modes[ix])), cx);
+                    return;
+                }
+            }
         })
+        .into_any_element()
 }

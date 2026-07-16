@@ -6,14 +6,15 @@ use gpui_component::dock::{DockArea, DockItem};
 use super::MAIN_DOCK_VERSION;
 
 /// Reset the center (terminal tabs) to a single tab AND re-apply the right
-/// dock as a fresh `DockItem::Panel(SidePanel)`.
+/// dock as a fresh `DockItem::Panel(SshClientPanel)`.
 ///
 /// The right dock is rebuilt every launch because the gpui-component
 /// `PanelInfo::Panel` load path round-trips back to `DockItem::tabs` (see
-/// `dock::state::PanelState::to_item`), which would render the SidePanel with
-/// an unwanted tab bar. Re-applying a fresh `DockItem::panel(...)` keeps the
-/// raw chromeless rendering stable across restarts. The user's last right-dock
-/// width + open/collapsed state is preserved from the just-loaded dock.
+/// `dock::state::PanelState::to_item`), which would render the SshClientPanel
+/// with an unwanted tab bar. Re-applying a fresh `DockItem::panel(...)` keeps
+/// the raw chromeless rendering stable across restarts. The user's last
+/// right-dock width + open/collapsed state is preserved from the just-loaded
+/// dock.
 pub(crate) fn reset_center_only(
     dock_area: gpui::WeakEntity<DockArea>,
     toggle_button_visible: bool,
@@ -32,8 +33,8 @@ pub(crate) fn reset_center_only(
         window,
         cx,
     );
-    let side_panel = super::build_named_panel("side_panel", &weak, window, cx);
-    let right = DockItem::panel(side_panel);
+    let ssh_client_panel = super::build_named_panel("ssh_client_panel", &weak, window, cx);
+    let right = DockItem::panel(ssh_client_panel);
     _ = dock_area.update(cx, |view, cx| {
         // Snapshot the loaded right dock's size + open state so the re-applied
         // `DockItem::Panel` preserves the user's last dock width + collapsed
@@ -65,7 +66,7 @@ pub(crate) fn reset_center_only(
     });
 }
 
-/// Build the default OneTerm layout: center = terminals, right_dock = SidePanel.
+/// Build the default OneTerm layout: center = terminals, right_dock = SshClientPanel.
 pub(crate) fn reset_default_layout(
     dock_area: gpui::WeakEntity<DockArea>,
     window: &mut Window,
@@ -85,8 +86,8 @@ pub(crate) fn reset_default_layout(
         cx,
     );
 
-    let side_panel = super::build_named_panel("side_panel", &weak, window, cx);
-    let right = DockItem::panel(side_panel);
+    let ssh_client_panel = super::build_named_panel("ssh_client_panel", &weak, window, cx);
+    let right = DockItem::panel(ssh_client_panel);
 
     _ = dock_area.update(cx, |view, cx| {
         view.set_version(MAIN_DOCK_VERSION, window, cx);

@@ -10,7 +10,7 @@ pub mod error;
 pub mod sftp;
 pub mod ssh_config;
 
-pub use config::{LocalShellConfig, ShellKind, config_dir, home_dir};
+pub use config::{LocalShellConfig, RightDockMode, ShellKind, config_dir, home_dir};
 pub use error::AppError;
 pub use sftp::{FileEntry, FileStat, SftpBackend};
 pub use ssh_config::{SshAuthMethod, SshConfig};

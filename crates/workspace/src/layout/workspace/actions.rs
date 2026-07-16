@@ -2,16 +2,16 @@
 
 use std::sync::atomic::Ordering;
 
-use gpui::{Context, Window};
+use gpui::{App, Context, Entity, Window};
 use gpui_component::{
     WindowExt as _,
     dialog::DialogButtonProps,
-    dock::{DockItem, DockPlacement},
+    dock::{DockArea, DockItem, DockPlacement},
 };
 
 use oneterm_actions::{
     About, AddPanel, AddPanelWithShell, AddSession, AddSftpBrowser, Find, NewSession, OpenSettings,
-    Quit, ToggleAutoHideRightDock, ToggleDockToggleButton,
+    Quit, RightDockMode, SetRightDockMode, ToggleAutoHideRightDock, ToggleDockToggleButton,
 };
 
 use oneterm_settings::TerminalSettings;
@@ -145,6 +145,66 @@ impl super::OneTermWorkspace {
         cx: &mut Context<Self>,
     ) {
         super::set_right_dock_open(&self.dock_area, true, window, cx);
+    }
+
+    /// Action handler: switch the right dock to the panels for the given
+    /// [`RightDockMode`] (SSH Client = Session + SFTP, Agent = Agent panels).
+    ///
+    /// Rebuilds the right dock as a fresh `DockItem::Panel` of the mode's
+    /// registered panel, preserving the dock's current width + open/collapsed
+    /// state. Persists the choice to `ui_config.json` so it survives restarts.
+    ///
+    /// Dispatched by the title bar mode toggle group. No-op if the right dock
+    /// is already showing that mode (read from `UiConfig`, the source of truth).
+    pub(crate) fn on_action_set_right_dock_mode(
+        &mut self,
+        action: &SetRightDockMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let new_mode = action.0;
+        let current = oneterm_settings::UiConfig::global(cx)
+            .read(cx)
+            .right_dock_mode
+            .unwrap_or_default();
+        if current == new_mode {
+            // Still reveal the dock — the click is an explicit user action.
+            super::set_right_dock_open(&self.dock_area, true, window, cx);
+            return;
+        }
+        Self::switch_right_dock_mode(&self.dock_area, new_mode, window, cx);
+
+        // Persist the new mode to ui_config.json.
+        oneterm_settings::UiConfig::global(cx).update(cx, |cfg, _cx| {
+            cfg.right_dock_mode = Some(new_mode);
+        });
+        oneterm_settings::UiConfig::persist(cx);
+    }
+
+    /// Rebuild the right dock as a `DockItem::Panel` for `mode`, preserving the
+    /// current dock width + open/collapsed state. Used by the action handler
+    /// above and by the startup apply in `OneTermWorkspace::new`.
+    pub(crate) fn switch_right_dock_mode(
+        dock_area: &Entity<DockArea>,
+        mode: RightDockMode,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let weak = dock_area.downgrade();
+        let panel = super::build_named_panel(mode.panel_name(), &weak, window, cx);
+        let right = DockItem::panel(panel);
+        dock_area.update(cx, |view, cx| {
+            // Snapshot the current right dock's size + open state so the swap
+            // preserves the user's last dock width + collapsed state.
+            let (right_size, right_open) = view
+                .right_dock()
+                .map(|dock| {
+                    let d = dock.read(cx);
+                    (Some(d.size()), d.is_open())
+                })
+                .unwrap_or((Some(gpui::px(480.)), true));
+            view.set_right_dock(right, right_size, right_open, window, cx);
+        });
     }
 
     /// Action handler: toggle the dock toggle button (expand/collapse button).

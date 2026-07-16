@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 
 use gpui::{App, AppContext, Entity, Global};
-use oneterm_core::config_dir;
+use oneterm_core::{RightDockMode, config_dir};
 use serde::{Deserialize, Serialize};
 
 // File path is resolved at runtime via config_dir().join("ui_config.json") —
@@ -42,6 +42,13 @@ pub struct UiConfig {
     /// Missing entries fall back to the built-in default.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub key_bindings: HashMap<String, String>,
+
+    /// Which set of panels the right dock displays (SSH Client vs Agent).
+    /// `None` = the default ([`RightDockMode::SshClient`]).
+    /// Written by the title bar mode toggle group, read at startup by
+    /// `OneTermWorkspace::new`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub right_dock_mode: Option<RightDockMode>,
 }
 
 impl UiConfig {

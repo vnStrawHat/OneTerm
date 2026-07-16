@@ -33,10 +33,15 @@ pub fn init(cx: &mut App) {
     // Session: SSH session store global + "session" panel.
     oneterm_session_ui::init(cx);
 
-    // Combined right-dock panel (Session + SFTP) — registered here because it
+    // SSH Client right-dock panel (Session + SFTP) — registered here because it
     // composes two feature crates, which only the omniscient `app` crate may
     // depend on together (R9).
-    crate::side_panel::init(cx);
+    crate::ssh_client_panel::init(cx);
+
+    // Agent Mode right-dock panel (placeholder for now) — same reason as the
+    // SSH Client panel: it may later compose feature crates, so it lives in the
+    // omniscient `app` crate (R9).
+    crate::agent_panel::init(cx);
 
     // Assemble the workspace command registry the shell uses. Each fn pointer is
     // provided by the owning feature crate; the shell calls them via the registry.

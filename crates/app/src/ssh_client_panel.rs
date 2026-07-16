@@ -1,9 +1,10 @@
-//! Combined side panel — the right dock's single `DockItem::Panel`.
+//! SSH Client right-dock panel — the right dock's single `DockItem::Panel` for
+//! [`oneterm_core::RightDockMode::SshClient`].
 //!
 //! OneTerm's right dock used to be a `DockItem::v_split` of two
 //! `DockItem::tabs` (Session on top, SFTP on the bottom). It is now a single
-//! [`DockItem::Panel`] wrapping this [`SidePanel`], which internally hosts a
-//! [`SessionPanel`] and an [`SftpPanel`] in a vertical resizable split, each
+//! [`DockItem::Panel`] wrapping this [`SshClientPanel`], which internally hosts
+//! a [`SessionPanel`] and an [`SftpPanel`] in a vertical resizable split, each
 //! with its own header bar (title, no close button).
 //!
 //! Why a composite panel instead of two dock tabs:
@@ -20,8 +21,8 @@
 //! features must not cross-depend, except `session-ui → terminal-view`).
 
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
-    InteractiveElement as _, ParentElement as _, Render, Styled as _, Window, div,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Window, div,
 };
 
 use gpui_component::{
@@ -37,23 +38,23 @@ use oneterm_sftp_ui::SftpPanel;
 /// Panel name registered with the gpui-component `PanelRegistry`.
 ///
 /// The feature-agnostic shell builds this panel *by name* via
-/// `build_named_panel("side_panel", ...)` — it never depends on the concrete
-/// type. Saved layouts deserialize by this name too.
-pub const SIDE_PANEL_NAME: &str = "side_panel";
+/// `build_named_panel("ssh_client_panel", ...)` — it never depends on the
+/// concrete type. Saved layouts deserialize by this name too.
+pub const SSH_CLIENT_PANEL_NAME: &str = "ssh_client_panel";
 
-/// Combined right-dock panel: a vertical resizable split of
+/// Combined right-dock panel for SSH Client Mode: a vertical resizable split of
 /// [`SessionPanel`] (top) + [`SftpPanel`] (bottom), each with its own header.
 ///
-/// `panel_name = "side_panel"`. Rendered raw as a `DockItem::Panel`, so it
-/// draws its own title bars + the resize split between the two sections.
-pub struct SidePanel {
+/// `panel_name = "ssh_client_panel"`. Rendered raw as a `DockItem::Panel`, so
+/// it draws its own title bars + the resize split between the two sections.
+pub struct SshClientPanel {
     focus_handle: FocusHandle,
     session: Entity<SessionPanel>,
     sftp: Entity<SftpPanel>,
 }
 
-impl SidePanel {
-    /// Create a new combined side panel.
+impl SshClientPanel {
+    /// Create a new SSH Client panel.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let session = SessionPanel::new_entity(window, cx);
         let sftp = SftpPanel::new_entity(window, cx);
@@ -90,9 +91,9 @@ impl SidePanel {
     }
 }
 
-impl EventEmitter<PanelEvent> for SidePanel {}
+impl EventEmitter<PanelEvent> for SshClientPanel {}
 
-impl Focusable for SidePanel {
+impl Focusable for SshClientPanel {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         // Delegate focus to the session tree first (top section), so keyboard
         // input reaches it instead of dying at the panel root.
@@ -100,13 +101,13 @@ impl Focusable for SidePanel {
     }
 }
 
-impl Panel for SidePanel {
+impl Panel for SshClientPanel {
     fn panel_name(&self) -> &'static str {
-        SIDE_PANEL_NAME
+        SSH_CLIENT_PANEL_NAME
     }
 
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        "Side"
+        "SSH Client"
     }
 
     fn closable(&self, _: &App) -> bool {
@@ -118,7 +119,7 @@ impl Panel for SidePanel {
     fn zoomable(&self, _: &App) -> Option<PanelControl> {
         // Zoom is a TabPanel feature; `DockItem::Panel` is not subscribed to
         // zoom events by the library (see `DockArea::subscribe_item`). Drop
-        // zoom for the side panel — per the design decision to switch to
+        // zoom for this panel — per the design decision to switch to
         // `DockItem::Panel`.
         None
     }
@@ -132,14 +133,14 @@ impl Panel for SidePanel {
         // only used for the between-session save/restore of dock openness +
         // size, not to reconstruct the exact `DockItem` variant.)
         PanelState {
-            panel_name: SIDE_PANEL_NAME.to_string(),
+            panel_name: SSH_CLIENT_PANEL_NAME.to_string(),
             children: Vec::new(),
             info: PanelInfo::panel(serde_json::Value::Null),
         }
     }
 }
 
-impl Render for SidePanel {
+impl Render for SshClientPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bg = cx.theme().background;
 
@@ -147,7 +148,7 @@ impl Render for SidePanel {
         // header (title) stacked above its panel content. The
         // `ResizablePanelGroup` manages its own `ResizableState` internally when
         // none is bound via `with_state`.
-        let group = v_resizable("side-panel-split")
+        let group = v_resizable("ssh-client-panel-split")
             .child(
                 resizable_panel().child(
                     v_flex()
@@ -166,7 +167,7 @@ impl Render for SidePanel {
             );
 
         div()
-            .id("side-panel")
+            .id("ssh-client-panel")
             .size_full()
             .track_focus(&self.focus_handle)
             .bg(bg)
@@ -175,12 +176,12 @@ impl Render for SidePanel {
     }
 }
 
-/// Initialize the side panel feature: register the `"side_panel"` dock panel
-/// with the gpui-component `PanelRegistry` so the shell can build it by name
-/// and saved layouts can deserialize it. Called by the app aggregator
+/// Initialize the SSH Client panel: register the `"ssh_client_panel"` dock
+/// panel with the gpui-component `PanelRegistry` so the shell can build it by
+/// name and saved layouts can deserialize it. Called by the app aggregator
 /// ([`crate::init::init`]).
 pub fn init(cx: &mut App) {
-    register_panel(cx, SIDE_PANEL_NAME, |_, _, _, window, cx| {
-        Box::new(SidePanel::new_entity(window, cx))
+    register_panel(cx, SSH_CLIENT_PANEL_NAME, |_, _, _, window, cx| {
+        Box::new(SshClientPanel::new_entity(window, cx))
     });
 }

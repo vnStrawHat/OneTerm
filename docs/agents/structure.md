@@ -30,7 +30,8 @@ OneTerm/
 │   │   └── src/
 │   │       ├── lib.rs              # run(): logging + gpui init + install factory + init() + open window
 │   │       ├── init.rs             # Aggregator: globals + feature init() + WorkspaceCommands assembly
-│   │       ├── side_panel.rs       # Combined right-dock panel (DockItem::Panel) hosting Session + SFTP
+│   │       ├── ssh_client_panel.rs  # SSH Client right-dock panel (DockItem::Panel) hosting Session + SFTP
+│   │       ├── agent_panel.rs       # Agent Mode right-dock panel (placeholder) (DockItem::Panel)
 │   │       ├── session_factory.rs  # AppSessionFactory: dispatches spawn_local/connect_ssh to local/ssh
 │   │       ├── assets.rs           # CustomAssets (merges oneterm_theme::icon::UiAssets + gpui-component)
 │   │       ├── window.rs           # open_window(cx) — create window + attach OneTermWorkspace

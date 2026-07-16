@@ -4,6 +4,12 @@ use gpui::{SharedString, actions};
 use gpui_component::{ThemeMode, dock::DockPlacement};
 use serde::Deserialize;
 
+// Re-exported so call-sites can use `oneterm_actions::RightDockMode` without
+// reaching into `oneterm_core` directly. Defined in `oneterm_core` (the lowest
+// crate that needs it) so the settings crate can persist it without a
+// same-layer dependency on `oneterm_actions`.
+pub use oneterm_core::RightDockMode;
+
 /// Add a new panel to the dock at the given placement.
 #[derive(Clone, PartialEq, Eq, Deserialize, gpui::Action)]
 #[action(namespace = oneterm, no_json)]
@@ -13,6 +19,14 @@ pub struct AddPanel(pub DockPlacement);
 #[derive(Clone, PartialEq, Eq, Deserialize, gpui::Action)]
 #[action(namespace = oneterm, no_json)]
 pub struct AddPanelWithShell(pub oneterm_core::ShellKind);
+
+/// Swap the right dock to show the panels for the given [`RightDockMode`].
+///
+/// Dispatched by the title bar mode toggle group; handled by the workspace,
+/// which rebuilds the right dock `DockItem` and persists the choice.
+#[derive(Clone, PartialEq, Eq, Deserialize, gpui::Action)]
+#[action(namespace = oneterm, no_json)]
+pub struct SetRightDockMode(pub RightDockMode);
 
 actions!(
     oneterm,
