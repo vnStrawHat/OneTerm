@@ -21,7 +21,7 @@
 
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
-    ParentElement as _, Render, Styled as _, Window, div,
+    InteractiveElement as _, ParentElement as _, Render, Styled as _, Window, div,
 };
 
 use gpui_component::{
