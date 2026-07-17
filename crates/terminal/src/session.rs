@@ -20,6 +20,7 @@ use crate::content::TerminalContent;
 use crate::key_encode::{KeyMods, KeySpec, NamedKey, encode_key};
 use crate::mouse_encode::{MouseModifiers, TerminalMouseButton};
 use crate::osc::{Osc133Kind, TerminalProgress};
+use crate::osc_agent::AgentStatusEvent;
 use crate::osc_color::DynamicColors;
 use crate::paste::{PastePolicy, PasteResult, encode_paste};
 use crate::search::{SearchMatch, SearchOptions};
@@ -101,6 +102,10 @@ pub enum SessionEvent {
     Notification(String),
     /// Taskbar progress (OSC 9;4) — the UI shows a progress indicator.
     Progress(TerminalProgress),
+    /// Coding-agent status event (OSC 9;7, see `docs/osc-agent-status.md`).
+    /// Wrapped in `Arc` so cloning on the fan-out path is cheap. `seq` dedup
+    /// is already applied by the listener before forwarding.
+    AgentStatus(std::sync::Arc<AgentStatusEvent>),
     /// Foreground process changed (tab title update).
     ForegroundProcess(Option<String>),
     /// Process exited (`None` = no exit code).

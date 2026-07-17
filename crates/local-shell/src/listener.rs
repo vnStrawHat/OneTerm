@@ -226,6 +226,20 @@ impl LocalListener {
                 }
             }
             OscPayload::Progress(progress) => self.forward(SessionEvent::Progress(progress)),
+            OscPayload::AgentStatus(ev) => {
+                // OSC 9;7 seq dedup (spec §4.1 / §8.3): drop events whose
+                // `seq` is <= the last applied `seq` for the same agent id.
+                // `ev` is `Box<AgentStatusEvent>` (kept small on the parse
+                // path); unbox into the `Arc` for the fan-out `SessionEvent`.
+                let ev = *ev;
+                let apply = oneterm_terminal::should_apply(
+                    &mut self.state.lock().unwrap().last_agent_seq,
+                    &ev,
+                );
+                if apply {
+                    self.forward(SessionEvent::AgentStatus(std::sync::Arc::new(ev)));
+                }
+            }
         }
     }
 }

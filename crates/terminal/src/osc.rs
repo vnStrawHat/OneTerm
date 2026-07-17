@@ -13,6 +13,8 @@
 
 use std::path::PathBuf;
 
+use crate::osc_agent::{AgentStatusEvent, parse_agent_status};
+
 use base64::Engine;
 
 /// OSC 133 marker kind — marks prompt/command/output boundaries.
@@ -58,6 +60,11 @@ pub enum OscPayload {
     Notification(String),
     /// OSC 9;4 — taskbar progress (ConEmu / Windows Terminal).
     Progress(TerminalProgress),
+    /// OSC 9;7 — coding-agent status event (see `docs/osc-agent-status.md`).
+    /// The payload is the base64-wrapped JSON event, already parsed +
+    /// schema-validated. `seq` dedup is performed by the listener. Boxed to
+    /// keep `OscPayload` small (the event is ~248 bytes; this enum is transient).
+    AgentStatus(Box<AgentStatusEvent>),
 }
 
 /// Parse the OSC parameters forwarded by the engine (`Event::Osc { params, .. }`)
@@ -80,7 +87,17 @@ pub fn parse_osc(params: &[&[u8]]) -> Option<OscPayload> {
         // OSC 9: notification (`9;msg`) OR taskbar progress (`9;4;st;pr`).
         // Windows Terminal disambiguates: sub-param "4" = progress, else notify.
         "9" if params.len() >= 2 => {
-            if params[1] == b"4" {
+            if params[1] == b"7" {
+                // OSC 9;7;<base64-json> — coding-agent status event
+                // (see `docs/osc-agent-status.md`). The third parameter is the
+                // base64-wrapped JSON payload (spec §3.1). Malformed payloads
+                // are dropped silently by `parse_agent_status` (spec §3.3).
+                if let Some(b64) = params.get(2) {
+                    parse_agent_status(b64).map(|ev| OscPayload::AgentStatus(Box::new(ev)))
+                } else {
+                    None
+                }
+            } else if params[1] == b"4" {
                 // OSC 9;4;state;percent — taskbar progress.
                 let parse = |p: &[u8]| std::str::from_utf8(p).ok()?.parse::<u8>().ok();
                 let state = params.get(2).and_then(|p| parse(p)).unwrap_or(0);

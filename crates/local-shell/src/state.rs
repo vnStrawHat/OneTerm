@@ -48,6 +48,9 @@ pub struct SessionState {
     /// Theme default 16-color ANSI palette — used to answer OSC 4 queries for
     /// indices 0-15 that were never set via OSC.
     pub default_ansi: Option<[Rgb; 16]>,
+    /// Last applied `seq` per agent id (OSC 9;7 dedup, spec §4.1 / §8.3).
+    /// Events with `seq <= last_applied_seq` for the same agent are dropped.
+    pub last_agent_seq: std::collections::HashMap<String, u64>,
 }
 
 /// Convenient Arc-Mutex wrapper.

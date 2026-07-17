@@ -16,8 +16,10 @@ use async_channel::Receiver;
 use gpui_component::input::InputState;
 use oneterm_terminal::TerminalPalette;
 use oneterm_terminal::{
-    SearchMatch, SearchOptions, SessionEvent, TerminalInfo, TerminalProgress, TerminalSession,
+    AgentStatusEvent, SearchMatch, SearchOptions, SessionEvent, TerminalInfo, TerminalProgress,
+    TerminalSession,
 };
+use std::sync::Arc;
 
 use super::element::{GridMetrics, RowLayoutCache};
 use super::highlight::SemanticOverlay;
@@ -62,6 +64,12 @@ pub struct LocalTerminalView {
     pub(crate) pending_notifications: Vec<String>,
     /// Current OSC 9;4 taskbar progress (`None` = no progress / removed).
     pub(crate) progress: Option<TerminalProgress>,
+    /// Latest OSC 9;7 coding-agent status event for this terminal
+    /// (see `docs/osc-agent-status.md`). `None` until the first event.
+    /// `seq` dedup is already applied by the listener; the view just keeps
+    /// the latest for whichever UI wants to render it (the AgentPanel
+    /// placeholder can later consume this).
+    pub(crate) agent_status: Option<Arc<AgentStatusEvent>>,
     /// Scrollbar drag state: Some(drag_start_y) while dragging the thumb.
     pub(crate) scrollbar_drag_start: Option<f32>,
     /// Last scroll time — used to auto-hide the scrollbar after 2s.
@@ -223,6 +231,12 @@ impl LocalTerminalView {
                             cx.notify();
                         });
                     }
+                    SessionEvent::AgentStatus(ev) => {
+                        let _ = this.update(cx, |view, cx| {
+                            view.agent_status = Some(ev);
+                            cx.notify();
+                        });
+                    }
                     _ => {
                         let _ = this.update(cx, |_, cx| cx.notify());
                     }
@@ -263,6 +277,7 @@ impl LocalTerminalView {
             has_bell: false,
             pending_notifications: Vec::new(),
             progress: None,
+            agent_status: None,
             scrollbar_drag_start: None,
             last_scroll_time: None,
             hovered_url: None,
@@ -385,6 +400,12 @@ impl LocalTerminalView {
                 Ok(SessionEvent::Progress(p)) => {
                     let _ = this.update(cx, |view, cx| {
                         view.set_progress(p);
+                        cx.notify();
+                    });
+                }
+                Ok(SessionEvent::AgentStatus(ev)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.agent_status = Some(ev);
                         cx.notify();
                     });
                 }

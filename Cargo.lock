@@ -5328,6 +5328,8 @@ dependencies = [
  "linkify",
  "log",
  "oneterm-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
