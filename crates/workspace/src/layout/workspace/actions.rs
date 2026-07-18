@@ -3,11 +3,8 @@
 use std::sync::atomic::Ordering;
 
 use gpui::{App, Context, Entity, Window};
-use gpui_component::{
-    WindowExt as _,
-    dialog::DialogButtonProps,
-    dock::{DockArea, DockItem, DockPlacement},
-};
+use gpui_component::{WindowExt as _, dialog::DialogButtonProps};
+use oneterm_ui::dock::{DockArea, DockItem, DockPlacement};
 
 use oneterm_actions::{
     About, AddPanel, AddPanelWithShell, AddSession, AddSftpBrowser, Find, NewSession, OpenSettings,

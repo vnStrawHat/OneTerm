@@ -1,0 +1,19 @@
+[package]
+name = "oneterm-ui"
+description = "OneTerm vendored fork of the gpui-component dock module, so we can patch it locally without forking the whole gpui-component repo."
+publish = false
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gpui.workspace = true
+gpui-component.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+smallvec = "1"
+itertools = "0.13"
+instant = "0.1"
+rust-i18n.workspace = true

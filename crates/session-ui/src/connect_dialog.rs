@@ -21,10 +21,10 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     dialog::{DialogButtonProps, DialogFooter},
-    dock::PanelView,
     input::{Input, InputState},
     notification::NotificationType,
 };
+use oneterm_ui::dock::PanelView;
 
 use oneterm_core::{SshAuthMethod, SshConfig};
 use oneterm_terminal::PtySize;

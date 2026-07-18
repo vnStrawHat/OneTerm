@@ -26,14 +26,13 @@ use gpui::{
 };
 
 use gpui_component::{
-    ActiveTheme as _,
-    dock::{Panel, PanelControl, PanelEvent, PanelInfo, PanelState, register_panel},
-    h_flex,
+    ActiveTheme as _, h_flex,
     resizable::{resizable_panel, v_resizable},
     v_flex,
 };
 use oneterm_session_ui::SessionPanel;
 use oneterm_sftp_ui::SftpPanel;
+use oneterm_ui::dock::{Panel, PanelControl, PanelEvent, PanelInfo, PanelState, register_panel};
 
 /// Panel name registered with the gpui-component `PanelRegistry`.
 ///

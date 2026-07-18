@@ -11,7 +11,8 @@ use gpui::{
     Context, IntoElement, ParentElement as _, Render, SharedString, Styled as _, WeakEntity,
     Window, div,
 };
-use gpui_component::{ActiveTheme as _, dock::TabPanel};
+use gpui_component::ActiveTheme as _;
+use oneterm_ui::dock::TabPanel;
 
 use super::super::panel::TerminalPanel;
 

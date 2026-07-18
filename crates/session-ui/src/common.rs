@@ -12,12 +12,11 @@ use std::sync::Arc;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{App, IntoElement, ParentElement as _, SharedString, Styled, Window, div};
 use gpui_component::{
-    ActiveTheme,
-    dock::{DockPlacement, PanelView},
-    h_flex,
+    ActiveTheme, h_flex,
     input::{Input, InputState},
     v_flex,
 };
+use oneterm_ui::dock::{DockPlacement, PanelView};
 
 use oneterm_state::AppState;
 

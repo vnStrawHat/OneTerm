@@ -12,3 +12,4 @@ oneterm-core.workspace = true
 oneterm-terminal.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
+oneterm-ui.workspace = true

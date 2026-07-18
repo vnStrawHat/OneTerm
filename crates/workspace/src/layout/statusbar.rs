@@ -9,9 +9,9 @@ use gpui::{Context, Entity, Styled, Window, div, px};
 use gpui_component::{
     ActiveTheme as _, IconName, Sizable,
     button::{Button, ButtonVariants as _},
-    dock::{DockArea, DockEvent, DockPlacement},
     status_bar::StatusBar,
 };
+use oneterm_ui::dock::{DockArea, DockEvent, DockPlacement};
 
 use crate::layout::OneTermWorkspace;
 use crate::widgets::{BreadcrumbIndicator, DateTimeClock, NetSpeedIndicator, ResourceIndicator};

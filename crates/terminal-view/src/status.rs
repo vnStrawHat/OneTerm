@@ -7,11 +7,11 @@
 use std::sync::Arc;
 
 use gpui::{App, Entity, Window};
-use gpui_component::dock::{DockArea, PanelView};
 use oneterm_core::ShellKind;
 use oneterm_state::active_terminal::ActiveTerminalMetricsProvider;
 use oneterm_state::dock_util::collect_tab_panels;
 use oneterm_terminal::NetStats;
+use oneterm_ui::dock::{DockArea, PanelView};
 
 use crate::panel::TerminalPanel;
 

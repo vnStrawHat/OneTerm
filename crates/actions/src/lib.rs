@@ -1,7 +1,8 @@
 //! UI-level actions for OneTerm.
 
 use gpui::{SharedString, actions};
-use gpui_component::{ThemeMode, dock::DockPlacement};
+use gpui_component::ThemeMode;
+use oneterm_ui::dock::DockPlacement;
 use serde::Deserialize;
 
 // Re-exported so call-sites can use `oneterm_actions::RightDockMode` without

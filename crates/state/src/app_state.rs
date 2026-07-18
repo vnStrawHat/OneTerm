@@ -6,9 +6,9 @@
 use std::sync::{Arc, Mutex};
 
 use gpui::{App, AppContext, Entity, Global, WeakEntity};
-use gpui_component::dock::DockArea;
 use oneterm_core::SftpBackend;
 use oneterm_terminal::CwdSource;
+use oneterm_ui::dock::DockArea;
 
 /// The application's global state.
 #[derive(Default)]

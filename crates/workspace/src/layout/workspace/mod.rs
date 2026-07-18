@@ -13,10 +13,8 @@ use gpui::{
     App, AppContext, Context, Entity, EntityId, InteractiveElement as _, IntoElement,
     ParentElement, Render, Styled, Task, Window, div,
 };
-use gpui_component::{
-    Root,
-    dock::{DockArea, DockEvent, PanelEvent, ToggleZoom},
-};
+use gpui_component::Root;
+use oneterm_ui::dock::{DockArea, DockEvent, PanelEvent, ToggleZoom};
 
 use oneterm_state::AppState;
 
@@ -82,8 +80,8 @@ pub(crate) fn build_named_panel(
     dock_area: &gpui::WeakEntity<DockArea>,
     window: &mut Window,
     cx: &mut App,
-) -> std::sync::Arc<dyn gpui_component::dock::PanelView> {
-    use gpui_component::dock::{PanelInfo, PanelRegistry, PanelState};
+) -> std::sync::Arc<dyn oneterm_ui::dock::PanelView> {
+    use oneterm_ui::dock::{PanelInfo, PanelRegistry, PanelState};
     let state = PanelState {
         panel_name: name.to_string(),
         children: Vec::new(),
@@ -117,7 +115,7 @@ pub struct OneTermWorkspace {
     pub breadcrumb: Entity<BreadcrumbIndicator>,
     /// CPU/memory resource indicator — created once so the 2s timer fires reliably.
     pub resource: Entity<ResourceIndicator>,
-    last_layout_state: Option<gpui_component::dock::DockAreaState>,
+    last_layout_state: Option<oneterm_ui::dock::DockAreaState>,
     toggle_button_visible: Arc<AtomicBool>,
     _save_layout_task: Option<Task<()>>,
 
@@ -140,7 +138,7 @@ impl OneTermWorkspace {
         AppState::init(cx);
 
         let dock_area = cx.new(|cx| {
-            use gpui_component::dock::PanelStyle;
+            use oneterm_ui::dock::PanelStyle;
             DockArea::new(MAIN_DOCK_ID, Some(MAIN_DOCK_VERSION), window, cx)
                 .panel_style(PanelStyle::TabBar)
         });

@@ -25,13 +25,13 @@ use gpui::{
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable,
     button::{Button, ButtonVariants as _},
-    dock::{Panel, PanelControl, PanelEvent, PanelView, TabPanel},
     h_flex,
     menu::DropdownMenu as _,
 };
 use oneterm_core::ShellKind;
 use oneterm_terminal::PtySize;
 use oneterm_terminal::TerminalSession;
+use oneterm_ui::dock::{Panel, PanelControl, PanelEvent, PanelView, TabPanel};
 
 use oneterm_actions::{AddPanelWithShell, NewSession};
 use oneterm_settings::{TabTitleMode, TerminalSettings};

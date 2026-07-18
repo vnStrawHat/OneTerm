@@ -2,7 +2,7 @@
 
 use anyhow::{Context as _, Result};
 use gpui::{Context, Edges, Entity, PromptLevel, Window};
-use gpui_component::dock::{DockArea, DockAreaState};
+use oneterm_ui::dock::{DockArea, DockAreaState};
 
 use super::{MAIN_DOCK_VERSION, SFTP_TABLE_STATE_FIELD, state_file};
 
@@ -135,7 +135,7 @@ pub(crate) fn read_toggle_button_visible() -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use gpui_component::dock::DockAreaState;
+    use oneterm_ui::dock::DockAreaState;
 
     #[test]
     fn zoomed_panel_field_roundtrips_and_keeps_state_deserializable() {

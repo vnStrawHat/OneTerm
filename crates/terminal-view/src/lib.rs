@@ -29,7 +29,7 @@ pub use theme::{TerminalTheme, build_terminal_theme, ensure_minimum_contrast, re
 pub use view::LocalTerminalView;
 
 use gpui::App;
-use gpui_component::dock::register_panel;
+use oneterm_ui::dock::register_panel;
 
 /// Initialize the terminal feature.
 ///

@@ -51,8 +51,8 @@ pub(super) const BINDABLE_ACTIONS: &[BindableAction] = &[
         group: "App Menu",
         default: Some("shift-escape"),
         context: None,
-        make: |ks, ctx| make_binding(ks, gpui_component::dock::ToggleZoom, ctx),
-        name_fn: <gpui_component::dock::ToggleZoom as Action>::name_for_type,
+        make: |ks, ctx| make_binding(ks, oneterm_ui::dock::ToggleZoom, ctx),
+        name_fn: <oneterm_ui::dock::ToggleZoom as Action>::name_for_type,
     },
     BindableAction {
         id: "close_panel",
@@ -60,8 +60,8 @@ pub(super) const BINDABLE_ACTIONS: &[BindableAction] = &[
         group: "App Menu",
         default: Some("ctrl-w"),
         context: None,
-        make: |ks, ctx| make_binding(ks, gpui_component::dock::ClosePanel, ctx),
-        name_fn: <gpui_component::dock::ClosePanel as Action>::name_for_type,
+        make: |ks, ctx| make_binding(ks, oneterm_ui::dock::ClosePanel, ctx),
+        name_fn: <oneterm_ui::dock::ClosePanel as Action>::name_for_type,
     },
     BindableAction {
         id: "new_terminal_tab",
@@ -69,13 +69,7 @@ pub(super) const BINDABLE_ACTIONS: &[BindableAction] = &[
         group: "App Menu",
         default: Some("ctrl-t"),
         context: None,
-        make: |ks, ctx| {
-            make_binding(
-                ks,
-                AddPanel(gpui_component::dock::DockPlacement::Center),
-                ctx,
-            )
-        },
+        make: |ks, ctx| make_binding(ks, AddPanel(oneterm_ui::dock::DockPlacement::Center), ctx),
         name_fn: <AddPanel as Action>::name_for_type,
     },
     BindableAction {

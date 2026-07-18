@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use gpui::{AppContext as _, Entity, Window};
 
-use gpui_component::{dock::PanelView, resizable::ResizableState};
+use gpui_component::resizable::ResizableState;
+use oneterm_ui::dock::PanelView;
 
 use oneterm_state::AppState;
 

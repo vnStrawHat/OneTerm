@@ -6,7 +6,7 @@
 //! other to share them.
 
 use gpui::{App, Entity, Window};
-use gpui_component::dock::{DockArea, DockItem, TabPanel};
+use oneterm_ui::dock::{DockArea, DockItem, TabPanel};
 
 /// Set the Right Dock open/closed (no-op if there is no right dock).
 ///

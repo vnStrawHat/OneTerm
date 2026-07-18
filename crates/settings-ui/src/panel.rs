@@ -11,8 +11,8 @@ use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, Render,
     Window,
 };
-use gpui_component::dock::{Panel, PanelControl, PanelEvent};
 use gpui_component::setting::{SettingPage, Settings};
+use oneterm_ui::dock::{Panel, PanelControl, PanelEvent};
 
 use super::{about, appearance, general, key_bindings, terminal};
 

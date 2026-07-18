@@ -1,7 +1,7 @@
 //! Default workspace layout construction.
 
 use gpui::{App, Window, px};
-use gpui_component::dock::{DockArea, DockItem};
+use oneterm_ui::dock::{DockArea, DockItem};
 
 use super::MAIN_DOCK_VERSION;
 

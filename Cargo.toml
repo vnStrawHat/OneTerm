@@ -13,6 +13,7 @@ members = [
     "crates/session-ui",
     "crates/settings-ui",
     "crates/local-shell",
+    "crates/ui",
     "crates/ssh",
 ]
 resolver = "3"
@@ -38,6 +39,7 @@ oneterm-actions = { path = "crates/actions" }
 oneterm-settings = { path = "crates/settings" }
 oneterm-state = { path = "crates/state" }
 oneterm-theme = { path = "crates/theme" }
+oneterm-ui = { path = "crates/ui" }
 oneterm-workspace = { path = "crates/workspace" }
 oneterm-terminal-view = { path = "crates/terminal-view" }
 oneterm-sftp-ui = { path = "crates/sftp-ui" }

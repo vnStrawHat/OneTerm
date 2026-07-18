@@ -22,12 +22,9 @@ use gpui::{
     Window,
 };
 use gpui_component::{
-    WindowExt,
-    dock::{Panel, PanelControl, PanelEvent},
-    input::InputState,
-    notification::NotificationType,
-    tree::TreeState,
+    WindowExt, input::InputState, notification::NotificationType, tree::TreeState,
 };
+use oneterm_ui::dock::{Panel, PanelControl, PanelEvent};
 
 use crate::session_state::SshSessionStore;
 use oneterm_actions::{DeleteSession, NewSession, OpenSession, SessionProperty};

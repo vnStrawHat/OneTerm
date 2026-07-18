@@ -20,8 +20,9 @@ use gpui::{
     App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
     IntoElement, ParentElement, Render, Styled, Task, WeakEntity, Window, div,
 };
-use gpui_component::{ActiveTheme as _, dock::DockArea};
+use gpui_component::ActiveTheme as _;
 use oneterm_terminal::NetStats;
+use oneterm_ui::dock::DockArea;
 
 /// Indicator showing the network speed (bps) of the active SSH session in the StatusBar.
 pub struct NetSpeedIndicator {

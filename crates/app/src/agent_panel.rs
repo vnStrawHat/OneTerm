@@ -18,11 +18,8 @@ use gpui::{
     InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Window, div,
 };
 
-use gpui_component::{
-    ActiveTheme as _,
-    dock::{Panel, PanelControl, PanelEvent, PanelInfo, PanelState, register_panel},
-    v_flex,
-};
+use gpui_component::{ActiveTheme as _, v_flex};
+use oneterm_ui::dock::{Panel, PanelControl, PanelEvent, PanelInfo, PanelState, register_panel};
 
 /// Panel name registered with the gpui-component `PanelRegistry`.
 ///
