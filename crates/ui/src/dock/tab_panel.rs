@@ -206,6 +206,29 @@ impl TabPanel {
         }
     }
 
+    /// Activate the tab whose panel matches `panel` (by `entity_id`).
+    ///
+    /// No-op if `panel` is not in this `TabPanel` or is already the active
+    /// tab. Used by the Agent Monitor to jump to the Tab/Space holding a
+    /// given agent (see `docs/agent-monitor-design.md` §3.7). This is the
+    /// public, panel-keyed wrapper around the private `set_active_ix`,
+    /// which is otherwise only reachable from tab clicks / add-remove.
+    pub fn set_active_panel(
+        &mut self,
+        panel: &Arc<dyn PanelView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let target_id = panel.view().entity_id();
+        if let Some(ix) = self
+            .panels
+            .iter()
+            .position(|p| p.view().entity_id() == target_id)
+        {
+            self.set_active_ix(ix, window, cx);
+        }
+    }
+
     pub fn active_ix(&self) -> usize {
         self.active_ix
     }
