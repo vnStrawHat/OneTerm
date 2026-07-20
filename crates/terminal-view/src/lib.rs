@@ -1,5 +1,6 @@
 //! Terminal panel — each tab is one Terminal.
 
+pub mod agent;
 pub mod box_drawing;
 pub mod cell;
 #[cfg(any(test, feature = "terminal-diagnostics"))]
@@ -38,6 +39,7 @@ use oneterm_ui::dock::register_panel;
 /// stats read the active terminal through it). Called by the app aggregator.
 pub fn init(cx: &mut App) {
     status::register_status_metrics(cx);
+    agent::init(cx);
     register_panel(cx, "terminal", |_, _, _, window, cx| {
         Box::new(panel::TerminalPanel::new_entity(window, cx))
     });

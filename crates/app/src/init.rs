@@ -32,6 +32,10 @@ pub fn init(cx: &mut App) {
     oneterm_sftp_ui::init(cx);
     // Session: SSH session store global + "session" panel.
     oneterm_session_ui::init(cx);
+    // Agent: the global AgentRegistry (folded OSC 9;7 model behind the Agent
+    // Panel). Ensures the registry exists so terminals can fold into it even
+    // before the Agent panel is first opened.
+    oneterm_agent_ui::init(cx);
 
     // SSH Client right-dock panel (Session + SFTP) — registered here because it
     // composes two feature crates, which only the omniscient `app` crate may

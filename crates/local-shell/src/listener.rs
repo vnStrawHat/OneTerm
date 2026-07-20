@@ -237,7 +237,20 @@ impl LocalListener {
                     &ev,
                 );
                 if apply {
+                    log::debug!(
+                        "OSC 9;7 applied & forwarded: agent={} type={} seq={}",
+                        ev.agent(),
+                        ev.type_name(),
+                        ev.seq()
+                    );
                     self.forward(SessionEvent::AgentStatus(std::sync::Arc::new(ev)));
+                } else {
+                    log::debug!(
+                        "OSC 9;7 dropped by dedup: agent={} type={} seq={}",
+                        ev.agent(),
+                        ev.type_name(),
+                        ev.seq()
+                    );
                 }
             }
         }
@@ -295,7 +308,13 @@ impl EventListener for LocalListener {
             // Parse once from the single VT pass — no second vte::Parser.
             Event::Osc { params, .. } => {
                 let refs: Vec<&[u8]> = params.iter().map(|p| p.as_slice()).collect();
-                if let Some(payload) = parse_osc(&refs) {
+                let parsed = parse_osc(&refs);
+                log::debug!(
+                    "LocalListener: Event::Osc recv with {} params, parsed = {}",
+                    refs.len(),
+                    parsed.is_some()
+                );
+                if let Some(payload) = parsed {
                     self.handle_osc_payload(payload);
                 }
             }
@@ -419,6 +438,75 @@ mod tests {
         assert!(matches!(
             rx.try_recv().unwrap(),
             SessionEvent::ShellIntegration(_)
+        ));
+    }
+
+    #[test]
+    fn osc97_agent_status_forwards() {
+        // OSC 9;7;<base64-json> — the engine forwards it as
+        // `Event::Osc { params: [b"9", b"7", <base64>] }`. The listener
+        // must parse + dedup + forward a `SessionEvent::AgentStatus`.
+        let (l, rx) = listener();
+        let json = stringify!(
+            {"v":1,"agent":"pi","type":"state",
+             "seq":1,"ts":1700000000000,
+             "state":"working","message":"hi"}
+        );
+        let params = oneterm_terminal::encode_osc97_params(json);
+        l.send_event(Event::Osc {
+            params,
+            bell_terminated: true,
+        });
+        match rx.try_recv().unwrap() {
+            SessionEvent::AgentStatus(ev) => {
+                assert_eq!(ev.agent(), "pi");
+                assert_eq!(ev.seq(), 1);
+                assert_eq!(ev.type_name(), "state");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn osc97_dedup_drops_stale_seq() {
+        // A second event with seq <= the last applied seq is dropped (spec §8.3).
+        let (l, rx) = listener();
+        let mk = |seq: u64| {
+            let json = format!(
+                "{{\"v\":1,\"agent\":\"pi\",\"type\":\"state\",
+                 \"seq\":{seq},\"ts\":1700000000000,
+                 \"state\":\"working\"}}"
+            );
+            oneterm_terminal::encode_osc97_params(&json)
+        };
+        l.send_event(Event::Osc {
+            params: mk(5),
+            bell_terminated: true,
+        });
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionEvent::AgentStatus(_)
+        ));
+        // seq=5 again (<= last applied) — dropped, nothing forwarded.
+        l.send_event(Event::Osc {
+            params: mk(5),
+            bell_terminated: true,
+        });
+        assert!(rx.try_recv().is_err());
+        // seq=3 (< last applied) — also dropped.
+        l.send_event(Event::Osc {
+            params: mk(3),
+            bell_terminated: true,
+        });
+        assert!(rx.try_recv().is_err());
+        // seq=6 (> last applied) — forwarded.
+        l.send_event(Event::Osc {
+            params: mk(6),
+            bell_terminated: true,
+        });
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionEvent::AgentStatus(_)
         ));
     }
 

@@ -1,24 +1,25 @@
-//! Agent Mode right-dock panel — placeholder for the future Agent feature.
+//! Agent Mode right-dock panel — composes the Agent feature's panel content.
 //!
 //! OneTerm's right dock content is switched by [`oneterm_core::RightDockMode`]:
 //! - `SshClient` → the combined Session + SFTP [`crate::ssh_client_panel::SshClientPanel`].
 //! - `Agent` → this [`AgentPanel`].
 //!
-//! For now the Agent panel is an empty placeholder (a centered "coming soon"
-//! message) so the mode toggle is fully wired end-to-end. The Agent feature's
-//! real panels (chat, tool calls, …) will replace this render later, mirroring
-//! how `SshClientPanel` composes `SessionPanel` + `SftpPanel`.
+//! Following the composite-panel pattern (`SshClientPanel` composes
+//! `SessionPanel` + `SftpPanel`), this panel hosts the Agent feature's
+//! [`oneterm_agent_ui::AgentListView`] — a right-dock "fleet view" of coding
+//! agents reporting via OSC 9;7. See `docs/agent-panel-display.md`.
 //!
-//! Like `SshClientPanel`, this is registered as a raw `DockItem::Panel` (no tab bar /
-//! close / zoom chrome) and lives in the `app` crate (the only omniscient crate,
-//! R9) so it can later compose any feature crates the Agent mode needs.
+//! Like `SshClientPanel`, this is registered as a raw `DockItem::Panel` (no tab
+//! bar / close / zoom chrome) and lives in the `app` crate (the only omniscient
+//! crate, R9) so it may compose feature crates.
 
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Window, div,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Window,
 };
 
 use gpui_component::{ActiveTheme as _, v_flex};
+use oneterm_agent_ui::AgentListView;
 use oneterm_ui::dock::{Panel, PanelControl, PanelEvent, PanelInfo, PanelState, register_panel};
 
 /// Panel name registered with the gpui-component `PanelRegistry`.
@@ -30,17 +31,19 @@ pub const AGENT_PANEL_NAME: &str = "agent_panel";
 
 /// Right-dock panel for Agent Mode.
 ///
-/// `panel_name = "agent_panel"`. Rendered raw as a `DockItem::Panel`. Today it
-/// shows a placeholder; the real Agent panels will be composed here later.
+/// `panel_name = "agent_panel"`. Rendered raw as a `DockItem::Panel`; hosts the
+/// [`AgentListView`] which renders its own header + scrolling card column.
 pub struct AgentPanel {
     focus_handle: FocusHandle,
+    list: Entity<AgentListView>,
 }
 
 impl AgentPanel {
     /// Create a new Agent panel.
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
+            list: AgentListView::new_entity(window, cx),
         }
     }
 
@@ -53,8 +56,9 @@ impl AgentPanel {
 impl EventEmitter<PanelEvent> for AgentPanel {}
 
 impl Focusable for AgentPanel {
-    fn focus_handle(&self, _cx: &App) -> FocusHandle {
-        self.focus_handle.clone()
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        // Delegate focus to the list so keyboard input reaches it.
+        self.list.read(cx).focus_handle(cx).clone()
     }
 }
 
@@ -92,27 +96,13 @@ impl Panel for AgentPanel {
 
 impl Render for AgentPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
+        let bg = cx.theme().background;
         v_flex()
             .id("agent-panel")
             .size_full()
             .track_focus(&self.focus_handle)
-            .bg(theme.background)
-            .items_center()
-            .justify_center()
-            .gap_1()
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(theme.foreground)
-                    .child("Agent Mode"),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child("Coming soon"),
-            )
+            .bg(bg)
+            .child(self.list.clone())
             .into_any_element()
     }
 }

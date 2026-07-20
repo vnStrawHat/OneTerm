@@ -299,6 +299,70 @@ impl TerminalPanel {
         self.tree.leaf_count()
     }
 
+    /// The resolved tab label (live OSC 0/2 title or the static fallback),
+    /// respecting the `tab_title_mode` setting. Used as the Agent Panel tab-group
+    /// title (`docs/agent-panel-display.md` §2.1).
+    ///
+    /// Reads the active terminal's session title via `v.read(cx)`. Do **not**
+    /// call this from inside a `LocalTerminalView::update` closure on the active
+    /// terminal — it would re-enter the view's lease and panic
+    /// (`entity_map::read` double-lease). Use [`Self::tab_label_with_title`]
+    /// instead, passing the title fetched from the already-leased view's own
+    /// `session.read(cx).title()`.
+    pub fn tab_label(&self, cx: &App) -> String {
+        let mode = TerminalSettings::global(cx).read(cx).tab_title_mode;
+        let session_title = self
+            .tree
+            .active_terminal()
+            .and_then(|v| v.read(cx).session.read(cx).title());
+        let live = match mode {
+            TabTitleMode::Osc => session_title.as_deref(),
+            TabTitleMode::Default => None,
+        };
+        resolve_tab_label(live, &self.tab_title)
+    }
+
+    /// Same as [`Self::tab_label`] but takes the live session title as a
+    /// parameter instead of reading the active terminal view. Use this from
+    /// contexts where the active `LocalTerminalView` is already being updated
+    /// (e.g. `push_agent_status` inside the view's `update` closure) — reading
+    /// it again would re-enter the view's lease and panic.
+    ///
+    /// `live_title` is the OSC 0/2 title of the terminal the event came from
+    /// (the caller already has the view and can read its own session). It is
+    /// only used when `tab_title_mode == Osc`; in `Default` mode the static
+    /// `tab_title` fallback is returned.
+    pub fn tab_label_with_title(&self, live_title: Option<&str>, cx: &App) -> String {
+        let mode = TerminalSettings::global(cx).read(cx).tab_title_mode;
+        let live = match mode {
+            TabTitleMode::Osc => live_title,
+            TabTitleMode::Default => None,
+        };
+        resolve_tab_label(live, &self.tab_title)
+    }
+
+    /// The Agent Panel Space label for `space_id`: `single` for a one-Space tab,
+    /// else `#N` (SpaceTree depth-first order — `docs/agent-panel-display.md` §5.1).
+    pub fn space_label(&self, space_id: SpaceId) -> String {
+        if self.tree.leaf_count() <= 1 {
+            return "single".to_string();
+        }
+        match self.tree.leaf_index(space_id) {
+            Some(i) => format!("#{}", i + 1),
+            None => "single".to_string(),
+        }
+    }
+
+    /// Whether `space_id` is the focused Space *and* this tab is the active tab.
+    pub fn is_space_active(&self, space_id: SpaceId) -> bool {
+        self.is_active && self.tree.active() == space_id
+    }
+
+    /// A weak handle to the containing `TabPanel` (for Agent Panel click-to-focus).
+    pub fn tab_panel_weak(&self) -> Option<WeakEntity<TabPanel>> {
+        self.tab_panel.clone()
+    }
+
     /// Whether this tab has no terminal Spaces left (all empty).
     pub fn has_no_terminals(&self, _cx: &App) -> bool {
         self.tree.has_no_terminals()

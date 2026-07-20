@@ -233,7 +233,20 @@ impl LocalTerminalView {
                     }
                     SessionEvent::AgentStatus(ev) => {
                         let _ = this.update(cx, |view, cx| {
+                            view.push_agent_status(&ev, cx);
                             view.agent_status = Some(ev);
+                            cx.notify();
+                        });
+                    }
+                    SessionEvent::Exited(code) => {
+                        let _ = this.update(cx, |view, cx| {
+                            view.mark_agent_ended(code, cx);
+                            cx.notify();
+                        });
+                    }
+                    SessionEvent::Closed => {
+                        let _ = this.update(cx, |view, cx| {
+                            view.mark_agent_ended(None, cx);
                             cx.notify();
                         });
                     }
@@ -318,6 +331,14 @@ impl LocalTerminalView {
         drop(self.blink_task.take());
         // Close the session (PTY/SSH channel).
         self.session.update(cx, |s, _| s.close());
+        // Drop this terminal's Agent Panel cards + navigation entry (spec §9:
+        // ended-vs-closed — a true close removes the cards, unlike process exit
+        // which only marks them Ended).
+        let key = cx.entity_id();
+        if let Some(registry) = oneterm_state::AgentRegistry::try_global(cx) {
+            registry.update(cx, |reg, cx| reg.remove_terminal(key, cx));
+        }
+        crate::agent::remove_nav(cx, key);
     }
 
     /// Return a snapshot of the most recently painted renderer counters.
@@ -332,6 +353,73 @@ impl LocalTerminalView {
             TerminalProgress::Remove => None,
             other => Some(other),
         };
+    }
+
+    /// Fold an OSC 9;7 event into the global `AgentRegistry` (Agent Panel model)
+    /// and refresh this terminal's navigation entry, tagging the event with its
+    /// Tab/Space grouping metadata (`docs/agent-panel-display.md` §3 / §12).
+    ///
+    /// No-op until the registry global is initialized and the panel has wired
+    /// up `split_ctx` (always set for a live terminal leaf).
+    pub(crate) fn push_agent_status(&self, ev: &Arc<AgentStatusEvent>, cx: &mut Context<Self>) {
+        log::debug!(
+            "push_agent_status: recv agent={} type={} seq={}",
+            ev.agent(),
+            ev.type_name(),
+            ev.seq()
+        );
+        let Some(registry) = oneterm_state::AgentRegistry::try_global(cx) else {
+            log::debug!("push_agent_status: AgentRegistry global not initialized — dropping");
+            return;
+        };
+        let Some(sc) = self.split_ctx.clone() else {
+            log::debug!("push_agent_status: no split_ctx — dropping");
+            return;
+        };
+        let Some(panel) = sc.panel.upgrade() else {
+            log::debug!("push_agent_status: split_ctx.panel already dropped — dropping");
+            return;
+        };
+        let terminal_key = cx.entity_id();
+        let tab_key = panel.entity_id();
+
+        let (grouping, nav) = {
+            let p = panel.read(cx);
+            // Fetch the live OSC 0/2 title from OUR OWN session (a different
+            // entity — safe to read while the view is leased) and pass it to
+            // `tab_label_with_title`. We must NOT call `p.tab_label(cx)` here:
+            // it reads the active terminal view via `v.read(cx)`, and we ARE
+            // that view mid-`update` — re-reading would double-lease the view
+            // and panic (`entity_map::read`).
+            let live_title = self.session.read(cx).title();
+            let grouping = oneterm_state::Grouping {
+                tab_key,
+                tab_title: p.tab_label_with_title(live_title.as_deref(), cx),
+                space_label: p.space_label(sc.space_id),
+                space_active: p.is_space_active(sc.space_id),
+            };
+            let nav = crate::agent::AgentNav {
+                tab_panel: p.tab_panel_weak(),
+                panel: sc.panel.clone(),
+                space_id: sc.space_id,
+            };
+            (grouping, nav)
+        };
+
+        crate::agent::register_nav(cx, terminal_key, nav);
+        registry.update(cx, |reg, cx| reg.apply(terminal_key, grouping, ev, cx));
+    }
+
+    /// Mark this terminal's agent card(s) as `Ended` in the registry (host is
+    /// authoritative for process death — spec §5.2.7). No-op if the registry is
+    /// not initialized or the terminal never reported an agent.
+    pub(crate) fn mark_agent_ended(&self, exit_code: Option<i32>, cx: &mut Context<Self>) {
+        if let Some(registry) = oneterm_state::AgentRegistry::try_global(cx) {
+            let key = cx.entity_id();
+            registry.update(cx, |reg, cx| {
+                reg.set_lifecycle(key, oneterm_state::Lifecycle::Ended { exit_code }, cx);
+            });
+        }
     }
 
     /// Reply to an OSC 52 clipboard-read request (`52;c;?`) with the current
@@ -405,6 +493,7 @@ impl LocalTerminalView {
                 }
                 Ok(SessionEvent::AgentStatus(ev)) => {
                     let _ = this.update(cx, |view, cx| {
+                        view.push_agent_status(&ev, cx);
                         view.agent_status = Some(ev);
                         cx.notify();
                     });

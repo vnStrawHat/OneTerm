@@ -54,6 +54,7 @@ oneterm-terminal-view.workspace = true
 oneterm-sftp-ui.workspace = true
 oneterm-session-ui.workspace = true
 oneterm-settings-ui.workspace = true
+oneterm-agent-ui.workspace = true
 
 gpui.workspace = true
 gpui_platform.workspace = true

@@ -154,6 +154,12 @@ impl SpaceTree {
         self.cur().leaf_count()
     }
 
+    /// The 0-based depth-first index of leaf `id` (for the Agent Panel `#N`
+    /// Space label). `None` if `id` is not a leaf.
+    pub fn leaf_index(&self, id: SpaceId) -> Option<usize> {
+        self.cur().leaf_index(id)
+    }
+
     /// The active leaf id.
     pub fn active(&self) -> SpaceId {
         self.active

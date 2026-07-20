@@ -78,6 +78,15 @@ pub fn parse_osc(params: &[&[u8]]) -> Option<OscPayload> {
         return None;
     }
     let kind = std::str::from_utf8(params[0]).ok()?;
+    // Debug-trace every OSC the engine forwards, so you can confirm the VT
+    // pump delivered it (e.g. `RUST_LOG=oneterm_terminal=trace`). The first
+    // param is the OSC number; the second (when present) is the sub-code
+    // (e.g. `7` for OSC 9;7, `4` for OSC 9;4, `A`/`B`/`C`/`D` for OSC 133).
+    let sub = params
+        .get(1)
+        .and_then(|p| std::str::from_utf8(p).ok())
+        .unwrap_or("");
+    log::debug!("OSC recv: {kind};{sub} ({} params)", params.len());
     match kind {
         // OSC 7: params = ["7", "file://..."]
         "7" if params.len() >= 2 => {
@@ -93,8 +102,22 @@ pub fn parse_osc(params: &[&[u8]]) -> Option<OscPayload> {
                 // base64-wrapped JSON payload (spec §3.1). Malformed payloads
                 // are dropped silently by `parse_agent_status` (spec §3.3).
                 if let Some(b64) = params.get(2) {
-                    parse_agent_status(b64).map(|ev| OscPayload::AgentStatus(Box::new(ev)))
+                    let ev = parse_agent_status(b64);
+                    if let Some(ref ev) = ev {
+                        log::debug!(
+                            "OSC 9;7 parsed: agent={} type={} seq={}",
+                            ev.agent(),
+                            ev.type_name(),
+                            ev.seq()
+                        );
+                    } else {
+                        log::debug!(
+                            "OSC 9;7 dropped: parse_agent_status returned None (bad base64/utf8/json/schema/type)"
+                        );
+                    }
+                    ev.map(|ev| OscPayload::AgentStatus(Box::new(ev)))
                 } else {
+                    log::debug!("OSC 9;7 dropped: no base64 parameter (params had no index 2)");
                     None
                 }
             } else if params[1] == b"4" {

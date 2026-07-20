@@ -6,10 +6,16 @@
 //! graph acyclic. [`notif_ext`] provides theme-tinted notification builders.
 
 pub mod active_terminal;
+pub mod agent_focus;
+pub mod agent_registry;
 pub mod app_state;
 pub mod commands;
 pub mod dock_util;
 pub mod notif_ext;
 pub mod paths;
 
+pub use agent_registry::{
+    AgentCard, AgentRegistry, AgentStateCounts, ApprovalInfo, FileEntry, Grouping, Lifecycle,
+    ModelInfo, ToolRun,
+};
 pub use app_state::AppState;

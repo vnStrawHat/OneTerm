@@ -49,9 +49,27 @@ pub struct UiConfig {
     /// `OneTermWorkspace::new`.
     #[serde(default)]
     pub right_dock_mode: RightDockMode,
+
+    /// Agent Panel staleness threshold in milliseconds. An agent card with no
+    /// OSC 9;7 event within `max(this, 3 × heartbeat_interval)` (while its
+    /// terminal process is alive) is marked "stale" (see
+    /// `docs/agent-panel-display.md` §9, `docs/osc-agent-status.md` §5.3).
+    /// `None` = the built-in default ([`UiConfig::DEFAULT_AGENT_STALE_THRESHOLD_MS`], 5 min).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub agent_stale_threshold_ms: Option<u64>,
 }
 
 impl UiConfig {
+    /// Built-in default for [`UiConfig::agent_stale_threshold_ms`] — 5 minutes.
+    pub const DEFAULT_AGENT_STALE_THRESHOLD_MS: u64 = 300_000;
+
+    /// The effective agent-panel staleness threshold in ms (config value or the
+    /// built-in default). A value of `0` disables staleness marking.
+    pub fn agent_stale_threshold_ms(&self) -> u64 {
+        self.agent_stale_threshold_ms
+            .unwrap_or(Self::DEFAULT_AGENT_STALE_THRESHOLD_MS)
+    }
+
     /// Load the config from file. Missing/unparseable → default (and a default
     /// file is written if absent, like `TerminalConfig::load`).
     pub fn load() -> Self {

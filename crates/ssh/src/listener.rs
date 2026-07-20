@@ -262,7 +262,20 @@ impl SshListener {
                     &ev,
                 );
                 if apply {
+                    log::debug!(
+                        "OSC 9;7 applied & forwarded: agent={} type={} seq={}",
+                        ev.agent(),
+                        ev.type_name(),
+                        ev.seq()
+                    );
                     self.forward(SessionEvent::AgentStatus(std::sync::Arc::new(ev)));
+                } else {
+                    log::debug!(
+                        "OSC 9;7 dropped by dedup: agent={} type={} seq={}",
+                        ev.agent(),
+                        ev.type_name(),
+                        ev.seq()
+                    );
                 }
             }
         }
@@ -314,7 +327,13 @@ impl EventListener for SshListener {
             // ── OSC 7/9/133 (fork: Handler::report_osc → Event::Osc) ────
             Event::Osc { params, .. } => {
                 let refs: Vec<&[u8]> = params.iter().map(|p| p.as_slice()).collect();
-                if let Some(payload) = parse_osc(&refs) {
+                let parsed = parse_osc(&refs);
+                log::debug!(
+                    "SshListener: Event::Osc recv with {} params, parsed = {}",
+                    refs.len(),
+                    parsed.is_some()
+                );
+                if let Some(payload) = parsed {
                     self.handle_osc_payload(payload);
                 }
             }

@@ -5171,6 +5171,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "oneterm-agent-ui"
+version = "0.0.0"
+dependencies = [
+ "gpui",
+ "gpui-component",
+ "log",
+ "oneterm-core",
+ "oneterm-settings",
+ "oneterm-state",
+ "oneterm-terminal",
+ "oneterm-theme",
+ "oneterm-ui",
+]
+
+[[package]]
 name = "oneterm-app"
 version = "0.0.0"
 dependencies = [
@@ -5182,6 +5197,7 @@ dependencies = [
  "gpui-component-assets",
  "gpui_platform",
  "log",
+ "oneterm-agent-ui",
  "oneterm-core",
  "oneterm-local-shell",
  "oneterm-session-ui",

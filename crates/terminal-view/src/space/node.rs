@@ -83,6 +83,34 @@ impl SpaceNode {
         }
     }
 
+    /// The 0-based depth-first (left→right) index of leaf `id` in this subtree,
+    /// or `None` if `id` is not a leaf here. Used for the Agent Panel's stable
+    /// `#N` Space label (`docs/agent-panel-display.md` §5.1 / §14.1).
+    pub fn leaf_index(&self, id: SpaceId) -> Option<usize> {
+        fn walk(node: &SpaceNode, id: SpaceId, counter: &mut usize) -> Option<usize> {
+            match node {
+                SpaceNode::Leaf(leaf) => {
+                    if leaf.id == id {
+                        Some(*counter)
+                    } else {
+                        *counter += 1;
+                        None
+                    }
+                }
+                SpaceNode::Split(split) => {
+                    for c in &split.children {
+                        if let Some(i) = walk(c, id, counter) {
+                            return Some(i);
+                        }
+                    }
+                    None
+                }
+            }
+        }
+        let mut counter = 0;
+        walk(self, id, &mut counter)
+    }
+
     /// Collect every terminal view in this subtree.
     pub fn collect_terminal_views(&self, out: &mut Vec<Entity<LocalTerminalView>>) {
         match self {
