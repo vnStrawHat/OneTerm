@@ -13,7 +13,6 @@
 
 mod card;
 
-use std::collections::HashSet;
 use std::time::Duration;
 
 use gpui::{
@@ -29,8 +28,8 @@ use oneterm_terminal::AgentState;
 
 use card::Palette;
 
-/// How often the view re-renders relative-time labels.
-const RELATIVE_TIME_TICK: Duration = Duration::from_secs(1);
+/// How often the view re-renders relative-time labels and card spinners.
+const RELATIVE_TIME_TICK: Duration = Duration::from_millis(120);
 
 /// How often the registry is polled to mark idle cards stale (§9).
 const STALE_TICK: Duration = Duration::from_secs(15);
@@ -43,22 +42,24 @@ pub enum Filter {
     Blocked,
     Errors,
     Idle,
+    Done,
+}
+
+#[derive(Clone, Copy)]
+struct StatusChipSpec {
+    filter: Filter,
+    marker: &'static str,
+    label: &'static str,
+    count: usize,
+    color: gpui::Hsla,
 }
 
 /// The Agent Panel content view. Observes the global [`AgentRegistry`] and
 /// re-renders on registry changes and on a periodic tick for relative-time
-/// labels; owns the view-local filter / collapse / expand state.
+/// labels; owns the view-local filter state.
 pub struct AgentListView {
     focus_handle: FocusHandle,
     filter: Filter,
-    /// "Collapse idle/done" — when on, resting cards are hidden (§8).
-    collapse_resting: bool,
-    /// Tab groups the user explicitly collapsed / expanded (overrides the
-    /// default, which collapses groups whose cards are all resting — §4 rule 1).
-    collapsed_groups: HashSet<EntityId>,
-    expanded_groups: HashSet<EntityId>,
-    /// Cards the user expanded to the detailed view (§4 rule 3).
-    expanded_cards: HashSet<(EntityId, String)>,
     _subs: Vec<gpui::Subscription>,
     _refresh_task: Task<()>,
 }
@@ -112,10 +113,6 @@ impl AgentListView {
         Self {
             focus_handle: cx.focus_handle(),
             filter: Filter::All,
-            collapse_resting: false,
-            collapsed_groups: HashSet::new(),
-            expanded_groups: HashSet::new(),
-            expanded_cards: HashSet::new(),
             _subs: subs,
             _refresh_task: refresh_task,
         }
@@ -128,38 +125,8 @@ impl AgentListView {
 
     // ── view-local state ────────────────────────────────────────────────
 
-    pub(crate) fn is_card_expanded(&self, key: &(EntityId, String)) -> bool {
-        self.expanded_cards.contains(key)
-    }
-
-    pub(crate) fn toggle_card(&mut self, key: (EntityId, String)) {
-        if !self.expanded_cards.remove(&key) {
-            self.expanded_cards.insert(key);
-        }
-    }
-
-    fn toggle_group(&mut self, tab_key: EntityId, currently_collapsed: bool) {
-        if currently_collapsed {
-            self.collapsed_groups.remove(&tab_key);
-            self.expanded_groups.insert(tab_key);
-        } else {
-            self.expanded_groups.remove(&tab_key);
-            self.collapsed_groups.insert(tab_key);
-        }
-    }
-
-    fn group_collapsed(&self, tab_key: EntityId, all_resting: bool) -> bool {
-        if self.expanded_groups.contains(&tab_key) {
-            false
-        } else if self.collapsed_groups.contains(&tab_key) {
-            true
-        } else {
-            all_resting
-        }
-    }
-
     fn passes_filter(&self, card: &AgentCard) -> bool {
-        if self.collapse_resting && card.is_resting() {
+        if matches!(card.lifecycle, Lifecycle::Ended { .. }) {
             return false;
         }
         match self.filter {
@@ -168,6 +135,7 @@ impl AgentListView {
             Filter::Blocked => card.state == AgentState::Blocked,
             Filter::Errors => card.state == AgentState::Error,
             Filter::Idle => card.state == AgentState::Idle,
+            Filter::Done => card.state == AgentState::Done,
         }
     }
 
@@ -191,43 +159,7 @@ impl AgentListView {
                     .text_color(pal.foreground)
                     .child("Agents"),
             )
-            .child(div().flex_1())
-            // "Collapse idle/done" toggle (⚙-menu action, §8).
-            .child(
-                div()
-                    .id("agent-collapse-resting")
-                    .size_5()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .when(self.collapse_resting, |this| {
-                        this.bg(pal.accent.opacity(0.25))
-                    })
-                    .hover(|this| this.bg(pal.accent.opacity(0.15)))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.collapse_resting = !this.collapse_resting;
-                        cx.notify();
-                    }))
-                    .child(Icon::new(IconName::Settings).xsmall().text_color(pal.muted)),
-            )
-            // "Clear ended" action (§8 / §9).
-            .child(
-                div()
-                    .id("agent-clear-ended")
-                    .px_1p5()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .text_xs()
-                    .text_color(pal.muted)
-                    .hover(|this| this.bg(pal.accent.opacity(0.15)))
-                    .on_click(cx.listener(|_, _, _, cx| {
-                        AgentRegistry::global(cx).update(cx, |reg, cx| reg.clear_ended(cx));
-                        cx.notify();
-                    }))
-                    .child("clear ended"),
-            );
+            .child(div().flex_1());
 
         v_flex()
             .w_full()
@@ -239,7 +171,6 @@ impl AgentListView {
             .border_b_1()
             .border_color(pal.border)
             .child(title)
-            .child(summary_line(counts, pal))
             .child(self.filter_chips(counts, pal, cx))
     }
 
@@ -250,47 +181,99 @@ impl AgentListView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let mut row = h_flex().w_full().flex_wrap().gap_1();
-        let mut chips = vec![
-            (Filter::All, "All"),
-            (Filter::Working, "Working"),
-            (Filter::Blocked, "Blocked"),
-            (Filter::Errors, "Errors"),
+        let chips = [
+            StatusChipSpec {
+                filter: Filter::All,
+                marker: "#",
+                label: "All",
+                count: counts.total,
+                color: pal.magenta,
+            },
+            StatusChipSpec {
+                filter: Filter::Working,
+                marker: "⠋",
+                label: "Work",
+                count: counts.working,
+                color: pal.success,
+            },
+            StatusChipSpec {
+                filter: Filter::Blocked,
+                marker: "▲",
+                label: "Block",
+                count: counts.blocked,
+                color: pal.warning,
+            },
+            StatusChipSpec {
+                filter: Filter::Errors,
+                marker: "✕",
+                label: "Err",
+                count: counts.error,
+                color: pal.danger,
+            },
+            StatusChipSpec {
+                filter: Filter::Idle,
+                marker: "○",
+                label: "Idle",
+                count: counts.idle,
+                color: pal.muted,
+            },
+            StatusChipSpec {
+                filter: Filter::Done,
+                marker: "✓",
+                label: "Done",
+                count: counts.done,
+                color: pal.info,
+            },
         ];
-        if counts.idle > 0 {
-            chips.push((Filter::Idle, "Idle"));
-        }
-        for (filter, label) in chips {
-            row = row.child(self.filter_chip(filter, label, pal, cx));
+
+        for chip in chips {
+            row = row.child(self.filter_chip(chip, pal, cx));
         }
         row
     }
 
     fn filter_chip(
         &self,
-        filter: Filter,
-        label: &'static str,
+        chip: StatusChipSpec,
         pal: &Palette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let active = self.filter == filter;
-        let id = SharedString::from(format!("agent-filter-{label}"));
-        div()
+        let active = self.filter == chip.filter;
+        let id = SharedString::from(format!("agent-filter-{}", chip.label));
+        h_flex()
             .id(id)
+            .items_center()
+            .gap_1()
             .px_1p5()
             .py_0p5()
             .rounded_sm()
             .cursor_pointer()
             .text_xs()
             .border_1()
-            .border_color(if active { pal.accent } else { pal.border })
-            .text_color(if active { pal.foreground } else { pal.muted })
-            .when(active, |this| this.bg(pal.accent.opacity(0.2)))
-            .hover(|this| this.bg(pal.accent.opacity(0.1)))
+            .border_color(chip.color)
+            .text_color(pal.foreground)
+            .when(active, |this| this.bg(chip.color.opacity(0.18)))
+            .hover(|this| this.bg(chip.color.opacity(0.12)))
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.filter = filter;
+                this.filter = chip.filter;
                 cx.notify();
             }))
-            .child(label)
+            .child(
+                div()
+                    .text_color(chip.color)
+                    .font_weight(FontWeight::BOLD)
+                    .child(chip.marker),
+            )
+            .child(div().child(chip.label))
+            .child(
+                div()
+                    .px_1()
+                    .rounded_sm()
+                    .bg(chip.color.opacity(0.16))
+                    .text_color(pal.foreground)
+                    .font_weight(FontWeight::BOLD)
+                    .child(chip.count.to_string()),
+            )
     }
 
     fn render_group(
@@ -301,8 +284,6 @@ impl AgentListView {
         pal: &Palette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let all_resting = cards.iter().all(|c| c.is_resting());
-        let collapsed = self.group_collapsed(tab_key, all_resting);
         let group_id = SharedString::from(format!("agent-group-{tab_key:?}"));
 
         let header = h_flex()
@@ -311,21 +292,6 @@ impl AgentListView {
             .items_center()
             .gap_1()
             .py_0p5()
-            .cursor_pointer()
-            .hover(|this| this.bg(pal.accent.opacity(0.08)))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.toggle_group(tab_key, collapsed);
-                cx.notify();
-            }))
-            .child(
-                Icon::new(if collapsed {
-                    IconName::ChevronRight
-                } else {
-                    IconName::ChevronDown
-                })
-                .xsmall()
-                .text_color(pal.muted),
-            )
             .child(
                 div()
                     .flex_1()
@@ -339,10 +305,8 @@ impl AgentListView {
             .children(group_badges(cards, pal));
 
         let mut col = v_flex().w_full().gap_1().child(header);
-        if !collapsed {
-            for card in cards {
-                col = col.child(self.render_card(card, pal, cx));
-            }
+        for card in cards {
+            col = col.child(self.render_card(card, pal, cx));
         }
         col
     }
@@ -438,37 +402,6 @@ impl Render for AgentListView {
 }
 
 // ── free rendering helpers ──────────────────────────────────────────────
-
-fn summary_line(counts: &AgentStateCounts, pal: &Palette) -> impl IntoElement {
-    let mut row = h_flex().w_full().flex_wrap().gap_1().text_xs();
-    let mut segs: Vec<(usize, &str, gpui::Hsla)> = Vec::new();
-    if counts.working > 0 {
-        segs.push((counts.working, "working", pal.success));
-    }
-    if counts.blocked > 0 {
-        segs.push((counts.blocked, "blocked", pal.warning));
-    }
-    if counts.idle > 0 {
-        segs.push((counts.idle, "idle", pal.muted));
-    }
-    if counts.error > 0 {
-        segs.push((counts.error, "err", pal.danger));
-    }
-    if counts.done > 0 {
-        segs.push((counts.done, "done", pal.muted));
-    }
-    if segs.is_empty() {
-        return row.child(div().text_color(pal.muted).child("no active agents"));
-    }
-    let last = segs.len() - 1;
-    for (i, (n, label, color)) in segs.into_iter().enumerate() {
-        row = row.child(div().text_color(color).child(format!("{n} {label}")));
-        if i != last {
-            row = row.child(div().text_color(pal.muted).child("·"));
-        }
-    }
-    row
-}
 
 /// Aggregate per-state count badges for a tab-group header (e.g. `🟢2 🟠1`).
 fn group_badges(cards: &[AgentCard], pal: &Palette) -> Vec<gpui::AnyElement> {
