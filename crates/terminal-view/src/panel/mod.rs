@@ -13,6 +13,7 @@ mod tests;
 
 mod actions;
 mod ops;
+mod title;
 
 use std::sync::Arc;
 
@@ -48,8 +49,10 @@ pub struct TerminalPanel {
     pub(super) tab_panel: Option<WeakEntity<TabPanel>>,
     /// Whether this panel is the currently selected tab in the `TabPanel`.
     pub(super) is_active: bool,
-    /// Tab title — "Terminal" for local, session label for SSH.
+    /// Tab title fallback — "Terminal" for local, session label for SSH.
     pub(super) tab_title: String,
+    /// Manual tab title override selected by the user (wins over OSC 0/2).
+    pub(super) tab_title_override: Option<String>,
     /// Subscriptions to every terminal leaf's `TitleChanged` — rebuilt whenever
     /// the set of terminals changes (split / close / drop / fill).
     pub(super) _title_subs: Vec<Subscription>,
@@ -130,6 +133,7 @@ impl TerminalPanel {
             tab_panel: None,
             is_active: false,
             tab_title: "Terminal".to_string(),
+            tab_title_override: None,
             _title_subs: Vec::new(),
             _settings_sub,
         };
@@ -163,6 +167,7 @@ impl TerminalPanel {
             tab_panel: None,
             is_active: false,
             tab_title: title.to_string(),
+            tab_title_override: None,
             _title_subs: Vec::new(),
             _settings_sub,
         };
@@ -299,8 +304,8 @@ impl TerminalPanel {
         self.tree.leaf_count()
     }
 
-    /// The resolved tab label (live OSC 0/2 title or the static fallback),
-    /// respecting the `tab_title_mode` setting. Used as the Agent Panel tab-group
+    /// The resolved tab label (manual override, live OSC 0/2 title, or static
+    /// fallback), respecting the `tab_title_mode` setting. Used as the Agent Panel tab-group
     /// title (`docs/agent-panel-display.md` §2.1).
     ///
     /// Reads the active terminal's session title via `v.read(cx)`. Do **not**
@@ -319,7 +324,7 @@ impl TerminalPanel {
             TabTitleMode::Osc => session_title.as_deref(),
             TabTitleMode::Default => None,
         };
-        resolve_tab_label(live, &self.tab_title)
+        self.effective_tab_label(live)
     }
 
     /// Same as [`Self::tab_label`] but takes the live session title as a
@@ -330,15 +335,15 @@ impl TerminalPanel {
     ///
     /// `live_title` is the OSC 0/2 title of the terminal the event came from
     /// (the caller already has the view and can read its own session). It is
-    /// only used when `tab_title_mode == Osc`; in `Default` mode the static
-    /// `tab_title` fallback is returned.
+    /// only used when `tab_title_mode == Osc` and no manual override exists; in
+    /// `Default` mode the static `tab_title` fallback is returned.
     pub fn tab_label_with_title(&self, live_title: Option<&str>, cx: &App) -> String {
         let mode = TerminalSettings::global(cx).read(cx).tab_title_mode;
         let live = match mode {
             TabTitleMode::Osc => live_title,
             TabTitleMode::Default => None,
         };
-        resolve_tab_label(live, &self.tab_title)
+        self.effective_tab_label(live)
     }
 
     /// The Agent Panel Space label for `space_id`: `single` for a one-Space tab,
@@ -417,8 +422,10 @@ impl Panel for TerminalPanel {
             TabTitleMode::Osc => session_title.as_deref(),
             TabTitleMode::Default => None,
         };
-        let tab_label = resolve_tab_label(live, &self.tab_title);
+        let tab_label = self.tab_label_with_title(live, cx);
         let drag_title: SharedString = tab_label.clone().into();
+        let rename_title = tab_label.clone();
+        let title_label_id = SharedString::from(format!("tab-title-label-{:?}", panel_entity));
 
         h_flex()
             .id("tab-title")
@@ -471,10 +478,27 @@ impl Panel for TerminalPanel {
             })
             .child(
                 div()
+                    .id(title_label_id)
                     .flex_1()
                     .overflow_hidden()
                     .text_ellipsis()
                     .whitespace_nowrap()
+                    .on_click({
+                        let panel = cx.entity().clone();
+                        let rename_title = rename_title.clone();
+                        move |event, window, cx| {
+                            if event.click_count() != 2 {
+                                return;
+                            }
+                            cx.stop_propagation();
+                            title::open_tab_title_dialog(
+                                panel.clone(),
+                                rename_title.clone(),
+                                window,
+                                cx,
+                            );
+                        }
+                    })
                     .child(tab_label),
             )
             .when_some(tab_panel, |this, tp| {

@@ -560,6 +560,26 @@ impl AgentRegistry {
         c
     }
 
+    /// Update the visible tab title for every card in a tab group.
+    pub fn rename_tab_title(
+        &mut self,
+        tab_key: EntityId,
+        tab_title: String,
+        cx: &mut Context<Self>,
+    ) {
+        let mut changed = false;
+        for card in self.cards.iter_mut() {
+            if card.tab_key != tab_key || card.tab_title == tab_title {
+                continue;
+            }
+            card.tab_title = tab_title.clone();
+            changed = true;
+        }
+        if changed {
+            cx.notify();
+        }
+    }
+
     /// Fold one event into the matching card (create if absent), refreshing its
     /// grouping metadata. `seq` dedup is already applied upstream.
     pub fn apply(
