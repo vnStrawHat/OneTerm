@@ -7,7 +7,7 @@
 ## 1. Directory tree (actual state)
 
 OneTerm is a **layered** workspace. The UI is split into low shared layers, a
-feature-agnostic app shell, and four feature crates; the two protocol backends
+feature-agnostic app shell, and five feature crates; the two protocol backends
 (`ssh` / `local-shell`) are known **only** to the `app` binary. See §3 for the crate
 responsibilities and the dependency graph.
 
@@ -116,10 +116,12 @@ OneTerm/
 │   │   └── src/                    # lib.rs init() (SshSessionStore::init + register "session" panel);
 │   │                               #   panel, connect_dialog, quick_connect_dialog, session_state.rs …
 │   │
-│   └── settings-ui/                # `oneterm-settings-ui` — General Settings window (has build.rs)
-│       ├── build.rs                # Publishes ONETERM_VERSION (About page)
-│       └── src/                    # lib.rs: open_settings + setup_key_bindings commands;
-│                                   #   panel/window/general/terminal/appearance/about/key_bindings …
+│   ├── settings-ui/                # `oneterm-settings-ui` — General Settings window (has build.rs)
+│   │   ├── build.rs                # Publishes ONETERM_VERSION (About page)
+│   │   └── src/                    # lib.rs: open_settings + setup_key_bindings commands;
+│   │                               #   panel/window/general/terminal/appearance/about/key_bindings …
+│   └── agent-ui/                   # `oneterm-agent-ui` — AGENT feature (right-dock fleet view + compact cards)
+│       └── src/                    # lib.rs init() (AgentRegistry::init); view/card render helpers
 │
 ├── docs/                           # Development documentation
 │   ├── refactor/ui-crate-restructure.md   # This restructure's authoritative plan
@@ -160,9 +162,10 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 | `sftp-ui` (`oneterm-sftp-ui`) | `core`, `terminal`, `state`, `theme`, `actions` | feature | SFTP file browser + transfer queue. Registers `"sftp"`. |
 | `session-ui` (`oneterm-session-ui`) | `core`, `terminal`, `terminal-view`, `state`, `actions` | feature | Session tree + connect dialogs + `SshSessionStore`. Registers `"session"`. |
 | `settings-ui` (`oneterm-settings-ui`) | `core`, `settings`, `theme`, `actions` | feature | General Settings window (general/terminal/appearance/key-bindings/about). Provides `open_settings` + `setup_key_bindings` commands. |
+| `agent-ui` (`oneterm-agent-ui`) | `core`, `terminal`, `settings`, `state`, `theme` | feature | Agent Panel (right-dock fleet view of coding agents). |
 | `ssh` (`oneterm-ssh`) | `core`, `terminal` (russh + russh-sftp) | backend | russh client + SFTP; `SshSession` (impl `TerminalSession`), `SftpSession` (impl `SftpBackend`). |
 | `local-shell` (`oneterm-local-shell`) | `core`, `terminal` | backend | Local PTY (`alacritty_terminal::tty` + ConPTY); `LocalSession` (impl `TerminalSession`). |
-| `app` (`oneterm-app`) | shell + all four features + `settings`/`theme`/`state` + `ssh` + `local-shell` | binary | Only crate that knows every layer. Installs `AppSessionFactory` (→ `ssh`/`local-shell`), runs `init()` (globals + feature `init()` + `WorkspaceCommands`), opens the window. Owns the `terminal-diagnostics` feature forwarding. |
+| `app` (`oneterm-app`) | shell + all five features + `settings`/`theme`/`state` + `ssh` + `local-shell` | binary | Only crate that knows every layer. Installs `AppSessionFactory` (→ `ssh`/`local-shell`), runs `init()` (globals + feature `init()` + `WorkspaceCommands`), opens the window. Owns the `terminal-diagnostics` feature forwarding. |
 
 ## 3.1 Crate & dependency rules
 
