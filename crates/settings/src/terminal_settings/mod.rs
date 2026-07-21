@@ -117,6 +117,11 @@ pub struct TerminalSettings {
     /// Semantic highlighting mode for plain-text terminal output.
     pub semantic_highlighting: SemanticHighlightingMode,
 
+    // ── Mouse ──
+    /// Show OneTerm's context menu on right click.
+    /// Disable this to let CLI apps receive right click directly.
+    pub show_context_menu: bool,
+
     // ── Tab title ──
     /// How the terminal tab title is determined: static label ("Terminal" /
     /// SSH session label) or the live OSC 0/2 title set by the shell.
@@ -164,6 +169,7 @@ impl Default for TerminalSettings {
             show_gutter: false,
             semantic_highlighting: SemanticHighlightingMode::Auto,
             tab_title_mode: TabTitleMode::Default,
+            show_context_menu: true,
             scroll_multiplier: 1.0,
             alternate_scroll: true,
             scrollback_history: 10_000,

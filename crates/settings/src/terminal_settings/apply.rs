@@ -1,8 +1,8 @@
 //! Apply `TerminalConfig` → `TerminalSettings`.
 
 use crate::terminal_config::{
-    BellConfig, ColorsConfig, CursorConfig, FontConfig, LayoutConfig, ScrollConfig, SecurityConfig,
-    TerminalConfig,
+    BellConfig, ColorsConfig, CursorConfig, FontConfig, LayoutConfig, MouseConfig, ScrollConfig,
+    SecurityConfig, TerminalConfig,
 };
 
 use super::{
@@ -52,6 +52,9 @@ impl TerminalSettings {
         self.scroll_multiplier = scroll.multiplier;
         self.alternate_scroll = scroll.alternate_scroll;
         self.scrollback_history = scroll.scrollback_history;
+
+        let mouse: &MouseConfig = &cfg.mouse;
+        self.show_context_menu = mouse.show_context_menu;
 
         let bell: &BellConfig = &cfg.bell;
         self.bell_enabled = bell.enabled;

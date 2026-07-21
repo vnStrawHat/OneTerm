@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gpui::{Entity, FocusHandle, MouseButton};
+use gpui::{AnyElement, Entity, FocusHandle, IntoElement as _, MouseButton};
 use oneterm_terminal::TerminalSession;
 
 use super::element::GridMetrics;
@@ -31,12 +31,23 @@ pub(crate) fn attach(
     view: Entity<LocalTerminalView>,
     focus: FocusHandle,
     split_ctx: Option<super::space::SplitContext>,
-) -> impl gpui::IntoElement {
-    let div = attach_mouse(div, session.clone(), metrics.clone(), view.clone());
+    show_context_menu: bool,
+) -> AnyElement {
+    let div = attach_mouse(
+        div,
+        session.clone(),
+        metrics.clone(),
+        view.clone(),
+        show_context_menu,
+    );
     let div = attach_scroll(div, session.clone(), metrics.clone(), view.clone());
     let div = url::attach_modifiers_changed(div, session.clone(), metrics.clone(), view.clone());
     let div = attach_key(div, session.clone(), metrics, view, focus.clone());
-    attach_context_menu(div, session, focus, split_ctx)
+    if show_context_menu {
+        attach_context_menu(div, session, focus, split_ctx).into_any_element()
+    } else {
+        div.into_any_element()
+    }
 }
 
 /// Map a GPUI `MouseButton` to a `TerminalMouseButton`.

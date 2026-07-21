@@ -274,8 +274,10 @@ impl<EP: EventListener> TerminalModel<EP> {
         if mode.intersects(TermMode::MOUSE_MODE) {
             let s = encode_mouse_press(row as usize, col as usize, button, mode, mods);
             Some(s.into_bytes())
-        } else {
+        } else if matches!(button, TerminalMouseButton::Left) {
             self.start_selection(row, col, sel);
+            None
+        } else {
             None
         }
     }

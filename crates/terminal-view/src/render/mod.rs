@@ -56,6 +56,7 @@ impl Render for LocalTerminalView {
             cursor_shape,
             show_gutter,
             semantic_highlighting,
+            show_context_menu,
         ) = {
             let settings = settings_entity.read(cx);
             let gpui_theme = cx.theme();
@@ -81,8 +82,10 @@ impl Render for LocalTerminalView {
                 settings.cursor_shape,
                 settings.show_gutter,
                 settings.semantic_highlighting,
+                settings.show_context_menu,
             )
         };
+
         let metrics = self.metrics.clone();
         let view = cx.entity();
 
@@ -206,6 +209,7 @@ impl Render for LocalTerminalView {
             view,
             self.focus.clone(),
             split_ctx,
+            show_context_menu,
         )
     }
 }

@@ -1,4 +1,4 @@
-//! "Terminal" settings page — shell and font groups, plus the page assembly
+//! "Terminal" settings page — shell, font, and terminal-behavior groups, plus the page assembly
 //! and the persistence helper shared with [`super::terminal_options`].
 //!
 //! Every field reads from the global [`TerminalSettings`] and writes back to it,
@@ -6,7 +6,7 @@
 //! [`TerminalSettings::save`]. Live terminal sessions pick up the changes
 //! through the `cx.notify()` observers wired in `apply.rs`.
 //!
-//! The cursor / layout / scroll / bell / security groups live in
+//! The cursor / layout / scroll / mouse / bell / security groups live in
 //! [`super::terminal_options`] (split for the ~400-line file guideline).
 
 use gpui::{
@@ -48,6 +48,7 @@ pub(crate) fn page() -> SettingPage {
         .group(super::terminal_options::cursor_group())
         .group(super::terminal_options::layout_group())
         .group(super::terminal_options::scroll_group())
+        .group(super::terminal_options::mouse_group())
         .group(super::terminal_options::bell_group())
         .group(super::terminal_options::security_group())
 }

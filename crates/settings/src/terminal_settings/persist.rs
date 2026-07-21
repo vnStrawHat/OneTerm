@@ -13,8 +13,8 @@
 use gpui::{FontWeight, Hsla};
 
 use crate::terminal_config::{
-    BellConfig, ColorsConfig, CursorConfig, FontConfig, LayoutConfig, PaddingConfig, ScrollConfig,
-    SecurityConfig, TerminalConfig,
+    BellConfig, ColorsConfig, CursorConfig, FontConfig, LayoutConfig, MouseConfig, PaddingConfig,
+    ScrollConfig, SecurityConfig, TerminalConfig,
 };
 
 use super::{TerminalBlink, TerminalCursorShape, TerminalSettings, hsla_to_hex};
@@ -89,6 +89,9 @@ impl TerminalSettings {
                 multiplier: self.scroll_multiplier,
                 alternate_scroll: self.alternate_scroll,
                 scrollback_history: self.scrollback_history,
+            },
+            mouse: MouseConfig {
+                show_context_menu: self.show_context_menu,
             },
             bell: BellConfig {
                 enabled: self.bell_enabled,

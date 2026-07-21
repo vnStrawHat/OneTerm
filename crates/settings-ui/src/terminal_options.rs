@@ -1,4 +1,4 @@
-//! "Terminal" settings page — the cursor, layout, scroll, bell, and security
+//! "Terminal" settings page — the cursor, layout, scroll, mouse, bell, and security
 //! groups.
 //!
 //! Split from [`super::terminal`] to keep files under the ~400-line guideline.
@@ -278,7 +278,28 @@ pub(super) fn scroll_group() -> SettingGroup {
         ]))
 }
 
-/// "Bell" group — enable/disable the bell indicator.
+/// "Mouse" group — right-click context menu behavior.
+pub(super) fn mouse_group() -> SettingGroup {
+    SettingGroup::new().title("Mouse").item(
+        SettingItem::new(
+            "Right-Click Context Menu",
+            SettingField::switch(
+                |cx: &App| TerminalSettings::global(cx).read(cx).show_context_menu,
+                |val: bool, cx: &mut App| {
+                    TerminalSettings::global(cx).update(cx, |s, cx| {
+                        s.show_context_menu = val;
+                        cx.notify();
+                    });
+                    super::terminal::persist(cx);
+                },
+            ),
+        )
+        .description(
+            "Show OneTerm's context menu when right-clicking the terminal. Disable this to let CLI apps receive right click directly.",
+        ),
+    )
+}
+
 pub(super) fn bell_group() -> SettingGroup {
     SettingGroup::new().title("Bell").item(
         SettingItem::new(

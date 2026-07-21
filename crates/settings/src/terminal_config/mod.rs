@@ -1,7 +1,7 @@
 //! Terminal config JSON — load/save `terminal.json`.
 //!
 //! The config file is organized into logical groups: font, cursor, layout, shell,
-//! scroll, bell, colors. If the file does not exist → create a default file so the
+//! scroll, mouse, bell, colors. If the file does not exist → create a default file so the
 //! user can see the available options.
 //!
 //! Path: `target/terminal.json` (debug) / `~/.OneTerm/terminal.json` (release).
@@ -15,6 +15,7 @@ pub mod colors;
 pub mod cursor;
 pub mod font;
 pub mod layout;
+pub mod mouse;
 pub mod scroll;
 pub mod security;
 
@@ -23,6 +24,7 @@ pub use colors::ColorsConfig;
 pub use cursor::CursorConfig;
 pub use font::FontConfig;
 pub use layout::{LayoutConfig, PaddingConfig, SemanticHighlightingMode, TabTitleMode};
+pub use mouse::MouseConfig;
 pub use scroll::ScrollConfig;
 pub use security::SecurityConfig;
 
@@ -44,6 +46,8 @@ pub struct TerminalConfig {
     pub shell: LocalShellConfig,
     #[serde(default)]
     pub scroll: ScrollConfig,
+    #[serde(default)]
+    pub mouse: MouseConfig,
     #[serde(default)]
     pub bell: BellConfig,
     #[serde(default)]
