@@ -38,7 +38,7 @@ pub(crate) fn attach(
         session.clone(),
         metrics.clone(),
         view.clone(),
-        show_context_menu,
+        !show_context_menu,
     );
     let div = attach_scroll(div, session.clone(), metrics.clone(), view.clone());
     let div = url::attach_modifiers_changed(div, session.clone(), metrics.clone(), view.clone());

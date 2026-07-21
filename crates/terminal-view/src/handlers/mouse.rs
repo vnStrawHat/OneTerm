@@ -76,6 +76,9 @@ fn handle_mouse_down(
             mods,
         )
     });
+    if matches!(button, MouseButton::Right) {
+        cx.stop_propagation();
+    }
     // Trigger a re-render to draw the selection highlight.
     let _ = view.update(cx, |v, cx| {
         v.last_scroll_time = Some(std::time::Instant::now());
@@ -102,6 +105,9 @@ fn handle_mouse_up(
         ctrl: e.modifiers.control,
     };
     session.update(cx, |s, _| s.mouse_up(row, col, map_button(button), mods));
+    if matches!(button, MouseButton::Right) {
+        cx.stop_propagation();
+    }
     if copy_selection {
         if let Some(text) = session.read(cx).selection_text() {
             if !text.is_empty() {
@@ -233,6 +239,9 @@ pub(crate) fn attach_mouse(
                     ctrl: e.modifiers.control,
                 };
                 s.update(cx, |s, _| s.mouse_move(row, col, mods));
+                if e.pressed_button == Some(MouseButton::Right) {
+                    cx.stop_propagation();
+                }
             }
             // URL detection on hover — highlight + cursor pointer (Ctrl+click to open).
             super::url::update_hovered_url(&s, &m, &view, e.position, e.modifiers.control, cx);
