@@ -1,8 +1,8 @@
 //! Agent card rendering (`docs/agent-panel-display.md` §5–§7).
 //!
 //! This module keeps each card compact: a single header line, one model line,
-//! the latest file row, and a footer that keeps the full session id visible
-//! until layout constraints force truncation.
+//! and a footer that keeps the full session id visible until layout constraints
+//! force truncation.
 
 mod render;
 
@@ -10,10 +10,10 @@ use gpui::{
     AnyElement, App, FontWeight, Hsla, IntoElement, ParentElement as _, SharedString, Styled as _,
     div,
 };
-use gpui_component::{ActiveTheme as _, IconName, h_flex};
+use gpui_component::{ActiveTheme as _, h_flex};
 
 use oneterm_state::AgentCard;
-use oneterm_terminal::{AgentState, FileAction};
+use oneterm_terminal::AgentState;
 
 /// Theme tokens captured once per render (all `Hsla` are `Copy`), so card
 /// sub-renderers can be built while `cx` stays free for click listeners.
@@ -158,27 +158,6 @@ fn space_label_text(label: &str) -> String {
     }
 }
 
-fn action_icon(action: FileAction) -> IconName {
-    match action {
-        FileAction::Read => IconName::Eye,
-        FileAction::Edit => IconName::Replace,
-        FileAction::Write | FileAction::Create => IconName::File,
-        FileAction::Delete => IconName::Delete,
-        FileAction::Move => IconName::ArrowRight,
-    }
-}
-
-fn action_word(action: FileAction) -> &'static str {
-    match action {
-        FileAction::Read => "read",
-        FileAction::Edit => "edit",
-        FileAction::Write => "write",
-        FileAction::Create => "create",
-        FileAction::Delete => "delete",
-        FileAction::Move => "move",
-    }
-}
-
 /// Format a token count compactly: `84500 → 84.5k`, `200000 → 200k`.
 pub(crate) fn fmt_tokens(n: u64) -> String {
     let (v, suffix) = if n >= 1_000_000 {
@@ -205,67 +184,6 @@ pub(crate) fn fmt_ago(secs: u64) -> String {
         format!("{}h ago", secs / 3600)
     } else {
         format!("{}d ago", secs / 86_400)
-    }
-}
-
-fn ellipsize_left(text: &str, max_chars: usize) -> String {
-    let count = text.chars().count();
-    if count <= max_chars {
-        return text.to_string();
-    }
-    if max_chars <= 3 {
-        return "...".chars().take(max_chars).collect();
-    }
-
-    let keep = max_chars - 3;
-    let tail: String = text
-        .chars()
-        .rev()
-        .take(keep)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    format!("...{tail}")
-}
-
-fn shorten_path(path: &str, max_chars: usize) -> String {
-    let count = path.chars().count();
-    if count <= max_chars {
-        return path.to_string();
-    }
-
-    let sep = if path.contains('\\') { '\\' } else { '/' };
-    let components: Vec<String> = path
-        .split(['/', '\\'])
-        .filter(|part| !(part.is_empty() || (part.len() == 2 && part.ends_with(':'))))
-        .map(ToOwned::to_owned)
-        .collect();
-
-    if components.is_empty() {
-        return ellipsize_left(path, max_chars);
-    }
-
-    let mut suffix: Vec<String> = vec![components.last().cloned().unwrap_or_default()];
-    let mut suffix_len = suffix[0].chars().count();
-    let prefix_len = 4; // ".../"
-
-    for part in components[..components.len() - 1].iter().rev() {
-        let part_len = part.chars().count();
-        let next_len = suffix_len + 1 + part_len;
-        if prefix_len + next_len > max_chars {
-            break;
-        }
-        suffix.push(part.clone());
-        suffix_len = next_len;
-    }
-    suffix.reverse();
-
-    let joined = suffix.join(&sep.to_string());
-    if prefix_len + joined.chars().count() <= max_chars {
-        format!("...{sep}{joined}")
-    } else {
-        ellipsize_left(&joined, max_chars)
     }
 }
 

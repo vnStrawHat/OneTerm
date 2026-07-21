@@ -5,13 +5,12 @@ use gpui::{
 };
 use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 
-use oneterm_state::{AgentCard, FileEntry, Lifecycle, ModelInfo, ToolRun};
+use oneterm_state::{AgentCard, Lifecycle, ModelInfo, ToolRun};
 
 use crate::AgentListView;
 
 use super::{
-    Palette, action_icon, action_word, activity_chip, fmt_ago, fmt_tokens, lifecycle_summary,
-    shorten_path, state_accent, state_indicator,
+    Palette, activity_chip, fmt_ago, fmt_tokens, lifecycle_summary, state_accent, state_indicator,
 };
 
 impl AgentListView {
@@ -39,10 +38,6 @@ impl AgentListView {
 
         if let Some(row) = self.activity_row(card, pal) {
             body = body.child(row);
-        }
-
-        if let Some(file) = card.recent_files.back() {
-            body = body.child(file_row(file, pal));
         }
 
         body = body.child(self.footer_row(card, pal));
@@ -166,11 +161,11 @@ impl AgentListView {
         } else {
             pal.success
         };
-        let label = if run.is_error { "error" } else { "done" };
+
         let detail = run
-            .diff_stat
-            .clone()
-            .or_else(|| run.target.clone())
+            .target
+            .as_deref()
+            .map(|target| tail_ellipsis(target, 42))
             .or_else(|| run.args.clone())
             .unwrap_or_default();
 
@@ -180,13 +175,18 @@ impl AgentListView {
             .gap_1()
             .text_xs()
             .text_color(pal.foreground)
-            .child(div().size_2().rounded_full().bg(color))
+            .child(
+                div()
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(color)
+                    .child(if run.is_error { "✕" } else { "✓" }),
+            )
             .child(
                 div()
                     .font_weight(FontWeight::MEDIUM)
+                    .text_color(color)
                     .child(run.tool.clone()),
             )
-            .child(activity_chip(label, color))
             .child(
                 div()
                     .flex_1()
@@ -197,11 +197,8 @@ impl AgentListView {
                     .child(detail),
             );
 
-        if run.args_redacted {
-            row = row.child(activity_chip("redacted", pal.muted));
-        }
         if let Some(ms) = run.duration_ms {
-            row = row.child(div().text_color(pal.muted).child(format!("{}ms", ms)));
+            row = row.child(div().text_color(pal.muted).child(fmt_duration(ms)));
         }
         if let Some(code) = run.exit_code {
             row = row.child(div().text_color(pal.muted).child(format!("exit {code}")));
@@ -234,6 +231,40 @@ impl AgentListView {
 
         row
     }
+}
+
+fn fmt_duration(ms: u64) -> String {
+    if ms < 1_000 {
+        format!("{ms}ms")
+    } else {
+        let secs = ms as f64 / 1_000.0;
+        if secs.fract().abs() < 0.05 {
+            format!("{secs:.0}s")
+        } else {
+            format!("{secs:.1}s")
+        }
+    }
+}
+
+fn tail_ellipsis(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_chars {
+        return text.to_string();
+    }
+    if max_chars <= 3 {
+        return "...".chars().take(max_chars).collect();
+    }
+
+    let keep = max_chars - 3;
+    let tail: String = text
+        .chars()
+        .rev()
+        .take(keep)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("...{tail}")
 }
 
 fn context_bar(card: &AgentCard, model: &ModelInfo, pal: &Palette) -> Option<AnyElement> {
@@ -274,38 +305,4 @@ fn usage_color(frac: f32) -> Hsla {
     let t = frac.clamp(0.0, 1.0);
     let hue = (1.0 - t) * (120.0 / 360.0);
     gpui::hsla(hue, 0.9, 0.48, 1.0)
-}
-
-fn file_row(file: &FileEntry, pal: &Palette) -> AnyElement {
-    let path_text = match &file.dest {
-        Some(dest) => format!(
-            "{} → {}",
-            shorten_path(&file.path, 42),
-            shorten_path(dest, 42)
-        ),
-        None => shorten_path(&file.path, 42),
-    };
-
-    h_flex()
-        .w_full()
-        .items_center()
-        .gap_1()
-        .text_xs()
-        .text_color(pal.muted)
-        .child(
-            Icon::new(action_icon(file.action))
-                .xsmall()
-                .text_color(pal.muted),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .overflow_hidden()
-                .text_ellipsis()
-                .text_color(pal.foreground)
-                .child(path_text),
-        )
-        .child(div().child(action_word(file.action)))
-        .into_any_element()
 }
