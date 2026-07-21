@@ -2,7 +2,7 @@
 
 > GUI client for **SSH / SFTP / Local Shell**, written in **Rust** with [GPUI](https://github.com/zed-industries/zed) & [gpui-component](https://github.com/longbridge/gpui-component).
 
-OneTerm is a terminal emulator plus host/session manager: connect to remote shells over SSH, browse and transfer files over SFTP, and open local shells. Terminal rendering is powered by `alacritty_terminal` and drawn with GPUI.
+OneTerm is a terminal emulator plus host/session manager: connect to remote shells over SSH, browse and transfer files over SFTP, open local shells, and monitor coding agents in a live Agent Panel fed by the OSC 9;7 proposal ([spec](docs/osc-agent-status.md)). Terminal rendering is powered by `alacritty_terminal` and drawn with GPUI.
 
 **Version:** 0.1.0 · **Edition:** Rust 2024
 
@@ -24,93 +24,66 @@ OneTerm is a terminal emulator plus host/session manager: connect to remote shel
 
 ### 🖥️ Terminal emulator
 
-- Full ANSI / VT rendering via `alacritty_terminal`
-- 16 / 256 / truecolor (24-bit) colors
-- Hand-drawn box-drawing, block elements & powerline (crisp at any font size)
-- Multiple cursor styles (block / bar / underline) + blink
-- Mouse selection + copy/paste, right-click context menu
-- **In-buffer search** (Ctrl+F) — match highlighting, next / previous (Enter / Shift+Enter), wrap-around
-- Scrollback history (configurable, 10,000 lines by default) + custom terminal scrollbar
-- URL detection (plain-text + OSC 8 hyperlinks) with hover highlight and click-to-open
-- IME support (Vietnamese / CJK input)
-- Bell (toggleable)
-- Minimum-contrast — auto-boosts text/background contrast for readability
-- Clipboard via OSC 52
-- Desktop notifications (OSC 9) shown as toasts; taskbar progress (OSC 9;4)
-- Shell integration: OSC 7 (cwd), OSC 133 (prompt markers / exit code), OSC 0/2 (title), OSC 4/104 palette overrides, OSC 10/11/12 dynamic colors
+- ANSI / VT rendering via `alacritty_terminal`
+- 24-bit colors, box drawing, and multiple cursor styles
+- Mouse selection, search, scrollback, and custom scrollbar
+- URL / OSC 8 detection, IME support, clipboard via OSC 52, bell
+- OSC 9 toasts, OSC 9;4 progress, and shell integration (OSC 7 / 133 / 0 / 2 / 4 / 104 / 10 / 11 / 12)
 
 ### 🪟 Terminal split (Spaces)
 
-- Split a single terminal tab into resizable **Spaces** — Right / Left / Up / Down
-- Recursive nesting (binary pane tree), like tmux / Zed panes
-- Resizable split handles; the active Space is highlighted
-- Fill an empty Space by dragging a terminal tab onto it (move semantics)
-- "New Terminal Here" spawns a local shell in an empty Space
-- Context-menu driven; closing down to one Space reverts the tab to a plain single terminal
+- Resizable split Spaces (Right / Left / Up / Down) with nesting
+- Drag a terminal tab into an empty Space to fill it
+- Context-menu driven; closing to one Space restores a single terminal
 
 ### 🔌 SSH connectivity
 
-- SSH client based on `russh` (hidden tokio runtime)
-- **Password**, **private key** (with passphrase), **SSH agent**, and **no-auth** authentication
-- Interactive shell channel with auto-resize to the window
-- Optional shell-integration injection (OSC 7 cwd + OSC 133 markers) for servers whose shell doesn't emit them
-- Bandwidth accounting (network speed indicator)
-- Passwords kept in RAM only, **never** written to disk (masked in logs)
+- SSH client based on `russh`
+- Password, private key, SSH agent, and no-auth authentication
+- Auto-resize shell channel with optional shell integration
+- Bandwidth indicator; passwords stay in RAM only
 
 ### 📁 SFTP file browser
 
-- Browse remote directories with breadcrumb navigation
-- Columns: Name / Date Modified / Permissions / Size / Owner / Group
-- Sort by column (folders always listed before files)
-- Resize & show/hide columns (persisted across sessions)
-- Upload files & folders, download files
-- Rename / Delete / Create new folder
-- View properties — permissions shown as `drwxr-xr-x (0775)`
-- Transfer queue with progress bars & cancellation
-- **Sync to terminal CWD** — one click jumps the browser to the active SSH session's current directory (via OSC 7)
-- SFTP runs over the same open SSH connection
+- Browse remote directories with breadcrumbs and sortable columns
+- Upload / download, rename / delete, create folders, view properties
+- Transfer queue with progress bars and cancellation
+- Sync the browser to the active SSH session CWD via OSC 7
 
 ### 🗂️ Session management
 
-- Tree-based session list with groups
-- Connect / add-new-session dialog
-- Rename groups, assign colors to sessions
-- Search / filter sessions
+- Grouped session tree with connect, rename, color, and search
 - Persisted to `ssh_session.json` (passwords never stored)
+
+### 🤖 Agent Panel
+
+- Right-dock fleet view of coding agents
+- Built from the OSC 9;7 proposal and folded into a global Agent Registry
+- Shows working, blocked, idle, done, and error
 
 ### 🧩 Layout & UI
 
-- Flexible DockArea (left / right / bottom docks + center tabs)
+- Flexible DockArea with left / right / bottom docks and center tabs
 - Multiple concurrent sessions across tabs
-- Title bar + menu bar (File / Edit / View / ...)
-- Status bar with a date/time clock, network speed indicator, and CPU/memory resource indicator
-- Zoom / fullscreen the active panel (Shift+Esc)
-- Quick close panel (Ctrl+W)
+- Title bar, menu bar, status bar, zoom, and quick close
 - Remembers dock layout across sessions (`docks.json`)
 
 ### ⚙️ Settings & theming
 
-- **Settings window** (Ctrl+,) with pages: General / Terminal / Appearance / About
-- General: UI font size + configurable, press-to-rebind key bindings (persisted to `ui_config.json`)
-- Terminal: font, cursor, layout/padding, shell, scroll, bell, colors, security groups
-- Appearance: theme mode + theme picker
-- **24 built-in themes** (2 Zed + 22 from the gpui-component collection: adventure, alduin, asciinema, aurora, ayu, catppuccin, everforest, fahrenheit, flexoki, gruvbox, harper, hybrid, jellybeans, kibble, macos-classic, matrix, mellifluous, molokai, solarized, spaceduck, tokyonight, twilight)
-- Terminal configuration via `terminal.json` (supports `//` and `/* */` comments)
+- Settings window (General / Terminal / Appearance / About)
+- UI font size, key bindings, terminal tuning, and themes
+- Terminal configuration in `terminal.json`
 - Colors read from the theme, never hardcoded in components
 
 ### 💻 Local shell
 
-- Local PTY via `alacritty_terminal::tty` + custom `EventLoop`
-- **Windows:** ConPTY (bundled `OpenConsole.exe` + `conpty.dll`) — fully tested
-- Unix local PTY code path compiles but is **not yet tested** on Linux/macOS
-- Shell auto-detection (`cmd` / `pwsh` / `COMSPEC` on Windows)
+- Local PTY via `alacritty_terminal::tty`
+- Windows ConPTY is bundled; Unix local PTY compiles but is untested
+- Windows is the primary platform; Linux/macOS compile but are untested
 
 ### 📦 Packaging & platforms
 
-- **Windows** is the primary, fully-supported platform
-- Linux / macOS compile but are **not yet tested** (see Platform support above)
-- Optimized release build (fat LTO, single codegen unit, stripped symbols)
-- Embedded app icon + version info in `.exe` (Windows)
+- Optimized release build with embedded app icon + version info on Windows
 
 ## 🚀 Build & run
 
