@@ -143,4 +143,5 @@ Packaged output lands in `dist/oneterm-<triple>/`:
 - [`docs/ssh-client-connect.md`](docs/ssh-client-connect.md) — SSH connection / auth design
 - [`docs/sftp-browser-design.md`](docs/sftp-browser-design.md) — SFTP file browser design
 - [`docs/sftp-follow-terminal-cwd.md`](docs/sftp-follow-terminal-cwd.md) — SFTP-follows-terminal-CWD design
+- [`docs/osc-agent-status.md`](docs/osc-agent-status.md) — OSC 9;7 agent status proposal/spec
 - [`docs/osc-sequences-checklist.md`](docs/osc-sequences-checklist.md) — OSC sequence support checklist
