@@ -111,6 +111,8 @@ pub struct SessionIdentityEvent {
     pub reason: Option<String>,
     #[serde(default)]
     pub parent_id: Option<String>,
+    #[serde(default)]
+    pub project_dir: Option<String>,
 }
 
 /// `type: "heartbeat"` — keepalive (spec §4.2.3).

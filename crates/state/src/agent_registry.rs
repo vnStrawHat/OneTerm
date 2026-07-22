@@ -259,7 +259,7 @@ pub struct AgentCard {
     pub session_id: Option<String>,
     pub session_reason: Option<String>,
     pub parent_id: Option<String>,
-
+    pub project_dir: Option<String>,
     // ── liveness ──
     pub last_event_ts: u64,
     pub last_recv: Instant,
@@ -299,6 +299,7 @@ impl AgentCard {
             session_id: None,
             session_reason: None,
             parent_id: None,
+            project_dir: None,
             last_event_ts: 0,
             last_recv: Instant::now(),
             heartbeat_interval: None,
@@ -346,6 +347,7 @@ impl AgentCard {
                 self.session_id = Some(sanitize_line(&payload.session_id, CAP_ID));
                 self.session_reason = sanitize_opt(&payload.reason, CAP_SHORT);
                 self.parent_id = sanitize_opt(&payload.parent_id, CAP_ID);
+                self.project_dir = sanitize_opt(&payload.project_dir, CAP_PATH);
             }
             AgentStatusEvent::Heartbeat { payload, .. } => {
                 self.heartbeat_interval = payload.interval_ms;

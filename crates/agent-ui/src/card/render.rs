@@ -251,12 +251,15 @@ fn fmt_duration(ms: u64) -> String {
 
 fn context_bar(card: &AgentCard, model: &ModelInfo, pal: &Palette) -> Option<AnyElement> {
     let used = card.context_used?;
+    let project_dir = card.project_dir.as_deref().map(fmt_project_dir);
+
     match model.context_window {
         Some(window) if window > 0 => {
             let frac = (used as f64 / window as f64).clamp(0.0, 1.0) as f32;
             let color = usage_color(frac);
             let pct = (frac * 100.0).round() as u32;
             let label = format!("{} / {}  {}%", fmt_tokens(used), fmt_tokens(window), pct);
+
             Some(
                 v_flex()
                     .w_full()
@@ -269,22 +272,194 @@ fn context_bar(card: &AgentCard, model: &ModelInfo, pal: &Palette) -> Option<Any
                             .bg(pal.muted.opacity(0.25))
                             .child(div().h_full().w(relative(frac)).rounded_sm().bg(color)),
                     )
-                    .child(div().text_xs().text_color(pal.muted).child(label))
+                    .child(context_info_row(label, project_dir.as_deref(), pal))
                     .into_any_element(),
             )
         }
         _ => Some(
-            div()
-                .text_xs()
-                .text_color(pal.muted)
-                .child(format!("{} tokens", fmt_tokens(used)))
-                .into_any_element(),
+            context_info_row(
+                format!("{} tokens", fmt_tokens(used)),
+                project_dir.as_deref(),
+                pal,
+            )
+            .into_any_element(),
         ),
     }
+}
+
+fn context_info_row(label: String, project_dir: Option<&str>, pal: &Palette) -> impl IntoElement {
+    let mut row = h_flex()
+        .w_full()
+        .items_center()
+        .gap_2()
+        .justify_between()
+        .text_xs()
+        .text_color(pal.muted)
+        .child(div().flex_shrink_0().min_w_0().child(label));
+
+    if let Some(project_dir) = project_dir {
+        row = row.child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .text_ellipsis()
+                .text_align(TextAlign::Right)
+                .child(project_dir.to_string()),
+        );
+    }
+
+    row
+}
+
+fn fmt_project_dir(path: &str) -> String {
+    const MAX_LEN: usize = 45;
+    if path.chars().count() <= MAX_LEN {
+        return path.to_string();
+    }
+
+    let uses_windows_backslash = matches!(
+        path.as_bytes(),
+        [drive, b':', b'\\', ..] if drive.is_ascii_alphabetic()
+    );
+    let normalized = path.replace('\\', "/");
+    let (mut prefix, rest) = split_project_dir_prefix(&normalized);
+    if uses_windows_backslash && prefix.ends_with(":/") {
+        prefix = format!("{}:\\", &prefix[..1]);
+    }
+
+    let segments: Vec<&str> = rest
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    if segments.len() < 3 {
+        return ellipsize_path_middle(path, MAX_LEN);
+    }
+
+    let last_two = format!(
+        "{}/{}",
+        segments[segments.len() - 2],
+        segments[segments.len() - 1]
+    );
+    let candidate = if segments.len() > 3 {
+        format!("{}{}/.../{}", prefix, segments[0], last_two)
+    } else {
+        format!("{}.../{}", prefix, last_two)
+    };
+    if candidate.chars().count() <= MAX_LEN {
+        return candidate;
+    }
+
+    let candidate = format!("{}.../{}", prefix, last_two);
+    if candidate.chars().count() <= MAX_LEN {
+        return candidate;
+    }
+
+    let budget = MAX_LEN.saturating_sub(prefix.chars().count() + 4);
+    format!("{}.../{}", prefix, truncate_tail_chars(&last_two, budget))
+}
+
+fn split_project_dir_prefix(path: &str) -> (String, &str) {
+    if let Some(rest) = path.strip_prefix('/') {
+        return ("/".to_string(), rest);
+    }
+
+    if path.len() >= 3 {
+        let bytes = path.as_bytes();
+        if bytes[1] == b':' && matches!(bytes[0], b'A'..=b'Z' | b'a'..=b'z') {
+            if let Some(rest) = path[2..].strip_prefix('/') {
+                let prefix = format!("{}:/", &path[..1]);
+                return (prefix, rest);
+            }
+        }
+    }
+
+    (String::new(), path)
+}
+
+fn ellipsize_path_middle(path: &str, max_len: usize) -> String {
+    let count = path.chars().count();
+    if count <= max_len {
+        return path.to_string();
+    }
+    if max_len <= 3 {
+        return "...".chars().take(max_len).collect();
+    }
+
+    let keep_tail = max_len - 3;
+    let tail: String = path
+        .chars()
+        .rev()
+        .take(keep_tail)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("...{tail}")
+}
+
+fn truncate_tail_chars(text: &str, max_len: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_len {
+        return text.to_string();
+    }
+    if max_len <= 3 {
+        return "...".chars().take(max_len).collect();
+    }
+
+    let keep_tail = max_len - 3;
+    let tail: String = text
+        .chars()
+        .rev()
+        .take(keep_tail)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("...{tail}")
 }
 
 fn usage_color(frac: f32) -> Hsla {
     let t = frac.clamp(0.0, 1.0);
     let hue = (1.0 - t) * (120.0 / 360.0);
     gpui::hsla(hue, 0.9, 0.48, 1.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fmt_project_dir;
+
+    #[test]
+    fn keeps_short_project_dirs_unchanged() {
+        assert_eq!(
+            fmt_project_dir(r"D:\TrungKFC-Research\Rust\myTerm2"),
+            r"D:\TrungKFC-Research\Rust\myTerm2"
+        );
+        assert_eq!(
+            fmt_project_dir("/opt/app/dev/myProject"),
+            "/opt/app/dev/myProject"
+        );
+    }
+
+    #[test]
+    fn formats_long_project_dirs_with_middle_ellipsis() {
+        assert_eq!(
+            fmt_project_dir(r"D:\TrungKFC-Research\some-very-long-folder\Rust\myTerm2"),
+            r"D:\TrungKFC-Research/.../Rust/myTerm2"
+        );
+        assert_eq!(
+            fmt_project_dir("/opt/application-source-tree/very-long-middle/dev/myProject"),
+            "/opt/.../dev/myProject"
+        );
+    }
+
+    #[test]
+    fn caps_very_long_project_dir() {
+        assert!(
+            fmt_project_dir("/very-long-root/application/dev/some-extremely-long-project-name")
+                .chars()
+                .count()
+                <= 45
+        );
+    }
 }

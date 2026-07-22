@@ -107,7 +107,7 @@ registry still stores `last_seq` as defensive/debug state.
 - identity/grouping: `terminal_key`, `agent_id`, `tab_key`, `tab_title`,
   `space_label`, `space_active`
 - lifecycle/session: `state`, `message`, `session_id`, `session_reason`,
-  `parent_id`
+  `parent_id`, `project_dir`
 - liveness: `last_event_ts`, `last_recv`, `heartbeat_interval`, `lifecycle`
 - model/context: `model`, `context_used`
 - tool activity: `current_tool`, `recent_tools` (last 8)
@@ -115,17 +115,17 @@ registry still stores `last_seq` as defensive/debug state.
 - approvals: `pending_approval`, `resolved_note`
 - debug: `last_seq`
 
-The current card UI uses only a subset: state/liveness, model/context, current
-or last tool, age, session id, and click navigation. File activity, approval
-state, `session_reason`, `parent_id`, and `resolved_note` are folded but not
-rendered yet.
+The current card UI uses only a subset: state/liveness, model/context, project
+directory, current or last tool, age, session id, and click navigation. File
+activity, approval state, `session_reason`, `parent_id`, and `resolved_note` are
+folded but not rendered yet.
 
 ### 3.3 Fold rules
 
 | Event `type` | Current registry effect |
 |---|---|
 | `state` | Set `state`, `message`, and optional `session_id`. Clear `pending_approval` when the state is not `blocked`. If `state == done`, set lifecycle to `Ended { exit_code: None }` unless already ended. |
-| `session` | Set `session_id`, `session_reason`, and `parent_id`. |
+| `session` | Set `session_id`, `session_reason`, `parent_id`, and `project_dir`. |
 | `heartbeat` | Set `heartbeat_interval`; if `state` is present, refresh `state`. |
 | `model` | Replace `model`; update `context_used` only when present. Latest value wins. |
 | `tool_call` / `start` | Set `current_tool` from `tool_call_id`, `tool`, `target`, `args`, `args_redacted`, `progress`, and start timestamp. |
@@ -159,6 +159,7 @@ The current panel is a simple vertical view:
 │ ┌ agent card ────────────────────────┐ │
 │ │ state + agent/#space/live          │ │
 │ │ provider > model [reasoning]       │ │
+│ │ 84.5k / 200k  42%     project_dir │ │
 │ │ current tool, or last finished tool│ │
 │ │ 3s ago                         sid │ │
 │ └────────────────────────────────────┘ │
@@ -223,9 +224,15 @@ If a model event has been folded, the card shows:
 
 If `context_used` is present:
 
-- with `context_window > 0`: show a thin bar and a label
-  `<used> / <window>  <percent>%`.
-- without a usable `context_window`: show `<used> tokens`.
+- with `context_window > 0`: show a thin bar and an info row. The info row
+  places `<used> / <window>  <percent>%` on the left and `project_dir` on the
+  right when available.
+- without a usable `context_window`: show `<used> tokens` on the left and
+  `project_dir` on the right when available.
+
+`project_dir` is formatted for compact display only when it exceeds 45 chars,
+keeping the root/first useful segment and the last two path segments, for example
+`D:\TrungKFC-Research/.../Rust/myTerm2` or `/opt/.../dev/myProject`.
 
 The current bar color is a hue ramp computed from the usage fraction. It is not
 currently a discrete success/warning/danger threshold.

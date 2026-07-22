@@ -43,7 +43,7 @@ fn parses_state_event() {
 #[test]
 fn parses_session_event() {
     let p = b64(
-        r#"{"v":1,"agent":"codex","type":"session","seq":2,"ts":2000,"session_id":"s1","reason":"startup","parent_id":"p0"}"#,
+        r#"{"v":1,"agent":"codex","type":"session","seq":2,"ts":2000,"session_id":"s1","reason":"startup","parent_id":"p0","project_dir":"/opt/app/dev/myProject"}"#,
     );
     let ev = parse_agent_status(&p).unwrap();
     match ev {
@@ -52,6 +52,10 @@ fn parses_session_event() {
             assert_eq!(payload.session_id, "s1");
             assert_eq!(payload.reason.as_deref(), Some("startup"));
             assert_eq!(payload.parent_id.as_deref(), Some("p0"));
+            assert_eq!(
+                payload.project_dir.as_deref(),
+                Some("/opt/app/dev/myProject")
+            );
         }
         other => panic!("unexpected {other:?}"),
     }
