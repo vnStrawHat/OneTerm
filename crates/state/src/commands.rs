@@ -30,8 +30,13 @@ pub struct WorkspaceCommands {
 impl Global for WorkspaceCommands {}
 
 /// Register the workspace command function pointers (called from feature init).
-pub fn set_commands(cx: &mut App, commands: WorkspaceCommands) {
+/// Duplicate registration is rejected so a stale feature set cannot be hidden.
+pub fn set_commands(cx: &mut App, commands: WorkspaceCommands) -> Result<(), &'static str> {
+    if cx.try_global::<WorkspaceCommands>().is_some() {
+        return Err("workspace commands are already registered");
+    }
     cx.set_global(commands);
+    Ok(())
 }
 
 /// Get the registered workspace commands, if any.

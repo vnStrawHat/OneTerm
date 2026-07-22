@@ -4,8 +4,7 @@
 //! tabs. Without per-tab state, switching tabs resets the SFTP browser's cwd
 //! and wipes the transfer queue — even though background transfer tasks keep
 //! running. This module gives each SFTP backend its own snapshot of the
-//! browser's UI state, keyed by the `SftpBackend` Arc's pointer identity (a
-//! stable per-session id).
+//! browser's UI state, keyed by the backend's stable per-session id.
 //!
 //! The store is a gpui `Global` so it outlives any one `SftpPanel` (e.g. when
 //! the right dock is swapped via the mode toggle: SSH Client → Agent → SSH
@@ -13,8 +12,8 @@
 //! cwd + transfers across that swap).
 //!
 //! Transfer tasks (upload/download) capture the SFTP backend they run on, so
-//! they can compute the same key and update the store directly — independent
-//! of which tab is currently active. The `SftpPanel` renders the active key's
+//! they can use the same key and update the store directly — independent of
+//! which tab is currently active. The `SftpPanel` renders the active key's
 //! snapshot; a running transfer keeps progressing in its own backend's
 //! snapshot and reappears when the user switches back to that tab.
 
@@ -24,19 +23,17 @@ use std::sync::Arc;
 
 use gpui::{App, Global};
 
-use oneterm_core::{FileEntry, SftpBackend};
+use oneterm_core::{FileEntry, SftpBackend, SftpSessionId};
 
 use super::types::{PendingAction, SortColumn, SortDir, TransferItem};
 
-/// Stable per-SFTP-backend id — the `Arc::as_ptr` of the `SftpBackend`, as a
-/// `usize`. Two `Arc`s to the same backend share a pointer → same key.
-pub(crate) type BackendKey = usize;
+/// Stable per-SFTP-session identity used as the browser state key.
+pub(crate) type BackendKey = SftpSessionId;
 
-/// Compute the [`BackendKey`] for an SFTP backend (by `Arc` pointer identity).
+/// Compute the [`BackendKey`] for an SFTP backend.
 /// `None` for a local shell (no SFTP backend).
 pub(crate) fn backend_key(sftp: &Option<Arc<dyn SftpBackend>>) -> Option<BackendKey> {
-    sftp.as_ref()
-        .map(|s| Arc::as_ptr(s) as *const () as BackendKey)
+    sftp.as_ref().map(|backend| backend.session_id())
 }
 
 /// Snapshot of the SFTP browser's UI state for one backend.

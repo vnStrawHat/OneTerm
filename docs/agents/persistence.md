@@ -17,12 +17,14 @@ moved with `quarantine_file` before defaults are persisted.
 | `terminal.json` | `oneterm-settings` | Terminal configuration schema and defaults. |
 | `ui_config.json` | `oneterm-settings` | UI theme/font/key-binding schema. |
 | SSH session store | `oneterm-session-ui` | Saved host/session schema. |
-| `docks.json` dock fields | `oneterm-workspace` | Dock layout, window/shell layout fields. |
-| `docks.json.sftp_table_state` | `oneterm-sftp-ui` | SFTP table field only; updates use a serialized JSON transaction. |
+| `docks.json` document model | `oneterm-state` | `DockDocument` is the typed top-level schema and the only read/update API. |
+| `docks.json` dock fields | `oneterm-workspace` | Dock layout and shell-owned display fields. |
+| `docks.json.sftp_table_state` | `oneterm-sftp-ui` | SFTP table field only, represented by `oneterm_core::SftpTableState`. |
 
-A crate may mutate only fields it owns. Shared documents must use
-`update_json_file`; read-modify-write sequences outside that transaction are not
-allowed.
+A crate may mutate only fields it owns. Callers of the shared dock document must
+use `oneterm_state::dock_persistence`; other shared documents must use
+`update_json_file`. Read-modify-write sequences outside those transactions are
+not allowed.
 
 ## Migration rules
 

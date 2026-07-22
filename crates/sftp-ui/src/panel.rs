@@ -42,8 +42,8 @@ pub struct SftpPanel {
 
     // ── SFTP backend state ──────────────────────────────────
     pub(crate) sftp: Option<Arc<dyn SftpBackend>>,
-    /// Store key for the active backend (`Arc::as_ptr` as `usize`). `None` = no
-    /// SFTP backend (local shell). Tracked so the panel knows which store entry
+    /// Stable store key for the active backend. `None` = no SFTP backend
+    /// (local shell). Tracked so the panel knows which store entry
     /// owns the currently-displayed cwd/entries/transfers.
     pub(crate) active_key: Option<super::browser_state::BackendKey>,
 

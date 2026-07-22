@@ -2,10 +2,11 @@
 
 use anyhow::{Context as _, Result};
 use gpui::{Context, Edges, Entity, PromptLevel, Window};
-use oneterm_core::{quarantine_file, update_json_file};
+use oneterm_core::quarantine_file;
+use oneterm_state::dock_persistence::{DockDocument, read_dock_document, update_dock_document};
 use oneterm_ui::dock::{DockArea, DockAreaState};
 
-use super::{MAIN_DOCK_VERSION, SFTP_TABLE_STATE_FIELD, state_file};
+use super::{MAIN_DOCK_VERSION, state_file};
 
 impl super::OneTermWorkspace {
     /// Load the layout from a file — used to keep right dock + settings.
@@ -14,16 +15,23 @@ impl super::OneTermWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<()> {
-        let json = std::fs::read_to_string(state_file())?;
-        let state = match serde_json::from_str::<DockAreaState>(&json) {
-            Ok(state) => state,
+        let document = match read_dock_document() {
+            Ok(document) => document,
             Err(error) => {
-                if let Err(quarantine_error) = quarantine_file(&state_file()) {
-                    log::warn!("failed to quarantine docks.json: {quarantine_error}");
+                if error.kind() == std::io::ErrorKind::InvalidData {
+                    if let Err(quarantine_error) = quarantine_file(&state_file()) {
+                        log::warn!("failed to quarantine docks.json: {quarantine_error}");
+                    }
                 }
-                return Err(anyhow::anyhow!("parse docks.json: {error}"));
+                return Err(error).context("read docks.json");
             }
         };
+        let state = document.dock_state::<DockAreaState>().map_err(|error| {
+            if let Err(quarantine_error) = quarantine_file(&state_file()) {
+                log::warn!("failed to quarantine docks.json: {quarantine_error}");
+            }
+            anyhow::anyhow!("parse dock layout: {error}")
+        })?;
 
         if state.version != Some(MAIN_DOCK_VERSION) {
             let answer = window.prompt(
@@ -76,40 +84,21 @@ pub(crate) fn save_state(
     toggle_button_visible: bool,
     trigger: &str,
 ) -> Result<()> {
-    let mut val = serde_json::to_value(state)?;
-
-    let right_dock_open = val
+    let state_value = serde_json::to_value(state)?;
+    let right_dock_open = state_value
         .get("right_dock")
-        .and_then(|d| d.get("open"))
-        .and_then(|v| v.as_bool())
+        .and_then(|dock| dock.get("open"))
+        .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     log::info!(
         "Save layout [trigger={trigger}] → zoomed_panel={zoomed_panel:?}, toggle_button_visible={toggle_button_visible}, right_dock_open={right_dock_open}",
     );
-    if let Some(obj) = val.as_object_mut() {
-        match zoomed_panel {
-            Some(name) => {
-                obj.insert(
-                    super::zoom::ZOOM_FIELD.into(),
-                    serde_json::Value::String(name.into()),
-                );
-            }
-            None => {
-                obj.remove(super::zoom::ZOOM_FIELD);
-            }
-        }
-        obj.insert(
-            super::TOGGLE_BUTTON_VISIBLE_FIELD.into(),
-            serde_json::Value::Bool(toggle_button_visible),
-        );
-    }
-    update_json_file(&state_file(), move |document| {
-        if let Some(sftp_state) = document.get(SFTP_TABLE_STATE_FIELD).cloned() {
-            if let Some(object) = val.as_object_mut() {
-                object.insert(SFTP_TABLE_STATE_FIELD.into(), sftp_state);
-            }
-        }
-        *document = val;
+    let mut next_document = DockDocument::from_dock_state(state)?;
+    next_document.zoomed_panel = zoomed_panel.map(str::to_owned);
+    next_document.toggle_button_visible = Some(toggle_button_visible);
+    update_dock_document(move |current| {
+        next_document.sftp_table_state = current.sftp_table_state.take();
+        *current = next_document;
         Ok(())
     })?;
     Ok(())
@@ -119,101 +108,43 @@ pub(crate) fn save_state(
 /// is reset (the center always resets to a new single tab). Returns `None` if the file
 /// does not exist or no panel is zoomed.
 pub(crate) fn read_zoomed_panel() -> Option<String> {
-    let raw = std::fs::read_to_string(state_file()).ok()?;
-    let val: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    val.get(super::zoom::ZOOM_FIELD)
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+    read_dock_document().ok()?.zoomed_panel
 }
 
 /// Read `toggle_button_visible` from `docks.json`. Returns `None` if the file does
 /// not exist or the field is missing.
 pub(crate) fn read_toggle_button_visible() -> Option<bool> {
-    let raw = std::fs::read_to_string(state_file()).ok()?;
-    let val: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    val.get(super::TOGGLE_BUTTON_VISIBLE_FIELD)
-        .and_then(|v| v.as_bool())
+    read_dock_document().ok()?.toggle_button_visible
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use oneterm_core::SftpTableState;
+    use oneterm_state::dock_persistence::DockDocument;
     use oneterm_ui::dock::DockAreaState;
 
     #[test]
-    fn zoomed_panel_field_roundtrips_and_keeps_state_deserializable() {
+    fn one_term_fields_roundtrip_with_dock_state() {
         let state = DockAreaState::default();
-        let mut val = serde_json::to_value(&state).unwrap();
-        val.as_object_mut().unwrap().insert(
-            super::super::zoom::ZOOM_FIELD.into(),
-            serde_json::Value::String("session".into()),
-        );
-        let json = serde_json::to_string_pretty(&val).unwrap();
+        let mut document = DockDocument::from_dock_state(&state).unwrap();
+        document.zoomed_panel = Some("session".into());
+        document.toggle_button_visible = Some(false);
+        document.sftp_table_state = Some(SftpTableState {
+            column_widths: HashMap::from([("name".into(), 320.0)]),
+            column_visibility: HashMap::from([("permissions".into(), false)]),
+        });
 
-        // Extra field must NOT break DockAreaState deserialization.
-        let parsed: DockAreaState = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, state);
+        let json = serde_json::to_string_pretty(&document).unwrap();
+        let restored: DockDocument = serde_json::from_str(&json).unwrap();
 
-        // Field readable back.
-        let val: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.dock_state::<DockAreaState>().unwrap(), state);
+        assert_eq!(restored.zoomed_panel.as_deref(), Some("session"));
+        assert_eq!(restored.toggle_button_visible, Some(false));
         assert_eq!(
-            val[super::super::zoom::ZOOM_FIELD].as_str(),
-            Some("session")
+            restored.sftp_table_state.unwrap().column_widths.get("name"),
+            Some(&320.0)
         );
-    }
-
-    #[test]
-    fn absent_zoomed_panel_is_none() {
-        let json = serde_json::to_string_pretty(&DockAreaState::default()).unwrap();
-        let val: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert!(val.get(super::super::zoom::ZOOM_FIELD).is_none());
-    }
-
-    #[test]
-    fn toggle_button_visible_field_roundtrips() {
-        let state = DockAreaState::default();
-        let mut val = serde_json::to_value(&state).unwrap();
-        val.as_object_mut().unwrap().insert(
-            super::super::TOGGLE_BUTTON_VISIBLE_FIELD.into(),
-            serde_json::Value::Bool(false),
-        );
-        let json = serde_json::to_string_pretty(&val).unwrap();
-
-        // Extra field must NOT break DockAreaState deserialization.
-        let parsed: DockAreaState = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, state);
-
-        // Field readable back.
-        let val: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(
-            val[super::super::TOGGLE_BUTTON_VISIBLE_FIELD].as_bool(),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn sftp_table_state_field_coexists_with_dock_state() {
-        // `sftp_table_state` is a JSON field injected by `views/sftp/persistence.rs`.
-        // It must not break `DockAreaState` deserialization and must be readable back.
-        let state = DockAreaState::default();
-        let mut val = serde_json::to_value(&state).unwrap();
-        val.as_object_mut().unwrap().insert(
-            super::super::SFTP_TABLE_STATE_FIELD.into(),
-            serde_json::json!({
-                "column_widths": { "name": 320.0, "size": 80.0 },
-                "column_visibility": { "name": true, "permissions": false }
-            }),
-        );
-        let json = serde_json::to_string_pretty(&val).unwrap();
-
-        let parsed: DockAreaState = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, state);
-
-        let val: serde_json::Value = serde_json::from_str(&json).unwrap();
-        let sftp = &val[super::super::SFTP_TABLE_STATE_FIELD];
-        assert_eq!(
-            sftp["column_visibility"]["permissions"].as_bool(),
-            Some(false)
-        );
-        assert_eq!(sftp["column_widths"]["name"].as_f64(), Some(320.0));
     }
 }

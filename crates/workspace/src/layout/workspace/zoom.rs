@@ -15,6 +15,3 @@
 // Dock traversal helpers now live in the low `oneterm-state` crate so both the
 // shell and feature crates can share them without a shell <-> feature edge.
 pub(crate) use oneterm_state::dock_util::{collect_tab_panels, find_tab_by_panel_name};
-
-/// Name of the JSON field storing the zoomed panel in `docks.json`.
-pub(crate) const ZOOM_FIELD: &str = "zoomed_panel";

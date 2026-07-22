@@ -3,11 +3,9 @@
 //!
 //! Split out from `file_browser.rs` to keep the file shorter.
 
-use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Local, Utc};
-use serde::{Deserialize, Serialize};
 
 use oneterm_core::FileEntry;
 
@@ -304,19 +302,6 @@ pub(crate) fn sort_dir_to_column_sort(dir: SortDir) -> gpui_component::table::Co
         SortDir::Asc => gpui_component::table::ColumnSort::Ascending,
         SortDir::Desc => gpui_component::table::ColumnSort::Descending,
     }
-}
-
-// ── Persistence (docks.json field `sftp_table_state`) ─────────
-
-/// SFTP table state persisted to `docks.json`.
-/// - `column_widths`: key = `SortColumn::key()`, value = px.
-/// - `column_visibility`: key = `SortColumn::key()`, value = visible?.
-#[derive(Default, Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct SftpTableStateJson {
-    #[serde(default)]
-    pub column_widths: HashMap<String, f32>,
-    #[serde(default)]
-    pub column_visibility: HashMap<String, bool>,
 }
 
 // ── Transfer queue ──────────────────────────────────────────

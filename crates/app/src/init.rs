@@ -58,5 +58,6 @@ pub fn init(cx: &mut App) {
             find_in_active_terminal: oneterm_terminal_view::find_in_active_terminal,
             setup_key_bindings: oneterm_settings_ui::setup_key_bindings,
         },
-    );
+    )
+    .expect("workspace commands must be registered exactly once");
 }

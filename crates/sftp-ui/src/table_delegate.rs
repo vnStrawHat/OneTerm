@@ -16,14 +16,14 @@ use gpui_component::{
     menu::{ContextMenuExt as _, PopupMenu},
     table::{Column, ColumnFixed, ColumnSort, TableDelegate, TableState},
 };
-use oneterm_core::FileEntry;
+use oneterm_core::{FileEntry, SftpTableState};
 use oneterm_theme::icon::AppIcon;
 
 use super::panel::SftpPanel;
 use super::persistence::{read_sftp_table_state, write_sftp_table_state};
 use super::types::{
-    SftpColumnConfig, SftpTableStateJson, SortColumn, SortDir, format_date, format_owner,
-    format_permissions, format_size, sort_dir_to_column_sort, sort_entries,
+    SftpColumnConfig, SortColumn, SortDir, format_date, format_owner, format_permissions,
+    format_size, sort_dir_to_column_sort, sort_entries,
 };
 
 /// Indices into `col_configs` of the currently visible columns (display order).
@@ -96,15 +96,15 @@ impl SftpTableDelegate {
         }
     }
 
-    /// Read the current config → `SftpTableStateJson` for persistence.
-    pub(crate) fn to_persisted_state(&self) -> SftpTableStateJson {
+    /// Read the current config for persistence.
+    pub(crate) fn to_persisted_state(&self) -> SftpTableState {
         let mut column_widths = HashMap::new();
         let mut column_visibility = HashMap::new();
         for cfg in &self.col_configs {
             column_widths.insert(cfg.key.to_string(), cfg.width);
             column_visibility.insert(cfg.key.to_string(), cfg.visible);
         }
-        SftpTableStateJson {
+        SftpTableState {
             column_widths,
             column_visibility,
         }

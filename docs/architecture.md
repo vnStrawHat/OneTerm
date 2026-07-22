@@ -11,7 +11,7 @@ Use this page and `docs/agents/structure.md` when locating current implementatio
 | Domain | `oneterm-core` | Errors, SSH/local configuration, SFTP contracts | `crates/core/src/lib.rs`, `crates/core/src/sftp.rs` |
 | Terminal engine | `oneterm-terminal` | Terminal model, session contract, encoding, OSC, search | `crates/terminal/src/lib.rs`, `crates/terminal/src/model.rs`, `crates/terminal/src/contracts.rs` |
 | Shared services | `oneterm-settings` | Persistent terminal and UI settings | `crates/settings/src/lib.rs` |
-| Shared services | `oneterm-state` | Global state, commands, persistence paths, Agent folded model | `crates/state/src/lib.rs`, `crates/state/src/agent_registry.rs`, `crates/state/src/agent_model.rs` |
+| Shared services | `oneterm-state` | Global state, commands, typed dock persistence, Agent folded model | `crates/state/src/lib.rs`, `crates/state/src/dock_persistence.rs`, `crates/state/src/agent_registry.rs`, `crates/state/src/agent_model.rs` |
 | Shared UI | `oneterm-ui` | Maintained dock/resizable/tab fork | `crates/ui/src/lib.rs` |
 | Shell | `oneterm-workspace` | Feature-agnostic window, layout, dock persistence, status bar | `crates/workspace/src/lib.rs`, `crates/workspace/src/layout/` |
 | Backend | `oneterm-local-shell` | Local PTY session implementation | `crates/local-shell/src/lib.rs`, `crates/local-shell/src/session_terminal.rs` |
@@ -35,6 +35,18 @@ The machine-readable dependency policy and verification commands are in
 [`docs/agents/crate-dependency-rules.md`](agents/crate-dependency-rules.md), and the
 CI entry point is [`scripts/verify-dependency-graph.py`](../scripts/verify-dependency-graph.py).
 
+## Service registration
+
+Two validated registries remain intentionally distinct:
+
+- `oneterm_terminal::SessionFactory` is a process-wide `OnceLock` because terminal
+  session creation is used from background work that does not carry a GPUI `App`.
+- `oneterm_state::WorkspaceCommands` is a GPUI global because its window-bound
+  callbacks require `App`/`Window` access and follow the application lifecycle.
+
+Both reject duplicate registration, and consumers handle a missing registry before
+dispatch. The app crate is the only registration site for either service.
+
 ## Ownership shortcuts
 
 - Terminal behavior and shared terminal capability changes: `crates/terminal/`.
@@ -44,7 +56,7 @@ CI entry point is [`scripts/verify-dependency-graph.py`](../scripts/verify-depen
 - SSH saved sessions and connection UX: `crates/session-ui/`.
 - Cross-feature runtime state: `crates/state/`.
 - Window shell and dock layout: `crates/workspace/`.
-- Persistent file lifecycle mechanics: `crates/core/src/persistence.rs`; schema ownership is documented in [`docs/agents/persistence.md`](agents/persistence.md).
+- Persistent file lifecycle mechanics: `crates/core/src/persistence.rs`; the typed dock document is owned by `crates/state/src/dock_persistence.rs`; schema ownership is documented in [`docs/agents/persistence.md`](agents/persistence.md).
 
 ## Navigation and validation
 

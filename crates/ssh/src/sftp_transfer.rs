@@ -313,11 +313,28 @@ async fn sftp_upload_dir(
         total_bytes
     );
 
-    // 2. Create directories in breadth-first order, parents first.
+    // 2. Create directories in breadth-first order, parents first. A failed
+    // create is ignored only after metadata proves that the directory exists.
     for dir in &plan.remote_dirs {
+        if cancel.is_cancelled() {
+            let _ = progress.try_send(-1.0);
+            return Err(AppError::msg("cancelled"));
+        }
         let dir_str = dir.to_string_lossy().replace('\\', "/");
-        if let Err(error) = sftp.create_dir(&dir_str).await {
-            log::debug!("sftp_upload_dir: create_dir \"{dir_str}\" → {error} (may already exist)");
+        if let Err(create_error) = sftp.create_dir(&dir_str).await {
+            match sftp.metadata(&dir_str).await {
+                Ok(attributes) if attributes.is_dir() && !attributes.is_symlink() => {}
+                Ok(_) => {
+                    return Err(AppError::msg(format!(
+                        "remote upload path exists but is not a directory: {dir_str}"
+                    )));
+                }
+                Err(metadata_error) => {
+                    return Err(AppError::msg(format!(
+                        "create remote directory {dir_str}: {create_error}; verify existing path: {metadata_error}"
+                    )));
+                }
+            }
         }
     }
 

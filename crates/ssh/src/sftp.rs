@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use async_channel::{Receiver, Sender};
 use tokio::sync::oneshot;
 
-use oneterm_core::{FileEntry, FileStat, Result, SftpBackend};
+use oneterm_core::{FileEntry, FileStat, Result, SftpBackend, SftpSessionId};
 
 // ── Re-export from core ──────────────────────────────────────
 // FileEntry, FileStat are defined in core; re-exported here for convenience.
@@ -100,6 +100,8 @@ pub enum SftpEvent {
 /// to the Tokio task. `SftpSession` is the handle the UI holds; `sftp_task` runs
 /// in the background within Tokio.
 pub struct SftpSession {
+    /// Stable process-local identity used by per-session UI state.
+    id: SftpSessionId,
     /// Channel sending `SftpCmd` to the tokio task.
     cmd_tx: Sender<SftpCmd>,
     /// Channel receiving `SftpEvent` from the tokio task (UI subscribes).
@@ -118,6 +120,7 @@ impl SftpSession {
         alive: Arc<Mutex<bool>>,
     ) -> Arc<Self> {
         Arc::new(Self {
+            id: SftpSessionId::next(),
             cmd_tx,
             event_rx: Mutex::new(Some(event_rx)),
             alive,
@@ -139,6 +142,10 @@ impl SftpSession {
 // commands asynchronously; `sftp_task` performs the protocol I/O.
 
 impl SftpBackend for SftpSession {
+    fn session_id(&self) -> SftpSessionId {
+        self.id
+    }
+
     fn read_dir(&self, path: PathBuf) -> oneterm_core::SftpFuture<'_, Vec<FileEntry>> {
         Box::pin(async move {
             let (tx, rx) = oneshot::channel();
@@ -306,5 +313,14 @@ mod tests {
             .await
             .expect_err("closed transport must fail");
         assert!(error.to_string().contains("closed"));
+    }
+    #[test]
+    fn session_identity_is_stable_across_clones_and_unique_per_session() {
+        let (first, _first_rx) = test_session();
+        let first_clone = Arc::clone(&first);
+        let (second, _second_rx) = test_session();
+
+        assert_eq!(first.session_id(), first_clone.session_id());
+        assert_ne!(first.session_id(), second.session_id());
     }
 }

@@ -47,10 +47,26 @@ pub trait SessionFactory: Send + Sync + 'static {
 
 static FACTORY: OnceLock<Arc<dyn SessionFactory>> = OnceLock::new();
 
+/// Error returned when the process-global session factory is registered twice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionFactoryAlreadyInstalled;
+
+impl std::fmt::Display for SessionFactoryAlreadyInstalled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("session factory is already installed")
+    }
+}
+
+impl std::error::Error for SessionFactoryAlreadyInstalled {}
+
 /// Install the process-global session factory. Call once at startup (app init).
-/// Subsequent calls are ignored (the first factory wins).
-pub fn install_session_factory(factory: Arc<dyn SessionFactory>) {
-    let _ = FACTORY.set(factory);
+/// Duplicate registration is rejected rather than silently retaining stale services.
+pub fn install_session_factory(
+    factory: Arc<dyn SessionFactory>,
+) -> std::result::Result<(), SessionFactoryAlreadyInstalled> {
+    FACTORY
+        .set(factory)
+        .map_err(|_| SessionFactoryAlreadyInstalled)
 }
 
 /// Get the installed session factory, or `None` if none has been installed yet.

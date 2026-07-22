@@ -97,10 +97,8 @@ pub(crate) fn build_named_panel(
     ))
 }
 
-pub const TOGGLE_BUTTON_VISIBLE_FIELD: &str = "toggle_button_visible";
-/// SFTP table-state field key + `docks.json` path — re-exported from the low
-/// `oneterm-state` crate (shared with the SFTP feature).
-pub use oneterm_state::paths::{SFTP_TABLE_STATE_FIELD, state_file};
+/// Shared path to the persisted dock document.
+pub use oneterm_state::paths::state_file;
 
 /// Main workspace: title bar + dock area + status bar.
 pub struct OneTermWorkspace {

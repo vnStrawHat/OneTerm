@@ -5,9 +5,11 @@
 //!
 //! The UI uses it via `dyn SftpBackend`, with no knowledge of `russh-sftp`.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use async_channel::Receiver;
@@ -52,6 +54,30 @@ pub struct FileStat {
     pub group: Option<String>,
 }
 
+/// SFTP table presentation state persisted with the dock document.
+#[derive(Default, Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct SftpTableState {
+    #[serde(default)]
+    pub column_widths: HashMap<String, f32>,
+    #[serde(default)]
+    pub column_visibility: HashMap<String, bool>,
+}
+
+/// Stable process-local identity for one SFTP backend instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SftpSessionId(u64);
+
+impl SftpSessionId {
+    /// Allocate a new unique session identity.
+    pub fn next() -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+        let id = NEXT_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .expect("SFTP session identity space exhausted");
+        Self(id)
+    }
+}
+
 // ── SftpBackend trait ────────────────────────────────────────
 
 /// Boxed SFTP operation future used by the object-safe backend contract.
@@ -62,6 +88,8 @@ pub type SftpFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>
 /// The UI uses it via `dyn SftpBackend`, with no knowledge of `russh-sftp`.
 /// Metadata and mutation operations are asynchronous and never block the UI thread.
 pub trait SftpBackend: Send + Sync + 'static {
+    /// Stable identity for this backend instance, used to restore per-session UI state.
+    fn session_id(&self) -> SftpSessionId;
     /// Read a directory — returns the list of entries.
     fn read_dir(&self, path: PathBuf) -> SftpFuture<'_, Vec<FileEntry>>;
 
