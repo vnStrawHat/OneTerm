@@ -17,6 +17,8 @@
 //! `oneterm_terminal::osc_agent::should_apply`); the registry keeps a
 //! `last_seq` guard purely for defensiveness.
 
+use std::collections::HashMap;
+
 use gpui::{App, AppContext, Context, Entity, EntityId, Global};
 
 use oneterm_terminal::{AgentState, AgentStatusEvent};
@@ -44,9 +46,11 @@ pub struct AgentStateCounts {
 ///
 /// Cards are stored insertion-ordered (a card appears in the order its agent
 /// first reported); grouping / ordering / filtering for display is applied by
-/// the `agent-ui` view layer.
+/// the `agent-ui` view layer. A composite `(terminal_key, agent_id)` index keeps
+/// event folding constant-time while preserving that stable display order.
 pub struct AgentRegistry {
     cards: Vec<AgentCard>,
+    card_indices: HashMap<(EntityId, String), usize>,
     stale_threshold_ms: u64,
 }
 
@@ -54,6 +58,7 @@ impl Default for AgentRegistry {
     fn default() -> Self {
         Self {
             cards: Vec::new(),
+            card_indices: HashMap::new(),
             stale_threshold_ms: 300_000,
         }
     }
@@ -156,19 +161,15 @@ impl AgentRegistry {
         cx: &mut Context<Self>,
     ) {
         let agent_id = ev.agent();
-        let idx = match self
-            .cards
-            .iter()
-            .position(|c| c.terminal_key == terminal_key && c.agent_id == agent_id)
-        {
-            Some(i) => i,
+        let key = (terminal_key, agent_id.to_string());
+        let idx = match self.card_indices.get(&key).copied() {
+            Some(index) => index,
             None => {
-                self.cards.push(AgentCard::new(
-                    terminal_key,
-                    agent_id.to_string(),
-                    &grouping,
-                ));
-                self.cards.len() - 1
+                self.cards
+                    .push(AgentCard::new(terminal_key, key.1.clone(), &grouping));
+                let index = self.cards.len() - 1;
+                self.card_indices.insert(key, index);
+                index
             }
         };
         let card = &mut self.cards[idx];
@@ -221,6 +222,7 @@ impl AgentRegistry {
         let before = self.cards.len();
         self.cards.retain(|c| c.terminal_key != terminal_key);
         if self.cards.len() != before {
+            self.rebuild_card_indices();
             cx.notify();
         }
     }
@@ -231,7 +233,16 @@ impl AgentRegistry {
         self.cards
             .retain(|c| !matches!(c.lifecycle, Lifecycle::Ended { .. }));
         if self.cards.len() != before {
+            self.rebuild_card_indices();
             cx.notify();
+        }
+    }
+
+    fn rebuild_card_indices(&mut self) {
+        self.card_indices.clear();
+        for (index, card) in self.cards.iter().enumerate() {
+            self.card_indices
+                .insert((card.terminal_key, card.agent_id.clone()), index);
         }
     }
 
@@ -260,5 +271,41 @@ impl AgentRegistry {
         if changed {
             cx.notify();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn card(terminal_key: EntityId, agent_id: &str) -> AgentCard {
+        AgentCard::new(
+            terminal_key,
+            agent_id.to_string(),
+            &Grouping {
+                tab_key: EntityId::from(99u64),
+                tab_title: "tab".to_string(),
+                space_label: "single".to_string(),
+                space_active: true,
+            },
+        )
+    }
+
+    #[test]
+    fn composite_index_tracks_stable_card_positions() {
+        let first = EntityId::from(1u64);
+        let second = EntityId::from(2u64);
+        let mut registry = AgentRegistry::default();
+        registry.cards = vec![card(first, "agent-a"), card(second, "agent-b")];
+        registry.rebuild_card_indices();
+
+        assert_eq!(
+            registry.card_indices.get(&(first, "agent-a".to_string())),
+            Some(&0)
+        );
+        assert_eq!(
+            registry.card_indices.get(&(second, "agent-b".to_string())),
+            Some(&1)
+        );
     }
 }

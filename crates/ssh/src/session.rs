@@ -1,9 +1,9 @@
-//! `SshSession` — SSH client over russh + a hidden tokio runtime.
+//! `SshSession` — SSH client over russh + a process-shared Tokio runtime.
 //!
-//! The public API is sync (uses `block_on` for connect). The tokio runtime is
-//! hidden inside (`multi_thread`, 1 worker). Write/resize/close commands are
-//! sent via `async_channel` (sync→async bridge). Outgoing events also go through
-//! `async_channel`.
+//! The public API is sync (uses `block_on` for connect). All sessions share one
+//! bounded multi-thread runtime, so connection count does not create one worker
+//! thread per tab. Write/resize/close commands and outgoing events cross the
+//! sync/async boundary through `async_channel`.
 //!
 //! **Important**: `russh::client::Handle` must be kept alive — dropping it closes
 //! the connection. The handle is moved into `ssh_main_task` and held until the
@@ -17,7 +17,7 @@
 //! See `docs/terminal-backend.md` §7, `docs/sftp-browser-design.md`.
 
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use alacritty_terminal::grid::Dimensions;
@@ -57,7 +57,7 @@ impl Dimensions for TermSize {
     }
 }
 
-/// An SSH session (russh + a hidden tokio runtime).
+/// An SSH session whose asynchronous tasks run on the shared SSH runtime.
 pub struct SshSession {
     pub(crate) term: Arc<FairMutex<Term<SshListener>>>,
     pub(crate) listener: SshListener,
@@ -66,7 +66,6 @@ pub struct SshSession {
     /// Keep the `Sender` alive — the listener has its own clone.
     #[allow(dead_code)]
     pub(crate) cmd_tx: async_channel::Sender<Cmd>,
-    pub(crate) _runtime: tokio::runtime::Runtime,
     pub(crate) cell_width: Mutex<f32>,
     pub(crate) line_height: Mutex<f32>,
     pub(crate) marked_text: Mutex<Option<String>>,
@@ -76,6 +75,26 @@ pub struct SshSession {
 
 const CONNECT_DEADLINE: Duration = Duration::from_secs(60);
 const PHASE_DEADLINE: Duration = Duration::from_secs(20);
+
+const SSH_RUNTIME_WORKERS: usize = 2;
+static SSH_RUNTIME: OnceLock<std::result::Result<tokio::runtime::Runtime, String>> =
+    OnceLock::new();
+
+fn shared_runtime() -> oneterm_core::Result<&'static tokio::runtime::Runtime> {
+    match SSH_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(SSH_RUNTIME_WORKERS)
+            .enable_all()
+            .thread_name("ssh-runtime")
+            .build()
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(runtime) => Ok(runtime),
+        Err(error) => Err(oneterm_core::AppError::msg(format!(
+            "failed to initialize shared SSH runtime: {error}"
+        ))),
+    }
+}
 
 async fn wait_for_cancellation(cancellation: oneterm_core::ConnectionCancellation) {
     while !cancellation.is_cancelled() {
@@ -113,9 +132,8 @@ where
     }
 }
 
-/// Connect over SSH to a server. Sync API — uses `block_on` for connect.
-/// The `multi_thread` runtime (1 worker) keeps background tasks running after
-/// `block_on()` returns.
+/// Connect over SSH to a server. Sync API — uses the shared runtime for connect.
+/// The runtime's bounded worker pool keeps all sessions' background tasks running.
 pub fn connect(
     mut cfg: SshConfig,
     initial: PtySize,
@@ -130,12 +148,7 @@ pub fn connect(
         initial.cols
     );
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
-        .enable_all()
-        .thread_name("ssh-runtime")
-        .build()
-        .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
+    let runtime = shared_runtime()?;
 
     // Input must preserve FIFO ordering without dropping keystrokes when the UI
     // produces a short burst. Control-flow failures remain observable when the
@@ -373,14 +386,12 @@ pub fn connect(
     match connect_result {
         Ok(sftp_session) => {
             log::info!("SshSession: connect successful");
-            // multi_thread runtime: the worker thread runs spawned tasks itself.
             let session = SshSession {
                 term,
                 listener,
                 event_rx: Mutex::new(Some(event_rx)),
                 state,
                 cmd_tx,
-                _runtime: runtime,
                 cell_width: Mutex::new(0.0),
                 line_height: Mutex::new(0.0),
                 marked_text: Mutex::new(None),
@@ -502,6 +513,25 @@ mod tests {
         .expect_err("cancelled phase must fail");
 
         assert_eq!(error.to_string(), "SSH connection cancelled");
+    }
+
+    #[test]
+    fn shared_runtime_is_reused_across_many_workers() {
+        let runtime = shared_runtime().expect("shared SSH runtime must initialize");
+        let expected = runtime as *const tokio::runtime::Runtime as usize;
+        let handles: Vec<_> = (0..32)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    let runtime = shared_runtime().expect("shared SSH runtime must exist");
+                    runtime.block_on(async { tokio::task::yield_now().await });
+                    runtime as *const tokio::runtime::Runtime as usize
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            assert_eq!(handle.join().expect("runtime worker must finish"), expected);
+        }
     }
 
     #[tokio::test]

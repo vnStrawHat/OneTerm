@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use gpui::{
     AnyElement, Context, EntityId, FontWeight, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, div,
@@ -223,18 +225,19 @@ impl Render for AgentListView {
                 .into_any_element();
         }
 
-        let mut order: Vec<EntityId> = Vec::new();
-        let mut titles: Vec<(EntityId, String)> = Vec::new();
+        let mut group_indices = HashMap::new();
+        let mut titles: Vec<String> = Vec::new();
         let mut grouped: Vec<(EntityId, Vec<AgentCard>)> = Vec::new();
         for card in cards.into_iter().filter(|c| self.passes_filter(c)) {
             let tab_key = card.tab_key;
-            let pos = match order.iter().position(|k| *k == tab_key) {
-                Some(i) => i,
+            let pos = match group_indices.get(&tab_key).copied() {
+                Some(index) => index,
                 None => {
-                    order.push(tab_key);
-                    titles.push((tab_key, card.tab_title.clone()));
+                    let index = grouped.len();
+                    group_indices.insert(tab_key, index);
+                    titles.push(card.tab_title.clone());
                     grouped.push((tab_key, Vec::new()));
-                    grouped.len() - 1
+                    index
                 }
             };
             grouped[pos].1.push(card);
@@ -255,7 +258,7 @@ impl Render for AgentListView {
             .p_2()
             .gap_2();
         for (i, (tab_key, group)) in grouped.iter().enumerate() {
-            let title = titles[i].1.clone();
+            let title = titles[i].clone();
             list = list.child(self.render_group(*tab_key, &title, group, &pal, cx));
         }
 

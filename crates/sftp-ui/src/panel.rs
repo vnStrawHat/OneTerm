@@ -139,6 +139,7 @@ impl SftpPanel {
                     // SftpPanel is destroyed without a tab switch (e.g. the right
                     // dock is swapped via the mode toggle: SSH Client → Agent drops
                     // the panel — the store keeps each backend's last state).
+                    super::browser_state::SftpBrowserStore::global(cx).purge_closed();
                     if let Some(key) = this.active_key {
                         this.save_state_for_key(key, cx);
                     }
@@ -225,9 +226,13 @@ impl SftpPanel {
             return;
         }
 
-        // Save the current view into the OLD backend's store entry.
+        // Preserve live backend state, but never retain a closed session's history.
         if let Some(old_key) = self.active_key {
-            self.save_state_for_key(old_key, cx);
+            if self.sftp.as_ref().is_some_and(|backend| backend.alive()) {
+                self.save_state_for_key(old_key, cx);
+            } else {
+                super::browser_state::SftpBrowserStore::global(cx).purge_closed();
+            }
         }
 
         log::info!(
@@ -243,6 +248,9 @@ impl SftpPanel {
         match new_key {
             Some(key) => {
                 let store = super::browser_state::SftpBrowserStore::global(cx);
+                if let Some(backend) = self.sftp.as_ref() {
+                    store.track_backend(backend);
+                }
                 let state = store.get_or_default(key);
                 let is_fresh = state.cwd.as_os_str().is_empty();
                 self.apply_state(state, cx);
@@ -343,7 +351,13 @@ impl SftpPanel {
         let id = item.id;
         let store = super::browser_state::SftpBrowserStore::global(cx);
         // Push into the store (source of truth).
-        store.with_mut(key, |st| st.transfers.push(item.clone()));
+        if store
+            .with_mut(key, |st| st.transfers.push(item.clone()))
+            .is_none()
+        {
+            log::warn!("SftpPanel: transfer state is unavailable for backend {key:?}");
+            return None;
+        }
         // Mirror into the active view.
         self.transfers.push(item);
         self.next_transfer_id = self.next_transfer_id.saturating_add(1);
@@ -365,14 +379,16 @@ impl SftpPanel {
     ) -> bool {
         let store = super::browser_state::SftpBrowserStore::global(cx);
         let mut updated: Option<TransferItem> = None;
-        let found = store.with_mut(key, |st| {
-            if let Some(item) = st.transfers.iter_mut().find(|t| t.id == transfer_id) {
-                f(item);
-                updated = Some(item.clone());
-                return true;
-            }
-            false
-        });
+        let found = store
+            .with_mut(key, |st| {
+                if let Some(item) = st.transfers.iter_mut().find(|t| t.id == transfer_id) {
+                    f(item);
+                    updated = Some(item.clone());
+                    return true;
+                }
+                false
+            })
+            .unwrap_or(false);
         if let Some(item) = updated {
             if self.active_key == Some(key) {
                 if let Some(view_item) = self.transfers.iter_mut().find(|t| t.id == transfer_id) {
@@ -394,7 +410,7 @@ impl SftpPanel {
                 let i = st.next_transfer_id;
                 st.next_transfer_id = i.saturating_add(1);
                 i
-            })
+            })?
         };
         self.next_transfer_id = id.saturating_add(1);
         Some(id)

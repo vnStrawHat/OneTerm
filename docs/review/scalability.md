@@ -61,4 +61,36 @@
 - Backend/UI separation permits different implementations without feature-to-backend dependencies.
 - Terminal tabs and split spaces have explicit teardown and task ownership.
 - Bounded queues constrain transient memory growth.
-- Per-backend SFTP state correctly preserves active background transfer state across tab switches; the missing piece is lifecycle cleanup and stable identity.
+- Per-backend SFTP state preserves active background transfer state across tab switches; lifecycle
+  cleanup now uses stable IDs and weak backend tracking.
+
+## Current remediation status (2026-07-22)
+
+The highest-risk growth paths are remediated while two measured UI-scale follow-ups remain:
+
+- SCALE-01: SSH sessions now share one lazily initialized two-worker Tokio runtime. A concurrent
+  stress test verifies that all callers reuse the same runtime instead of allocating one runtime
+  and worker thread per session.
+- SCALE-02: The existing stable `SftpSessionId` is now paired with weak backend tracking.
+  `SftpBrowserStore` purges closed or dropped backends during panel synchronization, does not
+  retain backend references, and does not recreate state after purge.
+- SCALE-03: Active duplicate transfer IDs are rejected to prevent token replacement. Transfer
+  tasks are tracked, token removal is enforced by a drop guard on completion, panic, or abort, and
+  close waits for cooperative cancellation before aborting shutdown stragglers.
+- SCALE-04: Recursive upload discovery runs in `spawn_blocking` and sends entries through a
+  capacity-128 cancellation-aware channel. Recursive download processes each discovered file
+  immediately with a bounded DFS stack instead of retaining the complete file plan. Existing
+  traversal limits, symlink rejection, destination containment, cancellation, and atomic
+  finalization remain enforced.
+- SCALE-05: `AgentRegistry` now indexes cards by `(EntityId, agent_id)` and rebuilds the index
+  after removals. Agent view grouping uses a hash index, eliminating repeated group-position
+  scans. Full Agent-list virtualization remains an explicit follow-up; the SFTP table is already
+  virtualized by `DataTable`.
+- SCALE-06: The two intentionally distinct global registries already reject duplicate
+  initialization and document their ownership. Moving them into app-context-owned services
+  remains an evolvability follow-up rather than part of this runtime-growth remediation.
+
+Focused coverage now verifies shared runtime reuse, SFTP state cleanup, composite Agent indexing,
+bounded streaming discovery, cancellation under channel backpressure, traversal limits, tracked
+transfer shutdown, and token cleanup. A measured multi-session UI/network soak harness and
+Agent-list virtualization remain open in `remediation-plan.md`.

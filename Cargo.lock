@@ -5301,6 +5301,7 @@ name = "oneterm-sftp-ui"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-channel 2.5.0",
  "chrono",
  "gpui",
  "gpui-component",

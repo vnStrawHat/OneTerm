@@ -209,21 +209,43 @@ cargo build --workspace --release
 
 ### Work items
 
-- [ ] Replace one Tokio runtime per SSH session with an app-owned shared runtime or bounded runtime pool.
-- [ ] Introduce stable session/SFTP IDs instead of `Arc` pointer identity.
-- [ ] Purge SFTP browser state when a backend closes.
-- [x] Remove completed transfer cancellation tokens from the active map.
-- [ ] Stream recursive transfer discovery through bounded producer/consumer channels.
-- [ ] Replace linear Agent registry lookup with stable composite-key indexing.
-- [ ] Add virtualization/incremental updates for large Agent and SFTP lists.
-- [ ] Add a multi-session soak test for opening, switching, cancelling, and closing many sessions.
+- [x] Replace one Tokio runtime per SSH session with a process-wide bounded shared runtime.
+- [x] Introduce stable session/SFTP IDs instead of `Arc` pointer identity.
+- [x] Purge SFTP browser state when a backend closes.
+- [x] Remove completed transfer cancellation tokens from the active map and reject duplicate active IDs.
+- [x] Stream recursive upload discovery through a bounded producer/consumer channel and process
+      recursive downloads incrementally without retaining a complete file plan.
+- [x] Replace linear Agent registry lookup with stable composite-key indexing and linear-time grouping.
+- [ ] Add Agent-list virtualization/incremental rendering. The SFTP table already uses the
+      virtualized `DataTable`; Agent rendering still clones and sorts the filtered snapshot.
+- [ ] Add a full multi-session soak test for opening, switching, cancelling, and closing many
+      sessions. A focused concurrent runtime-reuse stress test now covers bounded runtime ownership.
 
 ### Acceptance criteria
 
-- [ ] Session count does not create one runtime worker per session.
-- [ ] Closed sessions release browser state, transfer tokens, tasks, and backend references.
+- [x] Session count does not create one runtime worker per session.
+- [x] Closed sessions release browser state, transfer tokens, tasks, and backend references.
 - [ ] A soak test demonstrates bounded memory and thread growth across repeated session cycles.
-- [ ] Large lists remain responsive under representative data volumes.
+- [ ] Large Agent lists remain responsive under representative data volumes.
+
+### Implemented scalability evidence (2026-07-22)
+
+- `crates/ssh/src/session.rs` now reuses one lazily initialized two-worker Tokio runtime; a
+  concurrent stress test confirms all callers receive the same runtime instead of creating
+  one scheduler per session.
+- `SftpBrowserStore` tracks stable `SftpSessionId` values with weak backend references, purges
+  closed/dropped backends during panel lifecycle synchronization, and refuses to recreate state
+  for an untracked session. Focused tests cover cleanup.
+- Recursive upload traversal now runs off-runtime and feeds a capacity-128 channel with
+  cancellation-aware backpressure. Recursive download traverses and transfers incrementally.
+  Existing depth, entry, symlink, destination-containment, temporary-file, and finalization
+  controls remain in place.
+- The SFTP task rejects duplicate active transfer IDs, removes tokens through a drop guard, tracks
+  transfer and recursive-mutation tasks, and waits before aborting any shutdown stragglers.
+- `AgentRegistry` uses a `(EntityId, agent_id)` index, rebuilds it after removals, and the view
+  groups cards with a hash index rather than repeated linear position scans.
+- Remaining optional scalability work is explicit: Agent-list virtualization and a measured
+  multi-session UI/network soak harness.
 
 ### Verification
 

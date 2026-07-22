@@ -14,6 +14,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use async_channel::{Receiver, Sender};
 use russh_sftp::client::SftpSession as SftpChannel;
 use russh_sftp::protocol::FileAttributes;
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 #[path = "sftp_transfer.rs"]
@@ -105,6 +106,31 @@ async fn load_uid_gid_lookup(sftp: &SftpChannel) -> UidGidLookup {
     lookup
 }
 
+type ActiveTransfers = Arc<std::sync::Mutex<HashMap<u64, CancellationToken>>>;
+
+struct ActiveTransferGuard {
+    transfers: ActiveTransfers,
+    transfer_id: u64,
+}
+
+impl ActiveTransferGuard {
+    fn new(transfers: ActiveTransfers, transfer_id: u64) -> Self {
+        Self {
+            transfers,
+            transfer_id,
+        }
+    }
+}
+
+impl Drop for ActiveTransferGuard {
+    fn drop(&mut self) {
+        self.transfers
+            .lock()
+            .expect("SFTP cancellation map is not poisoned")
+            .remove(&self.transfer_id);
+    }
+}
+
 /// Tokio task that handles SFTP commands.
 ///
 /// Runs alongside `ssh_main_task` on the same tokio runtime.
@@ -135,12 +161,23 @@ pub(crate) async fn sftp_task(
     let _ = event_tx.try_send(SftpEvent::Ready);
 
     // Cancel tokens for running transfers — key = transfer_id.
-    let cancels = Arc::new(std::sync::Mutex::new(
-        HashMap::<u64, CancellationToken>::new(),
-    ));
+    let cancels: ActiveTransfers = Arc::new(std::sync::Mutex::new(HashMap::new()));
+    let mut background_tasks = JoinSet::new();
 
     loop {
-        match cmd_rx.recv().await {
+        let command = tokio::select! {
+            command = cmd_rx.recv() => Some(command),
+            completed = background_tasks.join_next(), if !background_tasks.is_empty() => {
+                if let Some(Err(error)) = completed {
+                    log::error!("sftp_task: background task failed: {error}");
+                }
+                None
+            }
+        };
+        let Some(command) = command else {
+            continue;
+        };
+        match command {
             Ok(SftpCmd::ReadDir { path, reply }) => {
                 log::debug!("sftp_task: ReadDir path=\"{}\"", path.display());
                 let result = sftp_read_dir(&sftp, &path, &lookup).await;
@@ -174,7 +211,7 @@ pub(crate) async fn sftp_task(
             Ok(SftpCmd::Rmdir { path, reply }) => {
                 log::debug!("sftp_task: Rmdir path=\"{}\"", path.display());
                 let sftp = Arc::clone(&sftp);
-                tokio::spawn(async move {
+                background_tasks.spawn(async move {
                     let result = sftp_remove_recursive(&sftp, &path).await;
                     let _ = reply.send(result);
                 });
@@ -200,23 +237,26 @@ pub(crate) async fn sftp_task(
                     remote.display()
                 );
                 let cancel = CancellationToken::new();
-                cancels
+                let mut active = cancels
                     .lock()
-                    .expect("SFTP cancellation map is not poisoned")
-                    .insert(transfer_id, cancel.clone());
+                    .expect("SFTP cancellation map is not poisoned");
+                if active.contains_key(&transfer_id) {
+                    let _ = reply.try_send(Err(AppError::msg(format!(
+                        "duplicate active transfer id: {transfer_id}"
+                    ))));
+                    continue;
+                }
+                active.insert(transfer_id, cancel.clone());
                 let sftp = Arc::clone(&sftp);
                 let cancels = Arc::clone(&cancels);
-                tokio::spawn(async move {
+                background_tasks.spawn(async move {
+                    let _cleanup = ActiveTransferGuard::new(cancels, transfer_id);
                     let result = sftp_upload(&sftp, &local, &remote, &progress, &cancel).await;
                     log::info!(
                         "sftp_task: Upload #{transfer_id} finished: {}",
                         if result.is_ok() { "OK" } else { "error" }
                     );
                     let _ = reply.try_send(result);
-                    cancels
-                        .lock()
-                        .expect("SFTP cancellation map is not poisoned")
-                        .remove(&transfer_id);
                 });
             }
             Ok(SftpCmd::Download {
@@ -232,23 +272,26 @@ pub(crate) async fn sftp_task(
                     local.display()
                 );
                 let cancel = CancellationToken::new();
-                cancels
+                let mut active = cancels
                     .lock()
-                    .expect("SFTP cancellation map is not poisoned")
-                    .insert(transfer_id, cancel.clone());
+                    .expect("SFTP cancellation map is not poisoned");
+                if active.contains_key(&transfer_id) {
+                    let _ = reply.try_send(Err(AppError::msg(format!(
+                        "duplicate active transfer id: {transfer_id}"
+                    ))));
+                    continue;
+                }
+                active.insert(transfer_id, cancel.clone());
                 let sftp = Arc::clone(&sftp);
                 let cancels = Arc::clone(&cancels);
-                tokio::spawn(async move {
+                background_tasks.spawn(async move {
+                    let _cleanup = ActiveTransferGuard::new(cancels, transfer_id);
                     let result = sftp_download(&sftp, &remote, &local, &progress, &cancel).await;
                     log::info!(
                         "sftp_task: Download #{transfer_id} finished: {}",
                         if result.is_ok() { "OK" } else { "error" }
                     );
                     let _ = reply.try_send(result);
-                    cancels
-                        .lock()
-                        .expect("SFTP cancellation map is not poisoned")
-                        .remove(&transfer_id);
                 });
             }
             Ok(SftpCmd::Cancel { transfer_id }) => {
@@ -289,6 +332,33 @@ pub(crate) async fn sftp_task(
             }
         }
     }
+
+    const BACKGROUND_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+    let drain_tasks = async {
+        while let Some(result) = background_tasks.join_next().await {
+            if let Err(error) = result {
+                log::error!("sftp_task: background task failed during shutdown: {error}");
+            }
+        }
+    };
+    if tokio::time::timeout(BACKGROUND_TASK_SHUTDOWN_TIMEOUT, drain_tasks)
+        .await
+        .is_err()
+    {
+        log::warn!("sftp_task: background-task shutdown timed out; aborting remaining tasks");
+        background_tasks.abort_all();
+        while let Some(result) = background_tasks.join_next().await {
+            if let Err(error) = result
+                && !error.is_cancelled()
+            {
+                log::error!("sftp_task: aborted background task failed: {error}");
+            }
+        }
+    }
+    cancels
+        .lock()
+        .expect("SFTP cancellation map is not poisoned")
+        .clear();
 
     {
         let mut a = alive.lock().unwrap();
@@ -659,7 +729,7 @@ mod security_tests {
     #[cfg(unix)]
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::sftp_transfer::collect_local_upload_plan;
+    use super::sftp_transfer::{LocalUploadEntry, stream_local_upload_entries};
     #[cfg(unix)]
     use super::sftp_transfer::{finalize_local_file, temporary_local_sibling};
     use super::*;
@@ -752,12 +822,91 @@ mod security_tests {
     }
 
     #[test]
+    fn active_transfer_guard_removes_token_on_drop() {
+        let transfers: ActiveTransfers = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        transfers
+            .lock()
+            .unwrap()
+            .insert(7, CancellationToken::new());
+        {
+            let _guard = ActiveTransferGuard::new(Arc::clone(&transfers), 7);
+        }
+        assert!(transfers.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn local_traversal_stops_before_filesystem_access_when_cancelled() {
         let cancel = CancellationToken::new();
         cancel.cancel();
-        let error =
-            collect_local_upload_plan(PathBuf::from("missing"), PathBuf::from("/remote"), cancel)
-                .unwrap_err();
+        let (entries, _receiver) = async_channel::bounded(1);
+        let error = stream_local_upload_entries(
+            PathBuf::from("missing"),
+            PathBuf::from("/remote"),
+            cancel,
+            &entries,
+        )
+        .unwrap_err();
         assert_eq!(error.to_string(), "cancelled");
+    }
+
+    #[test]
+    fn local_upload_discovery_cancels_while_channel_is_full() {
+        let cancel = CancellationToken::new();
+        let (entries, _receiver) = async_channel::bounded(1);
+        entries
+            .try_send(LocalUploadEntry::Directory(PathBuf::from("/occupied")))
+            .unwrap();
+        let traversal_cancel = cancel.clone();
+        let traversal = std::thread::spawn(move || {
+            stream_local_upload_entries(
+                PathBuf::from("missing"),
+                PathBuf::from("/remote"),
+                traversal_cancel,
+                &entries,
+            )
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        cancel.cancel();
+        assert_eq!(
+            traversal.join().unwrap().unwrap_err().to_string(),
+            "cancelled"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_upload_discovery_streams_directories_and_files() {
+        let root = temporary_dir();
+        std::fs::create_dir_all(root.join("nested")).unwrap();
+        std::fs::write(root.join("first.txt"), b"first").unwrap();
+        std::fs::write(root.join("nested").join("second.txt"), b"second").unwrap();
+        let (entries, receiver) = async_channel::bounded(8);
+
+        stream_local_upload_entries(
+            root.clone(),
+            PathBuf::from("/remote"),
+            CancellationToken::new(),
+            &entries,
+        )
+        .unwrap();
+        drop(entries);
+        let discovered: Vec<_> = receiver.try_iter().collect();
+
+        assert_eq!(
+            discovered
+                .iter()
+                .filter(|entry| matches!(entry, LocalUploadEntry::Directory(_)))
+                .count(),
+            2
+        );
+        assert_eq!(
+            discovered
+                .iter()
+                .filter(|entry| matches!(entry, LocalUploadEntry::File { .. }))
+                .count(),
+            2
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }
