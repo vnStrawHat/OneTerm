@@ -115,6 +115,7 @@ impl AgentListView {
 
     fn activity_row(&self, card: &AgentCard, pal: &Palette) -> Option<AnyElement> {
         if let Some(run) = &card.current_tool {
+            let use_start_ellipsis = run.target.is_some();
             let detail = run
                 .target
                 .clone()
@@ -137,7 +138,8 @@ impl AgentListView {
                         .flex_1()
                         .min_w_0()
                         .overflow_hidden()
-                        .text_ellipsis()
+                        .when(use_start_ellipsis, |this| this.text_ellipsis_start())
+                        .when(!use_start_ellipsis, |this| this.text_ellipsis())
                         .text_color(pal.muted)
                         .child(detail),
                 );
@@ -162,10 +164,10 @@ impl AgentListView {
             pal.success
         };
 
+        let use_start_ellipsis = run.target.is_some();
         let detail = run
             .target
-            .as_deref()
-            .map(|target| tail_ellipsis(target, 42))
+            .clone()
             .or_else(|| run.args.clone())
             .unwrap_or_default();
 
@@ -192,7 +194,8 @@ impl AgentListView {
                     .flex_1()
                     .min_w_0()
                     .overflow_hidden()
-                    .text_ellipsis()
+                    .when(use_start_ellipsis, |this| this.text_ellipsis_start())
+                    .when(!use_start_ellipsis, |this| this.text_ellipsis())
                     .text_color(pal.muted)
                     .child(detail),
             );
@@ -244,27 +247,6 @@ fn fmt_duration(ms: u64) -> String {
             format!("{secs:.1}s")
         }
     }
-}
-
-fn tail_ellipsis(text: &str, max_chars: usize) -> String {
-    let count = text.chars().count();
-    if count <= max_chars {
-        return text.to_string();
-    }
-    if max_chars <= 3 {
-        return "...".chars().take(max_chars).collect();
-    }
-
-    let keep = max_chars - 3;
-    let tail: String = text
-        .chars()
-        .rev()
-        .take(keep)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    format!("...{tail}")
 }
 
 fn context_bar(card: &AgentCard, model: &ModelInfo, pal: &Palette) -> Option<AnyElement> {
