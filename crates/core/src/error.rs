@@ -9,6 +9,34 @@ pub enum AppError {
     #[error("serialization error: {0}")]
     Serde(#[from] serde_json::Error),
 
+    /// The server key is not present in known_hosts and requires explicit approval.
+    #[error(
+        "Unknown SSH host key for {host}:{port} ({algorithm}), SHA-256 fingerprint: {fingerprint}"
+    )]
+    HostKeyUnknown {
+        /// Hostname presented by the connection configuration.
+        host: String,
+        /// Port presented by the connection configuration.
+        port: u16,
+        /// Server host-key algorithm.
+        algorithm: String,
+        /// OpenSSH SHA-256 fingerprint.
+        fingerprint: String,
+    },
+
+    /// The server presented a key different from the recorded key.
+    #[error(
+        "SSH host key changed for {host}:{port}; refusing connection (SHA-256 fingerprint: {fingerprint})"
+    )]
+    HostKeyChanged {
+        /// Hostname presented by the connection configuration.
+        host: String,
+        /// Port presented by the connection configuration.
+        port: u16,
+        /// OpenSSH SHA-256 fingerprint of the unexpected key.
+        fingerprint: String,
+    },
+
     #[error("{0}")]
     Other(String),
 }

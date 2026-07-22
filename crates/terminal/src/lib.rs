@@ -53,7 +53,7 @@ pub use osc_color::{
 pub use palette::{TerminalPalette, extended_indexed_color, indexed_default_color, resolve_color};
 pub use paste::{PastePolicy, PasteResult, encode_paste};
 pub use search::{SearchMatch, SearchOptions, search_term};
-pub use security_policy::TerminalSecurityPolicy;
+pub use security_policy::{NotificationRateLimiter, TerminalSecurityPolicy};
 pub use session::{
     CursorBounds, CwdSource, NetStats, SessionEvent, TerminalInfo, TerminalQueryState,
     TerminalSession, parse_keystroke,

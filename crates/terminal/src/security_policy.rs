@@ -11,6 +11,8 @@
 //! This module provides a single `TerminalSecurityPolicy` with explicit
 //! defaults that all terminal-controlled data must pass through.
 
+use std::time::{Duration, Instant};
+
 /// Default maximum title length in bytes (4 KiB).
 const DEFAULT_MAX_TITLE_BYTES: usize = 4 * 1024;
 
@@ -63,6 +65,41 @@ impl Default for TerminalSecurityPolicy {
             allow_remote_clipboard_write: false,
             allow_remote_clipboard_read: false,
         }
+    }
+}
+
+/// Bounded one-second notification limiter shared by a terminal listener's clones.
+#[derive(Debug, Default)]
+pub struct NotificationRateLimiter {
+    window_start: Option<Instant>,
+    accepted: u32,
+}
+
+impl NotificationRateLimiter {
+    /// Return whether one more notification may enter the session event stream.
+    pub fn allow(&mut self, policy: &TerminalSecurityPolicy) -> bool {
+        self.allow_at(policy, Instant::now())
+    }
+
+    /// Testable form of [`Self::allow`].
+    pub fn allow_at(&mut self, policy: &TerminalSecurityPolicy, now: Instant) -> bool {
+        if policy.notification_rate_per_sec == 0 {
+            return false;
+        }
+
+        let reset = self
+            .window_start
+            .is_none_or(|started| now.duration_since(started) >= Duration::from_secs(1));
+        if reset {
+            self.window_start = Some(now);
+            self.accepted = 0;
+        }
+
+        if self.accepted >= policy.notification_rate_per_sec {
+            return false;
+        }
+        self.accepted += 1;
+        true
     }
 }
 
@@ -334,5 +371,35 @@ mod tests {
         let title = "x".repeat(5000);
         let result = policy.sanitize_title(&title).unwrap();
         assert_eq!(result.len(), DEFAULT_MAX_TITLE_BYTES);
+    }
+}
+
+#[cfg(test)]
+mod notification_limiter_tests {
+    use super::*;
+
+    #[test]
+    fn notification_rate_is_bounded_and_resets() {
+        let policy = TerminalSecurityPolicy {
+            notification_rate_per_sec: 2,
+            ..Default::default()
+        };
+        let start = Instant::now();
+        let mut limiter = NotificationRateLimiter::default();
+
+        assert!(limiter.allow_at(&policy, start));
+        assert!(limiter.allow_at(&policy, start + Duration::from_millis(10)));
+        assert!(!limiter.allow_at(&policy, start + Duration::from_millis(20)));
+        assert!(limiter.allow_at(&policy, start + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn zero_rate_rejects_every_notification() {
+        let policy = TerminalSecurityPolicy {
+            notification_rate_per_sec: 0,
+            ..Default::default()
+        };
+        let mut limiter = NotificationRateLimiter::default();
+        assert!(!limiter.allow_at(&policy, Instant::now()));
     }
 }

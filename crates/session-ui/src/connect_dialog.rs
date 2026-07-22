@@ -9,7 +9,6 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
@@ -24,17 +23,14 @@ use gpui_component::{
     input::{Input, InputState},
     notification::NotificationType,
 };
-use oneterm_ui::dock::PanelView;
 
-use oneterm_core::{SshAuthMethod, SshConfig};
-use oneterm_terminal::PtySize;
+use oneterm_core::{HostKeyPolicy, SecretString, SshAuthMethod, SshConfig};
 
 use crate::session_state::{SshSession, SshSessionStore};
 use oneterm_state::notif_ext::notify;
-use oneterm_terminal_view::TerminalPanel;
 
 use super::common::{
-    add_ssh_terminal_to_dock, field, parse_user_host_port, password_field, server_info_banner,
+    connect_ssh_session, field, parse_user_host_port, password_field, server_info_banner,
 };
 
 /// Open the SSH connect dialog.
@@ -235,74 +231,24 @@ fn on_connect_click(
         });
     }
 
-    // 4. Build SshConfig + connect asynchronously (does not block the UI).
-    //    Empty password → None auth (server does not require a password).
+    // 4. Build a zeroizing config, clear the UI field, and connect off-thread.
     let auth = if password.is_empty() {
         SshAuthMethod::None
     } else {
-        SshAuthMethod::Password { password }
+        SshAuthMethod::Password {
+            password: SecretString::new(password),
+        }
     };
     let cfg = SshConfig {
         host,
         port,
         username,
         auth,
+        host_key_policy: HostKeyPolicy::Strict,
         shell_integration: true,
     };
-    let label = session.label.clone();
-
-    let Some(factory) = oneterm_terminal::session_factory() else {
-        window.push_notification(
-            notify(
-                NotificationType::Error,
-                "Internal error: no session factory installed.".to_string(),
-                cx,
-            ),
-            cx,
-        );
-        return true;
-    };
-
-    window
-        .spawn(cx, async move |cx| {
-            // Run connect on the background executor — connect() uses block_on
-            // internally, so it needs its own thread.
-            let result = cx
-                .background_executor()
-                .spawn(
-                    async move { factory.connect_ssh(cfg, PtySize { rows: 24, cols: 80 }, 10_000) },
-                )
-                .await;
-
-            _ =
-                cx.update(|window, cx| match result {
-                    Ok(ssh_session) => {
-                        let panel: Arc<dyn PanelView> = Arc::new(
-                            TerminalPanel::from_session_entity(ssh_session, &label, window, cx),
-                        );
-                        add_ssh_terminal_to_dock(&panel, window, cx);
-                        window.push_notification(
-                            notify(
-                                NotificationType::Success,
-                                format!("Connected to \"{}\".", label),
-                                cx,
-                            ),
-                            cx,
-                        );
-                    }
-                    Err(e) => {
-                        window.push_notification(
-                            notify(
-                                NotificationType::Error,
-                                format!("SSH connect failed: {e}"),
-                                cx,
-                            ),
-                            cx,
-                        );
-                    }
-                });
-        })
-        .detach();
+    password_state.update(cx, |state, cx| state.set_value("", window, cx));
+    connect_ssh_session(cfg, session.label.clone(), window, cx);
 
     true // close the dialog
 }

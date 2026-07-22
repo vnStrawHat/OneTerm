@@ -9,7 +9,6 @@
 //! EventLoop sends Wakeup/ChildExit after reading. See `docs/terminal-backend.md` §5.
 
 use std::borrow::Cow;
-#[cfg(any(test, feature = "terminal-diagnostics"))]
 use std::sync::Arc;
 use std::sync::Mutex;
 #[cfg(any(test, feature = "terminal-diagnostics"))]
@@ -23,8 +22,8 @@ use log::warn;
 
 use oneterm_terminal::SessionEvent;
 use oneterm_terminal::{
-    ColorFormatter, Osc133Kind, OscPayload, PendingColorQuery, SharedColorQueries,
-    TerminalSecurityPolicy, new_color_queries, parse_cwd_url, parse_osc,
+    ColorFormatter, NotificationRateLimiter, Osc133Kind, OscPayload, PendingColorQuery,
+    SharedColorQueries, TerminalSecurityPolicy, new_color_queries, parse_cwd_url, parse_osc,
 };
 
 use crate::event_loop::{ShellMsg, ShellNotifier};
@@ -62,6 +61,7 @@ pub struct LocalListener {
     color_queries: SharedColorQueries,
     /// Security policy for terminal-controlled data (title, clipboard, etc).
     security: TerminalSecurityPolicy,
+    notification_limiter: Arc<Mutex<NotificationRateLimiter>>,
     /// Diagnostic counters for bounded event-queue failures.
     #[cfg(any(test, feature = "terminal-diagnostics"))]
     queue_counters: Arc<LocalQueueCounters>,
@@ -75,6 +75,7 @@ impl LocalListener {
             state,
             color_queries: new_color_queries(),
             security: TerminalSecurityPolicy::default(),
+            notification_limiter: Arc::new(Mutex::new(NotificationRateLimiter::default())),
             #[cfg(any(test, feature = "terminal-diagnostics"))]
             queue_counters: Arc::new(LocalQueueCounters::default()),
         }
@@ -222,7 +223,16 @@ impl LocalListener {
             }
             OscPayload::Notification(msg) => {
                 if let Some(sanitized) = self.security.sanitize_notification(&msg) {
-                    self.forward(SessionEvent::Notification(sanitized));
+                    if self
+                        .notification_limiter
+                        .lock()
+                        .unwrap()
+                        .allow(&self.security)
+                    {
+                        self.forward(SessionEvent::Notification(sanitized));
+                    } else {
+                        log::debug!("LocalListener: notification rate limit exceeded");
+                    }
                 }
             }
             OscPayload::Progress(progress) => self.forward(SessionEvent::Progress(progress)),

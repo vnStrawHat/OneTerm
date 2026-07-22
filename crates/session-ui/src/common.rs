@@ -12,13 +12,21 @@ use std::sync::Arc;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{App, IntoElement, ParentElement as _, SharedString, Styled, Window, div};
 use gpui_component::{
-    ActiveTheme, h_flex,
+    ActiveTheme, WindowExt as _,
+    button::ButtonVariant,
+    dialog::DialogButtonProps,
+    h_flex,
     input::{Input, InputState},
+    notification::NotificationType,
     v_flex,
 };
 use oneterm_ui::dock::{DockPlacement, PanelView};
 
+use oneterm_core::{AppError, HostKeyPolicy, SshConfig};
 use oneterm_state::AppState;
+use oneterm_state::notif_ext::notify;
+use oneterm_terminal::PtySize;
+use oneterm_terminal_view::TerminalPanel;
 
 // ── UI helpers ───────────────────────────────────────────────────────
 
@@ -118,4 +126,122 @@ pub(crate) fn add_ssh_terminal_to_dock(
             dock.add_panel(panel.clone(), DockPlacement::Center, None, window, cx);
         })
         .ok();
+}
+
+/// Connect one SSH configuration on a background thread and handle host-key
+/// first-use approval without weakening changed-key rejection.
+pub(crate) fn connect_ssh_session(
+    cfg: SshConfig,
+    label: String,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Some(factory) = oneterm_terminal::session_factory() else {
+        window.push_notification(
+            notify(
+                NotificationType::Error,
+                "Internal error: no session factory installed.",
+                cx,
+            ),
+            cx,
+        );
+        return;
+    };
+
+    // Retain one short-lived zeroizing copy only so an unknown key can be
+    // explicitly approved and retried without asking for the password again.
+    let retry_cfg = cfg.clone();
+    let retry_label = label.clone();
+    window
+        .spawn(cx, async move |cx| {
+            let result = cx
+                .background_executor()
+                .spawn(
+                    async move { factory.connect_ssh(cfg, PtySize { rows: 24, cols: 80 }, 10_000) },
+                )
+                .await;
+
+            _ =
+                cx.update(|window, cx| match result {
+                    Ok(ssh_session) => {
+                        let panel: Arc<dyn PanelView> = Arc::new(
+                            TerminalPanel::from_session_entity(ssh_session, &label, window, cx),
+                        );
+                        add_ssh_terminal_to_dock(&panel, window, cx);
+                        window.push_notification(
+                            notify(
+                                NotificationType::Success,
+                                format!("Connected to \"{label}\"."),
+                                cx,
+                            ),
+                            cx,
+                        );
+                    }
+                    Err(AppError::HostKeyUnknown {
+                        host,
+                        port,
+                        algorithm,
+                        fingerprint,
+                    }) => open_host_key_confirmation(
+                        retry_cfg,
+                        retry_label,
+                        host,
+                        port,
+                        algorithm,
+                        fingerprint,
+                        window,
+                        cx,
+                    ),
+                    Err(error) => {
+                        window.push_notification(
+                            notify(
+                                NotificationType::Error,
+                                format!("SSH connect failed: {error}"),
+                                cx,
+                            ),
+                            cx,
+                        );
+                    }
+                });
+        })
+        .detach();
+}
+
+#[allow(clippy::too_many_arguments)]
+fn open_host_key_confirmation(
+    mut cfg: SshConfig,
+    label: String,
+    host: String,
+    port: u16,
+    algorithm: String,
+    fingerprint: String,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    cfg.host_key_policy = HostKeyPolicy::AcceptNewFingerprint(fingerprint.clone());
+    let description = format!(
+        "The server is not present in your OpenSSH known_hosts file.\n\n\
+         Host: {host}:{port}\nAlgorithm: {algorithm}\n\
+         SHA-256 fingerprint: {fingerprint}\n\n\
+         Verify this fingerprint through a trusted channel before continuing.",
+    );
+    window.open_alert_dialog(cx, move |alert, _, _| {
+        let cfg = cfg.clone();
+        let label = label.clone();
+        alert
+            .confirm()
+            .title("Unknown SSH Host Key")
+            .description(description.clone())
+            .button_props(
+                DialogButtonProps::default()
+                    .ok_text("Trust and Connect")
+                    .ok_variant(ButtonVariant::Danger)
+                    .cancel_text("Cancel")
+                    .show_cancel(true),
+            )
+            .on_ok(move |_, window, cx| {
+                connect_ssh_session(cfg.clone(), label.clone(), window, cx);
+                true
+            })
+    });
 }

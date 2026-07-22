@@ -7,8 +7,8 @@
 //! Similar to `local/src/listener.rs` but replaces `Notifier` with `cmd_tx`
 //! (async_channel::Sender<Cmd>).
 
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 
 #[cfg(any(test, feature = "terminal-diagnostics"))]
 use std::sync::atomic::AtomicU64;
@@ -22,8 +22,8 @@ use alacritty_terminal::event::{Event, EventListener};
 
 use oneterm_terminal::SessionEvent;
 use oneterm_terminal::{
-    ColorFormatter, Osc133Kind, OscPayload, PendingColorQuery, SharedColorQueries,
-    TerminalSecurityPolicy, new_color_queries, parse_cwd_url, parse_osc,
+    ColorFormatter, NotificationRateLimiter, Osc133Kind, OscPayload, PendingColorQuery,
+    SharedColorQueries, TerminalSecurityPolicy, new_color_queries, parse_cwd_url, parse_osc,
 };
 
 use crate::state::SharedState;
@@ -78,6 +78,7 @@ pub struct SshListener {
     /// Security policy for terminal-controlled data (title, clipboard, etc).
     /// SSH is remote: clipboard read/write default off.
     security: TerminalSecurityPolicy,
+    notification_limiter: Arc<Mutex<NotificationRateLimiter>>,
     /// Set when close has been requested — the tokio task checks this flag
     /// to ensure close is always honored even if Cmd::Close is dropped.
     closing: Arc<std::sync::atomic::AtomicBool>,
@@ -94,6 +95,7 @@ impl SshListener {
             state,
             color_queries: new_color_queries(),
             security: TerminalSecurityPolicy::default(),
+            notification_limiter: Arc::new(Mutex::new(NotificationRateLimiter::default())),
             closing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             #[cfg(any(test, feature = "terminal-diagnostics"))]
             queue_counters: Arc::new(SshQueueCounters::default()),
@@ -247,7 +249,16 @@ impl SshListener {
             }
             OscPayload::Notification(msg) => {
                 if let Some(sanitized) = self.security.sanitize_notification(&msg) {
-                    self.forward(SessionEvent::Notification(sanitized));
+                    if self
+                        .notification_limiter
+                        .lock()
+                        .unwrap()
+                        .allow(&self.security)
+                    {
+                        self.forward(SessionEvent::Notification(sanitized));
+                    } else {
+                        log::debug!("SshListener: notification rate limit exceeded");
+                    }
                 }
             }
             OscPayload::Progress(progress) => self.forward(SessionEvent::Progress(progress)),

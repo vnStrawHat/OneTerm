@@ -32,6 +32,17 @@ impl Render for LocalTerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl gpui::IntoElement {
         // Drain OSC 9 notifications here (needs a `Window`, unavailable in the
         // async subscribe task where they are queued).
+        if self.dropped_notifications > 0 {
+            let dropped = std::mem::take(&mut self.dropped_notifications);
+            window.push_notification(
+                notify(
+                    NotificationType::Warning,
+                    format!("{dropped} terminal notifications were dropped while the UI was busy."),
+                    cx,
+                ),
+                cx,
+            );
+        }
         if !self.pending_notifications.is_empty() {
             for msg in std::mem::take(&mut self.pending_notifications) {
                 window.push_notification(notify(NotificationType::Info, msg, cx), cx);

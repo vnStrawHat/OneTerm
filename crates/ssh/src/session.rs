@@ -30,7 +30,7 @@ use oneterm_terminal::{PtySize, SessionEvent};
 
 use crate::config::{SshAuthMethod, SshConfig};
 use crate::counting_stream::CountingStream;
-use crate::handler::SshClientHandler;
+use crate::handler::{SshClientHandler, SshHandlerError};
 use crate::listener::{Cmd, SshListener};
 use crate::sftp::{SftpCmd, SftpEvent, SftpSession};
 use crate::sftp_task::sftp_task;
@@ -76,7 +76,7 @@ pub struct SshSession {
 /// The `multi_thread` runtime (1 worker) keeps background tasks running after
 /// `block_on()` returns.
 pub fn connect(
-    cfg: SshConfig,
+    mut cfg: SshConfig,
     initial: PtySize,
     scrollback_history: usize,
 ) -> oneterm_core::Result<Box<dyn oneterm_terminal::TerminalSession>> {
@@ -122,15 +122,19 @@ pub fn connect(
         let addr = format!("{}:{}", cfg.host, cfg.port);
         log::info!("SshSession: connecting to {addr}");
         let client_cfg = russh::client::Config::default();
-        let handler = SshClientHandler;
+        let handler =
+            SshClientHandler::new(cfg.host.clone(), cfg.port, cfg.host_key_policy.clone());
 
         let mut handle = client::connect(Arc::new(client_cfg), addr, handler)
             .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+            .map_err(anyhow::Error::new)?;
         log::info!("SshSession: TCP connected");
 
         // ── Authenticate ──────────────────────────────────────────────
-        let auth_result = match &cfg.auth {
+        // Move authentication material out of the long-lived config so it is
+        // zeroized as soon as authentication completes.
+        let auth = std::mem::replace(&mut cfg.auth, SshAuthMethod::None);
+        let auth_result = match auth {
             SshAuthMethod::None => {
                 log::info!("SshSession: authenticating with none (no password)");
                 handle
@@ -141,7 +145,7 @@ pub fn connect(
             SshAuthMethod::Password { password } => {
                 log::info!("SshSession: authenticating with password");
                 handle
-                    .authenticate_password(&cfg.username, password)
+                    .authenticate_password(&cfg.username, password.expose_secret())
                     .await
                     .map_err(|e| anyhow::anyhow!("{e}"))?
             }
@@ -150,7 +154,10 @@ pub fn connect(
                 passphrase,
             } => {
                 log::info!("SshSession: authenticating with key {}", key_path.display());
-                let key = load_private_key(key_path, passphrase.as_deref())?;
+                let key = load_private_key(
+                    &key_path,
+                    passphrase.as_ref().map(|secret| secret.expose_secret()),
+                )?;
                 let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key), None);
                 handle
                     .authenticate_publickey(&cfg.username, key_with_alg)
@@ -270,7 +277,11 @@ pub fn connect(
         }
         Err(e) => {
             log::error!("SshSession: connect failed: {e}");
-            Err(oneterm_core::AppError::msg(e.to_string()))
+            if let Some(handler_error) = e.downcast_ref::<SshHandlerError>() {
+                Err(handler_error.to_app_error())
+            } else {
+                Err(oneterm_core::AppError::msg(e.to_string()))
+            }
         }
     }
 }

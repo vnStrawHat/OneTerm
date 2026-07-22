@@ -61,7 +61,11 @@ pub struct LocalTerminalView {
     /// Pending OSC 9 desktop notifications — drained in `render` via
     /// `window.push_notification` (which needs a `Window`, unavailable in the
     /// async subscribe task).
-    pub(crate) pending_notifications: Vec<String>,
+    pub(crate) pending_notifications: VecDeque<String>,
+    /// Number of notifications dropped because the display queue was full.
+    pub(crate) dropped_notifications: usize,
+    /// UI-side notification policy; listener-side rate limiting happens earlier.
+    pub(crate) notification_policy: oneterm_terminal::TerminalSecurityPolicy,
     /// Current OSC 9;4 taskbar progress (`None` = no progress / removed).
     pub(crate) progress: Option<TerminalProgress>,
     /// Latest OSC 9;7 coding-agent status event for this terminal
@@ -209,7 +213,7 @@ impl LocalTerminalView {
                     }
                     SessionEvent::Notification(msg) => {
                         let _ = this.update(cx, |view, cx| {
-                            view.pending_notifications.push(msg);
+                            view.queue_notification(msg);
                             cx.notify();
                         });
                     }
@@ -288,7 +292,9 @@ impl LocalTerminalView {
             scroll_handle: TerminalScrollHandle::new(),
             cursor_blink_visible: true,
             has_bell: false,
-            pending_notifications: Vec::new(),
+            pending_notifications: VecDeque::new(),
+            dropped_notifications: 0,
+            notification_policy: oneterm_terminal::TerminalSecurityPolicy::default(),
             progress: None,
             agent_status: None,
             scrollbar_drag_start: None,
@@ -316,6 +322,19 @@ impl LocalTerminalView {
             blink_task: Some(blink_task),
             alive: true,
         }
+    }
+
+    fn queue_notification(&mut self, message: String) {
+        let limit = self.notification_policy.max_queued_notifications;
+        if limit == 0 {
+            self.dropped_notifications = self.dropped_notifications.saturating_add(1);
+            return;
+        }
+        if self.pending_notifications.len() >= limit {
+            self.pending_notifications.pop_front();
+            self.dropped_notifications = self.dropped_notifications.saturating_add(1);
+        }
+        self.pending_notifications.push_back(message);
     }
 
     /// Shut down this view: cancel tasks, close the session, mark as not alive.
@@ -470,7 +489,7 @@ impl LocalTerminalView {
                 }
                 Ok(SessionEvent::Notification(msg)) => {
                     let _ = this.update(cx, |view, cx| {
-                        view.pending_notifications.push(msg);
+                        view.queue_notification(msg);
                         cx.notify();
                     });
                 }

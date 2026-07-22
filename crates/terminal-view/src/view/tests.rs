@@ -74,3 +74,35 @@ fn phase0_renderer_baseline_counts_dirty_and_idle_frames(cx: &mut TestAppContext
     eprintln!("phase0_renderer_dirty={dirty:?}");
     eprintln!("phase0_renderer_idle={idle:?}");
 }
+
+#[gpui::test]
+fn terminal_notification_queue_is_bounded(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    cx.update(crate::init);
+    cx.update(oneterm_settings::TerminalSettings::init);
+
+    let (session, _) = FakeTerminalSession::boxed(24, 80, "");
+    let (view, cx) = cx.add_window_view(move |window, cx| {
+        let session = cx.new(|_| session);
+        LocalTerminalView::new(session, window, cx)
+    });
+    let cx: &mut VisualTestContext = cx;
+
+    view.update(cx, |view, _| {
+        view.notification_policy.max_queued_notifications = 2;
+        view.queue_notification("first".to_string());
+        view.queue_notification("second".to_string());
+        view.queue_notification("third".to_string());
+    });
+
+    let (queued, dropped, oldest) = view.read_with(cx, |view, _| {
+        (
+            view.pending_notifications.len(),
+            view.dropped_notifications,
+            view.pending_notifications.front().cloned(),
+        )
+    });
+    assert_eq!(queued, 2);
+    assert_eq!(dropped, 1);
+    assert_eq!(oldest.as_deref(), Some("second"));
+}

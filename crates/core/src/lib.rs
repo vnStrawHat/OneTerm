@@ -13,7 +13,7 @@ pub mod ssh_config;
 pub use config::{LocalShellConfig, RightDockMode, ShellKind, config_dir, home_dir};
 pub use error::AppError;
 pub use sftp::{FileEntry, FileStat, SftpBackend};
-pub use ssh_config::{SshAuthMethod, SshConfig};
+pub use ssh_config::{HostKeyPolicy, SecretString, SshAuthMethod, SshConfig};
 
 /// Shared result type for the `core` crate.
 pub type Result<T> = std::result::Result<T, AppError>;

@@ -269,6 +269,165 @@ fn map_sftp_err(e: russh_sftp::client::error::Error) -> AppError {
     AppError::msg(e.to_string())
 }
 
+/// Validate one remote directory entry before using it as a local path component.
+///
+/// Remote names are treated as untrusted input. They must remain one normal
+/// component on every supported client platform; separators, prefixes, reserved
+/// Windows names, and trailing dot/space forms are rejected.
+fn validate_remote_entry_name(name: &str) -> Result<()> {
+    if name.is_empty() || name == "." || name == ".." {
+        return Err(AppError::msg("unsafe remote filename"));
+    }
+    if name
+        .chars()
+        .any(|ch| ch == '/' || ch == '\\' || ch == ':' || ch == '\0')
+    {
+        return Err(AppError::msg(format!("unsafe remote filename: {name:?}")));
+    }
+    if name.ends_with('.') || name.ends_with(' ') {
+        return Err(AppError::msg(format!("unsafe remote filename: {name:?}")));
+    }
+    if !matches!(
+        Path::new(name).components().next(),
+        Some(std::path::Component::Normal(component))
+            if component == std::ffi::OsStr::new(name)
+    ) {
+        return Err(AppError::msg(format!("unsafe remote filename: {name:?}")));
+    }
+
+    let stem = name.split('.').next().unwrap_or(name).to_ascii_uppercase();
+    if matches!(
+        stem.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    ) {
+        return Err(AppError::msg(format!("unsafe remote filename: {name:?}")));
+    }
+    Ok(())
+}
+
+/// Join a validated remote name to a local root without allowing traversal.
+fn safe_local_child(root: &Path, name: &str) -> Result<PathBuf> {
+    validate_remote_entry_name(name)?;
+    let child = root.join(name);
+    if !child.starts_with(root) {
+        return Err(AppError::msg("local download path escaped destination"));
+    }
+    Ok(child)
+}
+
+/// Reject existing symlinks and verify that a local destination remains below
+/// the selected root before writing it.
+async fn ensure_local_destination(root: &Path, candidate: &Path) -> Result<()> {
+    if !candidate.starts_with(root) {
+        return Err(AppError::msg("local download path escaped destination"));
+    }
+    let relative = candidate
+        .strip_prefix(root)
+        .map_err(|_| AppError::msg("local download path escaped destination"))?;
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        let std::path::Component::Normal(component) = component else {
+            return Err(AppError::msg("unsafe local download component"));
+        };
+        current.push(component);
+        match tokio::fs::symlink_metadata(&current).await {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(AppError::msg(format!(
+                    "refusing to traverse local symlink: {}",
+                    current.display()
+                )));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(AppError::msg(format!(
+                    "inspect local download path {}: {error}",
+                    current.display()
+                )));
+            }
+        }
+    }
+
+    let parent = candidate.parent().unwrap_or(root);
+    let canonical_parent = tokio::fs::canonicalize(parent)
+        .await
+        .map_err(|e| AppError::msg(format!("canonicalize download parent: {e}")))?;
+    if !canonical_parent.starts_with(root) {
+        return Err(AppError::msg("local download path escaped destination"));
+    }
+    Ok(())
+}
+
+/// Create missing destination directories one component at a time while
+/// rejecting pre-existing symlinks and non-directory components.
+async fn create_safe_parent_dirs(root: &Path, candidate: &Path) -> Result<()> {
+    let parent = candidate.parent().unwrap_or(root);
+    let relative = parent
+        .strip_prefix(root)
+        .map_err(|_| AppError::msg("local download path escaped destination"))?;
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        let std::path::Component::Normal(component) = component else {
+            return Err(AppError::msg("unsafe local download component"));
+        };
+        current.push(component);
+        match tokio::fs::symlink_metadata(&current).await {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(AppError::msg(format!(
+                    "refusing to traverse local symlink: {}",
+                    current.display()
+                )));
+            }
+            Ok(metadata) if !metadata.is_dir() => {
+                return Err(AppError::msg(format!(
+                    "local download parent is not a directory: {}",
+                    current.display()
+                )));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                tokio::fs::create_dir(&current)
+                    .await
+                    .map_err(|e| AppError::msg(format!("create local directory: {e}")))?;
+            }
+            Err(error) => {
+                return Err(AppError::msg(format!(
+                    "inspect local download path {}: {error}",
+                    current.display()
+                )));
+            }
+        }
+        let canonical = tokio::fs::canonicalize(&current)
+            .await
+            .map_err(|e| AppError::msg(format!("canonicalize download directory: {e}")))?;
+        if !canonical.starts_with(root) {
+            return Err(AppError::msg("local download path escaped destination"));
+        }
+    }
+    ensure_local_destination(root, candidate).await
+}
+
 /// Convert `FileAttributes` (russh-sftp) to a `FileEntry`.
 ///
 /// IMPORTANT: SFTP paths always use `/` (Unix style), even when the client runs
@@ -662,6 +821,9 @@ async fn sftp_download(
 ) -> Result<()> {
     let remote_str = remote.to_string_lossy().replace('\\', "/");
     let attrs = sftp.metadata(&remote_str).await.map_err(map_sftp_err)?;
+    if attrs.is_symlink() {
+        return Err(AppError::msg("refusing to download a remote symlink"));
+    }
 
     if attrs.is_dir() {
         sftp_download_dir(sftp, &remote_str, local, progress, cancel).await
@@ -680,6 +842,14 @@ async fn sftp_download_file(
 ) -> Result<()> {
     // Get the size to compute progress.
     let attrs = sftp.metadata(remote_str).await.map_err(map_sftp_err)?;
+    if attrs.is_symlink() {
+        return Err(AppError::msg("refusing to download a remote symlink"));
+    }
+    if let Ok(metadata) = tokio::fs::symlink_metadata(local).await {
+        if metadata.file_type().is_symlink() {
+            return Err(AppError::msg("refusing to overwrite a local symlink"));
+        }
+    }
     let total = attrs.size.unwrap_or(0);
 
     let mut remote_file = sftp.open(remote_str).await.map_err(map_sftp_err)?;
@@ -746,23 +916,29 @@ async fn sftp_download_dir(
         files: &mut Vec<(String, PathBuf, u64)>,
     ) -> Result<()> {
         let read_dir = sftp.read_dir(remote).await.map_err(map_sftp_err)?;
-        let entries: Vec<(String, bool, u64)> = read_dir
-            .filter_map(|e| {
-                let name = e.file_name();
-                if name == "." || name == ".." {
-                    return None;
-                }
-                let metadata = e.metadata();
-                let is_dir = metadata.is_dir();
-                let size = metadata.size.unwrap_or(0);
-                Some((name, is_dir, size))
-            })
-            .collect();
+        let mut entries = Vec::new();
+        for entry in read_dir {
+            let name = entry.file_name();
+            if name == "." || name == ".." {
+                continue;
+            }
+            validate_remote_entry_name(&name)?;
+            let metadata = entry.metadata();
+            if metadata.is_symlink() {
+                return Err(AppError::msg(format!(
+                    "refusing to download remote symlink: {name:?}"
+                )));
+            }
+            entries.push((name, metadata.is_dir(), metadata.size.unwrap_or(0)));
+        }
 
         for (name, is_dir, size) in entries {
-            // Use string concat with '/' instead of Path::join (avoids '\' on Windows).
-            let remote_child = format!("{remote}/{name}");
-            let local_child = local.join(&name);
+            let remote_child = if remote.ends_with('/') {
+                format!("{remote}{name}")
+            } else {
+                format!("{remote}/{name}")
+            };
+            let local_child = safe_local_child(local, &name)?;
             if is_dir {
                 Box::pin(collect_files(sftp, &remote_child, &local_child, files)).await?;
             } else {
@@ -772,21 +948,24 @@ async fn sftp_download_dir(
         Ok(())
     }
 
-    // 1. Collect the file list + compute total size.
-    let mut files: Vec<(String, PathBuf, u64)> = Vec::new();
-    collect_files(sftp, remote_str, local, &mut files).await?;
-    let total_bytes: u64 = files.iter().map(|(_, _, s)| *s).sum();
-    log::info!(
-        "sftp_download_dir: \"{remote_str}\" → \"{}\" — {} files, {} bytes",
-        local.display(),
-        files.len(),
-        total_bytes
-    );
-
-    // 2. Create the local root directory.
+    // 1. Create and canonicalize the selected root before trusting remote names.
     tokio::fs::create_dir_all(local)
         .await
         .map_err(|e| AppError::msg(format!("create local dir: {e}")))?;
+    let local_root = tokio::fs::canonicalize(local)
+        .await
+        .map_err(|e| AppError::msg(format!("canonicalize local dir: {e}")))?;
+
+    // 2. Collect the file list + compute total size.
+    let mut files: Vec<(String, PathBuf, u64)> = Vec::new();
+    collect_files(sftp, remote_str, &local_root, &mut files).await?;
+    let total_bytes: u64 = files.iter().map(|(_, _, s)| *s).sum();
+    log::info!(
+        "sftp_download_dir: \"{remote_str}\" → \"{}\" — {} files, {} bytes",
+        local_root.display(),
+        files.len(),
+        total_bytes
+    );
 
     // 3. Download each file, tracking cumulative progress.
     let mut bytes_done: u64 = 0;
@@ -802,14 +981,15 @@ async fn sftp_download_dir(
             local_path.display()
         );
 
-        // Ensure the file's parent directory exists locally.
-        if let Some(parent) = local_path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|e| AppError::msg(format!("create local parent dir: {e}")))?;
-        }
+        // Create parents component-by-component and reject symlink traversal.
+        create_safe_parent_dirs(&local_root, local_path).await?;
 
         let mut remote_file = sftp.open(remote_path).await.map_err(map_sftp_err)?;
+        if let Ok(metadata) = tokio::fs::symlink_metadata(local_path).await {
+            if metadata.file_type().is_symlink() {
+                return Err(AppError::msg("refusing to overwrite a local symlink"));
+            }
+        }
         let mut local_file = tokio::fs::File::create(local_path)
             .await
             .map_err(|e| AppError::msg(format!("create local: {e}")))?;
@@ -850,4 +1030,81 @@ async fn sftp_download_dir(
 
     let _ = progress.try_send(1.0);
     Ok(())
+}
+
+#[cfg(test)]
+mod security_tests {
+    #[cfg(unix)]
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    #[cfg(unix)]
+    fn temporary_dir() -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "oneterm-sftp-security-{}-{nonce}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn rejects_remote_names_that_can_escape_or_alias() {
+        for name in [
+            "",
+            ".",
+            "..",
+            "../outside",
+            "dir/file",
+            "dir\\file",
+            "/absolute",
+            "C:outside",
+            "name\0tail",
+            "CON",
+            "nul.txt",
+            "COM1.log",
+            "trailing.",
+            "trailing ",
+        ] {
+            assert!(
+                validate_remote_entry_name(name).is_err(),
+                "{name:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_one_safe_component_and_keeps_it_below_root() {
+        let root = Path::new("download-root");
+        for name in ["file.txt", "folder", "héllo 世界.txt", "..safe"] {
+            let child = safe_local_child(root, name).unwrap();
+            assert_eq!(child, root.join(name));
+            assert!(child.starts_with(root));
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn refuses_preexisting_symlink_below_download_root() {
+        use std::os::unix::fs::symlink;
+
+        let root = temporary_dir();
+        let outside = temporary_dir();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let root = std::fs::canonicalize(&root).unwrap();
+        symlink(&outside, root.join("linked")).unwrap();
+        let candidate = root.join("linked").join("file.txt");
+
+        let error = create_safe_parent_dirs(&root, &candidate)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("symlink"));
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
 }
