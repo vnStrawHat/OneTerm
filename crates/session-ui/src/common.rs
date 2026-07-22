@@ -7,13 +7,20 @@
 //! - [`parse_user_host_port`] — parse `user@host:port` strings.
 //! - [`add_ssh_terminal_to_dock`] — add a terminal panel to the DockArea center.
 
-use std::sync::Arc;
+use std::rc::Rc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use gpui::prelude::FluentBuilder as _;
-use gpui::{App, IntoElement, ParentElement as _, SharedString, Styled, Window, div};
+use gpui::{
+    App, ClickEvent, Context, IntoElement, ParentElement as _, Render, SharedString, Styled,
+    Window, div,
+};
 use gpui_component::{
-    ActiveTheme, WindowExt as _,
-    button::ButtonVariant,
+    ActiveTheme, Disableable as _, WindowExt as _,
+    button::{Button, ButtonVariant, ButtonVariants as _},
     dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputState},
@@ -63,6 +70,36 @@ pub(crate) fn password_field(state: &gpui::Entity<InputState>, _cx: &App) -> imp
                 .child(SharedString::from("Password")),
         )
         .child(Input::new(state).mask_toggle().cleanable(true))
+}
+
+/// Stateful Connect button that renders a spinner and disables itself while connecting.
+pub(crate) struct ConnectButton {
+    action: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool>,
+    connecting: Arc<AtomicBool>,
+}
+
+impl ConnectButton {
+    pub(crate) fn new(
+        action: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool>,
+        connecting: Arc<AtomicBool>,
+    ) -> Self {
+        Self { action, connecting }
+    }
+}
+
+impl Render for ConnectButton {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let connecting = self.connecting.load(Ordering::Relaxed);
+        let action = self.action.clone();
+        Button::new("connect")
+            .label(if connecting { "Connecting" } else { "Connect" })
+            .primary()
+            .loading(connecting)
+            .disabled(connecting)
+            .on_click(move |event, window, cx| {
+                let _ = action(event, window, cx);
+            })
+    }
 }
 
 /// Server info banner (read-only).
@@ -133,11 +170,14 @@ pub(crate) fn add_ssh_terminal_to_dock(
 pub(crate) fn connect_ssh_session(
     cfg: SshConfig,
     label: String,
+    connecting: Arc<std::sync::atomic::AtomicBool>,
     window: &mut Window,
     cx: &mut App,
 ) -> ConnectionCancellation {
     let cancellation = cfg.cancellation.clone();
     let Some(factory) = oneterm_terminal::session_factory() else {
+        connecting.store(false, std::sync::atomic::Ordering::Relaxed);
+        window.refresh();
         window.push_notification(
             notify(
                 NotificationType::Error,
@@ -157,6 +197,7 @@ pub(crate) fn connect_ssh_session(
     // explicitly approved and retried without asking for the password again.
     let retry_cfg = cfg.clone();
     let retry_label = label.clone();
+    let connecting_for_task = connecting.clone();
     let task_cancellation = cancellation.clone();
     window
         .spawn(cx, async move |cx| {
@@ -167,12 +208,14 @@ pub(crate) fn connect_ssh_session(
                 )
                 .await;
             if task_cancellation.is_cancelled() {
+                connecting_for_task.store(false, std::sync::atomic::Ordering::Relaxed);
                 return;
             }
 
             _ =
                 cx.update(|window, cx| match result {
                     Ok(ssh_session) => {
+                        connecting_for_task.store(false, std::sync::atomic::Ordering::Relaxed);
                         window.close_dialog(cx);
                         let panel: Arc<dyn PanelView> = Arc::new(
                             TerminalPanel::from_session_entity(ssh_session, &label, window, cx),
@@ -193,6 +236,7 @@ pub(crate) fn connect_ssh_session(
                         algorithm,
                         fingerprint,
                     }) => {
+                        connecting_for_task.store(false, std::sync::atomic::Ordering::Relaxed);
                         window.close_dialog(cx);
                         open_host_key_confirmation(
                             retry_cfg,
@@ -206,6 +250,8 @@ pub(crate) fn connect_ssh_session(
                         );
                     }
                     Err(error) => {
+                        connecting_for_task.store(false, std::sync::atomic::Ordering::Relaxed);
+                        window.refresh();
                         window.push_notification(
                             notify(
                                 NotificationType::Error,
@@ -255,7 +301,13 @@ fn open_host_key_confirmation(
                     .show_cancel(true),
             )
             .on_ok(move |_, window, cx| {
-                connect_ssh_session(cfg.clone(), label.clone(), window, cx);
+                connect_ssh_session(
+                    cfg.clone(),
+                    label.clone(),
+                    Arc::new(AtomicBool::new(true)),
+                    window,
+                    cx,
+                );
                 true
             })
     });

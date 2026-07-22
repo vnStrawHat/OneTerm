@@ -9,6 +9,10 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
@@ -17,7 +21,7 @@ use gpui::{
 };
 use gpui_component::{
     WindowExt as _,
-    button::{Button, ButtonVariants as _},
+    button::Button,
     checkbox::Checkbox,
     dialog::{DialogButtonProps, DialogFooter},
     input::{Input, InputState},
@@ -30,7 +34,8 @@ use crate::session_state::{SshSession, SshSessionStore};
 use oneterm_state::notif_ext::notify;
 
 use super::common::{
-    connect_ssh_session, field, parse_user_host_port, password_field, server_info_banner,
+    ConnectButton, connect_ssh_session, field, parse_user_host_port, password_field,
+    server_info_banner,
 };
 
 /// Open the SSH connect dialog.
@@ -84,6 +89,7 @@ pub(crate) fn open_connect_dialog(
 
     // Save-username flag — defaults to NOT saving (the user must tick the checkbox).
     let save_username = Rc::new(Cell::new(false));
+    let connecting = Arc::new(AtomicBool::new(false));
     let connection_cancellation: Rc<RefCell<Option<ConnectionCancellation>>> =
         Rc::new(RefCell::new(None));
     // Clone for the save_logic closure.
@@ -99,7 +105,11 @@ pub(crate) fn open_connect_dialog(
         let session_ok = session_ok.clone();
         let save_username = save_username.clone();
         let connection_cancellation = connection_cancellation.clone();
+        let connecting = connecting.clone();
         move |_, window, cx| {
+            if connecting.load(Ordering::Relaxed) {
+                return false;
+            }
             let save = save_username.get();
             on_connect_click(
                 &session_ok,
@@ -108,11 +118,14 @@ pub(crate) fn open_connect_dialog(
                 &password_ok,
                 save,
                 &connection_cancellation,
+                connecting.clone(),
                 window,
                 cx,
             )
         }
     });
+
+    let connect_button = cx.new(|_| ConnectButton::new(connect_logic.clone(), connecting.clone()));
 
     window.open_dialog(cx, move |dialog, window, cx| {
         // Focus username (if not yet set) or password (if username already exists).
@@ -122,8 +135,7 @@ pub(crate) fn open_connect_dialog(
             password_state.read(cx).focus_handle(cx)
         };
         focus_handle.focus(window, cx);
-        // Clone connect_logic for the button on_click and keyboard on_ok.
-        let connect_for_click = connect_logic.clone();
+        // Clone connect_logic for keyboard on_ok; the footer owns the Connect button.
         let connect_for_kb = connect_logic.clone();
         let cancellation_for_keyboard = connection_cancellation.clone();
         dialog
@@ -178,11 +190,7 @@ pub(crate) fn open_connect_dialog(
                             window.close_dialog(cx);
                         },
                     ))
-                    .child(Button::new("connect").label("Connect").primary().on_click(
-                        move |_, window, cx| {
-                            let _ = connect_for_click(&ClickEvent::default(), window, cx);
-                        },
-                    ))
+                    .child(connect_button.clone())
             })
             .button_props(
                 DialogButtonProps::default()
@@ -206,6 +214,7 @@ fn on_connect_click(
     password_state: &gpui::Entity<InputState>,
     save_username: bool,
     connection_cancellation: &Rc<RefCell<Option<ConnectionCancellation>>>,
+    connecting: Arc<AtomicBool>,
     window: &mut Window,
     cx: &mut App,
 ) -> bool {
@@ -263,7 +272,9 @@ fn on_connect_click(
         shell_integration: true,
     };
     password_state.update(cx, |state, cx| state.set_value("", window, cx));
-    let cancellation = connect_ssh_session(cfg, session.label.clone(), window, cx);
+    connecting.store(true, Ordering::Relaxed);
+    window.refresh();
+    let cancellation = connect_ssh_session(cfg, session.label.clone(), connecting, window, cx);
     *connection_cancellation.borrow_mut() = Some(cancellation);
 
     false // keep the dialog open until the background attempt completes

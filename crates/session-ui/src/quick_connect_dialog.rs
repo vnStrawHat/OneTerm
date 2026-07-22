@@ -7,11 +7,15 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use gpui::{App, AppContext, ClickEvent, ParentElement as _, Styled, Window, div, px};
 use gpui_component::{
     WindowExt as _,
-    button::{Button, ButtonVariants as _},
+    button::Button,
     checkbox::Checkbox,
     dialog::{DialogButtonProps, DialogFooter},
     input::{Input, InputState},
@@ -23,7 +27,7 @@ use oneterm_core::{ConnectionCancellation, HostKeyPolicy, SecretString, SshAuthM
 use crate::session_state::{SshSession, SshSessionStore};
 use oneterm_state::notif_ext::notify;
 
-use super::common::{connect_ssh_session, field};
+use super::common::{ConnectButton, connect_ssh_session, field};
 
 /// Open a "Quick Connect" dialog — enter host, port, username, password and
 /// connect immediately. Optionally save the session to the SSH session store.
@@ -43,6 +47,7 @@ pub fn open_quick_connect_dialog(window: &mut Window, cx: &mut App) {
 
     // ── Save-to-store checkbox state ───────────────────────────────────
     let save_session = Rc::new(Cell::new(false));
+    let connecting = Arc::new(AtomicBool::new(false));
     let connection_cancellation: Rc<RefCell<Option<ConnectionCancellation>>> =
         Rc::new(RefCell::new(None));
 
@@ -54,7 +59,11 @@ pub fn open_quick_connect_dialog(window: &mut Window, cx: &mut App) {
         let password_state = password_state.clone();
         let save_session = save_session.clone();
         let connection_cancellation = connection_cancellation.clone();
+        let connecting = connecting.clone();
         move |_, window, cx| {
+            if connecting.load(Ordering::Relaxed) {
+                return false;
+            }
             let host_field = host_state.read(cx).value().trim().to_string();
             let port_field = port_state.read(cx).value().trim().to_string();
             let username_raw = username_state.read(cx).value().trim().to_string();
@@ -141,15 +150,18 @@ pub fn open_quick_connect_dialog(window: &mut Window, cx: &mut App) {
             };
             let label = format!("{}@{}:{}", cfg.username, cfg.host, cfg.port);
             password_state.update(cx, |state, cx| state.set_value("", window, cx));
-            let cancellation = connect_ssh_session(cfg, label, window, cx);
+            connecting.store(true, Ordering::Relaxed);
+            window.refresh();
+            let cancellation = connect_ssh_session(cfg, label, connecting.clone(), window, cx);
             *connection_cancellation.borrow_mut() = Some(cancellation);
 
             false
         }
     });
 
+    let connect_button = cx.new(|_| ConnectButton::new(connect_logic.clone(), connecting.clone()));
+
     window.open_dialog(cx, move |dialog, _window, _cx| {
-        let connect_for_click = connect_logic.clone();
         let connect_for_kb = connect_logic.clone();
         let cancellation_for_keyboard = connection_cancellation.clone();
 
@@ -199,11 +211,7 @@ pub fn open_quick_connect_dialog(window: &mut Window, cx: &mut App) {
                             window.close_dialog(cx);
                         },
                     ))
-                    .child(Button::new("connect").label("Connect").primary().on_click(
-                        move |_, window, cx| {
-                            let _ = connect_for_click(&ClickEvent::default(), window, cx);
-                        },
-                    ))
+                    .child(connect_button.clone())
             })
             .button_props(
                 DialogButtonProps::default()
