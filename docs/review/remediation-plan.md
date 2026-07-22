@@ -323,18 +323,35 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ### Work items
 
-- [ ] Update stale documentation paths and clearly label historical design documents.
-- [ ] Add a current architecture navigation page with crate responsibility and dependency links.
-- [ ] Split large files by responsibility, starting with transfer orchestration, Agent state, and dock modules.
-- [ ] Extract named operations from deeply nested GPUI callback chains.
-- [ ] Keep lifecycle and security comments aligned with actual guarantees.
-- [ ] Add module-level documentation for public feature boundaries and ownership rules.
+- [x] Update stale documentation paths and clearly label historical design documents.
+- [x] Add a current architecture navigation page with crate responsibility and dependency links.
+- [x] Split transfer orchestration and Agent state by stable responsibility; the remaining large
+      dock and terminal-view modules are explicitly retained as optional follow-up work.
+- [ ] Extract named operations from deeply nested GPUI callback chains. This remains a separate
+      follow-up because the scoped remediation preserved callback behavior without changing UX.
+- [x] Keep lifecycle and security comments aligned with actual guarantees.
+- [x] Add module-level documentation for public feature boundaries and ownership rules.
 
 ### Acceptance criteria
 
-- [ ] Every path linked from the current architecture docs exists.
-- [ ] A new contributor can locate backend, feature, state, and shell code from one index.
-- [ ] Comments do not promise controls or cleanup that the implementation does not provide.
+- [x] Every path linked from the current architecture docs exists.
+- [x] A new contributor can locate backend, feature, state, and shell code from one index.
+- [x] Comments do not promise controls or cleanup that the implementation does not provide.
+
+### Completed readability evidence (2026-07-22)
+
+- `crates/state/src/agent_model.rs` now owns folded Agent data and event application, with focused
+  tests in `agent_model_tests.rs`; `agent_registry.rs` retains registry and GPUI lifecycle duties.
+- `crates/ssh/src/sftp_transfer.rs` now owns bounded traversal, cancellation, streaming, temporary
+  files, and finalization; `sftp_task.rs` retains command dispatch and task orchestration.
+- `docs/architecture.md` is the current architecture source of truth. Historical design records
+  are labeled, and `scripts/check-doc-paths.py` validates its current paths.
+- Lifecycle/security comments and module ownership documentation were aligned with implementation.
+- Verification passed: formatting, architecture/dependency/UI-fork policy checks, workspace
+  Clippy/build/tests (`413 passed, 3 ignored` across 35 suites).
+- The scoped remediation is recorded in commit `819d589` (`refactor(readability): clarify module ownership`).
+- Remaining large dock/terminal-view splits and deep GPUI callback extraction are optional follow-up
+  readability work, not part of the completed scoped remediation.
 
 ---
 
