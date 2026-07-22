@@ -9,6 +9,8 @@
 | 1 | Project introduction & core principles | `AGENTS.md` (this file) |
 | 2 | Project structure (directory tree, conventions, dependency graph) | [`docs/agents/structure.md`](docs/agents/structure.md) |
 | 2a | **Crate & dependency rules (R1–R12)** | [`docs/agents/crate-dependency-rules.md`](docs/agents/crate-dependency-rules.md) |
+| 2b | **Runtime error policy** | [`docs/agents/error-policy.md`](docs/agents/error-policy.md) |
+| 2c | **Persistence ownership and migrations** | [`docs/agents/persistence.md`](docs/agents/persistence.md) |
 | 3 | Development guide (workflow, commands, git) | `AGENTS.md` |
 | 4 | Code conventions (style, GPUI, async, error) | [`docs/agents/code-style.md`](docs/agents/code-style.md) |
 | 5 | Dependencies, rev lock, gpui-component integration, reference-first research | [`docs/agents/dependencies.md`](docs/agents/dependencies.md) |
@@ -18,7 +20,9 @@
 > 1. `AGENTS.md` (this file) — to understand the overview, workflow, git, and quality gate.
 > 2. [`docs/agents/structure.md`](docs/agents/structure.md) — to learn the crate structure, directory tree, and dependency graph; and [`docs/agents/crate-dependency-rules.md`](docs/agents/crate-dependency-rules.md) for the **hard crate & dependency rules (R1–R12)**.
 > 3. [`docs/agents/code-style.md`](docs/agents/code-style.md) — to learn the code conventions (GPUI, async, error).
-> 4. [`docs/agents/dependencies.md`](docs/agents/dependencies.md) — to learn the rev lock & reference-first research.
+> 4. [`docs/agents/error-policy.md`](docs/agents/error-policy.md) — to apply consistent runtime error handling and recovery rules.
+> 5. [`docs/agents/persistence.md`](docs/agents/persistence.md) — before changing persisted schemas or storage mechanics.
+> 6. [`docs/agents/dependencies.md`](docs/agents/dependencies.md) — to learn the rev lock & reference-first research.
 
 ---
 

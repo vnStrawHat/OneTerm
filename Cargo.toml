@@ -13,6 +13,7 @@ members = [
     "crates/session-ui",
     "crates/settings-ui",
     "crates/agent-ui",
+    "crates/highlight",
     "crates/local-shell",
     "crates/ui",
     "crates/ssh",
@@ -27,7 +28,7 @@ publish = false
 edition = "2024"
 
 [workspace.dependencies]
-# GPUI core — cùng rev, cùng monorepo (xem docs/agents/dependencies.md §1)
+# GPUI core — same revision and monorepo (see docs/agents/dependencies.md §1)
 gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "ea6b194db04cc7c0474851f07c7d5b7a9df6a98b" }
@@ -51,26 +52,26 @@ oneterm-highlight = { path = "crates/highlight" }
 oneterm-local-shell = { path = "crates/local-shell" }
 oneterm-ssh = { path = "crates/ssh" }
 
-# Terminal engine — fork Zed của alacritty_terminal (bản patched có TerminalContent/display_iter)
-# Phải khớp rev mà GPUI dùng (xem docs/agents/dependencies.md §1)
+# Terminal engine — Zed fork of alacritty_terminal with TerminalContent/display_iter.
+# Keep the revision aligned with GPUI (see docs/agents/dependencies.md §1).
 alacritty_terminal = { git = "https://github.com/zed-industries/alacritty", rev = "fcf32feacb367b75ec84dd40f041e4fd411d3cc1" }
 # Terminal helpers: URL detect + OSC 52 base64
 linkify = "0.10"
 aho-corasick = "1"
 regex = "1"
 base64 = "0.22"
-# Event channel (SessionEvent subscribe) — không tokio lộ ra
+# Event channel (SessionEvent subscription) — keeps Tokio out of the public API
 async-channel = "2"
 # PTY polling (same version as alacritty_terminal)
 polling = "3.8"
-# Logging (alacritty_terminal cũng dùng log)
+# Logging (also used by alacritty_terminal)
 log = "0.4"
 env_logger = "0.11"
 # SSH client
 russh = { version = "0.61", default-features = false, features = ["ring", "flate2", "rsa"] }
-# SFTP subsystem cho russh — mở SFTP channel trên cùng SSH connection
+# SFTP subsystem for russh — opens an SFTP channel on the same SSH connection
 russh-sftp = "2.3"
-# russh-keys đã merge vào russh >= 0.50
+# russh-keys was merged into russh >= 0.50
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "io-util", "net", "macros", "fs"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 
@@ -89,7 +90,7 @@ sysinfo = "0.37"
 rust-i18n = "4"
 
 [workspace.lints.clippy]
-# Giữ tương thích với gpui-component upstream (xem reference/Cargo.toml)
+# Preserve compatibility with upstream gpui-component (see reference/Cargo.toml)
 almost_complete_range = "allow"
 arc_with_non_send_sync = "allow"
 borrowed_box = "allow"
@@ -142,10 +143,10 @@ oneterm-ssh = { opt-level = 3 }
 alacritty_terminal = { opt-level = 3 }
 
 [profile.release]
-# Optimised cho distributable binary.
-# - lto = "fat" + codegen-units = 1: tối ưu xuyên suốt crate, exe nhỏ + nhanh hơn.
-# - panic = "unwind": giữ mặc định — alacritty_terminal / smol có thể rely trên unwinding.
-# - strip = "symbols": bỏ debug symbols → exe nhỏ. Debug info vẫn giữ qua split-debuginfo.
+# Optimized for the distributable binary.
+# - lto = "fat" + codegen-units = 1: whole-program optimization and a smaller binary.
+# - panic = "unwind": keep the default because alacritty_terminal / smol may rely on unwinding.
+# - strip = "symbols": remove debug symbols for a smaller binary; split debug info remains available.
 # - opt-level = 3 + overflow-checks = false: production semantics.
 opt-level = 3
 lto = "fat"
@@ -156,7 +157,7 @@ overflow-checks = false
 panic = "unwind"
 
 [profile.release.package]
-# GPUI/smol nặng: build với opt-level 3 luôn (kể cả build dep).
+# GPUI/smol are expensive: always build them with opt-level 3 (including dependencies).
 gpui = { opt-level = 3 }
 gpui_platform = { opt-level = 3 }
 smol = { opt-level = 3 }

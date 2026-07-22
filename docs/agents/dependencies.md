@@ -66,11 +66,22 @@ Before adding a new crate, ask: "is this crate already in `reference/gpui-compon
 
 ## 4. Integrating with gpui-component upstream
 
-This project uses gpui-component directly from git. When upstream changes its API:
+This project keeps a small local dock fork in `crates/ui` because the dock needs
+`pub(crate)` access across several upstream sibling modules. Follow the complete
+base-revision, delta-review, and baseline-update procedure in
+[`ui-fork-maintenance.md`](ui-fork-maintenance.md). Verify the local delta with:
+
+```bash
+python scripts/check-ui-fork.py
+```
+
+For changes to the upstream dependency itself:
 
 1. Read the release note / PR diff in `reference/gpui-component/`.
-2. Update the corresponding code in the UI crates (`crates/workspace`, `crates/terminal-view`, `crates/sftp-ui`, `crates/session-ui`, `crates/settings-ui`, or the shared `crates/theme` / `crates/state`).
-3. If the change is breaking → update `CHANGELOG.md` (if any) + `docs/architecture.md`.
+2. Check out the exact revision pinned in `Cargo.toml` before comparing source.
+3. Update the corresponding code in the UI crates or the local fork.
+4. If the change is breaking, update `CHANGELOG.md` (if any) and the current architecture docs.
+5. Run `python scripts/check-ui-fork.py --update` only after reviewing every changed fork file.
 
 ### Quick reference for important gpui-component entry points
 

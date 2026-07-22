@@ -43,6 +43,17 @@ impl std::fmt::Display for TerminalError {
 
 impl std::error::Error for TerminalError {}
 
+/// Log a best-effort generated input failure with operation context.
+///
+/// User keystrokes use the typed [`TerminalInput::write`] result directly. Mouse
+/// reports, clear commands, and IME commits currently have void trait methods, so
+/// their delivery failures must remain observable rather than being discarded.
+pub fn report_generated_input(operation: &str, result: Result<(), TerminalError>) {
+    if let Err(error) = result {
+        log::warn!("{operation} delivery failed: {error}");
+    }
+}
+
 // ── Sub-trait contracts (documentation of the intended split) ──────────────
 //
 // These traits document the narrower capability boundaries. The monolithic

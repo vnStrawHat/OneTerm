@@ -1,0 +1,53 @@
+{
+  "workspace_members": [
+    "crates/app",
+    "crates/core",
+    "crates/terminal",
+    "crates/actions",
+    "crates/settings",
+    "crates/state",
+    "crates/theme",
+    "crates/ui",
+    "crates/workspace",
+    "crates/terminal-view",
+    "crates/sftp-ui",
+    "crates/session-ui",
+    "crates/settings-ui",
+    "crates/agent-ui",
+    "crates/highlight",
+    "crates/local-shell",
+    "crates/ssh"
+  ],
+  "internal_dependencies": {
+    "oneterm-actions": ["oneterm-core", "oneterm-ui"],
+    "oneterm-agent-ui": ["oneterm-core", "oneterm-settings", "oneterm-state", "oneterm-terminal", "oneterm-theme", "oneterm-ui"],
+    "oneterm-app": ["oneterm-agent-ui", "oneterm-core", "oneterm-local-shell", "oneterm-session-ui", "oneterm-settings", "oneterm-settings-ui", "oneterm-sftp-ui", "oneterm-ssh", "oneterm-state", "oneterm-terminal", "oneterm-terminal-view", "oneterm-theme", "oneterm-ui", "oneterm-workspace"],
+    "oneterm-core": [],
+    "oneterm-highlight": [],
+    "oneterm-local-shell": ["oneterm-core", "oneterm-terminal"],
+    "oneterm-session-ui": ["oneterm-actions", "oneterm-core", "oneterm-state", "oneterm-terminal", "oneterm-terminal-view", "oneterm-ui"],
+    "oneterm-settings": ["oneterm-core"],
+    "oneterm-settings-ui": ["oneterm-actions", "oneterm-core", "oneterm-settings", "oneterm-theme", "oneterm-ui"],
+    "oneterm-sftp-ui": ["oneterm-actions", "oneterm-core", "oneterm-state", "oneterm-terminal", "oneterm-theme", "oneterm-ui"],
+    "oneterm-ssh": ["oneterm-core", "oneterm-terminal"],
+    "oneterm-state": ["oneterm-core", "oneterm-terminal", "oneterm-ui"],
+    "oneterm-terminal": ["oneterm-core"],
+    "oneterm-terminal-view": ["oneterm-actions", "oneterm-core", "oneterm-highlight", "oneterm-settings", "oneterm-state", "oneterm-terminal", "oneterm-theme", "oneterm-ui"],
+    "oneterm-theme": ["oneterm-actions", "oneterm-settings"],
+    "oneterm-ui": [],
+    "oneterm-workspace": ["oneterm-actions", "oneterm-core", "oneterm-settings", "oneterm-state", "oneterm-terminal", "oneterm-theme", "oneterm-ui"]
+  },
+  "backends": ["oneterm-ssh", "oneterm-local-shell"],
+  "app_package": "oneterm-app",
+  "shell_package": "oneterm-workspace",
+  "feature_packages": [
+    "oneterm-terminal-view",
+    "oneterm-sftp-ui",
+    "oneterm-session-ui",
+    "oneterm-settings-ui",
+    "oneterm-agent-ui"
+  ],
+  "allowed_feature_dependencies": {
+    "oneterm-session-ui": ["oneterm-terminal-view"]
+  }
+}

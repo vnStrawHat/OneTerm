@@ -95,6 +95,10 @@ OneTerm/
 │   │   ├── themes/                 # 24 built-in JSON themes (2 Zed + 22 gpui-component)
 │   │   └── src/{lib.rs, theme.rs, icon.rs}
 │   │
+│   ├── ui/                         # `oneterm-ui` — maintained local fork of gpui-component dock modules
+│   │   └── src/                    # dock + required resizable/tab/history siblings; see ui-fork-maintenance.md
+│   │
+
 │   ├── workspace/                  # `oneterm-workspace` — feature-AGNOSTIC app shell (has build.rs)
 │   │   ├── build.rs                # Publishes ONETERM_VERSION (About action)
 │   │   └── src/
@@ -151,21 +155,22 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 | Crate (package) | Depends on | Layer | Responsibility |
 |---|---|---|---|
 | `core` (`oneterm-core`) | _(leaf)_ | domain | Error type, `SftpBackend`, `LocalShellConfig`/`ShellKind`, `SshConfig`/`SshAuthMethod`. No gpui, **no alacritty**. |
-| `terminal` (`oneterm-terminal`) | `core` | engine | Terminal engine (alacritty-coupled, no gpui): `TerminalSession`, `SessionEvent`, `TerminalContent`, palette/OSC/key/mouse helpers, `PtySize` + `SessionFactory` trait + process global. |
 | `highlight` (`oneterm-highlight`) | _(leaf)_ | engine | Semantic syntax-highlighting engine. |
-| `actions` (`oneterm-actions`) | `core`, gpui | leaf-ui | gpui `Action` structs shared by shell + features. |
-| `settings` (`oneterm-settings`) | `core`, gpui | shared | `TerminalConfig` (terminal.json), live `TerminalSettings`, `UiConfig` (ui_config.json). |
-| `state` (`oneterm-state`) | `core`, `terminal`, gpui, gpui-component | shared | `AppState`, notif helpers, `WorkspaceCommands` registry, dock-walking + `set_right_dock_open`, active-terminal metrics provider, shared persistence paths. |
-| `theme` (`oneterm-theme`) | `settings`, `actions`, gpui, gpui-component | shared | Theme registry + 24 built-in themes, `AppIcon` (generated from SVGs). |
-| `workspace` (`oneterm-workspace`) | `core`, `terminal`, `settings`, `state`, `actions`, `theme` | shell | Feature-**agnostic** app shell: `OneTermWorkspace` (DockArea) + persistence, title bar, menus, statusbar + widgets. Builds feature panels **by name** via the gpui-component `PanelRegistry`; drives features via the `WorkspaceCommands` registry. **No feature/backend deps.** |
-| `terminal-view` (`oneterm-terminal-view`) | `core`, `terminal`, `settings`, `state`, `theme`, `actions`, `highlight` | feature | Terminal panel + rendering + input + split spaces + terminal-settings panel. Registers `"terminal"`/`"terminal-settings"` panels. |
-| `sftp-ui` (`oneterm-sftp-ui`) | `core`, `terminal`, `state`, `theme`, `actions` | feature | SFTP file browser + transfer queue. Registers `"sftp"`. |
-| `session-ui` (`oneterm-session-ui`) | `core`, `terminal`, `terminal-view`, `state`, `actions` | feature | Session tree + connect dialogs + `SshSessionStore`. Registers `"session"`. |
-| `settings-ui` (`oneterm-settings-ui`) | `core`, `settings`, `theme`, `actions` | feature | General Settings window (general/terminal/appearance/key-bindings/about). Provides `open_settings` + `setup_key_bindings` commands. |
-| `agent-ui` (`oneterm-agent-ui`) | `core`, `terminal`, `settings`, `state`, `theme` | feature | Agent Panel (right-dock fleet view of coding agents). |
-| `ssh` (`oneterm-ssh`) | `core`, `terminal` (russh + russh-sftp) | backend | russh client + SFTP; `SshSession` (impl `TerminalSession`), `SftpSession` (impl `SftpBackend`). |
-| `local-shell` (`oneterm-local-shell`) | `core`, `terminal` | backend | Local PTY (`alacritty_terminal::tty` + ConPTY); `LocalSession` (impl `TerminalSession`). |
-| `app` (`oneterm-app`) | shell + all five features + `settings`/`theme`/`state` + `ssh` + `local-shell` | binary | Only crate that knows every layer. Installs `AppSessionFactory` (→ `ssh`/`local-shell`), runs `init()` (globals + feature `init()` + `WorkspaceCommands`), opens the window. Owns the `terminal-diagnostics` feature forwarding. |
+| `ui` (`oneterm-ui`) | _(leaf; external deps only)_ | shared-ui | Maintained local fork of gpui-component dock/resizable/tab/history modules. See [`ui-fork-maintenance.md`](ui-fork-maintenance.md). |
+| `terminal` (`oneterm-terminal`) | `core` | engine | Terminal engine (alacritty-coupled, no gpui): `TerminalSession`, `TerminalModel`, events, palette/OSC/key/mouse helpers, and `SessionFactory`. |
+| `actions` (`oneterm-actions`) | `core`, `ui`, gpui | leaf-ui | gpui `Action` structs shared by shell and features. |
+| `settings` (`oneterm-settings`) | `core`, gpui | shared | `TerminalConfig`, live `TerminalSettings`, and `UiConfig`. |
+| `state` (`oneterm-state`) | `core`, `terminal`, `ui`, gpui, gpui-component | shared | `AppState`, notification helpers, command registry, dock helpers, active-terminal metrics, and shared persistence paths. |
+| `theme` (`oneterm-theme`) | `settings`, `actions`, gpui, gpui-component | shared | Theme registry, built-in themes, and generated `AppIcon`. |
+| `workspace` (`oneterm-workspace`) | `core`, `terminal`, `settings`, `state`, `actions`, `theme`, `ui` | shell | Feature-agnostic app shell. Builds panels by name and drives features through `WorkspaceCommands`. |
+| `terminal-view` (`oneterm-terminal-view`) | `core`, `terminal`, `settings`, `state`, `theme`, `actions`, `highlight`, `ui` | feature | Terminal panel, rendering/input, split spaces, and terminal settings panel. |
+| `sftp-ui` (`oneterm-sftp-ui`) | `core`, `terminal`, `state`, `theme`, `actions`, `ui` | feature | SFTP file browser and transfer queue. |
+| `session-ui` (`oneterm-session-ui`) | `core`, `terminal`, `terminal-view`, `state`, `actions`, `ui` | feature | Session tree, connect dialogs, and `SshSessionStore`. |
+| `settings-ui` (`oneterm-settings-ui`) | `core`, `settings`, `theme`, `actions`, `ui` | feature | General Settings window and key-binding setup. |
+| `agent-ui` (`oneterm-agent-ui`) | `core`, `terminal`, `settings`, `state`, `theme`, `ui` | feature | Agent Panel fleet view. |
+| `ssh` (`oneterm-ssh`) | `core`, `terminal` | backend | russh client and SFTP; implements `TerminalSession` and `SftpBackend`. |
+| `local-shell` (`oneterm-local-shell`) | `core`, `terminal` | backend | Local PTY; implements `TerminalSession`. |
+| `app` (`oneterm-app`) | shell + all five features + shared layers + `ui` + both backends | binary | Only crate that knows every layer. Installs `AppSessionFactory`, initializes features and commands, and opens the window. |
 
 ## 3.1 Crate & dependency rules
 

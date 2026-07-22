@@ -3,7 +3,7 @@
 //!
 //! ARCH-05: Terminal-model operations (snapshot, query, scroll, selection,
 //! search, mouse encoding) are delegated to the shared `TerminalModel` adapter
-//! in `oneterm_core`. Only transport (PTY write), lifecycle, and state remain
+//! in `oneterm_terminal`. Only transport (PTY write), lifecycle, and state remain
 //! on `LocalSession`.
 
 use std::path::PathBuf;
@@ -14,13 +14,13 @@ use async_channel::Receiver;
 use oneterm_terminal::mouse_encode::{MouseModifiers, TerminalMouseButton};
 use oneterm_terminal::{
     CursorBounds, SearchMatch, SearchOptions, SessionEvent, TerminalError, TerminalSession,
+    report_generated_input,
 };
 use oneterm_terminal::{DynamicColors, TerminalContent, TerminalInfo, TerminalQueryState};
 
 use crate::session::LocalSession;
 
 impl TerminalSession for LocalSession {
-    // ── Render ──────────────────────────────────────────────────────
     fn snapshot(&self) -> TerminalContent {
         self.model().snapshot()
     }
@@ -141,31 +141,31 @@ impl TerminalSession for LocalSession {
         mods: MouseModifiers,
     ) {
         if let Some(bytes) = self.model().mouse_down(row, col, button, sel, mods) {
-            let _ = self.write(&bytes);
+            report_generated_input("LocalSession mouse input", self.write(&bytes));
         }
     }
 
     fn mouse_move(&self, row: f32, col: f32, mods: MouseModifiers) {
         if let Some(bytes) = self.model().mouse_move(row, col, mods) {
-            let _ = self.write(&bytes);
+            report_generated_input("LocalSession mouse input", self.write(&bytes));
         }
     }
 
     fn mouse_drag(&self, row: f32, col: f32, mods: MouseModifiers) {
         if let Some(bytes) = self.model().mouse_drag(row, col, mods) {
-            let _ = self.write(&bytes);
+            report_generated_input("LocalSession mouse input", self.write(&bytes));
         }
     }
 
     fn mouse_up(&self, row: f32, col: f32, button: TerminalMouseButton, mods: MouseModifiers) {
         if let Some(bytes) = self.model().mouse_up(row, col, button, mods) {
-            let _ = self.write(&bytes);
+            report_generated_input("LocalSession mouse input", self.write(&bytes));
         }
     }
 
     fn wheel(&self, delta_y: f64, row: f32, col: f32, mods: MouseModifiers) {
         if let Some(bytes) = self.model().wheel(delta_y, row, col, mods) {
-            let _ = self.write(&bytes);
+            report_generated_input("LocalSession mouse input", self.write(&bytes));
         }
     }
 
@@ -184,7 +184,7 @@ impl TerminalSession for LocalSession {
 
     fn clear(&self) {
         // Send the `clear` command to the shell, exactly as if the user typed it.
-        let _ = self.write(b"clear\r");
+        report_generated_input("LocalSession clear command", self.write(b"clear\r"));
         self.clear_selection();
     }
 
@@ -204,7 +204,7 @@ impl TerminalSession for LocalSession {
 
     fn commit_text(&self, text: &str) {
         self.clear_marked_text();
-        let _ = self.write(text.as_bytes());
+        report_generated_input("LocalSession committed text", self.write(text.as_bytes()));
     }
 
     fn marked_text(&self) -> Option<String> {

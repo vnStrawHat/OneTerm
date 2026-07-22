@@ -2,7 +2,7 @@
 //! clipboard, scroll, IME, and lifecycle query methods.
 //!
 //! ARCH-05: Terminal-model operations are delegated to the shared
-//! `TerminalModel` adapter in `oneterm_core`. Only transport (SSH channel),
+//! `TerminalModel` adapter in `oneterm_terminal`. Only transport (SSH channel),
 //! lifecycle, and state remain on `SshSession`.
 
 use std::path::PathBuf;
@@ -15,6 +15,7 @@ use oneterm_terminal::model::TerminalModel;
 use oneterm_terminal::mouse_encode::{MouseModifiers, TerminalMouseButton};
 use oneterm_terminal::{
     CursorBounds, SearchMatch, SearchOptions, SessionEvent, TerminalError, TerminalSession,
+    report_generated_input,
 };
 use oneterm_terminal::{DynamicColors, TerminalContent, TerminalInfo, TerminalQueryState};
 
@@ -138,31 +139,31 @@ impl TerminalSession for SshSession {
         mods: MouseModifiers,
     ) {
         if let Some(bytes) = self.model().mouse_down(row, col, button, sel, mods) {
-            let _ = self.write(&bytes);
+            report_generated_input("SshSession mouse input", self.write(&bytes));
         }
     }
 
     fn mouse_move(&self, row: f32, col: f32, mods: MouseModifiers) {
         if let Some(bytes) = self.model().mouse_move(row, col, mods) {
-            let _ = self.write(&bytes);
+            report_generated_input("SshSession mouse input", self.write(&bytes));
         }
     }
 
     fn mouse_drag(&self, row: f32, col: f32, mods: MouseModifiers) {
         if let Some(bytes) = self.model().mouse_drag(row, col, mods) {
-            let _ = self.write(&bytes);
+            report_generated_input("SshSession mouse input", self.write(&bytes));
         }
     }
 
     fn mouse_up(&self, row: f32, col: f32, button: TerminalMouseButton, mods: MouseModifiers) {
         if let Some(bytes) = self.model().mouse_up(row, col, button, mods) {
-            let _ = self.write(&bytes);
+            report_generated_input("SshSession mouse input", self.write(&bytes));
         }
     }
 
     fn wheel(&self, delta_y: f64, row: f32, col: f32, mods: MouseModifiers) {
         if let Some(bytes) = self.model().wheel(delta_y, row, col, mods) {
-            let _ = self.write(&bytes);
+            report_generated_input("SshSession mouse input", self.write(&bytes));
         }
     }
 
@@ -181,7 +182,7 @@ impl TerminalSession for SshSession {
 
     fn clear(&self) {
         // Send the `clear` command to the shell, exactly as if the user typed it.
-        let _ = self.write(b"clear\r");
+        report_generated_input("SshSession clear command", self.write(b"clear\r"));
         self.clear_selection();
     }
 
@@ -201,7 +202,7 @@ impl TerminalSession for SshSession {
 
     fn commit_text(&self, text: &str) {
         self.clear_marked_text();
-        let _ = self.write(text.as_bytes());
+        report_generated_input("SshSession committed text", self.write(text.as_bytes()));
     }
 
     fn marked_text(&self) -> Option<String> {

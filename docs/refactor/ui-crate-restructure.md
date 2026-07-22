@@ -1,7 +1,7 @@
 # OneTerm workspace crate restructure — layer every crate the way Zed does
 
-> Status: **proposal** (not yet implemented). Audience: OneTerm maintainers / AI agents.
-> This is the single authoritative document. It supersedes and replaces the three
+> Status: **historical proposal**. The crate split described here has largely been implemented; use [`docs/agents/structure.md`](../agents/structure.md) and [`docs/agents/crate-dependency-rules.md`](../agents/crate-dependency-rules.md) for the current architecture. Audience: OneTerm maintainers / AI agents.
+> This historical decision record superseded and replaced the three
 > earlier drafts (`docs/ui-crate-refactor-plan.md`,
 > `docs/refactor/ui-crate-restructure-proposal.md`,
 > `docs/refactor/ui-crate-restructure-plan.md`), resolving the contradictions
@@ -9,7 +9,7 @@
 >
 > Goal: study how Zed organizes its crates (UI **and** non-UI), review every
 > OneTerm crate, and propose a concrete, phased refactor that turns today's
-> workspace — where `crates/ui` is a 21k-line monolith that depends *backwards* on
+> workspace — where `crates/ui` was a 21k-line monolith that depended *backwards* on
 > `ssh`/`local`, and `crates/core` conflates a pure leaf with the alacritty
 > terminal engine — into a cleanly layered set of crates with **no dependency
 > cycle** and **no UI→backend edge**.

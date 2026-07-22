@@ -1,0 +1,65 @@
+{
+  "upstream_revision": "ea6b194db04cc7c0474851f07c7d5b7a9df6a98b",
+  "files": {
+    "dock/dock.rs": {
+      "local_sha256": "d2235842634ba275982aa0ef46df104d5733ee8e7d5317f7b3864160c2b6b0a7",
+      "upstream_sha256": "0eabc68c2c1cb68668c5dd2071f21320a37916b6266a46145a96887eba2f4214"
+    },
+    "dock/invalid_panel.rs": {
+      "local_sha256": "4aaa3efe50bb4c823f58b56addf207ee5c804fc849cb748c6056c367cb40c78b",
+      "upstream_sha256": "ecc0a9cbd495fd762dd6120d13b8166c17d4985ba89a9c2b8d42c10daa4443b1"
+    },
+    "dock/mod.rs": {
+      "local_sha256": "59cb4ced0618fa8dc195d2b6c23562b6544aba322db464bc16e2902a08b52351",
+      "upstream_sha256": "874d92ed22ea35a047bd844f056ed46a27be8c7bd8de7a55eda227d270637a40"
+    },
+    "dock/panel.rs": {
+      "local_sha256": "4752fa59a80be7087963b87ac7d7880d4c83dfdeddde6c1780e39301c0ef6940",
+      "upstream_sha256": "cb8a1be7118e3ec5c38413e404d71c30113014fecb757f8ad9dce5a98412df32"
+    },
+    "dock/stack_panel.rs": {
+      "local_sha256": "dbe7fcf395c7a0be093e9e9cdd34eea32a26a86769f69b1a721053b861f9ec21",
+      "upstream_sha256": "7ef28fe64d2dd756c4dab434e17de220ea8ca9058f0468d143264cad56758bb0"
+    },
+    "dock/state.rs": {
+      "local_sha256": "d2559d3069a7fcf0dd10482d713d9d1dfeac5e8afa1344249417e6ee313e574c",
+      "upstream_sha256": "e44325b98ccce23a94f4eddd5e80f411f95dcdc097dff754f879394e4bba247f"
+    },
+    "dock/tab_panel.rs": {
+      "local_sha256": "d311d44d2baff1e409bab6b32bb1697c135cbbb5470dc7e872a21ebc88a9ee98",
+      "upstream_sha256": "5ccf1583354bc68d97db8edbe02d2ca2a862ad5412c31b3893b68266ab41b976"
+    },
+    "dock/tiles.rs": {
+      "local_sha256": "d0ecaf3f5f4462bc17bccb2e0f6609dcdd4716a21e05321cbb4c693166072c4c",
+      "upstream_sha256": "68e0314a081b67bd9169f9c118741550a5b5e81f9a13680c3239795d5fad03da"
+    },
+    "history.rs": {
+      "local_sha256": "6be1e58050562f15f33c44a1a53d2970126e4d7df3e7e8439689772db706467d",
+      "upstream_sha256": "21e082d8b8c1fd0f7ebb26d8ec37b8ddf175f210b8fcaa6806dc57f5a1a7e546"
+    },
+    "resizable/mod.rs": {
+      "local_sha256": "893c58f071fdcea2eef4d63a5521a01d7d26e36e4579d7628e77353b0cb54f3c",
+      "upstream_sha256": "893c58f071fdcea2eef4d63a5521a01d7d26e36e4579d7628e77353b0cb54f3c"
+    },
+    "resizable/panel.rs": {
+      "local_sha256": "0130667b131ed153fc83dc1ca500ee0fd967349e260086eafc2904fed30a1c55",
+      "upstream_sha256": "61d26141cf2d85265d7b41e5c40b3a5ca97ee5672e4012a19ee476c882185201"
+    },
+    "resizable/resize_handle.rs": {
+      "local_sha256": "f0aa556b18bb2e12d9426cbbef2e549949adde214a00705a9d2a21d359b38ff3",
+      "upstream_sha256": "be1963fc31b1e1adff193fded7c6185c12f8abf0ca978b77531fd719bae6e41d"
+    },
+    "tab/mod.rs": {
+      "local_sha256": "3af7e5dd1a12d05a463c0a52aab8b5392dfd945b8f999194b62ce905816cd442",
+      "upstream_sha256": "3af7e5dd1a12d05a463c0a52aab8b5392dfd945b8f999194b62ce905816cd442"
+    },
+    "tab/tab.rs": {
+      "local_sha256": "a18df08dcf76d54d574b6776e77a802eda0b61c1fc8500cf8461c1a97eb38133",
+      "upstream_sha256": "c6c18034286bd5bb61ff4639e412b50a67696c9ce15dcc082b7eaeddc6a452ec"
+    },
+    "tab/tab_bar.rs": {
+      "local_sha256": "16dbd951efd93e6d5aa16a02056d6b97ec1d3c289ca3456c3d15f85671e0075f",
+      "upstream_sha256": "cf4d957e96d3cfd8e2a9bf224f828cb4978b8aa885c03e937c8ead6eb8567b47"
+    }
+  }
+}

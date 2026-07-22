@@ -89,6 +89,7 @@ impl SftpPanel {
                 window
                     .spawn(cx, async move |cx| {
                         let result = operation_sftp.rename(operation_from, to_path).await;
+                        // The dialog may close before the background result arrives.
                         _ = cx.update(|window, cx| match result {
                             Ok(()) => {
                                 log::info!("SftpPanel: rename OK");
@@ -229,6 +230,7 @@ impl SftpPanel {
                                         } else {
                                             operation_sftp.remove(operation_path).await
                                         };
+                                        // The dialog may close before the background result arrives.
                                         _ = cx.update(|window, cx| match result {
                                             Ok(()) => {
                                                 log::info!("SftpPanel: delete OK");
@@ -308,6 +310,7 @@ impl SftpPanel {
                 window
                     .spawn(cx, async move |cx| {
                         let result = operation_sftp.mkdir(path).await;
+                        // The dialog may close before the background result arrives.
                         _ = cx.update(|window, cx| match result {
                             Ok(()) => {
                                 log::info!("SftpPanel: mkdir OK");
@@ -413,6 +416,7 @@ impl SftpPanel {
         window
             .spawn(cx, async move |cx| {
                 let result = sftp.stat(path).await;
+                // The window may close before the background result arrives.
                 _ = cx.update(|window, cx| match result {
                     Ok(stat) => open_properties_dialog(stat, window, cx),
                     Err(error) => {

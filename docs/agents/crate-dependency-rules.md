@@ -47,6 +47,7 @@ lower layer — with the single explicit same-layer exception noted in R5
 ## Full-graph verification (one shot)
 
 ```bash
+python scripts/verify-dependency-graph.py                   # policy + manifest allow-list
 cargo build --workspace                                   # R1 (no cycle)
 cargo tree -i oneterm-ssh -e normal                       # R3: only oneterm-app
 cargo tree -i oneterm-local-shell -e normal               # R3: only oneterm-app
