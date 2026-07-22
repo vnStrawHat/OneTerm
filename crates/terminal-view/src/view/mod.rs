@@ -367,7 +367,7 @@ impl LocalTerminalView {
     /// Return a snapshot of the most recently painted renderer counters.
     #[cfg(any(test, feature = "terminal-diagnostics"))]
     pub fn render_diagnostics(&self) -> super::diagnostics::TerminalRenderDiagnostics {
-        self.row_cache.borrow().stats.into()
+        super::diagnostics::TerminalRenderDiagnostics::from_cache(&self.row_cache.borrow())
     }
 
     /// Update the OSC 9;4 progress state. `Remove` clears it (`None`).

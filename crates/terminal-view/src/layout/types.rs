@@ -152,6 +152,69 @@ pub(crate) struct RenderStyleKey {
     pub shell_profile: oneterm_highlight::ShellProfile,
 }
 
+#[cfg(any(test, feature = "terminal-diagnostics"))]
+const LATENCY_SAMPLE_CAPACITY: usize = 512;
+
+/// Rolling terminal-frame latency samples used only by opt-in diagnostics.
+#[cfg(any(test, feature = "terminal-diagnostics"))]
+#[derive(Default)]
+pub(crate) struct LatencySamples {
+    snapshot_us: std::collections::VecDeque<u128>,
+    frame_us: std::collections::VecDeque<u128>,
+}
+
+#[cfg(any(test, feature = "terminal-diagnostics"))]
+impl LatencySamples {
+    pub(crate) fn record(&mut self, snapshot_us: u128, frame_us: u128) {
+        Self::push_bounded(&mut self.snapshot_us, snapshot_us);
+        Self::push_bounded(&mut self.frame_us, frame_us);
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.frame_us.len()
+    }
+
+    pub(crate) fn snapshot_percentile(&self, percentile: f64) -> u128 {
+        Self::percentile(&self.snapshot_us, percentile)
+    }
+
+    pub(crate) fn frame_percentile(&self, percentile: f64) -> u128 {
+        Self::percentile(&self.frame_us, percentile)
+    }
+
+    fn push_bounded(samples: &mut std::collections::VecDeque<u128>, value: u128) {
+        if samples.len() == LATENCY_SAMPLE_CAPACITY {
+            samples.pop_front();
+        }
+        samples.push_back(value);
+    }
+
+    fn percentile(samples: &std::collections::VecDeque<u128>, percentile: f64) -> u128 {
+        let mut sorted: Vec<_> = samples.iter().copied().collect();
+        sorted.sort_unstable();
+        sorted
+            .get(((sorted.len().saturating_sub(1)) as f64 * percentile).ceil() as usize)
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod latency_tests {
+    use super::*;
+
+    #[test]
+    fn rolling_percentiles_are_bounded_and_ordered() {
+        let mut samples = LatencySamples::default();
+        for value in 1..=LATENCY_SAMPLE_CAPACITY as u128 + 10 {
+            samples.record(value, value * 2);
+        }
+        assert_eq!(samples.len(), LATENCY_SAMPLE_CAPACITY);
+        assert!(samples.snapshot_percentile(0.95) <= samples.snapshot_percentile(0.99));
+        assert!(samples.frame_percentile(0.95) <= samples.frame_percentile(0.99));
+    }
+}
+
 /// Per-row layout cache — persisted across frames.
 pub(crate) struct RowLayoutCache {
     pub rows: Vec<RowLayout>,
@@ -161,6 +224,12 @@ pub(crate) struct RowLayoutCache {
     /// Cached URL masks from the last frame with dirty rows (PERF-09).
     /// Reused when the terminal is idle to avoid scanning all cells.
     pub cached_url_masks: Vec<Vec<bool>>,
+    /// Rolling p95/p99 source data; omitted from normal production builds.
+    #[cfg(any(test, feature = "terminal-diagnostics"))]
+    pub latency_samples: LatencySamples,
+    /// Last renderer diagnostic report; omitted unless diagnostics are enabled.
+    #[cfg(feature = "terminal-diagnostics")]
+    pub diagnostics_last_report: Option<std::time::Instant>,
     pub stats: FrameStats,
 }
 
@@ -172,6 +241,10 @@ impl RowLayoutCache {
             prev_display_offset: 0,
             prev_style_key: None,
             cached_url_masks: Vec::new(),
+            #[cfg(any(test, feature = "terminal-diagnostics"))]
+            latency_samples: LatencySamples::default(),
+            #[cfg(feature = "terminal-diagnostics")]
+            diagnostics_last_report: None,
             stats: FrameStats::default(),
         }
     }

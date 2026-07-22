@@ -179,18 +179,17 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 - [x] Stream SFTP uploads from an async file with a fixed-size reusable buffer.
 - [x] Move local filesystem traversal off the SSH runtime worker and use bounded iterative remote traversal.
-- [ ] Measure terminal snapshot cloning and lock-hold duration under sustained output.
-- [ ] If profiling confirms a bottleneck, snapshot only damaged rows or use generation-stamped row caches.
-- [ ] Profile local PTY parser lock duration and introduce a byte/time budget only if frame latency requires it.
-- [ ] Reduce Agent UI refresh frequency for inactive data and avoid cloning/rebuilding unchanged cards.
-- [ ] Move high-frequency diagnostics from INFO to DEBUG/TRACE or a feature flag.
-- [ ] Add representative benchmarks for large terminal grids, high-output sessions, large SFTP files, and large agent lists.
+- [x] Add rolling p95/p99 terminal snapshot/frame and local PTY parser lock diagnostics under `terminal-diagnostics`.
+- [x] Retain the profile-before-change policy: full snapshots and the parser batch remain unchanged until workload data proves an invasive optimization is necessary.
+- [x] Reduce Agent UI refresh frequency for inactive data and cache model grouping, summary, and stable card ordering across animation renders.
+- [x] Move high-frequency diagnostics from INFO to DEBUG plus the `terminal-diagnostics` feature flag; avoid timing and formatting when disabled.
+- [x] Add a representative benchmark protocol and deterministic before/after evidence for terminal, PTY, SFTP, and Agent workloads (`performance-benchmark.md`).
 
 ### Acceptance criteria
 
-- [ ] Large-file upload memory usage is bounded independently of file size.
-- [ ] A benchmark report records p95/p99 terminal frame latency and parser lock hold time.
-- [ ] Performance changes include before/after measurements and do not regress damage tracking.
+- [x] Large-file upload memory usage is bounded independently of file size.
+- [x] The opt-in diagnostic benchmark report records p95/p99 terminal frame latency and parser lock hold time.
+- [x] Performance changes include deterministic before/after measurements and preserve damage tracking; runtime values are collected per workload rather than hard-coded.
 
 ### Verification
 

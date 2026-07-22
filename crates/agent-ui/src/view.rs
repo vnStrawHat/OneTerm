@@ -1,16 +1,14 @@
-use std::collections::HashMap;
-
 use gpui::{
-    AnyElement, Context, EntityId, FontWeight, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, div,
+    AnyElement, Context, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _,
+    Render, SharedString, StatefulInteractiveElement as _, Styled as _, div,
     prelude::FluentBuilder as _,
 };
 use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 
-use oneterm_state::{AgentCard, AgentRegistry, AgentStateCounts, Lifecycle};
+use oneterm_state::{AgentCard, AgentStateCounts, Lifecycle};
 use oneterm_terminal::AgentState;
 
-use crate::{AgentListView, Filter, card::Palette};
+use crate::{AgentDisplayGroup, AgentListView, Filter, card::Palette};
 
 #[derive(Clone, Copy)]
 struct StatusChipSpec {
@@ -135,6 +133,10 @@ impl AgentListView {
             .hover(|this| this.bg(chip.color.opacity(0.12)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.filter = chip.filter;
+                this.has_working_cards = this
+                    .cards
+                    .iter()
+                    .any(|card| this.passes_filter(card) && card.state == AgentState::Working);
                 cx.notify();
             }))
             .child(
@@ -157,13 +159,18 @@ impl AgentListView {
 
     fn render_group(
         &self,
-        tab_key: EntityId,
-        tab_title: &str,
-        cards: &[AgentCard],
+        group: &AgentDisplayGroup,
         pal: &Palette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let group_id = SharedString::from(format!("agent-group-{tab_key:?}"));
+        let group_id = SharedString::from(format!("agent-group-{:?}", group.tab_key));
+        let visible = || {
+            group
+                .card_indices
+                .iter()
+                .filter_map(|&index| self.cards.get(index))
+                .filter(|card| self.passes_filter(card))
+        };
 
         let header = h_flex()
             .id(group_id)
@@ -179,12 +186,12 @@ impl AgentListView {
                     .font_weight(FontWeight::MEDIUM)
                     .text_sm()
                     .text_color(pal.foreground)
-                    .child(tab_title.to_string()),
+                    .child(group.tab_title.clone()),
             )
-            .children(group_badges(cards, pal));
+            .children(group_badges(visible(), pal));
 
         let mut col = v_flex().w_full().gap_1().child(header);
-        for card in cards {
+        for card in visible() {
             col = col.child(self.render_card(card, pal, cx));
         }
         col
@@ -194,11 +201,10 @@ impl AgentListView {
 impl Render for AgentListView {
     fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
         let pal = Palette::capture(cx);
-        let registry = AgentRegistry::global(cx);
-        let (cards, counts) = {
-            let reg = registry.read(cx);
-            (reg.cards().to_vec(), reg.summary())
-        };
+        // The observer refreshes this snapshot only when the registry changes.
+        // Animation ticks therefore avoid cloning and summarizing the registry.
+        let cards = &self.cards;
+        let counts = self.counts;
 
         if cards.is_empty() {
             return v_flex()
@@ -225,31 +231,6 @@ impl Render for AgentListView {
                 .into_any_element();
         }
 
-        let mut group_indices = HashMap::new();
-        let mut titles: Vec<String> = Vec::new();
-        let mut grouped: Vec<(EntityId, Vec<AgentCard>)> = Vec::new();
-        for card in cards.into_iter().filter(|c| self.passes_filter(c)) {
-            let tab_key = card.tab_key;
-            let pos = match group_indices.get(&tab_key).copied() {
-                Some(index) => index,
-                None => {
-                    let index = grouped.len();
-                    group_indices.insert(tab_key, index);
-                    titles.push(card.tab_title.clone());
-                    grouped.push((tab_key, Vec::new()));
-                    index
-                }
-            };
-            grouped[pos].1.push(card);
-        }
-        for (_, group) in grouped.iter_mut() {
-            group.sort_by(|a, b| {
-                a.sort_rank()
-                    .cmp(&b.sort_rank())
-                    .then(b.last_recv.cmp(&a.last_recv))
-            });
-        }
-
         let mut list = v_flex()
             .id("agent-scroll")
             .w_full()
@@ -257,9 +238,15 @@ impl Render for AgentListView {
             .overflow_y_scroll()
             .p_2()
             .gap_2();
-        for (i, (tab_key, group)) in grouped.iter().enumerate() {
-            let title = titles[i].clone();
-            list = list.child(self.render_group(*tab_key, &title, group, &pal, cx));
+        for group in &self.groups {
+            let has_visible_cards = group
+                .card_indices
+                .iter()
+                .filter_map(|&index| cards.get(index))
+                .any(|card| self.passes_filter(card));
+            if has_visible_cards {
+                list = list.child(self.render_group(group, &pal, cx));
+            }
         }
 
         v_flex()
@@ -273,7 +260,7 @@ impl Render for AgentListView {
     }
 }
 
-fn group_badges(cards: &[AgentCard], pal: &Palette) -> Vec<AnyElement> {
+fn group_badges<'a>(cards: impl Iterator<Item = &'a AgentCard>, pal: &Palette) -> Vec<AnyElement> {
     let mut working = 0;
     let mut blocked = 0;
     let mut error = 0;

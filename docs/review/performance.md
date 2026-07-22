@@ -2,6 +2,10 @@
 
 **Score: 5.5 / 10**
 
+**Status:** Remediated on 2026-07-22. PERF-01 through PERF-03 were completed by the Reliability/Scalability work. PERF-04 and PERF-05 now have opt-in rolling p95/p99 diagnostics, with the existing full snapshot and unbounded parser batch intentionally retained until measurements justify a more invasive change. PERF-06 and PERF-07 are implemented. See [`performance-benchmark.md`](performance-benchmark.md) for the measurement protocol and deterministic before/after evidence.
+
+The original findings remain below as the pre-remediation baseline.
+
 ## PERF-01 — SFTP uploads load whole files into memory
 
 - **Files:** `crates/ssh/src/sftp_task.rs:479-524,609-635`

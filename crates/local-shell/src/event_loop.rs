@@ -30,6 +30,17 @@ use crate::state::SharedState;
 /// PTY read buffer size (1 MiB — same as alacritty).
 const READ_BUFFER_SIZE: usize = 0x10_0000;
 
+/// Maximum parser lock samples retained in one two-second diagnostics window.
+#[cfg(feature = "terminal-diagnostics")]
+const LOCK_SAMPLE_CAPACITY: usize = 16_384;
+
+#[cfg(feature = "terminal-diagnostics")]
+fn record_lock_sample(samples: &mut Vec<u64>, started: std::time::Instant) {
+    if samples.len() < LOCK_SAMPLE_CAPACITY {
+        samples.push(started.elapsed().as_micros() as u64);
+    }
+}
+
 /// Token used by `alacritty_terminal`'s PTY to signal child (signal) events.
 ///
 /// `alacritty_terminal::tty::PTY_CHILD_EVENT_TOKEN` is `pub(crate)` on Unix (only
@@ -157,18 +168,26 @@ impl ShellEventLoop {
 
         let mut events = Events::with_capacity(1024.try_into().unwrap());
 
-        // ── Pump throughput instrumentation ──
-        // Distinguishes "OneTerm parse-bound" (most time in parse) from
-        // "ConPTY/producer-bound" (most time waiting for PTY data). Logged every
-        // ~2s at INFO so it lines up with the [TerminalElement] render stats.
+        // Throughput and lock-hold instrumentation is intentionally absent from
+        // normal builds. Enable `terminal-diagnostics` and DEBUG logging when
+        // profiling a sustained-output session.
+        #[cfg(feature = "terminal-diagnostics")]
+        let diagnostics_enabled = log::log_enabled!(log::Level::Debug);
+        #[cfg(feature = "terminal-diagnostics")]
         let mut stat_bytes: u64 = 0;
+        #[cfg(feature = "terminal-diagnostics")]
         let mut stat_wait = std::time::Duration::ZERO;
+        #[cfg(feature = "terminal-diagnostics")]
         let mut stat_parse = std::time::Duration::ZERO;
+        #[cfg(feature = "terminal-diagnostics")]
+        let mut stat_lock_hold_us: Vec<u64> = Vec::with_capacity(1024);
+        #[cfg(feature = "terminal-diagnostics")]
         let mut stat_since = std::time::Instant::now();
 
         loop {
             events.clear();
             // Timeout: short poll to check channel messages.
+            #[cfg(feature = "terminal-diagnostics")]
             let wait_start = std::time::Instant::now();
             if let Err(err) = self
                 .poll
@@ -180,7 +199,10 @@ impl ShellEventLoop {
                 error!("ShellEventLoop: poll error: {err}");
                 break;
             }
-            stat_wait += wait_start.elapsed();
+            #[cfg(feature = "terminal-diagnostics")]
+            if diagnostics_enabled {
+                stat_wait += wait_start.elapsed();
+            }
 
             // Drain channel messages (non-blocking).
             let mut shutdown = false;
@@ -252,7 +274,10 @@ impl ShellEventLoop {
                 }
 
                 if event.readable {
-                    let parse_start = std::time::Instant::now();
+                    #[cfg(feature = "terminal-diagnostics")]
+                    let parse_start = diagnostics_enabled.then(std::time::Instant::now);
+                    #[cfg(feature = "terminal-diagnostics")]
+                    let mut lock_started = None;
                     let mut unprocessed = 0;
                     let mut processed = 0;
                     let mut terminal = None;
@@ -283,11 +308,20 @@ impl ShellEventLoop {
                         // Lock terminal.
                         let terminal = match &mut terminal {
                             Some(t) => t,
-                            None => terminal.insert(match self.term.try_lock_unfair() {
-                                None if unprocessed >= READ_BUFFER_SIZE => self.term.lock_unfair(),
-                                None => continue,
-                                Some(t) => t,
-                            }),
+                            None => {
+                                let guard = match self.term.try_lock_unfair() {
+                                    None if unprocessed >= READ_BUFFER_SIZE => {
+                                        self.term.lock_unfair()
+                                    }
+                                    None => continue,
+                                    Some(t) => t,
+                                };
+                                #[cfg(feature = "terminal-diagnostics")]
+                                if diagnostics_enabled {
+                                    lock_started = Some(std::time::Instant::now());
+                                }
+                                terminal.insert(guard)
+                            }
                         };
 
                         // Feed bytes to Term (via ansi::Processor).
@@ -362,6 +396,12 @@ impl ShellEventLoop {
                             }
                         }
                         drop(guard);
+                        #[cfg(feature = "terminal-diagnostics")]
+                        if diagnostics_enabled {
+                            if let Some(start) = lock_started.take() {
+                                record_lock_sample(&mut stat_lock_hold_us, start);
+                            }
+                        }
                         for reply in replies {
                             if let Err(error) = self.listener.pty_write(reply.as_bytes()) {
                                 log::warn!("ShellEventLoop: OSC reply delivery failed: {error}");
@@ -369,38 +409,67 @@ impl ShellEventLoop {
                         }
                     }
 
-                    stat_parse += parse_start.elapsed();
-                    stat_bytes += processed as u64;
+                    drop(terminal);
+                    #[cfg(feature = "terminal-diagnostics")]
+                    if diagnostics_enabled {
+                        if let Some(start) = lock_started.take() {
+                            record_lock_sample(&mut stat_lock_hold_us, start);
+                        }
+                        if let Some(start) = parse_start {
+                            stat_parse += start.elapsed();
+                        }
+                        stat_bytes += processed as u64;
+                    }
                 }
             }
 
-            // ── Periodic pump-throughput report (~every 2s) ──
-            let since = stat_since.elapsed();
-            if since >= std::time::Duration::from_secs(2) {
-                let secs = since.as_secs_f64();
-                let mib_s = stat_bytes as f64 / (1024.0 * 1024.0) / secs;
-                let parse_ms = stat_parse.as_secs_f64() * 1000.0;
-                let wait_ms = stat_wait.as_secs_f64() * 1000.0;
-                let busy = stat_parse.as_secs_f64() / secs * 100.0;
-                log::info!(
-                    "[PTY pump] {:.1} MiB/s parsed | parse={:.0}ms wait={:.0}ms over {:.1}s | pump {:.0}% busy ({})",
-                    mib_s,
-                    parse_ms,
-                    wait_ms,
-                    secs,
-                    busy,
-                    if busy > 50.0 {
-                        "parse-bound: OneTerm parse/grid-update is the limiter"
-                    } else if mib_s < 1.0 {
-                        "idle"
-                    } else {
-                        "wait-bound: ConPTY/producer is the limiter"
-                    },
-                );
-                stat_bytes = 0;
-                stat_wait = std::time::Duration::ZERO;
-                stat_parse = std::time::Duration::ZERO;
-                stat_since = std::time::Instant::now();
+            #[cfg(feature = "terminal-diagnostics")]
+            if diagnostics_enabled {
+                // Keep the report DEBUG-only: idle sessions must not emit
+                // periodic INFO records in production. The percentile samples
+                // make sustained-output lock contention measurable without a
+                // separate profiler build.
+                let since = stat_since.elapsed();
+                if since >= std::time::Duration::from_secs(2) {
+                    let secs = since.as_secs_f64();
+                    let mib_s = stat_bytes as f64 / (1024.0 * 1024.0) / secs;
+                    let parse_ms = stat_parse.as_secs_f64() * 1000.0;
+                    let wait_ms = stat_wait.as_secs_f64() * 1000.0;
+                    let busy = stat_parse.as_secs_f64() / secs * 100.0;
+                    stat_lock_hold_us.sort_unstable();
+                    let percentile = |fraction: f64| {
+                        stat_lock_hold_us
+                            .get(
+                                ((stat_lock_hold_us.len().saturating_sub(1)) as f64 * fraction)
+                                    .ceil() as usize,
+                            )
+                            .copied()
+                            .unwrap_or(0)
+                    };
+                    log::debug!(
+                        "[PTY pump] {:.1} MiB/s parsed | parse={:.0}ms wait={:.0}ms over {:.1}s | pump {:.0}% busy ({}) | lock p95={}us p99={}us samples={}",
+                        mib_s,
+                        parse_ms,
+                        wait_ms,
+                        secs,
+                        busy,
+                        if busy > 50.0 {
+                            "parse-bound: OneTerm parse/grid-update is the limiter"
+                        } else if mib_s < 1.0 {
+                            "idle"
+                        } else {
+                            "wait-bound: ConPTY/producer is the limiter"
+                        },
+                        percentile(0.95),
+                        percentile(0.99),
+                        stat_lock_hold_us.len(),
+                    );
+                    stat_bytes = 0;
+                    stat_wait = std::time::Duration::ZERO;
+                    stat_parse = std::time::Duration::ZERO;
+                    stat_lock_hold_us.clear();
+                    stat_since = std::time::Instant::now();
+                }
             }
         }
     }

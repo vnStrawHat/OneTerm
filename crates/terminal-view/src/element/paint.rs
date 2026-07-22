@@ -168,25 +168,46 @@ pub(crate) fn paint_terminal(
             cache.stats.text_run_paints = run_count;
             cache.stats.paint_us = paint_start.elapsed().as_micros();
             cache.stats.frame_count += 1;
+            #[cfg(any(test, feature = "terminal-diagnostics"))]
+            {
+                let snapshot_us = cache.stats.snapshot_us;
+                let frame_us = cache
+                    .stats
+                    .prepaint_us
+                    .saturating_add(cache.stats.paint_us);
+                cache.latency_samples.record(snapshot_us, frame_us);
+            }
             #[cfg(feature = "terminal-diagnostics")]
-            if cache.stats.frame_count % 60 == 0 {
-                log::trace!(
-                    "[TerminalElement] frame={} lines={} dirty={} row_layouts={} quads={} bg_rects={} shapes={} runs={} hashes={} alloc_sites={} info_us={} snapshot_us={} prepaint_us={} paint_us={}",
-                    cache.stats.frame_count,
-                    cache.stats.total_lines,
-                    cache.stats.dirty_lines,
-                    cache.stats.row_layout_calls,
-                    cache.stats.paint_quad_calls,
-                    cache.stats.bg_rect_count,
-                    cache.stats.shape_line_calls,
-                    cache.stats.text_run_paints,
-                    cache.stats.hash_calls,
-                    cache.stats.allocation_buffer_sites,
-                    cache.stats.terminal_info_us,
-                    cache.stats.snapshot_us,
-                    cache.stats.prepaint_us,
-                    cache.stats.paint_us,
-                );
+            {
+                let now = std::time::Instant::now();
+                let should_report = cache.diagnostics_last_report.is_none_or(|last| {
+                    now.duration_since(last) >= std::time::Duration::from_secs(5)
+                });
+                if should_report {
+                    cache.diagnostics_last_report = Some(now);
+                    log::debug!(
+                        "[TerminalElement] frame={} lines={} dirty={} row_layouts={} quads={} bg_rects={} shapes={} runs={} hashes={} alloc_sites={} info_us={} snapshot_us={} prepaint_us={} paint_us={} | snapshot p95={}us p99={}us | frame p95={}us p99={}us samples={}",
+                        cache.stats.frame_count,
+                        cache.stats.total_lines,
+                        cache.stats.dirty_lines,
+                        cache.stats.row_layout_calls,
+                        cache.stats.paint_quad_calls,
+                        cache.stats.bg_rect_count,
+                        cache.stats.shape_line_calls,
+                        cache.stats.text_run_paints,
+                        cache.stats.hash_calls,
+                        cache.stats.allocation_buffer_sites,
+                        cache.stats.terminal_info_us,
+                        cache.stats.snapshot_us,
+                        cache.stats.prepaint_us,
+                        cache.stats.paint_us,
+                        cache.latency_samples.snapshot_percentile(0.95),
+                        cache.latency_samples.snapshot_percentile(0.99),
+                        cache.latency_samples.frame_percentile(0.95),
+                        cache.latency_samples.frame_percentile(0.99),
+                        cache.latency_samples.len(),
+                    );
+                }
             }
         }
     });
