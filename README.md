@@ -2,7 +2,7 @@
 
 > GUI client for **SSH / SFTP / Local Shell**, written in **Rust** with [GPUI](https://github.com/zed-industries/zed) & [gpui-component](https://github.com/longbridge/gpui-component).
 
-OneTerm is a terminal emulator plus host/session manager: connect to remote shells over SSH, browse and transfer files over SFTP, open local shells, and monitor coding agents in a live Agent Panel fed by the OSC 9;7 proposal ([spec](docs/osc-agent-status.md)). Terminal rendering is powered by `alacritty_terminal` and drawn with GPUI.
+OneTerm is a terminal emulator plus host/session manager with a **Zed-style workspace UI**: connect to remote shells over SSH, browse and transfer files over SFTP, open local shells, and monitor coding agents in a live Agent Panel fed by the OSC 9;7 proposal ([spec](docs/osc-agent-status.md)). Terminal rendering is powered by `alacritty_terminal` and drawn with GPUI.
 
 **Version:** 0.1.0 · **Edition:** Rust 2024
 
@@ -58,12 +58,13 @@ OneTerm is a terminal emulator plus host/session manager: connect to remote shel
 ### 🤖 Agent Panel
 
 - Right-dock fleet view of coding agents
+- Currently supports Pi Coding Agent (`pi install npm:@vnstrawhat/pi-oneterm`)
 - Built from the OSC 9;7 proposal and folded into a global Agent Registry
 - Shows working, blocked, idle, done, and error
 
 ### 🧩 Layout & UI
 
-- Flexible DockArea with left / right / bottom docks and center tabs
+- Zed-style workspace with a flexible DockArea, left / right / bottom docks, and center tabs
 - Multiple concurrent sessions across tabs
 - Title bar, menu bar, status bar, zoom, and quick close
 - Remembers dock layout across sessions (`docks.json`)
