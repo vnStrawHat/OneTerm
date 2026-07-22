@@ -127,9 +127,12 @@ impl SshSessionStore {
                     Vec::new()
                 }
             },
-            Err(_) => {
-                // File does not exist yet — no sessions; don't create an empty file
-                // to avoid writing a blank file before the user adds any session.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // A missing file means there are no saved sessions yet.
+                Vec::new()
+            }
+            Err(error) => {
+                log::error!("failed to read ssh_session.json: {error}; starting empty");
                 Vec::new()
             }
         }

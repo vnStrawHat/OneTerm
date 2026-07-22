@@ -70,8 +70,8 @@ impl UiConfig {
             .unwrap_or(Self::DEFAULT_AGENT_STALE_THRESHOLD_MS)
     }
 
-    /// Load the config from file. Missing/unparseable → default (and a default
-    /// file is written if absent, like `TerminalConfig::load`).
+    /// Load the config from file. Missing or invalid input selects defaults;
+    /// invalid JSON is quarantined and only a missing file is initialized.
     pub fn load() -> Self {
         let path = config_dir().join("ui_config.json");
         match std::fs::read_to_string(&path) {
@@ -82,14 +82,24 @@ impl UiConfig {
                 }
                 Self::default()
             }),
-            Err(_) => {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 let cfg = Self::default();
-                if let Ok(json) = serde_json::to_string_pretty(&cfg) {
-                    if atomic_write(&path, json.as_bytes()).is_ok() {
-                        log::info!("Created default ui_config.json at {path:?}");
+                match serde_json::to_string_pretty(&cfg) {
+                    Ok(json) => match atomic_write(&path, json.as_bytes()) {
+                        Ok(()) => log::info!("Created default ui_config.json at {path:?}"),
+                        Err(write_error) => log::warn!(
+                            "failed to create default ui_config.json at {path:?}: {write_error}"
+                        ),
+                    },
+                    Err(serialize_error) => {
+                        log::warn!("failed to serialize default ui_config.json: {serialize_error}")
                     }
                 }
                 cfg
+            }
+            Err(error) => {
+                log::error!("failed to read ui_config.json: {error}; using defaults");
+                Self::default()
             }
         }
     }

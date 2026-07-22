@@ -124,15 +124,25 @@ impl TerminalConfig {
                     }
                 }
             }
-            Err(_) => {
-                // File does not exist → create a default file so the user can see the options.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // A missing file is the only read failure that safely selects defaults.
                 let cfg = Self::default();
-                if let Ok(json) = serde_json::to_string_pretty(&cfg) {
-                    if atomic_write(&path, json.as_bytes()).is_ok() {
-                        log::info!("Created default terminal.json at {path:?}");
+                match serde_json::to_string_pretty(&cfg) {
+                    Ok(json) => match atomic_write(&path, json.as_bytes()) {
+                        Ok(()) => log::info!("Created default terminal.json at {path:?}"),
+                        Err(write_error) => log::warn!(
+                            "failed to create default terminal.json at {path:?}: {write_error}"
+                        ),
+                    },
+                    Err(serialize_error) => {
+                        log::warn!("failed to serialize default terminal.json: {serialize_error}")
                     }
                 }
                 cfg
+            }
+            Err(error) => {
+                log::error!("failed to read terminal.json: {error}; using defaults");
+                Self::default()
             }
         }
     }

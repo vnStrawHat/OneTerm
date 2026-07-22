@@ -386,20 +386,42 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ### Work items
 
-- [ ] Update all architecture and feature docs to current crate paths.
-- [ ] Translate remaining non-English repository comments to English.
-- [ ] Standardize transport error, close, cancellation, and backpressure semantics across local and SSH backends.
-- [ ] Standardize persistence recovery behavior.
-- [ ] Correct comments describing transfer cleanup, security limits, and task ownership.
-- [ ] Add `crates/highlight` explicitly to root workspace members.
-- [ ] Add CI checks for documentation links, workspace membership, and dependency rules.
+- [x] Update architecture and feature documentation to current crate paths, while labeling
+      retained historical/design records.
+- [x] Translate remaining contributor-facing non-English repository comments to English and
+      add an automated language check.
+- [x] Standardize transport error, close, cancellation, and backpressure semantics across
+      local, SSH, and SFTP boundaries.
+- [x] Standardize persistence recovery behavior: missing files may initialize defaults, invalid
+      JSON is quarantined, other read failures are reported, and writes remain atomic.
+- [x] Correct comments describing transfer cleanup, security limits, and task ownership.
+- [x] Add `crates/highlight` explicitly to root workspace members.
+- [x] Add CI checks for documentation links, workspace membership, dependency rules, and
+      contributor-facing language.
 
 ### Acceptance criteria
 
-- [ ] All repository content complies with the English-only rule.
-- [ ] Local and SSH sessions expose equivalent observable lifecycle semantics.
-- [ ] Missing, corrupt, and failed persistence cases follow the same documented policy.
-- [ ] Root workspace membership includes every path crate required by project rules.
+- [x] Contributor-facing repository content complies with the English-only rule; user-facing
+      locale translations remain supported as data.
+- [x] Local and SSH sessions expose equivalent observable lifecycle semantics.
+- [x] Missing, corrupt, and failed persistence cases follow the documented policy.
+- [x] Root workspace membership includes every path crate required by project rules.
+
+### Completed consistency evidence (2026-07-22)
+
+- Current architecture paths are indexed in `docs/architecture.md`, historical design records
+  are labeled, and `scripts/check-doc-paths.py` validates the current path index.
+- `scripts/check-english.py` validates contributor-facing comments and documentation; it excludes
+  user-facing locale data. CI runs this check together with dependency and UI-fork checks.
+- Local and SSH terminal input now uses typed delivery results, bounded event queues, FIFO input,
+  explicit close/cancellation behavior, and observable queue failures. SFTP enqueue failures now
+  reach the transfer reply channel instead of being silently discarded.
+- Settings, SSH session, SFTP table, and dock persistence distinguish missing files from invalid
+  or unreadable files, quarantine malformed JSON, report failures, and use atomic writes.
+- `oneterm-highlight` is an explicit workspace member, and the dependency/path policy checks run
+  in CI. Lifecycle and security comments were aligned with the current implementation.
+- Verification passed: `cargo fmt --all`, consistency policy scripts, targeted tests (`42 passed,
+  1 ignored`), workspace check, and `python scripts/check-english.py`.
 
 ---
 

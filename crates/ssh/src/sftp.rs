@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use async_channel::{Receiver, Sender};
 use tokio::sync::oneshot;
 
-use oneterm_core::{FileEntry, FileStat, Result, SftpBackend, SftpSessionId};
+use oneterm_core::{AppError, FileEntry, FileStat, Result, SftpBackend, SftpSessionId};
 
 // ── Re-export from core ──────────────────────────────────────
 // FileEntry, FileStat are defined in core; re-exported here for convenience.
@@ -230,13 +230,18 @@ impl SftpBackend for SftpSession {
     ) -> (Receiver<f64>, Receiver<Result<()>>) {
         let (progress_tx, progress_rx) = async_channel::bounded(100);
         let (reply_tx, reply_rx) = async_channel::bounded(1);
-        let _ = self.cmd_tx.try_send(SftpCmd::Upload {
+        if let Err(error) = self.cmd_tx.try_send(SftpCmd::Upload {
             transfer_id,
             local,
             remote,
             progress: progress_tx,
-            reply: reply_tx,
-        });
+            reply: reply_tx.clone(),
+        }) {
+            log::warn!("SftpSession: failed to enqueue upload #{transfer_id}: {error}");
+            let _ = reply_tx.try_send(Err(AppError::msg(format!(
+                "failed to enqueue upload: {error}"
+            ))));
+        }
         (progress_rx, reply_rx)
     }
 
@@ -248,23 +253,32 @@ impl SftpBackend for SftpSession {
     ) -> (Receiver<f64>, Receiver<Result<()>>) {
         let (progress_tx, progress_rx) = async_channel::bounded(100);
         let (reply_tx, reply_rx) = async_channel::bounded(1);
-        let _ = self.cmd_tx.try_send(SftpCmd::Download {
+        if let Err(error) = self.cmd_tx.try_send(SftpCmd::Download {
             transfer_id,
             remote,
             local,
             progress: progress_tx,
-            reply: reply_tx,
-        });
+            reply: reply_tx.clone(),
+        }) {
+            log::warn!("SftpSession: failed to enqueue download #{transfer_id}: {error}");
+            let _ = reply_tx.try_send(Err(AppError::msg(format!(
+                "failed to enqueue download: {error}"
+            ))));
+        }
         (progress_rx, reply_rx)
     }
 
     fn cancel_transfer(&self, transfer_id: u64) {
         log::info!("SftpSession: cancel transfer #{transfer_id}");
-        let _ = self.cmd_tx.try_send(SftpCmd::Cancel { transfer_id });
+        if let Err(error) = self.cmd_tx.try_send(SftpCmd::Cancel { transfer_id }) {
+            log::warn!("SftpSession: failed to enqueue cancel #{transfer_id}: {error}");
+        }
     }
 
     fn close(&self) {
-        let _ = self.cmd_tx.try_send(SftpCmd::Close);
+        if let Err(error) = self.cmd_tx.try_send(SftpCmd::Close) {
+            log::warn!("SftpSession: failed to enqueue close: {error}");
+        }
     }
 
     fn alive(&self) -> bool {
@@ -314,6 +328,21 @@ mod tests {
             .expect_err("closed transport must fail");
         assert!(error.to_string().contains("closed"));
     }
+
+    #[tokio::test]
+    async fn transfer_enqueue_failure_reaches_reply_channel() {
+        let (session, cmd_rx) = test_session();
+        drop(cmd_rx);
+
+        let (_progress, reply) = session.upload(7, PathBuf::from("local"), PathBuf::from("remote"));
+        let error = reply
+            .recv()
+            .await
+            .expect("enqueue failure must produce a reply")
+            .expect_err("closed command transport must fail the transfer");
+        assert!(error.to_string().contains("enqueue upload"));
+    }
+
     #[test]
     fn session_identity_is_stable_across_clones_and_unique_per_session() {
         let (first, _first_rx) = test_session();

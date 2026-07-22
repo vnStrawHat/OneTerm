@@ -26,3 +26,5 @@ jobs:
         run: python scripts/check-ui-fork.py
       - name: Verify architecture documentation paths
         run: python scripts/check-doc-paths.py
+      - name: Verify contributor-facing text language
+        run: python scripts/check-english.py
