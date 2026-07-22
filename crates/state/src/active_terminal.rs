@@ -7,8 +7,8 @@
 //! type dependency.
 
 use gpui::{App, Entity, Global};
+use gpui_component::dock::DockArea;
 use oneterm_terminal::NetStats;
-use oneterm_ui::dock::DockArea;
 
 /// Extractor functions provided by the terminal feature crate.
 #[derive(Clone, Copy)]

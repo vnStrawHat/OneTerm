@@ -2,6 +2,17 @@
 
 **Score: 6.0 / 10**
 
+## Remediation status (2026-07-22)
+
+The original findings below are retained as review history. The scoped architecture remediation is complete:
+
+- **ARCH-01:** Resolved. `oneterm-ui` and `crates/ui` were removed; `gpui-component` is supplied through a root Cargo `[patch]` to `vendor/gpui-component`, which is excluded from workspace membership. The vendor snapshot records the upstream commit and approved delta surface.
+- **ARCH-02:** Resolved. `DockPlacement` is a domain enum in `oneterm-core`; `oneterm-workspace` maps it to the vendored UI dock type.
+- **ARCH-03:** Resolved. The unused parallel capability contracts were removed; `TerminalSession` is the authoritative implemented boundary.
+- **ARCH-04:** Resolved. SFTP operations are asynchronous and object-safe, and UI paths use background orchestration.
+- **ARCH-05:** Resolved for the current design. `SessionFactory` and `WorkspaceCommands` remain intentionally distinct, but registration rejects duplicates and missing services are handled explicitly.
+- **ARCH-06:** Resolved. Workspace membership, dependency allow-lists, architecture paths, vendor baseline, and contributor-facing language are checked by scripts in CI.
+
 ## ARCH-01 — The documented crate graph omits the current `oneterm-ui` layer
 
 - **Files:** `Cargo.toml:1-52`; `crates/ui/Cargo.toml:1-19`; `docs/agents/structure.md:147-168`; `docs/agents/crate-dependency-rules.md:12-45`

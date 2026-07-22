@@ -66,10 +66,12 @@ Before adding a new crate, ask: "is this crate already in `reference/gpui-compon
 
 ## 4. Integrating with gpui-component upstream
 
-This project keeps a small local dock fork in `crates/ui` because the dock needs
+This project uses Cargo's `[patch]` mechanism to replace the upstream
+`gpui-component` package with `vendor/gpui-component`. The vendor snapshot is
+created from a clean clone at the exact pinned revision because the dock needs
 `pub(crate)` access across several upstream sibling modules. Follow the complete
 base-revision, delta-review, and baseline-update procedure in
-[`ui-fork-maintenance.md`](ui-fork-maintenance.md). Verify the local delta with:
+[`ui-fork-maintenance.md`](ui-fork-maintenance.md). Verify the vendor delta with:
 
 ```bash
 python scripts/check-ui-fork.py
@@ -78,19 +80,20 @@ python scripts/check-ui-fork.py
 For changes to the upstream dependency itself:
 
 1. Read the release note / PR diff in `reference/gpui-component/`.
-2. Check out the exact revision pinned in `Cargo.toml` before comparing source.
-3. Update the corresponding code in the UI crates or the local fork.
+2. Clone the upstream repository and check out the exact revision pinned in
+   `Cargo.toml` before comparing source.
+3. Update the corresponding code in the UI crates or the vendor patch.
 4. If the change is breaking, update `CHANGELOG.md` (if any) and the current architecture docs.
-5. Run `python scripts/check-ui-fork.py --update` only after reviewing every changed fork file.
+5. Run `python scripts/check-ui-fork.py --update` only after reviewing every changed vendor file.
 
 ### Quick reference for important gpui-component entry points
 
-- `crates/ui/src/dock/` — `DockArea`, `Panel`, `StackPanel`, `TabPanel`.
-- `crates/ui/src/input/` — `InputState`, `Input`.
-- `crates/ui/src/dialog/` — `Dialog` overlay.
-- `crates/ui/src/notification/` — toast/notification.
-- `crates/ui/src/sheet/` — side panel.
-- `crates/ui/src/theme.rs` — `Theme`, `ActiveTheme`, `ThemeColor`.
+- `vendor/gpui-component/src/dock/` — `DockArea`, `Panel`, `StackPanel`, `TabPanel`.
+- `vendor/gpui-component/src/input/` — `InputState`, `Input`.
+- `vendor/gpui-component/src/dialog/` — `Dialog` overlay.
+- `vendor/gpui-component/src/notification/` — toast/notification.
+- `vendor/gpui-component/src/sheet/` — side panel.
+- `vendor/gpui-component/src/theme.rs` — `Theme`, `ActiveTheme`, `ThemeColor`.
 
 ---
 

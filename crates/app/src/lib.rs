@@ -69,12 +69,6 @@ pub fn run() {
 
         // Initialize gpui-component (theme, dock, root, ...).
         gpui_component::init(cx);
-        // Initialize the vendored dock module's own PanelRegistry global. The
-        // upstream `gpui_component::init` above initializes the *upstream*
-        // PanelRegistry, which OneTerm does not use — every OneTerm panel goes
-        // through `oneterm_ui::dock`, so this separate global must be initialized
-        // too (see crates/ui/src/lib.rs).
-        oneterm_ui::dock::init(cx);
 
         // Set Lilex as the theme's default monospace font (after init registers Theme).
         cx.global_mut::<gpui_component::Theme>().mono_font_family = "Lilex".into();

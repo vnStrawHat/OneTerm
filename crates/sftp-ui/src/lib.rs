@@ -19,7 +19,7 @@ mod types;
 pub use panel::SftpPanel;
 
 use gpui::App;
-use oneterm_ui::dock::register_panel;
+use gpui_component::dock::register_panel;
 
 /// Initialize the SFTP feature: register the "sftp" dock panel so saved layouts
 /// deserialize. Called by the app aggregator.

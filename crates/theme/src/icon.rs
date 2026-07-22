@@ -2,7 +2,7 @@
 //!
 //! ## Adding a new icon
 //!
-//! 1. Drop a `.svg` file into `crates/ui/assets/icons/` (e.g. `my-icon.svg`)
+//! 1. Drop a `.svg` file into `crates/theme/assets/icons/` (e.g. `my-icon.svg`)
 //! 2. Build — the `AppIcon::MyIcon` variant is generated automatically
 //! 3. Use it: `Icon::new(AppIcon::MyIcon)` or `.icon(AppIcon::MyIcon)`
 //!
@@ -62,7 +62,7 @@ impl AppIcon {
     }
 }
 
-/// Embedded assets — serve SVG files from `crates/ui/assets/` via RustEmbed.
+/// Embedded assets — serve SVG files from `crates/theme/assets/` via RustEmbed.
 ///
 /// Paths stored relative to `assets/`, e.g. `"icons/terminal.svg"`.
 /// This matches the `"icons/<name>.svg"` path format that `icon_named!` generates.

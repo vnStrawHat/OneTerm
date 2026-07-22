@@ -2,9 +2,9 @@
 
 use anyhow::{Context as _, Result};
 use gpui::{Context, Edges, Entity, PromptLevel, Window};
+use gpui_component::dock::{DockArea, DockAreaState};
 use oneterm_core::quarantine_file;
 use oneterm_state::dock_persistence::{DockDocument, read_dock_document, update_dock_document};
-use oneterm_ui::dock::{DockArea, DockAreaState};
 
 use super::{MAIN_DOCK_VERSION, state_file};
 
@@ -121,9 +121,9 @@ pub(crate) fn read_toggle_button_visible() -> Option<bool> {
 mod tests {
     use std::collections::HashMap;
 
+    use gpui_component::dock::DockAreaState;
     use oneterm_core::SftpTableState;
     use oneterm_state::dock_persistence::DockDocument;
-    use oneterm_ui::dock::DockAreaState;
 
     #[test]
     fn one_term_fields_roundtrip_with_dock_state() {

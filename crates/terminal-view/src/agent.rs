@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use gpui::{App, EntityId, Global, WeakEntity, Window};
 
-use oneterm_ui::dock::{PanelView, TabPanel};
+use gpui_component::dock::{PanelView, TabPanel};
 
 use crate::TerminalPanel;
 use crate::space::SpaceId;

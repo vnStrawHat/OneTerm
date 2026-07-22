@@ -16,5 +16,4 @@ oneterm-theme.workspace = true
 
 gpui.workspace = true
 gpui-component.workspace = true
-oneterm-ui.workspace = true
 log.workspace = true

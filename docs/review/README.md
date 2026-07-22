@@ -4,6 +4,8 @@
 **Scope:** The complete repository, with primary implementation evidence from `crates/`, workspace manifests, build/release automation, and the project design documents.
 **Method:** Whole-system review of crate boundaries, startup wiring, terminal and SFTP data flow, persistence, async lifecycles, tests, security controls, and operational automation. This is not a file-by-file approval review; conclusions consider interactions between modules.
 
+**Status:** This report is the pre-remediation baseline. Reliability, SSH progress UX, maintainability, scoped readability, simplicity, consistency, scalability, and the scoped architecture migration have since been implemented; see [`remediation-plan.md`](remediation-plan.md) for current acceptance status. The original findings remain below for historical rationale.
+
 ## Executive summary
 
 OneTerm has a thoughtful direction: the application is being moved from a UI god-crate toward a layered workspace, protocol implementations are hidden behind `TerminalSession`/`SftpBackend`/`SessionFactory`, terminal-controlled strings have a centralized sanitization policy, and the terminal hot path has real damage tracking, event coalescing, bounded queues, and diagnostics. The codebase is also unusually well documented for an active refactor.

@@ -25,7 +25,7 @@ This plan converts the repository review into actionable work. It is intentional
 | P0 | Stop silent terminal input loss and make connection attempts cancellable | Transport API decision | Reliability baseline |
 | P1 | Remove blocking SFTP work from UI callbacks | Async SFTP boundary decision | Responsiveness release |
 | P1 | Make persistence atomic, serialized, versioned, and testable | Persistence ownership decision | Data-safety release |
-| P1 | Reconcile the real and documented crate graph | Architecture decision on `oneterm-ui` | Architecture baseline |
+| P1 | Reconcile the real and documented crate graph | Cargo vendor-patch decision and domain placement type | Architecture baseline |
 | P2 | Remove retained state and per-session runtime scaling costs | Stable session identity and app runtime boundary | Multi-session scale |
 | P2 | Reduce backend duplication and complete terminal capability migration | API migration plan | Refactor milestone |
 | P3 | Improve documentation navigation and broad integration coverage | Current architecture baseline | Continuous quality |
@@ -264,20 +264,20 @@ cargo build --workspace --release
 
 ### Work items
 
-- [ ] Decide whether `oneterm-ui` is permanent shared UI infrastructure or a temporary fork.
-- [ ] Document its allowed dependency layer, upstream revision, patch delta, and update process.
-- [ ] Remove `oneterm_ui::dock::DockPlacement` from the low-level `actions` crate; map an app-owned placement type in `workspace`.
-- [ ] Migrate terminal consumers incrementally from the monolithic `TerminalSession` to implemented capability contracts, or remove the unused contracts and record the future design separately.
-- [ ] Replace blocking synchronous SFTP methods with async operations or typed background operation handles.
-- [ ] Consolidate process-global services behind an app-owned service registry/entity with test-scoped construction.
-- [ ] Add an automated dependency allow-list check for forbidden feature/backend edges and undocumented crates.
+- [x] Replace the former `oneterm-ui` workspace crate with a Cargo `[patch]` vendor snapshot generated from a clean clone at the pinned upstream revision.
+- [x] Document the vendor package's non-member status, upstream revision, reviewed patch surface, and clone/baseline update process.
+- [x] Remove `oneterm_ui::dock::DockPlacement` from the low-level `actions` crate; `core` owns the domain placement type and `workspace` maps it to the UI dock type.
+- [x] Remove the unused terminal capability contracts; `TerminalSession` is the single implemented capability boundary and its errors are typed/observable.
+- [x] Replace blocking synchronous SFTP methods with async object-safe operations and background task orchestration.
+- [x] Keep the two process/GPUI registries intentionally distinct, but reject duplicate registration and handle missing registration explicitly.
+- [x] Add automated dependency allow-list, UI-vendor baseline, documentation-path, and contributor-language checks to CI.
 
 ### Acceptance criteria
 
-- [ ] The architecture document and all manifests describe the same crate graph.
-- [ ] Feature crates still compile without direct backend dependencies.
-- [ ] SFTP API usage makes UI blocking impossible by construction.
-- [ ] Tests can create isolated service registries without process-global ordering.
+- [x] The architecture document, vendor policy, and all manifests describe the same internal crate graph; the vendor package is explicitly external and excluded from workspace membership.
+- [x] Feature crates still compile without direct backend dependencies.
+- [x] SFTP API usage makes UI blocking impossible by construction.
+- [x] Registry initialization rejects duplicates and missing services are reported; process-global terminal construction remains deliberately separate from GPUI window callbacks.
 
 ### Verification
 
@@ -299,7 +299,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 - [x] Centralize persistence mechanics while leaving domain serializers in owning crates (`oneterm_core::persistence`).
 - [x] Extract shared local/SSH terminal model operations (`oneterm_terminal::TerminalModel`).
 - [ ] Split `sftp_task.rs`, `agent_registry.rs`, and large dock/terminal-view files by stable responsibility.
-- [x] Establish an explicit `oneterm-ui` fork maintenance and upstream synchronization process (`ui-fork-maintenance.md`, `check-ui-fork.py`).
+- [x] Establish an explicit vendored `gpui-component` maintenance and upstream synchronization process (`ui-fork-maintenance.md`, `check-ui-fork.py`).
 - [x] Define a common runtime error taxonomy and review policy for ignored errors, defaults, and panics (`error-policy.md`).
 - [x] Add schema migration ownership and fixture conventions (`persistence.md`).
 - [x] Add a dependency-graph allow-list verification script to CI (`verify-dependency-graph.py`).
@@ -471,19 +471,19 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ### Work items
 
-- [ ] Close the UI crate migration with an explicit architecture decision record.
-- [ ] Complete terminal capability migration or remove the unused future API.
+- [x] Close the UI crate migration by removing `oneterm-ui` and recording the Cargo vendor-patch architecture.
+- [x] Remove the unused future terminal capability API and keep the implemented `TerminalSession` contract authoritative.
 - [ ] Move service ownership from process globals toward app/context-owned services.
 - [ ] Add versioned persistence envelopes and migrations for settings, sessions, docks, and SFTP state.
-- [ ] Document the fork delta and upstream update cadence for `oneterm-ui`.
-- [ ] Preserve feature self-registration while adding validation for duplicate/missing panel and command registrations.
+- [x] Document the fork delta and upstream update procedure for the vendored `gpui-component` snapshot.
+- [x] Preserve feature self-registration while adding validation for duplicate/missing panel and command registrations.
 
 ### Acceptance criteria
 
 - [ ] A future backend can implement only the capabilities it supports.
 - [ ] A future app/window context can be instantiated without process-global state collisions.
 - [ ] Older persisted configurations migrate through tested versions without data loss.
-- [ ] The UI fork can be updated from upstream through a documented, reviewable process.
+- [x] The UI vendor patch can be updated from a verified upstream clone through a documented, reviewable process.
 
 ---
 
@@ -498,7 +498,7 @@ Create separate issues or pull requests in this order:
 5. `reliability: move all SFTP actions off the UI thread`
 6. `reliability: finalize transfers through temporary files`
 7. `persistence: centralize atomic versioned JSON storage`
-8. `architecture: reconcile oneterm-ui and workspace dependency graph`
+8. `architecture: remove oneterm-ui and vendor the reviewed gpui-component patch`
 9. `test: add SFTP, host-key, persistence, and lifecycle harnesses`
 10. `scalability: introduce stable session IDs and cleanup`
 11. `performance: share async runtime and stream large uploads`

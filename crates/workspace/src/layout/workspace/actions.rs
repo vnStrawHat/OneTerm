@@ -3,8 +3,10 @@
 use std::sync::atomic::Ordering;
 
 use gpui::{App, Context, Entity, Window};
+use gpui_component::dock::{DockArea, DockItem, DockPlacement as UiDockPlacement};
 use gpui_component::{WindowExt as _, dialog::DialogButtonProps};
-use oneterm_ui::dock::{DockArea, DockItem, DockPlacement};
+
+use oneterm_core::DockPlacement;
 
 use oneterm_actions::{
     About, AddPanel, AddPanelWithShell, AddSession, AddSftpBrowser, Find, NewSession, OpenSettings,
@@ -12,6 +14,15 @@ use oneterm_actions::{
 };
 
 impl super::OneTermWorkspace {
+    fn to_ui_placement(placement: DockPlacement) -> UiDockPlacement {
+        match placement {
+            DockPlacement::Center => UiDockPlacement::Center,
+            DockPlacement::Left => UiDockPlacement::Left,
+            DockPlacement::Bottom => UiDockPlacement::Bottom,
+            DockPlacement::Right => UiDockPlacement::Right,
+        }
+    }
+
     /// Action handler: add a new TerminalPanel.
     pub(crate) fn on_action_add_panel(
         &mut self,
@@ -42,7 +53,7 @@ impl super::OneTermWorkspace {
             });
         } else {
             self.dock_area.update(cx, |dock_area, cx| {
-                dock_area.add_panel(panel, action.0, None, window, cx);
+                dock_area.add_panel(panel, Self::to_ui_placement(action.0), None, window, cx);
             });
         }
     }
@@ -95,7 +106,7 @@ impl super::OneTermWorkspace {
             });
         } else {
             self.dock_area.update(cx, |dock_area, cx| {
-                dock_area.add_panel(panel, DockPlacement::Center, None, window, cx);
+                dock_area.add_panel(panel, UiDockPlacement::Center, None, window, cx);
             });
         }
     }

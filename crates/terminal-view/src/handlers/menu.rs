@@ -52,12 +52,12 @@ where
             // 1. New Terminal — add a new TerminalPanel to the center dock.
             let mut menu = menu.item(
                 PopupMenuItem::new("New Terminal")
-                    .action(Box::new(AddPanel(oneterm_ui::dock::DockPlacement::Center)))
+                    .action(Box::new(AddPanel(oneterm_actions::DockPlacement::Center)))
                     .on_click({
                         let f = focus.clone();
                         move |_, window, cx| {
                             window.dispatch_action(
-                                Box::new(AddPanel(oneterm_ui::dock::DockPlacement::Center)),
+                                Box::new(AddPanel(oneterm_actions::DockPlacement::Center)),
                                 cx,
                             );
                             window.focus(&f, cx);
@@ -146,11 +146,14 @@ where
                 // 10. Close Terminal Tab — dispatch the ClosePanel action.
                 .item(
                     PopupMenuItem::new("Close Terminal Tab")
-                        .action(Box::new(oneterm_ui::dock::ClosePanel))
+                        .action(Box::new(gpui_component::dock::ClosePanel))
                         .on_click({
                             let f = focus.clone();
                             move |_, window, cx| {
-                                window.dispatch_action(Box::new(oneterm_ui::dock::ClosePanel), cx);
+                                window.dispatch_action(
+                                    Box::new(gpui_component::dock::ClosePanel),
+                                    cx,
+                                );
                                 window.focus(&f, cx);
                             }
                         }),

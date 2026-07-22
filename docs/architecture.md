@@ -12,7 +12,7 @@ Use this page and `docs/agents/structure.md` when locating current implementatio
 | Terminal engine | `oneterm-terminal` | Terminal model, session contract, encoding, OSC, search | `crates/terminal/src/lib.rs`, `crates/terminal/src/model.rs`, `crates/terminal/src/contracts.rs` |
 | Shared services | `oneterm-settings` | Persistent terminal and UI settings | `crates/settings/src/lib.rs` |
 | Shared services | `oneterm-state` | Global state, commands, typed dock persistence, Agent folded model | `crates/state/src/lib.rs`, `crates/state/src/dock_persistence.rs`, `crates/state/src/agent_registry.rs`, `crates/state/src/agent_model.rs` |
-| Shared UI | `oneterm-ui` | Maintained dock/resizable/tab fork | `crates/ui/src/lib.rs` |
+| Vendor patch | `gpui-component` | Pinned upstream UI crate with the reviewed `TabPanel::set_active_panel` addition | `vendor/gpui-component/ONETERM-VENDOR.md`, `vendor/patches/gpui-component/0001-OneTerm-add-TabPanel-set_active_panel.patch` |
 | Shell | `oneterm-workspace` | Feature-agnostic window, layout, dock persistence, status bar | `crates/workspace/src/lib.rs`, `crates/workspace/src/layout/` |
 | Backend | `oneterm-local-shell` | Local PTY session implementation | `crates/local-shell/src/lib.rs`, `crates/local-shell/src/session_terminal.rs` |
 | Backend | `oneterm-ssh` | SSH shell and SFTP implementations | `crates/ssh/src/lib.rs`, `crates/ssh/src/session_terminal.rs`, `crates/ssh/src/sftp_task.rs`, `crates/ssh/src/sftp_transfer.rs` |
@@ -30,6 +30,12 @@ knows the backends, feature crates, shell, and shared layers together. Feature c
 create sessions through `oneterm_terminal::SessionFactory`; they do not depend on
 `oneterm-ssh` or `oneterm-local-shell`. The workspace shell is feature-agnostic and
 uses command/panel registries rather than importing feature implementations.
+
+`gpui-component` remains an external dependency in every crate manifest. The root
+Cargo `[patch]` redirects that dependency to `vendor/gpui-component`; the vendor
+package is not a OneTerm workspace member and does not create an internal UI layer.
+Shared action contracts use `oneterm_core::DockPlacement`, and only the workspace
+shell maps that domain value to `gpui_component::dock::DockPlacement`.
 
 The machine-readable dependency policy and verification commands are in
 [`docs/agents/crate-dependency-rules.md`](agents/crate-dependency-rules.md), and the

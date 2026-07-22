@@ -59,7 +59,6 @@ oneterm-agent-ui.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
 gpui-component.workspace = true
-oneterm-ui.workspace = true
 gpui-component-assets.workspace = true
 
 anyhow.workspace = true

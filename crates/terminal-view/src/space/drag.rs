@@ -12,7 +12,7 @@ use gpui::{
     Window, div,
 };
 use gpui_component::ActiveTheme as _;
-use oneterm_ui::dock::TabPanel;
+use gpui_component::dock::TabPanel;
 
 use super::super::panel::TerminalPanel;
 

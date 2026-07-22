@@ -25,6 +25,9 @@ use gpui::{
     InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Window, div,
 };
 
+use gpui_component::dock::{
+    Panel, PanelControl, PanelEvent, PanelInfo, PanelState, register_panel,
+};
 use gpui_component::{
     ActiveTheme as _, h_flex,
     resizable::{resizable_panel, v_resizable},
@@ -32,7 +35,6 @@ use gpui_component::{
 };
 use oneterm_session_ui::SessionPanel;
 use oneterm_sftp_ui::SftpPanel;
-use oneterm_ui::dock::{Panel, PanelControl, PanelEvent, PanelInfo, PanelState, register_panel};
 
 /// Panel name registered with the gpui-component `PanelRegistry`.
 ///

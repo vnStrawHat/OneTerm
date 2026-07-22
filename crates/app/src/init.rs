@@ -1,6 +1,6 @@
 //! Application initialization: OneTerm global state + feature registration.
 //!
-//! This replaces the former `oneterm_ui::init` aggregator. The app crate is the
+//! This replaces the former `gpui_component::init` aggregator. The app crate is the
 //! only place that knows about every feature crate, so it wires them together:
 //! it initializes the shared globals, calls each feature's `init` (which
 //! registers its dock panels + feature globals), and assembles the workspace

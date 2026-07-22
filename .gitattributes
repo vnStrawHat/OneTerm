@@ -1,0 +1,3 @@
+# Preserve exact upstream vendor snapshots and generated source patches.
+vendor/gpui-component/** -whitespace
+vendor/patches/gpui-component/** -whitespace

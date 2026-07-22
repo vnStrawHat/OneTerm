@@ -21,7 +21,7 @@ pub use quick_connect_dialog::open_quick_connect_dialog;
 pub use session_state::{SshSession, SshSessionStore};
 
 use gpui::App;
-use oneterm_ui::dock::register_panel;
+use gpui_component::dock::register_panel;
 
 /// Initialize the session feature: initialize the SSH session store global and
 /// register the "session" dock panel (so saved layouts deserialize). Called by

@@ -2961,7 +2961,6 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.5.2"
-source = "git+https://github.com/longbridge/gpui-component?rev=ea6b194db04cc7c0474851f07c7d5b7a9df6a98b#ea6b194db04cc7c0474851f07c7d5b7a9df6a98b"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5166,7 +5165,6 @@ dependencies = [
  "gpui",
  "gpui-component",
  "oneterm-core",
- "oneterm-ui",
  "serde",
 ]
 
@@ -5182,7 +5180,6 @@ dependencies = [
  "oneterm-state",
  "oneterm-terminal",
  "oneterm-theme",
- "oneterm-ui",
 ]
 
 [[package]]
@@ -5209,7 +5206,6 @@ dependencies = [
  "oneterm-terminal",
  "oneterm-terminal-view",
  "oneterm-theme",
- "oneterm-ui",
  "oneterm-workspace",
  "serde_json",
  "windows-sys 0.59.0",
@@ -5263,7 +5259,6 @@ dependencies = [
  "oneterm-state",
  "oneterm-terminal",
  "oneterm-terminal-view",
- "oneterm-ui",
  "serde",
  "serde_json",
 ]
@@ -5291,7 +5286,6 @@ dependencies = [
  "oneterm-core",
  "oneterm-settings",
  "oneterm-theme",
- "oneterm-ui",
  "serde",
  "serde_json",
 ]
@@ -5311,7 +5305,6 @@ dependencies = [
  "oneterm-state",
  "oneterm-terminal",
  "oneterm-theme",
- "oneterm-ui",
  "serde",
  "serde_json",
 ]
@@ -5340,7 +5333,6 @@ dependencies = [
  "gpui-component",
  "oneterm-core",
  "oneterm-terminal",
- "oneterm-ui",
  "serde",
  "serde_json",
 ]
@@ -5377,7 +5369,6 @@ dependencies = [
  "oneterm-state",
  "oneterm-terminal",
  "oneterm-theme",
- "oneterm-ui",
  "serde_json",
 ]
 
@@ -5395,21 +5386,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "oneterm-ui"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "gpui",
- "gpui-component",
- "instant",
- "itertools 0.13.0",
- "rust-i18n",
- "serde",
- "serde_json",
- "smallvec",
-]
-
-[[package]]
 name = "oneterm-workspace"
 version = "0.0.0"
 dependencies = [
@@ -5424,7 +5400,6 @@ dependencies = [
  "oneterm-state",
  "oneterm-terminal",
  "oneterm-theme",
- "oneterm-ui",
  "serde",
  "serde_json",
  "sysinfo 0.37.2",

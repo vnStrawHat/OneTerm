@@ -11,7 +11,7 @@ pub mod persistence;
 pub mod sftp;
 pub mod ssh_config;
 
-pub use config::{LocalShellConfig, RightDockMode, ShellKind, config_dir, home_dir};
+pub use config::{DockPlacement, LocalShellConfig, RightDockMode, ShellKind, config_dir, home_dir};
 pub use error::AppError;
 pub use persistence::{atomic_write, quarantine_file, update_json_file};
 pub use sftp::{FileEntry, FileStat, SftpBackend, SftpFuture, SftpSessionId, SftpTableState};

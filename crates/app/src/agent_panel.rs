@@ -18,9 +18,11 @@ use gpui::{
     InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Window,
 };
 
+use gpui_component::dock::{
+    Panel, PanelControl, PanelEvent, PanelInfo, PanelState, register_panel,
+};
 use gpui_component::{ActiveTheme as _, v_flex};
 use oneterm_agent_ui::AgentListView;
-use oneterm_ui::dock::{Panel, PanelControl, PanelEvent, PanelInfo, PanelState, register_panel};
 
 /// Panel name registered with the gpui-component `PanelRegistry`.
 ///

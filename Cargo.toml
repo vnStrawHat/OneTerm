@@ -15,13 +15,16 @@ members = [
     "crates/agent-ui",
     "crates/highlight",
     "crates/local-shell",
-    "crates/ui",
     "crates/ssh",
 ]
 resolver = "3"
-# Vendored OneTerm fork of alacritty_terminal + vte (patched below). Excluded as
-# workspace members — they are consumed via [patch] and built as dependencies.
-exclude = ["vendor/vte", "vendor/alacritty_terminal"]
+# Vendored dependency snapshots (patched below). Excluded as workspace members;
+# they are consumed via [patch] and built as dependencies.
+exclude = [
+    "vendor/vte",
+    "vendor/alacritty_terminal",
+    "vendor/gpui-component",
+]
 
 [workspace.package]
 publish = false
@@ -41,7 +44,6 @@ oneterm-actions = { path = "crates/actions" }
 oneterm-settings = { path = "crates/settings" }
 oneterm-state = { path = "crates/state" }
 oneterm-theme = { path = "crates/theme" }
-oneterm-ui = { path = "crates/ui" }
 oneterm-workspace = { path = "crates/workspace" }
 oneterm-terminal-view = { path = "crates/terminal-view" }
 oneterm-sftp-ui = { path = "crates/sftp-ui" }
@@ -171,6 +173,9 @@ smol = { opt-level = 3 }
 # docs/agents/dependencies.md §1/§3.
 [patch."https://github.com/zed-industries/alacritty"]
 alacritty_terminal = { path = "vendor/alacritty_terminal" }
+
+[patch."https://github.com/longbridge/gpui-component"]
+gpui-component = { path = "vendor/gpui-component" }
 
 [patch.crates-io]
 vte = { path = "vendor/vte" }

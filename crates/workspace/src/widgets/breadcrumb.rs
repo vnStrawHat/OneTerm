@@ -21,8 +21,8 @@ use gpui::{
     InteractiveElement as _, IntoElement, ParentElement, Render, StatefulInteractiveElement,
     Styled, Task, WeakEntity, Window, div,
 };
+use gpui_component::dock::DockArea;
 use gpui_component::{ActiveTheme as _, tooltip::Tooltip};
-use oneterm_ui::dock::DockArea;
 
 /// Indicator showing the breadcrumb (cwd path + foreground process) of the
 /// active terminal session in the StatusBar.

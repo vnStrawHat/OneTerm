@@ -97,9 +97,6 @@ OneTerm/
 │   │   ├── themes/                 # 24 built-in JSON themes (2 Zed + 22 gpui-component)
 │   │   └── src/{lib.rs, theme.rs, icon.rs}
 │   │
-│   ├── ui/                         # `oneterm-ui` — maintained local fork of gpui-component dock modules
-│   │   └── src/                    # dock + required resizable/tab/history siblings; see ui-fork-maintenance.md
-│   │
 
 │   ├── workspace/                  # `oneterm-workspace` — feature-AGNOSTIC app shell (has build.rs)
 │   │   ├── build.rs                # Publishes ONETERM_VERSION (About action)
@@ -134,7 +131,10 @@ OneTerm/
 │   ├── terminal-backend.md / ssh-client-connect.md / sftp-browser-design.md …
 │   └── agents/{code-style.md, dependencies.md, structure.md (this file)}
 │
-└── reference/                      # Local clone of gpui-component (gitignored)
+├── vendor/                         # Tracked source patches for external dependencies
+│   └── gpui-component/             # patched snapshot; not a workspace member
+│
+└── reference/                      # Local clone of gpui-component (gitignored, research only)
     └── gpui-component/
 ```
 
@@ -158,21 +158,21 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 |---|---|---|---|
 | `core` (`oneterm-core`) | _(leaf)_ | domain | Error type, `SftpBackend`, `LocalShellConfig`/`ShellKind`, `SshConfig`/`SshAuthMethod`. No gpui, **no alacritty**. |
 | `highlight` (`oneterm-highlight`) | _(leaf)_ | engine | Semantic syntax-highlighting engine. |
-| `ui` (`oneterm-ui`) | _(leaf; external deps only)_ | shared-ui | Maintained local fork of gpui-component dock/resizable/tab/history modules. See [`ui-fork-maintenance.md`](ui-fork-maintenance.md). |
+| `vendor/gpui-component` | _(Cargo patch; not a workspace member)_ | external shared-ui | Upstream `gpui-component` `crates/ui` snapshot at the pinned revision, with the reviewed `TabPanel::set_active_panel` addition. See [`ui-fork-maintenance.md`](ui-fork-maintenance.md). |
 | `terminal` (`oneterm-terminal`) | `core` | engine | Terminal engine (alacritty-coupled, no gpui): `TerminalSession`, `TerminalModel`, events, palette/OSC/key/mouse helpers, and `SessionFactory`. |
-| `actions` (`oneterm-actions`) | `core`, `ui`, gpui | leaf-ui | gpui `Action` structs shared by shell and features. |
+| `actions` (`oneterm-actions`) | `core`, gpui | leaf-ui | gpui `Action` structs shared by shell and features; domain placement types come from `core`. |
 | `settings` (`oneterm-settings`) | `core`, gpui | shared | `TerminalConfig`, live `TerminalSettings`, and `UiConfig`. |
-| `state` (`oneterm-state`) | `core`, `terminal`, `ui`, gpui, gpui-component | shared | `AppState`, notification helpers, command registry, dock helpers, active-terminal metrics, and shared persistence paths. |
+| `state` (`oneterm-state`) | `core`, `terminal`, gpui, gpui-component | shared | `AppState`, notification helpers, command registry, dock helpers, active-terminal metrics, and shared persistence paths. |
 | `theme` (`oneterm-theme`) | `settings`, `actions`, gpui, gpui-component | shared | Theme registry, built-in themes, and generated `AppIcon`. |
-| `workspace` (`oneterm-workspace`) | `core`, `terminal`, `settings`, `state`, `actions`, `theme`, `ui` | shell | Feature-agnostic app shell. Builds panels by name and drives features through `WorkspaceCommands`. |
-| `terminal-view` (`oneterm-terminal-view`) | `core`, `terminal`, `settings`, `state`, `theme`, `actions`, `highlight`, `ui` | feature | Terminal panel, rendering/input, split spaces, and terminal settings panel. |
-| `sftp-ui` (`oneterm-sftp-ui`) | `core`, `terminal`, `state`, `theme`, `actions`, `ui` | feature | SFTP file browser and transfer queue. |
-| `session-ui` (`oneterm-session-ui`) | `core`, `terminal`, `terminal-view`, `state`, `actions`, `ui` | feature | Session tree, connect dialogs, and `SshSessionStore`. |
-| `settings-ui` (`oneterm-settings-ui`) | `core`, `settings`, `theme`, `actions`, `ui` | feature | General Settings window and key-binding setup. |
-| `agent-ui` (`oneterm-agent-ui`) | `core`, `terminal`, `settings`, `state`, `theme`, `ui` | feature | Agent Panel fleet view. |
+| `workspace` (`oneterm-workspace`) | `core`, `terminal`, `settings`, `state`, `actions`, `theme`, gpui-component | shell | Feature-agnostic app shell. Maps domain placement types to the UI dock and drives features through `WorkspaceCommands`. |
+| `terminal-view` (`oneterm-terminal-view`) | `core`, `terminal`, `settings`, `state`, `theme`, `actions`, `highlight`, gpui-component | feature | Terminal panel, rendering/input, split spaces, and terminal settings panel. |
+| `sftp-ui` (`oneterm-sftp-ui`) | `core`, `terminal`, `state`, `theme`, `actions`, gpui-component | feature | SFTP file browser and transfer queue. |
+| `session-ui` (`oneterm-session-ui`) | `core`, `terminal`, `terminal-view`, `state`, `actions`, gpui-component | feature | Session tree, connect dialogs, and `SshSessionStore`. |
+| `settings-ui` (`oneterm-settings-ui`) | `core`, `settings`, `theme`, `actions`, gpui-component | feature | General Settings window and key-binding setup. |
+| `agent-ui` (`oneterm-agent-ui`) | `core`, `terminal`, `settings`, `state`, `theme`, gpui-component | feature | Agent Panel fleet view. |
 | `ssh` (`oneterm-ssh`) | `core`, `terminal` | backend | russh client and SFTP; implements `TerminalSession` and `SftpBackend`. |
 | `local-shell` (`oneterm-local-shell`) | `core`, `terminal` | backend | Local PTY; implements `TerminalSession`. |
-| `app` (`oneterm-app`) | shell + all five features + shared layers + `ui` + both backends | binary | Only crate that knows every layer. Installs `AppSessionFactory`, initializes features and commands, and opens the window. |
+| `app` (`oneterm-app`) | shell + all five features + shared layers + gpui-component + both backends | binary | Only crate that knows every layer. Installs `AppSessionFactory`, initializes features and commands, and opens the window. |
 
 ## 3.1 Crate & dependency rules
 

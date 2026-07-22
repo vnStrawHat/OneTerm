@@ -2,14 +2,13 @@
 
 use gpui::{SharedString, actions};
 use gpui_component::ThemeMode;
-use oneterm_ui::dock::DockPlacement;
 use serde::Deserialize;
 
 // Re-exported so call-sites can use `oneterm_actions::RightDockMode` without
 // reaching into `oneterm_core` directly. Defined in `oneterm_core` (the lowest
 // crate that needs it) so the settings crate can persist it without a
 // same-layer dependency on `oneterm_actions`.
-pub use oneterm_core::RightDockMode;
+pub use oneterm_core::{DockPlacement, RightDockMode};
 
 /// Add a new panel to the dock at the given placement.
 #[derive(Clone, PartialEq, Eq, Deserialize, gpui::Action)]

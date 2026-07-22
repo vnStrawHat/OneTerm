@@ -21,10 +21,10 @@ use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, Task,
     Window,
 };
+use gpui_component::dock::{Panel, PanelControl, PanelEvent};
 use gpui_component::{
     WindowExt, input::InputState, notification::NotificationType, tree::TreeState,
 };
-use oneterm_ui::dock::{Panel, PanelControl, PanelEvent};
 
 use crate::session_state::SshSessionStore;
 use oneterm_actions::{DeleteSession, NewSession, OpenSession, SessionProperty};

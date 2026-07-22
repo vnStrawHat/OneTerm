@@ -18,6 +18,7 @@ use gpui::{
     App, ClickEvent, Context, IntoElement, ParentElement as _, Render, SharedString, Styled,
     Window, div,
 };
+use gpui_component::dock::{DockPlacement, PanelView};
 use gpui_component::{
     ActiveTheme, Disableable as _, WindowExt as _,
     button::{Button, ButtonVariant, ButtonVariants as _},
@@ -27,7 +28,6 @@ use gpui_component::{
     notification::NotificationType,
     v_flex,
 };
-use oneterm_ui::dock::{DockPlacement, PanelView};
 
 use oneterm_core::{AppError, ConnectionCancellation, HostKeyPolicy, SshConfig};
 use oneterm_state::AppState;

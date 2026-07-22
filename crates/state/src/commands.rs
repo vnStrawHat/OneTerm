@@ -9,8 +9,8 @@
 use std::sync::Arc;
 
 use gpui::{App, Entity, Global, Window};
+use gpui_component::dock::{DockArea, PanelView};
 use oneterm_core::ShellKind;
-use oneterm_ui::dock::{DockArea, PanelView};
 
 /// Command function pointers registered by the feature crates.
 #[derive(Clone, Copy)]

@@ -10,9 +10,9 @@ use gpui::{
     StatefulInteractiveElement as _, Styled, Window, div,
 };
 use gpui_component::ActiveTheme;
+use gpui_component::dock::{Panel, PanelControl, PanelEvent};
 use oneterm_core::LocalShellConfig;
 use oneterm_core::config::ShellKind;
-use oneterm_ui::dock::{Panel, PanelControl, PanelEvent};
 
 use oneterm_settings::TerminalSettings;
 

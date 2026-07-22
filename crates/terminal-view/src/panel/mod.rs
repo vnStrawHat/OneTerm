@@ -23,6 +23,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div,
     prelude::FluentBuilder as _, px,
 };
+use gpui_component::dock::{Panel, PanelControl, PanelEvent, PanelView, TabPanel};
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable,
     button::{Button, ButtonVariants as _},
@@ -32,7 +33,6 @@ use gpui_component::{
 use oneterm_core::ShellKind;
 use oneterm_terminal::PtySize;
 use oneterm_terminal::TerminalSession;
-use oneterm_ui::dock::{Panel, PanelControl, PanelEvent, PanelView, TabPanel};
 
 use oneterm_actions::{AddPanelWithShell, NewSession};
 use oneterm_settings::{TabTitleMode, TerminalSettings};

@@ -19,9 +19,9 @@ use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
     Subscription, Task, Window,
 };
+use gpui_component::dock::{Panel, PanelControl, PanelEvent};
 use gpui_component::input::{InputEvent, InputState};
 use gpui_component::table::{TableEvent, TableState};
-use oneterm_ui::dock::{Panel, PanelControl, PanelEvent};
 
 use oneterm_core::SftpBackend;
 use oneterm_terminal::CwdSource;
