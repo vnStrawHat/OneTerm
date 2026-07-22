@@ -1,5 +1,7 @@
 # Terminal Rendering Optimization — Technical Document
 
+> **Status:** Historical implementation record. Current terminal code lives under `crates/terminal/` and `crates/terminal-view/`; see [`docs/architecture.md`](architecture.md).
+
 > A comprehensive technical document describing the methods, technologies, and techniques applied in OneTerm's `TerminalElement` to achieve terminal rendering quality close to **Windows Terminal AtlasEngine**.
 >
 > **Applied commits**:

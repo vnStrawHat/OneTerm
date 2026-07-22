@@ -1,5 +1,7 @@
 # Full-Screen Animation Rendering Performance — OneTerm
 
+> **Status:** Historical optimization record. Current terminal paths are listed in [`docs/architecture.md`](../architecture.md).
+
 > Investigation **and implementation record** for **optimizing** heavy full-screen TUI
 > animation rendering (benchmarked with **DOOM-fire-zig**) in OneTerm's `TerminalElement`.
 >

@@ -1,5 +1,7 @@
 # SFTP Browser — Integration design
 
+> **Status:** Historical design record. For current crate ownership and paths, see [`docs/architecture.md`](architecture.md).
+
 > Design document for the SFTP browser feature: browse files, upload/download,
 > rename/delete on a remote host — running in parallel with the terminal shell over
 > the same SSH connection.

@@ -24,3 +24,5 @@ jobs:
         run: python scripts/verify-dependency-graph.py
       - name: Verify UI fork baseline
         run: python scripts/check-ui-fork.py
+      - name: Verify architecture documentation paths
+        run: python scripts/check-doc-paths.py

@@ -1,5 +1,7 @@
 # Gap Analysis: OneTerm Terminal vs Zed Terminal
 
+> **Status:** Historical gap analysis. Current terminal ownership and paths are documented in [`docs/architecture.md`](architecture.md).
+
 > Created: 2025-07-14
 > Zed reference: `zed-industries/zed` @ commit `20a3f770` (main branch)
 > OneTerm reference: `crates/core/src/terminal/` + `crates/ui/src/views/terminal/`

@@ -1,5 +1,7 @@
 # SSH Client Connect Design — OneTerm
 
+> **Status:** Historical design record. For current crate ownership and paths, see [`docs/architecture.md`](architecture.md).
+
 > Design document for the SSH connect feature: click an item in the SSH Session list →
 > open an SSH session to the target server, with a credential-entry dialog when needed.
 >

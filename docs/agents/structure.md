@@ -4,6 +4,8 @@
 >
 > 📌 The tree in §1 reflects the **actual on-disk state** (current commit). **Planned** parts (not yet created) are listed separately in §5 as a roadmap.
 
+> **Current navigation:** [`docs/architecture.md`](../architecture.md) is the concise source-of-truth index for crate ownership and current paths.
+
 ## 1. Directory tree (actual state)
 
 OneTerm is a **layered** workspace. The UI is split into low shared layers, a

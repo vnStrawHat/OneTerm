@@ -7,6 +7,7 @@
 
 pub mod active_terminal;
 pub mod agent_focus;
+mod agent_model;
 pub mod agent_registry;
 pub mod app_state;
 pub mod commands;

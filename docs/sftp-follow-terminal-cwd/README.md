@@ -1,5 +1,7 @@
 # SFTP follow Terminal CWD — Design (split into parts)
 
+> **Status:** Historical design record. For current SFTP and terminal paths, see [`docs/architecture.md`](../architecture.md).
+
 Feature: **a button on the SFTP Browser to jump to the current directory (`cwd`) of the SSH
 session**. The user runs `cd` in the terminal → clicks the button → SFTP follows.
 

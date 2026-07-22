@@ -1,5 +1,7 @@
 # Terminal Semantic Highlighting — Rust-native design for OneTerm
 
+> **Status:** Historical design record. Current implementation paths are listed in [`docs/architecture.md`](architecture.md).
+
 > **Goal**: colorize **plain-text terminal output** (logs, `cat`, router `show`,
 > `systemctl status`, compile output — anything that emits no SGR codes) by *meaning*,
 > on top of the existing ANSI/SGR color layer.
