@@ -128,8 +128,6 @@ impl AgentListView {
             .rounded_sm()
             .cursor_pointer()
             .text_xs()
-            .border_1()
-            .border_color(chip.color)
             .text_color(pal.foreground)
             .when(active, |this| this.bg(chip.color.opacity(0.18)))
             .hover(|this| this.bg(chip.color.opacity(0.12)))
