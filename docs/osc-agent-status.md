@@ -206,7 +206,8 @@ been restarted.
   "seq": 12300, "ts": 1721234567000,
   "session_id": "abc",
   "reason": "startup",
-  "parent_id": "parent-session-id"
+  "parent_id": "parent-session-id",
+  "project_dir": "/work/my-project"
 }
 ```
 
@@ -215,6 +216,7 @@ been restarted.
 | `session_id` | string | yes | Opaque session id (the canonical handle for resume and for cross-references such as `state.session_id` and `parent_id`). |
 | `reason` | string | no | `"startup"` \| `"reload"` \| `"new"` \| `"resume"` \| `"fork"`. Display-only. |
 | `parent_id` | string | no | The `session_id` of the parent session, for fork/clone lineage. Absent for a root session. |
+| `project_dir` | string | no | Absolute or agent-native path of the project directory / cwd the agent is currently working in. Emit on session start/reload/resume/fork so the host can label or group agents by project. |
 
 ---
 
@@ -514,6 +516,10 @@ Cards are grouped by terminal tab and sorted by state priority (`blocked → err
 5. **Remote agents.** OSC 9;7 traverses SSH unchanged. A remote agent can
    report state to a local host exactly like a local agent. No credentials
    or secrets are involved; the payload is status metadata only.
+6. **Path privacy.** `session.project_dir` can reveal local usernames, mount
+   names, or repository names. Treat it as local UI metadata: sanitize before
+   display and avoid forwarding it to external telemetry without explicit user
+   consent.
 
 ---
 
