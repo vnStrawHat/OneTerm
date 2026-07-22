@@ -389,7 +389,7 @@ them through the terminal's input channel.
 | Field | Type | Required | Meaning |
 |---|---|:---:|---|
 | `id` | string | yes | Approval id. The host uses it to correlate a later `state` event (when the user answers) with this request. |
-| `kind` | string | yes | `"permission"` \| `"confirm"` \| `"prompt"` \| `"select"`. |
+| `kind` | string | yes | `"permission"` \| `"confirm"` \| `"prompt"` \| `"select"` \| `"resolved"`. |
 | `prompt` | string | yes | The question text. Cap 1024 chars. |
 | `options` | array of string | no | For `"confirm"`/`"select"`: the choices. Defaults to `["yes","no"]` for `confirm`. |
 | `default` | string | no | The default option (what the agent assumes if it times out). |
@@ -484,7 +484,16 @@ badge). This catches agents that have frozen without emitting anything. If
 the process is dead, the card is `done` or `crashed` (exit code from the
 PTY), regardless of the last OSC. The threshold should be configurable.
 
----
+### 5.4 Current OneTerm Agent Panel behavior
+
+In OneTerm today, OSC 9;7 events are folded by `oneterm-state::AgentRegistry` and rendered by `crates/agent-ui` as a compact card list. The current panel shows:
+- state badge + liveness summary
+- optional model row and context bar
+- the running tool row, or the most recent finished tool row when no tool is active
+- age + session id in the footer
+
+Cards are grouped by terminal tab and sorted by state priority (`blocked → error → working → stale → idle → done → ended`). Approval events are stored in the registry as `pending_approval` / `resolved_note`; the current card UI does not yet render inline approval buttons or a file feed.
+
 
 ## 6. Security considerations
 
