@@ -8,6 +8,8 @@
 
 use std::fmt::{self, Debug, Formatter};
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -48,6 +50,21 @@ impl From<String> for SecretString {
     }
 }
 
+/// Cooperative cancellation handle for one SSH connection attempt.
+#[derive(Clone, Debug, Default)]
+pub struct ConnectionCancellation(Arc<AtomicBool>);
+
+impl ConnectionCancellation {
+    /// Request cancellation. The SSH backend checks this during every phase.
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    /// Return whether cancellation has been requested.
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
 /// Policy used for a server key that is not already in OpenSSH `known_hosts`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum HostKeyPolicy {
@@ -97,6 +114,8 @@ pub struct SshConfig {
     pub username: String,
     /// Authentication method.
     pub auth: SshAuthMethod,
+    /// Cooperative cancellation owned by the initiating UI operation.
+    pub cancellation: ConnectionCancellation,
     /// Server host-key verification policy.
     pub host_key_policy: HostKeyPolicy,
     /// Inject shell integration (OSC 7 cwd + OSC 133 prompt markers) into the
@@ -155,6 +174,7 @@ mod tests {
             auth: SshAuthMethod::Password {
                 password: SecretString::new("do-not-print"),
             },
+            cancellation: ConnectionCancellation::default(),
             host_key_policy: HostKeyPolicy::Strict,
             shell_integration: true,
         };

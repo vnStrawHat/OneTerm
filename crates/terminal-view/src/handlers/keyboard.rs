@@ -243,7 +243,11 @@ pub(crate) fn attach_key(
             let Some(bytes) = encode_key(&spec, mods, app_cursor) else {
                 return;
             };
-            s.update(cx, |s, _| s.write(&bytes));
+            s.update(cx, |s, _| {
+                if let Err(error) = s.write(&bytes) {
+                    log::warn!("terminal key delivery failed: {error}");
+                }
+            });
 
             // Clear the bell indicator when the user presses a key.
             let _ = view.update(cx, |view, cx| {

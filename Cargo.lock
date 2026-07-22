@@ -5224,6 +5224,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "windows-sys 0.59.0",
  "zeroize",
 ]
 

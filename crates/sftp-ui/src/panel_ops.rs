@@ -45,10 +45,7 @@ impl SftpPanel {
                 path.display()
             );
 
-            let result = cx
-                .background_executor()
-                .spawn(async move { sftp.read_dir(path) })
-                .await;
+            let result = sftp.read_dir(path).await;
 
             this.update(cx, |this, cx| {
                 this.table.update(cx, |t, cx| {

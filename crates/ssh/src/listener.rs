@@ -14,17 +14,16 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::AtomicU64;
 
 use async_channel::Sender;
-#[cfg(any(test, feature = "terminal-diagnostics"))]
 use async_channel::TrySendError;
 use log::warn;
 
 use alacritty_terminal::event::{Event, EventListener};
 
-use oneterm_terminal::SessionEvent;
 use oneterm_terminal::{
     ColorFormatter, NotificationRateLimiter, Osc133Kind, OscPayload, PendingColorQuery,
     SharedColorQueries, TerminalSecurityPolicy, new_color_queries, parse_cwd_url, parse_osc,
 };
+use oneterm_terminal::{SessionEvent, TerminalError};
 
 use crate::state::SharedState;
 
@@ -132,13 +131,18 @@ impl SshListener {
     }
 
     /// Write bytes to the SSH channel (via cmd_tx → tokio task → channel.data).
-    pub fn pty_write(&self, bytes: &[u8]) {
+    pub fn pty_write(&self, bytes: &[u8]) -> Result<(), TerminalError> {
         log::debug!("SshListener::pty_write: {} bytes", bytes.len());
-        if let Err(e) = self.cmd_tx.try_send(Cmd::Write(bytes.to_vec())) {
-            #[cfg(any(test, feature = "terminal-diagnostics"))]
-            self.record_command_failure(&e);
-            warn!("SshListener::pty_write: try_send fail: {e}");
-        }
+        self.cmd_tx
+            .try_send(Cmd::Write(bytes.to_vec()))
+            .map_err(|error| {
+                #[cfg(any(test, feature = "terminal-diagnostics"))]
+                self.record_command_failure(&error);
+                match error {
+                    TrySendError::Full(_) => TerminalError::QueueFull,
+                    TrySendError::Closed(_) => TerminalError::Closed,
+                }
+            })
     }
 
     /// Whether close has been requested. The tokio task checks this flag to
@@ -148,26 +152,31 @@ impl SshListener {
     }
 
     /// Resize the SSH channel (via cmd_tx → tokio task → channel.window_change).
-    pub fn pty_resize(&self, rows: u16, cols: u16) {
-        if let Err(e) = self.cmd_tx.try_send(Cmd::Resize(rows, cols)) {
-            #[cfg(any(test, feature = "terminal-diagnostics"))]
-            self.record_command_failure(&e);
-            warn!("SshListener: pty_resize fail: {e}");
-        }
+    pub fn pty_resize(&self, rows: u16, cols: u16) -> Result<(), TerminalError> {
+        self.cmd_tx
+            .try_send(Cmd::Resize(rows, cols))
+            .map_err(|error| {
+                #[cfg(any(test, feature = "terminal-diagnostics"))]
+                self.record_command_failure(&error);
+                match error {
+                    TrySendError::Full(_) => TerminalError::QueueFull,
+                    TrySendError::Closed(_) => TerminalError::Closed,
+                }
+            })
     }
 
     /// Close the SSH channel. Close is lifecycle-critical and must never be
     /// silently dropped. Uses a closing flag + try_send to ensure the task
     /// exits even if the command is dropped due to a full queue.
-    pub fn pty_close(&self) {
-        // Close is lifecycle-critical and must never be silently dropped.
-        // Set the closing flag (checked by the tokio task) AND send Cmd::Close.
-        // If try_send fails (queue full), the flag ensures the task exits.
+    pub fn pty_close(&self) -> Result<(), TerminalError> {
         self.closing.store(true, Ordering::Relaxed);
-        if let Err(e) = self.cmd_tx.try_send(Cmd::Close) {
-            #[cfg(any(test, feature = "terminal-diagnostics"))]
-            self.record_command_failure(&e);
-            warn!("SshListener: pty_close queued via flag (try_send: {e})");
+        match self.cmd_tx.try_send(Cmd::Close) {
+            Ok(()) | Err(TrySendError::Full(_)) => Ok(()),
+            Err(_error @ TrySendError::Closed(_)) => {
+                #[cfg(any(test, feature = "terminal-diagnostics"))]
+                self.record_command_failure(&_error);
+                Err(TerminalError::Closed)
+            }
         }
     }
 
@@ -326,7 +335,11 @@ impl EventListener for SshListener {
                 }
             }
             // ── Channel write (OSC/DA response) ─────────────────────────
-            Event::PtyWrite(s) => self.pty_write(s.as_bytes()),
+            Event::PtyWrite(s) => {
+                if let Err(error) = self.pty_write(s.as_bytes()) {
+                    warn!("SshListener: PTY response delivery failed: {error}");
+                }
+            }
             // ── Process exit — SSH uses ChannelMsg::ExitStatus, not this path ──
             Event::ChildExit(_) => {}
             // ── Shutdown ────────────────────────────────────────────────
@@ -427,7 +440,7 @@ mod tests {
         let (listener, _events, commands) = make_listener(4, 4);
         let sentinel = b"PHASE0_DO_NOT_LOG_SECRET_7fd65c";
 
-        listener.pty_write(sentinel);
+        assert_eq!(listener.pty_write(sentinel), Ok(()));
 
         let records = LOGGER.records.lock().unwrap().clone();
         // No log record may contain the sentinel secret.
@@ -457,7 +470,10 @@ mod tests {
             .try_send(SessionEvent::Title("first".into()))
             .unwrap();
 
-        listener.pty_write(b"dropped command");
+        assert_eq!(
+            listener.pty_write(b"dropped command"),
+            Err(TerminalError::QueueFull)
+        );
         listener.forward(SessionEvent::Bell);
 
         let diagnostics = listener.queue_diagnostics();
@@ -468,7 +484,7 @@ mod tests {
 
         commands.close();
         events.close();
-        listener.pty_resize(24, 80);
+        assert_eq!(listener.pty_resize(24, 80), Err(TerminalError::Closed));
         listener.forward(SessionEvent::Bell);
         let diagnostics = listener.queue_diagnostics();
         assert_eq!(diagnostics.command_closed, 1);
@@ -483,19 +499,22 @@ mod tests {
         assert_eq!(commands.len(), 1);
 
         // A regular write would be dropped (queue full)...
-        listener.pty_write(b"dropped");
+        assert_eq!(
+            listener.pty_write(b"dropped"),
+            Err(TerminalError::QueueFull)
+        );
         assert_eq!(commands.len(), 1);
 
         // ...but close sets the closing flag even if Cmd::Close is dropped.
         // The tokio task checks is_closing() to ensure it exits.
-        listener.pty_close();
+        assert_eq!(listener.pty_close(), Ok(()));
         assert!(listener.is_closing());
         // Cmd::Close was dropped (queue full), but the flag is set.
         assert_eq!(commands.len(), 1);
 
         // Now drain the queue and try again — Cmd::Close fits.
         assert!(matches!(commands.try_recv(), Ok(Cmd::Write(_))));
-        listener.pty_close();
+        assert_eq!(listener.pty_close(), Ok(()));
         assert!(matches!(commands.try_recv(), Ok(Cmd::Close)));
     }
 }

@@ -18,12 +18,12 @@ use super::TerminalQueryState;
 
 /// Error from a terminal input/control operation (write, resize, close).
 ///
-/// Currently both backends use `try_send` into bounded channels and only
-/// log failures. The typed error lets future callers surface transport
-/// failures to the UI instead of silently dropping input.
+/// Backends return this error at the transport boundary so callers can
+/// distinguish saturation, closure, and transport failures instead of silently
+/// dropping input.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalError {
-    /// The command queue is full — input was dropped.
+    /// The command queue is full — the caller must retry or report failure.
     QueueFull,
     /// The session/channel is closed — no more data can be sent.
     Closed,
@@ -45,9 +45,9 @@ impl std::error::Error for TerminalError {}
 
 // ── Sub-trait contracts (documentation of the intended split) ──────────────
 //
-// These traits are not yet used by consumers — they document the target
-// architecture. Phase 5 will migrate callers to use these narrower
-// interfaces instead of the monolithic `TerminalSession`.
+// These traits document the narrower capability boundaries. The monolithic
+// `TerminalSession` currently exposes the same typed input errors while callers
+// migrate incrementally to these interfaces.
 
 /// Render-only interface: produce frames and compact query state.
 ///

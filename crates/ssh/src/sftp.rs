@@ -92,13 +92,13 @@ pub enum SftpEvent {
     Closed,
 }
 
-// ── SftpSession — bridge sync (UI) ↔ async (tokio task) ──────
+// ── SftpSession — async UI ↔ Tokio task bridge ───────────────
 
 /// SFTP session — sends commands over a channel, receives events over a channel.
 ///
-/// Similar to the `SshSession` pattern: the UI calls sync, the tokio task handles
-/// async. `SftpSession` is the handle the UI holds; `sftp_task` runs in the
-/// background within tokio.
+/// Similar to the `SshSession` pattern: object-safe futures bridge UI operations
+/// to the Tokio task. `SftpSession` is the handle the UI holds; `sftp_task` runs
+/// in the background within Tokio.
 pub struct SftpSession {
     /// Channel sending `SftpCmd` to the tokio task.
     cmd_tx: Sender<SftpCmd>,
@@ -135,66 +135,84 @@ impl SftpSession {
 // ── impl SftpBackend for SftpSession ─────────────────────────
 //
 // The `SftpBackend` trait is defined in the `core` crate.
-// `SftpSession` implements it here — bridging sync (UI) → async (tokio task).
-// Sync methods send `SftpCmd` over the channel; `sftp_task` handles it async.
+// `SftpSession` implements it here with object-safe futures. Methods enqueue
+// commands asynchronously; `sftp_task` performs the protocol I/O.
 
 impl SftpBackend for SftpSession {
-    fn read_dir(&self, path: PathBuf) -> Result<Vec<FileEntry>> {
-        let (tx, rx) = oneshot::channel();
-        self.cmd_tx
-            .try_send(SftpCmd::ReadDir { path, reply: tx })
-            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
-        rx.blocking_recv()
-            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?
+    fn read_dir(&self, path: PathBuf) -> oneterm_core::SftpFuture<'_, Vec<FileEntry>> {
+        Box::pin(async move {
+            let (tx, rx) = oneshot::channel();
+            self.cmd_tx
+                .send(SftpCmd::ReadDir { path, reply: tx })
+                .await
+                .map_err(|error| oneterm_core::AppError::msg(error.to_string()))?;
+            rx.await
+                .map_err(|error| oneterm_core::AppError::msg(error.to_string()))?
+        })
     }
 
-    fn stat(&self, path: PathBuf) -> Result<FileStat> {
-        let (tx, rx) = oneshot::channel();
-        self.cmd_tx
-            .try_send(SftpCmd::Stat { path, reply: tx })
-            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
-        rx.blocking_recv()
-            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?
+    fn stat(&self, path: PathBuf) -> oneterm_core::SftpFuture<'_, FileStat> {
+        Box::pin(async move {
+            let (tx, rx) = oneshot::channel();
+            self.cmd_tx
+                .send(SftpCmd::Stat { path, reply: tx })
+                .await
+                .map_err(|error| oneterm_core::AppError::msg(error.to_string()))?;
+            rx.await
+                .map_err(|error| oneterm_core::AppError::msg(error.to_string()))?
+        })
     }
 
-    fn rename(&self, from: PathBuf, to: PathBuf) -> Result<()> {
-        let (tx, rx) = oneshot::channel();
-        self.cmd_tx
-            .try_send(SftpCmd::Rename {
-                from,
-                to,
-                reply: tx,
-            })
-            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
-        rx.blocking_recv()
-            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?
+    fn rename(&self, from: PathBuf, to: PathBuf) -> oneterm_core::SftpFuture<'_, ()> {
+        Box::pin(async move {
+            let (tx, rx) = oneshot::channel();
+            self.cmd_tx
+                .send(SftpCmd::Rename {
+                    from,
+                    to,
+                    reply: tx,
+                })
+                .await
+                .map_err(|error| oneterm_core::AppError::msg(error.to_string()))?;
+            rx.await
+                .map_err(|error| oneterm_core::AppError::msg(error.to_string()))?
+        })
     }
 
-    fn remove(&self, path: PathBuf) -> Result<()> {
-        let (tx, rx) = oneshot::channel();
-        self.cmd_tx
-            .try_send(SftpCmd::Remove { path, reply: tx })
-            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
-        rx.blocking_recv()
-            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?
+    fn remove(&self, path: PathBuf) -> oneterm_core::SftpFuture<'_, ()> {
+        Box::pin(async move {
+            let (tx, rx) = oneshot::channel();
+            self.cmd_tx
+                .send(SftpCmd::Remove { path, reply: tx })
+                .await
+                .map_err(|error| oneterm_core::AppError::msg(error.to_string()))?;
+            rx.await
+                .map_err(|error| oneterm_core::AppError::msg(error.to_string()))?
+        })
     }
 
-    fn rmdir(&self, path: PathBuf) -> Result<()> {
-        let (tx, rx) = oneshot::channel();
-        self.cmd_tx
-            .try_send(SftpCmd::Rmdir { path, reply: tx })
-            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
-        rx.blocking_recv()
-            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?
+    fn rmdir(&self, path: PathBuf) -> oneterm_core::SftpFuture<'_, ()> {
+        Box::pin(async move {
+            let (tx, rx) = oneshot::channel();
+            self.cmd_tx
+                .send(SftpCmd::Rmdir { path, reply: tx })
+                .await
+                .map_err(|error| oneterm_core::AppError::msg(error.to_string()))?;
+            rx.await
+                .map_err(|error| oneterm_core::AppError::msg(error.to_string()))?
+        })
     }
 
-    fn mkdir(&self, path: PathBuf) -> Result<()> {
-        let (tx, rx) = oneshot::channel();
-        self.cmd_tx
-            .try_send(SftpCmd::Mkdir { path, reply: tx })
-            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
-        rx.blocking_recv()
-            .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?
+    fn mkdir(&self, path: PathBuf) -> oneterm_core::SftpFuture<'_, ()> {
+        Box::pin(async move {
+            let (tx, rx) = oneshot::channel();
+            self.cmd_tx
+                .send(SftpCmd::Mkdir { path, reply: tx })
+                .await
+                .map_err(|error| oneterm_core::AppError::msg(error.to_string()))?;
+            rx.await
+                .map_err(|error| oneterm_core::AppError::msg(error.to_string()))?
+        })
     }
 
     fn upload(
@@ -244,5 +262,49 @@ impl SftpBackend for SftpSession {
 
     fn alive(&self) -> bool {
         *self.alive.lock().unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_session() -> (Arc<SftpSession>, Receiver<SftpCmd>) {
+        let (cmd_tx, cmd_rx) = async_channel::bounded(1);
+        let (_event_tx, event_rx) = async_channel::bounded(1);
+        let session = SftpSession::new(cmd_tx, event_rx, Arc::new(Mutex::new(true)));
+        (session, cmd_rx)
+    }
+
+    #[tokio::test]
+    async fn read_dir_awaits_the_protocol_reply() {
+        let (session, cmd_rx) = test_session();
+        tokio::spawn(async move {
+            match cmd_rx.recv().await.expect("command must arrive") {
+                SftpCmd::ReadDir { path, reply } => {
+                    assert_eq!(path, PathBuf::from("/tmp"));
+                    reply.send(Ok(Vec::new())).expect("reply must be received");
+                }
+                _ => panic!("unexpected command"),
+            }
+        });
+
+        let entries = session
+            .read_dir(PathBuf::from("/tmp"))
+            .await
+            .expect("read_dir must succeed");
+        assert!(entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn metadata_operation_reports_a_closed_command_transport() {
+        let (session, cmd_rx) = test_session();
+        drop(cmd_rx);
+
+        let error = session
+            .stat(PathBuf::from("/tmp"))
+            .await
+            .expect_err("closed transport must fail");
+        assert!(error.to_string().contains("closed"));
     }
 }

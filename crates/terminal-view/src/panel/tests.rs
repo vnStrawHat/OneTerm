@@ -37,7 +37,7 @@ fn phase0_close_last_space_calls_session_close(cx: &mut TestAppContext) {
     // Now explicitly close the session to verify the fake's close path.
     panel.update(cx, |p, cx| {
         if let Some(view) = p.tree.terminal_views().into_iter().next() {
-            view.read(cx).session.read(cx).close();
+            let _ = view.read(cx).session.read(cx).close();
         }
     });
     assert_eq!(probe.close_calls(), 1);

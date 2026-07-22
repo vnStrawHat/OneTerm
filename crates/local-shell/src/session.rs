@@ -12,12 +12,12 @@ use alacritty_terminal::grid::Dimensions;
 
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config, Term};
-use alacritty_terminal::tty::{self, Options, Shell};
+use alacritty_terminal::tty::{Options, Shell};
 use async_channel::Receiver;
 
 use oneterm_core::config::resolve_shell;
 use oneterm_core::{AppError, LocalShellConfig, home_dir};
-use oneterm_terminal::{PtySize, SessionEvent};
+use oneterm_terminal::{PtySize, SessionEvent, TerminalError};
 
 use crate::event_loop::ShellEventLoop;
 use crate::listener::LocalListener;
@@ -53,6 +53,7 @@ pub struct LocalSession {
     pub(crate) line_height: Mutex<f32>,
     /// IME marked text (compose buffer).
     pub(crate) marked_text: Mutex<Option<String>>,
+    owner_join: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 impl LocalSession {
@@ -79,7 +80,6 @@ impl LocalSession {
             cell_width: 0,
             cell_height: 0,
         };
-        let pty = tty::new(&opts, winsize, 0).map_err(|e| AppError::msg(e.to_string()))?;
 
         let state = new_shared();
         state.lock().unwrap().alive = true;
@@ -101,11 +101,14 @@ impl LocalSession {
             listener.clone(),
         )));
 
-        let (event_loop, notifier) =
-            ShellEventLoop::new(pty, term.clone(), listener.clone(), state.clone())
-                .map_err(|e| AppError::msg(e.to_string()))?;
-        listener.set_notifier(notifier);
-        let _join = event_loop.spawn();
+        let (_notifier, owner_join) = ShellEventLoop::spawn_owned(
+            opts,
+            winsize,
+            term.clone(),
+            listener.clone(),
+            state.clone(),
+        )
+        .map_err(|e| AppError::msg(e.to_string()))?;
 
         // Shell integration is injected via env vars in resolve_shell()
         // — fully silent, no temp file, no script written to the PTY.
@@ -120,6 +123,7 @@ impl LocalSession {
             cell_width: Mutex::new(0.0),
             line_height: Mutex::new(0.0),
             marked_text: Mutex::new(None),
+            owner_join: Mutex::new(Some(owner_join)),
         })
     }
 
@@ -140,5 +144,31 @@ impl LocalSession {
     /// Cheap to create — just wraps the existing `Arc<FairMutex<Term>>`.
     pub(crate) fn model(&self) -> oneterm_terminal::model::TerminalModel<LocalListener> {
         oneterm_terminal::model::TerminalModel::new(self.term.clone())
+    }
+
+    /// Shut down and join the dedicated PTY owner thread.
+    pub(crate) fn shutdown_owner(&self) -> Result<(), TerminalError> {
+        let result = self.listener.pty_shutdown();
+        let join_result = self
+            .owner_join
+            .lock()
+            .unwrap()
+            .take()
+            .map(|join| join.join());
+        if let Err(error) = join_result.unwrap_or(Ok(())) {
+            return Err(TerminalError::Transport(format!(
+                "PTY owner thread panicked: {error:?}"
+            )));
+        }
+        result
+    }
+}
+
+impl Drop for LocalSession {
+    fn drop(&mut self) {
+        let _ = self.listener.pty_shutdown();
+        if let Some(join) = self.owner_join.get_mut().unwrap().take() {
+            let _ = join.join();
+        }
     }
 }

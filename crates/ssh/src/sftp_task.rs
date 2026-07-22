@@ -6,9 +6,10 @@
 //! Upload/download are spawned as separate tokio tasks — the main loop stays
 //! responsive to receive `SftpCmd::Cancel` and signal the `CancellationToken`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, UNIX_EPOCH};
 
 use async_channel::{Receiver, Sender};
@@ -132,7 +133,9 @@ pub(crate) async fn sftp_task(
     let _ = event_tx.try_send(SftpEvent::Ready);
 
     // Cancel tokens for running transfers — key = transfer_id.
-    let mut cancels: HashMap<u64, CancellationToken> = HashMap::new();
+    let cancels = Arc::new(std::sync::Mutex::new(
+        HashMap::<u64, CancellationToken>::new(),
+    ));
 
     loop {
         match cmd_rx.recv().await {
@@ -195,8 +198,12 @@ pub(crate) async fn sftp_task(
                     remote.display()
                 );
                 let cancel = CancellationToken::new();
-                cancels.insert(transfer_id, cancel.clone());
+                cancels
+                    .lock()
+                    .expect("SFTP cancellation map is not poisoned")
+                    .insert(transfer_id, cancel.clone());
                 let sftp = Arc::clone(&sftp);
+                let cancels = Arc::clone(&cancels);
                 tokio::spawn(async move {
                     let result = sftp_upload(&sftp, &local, &remote, &progress, &cancel).await;
                     log::info!(
@@ -204,6 +211,10 @@ pub(crate) async fn sftp_task(
                         if result.is_ok() { "OK" } else { "error" }
                     );
                     let _ = reply.try_send(result);
+                    cancels
+                        .lock()
+                        .expect("SFTP cancellation map is not poisoned")
+                        .remove(&transfer_id);
                 });
             }
             Ok(SftpCmd::Download {
@@ -219,8 +230,12 @@ pub(crate) async fn sftp_task(
                     local.display()
                 );
                 let cancel = CancellationToken::new();
-                cancels.insert(transfer_id, cancel.clone());
+                cancels
+                    .lock()
+                    .expect("SFTP cancellation map is not poisoned")
+                    .insert(transfer_id, cancel.clone());
                 let sftp = Arc::clone(&sftp);
+                let cancels = Arc::clone(&cancels);
                 tokio::spawn(async move {
                     let result = sftp_download(&sftp, &remote, &local, &progress, &cancel).await;
                     log::info!(
@@ -228,11 +243,20 @@ pub(crate) async fn sftp_task(
                         if result.is_ok() { "OK" } else { "error" }
                     );
                     let _ = reply.try_send(result);
+                    cancels
+                        .lock()
+                        .expect("SFTP cancellation map is not poisoned")
+                        .remove(&transfer_id);
                 });
             }
             Ok(SftpCmd::Cancel { transfer_id }) => {
                 log::info!("sftp_task: Cancel transfer #{transfer_id}");
-                if let Some(cancel) = cancels.get(&transfer_id) {
+                let cancel = cancels
+                    .lock()
+                    .expect("SFTP cancellation map is not poisoned")
+                    .get(&transfer_id)
+                    .cloned();
+                if let Some(cancel) = cancel {
                     cancel.cancel();
                     log::info!("sftp_task: Cancel #{transfer_id} — token signalled");
                 } else {
@@ -241,17 +265,27 @@ pub(crate) async fn sftp_task(
             }
             Ok(SftpCmd::Close) => {
                 log::info!("sftp_task: close requested");
+                for cancellation in cancels
+                    .lock()
+                    .expect("SFTP cancellation map is not poisoned")
+                    .values()
+                {
+                    cancellation.cancel();
+                }
                 break;
             }
             Err(_) => {
                 log::info!("sftp_task: cmd_rx closed — session dropped");
+                for cancellation in cancels
+                    .lock()
+                    .expect("SFTP cancellation map is not poisoned")
+                    .values()
+                {
+                    cancellation.cancel();
+                }
                 break;
             }
         }
-        // Cleanup: remove cancel tokens for finished transfers.
-        // Tokens are inserted when an upload/download begins. The spawned task
-        // cannot remove them from the map → they stay. The map is small (only
-        // running transfers), so this is negligible.
     }
 
     {
@@ -570,43 +604,172 @@ async fn sftp_stat(sftp: &SftpChannel, path: &Path, lookup: &UidGidLookup) -> Re
 /// remove each entry → remove the dir.
 /// Used for `SftpCmd::Rmdir` — supports removing non-empty directories.
 async fn sftp_remove_recursive(sftp: &SftpChannel, path: &Path) -> Result<()> {
-    let path_str = path.to_string_lossy().replace('\\', "/");
+    let root = path.to_string_lossy().replace('\\', "/");
+    let mut pending = vec![(root, false, 0usize)];
+    let mut visited = 0usize;
 
-    // Read the directory — if read_dir fails, the path may be a file → try remove_file.
-    let read_dir = match sftp.read_dir(&path_str).await {
-        Ok(rd) => rd,
-        Err(_) => {
-            // Path may be a file → try remove_file.
-            log::debug!("sftp_remove_recursive: \"{path_str}\" not a dir, trying remove_file");
-            return sftp.remove_file(&path_str).await.map_err(map_sftp_err);
+    while let Some((current, expanded, depth)) = pending.pop() {
+        if depth > MAX_TRAVERSAL_DEPTH {
+            return Err(AppError::msg(
+                "remote deletion exceeded traversal depth limit",
+            ));
+        }
+        if expanded {
+            sftp.remove_dir(&current).await.map_err(map_sftp_err)?;
+            continue;
+        }
+
+        let read_dir = match sftp.read_dir(&current).await {
+            Ok(entries) => entries,
+            Err(_) => {
+                sftp.remove_file(&current).await.map_err(map_sftp_err)?;
+                continue;
+            }
+        };
+        pending.push((current.clone(), true, depth));
+
+        for entry in read_dir {
+            let name = entry.file_name();
+            if name == "." || name == ".." {
+                continue;
+            }
+            validate_remote_entry_name(&name)?;
+            visited += 1;
+            if visited > MAX_TRAVERSAL_ENTRIES {
+                return Err(AppError::msg(
+                    "remote deletion exceeded traversal entry limit",
+                ));
+            }
+            let child = format!("{}/{}", current.trim_end_matches('/'), name);
+            let metadata = entry.metadata();
+            if metadata.is_dir() && !metadata.is_symlink() {
+                pending.push((child, false, depth + 1));
+            } else {
+                sftp.remove_file(&child).await.map_err(map_sftp_err)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+const MAX_TRAVERSAL_DEPTH: usize = 64;
+const MAX_TRAVERSAL_ENTRIES: usize = 100_000;
+
+static TRANSFER_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+fn transfer_nonce() -> u64 {
+    TRANSFER_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+}
+
+fn temporary_local_sibling(target: &Path, marker: &str) -> Result<PathBuf> {
+    let parent = target.parent().unwrap_or_else(|| Path::new("."));
+    let name = target
+        .file_name()
+        .ok_or_else(|| AppError::msg("transfer target has no filename"))?
+        .to_string_lossy();
+    Ok(parent.join(format!(
+        ".{name}.oneterm-{}-{}.{}",
+        std::process::id(),
+        transfer_nonce(),
+        marker
+    )))
+}
+
+fn temporary_remote_sibling(target: &str, marker: &str) -> Result<String> {
+    let (parent, name) = target.rsplit_once('/').unwrap_or(("", target));
+    if name.is_empty() {
+        return Err(AppError::msg("remote transfer target has no filename"));
+    }
+    let temporary_name = format!(
+        ".{name}.oneterm-{}-{}.{}",
+        std::process::id(),
+        transfer_nonce(),
+        marker
+    );
+    Ok(if parent.is_empty() && target.starts_with('/') {
+        format!("/{temporary_name}")
+    } else if parent.is_empty() {
+        temporary_name
+    } else {
+        format!("{parent}/{temporary_name}")
+    })
+}
+
+async fn finalize_remote_file(sftp: &SftpChannel, temporary: &str, target: &str) -> Result<()> {
+    let backup = temporary_remote_sibling(target, "backup")?;
+    let had_target = match sftp.metadata(target).await {
+        Ok(attributes) => {
+            if attributes.is_dir() || attributes.is_symlink() {
+                let _ = sftp.remove_file(temporary).await;
+                return Err(AppError::msg(
+                    "refusing to replace a remote directory or symlink",
+                ));
+            }
+            if let Err(error) = sftp.rename(target, &backup).await {
+                let _ = sftp.remove_file(temporary).await;
+                return Err(map_sftp_err(error));
+            }
+            true
+        }
+        Err(_) => false,
+    };
+
+    if let Err(error) = sftp.rename(temporary, target).await {
+        if had_target {
+            let _ = sftp.rename(&backup, target).await;
+        }
+        let _ = sftp.remove_file(temporary).await;
+        return Err(map_sftp_err(error));
+    }
+
+    if had_target {
+        if let Err(error) = sftp.remove_file(&backup).await {
+            log::warn!("failed to remove remote transfer backup {backup:?}: {error}");
+        }
+    }
+    Ok(())
+}
+
+async fn finalize_local_file(temporary: &Path, target: &Path) -> Result<()> {
+    let backup = temporary_local_sibling(target, "backup")?;
+    let had_target = match tokio::fs::symlink_metadata(target).await {
+        Ok(metadata) => {
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                let _ = tokio::fs::remove_file(temporary).await;
+                return Err(AppError::msg(
+                    "refusing to replace a local directory or symlink",
+                ));
+            }
+            if let Err(error) = tokio::fs::rename(target, &backup).await {
+                let _ = tokio::fs::remove_file(temporary).await;
+                return Err(AppError::msg(format!("backup local target: {error}")));
+            }
+            true
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            let _ = tokio::fs::remove_file(temporary).await;
+            return Err(AppError::msg(format!("inspect local target: {error}")));
         }
     };
 
-    let entries: Vec<(String, bool)> = read_dir
-        .filter_map(|e| {
-            let name = e.file_name();
-            if name == "." || name == ".." {
-                return None;
-            }
-            let is_dir = e.metadata().is_dir();
-            Some((name, is_dir))
-        })
-        .collect();
-
-    for (name, is_dir) in entries {
-        // Use string concat with '/' instead of Path::join (avoids '\' on Windows).
-        let child_path = format!("{path_str}/{name}");
-        if is_dir {
-            Box::pin(sftp_remove_recursive(sftp, &PathBuf::from(&child_path))).await?;
-        } else {
-            log::debug!("sftp_remove_recursive: remove_file \"{child_path}\"");
-            sftp.remove_file(&child_path).await.map_err(map_sftp_err)?;
+    if let Err(error) = tokio::fs::rename(temporary, target).await {
+        if had_target {
+            let _ = tokio::fs::rename(&backup, target).await;
         }
+        let _ = tokio::fs::remove_file(temporary).await;
+        return Err(AppError::msg(format!("finalize local download: {error}")));
     }
 
-    // Directory is now empty → remove_dir.
-    log::debug!("sftp_remove_recursive: remove_dir \"{path_str}\"");
-    sftp.remove_dir(&path_str).await.map_err(map_sftp_err)
+    if had_target {
+        if let Err(error) = tokio::fs::remove_file(&backup).await {
+            log::warn!(
+                "failed to remove local transfer backup {}: {error}",
+                backup.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Upload a local file or directory → remote with progress reporting.
@@ -643,47 +806,121 @@ async fn sftp_upload_file(
     progress: &Sender<f64>,
     cancel: &CancellationToken,
 ) -> Result<()> {
-    let local_data = tokio::fs::read(local)
+    let total = tokio::fs::metadata(local)
         .await
-        .map_err(|e| AppError::msg(format!("read local: {e}")))?;
-    let total = local_data.len() as u64;
+        .map_err(|e| AppError::msg(format!("stat local: {e}")))?
+        .len();
+    let mut local_file = tokio::fs::File::open(local)
+        .await
+        .map_err(|e| AppError::msg(format!("open local: {e}")))?;
 
-    // Use `create` — open the file with WRITE|CREATE|TRUNCATE.
     let remote_str = remote.to_string_lossy().replace('\\', "/");
-    let mut remote_file = sftp.create(&remote_str).await.map_err(map_sftp_err)?;
+    let temporary = temporary_remote_sibling(&remote_str, "part")?;
+    let mut remote_file = sftp.create(&temporary).await.map_err(map_sftp_err)?;
 
-    const CHUNK: usize = 32 * 1024;
-    let mut written: u64 = 0;
-    for chunk in local_data.chunks(CHUNK) {
-        // Check cancel before writing — stop immediately if cancelled.
-        if cancel.is_cancelled() {
-            log::info!("sftp_upload_file: cancelled at {written}/{total} bytes");
-            let _ = progress.try_send(-1.0); // -1 = cancelled signal
-            return Err(AppError::msg("cancelled"));
+    let transfer_result: Result<()> = async {
+        const CHUNK: usize = 32 * 1024;
+        let mut buffer = vec![0u8; CHUNK];
+        let mut written: u64 = 0;
+        loop {
+            if cancel.is_cancelled() {
+                log::info!("sftp_upload_file: cancelled at {written}/{total} bytes");
+                let _ = progress.try_send(-1.0);
+                return Err(AppError::msg("cancelled"));
+            }
+            let read = local_file
+                .read(&mut buffer)
+                .await
+                .map_err(|e| AppError::msg(format!("read local: {e}")))?;
+            if read == 0 {
+                break;
+            }
+            remote_file
+                .write_all(&buffer[..read])
+                .await
+                .map_err(|e| AppError::msg(format!("write remote: {e}")))?;
+            written += read as u64;
+            let pct = if total > 0 {
+                written as f64 / total as f64
+            } else {
+                1.0
+            };
+            let _ = progress.try_send(pct);
         }
         remote_file
-            .write_all(chunk)
+            .flush()
             .await
-            .map_err(|e| AppError::msg(format!("write remote: {e}")))?;
-        written += chunk.len() as u64;
-        let pct = if total > 0 {
-            written as f64 / total as f64
-        } else {
-            1.0
-        };
-        let _ = progress.try_send(pct);
+            .map_err(|e| AppError::msg(format!("flush remote: {e}")))?;
+        Ok(())
     }
+    .await;
+    drop(remote_file);
 
-    remote_file
-        .flush()
-        .await
-        .map_err(|e| AppError::msg(format!("flush remote: {e}")))?;
+    if let Err(error) = transfer_result {
+        let _ = sftp.remove_file(&temporary).await;
+        return Err(error);
+    }
+    finalize_remote_file(sftp, &temporary, &remote_str).await?;
     let _ = progress.try_send(1.0);
-
     Ok(())
 }
 
-/// Upload a directory — walk recursively, create remote dirs, upload each file.
+#[derive(Debug)]
+struct LocalUploadPlan {
+    files: Vec<(PathBuf, PathBuf, u64)>,
+    remote_dirs: Vec<PathBuf>,
+}
+
+fn collect_local_upload_plan(
+    local_root: PathBuf,
+    remote_root: PathBuf,
+    cancel: CancellationToken,
+) -> Result<LocalUploadPlan> {
+    let mut pending = VecDeque::from([(local_root, remote_root, 0usize)]);
+    let mut plan = LocalUploadPlan {
+        files: Vec::new(),
+        remote_dirs: Vec::new(),
+    };
+    let mut visited = 0usize;
+
+    while let Some((local, remote, depth)) = pending.pop_front() {
+        if cancel.is_cancelled() {
+            return Err(AppError::msg("cancelled"));
+        }
+        if depth > MAX_TRAVERSAL_DEPTH {
+            return Err(AppError::msg("local upload exceeded traversal depth limit"));
+        }
+        plan.remote_dirs.push(remote.clone());
+        for entry in std::fs::read_dir(&local)
+            .map_err(|error| AppError::msg(format!("walk local dir: {error}")))?
+        {
+            let entry = entry.map_err(|error| AppError::msg(format!("walk local dir: {error}")))?;
+            visited += 1;
+            if visited > MAX_TRAVERSAL_ENTRIES {
+                return Err(AppError::msg("local upload exceeded traversal entry limit"));
+            }
+            let path = entry.path();
+            let remote_child = remote.join(entry.file_name());
+            let metadata = std::fs::symlink_metadata(&path)
+                .map_err(|error| AppError::msg(format!("stat local entry: {error}")))?;
+            if metadata.file_type().is_symlink() {
+                return Err(AppError::msg(format!(
+                    "refusing to upload local symlink: {}",
+                    path.display()
+                )));
+            }
+            if metadata.is_dir() {
+                pending.push_back((path, remote_child, depth + 1));
+            } else if metadata.is_file() {
+                plan.files.push((path, remote_child, metadata.len()));
+            }
+        }
+    }
+
+    Ok(plan)
+}
+
+/// Upload a directory — iteratively walk local entries, create remote dirs, and upload files.
 ///
 /// Progress = cumulative bytes uploaded / total bytes across all files.
 async fn sftp_upload_dir(
@@ -693,31 +930,17 @@ async fn sftp_upload_dir(
     progress: &Sender<f64>,
     cancel: &CancellationToken,
 ) -> Result<()> {
-    /// Collect all files (local_path, remote_path, size) in the directory.
-    fn collect_files(
-        local: &Path,
-        remote: &Path,
-        files: &mut Vec<(PathBuf, PathBuf, u64)>,
-    ) -> std::io::Result<()> {
-        for entry in std::fs::read_dir(local)? {
-            let entry = entry?;
-            let path = entry.path();
-            let remote_child = remote.join(entry.file_name());
-            let metadata = entry.metadata()?;
-            if metadata.is_dir() {
-                collect_files(&path, &remote_child, files)?;
-            } else {
-                files.push((path, remote_child, metadata.len()));
-            }
-        }
-        Ok(())
-    }
-
-    // 1. Collect the file list + compute total size.
-    let mut files: Vec<(PathBuf, PathBuf, u64)> = Vec::new();
-    collect_files(local, remote, &mut files)
-        .map_err(|e| AppError::msg(format!("walk local dir: {e}")))?;
-    let total_bytes: u64 = files.iter().map(|(_, _, s)| *s).sum();
+    // 1. Iteratively collect the file list and remote directories off the Tokio worker.
+    let plan = tokio::task::spawn_blocking({
+        let local = local.to_path_buf();
+        let remote = remote.to_path_buf();
+        let cancel = cancel.clone();
+        move || collect_local_upload_plan(local, remote, cancel)
+    })
+    .await
+    .map_err(|error| AppError::msg(format!("walk local dir task: {error}")))??;
+    let files = plan.files;
+    let total_bytes: u64 = files.iter().map(|(_, _, size)| *size).sum();
     log::info!(
         "sftp_upload_dir: \"{}\" → \"{}\" — {} files, {} bytes",
         local.display(),
@@ -726,27 +949,11 @@ async fn sftp_upload_dir(
         total_bytes
     );
 
-    // 2. Collect all remote dirs to create (DFS, parents first).
-    fn collect_dirs(local: &Path, remote: &Path, dirs: &mut Vec<PathBuf>) {
-        dirs.push(remote.to_path_buf());
-        if let Ok(entries) = std::fs::read_dir(local) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    let remote_child = remote.join(entry.file_name());
-                    collect_dirs(&path, &remote_child, dirs);
-                }
-            }
-        }
-    }
-
-    let mut remote_dirs: Vec<PathBuf> = Vec::new();
-    collect_dirs(local, remote, &mut remote_dirs);
-    for dir in &remote_dirs {
+    // 2. Create directories in breadth-first order, parents first.
+    for dir in &plan.remote_dirs {
         let dir_str = dir.to_string_lossy().replace('\\', "/");
-        // Create the dir (ignore error if it already exists).
-        if let Err(e) = sftp.create_dir(&dir_str).await {
-            log::debug!("sftp_upload_dir: create_dir \"{dir_str}\" → {e} (may already exist)");
+        if let Err(error) = sftp.create_dir(&dir_str).await {
+            log::debug!("sftp_upload_dir: create_dir \"{dir_str}\" → {error} (may already exist)");
         }
     }
 
@@ -766,37 +973,56 @@ async fn sftp_upload_dir(
         );
 
         // Upload the file inline — report progress based on cumulative bytes.
-        let local_data = tokio::fs::read(local_path)
+        let mut local_file = tokio::fs::File::open(local_path)
             .await
-            .map_err(|e| AppError::msg(format!("read local: {e}")))?;
+            .map_err(|e| AppError::msg(format!("open local: {e}")))?;
 
         let remote_str = remote_path.to_string_lossy().replace('\\', "/");
-        let mut remote_file = sftp.create(&remote_str).await.map_err(map_sftp_err)?;
+        let temporary = temporary_remote_sibling(&remote_str, "part")?;
+        let mut remote_file = sftp.create(&temporary).await.map_err(map_sftp_err)?;
 
-        const CHUNK: usize = 32 * 1024;
-        for chunk in local_data.chunks(CHUNK) {
-            if cancel.is_cancelled() {
-                log::info!("sftp_upload_dir: cancelled mid-file at {bytes_done}/{total_bytes}");
-                let _ = progress.try_send(-1.0);
-                return Err(AppError::msg("cancelled"));
+        let transfer_result: Result<()> = async {
+            const CHUNK: usize = 32 * 1024;
+            let mut buffer = vec![0u8; CHUNK];
+            loop {
+                if cancel.is_cancelled() {
+                    log::info!("sftp_upload_dir: cancelled mid-file at {bytes_done}/{total_bytes}");
+                    let _ = progress.try_send(-1.0);
+                    return Err(AppError::msg("cancelled"));
+                }
+                let read = local_file
+                    .read(&mut buffer)
+                    .await
+                    .map_err(|e| AppError::msg(format!("read local: {e}")))?;
+                if read == 0 {
+                    break;
+                }
+                remote_file
+                    .write_all(&buffer[..read])
+                    .await
+                    .map_err(|e| AppError::msg(format!("write remote: {e}")))?;
+                bytes_done += read as u64;
+                let pct = if total_bytes > 0 {
+                    bytes_done as f64 / total_bytes as f64
+                } else {
+                    1.0
+                };
+                let _ = progress.try_send(pct);
             }
             remote_file
-                .write_all(chunk)
+                .flush()
                 .await
-                .map_err(|e| AppError::msg(format!("write remote: {e}")))?;
-            bytes_done += chunk.len() as u64;
-            let pct = if total_bytes > 0 {
-                bytes_done as f64 / total_bytes as f64
-            } else {
-                1.0
-            };
-            let _ = progress.try_send(pct);
+                .map_err(|e| AppError::msg(format!("flush remote: {e}")))?;
+            Ok(())
         }
+        .await;
+        drop(remote_file);
 
-        remote_file
-            .flush()
-            .await
-            .map_err(|e| AppError::msg(format!("flush remote: {e}")))?;
+        if let Err(error) = transfer_result {
+            let _ = sftp.remove_file(&temporary).await;
+            return Err(error);
+        }
+        finalize_remote_file(sftp, &temporary, &remote_str).await?;
     }
 
     let _ = progress.try_send(1.0);
@@ -854,46 +1080,59 @@ async fn sftp_download_file(
 
     let mut remote_file = sftp.open(remote_str).await.map_err(map_sftp_err)?;
 
-    let mut local_file = tokio::fs::File::create(local)
+    let temporary = temporary_local_sibling(local, "part")?;
+    let mut local_file = tokio::fs::File::create(&temporary)
         .await
-        .map_err(|e| AppError::msg(format!("create local: {e}")))?;
+        .map_err(|e| AppError::msg(format!("create local temporary file: {e}")))?;
 
-    const CHUNK: usize = 32 * 1024;
-    let mut buf = vec![0u8; CHUNK];
-    let mut read: u64 = 0;
-    loop {
-        // Check cancel before reading — stop immediately if cancelled.
-        if cancel.is_cancelled() {
-            log::info!("sftp_download_file: cancelled at {read}/{total} bytes");
-            let _ = progress.try_send(-1.0); // -1 = cancelled signal
-            return Err(AppError::msg("cancelled"));
-        }
-        let n = remote_file
-            .read(&mut buf)
-            .await
-            .map_err(|e| AppError::msg(format!("read remote: {e}")))?;
-        if n == 0 {
-            break;
+    let transfer_result: Result<()> = async {
+        const CHUNK: usize = 32 * 1024;
+        let mut buf = vec![0u8; CHUNK];
+        let mut read: u64 = 0;
+        loop {
+            if cancel.is_cancelled() {
+                log::info!("sftp_download_file: cancelled at {read}/{total} bytes");
+                let _ = progress.try_send(-1.0);
+                return Err(AppError::msg("cancelled"));
+            }
+            let n = remote_file
+                .read(&mut buf)
+                .await
+                .map_err(|e| AppError::msg(format!("read remote: {e}")))?;
+            if n == 0 {
+                break;
+            }
+            local_file
+                .write_all(&buf[..n])
+                .await
+                .map_err(|e| AppError::msg(format!("write local: {e}")))?;
+            read += n as u64;
+            let pct = if total > 0 {
+                read as f64 / total as f64
+            } else {
+                1.0
+            };
+            let _ = progress.try_send(pct);
         }
         local_file
-            .write_all(&buf[..n])
+            .flush()
             .await
-            .map_err(|e| AppError::msg(format!("write local: {e}")))?;
-        read += n as u64;
-        let pct = if total > 0 {
-            read as f64 / total as f64
-        } else {
-            1.0
-        };
-        let _ = progress.try_send(pct);
+            .map_err(|e| AppError::msg(format!("flush local: {e}")))?;
+        local_file
+            .sync_all()
+            .await
+            .map_err(|e| AppError::msg(format!("sync local: {e}")))?;
+        Ok(())
     }
+    .await;
+    drop(local_file);
 
-    local_file
-        .flush()
-        .await
-        .map_err(|e| AppError::msg(format!("flush local: {e}")))?;
+    if let Err(error) = transfer_result {
+        let _ = tokio::fs::remove_file(&temporary).await;
+        return Err(error);
+    }
+    finalize_local_file(&temporary, local).await?;
     let _ = progress.try_send(1.0);
-
     Ok(())
 }
 
@@ -908,46 +1147,6 @@ async fn sftp_download_dir(
     progress: &Sender<f64>,
     cancel: &CancellationToken,
 ) -> Result<()> {
-    /// Collect all files (remote_path, local_path, size) in the remote directory.
-    async fn collect_files(
-        sftp: &SftpChannel,
-        remote: &str,
-        local: &Path,
-        files: &mut Vec<(String, PathBuf, u64)>,
-    ) -> Result<()> {
-        let read_dir = sftp.read_dir(remote).await.map_err(map_sftp_err)?;
-        let mut entries = Vec::new();
-        for entry in read_dir {
-            let name = entry.file_name();
-            if name == "." || name == ".." {
-                continue;
-            }
-            validate_remote_entry_name(&name)?;
-            let metadata = entry.metadata();
-            if metadata.is_symlink() {
-                return Err(AppError::msg(format!(
-                    "refusing to download remote symlink: {name:?}"
-                )));
-            }
-            entries.push((name, metadata.is_dir(), metadata.size.unwrap_or(0)));
-        }
-
-        for (name, is_dir, size) in entries {
-            let remote_child = if remote.ends_with('/') {
-                format!("{remote}{name}")
-            } else {
-                format!("{remote}/{name}")
-            };
-            let local_child = safe_local_child(local, &name)?;
-            if is_dir {
-                Box::pin(collect_files(sftp, &remote_child, &local_child, files)).await?;
-            } else {
-                files.push((remote_child, local_child, size));
-            }
-        }
-        Ok(())
-    }
-
     // 1. Create and canonicalize the selected root before trusting remote names.
     tokio::fs::create_dir_all(local)
         .await
@@ -956,10 +1155,47 @@ async fn sftp_download_dir(
         .await
         .map_err(|e| AppError::msg(format!("canonicalize local dir: {e}")))?;
 
-    // 2. Collect the file list + compute total size.
+    // 2. Iteratively collect a bounded file list while checking cancellation.
     let mut files: Vec<(String, PathBuf, u64)> = Vec::new();
-    collect_files(sftp, remote_str, &local_root, &mut files).await?;
-    let total_bytes: u64 = files.iter().map(|(_, _, s)| *s).sum();
+    let mut pending = VecDeque::from([(remote_str.to_string(), local_root.clone(), 0usize)]);
+    let mut visited = 0usize;
+    while let Some((remote, local, depth)) = pending.pop_front() {
+        if cancel.is_cancelled() {
+            return Err(AppError::msg("cancelled"));
+        }
+        if depth > MAX_TRAVERSAL_DEPTH {
+            return Err(AppError::msg(
+                "remote download exceeded traversal depth limit",
+            ));
+        }
+        for entry in sftp.read_dir(&remote).await.map_err(map_sftp_err)? {
+            let name = entry.file_name();
+            if name == "." || name == ".." {
+                continue;
+            }
+            validate_remote_entry_name(&name)?;
+            visited += 1;
+            if visited > MAX_TRAVERSAL_ENTRIES {
+                return Err(AppError::msg(
+                    "remote download exceeded traversal entry limit",
+                ));
+            }
+            let metadata = entry.metadata();
+            if metadata.is_symlink() {
+                return Err(AppError::msg(format!(
+                    "refusing to download remote symlink: {name:?}"
+                )));
+            }
+            let remote_child = format!("{}/{}", remote.trim_end_matches('/'), name);
+            let local_child = safe_local_child(&local, &name)?;
+            if metadata.is_dir() {
+                pending.push_back((remote_child, local_child, depth + 1));
+            } else {
+                files.push((remote_child, local_child, metadata.size.unwrap_or(0)));
+            }
+        }
+    }
+    let total_bytes: u64 = files.iter().map(|(_, _, size)| *size).sum();
     log::info!(
         "sftp_download_dir: \"{remote_str}\" → \"{}\" — {} files, {} bytes",
         local_root.display(),
@@ -990,42 +1226,62 @@ async fn sftp_download_dir(
                 return Err(AppError::msg("refusing to overwrite a local symlink"));
             }
         }
-        let mut local_file = tokio::fs::File::create(local_path)
+        let temporary = temporary_local_sibling(local_path, "part")?;
+        let mut local_file = tokio::fs::File::create(&temporary)
             .await
-            .map_err(|e| AppError::msg(format!("create local: {e}")))?;
+            .map_err(|e| AppError::msg(format!("create local temporary file: {e}")))?;
 
-        const CHUNK: usize = 32 * 1024;
-        let mut buf = vec![0u8; CHUNK];
-        loop {
-            if cancel.is_cancelled() {
-                log::info!("sftp_download_dir: cancelled mid-file at {bytes_done}/{total_bytes}");
-                let _ = progress.try_send(-1.0);
-                return Err(AppError::msg("cancelled"));
-            }
-            let n = remote_file
-                .read(&mut buf)
-                .await
-                .map_err(|e| AppError::msg(format!("read remote: {e}")))?;
-            if n == 0 {
-                break;
+        let transfer_result: Result<()> = async {
+            const CHUNK: usize = 32 * 1024;
+            let mut buf = vec![0u8; CHUNK];
+            loop {
+                if cancel.is_cancelled() {
+                    log::info!(
+                        "sftp_download_dir: cancelled mid-file at {bytes_done}/{total_bytes}"
+                    );
+                    let _ = progress.try_send(-1.0);
+                    return Err(AppError::msg("cancelled"));
+                }
+                let n = remote_file
+                    .read(&mut buf)
+                    .await
+                    .map_err(|e| AppError::msg(format!("read remote: {e}")))?;
+                if n == 0 {
+                    break;
+                }
+                local_file
+                    .write_all(&buf[..n])
+                    .await
+                    .map_err(|e| AppError::msg(format!("write local: {e}")))?;
+                bytes_done += n as u64;
+                let pct = if total_bytes > 0 {
+                    bytes_done as f64 / total_bytes as f64
+                } else {
+                    1.0
+                };
+                let _ = progress.try_send(pct);
             }
             local_file
-                .write_all(&buf[..n])
+                .flush()
                 .await
-                .map_err(|e| AppError::msg(format!("write local: {e}")))?;
-            bytes_done += n as u64;
-            let pct = if total_bytes > 0 {
-                bytes_done as f64 / total_bytes as f64
-            } else {
-                1.0
-            };
-            let _ = progress.try_send(pct);
+                .map_err(|e| AppError::msg(format!("flush local: {e}")))?;
+            local_file
+                .sync_all()
+                .await
+                .map_err(|e| AppError::msg(format!("sync local: {e}")))?;
+            Ok(())
         }
+        .await;
+        drop(local_file);
 
-        local_file
-            .flush()
-            .await
-            .map_err(|e| AppError::msg(format!("flush local: {e}")))?;
+        if let Err(error) = transfer_result {
+            let _ = tokio::fs::remove_file(&temporary).await;
+            return Err(error);
+        }
+        if let Err(error) = finalize_local_file(&temporary, local_path).await {
+            let _ = tokio::fs::remove_file(&temporary).await;
+            return Err(error);
+        }
     }
 
     let _ = progress.try_send(1.0);
@@ -1088,6 +1344,24 @@ mod security_tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn local_finalization_replaces_only_after_complete_write() {
+        let root = temporary_dir();
+        std::fs::create_dir_all(&root).unwrap();
+        let target = root.join("result.txt");
+        let temporary = temporary_local_sibling(&target, "part").unwrap();
+        std::fs::write(&target, b"old").unwrap();
+        std::fs::write(&temporary, b"complete").unwrap();
+
+        finalize_local_file(&temporary, &target).await.unwrap();
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"complete");
+        assert!(!temporary.exists());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn refuses_preexisting_symlink_below_download_root() {
         use std::os::unix::fs::symlink;
 
@@ -1106,5 +1380,15 @@ mod security_tests {
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn local_traversal_stops_before_filesystem_access_when_cancelled() {
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let error =
+            collect_local_upload_plan(PathBuf::from("missing"), PathBuf::from("/remote"), cancel)
+                .unwrap_err();
+        assert_eq!(error.to_string(), "cancelled");
     }
 }

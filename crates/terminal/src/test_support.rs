@@ -13,7 +13,7 @@ use async_channel::{Receiver, Sender, TryRecvError, TrySendError};
 
 use super::{
     CursorBounds, IndexedCell, SessionEvent, TermDamageInfo, TerminalBounds, TerminalContent,
-    TerminalInfo, TerminalMouseButton, TerminalQueryState, TerminalSession,
+    TerminalError, TerminalInfo, TerminalMouseButton, TerminalQueryState, TerminalSession,
 };
 use crate::mouse_encode::MouseModifiers;
 
@@ -269,19 +269,21 @@ impl TerminalSession for FakeTerminalSession {
             .contains(TermMode::ALT_SCREEN)
     }
 
-    fn write(&self, bytes: &[u8]) {
+    fn write(&self, bytes: &[u8]) -> Result<(), TerminalError> {
         self.state.writes.lock().unwrap().push(bytes.to_vec());
+        Ok(())
     }
 
     fn flush_pty(&self) {}
 
     fn send_ctrl_c(&self) {
-        self.write(b"\x03");
+        let _ = self.write(b"\x03");
     }
 
-    fn resize(&self, rows: u16, cols: u16) {
+    fn resize(&self, rows: u16, cols: u16) -> Result<(), TerminalError> {
         *self.state.rows_cols.lock().unwrap() = (rows.max(1) as usize, cols.max(1) as usize);
         self.state.full_damage.store(true, Ordering::SeqCst);
+        Ok(())
     }
 
     fn scroll(&self, _delta: i32) {}
@@ -323,7 +325,7 @@ impl TerminalSession for FakeTerminalSession {
     fn clear_marked_text(&self) {}
 
     fn commit_text(&self, text: &str) {
-        self.write(text.as_bytes());
+        let _ = self.write(text.as_bytes());
     }
 
     fn marked_text(&self) -> Option<String> {
@@ -346,10 +348,11 @@ impl TerminalSession for FakeTerminalSession {
         self.state.alive.load(Ordering::SeqCst)
     }
 
-    fn close(&self) {
+    fn close(&self) -> Result<(), TerminalError> {
         self.state.close_calls.fetch_add(1, Ordering::SeqCst);
         self.state.alive.store(false, Ordering::SeqCst);
         let _ = self.state.event_tx.try_send(SessionEvent::Closed);
+        Ok(())
     }
 
     fn is_local(&self) -> bool {

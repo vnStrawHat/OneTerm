@@ -2,7 +2,7 @@
 //!
 //! Forwards alacritty events → `SessionEvent` (via `async_channel`, non-blocking
 //! `try_send`) AND updates the `SessionState` cache (title/clipboard/alive).
-//! Routes `PtyWrite` → `Notifier` (EventLoopSender, set after `EventLoop::new`).
+//! Routes `PtyWrite` through the owner-thread notifier.
 //!
 //! Both `Term<U>` and `EventLoop` receive a **clone** of the same listener
 //! (Arc-shared) — Term sends Title/PtyWrite/ClipboardStore while parsing, and
@@ -20,11 +20,11 @@ use async_channel::Sender;
 use async_channel::TrySendError;
 use log::warn;
 
-use oneterm_terminal::SessionEvent;
 use oneterm_terminal::{
     ColorFormatter, NotificationRateLimiter, Osc133Kind, OscPayload, PendingColorQuery,
     SharedColorQueries, TerminalSecurityPolicy, new_color_queries, parse_cwd_url, parse_osc,
 };
+use oneterm_terminal::{SessionEvent, TerminalError};
 
 use crate::event_loop::{ShellMsg, ShellNotifier};
 use crate::state::SharedState;
@@ -52,7 +52,7 @@ struct LocalQueueCounters {
 pub struct LocalListener {
     /// Channel emitting `SessionEvent` to the UI (subscribe via `subscribe`).
     event_tx: Sender<SessionEvent>,
-    /// Notifier (ShellNotifier) for PTY writes — set after ShellEventLoop::new().
+    /// Notifier (ShellNotifier) for PTY writes — initialized on the owner thread.
     notifier: std::sync::Arc<Mutex<Option<ShellNotifier>>>,
     /// State cache (title/clipboard/alive) — shared with `LocalSession`.
     state: SharedState,
@@ -65,6 +65,13 @@ pub struct LocalListener {
     /// Diagnostic counters for bounded event-queue failures.
     #[cfg(any(test, feature = "terminal-diagnostics"))]
     queue_counters: Arc<LocalQueueCounters>,
+}
+
+fn map_notifier_error(error: std::io::Error) -> TerminalError {
+    match error.kind() {
+        std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::NotConnected => TerminalError::Closed,
+        _ => TerminalError::Transport(error.to_string()),
+    }
 }
 
 impl LocalListener {
@@ -99,45 +106,53 @@ impl LocalListener {
         counter.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Set the notifier once `ShellEventLoop::new()` is available. Can be called
+    /// Set the notifier once the owner thread has constructed the event loop. Can be called
     /// on any clone (Arc-shared).
     pub fn set_notifier(&self, sender: ShellNotifier) {
         *self.notifier.lock().unwrap() = Some(sender);
     }
 
     /// Write bytes to the PTY (via ShellMsg::Input).
-    pub fn pty_write(&self, bytes: &[u8]) {
-        if let Some(sender) = self.notifier.lock().unwrap().as_ref() {
-            if let Err(e) = sender.send(ShellMsg::Input(Cow::Owned(bytes.to_vec()))) {
-                warn!("LocalListener: pty_write fail: {e}");
-            }
-        }
+    pub fn pty_write(&self, bytes: &[u8]) -> Result<(), TerminalError> {
+        let sender = self
+            .notifier
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or(TerminalError::Closed)?;
+        sender
+            .send(ShellMsg::Input(Cow::Owned(bytes.to_vec())))
+            .map_err(map_notifier_error)
     }
 
     /// Resize the PTY (via ShellMsg::Resize).
-    pub fn pty_resize(&self, rows: u16, cols: u16) {
-        if let Some(sender) = self.notifier.lock().unwrap().as_ref() {
-            let sz = WindowSize {
-                num_lines: rows,
-                num_cols: cols,
-                cell_width: 0,
-                cell_height: 0,
-            };
-            if let Err(e) = sender.send(ShellMsg::Resize(sz)) {
-                warn!("LocalListener: pty_resize fail: {e}");
-            }
-        }
+    pub fn pty_resize(&self, rows: u16, cols: u16) -> Result<(), TerminalError> {
+        let sender = self
+            .notifier
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or(TerminalError::Closed)?;
+        let sz = WindowSize {
+            num_lines: rows,
+            num_cols: cols,
+            cell_width: 0,
+            cell_height: 0,
+        };
+        sender
+            .send(ShellMsg::Resize(sz))
+            .map_err(map_notifier_error)
     }
-
     /// Shut down the EventLoop (via ShellMsg::Shutdown).
-    pub fn pty_shutdown(&self) {
-        if let Some(sender) = self.notifier.lock().unwrap().as_ref() {
-            if let Err(e) = sender.send(ShellMsg::Shutdown) {
-                warn!("LocalListener: pty_shutdown fail: {e}");
-            }
-        }
+    pub fn pty_shutdown(&self) -> Result<(), TerminalError> {
+        let sender = self
+            .notifier
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or(TerminalError::Closed)?;
+        sender.send(ShellMsg::Shutdown).map_err(map_notifier_error)
     }
-
     /// Forward a `SessionEvent` (non-blocking). Drops it if the channel is
     /// full/closed — acceptable since `Output` is debounced.
     pub fn forward(&self, ev: SessionEvent) {
@@ -299,7 +314,11 @@ impl EventListener for LocalListener {
                 self.forward(SessionEvent::ClipboardRead);
             }
             // ── PTY write (OSC/DA response) ─────────────────────────────
-            Event::PtyWrite(s) => self.pty_write(s.as_bytes()),
+            Event::PtyWrite(s) => {
+                if let Err(error) = self.pty_write(s.as_bytes()) {
+                    warn!("LocalListener: PTY response delivery failed: {error}");
+                }
+            }
             // ── Process exit ────────────────────────────────────────────
             Event::ChildExit(status) => {
                 let code = status.code();

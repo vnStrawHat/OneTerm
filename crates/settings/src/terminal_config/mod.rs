@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use oneterm_core::{LocalShellConfig, config_dir};
+use oneterm_core::{LocalShellConfig, atomic_write, config_dir, quarantine_file};
 
 pub mod bell;
 pub mod colors;
@@ -117,6 +117,9 @@ impl TerminalConfig {
                     Ok(cfg) => cfg,
                     Err(e) => {
                         log::error!("terminal.json parse error: {e} — using defaults");
+                        if let Err(quarantine_error) = quarantine_file(&path) {
+                            log::warn!("failed to quarantine terminal.json: {quarantine_error}");
+                        }
                         Self::default()
                     }
                 }
@@ -125,7 +128,7 @@ impl TerminalConfig {
                 // File does not exist → create a default file so the user can see the options.
                 let cfg = Self::default();
                 if let Ok(json) = serde_json::to_string_pretty(&cfg) {
-                    if std::fs::write(&path, json).is_ok() {
+                    if atomic_write(&path, json.as_bytes()).is_ok() {
                         log::info!("Created default terminal.json at {path:?}");
                     }
                 }
@@ -139,7 +142,7 @@ impl TerminalConfig {
         let path = config_dir().join("terminal.json");
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        std::fs::write(&path, json)?;
+        atomic_write(&path, json.as_bytes())?;
         log::info!("Saved terminal.json to {path:?}");
         Ok(())
     }

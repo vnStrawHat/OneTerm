@@ -3,8 +3,8 @@
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::selection::SelectionType;
-use oneterm_terminal::TerminalSession;
 use oneterm_terminal::mouse_encode::{MouseModifiers, TerminalMouseButton};
+use oneterm_terminal::{TerminalError, TerminalSession};
 
 use crate::session::LocalSession;
 use oneterm_terminal::PtySize;
@@ -20,7 +20,7 @@ fn trait_snapshot_bounds() {
     let snap = s.snapshot();
     assert_eq!(snap.terminal_bounds.num_cols, 80);
     assert_eq!(snap.terminal_bounds.num_lines, 24);
-    s.close();
+    let _ = s.close();
 }
 
 #[test]
@@ -28,7 +28,8 @@ fn trait_alive_is_local_close() {
     let s = spawn_default();
     assert!(s.alive());
     assert!(s.is_local());
-    s.close();
+    s.close().expect("close and join PTY owner");
+    assert_eq!(s.write(b"after-close"), Err(TerminalError::Closed));
     std::thread::sleep(std::time::Duration::from_millis(50));
     assert!(!s.alive());
 }
@@ -40,16 +41,16 @@ fn trait_subscribe_returns_receiver() {
     // 2nd subscribe → closed channel (recv → Err Closed) but no panic.
     let rx2 = s.subscribe();
     assert!(rx2.recv_blocking().is_err());
-    s.close();
+    let _ = s.close();
 }
 
 #[test]
 fn trait_write_resize_no_panic() {
     let s = spawn_default();
-    s.write(b"echo hi\r");
-    s.resize(30, 100);
+    let _ = s.write(b"echo hi\r");
+    let _ = s.resize(30, 100);
     assert_eq!(s.snapshot().terminal_bounds.num_cols, 100);
-    s.close();
+    let _ = s.close();
 }
 
 #[test]
@@ -59,7 +60,7 @@ fn trait_ime_commit_writes_and_clears_marked() {
     assert_eq!(s.marked_text().as_deref(), Some("x"));
     s.commit_text("hello");
     assert_eq!(s.marked_text(), None);
-    s.close();
+    let _ = s.close();
 }
 
 #[test]
@@ -75,7 +76,7 @@ fn trait_cursor_bounds_needs_cell_size() {
         assert_eq!(cb.width, 8.0);
         assert_eq!(cb.height, 16.0);
     }
-    s.close();
+    let _ = s.close();
 }
 
 #[test]
@@ -96,7 +97,7 @@ fn trait_mouse_in_normal_mode_starts_selection() {
         TerminalMouseButton::Left,
         MouseModifiers::default(),
     );
-    s.close();
+    let _ = s.close();
 }
 
 #[test]
@@ -105,7 +106,7 @@ fn selection_text_and_clear() {
     // Empty buffer → no selection yet.
     assert!(s.selection_text().is_none() || s.selection_text().as_deref() == Some(""));
     // Write a few characters then select.
-    s.write(b"hello");
+    let _ = s.write(b"hello");
     std::thread::sleep(std::time::Duration::from_millis(50));
     s.mouse_down(
         0.0,
@@ -118,13 +119,13 @@ fn selection_text_and_clear() {
     // selection_to_string may return Some/None depending on grid state — just check no panic.
     let _ = s.selection_text();
     s.clear_selection();
-    s.close();
+    let _ = s.close();
 }
 
 #[test]
 fn mouse_drag_updates_selection_not_mouse_move() {
     let s = spawn_default();
-    s.write(b"hello_world");
+    let _ = s.write(b"hello_world");
     std::thread::sleep(std::time::Duration::from_millis(50));
     // Start selection at col 0
     s.mouse_down(
@@ -163,7 +164,7 @@ fn mouse_drag_updates_selection_not_mouse_move() {
         TerminalMouseButton::Left,
         MouseModifiers::default(),
     );
-    s.close();
+    let _ = s.close();
 }
 
 #[test]
@@ -171,7 +172,7 @@ fn trait_wheel_scroll_does_not_panic() {
     let s = spawn_default();
     s.wheel(3.0, 0.0, 0.0, MouseModifiers::default());
     s.wheel(-3.0, 0.0, 0.0, MouseModifiers::default());
-    s.close();
+    let _ = s.close();
 }
 
 #[test]
@@ -179,14 +180,14 @@ fn set_cell_size_stores() {
     let s = spawn_default();
     s.set_cell_size(7.5, 15.0);
     assert_eq!(*s.cell_width.lock().unwrap(), 7.5);
-    s.close();
+    let _ = s.close();
 }
 
 #[test]
 fn spawn_cmd_exit_detected() {
     // Round-trip Windows: spawn cmd → write `exit\r` → ChildExit → alive false.
     let s = spawn_default();
-    s.write(b"exit\r");
+    let _ = s.write(b"exit\r");
     let start = Instant::now();
     while s.alive() && start.elapsed() < Duration::from_secs(4) {
         std::thread::sleep(Duration::from_millis(50));
@@ -202,7 +203,7 @@ fn e2e_echo_output_rendered_in_snapshot() {
     let s = spawn_default();
     // Wait a moment for the prompt to appear, then type.
     std::thread::sleep(Duration::from_millis(200));
-    s.write(b"echo oneterm_e2e\r");
+    let _ = s.write(b"echo oneterm_e2e\r");
     let needle = "oneterm_e2e";
     let start = Instant::now();
     let mut found = false;
@@ -213,7 +214,7 @@ fn e2e_echo_output_rendered_in_snapshot() {
         let text: String = snap.cells.iter().map(|ic| ic.cell.c).collect();
         found = text.contains(needle);
     }
-    s.close();
+    let _ = s.close();
     assert!(
         found,
         "`echo oneterm_e2e` did not appear in the snapshot after 6s"

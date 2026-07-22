@@ -16,7 +16,7 @@ use alacritty_terminal::event::{Event, EventListener, OnResize, WindowSize};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
-use alacritty_terminal::tty::{self, EventedPty, EventedReadWrite};
+use alacritty_terminal::tty::{self, EventedPty, EventedReadWrite, Options};
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use log::error;
 use polling::{Event as PollEvent, Events, PollMode, Poller};
@@ -61,7 +61,7 @@ impl ShellNotifier {
     pub fn send(&self, msg: ShellMsg) -> io::Result<()> {
         self.sender
             .send(msg)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| io::Error::new(io::ErrorKind::BrokenPipe, e.to_string()))?;
         self.poller.notify()
     }
 }
@@ -104,14 +104,42 @@ impl ShellEventLoop {
         ))
     }
 
-    /// Spawn the event loop thread. Returns the join handle.
-    pub fn spawn(mut self) -> std::thread::JoinHandle<()> {
-        std::thread::Builder::new()
-            .name("PTY reader".into())
+    /// Spawn the PTY owner thread. The PTY is constructed, operated, and dropped there.
+    pub fn spawn_owned(
+        opts: Options,
+        winsize: WindowSize,
+        term: std::sync::Arc<FairMutex<Term<LocalListener>>>,
+        listener: LocalListener,
+        state: SharedState,
+    ) -> io::Result<(ShellNotifier, std::thread::JoinHandle<()>)> {
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let join = std::thread::Builder::new()
+            .name("PTY owner".into())
             .spawn(move || {
-                self.run();
-            })
-            .expect("spawn PTY reader thread")
+                let result = tty::new(&opts, winsize, 0)
+                    .and_then(|pty| Self::new(pty, term, listener.clone(), state));
+                match result {
+                    Ok((mut event_loop, notifier)) => {
+                        listener.set_notifier(notifier.clone());
+                        let _ = ready_tx.send(Ok(notifier));
+                        event_loop.run();
+                    }
+                    Err(error) => {
+                        let _ = ready_tx.send(Err(error.to_string()));
+                    }
+                }
+            })?;
+        match ready_rx.recv() {
+            Ok(Ok(notifier)) => Ok((notifier, join)),
+            Ok(Err(error)) => {
+                let _ = join.join();
+                Err(io::Error::other(error))
+            }
+            Err(error) => {
+                let _ = join.join();
+                Err(io::Error::new(io::ErrorKind::BrokenPipe, error.to_string()))
+            }
+        }
     }
 
     fn run(&mut self) {
@@ -335,7 +363,9 @@ impl ShellEventLoop {
                         }
                         drop(guard);
                         for reply in replies {
-                            self.listener.pty_write(reply.as_bytes());
+                            if let Err(error) = self.listener.pty_write(reply.as_bytes()) {
+                                log::warn!("ShellEventLoop: OSC reply delivery failed: {error}");
+                            }
                         }
                     }
 

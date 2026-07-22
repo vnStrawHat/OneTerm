@@ -5,7 +5,9 @@
 //!
 //! The UI uses it via `dyn SftpBackend`, with no knowledge of `russh-sftp`.
 
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::time::SystemTime;
 
 use async_channel::Receiver;
@@ -52,28 +54,31 @@ pub struct FileStat {
 
 // ── SftpBackend trait ────────────────────────────────────────
 
+/// Boxed SFTP operation future used by the object-safe backend contract.
+pub type SftpFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
+
 /// Abstract SFTP backend — implemented by the `ssh` crate.
 ///
 /// The UI uses it via `dyn SftpBackend`, with no knowledge of `russh-sftp`.
-/// Methods are sync — they bridge to async inside the implementation.
+/// Metadata and mutation operations are asynchronous and never block the UI thread.
 pub trait SftpBackend: Send + Sync + 'static {
     /// Read a directory — returns the list of entries.
-    fn read_dir(&self, path: PathBuf) -> Result<Vec<FileEntry>>;
+    fn read_dir(&self, path: PathBuf) -> SftpFuture<'_, Vec<FileEntry>>;
 
     /// Get detailed metadata.
-    fn stat(&self, path: PathBuf) -> Result<FileStat>;
+    fn stat(&self, path: PathBuf) -> SftpFuture<'_, FileStat>;
 
     /// Rename a file/folder.
-    fn rename(&self, from: PathBuf, to: PathBuf) -> Result<()>;
+    fn rename(&self, from: PathBuf, to: PathBuf) -> SftpFuture<'_, ()>;
 
     /// Remove a file.
-    fn remove(&self, path: PathBuf) -> Result<()>;
+    fn remove(&self, path: PathBuf) -> SftpFuture<'_, ()>;
 
     /// Remove an empty directory.
-    fn rmdir(&self, path: PathBuf) -> Result<()>;
+    fn rmdir(&self, path: PathBuf) -> SftpFuture<'_, ()>;
 
     /// Create a directory.
-    fn mkdir(&self, path: PathBuf) -> Result<()>;
+    fn mkdir(&self, path: PathBuf) -> SftpFuture<'_, ()>;
 
     /// Upload a file from local → remote.
     /// `transfer_id` — a unique ID created by the UI, used to cancel.

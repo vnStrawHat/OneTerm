@@ -7,7 +7,7 @@
 //! Footer: **Cancel** + **Connect** — uses direct on_click to bypass
 //! action dispatch through the focus chain (consistent with the SSH Session dialog).
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
@@ -24,7 +24,7 @@ use gpui_component::{
     notification::NotificationType,
 };
 
-use oneterm_core::{HostKeyPolicy, SecretString, SshAuthMethod, SshConfig};
+use oneterm_core::{ConnectionCancellation, HostKeyPolicy, SecretString, SshAuthMethod, SshConfig};
 
 use crate::session_state::{SshSession, SshSessionStore};
 use oneterm_state::notif_ext::notify;
@@ -84,6 +84,8 @@ pub(crate) fn open_connect_dialog(
 
     // Save-username flag — defaults to NOT saving (the user must tick the checkbox).
     let save_username = Rc::new(Cell::new(false));
+    let connection_cancellation: Rc<RefCell<Option<ConnectionCancellation>>> =
+        Rc::new(RefCell::new(None));
     // Clone for the save_logic closure.
     let password_ok = password_state.clone();
     let username_ok = username_state.clone();
@@ -96,6 +98,7 @@ pub(crate) fn open_connect_dialog(
         let password_ok = password_ok.clone();
         let session_ok = session_ok.clone();
         let save_username = save_username.clone();
+        let connection_cancellation = connection_cancellation.clone();
         move |_, window, cx| {
             let save = save_username.get();
             on_connect_click(
@@ -104,6 +107,7 @@ pub(crate) fn open_connect_dialog(
                 &username_ok,
                 &password_ok,
                 save,
+                &connection_cancellation,
                 window,
                 cx,
             )
@@ -121,6 +125,7 @@ pub(crate) fn open_connect_dialog(
         // Clone connect_logic for the button on_click and keyboard on_ok.
         let connect_for_click = connect_logic.clone();
         let connect_for_kb = connect_logic.clone();
+        let cancellation_for_keyboard = connection_cancellation.clone();
         dialog
             .title(title_ok.clone())
             .w(px(440.))
@@ -163,35 +168,44 @@ pub(crate) fn open_connect_dialog(
             // Footer: Cancel + Connect — uses direct on_click instead of DialogAction/DialogClose
             // to bypass action dispatch through the focus chain.
             .footer({
+                let connection_cancellation = connection_cancellation.clone();
                 DialogFooter::new()
                     .child(Button::new("cancel").label("Cancel").outline().on_click(
-                        |_, window, cx| {
+                        move |_, window, cx| {
+                            if let Some(cancellation) = connection_cancellation.borrow().as_ref() {
+                                cancellation.cancel();
+                            }
                             window.close_dialog(cx);
                         },
                     ))
                     .child(Button::new("connect").label("Connect").primary().on_click(
                         move |_, window, cx| {
-                            if connect_for_click(&ClickEvent::default(), window, cx) {
-                                window.close_dialog(cx);
-                            }
+                            let _ = connect_for_click(&ClickEvent::default(), window, cx);
                         },
                     ))
             })
             .button_props(
                 DialogButtonProps::default()
-                    .on_cancel(|_, _, _| true)
+                    .on_cancel(move |_, _, _| {
+                        if let Some(cancellation) = cancellation_for_keyboard.borrow().as_ref() {
+                            cancellation.cancel();
+                        }
+                        true
+                    })
                     .on_ok(move |_, window, cx| connect_for_kb(&ClickEvent::default(), window, cx)),
             )
     });
 }
 
 /// Handler for the Connect button — validates inputs, builds SshConfig, connects.
+#[allow(clippy::too_many_arguments)]
 fn on_connect_click(
     session: &SshSession,
     index: usize,
     username_state: &Option<gpui::Entity<InputState>>,
     password_state: &gpui::Entity<InputState>,
     save_username: bool,
+    connection_cancellation: &Rc<RefCell<Option<ConnectionCancellation>>>,
     window: &mut Window,
     cx: &mut App,
 ) -> bool {
@@ -244,11 +258,13 @@ fn on_connect_click(
         port,
         username,
         auth,
+        cancellation: ConnectionCancellation::default(),
         host_key_policy: HostKeyPolicy::Strict,
         shell_integration: true,
     };
     password_state.update(cx, |state, cx| state.set_value("", window, cx));
-    connect_ssh_session(cfg, session.label.clone(), window, cx);
+    let cancellation = connect_ssh_session(cfg, session.label.clone(), window, cx);
+    *connection_cancellation.borrow_mut() = Some(cancellation);
 
-    true // close the dialog
+    false // keep the dialog open until the background attempt completes
 }

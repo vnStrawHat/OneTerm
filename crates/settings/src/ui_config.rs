@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 
 use gpui::{App, AppContext, Entity, Global};
-use oneterm_core::{RightDockMode, config_dir};
+use oneterm_core::{RightDockMode, atomic_write, config_dir, quarantine_file};
 use serde::{Deserialize, Serialize};
 
 // File path is resolved at runtime via config_dir().join("ui_config.json") —
@@ -77,12 +77,15 @@ impl UiConfig {
         match std::fs::read_to_string(&path) {
             Ok(raw) => serde_json::from_str::<UiConfig>(&raw).unwrap_or_else(|e| {
                 log::error!("ui_config.json parse error: {e} — using defaults");
+                if let Err(quarantine_error) = quarantine_file(&path) {
+                    log::warn!("failed to quarantine ui_config.json: {quarantine_error}");
+                }
                 Self::default()
             }),
             Err(_) => {
                 let cfg = Self::default();
                 if let Ok(json) = serde_json::to_string_pretty(&cfg) {
-                    if std::fs::write(&path, json).is_ok() {
+                    if atomic_write(&path, json.as_bytes()).is_ok() {
                         log::info!("Created default ui_config.json at {path:?}");
                     }
                 }
@@ -96,7 +99,7 @@ impl UiConfig {
         let path = config_dir().join("ui_config.json");
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        std::fs::write(&path, json)?;
+        atomic_write(&path, json.as_bytes())?;
         log::debug!("Saved ui_config.json to {path:?}");
         Ok(())
     }

@@ -13,7 +13,9 @@ use async_channel::Receiver;
 use oneterm_core::SftpBackend;
 use oneterm_terminal::model::TerminalModel;
 use oneterm_terminal::mouse_encode::{MouseModifiers, TerminalMouseButton};
-use oneterm_terminal::{CursorBounds, SearchMatch, SearchOptions, SessionEvent, TerminalSession};
+use oneterm_terminal::{
+    CursorBounds, SearchMatch, SearchOptions, SessionEvent, TerminalError, TerminalSession,
+};
 use oneterm_terminal::{DynamicColors, TerminalContent, TerminalInfo, TerminalQueryState};
 
 use crate::session::SshSession;
@@ -88,27 +90,30 @@ impl TerminalSession for SshSession {
     }
 
     // ── Input ───────────────────────────────────────────────────────
-    fn write(&self, bytes: &[u8]) {
+    fn write(&self, bytes: &[u8]) -> Result<(), TerminalError> {
         log::trace!("SshSession::write: {} bytes", bytes.len());
-        self.listener.pty_write(bytes);
+        self.listener.pty_write(bytes)
     }
 
     fn flush_pty(&self) {
         // SSH needs no ConPTY workaround — send a DSR query.
-        self.listener.pty_write(b"\x1b[6n");
+        if let Err(error) = self.listener.pty_write(b"\x1b[6n") {
+            log::warn!("SshSession: PTY flush query failed: {error}");
+        }
     }
 
     fn send_ctrl_c(&self) {
-        self.listener.pty_write(b"\x03");
+        if let Err(error) = self.listener.pty_write(b"\x03") {
+            log::warn!("SshSession: Ctrl+C delivery failed: {error}");
+        }
     }
 
-    fn resize(&self, rows: u16, cols: u16) {
-        // PTY resize FIRST, then grid resize — ensures the process knows
-        // the new size before it sends output to the new grid.
+    fn resize(&self, rows: u16, cols: u16) -> Result<(), TerminalError> {
         if self.model().needs_resize(rows, cols) {
-            self.listener.pty_resize(rows, cols);
+            self.listener.pty_resize(rows, cols)?;
             self.model().resize_grid(rows, cols);
         }
+        Ok(())
     }
 
     fn scroll(&self, delta: i32) {
@@ -133,31 +138,31 @@ impl TerminalSession for SshSession {
         mods: MouseModifiers,
     ) {
         if let Some(bytes) = self.model().mouse_down(row, col, button, sel, mods) {
-            self.write(&bytes);
+            let _ = self.write(&bytes);
         }
     }
 
     fn mouse_move(&self, row: f32, col: f32, mods: MouseModifiers) {
         if let Some(bytes) = self.model().mouse_move(row, col, mods) {
-            self.write(&bytes);
+            let _ = self.write(&bytes);
         }
     }
 
     fn mouse_drag(&self, row: f32, col: f32, mods: MouseModifiers) {
         if let Some(bytes) = self.model().mouse_drag(row, col, mods) {
-            self.write(&bytes);
+            let _ = self.write(&bytes);
         }
     }
 
     fn mouse_up(&self, row: f32, col: f32, button: TerminalMouseButton, mods: MouseModifiers) {
         if let Some(bytes) = self.model().mouse_up(row, col, button, mods) {
-            self.write(&bytes);
+            let _ = self.write(&bytes);
         }
     }
 
     fn wheel(&self, delta_y: f64, row: f32, col: f32, mods: MouseModifiers) {
         if let Some(bytes) = self.model().wheel(delta_y, row, col, mods) {
-            self.write(&bytes);
+            let _ = self.write(&bytes);
         }
     }
 
@@ -176,7 +181,7 @@ impl TerminalSession for SshSession {
 
     fn clear(&self) {
         // Send the `clear` command to the shell, exactly as if the user typed it.
-        self.write(b"clear\r");
+        let _ = self.write(b"clear\r");
         self.clear_selection();
     }
 
@@ -196,7 +201,7 @@ impl TerminalSession for SshSession {
 
     fn commit_text(&self, text: &str) {
         self.clear_marked_text();
-        self.write(text.as_bytes());
+        let _ = self.write(text.as_bytes());
     }
 
     fn marked_text(&self) -> Option<String> {
@@ -222,9 +227,10 @@ impl TerminalSession for SshSession {
         self.state.lock().unwrap().alive
     }
 
-    fn close(&self) {
-        self.listener.pty_close();
+    fn close(&self) -> Result<(), TerminalError> {
+        let result = self.listener.pty_close();
         self.state.lock().unwrap().alive = false;
+        result
     }
 
     fn is_local(&self) -> bool {

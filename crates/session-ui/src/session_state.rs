@@ -8,7 +8,7 @@
 //! Path: `target/ssh_session.json` (debug) / `~/.OneTerm/ssh_session.json` (release)
 //! — same pattern as `terminal.json` and `docks.json`.
 
-use oneterm_core::config_dir;
+use oneterm_core::{atomic_write, config_dir, quarantine_file};
 
 use gpui::{App, AppContext, Entity, Global};
 use serde::{Deserialize, Serialize};
@@ -121,6 +121,9 @@ impl SshSessionStore {
                 Ok(list) => list,
                 Err(e) => {
                     log::error!("ssh_session.json parse error: {e} — starting empty");
+                    if let Err(quarantine_error) = quarantine_file(&path) {
+                        log::warn!("failed to quarantine ssh_session.json: {quarantine_error}");
+                    }
                     Vec::new()
                 }
             },
@@ -137,7 +140,7 @@ impl SshSessionStore {
         let path = config_dir().join("ssh_session.json");
         match serde_json::to_string_pretty(&self.sessions) {
             Ok(json) => {
-                if let Err(e) = std::fs::write(&path, json) {
+                if let Err(e) = atomic_write(&path, json.as_bytes()) {
                     log::error!("Failed to write ssh_session.json: {e}");
                 }
             }

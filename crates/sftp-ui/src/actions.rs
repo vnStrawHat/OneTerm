@@ -82,29 +82,42 @@ impl SftpPanel {
                     to_path.display()
                 );
 
-                match sftp.rename(from_path.clone(), to_path) {
-                    Ok(()) => {
-                        log::info!("SftpPanel: rename OK");
-                        window.push_notification(
-                            notify(
-                                NotificationType::Success,
-                                format!("Renamed to \"{new_name}\"."),
-                                cx,
-                            ),
-                            cx,
-                        );
-                        panel.update(cx, |this, cx| this.refresh(cx));
-                        true
-                    }
-                    Err(e) => {
-                        log::error!("SftpPanel: rename failed: {e}");
-                        window.push_notification(
-                            notify(NotificationType::Error, format!("Rename failed: {e}"), cx),
-                            cx,
-                        );
-                        false
-                    }
-                }
+                let result_name = new_name.clone();
+                let operation_sftp = sftp.clone();
+                let operation_from = from_path.clone();
+                let operation_panel = panel.clone();
+                window
+                    .spawn(cx, async move |cx| {
+                        let result = operation_sftp.rename(operation_from, to_path).await;
+                        _ = cx.update(|window, cx| match result {
+                            Ok(()) => {
+                                log::info!("SftpPanel: rename OK");
+                                window.push_notification(
+                                    notify(
+                                        NotificationType::Success,
+                                        format!("Renamed to \"{result_name}\"."),
+                                        cx,
+                                    ),
+                                    cx,
+                                );
+                                operation_panel.update(cx, |this, cx| this.refresh(cx));
+                                window.close_dialog(cx);
+                            }
+                            Err(e) => {
+                                log::error!("SftpPanel: rename failed: {e}");
+                                window.push_notification(
+                                    notify(
+                                        NotificationType::Error,
+                                        format!("Rename failed: {e}"),
+                                        cx,
+                                    ),
+                                    cx,
+                                );
+                            }
+                        });
+                    })
+                    .detach();
+                false
             }
         });
 
@@ -206,38 +219,45 @@ impl SftpPanel {
                         ))
                         .child(Button::new("delete").label("Delete").danger().on_click(
                             move |_, window, cx| {
-                                log::info!("SftpPanel: deleting \"{}\"", path.display());
-                                let result = if is_dir {
-                                    sftp.rmdir(path.clone())
-                                } else {
-                                    sftp.remove(path.clone())
-                                };
-                                match result {
-                                    Ok(()) => {
-                                        log::info!("SftpPanel: delete OK");
-                                        window.push_notification(
-                                            notify(
-                                                NotificationType::Success,
-                                                "Deleted successfully.",
-                                                cx,
-                                            ),
-                                            cx,
-                                        );
-                                        panel.update(cx, |this, cx| this.refresh(cx));
-                                        window.close_dialog(cx);
-                                    }
-                                    Err(e) => {
-                                        log::error!("SftpPanel: delete failed: {e}");
-                                        window.push_notification(
-                                            notify(
-                                                NotificationType::Error,
-                                                format!("Delete failed: {e}"),
-                                                cx,
-                                            ),
-                                            cx,
-                                        );
-                                    }
-                                }
+                                let operation_path = path.clone();
+                                let operation_sftp = sftp.clone();
+                                let operation_panel = panel.clone();
+                                window
+                                    .spawn(cx, async move |cx| {
+                                        let result = if is_dir {
+                                            operation_sftp.rmdir(operation_path).await
+                                        } else {
+                                            operation_sftp.remove(operation_path).await
+                                        };
+                                        _ = cx.update(|window, cx| match result {
+                                            Ok(()) => {
+                                                log::info!("SftpPanel: delete OK");
+                                                window.push_notification(
+                                                    notify(
+                                                        NotificationType::Success,
+                                                        "Deleted successfully.",
+                                                        cx,
+                                                    ),
+                                                    cx,
+                                                );
+                                                operation_panel
+                                                    .update(cx, |this, cx| this.refresh(cx));
+                                                window.close_dialog(cx);
+                                            }
+                                            Err(e) => {
+                                                log::error!("SftpPanel: delete failed: {e}");
+                                                window.push_notification(
+                                                    notify(
+                                                        NotificationType::Error,
+                                                        format!("Delete failed: {e}"),
+                                                        cx,
+                                                    ),
+                                                    cx,
+                                                );
+                                            }
+                                        });
+                                    })
+                                    .detach();
                             },
                         ))
                 })
@@ -282,33 +302,41 @@ impl SftpPanel {
                 }
                 let path = cwd.join(&name);
                 log::info!("SftpPanel: mkdir \"{}\"", path.display());
-                match sftp.mkdir(path) {
-                    Ok(()) => {
-                        log::info!("SftpPanel: mkdir OK");
-                        window.push_notification(
-                            notify(
-                                NotificationType::Success,
-                                format!("Folder \"{name}\" created."),
-                                cx,
-                            ),
-                            cx,
-                        );
-                        panel.update(cx, |this, cx| this.refresh(cx));
-                        true
-                    }
-                    Err(e) => {
-                        log::error!("SftpPanel: mkdir failed: {e}");
-                        window.push_notification(
-                            notify(
-                                NotificationType::Error,
-                                format!("Create folder failed: {e}"),
-                                cx,
-                            ),
-                            cx,
-                        );
-                        false
-                    }
-                }
+                let result_name = name.clone();
+                let operation_sftp = sftp.clone();
+                let operation_panel = panel.clone();
+                window
+                    .spawn(cx, async move |cx| {
+                        let result = operation_sftp.mkdir(path).await;
+                        _ = cx.update(|window, cx| match result {
+                            Ok(()) => {
+                                log::info!("SftpPanel: mkdir OK");
+                                window.push_notification(
+                                    notify(
+                                        NotificationType::Success,
+                                        format!("Folder \"{result_name}\" created."),
+                                        cx,
+                                    ),
+                                    cx,
+                                );
+                                operation_panel.update(cx, |this, cx| this.refresh(cx));
+                                window.close_dialog(cx);
+                            }
+                            Err(e) => {
+                                log::error!("SftpPanel: mkdir failed: {e}");
+                                window.push_notification(
+                                    notify(
+                                        NotificationType::Error,
+                                        format!("Create folder failed: {e}"),
+                                        cx,
+                                    ),
+                                    cx,
+                                );
+                            }
+                        });
+                    })
+                    .detach();
+                false
             }
         });
 
@@ -381,126 +409,127 @@ impl SftpPanel {
         log::info!("SftpPanel::do_properties: \"{}\"", entry.name);
 
         let sftp = self.sftp.clone().unwrap();
-        let stat: FileStat = match sftp.stat(entry.path.clone()) {
-            Ok(s) => s,
-            Err(e) => {
-                log::error!("SftpPanel: stat failed: {e}");
-                window.push_notification(
-                    notify(
-                        NotificationType::Error,
-                        format!("Failed to get properties: {e}"),
-                        cx,
-                    ),
-                    cx,
-                );
-                return;
-            }
-        };
-
-        log::debug!(
-            "SftpPanel: stat OK — size={}, perm={:#o}, uid={:?}, gid={:?}",
-            stat.size,
-            stat.permissions,
-            stat.uid,
-            stat.gid
-        );
-
-        // Build detail rows — wrap in Rc for sharing across Fn closures.
-        let kind_str = if stat.is_dir { "Folder" } else { "File" };
-        let size_text = Rc::new(if stat.is_dir {
-            "-".to_string()
-        } else {
-            format!("{} ({} bytes)", format_size(stat.size), stat.size)
-        });
-        let modified_text = Rc::new(format_date(stat.modified));
-        let accessed_text = Rc::new(format_date(stat.accessed));
-        let perm_text = Rc::new(format_permissions(stat.permissions));
-        let owner_text = Rc::new(format_owner(stat.owner.as_deref(), stat.uid));
-        let group_text = Rc::new(format_owner(stat.group.as_deref(), stat.gid));
-        let path_text = Rc::new(stat.path.display().to_string());
-        let name_text = Rc::new(stat.name.clone());
-        let is_symlink = stat.is_symlink;
-
-        window.open_dialog(cx, move |dialog, _window, _cx| {
-            // Clone Rc values here so content closure can capture them by move.
-            let name_text = name_text.clone();
-            let size_text = size_text.clone();
-            let modified_text = modified_text.clone();
-            let accessed_text = accessed_text.clone();
-            let perm_text = perm_text.clone();
-            let owner_text = owner_text.clone();
-            let group_text = group_text.clone();
-            let path_text = path_text.clone();
-
-            dialog
-                .title("Properties")
-                .w(px(480.))
-                .content(move |content, _window, cx| {
-                    let theme = cx.theme();
-                    let label_w = px(100.0);
-                    let muted = theme.muted_foreground;
-
-                    // Helper: label + value row.
-                    let row = |label: &str, value: String| {
-                        h_flex()
-                            .w_full()
-                            .gap_2()
-                            .py_1()
-                            .child(
-                                div()
-                                    .w(label_w)
-                                    .flex_shrink_0()
-                                    .text_sm()
-                                    .text_color(muted)
-                                    .child(label.to_string()),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_sm()
-                                    .text_color(theme.foreground)
-                                    .truncate()
-                                    .child(value),
-                            )
-                    };
-
-                    content.child(
-                        v_flex()
-                            .gap_0()
-                            .w_full()
-                            .child(row("Name:", (*name_text).clone()))
-                            .child(row(
-                                "Type:",
-                                format!("{kind_str}{}", if is_symlink { " (symlink)" } else { "" }),
-                            ))
-                            .child(row("Size:", (*size_text).clone()))
-                            .child(row("Modified:", (*modified_text).clone()))
-                            .child(row("Accessed:", (*accessed_text).clone()))
-                            .child(row("Permissions:", (*perm_text).clone()))
-                            .child(row("Owner:", (*owner_text).clone()))
-                            .child(row("Group:", (*group_text).clone()))
-                            .child(row("Path:", (*path_text).clone())),
-                    )
-                })
-                .footer({
-                    DialogFooter::new().child(
-                        Button::new("close")
-                            .label("Close")
-                            .primary()
-                            .on_click(|_, window, cx| {
-                                window.close_dialog(cx);
-                            }),
-                    )
-                })
-                .button_props(
-                    DialogButtonProps::default()
-                        .on_cancel(|_, _, _| true)
-                        .on_ok(|_, window, cx| {
-                            window.close_dialog(cx);
-                            true
-                        }),
-                )
-        });
+        let path = entry.path.clone();
+        window
+            .spawn(cx, async move |cx| {
+                let result = sftp.stat(path).await;
+                _ = cx.update(|window, cx| match result {
+                    Ok(stat) => open_properties_dialog(stat, window, cx),
+                    Err(error) => {
+                        log::error!("SftpPanel: stat failed: {error}");
+                        window.push_notification(
+                            notify(
+                                NotificationType::Error,
+                                format!("Failed to get properties: {error}"),
+                                cx,
+                            ),
+                            cx,
+                        );
+                    }
+                });
+            })
+            .detach();
     }
+}
+
+fn open_properties_dialog(stat: FileStat, window: &mut Window, cx: &mut App) {
+    log::debug!(
+        "SftpPanel: stat OK — size={}, perm={:#o}, uid={:?}, gid={:?}",
+        stat.size,
+        stat.permissions,
+        stat.uid,
+        stat.gid
+    );
+
+    let kind_str = if stat.is_dir { "Folder" } else { "File" };
+    let size_text = Rc::new(if stat.is_dir {
+        "-".to_string()
+    } else {
+        format!("{} ({} bytes)", format_size(stat.size), stat.size)
+    });
+    let modified_text = Rc::new(format_date(stat.modified));
+    let accessed_text = Rc::new(format_date(stat.accessed));
+    let perm_text = Rc::new(format_permissions(stat.permissions));
+    let owner_text = Rc::new(format_owner(stat.owner.as_deref(), stat.uid));
+    let group_text = Rc::new(format_owner(stat.group.as_deref(), stat.gid));
+    let path_text = Rc::new(stat.path.display().to_string());
+    let name_text = Rc::new(stat.name.clone());
+    let is_symlink = stat.is_symlink;
+
+    window.open_dialog(cx, move |dialog, _window, _cx| {
+        let name_text = name_text.clone();
+        let size_text = size_text.clone();
+        let modified_text = modified_text.clone();
+        let accessed_text = accessed_text.clone();
+        let perm_text = perm_text.clone();
+        let owner_text = owner_text.clone();
+        let group_text = group_text.clone();
+        let path_text = path_text.clone();
+
+        dialog
+            .title("Properties")
+            .w(px(480.))
+            .content(move |content, _window, cx| {
+                let theme = cx.theme();
+                let label_w = px(100.0);
+                let muted = theme.muted_foreground;
+
+                let row = |label: &str, value: String| {
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .py_1()
+                        .child(
+                            div()
+                                .w(label_w)
+                                .flex_shrink_0()
+                                .text_sm()
+                                .text_color(muted)
+                                .child(label.to_string()),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_sm()
+                                .text_color(theme.foreground)
+                                .truncate()
+                                .child(value),
+                        )
+                };
+
+                content.child(
+                    v_flex()
+                        .gap_0()
+                        .w_full()
+                        .child(row("Name:", (*name_text).clone()))
+                        .child(row(
+                            "Type:",
+                            format!("{kind_str}{}", if is_symlink { " (symlink)" } else { "" }),
+                        ))
+                        .child(row("Size:", (*size_text).clone()))
+                        .child(row("Modified:", (*modified_text).clone()))
+                        .child(row("Accessed:", (*accessed_text).clone()))
+                        .child(row("Permissions:", (*perm_text).clone()))
+                        .child(row("Owner:", (*owner_text).clone()))
+                        .child(row("Group:", (*group_text).clone()))
+                        .child(row("Path:", (*path_text).clone())),
+                )
+            })
+            .footer({
+                DialogFooter::new().child(Button::new("close").label("Close").primary().on_click(
+                    |_, window, cx| {
+                        window.close_dialog(cx);
+                    },
+                ))
+            })
+            .button_props(
+                DialogButtonProps::default()
+                    .on_cancel(|_, _, _| true)
+                    .on_ok(|_, window, cx| {
+                        window.close_dialog(cx);
+                        true
+                    }),
+            )
+    });
 }

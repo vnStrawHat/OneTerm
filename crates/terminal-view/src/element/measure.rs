@@ -89,7 +89,11 @@ pub(crate) fn resize_session(
     let rows = ((avail_height_device / line_height_device).floor() as u16).max(1);
 
     if last_grid_size.borrow().as_ref() != Some(&(rows, cols)) {
-        session.update(cx, |s, _| s.resize(rows, cols));
+        session.update(cx, |s, _| {
+            if let Err(error) = s.resize(rows, cols) {
+                log::warn!("terminal resize delivery failed: {error}");
+            }
+        });
         *last_grid_size.borrow_mut() = Some((rows, cols));
     }
     (rows, cols)

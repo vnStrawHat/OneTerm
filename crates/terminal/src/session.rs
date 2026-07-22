@@ -17,6 +17,7 @@ use async_channel::Receiver;
 
 use crate::IndexedCell;
 use crate::content::TerminalContent;
+use crate::contracts::TerminalError;
 use crate::key_encode::{KeyMods, KeySpec, NamedKey, encode_key};
 use crate::mouse_encode::{MouseModifiers, TerminalMouseButton};
 use crate::osc::{Osc133Kind, TerminalProgress};
@@ -239,14 +240,14 @@ pub trait TerminalSession: Send + Sync + 'static {
 
     // ── Input ───────────────────────────────────────────────
     /// Write bytes to the PTY/channel (keystroke, paste, OSC response).
-    fn write(&self, bytes: &[u8]);
+    fn write(&self, bytes: &[u8]) -> Result<(), TerminalError>;
     /// Flush the PTY output buffer (Windows ConPTY workaround).
     fn flush_pty(&self);
     /// Send a Ctrl+C signal — Windows uses GenerateConsoleCtrlEvent
     /// (to avoid ConPTY sending CTRL_C_EVENT to the shell), falls back to \x03.
     fn send_ctrl_c(&self);
     /// Resize rows×cols (PTY resize / ssh window_change).
-    fn resize(&self, rows: u16, cols: u16);
+    fn resize(&self, rows: u16, cols: u16) -> Result<(), TerminalError>;
     /// Scroll the scrollback (only when not alt-screen / not mouse mode).
     fn scroll(&self, delta: i32);
     /// Scroll to bottom (display_offset = 0) — used when there is new output.
@@ -309,7 +310,7 @@ pub trait TerminalSession: Send + Sync + 'static {
     /// Whether the process is still alive (not exited/closed).
     fn alive(&self) -> bool;
     /// Close the session (shut down PTY / close channel).
-    fn close(&self);
+    fn close(&self) -> Result<(), TerminalError>;
     /// true = local shell, false = SSH.
     fn is_local(&self) -> bool;
     /// The current title (OSC 0/2).
@@ -321,7 +322,9 @@ pub trait TerminalSession: Send + Sync + 'static {
     /// Send raw text to the PTY (for automation, extensions, task runners).
     /// Equivalent to Zed `SendText(String)`.
     fn send_text(&self, text: &str) {
-        self.write(text.as_bytes());
+        if let Err(error) = self.write(text.as_bytes()) {
+            log::warn!("terminal send_text failed: {error}");
+        }
     }
 
     /// Send an encoded keystroke to the PTY (e.g. "Ctrl+C" → 0x03, "Enter" → \r).
@@ -331,7 +334,9 @@ pub trait TerminalSession: Send + Sync + 'static {
         if let Some((spec, mods)) = parse_keystroke(keystroke) {
             let app_cursor = self.query_state().mode.contains(TermMode::APP_CURSOR);
             if let Some(bytes) = encode_key(&spec, mods, app_cursor) {
-                self.write(&bytes);
+                if let Err(error) = self.write(&bytes) {
+                    log::warn!("terminal send_keystroke failed: {error}");
+                }
             }
         }
     }
@@ -345,16 +350,20 @@ pub trait TerminalSession: Send + Sync + 'static {
     /// Paste text into the PTY. Automatically wraps it in bracketed paste markers
     /// if the terminal is in bracketed paste mode.
     fn paste(&self, text: &str) {
-        if self.is_bracketed_paste() {
+        let result = if self.is_bracketed_paste() {
             let policy = PastePolicy::default();
             match encode_paste(text, true, &policy) {
                 PasteResult::Ok(bytes) => self.write(&bytes),
                 PasteResult::TooLarge(_) => {
                     log::warn!("paste rejected: exceeded max paste size");
+                    return;
                 }
             }
         } else {
-            self.write(text.as_bytes());
+            self.write(text.as_bytes())
+        };
+        if let Err(error) = result {
+            log::warn!("terminal paste failed: {error}");
         }
     }
 

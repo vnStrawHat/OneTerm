@@ -121,7 +121,11 @@ pub(crate) async fn ssh_main_task(
                                 }
                             }
                             for reply in replies {
-                                listener.pty_write(reply.as_bytes());
+                                if let Err(error) = listener.pty_write(reply.as_bytes()) {
+                                    log::warn!(
+                                        "ssh_main_task: OSC reply delivery failed: {error}"
+                                    );
+                                }
                             }
                         }
 

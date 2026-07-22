@@ -2,6 +2,7 @@
 
 use anyhow::{Context as _, Result};
 use gpui::{Context, Edges, Entity, PromptLevel, Window};
+use oneterm_core::{quarantine_file, update_json_file};
 use oneterm_ui::dock::{DockArea, DockAreaState};
 
 use super::{MAIN_DOCK_VERSION, SFTP_TABLE_STATE_FIELD, state_file};
@@ -14,7 +15,15 @@ impl super::OneTermWorkspace {
         cx: &mut Context<Self>,
     ) -> Result<()> {
         let json = std::fs::read_to_string(state_file())?;
-        let state = serde_json::from_str::<DockAreaState>(&json)?;
+        let state = match serde_json::from_str::<DockAreaState>(&json) {
+            Ok(state) => state,
+            Err(error) => {
+                if let Err(quarantine_error) = quarantine_file(&state_file()) {
+                    log::warn!("failed to quarantine docks.json: {quarantine_error}");
+                }
+                return Err(anyhow::anyhow!("parse docks.json: {error}"));
+            }
+        };
 
         if state.version != Some(MAIN_DOCK_VERSION) {
             let answer = window.prompt(
@@ -69,12 +78,6 @@ pub(crate) fn save_state(
 ) -> Result<()> {
     let mut val = serde_json::to_value(state)?;
 
-    // Preserve `sftp_table_state` from the existing file before overwriting —
-    // `views/sftp/persistence.rs` manages this field independently of DockAreaState.
-    let mut raw_sftp_state: Option<serde_json::Value> = std::fs::read_to_string(state_file())
-        .ok()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-        .and_then(|v| v.get(SFTP_TABLE_STATE_FIELD).cloned());
     let right_dock_open = val
         .get("right_dock")
         .and_then(|d| d.get("open"))
@@ -99,17 +102,16 @@ pub(crate) fn save_state(
             super::TOGGLE_BUTTON_VISIBLE_FIELD.into(),
             serde_json::Value::Bool(toggle_button_visible),
         );
-
-        // Preserve `sftp_table_state` (column widths + visibility) if present in the
-        // file — avoid overwriting it when the workspace re-saves the layout.
-        // (Written by `views/sftp/persistence.rs`.)
-        let preserved = raw_sftp_state.take();
-        if let Some(v) = preserved {
-            obj.insert(SFTP_TABLE_STATE_FIELD.into(), v);
-        }
     }
-    let json = serde_json::to_string_pretty(&val)?;
-    std::fs::write(state_file(), json)?;
+    update_json_file(&state_file(), move |document| {
+        if let Some(sftp_state) = document.get(SFTP_TABLE_STATE_FIELD).cloned() {
+            if let Some(object) = val.as_object_mut() {
+                object.insert(SFTP_TABLE_STATE_FIELD.into(), sftp_state);
+            }
+        }
+        *document = val;
+        Ok(())
+    })?;
     Ok(())
 }
 

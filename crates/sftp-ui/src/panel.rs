@@ -466,30 +466,31 @@ impl SftpPanel {
             Some(s) => s.clone(),
             None => return,
         };
-        // Check path exists via stat — if fails or not a dir, highlight error.
-        match sftp.stat(path.clone()) {
-            Ok(stat) if stat.is_dir => {
-                self.path_error = false;
-                self.load_dir(path, cx);
-            }
-            Ok(_) => {
-                log::warn!(
-                    "SftpPanel::goto_path: not a directory: \"{}\"",
-                    path.display()
-                );
-                self.path_error = true;
-                cx.notify();
-            }
-            Err(e) => {
-                log::warn!(
-                    "SftpPanel::goto_path: invalid path \"{}\": {}",
-                    path.display(),
-                    e
-                );
-                self.path_error = true;
-                cx.notify();
-            }
-        }
+        let _ = cx.spawn(async move |this, cx| {
+            let result = sftp.stat(path.clone()).await;
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(stat) if stat.is_dir => {
+                    this.path_error = false;
+                    this.load_dir(path, cx);
+                }
+                Ok(_) => {
+                    log::warn!(
+                        "SftpPanel::goto_path: not a directory: \"{}\"",
+                        path.display()
+                    );
+                    this.path_error = true;
+                    cx.notify();
+                }
+                Err(error) => {
+                    log::warn!(
+                        "SftpPanel::goto_path: invalid path \"{}\": {error}",
+                        path.display()
+                    );
+                    this.path_error = true;
+                    cx.notify();
+                }
+            });
+        });
     }
 
     /// Debounce 1s then persist column state (width + visibility) to docks.json.

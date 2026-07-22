@@ -22,7 +22,7 @@ use gpui_component::{
 };
 use oneterm_ui::dock::{DockPlacement, PanelView};
 
-use oneterm_core::{AppError, HostKeyPolicy, SshConfig};
+use oneterm_core::{AppError, ConnectionCancellation, HostKeyPolicy, SshConfig};
 use oneterm_state::AppState;
 use oneterm_state::notif_ext::notify;
 use oneterm_terminal::PtySize;
@@ -135,7 +135,8 @@ pub(crate) fn connect_ssh_session(
     label: String,
     window: &mut Window,
     cx: &mut App,
-) {
+) -> ConnectionCancellation {
+    let cancellation = cfg.cancellation.clone();
     let Some(factory) = oneterm_terminal::session_factory() else {
         window.push_notification(
             notify(
@@ -145,13 +146,18 @@ pub(crate) fn connect_ssh_session(
             ),
             cx,
         );
-        return;
+        return cancellation;
     };
+
+    if cancellation.is_cancelled() {
+        return cancellation;
+    }
 
     // Retain one short-lived zeroizing copy only so an unknown key can be
     // explicitly approved and retried without asking for the password again.
     let retry_cfg = cfg.clone();
     let retry_label = label.clone();
+    let task_cancellation = cancellation.clone();
     window
         .spawn(cx, async move |cx| {
             let result = cx
@@ -160,10 +166,14 @@ pub(crate) fn connect_ssh_session(
                     async move { factory.connect_ssh(cfg, PtySize { rows: 24, cols: 80 }, 10_000) },
                 )
                 .await;
+            if task_cancellation.is_cancelled() {
+                return;
+            }
 
             _ =
                 cx.update(|window, cx| match result {
                     Ok(ssh_session) => {
+                        window.close_dialog(cx);
                         let panel: Arc<dyn PanelView> = Arc::new(
                             TerminalPanel::from_session_entity(ssh_session, &label, window, cx),
                         );
@@ -182,16 +192,19 @@ pub(crate) fn connect_ssh_session(
                         port,
                         algorithm,
                         fingerprint,
-                    }) => open_host_key_confirmation(
-                        retry_cfg,
-                        retry_label,
-                        host,
-                        port,
-                        algorithm,
-                        fingerprint,
-                        window,
-                        cx,
-                    ),
+                    }) => {
+                        window.close_dialog(cx);
+                        open_host_key_confirmation(
+                            retry_cfg,
+                            retry_label,
+                            host,
+                            port,
+                            algorithm,
+                            fingerprint,
+                            window,
+                            cx,
+                        );
+                    }
                     Err(error) => {
                         window.push_notification(
                             notify(
@@ -205,6 +218,7 @@ pub(crate) fn connect_ssh_session(
                 });
         })
         .detach();
+    cancellation
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -218,6 +232,7 @@ fn open_host_key_confirmation(
     window: &mut Window,
     cx: &mut App,
 ) {
+    cfg.cancellation = ConnectionCancellation::default();
     cfg.host_key_policy = HostKeyPolicy::AcceptNewFingerprint(fingerprint.clone());
     let description = format!(
         "The server is not present in your OpenSSH known_hosts file.\n\n\

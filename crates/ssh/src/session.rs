@@ -16,7 +16,9 @@
 //!
 //! See `docs/terminal-backend.md` §7, `docs/sftp-browser-design.md`.
 
+use std::future::Future;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
@@ -72,6 +74,45 @@ pub struct SshSession {
     pub(crate) sftp: Mutex<Option<Arc<SftpSession>>>,
 }
 
+const CONNECT_DEADLINE: Duration = Duration::from_secs(60);
+const PHASE_DEADLINE: Duration = Duration::from_secs(20);
+
+async fn wait_for_cancellation(cancellation: oneterm_core::ConnectionCancellation) {
+    while !cancellation.is_cancelled() {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+async fn await_phase<T, F>(
+    phase: &'static str,
+    future: F,
+    cancellation: oneterm_core::ConnectionCancellation,
+) -> anyhow::Result<T>
+where
+    F: Future<Output = anyhow::Result<T>>,
+{
+    await_phase_with_deadline(phase, future, cancellation, PHASE_DEADLINE).await
+}
+
+async fn await_phase_with_deadline<T, F>(
+    phase: &'static str,
+    future: F,
+    cancellation: oneterm_core::ConnectionCancellation,
+    deadline: Duration,
+) -> anyhow::Result<T>
+where
+    F: Future<Output = anyhow::Result<T>>,
+{
+    tokio::select! {
+        result = tokio::time::timeout(deadline, future) => {
+            result.map_err(|_| anyhow::anyhow!("SSH {phase} phase timed out"))?
+        }
+        _ = wait_for_cancellation(cancellation) => {
+            Err(anyhow::anyhow!("SSH connection cancelled"))
+        }
+    }
+}
+
 /// Connect over SSH to a server. Sync API — uses `block_on` for connect.
 /// The `multi_thread` runtime (1 worker) keeps background tasks running after
 /// `block_on()` returns.
@@ -96,7 +137,10 @@ pub fn connect(
         .build()
         .map_err(|e| oneterm_core::AppError::msg(e.to_string()))?;
 
-    let (cmd_tx, cmd_rx) = async_channel::bounded::<Cmd>(64);
+    // Input must preserve FIFO ordering without dropping keystrokes when the UI
+    // produces a short burst. Control-flow failures remain observable when the
+    // receiver closes; tests use bounded transports to exercise saturation.
+    let (cmd_tx, cmd_rx) = async_channel::unbounded::<Cmd>();
     let (event_tx, event_rx) = async_channel::bounded::<SessionEvent>(4096);
     let state = new_shared();
     state.lock().unwrap().alive = true;
@@ -119,142 +163,211 @@ pub fn connect(
 
     // ── Connect (block_on) ──────────────────────────────────────────
     let connect_result = runtime.block_on(async {
-        let addr = format!("{}:{}", cfg.host, cfg.port);
-        log::info!("SshSession: connecting to {addr}");
-        let client_cfg = russh::client::Config::default();
-        let handler =
-            SshClientHandler::new(cfg.host.clone(), cfg.port, cfg.host_key_policy.clone());
+        let operation = async {
+            let addr = format!("{}:{}", cfg.host, cfg.port);
+            log::info!("SshSession: connecting to {addr}");
+            let client_cfg = russh::client::Config::default();
+            let handler =
+                SshClientHandler::new(cfg.host.clone(), cfg.port, cfg.host_key_policy.clone());
 
-        let mut handle = client::connect(Arc::new(client_cfg), addr, handler)
-            .await
-            .map_err(anyhow::Error::new)?;
-        log::info!("SshSession: TCP connected");
+            let mut handle = await_phase(
+                "connect",
+                async {
+                    client::connect(Arc::new(client_cfg), addr, handler)
+                        .await
+                        .map_err(anyhow::Error::new)
+                },
+                cfg.cancellation.clone(),
+            )
+            .await?;
+            log::info!("SshSession: TCP connected");
 
-        // ── Authenticate ──────────────────────────────────────────────
-        // Move authentication material out of the long-lived config so it is
-        // zeroized as soon as authentication completes.
-        let auth = std::mem::replace(&mut cfg.auth, SshAuthMethod::None);
-        let auth_result = match auth {
-            SshAuthMethod::None => {
-                log::info!("SshSession: authenticating with none (no password)");
-                handle
-                    .authenticate_none(&cfg.username)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("{e}"))?
+            // ── Authenticate ──────────────────────────────────────────────
+            // Move authentication material out of the long-lived config so it is
+            // zeroized as soon as authentication completes.
+            let auth = std::mem::replace(&mut cfg.auth, SshAuthMethod::None);
+            let auth_result = match auth {
+                SshAuthMethod::None => {
+                    log::info!("SshSession: authenticating with none (no password)");
+                    await_phase(
+                        "authentication",
+                        async {
+                            handle
+                                .authenticate_none(&cfg.username)
+                                .await
+                                .map_err(|e| anyhow::anyhow!("{e}"))
+                        },
+                        cfg.cancellation.clone(),
+                    )
+                    .await?
+                }
+                SshAuthMethod::Password { password } => {
+                    log::info!("SshSession: authenticating with password");
+                    await_phase(
+                        "authentication",
+                        async {
+                            handle
+                                .authenticate_password(&cfg.username, password.expose_secret())
+                                .await
+                                .map_err(|e| anyhow::anyhow!("{e}"))
+                        },
+                        cfg.cancellation.clone(),
+                    )
+                    .await?
+                }
+                SshAuthMethod::PrivateKey {
+                    key_path,
+                    passphrase,
+                } => {
+                    log::info!("SshSession: authenticating with key {}", key_path.display());
+                    let key = load_private_key(
+                        &key_path,
+                        passphrase.as_ref().map(|secret| secret.expose_secret()),
+                    )?;
+                    let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key), None);
+                    await_phase(
+                        "authentication",
+                        async {
+                            handle
+                                .authenticate_publickey(&cfg.username, key_with_alg)
+                                .await
+                                .map_err(|e| anyhow::anyhow!("{e}"))
+                        },
+                        cfg.cancellation.clone(),
+                    )
+                    .await?
+                }
+                SshAuthMethod::Agent => {
+                    return Err(anyhow::anyhow!(
+                        "SSH agent auth not supported yet (roadmap)"
+                    ));
+                }
+            };
+            log::info!("SshSession: auth result = {auth_result:?}");
+            if !matches!(auth_result, AuthResult::Success) {
+                return Err(anyhow::anyhow!("SSH authentication failed"));
             }
-            SshAuthMethod::Password { password } => {
-                log::info!("SshSession: authenticating with password");
-                handle
-                    .authenticate_password(&cfg.username, password.expose_secret())
-                    .await
-                    .map_err(|e| anyhow::anyhow!("{e}"))?
-            }
-            SshAuthMethod::PrivateKey {
-                key_path,
-                passphrase,
-            } => {
-                log::info!("SshSession: authenticating with key {}", key_path.display());
-                let key = load_private_key(
-                    &key_path,
-                    passphrase.as_ref().map(|secret| secret.expose_secret()),
-                )?;
-                let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key), None);
-                handle
-                    .authenticate_publickey(&cfg.username, key_with_alg)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("{e}"))?
-            }
-            SshAuthMethod::Agent => {
-                return Err(anyhow::anyhow!(
-                    "SSH agent auth not supported yet (roadmap)"
-                ));
-            }
-        };
-        log::info!("SshSession: auth result = {auth_result:?}");
-        if !matches!(auth_result, AuthResult::Success) {
-            return Err(anyhow::anyhow!("SSH authentication failed"));
-        }
 
-        // ── Open channel + pty + shell ──────────────────────────────
-        let channel = handle
-            .channel_open_session()
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-        log::info!("SshSession: channel opened");
+            // ── Open channel + pty + shell ──────────────────────────────
+            let channel = await_phase(
+                "channel open",
+                async {
+                    handle
+                        .channel_open_session()
+                        .await
+                        .map_err(|e| anyhow::anyhow!("{e}"))
+                },
+                cfg.cancellation.clone(),
+            )
+            .await?;
+            log::info!("SshSession: channel opened");
 
-        channel
-            .request_pty(
-                false,
-                "xterm-256color",
-                initial.cols as u32,
-                initial.rows as u32,
-                0,
-                0,
-                &[],
+            await_phase(
+                "PTY request",
+                async {
+                    channel
+                        .request_pty(
+                            false,
+                            "xterm-256color",
+                            initial.cols as u32,
+                            initial.rows as u32,
+                            0,
+                            0,
+                            &[],
+                        )
+                        .await
+                        .map_err(|e| anyhow::anyhow!("{e}"))
+                },
+                cfg.cancellation.clone(),
+            )
+            .await?;
+            log::info!(
+                "SshSession: pty requested ({}x{})",
+                initial.cols,
+                initial.rows
+            );
+
+            // ── Shell integration (OSC 7 cwd) — silent, via exec ──────
+            // Instead of `request_shell`, run an exec request that:
+            //   1. defines a prompt hook emitting OSC 7 (cwd) + OSC 133;A,
+            //   2. exports it (function + PROMPT_COMMAND) into the environment,
+            //   3. `exec`s the user's interactive login shell, which inherits it.
+            //
+            // Steps 1–2 run in a NON-interactive shell (sshd runs `$SHELL -c <cmd>`),
+            // so there is no readline/PTY echo → completely silent. Unlike the `env`
+            // channel request, this does not depend on sshd `AcceptEnv`.
+            //
+            // bash-oriented (`export -f` + `PROMPT_COMMAND`); zsh/others: no OSC 7 but
+            // harmless. `.bashrc` that overwrites `PROMPT_COMMAND` would defeat it.
+            // Disable via `SshConfig::shell_integration = false`.
+            if cfg.shell_integration {
+                await_phase(
+                    "shell request",
+                    async {
+                        channel
+                            .exec(true, SHELL_INTEGRATION_EXEC)
+                            .await
+                            .map_err(|e| anyhow::anyhow!("{e}"))
+                    },
+                    cfg.cancellation.clone(),
+                )
+                .await?;
+                log::info!("SshSession: shell started via exec (shell integration)");
+            } else {
+                await_phase(
+                    "shell request",
+                    async {
+                        channel
+                            .request_shell(true)
+                            .await
+                            .map_err(|e| anyhow::anyhow!("{e}"))
+                    },
+                    cfg.cancellation.clone(),
+                )
+                .await?;
+                log::info!("SshSession: shell requested");
+            }
+
+            // ── Open SFTP channel (optional) ────────────────────────────
+            // Open it BEFORE spawning ssh_main_task because the handle is moved into
+            // the task. The SFTP channel is split into its own object — no handle needed.
+            let sftp_session = match await_phase(
+                "SFTP setup",
+                async { open_sftp(&handle, &state).await },
+                cfg.cancellation.clone(),
             )
             .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-        log::info!(
-            "SshSession: pty requested ({}x{})",
-            initial.cols,
-            initial.rows
-        );
+            {
+                Ok(sftp) => {
+                    log::info!("SshSession: SFTP channel opened");
+                    Some(sftp)
+                }
+                Err(e) if cfg.cancellation.is_cancelled() => return Err(e),
+                Err(e) => {
+                    log::warn!("SshSession: SFTP not available: {e} — terminal only");
+                    None
+                }
+            };
 
-        // ── Shell integration (OSC 7 cwd) — silent, via exec ──────
-        // Instead of `request_shell`, run an exec request that:
-        //   1. defines a prompt hook emitting OSC 7 (cwd) + OSC 133;A,
-        //   2. exports it (function + PROMPT_COMMAND) into the environment,
-        //   3. `exec`s the user's interactive login shell, which inherits it.
-        //
-        // Steps 1–2 run in a NON-interactive shell (sshd runs `$SHELL -c <cmd>`),
-        // so there is no readline/PTY echo → completely silent. Unlike the `env`
-        // channel request, this does not depend on sshd `AcceptEnv`.
-        //
-        // bash-oriented (`export -f` + `PROMPT_COMMAND`); zsh/others: no OSC 7 but
-        // harmless. `.bashrc` that overwrites `PROMPT_COMMAND` would defeat it.
-        // Disable via `SshConfig::shell_integration = false`.
-        if cfg.shell_integration {
-            channel
-                .exec(true, SHELL_INTEGRATION_EXEC)
-                .await
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-            log::info!("SshSession: shell started via exec (shell integration)");
-        } else {
-            channel
-                .request_shell(true)
-                .await
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-            log::info!("SshSession: shell requested");
-        }
+            // ── Spawn main SSH task ──────────────────────────────────────
+            // IMPORTANT: `handle` must be moved into the task — dropping it closes the
+            // connection.
+            tokio::spawn(ssh_main_task(
+                handle,
+                channel,
+                term.clone(),
+                listener.clone(),
+                state.clone(),
+                cmd_rx,
+            ));
+            log::info!("SshSession: main task spawned");
 
-        // ── Open SFTP channel (optional) ────────────────────────────
-        // Open it BEFORE spawning ssh_main_task because the handle is moved into
-        // the task. The SFTP channel is split into its own object — no handle needed.
-        let sftp_session = match open_sftp(&handle, &state).await {
-            Ok(sftp) => {
-                log::info!("SshSession: SFTP channel opened");
-                Some(sftp)
-            }
-            Err(e) => {
-                log::warn!("SshSession: SFTP not available: {e} — terminal only");
-                None
-            }
+            Ok::<_, anyhow::Error>(sftp_session)
         };
-
-        // ── Spawn main SSH task ──────────────────────────────────────
-        // IMPORTANT: `handle` must be moved into the task — dropping it closes the
-        // connection.
-        tokio::spawn(ssh_main_task(
-            handle,
-            channel,
-            term.clone(),
-            listener.clone(),
-            state.clone(),
-            cmd_rx,
-        ));
-        log::info!("SshSession: main task spawned");
-
-        Ok::<_, anyhow::Error>(sftp_session)
+        tokio::time::timeout(CONNECT_DEADLINE, operation)
+            .await
+            .map_err(|_| anyhow::anyhow!("SSH connection timed out"))
+            .and_then(|result| result)
     });
 
     match connect_result {
@@ -365,4 +478,46 @@ fn load_private_key(
     let key = load_secret_key(path, passphrase)
         .map_err(|e| anyhow::anyhow!("Failed to load key {}: {e}", path.display()))?;
     Ok(key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn phase_wait_stops_when_cancelled() {
+        let cancellation = oneterm_core::ConnectionCancellation::default();
+        cancellation.cancel();
+
+        let error = await_phase_with_deadline(
+            "test",
+            async {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                Ok(())
+            },
+            cancellation,
+            Duration::from_secs(1),
+        )
+        .await
+        .expect_err("cancelled phase must fail");
+
+        assert_eq!(error.to_string(), "SSH connection cancelled");
+    }
+
+    #[tokio::test]
+    async fn phase_wait_has_a_deadline() {
+        let error = await_phase_with_deadline(
+            "test",
+            async {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                Ok(())
+            },
+            oneterm_core::ConnectionCancellation::default(),
+            Duration::from_millis(1),
+        )
+        .await
+        .expect_err("expired phase must fail");
+
+        assert_eq!(error.to_string(), "SSH test phase timed out");
+    }
 }

@@ -349,7 +349,11 @@ impl LocalTerminalView {
         drop(self.event_task.take());
         drop(self.blink_task.take());
         // Close the session (PTY/SSH channel).
-        self.session.update(cx, |s, _| s.close());
+        self.session.update(cx, |s, _| {
+            if let Err(error) = s.close() {
+                log::warn!("terminal close failed: {error}");
+            }
+        });
         // Drop this terminal's Agent Panel cards + navigation entry (spec §9:
         // ended-vs-closed — a true close removes the cards, unlike process exit
         // which only marks them Ended).
@@ -458,7 +462,9 @@ impl LocalTerminalView {
             .and_then(|c| c.text())
             .unwrap_or_default();
         let reply = format!("\x1b]52;c;{}\x07", oneterm_terminal::encode_osc52(&text));
-        self.session.read(cx).write(reply.as_bytes());
+        if let Err(error) = self.session.read(cx).write(reply.as_bytes()) {
+            log::warn!("OSC 52 clipboard response delivery failed: {error}");
+        }
     }
 
     /// Drain all pending events in the channel — coalesce Output events,
