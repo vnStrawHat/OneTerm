@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use gpui::{Context, Window};
 use gpui_component::{WindowExt as _, notification::NotificationType};
+use oneterm_core::AppError;
 
 use super::panel::SftpPanel;
 use super::types::{TransferDirection, TransferItem, TransferStatus};
@@ -149,7 +150,7 @@ impl SftpPanel {
                         }
                     }
                     Ok(Err(e)) => {
-                        if e.to_string() == "cancelled" {
+                        if matches!(&e, AppError::Cancelled) {
                             return;
                         }
                         log::error!("SftpPanel: upload #{transfer_id} failed: {e}");
@@ -444,7 +445,7 @@ impl SftpPanel {
                     }
                 }
                 Ok(Err(e)) => {
-                    if e.to_string() == "cancelled" {
+                    if matches!(&e, AppError::Cancelled) {
                         return;
                     }
                     log::error!("SftpPanel: download #{transfer_id} failed: {e}");

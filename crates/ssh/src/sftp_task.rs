@@ -846,7 +846,7 @@ mod security_tests {
             &entries,
         )
         .unwrap_err();
-        assert_eq!(error.to_string(), "cancelled");
+        assert!(matches!(error, AppError::Cancelled));
     }
 
     #[test]
@@ -868,10 +868,10 @@ mod security_tests {
 
         std::thread::sleep(std::time::Duration::from_millis(10));
         cancel.cancel();
-        assert_eq!(
-            traversal.join().unwrap().unwrap_err().to_string(),
-            "cancelled"
-        );
+        assert!(matches!(
+            traversal.join().unwrap().unwrap_err(),
+            AppError::Cancelled
+        ));
     }
 
     #[cfg(unix)]

@@ -135,10 +135,11 @@ Items are ordered within each category by priority. Cross-category dependencies 
 
 ## 5. Reliability
 
-- [ ] **P0 — Replace string-based cancellation handling.**
+- [x] **P0 — Replace string-based cancellation handling.**
   - Add `AppError::Cancelled` and update `crates/ssh/src/sftp_transfer.rs` and `crates/sftp-ui/src/transfer.rs`.
   - Add regression tests proving contextual error messages do not change cancellation classification.
   - **Done when:** no production code compares `to_string()` for control flow.
+  - **Completed:** cancellation producers now return `AppError::Cancelled`; SFTP upload/download UI paths pattern-match the typed variant, and backend regression tests assert the variant directly.
 
 - [x] **P0 — Remove the SFTP download `unwrap`.**
   - **Target:** `crates/sftp-ui/src/transfer.rs`.

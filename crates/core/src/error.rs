@@ -37,6 +37,9 @@ pub enum AppError {
         fingerprint: String,
     },
 
+    /// The operation was intentionally cancelled by the user or its owner.
+    #[error("operation cancelled")]
+    Cancelled,
     #[error("{0}")]
     Other(String),
 }

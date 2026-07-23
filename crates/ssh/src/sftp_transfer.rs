@@ -143,7 +143,7 @@ pub(super) async fn finalize_local_file(temporary: &Path, target: &Path) -> Resu
 ///   progress = cumulative bytes / total bytes.
 ///
 /// Checks `cancel.is_cancelled()` after each chunk write.
-/// If cancelled → returns `Err("cancelled")`.
+/// If cancelled → returns `Err(AppError::Cancelled)`.
 pub(super) async fn sftp_upload(
     sftp: &SftpChannel,
     local: &Path,
@@ -190,7 +190,7 @@ async fn sftp_upload_file(
             if cancel.is_cancelled() {
                 log::info!("sftp_upload_file: cancelled at {written}/{total} bytes");
                 let _ = progress.try_send(-1.0);
-                return Err(AppError::msg("cancelled"));
+                return Err(AppError::Cancelled);
             }
             let read = local_file
                 .read(&mut buffer)
@@ -246,7 +246,7 @@ fn send_local_upload_entry(
 ) -> Result<()> {
     loop {
         if cancel.is_cancelled() {
-            return Err(AppError::msg("cancelled"));
+            return Err(AppError::Cancelled);
         }
         match entries.try_send(entry) {
             Ok(()) => return Ok(()),
@@ -272,7 +272,7 @@ pub(super) fn stream_local_upload_entries(
 
     while let Some((local, remote, depth)) = pending.pop_front() {
         if cancel.is_cancelled() {
-            return Err(AppError::msg("cancelled"));
+            return Err(AppError::Cancelled);
         }
         if depth > MAX_TRAVERSAL_DEPTH {
             return Err(AppError::msg("local upload exceeded traversal depth limit"));
@@ -360,7 +360,7 @@ async fn sftp_upload_dir(
                 if cancel.is_cancelled() {
                     let _ = progress.try_send(-1.0);
                     let _ = traversal.await;
-                    return Err(AppError::msg("cancelled"));
+                    return Err(AppError::Cancelled);
                 }
                 let dir_str = dir.to_string_lossy().replace('\\', "/");
                 if let Err(create_error) = sftp.create_dir(&dir_str).await {
@@ -415,7 +415,7 @@ async fn sftp_upload_dir(
                     loop {
                         if cancel.is_cancelled() {
                             let _ = progress.try_send(-1.0);
-                            return Err(AppError::msg("cancelled"));
+                            return Err(AppError::Cancelled);
                         }
                         let read = local_file
                             .read(&mut buffer)
@@ -485,7 +485,7 @@ async fn sftp_upload_dir(
 ///   each file, progress = cumulative bytes / total bytes.
 ///
 /// Checks `cancel.is_cancelled()` after each chunk read.
-/// If cancelled → returns `Err("cancelled")`.
+/// If cancelled → returns `Err(AppError::Cancelled)`.
 pub(super) async fn sftp_download(
     sftp: &SftpChannel,
     remote: &Path,
@@ -541,7 +541,7 @@ async fn sftp_download_file(
             if cancel.is_cancelled() {
                 log::info!("sftp_download_file: cancelled at {read}/{total} bytes");
                 let _ = progress.try_send(-1.0);
-                return Err(AppError::msg("cancelled"));
+                return Err(AppError::Cancelled);
             }
             let n = remote_file
                 .read(&mut buf)
@@ -615,7 +615,7 @@ async fn sftp_download_dir(
     while let Some((remote, local_dir, depth)) = pending.pop() {
         if cancel.is_cancelled() {
             let _ = progress.try_send(-1.0);
-            return Err(AppError::msg("cancelled"));
+            return Err(AppError::Cancelled);
         }
         if depth > MAX_TRAVERSAL_DEPTH {
             return Err(AppError::msg(
@@ -626,7 +626,7 @@ async fn sftp_download_dir(
         for entry in sftp.read_dir(&remote).await.map_err(map_sftp_err)? {
             if cancel.is_cancelled() {
                 let _ = progress.try_send(-1.0);
-                return Err(AppError::msg("cancelled"));
+                return Err(AppError::Cancelled);
             }
             let name = entry.file_name();
             if name == "." || name == ".." {
@@ -685,7 +685,7 @@ async fn sftp_download_dir(
                 loop {
                     if cancel.is_cancelled() {
                         let _ = progress.try_send(-1.0);
-                        return Err(AppError::msg("cancelled"));
+                        return Err(AppError::Cancelled);
                     }
                     let n = remote_file
                         .read(&mut buf)
