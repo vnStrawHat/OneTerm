@@ -70,6 +70,7 @@ pub struct LocalListener {
 fn map_notifier_error(error: std::io::Error) -> TerminalError {
     match error.kind() {
         std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::NotConnected => TerminalError::Closed,
+        std::io::ErrorKind::WouldBlock => TerminalError::QueueFull,
         _ => TerminalError::Transport(error.to_string()),
     }
 }

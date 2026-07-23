@@ -170,10 +170,11 @@ Items are ordered within each category by priority. Cross-category dependencies 
 
 ## 6. Performance
 
-- [ ] **P0 — Bound terminal command queues by bytes and messages.**
+- [x] **P0 — Bound terminal command queues by bytes and messages.**
   - Apply to SSH command channels and local-shell write buffers.
   - Coalesce resize, prioritize close, preserve input ordering, and reject/await when paste budget is exhausted.
   - **Done when:** queue memory has a documented upper bound and overload tests pass.
+  - **Completed:** SSH and LocalShell use 256-message queues with 4 MiB aggregate input budgets; writes report typed saturation, resize bursts coalesce, and close/shutdown is prioritized.
 
 - [ ] **P1 — Remove periodic full SFTP snapshot cloning.**
   - **Targets:** `crates/sftp-ui/src/panel.rs`, `crates/sftp-ui/src/browser_state.rs`.

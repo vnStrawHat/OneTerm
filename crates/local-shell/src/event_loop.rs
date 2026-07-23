@@ -10,6 +10,7 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 
 use alacritty_terminal::event::{Event, EventListener, OnResize, WindowSize};
@@ -29,6 +30,10 @@ use crate::state::SharedState;
 
 /// PTY read buffer size (1 MiB — same as alacritty).
 const READ_BUFFER_SIZE: usize = 0x10_0000;
+/// Maximum queued local-shell command messages.
+pub(crate) const LOCAL_COMMAND_QUEUE_CAPACITY: usize = 256;
+/// Maximum aggregate input bytes queued or waiting for PTY delivery.
+pub(crate) const LOCAL_COMMAND_BYTE_BUDGET: usize = 4 * 1024 * 1024;
 
 /// Maximum parser lock samples retained in one two-second diagnostics window.
 #[cfg(feature = "terminal-diagnostics")]
@@ -60,19 +65,71 @@ pub enum ShellMsg {
     Shutdown,
 }
 
+#[derive(Default)]
+struct ShellControl {
+    pending_resize: std::sync::Mutex<Option<WindowSize>>,
+    shutdown: AtomicBool,
+    queued_input_bytes: AtomicUsize,
+}
+
 /// Notifier for the UI to send messages to the event loop (replaces
 /// `EventLoopSender`).
 #[derive(Clone)]
 pub struct ShellNotifier {
-    sender: mpsc::Sender<ShellMsg>,
+    sender: mpsc::SyncSender<ShellMsg>,
     poller: std::sync::Arc<Poller>,
+    control: std::sync::Arc<ShellControl>,
 }
 
 impl ShellNotifier {
     pub fn send(&self, msg: ShellMsg) -> io::Result<()> {
-        self.sender
-            .send(msg)
-            .map_err(|e| io::Error::new(io::ErrorKind::BrokenPipe, e.to_string()))?;
+        if !matches!(&msg, ShellMsg::Shutdown) && self.control.shutdown.load(Ordering::Acquire) {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "local-shell command queue is closed",
+            ));
+        }
+        match msg {
+            ShellMsg::Input(bytes) => {
+                let length = bytes.len();
+                let reserved = self
+                    .control
+                    .queued_input_bytes
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                        current
+                            .checked_add(length)
+                            .filter(|&next| next <= LOCAL_COMMAND_BYTE_BUDGET)
+                    })
+                    .is_ok();
+                if !reserved {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "local-shell command byte budget is full",
+                    ));
+                }
+                if let Err(error) = self.sender.try_send(ShellMsg::Input(bytes)) {
+                    self.control
+                        .queued_input_bytes
+                        .fetch_sub(length, Ordering::AcqRel);
+                    return Err(match error {
+                        mpsc::TrySendError::Full(_) => io::Error::new(
+                            io::ErrorKind::WouldBlock,
+                            "local-shell command queue is full",
+                        ),
+                        mpsc::TrySendError::Disconnected(_) => io::Error::new(
+                            io::ErrorKind::BrokenPipe,
+                            "local-shell command queue is closed",
+                        ),
+                    });
+                }
+            }
+            ShellMsg::Resize(size) => {
+                *self.control.pending_resize.lock().unwrap() = Some(size);
+            }
+            ShellMsg::Shutdown => {
+                self.control.shutdown.store(true, Ordering::Release);
+            }
+        }
         self.poller.notify()
     }
 }
@@ -86,6 +143,7 @@ pub struct ShellEventLoop {
     msg_rx: mpsc::Receiver<ShellMsg>,
     poll: std::sync::Arc<Poller>,
     state: SharedState,
+    control: std::sync::Arc<ShellControl>,
 }
 
 impl ShellEventLoop {
@@ -97,10 +155,12 @@ impl ShellEventLoop {
         state: SharedState,
     ) -> io::Result<(Self, ShellNotifier)> {
         let poll = std::sync::Arc::new(Poller::new()?);
-        let (tx, rx) = mpsc::channel();
+        let control = std::sync::Arc::new(ShellControl::default());
+        let (tx, rx) = mpsc::sync_channel(LOCAL_COMMAND_QUEUE_CAPACITY);
         let notifier = ShellNotifier {
             sender: tx,
             poller: poll.clone(),
+            control: control.clone(),
         };
         Ok((
             Self {
@@ -110,6 +170,7 @@ impl ShellEventLoop {
                 msg_rx: rx,
                 poll,
                 state,
+                control,
             },
             notifier,
         ))
@@ -202,6 +263,14 @@ impl ShellEventLoop {
             #[cfg(feature = "terminal-diagnostics")]
             if diagnostics_enabled {
                 stat_wait += wait_start.elapsed();
+            }
+
+            if self.control.shutdown.load(Ordering::Acquire) {
+                let _ = self.pty.deregister(&self.poll);
+                return;
+            }
+            if let Some(size) = self.control.pending_resize.lock().unwrap().take() {
+                self.pty.on_resize(size);
             }
 
             // Drain channel messages (non-blocking).

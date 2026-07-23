@@ -153,7 +153,8 @@ pub fn connect(
     // Input must preserve FIFO ordering without dropping keystrokes when the UI
     // produces a short burst. Control-flow failures remain observable when the
     // receiver closes; tests use bounded transports to exercise saturation.
-    let (cmd_tx, cmd_rx) = async_channel::unbounded::<Cmd>();
+    let (cmd_tx, cmd_rx) =
+        async_channel::bounded::<Cmd>(crate::listener::SSH_COMMAND_QUEUE_CAPACITY);
     let (event_tx, event_rx) = async_channel::bounded::<SessionEvent>(4096);
     let state = new_shared();
     state.lock().unwrap().alive = true;

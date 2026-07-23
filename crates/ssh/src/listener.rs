@@ -8,7 +8,7 @@
 //! Similar to `local/src/listener.rs` but replaces `Notifier` with `cmd_tx`
 //! (async_channel::Sender<Cmd>).
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[cfg(any(test, feature = "terminal-diagnostics"))]
@@ -28,15 +28,26 @@ use oneterm_terminal::{SessionEvent, TerminalError};
 
 use crate::state::SharedState;
 
+/// Maximum queued SSH command messages.
+pub(crate) const SSH_COMMAND_QUEUE_CAPACITY: usize = 256;
+/// Maximum aggregate payload bytes waiting for SSH transport delivery.
+pub(crate) const SSH_COMMAND_BYTE_BUDGET: usize = 4 * 1024 * 1024;
+
 /// Command sent from the main thread → tokio task (via async_channel).
 #[derive(Debug)]
 pub enum Cmd {
     /// Write bytes to the SSH channel (keystroke, paste, OSC response).
     Write(Vec<u8>),
-    /// Resize the PTY (window_change).
-    Resize(u16, u16),
+    /// Apply the latest coalesced PTY size.
+    Resize,
     /// Close the channel.
     Close,
+}
+
+#[derive(Default)]
+struct PendingResize {
+    latest: Option<(u16, u16)>,
+    signal_enqueued: bool,
 }
 
 /// Snapshot of SSH command/event queue failures.
@@ -51,6 +62,8 @@ pub struct SshQueueDiagnostics {
     pub event_full: u64,
     /// Session events rejected because the event queue was closed.
     pub event_closed: u64,
+    /// Aggregate write payload bytes currently queued or in flight.
+    pub queued_write_bytes: usize,
 }
 
 #[cfg(any(test, feature = "terminal-diagnostics"))]
@@ -85,6 +98,10 @@ pub struct SshListener {
     /// Diagnostic counters for bounded queue failures.
     #[cfg(any(test, feature = "terminal-diagnostics"))]
     queue_counters: Arc<SshQueueCounters>,
+    /// Aggregate bytes reserved by queued or in-flight `Cmd::Write` messages.
+    queued_write_bytes: Arc<AtomicUsize>,
+    /// Latest resize and whether a queue wakeup marker is already pending.
+    pending_resize: Arc<Mutex<PendingResize>>,
 }
 
 impl SshListener {
@@ -99,6 +116,8 @@ impl SshListener {
             closing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             #[cfg(any(test, feature = "terminal-diagnostics"))]
             queue_counters: Arc::new(SshQueueCounters::default()),
+            queued_write_bytes: Arc::new(AtomicUsize::new(0)),
+            pending_resize: Arc::new(Mutex::new(PendingResize::default())),
         }
     }
 
@@ -110,6 +129,7 @@ impl SshListener {
             command_closed: self.queue_counters.command_closed.load(Ordering::Relaxed),
             event_full: self.queue_counters.event_full.load(Ordering::Relaxed),
             event_closed: self.queue_counters.event_closed.load(Ordering::Relaxed),
+            queued_write_bytes: self.queued_write_bytes.load(Ordering::Relaxed),
         }
     }
 
@@ -134,16 +154,43 @@ impl SshListener {
     /// Write bytes to the SSH channel (via cmd_tx → tokio task → channel.data).
     pub fn pty_write(&self, bytes: &[u8]) -> Result<(), TerminalError> {
         log::debug!("SshListener::pty_write: {} bytes", bytes.len());
-        self.cmd_tx
-            .try_send(Cmd::Write(bytes.to_vec()))
-            .map_err(|error| {
+        if self.is_closing() {
+            return Err(TerminalError::Closed);
+        }
+        if !self.reserve_write_bytes(bytes.len()) {
+            #[cfg(any(test, feature = "terminal-diagnostics"))]
+            self.queue_counters
+                .command_full
+                .fetch_add(1, Ordering::Relaxed);
+            return Err(TerminalError::QueueFull);
+        }
+
+        match self.cmd_tx.try_send(Cmd::Write(bytes.to_vec())) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.release_write_bytes(bytes.len());
                 #[cfg(any(test, feature = "terminal-diagnostics"))]
                 self.record_command_failure(&error);
                 match error {
-                    TrySendError::Full(_) => TerminalError::QueueFull,
-                    TrySendError::Closed(_) => TerminalError::Closed,
+                    TrySendError::Full(_) => Err(TerminalError::QueueFull),
+                    TrySendError::Closed(_) => Err(TerminalError::Closed),
                 }
+            }
+        }
+    }
+
+    fn reserve_write_bytes(&self, additional: usize) -> bool {
+        self.queued_write_bytes
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current
+                    .checked_add(additional)
+                    .filter(|&next| next <= SSH_COMMAND_BYTE_BUDGET)
             })
+            .is_ok()
+    }
+
+    pub(crate) fn release_write_bytes(&self, bytes: usize) {
+        self.queued_write_bytes.fetch_sub(bytes, Ordering::AcqRel);
     }
 
     /// Whether close has been requested. The tokio task checks this flag to

@@ -49,6 +49,16 @@ pub(crate) async fn ssh_main_task(
             listener.forward_lifecycle(SessionEvent::Closed);
             break;
         }
+        if let Some((rows, cols)) = listener.take_pending_resize() {
+            log::info!("ssh_main_task: resize {cols}x{rows}");
+            if let Err(error) = channel.window_change(cols as u32, rows as u32, 0, 0).await {
+                log::warn!("ssh_main_task: window_change fail: {error}");
+            }
+            term.lock().resize(TermSize {
+                cols: cols as usize,
+                lines: rows as usize,
+            });
+        }
         tokio::select! {
             // ── Read data from the SSH channel ────────────────────────
             msg = channel.wait() => {
@@ -184,20 +194,9 @@ pub(crate) async fn ssh_main_task(
                         if let Err(e) = channel.data(&bytes[..]).await {
                             log::warn!("ssh_main_task: channel.data fail: {e}");
                         }
+                        listener.release_write_bytes(bytes.len());
                     }
-                    Ok(Cmd::Resize(rows, cols)) => {
-                        log::info!("ssh_main_task: resize {cols}x{rows}");
-                        if let Err(e) = channel
-                            .window_change(cols as u32, rows as u32, 0, 0)
-                            .await
-                        {
-                            log::warn!("ssh_main_task: window_change fail: {e}");
-                        }
-                        term.lock().resize(TermSize {
-                            cols: cols as usize,
-                            lines: rows as usize,
-                        });
-                    }
+                    Ok(Cmd::Resize) => {}
                     Ok(Cmd::Close) => {
                         log::info!("ssh_main_task: close requested");
                         let _ = channel.close().await;
