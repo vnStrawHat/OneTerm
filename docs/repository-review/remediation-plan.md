@@ -14,7 +14,8 @@ Items are ordered within each category by priority. Cross-category dependencies 
 
 - [x] **Phase 1 — Protect the delivery path:** add the full-workspace CI gate; fix the production `unwrap`; correct English-check coverage; resolve the SSH-agent documentation mismatch; pin release actions.
   - **Completed:** all Phase 1 implementation and validation tasks are complete; the final workspace gate passes with 427 tests passed and 2 ignored.
-- [ ] **Phase 2 — Make failure behavior typed and bounded:** introduce typed cancellation/errors; define event delivery semantics; bound terminal command queues; add overload tests.
+- [x] **Phase 2 — Make failure behavior typed and bounded:** introduce typed cancellation/errors; define event delivery semantics; bound terminal command queues; add overload tests.
+  - **Completed:** typed cancellation, reliable/coalescible session events, bounded SSH/LocalShell command queues, documented overload semantics, and deterministic saturation tests are complete. The full quality gate passes with 436 tests passed and 2 ignored. The broader `AppError` taxonomy remains a separate Maintainability item.
 - [ ] **Phase 3 — Make persistence and state safe:** move persistence off UI handlers; choose single-instance or inter-process locking; scope active workspace state; add subprocess/fault-injection tests.
 - [ ] **Phase 4 — Reduce structural cost:** split oversized modules; remove periodic SFTP snapshot cloning; narrow terminal capabilities; consolidate service registration.
 - [ ] **Phase 5 — Measure and evolve:** define supported scale targets, add benchmarks and UI integration coverage, introduce schema migrations, and upstream/remove the UI fork where possible.
@@ -118,11 +119,12 @@ Items are ordered within each category by priority. Cross-category dependencies 
   - Use a fake SFTP backend with controllable delays and failures.
   - **Done when:** no test requires a live SSH server and every transfer terminal state is asserted.
 
-- [ ] **P1 — Add overload/backpressure tests.**
+- [x] **P1 — Add overload/backpressure tests.**
   - Inject queue capacities and simulate stalled SSH/PTY writers, large paste, sustained output, event saturation, and close under pressure.
   - Assert ordering, coalescing, memory bounds, close priority, and error reporting.
   - **Dependency:** define queue semantics first under Reliability/Performance.
   - **Done when:** production and test queues use the same bounded implementation.
+  - **Completed:** SSH and LocalShell tests cover stalled consumers, message/byte saturation, FIFO writes, latest-value resize, close priority, reliable event blocking, and coalesced repaint overflow.
 
 - [ ] **P1 — Expand persistence fault tests.**
   - Add subprocess tests for concurrent writers after an inter-process policy is selected.

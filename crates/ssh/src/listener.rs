@@ -199,18 +199,36 @@ impl SshListener {
         self.closing.load(Ordering::Relaxed)
     }
 
-    /// Resize the SSH channel (via cmd_tx → tokio task → channel.window_change).
+    /// Resize the SSH channel, coalescing bursts to the latest dimensions.
     pub fn pty_resize(&self, rows: u16, cols: u16) -> Result<(), TerminalError> {
-        self.cmd_tx
-            .try_send(Cmd::Resize(rows, cols))
-            .map_err(|error| {
+        if self.is_closing() {
+            return Err(TerminalError::Closed);
+        }
+        let mut pending = self.pending_resize.lock().unwrap();
+        pending.latest = Some((rows, cols));
+        if pending.signal_enqueued {
+            return Ok(());
+        }
+        pending.signal_enqueued = true;
+        match self.cmd_tx.try_send(Cmd::Resize) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => {
+                pending.signal_enqueued = false;
+                Ok(())
+            }
+            Err(_error @ TrySendError::Closed(_)) => {
+                pending.signal_enqueued = false;
                 #[cfg(any(test, feature = "terminal-diagnostics"))]
-                self.record_command_failure(&error);
-                match error {
-                    TrySendError::Full(_) => TerminalError::QueueFull,
-                    TrySendError::Closed(_) => TerminalError::Closed,
-                }
-            })
+                self.record_command_failure(&_error);
+                Err(TerminalError::Closed)
+            }
+        }
+    }
+
+    pub(crate) fn take_pending_resize(&self) -> Option<(u16, u16)> {
+        let mut pending = self.pending_resize.lock().unwrap();
+        pending.signal_enqueued = false;
+        pending.latest.take()
     }
 
     /// Close the SSH channel. Close is lifecycle-critical and must never be
@@ -584,6 +602,53 @@ mod tests {
             .unwrap();
         sender.join().unwrap();
         assert_eq!(events.try_recv().unwrap(), SessionEvent::Bell);
+    }
+
+    #[test]
+    fn ssh_writes_are_bounded_by_payload_bytes() {
+        let (listener, events, commands) = make_listener(4, 4);
+        let budget = vec![0; SSH_COMMAND_BYTE_BUDGET];
+        assert_eq!(listener.pty_write(&budget), Ok(()));
+        assert_eq!(listener.pty_write(&[1]), Err(TerminalError::QueueFull));
+        assert_eq!(commands.len(), 1);
+        assert_eq!(
+            listener.queue_diagnostics().queued_write_bytes,
+            SSH_COMMAND_BYTE_BUDGET
+        );
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(Cmd::Write(bytes)) if bytes.len() == SSH_COMMAND_BYTE_BUDGET
+        ));
+        listener.release_write_bytes(SSH_COMMAND_BYTE_BUDGET);
+        events.close();
+    }
+
+    #[test]
+    fn ssh_resizes_coalesce_to_the_latest_dimensions() {
+        let (listener, events, commands) = make_listener(4, 4);
+        listener.pty_resize(24, 80).unwrap();
+        listener.pty_resize(40, 120).unwrap();
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(commands.try_recv(), Ok(Cmd::Resize)));
+        assert_eq!(listener.take_pending_resize(), Some((40, 120)));
+        events.close();
+    }
+
+    #[test]
+    fn ssh_write_queue_preserves_fifo_order() {
+        let (listener, events, commands) = make_listener(4, 4);
+        listener.pty_write(b"first").unwrap();
+        listener.pty_write(b"second").unwrap();
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(Cmd::Write(bytes)) if bytes == b"first"
+        ));
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(Cmd::Write(bytes)) if bytes == b"second"
+        ));
+        listener.release_write_bytes(11);
+        events.close();
     }
 
     #[test]
