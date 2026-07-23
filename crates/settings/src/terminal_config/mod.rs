@@ -6,6 +6,8 @@
 //!
 //! Path: `target/terminal.json` (debug) / `~/.OneTerm/terminal.json` (release).
 
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 
 use oneterm_core::{LocalShellConfig, atomic_write, config_dir, quarantine_file};
@@ -109,7 +111,11 @@ impl TerminalConfig {
     /// Load the config from file. If the file does not exist → create a default + return default.
     /// Supports `//` and `/* */` comments in the JSON.
     pub fn load() -> Self {
-        let path = config_dir().join("terminal.json");
+        Self::load_from(&config_dir().join("terminal.json"))
+    }
+
+    /// Load the config from an explicit path for deterministic callers and tests.
+    pub fn load_from(path: &Path) -> Self {
         match std::fs::read_to_string(&path) {
             Ok(raw) => {
                 let json = strip_json_comments(&raw);
@@ -149,7 +155,11 @@ impl TerminalConfig {
 
     /// Save the config to `terminal.json` (pretty-printed, no comments).
     pub fn save(&self) -> std::io::Result<()> {
-        let path = config_dir().join("terminal.json");
+        self.save_to(&config_dir().join("terminal.json"))
+    }
+
+    /// Save the config to an explicit path for deterministic callers and tests.
+    pub fn save_to(&self, path: &Path) -> std::io::Result<()> {
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
         atomic_write(&path, json.as_bytes())?;
@@ -315,5 +325,39 @@ mod tests {
         assert!(json.contains("\"tab_title\":\"osc\""), "got: {json}");
         let again: TerminalConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(again.layout.tab_title, super::layout::TabTitleMode::Osc);
+    }
+    #[test]
+    fn explicit_path_persistence_is_isolated_and_quarantines_corruption() {
+        let directory = std::env::temp_dir().join(format!(
+            "oneterm-terminal-config-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("terminal.json");
+        let missing = TerminalConfig::load_from(&path);
+        assert_eq!(missing.font.family, FontConfig::default().family);
+        assert!(path.exists());
+        let config = TerminalConfig::default();
+        config.save_to(&path).unwrap();
+        assert_eq!(
+            TerminalConfig::load_from(&path).font.family,
+            config.font.family
+        );
+        std::fs::write(&path, b"{not-json").unwrap();
+        let loaded = TerminalConfig::load_from(&path);
+        assert_eq!(loaded.font.family, FontConfig::default().family);
+        assert!(!path.exists());
+        assert!(std::fs::read_dir(&directory).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".invalid-")
+        }));
+        let _ = std::fs::remove_dir_all(directory);
     }
 }

@@ -5319,6 +5319,7 @@ dependencies = [
  "log",
  "oneterm-core",
  "oneterm-terminal",
+ "rand 0.10.1",
  "russh",
  "russh-sftp",
  "tokio",

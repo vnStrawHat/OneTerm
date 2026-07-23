@@ -28,3 +28,17 @@ jobs:
         run: python scripts/check-doc-paths.py
       - name: Verify contributor-facing text language
         run: python scripts/check-english.py
+
+  cross-platform-tests:
+    name: Cross-platform backend tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Test portable backend contracts
+        run: cargo test -p oneterm-core -p oneterm-terminal -p oneterm-local-shell -p oneterm-ssh

@@ -8,6 +8,8 @@
 //! Path: `target/ssh_session.json` (debug) / `~/.OneTerm/ssh_session.json` (release)
 //! — same pattern as `terminal.json` and `docks.json`.
 
+use std::path::Path;
+
 use oneterm_core::{atomic_write, config_dir, quarantine_file};
 
 use gpui::{App, AppContext, Entity, Global};
@@ -115,7 +117,11 @@ impl SshSessionStore {
     /// Load the session list from `ssh_session.json`.
     /// If the file does not exist or fails to parse → return an empty list.
     fn load() -> Vec<SshSession> {
-        let path = config_dir().join("ssh_session.json");
+        Self::load_from(&config_dir().join("ssh_session.json"))
+    }
+
+    /// Load sessions from an explicit path for deterministic callers and tests.
+    fn load_from(path: &Path) -> Vec<SshSession> {
         match std::fs::read_to_string(&path) {
             Ok(raw) => match serde_json::from_str::<Vec<SshSession>>(&raw) {
                 Ok(list) => list,
@@ -140,7 +146,11 @@ impl SshSessionStore {
 
     /// Save the session list to `ssh_session.json` (pretty-printed).
     fn save(&self) {
-        let path = config_dir().join("ssh_session.json");
+        self.save_to(&config_dir().join("ssh_session.json"));
+    }
+
+    /// Save sessions to an explicit path for deterministic callers and tests.
+    fn save_to(&self, path: &Path) {
         match serde_json::to_string_pretty(&self.sessions) {
             Ok(json) => {
                 if let Err(e) = atomic_write(&path, json.as_bytes()) {
@@ -229,5 +239,47 @@ mod tests {
     fn empty_array_parses() {
         let list: Vec<SshSession> = serde_json::from_str("[]").unwrap();
         assert!(list.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+
+    #[test]
+    fn explicit_path_roundtrip_and_corruption_quarantine_are_isolated() {
+        let directory = std::env::temp_dir().join(format!(
+            "oneterm-session-store-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("ssh_session.json");
+        let store = SshSessionStore {
+            sessions: vec![SshSession {
+                label: "test".into(),
+                host: "example.test".into(),
+                port: 2222,
+                username: Some("user".into()),
+                color: None,
+                group: Some("group".into()),
+            }],
+        };
+        store.save_to(&path);
+        assert_eq!(SshSessionStore::load_from(&path).len(), 1);
+        std::fs::write(&path, b"not-json").unwrap();
+        assert!(SshSessionStore::load_from(&path).is_empty());
+        assert!(!path.exists());
+        assert!(std::fs::read_dir(&directory).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".invalid-")
+        }));
+        let _ = std::fs::remove_dir_all(directory);
     }
 }

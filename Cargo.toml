@@ -76,6 +76,7 @@ russh-sftp = "2.3"
 # russh-keys was merged into russh >= 0.50
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "io-util", "net", "macros", "fs"] }
 tokio-util = { version = "0.7", features = ["rt"] }
+rand = "0.10"
 
 # Async / serialization / error
 anyhow = "1"

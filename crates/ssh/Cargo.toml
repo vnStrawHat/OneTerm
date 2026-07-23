@@ -24,3 +24,4 @@ tokio-util.workspace = true
 
 [dev-dependencies]
 oneterm-terminal = { workspace = true, features = ["test-support"] }
+rand.workspace = true

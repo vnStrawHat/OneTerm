@@ -319,21 +319,45 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ### Work items
 
-- [ ] Add a fake SFTP backend and pure path/transfer planning functions.
-- [ ] Add host-key verification unit and local-server integration tests.
-- [ ] Inject persistence directories and add temporary-directory tests.
-- [ ] Add tests for atomic writes, corrupt-file quarantine, concurrent saves, and schema migrations.
-- [ ] Add test-scoped service/factory construction without `OnceLock` pollution.
-- [ ] Replace fixed sleeps in local PTY tests with event/readiness predicates.
-- [ ] Add UI boundary tests for startup registration, panel lifecycle, settings round trips, and SFTP operation states.
-- [ ] Add cross-platform test coverage for shell resolution, path handling, and PTY behavior.
+- [x] Add a fake SFTP backend and pure path/transfer planning functions.
+- [x] Add host-key verification unit and local-server integration tests.
+- [x] Inject persistence directories and add temporary-directory tests.
+- [x] Add tests for atomic writes, corrupt-file quarantine, concurrent saves, and schema migrations.
+- [x] Add test-scoped service/factory construction without `OnceLock` pollution.
+- [x] Replace fixed sleeps in local PTY tests with event/readiness predicates.
+- [x] Add UI boundary tests for startup registration, panel lifecycle, settings round trips, and SFTP operation states.
+- [x] Add cross-platform test coverage for shell resolution, path handling, and PTY behavior.
 
 ### Acceptance criteria
 
-- [ ] Every P0 security/reliability issue has a regression test.
-- [ ] SFTP path safety and transfer cleanup are tested without a real remote server.
-- [ ] Persistence tests do not write to the developer's real configuration directory.
-- [ ] Test suites can run independently and in any order.
+- [x] Every P0 security/reliability issue has a regression test.
+- [x] SFTP path safety and transfer cleanup are tested without a real remote server.
+- [x] Persistence tests do not write to the developer's real configuration directory.
+- [x] Test suites can run independently and in any order.
+
+### Completed testability evidence (2026-07-22)
+
+- `crates/ssh/src/sftp_transfer.rs` isolates path containment, component validation,
+  traversal limits, cancellation, symlink rejection, and temporary-file finalization behind
+  pure helpers with fake-session tests; `crates/sftp-ui/src/browser_state.rs` uses a fake
+  `SftpBackend` to verify backend state creation, purge, and stale-state rejection.
+- `crates/ssh/src/handler.rs` tests matching, unknown, explicitly approved, changed, malformed,
+  and wrong-fingerprint host keys. A Tokio loopback russh server verifies that the real client
+  handshake rejects an unknown key, persists an explicitly approved fingerprint, and then
+  accepts the same endpoint under strict policy.
+- `TerminalConfig`, `UiConfig`, `SshSessionStore`, and `DockDocument` expose explicit-path
+  persistence seams. Temporary-directory tests cover round trips, missing/default schemas,
+  corrupt-file quarantine, atomic replacement, and concurrent JSON updates without touching
+  the developer's configuration directory.
+- `SessionFactorySlot` provides independently constructible test-scoped factory registration;
+  production keeps a single process-global slot while tests verify isolation and duplicate
+  registration without mutating it.
+- Local PTY integration tests now wait on lifecycle or terminal-snapshot predicates instead of
+  fixed delays. Existing listener/parser tests remain deterministic and do not spawn a shell.
+- Boundary coverage includes duplicate startup registration, terminal panel shutdown, settings
+  serialization/migration, and SFTP backend state swap/purge behavior.
+- `.github/workflows/ci.yml` runs portable backend contracts on Linux, macOS, and Windows,
+  covering shell resolution, SFTP path policy, host-key handling, and PTY behavior.
 
 ---
 

@@ -54,7 +54,15 @@ impl DockDocument {
 
 /// Read and parse the complete dock document.
 pub fn read_dock_document() -> io::Result<DockDocument> {
-    let raw = std::fs::read_to_string(state_file())?;
+    read_dock_document_from(&state_file())
+}
+
+/// Read and parse a dock document from an explicit path.
+///
+/// The path-taking variant keeps persistence tests independent from the process
+/// configuration directory while the production wrapper retains the normal path.
+pub fn read_dock_document_from(path: &std::path::Path) -> io::Result<DockDocument> {
+    let raw = std::fs::read_to_string(path)?;
     serde_json::from_str(&raw).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
@@ -62,7 +70,15 @@ pub fn read_dock_document() -> io::Result<DockDocument> {
 pub fn update_dock_document(
     update: impl FnOnce(&mut DockDocument) -> io::Result<()>,
 ) -> io::Result<()> {
-    update_json_file(&state_file(), |value| {
+    update_dock_document_at(&state_file(), update)
+}
+
+/// Atomically update a dock document at an explicit path.
+pub fn update_dock_document_at(
+    path: &std::path::Path,
+    update: impl FnOnce(&mut DockDocument) -> io::Result<()>,
+) -> io::Result<()> {
+    update_json_file(path, |value| {
         let mut document = if value.as_object().is_some_and(|object| object.is_empty()) {
             DockDocument::default()
         } else {
@@ -111,5 +127,37 @@ mod tests {
             restored.sftp_table_state.unwrap().column_widths.get("name"),
             Some(&240.0)
         );
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+
+    #[test]
+    fn explicit_path_updates_are_isolated_and_atomic() {
+        let directory = std::env::temp_dir().join(format!(
+            "oneterm-dock-document-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let path = directory.join("docks.json");
+        update_dock_document_at(&path, |document| {
+            document.zoomed_panel = Some("terminal".into());
+            Ok(())
+        })
+        .unwrap();
+        let restored = read_dock_document_from(&path).unwrap();
+        assert_eq!(restored.zoomed_panel.as_deref(), Some("terminal"));
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        std::fs::write(&path, b"not-json").unwrap();
+        assert_eq!(
+            read_dock_document_from(&path).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        let _ = std::fs::remove_dir_all(directory);
     }
 }

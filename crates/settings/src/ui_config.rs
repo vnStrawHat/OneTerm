@@ -15,6 +15,7 @@
 //! saving, and the rebind UI updates `key_bindings` on it before saving.
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use gpui::{App, AppContext, Entity, Global};
 use oneterm_core::{RightDockMode, atomic_write, config_dir, quarantine_file};
@@ -73,7 +74,11 @@ impl UiConfig {
     /// Load the config from file. Missing or invalid input selects defaults;
     /// invalid JSON is quarantined and only a missing file is initialized.
     pub fn load() -> Self {
-        let path = config_dir().join("ui_config.json");
+        Self::load_from(&config_dir().join("ui_config.json"))
+    }
+
+    /// Load the config from an explicit path for deterministic callers and tests.
+    pub fn load_from(path: &Path) -> Self {
         match std::fs::read_to_string(&path) {
             Ok(raw) => serde_json::from_str::<UiConfig>(&raw).unwrap_or_else(|e| {
                 log::error!("ui_config.json parse error: {e} — using defaults");
@@ -106,7 +111,11 @@ impl UiConfig {
 
     /// Save the config to `ui_config.json` (pretty-printed).
     pub fn save(&self) -> std::io::Result<()> {
-        let path = config_dir().join("ui_config.json");
+        self.save_to(&config_dir().join("ui_config.json"))
+    }
+
+    /// Save the config to an explicit path for deterministic callers and tests.
+    pub fn save_to(&self, path: &Path) -> std::io::Result<()> {
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
         atomic_write(&path, json.as_bytes())?;
@@ -143,5 +152,73 @@ impl UiConfig {
         if let Err(e) = res {
             log::warn!("Failed to save ui_config.json: {e}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_path_roundtrip_and_corruption_quarantine_are_isolated() {
+        let directory = std::env::temp_dir().join(format!(
+            "oneterm-ui-config-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("ui_config.json");
+        let missing = UiConfig::load_from(&path);
+        assert_eq!(missing.right_dock_mode, RightDockMode::SshClient);
+        assert!(path.exists());
+        let config = UiConfig {
+            ui_font_size: Some(18.0),
+            theme_name: Some("Test Theme".into()),
+            key_bindings: [("open_settings".into(), "ctrl-,".into())]
+                .into_iter()
+                .collect(),
+            right_dock_mode: RightDockMode::Agent,
+            agent_stale_threshold_ms: Some(42),
+        };
+        config.save_to(&path).unwrap();
+        let restored = UiConfig::load_from(&path);
+        assert_eq!(restored.ui_font_size, Some(18.0));
+        assert_eq!(restored.theme_name.as_deref(), Some("Test Theme"));
+        assert_eq!(
+            restored
+                .key_bindings
+                .get("open_settings")
+                .map(String::as_str),
+            Some("ctrl-,")
+        );
+        assert_eq!(restored.agent_stale_threshold_ms, Some(42));
+        std::fs::write(&path, b"not-json").unwrap();
+        let fallback = UiConfig::load_from(&path);
+        assert!(fallback.theme_name.is_none());
+        assert!(!path.exists());
+        assert!(std::fs::read_dir(&directory).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".invalid-")
+        }));
+        let _ = std::fs::remove_dir_all(directory);
+    }
+    #[test]
+    fn legacy_partial_schema_uses_current_defaults() {
+        let config: UiConfig = serde_json::from_str(
+            r#"{"ui_font_size":14.0,"key_bindings":{"open_settings":"ctrl-,"}}"#,
+        )
+        .unwrap();
+        assert_eq!(config.ui_font_size, Some(14.0));
+        assert_eq!(config.right_dock_mode, RightDockMode::SshClient);
+        assert_eq!(
+            config.agent_stale_threshold_ms(),
+            UiConfig::DEFAULT_AGENT_STALE_THRESHOLD_MS
+        );
     }
 }

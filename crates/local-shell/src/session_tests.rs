@@ -9,6 +9,27 @@ use oneterm_terminal::{TerminalError, TerminalSession};
 use crate::session::LocalSession;
 use oneterm_terminal::PtySize;
 
+fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if predicate() {
+            return true;
+        }
+        std::thread::park_timeout(Duration::from_millis(5));
+    }
+    predicate()
+}
+
+fn snapshot_contains(session: &LocalSession, needle: &str) -> bool {
+    session
+        .snapshot()
+        .cells
+        .iter()
+        .map(|indexed| indexed.cell.c)
+        .collect::<String>()
+        .contains(needle)
+}
+
 fn spawn_default() -> LocalSession {
     let cfg = oneterm_core::LocalShellConfig::default();
     LocalSession::spawn(cfg, PtySize { rows: 24, cols: 80 }, 10_000).expect("spawn")
@@ -30,8 +51,7 @@ fn trait_alive_is_local_close() {
     assert!(s.is_local());
     s.close().expect("close and join PTY owner");
     assert_eq!(s.write(b"after-close"), Err(TerminalError::Closed));
-    std::thread::sleep(std::time::Duration::from_millis(50));
-    assert!(!s.alive());
+    assert!(wait_until(Duration::from_secs(2), || !s.alive()));
 }
 
 #[test]
@@ -107,7 +127,9 @@ fn selection_text_and_clear() {
     assert!(s.selection_text().is_none() || s.selection_text().as_deref() == Some(""));
     // Write a few characters then select.
     let _ = s.write(b"hello");
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert!(wait_until(Duration::from_secs(2), || snapshot_contains(
+        &s, "hello"
+    )));
     s.mouse_down(
         0.0,
         0.0,
@@ -126,7 +148,9 @@ fn selection_text_and_clear() {
 fn mouse_drag_updates_selection_not_mouse_move() {
     let s = spawn_default();
     let _ = s.write(b"hello_world");
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert!(wait_until(Duration::from_secs(2), || {
+        snapshot_contains(&s, "hello_world")
+    }));
     // Start selection at col 0
     s.mouse_down(
         0.0,
@@ -184,36 +208,25 @@ fn set_cell_size_stores() {
 }
 
 #[test]
-fn spawn_cmd_exit_detected() {
-    // Round-trip Windows: spawn cmd → write `exit\r` → ChildExit → alive false.
+fn spawned_shell_exit_is_detected() {
+    // Cross-platform round trip: request shell exit and observe lifecycle state.
     let s = spawn_default();
     let _ = s.write(b"exit\r");
-    let start = Instant::now();
-    while s.alive() && start.elapsed() < Duration::from_secs(4) {
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    assert!(!s.alive(), "cmd exit not detected after 4s");
+    assert!(
+        wait_until(Duration::from_secs(4), || !s.alive()),
+        "shell exit not detected after 4s"
+    );
 }
 
-/// End-to-end (Windows): spawn cmd → write `echo oneterm_e2e` → poll the
-/// snapshot → assert the string appears in the grid cells (proving the whole
-/// PTY→EventLoop→Term→snapshot pipeline works, no GUI needed).
+/// End-to-end: spawn the platform shell, write `echo oneterm_e2e`, and assert
+/// that the text reaches the terminal snapshot without requiring a GUI.
 #[test]
 fn e2e_echo_output_rendered_in_snapshot() {
     let s = spawn_default();
-    // Wait a moment for the prompt to appear, then type.
-    std::thread::sleep(Duration::from_millis(200));
     let _ = s.write(b"echo oneterm_e2e\r");
-    let needle = "oneterm_e2e";
-    let start = Instant::now();
-    let mut found = false;
-    while start.elapsed() < Duration::from_secs(6) && !found {
-        std::thread::sleep(Duration::from_millis(40));
-        let snap = s.snapshot();
-        // Collect characters from all cells (ignore runs of ' ' as needed).
-        let text: String = snap.cells.iter().map(|ic| ic.cell.c).collect();
-        found = text.contains(needle);
-    }
+    let found = wait_until(Duration::from_secs(6), || {
+        snapshot_contains(&s, "oneterm_e2e")
+    });
     let _ = s.close();
     assert!(
         found,

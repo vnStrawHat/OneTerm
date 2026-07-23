@@ -62,3 +62,68 @@
 - Pure tests cover OSC parsing, URL policy, paste sanitization, encoding, highlighting, shell resolution, and split-tree invariants.
 - `terminal-view` has GPUI tests for panel shutdown and view behavior.
 - Backend listeners have tests for queue saturation and lifecycle guarantees.
+
+---
+
+## Remediation status (2026-07-22)
+
+All scoped Testability work items and acceptance criteria in
+[`remediation-plan.md`](remediation-plan.md) are complete. The findings above are retained as the
+pre-remediation baseline.
+
+### TEST-01 — Resolved
+
+- SFTP traversal, path containment, dangerous components, symlink rejection, cancellation,
+  bounded discovery, and atomic finalization have direct unit tests in
+  `crates/ssh/src/sftp_transfer.rs` and `crates/ssh/src/sftp_task.rs`.
+- `crates/sftp-ui/src/browser_state.rs` provides a fake `SftpBackend` and verifies state creation,
+  backend swapping, closed-backend purge, and prevention of stale state recreation.
+- These tests do not require a remote SSH or SFTP server.
+
+### TEST-02 — Resolved
+
+- Host-key unit tests cover matching, unknown, approved, changed, malformed, and wrong-fingerprint
+  cases in `crates/ssh/src/handler.rs`.
+- A Tokio loopback russh server exercises the real client handshake: strict mode rejects the first
+  unknown key, explicit fingerprint approval persists it, and a subsequent strict connection succeeds.
+
+### TEST-03 — Resolved
+
+- `TerminalConfig`, `UiConfig`, `SshSessionStore`, and `DockDocument` now offer explicit-path
+  load/save/update seams while their production methods retain the standard configuration paths.
+- Isolated temporary-directory tests cover round trips, corrupt-file quarantine, partial-schema
+  migration defaults, atomic replacement, and typed malformed-document errors.
+- Core persistence tests cover same-directory atomic replacement and concurrent JSON updates.
+
+### TEST-04 — Resolved
+
+- `SessionFactorySlot` is independently constructible. Production uses one static slot, while tests
+  use fresh slots and verify isolation plus duplicate-registration rejection without changing the
+  process-global factory.
+- Existing command-registry tests retain duplicate-registration diagnostics at the GPUI boundary.
+
+### TEST-05 — Resolved
+
+- Local PTY integration tests wait for lifecycle or terminal snapshot predicates with deadlines
+  instead of using fixed setup/output sleeps.
+- Shell resolution remains covered by pure platform-specific tests, while listener and terminal-model
+  tests remain deterministic and avoid spawning a shell.
+
+### TEST-06 — Resolved
+
+- Boundary tests cover startup service registration, panel shutdown, settings persistence/schema
+  round trips, and SFTP backend state swap/purge behavior.
+- `.github/workflows/ci.yml` runs portable core, terminal, local-shell, and SSH tests on Linux, macOS,
+  and Windows, including the real PTY integration cases.
+
+### Verification
+
+```text
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo build --workspace
+cargo test --workspace
+python scripts/check-doc-paths.py
+python scripts/check-english.py
+python scripts/verify-dependency-graph.py
+```
