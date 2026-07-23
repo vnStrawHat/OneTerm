@@ -10,13 +10,19 @@
 
 use std::path::Path;
 
-use oneterm_core::{atomic_write, config_dir, quarantine_file};
+use oneterm_core::{
+    atomic_write, config_dir, migrate_json_value, quarantine_file, set_schema_version,
+    versioned_object,
+};
 
 use gpui::{App, AppContext, Entity, Global};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 // File path is resolved at runtime via config_dir().join("ssh_session.json") —
 // debug → target/, release → ~/.OneTerm/ (see oneterm_core::config_dir).
+
+const CURRENT_SCHEMA_VERSION: u32 = 1;
 
 // ── SshSession ───────────────────────────────────────────────────────
 
@@ -122,8 +128,35 @@ impl SshSessionStore {
 
     /// Load sessions from an explicit path for deterministic callers and tests.
     fn load_from(path: &Path) -> Vec<SshSession> {
+        fn parse_document(raw: &str) -> std::io::Result<Vec<SshSession>> {
+            let value: Value = serde_json::from_str(raw).map_err(std::io::Error::other)?;
+            let value = migrate_json_value(
+                value,
+                CURRENT_SCHEMA_VERSION,
+                "ssh_session.json",
+                |_, value| match value {
+                    Value::Array(sessions) => {
+                        let mut document = versioned_object(0);
+                        document["sessions"] = Value::Array(sessions);
+                        Ok(document)
+                    }
+                    Value::Object(_) => Ok(value),
+                    _ => Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "ssh_session.json schema must be an object or legacy array",
+                    )),
+                },
+            )?;
+            let sessions = value.get("sessions").cloned().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "ssh_session.json is missing sessions",
+                )
+            })?;
+            serde_json::from_value(sessions).map_err(std::io::Error::other)
+        }
         match std::fs::read_to_string(&path) {
-            Ok(raw) => match serde_json::from_str::<Vec<SshSession>>(&raw) {
+            Ok(raw) => match parse_document(&raw) {
                 Ok(list) => list,
                 Err(e) => {
                     log::error!("ssh_session.json parse error: {e} — starting empty");
@@ -155,7 +188,19 @@ impl SshSessionStore {
     }
 
     fn save_snapshot(sessions: &[SshSession], path: &Path) {
-        match serde_json::to_string_pretty(sessions) {
+        let mut document = versioned_object(CURRENT_SCHEMA_VERSION);
+        document["sessions"] = match serde_json::to_value(sessions) {
+            Ok(value) => value,
+            Err(error) => {
+                log::error!("Failed to serialize ssh sessions: {error}");
+                return;
+            }
+        };
+        if let Err(error) = set_schema_version(&mut document, CURRENT_SCHEMA_VERSION) {
+            log::error!("Failed to version ssh sessions: {error}");
+            return;
+        }
+        match serde_json::to_string_pretty(&document) {
             Ok(json) => {
                 if let Err(e) = atomic_write(path, json.as_bytes()) {
                     log::error!("Failed to write ssh_session.json: {e}");
@@ -290,6 +335,33 @@ mod persistence_tests {
                 .to_string_lossy()
                 .contains(".invalid-")
         }));
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn legacy_fixture_migrates_to_versioned_session_document() {
+        let directory = std::env::temp_dir().join(format!(
+            "oneterm-session-schema-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("ssh_session.json");
+        std::fs::write(
+            &path,
+            include_str!("../tests/fixtures/persistence/ssh-session-v0.json"),
+        )
+        .unwrap();
+        let sessions = SshSessionStore::load_from(&path);
+        assert_eq!(sessions[0].label, "legacy");
+        SshSessionStore::save_snapshot(&sessions, &path);
+        let value: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value["schema_version"], CURRENT_SCHEMA_VERSION);
+        assert_eq!(value["sessions"][0]["host"], "legacy.example.test");
+        assert_eq!(SshSessionStore::load_from(&path)[0].label, "legacy");
         let _ = std::fs::remove_dir_all(directory);
     }
 }

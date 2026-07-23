@@ -18,8 +18,12 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use gpui::{App, AppContext, Entity, Global};
-use oneterm_core::{RightDockMode, atomic_write, config_dir, quarantine_file};
+use oneterm_core::{
+    RightDockMode, atomic_write, config_dir, migrate_json_value, quarantine_file,
+    set_schema_version,
+};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 // File path is resolved at runtime via config_dir().join("ui_config.json") —
 // debug → target/, release → ~/.OneTerm/ (see oneterm_core::config_dir).
@@ -60,7 +64,27 @@ pub struct UiConfig {
     pub agent_stale_threshold_ms: Option<u64>,
 }
 
+const CURRENT_SCHEMA_VERSION: u32 = 1;
+
 impl UiConfig {
+    fn parse_document(raw: &str) -> std::io::Result<Self> {
+        let value: Value = serde_json::from_str(raw).map_err(std::io::Error::other)?;
+        let value = migrate_json_value(
+            value,
+            CURRENT_SCHEMA_VERSION,
+            "ui_config.json",
+            |_, value| {
+                if !value.is_object() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "ui_config.json schema must be an object",
+                    ));
+                }
+                Ok(value)
+            },
+        )?;
+        serde_json::from_value(value).map_err(std::io::Error::other)
+    }
     /// Built-in default for [`UiConfig::agent_stale_threshold_ms`] — 5 minutes.
     pub const DEFAULT_AGENT_STALE_THRESHOLD_MS: u64 = 300_000;
 
@@ -80,8 +104,8 @@ impl UiConfig {
     /// Load the config from an explicit path for deterministic callers and tests.
     pub fn load_from(path: &Path) -> Self {
         match std::fs::read_to_string(&path) {
-            Ok(raw) => serde_json::from_str::<UiConfig>(&raw).unwrap_or_else(|e| {
-                log::error!("ui_config.json parse error: {e} — using defaults");
+            Ok(raw) => Self::parse_document(&raw).unwrap_or_else(|e| {
+                log::error!("ui_config.json parse or migration error: {e} — using defaults");
                 if let Err(quarantine_error) = quarantine_file(&path) {
                     log::warn!("failed to quarantine ui_config.json: {quarantine_error}");
                 }
@@ -116,8 +140,9 @@ impl UiConfig {
 
     /// Save the config to an explicit path for deterministic callers and tests.
     pub fn save_to(&self, path: &Path) -> std::io::Result<()> {
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let mut value = serde_json::to_value(self).map_err(std::io::Error::other)?;
+        set_schema_version(&mut value, CURRENT_SCHEMA_VERSION)?;
+        let json = serde_json::to_string_pretty(&value).map_err(std::io::Error::other)?;
         atomic_write(&path, json.as_bytes())?;
         log::debug!("Saved ui_config.json to {path:?}");
         Ok(())
@@ -223,5 +248,27 @@ mod tests {
             config.agent_stale_threshold_ms(),
             UiConfig::DEFAULT_AGENT_STALE_THRESHOLD_MS
         );
+    }
+
+    #[test]
+    fn legacy_fixture_migrates_and_current_save_is_idempotent() {
+        let legacy = include_str!("../tests/fixtures/persistence/ui-config-v0.json");
+        let config = UiConfig::parse_document(legacy).unwrap();
+        assert_eq!(config.theme_name.as_deref(), Some("Legacy Theme"));
+        let directory = std::env::temp_dir().join(format!(
+            "oneterm-ui-schema-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let path = directory.join("ui_config.json");
+        config.save_to(&path).unwrap();
+        let value: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value["schema_version"], CURRENT_SCHEMA_VERSION);
+        let restored = UiConfig::load_from(&path);
+        assert_eq!(restored.theme_name, config.theme_name);
+        let _ = std::fs::remove_dir_all(directory);
     }
 }

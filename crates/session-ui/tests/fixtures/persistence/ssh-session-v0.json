@@ -1,0 +1,8 @@
+[
+  {
+    "label": "legacy",
+    "host": "legacy.example.test",
+    "port": 2222,
+    "username": "operator"
+  }
+]

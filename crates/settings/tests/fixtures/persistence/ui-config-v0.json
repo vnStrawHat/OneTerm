@@ -1,0 +1,7 @@
+{
+  "ui_font_size": 14.0,
+  "theme_name": "Legacy Theme",
+  "key_bindings": {
+    "open_settings": "ctrl-,"
+  }
+}

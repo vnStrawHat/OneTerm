@@ -7,15 +7,20 @@
 use std::collections::BTreeMap;
 use std::io;
 
-use oneterm_core::{SftpTableState, update_json_file};
+use oneterm_core::{SftpTableState, migrate_json_value, set_schema_version, update_json_file};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
 use crate::paths::state_file;
 
+const CURRENT_SCHEMA_VERSION: u32 = 1;
+
 /// Complete OneTerm-owned `docks.json` document.
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DockDocument {
+    /// Version of the complete dock document schema.
+    #[serde(default = "current_schema_version")]
+    pub schema_version: u32,
     /// Fields owned by gpui-component's dock layout model.
     #[serde(flatten)]
     dock_fields: BTreeMap<String, Value>,
@@ -30,6 +35,34 @@ pub struct DockDocument {
     pub sftp_table_state: Option<SftpTableState>,
 }
 
+fn current_schema_version() -> u32 {
+    CURRENT_SCHEMA_VERSION
+}
+
+impl Default for DockDocument {
+    fn default() -> Self {
+        Self {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            dock_fields: BTreeMap::new(),
+            zoomed_panel: None,
+            toggle_button_visible: None,
+            sftp_table_state: None,
+        }
+    }
+}
+
+fn parse_document(value: Value) -> io::Result<DockDocument> {
+    let value = migrate_json_value(value, CURRENT_SCHEMA_VERSION, "docks.json", |_, value| {
+        if !value.is_object() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "docks.json schema must be an object",
+            ));
+        }
+        Ok(value)
+    })?;
+    serde_json::from_value(value).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
 impl DockDocument {
     /// Create a document from a serializable dock layout.
     pub fn from_dock_state<T: Serialize>(state: &T) -> serde_json::Result<Self> {
@@ -63,7 +96,10 @@ pub fn read_dock_document() -> io::Result<DockDocument> {
 /// configuration directory while the production wrapper retains the normal path.
 pub fn read_dock_document_from(path: &std::path::Path) -> io::Result<DockDocument> {
     let raw = std::fs::read_to_string(path)?;
-    serde_json::from_str(&raw).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    parse_document(
+        serde_json::from_str(&raw)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
+    )
 }
 
 /// Atomically update the complete dock document under the shared file lock.
@@ -82,11 +118,12 @@ pub fn update_dock_document_at(
         let mut document = if value.as_object().is_some_and(|object| object.is_empty()) {
             DockDocument::default()
         } else {
-            serde_json::from_value(value.clone())
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?
+            parse_document(value.clone())?
         };
         update(&mut document)?;
-        *value = serde_json::to_value(document).map_err(io::Error::other)?;
+        let mut serialized = serde_json::to_value(document).map_err(io::Error::other)?;
+        set_schema_version(&mut serialized, CURRENT_SCHEMA_VERSION)?;
+        *value = serialized;
         Ok(())
     })
 }
@@ -157,6 +194,36 @@ mod persistence_tests {
         assert_eq!(
             read_dock_document_from(&path).unwrap_err().kind(),
             io::ErrorKind::InvalidData
+        );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn legacy_fixture_migrates_during_shared_update() {
+        let directory = std::env::temp_dir().join(format!(
+            "oneterm-dock-schema-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("docks.json");
+        std::fs::write(
+            &path,
+            include_str!("../tests/fixtures/persistence/docks-v0.json"),
+        )
+        .unwrap();
+        let legacy = read_dock_document_from(&path).unwrap();
+        assert_eq!(legacy.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(legacy.zoomed_panel.as_deref(), Some("terminal"));
+        update_dock_document_at(&path, |_| Ok(())).unwrap();
+        let value: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value["schema_version"], CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            read_dock_document_from(&path).unwrap().schema_version,
+            CURRENT_SCHEMA_VERSION
         );
         let _ = std::fs::remove_dir_all(directory);
     }

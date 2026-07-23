@@ -9,8 +9,12 @@
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-use oneterm_core::{LocalShellConfig, atomic_write, config_dir, quarantine_file};
+use oneterm_core::{
+    LocalShellConfig, atomic_write, config_dir, migrate_json_value, quarantine_file,
+    set_schema_version,
+};
 
 pub mod bell;
 pub mod colors;
@@ -57,6 +61,8 @@ pub struct TerminalConfig {
     #[serde(default)]
     pub security: SecurityConfig,
 }
+
+const CURRENT_SCHEMA_VERSION: u32 = 1;
 
 // ── Load / Save ─────────────────────────────────────────────────────
 
@@ -108,6 +114,30 @@ fn strip_json_comments(input: &str) -> String {
 }
 
 impl TerminalConfig {
+    fn parse_document(raw: &str) -> std::io::Result<Self> {
+        let value: Value = serde_json::from_str(raw).map_err(std::io::Error::other)?;
+        let value = migrate_json_value(
+            value,
+            CURRENT_SCHEMA_VERSION,
+            "terminal.json",
+            |_, value| {
+                if !value.is_object() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "terminal.json schema must be an object",
+                    ));
+                }
+                Ok(value)
+            },
+        )?;
+        serde_json::from_value(value).map_err(std::io::Error::other)
+    }
+
+    fn serialize_document(&self) -> std::io::Result<String> {
+        let mut value = serde_json::to_value(self).map_err(std::io::Error::other)?;
+        set_schema_version(&mut value, CURRENT_SCHEMA_VERSION)?;
+        serde_json::to_string_pretty(&value).map_err(std::io::Error::other)
+    }
     /// Load the config from file. If the file does not exist → create a default + return default.
     /// Supports `//` and `/* */` comments in the JSON.
     pub fn load() -> Self {
@@ -119,7 +149,7 @@ impl TerminalConfig {
         match std::fs::read_to_string(&path) {
             Ok(raw) => {
                 let json = strip_json_comments(&raw);
-                match serde_json::from_str::<TerminalConfig>(&json) {
+                match Self::parse_document(&json) {
                     Ok(cfg) => cfg,
                     Err(e) => {
                         log::error!("terminal.json parse error: {e} — using defaults");
@@ -133,7 +163,7 @@ impl TerminalConfig {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 // A missing file is the only read failure that safely selects defaults.
                 let cfg = Self::default();
-                match serde_json::to_string_pretty(&cfg) {
+                match cfg.serialize_document() {
                     Ok(json) => match atomic_write(&path, json.as_bytes()) {
                         Ok(()) => log::info!("Created default terminal.json at {path:?}"),
                         Err(write_error) => log::warn!(
@@ -160,8 +190,7 @@ impl TerminalConfig {
 
     /// Save the config to an explicit path for deterministic callers and tests.
     pub fn save_to(&self, path: &Path) -> std::io::Result<()> {
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let json = self.serialize_document()?;
         atomic_write(&path, json.as_bytes())?;
         log::info!("Saved terminal.json to {path:?}");
         Ok(())
@@ -358,6 +387,28 @@ mod tests {
                 .to_string_lossy()
                 .contains(".invalid-")
         }));
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn legacy_fixture_migrates_and_current_save_is_idempotent() {
+        let legacy = include_str!("../../tests/fixtures/persistence/terminal-v0.json");
+        let config = TerminalConfig::parse_document(legacy).unwrap();
+        assert_eq!(config.font.family.as_deref(), Some("Legacy Mono"));
+        let directory = std::env::temp_dir().join(format!(
+            "oneterm-terminal-schema-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let path = directory.join("terminal.json");
+        config.save_to(&path).unwrap();
+        let value: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value["schema_version"], CURRENT_SCHEMA_VERSION);
+        let restored = TerminalConfig::load_from(&path);
+        assert_eq!(restored.font.family, config.font.family);
         let _ = std::fs::remove_dir_all(directory);
     }
 }
