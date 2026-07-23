@@ -11,11 +11,11 @@ Use this page and `docs/agents/structure.md` when locating current implementatio
 | Domain | `oneterm-core` | Errors, SSH/local configuration, SFTP contracts | `crates/core/src/lib.rs`, `crates/core/src/sftp.rs` |
 | Terminal engine | `oneterm-terminal` | Terminal model, session contract, encoding, OSC, search | `crates/terminal/src/lib.rs`, `crates/terminal/src/model.rs`, `crates/terminal/src/contracts.rs` |
 | Shared services | `oneterm-settings` | Persistent terminal and UI settings | `crates/settings/src/lib.rs` |
-| Shared services | `oneterm-state` | Global state, commands, typed dock persistence, Agent folded model | `crates/state/src/lib.rs`, `crates/state/src/dock_persistence.rs`, `crates/state/src/agent_registry.rs`, `crates/state/src/agent_model.rs` |
+| Shared services | `oneterm-state` | App-scoped services, workspace state, typed dock persistence, Agent folded model | `crates/state/src/lib.rs`, `crates/state/src/services.rs`, `crates/state/src/dock_persistence.rs`, `crates/state/src/agent_registry.rs`, `crates/state/src/agent_model.rs` |
 | Vendor patch | `gpui-component` | Pinned upstream UI crate with the reviewed source and standalone-manifest patches | `vendor/README.md`, `vendor/patches/gpui-component/` |
 | Shell | `oneterm-workspace` | Feature-agnostic window, layout, dock persistence, status bar | `crates/workspace/src/lib.rs`, `crates/workspace/src/layout/` |
 | Backend | `oneterm-local-shell` | Local PTY session implementation | `crates/local-shell/src/lib.rs`, `crates/local-shell/src/session_terminal.rs` |
-| Backend | `oneterm-ssh` | SSH shell and SFTP implementations | `crates/ssh/src/lib.rs`, `crates/ssh/src/session_terminal.rs`, `crates/ssh/src/sftp_task.rs`, `crates/ssh/src/sftp_transfer.rs` |
+| Backend | `oneterm-ssh` | SSH shell and SFTP implementations | `crates/ssh/src/lib.rs`, `crates/ssh/src/session_terminal.rs`, `crates/ssh/src/sftp_task.rs`, `crates/ssh/src/sftp_task/`, `crates/ssh/src/sftp_task/transfer/` |
 | Feature | `oneterm-terminal-view` | Terminal panel, rendering, input, split spaces | `crates/terminal-view/src/lib.rs`, `crates/terminal-view/src/panel/` |
 | Feature | `oneterm-sftp-ui` | SFTP browser, transfer queue, persistence UI | `crates/sftp-ui/src/lib.rs`, `crates/sftp-ui/src/panel.rs` |
 | Feature | `oneterm-session-ui` | Session tree and SSH connection dialogs | `crates/session-ui/src/lib.rs`, `crates/session-ui/src/connect_dialog.rs` |
@@ -43,15 +43,13 @@ CI entry point is [`scripts/verify-dependency-graph.py`](../scripts/verify-depen
 
 ## Service registration
 
-Two validated registries remain intentionally distinct:
-
-- `oneterm_terminal::SessionFactory` is a process-wide `OnceLock` because terminal
-  session creation is used from background work that does not carry a GPUI `App`.
-- `oneterm_state::WorkspaceCommands` is a GPUI global because its window-bound
-  callbacks require `App`/`Window` access and follow the application lifecycle.
-
-Both reject duplicate registration, and consumers handle a missing registry before
-dispatch. The app crate is the only registration site for either service.
+`oneterm_state::AppServices` is the single application-scoped service bundle. The
+composition root constructs the backend-neutral `SessionFactory` implementation and
+workspace command callbacks, installs them together, rejects duplicate registration,
+and validates availability during startup. Feature crates retrieve only the handle
+they need through GPUI application context; they do not own registries or backend
+construction. Workspace active terminal and SFTP state remains keyed by DockArea,
+while durable settings and persistence policy remain process-wide where documented.
 
 ## Ownership shortcuts
 

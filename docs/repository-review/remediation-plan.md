@@ -18,19 +18,20 @@ Items are ordered within each category by priority. Cross-category dependencies 
   - **Completed:** typed cancellation, reliable/coalescible session events, bounded SSH/LocalShell command queues, documented overload semantics, and deterministic saturation tests are complete. The full quality gate passes with 436 tests passed and 2 ignored. The broader `AppError` taxonomy remains a separate Maintainability item.
 - [x] **Phase 3 — Make persistence and state safe:** move persistence off UI handlers; choose single-instance or inter-process locking; scope active workspace state; add subprocess/fault-injection tests.
   - **Completed:** OS-level advisory locks, explicit last-completed-writer-wins semantics, background snapshot persistence, per-DockArea active state, subprocess concurrency coverage, and injected filesystem-failure coverage are implemented. The full quality gate passes with 443 tests passed and 2 ignored; English, architecture-path, and 16-member dependency-graph checks also pass.
-- [ ] **Phase 4 — Reduce structural cost:** split oversized modules; remove periodic SFTP snapshot cloning; narrow terminal capabilities; consolidate service registration.
+- [x] **Phase 4 — Reduce structural cost:** split oversized modules; remove periodic SFTP snapshot cloning; narrow terminal capabilities; consolidate service registration.
+  - **Completed:** SFTP task/transfer responsibilities are split into focused modules; idle SFTP snapshots reuse immutable shared entries and dirty tracking; optional terminal services are grouped behind `TerminalCapabilities`; and session factory/workspace commands are installed together through app-scoped `AppServices`. Targeted SSH, SFTP UI, terminal, state, session UI, and terminal-view tests pass.
 - [ ] **Phase 5 — Measure and evolve:** define supported scale targets, add benchmarks and UI integration coverage, introduce schema migrations, and upstream/remove the UI fork where possible.
 
 ---
 
 ## 1. Readability
 
-- [ ] **P1 — Split oversized SFTP modules.**
+- [x] **P1 — Split oversized SFTP modules.**
   - **Targets:** `crates/ssh/src/sftp_task.rs`, `crates/ssh/src/sftp_transfer.rs`.
   - Extract command dispatch, transfer registry, path policy, recursive deletion, metadata conversion, and traversal planning into focused modules.
   - Keep the public orchestration function small and preserve existing backend contracts.
   - **Done when:** each extracted module has one primary responsibility, public behavior is unchanged, and targeted SFTP tests remain green.
-
+  - **Completed:** `sftp_task.rs` and `sftp_transfer.rs` now delegate to focused metadata, path-policy, deletion, registry, upload, download, and staging modules; `oneterm-ssh` tests pass.
 - [ ] **P1 — Split terminal-view orchestration from rendering.**
   - **Targets:** `crates/terminal-view/src/view/mod.rs`, `crates/terminal-view/src/element/prepaint.rs`.
   - Separate lifecycle/event subscription, view state, clipboard/agent integration, and render preparation.
@@ -48,13 +49,13 @@ Items are ordered within each category by priority. Cross-category dependencies 
 
 ## 2. Simplicity
 
-- [ ] **P1 — Define a narrower terminal capability model.**
+- [x] **P1 — Define a narrower terminal capability model.**
   - **Target:** `crates/terminal/src/session.rs`.
   - Split optional concerns into focused capabilities such as rendering, input, search, lifecycle, CWD, SFTP, and metrics.
   - Retain a compatibility façade during migration if required.
   - **Dependency:** coordinate with architecture/service-registration work before changing feature constructors.
   - **Done when:** feature crates depend only on the capabilities they use and fakes do not implement unrelated methods.
-
+  - **Completed:** optional network, SFTP, and CWD services are returned through `TerminalCapabilities`; local/test sessions use the empty default without unrelated methods.
 - [ ] **P1 — Replace or formally constrain custom URL parsing.**
   - **Target:** `crates/terminal/src/url_policy.rs`.
   - Prefer a mature URL parser if allowed by dependency policy; otherwise document and enforce a narrow grammar.
@@ -67,11 +68,11 @@ Items are ordered within each category by priority. Cross-category dependencies 
   - Keep migrations and schema definitions in their owning crates.
   - **Done when:** recovery behavior is consistent and schema ownership remains visible at call sites.
 
-- [ ] **P2 — Reduce runtime service indirection.**
+- [x] **P2 — Reduce runtime service indirection.**
   - Replace implicit global lookups with explicit service handles during feature/window initialization.
   - Add a single startup validation for required registrations.
   - **Done when:** missing registration produces one actionable startup error and tests can install isolated service sets.
-
+  - **Completed:** `AppServices` owns the session factory and workspace callbacks, validates startup registration, rejects duplicates, and is covered by isolated GPUI-context tests.
 ## 3. Maintainability
 
 - [x] **P0 — Add automated enforcement for the documented quality gate.**
@@ -182,11 +183,11 @@ Items are ordered within each category by priority. Cross-category dependencies 
   - **Done when:** queue memory has a documented upper bound and overload tests pass.
   - **Completed:** SSH and LocalShell use 256-message queues with 4 MiB aggregate input budgets; writes report typed saturation, resize bursts coalesce, and close/shutdown is prioritized.
 
-- [ ] **P1 — Remove periodic full SFTP snapshot cloning.**
+- [x] **P1 — Remove periodic full SFTP snapshot cloning.**
   - **Targets:** `crates/sftp-ui/src/panel.rs`, `crates/sftp-ui/src/browser_state.rs`.
   - Track dirty generations and persist only after changes/tab transitions; use immutable shared entries if snapshots remain necessary.
   - **Done when:** idle panels perform no O(entry-count) copies.
-
+  - **Completed:** dirty tracking prevents idle snapshot rebuilding, while `Arc<[FileEntry]>` shares unchanged entries in O(1); focused idle-snapshot and SFTP UI tests pass.
 - [ ] **P1 — Measure terminal snapshot and lock hold latency.**
   - Use existing diagnostics for snapshot time, parse lock hold, frame latency, and throughput.
   - Establish p95/p99 targets for representative grid sizes and concurrent panes.
@@ -279,12 +280,12 @@ Items are ordered within each category by priority. Cross-category dependencies 
 
 ## 10. Evolvability
 
-- [ ] **P1 — Replace process-global service registration with scoped service bundles.**
+- [x] **P1 — Replace process-global service registration with scoped service bundles.**
   - Introduce app/window/workspace service handles for session creation and workspace commands.
   - Keep backend construction in the app composition root.
   - Add startup validation and isolated test installation.
   - **Done when:** two independent test/application contexts can use different service configurations.
-
+  - **Completed:** process-global factory and command registries were removed; the app composition root installs one typed `AppServices` bundle per GPUI application context, with duplicate/missing-registration tests.
 - [ ] **P1 — Introduce schema migration infrastructure before the first breaking change.**
   - Define version constants, migration functions, legacy fixtures, current-schema serialization, and idempotence tests.
   - Apply to UI config, terminal config, session store, and dock documents as needed.
@@ -306,11 +307,11 @@ Items are ordered within each category by priority. Cross-category dependencies 
 
 ## 11. Architecture
 
-- [ ] **P1 — Establish an explicit app/workspace service boundary.**
+- [x] **P1 — Establish an explicit app/workspace service boundary.**
   - Define which dependencies are process-wide, app-wide, window-wide, and workspace-wide.
   - Replace hidden global lookups for UI-facing services with typed handles.
   - **Done when:** the architecture document and constructors agree on scope and initialization order.
-
+  - **Completed:** backend construction remains in `app`; feature-facing factory and workspace callbacks are app-scoped state services, while active terminal/SFTP state remains DockArea-scoped.
 - [ ] **P1 — Make active-terminal and SFTP state window-scoped.**
   - Introduce per-workspace state and pass it to panels/views.
   - Add a multi-window or two-context test harness.
@@ -332,10 +333,10 @@ Items are ordered within each category by priority. Cross-category dependencies 
   - Replace the `session-ui → terminal-view` exception with a typed open-panel request.
   - **Done when:** the app remains the only feature composition point.
 
-- [ ] **P2 — Split the broad terminal contract by capability.**
+- [x] **P2 — Split the broad terminal contract by capability.**
   - Coordinate with Simplicity SIMP-01 and preserve backend-neutrality.
   - **Done when:** new optional capabilities can be added without expanding every session implementation and fake.
-
+  - **Completed:** `TerminalSession::capabilities()` provides an extensible optional-capability boundary with a default implementation.
 ## Completion criteria for the plan
 
 - [ ] All P0 items are complete and covered by CI or an explicit security/release check.

@@ -480,6 +480,13 @@ pub trait TerminalSession: Send + Sync + 'static {
 > This trait is only a **render/lifecycle interface** — it does not force a shared pump/transport.
 > `LocalSession` and `SshSession` implement it independently. The two backends still don't know each other.
 
+`TerminalSession::capabilities()` returns optional backend services as one scoped
+`TerminalCapabilities` value. SSH supplies network counters, SFTP, and its live CWD
+source; local sessions use the default empty value. This keeps optional features out
+of the required implementation surface for test fakes and future backends. The app
+installs the session factory and workspace callbacks together through `AppServices`;
+feature crates read those handles from their GPUI application context.
+
 `SessionEvent`: `Output | Title(String) | Cwd(PathBuf) | Clipboard(Option<String>) |
 Exited(Option<i32>) | Closed`.
 
