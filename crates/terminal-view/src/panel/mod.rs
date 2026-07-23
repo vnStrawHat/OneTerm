@@ -18,7 +18,7 @@ mod title;
 use std::sync::Arc;
 
 use gpui::{
-    Anchor, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    Anchor, App, AppContext as _, Context, Entity, EntityId, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, MouseButton, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div,
     prelude::FluentBuilder as _, px,
@@ -42,6 +42,8 @@ use super::view::{LocalTerminalView, TerminalViewEvent};
 
 /// Panel displaying a Terminal Tab (a tree of Spaces).
 pub struct TerminalPanel {
+    /// DockArea identity used to publish active state only to this workspace.
+    pub(super) workspace_id: Option<EntityId>,
     /// The pane tree — leaves are terminals or empty placeholders.
     pub(super) tree: SpaceTree,
     /// Reference to the `TabPanel` containing this panel — used for the close-tab
@@ -89,16 +91,28 @@ fn trim_path_title(title: &str) -> &str {
 impl TerminalPanel {
     /// Create a panel + spawn the default local session (cmd on Windows).
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::new_internal(None, window, cx)
+        let workspace_id = oneterm_state::AppState::primary_workspace_id(cx);
+        Self::new_internal(None, workspace_id, window, cx)
+    }
+
+    /// Create a panel bound to a specific dock/workspace.
+    pub fn new_in_workspace(
+        workspace_id: EntityId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new_internal(None, Some(workspace_id), window, cx)
     }
 
     /// Create a panel + spawn a local session with the given shell kind.
     pub fn new_with_shell(kind: ShellKind, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::new_internal(Some(kind), window, cx)
+        let workspace_id = oneterm_state::AppState::primary_workspace_id(cx);
+        Self::new_internal(Some(kind), workspace_id, window, cx)
     }
 
     fn new_internal(
         shell_kind_override: Option<ShellKind>,
+        workspace_id: Option<EntityId>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -129,6 +143,7 @@ impl TerminalPanel {
         // Focus is handled inside the match above (only when spawn succeeds).
 
         let mut this = Self {
+            workspace_id,
             tree,
             tab_panel: None,
             is_active: false,
@@ -162,7 +177,9 @@ impl TerminalPanel {
         });
         view.read(cx).focus_handle(cx).focus(window, cx);
 
+        let workspace_id = oneterm_state::AppState::primary_workspace_id(cx);
         let mut this = Self {
+            workspace_id,
             tree,
             tab_panel: None,
             is_active: false,
@@ -189,6 +206,15 @@ impl TerminalPanel {
     /// Helper to create an `Entity<Self>` (default local session).
     pub fn new_entity(window: &mut Window, cx: &mut App) -> Entity<Self> {
         cx.new(|cx| Self::new(window, cx))
+    }
+
+    /// Create an entity bound to a specific dock/workspace.
+    pub fn new_entity_in_workspace(
+        workspace_id: EntityId,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<Self> {
+        cx.new(|cx| Self::new_in_workspace(workspace_id, window, cx))
     }
 
     /// Helper to create an `Entity<Self>` with a specific shell kind.

@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
+    App, AppContext, Context, Entity, EntityId, EventEmitter, FocusHandle, Focusable, IntoElement,
     Subscription, Task, Window,
 };
 use gpui_component::dock::{Panel, PanelControl, PanelEvent};
@@ -35,8 +35,8 @@ use super::types::{PendingAction, TransferItem};
 
 /// Panel displaying the SFTP browser.
 ///
-/// `panel_name = "sftp"`. One panel for the whole app in the right dock.
-/// Observes `AppState.active_sftp` — when the SSH tab changes, swap the SFTP backend.
+/// `panel_name = "sftp"`. One panel per workspace in the right dock.
+/// Observes the active state keyed by its DockArea workspace when the SSH tab changes.
 pub struct SftpPanel {
     pub(crate) focus_handle: FocusHandle,
 
@@ -94,10 +94,28 @@ pub struct SftpPanel {
 impl SftpPanel {
     /// Create a new panel — observe AppState, create DataTable state.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let workspace_id = AppState::primary_workspace_id(cx);
+        Self::new_internal(workspace_id, window, cx)
+    }
+
+    /// Create a new panel bound to a specific dock/workspace.
+    pub fn new_in_workspace(
+        workspace_id: EntityId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new_internal(Some(workspace_id), window, cx)
+    }
+
+    fn new_internal(
+        workspace_id: Option<EntityId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let focus_handle = cx.focus_handle();
 
         let app_state = AppState::global(cx);
-        log::debug!("SftpPanel::new: observing AppState for active_sftp changes");
+        log::debug!("SftpPanel::new: observing workspace active state changes");
 
         // DataTable state — delegate owns entries + column config (persisted).
         let panel_weak = cx.entity().downgrade();
@@ -115,11 +133,9 @@ impl SftpPanel {
         // persist column widths on resize.
         let table_sub = cx.subscribe_in(&table, window, Self::on_table_event);
 
-        cx.observe(&app_state, |this, state, cx| {
-            let (sftp, cwd_source) = {
-                let s = state.read(cx);
-                (s.active_sftp.clone(), s.active_cwd_source.clone())
-            };
+        cx.observe(&app_state, move |this, state, cx| {
+            let active = state.read(cx).active_workspace(workspace_id);
+            let (sftp, cwd_source) = (active.active_sftp, active.active_cwd_source);
             this.sync_from_app_state(sftp, cwd_source, cx);
             cx.notify();
         })
@@ -178,10 +194,8 @@ impl SftpPanel {
         // SFTP connection immediately. The observer above only fires on *change*,
         // so without this seed the panel stays empty when the active tab is the
         // same one that was active before the swap.
-        let (sftp, cwd_source) = {
-            let s = app_state.read(cx);
-            (s.active_sftp.clone(), s.active_cwd_source.clone())
-        };
+        let active = app_state.read(cx).active_workspace(workspace_id);
+        let (sftp, cwd_source) = (active.active_sftp, active.active_cwd_source);
         me.sync_from_app_state(sftp, cwd_source, cx);
 
         me
@@ -192,9 +206,18 @@ impl SftpPanel {
         cx.new(|cx| Self::new(window, cx))
     }
 
+    /// Create an entity bound to a specific dock/workspace.
+    pub fn new_entity_in_workspace(
+        workspace_id: EntityId,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<Self> {
+        cx.new(|cx| Self::new_in_workspace(workspace_id, window, cx))
+    }
+
     // ── Table event handler ──────────────────────────────────
 
-    /// Pull the active SFTP backend + cwd source from `AppState`.
+    /// Pull the active SFTP backend + cwd source from this workspace's state.
     ///
     /// Called both from the AppState observer (whenever the active SSH tab changes)
     /// and once at construction. The construction call is what fixes the

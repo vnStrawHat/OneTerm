@@ -26,7 +26,7 @@ use gpui::{
 };
 
 use gpui_component::dock::{
-    Panel, PanelControl, PanelEvent, PanelInfo, PanelState, register_panel,
+    DockArea, Panel, PanelControl, PanelEvent, PanelInfo, PanelState, register_panel,
 };
 use gpui_component::{
     ActiveTheme as _, h_flex,
@@ -56,9 +56,13 @@ pub struct SshClientPanel {
 
 impl SshClientPanel {
     /// Create a new SSH Client panel.
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        dock_area: gpui::WeakEntity<DockArea>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let session = SessionPanel::new_entity(window, cx);
-        let sftp = SftpPanel::new_entity(window, cx);
+        let sftp = SftpPanel::new_entity_in_workspace(dock_area.entity_id(), window, cx);
 
         Self {
             focus_handle: cx.focus_handle(),
@@ -68,8 +72,12 @@ impl SshClientPanel {
     }
 
     /// Helper to create an `Entity<Self>`.
-    pub fn new_entity(window: &mut Window, cx: &mut App) -> Entity<Self> {
-        cx.new(|cx| Self::new(window, cx))
+    pub fn new_entity(
+        dock_area: gpui::WeakEntity<DockArea>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<Self> {
+        cx.new(|cx| Self::new(dock_area, window, cx))
     }
 
     /// Render a section header: just the title text. The background uses the
@@ -182,7 +190,7 @@ impl Render for SshClientPanel {
 /// name and saved layouts can deserialize it. Called by the app aggregator
 /// ([`crate::init::init`]).
 pub fn init(cx: &mut App) {
-    register_panel(cx, SSH_CLIENT_PANEL_NAME, |_, _, _, window, cx| {
-        Box::new(SshClientPanel::new_entity(window, cx))
+    register_panel(cx, SSH_CLIENT_PANEL_NAME, |dock_area, _, _, window, cx| {
+        Box::new(SshClientPanel::new_entity(dock_area, window, cx))
     });
 }

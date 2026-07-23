@@ -187,10 +187,9 @@ impl TerminalPanel {
             }
             None => (None, None, true),
         };
+        let workspace_id = self.workspace_id;
         AppState::global(cx).update(cx, |state, cx| {
-            state.active_sftp = sftp;
-            state.active_cwd_source = cwd_source;
-            state.active_is_local = is_local;
+            state.set_active_workspace(workspace_id, sftp, cwd_source, is_local);
             cx.notify();
         });
     }

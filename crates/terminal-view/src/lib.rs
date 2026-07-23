@@ -40,8 +40,12 @@ use gpui_component::dock::register_panel;
 pub fn init(cx: &mut App) {
     status::register_status_metrics(cx);
     agent::init(cx);
-    register_panel(cx, "terminal", |_, _, _, window, cx| {
-        Box::new(panel::TerminalPanel::new_entity(window, cx))
+    register_panel(cx, "terminal", |dock_area, _, _, window, cx| {
+        Box::new(panel::TerminalPanel::new_entity_in_workspace(
+            dock_area.entity_id(),
+            window,
+            cx,
+        ))
     });
     register_panel(cx, "terminal-settings", |_, _, _, window, cx| {
         Box::new(settings_panel::TerminalSettingsPanel::new_entity(
