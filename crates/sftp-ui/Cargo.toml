@@ -24,3 +24,4 @@ log.workspace = true
 
 [dev-dependencies]
 async-channel.workspace = true
+gpui = { workspace = true, features = ["test-support"] }

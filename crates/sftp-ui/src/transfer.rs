@@ -281,7 +281,7 @@ impl SftpPanel {
     /// - Folder: recursively walk the remote tree, create local dirs, download each file.
     pub(crate) fn do_download(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let entry = match self.selected_entry(cx) {
-            Some(e) => e.clone(),
+            Some(entry) => entry.clone(),
             None => {
                 log::warn!("SftpPanel::do_download: no selection");
                 window.push_notification(
@@ -295,14 +295,27 @@ impl SftpPanel {
                 return;
             }
         };
+        let sftp = match self.sftp.clone() {
+            Some(sftp) => sftp,
+            None => {
+                log::warn!("SftpPanel::do_download: no active SFTP backend");
+                window.push_notification(
+                    notify(
+                        NotificationType::Warning,
+                        "No active SFTP connection is available.",
+                        cx,
+                    ),
+                    cx,
+                );
+                return;
+            }
+        };
 
         log::info!(
             "SftpPanel::do_download: \"{}\" (is_dir={})",
             entry.name,
             entry.is_dir
         );
-
-        let sftp = self.sftp.clone().unwrap();
         let backend_key = super::browser_state::backend_key(&Some(sftp.clone()));
         let panel = cx.entity();
         let remote_path = entry.path.clone();
@@ -472,5 +485,53 @@ impl SftpPanel {
             }
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use gpui::{AppContext as _, TestAppContext, VisualTestContext};
+    use oneterm_core::FileEntry;
+
+    use super::SftpPanel;
+
+    #[gpui::test]
+    fn download_with_stale_selection_and_no_backend_is_recoverable(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(oneterm_state::AppState::init);
+
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| SftpPanel::new(window, cx));
+            gpui_component::Root::new(panel, window, cx)
+        });
+        let cx: &mut VisualTestContext = cx;
+        let panel = root.read_with(cx, |root, _| {
+            root.view().clone().downcast::<SftpPanel>().unwrap()
+        });
+
+        panel.update_in(cx, |panel, window, cx| {
+            panel.table.update(cx, |table, _| {
+                table.delegate_mut().entries.push(FileEntry {
+                    name: "example.txt".into(),
+                    path: PathBuf::from("example.txt"),
+                    is_dir: false,
+                    is_symlink: false,
+                    size: 1,
+                    modified: None,
+                    accessed: None,
+                    permissions: 0o644,
+                    uid: None,
+                    gid: None,
+                    owner: None,
+                    group: None,
+                });
+            });
+            panel.selected = Some(0);
+            assert!(panel.sftp.is_none());
+
+            panel.do_download(window, cx);
+        });
     }
 }
