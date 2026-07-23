@@ -2,7 +2,7 @@
   "upstream_repository": "https://github.com/longbridge/gpui-component",
   "upstream_revision": "ea6b194db04cc7c0474851f07c7d5b7a9df6a98b",
   "patch_file": "vendor/patches/gpui-component/0001-OneTerm-add-TabPanel-set_active_panel.patch",
-  "patch_sha256": "35a03e6d3d92a6e154a6dc877efb98cded9b0d4ec12062b9853493ed593ca593",
+  "patch_sha256": "ceb31f2f683ff5330fb85dafc9182ac866ba6fb57b28dd49477e531bcecd4f79",
   "patch_modules": [
     "dock/tab_panel.rs"
   ],

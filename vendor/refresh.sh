@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# refresh.sh — regenerate the vendored OneTerm forks of `vte` + `alacritty_terminal`
+# refresh.sh — regenerate the vendored OneTerm forks of `vte`, `alacritty_terminal`, and `gpui-component`
 # from their PRISTINE upstream revisions plus the patches under `vendor/patches/`.
 #
 # Model (per crate):
@@ -17,10 +17,14 @@
 #   bash vendor/refresh.sh --check    # verify vendor/<crate> == pristine + patches (no writes)
 #
 # Pristine sources are taken from the local Cargo cache when present (byte-exact), else
-# fetched from the network (crates.io / GitHub). Requires: bash, patch, diff, tar; and
-# git + curl only for the network fallback.
+# fetched from the network (crates.io / GitHub). gpui-component is always cloned at its
+# exact pinned commit; it must never be regenerated from reference/. Requires: bash, patch,
+# diff, tar; and git + curl only for the network fallback.
 
 set -euo pipefail
+
+# `-b` makes --check insensitive to Git's platform line-ending conversion while still
+# detecting non-whitespace source changes. The UI baseline script performs exact hashes.
 
 # ── Pinned upstream revisions (keep in sync with the root Cargo.toml [patch] section
 #    and docs/agents/dependencies.md §1/§3) ────────────────────────────────────────────
@@ -28,6 +32,8 @@ VTE_VERSION="0.15.0"                                          # crates.io
 VTE_VCS_SHA1="3b3da71c34cc1256c7e20981cf03f8eb95e08ffc"       # .cargo_vcs_info.json (provenance)
 ALA_URL="https://github.com/zed-industries/alacritty"
 ALA_REV="fcf32feacb367b75ec84dd40f041e4fd411d3cc1"
+GPUI_URL="https://github.com/longbridge/gpui-component"
+GPUI_REV="ea6b194db04cc7c0474851f07c7d5b7a9df6a98b"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENDOR="$SCRIPT_DIR"
@@ -77,6 +83,18 @@ fetch_ala() {
   cp -a "$TMP/ala/alacritty_terminal/." "$dest/"
 }
 
+# ── fetch_gpui <dest> : populate <dest> with the exact upstream gpui-component repo ──────
+fetch_gpui() {
+  local dest="$1" actual
+  command -v git >/dev/null || die "gpui-component requires git"
+  log "gpui-component @ ${GPUI_REV:0:7}: cloning $GPUI_URL"
+  git clone --quiet --filter=blob:none --no-checkout "$GPUI_URL" "$dest"
+  git -C "$dest" checkout --quiet --detach "$GPUI_REV"
+  actual="$(git -C "$dest" rev-parse HEAD)"
+  [[ "$actual" == "$GPUI_REV" ]] || die "gpui-component checkout is at $actual, expected $GPUI_REV"
+}
+
+
 # ── apply_patches <dir> <crate> ──────────────────────────────────────────────────────────
 apply_patches() {
   local dir="$1" crate="$2" p had=0
@@ -100,11 +118,11 @@ regen() {
   apply_patches "$build" "$crate"
 
   if [[ $CHECK -eq 1 ]]; then
-    if diff -ru "$build" "$VENDOR/$crate" >/dev/null; then
+    if diff -ru -b "$build" "$VENDOR/$crate" >/dev/null; then
       log "$crate: OK — vendor/$crate == pristine + patches"
     else
       log "$crate: MISMATCH — vendor/$crate differs from pristine + patches:"
-      diff -ru "$build" "$VENDOR/$crate" | sed 's/^/    /' | head -80
+      diff -ru -b "$build" "$VENDOR/$crate" | sed 's/^/    /' | head -80
       return 1
     fi
   else
@@ -114,9 +132,35 @@ regen() {
   fi
 }
 
+# ── regen_gpui : patch the upstream repo, then package crates/ui as vendor/gpui-component ─
+regen_gpui() {
+  local checkout="$TMP/build_gpui-component" package="$TMP/package_gpui-component"
+  rm -rf "$checkout" "$package"
+  fetch_gpui "$checkout"
+  chmod -R u+w "$checkout"
+  apply_patches "$checkout" gpui-component
+  mkdir -p "$package"
+  cp -a "$checkout/crates/ui/." "$package/"
+  if [[ $CHECK -eq 1 ]]; then
+    if diff -ru -b "$package" "$VENDOR/gpui-component" >/dev/null; then
+      log "gpui-component: OK — vendor/gpui-component == pristine + patches"
+    else
+      log "gpui-component: MISMATCH — vendor/gpui-component differs from pristine + patches:"
+      diff -ru -b "$package" "$VENDOR/gpui-component" | sed 's/^/    /' | head -80
+      return 1
+    fi
+  else
+    rm -rf "$VENDOR/gpui-component"
+    mv "$package" "$VENDOR/gpui-component"
+    log "gpui-component: regenerated -> vendor/gpui-component"
+  fi
+}
+
+
 rc=0
 regen vte              fetch_vte || rc=1
 regen alacritty_terminal fetch_ala || rc=1
+regen_gpui || rc=1
 
 if [[ $rc -eq 0 ]]; then
   [[ $CHECK -eq 1 ]] && log "all crates verified." || log "all crates regenerated."

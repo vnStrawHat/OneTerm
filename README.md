@@ -105,6 +105,49 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
+### Debug logging and terminal diagnostics
+
+OneTerm uses `env_logger` and reads standard `RUST_LOG` directives. The normal development
+run uses the `oneterm-debug` binary and enables application DEBUG logs without enabling the
+extra terminal timing instrumentation.
+
+PowerShell:
+
+```powershell
+# General application debug logs
+$env:RUST_LOG = "info,gpui=info,oneterm=debug"
+cargo run -p oneterm-app
+
+# Add terminal renderer and PTY timing diagnostics
+$env:RUST_LOG = "info,gpui=info,oneterm=debug"
+cargo run -p oneterm-app --features terminal-diagnostics
+
+# Remove the override when finished
+Remove-Item Env:RUST_LOG
+```
+
+Command Prompt (`cmd.exe`):
+
+```cmd
+set "RUST_LOG=info,gpui=info,oneterm=debug"
+cargo run -p oneterm-app --features terminal-diagnostics
+```
+
+Bash (Linux, macOS, or Git Bash):
+
+```bash
+RUST_LOG="info,gpui=info,oneterm=debug" \
+  cargo run -p oneterm-app --features terminal-diagnostics
+```
+
+The `terminal-diagnostics` feature is intentionally opt-in. It enables `[TerminalElement]`
+renderer latency reports and `[PTY pump]` lock timing reports. The renderer reports after
+its first painted frame and then at most once every five seconds while frames are painted;
+the PTY pump reports over two-second sampling windows. These records use DEBUG logging, so
+`oneterm=debug` is sufficient. See
+[`docs/review/performance-benchmark.md`](docs/review/performance-benchmark.md) for the
+workload and measurement protocol.
+
 ### Release build
 
 ```powershell

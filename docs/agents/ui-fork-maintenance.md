@@ -15,7 +15,7 @@ a clean clone of `https://github.com/longbridge/gpui-component` checked out at t
 exact revision. The ignored `reference/gpui-component` checkout is for API research
 only and is not the source used to generate the vendor snapshot.
 
-`vendor/gpui-component/ONETERM-VENDOR.md` records the provenance and patch boundary.
+`vendor/README.md` records the provenance, pinned revisions, and patch workflow.
 
 ## Delta surface
 
@@ -33,11 +33,11 @@ crate, not in the vendor patch.
 1. Check the pinned `gpui-component` revision in `Cargo.toml`.
 2. Clone `https://github.com/longbridge/gpui-component` into a temporary directory,
    check out that exact revision, and verify its `HEAD` before copying `crates/ui`.
-3. Apply `vendor/patches/gpui-component/0001-OneTerm-add-TabPanel-set_active_panel.patch` from the clone root and
-   verify that it changes only `crates/ui/src/dock/tab_panel.rs`.
-4. Copy the patched `crates/ui` source into `vendor/gpui-component`.
-5. Keep the vendored manifest self-contained; do not add the vendor package to the
-   OneTerm workspace.
+3. Apply both patches under `vendor/patches/gpui-component/` from the clone root.
+   Verify that `0001` changes only `crates/ui/src/dock/tab_panel.rs` and that `0002`
+   only makes `crates/ui/Cargo.toml` standalone.
+4. Copy the patched `crates/ui` package into `vendor/gpui-component`.
+5. Keep the vendor package excluded from the OneTerm workspace.
 6. Run `python scripts/check-ui-fork.py --update` to review the complete source
    snapshot and refresh `scripts/ui-fork-baseline.json`.
 7. Run `python scripts/check-ui-fork.py`, then the workspace format, clippy, build,

@@ -1,3 +1,15 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OneTerm <oneterm@local>
+Date: Fri, 10 Jul 2026 00:00:00 +0000
+Subject: [PATCH 1/2] OneTerm fork: expose TabPanel::set_active_panel
+
+Adds a public, panel-keyed wrapper around TabPanel's private set_active_ix method.
+This lets Agent navigation activate an existing panel without reaching into GPUI's
+private tab-selection implementation.
+---
+ crates/ui/src/dock/tab_panel.rs | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
 diff --git a/crates/ui/src/dock/tab_panel.rs b/crates/ui/src/dock/tab_panel.rs
 index 1d88d28b..5e224642 100644
 --- a/crates/ui/src/dock/tab_panel.rs
