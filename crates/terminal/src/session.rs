@@ -83,6 +83,9 @@ pub struct TerminalQueryState {
     pub alive: bool,
 }
 /// Session events emitted to the UI (subscribed via channel).
+///
+/// [`SessionEvent::Output`] is a coalescible repaint hint. Every other variant
+/// is reliable and applies bounded-channel backpressure instead of being dropped.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionEvent {
     /// New output → the UI re-renders (debounced in the UI).
@@ -115,6 +118,36 @@ pub enum SessionEvent {
     Closed,
     /// Bell (`\x07`) — the UI shows a 🔔 indicator, cleared when the user presses a key.
     Bell,
+}
+
+impl SessionEvent {
+    /// Return the delivery policy required by this event.
+    pub const fn delivery_policy(&self) -> SessionEventDelivery {
+        match self {
+            Self::Output => SessionEventDelivery::Coalescible,
+            Self::Title(_)
+            | Self::Cwd(_)
+            | Self::Clipboard(_)
+            | Self::ClipboardRead
+            | Self::ShellIntegration(_)
+            | Self::Notification(_)
+            | Self::Progress(_)
+            | Self::AgentStatus(_)
+            | Self::ForegroundProcess(_)
+            | Self::Exited(_)
+            | Self::Closed
+            | Self::Bell => SessionEventDelivery::Reliable,
+        }
+    }
+}
+
+/// Delivery policy for session events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionEventDelivery {
+    /// The event is a repaint hint and may be coalesced under load.
+    Coalescible,
+    /// The event must be delivered or report that the channel is closed.
+    Reliable,
 }
 
 /// Live source of a session's current working directory (OSC 7).

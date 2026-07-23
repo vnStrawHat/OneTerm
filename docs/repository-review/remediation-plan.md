@@ -157,10 +157,11 @@ Items are ordered within each category by priority. Cross-category dependencies 
   - Add background snapshot writes, debounce, dirty state, retry, and user-visible errors.
   - **Done when:** settings, sessions, and layout remain responsive during slow filesystem operations.
 
-- [ ] **P1 — Separate reliable and lossy session events.**
+- [x] **P1 — Separate reliable and lossy session events.**
   - Make output/repaint notifications coalescible, while clipboard, lifecycle, progress completion, and agent transitions use reliable or latest-value delivery.
   - Add explicit overflow metrics/logging.
   - **Done when:** no non-coalescible event is silently discarded.
+  - **Completed:** `SessionEvent` now declares a shared delivery policy; SSH and LocalShell coalesce only `Output`, apply bounded-channel backpressure to all stateful events, and retain saturation/closed-channel diagnostics with regression tests.
 
 - [ ] **P1 — Bound local-shell shutdown.**
   - Replace unconditional UI-thread joins with asynchronous completion and a deadline.

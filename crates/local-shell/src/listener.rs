@@ -1,7 +1,8 @@
 //! `LocalListener` — `EventListener` for the local PTY.
 //!
-//! Forwards alacritty events → `SessionEvent` (via `async_channel`, non-blocking
-//! `try_send`) AND updates the `SessionState` cache (title/clipboard/alive).
+//! Forwards alacritty events → `SessionEvent` through a bounded channel: repaint
+//! hints are coalescible, while stateful events apply backpressure. Also updates
+//! the `SessionState` cache (title/clipboard/alive).
 //! Routes `PtyWrite` through the owner-thread notifier.
 //!
 //! Both `Term<U>` and `EventLoop` receive a **clone** of the same listener
@@ -16,7 +17,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use async_channel::Sender;
-#[cfg(any(test, feature = "terminal-diagnostics"))]
 use async_channel::TrySendError;
 use log::warn;
 
@@ -153,26 +153,49 @@ impl LocalListener {
             .ok_or(TerminalError::Closed)?;
         sender.send(ShellMsg::Shutdown).map_err(map_notifier_error)
     }
-    /// Forward a `SessionEvent` (non-blocking). Drops it if the channel is
-    /// full/closed — acceptable since `Output` is debounced.
+    /// Forward a session event according to its delivery policy.
+    ///
+    /// Repaint hints may be coalesced when the bounded queue is full. All other
+    /// events use blocking send so a slow consumer creates backpressure instead
+    /// of silently losing clipboard, notification, progress, agent, or lifecycle
+    /// state transitions.
     pub fn forward(&self, ev: SessionEvent) {
-        if let Err(e) = self.event_tx.try_send(ev) {
-            #[cfg(any(test, feature = "terminal-diagnostics"))]
-            self.record_event_failure(&e);
-            warn!("LocalListener: drop event (channel full/closed): {e:?}");
+        match ev.delivery_policy() {
+            oneterm_terminal::SessionEventDelivery::Coalescible => {
+                if let Err(error) = self.event_tx.try_send(ev) {
+                    #[cfg(any(test, feature = "terminal-diagnostics"))]
+                    self.record_event_failure(&error);
+                    match error {
+                        TrySendError::Full(_) => {
+                            log::debug!("LocalListener: coalesced repaint event");
+                        }
+                        TrySendError::Closed(_) => {
+                            warn!("LocalListener: event channel is closed");
+                        }
+                    }
+                }
+            }
+            oneterm_terminal::SessionEventDelivery::Reliable => {
+                if let Err(error) = self.event_tx.send_blocking(ev) {
+                    #[cfg(any(test, feature = "terminal-diagnostics"))]
+                    self.queue_counters
+                        .event_closed
+                        .fetch_add(1, Ordering::Relaxed);
+                    warn!(
+                        "LocalListener: reliable event lost because channel is closed: {error:?}"
+                    );
+                }
+            }
         }
     }
 
-    /// Forward a lifecycle `SessionEvent` (`Exited`/`Closed`) using
-    /// `send_blocking` to ensure it is never silently dropped.
+    /// Forward a lifecycle `SessionEvent` using the reliable delivery policy.
     pub fn forward_lifecycle(&self, ev: SessionEvent) {
-        if let Err(e) = self.event_tx.send_blocking(ev) {
-            #[cfg(any(test, feature = "terminal-diagnostics"))]
-            self.queue_counters
-                .event_closed
-                .fetch_add(1, Ordering::Relaxed);
-            warn!("LocalListener: lifecycle event lost (channel closed): {e:?}");
-        }
+        debug_assert_eq!(
+            ev.delivery_policy(),
+            oneterm_terminal::SessionEventDelivery::Reliable
+        );
+        self.forward(ev);
     }
 
     /// Enqueue an OSC 10/11/12 color query (from `Event::ColorRequest`). Answered
@@ -559,20 +582,48 @@ mod phase0_tests {
     use crate::state::new_shared;
 
     #[test]
-    fn phase0_bounded_local_event_queue_drops_new_items_and_counts_failures() {
+    fn coalescible_local_repaint_events_are_counted_when_saturated() {
         let events = FakeTransport::bounded(1);
         let listener = LocalListener::new(events.sender(), new_shared());
-        events
-            .try_send(SessionEvent::Title("first".into()))
-            .unwrap();
+        events.try_send(SessionEvent::Output).unwrap();
 
-        listener.forward(SessionEvent::Bell);
+        listener.forward(SessionEvent::Output);
 
         assert_eq!(listener.queue_diagnostics().event_full, 1);
         assert_eq!(events.len(), 1);
 
         events.close();
-        listener.forward(SessionEvent::Bell);
+        listener.forward(SessionEvent::Output);
         assert_eq!(listener.queue_diagnostics().event_closed, 1);
+    }
+
+    #[test]
+    fn reliable_local_events_wait_for_queue_capacity() {
+        let events = FakeTransport::bounded(1);
+        let listener = LocalListener::new(events.sender(), new_shared());
+        events.try_send(SessionEvent::Output).unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
+        let (finished_tx, finished_rx) = std::sync::mpsc::sync_channel(1);
+
+        let sender = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            listener.forward(SessionEvent::Bell);
+            finished_tx.send(()).unwrap();
+        });
+
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        assert!(
+            finished_rx
+                .recv_timeout(std::time::Duration::from_millis(20))
+                .is_err()
+        );
+        assert_eq!(events.try_recv().unwrap(), SessionEvent::Output);
+        finished_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        sender.join().unwrap();
+        assert_eq!(events.try_recv().unwrap(), SessionEvent::Bell);
     }
 }

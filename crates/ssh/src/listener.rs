@@ -1,7 +1,8 @@
 //! `SshListener` — `EventListener` for the SSH session.
 //!
-//! Forwards alacritty events → `SessionEvent` (via `async_channel`, non-blocking
-//! `try_send`) AND updates the `SessionState` cache (title/clipboard/alive).
+//! Forwards alacritty events → `SessionEvent` through a bounded channel: repaint
+//! hints are coalescible, while stateful events apply backpressure. Also updates
+//! the `SessionState` cache (title/clipboard/alive).
 //! Routes `PtyWrite` → `cmd_tx` (channel data going out to SSH).
 //!
 //! Similar to `local/src/listener.rs` but replaces `Notifier` with `cmd_tx`
@@ -180,27 +181,47 @@ impl SshListener {
         }
     }
 
-    /// Forward a `SessionEvent` (non-blocking). Drops it if the channel is
-    /// full/closed — acceptable since `Output` is debounced.
+    /// Forward a session event according to its delivery policy.
+    ///
+    /// Repaint hints may be coalesced when the bounded queue is full. All other
+    /// events use blocking send so a slow consumer creates backpressure instead
+    /// of silently losing clipboard, notification, progress, agent, or lifecycle
+    /// state transitions.
     pub fn forward(&self, ev: SessionEvent) {
-        if let Err(e) = self.event_tx.try_send(ev) {
-            #[cfg(any(test, feature = "terminal-diagnostics"))]
-            self.record_event_failure(&e);
-            warn!("SshListener: drop event (channel full/closed): {e:?}");
+        match ev.delivery_policy() {
+            oneterm_terminal::SessionEventDelivery::Coalescible => {
+                if let Err(error) = self.event_tx.try_send(ev) {
+                    #[cfg(any(test, feature = "terminal-diagnostics"))]
+                    self.record_event_failure(&error);
+                    match error {
+                        TrySendError::Full(_) => {
+                            log::debug!("SshListener: coalesced repaint event");
+                        }
+                        TrySendError::Closed(_) => {
+                            warn!("SshListener: event channel is closed");
+                        }
+                    }
+                }
+            }
+            oneterm_terminal::SessionEventDelivery::Reliable => {
+                if let Err(error) = self.event_tx.send_blocking(ev) {
+                    #[cfg(any(test, feature = "terminal-diagnostics"))]
+                    self.queue_counters
+                        .event_closed
+                        .fetch_add(1, Ordering::Relaxed);
+                    warn!("SshListener: reliable event lost because channel is closed: {error:?}");
+                }
+            }
         }
     }
 
-    /// Forward a lifecycle `SessionEvent` (`Exited`/`Closed`) using
-    /// `send_blocking` to ensure it is never silently dropped.
+    /// Forward a lifecycle `SessionEvent` using the reliable delivery policy.
     pub fn forward_lifecycle(&self, ev: SessionEvent) {
-        if let Err(e) = self.event_tx.send_blocking(ev) {
-            // send_blocking only fails if the channel is closed.
-            #[cfg(any(test, feature = "terminal-diagnostics"))]
-            self.queue_counters
-                .event_closed
-                .fetch_add(1, Ordering::Relaxed);
-            warn!("SshListener: lifecycle event lost (channel closed): {e:?}");
-        }
+        debug_assert_eq!(
+            ev.delivery_policy(),
+            oneterm_terminal::SessionEventDelivery::Reliable
+        );
+        self.forward(ev);
     }
 
     /// Enqueue an OSC 10/11/12 color query (from `Event::ColorRequest`). Answered
@@ -463,18 +484,16 @@ mod tests {
     }
 
     #[test]
-    fn phase0_bounded_ssh_queues_drop_new_items_and_count_failures() {
+    fn coalescible_ssh_repaint_events_are_counted_when_saturated() {
         let (listener, events, commands) = make_listener(1, 1);
         commands.try_send(Cmd::Close).unwrap();
-        events
-            .try_send(SessionEvent::Title("first".into()))
-            .unwrap();
+        events.try_send(SessionEvent::Output).unwrap();
 
         assert_eq!(
             listener.pty_write(b"dropped command"),
             Err(TerminalError::QueueFull)
         );
-        listener.forward(SessionEvent::Bell);
+        listener.forward(SessionEvent::Output);
 
         let diagnostics = listener.queue_diagnostics();
         assert_eq!(diagnostics.command_full, 1);
@@ -485,10 +504,39 @@ mod tests {
         commands.close();
         events.close();
         assert_eq!(listener.pty_resize(24, 80), Err(TerminalError::Closed));
-        listener.forward(SessionEvent::Bell);
+        listener.forward(SessionEvent::Output);
         let diagnostics = listener.queue_diagnostics();
         assert_eq!(diagnostics.command_closed, 1);
         assert_eq!(diagnostics.event_closed, 1);
+    }
+
+    #[test]
+    fn reliable_ssh_events_wait_for_queue_capacity() {
+        let (listener, events, _commands) = make_listener(1, 1);
+        events.try_send(SessionEvent::Output).unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
+        let (finished_tx, finished_rx) = std::sync::mpsc::sync_channel(1);
+
+        let sender = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            listener.forward(SessionEvent::Bell);
+            finished_tx.send(()).unwrap();
+        });
+
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        assert!(
+            finished_rx
+                .recv_timeout(std::time::Duration::from_millis(20))
+                .is_err()
+        );
+        assert_eq!(events.try_recv().unwrap(), SessionEvent::Output);
+        finished_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        sender.join().unwrap();
+        assert_eq!(events.try_recv().unwrap(), SessionEvent::Bell);
     }
 
     #[test]
