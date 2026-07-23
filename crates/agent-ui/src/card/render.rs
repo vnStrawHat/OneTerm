@@ -146,9 +146,6 @@ impl AgentListView {
             if run.args_redacted {
                 row = row.child(activity_chip("redacted", pal.muted));
             }
-            if let Some(p) = &run.progress {
-                row = row.child(div().text_color(pal.muted).child(p.clone()));
-            }
             return Some(row.into_any_element());
         }
 
