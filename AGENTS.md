@@ -187,7 +187,8 @@ When done, the clean packaged build lives in `dist/oneterm-<triple>/` containing
 - [x] Workspace skeleton + Cargo.toml + .gitignore + .rustfmt.toml + workspace lints.
 - [x] `core`: types + traits (`TerminalSession`, `SftpBackend`, `AppError`).
 - [x] `local`: a PTY shell that works inside a gpui view.
-- [x] `ssh`: connect with password + pubkey + agent, shell channel.
+- [x] `ssh`: connect with password + private key + no-auth, shell channel.
+- [ ] `ssh`: SSH-agent authentication.
 - [x] `ssh/sftp`: list / upload / download (via `SftpSession`).
 - [x] `ui`: layout (dock + statusbar + title bar + app menus) + session tabs + SFTP panel + terminal view/settings.
 - [ ] `ui`: host manager + host-list sidebar (host list currently lives in `session_tabs`).

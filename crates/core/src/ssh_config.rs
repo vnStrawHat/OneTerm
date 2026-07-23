@@ -96,8 +96,6 @@ pub enum SshAuthMethod {
         /// Zeroizing passphrase to decrypt the key, if encrypted.
         passphrase: Option<SecretString>,
     },
-    /// Authentication via SSH agent.
-    Agent,
 }
 
 /// SSH connection config.
@@ -138,7 +136,6 @@ impl Debug for SshAuthMethod {
                 .field("key_path", key_path)
                 .field("passphrase", &"***")
                 .finish(),
-            Self::Agent => f.write_str("Agent"),
         }
     }
 }

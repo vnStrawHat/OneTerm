@@ -39,7 +39,7 @@ OneTerm is a terminal emulator plus host/session manager with a **Zed-style work
 ### 🔌 SSH connectivity
 
 - SSH client based on `russh`
-- Password, private key, SSH agent, and no-auth authentication
+- Password, private-key, and no-auth authentication
 - Auto-resize shell channel with optional shell integration
 - Bandwidth indicator; passwords stay in RAM only
 

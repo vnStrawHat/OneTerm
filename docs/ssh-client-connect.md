@@ -109,24 +109,21 @@ a dialog for the user to enter them.
 
 ### 2.1. `SshConfig` — connection config (`ssh` crate)
 
-Defined in `crates/ssh/src/config.rs`, re-exported via `ssh::lib.rs`.
+Defined in `crates/core/src/ssh_config.rs` and consumed through the terminal session factory.
 This is the input for `SshSession::connect()`.
 
 ```rust
 use std::path::PathBuf;
 
 /// SSH authentication method.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum SshAuthMethod {
-    /// Password authentication.
-    Password { password: String },
-    /// Private key file authentication (to be implemented later).
+    None,
+    Password { password: SecretString },
     PrivateKey {
         key_path: PathBuf,
-        passphrase: Option<String>,
+        passphrase: Option<SecretString>,
     },
-    /// SSH agent (to be implemented later).
-    Agent,
 }
 
 /// SSH connection config — input for [`crate::SshSession::connect`].
@@ -143,9 +140,9 @@ pub struct SshConfig {
 }
 ```
 
-> **Note:** `SshConfig` holds the `password` as a `String` (plaintext in RAM).
-> Do not serialize `SshConfig` to disk. The password only exists in memory during
-> the connection + the working session.
+> **Note:** `SshConfig` holds credentials in zeroizing `SecretString` values.
+> Do not serialize `SshConfig` to disk. Credentials exist only in memory during
+> connection setup and are removed from the long-lived session configuration.
 
 ### 2.2. Extending `SshSession` (state) — add a `password` field?
 
@@ -1011,11 +1008,9 @@ impl Debug for SshConfig {
 > `DialogAction` button → dispatches `ConfirmDialog`. You need to bind the Enter key in
 > the input field → dispatch `ConfirmDialog` (see the Dialog API).
 
-### 9.6. Other auth methods (roadmap)
+### 9.6. Authentication status
 
-The MVP only supports password. Roadmap additions:
-- **Private key**: the dialog adds a "Key file path" + "Passphrase (optional)" field.
-  `SshAuthMethod::PrivateKey { key_path, passphrase }`.
-- **SSH agent**: auto-detect the agent, no dialog needed. `SshAuthMethod::Agent`.
-- With multiple auth methods, the dialog adds an "Authentication method" dropdown →
-  show/hide the corresponding fields.
+The current implementation supports no-auth, password, and private-key authentication.
+SSH-agent authentication remains a roadmap item and is not exposed by `SshAuthMethod`
+until the backend can support it end to end. A future implementation should auto-detect
+the agent, support cancellation and key selection, and include platform-specific tests.

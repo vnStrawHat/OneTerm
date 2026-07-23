@@ -250,11 +250,6 @@ pub fn connect(
                     )
                     .await?
                 }
-                SshAuthMethod::Agent => {
-                    return Err(anyhow::anyhow!(
-                        "SSH agent auth not supported yet (roadmap)"
-                    ));
-                }
             };
             log::info!("SshSession: auth result = {auth_result:?}");
             if !matches!(auth_result, AuthResult::Success) {
