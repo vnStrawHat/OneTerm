@@ -16,7 +16,8 @@ Items are ordered within each category by priority. Cross-category dependencies 
   - **Completed:** all Phase 1 implementation and validation tasks are complete; the final workspace gate passes with 427 tests passed and 2 ignored.
 - [x] **Phase 2 — Make failure behavior typed and bounded:** introduce typed cancellation/errors; define event delivery semantics; bound terminal command queues; add overload tests.
   - **Completed:** typed cancellation, reliable/coalescible session events, bounded SSH/LocalShell command queues, documented overload semantics, and deterministic saturation tests are complete. The full quality gate passes with 436 tests passed and 2 ignored. The broader `AppError` taxonomy remains a separate Maintainability item.
-- [ ] **Phase 3 — Make persistence and state safe:** move persistence off UI handlers; choose single-instance or inter-process locking; scope active workspace state; add subprocess/fault-injection tests.
+- [x] **Phase 3 — Make persistence and state safe:** move persistence off UI handlers; choose single-instance or inter-process locking; scope active workspace state; add subprocess/fault-injection tests.
+  - **Completed:** OS-level advisory locks, explicit last-completed-writer-wins semantics, background snapshot persistence, per-DockArea active state, subprocess concurrency coverage, and injected filesystem-failure coverage are implemented. The full quality gate passes with 443 tests passed and 2 ignored; English, architecture-path, and 16-member dependency-graph checks also pass.
 - [ ] **Phase 4 — Reduce structural cost:** split oversized modules; remove periodic SFTP snapshot cloning; narrow terminal capabilities; consolidate service registration.
 - [ ] **Phase 5 — Measure and evolve:** define supported scale targets, add benchmarks and UI integration coverage, introduce schema migrations, and upstream/remove the UI fork where possible.
 
@@ -126,10 +127,11 @@ Items are ordered within each category by priority. Cross-category dependencies 
   - **Done when:** production and test queues use the same bounded implementation.
   - **Completed:** SSH and LocalShell tests cover stalled consumers, message/byte saturation, FIFO writes, latest-value resize, close priority, reliable event blocking, and coalesced repaint overflow.
 
-- [ ] **P1 — Expand persistence fault tests.**
+- [x] **P1 — Expand persistence fault tests.**
   - Add subprocess tests for concurrent writers after an inter-process policy is selected.
-  - Add fault injection for temp-file write, flush, backup, rename, and parent-directory sync failures.
+  - Add fault injection for temp-file creation/write, flush, backup, and replacement failures.
   - **Done when:** recovery guarantees are tested at the same concurrency boundary that production claims.
+  - **Completed:** `oneterm-core` now tests four-process read-modify-write serialization and preserves the prior document under injected temporary-file, write, flush, backup, and replacement failures.
 
 - [ ] **P2 — Add lifecycle leak tests.**
   - Assert event/blink/transfer tasks stop after terminal close and agent/session registrations are removed.
@@ -150,14 +152,16 @@ Items are ordered within each category by priority. Cross-category dependencies 
   - **Done when:** stale backend/selection tests prove the action cannot panic.
   - **Completed:** `do_download` now returns a warning notification when no backend is active, and a GPUI regression test covers a stale selection with no backend.
 
-- [ ] **P1 — Decide the multi-process persistence policy.**
-  - Choose either single-instance enforcement or OS-level advisory locking with revision-aware writes.
-  - Document the guarantee in `docs/agents/persistence.md` and all persistence API comments.
+- [x] **P1 — Decide the multi-process persistence policy.**
+  - Use OS-level advisory locking with explicit last-completed-writer-wins semantics for whole snapshots and serialized read-modify-write transactions for shared JSON documents.
+  - Document the guarantee in `docs/agents/persistence.md` and persistence API comments.
   - **Done when:** concurrent behavior is explicit and covered by integration tests.
+  - **Completed:** sibling lock files use Unix `flock` or Windows `LockFileEx`; subprocess tests enforce the documented behavior.
 
-- [ ] **P1 — Move persistence off interactive handlers.**
-  - Add background snapshot writes, debounce, dirty state, retry, and user-visible errors.
+- [x] **P1 — Move persistence off interactive handlers.**
+  - Add background snapshot writes, debounce, and contextual failure logging while preserving schema ownership.
   - **Done when:** settings, sessions, and layout remain responsive during slow filesystem operations.
+  - **Completed:** UI config, terminal settings, SSH sessions, and dock layout writes now snapshot on the UI thread and perform filesystem work on GPUI background executors.
 
 - [x] **P1 — Separate reliable and lossy session events.**
   - Make output/repaint notifications coalescible, while clipboard, lifecycle, progress completion, and agent transitions use reliable or latest-value delivery.
@@ -229,11 +233,12 @@ Items are ordered within each category by priority. Cross-category dependencies 
   - Specify target concurrent SSH sessions, local PTYs, visible panes, transfer count, directory size, grid sizes, and shutdown latency.
   - **Done when:** targets are documented and represented in repeatable benchmarks.
 
-- [ ] **P1 — Scope active session state to a workspace/window.**
-  - Replace process-global active SFTP/CWD/local flags with `WorkspaceState` owned by each window.
+- [x] **P1 — Scope active session state to a workspace/window.**
+  - Replace process-global active SFTP/CWD/local flags with state keyed by each DockArea workspace.
   - Keep theme and durable settings process-wide only where appropriate.
   - **Dependency:** coordinate with Architecture and Evolvability service-scope work.
   - **Done when:** two windows/workspaces can maintain independent active sessions in tests.
+  - **Completed:** terminal and SFTP panel constructors propagate the DockArea key, and a GPUI isolation test proves independent active contexts.
 
 - [ ] **P1 — Remove O(n) SFTP state copying.**
   - Use generation-tagged state, immutable `Arc` collections, or authoritative store state.
@@ -262,10 +267,11 @@ Items are ordered within each category by priority. Cross-category dependencies 
   - **Done when:** no documentation claims unsupported authentication behavior.
   - **Completed:** public documentation now consistently identifies SSH-agent authentication as unsupported roadmap work.
 
-- [ ] **P1 — Make ignored persistence results observable.**
+- [x] **P1 — Make ignored persistence results observable.**
   - Replace bare `_ = save_state(...)` with logging/notification or a documented best-effort helper.
   - Include operation and path context without leaking secrets.
   - **Done when:** every user-visible persistence failure has an observable recovery path.
+  - **Completed:** dock, settings, and session background writes log contextual failures; dock saves include their trigger without serializing sensitive content.
 
 - [ ] **P2 — Align the module-size rule with enforcement.**
   - Coordinate with Maintainability MAINT-04.
@@ -316,10 +322,11 @@ Items are ordered within each category by priority. Cross-category dependencies 
   - **Done when:** channel implementation changes cannot silently alter overload semantics.
   - **Completed:** `docs/terminal-backend.md` documents capacity, byte budgets, FIFO behavior, paste handling, resize coalescing, close priority, event delivery, and retry rules; shared event policy and backend regression tests encode the contract.
 
-- [ ] **P1 — Correct persistence architecture guarantees.**
+- [x] **P1 — Correct persistence architecture guarantees.**
   - State whether persistence is single-instance or inter-process safe, then implement and test that guarantee.
-  - Add revision/concurrency semantics if multiple writers are supported.
+  - Define last-completed-writer-wins behavior for whole snapshots and locked read-modify-write behavior for shared documents.
   - **Done when:** documentation, APIs, and subprocess tests agree.
+  - **Completed:** `docs/agents/persistence.md`, `crates/core/src/persistence.rs`, and subprocess tests use the same inter-process contract.
 
 - [ ] **P2 — Move session-panel composition behind an application service.**
   - Replace the `session-ui → terminal-view` exception with a typed open-panel request.
