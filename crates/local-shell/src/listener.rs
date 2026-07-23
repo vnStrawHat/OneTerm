@@ -401,6 +401,20 @@ mod tests {
         (LocalListener::new(tx, new_shared()), rx)
     }
 
+    #[cfg(unix)]
+    fn exit_status(code: i32) -> std::process::ExitStatus {
+        use std::os::unix::process::ExitStatusExt;
+
+        std::process::ExitStatus::from_raw(code << 8)
+    }
+
+    #[cfg(windows)]
+    fn exit_status(code: u32) -> std::process::ExitStatus {
+        use std::os::windows::process::ExitStatusExt;
+
+        std::process::ExitStatus::from_raw(code)
+    }
+
     #[test]
     fn forwards_title_and_wakeup() {
         let (l, rx) = listener();
@@ -436,10 +450,7 @@ mod tests {
     #[test]
     fn child_exit_sets_alive_false_and_code() {
         let (l, rx) = listener();
-        let status = std::process::Command::new("cmd")
-            .args(["/C", "exit", "0"])
-            .status()
-            .unwrap();
+        let status = exit_status(0);
         l.send_event(Event::ChildExit(status));
         match rx.try_recv().unwrap() {
             SessionEvent::Exited(code) => assert_eq!(code, Some(0)),
