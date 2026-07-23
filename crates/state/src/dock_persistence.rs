@@ -152,7 +152,7 @@ mod persistence_tests {
         .unwrap();
         let restored = read_dock_document_from(&path).unwrap();
         assert_eq!(restored.zoomed_panel.as_deref(), Some("terminal"));
-        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 2);
         std::fs::write(&path, b"not-json").unwrap();
         assert_eq!(
             read_dock_document_from(&path).unwrap_err().kind(),

@@ -10,6 +10,26 @@ All new user-owned JSON writes must use `atomic_write` or `update_json_file` fro
 serialization, backups, durable replacement, and cleanup. Invalid documents are
 moved with `quarantine_file` before defaults are persisted.
 
+### Cross-process guarantee
+
+Persistence transactions are serialized with a sibling `.<document>.lock` file and
+an operating-system advisory lock. The lock is held across the complete operation:
+read, mutation, serialization, backup, flush, and replacement. Lock files are
+persistent coordination artifacts and may remain after the process exits; the
+operating system releases the actual lock when the file handle closes or the
+process terminates.
+
+`update_json_file` provides inter-process-safe read-modify-write semantics and must
+be used for shared documents. Whole-document `atomic_write` calls are also
+serialized, but use explicit last-completed-writer-wins semantics; they do not
+merge independent snapshots. Domain owners that need field-level merging must use
+a transaction instead of writing a stale snapshot.
+
+Filesystem operations are blocking. UI handlers may only create an owned snapshot
+and schedule persistence on GPUI's background executor. They must not call
+`atomic_write`, `update_json_file`, configuration `save`, or quarantine operations
+directly on the UI thread.
+
 ## Schema owners
 
 | Document | Owner | Notes |
