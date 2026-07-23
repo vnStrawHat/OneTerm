@@ -73,10 +73,6 @@ pub fn run() {
         // Set Lilex as the theme's default monospace font (after init registers Theme).
         cx.global_mut::<gpui_component::Theme>().mono_font_family = "Lilex".into();
 
-        // Install the session factory (local + SSH backends) before the UI can
-        // create any terminal session. Keeps the UI→backend edge out of the graph.
-        crate::session_factory::install();
-
         // Initialize the OneTerm UI (globals + feature panel registration + commands).
         crate::init::init(cx);
         // Bind key bindings for the workspace.

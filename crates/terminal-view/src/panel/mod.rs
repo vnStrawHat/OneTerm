@@ -31,6 +31,7 @@ use gpui_component::{
     menu::DropdownMenu as _,
 };
 use oneterm_core::ShellKind;
+use oneterm_state::AppServices;
 use oneterm_terminal::PtySize;
 use oneterm_terminal::TerminalSession;
 
@@ -249,8 +250,8 @@ impl TerminalPanel {
             };
             (shell, settings.scrollback_history)
         };
-        let Some(factory) = oneterm_terminal::session_factory() else {
-            log::error!("No session factory installed; cannot spawn local terminal.");
+        let Some(factory) = AppServices::session_factory(cx) else {
+            log::error!("Application session service is unavailable; cannot spawn local terminal.");
             return None;
         };
         let session: Box<dyn TerminalSession> =

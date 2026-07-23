@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use oneterm_core::{LocalShellConfig, Result, SshConfig};
-use oneterm_terminal::{PtySize, SessionFactory, TerminalSession, install_session_factory};
+use oneterm_terminal::{PtySize, SessionFactory, TerminalSession};
 
 /// App-owned factory that dispatches to the local + SSH backends.
 struct AppSessionFactory;
@@ -33,9 +33,7 @@ impl SessionFactory for AppSessionFactory {
     }
 }
 
-/// Install the app's session factory. Call once at startup, before the UI can
-/// create any terminal session.
-pub fn install() {
-    install_session_factory(Arc::new(AppSessionFactory))
-        .expect("session factory must be installed exactly once");
+/// Build the app's session factory for the application service bundle.
+pub fn build() -> Arc<dyn SessionFactory> {
+    Arc::new(AppSessionFactory)
 }

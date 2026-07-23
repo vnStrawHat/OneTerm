@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use gpui::{App, Entity, Global, Window};
+use gpui::{App, Entity, Window};
 use gpui_component::dock::{DockArea, PanelView};
 use oneterm_core::ShellKind;
 
@@ -27,55 +27,17 @@ pub struct WorkspaceCommands {
     pub setup_key_bindings: fn(&mut App),
 }
 
-impl Global for WorkspaceCommands {}
-
-/// Register the workspace command function pointers (called from feature init).
-/// Duplicate registration is rejected so a stale feature set cannot be hidden.
-pub fn set_commands(cx: &mut App, commands: WorkspaceCommands) -> Result<(), &'static str> {
-    if cx.try_global::<WorkspaceCommands>().is_some() {
-        return Err("workspace commands are already registered");
-    }
-    cx.set_global(commands);
-    Ok(())
-}
-
-/// Get the registered workspace commands, if any.
+/// Get the workspace commands from the application service bundle, if installed.
 pub fn commands(cx: &App) -> Option<WorkspaceCommands> {
-    cx.try_global::<WorkspaceCommands>().copied()
+    super::AppServices::workspace_commands(cx)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn new_terminal(_shell: ShellKind, _window: &mut Window, _cx: &mut App) -> Arc<dyn PanelView> {
-        unreachable!("test command is registration-only")
-    }
-
-    fn with_window(_window: &mut Window, _cx: &mut App) {}
-    fn with_app(_cx: &mut App) {}
-    fn with_dock(_dock: &Entity<DockArea>, _window: &mut Window, _cx: &mut App) {}
-
-    fn test_commands() -> WorkspaceCommands {
-        WorkspaceCommands {
-            new_terminal_with_shell: new_terminal,
-            open_new_session_dialog: with_window,
-            open_settings: with_app,
-            find_in_active_terminal: with_dock,
-            setup_key_bindings: with_app,
-        }
-    }
-
     #[gpui::test]
-    fn registration_is_available_and_rejects_duplicates(cx: &mut gpui::TestAppContext) {
-        cx.update(|cx| {
-            assert!(commands(cx).is_none());
-            set_commands(cx, test_commands()).unwrap();
-            assert!(commands(cx).is_some());
-            assert_eq!(
-                set_commands(cx, test_commands()),
-                Err("workspace commands are already registered")
-            );
-        });
+    fn commands_are_absent_until_app_services_are_installed(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| assert!(commands(cx).is_none()));
     }
 }

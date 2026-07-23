@@ -15,9 +15,11 @@ pub mod dock_persistence;
 pub mod dock_util;
 pub mod notif_ext;
 pub mod paths;
+pub mod services;
 
 pub use agent_registry::{
     AgentCard, AgentRegistry, AgentStateCounts, ApprovalInfo, FileEntry, Grouping, Lifecycle,
     ModelInfo, ToolRun,
 };
 pub use app_state::AppState;
+pub use services::AppServices;

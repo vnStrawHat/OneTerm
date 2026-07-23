@@ -30,8 +30,8 @@ use gpui_component::{
 };
 
 use oneterm_core::{AppError, ConnectionCancellation, HostKeyPolicy, SshConfig};
-use oneterm_state::AppState;
 use oneterm_state::notif_ext::notify;
+use oneterm_state::{AppServices, AppState};
 use oneterm_terminal::PtySize;
 use oneterm_terminal_view::TerminalPanel;
 
@@ -175,13 +175,13 @@ pub(crate) fn connect_ssh_session(
     cx: &mut App,
 ) -> ConnectionCancellation {
     let cancellation = cfg.cancellation.clone();
-    let Some(factory) = oneterm_terminal::session_factory() else {
+    let Some(factory) = AppServices::session_factory(cx) else {
         connecting.store(false, std::sync::atomic::Ordering::Relaxed);
         window.refresh();
         window.push_notification(
             notify(
                 NotificationType::Error,
-                "Internal error: no session factory installed.",
+                "Internal error: application session service is unavailable.",
                 cx,
             ),
             cx,

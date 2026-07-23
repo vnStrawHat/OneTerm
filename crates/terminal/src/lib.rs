@@ -30,7 +30,7 @@ pub use content::{
     IndexedCell, TermDamageInfo, TerminalBounds, TerminalContent, is_blank_cell, last_content_line,
 };
 pub use contracts::{TerminalError, report_generated_input};
-pub use factory::{PtySize, SessionFactory, install_session_factory, session_factory};
+pub use factory::{PtySize, SessionFactory};
 pub use key_encode::{KeyMods, KeySpec, NamedKey, encode_key};
 pub use mouse_encode::{
     MouseModifiers, TerminalMouseButton, encode_mouse_move, encode_mouse_press,

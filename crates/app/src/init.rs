@@ -10,8 +10,8 @@
 use gpui::App;
 
 use oneterm_settings::{TerminalSettings, UiConfig};
-use oneterm_state::AppState;
-use oneterm_state::commands::{WorkspaceCommands, set_commands};
+use oneterm_state::commands::WorkspaceCommands;
+use oneterm_state::{AppServices, AppState};
 
 /// Initialize OneTerm's UI layer: globals + feature registration + commands.
 ///
@@ -47,10 +47,10 @@ pub fn init(cx: &mut App) {
     // omniscient `app` crate (R9).
     crate::agent_panel::init(cx);
 
-    // Assemble the workspace command registry the shell uses. Each fn pointer is
-    // provided by the owning feature crate; the shell calls them via the registry.
-    set_commands(
-        cx,
+    // Install all cross-feature services as one composition-root bundle. Each
+    // callback belongs to its feature, while the shell consumes only this state API.
+    AppServices::new(
+        crate::session_factory::build(),
         WorkspaceCommands {
             new_terminal_with_shell: oneterm_terminal_view::new_terminal_with_shell_cmd,
             open_new_session_dialog: oneterm_session_ui::open_quick_connect_dialog,
@@ -59,5 +59,7 @@ pub fn init(cx: &mut App) {
             setup_key_bindings: oneterm_settings_ui::setup_key_bindings,
         },
     )
-    .expect("workspace commands must be registered exactly once");
+    .install(cx)
+    .expect("application services must be registered exactly once");
+    AppServices::validate(cx).expect("application services must be available");
 }
