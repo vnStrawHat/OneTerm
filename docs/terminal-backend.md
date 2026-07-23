@@ -280,6 +280,31 @@ impl LocalSession {
   (compare old vs new snapshot). Avoids continuous redraw under `yes`.
 - Log `layout took {:?}` for tuning (copy Zed's `log::debug!`).
 
+### 6.5. Transport backpressure contract
+
+SSH and LocalShell use the same observable overload semantics even though their
+owner loops use different channel implementations:
+
+- Command queues are bounded to 256 messages and a 4 MiB aggregate write-payload
+  budget. The source-of-truth constants are `SSH_COMMAND_QUEUE_CAPACITY`,
+  `SSH_COMMAND_BYTE_BUDGET`, `LOCAL_COMMAND_QUEUE_CAPACITY`, and
+  `LOCAL_COMMAND_BYTE_BUDGET`.
+- Writes preserve FIFO order and are atomic at enqueue time: the complete write is
+  accepted, or `TerminalError::QueueFull`/`TerminalError::Closed` is returned.
+  Paste uses the same write path and therefore cannot bypass the byte budget.
+- Resize is latest-value delivery. Bursts overwrite one pending size instead of
+  consuming one queue slot per intermediate geometry.
+- Close/shutdown is out-of-band and has priority over queued input. A queue at
+  capacity cannot prevent the owner loop from observing close.
+- `SessionEvent::Output` is the only coalescible event. Clipboard, notification,
+  progress, agent, title, working-directory, bell, and lifecycle events use
+  reliable bounded-channel delivery and backpressure; a closed consumer is logged
+  and counted by diagnostic builds.
+
+Backends do not retry rejected writes because retrying after returning an error
+could duplicate input. Callers must report failure or explicitly retry the same
+payload. Saturation tests use the production policies and constants.
+
 ---
 
 ## 7. SSH backend (`ssh` crate)
@@ -296,12 +321,12 @@ pub struct SshSession {
     alive: Arc<AtomicBool>,
 }
 
-enum Cmd { Write(Vec<u8>), Resize(u16, u16), Close }
+enum Cmd { Write(Vec<u8>), Resize, Close }
 
 impl SshSession {
     pub fn connect(cfg: SshConfig, initial: PtySize) -> core::Result<Self> {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-        let (cmd_tx, cmd_rx) = std::sync::mpsc::sync_channel(64);
+        let (cmd_tx, cmd_rx) = async_channel::bounded(256);
         let term = Arc::new(FairMutex::new(Term::new(/* cfg */, &TermSize::from(initial), SshListener { /* event_tx */ })));
         let event_tx_clone = event_tx.clone();
         runtime.block_on(async move {
@@ -331,8 +356,8 @@ impl SshSession {
   `Eof`/`Close` → `SessionEvent::Closed`.
 - Auth (MVP): password + key file. Agent later.
 
-> Sync→async bridge: `std::sync::mpsc::SyncSender` sends from the main thread, a tokio task
-> `recv()` (blocking) inside the runtime. Avoids nested `block_on`. Outgoing events use
+> Sync→async bridge: `async_channel::Sender` sends from the main thread, a tokio task
+> `recv().await` inside the runtime. Avoids nested `block_on`. Outgoing events use
 > `async_channel` (sender Send+Sync, recv in a smol/GPUI task).
 
 ---
@@ -566,7 +591,7 @@ crates/
 | Tokio (ssh) vs smol (gpui) runtime conflict | Hidden tokio runtime inside `ssh`, sync API, bridge via `std::mpsc` + `async_channel`. |
 | Windows cmd codepage not UTF-8 | `chcp 65001` (cmd), env `LANG` (pwsh). Document requires Win10 1903+ for good ConPTY. |
 | `yes` spam → continuous redraw | Snapshot diff + debounce notify (§6.4). |
-| Channel backpressure | `async_channel` bounded + drop-oldest for output; cmd channel `sync_channel(64)`. |
+| Channel backpressure | 256 command messages plus a 4 MiB write budget; latest-value resize, priority close, coalescible repaint hints, and reliable stateful events (§6.5). |
 | IME differs on Windows/Linux | Use GPUI's `EntityInputHandler` (ready abstraction), test both platforms. |
 | SSH host key not verified | Require known_hosts + accept prompt, don't disable by default. |
 

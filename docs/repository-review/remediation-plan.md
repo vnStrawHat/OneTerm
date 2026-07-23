@@ -308,10 +308,11 @@ Items are ordered within each category by priority. Cross-category dependencies 
   - Add a multi-window or two-context test harness.
   - **Done when:** active state cannot leak between workspaces.
 
-- [ ] **P1 — Publish a transport backpressure contract.**
+- [x] **P1 — Publish a transport backpressure contract.**
   - Specify capacity, byte budgets, ordering, coalescing, priorities, cancellation, and close behavior for terminal commands and events.
   - Encode the contract in shared adapters and tests.
   - **Done when:** channel implementation changes cannot silently alter overload semantics.
+  - **Completed:** `docs/terminal-backend.md` documents capacity, byte budgets, FIFO behavior, paste handling, resize coalescing, close priority, event delivery, and retry rules; shared event policy and backend regression tests encode the contract.
 
 - [ ] **P1 — Correct persistence architecture guarantees.**
   - State whether persistence is single-instance or inter-process safe, then implement and test that guarantee.
