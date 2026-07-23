@@ -104,7 +104,7 @@ struct TermSz {
 #[cfg(unix)]
 mod platform {
     use super::TermSz;
-
+    use std::io::{self};
     /// Initialise the terminal — on Unix there's nothing special to do
     /// (ANSI escapes are supported natively).
     pub(super) fn init_term() -> io::Result<()> {
