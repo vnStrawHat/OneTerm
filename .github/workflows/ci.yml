@@ -29,6 +29,37 @@ jobs:
       - name: Verify contributor-facing text language
         run: python scripts/check-english.py
 
+  workspace-quality:
+    name: Full workspace quality gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Install Linux system dependencies (GPUI)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxkbcommon-x11-dev libxkbcommon-dev \
+            libx11-dev libxext-dev libxft-dev libxrandr-dev libxi-dev libxtst-dev \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libwayland-dev libdbus-1-dev \
+            libgbm-dev libegl-dev \
+            libfontconfig1 libfontconfig-dev libfreetype6-dev
+      - name: Verify formatting
+        run: cargo fmt --all -- --check
+      - name: Lint workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Build workspace
+        run: cargo build --workspace
+      - name: Test workspace
+        run: cargo test --workspace
+
+
   cross-platform-tests:
     name: Cross-platform backend tests (${{ matrix.os }})
     strategy:
