@@ -171,6 +171,21 @@ pub struct NetStats {
     /// Total bytes sent (upload direction: client → server).
     pub tx_bytes: u64,
 }
+
+/// Optional session capabilities that are not required by every backend.
+///
+/// The stable [`TerminalSession`] façade exposes this single capability object
+/// so adding another optional backend feature does not require a new default
+/// method on every session implementation and test fake.
+#[derive(Clone, Default)]
+pub struct TerminalCapabilities {
+    /// SSH network counters, if the backend exposes them.
+    pub network_stats: Option<NetStats>,
+    /// SFTP access, if the backend exposes a remote filesystem channel.
+    pub sftp: Option<Arc<dyn SftpBackend>>,
+    /// Live OSC 7 working-directory source, if available.
+    pub cwd_source: Option<Arc<dyn CwdSource>>,
+}
 /// Pixel rectangle of the cursor — for IME popup positioning.
 /// The UI maps it to `gpui::Bounds<Pixels>`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -423,28 +438,11 @@ pub trait TerminalSession: Send + Sync + 'static {
         self.cwd().map(|p| p.display().to_string())
     }
 
-    // ── Network Stats ────────────────────────────────────────
-    /// Network statistics (rx/tx bytes). `None` for a local shell.
-    /// Used by the StatusBar to display network speed (kbps).
-    fn network_stats(&self) -> Option<NetStats> {
-        None
-    }
-
-    // ── SFTP ─────────────────────────────────────────────
-    /// SFTP backend if the session has an SFTP channel (SSH only).
-    /// `None` for a local shell — does not force local sessions to implement SFTP.
-    fn sftp(&self) -> Option<Arc<dyn SftpBackend>> {
-        None
-    }
-
-    // ── Cwd source ───────────────────────────────────────
-    /// A live handle for reading this session's cwd (OSC 7), shared with the UI.
-    /// `None` = the session does not expose a cwd source (default). SSH/local
-    /// override this to return an `Arc` wrapping their shared state.
-    ///
-    /// Used by the SFTP browser to jump to the terminal's current directory.
-    fn cwd_source(&self) -> Option<Arc<dyn CwdSource>> {
-        None
+    // ── Optional capabilities ───────────────────────────────
+    /// Return capabilities provided by this backend without widening the stable
+    /// session façade for every future optional feature.
+    fn capabilities(&self) -> TerminalCapabilities {
+        TerminalCapabilities::default()
     }
 }
 
@@ -530,6 +528,15 @@ pub fn parse_keystroke(s: &str) -> Option<(KeySpec, KeyMods)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn optional_capabilities_default_without_fake_implementations() {
+        let (session, _) = crate::test_support::FakeTerminalSession::boxed(24, 80, "");
+        let capabilities = session.capabilities();
+        assert!(capabilities.network_stats.is_none());
+        assert!(capabilities.sftp.is_none());
+        assert!(capabilities.cwd_source.is_none());
+    }
 
     #[test]
     fn parse_ctrl_c() {

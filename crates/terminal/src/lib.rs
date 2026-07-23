@@ -55,8 +55,8 @@ pub use paste::{PastePolicy, PasteResult, encode_paste};
 pub use search::{SearchMatch, SearchOptions, search_term};
 pub use security_policy::{NotificationRateLimiter, TerminalSecurityPolicy};
 pub use session::{
-    CursorBounds, CwdSource, NetStats, SessionEvent, SessionEventDelivery, TerminalInfo,
-    TerminalQueryState, TerminalSession, parse_keystroke,
+    CursorBounds, CwdSource, NetStats, SessionEvent, SessionEventDelivery, TerminalCapabilities,
+    TerminalInfo, TerminalQueryState, TerminalSession, parse_keystroke,
 };
 pub use url::{link_ranges, url_at};
 pub use url_policy::{ConfirmReason, DenyReason, ExternalTargetPolicy, TargetDecision};

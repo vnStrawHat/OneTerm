@@ -14,8 +14,8 @@ use oneterm_core::SftpBackend;
 use oneterm_terminal::model::TerminalModel;
 use oneterm_terminal::mouse_encode::{MouseModifiers, TerminalMouseButton};
 use oneterm_terminal::{
-    CursorBounds, SearchMatch, SearchOptions, SessionEvent, TerminalError, TerminalSession,
-    report_generated_input,
+    CursorBounds, SearchMatch, SearchOptions, SessionEvent, TerminalCapabilities, TerminalError,
+    TerminalSession, report_generated_input,
 };
 use oneterm_terminal::{DynamicColors, TerminalContent, TerminalInfo, TerminalQueryState};
 
@@ -256,28 +256,25 @@ impl TerminalSession for SshSession {
         self.state.lock().unwrap().foreground_process.clone()
     }
 
-    // ── Network Stats ───────────────────────────────────────────────
-    fn network_stats(&self) -> Option<oneterm_terminal::NetStats> {
-        let st = self.state.lock().unwrap();
-        Some(oneterm_terminal::NetStats {
-            rx_bytes: st.rx_bytes,
-            tx_bytes: st.tx_bytes,
-        })
-    }
-
-    // ── SFTP ────────────────────────────────────────────────────────
-    fn sftp(&self) -> Option<std::sync::Arc<dyn SftpBackend>> {
-        self.sftp
-            .lock()
-            .unwrap()
-            .clone()
-            .map(|s| s as std::sync::Arc<dyn SftpBackend>)
-    }
-
-    // ── Cwd source ──────────────────────────────────────────────────
-    fn cwd_source(&self) -> Option<std::sync::Arc<dyn oneterm_terminal::CwdSource>> {
-        Some(std::sync::Arc::new(crate::state::SshCwdSource::new(
-            self.state.clone(),
-        )))
+    // ── Optional capabilities ───────────────────────────────────────
+    fn capabilities(&self) -> TerminalCapabilities {
+        let state = self.state.lock().unwrap();
+        let network_stats = oneterm_terminal::NetStats {
+            rx_bytes: state.rx_bytes,
+            tx_bytes: state.tx_bytes,
+        };
+        drop(state);
+        TerminalCapabilities {
+            network_stats: Some(network_stats),
+            sftp: self
+                .sftp
+                .lock()
+                .unwrap()
+                .clone()
+                .map(|session| session as std::sync::Arc<dyn SftpBackend>),
+            cwd_source: Some(std::sync::Arc::new(crate::state::SshCwdSource::new(
+                self.state.clone(),
+            ))),
+        }
     }
 }

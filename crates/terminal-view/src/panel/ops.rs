@@ -182,8 +182,13 @@ impl TerminalPanel {
     ) {
         let (sftp, cwd_source, is_local) = match self.tree.active_terminal() {
             Some(view) => {
-                let s = view.read(cx).session.read(cx);
-                (s.sftp(), s.cwd_source(), s.is_local())
+                let session = view.read(cx).session.read(cx);
+                let capabilities = session.capabilities();
+                (
+                    capabilities.sftp,
+                    capabilities.cwd_source,
+                    session.is_local(),
+                )
             }
             None => (None, None, true),
         };

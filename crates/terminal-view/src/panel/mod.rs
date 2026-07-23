@@ -306,7 +306,8 @@ impl TerminalPanel {
             .read(cx)
             .session
             .read(cx)
-            .network_stats()
+            .capabilities()
+            .network_stats
     }
 
     /// Breadcrumb label for the active Space's session. `None` when the active
