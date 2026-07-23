@@ -222,22 +222,119 @@ jobs:
           merge-multiple: true
 
       - name: Generate release notes
+        shell: bash
         run: |
           set -euo pipefail
           VERSION="${{ needs.prepare.outputs.version }}"
           TAG="v${VERSION}"
           # Find the previous tag to bound the commit range.
           PREV_TAG="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
-          {
-            echo "## What's Changed"
-            echo
-            if [ -n "${PREV_TAG}" ]; then
-              git log "${PREV_TAG}..${TAG}" --pretty=format:'* %s (%h)' --no-merges
-            else
-              # First release: include the entire history.
-              git log "${TAG}" --pretty=format:'* %s (%h)' --no-merges
-            fi
-          } > notes.md
+          if [ -n "${PREV_TAG}" ]; then
+            RANGE="${PREV_TAG}..${TAG}"
+          else
+            # First release: include the entire history.
+            RANGE="${TAG}"
+          fi
+          export VERSION TAG PREV_TAG RANGE
+          python3 <<'PY' > notes.md
+          import os
+          import re
+          import subprocess
+          from collections import OrderedDict
+
+          GROUPS = OrderedDict([
+              ("feat", "Features"),
+              ("fix", "Bug Fixes"),
+              ("perf", "Performance"),
+              ("refactor", "Refactoring"),
+              ("build", "Build System"),
+              ("ci", "Continuous Integration"),
+              ("test", "Tests"),
+              ("docs", "Documentation"),
+              ("style", "Styles"),
+              ("chore", "Chores"),
+              ("revert", "Reverts"),
+              ("other", "Other Changes"),
+          ])
+
+          VERSION = os.environ["VERSION"]
+          PREV_TAG = os.environ.get("PREV_TAG", "")
+          RANGE = os.environ["RANGE"]
+
+          log = subprocess.check_output(
+              [
+                  "git",
+                  "log",
+                  RANGE,
+                  "--format=%H%x1f%h%x1f%s%x1f%b%x1e",
+                  "--no-merges",
+              ],
+              text=True,
+          )
+
+          grouped = {key: [] for key in GROUPS}
+          breaking_changes = []
+          conventional = re.compile(
+              r"^(?P<type>[A-Za-z]+)(?:\((?P<scope>[^)]+)\))?(?P<breaking>!)?:\s*(?P<desc>.+)$"
+          )
+          release_commit = re.compile(r"^chore\(release\):\s*v?\d+\.\d+\.\d+(?:[-+].*)?$")
+
+          for record in log.split("\x1e"):
+              record = record.strip("\n")
+              if not record:
+                  continue
+              full_hash, short_hash, subject, body = record.split("\x1f", 3)
+              if release_commit.match(subject):
+                  continue
+              match = conventional.match(subject)
+              if match:
+                  commit_type = match.group("type").lower()
+                  scope = match.group("scope")
+                  description = match.group("desc")
+                  is_breaking = bool(match.group("breaking"))
+              else:
+                  commit_type = "other"
+                  scope = None
+                  description = subject
+                  is_breaking = False
+              if re.search(r"(^|\n)BREAKING[ -]CHANGE:\s*", body):
+                  is_breaking = True
+              group = commit_type if commit_type in GROUPS else "other"
+              prefix = f"**{scope}:** " if scope else ""
+              item = f"- {prefix}{description} (`{short_hash}`)"
+              grouped[group].append(item)
+              if is_breaking:
+                  breaking_changes.append(item)
+
+          print("## What's Changed")
+          print()
+          if PREV_TAG:
+              print(f"Changes since `{PREV_TAG}`.")
+          else:
+              print("Initial release changes.")
+          print()
+
+          if breaking_changes:
+              print("### Breaking Changes")
+              print()
+              print("\n".join(breaking_changes))
+              print()
+
+          wrote_section = False
+          for key, title in GROUPS.items():
+              entries = grouped[key]
+              if not entries:
+                  continue
+              wrote_section = True
+              print(f"### {title}")
+              print()
+              print("\n".join(entries))
+              print()
+
+          if not wrote_section and not breaking_changes:
+              print("No notable changes.")
+              print()
+          PY
           echo "==> Release notes:"
           cat notes.md
 
