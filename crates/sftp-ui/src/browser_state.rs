@@ -27,6 +27,29 @@ use oneterm_core::{FileEntry, SftpBackend, SftpSessionId};
 
 use super::types::{PendingAction, SortColumn, SortDir, TransferItem};
 
+/// Mutation gate that prevents periodic snapshots while browser state is idle.
+#[derive(Default)]
+pub(crate) struct SnapshotGate {
+    dirty: bool,
+}
+
+impl SnapshotGate {
+    /// Record a browser-state mutation.
+    pub(crate) fn mark(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Consume the pending snapshot request.
+    pub(crate) fn take(&mut self) -> bool {
+        std::mem::take(&mut self.dirty)
+    }
+
+    /// Clear a pending request after an explicit backend-transition snapshot.
+    pub(crate) fn clear(&mut self) {
+        self.dirty = false;
+    }
+}
+
 /// Stable per-SFTP-session identity used as the browser state key.
 pub(crate) type BackendKey = SftpSessionId;
 
@@ -44,7 +67,8 @@ pub(crate) fn backend_key(sftp: &Option<Arc<dyn SftpBackend>>) -> Option<Backend
 #[derive(Clone)]
 pub(crate) struct SftpBrowserState {
     pub cwd: PathBuf,
-    pub entries: Vec<FileEntry>,
+    /// Immutable entries make unchanged snapshots O(1) in directory size.
+    pub entries: Arc<[FileEntry]>,
     pub sort: Option<(SortColumn, SortDir)>,
     pub selected: Option<usize>,
     pub error: Option<String>,
@@ -66,7 +90,7 @@ impl Default for SftpBrowserState {
     fn default() -> Self {
         Self {
             cwd: PathBuf::new(),
-            entries: Vec::new(),
+            entries: Arc::from([]),
             sort: None,
             selected: None,
             error: None,
@@ -123,6 +147,17 @@ impl SftpBrowserStore {
             .unwrap_or_default()
     }
 
+    /// Return the immutable entry snapshot for a tracked backend.
+    pub fn entries(&self, key: BackendKey) -> Arc<[FileEntry]> {
+        self.0
+            .lock()
+            .expect("SftpBrowserStore poisoned")
+            .states
+            .get(&key)
+            .map(|state| Arc::clone(&state.entries))
+            .unwrap_or_else(|| Arc::from([]))
+    }
+
     /// Save a snapshot for a tracked backend (overwrites any existing entry).
     pub fn save(&self, key: BackendKey, state: SftpBrowserState) {
         let mut data = self.0.lock().expect("SftpBrowserStore poisoned");
@@ -165,6 +200,20 @@ impl SftpBrowserStore {
 
 #[cfg(test)]
 mod tests {
+    use super::SnapshotGate;
+
+    #[test]
+    fn idle_ticks_do_not_request_repeated_snapshots() {
+        let mut gate = SnapshotGate::default();
+        assert!(!gate.take());
+        assert!(!gate.take());
+
+        gate.mark();
+        gate.mark();
+        assert!(gate.take());
+        assert!(!gate.take());
+    }
+
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use async_channel::Receiver;

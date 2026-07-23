@@ -36,6 +36,7 @@ impl SftpPanel {
         self.error = None;
         self.cwd = path.clone();
         self.selected = None;
+        self.mark_state_dirty();
         self.table.update(cx, |t, cx| t.clear_selection(cx));
         cx.notify();
 
@@ -74,6 +75,7 @@ impl SftpPanel {
                             t.refresh(cx);
                         });
                         this.error = None;
+                        this.mark_entries_dirty();
                     }
                     Err(e) => {
                         log::error!("SftpPanel::load_dir: read_dir failed: {e}");
@@ -84,6 +86,7 @@ impl SftpPanel {
                         });
                     }
                 }
+                this.mark_state_dirty();
                 cx.notify();
             })
         })
@@ -144,6 +147,7 @@ impl SftpPanel {
     /// Toggle the auto-follow-terminal-cwd flag (from the "..." menu checkbox).
     pub(crate) fn toggle_follow_terminal_cwd(&mut self, cx: &mut Context<Self>) {
         self.follow_terminal_cwd = !self.follow_terminal_cwd;
+        self.mark_state_dirty();
         log::info!(
             "SftpPanel: auto-follow terminal cwd {}",
             if self.follow_terminal_cwd {
@@ -178,6 +182,7 @@ impl SftpPanel {
         // Skip if the browser is already showing this directory.
         if self.cwd == cwd {
             self.last_followed_cwd = Some(cwd);
+            self.mark_state_dirty();
             return;
         }
         log::debug!(
@@ -186,6 +191,7 @@ impl SftpPanel {
             cwd.display()
         );
         self.last_followed_cwd = Some(cwd.clone());
+        self.mark_state_dirty();
         self.goto_path(cwd, cx);
     }
 
@@ -220,6 +226,7 @@ impl SftpPanel {
             changed
         });
         if changed {
+            self.mark_state_dirty();
             self.schedule_save_table_state(cx);
             cx.notify();
         }

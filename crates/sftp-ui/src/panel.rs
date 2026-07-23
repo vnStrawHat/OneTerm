@@ -85,6 +85,10 @@ pub struct SftpPanel {
     pub(crate) last_followed_cwd: Option<PathBuf>,
     /// Handle for the auto-follow polling task so we can detach it.
     _follow_task: Option<Task<()>>,
+    /// Mutation gate for deferred per-backend browser snapshots.
+    snapshot_gate: super::browser_state::SnapshotGate,
+    /// Whether the table entry ordering/content changed since its stored Arc snapshot.
+    entries_dirty: bool,
 
     // ── Debounce save table state ───────────────────────────
     _save_table_task: Option<Task<()>>,
@@ -150,14 +154,15 @@ impl SftpPanel {
                     .await;
                 let _ = this.update(cx, |this, cx| {
                     this.maybe_follow_terminal_cwd(cx);
-                    // Persist the active backend's view to the store so the latest
-                    // cwd/entries/sort/selection/follow-flag survive even if the
-                    // SftpPanel is destroyed without a tab switch (e.g. the right
-                    // dock is swapped via the mode toggle: SSH Client → Agent drops
-                    // the panel — the store keeps each backend's last state).
+                    // Persist only after a browser-state mutation. The timer remains
+                    // responsible for saving changes made by a panel that is removed
+                    // without a backend transition, but it no longer clones directory
+                    // entries while the panel is idle.
                     super::browser_state::SftpBrowserStore::global(cx).purge_closed();
-                    if let Some(key) = this.active_key {
-                        this.save_state_for_key(key, cx);
+                    if this.snapshot_gate.take() {
+                        if let Some(key) = this.active_key {
+                            this.save_state_for_key(key, cx);
+                        }
                     }
                 });
             }
@@ -185,6 +190,8 @@ impl SftpPanel {
             follow_terminal_cwd: false,
             last_followed_cwd: None,
             _follow_task: Some(_follow_task),
+            snapshot_gate: super::browser_state::SnapshotGate::default(),
+            entries_dirty: false,
             _save_table_task: None,
             _table_sub: table_sub,
         };
@@ -307,10 +314,17 @@ impl SftpPanel {
     /// Snapshot the panel's current view into the store under `key`.
     ///
     /// Reads the delegate's entries + sort (so the file list is preserved exactly),
-    fn save_state_for_key(&self, key: super::browser_state::BackendKey, cx: &mut Context<Self>) {
-        let (entries, sort) = {
-            let d = self.table.read(cx).delegate();
-            (d.entries.clone(), d.sort)
+    fn save_state_for_key(
+        &mut self,
+        key: super::browser_state::BackendKey,
+        cx: &mut Context<Self>,
+    ) {
+        let sort = self.table.read(cx).delegate().sort;
+        let store = super::browser_state::SftpBrowserStore::global(cx);
+        let entries = if self.entries_dirty {
+            Arc::from(self.table.read(cx).delegate().entries.clone())
+        } else {
+            store.entries(key)
         };
 
         let state = super::browser_state::SftpBrowserState {
@@ -327,6 +341,19 @@ impl SftpPanel {
             path_error: self.path_error,
         };
         super::browser_state::SftpBrowserStore::global(cx).save(key, state);
+        self.snapshot_gate.clear();
+        self.entries_dirty = false;
+    }
+
+    /// Mark the active browser projection for one deferred store snapshot.
+    pub(crate) fn mark_state_dirty(&mut self) {
+        self.snapshot_gate.mark();
+    }
+
+    /// Mark the directory entries as changed so the next snapshot refreshes the Arc.
+    pub(crate) fn mark_entries_dirty(&mut self) {
+        self.entries_dirty = true;
+        self.mark_state_dirty();
     }
 
     /// Apply a stored snapshot to the panel + table.
@@ -344,10 +371,12 @@ impl SftpPanel {
         self.follow_terminal_cwd = state.follow_terminal_cwd;
         self.last_followed_cwd = state.last_followed_cwd;
         self.path_error = state.path_error;
+        self.snapshot_gate.clear();
+        self.entries_dirty = false;
         self.table.update(cx, |t, cx| {
             t.delegate_mut().sort = state.sort;
             t.delegate_mut().loading = false;
-            t.delegate_mut().set_entries(state.entries);
+            t.delegate_mut().set_entries(state.entries.to_vec());
             t.clear_selection(cx);
             t.refresh(cx);
             cx.notify();
@@ -384,6 +413,7 @@ impl SftpPanel {
         // Mirror into the active view.
         self.transfers.push(item);
         self.next_transfer_id = self.next_transfer_id.saturating_add(1);
+        self.mark_state_dirty();
         cx.notify();
         Some(id)
     }
@@ -413,6 +443,7 @@ impl SftpPanel {
             })
             .unwrap_or(false);
         if let Some(item) = updated {
+            self.mark_state_dirty();
             if self.active_key == Some(key) {
                 if let Some(view_item) = self.transfers.iter_mut().find(|t| t.id == transfer_id) {
                     *view_item = item;
@@ -436,6 +467,7 @@ impl SftpPanel {
             })?
         };
         self.next_transfer_id = id.saturating_add(1);
+        self.mark_state_dirty();
         Some(id)
     }
 
@@ -449,6 +481,7 @@ impl SftpPanel {
         match event {
             TableEvent::SelectRow(idx) => {
                 self.selected = Some(*idx);
+                self.mark_state_dirty();
                 cx.notify();
             }
             TableEvent::DoubleClickedRow(idx) => {
@@ -457,6 +490,7 @@ impl SftpPanel {
             }
             TableEvent::ClearSelection => {
                 self.selected = None;
+                self.mark_state_dirty();
                 cx.notify();
             }
             TableEvent::ColumnWidthsChanged(widths) => {
@@ -466,6 +500,7 @@ impl SftpPanel {
                     t.delegate_mut().apply_widths(&widths);
                     cx.notify();
                 });
+                self.mark_state_dirty();
                 self.schedule_save_table_state(cx);
             }
             _ => {}
@@ -492,6 +527,7 @@ impl SftpPanel {
                 // Reset the error highlight when the user types again.
                 if self.path_error {
                     self.path_error = false;
+                    self.mark_state_dirty();
                     cx.notify();
                 }
             }
@@ -510,6 +546,7 @@ impl SftpPanel {
             let _ = this.update(cx, |this, cx| match result {
                 Ok(stat) if stat.is_dir => {
                     this.path_error = false;
+                    this.mark_state_dirty();
                     this.load_dir(path, cx);
                 }
                 Ok(_) => {
@@ -518,6 +555,7 @@ impl SftpPanel {
                         path.display()
                     );
                     this.path_error = true;
+                    this.mark_state_dirty();
                     cx.notify();
                 }
                 Err(error) => {
@@ -526,6 +564,7 @@ impl SftpPanel {
                         path.display()
                     );
                     this.path_error = true;
+                    this.mark_state_dirty();
                     cx.notify();
                 }
             });

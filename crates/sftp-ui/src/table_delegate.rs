@@ -330,7 +330,7 @@ impl TableDelegate for SftpTableDelegate {
         col_ix: usize,
         sort: ColumnSort,
         _: &mut Window,
-        _: &mut Context<TableState<Self>>,
+        cx: &mut Context<TableState<Self>>,
     ) {
         let Some(cfg) = self.visible_cfg(col_ix) else {
             return;
@@ -347,6 +347,9 @@ impl TableDelegate for SftpTableDelegate {
             self.sort
         );
         self.resort();
+        if let Some(panel) = self.panel.upgrade() {
+            panel.update(cx, |panel, _| panel.mark_entries_dirty());
+        }
     }
 
     fn loading(&self, _: &App) -> bool {
@@ -364,6 +367,7 @@ impl TableDelegate for SftpTableDelegate {
         if let Some(panel) = self.panel.upgrade() {
             panel.update(cx, |this, cx| {
                 this.selected = Some(row_ix);
+                this.mark_state_dirty();
                 cx.notify();
             });
         }
