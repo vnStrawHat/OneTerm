@@ -39,6 +39,7 @@ const NL: &str = "\n";
 
 const CURSOR_HOME: &str = "\x1b[1;1H";
 const SCREEN_CLEAR: &str = "\x1b[2J";
+#[cfg(windows)]
 const CHAR_SET_ASCII: &str = "\x1b(B";
 
 const COLOR_RESET: &str = "\x1b[0m";
@@ -387,10 +388,7 @@ impl DoomFire {
         emit(SCREEN_CLEAR)?;
 
         // Scope-cached init frame: cursor_home + bg[black] + fg[black]
-        let init_frame = format!(
-            "{}{}{}",
-            CURSOR_HOME, &self.colors.bg[0], &self.colors.fg[0]
-        );
+        let init_frame = format!("{}{}{}", CURSOR_HOME, self.colors.bg[0], self.colors.fg[0]);
 
         // Estimate buffer capacity — generous to avoid reallocation.
         let px_color_sz = self.colors.bg[LAST_COLOR].len() + self.colors.fg[LAST_COLOR].len();

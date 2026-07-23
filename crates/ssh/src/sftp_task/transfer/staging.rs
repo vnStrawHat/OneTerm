@@ -15,7 +15,10 @@ fn transfer_nonce() -> u64 {
     TRANSFER_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
 }
 
-pub(super) fn temporary_local_sibling(target: &Path, marker: &str) -> Result<PathBuf> {
+pub(in crate::sftp_task) fn temporary_local_sibling(
+    target: &Path,
+    marker: &str,
+) -> Result<PathBuf> {
     let parent = target.parent().unwrap_or_else(|| Path::new("."));
     let name = target
         .file_name()
@@ -88,7 +91,10 @@ pub(super) async fn finalize_remote_file(
     Ok(())
 }
 
-pub(super) async fn finalize_local_file(temporary: &Path, target: &Path) -> Result<()> {
+pub(in crate::sftp_task) async fn finalize_local_file(
+    temporary: &Path,
+    target: &Path,
+) -> Result<()> {
     let backup = temporary_local_sibling(target, "backup")?;
     let had_target = match tokio::fs::symlink_metadata(target).await {
         Ok(metadata) => {

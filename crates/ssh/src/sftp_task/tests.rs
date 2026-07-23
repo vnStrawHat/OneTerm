@@ -164,7 +164,10 @@ fn local_upload_discovery_streams_directories_and_files() {
     )
     .unwrap();
     drop(entries);
-    let discovered: Vec<_> = receiver.try_iter().collect();
+    let mut discovered = Vec::new();
+    while let Ok(entry) = receiver.try_recv() {
+        discovered.push(entry);
+    }
 
     assert_eq!(
         discovered
