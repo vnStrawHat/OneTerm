@@ -48,8 +48,12 @@ pub struct SftpPanel {
     pub(crate) active_key: Option<super::browser_state::BackendKey>,
 
     /// Live cwd source of the active terminal tab (OSC 7). Read on demand by the
-    /// "sync to terminal cwd" toolbar button. `None` = no cwd available.
+    /// "sync to terminal cwd" toolbar button. `None` = no cwd source available.
     pub(crate) cwd_source: Option<Arc<dyn CwdSource>>,
+    /// Last cwd observed from `cwd_source`. The polling task updates this cache
+    /// only to trigger toolbar re-rendering when OSC 7 arrives after the panel
+    /// was rendered with a disabled sync button; sync actions still read live.
+    pub(crate) terminal_cwd_cache: Option<PathBuf>,
 
     // ── File tree state (active view; mirrored from the store on tab switch) ─
     pub(crate) cwd: PathBuf,
@@ -153,6 +157,7 @@ impl SftpPanel {
                     .timer(Duration::from_millis(500))
                     .await;
                 let _ = this.update(cx, |this, cx| {
+                    this.refresh_terminal_cwd_cache(cx);
                     this.maybe_follow_terminal_cwd(cx);
                     // Persist only after a browser-state mutation. The timer remains
                     // responsible for saving changes made by a panel that is removed
@@ -177,6 +182,7 @@ impl SftpPanel {
             sftp: None,
             active_key: None,
             cwd_source: None,
+            terminal_cwd_cache: None,
             cwd: PathBuf::new(),
             table,
             selected: None,
@@ -249,6 +255,7 @@ impl SftpPanel {
         // Always track the active terminal's cwd source (may change with the tab
         // even when the SFTP backend does not).
         self.cwd_source = new_cwd_source;
+        self.refresh_terminal_cwd_cache(cx);
 
         let new_key = super::browser_state::backend_key(&new_sftp);
         if new_key == self.active_key {
@@ -300,6 +307,7 @@ impl SftpPanel {
                 self.pending_action = None;
                 self.follow_terminal_cwd = false;
                 self.last_followed_cwd = None;
+                self.terminal_cwd_cache = None;
                 self.path_error = false;
                 self.table.update(cx, |t, cx| {
                     t.delegate_mut().entries.clear();
@@ -541,7 +549,7 @@ impl SftpPanel {
             Some(s) => s.clone(),
             None => return,
         };
-        let _ = cx.spawn(async move |this, cx| {
+        cx.spawn(async move |this, cx| {
             let result = sftp.stat(path.clone()).await;
             let _ = this.update(cx, |this, cx| match result {
                 Ok(stat) if stat.is_dir => {
@@ -568,7 +576,8 @@ impl SftpPanel {
                     cx.notify();
                 }
             });
-        });
+        })
+        .detach();
     }
 
     /// Debounce 1s then persist column state (width + visibility) to docks.json.

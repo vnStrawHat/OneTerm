@@ -122,6 +122,17 @@ impl SftpPanel {
         self.cwd_source.as_ref().and_then(|s| s.cwd())
     }
 
+    /// Refresh the cached terminal cwd and notify when the sync button state or
+    /// tooltip should be re-rendered. The cache is not used for navigation;
+    /// sync actions read `cwd_source` live to avoid stale jumps.
+    pub(crate) fn refresh_terminal_cwd_cache(&mut self, cx: &mut Context<Self>) {
+        let current = self.terminal_cwd();
+        if self.terminal_cwd_cache != current {
+            self.terminal_cwd_cache = current;
+            cx.notify();
+        }
+    }
+
     /// Navigate the SFTP browser to the active terminal's current directory.
     /// No-op if there is no SFTP connection or the terminal has not reported a cwd.
     pub(crate) fn sync_to_terminal_cwd(&mut self, cx: &mut Context<Self>) {
