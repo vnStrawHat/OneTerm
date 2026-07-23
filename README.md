@@ -9,7 +9,7 @@ OneTerm is a terminal emulator plus host/session manager with a **Zed-style work
 
 ---
 
-## Showcase
+## ⭐ Showcase
 
 | | |
 |:---:|:---:|
