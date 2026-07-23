@@ -1,22 +1,24 @@
 # OneTerm
 
-> GUI client for **SSH / SFTP / Local Shell**, written in **Rust** with [GPUI](https://github.com/zed-industries/zed) & [gpui-component](https://github.com/longbridge/gpui-component).
+OneTerm is a terminal emulator plus host/session manager with a **Zed-style workspace UI**: 
+- Connect to remote shells over SSH
+- Browse and transfer files over SFTP
+- Open local shells
+- Monitor coding agents in a live Agent Panel fed by the OSC 9;7 proposal ([spec](docs/osc-agent-status.md)). 
+- Powered by `Rust`, `alacritty_terminal`, `gpui`, `gpui-component`
 
-OneTerm is a terminal emulator plus host/session manager with a **Zed-style workspace UI**: connect to remote shells over SSH, browse and transfer files over SFTP, open local shells, and monitor coding agents in a live Agent Panel fed by the OSC 9;7 proposal ([spec](docs/osc-agent-status.md)). Terminal rendering is powered by `alacritty_terminal` and drawn with GPUI.
+---
 
-**Version:** 0.1.0 · **Edition:** Rust 2024
+## Showcase
 
-> ### 🪟 Platform support
->
-> OneTerm is **developed and tested primarily on Windows** — that is the
-> first-class, fully-supported platform (local shells use Windows ConPTY,
-> the release build embeds an app icon + version info, and runtime assets
-> such as `conpty.dll` / `OpenConsole.exe` are bundled).
->
-> Linux and macOS **compile** and the cross-platform code paths are in
-> place, but they are **not yet tested**. Expect rough edges on those
-> platforms (local PTY, packaging, theming) until they receive a proper
-> QA pass. PRs improving Linux/macOS support are welcome.
+| | |
+|:---:|:---:|
+| ![Multiple tabs and split Spaces](screenshots/mutiple-tabs-spaces.png) | ![Terminal emulator rendering](screenshots/doom-fire.png) |
+| Multiple sessions across tabs with resizable split Spaces | Terminal emulator — 24-bit colors, box drawing, ANSI/VT |
+| ![SSH & SFTP client](screenshots/ssh-sftp-client.png) | ![Agent Panel](screenshots/agents-panel.png) |
+| SSH connectivity + SFTP file browser with transfer queue | Agent Panel — right-dock fleet view (OSC 9;7) |
+| ![Semantic highlight](screenshots/semantic-highlight.png) | ![Semantic highlight detail](screenshots/semantic-highlight-2.png) |
+| Semantic highlight via shell integration (OSC 7 / 133) | Semantic highlight detail — CWD, prompt, and output coloring |
 
 ---
 
@@ -82,9 +84,18 @@ OneTerm is a terminal emulator plus host/session manager with a **Zed-style work
 - Windows ConPTY is bundled; Unix local PTY compiles but is untested
 - Windows is the primary platform; Linux/macOS compile but are untested
 
-### 📦 Packaging & platforms
+### 🪟 Platform support
 
-- Optimized release build with embedded app icon + version info on Windows
+- OneTerm is **developed and tested primarily on Windows** — that is the
+first-class, fully-supported platform (local shells use Windows ConPTY,
+the release build embeds an app icon + version info, and runtime assets
+such as `conpty.dll` / `OpenConsole.exe` are bundled).
+
+- Linux and macOS **compile** and the cross-platform code paths are in
+place, but they are **not yet tested**. Expect rough edges on those
+platforms (local PTY, packaging, theming) until they receive a proper
+QA pass. PRs improving Linux/macOS support are welcome.
+
 
 ## 🚀 Build & run
 
