@@ -57,10 +57,7 @@ pub(crate) fn page() -> SettingPage {
 
 /// Persist the live [`TerminalSettings`] to `terminal.json`.
 pub(super) fn persist(cx: &mut App) {
-    let entity = TerminalSettings::global(cx);
-    if let Err(e) = entity.read(cx).save() {
-        log::warn!("Failed to save terminal.json: {e}");
-    }
+    TerminalSettings::persist_global(cx);
 }
 
 // ── Shell + Font groups ───────────────────────────────────────────────

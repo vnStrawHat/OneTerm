@@ -53,8 +53,12 @@ pub fn save_dock_state_on_close(cx: &App) {
         return;
     };
     let dock_state = dock_area.read(cx).dump(cx);
-    log::info!("save_dock_state_on_close → saving dock state");
-    _ = persistence::save_state(&dock_state, zoomed_name.as_deref(), tbv, "on_close");
+    log::info!("save_dock_state_on_close → scheduling dock state save");
+    cx.background_executor()
+        .spawn(async move {
+            persistence::save_state_logged(&dock_state, zoomed_name.as_deref(), tbv, "on_close");
+        })
+        .detach();
 }
 
 pub const MAIN_DOCK_VERSION: usize = 3;
@@ -145,7 +149,8 @@ impl OneTermWorkspace {
         // Save WeakEntity<DockArea> into AppState — the SSH connect dialog uses it
         // to add a terminal tab after a successful connection.
         AppState::global(cx).update(cx, |s, cx| {
-            s.dock_area = Some(weak_dock_area.clone());
+            s.dock_area.get_or_insert_with(|| weak_dock_area.clone());
+            s.register_workspace(&weak_dock_area);
             cx.notify();
         });
 
@@ -224,9 +229,14 @@ impl OneTermWorkspace {
                 let state = dock_area.read(cx).dump(cx);
                 let zoomed_name = zoomed_panel.lock().ok().and_then(|g| g.clone());
                 let tbv = toggle_button_visible.load(Ordering::Relaxed);
-                async move {
-                    _ = persistence::save_state(&state, zoomed_name.as_deref(), tbv, "on_app_quit");
-                }
+                cx.background_executor().spawn(async move {
+                    persistence::save_state_logged(
+                        &state,
+                        zoomed_name.as_deref(),
+                        tbv,
+                        "on_app_quit",
+                    );
+                })
             }
         })
         .detach();
@@ -308,13 +318,18 @@ impl OneTermWorkspace {
                 if Some(&state) == this.last_layout_state.as_ref() {
                     return;
                 }
-                _ = persistence::save_state(
-                    &state,
-                    zoomed_name.as_deref(),
-                    this.toggle_button_visible.load(Ordering::Relaxed),
-                    "debounce",
-                );
-                this.last_layout_state = Some(state);
+                let tbv = this.toggle_button_visible.load(Ordering::Relaxed);
+                this.last_layout_state = Some(state.clone());
+                cx.background_executor()
+                    .spawn(async move {
+                        persistence::save_state_logged(
+                            &state,
+                            zoomed_name.as_deref(),
+                            tbv,
+                            "debounce",
+                        );
+                    })
+                    .detach();
             });
         }));
     }
@@ -346,12 +361,17 @@ impl OneTermWorkspace {
                             }
                             // Save to docks.json IMMEDIATELY — independent of quit/debounce.
                             let state = dock_area.read(cx).dump(cx);
-                            _ = persistence::save_state(
-                                &state,
-                                name.as_deref(),
-                                toggle_button_visible.load(Ordering::Relaxed),
-                                "zoom_in",
-                            );
+                            let tbv = toggle_button_visible.load(Ordering::Relaxed);
+                            cx.background_executor()
+                                .spawn(async move {
+                                    persistence::save_state_logged(
+                                        &state,
+                                        name.as_deref(),
+                                        tbv,
+                                        "zoom_in",
+                                    );
+                                })
+                                .detach();
                             cx.notify();
                         }
                         PanelEvent::ZoomOut => {
@@ -360,12 +380,12 @@ impl OneTermWorkspace {
                                 *g = None;
                             }
                             let state = dock_area.read(cx).dump(cx);
-                            _ = persistence::save_state(
-                                &state,
-                                None,
-                                toggle_button_visible.load(Ordering::Relaxed),
-                                "zoom_out",
-                            );
+                            let tbv = toggle_button_visible.load(Ordering::Relaxed);
+                            cx.background_executor()
+                                .spawn(async move {
+                                    persistence::save_state_logged(&state, None, tbv, "zoom_out");
+                                })
+                                .detach();
                             cx.notify();
                         }
                         _ => {}

@@ -145,13 +145,16 @@ impl UiConfig {
         cx.set_global(UiConfigGlobal(entity));
     }
 
-    /// Persist the global config to disk (reads the global entity + saves).
+    /// Schedule persistence of a snapshot of the global config off the UI thread.
     pub fn persist(cx: &App) {
-        let entity = Self::global(cx);
-        let res = entity.read(cx).save();
-        if let Err(e) = res {
-            log::warn!("Failed to save ui_config.json: {e}");
-        }
+        let snapshot = Self::global(cx).read(cx).clone();
+        cx.background_executor()
+            .spawn(async move {
+                if let Err(e) = snapshot.save() {
+                    log::warn!("Failed to save ui_config.json: {e}");
+                }
+            })
+            .detach();
     }
 }
 

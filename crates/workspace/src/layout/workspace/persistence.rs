@@ -104,6 +104,18 @@ pub(crate) fn save_state(
     Ok(())
 }
 
+/// Persist a background snapshot and retain an actionable diagnostic on failure.
+pub(crate) fn save_state_logged(
+    state: &DockAreaState,
+    zoomed_panel: Option<&str>,
+    toggle_button_visible: bool,
+    trigger: &str,
+) {
+    if let Err(error) = save_state(state, zoomed_panel, toggle_button_visible, trigger) {
+        log::error!("failed to persist dock state [trigger={trigger}]: {error:#}");
+    }
+}
+
 /// Read the name of the zoomed panel (fullscreen) from `docks.json` before the layout
 /// is reset (the center always resets to a new single tab). Returns `None` if the file
 /// does not exist or no panel is zoomed.

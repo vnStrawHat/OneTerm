@@ -35,6 +35,7 @@ pub(crate) fn reset_center_only(
     );
     let ssh_client_panel = super::build_named_panel("ssh_client_panel", &weak, window, cx);
     let right = DockItem::panel(ssh_client_panel);
+    let mut saved_state = None;
     _ = dock_area.update(cx, |view, cx| {
         // Snapshot the loaded right dock's size + open state so the re-applied
         // `DockItem::Panel` preserves the user's last dock width + collapsed
@@ -57,13 +58,20 @@ pub(crate) fn reset_center_only(
             window,
             cx,
         );
-        _ = super::persistence::save_state(
-            &view.dump(cx),
-            None,
-            toggle_button_visible,
-            "reset_center_only",
-        );
+        saved_state = Some(view.dump(cx));
     });
+    if let Some(state) = saved_state {
+        cx.background_executor()
+            .spawn(async move {
+                super::persistence::save_state_logged(
+                    &state,
+                    None,
+                    toggle_button_visible,
+                    "reset_center_only",
+                );
+            })
+            .detach();
+    }
 }
 
 /// Build the default OneTerm layout: center = terminals, right_dock = SshClientPanel.
@@ -89,6 +97,7 @@ pub(crate) fn reset_default_layout(
     let ssh_client_panel = super::build_named_panel("ssh_client_panel", &weak, window, cx);
     let right = DockItem::panel(ssh_client_panel);
 
+    let mut saved_state = None;
     _ = dock_area.update(cx, |view, cx| {
         view.set_version(MAIN_DOCK_VERSION, window, cx);
         view.set_center(center, window, cx);
@@ -101,6 +110,13 @@ pub(crate) fn reset_default_layout(
             window,
             cx,
         );
-        _ = super::persistence::save_state(&view.dump(cx), None, true, "reset_default_layout");
+        saved_state = Some(view.dump(cx));
     });
+    if let Some(state) = saved_state {
+        cx.background_executor()
+            .spawn(async move {
+                super::persistence::save_state_logged(&state, None, true, "reset_default_layout");
+            })
+            .detach();
+    }
 }

@@ -10,7 +10,7 @@
 //! Color overrides (stored as `Hsla` in settings) are serialized back to
 //! `"#RRGGBB"` strings via [`hsla_to_hex`](super::hsla_to_hex).
 
-use gpui::{FontWeight, Hsla};
+use gpui::{App, FontWeight, Hsla};
 
 use crate::terminal_config::{
     BellConfig, ColorsConfig, CursorConfig, FontConfig, LayoutConfig, MouseConfig, PaddingConfig,
@@ -121,5 +121,17 @@ impl TerminalSettings {
     /// then call this — the config file is the source of truth across restarts.
     pub fn save(&self) -> std::io::Result<()> {
         self.to_config().save()
+    }
+
+    /// Schedule persistence of the current global settings off the UI thread.
+    pub fn persist_global(cx: &App) {
+        let config = Self::global(cx).read(cx).to_config();
+        cx.background_executor()
+            .spawn(async move {
+                if let Err(error) = config.save() {
+                    log::warn!("Failed to save terminal.json: {error}");
+                }
+            })
+            .detach();
     }
 }

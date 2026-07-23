@@ -70,7 +70,7 @@ impl SshSessionStore {
     pub fn add(&mut self, session: SshSession, cx: &mut gpui::Context<Self>) {
         self.sessions.push(session);
         cx.notify();
-        self.save();
+        self.save(cx);
     }
 
     /// Update the session at `index` + save the file + notify observers.
@@ -79,7 +79,7 @@ impl SshSessionStore {
         if let Some(slot) = self.sessions.get_mut(index) {
             *slot = session;
             cx.notify();
-            self.save();
+            self.save(cx);
         }
     }
 
@@ -101,7 +101,7 @@ impl SshSessionStore {
         }
         if changed {
             cx.notify();
-            self.save();
+            self.save(cx);
         }
     }
     /// Remove the session at `index` + save the file + notify observers.
@@ -110,7 +110,7 @@ impl SshSessionStore {
         if index < self.sessions.len() {
             self.sessions.remove(index);
             cx.notify();
-            self.save();
+            self.save(cx);
         }
     }
 
@@ -144,21 +144,31 @@ impl SshSessionStore {
         }
     }
 
-    /// Save the session list to `ssh_session.json` (pretty-printed).
-    fn save(&self) {
-        self.save_to(&config_dir().join("ssh_session.json"));
+    /// Schedule saving a snapshot of the session list off the UI thread.
+    fn save(&self, cx: &gpui::Context<Self>) {
+        let sessions = self.sessions.clone();
+        cx.background_executor()
+            .spawn(async move {
+                Self::save_snapshot(&sessions, &config_dir().join("ssh_session.json"));
+            })
+            .detach();
     }
 
-    /// Save sessions to an explicit path for deterministic callers and tests.
-    fn save_to(&self, path: &Path) {
-        match serde_json::to_string_pretty(&self.sessions) {
+    fn save_snapshot(sessions: &[SshSession], path: &Path) {
+        match serde_json::to_string_pretty(sessions) {
             Ok(json) => {
-                if let Err(e) = atomic_write(&path, json.as_bytes()) {
+                if let Err(e) = atomic_write(path, json.as_bytes()) {
                     log::error!("Failed to write ssh_session.json: {e}");
                 }
             }
             Err(e) => log::error!("Failed to serialize ssh sessions: {e}"),
         }
+    }
+
+    #[cfg(test)]
+    /// Save sessions to an explicit path for deterministic callers and tests.
+    fn save_to(&self, path: &Path) {
+        Self::save_snapshot(&self.sessions, path);
     }
 }
 

@@ -60,13 +60,8 @@ pub fn init(title: impl Into<SharedString>, cx: &mut App) -> Entity<AppMenuBar> 
             st.show_gutter = new_val;
             cx.notify();
         });
-        // Persist to terminal.json (load → mutate only this field → save) so the
-        // preference survives restarts; other fields in the file are preserved.
-        let mut cfg = oneterm_settings::terminal_config::TerminalConfig::load();
-        cfg.layout.show_gutter = new_val;
-        if let Err(e) = cfg.save() {
-            log::warn!("Failed to persist terminal.json: {e}");
-        }
+        // Persist a snapshot off the UI thread so the preference survives restarts.
+        TerminalSettings::persist_global(cx);
         cx.refresh_windows();
     });
     app_menu_bar
