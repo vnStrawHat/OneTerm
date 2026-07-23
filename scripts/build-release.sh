@@ -1,21 +1,22 @@
 #!/usr/bin/env bash
-# scripts/build-release.sh — Build bản release cho OneTerm (Linux / macOS / WSL).
+# scripts/build-release.sh — Build a OneTerm release for Linux, macOS, or WSL.
 #
-# Trên Windows native hãy dùng build-release.ps1 (stage dist/ + copy conpty.dll).
-# Script này chủ yếu cho Linux/mac, nơi không cần conpty.dll/OpenConsole.exe.
+# On native Windows, use build-release.ps1 to stage dist/ and copy conpty.dll.
+# This script primarily targets Linux and macOS, where conpty.dll and
+# OpenConsole.exe are not required.
 #
-# Chạy:  ./scripts/build-release.sh
+# Usage: ./scripts/build-release.sh
 #        TARGET=aarch64-unknown-linux-gnu ./scripts/build-release.sh
 #
-# Bin release = `oneterm` (gated bởi feature `release-bin` trong crates/app/Cargo.toml).
-# Dev bin = `oneterm-debug` (feature `dev-bin`, default). Hai bin mutually-exclusive
-# qua --no-default-features --features release-bin để release chỉ build `oneterm`.
+# The release binary is `oneterm` (gated by the `release-bin` feature in
+# crates/app/Cargo.toml). The development binary is `oneterm-debug` (the default
+# `dev-bin` feature). Passing --no-default-features --features release-bin makes
+# the release build produce only `oneterm`.
 #
-# Kết quả:
-#   - target/<triple>/release/oneterm       (release binary, đã strip + LTO)
-#   - dist/oneterm-<triple>/oneterm          (Linux: bản đóng gói sạch để phát hành)
-#   - dist/oneterm-<triple>/OneTerm.app      (macOS: .app bundle — double-click mà
-#                                            không mở thêm cửa sổ Terminal)
+# Outputs:
+#   - target/<triple>/release/oneterm       (release binary with strip + LTO)
+#   - dist/oneterm-<triple>/oneterm         (clean Linux distribution)
+#   - dist/oneterm-<triple>/OneTerm.app     (macOS application bundle)
 
 set -euo pipefail
 
@@ -25,7 +26,7 @@ cd "$REPO_ROOT"
 TARGET="${TARGET:-}"
 NO_DIST="${NO_DIST:-0}"
 
-# Release build: chỉ build bin `oneterm` (bật release-bin, tắt dev-bin default).
+# Build only `oneterm`: enable release-bin and disable the default dev-bin.
 RELEASE_ARGS=(build --release --no-default-features --features release-bin)
 echo "==> cargo ${RELEASE_ARGS[*]}"
 if [[ -n "$TARGET" ]]; then
@@ -35,13 +36,13 @@ if [[ -n "$TARGET" ]]; then
 else
   cargo "${RELEASE_ARGS[@]}"
   TRIPLE="$(rustc -vV | awk '/^host:/{print $2}')"
-  # Khi không truyền --target, cargo ghi trực tiếp ra target/release (không có subdir triple).
+  # Without --target, Cargo writes directly to target/release.
   RELEASE_DIR="target/release"
 fi
 
 EXE="$RELEASE_DIR/oneterm"
 if [[ ! -f "$EXE" ]]; then
-  echo "ERROR: không tìm thấy $EXE" >&2
+  echo "ERROR: release binary not found: $EXE" >&2
   exit 1
 fi
 echo "OK: $EXE"
@@ -56,26 +57,23 @@ mkdir -p "$DIST_DIR"
 
 OS_FAMILY="$(uname -s)"
 if [[ "$OS_FAMILY" == "Darwin" ]]; then
-  # macOS: package the release binary into a proper OneTerm.app bundle.
+  # Package the release binary into a proper OneTerm.app bundle on macOS.
   #
-  # A raw GUI binary on macOS is treated by LaunchServices as a plain CLI
-  # tool, so double-clicking it in Finder routes it through Terminal.app and
-  # opens an extra Terminal window alongside the GUI (the macOS analog of
-  # the Windows console-window problem fixed with `windows_subsystem =
-  # "windows"`). Bundling it inside OneTerm.app with an Info.plist declaring
-  # it a GUI app (NSPrincipalClass=NSApplication, CFBundlePackageType=APPL)
-  # makes LaunchServices launch it directly. Shared with CI via this script.
+  # LaunchServices treats a raw GUI binary as a command-line tool, so opening it
+  # in Finder routes it through Terminal.app and opens an extra Terminal window.
+  # An application bundle with an Info.plist that declares a GUI app launches
+  # directly instead. CI uses this script for the same packaging behavior.
   bash scripts/bundle-macos.sh "$REPO_ROOT" "$RELEASE_DIR" "$DIST_DIR"
 
-  # Config files are NOT bundled: release builds read/write ~/.OneTerm/ (auto
-  # created on first run), so no shipped config is needed inside the .app.
+  # Release builds create and use ~/.OneTerm/ on first run, so no configuration
+  # files need to be shipped inside the application bundle.
 else
-  # Linux: ship the raw binary + optional default config next to it.
+  # Ship the Linux binary and any optional default configuration beside it.
   cp "$EXE" "$DIST_DIR/"
   for cfg in terminal.json docks.json; do
     [[ -f "$REPO_ROOT/$cfg" ]] && cp "$REPO_ROOT/$cfg" "$DIST_DIR/" || true
   done
 fi
 
-echo "==> dist staged tại: $DIST_DIR"
+echo "==> Distribution staged at: $DIST_DIR"
 ( cd "$DIST_DIR" && find . -type f | sort )

@@ -16,11 +16,11 @@ SCOPES = [
     ROOT / "Cargo.toml",
     ROOT / ".github",
     ROOT / "crates",
-    ROOT / "docs" / "agents",
-    ROOT / "docs" / "architecture.md",
+    ROOT / "README.md",
+    ROOT / "docs",
     ROOT / "scripts",
 ]
-SUFFIXES = {".md", ".py", ".rs", ".toml", ".yml", ".yaml"}
+SUFFIXES = {".md", ".ps1", ".py", ".rs", ".sh", ".toml", ".yaml", ".yml"}
 VIETNAMESE = re.compile(
     "[\u0103\u00e2\u0111\u00ea\u00f4\u01a1\u01b0"
     "\u1ea5\u1ea7\u1ea9\u1eab\u1ead\u1eaf\u1eb1\u1eb3\u1eb5\u1eb7"
@@ -40,6 +40,10 @@ def files_in_scope(scope: Path) -> list[Path]:
 def contributor_text(path: Path) -> str:
     text = path.read_text(encoding="utf-8")
     if path.suffix in {".md", ".yml", ".yaml"}:
+        return text
+    if path.suffix in {".ps1", ".sh"}:
+        # Release scripts contain contributor-facing diagnostics as well as
+        # comments, so inspect the complete script rather than comments alone.
         return text
     if path.suffix in {".py", ".toml"}:
         return "\n".join(
