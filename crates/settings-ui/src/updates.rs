@@ -3,18 +3,15 @@
 use std::sync::{Arc, Mutex};
 
 use gpui::{
-    App, AppContext as _, Context, Entity, Global, IntoElement, ParentElement as _, SharedString,
-    Styled, Subscription, Window,
+    App, AppContext as _, Context, Entity, Global, IntoElement, ParentElement as _, Styled, Window,
 };
 use gpui_component::{
-    ActiveTheme as _, AxisExt as _, Sizable as _, WindowExt as _,
+    ActiveTheme as _, WindowExt as _,
     button::ButtonVariant,
     dialog::DialogButtonProps,
-    input::{Input, InputEvent, InputState},
     label::Label,
     notification::NotificationType,
-    setting::{RenderOptions, SettingField, SettingGroup, SettingItem},
-    switch::Switch,
+    setting::{SettingField, SettingGroup, SettingItem},
     v_flex,
 };
 use oneterm_state::notif_ext::{notify, notify_with_title};
@@ -63,12 +60,6 @@ pub(crate) struct UpdateConfigPersistQueueGlobal(pub Arc<Mutex<UpdateConfigPersi
 impl Global for UpdateUiStateGlobal {}
 impl Global for UpdateConfigGlobal {}
 impl Global for UpdateConfigPersistQueueGlobal {}
-
-struct UpdateProxyInputState {
-    input: Entity<InputState>,
-    initial_value: String,
-    _subscription: Subscription,
-}
 
 impl Default for UpdateUiState {
     fn default() -> Self {
@@ -189,15 +180,12 @@ pub(crate) fn network_group(cx: &App) -> SettingGroup {
 fn auto_check_item(config: UpdateConfig) -> SettingItem {
     SettingItem::new(
         "Automatic Checks",
-        SettingField::render(move |options, _window, _cx| {
-            Switch::new("update-auto-check")
-                .checked(config.auto_check)
-                .with_size(options.size)
-                .on_click(|checked: &bool, _window, cx| {
-                    set_auto_check(cx, *checked);
-                })
-                .into_any_element()
-        }),
+        SettingField::switch(
+            move |_cx| config.auto_check,
+            |checked, cx| {
+                set_auto_check(cx, checked);
+            },
+        ),
     )
     .description(
         "Check for updates automatically after startup when the configured interval is due.",
@@ -207,66 +195,17 @@ fn auto_check_item(config: UpdateConfig) -> SettingItem {
 fn proxy_item(config: UpdateConfig) -> SettingItem {
     SettingItem::new(
         "Proxy URL",
-        SettingField::render(
-            move |options: &RenderOptions, window: &mut Window, cx: &mut App| {
-                let current = config.proxy_url.clone().unwrap_or_default();
-                let key = SharedString::from(format!(
-                    "update-proxy-{}-{}-{}",
-                    options.page_ix, options.group_ix, options.item_ix
-                ));
-                let state_entity = window.use_keyed_state(key, cx, |window, cx| {
-                    let input = cx.new(|cx| {
-                        InputState::new(window, cx)
-                            .placeholder("https://proxy.example.com:8080")
-                            .default_value(current.clone())
-                    });
-
-                    let _subscription = cx.subscribe_in(&input, window, {
-                        move |state: &mut UpdateProxyInputState,
-                              input,
-                              event: &InputEvent,
-                              _window,
-                              cx| {
-                            if !matches!(event, InputEvent::Change) {
-                                return;
-                            }
-                            input.update(cx, |input, cx| {
-                                let value = input.value().trim().to_owned();
-                                if value == state.initial_value {
-                                    return;
-                                }
-                                state.initial_value = value.clone();
-                                set_proxy_url(
-                                    cx,
-                                    if value.is_empty() { None } else { Some(value) },
-                                );
-                            });
-                        }
-                    });
-
-                    UpdateProxyInputState {
-                        input,
-                        initial_value: current.clone(),
-                        _subscription,
-                    }
-                });
-
-                state_entity.update(cx, |state, cx| {
-                    if state.initial_value != current {
-                        state.initial_value = current.clone();
-                        state.input.update(cx, |input, cx| {
-                            input.set_value(SharedString::from(current.clone()), window, cx);
-                        });
-                    }
-                });
-
-                let input = Input::new(&state_entity.read(cx).input).with_size(options.size);
-                let input = if options.layout.is_horizontal() {
-                    input.w_64()
-                } else {
-                    input.w_full()
-                };
-                input.into_any_element()
+        SettingField::input(
+            move |_cx| config.proxy_url.clone().unwrap_or_default().into(),
+            |value, cx| {
+                set_proxy_url(
+                    cx,
+                    if value.is_empty() {
+                        None
+                    } else {
+                        Some(value.to_string())
+                    },
+                );
             },
         ),
     )
@@ -276,15 +215,12 @@ fn proxy_item(config: UpdateConfig) -> SettingItem {
 fn certificate_item(config: UpdateConfig) -> SettingItem {
     SettingItem::new(
         "Verify Certificates",
-        SettingField::render(move |options, _window, _cx| {
-            Switch::new("update-verify-certificates")
-                .checked(config.verify_certificates)
-                .with_size(options.size)
-                .on_click(|checked: &bool, _window, cx| {
-                    set_verify_certificates(cx, *checked);
-                })
-                .into_any_element()
-        }),
+        SettingField::switch(
+            move |_cx| config.verify_certificates,
+            |checked, cx| {
+                set_verify_certificates(cx, checked);
+            },
+        ),
     )
     .description(
         "Keep TLS certificate verification enabled unless you fully trust the proxy or network.",
