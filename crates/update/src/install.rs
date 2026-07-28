@@ -149,7 +149,7 @@ fn find_app_bundle(current_exe: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-#[cfg(any(target_os = "macos", all(unix, not(target_os = "macos"))))]
+#[cfg(target_os = "macos")]
 fn replace_path(source: &Path, destination: &Path) -> Result<PathBuf> {
     let backup = backup_path(destination);
     std::fs::rename(destination, &backup)?;
@@ -175,7 +175,7 @@ fn replace_path(source: &Path, destination: &Path) -> Result<PathBuf> {
     Ok(backup)
 }
 
-#[cfg(any(target_os = "macos", all(unix, not(target_os = "macos"))))]
+#[cfg(target_os = "macos")]
 fn restore_path_from_backup(
     destination: &Path,
     backup: &Path,
