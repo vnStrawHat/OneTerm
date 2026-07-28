@@ -259,16 +259,16 @@ jobs:
           GROUPS = OrderedDict([
               ("feat", "Features"),
               ("fix", "Bug Fixes"),
-              ("perf", "Performance"),
-              ("refactor", "Refactoring"),
-              ("build", "Build System"),
-              ("ci", "Continuous Integration"),
+              ("perf", "Perf"),
+              ("refactor", "Refactor"),
+              ("build", "Build"),
+              ("ci", "CI"),
               ("test", "Tests"),
-              ("docs", "Documentation"),
+              ("docs", "Docs"),
               ("style", "Styles"),
               ("chore", "Chores"),
               ("revert", "Reverts"),
-              ("other", "Other Changes"),
+              ("other", "Others"),
           ])
 
           VERSION = os.environ["VERSION"]
