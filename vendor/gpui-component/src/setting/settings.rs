@@ -196,8 +196,8 @@ impl Settings {
                             this.children(
                                 page.groups
                                     .iter()
-                                    .filter(|g| g.title.is_some())
                                     .enumerate()
+                                    .filter(|(_, group)| group.title.is_some())
                                     .map(|(group_ix, group)| {
                                         let is_active = selected_index.page_ix == page_ix
                                             && selected_index.group_ix == Some(group_ix);

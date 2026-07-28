@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OneTerm <oneterm@local>
+Date: Fri, 10 Jul 2026 00:00:00 +0000
+Subject: [PATCH 3/3] OneTerm fork: fix settings section scrolling
+
+Settings section navigation needs deterministic first-click scrolling. The
+settings list now measures all groups up front before scroll_to_reveal_item uses
+cached item heights, and the sidebar stores the actual filtered group index so
+untitled groups do not offset the target section.
+---
+ crates/ui/src/setting/page.rs     |  2 +-
+ crates/ui/src/setting/settings.rs |  2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/crates/ui/src/setting/page.rs b/crates/ui/src/setting/page.rs
+index 94fb4488..38931b5b 100644
+--- a/crates/ui/src/setting/page.rs
++++ b/crates/ui/src/setting/page.rs
+@@ -122,7 +122,7 @@ impl SettingPage {
+             .use_keyed_state(
+                 SharedString::from(format!("list-state:{}", ix)),
+                 cx,
+-                |_, _| ListState::new(groups_count, ListAlignment::Top, px(100.)),
++                |_, _| ListState::new(groups_count, ListAlignment::Top, px(100.)).measure_all(),
+             )
+             .read(cx)
+             .clone();
+diff --git a/crates/ui/src/setting/settings.rs b/crates/ui/src/setting/settings.rs
+index 6ec2496b..b56beaf0 100644
+--- a/crates/ui/src/setting/settings.rs
++++ b/crates/ui/src/setting/settings.rs
+@@ -196,8 +196,8 @@ impl Settings {
+                             this.children(
+                                 page.groups
+                                     .iter()
+-                                    .filter(|g| g.title.is_some())
+                                     .enumerate()
++                                    .filter(|(_, group)| group.title.is_some())
+                                     .map(|(group_ix, group)| {
+                                         let is_active = selected_index.page_ix == page_ix
+                                             && selected_index.group_ix == Some(group_ix);

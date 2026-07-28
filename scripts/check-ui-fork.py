@@ -13,10 +13,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FORK = ROOT / "vendor" / "gpui-component" / "src"
-PATCH_FILE = ROOT / "vendor" / "patches" / "gpui-component" / "0001-OneTerm-add-TabPanel-set_active_panel.patch"
+PATCH_DIR = ROOT / "vendor" / "patches" / "gpui-component"
+PATCH_FILES = (
+    PATCH_DIR / "0001-OneTerm-add-TabPanel-set_active_panel.patch",
+    PATCH_DIR / "0003-OneTerm-fix-settings-section-scroll.patch",
+)
 BASELINE = ROOT / "scripts" / "ui-fork-baseline.json"
 UPSTREAM_URL = "https://github.com/longbridge/gpui-component"
-PATCH_MODULES = ("dock/tab_panel.rs",)
+PATCH_MODULES = ("dock/tab_panel.rs", "setting/page.rs", "setting/settings.rs")
 
 
 def digest(path: Path) -> str:
@@ -59,8 +63,10 @@ def clone_upstream(destination: Path, revision: str) -> Path:
 
 
 def update_baseline(expected_rev: str) -> int:
-    if not PATCH_FILE.exists():
-        print(f"error: missing source patch: {PATCH_FILE.relative_to(ROOT)}", file=sys.stderr)
+    missing_patches = [path for path in PATCH_FILES if not path.exists()]
+    if missing_patches:
+        for path in missing_patches:
+            print(f"error: missing source patch: {path.relative_to(ROOT)}", file=sys.stderr)
         return 1
 
     with tempfile.TemporaryDirectory(prefix="oneterm-gpui-component-") as temporary:
@@ -94,8 +100,13 @@ def update_baseline(expected_rev: str) -> int:
     baseline = {
         "upstream_repository": UPSTREAM_URL,
         "upstream_revision": expected_rev,
-        "patch_file": PATCH_FILE.relative_to(ROOT).as_posix(),
-        "patch_sha256": digest(PATCH_FILE),
+        "patch_files": [
+            {
+                "path": path.relative_to(ROOT).as_posix(),
+                "sha256": digest(path),
+            }
+            for path in PATCH_FILES
+        ],
         "patch_modules": list(PATCH_MODULES),
         "files": files,
     }
@@ -107,12 +118,18 @@ def update_baseline(expected_rev: str) -> int:
 def verify_baseline(expected_rev: str) -> int:
     baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
     errors: list[str] = []
-    if not PATCH_FILE.exists():
-        errors.append(f"missing source patch: {PATCH_FILE.relative_to(ROOT)}")
-    if baseline.get("patch_file") != PATCH_FILE.relative_to(ROOT).as_posix():
-        errors.append("baseline patch file path is incorrect")
-    elif PATCH_FILE.exists() and digest(PATCH_FILE) != baseline.get("patch_sha256"):
-        errors.append("source patch differs from the reviewed baseline")
+    expected_patch_files = [
+        {
+            "path": path.relative_to(ROOT).as_posix(),
+            "sha256": digest(path) if path.exists() else None,
+        }
+        for path in PATCH_FILES
+    ]
+    for path in PATCH_FILES:
+        if not path.exists():
+            errors.append(f"missing source patch: {path.relative_to(ROOT)}")
+    if baseline.get("patch_files") != expected_patch_files:
+        errors.append("source patch files differ from the reviewed baseline")
     if baseline.get("upstream_repository") != UPSTREAM_URL:
         errors.append("baseline upstream repository is incorrect")
     if baseline["upstream_revision"] != expected_rev:

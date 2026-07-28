@@ -19,10 +19,17 @@ only and is not the source used to generate the vendor snapshot.
 
 ## Delta surface
 
-The current OneTerm patch is intentionally limited to one source file:
+The current OneTerm source patch set is intentionally split across three patch
+files:
 
-- `vendor/gpui-component/src/dock/tab_panel.rs` — exposes
+- `vendor/gpui-component/src/dock/tab_panel.rs` — exposed by `0001`, adds
   `TabPanel::set_active_panel` for Agent navigation.
+- `vendor/gpui-component/src/setting/page.rs` — exposed by `0003`, measures
+  settings groups up front so section navigation has stable item heights on the
+  first click.
+- `vendor/gpui-component/src/setting/settings.rs` — exposed by `0003`, maps
+  sidebar child clicks to the actual filtered group index so untitled groups do
+  not offset the scroll target.
 
 All other files under `vendor/gpui-component/src/` must match the pinned upstream
 revision. New UI components belong in upstream `gpui-component` or in a feature
@@ -33,9 +40,10 @@ crate, not in the vendor patch.
 1. Check the pinned `gpui-component` revision in `Cargo.toml`.
 2. Clone `https://github.com/longbridge/gpui-component` into a temporary directory,
    check out that exact revision, and verify its `HEAD` before copying `crates/ui`.
-3. Apply both patches under `vendor/patches/gpui-component/` from the clone root.
-   Verify that `0001` changes only `crates/ui/src/dock/tab_panel.rs` and that `0002`
-   only makes `crates/ui/Cargo.toml` standalone.
+3. Apply all three patches under `vendor/patches/gpui-component/` from the clone root.
+   Verify that `0001` changes only `crates/ui/src/dock/tab_panel.rs`, that
+   `0002` only makes `crates/ui/Cargo.toml` standalone, and that `0003` changes
+   only `crates/ui/src/setting/page.rs` and `crates/ui/src/setting/settings.rs`.
 4. Copy the patched `crates/ui` package into `vendor/gpui-component`.
 5. Keep the vendor package excluded from the OneTerm workspace.
 6. Run `python scripts/check-ui-fork.py --update` to review the complete source

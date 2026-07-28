@@ -20,8 +20,9 @@ vendor/
 │   │   ├── 0001-*.patch          ← standalone Cargo manifest
 │   │   └── 0002-*.patch          ← Event::Osc / Event::ClearScreen single-pass hook
 │   └── gpui-component/
-│       ├── 0001-*.patch          ← TabPanel::set_active_panel source delta
-│       └── 0002-*.patch          ← standalone Cargo manifest
+│       ├── 0001-*.patch          ← TabPanel source delta
+│       ├── 0002-*.patch          ← standalone Cargo manifest
+│       └── 0003-*.patch          ← Settings scroll source delta
 ├── vte/                          ← pristine vte 0.15.0 + patches/vte/*   (built by Cargo)
 ├── alacritty_terminal/           ← pristine alacritty @ fcf32fe + patches/alacritty_terminal/*
 └── gpui-component/               ← pristine gpui-component crates/ui @ ea6b194 + patches
@@ -66,6 +67,17 @@ one `Processor::advance` parse*, so the PTY pump no longer runs a **second** `vt
 - `0002` — adds `Event::Osc { params, bell_terminated }` + `Event::ClearScreen`; `Term`
   forwards `report_osc` → `Event::Osc`, and emits `Event::ClearScreen` from `clear_screen`
   (`CSI 2J`/`3J`) and `reset_state` (RIS). *(touches `src/event.rs`, `src/term/mod.rs`)*
+
+**`patches/gpui-component/`**
+- `0001` — exposes `TabPanel::set_active_panel` for Agent navigation.
+  *(touches `crates/ui/src/dock/tab_panel.rs`)*
+- `0002` — standalone `Cargo.toml`: inlines the metadata and dependencies needed
+  to build `crates/ui` through Cargo's `[patch]` mechanism. *(touches
+  `crates/ui/Cargo.toml`)*
+- `0003` — measures settings groups up front for stable first-click section
+  scrolling, and maps settings sidebar child clicks to the actual filtered
+  group index. *(touches `crates/ui/src/setting/page.rs`,
+  `crates/ui/src/setting/settings.rs`)*
 
 The patches are **git `format-patch`** files: each carries the commit message describing
 the change, so `patches/` reads like a changelog of the fork.

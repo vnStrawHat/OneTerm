@@ -1,10 +1,20 @@
 {
   "upstream_repository": "https://github.com/longbridge/gpui-component",
   "upstream_revision": "ea6b194db04cc7c0474851f07c7d5b7a9df6a98b",
-  "patch_file": "vendor/patches/gpui-component/0001-OneTerm-add-TabPanel-set_active_panel.patch",
-  "patch_sha256": "ceb31f2f683ff5330fb85dafc9182ac866ba6fb57b28dd49477e531bcecd4f79",
+  "patch_files": [
+    {
+      "path": "vendor/patches/gpui-component/0001-OneTerm-add-TabPanel-set_active_panel.patch",
+      "sha256": "56294fe02c5f877afb29573b95f46368c401b862b9997cc3dd10ae33ee13cde5"
+    },
+    {
+      "path": "vendor/patches/gpui-component/0003-OneTerm-fix-settings-section-scroll.patch",
+      "sha256": "fd58598987be94ef751f753d03935e03f25e98cb87ad14a9fe3fc193f6aac87d"
+    }
+  ],
   "patch_modules": [
-    "dock/tab_panel.rs"
+    "dock/tab_panel.rs",
+    "setting/page.rs",
+    "setting/settings.rs"
   ],
   "files": {
     "accordion.rs": {
@@ -973,14 +983,14 @@
       "patch_file": false
     },
     "setting/page.rs": {
-      "local_sha256": "a8ae48dfdfacc2c0361e3732e001b5aef0b4bed5826e580c6f389cde60ce3acf",
+      "local_sha256": "e014a7a84f98ec0a31c2cdd174ed61b1b2ad2b40c6d9810cb3e1a8fb1ec06edc",
       "upstream_sha256": "a8ae48dfdfacc2c0361e3732e001b5aef0b4bed5826e580c6f389cde60ce3acf",
-      "patch_file": false
+      "patch_file": true
     },
     "setting/settings.rs": {
-      "local_sha256": "1823f2b69b8a10bfe267f35443024a1440ede80ff5f8b8693df84b87db75ee01",
+      "local_sha256": "7f34e22e238ab12b8fa7c250fa9febb35138b3aa583b5d51315aaaefa88b1d25",
       "upstream_sha256": "1823f2b69b8a10bfe267f35443024a1440ede80ff5f8b8693df84b87db75ee01",
-      "patch_file": false
+      "patch_file": true
     },
     "sheet.rs": {
       "local_sha256": "68ebd979c90a1a0774f4a5442e539f4db319d65224bc0f45533e50b13cb72d91",
