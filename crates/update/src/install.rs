@@ -371,7 +371,7 @@ fn spawn_cmd_helper(script: &Path, env: &[(&str, std::ffi::OsString)]) -> Result
 mod tests {
     use super::*;
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", all(unix, not(target_os = "macos"))))]
     fn test_dir(name: &str) -> PathBuf {
         let suffix = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
         std::env::temp_dir().join(format!(
