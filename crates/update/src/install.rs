@@ -156,7 +156,10 @@ fn replace_path(source: &Path, destination: &Path) -> Result<PathBuf> {
     let copy_result = if source.is_dir() {
         copy_dir_recursive(source, destination)
     } else {
-        std::fs::copy(source, destination).map(|_| ())
+        {
+            std::fs::copy(source, destination)?;
+            Ok(())
+        }
     };
     if let Err(error) = copy_result {
         if let Err(restore_error) = restore_path_from_backup(destination, &backup, source.is_dir())
