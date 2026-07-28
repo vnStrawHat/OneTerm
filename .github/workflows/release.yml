@@ -119,6 +119,19 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Verify checked-out VERSION
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.prepare.outputs.version }}"
+          FILEV="$(tr -d '[:space:]' < VERSION)"
+          if [ "$FILEV" != "$VERSION" ]; then
+            echo "::error::Checked-out VERSION ($FILEV) does not match release version ($VERSION)."
+            exit 1
+          fi
 
       - name: Install Rust toolchain + target
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable, 2026-07-23
@@ -213,6 +226,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0 # full history for release notes
 
       - name: Download all build artifacts
@@ -220,15 +234,6 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
-
-      - name: Generate SHA256SUMS
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd artifacts
-          sha256sum oneterm-* > SHA256SUMS
-          echo "==> SHA256SUMS:"
-          cat SHA256SUMS
 
       - name: Generate release notes
         shell: bash
@@ -359,4 +364,4 @@ jobs:
           gh release create "${TAG}" \
             --title "OneTerm ${VERSION}" \
             --notes-file notes.md \
-            artifacts/oneterm-* artifacts/SHA256SUMS
+            artifacts/oneterm-*
