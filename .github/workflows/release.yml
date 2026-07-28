@@ -221,6 +221,15 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: Generate SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd artifacts
+          sha256sum oneterm-* > SHA256SUMS
+          echo "==> SHA256SUMS:"
+          cat SHA256SUMS
+
       - name: Generate release notes
         shell: bash
         run: |
@@ -350,4 +359,4 @@ jobs:
           gh release create "${TAG}" \
             --title "OneTerm ${VERSION}" \
             --notes-file notes.md \
-            artifacts/oneterm-*
+            artifacts/oneterm-* artifacts/SHA256SUMS
