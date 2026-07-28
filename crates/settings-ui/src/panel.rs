@@ -8,11 +8,15 @@
 //! page drives the gpui-component [`Theme`] / [`ThemeRegistry`].
 
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, Render,
-    Window,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
+    ParentElement as _, Render, Styled as _, Window,
 };
-use gpui_component::dock::{Panel, PanelControl, PanelEvent};
-use gpui_component::setting::{SettingPage, Settings};
+use gpui_component::{
+    TitleBar,
+    dock::{Panel, PanelControl, PanelEvent},
+    setting::{SettingPage, Settings},
+    v_flex,
+};
 
 use super::{about, appearance, general, key_bindings, terminal, updates};
 
@@ -86,6 +90,9 @@ impl Panel for SettingsPanel {
 
 impl Render for SettingsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        Settings::new("oneterm-settings").pages(self.pages(cx))
+        v_flex()
+            .size_full()
+            .child(TitleBar::new().child("Settings"))
+            .child(Settings::new("oneterm-settings").pages(self.pages(cx)))
     }
 }

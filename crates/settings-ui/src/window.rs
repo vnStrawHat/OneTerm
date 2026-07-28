@@ -5,8 +5,9 @@
 //! widget and its inputs have the component context, focus management, etc.).
 //!
 //! Unlike the main window (`crates/app/src/window.rs`), the settings window:
-//! - uses the platform's default native title bar (no transparent/custom title
-//!   bar — the `Settings` widget renders its own sidebar header),
+//! - renders its own in-window title bar, matching the main workspace chrome,
+//! - keeps the native window configured for the same desktop title bar behavior
+//!   as the main window on non-Linux platforms,
 //! - has no `on_release` quit hook, so closing it leaves the app running,
 //! - is smaller and centered on the active display.
 //!
@@ -19,6 +20,8 @@ use gpui::{
     size,
 };
 use gpui_component::Root;
+#[cfg(not(target_os = "linux"))]
+use gpui_component::TitleBar;
 
 use super::SettingsPanel;
 
@@ -39,6 +42,8 @@ pub fn open_settings_window(cx: &mut App) -> Task<anyhow::Result<WindowHandle<Ro
     cx.spawn(async move |cx| {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(window_bounds)),
+            #[cfg(not(target_os = "linux"))]
+            titlebar: Some(TitleBar::title_bar_options()),
             #[cfg(target_os = "linux")]
             window_background: gpui::WindowBackgroundAppearance::Transparent,
             #[cfg(target_os = "linux")]
