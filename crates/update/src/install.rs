@@ -149,7 +149,7 @@ fn find_app_bundle(current_exe: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-#[cfg(any(target_os = "macos", all(unix, not(target_os = "macos"))))]
+#[cfg(target_os = "macos")]
 fn replace_path(source: &Path, destination: &Path) -> Result<PathBuf> {
     let backup = backup_path(destination);
     std::fs::rename(destination, &backup)?;
@@ -175,7 +175,7 @@ fn replace_path(source: &Path, destination: &Path) -> Result<PathBuf> {
     Ok(backup)
 }
 
-#[cfg(any(target_os = "macos", all(unix, not(target_os = "macos"))))]
+#[cfg(target_os = "macos")]
 fn restore_path_from_backup(
     destination: &Path,
     backup: &Path,
@@ -371,7 +371,7 @@ fn spawn_cmd_helper(script: &Path, env: &[(&str, std::ffi::OsString)]) -> Result
 mod tests {
     use super::*;
 
-    #[cfg(any(target_os = "macos", all(unix, not(target_os = "macos"))))]
+    #[cfg(target_os = "macos")]
     fn test_dir(name: &str) -> PathBuf {
         let suffix = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
         std::env::temp_dir().join(format!(
@@ -380,7 +380,7 @@ mod tests {
         ))
     }
 
-    #[cfg(any(target_os = "macos", all(unix, not(target_os = "macos"))))]
+    #[cfg(target_os = "macos")]
     #[test]
     fn replace_path_restores_old_file_when_copy_fails() {
         let root = test_dir("replace-path-rollback");
