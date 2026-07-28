@@ -12,6 +12,7 @@ Use this page and `docs/agents/structure.md` when locating current implementatio
 | Terminal engine | `oneterm-terminal` | Terminal model, session contract, encoding, OSC, search | `crates/terminal/src/lib.rs`, `crates/terminal/src/model.rs`, `crates/terminal/src/contracts.rs` |
 | Shared services | `oneterm-settings` | Persistent terminal and UI settings | `crates/settings/src/lib.rs` |
 | Shared services | `oneterm-state` | App-scoped services, workspace state, typed dock persistence, Agent folded model | `crates/state/src/lib.rs`, `crates/state/src/services.rs`, `crates/state/src/dock_persistence.rs`, `crates/state/src/agent_registry.rs`, `crates/state/src/agent_model.rs` |
+| Shared services | `oneterm-update` | GitHub Releases auto-update service, release selection, download, verification, staging, and install orchestration | `crates/update/src/lib.rs`, `crates/update/src/config.rs`, `crates/update/src/github.rs`, `crates/update/src/archive.rs`, `crates/update/src/install.rs` |
 | Vendor patch | `gpui-component` | Pinned upstream UI crate with the reviewed source and standalone-manifest patches | `vendor/README.md`, `vendor/patches/gpui-component/` |
 | Shell | `oneterm-workspace` | Feature-agnostic window, layout, dock persistence, status bar | `crates/workspace/src/lib.rs`, `crates/workspace/src/layout/` |
 | Backend | `oneterm-local-shell` | Local PTY session implementation | `crates/local-shell/src/lib.rs`, `crates/local-shell/src/session_terminal.rs` |
@@ -61,6 +62,8 @@ while durable settings and persistence policy remain process-wide where document
 - Cross-feature runtime state: `crates/state/`.
 - Window shell and dock layout: `crates/workspace/`.
 - Persistent file lifecycle mechanics: `crates/core/src/persistence.rs`; the typed dock document is owned by `crates/state/src/dock_persistence.rs`; schema ownership is documented in [`docs/agents/persistence.md`](agents/persistence.md).
+- Auto-update service and GitHub Releases release flow: `crates/update/`.
+- Auto-update design and GitHub Releases packaging requirements: [`docs/auto-update.md`](auto-update.md).
 
 ## Navigation and validation
 

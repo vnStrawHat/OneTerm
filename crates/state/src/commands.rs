@@ -21,6 +21,8 @@ pub struct WorkspaceCommands {
     pub open_new_session_dialog: fn(&mut Window, &mut App),
     /// Open the General Settings window.
     pub open_settings: fn(&mut App),
+    /// Open the About dialog from the application menu.
+    pub open_about: fn(&mut Window, &mut App),
     /// Toggle the in-terminal search bar on the active terminal panel.
     pub find_in_active_terminal: fn(&Entity<DockArea>, &mut Window, &mut App),
     /// Snapshot + apply key bindings (the settings feature owns the logic).

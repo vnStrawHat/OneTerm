@@ -75,21 +75,13 @@ fn main() {
         // Copy conpty.dll → target/conpty.dll
         let conpty_src = assets_dir.join("conpty.dll");
         let conpty_dst = target_dir.join("conpty.dll");
-        if conpty_src.exists() {
-            if let Err(e) = std::fs::copy(&conpty_src, &conpty_dst) {
-                println!("cargo:warning=Failed to copy conpty.dll: {e}");
-            }
-        }
+        copy_runtime_asset(&conpty_src, &conpty_dst, "conpty.dll");
 
         // Copy x64/OpenConsole.exe → target/x64/OpenConsole.exe
         let openconsole_src = assets_dir.join("x64").join("OpenConsole.exe");
         let openconsole_dst = target_dir.join("x64").join("OpenConsole.exe");
-        if openconsole_src.exists() {
-            let _ = std::fs::create_dir_all(target_dir.join("x64"));
-            if let Err(e) = std::fs::copy(&openconsole_src, &openconsole_dst) {
-                println!("cargo:warning=Failed to copy OpenConsole.exe: {e}");
-            }
-        }
+        let _ = std::fs::create_dir_all(target_dir.join("x64"));
+        copy_runtime_asset(&openconsole_src, &openconsole_dst, "OpenConsole.exe");
 
         // Re-run the build script when assets / resources / VERSION change.
         println!("cargo:rerun-if-changed=assets/oneterm.rc");
@@ -135,6 +127,19 @@ fn generate_rc(
     }
     std::fs::write(out, generated)?;
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn copy_runtime_asset(src: &Path, dst: &Path, label: &str) {
+    if !src.exists() {
+        return;
+    }
+    if let Err(error) = std::fs::copy(src, dst) {
+        if dst.exists() {
+            return;
+        }
+        println!("cargo:warning=Failed to copy {label}: {error}");
+    }
 }
 
 /// Parse a version string like "0.1.0" or "0.1.0.4" into Windows 4-part form.

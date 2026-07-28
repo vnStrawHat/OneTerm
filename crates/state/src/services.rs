@@ -109,6 +109,7 @@ mod tests {
             new_terminal_with_shell: terminal,
             open_new_session_dialog: window,
             open_settings: app,
+            open_about: window,
             find_in_active_terminal: dock,
             setup_key_bindings: app,
         }

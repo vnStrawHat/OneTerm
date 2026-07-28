@@ -14,6 +14,7 @@
     "crates/settings-ui",
     "crates/agent-ui",
     "crates/highlight",
+    "crates/update",
     "crates/local-shell",
     "crates/ssh"
   ],
@@ -63,7 +64,9 @@
       "oneterm-actions",
       "oneterm-core",
       "oneterm-settings",
-      "oneterm-theme"
+      "oneterm-state",
+      "oneterm-theme",
+      "oneterm-update"
     ],
     "oneterm-sftp-ui": [
       "oneterm-actions",
@@ -79,6 +82,9 @@
     "oneterm-state": [
       "oneterm-core",
       "oneterm-terminal"
+    ],
+    "oneterm-update": [
+      "oneterm-core"
     ],
     "oneterm-terminal": [
       "oneterm-core"

@@ -14,7 +14,7 @@ use gpui::{
 use gpui_component::dock::{Panel, PanelControl, PanelEvent};
 use gpui_component::setting::{SettingPage, Settings};
 
-use super::{about, appearance, general, key_bindings, terminal};
+use super::{about, appearance, general, key_bindings, terminal, updates};
 
 /// General Settings panel (font, theme, key bindings, terminal options, about).
 pub struct SettingsPanel {
@@ -30,6 +30,10 @@ impl SettingsPanel {
             |_, _, cx| cx.notify(),
         )
         .detach();
+        cx.observe(&updates::UpdateUiState::global(cx), |_, _, cx| cx.notify())
+            .detach();
+        cx.observe(&updates::UpdateUiState::config(cx), |_, _, cx| cx.notify())
+            .detach();
         Self {
             focus_handle: cx.focus_handle(),
         }
@@ -49,7 +53,7 @@ impl SettingsPanel {
             key_bindings::page(),
             terminal::page(),
             appearance::page(cx),
-            about::page(),
+            about::page(cx),
         ]
     }
 }

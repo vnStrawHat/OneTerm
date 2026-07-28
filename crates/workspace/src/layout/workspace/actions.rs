@@ -279,6 +279,11 @@ impl super::OneTermWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(cmds) = oneterm_state::commands::commands(cx) {
+            (cmds.open_about)(window, cx);
+            return;
+        }
+
         window.open_alert_dialog(cx, |alert, _, _| {
             alert
                 .title("About OneTerm")

@@ -14,6 +14,7 @@ members = [
     "crates/settings-ui",
     "crates/agent-ui",
     "crates/highlight",
+    "crates/update",
     "crates/local-shell",
     "crates/ssh",
 ]
@@ -52,6 +53,7 @@ oneterm-settings-ui = { path = "crates/settings-ui" }
 oneterm-agent-ui = { path = "crates/agent-ui" }
 oneterm-highlight = { path = "crates/highlight" }
 oneterm-local-shell = { path = "crates/local-shell" }
+oneterm-update = { path = "crates/update" }
 oneterm-ssh = { path = "crates/ssh" }
 
 # Terminal engine — Zed fork of alacritty_terminal with TerminalContent/display_iter.
@@ -85,6 +87,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 zeroize = { version = "1.8", features = ["derive"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-native-roots", "system-proxy"] }
+semver = "1"
+sha2 = "0.10"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tar = "0.4"
+flate2 = "1"
 
 # UI helpers
 chrono = "0.4"

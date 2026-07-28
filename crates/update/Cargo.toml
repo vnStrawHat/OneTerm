@@ -1,0 +1,22 @@
+[package]
+name = "oneterm-update"
+description = "OneTerm auto-update service using GitHub Releases."
+publish = false
+edition.workspace = true
+build = "build.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+oneterm-core.workspace = true
+chrono.workspace = true
+flate2.workspace = true
+log.workspace = true
+reqwest.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tar.workspace = true
+zip.workspace = true

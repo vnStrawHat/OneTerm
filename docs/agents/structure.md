@@ -91,6 +91,9 @@ OneTerm/
 │   │       ├── active_terminal.rs  # ActiveTerminalMetricsProvider (breadcrumb/net stats injection)
 │   │       └── paths.rs            # docks.json path + SFTP_TABLE_STATE_FIELD (shared shell/sftp)
 │   │
+│   ├── update/                     # `oneterm-update` — GitHub Releases updater service + staging/install orchestration
+│   │   └── src/                    # lib.rs + config/github/archive/install/version helpers
+│   │
 │   ├── theme/                      # `oneterm-theme` — theme registry + AppIcon (has build.rs)
 │   │   ├── build.rs                # Sets ONETERM_UI_ICONS_DIR for the icon_named! macro
 │   │   ├── assets/icons/           # OneTerm SVG icons (auto-generate AppIcon variants)
@@ -123,6 +126,11 @@ OneTerm/
 │   │   ├── build.rs                # Publishes ONETERM_VERSION (About page)
 │   │   └── src/                    # lib.rs: open_settings + setup_key_bindings commands;
 │   │                               #   panel/window/general/terminal/appearance/about/key_bindings …
+│   │                               #   update_controls/updates state
+│   │
+│   ├── update/                     # `oneterm-update` — GitHub Releases updater service + staging/install orchestration
+│   │   └── src/                    # lib.rs, build.rs, config.rs, github.rs, archive.rs, install.rs, version.rs
+│   │
 │   └── agent-ui/                   # `oneterm-agent-ui` — AGENT feature (right-dock fleet view + compact cards)
 │       └── src/                    # lib.rs init() (AgentRegistry::init); view/card render helpers
 │
@@ -142,7 +150,7 @@ OneTerm/
 
 - **Each Rust file is at most ~400 lines.** If it exceeds that → split into a submodule immediately. Conversely, **do not split too small**. Each file must have enough "responsibility mass" to stand on its own.
 - **One module, one responsibility.** The file name = the main module name (snake_case).
-- **One crate per layer / feature.** Shared logic goes in a low crate (`core` / `terminal` / `actions` / `settings` / `state` / `theme`); each user-facing feature is its own `*-ui` crate; the shell (`workspace`) is feature-agnostic.
+- **One crate per layer / feature.** Shared logic goes in a low crate (`core` / `terminal` / `actions` / `settings` / `state` / `update` / `theme`); each user-facing feature is its own `*-ui` crate; the shell (`workspace`) is feature-agnostic.
 - **Feature crates never depend on each other's internals** except the acyclic edge `session-ui → terminal-view` (a new SSH session opens a `TerminalPanel`). Cross-cutting helpers live in `state`.
 - **Feature crates never depend on `ssh`/`local-shell`.** They create sessions through the `oneterm_terminal::SessionFactory` process-global that the `app` installs at startup.
 - **Theme JSON** lives at `crates/theme/themes/<name>.json`, loaded via `BUILTIN_THEMES` in `crates/theme/src/theme.rs`. Do not hardcode colors — read from `cx.theme()` / `TerminalTheme`.
@@ -163,12 +171,13 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 | `actions` (`oneterm-actions`) | `core`, gpui | leaf-ui | gpui `Action` structs shared by shell and features; domain placement types come from `core`. |
 | `settings` (`oneterm-settings`) | `core`, gpui | shared | `TerminalConfig`, live `TerminalSettings`, and `UiConfig`. |
 | `state` (`oneterm-state`) | `core`, `terminal`, gpui, gpui-component | shared | `AppState`, notification helpers, command registry, dock helpers, active-terminal metrics, and shared persistence paths. |
+| `update` (`oneterm-update`) | `core`, `chrono`, `reqwest`, `semver`, `sha2`, `tar`, `flate2`, `zip` | shared | GitHub Releases auto-update checks, asset selection, download verification, staging, and installer orchestration. |
 | `theme` (`oneterm-theme`) | `settings`, `actions`, gpui, gpui-component | shared | Theme registry, built-in themes, and generated `AppIcon`. |
 | `workspace` (`oneterm-workspace`) | `core`, `terminal`, `settings`, `state`, `actions`, `theme`, gpui-component | shell | Feature-agnostic app shell. Maps domain placement types to the UI dock and drives features through `WorkspaceCommands`. |
 | `terminal-view` (`oneterm-terminal-view`) | `core`, `terminal`, `settings`, `state`, `theme`, `actions`, `highlight`, gpui-component | feature | Terminal panel, rendering/input, split spaces, and terminal settings panel. |
 | `sftp-ui` (`oneterm-sftp-ui`) | `core`, `terminal`, `state`, `theme`, `actions`, gpui-component | feature | SFTP file browser and transfer queue. |
 | `session-ui` (`oneterm-session-ui`) | `core`, `terminal`, `terminal-view`, `state`, `actions`, gpui-component | feature | Session tree, connect dialogs, and `SshSessionStore`. |
-| `settings-ui` (`oneterm-settings-ui`) | `core`, `settings`, `theme`, `actions`, gpui-component | feature | General Settings window and key-binding setup. |
+| `settings-ui` (`oneterm-settings-ui`) | `core`, `settings`, `state`, `update`, `theme`, `actions`, gpui-component | feature | General Settings window, update status/actions, and key-binding setup. |
 | `agent-ui` (`oneterm-agent-ui`) | `core`, `terminal`, `settings`, `state`, `theme`, gpui-component | feature | Agent Panel fleet view. |
 | `ssh` (`oneterm-ssh`) | `core`, `terminal` | backend | russh client and SFTP; implements `TerminalSession` and `SftpBackend`. |
 | `local-shell` (`oneterm-local-shell`) | `core`, `terminal` | backend | Local PTY; implements `TerminalSession`. |

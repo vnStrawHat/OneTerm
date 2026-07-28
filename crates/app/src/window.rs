@@ -10,6 +10,7 @@ use gpui_component::Root;
 #[cfg(not(target_os = "linux"))]
 use gpui_component::TitleBar;
 
+use oneterm_settings_ui::start_auto_check;
 use oneterm_workspace::{OneTermWorkspace, save_dock_state_on_close};
 
 /// Open the main window and return its task handle.
@@ -42,12 +43,14 @@ pub fn open_window(cx: &mut App) -> Task<anyhow::Result<WindowHandle<Root>>> {
 
         let window = cx.open_window(options, |window, cx| {
             let workspace = cx.new(|cx| OneTermWorkspace::new(window, cx));
-            cx.new(|cx| Root::new(workspace, window, cx))
+            let root = cx.new(|cx| Root::new(workspace, window, cx));
+            root
         })?;
 
         window
             .update(cx, |_, window, cx| {
                 window.activate_window();
+                start_auto_check(window, cx);
                 window.set_window_title("OneTerm");
                 cx.on_release(|_, cx| {
                     save_dock_state_on_close(cx);

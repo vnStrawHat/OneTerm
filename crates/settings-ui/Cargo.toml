@@ -13,6 +13,8 @@ oneterm-core.workspace = true
 oneterm-settings.workspace = true
 oneterm-theme.workspace = true
 oneterm-actions.workspace = true
+oneterm-update.workspace = true
+oneterm-state.workspace = true
 
 gpui.workspace = true
 gpui-component.workspace = true

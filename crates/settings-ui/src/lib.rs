@@ -20,6 +20,7 @@ mod key_bindings;
 mod panel;
 mod terminal;
 mod terminal_options;
+mod updates;
 mod window;
 
 pub use panel::SettingsPanel;
@@ -33,6 +34,11 @@ pub fn open_settings(cx: &mut gpui::App) {
     open_settings_window(cx).detach();
 }
 
+/// Open the About dialog with update status and install action.
+pub fn open_about_dialog(window: &mut gpui::Window, cx: &mut gpui::App) {
+    about::open_about_dialog(window, cx);
+}
+
 /// Snapshot the currently-registered key bindings, then apply OneTerm's
 /// overrides. Owns the logic the shell's `bind_keys` used to inline; the shell
 /// calls this via the workspace command registry so it needs no `views::settings`
@@ -42,6 +48,16 @@ pub fn setup_key_bindings(cx: &mut gpui::App) {
     cx.set_global(KeyBindingsSnapshotGlobal(snapshot));
     init_state(cx);
     apply_key_bindings(cx);
+}
+
+/// Initialize Settings UI globals before startup auto-checks run.
+pub fn init(cx: &mut gpui::App) {
+    updates::UpdateUiState::init(cx);
+}
+
+/// Start the startup update check and notify when an update is available.
+pub fn start_auto_check(window: &mut gpui::Window, cx: &mut gpui::App) {
+    updates::start_auto_check(window, cx);
 }
 
 // ── Separator helpers ────────────────────────────────────────────────
