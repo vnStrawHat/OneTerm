@@ -24,6 +24,7 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config, Term};
 use async_channel::Receiver;
+use russh::Pty;
 use russh::client;
 use russh::client::AuthResult;
 use russh::keys::{PrivateKey, PrivateKeyWithHashAlg, load_secret_key};
@@ -75,6 +76,8 @@ pub struct SshSession {
 
 const CONNECT_DEADLINE: Duration = Duration::from_secs(60);
 const PHASE_DEADLINE: Duration = Duration::from_secs(20);
+// Disable TTY echo while shell integration bootstraps the running shell.
+const SHELL_INTEGRATION_PTY_MODES: &[(Pty, u32)] = &[(Pty::ECHO, 0)];
 
 const SSH_RUNTIME_WORKERS: usize = 2;
 static SSH_RUNTIME: OnceLock<std::result::Result<tokio::runtime::Runtime, String>> =
@@ -271,6 +274,12 @@ pub fn connect(
             .await?;
             log::info!("SshSession: channel opened");
 
+            let pty_modes: &[(Pty, u32)] = if cfg.shell_integration {
+                SHELL_INTEGRATION_PTY_MODES
+            } else {
+                &[]
+            };
+
             await_phase(
                 "PTY request",
                 async {
@@ -282,7 +291,7 @@ pub fn connect(
                             initial.rows as u32,
                             0,
                             0,
-                            &[],
+                            pty_modes,
                         )
                         .await
                         .map_err(|e| anyhow::anyhow!("{e}"))
@@ -296,45 +305,32 @@ pub fn connect(
                 initial.rows
             );
 
-            // ── Shell integration (OSC 7 cwd) — silent, via exec ──────
-            // Instead of `request_shell`, run an exec request that:
-            //   1. defines a prompt hook emitting OSC 7 (cwd) + OSC 133;A,
-            //   2. exports it (function + PROMPT_COMMAND) into the environment,
-            //   3. `exec`s the user's interactive login shell, which inherits it.
-            //
-            // Steps 1–2 run in a NON-interactive shell (sshd runs `$SHELL -c <cmd>`),
-            // so there is no readline/PTY echo → completely silent. Unlike the `env`
-            // channel request, this does not depend on sshd `AcceptEnv`.
-            //
-            // bash-oriented (`export -f` + `PROMPT_COMMAND`); zsh/others: no OSC 7 but
-            // harmless. `.bashrc` that overwrites `PROMPT_COMMAND` would defeat it.
-            // Disable via `SshConfig::shell_integration = false`.
+            // ── Shell integration (OSC 7 cwd) — shell login + bootstrap ──────
+            // Keep `request_shell(true)` so sshd/PAM still prints the normal login
+            // banner and MOTD / "Last login" output. When enabled, we request the PTY
+            // with ECHO off, then inject a bootstrap command that installs the OSC 7
+            // prompt hook in the running shell and re-enables echo.
+            await_phase(
+                "shell request",
+                async {
+                    channel
+                        .request_shell(true)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("{e}"))
+                },
+                cfg.cancellation.clone(),
+            )
+            .await?;
+            log::info!("SshSession: shell requested");
+
             if cfg.shell_integration {
                 await_phase(
-                    "shell request",
-                    async {
-                        channel
-                            .exec(true, SHELL_INTEGRATION_EXEC)
-                            .await
-                            .map_err(|e| anyhow::anyhow!("{e}"))
-                    },
+                    "shell integration bootstrap",
+                    async { send_shell_integration_bootstrap(&channel, &state).await },
                     cfg.cancellation.clone(),
                 )
                 .await?;
-                log::info!("SshSession: shell started via exec (shell integration)");
-            } else {
-                await_phase(
-                    "shell request",
-                    async {
-                        channel
-                            .request_shell(true)
-                            .await
-                            .map_err(|e| anyhow::anyhow!("{e}"))
-                    },
-                    cfg.cancellation.clone(),
-                )
-                .await?;
-                log::info!("SshSession: shell requested");
+                log::info!("SshSession: shell integration bootstrap sent");
             }
 
             // ── Open SFTP channel (optional) ────────────────────────────
@@ -459,23 +455,23 @@ async fn open_sftp(
     Ok(SftpSession::new(sftp_cmd_tx, sftp_event_rx, alive))
 }
 
-/// Exec command used instead of `request_shell` to enable shell integration
-/// **silently**. sshd runs it as `$SHELL -c <cmd>` (non-interactive → no echo):
-///
-/// 1. define `__oneterm_osc7` — emits **OSC 7** (cwd) + **OSC 133;A** (prompt marker),
-/// 2. `export -f __oneterm_osc7` + `PROMPT_COMMAND=__oneterm_osc7` → inherited by the child shell,
-/// 3. print the MOTD (which sshd/PAM only shows for `request_shell`, not `exec`),
-/// 4. `exec` the user's interactive login shell.
-///
-/// Step 3 restores the login banner: PAM caches the dynamic MOTD to
-/// `/run/motd.dynamic` (Ubuntu) plus static `/etc/motd`; we print both, guarded so
-/// missing files are skipped. Absent on non-Ubuntu → simply nothing printed.
-///
-/// bash `printf` expands `\x1b...\x1b\\` (ESC ... ST) at runtime. This is
-/// bash-oriented (`export -f`/`PROMPT_COMMAND`); zsh and other shells simply
-/// won't emit OSC 7 (harmless). A `.bashrc` that overwrites `PROMPT_COMMAND`
-/// would defeat it. Disable via `SshConfig::shell_integration = false`.
-const SHELL_INTEGRATION_EXEC: &str = r#"__oneterm_osc7() { printf '\x1b]7;file://%s%s\x1b\\' "${HOSTNAME:-$(hostname)}" "$PWD"; printf '\x1b]133;A\x1b\\'; }; export -f __oneterm_osc7 2>/dev/null; export PROMPT_COMMAND='__oneterm_osc7'; [ -f /run/motd.dynamic ] && cat /run/motd.dynamic 2>/dev/null; [ -r /etc/motd ] && cat /etc/motd 2>/dev/null; exec "${SHELL:-/bin/bash}" -il"#;
+/// Bootstrap command injected after `request_shell(true)` to install the
+/// OSC 7 prompt hook in the running shell without showing the script itself.
+const SHELL_INTEGRATION_BOOTSTRAP: &str = r#"__oneterm_osc7() { printf '\x1b]7;file://%s%s\x1b\\' "${HOSTNAME:-$(hostname)}" "$PWD"; printf '\x1b]133;A\x1b\\'; }; case ";${PROMPT_COMMAND:-};" in *";__oneterm_osc7;"*) ;; *) PROMPT_COMMAND="__oneterm_osc7${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;; esac; __oneterm_osc7; stty echo 2>/dev/null"#;
+
+/// Send the shell-integration bootstrap after the shell is open.
+async fn send_shell_integration_bootstrap(
+    channel: &russh::Channel<russh::client::Msg>,
+    state: &SharedState,
+) -> anyhow::Result<()> {
+    let payload = format!("{SHELL_INTEGRATION_BOOTSTRAP}\r");
+    channel
+        .data(payload.as_bytes())
+        .await
+        .map_err(|e| anyhow::anyhow!("shell integration bootstrap: {e}"))?;
+    state.lock().unwrap().tx_bytes += payload.len() as u64;
+    Ok(())
+}
 
 /// Load a private key from a file, decrypting with the passphrase if needed.
 fn load_private_key(

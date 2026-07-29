@@ -56,47 +56,41 @@ cargo build --workspace
 
 ---
 
-## 5.4. (Implemented) OSC 7 over SSH — silent, using `exec`
+## 5.4. (Implemented) OSC 7 over SSH — silent bootstrap after `request_shell`
 
-For the local shell, OneTerm generates OSC 7/133 via env at spawn (silent). For SSH, every
-other approach has drawbacks:
+For the local shell, OneTerm generates OSC 7/133 via env at spawn (silent). For SSH, the working approach is now:
+
+1. request a PTY with `ECHO=0` when shell integration is enabled,
+2. call `request_shell(true)` so sshd/PAM still prints the normal login banner, MOTD, and `Last login`,
+3. send a compact bootstrap command into the running shell,
+4. restore echo with `stty echo`.
 
 | Approach | Silent? | Needs sshd config? | Result |
 |------|:--------:|:------------------:|---------|
 | Write a snippet to stdin (`channel.data`) | ❌ (PTY echoes it) | No | Tried — shows up in the terminal |
 | Strip echo on the client side (`EchoSuppressor`) | ❌ (echo gets reformatted) | No | Tried — still shows up |
 | `channel.set_env("PROMPT_COMMAND")` | ✅ | **Yes** (`AcceptEnv`) | Tried — server rejects it → OSC 7 lost |
-| **`channel.exec(...)` then `exec` the shell** | ✅ | **No** | **Currently used** |
+| **PTY echo off + `request_shell` + bootstrap** | ✅ | **No** | **Currently used** |
 
-**The approach in use** — replace `request_shell` with `channel.exec(true, cmd)`:
+**The approach in use** — keep the shell login flow, then bootstrap the prompt hook:
 
 ```
 __oneterm_osc7() { printf '\x1b]7;file://%s%s\x1b\\' "${HOSTNAME:-$(hostname)}" "$PWD"; printf '\x1b]133;A\x1b\\'; };
-export -f __oneterm_osc7 2>/dev/null;
-export PROMPT_COMMAND='__oneterm_osc7';
-[ -f /run/motd.dynamic ] && cat /run/motd.dynamic 2>/dev/null;
-[ -r /etc/motd ] && cat /etc/motd 2>/dev/null;
-exec "${SHELL:-/bin/bash}" -il
+case ";${PROMPT_COMMAND:-};" in *";__oneterm_osc7;"*) ;; *) PROMPT_COMMAND="__oneterm_osc7${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;; esac;
+__oneterm_osc7;
+stty echo 2>/dev/null
 ```
 
-- sshd runs this command via `$SHELL -c <cmd>` (**non-interactive** → no readline →
-  **no echo**).
-- Steps 1–2 define the hook + export (the function via `export -f`, and `PROMPT_COMMAND`).
-- Step 3 **re-prints the MOTD**: `exec` skips the step where sshd/PAM prints the login
-  banner (only runs for `request_shell`), so we `cat /run/motd.dynamic` (Ubuntu's dynamic
-  MOTD cache) + `/etc/motd` ourselves (guard if the file is missing → print nothing).
-- Step 4 `exec`s the interactive login shell → **inherits** the hook + `PROMPT_COMMAND` →
-  emits OSC 7 + OSC 133;A before each prompt.
+- `request_shell(true)` preserves the normal sshd/PAM banner, MOTD, and `Last login`.
+- `Pty::ECHO = 0` keeps the bootstrap command itself from being echoed while it is sent.
+- The bootstrap installs `PROMPT_COMMAND` in the running shell; no child `exec` and no manual MOTD replay are needed.
+- `stty echo` restores normal user input once the hook is installed.
 - **Doesn't depend on** `AcceptEnv` (unlike `set_env`).
 
 **Remaining limitations:**
-- bash-oriented (`export -f` + `PROMPT_COMMAND`). zsh/other shells: no OSC 7 but harmless.
-- A `.bashrc` that overwrites `PROMPT_COMMAND` will disable the hook (most distros don't
-  touch it by default).
-- MOTD: restored via `/run/motd.dynamic` + `/etc/motd`. The "Last login:" line (printed
-  separately by sshd) is absent. If some server's PAM still prints the MOTD for exec →
-  may duplicate.
-- Disable entirely: `SshConfig::shell_integration = false` → use `request_shell` as before.
+- bash-oriented (`PROMPT_COMMAND`). zsh/other shells may not keep the hook, but the login shell still starts normally.
+- A `.bashrc` that overwrites `PROMPT_COMMAND` will disable the hook (most distros don't touch it by default).
+- `SshConfig::shell_integration = false` disables the bootstrap and leaves a plain `request_shell(true)` session.
 
 ---
 
