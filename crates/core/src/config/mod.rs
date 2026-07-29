@@ -3,6 +3,7 @@
 //! Pure logic, no GPUI dependency.
 
 pub mod dock_mode;
+mod env;
 pub mod placement;
 pub mod shell;
 

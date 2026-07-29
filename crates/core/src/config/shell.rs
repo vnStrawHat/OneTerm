@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
 
+use super::env::base_env;
+
 /// Kinds of local shell configurable from settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -120,17 +122,6 @@ pub struct ResolvedShell {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
-}
-
-/// Default env for every shell.
-fn base_env() -> HashMap<String, String> {
-    let mut env = HashMap::new();
-    env.insert("TERM".into(), "xterm-256color".into());
-    env.insert("COLORTERM".into(), "truecolor".into());
-    // LANG: prefer the current env, fall back to en_US.UTF-8.
-    let lang = std::env::var("LANG").unwrap_or_else(|_| "en_US.UTF-8".into());
-    env.insert("LANG".into(), lang);
-    env
 }
 
 #[cfg(windows)]
