@@ -1,9 +1,9 @@
 # .github/workflows/release.yml — Release pipeline for OneTerm.
 #
 # Triggers:
-#   • workflow_dispatch (choose bump: patch / minor / major) — bumps VERSION, commits,
-#     creates + pushes a tag, then builds & publishes the release. Pushing with
-#     GITHUB_TOKEN does not re-trigger workflows, so there is no recursion.
+#   • workflow_dispatch (choose bump: patch / minor / major) — computes the next
+#     version, builds with that VERSION, then commits VERSION and publishes the
+#     release only after all builds have succeeded.
 #   • push tag v*                                 — builds & publishes the release
 #     directly (VERSION must already be bumped to match the tag).
 #
@@ -39,8 +39,8 @@ concurrency:
 
 jobs:
   # ──────────────────────────────────────────────────────────────────────────
-  # prepare — bump VERSION + commit + tag + push (dispatch), or resolve the
-  # version from the tag (tag push). Outputs `version` and `tag` for later jobs.
+  # prepare — compute the next version (dispatch), or resolve the version from
+  # the tag (tag push). Outputs `version`, `tag`, and `ref` for later jobs.
   # ──────────────────────────────────────────────────────────────────────────
   prepare:
     runs-on: ubuntu-latest
@@ -49,29 +49,41 @@ jobs:
     outputs:
       version: ${{ steps.dispatch.outputs.version || steps.tagpush.outputs.version }}
       tag: ${{ steps.dispatch.outputs.tag || steps.tagpush.outputs.tag }}
+      ref: ${{ steps.dispatch.outputs.ref || steps.tagpush.outputs.ref }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
           persist-credentials: true
 
-      # Dispatch path: bump VERSION, commit, tag, push.
+      # Dispatch path: compute the next VERSION only. If the current VERSION
+      # is already published, bump from it. If a release commit exists but is
+      # not published yet, reuse the version already written in VERSION so a
+      # rerun does not skip a number.
       - id: dispatch
         if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          NEW="$(bash scripts/bump-version.sh "${{ inputs.bump }}")"
-          echo "==> Bumped VERSION to $NEW"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add VERSION
-          git commit -m "chore(release): v${NEW}"
-          git tag "v${NEW}"
-          # GITHUB_TOKEN pushes do not trigger other workflows -> no recursion.
-          git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
-          git push origin "v${NEW}"
+          SOURCE_REF="$(git rev-parse HEAD)"
+          CURRENT="$(tr -d '[:space:]' < VERSION)"
+          HEAD_SUBJECT="$(git log -1 --pretty=%s)"
+          if gh release view "v${CURRENT}" >/dev/null 2>&1; then
+            NEW="$(bash scripts/bump-version.sh "${{ inputs.bump }}")"
+            git checkout -- VERSION
+            echo "==> Bumped release VERSION to $NEW from published v${CURRENT}"
+          elif [[ "${HEAD_SUBJECT}" == chore\(release\):* ]]; then
+            NEW="${CURRENT}"
+            echo "==> Reusing unpublished release VERSION $NEW"
+          else
+            NEW="$(bash scripts/bump-version.sh "${{ inputs.bump }}")"
+            git checkout -- VERSION
+            echo "==> Computed release VERSION $NEW from current VERSION $CURRENT"
+          fi
           echo "version=${NEW}" >> "$GITHUB_OUTPUT"
           echo "tag=v${NEW}" >> "$GITHUB_OUTPUT"
+          echo "ref=${SOURCE_REF}" >> "$GITHUB_OUTPUT"
 
       # Tag-push path: resolve the version from the tag name; verify it matches
       # the VERSION file.
@@ -88,6 +100,7 @@ jobs:
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "ref=${TAG}" >> "$GITHUB_OUTPUT"
 
   # ──────────────────────────────────────────────────────────────────────────
   # build — matrix build for 4 targets, stage the dist directory, upload artifact.
@@ -120,16 +133,23 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ needs.prepare.outputs.tag }}
+          ref: ${{ needs.prepare.outputs.ref }}
 
-      - name: Verify checked-out VERSION
+      - name: Apply release VERSION
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' "${{ needs.prepare.outputs.version }}" > VERSION
+
+      - name: Verify release VERSION
         shell: bash
         run: |
           set -euo pipefail
           VERSION="${{ needs.prepare.outputs.version }}"
           FILEV="$(tr -d '[:space:]' < VERSION)"
           if [ "$FILEV" != "$VERSION" ]; then
-            echo "::error::Checked-out VERSION ($FILEV) does not match release version ($VERSION)."
+            echo "::error::VERSION file ($FILEV) does not match release version ($VERSION)."
             exit 1
           fi
 
@@ -226,7 +246,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ needs.prepare.outputs.tag }}
+          ref: ${{ needs.prepare.outputs.ref }}
           fetch-depth: 0 # full history for release notes
 
       - name: Download all build artifacts
@@ -237,19 +257,23 @@ jobs:
 
       - name: Generate release notes
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           VERSION="${{ needs.prepare.outputs.version }}"
           TAG="v${VERSION}"
-          # Find the previous tag to bound the commit range.
-          PREV_TAG="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          RELEASE_REF="${{ needs.prepare.outputs.ref }}"
+          # Prefer the previous published GitHub release, not the previous git
+          # tag. That keeps failed tags from becoming the changelog boundary.
+          PREV_TAG="$(gh release list --exclude-drafts --exclude-pre-releases --limit 20 --json tagName --jq '.[].tagName' 2>/dev/null | awk -v tag="${TAG}" '$0 != tag { print; exit }' || true)"
           if [ -n "${PREV_TAG}" ]; then
-            RANGE="${PREV_TAG}..${TAG}"
+            RANGE="${PREV_TAG}..${RELEASE_REF}"
           else
             # First release: include the entire history.
-            RANGE="${TAG}"
+            RANGE="${RELEASE_REF}"
           fi
-          export VERSION TAG PREV_TAG RANGE
+          export VERSION TAG PREV_TAG RANGE RELEASE_REF
           python3 <<'PY' > notes.md
           import os
           import re
@@ -272,6 +296,7 @@ jobs:
           ])
 
           VERSION = os.environ["VERSION"]
+          REPOSITORY = os.environ["GITHUB_REPOSITORY"]
           PREV_TAG = os.environ.get("PREV_TAG", "")
           RANGE = os.environ["RANGE"]
 
@@ -315,7 +340,8 @@ jobs:
                   is_breaking = True
               group = commit_type if commit_type in GROUPS else "other"
               prefix = f"**{scope}:** " if scope else ""
-              item = f"- {prefix}{description} (`{short_hash}`)"
+              commit_url = f"https://github.com/{REPOSITORY}/commit/{full_hash}"
+              item = f"- {prefix}{description} ([`{short_hash}`]({commit_url}))"
               grouped[group].append(item)
               if is_breaking:
                   breaking_changes.append(item)
@@ -352,16 +378,39 @@ jobs:
           echo "==> Release notes:"
           cat notes.md
 
-      - name: Create GitHub release
+      - name: Commit VERSION and create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           VERSION="${{ needs.prepare.outputs.version }}"
           TAG="v${VERSION}"
+          RELEASE_REF="${{ needs.prepare.outputs.ref }}"
+          EVENT="${{ github.event_name }}"
           echo "==> Artifacts to upload:"
           ls -la artifacts/
-          gh release create "${TAG}" \
-            --title "OneTerm ${VERSION}" \
-            --notes-file notes.md \
-            artifacts/oneterm-*
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            if [[ "${GITHUB_REF}" != refs/heads/* ]]; then
+              echo "::error::workflow_dispatch releases must run from a branch ref."
+              exit 1
+            fi
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            printf '%s\n' "${VERSION}" > VERSION
+            git add VERSION
+            if ! git diff --cached --quiet; then
+              git commit -m "chore(release): v${VERSION}"
+            fi
+            git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
+            RELEASE_REF="$(git rev-parse HEAD)"
+            gh release create "${TAG}" \
+              --target "${RELEASE_REF}" \
+              --title "OneTerm ${VERSION}" \
+              --notes-file notes.md \
+              artifacts/oneterm-*
+          else
+            gh release create "${TAG}" \
+              --title "OneTerm ${VERSION}" \
+              --notes-file notes.md \
+              artifacts/oneterm-*
+          fi
