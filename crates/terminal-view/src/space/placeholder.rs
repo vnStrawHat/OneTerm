@@ -6,7 +6,7 @@
 
 use gpui::{
     App, ElementId, InteractiveElement, IntoElement, MouseButton, ParentElement, Styled,
-    WeakEntity, Window,
+    WeakEntity, Window, rgb,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, Sizable as _,
@@ -40,7 +40,11 @@ pub(crate) fn render_placeholder(
         .gap_2()
         .bg(cx.theme().background)
         .text_color(cx.theme().muted_foreground)
-        .child(Icon::new(AppIcon::Terminal).large())
+        .child(
+            Icon::new(AppIcon::Terminal)
+                .large()
+                .text_color(rgb(0x58c4dc)),
+        )
         .child("Drag a terminal tab here")
         .child("or right-click to split")
         // Clicking the placeholder activates this Space.
