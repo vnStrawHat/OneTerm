@@ -5,11 +5,27 @@ name: CI
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - ".github/workflows/**"
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".rustfmt.toml"
+      - "README.md"
+      - "AGENTS.md"
+      - "docs/**"
+      - "scripts/**"
+      - "crates/**"
+      - "vendor/**"
   pull_request:
-    paths-ignore:
-      - ".github/workflows/**"
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".rustfmt.toml"
+      - "README.md"
+      - "AGENTS.md"
+      - "docs/**"
+      - "scripts/**"
+      - "crates/**"
+      - "vendor/**"
 
 permissions:
   contents: read
