@@ -4,12 +4,12 @@
 //! same value shown by the OneTerm ▸ About dialog).
 
 use gpui::{
-    App, AppContext as _, Context, Element, InteractiveElement as _, IntoElement,
+    AnyElement, App, AppContext as _, Context, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, StatefulInteractiveElement as _, Styled, Window, div,
-    prelude::FluentBuilder, px,
+    prelude::FluentBuilder, px, rgb,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, WindowExt as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dialog::DialogFooter,
     h_flex,
@@ -71,14 +71,18 @@ impl Render for AboutUpdateControls {
 /// Open the About dialog from the application menu.
 pub(crate) fn open_about_dialog(window: &mut Window, cx: &mut App) {
     let update_controls = cx.new(|cx| AboutUpdateControls::new(cx));
-    window.open_alert_dialog(cx, move |alert, _, _| {
+    window.open_alert_dialog(cx, move |alert, _, cx| {
         alert
             .title("About OneTerm")
-            .description(format!(
-                "OneTerm v{}\n\nLocal and SSH terminal client.",
-                env!("ONETERM_VERSION")
-            ))
-            .child(update_controls.clone())
+            .width(px(520.))
+            .child(
+                v_flex()
+                    .gap_5()
+                    .w_full()
+                    .child(app_identity(cx))
+                    .child(links_section(cx))
+                    .child(update_controls.clone()),
+            )
             .footer(
                 DialogFooter::new()
                     .gap_2()
@@ -110,26 +114,32 @@ pub(crate) fn page(cx: &gpui::App) -> SettingPage {
 
 /// The "About" group — app name, version, and a short description.
 fn about_group() -> SettingGroup {
-    SettingGroup::new().item(SettingItem::render(|_options, _, cx| {
-        v_flex()
-            .gap_3()
-            .w_full()
-            .items_center()
-            .justify_center()
-            .child(AppIcon::TerminalLogo.colored().size(px(96.)))
-            .child(Label::new("OneTerm").text_xl())
-            .child(
-                Label::new(format!("Version {}", env!("ONETERM_VERSION")))
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground),
-            )
-            .child(
-                Label::new("A terminal application for local and SSH sessions.")
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground),
-            )
-            .into_any()
-    }))
+    SettingGroup::new().item(SettingItem::render(|_options, _, cx| app_identity(cx)))
+}
+
+fn app_identity(cx: &App) -> AnyElement {
+    v_flex()
+        .gap_3()
+        .w_full()
+        .items_center()
+        .justify_center()
+        .child(
+            Icon::new(AppIcon::Terminal)
+                .with_size(px(96.))
+                .text_color(rgb(0x58c4dc)),
+        )
+        .child(Label::new("OneTerm").text_xl())
+        .child(
+            Label::new(format!("Version {}", env!("ONETERM_VERSION")))
+                .text_sm()
+                .text_color(cx.theme().muted_foreground),
+        )
+        .child(
+            Label::new("A Terminal application for SSH / SFTP / Local Shell")
+                .text_sm()
+                .text_color(cx.theme().muted_foreground),
+        )
+        .into_any_element()
 }
 
 /// The "Links" group — GitHub repository.
@@ -138,19 +148,39 @@ fn links_group() -> SettingGroup {
         "GitHub Repository",
         SettingField::element(
             |_options: &RenderOptions, _window: &mut Window, cx: &mut App| {
-                div()
-                    .id("open-repo")
-                    .py_0p5()
-                    .text_sm()
-                    .text_color(cx.theme().link)
-                    .text_decoration_1()
-                    .cursor_pointer()
-                    .child(GITHUB_REPOSITORY_URL)
-                    .on_click(|_, _, cx| {
-                        cx.open_url(GITHUB_REPOSITORY_URL);
-                    })
-                    .into_any_element()
+                repository_link("settings-open-repo", cx)
             },
         ),
     ))
+}
+
+fn links_section(cx: &App) -> AnyElement {
+    v_flex()
+        .gap_2()
+        .w_full()
+        .child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .justify_between()
+                .gap_3()
+                .child(Label::new("GitHub Repository").text_sm())
+                .child(repository_link("about-open-repo", cx)),
+        )
+        .into_any_element()
+}
+
+fn repository_link(id: &'static str, cx: &App) -> AnyElement {
+    div()
+        .id(id)
+        .py_0p5()
+        .text_sm()
+        .text_color(cx.theme().link)
+        .text_decoration_1()
+        .cursor_pointer()
+        .child(GITHUB_REPOSITORY_URL)
+        .on_click(|_, _, cx| {
+            cx.open_url(GITHUB_REPOSITORY_URL);
+        })
+        .into_any_element()
 }
