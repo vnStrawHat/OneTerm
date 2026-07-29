@@ -16,6 +16,7 @@ use oneterm_theme::theme::apply_list_style_override;
 /// Build the "Appearance" settings page.
 pub(crate) fn page(cx: &App) -> SettingPage {
     SettingPage::new("Appearance")
+        .resettable(true)
         .icon(Icon::new(IconName::Palette))
         .group(theme_mode_group())
         .group(theme_group(cx))
@@ -30,7 +31,7 @@ fn theme_mode_group() -> SettingGroup {
 
     SettingGroup::new()
         .title("Theme Mode")
-        .description("Switch between light and dark appearance.")
+        .description("Light or dark mode.")
         .item(
             SettingItem::new(
                 "Mode",
@@ -55,7 +56,7 @@ fn theme_mode_group() -> SettingGroup {
                     },
                 ),
             )
-            .description("Light or Dark appearance."),
+            .description("Light or dark."),
         )
 }
 
@@ -69,7 +70,7 @@ fn theme_group(cx: &App) -> SettingGroup {
 
     SettingGroup::new()
         .title("Theme")
-        .description("The color theme applied to the whole application.")
+        .description("App color theme.")
         .item(
             SettingItem::new(
                 "Color Theme",
@@ -90,6 +91,6 @@ fn theme_group(cx: &App) -> SettingGroup {
                     },
                 ),
             )
-            .description("Choose from the built-in themes (Zed, iTerm2 color schemes, …)."),
+            .description("Choose a built-in theme."),
         )
 }

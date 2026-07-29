@@ -29,7 +29,9 @@ use super::{is_modifier_only, keystroke_to_string};
 /// Edit Menu, Terminal Context Menu, Session Tabs Context Menu, SFTP Context
 /// Menu).
 pub(crate) fn page() -> SettingPage {
-    let mut page = SettingPage::new("Key Bindings").icon(Icon::new(IconName::Menu));
+    let mut page = SettingPage::new("Key Bindings")
+        .resettable(true)
+        .icon(Icon::new(IconName::Menu));
     // Iterate actions in registry order, grouping consecutive actions that share
     // the same `group` field into one `SettingGroup` per unique group title.
     let mut current_title: Option<&str> = None;

@@ -1,126 +1,90 @@
-//! "Terminal" settings page — shell, font, and terminal-behavior groups, plus the page assembly
-//! and the persistence helper shared with [`super::terminal_options`].
-//!
-//! Every field reads from the global [`TerminalSettings`] and writes back to it,
-//! then persists the full snapshot to `terminal.json` via
-//! [`TerminalSettings::save`]. Live terminal sessions pick up the changes
-//! through the `cx.notify()` observers wired in `apply.rs`.
-//!
-//! The cursor / layout / scroll / mouse / bell / security groups live in
-//! [`super::terminal_options`] (split for the ~400-line file guideline).
+//! Font settings group and custom font-related fields.
 
 use gpui::{
     App, AppContext as _, Entity, FontWeight, IntoElement, ParentElement, SharedString, Styled,
     Subscription, Window, div, prelude::FluentBuilder as _, px, rems,
 };
 use gpui_component::{
-    AxisExt, Disableable, Icon, IconName, IndexPath, Sizable,
+    AxisExt, Disableable, IndexPath, Sizable,
     input::{InputEvent, InputState, NumberInput},
     select::{SearchableVec, Select, SelectEvent, SelectState},
-    setting::{
-        NumberFieldOptions, RenderOptions, SettingField, SettingGroup, SettingItem, SettingPage,
-    },
+    setting::{NumberFieldOptions, RenderOptions, SettingField, SettingGroup, SettingItem},
 };
-use oneterm_core::config::ShellKind;
-
-use super::items_with_separators;
 use oneterm_settings::TerminalSettings;
 
-/// Shell presets shown in the dropdown (label is used as both key and value).
-const SHELL_KINDS: &[(ShellKind, &str)] = &[
-    (ShellKind::Cmd, "cmd.exe (Windows)"),
-    (ShellKind::PowerShell, "Windows PowerShell 5.x"),
-    (ShellKind::Pwsh, "PowerShell 7+ (pwsh)"),
-    (ShellKind::Bash, "Bash"),
-    (ShellKind::Zsh, "Zsh"),
-    (ShellKind::Sh, "Sh"),
-    (ShellKind::Custom, "Custom"),
-];
+use crate::items_with_separators;
+
+use super::persist;
 
 const DEFAULT_FONT_SENTINEL: &str = "Default (theme)";
 
-/// Build the "Terminal" settings page.
-pub(crate) fn page() -> SettingPage {
-    SettingPage::new("Terminal")
-        .icon(Icon::new(IconName::SquareTerminal))
-        .group(shell_group())
-        .group(font_group())
-        .group(super::terminal_options::cursor_group())
-        .group(super::terminal_options::layout_group())
-        .group(super::terminal_options::scroll_group())
-        .group(super::terminal_options::mouse_group())
-        .group(super::terminal_options::bell_group())
-        .group(super::terminal_options::security_group())
-}
-
-// ── Persistence helper (shared with `terminal_options`) ──────────────
-
-/// Persist the live [`TerminalSettings`] to `terminal.json`.
-pub(super) fn persist(cx: &mut App) {
-    TerminalSettings::persist_global(cx);
-}
-
-// ── Shell + Font groups ───────────────────────────────────────────────
-
-fn shell_group() -> SettingGroup {
-    let options: Vec<(SharedString, SharedString)> = SHELL_KINDS
-        .iter()
-        .map(|(_, label)| (SharedString::from(*label), SharedString::from(*label)))
-        .collect();
+/// Build the "Font" settings group.
+pub(super) fn group() -> SettingGroup {
+    let weight_options: Vec<(SharedString, SharedString)> = [
+        ("thin", "Thin"),
+        ("extra_light", "Extra Light"),
+        ("light", "Light"),
+        ("normal", "Normal"),
+        ("medium", "Medium"),
+        ("semibold", "Semibold"),
+        ("bold", "Bold"),
+        ("extra_bold", "Extra Bold"),
+        ("black", "Black"),
+    ]
+    .iter()
+    .map(|(k, label)| (SharedString::from(*k), SharedString::from(*label)))
+    .collect();
 
     SettingGroup::new()
-        .title("Shell")
-        .description("The default shell launched for new local terminals.")
+        .title("Font")
+        .description("Family, size, and weight.")
         .items(items_with_separators(vec![
+            SettingItem::new("Font Family", font_family_field())
+                .description("Use \"Default\" for theme font."),
             SettingItem::new(
-                "Shell",
-                SettingField::dropdown(
-                    options,
-                    |cx: &App| {
-                        let kind = TerminalSettings::global(cx).read(cx).shell.kind;
-                        SHELL_KINDS
-                            .iter()
-                            .find(|(k, _)| *k == kind)
-                            .map(|(_, label)| SharedString::from(*label))
-                            .unwrap_or_else(|| "Custom".into())
+                "Font Size",
+                SettingField::number_input(
+                    NumberFieldOptions {
+                        min: 6.0,
+                        max: 72.0,
+                        ..Default::default()
                     },
-                    |val: SharedString, cx: &mut App| {
-                        let kind = SHELL_KINDS
-                            .iter()
-                            .find(|(_, label)| *label == val.as_ref())
-                            .map(|(k, _)| *k)
-                            .unwrap_or(ShellKind::Custom);
-                        TerminalSettings::global(cx).update(cx, |s, cx| {
-                            s.set_kind(kind);
-                            cx.notify();
-                        });
-                        persist(cx);
-                    },
-                ),
-            )
-            .description("Choose the shell kind. For Custom, set the program path below."),
-            SettingItem::new(
-                "Custom Program",
-                SettingField::input(
                     |cx: &App| {
                         TerminalSettings::global(cx)
                             .read(cx)
-                            .shell
-                            .program
-                            .as_ref()
-                            .map(|s| SharedString::from(s.to_string_lossy().to_string()))
-                            .unwrap_or_default()
+                            .font_size
+                            .unwrap_or(15.0) as f64
                     },
-                    |val: SharedString, cx: &mut App| {
+                    |val: f64, cx: &mut App| {
+                        let size = val as f32;
                         TerminalSettings::global(cx).update(cx, |s, cx| {
-                            s.set_program(val.to_string());
+                            s.font_size = Some(size);
+                            s.base_font_size = Some(size);
                             cx.notify();
                         });
                         persist(cx);
                     },
                 ),
             )
-            .description("Used only when Shell is set to Custom (e.g. /usr/bin/fish)."),
+            .description("Size in px (6–72)."),
+            SettingItem::new(
+                "Font Weight",
+                SettingField::dropdown(
+                    weight_options,
+                    |cx: &App| SharedString::from(weight_to_string(cx)),
+                    |val: SharedString, cx: &mut App| {
+                        let weight = parse_weight(val.as_ref());
+                        TerminalSettings::global(cx).update(cx, |s, cx| {
+                            s.font_weight = weight;
+                            cx.notify();
+                        });
+                        persist(cx);
+                    },
+                ),
+            )
+            .description("Font weight."),
+            SettingItem::new("Line Height", line_height_field())
+                .description("Line height multiplier."),
         ]))
 }
 
@@ -129,7 +93,7 @@ fn shell_group() -> SettingGroup {
 // The font family list can be very long (hundreds of OS fonts). Instead of
 // a plain `SettingField::dropdown` that renders every item, we use a
 // searchable, scrollable `Select` from gpui-component with `menu_max_h` set
-// to show roughly five items at a time.  The `SelectState` entity is created
+// to show roughly five items at a time. The `SelectState` entity is created
 // once via `window::use_keyed_state` (same pattern as `line_height_field`)
 // and reused across renders.
 
@@ -174,7 +138,7 @@ struct FontSelectState {
 /// The dropdown shows ~5 items at a time (`menu_max_h(rems(10.))`) with a
 /// search input for filtering the full OS font list.
 fn font_family_field() -> SettingField<SharedString> {
-    SettingField::render(
+    SettingField::element(
         move |options: &RenderOptions, window: &mut Window, cx: &mut App| {
             let key = SharedString::from(format!(
                 "font-family-select-{}-{}-{}",
@@ -262,76 +226,6 @@ fn font_family_field() -> SettingField<SharedString> {
     )
 }
 
-fn font_group() -> SettingGroup {
-    let weight_options: Vec<(SharedString, SharedString)> = [
-        ("thin", "Thin"),
-        ("extra_light", "Extra Light"),
-        ("light", "Light"),
-        ("normal", "Normal"),
-        ("medium", "Medium"),
-        ("semibold", "Semibold"),
-        ("bold", "Bold"),
-        ("extra_bold", "Extra Bold"),
-        ("black", "Black"),
-    ]
-    .iter()
-    .map(|(k, label)| (SharedString::from(*k), SharedString::from(*label)))
-    .collect();
-
-    SettingGroup::new()
-        .title("Font")
-        .description("Terminal font family, size, and weight.")
-        .items(items_with_separators(vec![
-            SettingItem::new("Font Family", font_family_field()).description(
-                "The terminal text font. \"Default (theme)\" uses the active theme's mono font.",
-            ),
-            SettingItem::new(
-                "Font Size",
-                SettingField::number_input(
-                    NumberFieldOptions {
-                        min: 6.0,
-                        max: 72.0,
-                        ..Default::default()
-                    },
-                    |cx: &App| {
-                        TerminalSettings::global(cx)
-                            .read(cx)
-                            .font_size
-                            .unwrap_or(15.0) as f64
-                    },
-                    |val: f64, cx: &mut App| {
-                        let size = val as f32;
-                        TerminalSettings::global(cx).update(cx, |s, cx| {
-                            s.font_size = Some(size);
-                            s.base_font_size = Some(size);
-                            cx.notify();
-                        });
-                        persist(cx);
-                    },
-                ),
-            )
-            .description("Terminal font size in px (6–72)."),
-            SettingItem::new(
-                "Font Weight",
-                SettingField::dropdown(
-                    weight_options,
-                    |cx: &App| SharedString::from(weight_to_string(cx)),
-                    |val: SharedString, cx: &mut App| {
-                        let weight = parse_weight(val.as_ref());
-                        TerminalSettings::global(cx).update(cx, |s, cx| {
-                            s.font_weight = weight;
-                            cx.notify();
-                        });
-                        persist(cx);
-                    },
-                ),
-            )
-            .description("Weight of the terminal font."),
-            SettingItem::new("Line Height", line_height_field())
-                .description("Line height multiplier (1.2 = 120% of the font size)."),
-        ]))
-}
-
 // ── Weight helpers ───────────────────────────────────────────────────
 
 /// Map the live [`FontWeight`] to its config string.
@@ -362,10 +256,10 @@ fn parse_weight(s: &str) -> FontWeight {
 //
 // `SettingField::number_input` from gpui-component does NOT propagate
 // `NumberFieldOptions.step` to the internal `InputState` (it defaults to
-// 1.0).  The increment/decrement buttons therefore step by 1 instead of the
+// 1.0). The increment/decrement buttons therefore step by 1 instead of the
 // configured 0.1.
 //
-// To fix this we use `SettingField::render` with a custom `NumberInput` that
+// To fix this we use `SettingField::element` with a custom `NumberInput` that
 // calls `.step(0.1).min(1.0).max(3.0)` directly on the `InputState`.
 
 /// State held across renders for the custom Line Height number input.
@@ -382,7 +276,7 @@ struct LineHeightInputState {
 /// The displayed value is rounded to 1 decimal place to avoid f32→f64
 /// precision artifacts (e.g. `1.2f32` → `1.2000000476837158f64`).
 fn line_height_field() -> SettingField<SharedString> {
-    SettingField::render(
+    SettingField::element(
         move |options: &RenderOptions, window: &mut Window, cx: &mut App| {
             // Current value from settings, rounded to 1 decimal place.
             let value = {

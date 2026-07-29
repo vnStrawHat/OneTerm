@@ -19,7 +19,6 @@ mod general;
 mod key_bindings;
 mod panel;
 mod terminal;
-mod terminal_options;
 mod updates;
 mod window;
 

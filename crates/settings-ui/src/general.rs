@@ -14,6 +14,7 @@ use gpui_component::{
 /// Build the "General" settings page.
 pub(crate) fn page() -> SettingPage {
     SettingPage::new("General")
+        .resettable(true)
         .icon(Icon::new(IconName::Settings2))
         .group(interface_group())
 }
@@ -22,7 +23,7 @@ pub(crate) fn page() -> SettingPage {
 fn interface_group() -> SettingGroup {
     SettingGroup::new()
         .title("Interface")
-        .description("Adjust the font size of the OneTerm UI (menus, panels, dialogs).")
+        .description("UI font size.")
         .item(
             SettingItem::new(
                 "UI Font Size",
@@ -40,6 +41,6 @@ fn interface_group() -> SettingGroup {
                 )
                 .default_value(16.0),
             )
-            .description("Font size (px) used for the application interface."),
+            .description("Interface font size in px."),
         )
 }

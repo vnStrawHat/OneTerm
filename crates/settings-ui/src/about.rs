@@ -14,7 +14,7 @@ use gpui_component::{
     dialog::DialogFooter,
     h_flex,
     label::Label,
-    setting::{SettingField, SettingGroup, SettingItem, SettingPage},
+    setting::{RenderOptions, SettingField, SettingGroup, SettingItem, SettingPage},
     v_flex,
 };
 use oneterm_theme::icon::AppIcon;
@@ -75,7 +75,7 @@ pub(crate) fn open_about_dialog(window: &mut Window, cx: &mut App) {
         alert
             .title("About OneTerm")
             .description(format!(
-                "OneTerm v{}\n\nA terminal application for local and SSH sessions.",
+                "OneTerm v{}\n\nLocal and SSH terminal client.",
                 env!("ONETERM_VERSION")
             ))
             .child(update_controls.clone())
@@ -101,7 +101,7 @@ pub(crate) fn open_about_dialog(window: &mut Window, cx: &mut App) {
 pub(crate) fn page(cx: &gpui::App) -> SettingPage {
     SettingPage::new("About")
         .icon(Icon::new(IconName::Info))
-        .resettable(false)
+        .resettable(true)
         .group(about_group())
         .group(links_group())
         .group(updates::network_group(cx))
@@ -136,19 +136,21 @@ fn about_group() -> SettingGroup {
 fn links_group() -> SettingGroup {
     SettingGroup::new().title("Links").item(SettingItem::new(
         "GitHub Repository",
-        SettingField::render(|_options, _window, cx| {
-            div()
-                .id("open-repo")
-                .py_0p5()
-                .text_sm()
-                .text_color(cx.theme().link)
-                .text_decoration_1()
-                .cursor_pointer()
-                .child(GITHUB_REPOSITORY_URL)
-                .on_click(|_, _, cx| {
-                    cx.open_url(GITHUB_REPOSITORY_URL);
-                })
-                .into_any_element()
-        }),
+        SettingField::element(
+            |_options: &RenderOptions, _window: &mut Window, cx: &mut App| {
+                div()
+                    .id("open-repo")
+                    .py_0p5()
+                    .text_sm()
+                    .text_color(cx.theme().link)
+                    .text_decoration_1()
+                    .cursor_pointer()
+                    .child(GITHUB_REPOSITORY_URL)
+                    .on_click(|_, _, cx| {
+                        cx.open_url(GITHUB_REPOSITORY_URL);
+                    })
+                    .into_any_element()
+            },
+        ),
     ))
 }
