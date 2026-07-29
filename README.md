@@ -1,6 +1,6 @@
 # OneTerm
 
-OneTerm is a terminal emulator plus host/session manager with a **Zed-style workspace UI**: 
+OneTerm is a Terminal application for SSH/SFTP/Local Shell with a **Zed-style workspace UI**: 
 - Connect to remote shells over SSH
 - Browse and transfer files over SFTP
 - Open local shells
