@@ -15,7 +15,7 @@ pub(crate) enum UpdateUiStatus {
     Downloading(String),
     Installing,
     Disabled(String),
-    NoChanges(String),
+
     Failed(String),
     RestartScheduled,
     Restarted,
@@ -103,7 +103,7 @@ impl UpdateUiState {
             UpdateUiStatus::Downloading(version) => format!("Downloading OneTerm {version}..."),
             UpdateUiStatus::Installing => "Installing update...".to_owned(),
             UpdateUiStatus::Disabled(reason) => reason.clone(),
-            UpdateUiStatus::NoChanges(message) => message.clone(),
+
             UpdateUiStatus::Failed(error) => format!("Update failed: {error}"),
             UpdateUiStatus::RestartScheduled => {
                 "Update helper started. Quit OneTerm to complete installation.".to_owned()

@@ -81,7 +81,7 @@ impl From<CachedUpdateCandidate> for UpdateCandidate {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UpdateCheckResult {
     Disabled(String),
-    NotModified,
+
     UpToDate { current_version: String },
     Available(Box<UpdateCandidate>),
 }
@@ -202,7 +202,7 @@ impl UpdateManager {
                 );
                 return Ok(UpdateCheckResult::Available(candidate));
             }
-            return Ok(UpdateCheckResult::NotModified);
+            return Ok(UpdateCheckResult::UpToDate { current_version });
         };
 
         let result = match self.select_candidate(&releases)? {

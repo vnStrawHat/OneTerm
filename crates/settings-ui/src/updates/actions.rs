@@ -46,11 +46,6 @@ pub(crate) fn start_auto_check(window: &mut Window, cx: &mut App) {
                         "Automatic update check completed: {current_version} is up to date."
                     );
                 }
-                Ok(UpdateCheckResult::NotModified) => {
-                    log::info!(
-                        "Automatic update check completed: no GitHub release changes detected."
-                    );
-                }
                 Ok(UpdateCheckResult::Disabled(reason)) => {
                     log::info!("Automatic update check skipped: {reason}");
                 }
@@ -112,11 +107,6 @@ pub(crate) fn check_now(window: &mut Window, cx: &mut App) {
                 Ok(UpdateCheckResult::UpToDate { current_version }) => {
                     log::info!("Manual update check completed: {current_version} is up to date.");
                 }
-                Ok(UpdateCheckResult::NotModified) => {
-                    log::info!(
-                        "Manual update check completed: no GitHub release changes detected."
-                    );
-                }
                 Ok(UpdateCheckResult::Disabled(reason)) => {
                     log::info!("Manual update check skipped: {reason}");
                 }
@@ -159,16 +149,6 @@ fn apply_check_result(state: &mut UpdateUiState, result: oneterm_core::Result<Up
             state.candidate = None;
             state.staged = None;
         }
-        Ok(UpdateCheckResult::NotModified) => {
-            if let Some(candidate) = &state.candidate {
-                state.status = UpdateUiStatus::Available(candidate.version.clone());
-            } else if let Some(staged) = &state.staged {
-                state.status = UpdateUiStatus::Available(staged.version.clone());
-            } else {
-                state.status =
-                    UpdateUiStatus::NoChanges("No GitHub release changes detected.".to_owned());
-            }
-        }
         Ok(UpdateCheckResult::Disabled(reason)) => state.status = UpdateUiStatus::Disabled(reason),
         Err(error) => state.status = UpdateUiStatus::Failed(error.to_string()),
     }
@@ -176,53 +156,27 @@ fn apply_check_result(state: &mut UpdateUiState, result: oneterm_core::Result<Up
 
 #[cfg(test)]
 mod tests {
-    use oneterm_update::UpdateCandidate;
-
     use super::*;
 
     #[test]
-    fn not_modified_result_clears_checking_status() {
+    fn up_to_date_result_clears_checking_status() {
         let mut state = UpdateUiState {
             status: UpdateUiStatus::Checking,
             candidate: None,
             staged: None,
         };
 
-        apply_check_result(&mut state, Ok(UpdateCheckResult::NotModified));
-
-        assert!(!state.is_busy());
-        assert!(matches!(
-            state.status,
-            UpdateUiStatus::NoChanges(message) if message == "No GitHub release changes detected."
-        ));
-    }
-
-    #[test]
-    fn not_modified_result_preserves_existing_candidate() {
-        let mut state = UpdateUiState {
-            status: UpdateUiStatus::Checking,
-            candidate: Some(UpdateCandidate {
-                version: "999.0.0".to_owned(),
-                tag_name: "v999.0.0".to_owned(),
-                release_name: None,
-                release_notes_url: "https://example.invalid/release".to_owned(),
-                body: None,
-                asset_name: "oneterm-999.0.0-x86_64-pc-windows-msvc.zip".to_owned(),
-                asset_url: "https://example.invalid/oneterm.zip".to_owned(),
-                asset_digest: format!("sha256:{}", "a".repeat(64)),
-                asset_size: None,
-                target_triple: "x86_64-pc-windows-msvc".to_owned(),
+        apply_check_result(
+            &mut state,
+            Ok(UpdateCheckResult::UpToDate {
+                current_version: "0.3.4".to_owned(),
             }),
-            staged: None,
-        };
-
-        apply_check_result(&mut state, Ok(UpdateCheckResult::NotModified));
+        );
 
         assert!(!state.is_busy());
-        assert!(state.candidate.is_some());
         assert!(matches!(
             state.status,
-            UpdateUiStatus::Available(version) if version == "999.0.0"
+            UpdateUiStatus::UpToDate(version) if version == "0.3.4"
         ));
     }
 }
