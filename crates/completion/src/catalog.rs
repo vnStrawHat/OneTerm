@@ -10,13 +10,13 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use serde::Deserialize;
-
 use crate::family::{CatalogCategory, ShellFamily};
 
-/// The highest catalog schema major version this build understands. Files with a
-/// higher `schema` are logged and ignored (docs 02 §5).
-pub const SUPPORTED_SCHEMA: u32 = 1;
+mod schema;
+#[cfg(test)]
+mod tests;
+
+use schema::parse_node;
 
 /// Where a catalog entry came from — drives manual-beats-external precedence
 /// (docs 02 §6).
@@ -69,73 +69,6 @@ pub(crate) fn names_eq(a: &str, b: &str, family: ShellFamily) -> bool {
     } else {
         a == b
     }
-}
-
-// ── Raw serde forms ──────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum RawFlag {
-    Str(String),
-    Obj {
-        flag: String,
-        #[serde(default)]
-        description: Option<String>,
-    },
-}
-
-impl RawFlag {
-    fn into_flag(self) -> Flag {
-        match self {
-            RawFlag::Str(text) => Flag {
-                text,
-                description: None,
-            },
-            RawFlag::Obj { flag, description } => Flag {
-                text: flag,
-                description: description.filter(|d| !d.trim().is_empty()),
-            },
-        }
-    }
-}
-
-#[derive(Deserialize)]
-struct RawNode {
-    #[serde(default)]
-    schema: Option<u32>,
-    name: String,
-    #[serde(default)]
-    options: Vec<RawFlag>,
-    #[serde(default)]
-    subcommands: Vec<RawNode>,
-}
-
-impl RawNode {
-    fn into_node(self) -> CommandNode {
-        CommandNode {
-            name: self.name,
-            options: self.options.into_iter().map(RawFlag::into_flag).collect(),
-            subcommands: self
-                .subcommands
-                .into_iter()
-                .map(RawNode::into_node)
-                .collect(),
-        }
-    }
-}
-
-/// Parse a single command node from its JSON string. Rejects unknown major
-/// schema versions (returns `None`, logged by the caller). Public for tests.
-pub fn parse_node(json: &str) -> Result<CommandNode, String> {
-    let raw: RawNode = serde_json::from_str(json).map_err(|e| e.to_string())?;
-    if let Some(v) = raw.schema {
-        if v > SUPPORTED_SCHEMA {
-            return Err(format!(
-                "unsupported catalog schema version {v} (max {SUPPORTED_SCHEMA})"
-            ));
-        }
-    }
-    Ok(raw.into_node())
 }
 
 // ── The catalog store ─────────────────────────────────────────────────────
@@ -301,110 +234,5 @@ impl Catalog {
         family: ShellFamily,
     ) -> bool {
         self.source_of(name, categories, family) == Some(Source::Manual)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const RAW: &[(&str, &str, &str, &str)] = &[
-        (
-            "dir",
-            "external",
-            "cmd",
-            r#"{ "schema": 1, "name": "dir", "options": ["/A", "/B"] }"#,
-        ),
-        (
-            "ls",
-            "external",
-            "coreutils",
-            r#"{ "schema": 1, "name": "ls", "options": ["-a", "--all"] }"#,
-        ),
-        (
-            "git",
-            "manual",
-            "common",
-            r#"{ "schema": 1, "name": "git", "options": ["-C"],
-                "subcommands": [ { "name": "commit", "options": ["-m", "--amend"] } ] }"#,
-        ),
-        ("bad", "external", "cmd", r#"{ this is not json"#),
-        (
-            "future",
-            "external",
-            "cmd",
-            r#"{ "schema": 99, "name": "future" }"#,
-        ),
-    ];
-
-    fn cat() -> Catalog {
-        Catalog::from_raw(RAW)
-    }
-
-    #[test]
-    fn parses_string_and_object_option_forms() {
-        let node = parse_node(
-            r#"{ "schema": 1, "name": "grep",
-                "options": ["-a", { "flag": "--all", "description": "x" }] }"#,
-        )
-        .unwrap();
-        assert_eq!(node.options[0].text, "-a");
-        assert_eq!(node.options[1].text, "--all");
-    }
-
-    #[test]
-    fn rejects_unknown_major_schema() {
-        assert!(parse_node(r#"{ "schema": 99, "name": "x" }"#).is_err());
-    }
-
-    #[test]
-    fn lookup_resolves_by_category_path() {
-        let c = cat();
-        let cmd = ShellFamily::Cmd.categories(false);
-        assert!(c.lookup("dir", &cmd, ShellFamily::Cmd).is_some());
-        // `ls` (coreutils) is not in the cmd search path.
-        assert!(c.lookup("ls", &cmd, ShellFamily::Cmd).is_none());
-        let unix = ShellFamily::Unix.categories(false);
-        assert!(c.lookup("ls", &unix, ShellFamily::Unix).is_some());
-    }
-
-    #[test]
-    fn lookup_is_case_insensitive_for_cmd_only() {
-        let c = cat();
-        let cmd = ShellFamily::Cmd.categories(false);
-        assert!(c.lookup("DIR", &cmd, ShellFamily::Cmd).is_some());
-        let unix = ShellFamily::Unix.categories(false);
-        // Unix is case-sensitive: "LS" must not resolve to "ls".
-        assert!(c.lookup("LS", &unix, ShellFamily::Unix).is_none());
-    }
-
-    #[test]
-    fn subcommand_child_lookup() {
-        let c = cat();
-        let common = vec![CatalogCategory::Common];
-        let git = c.lookup("git", &common, ShellFamily::Unix).unwrap();
-        let commit = git.child("commit", ShellFamily::Unix).unwrap();
-        assert_eq!(commit.options.len(), 2);
-    }
-
-    #[test]
-    fn malformed_file_skipped_without_breaking_siblings() {
-        let c = cat();
-        let cmd = ShellFamily::Cmd.categories(false);
-        // "bad" (malformed) and "future" (unknown schema) yield None…
-        assert!(c.lookup("bad", &cmd, ShellFamily::Cmd).is_none());
-        assert!(c.lookup("future", &cmd, ShellFamily::Cmd).is_none());
-        // …but "dir" still resolves.
-        assert!(c.lookup("dir", &cmd, ShellFamily::Cmd).is_some());
-    }
-
-    #[test]
-    fn command_names_deduped_across_categories() {
-        let c = cat();
-        let unix = ShellFamily::Unix.categories(false);
-        let names = c.command_names(&unix, ShellFamily::Unix);
-        assert!(names.contains(&"ls"));
-        assert!(names.contains(&"git"));
-        assert!(!names.contains(&"dir")); // cmd-only, not in unix path
     }
 }

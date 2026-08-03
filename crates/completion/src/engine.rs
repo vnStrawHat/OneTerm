@@ -14,6 +14,7 @@ use crate::params::CompletionParams;
 use crate::parse::ParsedLine;
 
 mod gather;
+mod resolve;
 mod scoring;
 #[cfg(test)]
 mod tests;
@@ -140,40 +141,6 @@ impl Engine {
     /// Build the engine from an explicit catalog (tests).
     pub fn with_catalog(catalog: Catalog) -> Self {
         Self { catalog }
-    }
-
-    /// Resolve the active command node + path from the tokens left of the cursor
-    /// (docs 10 §3). Returns `None` for an unknown top-level command.
-    pub fn resolve(
-        &self,
-        p: &ParsedLine,
-        family: ShellFamily,
-        allow_coreutils: bool,
-    ) -> Option<Resolved> {
-        let categories = family.categories(allow_coreutils);
-        let head = p.head.as_deref()?;
-        let root = self.catalog.lookup(head, &categories, family)?;
-        let mut active: CommandNode = (*root).clone();
-        let mut path_names = vec![active.name.clone()];
-        let mut ancestor_options: Vec<Flag> = Vec::new();
-        for tok in p.prior_tokens.iter().skip(1) {
-            if family.is_option_token(tok) {
-                continue;
-            }
-            if let Some(child) = active.child(tok, family) {
-                let child = child.clone();
-                ancestor_options.extend(active.options.clone());
-                active = child;
-                path_names.push(active.name.clone());
-            } else {
-                break;
-            }
-        }
-        Some(Resolved {
-            active,
-            path_names,
-            ancestor_options,
-        })
     }
 
     /// Produce a ranked, deduped, redaction-safe suggestion list.
