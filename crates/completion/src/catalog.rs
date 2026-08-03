@@ -14,6 +14,7 @@ use crate::family::{CatalogCategory, ShellFamily};
 
 mod schema;
 #[cfg(test)]
+#[path = "catalog_tests.rs"]
 mod tests;
 
 use schema::parse_node;
@@ -21,7 +22,7 @@ use schema::parse_node;
 /// Where a catalog entry came from — drives manual-beats-external precedence
 /// (docs 02 §6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Source {
+pub(crate) enum Source {
     External,
     Manual,
 }
@@ -38,7 +39,7 @@ impl Source {
 
 /// A single option flag, including its trigger prefix (`/A`, `--all`, `-a`).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Flag {
+pub(crate) struct Flag {
     pub text: String,
     /// Optional short hint shown after the flag (e.g. an argument placeholder
     /// like `new-branch`, or a one-word description). Rendered italic in the UI.
@@ -47,7 +48,7 @@ pub struct Flag {
 
 /// A recursive command node: a name, its options, and optional subcommands.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CommandNode {
+pub(crate) struct CommandNode {
     pub name: String,
     pub options: Vec<Flag>,
     pub subcommands: Vec<CommandNode>,
@@ -55,7 +56,7 @@ pub struct CommandNode {
 
 impl CommandNode {
     /// Find a direct child subcommand by name (family-aware case rules).
-    pub fn child(&self, name: &str, family: ShellFamily) -> Option<&CommandNode> {
+    pub(crate) fn child(&self, name: &str, family: ShellFamily) -> Option<&CommandNode> {
         self.subcommands
             .iter()
             .find(|c| names_eq(&c.name, name, family))
@@ -83,19 +84,21 @@ struct Entry {
 /// The bundled command catalog: an index over the embedded files plus a lazy
 /// parse cache. Lookups honor the shell's category search path and the
 /// manual-beats-external precedence rule (docs 02 §6).
-pub struct Catalog {
+pub(crate) struct Catalog {
     entries: Vec<Entry>,
     cache: RefCell<HashMap<usize, Option<Rc<CommandNode>>>>,
 }
 
 impl Catalog {
     /// Build the catalog from the compile-time embedded index.
-    pub fn from_embedded() -> Self {
+    pub(crate) fn from_embedded() -> Self {
         Self::from_raw(crate::index::CATALOG_FILES)
     }
 
     /// Build from an explicit `(name, source, category, json)` slice (tests).
-    pub fn from_raw(raw: &[(&'static str, &'static str, &'static str, &'static str)]) -> Self {
+    pub(crate) fn from_raw(
+        raw: &[(&'static str, &'static str, &'static str, &'static str)],
+    ) -> Self {
         let mut entries = Vec::new();
         for (name, source, category, json) in raw {
             let (Some(source), Some(category)) = (
@@ -178,7 +181,7 @@ impl Catalog {
 
     /// Look up a top-level command node by name, honoring the category search
     /// path + precedence. Returns `None` for unknown commands.
-    pub fn lookup(
+    pub(crate) fn lookup(
         &self,
         name: &str,
         categories: &[CatalogCategory],
@@ -191,7 +194,7 @@ impl Catalog {
     /// All distinct top-level command names available in the searched
     /// `categories`, deduped by family case-rules keeping the highest-precedence
     /// entry. Cheap: reads only the index, never parses JSON.
-    pub fn command_names(
+    pub(crate) fn command_names(
         &self,
         categories: &[CatalogCategory],
         family: ShellFamily,
@@ -216,7 +219,7 @@ impl Catalog {
 
     /// The source of the highest-precedence entry for `name` within
     /// `categories`, if any.
-    pub fn source_of(
+    fn source_of(
         &self,
         name: &str,
         categories: &[CatalogCategory],
@@ -227,7 +230,7 @@ impl Catalog {
     }
 
     /// Whether the highest-precedence entry for `name` came from `manual`.
-    pub fn is_manual(
+    pub(crate) fn is_manual(
         &self,
         name: &str,
         categories: &[CatalogCategory],

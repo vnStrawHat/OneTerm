@@ -7,7 +7,7 @@
 
 /// A single parsed token: its unquoted text and its byte offset in the line.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Token {
+pub(crate) struct Token {
     pub text: String,
     pub start: usize,
 }
@@ -15,7 +15,7 @@ pub struct Token {
 /// Tokenize a string, honoring single/double quotes. Quote characters are
 /// stripped from the token text; `start` is the byte offset of the token's first
 /// character (the opening quote, if quoted) in `input`.
-pub fn tokenize(input: &str) -> Vec<Token> {
+pub(crate) fn tokenize(input: &str) -> Vec<Token> {
     let mut tokens = Vec::new();
     let mut cur = String::new();
     let mut start = 0usize;

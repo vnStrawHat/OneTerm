@@ -10,7 +10,7 @@ use oneterm_core::ShellKind;
 /// The catalog categories, each backed by an `external` and/or `manual` folder
 /// (docs/auto-completion/02 §4.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CatalogCategory {
+pub(crate) enum CatalogCategory {
     Cmd,
     Coreutils,
     PowerShell,
@@ -20,21 +20,8 @@ pub enum CatalogCategory {
 }
 
 impl CatalogCategory {
-    /// The folder-derived category string used in the embedded catalog index
-    /// (`build.rs` classifies files into these).
-    pub fn as_str(self) -> &'static str {
-        match self {
-            CatalogCategory::Cmd => "cmd",
-            CatalogCategory::Coreutils => "coreutils",
-            CatalogCategory::PowerShell => "powershell",
-            CatalogCategory::Windows => "windows",
-            CatalogCategory::Linux => "linux",
-            CatalogCategory::Common => "common",
-        }
-    }
-
     /// Parse a folder-derived category string back into a [`CatalogCategory`].
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub(crate) fn from_str(s: &str) -> Option<Self> {
         Some(match s {
             "cmd" => CatalogCategory::Cmd,
             "coreutils" => CatalogCategory::Coreutils,
@@ -80,7 +67,7 @@ impl ShellFamily {
 
     /// Catalog categories searched, high → low precedence (docs 02 §4.1).
     /// `allow_coreutils` appends `Coreutils`/`Linux` for the Windows families.
-    pub fn categories(self, allow_coreutils: bool) -> Vec<CatalogCategory> {
+    pub(crate) fn categories(self, allow_coreutils: bool) -> Vec<CatalogCategory> {
         use CatalogCategory::*;
         let mut c = match self {
             ShellFamily::Cmd => vec![Cmd, Windows, Common],
@@ -95,7 +82,7 @@ impl ShellFamily {
 
     /// Characters that start an option token for this family
     /// (docs 03 §2; Q2 — `Cmd` accepts both `/` and `-`).
-    pub fn option_triggers(self) -> &'static [char] {
+    pub(crate) fn option_triggers(self) -> &'static [char] {
         match self {
             ShellFamily::Cmd => &['/', '-'],
             ShellFamily::PowerShell => &['-'],
@@ -106,12 +93,12 @@ impl ShellFamily {
     /// Whether command/subcommand/option matching is case-insensitive for this
     /// family. `Cmd`/`PowerShell` are case-insensitive; `Unix` is case-sensitive
     /// (POSIX commands are case-sensitive — docs 04 §4.1).
-    pub fn case_insensitive(self) -> bool {
+    pub(crate) fn case_insensitive(self) -> bool {
         matches!(self, ShellFamily::Cmd | ShellFamily::PowerShell)
     }
 
     /// A token starts an option in this family if its first char is a trigger.
-    pub fn is_option_token(self, token: &str) -> bool {
+    pub(crate) fn is_option_token(self, token: &str) -> bool {
         token
             .chars()
             .next()

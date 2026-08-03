@@ -4,7 +4,7 @@
 //! ranked, deduped, redaction-safe suggestion list. It owns:
 //!
 //! - the **data model** ([`Suggestion`], [`SuggestionKind`], [`ShellFamily`],
-//!   [`catalog::CommandNode`]),
+//!   the internal command-catalog model),
 //! - **catalog loading** from the compile-time embedded index ([`build.rs`]),
 //! - **line parsing** + subcommand-tree resolution,
 //! - **matching + frecency ranking**,
@@ -14,18 +14,17 @@
 //! It depends only on `oneterm-core` (for [`oneterm_core::ShellKind`]). See
 //! `docs/auto-completion/` for the full design.
 
-pub mod catalog;
-pub mod engine;
-pub mod family;
-pub mod history;
+mod catalog;
+mod engine;
+mod family;
+mod history;
 mod index;
-pub mod params;
-pub mod parse;
+mod params;
+mod parse;
 pub mod redact;
 
-pub use catalog::{Catalog, CommandNode, Flag};
-pub use engine::{CompletionContext, Engine, Resolved, Suggestion, SuggestionKind};
-pub use family::{CatalogCategory, ShellFamily};
-pub use history::{CommandRing, CompletionHistory, FrecencyRecord, HistoryHit};
+pub use engine::{CompletionContext, Engine, Suggestion, SuggestionKind};
+pub use family::ShellFamily;
+pub use history::{CompletionHistory, FrecencyRecord};
 pub use params::{CompletionParams, SourceToggles};
-pub use parse::{ParsedLine, Token};
+pub use parse::ParsedLine;

@@ -7,6 +7,8 @@
 //! Per-context candidate gathering + finalization live in [`gather`]; the
 //! matching and ranking helpers live in [`scoring`].
 
+use std::rc::Rc;
+
 use crate::catalog::{Catalog, CommandNode, Flag};
 use crate::family::ShellFamily;
 use crate::history::CompletionHistory;
@@ -17,6 +19,7 @@ mod gather;
 mod resolve;
 mod scoring;
 #[cfg(test)]
+#[path = "engine_tests.rs"]
 mod tests;
 
 use scoring::match_token;
@@ -49,9 +52,7 @@ pub struct Suggestion {
     /// Optional short hint shown after the text (argument placeholder / one-word
     /// description), rendered italic in the overlay. Only options carry one.
     pub description: Option<String>,
-    /// Byte offset within `text` where the matched prefix begins (0 for prefix).
-    pub match_start: usize,
-    /// Matched-prefix length (for highlight).
+    /// Matched-prefix length (for highlight), measured from the start of `text`.
     pub match_len: usize,
     /// Ranking score (higher = better).
     pub score: f32,
@@ -97,10 +98,10 @@ pub struct CompletionContext<'a> {
 
 /// The resolved command tree position (docs 10 §3).
 #[derive(Debug, Clone)]
-pub struct Resolved {
-    pub active: CommandNode,
-    /// Command path from root to active (breadcrumb — docs 10 §5).
-    pub path_names: Vec<String>,
+pub(crate) struct Resolved {
+    /// The active command node — shared with the catalog's lazy parse cache, so
+    /// resolution never deep-clones the root subtree.
+    pub active: Rc<CommandNode>,
     /// Options of the ancestors of `active` (ranked below active's own).
     pub ancestor_options: Vec<Flag>,
 }
@@ -124,7 +125,6 @@ struct Candidate {
     description: Option<String>,
     is_manual: bool,
     is_prefix: bool,
-    match_start: usize,
     match_len: usize,
     frecency: f32,
     replace_from: usize,
@@ -139,7 +139,8 @@ impl Engine {
     }
 
     /// Build the engine from an explicit catalog (tests).
-    pub fn with_catalog(catalog: Catalog) -> Self {
+    #[cfg(test)]
+    pub(crate) fn with_catalog(catalog: Catalog) -> Self {
         Self { catalog }
     }
 
@@ -193,7 +194,6 @@ impl Engine {
                                 kind: SuggestionKind::Command,
                                 is_manual: true,
                                 is_prefix,
-                                match_start: 0,
                                 match_len: mlen,
                                 frecency: 0.0,
                                 replace_from: p.token_start,

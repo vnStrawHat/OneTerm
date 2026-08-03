@@ -1,6 +1,5 @@
 //! Per-context candidate gathering + finalization for the suggestion engine
 //! (docs 04 §3–§4).
-
 use super::scoring::{match_option, match_token, precedence, score, text_eq};
 use super::{Candidate, Engine, Query, Suggestion, SuggestionKind};
 use crate::catalog::names_eq;
@@ -9,7 +8,6 @@ use crate::history::prefix_match;
 use crate::params::CompletionParams;
 use crate::parse::ParsedLine;
 use crate::redact;
-
 impl Engine {
     pub(super) fn gather_commands(
         &self,
@@ -30,7 +28,6 @@ impl Engine {
                         kind: SuggestionKind::Command,
                         is_manual: self.catalog.is_manual(name, &categories, family),
                         is_prefix,
-                        match_start: 0,
                         match_len: mlen,
                         frecency: 0.0,
                         replace_from: p.token_start,
@@ -52,7 +49,6 @@ impl Engine {
                         kind: SuggestionKind::History,
                         is_manual: false,
                         is_prefix,
-                        match_start: 0,
                         match_len: mlen,
                         frecency: rec.frecency(q.ctx.now_ms),
                         replace_from: p.token_start,
@@ -61,7 +57,6 @@ impl Engine {
             }
         }
     }
-
     pub(super) fn gather_options(
         &self,
         q: &Query,
@@ -81,7 +76,6 @@ impl Engine {
                             description: flag.description.clone(),
                             is_manual: true,
                             is_prefix,
-                            match_start: 0,
                             match_len: mlen,
                             frecency: 0.0,
                             replace_from: p.token_start,
@@ -97,7 +91,6 @@ impl Engine {
                                 description: flag.description.clone(),
                                 is_manual: true,
                                 is_prefix,
-                                match_start: 0,
                                 match_len: mlen,
                                 // Rank ancestor options below the active node's own.
                                 frecency: -1.0,
@@ -126,7 +119,6 @@ impl Engine {
                                     kind: SuggestionKind::History,
                                     is_manual: false,
                                     is_prefix,
-                                    match_start: 0,
                                     match_len: mlen,
                                     frecency: rec.frecency(q.ctx.now_ms),
                                     replace_from: p.token_start,
@@ -138,7 +130,6 @@ impl Engine {
             }
         }
     }
-
     pub(super) fn gather_history_whole_line(&self, q: &Query, out: &mut Vec<Candidate>) {
         let (cfg, family, ctx) = (q.cfg, q.family, q.ctx);
         if !cfg.sources.memory {
@@ -158,7 +149,6 @@ impl Engine {
                     kind: SuggestionKind::History,
                     is_manual: false,
                     is_prefix: true,
-                    match_start: 0,
                     match_len: line_prefix.len(),
                     frecency: rec.frecency(ctx.now_ms),
                     replace_from: 0,
@@ -166,7 +156,6 @@ impl Engine {
             }
         }
     }
-
     /// Score, dedup, drop secrets, sort, and truncate.
     pub(super) fn finalize(
         &self,
@@ -186,10 +175,8 @@ impl Engine {
             })
             .map(|c| (score(&c, cfg), c))
             .collect();
-
         // Sort by score desc so dedup keeps the best-scoring duplicate.
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-
         // Dedup by normalized text, keeping the highest-precedence tag + score.
         let mut result: Vec<(f32, Candidate)> = Vec::new();
         for (s, c) in scored {
@@ -207,7 +194,6 @@ impl Engine {
             }
             result.push((s, c));
         }
-
         // Already sorted by score; take a bounded window.
         result.truncate(cfg.hard_cap());
         result
@@ -216,7 +202,6 @@ impl Engine {
                 text: c.text,
                 kind: c.kind,
                 description: c.description,
-                match_start: c.match_start,
                 match_len: c.match_len,
                 score,
                 replace_from: c.replace_from,

@@ -54,7 +54,7 @@ impl CompletionOverlay {
             .iter()
             .enumerate()
             .map(|(i, s)| {
-                let split = (s.match_start + s.match_len).min(s.text.len());
+                let split = s.match_len.min(s.text.len());
                 Row {
                     matched: s.text[..split].to_string(),
                     rest: s.text[split..].to_string(),

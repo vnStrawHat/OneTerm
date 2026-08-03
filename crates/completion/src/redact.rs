@@ -13,6 +13,7 @@
 
 mod detect;
 #[cfg(test)]
+#[path = "redact_tests.rs"]
 mod tests;
 
 use detect::{is_secret_flag, is_secret_key, looks_like_secret, strip_url_userinfo};

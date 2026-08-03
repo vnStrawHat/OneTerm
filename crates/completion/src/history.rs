@@ -31,20 +31,9 @@ impl FrecencyRecord {
     }
 }
 
-/// A single history match handed to the engine.
-#[derive(Debug, Clone)]
-pub struct HistoryHit {
-    /// The suggested text (a whole command line or a first token).
-    pub text: String,
-    /// Frecency score of the source entry.
-    pub frecency: f32,
-    /// Length of the matched prefix (for highlight).
-    pub match_len: usize,
-}
-
 /// A bounded, deduped ring buffer of command lines for one shell family.
 #[derive(Debug, Clone)]
-pub struct CommandRing {
+struct CommandRing {
     entries: Vec<FrecencyRecord>,
     capacity: usize,
 }
@@ -141,21 +130,6 @@ impl CompletionHistory {
             .unwrap_or(&[])
     }
 
-    /// Whole-line-prefix matches for `token` (case per family). Used for command
-    /// recall in subcommand/argument context.
-    pub fn matches(&self, family: ShellFamily, token: &str, now_ms: u64) -> Vec<HistoryHit> {
-        let ci = family.case_insensitive();
-        self.entries(family)
-            .iter()
-            .filter(|r| prefix_match(&r.line, token, ci))
-            .map(|r| HistoryHit {
-                text: r.line.clone(),
-                frecency: r.frecency(now_ms),
-                match_len: token.len(),
-            })
-            .collect()
-    }
-
     /// Set the per-family ring capacity. `0` disables/clears the store.
     pub fn set_capacity(&mut self, n: usize) {
         self.capacity = n;
@@ -208,17 +182,17 @@ mod tests {
     fn record_and_match_whole_line() {
         let mut h = CompletionHistory::new(10);
         h.record(ShellFamily::Unix, "git commit -m msg", 1000);
-        let hits = h.matches(ShellFamily::Unix, "git c", 2000);
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].text, "git commit -m msg");
+        let entries = h.entries(ShellFamily::Unix);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].line, "git commit -m msg");
     }
 
     #[test]
     fn family_partitioned() {
         let mut h = CompletionHistory::new(10);
         h.record(ShellFamily::Cmd, "dir /Q", 1000);
-        assert!(h.matches(ShellFamily::Unix, "dir", 2000).is_empty());
-        assert_eq!(h.matches(ShellFamily::Cmd, "dir", 2000).len(), 1);
+        assert!(h.entries(ShellFamily::Unix).is_empty());
+        assert_eq!(h.entries(ShellFamily::Cmd).len(), 1);
     }
 
     #[test]

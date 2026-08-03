@@ -11,7 +11,7 @@ use super::{CommandNode, Flag};
 
 /// The highest catalog schema major version this build understands. Files with a
 /// higher `schema` are logged and ignored (docs 02 §5).
-pub const SUPPORTED_SCHEMA: u32 = 1;
+pub(crate) const SUPPORTED_SCHEMA: u32 = 1;
 
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -66,7 +66,7 @@ impl RawNode {
 
 /// Parse a single command node from its JSON string. Rejects unknown major
 /// schema versions (returns `Err`, logged by the caller). Public for tests.
-pub fn parse_node(json: &str) -> Result<CommandNode, String> {
+pub(crate) fn parse_node(json: &str) -> Result<CommandNode, String> {
     let raw: RawNode = serde_json::from_str(json).map_err(|e| e.to_string())?;
     if let Some(v) = raw.schema {
         if v > SUPPORTED_SCHEMA {

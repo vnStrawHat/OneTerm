@@ -280,7 +280,6 @@ fn remainder_is_append_only() {
         text: "dir".into(),
         kind: SuggestionKind::Command,
         description: None,
-        match_start: 0,
         match_len: 2,
         score: 0.0,
         replace_from: 0,
