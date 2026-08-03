@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://oneterm/completion/catalog.schema.json",
+  "title": "OneTerm completion catalog command node",
+  "description": "One JSON file per command. A command node is { name, options, subcommands? }, nested recursively. Source and category are derived from the folder path, never from a field.",
+  "type": "object",
+  "$ref": "#/definitions/commandNode",
+  "definitions": {
+    "flag": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "required": ["flag"],
+          "properties": {
+            "flag": { "type": "string", "minLength": 1 },
+            "description": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "commandNode": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "schema": { "type": "integer", "minimum": 1 },
+        "generated": { "type": "string" },
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "options": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/flag" }
+        },
+        "subcommands": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/commandNode" }
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

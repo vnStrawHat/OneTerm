@@ -1,0 +1,14 @@
+[package]
+name = "oneterm-completion"
+description = "Terminal auto-completion engine (gpui-free): catalog model, line parsing, matching/ranking, in-session history, and secret redaction. Embeds the bundled command catalogs."
+publish = false
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+oneterm-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true

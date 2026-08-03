@@ -18,6 +18,7 @@ use oneterm_core::{
 
 pub mod bell;
 pub mod colors;
+pub mod completion;
 pub mod cursor;
 pub mod font;
 pub mod layout;
@@ -27,6 +28,7 @@ pub mod security;
 
 pub use bell::BellConfig;
 pub use colors::ColorsConfig;
+pub use completion::{CompletionConfig, CompletionSources};
 pub use cursor::CursorConfig;
 pub use font::FontConfig;
 pub use layout::{LayoutConfig, PaddingConfig, SemanticHighlightingMode, TabTitleMode};
@@ -60,6 +62,8 @@ pub struct TerminalConfig {
     pub colors: ColorsConfig,
     #[serde(default)]
     pub security: SecurityConfig,
+    #[serde(default)]
+    pub completion: CompletionConfig,
 }
 
 const CURRENT_SCHEMA_VERSION: u32 = 1;

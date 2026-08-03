@@ -7,3 +7,5 @@ opentui-examples.exe
 dist/
 docks.json
 terminal.json
+# Raw upstream downloads for scripts/completion-catalog.py (generated JSON is committed)
+scripts/.cache/

@@ -20,6 +20,7 @@ oneterm-state.workspace = true
 oneterm-theme.workspace = true
 oneterm-actions.workspace = true
 oneterm-highlight.workspace = true
+oneterm-completion.workspace = true
 
 gpui.workspace = true
 gpui-component.workspace = true

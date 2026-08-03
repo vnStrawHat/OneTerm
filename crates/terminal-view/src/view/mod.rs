@@ -25,6 +25,7 @@ use super::element::{GridMetrics, RowLayoutCache};
 use super::highlight::SemanticOverlay;
 use super::scrollbar::TerminalScrollHandle;
 
+pub(crate) mod completion;
 pub(crate) mod cursor;
 pub(crate) mod font;
 pub(crate) mod grid;
@@ -137,6 +138,16 @@ pub struct LocalTerminalView {
     pub(crate) blink_task: Option<gpui::Task<()>>,
     /// Whether the view is alive (not yet closed). Used to gate the blink task.
     pub(crate) alive: bool,
+    /// Per-terminal auto-completion controller + overlay state. Lazily created on
+    /// the first render (needs `cx` to read settings + session kind). `None` until
+    /// then; also `None`/idle while completion is disabled.
+    pub(crate) completion: Option<crate::completion::CompletionController>,
+    /// Anchor for the completion overlay: (display line, token-start column) in
+    /// the grid, computed during `update_completion`. `None` when hidden.
+    pub(crate) completion_anchor: Option<(i32, usize)>,
+    /// Last cursor (line, col) seen by `update_completion` — used to skip the
+    /// grid snapshot on frames where the cursor did not move (e.g. blink ticks).
+    pub(crate) completion_last_cursor: Option<(i32, usize)>,
 }
 
 impl Drop for LocalTerminalView {
@@ -321,6 +332,9 @@ impl LocalTerminalView {
             event_task: Some(event_task),
             blink_task: Some(blink_task),
             alive: true,
+            completion: None,
+            completion_anchor: None,
+            completion_last_cursor: None,
         }
     }
 

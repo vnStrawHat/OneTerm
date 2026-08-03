@@ -62,6 +62,25 @@ impl TerminalSettings {
         let security: &SecurityConfig = &cfg.security;
         self.allow_clipboard_read = security.allow_clipboard_read;
 
+        let completion = &cfg.completion;
+        self.completion = super::CompletionSettings {
+            enabled: completion.enabled,
+            accept_tab: completion.accept_tab,
+            max_history: completion.max_history,
+            min_prefix_len: completion.min_prefix_len,
+            max_visible_items: completion.max_visible_items,
+            source_memory: completion.sources.memory,
+            source_manual: completion.sources.manual,
+            source_external: completion.sources.external,
+            fuzzy: completion.fuzzy,
+            inherit_ancestor_options: completion.inherit_ancestor_options,
+            disable_in_alt_screen: completion.disable_in_alt_screen,
+            require_prompt_region: completion.require_prompt_region,
+            windows_allow_coreutils: completion.windows_allow_coreutils,
+            force_family: completion.force_family.clone(),
+            redact_sensitive: completion.redact_sensitive,
+        };
+
         let colors: &ColorsConfig = &cfg.colors;
         self.color_overrides = ColorOverrides {
             foreground: colors.foreground.as_deref().and_then(parse_hex_color),

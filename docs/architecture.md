@@ -10,14 +10,15 @@ Use this page and `docs/agents/structure.md` when locating current implementatio
 |---|---|---|---|
 | Domain | `oneterm-core` | Errors, SSH/local configuration, SFTP contracts | `crates/core/src/lib.rs`, `crates/core/src/sftp.rs` |
 | Terminal engine | `oneterm-terminal` | Terminal model, session contract, encoding, OSC, search | `crates/terminal/src/lib.rs`, `crates/terminal/src/model.rs`, `crates/terminal/src/contracts.rs` |
+| Completion engine | `oneterm-completion` | Auto-completion engine (gpui-free): embedded command catalogs, line parsing + subcommand resolution, matching/ranking, in-session history, secret redaction | `crates/completion/src/lib.rs`, `crates/completion/src/engine.rs`, `crates/completion/src/catalog.rs`, `crates/completion/src/history.rs`, `crates/completion/src/redact.rs` |
 | Shared services | `oneterm-settings` | Persistent terminal and UI settings | `crates/settings/src/lib.rs` |
-| Shared services | `oneterm-state` | App-scoped services, workspace state, typed dock persistence, Agent folded model | `crates/state/src/lib.rs`, `crates/state/src/services.rs`, `crates/state/src/dock_persistence.rs`, `crates/state/src/agent_registry.rs`, `crates/state/src/agent_model.rs` |
+| Shared services | `oneterm-state` | App-scoped services, workspace state, typed dock persistence, Agent folded model, process-global completion history | `crates/state/src/lib.rs`, `crates/state/src/services.rs`, `crates/state/src/dock_persistence.rs`, `crates/state/src/agent_registry.rs`, `crates/state/src/completion_history.rs` |
 | Shared services | `oneterm-update` | GitHub Releases auto-update service, release selection, download, verification, staging, and install orchestration | `crates/update/src/lib.rs`, `crates/update/src/config.rs`, `crates/update/src/github.rs`, `crates/update/src/archive.rs`, `crates/update/src/install.rs` |
 | Vendor patch | `gpui-component` | Pinned upstream UI crate with the reviewed source and standalone-manifest patches | `vendor/README.md`, `vendor/patches/gpui-component/` |
 | Shell | `oneterm-workspace` | Feature-agnostic window, layout, dock persistence, status bar | `crates/workspace/src/lib.rs`, `crates/workspace/src/layout/` |
 | Backend | `oneterm-local-shell` | Local PTY session implementation | `crates/local-shell/src/lib.rs`, `crates/local-shell/src/session_terminal.rs` |
 | Backend | `oneterm-ssh` | SSH shell and SFTP implementations | `crates/ssh/src/lib.rs`, `crates/ssh/src/session_terminal.rs`, `crates/ssh/src/sftp_task.rs`, `crates/ssh/src/sftp_task/`, `crates/ssh/src/sftp_task/transfer/` |
-| Feature | `oneterm-terminal-view` | Terminal panel, rendering, input, split spaces | `crates/terminal-view/src/lib.rs`, `crates/terminal-view/src/panel/` |
+| Feature | `oneterm-terminal-view` | Terminal panel, rendering, input, split spaces, auto-completion overlay | `crates/terminal-view/src/lib.rs`, `crates/terminal-view/src/panel/`, `crates/terminal-view/src/completion/` |
 | Feature | `oneterm-sftp-ui` | SFTP browser, transfer queue, persistence UI | `crates/sftp-ui/src/lib.rs`, `crates/sftp-ui/src/panel.rs` |
 | Feature | `oneterm-session-ui` | Session tree and SSH connection dialogs | `crates/session-ui/src/lib.rs`, `crates/session-ui/src/connect_dialog.rs` |
 | Feature | `oneterm-settings-ui` | General Settings window | `crates/settings-ui/src/lib.rs` |

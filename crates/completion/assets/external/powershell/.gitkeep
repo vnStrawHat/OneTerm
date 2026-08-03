@@ -1,0 +1,2 @@
+# PowerShell external catalog — empty in Phase 1 (see docs/auto-completion/03 §4).
+# A cmdlet generator is a later phase; this folder is kept so the layout is stable.

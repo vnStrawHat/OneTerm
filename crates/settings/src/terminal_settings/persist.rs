@@ -99,6 +99,25 @@ impl TerminalSettings {
             security: SecurityConfig {
                 allow_clipboard_read: self.allow_clipboard_read,
             },
+            completion: crate::terminal_config::CompletionConfig {
+                enabled: self.completion.enabled,
+                accept_tab: self.completion.accept_tab,
+                max_history: self.completion.max_history,
+                min_prefix_len: self.completion.min_prefix_len,
+                max_visible_items: self.completion.max_visible_items,
+                sources: crate::terminal_config::CompletionSources {
+                    memory: self.completion.source_memory,
+                    manual: self.completion.source_manual,
+                    external: self.completion.source_external,
+                },
+                fuzzy: self.completion.fuzzy,
+                inherit_ancestor_options: self.completion.inherit_ancestor_options,
+                disable_in_alt_screen: self.completion.disable_in_alt_screen,
+                require_prompt_region: self.completion.require_prompt_region,
+                windows_allow_coreutils: self.completion.windows_allow_coreutils,
+                force_family: self.completion.force_family.clone(),
+                redact_sensitive: self.completion.redact_sensitive,
+            },
             colors: ColorsConfig {
                 foreground: color_to_hex(co.foreground),
                 background: color_to_hex(co.background),

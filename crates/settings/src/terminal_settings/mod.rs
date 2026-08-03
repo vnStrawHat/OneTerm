@@ -20,6 +20,52 @@ pub(crate) mod persist;
 pub use color::{hsla_to_hex, parse_hex_color};
 pub use font::parse_weight;
 
+/// Live mirror of the `completion` config group (docs/auto-completion/06).
+///
+/// A plain resolved copy the `terminal-view` layer projects into the engine's
+/// `CompletionParams` (keeping the engine free of a `settings` dependency).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompletionSettings {
+    pub enabled: bool,
+    pub accept_tab: bool,
+    pub max_history: usize,
+    pub min_prefix_len: usize,
+    pub max_visible_items: usize,
+    pub source_memory: bool,
+    pub source_manual: bool,
+    pub source_external: bool,
+    pub fuzzy: bool,
+    pub inherit_ancestor_options: bool,
+    pub disable_in_alt_screen: bool,
+    pub require_prompt_region: bool,
+    pub windows_allow_coreutils: bool,
+    pub force_family: Option<String>,
+    pub redact_sensitive: bool,
+}
+
+impl Default for CompletionSettings {
+    fn default() -> Self {
+        // Mirrors CompletionConfig::default().
+        Self {
+            enabled: true,
+            accept_tab: true,
+            max_history: 500,
+            min_prefix_len: 1,
+            max_visible_items: 8,
+            source_memory: true,
+            source_manual: true,
+            source_external: true,
+            fuzzy: true,
+            inherit_ancestor_options: true,
+            disable_in_alt_screen: true,
+            require_prompt_region: true,
+            windows_allow_coreutils: false,
+            force_family: None,
+            redact_sensitive: true,
+        }
+    }
+}
+
 /// Terminal cursor shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TerminalCursorShape {
@@ -149,6 +195,10 @@ pub struct TerminalSettings {
     // ── Colors ──
     /// Color overrides for the terminal theme.
     pub color_overrides: ColorOverrides,
+
+    // ── Completion ──
+    /// Live mirror of the `completion` config group.
+    pub completion: CompletionSettings,
 }
 
 impl Default for TerminalSettings {
@@ -176,6 +226,7 @@ impl Default for TerminalSettings {
             bell_enabled: true,
             allow_clipboard_read: false,
             color_overrides: ColorOverrides::default(),
+            completion: CompletionSettings::default(),
         }
     }
 }

@@ -32,6 +32,19 @@ OneTerm is a Terminal application for SSH/SFTP/Local Shell with a **Zed-style wo
 - URL / OSC 8 detection, IME support, clipboard via OSC 52, bell
 - OSC 9 toasts, OSC 9;4 progress, and shell integration (OSC 7 / 133 / 0 / 2 / 4 / 104 / 10 / 11 / 12)
 
+### ⌨️ Command auto-completion
+
+- Cursor-anchored suggestion overlay for commands, subcommands, and options
+- Three sources with `H`/`C`/`O` tag badges: in-session history, hand-authored
+  catalogs (git, cargo, …), and generated catalogs (Windows commands, coreutils)
+- Shell-aware: a `bash` prompt never suggests `cmd` commands and vice-versa
+- Subcommand trees (`git remote add -…`) with per-node options + breadcrumb
+- Frecency-ranked history that **never** stores or suggests secret values
+  (passwords, tokens, API keys are redacted at capture)
+- TUI-safe: suppressed on the alternate screen (vim/less) and outside the
+  OSC 133 command-input region; append-only accept (`Tab`/`Enter`)
+- Fully configurable in `terminal.json` / the Settings UI
+
 ### 🪟 Terminal split (Spaces)
 
 - Resizable split Spaces (Right / Left / Up / Down) with nesting

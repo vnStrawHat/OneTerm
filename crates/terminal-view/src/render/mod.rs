@@ -49,6 +49,10 @@ impl Render for LocalTerminalView {
             }
         }
 
+        // Auto-completion: sync settings, feed gating + the live input line, and
+        // recompute suggestions for this frame (docs/auto-completion/06 §3).
+        self.update_completion(cx);
+
         let theme: TerminalTheme = build_terminal_theme(cx.theme());
         let focused = self.focus.is_focused(window);
         let session = self.session.clone();
@@ -209,6 +213,7 @@ impl Render for LocalTerminalView {
             ))
             .children(self.bell_overlay(has_bell, bell_enabled, &theme_ref))
             .children(self.progress_overlay(&theme_ref))
+            .children(self.completion_overlay_element(cx))
             .children(self.render_scrollbar(&theme, &metrics, cx))
             .children(self.render_search_bar(window, cx));
 

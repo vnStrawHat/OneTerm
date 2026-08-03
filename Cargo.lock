@@ -5231,6 +5231,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "oneterm-completion"
+version = "0.0.0"
+dependencies = [
+ "log",
+ "oneterm-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "oneterm-core"
 version = "0.0.0"
 dependencies = [
@@ -5353,6 +5363,7 @@ version = "0.0.0"
 dependencies = [
  "gpui",
  "gpui-component",
+ "oneterm-completion",
  "oneterm-core",
  "oneterm-terminal",
  "serde",
@@ -5385,6 +5396,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "oneterm-actions",
+ "oneterm-completion",
  "oneterm-core",
  "oneterm-highlight",
  "oneterm-settings",

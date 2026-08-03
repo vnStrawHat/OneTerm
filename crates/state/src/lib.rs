@@ -11,6 +11,7 @@ mod agent_model;
 pub mod agent_registry;
 pub mod app_state;
 pub mod commands;
+pub mod completion_history;
 pub mod dock_persistence;
 pub mod dock_util;
 pub mod notif_ext;
@@ -22,4 +23,5 @@ pub use agent_registry::{
     ModelInfo, ToolRun,
 };
 pub use app_state::AppState;
+pub use completion_history::{CompletionHistory, GlobalCompletionHistory};
 pub use services::AppServices;

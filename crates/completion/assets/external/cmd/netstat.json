@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "generated": "2026-08-03",
+  "name": "netstat",
+  "options": [
+    "-A",
+    "-B",
+    "-E",
+    "-N",
+    "-O",
+    "-P",
+    "-R",
+    "-S",
+    "/LI",
+    "/UL"
+  ]
+}

@@ -3,6 +3,7 @@
 pub mod agent;
 pub mod box_drawing;
 pub mod cell;
+pub mod completion;
 #[cfg(any(test, feature = "terminal-diagnostics"))]
 pub mod diagnostics;
 pub mod element;

@@ -11,7 +11,7 @@ use gpui::App;
 
 use oneterm_settings::{TerminalSettings, UiConfig};
 use oneterm_state::commands::WorkspaceCommands;
-use oneterm_state::{AppServices, AppState};
+use oneterm_state::{AppServices, AppState, GlobalCompletionHistory};
 
 /// Initialize OneTerm's UI layer: globals + feature registration + commands.
 ///
@@ -24,6 +24,8 @@ pub fn init(cx: &mut App) {
     oneterm_theme::theme::init(cx);
     AppState::init(cx);
     TerminalSettings::init(cx);
+    // Process-global, cross-tab, non-persistent command history (memory source).
+    GlobalCompletionHistory::init(cx);
 
     // Feature inits — each registers its dock panel(s) + feature globals.
     // Terminal: "terminal" + "terminal-settings" panels + status-bar metrics.

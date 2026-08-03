@@ -4,6 +4,86 @@ use oneterm_terminal::test_support::FakeTerminalSession;
 use super::LocalTerminalView;
 
 #[gpui::test]
+fn completion_overlay_shows_when_typing_d_at_cmd_prompt(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    cx.update(crate::init);
+    cx.update(oneterm_settings::TerminalSettings::init);
+    cx.update(oneterm_state::GlobalCompletionHistory::init);
+
+    // A cmd prompt with the user having typed `d`. Cursor sits just after `d`.
+    let prompt = r"C:\Users\trunglt>d";
+    let (session, probe) = FakeTerminalSession::boxed(24, 80, prompt);
+    probe.set_cursor(0, prompt.chars().count());
+
+    let (view, cx) = cx.add_window_view(move |window, cx| {
+        let session = cx.new(|_| session);
+        LocalTerminalView::new(session, window, cx)
+    });
+    let cx: &mut VisualTestContext = cx;
+    cx.run_until_parked();
+
+    // Drive the same path `render` uses.
+    view.update(cx, |v, cx| v.update_completion(cx));
+
+    let (visible, texts) = view.read_with(cx, |v, _| {
+        let c = v
+            .completion
+            .as_ref()
+            .expect("controller must be initialized");
+        (
+            c.is_visible(),
+            c.suggestions()
+                .iter()
+                .map(|s| s.text.clone())
+                .collect::<Vec<_>>(),
+        )
+    });
+    assert!(visible, "overlay should be visible for 'd' at a cmd prompt");
+    assert!(
+        texts
+            .iter()
+            .any(|t| t == "dir" || t == "date" || t == "del"),
+        "expected dir/date/del among suggestions, got {texts:?}"
+    );
+}
+
+#[gpui::test]
+fn completion_resumes_after_initial_non_prompt_render(cx: &mut TestAppContext) {
+    // Regression: the pre-grid gate must NOT depend on `in_prompt_region` (only
+    // known after reading the line). An initial empty/non-prompt render once left
+    // the region gate stuck false, permanently blocking completion afterwards.
+    cx.update(gpui_component::init);
+    cx.update(crate::init);
+    cx.update(oneterm_settings::TerminalSettings::init);
+    cx.update(oneterm_state::GlobalCompletionHistory::init);
+
+    let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
+    probe.set_cursor(0, 0);
+    let (view, cx) = cx.add_window_view(move |window, cx| {
+        let session = cx.new(|_| session);
+        LocalTerminalView::new(session, window, cx)
+    });
+    let cx: &mut VisualTestContext = cx;
+    cx.run_until_parked();
+
+    // Frame 1: empty grid / no prompt → not visible (in_prompt_region → false).
+    view.update(cx, |v, cx| v.update_completion(cx));
+    let visible1 = view.read_with(cx, |v, _| v.completion.as_ref().unwrap().is_visible());
+    assert!(!visible1, "empty prompt must not show an overlay");
+
+    // Frame 2: the prompt is drawn and the user typed `d`.
+    let prompt = r"C:\Users\trunglt>d";
+    probe.set_text(prompt);
+    probe.set_cursor(0, prompt.chars().count());
+    view.update(cx, |v, cx| v.update_completion(cx));
+    let visible2 = view.read_with(cx, |v, _| v.completion.as_ref().unwrap().is_visible());
+    assert!(
+        visible2,
+        "overlay must resume after an initial non-prompt render (pre-grid gate bug)"
+    );
+}
+
+#[gpui::test]
 fn phase0_renderer_baseline_counts_dirty_and_idle_frames(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     cx.update(crate::init);

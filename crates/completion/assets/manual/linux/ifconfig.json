@@ -1,0 +1,2 @@
+{ "schema": 1, "name": "ifconfig",
+  "options": ["-a", "-s", "-v", "up", "down"] }

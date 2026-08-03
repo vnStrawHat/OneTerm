@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 oneterm-core.workspace = true
 oneterm-terminal.workspace = true
+oneterm-completion.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
 serde.workspace = true

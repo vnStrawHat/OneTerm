@@ -4,6 +4,7 @@
 //! one cohesive group and stays easy to review.
 
 mod bell;
+mod completion;
 mod cursor;
 mod font;
 mod layout;
@@ -29,6 +30,7 @@ pub(crate) fn page() -> SettingPage {
         .group(mouse::group())
         .group(bell::group())
         .group(security::group())
+        .group(completion::group())
 }
 
 /// Persist the live [`TerminalSettings`] to `terminal.json`.

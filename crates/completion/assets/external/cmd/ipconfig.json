@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "generated": "2026-08-03",
+  "name": "ipconfig",
+  "options": [
+    "/all",
+    "/allcompartments",
+    "/displaydns",
+    "/flushdns",
+    "/registerdns",
+    "/release",
+    "/release6",
+    "/renew",
+    "/renew6",
+    "/setclassid",
+    "/showclassid"
+  ]
+}

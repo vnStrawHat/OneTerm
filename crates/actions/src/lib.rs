@@ -94,6 +94,13 @@ actions!(
         SftpNewFolder,
         /// Refresh the SFTP file listing.
         SftpRefresh,
+        // ── Completion actions ──────────────────────────────────────
+        /// Toggle terminal auto-completion on/off.
+        ToggleCompletion,
+        /// Clear the in-session completion history (`memory` source).
+        ClearCompletionHistory,
+        /// Force-open the completion overlay at the cursor (default Ctrl+Shift+Space).
+        TriggerCompletion,
     ]
 );
 

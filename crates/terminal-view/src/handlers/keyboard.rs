@@ -60,6 +60,29 @@ pub(crate) fn attach_key(
                 }
             }
 
+            // ── Auto-completion overlay key handling (before PTY delivery) ──
+            {
+                let key = e.keystroke.key.as_str();
+                // Manual trigger: Ctrl+Shift+Space (docs/auto-completion/06 §6).
+                if mods.control && mods.shift && key == "space" {
+                    let _ = view.update(cx, |v, cx| v.trigger_completion(cx));
+                    cx.stop_propagation();
+                    return;
+                }
+                // Navigation / accept while the overlay is visible.
+                let consumed =
+                    view.update(cx, |v, cx| v.completion_handle_key(key, mods.control, cx));
+                if consumed {
+                    cx.stop_propagation();
+                    return;
+                }
+                // Run-first: Enter with no selection runs the command — capture
+                // the typed line into history first, then let Enter reach the PTY.
+                if matches!(key, "enter" | "return") {
+                    let _ = view.update(cx, |v, cx| v.completion_capture_current(cx));
+                }
+            }
+
             // ── Zoom shortcuts (platform +/−/0) ──
             if plat && !mods.alt {
                 match e.keystroke.key.as_str() {

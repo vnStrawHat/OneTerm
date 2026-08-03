@@ -11,6 +11,7 @@ pub mod ui_config;
 
 pub use terminal_config::{SemanticHighlightingMode, TabTitleMode, TerminalConfig};
 pub use terminal_settings::{
-    ColorOverrides, TerminalBlink, TerminalCursorShape, TerminalPadding, TerminalSettings,
+    ColorOverrides, CompletionSettings, TerminalBlink, TerminalCursorShape, TerminalPadding,
+    TerminalSettings,
 };
 pub use ui_config::UiConfig;

@@ -17,6 +17,7 @@ members = [
     "crates/update",
     "crates/local-shell",
     "crates/ssh",
+    "crates/completion",
 ]
 resolver = "3"
 # Vendored dependency snapshots (patched below). Excluded as workspace members;
@@ -55,6 +56,7 @@ oneterm-highlight = { path = "crates/highlight" }
 oneterm-local-shell = { path = "crates/local-shell" }
 oneterm-update = { path = "crates/update" }
 oneterm-ssh = { path = "crates/ssh" }
+oneterm-completion = { path = "crates/completion" }
 
 # Terminal engine — Zed fork of alacritty_terminal with TerminalContent/display_iter.
 # Keep the revision aligned with GPUI (see docs/agents/dependencies.md §1).

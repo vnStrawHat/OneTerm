@@ -1,0 +1,19 @@
+{
+  "_comment": "Curated command whitelist for completion-catalog.py. Only commands listed here are generated into (and kept in) crates/completion/assets/external/. Add a name to include it; remove it to prune its JSON. Manual catalogs (assets/manual/**) are hand-authored and never touched by the generator.",
+  "cmd": [
+    "assoc", "attrib", "cd", "chdir", "chkdsk", "cls", "color", "copy",
+    "date", "del", "dir", "echo", "erase", "exit", "fc", "find", "findstr",
+    "ftype", "hostname", "ipconfig", "md", "mkdir", "mklink", "more", "move",
+    "netstat", "path", "pause", "ping", "popd", "pushd", "rd", "ren",
+    "rename", "rmdir", "robocopy", "route", "sc", "set", "setx", "shutdown",
+    "sort", "start", "systeminfo", "taskkill", "tasklist", "time", "timeout",
+    "title", "tracert", "tree", "type", "ver", "where", "whoami", "xcopy"
+  ],
+  "coreutils": [
+    "cat", "chmod", "chown", "cp", "cut", "date", "df", "dirname", "basename",
+    "du", "echo", "env", "head", "id", "ln", "ls", "mkdir", "mv", "nl",
+    "printf", "pwd", "readlink", "realpath", "rm", "rmdir", "seq", "sleep",
+    "sort", "split", "stat", "tac", "tail", "tee", "touch", "tr", "true",
+    "false", "uname", "uniq", "wc", "who", "whoami", "yes", "grep"
+  ]
+}

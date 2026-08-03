@@ -166,15 +166,16 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 |---|---|---|---|
 | `core` (`oneterm-core`) | _(leaf)_ | domain | Error type, `SftpBackend`, `LocalShellConfig`/`ShellKind`, `SshConfig`/`SshAuthMethod`. No gpui, **no alacritty**. |
 | `highlight` (`oneterm-highlight`) | _(leaf)_ | engine | Semantic syntax-highlighting engine. |
+| `completion` (`oneterm-completion`) | `core` | engine | Terminal auto-completion engine (gpui-free, alacritty-free): catalog model + embedded `assets/**/*.json` catalogs, line parsing + subcommand resolution, matching/ranking, in-session `CompletionHistory`, and secret redaction. See [`../auto-completion.md`](../auto-completion.md). |
 | `vendor/gpui-component` | _(Cargo patch; not a workspace member)_ | external shared-ui | Upstream `gpui-component` `crates/ui` snapshot at the pinned revision, with the reviewed `TabPanel::set_active_panel` addition. See [`ui-fork-maintenance.md`](ui-fork-maintenance.md). |
 | `terminal` (`oneterm-terminal`) | `core` | engine | Terminal engine (alacritty-coupled, no gpui): `TerminalSession`, `TerminalModel`, events, palette/OSC/key/mouse helpers, and `SessionFactory`. |
 | `actions` (`oneterm-actions`) | `core`, gpui | leaf-ui | gpui `Action` structs shared by shell and features; domain placement types come from `core`. |
 | `settings` (`oneterm-settings`) | `core`, gpui | shared | `TerminalConfig`, live `TerminalSettings`, and `UiConfig`. |
-| `state` (`oneterm-state`) | `core`, `terminal`, gpui, gpui-component | shared | `AppState`, notification helpers, command registry, dock helpers, active-terminal metrics, and shared persistence paths. |
+| `state` (`oneterm-state`) | `core`, `terminal`, `completion`, gpui, gpui-component | shared | `AppState`, notification helpers, command registry, dock helpers, active-terminal metrics, shared persistence paths, and the process-global `CompletionHistory`. |
 | `update` (`oneterm-update`) | `core`, `chrono`, `reqwest`, `semver`, `sha2`, `tar`, `flate2`, `zip` | shared | GitHub Releases auto-update checks, asset selection, download verification, staging, and installer orchestration. |
 | `theme` (`oneterm-theme`) | `settings`, `actions`, gpui, gpui-component | shared | Theme registry, built-in themes, and generated `AppIcon`. |
 | `workspace` (`oneterm-workspace`) | `core`, `terminal`, `settings`, `state`, `actions`, `theme`, gpui-component | shell | Feature-agnostic app shell. Maps domain placement types to the UI dock and drives features through `WorkspaceCommands`. |
-| `terminal-view` (`oneterm-terminal-view`) | `core`, `terminal`, `settings`, `state`, `theme`, `actions`, `highlight`, gpui-component | feature | Terminal panel, rendering/input, split spaces, and terminal settings panel. |
+| `terminal-view` (`oneterm-terminal-view`) | `core`, `terminal`, `settings`, `state`, `theme`, `actions`, `highlight`, `completion`, gpui-component | feature | Terminal panel, rendering/input, split spaces, the terminal settings panel, and the auto-completion overlay + controller. |
 | `sftp-ui` (`oneterm-sftp-ui`) | `core`, `terminal`, `state`, `theme`, `actions`, gpui-component | feature | SFTP file browser and transfer queue. |
 | `session-ui` (`oneterm-session-ui`) | `core`, `terminal`, `terminal-view`, `state`, `actions`, gpui-component | feature | Session tree, connect dialogs, and `SshSessionStore`. |
 | `settings-ui` (`oneterm-settings-ui`) | `core`, `settings`, `state`, `update`, `theme`, `actions`, gpui-component | feature | General Settings window, update status/actions, and key-binding setup. |

@@ -36,6 +36,12 @@ impl FakeSessionProbe {
         self.state.full_damage.store(true, Ordering::SeqCst);
     }
 
+    /// Set the cursor position (display line, column) for future snapshots.
+    pub fn set_cursor(&self, line: i32, col: usize) {
+        *self.state.cursor.lock().unwrap() = (line, col);
+        self.state.full_damage.store(true, Ordering::SeqCst);
+    }
+
     /// Send an event to the session subscriber.
     pub fn emit(&self, event: SessionEvent) -> Result<(), TrySendError<SessionEvent>> {
         self.state.event_tx.try_send(event)
@@ -97,6 +103,7 @@ struct FakeSessionState {
     rows_cols: Mutex<(usize, usize)>,
     text: Mutex<String>,
     mode: Mutex<TermMode>,
+    cursor: Mutex<(i32, usize)>,
     writes: Mutex<Vec<Vec<u8>>>,
     event_tx: Sender<SessionEvent>,
     full_damage: AtomicBool,
@@ -117,6 +124,7 @@ impl FakeTerminalSession {
             rows_cols: Mutex::new((rows.max(1), cols.max(1))),
             text: Mutex::new(text.into()),
             mode: Mutex::new(TermMode::SHOW_CURSOR),
+            cursor: Mutex::new((0, 0)),
             writes: Mutex::new(Vec::new()),
             event_tx,
             full_damage: AtomicBool::new(true),
@@ -182,11 +190,12 @@ impl FakeTerminalSession {
             TermDamageInfo::Partial(Vec::new())
         };
 
+        let (cursor_line, cursor_col) = *self.state.cursor.lock().unwrap();
         TerminalContent {
             cells,
             cursor: RenderableCursor {
                 shape: CursorShape::Block,
-                point: Point::new(Line(0), Column(0)),
+                point: Point::new(Line(cursor_line), Column(cursor_col)),
             },
             mode,
             display_offset: 0,
