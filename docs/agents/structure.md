@@ -148,7 +148,6 @@ OneTerm/
 
 ## 2. Structure conventions
 
-- **Each Rust file is at most ~400 lines.** If it exceeds that → split into a submodule immediately. Conversely, **do not split too small**. Each file must have enough "responsibility mass" to stand on its own.
 - **One module, one responsibility.** The file name = the main module name (snake_case).
 - **One crate per layer / feature.** Shared logic goes in a low crate (`core` / `terminal` / `actions` / `settings` / `state` / `update` / `theme`); each user-facing feature is its own `*-ui` crate; the shell (`workspace`) is feature-agnostic.
 - **Feature crates never depend on each other's internals** except the acyclic edge `session-ui → terminal-view` (a new SSH session opens a `TerminalPanel`). Cross-cutting helpers live in `state`.
