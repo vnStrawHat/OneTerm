@@ -13,6 +13,26 @@
 
 use std::time::{Duration, Instant};
 
+/// Where a clipboard operation originated.
+///
+/// Remote (SSH) sessions are treated more strictly than the local shell:
+/// remote clipboard access exposes the local clipboard to a program running on
+/// another host, so it is gated by dedicated policy flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardOrigin {
+    /// The local shell running on this machine.
+    Local,
+    /// A remote (SSH) session.
+    Remote,
+}
+
+impl ClipboardOrigin {
+    /// Whether this origin is a remote (SSH) session.
+    const fn is_remote(self) -> bool {
+        matches!(self, Self::Remote)
+    }
+}
+
 /// Default maximum title length in bytes (4 KiB).
 const DEFAULT_MAX_TITLE_BYTES: usize = 4 * 1024;
 
@@ -141,8 +161,12 @@ impl TerminalSecurityPolicy {
     /// - Truncates to `max_clipboard_bytes`
     /// - Returns `None` if it exceeds the limit (reject, don't truncate
     ///   security-sensitive data)
-    pub fn validate_clipboard_write<'a>(&self, text: &'a str, is_remote: bool) -> Option<&'a str> {
-        if is_remote && !self.allow_remote_clipboard_write {
+    pub fn validate_clipboard_write<'a>(
+        &self,
+        text: &'a str,
+        origin: ClipboardOrigin,
+    ) -> Option<&'a str> {
+        if origin.is_remote() && !self.allow_remote_clipboard_write {
             return None;
         }
         if text.len() > self.max_clipboard_bytes {
@@ -152,8 +176,8 @@ impl TerminalSecurityPolicy {
     }
 
     /// Check whether a clipboard read is allowed.
-    pub fn allow_clipboard_read(&self, is_remote: bool) -> bool {
-        if is_remote {
+    pub fn allow_clipboard_read(&self, origin: ClipboardOrigin) -> bool {
+        if origin.is_remote() {
             self.allow_remote_clipboard_read
         } else {
             true
@@ -302,7 +326,7 @@ mod tests {
     fn clipboard_write_local_allowed() {
         let policy = TerminalSecurityPolicy::default();
         assert_eq!(
-            policy.validate_clipboard_write("hello", false),
+            policy.validate_clipboard_write("hello", ClipboardOrigin::Local),
             Some("hello")
         );
     }
@@ -310,7 +334,10 @@ mod tests {
     #[test]
     fn clipboard_write_remote_denied_by_default() {
         let policy = TerminalSecurityPolicy::default();
-        assert_eq!(policy.validate_clipboard_write("hello", true), None);
+        assert_eq!(
+            policy.validate_clipboard_write("hello", ClipboardOrigin::Remote),
+            None
+        );
     }
 
     #[test]
@@ -320,7 +347,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            policy.validate_clipboard_write("hello", true),
+            policy.validate_clipboard_write("hello", ClipboardOrigin::Remote),
             Some("hello")
         );
     }
@@ -332,19 +359,22 @@ mod tests {
             ..Default::default()
         };
         let large = "x".repeat(100);
-        assert_eq!(policy.validate_clipboard_write(&large, false), None);
+        assert_eq!(
+            policy.validate_clipboard_write(&large, ClipboardOrigin::Local),
+            None
+        );
     }
 
     #[test]
     fn clipboard_read_local_allowed() {
         let policy = TerminalSecurityPolicy::default();
-        assert!(policy.allow_clipboard_read(false));
+        assert!(policy.allow_clipboard_read(ClipboardOrigin::Local));
     }
 
     #[test]
     fn clipboard_read_remote_denied_by_default() {
         let policy = TerminalSecurityPolicy::default();
-        assert!(!policy.allow_clipboard_read(true));
+        assert!(!policy.allow_clipboard_read(ClipboardOrigin::Remote));
     }
 
     #[test]

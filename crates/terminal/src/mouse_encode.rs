@@ -50,10 +50,22 @@ impl MouseModifiers {
     }
 }
 
+/// Which terminator byte an SGR (1006) mouse report uses.
+///
+/// SGR distinguishes press (`M`) from release (`m`); classic X10/X11 encoding
+/// ignores this (release collapses to a fixed button byte).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SgrTerminator {
+    /// Button press / motion / wheel — terminator `M`.
+    Press,
+    /// Button release — terminator `m`.
+    Release,
+}
+
 /// Encode a single mouse event → the escape sequence the running app receives.
 ///
 /// `sgr_code`: code for SGR (1006); `x11_code`: code for classic X11 (before the
-/// mandatory +32 offset). `release_in_sgr` only affects SGR (`m` vs `M`);
+/// mandatory +32 offset). `terminator` only affects SGR (`m` vs `M`);
 /// X11 release uses a fixed button byte = 3.
 fn encode(
     sgr_code: u8,
@@ -62,14 +74,17 @@ fn encode(
     col: usize,
     mode: TermMode,
     mods: MouseModifiers,
-    release_in_sgr: bool,
+    terminator: SgrTerminator,
 ) -> String {
     // row/col are 0-indexed from the caller → terminal is 1-indexed.
     let row = row.saturating_add(1);
     let col = col.saturating_add(1);
     let mod_mask = mods.mask();
     if mode.contains(TermMode::SGR_MOUSE) {
-        let action = if release_in_sgr { 'm' } else { 'M' };
+        let action = match terminator {
+            SgrTerminator::Release => 'm',
+            SgrTerminator::Press => 'M',
+        };
         format!("\x1b[<{};{};{}{}", sgr_code + mod_mask, col, row, action)
     } else {
         // X10/X11: button+32, col+32, row+32 (capped at 255 due to single byte).
@@ -91,7 +106,15 @@ pub fn encode_mouse_press(
     mode: TermMode,
     mods: MouseModifiers,
 ) -> String {
-    encode(button.code(), button.code(), row, col, mode, mods, false)
+    encode(
+        button.code(),
+        button.code(),
+        row,
+        col,
+        mode,
+        mods,
+        SgrTerminator::Press,
+    )
 }
 
 /// Mouse release (button up).
@@ -104,7 +127,15 @@ pub fn encode_mouse_release(
 ) -> String {
     // X11 collapses release into a fixed button byte = 3; SGR keeps the original
     // button code but changes `M` → `m`.
-    encode(button.code(), 3, row, col, mode, mods, true)
+    encode(
+        button.code(),
+        3,
+        row,
+        col,
+        mode,
+        mods,
+        SgrTerminator::Release,
+    )
 }
 
 /// Mouse motion. `button = None` → hover (no button, code 3).
@@ -116,7 +147,7 @@ pub fn encode_mouse_move(
     mods: MouseModifiers,
 ) -> String {
     let code = button.map_or(3, TerminalMouseButton::code) + 32;
-    encode(code, code, row, col, mode, mods, false)
+    encode(code, code, row, col, mode, mods, SgrTerminator::Press)
 }
 
 /// Wheel. `delta_y > 0` = scroll up (code 64), `< 0` = scroll down (code 65).
@@ -128,7 +159,7 @@ pub fn encode_wheel_event(
     mods: MouseModifiers,
 ) -> String {
     let code = if delta_y > 0.0 { 64 } else { 65 };
-    encode(code, code, row, col, mode, mods, false)
+    encode(code, code, row, col, mode, mods, SgrTerminator::Press)
 }
 
 #[cfg(test)]

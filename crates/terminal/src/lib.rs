@@ -3,7 +3,7 @@
 //! Depends on `alacritty_terminal` (types: `TermMode`, `Cell`, colors) but does
 //! **not** depend on GPUI. The UI crate maps these types to GPUI when rendering.
 
-pub mod colors_util;
+pub mod color_classification;
 pub mod content;
 pub mod contracts;
 pub mod factory;
@@ -23,7 +23,7 @@ pub mod test_support;
 pub mod url;
 pub mod url_policy;
 
-pub use colors_util::{
+pub use color_classification::{
     is_app_chosen_exact_color, is_decorative_character, is_default_background_color,
 };
 pub use content::{
@@ -50,13 +50,13 @@ pub use osc_color::{
     BACKGROUND_INDEX, CURSOR_INDEX, ColorFormatter, DynamicColors, FOREGROUND_INDEX,
     PendingColorQuery, SharedColorQueries, default_color_for_index, new_color_queries,
 };
-pub use palette::{TerminalPalette, extended_indexed_color, indexed_default_color, resolve_color};
-pub use paste::{PastePolicy, PasteResult, encode_paste};
-pub use search::{SearchMatch, SearchOptions, search_term};
-pub use security_policy::{NotificationRateLimiter, TerminalSecurityPolicy};
+pub use palette::{TerminalPalette, resolve_color};
+pub use paste::{PasteMode, PastePolicy, PasteResult, encode_paste};
+pub use search::{SearchMatch, SearchOptions};
+pub use security_policy::{ClipboardOrigin, NotificationRateLimiter, TerminalSecurityPolicy};
 pub use session::{
     CursorBounds, CwdSource, NetStats, SessionEvent, SessionEventDelivery, TerminalCapabilities,
-    TerminalInfo, TerminalQueryState, TerminalSession, parse_keystroke,
+    TerminalInfo, TerminalQueryState, TerminalSession,
 };
 pub use url::{link_ranges, url_at};
 pub use url_policy::{ConfirmReason, DenyReason, ExternalTargetPolicy, TargetDecision};

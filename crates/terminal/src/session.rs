@@ -13,7 +13,9 @@ use std::sync::Arc;
 
 use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::TermMode;
+use alacritty_terminal::vte::ansi::Rgb;
 use async_channel::Receiver;
+use oneterm_core::sftp::SftpBackend;
 
 use crate::IndexedCell;
 use crate::content::TerminalContent;
@@ -23,11 +25,8 @@ use crate::mouse_encode::{MouseModifiers, TerminalMouseButton};
 use crate::osc::{Osc133Kind, TerminalProgress};
 use crate::osc_agent::AgentStatusEvent;
 use crate::osc_color::DynamicColors;
-use crate::paste::{PastePolicy, PasteResult, encode_paste};
+use crate::paste::{PasteMode, PastePolicy, PasteResult, encode_paste};
 use crate::search::{SearchMatch, SearchOptions};
-use oneterm_core::sftp::SftpBackend;
-
-use alacritty_terminal::vte::ansi::Rgb;
 
 /// Basic terminal info — lightweight, does not clear damage.
 /// Used for line_times updates and the scroll handle without affecting
@@ -398,17 +397,18 @@ pub trait TerminalSession: Send + Sync + 'static {
     /// Paste text into the PTY. Automatically wraps it in bracketed paste markers
     /// if the terminal is in bracketed paste mode.
     fn paste(&self, text: &str) {
-        let result = if self.is_bracketed_paste() {
-            let policy = PastePolicy::default();
-            match encode_paste(text, true, &policy) {
-                PasteResult::Ok(bytes) => self.write(&bytes),
-                PasteResult::TooLarge(_) => {
-                    log::warn!("paste rejected: exceeded max paste size");
-                    return;
-                }
-            }
+        let mode = if self.is_bracketed_paste() {
+            PasteMode::Bracketed
         } else {
-            self.write(text.as_bytes())
+            PasteMode::Plain
+        };
+        let policy = PastePolicy::default();
+        let result = match encode_paste(text, mode, &policy) {
+            PasteResult::Ok(bytes) => self.write(&bytes),
+            PasteResult::TooLarge(_) => {
+                log::warn!("paste rejected: exceeded max paste size");
+                return;
+            }
         };
         if let Err(error) = result {
             log::warn!("terminal paste failed: {error}");
@@ -452,7 +452,7 @@ pub trait TerminalSession: Send + Sync + 'static {
 /// Modifiers are separated by `+`, case-insensitive.
 ///
 /// Equivalent to Zed `SendKeystroke(String)`.
-pub fn parse_keystroke(s: &str) -> Option<(KeySpec, KeyMods)> {
+pub(crate) fn parse_keystroke(s: &str) -> Option<(KeySpec, KeyMods)> {
     let parts: Vec<&str> = s.split('+').collect();
     let mut mods = KeyMods::default();
     let mut key_part = s;
@@ -586,7 +586,7 @@ mod tests {
     }
 
     #[test]
-    fn phase1_bracketed_paste_strips_embedded_markers() {
+    fn bracketed_paste_strips_embedded_markers() {
         use crate::test_support::FakeTerminalSession;
 
         let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
@@ -626,7 +626,7 @@ mod tests {
     }
 
     #[test]
-    fn phase0_baseline_plain_paste_preserves_unicode_and_controls() {
+    fn plain_paste_preserves_unicode_and_controls() {
         use crate::test_support::FakeTerminalSession;
 
         let (session, probe) = FakeTerminalSession::boxed(24, 80, "");

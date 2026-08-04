@@ -49,7 +49,7 @@ impl TerminalPalette {
 /// Color for the extended palette (indices 16-255): 6×6×6 RGB cube (16-231)
 /// and 24-step grayscale ramp (232-255). These are theme-independent. For
 /// indices 0-15 this returns black — callers must use the ANSI palette instead.
-pub fn extended_indexed_color(n: u8) -> Rgb {
+pub(crate) fn extended_indexed_color(n: u8) -> Rgb {
     match n {
         // 6×6×6 RGB cube (16..=231).
         16..=231 => {
@@ -79,9 +79,8 @@ pub fn extended_indexed_color(n: u8) -> Rgb {
 /// - `16..=231` → 6×6×6 RGB cube.
 /// - `232..=255` → 24-step grayscale ramp.
 ///
-/// Used both by `resolve_indexed` (fallback when no OSC 4 override) and to
-/// answer OSC 4 queries for indices never set via OSC.
-pub fn indexed_default_color(n: u8, ansi: &[Rgb; 16]) -> Rgb {
+/// Used by `resolve_indexed` as the fallback when no OSC 4 override is set.
+fn indexed_default_color(n: u8, ansi: &[Rgb; 16]) -> Rgb {
     match n {
         0..=15 => ansi[n as usize],
         _ => extended_indexed_color(n),

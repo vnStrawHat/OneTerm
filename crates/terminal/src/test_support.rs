@@ -17,6 +17,16 @@ use super::{
 };
 use crate::mouse_encode::MouseModifiers;
 
+/// Whether a fake snapshot consumes the pending damage (render path) or leaves
+/// it intact (auxiliary query path).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DamageMode {
+    /// Render snapshot — consume and reset the accumulated damage.
+    Consume,
+    /// Auxiliary query — do not touch the damage state.
+    Preserve,
+}
+
 /// Shared observation and control handle for a [`FakeTerminalSession`].
 #[derive(Clone)]
 pub struct FakeSessionProbe {
@@ -158,7 +168,7 @@ impl FakeTerminalSession {
         (Box::new(session), probe)
     }
 
-    fn content(&self, consume_damage: bool) -> TerminalContent {
+    fn content(&self, damage: DamageMode) -> TerminalContent {
         let (rows, cols) = *self.state.rows_cols.lock().unwrap();
         let text = self.state.text.lock().unwrap().clone();
         let mode = *self.state.mode.lock().unwrap();
@@ -184,7 +194,9 @@ impl FakeTerminalSession {
             })
             .collect();
 
-        let damage = if consume_damage && self.state.full_damage.swap(false, Ordering::SeqCst) {
+        let damage = if damage == DamageMode::Consume
+            && self.state.full_damage.swap(false, Ordering::SeqCst)
+        {
             TermDamageInfo::Full
         } else {
             TermDamageInfo::Partial(Vec::new())
@@ -219,20 +231,20 @@ impl Drop for FakeTerminalSession {
 impl TerminalSession for FakeTerminalSession {
     fn snapshot(&self) -> TerminalContent {
         self.state.snapshot_calls.fetch_add(1, Ordering::SeqCst);
-        self.content(true)
+        self.content(DamageMode::Consume)
     }
 
     fn snapshot_query(&self) -> TerminalContent {
         self.state
             .query_snapshot_calls
             .fetch_add(1, Ordering::SeqCst);
-        self.content(false)
+        self.content(DamageMode::Preserve)
     }
 
     fn query_state(&self) -> TerminalQueryState {
         self.state.query_state_calls.fetch_add(1, Ordering::SeqCst);
         let mode = *self.state.mode.lock().unwrap();
-        let snap = self.content(false);
+        let snap = self.content(DamageMode::Preserve);
         TerminalQueryState {
             mode,
             cursor_line: snap.cursor.point.line.0,

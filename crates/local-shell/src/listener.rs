@@ -21,8 +21,9 @@ use async_channel::TrySendError;
 use log::warn;
 
 use oneterm_terminal::{
-    ColorFormatter, NotificationRateLimiter, Osc133Kind, OscPayload, PendingColorQuery,
-    SharedColorQueries, TerminalSecurityPolicy, new_color_queries, parse_cwd_url, parse_osc,
+    ClipboardOrigin, ColorFormatter, NotificationRateLimiter, Osc133Kind, OscPayload,
+    PendingColorQuery, SharedColorQueries, TerminalSecurityPolicy, new_color_queries,
+    parse_cwd_url, parse_osc,
 };
 use oneterm_terminal::{SessionEvent, TerminalError};
 
@@ -220,8 +221,11 @@ impl LocalListener {
     }
 
     fn set_clipboard(&self, text: String) {
-        // Local session: is_remote = false.
-        if let Some(validated) = self.security.validate_clipboard_write(&text, false) {
+        // Local session.
+        if let Some(validated) = self
+            .security
+            .validate_clipboard_write(&text, ClipboardOrigin::Local)
+        {
             self.state.lock().unwrap().clipboard = Some(validated.to_string());
         }
     }
@@ -325,7 +329,10 @@ impl EventListener for LocalListener {
             // ── Clipboard (OSC 52 set) ─────────────────────────────────
             Event::ClipboardStore(_, text) => {
                 // Validate before forwarding.
-                if let Some(validated) = self.security.validate_clipboard_write(&text, false) {
+                if let Some(validated) = self
+                    .security
+                    .validate_clipboard_write(&text, ClipboardOrigin::Local)
+                {
                     let validated = validated.to_string();
                     self.set_clipboard(text);
                     self.forward(SessionEvent::Clipboard(Some(validated)));

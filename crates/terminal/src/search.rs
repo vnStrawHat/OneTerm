@@ -66,7 +66,7 @@ impl SearchMatch {
 ///
 /// Empty `query` → empty result. The query is matched against the per-line text
 /// (cells joined left-to-right); matches do **not** span line boundaries.
-pub fn search_term<EP: EventListener>(
+pub(crate) fn search_term<EP: EventListener>(
     term: &Term<EP>,
     query: &str,
     options: SearchOptions,

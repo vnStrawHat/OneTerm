@@ -282,4 +282,4 @@ pub fn encode_osc97_params(json: &str) -> Vec<Vec<u8>> {
 }
 
 #[cfg(test)]
-mod tests;
+mod receiver_tests;

@@ -314,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn phase1_osc_payloads_are_capped_by_security_policy() {
+    fn osc_payloads_are_capped_by_security_policy() {
         // parse_osc itself doesn't cap — the TerminalSecurityPolicy does.
         let notification = vec![b'x'; 256 * 1024];
         let parsed = parse_osc(&[b"9", notification.as_slice()]);
@@ -333,14 +333,20 @@ mod tests {
         // The policy caps clipboard write size (256 KiB limit).
         let large_clipboard = "c".repeat(256 * 1024 + 1);
         assert_eq!(
-            policy.validate_clipboard_write(&large_clipboard, false),
+            policy.validate_clipboard_write(
+                &large_clipboard,
+                crate::security_policy::ClipboardOrigin::Local
+            ),
             None
         );
 
         // Normal-sized clipboard write is allowed.
         let small_clipboard = "c".repeat(100);
         assert_eq!(
-            policy.validate_clipboard_write(&small_clipboard, false),
+            policy.validate_clipboard_write(
+                &small_clipboard,
+                crate::security_policy::ClipboardOrigin::Local
+            ),
             Some(small_clipboard.as_str())
         );
 

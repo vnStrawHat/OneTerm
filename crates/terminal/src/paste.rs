@@ -26,6 +26,18 @@ impl Default for PastePolicy {
     }
 }
 
+/// Whether pasted text is wrapped in bracketed-paste delimiters.
+///
+/// Selected from the terminal's `TermMode::BRACKETED_PASTE` state at the call
+/// site (see [`crate::TerminalSession::paste`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasteMode {
+    /// Wrap the payload in `ESC[200~…ESC[201~` and strip embedded markers.
+    Bracketed,
+    /// Pass the payload through unchanged.
+    Plain,
+}
+
 /// Outcome of [`encode_paste`].
 #[derive(Debug, PartialEq, Eq)]
 pub enum PasteResult {
@@ -37,20 +49,20 @@ pub enum PasteResult {
 
 /// Encode text for pasting into the terminal.
 ///
-/// - **Bracketed mode** (`bracketed = true`): wraps the text in
-///   `ESC[200~…ESC[201~` after stripping any embedded start/end markers.
-/// - **Plain mode** (`bracketed = false`): passes the text through as-is.
+/// - [`PasteMode::Bracketed`]: wraps the text in `ESC[200~…ESC[201~` after
+///   stripping any embedded start/end markers.
+/// - [`PasteMode::Plain`]: passes the text through as-is.
 ///
 /// Embedded `ESC[200~` and `ESC[201~` sequences are **removed** from the
 /// payload so that pasted content cannot terminate bracketed-paste mode
 /// early or re-enter it spuriously.
-pub fn encode_paste(text: &str, bracketed: bool, policy: &PastePolicy) -> PasteResult {
+pub fn encode_paste(text: &str, mode: PasteMode, policy: &PastePolicy) -> PasteResult {
     // Enforce size cap.
     if policy.max_bytes > 0 && text.len() > policy.max_bytes {
         return PasteResult::TooLarge(text.len());
     }
 
-    if !bracketed {
+    if mode == PasteMode::Plain {
         return PasteResult::Ok(text.as_bytes().to_vec());
     }
 
@@ -107,32 +119,32 @@ mod tests {
 
     #[test]
     fn bracketed_paste_wraps_text() {
-        let result = encode_paste("hello", true, &PastePolicy::default());
+        let result = encode_paste("hello", PasteMode::Bracketed, &PastePolicy::default());
         assert_eq!(result, PasteResult::Ok(b"\x1b[200~hello\x1b[201~".to_vec()));
     }
 
     #[test]
     fn plain_paste_passes_through() {
-        let result = encode_paste("hello", false, &PastePolicy::default());
+        let result = encode_paste("hello", PasteMode::Plain, &PastePolicy::default());
         assert_eq!(result, PasteResult::Ok(b"hello".to_vec()));
     }
 
     #[test]
     fn empty_text_bracketed() {
-        let result = encode_paste("", true, &PastePolicy::default());
+        let result = encode_paste("", PasteMode::Bracketed, &PastePolicy::default());
         assert_eq!(result, PasteResult::Ok(b"\x1b[200~\x1b[201~".to_vec()));
     }
 
     #[test]
     fn empty_text_plain() {
-        let result = encode_paste("", false, &PastePolicy::default());
+        let result = encode_paste("", PasteMode::Plain, &PastePolicy::default());
         assert_eq!(result, PasteResult::Ok(b"".to_vec()));
     }
 
     #[test]
     fn embedded_end_marker_is_stripped() {
         let text = "safe\x1b[201~malicious";
-        let result = encode_paste(text, true, &PastePolicy::default());
+        let result = encode_paste(text, PasteMode::Bracketed, &PastePolicy::default());
         assert_eq!(
             result,
             PasteResult::Ok(b"\x1b[200~safemalicious\x1b[201~".to_vec())
@@ -142,7 +154,7 @@ mod tests {
     #[test]
     fn embedded_start_marker_is_stripped() {
         let text = "text\x1b[200~more";
-        let result = encode_paste(text, true, &PastePolicy::default());
+        let result = encode_paste(text, PasteMode::Bracketed, &PastePolicy::default());
         assert_eq!(
             result,
             PasteResult::Ok(b"\x1b[200~textmore\x1b[201~".to_vec())
@@ -152,7 +164,7 @@ mod tests {
     #[test]
     fn multiple_embedded_markers_stripped() {
         let text = "a\x1b[201~b\x1b[200~c\x1b[201~d";
-        let result = encode_paste(text, true, &PastePolicy::default());
+        let result = encode_paste(text, PasteMode::Bracketed, &PastePolicy::default());
         assert_eq!(result, PasteResult::Ok(b"\x1b[200~abcd\x1b[201~".to_vec()));
     }
 
@@ -161,7 +173,7 @@ mod tests {
         // A partial marker like "\x1b[201" (without ~) should NOT be stripped —
         // it is not a complete paste terminator.
         let text = "text\x1b[201x";
-        let result = encode_paste(text, true, &PastePolicy::default());
+        let result = encode_paste(text, PasteMode::Bracketed, &PastePolicy::default());
         assert_eq!(
             result,
             PasteResult::Ok(b"\x1b[200~text\x1b[201x\x1b[201~".to_vec())
@@ -171,7 +183,7 @@ mod tests {
     #[test]
     fn nul_and_control_chars_preserved() {
         let text = "nul:\0ctrl:\u{0001}bell:\u{0007}";
-        let result = encode_paste(text, true, &PastePolicy::default());
+        let result = encode_paste(text, PasteMode::Bracketed, &PastePolicy::default());
         assert_eq!(
             result,
             PasteResult::Ok(b"\x1b[200~nul:\0ctrl:\x01bell:\x07\x1b[201~".to_vec())
@@ -181,7 +193,7 @@ mod tests {
     #[test]
     fn multiline_text_preserved() {
         let text = "line one\nline two\r\nline three";
-        let result = encode_paste(text, true, &PastePolicy::default());
+        let result = encode_paste(text, PasteMode::Bracketed, &PastePolicy::default());
         assert_eq!(
             result,
             PasteResult::Ok(b"\x1b[200~line one\nline two\r\nline three\x1b[201~".to_vec())
@@ -191,7 +203,7 @@ mod tests {
     #[test]
     fn unicode_preserved() {
         let text = "Héllo, 世界 🎉";
-        let result = encode_paste(text, true, &PastePolicy::default());
+        let result = encode_paste(text, PasteMode::Bracketed, &PastePolicy::default());
         assert_eq!(
             result,
             PasteResult::Ok(format!("\x1b[200~{text}\x1b[201~").into_bytes())
@@ -201,7 +213,7 @@ mod tests {
     #[test]
     fn large_text_within_limit() {
         let large = "x".repeat(1024 * 1024);
-        let result = encode_paste(&large, true, &PastePolicy::default());
+        let result = encode_paste(&large, PasteMode::Bracketed, &PastePolicy::default());
         match result {
             PasteResult::Ok(bytes) => {
                 assert_eq!(bytes.len(), large.len() + 12);
@@ -214,7 +226,7 @@ mod tests {
     fn text_exceeding_max_is_rejected() {
         let policy = PastePolicy { max_bytes: 100 };
         let large = "x".repeat(200);
-        let result = encode_paste(&large, true, &policy);
+        let result = encode_paste(&large, PasteMode::Bracketed, &policy);
         assert_eq!(result, PasteResult::TooLarge(200));
     }
 
@@ -222,7 +234,7 @@ mod tests {
     fn zero_max_means_unlimited() {
         let policy = PastePolicy { max_bytes: 0 };
         let large = "x".repeat(1024 * 1024 + 1);
-        let result = encode_paste(&large, false, &policy);
+        let result = encode_paste(&large, PasteMode::Plain, &policy);
         assert!(matches!(result, PasteResult::Ok(_)));
     }
 
@@ -231,7 +243,7 @@ mod tests {
         // In plain mode, markers are left in place — the terminal is not in
         // bracketed paste mode, so ESC sequences are interpreted normally.
         let text = "text\x1b[201~more";
-        let result = encode_paste(text, false, &PastePolicy::default());
+        let result = encode_paste(text, PasteMode::Plain, &PastePolicy::default());
         assert_eq!(result, PasteResult::Ok(text.as_bytes().to_vec()));
     }
 
@@ -239,7 +251,7 @@ mod tests {
     fn esc_byte_without_marker_preserved() {
         // A bare ESC not followed by a paste marker should be preserved.
         let text = "text\x1b[0mcolor";
-        let result = encode_paste(text, true, &PastePolicy::default());
+        let result = encode_paste(text, PasteMode::Bracketed, &PastePolicy::default());
         assert_eq!(
             result,
             PasteResult::Ok(b"\x1b[200~text\x1b[0mcolor\x1b[201~".to_vec())

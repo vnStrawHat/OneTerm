@@ -19,7 +19,7 @@ use alacritty_terminal::selection::SelectionRange;
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{RenderableCursor, Term, TermDamage, TermMode};
 
-use super::colors_util::is_default_background_color;
+use super::color_classification::is_default_background_color;
 
 /// A blank cell = space + default background + no decoration (hyperlink, underline,
 /// inverse…). Matches the UI's `is_blank` definition so the gutter and stamping

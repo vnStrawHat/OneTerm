@@ -20,9 +20,9 @@ use log::warn;
 use alacritty_terminal::event::{Event, EventListener};
 
 use oneterm_terminal::{
-    ColorFormatter, NotificationRateLimiter, Osc133Kind, OscPayload, PendingColorQuery,
-    SessionEvent, SharedColorQueries, TerminalError, TerminalSecurityPolicy, new_color_queries,
-    parse_cwd_url, parse_osc,
+    ClipboardOrigin, ColorFormatter, NotificationRateLimiter, Osc133Kind, OscPayload,
+    PendingColorQuery, SessionEvent, SharedColorQueries, TerminalError, TerminalSecurityPolicy,
+    new_color_queries, parse_cwd_url, parse_osc,
 };
 
 use crate::state::SharedState;
@@ -309,7 +309,10 @@ impl SshListener {
 
     fn set_clipboard(&self, text: String) {
         // SSH is remote: clipboard writes default off.
-        if let Some(validated) = self.security.validate_clipboard_write(&text, true) {
+        if let Some(validated) = self
+            .security
+            .validate_clipboard_write(&text, ClipboardOrigin::Remote)
+        {
             self.state.lock().unwrap().clipboard = Some(validated.to_string());
         }
     }
@@ -405,7 +408,10 @@ impl EventListener for SshListener {
             // ── Clipboard (OSC 52 set) ─────────────────────────────
             Event::ClipboardStore(_, text) => {
                 // SSH is remote: clipboard writes default off.
-                if let Some(validated) = self.security.validate_clipboard_write(&text, true) {
+                if let Some(validated) = self
+                    .security
+                    .validate_clipboard_write(&text, ClipboardOrigin::Remote)
+                {
                     let validated = validated.to_string();
                     self.set_clipboard(text);
                     self.forward(SessionEvent::Clipboard(Some(validated)));
@@ -413,7 +419,7 @@ impl EventListener for SshListener {
             }
             Event::ClipboardLoad(_, _) => {
                 // SSH is remote: clipboard reads default off.
-                if self.security.allow_clipboard_read(true) {
+                if self.security.allow_clipboard_read(ClipboardOrigin::Remote) {
                     self.forward(SessionEvent::ClipboardRead);
                 } else {
                     log::debug!("SSH: OSC 52 clipboard read refused (remote default off)");
