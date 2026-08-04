@@ -59,7 +59,7 @@ pub fn parse_hex(hex: &str) -> Option<Hsla> {
 }
 
 /// Convert 8-bit RGB(A) to `Hsla` (same algorithm as gpui's `Rgba::to_hsla`).
-pub fn rgb_to_hsla(r: u8, g: u8, b: u8, a: u8) -> Hsla {
+fn rgb_to_hsla(r: u8, g: u8, b: u8, a: u8) -> Hsla {
     let r = r as f32 / 255.0;
     let g = g as f32 / 255.0;
     let b = b as f32 / 255.0;

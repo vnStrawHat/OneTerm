@@ -15,13 +15,7 @@ pub(super) fn structural_scan(chars: &[char], classes: &mut [u8], rules: &RuleSe
     let s: String = chars.iter().collect();
 
     // Byte → char index map.
-    let mut byte_to_char: Vec<usize> = Vec::with_capacity(s.len() + 1);
-    let mut ci = 0;
-    for _ in s.char_indices() {
-        byte_to_char.push(ci);
-        ci += 1;
-    }
-    byte_to_char.push(ci);
+    let byte_to_char = super::byte_to_char_map(&s);
 
     let structural: [(&regex::Regex, Class); 3] = [
         (&rules.mac, Class::Mac),
@@ -88,8 +82,8 @@ fn try_ipv4(chars: &[char], start: usize) -> Option<usize> {
         while pos < n && chars[pos].is_ascii_digit() {
             pos += 1;
         }
-        let dlen = pos - digit_start;
-        if dlen == 0 || dlen > 3 {
+        let digit_len = pos - digit_start;
+        if digit_len == 0 || digit_len > 3 {
             return None;
         }
         // Validate octet value ≤ 255.
@@ -245,7 +239,7 @@ fn path_has_extension(span: &[char]) -> bool {
     last_seg
         .iter()
         .position(|&c| c == '.')
-        .map_or(false, |p| p > 0)
+        .is_some_and(|p| p > 0)
 }
 
 /// 5c. Number probe — hand-written scan for numeric literals.

@@ -3,7 +3,7 @@
 //! Each display row is classified as `Output`, `Prompt`, or `Command` from the
 //! OSC 133 stream (`PromptStart`/`PromptEnd`/`OutputStart`/`OutputEnd`). When
 //! shell integration is absent, the scanner falls back to the `ShellProfile`
-//! prompt regex (see [`crate::profile`]).
+//! prompt regex (see [`ShellProfile`](crate::ShellProfile)).
 //!
 //! See §4.2 and §Q1 of the design doc.
 

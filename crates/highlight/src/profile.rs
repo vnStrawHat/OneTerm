@@ -1,8 +1,10 @@
 //! Per-shell profile — only the prompt regex and path/option syntax differ.
 //!
 //! Everything else (keyword sets, structural regexes, probes) is shared in
-//! [`crate::rules::RuleSet`]. One `ShellProfile` per view, not 6 duplicate
+//! [`RuleSet`](crate::RuleSet). One `ShellProfile` per view, not 6 duplicate
 //! grammars. See §6 of the design doc.
+
+use std::sync::LazyLock;
 
 use regex::Regex;
 
@@ -78,30 +80,31 @@ impl ShellProfile {
 
 // ── Compiled prompt regexes (DFA, ReDoS-safe) ──────────────────────────────
 
-use std::sync::LazyLock;
-
 /// Unix prompt: line starts with optional path/user text, ends with `$` or
 /// `#` or `%` before the command. We match the *sign + optional trailing space*
 /// pattern at a reasonable position from the start of the line.
 static PROMPT_UNIX: LazyLock<Regex> = LazyLock::new(|| {
     // Accept leading non-whitespace (user@host:path) then a sign + space.
     // Also accept a bare sign at column 0.
-    Regex::new(r"^(?:[^\s]*[\$#%][ ]?)|(?:^[#\$%][ ]?)").unwrap()
+    Regex::new(r"^(?:[^\s]*[\$#%][ ]?)|(?:^[#\$%][ ]?)").expect("Unix prompt regex is valid")
 });
 
 /// cmd.exe prompt: `C:\path>` or `>`. The trailing space is optional so the
 /// prompt is detected even when the user has typed right after `>` (the blank
 /// cell after `>` is replaced by the typed char, removing the trailing space).
-static PROMPT_CMD: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(?:[A-Za-z]:[^\s>]*>[ ]?)|(?:^>[ ]?)").unwrap());
+static PROMPT_CMD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:[A-Za-z]:[^\s>]*>[ ]?)|(?:^>[ ]?)").expect("cmd prompt regex is valid")
+});
 
 /// PowerShell prompt: `PS C:\path>` or `>>`.
-static PROMPT_PWSH: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(?:PS[^\s>]*>[ ]?)|(?:^>+[ ]?)").unwrap());
+static PROMPT_PWSH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:PS[^\s>]*>[ ]?)|(?:^>+[ ]?)").expect("PowerShell prompt regex is valid")
+});
 
 /// Dumb / serial / router — most permissive: any of `$ # % > → »` + optional space.
-static PROMPT_DUMB: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(?:[^\s]*[\$#%>»][ ]?)|(?:^[\$#%>»][ ]?)").unwrap());
+static PROMPT_DUMB: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:[^\s]*[\$#%>»][ ]?)|(?:^[\$#%>»][ ]?)").expect("dumb prompt regex is valid")
+});
 
 #[cfg(test)]
 mod tests {

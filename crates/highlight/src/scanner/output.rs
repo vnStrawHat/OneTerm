@@ -212,13 +212,7 @@ fn keyword_scan(chars: &[char], classes: &mut [u8], rules: &RuleSet) {
     let s: String = chars.iter().collect();
 
     // Precompute byte offset → char index mapping.
-    let mut byte_to_char: Vec<usize> = Vec::with_capacity(s.len() + 1);
-    let mut char_idx = 0;
-    for _ in s.char_indices() {
-        byte_to_char.push(char_idx);
-        char_idx += 1;
-    }
-    byte_to_char.push(char_idx); // sentinel for end
+    let byte_to_char = super::byte_to_char_map(&s);
 
     for m in rules.keywords.find_iter(&s) {
         let pat = m.pattern();

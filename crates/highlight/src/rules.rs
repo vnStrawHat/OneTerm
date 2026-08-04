@@ -14,7 +14,7 @@ use crate::class::Class;
 // ── Keyword vocabulary (Rust statics for v1 — see §Q2) ─────────────────────
 
 /// Error keywords → [`Class::Error`].
-pub const ERROR_WORDS: &[&str] = &[
+const ERROR_WORDS: &[&str] = &[
     "bad",
     "cannot",
     "denied",
@@ -38,7 +38,7 @@ pub const ERROR_WORDS: &[&str] = &[
 ];
 
 /// Success keywords → [`Class::Success`].
-pub const SUCCESS_WORDS: &[&str] = &[
+const SUCCESS_WORDS: &[&str] = &[
     "can",
     "correct",
     "correctly",
@@ -56,7 +56,7 @@ pub const SUCCESS_WORDS: &[&str] = &[
 ];
 
 /// Warning keywords → [`Class::Warn`].
-pub const WARN_WORDS: &[&str] = &[
+const WARN_WORDS: &[&str] = &[
     "closed",
     "disconnected",
     "exited",
@@ -69,7 +69,7 @@ pub const WARN_WORDS: &[&str] = &[
 ];
 
 /// Info keywords → [`Class::Info`].
-pub const INFO_WORDS: &[&str] = &[
+const INFO_WORDS: &[&str] = &[
     "access",
     "authentication",
     "connection",
@@ -82,7 +82,7 @@ pub const INFO_WORDS: &[&str] = &[
 ];
 
 /// Debug keywords → [`Class::Debug`].
-pub const DEBUG_WORDS: &[&str] = &["debug", "trace", "verbose"];
+const DEBUG_WORDS: &[&str] = &["debug", "trace", "verbose"];
 
 /// All keyword patterns in priority order. Order matters for ties (same
 /// length, different class): earlier patterns win. We put more specific
@@ -108,15 +108,15 @@ const ALL_CLASSES: &[Class] = &[
 /// Compiled rule set — one Aho-Corasick over all keywords + structural regexes.
 pub struct RuleSet {
     /// One Aho-Corasick automaton over all keyword patterns.
-    pub keywords: AhoCorasick,
+    pub(crate) keywords: AhoCorasick,
     /// Parallel to the Aho-Corasick patterns → which `Class` each pattern maps to.
-    pub keyword_class: Vec<Class>,
+    pub(crate) keyword_class: Vec<Class>,
     /// IPv6 address regex.
-    pub ipv6: regex::Regex,
+    pub(crate) ipv6: regex::Regex,
     /// MAC address regex.
-    pub mac: regex::Regex,
+    pub(crate) mac: regex::Regex,
     /// Date/time regex.
-    pub datetime: regex::Regex,
+    pub(crate) datetime: regex::Regex,
 }
 
 impl RuleSet {
@@ -177,7 +177,7 @@ impl RuleSet {
     }
 
     /// Map a keyword pattern index → `Class`.
-    pub fn class_for_pattern(&self, pattern_idx: usize) -> Class {
+    pub(crate) fn class_for_pattern(&self, pattern_idx: usize) -> Class {
         self.keyword_class
             .get(pattern_idx)
             .copied()
