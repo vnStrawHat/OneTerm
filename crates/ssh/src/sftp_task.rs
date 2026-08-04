@@ -140,16 +140,16 @@ pub(crate) async fn sftp_task(
                     remote.display()
                 );
                 let cancel = CancellationToken::new();
-                let mut active = cancels
-                    .lock()
-                    .expect("SFTP cancellation map is not poisoned");
-                if active.contains_key(&transfer_id) {
-                    let _ = reply.try_send(Err(AppError::msg(format!(
-                        "duplicate active transfer id: {transfer_id}"
-                    ))));
-                    continue;
+                {
+                    let mut active = cancels.lock().unwrap();
+                    if active.contains_key(&transfer_id) {
+                        let _ = reply.try_send(Err(AppError::msg(format!(
+                            "duplicate active transfer id: {transfer_id}"
+                        ))));
+                        continue;
+                    }
+                    active.insert(transfer_id, cancel.clone());
                 }
-                active.insert(transfer_id, cancel.clone());
                 let sftp = Arc::clone(&sftp);
                 let cancels = Arc::clone(&cancels);
                 background_tasks.spawn(async move {
@@ -175,16 +175,16 @@ pub(crate) async fn sftp_task(
                     local.display()
                 );
                 let cancel = CancellationToken::new();
-                let mut active = cancels
-                    .lock()
-                    .expect("SFTP cancellation map is not poisoned");
-                if active.contains_key(&transfer_id) {
-                    let _ = reply.try_send(Err(AppError::msg(format!(
-                        "duplicate active transfer id: {transfer_id}"
-                    ))));
-                    continue;
+                {
+                    let mut active = cancels.lock().unwrap();
+                    if active.contains_key(&transfer_id) {
+                        let _ = reply.try_send(Err(AppError::msg(format!(
+                            "duplicate active transfer id: {transfer_id}"
+                        ))));
+                        continue;
+                    }
+                    active.insert(transfer_id, cancel.clone());
                 }
-                active.insert(transfer_id, cancel.clone());
                 let sftp = Arc::clone(&sftp);
                 let cancels = Arc::clone(&cancels);
                 background_tasks.spawn(async move {
@@ -199,11 +199,7 @@ pub(crate) async fn sftp_task(
             }
             Ok(SftpCmd::Cancel { transfer_id }) => {
                 log::info!("sftp_task: Cancel transfer #{transfer_id}");
-                let cancel = cancels
-                    .lock()
-                    .expect("SFTP cancellation map is not poisoned")
-                    .get(&transfer_id)
-                    .cloned();
+                let cancel = cancels.lock().unwrap().get(&transfer_id).cloned();
                 if let Some(cancel) = cancel {
                     cancel.cancel();
                     log::info!("sftp_task: Cancel #{transfer_id} — token signalled");
@@ -213,22 +209,14 @@ pub(crate) async fn sftp_task(
             }
             Ok(SftpCmd::Close) => {
                 log::info!("sftp_task: close requested");
-                for cancellation in cancels
-                    .lock()
-                    .expect("SFTP cancellation map is not poisoned")
-                    .values()
-                {
+                for cancellation in cancels.lock().unwrap().values() {
                     cancellation.cancel();
                 }
                 break;
             }
             Err(_) => {
                 log::info!("sftp_task: cmd_rx closed — session dropped");
-                for cancellation in cancels
-                    .lock()
-                    .expect("SFTP cancellation map is not poisoned")
-                    .values()
-                {
+                for cancellation in cancels.lock().unwrap().values() {
                     cancellation.cancel();
                 }
                 break;
@@ -258,10 +246,7 @@ pub(crate) async fn sftp_task(
             }
         }
     }
-    cancels
-        .lock()
-        .expect("SFTP cancellation map is not poisoned")
-        .clear();
+    cancels.lock().unwrap().clear();
 
     {
         let mut a = alive.lock().unwrap();
@@ -279,4 +264,4 @@ pub(crate) fn map_sftp_err(e: russh_sftp::client::error::Error) -> AppError {
 }
 
 #[cfg(test)]
-mod tests;
+mod sftp_task_tests;

@@ -8,14 +8,14 @@
 
 pub mod config;
 pub(crate) mod counting_stream;
-pub mod handler;
+pub(crate) mod handler;
 pub mod listener;
 pub mod session;
-pub mod session_terminal;
+pub(crate) mod session_terminal;
 pub mod sftp;
-pub mod sftp_task;
-pub mod state;
-pub mod task;
+pub(crate) mod sftp_task;
+pub(crate) mod state;
+pub(crate) mod task;
 
 pub use config::{SshAuthMethod, SshConfig};
 pub use listener::{Cmd, SshListener};

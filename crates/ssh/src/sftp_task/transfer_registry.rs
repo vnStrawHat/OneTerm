@@ -25,9 +25,6 @@ impl ActiveTransferGuard {
 
 impl Drop for ActiveTransferGuard {
     fn drop(&mut self) {
-        self.transfers
-            .lock()
-            .expect("SFTP cancellation map is not poisoned")
-            .remove(&self.transfer_id);
+        self.transfers.lock().unwrap().remove(&self.transfer_id);
     }
 }
