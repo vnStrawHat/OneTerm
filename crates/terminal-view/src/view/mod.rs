@@ -432,8 +432,7 @@ impl LocalTerminalView {
             let grouping = oneterm_state::Grouping {
                 tab_key,
                 tab_title: p.tab_label_with_title(live_title.as_deref(), cx),
-                space_label: p.space_label(sc.space_id),
-                space_active: p.is_space_active(sc.space_id),
+                space_index: p.space_index(sc.space_id),
             };
             let nav = crate::agent::AgentNav {
                 tab_panel: p.tab_panel_weak(),

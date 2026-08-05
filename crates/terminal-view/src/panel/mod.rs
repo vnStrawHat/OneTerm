@@ -374,21 +374,12 @@ impl TerminalPanel {
         self.effective_tab_label(live)
     }
 
-    /// The Agent Panel Space label for `space_id`: `single` for a one-Space tab,
-    /// else `#N` (SpaceTree depth-first order — `docs/agent-panel-display.md` §5.1).
-    pub fn space_label(&self, space_id: SpaceId) -> String {
-        if self.tree.leaf_count() <= 1 {
-            return "single".to_string();
-        }
-        match self.tree.leaf_index(space_id) {
-            Some(i) => format!("#{}", i + 1),
-            None => "single".to_string(),
-        }
-    }
-
-    /// Whether `space_id` is the focused Space *and* this tab is the active tab.
-    pub fn is_space_active(&self, space_id: SpaceId) -> bool {
-        self.is_active && self.tree.active() == space_id
+    /// The Agent Panel Space ordering index for `space_id`: the 0-based
+    /// depth-first (left→right) position in the `SpaceTree`. Drives both the
+    /// fixed within-tab card order and the `#N` label
+    /// (`docs/agent-panel-display.md` §5.1). `0` for a single-Space tab.
+    pub fn space_index(&self, space_id: SpaceId) -> u64 {
+        self.tree.leaf_index(space_id).unwrap_or(0) as u64
     }
 
     /// A weak handle to the containing `TabPanel` (for Agent Panel click-to-focus).

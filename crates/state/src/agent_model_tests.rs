@@ -11,8 +11,7 @@ fn card() -> AgentCard {
         &Grouping {
             tab_key: EntityId::from(2u64),
             tab_title: "t".into(),
-            space_label: "single".into(),
-            space_active: false,
+            space_index: 0,
         },
     )
 }

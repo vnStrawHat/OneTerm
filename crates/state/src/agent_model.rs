@@ -220,10 +220,9 @@ pub struct Grouping {
     pub tab_key: EntityId,
     /// Tab title (resolved OSC 0/2 title or fallback).
     pub tab_title: String,
-    /// `single` for a one-Space tab, else `#N` (SpaceTree order).
-    pub space_label: String,
-    /// Whether this agent's Space is the focused one.
-    pub space_active: bool,
+    /// 0-based depth-first position of the agent's Space in the `SpaceTree` —
+    /// the fixed within-tab card ordering key and the `#N` display label.
+    pub space_index: u64,
 }
 
 // ── The folded per-agent card ───────────────────────────────────────────
@@ -236,8 +235,7 @@ pub struct AgentCard {
     pub agent_id: String,
     pub tab_key: EntityId,
     pub tab_title: String,
-    pub space_label: String,
-    pub space_active: bool,
+    pub space_index: u64,
 
     // ── lifecycle (from `state` / `session`) ──
     pub state: AgentState,
@@ -278,8 +276,7 @@ impl AgentCard {
             agent_id,
             tab_key: grouping.tab_key,
             tab_title: grouping.tab_title.clone(),
-            space_label: grouping.space_label.clone(),
-            space_active: grouping.space_active,
+            space_index: grouping.space_index,
             state: AgentState::Idle,
             message: None,
             session_id: None,

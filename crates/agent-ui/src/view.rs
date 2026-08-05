@@ -60,11 +60,15 @@ fn build_display_groups(cards: &[AgentCard]) -> Vec<AgentDisplayGroup> {
         groups[group_index].card_indices.push(card_index);
     }
     for group in &mut groups {
+        // Fixed within-tab order keyed by the Space's depth-first index, so cards
+        // no longer jump around as agent state or event-arrival changes. Ties
+        // (several agents sharing one Space) keep first-seen registry order via
+        // the ascending insertion index.
         group.card_indices.sort_by(|&a, &b| {
             cards[a]
-                .sort_rank()
-                .cmp(&cards[b].sort_rank())
-                .then(cards[b].last_recv.cmp(&cards[a].last_recv))
+                .space_index
+                .cmp(&cards[b].space_index)
+                .then(a.cmp(&b))
         });
     }
     groups

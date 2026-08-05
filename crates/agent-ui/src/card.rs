@@ -128,9 +128,9 @@ fn state_indicator(card: &AgentCard, pal: &Palette) -> AnyElement {
 fn lifecycle_summary(card: &AgentCard, pal: &Palette) -> AnyElement {
     let color = lifecycle_color(card, pal);
     let text = format!(
-        "{} {}: {}",
+        "{} #{}: {}",
         card.agent_id,
-        space_label_text(&card.space_label),
+        card.space_index,
         liveness_word(card)
     );
 
@@ -149,14 +149,6 @@ fn lifecycle_summary(card: &AgentCard, pal: &Palette) -> AnyElement {
                 .child(text),
         )
         .into_any_element()
-}
-
-fn space_label_text(label: &str) -> String {
-    if label == "single" {
-        "#0".to_string()
-    } else {
-        label.to_string()
-    }
 }
 
 /// Format a token count compactly: `84500 → 84.5k`, `200000 → 200k`.
