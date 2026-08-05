@@ -41,14 +41,14 @@ use oneterm_sftp_ui::SftpPanel;
 /// The feature-agnostic shell builds this panel *by name* via
 /// `build_named_panel("ssh_client_panel", ...)` — it never depends on the
 /// concrete type. Saved layouts deserialize by this name too.
-pub const SSH_CLIENT_PANEL_NAME: &str = "ssh_client_panel";
+pub(crate) const SSH_CLIENT_PANEL_NAME: &str = "ssh_client_panel";
 
 /// Combined right-dock panel for SSH Client Mode: a vertical resizable split of
 /// [`SessionPanel`] (top) + [`SftpPanel`] (bottom), each with its own header.
 ///
 /// `panel_name = "ssh_client_panel"`. Rendered raw as a `DockItem::Panel`, so
 /// it draws its own title bars + the resize split between the two sections.
-pub struct SshClientPanel {
+pub(crate) struct SshClientPanel {
     focus_handle: FocusHandle,
     session: Entity<SessionPanel>,
     sftp: Entity<SftpPanel>,
@@ -56,7 +56,7 @@ pub struct SshClientPanel {
 
 impl SshClientPanel {
     /// Create a new SSH Client panel.
-    pub fn new(
+    pub(crate) fn new(
         dock_area: gpui::WeakEntity<DockArea>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -72,7 +72,7 @@ impl SshClientPanel {
     }
 
     /// Helper to create an `Entity<Self>`.
-    pub fn new_entity(
+    pub(crate) fn new_entity(
         dock_area: gpui::WeakEntity<DockArea>,
         window: &mut Window,
         cx: &mut App,
@@ -189,7 +189,7 @@ impl Render for SshClientPanel {
 /// panel with the gpui-component `PanelRegistry` so the shell can build it by
 /// name and saved layouts can deserialize it. Called by the app aggregator
 /// ([`crate::init::init`]).
-pub fn init(cx: &mut App) {
+pub(crate) fn init(cx: &mut App) {
     register_panel(cx, SSH_CLIENT_PANEL_NAME, |dock_area, _, _, window, cx| {
         Box::new(SshClientPanel::new_entity(dock_area, window, cx))
     });

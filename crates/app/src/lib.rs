@@ -10,12 +10,12 @@ use std::borrow::Cow;
 
 use oneterm_workspace::OneTermWorkspace;
 
-pub mod agent_panel;
-pub mod assets;
-pub mod init;
-pub mod session_factory;
-pub mod ssh_client_panel;
-pub mod window;
+mod agent_panel;
+mod assets;
+mod init;
+mod session_factory;
+mod ssh_client_panel;
+mod window;
 
 use assets::CustomAssets;
 

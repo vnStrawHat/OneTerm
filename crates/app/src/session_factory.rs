@@ -34,6 +34,6 @@ impl SessionFactory for AppSessionFactory {
 }
 
 /// Build the app's session factory for the application service bundle.
-pub fn build() -> Arc<dyn SessionFactory> {
+pub(crate) fn build() -> Arc<dyn SessionFactory> {
     Arc::new(AppSessionFactory)
 }

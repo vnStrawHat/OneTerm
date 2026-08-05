@@ -14,7 +14,7 @@ use oneterm_settings_ui::start_auto_check;
 use oneterm_workspace::{OneTermWorkspace, save_dock_state_on_close};
 
 /// Open the main window and return its task handle.
-pub fn open_window(cx: &mut App) -> Task<anyhow::Result<WindowHandle<Root>>> {
+pub(crate) fn open_window(cx: &mut App) -> Task<anyhow::Result<WindowHandle<Root>>> {
     let mut window_size = size(px(1600.0), px(1000.0));
     if let Some(display) = cx.primary_display() {
         let display_size = display.bounds().size;
@@ -43,8 +43,7 @@ pub fn open_window(cx: &mut App) -> Task<anyhow::Result<WindowHandle<Root>>> {
 
         let window = cx.open_window(options, |window, cx| {
             let workspace = cx.new(|cx| OneTermWorkspace::new(window, cx));
-            let root = cx.new(|cx| Root::new(workspace, window, cx));
-            root
+            cx.new(|cx| Root::new(workspace, window, cx))
         })?;
 
         window

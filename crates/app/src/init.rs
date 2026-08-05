@@ -17,7 +17,7 @@ use oneterm_state::{AppServices, AppState, GlobalCompletionHistory};
 ///
 /// `gpui_component::init(cx)` (called in [`crate::run`]) already initializes the
 /// theme, dock, root, and `PanelRegistry`. This runs afterwards.
-pub fn init(cx: &mut App) {
+pub(crate) fn init(cx: &mut App) {
     // Shared globals. `UiConfig` first so the saved theme/font apply in
     // `theme::init`.
     UiConfig::init(cx);

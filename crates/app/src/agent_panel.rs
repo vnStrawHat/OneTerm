@@ -29,20 +29,20 @@ use oneterm_agent_ui::AgentListView;
 /// The feature-agnostic shell builds this panel *by name* via
 /// `build_named_panel("agent_panel", ...)` — it never depends on the concrete
 /// type. Saved layouts deserialize by this name too.
-pub const AGENT_PANEL_NAME: &str = "agent_panel";
+pub(crate) const AGENT_PANEL_NAME: &str = "agent_panel";
 
 /// Right-dock panel for Agent Mode.
 ///
 /// `panel_name = "agent_panel"`. Rendered raw as a `DockItem::Panel`; hosts the
 /// [`AgentListView`] which renders its own header + scrolling card column.
-pub struct AgentPanel {
+pub(crate) struct AgentPanel {
     focus_handle: FocusHandle,
     list: Entity<AgentListView>,
 }
 
 impl AgentPanel {
     /// Create a new Agent panel.
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
             list: AgentListView::new_entity(window, cx),
@@ -50,7 +50,7 @@ impl AgentPanel {
     }
 
     /// Helper to create an `Entity<Self>`.
-    pub fn new_entity(window: &mut Window, cx: &mut App) -> Entity<Self> {
+    pub(crate) fn new_entity(window: &mut Window, cx: &mut App) -> Entity<Self> {
         cx.new(|cx| Self::new(window, cx))
     }
 }
@@ -112,7 +112,7 @@ impl Render for AgentPanel {
 /// Initialize the Agent panel: register the `"agent_panel"` dock panel with the
 /// gpui-component `PanelRegistry` so the shell can build it by name and saved
 /// layouts can deserialize it. Called by the app aggregator ([`crate::init::init`]).
-pub fn init(cx: &mut App) {
+pub(crate) fn init(cx: &mut App) {
     register_panel(cx, AGENT_PANEL_NAME, |_, _, _, window, cx| {
         Box::new(AgentPanel::new_entity(window, cx))
     });
