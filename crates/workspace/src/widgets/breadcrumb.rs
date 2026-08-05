@@ -13,9 +13,9 @@
 //!
 //! Hidden when no active terminal panel has a breadcrumb (e.g. no cwd yet).
 
-use gpui::prelude::FluentBuilder as _;
 use std::time::Duration;
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext as _, ClickEvent, ClipboardItem, Context, Entity, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, ParentElement, Render, StatefulInteractiveElement,

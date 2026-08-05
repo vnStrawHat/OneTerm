@@ -55,8 +55,9 @@ pub struct ResourceIndicator {
     focus_handle: FocusHandle,
     /// `sysinfo` system handle — kept across ticks so CPU deltas are meaningful.
     sys: System,
-    /// PID of the current process (OneTerm).
-    pid: Pid,
+    /// PID of the current process (OneTerm). `None` on platforms where `sysinfo`
+    /// cannot resolve the current PID — the indicator then reports 0% / 0 bytes.
+    pid: Option<Pid>,
     /// Latest CPU usage (%) normalised to total system (100% = all cores) —
     /// matches Task Manager. 0.0 on the first tick.
     cpu_usage: f32,
@@ -70,14 +71,23 @@ impl ResourceIndicator {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
 
-        // Resolve the current PID — fails only on unsupported platforms.
-        let pid = sysinfo::get_current_pid().expect("sysinfo: get_current_pid failed");
+        // Resolve the current PID — fails only on unsupported platforms. Degrade
+        // to an idle indicator rather than panicking if it is unavailable.
+        let pid = match sysinfo::get_current_pid() {
+            Ok(pid) => Some(pid),
+            Err(error) => {
+                log::warn!("sysinfo: failed to resolve current PID: {error}");
+                None
+            }
+        };
 
         // Seed the System with an initial refresh so the first timer tick gets a
         // real CPU delta instead of 0%. This also lazily initialises the CPU list
         // (needed for nb_cpus normalisation).
         let mut sys = System::new();
-        sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+        if let Some(pid) = pid {
+            sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+        }
 
         let timer = cx.spawn_in(window, async move |this, window| {
             loop {
@@ -110,10 +120,14 @@ impl ResourceIndicator {
 
     /// Refresh process stats from `sysinfo` and read CPU/memory.
     fn tick(&mut self, cx: &mut Context<Self>) {
-        self.sys
-            .refresh_processes(ProcessesToUpdate::Some(&[self.pid]), true);
+        let Some(pid) = self.pid else {
+            return;
+        };
 
-        if let Some(process) = self.sys.process(self.pid) {
+        self.sys
+            .refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+
+        if let Some(process) = self.sys.process(pid) {
             // sysinfo returns per-core CPU (100% = 1 core). Divide by nb_cpus
             // to get the total-system percentage that Task Manager shows.
             let nb_cpus = self.sys.cpus().len().max(1) as f32;
