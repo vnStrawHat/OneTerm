@@ -140,56 +140,6 @@ fn phase1_osc8_targets_are_policy_validated() {
     ));
 }
 
-// --- url_column_mask tests ---
-
-fn make_line_refs(cells: &[IndexedCell], row: usize, num_cols: usize) -> Vec<&IndexedCell> {
-    cells[row * num_cols..(row + 1) * num_cols].iter().collect()
-}
-
-#[test]
-fn mask_detects_https_url() {
-    let cells = make_cells("visit https://example.com today", 30);
-    let line = make_line_refs(&cells, 0, 30);
-    let mask = url_column_mask(&line);
-    for col in 6..25 {
-        assert!(mask[col], "col {col} should be URL");
-    }
-    for col in 0..6 {
-        assert!(!mask[col], "col {col} should not be URL");
-    }
-}
-
-#[test]
-fn mask_detects_multiple_urls() {
-    let cells = make_cells("http://a.com https://b.com", 25);
-    let line = make_line_refs(&cells, 0, 25);
-    let mask = url_column_mask(&line);
-    for col in 0..12 {
-        assert!(mask[col], "col {col} should be URL");
-    }
-    assert!(!mask[12]);
-    for col in 13..25 {
-        assert!(mask[col], "col {col} should be URL");
-    }
-}
-
-#[test]
-fn mask_strips_trailing_punct() {
-    let cells = make_cells("link: https://example.com.", 26);
-    let line = make_line_refs(&cells, 0, 26);
-    let mask = url_column_mask(&line);
-    assert!(mask[6]);
-    assert!(!mask[25], "trailing dot should not be URL");
-}
-
-#[test]
-fn mask_no_url_in_plain_text() {
-    let cells = make_cells("hello world foo bar", 20);
-    let line = make_line_refs(&cells, 0, 20);
-    let mask = url_column_mask(&line);
-    assert!(mask.iter().all(|&v| !v));
-}
-
 // --- Wrap-aware tests ---
 
 /// Helper: set WRAPLINE on the last cell of `row`.

@@ -71,11 +71,6 @@ impl CompletionOverlay {
             hidden_below,
         }
     }
-
-    /// Whether there is anything to render.
-    pub fn is_empty(&self) -> bool {
-        self.rows.is_empty()
-    }
 }
 
 impl RenderOnce for CompletionOverlay {

@@ -10,7 +10,7 @@ mod detect;
 mod mask;
 
 pub use detect::detect_url_at;
-pub use mask::{url_column_mask, url_masks_wrapped};
+pub use mask::url_masks_wrapped;
 
 /// A URL detected at a position in the terminal.
 #[derive(Clone, Debug, PartialEq)]

@@ -11,7 +11,6 @@ use gpui::{
 };
 use gpui_component::ActiveTheme;
 use gpui_component::dock::{Panel, PanelControl, PanelEvent};
-use oneterm_core::LocalShellConfig;
 use oneterm_core::config::ShellKind;
 
 use oneterm_settings::TerminalSettings;
@@ -141,9 +140,4 @@ impl Render for TerminalSettingsPanel {
             .child(list)
             .child(hint)
     }
-}
-
-/// Return the current `LocalShellConfig` from global settings (used when spawning).
-pub fn current_shell_config(cx: &App) -> LocalShellConfig {
-    TerminalSettings::global(cx).read(cx).shell.clone()
 }

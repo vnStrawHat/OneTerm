@@ -2,7 +2,10 @@
 mod tests {
     use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb as VteRgb};
     use gpui::Hsla;
+    use oneterm_terminal::TerminalPalette;
 
+    use super::super::contrast::contrast_ratio;
+    use super::super::palette::{ANSI_16, rgba_from_vte};
     use super::super::*;
 
     fn pal() -> TerminalPalette {

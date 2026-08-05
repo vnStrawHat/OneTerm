@@ -190,7 +190,8 @@ pub(crate) fn attach_mouse(
                     }
                 };
                 let _ = view.update(cx, |v, cx| {
-                    let (total, vp, _, lh) = v.scroll_handle.state_info();
+                    let s = v.scroll_handle.state();
+                    let (total, vp, lh) = (s.total_lines, s.viewport_lines, s.line_height);
                     if lh <= 0.0 {
                         return;
                     }

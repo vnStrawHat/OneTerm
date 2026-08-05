@@ -1,6 +1,10 @@
 //! Unit tests for the gpui-free `CompletionController`.
 
-use super::*;
+use oneterm_completion::{CompletionHistory, ShellFamily};
+use oneterm_core::ShellKind;
+use oneterm_settings::CompletionSettings;
+
+use super::controller::{CompletionController, params_from_settings};
 
 fn settings() -> CompletionSettings {
     CompletionSettings::default()

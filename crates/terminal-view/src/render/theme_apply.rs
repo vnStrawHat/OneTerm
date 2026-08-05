@@ -1,7 +1,7 @@
 //! Apply color overrides from config → `TerminalTheme`.
 
 use super::super::theme::{TerminalTheme, hsla_from_vte, vte_from_rgba};
-use super::LocalTerminalView;
+use super::super::view::LocalTerminalView;
 use oneterm_settings::ColorOverrides;
 use oneterm_terminal::DynamicColors;
 

@@ -48,6 +48,8 @@ impl SpaceTree {
         let root = self.take_root();
         match close_transform(root, target, &mut removed) {
             Some(new_root) => self.set_root(new_root),
+            // Invariant: the early `leaf_count() <= 1` guard above ensures the
+            // tree has ≥ 2 leaves, so removing one always leaves a valid root.
             None => unreachable!("close guarded by leaf_count > 1"),
         }
 
@@ -97,6 +99,9 @@ fn split_transform(
     match node {
         SpaceNode::Leaf(leaf) => {
             if leaf.id == target {
+                // Invariant: `split` seeds `empty`/`state` as `Some` and this is
+                // the only site that takes them; we reach it exactly once (the
+                // first matching leaf), so both are still `Some` here.
                 let new_leaf = SpaceNode::Leaf(empty.take().expect("empty leaf present"));
                 let existing = SpaceNode::Leaf(leaf);
                 let children = if dir.new_after() {
@@ -107,6 +112,7 @@ fn split_transform(
                 SpaceNode::Split(SpaceSplit {
                     axis: dir.axis(),
                     children,
+                    // Invariant: taken once alongside `empty` (see above).
                     state: state.take().expect("state present"),
                 })
             } else {

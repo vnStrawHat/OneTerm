@@ -16,12 +16,13 @@ use gpui::{Pixels, Point, Size, px};
 use gpui_component::scroll::ScrollbarHandle;
 
 /// Cached scrollbar state — updated each frame from a snapshot + GridMetrics.
+/// Also returned by [`TerminalScrollHandle::state`] as the render-time snapshot.
 #[derive(Debug, Clone, Copy)]
-struct TerminalScrollState {
-    total_lines: usize,
-    viewport_lines: usize,
-    display_offset: usize,
-    line_height: f32,
+pub(crate) struct TerminalScrollState {
+    pub(crate) total_lines: usize,
+    pub(crate) viewport_lines: usize,
+    pub(crate) display_offset: usize,
+    pub(crate) line_height: f32,
 }
 
 impl Default for TerminalScrollState {
@@ -72,15 +73,9 @@ impl TerminalScrollHandle {
         self.future_display_offset.take()
     }
 
-    /// Returns (total_lines, viewport_lines, display_offset, line_height).
-    pub fn state_info(&self) -> (usize, usize, usize, f32) {
-        let s = self.state.borrow();
-        (
-            s.total_lines,
-            s.viewport_lines,
-            s.display_offset,
-            s.line_height,
-        )
+    /// The current cached scroll state (total/viewport/display-offset/line-height).
+    pub fn state(&self) -> TerminalScrollState {
+        *self.state.borrow()
     }
 }
 

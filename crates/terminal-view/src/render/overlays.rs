@@ -6,7 +6,7 @@ use gpui::{
 use gpui_component::Theme;
 use oneterm_terminal::TerminalProgress;
 
-use super::LocalTerminalView;
+use super::super::view::LocalTerminalView;
 
 impl LocalTerminalView {
     /// Taskbar progress overlay (OSC 9;4) — a thin bar along the top edge.

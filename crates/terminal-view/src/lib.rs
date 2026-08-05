@@ -1,26 +1,26 @@
 //! Terminal panel — each tab is one Terminal.
 
-pub mod agent;
-pub mod box_drawing;
-pub mod cell;
-pub mod completion;
+pub(crate) mod agent;
+pub(crate) mod box_drawing;
+pub(crate) mod cell;
+pub(crate) mod completion;
 #[cfg(any(test, feature = "terminal-diagnostics"))]
-pub mod diagnostics;
-pub mod element;
-pub mod handlers;
-pub mod highlight;
-pub mod ime;
-pub mod layout;
+pub(crate) mod diagnostics;
+pub(crate) mod element;
+pub(crate) mod handlers;
+pub(crate) mod highlight;
+pub(crate) mod ime;
+pub(crate) mod layout;
 pub mod panel;
-pub mod render;
-pub mod scrollbar;
-pub mod search;
-pub mod settings_panel;
-pub mod space;
-pub mod status;
-pub mod theme;
-pub mod url;
-pub mod view;
+pub(crate) mod render;
+pub(crate) mod scroll_handle;
+pub(crate) mod search;
+pub(crate) mod settings_panel;
+pub(crate) mod space;
+pub(crate) mod status;
+pub(crate) mod theme;
+pub(crate) mod url;
+pub(crate) mod view;
 
 #[cfg(any(test, feature = "terminal-diagnostics"))]
 pub use diagnostics::TerminalRenderDiagnostics;

@@ -14,11 +14,6 @@ pub fn to_gpui_hsla(c: Hsla) -> GpHsla {
     gpui::hsla(c.h / 360.0, c.s, c.l, c.a)
 }
 
-/// Convert an optional `highlight::Hsla` → optional `gpui::Hsla`.
-pub fn to_gpui(c: Option<Hsla>) -> Option<GpHsla> {
-    c.map(to_gpui_hsla)
-}
-
 /// Load the default semantic style block from the embedded asset JSON into a
 /// `ClassStyles`. This is merged under any per-theme overrides (callers apply
 /// overrides on top).

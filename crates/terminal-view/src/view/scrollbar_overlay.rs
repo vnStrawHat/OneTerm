@@ -20,7 +20,13 @@ impl LocalTerminalView {
         metrics: &Rc<RefCell<GridMetrics>>,
         cx: &mut Context<LocalTerminalView>,
     ) -> Option<impl IntoElement> {
-        let (total, viewport, display_offset, line_h) = self.scroll_handle.state_info();
+        let s = self.scroll_handle.state();
+        let (total, viewport, display_offset, line_h) = (
+            s.total_lines,
+            s.viewport_lines,
+            s.display_offset,
+            s.line_height,
+        );
 
         if total <= viewport || line_h <= 0.0 {
             return None;
@@ -89,7 +95,8 @@ impl LocalTerminalView {
                             }
                         };
                         let _ = view.update(cx, |v, cx| {
-                            let (total, vp, _, lh) = v.scroll_handle.state_info();
+                            let s = v.scroll_handle.state();
+                            let (total, vp, lh) = (s.total_lines, s.viewport_lines, s.line_height);
                             if lh <= 0.0 {
                                 return;
                             }
