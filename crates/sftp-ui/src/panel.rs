@@ -24,9 +24,8 @@ use gpui_component::input::{InputEvent, InputState};
 use gpui_component::table::{TableEvent, TableState};
 
 use oneterm_core::SftpBackend;
-use oneterm_terminal::CwdSource;
-
 use oneterm_state::AppState;
+use oneterm_terminal::CwdSource;
 
 use super::table_delegate::SftpTableDelegate;
 use super::types::{PendingAction, TransferItem};
@@ -100,14 +99,16 @@ pub struct SftpPanel {
 }
 
 impl SftpPanel {
-    /// Create a new panel — observe AppState, create DataTable state.
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    /// Create a new panel for the primary workspace. Test-only helper; production
+    /// builds panels bound to a specific dock via [`Self::new_in_workspace`].
+    #[cfg(test)]
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let workspace_id = AppState::primary_workspace_id(cx);
         Self::new_internal(workspace_id, window, cx)
     }
 
     /// Create a new panel bound to a specific dock/workspace.
-    pub fn new_in_workspace(
+    pub(crate) fn new_in_workspace(
         workspace_id: EntityId,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -212,11 +213,6 @@ impl SftpPanel {
         me.sync_from_app_state(sftp, cwd_source, cx);
 
         me
-    }
-
-    /// Helper to create an `Entity<Self>`.
-    pub fn new_entity(window: &mut Window, cx: &mut App) -> Entity<Self> {
-        cx.new(|cx| Self::new(window, cx))
     }
 
     /// Create an entity bound to a specific dock/workspace.

@@ -29,17 +29,6 @@ pub(crate) enum SortDir {
     Desc,
 }
 
-impl SortDir {
-    /// Toggle asc ↔ desc.
-    #[allow(dead_code)]
-    pub(crate) fn toggle(self) -> Self {
-        match self {
-            SortDir::Asc => SortDir::Desc,
-            SortDir::Desc => SortDir::Asc,
-        }
-    }
-}
-
 // ── Pending action (for context menu → render execution) ─────
 
 /// Action triggered from the context menu, executed in `render()`.
@@ -225,20 +214,6 @@ impl SortColumn {
             SortColumn::Group => "group",
         }
     }
-
-    /// Parse a key back into a `SortColumn`. `None` if the key is invalid.
-    #[allow(dead_code)]
-    pub(crate) fn from_key(key: &str) -> Option<Self> {
-        Some(match key {
-            "name" => SortColumn::Name,
-            "modified" => SortColumn::Modified,
-            "size" => SortColumn::Size,
-            "permissions" => SortColumn::Permissions,
-            "owner" => SortColumn::Owner,
-            "group" => SortColumn::Group,
-            _ => return None,
-        })
-    }
 }
 
 /// Definition of a column in the file list — display config + resize/visibility
@@ -250,9 +225,6 @@ pub(crate) struct SftpColumnConfig {
     pub key: &'static str,
     /// Header label.
     pub label: &'static str,
-    /// Default width (px) — used to reset.
-    #[allow(dead_code)]
-    pub default_width: f32,
     /// Minimum width (px) — resize limit.
     pub min_width: f32,
     /// Maximum width (px) — resize limit.
@@ -271,7 +243,6 @@ impl SftpColumnConfig {
             key: col.key(),
             col,
             label,
-            default_width,
             min_width: 40.0,
             max_width: 800.0,
             right_align,

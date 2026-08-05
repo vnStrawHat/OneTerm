@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use gpui::{App, Global};
 
@@ -114,44 +114,45 @@ struct SftpBrowserStoreData {
 ///
 /// Weak backend registrations let the store purge closed or dropped sessions
 /// without retaining protocol objects solely for UI history.
-pub struct SftpBrowserStore(std::sync::Mutex<SftpBrowserStoreData>);
+pub(crate) struct SftpBrowserStore(Mutex<SftpBrowserStoreData>);
 
 impl Global for SftpBrowserStore {}
 
 impl SftpBrowserStore {
+    /// Lock the store, recovering the guard if a previous holder panicked.
+    ///
+    /// The store only holds UI state (cwd, transfer snapshots), so a poisoned
+    /// lock never leaves protocol objects in an unsafe state — recovering keeps
+    /// the browser usable instead of cascading the panic across every caller.
+    fn lock(&self) -> MutexGuard<'_, SftpBrowserStoreData> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Get the global store, initializing an empty one if absent.
-    pub fn global(cx: &mut App) -> &Self {
+    pub(crate) fn global(cx: &mut App) -> &Self {
         if cx.try_global::<Self>().is_none() {
-            cx.set_global(Self(std::sync::Mutex::new(SftpBrowserStoreData::default())));
+            cx.set_global(Self(Mutex::new(SftpBrowserStoreData::default())));
         }
         cx.global::<Self>()
     }
 
     /// Register a live backend and ensure its state entry exists.
-    pub fn track_backend(&self, backend: &Arc<dyn SftpBackend>) -> BackendKey {
+    pub(crate) fn track_backend(&self, backend: &Arc<dyn SftpBackend>) -> BackendKey {
         let key = backend.session_id();
-        let mut data = self.0.lock().expect("SftpBrowserStore poisoned");
+        let mut data = self.lock();
         data.backends.insert(key, Arc::downgrade(backend));
         data.states.entry(key).or_default();
         key
     }
 
     /// Get the stored snapshot for `key` (cloned), or a default if absent.
-    pub fn get_or_default(&self, key: BackendKey) -> SftpBrowserState {
-        self.0
-            .lock()
-            .expect("SftpBrowserStore poisoned")
-            .states
-            .get(&key)
-            .cloned()
-            .unwrap_or_default()
+    pub(crate) fn get_or_default(&self, key: BackendKey) -> SftpBrowserState {
+        self.lock().states.get(&key).cloned().unwrap_or_default()
     }
 
     /// Return the immutable entry snapshot for a tracked backend.
-    pub fn entries(&self, key: BackendKey) -> Arc<[FileEntry]> {
-        self.0
-            .lock()
-            .expect("SftpBrowserStore poisoned")
+    pub(crate) fn entries(&self, key: BackendKey) -> Arc<[FileEntry]> {
+        self.lock()
             .states
             .get(&key)
             .map(|state| Arc::clone(&state.entries))
@@ -159,26 +160,26 @@ impl SftpBrowserStore {
     }
 
     /// Save a snapshot for a tracked backend (overwrites any existing entry).
-    pub fn save(&self, key: BackendKey, state: SftpBrowserState) {
-        let mut data = self.0.lock().expect("SftpBrowserStore poisoned");
+    pub(crate) fn save(&self, key: BackendKey, state: SftpBrowserState) {
+        let mut data = self.lock();
         if data.backends.contains_key(&key) {
             data.states.insert(key, state);
         }
     }
 
     /// Read+modify existing state for `key` without recreating purged sessions.
-    pub fn with_mut<R>(
+    pub(crate) fn with_mut<R>(
         &self,
         key: BackendKey,
         f: impl FnOnce(&mut SftpBrowserState) -> R,
     ) -> Option<R> {
-        let mut data = self.0.lock().expect("SftpBrowserStore poisoned");
+        let mut data = self.lock();
         data.states.get_mut(&key).map(f)
     }
 
     /// Purge browser snapshots whose backend has closed or been dropped.
-    pub fn purge_closed(&self) -> usize {
-        let mut data = self.0.lock().expect("SftpBrowserStore poisoned");
+    pub(crate) fn purge_closed(&self) -> usize {
+        let mut data = self.lock();
         let stale: Vec<_> = data
             .backends
             .iter()

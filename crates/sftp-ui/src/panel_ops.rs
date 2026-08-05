@@ -14,7 +14,7 @@ use super::types::SortColumn;
 
 impl SftpPanel {
     /// Read a directory — spawn a background task, does not block the UI.
-    pub fn load_dir(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+    pub(crate) fn load_dir(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         log::debug!("SftpPanel::load_dir: path=\"{}\"", path.display());
 
         let sftp = match &self.sftp {

@@ -5,6 +5,7 @@
 
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gpui::{App, AppContext, ClickEvent, Context, ParentElement, Styled, Window, div, px};
 use gpui_component::{
@@ -16,14 +17,41 @@ use gpui_component::{
     notification::NotificationType,
     v_flex,
 };
-
-use oneterm_core::FileStat;
+use oneterm_core::{FileStat, SftpBackend};
+use oneterm_state::notif_ext::notify;
 
 use super::panel::SftpPanel;
 use super::types::{format_date, format_owner, format_permissions, format_size};
-use oneterm_state::notif_ext::notify;
 
 impl SftpPanel {
+    /// Return the active SFTP backend, or notify the user and yield `None` when
+    /// none is available.
+    ///
+    /// These actions are only reachable while a backend is present, so `None`
+    /// reflects a race with a disconnect rather than normal operation.
+    fn require_sftp(
+        &self,
+        action: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Arc<dyn SftpBackend>> {
+        match self.sftp.clone() {
+            Some(sftp) => Some(sftp),
+            None => {
+                log::warn!("SftpPanel::{action}: no active SFTP backend");
+                window.push_notification(
+                    notify(
+                        NotificationType::Warning,
+                        "No active SFTP connection is available.",
+                        cx,
+                    ),
+                    cx,
+                );
+                None
+            }
+        }
+    }
+
     /// Rename selected entry.
     /// Opens a dialog with an InputState pre-filled with the current name → sftp.rename().
     pub(crate) fn do_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -45,7 +73,9 @@ impl SftpPanel {
 
         log::info!("SftpPanel::do_rename: \"{}\"", entry.name);
 
-        let sftp = self.sftp.clone().unwrap();
+        let Some(sftp) = self.require_sftp("do_rename", window, cx) else {
+            return;
+        };
         let panel = cx.entity();
         let from_path = entry.path.clone();
 
@@ -195,7 +225,9 @@ impl SftpPanel {
             entry.is_dir
         );
 
-        let sftp = self.sftp.clone().unwrap();
+        let Some(sftp) = self.require_sftp("do_delete", window, cx) else {
+            return;
+        };
         let panel = cx.entity();
         let path = entry.path.clone();
         let is_dir = entry.is_dir;
@@ -276,7 +308,9 @@ impl SftpPanel {
     pub(crate) fn do_new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         log::info!("SftpPanel::do_new_folder: cwd=\"{}\"", self.cwd.display());
 
-        let sftp = self.sftp.clone().unwrap();
+        let Some(sftp) = self.require_sftp("do_new_folder", window, cx) else {
+            return;
+        };
         let panel = cx.entity();
         let cwd = self.cwd.clone();
 
@@ -411,7 +445,9 @@ impl SftpPanel {
 
         log::info!("SftpPanel::do_properties: \"{}\"", entry.name);
 
-        let sftp = self.sftp.clone().unwrap();
+        let Some(sftp) = self.require_sftp("do_properties", window, cx) else {
+            return;
+        };
         let path = entry.path.clone();
         window
             .spawn(cx, async move |cx| {

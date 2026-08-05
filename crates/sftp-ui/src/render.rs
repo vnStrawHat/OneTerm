@@ -4,8 +4,6 @@
 //! The file list is rendered with `gpui_component::table::DataTable` — replacing
 //! the manual header + rows rendering in `render_list.rs` (removed).
 
-use super::panel::SftpPanel;
-use super::types::{PendingAction, SortColumn};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Context, ExternalPaths, Focusable as _, InteractiveElement as _, IntoElement, ParentElement,
@@ -22,6 +20,9 @@ use gpui_component::{
     v_flex,
 };
 use oneterm_theme::icon::AppIcon;
+
+use super::panel::SftpPanel;
+use super::types::{PendingAction, SortColumn};
 
 impl Render for SftpPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

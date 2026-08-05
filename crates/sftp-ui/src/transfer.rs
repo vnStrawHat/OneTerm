@@ -11,10 +11,10 @@ use std::path::PathBuf;
 use gpui::{Context, Window};
 use gpui_component::{WindowExt as _, notification::NotificationType};
 use oneterm_core::AppError;
+use oneterm_state::notif_ext::notify;
 
 use super::panel::SftpPanel;
 use super::types::{TransferDirection, TransferItem, TransferStatus};
-use oneterm_state::notif_ext::notify;
 
 impl SftpPanel {
     /// Upload a list of local paths → remote cwd.
