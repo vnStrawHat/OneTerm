@@ -1,6 +1,7 @@
 //! Host-key verification tests for the SSH client handler.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::*;
@@ -9,12 +10,19 @@ const KEY_A: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIJdD7y3aLq454yWBdwLWbieU1ebz9/cu7/Q
 const KEY_B: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIA6rWI3G1sz07DnfFlrouTcysQlj2P+jpNSOEWD9OJ3X";
 
 fn temporary_known_hosts() -> PathBuf {
+    // Distinct per call so tests running in parallel never share a known_hosts
+    // file, even when the wall clock is too coarse to separate two calls (as on
+    // macOS). The atomic counter guarantees uniqueness within the process; the
+    // pid and timestamp keep names unique across processes and test runs.
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
+    let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!(
-        "oneterm-known-hosts-{}-{nonce}",
+        "oneterm-known-hosts-{}-{nonce}-{sequence}",
         std::process::id()
     ))
 }
