@@ -225,8 +225,9 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
             let name = match cfg.kind {
                 ShellKind::Bash => "bash",
                 ShellKind::Zsh => "zsh",
-                ShellKind::Sh => "sh",
-                _ => unreachable!(),
+                // The outer arm restricts `cfg.kind` to Bash/Zsh/Sh, so the only
+                // remaining kind here is Sh.
+                _ => "sh",
             };
             let prog = cfg
                 .program

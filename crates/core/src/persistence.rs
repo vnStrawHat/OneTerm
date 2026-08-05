@@ -54,6 +54,9 @@ impl Drop for InterProcessLock {
     }
 }
 
+// SAFETY: the signature mirrors the platform's `flock(2)`: two `int` arguments
+// and an `int` result. The symbol resolves against the C runtime linked into
+// the process, so the calls below only need to uphold the descriptor invariant.
 #[cfg(unix)]
 unsafe extern "C" {
     fn flock(fd: i32, operation: i32) -> i32;
@@ -62,6 +65,9 @@ unsafe extern "C" {
 #[cfg(unix)]
 fn lock_file(file: &File) -> io::Result<()> {
     const LOCK_EX: i32 = 2;
+    // SAFETY: `file` is owned and stays open for this call, so `as_raw_fd`
+    // returns a valid descriptor. `flock` only inspects that descriptor and the
+    // operation flag and reports failure through its return value.
     let result = unsafe { flock(file.as_raw_fd(), LOCK_EX) };
     if result == 0 {
         Ok(())
@@ -73,6 +79,8 @@ fn lock_file(file: &File) -> io::Result<()> {
 #[cfg(unix)]
 fn unlock_file(file: &File) {
     const LOCK_UN: i32 = 8;
+    // SAFETY: `file` is owned and open, so the descriptor is valid. Releasing a
+    // held lock cannot violate memory safety; errors are ignored during drop.
     let _ = unsafe { flock(file.as_raw_fd(), LOCK_UN) };
 }
 
@@ -81,7 +89,12 @@ fn lock_file(file: &File) -> io::Result<()> {
     use windows_sys::Win32::Storage::FileSystem::{LOCKFILE_EXCLUSIVE_LOCK, LockFileEx};
     use windows_sys::Win32::System::IO::OVERLAPPED;
 
+    // SAFETY: `OVERLAPPED` is a plain C struct with no validity invariants, so
+    // an all-zero value is a valid initial state.
     let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+    // SAFETY: `file` is owned and open, so `as_raw_handle` yields a valid handle.
+    // `overlapped` points to the live local above and outlives the call, and the
+    // byte range covers the whole file. Failure is reported by a zero result.
     let result = unsafe {
         LockFileEx(
             file.as_raw_handle() as _,
@@ -104,7 +117,11 @@ fn unlock_file(file: &File) {
     use windows_sys::Win32::Storage::FileSystem::UnlockFileEx;
     use windows_sys::Win32::System::IO::OVERLAPPED;
 
+    // SAFETY: `OVERLAPPED` is a plain C struct, so an all-zero value is valid.
     let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+    // SAFETY: `file` is owned and open, so the handle is valid, and `overlapped`
+    // points to the live local above that outlives the call. The range matches
+    // the one locked in `lock_file`; the result is ignored during drop.
     unsafe {
         let _ = UnlockFileEx(
             file.as_raw_handle() as _,
@@ -271,6 +288,9 @@ fn replace_file(temporary: &Path, target: &Path) -> io::Result<()> {
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
+    // SAFETY: both name pointers reference local NUL-terminated wide buffers that
+    // outlive the call, and the optional backup/reserved/exclude arguments are
+    // null as the API permits. Failure is reported by a zero return value.
     let replaced = unsafe {
         ReplaceFileW(
             target_wide.as_ptr(),

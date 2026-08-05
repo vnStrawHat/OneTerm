@@ -71,9 +71,10 @@ impl SftpSessionId {
     /// Allocate a new unique session identity.
     pub fn next() -> Self {
         static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-        let id = NEXT_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
-            .expect("SFTP session identity space exhausted");
+        // A `u64` counter cannot realistically wrap within a single process run,
+        // so a plain fetch-add stays unique without a fallible overflow check.
+        // This mirrors the `TEMP_SEQUENCE` counter in `persistence`.
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         Self(id)
     }
 }
