@@ -21,12 +21,12 @@ use gpui_component::{
 use super::{about, appearance, general, key_bindings, terminal, updates};
 
 /// General Settings panel (font, theme, key bindings, terminal options, about).
-pub struct SettingsPanel {
+pub(crate) struct SettingsPanel {
     focus_handle: FocusHandle,
 }
 
 impl SettingsPanel {
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         // Re-render when the key-binding UI state changes (capture mode entered/
         // exited) so the capturing row / binding chips update live.
         cx.observe(
@@ -43,7 +43,7 @@ impl SettingsPanel {
         }
     }
 
-    pub fn new_entity(window: &mut Window, cx: &mut App) -> Entity<Self> {
+    pub(crate) fn new_entity(window: &mut Window, cx: &mut App) -> Entity<Self> {
         cx.new(|cx| Self::new(window, cx))
     }
 

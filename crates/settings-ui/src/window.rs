@@ -15,6 +15,7 @@
 //! `window_decorations: Client`) mirror the main window so the [`Root`]'s
 //! `window_border` wrapper draws the client-side decorations.
 
+use anyhow::Context as _;
 use gpui::{
     App, AppContext, Bounds, Size, Task, WindowBounds, WindowHandle, WindowKind, WindowOptions, px,
     size,
@@ -23,7 +24,7 @@ use gpui_component::Root;
 #[cfg(not(target_os = "linux"))]
 use gpui_component::TitleBar;
 
-use super::SettingsPanel;
+use super::panel::SettingsPanel;
 
 /// Open the Settings window and return its task handle.
 ///
@@ -67,7 +68,7 @@ pub fn open_settings_window(cx: &mut App) -> Task<anyhow::Result<WindowHandle<Ro
                 window.set_window_title("Settings");
                 let _ = cx;
             })
-            .expect("failed to update settings window");
+            .context("failed to update settings window")?;
 
         Ok(window)
     })

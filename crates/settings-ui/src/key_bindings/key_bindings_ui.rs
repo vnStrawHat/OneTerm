@@ -16,11 +16,12 @@ use gpui_component::{
     setting::{SettingGroup, SettingItem, SettingPage},
 };
 
-use super::super::separator;
+use crate::separator;
 
 use super::key_bindings_actions::{BINDABLE_ACTIONS, BindableAction};
-use super::{KeyBindingsState, apply_key_bindings, save_key_bindings};
-use super::{is_modifier_only, keystroke_to_string};
+use super::state::{
+    KeyBindingsState, apply_key_bindings, is_modifier_only, keystroke_to_string, save_key_bindings,
+};
 
 // ── Page builder ─────────────────────────────────────────────────────
 
