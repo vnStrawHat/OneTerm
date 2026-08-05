@@ -337,13 +337,20 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    // Distinct per call so concurrently running tests never share a directory,
+    // even when the wall clock is too coarse to separate two calls (as on
+    // macOS). The atomic counter guarantees uniqueness within the process; the
+    // pid and timestamp keep names unique across processes and test runs.
+    static TEST_DIR_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
     fn test_dir() -> PathBuf {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
+        let sequence = TEST_DIR_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!(
-            "oneterm-persistence-{}-{nonce}",
+            "oneterm-persistence-{}-{nonce}-{sequence}",
             std::process::id()
         ))
     }
