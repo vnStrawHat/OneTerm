@@ -9,12 +9,21 @@ use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
 fn temporary_dir() -> PathBuf {
+    // Distinct per call so parallel tests never share a directory, and so two
+    // calls within one test (e.g. `root` and `outside`) can't alias when the
+    // wall clock is too coarse to separate them (as on macOS). The atomic
+    // counter guarantees uniqueness within the process; the pid and timestamp
+    // keep names unique across processes and test runs.
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
+    let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!(
-        "oneterm-sftp-security-{}-{nonce}",
+        "oneterm-sftp-security-{}-{nonce}-{sequence}",
         std::process::id()
     ))
 }
