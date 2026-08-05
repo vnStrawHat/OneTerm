@@ -27,7 +27,7 @@ use oneterm_core::{ConnectionCancellation, HostKeyPolicy, SecretString, SshAuthM
 use crate::session_state::{SshSession, SshSessionStore};
 use oneterm_state::notif_ext::notify;
 
-use super::common::{ConnectButton, connect_ssh_session, field};
+use super::common::{ConnectButton, FieldRequirement, connect_ssh_session, field};
 
 /// Open a "Quick Connect" dialog — enter host, port, username, password and
 /// connect immediately. Optionally save the session to the SSH session store.
@@ -176,12 +176,27 @@ pub fn open_quick_connect_dialog(window: &mut Window, cx: &mut App) {
                 let save_session = save_session.clone();
                 move |content, _window, cx| {
                     content
-                        .child(field("Host", true, Input::new(&host_state), cx))
-                        .child(field("Port", false, Input::new(&port_state), cx))
-                        .child(field("Username", true, Input::new(&username_state), cx))
+                        .child(field(
+                            "Host",
+                            FieldRequirement::Required,
+                            Input::new(&host_state),
+                            cx,
+                        ))
+                        .child(field(
+                            "Port",
+                            FieldRequirement::Optional,
+                            Input::new(&port_state),
+                            cx,
+                        ))
+                        .child(field(
+                            "Username",
+                            FieldRequirement::Required,
+                            Input::new(&username_state),
+                            cx,
+                        ))
                         .child(field(
                             "Password",
-                            false,
+                            FieldRequirement::Optional,
                             Input::new(&password_state).mask_toggle(),
                             cx,
                         ))

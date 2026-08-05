@@ -1,7 +1,5 @@
 //! Tree builder helpers — build `Vec<TreeItem>` from the session list,
 //! applying the search filter + grouping + sorting.
-//!
-//! Split out from `tabs.rs` to keep the file shorter.
 
 use std::collections::BTreeMap;
 

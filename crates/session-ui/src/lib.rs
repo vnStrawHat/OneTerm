@@ -1,7 +1,5 @@
-//! Session tabs — panel displaying the list of sessions.
-//!
-//! The original `tabs.rs` module was split into several submodules
-//! to comply with the ~400 lines/file rule (see `docs/agents/structure.md` §2).
+//! Session feature entry point — wires the session panel and dialogs together
+//! and exposes the crate's public API.
 
 pub mod session_state;
 

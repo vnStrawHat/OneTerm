@@ -37,10 +37,16 @@ use oneterm_terminal_view::TerminalPanel;
 
 // ── UI helpers ───────────────────────────────────────────────────────
 
-/// Render one form field: label (with `*` if required) + input element.
+/// Whether a form field must be filled in. Controls the required marker (`*`).
+pub(crate) enum FieldRequirement {
+    Required,
+    Optional,
+}
+
+/// Render one form field: label (with `*` when required) + input element.
 pub(crate) fn field(
     label: &'static str,
-    required: bool,
+    requirement: FieldRequirement,
     input: impl IntoElement,
     cx: &App,
 ) -> impl IntoElement {
@@ -53,7 +59,9 @@ pub(crate) fn field(
                 .gap_1()
                 .text_sm()
                 .child(SharedString::from(label))
-                .when(required, |t| t.child(div().text_color(danger).child("*"))),
+                .when(matches!(requirement, FieldRequirement::Required), |t| {
+                    t.child(div().text_color(danger).child("*"))
+                }),
         )
         .child(input)
 }

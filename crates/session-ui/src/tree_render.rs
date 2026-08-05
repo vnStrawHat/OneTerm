@@ -1,6 +1,4 @@
 //! Tree widget rendering — item renderer + context menu for SessionPanel.
-//!
-//! Split out from `tabs.rs` to keep the file shorter.
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{Hsla, IntoElement, MouseButton, ParentElement as _, SharedString, Styled, div, px};

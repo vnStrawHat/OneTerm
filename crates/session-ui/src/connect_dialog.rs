@@ -34,8 +34,8 @@ use crate::session_state::{SshSession, SshSessionStore};
 use oneterm_state::notif_ext::notify;
 
 use super::common::{
-    ConnectButton, connect_ssh_session, field, parse_user_host_port, password_field,
-    server_info_banner,
+    ConnectButton, FieldRequirement, connect_ssh_session, field, parse_user_host_port,
+    password_field, server_info_banner,
 };
 
 /// Open the SSH connect dialog.
@@ -128,11 +128,10 @@ pub(crate) fn open_connect_dialog(
     let connect_button = cx.new(|_| ConnectButton::new(connect_logic.clone(), connecting.clone()));
 
     window.open_dialog(cx, move |dialog, window, cx| {
-        // Focus username (if not yet set) or password (if username already exists).
-        let focus_handle = if ask_username {
-            username_state.as_ref().unwrap().read(cx).focus_handle(cx)
-        } else {
-            password_state.read(cx).focus_handle(cx)
+        // Focus the username field when it is present, otherwise the password field.
+        let focus_handle = match username_state.as_ref() {
+            Some(state) => state.read(cx).focus_handle(cx),
+            None => password_state.read(cx).focus_handle(cx),
         };
         focus_handle.focus(window, cx);
         // Clone connect_logic for keyboard on_ok; the footer owns the Connect button.
@@ -155,7 +154,12 @@ pub(crate) fn open_connect_dialog(
                         ))
                         // Username field (only when ask_username).
                         .when_some(username_state.as_ref(), |content, st| {
-                            content.child(field("Username", true, Input::new(st), cx))
+                            content.child(field(
+                                "Username",
+                                FieldRequirement::Required,
+                                Input::new(st),
+                                cx,
+                            ))
                         })
                         // Password field (always).
                         .child(password_field(&password_state, cx))

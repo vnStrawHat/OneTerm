@@ -1,6 +1,4 @@
 //! "Rename Group" dialog — rename the group for all sessions in that group.
-//!
-//! Split out from `session_dialog.rs` to keep the file shorter.
 
 use std::rc::Rc;
 
@@ -16,7 +14,7 @@ use gpui_component::{
 use crate::session_state::SshSessionStore;
 use oneterm_state::notif_ext::notify;
 
-use super::session_dialog::field;
+use super::common::{FieldRequirement, field};
 
 /// Open the rename-group dialog.
 ///
@@ -64,7 +62,12 @@ pub(crate) fn open_rename_group_dialog(window: &mut Window, cx: &mut App, group_
             .content({
                 let group_state = group_state.clone();
                 move |content, _window, cx| {
-                    content.child(field("Group Name", true, Input::new(&group_state), cx))
+                    content.child(field(
+                        "Group Name",
+                        FieldRequirement::Required,
+                        Input::new(&group_state),
+                        cx,
+                    ))
                 }
             })
             // Footer: Cancel + Save — uses direct on_click instead of DialogAction/DialogClose

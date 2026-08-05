@@ -1,7 +1,5 @@
 //! [`GroupComboDelegate`] + [`group_combobox`] — Combobox delegate and widget
 //! for the Group field in the session dialog.
-//!
-//! Split out from `session_dialog.rs` to keep the file shorter.
 
 use std::cell::RefCell;
 use std::rc::Rc;

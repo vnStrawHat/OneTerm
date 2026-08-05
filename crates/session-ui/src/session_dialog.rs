@@ -30,6 +30,7 @@ use gpui_component::{
 use crate::session_state::{SshSession, SshSessionStore};
 use oneterm_state::notif_ext::notify;
 
+use super::common::{FieldRequirement, field};
 use super::group_combo::{GroupComboDelegate, SharedCell, group_combobox};
 
 /// Open the dialog to create (when `edit` = `None`) or edit (when `edit` =
@@ -237,7 +238,7 @@ pub(crate) fn open_session_dialog(
                     content
                         .child(field(
                             "Label",
-                            true,
+                            FieldRequirement::Required,
                             h_flex()
                                 .gap_2()
                                 .w_full()
@@ -245,12 +246,27 @@ pub(crate) fn open_session_dialog(
                                 .child(ColorPicker::new(&color_state).small()),
                             cx,
                         ))
-                        .child(field("Host", true, Input::new(&host_state), cx))
-                        .child(field("Port", false, Input::new(&port_state), cx))
-                        .child(field("Username", false, Input::new(&user_state), cx))
+                        .child(field(
+                            "Host",
+                            FieldRequirement::Required,
+                            Input::new(&host_state),
+                            cx,
+                        ))
+                        .child(field(
+                            "Port",
+                            FieldRequirement::Optional,
+                            Input::new(&port_state),
+                            cx,
+                        ))
+                        .child(field(
+                            "Username",
+                            FieldRequirement::Optional,
+                            Input::new(&user_state),
+                            cx,
+                        ))
                         .child(field(
                             "Group",
-                            false,
+                            FieldRequirement::Optional,
                             group_combobox(&group_combo_state, &group_value, &query_cell, cx),
                             cx,
                         ))
@@ -280,5 +296,3 @@ pub(crate) fn open_session_dialog(
             )
     });
 }
-
-pub(crate) use super::common::field;

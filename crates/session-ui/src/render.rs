@@ -1,7 +1,5 @@
 //! `impl Render for SessionPanel` — header (search + new-session button),
 //! empty/no-results states, and final div assembly.
-//!
-//! Split out from `tabs.rs` to keep the file shorter.
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
