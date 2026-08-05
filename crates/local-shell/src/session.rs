@@ -9,7 +9,6 @@ use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::WindowSize;
 use alacritty_terminal::grid::Dimensions;
-
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::tty::{Options, Shell};
@@ -172,3 +171,7 @@ impl Drop for LocalSession {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "session_tests.rs"]
+mod session_tests;
