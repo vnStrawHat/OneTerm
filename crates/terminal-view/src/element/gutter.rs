@@ -41,33 +41,41 @@ pub(crate) fn compute_gutter_width(
     gutter_text_width + px(8.0)
 }
 
+/// Line-indexing inputs for the gutter: which absolute lines map to which
+/// display rows, and how many entries to emit.
+pub(crate) struct GutterLayout {
+    /// The absolute index (0-based) of `line_times[0]`.
+    pub line_time_base: usize,
+    /// Total lines output so far (monotonically increasing).
+    pub absolute_line_count: usize,
+    pub display_offset: usize,
+    /// Viewport height in grid rows.
+    pub viewport_lines: usize,
+    /// Caps the number of entries actually rendered.
+    pub max_entries: usize,
+}
+
 /// Build the `GutterEntry` for each display line.
 ///
-/// `line_time_base` = the absolute index (0-based) of `line_times[0]`. A line's
-/// time is looked up by its own **absolute index** (equal to line number − 1),
-/// so it doesn't drift when `total_lines` fluctuates due to ConPTY repaint/reflow.
-/// `absolute_line_count` = total lines output so far (monotonically increasing).
-/// `viewport_lines` is the viewport height (grid rows). `max_entries` caps the
-/// number of entries actually rendered.
-#[allow(clippy::too_many_arguments)]
+/// A line's time is looked up by its own **absolute index** (equal to line
+/// number − 1), so it doesn't drift when `total_lines` fluctuates due to ConPTY
+/// repaint/reflow. See [`GutterLayout`] for the index inputs.
 pub(crate) fn compute_gutter_entries(
     line_times: &VecDeque<String>,
-    line_time_base: usize,
-    absolute_line_count: usize,
-    display_offset: usize,
-    viewport_lines: usize,
-    max_entries: usize,
+    layout: &GutterLayout,
     bounds_origin: gpui::Point<Pixels>,
     line_height: Pixels,
     scale_factor: f32,
 ) -> Vec<GutterEntry> {
-    let num_digits = absolute_line_count.max(1).to_string().len().max(2);
+    let num_digits = layout.absolute_line_count.max(1).to_string().len().max(2);
 
-    let mut entries = Vec::with_capacity(max_entries);
-    for i in 0..max_entries {
+    let mut entries = Vec::with_capacity(layout.max_entries);
+    for i in 0..layout.max_entries {
         // Absolute index (0-based) of the line at display row `i`.
-        let abs_index =
-            absolute_line_count as i32 - display_offset as i32 - viewport_lines as i32 + i as i32;
+        let abs_index = layout.absolute_line_count as i32
+            - layout.display_offset as i32
+            - layout.viewport_lines as i32
+            + i as i32;
         let line_num = (abs_index + 1).max(1) as usize;
         // Look up the timestamp by absolute index (via base). When a line WITH CONTENT
         // is rendered in the gutter but has no corresponding timestamp yet — usually a
@@ -80,8 +88,8 @@ pub(crate) fn compute_gutter_entries(
             "--:--:--"
         } else {
             let ai = abs_index as usize;
-            if ai >= line_time_base {
-                let j = ai - line_time_base;
+            if ai >= layout.line_time_base {
+                let j = ai - layout.line_time_base;
                 line_times
                     .get(j)
                     .map(|s| s.as_str())

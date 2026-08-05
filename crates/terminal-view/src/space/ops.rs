@@ -5,7 +5,7 @@
 //!
 //! See `docs/terminal-split/02-split-and-close.md`.
 
-use gpui::{Axis, Entity};
+use gpui::Entity;
 use gpui_component::resizable::ResizableState;
 
 use super::super::view::LocalTerminalView;
@@ -24,15 +24,11 @@ impl SpaceTree {
         state: Entity<ResizableState>,
     ) {
         let new_id = empty.id;
-        let axis = dir.axis();
-        let after = dir.new_after();
 
         let mut empty = Some(empty);
         let mut state = Some(state);
         let root = self.take_root();
-        self.set_root(split_transform(
-            root, target, axis, after, &mut empty, &mut state,
-        ));
+        self.set_root(split_transform(root, target, dir, &mut empty, &mut state));
 
         // `empty` is consumed only if the target leaf was found.
         if empty.is_none() {
@@ -94,8 +90,7 @@ impl SpaceTree {
 fn split_transform(
     node: SpaceNode,
     target: SpaceId,
-    axis: Axis,
-    after: bool,
+    dir: SplitDir,
     empty: &mut Option<SpaceLeaf>,
     state: &mut Option<Entity<ResizableState>>,
 ) -> SpaceNode {
@@ -104,13 +99,13 @@ fn split_transform(
             if leaf.id == target {
                 let new_leaf = SpaceNode::Leaf(empty.take().expect("empty leaf present"));
                 let existing = SpaceNode::Leaf(leaf);
-                let children = if after {
+                let children = if dir.new_after() {
                     vec![existing, new_leaf]
                 } else {
                     vec![new_leaf, existing]
                 };
                 SpaceNode::Split(SpaceSplit {
-                    axis,
+                    axis: dir.axis(),
                     children,
                     state: state.take().expect("state present"),
                 })
@@ -127,7 +122,7 @@ fn split_transform(
             let mut new_children = Vec::with_capacity(children.len());
             for child in children {
                 if empty.is_some() {
-                    new_children.push(split_transform(child, target, axis, after, empty, state));
+                    new_children.push(split_transform(child, target, dir, empty, state));
                 } else {
                     new_children.push(child);
                 }
@@ -176,7 +171,8 @@ fn close_transform(
             }
             match new_children.len() {
                 0 => None,
-                1 => Some(new_children.into_iter().next().unwrap()),
+                // Exactly one child left: collapse the split into that child.
+                1 => new_children.into_iter().next(),
                 _ => Some(SpaceNode::Split(SpaceSplit {
                     axis,
                     children: new_children,

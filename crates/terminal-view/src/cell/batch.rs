@@ -37,13 +37,11 @@ impl BatchedTextRun {
     }
 
     /// Paint the text run using the cached `ShapedLine`.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn paint(
         &self,
         shaped: &ShapedLine,
         x: Pixels,
         y: Pixels,
-        _cell_w: Pixels,
         line_h: Pixels,
         window: &mut gpui::Window,
         cx: &mut gpui::App,

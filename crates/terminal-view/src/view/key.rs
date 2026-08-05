@@ -99,7 +99,6 @@ impl super::LocalTerminalView {
 }
 
 #[cfg(test)]
-#[allow(clippy::needless_update)]
 mod tests {
     use super::super::LocalTerminalView;
     use gpui::{Keystroke, Modifiers};
@@ -110,7 +109,6 @@ mod tests {
             key: key.into(),
             key_char: key_char.map(|s| s.into()),
             modifiers: mods,
-            ..Default::default()
         }
     }
 

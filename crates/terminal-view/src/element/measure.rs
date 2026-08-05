@@ -57,35 +57,41 @@ pub(crate) fn snap(value: f32, scale_factor: f32) -> f32 {
     (value * scale_factor).round() / scale_factor
 }
 
+/// Grid sizing inputs — gutter width, padding, and cell metrics used to convert
+/// pixel bounds into a (rows, cols) terminal grid.
+pub(crate) struct GridSizing {
+    pub gutter_width: Pixels,
+    pub pad_left: Pixels,
+    pub pad_right: Pixels,
+    pub pad_top: Pixels,
+    pub pad_bottom: Pixels,
+    pub cell_width: Pixels,
+    pub line_height: Pixels,
+}
+
 /// Resize the session to the measured bounds.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn resize_session(
     session: &gpui::Entity<Box<dyn oneterm_terminal::TerminalSession>>,
     bounds_size: gpui::Size<Pixels>,
-    gutter_width: Pixels,
-    pad_left: Pixels,
-    pad_right: Pixels,
-    pad_top: Pixels,
-    pad_bottom: Pixels,
-    cell_width: Pixels,
-    line_height: Pixels,
+    sizing: &GridSizing,
     last_grid_size: &Rc<RefCell<Option<(u16, u16)>>>,
     window: &mut Window,
     cx: &mut App,
 ) -> (u16, u16) {
     let scale_factor = window.scale_factor().max(1.0);
     let grid_width = (f32::from(bounds_size.width)
-        - f32::from(gutter_width)
-        - f32::from(pad_left)
-        - f32::from(pad_right))
-    .max(f32::from(cell_width));
+        - f32::from(sizing.gutter_width)
+        - f32::from(sizing.pad_left)
+        - f32::from(sizing.pad_right))
+    .max(f32::from(sizing.cell_width));
     let grid_width_device = (grid_width * scale_factor).floor().max(1.0);
-    let cell_width_device = f32::from(cell_width) * scale_factor;
+    let cell_width_device = f32::from(sizing.cell_width) * scale_factor;
     let cols = ((grid_width_device / cell_width_device).floor() as u16).max(1);
 
-    let avail_height = f32::from(bounds_size.height) - f32::from(pad_top) - f32::from(pad_bottom);
+    let avail_height =
+        f32::from(bounds_size.height) - f32::from(sizing.pad_top) - f32::from(sizing.pad_bottom);
     let avail_height_device = (avail_height * scale_factor).floor().max(0.0);
-    let line_height_device = f32::from(line_height) * scale_factor;
+    let line_height_device = f32::from(sizing.line_height) * scale_factor;
     let rows = ((avail_height_device / line_height_device).floor() as u16).max(1);
 
     if last_grid_size.borrow().as_ref() != Some(&(rows, cols)) {

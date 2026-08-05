@@ -1,40 +1,83 @@
 //! `TerminalElement::paint` implementation.
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use alacritty_terminal::vte::ansi::CursorShape;
 use gpui::{
-    App, Bounds, ContentMask, ElementInputHandler, Entity, FocusHandle, Pixels, TextRun, Window,
-    fill, point, px, size,
+    App, Bounds, ContentMask, ElementInputHandler, Pixels, Point, TextRun, Window, fill, point, px,
+    size,
 };
 
-use oneterm_terminal::TerminalSession;
-
 use super::super::box_drawing::{box_drawing_rects_into, rounded_corner_rects_aa};
-use super::super::layout::{CursorPaint, LayoutState, RowLayoutCache};
+use super::super::layout::{CursorPaint, LayoutState};
 use super::super::theme::TerminalTheme;
-use super::super::view::LocalTerminalView;
 
-/// Paint the terminal element from the prepainted `LayoutState`.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn paint_terminal(
-    _session: &Entity<Box<dyn TerminalSession>>,
-    view: &Entity<LocalTerminalView>,
-    focus: &FocusHandle,
-    theme: &TerminalTheme,
-    font: &gpui::Font,
-    font_size: Pixels,
-    focused: bool,
-    cursor_visible: bool,
-    row_cache: &Rc<RefCell<RowLayoutCache>>,
-    bounds: Bounds<Pixels>,
-    layout: &mut LayoutState,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    window.handle_input(focus, ElementInputHandler::new(bounds, view.clone()), cx);
-    window.with_content_mask(Some(ContentMask { bounds }), |window| {
+/// Device-snapped grid geometry for the paint pass. Converts (row, col) cell
+/// coordinates into logical pixel positions/sizes, rounding to device pixels
+/// once up front so every cell lands on the same pixel grid.
+struct GridGeometry {
+    scale_factor: f32,
+    origin_x_d: i32,
+    origin_y_d: i32,
+    cw_d: i32,
+    lh_d: i32,
+    cell_width: Pixels,
+    line_height: Pixels,
+}
+
+impl GridGeometry {
+    fn new(
+        origin: Point<Pixels>,
+        cell_width: Pixels,
+        line_height: Pixels,
+        scale_factor: f32,
+    ) -> Self {
+        Self {
+            scale_factor,
+            origin_x_d: (f32::from(origin.x) * scale_factor).round() as i32,
+            origin_y_d: (f32::from(origin.y) * scale_factor).round() as i32,
+            cw_d: (f32::from(cell_width) * scale_factor).round() as i32,
+            lh_d: (f32::from(line_height) * scale_factor).round() as i32,
+            cell_width,
+            line_height,
+        }
+    }
+
+    fn cell_x(&self, col: i32) -> Pixels {
+        px((self.origin_x_d + col * self.cw_d) as f32 / self.scale_factor)
+    }
+
+    fn cell_y(&self, row: i32) -> Pixels {
+        px((self.origin_y_d + row * self.lh_d) as f32 / self.scale_factor)
+    }
+
+    fn run_w(&self, cells: usize) -> Pixels {
+        px((cells as i32 * self.cw_d) as f32 / self.scale_factor)
+    }
+
+    fn line_h(&self) -> Pixels {
+        px(self.lh_d as f32 / self.scale_factor)
+    }
+}
+
+impl super::TerminalElement {
+    /// Paint the terminal element from the prepainted `LayoutState`.
+    pub(crate) fn paint_terminal(
+        &self,
+        bounds: Bounds<Pixels>,
+        layout: &mut LayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let view = &self.view;
+        let focus = &self.focus;
+        let theme = &self.theme;
+        let font = &self.font;
+        let font_size = self.font_size;
+        let focused = self.focused;
+        let cursor_visible = self.cursor_visible;
+        let row_cache = &self.render_cache.row_cache;
+
+        window.handle_input(focus, ElementInputHandler::new(bounds, view.clone()), cx);
+        window.with_content_mask(Some(ContentMask { bounds }), |window| {
         let paint_start = std::time::Instant::now();
         let mut quad_count: usize = 0;
         let mut run_count: usize = 0;
@@ -51,29 +94,23 @@ pub(crate) fn paint_terminal(
             };
             window.paint_quad(fill(gutter_bounds, layout.gutter_bg));
             quad_count += 1;
-            paint_gutter(window, theme, font, font_size, layout, bounds, &mut quad_count, cx);
+            paint_gutter(window, theme, font, font_size, layout, bounds, cx);
         }
 
-        let origin = layout.grid_origin;
-        let cw = layout.cell_width;
-        let lh = layout.line_height;
-
         let scale_factor = window.scale_factor().max(1.0);
-        let origin_x_d = (f32::from(origin.x) * scale_factor).round() as i32;
-        let origin_y_d = (f32::from(origin.y) * scale_factor).round() as i32;
-        let cw_d = (f32::from(cw) * scale_factor).round() as i32;
-        let lh_d = (f32::from(lh) * scale_factor).round() as i32;
-
-        let cell_x = |col: i32| -> Pixels {
-            px((origin_x_d + col * cw_d) as f32 / scale_factor)
-        };
-        let cell_y = |row: i32| -> Pixels {
-            px((origin_y_d + row * lh_d) as f32 / scale_factor)
-        };
-        let run_w = |cells: usize| -> Pixels {
-            px((cells as i32 * cw_d) as f32 / scale_factor)
-        };
-        let line_h_px = px(lh_d as f32 / scale_factor);
+        let geom = GridGeometry::new(
+            layout.grid_origin,
+            layout.cell_width,
+            layout.line_height,
+            scale_factor,
+        );
+        let lh = geom.line_height;
+        let cw_d = geom.cw_d;
+        let lh_d = geom.lh_d;
+        let cell_x = |col: i32| geom.cell_x(col);
+        let cell_y = |row: i32| geom.cell_y(row);
+        let run_w = |cells: usize| geom.run_w(cells);
+        let line_h_px = geom.line_h();
 
         let num_lines = layout.num_lines;
         let cache = row_cache.borrow();
@@ -111,7 +148,7 @@ pub(crate) fn paint_terminal(
             for (j, run) in row.runs.iter().enumerate() {
                 if let Some(shaped) = row.shaped_lines.get(j).and_then(|s| s.as_ref()) {
                     let x = cell_x(run.start.column);
-                    run.paint(shaped, x, y, cw, lh, window, cx);
+                    run.paint(shaped, x, y, lh, window, cx);
                 }
                 run_count += 1;
             }
@@ -158,7 +195,7 @@ pub(crate) fn paint_terminal(
         drop(cache);
 
         if let Some(cur) = &layout.cursor {
-            paint_cursor(cur, focused, cursor_visible, cw, lh, &cell_x, &cell_y, window, &mut quad_count);
+            paint_cursor(cur, focused, cursor_visible, &geom, window, &mut quad_count);
         }
 
         {
@@ -211,9 +248,9 @@ pub(crate) fn paint_terminal(
             }
         }
     });
+    }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn paint_gutter(
     window: &mut Window,
     theme: &TerminalTheme,
@@ -221,7 +258,6 @@ fn paint_gutter(
     font_size: Pixels,
     layout: &LayoutState,
     bounds: Bounds<Pixels>,
-    _quad_count: &mut usize,
     cx_gutter: &mut App,
 ) {
     let glh = layout.line_height;
@@ -268,15 +304,11 @@ fn paint_gutter(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn paint_cursor(
     cur: &CursorPaint,
     focused: bool,
     cursor_visible: bool,
-    cw: Pixels,
-    lh: Pixels,
-    cell_x: &dyn Fn(i32) -> Pixels,
-    cell_y: &dyn Fn(i32) -> Pixels,
+    geom: &GridGeometry,
     window: &mut Window,
     quad_count: &mut usize,
 ) {
@@ -284,41 +316,25 @@ fn paint_cursor(
     if !should_paint {
         return;
     }
-    let scale_factor = window.scale_factor().max(1.0);
-    let pos = point(cell_x(cur.point.column), cell_y(cur.point.line));
+    let scale_factor = geom.scale_factor;
+    let cw = geom.cell_width;
+    let lh = geom.line_height;
+    let pos = point(geom.cell_x(cur.point.column), geom.cell_y(cur.point.line));
     let sz = match cur.shape {
         CursorShape::Beam => {
             let bar_w = (cw * 0.2).max(px(1.0));
             let bar_w_d = (f32::from(bar_w) * scale_factor).ceil().max(1.0) as i32;
-            size(
-                px(bar_w_d as f32 / scale_factor),
-                line_h_px(lh, scale_factor),
-            )
+            size(px(bar_w_d as f32 / scale_factor), geom.line_h())
         }
         CursorShape::Underline => {
             let ul_h = (lh * 0.15).max(px(2.0));
             let ul_h_d = (f32::from(ul_h) * scale_factor).ceil().max(2.0) as i32;
-            size(
-                run_w_px(cw, 1, scale_factor),
-                px(ul_h_d as f32 / scale_factor),
-            )
+            size(geom.run_w(1), px(ul_h_d as f32 / scale_factor))
         }
-        CursorShape::Block => size(run_w_px(cw, 1, scale_factor), line_h_px(lh, scale_factor)),
-        CursorShape::HollowBlock => {
-            size(run_w_px(cw, 1, scale_factor), line_h_px(lh, scale_factor))
-        }
+        CursorShape::Block => size(geom.run_w(1), geom.line_h()),
+        CursorShape::HollowBlock => size(geom.run_w(1), geom.line_h()),
         CursorShape::Hidden => return,
     };
     window.paint_quad(fill(Bounds::new(pos, sz), cur.color));
     *quad_count += 1;
-}
-
-fn run_w_px(cw: Pixels, cells: usize, scale_factor: f32) -> Pixels {
-    let cw_d = (f32::from(cw) * scale_factor).round() as i32;
-    px((cells as i32 * cw_d) as f32 / scale_factor)
-}
-
-fn line_h_px(lh: Pixels, scale_factor: f32) -> Pixels {
-    let lh_d = (f32::from(lh) * scale_factor).round() as i32;
-    px(lh_d as f32 / scale_factor)
 }

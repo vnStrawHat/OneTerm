@@ -10,14 +10,14 @@ use gpui::{
 };
 use gpui_component::{ActiveTheme as _, WindowExt as _, notification::NotificationType};
 
-use super::element::TerminalElement;
-
-use super::theme::{TerminalTheme, build_terminal_theme};
-use super::view::LocalTerminalView;
 use oneterm_core::config::ShellKind;
 use oneterm_highlight::ShellProfile;
 use oneterm_settings::{SemanticHighlightingMode, TerminalSettings};
 use oneterm_state::notif_ext::notify;
+
+use super::element::TerminalElement;
+use super::theme::{TerminalTheme, build_terminal_theme};
+use super::view::LocalTerminalView;
 
 pub(crate) mod overlays;
 pub(crate) mod theme_apply;
@@ -183,26 +183,24 @@ impl Render for LocalTerminalView {
             .track_focus(&self.focus)
             .key_context("Terminal")
             .when(self.hovered_url.is_some(), |d| d.cursor_pointer())
-            .child(TerminalElement::new(
-                session.clone(),
-                theme.clone(),
+            .child(TerminalElement {
+                session: session.clone(),
+                theme: theme.clone(),
                 font,
                 font_size,
                 line_height_factor,
                 focused,
                 cursor_visible,
-                cx.entity(),
-                self.focus.clone(),
-                self.hovered_url.clone(),
-                self.ctrl_held,
-                self.line_times.clone(),
-                self.line_time_base,
+                view: cx.entity(),
+                focus: self.focus.clone(),
+                line_times: self.line_times.clone(),
+                line_time_base: self.line_time_base,
                 padding,
                 show_gutter,
                 cell_width_override,
-                cursor_color,
-                cursor_shape,
-                super::layout::types::TerminalRenderCache {
+                cursor_color_override: cursor_color,
+                cursor_shape_override: cursor_shape,
+                render_cache: super::layout::types::TerminalRenderCache {
                     row_cache: self.row_cache.clone(),
                     cached_gutter: self.cached_gutter.clone(),
                     last_grid_size: self.last_grid_size.clone(),
@@ -210,7 +208,7 @@ impl Render for LocalTerminalView {
                 },
                 search_highlights,
                 overlay,
-            ))
+            })
             .children(self.bell_overlay(has_bell, bell_enabled, &theme_ref))
             .children(self.progress_overlay(&theme_ref))
             .children(self.completion_overlay_element(cx))

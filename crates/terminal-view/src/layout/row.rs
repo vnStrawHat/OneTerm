@@ -157,10 +157,13 @@ pub(crate) fn layout_row(
             continue;
         }
 
-        if let Some(b) = current_batch.as_mut() {
-            if b.can_append(&style)
-                && b.start.line == lp.line
-                && b.start.column + b.cell_count as i32 == lp.column
+        match current_batch.as_mut() {
+            // Extend the active run when the next cell shares its style and is
+            // immediately adjacent on the same line.
+            Some(b)
+                if b.can_append(&style)
+                    && b.start.line == lp.line
+                    && b.start.column + b.cell_count as i32 == lp.column =>
             {
                 b.append_char(cell.c);
                 if let Some(cs) = zw {
@@ -168,9 +171,12 @@ pub(crate) fn layout_row(
                         b.append_zw(c);
                     }
                 }
-            } else {
-                let old = current_batch.take().unwrap();
-                runs.push(old);
+            }
+            // Otherwise flush the active run (if any) and start a fresh one.
+            _ => {
+                if let Some(old) = current_batch.take() {
+                    runs.push(old);
+                }
                 let mut nb = BatchedTextRun::new(lp, cell.c, style);
                 if let Some(cs) = zw {
                     for &c in cs {
@@ -179,14 +185,6 @@ pub(crate) fn layout_row(
                 }
                 current_batch = Some(nb);
             }
-        } else {
-            let mut nb = BatchedTextRun::new(lp, cell.c, style);
-            if let Some(cs) = zw {
-                for &c in cs {
-                    nb.append_zw(c);
-                }
-            }
-            current_batch = Some(nb);
         }
     }
     if let Some(b) = current_batch {

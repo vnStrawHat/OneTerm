@@ -87,7 +87,9 @@ impl LocalTerminalView {
         let query = self.session.read(cx).query_state();
         let on_alt = query.mode.contains(TermMode::ALT_SCREEN);
         {
-            let c = self.completion.as_mut().unwrap();
+            let Some(c) = self.completion.as_mut() else {
+                return;
+            };
             c.set_alt_screen(on_alt);
             // Cheap pre-grid gate: enabled + alt-screen only. The prompt-region
             // gate is applied after we read the line (it depends on the line).
@@ -130,7 +132,9 @@ impl LocalTerminalView {
         let now = now_ms();
         {
             let history = history_entity.read(cx);
-            let c = self.completion.as_mut().unwrap();
+            let Some(c) = self.completion.as_mut() else {
+                return;
+            };
             c.set_in_prompt_region(prompt_found);
             let allowed = c.gating_allows();
             if !allowed {
@@ -336,9 +340,6 @@ impl LocalTerminalView {
     /// Capture the current input line into history when a command runs (Enter
     /// with no active selection). Called from the keyboard handler.
     pub(crate) fn completion_capture_current(&mut self, cx: &mut Context<Self>) {
-        if self.completion.is_none() {
-            return;
-        }
         let content = self.session.read(cx).snapshot_query();
         let (line, _found, _anchor) = extract_cursor_command(&content);
         if line.trim().is_empty() {
@@ -348,7 +349,9 @@ impl LocalTerminalView {
             return;
         };
         let now = now_ms();
-        let controller = self.completion.as_ref().unwrap();
+        let Some(controller) = self.completion.as_ref() else {
+            return;
+        };
         history_entity.update(cx, |h, _| {
             controller.capture(&line, now, h);
         });

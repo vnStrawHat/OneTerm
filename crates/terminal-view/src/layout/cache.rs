@@ -15,25 +15,53 @@ use super::super::url::url_masks_wrapped;
 use super::row::layout_row;
 use super::types::{RenderStyleKey, RowLayout, RowLayoutCache};
 
+/// Frame inputs for [`update_row_cache`] — the per-frame terminal grid state
+/// that determines which rows are dirty and need re-layout.
+pub(crate) struct RowCacheFrame<'a> {
+    pub cells: &'a [IndexedCell],
+    pub damage: &'a TermDamageInfo,
+    pub num_lines: usize,
+    pub display_offset: usize,
+    pub grid_size: (u16, u16),
+    pub cursor_display_line: i32,
+}
+
+/// Style inputs for [`update_row_cache`] — theme, font, and overlay used to
+/// lay out a dirty row. Changes to `style_key` invalidate the whole cache.
+pub(crate) struct RowCacheStyle<'a> {
+    pub theme: &'a TerminalTheme,
+    pub base_font: &'a Font,
+    pub style_key: &'a RenderStyleKey,
+    pub overlay: &'a SemanticOverlay,
+}
+
 /// Update the row cache: only recompute layout for dirty rows, reuse cached
 /// artifacts for non-dirty rows.
-#[allow(clippy::too_many_arguments)]
+///
+/// Selection and hover state are painted as separate rectangles rather than
+/// baked into row layout, so they never invalidate cached rows and are not
+/// part of the inputs here.
 pub(crate) fn update_row_cache(
     cache: &mut RowLayoutCache,
-    cells: &[IndexedCell],
-    damage: &TermDamageInfo,
-    num_lines: usize,
-    display_offset: usize,
-    grid_size: (u16, u16),
-    _hovered_url: Option<&super::super::url::DetectedUrl>,
-    _ctrl_held: bool,
-    theme: &TerminalTheme,
-    base_font: &Font,
-    style_key: &RenderStyleKey,
-    cursor_display_line: i32,
-    overlay: &SemanticOverlay,
+    frame: &RowCacheFrame,
+    style: &RowCacheStyle,
 ) {
     use itertools::Itertools;
+
+    let &RowCacheFrame {
+        cells,
+        damage,
+        num_lines,
+        display_offset,
+        grid_size,
+        cursor_display_line,
+    } = frame;
+    let &RowCacheStyle {
+        theme,
+        base_font,
+        style_key,
+        overlay,
+    } = style;
 
     let size_changed = cache.prev_grid_size != Some(grid_size);
     let scroll_delta = display_offset as i32 - cache.prev_display_offset as i32;
@@ -266,6 +294,36 @@ mod tests {
         }
     }
 
+    /// Drive `update_row_cache` with the fixed test defaults (no cells, offset 0,
+    /// no cursor row), varying only the damage, line count, and style key.
+    fn run_update(
+        cache: &mut RowLayoutCache,
+        damage: TermDamageInfo,
+        num_lines: usize,
+        theme: &TerminalTheme,
+        font: &gpui::Font,
+        key: &RenderStyleKey,
+        overlay: &SemanticOverlay,
+    ) {
+        update_row_cache(
+            cache,
+            &RowCacheFrame {
+                cells: &[],
+                damage: &damage,
+                num_lines,
+                display_offset: 0,
+                grid_size: (24, 80),
+                cursor_display_line: -1,
+            },
+            &RowCacheStyle {
+                theme,
+                base_font: font,
+                style_key: key,
+                overlay,
+            },
+        );
+    }
+
     /// Same style key + Partial([]) damage → 0 dirty lines (cache hit).
     #[test]
     fn same_style_key_no_dirty() {
@@ -276,37 +334,25 @@ mod tests {
         let key = test_style_key("monospace", theme.palette);
 
         // First call: establish cache state with 0 lines.
-        update_row_cache(
+        run_update(
             &mut cache,
-            &[],
-            &TermDamageInfo::Partial(vec![]),
+            TermDamageInfo::Partial(vec![]),
             0,
-            0,
-            (24, 80),
-            None,
-            false,
             &theme,
             &font,
             &key,
-            -1,
             &overlay,
         );
         assert_eq!(cache.stats.dirty_lines, 0);
 
         // Second call: same key, same damage → still 0 dirty lines.
-        update_row_cache(
+        run_update(
             &mut cache,
-            &[],
-            &TermDamageInfo::Partial(vec![]),
+            TermDamageInfo::Partial(vec![]),
             0,
-            0,
-            (24, 80),
-            None,
-            false,
             &theme,
             &font,
             &key,
-            -1,
             &overlay,
         );
         assert_eq!(cache.stats.dirty_lines, 0);
@@ -323,36 +369,24 @@ mod tests {
         let key2 = test_style_key("courier", theme.palette);
 
         // First call: establish cache with 2 lines.
-        update_row_cache(
+        run_update(
             &mut cache,
-            &[],
-            &TermDamageInfo::Full,
+            TermDamageInfo::Full,
             2,
-            0,
-            (24, 80),
-            None,
-            false,
             &theme,
             &font,
             &key1,
-            -1,
             &overlay,
         );
 
         // Second call: font changed → all 2 lines dirty.
-        update_row_cache(
+        run_update(
             &mut cache,
-            &[],
-            &TermDamageInfo::Partial(vec![]),
+            TermDamageInfo::Partial(vec![]),
             2,
-            0,
-            (24, 80),
-            None,
-            false,
             &theme,
             &font,
             &key2,
-            -1,
             &overlay,
         );
         assert_eq!(cache.stats.dirty_lines, 2);
@@ -367,19 +401,13 @@ mod tests {
         let overlay = test_overlay();
         let key1 = test_style_key("monospace", theme.palette);
 
-        update_row_cache(
+        run_update(
             &mut cache,
-            &[],
-            &TermDamageInfo::Full,
+            TermDamageInfo::Full,
             2,
-            0,
-            (24, 80),
-            None,
-            false,
             &theme,
             &font,
             &key1,
-            -1,
             &overlay,
         );
 
@@ -388,19 +416,13 @@ mod tests {
         new_palette.foreground = alacritty_terminal::vte::ansi::Rgb { r: 255, g: 0, b: 0 };
         let key2 = test_style_key("monospace", new_palette);
 
-        update_row_cache(
+        run_update(
             &mut cache,
-            &[],
-            &TermDamageInfo::Partial(vec![]),
+            TermDamageInfo::Partial(vec![]),
             2,
-            0,
-            (24, 80),
-            None,
-            false,
             &theme,
             &font,
             &key2,
-            -1,
             &overlay,
         );
         assert_eq!(cache.stats.dirty_lines, 2);
@@ -415,19 +437,13 @@ mod tests {
         let overlay = test_overlay();
         let key1 = test_style_key("monospace", theme.palette);
 
-        update_row_cache(
+        run_update(
             &mut cache,
-            &[],
-            &TermDamageInfo::Full,
+            TermDamageInfo::Full,
             2,
-            0,
-            (24, 80),
-            None,
-            false,
             &theme,
             &font,
             &key1,
-            -1,
             &overlay,
         );
 
@@ -437,19 +453,13 @@ mod tests {
             ..key1.clone()
         };
 
-        update_row_cache(
+        run_update(
             &mut cache,
-            &[],
-            &TermDamageInfo::Partial(vec![]),
+            TermDamageInfo::Partial(vec![]),
             2,
-            0,
-            (24, 80),
-            None,
-            false,
             &theme,
             &font,
             &key2,
-            -1,
             &overlay,
         );
         assert_eq!(cache.stats.dirty_lines, 2);
@@ -466,19 +476,13 @@ mod tests {
         let key = test_style_key("monospace", theme.palette);
 
         // Establish cache: Full damage → all 2 lines dirty.
-        update_row_cache(
+        run_update(
             &mut cache,
-            &[],
-            &TermDamageInfo::Full,
+            TermDamageInfo::Full,
             2,
-            0,
-            (24, 80),
-            None,
-            false,
             &theme,
             &font,
             &key,
-            -1,
             &overlay,
         );
         assert_eq!(cache.stats.dirty_lines, 2);
@@ -486,19 +490,13 @@ mod tests {
         // Second call: same key + Partial([]) → 0 dirty.
         // Previously, a selection change would invalidate all rows.
         // Now selection is not part of the cache key at all.
-        update_row_cache(
+        run_update(
             &mut cache,
-            &[],
-            &TermDamageInfo::Partial(vec![]),
+            TermDamageInfo::Partial(vec![]),
             2,
-            0,
-            (24, 80),
-            None,
-            false,
             &theme,
             &font,
             &key,
-            -1,
             &overlay,
         );
         assert_eq!(cache.stats.dirty_lines, 0);

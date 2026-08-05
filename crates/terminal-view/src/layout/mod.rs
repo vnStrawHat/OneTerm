@@ -7,7 +7,7 @@ pub(crate) mod row;
 pub(crate) mod selection;
 pub(crate) mod types;
 
-pub(crate) use cache::update_row_cache;
+pub(crate) use cache::{RowCacheFrame, RowCacheStyle, update_row_cache};
 pub(crate) use selection::layout_selection;
 pub(crate) use types::{
     BatchedTextRun, CursorPaint, GridMetrics, GutterEntry, LayoutPoint, LayoutRect, LayoutState,

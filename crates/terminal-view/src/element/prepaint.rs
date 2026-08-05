@@ -1,98 +1,105 @@
 //! `TerminalElement::prepaint` implementation.
 
-use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::rc::Rc;
 
 use alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
 use gpui::{App, Bounds, Pixels, SharedString, Window, px};
 
-use oneterm_terminal::TerminalSession;
-
 use super::super::cell::blank::is_blank;
-use super::super::search::SearchHighlight;
-
-use super::super::highlight::SemanticOverlay;
 use super::super::layout::{
-    CursorPaint, GridMetrics, LayoutPoint, LayoutRect, LayoutState, RowLayoutCache,
+    CursorPaint, GridMetrics, LayoutPoint, LayoutRect, LayoutState, RowCacheFrame, RowCacheStyle,
     update_row_cache,
 };
 use super::super::theme::{TerminalTheme, resolve_cell_color};
-use super::super::view::LocalTerminalView;
-use super::gutter::compute_gutter_width;
-use super::measure::FontMetrics;
+use super::gutter::{GutterLayout, compute_gutter_width};
+use super::measure::{FontMetrics, GridSizing};
 use super::{gutter, measure};
 
-/// Prepaint the terminal element — compute layout state for paint.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn prepaint_terminal(
-    session: &gpui::Entity<Box<dyn TerminalSession>>,
-    _view: &gpui::Entity<LocalTerminalView>,
-    theme: &TerminalTheme,
-    font: &gpui::Font,
-    font_size: Pixels,
-    line_height_factor: f32,
-    cell_width_override: Option<f32>,
-    cursor_color_override: Option<gpui::Hsla>,
-    cursor_shape_override: oneterm_settings::TerminalCursorShape,
-    padding: oneterm_settings::TerminalPadding,
-    show_gutter: bool,
-    line_times: &VecDeque<String>,
-    line_time_base: usize,
-    hovered_url: Option<&super::super::url::DetectedUrl>,
-    ctrl_held: bool,
-    cached_gutter: &Rc<RefCell<Option<(Pixels, usize, Pixels, SharedString)>>>,
-    last_grid_size: &Rc<RefCell<Option<(u16, u16)>>>,
-    metrics: &Rc<RefCell<GridMetrics>>,
-    row_cache: &Rc<RefCell<RowLayoutCache>>,
-    search_highlights: &[SearchHighlight],
-    overlay: &SemanticOverlay,
-    bounds: Bounds<Pixels>,
-    window: &mut Window,
-    cx: &mut App,
-) -> LayoutState {
-    let prepaint_start = std::time::Instant::now();
-    let scale_factor = window.scale_factor().max(1.0);
+impl super::TerminalElement {
+    /// Prepaint the terminal element — compute layout state for paint.
+    pub(crate) fn prepaint_terminal(
+        &self,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> LayoutState {
+        let session = &self.session;
+        let theme = &self.theme;
+        let font = &self.font;
+        let font_size = self.font_size;
+        let line_height_factor = self.line_height_factor;
+        let cell_width_override = self.cell_width_override;
+        let cursor_color_override = self.cursor_color_override;
+        let cursor_shape_override = self.cursor_shape_override;
+        let padding = self.padding;
+        let show_gutter = self.show_gutter;
+        let line_times: &VecDeque<String> = &self.line_times;
+        let line_time_base = self.line_time_base;
+        let cached_gutter = &self.render_cache.cached_gutter;
+        let last_grid_size = &self.render_cache.last_grid_size;
+        let metrics = &self.render_cache.metrics;
+        let row_cache = &self.render_cache.row_cache;
+        let search_highlights = &self.search_highlights;
+        let overlay = &self.overlay;
 
-    let FontMetrics {
-        cell_width,
-        line_height,
-    } = measure::measure_font(
-        font,
-        font_size,
-        line_height_factor,
-        cell_width_override,
-        window,
-        cx,
-    );
+        let prepaint_start = std::time::Instant::now();
+        let scale_factor = window.scale_factor().max(1.0);
 
-    let pad_left = px(padding.left);
-    let pad_right = px(padding.right);
-    let pad_top = px(padding.top);
-    let pad_bottom = px(padding.bottom);
+        let FontMetrics {
+            cell_width,
+            line_height,
+        } = measure::measure_font(
+            font,
+            font_size,
+            line_height_factor,
+            cell_width_override,
+            window,
+            cx,
+        );
 
-    // Read terminal_info early — need absolute_line_count for the gutter width.
-    let terminal_info_start = std::time::Instant::now();
-    let info = session.read(cx).terminal_info();
-    let terminal_info_us = terminal_info_start.elapsed().as_micros();
-    let absolute_line_count = info.absolute_line_count;
+        let pad_left = px(padding.left);
+        let pad_right = px(padding.right);
+        let pad_top = px(padding.top);
+        let pad_bottom = px(padding.bottom);
 
-    // ── Gutter width (cached) ──
-    // Recompute only when num_digits *or* font *or* font_size changes, to avoid
-    // gutter_width fluctuations that cause a resize loop with TUI apps.
-    // When show_gutter = false, gutter_width = 0.
-    // PERF-08: cache key includes font family + size so font setting changes
-    // invalidate the cache (not just num_digits changes).
-    let num_digits = absolute_line_count.max(1).to_string().len().max(2);
-    let font_family = font.family.clone();
-    let gutter_width = if show_gutter {
-        let cg = cached_gutter.borrow();
-        if let Some((cached_w, cached_digits, cached_fs, cached_ff)) = cg.as_ref() {
-            if *cached_digits == num_digits && *cached_fs == font_size && *cached_ff == font_family
-            {
-                *cached_w
+        // Read terminal_info early — need absolute_line_count for the gutter width.
+        let terminal_info_start = std::time::Instant::now();
+        let info = session.read(cx).terminal_info();
+        let terminal_info_us = terminal_info_start.elapsed().as_micros();
+        let absolute_line_count = info.absolute_line_count;
+
+        // ── Gutter width (cached) ──
+        // Recompute only when num_digits *or* font *or* font_size changes, to avoid
+        // gutter_width fluctuations that cause a resize loop with TUI apps.
+        // When show_gutter = false, gutter_width = 0.
+        // PERF-08: cache key includes font family + size so font setting changes
+        // invalidate the cache (not just num_digits changes).
+        let num_digits = absolute_line_count.max(1).to_string().len().max(2);
+        let font_family = font.family.clone();
+        let gutter_width = if show_gutter {
+            let cg = cached_gutter.borrow();
+            if let Some((cached_w, cached_digits, cached_fs, cached_ff)) = cg.as_ref() {
+                if *cached_digits == num_digits
+                    && *cached_fs == font_size
+                    && *cached_ff == font_family
+                {
+                    *cached_w
+                } else {
+                    drop(cg); // release the borrow before calling shape_line
+                    let w = compute_gutter_width(
+                        line_times,
+                        absolute_line_count,
+                        font,
+                        font_size,
+                        theme,
+                        window,
+                    );
+                    *cached_gutter.borrow_mut() =
+                        Some((w, num_digits, font_size, font_family.clone()));
+                    w
+                }
             } else {
-                drop(cg); // release the borrow before calling shape_line
+                drop(cg);
                 let w = compute_gutter_width(
                     line_times,
                     absolute_line_count,
@@ -105,206 +112,198 @@ pub(crate) fn prepaint_terminal(
                 w
             }
         } else {
-            drop(cg);
-            let w = compute_gutter_width(
-                line_times,
-                absolute_line_count,
-                font,
-                font_size,
-                theme,
-                window,
-            );
-            *cached_gutter.borrow_mut() = Some((w, num_digits, font_size, font_family.clone()));
-            w
-        }
-    } else {
-        px(0.)
-    };
+            px(0.)
+        };
 
-    let (rows, cols) = measure::resize_session(
-        session,
-        bounds.size,
-        gutter_width,
-        pad_left,
-        pad_right,
-        pad_top,
-        pad_bottom,
-        cell_width,
-        line_height,
-        last_grid_size,
-        window,
-        cx,
-    );
+        let (rows, cols) = measure::resize_session(
+            session,
+            bounds.size,
+            &GridSizing {
+                gutter_width,
+                pad_left,
+                pad_right,
+                pad_top,
+                pad_bottom,
+                cell_width,
+                line_height,
+            },
+            last_grid_size,
+            window,
+            cx,
+        );
 
-    let snapshot_start = std::time::Instant::now();
-    let snapshot = session.read(cx).snapshot();
-    let snapshot_us = snapshot_start.elapsed().as_micros();
-    let num_lines = snapshot.terminal_bounds.num_lines;
-    let num_cols = snapshot.terminal_bounds.num_cols;
-    let display_offset = snapshot.display_offset;
+        let snapshot_start = std::time::Instant::now();
+        let snapshot = session.read(cx).snapshot();
+        let snapshot_us = snapshot_start.elapsed().as_micros();
+        let num_lines = snapshot.terminal_bounds.num_lines;
+        let num_cols = snapshot.terminal_bounds.num_cols;
+        let display_offset = snapshot.display_offset;
 
-    let selection_rects = snapshot
-        .selection
-        .map(|sel| {
-            super::super::layout::layout_selection(
-                &sel,
-                display_offset,
+        let selection_rects = snapshot
+            .selection
+            .map(|sel| {
+                super::super::layout::layout_selection(
+                    &sel,
+                    display_offset,
+                    num_lines,
+                    num_cols,
+                    theme.selection,
+                )
+            })
+            .unwrap_or_default();
+
+        let cursor_display_line = snapshot.cursor.point.line.0 + display_offset as i32;
+
+        let style_key = super::super::layout::RenderStyleKey {
+            font: font.clone(),
+            font_size_bits: f32::from(font_size).to_bits(),
+            palette: theme.palette,
+            min_contrast_bits: theme.min_contrast.to_bits(),
+            semantic_enabled: overlay.is_enabled(),
+            shell_profile: overlay.profile(),
+        };
+
+        update_row_cache(
+            &mut row_cache.borrow_mut(),
+            &RowCacheFrame {
+                cells: &snapshot.cells,
+                damage: &snapshot.damage,
                 num_lines,
-                num_cols,
-                theme.selection,
-            )
-        })
-        .unwrap_or_default();
+                display_offset,
+                grid_size: (rows, cols),
+                cursor_display_line,
+            },
+            &RowCacheStyle {
+                theme,
+                base_font: font,
+                style_key: &style_key,
+                overlay,
+            },
+        );
 
-    let cursor_display_line = snapshot.cursor.point.line.0 + display_offset as i32;
-
-    let style_key = super::super::layout::RenderStyleKey {
-        font: font.clone(),
-        font_size_bits: f32::from(font_size).to_bits(),
-        palette: theme.palette,
-        min_contrast_bits: theme.min_contrast.to_bits(),
-        semantic_enabled: overlay.is_enabled(),
-        shell_profile: overlay.profile(),
-    };
-
-    update_row_cache(
-        &mut row_cache.borrow_mut(),
-        &snapshot.cells,
-        &snapshot.damage,
-        num_lines,
-        display_offset,
-        (rows, cols),
-        hovered_url,
-        ctrl_held,
-        theme,
-        font,
-        &style_key,
-        cursor_display_line,
-        overlay,
-    );
-
-    // Fill the cached ShapedLine for runs not yet shaped.
-    let mut shape_line_count: usize = 0;
-    let mut shape_buffer_allocations: usize = 0;
-    {
-        let mut cache = row_cache.borrow_mut();
-        for i in 0..num_lines {
-            let row = &mut cache.rows[i];
-            if row.shaped_lines.len() != row.runs.len() {
-                row.shaped_lines.clear();
-                row.shaped_lines.reserve(row.runs.len());
-                if !row.runs.is_empty() {
-                    shape_buffer_allocations += 1;
-                }
-                for run in &row.runs {
-                    let shaped = window.text_system().shape_line(
-                        SharedString::from(run.text.clone()),
-                        font_size,
-                        std::slice::from_ref(&run.style),
-                        Some(cell_width),
-                    );
-                    row.shaped_lines.push(Some(shaped));
-                    shape_line_count += 1;
+        // Fill the cached ShapedLine for runs not yet shaped.
+        let mut shape_line_count: usize = 0;
+        let mut shape_buffer_allocations: usize = 0;
+        {
+            let mut cache = row_cache.borrow_mut();
+            for i in 0..num_lines {
+                let row = &mut cache.rows[i];
+                if row.shaped_lines.len() != row.runs.len() {
+                    row.shaped_lines.clear();
+                    row.shaped_lines.reserve(row.runs.len());
+                    if !row.runs.is_empty() {
+                        shape_buffer_allocations += 1;
+                    }
+                    for run in &row.runs {
+                        let shaped = window.text_system().shape_line(
+                            SharedString::from(run.text.clone()),
+                            font_size,
+                            std::slice::from_ref(&run.style),
+                            Some(cell_width),
+                        );
+                        row.shaped_lines.push(Some(shaped));
+                        shape_line_count += 1;
+                    }
                 }
             }
+            cache.stats.allocation_buffer_sites += shape_buffer_allocations;
+            cache.stats.shape_line_calls = shape_line_count;
+            cache.stats.terminal_info_us = terminal_info_us;
+            cache.stats.snapshot_us = snapshot_us;
+            cache.stats.prepaint_us = prepaint_start.elapsed().as_micros();
         }
-        cache.stats.allocation_buffer_sites += shape_buffer_allocations;
-        cache.stats.shape_line_calls = shape_line_count;
-        cache.stats.terminal_info_us = terminal_info_us;
-        cache.stats.snapshot_us = snapshot_us;
-        cache.stats.prepaint_us = prepaint_start.elapsed().as_micros();
-    }
 
-    let cursor = build_cursor(
-        &snapshot,
-        num_lines,
-        cursor_color_override,
-        cursor_shape_override,
-        theme,
-    );
+        let cursor = build_cursor(
+            &snapshot,
+            num_lines,
+            cursor_color_override,
+            cursor_shape_override,
+            theme,
+        );
 
-    let _hitbox = window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal);
+        let _hitbox = window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal);
 
-    let gutter_bg = theme.gutter_bg;
+        let gutter_bg = theme.gutter_bg;
 
-    // Render the gutter up to the last line with actual content in the viewport,
-    // but always at least 1 line. This preserves the UX at startup (only the first
-    // few lines have output) without missing TUI content on lines below the cursor.
-    let last_non_blank_display_line = snapshot
-        .cells
-        .iter()
-        .rev()
-        .find(|ic| !is_blank(&ic.cell))
-        .map(|ic| ic.point.line.0 + display_offset as i32)
-        .unwrap_or(0)
-        .max(0);
-    let gutter_line_count = ((last_non_blank_display_line as usize) + 1)
-        .min(num_lines)
-        .max(1);
+        // Render the gutter up to the last line with actual content in the viewport,
+        // but always at least 1 line. This preserves the UX at startup (only the first
+        // few lines have output) without missing TUI content on lines below the cursor.
+        let last_non_blank_display_line = snapshot
+            .cells
+            .iter()
+            .rev()
+            .find(|ic| !is_blank(&ic.cell))
+            .map(|ic| ic.point.line.0 + display_offset as i32)
+            .unwrap_or(0)
+            .max(0);
+        let gutter_line_count = ((last_non_blank_display_line as usize) + 1)
+            .min(num_lines)
+            .max(1);
 
-    let gutter_entries = gutter::compute_gutter_entries(
-        line_times,
-        line_time_base,
-        absolute_line_count,
-        display_offset,
-        num_lines,
-        gutter_line_count,
-        bounds.origin,
-        line_height,
-        scale_factor,
-    );
-
-    let grid_origin = gpui::Point {
-        x: px(measure::snap(
-            f32::from(bounds.origin.x + gutter_width + pad_left),
-            scale_factor,
-        )),
-        y: px(measure::snap(
-            f32::from(bounds.origin.y + pad_top),
-            scale_factor,
-        )),
-    };
-
-    *metrics.borrow_mut() = GridMetrics {
-        bounds: Some(bounds),
-        cell_width,
-        line_height,
-        gutter_width: gutter_width + pad_left,
-        pad_top: px(measure::snap(f32::from(pad_top), scale_factor)),
-        grid_origin,
-        rows: num_lines,
-        cols: num_cols,
-    };
-
-    // ── Search highlight rects (display coordinates → LayoutRect) ──
-    let search_rects: Vec<LayoutRect> = search_highlights
-        .iter()
-        .map(|h| LayoutRect {
-            point: LayoutPoint {
-                line: h.display_line,
-                column: h.start_col,
+        let gutter_entries = gutter::compute_gutter_entries(
+            line_times,
+            &GutterLayout {
+                line_time_base,
+                absolute_line_count,
+                display_offset,
+                viewport_lines: num_lines,
+                max_entries: gutter_line_count,
             },
-            num_cells: (h.end_col - h.start_col).max(0) as usize,
-            color: if h.active {
-                theme.search_active
-            } else {
-                theme.search_match
-            },
-        })
-        .collect();
+            bounds.origin,
+            line_height,
+            scale_factor,
+        );
 
-    LayoutState {
-        selection_rects,
-        search_rects,
-        cursor,
-        background: theme.bg,
-        cell_width,
-        line_height,
-        grid_origin,
-        gutter_width,
-        gutter_entries,
-        gutter_bg,
-        num_lines,
+        let grid_origin = gpui::Point {
+            x: px(measure::snap(
+                f32::from(bounds.origin.x + gutter_width + pad_left),
+                scale_factor,
+            )),
+            y: px(measure::snap(
+                f32::from(bounds.origin.y + pad_top),
+                scale_factor,
+            )),
+        };
+
+        *metrics.borrow_mut() = GridMetrics {
+            bounds: Some(bounds),
+            cell_width,
+            line_height,
+            grid_origin,
+            rows: num_lines,
+            cols: num_cols,
+        };
+
+        // ── Search highlight rects (display coordinates → LayoutRect) ──
+        let search_rects: Vec<LayoutRect> = search_highlights
+            .iter()
+            .map(|h| LayoutRect {
+                point: LayoutPoint {
+                    line: h.display_line,
+                    column: h.start_col,
+                },
+                num_cells: (h.end_col - h.start_col).max(0) as usize,
+                color: if h.active {
+                    theme.search_active
+                } else {
+                    theme.search_match
+                },
+            })
+            .collect();
+
+        LayoutState {
+            selection_rects,
+            search_rects,
+            cursor,
+            background: theme.bg,
+            cell_width,
+            line_height,
+            grid_origin,
+            gutter_width,
+            gutter_entries,
+            gutter_bg,
+            num_lines,
+        }
     }
 }
 
