@@ -275,13 +275,19 @@ mod tests {
     }
 
     fn test_dir(name: &str) -> std::path::PathBuf {
+        // A process-wide sequence keeps directories distinct even when parallel
+        // tests read the same coarse timestamp (as on macOS).
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!(
-            "oneterm-archive-{name}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
+            "oneterm-archive-{name}-{}-{nonce}-{sequence}",
+            std::process::id()
         ))
     }
 }

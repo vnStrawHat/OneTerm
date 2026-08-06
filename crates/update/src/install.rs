@@ -373,9 +373,15 @@ mod tests {
 
     #[cfg(any(target_os = "macos", all(unix, not(target_os = "macos"))))]
     fn test_dir(name: &str) -> PathBuf {
+        // A process-wide sequence keeps directories distinct even when parallel
+        // tests read the same coarse timestamp (as on macOS).
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
         let suffix = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
+        let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!(
-            "oneterm-update-{name}-{}-{suffix}",
+            "oneterm-update-{name}-{}-{suffix}-{sequence}",
             std::process::id()
         ))
     }
