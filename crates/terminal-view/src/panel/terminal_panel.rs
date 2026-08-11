@@ -513,12 +513,8 @@ impl Panel for TerminalPanel {
                 }
             })
             .child(
-                div()
+                super::title::tab_title_label()
                     .id(title_label_id)
-                    .flex_1()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .whitespace_nowrap()
                     .on_click({
                         let panel = cx.entity().clone();
                         let rename_title = rename_title.clone();

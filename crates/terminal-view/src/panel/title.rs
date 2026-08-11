@@ -6,7 +6,7 @@
 use std::rc::Rc;
 
 use gpui::{
-    App, AppContext as _, ClickEvent, Context, Entity, Focusable as _, ParentElement as _,
+    App, AppContext as _, ClickEvent, Context, Div, Entity, Focusable as _, ParentElement as _,
     Styled as _, Window, div, px,
 };
 use gpui_component::{
@@ -45,6 +45,12 @@ fn trim_path_title(title: &str) -> &str {
         Some(last) if !last.is_empty() => last,
         _ => title,
     }
+}
+
+pub(super) fn tab_title_label() -> Div {
+    // GPUI creates a rectangular content mask when either overflow axis is
+    // hidden, which clips glyph descenders to this label's line box.
+    div().flex_1().min_w_0().text_ellipsis().whitespace_nowrap()
 }
 
 impl TerminalPanel {
@@ -156,7 +162,18 @@ pub(crate) fn open_tab_title_dialog(
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_tab_label, trim_path_title};
+    use gpui::Styled as _;
+
+    use super::{resolve_tab_label, tab_title_label, trim_path_title};
+
+    #[test]
+    fn tab_title_label_does_not_create_a_content_mask() {
+        let mut label = tab_title_label();
+        let overflow = &label.style().overflow;
+
+        assert_eq!(overflow.x, None);
+        assert_eq!(overflow.y, None);
+    }
 
     #[test]
     fn live_title_is_used() {
