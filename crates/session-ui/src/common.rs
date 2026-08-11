@@ -2,7 +2,6 @@
 //!
 //! Contains:
 //! - [`field`] — form field renderer (label + input).
-//! - [`password_field`] — masked password field with toggle.
 //! - [`server_info_banner`] — read-only banner showing `ssh://…`.
 //! - [`parse_user_host_port`] — parse `user@host:port` strings.
 //! - [`add_ssh_terminal_to_dock`] — add a terminal panel to the DockArea center.
@@ -24,11 +23,9 @@ use gpui_component::{
     button::{Button, ButtonVariant, ButtonVariants as _},
     dialog::DialogButtonProps,
     h_flex,
-    input::{Input, InputState},
     notification::NotificationType,
     v_flex,
 };
-
 use oneterm_core::{AppError, ConnectionCancellation, HostKeyPolicy, SshConfig};
 use oneterm_state::notif_ext::notify;
 use oneterm_state::{AppServices, AppState};
@@ -64,20 +61,6 @@ pub(crate) fn field(
                 }),
         )
         .child(input)
-}
-
-/// Password field: label + masked input with mask_toggle + cleanable.
-pub(crate) fn password_field(state: &gpui::Entity<InputState>, _cx: &App) -> impl IntoElement {
-    v_flex()
-        .gap_1()
-        .w_full()
-        .child(
-            h_flex()
-                .gap_1()
-                .text_sm()
-                .child(SharedString::from("Password")),
-        )
-        .child(Input::new(state).mask_toggle().cleanable(true))
 }
 
 /// Stateful Connect button that renders a spinner and disables itself while connecting.

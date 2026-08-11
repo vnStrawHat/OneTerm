@@ -8,14 +8,13 @@
 //! Path: `target/ssh_session.json` (debug) / `~/.OneTerm/ssh_session.json` (release)
 //! — same pattern as `terminal.json` and `docks.json`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use gpui::{App, AppContext, Entity, Global};
 use oneterm_core::{
     atomic_write, config_dir, migrate_json_value, quarantine_file, set_schema_version,
     versioned_object,
 };
-
-use gpui::{App, AppContext, Entity, Global};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -25,6 +24,21 @@ use serde_json::Value;
 const CURRENT_SCHEMA_VERSION: u32 = 1;
 
 // ── SshSession ───────────────────────────────────────────────────────
+
+/// Authentication preference persisted for an SSH session.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SshAuthPreference {
+    /// Ask for an optional password when connecting.
+    #[default]
+    Password,
+    /// Use a private-key file and ask for its optional passphrase when connecting.
+    PrivateKey,
+}
+
+fn is_password_auth(auth: &SshAuthPreference) -> bool {
+    *auth == SshAuthPreference::Password
+}
 
 /// A single SSH session entry — stored in `ssh_session.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,6 +53,12 @@ pub struct SshSession {
     /// Username (optional — can be entered at connect time).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
+    /// Preferred authentication method. Missing values preserve password behavior.
+    #[serde(default, skip_serializing_if = "is_password_auth")]
+    pub auth_method: SshAuthPreference,
+    /// Private-key path. Passphrases are never part of this persisted model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_path: Option<PathBuf>,
     /// Display color (hex string, e.g. "#58c4dc"). Optional.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
@@ -260,6 +280,8 @@ mod tests {
         let list: Vec<SshSession> = serde_json::from_str(json).unwrap();
         assert_eq!(list[0].port, SshSession::DEFAULT_PORT);
         assert!(list[0].username.is_none());
+        assert_eq!(list[0].auth_method, SshAuthPreference::Password);
+        assert!(list[0].key_path.is_none());
     }
 
     #[test]
@@ -269,6 +291,8 @@ mod tests {
             host: "b".into(),
             port: 22,
             username: None,
+            auth_method: SshAuthPreference::Password,
+            key_path: None,
             color: None,
             group: None,
         };
@@ -283,11 +307,33 @@ mod tests {
             host: "b".into(),
             port: 22,
             username: Some("root".into()),
+            auth_method: SshAuthPreference::Password,
+            key_path: None,
             color: None,
             group: None,
         };
         let json = serde_json::to_string(&session).unwrap();
         assert!(json.contains("\"username\":\"root\""));
+    }
+
+    #[test]
+    fn private_key_metadata_serializes_without_secret_fields() {
+        let session = SshSession {
+            label: "key host".into(),
+            host: "example.test".into(),
+            port: 22,
+            username: Some("user".into()),
+            auth_method: SshAuthPreference::PrivateKey,
+            key_path: Some(PathBuf::from("/home/user/.ssh/id_ed25519")),
+            color: None,
+            group: None,
+        };
+
+        let json = serde_json::to_string(&session).unwrap();
+        assert!(json.contains("\"auth_method\":\"private_key\""));
+        assert!(json.contains("\"key_path\""));
+        assert!(!json.contains("passphrase"));
+        assert!(!json.contains("password"));
     }
 
     #[test]
@@ -319,12 +365,17 @@ mod persistence_tests {
                 host: "example.test".into(),
                 port: 2222,
                 username: Some("user".into()),
+                auth_method: SshAuthPreference::PrivateKey,
+                key_path: Some(PathBuf::from("/keys/test")),
                 color: None,
                 group: Some("group".into()),
             }],
         };
         store.save_to(&path);
-        assert_eq!(SshSessionStore::load_from(&path).len(), 1);
+        let loaded = SshSessionStore::load_from(&path);
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].auth_method, SshAuthPreference::PrivateKey);
+        assert_eq!(loaded[0].key_path.as_deref(), Some(Path::new("/keys/test")));
         std::fs::write(&path, b"not-json").unwrap();
         assert!(SshSessionStore::load_from(&path).is_empty());
         assert!(!path.exists());

@@ -1,8 +1,8 @@
 //! "Connect to SSH" dialog — enter credentials and connect over SSH.
 //!
 //! When the user clicks a session item (or selects "Open" in the context menu):
-//! - If `SshSession.username = None` → the dialog asks for **username + password**.
-//! - If `SshSession.username = Some` → the dialog asks for **password** only.
+//! - If `SshSession.username = None`, the dialog also asks for a username.
+//! - Authentication fields follow the saved password or private-key preference.
 //!
 //! Footer: **Cancel** + **Connect** — uses direct on_click to bypass
 //! action dispatch through the focus chain (consistent with the SSH Session dialog).
@@ -16,8 +16,8 @@ use std::sync::{
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext, ClickEvent, Focusable as _, ParentElement as _, SharedString, Styled, Window,
-    div, px,
+    App, AppContext, ClickEvent, FocusHandle, Focusable as _, ParentElement as _, SharedString,
+    Styled, Window, div, px,
 };
 use gpui_component::{
     WindowExt as _,
@@ -28,24 +28,23 @@ use gpui_component::{
     notification::NotificationType,
 };
 
-use oneterm_core::{ConnectionCancellation, HostKeyPolicy, SecretString, SshAuthMethod, SshConfig};
-
-use crate::session_state::{SshSession, SshSessionStore};
+use oneterm_core::{ConnectionCancellation, HostKeyPolicy, SshConfig};
 use oneterm_state::notif_ext::notify;
 
+use super::auth_form::SshAuthForm;
 use super::common::{
     ConnectButton, FieldRequirement, connect_ssh_session, field, parse_user_host_port,
-    password_field, server_info_banner,
+    server_info_banner,
 };
+use crate::session_state::{SshSession, SshSessionStore};
 
 /// Open the SSH connect dialog.
 ///
 /// - `session`: SSH session info from the store.
 /// - `index`: position in the store (used to update the username if the user enters a new one).
 ///
-/// Branching logic:
-/// - `session.username = None` → dialog asks for username + password.
-/// - `session.username = Some` → dialog asks for password only.
+/// When the saved session has no username, the dialog asks for one in addition to
+/// rendering the session's preferred authentication fields.
 pub(crate) fn open_connect_dialog(
     session: SshSession,
     index: usize,
@@ -71,12 +70,7 @@ pub(crate) fn open_connect_dialog(
         None => format!("ssh://{}:{}", session.host, session.port),
     };
 
-    // Password state — always needed, masked.
-    let password_state = cx.new(|cx| {
-        InputState::new(window, cx)
-            .placeholder("Enter password")
-            .masked(true)
-    });
+    let auth_form = SshAuthForm::new(session.auth_method, session.key_path.as_deref(), window, cx);
 
     // Username state — only created when needed.
     let username_state: Option<gpui::Entity<InputState>> = if ask_username {
@@ -92,17 +86,16 @@ pub(crate) fn open_connect_dialog(
     let connecting = Arc::new(AtomicBool::new(false));
     let connection_cancellation: Rc<RefCell<Option<ConnectionCancellation>>> =
         Rc::new(RefCell::new(None));
-    // Clone for the save_logic closure.
-    let password_ok = password_state.clone();
-    let username_ok = username_state.clone();
-    let session_ok = session.clone();
+    let auth_for_connect = auth_form.clone();
+    let username_for_connect = username_state.clone();
+    let session_for_connect = session.clone();
     let title_ok = title.clone();
 
     // ── Shared connect logic (used by both the button on_click and keyboard on_ok) ──
     let connect_logic: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool> = Rc::new({
-        let username_ok = username_ok.clone();
-        let password_ok = password_ok.clone();
-        let session_ok = session_ok.clone();
+        let username_for_connect = username_for_connect.clone();
+        let auth_for_connect = auth_for_connect.clone();
+        let session_for_connect = session_for_connect.clone();
         let save_username = save_username.clone();
         let connection_cancellation = connection_cancellation.clone();
         let connecting = connecting.clone();
@@ -112,10 +105,10 @@ pub(crate) fn open_connect_dialog(
             }
             let save = save_username.get();
             on_connect_click(
-                &session_ok,
+                &session_for_connect,
                 index,
-                &username_ok,
-                &password_ok,
+                &username_for_connect,
+                &auth_for_connect,
                 save,
                 &connection_cancellation,
                 connecting.clone(),
@@ -126,14 +119,15 @@ pub(crate) fn open_connect_dialog(
     });
 
     let connect_button = cx.new(|_| ConnectButton::new(connect_logic.clone(), connecting.clone()));
+    let initial_focus_pending = Rc::new(Cell::new(true));
 
     window.open_dialog(cx, move |dialog, window, cx| {
-        // Focus the username field when it is present, otherwise the password field.
-        let focus_handle = match username_state.as_ref() {
+        let initial_focus = match username_state.as_ref() {
             Some(state) => state.read(cx).focus_handle(cx),
-            None => password_state.read(cx).focus_handle(cx),
+            None => auth_form.focus_handle(cx),
         };
-        focus_handle.focus(window, cx);
+        defer_initial_focus_once(&initial_focus_pending, initial_focus, window, cx);
+
         // Clone connect_logic for keyboard on_ok; the footer owns the Connect button.
         let connect_for_kb = connect_logic.clone();
         let cancellation_for_keyboard = connection_cancellation.clone();
@@ -143,7 +137,7 @@ pub(crate) fn open_connect_dialog(
             .content({
                 let server_info = server_info.clone();
                 let username_state = username_state.clone();
-                let password_state = password_state.clone();
+                let auth_form = auth_form.clone();
                 let save_username = save_username.clone();
                 move |content, _window, cx| {
                     content
@@ -161,8 +155,7 @@ pub(crate) fn open_connect_dialog(
                                 cx,
                             ))
                         })
-                        // Password field (always).
-                        .child(password_field(&password_state, cx))
+                        .child(auth_form.render(cx))
                         // "Save username" checkbox — only shown when ask_username.
                         .when_some(username_state.as_ref(), |content, _st| {
                             content.child(
@@ -209,13 +202,30 @@ pub(crate) fn open_connect_dialog(
     });
 }
 
+fn defer_initial_focus_once(
+    initial_focus_pending: &Cell<bool>,
+    focus_handle: FocusHandle,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    // Root rebuilds dialog closures on every render. Reapplying initial focus would override
+    // any later pointer or keyboard focus change inside the dialog.
+    if !initial_focus_pending.replace(false) {
+        return;
+    }
+
+    window.defer(cx, move |window, cx| {
+        focus_handle.focus(window, cx);
+    });
+}
+
 /// Handler for the Connect button — validates inputs, builds SshConfig, connects.
 #[allow(clippy::too_many_arguments)]
 fn on_connect_click(
     session: &SshSession,
     index: usize,
     username_state: &Option<gpui::Entity<InputState>>,
-    password_state: &gpui::Entity<InputState>,
+    auth_form: &SshAuthForm,
     save_username: bool,
     connection_cancellation: &Rc<RefCell<Option<ConnectionCancellation>>>,
     connecting: Arc<AtomicBool>,
@@ -244,8 +254,14 @@ fn on_connect_click(
         ),
     };
 
-    // 2. Read password (optional — may be left empty).
-    let password = password_state.read(cx).value().to_string();
+    // 2. Validate and collect the selected authentication material.
+    let auth = match auth_form.take_auth(window, cx) {
+        Ok(auth) => auth,
+        Err(message) => {
+            window.push_notification(notify(NotificationType::Warning, message, cx), cx);
+            return false;
+        }
+    };
 
     // 3. (Optional) Save username/host/port to the store — only when the user ticks the checkbox.
     if save_username && username_state.is_some() {
@@ -258,14 +274,7 @@ fn on_connect_click(
         });
     }
 
-    // 4. Build a zeroizing config, clear the UI field, and connect off-thread.
-    let auth = if password.is_empty() {
-        SshAuthMethod::None
-    } else {
-        SshAuthMethod::Password {
-            password: SecretString::new(password),
-        }
-    };
+    // 4. Build the connection config and connect off-thread.
     let cfg = SshConfig {
         host,
         port,
@@ -275,11 +284,59 @@ fn on_connect_click(
         host_key_policy: HostKeyPolicy::Strict,
         shell_integration: true,
     };
-    password_state.update(cx, |state, cx| state.set_value("", window, cx));
     connecting.store(true, Ordering::Relaxed);
     window.refresh();
     let cancellation = connect_ssh_session(cfg, session.label.clone(), connecting, window, cx);
     *connection_cancellation.borrow_mut() = Some(cancellation);
 
     false // keep the dialog open until the background attempt completes
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{
+        Context, InteractiveElement as _, IntoElement, Render, TestAppContext, VisualTestContext,
+    };
+
+    use super::*;
+
+    struct FocusTestView {
+        initial: FocusHandle,
+        user_selected: FocusHandle,
+    }
+
+    impl Render for FocusTestView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .track_focus(&self.initial)
+                .child(div().track_focus(&self.user_selected))
+        }
+    }
+
+    #[gpui::test]
+    fn initial_dialog_focus_is_not_reapplied_after_focus_moves(cx: &mut TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_window, cx| FocusTestView {
+            initial: cx.focus_handle(),
+            user_selected: cx.focus_handle(),
+        });
+        let cx: &mut VisualTestContext = cx;
+        let initial_focus_pending = Cell::new(true);
+        let initial = view.read_with(cx, |view, _| view.initial.clone());
+        let user_selected = view.read_with(cx, |view, _| view.user_selected.clone());
+
+        cx.update(|window, cx| {
+            defer_initial_focus_once(&initial_focus_pending, initial.clone(), window, cx);
+        });
+        cx.run_until_parked();
+        assert!(cx.update(|window, _cx| initial.is_focused(window)));
+
+        cx.update(|window, cx| user_selected.focus(window, cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            defer_initial_focus_once(&initial_focus_pending, initial, window, cx);
+        });
+        cx.run_until_parked();
+
+        assert!(cx.update(|window, _cx| user_selected.is_focused(window)));
+    }
 }

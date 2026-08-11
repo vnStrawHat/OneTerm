@@ -1,5 +1,5 @@
-//! "Quick Connect" dialog — enter host, port, username, password and connect
-//! immediately. Optionally save the session to the SSH session store.
+//! "Quick Connect" dialog — enter connection and authentication details, then
+//! connect immediately. Optionally save the session to the SSH session store.
 //!
 //! Unlike [`open_connect_dialog`](super::connect_dialog::open_connect_dialog)
 //! (which requires an existing saved session), this dialog collects all
@@ -22,15 +22,15 @@ use gpui_component::{
     notification::NotificationType,
 };
 
-use oneterm_core::{ConnectionCancellation, HostKeyPolicy, SecretString, SshAuthMethod, SshConfig};
-
-use crate::session_state::{SshSession, SshSessionStore};
+use oneterm_core::{ConnectionCancellation, HostKeyPolicy, SshConfig};
 use oneterm_state::notif_ext::notify;
 
+use super::auth_form::SshAuthForm;
 use super::common::{ConnectButton, FieldRequirement, connect_ssh_session, field};
+use crate::session_state::{SshAuthPreference, SshSession, SshSessionStore};
 
-/// Open a "Quick Connect" dialog — enter host, port, username, password and
-/// connect immediately. Optionally save the session to the SSH session store.
+/// Open a dialog that collects SSH connection and authentication details.
+/// Optionally save the non-secret session metadata to the SSH session store.
 pub fn open_quick_connect_dialog(window: &mut Window, cx: &mut App) {
     // ── Input states ──────────────────────────────────────────────────
     let host_state = cx.new(|cx| {
@@ -39,11 +39,7 @@ pub fn open_quick_connect_dialog(window: &mut Window, cx: &mut App) {
     let port_state = cx.new(|cx| InputState::new(window, cx).placeholder("22"));
     let username_state =
         cx.new(|cx| InputState::new(window, cx).placeholder("root  or  root@host:port"));
-    let password_state = cx.new(|cx| {
-        InputState::new(window, cx)
-            .placeholder("Enter password")
-            .masked(true)
-    });
+    let auth_form = SshAuthForm::new(SshAuthPreference::Password, None, window, cx);
 
     // ── Save-to-store checkbox state ───────────────────────────────────
     let save_session = Rc::new(Cell::new(false));
@@ -56,7 +52,7 @@ pub fn open_quick_connect_dialog(window: &mut Window, cx: &mut App) {
         let host_state = host_state.clone();
         let port_state = port_state.clone();
         let username_state = username_state.clone();
-        let password_state = password_state.clone();
+        let auth_form = auth_form.clone();
         let save_session = save_session.clone();
         let connection_cancellation = connection_cancellation.clone();
         let connecting = connecting.clone();
@@ -67,7 +63,6 @@ pub fn open_quick_connect_dialog(window: &mut Window, cx: &mut App) {
             let host_field = host_state.read(cx).value().trim().to_string();
             let port_field = port_state.read(cx).value().trim().to_string();
             let username_raw = username_state.read(cx).value().trim().to_string();
-            let password = password_state.read(cx).value().to_string();
 
             // Parse "user@host:port" format from the username field.
             // If the username contains '@', split into user + host[:port].
@@ -115,7 +110,15 @@ pub fn open_quick_connect_dialog(window: &mut Window, cx: &mut App) {
                 return false;
             }
 
-            // Optionally save to the SSH session store.
+            let auth = match auth_form.take_auth(window, cx) {
+                Ok(auth) => auth,
+                Err(message) => {
+                    window.push_notification(notify(NotificationType::Warning, message, cx), cx);
+                    return false;
+                }
+            };
+
+            // Optionally save non-secret connection metadata to the SSH session store.
             if save_session.get() {
                 let label = format!("{}@{}:{}", username, host, port);
                 let session = SshSession {
@@ -123,6 +126,12 @@ pub fn open_quick_connect_dialog(window: &mut Window, cx: &mut App) {
                     host: host.clone(),
                     port,
                     username: Some(username.clone()),
+                    auth_method: auth_form.method(),
+                    key_path: if auth_form.method() == SshAuthPreference::PrivateKey {
+                        auth_form.key_path_value(cx)
+                    } else {
+                        None
+                    },
                     color: None,
                     group: None,
                 };
@@ -131,14 +140,7 @@ pub fn open_quick_connect_dialog(window: &mut Window, cx: &mut App) {
                 });
             }
 
-            // Build a zeroizing config, clear the UI field, and connect off-thread.
-            let auth = if password.is_empty() {
-                SshAuthMethod::None
-            } else {
-                SshAuthMethod::Password {
-                    password: SecretString::new(password),
-                }
-            };
+            // Build the connection config and connect off-thread.
             let cfg = SshConfig {
                 host,
                 port,
@@ -149,7 +151,6 @@ pub fn open_quick_connect_dialog(window: &mut Window, cx: &mut App) {
                 shell_integration: true,
             };
             let label = format!("{}@{}:{}", cfg.username, cfg.host, cfg.port);
-            password_state.update(cx, |state, cx| state.set_value("", window, cx));
             connecting.store(true, Ordering::Relaxed);
             window.refresh();
             let cancellation = connect_ssh_session(cfg, label, connecting.clone(), window, cx);
@@ -172,7 +173,7 @@ pub fn open_quick_connect_dialog(window: &mut Window, cx: &mut App) {
                 let host_state = host_state.clone();
                 let port_state = port_state.clone();
                 let username_state = username_state.clone();
-                let password_state = password_state.clone();
+                let auth_form = auth_form.clone();
                 let save_session = save_session.clone();
                 move |content, _window, cx| {
                     content
@@ -194,12 +195,7 @@ pub fn open_quick_connect_dialog(window: &mut Window, cx: &mut App) {
                             Input::new(&username_state),
                             cx,
                         ))
-                        .child(field(
-                            "Password",
-                            FieldRequirement::Optional,
-                            Input::new(&password_state).mask_toggle(),
-                            cx,
-                        ))
+                        .child(auth_form.render(cx))
                         .child(
                             div().pt_1().child(
                                 Checkbox::new("save-session")

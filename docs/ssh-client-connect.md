@@ -1,6 +1,6 @@
 # SSH Client Connect Design — OneTerm
 
-> **Status:** Historical design record. For current crate ownership and paths, see [`docs/architecture.md`](architecture.md).
+> **Status:** Historical design record. For current crate ownership and paths, see [`docs/architecture.md`](architecture.md). For the accepted password and private-key authentication behavior, see [`docs/ssh-authentication.md`](ssh-authentication.md).
 
 > Design document for the SSH connect feature: click an item in the SSH Session list →
 > open an SSH session to the target server, with a credential-entry dialog when needed.
@@ -1010,7 +1010,4 @@ impl Debug for SshConfig {
 
 ### 9.6. Authentication status
 
-The current implementation supports no-auth, password, and private-key authentication.
-SSH-agent authentication remains a roadmap item and is not exposed by `SshAuthMethod`
-until the backend can support it end to end. A future implementation should auto-detect
-the agent, support cancellation and key selection, and include platform-specific tests.
+The accepted current behavior is defined in [`docs/ssh-authentication.md`](ssh-authentication.md). The backend supports no-auth, password, and private-key authentication; the saved-session and Quick Connect UI expose password and private-key choices. SSH-agent authentication remains a roadmap item and is not exposed by `SshAuthMethod` until the backend can support it end to end.

@@ -3,6 +3,7 @@
 
 pub mod session_state;
 
+mod auth_form;
 mod common;
 mod connect_dialog;
 mod group_combo;
@@ -16,7 +17,7 @@ mod tree_render;
 
 pub use panel::SessionPanel;
 pub use quick_connect_dialog::open_quick_connect_dialog;
-pub use session_state::{SshSession, SshSessionStore};
+pub use session_state::{SshAuthPreference, SshSession, SshSessionStore};
 
 use gpui::App;
 use gpui_component::dock::register_panel;

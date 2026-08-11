@@ -163,6 +163,19 @@ mod tests {
     }
 
     #[test]
+    fn private_key_debug_output_masks_passphrase() {
+        let auth = SshAuthMethod::PrivateKey {
+            key_path: PathBuf::from("id_ed25519"),
+            passphrase: Some(SecretString::new("do-not-print")),
+        };
+
+        let output = format!("{auth:?}");
+        assert!(!output.contains("do-not-print"));
+        assert!(output.contains("***"));
+        assert!(output.contains("id_ed25519"));
+    }
+
+    #[test]
     fn config_debug_output_masks_password() {
         let config = SshConfig {
             host: "example.com".to_string(),

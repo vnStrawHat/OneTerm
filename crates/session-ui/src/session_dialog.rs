@@ -6,7 +6,7 @@
 //! `store.add` (create) or `store.update` (edit) → auto-saves
 //! `ssh_session.json`.
 //!
-//! Form fields: Label, Host, Port, Username (optional), Group (optional).
+//! Form fields: Label, Host, Port, Username, authentication preference, and Group.
 //!
 //! The Group field uses a [`Combobox`] with `searchable(true)` + a "Create" footer —
 //! the user can **pick an existing group** or **type a new one**.
@@ -27,11 +27,12 @@ use gpui_component::{
     notification::NotificationType,
 };
 
-use crate::session_state::{SshSession, SshSessionStore};
 use oneterm_state::notif_ext::notify;
 
+use super::auth_form::SshAuthForm;
 use super::common::{FieldRequirement, field};
 use super::group_combo::{GroupComboDelegate, SharedCell, group_combobox};
+use crate::session_state::{SshAuthPreference, SshSession, SshSessionStore};
 
 /// Open the dialog to create (when `edit` = `None`) or edit (when `edit` =
 /// `Some((index, session))`) an SSH session.
@@ -49,24 +50,29 @@ pub(crate) fn open_session_dialog(
     };
 
     // Prefill values (empty when creating new).
-    let (label_val, host_val, port_val, user_val, group_val, color_val) = match &edit {
-        Some((_, s)) => (
-            s.label.clone(),
-            s.host.clone(),
-            s.port.to_string(),
-            s.username.clone().unwrap_or_default(),
-            s.group.clone().unwrap_or_default(),
-            s.color.clone(),
-        ),
-        None => (
-            String::new(),
-            String::new(),
-            String::new(),
-            String::new(),
-            String::new(),
-            None,
-        ),
-    };
+    let (label_val, host_val, port_val, user_val, group_val, color_val, auth_method, key_path) =
+        match &edit {
+            Some((_, s)) => (
+                s.label.clone(),
+                s.host.clone(),
+                s.port.to_string(),
+                s.username.clone().unwrap_or_default(),
+                s.group.clone().unwrap_or_default(),
+                s.color.clone(),
+                s.auth_method,
+                s.key_path.clone(),
+            ),
+            None => (
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                None,
+                SshAuthPreference::Password,
+                None,
+            ),
+        };
 
     // ── Collect existing groups from the store ──────────────────────────
     let existing_groups: Vec<SharedString> = {
@@ -123,6 +129,7 @@ pub(crate) fn open_session_dialog(
         }
         st
     });
+    let auth_form = SshAuthForm::new(auth_method, key_path.as_deref(), window, cx);
 
     // ── ColorPickerState ────────────────────────────────────────
     // Default: #56B6C2 when creating new, keep the old color when editing.
@@ -151,6 +158,7 @@ pub(crate) fn open_session_dialog(
     let user_ok = user_state.clone();
     let group_ok = group_value.clone();
     let color_ok = color_state.clone();
+    let auth_for_save = auth_form.clone();
 
     // ── Shared save logic (used by both the button on_click and keyboard on_ok) ──
     let save_logic: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool> = Rc::new({
@@ -160,6 +168,7 @@ pub(crate) fn open_session_dialog(
         let user_ok = user_ok.clone();
         let group_ok = group_ok.clone();
         let color_ok = color_ok.clone();
+        let auth_for_save = auth_for_save.clone();
         move |_, window, cx| {
             let label = label_ok.read(cx).value().trim().to_string();
             let host = host_ok.read(cx).value().trim().to_string();
@@ -189,11 +198,32 @@ pub(crate) fn open_session_dialog(
                 if g.is_empty() { None } else { Some(g) }
             };
             let color = color_ok.read(cx).value().map(|h| h.to_hex());
+            let auth_method = auth_for_save.method();
+            let key_path = if auth_method == SshAuthPreference::PrivateKey {
+                match auth_for_save.key_path_value(cx) {
+                    Some(path) => Some(path),
+                    None => {
+                        window.push_notification(
+                            notify(
+                                NotificationType::Warning,
+                                "Private key path is required.",
+                                cx,
+                            ),
+                            cx,
+                        );
+                        return false;
+                    }
+                }
+            } else {
+                None
+            };
             let session = SshSession {
                 label,
                 host,
                 port,
                 username,
+                auth_method,
+                key_path,
                 color,
                 group,
             };
@@ -234,6 +264,7 @@ pub(crate) fn open_session_dialog(
                 let group_combo_state = group_combo_state.clone();
                 let group_value = group_value.clone();
                 let query_cell = query_cell.clone();
+                let auth_form = auth_form.clone();
                 move |content, _window, cx| {
                     content
                         .child(field(
@@ -264,6 +295,7 @@ pub(crate) fn open_session_dialog(
                             Input::new(&user_state),
                             cx,
                         ))
+                        .child(auth_form.render_preference(cx))
                         .child(field(
                             "Group",
                             FieldRequirement::Optional,
