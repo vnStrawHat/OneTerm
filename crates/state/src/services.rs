@@ -98,6 +98,13 @@ mod tests {
             unreachable!()
         }
         fn window(_: &mut gpui::Window, _: &mut gpui::App) {}
+        fn duplicate_ssh(
+            _: oneterm_core::SshDuplicateConfig,
+            _: Option<std::path::PathBuf>,
+            _: &mut gpui::Window,
+            _: &mut gpui::App,
+        ) {
+        }
         fn app(_: &mut gpui::App) {}
         fn dock(
             _: &gpui::Entity<gpui_component::dock::DockArea>,
@@ -108,6 +115,7 @@ mod tests {
         WorkspaceCommands {
             new_terminal_with_shell: terminal,
             open_new_session_dialog: window,
+            open_duplicate_ssh_dialog: duplicate_ssh,
             open_settings: app,
             open_about: window,
             find_in_active_terminal: dock,

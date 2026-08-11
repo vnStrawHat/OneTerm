@@ -211,6 +211,16 @@ Resolving `ShellKind` → executable + args + env (Windows-first):
 > The settings UI (`ui/views/settings/terminal.rs`) lets the user pick `kind`, type a custom
 > `program`, add `args`, set `cwd`, toggle `utf8`. Persisted via `core::config::store`.
 
+### 6.1.1 Windows local cwd reporting
+
+OneTerm's generated prompt integration emits OSC 7 whenever it controls the Windows shell prompt:
+
+- `cmd.exe`: the generated `PROMPT` emits the current `$P` path before OSC 133 markers. A user-supplied `LocalShellConfig.env["PROMPT"]` remains authoritative and may omit cwd reporting.
+- Windows PowerShell and pwsh: the startup command wraps the existing global `prompt` function, emits the current `$pwd.Path` as OSC 7, then invokes the original prompt. This preserves the shell's normal prompt output while making cwd updates observable after `cd`/`Set-Location`.
+- Custom shells or user prompt overrides must emit OSC 7 themselves if live cwd tracking is required.
+
+The local listener already parses forwarded OSC 7 payloads into `SessionEvent::Cwd` and updates `TerminalSession::cwd()`.
+
 ### 6.2. Spawn via `alacritty_terminal::tty`
 
 ```rust
@@ -489,6 +499,17 @@ feature crates read those handles from their GPUI application context.
 
 `SessionEvent`: `Output | Title(String) | Cwd(PathBuf) | Clipboard(Option<String>) |
 Exited(Option<i32>) | Closed`.
+
+### 9.1 Session duplication metadata and cwd
+
+Each terminal view retains a non-secret launch descriptor so the terminal context menu can duplicate the terminal in the right-clicked Space without importing a backend crate:
+
+- Local descriptors contain the complete `LocalShellConfig` used to spawn the source session.
+- SSH descriptors contain host, port, username, authentication preference, optional private-key path, and shell-integration preference. They never contain a password or private-key passphrase.
+
+At invocation time, duplication reads `TerminalSession::cwd()`. Local duplication clones its descriptor, sets `LocalShellConfig::cwd` to the live value, and spawns a new sibling tab through `SessionFactory`; when the live value is absent, it clears `cwd` so the shell/backend chooses its normal default directory. SSH duplication crosses the app-composed workspace command boundary to `session-ui`, opens a prefilled authentication dialog with empty secret fields and one-shot initial focus on password/passphrase, reconnects through `SessionFactory`, and requests the selected cwd in the new remote login shell only when known. It does not use OneTerm's process cwd as a fallback. The source process/session and terminal contents are not cloned or modified.
+
+See [`decisions/0002-ssh-duplicate-auth.md`](decisions/0002-ssh-duplicate-auth.md) for the accepted credential-lifetime decision and [`terminal-split/04-context-menu.md`](terminal-split/04-context-menu.md) for menu behavior.
 
 ---
 

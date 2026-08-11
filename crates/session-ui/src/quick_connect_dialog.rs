@@ -12,7 +12,10 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use gpui::{App, AppContext, ClickEvent, ParentElement as _, Styled, Window, div, px};
+use gpui::{
+    App, AppContext, ClickEvent, IntoElement, ParentElement as _, Styled, Window, div,
+    prelude::FluentBuilder as _, px,
+};
 use gpui_component::{
     WindowExt as _,
     button::Button,
@@ -22,24 +25,138 @@ use gpui_component::{
     notification::NotificationType,
 };
 
-use oneterm_core::{ConnectionCancellation, HostKeyPolicy, SshConfig};
+use oneterm_core::{
+    ConnectionCancellation, HostKeyPolicy, SshConfig, SshDuplicateAuth, SshDuplicateConfig,
+};
 use oneterm_state::notif_ext::notify;
 
 use super::auth_form::SshAuthForm;
-use super::common::{ConnectButton, FieldRequirement, connect_ssh_session, field};
+use super::common::{
+    ConnectButton, FieldRequirement, connect_ssh_session, defer_initial_focus_once, field,
+};
 use crate::session_state::{SshAuthPreference, SshSession, SshSessionStore};
+
+#[derive(Clone, Copy)]
+enum QuickConnectKind {
+    New,
+    Duplicate,
+}
+
+enum QuickConnectMode {
+    New,
+    Duplicate {
+        config: SshDuplicateConfig,
+        initial_cwd: Option<std::path::PathBuf>,
+    },
+}
+
+impl QuickConnectMode {
+    fn kind(&self) -> QuickConnectKind {
+        match self {
+            Self::New => QuickConnectKind::New,
+            Self::Duplicate { .. } => QuickConnectKind::Duplicate,
+        }
+    }
+}
+
+fn save_session_option(
+    kind: QuickConnectKind,
+    save_session: Rc<Cell<bool>>,
+) -> Option<impl IntoElement> {
+    match kind {
+        QuickConnectKind::Duplicate => None,
+        QuickConnectKind::New => Some(
+            div().pt_1().child(
+                Checkbox::new("save-session")
+                    .label("Save to SSH Sessions")
+                    .checked(save_session.get())
+                    .on_click(move |checked: &bool, _window, _cx| {
+                        save_session.set(*checked);
+                    }),
+            ),
+        ),
+    }
+}
 
 /// Open a dialog that collects SSH connection and authentication details.
 /// Optionally save the non-secret session metadata to the SSH session store.
 pub fn open_quick_connect_dialog(window: &mut Window, cx: &mut App) {
+    open_quick_connect_dialog_internal(QuickConnectMode::New, window, cx);
+}
+
+/// Open the SSH Duplicate Session dialog with non-secret fields prefilled.
+pub fn open_duplicate_ssh_dialog(
+    config: SshDuplicateConfig,
+    cwd: Option<std::path::PathBuf>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    open_quick_connect_dialog_internal(
+        QuickConnectMode::Duplicate {
+            config,
+            initial_cwd: cwd,
+        },
+        window,
+        cx,
+    );
+}
+
+fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Window, cx: &mut App) {
+    let kind = mode.kind();
+    let is_duplicate = matches!(kind, QuickConnectKind::Duplicate);
+    let (prefill, initial_cwd) = match mode {
+        QuickConnectMode::New => (None, None),
+        QuickConnectMode::Duplicate {
+            config,
+            initial_cwd,
+        } => (Some(config), initial_cwd),
+    };
+    let (host, port, username, auth_method, key_path, shell_integration) = match prefill {
+        Some(config) => {
+            let (method, key_path) = match config.auth {
+                SshDuplicateAuth::PrivateKey { key_path } => {
+                    (SshAuthPreference::PrivateKey, Some(key_path))
+                }
+                SshDuplicateAuth::None | SshDuplicateAuth::Password => {
+                    (SshAuthPreference::Password, None)
+                }
+            };
+            (
+                config.host,
+                config.port.to_string(),
+                config.username,
+                method,
+                key_path,
+                config.shell_integration,
+            )
+        }
+        None => (
+            String::new(),
+            String::new(),
+            String::new(),
+            SshAuthPreference::Password,
+            None,
+            true,
+        ),
+    };
+
     // ── Input states ──────────────────────────────────────────────────
     let host_state = cx.new(|cx| {
-        InputState::new(window, cx).placeholder("e.g. 192.168.1.10 or server.example.com")
+        InputState::new(window, cx)
+            .placeholder("e.g. 192.168.1.10 or server.example.com")
+            .default_value(host)
     });
-    let port_state = cx.new(|cx| InputState::new(window, cx).placeholder("22"));
-    let username_state =
-        cx.new(|cx| InputState::new(window, cx).placeholder("root  or  root@host:port"));
-    let auth_form = SshAuthForm::new(SshAuthPreference::Password, None, window, cx);
+    let port_state = cx.new(|cx| {
+        InputState::new(window, cx)
+            .placeholder("22")
+            .default_value(port)
+    });
+    let username_state = cx.new(|cx| {
+        InputState::new(window, cx)
+            .placeholder("root  or  root@host:port")
+            .default_value(username)
+    });
+    let auth_form = SshAuthForm::new(auth_method, key_path.as_deref(), window, cx);
 
     // ── Save-to-store checkbox state ───────────────────────────────────
     let save_session = Rc::new(Cell::new(false));
@@ -56,6 +173,7 @@ pub fn open_quick_connect_dialog(window: &mut Window, cx: &mut App) {
         let save_session = save_session.clone();
         let connection_cancellation = connection_cancellation.clone();
         let connecting = connecting.clone();
+        let initial_cwd = initial_cwd.clone();
         move |_, window, cx| {
             if connecting.load(Ordering::Relaxed) {
                 return false;
@@ -148,12 +266,19 @@ pub fn open_quick_connect_dialog(window: &mut Window, cx: &mut App) {
                 auth,
                 cancellation: ConnectionCancellation::default(),
                 host_key_policy: HostKeyPolicy::Strict,
-                shell_integration: true,
+                shell_integration,
             };
             let label = format!("{}@{}:{}", cfg.username, cfg.host, cfg.port);
             connecting.store(true, Ordering::Relaxed);
             window.refresh();
-            let cancellation = connect_ssh_session(cfg, label, connecting.clone(), window, cx);
+            let cancellation = connect_ssh_session(
+                cfg,
+                label,
+                initial_cwd.clone(),
+                connecting.clone(),
+                window,
+                cx,
+            );
             *connection_cancellation.borrow_mut() = Some(cancellation);
 
             false
@@ -161,13 +286,26 @@ pub fn open_quick_connect_dialog(window: &mut Window, cx: &mut App) {
     });
 
     let connect_button = cx.new(|_| ConnectButton::new(connect_logic.clone(), connecting.clone()));
+    let initial_focus_pending = Rc::new(Cell::new(is_duplicate));
 
-    window.open_dialog(cx, move |dialog, _window, _cx| {
+    window.open_dialog(cx, move |dialog, window, cx| {
+        if is_duplicate {
+            defer_initial_focus_once(
+                &initial_focus_pending,
+                auth_form.secret_focus_handle(cx),
+                window,
+                cx,
+            );
+        }
         let connect_for_kb = connect_logic.clone();
         let cancellation_for_keyboard = connection_cancellation.clone();
 
         dialog
-            .title("SSH Quick Connect")
+            .title(if is_duplicate {
+                "Duplicate SSH Session"
+            } else {
+                "SSH Quick Connect"
+            })
             .w(px(440.))
             .content({
                 let host_state = host_state.clone();
@@ -196,18 +334,9 @@ pub fn open_quick_connect_dialog(window: &mut Window, cx: &mut App) {
                             cx,
                         ))
                         .child(auth_form.render(cx))
-                        .child(
-                            div().pt_1().child(
-                                Checkbox::new("save-session")
-                                    .label("Save to SSH Sessions")
-                                    .checked(save_session.get())
-                                    .on_click({
-                                        let save_session = save_session.clone();
-                                        move |checked: &bool, _window, _cx| {
-                                            save_session.set(*checked);
-                                        }
-                                    }),
-                            ),
+                        .when_some(
+                            save_session_option(kind, save_session.clone()),
+                            |content, option| content.child(option),
                         )
                 }
             })
@@ -235,4 +364,17 @@ pub fn open_quick_connect_dialog(window: &mut Window, cx: &mut App) {
                     .on_ok(move |_, window, cx| connect_for_kb(&ClickEvent::default(), window, cx)),
             )
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_option_element_is_built_only_for_quick_connect() {
+        assert!(
+            save_session_option(QuickConnectKind::Duplicate, Rc::new(Cell::new(false))).is_none()
+        );
+        assert!(save_session_option(QuickConnectKind::New, Rc::new(Cell::new(false))).is_some());
+    }
 }

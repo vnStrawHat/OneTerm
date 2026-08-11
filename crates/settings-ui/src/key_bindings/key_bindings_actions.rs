@@ -169,6 +169,15 @@ pub(super) const BINDABLE_ACTIONS: &[BindableAction] = &[
     },
     // ── Terminal context-menu actions ────────────────────────────
     BindableAction {
+        id: "duplicate_session",
+        label: "Duplicate Session",
+        group: "Terminal Context Menu",
+        default: None,
+        context: None,
+        make: |ks, ctx| make_binding(ks, oneterm_actions::DuplicateSession, ctx),
+        name_fn: <oneterm_actions::DuplicateSession as Action>::name_for_type,
+    },
+    BindableAction {
         id: "split_right",
         label: "Split Right",
         group: "Terminal Context Menu",
@@ -324,3 +333,21 @@ pub(super) const BINDABLE_ACTIONS: &[BindableAction] = &[
         name_fn: <oneterm_actions::SftpRefresh as Action>::name_for_type,
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::BINDABLE_ACTIONS;
+
+    #[test]
+    fn duplicate_session_is_bindable_without_a_default_keystroke() {
+        let action = BINDABLE_ACTIONS
+            .iter()
+            .find(|action| action.id == "duplicate_session")
+            .expect("Duplicate Session action must be registered");
+
+        assert_eq!(action.label, "Duplicate Session");
+        assert_eq!(action.group, "Terminal Context Menu");
+        assert_eq!(action.default, None);
+        assert_eq!((action.name_fn)(), "oneterm::DuplicateSession");
+    }
+}

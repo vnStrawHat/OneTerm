@@ -42,6 +42,8 @@ pub enum TerminalViewEvent {
 /// View that renders one terminal session (local or ssh — via `dyn TerminalSession`).
 pub struct LocalTerminalView {
     pub(crate) session: Entity<Box<dyn TerminalSession>>,
+    /// Non-secret launch metadata used by Duplicate Session.
+    pub(crate) duplicate_config: Option<oneterm_core::SessionDuplicateConfig>,
     pub(crate) focus: FocusHandle,
     /// Layout metrics sink (Element writes in prepaint, mouse handler reads).
     pub(crate) metrics: Rc<RefCell<GridMetrics>>,
@@ -290,6 +292,7 @@ impl LocalTerminalView {
 
         Self {
             session,
+            duplicate_config: None,
             focus,
             metrics: Rc::new(RefCell::new(GridMetrics::default())),
             scroll_handle: TerminalScrollHandle::new(),

@@ -58,6 +58,7 @@ pub(crate) fn init(cx: &mut App) {
         WorkspaceCommands {
             new_terminal_with_shell: oneterm_terminal_view::new_terminal_with_shell_cmd,
             open_new_session_dialog: oneterm_session_ui::open_quick_connect_dialog,
+            open_duplicate_ssh_dialog: oneterm_session_ui::open_duplicate_ssh_dialog,
             open_settings: oneterm_settings_ui::open_settings,
             open_about: oneterm_settings_ui::open_about_dialog,
             find_in_active_terminal: oneterm_terminal_view::find_in_active_terminal,

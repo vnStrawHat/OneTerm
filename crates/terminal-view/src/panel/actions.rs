@@ -12,8 +12,8 @@ use gpui::{
 use gpui_component::ActiveTheme as _;
 
 use oneterm_actions::{
-    CloseSpace, SplitDown, SplitLeft, SplitRight, SplitUp, TerminalClear, TerminalCopy,
-    TerminalPaste, TerminalSelectAll,
+    CloseSpace, DuplicateSession, SplitDown, SplitLeft, SplitRight, SplitUp, TerminalClear,
+    TerminalCopy, TerminalPaste, TerminalSelectAll,
 };
 
 use super::super::space::{SplitDir, render_node};
@@ -22,6 +22,16 @@ use super::TerminalPanel;
 // ── Terminal context-menu action handlers ────────────────────────────
 
 impl TerminalPanel {
+    /// Duplicate the session in the active terminal Space.
+    fn on_action_duplicate_session(
+        &mut self,
+        _: &DuplicateSession,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.duplicate_session(self.tree.active(), window, cx);
+    }
+
     /// Split the active terminal Space to the right.
     fn on_action_split_right(
         &mut self,
@@ -131,6 +141,7 @@ impl Render for TerminalPanel {
             .size_full()
             .bg(cx.theme().background)
             // Terminal context-menu action handlers — also fired by global key bindings.
+            .on_action(cx.listener(Self::on_action_duplicate_session))
             .on_action(cx.listener(Self::on_action_split_right))
             .on_action(cx.listener(Self::on_action_split_left))
             .on_action(cx.listener(Self::on_action_split_up))

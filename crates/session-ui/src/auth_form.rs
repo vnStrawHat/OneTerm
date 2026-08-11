@@ -76,6 +76,14 @@ impl SshAuthForm {
         }
     }
 
+    /// Focus the credential field appropriate for the selected method.
+    pub(crate) fn secret_focus_handle(&self, cx: &App) -> gpui::FocusHandle {
+        match self.method() {
+            SshAuthPreference::Password => self.password.read(cx).focus_handle(cx),
+            SshAuthPreference::PrivateKey => self.passphrase.read(cx).focus_handle(cx),
+        }
+    }
+
     pub(crate) fn key_path_value(&self, cx: &App) -> Option<PathBuf> {
         let value = self.key_path.read(cx).value().trim().to_string();
         (!value.is_empty()).then(|| PathBuf::from(value))
@@ -327,6 +335,70 @@ mod tests {
                 .p_4()
                 .child(self.form.render(cx))
         }
+    }
+
+    #[gpui::test]
+    fn secret_focus_targets_password_for_password_auth(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let view_probe = Rc::new(RefCell::new(None));
+        let probe_for_window = view_probe.clone();
+        let (_root, cx) = cx.add_window_view(move |window, cx| {
+            let view = cx.new(|cx| AuthFormTestView {
+                form: SshAuthForm::new(SshAuthPreference::Password, None, window, cx),
+            });
+            *probe_for_window.borrow_mut() = Some(view.clone());
+            Root::new(view, window, cx)
+        });
+        let cx: &mut VisualTestContext = cx;
+        let view = view_probe
+            .borrow()
+            .clone()
+            .expect("view must be initialized");
+        let secret_focus = view.read_with(cx, |view, cx| view.form.secret_focus_handle(cx));
+        cx.update(|window, cx| secret_focus.focus(window, cx));
+        cx.run_until_parked();
+
+        assert!(cx.update(|window, _| secret_focus.is_focused(window)));
+        assert!(cx.update(|window, cx| {
+            view.read(cx)
+                .form
+                .password
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+        }));
+    }
+
+    #[gpui::test]
+    fn secret_focus_targets_passphrase_for_private_key_auth(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let view_probe = Rc::new(RefCell::new(None));
+        let probe_for_window = view_probe.clone();
+        let (_root, cx) = cx.add_window_view(move |window, cx| {
+            let view = cx.new(|cx| AuthFormTestView {
+                form: SshAuthForm::new(SshAuthPreference::PrivateKey, None, window, cx),
+            });
+            *probe_for_window.borrow_mut() = Some(view.clone());
+            Root::new(view, window, cx)
+        });
+        let cx: &mut VisualTestContext = cx;
+        let view = view_probe
+            .borrow()
+            .clone()
+            .expect("view must be initialized");
+        let secret_focus = view.read_with(cx, |view, cx| view.form.secret_focus_handle(cx));
+        cx.update(|window, cx| secret_focus.focus(window, cx));
+        cx.run_until_parked();
+
+        assert!(cx.update(|window, _| secret_focus.is_focused(window)));
+        assert!(cx.update(|window, cx| {
+            view.read(cx)
+                .form
+                .passphrase
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+        }));
     }
 
     #[gpui::test]

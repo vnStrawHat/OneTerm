@@ -21,7 +21,7 @@ use gpui_component::{
     h_flex,
     menu::DropdownMenu as _,
 };
-use oneterm_core::ShellKind;
+use oneterm_core::{LocalShellConfig, SessionDuplicateConfig, ShellKind};
 use oneterm_state::AppServices;
 use oneterm_terminal::PtySize;
 use oneterm_terminal::TerminalSession;
@@ -125,15 +125,30 @@ impl TerminalPanel {
         this
     }
 
-    /// Create a panel from an existing session (SSH or local).
+    /// Create a panel from an existing session without duplication metadata.
     pub fn from_session(
         session: Box<dyn TerminalSession>,
         title: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        Self::from_session_with_duplicate_config(session, title, None, window, cx)
+    }
+
+    /// Create a panel from an existing session and its non-secret duplication metadata.
+    pub(super) fn from_session_with_duplicate_config(
+        session: Box<dyn TerminalSession>,
+        title: &str,
+        duplicate_config: Option<SessionDuplicateConfig>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let session_entity = cx.new(|_| session);
-        let view = cx.new(|cx| LocalTerminalView::new(session_entity, window, cx));
+        let view = cx.new(|cx| {
+            let mut view = LocalTerminalView::new(session_entity, window, cx);
+            view.duplicate_config = duplicate_config;
+            view
+        });
         let focus = cx.focus_handle();
         let tree = SpaceTree::new_terminal(view.clone(), focus);
         let active = tree.active();
@@ -169,6 +184,25 @@ impl TerminalPanel {
         cx.new(|cx| Self::from_session(session, title, window, cx))
     }
 
+    /// Create an entity from a session and non-secret duplication metadata.
+    pub fn from_session_entity_with_duplicate_config(
+        session: Box<dyn TerminalSession>,
+        title: &str,
+        duplicate_config: SessionDuplicateConfig,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<Self> {
+        cx.new(|cx| {
+            Self::from_session_with_duplicate_config(
+                session,
+                title,
+                Some(duplicate_config),
+                window,
+                cx,
+            )
+        })
+    }
+
     /// Helper to create an `Entity<Self>` (default local session).
     pub fn new_entity(window: &mut Window, cx: &mut App) -> Entity<Self> {
         cx.new(|cx| Self::new(window, cx))
@@ -200,25 +234,35 @@ impl TerminalPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Entity<LocalTerminalView>> {
-        let (shell, scrollback_history) = {
+        let shell = {
             let settings = TerminalSettings::global(cx).read(cx);
-            let shell = match shell_kind_override {
+            match shell_kind_override {
                 Some(kind) => {
                     // Override the shell kind but keep other settings (utf8, cwd, env, args).
-                    let mut s = settings.shell.clone();
-                    s.kind = kind;
+                    let mut shell = settings.shell.clone();
+                    shell.kind = kind;
                     // Clear program so resolve_shell auto-detects for the new kind.
-                    s.program = None;
-                    s
+                    shell.program = None;
+                    shell
                 }
                 None => settings.shell.clone(),
-            };
-            (shell, settings.scrollback_history)
+            }
         };
+        Self::spawn_local_view_with_config(shell, window, cx)
+    }
+
+    /// Spawn a local terminal view from an exact shell configuration.
+    pub(super) fn spawn_local_view_with_config(
+        shell: LocalShellConfig,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<LocalTerminalView>> {
+        let scrollback_history = TerminalSettings::global(cx).read(cx).scrollback_history;
         let Some(factory) = AppServices::session_factory(cx) else {
             log::error!("Application session service is unavailable; cannot spawn local terminal.");
             return None;
         };
+        let duplicate_config = SessionDuplicateConfig::Local(shell.clone());
         let session: Box<dyn TerminalSession> =
             match factory.spawn_local(shell, PtySize { rows: 24, cols: 80 }, scrollback_history) {
                 Ok(s) => s,
@@ -228,7 +272,11 @@ impl TerminalPanel {
                 }
             };
         let session_entity = cx.new(|_| session);
-        Some(cx.new(|cx| LocalTerminalView::new(session_entity, window, cx)))
+        Some(cx.new(|cx| {
+            let mut view = LocalTerminalView::new(session_entity, window, cx);
+            view.duplicate_config = Some(duplicate_config);
+            view
+        }))
     }
 
     /// Point `view`'s context menu at Space `space_id` in this panel.

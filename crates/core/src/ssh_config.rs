@@ -140,6 +140,26 @@ impl Debug for SshAuthMethod {
     }
 }
 
+impl SshConfig {
+    /// Build the non-secret metadata retained for Duplicate Session.
+    pub fn duplicate_config(&self) -> crate::SshDuplicateConfig {
+        let auth = match &self.auth {
+            SshAuthMethod::None => crate::SshDuplicateAuth::None,
+            SshAuthMethod::Password { .. } => crate::SshDuplicateAuth::Password,
+            SshAuthMethod::PrivateKey { key_path, .. } => crate::SshDuplicateAuth::PrivateKey {
+                key_path: key_path.clone(),
+            },
+        };
+        crate::SshDuplicateConfig {
+            host: self.host.clone(),
+            port: self.port,
+            username: self.username.clone(),
+            auth,
+            shell_integration: self.shell_integration,
+        }
+    }
+}
+
 impl Debug for SshConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("SshConfig")
@@ -155,6 +175,33 @@ impl Debug for SshConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duplicate_config_keeps_key_path_but_not_passphrase() {
+        let config = SshConfig {
+            host: "example.com".to_string(),
+            port: 2222,
+            username: "alice".to_string(),
+            auth: SshAuthMethod::PrivateKey {
+                key_path: PathBuf::from("id_ed25519"),
+                passphrase: Some(SecretString::new("do-not-retain")),
+            },
+            cancellation: ConnectionCancellation::default(),
+            host_key_policy: HostKeyPolicy::Strict,
+            shell_integration: true,
+        };
+
+        let duplicate = config.duplicate_config();
+        assert_eq!(duplicate.host, "example.com");
+        assert_eq!(duplicate.port, 2222);
+        assert_eq!(duplicate.username, "alice");
+        assert_eq!(
+            duplicate.auth,
+            crate::SshDuplicateAuth::PrivateKey {
+                key_path: PathBuf::from("id_ed25519")
+            }
+        );
+    }
 
     #[test]
     fn secret_debug_output_is_masked() {

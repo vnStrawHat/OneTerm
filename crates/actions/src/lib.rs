@@ -50,6 +50,8 @@ actions!(
         /// Activate the in-terminal search bar (Find).
         Find,
         // ── Terminal context-menu actions ───────────────────────────
+        /// Duplicate the session in the active terminal Space.
+        DuplicateSession,
         /// Split the active terminal Space to the right.
         SplitRight,
         /// Split the active terminal Space to the left.

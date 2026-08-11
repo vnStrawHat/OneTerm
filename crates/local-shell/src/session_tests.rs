@@ -35,6 +35,47 @@ fn spawn_default() -> LocalSession {
     LocalSession::spawn(cfg, PtySize { rows: 24, cols: 80 }, 10_000).expect("spawn")
 }
 
+#[cfg(windows)]
+fn assert_powershell_prompt_emits_cwd(kind: oneterm_core::ShellKind, label: &str) {
+    let cfg = oneterm_core::LocalShellConfig {
+        kind,
+        ..Default::default()
+    };
+    let session = LocalSession::spawn(cfg, PtySize { rows: 24, cols: 80 }, 10_000)
+        .unwrap_or_else(|error| panic!("spawn {label}: {error}"));
+
+    assert!(
+        wait_until(Duration::from_secs(5), || session.cwd().is_some()),
+        "{label} prompt must emit OSC 7 through the PTY"
+    );
+    let snapshot = session
+        .snapshot_query()
+        .cells
+        .iter()
+        .map(|indexed| indexed.cell.c)
+        .collect::<String>();
+    assert!(!snapshot.contains("ParserError"), "{snapshot}");
+    assert!(
+        !snapshot.contains("Missing ')' in method call"),
+        "{snapshot}"
+    );
+    session
+        .close()
+        .unwrap_or_else(|error| panic!("close {label}: {error}"));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_powershell_prompt_emits_cwd_without_parser_errors() {
+    assert_powershell_prompt_emits_cwd(oneterm_core::ShellKind::PowerShell, "PowerShell");
+}
+
+#[cfg(windows)]
+#[test]
+fn pwsh_prompt_emits_cwd_without_parser_errors() {
+    assert_powershell_prompt_emits_cwd(oneterm_core::ShellKind::Pwsh, "pwsh");
+}
+
 #[test]
 fn trait_snapshot_bounds() {
     let s = spawn_default();

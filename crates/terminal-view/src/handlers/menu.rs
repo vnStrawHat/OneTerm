@@ -6,8 +6,8 @@ use gpui_component::menu::{ContextMenu, ContextMenuExt as _, PopupMenuItem};
 use oneterm_terminal::TerminalSession;
 
 use oneterm_actions::{
-    AddPanel, CloseSpace, SplitDown, SplitLeft, SplitRight, SplitUp, TerminalClear, TerminalCopy,
-    TerminalPaste, TerminalSelectAll,
+    AddPanel, CloseSpace, DuplicateSession, SplitDown, SplitLeft, SplitRight, SplitUp,
+    TerminalClear, TerminalCopy, TerminalPaste, TerminalSelectAll,
 };
 
 use super::super::space::{SplitContext, SplitDir};
@@ -23,8 +23,9 @@ use super::super::space::{SplitContext, SplitDir};
 ///
 /// Layout for a terminal Space (with `split_ctx`):
 /// 1. New Terminal
-/// 2. ── separator ──
-/// 3. Split Right / Left / Up / Down
+/// 2. Duplicate Session
+/// 3. ── separator ──
+/// 4. Split Right / Left / Up / Down
 /// 4. ── separator ──
 /// 5. Copy / Paste / Select All / Clear
 /// 6. ── separator ──
@@ -65,7 +66,26 @@ where
                     }),
             );
 
-            // 2–3. Split Right / Left / Up / Down (only inside a Space tree).
+            // 2. Duplicate Session — targets the terminal in the right-clicked Space.
+            if let Some(ctx) = split_ctx.clone() {
+                let panel = ctx.panel.clone();
+                let space_id = ctx.space_id;
+                let f = focus.clone();
+                menu = menu.item(
+                    PopupMenuItem::new("Duplicate Session")
+                        .action(Box::new(DuplicateSession))
+                        .on_click(move |_, window, cx| {
+                            if let Some(panel) = panel.upgrade() {
+                                panel.update(cx, |panel, cx| {
+                                    panel.duplicate_session(space_id, window, cx);
+                                });
+                            }
+                            window.focus(&f, cx);
+                        }),
+                );
+            }
+
+            // 3–4. Split Right / Left / Up / Down (only inside a Space tree).
             if let Some(ctx) = split_ctx.clone() {
                 menu = menu
                     .separator()

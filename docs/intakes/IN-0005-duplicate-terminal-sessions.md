@@ -1,0 +1,65 @@
+# Spec Intake: Duplicate terminal sessions
+
+ID: IN-0005
+Date: 2026-08-11
+Type: new_spec
+Lane: normal
+
+## Source
+
+User request: add **Duplicate Session** directly below **New Terminal** in the terminal context menu. Clarifications accepted on 2026-08-11: support both local and SSH sessions; SSH must prompt for authentication again instead of retaining secrets; the duplicate dialog initially focuses the password/passphrase; when live cwd is unavailable, use the duplicated shell's normal default directory rather than OneTerm's process cwd; enable Windows local shells to report cwd where OneTerm controls the prompt integration.
+
+## Requested Outcome
+
+Add Duplicate Session below New Terminal in the terminal context menu. Local duplication reuses the original shell configuration and current cwd; SSH duplication prefills connection details, prompts again for authentication, reconnects to the same host shell, and changes to the current cwd. If cwd is unavailable, the duplicated shell uses its normal default directory.
+
+## Project Impact
+
+The terminal context menu gains one action. Terminal views must retain non-secret launch metadata per Space so the source shell/connection can be reconstructed. Local duplication creates a sibling terminal tab immediately. SSH duplication crosses the terminal/session feature boundary through the existing app-composed command registry, opens a prefilled authentication dialog, then reconnects and requests the source cwd.
+
+## Candidate Product Contracts
+
+| Contract | Purpose | Source or owner |
+| --- | --- | --- |
+| `docs/terminal-split/04-context-menu.md` | Terminal Space context-menu layout and action behavior | `oneterm-terminal-view` |
+| `docs/terminal-backend.md` | Session creation, secret lifetime, and cwd behavior | terminal/core/backends and app composition |
+| `docs/architecture.md` | Feature and command-registry boundaries | app/state/feature crates |
+
+## Candidate Work Packets
+
+| Packet | Outcome | Dependencies |
+| --- | --- | --- |
+| `docs/work/US-0010-duplicate-terminal-sessions.md` | Implement and verify local and SSH duplication | This intake and accepted owning contracts |
+
+## Architecture and Boundary Questions
+
+- Runtime and owning boundary: terminal-view owns the menu and local duplicate; session-ui owns the SSH authentication dialog; app wires the callback through state.
+- Data ownership and lifecycle: retain only non-secret launch metadata with each terminal view; read cwd live when the action runs.
+- Auth, security, privacy, or audit: do not retain password/passphrase material for duplication; prompt again for SSH authentication.
+- External systems and side effects: SSH duplication creates a new network connection and sends a cwd-change command after connection.
+- Public interfaces and compatibility: extend internal app command/session-launch contracts without changing persisted schemas.
+
+## Validation Shape
+
+| Layer | Expected proof |
+| --- | --- |
+| Focused | Unit tests for non-secret launch metadata, cwd selection, and remote cwd command escaping; terminal-view/session-ui package tests |
+| Unit | `cargo test --workspace` |
+| Integration | Existing app service and workspace command wiring compiles and tests |
+| E2E | Manual context-menu flows for local and SSH where GUI/network access is available |
+| Platform / Release | Format, clippy, and workspace build quality gates |
+
+## Open Decisions and Questions
+
+- Accepted: SSH duplicate authentication prompts again; see `docs/decisions/0002-ssh-duplicate-auth.md`.
+- Non-blocking platform caveat: remote cwd change targets the shell command syntax supported by the existing SSH shell-integration scope (POSIX-like shells).
+
+## First Action or Handoff
+
+Implement the bounded work in `US-0010`, stopping if the command-registry boundary cannot carry non-secret SSH metadata without introducing a feature dependency cycle.
+
+## Harness Delta
+
+No reusable Harness change identified.
+
+> Keep only useful detail. Do not fabricate project facts, create empty downstream artifacts, or turn unresolved product decisions into implementation assumptions.

@@ -124,6 +124,19 @@ pub struct ResolvedShell {
     pub env: HashMap<String, String>,
 }
 
+const CMD_OSC7_PROMPT: &str = "$E]7;$P$E\\$E]133;A$E\\$P$G$E]133;B$E\\";
+const POWERSHELL_OSC7_PROMPT_INIT: &str = r#"$global:__OneTermOriginalPrompt=$function:prompt;function global:prompt{$e=[char]27;[Console]::Write($e+']7;'+$pwd.Path+$e+'\');& $global:__OneTermOriginalPrompt}"#;
+
+fn powershell_init(utf8: bool) -> String {
+    if utf8 {
+        format!(
+            "[Console]::OutputEncoding=[Text.UTF8Encoding]::new();{POWERSHELL_OSC7_PROMPT_INIT}"
+        )
+    } else {
+        POWERSHELL_OSC7_PROMPT_INIT.to_string()
+    }
+}
+
 #[cfg(windows)]
 fn comspec() -> PathBuf {
     std::env::var_os("COMSPEC")
@@ -196,14 +209,14 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
                 .or_else(|| find_in_path("powershell"))
                 .or_else(|| find_in_path("powershell.exe"))
                 .ok_or_else(|| AppError::msg("powershell.exe not found in PATH"))?;
-            let mut a = vec!["-NoLogo".into()];
-            if cfg.utf8 {
-                // -NoExit keeps the session interactive after -Command runs.
-                // Without it PowerShell exits immediately → tab appears dead.
-                a.push("-NoExit".into());
-                a.push("-Command".into());
-                a.push("[Console]::OutputEncoding=[Text.UTF8Encoding]::new()".into());
-            }
+            // -NoExit keeps the session interactive after the integration command runs.
+            // The prompt wrapper emits OSC 7 before delegating to the original prompt.
+            let a = vec![
+                "-NoLogo".into(),
+                "-NoExit".into(),
+                "-Command".into(),
+                powershell_init(cfg.utf8),
+            ];
             (prog, a)
         }
         ShellKind::Pwsh => {
@@ -213,12 +226,12 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
                 .or_else(|| find_in_path("pwsh"))
                 .or_else(|| find_in_path("pwsh.exe"))
                 .ok_or_else(|| AppError::msg("pwsh not found in PATH"))?;
-            let mut a = vec!["-NoLogo".into()];
-            if cfg.utf8 {
-                a.push("-NoExit".into());
-                a.push("-Command".into());
-                a.push("[Console]::OutputEncoding=[Text.UTF8Encoding]::new()".into());
-            }
+            let a = vec![
+                "-NoLogo".into(),
+                "-NoExit".into(),
+                "-Command".into(),
+                powershell_init(cfg.utf8),
+            ];
             (prog, a)
         }
         ShellKind::Bash | ShellKind::Zsh | ShellKind::Sh => {
@@ -259,7 +272,7 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
             // $E = ESC, $P = current path, $G = '>', $\ = literal backslash.
             // Do not override if the user already set PROMPT in cfg.env.
             if !env.contains_key("PROMPT") {
-                env.insert("PROMPT".into(), "$E]133;A$E\\$P$G$E]133;B$E\\".into());
+                env.insert("PROMPT".into(), CMD_OSC7_PROMPT.into());
             }
         }
         ShellKind::Bash => {
@@ -294,6 +307,14 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_windows_prompts_emit_osc_7() {
+        assert!(CMD_OSC7_PROMPT.contains("$E]7;$P$E\\"));
+        assert!(POWERSHELL_OSC7_PROMPT_INIT.contains("']7;'+$pwd.Path"));
+        assert!(POWERSHELL_OSC7_PROMPT_INIT.contains("& $global:__OneTermOriginalPrompt"));
+        assert!(!POWERSHELL_OSC7_PROMPT_INIT.contains('"'));
+    }
 
     #[test]
     fn default_kind_windows() {

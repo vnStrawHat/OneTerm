@@ -1,5 +1,17 @@
-use gpui::{AppContext as _, TestAppContext, VisualTestContext};
-use oneterm_terminal::test_support::FakeTerminalSession;
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::sync::{Arc, Mutex};
+
+use gpui::{AppContext as _, Focusable as _, TestAppContext, VisualTestContext};
+use gpui_component::{
+    Root,
+    dock::{DockArea, PanelView, TabPanel},
+};
+use oneterm_core::{AppError, LocalShellConfig, Result, SessionDuplicateConfig, SshConfig};
+use oneterm_state::{AppServices, commands::WorkspaceCommands};
+use oneterm_terminal::{
+    PtySize, SessionFactory, TerminalSession, test_support::FakeTerminalSession,
+};
 
 use crate::panel::TerminalPanel;
 use crate::space::{CloseOutcome, SplitDir};
@@ -167,4 +179,145 @@ fn phase1_shutdown_is_idempotent(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     assert_eq!(probe.close_calls(), 1);
+}
+
+struct DuplicateSessionFactory {
+    spawned_local_configs: Arc<Mutex<Vec<LocalShellConfig>>>,
+}
+
+impl SessionFactory for DuplicateSessionFactory {
+    fn spawn_local(
+        &self,
+        config: LocalShellConfig,
+        _: PtySize,
+        _: usize,
+    ) -> Result<Box<dyn TerminalSession>> {
+        self.spawned_local_configs
+            .lock()
+            .expect("spawned config recorder must not be poisoned")
+            .push(config);
+        Ok(FakeTerminalSession::boxed(24, 80, "duplicate").0)
+    }
+
+    fn connect_ssh(&self, _: SshConfig, _: PtySize, _: usize) -> Result<Box<dyn TerminalSession>> {
+        Err(AppError::msg("SSH is not used by this test"))
+    }
+}
+
+fn duplicate_test_commands() -> WorkspaceCommands {
+    fn terminal(
+        _: oneterm_core::ShellKind,
+        _: &mut gpui::Window,
+        _: &mut gpui::App,
+    ) -> Arc<dyn PanelView> {
+        unreachable!("new-terminal command is not used by this test")
+    }
+    fn window(_: &mut gpui::Window, _: &mut gpui::App) {}
+    fn duplicate_ssh(
+        _: oneterm_core::SshDuplicateConfig,
+        _: Option<std::path::PathBuf>,
+        _: &mut gpui::Window,
+        _: &mut gpui::App,
+    ) {
+    }
+    fn app(_: &mut gpui::App) {}
+    fn dock(_: &gpui::Entity<DockArea>, _: &mut gpui::Window, _: &mut gpui::App) {}
+
+    WorkspaceCommands {
+        new_terminal_with_shell: terminal,
+        open_new_session_dialog: window,
+        open_duplicate_ssh_dialog: duplicate_ssh,
+        open_settings: app,
+        open_about: window,
+        find_in_active_terminal: dock,
+        setup_key_bindings: app,
+    }
+}
+
+#[gpui::test]
+fn duplicate_action_dispatches_to_the_active_space(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    cx.update(crate::init);
+    cx.update(oneterm_settings::TerminalSettings::init);
+    cx.update(oneterm_state::AppState::init);
+    let spawned_local_configs = Arc::new(Mutex::new(Vec::new()));
+    let configs_for_factory = spawned_local_configs.clone();
+    cx.update(|cx| {
+        AppServices::new(
+            Arc::new(DuplicateSessionFactory {
+                spawned_local_configs: configs_for_factory,
+            }),
+            duplicate_test_commands(),
+        )
+        .install(cx)
+        .expect("test services must install once");
+    });
+
+    let panel_probe = Rc::new(RefCell::new(None));
+    let tab_probe = Rc::new(RefCell::new(None));
+    let panel_for_window = panel_probe.clone();
+    let tab_for_window = tab_probe.clone();
+    let (session, _) = FakeTerminalSession::boxed(24, 80, "source");
+    let (_root, cx) = cx.add_window_view(move |window, cx| {
+        let dock_area = cx.new(|cx| DockArea::new("duplicate-action-test", None, window, cx));
+        let tab_panel = cx.new(|cx| TabPanel::new(None, dock_area.downgrade(), window, cx));
+        let panel = cx.new(|cx| {
+            let mut inactive_config = LocalShellConfig::default();
+            inactive_config.program = Some("inactive-shell".into());
+            TerminalPanel::from_session_with_duplicate_config(
+                session,
+                "Source",
+                Some(SessionDuplicateConfig::Local(inactive_config)),
+                window,
+                cx,
+            )
+        });
+        panel.update(cx, |panel, cx| {
+            let inactive_space = panel.tree.active();
+            panel.split_active_at(inactive_space, SplitDir::Right, window, cx);
+            let active_space = panel.tree.active();
+            let (active_session, _) = FakeTerminalSession::boxed(24, 80, "active");
+            let active_session = cx.new(|_| active_session);
+            let active_view = cx.new(|cx| {
+                let mut view = LocalTerminalView::new(active_session, window, cx);
+                let mut active_config = LocalShellConfig::default();
+                active_config.program = Some("active-shell".into());
+                view.duplicate_config = Some(SessionDuplicateConfig::Local(active_config));
+                view
+            });
+            panel.tree.fill_empty(active_space, active_view);
+        });
+        tab_panel.update(cx, |tabs, cx| {
+            tabs.add_panel(Arc::new(panel.clone()), window, cx);
+        });
+        *panel_for_window.borrow_mut() = Some(panel.clone());
+        *tab_for_window.borrow_mut() = Some(tab_panel);
+        Root::new(panel, window, cx)
+    });
+    let cx: &mut VisualTestContext = cx;
+    let panel = panel_probe
+        .borrow()
+        .clone()
+        .expect("panel must be initialized");
+    let tab_panel = tab_probe
+        .borrow()
+        .clone()
+        .expect("tab panel must be initialized");
+
+    cx.run_until_parked();
+    let focus = panel.read_with(cx, |panel, cx| panel.focus_handle(cx));
+    cx.update(|window, cx| focus.focus(window, cx));
+    cx.run_until_parked();
+    cx.dispatch_action(oneterm_actions::DuplicateSession);
+    cx.run_until_parked();
+
+    assert_eq!(tab_panel.read_with(cx, |tabs, _| tabs.active_ix()), 1);
+    let spawned_local_configs = spawned_local_configs
+        .lock()
+        .expect("spawned config recorder must not be poisoned");
+    assert_eq!(spawned_local_configs.len(), 1);
+    assert_eq!(
+        spawned_local_configs[0].program.as_deref(),
+        Some(std::path::Path::new("active-shell"))
+    );
 }

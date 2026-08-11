@@ -9,6 +9,7 @@ pub mod config;
 pub mod error;
 pub mod persistence;
 pub mod schema;
+pub mod session_duplicate;
 pub mod sftp;
 pub mod ssh_config;
 
@@ -18,6 +19,7 @@ pub use persistence::{atomic_write, quarantine_file, update_json_file};
 pub use schema::{
     SCHEMA_VERSION_FIELD, migrate_json_value, schema_version, set_schema_version, versioned_object,
 };
+pub use session_duplicate::{SessionDuplicateConfig, SshDuplicateAuth, SshDuplicateConfig};
 pub use sftp::{FileEntry, FileStat, SftpBackend, SftpFuture, SftpSessionId, SftpTableState};
 pub use ssh_config::{
     ConnectionCancellation, HostKeyPolicy, SecretString, SshAuthMethod, SshConfig,

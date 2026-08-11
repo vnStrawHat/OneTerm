@@ -8,10 +8,16 @@ use std::sync::Arc;
 
 use gpui::{AppContext as _, Entity, Window};
 
+use gpui_component::WindowExt as _;
 use gpui_component::dock::PanelView;
+use gpui_component::notification::NotificationType;
 use gpui_component::resizable::ResizableState;
 
-use oneterm_state::AppState;
+use oneterm_core::SessionDuplicateConfig;
+use oneterm_settings::TerminalSettings;
+use oneterm_state::notif_ext::notify;
+use oneterm_state::{AppServices, AppState};
+use oneterm_terminal::PtySize;
 
 use super::super::space::{
     CloseOutcome, DragTerminalTab, SpaceContent, SpaceId, SpaceLeaf, SplitDir,
@@ -19,7 +25,113 @@ use super::super::space::{
 use super::super::view::LocalTerminalView;
 use super::TerminalPanel;
 
+fn apply_duplicate_cwd(
+    mut config: oneterm_core::LocalShellConfig,
+    live_cwd: Option<std::path::PathBuf>,
+) -> oneterm_core::LocalShellConfig {
+    config.cwd = live_cwd;
+    config
+}
+
 impl TerminalPanel {
+    /// Create a new tab from the session in `space_id` without changing the source.
+    pub(crate) fn duplicate_session(
+        &mut self,
+        space_id: SpaceId,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(view) = self.tree.leaf_terminal(space_id) else {
+            return;
+        };
+        let (duplicate_config, live_cwd) = {
+            let view = view.read(cx);
+            (view.duplicate_config.clone(), view.session.read(cx).cwd())
+        };
+        let Some(duplicate_config) = duplicate_config else {
+            window.push_notification(
+                notify(
+                    NotificationType::Warning,
+                    "This terminal does not provide duplication metadata.",
+                    cx,
+                ),
+                cx,
+            );
+            return;
+        };
+        match duplicate_config {
+            SessionDuplicateConfig::Local(config) => {
+                let config = apply_duplicate_cwd(config, live_cwd);
+                let Some(tab_panel) = self.tab_panel.as_ref().and_then(|panel| panel.upgrade())
+                else {
+                    window.push_notification(
+                        notify(
+                            NotificationType::Error,
+                            "The terminal tab container is unavailable.",
+                            cx,
+                        ),
+                        cx,
+                    );
+                    return;
+                };
+                let Some(factory) = AppServices::session_factory(cx) else {
+                    window.push_notification(
+                        notify(
+                            NotificationType::Error,
+                            "Application session service is unavailable.",
+                            cx,
+                        ),
+                        cx,
+                    );
+                    return;
+                };
+                let scrollback = TerminalSettings::global(cx).read(cx).scrollback_history;
+                let duplicate_config = SessionDuplicateConfig::Local(config.clone());
+                let session =
+                    match factory.spawn_local(config, PtySize { rows: 24, cols: 80 }, scrollback) {
+                        Ok(session) => session,
+                        Err(error) => {
+                            window.push_notification(
+                                notify(
+                                    NotificationType::Error,
+                                    format!("Failed to duplicate local session: {error}"),
+                                    cx,
+                                ),
+                                cx,
+                            );
+                            return;
+                        }
+                    };
+                let panel = cx.new(|cx| {
+                    TerminalPanel::from_session_with_duplicate_config(
+                        session,
+                        "Terminal",
+                        Some(duplicate_config),
+                        window,
+                        cx,
+                    )
+                });
+                tab_panel.update(cx, |tabs, cx| {
+                    tabs.add_panel(Arc::new(panel), window, cx);
+                });
+            }
+            SessionDuplicateConfig::Ssh(config) => {
+                let Some(commands) = oneterm_state::commands::commands(cx) else {
+                    window.push_notification(
+                        notify(
+                            NotificationType::Error,
+                            "Application workspace commands are unavailable.",
+                            cx,
+                        ),
+                        cx,
+                    );
+                    return;
+                };
+                (commands.open_duplicate_ssh_dialog)(config, live_cwd, window, cx);
+            }
+        }
+    }
+
     /// Split Space `space_id` in `dir`; the new empty Space becomes active.
     pub fn split_active_at(
         &mut self,
@@ -197,5 +309,36 @@ impl TerminalPanel {
             state.set_active_workspace(workspace_id, sftp, cwd_source, is_local);
             cx.notify();
         });
+    }
+}
+
+#[cfg(test)]
+mod duplicate_tests {
+    use std::path::PathBuf;
+
+    use oneterm_core::{LocalShellConfig, ShellKind};
+
+    use super::apply_duplicate_cwd;
+
+    #[test]
+    fn missing_live_cwd_uses_shell_default() {
+        let mut config = LocalShellConfig::default();
+        config.cwd = Some(PathBuf::from("configured"));
+        let duplicate = apply_duplicate_cwd(config, None);
+        assert_eq!(duplicate.cwd, None);
+    }
+
+    #[test]
+    fn local_duplicate_preserves_shell_config_and_replaces_cwd() {
+        let mut config = LocalShellConfig::default();
+        config.kind = ShellKind::Custom;
+        config.program = Some(PathBuf::from("custom-shell"));
+        config.args = vec!["--login".to_string()];
+        let duplicate = apply_duplicate_cwd(config, Some(PathBuf::from("live")));
+
+        assert_eq!(duplicate.kind, ShellKind::Custom);
+        assert_eq!(duplicate.program, Some(PathBuf::from("custom-shell")));
+        assert_eq!(duplicate.args, vec!["--login"]);
+        assert_eq!(duplicate.cwd, Some(PathBuf::from("live")));
     }
 }

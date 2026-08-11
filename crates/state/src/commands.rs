@@ -6,11 +6,12 @@
 //! already hold from the render/listener context. This keeps the shell
 //! feature-agnostic while preserving the `Window` access panel construction needs.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::{App, Entity, Window};
 use gpui_component::dock::{DockArea, PanelView};
-use oneterm_core::ShellKind;
+use oneterm_core::{ShellKind, SshDuplicateConfig};
 
 /// Command function pointers registered by the feature crates.
 #[derive(Clone, Copy)]
@@ -19,6 +20,8 @@ pub struct WorkspaceCommands {
     pub new_terminal_with_shell: fn(ShellKind, &mut Window, &mut App) -> Arc<dyn PanelView>,
     /// Open the "New SSH session" quick-connect dialog.
     pub open_new_session_dialog: fn(&mut Window, &mut App),
+    /// Prompt for authentication and duplicate an SSH session at the requested cwd.
+    pub open_duplicate_ssh_dialog: fn(SshDuplicateConfig, Option<PathBuf>, &mut Window, &mut App),
     /// Open the General Settings window.
     pub open_settings: fn(&mut App),
     /// Open the About dialog from the application menu.

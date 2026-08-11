@@ -6,6 +6,8 @@
 //! - [`parse_user_host_port`] — parse `user@host:port` strings.
 //! - [`add_ssh_terminal_to_dock`] — add a terminal panel to the DockArea center.
 
+use std::cell::Cell;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{
     Arc,
@@ -14,8 +16,8 @@ use std::sync::{
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, ClickEvent, Context, IntoElement, ParentElement as _, Render, SharedString, Styled,
-    Window, div,
+    App, ClickEvent, Context, FocusHandle, IntoElement, ParentElement as _, Render, SharedString,
+    Styled, Window, div,
 };
 use gpui_component::dock::{DockPlacement, PanelView};
 use gpui_component::{
@@ -33,6 +35,22 @@ use oneterm_terminal::PtySize;
 use oneterm_terminal_view::TerminalPanel;
 
 // ── UI helpers ───────────────────────────────────────────────────────
+
+/// Apply one deferred initial focus without overriding later user focus changes.
+pub(crate) fn defer_initial_focus_once(
+    initial_focus_pending: &Cell<bool>,
+    focus_handle: FocusHandle,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if !initial_focus_pending.replace(false) {
+        return;
+    }
+
+    window.defer(cx, move |window, cx| {
+        focus_handle.focus(window, cx);
+    });
+}
 
 /// Whether a form field must be filled in. Controls the required marker (`*`).
 pub(crate) enum FieldRequirement {
@@ -133,6 +151,13 @@ pub(crate) fn parse_user_host_port(
     }
 }
 
+/// Build a POSIX-shell command that changes the new remote shell's directory.
+fn remote_cd_command(cwd: &Path) -> String {
+    let value = cwd.to_string_lossy();
+    let quoted = value.replace('\'', "'\"'\"'");
+    format!("cd -- '{quoted}'\r")
+}
+
 // ── Dock integration ─────────────────────────────────────────────────
 
 /// Add the SSH terminal panel to the DockArea center.
@@ -161,11 +186,13 @@ pub(crate) fn add_ssh_terminal_to_dock(
 pub(crate) fn connect_ssh_session(
     cfg: SshConfig,
     label: String,
+    initial_cwd: Option<PathBuf>,
     connecting: Arc<std::sync::atomic::AtomicBool>,
     window: &mut Window,
     cx: &mut App,
 ) -> ConnectionCancellation {
     let cancellation = cfg.cancellation.clone();
+    let duplicate_config = cfg.duplicate_config();
     let Some(factory) = AppServices::session_factory(cx) else {
         connecting.store(false, std::sync::atomic::Ordering::Relaxed);
         window.refresh();
@@ -188,6 +215,7 @@ pub(crate) fn connect_ssh_session(
     // explicitly approved and retried without asking for the password again.
     let retry_cfg = cfg.clone();
     let retry_label = label.clone();
+    let retry_cwd = initial_cwd.clone();
     let connecting_for_task = connecting.clone();
     let task_cancellation = cancellation.clone();
     window
@@ -203,56 +231,64 @@ pub(crate) fn connect_ssh_session(
                 return;
             }
 
-            _ =
-                cx.update(|window, cx| match result {
-                    Ok(ssh_session) => {
-                        connecting_for_task.store(false, std::sync::atomic::Ordering::Relaxed);
-                        window.close_dialog(cx);
-                        let panel: Arc<dyn PanelView> = Arc::new(
-                            TerminalPanel::from_session_entity(ssh_session, &label, window, cx),
-                        );
-                        add_ssh_terminal_to_dock(&panel, window, cx);
-                        window.push_notification(
-                            notify(
-                                NotificationType::Success,
-                                format!("Connected to \"{label}\"."),
-                                cx,
-                            ),
-                            cx,
-                        );
+            _ = cx.update(|window, cx| match result {
+                Ok(ssh_session) => {
+                    connecting_for_task.store(false, std::sync::atomic::Ordering::Relaxed);
+                    window.close_dialog(cx);
+                    if let Some(cwd) = initial_cwd.as_deref() {
+                        ssh_session.send_text(&remote_cd_command(cwd));
                     }
-                    Err(AppError::HostKeyUnknown {
+                    let panel: Arc<dyn PanelView> =
+                        Arc::new(TerminalPanel::from_session_entity_with_duplicate_config(
+                            ssh_session,
+                            &label,
+                            oneterm_core::SessionDuplicateConfig::Ssh(duplicate_config),
+                            window,
+                            cx,
+                        ));
+                    add_ssh_terminal_to_dock(&panel, window, cx);
+                    window.push_notification(
+                        notify(
+                            NotificationType::Success,
+                            format!("Connected to \"{label}\"."),
+                            cx,
+                        ),
+                        cx,
+                    );
+                }
+                Err(AppError::HostKeyUnknown {
+                    host,
+                    port,
+                    algorithm,
+                    fingerprint,
+                }) => {
+                    connecting_for_task.store(false, std::sync::atomic::Ordering::Relaxed);
+                    window.close_dialog(cx);
+                    open_host_key_confirmation(
+                        retry_cfg,
+                        retry_label,
+                        retry_cwd,
                         host,
                         port,
                         algorithm,
                         fingerprint,
-                    }) => {
-                        connecting_for_task.store(false, std::sync::atomic::Ordering::Relaxed);
-                        window.close_dialog(cx);
-                        open_host_key_confirmation(
-                            retry_cfg,
-                            retry_label,
-                            host,
-                            port,
-                            algorithm,
-                            fingerprint,
-                            window,
+                        window,
+                        cx,
+                    );
+                }
+                Err(error) => {
+                    connecting_for_task.store(false, std::sync::atomic::Ordering::Relaxed);
+                    window.refresh();
+                    window.push_notification(
+                        notify(
+                            NotificationType::Error,
+                            format!("SSH connect failed: {error}"),
                             cx,
-                        );
-                    }
-                    Err(error) => {
-                        connecting_for_task.store(false, std::sync::atomic::Ordering::Relaxed);
-                        window.refresh();
-                        window.push_notification(
-                            notify(
-                                NotificationType::Error,
-                                format!("SSH connect failed: {error}"),
-                                cx,
-                            ),
-                            cx,
-                        );
-                    }
-                });
+                        ),
+                        cx,
+                    );
+                }
+            });
         })
         .detach();
     cancellation
@@ -262,6 +298,7 @@ pub(crate) fn connect_ssh_session(
 fn open_host_key_confirmation(
     mut cfg: SshConfig,
     label: String,
+    initial_cwd: Option<PathBuf>,
     host: String,
     port: u16,
     algorithm: String,
@@ -280,6 +317,7 @@ fn open_host_key_confirmation(
     window.open_alert_dialog(cx, move |alert, _, _| {
         let cfg = cfg.clone();
         let label = label.clone();
+        let initial_cwd = initial_cwd.clone();
         alert
             .confirm()
             .title("Unknown SSH Host Key")
@@ -295,6 +333,7 @@ fn open_host_key_confirmation(
                 connect_ssh_session(
                     cfg.clone(),
                     label.clone(),
+                    initial_cwd.clone(),
                     Arc::new(AtomicBool::new(true)),
                     window,
                     cx,
@@ -302,4 +341,15 @@ fn open_host_key_confirmation(
                 true
             })
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_cd_command_quotes_spaces_and_single_quotes() {
+        let command = remote_cd_command(Path::new("/srv/one term/user's"));
+        assert_eq!(command, "cd -- '/srv/one term/user'\"'\"'s'\r");
+    }
 }

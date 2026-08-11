@@ -14,10 +14,12 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+#[cfg(test)]
+use gpui::FocusHandle;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext, ClickEvent, FocusHandle, Focusable as _, ParentElement as _, SharedString,
-    Styled, Window, div, px,
+    App, AppContext, ClickEvent, Focusable as _, ParentElement as _, SharedString, Styled, Window,
+    div, px,
 };
 use gpui_component::{
     WindowExt as _,
@@ -33,8 +35,8 @@ use oneterm_state::notif_ext::notify;
 
 use super::auth_form::SshAuthForm;
 use super::common::{
-    ConnectButton, FieldRequirement, connect_ssh_session, field, parse_user_host_port,
-    server_info_banner,
+    ConnectButton, FieldRequirement, connect_ssh_session, defer_initial_focus_once, field,
+    parse_user_host_port, server_info_banner,
 };
 use crate::session_state::{SshSession, SshSessionStore};
 
@@ -202,23 +204,6 @@ pub(crate) fn open_connect_dialog(
     });
 }
 
-fn defer_initial_focus_once(
-    initial_focus_pending: &Cell<bool>,
-    focus_handle: FocusHandle,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    // Root rebuilds dialog closures on every render. Reapplying initial focus would override
-    // any later pointer or keyboard focus change inside the dialog.
-    if !initial_focus_pending.replace(false) {
-        return;
-    }
-
-    window.defer(cx, move |window, cx| {
-        focus_handle.focus(window, cx);
-    });
-}
-
 /// Handler for the Connect button — validates inputs, builds SshConfig, connects.
 #[allow(clippy::too_many_arguments)]
 fn on_connect_click(
@@ -286,7 +271,8 @@ fn on_connect_click(
     };
     connecting.store(true, Ordering::Relaxed);
     window.refresh();
-    let cancellation = connect_ssh_session(cfg, session.label.clone(), connecting, window, cx);
+    let cancellation =
+        connect_ssh_session(cfg, session.label.clone(), None, connecting, window, cx);
     *connection_cancellation.borrow_mut() = Some(cancellation);
 
     false // keep the dialog open until the background attempt completes
