@@ -99,6 +99,7 @@ impl<const N: usize> FixedBuffer<N> {
         }
     }
 
+    #[cfg(any(test, windows, target_os = "macos"))]
     fn push_hex(&mut self, mut value: u64) {
         const HEX: &[u8; 16] = b"0123456789ABCDEF";
         let mut digits = [0_u8; 16];
@@ -220,6 +221,7 @@ fn write_direct(file: &File, mut bytes: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "windows")]
     use std::fs;
 
     use super::*;
