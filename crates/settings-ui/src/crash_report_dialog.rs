@@ -68,7 +68,7 @@ fn crash_dialog(
     cleanup: CleanupReport,
     report_input: gpui::Entity<InputState>,
 ) -> impl Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static {
-    let issue_url = create_issue_url(&report.contents);
+    let issue_url = create_issue_url();
 
     move |dialog, _, _| {
         let issue_url = issue_url.clone();
@@ -134,17 +134,8 @@ fn crash_dialog(
     }
 }
 
-fn create_issue_url(report: &str) -> String {
-    let body = format!(
-        "OneTerm version: {}\n\nPlease add any reproduction steps above this line.\n\n```text\n{report}\n```",
-        env!("ONETERM_VERSION")
-    );
-
-    format!(
-        "{NEW_ISSUE_URL}?title={}&body={}",
-        percent_encode(ISSUE_TITLE),
-        percent_encode(&body)
-    )
+fn create_issue_url() -> String {
+    format!("{NEW_ISSUE_URL}?title={}", percent_encode(ISSUE_TITLE))
 }
 
 fn percent_encode(value: &str) -> String {
@@ -191,12 +182,10 @@ mod tests {
     }
 
     #[test]
-    fn issue_url_prefills_title_version_and_report() {
-        let url = create_issue_url("panic at src/main.rs:10\nstack");
+    fn issue_url_prefills_only_the_title() {
+        let url = create_issue_url();
 
-        assert!(url.starts_with(NEW_ISSUE_URL));
-        assert!(url.contains("title=Crash%20report"));
-        assert!(url.contains(&percent_encode(env!("ONETERM_VERSION"))));
-        assert!(url.contains("panic%20at%20src%2Fmain.rs%3A10%0Astack"));
+        assert_eq!(url, format!("{NEW_ISSUE_URL}?title=Crash%20report"));
+        assert!(!url.contains("body="));
     }
 }

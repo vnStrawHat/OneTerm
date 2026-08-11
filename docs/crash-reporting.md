@@ -47,10 +47,10 @@ After the main window opens, OneTerm shows completed reports sequentially, newes
 
 - **Dismiss** closes and deletes only the report currently displayed, then opens the next report if one exists. A failed deletion is logged; the report remains on disk for a later launch, but the in-memory queue may continue.
 - **Copy** copies only the current report to the system clipboard without deleting or advancing it.
-- **Create Issue** opens the OneTerm GitHub new-issue page with the current report prefilled. The user reviews and submits the draft in the browser. OneTerm does not upload or submit the report automatically, and the local report is retained.
+- **Create Issue** opens the OneTerm GitHub new-issue page with only the issue title prefilled. The crash report is deliberately omitted from the URL to avoid browser/GitHub URL-length failures. The local report is retained; users can use Copy and paste it into the issue manually.
 
 Closing through the dialog close button, Escape, overlay click, application window close, or any non-Dismiss route retains the current and remaining reports and does not advance the queue. They are shown again on a later launch.
 
 ## Privacy and support expectations
 
-Crash reports remain local unless the user explicitly copies them or chooses Create Issue. The GitHub action only opens a draft; users can remove sensitive information before submission.
+Crash reports remain local unless the user explicitly copies them. Create Issue only opens a title-prefilled draft and does not place report content in the URL; users can review and paste copied diagnostics before submission.
