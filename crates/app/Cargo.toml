@@ -65,11 +65,16 @@ anyhow.workspace = true
 serde_json.workspace = true
 env_logger.workspace = true
 log.workspace = true
+chrono.workspace = true
+rand.workspace = true
+sysinfo.workspace = true
+crash-handler.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
     "Win32_System_Console",
     "Win32_Foundation",
+    "Win32_Storage_FileSystem",
 ] }
 
 [target.'cfg(windows)'.build-dependencies]

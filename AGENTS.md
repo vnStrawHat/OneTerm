@@ -123,3 +123,19 @@ If any of the three commands above fails → fix it before reporting completion.
 | Theme schema & colors | `reference/gpui-component/.theme-schema.json` |
 | gpui internal skills | `reference/gpui-component/skills/` |
 | Documentation (en) | `reference/gpui-component/docs/docs/` |
+
+<!-- HARNESS:BEGIN -->
+## Harness
+
+Default: classify the request, establish its documentation record, make the smallest fitting change, verify it, then reconcile docs and report evidence and gaps.
+
+Before editing implementation files, create or update one Markdown work packet with the outcome, owning docs, documentation action, acceptance, and verification plan. Every source, test, schema, script, or behavior-affecting configuration change requires a work packet generated from `docs/templates/work.md`.
+
+A new capability requires a Spec Intake, accepted owning contract, and work packet before implementation. A bug or maintenance task still requires locating and reviewing the owning docs before implementation; update stale docs, or record the reviewed paths and a no-change reason in the packet. A detailed prompt may shorten these records but never removes them.
+
+Read the affected source, owning docs, nearby decisions, and relevant tests. Read `docs/PROJECT.md` for project facts and standing invariants. Follow the editable files under `docs/templates/`. Create a decision only for choices future work must inherit and a trace when evidence or failure context must persist.
+
+Treat auth, authorization, data loss, migrations, secrets, external effects, and public contracts as high-risk. Ask before implementing consequential ambiguous behavior. Never claim unverified behavior as working.
+
+This pre-code documentation gate is mandatory and overrides less strict artifact-routing text in preserved project docs. Read `docs/HARNESS.md` for routing and completion details. Use the `harness` tool (or `/harness`) for durable records and mechanical checks; no external binary is required.
+<!-- HARNESS:END -->

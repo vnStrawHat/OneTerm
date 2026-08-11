@@ -23,10 +23,22 @@
 use std::path::{Path, PathBuf};
 
 fn main() {
-    // All logic runs on Windows only.
+    let manifest_dir = std::path::PathBuf::from(
+        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"),
+    );
+    let version_file = manifest_dir
+        .ancestors()
+        .nth(2)
+        .expect("could not resolve repo root")
+        .join("VERSION");
+    let version = std::fs::read_to_string(&version_file)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", version_file.display()));
+    println!("cargo:rustc-env=ONETERM_VERSION={}", version.trim());
+    println!("cargo:rerun-if-changed=../../VERSION");
+
+    // All remaining logic runs on Windows only.
     #[cfg(target_os = "windows")]
     {
-        let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
         let assets_dir = manifest_dir.join("assets");
 
         // ── 1. Generate + compile the resource script (icon + version info) ──
@@ -89,8 +101,6 @@ fn main() {
         println!("cargo:rerun-if-changed=assets/icons/terminal-96x96.ico");
         println!("cargo:rerun-if-changed=assets/conpty.dll");
         println!("cargo:rerun-if-changed=assets/x64/OpenConsole.exe");
-        // Repo-root VERSION drives the embedded version info.
-        println!("cargo:rerun-if-changed=../../VERSION");
     }
 }
 

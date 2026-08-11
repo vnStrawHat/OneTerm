@@ -9,3 +9,8 @@ docks.json
 terminal.json
 # Raw upstream downloads for scripts/completion-catalog.py (generated JSON is committed)
 scripts/.cache/
+
+# Harness durable layer — each project instance generates its own data.
+harness.db
+harness.db-wal
+harness.db-shm

@@ -3,6 +3,8 @@
 //! The version string comes from the `ONETERM_VERSION` compile-time env (the
 //! same value shown by the OneTerm ▸ About dialog).
 
+use std::sync::atomic::{AtomicU8, Ordering};
+
 use gpui::{
     AnyElement, App, AppContext as _, Context, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, StatefulInteractiveElement as _, Styled, Window, div,
@@ -22,6 +24,9 @@ use oneterm_theme::icon::AppIcon;
 use super::updates;
 
 const GITHUB_REPOSITORY_URL: &str = "https://github.com/vnStrawHat/OneTerm";
+const TEST_CRASH_CLICK_COUNT: u8 = 10;
+
+static ABOUT_ICON_CLICKS: AtomicU8 = AtomicU8::new(0);
 
 struct AboutUpdateControls;
 
@@ -124,9 +129,20 @@ fn app_identity(cx: &App) -> AnyElement {
         .items_center()
         .justify_center()
         .child(
-            Icon::new(AppIcon::Terminal)
-                .with_size(px(96.))
-                .text_color(rgb(0x58c4dc)),
+            div()
+                .id("about-app-icon")
+                .cursor_pointer()
+                .child(
+                    Icon::new(AppIcon::Terminal)
+                        .with_size(px(96.))
+                        .text_color(rgb(0x58c4dc)),
+                )
+                .on_click(|_, _, _| {
+                    if register_about_icon_click() {
+                        // This diagnostic-only panic verifies the crash recovery flow end to end.
+                        panic!("Intentional crash triggered by ten clicks on the About icon");
+                    }
+                }),
         )
         .child(Label::new("OneTerm").text_xl())
         .child(
@@ -170,6 +186,18 @@ fn links_section(cx: &App) -> AnyElement {
         .into_any_element()
 }
 
+fn register_about_icon_click() -> bool {
+    ABOUT_ICON_CLICKS
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+            Some(if count + 1 == TEST_CRASH_CLICK_COUNT {
+                0
+            } else {
+                count + 1
+            })
+        })
+        .is_ok_and(|previous| previous + 1 == TEST_CRASH_CLICK_COUNT)
+}
+
 fn repository_link(id: &'static str, cx: &App) -> AnyElement {
     div()
         .id(id)
@@ -183,4 +211,20 @@ fn repository_link(id: &'static str, cx: &App) -> AnyElement {
             cx.open_url(GITHUB_REPOSITORY_URL);
         })
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crash_trigger_fires_on_every_tenth_click() {
+        ABOUT_ICON_CLICKS.store(0, Ordering::Relaxed);
+
+        for _ in 0..TEST_CRASH_CLICK_COUNT - 1 {
+            assert!(!register_about_icon_click());
+        }
+        assert!(register_about_icon_click());
+        assert!(!register_about_icon_click());
+    }
 }

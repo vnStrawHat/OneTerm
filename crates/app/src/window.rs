@@ -10,11 +10,14 @@ use gpui_component::Root;
 #[cfg(not(target_os = "linux"))]
 use gpui_component::TitleBar;
 
-use oneterm_settings_ui::start_auto_check;
+use oneterm_settings_ui::{CrashReport, show_crash_reports, start_auto_check};
 use oneterm_workspace::{OneTermWorkspace, save_dock_state_on_close};
 
 /// Open the main window and return its task handle.
-pub(crate) fn open_window(cx: &mut App) -> Task<anyhow::Result<WindowHandle<Root>>> {
+pub(crate) fn open_window(
+    pending_crash_reports: Vec<crate::crash_report::PendingCrashReport>,
+    cx: &mut App,
+) -> Task<anyhow::Result<WindowHandle<Root>>> {
     let mut window_size = size(px(1600.0), px(1000.0));
     if let Some(display) = cx.primary_display() {
         let display_size = display.bounds().size;
@@ -47,9 +50,23 @@ pub(crate) fn open_window(cx: &mut App) -> Task<anyhow::Result<WindowHandle<Root
         })?;
 
         window
-            .update(cx, |_, window, cx| {
+            .update(cx, |root, window, cx| {
                 window.activate_window();
                 start_auto_check(window, cx);
+                let reports = pending_crash_reports
+                    .into_iter()
+                    .map(|report| CrashReport {
+                        path: report.path,
+                        contents: report.contents,
+                    })
+                    .collect();
+                show_crash_reports(
+                    reports,
+                    crate::crash_report::delete_pending_report,
+                    root,
+                    window,
+                    cx,
+                );
                 window.set_window_title("OneTerm");
                 cx.on_release(|_, cx| {
                     save_dock_state_on_close(cx);

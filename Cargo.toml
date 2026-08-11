@@ -73,6 +73,8 @@ polling = "3.8"
 # Logging (also used by alacritty_terminal)
 log = "0.4"
 env_logger = "0.11"
+# Native exception/signal capture. Keep exact: callback safety is version-reviewed.
+crash-handler = "=0.8.0"
 # SSH client
 russh = { version = "0.61", default-features = false, features = ["ring", "flate2", "rsa"] }
 # SFTP subsystem for russh — opens an SFTP channel on the same SSH connection

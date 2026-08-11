@@ -12,7 +12,9 @@ use oneterm_workspace::OneTermWorkspace;
 
 mod agent_panel;
 mod assets;
+mod crash_report;
 mod init;
+mod native_crash;
 mod session_factory;
 mod ssh_client_panel;
 mod window;
@@ -21,6 +23,17 @@ use assets::CustomAssets;
 
 /// Launch OneTerm: initialize logging, the app, the UI, then open the main window.
 pub fn run() {
+    let crash_capture_paths = match crash_report::prepare_capture_paths() {
+        Ok(paths) => {
+            crash_report::install_panic_hook(&paths);
+            Some(paths)
+        }
+        Err(error) => {
+            eprintln!("OneTerm failed to prepare crash capture storage: {error}");
+            None
+        }
+    };
+
     // Initialize logging — reads the RUST_LOG env var, default: info for the app, warn for deps.
     // E.g. RUST_LOG=debug → show debug logs; RUST_LOG=ssh=trace → trace the SSH crate.
     env_logger::Builder::from_env(
@@ -32,6 +45,23 @@ pub fn run() {
     .format_timestamp_secs()
     .init();
     log::info!("OneTerm starting up");
+    let pending_crash_reports = match crash_report::load_pending_reports() {
+        Ok(reports) => reports,
+        Err(error) => {
+            log::error!("Failed to load pending crash reports: {error}");
+            Vec::new()
+        }
+    };
+    let _native_crash_handler =
+        crash_capture_paths
+            .as_ref()
+            .and_then(|paths| match native_crash::install(&paths.native) {
+                Ok(handler) => Some(handler),
+                Err(error) => {
+                    log::error!("Failed to install native crash capture: {error}");
+                    None
+                }
+            });
 
     // Windows: SetConsoleCtrlHandler safety net — ignore CTRL_C_EVENT.
     // With OpenConsole.exe (from Windows Terminal), \x03 over the PTY is handled
@@ -81,6 +111,6 @@ pub fn run() {
         cx.activate(true);
 
         // Open the main window.
-        crate::window::open_window(cx).detach();
+        crate::window::open_window(pending_crash_reports, cx).detach();
     });
 }

@@ -57,6 +57,7 @@ gpui-component-assets.workspace = true
 | Storage (host list, settings) | `directories` (XDG / AppData) |
 | Logging | `tracing` + `tracing-subscriber` |
 | Error | `anyhow` (binary), `thiserror` (library) |
+| Native crash capture | `crash-handler = 0.8.0` (app binary only; callback must remain compromised-context-safe) |
 | Extra crypto | `russh-cryptovec`, `ssh-key` |
 | i18n | `rust-i18n` (matches gpui-component) |
 
