@@ -1,6 +1,7 @@
 # Work: Prevent terminal tab title descender clipping
 
 ID: BUG-006
+Intake: IN-0004
 Created: 2026-08-11
 
 > Pre-code gate: complete Outcome, Scope, Acceptance, Documentation, and Verification Plan before editing implementation files. Keep operational status in `harness.db`.
@@ -9,7 +10,7 @@ Created: 2026-08-11
 
 - Change type: bug
 - Risk lane: tiny
-- Spec Intake, when required: not required for a localized rendering correction
+- Spec Intake, when required: maintenance intake `IN-0004`
 
 ## Outcome
 
@@ -85,3 +86,23 @@ None; the fix follows existing GPUI overflow semantics and does not establish a 
 ## Handoff
 
 Not applicable; single-session change.
+
+## Harness Status
+
+<!-- HARNESS:STATUS:BEGIN -->
+- [ ] Planned
+- [ ] In progress
+- [ ] Implemented
+- [x] Changed
+- [ ] Retired
+<!-- HARNESS:STATUS:END -->
+
+## Harness Proof
+
+<!-- HARNESS:PROOF:BEGIN -->
+- [ ] Unit proof
+- [ ] Integration proof
+- [ ] E2E proof
+- [ ] Platform proof
+- [x] Verify command passed
+<!-- HARNESS:PROOF:END -->

@@ -1,6 +1,7 @@
 # Work: Compile native crash helpers only where used
 
 ID: BUG-004
+Intake: IN-0001
 Created: 2026-08-11
 
 > Pre-code gate: complete Outcome, Scope, Acceptance, Documentation, and Verification Plan before editing implementation files. Keep operational status in `harness.db`.
@@ -9,7 +10,7 @@ Created: 2026-08-11
 
 - Change type: bug
 - Risk lane: tiny
-- Spec Intake, when required: not required; this restores warning-free compilation without changing the accepted crash-reporting capability.
+- Spec Intake, when required: existing crash-reporting capability `IN-0001`; no new intake required.
 
 ## Outcome
 
@@ -32,7 +33,7 @@ Created: 2026-08-11
 
 - `docs/PROJECT.md` — crash reports remain local diagnostics and the workspace release gates are mandatory.
 - `docs/crash-reporting.md` — native callback capture content, supported platform coverage, and verification contract.
-- `docs/work/US-002-redact-user-paths-and-capture-native-crashes.md` — original callback-safety acceptance and platform-test intent.
+- `docs/spec-intakes/IN-0001-persistent-crash-reporting-and-recovery/US-002-redact-user-paths-and-capture-native-crashes.md` — original callback-safety acceptance and platform-test intent.
 - `docs/agents/code-style.md` — warning-free Clippy, localized changes, and test conventions.
 - `docs/agents/error-policy.md` — native capture remains best effort without changing runtime failure handling.
 
@@ -82,3 +83,23 @@ No decision record is needed; no architectural or behavioral choice is introduce
 ## Handoff
 
 Single-session change; no handoff expected.
+
+## Harness Status
+
+<!-- HARNESS:STATUS:BEGIN -->
+- [ ] Planned
+- [ ] In progress
+- [x] Implemented
+- [ ] Changed
+- [ ] Retired
+<!-- HARNESS:STATUS:END -->
+
+## Harness Proof
+
+<!-- HARNESS:PROOF:BEGIN -->
+- [ ] Unit proof
+- [ ] Integration proof
+- [ ] E2E proof
+- [ ] Platform proof
+- [x] Verify command passed
+<!-- HARNESS:PROOF:END -->

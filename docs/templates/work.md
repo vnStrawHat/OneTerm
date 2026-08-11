@@ -1,9 +1,20 @@
 # Work: {{title}}
 
 ID: {{id}}
+Intake: {{intake}}
 Created: {{date}}
 
-> Pre-code gate: complete Outcome, Scope, Acceptance, Documentation, and Verification Plan before editing implementation files. Keep operational status in `harness.db`.
+> Pre-code gate: complete Outcome, Scope, Acceptance, Documentation, and Verification Plan before editing implementation files. Harness synchronizes only the marked status/proof blocks; keep authored checklists current.
+
+## Status
+
+<!-- HARNESS:STATUS:BEGIN -->
+- [x] Planned
+- [ ] In progress
+- [ ] Implemented
+- [ ] Changed
+- [ ] Retired
+<!-- HARNESS:STATUS:END -->
 
 ## Classification
 
@@ -17,12 +28,12 @@ Describe the result that must be true.
 
 ## Scope
 
-- In scope:
-- Out of scope:
+- [ ] In scope:
+- [ ] Out of scope:
 
 ## Acceptance
 
-- Criterion.
+- [ ] Criterion.
 
 ## Documentation
 
@@ -49,7 +60,7 @@ Add only relevant code, decisions, dependencies, and invariants not already clea
 
 ## Plan
 
-Add only useful implementation or coordination steps.
+- [ ] Add only useful implementation or coordination steps.
 
 ## Decisions
 
@@ -58,6 +69,14 @@ Link consequential decisions; do not repeat their rationale here.
 ## Verification Plan
 
 List focused proof and relevant regression checks before implementation.
+
+<!-- HARNESS:PROOF:BEGIN -->
+- [ ] Unit proof
+- [ ] Integration proof
+- [ ] E2E proof
+- [ ] Platform proof
+- [ ] Verify command passed
+<!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 

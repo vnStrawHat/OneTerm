@@ -1,6 +1,7 @@
 # Work: Connect with an SSH private key
 
 ID: US-004
+Intake: IN-0002
 Created: 2026-08-11
 
 > Pre-code gate: complete Outcome, Scope, Acceptance, Documentation, and Verification Plan before editing implementation files. Keep operational status in `harness.db`.
@@ -9,7 +10,7 @@ Created: 2026-08-11
 
 - Change type: new capability
 - Risk lane: high-risk (authentication and secrets)
-- Spec Intake, when required: `docs/intakes/IN-0004-ssh-private-key-authentication.md`
+- Spec Intake, when required: `docs/spec-intakes/IN-0002-ssh-private-key-authentication/IN-0002.md`
 
 ## Outcome
 
@@ -92,3 +93,23 @@ Updated `docs/ssh-authentication.md` with the accepted current behavior and link
 ## Handoff
 
 Not applicable; one session owns implementation and verification.
+
+## Harness Status
+
+<!-- HARNESS:STATUS:BEGIN -->
+- [ ] Planned
+- [ ] In progress
+- [x] Implemented
+- [ ] Changed
+- [ ] Retired
+<!-- HARNESS:STATUS:END -->
+
+## Harness Proof
+
+<!-- HARNESS:PROOF:BEGIN -->
+- [ ] Unit proof
+- [ ] Integration proof
+- [ ] E2E proof
+- [ ] Platform proof
+- [x] Verify command passed
+<!-- HARNESS:PROOF:END -->

@@ -1,6 +1,7 @@
 # Work: Open startup crash dialog without re-entering Root
 
 ID: BUG-001
+Intake: IN-0001
 Created: 2026-08-11
 
 ## Classification
@@ -84,3 +85,23 @@ No durable decision record required; this follows GPUI's existing entity borrowi
 ## Handoff
 
 Single-session fix; no blocker.
+
+## Harness Status
+
+<!-- HARNESS:STATUS:BEGIN -->
+- [x] Planned
+- [ ] In progress
+- [ ] Implemented
+- [ ] Changed
+- [ ] Retired
+<!-- HARNESS:STATUS:END -->
+
+## Harness Proof
+
+<!-- HARNESS:PROOF:BEGIN -->
+- [ ] Unit proof
+- [ ] Integration proof
+- [ ] E2E proof
+- [ ] Platform proof
+- [x] Verify command passed
+<!-- HARNESS:PROOF:END -->

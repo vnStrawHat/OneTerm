@@ -1,6 +1,7 @@
 # Work: Recover from a previous OneTerm crash
 
 ID: US-001
+Intake: IN-0001
 Created: 2026-08-11
 
 ## Classification
@@ -94,3 +95,23 @@ No separate decision record: the choices are local to this new owning contract a
 ## Handoff
 
 Single-session implementation; no blocker.
+
+## Harness Status
+
+<!-- HARNESS:STATUS:BEGIN -->
+- [x] Planned
+- [ ] In progress
+- [ ] Implemented
+- [ ] Changed
+- [ ] Retired
+<!-- HARNESS:STATUS:END -->
+
+## Harness Proof
+
+<!-- HARNESS:PROOF:BEGIN -->
+- [ ] Unit proof
+- [ ] Integration proof
+- [ ] E2E proof
+- [ ] Platform proof
+- [x] Verify command passed
+<!-- HARNESS:PROOF:END -->

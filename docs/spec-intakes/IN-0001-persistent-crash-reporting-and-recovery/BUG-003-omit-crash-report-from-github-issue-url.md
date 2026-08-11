@@ -1,6 +1,7 @@
 # Work: Omit crash report from GitHub issue URL
 
 ID: BUG-003
+Intake: IN-0001
 Created: 2026-08-11
 
 ## Classification
@@ -72,3 +73,23 @@ No separate decision record; this narrows an existing external action.
 ## Handoff
 
 Single-session implementation; no blocker.
+
+## Harness Status
+
+<!-- HARNESS:STATUS:BEGIN -->
+- [x] Planned
+- [ ] In progress
+- [ ] Implemented
+- [ ] Changed
+- [ ] Retired
+<!-- HARNESS:STATUS:END -->
+
+## Harness Proof
+
+<!-- HARNESS:PROOF:BEGIN -->
+- [ ] Unit proof
+- [ ] Integration proof
+- [ ] E2E proof
+- [ ] Platform proof
+- [x] Verify command passed
+<!-- HARNESS:PROOF:END -->

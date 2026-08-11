@@ -1,6 +1,7 @@
 # Work: Duplicate terminal sessions
 
 ID: US-0010
+Intake: IN-0003
 Created: 2026-08-11
 
 > Pre-code gate: complete Outcome, Scope, Acceptance, Documentation, and Verification Plan before editing implementation files. Keep operational status in `harness.db`.
@@ -9,7 +10,7 @@ Created: 2026-08-11
 
 - Change type: new capability
 - Risk lane: normal
-- Spec Intake, when required: `docs/intakes/IN-0005-duplicate-terminal-sessions.md`
+- Spec Intake, when required: `docs/spec-intakes/IN-0003-duplicate-terminal-sessions/IN-0003.md`
 
 ## Outcome
 
@@ -99,3 +100,23 @@ The menu receives a `SplitContext` that identifies the owning panel and Space. `
 ## Handoff
 
 Use only across actors or sessions: current state, next owner/action, and blockers.
+
+## Harness Status
+
+<!-- HARNESS:STATUS:BEGIN -->
+- [ ] Planned
+- [ ] In progress
+- [x] Implemented
+- [ ] Changed
+- [ ] Retired
+<!-- HARNESS:STATUS:END -->
+
+## Harness Proof
+
+<!-- HARNESS:PROOF:BEGIN -->
+- [ ] Unit proof
+- [ ] Integration proof
+- [ ] E2E proof
+- [ ] Platform proof
+- [x] Verify command passed
+<!-- HARNESS:PROOF:END -->

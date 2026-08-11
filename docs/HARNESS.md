@@ -24,13 +24,13 @@ A clear or detailed prompt can make the documentation concise; it does not bypas
 | Read-only investigation, discussion, or a documentation-only edit with no implementation change | Work directly in the relevant docs; no implementation packet is required. |
 | Any source, test, schema, script, or behavior-affecting configuration change | Before editing implementation, create or update one Markdown work packet from the editable template. |
 | A new capability, new spec, spec slice, or initiative | Before implementation, create one Spec Intake, establish or update the owning contract, then create the work packet. |
-| A bug or maintenance change, however small | Before implementation, locate and review the owning docs. Update stale docs, or record reviewed paths and a no-change reason in the work packet. |
+| A bug or maintenance change, however small | Before implementation, create or locate its owning Intake, then review the owning docs. Update stale docs, or record reviewed paths and a no-change reason in the work packet. |
 | Acceptance must survive a session, work has several independent steps, or a handoff is needed | Keep the same owning work packet current; do not create a parallel status record. |
 | A choice about architecture, behavior, authorization, data ownership, public contracts, or validation must guide future work | Create or update one decision record. |
 | Review, release, benchmark, failure attribution, or a non-reconstructable handoff needs retained evidence | Record one evidence-focused trace. |
 | Repeated harness friction is worth follow-up but out of scope | Add a harness backlog item. |
 
-There is no undocumented implementation lane. A work packet is the durable change record, not a duplicate operational status log: keep status and proof state in `harness.db`, while the packet owns outcome, documentation review, acceptance, verification plan, evidence, and gaps.
+There is no undocumented implementation lane. A work packet is the durable change record, not a duplicate operational status log: `harness.db` is authoritative for status and proof state, and the CLI mirrors those fields into machine-owned task-list blocks in the packet. The packet owns outcome, documentation review, acceptance, verification plan, evidence, and gaps.
 
 ## High-Risk Triggers
 
@@ -95,7 +95,9 @@ docs/templates/work.md
 docs/templates/decision.md
 ```
 
-Agents must follow the current project templates rather than an extension-internal shape. Humans may edit their sections and instructions at any time. Spec Intake generators replace `{{id}}`, `{{title}}`, `{{date}}`, `{{type}}`, `{{lane}}`, and `{{summary}}`; work and decision generators replace their applicable values including `{{status}}`. All other text is preserved. Keep the templates useful and concise, and do not make them duplicate operational state owned by `harness.db`.
+Agents must follow the current project templates rather than an extension-internal shape. Humans may edit their sections and instructions at any time. Spec Intake generators replace `{{id}}`, `{{title}}`, `{{date}}`, `{{type}}`, `{{lane}}`, and `{{summary}}`; work and decision generators replace their applicable values including `{{status}}` and `{{intake}}`. All other text is preserved.
+
+Generated Intakes use a gap-free document sequence independent of DB-only classifications and live at `docs/spec-intakes/IN-NNNN-slug/IN-NNNN.md`. `intake create` supports every request type so standalone bugs and maintenance can own a folder; `intake add` remains the DB-only classification path. Work IDs use `US-NNNN` or `BUG-NNNN`; `story create` requires their owning `IN-NNNN` and keeps the packet inside that Intake folder, including when `--doc` is supplied. Decision IDs use `DEC-NNNN` and remain under `docs/decisions/`. The CLI updates only marked Harness status/proof task-list blocks (or appends them to older/custom templates); authored Acceptance and Plan checklists remain human/agent-owned. Keep templates useful and concise.
 
 ## Commands
 

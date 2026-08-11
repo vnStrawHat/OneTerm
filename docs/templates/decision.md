@@ -16,9 +16,10 @@ What must future work inherit?
 
 ## Alternatives
 
-- Alternative and why it was not selected.
+- [x] Selected approach described above.
+- [ ] Alternative and why it was not selected.
 
 ## Consequences
 
-- Benefit.
-- Tradeoff or follow-up.
+- [ ] Benefit to confirm.
+- [ ] Tradeoff or follow-up to address.

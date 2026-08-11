@@ -1,6 +1,7 @@
 # Work: Clean crash report lock artifacts
 
 ID: BUG-002
+Intake: IN-0001
 Created: 2026-08-11
 
 ## Classification
@@ -34,7 +35,7 @@ The unique-file crash store contains only completed reports and active/native st
 - `docs/crash-reporting.md` — crash store and lifecycle owner.
 - `docs/agents/persistence.md` — persistent `.lock` files are intentional for shared atomic documents.
 - `docs/agents/error-policy.md` — crash persistence failures remain observable.
-- `docs/work/US-003-store-and-recover-multiple-crash-reports.md` — unique path and claim invariants.
+- `docs/spec-intakes/IN-0001-persistent-crash-reporting-and-recovery/US-003-store-and-recover-multiple-crash-reports.md` — unique path and claim invariants.
 - `crates/core/src/persistence.rs` — `atomic_write` intentionally acquires a persistent sibling lock and creates backups.
 
 ### Documentation Action
@@ -88,3 +89,23 @@ No separate decision record: this restores the documented clean crash-store inva
 ## Handoff
 
 Single-session implementation; no blocker.
+
+## Harness Status
+
+<!-- HARNESS:STATUS:BEGIN -->
+- [x] Planned
+- [ ] In progress
+- [ ] Implemented
+- [ ] Changed
+- [ ] Retired
+<!-- HARNESS:STATUS:END -->
+
+## Harness Proof
+
+<!-- HARNESS:PROOF:BEGIN -->
+- [ ] Unit proof
+- [ ] Integration proof
+- [ ] E2E proof
+- [ ] Platform proof
+- [x] Verify command passed
+<!-- HARNESS:PROOF:END -->

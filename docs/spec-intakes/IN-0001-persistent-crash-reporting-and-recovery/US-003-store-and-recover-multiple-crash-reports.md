@@ -1,6 +1,7 @@
 # Work: Store and recover multiple crash reports
 
 ID: US-003
+Intake: IN-0001
 Created: 2026-08-11
 
 ## Classification
@@ -38,7 +39,7 @@ Each OneTerm instance writes to a collision-resistant report identity under `cra
 - `docs/agents/error-policy.md` — startup and cleanup failure visibility.
 - `docs/agents/code-style.md` — concurrency clarity, error handling, and regression tests.
 - `docs/PROJECT.md` — standing project invariants.
-- `docs/work/US-002-redact-user-paths-and-capture-native-crashes.md` — previous singleton staging and safety decisions.
+- `docs/spec-intakes/IN-0001-persistent-crash-reporting-and-recovery/US-002-redact-user-paths-and-capture-native-crashes.md` — previous singleton staging and safety decisions.
 
 ### Documentation Action
 
@@ -93,3 +94,23 @@ No separate decision record: the user-selected queue, deletion, naming, and rete
 ## Handoff
 
 Single-session implementation; no blocker.
+
+## Harness Status
+
+<!-- HARNESS:STATUS:BEGIN -->
+- [x] Planned
+- [ ] In progress
+- [ ] Implemented
+- [ ] Changed
+- [ ] Retired
+<!-- HARNESS:STATUS:END -->
+
+## Harness Proof
+
+<!-- HARNESS:PROOF:BEGIN -->
+- [ ] Unit proof
+- [ ] Integration proof
+- [ ] E2E proof
+- [ ] Platform proof
+- [x] Verify command passed
+<!-- HARNESS:PROOF:END -->

@@ -1,6 +1,7 @@
 # Work: Redact user paths and capture native crashes
 
 ID: US-002
+Intake: IN-0001
 Created: 2026-08-11
 
 ## Classification
@@ -95,3 +96,23 @@ No separate decision record: callback safety and staging ownership are captured 
 ## Handoff
 
 Single-session implementation; no blocker.
+
+## Harness Status
+
+<!-- HARNESS:STATUS:BEGIN -->
+- [x] Planned
+- [ ] In progress
+- [ ] Implemented
+- [ ] Changed
+- [ ] Retired
+<!-- HARNESS:STATUS:END -->
+
+## Harness Proof
+
+<!-- HARNESS:PROOF:BEGIN -->
+- [ ] Unit proof
+- [ ] Integration proof
+- [ ] E2E proof
+- [ ] Platform proof
+- [x] Verify command passed
+<!-- HARNESS:PROOF:END -->

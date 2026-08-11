@@ -1,6 +1,7 @@
 # Work: Focus the SSH private-key passphrase input
 
 ID: BUG-005
+Intake: IN-0002
 Created: 2026-08-11
 
 > Pre-code gate: complete Outcome, Scope, Acceptance, Documentation, and Verification Plan before editing implementation files. Keep operational status in `harness.db`.
@@ -9,7 +10,7 @@ Created: 2026-08-11
 
 - Change type: bug
 - Risk lane: normal; the affected value is secret-sensitive, but the change does not alter storage or backend authentication.
-- Spec Intake, when required: existing capability `IN-0004`; no new intake required.
+- Spec Intake, when required: existing capability `IN-0002`; no new intake required.
 
 ## Outcome
 
@@ -34,7 +35,7 @@ After switching or opening a connect dialog with Private Key authentication, the
 ### Owning Docs Reviewed
 
 - `docs/ssh-authentication.md` — requires an optional masked passphrase field for private-key flows.
-- `docs/work/US-004-connect-with-an-ssh-private-key.md` — original acceptance and known manual E2E gap.
+- `docs/spec-intakes/IN-0002-ssh-private-key-authentication/US-004-connect-with-an-ssh-private-key.md` — original acceptance and known manual E2E gap.
 - `Screenshot 2026-08-11 132116.png` — runtime evidence that Private Key retained the blue focus border while the visible Passphrase field could not receive input.
 - `reference/gpui-component/crates/ui/src/input/input.rs` — pinned Input identity and focus tracking behavior.
 - `vendor/gpui-component/src/dialog/dialog.rs` — current dialog content and focus-trap rendering lifecycle.
@@ -88,3 +89,23 @@ No new durable decision.
 ## Handoff
 
 Not applicable.
+
+## Harness Status
+
+<!-- HARNESS:STATUS:BEGIN -->
+- [ ] Planned
+- [ ] In progress
+- [x] Implemented
+- [ ] Changed
+- [ ] Retired
+<!-- HARNESS:STATUS:END -->
+
+## Harness Proof
+
+<!-- HARNESS:PROOF:BEGIN -->
+- [ ] Unit proof
+- [ ] Integration proof
+- [ ] E2E proof
+- [ ] Platform proof
+- [x] Verify command passed
+<!-- HARNESS:PROOF:END -->

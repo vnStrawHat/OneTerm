@@ -25,9 +25,7 @@ Identify affected product surfaces, contracts, users, systems, and existing beha
 
 ## Candidate Work Packets
 
-| Packet | Outcome | Dependencies |
-| --- | --- | --- |
-| | | |
+- [ ] `US-NNNN` or `BUG-NNNN` — outcome and dependencies.
 
 ## Architecture and Boundary Questions
 
@@ -49,14 +47,14 @@ Identify affected product surfaces, contracts, users, systems, and existing beha
 
 ## Open Decisions and Questions
 
-- Item, owner, and blocking status.
+- [ ] Item, owner, and blocking status.
 
 ## First Action or Handoff
 
-Record the first bounded action, owner, dependencies, and stop condition.
+- [ ] Record the first bounded action, owner, dependencies, and stop condition.
 
 ## Harness Delta
 
-Record only reusable Harness improvements exposed by this intake.
+- [ ] Record only reusable Harness improvements exposed by this intake.
 
 > Keep only useful detail. Do not fabricate project facts, create empty downstream artifacts, or turn unresolved product decisions into implementation assumptions.
