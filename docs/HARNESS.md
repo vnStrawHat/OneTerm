@@ -97,7 +97,7 @@ docs/templates/decision.md
 
 Agents must follow the current project templates rather than an extension-internal shape. Humans may edit their sections and instructions at any time. Spec Intake generators replace `{{id}}`, `{{title}}`, `{{date}}`, `{{type}}`, `{{lane}}`, and `{{summary}}`; work and decision generators replace their applicable values including `{{status}}` and `{{intake}}`. All other text is preserved.
 
-Generated Intakes use a gap-free document sequence independent of DB-only classifications and live at `docs/spec-intakes/IN-NNNN-slug/IN-NNNN.md`. `intake create` supports every request type so standalone bugs and maintenance can own a folder; `intake add` remains the DB-only classification path. Work IDs use `US-NNNN` or `BUG-NNNN`; `story create` requires their owning `IN-NNNN` and keeps the packet inside that Intake folder, including when `--doc` is supplied. Decision IDs use `DEC-NNNN` and remain under `docs/decisions/`. The CLI updates only marked Harness status/proof task-list blocks (or appends them to older/custom templates); authored Acceptance and Plan checklists remain human/agent-owned. Keep templates useful and concise.
+Generated Intakes use a gap-free document sequence independent of DB-only classifications and live at `docs/spec-intakes/IN-NNNN-slug/IN-NNNN.md`. `intake create` supports every request type so standalone bugs and maintenance can own a folder; `intake add` remains the DB-only classification path. Every `intake create` also generates the intake's one mandatory High-Level Design at `<intake-folder>/high-level-design.md` and records its path. Detail (Low-Level) Design is optional and split by concern under `<intake-folder>/low-level-design/<concern>.md` via `design lld`; it is **required for the high-risk lane**, where `story create` is blocked until at least one detail design file exists. Work IDs use `US-NNNN` or `BUG-NNNN`; `story create` requires their owning `IN-NNNN` and keeps the packet inside that Intake folder, including when `--doc` is supplied. Decision IDs use `DEC-NNNN` and remain under `docs/decisions/`. The CLI updates only marked Harness status/proof task-list blocks (or appends them to older/custom templates); authored Acceptance and Plan checklists remain human/agent-owned. Keep templates useful and concise.
 
 ## Commands
 
@@ -105,6 +105,7 @@ Use the `harness` agent tool or `/harness` slash command. Common operations:
 
 ```text
 harness intake create|add
+harness design hld|lld
 harness story create|update|verify
 harness decision create|add|verify
 harness trace

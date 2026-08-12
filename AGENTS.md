@@ -131,7 +131,7 @@ Default: classify the request, establish its documentation record, make the smal
 
 Before editing implementation files, create or update one Markdown work packet with the outcome, owning docs, documentation action, acceptance, and verification plan. Every source, test, schema, script, or behavior-affecting configuration change requires a work packet generated from `docs/templates/work.md`.
 
-A new capability requires a Spec Intake, accepted owning contract, and work packet before implementation. A bug or maintenance task still requires locating and reviewing the owning docs before implementation; update stale docs, or record the reviewed paths and a no-change reason in the packet. A detailed prompt may shorten these records but never removes them.
+A new capability requires a Spec Intake, accepted owning contract, and work packet before implementation. Every Spec Intake owns one mandatory High-Level Design (`high-level-design.md`, auto-generated with the intake); shape architecture, data ownership, and interfaces there. Detail (Low-Level) Design is optional and split by concern under the intake's `low-level-design/` folder, and required for the high-risk lane before any work packet. A bug or maintenance task still requires locating and reviewing the owning docs before implementation; update stale docs, or record the reviewed paths and a no-change reason in the packet. A detailed prompt may shorten these records but never removes them.
 
 Read the affected source, owning docs, nearby decisions, and relevant tests. Read `docs/PROJECT.md` for project facts and standing invariants. Follow the editable files under `docs/templates/`. Create a decision only for choices future work must inherit and a trace when evidence or failure context must persist.
 
