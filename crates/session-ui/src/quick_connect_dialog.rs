@@ -28,6 +28,7 @@ use gpui_component::{
 use oneterm_core::{
     ConnectionCancellation, HostKeyPolicy, SshConfig, SshDuplicateAuth, SshDuplicateConfig,
 };
+use oneterm_state::commands::SshDuplicateCompletion;
 use oneterm_state::notif_ext::notify;
 
 use super::auth_form::SshAuthForm;
@@ -47,6 +48,7 @@ enum QuickConnectMode {
     Duplicate {
         config: SshDuplicateConfig,
         initial_cwd: Option<std::path::PathBuf>,
+        completion: SshDuplicateCompletion,
     },
 }
 
@@ -88,6 +90,7 @@ pub fn open_quick_connect_dialog(window: &mut Window, cx: &mut App) {
 pub fn open_duplicate_ssh_dialog(
     config: SshDuplicateConfig,
     cwd: Option<std::path::PathBuf>,
+    completion: SshDuplicateCompletion,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -95,6 +98,7 @@ pub fn open_duplicate_ssh_dialog(
         QuickConnectMode::Duplicate {
             config,
             initial_cwd: cwd,
+            completion,
         },
         window,
         cx,
@@ -104,12 +108,13 @@ pub fn open_duplicate_ssh_dialog(
 fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Window, cx: &mut App) {
     let kind = mode.kind();
     let is_duplicate = matches!(kind, QuickConnectKind::Duplicate);
-    let (prefill, initial_cwd) = match mode {
-        QuickConnectMode::New => (None, None),
+    let (prefill, initial_cwd, completion) = match mode {
+        QuickConnectMode::New => (None, None, None),
         QuickConnectMode::Duplicate {
             config,
             initial_cwd,
-        } => (Some(config), initial_cwd),
+            completion,
+        } => (Some(config), initial_cwd, Some(completion)),
     };
     let (host, port, username, auth_method, key_path, shell_integration) = match prefill {
         Some(config) => {
@@ -174,6 +179,7 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
         let connection_cancellation = connection_cancellation.clone();
         let connecting = connecting.clone();
         let initial_cwd = initial_cwd.clone();
+        let completion = completion.clone();
         move |_, window, cx| {
             if connecting.load(Ordering::Relaxed) {
                 return false;
@@ -275,6 +281,7 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
                 cfg,
                 label,
                 initial_cwd.clone(),
+                completion.clone(),
                 connecting.clone(),
                 window,
                 cx,

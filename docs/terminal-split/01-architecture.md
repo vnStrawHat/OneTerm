@@ -100,8 +100,16 @@ pub struct SpaceTree {
   terminal, if any (used by `set_active` integration, [06](06-integration.md)).
 - `leaf_count() -> usize` — used to decide "single terminal vs split" rendering and
   whether **Close Space** appears in the menu ([04](04-context-menu.md)).
-- `fill_empty(target: SpaceId, view: Entity<LocalTerminalView>, cx)` — used by drop
-  ([03](03-drag-drop.md)).
+- `empty_space_destinations() -> Vec<SpaceId>` — returns only empty leaves in
+  rendered tree order. `SpaceId(0)` is reserved for the tab's initial terminal,
+  while split-created empty leaves start at 1 (and the spawn-failure recovery empty
+  leaf also starts at 1). IDs increase monotonically and are not reused. Placeholder
+  and **Into Space #N** labels derive `N` directly from each returned ID; rendering
+  does not maintain or look up a second display-number state.
+- `fill_empty(target: SpaceId, view: Entity<LocalTerminalView>) -> Result<(), Entity<LocalTerminalView>>`
+  — fills and activates an empty leaf, returning the unplaced view when the leaf is
+  missing or occupied so callers can close it and report a stale destination. Used
+  by drop and destination-aware duplication ([03](03-drag-drop.md), [04](04-context-menu.md)).
 
 ## 3. Mapping direction → axis + child order
 

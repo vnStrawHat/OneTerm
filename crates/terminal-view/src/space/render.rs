@@ -64,9 +64,13 @@ fn render_leaf(
     let id = leaf.id;
     let content: AnyElement = match &leaf.content {
         SpaceContent::Terminal(view) => view.clone().into_any_element(),
-        SpaceContent::Empty => {
-            super::placeholder::render_placeholder(leaf, panel.clone(), window, cx)
-        }
+        SpaceContent::Empty => super::placeholder::render_placeholder(
+            leaf,
+            id.display_number(),
+            panel.clone(),
+            window,
+            cx,
+        ),
     };
 
     // Fast path: the tab's only Space renders with no border / no activation

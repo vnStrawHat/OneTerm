@@ -7,11 +7,17 @@
 //! feature-agnostic while preserving the `Window` access panel construction needs.
 
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{App, Entity, Window};
 use gpui_component::dock::{DockArea, PanelView};
-use oneterm_core::{ShellKind, SshDuplicateConfig};
+use oneterm_core::{SessionDuplicateConfig, ShellKind, SshDuplicateConfig};
+use oneterm_terminal::TerminalSession;
+
+/// Receives a freshly authenticated SSH duplicate for destination-aware placement.
+pub type SshDuplicateCompletion =
+    Rc<dyn Fn(Box<dyn TerminalSession>, String, SessionDuplicateConfig, &mut Window, &mut App)>;
 
 /// Command function pointers registered by the feature crates.
 #[derive(Clone, Copy)]
@@ -21,7 +27,8 @@ pub struct WorkspaceCommands {
     /// Open the "New SSH session" quick-connect dialog.
     pub open_new_session_dialog: fn(&mut Window, &mut App),
     /// Prompt for authentication and duplicate an SSH session at the requested cwd.
-    pub open_duplicate_ssh_dialog: fn(SshDuplicateConfig, Option<PathBuf>, &mut Window, &mut App),
+    pub open_duplicate_ssh_dialog:
+        fn(SshDuplicateConfig, Option<PathBuf>, SshDuplicateCompletion, &mut Window, &mut App),
     /// Open the General Settings window.
     pub open_settings: fn(&mut App),
     /// Open the About dialog from the application menu.

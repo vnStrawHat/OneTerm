@@ -14,6 +14,13 @@ use super::super::view::LocalTerminalView;
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub struct SpaceId(pub u64);
 
+impl SpaceId {
+    /// User-facing Space number. Production empty Spaces always have ids >= 1.
+    pub fn display_number(self) -> u64 {
+        self.0
+    }
+}
+
 /// One node of the Space tree.
 pub enum SpaceNode {
     /// A leaf Space — holds a terminal or is empty.
@@ -111,6 +118,22 @@ impl SpaceNode {
         walk(self, id, &mut counter)
     }
 
+    /// Collect empty leaf ids in tree order.
+    pub fn collect_empty_space_destinations(&self, out: &mut Vec<SpaceId>) {
+        match self {
+            SpaceNode::Leaf(leaf) => {
+                if matches!(leaf.content, SpaceContent::Empty) {
+                    out.push(leaf.id);
+                }
+            }
+            SpaceNode::Split(split) => {
+                for child in &split.children {
+                    child.collect_empty_space_destinations(out);
+                }
+            }
+        }
+    }
+
     /// Collect every terminal view in this subtree.
     pub fn collect_terminal_views(&self, out: &mut Vec<Entity<LocalTerminalView>>) {
         match self {
@@ -120,8 +143,8 @@ impl SpaceNode {
                 }
             }
             SpaceNode::Split(split) => {
-                for c in &split.children {
-                    c.collect_terminal_views(out);
+                for child in &split.children {
+                    child.collect_terminal_views(out);
                 }
             }
         }

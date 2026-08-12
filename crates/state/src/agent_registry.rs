@@ -175,7 +175,8 @@ impl AgentRegistry {
         let card = &mut self.cards[idx];
         card.tab_key = grouping.tab_key;
         card.tab_title = grouping.tab_title;
-        card.space_index = grouping.space_index;
+        card.space_number = grouping.space_number;
+        card.space_order = grouping.space_order;
         card.apply_event(ev);
         cx.notify();
     }
@@ -284,7 +285,8 @@ mod tests {
             &Grouping {
                 tab_key: EntityId::from(99u64),
                 tab_title: "tab".to_string(),
-                space_index: 0,
+                space_number: 0,
+                space_order: 0,
             },
         )
     }

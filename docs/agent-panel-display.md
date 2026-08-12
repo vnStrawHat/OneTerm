@@ -467,10 +467,14 @@ These are known current gaps, not active behavior:
 
 ## 14. Decisions reflected by the current code
 
-### 14.1 Space label = numbering
+### 14.1 Space identity and ordering
 
-`TerminalPanel::space_label` returns `single` for a one-space tab and `#N` for a
-split tab. The current card renderer displays `single` as `#0`.
+Agent cards display `#N`, where `N` is the terminal Space's raw, stable `SpaceId`.
+`SpaceId(0)` identifies the tab's initial terminal, while split-created Spaces use
+monotonically increasing IDs. Card ordering is a separate concern: `space_order`
+is the Space's current 0-based depth-first position and is used only to sort cards
+within a tab. Closing a Space can change ordering, but never renumbers surviving
+card labels.
 
 ### 14.2 Multiple agents per terminal
 

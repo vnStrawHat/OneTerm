@@ -10,6 +10,7 @@ use oneterm_actions::{
     TerminalClear, TerminalCopy, TerminalPaste, TerminalSelectAll,
 };
 
+use super::super::panel::DuplicateDestination;
 use super::super::space::{SplitContext, SplitDir};
 
 /// Attach the right-click context menu.
@@ -43,7 +44,7 @@ where
     div.context_menu({
         let session = session.clone();
         let focus = focus.clone();
-        move |menu, _window: &mut Window, cx| {
+        move |menu, window: &mut Window, cx| {
             let has_selection = session
                 .read(cx)
                 .selection_text()
@@ -66,23 +67,49 @@ where
                     }),
             );
 
-            // 2. Duplicate Session — targets the terminal in the right-clicked Space.
+            // 2. Duplicate Session — dynamic destinations for the right-clicked Space.
             if let Some(ctx) = split_ctx.clone() {
-                let panel = ctx.panel.clone();
-                let space_id = ctx.space_id;
-                let f = focus.clone();
-                menu = menu.item(
-                    PopupMenuItem::new("Duplicate Session")
-                        .action(Box::new(DuplicateSession))
-                        .on_click(move |_, window, cx| {
-                            if let Some(panel) = panel.upgrade() {
-                                panel.update(cx, |panel, cx| {
-                                    panel.duplicate_session(space_id, window, cx);
-                                });
-                            }
-                            window.focus(&f, cx);
-                        }),
-                );
+                let destinations = ctx
+                    .panel
+                    .upgrade()
+                    .map(|panel| panel.read(cx).empty_space_destinations())
+                    .unwrap_or_default();
+                let submenu_ctx = ctx.clone();
+                let submenu_focus = focus.clone();
+                menu = menu.submenu("Duplicate Session", window, cx, move |submenu, _, _| {
+                    let mut submenu = submenu.item(duplicate_item(
+                        "In New Tab".into(),
+                        DuplicateDestination::NewTab,
+                        &submenu_ctx,
+                        &submenu_focus,
+                        true,
+                    ));
+                    for space_id in &destinations {
+                        submenu = submenu.item(duplicate_item(
+                            format!("Into Space #{}", space_id.display_number()),
+                            DuplicateDestination::ExistingSpace(*space_id),
+                            &submenu_ctx,
+                            &submenu_focus,
+                            false,
+                        ));
+                    }
+                    submenu
+                        .separator()
+                        .item(duplicate_item(
+                            "Split Right".into(),
+                            DuplicateDestination::Split(SplitDir::Right),
+                            &submenu_ctx,
+                            &submenu_focus,
+                            false,
+                        ))
+                        .item(duplicate_item(
+                            "Split Down".into(),
+                            DuplicateDestination::Split(SplitDir::Down),
+                            &submenu_ctx,
+                            &submenu_focus,
+                            false,
+                        ))
+                });
             }
 
             // 3–4. Split Right / Left / Up / Down (only inside a Space tree).
@@ -211,6 +238,32 @@ where
             menu
         }
     })
+}
+
+/// Build one Duplicate Session destination item.
+fn duplicate_item(
+    label: String,
+    destination: DuplicateDestination,
+    ctx: &SplitContext,
+    focus: &FocusHandle,
+    show_action: bool,
+) -> PopupMenuItem {
+    let panel = ctx.panel.clone();
+    let source_space = ctx.space_id;
+    let f = focus.clone();
+    let item = PopupMenuItem::new(label).on_click(move |_, window, cx| {
+        if let Some(panel) = panel.upgrade() {
+            panel.update(cx, |panel, cx| {
+                panel.duplicate_session_to(source_space, destination, window, cx);
+            });
+        }
+        window.focus(&f, cx);
+    });
+    if show_action {
+        item.action(Box::new(DuplicateSession))
+    } else {
+        item
+    }
 }
 
 /// Build a "Split <dir>" menu item that dispatches to the owning panel.

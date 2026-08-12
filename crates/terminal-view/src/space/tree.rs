@@ -68,7 +68,10 @@ pub struct SpaceTree {
 impl SpaceTree {
     /// Create a tree with a single empty leaf (no terminal session).
     pub fn new_empty(focus: FocusHandle) -> Self {
-        let id = SpaceId(0);
+        // SpaceId(0) is reserved for a tab's initial terminal. This recovery
+        // constructor is used only when spawning that terminal fails, so its
+        // visible empty placeholder starts at Space #1 like split-created leaves.
+        let id = SpaceId(1);
         let root = SpaceNode::Leaf(SpaceLeaf {
             id,
             content: SpaceContent::Empty,
@@ -76,7 +79,7 @@ impl SpaceTree {
         });
         Self {
             root: Some(root),
-            next_id: 1,
+            next_id: 2,
             active: id,
         }
     }
@@ -178,6 +181,13 @@ impl SpaceTree {
             SpaceContent::Terminal(view) => Some(view.clone()),
             SpaceContent::Empty => None,
         }
+    }
+
+    /// Empty Space ids and stable display numbers in rendered tree order.
+    pub fn empty_space_destinations(&self) -> Vec<SpaceId> {
+        let mut out = Vec::new();
+        self.cur().collect_empty_space_destinations(&mut out);
+        out
     }
 
     /// Every terminal view in the tree (used to (re)subscribe to title events).

@@ -118,6 +118,45 @@ fn split_nested_creates_three_leaves(cx: &mut gpui::TestAppContext) {
 // ── Close tests ──────────────────────────────────────────────────────
 
 #[gpui::test]
+fn empty_spaces_keep_stable_numbers_when_an_earlier_space_is_removed(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(|cx| {
+        let focus = cx.focus_handle();
+        let mut tree = SpaceTree::new_empty(focus.clone());
+        let first = tree.active();
+
+        let second = tree.alloc_id();
+        let state = cx.new(|_| gpui_component::resizable::ResizableState::default());
+        tree.split(
+            first,
+            SplitDir::Right,
+            empty_leaf(second.0, focus.clone()),
+            state,
+        );
+        let third = tree.alloc_id();
+        let state = cx.new(|_| gpui_component::resizable::ResizableState::default());
+        tree.split(first, SplitDir::Down, empty_leaf(third.0, focus), state);
+
+        assert_eq!(tree.empty_space_destinations(), vec![first, third, second]);
+
+        tree.close(first);
+        assert_eq!(tree.empty_space_destinations(), vec![third, second]);
+
+        let fourth = tree.alloc_id();
+        assert_eq!(fourth.display_number(), 4);
+        let state = cx.new(|_| gpui_component::resizable::ResizableState::default());
+        tree.split(
+            second,
+            SplitDir::Right,
+            empty_leaf(fourth.0, cx.focus_handle()),
+            state,
+        );
+        assert_eq!(tree.empty_space_destinations(), vec![third, second, fourth]);
+    });
+}
+
+#[gpui::test]
 fn close_last_leaf_returns_last_space_closed(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
         let focus = cx.focus_handle();
@@ -278,6 +317,7 @@ fn tree_starts_with_single_empty_leaf(cx: &mut gpui::TestAppContext) {
         assert_eq!(tree.leaf_count(), 1);
         assert!(tree.has_no_terminals());
         assert_eq!(tree.terminal_views().len(), 0);
+        assert_eq!(tree.empty_space_destinations(), vec![SpaceId(1)]);
     });
 }
 
@@ -291,8 +331,8 @@ fn alloc_id_is_monotonic(cx: &mut gpui::TestAppContext) {
         let id2 = tree.alloc_id();
         let id3 = tree.alloc_id();
 
-        assert_eq!(id1.0, 1);
-        assert_eq!(id2.0, 2);
-        assert_eq!(id3.0, 3);
+        assert_eq!(id1.0, 2);
+        assert_eq!(id2.0, 3);
+        assert_eq!(id3.0, 4);
     });
 }

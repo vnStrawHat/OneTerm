@@ -4,6 +4,7 @@
 //! These methods are part of the `impl TerminalPanel` block split out of
 //! [`super`] to keep each file under the ~400-line guideline.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{AppContext as _, Entity, Window};
@@ -17,7 +18,7 @@ use oneterm_core::SessionDuplicateConfig;
 use oneterm_settings::TerminalSettings;
 use oneterm_state::notif_ext::notify;
 use oneterm_state::{AppServices, AppState};
-use oneterm_terminal::PtySize;
+use oneterm_terminal::{PtySize, TerminalSession};
 
 use super::super::space::{
     CloseOutcome, DragTerminalTab, SpaceContent, SpaceId, SpaceLeaf, SplitDir,
@@ -33,11 +34,35 @@ fn apply_duplicate_cwd(
     config
 }
 
+struct DuplicatedSession {
+    session: Box<dyn TerminalSession>,
+    title: String,
+    duplicate_config: SessionDuplicateConfig,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DuplicateDestination {
+    NewTab,
+    ExistingSpace(SpaceId),
+    Split(SplitDir),
+}
+
 impl TerminalPanel {
     /// Create a new tab from the session in `space_id` without changing the source.
     pub(crate) fn duplicate_session(
         &mut self,
         space_id: SpaceId,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.duplicate_session_to(space_id, DuplicateDestination::NewTab, window, cx);
+    }
+
+    /// Duplicate the session in `space_id` into the requested destination.
+    pub(crate) fn duplicate_session_to(
+        &mut self,
+        space_id: SpaceId,
+        destination: DuplicateDestination,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
@@ -62,18 +87,6 @@ impl TerminalPanel {
         match duplicate_config {
             SessionDuplicateConfig::Local(config) => {
                 let config = apply_duplicate_cwd(config, live_cwd);
-                let Some(tab_panel) = self.tab_panel.as_ref().and_then(|panel| panel.upgrade())
-                else {
-                    window.push_notification(
-                        notify(
-                            NotificationType::Error,
-                            "The terminal tab container is unavailable.",
-                            cx,
-                        ),
-                        cx,
-                    );
-                    return;
-                };
                 let Some(factory) = AppServices::session_factory(cx) else {
                     window.push_notification(
                         notify(
@@ -102,18 +115,17 @@ impl TerminalPanel {
                             return;
                         }
                     };
-                let panel = cx.new(|cx| {
-                    TerminalPanel::from_session_with_duplicate_config(
+                self.place_duplicate_session(
+                    DuplicatedSession {
                         session,
-                        "Terminal",
-                        Some(duplicate_config),
-                        window,
-                        cx,
-                    )
-                });
-                tab_panel.update(cx, |tabs, cx| {
-                    tabs.add_panel(Arc::new(panel), window, cx);
-                });
+                        title: "Terminal".to_string(),
+                        duplicate_config,
+                    },
+                    space_id,
+                    destination,
+                    window,
+                    cx,
+                );
             }
             SessionDuplicateConfig::Ssh(config) => {
                 let Some(commands) = oneterm_state::commands::commands(cx) else {
@@ -127,9 +139,148 @@ impl TerminalPanel {
                     );
                     return;
                 };
-                (commands.open_duplicate_ssh_dialog)(config, live_cwd, window, cx);
+                let panel = cx.entity().downgrade();
+                let completion: oneterm_state::commands::SshDuplicateCompletion = Rc::new(
+                    move |session, label, duplicate_config, window, cx| {
+                        if let Some(panel) = panel.upgrade() {
+                            panel.update(cx, |panel, cx| {
+                                panel.place_duplicate_session(
+                                    DuplicatedSession {
+                                        session,
+                                        title: label,
+                                        duplicate_config,
+                                    },
+                                    space_id,
+                                    destination,
+                                    window,
+                                    cx,
+                                );
+                            });
+                        } else {
+                            if let Err(error) = session.close() {
+                                log::warn!(
+                                    "duplicate_session: failed to close orphaned SSH session: {error}"
+                                );
+                            }
+                            window.push_notification(
+                                notify(
+                                    NotificationType::Warning,
+                                    "The duplicate destination is no longer available.",
+                                    cx,
+                                ),
+                                cx,
+                            );
+                        }
+                    },
+                );
+                (commands.open_duplicate_ssh_dialog)(config, live_cwd, completion, window, cx);
             }
         }
+    }
+
+    fn place_duplicate_session(
+        &mut self,
+        duplicate: DuplicatedSession,
+        source_space: SpaceId,
+        destination: DuplicateDestination,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let DuplicatedSession {
+            session,
+            title,
+            duplicate_config,
+        } = duplicate;
+        let target = match destination {
+            DuplicateDestination::NewTab => {
+                let Some(tab_panel) = self.tab_panel.as_ref().and_then(|panel| panel.upgrade())
+                else {
+                    window.push_notification(
+                        notify(
+                            NotificationType::Error,
+                            "The terminal tab container is unavailable.",
+                            cx,
+                        ),
+                        cx,
+                    );
+                    if let Err(error) = session.close() {
+                        log::warn!("duplicate_session: failed to close unplaced session: {error}");
+                    }
+                    return;
+                };
+                let panel = cx.new(|cx| {
+                    TerminalPanel::from_session_with_duplicate_config(
+                        session,
+                        &title,
+                        Some(duplicate_config),
+                        window,
+                        cx,
+                    )
+                });
+                tab_panel.update(cx, |tabs, cx| {
+                    tabs.add_panel(Arc::new(panel), window, cx);
+                });
+                return;
+            }
+            DuplicateDestination::ExistingSpace(target) => target,
+            DuplicateDestination::Split(dir) => {
+                if self.tree.leaf_terminal(source_space).is_none() {
+                    self.close_unplaced_duplicate(session, window, cx);
+                    return;
+                }
+                let target = self.tree.alloc_id();
+                let empty = SpaceLeaf {
+                    id: target,
+                    content: SpaceContent::Empty,
+                    focus: cx.focus_handle(),
+                };
+                let state = cx.new(|_| ResizableState::default());
+                self.tree.split(source_space, dir, empty, state);
+                target
+            }
+        };
+
+        let session = cx.new(|_| session);
+        let view = cx.new(|cx| {
+            let mut view = LocalTerminalView::new(session, window, cx);
+            view.duplicate_config = Some(duplicate_config);
+            view
+        });
+        self.attach_split_ctx(&view, target, cx);
+        if let Err(view) = self.tree.fill_empty(target, view) {
+            view.update(cx, |view, cx| view.shutdown(cx));
+            window.push_notification(
+                notify(
+                    NotificationType::Warning,
+                    "The duplicate destination is no longer available.",
+                    cx,
+                ),
+                cx,
+            );
+            return;
+        }
+        self.rebuild_title_subs(cx);
+        self.set_active_space(target, window, cx);
+        cx.notify();
+    }
+
+    fn close_unplaced_duplicate(
+        &self,
+        session: Box<dyn TerminalSession>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if let Err(error) = session.close() {
+            log::warn!("duplicate_session: failed to close unplaced session: {error}");
+        }
+        window.push_notification(
+            notify(
+                NotificationType::Warning,
+                "The duplicate destination is no longer available.",
+                cx,
+            ),
+            cx,
+        );
     }
 
     /// Split Space `space_id` in `dir`; the new empty Space becomes active.
@@ -193,7 +344,18 @@ impl TerminalPanel {
             }
         };
         self.attach_split_ctx(&view, space_id, cx);
-        self.tree.fill_empty(space_id, view);
+        if let Err(view) = self.tree.fill_empty(space_id, view) {
+            view.update(cx, |view, cx| view.shutdown(cx));
+            window.push_notification(
+                notify(
+                    NotificationType::Warning,
+                    "The destination Space is no longer available.",
+                    cx,
+                ),
+                cx,
+            );
+            return;
+        }
         self.rebuild_title_subs(cx);
         self.set_active_space(space_id, window, cx);
         cx.notify();
@@ -269,7 +431,10 @@ impl TerminalPanel {
         };
 
         self.attach_split_ctx(&view, target, cx);
-        self.tree.fill_empty(target, view);
+        if let Err(view) = self.tree.fill_empty(target, view) {
+            view.update(cx, |view, cx| view.shutdown(cx));
+            return;
+        }
         self.rebuild_title_subs(cx);
         self.set_active_space(target, window, cx);
 

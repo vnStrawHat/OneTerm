@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use gpui::{AppContext as _, Focusable as _, TestAppContext, VisualTestContext};
 use gpui_component::{
     Root,
-    dock::{DockArea, PanelView, TabPanel},
+    dock::{DockArea, Panel as _, PanelView, TabPanel},
 };
 use oneterm_core::{AppError, LocalShellConfig, Result, SessionDuplicateConfig, SshConfig};
 use oneterm_state::{AppServices, commands::WorkspaceCommands};
@@ -16,6 +16,55 @@ use oneterm_terminal::{
 use crate::panel::TerminalPanel;
 use crate::space::{CloseOutcome, SplitDir};
 use crate::view::LocalTerminalView;
+
+#[gpui::test]
+fn terminal_panel_disables_multi_tab_inner_padding(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    cx.update(crate::init);
+    cx.update(oneterm_settings::TerminalSettings::init);
+
+    let (session, _) = FakeTerminalSession::boxed(24, 80, "");
+    let (panel, cx) = cx.add_window_view(move |window, cx| {
+        TerminalPanel::from_session(session, "Terminal", window, cx)
+    });
+    let cx: &mut VisualTestContext = cx;
+
+    assert!(!panel.read_with(cx, |panel, cx| panel.inner_padding(cx)));
+}
+
+#[gpui::test]
+fn filling_space_one_does_not_renumber_space_two(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    cx.update(crate::init);
+    cx.update(oneterm_settings::TerminalSettings::init);
+
+    let (session, _) = FakeTerminalSession::boxed(24, 80, "source");
+    let (panel, cx) = cx.add_window_view(move |window, cx| {
+        TerminalPanel::from_session(session, "Terminal", window, cx)
+    });
+    let cx: &mut VisualTestContext = cx;
+
+    panel.update_in(cx, |panel, window, cx| {
+        let source = panel.tree.active();
+        panel.split_active_at(source, SplitDir::Right, window, cx);
+        panel.split_active_at(source, SplitDir::Down, window, cx);
+        let destinations = panel.empty_space_destinations();
+        assert_eq!(destinations.len(), 2);
+        assert_eq!(destinations[0].display_number(), 2);
+        assert_eq!(destinations[1].display_number(), 1);
+
+        let space_one = destinations[1];
+        let (duplicate, _) = FakeTerminalSession::boxed(24, 80, "duplicate");
+        let duplicate = cx.new(|_| duplicate);
+        let view = cx.new(|cx| LocalTerminalView::new(duplicate, window, cx));
+        panel
+            .tree
+            .fill_empty(space_one, view)
+            .expect("Space #1 must be empty");
+
+        assert_eq!(panel.empty_space_destinations(), vec![destinations[0]]);
+    });
+}
 
 #[gpui::test]
 fn phase0_close_last_space_calls_session_close(cx: &mut TestAppContext) {
@@ -84,7 +133,9 @@ fn phase0_close_non_last_space_closes_removed_session(cx: &mut TestAppContext) {
     panel.update_in(cx, |p, window, cx| {
         let session_entity = cx.new(|_| session_b);
         let view = cx.new(|cx| LocalTerminalView::new(session_entity, window, cx));
-        p.tree.fill_empty(new_active, view);
+        p.tree
+            .fill_empty(new_active, view)
+            .expect("new split Space must be empty");
     });
 
     cx.run_until_parked();
@@ -216,6 +267,7 @@ fn duplicate_test_commands() -> WorkspaceCommands {
     fn duplicate_ssh(
         _: oneterm_core::SshDuplicateConfig,
         _: Option<std::path::PathBuf>,
+        _: oneterm_state::commands::SshDuplicateCompletion,
         _: &mut gpui::Window,
         _: &mut gpui::App,
     ) {
@@ -276,6 +328,7 @@ fn duplicate_action_dispatches_to_the_active_space(cx: &mut TestAppContext) {
             let inactive_space = panel.tree.active();
             panel.split_active_at(inactive_space, SplitDir::Right, window, cx);
             let active_space = panel.tree.active();
+            assert_eq!(panel.empty_space_destinations(), vec![active_space]);
             let (active_session, _) = FakeTerminalSession::boxed(24, 80, "active");
             let active_session = cx.new(|_| active_session);
             let active_view = cx.new(|cx| {
@@ -285,7 +338,11 @@ fn duplicate_action_dispatches_to_the_active_space(cx: &mut TestAppContext) {
                 view.duplicate_config = Some(SessionDuplicateConfig::Local(active_config));
                 view
             });
-            panel.tree.fill_empty(active_space, active_view);
+            panel
+                .tree
+                .fill_empty(active_space, active_view)
+                .expect("new split Space must be empty");
+            assert!(panel.empty_space_destinations().is_empty());
         });
         tab_panel.update(cx, |tabs, cx| {
             tabs.add_panel(Arc::new(panel.clone()), window, cx);

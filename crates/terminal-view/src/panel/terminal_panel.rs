@@ -279,6 +279,11 @@ impl TerminalPanel {
         }))
     }
 
+    /// Empty Space ids in visual tree order.
+    pub(crate) fn empty_space_destinations(&self) -> Vec<SpaceId> {
+        self.tree.empty_space_destinations()
+    }
+
     /// Point `view`'s context menu at Space `space_id` in this panel.
     pub(super) fn attach_split_ctx(
         &self,
@@ -387,12 +392,11 @@ impl TerminalPanel {
         self.effective_tab_label(live)
     }
 
-    /// The Agent Panel Space ordering index for `space_id`: the 0-based
-    /// depth-first (left→right) position in the `SpaceTree`. Drives both the
-    /// fixed within-tab card order and the `#N` label
-    /// (`docs/agent-panel-display.md` §5.1). `0` for a single-Space tab.
-    pub fn space_index(&self, space_id: SpaceId) -> u64 {
-        self.tree.leaf_index(space_id).unwrap_or(0) as u64
+    /// The Agent Panel ordering key for `space_id`: its 0-based depth-first
+    /// (left-to-right) position in the current tree. User-facing labels use the
+    /// stable `SpaceId` instead.
+    pub fn space_order(&self, space_id: SpaceId) -> usize {
+        self.tree.leaf_index(space_id).unwrap_or(0)
     }
 
     /// A weak handle to the containing `TabPanel` (for Agent Panel click-to-focus).
@@ -434,6 +438,10 @@ impl Focusable for TerminalPanel {
 impl Panel for TerminalPanel {
     fn panel_name(&self) -> &'static str {
         "terminal"
+    }
+
+    fn inner_padding(&self, _: &App) -> bool {
+        false
     }
 
     fn on_removed(&mut self, window: &mut Window, cx: &mut Context<Self>) {

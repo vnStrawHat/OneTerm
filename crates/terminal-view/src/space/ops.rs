@@ -66,14 +66,20 @@ impl SpaceTree {
     }
 
     /// Replace the empty content of leaf `target` with a terminal `view`.
-    /// No-op if `target` is not an empty leaf. Activates the filled leaf.
-    pub fn fill_empty(&mut self, target: SpaceId, view: Entity<LocalTerminalView>) {
-        if let Some(leaf) = self.cur_mut().find_leaf_mut(target) {
-            if matches!(leaf.content, SpaceContent::Empty) {
-                leaf.content = SpaceContent::Terminal(view);
-                self.active = target;
-            }
+    /// Returns whether the target existed and was empty. Activates a filled leaf.
+    pub fn fill_empty(
+        &mut self,
+        target: SpaceId,
+        view: Entity<LocalTerminalView>,
+    ) -> Result<(), Entity<LocalTerminalView>> {
+        if let Some(leaf) = self.cur_mut().find_leaf_mut(target)
+            && matches!(leaf.content, SpaceContent::Empty)
+        {
+            leaf.content = SpaceContent::Terminal(view);
+            self.active = target;
+            return Ok(());
         }
+        Err(view)
     }
 
     /// Take the terminal view out of leaf `id`, leaving the leaf empty. Returns

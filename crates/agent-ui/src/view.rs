@@ -66,8 +66,8 @@ fn build_display_groups(cards: &[AgentCard]) -> Vec<AgentDisplayGroup> {
         // the ascending insertion index.
         group.card_indices.sort_by(|&a, &b| {
             cards[a]
-                .space_index
-                .cmp(&cards[b].space_index)
+                .space_order
+                .cmp(&cards[b].space_order)
                 .then(a.cmp(&b))
         });
     }

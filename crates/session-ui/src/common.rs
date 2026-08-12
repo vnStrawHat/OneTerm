@@ -29,6 +29,7 @@ use gpui_component::{
     v_flex,
 };
 use oneterm_core::{AppError, ConnectionCancellation, HostKeyPolicy, SshConfig};
+use oneterm_state::commands::SshDuplicateCompletion;
 use oneterm_state::notif_ext::notify;
 use oneterm_state::{AppServices, AppState};
 use oneterm_terminal::PtySize;
@@ -187,6 +188,7 @@ pub(crate) fn connect_ssh_session(
     cfg: SshConfig,
     label: String,
     initial_cwd: Option<PathBuf>,
+    completion: Option<SshDuplicateCompletion>,
     connecting: Arc<std::sync::atomic::AtomicBool>,
     window: &mut Window,
     cx: &mut App,
@@ -216,6 +218,7 @@ pub(crate) fn connect_ssh_session(
     let retry_cfg = cfg.clone();
     let retry_label = label.clone();
     let retry_cwd = initial_cwd.clone();
+    let retry_completion = completion.clone();
     let connecting_for_task = connecting.clone();
     let task_cancellation = cancellation.clone();
     window
@@ -238,15 +241,21 @@ pub(crate) fn connect_ssh_session(
                     if let Some(cwd) = initial_cwd.as_deref() {
                         ssh_session.send_text(&remote_cd_command(cwd));
                     }
-                    let panel: Arc<dyn PanelView> =
-                        Arc::new(TerminalPanel::from_session_entity_with_duplicate_config(
-                            ssh_session,
-                            &label,
-                            oneterm_core::SessionDuplicateConfig::Ssh(duplicate_config),
-                            window,
-                            cx,
-                        ));
-                    add_ssh_terminal_to_dock(&panel, window, cx);
+                    let duplicate_config =
+                        oneterm_core::SessionDuplicateConfig::Ssh(duplicate_config);
+                    if let Some(completion) = completion {
+                        completion(ssh_session, label.clone(), duplicate_config, window, cx);
+                    } else {
+                        let panel: Arc<dyn PanelView> =
+                            Arc::new(TerminalPanel::from_session_entity_with_duplicate_config(
+                                ssh_session,
+                                &label,
+                                duplicate_config,
+                                window,
+                                cx,
+                            ));
+                        add_ssh_terminal_to_dock(&panel, window, cx);
+                    }
                     window.push_notification(
                         notify(
                             NotificationType::Success,
@@ -268,6 +277,7 @@ pub(crate) fn connect_ssh_session(
                         retry_cfg,
                         retry_label,
                         retry_cwd,
+                        retry_completion,
                         host,
                         port,
                         algorithm,
@@ -299,6 +309,7 @@ fn open_host_key_confirmation(
     mut cfg: SshConfig,
     label: String,
     initial_cwd: Option<PathBuf>,
+    completion: Option<SshDuplicateCompletion>,
     host: String,
     port: u16,
     algorithm: String,
@@ -318,6 +329,7 @@ fn open_host_key_confirmation(
         let cfg = cfg.clone();
         let label = label.clone();
         let initial_cwd = initial_cwd.clone();
+        let completion = completion.clone();
         alert
             .confirm()
             .title("Unknown SSH Host Key")
@@ -334,6 +346,7 @@ fn open_host_key_confirmation(
                     cfg.clone(),
                     label.clone(),
                     initial_cwd.clone(),
+                    completion.clone(),
                     Arc::new(AtomicBool::new(true)),
                     window,
                     cx,

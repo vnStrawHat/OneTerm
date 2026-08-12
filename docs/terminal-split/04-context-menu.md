@@ -27,7 +27,13 @@ Right-clicking a Space that **contains a terminal**:
 
 ```
 New Terminal
-Duplicate Session
+Duplicate Session                 >
+    In New Tab
+    Into Space #1                 ← one item per empty Space; omitted when none
+    Into Space #2
+    ──────────
+    Split Right
+    Split Down
 ──────────
 Split Right
 Split Left
@@ -43,7 +49,9 @@ Close Terminal Tab
 Close Space            ← only shown when the tab has > 1 Space
 ```
 
-- **Duplicate Session** is directly below **New Terminal** and targets the terminal in the right-clicked Space. The same action is configurable under the **Terminal Context Menu** Key Bindings group and has no built-in default keystroke; keyboard invocation targets the active Space. A local source creates a new sibling tab immediately with the same complete shell launch configuration and the live cwd. An SSH source opens a prefilled authentication dialog, initially focuses the applicable password/passphrase field, requires credentials again, reconnects to the same endpoint/default remote shell, then requests the live cwd when known. If the source has not reported a cwd, the duplicate uses its shell/backend default directory: local launch metadata clears `cwd`, and SSH sends no `cd` command. The source tab and process remain unchanged.
+- **Duplicate Session** is directly below **New Terminal** and targets the terminal in the right-clicked Space. Its submenu always contains **In New Tab**, then one **Into Space #N** item for every currently empty Space in rendered tree order, then a separator followed by **Split Right** and **Split Down**. `Into Space` items are omitted when no empty destination exists. Each number is the destination's raw `SpaceId`: `SpaceId(0)` is reserved for the initial terminal and split-created empty Spaces start at 1. IDs are monotonic and non-reused, so filling `Space #1` leaves a surviving `Space #2` labeled `#2`. Each item carries that same destination `SpaceId` and revalidates that it is still empty before placement.
+- **In New Tab** preserves the original behavior. The same action is configurable under the **Terminal Context Menu** Key Bindings group and has no built-in default keystroke; keyboard invocation targets the active Space and duplicates into a new tab. **Into Space #N** fills the existing empty leaf without restructuring the tree. **Split Right/Down** splits the source leaf and fills the new adjacent leaf. The duplicate becomes active and focused; the source tab and process remain unchanged.
+- A local source duplicates immediately with the same complete shell launch configuration and the live cwd. An SSH source opens a prefilled authentication dialog, initially focuses the applicable password/passphrase field, requires credentials again, reconnects to the same endpoint/default remote shell, then requests the live cwd when known and routes the result to the selected destination. If the source has not reported a cwd, the duplicate uses its shell/backend default directory: local launch metadata clears `cwd`, and SSH sends no `cd` command. If the originating panel/source or an existing-Space destination becomes unavailable, the new session is closed, layout/content remains unchanged, and the user is notified instead of silently redirecting the result.
 - Duplicate metadata is non-secret. SSH password and private-key passphrase fields are never retained or prefilled. The duplicate authentication dialog does not offer **Save to SSH Sessions**; saving connection metadata remains exclusive to the normal SSH Quick Connect flow. See [`../decisions/0002-ssh-duplicate-auth.md`](../decisions/0002-ssh-duplicate-auth.md).
 - **Split R/L/U/D** call `TerminalPanel::split_active(dir, window, cx)` →
   `SpaceTree::split(active, dir, …)` ([02](02-split-and-close.md) §1). The target is

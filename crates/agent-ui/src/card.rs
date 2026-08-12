@@ -130,7 +130,7 @@ fn lifecycle_summary(card: &AgentCard, pal: &Palette) -> AnyElement {
     let text = format!(
         "{} #{}: {}",
         card.agent_id,
-        card.space_index,
+        card.space_number,
         liveness_word(card)
     );
 

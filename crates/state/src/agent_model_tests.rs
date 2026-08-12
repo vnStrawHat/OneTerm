@@ -11,9 +11,27 @@ fn card() -> AgentCard {
         &Grouping {
             tab_key: EntityId::from(2u64),
             tab_title: "t".into(),
-            space_index: 0,
+            space_number: 0,
+            space_order: 0,
         },
     )
+}
+
+#[test]
+fn card_keeps_space_number_separate_from_sort_order() {
+    let card = AgentCard::new(
+        EntityId::from(1u64),
+        "pi".into(),
+        &Grouping {
+            tab_key: EntityId::from(2u64),
+            tab_title: "t".into(),
+            space_number: 7,
+            space_order: 1,
+        },
+    );
+
+    assert_eq!(card.space_number, 7);
+    assert_eq!(card.space_order, 1);
 }
 
 fn state_ev(seq: u64, state: AgentState, msg: Option<&str>) -> AgentStatusEvent {

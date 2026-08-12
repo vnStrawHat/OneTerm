@@ -106,6 +106,7 @@ v_flex()
     .bg(cx.theme().background)
     .text_color(cx.theme().muted_foreground)
     .child(Icon::new(IconName::SquareTerminal)) // or AppIcon::Terminal
+    .child(format!("Space #{number}"))
     .child("Drag a terminal tab here")
     .child("or right-click to split")
     // context menu for empty Space (see 04 §3)
@@ -114,6 +115,13 @@ v_flex()
 The placeholder is the **only** drop target for `DragTerminalTab` — terminal leaves
 are not droppable ([03](03-drag-drop.md) §3). It also carries the empty-Space context
 menu, including **New Terminal Here** ([04](04-context-menu.md) §3).
+
+Only empty leaves display `Space #N`, where `N` is the leaf's raw `SpaceId` value.
+`SpaceId(0)` is reserved for a tab's initial terminal; split-created empty leaves and
+the spawn-failure recovery placeholder start at 1. IDs increase monotonically and are
+not reused, so surviving labels do not change when another Space is filled or closed.
+The same `SpaceId` supplies the matching **Into Space #N** label and command identity;
+it is not persisted across restart.
 
 ## 6. Resize behavior
 

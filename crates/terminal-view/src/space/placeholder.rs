@@ -25,6 +25,7 @@ use super::node::{SpaceId, SpaceLeaf};
 /// Render the empty-Space placeholder for `leaf`.
 pub(crate) fn render_placeholder(
     leaf: &SpaceLeaf,
+    number: u64,
     panel: WeakEntity<TerminalPanel>,
     _window: &mut Window,
     cx: &mut App,
@@ -45,6 +46,7 @@ pub(crate) fn render_placeholder(
                 .large()
                 .text_color(rgb(0x58c4dc)),
         )
+        .child(format!("Space #{number}"))
         .child("Drag a terminal tab here")
         .child("or right-click to split")
         // Clicking the placeholder activates this Space.

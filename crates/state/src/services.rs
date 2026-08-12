@@ -101,6 +101,7 @@ mod tests {
         fn duplicate_ssh(
             _: oneterm_core::SshDuplicateConfig,
             _: Option<std::path::PathBuf>,
+            _: crate::commands::SshDuplicateCompletion,
             _: &mut gpui::Window,
             _: &mut gpui::App,
         ) {

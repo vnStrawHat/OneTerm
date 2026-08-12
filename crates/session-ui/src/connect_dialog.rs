@@ -271,8 +271,15 @@ fn on_connect_click(
     };
     connecting.store(true, Ordering::Relaxed);
     window.refresh();
-    let cancellation =
-        connect_ssh_session(cfg, session.label.clone(), None, connecting, window, cx);
+    let cancellation = connect_ssh_session(
+        cfg,
+        session.label.clone(),
+        None,
+        None,
+        connecting,
+        window,
+        cx,
+    );
     *connection_cancellation.borrow_mut() = Some(cancellation);
 
     false // keep the dialog open until the background attempt completes

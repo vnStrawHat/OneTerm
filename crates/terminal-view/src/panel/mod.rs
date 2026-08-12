@@ -18,4 +18,5 @@ mod ops;
 mod terminal_panel;
 mod title;
 
+pub(crate) use ops::DuplicateDestination;
 pub use terminal_panel::TerminalPanel;
