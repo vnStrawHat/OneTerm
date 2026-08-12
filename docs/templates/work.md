@@ -13,12 +13,13 @@ Created: {{date}}
 - [ ] In progress
 - [ ] Implemented
 - [ ] Changed
+- [ ] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
 ## Classification
 
-- Change type: new capability | existing-contract change | bug | maintenance
+- Change type: new capability | existing-contract change | bug | maintenance | acceptance rework
 - Risk lane:
 - Spec Intake, when required:
 

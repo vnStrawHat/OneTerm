@@ -8,7 +8,7 @@ Harness keeps implementation and its owning documentation aligned while coding a
 Classify -> Document -> Change -> Verify -> Reconcile
 ```
 
-1. Classify the request as a new capability, existing-contract change, bug, maintenance, or non-implementation task.
+1. Classify the request as a new capability, existing-contract change, bug, maintenance, acceptance rework, or non-implementation task.
 2. Read the owning docs, affected source, nearby decisions, and relevant tests.
 3. Before implementation, establish the required Spec Intake, owning contract, and Markdown work packet.
 4. Make the smallest change that fits the accepted contract.
@@ -25,6 +25,7 @@ A clear or detailed prompt can make the documentation concise; it does not bypas
 | Any source, test, schema, script, or behavior-affecting configuration change | Before editing implementation, create or update one Markdown work packet from the editable template. |
 | A new capability, new spec, spec slice, or initiative | Before implementation, create one Spec Intake, establish or update the owning contract, then create the work packet. |
 | A bug or maintenance change, however small | Before implementation, create or locate its owning Intake, then review the owning docs. Update stale docs, or record reviewed paths and a no-change reason in the work packet. |
+| Acceptance feedback on work that was just built but not yet accepted ("fix these points" during your own trial/UAT) | Reopen and rework the **owning US/BUG**; do not open a new BUG. Run `harness story reopen --id <US/BUG> --reason "..."`, mark the failed items in that packet's Acceptance checklist, then re-prove. A new BUG is only for defects found in behavior that was already accepted/shipped. |
 | Acceptance must survive a session, work has several independent steps, or a handoff is needed | Keep the same owning work packet current; do not create a parallel status record. |
 | A choice about architecture, behavior, authorization, data ownership, public contracts, or validation must guide future work | Create or update one decision record. |
 | Review, release, benchmark, failure attribution, or a non-reconstructable handoff needs retained evidence | Record one evidence-focused trace. |
@@ -106,7 +107,7 @@ Use the `harness` agent tool or `/harness` slash command. Common operations:
 ```text
 harness intake create|add
 harness design hld|lld
-harness story create|update|verify
+harness story create|update|reopen|verify
 harness decision create|add|verify
 harness trace
 harness query matrix|decisions|guardrails|stats
