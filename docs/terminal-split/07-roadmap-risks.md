@@ -37,7 +37,7 @@ re-parents existing views and calls existing `TerminalSession` methods).
    render it via the fast path. App must look/behave exactly as today. (Refactor-safe
    checkpoint.)
 3. **Split + borders + highlight.** Implement `space/render.rs` (nested resizables,
-   uniform 4px border, active highlight) and hook Split R/L/U/D into the context menu
+   neutral outer border, layout-reserved inner frame, active highlight) and hook Split R/L/U/D into the context menu
    (04). New Space = empty placeholder (05 §5); activate the new empty Space.
 4. **Active tracking.** Focus→active, highlight moves, `set_active`/statusbar/SFTP
    read the active Space (06 §2–§3).
@@ -60,7 +60,7 @@ Run the quality gate after each step: `cargo fmt --all -- --check`,
 |---|---|---|
 | R1 | **Drag precedence**: our `on_drag` on the tab title may not beat gpui-component's `Tab` wrapper `on_drag(DragPanel)`. | Prototype step 6 in isolation first. `cx.stop_propagation()` in our drag builder should win when the gesture starts on the title. Fallback: a dedicated drag "grip" affordance in the tab, or patch the fork to expose `DragPanel` (03 §6). |
 | R2 | **`DragPanel` is `pub(crate)`** → cannot reuse the dock's native tab DnD. | Own payload `DragTerminalTab` (03). |
-| R3 | **4px border vs resize handle overlap**: handle sits at `left:-4px`; border on leaf may cover/clip it. | Keep border on the leaf, handle on top (handle is a later sibling, absolute); verify the handle stays hittable. `resizable/panel.rs` warns against `overflow_hidden` on panels — do not set it. |
+| R3 | **Space frame vs resize handle overlap**: the handle shares the pane edge and may obscure the outer border. | Keep the outer border neutral and reserve a 1px inner gutter in layout for selection. The handle may cover the outer pixel but cannot erase the active gutter; do not add a content overlay. `resizable/panel.rs` warns against `overflow_hidden` on panels — do not set it. |
 | R4 | **Re-subscription churn**: title/stat subscriptions must follow the active leaf. | Central `SpaceActivated` event; drop+recreate the `Subscription` on activation (06 §2). |
 | R5 | **`ResizableState` identity**: recreating states on re-render loses sizes. | One `Entity<ResizableState>` per `Split` node, created once, reused via `with_state` (05 §1). |
 | R6 | **Grafting a split source on drop** (source tab itself split). | MVP moves only the source's active leaf (03 §5); full-subtree graft deferred. |
@@ -71,8 +71,9 @@ Run the quality gate after each step: `cargo fmt --all -- --check`,
 All five were confirmed with the requester:
 
 1. **Active after split** → activate the **new empty Space** (02 §1.6).
-2. **Border style** → **uniform** `border_4()` on every leaf (4px between Spaces and
-   a 4px outer inset) (05 §2).
+2. **Border style** → a neutral one-pixel outer border plus a layout-reserved one-pixel
+   inner gutter; active selection changes the gutter color without adding a content
+   overlay (05 §2–§3).
 3. **"New Terminal Here"** → **included in the MVP** (empty-Space menu spawns a local
    shell in place) (04 §3).
 4. **Keyboard shortcuts** for Split / Close Space → **deferred** (post-MVP); MVP uses

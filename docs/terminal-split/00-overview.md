@@ -24,9 +24,9 @@ splitting Right / Left / Up / Down, nested to any depth.
   empty source tab.
 - Right-clicking a Space shows a context menu that includes **Close Space**, placed
   directly **below** the existing **Close Terminal Tab** item.
-- The border between Spaces is **4px** thick.
-- The **active** Space has a distinct/prominent border color; inactive Spaces use
-  the normal border color.
+- Each split Space has a neutral **1px outer border** and a **1px inner frame gutter**.
+- The **active** Space uses a prominent inner-frame color; inactive Spaces use the
+  normal border color.
 - Closing Spaces down to one reverts the tab to a **plain single terminal**.
 
 ## 3. Non-goals (explicitly out of scope for the MVP)
@@ -51,7 +51,7 @@ splitting Right / Left / Up / Down, nested to any depth.
 | R4 | New Space is empty / placeholder | [02](02-split-and-close.md), [05](05-rendering-theme.md) |
 | R5 | Drag a Terminal Tab into a Space | [03](03-drag-drop.md) |
 | R6 | Context menu on a Space with **Close Space** below **Close Terminal Tab** | [04](04-context-menu.md) |
-| R7 | 4px border between Spaces | [05](05-rendering-theme.md) |
+| R7 | Layout-reserved frame separates Spaces without covering content | [05](05-rendering-theme.md) |
 | R8 | Active Space has a distinct border color | [05](05-rendering-theme.md) |
 
 ## 5. Glossary

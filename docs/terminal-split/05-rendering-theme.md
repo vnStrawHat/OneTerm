@@ -1,7 +1,7 @@
 # 05 — Rendering, borders, and the active-Space highlight
 
 > Part of [Terminal Split design](../terminal-split.md). How the Space tree is
-> painted: nested resizables, 4px borders, active highlight, placeholder.
+> painted: nested resizables, one-pixel frames, active highlight, placeholder.
 
 ## 1. Rendering the tree
 
@@ -37,39 +37,32 @@ fn render_node(node: &SpaceNode, active: SpaceId, panel: WeakEntity<TerminalPane
 - **Stable ids.** Give each split group and panel a stable `ElementId` derived from
   `SpaceId`s so `ResizableState` and hitboxes survive re-renders.
 
-## 2. The 4px border between Spaces
+## 2. The Space frame
 
-Requirement R7: borders between Spaces are **4px** thick.
-
-The gap between two resizable panels is the **resize handle**. In gpui-component the
-handle for a panel after the first is positioned absolute at `left: -4px` (see
-`resizable/panel.rs` doc comment). We render the 4px separation as a **border on the
-Space wrapper** so it is visible and themable, and we keep the handle draggable on
-top of it:
+Each leaf has a neutral **one-pixel outer border** and a **one-pixel layout-reserved
+inner gutter**. At a shared edge, the resizable component may paint its own one-pixel
+resize handle over the outer border. The inner gutter remains visible, so the selected
+frame is complete without overlaying terminal content.
 
 ```rust
 // Each Space leaf wrapper:
 div()
     .id(("space", leaf.id.0))
     .size_full()
-    .border_4()                       // 4px — requirement R7
-    .border_color(if leaf.id == active {
-        cx.theme().table_active_border // active: prominent (same token the active
-    } else {                          //         tab highlight already uses)
-        cx.theme().border              // inactive: normal border color
+    .border_1()
+    .border_color(cx.theme().border)
+    .p(px(1.))
+    .bg(if leaf.id == active {
+        cx.theme().table_active_border
+    } else {
+        cx.theme().border
     })
     .child(render_content(leaf, …))
 ```
 
-Notes:
-
-- **Decision (confirmed): uniform border.** A `border_4()` on every leaf yields a 4px
-  line everywhere two Spaces meet **and** a 4px inset around the outer edge of the
-  tab. This is the chosen, simplest-correct approach — no per-edge computation. (An
-  inner-edge-only variant was considered and rejected.)
-- Do **not** hardcode colors — read from `cx.theme()` (project rule). `border` and
-  `table_active_border` are existing theme tokens; `table_active_border` is already
-  used for the active-tab top highlight in `panel.rs`, giving a consistent accent.
+Do not hardcode colors. `border` and `table_active_border` are existing theme tokens;
+`table_active_border` is also used for the active-tab highlight and keeps the selected
+state visually consistent.
 
 ## 3. Active-Space highlight
 
@@ -80,8 +73,12 @@ Requirement R8: the active Space's border is distinct/prominent.
 - The highlight moves whenever `SpaceTree.active` changes (split / close / focus /
   drop — [02](02-split-and-close.md) §6). `active` is captured at render time, so a
   single `cx.notify()` repaints all leaves with the correct color.
-- Optional polish: also raise the active border to a slightly brighter shade or add
-  an inner ring; keep it within theme tokens.
+- The layout-reserved inner gutter is the active highlight. Its padding reduces the
+  child's bounds, so the highlight never paints over terminal glyphs.
+- Keep the outer border neutral: the resize handle can paint over a shared outer edge.
+  The inner gutter provides the uninterrupted four-sided selection frame.
+- Do not append an absolute inner ring after the content: later siblings paint above
+  earlier siblings and such an overlay can cover terminal glyphs at the pane edges.
 
 ## 4. Focus → active
 
@@ -120,7 +117,7 @@ menu, including **New Terminal Here** ([04](04-context-menu.md) §3).
 
 ## 6. Resize behavior
 
-- Dragging a 4px handle resizes adjacent Spaces via `ResizableState`
+- Dragging the resize handle resizes adjacent Spaces via `ResizableState`
   (`resize_panel_at_handle` — already implemented in the primitive). No custom resize
   math needed.
 - `ResizableState` re-distributes proportionally when the tab/window resizes

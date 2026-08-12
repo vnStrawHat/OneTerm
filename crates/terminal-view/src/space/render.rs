@@ -1,11 +1,11 @@
 //! Recursive rendering of the Space tree → nested `h/v_resizable` groups with
-//! 4px borders and the active-Space highlight.
+//! one-pixel frames and the active-Space highlight.
 //!
 //! See `docs/terminal-split/05-rendering-theme.md`.
 
 use gpui::{
-    AnyElement, App, Axis, ElementId, InteractiveElement as _, IntoElement, MouseButton,
-    ParentElement as _, Styled as _, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, App, Axis, ElementId, Hsla, InteractiveElement as _, IntoElement, MouseButton,
+    ParentElement as _, Styled as _, WeakEntity, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme as _,
@@ -48,6 +48,10 @@ pub(crate) fn render_node(
     }
 }
 
+fn space_border_color(is_active: bool, active: Hsla, inactive: Hsla) -> Hsla {
+    if is_active { active } else { inactive }
+}
+
 /// Render a single leaf Space.
 fn render_leaf(
     leaf: &SpaceLeaf,
@@ -71,18 +75,24 @@ fn render_leaf(
         return content;
     }
 
-    let is_active = id == active;
-    let active_border = cx.theme().table_active_border;
+    let frame_color = space_border_color(
+        id == active,
+        cx.theme().table_active_border,
+        cx.theme().border,
+    );
 
     div()
         .id(ElementId::from(("space", id.0 as usize)))
         .relative()
         .size_full()
-        // Uniform 1px neutral separator on every Space. On the edge shared with a
-        // sibling, gpui-component's resize handle paints its own 1px line on top
-        // in the same neutral color, so this reads as a single 1px border.
+        // Keep a neutral outer border for separation and reserve a one-pixel
+        // inner gutter for selection. The resize handle may paint over the outer
+        // shared edge, but cannot erase this gutter; padding keeps it outside the
+        // terminal's content bounds instead of overlaying terminal cells.
         .border_1()
         .border_color(cx.theme().border)
+        .p(px(1.))
+        .bg(frame_color)
         // Clicking anywhere in the Space makes it the active Space. Bubble phase:
         // the terminal view handles its own selection first, then this fires.
         .on_mouse_down(MouseButton::Left, {
@@ -92,21 +102,21 @@ fn render_leaf(
             }
         })
         .child(content)
-        // Active-Space highlight: an inset 1px ring painted on top of the content.
-        // It sits 1px inside the edge so it clears the resize handle's 1px bar
-        // (which would otherwise hide the highlight on the shared edge) and is
-        // therefore visible on all four sides.
-        .when(is_active, |this| {
-            this.child(
-                div()
-                    .absolute()
-                    .top(px(1.))
-                    .left(px(1.))
-                    .right(px(1.))
-                    .bottom(px(1.))
-                    .border_1()
-                    .border_color(active_border),
-            )
-        })
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::hsla;
+
+    use super::space_border_color;
+
+    #[test]
+    fn selected_space_uses_active_gutter_color() {
+        let active = hsla(0.1, 0.8, 0.5, 1.0);
+        let inactive = hsla(0.0, 0.0, 0.2, 1.0);
+
+        assert_eq!(space_border_color(true, active, inactive), active);
+        assert_eq!(space_border_color(false, active, inactive), inactive);
+    }
 }
