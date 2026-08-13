@@ -46,6 +46,56 @@ fn visible_window(n: usize, selected: Option<usize>, max_visible: usize) -> (usi
 
 /// The command line read from under the cursor: the text after the prompt, plus
 /// whether a prompt prefix was found and where the cursor sits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompletionKeyAction {
+    Forward,
+    SelectFirst,
+    NavigateNext,
+    NavigatePrev,
+    Accept,
+    Dismiss,
+}
+
+fn completion_key_action(
+    key: &str,
+    ctrl: bool,
+    selected: bool,
+    accept_tab: bool,
+) -> CompletionKeyAction {
+    match key {
+        "down" | "n" if key == "down" || ctrl => {
+            if selected {
+                CompletionKeyAction::NavigateNext
+            } else {
+                CompletionKeyAction::Forward
+            }
+        }
+        "up" | "p" if key == "up" || ctrl => {
+            if selected {
+                CompletionKeyAction::NavigatePrev
+            } else {
+                CompletionKeyAction::Forward
+            }
+        }
+        "escape" => CompletionKeyAction::Dismiss,
+        "enter" | "return" => {
+            if selected {
+                CompletionKeyAction::Accept
+            } else {
+                CompletionKeyAction::Forward
+            }
+        }
+        "tab" if accept_tab => {
+            if selected {
+                CompletionKeyAction::Accept
+            } else {
+                CompletionKeyAction::SelectFirst
+            }
+        }
+        _ => CompletionKeyAction::Forward,
+    }
+}
+
 struct CursorCommand {
     /// Command text after the prompt prefix, up to the cursor column.
     line: String,
@@ -352,68 +402,45 @@ impl LocalTerminalView {
         if !c.is_visible() {
             return false;
         }
-        let accept_tab = c.accept_tab();
-        match key {
-            "down" => {
+        let action = completion_key_action(key, ctrl, c.selected().is_some(), c.accept_tab());
+        match action {
+            CompletionKeyAction::Forward => false,
+            CompletionKeyAction::SelectFirst => {
+                c.select_first_if_none();
+                cx.notify();
+                true
+            }
+            CompletionKeyAction::NavigateNext => {
                 c.select_next();
                 cx.notify();
                 true
             }
-            "up" => {
+            CompletionKeyAction::NavigatePrev => {
                 c.select_prev();
                 cx.notify();
                 true
             }
-            "n" if ctrl => {
-                c.select_next();
-                cx.notify();
+            CompletionKeyAction::Accept => {
+                self.completion_accept(cx);
                 true
             }
-            "p" if ctrl => {
-                c.select_prev();
-                cx.notify();
-                true
-            }
-            "escape" => {
+            CompletionKeyAction::Dismiss => {
                 c.dismiss();
                 self.completion_anchor = None;
                 cx.notify();
                 true
             }
-            "enter" | "return" => {
-                // Run-first: only accept when the user has navigated to a row.
-                if c.selected().is_some() {
-                    self.completion_accept(cx);
-                    true
-                } else {
-                    // No selection → let Enter run the command (not consumed).
-                    false
-                }
-            }
-            "tab" => {
-                if accept_tab {
-                    // Auto-select the first row if none, then accept.
-                    if c.selected().is_none() {
-                        c.select_next();
-                    }
-                    self.completion_accept(cx);
-                    true
-                } else {
-                    false
-                }
-            }
-            _ => false,
         }
     }
 
-    /// Accept the selected suggestion: append its remainder to the PTY, dismiss.
+    /// Accept the selected suggestion: write its terminal edit bytes, then dismiss.
     fn completion_accept(&mut self, cx: &mut Context<Self>) {
         let bytes = self.completion.as_ref().and_then(|c| c.accept_bytes());
-        if let Some(remainder) = bytes {
-            if !remainder.is_empty() {
-                log::debug!("completion: accept → append {remainder:?}");
+        if let Some(bytes) = bytes {
+            if !bytes.is_empty() {
+                log::debug!("completion: accept → write {bytes:?}");
                 self.session.update(cx, |s, _| {
-                    if let Err(e) = s.write(remainder.as_bytes()) {
+                    if let Err(e) = s.write(&bytes) {
                         log::warn!("completion: PTY write on accept failed: {e}");
                     }
                 });
@@ -454,7 +481,55 @@ impl LocalTerminalView {
 
 #[cfg(test)]
 mod tests {
-    use super::{strip_prompt, visible_window};
+    use super::{CompletionKeyAction, completion_key_action, strip_prompt, visible_window};
+
+    #[test]
+    fn first_tab_selects_and_later_tab_or_enter_accepts() {
+        assert_eq!(
+            completion_key_action("tab", false, false, true),
+            CompletionKeyAction::SelectFirst
+        );
+        assert_eq!(
+            completion_key_action("tab", false, true, true),
+            CompletionKeyAction::Accept
+        );
+        assert_eq!(
+            completion_key_action("enter", false, true, true),
+            CompletionKeyAction::Accept
+        );
+        assert_eq!(
+            completion_key_action("enter", false, false, true),
+            CompletionKeyAction::Forward
+        );
+    }
+
+    #[test]
+    fn navigation_forwards_until_a_suggestion_is_selected() {
+        for (key, ctrl, expected) in [
+            ("down", false, CompletionKeyAction::NavigateNext),
+            ("up", false, CompletionKeyAction::NavigatePrev),
+            ("n", true, CompletionKeyAction::NavigateNext),
+            ("p", true, CompletionKeyAction::NavigatePrev),
+        ] {
+            assert_eq!(
+                completion_key_action(key, ctrl, false, true),
+                CompletionKeyAction::Forward
+            );
+            assert_eq!(completion_key_action(key, ctrl, true, true), expected);
+        }
+    }
+
+    #[test]
+    fn tab_forwards_when_tab_acceptance_is_disabled() {
+        assert_eq!(
+            completion_key_action("tab", false, false, false),
+            CompletionKeyAction::Forward
+        );
+        assert_eq!(
+            completion_key_action("tab", false, true, false),
+            CompletionKeyAction::Forward
+        );
+    }
 
     #[test]
     fn strip_cmd_prompt() {

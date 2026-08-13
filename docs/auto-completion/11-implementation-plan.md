@@ -94,10 +94,11 @@ Sizes are rough (S ≈ ½ day, M ≈ 1–2 days, L ≈ 3–5 days) for one engin
   ancestor-option inheritance ([10](10-subcommands.md) §3.2).
 - Frecency score blend; dedup keeping the `H` tag; truncation to
   `max_visible_items` ([04](04-suggestion-engine.md) §4).
-- `Suggestion::remainder()` (append-only); `allow_fuzzy_accept` off
-  ([04](04-suggestion-engine.md) §5, Q3).
-- **Tests:** case sensitivity per family; prefix beats fuzzy; frecency beats
-  catalog; dedup tag precedence; remainder computation.
+- `Suggestion::remainder()` for exact-case append; terminal-view applies bounded
+  casing correction for Cmd/PowerShell case-insensitive prefixes;
+  `allow_fuzzy_accept` off ([04](04-suggestion-engine.md) §5, Q3).
+- **Tests:** case sensitivity per family; Windows exact-suggestion casing; prefix
+  beats fuzzy; frecency beats catalog; dedup tag precedence; remainder computation.
 - **Exit:** ✅ `Engine::suggest` returns correctly ranked, deduped lists.
 
 ### M4 — History store + redaction (M) — ✅ DONE
@@ -145,10 +146,11 @@ Sizes are rough (S ≈ ½ day, M ≈ 1–2 days, L ≈ 3–5 days) for one engin
 - ✅ `CompletionOverlay` (`RenderOnce`): item format, `H`/`C`/`O` tag badges from
   the theme, breadcrumb slot; anchored to the token-start cell via `GridMetrics`
   and added as a child in `render/mod.rs`.
-- ✅ Key handling in `handlers/keyboard.rs` before PTY delivery: `Up`/`Down`/
-  `Ctrl-N`/`Ctrl-P`, `Enter` (run-first — accepts only after navigation, else
-  runs + captures), `Tab` (respects `accept_tab`), `Esc` (swallowed); accept =
-  append remainder.
+- ✅ Key handling in `handlers/keyboard.rs` before PTY delivery: first `Tab`
+  (respects `accept_tab`) selects item 0; later `Tab` or `Enter` accepts; `Up`/`Down`/
+  `Ctrl-N`/`Ctrl-P` navigate only after selection and otherwise pass through;
+  `Esc` is swallowed. Accept applies the exact selected suggestion under the active
+  family's case rule.
 - ✅ Actions in `oneterm-actions`: `ToggleCompletion`, `ClearCompletionHistory`,
   `TriggerCompletion` (`Ctrl+Shift+Space`, handled in the keyboard handler).
 - ✅ Added `oneterm-completion` to `terminal-view`'s `Cargo.toml`.

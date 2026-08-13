@@ -171,14 +171,17 @@ impl Suggestion {
 }
 ```
 
-Because acceptance only **appends** (see [00](00-overview.md) §5), the remainder is
-`self.text` with the `typed_token` prefix stripped. If the suggestion is not a
-prefix extension of the typed token (a fuzzy match), the engine returns a
-"replace" form the caller applies by sending backspaces for `typed_token` then the
-full text — but Phase 1 restricts **Tab/Enter accept to prefix matches only** to
-keep the no-backspace guarantee; fuzzy matches are display/navigation aids that,
-when accepted, fall back to the replace form guarded behind `cfg.allow_fuzzy_accept`
-(default off).
+For an exact-case prefix, acceptance appends `self.text` with the typed prefix
+stripped. Unix requires this exact-case relationship. Cmd and PowerShell match
+prefixes case-insensitively, but acceptance must reproduce the selected suggestion
+exactly: if casing differs, the terminal-view controller sends plain Backspace
+bytes from the first differing character through the cursor, then writes the exact
+suggestion suffix from that point (`cd p` + `cd Project` → `cd Project`). This is a
+bounded case correction within `Suggestion::replace_from`, not fuzzy acceptance.
+
+If the suggestion is not a prefix under the active family's case rule (a fuzzy or
+non-prefix match), Phase 1 does not accept it unless `cfg.allow_fuzzy_accept` is
+explicitly enabled (default off).
 
 ## 6. Suppression / empty results
 
@@ -187,6 +190,9 @@ when accepted, fall back to the replace form guarded behind `cfg.allow_fuzzy_acc
 - `token.len() < cfg.min_prefix_len` in command context (default 1; the request's
   "type `d`" example implies 1).
 - No candidate matches.
+- Controller post-processing finds exactly one suggestion whose text is already
+  byte-identical to the typed text in its `replace_from..cursor` range. Multiple
+  results, prefix extensions, and case-only differences remain visible.
 - The caller already decided completion is gated off (alt-screen / not at prompt) —
   though the caller typically skips calling `suggest` entirely in that case (see
   [06](06-configuration.md) §3).

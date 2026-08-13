@@ -22,8 +22,8 @@
 4. `settings`: `completion` group in `terminal.json` + live `TerminalSettings`.
 5. `terminal-view`: `CompletionController` (input tracking, gating via
    alt-screen + OSC 133), `CompletionOverlay` (cursor-anchored list, tags, keys,
-   optional command-path breadcrumb), accept = append remainder, history capture on
-   OSC 133 `C`/`D`.
+   optional command-path breadcrumb), accept = apply exact suggestion text under
+   the active family's case rule, history capture on OSC 133 `C`/`D`.
 6. `settings-ui`: Completion section; `oneterm-actions` `ToggleCompletion` /
    `ClearCompletionHistory` / `TriggerCompletion` (default binding
    `Ctrl+Shift+Space`) actions.
@@ -136,10 +136,10 @@ Explicitly **not** built (recorded so they are not reconsidered by accident):
   `rm -rf build && deploy prod` — only places it on the line; the user presses
   `Enter` again to run. Auto-running a remembered command would be dangerous.
 
-  **Selection rules (run-first):** no navigation ⇒ no selection ⇒ `Enter` runs;
-  after `Up`/`Down` ⇒ `Enter` accepts (no run) ⇒ next `Enter` runs. Possible future
-  middle-ground: allow `Enter`-accept when the overlay was opened via the explicit
-  `TriggerCompletion` action (the user signalled intent to complete).
+  **Selection rules (run-first):** only Tab engages the list. First Tab selects
+  item 0 without applying it; second Tab or Enter applies the selected suggestion
+  without running it. Before selection, Enter and Up/Down/Ctrl+P/Ctrl+N pass through
+  to the shell. After selection, navigation moves within the suggestion list.
 
   Precedent: fish, PSReadLine `MenuComplete`, and VSCode terminal-suggest are all
   effectively run-first until the user engages the list; Warp preselects and had to
@@ -152,6 +152,8 @@ Explicitly **not** built (recorded so they are not reconsidered by accident):
   additionally accepts `/`. Matching stays prefix-based on the option's stored
   prefix, so mixing does not mislabel flags. See [03](03-shell-detection.md) §2.
 - **Q3 — Fuzzy-accept: allow it, or keep it display-only? → `allow_fuzzy_accept`
-  default `off` (decided).** Tab/Enter accept is restricted to prefix matches to
-  preserve the append-only (no-backspace) guarantee; fuzzy matches remain a
-  display/navigation aid. A safe replace path may be revisited later.
+  default `off` (decided).** Tab/Enter accept remains restricted to prefix matches;
+  fuzzy matches are display/navigation aids. Cmd/PowerShell case-insensitive prefix
+  matches are not fuzzy: acceptance may backspace only the case-mismatched suffix
+  within the suggestion replacement range so the result exactly matches the
+  displayed suggestion. Unix remains exact-case and append-only.

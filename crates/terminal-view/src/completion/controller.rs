@@ -29,8 +29,8 @@ pub struct CompletionController {
     // Current results.
     suggestions: Vec<Suggestion>,
     selected: Option<usize>,
-    /// The `token`/line prefix the current suggestions were computed against —
-    /// used to compute the accept remainder.
+    /// The current token/line prefix, used to anchor the overlay under the text
+    /// being edited.
     typed_prefix: String,
     // Change-detection so `recompute` is a no-op (preserving selection) when the
     // input line + gating are unchanged since the last render.
@@ -207,6 +207,9 @@ impl CompletionController {
         // a bounded multiple.
         self.suggestions
             .truncate(self.params.max_visible_items.max(1) * 4);
+        if has_sole_exact_match(&self.suggestions, line, cursor) {
+            self.suggestions.clear();
+        }
         // Run-first: no selection until the user navigates (docs 09 §4 Q1).
         self.selected = None;
 
@@ -236,40 +239,58 @@ impl CompletionController {
         self.selected = None;
     }
 
-    /// Move the selection down (clamped). Begins selection at row 0.
+    /// Select the first suggestion when the list is not yet engaged. Returns
+    /// whether selection changed, allowing first Tab to select and later Tab to
+    /// accept without duplicating state checks in the view.
+    pub fn select_first_if_none(&mut self) -> bool {
+        if self.selected.is_some() || self.suggestions.is_empty() {
+            return false;
+        }
+        self.selected = Some(0);
+        true
+    }
+
+    /// Move an existing selection down (clamped). Does nothing before selection.
     pub fn select_next(&mut self) {
-        if self.suggestions.is_empty() {
+        let Some(selected) = self.selected else {
             return;
-        }
-        self.selected = Some(match self.selected {
-            None => 0,
-            Some(i) => (i + 1).min(self.suggestions.len() - 1),
-        });
+        };
+        self.selected = Some((selected + 1).min(self.suggestions.len() - 1));
     }
 
-    /// Move the selection up (clamped). Begins selection at the last row.
+    /// Move an existing selection up (clamped). Does nothing before selection.
     pub fn select_prev(&mut self) {
-        if self.suggestions.is_empty() {
+        let Some(selected) = self.selected else {
             return;
-        }
-        self.selected = Some(match self.selected {
-            None => self.suggestions.len() - 1,
-            Some(i) => i.saturating_sub(1),
-        });
+        };
+        self.selected = Some(selected.saturating_sub(1));
     }
 
-    /// The bytes to append to the PTY to accept the selected suggestion, or
-    /// `None` if there is no selection or the accept is not a safe prefix
-    /// extension (append-only guarantee, docs 04 §5 / 09 Q3).
-    pub fn accept_bytes(&self) -> Option<String> {
+    /// The terminal bytes that apply the selected suggestion, or `None` when no
+    /// selection exists or acceptance would require a fuzzy/non-prefix replace.
+    ///
+    /// Unix remains exact-case and append-only. Cmd/PowerShell may erase a
+    /// case-mismatched suffix with plain Backspace bytes before writing the exact
+    /// suggestion casing.
+    pub fn accept_bytes(&self) -> Option<Vec<u8>> {
         let idx = self.selected?;
-        let s = self.suggestions.get(idx)?;
-        if s.is_prefix_of_typed(&self.typed_prefix) {
-            Some(s.remainder(&self.typed_prefix).to_string())
-        } else if self.params.allow_fuzzy_accept {
-            // Replace form: caller sends backspaces for typed then full text.
-            // Phase 1 keeps this off by default.
-            Some(s.text.clone())
+        let suggestion = self.suggestions.get(idx)?;
+        let typed = replacement_text(&self.last_line, self.last_cursor, suggestion)?;
+
+        if suggestion.text.starts_with(typed) {
+            return Some(suggestion.text.as_bytes()[typed.len()..].to_vec());
+        }
+
+        if matches!(self.family, ShellFamily::Cmd | ShellFamily::PowerShell)
+            && suggestion.is_prefix_of_typed(typed)
+        {
+            return case_corrected_acceptance_bytes(&suggestion.text, typed);
+        }
+
+        if self.params.allow_fuzzy_accept {
+            // The existing opt-in fuzzy path writes the full suggestion. Callers
+            // enabling it remain responsible for replacing the typed range.
+            Some(suggestion.text.as_bytes().to_vec())
         } else {
             None
         }
@@ -300,11 +321,36 @@ impl CompletionController {
     }
 }
 
-/// The text the accept-remainder is computed against: the whole-line prefix for
-/// history recall, or just the current token. We use the current token when the
-/// cursor is mid- or at the end of a token, else the whole line prefix. The
-/// engine's `replace_from` already encodes which; here we mirror it with the
-/// token when present, falling back to the line prefix.
+fn has_sole_exact_match(suggestions: &[Suggestion], line: &str, cursor: usize) -> bool {
+    let [suggestion] = suggestions else {
+        return false;
+    };
+    replacement_text(line, cursor, suggestion).is_some_and(|typed| typed == suggestion.text)
+}
+
+fn replacement_text<'a>(line: &'a str, cursor: usize, suggestion: &Suggestion) -> Option<&'a str> {
+    let typed = line.get(suggestion.replace_from..cursor)?;
+    Some(if suggestion.replace_from == 0 {
+        typed.trim_start()
+    } else {
+        typed
+    })
+}
+
+fn case_corrected_acceptance_bytes(suggestion: &str, typed: &str) -> Option<Vec<u8>> {
+    let mismatch = suggestion
+        .as_bytes()
+        .iter()
+        .zip(typed.as_bytes())
+        .position(|(suggested, actual)| suggested != actual)?;
+    let typed_tail = typed.get(mismatch..)?;
+    let suggestion_tail = suggestion.get(mismatch..)?;
+
+    let mut bytes = vec![0x7f; typed_tail.chars().count()];
+    bytes.extend_from_slice(suggestion_tail.as_bytes());
+    Some(bytes)
+}
+
 fn current_typed_prefix(line: &str, cursor: usize) -> String {
     let p = oneterm_completion::ParsedLine::parse(line, cursor);
     if p.token.is_empty() {
