@@ -163,10 +163,9 @@ pub(crate) fn prefix_match(haystack: &str, prefix: &str, case_insensitive: bool)
     if prefix.is_empty() {
         return true;
     }
-    if haystack.len() < prefix.len() {
+    let Some(head) = haystack.get(..prefix.len()) else {
         return false;
-    }
-    let head = &haystack[..prefix.len()];
+    };
     if case_insensitive {
         head.eq_ignore_ascii_case(prefix)
     } else {
@@ -185,6 +184,11 @@ mod tests {
         let entries = h.entries(ShellFamily::Unix);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].line, "git commit -m msg");
+    }
+
+    #[test]
+    fn prefix_match_rejects_non_character_boundary() {
+        assert!(!prefix_match("❯ prompt", "x", false));
     }
 
     #[test]
