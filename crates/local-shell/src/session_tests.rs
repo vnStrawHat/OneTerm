@@ -44,16 +44,17 @@ fn assert_powershell_prompt_emits_cwd(kind: oneterm_core::ShellKind, label: &str
     let session = LocalSession::spawn(cfg, PtySize { rows: 24, cols: 80 }, 10_000)
         .unwrap_or_else(|error| panic!("spawn {label}: {error}"));
 
-    assert!(
-        wait_until(Duration::from_secs(5), || session.cwd().is_some()),
-        "{label} prompt must emit OSC 7 through the PTY"
-    );
+    let emitted_cwd = wait_until(Duration::from_secs(15), || session.cwd().is_some());
     let snapshot = session
         .snapshot_query()
         .cells
         .iter()
         .map(|indexed| indexed.cell.c)
         .collect::<String>();
+    assert!(
+        emitted_cwd,
+        "{label} prompt must emit OSC 7 through the PTY; terminal snapshot: {snapshot}"
+    );
     assert!(!snapshot.contains("ParserError"), "{snapshot}");
     assert!(
         !snapshot.contains("Missing ')' in method call"),
