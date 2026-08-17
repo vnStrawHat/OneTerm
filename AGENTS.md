@@ -88,15 +88,37 @@ Refs: #issue
 
 ## 4. Automated quality gate
 
-Before completing a task, the agent **must** run and confirm the following pass:
+Before completing a task, the agent **must** run and confirm the **same set of checks
+CI runs** (`.github/workflows/ci.yml`). Run the bundled script (it stops at the first
+failure and prints the failing command):
+
+```bash
+scripts/ci-local.sh          # bash / Git Bash
+pwsh scripts/ci-local.ps1    # PowerShell (Windows)
+```
+
+The script runs, in order:
 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build --workspace
+cargo test --workspace
+python scripts/verify-dependency-graph.py     # crate graph policy + VERSION/Cargo.toml agreement
+python scripts/check-ui-fork.py               # gpui-component vendor baseline
+python scripts/check-doc-paths.py             # architecture doc paths
+python -m unittest scripts/test_check_english.py
+python scripts/check-english.py               # English-only contributor text
+python scripts/completion-catalog.py validate # completion catalogs vs schema
+python scripts/benchmark-scale.py --list      # scale benchmark manifest
 ```
 
-If any of the three commands above fails → fix it before reporting completion.
+Optional (need network / extra tools; CI runs them too): `bash vendor/refresh.sh --check`
+(vendored forks == pristine + patches) and `cargo deny check licenses bans advisories`
+(`cargo install cargo-deny`). Pass `--full` to `ci-local` to include both.
+
+If any command fails → fix it before reporting completion. Do not report a task done
+with only fmt/clippy/build green.
 
 
 ## 5. Quick reference

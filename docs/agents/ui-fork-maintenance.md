@@ -53,4 +53,8 @@ crate, not in the vendor patch.
 
 The check script does not access the ignored research mirror during normal CI. Its
 `--update` mode performs a clean clone, verifies the pinned commit, compares the
-complete source file set, and rejects deltas outside `dock/tab_panel.rs`.
+complete package file set (`src/**`, `Cargo.toml`, `build.rs`, `locales/**`, licence),
+and rejects deltas outside the four patched paths: `src/dock/tab_panel.rs` (`0001`),
+`Cargo.toml` (`0002`), `src/setting/page.rs` and `src/setting/settings.rs` (`0003`).
+`bash vendor/refresh.sh --check` (also run in CI) is the complementary guard: it
+rebuilds every vendored crate from pristine + patches and diffs it against `vendor/`.
