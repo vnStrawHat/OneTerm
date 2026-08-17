@@ -28,6 +28,14 @@ pub(crate) mod zoom;
 
 /// Save the dock state to `docks.json` — used when the window closes (`on_release`).
 /// Reads `dock_area`, `zoomed_panel`, and `toggle_button_visible` from the global AppState.
+///
+/// The write is performed synchronously on the calling (UI) thread. This is a
+/// deliberate exception to the "persist off the UI thread" rule: the caller
+/// invokes `cx.quit()` right after, and gpui's `App::shutdown` only awaits
+/// `on_app_quit` observers — a detached background task is not awaited and can
+/// be killed by process exit before the layout reaches disk (CORR-04). The
+/// document is small and the process is shutting down, so a blocking atomic
+/// write is acceptable here.
 pub fn save_dock_state_on_close(cx: &App) {
     let (weak_dock, zoomed_name, tbv) = {
         let state = AppState::global(cx).read(cx);
@@ -53,12 +61,8 @@ pub fn save_dock_state_on_close(cx: &App) {
         return;
     };
     let dock_state = dock_area.read(cx).dump(cx);
-    log::info!("save_dock_state_on_close → scheduling dock state save");
-    cx.background_executor()
-        .spawn(async move {
-            persistence::save_state_logged(&dock_state, zoomed_name.as_deref(), tbv, "on_close");
-        })
-        .detach();
+    log::info!("save_dock_state_on_close → writing dock state before quit");
+    persistence::save_state_logged(&dock_state, zoomed_name.as_deref(), tbv, "on_close");
 }
 
 pub const MAIN_DOCK_VERSION: usize = 3;
