@@ -243,7 +243,7 @@ async fn sftp_upload_dir(
                 }
                 let dir_str = dir.to_string_lossy().replace('\\', "/");
                 if let Err(create_error) = sftp.create_dir(&dir_str).await {
-                    match sftp.metadata(&dir_str).await {
+                    match sftp.symlink_metadata(&dir_str).await {
                         Ok(attributes) if attributes.is_dir() && !attributes.is_symlink() => {}
                         Ok(_) => {
                             cancel.cancel();

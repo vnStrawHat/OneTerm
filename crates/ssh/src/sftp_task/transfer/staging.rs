@@ -58,7 +58,7 @@ pub(super) async fn finalize_remote_file(
     target: &str,
 ) -> Result<()> {
     let backup = temporary_remote_sibling(target, "backup")?;
-    let had_target = match sftp.metadata(target).await {
+    let had_target = match sftp.symlink_metadata(target).await {
         Ok(attributes) => {
             if attributes.is_dir() || attributes.is_symlink() {
                 let _ = sftp.remove_file(temporary).await;
