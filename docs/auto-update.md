@@ -2,8 +2,27 @@
 
 ## Status
 
-Planned. This document defines the target behavior and implementation boundaries for
-OneTerm auto-update. The update source is GitHub Releases.
+Implemented (`crates/update/`, surfaced by `crates/settings-ui/src/updates/`). This
+document defines the target behavior and implementation boundaries for OneTerm
+auto-update; the update source is GitHub Releases. Where the shipped code still differs
+from the target text below, the difference is called out inline. Current wiring
+(review refresh 2026-08):
+
+- **Repository.** `oneterm_update::UPDATE_REPOSITORY` is the compile-time constant
+  `vnStrawHat/OneTerm`, overridable only by the `ONETERM_UPDATE_REPO=owner/repo` build
+  environment variable (`crates/update/src/config.rs`); the About dialog derives its
+  GitHub URL from the same constant. Nothing is inferred from `git remote` any more.
+- **Version.** The current version is `env!("CARGO_PKG_VERSION")`
+  (`oneterm_update::CURRENT_VERSION`), i.e. `[workspace.package] version`, which the
+  release workflow keeps equal to `VERSION`.
+- **Interval and channel.** `check_interval_hours` (default 24) and
+  `UpdateConfig::should_auto_check` exist and are persisted, but the startup path
+  (`start_auto_check` in `crates/settings-ui/src/updates/actions.rs`) currently checks only
+  `auto_check` and runs on every start; honouring the interval is open (ARCH-36).
+  `channel` (stable/preview) and `skipped_version` are honoured by `UpdateManager`
+  when filtering releases, but neither has a Settings UI item yet; the Settings page
+  exposes `auto_check`, `proxy_url` and `verify_certificates` only.
+- **Debug builds** skip the automatic check unless `ONETERM_UPDATE_AUTO_CHECK_DEBUG` is set.
 
 ## Goals
 
@@ -32,8 +51,8 @@ OneTerm auto-update. The update source is GitHub Releases.
 
 ## Release source
 
-The updater reads releases from the official GitHub repository configured at build
-time or in a trusted static constant:
+The updater reads releases from the official GitHub repository (the static
+`UPDATE_REPOSITORY` constant, see Status above):
 
 ```text
 https://api.github.com/repos/<owner>/<repo>/releases
@@ -48,8 +67,8 @@ Version rules:
 
 - Release tags must be SemVer-compatible: `vMAJOR.MINOR.PATCH` or
   `MAJOR.MINOR.PATCH`.
-- The current app version is read from the same `VERSION` value used by release
-  builds.
+- The current app version is `CARGO_PKG_VERSION`, which release builds keep equal
+  to the `VERSION` file.
 - The updater offers an update only when the release version is strictly greater
   than the current version.
 - Build metadata does not make a release newer. Pre-release versions are offered
@@ -204,17 +223,16 @@ manager's stale pre-check copy.
 
 ## Architecture
 
-Recommended crate split:
+Crate split (as shipped; `oneterm-update` depends on `oneterm-core` only, no GPUI):
 
-- `oneterm-core`: shared error variants and small domain types only when required by
-  multiple lower layers.
-- `oneterm-settings`: persistent update preferences.
-- `oneterm-state`: runtime update status and app-level notification integration, if
-  the status is shared across windows.
-- `oneterm-update` (new shared service crate, to be added only after following the
-  new-crate process): GitHub release checking, asset selection, download, checksum
-  verification, staging, and platform installer orchestration. This crate must not
-  depend on GPUI or feature UI crates.
+- `oneterm-core`: shared error variants, atomic persistence helpers and small domain
+  types only when required by multiple lower layers.
+- `oneterm-update` (`crates/update/`): the `UpdateConfig` document
+  (`update_config.json`, `crates/update/src/config.rs`), GitHub release checking,
+  asset selection, download, checksum verification, staging, and platform installer
+  orchestration. This crate must not depend on GPUI or feature UI crates.
+- `oneterm-settings-ui` (`crates/settings-ui/src/updates/`): the in-memory
+  `UpdateConfig` entity, runtime update status (`UpdateUiState`) and notifications.
 - `oneterm-settings-ui`: settings/about controls that call the update service through
   an app service handle or command callback.
 - `oneterm-app`: composition root that installs the update service and wires platform

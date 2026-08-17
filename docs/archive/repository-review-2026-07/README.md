@@ -1,5 +1,7 @@
 # OneTerm repository-wide engineering review
 
+> **Status (2026-08): historical — archived.** Superseded by [`docs/review-refresh-2026-08/`](../../review-refresh-2026-08/README.md), the live review checklist. Kept for rationale only; paths and line numbers refer to revision `4dc9bfd` (2026-07-23).
+
 **Review date:** 2026-07-23  
 **Reviewed revision:** `4dc9bfd` (`test(testability): add isolated backend and persistence coverage`)  
 **Scope:** all tracked OneTerm workspace source under `crates/`, root/workspace manifests, `scripts/`, and `.github/workflows/`. The review used architecture documents for intended behavior but did not treat them as proof that the implementation is correct. Per request, `docs/review/` was excluded. Ignored research sources under `reference/` and vendored upstream implementation under `vendor/` were not scored as OneTerm-owned product code; the vendor verification mechanism was reviewed.

@@ -53,7 +53,7 @@ Close Space            ← only shown when the tab has > 1 Space
 - **In New Tab** preserves the original behavior. The same action is configurable under the **Terminal Context Menu** Key Bindings group and has no built-in default keystroke; keyboard invocation targets the active Space and duplicates into a new tab. **Into Space #N** fills the existing empty leaf without restructuring the tree. **Split Right/Down** splits the source leaf and fills the new adjacent leaf. The duplicate becomes active and focused; the source tab and process remain unchanged.
 - A local source duplicates immediately with the same complete shell launch configuration and the live cwd. An SSH source opens a prefilled authentication dialog, initially focuses the applicable password/passphrase field, requires credentials again, reconnects to the same endpoint/default remote shell, then requests the live cwd when known and routes the result to the selected destination. If the source has not reported a cwd, the duplicate uses its shell/backend default directory: local launch metadata clears `cwd`, and SSH sends no `cd` command. If the originating panel/source or an existing-Space destination becomes unavailable, the new session is closed, layout/content remains unchanged, and the user is notified instead of silently redirecting the result.
 - Duplicate metadata is non-secret. SSH password and private-key passphrase fields are never retained or prefilled. The duplicate authentication dialog does not offer **Save to SSH Sessions**; saving connection metadata remains exclusive to the normal SSH Quick Connect flow. See [`../decisions/0002-ssh-duplicate-auth.md`](../decisions/0002-ssh-duplicate-auth.md).
-- **Split R/L/U/D** call `TerminalPanel::split_active(dir, window, cx)` →
+- **Split R/L/U/D** call `TerminalPanel::split_active_at(space_id, dir, window, cx)` →
   `SpaceTree::split(active, dir, …)` ([02](02-split-and-close.md) §1). The target is
   the Space that was right-clicked (which also becomes active on right-click).
 - **Close Space** is placed **directly below Close Terminal Tab** (requirement R6).
@@ -81,7 +81,7 @@ Close Space
 ```
 
 - **New Terminal Here** (confirmed for the MVP): spawns a `LocalSession` into the
-  empty Space (same construction path as `TerminalPanel::new`) and replaces the
+  empty Space (`TerminalPanel::new_terminal_here`, same spawn path as `PanelSpec::DefaultShell`) and replaces the
   placeholder with a `Terminal` leaf via `tree.fill_empty`. Lets a Space be filled
   without dragging a tab in.
 - The empty-Space menu is a separate small builder attached to the placeholder

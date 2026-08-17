@@ -21,9 +21,11 @@ pub struct TerminalPanel {
 
 Constructors:
 
-- `TerminalPanel::new` — build a `SpaceTree` with a single `Terminal` leaf wrapping
-  the spawned `LocalSession` view (today's behavior, just wrapped in a one-leaf tree).
-- `from_session` — same, seeded with the provided `Box<dyn TerminalSession>`.
+- `TerminalPanel::open(PanelSpec::DefaultShell { .. } | PanelSpec::Shell(kind), …)` — build a
+  `SpaceTree` with a single `Terminal` leaf wrapping the spawned local session view
+  (a one-leaf tree; the tree starts empty when the spawn fails).
+- `TerminalPanel::open(PanelSpec::Session { session, title, duplicate_config }, …)` — same,
+  seeded with the provided `Box<dyn TerminalSession>` (SSH connect, duplicate).
 
 ## 2. Methods that must retarget to the active Space
 

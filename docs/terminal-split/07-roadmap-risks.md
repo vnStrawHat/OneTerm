@@ -5,27 +5,26 @@
 
 ## 1. Proposed file layout (crate `ui`)
 
-Follows `docs/agents/structure.md` conventions (feature folder under
-`views/terminal/`, each file ≤ ~400 lines, one responsibility per file):
+As shipped (the design originally targeted the pre-restructure `crates/ui/src/views/terminal/`):
 
 ```
-crates/ui/src/views/terminal/
-├── panel.rs                 # CHANGED: holds SpaceTree instead of a single view;
-│                            #          retargets methods to the active Space (06)
-├── space/                   # NEW — the split "Space" pane tree
-│   ├── mod.rs               # SpaceTree + SpaceId + public API (split/close/active/fill)
-│   ├── node.rs              # SpaceNode / SpaceLeaf / SpaceSplit + tree ops (find, collapse)
-│   ├── ops.rs               # split() / close() / active-selection logic (02)
-│   ├── render.rs            # recursive render → nested h/v_resizable + borders/highlight (05)
-│   ├── drag.rs              # DragTerminalTab payload + handle_tab_drop (03)
-│   └── placeholder.rs       # empty-Space placeholder + its context menu (04 §3, 05 §5)
-└── handlers/
-    └── menu.rs              # CHANGED: add Split R/L/U/D + Close Space (04)
+crates/terminal-view/src/
+├── panel/                   # TerminalPanel holds a SpaceTree; methods retarget to the active Space (06)
+│   ├── terminal_panel.rs    # TerminalPanel + PanelSpec + TerminalPanel::open, Panel/title impls
+│   ├── ops.rs               # split_active_at / close_space / new_terminal_here / set_active_space / handle_tab_drop
+│   ├── actions.rs           # context-menu action handlers (Split R/L/U/D, Close Space, …) + Render
+│   └── title.rs             # tab-title resolution
+└── space/                   # the split "Space" pane tree
+    ├── mod.rs               # re-exports (SpaceTree, SpaceId, SplitContext, SplitDir, DragTerminalTab…)
+    ├── tree.rs              # SpaceTree + SplitContext: split/close/active/fill
+    ├── node.rs              # SpaceNode / SpaceLeaf / SpaceSplit + tree ops (find, collapse)
+    ├── ops.rs               # split() / close() / active-selection logic (02)
+    ├── render.rs            # recursive render → nested h/v_resizable + borders/highlight (05)
+    ├── drag.rs              # DragTerminalTab payload (03)
+    └── placeholder.rs       # empty-Space placeholder + its context menu (04 §3, 05 §5)
 ```
 
-`views/terminal/mod.rs` gains `mod space;` and re-exports what `panel.rs` needs.
-
-No changes to `core`, `local`, or `ssh` — this is a pure `ui` feature (it only
+No changes to `core`, `local-shell`, or `ssh` — this is a pure `terminal-view` feature (it only
 re-parents existing views and calls existing `TerminalSession` methods).
 
 ## 2. Implementation order (roadmap)

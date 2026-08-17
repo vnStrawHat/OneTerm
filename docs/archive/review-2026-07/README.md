@@ -1,5 +1,7 @@
 # OneTerm Repository-Wide Engineering Review
 
+> **Status (2026-08): historical — archived.** Superseded by [`docs/review-refresh-2026-08/`](../../review-refresh-2026-08/README.md), the live review checklist. Kept for rationale only; paths and line numbers refer to the 2026-07-22 tree.
+
 **Review date:** 2026-07-22
 **Scope:** The complete repository, with primary implementation evidence from `crates/`, workspace manifests, build/release automation, and the project design documents.
 **Method:** Whole-system review of crate boundaries, startup wiring, terminal and SFTP data flow, persistence, async lifecycles, tests, security controls, and operational automation. This is not a file-by-file approval review; conclusions consider interactions between modules.

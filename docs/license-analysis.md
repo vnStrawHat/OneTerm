@@ -2,6 +2,14 @@
 
 > Date: 2025. Scope: **runtime dependencies only** (excluding dev-deps / build-deps).
 > Tools: `cargo-license` + direct inspection of `Cargo.toml` + `LICENSE-*` files + `strings`/`nm` on built binary.
+>
+> **Status (2026-08):** the counts below are a point-in-time snapshot. The policy this
+> analysis motivates is now enforced mechanically by `deny.toml` (`cargo deny check
+> licenses bans advisories`, run by the `cargo-deny` job in `.github/workflows/ci.yml`
+> and by `scripts/ci-local.sh` with `--full`): the allow-list mirrors §1, and the `zlog` /
+> `ztracing` / `ztracing_macro` GPL exceptions of §2 are crate-scoped so any other GPL
+> crate fails the check. The project itself is licensed **Apache-2.0** (root `LICENSE`,
+> `[workspace.package] license`), not the dual grant discussed in §4.
 
 ---
 
@@ -252,8 +260,8 @@ The initial analysis (in the previous version of this file) concluded GPL-3.0 co
 
 ## 7. Compliance Checklist for Distribution
 
-1. **LICENSE file** at project root: `Apache-2.0 OR MIT` (dual).
-2. **NOTICE / credit file** listing all dependencies + their licenses (use `cargo-about` or `cargo license`).
+1. **LICENSE file** at project root: Apache-2.0 (the shipped choice; see the status note at the top).
+2. **NOTICE / third-party credit file** listing all dependencies + their licenses (generated from the Cargo metadata; the bundled Windows Terminal ConPTY binaries are MIT and need their own entry).
 3. Retain copyright notices from: Zed Industries (gpui, sum_tree, ztracing…), Longbridge (gpui-component), Alacritty contributors, Microsoft (windows crates), Rust ecosystem contributors.
 4. **Do NOT set `ZTRACING=1`** when building a release binary — prevents pulling `zlog` (GPL) into the binary.
 5. If copying code from Windows Terminal (MIT): retain the Microsoft copyright notice in the NOTICE file.
