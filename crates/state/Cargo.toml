@@ -1,8 +1,12 @@
 [package]
 name = "oneterm-state"
 description = "OneTerm cross-cutting global application state (AppState) + notification helpers."
-publish = false
+version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
 
 [lints]
 workspace = true

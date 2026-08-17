@@ -1,9 +1,12 @@
 [package]
 name = "oneterm-update"
 description = "OneTerm auto-update service using GitHub Releases."
-publish = false
+version.workspace = true
 edition.workspace = true
-build = "build.rs"
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
 
 [lints]
 workspace = true

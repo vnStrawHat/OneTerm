@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify OneTerm's machine-readable workspace dependency policy."""
+"""Verify OneTerm's machine-readable workspace dependency policy and version sources."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "scripts" / "dependency-graph-policy.json"
 ROOT_MANIFEST = ROOT / "Cargo.toml"
+VERSION_PATH = ROOT / "VERSION"
 
 
 def fail(messages: list[str]) -> None:
@@ -103,6 +104,23 @@ def main() -> None:
         backend_dependencies = sorted(dependencies & set(policy["backends"]))
         if backend_dependencies:
             errors.append(f"{feature} depends on backends: {backend_dependencies}")
+
+    # The repo-root VERSION file (release workflow, macOS bundle) and the
+    # `[workspace.package] version` (CARGO_PKG_VERSION) must agree; every crate
+    # inherits the workspace version.
+    version_file = VERSION_PATH.read_text(encoding="utf-8").strip()
+    workspace_version = manifest["workspace"]["package"].get("version")
+    if workspace_version != version_file:
+        errors.append(
+            f"[workspace.package] version {workspace_version!r} does not match "
+            f"VERSION file {version_file!r}; run scripts/bump-version.sh"
+        )
+    for package_name, package in sorted(packages.items()):
+        if package["version"] != version_file:
+            errors.append(
+                f"{package_name} is version {package['version']!r}, expected the "
+                f"workspace version {version_file!r} (use version.workspace = true)"
+            )
 
     for package_name in ("oneterm-core", "oneterm-terminal"):
         dependencies = normal_workspace_dependencies(packages[package_name], workspace_names)

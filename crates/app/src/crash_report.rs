@@ -348,7 +348,7 @@ fn format_report(panic_info: &PanicHookInfo<'_>) -> String {
          Panic: {message}\n\
          Location: {location}\n\n\
          Backtrace:\n{}\n",
-        env!("ONETERM_VERSION"),
+        env!("CARGO_PKG_VERSION"),
         std::env::consts::OS,
         std::env::consts::ARCH,
         Backtrace::force_capture(),

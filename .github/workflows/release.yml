@@ -10,9 +10,11 @@
 # Targets (matrix): Windows x86_64, Linux x86_64, macOS x86_64 (Intel) + aarch64
 # (Apple Silicon). Release binary = `oneterm` (feature `release-bin`).
 #
-# Version source: the `VERSION` file at the repo root. The Windows build.rs reads
-# VERSION and injects the version info into the resource script (.rc); the UI
-# build.rs exposes it as ONETERM_VERSION for the About dialog.
+# Version sources: the `VERSION` file at the repo root (this workflow, the macOS
+# bundle) and `[workspace.package] version` in the root Cargo.toml (CARGO_PKG_VERSION
+# for every crate: About dialog, updater, Windows .rc version info). They must agree;
+# `scripts/bump-version.sh` rewrites both and `scripts/verify-dependency-graph.py`
+# fails CI when they drift.
 
 name: Release
 
@@ -140,7 +142,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          printf '%s\n' "${{ needs.prepare.outputs.version }}" > VERSION
+          VERSION="${{ needs.prepare.outputs.version }}"
+          # bump-version.sh rewrites VERSION + Cargo.toml + Cargo.lock together; it
+          # refuses a no-op, so skip when the source ref already carries the version.
+          if [ "$(tr -d '[:space:]' < VERSION)" != "$VERSION" ]; then
+            bash scripts/bump-version.sh "$VERSION"
+          fi
 
       - name: Verify release VERSION
         shell: bash
@@ -152,10 +159,25 @@ jobs:
             echo "::error::VERSION file ($FILEV) does not match release version ($VERSION)."
             exit 1
           fi
+          CARGOV="$(sed -n '/^\[workspace\.package\]/,/^\[workspace\.dependencies\]/s/^version = "\(.*\)"$/\1/p' Cargo.toml)"
+          if [ "$CARGOV" != "$VERSION" ]; then
+            echo "::error::[workspace.package] version ($CARGOV) does not match release version ($VERSION)."
+            exit 1
+          fi
+
+      - name: Read pinned toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+          [ -n "$channel" ] || { echo "::error::rust-toolchain.toml has no channel"; exit 1; }
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust toolchain + target
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable, 2026-07-23
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 2026-07-23
         with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
           targets: ${{ matrix.target }}
 
       - name: Cache cargo
@@ -396,8 +418,10 @@ jobs:
             fi
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            printf '%s\n' "${VERSION}" > VERSION
-            git add VERSION
+            if [ "$(tr -d '[:space:]' < VERSION)" != "$VERSION" ]; then
+              bash scripts/bump-version.sh "$VERSION"
+            fi
+            git add VERSION Cargo.toml Cargo.lock
             if ! git diff --cached --quiet; then
               git commit -m "chore(release): v${VERSION}"
             fi

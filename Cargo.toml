@@ -29,8 +29,16 @@ exclude = [
 ]
 
 [workspace.package]
+# Single version for every workspace crate. `scripts/bump-version.sh` rewrites this
+# field together with the repo-root `VERSION` file (the release workflow and macOS
+# bundle read `VERSION`); `scripts/verify-dependency-graph.py` fails when they drift.
+version = "0.3.10"
 publish = false
 edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/vnStrawHat/OneTerm"
+# Keep in sync with rust-toolchain.toml.
+rust-version = "1.96.0"
 
 [workspace.dependencies]
 # GPUI core — same revision and monorepo (see docs/agents/dependencies.md §1)
@@ -86,7 +94,6 @@ rand = "0.10"
 
 # Async / serialization / error
 anyhow = "1"
-smol = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -102,7 +109,23 @@ flate2 = "1"
 chrono = "0.4"
 # System resource monitoring (CPU/memory of the OneTerm process)
 sysinfo = "0.37"
-rust-i18n = "4"
+itertools = "0.14"
+# Embedded theme JSON + icon assets (theme crate)
+rust-embed = "8.7"
+# Windows FFI (Ctrl handler, file locking / replace, ConPTY example). One version
+# for every first-party crate (0.59 = the version alacritty_terminal uses; 0.61 moved
+# `BOOL` to `windows_sys::core`); the feature set is the union of what they need.
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_IO",
+    "Win32_System_Threading",
+] }
+# Compile assets/oneterm.rc → embed app icon + version info into the exe (app build.rs).
+embed-resource = "3"
+# DOOM-fire example: terminal size detection (local-shell dev-dep).
+libc = "0.2"
 
 [workspace.lints.clippy]
 # Preserve compatibility with upstream gpui-component (see reference/Cargo.toml)

@@ -1,8 +1,12 @@
 [package]
 name = "oneterm-core"
 description = "Domain model & business logic for OneTerm (no GPUI, no alacritty)."
-publish = false
+version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
 
 [lints]
 workspace = true
@@ -16,4 +20,4 @@ serde_json.workspace = true
 zeroize.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_System_IO"] }
+windows-sys.workspace = true

@@ -1,0 +1,6 @@
+# Pinned toolchain for OneTerm (keep in sync with `rust-version` in the root Cargo.toml).
+# CI installs this exact release, so a new stable clippy lint cannot break `-D warnings`
+# without an intentional bump.
+[toolchain]
+channel = "1.96.0"
+components = ["rustfmt", "clippy"]

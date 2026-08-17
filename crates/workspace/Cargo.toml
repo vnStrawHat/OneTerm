@@ -1,9 +1,12 @@
 [package]
 name = "oneterm-workspace"
 description = "OneTerm app shell: DockArea workspace, title bar, menus, status bar, widgets, persistence, zoom (feature-agnostic)."
-publish = false
+version.workspace = true
 edition.workspace = true
-build = "build.rs"
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
 
 [lints]
 workspace = true
@@ -14,11 +17,9 @@ oneterm-terminal.workspace = true
 oneterm-state.workspace = true
 oneterm-settings.workspace = true
 oneterm-actions.workspace = true
-oneterm-theme.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
 anyhow.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 log.workspace = true
 chrono.workspace = true
