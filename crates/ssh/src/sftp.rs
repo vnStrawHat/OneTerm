@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use async_channel::{Receiver, Sender};
+use async_channel::Sender;
 use tokio::sync::oneshot;
 
 use oneterm_core::{
@@ -21,7 +21,7 @@ use oneterm_core::{
 // ── SFTP commands: UI → tokio task ───────────────────────────
 
 /// SFTP command sent from the UI thread to the tokio task via `async_channel`.
-pub enum SftpCmd {
+pub(crate) enum SftpCmd {
     /// Read a directory → returns the list of entries.
     ReadDir {
         path: RemotePath,
@@ -81,13 +81,13 @@ pub enum SftpCmd {
 
 // ── SFTP event: tokio task → UI ──────────────────────────────
 
-/// Event sent from the SFTP task to the UI (via `async_channel`).
+/// Lifecycle event emitted by the SFTP task (via `async_channel`). No UI
+/// consumer subscribes today — `SftpBackend::alive()` is the observable state
+/// — so the receiver side is dropped after setup.
 #[derive(Debug, Clone)]
-pub enum SftpEvent {
+pub(crate) enum SftpEvent {
     /// SFTP session is ready (after the handshake).
     Ready,
-    /// SFTP session errored/disconnected.
-    Error(String),
     /// SFTP session is closed.
     Closed,
 }
@@ -99,39 +99,25 @@ pub enum SftpEvent {
 /// Similar to the `SshSession` pattern: object-safe futures bridge UI operations
 /// to the Tokio task. `SftpSession` is the handle the UI holds; `sftp_task` runs
 /// in the background within Tokio.
-pub struct SftpSession {
+pub(crate) struct SftpSession {
     /// Stable process-local identity used by per-session UI state.
     id: SftpSessionId,
     /// Channel sending `SftpCmd` to the tokio task.
     cmd_tx: Sender<SftpCmd>,
-    /// Channel receiving `SftpEvent` from the tokio task (UI subscribes).
-    /// `Mutex<Option<...>>` — taken only once on subscribe.
-    event_rx: Mutex<Option<Receiver<SftpEvent>>>,
-    /// Whether SFTP is alive (channel not yet closed).
+    /// Whether SFTP is alive (task still running; cleared when the task exits,
+    /// including when the SSH connection ends — ARCH-28).
     alive: Arc<Mutex<bool>>,
 }
 
 impl SftpSession {
-    /// Create an `SftpSession` from channels already set up by `sftp_task`.
+    /// Create an `SftpSession` from the command channel set up for `sftp_task`.
     /// Uses `Arc` to share across multiple panels (terminal + sftp browser).
-    pub(crate) fn new(
-        cmd_tx: Sender<SftpCmd>,
-        event_rx: Receiver<SftpEvent>,
-        alive: Arc<Mutex<bool>>,
-    ) -> Arc<Self> {
+    pub(crate) fn new(cmd_tx: Sender<SftpCmd>, alive: Arc<Mutex<bool>>) -> Arc<Self> {
         Arc::new(Self {
             id: SftpSessionId::next(),
             cmd_tx,
-            event_rx: Mutex::new(Some(event_rx)),
             alive,
         })
-    }
-
-    // ── Lifecycle ────────────────────────────────────────────
-
-    /// Subscribe to events (Ready/Error/Closed). Can be taken only once.
-    pub fn subscribe(&self) -> Option<Receiver<SftpEvent>> {
-        self.event_rx.lock().unwrap().take()
     }
 
     /// Enqueue a command carrying a oneshot reply and await that reply.
@@ -243,10 +229,9 @@ impl SftpBackend for SftpSession {
 mod tests {
     use super::*;
 
-    fn test_session() -> (Arc<SftpSession>, Receiver<SftpCmd>) {
+    fn test_session() -> (Arc<SftpSession>, async_channel::Receiver<SftpCmd>) {
         let (cmd_tx, cmd_rx) = async_channel::bounded(1);
-        let (_event_tx, event_rx) = async_channel::bounded(1);
-        let session = SftpSession::new(cmd_tx, event_rx, Arc::new(Mutex::new(true)));
+        let session = SftpSession::new(cmd_tx, Arc::new(Mutex::new(true)));
         (session, cmd_rx)
     }
 

@@ -1,27 +1,21 @@
 //! SSH + SFTP implementation for OneTerm.
 //!
-//! Implements a `russh` client with a hidden tokio runtime. `SshSession`
+//! Implements a `russh` client on a shared tokio runtime. `SshSession`
 //! implements `TerminalSession` — the UI uses it through the trait, unaware of
-//! the internals.
+//! the internals; SFTP is reached through `TerminalCapabilities::sftp`.
+//! Terminal parsing / OSC routing / event delivery come from the shared pump
+//! layer in `oneterm_terminal::backend`.
 //!
-//! See `docs/terminal-backend.md` §7.
+//! The only public items are [`SshSession`] and [`connect`]; everything else
+//! is crate-private. See `docs/terminal-backend.md` §7.
 
-pub mod config;
-pub(crate) mod counting_stream;
-pub(crate) mod handler;
-pub mod listener;
-pub mod session;
-pub(crate) mod session_terminal;
-pub mod sftp;
-pub(crate) mod sftp_task;
-pub(crate) mod state;
-pub(crate) mod task;
+mod counting_stream;
+mod handler;
+mod session;
+mod session_terminal;
+mod sftp;
+mod sftp_task;
+mod task;
+mod transport;
 
-pub use config::{SshAuthMethod, SshConfig};
-pub use listener::{Cmd, SshListener};
-pub use oneterm_core::{FileEntry, FileStat};
-pub use oneterm_terminal::PtySize;
 pub use session::{SshSession, connect};
-pub use sftp::{SftpCmd, SftpEvent, SftpSession};
-
-pub use oneterm_core as core;
