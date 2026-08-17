@@ -30,10 +30,10 @@ use crate::{AppError, Result};
 /// - runs of `/` are collapsed into one,
 /// - a trailing `/` is dropped unless the path is the root `/`.
 ///
-/// The empty path is allowed and means "unset" (a browser with no directory
+/// The empty path (also the `Default`) is allowed and means "unset" (a browser with no directory
 /// loaded yet). Relative paths such as `.` are allowed; the backend resolves
 /// them against the server's default directory.
-#[derive(Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Hash, serde::Serialize)]
 #[serde(transparent)]
 pub struct RemotePath(String);
 

@@ -130,15 +130,15 @@ impl SftpPanel {
             return;
         }
 
-        let sftp = match self.sftp.clone() {
-            Some(s) => s,
+        let sftp = match self.sftp() {
+            Some(s) => s.clone(),
             None => {
                 log::warn!("SftpPanel::do_upload_paths: no SFTP connection");
                 return;
             }
         };
         let panel = cx.entity();
-        let cwd = self.cwd.clone();
+        let cwd = self.browser().cwd().clone();
 
         log::info!(
             "SftpPanel::do_upload_paths: {} path(s) → \"{cwd}\"",
@@ -175,7 +175,7 @@ impl SftpPanel {
             // is still the active one — otherwise the user will refresh on switch).
             cx.update(|cx| {
                 panel.update(cx, |this, cx| {
-                    if this.active_key == Some(backend_key) {
+                    if this.active_key() == Some(backend_key) {
                         this.refresh(cx);
                     }
                 })
@@ -195,7 +195,10 @@ impl SftpPanel {
         cx: &mut Context<Self>,
     ) {
         let mode_str = if pick_folders { "folder" } else { "files" };
-        log::info!("SftpPanel::do_upload ({mode_str}): cwd=\"{}\"", self.cwd);
+        log::info!(
+            "SftpPanel::do_upload ({mode_str}): cwd=\"{}\"",
+            self.browser().cwd()
+        );
 
         // Open the OS-native file picker.
         // Windows does not support mixed files+folders (FOS_PICKFOLDERS toggles mode),
@@ -273,8 +276,8 @@ impl SftpPanel {
                 return;
             }
         };
-        let sftp = match self.sftp.clone() {
-            Some(sftp) => sftp,
+        let sftp = match self.sftp() {
+            Some(sftp) => sftp.clone(),
             None => {
                 log::warn!("SftpPanel::do_download: no active SFTP backend");
                 window.push_notification(
@@ -370,16 +373,21 @@ mod tests {
     use std::sync::Arc;
 
     use gpui::{AppContext as _, TestAppContext, VisualTestContext};
-    use oneterm_core::{AppError, RemotePath, SftpBackend, TransferEvent};
+    use oneterm_core::{AppError, RemotePath, TransferEvent};
 
     use super::SftpPanel;
-    use crate::browser_state::SftpBrowserStore;
     use crate::test_backend::{FakeSftpBackend, dir_entry};
     use crate::types::TransferStatus;
 
-    fn test_panel(cx: &mut TestAppContext) -> (gpui::Entity<SftpPanel>, &mut VisualTestContext) {
+    struct Harness {
+        root: gpui::Entity<gpui_component::Root>,
+        panel: gpui::Entity<SftpPanel>,
+    }
+
+    fn test_panel(cx: &mut TestAppContext) -> (Harness, &mut VisualTestContext) {
         cx.update(gpui_component::init);
         cx.update(oneterm_state::AppState::init);
+        cx.update(crate::browser_state::SftpBrowserStore::init);
 
         let (root, cx) = cx.add_window_view(|window, cx| {
             let panel = cx.new(|cx| SftpPanel::new(window, cx));
@@ -388,63 +396,164 @@ mod tests {
         let panel = root.read_with(cx, |root, _| {
             root.view().clone().downcast::<SftpPanel>().unwrap()
         });
-        (panel, cx)
+        (Harness { root, panel }, cx)
     }
 
-    /// Attach a scripted backend as the panel's active session.
-    fn attach_backend(
-        panel: &gpui::Entity<SftpPanel>,
-        cx: &mut VisualTestContext,
-    ) -> Arc<FakeSftpBackend> {
-        let backend = Arc::new(FakeSftpBackend::new());
-        let dynamic: Arc<dyn SftpBackend> = backend.clone();
-        panel.update(cx, |panel, cx| {
-            let key = SftpBrowserStore::global(cx).track_backend(&dynamic);
-            panel.sftp = Some(dynamic);
-            panel.active_key = Some(key);
-            panel.cwd = RemotePath::new("/home/u");
-        });
-        backend
-    }
-
-    fn statuses(
-        panel: &gpui::Entity<SftpPanel>,
-        cx: &mut VisualTestContext,
-    ) -> Vec<TransferStatus> {
-        panel.read_with(cx, |panel, _| {
-            panel.transfers.iter().map(|item| item.status).collect()
-        })
-    }
-
-    #[gpui::test]
-    fn download_with_stale_selection_and_no_backend_is_recoverable(cx: &mut TestAppContext) {
-        let (panel, cx) = test_panel(cx);
-
-        panel.update_in(cx, |panel, window, cx| {
-            panel.table.update(cx, |table, _| {
-                table.delegate_mut().entries.push(dir_entry(
-                    &RemotePath::root(),
-                    "example.txt",
-                    false,
-                ));
+    impl Harness {
+        /// Attach a scripted backend as the panel's active session.
+        fn attach_backend(&self, cx: &mut VisualTestContext) -> Arc<FakeSftpBackend> {
+            let backend = Arc::new(FakeSftpBackend::new());
+            self.panel.update(cx, |panel, cx| {
+                panel.attach_backend_for_test(backend.clone(), RemotePath::new("/home/u"), cx);
             });
-            panel.selected = Some(0);
-            assert!(panel.sftp.is_none());
+            backend
+        }
 
+        /// Show `entries` in the table and select row `selected`.
+        fn list_and_select(
+            &self,
+            entries: Vec<oneterm_core::FileEntry>,
+            selected: Option<usize>,
+            cx: &mut VisualTestContext,
+        ) {
+            self.panel.update(cx, |panel, cx| {
+                panel.table().update(cx, |table, _| {
+                    table.delegate_mut().set_entries(entries);
+                });
+                panel.browser_mut().select(selected);
+            });
+        }
+
+        fn statuses(&self, cx: &mut VisualTestContext) -> Vec<TransferStatus> {
+            self.panel.read_with(cx, |panel, _| {
+                panel
+                    .transfers()
+                    .items()
+                    .iter()
+                    .map(|item| item.status)
+                    .collect()
+            })
+        }
+
+        fn notification_count(&self, cx: &mut VisualTestContext) -> usize {
+            self.root.read_with(cx, |root, cx| {
+                root.notification.read(cx).notifications().len()
+            })
+        }
+    }
+
+    /// TEST-25: with a stale selection and no backend, `do_download` warns the
+    /// user and starts nothing — no queue item, no save dialog.
+    #[gpui::test]
+    fn download_without_backend_warns_and_starts_nothing(cx: &mut TestAppContext) {
+        let (harness, cx) = test_panel(cx);
+        harness.list_and_select(
+            vec![dir_entry(&RemotePath::root(), "example.txt", false)],
+            Some(0),
+            cx,
+        );
+
+        harness.panel.update_in(cx, |panel, window, cx| {
+            assert!(panel.sftp().is_none());
             panel.do_download(window, cx);
         });
+        cx.run_until_parked();
+
+        assert_eq!(harness.notification_count(cx), 1);
+        assert!(harness.statuses(cx).is_empty());
+    }
+
+    /// A selection index that no longer points at an entry (the listing changed
+    /// underneath it) is reported, not downloaded.
+    #[gpui::test]
+    fn download_with_out_of_range_selection_warns(cx: &mut TestAppContext) {
+        let (harness, cx) = test_panel(cx);
+        let backend = harness.attach_backend(cx);
+        harness.list_and_select(Vec::new(), Some(3), cx);
+
+        harness.panel.update_in(cx, |panel, window, cx| {
+            panel.do_download(window, cx);
+        });
+        cx.run_until_parked();
+
+        assert_eq!(harness.notification_count(cx), 1);
+        assert!(backend.transfer_requests().is_empty());
+        assert!(harness.statuses(cx).is_empty());
+    }
+
+    /// The happy path: the selected remote file is downloaded to the path the
+    /// user picks, the queue item tracks progress and ends `Completed`.
+    #[gpui::test]
+    fn download_streams_the_selected_file_to_the_chosen_path(cx: &mut TestAppContext) {
+        let (harness, cx) = test_panel(cx);
+        let backend = harness.attach_backend(cx);
+        let transfer = backend.arm_transfer();
+        harness.list_and_select(
+            vec![dir_entry(&RemotePath::new("/home/u"), "example.txt", false)],
+            Some(0),
+            cx,
+        );
+
+        harness.panel.update_in(cx, |panel, window, cx| {
+            panel.do_download(window, cx);
+        });
+        cx.simulate_new_path_selection(|_| Some(PathBuf::from("picked/example.txt")));
+        cx.run_until_parked();
+
+        let requests = backend.transfer_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].remote.as_str(), "/home/u/example.txt");
+        assert_eq!(requests[0].local, PathBuf::from("picked/example.txt"));
+        assert_eq!(harness.statuses(cx), vec![TransferStatus::InProgress]);
+        assert_eq!(harness.notification_count(cx), 0);
+
+        transfer
+            .events
+            .try_send(TransferEvent::Progress(0.25))
+            .unwrap();
+        cx.run_until_parked();
+        let progress = harness
+            .panel
+            .read_with(cx, |panel, _| panel.transfers().items()[0].progress);
+        assert!((progress - 0.25).abs() < f64::EPSILON);
+
+        drop(transfer.events);
+        transfer.result.try_send(Ok(())).unwrap();
+        cx.run_until_parked();
+        assert_eq!(harness.statuses(cx), vec![TransferStatus::Completed]);
+    }
+
+    /// Cancelling the save dialog leaves the queue untouched.
+    #[gpui::test]
+    fn dismissed_save_dialog_starts_no_download(cx: &mut TestAppContext) {
+        let (harness, cx) = test_panel(cx);
+        let backend = harness.attach_backend(cx);
+        harness.list_and_select(
+            vec![dir_entry(&RemotePath::new("/home/u"), "example.txt", false)],
+            Some(0),
+            cx,
+        );
+
+        harness.panel.update_in(cx, |panel, window, cx| {
+            panel.do_download(window, cx);
+        });
+        cx.simulate_new_path_selection(|_| None);
+        cx.run_until_parked();
+
+        assert!(backend.transfer_requests().is_empty());
+        assert!(harness.statuses(cx).is_empty());
     }
 
     /// CORR-31: a cancelled first file must be marked `Cancelled` and the batch
     /// must continue with the next file, whose failure is likewise recorded.
     #[gpui::test]
     fn cancelled_or_failed_upload_does_not_abort_the_batch(cx: &mut TestAppContext) {
-        let (panel, cx) = test_panel(cx);
-        let backend = attach_backend(&panel, cx);
+        let (harness, cx) = test_panel(cx);
+        let backend = harness.attach_backend(cx);
         let first = backend.arm_transfer();
         let second = backend.arm_transfer();
 
-        panel.update(cx, |panel, cx| {
+        harness.panel.update(cx, |panel, cx| {
             panel.do_upload_paths(vec![PathBuf::from("a.txt"), PathBuf::from("b.txt")], cx);
         });
         cx.run_until_parked();
@@ -453,7 +562,7 @@ mod tests {
         let requests = backend.transfer_requests();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].remote.as_str(), "/home/u/a.txt");
-        assert_eq!(statuses(&panel, cx), vec![TransferStatus::InProgress]);
+        assert_eq!(harness.statuses(cx), vec![TransferStatus::InProgress]);
 
         first.events.try_send(TransferEvent::Progress(0.5)).unwrap();
         first.events.try_send(TransferEvent::Cancelled).unwrap();
@@ -466,7 +575,7 @@ mod tests {
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[1].remote.as_str(), "/home/u/b.txt");
         assert_eq!(
-            statuses(&panel, cx),
+            harness.statuses(cx),
             vec![TransferStatus::Cancelled, TransferStatus::InProgress]
         );
 
@@ -478,10 +587,12 @@ mod tests {
         cx.run_until_parked();
 
         assert_eq!(
-            statuses(&panel, cx),
+            harness.statuses(cx),
             vec![TransferStatus::Cancelled, TransferStatus::Error]
         );
-        let error = panel.read_with(cx, |panel, _| panel.transfers[1].error.clone());
+        let error = harness
+            .panel
+            .read_with(cx, |panel, _| panel.transfers().items()[1].error.clone());
         assert_eq!(error.as_deref(), Some("disk full"));
     }
 
@@ -489,11 +600,11 @@ mod tests {
     /// settles the item as cancelled — never left `InProgress`.
     #[gpui::test]
     fn cancelled_result_alone_marks_the_item_cancelled(cx: &mut TestAppContext) {
-        let (panel, cx) = test_panel(cx);
-        let backend = attach_backend(&panel, cx);
+        let (harness, cx) = test_panel(cx);
+        let backend = harness.attach_backend(cx);
         let transfer = backend.arm_transfer();
 
-        panel.update(cx, |panel, cx| {
+        harness.panel.update(cx, |panel, cx| {
             panel.do_upload_paths(vec![PathBuf::from("a.txt")], cx);
         });
         cx.run_until_parked();
@@ -502,6 +613,6 @@ mod tests {
         transfer.result.try_send(Err(AppError::Cancelled)).unwrap();
         cx.run_until_parked();
 
-        assert_eq!(statuses(&panel, cx), vec![TransferStatus::Cancelled]);
+        assert_eq!(harness.statuses(cx), vec![TransferStatus::Cancelled]);
     }
 }

@@ -6,7 +6,7 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use gpui::{App, AppContext, ClickEvent, Context, ParentElement, Styled, Window, div, px};
+use gpui::{App, AppContext, Context, Entity, ParentElement, Styled, Window, div, px};
 use gpui_component::{
     ActiveTheme as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
@@ -16,7 +16,8 @@ use gpui_component::{
     notification::NotificationType,
     v_flex,
 };
-use oneterm_core::{FileEntry, RemotePath, SftpBackend};
+use oneterm_core::{AppError, FileEntry, RemotePath, SftpBackend, SftpStatus};
+use oneterm_state::form_dialog::{FieldRequirement, FormDialog, labelled_field};
 use oneterm_state::notif_ext::notify;
 
 use super::panel::SftpPanel;
@@ -41,8 +42,8 @@ impl SftpPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Arc<dyn SftpBackend>> {
-        match self.sftp.clone() {
-            Some(sftp) => Some(sftp),
+        match self.sftp() {
+            Some(sftp) => Some(sftp.clone()),
             None => {
                 log::warn!("SftpPanel::{action}: no active SFTP backend");
                 window.push_notification(
@@ -91,15 +92,10 @@ impl SftpPanel {
             st
         });
 
-        let name_ok = name_state.clone();
-
-        let save_logic: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool> = Rc::new({
-            let name_ok = name_ok.clone();
-            let sftp = sftp.clone();
-            let from_path = from_path.clone();
-            let panel = panel.clone();
-            move |_, window, cx| {
-                let new_name = name_ok.read(cx).value().trim().to_string();
+        let submit = {
+            let name_state = name_state.clone();
+            move |window: &mut Window, cx: &mut App| {
+                let new_name = name_state.read(cx).value().trim().to_string();
                 if new_name.is_empty() {
                     window.push_notification(
                         notify(NotificationType::Warning, "Name cannot be empty.", cx),
@@ -107,96 +103,38 @@ impl SftpPanel {
                     );
                     return false;
                 }
-
                 let to_path = rename_target(&from_path, &new_name);
                 log::info!("SftpPanel: rename \"{from_path}\" → \"{to_path}\"");
-
-                let result_name = new_name.clone();
-                let operation_sftp = sftp.clone();
-                let operation_from = from_path.clone();
-                let operation_panel = panel.clone();
-                window
-                    .spawn(cx, async move |cx| {
-                        let result = operation_sftp.rename(operation_from, to_path).await;
-                        // The dialog may close before the background result arrives.
-                        _ = cx.update(|window, cx| match result {
-                            Ok(()) => {
-                                log::info!("SftpPanel: rename OK");
-                                window.push_notification(
-                                    notify(
-                                        NotificationType::Success,
-                                        format!("Renamed to \"{result_name}\"."),
-                                        cx,
-                                    ),
-                                    cx,
-                                );
-                                operation_panel.update(cx, |this, cx| this.refresh(cx));
-                                window.close_dialog(cx);
-                            }
-                            Err(e) => {
-                                log::error!("SftpPanel: rename failed: {e}");
-                                window.push_notification(
-                                    notify(
-                                        NotificationType::Error,
-                                        format!("Rename failed: {e}"),
-                                        cx,
-                                    ),
-                                    cx,
-                                );
-                            }
-                        });
-                    })
-                    .detach();
+                let sftp = sftp.clone();
+                let from = from_path.clone();
+                run_mutation(
+                    panel.clone(),
+                    "rename",
+                    format!("Renamed to \"{new_name}\"."),
+                    "Rename failed",
+                    async move { sftp.rename(from, to_path).await },
+                    window,
+                    cx,
+                );
+                // The dialog closes itself once the backend confirms.
                 false
             }
-        });
+        };
 
-        window.open_dialog(cx, move |dialog, _window, _cx| {
-            let save_for_click = save_logic.clone();
-            let save_for_kb = save_logic.clone();
-            dialog
-                .title("Rename")
-                .w(px(440.))
-                .content({
-                    let name_state = name_state.clone();
-                    move |content, _window, cx| {
-                        content.child(
-                            v_flex()
-                                .gap_1()
-                                .w_full()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(cx.theme().foreground)
-                                        .child("New name"),
-                                )
-                                .child(Input::new(&name_state)),
-                        )
-                    }
-                })
-                .footer({
-                    DialogFooter::new()
-                        .child(Button::new("cancel").label("Cancel").outline().on_click(
-                            |_, window, cx| {
-                                window.close_dialog(cx);
-                            },
-                        ))
-                        .child(Button::new("save").label("Rename").primary().on_click(
-                            move |_, window, cx| {
-                                if save_for_click(&ClickEvent::default(), window, cx) {
-                                    window.close_dialog(cx);
-                                }
-                            },
-                        ))
-                })
-                .button_props(
-                    DialogButtonProps::default()
-                        .on_cancel(|_, _, _| true)
-                        .on_ok(move |_, window, cx| {
-                            save_for_kb(&ClickEvent::default(), window, cx)
-                        }),
-                )
-        });
+        FormDialog::new(
+            "Rename",
+            move |content, _window, cx| {
+                content.child(labelled_field(
+                    "New name",
+                    FieldRequirement::Required,
+                    Input::new(&name_state),
+                    cx,
+                ))
+            },
+            submit,
+        )
+        .confirm_label("Rename")
+        .open(window, cx);
     }
 
     /// Delete selected entry (file or folder).
@@ -282,7 +220,7 @@ impl SftpPanel {
                                                 window.push_notification(
                                                     notify(
                                                         NotificationType::Error,
-                                                        format!("Delete failed: {e}"),
+                                                        describe_failure("Delete failed", &e),
                                                         cx,
                                                     ),
                                                     cx,
@@ -305,25 +243,20 @@ impl SftpPanel {
     /// Create a new folder in the cwd.
     /// Opens a dialog with an InputState → sftp.mkdir().
     pub(crate) fn do_new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        log::info!("SftpPanel::do_new_folder: cwd=\"{}\"", self.cwd);
+        log::info!("SftpPanel::do_new_folder: cwd=\"{}\"", self.browser().cwd());
 
         let Some(sftp) = self.require_sftp("do_new_folder", window, cx) else {
             return;
         };
         let panel = cx.entity();
-        let cwd = self.cwd.clone();
+        let cwd = self.browser().cwd().clone();
 
         let name_state = cx.new(|cx| InputState::new(window, cx).placeholder("Folder name"));
 
-        let name_ok = name_state.clone();
-
-        let save_logic: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool> = Rc::new({
-            let name_ok = name_ok.clone();
-            let sftp = sftp.clone();
-            let cwd = cwd.clone();
-            let panel = panel.clone();
-            move |_, window, cx| {
-                let name = name_ok.read(cx).value().trim().to_string();
+        let submit = {
+            let name_state = name_state.clone();
+            move |window: &mut Window, cx: &mut App| {
+                let name = name_state.read(cx).value().trim().to_string();
                 if name.is_empty() {
                     window.push_notification(
                         notify(
@@ -337,91 +270,35 @@ impl SftpPanel {
                 }
                 let path = cwd.join(&name);
                 log::info!("SftpPanel: mkdir \"{path}\"");
-                let result_name = name.clone();
-                let operation_sftp = sftp.clone();
-                let operation_panel = panel.clone();
-                window
-                    .spawn(cx, async move |cx| {
-                        let result = operation_sftp.mkdir(path).await;
-                        // The dialog may close before the background result arrives.
-                        _ = cx.update(|window, cx| match result {
-                            Ok(()) => {
-                                log::info!("SftpPanel: mkdir OK");
-                                window.push_notification(
-                                    notify(
-                                        NotificationType::Success,
-                                        format!("Folder \"{result_name}\" created."),
-                                        cx,
-                                    ),
-                                    cx,
-                                );
-                                operation_panel.update(cx, |this, cx| this.refresh(cx));
-                                window.close_dialog(cx);
-                            }
-                            Err(e) => {
-                                log::error!("SftpPanel: mkdir failed: {e}");
-                                window.push_notification(
-                                    notify(
-                                        NotificationType::Error,
-                                        format!("Create folder failed: {e}"),
-                                        cx,
-                                    ),
-                                    cx,
-                                );
-                            }
-                        });
-                    })
-                    .detach();
+                let sftp = sftp.clone();
+                run_mutation(
+                    panel.clone(),
+                    "mkdir",
+                    format!("Folder \"{name}\" created."),
+                    "Create folder failed",
+                    async move { sftp.mkdir(path).await },
+                    window,
+                    cx,
+                );
+                // The dialog closes itself once the backend confirms.
                 false
             }
-        });
+        };
 
-        window.open_dialog(cx, move |dialog, _window, _cx| {
-            let save_for_click = save_logic.clone();
-            let save_for_kb = save_logic.clone();
-            dialog
-                .title("New Folder")
-                .w(px(440.))
-                .content({
-                    let name_state = name_state.clone();
-                    move |content, _window, cx| {
-                        content.child(
-                            v_flex()
-                                .gap_1()
-                                .w_full()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(cx.theme().foreground)
-                                        .child("Folder name"),
-                                )
-                                .child(Input::new(&name_state)),
-                        )
-                    }
-                })
-                .footer({
-                    DialogFooter::new()
-                        .child(Button::new("cancel").label("Cancel").outline().on_click(
-                            |_, window, cx| {
-                                window.close_dialog(cx);
-                            },
-                        ))
-                        .child(Button::new("create").label("Create").primary().on_click(
-                            move |_, window, cx| {
-                                if save_for_click(&ClickEvent::default(), window, cx) {
-                                    window.close_dialog(cx);
-                                }
-                            },
-                        ))
-                })
-                .button_props(
-                    DialogButtonProps::default()
-                        .on_cancel(|_, _, _| true)
-                        .on_ok(move |_, window, cx| {
-                            save_for_kb(&ClickEvent::default(), window, cx)
-                        }),
-                )
-        });
+        FormDialog::new(
+            "New Folder",
+            move |content, _window, cx| {
+                content.child(labelled_field(
+                    "Folder name",
+                    FieldRequirement::Required,
+                    Input::new(&name_state),
+                    cx,
+                ))
+            },
+            submit,
+        )
+        .confirm_label("Create")
+        .open(window, cx);
     }
 
     /// Show properties dialog — sftp.stat() → display detailed metadata.
@@ -459,7 +336,7 @@ impl SftpPanel {
                         window.push_notification(
                             notify(
                                 NotificationType::Error,
-                                format!("Failed to get properties: {error}"),
+                                describe_failure("Failed to get properties", &error),
                                 cx,
                             ),
                             cx,
@@ -481,6 +358,66 @@ fn delete_confirmation(entry_name: &str, is_dir: bool) -> String {
     } else {
         format!("Are you sure you want to delete file \"{entry_name}\"?")
     }
+}
+
+/// User-facing text for a failed operation: SFTP status codes get a corrective
+/// hint (permission denied vs. missing path), everything else shows the error.
+fn describe_failure(what: &str, error: &AppError) -> String {
+    match error.sftp_status() {
+        Some(SftpStatus::PermissionDenied) => {
+            format!("{what}: permission denied by the server.")
+        }
+        Some(SftpStatus::NoSuchFile) => {
+            format!("{what}: the path no longer exists on the server. Refresh and try again.")
+        }
+        Some(SftpStatus::Failure) => {
+            format!(
+                "{what}: the server refused ({error}). The name may be in use or the folder not empty."
+            )
+        }
+        _ => format!("{what}: {error}"),
+    }
+}
+
+/// Run one backend mutation from a form dialog: on success notify, refresh the
+/// listing and close the dialog; on failure notify and keep the dialog open.
+fn run_mutation(
+    panel: Entity<SftpPanel>,
+    operation: &'static str,
+    success_message: String,
+    failure_prefix: &'static str,
+    mutation: impl Future<Output = oneterm_core::Result<()>> + 'static,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    window
+        .spawn(cx, async move |cx| {
+            let result = mutation.await;
+            // The dialog may close before the background result arrives.
+            _ = cx.update(|window, cx| match result {
+                Ok(()) => {
+                    log::info!("SftpPanel: {operation} OK");
+                    window.push_notification(
+                        notify(NotificationType::Success, success_message, cx),
+                        cx,
+                    );
+                    panel.update(cx, |this, cx| this.refresh(cx));
+                    window.close_dialog(cx);
+                }
+                Err(error) => {
+                    log::error!("SftpPanel: {operation} failed: {error}");
+                    window.push_notification(
+                        notify(
+                            NotificationType::Error,
+                            describe_failure(failure_prefix, &error),
+                            cx,
+                        ),
+                        cx,
+                    );
+                }
+            });
+        })
+        .detach();
 }
 
 fn open_properties_dialog(stat: FileEntry, window: &mut Window, cx: &mut App) {
@@ -602,6 +539,24 @@ mod tests {
         let cwd = RemotePath::new("/home/u");
         assert_eq!(cwd.join("new folder").as_str(), "/home/u/new folder");
         assert_eq!(RemotePath::root().join("dir").as_str(), "/dir");
+    }
+
+    #[test]
+    fn failure_text_distinguishes_permission_denied_from_missing_paths() {
+        let denied = AppError::Sftp {
+            status: SftpStatus::PermissionDenied,
+            message: "Permission denied".into(),
+        };
+        assert!(describe_failure("Rename failed", &denied).contains("permission denied"));
+        let missing = AppError::Sftp {
+            status: SftpStatus::NoSuchFile,
+            message: String::new(),
+        };
+        assert!(describe_failure("Delete failed", &missing).contains("no longer exists"));
+        assert_eq!(
+            describe_failure("Rename failed", &AppError::msg("boom")),
+            "Rename failed: boom"
+        );
     }
 
     #[test]

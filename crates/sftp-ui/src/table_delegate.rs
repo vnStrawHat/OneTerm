@@ -7,6 +7,7 @@
 //! background executor and hands the snapshot to this delegate.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use gpui::{
     App, Context, Div, InteractiveElement as _, IntoElement, ParentElement, Stateful, Styled,
@@ -34,8 +35,11 @@ type VisibleIndices = Vec<usize>;
 /// Owns `entries` (data), `col_configs` (config + width + visibility),
 /// `sort` state, and the `loading` flag. Holds a back-reference to `SftpPanel`
 /// via `WeakEntity` to trigger actions from the context menu (rename, delete, ...).
+///
+/// Entries are kept behind an `Arc<[FileEntry]>` so the per-backend store can
+/// snapshot the listing without cloning every row; sorting rebuilds the Arc.
 pub(crate) struct SftpTableDelegate {
-    pub(crate) entries: Vec<FileEntry>,
+    entries: Arc<[FileEntry]>,
     pub(crate) col_configs: Vec<SftpColumnConfig>,
     visible_indices: VisibleIndices,
     /// `None` = default sort (Name asc, folder-first).
@@ -47,7 +51,7 @@ pub(crate) struct SftpTableDelegate {
 impl SftpTableDelegate {
     pub(crate) fn new(panel: gpui::WeakEntity<SftpPanel>) -> Self {
         let mut me = Self {
-            entries: Vec::new(),
+            entries: Arc::from([]),
             col_configs: super::types::default_column_configs(),
             visible_indices: Vec::new(),
             sort: None,
@@ -140,15 +144,27 @@ impl SftpTableDelegate {
 
     // ── Entries / sort ────────────────────────────────────────────
 
+    /// The listing in display order.
+    pub(crate) fn entries(&self) -> &[FileEntry] {
+        &self.entries
+    }
+
+    /// Share the current listing without copying rows.
+    pub(crate) fn entries_snapshot(&self) -> Arc<[FileEntry]> {
+        Arc::clone(&self.entries)
+    }
+
     /// Replace entries + re-sort by the current sort state.
     pub(crate) fn set_entries(&mut self, mut entries: Vec<FileEntry>) {
         sort_entries(&mut entries, self.sort);
-        self.entries = entries;
+        self.entries = Arc::from(entries);
     }
 
     /// Re-sort the current entries (used after changing the sort state).
     fn resort(&mut self) {
-        sort_entries(&mut self.entries, self.sort);
+        let mut entries = self.entries.to_vec();
+        sort_entries(&mut entries, self.sort);
+        self.entries = Arc::from(entries);
     }
 
     /// Config for the visible column at `col_ix` (index in visible order).
@@ -228,7 +244,10 @@ impl TableDelegate for SftpTableDelegate {
         // Read `selected` directly from SftpPanel (single source of truth) instead of
         // syncing via events — avoids re-entrancy when `clear_selection` emits inside
         // `table.update`.
-        let selected = self.panel.upgrade().and_then(|p| p.read(cx).selected);
+        let selected = self
+            .panel
+            .upgrade()
+            .and_then(|p| p.read(cx).browser().selected());
         let row = div().id(("row", row_ix));
         if selected == Some(row_ix) {
             row.bg(cx.theme().tokens.table_hover)
@@ -356,8 +375,7 @@ impl TableDelegate for SftpTableDelegate {
         // Select the row on right-click (mirror to SftpPanel so toolbar actions can use it).
         if let Some(panel) = self.panel.upgrade() {
             panel.update(cx, |this, cx| {
-                this.selected = Some(row_ix);
-                this.mark_state_dirty();
+                this.browser_mut().select(Some(row_ix));
                 cx.notify();
             });
         }
@@ -389,5 +407,98 @@ impl TableDelegate for SftpTableDelegate {
             .context_menu(move |menu, _window, _cx| {
                 super::table_delegate_menu::build_empty_menu(menu, &panel)
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{TestAppContext, px};
+    use oneterm_core::SftpTableState;
+
+    use super::*;
+
+    /// A delegate wired to a throw-away panel (the delegate needs a back-reference).
+    fn delegate(cx: &mut TestAppContext) -> SftpTableDelegate {
+        cx.update(gpui_component::init);
+        cx.update(oneterm_state::AppState::init);
+        cx.update(crate::browser_state::SftpBrowserStore::init);
+        let (panel, _cx) = cx.add_window_view(|window, cx| SftpPanel::new(window, cx));
+        SftpTableDelegate::new(panel.downgrade())
+    }
+
+    fn visible_keys(delegate: &SftpTableDelegate) -> Vec<&'static str> {
+        delegate
+            .col_configs
+            .iter()
+            .filter(|c| c.visible)
+            .map(|c| c.key)
+            .collect()
+    }
+
+    #[gpui::test]
+    fn persisted_state_round_trips_and_ignores_invalid_values(cx: &mut TestAppContext) {
+        let mut delegate = delegate(cx);
+        let mut state = SftpTableState::default();
+        state.column_widths.insert("size".into(), 120.0);
+        // Below the minimum width and an unknown key: both ignored.
+        state.column_widths.insert("owner".into(), 1.0);
+        state.column_widths.insert("bogus".into(), 50.0);
+        state.column_visibility.insert("group".into(), false);
+        // Name can never be hidden.
+        state.column_visibility.insert("name".into(), false);
+
+        delegate.apply_persisted_state(&state);
+
+        let width = |key: &str| {
+            delegate
+                .col_configs
+                .iter()
+                .find(|c| c.key == key)
+                .map(|c| c.width)
+                .unwrap()
+        };
+        assert_eq!(width("size"), 120.0);
+        assert_eq!(width("owner"), 90.0);
+        assert_eq!(
+            visible_keys(&delegate),
+            vec!["name", "modified", "permissions", "size", "owner"]
+        );
+
+        let persisted = delegate.to_persisted_state();
+        assert_eq!(persisted.column_widths["size"], 120.0);
+        assert!(!persisted.column_visibility["group"]);
+        assert!(persisted.column_visibility["name"]);
+        assert!(!persisted.column_widths.contains_key("bogus"));
+    }
+
+    #[gpui::test]
+    fn toggling_visibility_never_hides_name(cx: &mut TestAppContext) {
+        let mut delegate = delegate(cx);
+        assert!(!delegate.toggle_visibility(SortColumn::Name));
+        assert!(delegate.toggle_visibility(SortColumn::Owner));
+        assert!(!visible_keys(&delegate).contains(&"owner"));
+        assert!(delegate.toggle_visibility(SortColumn::Owner));
+        assert!(visible_keys(&delegate).contains(&"owner"));
+    }
+
+    #[gpui::test]
+    fn widths_apply_in_visible_order_and_are_clamped(cx: &mut TestAppContext) {
+        let mut delegate = delegate(cx);
+        delegate.toggle_visibility(SortColumn::Modified);
+        // Visible order is now: name, permissions, size, owner, group.
+        delegate.apply_widths(&[px(500.), px(10.), px(9999.)]);
+        let width = |key: &str| {
+            delegate
+                .col_configs
+                .iter()
+                .find(|c| c.key == key)
+                .map(|c| c.width)
+                .unwrap()
+        };
+        assert_eq!(width("name"), 500.0);
+        assert_eq!(width("permissions"), 40.0);
+        assert_eq!(width("size"), 800.0);
+        // The hidden column keeps its default width.
+        assert_eq!(width("modified"), 140.0);
     }
 }

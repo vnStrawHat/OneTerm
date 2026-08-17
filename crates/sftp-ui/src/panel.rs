@@ -9,6 +9,10 @@
 //! - Column state (width + visibility) is persisted to `docks.json`
 //!   (the `sftp_table_state` field).
 //!
+//! The panel's mutable state is grouped into [`BrowserView`],
+//! [`TransferQueueView`] and [`FollowCwd`] (see [`super::browser_view`]); the
+//! other modules of this crate reach them through the accessors below.
+//!
 //! See `docs/sftp-browser-design.md` §4.
 
 use std::sync::Arc;
@@ -26,9 +30,10 @@ use oneterm_core::{RemotePath, SftpBackend};
 use oneterm_state::AppState;
 use oneterm_terminal::CwdSource;
 
+use super::browser_state::{BackendKey, SftpBrowserState, SftpBrowserStore, SnapshotGate};
+use super::browser_view::{BrowserView, FollowCwd, TransferQueueView};
 use super::persistence::{read_sftp_table_state, write_sftp_table_state};
 use super::table_delegate::SftpTableDelegate;
-use super::types::{PendingAction, TransferItem};
 
 // ── SftpPanel ────────────────────────────────────────────────
 
@@ -37,63 +42,35 @@ use super::types::{PendingAction, TransferItem};
 /// `panel_name = "sftp"`. One panel per workspace in the right dock.
 /// Observes the active state keyed by its DockArea workspace when the SSH tab changes.
 pub struct SftpPanel {
-    pub(crate) focus_handle: FocusHandle,
+    focus_handle: FocusHandle,
 
-    // ── SFTP backend state ──────────────────────────────────
-    pub(crate) sftp: Option<Arc<dyn SftpBackend>>,
+    // ── SFTP backend ────────────────────────────────────────
+    sftp: Option<Arc<dyn SftpBackend>>,
     /// Stable store key for the active backend. `None` = no SFTP backend
     /// (local shell). Tracked so the panel knows which store entry
     /// owns the currently-displayed cwd/entries/transfers.
-    pub(crate) active_key: Option<super::browser_state::BackendKey>,
+    active_key: Option<BackendKey>,
 
-    /// Live cwd source of the active terminal tab (OSC 7). Read on demand by the
-    /// "sync to terminal cwd" toolbar button. `None` = no cwd source available.
-    pub(crate) cwd_source: Option<Arc<dyn CwdSource>>,
-    /// Last cwd observed from `cwd_source`. The polling task updates this cache
-    /// only to trigger toolbar re-rendering when OSC 7 arrives after the panel
-    /// was rendered with a disabled sync button; sync actions still read live.
-    pub(crate) terminal_cwd_cache: Option<RemotePath>,
-
-    // ── File tree state (active view; mirrored from the store on tab switch) ─
-    pub(crate) cwd: RemotePath,
+    // ── Active view (mirrored from the store on tab switch) ─
+    browser: BrowserView,
+    transfers: TransferQueueView,
+    follow: FollowCwd,
     /// Incremented by every directory request. A listing result is applied only
     /// when its captured generation (and backend key) still match, so a slower
     /// earlier request cannot overwrite a newer one.
-    pub(crate) load_generation: u64,
+    load_generation: u64,
     /// Entries + sort + loading + column config live in the delegate.
-    pub(crate) table: Entity<TableState<SftpTableDelegate>>,
-    /// Mirror of the selected row index (synced from `TableEvent::SelectRow` +
-    /// context-menu right-click). Used by toolbar actions.
-    pub(crate) selected: Option<usize>,
-    pub(crate) error: Option<String>,
-
-    // ── Transfer queue (active view; mirrored from the store on tab switch).
-    /// The source of truth is the per-backend store (`SftpBrowserStore`); this
-    /// vec mirrors the active backend's queue so render can read it. Background
-    /// transfer tasks update the store by `(backend_key, transfer_id)` and, when
-    /// that key is active, also update this vec so the UI re-renders live.
-    pub(crate) transfers: Vec<TransferItem>,
-    pub(crate) next_transfer_id: usize,
-
-    // ── Pending action (context menu → render) ──────────────
-    pub(crate) pending_action: Option<PendingAction>,
+    table: Entity<TableState<SftpTableDelegate>>,
 
     // ── Path input (toolbar) ────────────────────────────────
-    pub(crate) path_input: Entity<InputState>,
-    pub(crate) path_error: bool,
+    path_input: Entity<InputState>,
     _path_sub: Subscription,
 
-    // ── Auto-follow terminal cwd (active view; mirrored from the store) ────
-    /// When enabled, the SFTP browser automatically navigates to the terminal's
-    /// cwd whenever it changes (OSC 7). Toggled via the "..." menu checkbox.
-    pub(crate) follow_terminal_cwd: bool,
-    /// The last terminal cwd we followed to — used by the polling timer to
-    /// detect changes (avoids redundant `read_dir` when the cwd hasn't moved).
-    pub(crate) last_followed_cwd: Option<RemotePath>,
     /// Handle for the auto-follow polling task so we can detach it.
     _follow_task: Option<Task<()>>,
-    /// Mutation gate for deferred per-backend browser snapshots.
-    snapshot_gate: super::browser_state::SnapshotGate,
+    /// Mutation gate for panel-level changes (column widths, sort) that are
+    /// not tracked by one of the views.
+    snapshot_gate: SnapshotGate,
     /// Whether the table entry ordering/content changed since its stored Arc snapshot.
     entries_dirty: bool,
 
@@ -168,8 +145,8 @@ impl SftpPanel {
                     // responsible for saving changes made by a panel that is removed
                     // without a backend transition, but it no longer clones directory
                     // entries while the panel is idle.
-                    super::browser_state::SftpBrowserStore::global(cx).purge_closed();
-                    if this.snapshot_gate.take() {
+                    SftpBrowserStore::global(cx).purge_closed();
+                    if this.take_dirty() {
                         if let Some(key) = this.active_key {
                             this.save_state_for_key(key, cx);
                         }
@@ -186,23 +163,15 @@ impl SftpPanel {
             focus_handle,
             sftp: None,
             active_key: None,
-            cwd_source: None,
-            terminal_cwd_cache: None,
-            cwd: RemotePath::new(""),
+            browser: BrowserView::default(),
+            transfers: TransferQueueView::default(),
+            follow: FollowCwd::default(),
             load_generation: 0,
             table,
-            selected: None,
-            error: None,
-            transfers: Vec::new(),
-            next_transfer_id: 0,
-            pending_action: None,
             path_input,
-            path_error: false,
             _path_sub,
-            follow_terminal_cwd: false,
-            last_followed_cwd: None,
             _follow_task: Some(_follow_task),
-            snapshot_gate: super::browser_state::SnapshotGate::default(),
+            snapshot_gate: SnapshotGate::default(),
             entries_dirty: false,
             _save_table_task: None,
             _table_sub: table_sub,
@@ -254,7 +223,68 @@ impl SftpPanel {
         cx.new(|cx| Self::new_in_workspace(workspace_id, window, cx))
     }
 
-    // ── Table event handler ──────────────────────────────────
+    // ── Accessors for the sibling modules ────────────────────
+
+    pub(crate) fn sftp(&self) -> Option<&Arc<dyn SftpBackend>> {
+        self.sftp.as_ref()
+    }
+
+    pub(crate) fn active_key(&self) -> Option<BackendKey> {
+        self.active_key
+    }
+
+    pub(crate) fn browser(&self) -> &BrowserView {
+        &self.browser
+    }
+
+    pub(crate) fn browser_mut(&mut self) -> &mut BrowserView {
+        &mut self.browser
+    }
+
+    pub(crate) fn transfers(&self) -> &TransferQueueView {
+        &self.transfers
+    }
+
+    pub(crate) fn transfers_mut(&mut self) -> &mut TransferQueueView {
+        &mut self.transfers
+    }
+
+    pub(crate) fn follow(&self) -> &FollowCwd {
+        &self.follow
+    }
+
+    pub(crate) fn follow_mut(&mut self) -> &mut FollowCwd {
+        &mut self.follow
+    }
+
+    pub(crate) fn table(&self) -> &Entity<TableState<SftpTableDelegate>> {
+        &self.table
+    }
+
+    pub(crate) fn path_input(&self) -> &Entity<InputState> {
+        &self.path_input
+    }
+
+    pub(crate) fn panel_focus_handle(&self) -> &FocusHandle {
+        &self.focus_handle
+    }
+
+    /// Attach `backend` as the active session without going through
+    /// `AppState` — lets tests script a panel directly.
+    #[cfg(test)]
+    pub(crate) fn attach_backend_for_test(
+        &mut self,
+        backend: Arc<dyn SftpBackend>,
+        cwd: RemotePath,
+        cx: &mut Context<Self>,
+    ) {
+        let key = SftpBrowserStore::global(cx).track_backend(&backend);
+        self.sftp = Some(backend);
+        self.active_key = Some(key);
+        self.browser.set_cwd(cwd);
+    }
+
+    // ── Backend switching ────────────────────────────────────
 
     /// Pull the active SFTP backend + cwd source from this workspace's state.
     ///
@@ -280,7 +310,7 @@ impl SftpPanel {
     ) {
         // Always track the active terminal's cwd source (may change with the tab
         // even when the SFTP backend does not).
-        self.cwd_source = new_cwd_source;
+        self.follow.set_source(new_cwd_source);
         self.refresh_terminal_cwd_cache(cx);
 
         let new_key = super::browser_state::backend_key(&new_sftp);
@@ -294,7 +324,7 @@ impl SftpPanel {
             if self.sftp.as_ref().is_some_and(|backend| backend.alive()) {
                 self.save_state_for_key(old_key, cx);
             } else {
-                super::browser_state::SftpBrowserStore::global(cx).purge_closed();
+                SftpBrowserStore::global(cx).purge_closed();
             }
         }
 
@@ -310,12 +340,12 @@ impl SftpPanel {
         // Restore (or initialize) the NEW backend's view.
         match new_key {
             Some(key) => {
-                let store = super::browser_state::SftpBrowserStore::global(cx);
+                let store = SftpBrowserStore::global(cx);
                 if let Some(backend) = self.sftp.as_ref() {
                     store.track_backend(backend);
                 }
                 let state = store.get_or_default(key);
-                let is_fresh = state.cwd.is_empty();
+                let is_fresh = state.browser.cwd().is_empty();
                 self.apply_state(state, cx);
                 if is_fresh {
                     // First time this backend is shown — load its root dir.
@@ -325,18 +355,11 @@ impl SftpPanel {
             }
             None => {
                 // No SFTP backend (local shell / no SFTP) — show the empty state.
-                self.selected = None;
-                self.error = None;
-                self.cwd = RemotePath::new("");
-                self.transfers.clear();
-                self.next_transfer_id = 0;
-                self.pending_action = None;
-                self.follow_terminal_cwd = false;
-                self.last_followed_cwd = None;
-                self.terminal_cwd_cache = None;
-                self.path_error = false;
+                self.browser = BrowserView::default();
+                self.transfers = TransferQueueView::default();
+                self.follow.clear();
                 self.table.update(cx, |t, cx| {
-                    t.delegate_mut().entries.clear();
+                    t.delegate_mut().set_entries(Vec::new());
                     t.delegate_mut().loading = false;
                     t.clear_selection(cx);
                     cx.notify();
@@ -348,33 +371,25 @@ impl SftpPanel {
     /// Snapshot the panel's current view into the store under `key`.
     ///
     /// Reads the delegate's entries + sort (so the file list is preserved exactly),
-    fn save_state_for_key(
-        &mut self,
-        key: super::browser_state::BackendKey,
-        cx: &mut Context<Self>,
-    ) {
+    fn save_state_for_key(&mut self, key: BackendKey, cx: &mut Context<Self>) {
         let sort = self.table.read(cx).delegate().sort;
-        let store = super::browser_state::SftpBrowserStore::global(cx);
+        let store = SftpBrowserStore::global(cx);
         let entries = if self.entries_dirty {
-            Arc::from(self.table.read(cx).delegate().entries.clone())
+            self.table.read(cx).delegate().entries_snapshot()
         } else {
             store.entries(key)
         };
+        let (follow_terminal_cwd, last_followed_cwd) = self.follow.snapshot();
 
-        let state = super::browser_state::SftpBrowserState {
-            cwd: self.cwd.clone(),
+        let state = SftpBrowserState {
+            browser: self.browser.clone(),
             entries,
             sort,
-            selected: self.selected,
-            error: self.error.clone(),
             transfers: self.transfers.clone(),
-            next_transfer_id: self.next_transfer_id,
-            pending_action: self.pending_action,
-            follow_terminal_cwd: self.follow_terminal_cwd,
-            last_followed_cwd: self.last_followed_cwd.clone(),
-            path_error: self.path_error,
+            follow_terminal_cwd,
+            last_followed_cwd,
         };
-        super::browser_state::SftpBrowserStore::global(cx).save(key, state);
+        store.save(key, state);
         self.snapshot_gate.clear();
         self.entries_dirty = false;
     }
@@ -390,22 +405,23 @@ impl SftpPanel {
         self.mark_state_dirty();
     }
 
+    /// Drain every pending-change flag; `true` when a snapshot is due.
+    fn take_dirty(&mut self) -> bool {
+        // Evaluate every flag so none stays raised for the next tick.
+        let gate = self.snapshot_gate.take();
+        let browser = self.browser.take_dirty();
+        let transfers = self.transfers.take_dirty();
+        let follow = self.follow.take_dirty();
+        gate || browser || transfers || follow
+    }
+
     /// Apply a stored snapshot to the panel + table.
-    fn apply_state(
-        &mut self,
-        state: super::browser_state::SftpBrowserState,
-        cx: &mut Context<Self>,
-    ) {
-        self.cwd = state.cwd;
-        self.selected = state.selected;
-        self.error = state.error;
+    fn apply_state(&mut self, state: SftpBrowserState, cx: &mut Context<Self>) {
+        self.browser = state.browser;
         self.transfers = state.transfers;
-        self.next_transfer_id = state.next_transfer_id;
-        self.pending_action = state.pending_action;
-        self.follow_terminal_cwd = state.follow_terminal_cwd;
-        self.last_followed_cwd = state.last_followed_cwd;
-        self.path_error = state.path_error;
-        self.snapshot_gate.clear();
+        self.follow
+            .restore(state.follow_terminal_cwd, state.last_followed_cwd);
+        self.take_dirty();
         self.entries_dirty = false;
         self.table.update(cx, |t, cx| {
             t.delegate_mut().sort = state.sort;
@@ -422,88 +438,7 @@ impl SftpPanel {
         // which is acceptable.
     }
 
-    // ── Transfer queue helpers (used by transfer.rs tasks) ──────────
-
-    /// Allocate a new transfer id for the ACTIVE backend and push the item both
-    /// into the panel's active view AND the store (so it survives tab switches
-    /// while the task runs). Returns the allocated id, or `None` if no SFTP
-    /// backend is active.
-    pub(crate) fn push_transfer(
-        &mut self,
-        item: TransferItem,
-        cx: &mut Context<Self>,
-    ) -> Option<usize> {
-        let key = self.active_key?;
-        let id = item.id;
-        let store = super::browser_state::SftpBrowserStore::global(cx);
-        // Push into the store (source of truth).
-        if store
-            .with_mut(key, |st| st.transfers.push(item.clone()))
-            .is_none()
-        {
-            log::warn!("SftpPanel: transfer state is unavailable for backend {key:?}");
-            return None;
-        }
-        // Mirror into the active view.
-        self.transfers.push(item);
-        self.next_transfer_id = self.next_transfer_id.saturating_add(1);
-        self.mark_state_dirty();
-        cx.notify();
-        Some(id)
-    }
-
-    /// Update a transfer (by id) for the backend identified by `key` in the
-    /// store, and mirror the updated item into the active view when `key` is the
-    /// active backend. The closure `f` runs once against the store entry; the
-    /// active view's matching item is then overwritten with the store's updated
-    /// copy (so the UI re-renders without calling `f` twice).
-    pub(crate) fn update_transfer_for(
-        &mut self,
-        key: super::browser_state::BackendKey,
-        transfer_id: usize,
-        f: impl FnOnce(&mut TransferItem),
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let store = super::browser_state::SftpBrowserStore::global(cx);
-        let mut updated: Option<TransferItem> = None;
-        let found = store
-            .with_mut(key, |st| {
-                if let Some(item) = st.transfers.iter_mut().find(|t| t.id == transfer_id) {
-                    f(item);
-                    updated = Some(item.clone());
-                    return true;
-                }
-                false
-            })
-            .unwrap_or(false);
-        if let Some(item) = updated {
-            self.mark_state_dirty();
-            if self.active_key == Some(key) {
-                if let Some(view_item) = self.transfers.iter_mut().find(|t| t.id == transfer_id) {
-                    *view_item = item;
-                }
-                cx.notify();
-            }
-        }
-        found
-    }
-
-    /// Allocate+return the next transfer id for the active backend (counter is
-    /// per-backend in the store; this updates the active view's mirror too).
-    pub(crate) fn alloc_transfer_id(&mut self, cx: &mut Context<Self>) -> Option<usize> {
-        let key = self.active_key?;
-        let id = {
-            let store = super::browser_state::SftpBrowserStore::global(cx);
-            store.with_mut(key, |st| {
-                let i = st.next_transfer_id;
-                st.next_transfer_id = i.saturating_add(1);
-                i
-            })?
-        };
-        self.next_transfer_id = id.saturating_add(1);
-        self.mark_state_dirty();
-        Some(id)
-    }
+    // ── Event handlers ───────────────────────────────────────
 
     fn on_table_event(
         &mut self,
@@ -514,8 +449,7 @@ impl SftpPanel {
     ) {
         match event {
             TableEvent::SelectRow(idx) => {
-                self.selected = Some(*idx);
-                self.mark_state_dirty();
+                self.browser.select(Some(*idx));
                 cx.notify();
             }
             TableEvent::DoubleClickedRow(idx) => {
@@ -523,8 +457,7 @@ impl SftpPanel {
                 self.navigate_into(*idx, cx);
             }
             TableEvent::ClearSelection => {
-                self.selected = None;
-                self.mark_state_dirty();
+                self.browser.select(None);
                 cx.notify();
             }
             TableEvent::ColumnWidthsChanged(widths) => {
@@ -559,9 +492,8 @@ impl SftpPanel {
             }
             InputEvent::Change => {
                 // Reset the error highlight when the user types again.
-                if self.path_error {
-                    self.path_error = false;
-                    self.mark_state_dirty();
+                if self.browser.path_error() {
+                    self.browser.set_path_error(false);
                     cx.notify();
                 }
             }
@@ -589,26 +521,34 @@ impl SftpPanel {
                 }
                 match result {
                     Ok(stat) if stat.is_dir => {
-                        this.path_error = false;
-                        this.mark_state_dirty();
+                        this.browser.set_path_error(false);
                         this.load_dir(path, cx);
                     }
                     Ok(_) => {
                         log::warn!("SftpPanel::goto_path: not a directory: \"{path}\"");
-                        this.path_error = true;
-                        this.mark_state_dirty();
+                        this.browser.set_path_error(true);
                         cx.notify();
                     }
                     Err(error) => {
                         log::warn!("SftpPanel::goto_path: invalid path \"{path}\": {error}");
-                        this.path_error = true;
-                        this.mark_state_dirty();
+                        this.browser.set_path_error(true);
                         cx.notify();
                     }
                 }
             });
         })
         .detach();
+    }
+
+    /// Bump the listing generation and return the new value (see `load_generation`).
+    pub(crate) fn next_load_generation(&mut self) -> u64 {
+        self.load_generation = self.load_generation.wrapping_add(1);
+        self.load_generation
+    }
+
+    /// `true` when a listing started at `generation` for backend `key` is still current.
+    pub(crate) fn is_current_load(&self, generation: u64, key: Option<BackendKey>) -> bool {
+        self.load_generation == generation && self.active_key == key
     }
 
     /// Debounce 1s, snapshot the column state (width + visibility) on the UI
