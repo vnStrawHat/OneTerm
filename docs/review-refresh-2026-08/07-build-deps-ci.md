@@ -133,14 +133,14 @@ into the updater.
 
 ## D. CI & release
 
-- [ ] **[High] BUILD-01 — Windows (the primary platform) never runs clippy or the UI test suites.**
+- [x] **[High] BUILD-01 — Windows (the primary platform) never runs clippy or the UI test suites.**
   `.github/workflows/ci.yml` `cross-platform-tests` (l.86-100): fmt/clippy/build/full `cargo test --workspace`
   run only on ubuntu; Windows/macOS run only `-p core -p terminal -p local-shell -p ssh`. The 111 tests in
   `terminal-view`, 57 in `completion`, and the ConPTY-specific `app`/`workspace` code are never compiled or
   tested on Windows in CI. *Fix:* run `cargo clippy --workspace --all-targets -- -D warnings` and
   `cargo test --workspace` on `windows-latest` (with `Swatinem/rust-cache`).
 
-- [ ] **[Medium] BUILD-23 — Workflow edits do not trigger CI.** `ci.yml` `on.push.paths` /
+- [x] **[Medium] BUILD-23 — Workflow edits do not trigger CI.** `ci.yml` `on.push.paths` /
   `on.pull_request.paths` (l.6-27) omit `.github/workflows/**` (and `LICENSE`, `.gitattributes`).
   *Fix:* add `".github/**"` or drop path filtering.
 

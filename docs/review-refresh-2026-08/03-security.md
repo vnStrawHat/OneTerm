@@ -15,7 +15,7 @@ TLS, and remote-controlled unbounded growth in the agent dedup map.
 
 ## A. Terminal input / escape handling
 
-- [ ] **[High] SEC-01 — Bracketed-paste marker stripping is bypassable by nesting.**
+- [x] **[High] SEC-01 — Bracketed-paste marker stripping is bypassable by nesting.**
   `crates/terminal/src/paste.rs:84-114`: single-pass removal reassembles a marker: input
   `"\x1b[20" + "\x1b[201~" + "1~"` → after stripping the inner marker the output is exactly `\x1b[201~`,
   terminating bracketed paste and letting the rest run as keystrokes.
@@ -60,7 +60,7 @@ TLS, and remote-controlled unbounded growth in the agent dedup map.
 
 ## B. SSH / SFTP
 
-- [ ] **[High] SEC-02 — RSA private keys sign with SHA-1 (`ssh-rsa`).**
+- [x] **[High] SEC-02 — RSA private keys sign with SHA-1 (`ssh-rsa`).**
   `crates/ssh/src/session.rs:244` `PrivateKeyWithHashAlg::new(Arc::new(key), None)` — russh maps `None` to the
   legacy `ssh-rsa` (SHA-1). OpenSSH ≥ 8.8 rejects it, and the user only sees "SSH authentication failed".
   *Fix:* `let alg = handle.best_supported_rsa_hash().await?.flatten().or(Some(HashAlg::Sha512));`.
@@ -72,7 +72,7 @@ TLS, and remote-controlled unbounded growth in the agent dedup map.
   is non-empty but no entry matches the algorithm, return `ChangedHostKey` (or a distinct "different key type"
   error requiring stronger confirmation); optionally set `client::Config.preferred.key` to prefer known types.
 
-- [ ] **[Medium] SEC-11 — Symlink checks use `metadata()` (follows links) so `is_symlink()` is never true.**
+- [x] **[Medium] SEC-11 — Symlink checks use `metadata()` (follows links) so `is_symlink()` is never true.**
   `crates/ssh/src/sftp_task/transfer/download.rs:47-50,68-71`, `transfer/staging.rs:61-67`,
   `transfer/upload.rs:383-384`. *Fix:* `symlink_metadata()`; make the tests run on Windows too (TEST-06).
 

@@ -9,23 +9,23 @@
 
 Small, surgical fixes with regression tests. No refactoring.
 
-- [ ] CORR-01 — buffer reliable events outside the `Term` lock (minimal version: per-listener
+- [x] CORR-01 — buffer reliable events outside the `Term` lock (minimal version: per-listener
   `VecDeque` flushed after `advance`) — **both** backends. Test TEST-06.
-- [ ] SEC-01 — strip all `\x1b`/`\x03` in bracketed paste. Test TEST-08.
-- [ ] SEC-02 — RSA `best_supported_rsa_hash()`.
-- [ ] CORR-07 — three `get(..)` slices in completion. Test TEST-07.
-- [ ] CORR-02 — add `Exited`/`Closed` arms to the drain (full dedupe in Phase 2). Test TEST-09.
-- [ ] CORR-03 — put the view back on `fill_empty` `Err`. Test TEST-09.
-- [ ] CORR-05 — forward `Exited(None)` and emit `Closed` on local exit. Test TEST-10.
-- [ ] CORR-06 — `impl Drop for SshSession`. Test TEST-10.
-- [ ] CORR-04 — synchronous (or awaited) docks.json write on close.
-- [ ] CORR-12 — persist `base_font_size`; add roundtrip test TEST-12.
-- [ ] CORR-08 — Linux installer touches only package files.
-- [ ] CORR-23 — ASCII check in `parse_hex_color`.
-- [ ] ARCH-12 stop-gap — sanitise `Rename`/`Mkdir`/`Remove` paths in `sftp_task.rs`; Windows test TEST-11.
-- [ ] SEC-11 — `symlink_metadata()` at the four sites; un-gate the tests from `cfg(unix)` (TEST-11).
-- [ ] BUILD-01 — run clippy + full tests on `windows-latest`.
-- [ ] BUILD-23 — add `.github/**` to CI path filters.
+- [x] SEC-01 — strip all `\x1b`/`\x03` in bracketed paste. Test TEST-08.
+- [x] SEC-02 — RSA `best_supported_rsa_hash()`.
+- [x] CORR-07 — three `get(..)` slices in completion. Test TEST-07.
+- [x] CORR-02 — add `Exited`/`Closed` arms to the drain (full dedupe in Phase 2). Test TEST-09.
+- [x] CORR-03 — put the view back on `fill_empty` `Err`. Test TEST-09.
+- [x] CORR-05 — forward `Exited(None)` and emit `Closed` on local exit. Test TEST-10.
+- [x] CORR-06 — `impl Drop for SshSession`. Test TEST-10.
+- [x] CORR-04 — synchronous (or awaited) docks.json write on close.
+- [x] CORR-12 — persist `base_font_size`; add roundtrip test TEST-12.
+- [x] CORR-08 — Linux installer touches only package files.
+- [x] CORR-23 — ASCII check in `parse_hex_color`.
+- [x] ARCH-12 stop-gap — sanitise `Rename`/`Mkdir`/`Remove` paths in `sftp_task.rs`; Windows test TEST-11.
+- [x] SEC-11 — `symlink_metadata()` at the four sites; un-gate the tests from `cfg(unix)` (TEST-11).
+- [x] BUILD-01 — run clippy + full tests on `windows-latest`.
+- [x] BUILD-23 — add `.github/**` to CI path filters.
 
 ## Phase 1 — Contracts and CI identity (1–2 weeks)
 

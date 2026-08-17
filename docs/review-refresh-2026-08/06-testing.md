@@ -39,20 +39,20 @@ crates are effectively untested (`sftp-ui` 0.8/KLOC, `workspace` 0.5, `settings-
 
 ## B. Missing regression tests for findings in this review
 
-- [ ] **[High] TEST-06 — Pump-under-lock deadlock** (CORR-01): hold the Term lock, saturate the queue, assert the
+- [x] **[High] TEST-06 — Pump-under-lock deadlock** (CORR-01): hold the Term lock, saturate the queue, assert the
   pump does not block.
-- [ ] **[High] TEST-07 — Completion Unicode slices** (CORR-07): fuzzy-then-accept and history-option cases with
+- [x] **[High] TEST-07 — Completion Unicode slices** (CORR-07): fuzzy-then-accept and history-option cases with
   multibyte candidates at `engine.rs:73,83`, `scoring.rs:56`.
-- [ ] **[High] TEST-08 — Nested bracketed-paste marker** (SEC-01): add the vector to
+- [x] **[High] TEST-08 — Nested bracketed-paste marker** (SEC-01): add the vector to
   `session.rs::bracketed_paste_strips_embedded_markers`.
-- [ ] **[Medium] TEST-09 — `Exited` after `Output` in one batch** (CORR-02); drop into a non-empty Space (CORR-03).
-- [ ] **[Medium] TEST-10 — `Exited(None)` on local exit** (CORR-05); `SshSession` drop without close (CORR-06);
+- [x] **[Medium] TEST-09 — `Exited` after `Output` in one batch** (CORR-02); drop into a non-empty Space (CORR-03).
+- [x] **[Medium] TEST-10 — `Exited(None)` on local exit** (CORR-05); `SshSession` drop without close (CORR-06);
   RSA hash selection (SEC-02); changed-algorithm host key (SEC-05).
-- [ ] **[Medium] TEST-11 — SFTP path-safety tests are `#[cfg(unix)]`** (`ssh/src/sftp_task/sftp_task_tests.rs:1-29,66-88`)
+- [x] **[Medium] TEST-11 — SFTP path-safety tests are `#[cfg(unix)]`** (`ssh/src/sftp_task/sftp_task_tests.rs:1-29,66-88`)
   — download-root/symlink protections never run on the Windows-first CI; and SEC-11 shows they are wrong.
   *Fix:* `std::os::windows::fs::symlink_file` under `cfg(windows)`; Windows regression for ARCH-12
   (backslash in remote path).
-- [ ] **[Medium] TEST-12 — `terminal_settings` (apply/persist/color/font) has zero tests** — no
+- [x] **[Medium] TEST-12 — `terminal_settings` (apply/persist/color/font) has zero tests** — no
   `apply_config(to_config())` roundtrip, no `parse_hex_color`/`hsla_to_hex` inverse, no
   `parse_weight`/`weight_to_string` inverse. Would have caught CORR-12 and CORR-23.
 - [ ] **[Medium] TEST-13 — docks.json has no concurrent-update, quarantine, or backup-preservation test at the

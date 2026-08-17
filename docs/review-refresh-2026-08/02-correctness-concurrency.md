@@ -14,7 +14,7 @@ drifted from its source of truth.
 
 ## A. Deadlocks, races, lifecycle
 
-- [ ] **[Critical] CORR-01 — Reliable events are `send_blocking`'d while the `Term` lock is held; the UI
+- [x] **[Critical] CORR-01 — Reliable events are `send_blocking`'d while the `Term` lock is held; the UI
   thread blocks on the same lock.**
   `crates/ssh/src/listener.rs:270-278` and `crates/local-shell/src/listener.rs:180-190` are invoked from
   `Term` callbacks (`Bell`, `Title`, `Cwd`, `Progress`, `ShellIntegration`, `AgentStatus`) during
@@ -31,19 +31,19 @@ drifted from its source of truth.
   latest-value coalescible. Add a regression test that holds the Term lock, saturates the queue, and
   asserts the pump does not block. (Best done together with ARCH-01.)
 
-- [ ] **[High] CORR-02 — `Exited`/`Closed` swallowed when they arrive behind an `Output` batch.**
+- [x] **[High] CORR-02 — `Exited`/`Closed` swallowed when they arrive behind an `Output` batch.**
   `crates/terminal-view/src/view/local_view.rs:468-528` `drain_coalesced_events` handles Clipboard / Bell /
   Notification / Title / Progress / AgentStatus, but `Exited`/`Closed` fall into the generic arm, so
   `mark_agent_ended` (main loop `:255-266`) is skipped whenever a process prints and exits in the same
   batch — the normal case. *Fix:* one shared `handle_event` (ARCH-22) or add the two arms + regression test.
 
-- [ ] **[High] CORR-03 — Tab drag-drop can destroy the user's terminal.**
+- [x] **[High] CORR-03 — Tab drag-drop can destroy the user's terminal.**
   `crates/terminal-view/src/panel/ops.rs:420-437` `handle_tab_drop` *takes* the terminal out of the source
   tree, then on `fill_empty` `Err` calls `view.shutdown(cx)` — killing the live session because the target
   Space stopped being empty. *Fix:* on `Err(view)` put it back (`src.update(|sp| sp.tree.fill_empty(orig_id, view))`)
   or check `self.tree.leaf_terminal(target).is_none()` before taking.
 
-- [ ] **[High] CORR-04 — On-close docks.json save races process exit.**
+- [x] **[High] CORR-04 — On-close docks.json save races process exit.**
   `crates/workspace/src/layout/workspace/mod.rs:57-61` spawns a *detached* background task, then
   `crates/app/src/window.rs:66-69` calls `cx.quit()`. gpui's shutdown only awaits `on_app_quit` observers
   (200 ms); detached tasks are not awaited. The workspace's own `on_app_quit` (`mod.rs:224-242`) is
@@ -51,14 +51,14 @@ drifted from its source of truth.
   *Fix:* write synchronously on the close path, or register an App-level `cx.on_app_quit` in `window.rs`
   returning a future that awaits the write.
 
-- [ ] **[High] CORR-05 — Local exit with `Exited(None)` leaves the session "alive" forever.**
+- [x] **[High] CORR-05 — Local exit with `Exited(None)` leaves the session "alive" forever.**
   `crates/local-shell/src/event_loop.rs:330-344` only clears `alive` and forwards `Exited` when
   `status.is_some()`; alacritty's Windows watcher yields `Exited(None)` when `GetExitCodeProcess` fails or the
   watcher disconnects (`vendor/alacritty_terminal/src/tty/windows/child.rs:43-44`). The thread returns; the
   tab shows a live-but-dead PTY. The local backend also never emits `SessionEvent::Closed`.
   *Fix:* set `alive=false` and forward `Exited(code)` (code may be `None`) unconditionally, then `Closed`.
 
-- [ ] **[High] CORR-06 — `SshSession` has no `Drop`; the task owns senders of its own command channel.**
+- [x] **[High] CORR-06 — `SshSession` has no `Drop`; the task owns senders of its own command channel.**
   `crates/ssh/src/task.rs:110-116` receives `term` (whose `SshListener` owns a `cmd_tx`) and `listener`
   (another `cmd_tx`), so `cmd_rx.recv()` at `task.rs:291-294` can never return `Err` while the task runs;
   `crates/ssh/src/session.rs:62-75` has no `Drop`. A real drop-without-close path exists:
@@ -78,7 +78,7 @@ drifted from its source of truth.
   current iteration and can deadlock with CORR-01. *Fix:* send `Shutdown` and detach; join on a background
   thread or with a bounded timeout.
 
-- [ ] **[Medium] CORR-11 — `Cmd::Close` path exits without `SessionEvent::Closed`.**
+- [x] **[Medium] CORR-11 — `Cmd::Close` path exits without `SessionEvent::Closed`.**
   `crates/ssh/src/task.rs:282-290` breaks silently while the closing-flag path (`124-133`) forwards `Closed`;
   which one runs is a race. *Fix:* single teardown block after the loop.
 
@@ -124,7 +124,7 @@ drifted from its source of truth.
 
 ## B. Logic errors & panics
 
-- [ ] **[High] CORR-07 — Unicode-boundary panics still reachable in completion (3 sites).**
+- [x] **[High] CORR-07 — Unicode-boundary panics still reachable in completion (3 sites).**
   `crates/completion/src/engine.rs:73,75` (`&self.text[..typed.len()]` in `remainder`), `:83`
   (`is_prefix_of_typed`), and `crates/completion/src/engine/scoring.rs:56` (`flag[..token.len()]`).
   Only `history::prefix_match` was fixed in 2d63267. Path: Cmd/PowerShell family, history first-token `日x`,
@@ -132,18 +132,18 @@ drifted from its source of truth.
   byte 1 inside a 3-byte char → panic. *Fix:* `self.text.get(..typed.len())` / `flag.get(..token.len())`
   returning `false`/`None`; regression tests for all three; delete `remainder` (no non-test callers).
 
-- [ ] **[High] CORR-08 — Linux install moves *every* file in `current_exe.parent()` into a backup dir.**
+- [x] **[High] CORR-08 — Linux install moves *every* file in `current_exe.parent()` into a backup dir.**
   `crates/update/src/install.rs:194-212` `replace_directory_contents`. If the binary lives in `~/.local/bin`
   or `/usr/local/bin`, all sibling tools are relocated to `.bin.backup-<pid>-<ts>` and never restored on
   success. *Fix:* restrict to files present in the package; remove the backup after successful launch.
 
-- [ ] **[Medium] CORR-12 — Zoomed font size persisted as the configured size.**
+- [x] **[Medium] CORR-12 — Zoomed font size persisted as the configured size.**
   `crates/settings/src/terminal_settings/persist.rs:65` writes `size: self.font_size` (live, zoom-modified;
   see `settings.rs:523-528`, `mutators.rs:150-165`, `terminal-view/src/handlers/keyboard.rs:93-114`). Any
   subsequent `persist_global` writes the zoomed size into `terminal.json`, and on next launch it becomes the
   base. *Fix:* `size: self.base_font_size` + roundtrip test (ARCH-16).
 
-- [ ] **[Medium] CORR-23 — Panic on non-ASCII 6-byte colour strings.**
+- [x] **[Medium] CORR-23 — Panic on non-ASCII 6-byte colour strings.**
   `crates/settings/src/terminal_settings/color.rs:12-17` checks `s.len() != 6` (bytes) then slices
   `&s[0..2]`; reachable at startup from a user-edited `terminal.json` (`apply.rs:34,86-99`).
   *Fix:* `if !s.is_ascii() || s.len() != 6 { return None }` or `s.get(0..2)?`.

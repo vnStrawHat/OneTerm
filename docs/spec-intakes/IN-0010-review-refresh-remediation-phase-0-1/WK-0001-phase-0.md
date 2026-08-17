@@ -8,8 +8,8 @@ Created: 2026-08-17
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [ ] Planned
-- [x] In progress
-- [ ] Implemented
+- [ ] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -33,8 +33,8 @@ All Phase 0 items in `docs/review-refresh-2026-08/09-remediation-plan.md` are fi
 
 ## Acceptance
 
-- [ ] Each item's regression test exists and passes.
-- [ ] Workspace gates green on the integration branch.
+- [x] Each item's regression test exists and passes.
+- [x] Workspace gates green on the integration branch (fmt, clippy -D warnings, 632 tests, build, 4 Python checks; 2026-08-17).
 
 ## Documentation
 
@@ -49,7 +49,7 @@ Update required: `docs/terminal-backend.md` (event delivery no longer blocks und
 
 ### Reconciliation
 
-To be filled at completion.
+`docs/terminal-backend.md` §5.3/§6.5/§7 updated (event delivery never blocks under the Term lock). No other owning contract changed.
 
 ## Plan
 
@@ -60,13 +60,14 @@ To be filled at completion.
 Per-crate `cargo test -p`, then full workspace gate on the merged branch.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Platform proof (Windows local; Linux/macOS via CI)
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-To be filled at completion.
+- Commits: dec800f, 74838d2, fff31f3, a4e17af, 76ae76d, 42d9a51, 3986790, 73193ce, c2960f1, 8f855e7, b76a881, 5f75ab7, d5d2ca1 (merged into `fix/review-remediation-phase-0-1`).
+- Gaps: CORR-04 has no unit test (no injectable path seam for docks.json in `workspace`); ARCH-12 is the stop-gap only (proper `RemotePath` in WK-0002); Linux/macOS runs of the new updater tests happen only in CI.
