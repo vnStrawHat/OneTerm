@@ -38,7 +38,7 @@ impl Default for PastePolicy {
 pub enum PasteMode {
     /// Wrap the payload in `ESC[200~…ESC[201~` and strip embedded markers.
     Bracketed,
-    /// Pass the payload through unchanged.
+    /// No delimiters; line breaks are rewritten to `\r` (see [`encode_paste`]).
     Plain,
 }
 
@@ -55,7 +55,10 @@ pub enum PasteResult {
 ///
 /// - [`PasteMode::Bracketed`]: wraps the text in `ESC[200~…ESC[201~` after
 ///   stripping embedded markers and every remaining ESC / `\x03` byte.
-/// - [`PasteMode::Plain`]: passes the text through as-is.
+/// - [`PasteMode::Plain`]: no delimiters, but `\r\n` and `\n` are rewritten
+///   to `\r`. Without bracketed paste the receiver treats the payload as
+///   keystrokes, and Enter is `\r` on the wire: raw-mode apps and cmd/ConPTY
+///   would otherwise see a bare LF (alacritty applies the same rewrite).
 ///
 /// Stripping ESC (not just the marker sequences) guarantees the payload cannot
 /// contain `ESC[201~` in any form, so pasted content cannot terminate
@@ -67,7 +70,7 @@ pub fn encode_paste(text: &str, mode: PasteMode, policy: &PastePolicy) -> PasteR
     }
 
     if mode == PasteMode::Plain {
-        return PasteResult::Ok(text.as_bytes().to_vec());
+        return PasteResult::Ok(text.replace("\r\n", "\r").replace('\n', "\r").into_bytes());
     }
 
     // Strip ESC / ETX so the payload cannot forge a paste terminator.
@@ -267,6 +270,29 @@ mod tests {
         let large = "x".repeat(1024 * 1024 + 1);
         let result = encode_paste(&large, PasteMode::Plain, &policy);
         assert!(matches!(result, PasteResult::Ok(_)));
+    }
+
+    #[test]
+    fn plain_paste_rewrites_line_breaks_to_cr() {
+        // Non-bracketed paste is delivered as keystrokes: LF and CRLF must
+        // become CR (Enter), never a bare LF or a doubled CR CR.
+        let text = "line one\nline two\r\nline three\rline four\n";
+        let result = encode_paste(text, PasteMode::Plain, &PastePolicy::default());
+        assert_eq!(
+            result,
+            PasteResult::Ok(b"line one\rline two\rline three\rline four\r".to_vec())
+        );
+    }
+
+    #[test]
+    fn bracketed_paste_keeps_line_breaks() {
+        // Bracketed paste hands the app the raw text; it decides what LF means.
+        let text = "a\nb\r\nc";
+        let result = encode_paste(text, PasteMode::Bracketed, &PastePolicy::default());
+        assert_eq!(
+            result,
+            PasteResult::Ok(b"\x1b[200~a\nb\r\nc\x1b[201~".to_vec())
+        );
     }
 
     #[test]

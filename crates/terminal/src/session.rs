@@ -634,8 +634,12 @@ mod tests {
         use crate::test_support::FakeTerminalSession;
 
         let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
+        // Plain (non-bracketed) paste keeps unicode/controls but rewrites LF → CR.
         let text = "Héllo\n世界\0\u{0001}";
         session.paste(text);
-        assert_eq!(probe.writes(), vec![text.as_bytes().to_vec()]);
+        assert_eq!(
+            probe.writes(),
+            vec!["Héllo\r世界\0\u{0001}".as_bytes().to_vec()]
+        );
     }
 }
