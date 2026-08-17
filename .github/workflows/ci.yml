@@ -15,6 +15,7 @@ on:
       - "scripts/**"
       - "crates/**"
       - "vendor/**"
+      - ".github/**"
   pull_request:
     paths:
       - "Cargo.toml"
@@ -26,6 +27,7 @@ on:
       - "scripts/**"
       - "crates/**"
       - "vendor/**"
+      - ".github/**"
 
 permissions:
   contents: read
