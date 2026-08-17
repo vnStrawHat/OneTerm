@@ -289,7 +289,14 @@ impl UpdateManager {
         })();
 
         if result.is_err() {
-            let _ = std::fs::remove_dir_all(&stage_root);
+            // Best effort: the download failure is what gets reported; a
+            // leftover staging directory only wastes disk space, but say so.
+            if let Err(error) = std::fs::remove_dir_all(&stage_root) {
+                log::warn!(
+                    "failed to remove update staging directory {}: {error}",
+                    stage_root.display()
+                );
+            }
         }
 
         result
