@@ -16,7 +16,7 @@ use gpui_component::{
     notification::NotificationType,
     v_flex,
 };
-use oneterm_core::{FileStat, RemotePath, SftpBackend};
+use oneterm_core::{FileEntry, RemotePath, SftpBackend};
 use oneterm_state::notif_ext::notify;
 
 use super::panel::SftpPanel;
@@ -483,7 +483,7 @@ fn delete_confirmation(entry_name: &str, is_dir: bool) -> String {
     }
 }
 
-fn open_properties_dialog(stat: FileStat, window: &mut Window, cx: &mut App) {
+fn open_properties_dialog(stat: FileEntry, window: &mut Window, cx: &mut App) {
     log::debug!(
         "SftpPanel: stat OK — size={}, perm={:#o}, uid={:?}, gid={:?}",
         stat.size,

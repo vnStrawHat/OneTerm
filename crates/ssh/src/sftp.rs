@@ -3,7 +3,7 @@
 //! Sent between the UI thread (sync) and the tokio task (async) via
 //! `async_channel`. Similar to the `Cmd`/`SessionEvent` pattern in `listener.rs`.
 //!
-//! `FileEntry`, `FileStat`, `RemotePath` are defined in the `core` crate (a leaf
+//! `FileEntry` and `RemotePath` are defined in the `core` crate (a leaf
 //! crate that does not depend on `ssh`). The `SftpBackend` trait is also in
 //! `core`. `SftpSession` implements `SftpBackend` here.
 
@@ -14,7 +14,7 @@ use async_channel::{Receiver, Sender};
 use tokio::sync::oneshot;
 
 use oneterm_core::{
-    AppError, FileEntry, FileStat, RemotePath, Result, SftpBackend, SftpSessionId, TransferEvent,
+    AppError, FileEntry, RemotePath, Result, SftpBackend, SftpSessionId, TransferEvent,
     TransferHandle,
 };
 
@@ -30,7 +30,7 @@ pub enum SftpCmd {
     /// Get metadata for a single file/folder.
     Stat {
         path: RemotePath,
-        reply: oneshot::Sender<Result<FileStat>>,
+        reply: oneshot::Sender<Result<FileEntry>>,
     },
     /// Rename a file/folder.
     Rename {
@@ -181,7 +181,7 @@ impl SftpBackend for SftpSession {
         Box::pin(self.request(|reply| SftpCmd::ReadDir { path, reply }))
     }
 
-    fn stat(&self, path: RemotePath) -> oneterm_core::SftpFuture<'_, FileStat> {
+    fn stat(&self, path: RemotePath) -> oneterm_core::SftpFuture<'_, FileEntry> {
         Box::pin(self.request(|reply| SftpCmd::Stat { path, reply }))
     }
 

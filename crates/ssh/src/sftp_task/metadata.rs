@@ -6,7 +6,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use russh_sftp::client::SftpSession as SftpChannel;
 use russh_sftp::protocol::FileAttributes;
 
-use oneterm_core::{FileEntry, FileStat, RemotePath, Result};
+use oneterm_core::{FileEntry, RemotePath, Result};
 
 use super::map_sftp_err;
 
@@ -182,32 +182,18 @@ pub(super) async fn sftp_read_dir(
     Ok(entries)
 }
 
-/// Get detailed metadata.
+/// Get detailed metadata for one path (follows symlinks, like `stat(2)`).
 pub(super) async fn sftp_stat(
     sftp: &SftpChannel,
     path: &RemotePath,
     lookup: &UidGidLookup,
-) -> Result<FileStat> {
+) -> Result<FileEntry> {
     let attrs = sftp.metadata(path.as_str()).await.map_err(map_sftp_err)?;
-
     let name = path.file_name().unwrap_or_default().to_string();
-
-    Ok(FileStat {
-        name,
-        path: path.clone(),
-        is_dir: attrs.is_dir(),
-        is_symlink: attrs.is_symlink(),
-        size: attrs.size.unwrap_or(0),
-        modified: attrs
-            .mtime
-            .map(|t| UNIX_EPOCH + Duration::from_secs(t as u64)),
-        accessed: attrs
-            .atime
-            .map(|t| UNIX_EPOCH + Duration::from_secs(t as u64)),
-        permissions: attrs.permissions.unwrap_or(0),
-        uid: attrs.uid,
-        gid: attrs.gid,
-        owner: lookup.uid_name(attrs.uid),
-        group: lookup.gid_name(attrs.gid),
-    })
+    let parent = path.parent().unwrap_or_else(RemotePath::root);
+    let mut entry = attrs_to_entry(name, &parent, &attrs, lookup);
+    // `attrs_to_entry` re-joins parent + name, which loses the original spelling
+    // of the root, `.` and other nameless paths; keep the caller's path verbatim.
+    entry.path = path.clone();
+    Ok(entry)
 }

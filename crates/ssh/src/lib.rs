@@ -19,7 +19,7 @@ pub(crate) mod task;
 
 pub use config::{SshAuthMethod, SshConfig};
 pub use listener::{Cmd, SshListener};
-pub use oneterm_core::{FileEntry, FileStat};
+pub use oneterm_core::FileEntry;
 pub use oneterm_terminal::PtySize;
 pub use session::{SshSession, connect};
 pub use sftp::{SftpCmd, SftpEvent, SftpSession};
