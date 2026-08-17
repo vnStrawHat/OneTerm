@@ -47,7 +47,7 @@ impl Render for SftpPanel {
         }
 
         // Sync the path input value with cwd (only when the input is not focused).
-        let cwd_display = self.cwd.display().to_string();
+        let cwd_display = self.cwd.to_string();
         let path_focused = self.path_input.read(cx).focus_handle(cx).is_focused(window);
         let path_value = self.path_input.read(cx).value().to_string();
         if !path_focused && path_value != cwd_display {
@@ -119,7 +119,7 @@ impl SftpPanel {
         let terminal_cwd = self.terminal_cwd();
         let sync_enabled = terminal_cwd.is_some();
         let sync_tooltip = match &terminal_cwd {
-            Some(p) => format!("Go to terminal's current directory: {}", p.display()),
+            Some(p) => format!("Go to terminal's current directory: {p}"),
             None => "Terminal has not reported a directory (needs shell integration / OSC 7)"
                 .to_string(),
         };

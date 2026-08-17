@@ -3,19 +3,17 @@
 //!
 //! Split out from [`super::panel`] to keep each file under the ~400-line guideline.
 
-use std::path::PathBuf;
-
 use gpui::{App, Context};
 
-use oneterm_core::FileEntry;
+use oneterm_core::{FileEntry, RemotePath};
 
 use super::panel::SftpPanel;
 use super::types::SortColumn;
 
 impl SftpPanel {
     /// Read a directory — spawn a background task, does not block the UI.
-    pub(crate) fn load_dir(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        log::debug!("SftpPanel::load_dir: path=\"{}\"", path.display());
+    pub(crate) fn load_dir(&mut self, path: RemotePath, cx: &mut Context<Self>) {
+        log::debug!("SftpPanel::load_dir: path=\"{path}\"");
 
         let sftp = match &self.sftp {
             Some(s) => s.clone(),
@@ -41,85 +39,89 @@ impl SftpPanel {
         cx.notify();
 
         cx.spawn(async move |this, cx| {
-            log::debug!(
-                "SftpPanel::load_dir: spawning background read_dir for \"{}\"",
-                path.display()
-            );
+            log::debug!("SftpPanel::load_dir: spawning background read_dir for \"{path}\"");
 
-            let result = sftp.read_dir(path).await;
+            let result = sftp.read_dir(path.clone()).await;
 
-            this.update(cx, |this, cx| {
-                this.table.update(cx, |t, cx| {
-                    t.delegate_mut().loading = false;
-                    cx.notify();
-                });
-                match result {
-                    Ok(entries) => {
-                        log::info!(
-                            "SftpPanel::load_dir: got {} entries for \"{}\"",
-                            entries.len(),
-                            this.cwd.display()
-                        );
-
-                        // Update cwd with the absolute path from the first entry.
-                        let mut cwd = this.cwd.clone();
-                        if let Some(first) = entries.first() {
-                            if let Some(parent) = first.path.parent() {
-                                cwd = parent.to_path_buf();
-                            }
-                        }
-                        this.cwd = cwd;
-
-                        this.table.update(cx, |t, cx| {
-                            t.delegate_mut().set_entries(entries);
-                            t.refresh(cx);
-                        });
-                        this.error = None;
-                        this.mark_entries_dirty();
-                    }
-                    Err(e) => {
-                        log::error!("SftpPanel::load_dir: read_dir failed: {e}");
-                        this.error = Some(e.to_string());
-                        this.table.update(cx, |t, cx| {
-                            t.delegate_mut().entries.clear();
-                            t.refresh(cx);
-                        });
-                    }
-                }
-                this.mark_state_dirty();
-                cx.notify();
-            })
+            // The panel may be gone before the listing arrives; nothing to apply then.
+            _ = this.update(cx, |this, cx| this.apply_listing(result, cx))
         })
         .detach();
     }
 
+    /// Apply the outcome of the most recent `read_dir` to the active view.
+    fn apply_listing(
+        &mut self,
+        result: oneterm_core::Result<Vec<FileEntry>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.table.update(cx, |t, cx| {
+            t.delegate_mut().loading = false;
+            cx.notify();
+        });
+        match result {
+            Ok(entries) => {
+                log::info!(
+                    "SftpPanel::load_dir: got {} entries for \"{}\"",
+                    entries.len(),
+                    self.cwd
+                );
+
+                // A relative request (e.g. the initial `.`) is resolved by the
+                // backend; the entries carry the absolute directory.
+                if let Some(parent) = entries.first().and_then(|first| first.path.parent()) {
+                    self.cwd = parent;
+                }
+
+                self.table.update(cx, |t, cx| {
+                    t.delegate_mut().set_entries(entries);
+                    t.refresh(cx);
+                });
+                self.error = None;
+                self.mark_entries_dirty();
+            }
+            Err(e) => {
+                log::error!("SftpPanel::load_dir: read_dir failed: {e}");
+                self.error = Some(e.to_string());
+                self.table.update(cx, |t, cx| {
+                    t.delegate_mut().entries.clear();
+                    t.refresh(cx);
+                });
+            }
+        }
+        self.mark_state_dirty();
+        cx.notify();
+    }
+
     /// Navigate up to the parent directory.
     pub(crate) fn navigate_parent(&mut self, cx: &mut Context<Self>) {
-        let parent = match self.cwd.parent() {
-            Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
-            _ => {
-                log::debug!("SftpPanel::navigate_parent: already at root");
-                return;
-            }
+        let Some(parent) = self.cwd.parent() else {
+            log::debug!("SftpPanel::navigate_parent: already at root");
+            return;
         };
         log::debug!(
-            "SftpPanel::navigate_parent: \"{}\" → \"{}\"",
-            self.cwd.display(),
-            parent.display()
+            "SftpPanel::navigate_parent: \"{}\" → \"{parent}\"",
+            self.cwd
         );
         self.load_dir(parent, cx);
     }
 
     /// Refresh the current directory.
     pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
-        log::debug!("SftpPanel::refresh: refreshing \"{}\"", self.cwd.display());
+        log::debug!("SftpPanel::refresh: refreshing \"{}\"", self.cwd);
         self.load_dir(self.cwd.clone(), cx);
     }
 
     /// The current working directory of the active terminal (OSC 7), read live.
     /// Used to compute the "sync" button's enabled state + tooltip.
-    pub(crate) fn terminal_cwd(&self) -> Option<PathBuf> {
-        self.cwd_source.as_ref().and_then(|s| s.cwd())
+    ///
+    /// The terminal reports its cwd as a host `PathBuf`; for an SSH tab it names
+    /// a remote directory, so it is converted to a [`RemotePath`] here.
+    pub(crate) fn terminal_cwd(&self) -> Option<RemotePath> {
+        self.cwd_source
+            .as_ref()
+            .and_then(|s| s.cwd())
+            .map(|cwd| RemotePath::new(cwd.to_string_lossy()))
     }
 
     /// Refresh the cached terminal cwd and notify when the sync button state or
@@ -147,9 +149,8 @@ impl SftpPanel {
             }
         };
         log::info!(
-            "SftpPanel::sync_to_terminal_cwd: \"{}\" → \"{}\"",
-            self.cwd.display(),
-            cwd.display()
+            "SftpPanel::sync_to_terminal_cwd: \"{}\" → \"{cwd}\"",
+            self.cwd
         );
         // `goto_path` stats the path (dir check) + handles errors + load_dir.
         self.goto_path(cwd, cx);
@@ -197,9 +198,8 @@ impl SftpPanel {
             return;
         }
         log::debug!(
-            "SftpPanel::maybe_follow_terminal_cwd: auto-follow \"{}\" → \"{}\"",
-            self.cwd.display(),
-            cwd.display()
+            "SftpPanel::maybe_follow_terminal_cwd: auto-follow \"{}\" → \"{cwd}\"",
+            self.cwd
         );
         self.last_followed_cwd = Some(cwd.clone());
         self.mark_state_dirty();
@@ -213,8 +213,8 @@ impl SftpPanel {
             Some(entry) if entry.is_dir => {
                 log::debug!(
                     "SftpPanel::navigate_into: \"{}\" → \"{}\"",
-                    self.cwd.display(),
-                    entry.path.display()
+                    self.cwd,
+                    entry.path
                 );
                 self.load_dir(entry.path.clone(), cx);
             }

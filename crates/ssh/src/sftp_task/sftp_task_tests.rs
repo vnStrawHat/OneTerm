@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use oneterm_core::RemotePath;
+
 use super::transfer::staging::{finalize_local_file, temporary_local_sibling};
 use super::transfer::upload::{LocalUploadEntry, stream_local_upload_entries};
 use super::*;
@@ -125,25 +127,6 @@ async fn refuses_preexisting_symlink_below_download_root() {
     let _ = std::fs::remove_dir_all(&outside);
 }
 
-/// ARCH-12 stop-gap: remote paths built with `Path::join` on Windows carry `\`;
-/// Rename/Mkdir/Remove must send `/` like every other command. The input is
-/// spelled out as a string so the test is meaningful on every host OS.
-#[test]
-fn remote_paths_are_sent_with_forward_slashes() {
-    assert_eq!(
-        remote_path_string(Path::new("/home/u\\b.txt")),
-        "/home/u/b.txt"
-    );
-    assert_eq!(
-        remote_path_string(Path::new("/home/u\\dir\\sub")),
-        "/home/u/dir/sub"
-    );
-    assert_eq!(
-        remote_path_string(Path::new("/home/u/plain")),
-        "/home/u/plain"
-    );
-}
-
 #[test]
 fn active_transfer_guard_removes_token_on_drop() {
     let transfers: ActiveTransfers = Arc::new(std::sync::Mutex::new(HashMap::new()));
@@ -164,7 +147,7 @@ fn local_traversal_stops_before_filesystem_access_when_cancelled() {
     let (entries, _receiver) = async_channel::bounded(1);
     let error = stream_local_upload_entries(
         PathBuf::from("missing"),
-        PathBuf::from("/remote"),
+        RemotePath::new("/remote"),
         cancel,
         &entries,
     )
@@ -177,13 +160,13 @@ fn local_upload_discovery_cancels_while_channel_is_full() {
     let cancel = CancellationToken::new();
     let (entries, _receiver) = async_channel::bounded(1);
     entries
-        .try_send(LocalUploadEntry::Directory(PathBuf::from("/occupied")))
+        .try_send(LocalUploadEntry::Directory(RemotePath::new("/occupied")))
         .unwrap();
     let traversal_cancel = cancel.clone();
     let traversal = std::thread::spawn(move || {
         stream_local_upload_entries(
             PathBuf::from("missing"),
-            PathBuf::from("/remote"),
+            RemotePath::new("/remote"),
             traversal_cancel,
             &entries,
         )
@@ -207,7 +190,7 @@ fn local_upload_discovery_streams_directories_and_files() {
 
     stream_local_upload_entries(
         root.clone(),
-        PathBuf::from("/remote"),
+        RemotePath::new("/remote"),
         CancellationToken::new(),
         &entries,
     )
@@ -216,6 +199,16 @@ fn local_upload_discovery_streams_directories_and_files() {
     let mut discovered = Vec::new();
     while let Ok(entry) = receiver.try_recv() {
         discovered.push(entry);
+    }
+
+    // Remote targets are built with `/` on every host OS (ARCH-12).
+    for entry in &discovered {
+        let remote = match entry {
+            LocalUploadEntry::Directory(remote) => remote,
+            LocalUploadEntry::File { remote, .. } => remote,
+        };
+        assert!(remote.as_str().starts_with("/remote"), "{remote}");
+        assert!(!remote.as_str().contains('\\'), "{remote}");
     }
 
     assert_eq!(

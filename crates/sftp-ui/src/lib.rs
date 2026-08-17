@@ -13,6 +13,8 @@ mod render;
 mod render_transfer;
 mod table_delegate;
 mod table_delegate_menu;
+#[cfg(test)]
+mod test_backend;
 mod transfer;
 mod types;
 

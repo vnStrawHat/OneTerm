@@ -1311,7 +1311,7 @@ Step 1: Dependency + types
 
 - [x] Toolbar buttons: Upload, Download, Rename, Delete, New Folder, Properties
 - [x] Rename: dialog (InputState) → `sftp.rename()`
-- [x] Delete: confirm dialog → `sftp.remove()` / `sftp.rmdir()`
+- [x] Delete: confirm dialog → `sftp.remove()` / `sftp.remove_dir_all()` (recursive; the dialog says so)
 - [x] New Folder: dialog → `sftp.mkdir()`
 - [x] Upload: file picker dialog → `sftp.upload()` → add to transfer queue
 - [x] Download: file picker dialog → `sftp.download()` → add to transfer queue
@@ -1386,6 +1386,61 @@ impl oneterm_core::SftpBackend for SftpSession {
 // crates/core/src/terminal/session.rs — add to the TerminalSession trait:
 fn sftp(&self) -> Option<Arc<dyn SftpBackend>> { None }
 ```
+
+### 5.3.1. Current `SftpBackend` contract (review refresh 2026-08)
+
+The sketch above is the original design; the trait as shipped in
+`crates/core/src/sftp.rs` differs in three ways (ARCH-12, ARCH-05, ARCH-04):
+
+**Remote paths are `RemotePath`, never `PathBuf`.** Remote locations are POSIX and
+must stay `/`-separated on every host OS — `PathBuf::join` inserts `\` on Windows,
+which an SFTP server treats as part of the file name. `oneterm_core::RemotePath` is a
+`String` newtype whose constructor normalises `\` → `/`, collapses duplicate slashes
+and drops a trailing slash (except for the root). It offers `root()`, `join(&str)`,
+`parent()`, `file_name()`, `as_str()`, `is_absolute()`, `Display`, `From<&str>` /
+`From<String>` and transparent serde. `FileEntry.path`, `FileStat.path`, and every
+remote parameter of the trait use it; only the local side of a transfer
+(`upload` source, `download` destination) remains a host `PathBuf`. The UI keeps
+its `cwd` as a `RemotePath` and converts the terminal's OSC 7 cwd at the boundary.
+
+**Transfers return a `TransferHandle`.** `upload`/`download` return
+`TransferHandle { events: Receiver<TransferEvent>, result: Receiver<Result<()>> }`
+with `enum TransferEvent { Progress(f64), Cancelled }`. Progress is always in
+`0.0..=1.0`; cancellation is an explicit event (and the result is
+`Err(AppError::Cancelled)`), never a negative sentinel. The UI drives one shared
+`run_transfer` loop for both directions: an item always ends `Completed`,
+`Cancelled`, or `Error`, and a cancelled/failed file does not abort the rest of an
+upload batch.
+
+**`rmdir` is `remove_dir_all`.** The method removes a directory and everything
+below it with a bounded traversal (depth and entry limits). It `lstat`s the root
+first: a symlinked root or a non-directory is unlinked with `remove_file`, so a
+symlink to a directory never causes the target's contents to be deleted; symlinks
+below the root are unlinked, not followed; `read_dir` errors are propagated instead
+of being mistaken for "not a directory". The delete confirmation dialog states that
+the folder *and all of its contents* will be deleted.
+
+```rust
+pub trait SftpBackend: Send + Sync + 'static {
+    fn session_id(&self) -> SftpSessionId;
+    fn read_dir(&self, path: RemotePath) -> SftpFuture<'_, Vec<FileEntry>>;
+    fn stat(&self, path: RemotePath) -> SftpFuture<'_, FileStat>;
+    fn rename(&self, from: RemotePath, to: RemotePath) -> SftpFuture<'_, ()>;
+    fn remove(&self, path: RemotePath) -> SftpFuture<'_, ()>;
+    fn remove_dir_all(&self, path: RemotePath) -> SftpFuture<'_, ()>;
+    fn mkdir(&self, path: RemotePath) -> SftpFuture<'_, ()>;
+    fn upload(&self, transfer_id: u64, local: PathBuf, remote: RemotePath) -> TransferHandle;
+    fn download(&self, transfer_id: u64, remote: RemotePath, local: PathBuf) -> TransferHandle;
+    fn cancel_transfer(&self, transfer_id: u64);
+    fn close(&self);
+    fn alive(&self) -> bool;
+}
+```
+
+Directory listings in the panel are guarded by a request generation
+(`SftpPanel::load_generation`) plus the active backend key: a `read_dir` result is
+applied only when both still match, so a slower earlier listing can neither replace
+a newer one nor rewrite `cwd` (CORR-09).
 
 ### 5.4. Final file layout
 

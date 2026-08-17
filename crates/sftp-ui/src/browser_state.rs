@@ -18,12 +18,11 @@
 //! snapshot and reappears when the user switches back to that tab.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use gpui::{App, Global};
 
-use oneterm_core::{FileEntry, SftpBackend, SftpSessionId};
+use oneterm_core::{FileEntry, RemotePath, SftpBackend, SftpSessionId};
 
 use super::types::{PendingAction, SortColumn, SortDir, TransferItem};
 
@@ -66,7 +65,8 @@ pub(crate) fn backend_key(sftp: &Option<Arc<dyn SftpBackend>>) -> Option<Backend
 /// transfer's progress updates land here even while another tab is active.
 #[derive(Clone)]
 pub(crate) struct SftpBrowserState {
-    pub cwd: PathBuf,
+    /// Remote working directory; empty until the first listing completes.
+    pub cwd: RemotePath,
     /// Immutable entries make unchanged snapshots O(1) in directory size.
     pub entries: Arc<[FileEntry]>,
     pub sort: Option<(SortColumn, SortDir)>,
@@ -79,7 +79,7 @@ pub(crate) struct SftpBrowserState {
     pub pending_action: Option<PendingAction>,
 
     pub follow_terminal_cwd: bool,
-    pub last_followed_cwd: Option<PathBuf>,
+    pub last_followed_cwd: Option<RemotePath>,
 
     /// Path input error flag, captured so the error highlight survives a tab
     /// switch. (The input value itself is re-synced from `cwd` in `render`.)
@@ -89,7 +89,7 @@ pub(crate) struct SftpBrowserState {
 impl Default for SftpBrowserState {
     fn default() -> Self {
         Self {
-            cwd: PathBuf::new(),
+            cwd: RemotePath::new(""),
             entries: Arc::from([]),
             sort: None,
             selected: None,
@@ -215,102 +215,17 @@ mod tests {
         assert!(!gate.take());
     }
 
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    use async_channel::Receiver;
-    use oneterm_core::{AppError, FileStat, Result, SftpFuture};
-
     use super::*;
-
-    struct TestBackend {
-        id: SftpSessionId,
-        alive: AtomicBool,
-    }
-
-    impl TestBackend {
-        fn new() -> Self {
-            Self {
-                id: SftpSessionId::next(),
-                alive: AtomicBool::new(true),
-            }
-        }
-
-        fn unused<T: Send + 'static>() -> SftpFuture<'static, T> {
-            Box::pin(async { Err(AppError::msg("unused test operation")) })
-        }
-    }
-
-    impl SftpBackend for TestBackend {
-        fn session_id(&self) -> SftpSessionId {
-            self.id
-        }
-
-        fn read_dir(&self, _path: PathBuf) -> SftpFuture<'_, Vec<FileEntry>> {
-            Self::unused()
-        }
-
-        fn stat(&self, _path: PathBuf) -> SftpFuture<'_, FileStat> {
-            Self::unused()
-        }
-
-        fn rename(&self, _from: PathBuf, _to: PathBuf) -> SftpFuture<'_, ()> {
-            Self::unused()
-        }
-
-        fn remove(&self, _path: PathBuf) -> SftpFuture<'_, ()> {
-            Self::unused()
-        }
-
-        fn rmdir(&self, _path: PathBuf) -> SftpFuture<'_, ()> {
-            Self::unused()
-        }
-
-        fn mkdir(&self, _path: PathBuf) -> SftpFuture<'_, ()> {
-            Self::unused()
-        }
-
-        fn upload(
-            &self,
-            _transfer_id: u64,
-            _local: PathBuf,
-            _remote: PathBuf,
-        ) -> (Receiver<f64>, Receiver<Result<()>>) {
-            let (_progress_tx, progress_rx) = async_channel::bounded(1);
-            let (reply_tx, reply_rx) = async_channel::bounded(1);
-            reply_tx
-                .try_send(Err(AppError::msg("unused test operation")))
-                .unwrap();
-            (progress_rx, reply_rx)
-        }
-
-        fn download(
-            &self,
-            transfer_id: u64,
-            remote: PathBuf,
-            local: PathBuf,
-        ) -> (Receiver<f64>, Receiver<Result<()>>) {
-            self.upload(transfer_id, remote, local)
-        }
-
-        fn cancel_transfer(&self, _transfer_id: u64) {}
-
-        fn close(&self) {
-            self.alive.store(false, Ordering::Relaxed);
-        }
-
-        fn alive(&self) -> bool {
-            self.alive.load(Ordering::Relaxed)
-        }
-    }
+    use crate::test_backend::FakeSftpBackend;
 
     #[test]
     fn closed_backend_state_is_purged_and_cannot_be_recreated() {
         let store = SftpBrowserStore(std::sync::Mutex::new(SftpBrowserStoreData::default()));
-        let backend: Arc<dyn SftpBackend> = Arc::new(TestBackend::new());
+        let backend: Arc<dyn SftpBackend> = Arc::new(FakeSftpBackend::new());
         let key = store.track_backend(&backend);
         assert!(
             store
-                .with_mut(key, |state| state.cwd = PathBuf::from("/tmp"))
+                .with_mut(key, |state| state.cwd = RemotePath::new("/tmp"))
                 .is_some()
         );
 

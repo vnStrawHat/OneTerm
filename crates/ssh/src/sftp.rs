@@ -3,9 +3,9 @@
 //! Sent between the UI thread (sync) and the tokio task (async) via
 //! `async_channel`. Similar to the `Cmd`/`SessionEvent` pattern in `listener.rs`.
 //!
-//! `FileEntry`, `FileStat` are defined in the `core` crate (a leaf crate that
-//! does not depend on `ssh`). The `SftpBackend` trait is also in `core`.
-//! `SftpSession` implements `SftpBackend` here.
+//! `FileEntry`, `FileStat`, `RemotePath` are defined in the `core` crate (a leaf
+//! crate that does not depend on `ssh`). The `SftpBackend` trait is also in
+//! `core`. `SftpSession` implements `SftpBackend` here.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -13,10 +13,10 @@ use std::sync::{Arc, Mutex};
 use async_channel::{Receiver, Sender};
 use tokio::sync::oneshot;
 
-use oneterm_core::{AppError, FileEntry, FileStat, Result, SftpBackend, SftpSessionId};
-
-// ── Re-export from core ──────────────────────────────────────
-// FileEntry, FileStat are defined in core; re-exported here for convenience.
+use oneterm_core::{
+    AppError, FileEntry, FileStat, RemotePath, Result, SftpBackend, SftpSessionId, TransferEvent,
+    TransferHandle,
+};
 
 // ── SFTP commands: UI → tokio task ───────────────────────────
 
@@ -24,52 +24,52 @@ use oneterm_core::{AppError, FileEntry, FileStat, Result, SftpBackend, SftpSessi
 pub enum SftpCmd {
     /// Read a directory → returns the list of entries.
     ReadDir {
-        path: PathBuf,
+        path: RemotePath,
         reply: oneshot::Sender<Result<Vec<FileEntry>>>,
     },
     /// Get metadata for a single file/folder.
     Stat {
-        path: PathBuf,
+        path: RemotePath,
         reply: oneshot::Sender<Result<FileStat>>,
     },
     /// Rename a file/folder.
     Rename {
-        from: PathBuf,
-        to: PathBuf,
+        from: RemotePath,
+        to: RemotePath,
         reply: oneshot::Sender<Result<()>>,
     },
     /// Remove a file.
     Remove {
-        path: PathBuf,
+        path: RemotePath,
         reply: oneshot::Sender<Result<()>>,
     },
-    /// Remove an empty directory.
-    Rmdir {
-        path: PathBuf,
+    /// Remove a directory tree (bounded, symlinks are unlinked, never followed).
+    RemoveDirAll {
+        path: RemotePath,
         reply: oneshot::Sender<Result<()>>,
     },
     /// Create a directory.
     Mkdir {
-        path: PathBuf,
+        path: RemotePath,
         reply: oneshot::Sender<Result<()>>,
     },
-    /// Upload a local file → remote. Progress via `progress` (0.0–1.0).
+    /// Upload a local file → remote. Progress via `events`.
     /// Reply via `async_channel::Sender` (not oneshot, to match the trait).
     /// `transfer_id` is used to cancel — the UI sends `SftpCmd::Cancel { transfer_id }`.
     Upload {
         transfer_id: u64,
         local: PathBuf,
-        remote: PathBuf,
-        progress: Sender<f64>,
+        remote: RemotePath,
+        events: Sender<TransferEvent>,
         reply: Sender<Result<()>>,
     },
-    /// Download a remote file → local. Progress via `progress` (0.0–1.0).
+    /// Download a remote file → local. Progress via `events`.
     /// Reply via `async_channel::Sender`.
     Download {
         transfer_id: u64,
-        remote: PathBuf,
+        remote: RemotePath,
         local: PathBuf,
-        progress: Sender<f64>,
+        events: Sender<TransferEvent>,
         reply: Sender<Result<()>>,
     },
     /// Cancel a running transfer (upload/download).
@@ -133,6 +133,37 @@ impl SftpSession {
     pub fn subscribe(&self) -> Option<Receiver<SftpEvent>> {
         self.event_rx.lock().unwrap().take()
     }
+
+    /// Enqueue a command carrying a oneshot reply and await that reply.
+    async fn request<T>(
+        &self,
+        build: impl FnOnce(oneshot::Sender<Result<T>>) -> SftpCmd,
+    ) -> Result<T> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(build(tx))
+            .await
+            .map_err(|error| AppError::msg(error.to_string()))?;
+        rx.await.map_err(|error| AppError::msg(error.to_string()))?
+    }
+
+    /// Enqueue a transfer command; a failed enqueue is reported through the handle.
+    fn start_transfer(
+        &self,
+        transfer_id: u64,
+        kind: &'static str,
+        build: impl FnOnce(Sender<TransferEvent>, Sender<Result<()>>) -> SftpCmd,
+    ) -> TransferHandle {
+        let (events_tx, events) = async_channel::bounded(100);
+        let (reply_tx, result) = async_channel::bounded(1);
+        if let Err(error) = self.cmd_tx.try_send(build(events_tx, reply_tx)) {
+            log::warn!("SftpSession: failed to enqueue {kind} #{transfer_id}: {error}");
+            return TransferHandle::failed(AppError::msg(format!(
+                "failed to enqueue {kind}: {error}"
+            )));
+        }
+        TransferHandle { events, result }
+    }
 }
 
 // ── impl SftpBackend for SftpSession ─────────────────────────
@@ -146,126 +177,48 @@ impl SftpBackend for SftpSession {
         self.id
     }
 
-    fn read_dir(&self, path: PathBuf) -> oneterm_core::SftpFuture<'_, Vec<FileEntry>> {
-        Box::pin(async move {
-            let (tx, rx) = oneshot::channel();
-            self.cmd_tx
-                .send(SftpCmd::ReadDir { path, reply: tx })
-                .await
-                .map_err(|error| oneterm_core::AppError::msg(error.to_string()))?;
-            rx.await
-                .map_err(|error| oneterm_core::AppError::msg(error.to_string()))?
-        })
+    fn read_dir(&self, path: RemotePath) -> oneterm_core::SftpFuture<'_, Vec<FileEntry>> {
+        Box::pin(self.request(|reply| SftpCmd::ReadDir { path, reply }))
     }
 
-    fn stat(&self, path: PathBuf) -> oneterm_core::SftpFuture<'_, FileStat> {
-        Box::pin(async move {
-            let (tx, rx) = oneshot::channel();
-            self.cmd_tx
-                .send(SftpCmd::Stat { path, reply: tx })
-                .await
-                .map_err(|error| oneterm_core::AppError::msg(error.to_string()))?;
-            rx.await
-                .map_err(|error| oneterm_core::AppError::msg(error.to_string()))?
-        })
+    fn stat(&self, path: RemotePath) -> oneterm_core::SftpFuture<'_, FileStat> {
+        Box::pin(self.request(|reply| SftpCmd::Stat { path, reply }))
     }
 
-    fn rename(&self, from: PathBuf, to: PathBuf) -> oneterm_core::SftpFuture<'_, ()> {
-        Box::pin(async move {
-            let (tx, rx) = oneshot::channel();
-            self.cmd_tx
-                .send(SftpCmd::Rename {
-                    from,
-                    to,
-                    reply: tx,
-                })
-                .await
-                .map_err(|error| oneterm_core::AppError::msg(error.to_string()))?;
-            rx.await
-                .map_err(|error| oneterm_core::AppError::msg(error.to_string()))?
-        })
+    fn rename(&self, from: RemotePath, to: RemotePath) -> oneterm_core::SftpFuture<'_, ()> {
+        Box::pin(self.request(|reply| SftpCmd::Rename { from, to, reply }))
     }
 
-    fn remove(&self, path: PathBuf) -> oneterm_core::SftpFuture<'_, ()> {
-        Box::pin(async move {
-            let (tx, rx) = oneshot::channel();
-            self.cmd_tx
-                .send(SftpCmd::Remove { path, reply: tx })
-                .await
-                .map_err(|error| oneterm_core::AppError::msg(error.to_string()))?;
-            rx.await
-                .map_err(|error| oneterm_core::AppError::msg(error.to_string()))?
-        })
+    fn remove(&self, path: RemotePath) -> oneterm_core::SftpFuture<'_, ()> {
+        Box::pin(self.request(|reply| SftpCmd::Remove { path, reply }))
     }
 
-    fn rmdir(&self, path: PathBuf) -> oneterm_core::SftpFuture<'_, ()> {
-        Box::pin(async move {
-            let (tx, rx) = oneshot::channel();
-            self.cmd_tx
-                .send(SftpCmd::Rmdir { path, reply: tx })
-                .await
-                .map_err(|error| oneterm_core::AppError::msg(error.to_string()))?;
-            rx.await
-                .map_err(|error| oneterm_core::AppError::msg(error.to_string()))?
-        })
+    fn remove_dir_all(&self, path: RemotePath) -> oneterm_core::SftpFuture<'_, ()> {
+        Box::pin(self.request(|reply| SftpCmd::RemoveDirAll { path, reply }))
     }
 
-    fn mkdir(&self, path: PathBuf) -> oneterm_core::SftpFuture<'_, ()> {
-        Box::pin(async move {
-            let (tx, rx) = oneshot::channel();
-            self.cmd_tx
-                .send(SftpCmd::Mkdir { path, reply: tx })
-                .await
-                .map_err(|error| oneterm_core::AppError::msg(error.to_string()))?;
-            rx.await
-                .map_err(|error| oneterm_core::AppError::msg(error.to_string()))?
-        })
+    fn mkdir(&self, path: RemotePath) -> oneterm_core::SftpFuture<'_, ()> {
+        Box::pin(self.request(|reply| SftpCmd::Mkdir { path, reply }))
     }
 
-    fn upload(
-        &self,
-        transfer_id: u64,
-        local: PathBuf,
-        remote: PathBuf,
-    ) -> (Receiver<f64>, Receiver<Result<()>>) {
-        let (progress_tx, progress_rx) = async_channel::bounded(100);
-        let (reply_tx, reply_rx) = async_channel::bounded(1);
-        if let Err(error) = self.cmd_tx.try_send(SftpCmd::Upload {
+    fn upload(&self, transfer_id: u64, local: PathBuf, remote: RemotePath) -> TransferHandle {
+        self.start_transfer(transfer_id, "upload", |events, reply| SftpCmd::Upload {
             transfer_id,
             local,
             remote,
-            progress: progress_tx,
-            reply: reply_tx.clone(),
-        }) {
-            log::warn!("SftpSession: failed to enqueue upload #{transfer_id}: {error}");
-            let _ = reply_tx.try_send(Err(AppError::msg(format!(
-                "failed to enqueue upload: {error}"
-            ))));
-        }
-        (progress_rx, reply_rx)
+            events,
+            reply,
+        })
     }
 
-    fn download(
-        &self,
-        transfer_id: u64,
-        remote: PathBuf,
-        local: PathBuf,
-    ) -> (Receiver<f64>, Receiver<Result<()>>) {
-        let (progress_tx, progress_rx) = async_channel::bounded(100);
-        let (reply_tx, reply_rx) = async_channel::bounded(1);
-        if let Err(error) = self.cmd_tx.try_send(SftpCmd::Download {
+    fn download(&self, transfer_id: u64, remote: RemotePath, local: PathBuf) -> TransferHandle {
+        self.start_transfer(transfer_id, "download", |events, reply| SftpCmd::Download {
             transfer_id,
             remote,
             local,
-            progress: progress_tx,
-            reply: reply_tx.clone(),
-        }) {
-            log::warn!("SftpSession: failed to enqueue download #{transfer_id}: {error}");
-            let _ = reply_tx.try_send(Err(AppError::msg(format!(
-                "failed to enqueue download: {error}"
-            ))));
-        }
-        (progress_rx, reply_rx)
+            events,
+            reply,
+        })
     }
 
     fn cancel_transfer(&self, transfer_id: u64) {
@@ -303,7 +256,7 @@ mod tests {
         tokio::spawn(async move {
             match cmd_rx.recv().await.expect("command must arrive") {
                 SftpCmd::ReadDir { path, reply } => {
-                    assert_eq!(path, PathBuf::from("/tmp"));
+                    assert_eq!(path, RemotePath::new("/tmp"));
                     reply.send(Ok(Vec::new())).expect("reply must be received");
                 }
                 _ => panic!("unexpected command"),
@@ -311,7 +264,7 @@ mod tests {
         });
 
         let entries = session
-            .read_dir(PathBuf::from("/tmp"))
+            .read_dir(RemotePath::new("/tmp"))
             .await
             .expect("read_dir must succeed");
         assert!(entries.is_empty());
@@ -323,7 +276,7 @@ mod tests {
         drop(cmd_rx);
 
         let error = session
-            .stat(PathBuf::from("/tmp"))
+            .stat(RemotePath::new("/tmp"))
             .await
             .expect_err("closed transport must fail");
         assert!(error.to_string().contains("closed"));
@@ -334,13 +287,33 @@ mod tests {
         let (session, cmd_rx) = test_session();
         drop(cmd_rx);
 
-        let (_progress, reply) = session.upload(7, PathBuf::from("local"), PathBuf::from("remote"));
-        let error = reply
+        let handle = session.upload(7, PathBuf::from("local"), RemotePath::new("remote"));
+        let error = handle
+            .result
             .recv()
             .await
             .expect("enqueue failure must produce a reply")
             .expect_err("closed command transport must fail the transfer");
         assert!(error.to_string().contains("enqueue upload"));
+    }
+
+    #[tokio::test]
+    async fn remove_dir_all_is_sent_as_a_recursive_delete_command() {
+        let (session, cmd_rx) = test_session();
+        tokio::spawn(async move {
+            match cmd_rx.recv().await.expect("command must arrive") {
+                SftpCmd::RemoveDirAll { path, reply } => {
+                    assert_eq!(path.as_str(), "/tmp/tree");
+                    reply.send(Ok(())).expect("reply must be received");
+                }
+                _ => panic!("unexpected command"),
+            }
+        });
+
+        session
+            .remove_dir_all(RemotePath::new("/tmp\\tree"))
+            .await
+            .expect("remove_dir_all must succeed");
     }
 
     #[test]

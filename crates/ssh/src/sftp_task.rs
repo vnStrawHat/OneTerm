@@ -82,37 +82,30 @@ pub(crate) async fn sftp_task(
         };
         match command {
             Ok(SftpCmd::ReadDir { path, reply }) => {
-                log::debug!("sftp_task: ReadDir path=\"{}\"", path.display());
+                log::debug!("sftp_task: ReadDir path=\"{path}\"");
                 let result = sftp_read_dir(&sftp, &path, &lookup).await;
                 let _ = reply.send(result);
             }
             Ok(SftpCmd::Stat { path, reply }) => {
-                log::debug!("sftp_task: Stat path=\"{}\"", path.display());
+                log::debug!("sftp_task: Stat path=\"{path}\"");
                 let result = sftp_stat(&sftp, &path, &lookup).await;
                 let _ = reply.send(result);
             }
             Ok(SftpCmd::Rename { from, to, reply }) => {
-                log::debug!(
-                    "sftp_task: Rename from=\"{}\" to=\"{}\"",
-                    from.display(),
-                    to.display()
-                );
+                log::debug!("sftp_task: Rename from=\"{from}\" to=\"{to}\"");
                 let result = sftp
-                    .rename(remote_path_string(&from), remote_path_string(&to))
+                    .rename(from.as_str(), to.as_str())
                     .await
                     .map_err(map_sftp_err);
                 let _ = reply.send(result);
             }
             Ok(SftpCmd::Remove { path, reply }) => {
-                log::debug!("sftp_task: Remove path=\"{}\"", path.display());
-                let result = sftp
-                    .remove_file(remote_path_string(&path))
-                    .await
-                    .map_err(map_sftp_err);
+                log::debug!("sftp_task: Remove path=\"{path}\"");
+                let result = sftp.remove_file(path.as_str()).await.map_err(map_sftp_err);
                 let _ = reply.send(result);
             }
-            Ok(SftpCmd::Rmdir { path, reply }) => {
-                log::debug!("sftp_task: Rmdir path=\"{}\"", path.display());
+            Ok(SftpCmd::RemoveDirAll { path, reply }) => {
+                log::debug!("sftp_task: RemoveDirAll path=\"{path}\"");
                 let sftp = Arc::clone(&sftp);
                 background_tasks.spawn(async move {
                     let result = sftp_remove_recursive(&sftp, &path).await;
@@ -120,58 +113,19 @@ pub(crate) async fn sftp_task(
                 });
             }
             Ok(SftpCmd::Mkdir { path, reply }) => {
-                log::debug!("sftp_task: Mkdir path=\"{}\"", path.display());
-                let result = sftp
-                    .create_dir(remote_path_string(&path))
-                    .await
-                    .map_err(map_sftp_err);
+                log::debug!("sftp_task: Mkdir path=\"{path}\"");
+                let result = sftp.create_dir(path.as_str()).await.map_err(map_sftp_err);
                 let _ = reply.send(result);
             }
             Ok(SftpCmd::Upload {
                 transfer_id,
                 local,
                 remote,
-                progress,
+                events,
                 reply,
             }) => {
                 log::info!(
-                    "sftp_task: Upload #{transfer_id} local=\"{}\" remote=\"{}\"",
-                    local.display(),
-                    remote.display()
-                );
-                let cancel = CancellationToken::new();
-                {
-                    let mut active = cancels.lock().unwrap();
-                    if active.contains_key(&transfer_id) {
-                        let _ = reply.try_send(Err(AppError::msg(format!(
-                            "duplicate active transfer id: {transfer_id}"
-                        ))));
-                        continue;
-                    }
-                    active.insert(transfer_id, cancel.clone());
-                }
-                let sftp = Arc::clone(&sftp);
-                let cancels = Arc::clone(&cancels);
-                background_tasks.spawn(async move {
-                    let _cleanup = ActiveTransferGuard::new(cancels, transfer_id);
-                    let result = sftp_upload(&sftp, &local, &remote, &progress, &cancel).await;
-                    log::info!(
-                        "sftp_task: Upload #{transfer_id} finished: {}",
-                        if result.is_ok() { "OK" } else { "error" }
-                    );
-                    let _ = reply.try_send(result);
-                });
-            }
-            Ok(SftpCmd::Download {
-                transfer_id,
-                remote,
-                local,
-                progress,
-                reply,
-            }) => {
-                log::info!(
-                    "sftp_task: Download #{transfer_id} remote=\"{}\" local=\"{}\"",
-                    remote.display(),
+                    "sftp_task: Upload #{transfer_id} local=\"{}\" remote=\"{remote}\"",
                     local.display()
                 );
                 let cancel = CancellationToken::new();
@@ -189,7 +143,41 @@ pub(crate) async fn sftp_task(
                 let cancels = Arc::clone(&cancels);
                 background_tasks.spawn(async move {
                     let _cleanup = ActiveTransferGuard::new(cancels, transfer_id);
-                    let result = sftp_download(&sftp, &remote, &local, &progress, &cancel).await;
+                    let result = sftp_upload(&sftp, &local, &remote, &events, &cancel).await;
+                    log::info!(
+                        "sftp_task: Upload #{transfer_id} finished: {}",
+                        if result.is_ok() { "OK" } else { "error" }
+                    );
+                    let _ = reply.try_send(result);
+                });
+            }
+            Ok(SftpCmd::Download {
+                transfer_id,
+                remote,
+                local,
+                events,
+                reply,
+            }) => {
+                log::info!(
+                    "sftp_task: Download #{transfer_id} remote=\"{remote}\" local=\"{}\"",
+                    local.display()
+                );
+                let cancel = CancellationToken::new();
+                {
+                    let mut active = cancels.lock().unwrap();
+                    if active.contains_key(&transfer_id) {
+                        let _ = reply.try_send(Err(AppError::msg(format!(
+                            "duplicate active transfer id: {transfer_id}"
+                        ))));
+                        continue;
+                    }
+                    active.insert(transfer_id, cancel.clone());
+                }
+                let sftp = Arc::clone(&sftp);
+                let cancels = Arc::clone(&cancels);
+                background_tasks.spawn(async move {
+                    let _cleanup = ActiveTransferGuard::new(cancels, transfer_id);
+                    let result = sftp_download(&sftp, &remote, &local, &events, &cancel).await;
                     log::info!(
                         "sftp_task: Download #{transfer_id} finished: {}",
                         if result.is_ok() { "OK" } else { "error" }
@@ -257,16 +245,6 @@ pub(crate) async fn sftp_task(
 }
 
 // ── Helpers ──────────────────────────────────────────────────
-
-/// Render a remote path for the SFTP wire.
-///
-/// Remote paths are POSIX, but the `SftpBackend` API carries them as host
-/// `PathBuf`s; on Windows `Path::join` inserts `\`, which the server would treat
-/// as part of the file name. Every command that sends a path must go through
-/// this until the API moves to a dedicated remote-path type.
-pub(crate) fn remote_path_string(path: &std::path::Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
 
 /// Convert a russh-sftp error to `AppError`.
 pub(crate) fn map_sftp_err(e: russh_sftp::client::error::Error) -> AppError {

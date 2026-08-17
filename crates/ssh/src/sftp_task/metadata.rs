@@ -1,13 +1,12 @@
 //! SFTP UID/GID lookup and remote metadata conversion.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
 use russh_sftp::client::SftpSession as SftpChannel;
 use russh_sftp::protocol::FileAttributes;
 
-use oneterm_core::{FileEntry, FileStat, Result};
+use oneterm_core::{FileEntry, FileStat, RemotePath, Result};
 
 use super::map_sftp_err;
 
@@ -93,27 +92,18 @@ pub(super) async fn load_uid_gid_lookup(sftp: &SftpChannel) -> UidGidLookup {
 }
 
 /// Convert `FileAttributes` (russh-sftp) to a `FileEntry`.
-///
-/// IMPORTANT: SFTP paths always use `/` (Unix style), even when the client runs
-/// on Windows. `PathBuf::join` on Windows uses `\` → the SFTP server won't
-/// understand it. So use string concatenation with `/` instead of `Path::join`.
 fn attrs_to_entry(
     name: String,
-    parent: &str,
+    parent: &RemotePath,
     attrs: &FileAttributes,
     lookup: &UidGidLookup,
 ) -> FileEntry {
-    // Join parent + name with `/` — ensures a Unix-style path for SFTP.
-    let path = if parent.ends_with('/') {
-        format!("{parent}{name}")
-    } else {
-        format!("{parent}/{name}")
-    };
+    let path = parent.join(&name);
     let uid = attrs.uid;
     let gid = attrs.gid;
     FileEntry {
         name,
-        path: PathBuf::from(path),
+        path,
         is_dir: attrs.is_dir(),
         is_symlink: attrs.is_symlink(),
         size: attrs.size.unwrap_or(0),
@@ -138,37 +128,30 @@ fn attrs_to_entry(
 /// absolute path first — some SFTP servers don't understand relative paths.
 pub(super) async fn sftp_read_dir(
     sftp: &SftpChannel,
-    path: &Path,
+    path: &RemotePath,
     lookup: &UidGidLookup,
 ) -> Result<Vec<FileEntry>> {
-    // to_string_lossy() may return `\` on Windows → convert to `/`.
-    let path_str = path.to_string_lossy().replace('\\', "/");
-    log::debug!("sftp_read_dir: path=\"{path_str}\"");
+    log::debug!("sftp_read_dir: path=\"{path}\"");
 
     // Resolve relative path → absolute path via SFTP realpath.
-    // Use starts_with('/') instead of Path::is_absolute() because Windows does
-    // not treat `/root` as absolute (it needs a drive letter).
-    let abs_path = if path_str.starts_with('/') {
-        path_str
+    let abs_path = if path.is_absolute() {
+        path.clone()
     } else {
-        match sftp.canonicalize(&path_str).await {
+        match sftp.canonicalize(path.as_str()).await {
             Ok(resolved) => {
-                log::debug!("sftp_read_dir: canonicalize(\"{path_str}\") → \"{resolved}\"");
-                resolved
+                log::debug!("sftp_read_dir: canonicalize(\"{path}\") → \"{resolved}\"");
+                RemotePath::new(resolved)
             }
             Err(e) => {
                 log::warn!(
-                    "sftp_read_dir: canonicalize(\"{path_str}\") failed: {e} — trying original path"
+                    "sftp_read_dir: canonicalize(\"{path}\") failed: {e} — trying original path"
                 );
-                path_str
+                path.clone()
             }
         }
     };
 
-    // abs_path is already a string with `/` separators (from canonicalize or input).
-    // Do NOT use Path::new — PathBuf on Windows would convert `/` → `\`.
-
-    let read_dir = sftp.read_dir(&abs_path).await.map_err(|e| {
+    let read_dir = sftp.read_dir(abs_path.as_str()).await.map_err(|e| {
         log::error!("sftp_read_dir: read_dir(\"{abs_path}\") failed: {e}");
         map_sftp_err(e)
     })?;
@@ -202,21 +185,16 @@ pub(super) async fn sftp_read_dir(
 /// Get detailed metadata.
 pub(super) async fn sftp_stat(
     sftp: &SftpChannel,
-    path: &Path,
+    path: &RemotePath,
     lookup: &UidGidLookup,
 ) -> Result<FileStat> {
-    // Sanitize backslashes → forward slashes for the SFTP server.
-    let path_str = path.to_string_lossy().replace('\\', "/");
-    let attrs = sftp.metadata(&path_str).await.map_err(map_sftp_err)?;
+    let attrs = sftp.metadata(path.as_str()).await.map_err(map_sftp_err)?;
 
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let name = path.file_name().unwrap_or_default().to_string();
 
     Ok(FileStat {
         name,
-        path: path.to_path_buf(),
+        path: path.clone(),
         is_dir: attrs.is_dir(),
         is_symlink: attrs.is_symlink(),
         size: attrs.size.unwrap_or(0),
