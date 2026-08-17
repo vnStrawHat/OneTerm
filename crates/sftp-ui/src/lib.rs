@@ -20,11 +20,12 @@ pub use panel::SftpPanel;
 
 use gpui::App;
 use gpui_component::dock::register_panel;
+use oneterm_state::panel_names;
 
 /// Initialize the SFTP feature: register the "sftp" dock panel so saved layouts
 /// deserialize. Called by the app aggregator.
 pub fn init(cx: &mut App) {
-    register_panel(cx, "sftp", |dock_area, _, _, window, cx| {
+    register_panel(cx, panel_names::SFTP, |dock_area, _, _, window, cx| {
         Box::new(panel::SftpPanel::new_entity_in_workspace(
             dock_area.entity_id(),
             window,

@@ -21,13 +21,14 @@ pub use session_state::{SshAuthPreference, SshSession, SshSessionStore};
 
 use gpui::App;
 use gpui_component::dock::register_panel;
+use oneterm_state::panel_names;
 
 /// Initialize the session feature: initialize the SSH session store global and
 /// register the "session" dock panel (so saved layouts deserialize). Called by
 /// the app aggregator.
 pub fn init(cx: &mut App) {
     session_state::SshSessionStore::init(cx);
-    register_panel(cx, "session", |_, _, _, window, cx| {
+    register_panel(cx, panel_names::SESSION, |_, _, _, window, cx| {
         Box::new(panel::SessionPanel::new_entity(window, cx))
     });
 }

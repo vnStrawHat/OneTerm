@@ -14,7 +14,9 @@ use serde::{Deserialize, Serialize};
 /// hides the right dock entirely (no panel is hosted).
 ///
 /// Persisted in `ui_config.json` (as the serde name of the variant) and applied
-/// at startup by `OneTermWorkspace::new`.
+/// at startup by `OneTermWorkspace::new`. The mapping to a registered dock
+/// panel name lives in `oneterm_state::panel_names::right_dock_panel_name`,
+/// so `core` stays free of any UI/dock knowledge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RightDockMode {
@@ -29,19 +31,6 @@ pub enum RightDockMode {
 }
 
 impl RightDockMode {
-    /// The registered `PanelRegistry` name of the dock panel this mode shows.
-    ///
-    /// The panel names (`"ssh_client_panel"`, `"agent_panel"`) are registered by the
-    /// `app` crate; this only returns the string, so `core` stays free of any
-    /// UI/dock dependency. Returns `""` for [`RightDockMode::None`] (no panel).
-    pub fn panel_name(self) -> &'static str {
-        match self {
-            RightDockMode::SshClient => "ssh_client_panel",
-            RightDockMode::Agent => "agent_panel",
-            RightDockMode::None => "",
-        }
-    }
-
     /// Whether this mode hides the right dock entirely.
     pub fn is_none(self) -> bool {
         matches!(self, RightDockMode::None)

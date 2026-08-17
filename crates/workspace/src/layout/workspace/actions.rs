@@ -7,6 +7,7 @@ use gpui_component::dock::{DockArea, DockItem, DockPlacement as UiDockPlacement}
 use gpui_component::{WindowExt as _, dialog::DialogButtonProps};
 
 use oneterm_core::DockPlacement;
+use oneterm_state::panel_names;
 
 use oneterm_actions::{
     About, AddPanel, AddPanelWithShell, AddSession, AddSftpBrowser, Find, NewSession, OpenSettings,
@@ -30,7 +31,12 @@ impl super::OneTermWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let panel = super::build_named_panel("terminal", &self.dock_area.downgrade(), window, cx);
+        let panel = super::build_named_panel(
+            panel_names::TERMINAL,
+            &self.dock_area.downgrade(),
+            window,
+            cx,
+        );
 
         // When all tabs are closed, the center DockItem still keeps the old entry but
         // the inner TabPanel has no panels left → add_panel would add to a "ghost"
@@ -201,14 +207,14 @@ impl super::OneTermWorkspace {
         window: &mut Window,
         cx: &mut App,
     ) {
-        if mode.is_none() {
+        let Some(panel_name) = panel_names::right_dock_panel_name(mode) else {
             // None mode — hide the right dock without rebuilding its panel, so
             // switching back to SSH Client / Agent restores the previous content.
             super::set_right_dock_open(dock_area, false, window, cx);
             return;
-        }
+        };
         let weak = dock_area.downgrade();
-        let panel = super::build_named_panel(mode.panel_name(), &weak, window, cx);
+        let panel = super::build_named_panel(panel_name, &weak, window, cx);
         let right = DockItem::panel(panel);
         dock_area.update(cx, |view, cx| {
             // Snapshot the current right dock's size so the swap preserves the

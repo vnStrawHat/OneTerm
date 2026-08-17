@@ -3,6 +3,8 @@
 use gpui::{App, Window, px};
 use gpui_component::dock::{DockArea, DockItem};
 
+use oneterm_state::panel_names;
+
 use super::MAIN_DOCK_VERSION;
 
 /// Reset the center (terminal tabs) to a single tab AND re-apply the right
@@ -24,7 +26,12 @@ pub(crate) fn reset_center_only(
     let weak = dock_area.clone();
     let center = DockItem::v_split(
         vec![DockItem::tabs(
-            vec![super::build_named_panel("terminal", &weak, window, cx)],
+            vec![super::build_named_panel(
+                panel_names::TERMINAL,
+                &weak,
+                window,
+                cx,
+            )],
             &weak,
             window,
             cx,
@@ -33,7 +40,7 @@ pub(crate) fn reset_center_only(
         window,
         cx,
     );
-    let ssh_client_panel = super::build_named_panel("ssh_client_panel", &weak, window, cx);
+    let ssh_client_panel = super::build_named_panel(panel_names::SSH_CLIENT, &weak, window, cx);
     let right = DockItem::panel(ssh_client_panel);
     let mut saved_state = None;
     _ = dock_area.update(cx, |view, cx| {
@@ -84,7 +91,12 @@ pub(crate) fn reset_default_layout(
 
     let center = DockItem::v_split(
         vec![DockItem::tabs(
-            vec![super::build_named_panel("terminal", &weak, window, cx)],
+            vec![super::build_named_panel(
+                panel_names::TERMINAL,
+                &weak,
+                window,
+                cx,
+            )],
             &weak,
             window,
             cx,
@@ -94,7 +106,7 @@ pub(crate) fn reset_default_layout(
         cx,
     );
 
-    let ssh_client_panel = super::build_named_panel("ssh_client_panel", &weak, window, cx);
+    let ssh_client_panel = super::build_named_panel(panel_names::SSH_CLIENT, &weak, window, cx);
     let right = DockItem::panel(ssh_client_panel);
 
     let mut saved_state = None;
