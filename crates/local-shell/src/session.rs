@@ -5,6 +5,7 @@
 //! (mouse/selection/wheel + IME + cursor_bounds). See
 //! `docs/terminal-backend.md` §6.2 + freya `handle.rs`.
 
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::WindowSize;
@@ -65,13 +66,19 @@ impl LocalSession {
         let resolved = resolve_shell(&cfg)?;
         let opts = Options {
             shell: Some(Shell::new(
-                resolved.program.to_string_lossy().into_owned(),
+                program_argument(&resolved.program),
                 resolved.args,
             )),
             working_directory: cfg.cwd.clone().or_else(home_dir),
             drain_on_exit: false,
             env: resolved.env,
-            ..Default::default()
+            // Escape every argument with the C-runtime rules so user-supplied
+            // `Custom` args and the PowerShell `-Command` payload survive
+            // `CreateProcessW` command-line re-parsing. The default `cmd /K chcp
+            // 65001 >nul` tokens contain no whitespace or quotes, so escaping
+            // leaves them verbatim for cmd.exe's own (non-CRT) `/K` parsing.
+            #[cfg(windows)]
+            escape_args: true,
         };
         let winsize = WindowSize {
             num_lines: initial.rows,
@@ -161,6 +168,52 @@ impl LocalSession {
         }
         result
     }
+}
+
+/// The program string handed to alacritty for `resolved.program`.
+///
+/// On Windows alacritty joins the program and its arguments into one
+/// `CreateProcessW` command line with `lpApplicationName = NULL`, so an unquoted
+/// path containing spaces (`C:\Program Files\PowerShell\7\pwsh.exe`) is
+/// resolved ambiguously (CWE-428). `Options::escape_args` only escapes the
+/// arguments, never the program, so quote it here. Unix hands the program to
+/// `execvp` verbatim, where added quotes would become part of the file name.
+fn program_argument(program: &Path) -> String {
+    let program = program.to_string_lossy();
+    if cfg!(windows) {
+        quote_windows_argument(&program)
+    } else {
+        program.into_owned()
+    }
+}
+
+/// Quote one token with the C-runtime command-line rules that `CreateProcessW`
+/// consumers use (the same rules alacritty applies to arguments): wrap in double
+/// quotes when the token is empty or contains whitespace, and double the
+/// backslashes that precede an embedded or closing quote.
+fn quote_windows_argument(token: &str) -> String {
+    let needs_quotes = token.is_empty() || token.contains([' ', '\t']);
+    let mut quoted = String::with_capacity(token.len() + 2);
+    if needs_quotes {
+        quoted.push('"');
+    }
+    let mut backslashes = 0;
+    for ch in token.chars() {
+        if ch == '\\' {
+            backslashes += 1;
+        } else {
+            if ch == '"' {
+                quoted.extend(std::iter::repeat_n('\\', backslashes + 1));
+            }
+            backslashes = 0;
+        }
+        quoted.push(ch);
+    }
+    if needs_quotes {
+        quoted.extend(std::iter::repeat_n('\\', backslashes));
+        quoted.push('"');
+    }
+    quoted
 }
 
 impl Drop for LocalSession {
