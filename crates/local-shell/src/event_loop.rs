@@ -328,17 +328,8 @@ impl ShellEventLoop {
 
                 if event.key == PTY_CHILD_EVENT_TOKEN {
                     if let Some(tty::ChildEvent::Exited(status)) = self.pty.next_child_event() {
-                        if let Some(status) = status {
-                            let code = status.code();
-                            {
-                                let mut st = self.state.lock().unwrap();
-                                st.alive = false;
-                                st.exit_code = code;
-                            }
-                            self.listener.forward_lifecycle(SessionEvent::Exited(code));
-                        }
                         self.term.lock().exit();
-                        self.listener.send_event(Event::Wakeup);
+                        publish_child_exit(&self.listener, &self.state, status);
                         let _ = self.pty.deregister(&self.poll);
                         return;
                     }
@@ -429,12 +420,9 @@ impl ShellEventLoop {
 
                     if processed > 0 {
                         // Persist absolute line count tracking state.
-                        {
-                            let mut st = self.state.lock().unwrap();
-                            st.absolute_line_count = absolute;
-                            st.prev_total_lines = prev_total;
-                        }
-                        self.listener.send_event(Event::Wakeup);
+                        let mut st = self.state.lock().unwrap();
+                        st.absolute_line_count = absolute;
+                        st.prev_total_lines = prev_total;
                     }
 
                     // Answer OSC 10/11/12 color queries collected during parsing.
@@ -492,6 +480,15 @@ impl ShellEventLoop {
                         }
                         stat_bytes += processed as u64;
                     }
+
+                    // The `Term` lock is released: deliver reliable events
+                    // (Bell/Title/OSC…) that did not fit in the queue during
+                    // `advance`, waiting for the UI if needed, then post the
+                    // batch's repaint hint so they are seen before it.
+                    self.listener.flush_reliable();
+                    if processed > 0 {
+                        self.listener.send_event(Event::Wakeup);
+                    }
                 }
             }
 
@@ -545,6 +542,30 @@ impl ShellEventLoop {
             }
         }
     }
+}
+
+/// Record the child's exit and tell the UI the session is over.
+///
+/// `status` is `None` when the platform watcher could not read an exit code
+/// (Windows: `GetExitCodeProcess` failed or the watcher disconnected). The
+/// session is dead either way, so `alive` is cleared and `Exited`/`Closed` are
+/// forwarded unconditionally — otherwise the tab would show a live-but-dead PTY
+/// forever. Must run without the `Term` lock held (the lifecycle forwards block
+/// until the UI has room).
+fn publish_child_exit(
+    listener: &LocalListener,
+    state: &SharedState,
+    status: Option<std::process::ExitStatus>,
+) {
+    let code = status.and_then(|status| status.code());
+    {
+        let mut st = state.lock().unwrap();
+        st.alive = false;
+        st.exit_code = code;
+    }
+    listener.forward_lifecycle(SessionEvent::Exited(code));
+    listener.send_event(Event::Wakeup);
+    listener.forward_lifecycle(SessionEvent::Closed);
 }
 
 #[cfg(test)]

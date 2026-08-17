@@ -33,7 +33,10 @@ pub(in crate::sftp_task) async fn sftp_download(
     cancel: &CancellationToken,
 ) -> Result<()> {
     let remote_str = remote.to_string_lossy().replace('\\', "/");
-    let attrs = sftp.metadata(&remote_str).await.map_err(map_sftp_err)?;
+    let attrs = sftp
+        .symlink_metadata(&remote_str)
+        .await
+        .map_err(map_sftp_err)?;
     if attrs.is_symlink() {
         return Err(AppError::msg("refusing to download a remote symlink"));
     }
@@ -54,7 +57,10 @@ async fn sftp_download_file(
     cancel: &CancellationToken,
 ) -> Result<()> {
     // Get the size to compute progress.
-    let attrs = sftp.metadata(remote_str).await.map_err(map_sftp_err)?;
+    let attrs = sftp
+        .symlink_metadata(remote_str)
+        .await
+        .map_err(map_sftp_err)?;
     if attrs.is_symlink() {
         return Err(AppError::msg("refusing to download a remote symlink"));
     }

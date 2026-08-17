@@ -1,13 +1,10 @@
-#[cfg(unix)]
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[cfg(unix)]
 use super::transfer::staging::{finalize_local_file, temporary_local_sibling};
 use super::transfer::upload::{LocalUploadEntry, stream_local_upload_entries};
 use super::*;
-use std::path::{Path, PathBuf};
 
-#[cfg(unix)]
 fn temporary_dir() -> PathBuf {
     // Distinct per call so parallel tests never share a directory, and so two
     // calls within one test (e.g. `root` and `outside`) can't alias when the
@@ -63,7 +60,6 @@ fn accepts_one_safe_component_and_keeps_it_below_root() {
     }
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn local_finalization_replaces_only_after_complete_write() {
     let root = temporary_dir();
@@ -81,17 +77,43 @@ async fn local_finalization_replaces_only_after_complete_write() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-#[cfg(unix)]
+/// Create a directory symlink `link` → `target`, or `None` when the platform
+/// refuses (Windows requires Developer Mode or `SeCreateSymbolicLinkPrivilege`).
+fn try_symlink_dir(target: &Path, link: &Path) -> Option<()> {
+    #[cfg(unix)]
+    let result = std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    let result = std::os::windows::fs::symlink_dir(target, link);
+    match result {
+        Ok(()) => Some(()),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping symlink test: cannot create symlinks here ({error})");
+            None
+        }
+        // Windows reports the missing privilege as os error 1314, which std
+        // maps to `Uncategorized`.
+        #[cfg(windows)]
+        Err(error) if error.raw_os_error() == Some(1314) => {
+            eprintln!("skipping symlink test: cannot create symlinks here ({error})");
+            None
+        }
+        Err(error) => panic!("symlink creation failed: {error}"),
+    }
+}
+
+/// TEST-11: the download-root symlink guard must run on every client platform.
 #[tokio::test]
 async fn refuses_preexisting_symlink_below_download_root() {
-    use std::os::unix::fs::symlink;
-
     let root = temporary_dir();
     let outside = temporary_dir();
     std::fs::create_dir_all(&root).unwrap();
     std::fs::create_dir_all(&outside).unwrap();
     let root = std::fs::canonicalize(&root).unwrap();
-    symlink(&outside, root.join("linked")).unwrap();
+    if try_symlink_dir(&outside, &root.join("linked")).is_none() {
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+        return;
+    }
     let candidate = root.join("linked").join("file.txt");
 
     let error = create_safe_parent_dirs(&root, &candidate)
@@ -101,6 +123,25 @@ async fn refuses_preexisting_symlink_below_download_root() {
 
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&outside);
+}
+
+/// ARCH-12 stop-gap: remote paths built with `Path::join` on Windows carry `\`;
+/// Rename/Mkdir/Remove must send `/` like every other command. The input is
+/// spelled out as a string so the test is meaningful on every host OS.
+#[test]
+fn remote_paths_are_sent_with_forward_slashes() {
+    assert_eq!(
+        remote_path_string(Path::new("/home/u\\b.txt")),
+        "/home/u/b.txt"
+    );
+    assert_eq!(
+        remote_path_string(Path::new("/home/u\\dir\\sub")),
+        "/home/u/dir/sub"
+    );
+    assert_eq!(
+        remote_path_string(Path::new("/home/u/plain")),
+        "/home/u/plain"
+    );
 }
 
 #[test]
@@ -156,7 +197,6 @@ fn local_upload_discovery_cancels_while_channel_is_full() {
     ));
 }
 
-#[cfg(unix)]
 #[test]
 fn local_upload_discovery_streams_directories_and_files() {
     let root = temporary_dir();

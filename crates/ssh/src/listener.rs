@@ -1,13 +1,17 @@
 //! `SshListener` — `EventListener` for the SSH session.
 //!
 //! Forwards alacritty events → `SessionEvent` through a bounded channel: repaint
-//! hints are coalescible, while stateful events apply backpressure. Also updates
-//! the `SessionState` cache (title/clipboard/alive).
+//! hints are coalescible, while stateful events are reliable — they are never
+//! dropped, but they are also never sent blocking from a `Term` callback (the
+//! `Term` lock is held there). Reliable events that do not fit are deferred and
+//! flushed by the tokio task after the parse batch, outside the lock. Also
+//! updates the `SessionState` cache (title/clipboard/alive).
 //! Routes `PtyWrite` → `cmd_tx` (channel data going out to SSH).
 //!
 //! Similar to `local/src/listener.rs` but replaces `Notifier` with `cmd_tx`
 //! (async_channel::Sender<Cmd>).
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -101,6 +105,11 @@ pub struct SshListener {
     queued_write_bytes: Arc<AtomicUsize>,
     /// Latest resize and whether a queue wakeup marker is already pending.
     pending_resize: Arc<Mutex<PendingResize>>,
+    /// Reliable events that did not fit in the event queue. `forward` runs from
+    /// `Term` callbacks with the `Term` lock held, so it must never block; the
+    /// tokio task drains this queue with `flush_reliable` after each parse
+    /// batch. FIFO order among reliable events is preserved.
+    deferred_reliable: Arc<Mutex<VecDeque<SessionEvent>>>,
 }
 
 impl SshListener {
@@ -117,6 +126,7 @@ impl SshListener {
             queue_counters: Arc::new(SshQueueCounters::default()),
             queued_write_bytes: Arc::new(AtomicUsize::new(0)),
             pending_resize: Arc::new(Mutex::new(PendingResize::default())),
+            deferred_reliable: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
@@ -248,9 +258,13 @@ impl SshListener {
     /// Forward a session event according to its delivery policy.
     ///
     /// Repaint hints may be coalesced when the bounded queue is full. All other
-    /// events use blocking send so a slow consumer creates backpressure instead
-    /// of silently losing clipboard, notification, progress, agent, or lifecycle
-    /// state transitions.
+    /// events are reliable: they are enqueued when the queue has room and
+    /// deferred otherwise, so a slow consumer never loses clipboard,
+    /// notification, progress, agent, or lifecycle state transitions. This
+    /// never blocks — it is called from `Term` callbacks while the `Term` lock
+    /// is held, and the UI thread needs that lock to drain the queue (blocking
+    /// here would deadlock the app). Deferred events are delivered by
+    /// `flush_reliable`, which the tokio task calls after every parse batch.
     pub fn forward(&self, ev: SessionEvent) {
         match ev.delivery_policy() {
             oneterm_terminal::SessionEventDelivery::Coalescible => {
@@ -268,24 +282,77 @@ impl SshListener {
                 }
             }
             oneterm_terminal::SessionEventDelivery::Reliable => {
-                if let Err(error) = self.event_tx.send_blocking(ev) {
-                    #[cfg(any(test, feature = "terminal-diagnostics"))]
-                    self.queue_counters
-                        .event_closed
-                        .fetch_add(1, Ordering::Relaxed);
-                    warn!("SshListener: reliable event lost because channel is closed: {error:?}");
+                let mut deferred = self.deferred_reliable.lock().unwrap();
+                // Keep FIFO order: once something is deferred, everything after
+                // it queues behind it until the next flush.
+                if !deferred.is_empty() {
+                    deferred.push_back(ev);
+                    return;
+                }
+                match self.event_tx.try_send(ev) {
+                    Ok(()) => {}
+                    Err(TrySendError::Full(ev)) => deferred.push_back(ev),
+                    Err(error @ TrySendError::Closed(_)) => {
+                        #[cfg(any(test, feature = "terminal-diagnostics"))]
+                        self.record_event_failure(&error);
+                        warn!(
+                            "SshListener: reliable event lost because channel is closed: {error:?}"
+                        );
+                    }
                 }
             }
         }
     }
 
-    /// Forward a lifecycle `SessionEvent` using the reliable delivery policy.
-    pub fn forward_lifecycle(&self, ev: SessionEvent) {
+    /// Whether reliable events are waiting for `flush_reliable`.
+    #[cfg(test)]
+    pub(crate) fn has_deferred_reliable(&self) -> bool {
+        !self.deferred_reliable.lock().unwrap().is_empty()
+    }
+
+    fn pop_deferred_reliable(&self) -> Option<SessionEvent> {
+        self.deferred_reliable.lock().unwrap().pop_front()
+    }
+
+    /// Deliver deferred reliable events, waiting for queue capacity. Must be
+    /// called **without** the `Term` lock held (the tokio task calls it after
+    /// each parse batch and before lifecycle events).
+    pub(crate) async fn flush_reliable(&self) {
+        while let Some(ev) = self.pop_deferred_reliable() {
+            if let Err(error) = self.event_tx.send(ev).await {
+                #[cfg(any(test, feature = "terminal-diagnostics"))]
+                self.queue_counters
+                    .event_closed
+                    .fetch_add(1, Ordering::Relaxed);
+                warn!("SshListener: reliable event lost because channel is closed: {error:?}");
+            }
+        }
+    }
+
+    /// Blocking variant of `flush_reliable` for callers outside the tokio
+    /// runtime (tests). Must not be called while the `Term` lock is held.
+    #[cfg(test)]
+    pub(crate) fn flush_reliable_blocking(&self) {
+        while let Some(ev) = self.pop_deferred_reliable() {
+            if let Err(error) = self.event_tx.send_blocking(ev) {
+                self.queue_counters
+                    .event_closed
+                    .fetch_add(1, Ordering::Relaxed);
+                warn!("SshListener: reliable event lost because channel is closed: {error:?}");
+            }
+        }
+    }
+
+    /// Forward a lifecycle `SessionEvent` and flush every deferred reliable
+    /// event so the transition reaches the UI in order. Call from the tokio
+    /// task only, without the `Term` lock held.
+    pub(crate) async fn forward_lifecycle(&self, ev: SessionEvent) {
         debug_assert_eq!(
             ev.delivery_policy(),
             oneterm_terminal::SessionEventDelivery::Reliable
         );
         self.forward(ev);
+        self.flush_reliable().await;
     }
 
     /// Enqueue an OSC 10/11/12 color query (from `Event::ColorRequest`). Answered

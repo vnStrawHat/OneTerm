@@ -98,7 +98,7 @@ pub(crate) async fn sftp_task(
                     to.display()
                 );
                 let result = sftp
-                    .rename(from.to_string_lossy(), to.to_string_lossy())
+                    .rename(remote_path_string(&from), remote_path_string(&to))
                     .await
                     .map_err(map_sftp_err);
                 let _ = reply.send(result);
@@ -106,7 +106,7 @@ pub(crate) async fn sftp_task(
             Ok(SftpCmd::Remove { path, reply }) => {
                 log::debug!("sftp_task: Remove path=\"{}\"", path.display());
                 let result = sftp
-                    .remove_file(path.to_string_lossy())
+                    .remove_file(remote_path_string(&path))
                     .await
                     .map_err(map_sftp_err);
                 let _ = reply.send(result);
@@ -122,7 +122,7 @@ pub(crate) async fn sftp_task(
             Ok(SftpCmd::Mkdir { path, reply }) => {
                 log::debug!("sftp_task: Mkdir path=\"{}\"", path.display());
                 let result = sftp
-                    .create_dir(path.to_string_lossy())
+                    .create_dir(remote_path_string(&path))
                     .await
                     .map_err(map_sftp_err);
                 let _ = reply.send(result);
@@ -257,6 +257,16 @@ pub(crate) async fn sftp_task(
 }
 
 // ── Helpers ──────────────────────────────────────────────────
+
+/// Render a remote path for the SFTP wire.
+///
+/// Remote paths are POSIX, but the `SftpBackend` API carries them as host
+/// `PathBuf`s; on Windows `Path::join` inserts `\`, which the server would treat
+/// as part of the file name. Every command that sends a path must go through
+/// this until the API moves to a dedicated remote-path type.
+pub(crate) fn remote_path_string(path: &std::path::Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
 
 /// Convert a russh-sftp error to `AppError`.
 pub(crate) fn map_sftp_err(e: russh_sftp::client::error::Error) -> AppError {

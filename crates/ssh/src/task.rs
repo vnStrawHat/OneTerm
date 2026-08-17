@@ -46,7 +46,7 @@ pub(crate) async fn ssh_main_task(
                 let mut st = state.lock().unwrap();
                 st.alive = false;
             }
-            listener.forward_lifecycle(SessionEvent::Closed);
+            listener.forward_lifecycle(SessionEvent::Closed).await;
             break;
         }
         if let Some((rows, cols)) = listener.take_pending_resize() {
@@ -139,6 +139,11 @@ pub(crate) async fn ssh_main_task(
                             }
                         }
 
+                        // Deliver reliable events (Bell/Title/OSC…) that did not
+                        // fit in the queue during `advance` — the `Term` lock is
+                        // released here, so waiting for the UI is safe. They go
+                        // out before the batch's repaint hint, as before.
+                        listener.flush_reliable().await;
                         // Notify UI.
                         listener.forward(SessionEvent::Output);
                     }
@@ -150,7 +155,9 @@ pub(crate) async fn ssh_main_task(
                             st.alive = false;
                             st.exit_code = Some(code);
                         }
-                        listener.forward_lifecycle(SessionEvent::Exited(Some(code)));
+                        listener
+                            .forward_lifecycle(SessionEvent::Exited(Some(code)))
+                            .await;
                     }
                     Some(ChannelMsg::Eof) => {
                         log::info!("ssh_main_task: EOF received");
@@ -158,7 +165,7 @@ pub(crate) async fn ssh_main_task(
                             let mut st = state.lock().unwrap();
                             st.alive = false;
                         }
-                        listener.forward_lifecycle(SessionEvent::Closed);
+                        listener.forward_lifecycle(SessionEvent::Closed).await;
                         break;
                     }
                     Some(ChannelMsg::Close) => {
@@ -167,7 +174,7 @@ pub(crate) async fn ssh_main_task(
                             let mut st = state.lock().unwrap();
                             st.alive = false;
                         }
-                        listener.forward_lifecycle(SessionEvent::Closed);
+                        listener.forward_lifecycle(SessionEvent::Closed).await;
                         break;
                     }
                     None => {
@@ -176,7 +183,7 @@ pub(crate) async fn ssh_main_task(
                             let mut st = state.lock().unwrap();
                             st.alive = false;
                         }
-                        listener.forward_lifecycle(SessionEvent::Closed);
+                        listener.forward_lifecycle(SessionEvent::Closed).await;
                         break;
                     }
                     Some(other) => {
@@ -204,10 +211,15 @@ pub(crate) async fn ssh_main_task(
                             let mut st = state.lock().unwrap();
                             st.alive = false;
                         }
+                        listener.forward_lifecycle(SessionEvent::Closed).await;
                         break;
                     }
                     Err(_) => {
-                        log::info!("ssh_main_task: cmd_rx closed — session dropped");
+                        // Unreachable while the task runs: `term` and `listener`
+                        // both hold a `cmd_tx` clone. The closing flag (checked at
+                        // the top of the loop) is the shutdown signal —
+                        // `SshSession::drop` sets it.
+                        log::warn!("ssh_main_task: cmd_rx closed unexpectedly");
                         break;
                     }
                 }
