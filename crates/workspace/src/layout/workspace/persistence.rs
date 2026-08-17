@@ -75,15 +75,12 @@ impl super::OneTermWorkspace {
 ///
 /// `zoomed_panel`: name of the panel currently zoomed (fullscreen) — injected into the
 /// JSON value of `docks.json` (field `zoomed_panel`). `None` → removes the field (no panel zoomed).
-/// `toggle_button_visible`: show/hide the expand/collapse button on the TabPanel — injected
-/// into the JSON (field `toggle_button_visible`).
 /// Does not modify the `DockAreaState` struct.
 /// `trigger`: a string describing what triggered the write (e.g. "debounce", "on_app_quit",
-/// "zoom_in", "zoom_out", "reset_center_only", "reset_default_layout").
+/// "on_close", "zoom_in", "zoom_out", "reset_center_only", "reset_default_layout").
 pub(crate) fn save_state(
     state: &DockAreaState,
     zoomed_panel: Option<&str>,
-    toggle_button_visible: bool,
     trigger: &str,
 ) -> Result<()> {
     let state_value = serde_json::to_value(state)?;
@@ -93,11 +90,10 @@ pub(crate) fn save_state(
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     log::info!(
-        "Save layout [trigger={trigger}] → zoomed_panel={zoomed_panel:?}, toggle_button_visible={toggle_button_visible}, right_dock_open={right_dock_open}",
+        "Save layout [trigger={trigger}] → zoomed_panel={zoomed_panel:?}, right_dock_open={right_dock_open}",
     );
     let mut next_document = DockDocument::from_dock_state(state)?;
     next_document.zoomed_panel = zoomed_panel.map(str::to_owned);
-    next_document.toggle_button_visible = Some(toggle_button_visible);
     let outcome = update_dock_document(move |current| {
         next_document.sftp_table_state = current.sftp_table_state.take();
         *current = next_document;
@@ -112,13 +108,8 @@ pub(crate) fn save_state(
 }
 
 /// Persist a background snapshot and retain an actionable diagnostic on failure.
-pub(crate) fn save_state_logged(
-    state: &DockAreaState,
-    zoomed_panel: Option<&str>,
-    toggle_button_visible: bool,
-    trigger: &str,
-) {
-    if let Err(error) = save_state(state, zoomed_panel, toggle_button_visible, trigger) {
+pub(crate) fn save_state_logged(state: &DockAreaState, zoomed_panel: Option<&str>, trigger: &str) {
+    if let Err(error) = save_state(state, zoomed_panel, trigger) {
         log::error!("failed to persist dock state [trigger={trigger}]: {error:#}");
     }
 }
@@ -128,12 +119,6 @@ pub(crate) fn save_state_logged(
 /// does not exist or no panel is zoomed.
 pub(crate) fn read_zoomed_panel() -> Option<String> {
     read_dock_document().ok()?.zoomed_panel
-}
-
-/// Read `toggle_button_visible` from `docks.json`. Returns `None` if the file does
-/// not exist or the field is missing.
-pub(crate) fn read_toggle_button_visible() -> Option<bool> {
-    read_dock_document().ok()?.toggle_button_visible
 }
 
 #[cfg(test)]
@@ -149,7 +134,6 @@ mod tests {
         let state = DockAreaState::default();
         let mut document = DockDocument::from_dock_state(&state).unwrap();
         document.zoomed_panel = Some("session".into());
-        document.toggle_button_visible = Some(false);
         document.sftp_table_state = Some(SftpTableState {
             column_widths: HashMap::from([("name".into(), 320.0)]),
             column_visibility: HashMap::from([("permissions".into(), false)]),
@@ -160,7 +144,6 @@ mod tests {
 
         assert_eq!(restored.dock_state::<DockAreaState>().unwrap(), state);
         assert_eq!(restored.zoomed_panel.as_deref(), Some("session"));
-        assert_eq!(restored.toggle_button_visible, Some(false));
         assert_eq!(
             restored.sftp_table_state.unwrap().column_widths.get("name"),
             Some(&320.0)

@@ -11,7 +11,7 @@ use gpui_component::Root;
 use gpui_component::TitleBar;
 
 use oneterm_settings_ui::{CrashReport, show_crash_reports, start_auto_check};
-use oneterm_workspace::{OneTermWorkspace, save_dock_state_on_close};
+use oneterm_workspace::OneTermWorkspace;
 
 /// Open the main window and return its task handle.
 pub(crate) fn open_window(
@@ -68,13 +68,12 @@ pub(crate) fn open_window(
                     cx,
                 );
                 window.set_window_title("OneTerm");
-                cx.on_release(|_, cx| {
-                    // Synchronous write by design: `cx.quit()` below does not
-                    // wait for detached background tasks (CORR-04).
-                    save_dock_state_on_close(cx);
-                    cx.quit();
-                })
-                .detach();
+                // Closing the main window quits the app. The workspace persists
+                // its final layout synchronously in its own release hook; gpui
+                // runs it in the same effect flush (the root drops the workspace
+                // right after this listener), before the quit request is
+                // processed by the run loop (CORR-04).
+                cx.on_release(|_, cx| cx.quit()).detach();
             })
             .expect("failed to update window");
 

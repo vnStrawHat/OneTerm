@@ -10,4 +10,4 @@
 pub mod layout;
 pub mod widgets;
 
-pub use layout::{OneTermWorkspace, save_dock_state_on_close};
+pub use layout::OneTermWorkspace;

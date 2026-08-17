@@ -5,9 +5,9 @@
 //! (`UiConfig::init`) and applied in `theme::init` (theme name + font size) and
 //! `OneTermWorkspace::bind_keys` (key bindings). Changes are persisted back by:
 //!
-//! - a `Theme` global observer (font size + theme name — fires on any
-//!   `Theme::global_mut` mutation, e.g. the View ▸ Font Size menu, the
-//!   Appearance page, or the theme menus), and
+//! - the `Theme` global observer installed by [`UiConfig::observe_theme`]
+//!   (font size + theme name — fires on any `Theme::global_mut` mutation, e.g.
+//!   the View ▸ Font Size menu, the Appearance page, or the theme menus), and
 //! - the key-binding rebind UI (writes the `key_bindings` map + saves).
 //!
 //! The global `Entity<UiConfig>` is the single source of truth for the file's
@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use gpui::{App, AppContext, Entity, Global};
+use gpui_component::{ActiveTheme as _, Theme};
 use oneterm_core::{
     RightDockMode, atomic_write, config_dir, migrate_json_value, quarantine_file,
     set_schema_version,
@@ -162,12 +163,43 @@ impl UiConfig {
         cx.global::<UiConfigGlobal>().0.clone()
     }
 
-    /// Initialize the global — load `ui_config.json` (called from `ui::init`,
-    /// before `theme::init` so the saved theme/font can be applied).
+    /// Initialize the global — load `ui_config.json` once (called from the
+    /// composition root before `theme::init` so the saved theme/font can be
+    /// applied). Idempotent: later calls keep the loaded entity.
     pub fn init(cx: &mut App) {
+        if cx.has_global::<UiConfigGlobal>() {
+            return;
+        }
         let cfg = Self::load();
         let entity = cx.new(|_| cfg);
         cx.set_global(UiConfigGlobal(entity));
+    }
+
+    /// Persist the theme name + UI font size whenever the global `Theme` changes
+    /// (View ▸ Font Size menu, Appearance page, theme menus, …).
+    ///
+    /// Register this after the startup theme has been applied so init
+    /// mutations do not trigger a write. Notifications that leave the persisted
+    /// pair unchanged (e.g. the list-style override applied right after a theme
+    /// switch) are coalesced into no write at all.
+    pub fn observe_theme(cx: &mut App) {
+        cx.observe_global::<Theme>(|cx| {
+            let (name, size) = {
+                let theme = cx.theme();
+                (theme.theme_name().to_string(), theme.font_size.as_f32())
+            };
+            let changed = Self::global(cx).update(cx, |cfg, _cx| {
+                let changed = cfg.theme_name.as_deref() != Some(name.as_str())
+                    || cfg.ui_font_size != Some(size);
+                cfg.theme_name = Some(name);
+                cfg.ui_font_size = Some(size);
+                changed
+            });
+            if changed {
+                Self::persist(cx);
+            }
+        })
+        .detach();
     }
 
     /// Schedule persistence of a snapshot of the global config off the UI thread.

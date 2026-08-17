@@ -1,6 +1,6 @@
 [package]
 name = "oneterm-state"
-description = "OneTerm cross-cutting global application state (AppState) + notification helpers."
+description = "OneTerm cross-feature runtime state (AppState, AgentRegistry, completion history) + injection (AppServices) + shared docks.json ownership."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

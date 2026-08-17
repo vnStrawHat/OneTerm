@@ -14,7 +14,7 @@
 //! "active tab merges with content" effect like Zed/editors, with no override needed.
 
 use gpui::{Anchor, App, px};
-use gpui_component::{ActiveTheme as _, Theme, ThemeRegistry, scroll::ScrollbarShow};
+use gpui_component::{Theme, ThemeRegistry, scroll::ScrollbarShow};
 
 use oneterm_actions::{SwitchTheme, SwitchThemeMode};
 
@@ -178,21 +178,41 @@ pub fn init(cx: &mut App) {
     // so it only needs to be set once at init.
     Theme::global_mut(cx).notification.placement = Anchor::BottomRight;
 
-    // Observe theme changes — persist the theme name + UI font size to ui_config.json
-    // whenever the global Theme is mutated (View ▸ Font Size menu, Appearance page, theme
-    // menus, …). Registered last so the init mutations above don't trigger a save.
-    cx.observe_global::<Theme>(|cx| {
-        let (name, size) = {
-            let theme = cx.theme();
-            (theme.theme_name().to_string(), theme.font_size.as_f32())
-        };
-        oneterm_settings::UiConfig::global(cx).update(cx, |cfg, _cx| {
-            cfg.theme_name = Some(name);
-            cfg.ui_font_size = Some(size);
-        });
-        oneterm_settings::UiConfig::persist(cx);
-    })
-    .detach();
+    // Persistence of the theme choice (`ui_config.json`) is owned by
+    // `oneterm_settings::UiConfig::observe_theme`, which the composition root
+    // registers after this init so the startup mutations above do not write.
+}
 
-    let _ = cx.theme();
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_embedded_theme_file_parses() {
+        // TEST-21: a broken JSON in `themes/` must fail here, not as a runtime
+        // warning at startup.
+        for (name, content) in EMBEDDED_THEME_FILES {
+            let mut registry = ThemeRegistry::default();
+            registry
+                .load_themes_from_str(content)
+                .unwrap_or_else(|error| panic!("embedded theme {name} failed to parse: {error}"));
+            assert!(
+                !registry.themes().is_empty(),
+                "embedded theme {name} defines no theme variant"
+            );
+        }
+    }
+
+    #[test]
+    fn zed_default_themes_are_present_under_their_registry_names() {
+        // `init` looks these names up to install the Zed defaults; a rename in
+        // the JSON would silently fall back to gpui-component's defaults.
+        let mut registry = ThemeRegistry::default();
+        for (_, content) in EMBEDDED_THEME_FILES {
+            registry.load_themes_from_str(content).unwrap();
+        }
+        assert!(registry.themes().contains_key("Zed One Dark"));
+        assert!(registry.themes().contains_key("Zed One Light"));
+        assert!(registry.themes().len() >= EMBEDDED_THEME_FILES.len());
+    }
 }

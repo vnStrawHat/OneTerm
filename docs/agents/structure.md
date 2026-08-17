@@ -76,22 +76,31 @@ OneTerm/
 │   ├── actions/                    # `oneterm-actions` — leaf: gpui action structs (Copy/Paste/AddPanel…)
 │   │   └── src/lib.rs
 │   │
-│   ├── settings/                   # `oneterm-settings` — config load/save + live settings (no gpui-component)
+│   ├── settings/                   # `oneterm-settings` — config load/save + live settings (no UI views)
 │   │   └── src/
 │   │       ├── lib.rs              # Re-export TerminalConfig, TerminalSettings, UiConfig + types
 │   │       ├── terminal_config/    # terminal.json load/save (font/cursor/layout/scroll/bell/colors/security)
-│   │       ├── terminal_settings/  # Live TerminalSettings + apply/persist/mutators/color helpers
-│   │       └── ui_config.rs        # UiConfig (ui_font_size, theme_name, key_bindings) → ui_config.json
+│   │       ├── terminal_settings/  # Live TerminalSettings (defaults = TerminalConfig::default() via from_config)
+│   │       │                       #   + persist (to_config) / mutators / color helpers
+│   │       └── ui_config.rs        # UiConfig (ui_font_size, theme_name, key_bindings) → ui_config.json;
+│   │                               #   observe_theme(cx) persists the Theme choice (coalesced)
 │   │
-│   ├── state/                      # `oneterm-state` — shared global Entity<T> state + cross-cutting helpers
+│   ├── state/                      # `oneterm-state` — cross-feature runtime state + injection
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── app_state.rs        # AppState (global)
-│   │       ├── notif_ext.rs        # Notification helpers
-│   │       ├── commands.rs         # WorkspaceCommands fn-pointer registry (shell → feature inversion)
+│   │       ├── app_state.rs        # AppState (global): primary DockArea + per-workspace active terminal/SFTP context
+│   │       ├── services.rs         # AppServices (single injection bundle) + AppServicesBuilder (feature contributions)
+│   │       ├── commands.rs         # WorkspaceCommands fn-pointer struct (shell → feature inversion, read via AppServices)
+│   │       ├── active_terminal.rs  # ActiveTerminalMetricsProvider (breadcrumb/net stats hook, contributed by terminal-view)
+│   │       ├── agent_focus.rs      # AgentFocuser (agent-ui → terminal focus hook, contributed by terminal-view)
+│   │       ├── agent_model.rs      # Folded OSC 9;7 agent card model (+ agent_model_tests.rs)
+│   │       ├── agent_registry.rs   # AgentRegistry (global Entity): fold/lifecycle/stale/summary behind the Agent Panel
+│   │       ├── completion_history.rs # Process-global CompletionHistory entity (memory completion source)
+│   │       ├── dock_persistence.rs # docks.json DockDocument schema owner (read/update transaction, quarantine)
 │   │       ├── dock_util.rs        # DockArea walking + set_right_dock_open (shared shell/feature helper)
-│   │       ├── active_terminal.rs  # ActiveTerminalMetricsProvider (breadcrumb/net stats injection)
-│   │       └── paths.rs            # docks.json path + SFTP_TABLE_STATE_FIELD (shared shell/sftp)
+│   │       ├── panel_names.rs      # Registered dock panel name constants (persisted contract)
+│   │       ├── notif_ext.rs        # Theme-tinted notification builders (UI helper; move to theme pending)
+│   │       └── paths.rs            # docks.json path (shared shell/sftp)
 │   │
 │   ├── update/                     # `oneterm-update` — GitHub Releases updater service + staging/install orchestration
 │   │   └── src/                    # lib.rs + config/github/archive/install/version helpers
@@ -105,7 +114,7 @@ OneTerm/
 
 │   ├── workspace/                  # `oneterm-workspace` — feature-AGNOSTIC app shell
 │   │   └── src/
-│   │       ├── lib.rs              # Re-export OneTermWorkspace + save_dock_state_on_close
+│   │       ├── lib.rs              # Re-export OneTermWorkspace
 │   │       ├── layout/             # title_bar, app_menus, statusbar, workspace/{mod,actions,layout,persistence,zoom}
 │   │       │                       #   builds feature panels by NAME via gpui-component PanelRegistry
 │   │       └── widgets/            # statusbar widgets (breadcrumb, net_speed, datetime_clock, resource)
@@ -168,8 +177,8 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 | `vendor/gpui-component` | _(Cargo patch; not a workspace member)_ | external shared-ui | Upstream `gpui-component` `crates/ui` snapshot at the pinned revision, with the reviewed `TabPanel::set_active_panel` addition. See [`ui-fork-maintenance.md`](ui-fork-maintenance.md). |
 | `terminal` (`oneterm-terminal`) | `core` | engine | Terminal engine (alacritty-coupled, no gpui): `TerminalSession`, `TerminalModel`, events, palette/OSC/key/mouse helpers, and `SessionFactory`. |
 | `actions` (`oneterm-actions`) | `core`, gpui | leaf-ui | gpui `Action` structs shared by shell and features; domain placement types come from `core`. |
-| `settings` (`oneterm-settings`) | `core`, gpui | shared | `TerminalConfig`, live `TerminalSettings`, and `UiConfig`. |
-| `state` (`oneterm-state`) | `core`, `terminal`, `completion`, gpui, gpui-component | shared | `AppState`, notification helpers, command registry, dock helpers, active-terminal metrics, shared persistence paths, and the process-global `CompletionHistory`. |
+| `settings` (`oneterm-settings`) | `core`, gpui, gpui-component | shared | `TerminalConfig`, live `TerminalSettings` (defaults single-sourced from the config), and `UiConfig` including the `Theme` observer that persists `ui_config.json`. |
+| `state` (`oneterm-state`) | `core`, `terminal`, `completion`, gpui, gpui-component | shared | Cross-feature runtime state (`AppState`, `AgentRegistry`, `CompletionHistory`) + injection (`AppServices` bundle: session factory, `WorkspaceCommands`, active-terminal metrics, agent focuser) + shared shell contracts (`docks.json` document owner, panel names, dock helpers, notification helpers). |
 | `update` (`oneterm-update`) | `core`, `chrono`, `reqwest`, `semver`, `sha2`, `tar`, `flate2`, `zip` | shared | GitHub Releases auto-update checks, asset selection, download verification, staging, and installer orchestration. |
 | `theme` (`oneterm-theme`) | `settings`, `actions`, gpui, gpui-component | shared | Theme registry, built-in themes, and generated `AppIcon`. |
 | `workspace` (`oneterm-workspace`) | `core`, `terminal`, `settings`, `state`, `actions`, gpui-component | shell | Feature-agnostic app shell. Maps domain placement types to the UI dock and drives features through `WorkspaceCommands`. |

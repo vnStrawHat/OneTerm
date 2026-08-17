@@ -195,19 +195,7 @@ pub(crate) fn connect_ssh_session(
 ) -> ConnectionCancellation {
     let cancellation = cfg.cancellation.clone();
     let duplicate_config = cfg.duplicate_config();
-    let Some(factory) = AppServices::session_factory(cx) else {
-        connecting.store(false, std::sync::atomic::Ordering::Relaxed);
-        window.refresh();
-        window.push_notification(
-            notify(
-                NotificationType::Error,
-                "Internal error: application session service is unavailable.",
-                cx,
-            ),
-            cx,
-        );
-        return cancellation;
-    };
+    let factory = AppServices::session_factory(cx);
 
     if cancellation.is_cancelled() {
         return cancellation;

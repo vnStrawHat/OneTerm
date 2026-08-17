@@ -4,12 +4,15 @@
 //! init. `TerminalSettingsPanel` updates the shell kind → notify.
 //!
 //! The reverse mapping (settings → config) and persistence live in
-//! [`super::persist`]; config → settings in [`super::apply`].
+//! [`super::persist`]; config → settings in [`super::apply`]. Defaults are
+//! single-sourced in [`TerminalConfig::default`].
 
 use gpui::{App, AppContext, Entity, FontWeight, Global, Hsla, SharedString};
 use oneterm_core::LocalShellConfig;
 
-use crate::terminal_config::{SemanticHighlightingMode, TabTitleMode, TerminalConfig};
+use crate::terminal_config::{
+    CompletionConfig, SemanticHighlightingMode, TabTitleMode, TerminalConfig,
+};
 
 /// Live mirror of the `completion` config group (docs/auto-completion/06).
 ///
@@ -35,25 +38,10 @@ pub struct CompletionSettings {
 }
 
 impl Default for CompletionSettings {
+    /// The live defaults are the config defaults — single-sourced in
+    /// [`CompletionConfig::default`].
     fn default() -> Self {
-        // Mirrors CompletionConfig::default().
-        Self {
-            enabled: true,
-            accept_tab: true,
-            max_history: 500,
-            min_prefix_len: 1,
-            max_visible_items: 8,
-            source_memory: true,
-            source_manual: true,
-            source_external: true,
-            fuzzy: true,
-            inherit_ancestor_options: true,
-            disable_in_alt_screen: true,
-            require_prompt_region: true,
-            windows_allow_coreutils: false,
-            force_family: None,
-            redact_sensitive: true,
-        }
+        Self::from_config(&CompletionConfig::default())
     }
 }
 
@@ -91,7 +79,7 @@ pub enum TerminalBlink {
 }
 
 /// Padding on all 4 sides for the terminal content (px).
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct TerminalPadding {
     pub top: f32,
     pub right: f32,
@@ -100,7 +88,7 @@ pub struct TerminalPadding {
 }
 
 /// Color overrides — if `Some`, override the theme; `None` = use the theme.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ColorOverrides {
     pub foreground: Option<Hsla>,
     pub background: Option<Hsla>,
@@ -116,6 +104,7 @@ pub struct ColorOverrides {
 
 /// Global terminal config (shell + rendering options).
 /// Loaded from `terminal.json` at init.
+#[derive(Debug, Clone)]
 pub struct TerminalSettings {
     // ── Shell ──
     pub shell: LocalShellConfig,
@@ -193,32 +182,10 @@ pub struct TerminalSettings {
 }
 
 impl Default for TerminalSettings {
+    /// The live defaults are the `terminal.json` defaults — single-sourced in
+    /// [`TerminalConfig::default`] (see [`TerminalSettings::from_config`]).
     fn default() -> Self {
-        Self {
-            shell: LocalShellConfig::default(),
-            font_family: None,
-            font_size: None,
-            base_font_size: None,
-            font_weight: FontWeight::default(),
-            font_features: Vec::new(),
-            cursor_shape: TerminalCursorShape::Block,
-            cursor_blink: TerminalBlink::On,
-            cursor_color: None,
-            line_height_factor: 1.2,
-            cell_width: None,
-            padding: TerminalPadding::default(),
-            show_gutter: false,
-            semantic_highlighting: SemanticHighlightingMode::Auto,
-            tab_title_mode: TabTitleMode::Default,
-            show_context_menu: true,
-            scroll_multiplier: 1.0,
-            alternate_scroll: true,
-            scrollback_history: 10_000,
-            bell_enabled: true,
-            allow_clipboard_read: false,
-            color_overrides: ColorOverrides::default(),
-            completion: CompletionSettings::default(),
-        }
+        Self::from_config(&TerminalConfig::default())
     }
 }
 
@@ -233,14 +200,13 @@ impl TerminalSettings {
         cx.global::<TerminalSettingsGlobal>().0.clone()
     }
 
-    /// Initialize the global — load `terminal.json` and apply it (called from `ui::init`).
+    /// Initialize the global — load `terminal.json` once (called from the
+    /// composition root). Idempotent: later calls keep the loaded entity.
     pub fn init(cx: &mut App) {
-        let cfg = TerminalConfig::load();
-        let entity = cx.new(|_| {
-            let mut settings = Self::default();
-            settings.apply_config(&cfg);
-            settings
-        });
+        if cx.has_global::<TerminalSettingsGlobal>() {
+            return;
+        }
+        let entity = cx.new(|_| Self::from_config(&TerminalConfig::load()));
         cx.set_global(TerminalSettingsGlobal(entity));
     }
 }

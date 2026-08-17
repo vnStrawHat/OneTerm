@@ -1,6 +1,6 @@
 //! Reverse mapping `TerminalSettings` → `TerminalConfig` + persistence.
 //!
-//! `apply_config` (in `apply.rs`) goes config → settings at load time. This
+//! `from_config` (in `apply.rs`) goes config → settings at load time. This
 //! module provides the inverse — `to_config` — so the live settings can be
 //! written back to `terminal.json` when the user changes them in the Settings
 //! UI. `save` is a convenience that builds the config and delegates to
@@ -13,11 +13,13 @@
 use gpui::{App, FontWeight, Hsla};
 
 use crate::terminal_config::{
-    BellConfig, ColorsConfig, CursorConfig, FontConfig, LayoutConfig, MouseConfig, PaddingConfig,
-    ScrollConfig, SecurityConfig, TerminalConfig,
+    BellConfig, ColorsConfig, CompletionConfig, CompletionSources, CursorConfig, FontConfig,
+    LayoutConfig, MouseConfig, PaddingConfig, ScrollConfig, SecurityConfig, TerminalConfig,
 };
 
-use super::{TerminalBlink, TerminalCursorShape, TerminalSettings, hsla_to_hex};
+use super::{
+    CompletionSettings, TerminalBlink, TerminalCursorShape, TerminalSettings, hsla_to_hex,
+};
 
 // Roundtrip tests live in a sibling `persist_tests.rs` (same convention as
 // `terminal_config/document_tests.rs`).
@@ -57,10 +59,36 @@ fn color_to_hex(c: Option<Hsla>) -> Option<String> {
     c.map(hsla_to_hex)
 }
 
+impl CompletionSettings {
+    /// Build the `completion` config group from the live settings (inverse of
+    /// [`CompletionSettings::from_config`]).
+    pub fn to_config(&self) -> CompletionConfig {
+        CompletionConfig {
+            enabled: self.enabled,
+            accept_tab: self.accept_tab,
+            max_history: self.max_history,
+            min_prefix_len: self.min_prefix_len,
+            max_visible_items: self.max_visible_items,
+            sources: CompletionSources {
+                memory: self.source_memory,
+                manual: self.source_manual,
+                external: self.source_external,
+            },
+            fuzzy: self.fuzzy,
+            inherit_ancestor_options: self.inherit_ancestor_options,
+            disable_in_alt_screen: self.disable_in_alt_screen,
+            require_prompt_region: self.require_prompt_region,
+            windows_allow_coreutils: self.windows_allow_coreutils,
+            force_family: self.force_family.clone(),
+            redact_sensitive: self.redact_sensitive,
+        }
+    }
+}
+
 impl TerminalSettings {
     /// Build a [`TerminalConfig`] snapshot from the live settings.
     ///
-    /// This is the inverse of [`TerminalSettings::apply_config`]. The result
+    /// This is the inverse of [`TerminalSettings::from_config`]. The result
     /// can be passed to [`TerminalConfig::save`] to persist the settings.
     pub fn to_config(&self) -> TerminalConfig {
         let co = &self.color_overrides;
@@ -108,25 +136,7 @@ impl TerminalSettings {
             security: SecurityConfig {
                 allow_clipboard_read: self.allow_clipboard_read,
             },
-            completion: crate::terminal_config::CompletionConfig {
-                enabled: self.completion.enabled,
-                accept_tab: self.completion.accept_tab,
-                max_history: self.completion.max_history,
-                min_prefix_len: self.completion.min_prefix_len,
-                max_visible_items: self.completion.max_visible_items,
-                sources: crate::terminal_config::CompletionSources {
-                    memory: self.completion.source_memory,
-                    manual: self.completion.source_manual,
-                    external: self.completion.source_external,
-                },
-                fuzzy: self.completion.fuzzy,
-                inherit_ancestor_options: self.completion.inherit_ancestor_options,
-                disable_in_alt_screen: self.completion.disable_in_alt_screen,
-                require_prompt_region: self.completion.require_prompt_region,
-                windows_allow_coreutils: self.completion.windows_allow_coreutils,
-                force_family: self.completion.force_family.clone(),
-                redact_sensitive: self.completion.redact_sensitive,
-            },
+            completion: self.completion.to_config(),
             colors: ColorsConfig {
                 foreground: color_to_hex(co.foreground),
                 background: color_to_hex(co.background),

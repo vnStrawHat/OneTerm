@@ -187,3 +187,19 @@ impl Render for ResourceIndicator {
             .text_color(cx.theme().muted_foreground)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::format_memory;
+
+    #[test]
+    fn format_memory_scales_units_at_binary_thresholds() {
+        assert_eq!(format_memory(0), "0 B");
+        assert_eq!(format_memory(1023), "1023 B");
+        assert_eq!(format_memory(1024), "1.0 KB");
+        assert_eq!(format_memory(1536), "1.5 KB");
+        assert_eq!(format_memory(1024 * 1024), "1.0 MB");
+        assert_eq!(format_memory(1024 * 1024 * 1024), "1.00 GB");
+        assert_eq!(format_memory(3 * 1024 * 1024 * 1024 / 2), "1.50 GB");
+    }
+}

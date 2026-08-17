@@ -72,12 +72,13 @@ fn focus_agent_terminal(terminal_key: EntityId, window: &mut Window, cx: &mut Ap
     panel.update(cx, |p, cx| p.set_active_space(nav.space_id, window, cx));
 }
 
-/// Register the focuser with `oneterm-state` (called from [`crate::init`]).
+/// Contribute the focuser to `AppServices` (called from [`crate::init`]).
 pub fn init(cx: &mut App) {
-    oneterm_state::agent_focus::set_focuser(
-        cx,
-        oneterm_state::agent_focus::AgentFocuser {
-            focus: focus_agent_terminal,
-        },
-    );
+    oneterm_state::AppServicesBuilder::pending(cx)
+        .and_then(|builder| {
+            builder.agent_focuser(oneterm_state::agent_focus::AgentFocuser {
+                focus: focus_agent_terminal,
+            })
+        })
+        .expect("terminal feature must contribute its agent focuser once during init");
 }

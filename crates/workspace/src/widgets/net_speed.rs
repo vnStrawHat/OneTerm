@@ -179,3 +179,20 @@ impl Render for NetSpeedIndicator {
             .text_color(cx.theme().muted_foreground)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::format_speed;
+
+    #[test]
+    fn format_speed_scales_units_at_decimal_thresholds() {
+        assert_eq!(format_speed(0.0), "0 bps");
+        assert_eq!(format_speed(999.4), "999 bps");
+        assert_eq!(format_speed(1_000.0), "1.0 Kbps");
+        assert_eq!(format_speed(12_345.0), "12.3 Kbps");
+        assert_eq!(format_speed(1_000_000.0), "1.0 Mbps");
+        assert_eq!(format_speed(999_950_000.0), "1000.0 Mbps");
+        assert_eq!(format_speed(1_000_000_000.0), "1.00 Gbps");
+        assert_eq!(format_speed(2_500_000_000.0), "2.50 Gbps");
+    }
+}

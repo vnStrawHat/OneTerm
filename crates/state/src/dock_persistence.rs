@@ -30,9 +30,6 @@ pub struct DockDocument {
     /// Name of the currently zoomed panel.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zoomed_panel: Option<String>,
-    /// Whether the active tab panel shows its expand/collapse affordance.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub toggle_button_visible: Option<bool>,
     /// Persisted SFTP table column widths and visibility.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sftp_table_state: Option<SftpTableState>,
@@ -48,7 +45,6 @@ impl Default for DockDocument {
             schema_version: CURRENT_SCHEMA_VERSION,
             dock_fields: BTreeMap::new(),
             zoomed_panel: None,
-            toggle_button_visible: None,
             sftp_table_state: None,
         }
     }
@@ -203,7 +199,6 @@ mod tests {
         };
         let mut document = DockDocument::from_dock_state(&state).unwrap();
         document.zoomed_panel = Some("session".into());
-        document.toggle_button_visible = Some(false);
         document.sftp_table_state = Some(SftpTableState {
             column_widths: HashMap::from([("name".into(), 240.0)]),
             column_visibility: HashMap::from([("owner".into(), false)]),
@@ -214,7 +209,6 @@ mod tests {
 
         assert_eq!(restored.dock_state::<TestDockState>().unwrap(), state);
         assert_eq!(restored.zoomed_panel.as_deref(), Some("session"));
-        assert_eq!(restored.toggle_button_visible, Some(false));
         assert_eq!(
             restored.sftp_table_state.unwrap().column_widths.get("name"),
             Some(&240.0)
@@ -286,7 +280,7 @@ mod persistence_tests {
         // A well-formed document that is not a dock document is recovered too.
         std::fs::write(&path, b"[1, 2, 3]").unwrap();
         let outcome = update_dock_document_at(&path, |document| {
-            document.toggle_button_visible = Some(true);
+            document.zoomed_panel = Some("sftp".into());
             Ok(())
         })
         .unwrap();
@@ -297,8 +291,8 @@ mod persistence_tests {
             }
         ));
         let restored = read_dock_document_from(&path).unwrap();
-        assert_eq!(restored.toggle_button_visible, Some(true));
-        assert_eq!(restored.zoomed_panel, None);
+        assert_eq!(restored.zoomed_panel.as_deref(), Some("sftp"));
+        assert!(restored.sftp_table_state.is_none());
 
         // Subsequent updates on the healthy document are plain updates.
         let outcome = update_dock_document_at(&path, |_| Ok(())).unwrap();
@@ -333,6 +327,145 @@ mod persistence_tests {
             read_dock_document_from(&path).unwrap().schema_version,
             CURRENT_SCHEMA_VERSION
         );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    /// A fresh per-test directory; tests never touch the real configuration directory.
+    fn temp_directory(label: &str) -> std::path::PathBuf {
+        let directory = std::env::temp_dir().join(format!(
+            "oneterm-dock-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        directory
+    }
+
+    #[test]
+    fn concurrent_updates_from_many_threads_are_all_applied() {
+        let directory = temp_directory("concurrent");
+        let path = directory.join("docks.json");
+        let threads: Vec<_> = (0..8u32)
+            .map(|worker| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    for round in 0..5u32 {
+                        let outcome = update_dock_document_at(&path, |document| {
+                            // Every writer touches a distinct dock field, so a
+                            // lost update would leave a hole in the final document.
+                            document
+                                .dock_fields
+                                .insert(format!("worker-{worker}-{round}"), Value::Bool(true));
+                            document.zoomed_panel = Some(format!("worker-{worker}"));
+                            Ok(())
+                        })
+                        .unwrap();
+                        assert_eq!(outcome, DockUpdateOutcome::Updated);
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+
+        let restored = read_dock_document_from(&path).unwrap();
+        assert_eq!(restored.dock_fields.len(), 8 * 5);
+        assert!(restored.zoomed_panel.is_some());
+        assert_eq!(restored.schema_version, CURRENT_SCHEMA_VERSION);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn update_preserves_the_previous_document_as_backup() {
+        let directory = temp_directory("backup");
+        let path = directory.join("docks.json");
+        update_dock_document_at(&path, |document| {
+            document.zoomed_panel = Some("first".into());
+            Ok(())
+        })
+        .unwrap();
+        let first = std::fs::read_to_string(&path).unwrap();
+
+        update_dock_document_at(&path, |document| {
+            document.zoomed_panel = Some("second".into());
+            Ok(())
+        })
+        .unwrap();
+
+        let backup = read_dock_document_from(&directory.join("docks.bak")).unwrap();
+        assert_eq!(backup.zoomed_panel.as_deref(), Some("first"));
+        assert_eq!(
+            std::fs::read_to_string(directory.join("docks.bak")).unwrap(),
+            first
+        );
+        assert_eq!(
+            read_dock_document_from(&path)
+                .unwrap()
+                .zoomed_panel
+                .as_deref(),
+            Some("second")
+        );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn quarantine_keeps_the_invalid_bytes_and_the_last_good_backup() {
+        let directory = temp_directory("quarantine-backup");
+        let path = directory.join("docks.json");
+        update_dock_document_at(&path, |document| {
+            document.zoomed_panel = Some("good".into());
+            Ok(())
+        })
+        .unwrap();
+        // A second write makes the healthy document the `.bak` of the file we corrupt.
+        update_dock_document_at(&path, |_| Ok(())).unwrap();
+        std::fs::write(&path, b"{ truncated").unwrap();
+
+        let outcome = update_dock_document_at(&path, |document| {
+            document.zoomed_panel = Some("recovered".into());
+            Ok(())
+        })
+        .unwrap();
+
+        let DockUpdateOutcome::RecoveredFromInvalidData { quarantined } = outcome else {
+            panic!("expected recovery, got {outcome:?}");
+        };
+        let quarantined = quarantined.expect("invalid file is moved aside");
+        assert_eq!(std::fs::read(&quarantined).unwrap(), b"{ truncated");
+        assert_eq!(
+            read_dock_document_from(&directory.join("docks.bak"))
+                .unwrap()
+                .zoomed_panel
+                .as_deref(),
+            Some("good"),
+            "the last good backup survives quarantine"
+        );
+        assert_eq!(
+            read_dock_document_from(&path)
+                .unwrap()
+                .zoomed_panel
+                .as_deref(),
+            Some("recovered")
+        );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn current_schema_document_loads_idempotently() {
+        let directory = temp_directory("idempotent");
+        let path = directory.join("docks.json");
+        update_dock_document_at(&path, |document| {
+            document.zoomed_panel = Some("terminal".into());
+            Ok(())
+        })
+        .unwrap();
+        let first = std::fs::read_to_string(&path).unwrap();
+        update_dock_document_at(&path, |_| Ok(())).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), first);
         let _ = std::fs::remove_dir_all(directory);
     }
 }

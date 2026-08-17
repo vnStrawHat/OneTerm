@@ -276,7 +276,350 @@ impl AgentRegistry {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
+    use gpui::TestAppContext;
+    use oneterm_terminal::{HeartbeatEvent, StateEvent};
+
     use super::*;
+
+    fn grouping(tab_key: u64, tab_title: &str) -> Grouping {
+        Grouping {
+            tab_key: EntityId::from(tab_key),
+            tab_title: tab_title.to_string(),
+            space_number: 1,
+            space_order: 0,
+        }
+    }
+
+    fn state_event(agent: &str, seq: u64, state: AgentState) -> AgentStatusEvent {
+        AgentStatusEvent::State {
+            agent: agent.into(),
+            seq,
+            ts: seq * 1000,
+            payload: StateEvent {
+                state,
+                message: None,
+                session_id: None,
+            },
+        }
+    }
+
+    fn heartbeat(agent: &str, seq: u64, interval_ms: Option<u64>) -> AgentStatusEvent {
+        AgentStatusEvent::Heartbeat {
+            agent: agent.into(),
+            seq,
+            ts: seq * 1000,
+            payload: HeartbeatEvent {
+                interval_ms,
+                state: None,
+            },
+        }
+    }
+
+    fn registry(cx: &mut TestAppContext) -> Entity<AgentRegistry> {
+        cx.update(|cx| cx.new(|_| AgentRegistry::default()))
+    }
+
+    fn apply_state(
+        registry: &mut AgentRegistry,
+        terminal: EntityId,
+        grouping: Grouping,
+        agent: &str,
+        seq: u64,
+        state: AgentState,
+        cx: &mut Context<AgentRegistry>,
+    ) {
+        registry.apply(terminal, grouping, &state_event(agent, seq, state), cx);
+    }
+
+    #[gpui::test]
+    fn apply_creates_one_card_per_terminal_and_agent_and_refreshes_grouping(
+        cx: &mut TestAppContext,
+    ) {
+        let registry = registry(cx);
+        let first = EntityId::from(1u64);
+        let second = EntityId::from(2u64);
+        registry.update(cx, |registry, cx| {
+            apply_state(
+                registry,
+                first,
+                grouping(10, "tab-a"),
+                "pi",
+                1,
+                AgentState::Working,
+                cx,
+            );
+            apply_state(
+                registry,
+                first,
+                grouping(10, "tab-a"),
+                "pi",
+                2,
+                AgentState::Blocked,
+                cx,
+            );
+            apply_state(
+                registry,
+                second,
+                grouping(20, "tab-b"),
+                "pi",
+                1,
+                AgentState::Idle,
+                cx,
+            );
+            apply_state(
+                registry,
+                first,
+                grouping(11, "tab-a2"),
+                "qa",
+                1,
+                AgentState::Done,
+                cx,
+            );
+        });
+        registry.read_with(cx, |registry, _| {
+            let cards = registry.cards();
+            assert_eq!(cards.len(), 3, "same (terminal, agent) folds into one card");
+            assert_eq!(cards[0].agent_id, "pi");
+            assert_eq!(cards[0].state, AgentState::Blocked);
+            assert_eq!(cards[0].last_seq, 2);
+            assert_eq!(cards[1].terminal_key, second);
+            // Grouping metadata follows the latest event.
+            assert_eq!(cards[2].tab_key, EntityId::from(11u64));
+            assert_eq!(cards[2].tab_title, "tab-a2");
+        });
+    }
+
+    #[gpui::test]
+    fn set_lifecycle_keeps_a_recorded_exit_code_over_a_later_close(cx: &mut TestAppContext) {
+        let registry = registry(cx);
+        let terminal = EntityId::from(1u64);
+        let other = EntityId::from(2u64);
+        registry.update(cx, |registry, cx| {
+            apply_state(
+                registry,
+                terminal,
+                grouping(10, "tab"),
+                "pi",
+                1,
+                AgentState::Working,
+                cx,
+            );
+            apply_state(
+                registry,
+                other,
+                grouping(10, "tab"),
+                "pi",
+                1,
+                AgentState::Working,
+                cx,
+            );
+            registry.set_lifecycle(terminal, Lifecycle::Ended { exit_code: Some(3) }, cx);
+            registry.set_lifecycle(terminal, Lifecycle::Ended { exit_code: None }, cx);
+        });
+        registry.read_with(cx, |registry, _| {
+            assert_eq!(
+                registry.cards()[0].lifecycle,
+                Lifecycle::Ended { exit_code: Some(3) }
+            );
+            assert_eq!(
+                registry.cards()[1].lifecycle,
+                Lifecycle::Live,
+                "other terminals untouched"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn remove_terminal_and_clear_ended_rebuild_the_index(cx: &mut TestAppContext) {
+        let registry = registry(cx);
+        let first = EntityId::from(1u64);
+        let second = EntityId::from(2u64);
+        let third = EntityId::from(3u64);
+        registry.update(cx, |registry, cx| {
+            apply_state(
+                registry,
+                first,
+                grouping(10, "tab"),
+                "pi",
+                1,
+                AgentState::Working,
+                cx,
+            );
+            apply_state(
+                registry,
+                second,
+                grouping(10, "tab"),
+                "pi",
+                1,
+                AgentState::Working,
+                cx,
+            );
+            apply_state(
+                registry,
+                third,
+                grouping(10, "tab"),
+                "pi",
+                1,
+                AgentState::Working,
+                cx,
+            );
+            registry.remove_terminal(first, cx);
+            registry.set_lifecycle(second, Lifecycle::Ended { exit_code: Some(0) }, cx);
+            registry.clear_ended(cx);
+            // The surviving card must still fold by its composite key.
+            apply_state(
+                registry,
+                third,
+                grouping(10, "tab"),
+                "pi",
+                2,
+                AgentState::Done,
+                cx,
+            );
+        });
+        registry.read_with(cx, |registry, _| {
+            assert_eq!(registry.cards().len(), 1);
+            assert_eq!(registry.cards()[0].terminal_key, third);
+            assert_eq!(registry.cards()[0].state, AgentState::Done);
+            assert_eq!(registry.card_indices.len(), 1);
+            assert_eq!(
+                registry.card_indices.get(&(third, "pi".to_string())),
+                Some(&0)
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn refresh_stale_marks_live_cards_after_the_effective_window(cx: &mut TestAppContext) {
+        let registry = registry(cx);
+        let quiet = EntityId::from(1u64);
+        let heartbeating = EntityId::from(2u64);
+        let ended = EntityId::from(3u64);
+        registry.update(cx, |registry, cx| {
+            registry.set_stale_threshold_ms(1_000, cx);
+            apply_state(
+                registry,
+                quiet,
+                grouping(10, "tab"),
+                "pi",
+                1,
+                AgentState::Working,
+                cx,
+            );
+            // 3 x heartbeat interval (30 s) exceeds the 1 s threshold.
+            registry.apply(
+                heartbeating,
+                grouping(10, "tab"),
+                &heartbeat("pi", 1, Some(10_000)),
+                cx,
+            );
+            apply_state(
+                registry,
+                ended,
+                grouping(10, "tab"),
+                "pi",
+                1,
+                AgentState::Working,
+                cx,
+            );
+            registry.set_lifecycle(ended, Lifecycle::Ended { exit_code: None }, cx);
+            let stale_since = Instant::now() - Duration::from_secs(5);
+            for card in registry.cards.iter_mut() {
+                card.last_recv = stale_since;
+            }
+            registry.refresh_stale(cx);
+        });
+        registry.read_with(cx, |registry, _| {
+            assert_eq!(registry.cards()[0].lifecycle, Lifecycle::Stale);
+            assert_eq!(registry.cards()[1].lifecycle, Lifecycle::Live);
+            assert_eq!(
+                registry.cards()[2].lifecycle,
+                Lifecycle::Ended { exit_code: None }
+            );
+        });
+
+        // A threshold of 0 disables staleness marking entirely.
+        registry.update(cx, |registry, cx| {
+            registry.set_stale_threshold_ms(0, cx);
+            registry.cards[1].last_recv = Instant::now() - Duration::from_secs(3600);
+            registry.refresh_stale(cx);
+        });
+        registry.read_with(cx, |registry, _| {
+            assert_eq!(registry.cards()[1].lifecycle, Lifecycle::Live);
+        });
+    }
+
+    #[gpui::test]
+    fn summary_counts_states_and_treats_ended_as_done(cx: &mut TestAppContext) {
+        let registry = registry(cx);
+        registry.update(cx, |registry, cx| {
+            let states = [
+                AgentState::Working,
+                AgentState::Working,
+                AgentState::Blocked,
+                AgentState::Idle,
+                AgentState::Done,
+                AgentState::Error,
+            ];
+            for (index, state) in states.into_iter().enumerate() {
+                let terminal = EntityId::from(index as u64 + 1);
+                apply_state(registry, terminal, grouping(10, "tab"), "pi", 1, state, cx);
+            }
+            // An ended Working card counts as done, not working.
+            registry.set_lifecycle(
+                EntityId::from(1u64),
+                Lifecycle::Ended { exit_code: Some(0) },
+                cx,
+            );
+        });
+        registry.read_with(cx, |registry, _| {
+            assert_eq!(
+                registry.summary(),
+                AgentStateCounts {
+                    working: 1,
+                    blocked: 1,
+                    idle: 1,
+                    done: 2,
+                    error: 1,
+                    total: 6,
+                }
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn rename_tab_title_updates_only_the_tab_group(cx: &mut TestAppContext) {
+        let registry = registry(cx);
+        registry.update(cx, |registry, cx| {
+            let first = EntityId::from(1u64);
+            let second = EntityId::from(2u64);
+            apply_state(
+                registry,
+                first,
+                grouping(10, "old"),
+                "pi",
+                1,
+                AgentState::Idle,
+                cx,
+            );
+            apply_state(
+                registry,
+                second,
+                grouping(20, "other"),
+                "pi",
+                1,
+                AgentState::Idle,
+                cx,
+            );
+            registry.rename_tab_title(EntityId::from(10u64), "new".into(), cx);
+        });
+        registry.read_with(cx, |registry, _| {
+            assert_eq!(registry.cards()[0].tab_title, "new");
+            assert_eq!(registry.cards()[1].tab_title, "other");
+        });
+    }
 
     fn card(terminal_key: EntityId, agent_id: &str) -> AgentCard {
         AgentCard::new(

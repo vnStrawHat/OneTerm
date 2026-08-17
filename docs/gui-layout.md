@@ -64,7 +64,7 @@ StatusBar.
 
 | Reference `dock.rs` component | OneTerm | Notes |
 |---|---|---|
-| `StoryWorkspace { title_bar, dock_area, last_layout_state, toggle_button_visible, _save_layout_task }` | `OneTermWorkspace` (rename, keep fields) | `app/src/app.rs` |
+| `StoryWorkspace { title_bar, dock_area, last_layout_state, toggle_button_visible, _save_layout_task }` | `OneTermWorkspace` (rename; `toggle_button_visible` dropped — the toggle-button action was never dispatched) | `crates/workspace/src/layout/workspace/mod.rs` |
 | `AppTitleBar::new("Examples", ...)` | `AppTitleBar::new("OneTerm", ...)` | Change title |
 | `AppMenuBar` (`app_menus.rs`: Appearance/Theme/Language + Edit/Window/Help) | Keep 100% | Themes + Language + Appearance |
 | `FontSizeSelector` (font-size, gutter toggle) | Keep (drop radius/scrollbar/list-highlight) | radius=0px, scrollbar=Scrolling fixed in `theme::init`; list.active_highlight=true fixed; gutter toggle → `TerminalSettings.show_gutter` |
@@ -491,20 +491,16 @@ impl OneTermWorkspace {
             _ => {}
         }).detach();
 
-        // Save layout before quit
-        cx.on_app_quit({
-            let dock_area = dock_area.clone();
-            move |_, cx| {
-                let state = dock_area.read(cx).dump(cx);
-                cx.background_executor().spawn(async move {
-                    Self::save_state(&state).unwrap();
-                })
-            }
-        }).detach();
+        // Save layout at exit — synchronously (gpui does not await detached
+        // background tasks during shutdown). `on_app_quit` covers Quit while
+        // the window is open; `on_release` covers closing the window, which
+        // drops the root view before `cx.quit()`. The first to run writes.
+        cx.on_app_quit(|this, cx| { this.save_layout_on_exit("on_app_quit", cx); async {} }).detach();
+        cx.on_release(|this, cx| this.save_layout_on_exit("on_close", cx)).detach();
 
         let title_bar = cx.new(|cx| AppTitleBar::new("OneTerm", window, cx).child(...));
 
-        Self { dock_area, title_bar, last_layout_state: None, toggle_button_visible: true, _save_layout_task: None }
+        Self { dock_area, title_bar, last_layout_state: None, zoomed_panel: None, layout_saved_on_exit: false, _save_layout_task: None, .. }
     }
 }
 ```
@@ -777,7 +773,7 @@ Per [`docs/agents/structure.md`](agents/structure.md):
 - [ ] `reset_default_layout`: center = tabs([TerminalPanel]), right_dock = v_split([Session, Sftp]).
 - [ ] `set_dock_collapsible(Edges{right:true, ..})`.
 - [ ] `load_layout` + version check + reset prompt.
-- [ ] `save_layout` (debounce 10s) + `save_state` + `on_app_quit` save.
+- [ ] `save_layout` (debounce) + `save_state` + synchronous exit save (`on_app_quit` / `on_release`).
 
 ### Step 4 — Title bar & menu
 
