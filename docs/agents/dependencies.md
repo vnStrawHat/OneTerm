@@ -14,6 +14,15 @@ The workspace is pinned to the exact rev set verified as compatible by `referenc
 | `gpui_platform` | `https://github.com/zed-industries/zed` | `1d217ee39d381ac101b7cf49d3d22451ac1093fe` | (same rev — monorepo) |
 | `gpui-component` | `https://github.com/longbridge/gpui-component` | `ea6b194db04cc7c0474851f07c7d5b7a9df6a98b` | `0.5.2` (not tagged yet, currently at HEAD between `v0.5.1` → `v0.5.2`) |
 | `gpui-component-assets` | `https://github.com/longbridge/gpui-component` | `ea6b194db04cc7c0474851f07c7d5b7a9df6a98b` | (same repo/rev as `gpui-component` — built-in icon/font assets) |
+| `alacritty_terminal` | `https://github.com/zed-industries/alacritty` (Zed fork) | `fcf32feacb367b75ec84dd40f041e4fd411d3cc1` | `0.26.1-dev` — **vendored** at `vendor/alacritty_terminal`, see [`vendor/README.md`](../../vendor/README.md) |
+| `vte` | crates.io | `0.15.0` (VCS `3b3da71c34cc1256c7e20981cf03f8eb95e08ffc`) | `0.15.0` — **vendored** at `vendor/vte`, see [`vendor/README.md`](../../vendor/README.md) |
+
+Three of these (`gpui-component`, `alacritty_terminal`, `vte`) are **vendored**: the root
+`Cargo.toml` `[patch]` section redirects them to `vendor/<crate>/`. **Policy:** the
+rev-lock above is the *pristine base rev*; every OneTerm delta lives **exclusively** in
+`vendor/patches/<crate>/*.patch` (never hand-edit `vendor/<crate>/`). `bash
+vendor/refresh.sh --check` (CI) proves `vendor/<crate> == pristine @ rev + patches`;
+`python scripts/check-ui-fork.py` additionally hash-pins the gpui-component package.
 
 > 📌 **Inviolable rules**:
 >
@@ -21,6 +30,7 @@ The workspace is pinned to the exact rev set verified as compatible by `referenc
 > 2. `gpui-component` and `gpui-component-assets` **must share the same rev** (same `longbridge/gpui-component` repo).
 > 3. Do not add `gpui` from crates.io or any other git source. If you need a feature beyond the 4 crates above → patch upstream or fork locally; do not swap dependencies on a whim.
 > 4. When upstream tags `gpui-component` `v0.5.2`, consider switching the rev → tag for long-term stability.
+> 5. Bumping a vendored crate's rev is a three-place change (root `Cargo.toml`, `vendor/README.md` §1, this table) plus a patch rebase — follow `vendor/README.md` §5.
 
 ## 2. Declaration in the workspace `Cargo.toml`
 
@@ -47,21 +57,34 @@ gpui-component-assets.workspace = true
 
 ## 3. Allowed auxiliary crates
 
-| Purpose | Recommended crate |
-|---|---|
-| SSH protocol | `russh` + `russh-sftp` |
-| Local shell PTY | `alacritty_terminal::tty` (do NOT use `portable-pty` — design decision, see [`docs/terminal-backend.md`](../terminal-backend.md)) |
-| Terminal parser / grid | `alacritty_terminal` (fork `zed-industries/alacritty` @ rev `fcf32feacb367b75ec84dd40f041e4fd411d3cc1` — patched build with `TerminalContent`/`display_iter`, see the workspace `Cargo.toml`) |
-| Async runtime (re-export) | `smol` / `futures` (already available in gpui) |
-| Serialization | `serde`, `serde_json`, `toml` |
-| Storage (host list, settings) | `directories` (XDG / AppData) |
-| Logging | `tracing` + `tracing-subscriber` |
-| Error | `anyhow` (binary), `thiserror` (library) |
-| Native crash capture | `crash-handler = 0.8.0` (app binary only; callback must remain compromised-context-safe) |
-| Extra crypto | `russh-cryptovec`, `ssh-key` |
-| i18n | `rust-i18n` (matches gpui-component) |
+Every third-party dependency is declared **once** in the root `Cargo.toml`
+`[workspace.dependencies]` and pulled into a crate with `name.workspace = true`
+(no inline versions in `crates/*/Cargo.toml`). The set currently in use:
 
-Before adding a new crate, ask: "is this crate already in `reference/gpui-component/Cargo.toml`?" If yes → use the locked rev. If not and it is a new crate → open an issue before adding it.
+| Purpose | Crate(s) |
+|---|---|
+| SSH protocol + SFTP subsystem | `russh` (features `ring`, `flate2`, `rsa`), `russh-sftp` |
+| SSH runtime (hidden inside `ssh`) | `tokio` (`rt`, `rt-multi-thread`, `sync`, `io-util`, `net`, `macros`, `fs`), `tokio-util`, `rand` |
+| Local shell PTY | `alacritty_terminal::tty` + `polling` (do NOT use `portable-pty` — design decision, see [`docs/terminal-backend.md`](../terminal-backend.md)) |
+| Terminal parser / grid | `alacritty_terminal` (vendored Zed fork, §1) — which pulls the vendored `vte` |
+| Event channel (`SessionEvent`) | `async-channel` (keeps Tokio out of the public API) |
+| Terminal helpers | `linkify` (URL detection), `base64` (OSC 52), `aho-corasick` + `regex` (highlight engine), `itertools` (terminal-view) |
+| Serialization | `serde` (`derive`), `serde_json` |
+| Error | `anyhow` (binary / UI glue), `thiserror` (library error types) |
+| Logging | `log` (also used by alacritty_terminal), `env_logger` (app binary) |
+| Native crash capture | `crash-handler = 0.8.0` (app binary only; callback must remain compromised-context-safe) |
+| Secrets | `zeroize` (`derive`) |
+| Auto-update | `reqwest` (blocking, rustls, system proxy), `semver`, `sha2`, `zip`, `tar`, `flate2` |
+| UI helpers | `chrono` (clock widget / timestamps), `sysinfo` (CPU/memory widget), `rust-embed` (theme + icon assets) |
+| Windows FFI | `windows-sys 0.59` — one workspace entry, feature union of every first-party use |
+| Build / dev only | `embed-resource` (app `.rc`), `libc` (local-shell DOOM-fire example) |
+
+Not used (do not re-add without a design decision): `tracing`/`tracing-subscriber`
+(the workspace logs through `log`), `directories` (`oneterm_core::config_dir` owns
+paths), `toml`, `russh-cryptovec`, `ssh-key`, `smol` (gpui's executor is reached
+through `cx.background_executor()`), `rust-i18n`.
+
+Before adding a new crate, ask: "is this crate already in `reference/gpui-component/Cargo.toml`?" If yes → use the locked rev. If not and it is a new crate → open an issue before adding it, then add it to `[workspace.dependencies]` **and** this table.
 
 ---
 

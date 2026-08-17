@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Verify the reviewed baseline for OneTerm's vendored gpui-component patch."""
+"""Verify the reviewed baseline for OneTerm's vendored gpui-component patch.
+
+The check surface is the whole vendored package (`vendor/gpui-component`: `src/**`,
+`Cargo.toml`, `build.rs`, `locales/**`, licence) against upstream `crates/ui` at the
+pinned revision; only the files touched by the patches under `vendor/patches/` may
+differ.
+"""
 
 from __future__ import annotations
 
@@ -12,15 +18,22 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-FORK = ROOT / "vendor" / "gpui-component" / "src"
+FORK = ROOT / "vendor" / "gpui-component"
 PATCH_DIR = ROOT / "vendor" / "patches" / "gpui-component"
 PATCH_FILES = (
     PATCH_DIR / "0001-OneTerm-add-TabPanel-set_active_panel.patch",
+    PATCH_DIR / "0002-OneTerm-make-Cargo-manifest-standalone.patch",
     PATCH_DIR / "0003-OneTerm-fix-settings-section-scroll.patch",
 )
 BASELINE = ROOT / "scripts" / "ui-fork-baseline.json"
 UPSTREAM_URL = "https://github.com/longbridge/gpui-component"
-PATCH_MODULES = ("dock/tab_panel.rs", "setting/page.rs", "setting/settings.rs")
+# Paths (relative to the package root) the patches are allowed to change.
+PATCH_MODULES = (
+    "src/dock/tab_panel.rs",
+    "src/setting/page.rs",
+    "src/setting/settings.rs",
+    "Cargo.toml",
+)
 
 
 def digest(path: Path) -> str:
@@ -59,7 +72,7 @@ def clone_upstream(destination: Path, revision: str) -> Path:
     ).strip()
     if actual != revision:
         raise RuntimeError(f"upstream checkout is at {actual}, expected {revision}")
-    return destination / "crates" / "ui" / "src"
+    return destination / "crates" / "ui"
 
 
 def update_baseline(expected_rev: str) -> int:
@@ -75,7 +88,10 @@ def update_baseline(expected_rev: str) -> int:
         upstream_files = source_files(upstream_root)
 
         if set(local_files) != set(upstream_files):
-            print("error: vendor and upstream source file sets differ", file=sys.stderr)
+            for name in sorted(set(local_files) ^ set(upstream_files)):
+                side = "vendor only" if name in local_files else "upstream only"
+                print(f"  {side}: {name}", file=sys.stderr)
+            print("error: vendor and upstream package file sets differ", file=sys.stderr)
             return 1
 
         files = {
@@ -111,7 +127,7 @@ def update_baseline(expected_rev: str) -> int:
         "files": files,
     }
     BASELINE.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
-    print(f"Updated {BASELINE.relative_to(ROOT)} for {len(files)} source files.")
+    print(f"Updated {BASELINE.relative_to(ROOT)} for {len(files)} package files.")
     return 0
 
 
@@ -143,7 +159,7 @@ def verify_baseline(expected_rev: str) -> int:
     local_files = source_files(FORK)
     baseline_files = baseline["files"]
     if set(local_files) != set(baseline_files):
-        errors.append("vendored source file set differs from the reviewed baseline")
+        errors.append("vendored package file set differs from the reviewed baseline")
     for name in sorted(set(local_files) & set(baseline_files)):
         entry = baseline_files[name]
         if digest(local_files[name]) != entry["local_sha256"]:
@@ -164,7 +180,7 @@ def verify_baseline(expected_rev: str) -> int:
     )
     delta_label = "file contains" if changed == 1 else "files contain"
     print(
-        f"UI vendor baseline passed for {len(baseline_files)} source files; "
+        f"UI vendor baseline passed for {len(baseline_files)} package files; "
         f"{changed} {delta_label} reviewed OneTerm deltas."
     )
     return 0

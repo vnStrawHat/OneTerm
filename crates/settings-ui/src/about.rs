@@ -1,7 +1,7 @@
 //! "About" settings page — version, description, and links.
 //!
-//! The version string comes from the `ONETERM_VERSION` compile-time env (the
-//! same value shown by the OneTerm ▸ About dialog).
+//! The version string is the workspace `CARGO_PKG_VERSION` (the same value
+//! shown by the OneTerm ▸ About dialog).
 
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -23,7 +23,6 @@ use oneterm_theme::icon::AppIcon;
 
 use super::updates;
 
-const GITHUB_REPOSITORY_URL: &str = "https://github.com/vnStrawHat/OneTerm";
 const TEST_CRASH_CLICK_COUNT: u8 = 10;
 
 static ABOUT_ICON_CLICKS: AtomicU8 = AtomicU8::new(0);
@@ -146,7 +145,7 @@ fn app_identity(cx: &App) -> AnyElement {
         )
         .child(Label::new("OneTerm").text_xl())
         .child(
-            Label::new(format!("Version {}", env!("ONETERM_VERSION")))
+            Label::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
                 .text_sm()
                 .text_color(cx.theme().muted_foreground),
         )
@@ -198,6 +197,12 @@ fn register_about_icon_click() -> bool {
         .is_ok_and(|previous| previous + 1 == TEST_CRASH_CLICK_COUNT)
 }
 
+/// GitHub page of the repository this build was configured for (the same
+/// `owner/repo` the updater queries), so a fork build links to itself.
+fn github_repository_url() -> String {
+    format!("https://github.com/{}", oneterm_update::UPDATE_REPOSITORY)
+}
+
 fn repository_link(id: &'static str, cx: &App) -> AnyElement {
     div()
         .id(id)
@@ -206,9 +211,9 @@ fn repository_link(id: &'static str, cx: &App) -> AnyElement {
         .text_color(cx.theme().link)
         .text_decoration_1()
         .cursor_pointer()
-        .child(GITHUB_REPOSITORY_URL)
+        .child(github_repository_url())
         .on_click(|_, _, cx| {
-            cx.open_url(GITHUB_REPOSITORY_URL);
+            cx.open_url(&github_repository_url());
         })
         .into_any_element()
 }

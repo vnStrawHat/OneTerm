@@ -2,8 +2,8 @@
 //!
 //! Responsibilities:
 //! 1. Generate a Windows resource script from the `assets/oneterm.rc` template by
-//!    injecting the version (read from the repo-root `VERSION` file) and absolute
-//!    icon paths, then compile it into a `.res` linked into the exe
+//!    injecting the version (`CARGO_PKG_VERSION`, i.e. the workspace `version`) and
+//!    absolute icon paths, then compile it into a `.res` linked into the exe
 //!    (oneterm-debug in dev, oneterm in release), embedding the app icon
 //!    (48px + 96px) and VS_VERSION_INFO. Windows only.
 //! 2. Copy `conpty.dll` + `x64/OpenConsole.exe` to the target directory so they ship with the exe.
@@ -23,29 +23,18 @@
 use std::path::{Path, PathBuf};
 
 fn main() {
-    let manifest_dir = std::path::PathBuf::from(
-        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"),
-    );
-    let version_file = manifest_dir
-        .ancestors()
-        .nth(2)
-        .expect("could not resolve repo root")
-        .join("VERSION");
-    let version = std::fs::read_to_string(&version_file)
-        .unwrap_or_else(|error| panic!("failed to read {}: {error}", version_file.display()));
-    println!("cargo:rustc-env=ONETERM_VERSION={}", version.trim());
-    println!("cargo:rerun-if-changed=../../VERSION");
-
-    // All remaining logic runs on Windows only.
+    // All logic runs on Windows only.
     #[cfg(target_os = "windows")]
     {
+        let manifest_dir =
+            PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"));
         let assets_dir = manifest_dir.join("assets");
 
         // ── 1. Generate + compile the resource script (icon + version info) ──
         //
         // `assets/oneterm.rc` is a TEMPLATE with placeholders:
         //   {{ASSETS_DIR}}, {{VERSION_COMMA}}, {{VERSION_STR}}.
-        // We read the repo-root VERSION file, parse it into Windows 4-part form,
+        // We take CARGO_PKG_VERSION, parse it into Windows 4-part form,
         // substitute the placeholders, and write the generated .rc to OUT_DIR
         // (so the source tree stays clean). embed-resource then compiles it;
         // icon paths in the generated file are absolute so they resolve regardless
@@ -55,12 +44,7 @@ fn main() {
             let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
             let generated_rc = out_dir.join("oneterm-generated.rc");
 
-            match generate_rc(
-                &rc_template,
-                &generated_rc,
-                &assets_dir,
-                manifest_dir.as_path(),
-            ) {
+            match generate_rc(&rc_template, &generated_rc, &assets_dir) {
                 Ok(()) => {
                     if let Err(e) = embed_resource::compile(&generated_rc, embed_resource::NONE)
                         .manifest_required()
@@ -95,7 +79,8 @@ fn main() {
         let _ = std::fs::create_dir_all(target_dir.join("x64"));
         copy_runtime_asset(&openconsole_src, &openconsole_dst, "OpenConsole.exe");
 
-        // Re-run the build script when assets / resources / VERSION change.
+        // Re-run the build script when assets / resources change (Cargo already
+        // re-runs it when the package version changes).
         println!("cargo:rerun-if-changed=assets/oneterm.rc");
         println!("cargo:rerun-if-changed=assets/icons/terminal-48x48.ico");
         println!("cargo:rerun-if-changed=assets/icons/terminal-96x96.ico");
@@ -104,25 +89,15 @@ fn main() {
     }
 }
 
-/// Read the repo-root `VERSION` file (semver-ish, 2-4 dot-separated ints), parse it into
-/// Windows VS_VERSION_INFO 4-part form, and substitute placeholders in the `.rc`
-/// template. Writes the generated script to `out`.
+/// Take the package version (`CARGO_PKG_VERSION`, semver-ish, 2-4 dot-separated ints),
+/// parse it into Windows VS_VERSION_INFO 4-part form, and substitute placeholders in the
+/// `.rc` template. Writes the generated script to `out`.
 ///
-/// Example: VERSION="0.1.0"  →  comma="0,1,0,0", str="0.1.0.0".
+/// Example: version="0.1.0"  →  comma="0,1,0,0", str="0.1.0.0".
 #[cfg(target_os = "windows")]
-fn generate_rc(
-    template: &Path,
-    out: &Path,
-    assets_dir: &Path,
-    manifest_dir: &Path,
-) -> std::io::Result<()> {
-    // VERSION lives at the repo root (two levels up from crates/app).
-    let repo_root = manifest_dir.ancestors().nth(2).unwrap();
-    let version_file = repo_root.join("VERSION");
-    let raw = std::fs::read_to_string(&version_file)?;
-    let raw = raw.trim();
-
-    let (comma, dotted) = parse_version_for_rc(raw);
+fn generate_rc(template: &Path, out: &Path, assets_dir: &Path) -> std::io::Result<()> {
+    let raw = std::env::var("CARGO_PKG_VERSION").expect("CARGO_PKG_VERSION not set");
+    let (comma, dotted) = parse_version_for_rc(raw.trim());
 
     let template_src = std::fs::read_to_string(template)?;
     // Use forward slashes — rc.exe accepts them on Windows too.

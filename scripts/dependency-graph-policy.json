@@ -24,11 +24,9 @@
       "oneterm-core"
     ],
     "oneterm-agent-ui": [
-      "oneterm-core",
       "oneterm-settings",
       "oneterm-state",
-      "oneterm-terminal",
-      "oneterm-theme"
+      "oneterm-terminal"
     ],
     "oneterm-app": [
       "oneterm-agent-ui",
@@ -113,8 +111,7 @@
       "oneterm-core",
       "oneterm-settings",
       "oneterm-state",
-      "oneterm-terminal",
-      "oneterm-theme"
+      "oneterm-terminal"
     ]
   },
   "backends": [

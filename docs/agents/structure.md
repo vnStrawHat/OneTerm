@@ -19,7 +19,9 @@ OneTerm/
 ├── Cargo.lock
 ├── AGENTS.md                       # Entry-point file for the agent
 ├── README.md                       # Project README
-├── VERSION                         # Single-source version string (read by build scripts)
+├── VERSION                         # Release version (workflow / macOS bundle); mirrors [workspace.package] version
+├── rust-toolchain.toml             # Pinned Rust toolchain (channel + rustfmt/clippy)
+├── deny.toml                       # cargo-deny policy (licenses / bans / advisories)
 ├── .gitignore
 ├── .rustfmt.toml
 │
@@ -101,8 +103,7 @@ OneTerm/
 │   │   └── src/{lib.rs, theme.rs, icon.rs}
 │   │
 
-│   ├── workspace/                  # `oneterm-workspace` — feature-AGNOSTIC app shell (has build.rs)
-│   │   ├── build.rs                # Publishes ONETERM_VERSION (About action)
+│   ├── workspace/                  # `oneterm-workspace` — feature-AGNOSTIC app shell
 │   │   └── src/
 │   │       ├── lib.rs              # Re-export OneTermWorkspace + save_dock_state_on_close
 │   │       ├── layout/             # title_bar, app_menus, statusbar, workspace/{mod,actions,layout,persistence,zoom}
@@ -122,14 +123,10 @@ OneTerm/
 │   │   └── src/                    # lib.rs init() (SshSessionStore::init + register "session" panel);
 │   │                               #   panel, connect_dialog, quick_connect_dialog, session_state.rs …
 │   │
-│   ├── settings-ui/                # `oneterm-settings-ui` — General Settings window (has build.rs)
-│   │   ├── build.rs                # Publishes ONETERM_VERSION (About page)
+│   ├── settings-ui/                # `oneterm-settings-ui` — General Settings window
 │   │   └── src/                    # lib.rs: open_settings + setup_key_bindings commands;
 │   │                               #   panel/window/general/terminal/appearance/about/key_bindings …
 │   │                               #   update_controls/updates state
-│   │
-│   ├── update/                     # `oneterm-update` — GitHub Releases updater service + staging/install orchestration
-│   │   └── src/                    # lib.rs, build.rs, config.rs, github.rs, archive.rs, install.rs, version.rs
 │   │
 │   └── agent-ui/                   # `oneterm-agent-ui` — AGENT feature (right-dock fleet view + compact cards)
 │       └── src/                    # lib.rs init() (AgentRegistry::init); view/card render helpers
@@ -139,8 +136,10 @@ OneTerm/
 │   ├── terminal-backend.md / ssh-client-connect.md / sftp-browser-design.md …
 │   └── agents/{code-style.md, dependencies.md, structure.md (this file)}
 │
-├── vendor/                         # Tracked source patches for external dependencies
-│   └── gpui-component/             # patched snapshot; not a workspace member
+├── vendor/                         # Vendored forks = pristine upstream @ rev + patches/ (see vendor/README.md)
+│   ├── patches/{vte,alacritty_terminal,gpui-component}/   # the ONLY place OneTerm deltas live
+│   ├── refresh.sh                  # regenerate / --check the vendored trees (CI runs --check)
+│   ├── vte/ · alacritty_terminal/ · gpui-component/       # consumed via [patch]; not workspace members
 │
 └── reference/                      # Local clone of gpui-component (gitignored, research only)
     └── gpui-component/
@@ -173,12 +172,12 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 | `state` (`oneterm-state`) | `core`, `terminal`, `completion`, gpui, gpui-component | shared | `AppState`, notification helpers, command registry, dock helpers, active-terminal metrics, shared persistence paths, and the process-global `CompletionHistory`. |
 | `update` (`oneterm-update`) | `core`, `chrono`, `reqwest`, `semver`, `sha2`, `tar`, `flate2`, `zip` | shared | GitHub Releases auto-update checks, asset selection, download verification, staging, and installer orchestration. |
 | `theme` (`oneterm-theme`) | `settings`, `actions`, gpui, gpui-component | shared | Theme registry, built-in themes, and generated `AppIcon`. |
-| `workspace` (`oneterm-workspace`) | `core`, `terminal`, `settings`, `state`, `actions`, `theme`, gpui-component | shell | Feature-agnostic app shell. Maps domain placement types to the UI dock and drives features through `WorkspaceCommands`. |
+| `workspace` (`oneterm-workspace`) | `core`, `terminal`, `settings`, `state`, `actions`, gpui-component | shell | Feature-agnostic app shell. Maps domain placement types to the UI dock and drives features through `WorkspaceCommands`. |
 | `terminal-view` (`oneterm-terminal-view`) | `core`, `terminal`, `settings`, `state`, `theme`, `actions`, `highlight`, `completion`, gpui-component | feature | Terminal panel, rendering/input, split spaces, the terminal settings panel, and the auto-completion overlay + controller. |
 | `sftp-ui` (`oneterm-sftp-ui`) | `core`, `terminal`, `state`, `theme`, `actions`, gpui-component | feature | SFTP file browser and transfer queue. |
 | `session-ui` (`oneterm-session-ui`) | `core`, `terminal`, `terminal-view`, `state`, `actions`, gpui-component | feature | Session tree, connect dialogs, and `SshSessionStore`. |
 | `settings-ui` (`oneterm-settings-ui`) | `core`, `settings`, `state`, `update`, `theme`, `actions`, gpui-component | feature | General Settings window, update status/actions, and key-binding setup. |
-| `agent-ui` (`oneterm-agent-ui`) | `core`, `terminal`, `settings`, `state`, `theme`, gpui-component | feature | Agent Panel fleet view. |
+| `agent-ui` (`oneterm-agent-ui`) | `terminal`, `settings`, `state`, gpui-component | feature | Agent Panel fleet view. |
 | `ssh` (`oneterm-ssh`) | `core`, `terminal` | backend | russh client and SFTP; implements `TerminalSession` and `SftpBackend`. |
 | `local-shell` (`oneterm-local-shell`) | `core`, `terminal` | backend | Local PTY; implements `TerminalSession`. |
 | `app` (`oneterm-app`) | shell + all five features + shared layers + gpui-component + both backends | binary | Only crate that knows every layer. Installs `AppSessionFactory`, initializes features and commands, and opens the window. |

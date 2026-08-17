@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/bump-version.sh — Bump the repo-root VERSION file (semver).
+# scripts/bump-version.sh — Bump the project version (semver).
 #
 # Usage:
 #   scripts/bump-version.sh patch        # 0.1.0 -> 0.1.1
@@ -7,19 +7,29 @@
 #   scripts/bump-version.sh major        # 0.1.0 -> 1.0.0
 #   scripts/bump-version.sh 0.3.0        # explicit version
 #
-# Reads VERSION, computes the new version, writes it back, and prints the new
-# version (without leading 'v') to stdout. The release workflow uses this to
-# bump before tagging.
+# Reads VERSION, computes the new version, writes it to BOTH version sources —
+# the repo-root VERSION file (release workflow, macOS bundle) and the
+# `[workspace.package] version` in the root Cargo.toml (CARGO_PKG_VERSION for
+# every crate) — refreshes the workspace-member entries in Cargo.lock, and prints
+# the new version (without leading 'v') to stdout. The release workflow uses this
+# to bump before tagging. `scripts/verify-dependency-graph.py` fails CI when the
+# two sources disagree.
 #
-# The script is pure bash — no external deps — so it runs in any CI runner.
+# The script is pure bash + awk — no other deps — so it runs in any CI runner.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION_FILE="$REPO_ROOT/VERSION"
+MANIFEST="$REPO_ROOT/Cargo.toml"
+LOCKFILE="$REPO_ROOT/Cargo.lock"
 
 if [[ ! -f "$VERSION_FILE" ]]; then
   echo "ERROR: VERSION file not found at $VERSION_FILE" >&2
+  exit 1
+fi
+if [[ ! -f "$MANIFEST" ]]; then
+  echo "ERROR: root Cargo.toml not found at $MANIFEST" >&2
   exit 1
 fi
 
@@ -77,5 +87,40 @@ fi
 IFS='.' read -ra np <<< "$NEW"
 NORMALIZED="${np[0]}.${np[1]:-0}.${np[2]:-0}"
 
+# Rewrite the `version = "..."` line inside [workspace.package] only (the first
+# `version` key after that table header, before the next table header).
+rewrite_manifest() {
+  local file="$1" new="$2"
+  awk -v new="$new" '
+    /^\[workspace\.package\]/ { in_pkg = 1; print; next }
+    /^\[/                     { in_pkg = 0 }
+    in_pkg && !done && /^version[[:space:]]*=/ {
+      print "version = \"" new "\""; done = 1; next
+    }
+    { print }
+    END { if (!done) exit 3 }
+  ' "$file" > "$file.tmp" || { rm -f "$file.tmp"; return 1; }
+  mv "$file.tmp" "$file"
+}
+
+# Cargo rewrites Cargo.lock on the next build anyway; refresh the workspace
+# member entries now so a `--locked` build sees a consistent tree.
+rewrite_lockfile() {
+  local file="$1" old="$2" new="$3"
+  [[ -f "$file" ]] || return 0
+  awk -v old="$old" -v new="$new" '
+    /^name = "oneterm-/ { member = 1; print; next }
+    member && /^version = / { sub("\"" old "\"", "\"" new "\""); member = 0 }
+    /^$/ { member = 0 }
+    { print }
+  ' "$file" > "$file.tmp"
+  mv "$file.tmp" "$file"
+}
+
+rewrite_manifest "$MANIFEST" "$NORMALIZED" || {
+  echo "ERROR: could not find 'version = ' under [workspace.package] in $MANIFEST" >&2
+  exit 1
+}
+rewrite_lockfile "$LOCKFILE" "$CURRENT" "$NORMALIZED"
 printf '%s\n' "$NORMALIZED" > "$VERSION_FILE"
 echo "$NORMALIZED"

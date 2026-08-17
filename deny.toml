@@ -1,0 +1,123 @@
+# cargo-deny configuration for OneTerm — run `cargo deny check licenses bans advisories`.
+# CI runs it in the `cargo-deny` job (.github/workflows/ci.yml). Rationale for the
+# license policy: docs/license-analysis.md.
+
+[graph]
+# Only the platforms OneTerm ships for; keeps unrelated platform-only crates out.
+targets = [
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+all-features = true
+
+[output]
+feature-depth = 1
+
+# ── Licenses ────────────────────────────────────────────────────────────────────
+[licenses]
+version = 2
+# Permissive licenses actually pulled by the graph (docs/license-analysis.md §1).
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "BSL-1.0",
+    "MPL-2.0",
+    "bzip2-1.0.6",
+]
+confidence-threshold = 0.8
+
+# Zed's tracing/logging crates declare `GPL-3.0-or-later` in Cargo.toml.
+# `ztracing` / `ztracing_macro` ship LICENSE-APACHE alongside LICENSE-GPL (dual
+# grant, Apache chosen); `zlog` is GPL-only but only reachable behind
+# `#[cfg(ztracing)]` / `#[cfg(test)]` and is not linked into the default build
+# (verified in docs/license-analysis.md §2). Keep the exceptions crate-scoped so a
+# new GPL crate anywhere else still fails the check.
+[[licenses.exceptions]]
+name = "zlog"
+allow = ["GPL-3.0-or-later"]
+
+[[licenses.exceptions]]
+name = "ztracing"
+allow = ["GPL-3.0-or-later"]
+
+[[licenses.exceptions]]
+name = "ztracing_macro"
+allow = ["GPL-3.0-or-later"]
+
+# Two Zed crates have no `license` field; each carries only a LICENSE-APACHE symlink
+# to the monorepo root (docs/license-analysis.md §2.1), which cargo-deny cannot score
+# from a git checkout. Clarify them as Apache-2.0.
+[[licenses.clarify]]
+name = "gpui_util"
+expression = "Apache-2.0"
+license-files = []
+
+[[licenses.clarify]]
+name = "gpui_shared_string"
+expression = "Apache-2.0"
+license-files = []
+
+# Workspace crates and the git-pinned Zed / gpui-component crates are publish=false;
+# check them anyway so the GPL exceptions above stay crate-scoped and observable.
+[licenses.private]
+ignore = false
+
+# ── Bans ────────────────────────────────────────────────────────────────────────
+[bans]
+# 47 duplicated crates come from gpui@1d217ee vs russh vs alacritty; warn only until
+# the upstream revisions converge (BUILD-07).
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+# Deliberately excluded designs (docs/agents/dependencies.md §3).
+deny = [
+    { crate = "portable-pty", reason = "local PTY goes through alacritty_terminal::tty (docs/terminal-backend.md)" },
+    { crate = "openssl-sys", reason = "TLS/crypto is rustls + ring only; no native OpenSSL linkage" },
+]
+
+# ── Advisories (RustSec) ────────────────────────────────────────────────────────
+[advisories]
+version = 2
+db-path = "$CARGO_HOME/advisory-dbs"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "warn"
+# Only direct workspace dependencies fail on "unmaintained": the transitive set is
+# pinned by gpui@1d217ee (async-std, instant, paste, proc-macro-error2, rustybuzz,
+# ttf-parser) and moves only with the gpui rev bump.
+unmaintained = "workspace"
+ignore = [
+    # quick-xml 0.39 (fix is the semver-incompatible 0.41) — pulled by gpui's pinned
+    # font/asset stack; not reachable from OneTerm's own code paths. Re-check on the
+    # next gpui rev bump.
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml via gpui@1d217ee; no compatible fix" },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml via gpui@1d217ee; no compatible fix" },
+    # rsa Marvin timing side-channel (RSA private-key operations) — via russh's `rsa`
+    # feature; no fixed release exists. OneTerm uses it for user key auth only.
+    { id = "RUSTSEC-2023-0071", reason = "rsa via russh; no upstream fix available" },
+]
+
+# ── Sources ─────────────────────────────────────────────────────────────────────
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = [
+    "https://github.com/zed-industries/zed",
+    "https://github.com/zed-industries/alacritty",
+    "https://github.com/longbridge/gpui-component",
+]
