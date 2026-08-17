@@ -69,6 +69,8 @@ pub(crate) fn open_window(
                 );
                 window.set_window_title("OneTerm");
                 cx.on_release(|_, cx| {
+                    // Synchronous write by design: `cx.quit()` below does not
+                    // wait for detached background tasks (CORR-04).
                     save_dock_state_on_close(cx);
                     cx.quit();
                 })
