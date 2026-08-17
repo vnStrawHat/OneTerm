@@ -114,7 +114,7 @@ impl SshClientHandler {
     }
 
     #[cfg(test)]
-    fn with_known_hosts_path(mut self, path: PathBuf) -> Self {
+    pub(crate) fn with_known_hosts_path(mut self, path: PathBuf) -> Self {
         self.known_hosts_path = Some(path);
         self
     }
