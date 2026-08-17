@@ -97,12 +97,13 @@ fn trait_alive_is_local_close() {
 }
 
 #[test]
-fn trait_subscribe_returns_receiver() {
+fn trait_take_events_hands_out_the_receiver_once() {
     let s = spawn_default();
-    let _rx = s.subscribe();
-    // 2nd subscribe → closed channel (recv → Err Closed) but no panic.
-    let rx2 = s.subscribe();
-    assert!(rx2.recv_blocking().is_err());
+    let first = s.take_events();
+    assert!(first.is_some());
+    // The single receiver is gone: a second consumer gets nothing instead of
+    // a dead channel that would silently miss every event.
+    assert!(s.take_events().is_none());
     let _ = s.close();
 }
 

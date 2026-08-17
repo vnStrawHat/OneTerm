@@ -169,101 +169,112 @@ impl LocalTerminalView {
             KeyBinding::new("shift-tab", NoAction {}, Some("Terminal")),
         ]);
 
-        let rx = session.read(cx).subscribe();
+        // The session hands out its event receiver exactly once. A view is
+        // the sole consumer, so `None` means another view already owns the
+        // events for this session: log it and render without live updates
+        // rather than spinning on a dead channel.
+        let events = session.read(cx).take_events();
+        if events.is_none() {
+            log::error!(
+                "LocalTerminalView: session events were already taken; this view will not receive live updates"
+            );
+        }
         let session_for_spawn = session.clone();
-        let event_task = cx.spawn(async move |this, cx| {
-            while let Ok(ev) = rx.recv().await {
-                match ev {
-                    SessionEvent::Clipboard(Some(t)) => {
-                        let _ = this.update(cx, |_, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(t));
-                        });
-                    }
-                    SessionEvent::Clipboard(None) => {
-                        let _ = this.update(cx, |_, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
-                        });
-                    }
-                    SessionEvent::Output => {
-                        let s = session_for_spawn.clone();
-                        // Coalesce every Output event already queued behind this
-                        // one into a single render. `drain_coalesced_events`
-                        // merges them via `try_recv`, so no wall-clock sleep is
-                        // needed — the previous fixed 1ms timer only added
-                        // latency (capping the frame period at 1ms + render time)
-                        // without adding coalescing. GPUI merges the resulting
-                        // `notify()`s into one paint per frame.
-                        Self::drain_coalesced_events(&rx, &this, cx);
-                        let _ = this.update(cx, |view, cx| {
-                            cx.notify();
-                            s.read(cx).scroll_to_bottom();
-                            // Stamp at the OUTPUT moment (not just at render): the
-                            // subscribe task runs independently of render, so an
-                            // inactive tab (not rendering) still updates timestamps to
-                            // the time the line was created, instead of bunching them at
-                            // the time the tab becomes active again.
-                            let info = s.read(cx).terminal_info();
-                            view.update_line_times(&info);
-                            // New output shifts the alacritty grid coordinate
-                            // system, so stored search matches would point at the
-                            // wrong rows — refresh them (keeps the active index).
-                            view.refresh_search(cx);
-                        });
-                    }
-                    SessionEvent::Bell => {
-                        let _ = this.update(cx, |view, cx| {
-                            view.has_bell = true;
-                            cx.notify();
-                        });
-                    }
-                    SessionEvent::Notification(msg) => {
-                        let _ = this.update(cx, |view, cx| {
-                            view.queue_notification(msg);
-                            cx.notify();
-                        });
-                    }
-                    SessionEvent::ClipboardRead => {
-                        let _ = this.update(cx, |view, cx| view.reply_clipboard_read(cx));
-                    }
-                    SessionEvent::Title(_) => {
-                        // OSC 0/2 title changed — notify the containing panel
-                        // so its `title()` (which reads the live session title)
-                        // re-runs and the tab strip refreshes.
-                        let _ = this.update(cx, |_, cx| {
-                            cx.emit(TerminalViewEvent::TitleChanged);
-                            cx.notify();
-                        });
-                    }
-                    SessionEvent::Progress(p) => {
-                        let _ = this.update(cx, |view, cx| {
-                            view.set_progress(p);
-                            cx.notify();
-                        });
-                    }
-                    SessionEvent::AgentStatus(ev) => {
-                        let _ = this.update(cx, |view, cx| {
-                            view.push_agent_status(&ev, cx);
-                            view.agent_status = Some(ev);
-                            cx.notify();
-                        });
-                    }
-                    SessionEvent::Exited(code) => {
-                        let _ = this.update(cx, |view, cx| {
-                            view.mark_agent_ended(code, cx);
-                            cx.notify();
-                        });
-                    }
-                    SessionEvent::Closed => {
-                        let _ = this.update(cx, |view, cx| {
-                            view.mark_agent_ended(None, cx);
-                            cx.notify();
-                        });
-                    }
-                    _ => {
-                        let _ = this.update(cx, |_, cx| cx.notify());
+        let event_task = events.map(|rx| {
+            cx.spawn(async move |this, cx| {
+                while let Ok(ev) = rx.recv().await {
+                    match ev {
+                        SessionEvent::Clipboard(Some(t)) => {
+                            let _ = this.update(cx, |_, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(t));
+                            });
+                        }
+                        SessionEvent::Clipboard(None) => {
+                            let _ = this.update(cx, |_, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
+                            });
+                        }
+                        SessionEvent::Output => {
+                            let s = session_for_spawn.clone();
+                            // Coalesce every Output event already queued behind this
+                            // one into a single render. `drain_coalesced_events`
+                            // merges them via `try_recv`, so no wall-clock sleep is
+                            // needed — the previous fixed 1ms timer only added
+                            // latency (capping the frame period at 1ms + render time)
+                            // without adding coalescing. GPUI merges the resulting
+                            // `notify()`s into one paint per frame.
+                            Self::drain_coalesced_events(&rx, &this, cx);
+                            let _ = this.update(cx, |view, cx| {
+                                cx.notify();
+                                s.read(cx).scroll_to_bottom();
+                                // Stamp at the OUTPUT moment (not just at render): the
+                                // subscribe task runs independently of render, so an
+                                // inactive tab (not rendering) still updates timestamps to
+                                // the time the line was created, instead of bunching them at
+                                // the time the tab becomes active again.
+                                let info = s.read(cx).terminal_info();
+                                view.update_line_times(&info);
+                                // New output shifts the alacritty grid coordinate
+                                // system, so stored search matches would point at the
+                                // wrong rows — refresh them (keeps the active index).
+                                view.refresh_search(cx);
+                            });
+                        }
+                        SessionEvent::Bell => {
+                            let _ = this.update(cx, |view, cx| {
+                                view.has_bell = true;
+                                cx.notify();
+                            });
+                        }
+                        SessionEvent::Notification(msg) => {
+                            let _ = this.update(cx, |view, cx| {
+                                view.queue_notification(msg);
+                                cx.notify();
+                            });
+                        }
+                        SessionEvent::ClipboardRead => {
+                            let _ = this.update(cx, |view, cx| view.reply_clipboard_read(cx));
+                        }
+                        SessionEvent::Title(_) => {
+                            // OSC 0/2 title changed — notify the containing panel
+                            // so its `title()` (which reads the live session title)
+                            // re-runs and the tab strip refreshes.
+                            let _ = this.update(cx, |_, cx| {
+                                cx.emit(TerminalViewEvent::TitleChanged);
+                                cx.notify();
+                            });
+                        }
+                        SessionEvent::Progress(p) => {
+                            let _ = this.update(cx, |view, cx| {
+                                view.set_progress(p);
+                                cx.notify();
+                            });
+                        }
+                        SessionEvent::AgentStatus(ev) => {
+                            let _ = this.update(cx, |view, cx| {
+                                view.push_agent_status(&ev, cx);
+                                view.agent_status = Some(ev);
+                                cx.notify();
+                            });
+                        }
+                        SessionEvent::Exited(code) => {
+                            let _ = this.update(cx, |view, cx| {
+                                view.mark_agent_ended(code, cx);
+                                cx.notify();
+                            });
+                        }
+                        SessionEvent::Closed => {
+                            let _ = this.update(cx, |view, cx| {
+                                view.mark_agent_ended(None, cx);
+                                cx.notify();
+                            });
+                        }
+                        _ => {
+                            let _ = this.update(cx, |_, cx| cx.notify());
+                        }
                     }
                 }
-            }
+            })
         });
 
         let blink_task = cx.spawn(async move |this, cx| {
@@ -324,7 +335,7 @@ impl LocalTerminalView {
             search_input: None,
             search_debounce_task: None,
             split_ctx: None,
-            event_task: Some(event_task),
+            event_task,
             blink_task: Some(blink_task),
             alive: true,
             completion: None,
