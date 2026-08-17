@@ -147,7 +147,13 @@ fn apply_check_result(state: &mut UpdateUiState, result: oneterm_core::Result<Up
             state.candidate = None;
             state.staged = None;
         }
-        Ok(UpdateCheckResult::Disabled(reason)) => state.status = UpdateUiStatus::Disabled(reason),
+        Ok(UpdateCheckResult::Disabled(reason)) => {
+            // No installable release for this build: a candidate or staged
+            // package from an earlier check must not keep the install button.
+            state.status = UpdateUiStatus::Disabled(reason);
+            state.candidate = None;
+            state.staged = None;
+        }
         Err(error) => state.status = UpdateUiStatus::Failed(error.to_string()),
     }
 }
@@ -176,5 +182,34 @@ mod tests {
             state.status,
             UpdateUiStatus::UpToDate(version) if version == "0.3.4"
         ));
+    }
+
+    #[test]
+    fn disabled_result_clears_stale_candidate() {
+        let mut state = UpdateUiState {
+            status: UpdateUiStatus::Checking,
+            candidate: Some(oneterm_update::UpdateCandidate {
+                version: "9.9.9".to_owned(),
+                tag_name: "v9.9.9".to_owned(),
+                release_name: None,
+                release_notes_url: String::new(),
+                body: None,
+                asset_name: String::new(),
+                asset_url: String::new(),
+                asset_digest: String::new(),
+                asset_size: None,
+                target_triple: String::new(),
+            }),
+            staged: None,
+        };
+
+        apply_check_result(
+            &mut state,
+            Ok(UpdateCheckResult::Disabled("no package".to_owned())),
+        );
+
+        assert!(matches!(state.status, UpdateUiStatus::Disabled(_)));
+        assert!(state.candidate.is_none());
+        assert!(!state.shows_install_button());
     }
 }
