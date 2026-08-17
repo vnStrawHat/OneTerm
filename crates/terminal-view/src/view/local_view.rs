@@ -477,7 +477,7 @@ impl LocalTerminalView {
     }
 
     /// Drain all pending events in the channel — coalesce Output events,
-    /// handle Clipboard/Bell/Title immediately.
+    /// handle every other event immediately, mirroring the main loop.
     pub(crate) fn drain_coalesced_events(
         rx: &Receiver<SessionEvent>,
         this: &gpui::WeakEntity<Self>,
@@ -529,6 +529,21 @@ impl LocalTerminalView {
                     let _ = this.update(cx, |view, cx| {
                         view.push_agent_status(&ev, cx);
                         view.agent_status = Some(ev);
+                        cx.notify();
+                    });
+                }
+                // A process that prints and exits delivers `Exited`/`Closed`
+                // right behind `Output` — the common case — so the drain must
+                // run the same exit handling as the main loop.
+                Ok(SessionEvent::Exited(code)) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.mark_agent_ended(code, cx);
+                        cx.notify();
+                    });
+                }
+                Ok(SessionEvent::Closed) => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.mark_agent_ended(None, cx);
                         cx.notify();
                     });
                 }

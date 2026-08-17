@@ -378,3 +378,83 @@ fn duplicate_action_dispatches_to_the_active_space(cx: &mut TestAppContext) {
         Some(std::path::Path::new("active-shell"))
     );
 }
+
+fn agent_state_event(seq: u64) -> oneterm_terminal::AgentStatusEvent {
+    oneterm_terminal::AgentStatusEvent::State {
+        agent: "pi".into(),
+        seq,
+        ts: seq * 1000,
+        payload: oneterm_terminal::StateEvent {
+            state: oneterm_terminal::AgentState::Working,
+            message: None,
+            session_id: None,
+        },
+    }
+}
+
+fn agent_lifecycle(
+    registry: &gpui::Entity<oneterm_state::AgentRegistry>,
+    terminal_key: gpui::EntityId,
+    cx: &mut VisualTestContext,
+) -> Option<oneterm_state::Lifecycle> {
+    registry.read_with(cx, |reg, _| {
+        reg.cards()
+            .iter()
+            .find(|c| c.terminal_key == terminal_key)
+            .map(|c| c.lifecycle)
+    })
+}
+
+#[gpui::test]
+fn exited_behind_output_batch_marks_agent_ended(cx: &mut TestAppContext) {
+    // Regression (CORR-02): a process that prints and exits in the same batch
+    // delivers `Output` followed by `Exited` on the event channel. The
+    // coalescing drain must run the same exit handling as the main loop.
+    cx.update(gpui_component::init);
+    cx.update(crate::init);
+    cx.update(oneterm_settings::TerminalSettings::init);
+    cx.update(oneterm_state::AgentRegistry::init);
+
+    let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
+    let (panel, cx) = cx.add_window_view(move |window, cx| {
+        TerminalPanel::from_session(session, "Agent", window, cx)
+    });
+    let cx: &mut VisualTestContext = cx;
+    cx.run_until_parked();
+
+    let terminal_key = panel.read_with(cx, |panel, _| {
+        panel
+            .tree
+            .active_terminal()
+            .expect("panel must own a terminal")
+            .entity_id()
+    });
+
+    probe
+        .emit(oneterm_terminal::SessionEvent::AgentStatus(Arc::new(
+            agent_state_event(1),
+        )))
+        .expect("event channel must accept the agent event");
+    cx.run_until_parked();
+
+    let registry = cx.update(|_, cx| oneterm_state::AgentRegistry::global(cx));
+    assert_eq!(
+        agent_lifecycle(&registry, terminal_key, cx),
+        Some(oneterm_state::Lifecycle::Live)
+    );
+
+    // Queue both events before the subscriber task gets to run so `Exited`
+    // is picked up by the coalescing drain behind `Output`.
+    probe
+        .emit(oneterm_terminal::SessionEvent::Output)
+        .expect("event channel must accept output");
+    probe
+        .emit(oneterm_terminal::SessionEvent::Exited(Some(0)))
+        .expect("event channel must accept exit");
+    cx.run_until_parked();
+
+    assert_eq!(
+        agent_lifecycle(&registry, terminal_key, cx),
+        Some(oneterm_state::Lifecycle::Ended { exit_code: Some(0) })
+    );
+}
