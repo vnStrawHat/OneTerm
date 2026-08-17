@@ -19,6 +19,12 @@ use crate::terminal_config::{
 
 use super::{TerminalBlink, TerminalCursorShape, TerminalSettings, hsla_to_hex};
 
+// Roundtrip tests live in a sibling `persist_tests.rs` (same convention as
+// `terminal_config/document_tests.rs`).
+#[cfg(test)]
+#[path = "persist_tests.rs"]
+mod persist_tests;
+
 /// Map a [`gpui::FontWeight`] back to its config string (the inverse of
 /// [`parse_weight`](super::font::parse_weight)).
 fn weight_to_string(w: FontWeight) -> String {
@@ -62,7 +68,10 @@ impl TerminalSettings {
         TerminalConfig {
             font: FontConfig {
                 family: self.font_family.as_ref().map(|s| s.to_string()),
-                size: self.font_size,
+                // Persist the configured size, not the live zoom-modified
+                // `font_size`; otherwise a zoomed session becomes the new base
+                // on the next launch (CORR-12).
+                size: self.base_font_size,
                 weight: weight_to_string(self.font_weight),
                 features: self.font_features.iter().map(|s| s.to_string()).collect(),
             },
