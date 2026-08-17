@@ -67,8 +67,9 @@ where
     let mut copied: u64 = 0;
     loop {
         let read = tokio::select! {
-            read = reader.read(&mut buffer) => read.map_err(|e| AppError::msg(format!("read: {e}")))?,
+            biased;
             _ = cancel.cancelled() => return Err(AppError::Cancelled),
+            read = reader.read(&mut buffer) => read.map_err(|e| AppError::msg(format!("read: {e}")))?,
         };
         if read == 0 {
             return Ok(());
@@ -135,11 +136,12 @@ where
         }
 
         let joined = tokio::select! {
-            joined = in_flight.join_next() => joined,
+            biased;
             _ = cancel.cancelled() => {
                 in_flight.abort_all();
                 return Err(AppError::Cancelled);
             }
+            joined = in_flight.join_next() => joined,
         };
         let Some(joined) = joined else {
             // Every issued chunk has been written yet the window is closed:

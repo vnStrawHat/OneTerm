@@ -279,7 +279,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use gpui::TestAppContext;
-    use oneterm_terminal::{HeartbeatEvent, StateEvent};
+    use oneterm_terminal::{AgentPayload, HeartbeatEvent, StateEvent};
 
     use super::*;
 
@@ -293,27 +293,27 @@ mod tests {
     }
 
     fn state_event(agent: &str, seq: u64, state: AgentState) -> AgentStatusEvent {
-        AgentStatusEvent::State {
+        AgentStatusEvent {
             agent: agent.into(),
             seq,
             ts: seq * 1000,
-            payload: StateEvent {
+            payload: AgentPayload::State(StateEvent {
                 state,
                 message: None,
                 session_id: None,
-            },
+            }),
         }
     }
 
     fn heartbeat(agent: &str, seq: u64, interval_ms: Option<u64>) -> AgentStatusEvent {
-        AgentStatusEvent::Heartbeat {
+        AgentStatusEvent {
             agent: agent.into(),
             seq,
             ts: seq * 1000,
-            payload: HeartbeatEvent {
+            payload: AgentPayload::Heartbeat(HeartbeatEvent {
                 interval_ms,
                 state: None,
-            },
+            }),
         }
     }
 
