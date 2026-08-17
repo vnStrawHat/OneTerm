@@ -114,9 +114,9 @@ drifted from its source of truth.
 
 - [ ] **[Low] CORR-19 — `closing` flag uses `Relaxed`** (`ssh/src/listener.rs:198,237`). *Fix:* Release/Acquire.
 
-- [ ] **[Low] CORR-20 — `ChannelMsg::ExitSignal` unhandled** (`ssh/src/task.rs:264-266`). *Fix:* map to `Exited(None)`.
+- [x] **[Low] CORR-20 — `ChannelMsg::ExitSignal` unhandled** (`ssh/src/task.rs:264-266`). *Fix:* map to `Exited(None)`.
 
-- [ ] **[Low] CORR-21 — Double Term resize on SSH.** UI thread resizes (`ssh/src/session_terminal.rs:112-118`)
+- [x] **[Low] CORR-21 — Double Term resize on SSH.** UI thread resizes (`ssh/src/session_terminal.rs:112-118`)
   and the task resizes again (`task.rs:139-142`). *Fix:* remove the second.
 
 - [ ] **[Low] CORR-22 — `subscribed_tabs` grows unbounded.** `workspace/.../mod.rs:133,344`: EntityIds of

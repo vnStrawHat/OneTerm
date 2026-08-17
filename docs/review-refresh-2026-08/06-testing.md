@@ -55,10 +55,10 @@ crates are effectively untested (`sftp-ui` 0.8/KLOC, `workspace` 0.5, `settings-
 - [x] **[Medium] TEST-12 — `terminal_settings` (apply/persist/color/font) has zero tests** — no
   `apply_config(to_config())` roundtrip, no `parse_hex_color`/`hsla_to_hex` inverse, no
   `parse_weight`/`weight_to_string` inverse. Would have caught CORR-12 and CORR-23.
-- [ ] **[Medium] TEST-13 — docks.json has no concurrent-update, quarantine, or backup-preservation test at the
+- [x] **[Medium] TEST-13 — docks.json has no concurrent-update, quarantine, or backup-preservation test at the
   owner** (`state/src/dock_persistence.rs:170-230` covers isolated update + v0 migration only), contrary to
   `persistence.md` "Fixture convention".
-- [ ] **[Medium] TEST-14 — `AgentRegistry` fold/lifecycle is essentially untested**
+- [x] **[Medium] TEST-14 — `AgentRegistry` fold/lifecycle is essentially untested**
   (`state/src/agent_registry.rs:156-274`: `apply`, `set_lifecycle`, `remove_terminal`, `clear_ended`,
   `refresh_stale`, `summary`).
 - [ ] **[Medium] TEST-15 — Updater: no tests for real archives** (zip-slip entry, tar with `..`/symlink, nested
@@ -67,24 +67,24 @@ crates are effectively untested (`sftp-ui` 0.8/KLOC, `workspace` 0.5, `settings-
 
 ## C. Pure code that is untested (cheap wins)
 
-- [ ] **[Medium] TEST-16 — terminal-view pure functions with 0 tests:** `update_line_times`
+- [x] **[Medium] TEST-16 — terminal-view pure functions with 0 tests:** `update_line_times`
   (`view/local_view.rs:541-620`, the most intricate arithmetic in the crate), `compute_gutter_entries`
   (`element/gutter.rs:293-347`), `layout_selection` (`layout/selection.rs`), `layout_row` (`layout/row.rs`:
   run batching, box-run coalescing, zero-width/space skip), `line_hash`, `pixel_to_grid`,
   `visible_search_highlights` + `scroll_to_active_match` centring math (`search.rs:181-235`), scroll-only
   cache rotation with `Partial` damage (`cache.rs:79-117` — tests only use `cells: &[]`), scrollbar
   thumb→offset math (duplicated in `mouse.rs:185-206` and `scrollbar_overlay.rs:201-223`).
-- [ ] **[Medium] TEST-17 — sftp-ui pure helpers:** `format_size`, `format_permissions` (setuid/sticky),
+- [x] **[Medium] TEST-17 — sftp-ui pure helpers:** `format_size`, `format_permissions` (setuid/sticky),
   `format_owner`, `sort_entries` (folder-first + desc), `SftpTableDelegate::{apply_persisted_state,
   apply_widths, toggle_visibility, to_persisted_state}`, transfer state transitions (after ARCH-32).
 - [ ] **[Medium] TEST-18 — settings-ui:** `keystroke_to_string`/`is_modifier_only`, `save_key_bindings` diffing,
   `apply_check_result` for `Available`/`Disabled`/`Err`, `UpdateUiState::{shows_install_button, can_install_update}`,
   `percent_encode`; the persist-queue test only exercises the mutex struct, not `drain_update_config_persist_queue`.
-- [ ] **[Low] TEST-19 — session-ui:** `parse_user_host_port` edge cases (IPv6, empty user, invalid port),
+- [x] **[Low] TEST-19 — session-ui:** `parse_user_host_port` edge cases (IPv6, empty user, invalid port),
   `build_tree_items` grouping/sorting/filter, `SshSessionStore::rename_group`, quick-connect field precedence.
 - [ ] **[Low] TEST-20 — workspace:** `center_has_no_visible_panel`, `switch_right_dock_mode`, `format_speed`,
   `format_memory`, load→reset_center_only→save flow.
-- [ ] **[Low] TEST-21 — theme:** all `EMBEDDED_THEME_FILES` parse and "Zed One Dark"/"Zed One Light" exist
+- [x] **[Low] TEST-21 — theme:** all `EMBEDDED_THEME_FILES` parse and "Zed One Dark"/"Zed One Light" exist
   (`theme.rs:28-61,116-117`).
 - [x] **[Low] TEST-22 — engine edge cases:** `url_policy` IPv6 host without port; `osc.rs parse_cwd_url` with
   `%20` and `file:///C:/`; `shell.rs` exact zsh PS1 bytes and Zsh kind vs `$SHELL`; highlight negative prompt
@@ -98,5 +98,5 @@ crates are effectively untested (`sftp-ui` 0.8/KLOC, `workspace` 0.5, `settings-
 - [ ] **[Low] TEST-24 — Test asserts nothing:** `crates/terminal/src/content.rs:321-335`
   `damage_partial_on_unchanged` accepts either enum variant. Assert `Partial(v)` with `v ⊆ {cursor line}` or
   delete.
-- [ ] **[Low] TEST-25 — The one gpui test in sftp-ui** (`transfer.rs:501-537`) only checks that a stale download
+- [x] **[Low] TEST-25 — The one gpui test in sftp-ui** (`transfer.rs:501-537`) only checks that a stale download
   does not panic.

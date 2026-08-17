@@ -70,7 +70,7 @@ how obviously they sit on the hot path.
   (`cache.rs:148`) plus a `HashSet<usize>` for dirty rows (`:101-117`) each frame. *Fix:* scratch buffers in
   `RowLayoutCache`; bitset for dirtiness; mask only dirty rows.
 
-- [ ] **[Medium] PERF-11 — Output always yanks the viewport to the bottom.** `local_view.rs:199`
+- [x] **[Medium] PERF-11 — Output always yanks the viewport to the bottom.** `local_view.rs:199`
   `scroll_to_bottom()` on every Output event: users cannot read scrollback while a command streams
   (mainstream terminals keep the offset and re-snap on keyboard input, which `keyboard.rs` already does).
   *Fix:* remove it here; keep the key-press snap. (UX as much as perf.)
@@ -96,7 +96,7 @@ how obviously they sit on the hot path.
 
 ## B. Backends
 
-- [ ] **[Medium] PERF-18 — SFTP transfers are RTT-bound.** 32 KiB chunk, one request in flight
+- [x] **[Medium] PERF-18 — SFTP transfers are RTT-bound.** 32 KiB chunk, one request in flight
   (`crates/ssh/src/sftp_task/transfer/download.rs:87-99`, `upload.rs:202-221`); russh-sftp allows 256 KiB
   packets and concurrent requests. ≈ 0.6 MB/s at 50 ms RTT. *Fix:* pipeline N outstanding reads via
   `RawSftpSession::read` with offsets (or at least 256 KiB chunks); extract one `copy_with_progress`.
@@ -106,10 +106,10 @@ how obviously they sit on the hot path.
   alt-screen). *Fix:* expose a scrolled-out-lines counter from the vendored fork's grid (already patched for
   OSC/clear).
 
-- [ ] **[Low] PERF-20 — Per-chunk `SharedState` locking 3–4× on the SSH hot path** (`task.rs:152,162,178,189`)
+- [x] **[Low] PERF-20 — Per-chunk `SharedState` locking 3–4× on the SSH hot path** (`task.rs:152,162,178,189`)
   and rx/tx counters under a `Mutex` in `poll_read` (`counting_stream.rs:49`). *Fix:* atomics; read defaults once.
 
-- [ ] **[Low] PERF-21 — 1 MiB read buffer on the owner-thread stack** (`event_loop.rs:218`; default 2 MiB stack).
+- [x] **[Low] PERF-21 — 1 MiB read buffer on the owner-thread stack** (`event_loop.rs:218`; default 2 MiB stack).
   *Fix:* heap-allocate or raise the builder stack size.
 
 - [ ] **[Low] PERF-22 — Idle wake-ups.** Event loop 50 ms poll timeout (CORR-18); agent-ui 120 ms tick with no
@@ -127,7 +127,7 @@ how obviously they sit on the hot path.
 - [ ] **[Low] PERF-24 — `command_names` is O(n²)** (`crates/completion/src/catalog.rs:197-218`, per keystroke).
   *Fix:* precompute per-family deduped name list in `Catalog::from_raw`.
 
-- [ ] **[Low] PERF-25 — `sort_entries` allocates two lowercase strings per comparison** (`sftp-ui/src/types.rs:188`).
+- [x] **[Low] PERF-25 — `sort_entries` allocates two lowercase strings per comparison** (`sftp-ui/src/types.rs:188`).
   *Fix:* `sort_by_cached_key`.
 
 ## D. Shell & widgets
@@ -158,5 +158,5 @@ how obviously they sit on the hot path.
 - [ ] **[Low] PERF-30 — Two `ui_config.json` writes per theme switch; menu tree built twice per Theme change**
   (`theme/src/theme.rs:94-95`, `workspace/src/layout/app_menus.rs:73-74`). *Fix:* build once, debounce persist.
 
-- [ ] **[Low] PERF-31 — `save_state_for_key` clones the whole SFTP entry vec on every dirty snapshot**
+- [x] **[Low] PERF-31 — `save_state_for_key` clones the whole SFTP entry vec on every dirty snapshot**
   (`sftp-ui/src/panel.rs:328-332`). *Fix:* `Arc<[FileEntry]>` in the delegate.

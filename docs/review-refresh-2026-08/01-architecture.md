@@ -20,7 +20,7 @@ all of it raises the cost of the next feature.
 
 ## A. Layering & contracts
 
-- [ ] **[High] ARCH-01 — Backend pump/listener/state logic duplicated between `ssh` and `local-shell`.**
+- [x] **[High] ARCH-01 — Backend pump/listener/state logic duplicated between `ssh` and `local-shell`.**
   `crates/ssh/src/listener.rs:254-471` vs `crates/local-shell/src/listener.rs:164-398`
   (forward / forward_lifecycle / colour queries / set_title / set_clipboard / handle_osc_payload /
   send_event are near-identical); `crates/ssh/src/state.rs:14-54` vs `crates/local-shell/src/state.rs:32-71`;
@@ -84,10 +84,10 @@ all of it raises the cost of the next feature.
   *Fix:* keep the enums, move panel-name mapping to the panel-name module (ARCH-08), `SftpTableState` to
   `settings`/`state`, badges to `agent-ui`/theme.
 
-- [ ] **[Low] ARCH-09 — Duplicate identical structs.** `crates/core/src/sftp.rs:23-38` (`FileEntry`) and
+- [x] **[Low] ARCH-09 — Duplicate identical structs.** `crates/core/src/sftp.rs:23-38` (`FileEntry`) and
   `:42-55` (`FileStat`) have the same 12 fields. *Fix:* keep one.
 
-- [ ] **[Low] ARCH-10 — Compat shim violates "no compatibility layers".** `crates/ssh/src/config.rs:1-7`
+- [x] **[Low] ARCH-10 — Compat shim violates "no compatibility layers".** `crates/ssh/src/config.rs:1-7`
   re-exports core's `SshConfig` "to keep … working". *Fix:* delete; import from core.
 
 - [ ] **[Low] ARCH-11 — Layer docs omit `completion`.** `docs/agents/crate-dependency-rules.md` L0 lists
@@ -112,7 +112,7 @@ all of it raises the cost of the next feature.
   *Fix:* fold `ActiveTerminalMetricsProvider` and `AgentFocuser` into `AppServices` (builder that features
   contribute to during `init()`, then `validate()`); keep the nav index inside `AgentRegistry`.
 
-- [ ] **[Medium] ARCH-14 — `AppState` carries workspace-private mirrors and self-described legacy fields.**
+- [x] **[Medium] ARCH-14 — `AppState` carries workspace-private mirrors and self-described legacy fields.**
   `crates/state/src/app_state.rs:28-41`: `dock_area` ("legacy commands"), `primary_workspace_id`
   ("legacy constructors"), `zoomed_panel: Option<Arc<Mutex<Option<String>>>>`,
   `toggle_button_visible: Option<Arc<AtomicBool>>` — `Arc<Mutex>`/atomics inside a single-threaded gpui
@@ -127,7 +127,7 @@ all of it raises the cost of the next feature.
   *Fix:* keep `state` = "cross-feature runtime state + injection"; move `notif_ext` to `theme`; consider a
   gpui-free `crates/agent` model crate; update `Cargo.toml` description and `structure.md`.
 
-- [ ] **[Medium] ARCH-16 — `settings` config↔live split is a hand-maintained bidirectional copy with
+- [x] **[Medium] ARCH-16 — `settings` config↔live split is a hand-maintained bidirectional copy with
   duplicated defaults.** `crates/settings/src/terminal_settings/apply.rs:15-101` (config→live),
   `persist.rs:59-134` (live→config), `settings.rs:434-455` ("Mirrors CompletionConfig::default()") and
   `:592-619` re-state 1.2 / 10_000 / true …. Every new field touches four places; the drift already produced
@@ -136,18 +136,18 @@ all of it raises the cost of the next feature.
   `apply_config(to_config()) == self` roundtrip test; longer term, keep `TerminalConfig` inside
   `TerminalSettings` and derive only parsed fields (`Hsla`, `FontWeight`).
 
-- [ ] **[Low] ARCH-17 — `AppServices::commands(cx)` returns `Option`, so shell handlers silently no-op**
+- [x] **[Low] ARCH-17 — `AppServices::commands(cx)` returns `Option`, so shell handlers silently no-op**
   (`workspace/.../actions.rs:86-88,124-126,252-254,270-274,285-288`, `mod.rs:418-422`) although
   `app/src/init.rs:69-70` `expect`s presence. *Fix:* treat as a startup invariant (`AppServices::global(cx)`
   panics with a precise message per error-policy) and delete the fallbacks (the About fallback at
   `actions.rs:290-299` is the only reason `crates/workspace/build.rs` exists).
 
-- [ ] **[Low] ARCH-18 — `theme` owns `UiConfig` persistence.** `crates/theme/src/theme.rs:184-195` installs
+- [x] **[Low] ARCH-18 — `theme` owns `UiConfig` persistence.** `crates/theme/src/theme.rs:184-195` installs
   the observer that writes `ui_config.json` on every `Theme` mutation; each switch persists twice
   (`apply_config` at :94 then `apply_list_style_override` at :95). *Fix:* move the observer to `settings`
   (`UiConfig::observe_theme(cx)`), coalesce.
 
-- [ ] **[Low] ARCH-19 — Inconsistent init contracts.** `AppState::init` is idempotent and called twice
+- [x] **[Low] ARCH-19 — Inconsistent init contracts.** `AppState::init` is idempotent and called twice
   (`app/src/init.rs:19`, `workspace/.../mod.rs:140`); `UiConfig::init` (`ui_config.rs:167-171`) and
   `TerminalSettings::init` (`settings.rs:634-642`) overwrite unconditionally. *Fix:* pick one contract.
 
@@ -159,7 +159,7 @@ all of it raises the cost of the next feature.
 
 ## C. terminal-view structure
 
-- [ ] **[High] ARCH-21 — `LocalTerminalView` god struct with `impl` spread across 12 files.**
+- [x] **[High] ARCH-21 — `LocalTerminalView` god struct with `impl` spread across 12 files.**
   `crates/terminal-view/src/view/local_view.rs:43-149`: 39 fields spanning session handle, focus, event loop
   + blink tasks, notifications, progress, agent status, scrollbar drag, URL hover, gutter timestamps,
   semantic overlay, palette push, 3 render caches, search (7 fields), split ctx, lifecycle, completion (3).
@@ -169,19 +169,19 @@ all of it raises the cost of the next feature.
   (`line_times`, `line_time_base`, `last_clear_epoch`, `update_line_times`), `UrlHover`, `ScrollbarState`,
   `CompletionState` — and fold `render/` back into `view/`.
 
-- [ ] **[Medium] ARCH-22 — Event handling duplicated between the main loop and the coalescing drain.**
+- [x] **[Medium] ARCH-22 — Event handling duplicated between the main loop and the coalescing drain.**
   `view/local_view.rs:172-268` and `:468-528` are ~50 lines of the same `match SessionEvent` (and the drain
   is missing arms — CORR-02). *Fix:* one `fn handle_event(&mut self, ev, cx)` called from both places; the
   drain only decides whether to coalesce `Output`.
 
-- [ ] **[Medium] ARCH-23 — Module split by implementation type, not concept.** `cell/` is five 14–65-line
+- [x] **[Medium] ARCH-23 — Module split by implementation type, not concept.** `cell/` is five 14–65-line
   files + `mod.rs`; `theme/resolve.rs` is 11 lines; `render/mod.rs` declares 3 files that are all
   `impl LocalTerminalView`; 14 `mod.rs` files; `layout/mod.rs`, `cell/mod.rs`, `handlers/mod.rs` still say
   "was split from …". Contradicts `docs/agents/code-style.md` (no `mod.rs` unless needed, no single-file
   folders). *Fix:* merge `cell/*` into `layout/row.rs`, `theme/resolve.rs` into `theme/palette.rs`,
   `render/*` into `view/render.rs`; drop the historical comments.
 
-- [ ] **[Medium] ARCH-24 — Panel/ops/space duplication.** "Install a view into a Space" sequence appears 3×
+- [x] **[Medium] ARCH-24 — Panel/ops/space duplication.** "Install a view into a Space" sequence appears 3×
   (`panel/ops.rs:249-264`, `:346-361`, `:433-439`); "duplicate destination is no longer available" 3×
   (`ops.rs:165-172`, `:252-260`, `:276-283`); Copy/Paste/SelectAll/Clear bodies twice
   (`handlers/menu.rs:129-190`, `panel/actions.rs:61-118`); split menu items in both `handlers/menu.rs:270-292`
@@ -189,7 +189,7 @@ all of it raises the cost of the next feature.
   `tab_label()` (`:363-374`). *Fix:* `fn place_view(&mut self, target, view, window, cx) -> Result<(), ()>`,
   one `fn close_unplaced(...)`, `title()` calls `tab_label()`.
 
-- [ ] **[Medium] ARCH-25 — Constructor sprawl / public API width.** `TerminalPanel` has 10 constructors
+- [x] **[Medium] ARCH-25 — Constructor sprawl / public API width.** `TerminalPanel` has 10 constructors
   (`terminal_panel.rs:59-227`); externally only `from_session_entity_with_duplicate_config`, `init`,
   `new_terminal_with_shell_cmd`, `find_in_active_terminal` are used. `lib.rs:24-33` re-exports
   `LocalTerminalView`, `TerminalTheme`, `build_terminal_theme`, `ensure_minimum_contrast`, `resolve_cell_color`,
@@ -197,37 +197,37 @@ all of it raises the cost of the next feature.
   (enum `DefaultShell{workspace}` / `Shell(kind)` / `Session{session,title,duplicate_config}`); everything
   else `pub(crate)`.
 
-- [ ] **[Low] ARCH-26 — `TerminalRenderCache` is 4 separate `Rc<RefCell<..>>`** with a tuple-typed gutter cache
+- [x] **[Low] ARCH-26 — `TerminalRenderCache` is 4 separate `Rc<RefCell<..>>`** with a tuple-typed gutter cache
   `Option<(Pixels, usize, Pixels, SharedString)>` (`layout/types.rs:266-272`, `view/local_view.rs:112-124`).
   *Fix:* one `Rc<RefCell<RenderCache { rows, gutter: GutterCache{…}, grid_size, metrics }>>`.
 
-- [ ] **[Low] ARCH-27 — `TerminalScrollHandle` implements gpui-component `ScrollbarHandle`
+- [x] **[Low] ARCH-27 — `TerminalScrollHandle` implements gpui-component `ScrollbarHandle`
   (`scroll_handle.rs:88-111`) but no `Scrollbar` element uses it**; the custom overlay in
   `view/scrollbar_overlay.rs` bypasses it. *Fix:* use `Scrollbar::vertical` (theming/fade for free) or delete
   the impl.
 
 ## D. Backends & feature crates
 
-- [ ] **[Medium] ARCH-28 — SFTP task lifetime is not tied to the SSH connection.**
+- [x] **[Medium] ARCH-28 — SFTP task lifetime is not tied to the SSH connection.**
   `SshSession::close()` (`crates/ssh/src/session_terminal.rs:231-235`) never closes SFTP; when
   `ssh_main_task` exits, `sftp_task` keeps running and `alive()` stays true (`sftp_task.rs:251-254`); every op
   then fails after russh-sftp's 10 s timeout. *Fix:* `CancellationToken` cancelled at the end of
   `ssh_main_task`; `SshSession::close` calls `sftp.close()`.
 
-- [ ] **[Medium] ARCH-29 — Backend public API far wider than used.** Only `LocalSession::spawn` and
+- [x] **[Medium] ARCH-29 — Backend public API far wider than used.** Only `LocalSession::spawn` and
   `oneterm_ssh::connect` are consumed (`crates/app/src/session_factory.rs:22,32`), yet
   `crates/local-shell/src/lib.rs:7-17` exports `event_loop`, `listener`, `state`, `ShellEventLoop`,
   `ShellNotifier`, `LocalListener`; `crates/ssh/src/lib.rs:9-27` exports `listener`, `Cmd`, `SshListener`,
   `SftpCmd`, `SftpEvent`, `SftpSession`. *Fix:* `pub(crate)` everything except `LocalSession`, `SshSession`,
   `connect`.
 
-- [ ] **[Medium] ARCH-30 — sftp-ui executes actions inside `render()` via `PendingAction`.**
+- [x] **[Medium] ARCH-30 — sftp-ui executes actions inside `render()` via `PendingAction`.**
   `crates/sftp-ui/src/render.rs:29-43`, rationale in `types.rs:34-36` ("context-menu on_click only has
   `&mut App`") is stale — `PopupMenuItem::on_click` receives `&mut Window` (vendored `menu/popup_menu.rs:196-198`).
   Side effects in the layout pass are a re-entrancy hazard. *Fix:* call
   `panel.update(cx, |this, cx| this.do_rename(window, cx))` from the click handler; delete `PendingAction`.
 
-- [ ] **[Medium] ARCH-31 — `SftpPanel` is a god struct.** 20 `pub(crate)` fields (`crates/sftp-ui/src/panel.rs:39-99`)
+- [x] **[Medium] ARCH-31 — `SftpPanel` is a god struct.** 20 `pub(crate)` fields (`crates/sftp-ui/src/panel.rs:39-99`)
   written from `panel_ops`, `transfer`, `render*`, `table_delegate*`, `actions`. *Fix:* group into
   `BrowserView { cwd, selected, error, path_error }`, `TransferQueueView`, `FollowCwd { enabled, last, cache }`
   with methods; make fields private.
@@ -238,17 +238,17 @@ all of it raises the cost of the next feature.
   *Fix:* `async fn run_transfer(panel, key, id, progress_rx, result_rx, cx)` in the UI; one
   `copy_with_progress` in the backend.
 
-- [ ] **[Medium] ARCH-33 — Duplicated dialog scaffolding across feature crates.** The
+- [x] **[Medium] ARCH-33 — Duplicated dialog scaffolding across feature crates.** The
   "`Rc<dyn Fn(&ClickEvent,&mut Window,&mut App)->bool>` save-logic + footer Cancel/OK" pattern is copied in
   `sftp-ui/src/actions.rs:90-200,321-425`, `session-ui/src/connect_dialog.rs:97-204`,
   `quick_connect_dialog.rs:170-300`, `session_dialog.rs:160-300`, `rename_group.rs`; "labelled input field"
   in `session-ui/src/common.rs:63-83` vs inline in sftp actions. *Fix:* a small `FormDialog` /
   `labelled_field` helper in `oneterm-state` (R10 – lowest gpui-aware shared layer) or a new `ui-kit` crate.
 
-- [ ] **[Medium] ARCH-34 — Two independent `user@host:port` parsers.** `session-ui/src/common.rs:138-153`
+- [x] **[Medium] ARCH-34 — Two independent `user@host:port` parsers.** `session-ui/src/common.rs:138-153`
   and `quick_connect_dialog.rs:193-207` differ (invalid port → default vs. treat as host). *Fix:* one function.
 
-- [ ] **[Medium] ARCH-35 — `SshSessionStore` identifies sessions by `Vec` index.**
+- [x] **[Medium] ARCH-35 — `SshSessionStore` identifies sessions by `Vec` index.**
   `crates/session-ui/src/session_state.rs:104-141`; tree ids encode the index (`panel.rs:36`); dialogs capture
   `index` for later `update`. Any reorder/removal between opening a dialog and saving targets a different
   session. *Fix:* stable `id` on `SshSession` (schema v2), address by id.
@@ -270,10 +270,10 @@ all of it raises the cost of the next feature.
 - [ ] **[Low] ARCH-39 — `SettingsPanel` implements `Panel` (`settings-ui/src/panel.rs:73-89`) but is never
   registered** (shown via `Root::new` in its own window). *Fix:* remove the impl or register it.
 
-- [ ] **[Low] ARCH-40 — `SftpBrowserStore` is a `Mutex` inside a gpui `Global`** (`sftp-ui/src/browser_state.rs:117`),
+- [x] **[Low] ARCH-40 — `SftpBrowserStore` is a `Mutex` inside a gpui `Global`** (`sftp-ui/src/browser_state.rs:117`),
   lazily created in `global(&mut App)`. *Fix:* `RefCell`, created in `init()`.
 
-- [ ] **[Low] ARCH-41 — `AgentStatusEvent` repeats envelope fields in every variant.**
+- [x] **[Low] ARCH-41 — `AgentStatusEvent` repeats envelope fields in every variant.**
   `crates/terminal/src/osc_agent/mod.rs:64-168`: `agent/seq/ts` duplicated across 7 variants → three 7-arm
   accessor `match`es. *Fix:* `struct AgentStatusEvent { agent, seq, ts, payload: AgentPayload }`.
 
