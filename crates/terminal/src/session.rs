@@ -613,8 +613,12 @@ mod tests {
             ("text\x1b[200~more", b"\x1b[200~textmore\x1b[201~"),
             // Multiple embedded markers.
             ("a\x1b[201~b\x1b[200~c\x1b[201~d", b"\x1b[200~abcd\x1b[201~"),
-            // Partial marker (no ~) is NOT stripped.
-            ("text\x1b[201x", b"\x1b[200~text\x1b[201x\x1b[201~"),
+            // Partial marker (no ~): the ESC is still stripped.
+            ("text\x1b[201x", b"\x1b[200~text[201x\x1b[201~"),
+            // SEC-01: nested marker must not reassemble into a terminator.
+            ("\x1b[20\x1b[201~1~", b"\x1b[200~[201~\x1b[201~"),
+            // ETX is stripped (some shells end bracketed paste on it).
+            ("a\x03b", b"\x1b[200~ab\x1b[201~"),
         ];
 
         for (text, expected) in vectors {

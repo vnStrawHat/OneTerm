@@ -275,19 +275,62 @@ fn case_sensitivity_per_family() {
 }
 
 #[test]
-fn remainder_is_append_only() {
+fn is_prefix_of_typed_handles_multibyte_candidate() {
+    // CORR-07: `typed.len()` (1) lands inside the 3-byte `日` — must not panic.
     let s = Suggestion {
-        text: "dir".into(),
-        kind: SuggestionKind::Command,
+        text: "日x".into(),
+        kind: SuggestionKind::History,
         description: None,
-        match_len: 2,
+        match_len: 0,
         score: 0.0,
         replace_from: 0,
     };
-    assert_eq!(s.remainder("di"), "r");
-    assert_eq!(s.remainder("dir"), "");
-    // Non-prefix → empty (fuzzy accept gated off).
-    assert_eq!(s.remainder("xyz"), "");
+    assert!(!s.is_prefix_of_typed("x"));
+    assert!(s.is_prefix_of_typed("日"));
+    assert!(s.is_prefix_of_typed("日x"));
+    assert!(!s.is_prefix_of_typed("日xy"));
+}
+
+#[test]
+fn match_option_handles_multibyte_flag() {
+    use super::scoring::match_option;
+
+    // CORR-07: token length falls inside `日` in the flag — must not panic.
+    let cfg = CompletionParams::default();
+    assert!(cfg.fuzzy);
+    let fuzzy = match_option("-日x", "-x", &cfg);
+    assert_eq!(fuzzy, Some((false, 0)));
+    let mut no_fuzzy = CompletionParams::default();
+    no_fuzzy.fuzzy = false;
+    assert_eq!(match_option("-日x", "-x", &no_fuzzy), None);
+    assert_eq!(match_option("-日x", "-日", &cfg), Some((true, "-日".len())));
+}
+
+#[test]
+fn fuzzy_history_match_with_multibyte_head_does_not_panic_on_accept() {
+    // CORR-07 reachable path: history first token `日x`, typed `x` → fuzzy
+    // suggestion `日x`; the controller then asks `is_prefix_of_typed("x")`.
+    let e = engine();
+    let mut h = CompletionHistory::new(10);
+    h.record(ShellFamily::Cmd, "日x", 1000);
+    let cfg = CompletionParams::default();
+    let s = e.suggest(&h, &ctx(ShellFamily::Cmd, "x"), &cfg);
+    let hit = s
+        .iter()
+        .find(|x| x.text == "日x")
+        .expect("fuzzy match yields the history command");
+    assert!(!hit.is_prefix_of_typed("x"));
+}
+
+#[test]
+fn history_option_with_multibyte_flag_does_not_panic() {
+    // CORR-07: unknown command → history-derived option `-日x` vs token `-x`.
+    let e = engine();
+    let mut h = CompletionHistory::new(10);
+    h.record(ShellFamily::Cmd, "foo -日x", 1000);
+    let cfg = CompletionParams::default();
+    let s = e.suggest(&h, &ctx(ShellFamily::Cmd, "foo -x"), &cfg);
+    assert!(s.iter().any(|x| x.text == "-日x"));
 }
 
 #[test]
