@@ -26,6 +26,7 @@ use oneterm_core::{RemotePath, SftpBackend};
 use oneterm_state::AppState;
 use oneterm_terminal::CwdSource;
 
+use super::persistence::{read_sftp_table_state, write_sftp_table_state};
 use super::table_delegate::SftpTableDelegate;
 use super::types::{PendingAction, TransferItem};
 
@@ -215,8 +216,33 @@ impl SftpPanel {
         let active = app_state.read(cx).active_workspace(workspace_id);
         let (sftp, cwd_source) = (active.active_sftp, active.active_cwd_source);
         me.sync_from_app_state(sftp, cwd_source, cx);
+        me.load_table_state(cx);
 
         me
+    }
+
+    /// Read the persisted column state off the UI thread and apply it once it
+    /// arrives. Filesystem reads must not run on the UI thread (see
+    /// `docs/agents/persistence.md`).
+    fn load_table_state(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let state = cx
+                .background_executor()
+                .spawn(async { read_sftp_table_state() })
+                .await;
+            let Some(state) = state else {
+                return;
+            };
+            // The panel may be gone before the read completes; nothing to apply then.
+            _ = this.update(cx, |this, cx| {
+                this.table.update(cx, |table, cx| {
+                    table.delegate_mut().apply_persisted_state(&state);
+                    table.refresh(cx);
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
     }
 
     /// Create an entity bound to a specific dock/workspace.
@@ -585,14 +611,23 @@ impl SftpPanel {
         .detach();
     }
 
-    /// Debounce 1s then persist column state (width + visibility) to docks.json.
+    /// Debounce 1s, snapshot the column state (width + visibility) on the UI
+    /// thread, then write it to docks.json on the background executor.
     pub(crate) fn schedule_save_table_state(&mut self, cx: &mut Context<Self>) {
         self._save_table_task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_secs(1)).await;
-            let _ = this.update(cx, |this, cx| {
-                this.table.read(cx).delegate().persist();
-                cx.notify();
-            });
+            let Ok(state) = this.update(cx, |this, cx| {
+                this.table.read(cx).delegate().to_persisted_state()
+            }) else {
+                return;
+            };
+            cx.background_executor()
+                .spawn(async move {
+                    if let Err(error) = write_sftp_table_state(&state) {
+                        log::warn!("SftpPanel: persist table state failed: {error:#}");
+                    }
+                })
+                .await;
         }));
     }
 }

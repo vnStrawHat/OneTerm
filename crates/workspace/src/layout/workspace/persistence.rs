@@ -4,7 +4,9 @@ use anyhow::{Context as _, Result};
 use gpui::{Context, Edges, Entity, PromptLevel, Window};
 use gpui_component::dock::{DockArea, DockAreaState};
 use oneterm_core::quarantine_file;
-use oneterm_state::dock_persistence::{DockDocument, read_dock_document, update_dock_document};
+use oneterm_state::dock_persistence::{
+    DockDocument, DockUpdateOutcome, read_dock_document, update_dock_document,
+};
 
 use super::{MAIN_DOCK_VERSION, state_file};
 
@@ -96,11 +98,16 @@ pub(crate) fn save_state(
     let mut next_document = DockDocument::from_dock_state(state)?;
     next_document.zoomed_panel = zoomed_panel.map(str::to_owned);
     next_document.toggle_button_visible = Some(toggle_button_visible);
-    update_dock_document(move |current| {
+    let outcome = update_dock_document(move |current| {
         next_document.sftp_table_state = current.sftp_table_state.take();
         *current = next_document;
         Ok(())
     })?;
+    if let DockUpdateOutcome::RecoveredFromInvalidData { quarantined } = outcome {
+        log::warn!(
+            "docks.json was invalid and has been reset while saving the layout [trigger={trigger}] (quarantined copy: {quarantined:?})"
+        );
+    }
     Ok(())
 }
 
