@@ -216,12 +216,8 @@ impl TerminalSession for SshSession {
     }
 
     // ── Lifecycle ────────────────────────────────────────────────────
-    fn subscribe(&self) -> Receiver<SessionEvent> {
-        self.event_rx
-            .lock()
-            .unwrap()
-            .take()
-            .unwrap_or_else(|| async_channel::bounded(1).1)
+    fn take_events(&self) -> Option<Receiver<SessionEvent>> {
+        self.event_rx.lock().unwrap().take()
     }
 
     fn alive(&self) -> bool {

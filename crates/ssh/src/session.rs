@@ -16,6 +16,7 @@
 //!
 //! See `docs/terminal-backend.md` §7, `docs/sftp-browser-design.md`.
 
+use std::borrow::Cow;
 use std::future::Future;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -26,8 +27,9 @@ use alacritty_terminal::term::{Config, Term};
 use async_channel::Receiver;
 use russh::Pty;
 use russh::client;
-use russh::client::AuthResult;
+use russh::client::{AuthResult, KeyboardInteractiveAuthResponse};
 use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg, load_secret_key};
+use russh::{MethodKind, MethodSet};
 
 use oneterm_terminal::{PtySize, SessionEvent};
 
@@ -98,6 +100,11 @@ impl Drop for SshSession {
 
 const CONNECT_DEADLINE: Duration = Duration::from_secs(60);
 const PHASE_DEADLINE: Duration = Duration::from_secs(20);
+// Transport-level keepalive so a dead peer or a NAT that dropped the mapping is
+// detected instead of leaving the tab hanging forever: one `keepalive@openssh.com`
+// request every 30 s, disconnect after 3 unanswered (about 90 s of silence).
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+const KEEPALIVE_MAX: usize = 3;
 // Disable TTY echo while shell integration bootstraps the running shell.
 const SHELL_INTEGRATION_PTY_MODES: &[(Pty, u32)] = &[(Pty::ECHO, 0)];
 
@@ -205,9 +212,14 @@ pub fn connect(
         let operation = async {
             let addr = format!("{}:{}", cfg.host, cfg.port);
             log::info!("SshSession: connecting to {addr}");
-            let client_cfg = russh::client::Config::default();
             let handler =
                 SshClientHandler::new(cfg.host.clone(), cfg.port, cfg.host_key_policy.clone());
+            let mut client_cfg = russh::client::Config {
+                keepalive_interval: Some(KEEPALIVE_INTERVAL),
+                keepalive_max: KEEPALIVE_MAX,
+                ..Default::default()
+            };
+            client_cfg.preferred.key = Cow::Owned(handler.preferred_key_algorithms());
 
             let mut handle = await_phase(
                 "connect",
@@ -245,10 +257,12 @@ pub fn connect(
                     await_phase(
                         "authentication",
                         async {
-                            handle
-                                .authenticate_password(&cfg.username, password.expose_secret())
-                                .await
-                                .map_err(|e| anyhow::anyhow!("{e}"))
+                            authenticate_with_password(
+                                &mut handle,
+                                &cfg.username,
+                                password.expose_secret(),
+                            )
+                            .await
                         },
                         cfg.cancellation.clone(),
                     )
@@ -298,8 +312,15 @@ pub fn connect(
                 }
             };
             log::info!("SshSession: auth result = {auth_result:?}");
-            if !matches!(auth_result, AuthResult::Success) {
-                return Err(anyhow::anyhow!("SSH authentication failed"));
+            if let AuthResult::Failure {
+                remaining_methods,
+                partial_success,
+            } = auth_result
+            {
+                return Err(anyhow::anyhow!(
+                    "{}",
+                    authentication_failure_message(&remaining_methods, partial_success)
+                ));
             }
 
             // ── Open channel + pty + shell ──────────────────────────────
@@ -496,6 +517,91 @@ async fn open_sftp(
     Ok(SftpSession::new(sftp_cmd_tx, sftp_event_rx, alive))
 }
 
+/// Password authentication with a keyboard-interactive fallback.
+///
+/// Servers configured with `PasswordAuthentication no` but
+/// `KbdInteractiveAuthentication yes` (the PAM default on several distributions)
+/// reject `password` and advertise `keyboard-interactive` instead. The fallback
+/// runs a single round: every prompt of the first info request is answered with
+/// the same password; a second info request or a prompt that echoes (so it is
+/// not a password prompt) aborts with an explicit error instead of guessing.
+async fn authenticate_with_password(
+    handle: &mut client::Handle<SshClientHandler>,
+    username: &str,
+    password: &str,
+) -> anyhow::Result<AuthResult> {
+    let result = handle
+        .authenticate_password(username, password)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let AuthResult::Failure {
+        remaining_methods, ..
+    } = &result
+    else {
+        return Ok(result);
+    };
+    if !remaining_methods.contains(&MethodKind::KeyboardInteractive) {
+        return Ok(result);
+    }
+    log::info!("SshSession: password rejected; falling back to keyboard-interactive");
+    let response = handle
+        .authenticate_keyboard_interactive_start(username, None)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let prompts = match response {
+        KeyboardInteractiveAuthResponse::Success => return Ok(AuthResult::Success),
+        KeyboardInteractiveAuthResponse::Failure {
+            remaining_methods,
+            partial_success,
+        } => {
+            return Ok(AuthResult::Failure {
+                remaining_methods,
+                partial_success,
+            });
+        }
+        KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => prompts,
+    };
+    if prompts.iter().any(|prompt| prompt.echo) {
+        anyhow::bail!(
+            "SSH keyboard-interactive authentication asked for input other than a password; interactive prompts are not supported"
+        );
+    }
+    let responses = prompts.iter().map(|_| password.to_string()).collect();
+    match handle
+        .authenticate_keyboard_interactive_respond(responses)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+    {
+        KeyboardInteractiveAuthResponse::Success => Ok(AuthResult::Success),
+        KeyboardInteractiveAuthResponse::Failure {
+            remaining_methods,
+            partial_success,
+        } => Ok(AuthResult::Failure {
+            remaining_methods,
+            partial_success,
+        }),
+        KeyboardInteractiveAuthResponse::InfoRequest { .. } => anyhow::bail!(
+            "SSH keyboard-interactive authentication requested a second round of prompts; interactive prompts are not supported"
+        ),
+    }
+}
+
+/// User-facing message for a rejected authentication attempt, naming the
+/// methods the server still accepts so a wrong method choice is diagnosable.
+fn authentication_failure_message(remaining_methods: &MethodSet, partial_success: bool) -> String {
+    let mut message = String::from("SSH authentication failed");
+    if partial_success {
+        message.push_str(" (the server accepted this method but requires another one)");
+    }
+    if remaining_methods.is_empty() {
+        return message;
+    }
+    let methods: Vec<&str> = remaining_methods.iter().map(<&str>::from).collect();
+    message.push_str("; the server accepts: ");
+    message.push_str(&methods.join(", "));
+    message
+}
+
 /// Bootstrap command injected after `request_shell(true)` to install the
 /// OSC 7 prompt hook in the running shell without showing the script itself.
 const SHELL_INTEGRATION_BOOTSTRAP: &str = r#"__oneterm_osc7() { printf '\x1b]7;file://%s%s\x1b\\' "${HOSTNAME:-$(hostname)}" "$PWD"; printf '\x1b]133;A\x1b\\'; }; case ";${PROMPT_COMMAND:-};" in *";__oneterm_osc7;"*) ;; *) PROMPT_COMMAND="__oneterm_osc7${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;; esac; __oneterm_osc7; stty echo 2>/dev/null"#;
@@ -634,6 +740,177 @@ mod tests {
     }
 
     /// SEC-02: RSA keys never fall back to SHA-1 `ssh-rsa`.
+    /// A server that only accepts keyboard-interactive: `password` is rejected
+    /// while advertising keyboard-interactive, whose single prompt must be
+    /// answered with `secret`.
+    #[derive(Clone)]
+    struct KeyboardInteractiveServer;
+
+    impl russh::server::Server for KeyboardInteractiveServer {
+        type Handler = Self;
+
+        fn new_client(&mut self, _peer_addr: Option<std::net::SocketAddr>) -> Self::Handler {
+            self.clone()
+        }
+    }
+
+    impl russh::server::Handler for KeyboardInteractiveServer {
+        type Error = russh::Error;
+
+        async fn auth_password(
+            &mut self,
+            _user: &str,
+            _password: &str,
+        ) -> Result<russh::server::Auth, Self::Error> {
+            Ok(russh::server::Auth::Reject {
+                proceed_with_methods: Some(MethodSet::from(&[MethodKind::KeyboardInteractive][..])),
+                partial_success: false,
+            })
+        }
+
+        async fn auth_keyboard_interactive(
+            &mut self,
+            _user: &str,
+            _submethods: &str,
+            response: Option<russh::server::Response<'_>>,
+        ) -> Result<russh::server::Auth, Self::Error> {
+            let Some(mut response) = response else {
+                return Ok(russh::server::Auth::Partial {
+                    name: "".into(),
+                    instructions: "".into(),
+                    prompts: vec![("Password: ".into(), false)].into(),
+                });
+            };
+            let answered_correctly = response.next().as_deref() == Some(b"secret".as_slice());
+            if answered_correctly {
+                Ok(russh::server::Auth::Accept)
+            } else {
+                Ok(russh::server::Auth::reject())
+            }
+        }
+    }
+
+    async fn spawn_keyboard_interactive_server()
+    -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        use russh::server::Server as _;
+
+        let private_key =
+            russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
+                .unwrap();
+        let server_config = Arc::new(russh::server::Config {
+            keys: vec![private_key],
+            auth_rejection_time: Duration::ZERO,
+            auth_rejection_time_initial: Some(Duration::ZERO),
+            ..Default::default()
+        });
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_task = tokio::spawn(async move {
+            let mut server = KeyboardInteractiveServer;
+            let _ = server.run_on_socket(server_config, &listener).await;
+        });
+        (address, server_task)
+    }
+
+    async fn connect_trusting_loopback(
+        address: std::net::SocketAddr,
+    ) -> (client::Handle<SshClientHandler>, std::path::PathBuf) {
+        let known_hosts = std::env::temp_dir().join(format!(
+            "oneterm-kbd-known-hosts-{}-{}",
+            std::process::id(),
+            address.port()
+        ));
+        // Learn the loopback key with a probe connection so the real
+        // connection can run under the strict policy without touching the
+        // user's known_hosts.
+        let probe = client::connect(
+            Arc::new(client::Config::default()),
+            address,
+            SshClientHandler::new(
+                address.ip().to_string(),
+                address.port(),
+                oneterm_core::HostKeyPolicy::Strict,
+            )
+            .with_known_hosts_path(known_hosts.clone()),
+        )
+        .await;
+        let fingerprint = match probe {
+            Err(SshHandlerError::UnknownHostKey { fingerprint, .. }) => fingerprint,
+            other => panic!("expected an unknown host key, got {:?}", other.err()),
+        };
+        let handle = client::connect(
+            Arc::new(client::Config::default()),
+            address,
+            SshClientHandler::new(
+                address.ip().to_string(),
+                address.port(),
+                oneterm_core::HostKeyPolicy::AcceptNewFingerprint(fingerprint),
+            )
+            .with_known_hosts_path(known_hosts.clone()),
+        )
+        .await
+        .expect("loopback connect");
+        (handle, known_hosts)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn password_falls_back_to_keyboard_interactive() {
+        let (address, server_task) = spawn_keyboard_interactive_server().await;
+        let (mut handle, known_hosts) = connect_trusting_loopback(address).await;
+
+        let result = authenticate_with_password(&mut handle, "user", "secret")
+            .await
+            .expect("keyboard-interactive fallback must not error");
+        assert!(matches!(result, AuthResult::Success), "{result:?}");
+
+        drop(handle);
+        server_task.abort();
+        let _ = std::fs::remove_file(known_hosts);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wrong_password_reports_remaining_methods() {
+        let (address, server_task) = spawn_keyboard_interactive_server().await;
+        let (mut handle, known_hosts) = connect_trusting_loopback(address).await;
+
+        let result = authenticate_with_password(&mut handle, "user", "wrong")
+            .await
+            .expect("a rejected password is a result, not an error");
+        let AuthResult::Failure {
+            remaining_methods, ..
+        } = result
+        else {
+            panic!("wrong password must be rejected");
+        };
+        assert!(remaining_methods.contains(&MethodKind::KeyboardInteractive));
+
+        drop(handle);
+        server_task.abort();
+        let _ = std::fs::remove_file(known_hosts);
+    }
+
+    #[test]
+    fn authentication_failure_message_lists_remaining_methods() {
+        let none = MethodSet::empty();
+        assert_eq!(
+            authentication_failure_message(&none, false),
+            "SSH authentication failed"
+        );
+
+        let methods =
+            MethodSet::from(&[MethodKind::PublicKey, MethodKind::KeyboardInteractive][..]);
+        assert_eq!(
+            authentication_failure_message(&methods, false),
+            "SSH authentication failed; the server accepts: publickey, keyboard-interactive"
+        );
+        assert_eq!(
+            authentication_failure_message(&methods, true),
+            "SSH authentication failed (the server accepted this method but requires another one); the server accepts: publickey, keyboard-interactive"
+        );
+    }
+
     #[test]
     fn rsa_hash_prefers_server_choice_and_never_sha1() {
         assert_eq!(

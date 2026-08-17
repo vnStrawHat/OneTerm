@@ -352,8 +352,15 @@ pub trait TerminalSession: Send + Sync + 'static {
     fn cursor_bounds(&self) -> Option<CursorBounds>;
 
     // ── Lifecycle ───────────────────────────────────────────
-    /// Subscribe to session events (Output/Title/Cwd/Clipboard/ShellIntegration/ForegroundProcess/Exited/Closed).
-    fn subscribe(&self) -> Receiver<SessionEvent>;
+    /// Take the session's single event receiver
+    /// (Output/Title/Cwd/Clipboard/ShellIntegration/ForegroundProcess/Exited/Closed).
+    ///
+    /// Sessions have exactly one event consumer: the backend owns one bounded
+    /// channel and hands its receiver out once. The first call returns
+    /// `Some(receiver)`; every later call returns `None`, so a second consumer
+    /// cannot silently starve the first one. Callers treat `None` as a
+    /// programming error (the view that owns the session already took it).
+    fn take_events(&self) -> Option<Receiver<SessionEvent>>;
     /// Whether the process is still alive (not exited/closed).
     fn alive(&self) -> bool;
     /// Close the session (shut down PTY / close channel).
@@ -536,6 +543,19 @@ mod tests {
         assert!(capabilities.network_stats.is_none());
         assert!(capabilities.sftp.is_none());
         assert!(capabilities.cwd_source.is_none());
+    }
+
+    #[test]
+    fn take_events_hands_out_the_receiver_once() {
+        let (session, probe) = crate::test_support::FakeTerminalSession::boxed(24, 80, "");
+        let events = session
+            .take_events()
+            .expect("first take_events returns the receiver");
+        assert!(session.take_events().is_none());
+
+        // The receiver taken first is the live one.
+        probe.emit(SessionEvent::Bell).unwrap();
+        assert!(matches!(events.try_recv(), Ok(SessionEvent::Bell)));
     }
 
     #[test]

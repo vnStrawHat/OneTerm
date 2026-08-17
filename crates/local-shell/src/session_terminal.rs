@@ -218,13 +218,8 @@ impl TerminalSession for LocalSession {
     }
 
     // ── Lifecycle ────────────────────────────────────────────────────
-    fn subscribe(&self) -> Receiver<SessionEvent> {
-        // Single-consumer: return the receiver if present, otherwise a closed channel.
-        self.event_rx
-            .lock()
-            .unwrap()
-            .take()
-            .unwrap_or_else(|| async_channel::bounded(1).1)
+    fn take_events(&self) -> Option<Receiver<SessionEvent>> {
+        self.event_rx.lock().unwrap().take()
     }
 
     fn alive(&self) -> bool {

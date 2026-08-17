@@ -973,11 +973,32 @@ See `terminal-backend.md` §13 (risks).
 
 ### 9.3. Host key verification
 
-MVP: accept any host key (NOT recommended for production). Roadmap: add
-known_hosts + an accept/reject prompt (see `terminal-backend.md` §8, step 8).
-When known_hosts is implemented, the connect dialog needs an extra step:
-- Unknown host key → dialog "Accept host key? (fingerprint: xx:xx:...)"
-- Host key mismatch → dialog "WARNING: host key changed!"
+Host keys are verified fail-closed against the OpenSSH `known_hosts` file
+(`~/.ssh/known_hosts`) by `crates/ssh/src/handler.rs` (`SshClientHandler`).
+Every entry recorded for `host` (`[host]:port` when the port is not 22, hashed
+entries included) is loaded and compared with the key the server presents:
+
+| known_hosts state for the host | Result |
+|---|---|
+| An entry matches the presented key exactly | Trusted, connection proceeds. |
+| No entry for the host | `AppError::HostKeyUnknown` (algorithm + SHA-256 fingerprint). The connect UI shows an "accept host key?" dialog; approving retries with `HostKeyPolicy::AcceptNewFingerprint(fingerprint)`, and the handler learns the key only when the presented fingerprint equals the approved one. |
+| An entry with the **same algorithm** but a different key | `AppError::HostKeyChanged` — refused, never approvable from the UI; the user must remove the stale entry by hand. |
+| Entries exist but **only for other algorithms** (for example the host is known by `ssh-ed25519` and the server presents `ecdsa-sha2-nistp256`) | `AppError::HostKeyChanged` as well (`SshHandlerError::HostKeyAlgorithmMismatch`). A man-in-the-middle can always present a key type the client has never recorded, so this case must not fall through to the friendly first-use prompt. |
+| `known_hosts` unreadable / malformed entry for the host | Key-store error, connection refused. |
+
+To keep the algorithm-mismatch rule from firing on legitimate servers that
+gained new key types after the first connection, the client's preferred
+host-key algorithm list is reordered before key exchange so every algorithm
+already recorded for the host is offered first
+(`SshClientHandler::preferred_key_algorithms` → `client::Config.preferred.key`).
+Servers pick the first client-preferred type they hold, so a host known only by
+its RSA key keeps presenting RSA. If a server dropped the recorded key type
+entirely, the mismatch is reported and the user removes the stale entry.
+
+Connections also send `keepalive@openssh.com` requests every 30 s and disconnect
+after 3 unanswered requests (`KEEPALIVE_INTERVAL` / `KEEPALIVE_MAX` in
+`crates/ssh/src/session.rs`) so a dead peer or a dropped NAT mapping surfaces as
+a closed session instead of a tab that hangs forever.
 
 ### 9.4. Password input — don't log it
 

@@ -6,8 +6,36 @@ use alacritty_terminal::selection::SelectionType;
 use oneterm_terminal::mouse_encode::{MouseModifiers, TerminalMouseButton};
 use oneterm_terminal::{TerminalError, TerminalSession};
 
-use crate::session::LocalSession;
+use crate::session::{LocalSession, quote_windows_argument};
 use oneterm_terminal::PtySize;
+
+#[test]
+fn program_path_with_spaces_is_quoted_for_conpty() {
+    assert_eq!(
+        quote_windows_argument(r"C:\Program Files\PowerShell\7\pwsh.exe"),
+        r#""C:\Program Files\PowerShell\7\pwsh.exe""#
+    );
+    // A trailing backslash must be doubled so it does not escape the closing quote.
+    assert_eq!(
+        quote_windows_argument(r"C:\Program Files\"),
+        r#""C:\Program Files\\""#
+    );
+    assert_eq!(quote_windows_argument(""), r#""""#);
+}
+
+#[test]
+fn cmd_utf8_command_line_stays_verbatim_under_escaping() {
+    // `cmd /K chcp 65001 >nul`: neither the program nor the arguments contain
+    // whitespace or quotes, so CRT escaping leaves cmd.exe's `/K` command line
+    // untouched — this is why `escape_args` can be enabled unconditionally.
+    assert_eq!(
+        quote_windows_argument(r"C:\Windows\System32\cmd.exe"),
+        r"C:\Windows\System32\cmd.exe"
+    );
+    for arg in ["/K", "chcp", "65001", ">nul"] {
+        assert_eq!(quote_windows_argument(arg), arg);
+    }
+}
 
 fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + timeout;
@@ -97,12 +125,13 @@ fn trait_alive_is_local_close() {
 }
 
 #[test]
-fn trait_subscribe_returns_receiver() {
+fn trait_take_events_hands_out_the_receiver_once() {
     let s = spawn_default();
-    let _rx = s.subscribe();
-    // 2nd subscribe → closed channel (recv → Err Closed) but no panic.
-    let rx2 = s.subscribe();
-    assert!(rx2.recv_blocking().is_err());
+    let first = s.take_events();
+    assert!(first.is_some());
+    // The single receiver is gone: a second consumer gets nothing instead of
+    // a dead channel that would silently miss every event.
+    assert!(s.take_events().is_none());
     let _ = s.close();
 }
 
