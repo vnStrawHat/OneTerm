@@ -272,8 +272,8 @@ impl<EP: EventListener> TerminalModel<EP> {
     ) -> Option<Vec<u8>> {
         let mode = self.mode();
         if mode.intersects(TermMode::MOUSE_MODE) {
-            let s = encode_mouse_press(row as usize, col as usize, button, mode, mods);
-            Some(s.into_bytes())
+            let bytes = encode_mouse_press(row as usize, col as usize, button, mode, mods);
+            Some(bytes)
         } else if matches!(button, TerminalMouseButton::Left) {
             self.start_selection(row, col, sel);
             None
@@ -286,8 +286,8 @@ impl<EP: EventListener> TerminalModel<EP> {
     pub fn mouse_move(&self, row: f32, col: f32, mods: MouseModifiers) -> Option<Vec<u8>> {
         let mode = self.mode();
         if mode.contains(TermMode::MOUSE_MOTION) || mode.contains(TermMode::MOUSE_DRAG) {
-            let s = encode_mouse_move(row as usize, col as usize, None, mode, mods);
-            Some(s.into_bytes())
+            let bytes = encode_mouse_move(row as usize, col as usize, None, mode, mods);
+            Some(bytes)
         } else {
             None
         }
@@ -298,14 +298,14 @@ impl<EP: EventListener> TerminalModel<EP> {
     pub fn mouse_drag(&self, row: f32, col: f32, mods: MouseModifiers) -> Option<Vec<u8>> {
         let mode = self.mode();
         if mode.intersects(TermMode::MOUSE_MODE) {
-            let s = encode_mouse_move(
+            let bytes = encode_mouse_move(
                 row as usize,
                 col as usize,
                 Some(TerminalMouseButton::Left),
                 mode,
                 mods,
             );
-            Some(s.into_bytes())
+            Some(bytes)
         } else {
             self.update_selection(row, col);
             None
@@ -322,8 +322,8 @@ impl<EP: EventListener> TerminalModel<EP> {
     ) -> Option<Vec<u8>> {
         let mode = self.mode();
         if mode.intersects(TermMode::MOUSE_MODE) {
-            let s = encode_mouse_release(row as usize, col as usize, button, mode, mods);
-            Some(s.into_bytes())
+            let bytes = encode_mouse_release(row as usize, col as usize, button, mode, mods);
+            Some(bytes)
         } else {
             None
         }
@@ -343,8 +343,8 @@ impl<EP: EventListener> TerminalModel<EP> {
             self.scroll(scroll_delta);
             None
         } else if mode.intersects(TermMode::MOUSE_MODE) {
-            let s = encode_wheel_event(row as usize, col as usize, delta_y, mode, mods);
-            Some(s.into_bytes())
+            let bytes = encode_wheel_event(row as usize, col as usize, delta_y, mode, mods);
+            Some(bytes)
         } else if mode.contains(TermMode::ALT_SCREEN) {
             let app_cursor = mode.contains(TermMode::APP_CURSOR);
             let key = match (delta_y > 0.0, app_cursor) {

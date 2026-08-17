@@ -241,6 +241,20 @@ pub(crate) fn attach_key(
                 }
             }
 
+            // AltGr on Windows arrives as Ctrl+Alt. When that chord produced
+            // printable text it is a layout character (`@ { [ € ~` on DE/FR
+            // layouts), not a control chord: return without stopping
+            // propagation so the platform delivers it as text
+            // (WM_CHAR → replace_text_in_range) instead of `encode_key`
+            // turning it into a control byte.
+            if is_altgr_text(
+                ALTGR_REPORTS_AS_CTRL_ALT,
+                &mods,
+                e.keystroke.key_char.as_deref(),
+            ) {
+                return;
+            }
+
             let Some((spec, mods)) = LocalTerminalView::map_key(&e.keystroke) else {
                 return;
             };
@@ -283,4 +297,78 @@ pub(crate) fn attach_key(
             cx.stop_propagation();
         }
     })
+}
+
+/// Whether this platform reports AltGr as Ctrl+Alt (Windows) rather than as a
+/// dedicated level-3 modifier (X11/Wayland/macOS).
+const ALTGR_REPORTS_AS_CTRL_ALT: bool = cfg!(windows);
+
+/// Classify a Ctrl+Alt chord that produced printable `key_char` as AltGr text.
+///
+/// Only meaningful when `altgr_as_ctrl_alt` (Windows): there the platform
+/// cannot distinguish AltGr+q (`@` on a German layout) from a real Ctrl+Alt+q,
+/// but a real Ctrl+Alt chord never yields printable text from `ToUnicode`, so
+/// printable text is the discriminator. Elsewhere Ctrl+Alt is genuinely
+/// Ctrl+Alt and must reach the encoder.
+pub(crate) fn is_altgr_text(
+    altgr_as_ctrl_alt: bool,
+    mods: &gpui::Modifiers,
+    key_char: Option<&str>,
+) -> bool {
+    if !altgr_as_ctrl_alt || !mods.control || !mods.alt || mods.platform {
+        return false;
+    }
+    key_char.is_some_and(|text| !text.is_empty() && !text.chars().any(char::is_control))
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::Modifiers;
+
+    use super::is_altgr_text;
+
+    fn ctrl_alt() -> Modifiers {
+        Modifiers {
+            control: true,
+            alt: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn ctrl_alt_with_printable_text_is_altgr() {
+        for text in ["@", "{", "[", "€", "~", "\\"] {
+            assert!(is_altgr_text(true, &ctrl_alt(), Some(text)), "{text}");
+        }
+    }
+
+    #[test]
+    fn ctrl_alt_without_text_is_a_control_chord() {
+        assert!(!is_altgr_text(true, &ctrl_alt(), None));
+        assert!(!is_altgr_text(true, &ctrl_alt(), Some("")));
+        // Control characters are never layout text.
+        assert!(!is_altgr_text(true, &ctrl_alt(), Some("\u{1b}")));
+    }
+
+    #[test]
+    fn plain_ctrl_or_alt_is_never_altgr() {
+        let ctrl = Modifiers {
+            control: true,
+            ..Default::default()
+        };
+        let alt = Modifiers {
+            alt: true,
+            ..Default::default()
+        };
+        assert!(!is_altgr_text(true, &ctrl, Some("2")));
+        assert!(!is_altgr_text(true, &alt, Some("a")));
+        assert!(!is_altgr_text(true, &Modifiers::default(), Some("a")));
+    }
+
+    #[test]
+    fn platforms_with_a_real_altgr_modifier_keep_ctrl_alt() {
+        // X11/Wayland/macOS report AltGr separately, so Ctrl+Alt+2 there is a
+        // real chord and must still be encoded (ESC NUL).
+        assert!(!is_altgr_text(false, &ctrl_alt(), Some("2")));
+    }
 }
