@@ -1,14 +1,15 @@
 //! Scriptable in-memory `SftpBackend` for panel tests.
 //!
-//! Transfers record their arguments and answer from a queue of pre-armed
-//! channels so a test controls *when* and *in which order* results arrive.
+//! Every operation records its arguments; `read_dir` and transfers answer from
+//! queues of pre-armed channels so a test controls *when* and *in which order*
+//! results arrive.
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use async_channel::Sender;
+use async_channel::{Receiver, Sender};
 
 use oneterm_core::{
     AppError, FileEntry, FileStat, RemotePath, Result, SftpBackend, SftpFuture, SftpSessionId,
@@ -30,6 +31,8 @@ pub(crate) struct TransferRequest {
 
 #[derive(Default)]
 struct Script {
+    read_dir_replies: VecDeque<Receiver<Result<Vec<FileEntry>>>>,
+    read_dir_requests: Vec<RemotePath>,
     transfer_handles: VecDeque<TransferHandle>,
     transfer_requests: Vec<TransferRequest>,
 }
@@ -47,6 +50,18 @@ impl FakeSftpBackend {
             alive: AtomicBool::new(true),
             script: Mutex::new(Script::default()),
         }
+    }
+
+    /// Arm the reply for the next `read_dir` call; the returned sender resolves it.
+    pub(crate) fn arm_read_dir(&self) -> Sender<Result<Vec<FileEntry>>> {
+        let (tx, rx) = async_channel::bounded(1);
+        self.script.lock().unwrap().read_dir_replies.push_back(rx);
+        tx
+    }
+
+    /// Paths requested through `read_dir`, in call order.
+    pub(crate) fn read_dir_requests(&self) -> Vec<RemotePath> {
+        self.script.lock().unwrap().read_dir_requests.clone()
     }
 
     /// Arm the handle for the next `upload`/`download` call.
@@ -97,8 +112,21 @@ impl SftpBackend for FakeSftpBackend {
         self.id
     }
 
-    fn read_dir(&self, _path: RemotePath) -> SftpFuture<'_, Vec<FileEntry>> {
-        Self::unused()
+    fn read_dir(&self, path: RemotePath) -> SftpFuture<'_, Vec<FileEntry>> {
+        let reply = {
+            let mut script = self.script.lock().unwrap();
+            script.read_dir_requests.push(path);
+            script.read_dir_replies.pop_front()
+        };
+        Box::pin(async move {
+            match reply {
+                Some(reply) => reply
+                    .recv()
+                    .await
+                    .unwrap_or_else(|_| Err(AppError::msg("read_dir reply dropped"))),
+                None => Err(AppError::msg("unexpected read_dir")),
+            }
+        })
     }
 
     fn stat(&self, _path: RemotePath) -> SftpFuture<'_, FileStat> {

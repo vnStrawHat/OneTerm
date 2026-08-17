@@ -55,6 +55,10 @@ pub struct SftpPanel {
 
     // ── File tree state (active view; mirrored from the store on tab switch) ─
     pub(crate) cwd: RemotePath,
+    /// Incremented by every directory request. A listing result is applied only
+    /// when its captured generation (and backend key) still match, so a slower
+    /// earlier request cannot overwrite a newer one.
+    pub(crate) load_generation: u64,
     /// Entries + sort + loading + column config live in the delegate.
     pub(crate) table: Entity<TableState<SftpTableDelegate>>,
     /// Mirror of the selected row index (synced from `TableEvent::SelectRow` +
@@ -184,6 +188,7 @@ impl SftpPanel {
             cwd_source: None,
             terminal_cwd_cache: None,
             cwd: RemotePath::new(""),
+            load_generation: 0,
             table,
             selected: None,
             error: None,
@@ -539,32 +544,41 @@ impl SftpPanel {
     }
 
     /// Goto path — stat it, then `load_dir` when it is a directory; on error, set
-    /// `path_error`.
+    /// `path_error`. The stat result is discarded when a newer directory request
+    /// or a backend switch happened while it was in flight.
     pub(crate) fn goto_path(&mut self, path: RemotePath, cx: &mut Context<Self>) {
         let sftp = match &self.sftp {
             Some(s) => s.clone(),
             None => return,
         };
+        let generation = self.load_generation;
+        let key = self.active_key;
         cx.spawn(async move |this, cx| {
             let result = sftp.stat(path.clone()).await;
             // The panel may be gone before the stat completes; nothing to apply then.
-            _ = this.update(cx, |this, cx| match result {
-                Ok(stat) if stat.is_dir => {
-                    this.path_error = false;
-                    this.mark_state_dirty();
-                    this.load_dir(path, cx);
+            _ = this.update(cx, |this, cx| {
+                if this.load_generation != generation || this.active_key != key {
+                    log::debug!("SftpPanel::goto_path: discarding stale result for \"{path}\"");
+                    return;
                 }
-                Ok(_) => {
-                    log::warn!("SftpPanel::goto_path: not a directory: \"{path}\"");
-                    this.path_error = true;
-                    this.mark_state_dirty();
-                    cx.notify();
-                }
-                Err(error) => {
-                    log::warn!("SftpPanel::goto_path: invalid path \"{path}\": {error}");
-                    this.path_error = true;
-                    this.mark_state_dirty();
-                    cx.notify();
+                match result {
+                    Ok(stat) if stat.is_dir => {
+                        this.path_error = false;
+                        this.mark_state_dirty();
+                        this.load_dir(path, cx);
+                    }
+                    Ok(_) => {
+                        log::warn!("SftpPanel::goto_path: not a directory: \"{path}\"");
+                        this.path_error = true;
+                        this.mark_state_dirty();
+                        cx.notify();
+                    }
+                    Err(error) => {
+                        log::warn!("SftpPanel::goto_path: invalid path \"{path}\": {error}");
+                        this.path_error = true;
+                        this.mark_state_dirty();
+                        cx.notify();
+                    }
                 }
             });
         })

@@ -12,6 +12,11 @@ use super::types::SortColumn;
 
 impl SftpPanel {
     /// Read a directory — spawn a background task, does not block the UI.
+    ///
+    /// Each call bumps `load_generation`; the spawned task applies its result
+    /// only when the generation and the active backend still match, so a slow
+    /// earlier listing (fast navigation, auto-follow racing a click, a tab switch
+    /// during load) can neither replace a newer listing nor rewrite `cwd`.
     pub(crate) fn load_dir(&mut self, path: RemotePath, cx: &mut Context<Self>) {
         log::debug!("SftpPanel::load_dir: path=\"{path}\"");
 
@@ -26,6 +31,10 @@ impl SftpPanel {
                 return;
             }
         };
+
+        self.load_generation = self.load_generation.wrapping_add(1);
+        let generation = self.load_generation;
+        let key = self.active_key;
 
         self.table.update(cx, |t, cx| {
             t.delegate_mut().loading = true;
@@ -44,7 +53,16 @@ impl SftpPanel {
             let result = sftp.read_dir(path.clone()).await;
 
             // The panel may be gone before the listing arrives; nothing to apply then.
-            _ = this.update(cx, |this, cx| this.apply_listing(result, cx))
+            _ = this.update(cx, |this, cx| {
+                if this.load_generation != generation || this.active_key != key {
+                    log::debug!(
+                        "SftpPanel::load_dir: discarding stale listing for \"{path}\" (generation {generation}, current {})",
+                        this.load_generation
+                    );
+                    return;
+                }
+                this.apply_listing(result, cx);
+            })
         })
         .detach();
     }
@@ -247,5 +265,129 @@ impl SftpPanel {
     pub(crate) fn selected_entry(&self, cx: &App) -> Option<FileEntry> {
         self.selected
             .and_then(|ix| self.table.read(cx).delegate().entries.get(ix).cloned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use gpui::{AppContext as _, TestAppContext, VisualTestContext};
+    use oneterm_core::{RemotePath, SftpBackend};
+
+    use super::SftpPanel;
+    use crate::browser_state::SftpBrowserStore;
+    use crate::test_backend::{FakeSftpBackend, dir_entry};
+
+    fn test_panel(cx: &mut TestAppContext) -> (gpui::Entity<SftpPanel>, &mut VisualTestContext) {
+        cx.update(gpui_component::init);
+        cx.update(oneterm_state::AppState::init);
+
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| SftpPanel::new(window, cx));
+            gpui_component::Root::new(panel, window, cx)
+        });
+        let panel = root.read_with(cx, |root, _| {
+            root.view().clone().downcast::<SftpPanel>().unwrap()
+        });
+        (panel, cx)
+    }
+
+    fn attach_backend(
+        panel: &gpui::Entity<SftpPanel>,
+        cx: &mut VisualTestContext,
+    ) -> Arc<FakeSftpBackend> {
+        let backend = Arc::new(FakeSftpBackend::new());
+        let dynamic: Arc<dyn SftpBackend> = backend.clone();
+        panel.update(cx, |panel, cx| {
+            let key = SftpBrowserStore::global(cx).track_backend(&dynamic);
+            panel.sftp = Some(dynamic);
+            panel.active_key = Some(key);
+        });
+        backend
+    }
+
+    fn listed_names(panel: &gpui::Entity<SftpPanel>, cx: &mut VisualTestContext) -> Vec<String> {
+        panel.read_with(cx, |panel, cx| {
+            panel
+                .table
+                .read(cx)
+                .delegate()
+                .entries
+                .iter()
+                .map(|entry| entry.name.clone())
+                .collect()
+        })
+    }
+
+    /// CORR-09: a listing that arrives after a newer request was issued is
+    /// discarded — it must neither replace the newer entries nor rewrite `cwd`.
+    #[gpui::test]
+    fn stale_listing_is_discarded(cx: &mut TestAppContext) {
+        let (panel, cx) = test_panel(cx);
+        let backend = attach_backend(&panel, cx);
+        let first_reply = backend.arm_read_dir();
+        let second_reply = backend.arm_read_dir();
+
+        let first_dir = RemotePath::new("/first");
+        let second_dir = RemotePath::new("/second");
+        panel.update(cx, |panel, cx| panel.load_dir(first_dir.clone(), cx));
+        panel.update(cx, |panel, cx| panel.load_dir(second_dir.clone(), cx));
+        cx.run_until_parked();
+        assert_eq!(
+            backend.read_dir_requests(),
+            vec![first_dir.clone(), second_dir.clone()]
+        );
+
+        // The newer request answers first.
+        second_reply
+            .try_send(Ok(vec![dir_entry(&second_dir, "b.txt", false)]))
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(listed_names(&panel, cx), vec!["b.txt"]);
+        assert_eq!(
+            panel.read_with(cx, |panel, _| panel.cwd.clone()),
+            second_dir
+        );
+
+        // The stale answer must be ignored.
+        first_reply
+            .try_send(Ok(vec![dir_entry(&first_dir, "a.txt", false)]))
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(listed_names(&panel, cx), vec!["b.txt"]);
+        assert_eq!(
+            panel.read_with(cx, |panel, _| panel.cwd.clone()),
+            second_dir
+        );
+        assert!(panel.read_with(cx, |panel, cx| !panel.table.read(cx).delegate().loading));
+    }
+
+    /// A listing that belongs to a backend that is no longer active is discarded.
+    #[gpui::test]
+    fn listing_from_a_switched_away_backend_is_discarded(cx: &mut TestAppContext) {
+        let (panel, cx) = test_panel(cx);
+        let backend = attach_backend(&panel, cx);
+        let reply = backend.arm_read_dir();
+
+        let dir = RemotePath::new("/old");
+        panel.update(cx, |panel, cx| panel.load_dir(dir.clone(), cx));
+        cx.run_until_parked();
+
+        // Switch to another backend while the listing is in flight.
+        let other = attach_backend(&panel, cx);
+        panel.update(cx, |panel, _| panel.cwd = RemotePath::new("/other"));
+
+        reply
+            .try_send(Ok(vec![dir_entry(&dir, "stale.txt", false)]))
+            .unwrap();
+        cx.run_until_parked();
+
+        assert!(listed_names(&panel, cx).is_empty());
+        assert_eq!(
+            panel.read_with(cx, |panel, _| panel.cwd.clone()),
+            RemotePath::new("/other")
+        );
+        assert!(other.read_dir_requests().is_empty());
     }
 }
