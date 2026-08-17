@@ -3,6 +3,7 @@
 //! Depends on `alacritty_terminal` (types: `TermMode`, `Cell`, colors) but does
 //! **not** depend on GPUI. The UI crate maps these types to GPUI when rendering.
 
+pub mod backend;
 pub mod color_classification;
 pub mod content;
 pub mod contracts;
@@ -23,6 +24,11 @@ pub mod test_support;
 pub mod url;
 pub mod url_policy;
 
+pub use backend::{
+    ColorQueryReplier, DefaultColors, EventQueueDiagnostics, GridSize, LineAccounting, OscRouter,
+    PtyTransport, SessionEventSink, SessionState, SharedSessionState, SharedState,
+    SharedStateCwdSource, TerminalPump,
+};
 pub use color_classification::{
     is_app_chosen_exact_color, is_decorative_character, is_default_background_color,
 };
@@ -42,9 +48,10 @@ pub use osc::{
 #[cfg(any(test, feature = "test-support"))]
 pub use osc_agent::encode_osc97_params;
 pub use osc_agent::{
-    AgentState, AgentStatusEvent, ApprovalChoice, ApprovalEvent, ApprovalKind, ApprovalRisk,
-    FileAction, FileEvent, HeartbeatEvent, ModelEvent, ModelSource, SessionIdentityEvent,
-    StateEvent, ToolCallEvent, ToolCallPhase, parse_agent_status, should_apply,
+    AgentPayload, AgentState, AgentStatusEvent, ApprovalChoice, ApprovalEvent, ApprovalKind,
+    ApprovalRisk, FileAction, FileEvent, HeartbeatEvent, ModelEvent, ModelSource,
+    SessionIdentityEvent, StateEvent, ToolCallEvent, ToolCallPhase, parse_agent_status,
+    should_apply,
 };
 pub use osc_color::{
     BACKGROUND_INDEX, CURSOR_INDEX, ColorFormatter, DynamicColors, FOREGROUND_INDEX,

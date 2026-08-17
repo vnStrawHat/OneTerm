@@ -18,16 +18,11 @@ fn parses_state_event() {
         r#"{"v":1,"agent":"pi","type":"state","seq":1,"ts":1000,"state":"working","message":"thinking","session_id":"abc"}"#,
     );
     let ev = parse_agent_status(&p).unwrap();
-    match &ev {
-        AgentStatusEvent::State {
-            agent,
-            seq,
-            ts,
-            payload,
-        } => {
-            assert_eq!(*agent, "pi");
-            assert_eq!(*seq, 1);
-            assert_eq!(*ts, 1000);
+    assert_eq!(ev.agent, "pi");
+    assert_eq!(ev.seq, 1);
+    assert_eq!(ev.ts, 1000);
+    match &ev.payload {
+        AgentPayload::State(payload) => {
             assert_eq!(payload.state, AgentState::Working);
             assert_eq!(payload.message.as_deref(), Some("thinking"));
             assert_eq!(payload.session_id.as_deref(), Some("abc"));
@@ -46,9 +41,9 @@ fn parses_session_event() {
         r#"{"v":1,"agent":"codex","type":"session","seq":2,"ts":2000,"session_id":"s1","reason":"startup","parent_id":"p0","project_dir":"/opt/app/dev/myProject"}"#,
     );
     let ev = parse_agent_status(&p).unwrap();
-    match ev {
-        AgentStatusEvent::Session { agent, payload, .. } => {
-            assert_eq!(agent, "codex");
+    assert_eq!(ev.agent, "codex");
+    match ev.payload {
+        AgentPayload::Session(payload) => {
             assert_eq!(payload.session_id, "s1");
             assert_eq!(payload.reason.as_deref(), Some("startup"));
             assert_eq!(payload.parent_id.as_deref(), Some("p0"));
@@ -67,8 +62,8 @@ fn parses_heartbeat_event() {
         r#"{"v":1,"agent":"pi","type":"heartbeat","seq":3,"ts":3000,"interval_ms":15000,"state":"idle"}"#,
     );
     let ev = parse_agent_status(&p).unwrap();
-    match ev {
-        AgentStatusEvent::Heartbeat { payload, .. } => {
+    match ev.payload {
+        AgentPayload::Heartbeat(payload) => {
             assert_eq!(payload.interval_ms, Some(15000));
             assert_eq!(payload.state, Some(AgentState::Idle));
         }
@@ -82,8 +77,8 @@ fn parses_model_event() {
         r#"{"v":1,"agent":"pi","type":"model","seq":4,"ts":4000,"provider":"anthropic","model_id":"claude-sonnet-4","model_name":"Claude Sonnet 4","context_window":200000,"max_output_tokens":8192,"reasoning":true,"source":"set","context_used":84500}"#,
     );
     let ev = parse_agent_status(&p).unwrap();
-    match ev {
-        AgentStatusEvent::Model { payload, .. } => {
+    match ev.payload {
+        AgentPayload::Model(payload) => {
             assert_eq!(payload.provider, "anthropic");
             assert_eq!(payload.model_id, "claude-sonnet-4");
             assert_eq!(payload.model_name.as_deref(), Some("Claude Sonnet 4"));
@@ -103,8 +98,8 @@ fn parses_tool_call_start_and_end() {
         r#"{"v":1,"agent":"pi","type":"tool_call","seq":10,"ts":5000,"tool_call_id":"tc-42","tool":"bash","phase":"start","target":"src/app.rs","args":"grep -n TODO src/app.rs","args_redacted":false}"#,
     );
     let ev = parse_agent_status(&start).unwrap();
-    match ev {
-        AgentStatusEvent::ToolCall { payload, .. } => {
+    match ev.payload {
+        AgentPayload::ToolCall(payload) => {
             assert_eq!(payload.tool_call_id, "tc-42");
             assert_eq!(payload.tool, "bash");
             assert_eq!(payload.phase, ToolCallPhase::Start);
@@ -118,8 +113,8 @@ fn parses_tool_call_start_and_end() {
         r#"{"v":1,"agent":"pi","type":"tool_call","seq":11,"ts":5900,"tool_call_id":"tc-42","tool":"bash","phase":"end","exit_code":0,"is_error":false,"duration_ms":900}"#,
     );
     let ev = parse_agent_status(&end).unwrap();
-    match ev {
-        AgentStatusEvent::ToolCall { payload, .. } => {
+    match ev.payload {
+        AgentPayload::ToolCall(payload) => {
             assert_eq!(payload.phase, ToolCallPhase::End);
             assert_eq!(payload.exit_code, Some(0));
             assert_eq!(payload.is_error, Some(false));
@@ -135,8 +130,8 @@ fn parses_file_event() {
         r#"{"v":1,"agent":"pi","type":"file","seq":12,"ts":6000,"path":"src/app.rs","action":"edit","tool_call_id":"tc-43"}"#,
     );
     let ev = parse_agent_status(&p).unwrap();
-    match ev {
-        AgentStatusEvent::File { payload, .. } => {
+    match ev.payload {
+        AgentPayload::File(payload) => {
             assert_eq!(payload.path, "src/app.rs");
             assert_eq!(payload.action, FileAction::Edit);
             assert_eq!(payload.tool_call_id.as_deref(), Some("tc-43"));
@@ -151,8 +146,8 @@ fn parses_approval_event() {
         r#"{"v":1,"agent":"pi","type":"approval","seq":13,"ts":7000,"id":"apr-7","kind":"permission","prompt":"Allow bash?","options":["yes","no","always"],"default":"no","tool":"bash","tool_call_id":"tc-44","risk":"high","timeout_ms":0}"#,
     );
     let ev = parse_agent_status(&p).unwrap();
-    match ev {
-        AgentStatusEvent::Approval { payload, .. } => {
+    match ev.payload {
+        AgentPayload::Approval(payload) => {
             assert_eq!(payload.id, "apr-7");
             assert_eq!(payload.kind, ApprovalKind::Permission);
             assert_eq!(payload.prompt, "Allow bash?");
@@ -178,8 +173,8 @@ fn semicolon_in_string_value_survives_base64_wrap() {
         r#"{"v":1,"agent":"pi","type":"state","seq":1,"ts":1,"state":"error","message":"retry: https://x/y?a=1;b=2"}"#,
     );
     let ev = parse_agent_status(&p).unwrap();
-    match ev {
-        AgentStatusEvent::State { payload, .. } => {
+    match ev.payload {
+        AgentPayload::State(payload) => {
             assert_eq!(payload.state, AgentState::Error);
             assert_eq!(
                 payload.message.as_deref(),

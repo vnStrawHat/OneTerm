@@ -21,7 +21,6 @@ use std::future::Future;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config, Term};
 use async_channel::Receiver;
@@ -30,35 +29,20 @@ use russh::client;
 use russh::client::{AuthResult, KeyboardInteractiveAuthResponse};
 use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg, load_secret_key};
 use russh::{MethodKind, MethodSet};
+use tokio_util::sync::CancellationToken;
 
-use oneterm_terminal::{PtySize, SessionEvent};
+use oneterm_core::{SshAuthMethod, SshConfig};
+use oneterm_terminal::{
+    ClipboardOrigin, GridSize, OscRouter, PtySize, PtyTransport, SessionEvent, SessionEventSink,
+    SharedSessionState, SharedState,
+};
 
-use crate::config::{SshAuthMethod, SshConfig};
 use crate::counting_stream::CountingStream;
 use crate::handler::{SshClientHandler, SshHandlerError};
-use crate::listener::{Cmd, SshListener};
 use crate::sftp::{SftpCmd, SftpEvent, SftpSession};
 use crate::sftp_task::sftp_task;
-use crate::state::{SharedState, new_shared};
 use crate::task::ssh_main_task;
-
-/// Dimensions for `Term::new` / `Term::resize`.
-pub(crate) struct TermSize {
-    pub(crate) cols: usize,
-    pub(crate) lines: usize,
-}
-
-impl Dimensions for TermSize {
-    fn total_lines(&self) -> usize {
-        self.lines
-    }
-    fn screen_lines(&self) -> usize {
-        self.lines
-    }
-    fn columns(&self) -> usize {
-        self.cols
-    }
-}
+use crate::transport::{Cmd, SSH_COMMAND_QUEUE_CAPACITY, SshListener, SshTransport};
 
 /// An SSH session whose asynchronous tasks run on the shared SSH runtime.
 pub struct SshSession {
@@ -73,28 +57,41 @@ pub struct SshSession {
     pub(crate) sftp: Mutex<Option<Arc<SftpSession>>>,
 }
 
+impl SshSession {
+    /// The SSH channel transport (write / resize / close).
+    pub(crate) fn transport(&self) -> &SshTransport {
+        self.listener.transport()
+    }
+
+    /// Ask the SFTP task to stop and drop the handle, so a later `close()` or
+    /// drop is a no-op (no-op without SFTP).
+    pub(crate) fn close_sftp(&self) {
+        let sftp = self.sftp.lock().unwrap().take();
+        if let Some(sftp) = sftp {
+            use oneterm_core::SftpBackend;
+            sftp.close();
+        }
+    }
+}
+
 impl Drop for SshSession {
     /// Release the connection when the session is discarded without `close()`
     /// (for example when connect succeeded after the user cancelled).
     ///
     /// `ssh_main_task` holds `cmd_tx` clones through `term`/`listener`, so the
-    /// command channel never closes on its own; the listener's closing flag is
+    /// command channel never closes on its own; the transport's closing flag is
     /// the task's shutdown signal. `pty_close` sets it and is idempotent, so an
     /// explicit `close()` followed by drop is fine.
     fn drop(&mut self) {
-        if !self.listener.is_closing() {
+        if !self.transport().is_closing() {
             log::info!("SshSession: dropped without close — requesting close");
-            if let Err(error) = self.listener.pty_close() {
+            if let Err(error) = self.transport().pty_close() {
                 log::debug!("SshSession: close on drop not delivered: {error}");
             }
         }
-        // Best effort: `sftp_task` also stops when the last command sender
-        // goes away, but the UI may still hold an `Arc<SftpSession>`.
-        let sftp = self.sftp.lock().ok().and_then(|mut guard| guard.take());
-        if let Some(sftp) = sftp {
-            use oneterm_core::SftpBackend;
-            sftp.close();
-        }
+        // Best effort: `sftp_task` also stops when the main task ends
+        // (ARCH-28), but the UI may still hold an `Arc<SftpSession>`.
+        self.close_sftp();
     }
 }
 
@@ -185,15 +182,22 @@ pub fn connect(
     // Input must preserve FIFO ordering without dropping keystrokes when the UI
     // produces a short burst. Control-flow failures remain observable when the
     // receiver closes; tests use bounded transports to exercise saturation.
-    let (cmd_tx, cmd_rx) =
-        async_channel::bounded::<Cmd>(crate::listener::SSH_COMMAND_QUEUE_CAPACITY);
+    let (cmd_tx, cmd_rx) = async_channel::bounded::<Cmd>(SSH_COMMAND_QUEUE_CAPACITY);
     let (event_tx, event_rx) = async_channel::bounded::<SessionEvent>(4096);
-    let state = new_shared();
-    state.lock().unwrap().alive = true;
+    let state = SharedSessionState::new_alive();
 
-    let listener = SshListener::new(event_tx, cmd_tx, state.clone());
+    // SSH is remote: OSC 52 clipboard reads/writes default off.
+    let listener = OscRouter::new(
+        SshTransport::new(cmd_tx),
+        SessionEventSink::new(event_tx),
+        state.clone(),
+        ClipboardOrigin::Remote,
+    );
+    // Cancelled by `ssh_main_task` on exit so the SFTP task dies with the
+    // connection (ARCH-28).
+    let sftp_shutdown = CancellationToken::new();
 
-    let size = TermSize {
+    let size = GridSize {
         cols: initial.cols as usize,
         lines: initial.rows as usize,
     };
@@ -401,7 +405,7 @@ pub fn connect(
             // the task. The SFTP channel is split into its own object — no handle needed.
             let sftp_session = match await_phase(
                 "SFTP setup",
-                async { open_sftp(&handle, &state).await },
+                async { open_sftp(&handle, &state, sftp_shutdown.clone()).await },
                 cfg.cancellation.clone(),
             )
             .await
@@ -425,8 +429,8 @@ pub fn connect(
                 channel,
                 term.clone(),
                 listener.clone(),
-                state.clone(),
                 cmd_rx,
+                sftp_shutdown,
             ));
             log::info!("SshSession: main task spawned");
 
@@ -477,6 +481,7 @@ pub fn connect(
 async fn open_sftp(
     handle: &russh::client::Handle<SshClientHandler>,
     state: &SharedState,
+    shutdown: CancellationToken,
 ) -> anyhow::Result<Arc<SftpSession>> {
     // 1. Open a new channel on the same handle.
     let channel = handle
@@ -500,9 +505,12 @@ async fn open_sftp(
         .await
         .map_err(|e| anyhow::anyhow!("SFTP handshake: {e}"))?;
 
-    // 5. Create channels bridging sync (UI) ↔ async (tokio task).
+    // 5. Create channels bridging sync (UI) ↔ async (tokio task). Nothing
+    //    consumes the lifecycle events today (`alive()` is the observable
+    //    state), so the receiver is dropped here and the task's best-effort
+    //    sends are no-ops.
     let (sftp_cmd_tx, sftp_cmd_rx) = async_channel::bounded::<SftpCmd>(64);
-    let (sftp_event_tx, sftp_event_rx) = async_channel::bounded::<SftpEvent>(40);
+    let (sftp_event_tx, _sftp_event_rx) = async_channel::bounded::<SftpEvent>(40);
     let alive = Arc::new(Mutex::new(true));
 
     // 6. Spawn sftp_task — runs in the background on the same tokio runtime.
@@ -511,10 +519,11 @@ async fn open_sftp(
         sftp_cmd_rx,
         sftp_event_tx,
         alive.clone(),
+        shutdown,
     ));
 
     // 7. Return Arc<SftpSession> — the UI holds this handle.
-    Ok(SftpSession::new(sftp_cmd_tx, sftp_event_rx, alive))
+    Ok(SftpSession::new(sftp_cmd_tx, alive))
 }
 
 /// Password authentication with a keyboard-interactive fallback.
@@ -616,7 +625,7 @@ async fn send_shell_integration_bootstrap(
         .data(payload.as_bytes())
         .await
         .map_err(|e| anyhow::anyhow!("shell integration bootstrap: {e}"))?;
-    state.lock().unwrap().tx_bytes += payload.len() as u64;
+    state.add_tx_bytes(payload.len() as u64);
     Ok(())
 }
 
@@ -687,12 +696,16 @@ mod tests {
     fn detached_session() -> (SshSession, async_channel::Receiver<Cmd>) {
         let (cmd_tx, cmd_rx) = async_channel::bounded::<Cmd>(4);
         let (event_tx, event_rx) = async_channel::bounded::<SessionEvent>(4);
-        let state = new_shared();
-        state.lock().unwrap().alive = true;
-        let listener = SshListener::new(event_tx, cmd_tx, state.clone());
+        let state = SharedSessionState::new_alive();
+        let listener = OscRouter::new(
+            SshTransport::new(cmd_tx),
+            SessionEventSink::new(event_tx),
+            state.clone(),
+            ClipboardOrigin::Remote,
+        );
         let term = Arc::new(FairMutex::new(Term::new(
             Config::default(),
-            &TermSize {
+            &GridSize {
                 cols: 80,
                 lines: 24,
             },
@@ -716,12 +729,12 @@ mod tests {
     #[test]
     fn dropping_an_unclosed_session_requests_close() {
         let (session, cmd_rx) = detached_session();
-        let listener = session.listener.clone();
-        assert!(!listener.is_closing());
+        let transport = session.transport().clone();
+        assert!(!transport.is_closing());
 
         drop(session);
 
-        assert!(listener.is_closing());
+        assert!(transport.is_closing());
         assert!(matches!(cmd_rx.try_recv(), Ok(Cmd::Close)));
     }
 

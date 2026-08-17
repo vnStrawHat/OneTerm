@@ -439,15 +439,15 @@ fn tab_drop_onto_occupied_space_keeps_source_terminal(cx: &mut TestAppContext) {
 }
 
 fn agent_state_event(seq: u64) -> oneterm_terminal::AgentStatusEvent {
-    oneterm_terminal::AgentStatusEvent::State {
+    oneterm_terminal::AgentStatusEvent {
         agent: "pi".into(),
         seq,
         ts: seq * 1000,
-        payload: oneterm_terminal::StateEvent {
+        payload: oneterm_terminal::AgentPayload::State(oneterm_terminal::StateEvent {
             state: oneterm_terminal::AgentState::Working,
             message: None,
             session_id: None,
-        },
+        }),
     }
 }
 

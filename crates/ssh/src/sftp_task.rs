@@ -41,11 +41,15 @@ pub(crate) use path_policy::{
 ///
 /// Upload/download are spawned as separate tokio tasks — the main loop stays
 /// responsive to receive `SftpCmd::Cancel` and signal the `CancellationToken`.
+///
+/// `shutdown` is cancelled by `ssh_main_task` when the SSH connection ends, so
+/// the SFTP task (and `alive()`) follow the connection lifetime (ARCH-28).
 pub(crate) async fn sftp_task(
     sftp: SftpChannel,
     cmd_rx: Receiver<SftpCmd>,
     event_tx: Sender<SftpEvent>,
     alive: std::sync::Arc<std::sync::Mutex<bool>>,
+    shutdown: CancellationToken,
 ) {
     log::info!("sftp_task: started");
 
@@ -75,6 +79,13 @@ pub(crate) async fn sftp_task(
                     log::error!("sftp_task: background task failed: {error}");
                 }
                 None
+            }
+            _ = shutdown.cancelled() => {
+                log::info!("sftp_task: SSH connection ended — shutting down");
+                for cancellation in cancels.lock().unwrap().values() {
+                    cancellation.cancel();
+                }
+                break;
             }
         };
         let Some(command) = command else {

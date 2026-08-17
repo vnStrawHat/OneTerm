@@ -1,9 +1,13 @@
 //! Custom event loop — replacement for `alacritty_terminal::event_loop::EventLoop`.
 //!
-//! Feeds PTY bytes to `ansi::Processor` (Term) in a **single pass**. OSC 7/9/133
-//! and screen clears (`CSI 2J/3J`, RIS) are surfaced by the OneTerm alacritty fork
-//! via `Event::Osc` / `Event::ClearScreen` and handled in `LocalListener` — there
-//! is no longer a second `vte::Parser`. See docs/terminal-fullscreen-perf/09-*.md.
+//! Feeds PTY bytes to the shared [`TerminalPump`] (`ansi::Processor` + OSC
+//! routing + line accounting) in a **single pass**. OSC 7/9/133 and screen
+//! clears (`CSI 2J/3J`, RIS) are surfaced by the OneTerm alacritty fork via
+//! `Event::Osc` / `Event::ClearScreen` and handled by the shared `OscRouter` —
+//! there is no second `vte::Parser`. See docs/terminal-fullscreen-perf/09-*.md.
+//!
+//! The loop is generic over the PTY (`EventedPty + OnResize`) so tests drive it
+//! with an in-memory transport instead of a real shell (TEST-02).
 //!
 //! Reference: `alacritty_terminal::event_loop::EventLoop`.
 
@@ -13,22 +17,19 @@ use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 
-use alacritty_terminal::event::{Event, EventListener, OnResize, WindowSize};
-use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::event::{OnResize, WindowSize};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
-use alacritty_terminal::tty::{self, EventedPty, EventedReadWrite, Options};
-use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+use alacritty_terminal::tty::{self, EventedPty, Options};
 use log::error;
 use polling::{Event as PollEvent, Events, PollMode, Poller};
 
-use oneterm_terminal::SessionEvent;
-use oneterm_terminal::default_color_for_index;
+use oneterm_terminal::TerminalPump;
 
-use crate::listener::LocalListener;
-use crate::state::SharedState;
+use crate::transport::{LocalListener, LocalTransport};
 
-/// PTY read buffer size (1 MiB — same as alacritty).
+/// PTY read buffer size (1 MiB — same as alacritty). Heap-allocated: the owner
+/// thread's default 2 MiB stack must not carry it (PERF-21).
 const READ_BUFFER_SIZE: usize = 0x10_0000;
 /// Maximum queued local-shell command messages.
 pub(crate) const LOCAL_COMMAND_QUEUE_CAPACITY: usize = 256;
@@ -56,7 +57,7 @@ const PTY_CHILD_EVENT_TOKEN: usize = 1;
 
 /// Message sent to the event loop.
 #[derive(Debug)]
-pub enum ShellMsg {
+pub(crate) enum ShellMsg {
     /// Data written to the PTY (keystroke, paste).
     Input(Cow<'static, [u8]>),
     /// Resize the PTY.
@@ -75,14 +76,16 @@ struct ShellControl {
 /// Notifier for the UI to send messages to the event loop (replaces
 /// `EventLoopSender`).
 #[derive(Clone)]
-pub struct ShellNotifier {
+pub(crate) struct ShellNotifier {
     sender: mpsc::SyncSender<ShellMsg>,
     poller: std::sync::Arc<Poller>,
     control: std::sync::Arc<ShellControl>,
 }
 
 impl ShellNotifier {
-    pub fn send(&self, msg: ShellMsg) -> io::Result<()> {
+    /// Queue a message and wake the owner loop. Every accepted message calls
+    /// `poller.notify()`, so the loop can wait without a timeout (CORR-18).
+    pub(crate) fn send(&self, msg: ShellMsg) -> io::Result<()> {
         if !matches!(&msg, ShellMsg::Shutdown) && self.control.shutdown.load(Ordering::Acquire) {
             return Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
@@ -136,63 +139,32 @@ impl ShellNotifier {
 
 /// Custom event loop — PTY I/O + byte routing (single `Term` parse pass; OSC/clear
 /// surfaced via `Event::Osc` / `Event::ClearScreen`, no second parser).
-pub struct ShellEventLoop {
-    pty: tty::Pty,
+pub(crate) struct ShellEventLoop<P: EventedPty + OnResize> {
+    pty: P,
     term: std::sync::Arc<FairMutex<Term<LocalListener>>>,
-    listener: LocalListener,
+    pump: TerminalPump<LocalTransport>,
     msg_rx: mpsc::Receiver<ShellMsg>,
     poll: std::sync::Arc<Poller>,
-    state: SharedState,
     control: std::sync::Arc<ShellControl>,
 }
 
-impl ShellEventLoop {
-    /// Create a new event loop. Call `spawn()` to run the thread.
-    pub fn new(
-        pty: tty::Pty,
-        term: std::sync::Arc<FairMutex<Term<LocalListener>>>,
-        listener: LocalListener,
-        state: SharedState,
-    ) -> io::Result<(Self, ShellNotifier)> {
-        let poll = std::sync::Arc::new(Poller::new()?);
-        let control = std::sync::Arc::new(ShellControl::default());
-        let (tx, rx) = mpsc::sync_channel(LOCAL_COMMAND_QUEUE_CAPACITY);
-        let notifier = ShellNotifier {
-            sender: tx,
-            poller: poll.clone(),
-            control: control.clone(),
-        };
-        Ok((
-            Self {
-                pty,
-                term,
-                listener,
-                msg_rx: rx,
-                poll,
-                state,
-                control,
-            },
-            notifier,
-        ))
-    }
-
+impl ShellEventLoop<tty::Pty> {
     /// Spawn the PTY owner thread. The PTY is constructed, operated, and dropped there.
-    pub fn spawn_owned(
+    pub(crate) fn spawn_owned(
         opts: Options,
         winsize: WindowSize,
         term: std::sync::Arc<FairMutex<Term<LocalListener>>>,
         listener: LocalListener,
-        state: SharedState,
     ) -> io::Result<(ShellNotifier, std::thread::JoinHandle<()>)> {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let join = std::thread::Builder::new()
             .name("PTY owner".into())
             .spawn(move || {
                 let result = tty::new(&opts, winsize, 0)
-                    .and_then(|pty| Self::new(pty, term, listener.clone(), state));
+                    .and_then(|pty| Self::new(pty, term, listener.clone()));
                 match result {
                     Ok((mut event_loop, notifier)) => {
-                        listener.set_notifier(notifier.clone());
+                        listener.transport().set_notifier(notifier.clone());
                         let _ = ready_tx.send(Ok(notifier));
                         event_loop.run();
                     }
@@ -213,10 +185,40 @@ impl ShellEventLoop {
             }
         }
     }
+}
 
-    fn run(&mut self) {
-        let mut buf = [0u8; READ_BUFFER_SIZE];
-        let mut processor = Processor::<StdSyncHandler>::new();
+impl<P: EventedPty + OnResize> ShellEventLoop<P> {
+    /// Create a new event loop around an already-open PTY. Call `run()` on the
+    /// owner thread.
+    pub(crate) fn new(
+        pty: P,
+        term: std::sync::Arc<FairMutex<Term<LocalListener>>>,
+        listener: LocalListener,
+    ) -> io::Result<(Self, ShellNotifier)> {
+        let poll = std::sync::Arc::new(Poller::new()?);
+        let control = std::sync::Arc::new(ShellControl::default());
+        let (tx, rx) = mpsc::sync_channel(LOCAL_COMMAND_QUEUE_CAPACITY);
+        let notifier = ShellNotifier {
+            sender: tx,
+            poller: poll.clone(),
+            control: control.clone(),
+        };
+        Ok((
+            Self {
+                pty,
+                term,
+                pump: TerminalPump::new(listener),
+                msg_rx: rx,
+                poll,
+                control,
+            },
+            notifier,
+        ))
+    }
+
+    /// Run the loop until shutdown or child exit. Blocks the calling thread.
+    pub(crate) fn run(&mut self) {
+        let mut buf = vec![0u8; READ_BUFFER_SIZE].into_boxed_slice();
         let mut write_queue: VecDeque<Cow<'static, [u8]>> = VecDeque::new();
 
         // Register PTY with poller.
@@ -247,13 +249,12 @@ impl ShellEventLoop {
 
         loop {
             events.clear();
-            // Timeout: short poll to check channel messages.
+            // No timeout: every command (`ShellNotifier::send`) and the child
+            // watcher wake the poller, so an idle tab sleeps until something
+            // happens (CORR-18 / PERF-22).
             #[cfg(feature = "terminal-diagnostics")]
             let wait_start = std::time::Instant::now();
-            if let Err(err) = self
-                .poll
-                .wait(&mut events, Some(std::time::Duration::from_millis(50)))
-            {
+            if let Err(err) = self.poll.wait(&mut events, None) {
                 if err.kind() == io::ErrorKind::Interrupted {
                     continue;
                 }
@@ -329,7 +330,7 @@ impl ShellEventLoop {
                 if event.key == PTY_CHILD_EVENT_TOKEN {
                     if let Some(tty::ChildEvent::Exited(status)) = self.pty.next_child_event() {
                         self.term.lock().exit();
-                        publish_child_exit(&self.listener, &self.state, status);
+                        publish_child_exit(&self.pump, status);
                         let _ = self.pty.deregister(&self.poll);
                         return;
                     }
@@ -344,12 +345,6 @@ impl ShellEventLoop {
                     let mut unprocessed = 0;
                     let mut processed = 0;
                     let mut terminal = None;
-
-                    // Load absolute line count tracking state.
-                    let (mut absolute, mut prev_total) = {
-                        let st = self.state.lock().unwrap();
-                        (st.absolute_line_count, st.prev_total_lines)
-                    };
 
                     loop {
                         match self.pty.reader().read(&mut buf[unprocessed..]) {
@@ -387,26 +382,8 @@ impl ShellEventLoop {
                             }
                         };
 
-                        // Feed bytes to Term (via ansi::Processor).
-                        processor.advance(&mut **terminal, &buf[..unprocessed]);
-                        let total_after = terminal.total_lines();
-                        let screen_lines = terminal.screen_lines();
-
-                        // Track absolute line count (decoupled from scrollback).
-                        if total_after > prev_total {
-                            // Scrollback not yet full — total_lines grows.
-                            absolute += total_after - prev_total;
-                        } else if total_after == prev_total && total_after > screen_lines {
-                            // Scrollback full — total_lines unchanged but there is new output.
-                            // Count \n in the buffer = number of dropped lines.
-                            let newline_count =
-                                buf[..unprocessed].iter().filter(|&&b| b == b'\n').count();
-                            absolute += newline_count;
-                        } else if total_after < prev_total {
-                            // Clear / alt-screen / resize — reset absolute.
-                            absolute = total_after;
-                        }
-                        prev_total = total_after;
+                        // Feed bytes to Term (parse + absolute line accounting).
+                        self.pump.advance(terminal, &buf[..unprocessed]);
 
                         processed += unprocessed;
                         unprocessed = 0;
@@ -418,43 +395,13 @@ impl ShellEventLoop {
                         // UI can acquire the lock once the event loop releases it.
                     }
 
-                    if processed > 0 {
-                        // Persist absolute line count tracking state.
-                        let mut st = self.state.lock().unwrap();
-                        st.absolute_line_count = absolute;
-                        st.prev_total_lines = prev_total;
-                    }
-
                     // Answer OSC 10/11/12 color queries collected during parsing.
                     // Read the current color from `Term` (reusing the lock guard
                     // if still held), fall back to the theme default, then reply.
-                    let queries = self.listener.take_color_queries();
+                    let queries = self.pump.take_color_queries();
                     if !queries.is_empty() {
-                        let (def_fg, def_bg, def_cursor, def_ansi) = {
-                            let st = self.state.lock().unwrap();
-                            (
-                                st.default_foreground,
-                                st.default_background,
-                                st.default_cursor,
-                                st.default_ansi,
-                            )
-                        };
                         let guard = terminal.take().unwrap_or_else(|| self.term.lock_unfair());
-                        let mut replies: Vec<String> = Vec::new();
-                        for q in queries {
-                            let color = guard.colors()[q.index].or_else(|| {
-                                default_color_for_index(
-                                    q.index,
-                                    def_fg,
-                                    def_bg,
-                                    def_cursor,
-                                    def_ansi.as_ref(),
-                                )
-                            });
-                            if let Some(color) = color {
-                                replies.push((q.format)(color));
-                            }
-                        }
+                        let replies = self.pump.color_replies(&guard, queries);
                         drop(guard);
                         #[cfg(feature = "terminal-diagnostics")]
                         if diagnostics_enabled {
@@ -462,11 +409,7 @@ impl ShellEventLoop {
                                 record_lock_sample(&mut stat_lock_hold_us, start);
                             }
                         }
-                        for reply in replies {
-                            if let Err(error) = self.listener.pty_write(reply.as_bytes()) {
-                                log::warn!("ShellEventLoop: OSC reply delivery failed: {error}");
-                            }
-                        }
+                        self.pump.write_color_replies(replies);
                     }
 
                     drop(terminal);
@@ -481,14 +424,12 @@ impl ShellEventLoop {
                         stat_bytes += processed as u64;
                     }
 
-                    // The `Term` lock is released: deliver reliable events
-                    // (Bell/Title/OSC…) that did not fit in the queue during
-                    // `advance`, waiting for the UI if needed, then post the
-                    // batch's repaint hint so they are seen before it.
-                    self.listener.flush_reliable();
-                    if processed > 0 {
-                        self.listener.send_event(Event::Wakeup);
-                    }
+                    // The `Term` lock is released: publish the line count,
+                    // deliver reliable events (Bell/Title/OSC…) that did not
+                    // fit in the queue during `advance`, waiting for the UI if
+                    // needed, then post the batch's repaint hint so they are
+                    // seen before it.
+                    self.pump.finish_batch_blocking(processed > 0);
                 }
             }
 
@@ -553,19 +494,13 @@ impl ShellEventLoop {
 /// forever. Must run without the `Term` lock held (the lifecycle forwards block
 /// until the UI has room).
 fn publish_child_exit(
-    listener: &LocalListener,
-    state: &SharedState,
+    pump: &TerminalPump<LocalTransport>,
     status: Option<std::process::ExitStatus>,
 ) {
     let code = status.and_then(|status| status.code());
-    {
-        let mut st = state.lock().unwrap();
-        st.alive = false;
-        st.exit_code = code;
-    }
-    listener.forward_lifecycle(SessionEvent::Exited(code));
-    listener.send_event(Event::Wakeup);
-    listener.forward_lifecycle(SessionEvent::Closed);
+    pump.publish_exit_blocking(code);
+    pump.finish_batch_blocking(true);
+    pump.publish_closed_blocking();
 }
 
 #[cfg(test)]
