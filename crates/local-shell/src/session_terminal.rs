@@ -13,8 +13,8 @@ use async_channel::Receiver;
 
 use oneterm_terminal::mouse_encode::{MouseModifiers, TerminalMouseButton};
 use oneterm_terminal::{
-    CursorBounds, SearchMatch, SearchOptions, SessionEvent, TerminalError, TerminalSession,
-    report_generated_input,
+    CursorBounds, DefaultColors, PtyTransport, SearchMatch, SearchOptions, SessionEvent,
+    TerminalError, TerminalSession, report_generated_input,
 };
 use oneterm_terminal::{DynamicColors, TerminalContent, TerminalInfo, TerminalQueryState};
 
@@ -52,22 +52,17 @@ impl TerminalSession for LocalSession {
         cursor: alacritty_terminal::vte::ansi::Rgb,
         ansi: [alacritty_terminal::vte::ansi::Rgb; 16],
     ) {
-        let mut st = self.state.lock().unwrap();
-        st.default_foreground = Some(foreground);
-        st.default_background = Some(background);
-        st.default_cursor = Some(cursor);
-        st.default_ansi = Some(ansi);
+        self.state.set_default_colors(DefaultColors {
+            foreground: Some(foreground),
+            background: Some(background),
+            cursor: Some(cursor),
+            ansi: Some(ansi),
+        });
     }
 
     fn terminal_info(&self) -> TerminalInfo {
-        // Read state fields FIRST, then release the state lock BEFORE locking
-        // the terminal. Holding both locks simultaneously can block the event
-        // loop (which needs the state lock after processing output).
-        let (absolute_line_count, clear_epoch) = {
-            let st = self.state.lock().unwrap();
-            (st.absolute_line_count, st.clear_epoch)
-        };
-        self.model().terminal_info(absolute_line_count, clear_epoch)
+        self.model()
+            .terminal_info(self.state.absolute_line_count(), self.state.clear_epoch())
     }
 
     fn is_alt_screen(&self) -> bool {
@@ -76,14 +71,14 @@ impl TerminalSession for LocalSession {
 
     // ── Input ───────────────────────────────────────────────────────
     fn write(&self, bytes: &[u8]) -> Result<(), TerminalError> {
-        self.listener.pty_write(bytes)
+        self.transport().pty_write(bytes)
     }
 
     fn flush_pty(&self) {
         // Send a DSR (Device Status Report) query → ConPTY processes the escape
         // sequence and responds with the cursor position → flushes the output buffer.
         // Windows ConPTY buffers output and only flushes on interaction.
-        if let Err(error) = self.listener.pty_write(b"\x1b[6n") {
+        if let Err(error) = self.transport().pty_write(b"\x1b[6n") {
             log::warn!("LocalSession: PTY flush query failed: {error}");
         }
     }
@@ -99,21 +94,21 @@ impl TerminalSession for LocalSession {
     /// target directory automatically.
     #[cfg(windows)]
     fn send_ctrl_c(&self) {
-        if let Err(error) = self.listener.pty_write(b"\x03") {
+        if let Err(error) = self.transport().pty_write(b"\x03") {
             log::warn!("LocalSession: Ctrl+C delivery failed: {error}");
         }
     }
 
     #[cfg(not(windows))]
     fn send_ctrl_c(&self) {
-        if let Err(error) = self.listener.pty_write(b"\x03") {
+        if let Err(error) = self.transport().pty_write(b"\x03") {
             log::warn!("LocalSession: Ctrl+C delivery failed: {error}");
         }
     }
 
     fn resize(&self, rows: u16, cols: u16) -> Result<(), TerminalError> {
         if self.model().needs_resize(rows, cols) {
-            self.listener.pty_resize(rows, cols)?;
+            self.transport().pty_resize(rows, cols)?;
             self.model().resize_grid(rows, cols);
         }
         Ok(())
@@ -223,12 +218,12 @@ impl TerminalSession for LocalSession {
     }
 
     fn alive(&self) -> bool {
-        self.state.lock().unwrap().alive
+        self.state.alive()
     }
 
     fn close(&self) -> Result<(), TerminalError> {
         let result = self.shutdown_owner();
-        self.state.lock().unwrap().alive = false;
+        self.state.set_alive(false);
         result
     }
 
@@ -237,16 +232,16 @@ impl TerminalSession for LocalSession {
     }
 
     fn title(&self) -> Option<String> {
-        self.state.lock().unwrap().title.clone()
+        self.state.title()
     }
 
     fn cwd(&self) -> Option<PathBuf> {
-        self.state.lock().unwrap().cwd.clone()
+        self.state.cwd()
     }
 
     // ── Shell Integration (OSC 133) ────────────────────────────
     fn prompt_count(&self) -> usize {
-        self.state.lock().unwrap().prompt_count
+        self.state.prompt_count()
     }
     fn scroll_to_prompt(&self, n: usize) {
         // TODO: implement scroll-to-prompt using prompt marker line positions.

@@ -9,7 +9,6 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::WindowSize;
-use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::tty::{Options, Shell};
@@ -17,29 +16,13 @@ use async_channel::Receiver;
 
 use oneterm_core::config::resolve_shell;
 use oneterm_core::{AppError, LocalShellConfig, home_dir};
-use oneterm_terminal::{PtySize, SessionEvent, TerminalError};
+use oneterm_terminal::{
+    ClipboardOrigin, GridSize, OscRouter, PtySize, PtyTransport, SessionEvent, SessionEventSink,
+    SharedSessionState, SharedState, TerminalError,
+};
 
 use crate::event_loop::ShellEventLoop;
-use crate::listener::LocalListener;
-use crate::state::{SharedState, new_shared};
-
-/// Dimensions for `Term::new` / `Term::resize`.
-pub(crate) struct TermSize {
-    pub(crate) cols: usize,
-    pub(crate) lines: usize,
-}
-
-impl Dimensions for TermSize {
-    fn total_lines(&self) -> usize {
-        self.lines
-    }
-    fn screen_lines(&self) -> usize {
-        self.lines
-    }
-    fn columns(&self) -> usize {
-        self.cols
-    }
-}
+use crate::transport::{LocalListener, LocalTransport};
 
 /// A local shell session.
 pub struct LocalSession {
@@ -87,13 +70,17 @@ impl LocalSession {
             cell_height: 0,
         };
 
-        let state = new_shared();
-        state.lock().unwrap().alive = true;
+        let state = SharedSessionState::new_alive();
 
         let (event_tx, event_rx) = async_channel::bounded::<SessionEvent>(4096);
-        let listener = LocalListener::new(event_tx, state.clone());
+        let listener = OscRouter::new(
+            LocalTransport::new(),
+            SessionEventSink::new(event_tx),
+            state.clone(),
+            ClipboardOrigin::Local,
+        );
 
-        let size = TermSize {
+        let size = GridSize {
             cols: initial.cols as usize,
             lines: initial.rows as usize,
         };
@@ -107,14 +94,9 @@ impl LocalSession {
             listener.clone(),
         )));
 
-        let (_notifier, owner_join) = ShellEventLoop::spawn_owned(
-            opts,
-            winsize,
-            term.clone(),
-            listener.clone(),
-            state.clone(),
-        )
-        .map_err(|e| AppError::msg(e.to_string()))?;
+        let (_notifier, owner_join) =
+            ShellEventLoop::spawn_owned(opts, winsize, term.clone(), listener.clone())
+                .map_err(|e| AppError::msg(e.to_string()))?;
 
         // Shell integration is injected via env vars in resolve_shell()
         // — fully silent, no temp file, no script written to the PTY.
@@ -152,9 +134,14 @@ impl LocalSession {
         oneterm_terminal::model::TerminalModel::new(self.term.clone())
     }
 
+    /// The PTY transport (write / resize / shutdown).
+    pub(crate) fn transport(&self) -> &LocalTransport {
+        self.listener.transport()
+    }
+
     /// Shut down and join the dedicated PTY owner thread.
     pub(crate) fn shutdown_owner(&self) -> Result<(), TerminalError> {
-        let result = self.listener.pty_shutdown();
+        let result = self.transport().pty_close();
         let join_result = self
             .owner_join
             .lock()
@@ -218,7 +205,7 @@ fn quote_windows_argument(token: &str) -> String {
 
 impl Drop for LocalSession {
     fn drop(&mut self) {
-        let _ = self.listener.pty_shutdown();
+        let _ = self.transport().pty_close();
         if let Some(join) = self.owner_join.get_mut().unwrap().take() {
             let _ = join.join();
         }

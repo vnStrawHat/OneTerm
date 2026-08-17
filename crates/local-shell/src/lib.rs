@@ -1,17 +1,14 @@
 //! Local shell via PTY for OneTerm.
 //!
-//! Uses `alacritty_terminal::tty` + `EventLoop` (ConPTY on Windows).
-//! Supports `cmd`/`powershell`/`pwsh`/custom shell config. See
-//! `docs/terminal-backend.md`.
+//! Uses `alacritty_terminal::tty` + a custom poll loop (ConPTY on Windows) on
+//! top of the shared pump layer in `oneterm_terminal::backend`. Supports
+//! `cmd`/`powershell`/`pwsh`/custom shell config. See `docs/terminal-backend.md`.
+//!
+//! The only public item is [`LocalSession`]; everything else is crate-private.
 
-pub mod event_loop;
-pub mod listener;
-pub mod session;
-pub mod session_terminal;
-pub mod state;
+mod event_loop;
+mod session;
+mod session_terminal;
+mod transport;
 
-pub use event_loop::{ShellEventLoop, ShellNotifier};
-pub use listener::LocalListener;
-pub use oneterm_core as core;
-pub use oneterm_terminal::PtySize;
 pub use session::LocalSession;
