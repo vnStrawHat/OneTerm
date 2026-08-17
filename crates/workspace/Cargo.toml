@@ -24,3 +24,6 @@ serde_json.workspace = true
 log.workspace = true
 chrono.workspace = true
 sysinfo.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

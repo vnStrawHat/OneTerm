@@ -295,13 +295,13 @@ fn duplicate_action_dispatches_to_the_active_space(cx: &mut TestAppContext) {
     let spawned_local_configs = Arc::new(Mutex::new(Vec::new()));
     let configs_for_factory = spawned_local_configs.clone();
     cx.update(|cx| {
-        AppServices::new(
+        AppServices::install(
+            cx,
             Arc::new(DuplicateSessionFactory {
                 spawned_local_configs: configs_for_factory,
             }),
             duplicate_test_commands(),
         )
-        .install(cx)
         .expect("test services must install once");
     });
 

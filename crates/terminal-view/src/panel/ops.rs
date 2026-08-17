@@ -87,17 +87,7 @@ impl TerminalPanel {
         match duplicate_config {
             SessionDuplicateConfig::Local(config) => {
                 let config = apply_duplicate_cwd(config, live_cwd);
-                let Some(factory) = AppServices::session_factory(cx) else {
-                    window.push_notification(
-                        notify(
-                            NotificationType::Error,
-                            "Application session service is unavailable.",
-                            cx,
-                        ),
-                        cx,
-                    );
-                    return;
-                };
+                let factory = AppServices::session_factory(cx);
                 let scrollback = TerminalSettings::global(cx).read(cx).scrollback_history;
                 let duplicate_config = SessionDuplicateConfig::Local(config.clone());
                 let session =
@@ -128,17 +118,7 @@ impl TerminalPanel {
                 );
             }
             SessionDuplicateConfig::Ssh(config) => {
-                let Some(commands) = oneterm_state::commands::commands(cx) else {
-                    window.push_notification(
-                        notify(
-                            NotificationType::Error,
-                            "Application workspace commands are unavailable.",
-                            cx,
-                        ),
-                        cx,
-                    );
-                    return;
-                };
+                let commands = oneterm_state::commands::commands(cx);
                 let panel = cx.entity().downgrade();
                 let completion: oneterm_state::commands::SshDuplicateCompletion = Rc::new(
                     move |session, label, duplicate_config, window, cx| {

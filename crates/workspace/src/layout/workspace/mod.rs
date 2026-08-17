@@ -3,10 +3,6 @@
 //! The original `workspace.rs` module has been split into `workspace/`.
 
 use std::collections::HashSet;
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
-};
 use std::time::Duration;
 
 use gpui::{
@@ -25,45 +21,6 @@ pub(crate) mod actions;
 pub(crate) mod layout;
 pub(crate) mod persistence;
 pub(crate) mod zoom;
-
-/// Save the dock state to `docks.json` — used when the window closes (`on_release`).
-/// Reads `dock_area`, `zoomed_panel`, and `toggle_button_visible` from the global AppState.
-///
-/// The write is performed synchronously on the calling (UI) thread. This is a
-/// deliberate exception to the "persist off the UI thread" rule: the caller
-/// invokes `cx.quit()` right after, and gpui's `App::shutdown` only awaits
-/// `on_app_quit` observers — a detached background task is not awaited and can
-/// be killed by process exit before the layout reaches disk (CORR-04). The
-/// document is small and the process is shutting down, so a blocking atomic
-/// write is acceptable here.
-pub fn save_dock_state_on_close(cx: &App) {
-    let (weak_dock, zoomed_name, tbv) = {
-        let state = AppState::global(cx).read(cx);
-        (
-            state.dock_area.clone(),
-            state
-                .zoomed_panel
-                .as_ref()
-                .and_then(|m| m.lock().ok())
-                .and_then(|g| g.clone()),
-            state
-                .toggle_button_visible
-                .as_ref()
-                .map(|a| a.load(Ordering::Relaxed))
-                .unwrap_or(true),
-        )
-    };
-    let Some(weak_dock) = weak_dock else {
-        return;
-    };
-    let Some(dock_area) = weak_dock.upgrade() else {
-        log::warn!("save_dock_state_on_close: dock_area already dropped");
-        return;
-    };
-    let dock_state = dock_area.read(cx).dump(cx);
-    log::info!("save_dock_state_on_close → writing dock state before quit");
-    persistence::save_state_logged(&dock_state, zoomed_name.as_deref(), tbv, "on_close");
-}
 
 pub const MAIN_DOCK_VERSION: usize = 3;
 pub const MAIN_DOCK_ID: &str = "main-dock";
@@ -136,16 +93,17 @@ pub struct OneTermWorkspace {
     /// CPU/memory resource indicator — created once so the 2s timer fires reliably.
     pub resource: Entity<ResourceIndicator>,
     last_layout_state: Option<gpui_component::dock::DockAreaState>,
-    toggle_button_visible: Arc<AtomicBool>,
     _save_layout_task: Option<Task<()>>,
 
     /// Mirror of the zoom state: name of the panel currently zoomed (fullscreen).
     /// `gpui-component` keeps `TabPanel.zoomed` (private) + `DockArea.zoom_view`
     /// (private), so they cannot be read from outside the crate → track it ourselves
-    /// via the `PanelEvent::ZoomIn`/`ZoomOut` subscription. Uses `Arc<Mutex<..>>`
-    /// shared with the `on_app_quit` closure to read safely even after the workspace
-    /// entity has been dropped during shutdown.
-    zoomed_panel: Arc<Mutex<Option<String>>>,
+    /// via the `PanelEvent::ZoomIn`/`ZoomOut` subscription.
+    zoomed_panel: Option<String>,
+    /// Set once the exit-time layout write has run, so the two exit hooks
+    /// (`on_app_quit` while the window is still open, `on_release` when the
+    /// window closes) do not write the same document twice.
+    layout_saved_on_exit: bool,
     /// `TabPanel`s already subscribed — avoids duplicate subscriptions (LayoutChanged
     /// fires multiple times, and TabPanels can be recreated).
     subscribed_tabs: HashSet<EntityId>,
@@ -154,9 +112,10 @@ pub struct OneTermWorkspace {
 impl OneTermWorkspace {
     /// Create a new workspace: load the old layout (keep right dock + settings),
     /// but reset the center (terminal tabs) to a single default tab.
+    ///
+    /// Precondition: the composition root has initialised the shared globals
+    /// (`AppState`, `UiConfig`, `AppServices`) before the window opens.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        AppState::init(cx);
-
         let dock_area = cx.new(|cx| {
             use gpui_component::dock::PanelStyle;
             DockArea::new(MAIN_DOCK_ID, Some(MAIN_DOCK_VERSION), window, cx)
@@ -164,10 +123,9 @@ impl OneTermWorkspace {
         });
         let weak_dock_area = dock_area.downgrade();
 
-        // Save WeakEntity<DockArea> into AppState — the SSH connect dialog uses it
-        // to add a terminal tab after a successful connection.
+        // Register the DockArea as the primary workspace in AppState — feature
+        // crates (e.g. the SSH connect dialog) place panels through it.
         AppState::global(cx).update(cx, |s, cx| {
-            s.dock_area.get_or_insert_with(|| weak_dock_area.clone());
             s.register_workspace(&weak_dock_area);
             cx.notify();
         });
@@ -175,12 +133,10 @@ impl OneTermWorkspace {
         // Read the name of the zoomed panel BEFORE the layout is reset (the center
         // always resets, and reset_* rewrites docks.json without the zoom → must save first).
         let saved_zoom = persistence::read_zoomed_panel();
-        // Read toggle_button_visible BEFORE reset_* rewrites docks.json.
-        let saved_toggle_button_visible = persistence::read_toggle_button_visible().unwrap_or(true);
 
         match Self::load_layout(dock_area.clone(), window, cx) {
             Ok(()) => {
-                layout::reset_center_only(weak_dock_area, saved_toggle_button_visible, window, cx);
+                layout::reset_center_only(weak_dock_area, window, cx);
             }
             Err(_) => {
                 layout::reset_default_layout(weak_dock_area, window, cx);
@@ -199,30 +155,6 @@ impl OneTermWorkspace {
             Self::switch_right_dock_mode(&dock_area, saved_mode, window, cx);
         }
 
-        // Mirror toggle_button_visible — `Arc<AtomicBool>` shared between
-        // subscription callbacks and the `on_app_quit` closure.
-        let toggle_button_visible = Arc::new(AtomicBool::new(saved_toggle_button_visible));
-
-        // Apply the saved toggle_button_visible to the DockArea (default = true).
-        if !saved_toggle_button_visible {
-            dock_area.update(cx, |dock_area, cx| {
-                dock_area.set_toggle_button_visible(false, cx);
-            });
-        }
-
-        // Mirror the zoom state (name of the zoomed panel) — `Arc<Mutex<..>>` shared
-        // between subscription callbacks and the `on_app_quit` closure to read safely
-        // even after the workspace entity has been dropped during shutdown.
-        let zoomed_panel = Arc::new(Mutex::new(None::<String>));
-
-        // Save zoomed_panel + toggle_button_visible into AppState — shared with the
-        // `on_release` callback in `window.rs` to save the dock state on close.
-        AppState::global(cx).update(cx, |s, cx| {
-            s.zoomed_panel = Some(zoomed_panel.clone());
-            s.toggle_button_visible = Some(toggle_button_visible.clone());
-            cx.notify();
-        });
-
         cx.subscribe_in(
             &dock_area,
             window,
@@ -237,27 +169,26 @@ impl OneTermWorkspace {
         )
         .detach();
 
-        // Fallback: on_app_quit may fire in some cases (e.g. cx.shutdown), but is usually
-        // dropped with the entity when the window closes (see `save_dock_state_on_close`).
-        cx.on_app_quit({
-            let dock_area = dock_area.clone();
-            let zoomed_panel = zoomed_panel.clone();
-            let toggle_button_visible = toggle_button_visible.clone();
-            move |_, cx| {
-                let state = dock_area.read(cx).dump(cx);
-                let zoomed_name = zoomed_panel.lock().ok().and_then(|g| g.clone());
-                let tbv = toggle_button_visible.load(Ordering::Relaxed);
-                cx.background_executor().spawn(async move {
-                    persistence::save_state_logged(
-                        &state,
-                        zoomed_name.as_deref(),
-                        tbv,
-                        "on_app_quit",
-                    );
-                })
-            }
+        // Exit-time layout persistence (CORR-04). Both hooks write synchronously
+        // on the UI thread — a deliberate exception to the "persist off the UI
+        // thread" rule: gpui's `App::shutdown` awaits `on_app_quit` futures for
+        // at most 200 ms and never awaits detached background tasks, so a
+        // background write could be killed by process exit before the layout
+        // reaches disk. The document is small and the process is exiting.
+        //
+        // - `on_app_quit` runs while the window is still open (Quit action /
+        //   Cmd+Q): the workspace entity is alive, so the write happens here.
+        // - `on_release` runs when the window is closed by the user: the root
+        //   view is dropped before `cx.quit()`, so `on_app_quit` would find the
+        //   entity gone. The release hook still owns `self.dock_area` and
+        //   writes the final layout before the shell quits.
+        cx.on_app_quit(|this, cx| {
+            this.save_layout_on_exit("on_app_quit", cx);
+            async {}
         })
         .detach();
+        cx.on_release(|this, cx| this.save_layout_on_exit("on_close", cx))
+            .detach();
 
         let title_bar = cx.new(|cx| {
             AppTitleBar::new("OneTerm", window, cx)
@@ -277,9 +208,9 @@ impl OneTermWorkspace {
             breadcrumb,
             resource,
             last_layout_state: None,
-            toggle_button_visible,
             _save_layout_task: None,
-            zoomed_panel,
+            zoomed_panel: None,
+            layout_saved_on_exit: false,
             subscribed_tabs: HashSet::new(),
         };
 
@@ -315,7 +246,18 @@ impl OneTermWorkspace {
         me
     }
 
-    /// Debounce the save by 5s, skip when the state is unchanged.
+    /// Write the current layout synchronously at exit; the first hook to run wins.
+    fn save_layout_on_exit(&mut self, trigger: &str, cx: &App) {
+        if self.layout_saved_on_exit {
+            return;
+        }
+        self.layout_saved_on_exit = true;
+        let state = self.dock_area.read(cx).dump(cx);
+        log::info!("save_layout_on_exit [trigger={trigger}] → writing dock state before quit");
+        persistence::save_state_logged(&state, self.zoomed_panel.as_deref(), trigger);
+    }
+
+    /// Debounce the save by 2s, skip when the state is unchanged.
     fn save_layout(
         &mut self,
         dock_area: &Entity<DockArea>,
@@ -323,8 +265,6 @@ impl OneTermWorkspace {
         cx: &mut Context<Self>,
     ) {
         let dock_area = dock_area.clone();
-        // Snapshot the zoomed panel name at schedule time (mirror state).
-        let zoomed_name = self.zoomed_panel.lock().ok().and_then(|g| g.clone());
         self._save_layout_task = Some(cx.spawn_in(window, async move |story, window| {
             window
                 .background_executor()
@@ -336,16 +276,11 @@ impl OneTermWorkspace {
                 if Some(&state) == this.last_layout_state.as_ref() {
                     return;
                 }
-                let tbv = this.toggle_button_visible.load(Ordering::Relaxed);
                 this.last_layout_state = Some(state.clone());
+                let zoomed_name = this.zoomed_panel.clone();
                 cx.background_executor()
                     .spawn(async move {
-                        persistence::save_state_logged(
-                            &state,
-                            zoomed_name.as_deref(),
-                            tbv,
-                            "debounce",
-                        );
+                        persistence::save_state_logged(&state, zoomed_name.as_deref(), "debounce");
                     })
                     .detach();
             });
@@ -360,13 +295,10 @@ impl OneTermWorkspace {
         for tp in tabs {
             let id = tp.entity_id();
             if self.subscribed_tabs.insert(id) {
-                let zoomed_panel = self.zoomed_panel.clone();
-                let dock_area = self.dock_area.clone();
-                let toggle_button_visible = self.toggle_button_visible.clone();
                 cx.subscribe_in(
                     &tp,
                     window,
-                    move |_this, tp, ev: &PanelEvent, _window, cx| match ev {
+                    move |this, tp, ev: &PanelEvent, _window, cx| match ev {
                         PanelEvent::ZoomIn => {
                             // Resolve the active panel's name at zoom time.
                             let name = tp
@@ -374,18 +306,14 @@ impl OneTermWorkspace {
                                 .active_panel(cx)
                                 .map(|p| p.panel_name(cx).to_string());
                             log::info!("PanelEvent::ZoomIn → name={name:?}");
-                            if let Ok(mut g) = zoomed_panel.lock() {
-                                *g = name.clone();
-                            }
+                            this.zoomed_panel = name.clone();
                             // Save to docks.json IMMEDIATELY — independent of quit/debounce.
-                            let state = dock_area.read(cx).dump(cx);
-                            let tbv = toggle_button_visible.load(Ordering::Relaxed);
+                            let state = this.dock_area.read(cx).dump(cx);
                             cx.background_executor()
                                 .spawn(async move {
                                     persistence::save_state_logged(
                                         &state,
                                         name.as_deref(),
-                                        tbv,
                                         "zoom_in",
                                     );
                                 })
@@ -394,14 +322,11 @@ impl OneTermWorkspace {
                         }
                         PanelEvent::ZoomOut => {
                             log::info!("PanelEvent::ZoomOut");
-                            if let Ok(mut g) = zoomed_panel.lock() {
-                                *g = None;
-                            }
-                            let state = dock_area.read(cx).dump(cx);
-                            let tbv = toggle_button_visible.load(Ordering::Relaxed);
+                            this.zoomed_panel = None;
+                            let state = this.dock_area.read(cx).dump(cx);
                             cx.background_executor()
                                 .spawn(async move {
-                                    persistence::save_state_logged(&state, None, tbv, "zoom_out");
+                                    persistence::save_state_logged(&state, None, "zoom_out");
                                 })
                                 .detach();
                             cx.notify();
@@ -434,9 +359,7 @@ impl OneTermWorkspace {
     /// which snapshots the current bindings then applies OneTerm's overrides.
     /// This keeps the shell free of any `views::settings` dependency.
     pub fn bind_keys(cx: &mut App) {
-        if let Some(cmds) = oneterm_state::commands::commands(cx) {
-            (cmds.setup_key_bindings)(cx);
-        }
+        (oneterm_state::commands::commands(cx).setup_key_bindings)(cx);
     }
 }
 
@@ -454,7 +377,6 @@ impl Render for OneTermWorkspace {
             .on_action(cx.listener(Self::on_action_set_right_dock_mode))
             .on_action(cx.listener(Self::on_action_add_panel_with_shell))
             .on_action(cx.listener(Self::on_action_new_session))
-            .on_action(cx.listener(Self::on_action_toggle_dock_toggle_button))
             .on_action(cx.listener(Self::on_action_quit))
             .on_action(cx.listener(Self::on_action_find))
             .on_action(cx.listener(Self::on_action_about))

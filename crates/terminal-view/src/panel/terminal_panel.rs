@@ -258,10 +258,7 @@ impl TerminalPanel {
         cx: &mut Context<Self>,
     ) -> Option<Entity<LocalTerminalView>> {
         let scrollback_history = TerminalSettings::global(cx).read(cx).scrollback_history;
-        let Some(factory) = AppServices::session_factory(cx) else {
-            log::error!("Application session service is unavailable; cannot spawn local terminal.");
-            return None;
-        };
+        let factory = AppServices::session_factory(cx);
         let duplicate_config = SessionDuplicateConfig::Local(shell.clone());
         let session: Box<dyn TerminalSession> =
             match factory.spawn_local(shell, PtySize { rows: 24, cols: 80 }, scrollback_history) {

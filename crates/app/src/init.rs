@@ -18,10 +18,13 @@ use oneterm_state::{AppServices, AppState, GlobalCompletionHistory};
 /// `gpui_component::init(cx)` (called in [`crate::run`]) already initializes the
 /// theme, dock, root, and `PanelRegistry`. This runs afterwards.
 pub(crate) fn init(cx: &mut App) {
-    // Shared globals. `UiConfig` first so the saved theme/font apply in
-    // `theme::init`.
+    // Shared globals (each `init` is idempotent: it installs once and later
+    // calls are no-ops). `UiConfig` first so the saved theme/font apply in
+    // `theme::init`; the `ui_config.json` theme observer is registered after
+    // the theme init so startup mutations do not trigger a write.
     UiConfig::init(cx);
     oneterm_theme::theme::init(cx);
+    UiConfig::observe_theme(cx);
     AppState::init(cx);
     TerminalSettings::init(cx);
     // Process-global, cross-tab, non-persistent command history (memory source).
@@ -51,9 +54,12 @@ pub(crate) fn init(cx: &mut App) {
     // omniscient `app` crate (R9).
     crate::agent_panel::init(cx);
 
-    // Install all cross-feature services as one composition-root bundle. Each
-    // callback belongs to its feature, while the shell consumes only this state API.
-    AppServices::new(
+    // Seal all cross-feature services into one composition-root bundle. The
+    // feature inits above contributed their hooks (active-terminal metrics,
+    // agent focuser) to the pending `AppServicesBuilder`; each command callback
+    // belongs to its feature, while the shell consumes only this state API.
+    AppServices::install(
+        cx,
         crate::session_factory::build(),
         WorkspaceCommands {
             new_terminal_with_shell: oneterm_terminal_view::new_terminal_with_shell_cmd,
@@ -65,7 +71,6 @@ pub(crate) fn init(cx: &mut App) {
             setup_key_bindings: oneterm_settings_ui::setup_key_bindings,
         },
     )
-    .install(cx)
-    .expect("application services must be registered exactly once");
+    .expect("application services must be registered exactly once with every feature contribution");
     AppServices::validate(cx).expect("application services must be available");
 }

@@ -19,7 +19,6 @@ use super::MAIN_DOCK_VERSION;
 /// dock.
 pub(crate) fn reset_center_only(
     dock_area: gpui::WeakEntity<DockArea>,
-    toggle_button_visible: bool,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -70,12 +69,7 @@ pub(crate) fn reset_center_only(
     if let Some(state) = saved_state {
         cx.background_executor()
             .spawn(async move {
-                super::persistence::save_state_logged(
-                    &state,
-                    None,
-                    toggle_button_visible,
-                    "reset_center_only",
-                );
+                super::persistence::save_state_logged(&state, None, "reset_center_only");
             })
             .detach();
     }
@@ -127,7 +121,7 @@ pub(crate) fn reset_default_layout(
     if let Some(state) = saved_state {
         cx.background_executor()
             .spawn(async move {
-                super::persistence::save_state_logged(&state, None, true, "reset_default_layout");
+                super::persistence::save_state_logged(&state, None, "reset_default_layout");
             })
             .detach();
     }

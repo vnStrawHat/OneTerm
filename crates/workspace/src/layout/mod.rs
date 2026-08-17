@@ -5,4 +5,4 @@ pub mod statusbar;
 pub mod title_bar;
 pub mod workspace;
 
-pub use workspace::{OneTermWorkspace, save_dock_state_on_close};
+pub use workspace::OneTermWorkspace;

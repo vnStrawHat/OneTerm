@@ -45,13 +45,37 @@ CI entry point is [`scripts/verify-dependency-graph.py`](../scripts/verify-depen
 
 ## Service registration
 
-`oneterm_state::AppServices` is the single application-scoped service bundle. The
-composition root constructs the backend-neutral `SessionFactory` implementation and
-workspace command callbacks, installs them together, rejects duplicate registration,
-and validates availability during startup. Feature crates retrieve only the handle
-they need through GPUI application context; they do not own registries or backend
-construction. Workspace active terminal and SFTP state remains keyed by DockArea,
+`oneterm_state::AppServices` is the single application-scoped service bundle and
+the only injection registry. Startup has two phases:
+
+1. Feature `init()`s *contribute* their cross-feature hooks to the pending
+   `oneterm_state::AppServicesBuilder` (`terminal-view` contributes the
+   `ActiveTerminalMetricsProvider` read by the status-bar widgets and the
+   `AgentFocuser` used by the Agent Panel). A duplicate or late contribution is a
+   startup error.
+2. The composition root (`crates/app/src/init.rs`) constructs the backend-neutral
+   `SessionFactory` and the `WorkspaceCommands` callbacks and seals the bundle with
+   `AppServices::install`, which rejects duplicate registration and a missing
+   contribution, then `validate`s availability.
+
+Consumers read handles through `AppServices::global(cx)` (or the typed accessors
+`session_factory` / `workspace_commands` / `active_terminal::breadcrumb` /
+`agent_focus::focus_terminal`). Presence is a startup invariant: a missing bundle
+panics with a precise message per the error policy, so shell handlers carry no
+`Option` fallbacks. Feature crates do not own registries or backend construction.
+Workspace active terminal and SFTP state remains keyed by DockArea (`AppState`),
 while durable settings and persistence policy remain process-wide where documented.
+
+Shared globals follow one init contract: `AppState::init`, `UiConfig::init`,
+`TerminalSettings::init`, `AgentRegistry::init` and `GlobalCompletionHistory::init`
+are idempotent — the first call installs, later calls are no-ops. Only the
+composition root calls them; the shell assumes they exist.
+
+The exit-time `docks.json` write is owned by the shell: `OneTermWorkspace`
+registers an entity-bound `on_app_quit` (quit while the window is open) and an
+`on_release` hook (window closed by the user, which drops the root view before
+`cx.quit()`); whichever runs first writes the layout synchronously so the write
+cannot be lost to process exit (CORR-04). `AppState` carries no mirrors for it.
 
 Dock panels are registered with the gpui-component `PanelRegistry` by their owning
 feature's `init()` (R12) and built by the shell *by name* (R4). The registered

@@ -39,17 +39,10 @@ pub struct WorkspaceCommands {
     pub setup_key_bindings: fn(&mut App),
 }
 
-/// Get the workspace commands from the application service bundle, if installed.
-pub fn commands(cx: &App) -> Option<WorkspaceCommands> {
+/// Get the workspace commands from the application service bundle.
+///
+/// Startup invariant: the bundle is installed before the shell runs (see
+/// [`crate::AppServices::global`]).
+pub fn commands(cx: &App) -> WorkspaceCommands {
     super::AppServices::workspace_commands(cx)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[gpui::test]
-    fn commands_are_absent_until_app_services_are_installed(cx: &mut gpui::TestAppContext) {
-        cx.update(|cx| assert!(commands(cx).is_none()));
-    }
 }
