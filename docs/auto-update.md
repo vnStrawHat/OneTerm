@@ -187,6 +187,21 @@ Persistence rules:
 - Downloaded artifacts are runtime cache data and should live under a dedicated
   update cache directory, not beside user settings.
 
+Writers and field ownership (`crates/update/src/config.rs`):
+
+| Field group | Fields | Owner / writer | Write path |
+|---|---|---|---|
+| Preferences | `auto_check`, `channel`, `check_interval_hours`, `proxy_url`, `verify_certificates`, `skipped_version` | `oneterm-settings-ui` (`updates/config.rs` persist queue, `UpdateConfig` entity is the in-memory truth) | `UpdateConfig::save_preferences` |
+| Check cache | `last_checked_at`, `last_etag`, `last_checked_version`, `cached_candidate` | `oneterm-update` (`UpdateManager` after a successful GitHub response) | `UpdateCheckCache::save` |
+
+Both write paths are field-level `update_json_file` merges under the shared
+inter-process lock, so neither writer can clobber the other's fields even when a
+preference is edited while a check is running. Only the initial default document
+(created when the file is missing) is written whole. When a check completes, the
+UI merges just the returned `UpdateCheckCache` into the live entity
+(`UpdateConfig::apply_check_cache`); it never replaces the entity with the
+manager's stale pre-check copy.
+
 ## Architecture
 
 Recommended crate split:

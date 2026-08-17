@@ -33,7 +33,59 @@ pub struct CachedUpdateCandidate {
     pub target_triple: String,
 }
 
+/// HTTP cache metadata recorded by the release checker.
+///
+/// These fields share `update_config.json` with the user preferences but are
+/// written only through field-level merges, so a check that finishes after
+/// the user edited a preference can never overwrite that edit.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UpdateCheckCache {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub last_checked_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub last_etag: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub last_checked_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cached_candidate: Option<CachedUpdateCandidate>,
+}
+
+/// Document keys owned by the preference writer (settings UI).
+const PREFERENCE_FIELDS: &[&str] = &[
+    "auto_check",
+    "channel",
+    "check_interval_hours",
+    "proxy_url",
+    "verify_certificates",
+    "skipped_version",
+];
+
+/// Document keys owned by the release checker.
+const CACHE_FIELDS: &[&str] = &[
+    "last_checked_at",
+    "last_etag",
+    "last_checked_version",
+    "cached_candidate",
+];
+
+impl UpdateCheckCache {
+    /// Merge the cache fields into the default update config document.
+    pub fn save(&self) -> std::io::Result<()> {
+        self.save_to(&config_dir().join("update_config.json"))
+    }
+
+    /// Merge the cache fields into the document at `path`, leaving every
+    /// preference field untouched.
+    pub fn save_to(&self, path: &Path) -> std::io::Result<()> {
+        let values = serde_json::to_value(self).map_err(std::io::Error::other)?;
+        merge_owned_fields(path, CACHE_FIELDS, &values)
+    }
+}
+
 /// Persisted auto-update preferences and HTTP cache metadata.
+///
+/// The settings UI owns the preference fields; [`UpdateCheckCache`] fields are
+/// owned by the release checker. Each owner persists only its own fields.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UpdateConfig {
     #[serde(default = "default_auto_check")]
@@ -94,7 +146,7 @@ impl UpdateConfig {
             }),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 let config = Self::default();
-                if let Err(write_error) = config.save_to(path) {
+                if let Err(write_error) = config.write_default_document(path) {
                     log::warn!(
                         "failed to create default update_config.json at {path:?}: {write_error}"
                     );
@@ -108,17 +160,43 @@ impl UpdateConfig {
         }
     }
 
-    /// Save to the default update config path.
-    pub fn save(&self) -> std::io::Result<()> {
-        self.save_to(&config_dir().join("update_config.json"))
-    }
-
-    /// Save to an explicit path.
-    pub fn save_to(&self, path: &Path) -> std::io::Result<()> {
+    /// Write the complete default document for a config file that does not
+    /// exist yet. Runtime writers must use the field-level merges instead.
+    fn write_default_document(&self, path: &Path) -> std::io::Result<()> {
         let mut value = serde_json::to_value(self).map_err(std::io::Error::other)?;
         set_schema_version(&mut value, CURRENT_SCHEMA_VERSION)?;
         let json = serde_json::to_string_pretty(&value).map_err(std::io::Error::other)?;
         atomic_write(path, json.as_bytes())
+    }
+
+    /// Merge the preference fields into the default update config document.
+    pub fn save_preferences(&self) -> std::io::Result<()> {
+        self.save_preferences_to(&config_dir().join("update_config.json"))
+    }
+
+    /// Merge the preference fields into the document at `path`, leaving the
+    /// checker-owned cache fields untouched.
+    pub fn save_preferences_to(&self, path: &Path) -> std::io::Result<()> {
+        let values = serde_json::to_value(self).map_err(std::io::Error::other)?;
+        merge_owned_fields(path, PREFERENCE_FIELDS, &values)
+    }
+
+    /// Snapshot the checker-owned cache fields.
+    pub fn check_cache(&self) -> UpdateCheckCache {
+        UpdateCheckCache {
+            last_checked_at: self.last_checked_at.clone(),
+            last_etag: self.last_etag.clone(),
+            last_checked_version: self.last_checked_version.clone(),
+            cached_candidate: self.cached_candidate.clone(),
+        }
+    }
+
+    /// Replace only the checker-owned cache fields, keeping every preference.
+    pub fn apply_check_cache(&mut self, cache: UpdateCheckCache) {
+        self.last_checked_at = cache.last_checked_at;
+        self.last_etag = cache.last_etag;
+        self.last_checked_version = cache.last_checked_version;
+        self.cached_candidate = cache.cached_candidate;
     }
 
     /// Return whether a startup auto-check should run now.
@@ -182,6 +260,42 @@ fn default_verify_certificates() -> bool {
     true
 }
 
+/// Read-modify-write only the `keys` owned by one writer.
+///
+/// Keys absent from `values` (serialized `None`) are removed from the document
+/// so a cleared field does not survive on disk. Fields owned by the other
+/// writer are copied through unchanged. A document that no longer parses is
+/// quarantined once and the merge restarts from an empty document, so a
+/// corrupt file cannot block preference or cache persistence until restart.
+fn merge_owned_fields(path: &Path, keys: &[&str], values: &Value) -> std::io::Result<()> {
+    let merge = |document: &mut Value| -> std::io::Result<()> {
+        if !document.is_object() {
+            *document = Value::Object(serde_json::Map::new());
+        }
+        if let Value::Object(fields) = document {
+            for key in keys {
+                match values.get(key) {
+                    Some(value) => {
+                        fields.insert((*key).to_owned(), value.clone());
+                    }
+                    None => {
+                        fields.remove(*key);
+                    }
+                }
+            }
+        }
+        set_schema_version(document, CURRENT_SCHEMA_VERSION)
+    };
+    match oneterm_core::update_json_file(path, &merge) {
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+            log::error!("update_config.json is unreadable: {error}; quarantining before rewrite");
+            quarantine_file(path)?;
+            oneterm_core::update_json_file(path, &merge)
+        }
+        result => result,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,6 +324,112 @@ mod tests {
         assert_eq!(config.proxy_url, None);
         assert!(config.verify_certificates);
         assert!(!path.exists());
+        assert!(std::fs::read_dir(&dir).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".invalid-")
+        }));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn preference_edit_during_check_survives_check_completion() {
+        let dir = test_dir("merge-check");
+        let path = dir.join("update_config.json");
+        // The UI entity is the in-memory truth; the checker works on a copy.
+        let mut entity = UpdateConfig::load_from(&path);
+        let mut checker_copy = entity.clone();
+
+        // User edits a preference while the check is still running.
+        entity.proxy_url = Some("https://proxy.example".to_owned());
+        entity.auto_check = false;
+        entity.save_preferences_to(&path).unwrap();
+
+        // The check completes on the background thread with the stale copy.
+        checker_copy.record_success(Some("etag-1".to_owned()), "0.3.0");
+        checker_copy.check_cache().save_to(&path).unwrap();
+        entity.apply_check_cache(checker_copy.check_cache());
+
+        assert_eq!(entity.proxy_url.as_deref(), Some("https://proxy.example"));
+        assert!(!entity.auto_check);
+        assert_eq!(entity.last_etag.as_deref(), Some("etag-1"));
+
+        let on_disk = UpdateConfig::load_from(&path);
+        assert_eq!(on_disk, entity);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn preference_and_cache_writers_do_not_lose_each_others_fields() {
+        let dir = test_dir("merge-concurrent");
+        let path = dir.join("update_config.json");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut writers = Vec::new();
+        for index in 0..4 {
+            let preference_path = path.clone();
+            writers.push(std::thread::spawn(move || {
+                let path = preference_path;
+                let config = UpdateConfig {
+                    proxy_url: Some(format!("https://proxy-{index}.example")),
+                    verify_certificates: false,
+                    ..Default::default()
+                };
+                config.save_preferences_to(&path).unwrap();
+            }));
+            let path = path.clone();
+            writers.push(std::thread::spawn(move || {
+                let cache = UpdateCheckCache {
+                    last_etag: Some(format!("etag-{index}")),
+                    last_checked_version: Some("0.3.0".to_owned()),
+                    ..Default::default()
+                };
+                cache.save_to(&path).unwrap();
+            }));
+        }
+        for writer in writers {
+            writer.join().unwrap();
+        }
+
+        let on_disk = UpdateConfig::load_from(&path);
+        assert!(
+            on_disk
+                .proxy_url
+                .as_deref()
+                .unwrap()
+                .starts_with("https://proxy-")
+        );
+        assert!(!on_disk.verify_certificates);
+        assert!(on_disk.last_etag.as_deref().unwrap().starts_with("etag-"));
+        assert_eq!(on_disk.last_checked_version.as_deref(), Some("0.3.0"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn cleared_fields_are_removed_and_corrupt_documents_are_quarantined() {
+        let dir = test_dir("merge-clear");
+        let path = dir.join("update_config.json");
+        let mut config = UpdateConfig {
+            proxy_url: Some("https://proxy.example".to_owned()),
+            ..Default::default()
+        };
+        config.save_preferences_to(&path).unwrap();
+        config.proxy_url = None;
+        config.save_preferences_to(&path).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("proxy_url"));
+
+        std::fs::write(&path, b"not-json").unwrap();
+        UpdateCheckCache {
+            last_etag: Some("etag".to_owned()),
+            ..Default::default()
+        }
+        .save_to(&path)
+        .unwrap();
+        let on_disk = UpdateConfig::load_from(&path);
+        assert_eq!(on_disk.last_etag.as_deref(), Some("etag"));
         assert!(std::fs::read_dir(&dir).unwrap().any(|entry| {
             entry
                 .unwrap()

@@ -10,7 +10,7 @@ mod install;
 mod manager;
 mod version;
 
-pub use config::{CachedUpdateCandidate, UpdateChannel, UpdateConfig};
+pub use config::{CachedUpdateCandidate, UpdateChannel, UpdateCheckCache, UpdateConfig};
 pub use install::{InstallOutcome, install_staged_update};
 pub use manager::{StagedUpdate, UpdateCandidate, UpdateCheckResult, UpdateManager};
 

@@ -5,7 +5,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 
 use crate::archive::{extract_archive, validate_staged_package};
-use crate::config::{CachedUpdateCandidate, UpdateChannel, UpdateConfig};
+use crate::config::{CachedUpdateCandidate, UpdateChannel, UpdateCheckCache, UpdateConfig};
 use crate::github::{self, GitHubClient, GitHubRelease};
 use crate::version::{current_target_triple, expected_asset_name, parse_release_version};
 use crate::{CURRENT_VERSION, UPDATE_REPOSITORY};
@@ -125,9 +125,16 @@ impl UpdateManager {
         }
     }
 
-    /// Return the persisted config snapshot.
+    /// Return the config snapshot this manager was built from, including any
+    /// cache metadata recorded by a completed check.
     pub fn config(&self) -> &UpdateConfig {
         &self.config
+    }
+
+    /// Cache metadata recorded by the last check. Callers that hold the live
+    /// preferences must merge only this into their config, never `config()`.
+    pub fn check_cache(&self) -> UpdateCheckCache {
+        self.config.check_cache()
     }
 
     /// Check whether the automatic interval permits a background check now.
@@ -241,9 +248,12 @@ impl UpdateManager {
         Some(Box::new(cached.into()))
     }
 
+    /// Persist only the checker-owned cache fields. Preferences are owned by
+    /// the settings UI and may have changed while this check was running, so
+    /// the manager never writes the whole document.
     fn persist_config(&self) {
-        if let Err(error) = self.config.save() {
-            log::warn!("failed to persist update_config.json after check: {error}");
+        if let Err(error) = self.config.check_cache().save() {
+            log::warn!("failed to persist update_config.json cache after check: {error}");
         }
     }
 
@@ -279,7 +289,14 @@ impl UpdateManager {
         })();
 
         if result.is_err() {
-            let _ = std::fs::remove_dir_all(&stage_root);
+            // Best effort: the download failure is what gets reported; a
+            // leftover staging directory only wastes disk space, but say so.
+            if let Err(error) = std::fs::remove_dir_all(&stage_root) {
+                log::warn!(
+                    "failed to remove update staging directory {}: {error}",
+                    stage_root.display()
+                );
+            }
         }
 
         result

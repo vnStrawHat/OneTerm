@@ -1,9 +1,15 @@
 //! Update preference mutation and background persistence queue.
+//!
+//! The `UpdateConfig` entity is the in-memory source of truth for
+//! `update_config.json`. This module owns the preference fields; the release
+//! checker owns the cache fields and merges them back through
+//! [`apply_check_cache`] so a check that finishes late never overwrites an
+//! edit made while it was running.
 
 use std::sync::{Arc, Mutex};
 
 use gpui::{App, AppContext as _, Entity, Global};
-use oneterm_update::UpdateConfig;
+use oneterm_update::{UpdateCheckCache, UpdateConfig};
 
 pub(super) struct UpdateConfigGlobal(pub Entity<UpdateConfig>);
 
@@ -62,6 +68,18 @@ pub(super) fn set_verify_certificates(cx: &mut App, verify: bool) {
     persist_update_config(cx);
 }
 
+/// Merge cache metadata from a completed check into the live entity.
+///
+/// Only the checker-owned fields change; preferences edited while the check
+/// was running are kept. The checker already persisted the cache fields, so
+/// nothing is scheduled for disk here.
+pub(super) fn apply_check_cache(cx: &mut App, cache: UpdateCheckCache) {
+    entity(cx).update(cx, |config, cx| {
+        config.apply_check_cache(cache);
+        cx.notify();
+    });
+}
+
 fn persist_update_config(cx: &App) {
     let snapshot = entity(cx).read(cx).clone();
     let queue = persist_queue(cx);
@@ -101,8 +119,10 @@ fn drain_update_config_persist_queue(queue: Arc<Mutex<UpdateConfigPersistQueueSt
             }
         };
 
-        if let Err(error) = snapshot.save() {
-            log::warn!("failed to save update_config.json: {error}");
+        // Preferences only: the checker persists its own cache fields through
+        // a field-level merge, so neither writer can clobber the other.
+        if let Err(error) = snapshot.save_preferences() {
+            log::warn!("failed to save update_config.json preferences: {error}");
         }
     }
 }

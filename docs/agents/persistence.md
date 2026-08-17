@@ -36,8 +36,8 @@ directly on the UI thread.
 |---|---|---|
 | `terminal.json` | `oneterm-settings` | Terminal configuration schema and defaults. |
 | `ui_config.json` | `oneterm-settings` | UI theme/font/key-binding schema. |
-| SSH session store | `oneterm-session-ui` | Saved host/session schema. |
-| `update_config.json` | `oneterm-update` | Auto-update channel, cache, proxy/TLS preferences, and skip/version state. |
+| SSH session store | `oneterm-session-ui` | Saved host/session schema. Whole-document writes are coalesced through a single-flight queue so the newest snapshot always wins. |
+| `update_config.json` | `oneterm-update` | Schema owner. Two field-level writers through `update_json_file`: preferences (`oneterm-settings-ui` persist queue via `UpdateConfig::save_preferences`) and check cache (`UpdateManager` via `UpdateCheckCache::save`). See `docs/auto-update.md`. |
 | `docks.json` document model | `oneterm-state` | `DockDocument` is the typed top-level schema and the only read/update API. |
 | `docks.json` dock fields | `oneterm-workspace` | Dock layout and shell-owned display fields. |
 | `docks.json.sftp_table_state` | `oneterm-sftp-ui` | SFTP table field only, represented by `oneterm_core::SftpTableState`. |
