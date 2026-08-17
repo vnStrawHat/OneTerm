@@ -63,9 +63,10 @@ impl SshSession {
         self.listener.transport()
     }
 
-    /// Ask the SFTP task to stop (idempotent; no-op without SFTP).
+    /// Ask the SFTP task to stop and drop the handle, so a later `close()` or
+    /// drop is a no-op (no-op without SFTP).
     pub(crate) fn close_sftp(&self) {
-        let sftp = self.sftp.lock().unwrap().clone();
+        let sftp = self.sftp.lock().unwrap().take();
         if let Some(sftp) = sftp {
             use oneterm_core::SftpBackend;
             sftp.close();
