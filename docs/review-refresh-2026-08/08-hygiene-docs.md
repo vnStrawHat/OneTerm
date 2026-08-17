@@ -130,7 +130,7 @@ authoritative.
   under `docs/archive/` with a one-line status header; fill or delete `PROJECT.md`; add a `docs/README.md`
   index (current vs historical); make this review the current one and archive it likewise when superseded.
 
-- [ ] **[Medium] HYG-17 — AGENTS.md quality gate is narrower than CI.** §4 lists fmt + clippy + build; CI also
+- [x] **[Medium] HYG-17 — AGENTS.md quality gate is narrower than CI.** §4 lists fmt + clippy + build; CI also
   requires `cargo test --workspace`, `verify-dependency-graph.py`, `check-ui-fork.py`, `check-doc-paths.py`,
   `check-english.py`, `benchmark-scale.py --list`. Agents following AGENTS.md will push red CI. *Fix:* list the
   full set (or add `scripts/ci-local.{sh,ps1}` and reference it).

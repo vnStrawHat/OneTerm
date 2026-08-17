@@ -86,13 +86,13 @@ crates are effectively untested (`sftp-ui` 0.8/KLOC, `workspace` 0.5, `settings-
   `format_memory`, load→reset_center_only→save flow.
 - [ ] **[Low] TEST-21 — theme:** all `EMBEDDED_THEME_FILES` parse and "Zed One Dark"/"Zed One Light" exist
   (`theme.rs:28-61,116-117`).
-- [ ] **[Low] TEST-22 — engine edge cases:** `url_policy` IPv6 host without port; `osc.rs parse_cwd_url` with
+- [x] **[Low] TEST-22 — engine edge cases:** `url_policy` IPv6 host without port; `osc.rs parse_cwd_url` with
   `%20` and `file:///C:/`; `shell.rs` exact zsh PS1 bytes and Zsh kind vs `$SHELL`; highlight negative prompt
   cases (`100%`, `#include`).
 
 ## D. Weak tests
 
-- [ ] **[Medium] TEST-23 — Test enshrines the wrong wire format:** `crates/terminal/src/mouse_encode.rs:294-313`
+- [x] **[Medium] TEST-23 — Test enshrines the wrong wire format:** `crates/terminal/src/mouse_encode.rs:294-313`
   expects `char::from_u32(233)` (2 UTF-8 bytes) for X11 col 200 (CORR-25). Rewrite against `Vec<u8>` and add
   a `UTF8_MOUSE` case.
 - [ ] **[Low] TEST-24 — Test asserts nothing:** `crates/terminal/src/content.rs:321-335`

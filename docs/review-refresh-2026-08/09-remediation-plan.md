@@ -29,27 +29,27 @@ Small, surgical fixes with regression tests. No refactoring.
 
 ## Phase 1 — Contracts and CI identity (1–2 weeks)
 
-- [ ] BUILD-02 / BUILD-13 — workspace `version` + `CARGO_PKG_VERSION`; delete three `VERSION` build scripts.
-- [ ] BUILD-03 — `rust-toolchain.toml` + `rust-version`.
-- [ ] BUILD-04 / BUILD-05 / BUILD-06 — prune unused deps; centralise `windows-sys`; fix `dependencies.md` §3.
-- [ ] BUILD-12 — canonical updater repo constant; drop `git remote` in build.rs.
-- [ ] BUILD-18 / BUILD-19 — prune vendor test corpus; `vendor/refresh.sh --check` in CI.
-- [ ] BUILD-25 — `cargo-deny` job (licences + bans).
-- [ ] ARCH-12 proper — `RemotePath` newtype in `core`; `SftpBackend` takes it.
-- [ ] ARCH-05 — `TransferHandle` / `TransferEvent` (kills the negative-progress sentinel; also fixes CORR-31).
-- [ ] ARCH-04 — rename `rmdir` → `remove_dir_all`; fix dialog wording.
-- [ ] ARCH-03 — `take_events()` once-only contract.
-- [ ] ARCH-08 / ERR-03 — panel-name constants module; error log on unregistered names; move
+- [x] BUILD-02 / BUILD-13 — workspace `version` + `CARGO_PKG_VERSION`; delete three `VERSION` build scripts.
+- [x] BUILD-03 — `rust-toolchain.toml` + `rust-version`.
+- [x] BUILD-04 / BUILD-05 / BUILD-06 — prune unused deps; centralise `windows-sys`; fix `dependencies.md` §3.
+- [x] BUILD-12 — canonical updater repo constant; drop `git remote` in build.rs.
+- [x] BUILD-18 / BUILD-19 — prune vendor test corpus; `vendor/refresh.sh --check` in CI.
+- [x] BUILD-25 — `cargo-deny` job (licences + bans).
+- [x] ARCH-12 proper — `RemotePath` newtype in `core`; `SftpBackend` takes it.
+- [x] ARCH-05 — `TransferHandle` / `TransferEvent` (kills the negative-progress sentinel; also fixes CORR-31).
+- [x] ARCH-04 — rename `rmdir` → `remove_dir_all`; fix dialog wording.
+- [x] ARCH-03 — `take_events()` once-only contract.
+- [x] ARCH-08 / ERR-03 — panel-name constants module; error log on unregistered names; move
   `RightDockMode::panel_name` out of `core` (ARCH-07).
-- [ ] SEC-05 — changed-algorithm host key → `ChangedHostKey`.
-- [ ] SEC-06 — quote ConPTY program path / `escape_args`.
-- [ ] SEC-13 / SEC-14 — keyboard-interactive fallback; keepalive.
-- [ ] CORR-09 — SFTP `load_generation`.
-- [ ] CORR-14 / CORR-15 / ARCH-37 — single-writer persistence for sessions.json and update_config.json.
-- [ ] CORR-16 — quarantine + continue on runtime docks.json corruption; ERR-05 — remove sftp-ui quarantine.
-- [ ] CORR-25 / CORR-26 / CORR-27 / CORR-28 / CORR-29 — key/mouse/PS1/shell/paste encoding fixes + tests
+- [x] SEC-05 — changed-algorithm host key → `ChangedHostKey`.
+- [x] SEC-06 — quote ConPTY program path / `escape_args`.
+- [x] SEC-13 / SEC-14 — keyboard-interactive fallback; keepalive.
+- [x] CORR-09 — SFTP `load_generation`.
+- [x] CORR-14 / CORR-15 / ARCH-37 — single-writer persistence for sessions.json and update_config.json.
+- [x] CORR-16 — quarantine + continue on runtime docks.json corruption; ERR-05 — remove sftp-ui quarantine.
+- [x] CORR-25 / CORR-26 / CORR-27 / CORR-28 / CORR-29 — key/mouse/PS1/shell/paste encoding fixes + tests
   (TEST-22, TEST-23).
-- [ ] HYG-17 — AGENTS.md §4 lists the full CI gate.
+- [x] HYG-17 — AGENTS.md §4 lists the full CI gate.
 
 ## Phase 2 — Structural refactors (2–4 weeks, one PR each)
 

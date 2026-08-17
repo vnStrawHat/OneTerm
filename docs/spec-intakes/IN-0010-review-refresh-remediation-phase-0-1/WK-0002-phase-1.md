@@ -8,8 +8,8 @@ Created: 2026-08-17
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [ ] Planned
-- [x] In progress
-- [ ] Implemented
+- [ ] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -33,8 +33,8 @@ All Phase 1 items in `docs/review-refresh-2026-08/09-remediation-plan.md` are fi
 
 ## Acceptance
 
-- [ ] Each item's regression test exists and passes.
-- [ ] Workspace gates green on the integration branch.
+- [x] Each item's regression test exists and passes.
+- [x] Workspace gates green on the integration branch (fmt, clippy -D warnings, 687 tests, build, 5 Python checks, cargo deny; 2026-08-17).
 
 ## Documentation
 
@@ -49,7 +49,7 @@ Update required: `docs/agents/dependencies.md` (vendoring), `docs/sftp-browser-d
 
 ### Reconciliation
 
-To be filled at completion.
+Updated: `docs/agents/dependencies.md` (vendoring rows + policy, allowed set), `docs/agents/structure.md` §3, `docs/agents/ui-fork-maintenance.md`, `vendor/README.md`, `AGENTS.md` §4 (full CI gate + `scripts/ci-local.*`), `docs/sftp-browser-design.md` (RemotePath / TransferHandle / remove_dir_all / generation guard), `docs/agents/persistence.md` (owner-only quarantine, update_config writers), `docs/auto-update.md` (writer table), `docs/ssh-client-connect.md` §9.3, `docs/ssh-authentication.md`, `docs/architecture.md` + `docs/gui-layout.md` (panel_names), `docs/terminal-backend.md` (take_events).
 
 ## Plan
 
@@ -60,13 +60,14 @@ To be filled at completion.
 Per-crate `cargo test -p`, then full workspace gate on the merged branch.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Platform proof (Windows local; Linux/macOS via CI)
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-To be filled at completion.
+- Commits: d9dcd66 (panel names), a252f36 c5a3645 24300c6 5238ad7 (single-writer persistence), f8e54f7 7b13477 f98a4f1 319f392 e56a7a4 (encoding), ab0c23d 247c073 b2b3772 d228d51 db43c54 (ssh/local security, take_events), 6549514 f6415cf d2a18c2 fb04106 3df694e (cargo/build/CI), a162cea f7dadcb 4e732fa (SFTP contract) — merged into `fix/review-remediation-phase-0-1`.
+- Gaps / follow-ups: `windows-sys` stays 0.59 (unifying to 0.61 needs `crates/app/src/lib.rs` `BOOL` import change — BUILD-06 partial); `crates/settings-ui/src/crash_report_dialog.rs` still hard-codes the issues URL; `oneterm-state` cannot log the docks.json recovery itself (no `log` dep) — callers log; literal panel names remain in `Panel::panel_name()` impls (values identical to the constants); the first `windows-quality` CI run is a cold cache.

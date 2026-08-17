@@ -33,7 +33,7 @@ all of it raises the cost of the next feature.
   `crates/terminal`; each backend keeps only transport (`pty_write` / `pty_resize` / `pty_close`)
   behind a small trait. This also fixes CORR-01 in one place.
 
-- [ ] **[High] ARCH-12 — `SftpBackend` models remote POSIX paths as host `PathBuf`.**
+- [x] **[High] ARCH-12 — `SftpBackend` models remote POSIX paths as host `PathBuf`.**
   `crates/core/src/sftp.rs:95-130`; consumers `crates/sftp-ui/src/actions.rs:106-107` (`parent.join(&new_name)`)
   and `:339` (`cwd.join(&name)`); the ssh backend sanitises `\`→`/` only for read_dir/stat/upload/download/rmdir
   (`ssh/src/sftp_task/metadata.rs:145,209`, `transfer/upload.rs:60`), **not** for `Rename`/`Mkdir`/`Remove`
@@ -51,19 +51,19 @@ all of it raises the cost of the next feature.
   `TerminalLifecycle`) or move optional features into `TerminalCapabilities`; remove presentation methods;
   delete dead members.
 
-- [ ] **[Medium] ARCH-03 — Single-subscriber `subscribe()` contract is undocumented and duplicated 3×.**
+- [x] **[Medium] ARCH-03 — Single-subscriber `subscribe()` contract is undocumented and duplicated 3×.**
   `crates/terminal/src/session.rs:355`, `test_support.rs:359-365`, `ssh/src/session_terminal.rs:219`,
   `local-shell/src/session_terminal.rs:221`: a second call silently returns a dead `bounded(1)` receiver.
   *Fix:* `fn take_events(&self) -> Option<Receiver<SessionEvent>>` (or `Result<_, AlreadySubscribed>`) and
   document once-only semantics on the trait.
 
-- [ ] **[Medium] ARCH-04 — `SftpBackend::rmdir` contract mismatch.** `crates/core/src/sftp.rs:96-97` says
+- [x] **[Medium] ARCH-04 — `SftpBackend::rmdir` contract mismatch.** `crates/core/src/sftp.rs:96-97` says
   "Remove an empty directory"; the implementation is a bounded recursive delete
   (`crates/ssh/src/sftp_task.rs:114-121`, `sftp_task/recursive_delete.rs`); the confirm dialog
   (`crates/sftp-ui/src/actions.rs:236`) says only "delete folder".
   *Fix:* rename to `remove_dir_all` with an explicit doc; word the dialog accordingly.
 
-- [ ] **[Medium] ARCH-05 — Cancellation encoded as a magic negative progress value.**
+- [x] **[Medium] ARCH-05 — Cancellation encoded as a magic negative progress value.**
   `crates/sftp-ui/src/transfer.rs:93-94,388-389` treat `progress < 0.0` as "cancelled"; the trait doc
   (`core/src/sftp.rs:114`) says 0.0–1.0. The trait also mixes async `SftpFuture` methods with sync
   channel-returning `upload/download` and returns tuples `(Receiver<f64>, Receiver<Result<()>>)`.
@@ -77,7 +77,7 @@ all of it raises the cost of the next feature.
   *Fix:* typed variants for the recurring classes (shell resolution, SFTP status, connect phase, config load);
   reserve `Other` for opaque messages.
 
-- [ ] **[Medium] ARCH-07 — UI concepts leak into the "pure domain" `core`.**
+- [x] **[Medium] ARCH-07 — UI concepts leak into the "pure domain" `core`.**
   `crates/core/src/config/dock_mode.rs:37-43` (`RightDockMode::panel_name()` returns gpui-component
   `PanelRegistry` names), `crates/core/src/sftp.rs:57-64` (`SftpTableState` = column widths/visibility),
   `crates/terminal/src/osc_agent/types.rs` (`AgentState::badge()` returns emoji).
@@ -95,7 +95,7 @@ all of it raises the cost of the next feature.
 
 ## B. Shell inversion & global state
 
-- [ ] **[High] ARCH-08 — Panel names are string literals duplicated across five places, including `core`.**
+- [x] **[High] ARCH-08 — Panel names are string literals duplicated across five places, including `core`.**
   `crates/workspace/src/layout/workspace/layout.rs:27,36,87,97`, `.../workspace/actions.rs:33`,
   `crates/core/src/config/dock_mode.rs:37-41`, `crates/app/src/ssh_client_panel.rs:44`,
   `crates/app/src/agent_panel.rs:32`, `crates/terminal-view/src/lib.rs:44`. R4 ("shell does not know which
@@ -232,7 +232,7 @@ all of it raises the cost of the next feature.
   `BrowserView { cwd, selected, error, path_error }`, `TransferQueueView`, `FollowCwd { enabled, last, cache }`
   with methods; make fields private.
 
-- [ ] **[Medium] ARCH-32 — Upload/download flow duplicated.** `crates/sftp-ui/src/transfer.rs:25-205` vs
+- [x] **[Medium] ARCH-32 — Upload/download flow duplicated.** `crates/sftp-ui/src/transfer.rs:25-205` vs
   `:283-489`: progress loop, cancel sentinel, result mapping, store update identical; and in the backend
   the four copy loops (`ssh/src/sftp_task/transfer/download.rs:86-131,232-283`, `upload.rs:201-242,428-473`).
   *Fix:* `async fn run_transfer(panel, key, id, progress_rx, result_rx, cx)` in the UI; one
@@ -258,7 +258,7 @@ all of it raises the cost of the next feature.
   `docs/auto-update.md` still claims a 24 h interval. *Fix:* wire them (settings items + honour interval in
   `start_auto_check`) or delete fields and doc claims.
 
-- [ ] **[Low] ARCH-37 — `UpdateManager` and settings-ui are two whole-document writers of
+- [x] **[Low] ARCH-37 — `UpdateManager` and settings-ui are two whole-document writers of
   `update_config.json`** (`crates/update/src/manager.rs:244-248` vs `settings-ui/src/updates/config.rs`).
   *Fix:* split "cache metadata" (etag/last_checked/cached_candidate) from "preferences", or route all writes
   through `update_json_file`.

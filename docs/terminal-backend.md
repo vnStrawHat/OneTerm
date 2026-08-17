@@ -501,7 +501,7 @@ pub trait TerminalSession: Send + Sync + 'static {
     fn marked_text(&self) -> Option<String>;
     fn cursor_bounds(&self) -> Option<Bounds<Pixels>>;     // for IME popup
     // Lifecycle
-    fn subscribe(&self) -> Receiver<SessionEvent>;
+    fn take_events(&self) -> Option<Receiver<SessionEvent>>; // once-only; None after the first call
     fn alive(&self) -> bool;
     fn close(&self);
     fn is_local(&self) -> bool;

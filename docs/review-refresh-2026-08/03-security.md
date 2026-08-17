@@ -35,7 +35,7 @@ TLS, and remote-controlled unbounded growth in the agent dedup map.
   a hostile program can grow memory indefinitely (ids up to ~6 KiB each). *Fix:* cap tracked agents
   (LRU/evict oldest) and cap `agent` length at parse time.
 
-- [ ] **[Medium] SEC-06 — ConPTY command line built without quoting.**
+- [x] **[Medium] SEC-06 — ConPTY command line built without quoting.**
   `crates/local-shell/src/session.rs:66-75` uses `Options::default()` (`escape_args: false`); alacritty joins
   program and args raw and passes `lpApplicationName = NULL` (`vendor/alacritty_terminal/src/tty/windows/mod.rs:158-174`,
   `conpty.rs:205-229`). Program paths containing spaces (`C:\Program Files\PowerShell\7\pwsh.exe`) are parsed
@@ -65,7 +65,7 @@ TLS, and remote-controlled unbounded growth in the agent dedup map.
   legacy `ssh-rsa` (SHA-1). OpenSSH ≥ 8.8 rejects it, and the user only sees "SSH authentication failed".
   *Fix:* `let alg = handle.best_supported_rsa_hash().await?.flatten().or(Some(HashAlg::Sha512));`.
 
-- [ ] **[Medium] SEC-05 — Host key of a *different algorithm* is reported as "unknown host", not "changed".**
+- [x] **[Medium] SEC-05 — Host key of a *different algorithm* is reported as "unknown host", not "changed".**
   `crates/ssh/src/handler.rs:229-259` relies on `check_known_hosts_path`, which returns `Ok(false)` when the
   recorded key type differs. A MITM presenting an ECDSA key for a host known by ED25519 gets a friendly
   "accept new fingerprint" prompt instead of the changed-key refusal. *Fix:* if `known_host_keys_path(host, port)`
@@ -76,17 +76,17 @@ TLS, and remote-controlled unbounded growth in the agent dedup map.
   `crates/ssh/src/sftp_task/transfer/download.rs:47-50,68-71`, `transfer/staging.rs:61-67`,
   `transfer/upload.rs:383-384`. *Fix:* `symlink_metadata()`; make the tests run on Windows too (TEST-06).
 
-- [ ] **[Medium] SEC-12 — Recursive delete follows a symlinked root.**
+- [x] **[Medium] SEC-12 — Recursive delete follows a symlinked root.**
   `crates/ssh/src/sftp_task/recursive_delete.rs:32-38` `read_dir(root)` without lstat: deleting a
   symlink-to-directory recursively deletes the *target's* contents; a `read_dir` failure (EACCES) is
   conflated with "not a directory". *Fix:* lstat root first; symlink/non-dir → `remove_file`; propagate errors.
 
-- [ ] **[Medium] SEC-13 — Auth failure discards `remaining_methods`; no keyboard-interactive.**
+- [x] **[Medium] SEC-13 — Auth failure discards `remaining_methods`; no keyboard-interactive.**
   `crates/ssh/src/session.rs:258-261`. Servers with `PasswordAuthentication no` + `KbdInteractiveAuthentication yes`
   fail with a generic message. *Fix:* fall back to `authenticate_keyboard_interactive_start` for `Password`;
   include remaining methods in the error.
 
-- [ ] **[Low] SEC-14 — No keepalive** (`client::Config::default()`, `session.rs:186`). *Fix:*
+- [x] **[Low] SEC-14 — No keepalive** (`client::Config::default()`, `session.rs:186`). *Fix:*
   `keepalive_interval = Some(30s)`, `keepalive_max = 3`.
 
 - [ ] **[Low] SEC-15 — Transfers do not preserve permissions/mtime** (download.rs, upload.rs). *Fix:*

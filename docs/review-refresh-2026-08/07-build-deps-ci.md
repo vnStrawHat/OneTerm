@@ -17,29 +17,29 @@ into the updater.
 
 ## A. Cargo manifests & dependencies
 
-- [ ] **[High] BUILD-02 — No crate declares `version`; all 18 packages are 0.0.0** while `VERSION` says 0.3.9.
+- [x] **[High] BUILD-02 — No crate declares `version`; all 18 packages are 0.0.0** while `VERSION` says 0.3.9.
   `Cargo.toml` `[workspace.package]` (l.30-32) + every `crates/*/Cargo.toml`. `CARGO_PKG_VERSION`,
   `cargo tree`, crash reports and any future packaging see 0.0.0. *Fix:* `version = "0.3.9"` (+ `license`,
   `repository`, `rust-version`) in `[workspace.package]`, `version.workspace = true` in each crate;
   `scripts/bump-version.sh` rewrites both (or drop `VERSION` and use `CARGO_PKG_VERSION`).
 
-- [ ] **[Medium] BUILD-03 — Toolchain floats.** No `rust-toolchain.toml`, no `rust-version`; workflows use
+- [x] **[Medium] BUILD-03 — Toolchain floats.** No `rust-toolchain.toml`, no `rust-version`; workflows use
   `dtolnay/rust-toolchain@…` "stable". A new stable clippy lint breaks `-D warnings` CI without any code
   change. *Fix:* `rust-toolchain.toml` (`channel = "1.xx"`), `rust-version` in `[workspace.package]`, CI reads it.
 
-- [ ] **[Medium] BUILD-04 — 10 declared dependencies with zero use.** `crates/agent-ui/Cargo.toml`
+- [x] **[Medium] BUILD-04 — 10 declared dependencies with zero use.** `crates/agent-ui/Cargo.toml`
   (`oneterm-core`, `oneterm-theme`, `log`), `crates/session-ui/Cargo.toml` (`anyhow`),
   `crates/settings-ui/Cargo.toml` (`serde`, `serde_json`), `crates/sftp-ui/Cargo.toml` (`serde`, `serde_json`),
   `crates/workspace/Cargo.toml` (`oneterm-theme`, `serde`). `scripts/dependency-graph-policy.json` even
   encodes the unused `agent-ui→core/theme` and `workspace→theme` edges. *Fix:* remove; update the policy
   and `docs/agents/structure.md` §3; consider `cargo machete` in CI.
 
-- [ ] **[Medium] BUILD-05 — Unused workspace deps and a stale allowed-set doc.** `Cargo.toml` l.90 `smol = "2"`,
+- [x] **[Medium] BUILD-05 — Unused workspace deps and a stale allowed-set doc.** `Cargo.toml` l.90 `smol = "2"`,
   l.117 `rust-i18n = "4"` used by no crate; `docs/agents/dependencies.md` §3 lists `tracing`,
   `tracing-subscriber`, `directories`, `toml`, `russh-cryptovec`, `ssh-key` — none exist. *Fix:* delete the
   two deps; rewrite §3.
 
-- [ ] **[Low] BUILD-06 — Direct deps not routed through `[workspace.dependencies]`.** `crates/app/Cargo.toml`
+- [x] **[Low] BUILD-06 — Direct deps not routed through `[workspace.dependencies]`.** `crates/app/Cargo.toml`
   l.71-80, `crates/core/Cargo.toml` l.19, `crates/local-shell/Cargo.toml` l.24-30 (`windows-sys 0.59`
   repeated 3× with diverging features; 0.61 is already in the graph), `crates/terminal-view/Cargo.toml` l.35
   (`itertools`), `crates/theme/Cargo.toml` l.18 (`rust-embed`), local-shell dev `libc`. *Fix:* centralise;
@@ -63,19 +63,19 @@ into the updater.
   + `[patch."https://github.com/zed-industries/alacritty"]` (l.174) still clones upstream on a cold cache.
   *Fix:* `alacritty_terminal = { path = "vendor/alacritty_terminal" }` directly, documenting the base rev.
 
-- [ ] **[Low] BUILD-11 — `publish = false` repeated 18×; no `license` field anywhere.** *Fix:*
+- [x] **[Low] BUILD-11 — `publish = false` repeated 18×; no `license` field anywhere.** *Fix:*
   `publish.workspace = true`, `license.workspace = true`.
 
 ## B. build.rs & scripts
 
-- [ ] **[Medium] BUILD-12 — Updater target repo inferred at build time from `git remote`.**
+- [x] **[Medium] BUILD-12 — Updater target repo inferred at build time from `git remote`.**
   `crates/update/build.rs:16-23` (`infer_git_remote`) — non-hermetic; a fork/mirror build ships an updater
   pointing at that fork; no `rerun-if-changed=.git/config`; `UPDATE_REPOSITORY` may be `""`; and
   `settings-ui/src/about.rs:26` hard-codes a second `GITHUB_REPOSITORY_URL`. *Fix:* hard-code the canonical
   repo constant in `crates/update/src/config.rs`, allow `ONETERM_UPDATE_REPO` env override only; derive the
   About URL from it.
 
-- [ ] **[Medium] BUILD-13 — `VERSION` is read by four build scripts.** `crates/app/build.rs:24-34` (twice),
+- [x] **[Medium] BUILD-13 — `VERSION` is read by four build scripts.** `crates/app/build.rs:24-34` (twice),
   `crates/workspace/build.rs`, `crates/settings-ui/build.rs`, `crates/update/build.rs` (which silently falls
   back to `"0.0.0"` where the others panic). *Fix:* with BUILD-02, delete the three copies and use
   `env!("CARGO_PKG_VERSION")`; keep only `app/build.rs` (resources) and `theme/build.rs`.
@@ -101,19 +101,19 @@ into the updater.
 
 ## C. Vendor forks
 
-- [ ] **[High] BUILD-18 — 46 MB of unused alacritty test recordings are tracked.**
+- [x] **[High] BUILD-18 — 46 MB of unused alacritty test recordings are tracked.**
   `vendor/alacritty_terminal/tests/**` (≈190 files, 46 MB vs 438 KB of `src/`); the crate is `exclude`d so
   these tests never run; `vendor/vte/.cargo-ok`, `.cargo_vcs_info.json`, `Cargo.toml.orig`, `Cargo.lock` are
   also tracked. *Fix:* `VENDOR_PRUNE` list in `vendor/refresh.sh` (delete after fetch, before diff);
   regenerate; commit the removal.
 
-- [ ] **[Medium] BUILD-19 — Only one of three forks is drift-checked in CI.** `ci.yml` runs
+- [x] **[Medium] BUILD-19 — Only one of three forks is drift-checked in CI.** `ci.yml` runs
   `check-ui-fork.py` (hash baseline of `vendor/gpui-component/src/`) only; nothing verifies `vendor/vte` or
   `vendor/alacritty_terminal` against pristine+patches, nor `vendor/gpui-component/{Cargo.toml,build.rs,locales}`
   (patch `0002` is outside the check surface). *Fix:* CI step `bash vendor/refresh.sh --check`; extend
   `check-ui-fork.py` to manifest and `build.rs`.
 
-- [ ] **[Medium] BUILD-20 — Rev-lock docs do not acknowledge the vendoring.** `docs/agents/dependencies.md`
+- [x] **[Medium] BUILD-20 — Rev-lock docs do not acknowledge the vendoring.** `docs/agents/dependencies.md`
   §1/§3 still say the alacritty dep is the Zed fork @ fcf32fe, never mention that it and `vte 0.15.0` are
   vendored/patched; `vendor/README.md` §6 shows `exclude` without gpui-component; `ui-fork-maintenance.md`
   says the check "rejects deltas outside `dock/tab_panel.rs`" (now three modules). *Fix:* add rows + a
@@ -150,7 +150,7 @@ into the updater.
   + `persist-credentials: true` it never uses. *Fix:* `git pull --rebase` before pushing, or make the workflow
   tag-driven only; reduce permissions.
 
-- [ ] **[Medium] BUILD-25 — No `cargo deny`/`cargo audit`, no `cargo doc`, no vendor `--check`, no catalog
+- [x] **[Medium] BUILD-25 — No `cargo deny`/`cargo audit`, no `cargo doc`, no vendor `--check`, no catalog
   validation in CI.** `docs/license-analysis.md` relies on `zlog` (GPL-3.0-only, still in graph:
   `zlog ← ztracing ← sum_tree ← gpui`) being dead-stripped — nothing re-verifies. *Fix:* `cargo-deny` job with
   `deny.toml` (`[licenses]`, `[bans]`), plus the two Python checks.

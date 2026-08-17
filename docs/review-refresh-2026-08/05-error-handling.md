@@ -26,7 +26,7 @@ paths is the one place where a panic can cascade.
   *Fix:* `parking_lot::Mutex` (already in the dependency graph via gpui) or
   `unwrap_or_else(PoisonError::into_inner)`; make rx/tx `AtomicU64`.
 
-- [ ] **[Medium] ERR-03 — Unregistered panel name yields a silent `InvalidPanel`.**
+- [x] **[Medium] ERR-03 — Unregistered panel name yields a silent `InvalidPanel`.**
   `crates/workspace/src/layout/workspace/mod.rs:82-102`: a layout containing a stale name or a feature that
   failed to `init` renders "not registered" text with no log. *Fix:* `log::error!` with the name (see ARCH-08).
 
@@ -36,7 +36,7 @@ paths is the one place where a panic can cascade.
   `ops.rs:339-345`). Policy: user actions must produce a corrective notification. *Fix:* return `Result` to
   the view and `push_notification`.
 
-- [ ] **[Medium] ERR-05 — Persistence quarantine by a non-owner.** `crates/sftp-ui/src/persistence.rs:20-23`
+- [x] **[Medium] ERR-05 — Persistence quarantine by a non-owner.** `crates/sftp-ui/src/persistence.rs:20-23`
   quarantines the whole shared `docks.json` on `InvalidData` — a shell/state-owned document
   ("a crate may mutate only fields it owns"). *Fix:* leave quarantine to `oneterm_state::dock_persistence`.
 
@@ -65,7 +65,7 @@ paths is the one place where a panic can cascade.
 - [ ] **[Low] ERR-11 — Info-level log noise on hot paths:** `workspace/.../mod.rs:341` (every `LayoutChanged`),
   `:358,:378`, `persistence.rs:93` (every debounce save). *Fix:* `debug!`.
 
-- [ ] **[Low] ERR-12 — `manager.rs:281-283` swallows `remove_dir_all` failure** on staging cleanup. *Fix:*
+- [x] **[Low] ERR-12 — `manager.rs:281-283` swallows `remove_dir_all` failure** on staging cleanup. *Fix:*
   `warn` with path.
 
 - [ ] **[Low] ERR-13 — `Events::with_capacity(1024.try_into().unwrap())`** (`local-shell/src/event_loop.rs:230`).

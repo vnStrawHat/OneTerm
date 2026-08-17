@@ -67,7 +67,7 @@ drifted from its source of truth.
   *Fix:* `impl Drop for SshSession { fn drop(&mut self) { let _ = self.listener.pty_close(); /* + sftp */ } }`,
   and treat the closing flag as the sole shutdown signal.
 
-- [ ] **[High] CORR-09 — SFTP `load_dir` has no request generation / backend guard.**
+- [x] **[High] CORR-09 — SFTP `load_dir` has no request generation / backend guard.**
   `crates/sftp-ui/src/panel_ops.rs:43-93`: any in-flight `read_dir` result is applied when it arrives, so fast
   navigation, auto-follow + user navigation, or a tab switch during load produces the *earlier* listing (and
   even rewrites `this.cwd` from the stale result's first entry, `:64-71`). Same for `goto_path`
@@ -86,17 +86,17 @@ drifted from its source of truth.
   awaits `ReadDir/Stat/Rename/Remove/Mkdir` inline, so a slow `read_dir` (up to the 10 s request timeout)
   delays `Cancel`/`Close`. *Fix:* spawn every command into the `JoinSet` (optionally behind a small semaphore).
 
-- [ ] **[Medium] CORR-14 — Concurrent `SshSessionStore::save()` tasks can complete out of order.**
+- [x] **[Medium] CORR-14 — Concurrent `SshSessionStore::save()` tasks can complete out of order.**
   `crates/session-ui/src/session_state.rs:201-208` spawns a detached background write per mutation
   (last-completed-writer wins). *Fix:* single-flight queue (like `settings-ui/src/updates/config.rs`) or
   `update_json_file`.
 
-- [ ] **[Medium] CORR-15 — Update-check completion overwrites concurrent user preference edits.**
+- [x] **[Medium] CORR-15 — Update-check completion overwrites concurrent user preference edits.**
   `crates/settings-ui/src/updates/actions.rs:56-59,118-121` do `*config = next_config` with the pre-check
   config the manager mutated on the background thread; edits made during the check are lost in memory and on
   disk. *Fix:* merge only cache fields back into the entity, or persist via `update_json_file`.
 
-- [ ] **[Medium] CORR-16 — Runtime docks.json corruption disables all layout saves until restart.**
+- [x] **[Medium] CORR-16 — Runtime docks.json corruption disables all layout saves until restart.**
   `crates/state/src/dock_persistence.rs:117-128` parses the existing file inside the transaction; on
   `InvalidData` every `save_state` (`workspace/persistence.rs:99-103`) fails and only logs; quarantine happens
   only in `load_layout` at startup. *Fix:* quarantine and continue from `DockDocument::default()` with a
@@ -153,13 +153,13 @@ drifted from its source of truth.
   and return the wrong adjusted colour; the thread-local map (`:205-212`) is unbounded.
   *Fix:* key on `([u32;4],[u32;4],u32)`; clear when `len() > 4096`.
 
-- [ ] **[Medium] CORR-25 — Legacy X10/X11 mouse encoding emits UTF-8, not raw bytes.**
+- [x] **[Medium] CORR-25 — Legacy X10/X11 mouse encoding emits UTF-8, not raw bytes.**
   `crates/terminal/src/mouse_encode.rs:92-99`: `col_byte as char` into a `String` becomes 2 UTF-8 bytes for
   values ≥ 0x80 (col/row > 95) — that is 1005 encoding, but `TermMode::UTF8_MOUSE` is never checked; test
   `x11_coordinates_above_127` (`:294`) enshrines the wrong wire format. *Fix:* return `Vec<u8>`; raw byte
   unless `UTF8_MOUSE`.
 
-- [ ] **[Medium] CORR-26 — Ctrl-key encoding wrong for non-letters and ignores Alt.**
+- [x] **[Medium] CORR-26 — Ctrl-key encoding wrong for non-letters and ignores Alt.**
   `crates/terminal/src/key_encode.rs:96`: `byte & 0x1f` maps Ctrl+2..7/0/1/9 to garbage instead of
   NUL/ESC/FS/GS/RS/US; Ctrl+`?` → 0x1f instead of 0x7f; Ctrl+Alt+x drops the ESC prefix; `encode_key`
   never returns `None` despite its `Option` contract (l.90). Related: `terminal-view/src/handlers/keyboard.rs:233-242`
@@ -168,16 +168,16 @@ drifted from its source of truth.
   *Fix:* explicit table for `@[\]^_?` and digits per xterm; prefix `0x1b` when `alt`; if
   `mods.control && mods.alt && key_char.is_some()` treat as plain text. Verify on a DE/FR layout.
 
-- [ ] **[Medium] CORR-27 — Zsh PS1 contains stray backslashes.** `crates/core/src/config/shell.rs:294`:
+- [x] **[Medium] CORR-27 — Zsh PS1 contains stray backslashes.** `crates/core/src/config/shell.rs:294`:
   in a normal Rust string `\\\\` is two literal backslashes; the terminal receives `ESC ] 133;A ESC \ \` —
   the second `\` prints and `%{…%}` width is off. *Fix:* `"%{\x1b]133;A\x1b\\%}…"` + exact-bytes test.
 
-- [ ] **[Medium] CORR-28 — Zsh/Bash/Sh kind ignores the requested shell when `$SHELL` differs.**
+- [x] **[Medium] CORR-28 — Zsh/Bash/Sh kind ignores the requested shell when `$SHELL` differs.**
   `crates/core/src/config/shell.rs:245-249`: `ShellKind::Zsh` with `program: None` resolves to `$SHELL`
   (often bash) but still injects the zsh PS1. *Fix:* `find_in_path(name)` first, then `/bin/{name}`, and only
   use `$SHELL` when it matches.
 
-- [ ] **[Medium] CORR-29 — Non-bracketed paste keeps LF.** `crates/terminal/src/paste.rs:65-67`: in
+- [x] **[Medium] CORR-29 — Non-bracketed paste keeps LF.** `crates/terminal/src/paste.rs:65-67`: in
   `PasteMode::Plain` multi-line text is written verbatim; raw-mode apps and cmd/ConPTY expect `\r`
   (alacritty rewrites). *Fix:* rewrite `\r\n`/`\n` → `\r` in Plain mode + test.
 
@@ -186,7 +186,7 @@ drifted from its source of truth.
   clears `SftpPanel::selected`; toolbar Delete/Rename then operate on whatever now sits at that index.
   *Fix:* clear or remap by path in `perform_sort`.
 
-- [ ] **[Medium] CORR-31 — One cancel aborts the whole SFTP batch silently; `Cancelled` can leave items
+- [x] **[Medium] CORR-31 — One cancel aborts the whole SFTP batch silently; `Cancelled` can leave items
   `InProgress`.** `crates/sftp-ui/src/transfer.rs:110` returns after a `-1.0` sentinel or `AppError::Cancelled`
   (`:153-155`, `:447-450`) skipping remaining files without marking them. *Fix:* continue with the next file
   (or mark the rest `Cancelled`); set `Cancelled` before returning.
@@ -327,7 +327,7 @@ drifted from its source of truth.
 - [ ] **[Low] CORR-67 — `SshSessionStore` follow-cwd poll runs `purge_closed()` and ticks every 500 ms even
   when follow is disabled** (`sftp-ui/src/panel.rs:153-175`). *Fix:* stop the timer when not needed.
 
-- [ ] **[Low] CORR-68 — `apply_check_result` leaves a stale `candidate` on `Disabled`**
+- [x] **[Low] CORR-68 — `apply_check_result` leaves a stale `candidate` on `Disabled`**
   (`settings-ui/src/updates/actions.rs:152`). *Fix:* clear.
 
 - [ ] **[Low] CORR-69 — `ManualInstall` outcome only visible in About status text**
