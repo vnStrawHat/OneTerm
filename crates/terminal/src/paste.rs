@@ -1,11 +1,15 @@
-//! Bracketed paste encoding with embedded-marker sanitization.
+//! Bracketed paste encoding with ESC sanitization.
 //!
 //! Before Phase 1, `paste()` used `format!("\x1b[200~{}\x1b[201~", text)` which
 //! allowed pasted content containing `\x1b[201~` to terminate bracketed-paste
 //! mode early, causing the remainder to be interpreted as keystrokes/commands.
 //!
-//! The fix is a pure, tested function that strips embedded paste markers from
-//! the payload before wrapping it in the outer bracketed-paste delimiters.
+//! The fix strips embedded paste markers and — following alacritty — every
+//! remaining ESC (`\x1b`) byte from the payload before wrapping it in the outer
+//! bracketed-paste delimiters. Removing ESC itself (not only marker sequences)
+//! makes it impossible for nested or overlapping fragments to reassemble into
+//! `\x1b[201~` after filtering. `\x03` is also removed because some shells
+//! incorrectly terminate bracketed paste on receiving it.
 
 /// Default maximum paste size (1 MiB). Larger pastes are rejected to prevent
 /// unbounded allocation from terminal-controlled content.
@@ -50,12 +54,12 @@ pub enum PasteResult {
 /// Encode text for pasting into the terminal.
 ///
 /// - [`PasteMode::Bracketed`]: wraps the text in `ESC[200~…ESC[201~` after
-///   stripping any embedded start/end markers.
+///   stripping embedded markers and every remaining ESC / `\x03` byte.
 /// - [`PasteMode::Plain`]: passes the text through as-is.
 ///
-/// Embedded `ESC[200~` and `ESC[201~` sequences are **removed** from the
-/// payload so that pasted content cannot terminate bracketed-paste mode
-/// early or re-enter it spuriously.
+/// Stripping ESC (not just the marker sequences) guarantees the payload cannot
+/// contain `ESC[201~` in any form, so pasted content cannot terminate
+/// bracketed-paste mode early or re-enter it spuriously.
 pub fn encode_paste(text: &str, mode: PasteMode, policy: &PastePolicy) -> PasteResult {
     // Enforce size cap.
     if policy.max_bytes > 0 && text.len() > policy.max_bytes {
@@ -66,8 +70,8 @@ pub fn encode_paste(text: &str, mode: PasteMode, policy: &PastePolicy) -> PasteR
         return PasteResult::Ok(text.as_bytes().to_vec());
     }
 
-    // Strip embedded paste markers from the payload.
-    let sanitized = strip_paste_markers(text);
+    // Strip ESC / ETX so the payload cannot forge a paste terminator.
+    let sanitized = strip_paste_escapes(text);
 
     let mut result = Vec::with_capacity(sanitized.len() + b"\x1b[200~".len() + b"\x1b[201~".len());
     result.extend_from_slice(b"\x1b[200~");
@@ -76,12 +80,16 @@ pub fn encode_paste(text: &str, mode: PasteMode, policy: &PastePolicy) -> PasteR
     PasteResult::Ok(result)
 }
 
-/// Remove all occurrences of `\x1b[200~` and `\x1b[201~` from the text.
+/// Remove embedded paste markers, then every remaining ESC (`\x1b`) and ETX
+/// (`\x03`) byte from the text.
 ///
-/// This prevents pasted content from breaking out of bracketed-paste mode.
-/// The function scans for the ESC byte (`\x1b`) and checks for the full
-/// marker sequences, handling split and partial markers correctly.
-fn strip_paste_markers(text: &str) -> String {
+/// Whole `ESC[200~` / `ESC[201~` sequences are dropped in full so pasted text
+/// that merely contains a marker loses only the marker. Every other ESC is
+/// dropped as well (alacritty's filtering): a marker-only stripper is
+/// bypassable by nesting (`ESC[20` + `ESC[201~` + `1~` collapses to `ESC[201~`
+/// after one pass), whereas removing ESC itself is provably safe because no
+/// ESC can survive into the payload.
+fn strip_paste_escapes(text: &str) -> String {
     const START_MARKER: &[u8] = b"\x1b[200~";
     const END_MARKER: &[u8] = b"\x1b[201~";
 
@@ -90,27 +98,28 @@ fn strip_paste_markers(text: &str) -> String {
     let mut i = 0;
 
     while i < bytes.len() {
-        if bytes[i] == 0x1b {
-            // Check for start or end marker.
-            if bytes[i..].starts_with(START_MARKER) {
-                i += START_MARKER.len();
-                continue;
+        match bytes[i] {
+            0x1b => {
+                if bytes[i..].starts_with(START_MARKER) {
+                    i += START_MARKER.len();
+                } else if bytes[i..].starts_with(END_MARKER) {
+                    i += END_MARKER.len();
+                } else {
+                    i += 1;
+                }
             }
-            if bytes[i..].starts_with(END_MARKER) {
-                i += END_MARKER.len();
-                continue;
+            0x03 => i += 1,
+            byte => {
+                result.push(byte);
+                i += 1;
             }
         }
-        result.push(bytes[i]);
-        i += 1;
     }
 
-    // Safety: we only removed valid UTF-8 subsequences (ASCII markers) from
-    // valid UTF-8 input, so the result is still valid UTF-8.
-    String::from_utf8(result).unwrap_or_else(|e| {
-        // Fallback: lossy conversion should never be needed.
-        String::from_utf8_lossy(&e.into_bytes()).into_owned()
-    })
+    // Only ASCII bytes were removed from valid UTF-8 input, so the result is
+    // still valid UTF-8; the lossy fallback is unreachable in practice.
+    String::from_utf8(result)
+        .unwrap_or_else(|e| String::from_utf8_lossy(&e.into_bytes()).into_owned())
 }
 
 #[cfg(test)]
@@ -169,15 +178,37 @@ mod tests {
     }
 
     #[test]
-    fn split_end_marker_not_stripped() {
-        // A partial marker like "\x1b[201" (without ~) should NOT be stripped —
-        // it is not a complete paste terminator.
+    fn nested_end_marker_cannot_reassemble() {
+        // SEC-01: a single-pass marker stripper would turn this into a bare
+        // `ESC[201~` (strip the inner marker, the halves join). ESC removal
+        // leaves no way to reassemble a terminator.
+        let text = "\x1b[20\x1b[201~1~";
+        let result = encode_paste(text, PasteMode::Bracketed, &PastePolicy::default());
+        let PasteResult::Ok(bytes) = result else {
+            panic!("expected Ok");
+        };
+        assert_eq!(bytes, b"\x1b[200~[201~\x1b[201~".to_vec());
+        let payload = &bytes[b"\x1b[200~".len()..bytes.len() - b"\x1b[201~".len()];
+        assert!(!payload.contains(&0x1b), "payload must not contain ESC");
+    }
+
+    #[test]
+    fn partial_marker_loses_esc() {
+        // Even a partial marker has its ESC removed, since any ESC could be
+        // combined with later bytes to form a terminator.
         let text = "text\x1b[201x";
         let result = encode_paste(text, PasteMode::Bracketed, &PastePolicy::default());
         assert_eq!(
             result,
-            PasteResult::Ok(b"\x1b[200~text\x1b[201x\x1b[201~".to_vec())
+            PasteResult::Ok(b"\x1b[200~text[201x\x1b[201~".to_vec())
         );
+    }
+
+    #[test]
+    fn etx_is_stripped_in_bracketed_mode() {
+        let text = "a\x03b";
+        let result = encode_paste(text, PasteMode::Bracketed, &PastePolicy::default());
+        assert_eq!(result, PasteResult::Ok(b"\x1b[200~ab\x1b[201~".to_vec()));
     }
 
     #[test]
@@ -248,13 +279,14 @@ mod tests {
     }
 
     #[test]
-    fn esc_byte_without_marker_preserved() {
-        // A bare ESC not followed by a paste marker should be preserved.
+    fn esc_byte_without_marker_is_stripped() {
+        // Every ESC is removed in bracketed mode (alacritty behaviour); the
+        // remaining bytes are passed through unchanged.
         let text = "text\x1b[0mcolor";
         let result = encode_paste(text, PasteMode::Bracketed, &PastePolicy::default());
         assert_eq!(
             result,
-            PasteResult::Ok(b"\x1b[200~text\x1b[0mcolor\x1b[201~".to_vec())
+            PasteResult::Ok(b"\x1b[200~text[0mcolor\x1b[201~".to_vec())
         );
     }
 }
