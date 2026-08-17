@@ -34,7 +34,7 @@ When the server rejects every attempted method, the error names the methods the 
 
 It must never contain a password, private-key contents, or private-key passphrase. Passwords and passphrases are wrapped in `SecretString`, omitted from debug output, cleared from the corresponding UI field after submission, and dropped after authentication. The existing explicit unknown-host-key confirmation may retain one short-lived zeroizing config clone for the approved retry.
 
-Existing session documents with no authentication metadata load as Password. The added fields are backward-compatible and do not change the current document schema version.
+Existing session documents with no authentication metadata load as Password. The added fields are backward-compatible; the document schema itself is versioned separately (v2 adds a stable `id` per session, see `crates/session-ui/src/session_state.rs`).
 
 ## Architecture
 
