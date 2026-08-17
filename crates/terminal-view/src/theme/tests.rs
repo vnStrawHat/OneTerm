@@ -5,7 +5,7 @@ mod tests {
     use oneterm_terminal::TerminalPalette;
 
     use super::super::contrast::contrast_ratio;
-    use super::super::palette::{ANSI_16, rgba_from_vte};
+    use super::super::palette::{ANSI_16, rgba_from_vte, vte_from_rgba};
     use super::super::*;
 
     fn pal() -> TerminalPalette {

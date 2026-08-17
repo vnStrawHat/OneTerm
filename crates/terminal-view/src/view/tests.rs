@@ -28,6 +28,7 @@ fn completion_overlay_shows_when_typing_d_at_cmd_prompt(cx: &mut TestAppContext)
     let (visible, texts) = view.read_with(cx, |v, _| {
         let c = v
             .completion
+            .controller
             .as_ref()
             .expect("controller must be initialized");
         (
@@ -68,7 +69,9 @@ fn completion_resumes_after_initial_non_prompt_render(cx: &mut TestAppContext) {
 
     // Frame 1: empty grid / no prompt → not visible (in_prompt_region → false).
     view.update(cx, |v, cx| v.update_completion(cx));
-    let visible1 = view.read_with(cx, |v, _| v.completion.as_ref().unwrap().is_visible());
+    let visible1 = view.read_with(cx, |v, _| {
+        v.completion.controller.as_ref().unwrap().is_visible()
+    });
     assert!(!visible1, "empty prompt must not show an overlay");
 
     // Frame 2: the prompt is drawn and the user typed `d`.
@@ -76,7 +79,9 @@ fn completion_resumes_after_initial_non_prompt_render(cx: &mut TestAppContext) {
     probe.set_text(prompt);
     probe.set_cursor(0, prompt.chars().count());
     view.update(cx, |v, cx| v.update_completion(cx));
-    let visible2 = view.read_with(cx, |v, _| v.completion.as_ref().unwrap().is_visible());
+    let visible2 = view.read_with(cx, |v, _| {
+        v.completion.controller.as_ref().unwrap().is_visible()
+    });
     assert!(
         visible2,
         "overlay must resume after an initial non-prompt render (pre-grid gate bug)"

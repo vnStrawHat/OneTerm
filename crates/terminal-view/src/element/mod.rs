@@ -13,5 +13,5 @@ pub(crate) mod paint;
 pub(crate) mod prepaint;
 mod terminal_element;
 
-pub(crate) use super::layout::{GridMetrics, RowLayoutCache};
+pub(crate) use super::layout::{GridMetrics, RenderCache};
 pub(crate) use terminal_element::TerminalElement;

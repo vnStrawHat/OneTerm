@@ -1,16 +1,17 @@
 //! Terminal theme: maps the gpui-component `Theme` → `core::TerminalPalette`,
-//! resolves `Color` → `gpui::Hsla`, and `ensure_minimum_contrast`.
+//! resolves `Color` → `gpui::Hsla`, applies config / OSC colour overrides, and
+//! `ensure_minimum_contrast`.
 //!
 //! Pure utilities (no GPUI Element).
 
-pub mod contrast;
-pub mod palette;
-pub mod resolve;
+mod contrast;
+mod palette;
 mod terminal_theme;
 #[cfg(test)]
 mod tests;
 
-pub use contrast::ensure_minimum_contrast;
-pub use palette::{hsla_from_vte, vte_from_rgba};
-pub use resolve::resolve_cell_color;
-pub use terminal_theme::{TerminalTheme, build_terminal_theme};
+pub(crate) use contrast::ensure_minimum_contrast;
+pub(crate) use palette::resolve_cell_color;
+pub(crate) use terminal_theme::{
+    TerminalTheme, apply_color_overrides, apply_dynamic_colors, build_terminal_theme,
+};

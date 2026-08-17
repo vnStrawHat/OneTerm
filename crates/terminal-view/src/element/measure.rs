@@ -1,8 +1,5 @@
 //! Font / cell measurement helpers for `TerminalElement`.
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use gpui::{App, Font, Pixels, Window, px};
 
 /// Metrics measured from font + config.
@@ -69,16 +66,13 @@ pub(crate) struct GridSizing {
     pub line_height: Pixels,
 }
 
-/// Resize the session to the measured bounds.
-pub(crate) fn resize_session(
-    session: &gpui::Entity<Box<dyn oneterm_terminal::TerminalSession>>,
+/// Compute the `(rows, cols)` grid that fits `bounds_size` after the gutter and
+/// padding, at device-pixel granularity (never below 1×1).
+pub(crate) fn grid_size_for(
     bounds_size: gpui::Size<Pixels>,
     sizing: &GridSizing,
-    last_grid_size: &Rc<RefCell<Option<(u16, u16)>>>,
-    window: &mut Window,
-    cx: &mut App,
+    scale_factor: f32,
 ) -> (u16, u16) {
-    let scale_factor = window.scale_factor().max(1.0);
     let grid_width = (f32::from(bounds_size.width)
         - f32::from(sizing.gutter_width)
         - f32::from(sizing.pad_left)
@@ -93,14 +87,80 @@ pub(crate) fn resize_session(
     let avail_height_device = (avail_height * scale_factor).floor().max(0.0);
     let line_height_device = f32::from(sizing.line_height) * scale_factor;
     let rows = ((avail_height_device / line_height_device).floor() as u16).max(1);
+    (rows, cols)
+}
 
-    if last_grid_size.borrow().as_ref() != Some(&(rows, cols)) {
+/// Resize the session to the measured bounds. `last_grid_size` is the size
+/// pushed on the previous frame — the resize is only delivered when it changes.
+pub(crate) fn resize_session(
+    session: &gpui::Entity<Box<dyn oneterm_terminal::TerminalSession>>,
+    bounds_size: gpui::Size<Pixels>,
+    sizing: &GridSizing,
+    last_grid_size: &mut Option<(u16, u16)>,
+    window: &mut Window,
+    cx: &mut App,
+) -> (u16, u16) {
+    let scale_factor = window.scale_factor().max(1.0);
+    let (rows, cols) = grid_size_for(bounds_size, sizing, scale_factor);
+    if *last_grid_size != Some((rows, cols)) {
         session.update(cx, |s, _| {
             if let Err(error) = s.resize(rows, cols) {
                 log::warn!("terminal resize delivery failed: {error}");
             }
         });
-        *last_grid_size.borrow_mut() = Some((rows, cols));
+        *last_grid_size = Some((rows, cols));
     }
     (rows, cols)
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{px, size};
+
+    use super::{GridSizing, grid_size_for};
+
+    fn sizing() -> GridSizing {
+        GridSizing {
+            gutter_width: px(60.0),
+            pad_left: px(4.0),
+            pad_right: px(4.0),
+            pad_top: px(2.0),
+            pad_bottom: px(2.0),
+            cell_width: px(8.0),
+            line_height: px(16.0),
+        }
+    }
+
+    #[test]
+    fn grid_size_subtracts_gutter_and_padding() {
+        // 800 − 60 − 8 = 732 px → 91 columns; 400 − 4 = 396 px → 24 rows.
+        assert_eq!(
+            grid_size_for(size(px(800.0), px(400.0)), &sizing(), 1.0),
+            (24, 91)
+        );
+    }
+
+    #[test]
+    fn grid_size_never_drops_below_one_cell() {
+        assert_eq!(
+            grid_size_for(size(px(10.0), px(5.0)), &sizing(), 1.0),
+            (1, 1)
+        );
+    }
+
+    #[test]
+    fn grid_size_rounds_at_device_pixels() {
+        // At 1.5× scale, 100.4 px of grid width is 150.6 device px → floor 150 →
+        // 150 / 12 = 12.5 → 12 columns.
+        let s = GridSizing {
+            gutter_width: px(0.0),
+            pad_left: px(0.0),
+            pad_right: px(0.0),
+            pad_top: px(0.0),
+            pad_bottom: px(0.0),
+            cell_width: px(8.0),
+            line_height: px(16.0),
+        };
+        assert_eq!(grid_size_for(size(px(100.4), px(48.0)), &s, 1.5), (3, 12));
+    }
 }

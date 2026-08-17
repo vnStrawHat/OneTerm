@@ -7,14 +7,16 @@
 //!    output text. Must scan cells to detect.
 
 mod detect;
+mod hover;
 mod mask;
 
-pub use detect::detect_url_at;
-pub use mask::url_masks_wrapped;
+pub(crate) use detect::detect_url_at;
+pub(crate) use hover::UrlHover;
+pub(crate) use mask::url_masks_wrapped;
 
 /// A URL detected at a position in the terminal.
 #[derive(Clone, Debug, PartialEq)]
-pub struct DetectedUrl {
+pub(crate) struct DetectedUrl {
     /// URL string (may add an `https://` prefix when it is `www.`).
     pub url: String,
     /// Display row (0-based from top of viewport).

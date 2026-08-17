@@ -7,27 +7,29 @@ use gpui::{App, Entity, InteractiveElement as _, ScrollDelta, ScrollWheelEvent};
 
 use oneterm_terminal::TerminalSession;
 
-use super::super::element::GridMetrics;
+use super::super::element::RenderCache;
 use super::super::view::LocalTerminalView;
+use super::super::view::grid::pixel_to_grid;
 use oneterm_settings::TerminalSettings;
 
 /// Attach the scroll wheel handler.
 pub(crate) fn attach_scroll(
     div: gpui::Stateful<gpui::Div>,
     session: Entity<Box<dyn TerminalSession>>,
-    metrics: Rc<RefCell<GridMetrics>>,
+    render_cache: Rc<RefCell<RenderCache>>,
     view: Entity<LocalTerminalView>,
 ) -> gpui::Stateful<gpui::Div> {
     div.on_scroll_wheel({
         let s = session.clone();
-        let m = metrics.clone();
+        let cache = render_cache.clone();
         let view = view.clone();
         move |e: &ScrollWheelEvent, _w, cx: &mut App| {
-            let (row, col) = match LocalTerminalView::pixel_to_grid(&m.borrow(), e.position) {
+            let metrics = cache.borrow().metrics;
+            let (row, col) = match pixel_to_grid(&metrics, e.position) {
                 Some(rc) => rc,
                 None => return,
             };
-            let line_h = f32::from(m.borrow().line_height);
+            let line_h = f32::from(metrics.line_height);
             let delta_y = match e.delta {
                 ScrollDelta::Pixels(p) => {
                     if line_h > 0.0 {
@@ -50,7 +52,7 @@ pub(crate) fn attach_scroll(
                 s.update(cx, |s, _| s.wheel(delta_y as f64, row, col, mods));
                 // Re-render + update scrollbar visibility.
                 let _ = view.update(cx, |v, cx| {
-                    v.last_scroll_time = Some(std::time::Instant::now());
+                    v.scrollbar.mark_scrolled();
                     cx.notify();
                 });
             }

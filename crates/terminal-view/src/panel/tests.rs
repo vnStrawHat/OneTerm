@@ -13,9 +13,18 @@ use oneterm_terminal::{
     PtySize, SessionFactory, TerminalSession, test_support::FakeTerminalSession,
 };
 
-use crate::panel::TerminalPanel;
+use crate::panel::{PanelSpec, TerminalPanel};
 use crate::space::{CloseOutcome, SplitDir};
 use crate::view::LocalTerminalView;
+
+/// A `PanelSpec` wrapping an existing session without duplication metadata.
+fn session_spec(session: Box<dyn TerminalSession>, title: &str) -> PanelSpec {
+    PanelSpec::Session {
+        session,
+        title: title.to_string(),
+        duplicate_config: None,
+    }
+}
 
 #[gpui::test]
 fn terminal_panel_disables_multi_tab_inner_padding(cx: &mut TestAppContext) {
@@ -25,7 +34,7 @@ fn terminal_panel_disables_multi_tab_inner_padding(cx: &mut TestAppContext) {
 
     let (session, _) = FakeTerminalSession::boxed(24, 80, "");
     let (panel, cx) = cx.add_window_view(move |window, cx| {
-        TerminalPanel::from_session(session, "Terminal", window, cx)
+        TerminalPanel::from_spec(session_spec(session, "Terminal"), window, cx)
     });
     let cx: &mut VisualTestContext = cx;
 
@@ -40,7 +49,7 @@ fn filling_space_one_does_not_renumber_space_two(cx: &mut TestAppContext) {
 
     let (session, _) = FakeTerminalSession::boxed(24, 80, "source");
     let (panel, cx) = cx.add_window_view(move |window, cx| {
-        TerminalPanel::from_session(session, "Terminal", window, cx)
+        TerminalPanel::from_spec(session_spec(session, "Terminal"), window, cx)
     });
     let cx: &mut VisualTestContext = cx;
 
@@ -74,7 +83,7 @@ fn phase0_close_last_space_calls_session_close(cx: &mut TestAppContext) {
 
     let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
     let (panel, cx) = cx.add_window_view(move |window, cx| {
-        TerminalPanel::from_session(session, "Phase0", window, cx)
+        TerminalPanel::from_spec(session_spec(session, "Phase0"), window, cx)
     });
     let cx: &mut VisualTestContext = cx;
 
@@ -113,8 +122,9 @@ fn phase0_close_non_last_space_closes_removed_session(cx: &mut TestAppContext) {
 
     // First session — will be split and then closed.
     let (session_a, probe_a) = FakeTerminalSession::boxed(24, 80, "session A");
-    let (panel, cx) = cx
-        .add_window_view(move |window, cx| TerminalPanel::from_session(session_a, "A", window, cx));
+    let (panel, cx) = cx.add_window_view(move |window, cx| {
+        TerminalPanel::from_spec(session_spec(session_a, "A"), window, cx)
+    });
     let cx: &mut VisualTestContext = cx;
 
     cx.run_until_parked();
@@ -163,7 +173,7 @@ fn phase1_shutdown_cancels_tasks_and_closes_session(cx: &mut TestAppContext) {
 
     let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
     let (panel, cx) = cx.add_window_view(move |window, cx| {
-        TerminalPanel::from_session(session, "Phase1", window, cx)
+        TerminalPanel::from_spec(session_spec(session, "Phase1"), window, cx)
     });
     let cx: &mut VisualTestContext = cx;
 
@@ -214,7 +224,7 @@ fn phase1_shutdown_is_idempotent(cx: &mut TestAppContext) {
 
     let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
     let (panel, cx) = cx.add_window_view(move |window, cx| {
-        TerminalPanel::from_session(session, "Phase1", window, cx)
+        TerminalPanel::from_spec(session_spec(session, "Phase1"), window, cx)
     });
     let cx: &mut VisualTestContext = cx;
 
@@ -316,10 +326,12 @@ fn duplicate_action_dispatches_to_the_active_space(cx: &mut TestAppContext) {
         let panel = cx.new(|cx| {
             let mut inactive_config = LocalShellConfig::default();
             inactive_config.program = Some("inactive-shell".into());
-            TerminalPanel::from_session_with_duplicate_config(
-                session,
-                "Source",
-                Some(SessionDuplicateConfig::Local(inactive_config)),
+            TerminalPanel::from_spec(
+                PanelSpec::Session {
+                    session,
+                    title: "Source".to_string(),
+                    duplicate_config: Some(SessionDuplicateConfig::Local(inactive_config)),
+                },
                 window,
                 cx,
             )
@@ -389,13 +401,13 @@ fn tab_drop_onto_occupied_space_keeps_source_terminal(cx: &mut TestAppContext) {
 
     let (target_session, _) = FakeTerminalSession::boxed(24, 80, "target");
     let (target, cx) = cx.add_window_view(move |window, cx| {
-        TerminalPanel::from_session(target_session, "Target", window, cx)
+        TerminalPanel::from_spec(session_spec(target_session, "Target"), window, cx)
     });
     let cx: &mut VisualTestContext = cx;
 
     let (source_session, source_probe) = FakeTerminalSession::boxed(24, 80, "source");
     let source = cx.update(|window, cx| {
-        cx.new(|cx| TerminalPanel::from_session(source_session, "Source", window, cx))
+        cx.new(|cx| TerminalPanel::from_spec(session_spec(source_session, "Source"), window, cx))
     });
     cx.run_until_parked();
 
@@ -464,7 +476,7 @@ fn exited_behind_output_batch_marks_agent_ended(cx: &mut TestAppContext) {
 
     let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
     let (panel, cx) = cx.add_window_view(move |window, cx| {
-        TerminalPanel::from_session(session, "Agent", window, cx)
+        TerminalPanel::from_spec(session_spec(session, "Agent"), window, cx)
     });
     let cx: &mut VisualTestContext = cx;
     cx.run_until_parked();

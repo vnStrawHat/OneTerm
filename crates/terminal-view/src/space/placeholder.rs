@@ -17,8 +17,8 @@ use gpui_component::{
 
 use oneterm_theme::icon::AppIcon;
 
+use super::super::handlers::menu::split_items;
 use super::super::panel::TerminalPanel;
-use super::SplitDir;
 use super::drag::DragTerminalTab;
 use super::node::{SpaceId, SpaceLeaf};
 
@@ -69,18 +69,6 @@ pub(crate) fn render_placeholder(
     attach_empty_menu(base, panel, id).into_any_element()
 }
 
-/// A "Split <dir>" menu item that dispatches to the panel.
-fn split_item(
-    label: &'static str,
-    dir: SplitDir,
-    panel: WeakEntity<TerminalPanel>,
-    space_id: SpaceId,
-) -> PopupMenuItem {
-    PopupMenuItem::new(label).on_click(move |_, window, cx| {
-        let _ = panel.update(cx, |p, cx| p.split_active_at(space_id, dir, window, cx));
-    })
-}
-
 /// Attach the empty-Space context menu to `el`.
 fn attach_empty_menu<E>(
     el: E,
@@ -97,38 +85,15 @@ where
                 .map(|p| p.read(cx).leaf_count() > 1)
                 .unwrap_or(false);
 
-            let mut menu = menu
+            let menu = menu
                 // New Terminal Here — spawn a local shell into this empty Space.
                 .item(PopupMenuItem::new("New Terminal Here").on_click({
                     let panel = panel.clone();
                     move |_, window, cx| {
                         let _ = panel.update(cx, |p, cx| p.new_terminal_here(space_id, window, cx));
                     }
-                }))
-                .item(split_item(
-                    "Split Right",
-                    SplitDir::Right,
-                    panel.clone(),
-                    space_id,
-                ))
-                .item(split_item(
-                    "Split Left",
-                    SplitDir::Left,
-                    panel.clone(),
-                    space_id,
-                ))
-                .item(split_item(
-                    "Split Up",
-                    SplitDir::Up,
-                    panel.clone(),
-                    space_id,
-                ))
-                .item(split_item(
-                    "Split Down",
-                    SplitDir::Down,
-                    panel.clone(),
-                    space_id,
-                ))
+                }));
+            let mut menu = split_items(menu, panel.clone(), space_id, None)
                 .separator()
                 // Close Terminal Tab — closes the whole tab (all Spaces).
                 .item(

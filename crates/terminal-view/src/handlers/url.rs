@@ -7,24 +7,26 @@ use gpui::{App, Entity, InteractiveElement as _, ModifiersChangedEvent};
 
 use oneterm_terminal::TerminalSession;
 
-use super::super::element::GridMetrics;
-use super::super::url::{DetectedUrl, detect_url_at};
+use super::super::element::RenderCache;
+use super::super::url::detect_url_at;
 use super::super::view::LocalTerminalView;
+use super::super::view::grid::pixel_to_grid;
 
-/// Update `hovered_url` based on the current position.
+/// Update the view's URL hover state based on the current position.
 ///
 /// URLs are always detected on hover (no Ctrl required). The `ctrl` parameter
-/// is still tracked in `ctrl_held` so the view knows when a click would open
-/// the URL, but it no longer gates the highlight.
+/// is still tracked so the view knows when a click would open the URL, but it
+/// no longer gates the highlight.
 pub(crate) fn update_hovered_url(
     session: &Entity<Box<dyn TerminalSession>>,
-    metrics: &Rc<RefCell<GridMetrics>>,
+    render_cache: &Rc<RefCell<RenderCache>>,
     view: &Entity<LocalTerminalView>,
     position: gpui::Point<gpui::Pixels>,
     ctrl: bool,
     cx: &mut App,
 ) {
-    let (row, col) = match LocalTerminalView::pixel_to_grid(&metrics.borrow(), position) {
+    let metrics = render_cache.borrow().metrics;
+    let (row, col) = match pixel_to_grid(&metrics, position) {
         Some(rc) => rc,
         None => return,
     };
@@ -43,12 +45,7 @@ pub(crate) fn update_hovered_url(
         u
     });
     let _ = view.update(cx, |v, cx| {
-        v.last_mouse_pos = Some(position);
-        let changed = v.ctrl_held != ctrl
-            || v.hovered_url.as_ref().map(url_identity) != new_url.as_ref().map(url_identity);
-        if changed {
-            v.ctrl_held = ctrl;
-            v.hovered_url = new_url;
+        if v.url_hover.set(position, new_url, ctrl) {
             cx.notify();
         }
     });
@@ -58,23 +55,19 @@ pub(crate) fn update_hovered_url(
 pub(crate) fn attach_modifiers_changed(
     div: gpui::Stateful<gpui::Div>,
     session: Entity<Box<dyn TerminalSession>>,
-    metrics: Rc<RefCell<GridMetrics>>,
+    render_cache: Rc<RefCell<RenderCache>>,
     view: Entity<LocalTerminalView>,
 ) -> gpui::Stateful<gpui::Div> {
     div.on_modifiers_changed({
         let s = session.clone();
-        let m = metrics.clone();
+        let cache = render_cache.clone();
         let view = view.clone();
         move |e: &ModifiersChangedEvent, _w, cx: &mut App| {
-            let pos = match view.read(cx).last_mouse_pos {
+            let pos = match view.read(cx).url_hover.last_mouse_pos() {
                 Some(p) => p,
                 None => return,
             };
-            update_hovered_url(&s, &m, &view, pos, e.modifiers.control, cx);
+            update_hovered_url(&s, &cache, &view, pos, e.modifiers.control, cx);
         }
     })
-}
-
-fn url_identity(u: &DetectedUrl) -> (&String, usize, usize, usize) {
-    (&u.url, u.row, u.start_col, u.end_col)
 }

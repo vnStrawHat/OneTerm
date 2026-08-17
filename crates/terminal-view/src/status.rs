@@ -14,7 +14,7 @@ use oneterm_state::active_terminal::ActiveTerminalMetricsProvider;
 use oneterm_state::dock_util::collect_tab_panels;
 use oneterm_terminal::NetStats;
 
-use crate::panel::TerminalPanel;
+use crate::panel::{PanelSpec, TerminalPanel};
 
 /// Breadcrumb label (cwd + foreground process) of the active terminal panel.
 fn active_breadcrumb(dock_area: &Entity<DockArea>, cx: &App) -> Option<String> {
@@ -47,7 +47,7 @@ fn active_net_stats(dock_area: &Entity<DockArea>, cx: &App) -> Option<NetStats> 
 }
 
 /// Contribute the active-terminal metric extractors to `AppServices`.
-pub fn register_status_metrics(cx: &mut App) {
+pub(crate) fn register_status_metrics(cx: &mut App) {
     AppServicesBuilder::pending(cx)
         .and_then(|builder| {
             builder.active_terminal_metrics(ActiveTerminalMetricsProvider {
@@ -67,7 +67,7 @@ pub fn new_terminal_with_shell_cmd(
     window: &mut Window,
     cx: &mut App,
 ) -> Arc<dyn PanelView> {
-    Arc::new(TerminalPanel::new_with_shell_entity(shell, window, cx))
+    Arc::new(TerminalPanel::open(PanelSpec::Shell(shell), window, cx))
 }
 
 /// Toggle the in-terminal search bar on the active terminal panel.
@@ -81,13 +81,7 @@ pub fn find_in_active_terminal(dock_area: &Entity<DockArea>, window: &mut Window
                 if let Ok(entity) = panel.view().downcast::<TerminalPanel>() {
                     entity.update(cx, |tp, cx| {
                         if let Some(view) = tp.active_view() {
-                            view.update(cx, |v, cx| {
-                                if v.search_active {
-                                    v.close_search(cx);
-                                } else {
-                                    v.open_search(window, cx);
-                                }
-                            });
+                            view.update(cx, |v, cx| v.toggle_search(window, cx));
                         }
                     });
                     return;
