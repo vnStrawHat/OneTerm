@@ -7,14 +7,19 @@ use gpui::SharedString;
 
 use gpui_component::tree::TreeItem;
 
-use crate::session_state::SshSession;
+use crate::session_state::{SshSession, SshSessionEntry, SshSessionId};
 
 use super::panel::{GROUP_ID_PREFIX, SESSION_ID_PREFIX};
 
-/// Parse the store index from a TreeItem id (`session:{ix}`).
-pub(crate) fn parse_session_id(id: &SharedString) -> Option<usize> {
+/// Parse the session id from a TreeItem id (`session:{id}`).
+pub(crate) fn parse_session_id(id: &SharedString) -> Option<SshSessionId> {
     id.strip_prefix(SESSION_ID_PREFIX)
-        .and_then(|s| s.parse::<usize>().ok())
+        .and_then(SshSessionId::parse)
+}
+
+/// The TreeItem id of a session leaf.
+fn session_item_id(id: SshSessionId) -> String {
+    format!("{SESSION_ID_PREFIX}{id}")
 }
 
 /// Parse the group name from a TreeItem id (`group:{name}`).
@@ -52,34 +57,30 @@ pub(crate) fn session_matches(s: &SshSession, q: &str) -> bool {
 /// - Non-empty `query` → show only matching sessions (label/host/user/group).
 /// - Items without a group → root (on top), sorted by label.
 /// - Items with a group → a folder per group name (sorted), sorted by label within the folder.
-pub(crate) fn build_tree_items(sessions: &[SshSession], query: &str) -> Vec<TreeItem> {
+pub(crate) fn build_tree_items(sessions: &[SshSessionEntry], query: &str) -> Vec<TreeItem> {
     let q = query.trim().to_lowercase();
 
     // 1. Filter sessions if there is a query.
-    let filtered: Vec<(usize, &SshSession)> = if q.is_empty() {
-        sessions.iter().enumerate().collect()
-    } else {
-        sessions
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| session_matches(s, &q))
-            .collect()
-    };
+    let filtered: Vec<(SshSessionId, &SshSession)> = sessions
+        .iter()
+        .filter(|entry| q.is_empty() || session_matches(&entry.session, &q))
+        .map(|entry| (entry.id, &entry.session))
+        .collect();
 
     // 2. Split into ungrouped and grouped.
-    let mut ungrouped: Vec<(usize, &SshSession)> = Vec::new();
-    let mut groups: BTreeMap<String, Vec<(usize, &SshSession)>> = BTreeMap::new();
+    let mut ungrouped: Vec<(SshSessionId, &SshSession)> = Vec::new();
+    let mut groups: BTreeMap<String, Vec<(SshSessionId, &SshSession)>> = BTreeMap::new();
 
-    for (ix, s) in filtered {
+    for (id, s) in filtered {
         match &s.group {
             Some(g) if !g.trim().is_empty() => {
                 groups
                     .entry(g.trim().to_string())
                     .or_default()
-                    .push((ix, s));
+                    .push((id, s));
             }
             _ => {
-                ungrouped.push((ix, s));
+                ungrouped.push((id, s));
             }
         }
     }
@@ -91,11 +92,8 @@ pub(crate) fn build_tree_items(sessions: &[SshSession], query: &str) -> Vec<Tree
     let mut items = Vec::new();
 
     // Ungrouped sessions at the root.
-    for (ix, s) in &ungrouped {
-        items.push(TreeItem::new(
-            format!("{SESSION_ID_PREFIX}{ix}"),
-            s.label.clone(),
-        ));
+    for (id, s) in &ungrouped {
+        items.push(TreeItem::new(session_item_id(*id), s.label.clone()));
     }
 
     // Groups.
@@ -103,7 +101,7 @@ pub(crate) fn build_tree_items(sessions: &[SshSession], query: &str) -> Vec<Tree
         group_sessions.sort_by_key(|a| a.1.label.to_lowercase());
         let children = group_sessions
             .iter()
-            .map(|(ix, s)| TreeItem::new(format!("{SESSION_ID_PREFIX}{ix}"), s.label.clone()))
+            .map(|(id, s)| TreeItem::new(session_item_id(*id), s.label.clone()))
             .collect::<Vec<_>>();
         items.push(
             TreeItem::new(format!("{GROUP_ID_PREFIX}{group}"), group)
@@ -113,4 +111,104 @@ pub(crate) fn build_tree_items(sessions: &[SshSession], query: &str) -> Vec<Tree
     }
 
     items
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session_state::SshAuthPreference;
+
+    fn entry(id: u64, label: &str, group: Option<&str>) -> SshSessionEntry {
+        let raw = serde_json::json!({
+            "id": id,
+            "label": label,
+            "host": format!("{label}.example.test"),
+            "username": if id % 2 == 0 { Some("even") } else { None },
+            "group": group,
+        });
+        let entry: SshSessionEntry = serde_json::from_value(raw).unwrap();
+        assert_eq!(entry.session.auth_method, SshAuthPreference::Password);
+        entry
+    }
+
+    fn labels(items: &[TreeItem]) -> Vec<(String, String, Vec<String>)> {
+        items
+            .iter()
+            .map(|item| {
+                (
+                    item.id.to_string(),
+                    item.label.to_string(),
+                    item.children
+                        .iter()
+                        .map(|child| child.id.to_string())
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    /// TEST-19: ungrouped first (sorted by label), then groups sorted by name
+    /// with their members sorted by label; ids are the stable session ids.
+    #[test]
+    fn tree_groups_and_sorts_by_stable_id() {
+        let sessions = vec![
+            entry(10, "zulu", None),
+            entry(11, "Alpha", None),
+            entry(12, "web-2", Some("prod")),
+            entry(13, "web-1", Some("prod")),
+            entry(14, "db", Some("dev")),
+            entry(15, "blank-group", Some("  ")),
+        ];
+        let items = build_tree_items(&sessions, "");
+        assert_eq!(
+            labels(&items),
+            vec![
+                ("session:11".into(), "Alpha".into(), vec![]),
+                ("session:15".into(), "blank-group".into(), vec![]),
+                ("session:10".into(), "zulu".into(), vec![]),
+                ("group:dev".into(), "dev".into(), vec!["session:14".into()]),
+                (
+                    "group:prod".into(),
+                    "prod".into(),
+                    vec!["session:13".into(), "session:12".into()]
+                ),
+            ]
+        );
+        assert_eq!(
+            parse_session_id(&SharedString::from("session:13")),
+            Some(SshSessionId::parse("13").unwrap())
+        );
+        assert_eq!(parse_session_id(&SharedString::from("group:prod")), None);
+        assert_eq!(
+            parse_group_id(&SharedString::from("group:prod")).as_deref(),
+            Some("prod")
+        );
+    }
+
+    /// The filter matches label, host, username and group, case-insensitively.
+    #[test]
+    fn tree_filter_matches_label_host_user_and_group() {
+        let sessions = vec![
+            entry(1, "Alpha", None),
+            entry(2, "beta", Some("Infra")),
+            entry(3, "gamma", None),
+        ];
+        let ids = |query: &str| -> Vec<String> {
+            build_tree_items(&sessions, query)
+                .iter()
+                .flat_map(|item| {
+                    if item.children.is_empty() {
+                        vec![item.id.to_string()]
+                    } else {
+                        item.children.iter().map(|c| c.id.to_string()).collect()
+                    }
+                })
+                .collect()
+        };
+        assert_eq!(ids("ALPHA"), vec!["session:1"]);
+        assert_eq!(ids("gamma.example"), vec!["session:3"]);
+        assert_eq!(ids("even"), vec!["session:2"]);
+        assert_eq!(ids("infra"), vec!["session:2"]);
+        assert!(ids("nothing").is_empty());
+    }
 }

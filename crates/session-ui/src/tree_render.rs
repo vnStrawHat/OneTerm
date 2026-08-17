@@ -83,8 +83,8 @@ impl SessionPanel {
                         })
                 } else {
                     // Session leaf.
-                    let store_ix = parse_session_id(&item.id);
-                    let session = store_ix.and_then(|i| store.read(cx).sessions().get(i));
+                    let session_id = parse_session_id(&item.id);
+                    let session = session_id.and_then(|id| store.read(cx).get(id));
                     let subtitle = session.map(|s| session_subtitle(s)).unwrap_or_default();
                     let color = session
                         .and_then(|s| s.color.as_deref())
@@ -135,11 +135,9 @@ impl SessionPanel {
                             let id = item.id.clone();
                             move |event, window, cx| {
                                 if event.click_count() == 2 {
-                                    if let Some(store_ix) = parse_session_id(&id) {
-                                        if let Some(s) =
-                                            store.read(cx).sessions().get(store_ix).cloned()
-                                        {
-                                            open_connect_dialog(s, store_ix, window, cx);
+                                    if let Some(session_id) = parse_session_id(&id) {
+                                        if let Some(s) = store.read(cx).get(session_id).cloned() {
+                                            open_connect_dialog(s, session_id, window, cx);
                                         }
                                     }
                                 }
@@ -192,7 +190,7 @@ impl SessionPanel {
                         )
                 } else {
                     // Session leaf → context menu: New Session, Open, Delete, Property.
-                    let Some(store_ix) = parse_session_id(&entry.item().id) else {
+                    let Some(session_id) = parse_session_id(&entry.item().id) else {
                         return menu;
                     };
                     let focus = focus.clone();
@@ -206,11 +204,10 @@ impl SessionPanel {
                                 .on_click(move |_, window, cx| {
                                     if let Some(s) = SshSessionStore::global(cx)
                                         .read(cx)
-                                        .sessions()
-                                        .get(store_ix)
+                                        .get(session_id)
                                         .cloned()
                                     {
-                                        open_connect_dialog(s, store_ix, window, cx);
+                                        open_connect_dialog(s, session_id, window, cx);
                                     }
                                 }),
                         )
@@ -220,7 +217,7 @@ impl SessionPanel {
                                 .action(Box::new(DeleteSession))
                                 .on_click(move |_, window, cx| {
                                     SshSessionStore::global(cx).update(cx, |s, cx| {
-                                        s.remove(store_ix, cx);
+                                        s.remove(session_id, cx);
                                     });
                                     window.push_notification(
                                         notify(
@@ -239,11 +236,10 @@ impl SessionPanel {
                                 .on_click(move |_, window, cx| {
                                     if let Some(s) = SshSessionStore::global(cx)
                                         .read(cx)
-                                        .sessions()
-                                        .get(store_ix)
+                                        .get(session_id)
                                         .cloned()
                                     {
-                                        open_session_dialog(window, cx, Some((store_ix, s)));
+                                        open_session_dialog(window, cx, Some((session_id, s)));
                                     }
                                 }),
                         )

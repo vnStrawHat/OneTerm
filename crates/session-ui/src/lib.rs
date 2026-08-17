@@ -17,7 +17,9 @@ mod tree_render;
 
 pub use panel::SessionPanel;
 pub use quick_connect_dialog::{open_duplicate_ssh_dialog, open_quick_connect_dialog};
-pub use session_state::{SshAuthPreference, SshSession, SshSessionStore};
+pub use session_state::{
+    SshAuthPreference, SshSession, SshSessionEntry, SshSessionId, SshSessionStore,
+};
 
 use gpui::App;
 use gpui_component::dock::register_panel;
