@@ -15,6 +15,7 @@ on:
       - "scripts/**"
       - "crates/**"
       - "vendor/**"
+      - ".github/**"
   pull_request:
     paths:
       - "Cargo.toml"
@@ -26,6 +27,7 @@ on:
       - "scripts/**"
       - "crates/**"
       - "vendor/**"
+      - ".github/**"
 
 permissions:
   contents: read
@@ -83,6 +85,24 @@ jobs:
       - name: Test workspace
         run: cargo test --workspace
 
+
+  windows-quality:
+    # Windows is the primary platform, so lint and run the whole workspace
+    # (including the GPUI-based UI crates) there as well.
+    name: Windows workspace quality gate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable, 2026-07-23
+        with:
+          components: clippy
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 tag, 2026-07-23
+      - name: Lint workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test workspace
+        run: cargo test --workspace
 
   cross-platform-tests:
     name: Cross-platform backend tests (${{ matrix.os }})
