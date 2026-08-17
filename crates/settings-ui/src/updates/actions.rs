@@ -29,12 +29,12 @@ pub(crate) fn start_auto_check(window: &mut Window, cx: &mut App) {
     log::info!("Starting automatic update check for {repository}.");
     window
         .spawn(cx, async move |cx| {
-            let (result, next_config) = cx
+            let (result, cache) = cx
                 .background_executor()
                 .spawn(async move {
                     let mut manager = UpdateManager::with_repository(repository, config);
                     let result = manager.check_now();
-                    (result, manager.config().clone())
+                    (result, manager.check_cache())
                 })
                 .await;
             match &result {
@@ -53,11 +53,10 @@ pub(crate) fn start_auto_check(window: &mut Window, cx: &mut App) {
                     log::warn!("Automatic update check failed: {error}");
                 }
             }
-            let _ = config_entity.update(cx, |config, cx| {
-                *config = next_config;
-                cx.notify();
-            });
             if let Err(error) = cx.update(|window, cx| {
+                // Merge only the checker-owned cache fields: preferences edited
+                // while the check ran must survive (CORR-15).
+                super::config::apply_check_cache(cx, cache);
                 let mut snapshot = None;
                 let _ = state.update(cx, |state, cx| {
                     apply_check_result(state, result);
@@ -91,12 +90,12 @@ pub(crate) fn check_now(window: &mut Window, cx: &mut App) {
     log::info!("Starting manual update check for {repository}.");
     window
         .spawn(cx, async move |cx| {
-            let (result, next_config) = cx
+            let (result, cache) = cx
                 .background_executor()
                 .spawn(async move {
                     let mut manager = UpdateManager::with_repository(repository, config);
                     let result = manager.refresh_now();
-                    (result, manager.config().clone())
+                    (result, manager.check_cache())
                 })
                 .await;
 
@@ -115,11 +114,10 @@ pub(crate) fn check_now(window: &mut Window, cx: &mut App) {
                 }
             }
 
-            let _ = config_entity.update(cx, |config, cx| {
-                *config = next_config;
-                cx.notify();
-            });
             if let Err(error) = cx.update(|window, cx| {
+                // Merge only the checker-owned cache fields: preferences edited
+                // while the check ran must survive (CORR-15).
+                super::config::apply_check_cache(cx, cache);
                 let mut snapshot = None;
                 let _ = state.update(cx, |state, cx| {
                     apply_check_result(state, result);
