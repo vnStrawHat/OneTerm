@@ -3,13 +3,14 @@
 //!
 //! Both the row context menu and the empty-area context menu are built here.
 //! Each menu item carries a `.action()` (for keyboard-shortcut display) and an
-//! `.on_click()` (which sets `pending_action` on [`SftpPanel`]).
+//! `.on_click()` that runs the matching [`SftpPanel`] method right away —
+//! `PopupMenuItem::on_click` receives the `&mut Window`, so no work is deferred
+//! into the render pass.
 
 use gpui::{App, ClickEvent, Window};
 use gpui_component::menu::{PopupMenu, PopupMenuItem};
 
 use super::panel::SftpPanel;
-use super::types::PendingAction;
 
 /// Build the context menu for a file/folder entry at `row_ix`.
 ///
@@ -27,18 +28,20 @@ pub(super) fn build_entry_menu(
         menu.item(
             PopupMenuItem::new("Open")
                 .action(Box::new(oneterm_actions::SftpOpen))
-                .on_click(on_click_pending(panel.clone(), PendingAction::Open(row_ix))),
+                .on_click(on_click_panel(panel.clone(), move |this, _, cx| {
+                    this.navigate_into(row_ix, cx)
+                })),
         )
         .item(
             PopupMenuItem::new("Download")
                 .action(Box::new(oneterm_actions::SftpDownload))
-                .on_click(on_click_pending(panel.clone(), PendingAction::Download)),
+                .on_click(on_click_panel(panel.clone(), SftpPanel::do_download)),
         )
     } else {
         menu.item(
             PopupMenuItem::new("Download")
                 .action(Box::new(oneterm_actions::SftpDownload))
-                .on_click(on_click_pending(panel.clone(), PendingAction::Download)),
+                .on_click(on_click_panel(panel.clone(), SftpPanel::do_download)),
         )
     };
 
@@ -47,41 +50,47 @@ pub(super) fn build_entry_menu(
         .item(
             PopupMenuItem::new("Rename")
                 .action(Box::new(oneterm_actions::SftpRename))
-                .on_click(on_click_pending(panel.clone(), PendingAction::Rename)),
+                .on_click(on_click_panel(panel.clone(), SftpPanel::do_rename)),
         )
         .item(
             PopupMenuItem::new("Delete")
                 .action(Box::new(oneterm_actions::SftpDelete))
-                .on_click(on_click_pending(panel.clone(), PendingAction::Delete)),
+                .on_click(on_click_panel(panel.clone(), SftpPanel::do_delete)),
         )
         // Properties.
         .separator()
         .item(
             PopupMenuItem::new("Properties")
                 .action(Box::new(oneterm_actions::SftpProperties))
-                .on_click(on_click_pending(panel.clone(), PendingAction::Properties)),
+                .on_click(on_click_panel(panel.clone(), SftpPanel::do_properties)),
         )
         // Upload + New Folder + Refresh.
         .separator()
         .item(
             PopupMenuItem::new("Upload Files")
                 .action(Box::new(oneterm_actions::SftpUploadFiles))
-                .on_click(on_click_pending(panel.clone(), PendingAction::UploadFiles)),
+                .on_click(on_click_panel(panel.clone(), |this, window, cx| {
+                    this.do_upload(false, window, cx)
+                })),
         )
         .item(
             PopupMenuItem::new("Upload Folder")
                 .action(Box::new(oneterm_actions::SftpUploadFolder))
-                .on_click(on_click_pending(panel.clone(), PendingAction::UploadFolder)),
+                .on_click(on_click_panel(panel.clone(), |this, window, cx| {
+                    this.do_upload(true, window, cx)
+                })),
         )
         .item(
             PopupMenuItem::new("New Folder")
                 .action(Box::new(oneterm_actions::SftpNewFolder))
-                .on_click(on_click_pending(panel.clone(), PendingAction::NewFolder)),
+                .on_click(on_click_panel(panel.clone(), SftpPanel::do_new_folder)),
         )
         .item(
             PopupMenuItem::new("Refresh")
                 .action(Box::new(oneterm_actions::SftpRefresh))
-                .on_click(on_click_pending(panel.clone(), PendingAction::Refresh)),
+                .on_click(on_click_panel(panel.clone(), |this, _, cx| {
+                    this.refresh(cx)
+                })),
         )
 }
 
@@ -97,38 +106,42 @@ pub(super) fn build_empty_menu(
         .item(
             PopupMenuItem::new("Upload Files")
                 .action(Box::new(oneterm_actions::SftpUploadFiles))
-                .on_click(on_click_pending(panel.clone(), PendingAction::UploadFiles)),
+                .on_click(on_click_panel(panel.clone(), |this, window, cx| {
+                    this.do_upload(false, window, cx)
+                })),
         )
         .item(
             PopupMenuItem::new("Upload Folder")
                 .action(Box::new(oneterm_actions::SftpUploadFolder))
-                .on_click(on_click_pending(panel.clone(), PendingAction::UploadFolder)),
+                .on_click(on_click_panel(panel.clone(), |this, window, cx| {
+                    this.do_upload(true, window, cx)
+                })),
         )
         .item(
             PopupMenuItem::new("New Folder")
                 .action(Box::new(oneterm_actions::SftpNewFolder))
-                .on_click(on_click_pending(panel.clone(), PendingAction::NewFolder)),
+                .on_click(on_click_panel(panel.clone(), SftpPanel::do_new_folder)),
         )
         .separator()
         .item(
             PopupMenuItem::new("Refresh")
                 .action(Box::new(oneterm_actions::SftpRefresh))
-                .on_click(on_click_pending(panel.clone(), PendingAction::Refresh)),
+                .on_click(on_click_panel(panel.clone(), |this, _, cx| {
+                    this.refresh(cx)
+                })),
         );
     menu
 }
 
-/// Create an `on_click` closure that sets `pending_action` on the panel.
-fn on_click_pending(
+/// Create an `on_click` closure that runs `action` on the panel (if it is
+/// still alive) with the window the click arrived on.
+pub(super) fn on_click_panel(
     panel: gpui::WeakEntity<SftpPanel>,
-    action: PendingAction,
+    action: impl Fn(&mut SftpPanel, &mut Window, &mut gpui::Context<SftpPanel>) + 'static,
 ) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
-    move |_, _, cx| {
+    move |_, window, cx| {
         if let Some(panel) = panel.upgrade() {
-            panel.update(cx, |this, cx| {
-                this.pending_action = Some(action);
-                cx.notify();
-            });
+            panel.update(cx, |this, cx| action(this, window, cx));
         }
     }
 }

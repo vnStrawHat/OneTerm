@@ -30,10 +30,10 @@ use crate::{AppError, Result};
 /// - runs of `/` are collapsed into one,
 /// - a trailing `/` is dropped unless the path is the root `/`.
 ///
-/// The empty path is allowed and means "unset" (a browser with no directory
+/// The empty path (also the `Default`) is allowed and means "unset" (a browser with no directory
 /// loaded yet). Relative paths such as `.` are allowed; the backend resolves
 /// them against the server's default directory.
-#[derive(Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Hash, serde::Serialize)]
 #[serde(transparent)]
 pub struct RemotePath(String);
 
@@ -152,7 +152,8 @@ impl From<String> for RemotePath {
 
 // ── File entry for UI rendering ──────────────────────────────
 
-/// A single entry in a directory (file or folder).
+/// Metadata of one remote file or folder — a directory-listing row and the
+/// result of `stat` alike (the properties dialog shows the same fields).
 #[derive(Debug, Clone)]
 pub struct FileEntry {
     pub name: String,
@@ -168,23 +169,6 @@ pub struct FileEntry {
     /// Owner name (resolved from /etc/passwd). None if it cannot be resolved.
     pub owner: Option<String>,
     /// Group name (resolved from /etc/group). None if it cannot be resolved.
-    pub group: Option<String>,
-}
-
-/// File/folder metadata — for the detail dialog.
-#[derive(Debug, Clone)]
-pub struct FileStat {
-    pub name: String,
-    pub path: RemotePath,
-    pub is_dir: bool,
-    pub is_symlink: bool,
-    pub size: u64,
-    pub modified: Option<SystemTime>,
-    pub accessed: Option<SystemTime>,
-    pub permissions: u32,
-    pub uid: Option<u32>,
-    pub gid: Option<u32>,
-    pub owner: Option<String>,
     pub group: Option<String>,
 }
 
@@ -265,8 +249,8 @@ pub trait SftpBackend: Send + Sync + 'static {
     /// Read a directory — returns the list of entries.
     fn read_dir(&self, path: RemotePath) -> SftpFuture<'_, Vec<FileEntry>>;
 
-    /// Get detailed metadata.
-    fn stat(&self, path: RemotePath) -> SftpFuture<'_, FileStat>;
+    /// Get detailed metadata for one path (follows symlinks).
+    fn stat(&self, path: RemotePath) -> SftpFuture<'_, FileEntry>;
 
     /// Rename a file/folder.
     fn rename(&self, from: RemotePath, to: RemotePath) -> SftpFuture<'_, ()>;

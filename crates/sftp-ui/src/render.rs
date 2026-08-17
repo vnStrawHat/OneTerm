@@ -22,36 +22,23 @@ use gpui_component::{
 use oneterm_theme::icon::AppIcon;
 
 use super::panel::SftpPanel;
-use super::types::{PendingAction, SortColumn};
+use super::table_delegate_menu::on_click_panel;
+use super::types::SortColumn;
 
 impl Render for SftpPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Execute pending action from context menu.
-        if let Some(action) = self.pending_action.take() {
-            log::debug!("SftpPanel: executing pending action: {action:?}");
-            match action {
-                PendingAction::Open(idx) => self.navigate_into(idx, cx),
-                PendingAction::Download => self.do_download(window, cx),
-                PendingAction::Rename => self.do_rename(window, cx),
-                PendingAction::Delete => self.do_delete(window, cx),
-                PendingAction::Properties => self.do_properties(window, cx),
-                PendingAction::UploadFiles => self.do_upload(false, window, cx),
-                PendingAction::UploadFolder => self.do_upload(true, window, cx),
-                PendingAction::NewFolder => self.do_new_folder(window, cx),
-                PendingAction::Refresh => self.refresh(cx),
-            }
-        }
-
-        if self.sftp.is_none() {
+        if self.sftp().is_none() {
             return self.render_no_connection(cx).into_any_element();
         }
 
         // Sync the path input value with cwd (only when the input is not focused).
-        let cwd_display = self.cwd.to_string();
-        let path_focused = self.path_input.read(cx).focus_handle(cx).is_focused(window);
-        let path_value = self.path_input.read(cx).value().to_string();
+        // This is a projection of state into the input widget, not an action.
+        let cwd_display = self.browser().cwd().to_string();
+        let path_input = self.path_input().clone();
+        let path_focused = path_input.read(cx).focus_handle(cx).is_focused(window);
+        let path_value = path_input.read(cx).value().to_string();
         if !path_focused && path_value != cwd_display {
-            self.path_input.update(cx, |state, cx| {
+            path_input.update(cx, |state, cx| {
                 state.set_value(cwd_display, window, cx);
             });
         }
@@ -61,7 +48,7 @@ impl Render for SftpPanel {
         v_flex()
             .id("sftp-panel")
             .size_full()
-            .track_focus(&self.focus_handle)
+            .track_focus(self.panel_focus_handle())
             // SFTP context-menu action handlers — also fired by global key bindings.
             .on_action(cx.listener(Self::on_action_sftp_open))
             .on_action(cx.listener(Self::on_action_sftp_download))
@@ -86,7 +73,7 @@ impl SftpPanel {
         div()
             .id("sftp-panel")
             .size_full()
-            .track_focus(&self.focus_handle)
+            .track_focus(self.panel_focus_handle())
             .flex()
             .items_center()
             .justify_center()
@@ -107,16 +94,21 @@ impl SftpPanel {
         // - Focused (no error) → do NOT override, so Input.focused_border(cx)
         //   sets border_color = theme.ring (focus highlight)
         // - Default → theme.border
-        let path_focused = self.path_input.read(cx).focus_handle(cx).is_focused(window);
-        let show_custom_border = self.path_error || !path_focused;
-        let path_border = if self.path_error {
+        let path_focused = self
+            .path_input()
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window);
+        let path_error = self.browser().path_error();
+        let show_custom_border = path_error || !path_focused;
+        let path_border = if path_error {
             theme.danger
         } else {
             theme.border
         };
 
         // "Sync to terminal cwd" button state — read the terminal's live cwd.
-        let terminal_cwd = self.terminal_cwd();
+        let terminal_cwd = self.follow().terminal_cwd();
         let sync_enabled = terminal_cwd.is_some();
         let sync_tooltip = match &terminal_cwd {
             Some(p) => format!("Go to terminal's current directory: {p}"),
@@ -126,8 +118,9 @@ impl SftpPanel {
 
         // Build "..." menu — toolbar actions + Columns config.
         let panel = cx.entity();
+        let panel_weak = panel.downgrade();
         let col_configs = self
-            .table
+            .table()
             .read(cx)
             .delegate()
             .col_configs
@@ -135,7 +128,7 @@ impl SftpPanel {
             .map(|c| (c.col, c.label.to_string(), c.visible))
             .collect::<Vec<_>>();
 
-        let follow_terminal_cwd = self.follow_terminal_cwd;
+        let follow_terminal_cwd = self.follow().enabled();
 
         let more_btn = Button::new("sftp-more")
             .icon(Icon::new(IconName::EllipsisVertical).small())
@@ -146,93 +139,41 @@ impl SftpPanel {
                     .item(
                         PopupMenuItem::new("New Folder")
                             .icon(Icon::new(IconName::Plus))
-                            .on_click({
-                                let panel = panel.clone();
-                                move |_, _, cx| {
-                                    panel.update(cx, |this, cx| {
-                                        this.pending_action = Some(PendingAction::NewFolder);
-                                        cx.notify();
-                                    });
-                                }
-                            }),
+                            .on_click(on_click_panel(panel_weak.clone(), SftpPanel::do_new_folder)),
                     )
                     .item(
                         PopupMenuItem::new("Upload Files")
                             .icon(Icon::new(IconName::ArrowUp))
-                            .on_click({
-                                let panel = panel.clone();
-                                move |_, _, cx| {
-                                    panel.update(cx, |this, cx| {
-                                        this.pending_action = Some(PendingAction::UploadFiles);
-                                        cx.notify();
-                                    });
-                                }
-                            }),
+                            .on_click(on_click_panel(panel_weak.clone(), |this, window, cx| {
+                                this.do_upload(false, window, cx)
+                            })),
                     )
                     .item(
                         PopupMenuItem::new("Upload Folder")
                             .icon(Icon::new(IconName::ArrowUp))
-                            .on_click({
-                                let panel = panel.clone();
-                                move |_, _, cx| {
-                                    panel.update(cx, |this, cx| {
-                                        this.pending_action = Some(PendingAction::UploadFolder);
-                                        cx.notify();
-                                    });
-                                }
-                            }),
+                            .on_click(on_click_panel(panel_weak.clone(), |this, window, cx| {
+                                this.do_upload(true, window, cx)
+                            })),
                     )
                     .item(
                         PopupMenuItem::new("Download")
                             .icon(Icon::new(IconName::ArrowDown))
-                            .on_click({
-                                let panel = panel.clone();
-                                move |_, _, cx| {
-                                    panel.update(cx, |this, cx| {
-                                        this.pending_action = Some(PendingAction::Download);
-                                        cx.notify();
-                                    });
-                                }
-                            }),
+                            .on_click(on_click_panel(panel_weak.clone(), SftpPanel::do_download)),
                     )
                     .item(
                         PopupMenuItem::new("Rename")
                             .icon(Icon::new(IconName::Replace))
-                            .on_click({
-                                let panel = panel.clone();
-                                move |_, _, cx| {
-                                    panel.update(cx, |this, cx| {
-                                        this.pending_action = Some(PendingAction::Rename);
-                                        cx.notify();
-                                    });
-                                }
-                            }),
+                            .on_click(on_click_panel(panel_weak.clone(), SftpPanel::do_rename)),
                     )
                     .item(
                         PopupMenuItem::new("Delete")
                             .icon(Icon::new(IconName::Delete))
-                            .on_click({
-                                let panel = panel.clone();
-                                move |_, _, cx| {
-                                    panel.update(cx, |this, cx| {
-                                        this.pending_action = Some(PendingAction::Delete);
-                                        cx.notify();
-                                    });
-                                }
-                            }),
+                            .on_click(on_click_panel(panel_weak.clone(), SftpPanel::do_delete)),
                     )
                     .item(
                         PopupMenuItem::new("Properties")
                             .icon(Icon::new(IconName::Info))
-                            .on_click({
-                                let panel = panel.clone();
-                                move |_, _, cx| {
-                                    panel.update(cx, |this, cx| {
-                                        this.pending_action = Some(PendingAction::Properties);
-                                        cx.notify();
-                                    });
-                                }
-                            }),
+                            .on_click(on_click_panel(panel_weak.clone(), SftpPanel::do_properties)),
                     )
                     .separator()
                     .item({
@@ -250,7 +191,7 @@ impl SftpPanel {
                                     .on_click(move |checked: &bool, _, cx| {
                                         panel.update(cx, |this, cx| {
                                             // Sync the flag to the checkbox's new state.
-                                            if this.follow_terminal_cwd != *checked {
+                                            if this.follow().enabled() != *checked {
                                                 this.toggle_follow_terminal_cwd(cx);
                                             }
                                         });
@@ -295,7 +236,7 @@ impl SftpPanel {
             .border_color(theme.border)
             // Path input — flex-1, border-bottom only, transparent bg.
             .child(
-                Input::new(&self.path_input)
+                Input::new(self.path_input())
                     .flex_1()
                     .border_b_1()
                     .border_t_0()
@@ -348,7 +289,7 @@ impl SftpPanel {
     fn render_file_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
-        if let Some(err) = &self.error {
+        if let Some(err) = self.browser().error() {
             return div()
                 .flex_1()
                 .flex()
@@ -365,7 +306,7 @@ impl SftpPanel {
             .flex_1()
             .min_h_0()
             .child(
-                DataTable::new(&self.table)
+                DataTable::new(self.table())
                     .bordered(false)
                     .scrollbar_visible(true, true)
                     .small(),
@@ -379,7 +320,7 @@ impl SftpPanel {
                         "SftpPanel: on_drop — {} external path(s) dropped",
                         paths.len()
                     );
-                    if this.sftp.is_some() {
+                    if this.sftp().is_some() {
                         this.do_upload_paths(paths, cx);
                     } else {
                         log::warn!("SftpPanel: on_drop — no SFTP connection, ignoring");

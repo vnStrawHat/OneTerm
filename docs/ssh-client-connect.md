@@ -1,6 +1,33 @@
 # SSH Client Connect Design — OneTerm
 
 > **Status:** Historical design record. For current crate ownership and paths, see [`docs/architecture.md`](architecture.md). For the accepted password and private-key authentication behavior, see [`docs/ssh-authentication.md`](ssh-authentication.md).
+>
+> **Current state (review refresh 2026-08, Phase 2).** The shipped code in
+> `crates/session-ui/` differs from the sketches below in three ways:
+>
+> - **Sessions are addressed by a stable id, not a `Vec` index.** `ssh_session.json`
+>   is schema v2: `{ "schema_version": 2, "next_session_id": N, "sessions": [{ "id": 1, … }] }`.
+>   `SshSessionStore` exposes `sessions() -> &[SshSessionEntry { id, session }]`,
+>   `get(id)`, `add(session) -> id`, `update(id, session)`, `remove(id)`; tree item ids
+>   are `session:{id}`; `open_connect_dialog(session, id, …)` and
+>   `open_session_dialog(…, Some((id, session)))` capture the id, so a session removed
+>   or reordered while a dialog is open is never retargeted. Loading a v0 (bare array)
+>   or v1 file assigns ids by position and re-saves the file as v2; a v2 file whose rows
+>   lack or repeat an `id` is repaired the same way. No field is dropped
+>   (`crates/session-ui/src/session_state.rs`, fixtures under
+>   `crates/session-ui/tests/fixtures/persistence/`).
+> - **One `user[@host[:port]]` parser** (`common::parse_user_host_port`, used by the
+>   connect and quick-connect dialogs) with an explicit policy: `user` alone leaves
+>   host/port to the caller's defaults; IPv6 hosts are `[addr]`, `[addr]:port` or a
+>   bare address with several colons (no port); an invalid port (`:abc`, `:0`,
+>   `:70000`), an empty user (`@host`) or an empty host (`user@`) is rejected with a
+>   corrective notification — never a silent default, never folded into the host name.
+>   `common::parse_port` applies the same `1..=65535` rule to the Port fields; an empty
+>   Port field means 22. In quick-connect the typed Host / Port fields win over the parts
+>   parsed from the Username field.
+> - **Dialogs share `oneterm_state::form_dialog::FormDialog`** (title, content builder,
+>   Cancel + confirm footer, Enter submits, Escape/Cancel hook) and `labelled_field`;
+>   the connect dialogs plug their stateful `ConnectButton` in via `confirm_element`.
 
 > Design document for the SSH connect feature: click an item in the SSH Session list →
 > open an SSH session to the target server, with a credential-entry dialog when needed.

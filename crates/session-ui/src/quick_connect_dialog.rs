@@ -13,14 +13,12 @@ use std::sync::{
 };
 
 use gpui::{
-    App, AppContext, ClickEvent, IntoElement, ParentElement as _, Styled, Window, div,
-    prelude::FluentBuilder as _, px,
+    App, AppContext, IntoElement, ParentElement as _, Styled, Window, div,
+    prelude::FluentBuilder as _,
 };
 use gpui_component::{
     WindowExt as _,
-    button::Button,
     checkbox::Checkbox,
-    dialog::{DialogButtonProps, DialogFooter},
     input::{Input, InputState},
     notification::NotificationType,
 };
@@ -29,11 +27,12 @@ use oneterm_core::{
     ConnectionCancellation, HostKeyPolicy, SshConfig, SshDuplicateAuth, SshDuplicateConfig,
 };
 use oneterm_state::commands::SshDuplicateCompletion;
+use oneterm_state::form_dialog::{FieldRequirement, FormDialog, labelled_field};
 use oneterm_state::notif_ext::notify;
 
 use super::auth_form::SshAuthForm;
 use super::common::{
-    ConnectButton, FieldRequirement, connect_ssh_session, defer_initial_focus_once, field,
+    ConnectButton, connect_ssh_session, defer_initial_focus_once, parse_port, parse_user_host_port,
 };
 use crate::session_state::{SshAuthPreference, SshSession, SshSessionStore};
 
@@ -169,8 +168,8 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
     let connection_cancellation: Rc<RefCell<Option<ConnectionCancellation>>> =
         Rc::new(RefCell::new(None));
 
-    // ── Shared connect logic ───────────────────────────────────────────
-    let connect_logic: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool> = Rc::new({
+    // ── Shared connect logic (Connect button + keyboard Enter) ──
+    let connect_logic: Rc<dyn Fn(&mut Window, &mut App) -> bool> = Rc::new({
         let host_state = host_state.clone();
         let port_state = port_state.clone();
         let username_state = username_state.clone();
@@ -180,7 +179,7 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
         let connecting = connecting.clone();
         let initial_cwd = initial_cwd.clone();
         let completion = completion.clone();
-        move |_, window, cx| {
+        move |window, cx| {
             if connecting.load(Ordering::Relaxed) {
                 return false;
             }
@@ -188,51 +187,13 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
             let port_field = port_state.read(cx).value().trim().to_string();
             let username_raw = username_state.read(cx).value().trim().to_string();
 
-            // Parse "user@host:port" format from the username field.
-            // If the username contains '@', split into user + host[:port].
-            let (username, parsed_host, parsed_port) =
-                if let Some((user, rest)) = username_raw.split_once('@') {
-                    let (host, port) = if let Some((h, p)) = rest.rsplit_once(':') {
-                        if let Ok(p) = p.parse::<u16>() {
-                            (h.to_string(), Some(p))
-                        } else {
-                            (rest.to_string(), None)
-                        }
-                    } else {
-                        (rest.to_string(), None)
-                    };
-                    (user.to_string(), Some(host), port)
-                } else {
-                    (username_raw, None, None)
-                };
-
-            // Use parsed host if the host field is empty.
-            let host = if !host_field.is_empty() {
-                host_field
-            } else if let Some(h) = parsed_host {
-                h
-            } else {
-                window.push_notification(
-                    notify(NotificationType::Warning, "Host is required.", cx),
-                    cx,
-                );
-                return false;
+            let target = match resolve_target(&username_raw, &host_field, &port_field) {
+                Ok(target) => target,
+                Err(message) => {
+                    window.push_notification(notify(NotificationType::Warning, message, cx), cx);
+                    return false;
+                }
             };
-
-            // Use parsed port if the port field is empty.
-            let port: u16 = if !port_field.is_empty() {
-                port_field.parse().unwrap_or(SshSession::DEFAULT_PORT)
-            } else {
-                parsed_port.unwrap_or(SshSession::DEFAULT_PORT)
-            };
-
-            if username.is_empty() {
-                window.push_notification(
-                    notify(NotificationType::Warning, "Username is required.", cx),
-                    cx,
-                );
-                return false;
-            }
 
             let auth = match auth_form.take_auth(window, cx) {
                 Ok(auth) => auth,
@@ -244,12 +205,11 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
 
             // Optionally save non-secret connection metadata to the SSH session store.
             if save_session.get() {
-                let label = format!("{}@{}:{}", username, host, port);
                 let session = SshSession {
-                    label,
-                    host: host.clone(),
-                    port,
-                    username: Some(username.clone()),
+                    label: target.label(),
+                    host: target.host.clone(),
+                    port: target.port,
+                    username: Some(target.username.clone()),
                     auth_method: auth_form.method(),
                     key_path: if auth_form.method() == SshAuthPreference::PrivateKey {
                         auth_form.key_path_value(cx)
@@ -265,16 +225,16 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
             }
 
             // Build the connection config and connect off-thread.
+            let label = target.label();
             let cfg = SshConfig {
-                host,
-                port,
-                username,
+                host: target.host,
+                port: target.port,
+                username: target.username,
                 auth,
                 cancellation: ConnectionCancellation::default(),
                 host_key_policy: HostKeyPolicy::Strict,
                 shell_integration,
             };
-            let label = format!("{}@{}:{}", cfg.username, cfg.host, cfg.port);
             connecting.store(true, Ordering::Relaxed);
             window.refresh();
             let cancellation = connect_ssh_session(
@@ -292,90 +252,170 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
         }
     });
 
-    let connect_button = cx.new(|_| ConnectButton::new(connect_logic.clone(), connecting.clone()));
+    let connect_button = cx.new(|_| ConnectButton::new(connect_logic.clone(), connecting));
     let initial_focus_pending = Rc::new(Cell::new(is_duplicate));
-
-    window.open_dialog(cx, move |dialog, window, cx| {
-        if is_duplicate {
-            defer_initial_focus_once(
-                &initial_focus_pending,
-                auth_form.secret_focus_handle(cx),
-                window,
-                cx,
-            );
+    let cancel_connection = {
+        let connection_cancellation = connection_cancellation.clone();
+        move |_: &mut Window, _: &mut App| {
+            if let Some(cancellation) = connection_cancellation.borrow().as_ref() {
+                cancellation.cancel();
+            }
         }
-        let connect_for_kb = connect_logic.clone();
-        let cancellation_for_keyboard = connection_cancellation.clone();
+    };
+    let initial_focus = {
+        let auth_form = auth_form.clone();
+        move |window: &mut Window, cx: &mut App| {
+            if is_duplicate {
+                defer_initial_focus_once(
+                    &initial_focus_pending,
+                    auth_form.secret_focus_handle(cx),
+                    window,
+                    cx,
+                );
+            }
+        }
+    };
 
-        dialog
-            .title(if is_duplicate {
-                "Duplicate SSH Session"
-            } else {
-                "SSH Quick Connect"
-            })
-            .w(px(440.))
-            .content({
-                let host_state = host_state.clone();
-                let port_state = port_state.clone();
-                let username_state = username_state.clone();
-                let auth_form = auth_form.clone();
-                let save_session = save_session.clone();
-                move |content, _window, cx| {
-                    content
-                        .child(field(
-                            "Host",
-                            FieldRequirement::Required,
-                            Input::new(&host_state),
-                            cx,
-                        ))
-                        .child(field(
-                            "Port",
-                            FieldRequirement::Optional,
-                            Input::new(&port_state),
-                            cx,
-                        ))
-                        .child(field(
-                            "Username",
-                            FieldRequirement::Required,
-                            Input::new(&username_state),
-                            cx,
-                        ))
-                        .child(auth_form.render(cx))
-                        .when_some(
-                            save_session_option(kind, save_session.clone()),
-                            |content, option| content.child(option),
-                        )
-                }
-            })
-            .footer({
-                let connection_cancellation = connection_cancellation.clone();
-                DialogFooter::new()
-                    .child(Button::new("cancel").label("Cancel").outline().on_click(
-                        move |_, window, cx| {
-                            if let Some(cancellation) = connection_cancellation.borrow().as_ref() {
-                                cancellation.cancel();
-                            }
-                            window.close_dialog(cx);
-                        },
-                    ))
-                    .child(connect_button.clone())
-            })
-            .button_props(
-                DialogButtonProps::default()
-                    .on_cancel(move |_, _, _| {
-                        if let Some(cancellation) = cancellation_for_keyboard.borrow().as_ref() {
-                            cancellation.cancel();
-                        }
-                        true
-                    })
-                    .on_ok(move |_, window, cx| connect_for_kb(&ClickEvent::default(), window, cx)),
-            )
-    });
+    FormDialog::new(
+        if is_duplicate {
+            "Duplicate SSH Session"
+        } else {
+            "SSH Quick Connect"
+        },
+        move |content, _window, cx| {
+            content
+                .child(labelled_field(
+                    "Host",
+                    FieldRequirement::Required,
+                    Input::new(&host_state),
+                    cx,
+                ))
+                .child(labelled_field(
+                    "Port",
+                    FieldRequirement::Optional,
+                    Input::new(&port_state),
+                    cx,
+                ))
+                .child(labelled_field(
+                    "Username",
+                    FieldRequirement::Required,
+                    Input::new(&username_state),
+                    cx,
+                ))
+                .child(auth_form.render(cx))
+                .when_some(
+                    save_session_option(kind, save_session.clone()),
+                    |content, option| content.child(option),
+                )
+        },
+        move |window, cx| connect_logic(window, cx),
+    )
+    .confirm_element(move |_, _| connect_button.clone().into_any_element())
+    .on_cancel(cancel_connection)
+    .on_render(initial_focus)
+    .open(window, cx);
+}
+
+/// The connection target resolved from the three quick-connect fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConnectTarget {
+    username: String,
+    host: String,
+    port: u16,
+}
+
+impl ConnectTarget {
+    fn label(&self) -> String {
+        format!("{}@{}:{}", self.username, self.host, self.port)
+    }
+}
+
+/// Combine the Username (`user[@host[:port]]`), Host and Port fields.
+///
+/// Precedence: an explicit Host / Port field wins over the host / port parsed
+/// from the username; an empty Port falls back to the parsed port, then to 22.
+/// A malformed username or port is reported with a corrective message.
+fn resolve_target(
+    username_raw: &str,
+    host_field: &str,
+    port_field: &str,
+) -> Result<ConnectTarget, String> {
+    let parsed = parse_user_host_port(username_raw).map_err(|error| error.to_string())?;
+    let host = if !host_field.is_empty() {
+        host_field.to_string()
+    } else {
+        parsed.host.ok_or_else(|| "Host is required.".to_string())?
+    };
+    let port = if !port_field.is_empty() {
+        parse_port(port_field).map_err(|error| error.to_string())?
+    } else {
+        parsed.port.unwrap_or(SshSession::DEFAULT_PORT)
+    };
+    if parsed.user.is_empty() {
+        return Err("Username is required.".to_string());
+    }
+    Ok(ConnectTarget {
+        username: parsed.user,
+        host,
+        port,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn target(username: &str, host: &str, port: u16) -> ConnectTarget {
+        ConnectTarget {
+            username: username.into(),
+            host: host.into(),
+            port,
+        }
+    }
+
+    /// TEST-19: explicit Host / Port fields win over the parts parsed from the
+    /// username; missing parts fall back to the parsed ones, then to 22.
+    #[test]
+    fn explicit_fields_take_precedence_over_the_username_string() {
+        assert_eq!(
+            resolve_target("root@parsed.test:2200", "typed.test", "22"),
+            Ok(target("root", "typed.test", 22))
+        );
+        assert_eq!(
+            resolve_target("root@parsed.test:2200", "", ""),
+            Ok(target("root", "parsed.test", 2200))
+        );
+        assert_eq!(
+            resolve_target("root@parsed.test", "", ""),
+            Ok(target("root", "parsed.test", 22))
+        );
+        assert_eq!(
+            resolve_target("root", "typed.test", ""),
+            Ok(target("root", "typed.test", 22))
+        );
+    }
+
+    #[test]
+    fn missing_or_invalid_parts_are_reported() {
+        assert_eq!(
+            resolve_target("root", "", ""),
+            Err("Host is required.".to_string())
+        );
+        assert_eq!(
+            resolve_target("", "typed.test", ""),
+            Err("Username is required.".to_string())
+        );
+        assert!(
+            resolve_target("root@host:abc", "", "")
+                .unwrap_err()
+                .contains("65535")
+        );
+        assert!(
+            resolve_target("root", "typed.test", "99999")
+                .unwrap_err()
+                .contains("65535")
+        );
+    }
 
     #[test]
     fn save_option_element_is_built_only_for_quick_connect() {

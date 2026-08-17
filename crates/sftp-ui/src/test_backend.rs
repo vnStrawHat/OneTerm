@@ -12,8 +12,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use async_channel::{Receiver, Sender};
 
 use oneterm_core::{
-    AppError, FileEntry, FileStat, RemotePath, Result, SftpBackend, SftpFuture, SftpSessionId,
-    TransferEvent, TransferHandle,
+    AppError, FileEntry, RemotePath, Result, SftpBackend, SftpFuture, SftpSessionId, TransferEvent,
+    TransferHandle,
 };
 
 /// One armed transfer: the test drives `events`/`result`, the panel receives them.
@@ -129,7 +129,7 @@ impl SftpBackend for FakeSftpBackend {
         })
     }
 
-    fn stat(&self, _path: RemotePath) -> SftpFuture<'_, FileStat> {
+    fn stat(&self, _path: RemotePath) -> SftpFuture<'_, FileEntry> {
         Self::unused()
     }
 

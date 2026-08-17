@@ -5,24 +5,27 @@ use std::path::{Path, PathBuf};
 
 use async_channel::Sender;
 use russh_sftp::client::SftpSession as SftpChannel;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
 
 use oneterm_core::{AppError, RemotePath, Result, TransferEvent};
 
 use crate::sftp_task::map_sftp_err;
 
+use super::pipeline::copy_sequential;
 use super::staging::{finalize_remote_file, temporary_remote_sibling};
-use super::{MAX_TRAVERSAL_DEPTH, MAX_TRAVERSAL_ENTRIES};
+use super::{MAX_TRAVERSAL_DEPTH, MAX_TRAVERSAL_ENTRIES, report_cancellation};
 
 /// Upload a local file or directory → remote with progress reporting.
 ///
-/// - File: read contents → write 32KB chunks → report progress 0.0–1.0.
+/// - File: chunked writes (see [`super::pipeline`]; the remote handle keeps
+///   several writes in flight) into a temporary sibling that replaces the target
+///   once complete; progress 0.0–1.0.
 /// - Directory: walk recursively → create remote dirs → upload each file,
-///   progress = cumulative bytes / total bytes.
+///   progress = cumulative bytes / bytes discovered so far.
 ///
-/// Checks `cancel.is_cancelled()` after each chunk write.
-/// If cancelled → returns `Err(AppError::Cancelled)`.
+/// Cancellation is observed between chunks; a cancelled transfer emits
+/// `TransferEvent::Cancelled` and returns `Err(AppError::Cancelled)`.
 pub(in crate::sftp_task) async fn sftp_upload(
     sftp: &SftpChannel,
     local: &Path,
@@ -37,59 +40,44 @@ pub(in crate::sftp_task) async fn sftp_upload(
     if metadata.is_dir() {
         sftp_upload_dir(sftp, local, remote, progress, cancel).await
     } else {
-        sftp_upload_file(sftp, local, remote, progress, cancel).await
+        let total = metadata.len();
+        let mut on_bytes = |done: u64| {
+            let fraction = if total > 0 {
+                (done as f64 / total as f64).min(1.0)
+            } else {
+                1.0
+            };
+            let _ = progress.try_send(TransferEvent::Progress(fraction));
+        };
+        upload_file_contents(sftp, local, remote.as_str(), cancel, &mut on_bytes)
+            .await
+            .map_err(|error| report_cancellation(progress, error))?;
+        let _ = progress.try_send(TransferEvent::Progress(1.0));
+        Ok(())
     }
 }
 
-/// Upload a single file — 32KB chunks, progress 0.0–1.0.
-async fn sftp_upload_file(
+/// Copy one local file to `remote_str`.
+///
+/// The bytes land in a temporary remote sibling first and replace the target
+/// atomically on success. `on_bytes` receives the running byte count after
+/// every chunk.
+async fn upload_file_contents(
     sftp: &SftpChannel,
     local: &Path,
-    remote: &RemotePath,
-    progress: &Sender<TransferEvent>,
+    remote_str: &str,
     cancel: &CancellationToken,
+    on_bytes: &mut impl FnMut(u64),
 ) -> Result<()> {
-    let total = tokio::fs::metadata(local)
-        .await
-        .map_err(|e| AppError::msg(format!("stat local: {e}")))?
-        .len();
     let mut local_file = tokio::fs::File::open(local)
         .await
         .map_err(|e| AppError::msg(format!("open local: {e}")))?;
 
-    let remote_str = remote.as_str();
     let temporary = temporary_remote_sibling(remote_str, "part")?;
     let mut remote_file = sftp.create(&temporary).await.map_err(map_sftp_err)?;
 
     let transfer_result: Result<()> = async {
-        const CHUNK: usize = 32 * 1024;
-        let mut buffer = vec![0u8; CHUNK];
-        let mut written: u64 = 0;
-        loop {
-            if cancel.is_cancelled() {
-                log::info!("sftp_upload_file: cancelled at {written}/{total} bytes");
-                let _ = progress.try_send(TransferEvent::Cancelled);
-                return Err(AppError::Cancelled);
-            }
-            let read = local_file
-                .read(&mut buffer)
-                .await
-                .map_err(|e| AppError::msg(format!("read local: {e}")))?;
-            if read == 0 {
-                break;
-            }
-            remote_file
-                .write_all(&buffer[..read])
-                .await
-                .map_err(|e| AppError::msg(format!("write remote: {e}")))?;
-            written += read as u64;
-            let pct = if total > 0 {
-                written as f64 / total as f64
-            } else {
-                1.0
-            };
-            let _ = progress.try_send(TransferEvent::Progress(pct));
-        }
+        copy_sequential(&mut local_file, &mut remote_file, cancel, on_bytes).await?;
         remote_file
             .flush()
             .await
@@ -103,9 +91,7 @@ async fn sftp_upload_file(
         let _ = sftp.remove_file(&temporary).await;
         return Err(error);
     }
-    finalize_remote_file(sftp, &temporary, remote_str).await?;
-    let _ = progress.try_send(TransferEvent::Progress(1.0));
-    Ok(())
+    finalize_remote_file(sftp, &temporary, remote_str).await
 }
 
 #[derive(Debug)]
@@ -273,70 +259,30 @@ async fn sftp_upload_dir(
                     "sftp_upload_dir: uploading discovered file \"{}\" → \"{remote_path}\" ({file_size} bytes)",
                     local_path.display()
                 );
-                let mut local_file = match tokio::fs::File::open(&local_path).await {
-                    Ok(file) => file,
-                    Err(error) => fail_upload!(AppError::msg(format!("open local: {error}"))),
-                };
-                let remote_str = remote_path.as_str();
-                let temporary = match temporary_remote_sibling(remote_str, "part") {
-                    Ok(path) => path,
-                    Err(error) => fail_upload!(error),
-                };
-                let mut remote_file = match sftp.create(&temporary).await.map_err(map_sftp_err) {
-                    Ok(file) => file,
-                    Err(error) => fail_upload!(error),
-                };
-
-                let transfer_result: Result<()> = async {
-                    const CHUNK: usize = 32 * 1024;
-                    let mut buffer = vec![0u8; CHUNK];
-                    loop {
-                        if cancel.is_cancelled() {
-                            let _ = progress.try_send(TransferEvent::Cancelled);
-                            return Err(AppError::Cancelled);
-                        }
-                        let read = local_file
-                            .read(&mut buffer)
-                            .await
-                            .map_err(|e| AppError::msg(format!("read local: {e}")))?;
-                        if read == 0 {
-                            break;
-                        }
-                        remote_file
-                            .write_all(&buffer[..read])
-                            .await
-                            .map_err(|e| AppError::msg(format!("write remote: {e}")))?;
-                        bytes_done += read as u64;
-                        let denominator = discovered_bytes.max(bytes_done);
-                        let candidate = if denominator > 0 {
-                            (bytes_done as f64 / denominator as f64).min(0.99)
-                        } else {
-                            0.0
-                        };
-                        if candidate > reported_progress {
-                            reported_progress = candidate;
-                            let _ = progress.try_send(TransferEvent::Progress(reported_progress));
-                        }
+                let file_start = bytes_done;
+                let mut on_bytes = |done: u64| {
+                    bytes_done = file_start + done;
+                    let denominator = discovered_bytes.max(bytes_done);
+                    let candidate = if denominator > 0 {
+                        (bytes_done as f64 / denominator as f64).min(0.99)
+                    } else {
+                        0.0
+                    };
+                    if candidate > reported_progress {
+                        reported_progress = candidate;
+                        let _ = progress.try_send(TransferEvent::Progress(reported_progress));
                     }
-                    remote_file
-                        .flush()
-                        .await
-                        .map_err(|e| AppError::msg(format!("flush remote: {e}")))?;
-                    Ok(())
-                }
+                };
+                let result = upload_file_contents(
+                    sftp,
+                    &local_path,
+                    remote_path.as_str(),
+                    cancel,
+                    &mut on_bytes,
+                )
                 .await;
-                drop(remote_file);
-
-                if let Err(error) = transfer_result {
-                    let _ = sftp.remove_file(&temporary).await;
-                    cancel.cancel();
-                    let _ = traversal.await;
-                    return Err(error);
-                }
-                if let Err(error) = finalize_remote_file(sftp, &temporary, remote_str).await {
-                    cancel.cancel();
-                    let _ = traversal.await;
-                    return Err(error);
+                if let Err(error) = result {
+                    fail_upload!(report_cancellation(progress, error));
                 }
             }
         }

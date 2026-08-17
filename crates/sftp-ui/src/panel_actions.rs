@@ -7,23 +7,21 @@
 use gpui::{Context, Window};
 
 use super::panel::SftpPanel;
-use super::types::PendingAction;
 
 impl SftpPanel {
     /// Action handler: open the selected entry (navigate into dir or download file).
     pub(crate) fn on_action_sftp_open(
         &mut self,
         _: &oneterm_actions::SftpOpen,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(ix) = self.selected {
+        if let Some(ix) = self.browser().selected() {
             if let Some(entry) = self.selected_entry(cx) {
                 if entry.is_dir {
                     self.navigate_into(ix, cx);
                 } else {
-                    self.pending_action = Some(PendingAction::Download);
-                    cx.notify();
+                    self.do_download(window, cx);
                 }
             }
         }

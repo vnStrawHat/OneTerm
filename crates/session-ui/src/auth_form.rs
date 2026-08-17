@@ -18,8 +18,8 @@ use gpui_component::{
     v_flex,
 };
 use oneterm_core::{SecretString, SshAuthMethod};
+use oneterm_state::form_dialog::{FieldRequirement, labelled_field};
 
-use super::common::{FieldRequirement, field};
 use crate::session_state::SshAuthPreference;
 
 /// UI state shared by saved-session and Quick Connect authentication forms.
@@ -100,7 +100,7 @@ impl SshAuthForm {
         v_flex()
             .gap_3()
             .w_full()
-            .child(field(
+            .child(labelled_field(
                 "Authentication",
                 FieldRequirement::Required,
                 RadioGroup::horizontal("ssh-auth-preference")
@@ -118,7 +118,7 @@ impl SshAuthForm {
             ))
             .when(self.method() == SshAuthPreference::PrivateKey, |form| {
                 let key_path = self.key_path.clone();
-                form.child(field(
+                form.child(labelled_field(
                     "Private Key",
                     FieldRequirement::Required,
                     h_flex()
@@ -150,7 +150,7 @@ impl SshAuthForm {
         v_flex()
             .gap_3()
             .w_full()
-            .child(field(
+            .child(labelled_field(
                 "Authentication",
                 FieldRequirement::Required,
                 RadioGroup::horizontal("ssh-auth-method")
@@ -174,7 +174,7 @@ impl SshAuthForm {
                 cx,
             ))
             .when(self.method() == SshAuthPreference::Password, |form| {
-                form.child(v_flex().id("password-auth-fields").child(field(
+                form.child(v_flex().id("password-auth-fields").child(labelled_field(
                     "Password",
                     FieldRequirement::Optional,
                     Input::new(&self.password).mask_toggle().cleanable(true),
@@ -188,7 +188,7 @@ impl SshAuthForm {
                         .id("private-key-auth-fields")
                         .gap_3()
                         .w_full()
-                        .child(field(
+                        .child(labelled_field(
                             "Private Key",
                             FieldRequirement::Required,
                             h_flex()
@@ -213,7 +213,7 @@ impl SshAuthForm {
                                 ),
                             cx,
                         ))
-                        .child(field(
+                        .child(labelled_field(
                             "Passphrase",
                             FieldRequirement::Optional,
                             Input::new(&self.passphrase).mask_toggle().cleanable(true),

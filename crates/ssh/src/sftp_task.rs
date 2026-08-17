@@ -15,7 +15,7 @@ use russh_sftp::client::SftpSession as SftpChannel;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-use oneterm_core::AppError;
+use oneterm_core::{AppError, SftpStatus};
 
 use crate::sftp::{SftpCmd, SftpEvent};
 
@@ -258,8 +258,33 @@ pub(crate) async fn sftp_task(
 // ── Helpers ──────────────────────────────────────────────────
 
 /// Convert a russh-sftp error to `AppError`.
+///
+/// A server `Status` reply keeps its code as [`SftpStatus`] so the UI can tell
+/// permission-denied from not-found; transport-level failures (timeout, I/O,
+/// protocol violations) stay opaque messages.
 pub(crate) fn map_sftp_err(e: russh_sftp::client::error::Error) -> AppError {
-    AppError::msg(e.to_string())
+    use russh_sftp::client::error::Error;
+    use russh_sftp::protocol::StatusCode;
+
+    match e {
+        Error::Status(status) => {
+            let code = match status.status_code {
+                StatusCode::Ok => SftpStatus::Other(0),
+                StatusCode::Eof => SftpStatus::Eof,
+                StatusCode::NoSuchFile => SftpStatus::NoSuchFile,
+                StatusCode::PermissionDenied => SftpStatus::PermissionDenied,
+                StatusCode::Failure => SftpStatus::Failure,
+                StatusCode::BadMessage => SftpStatus::BadMessage,
+                StatusCode::NoConnection | StatusCode::ConnectionLost => SftpStatus::ConnectionLost,
+                StatusCode::OpUnsupported => SftpStatus::OpUnsupported,
+            };
+            AppError::Sftp {
+                status: code,
+                message: status.error_message,
+            }
+        }
+        other => AppError::msg(other.to_string()),
+    }
 }
 
 #[cfg(test)]
