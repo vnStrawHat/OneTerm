@@ -3,12 +3,19 @@
 //!
 //! Both the shell and this feature use `oneterm_state::dock_persistence`, which
 //! owns the complete typed document and serializes updates under one file lock.
+//! `docks.json` is a shell/state-owned document: this crate only reads and
+//! writes its own field and never quarantines or replaces the file itself —
+//! recovery of an invalid document belongs to `dock_persistence`.
+//!
+//! Both functions block on the filesystem and must run on the background
+//! executor, never on the UI thread.
 
 use anyhow::{Context as _, Result};
 
-use oneterm_core::{SftpTableState, quarantine_file};
-use oneterm_state::dock_persistence::{read_dock_document, update_dock_document};
-use oneterm_state::paths::state_file;
+use oneterm_core::SftpTableState;
+use oneterm_state::dock_persistence::{
+    DockUpdateOutcome, read_dock_document, update_dock_document,
+};
 
 /// Read `sftp_table_state` from `docks.json`. `None` if the file/field does not exist
 /// or fails to parse.
@@ -17,12 +24,7 @@ pub(crate) fn read_sftp_table_state() -> Option<SftpTableState> {
         Ok(document) => document.sftp_table_state,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => {
-            if error.kind() == std::io::ErrorKind::InvalidData {
-                if let Err(quarantine_error) = quarantine_file(&state_file()) {
-                    log::warn!("failed to quarantine docks.json: {quarantine_error}");
-                }
-            }
-            log::warn!("failed to read SFTP table state: {error}");
+            log::warn!("failed to read SFTP table state from docks.json: {error}");
             None
         }
     }
@@ -32,9 +34,15 @@ pub(crate) fn read_sftp_table_state() -> Option<SftpTableState> {
 /// layout and shell-owned fields.
 pub(crate) fn write_sftp_table_state(state: &SftpTableState) -> Result<()> {
     let state = state.clone();
-    update_dock_document(move |document| {
+    let outcome = update_dock_document(move |document| {
         document.sftp_table_state = Some(state);
         Ok(())
     })
-    .context("write docks.json")
+    .context("write docks.json")?;
+    if let DockUpdateOutcome::RecoveredFromInvalidData { quarantined } = outcome {
+        log::warn!(
+            "docks.json was invalid and has been reset while saving the SFTP table state (quarantined copy: {quarantined:?})"
+        );
+    }
+    Ok(())
 }

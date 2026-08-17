@@ -45,7 +45,10 @@ directly on the UI thread.
 A crate may mutate only fields it owns. Callers of the shared dock document must
 use `oneterm_state::dock_persistence`; other shared documents must use
 `update_json_file`. Read-modify-write sequences outside those transactions are
-not allowed.
+not allowed. Only the document owner quarantines: `update_dock_document` moves an
+invalid `docks.json` aside, applies the update to a default document, and reports
+`DockUpdateOutcome::RecoveredFromInvalidData` so the caller can log the recovery
+(`oneterm-state` has no logger of its own); feature crates never quarantine it.
 
 ## Migration rules
 

@@ -8,7 +8,7 @@ use russh_sftp::client::SftpSession as SftpChannel;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
-use oneterm_core::{AppError, Result};
+use oneterm_core::{AppError, RemotePath, Result, TransferEvent};
 
 use crate::sftp_task::map_sftp_err;
 
@@ -26,8 +26,8 @@ use super::{MAX_TRAVERSAL_DEPTH, MAX_TRAVERSAL_ENTRIES};
 pub(in crate::sftp_task) async fn sftp_upload(
     sftp: &SftpChannel,
     local: &Path,
-    remote: &Path,
-    progress: &Sender<f64>,
+    remote: &RemotePath,
+    progress: &Sender<TransferEvent>,
     cancel: &CancellationToken,
 ) -> Result<()> {
     let metadata = tokio::fs::metadata(local)
@@ -45,8 +45,8 @@ pub(in crate::sftp_task) async fn sftp_upload(
 async fn sftp_upload_file(
     sftp: &SftpChannel,
     local: &Path,
-    remote: &Path,
-    progress: &Sender<f64>,
+    remote: &RemotePath,
+    progress: &Sender<TransferEvent>,
     cancel: &CancellationToken,
 ) -> Result<()> {
     let total = tokio::fs::metadata(local)
@@ -57,8 +57,8 @@ async fn sftp_upload_file(
         .await
         .map_err(|e| AppError::msg(format!("open local: {e}")))?;
 
-    let remote_str = remote.to_string_lossy().replace('\\', "/");
-    let temporary = temporary_remote_sibling(&remote_str, "part")?;
+    let remote_str = remote.as_str();
+    let temporary = temporary_remote_sibling(remote_str, "part")?;
     let mut remote_file = sftp.create(&temporary).await.map_err(map_sftp_err)?;
 
     let transfer_result: Result<()> = async {
@@ -68,7 +68,7 @@ async fn sftp_upload_file(
         loop {
             if cancel.is_cancelled() {
                 log::info!("sftp_upload_file: cancelled at {written}/{total} bytes");
-                let _ = progress.try_send(-1.0);
+                let _ = progress.try_send(TransferEvent::Cancelled);
                 return Err(AppError::Cancelled);
             }
             let read = local_file
@@ -88,7 +88,7 @@ async fn sftp_upload_file(
             } else {
                 1.0
             };
-            let _ = progress.try_send(pct);
+            let _ = progress.try_send(TransferEvent::Progress(pct));
         }
         remote_file
             .flush()
@@ -103,17 +103,17 @@ async fn sftp_upload_file(
         let _ = sftp.remove_file(&temporary).await;
         return Err(error);
     }
-    finalize_remote_file(sftp, &temporary, &remote_str).await?;
-    let _ = progress.try_send(1.0);
+    finalize_remote_file(sftp, &temporary, remote_str).await?;
+    let _ = progress.try_send(TransferEvent::Progress(1.0));
     Ok(())
 }
 
 #[derive(Debug)]
 pub(in crate::sftp_task) enum LocalUploadEntry {
-    Directory(PathBuf),
+    Directory(RemotePath),
     File {
         local: PathBuf,
-        remote: PathBuf,
+        remote: RemotePath,
         size: u64,
     },
 }
@@ -142,7 +142,7 @@ fn send_local_upload_entry(
 
 pub(in crate::sftp_task) fn stream_local_upload_entries(
     local_root: PathBuf,
-    remote_root: PathBuf,
+    remote_root: RemotePath,
     cancel: CancellationToken,
     entries: &Sender<LocalUploadEntry>,
 ) -> Result<()> {
@@ -171,7 +171,7 @@ pub(in crate::sftp_task) fn stream_local_upload_entries(
                 return Err(AppError::msg("local upload exceeded traversal entry limit"));
             }
             let path = entry.path();
-            let remote_child = remote.join(entry.file_name());
+            let remote_child = remote.join(&entry.file_name().to_string_lossy());
             let metadata = std::fs::symlink_metadata(&path)
                 .map_err(|error| AppError::msg(format!("stat local entry: {error}")))?;
             if metadata.file_type().is_symlink() {
@@ -204,14 +204,14 @@ pub(in crate::sftp_task) fn stream_local_upload_entries(
 async fn sftp_upload_dir(
     sftp: &SftpChannel,
     local: &Path,
-    remote: &Path,
-    progress: &Sender<f64>,
+    remote: &RemotePath,
+    progress: &Sender<TransferEvent>,
     cancel: &CancellationToken,
 ) -> Result<()> {
     const DISCOVERY_CAPACITY: usize = 128;
     let (entries_tx, entries_rx) = async_channel::bounded(DISCOVERY_CAPACITY);
     let local_root = local.to_path_buf();
-    let remote_root = remote.to_path_buf();
+    let remote_root = remote.clone();
     let traversal = tokio::task::spawn_blocking({
         let cancel = cancel.clone();
         move || {
@@ -237,13 +237,13 @@ async fn sftp_upload_dir(
         match entry {
             LocalUploadEntry::Directory(dir) => {
                 if cancel.is_cancelled() {
-                    let _ = progress.try_send(-1.0);
+                    let _ = progress.try_send(TransferEvent::Cancelled);
                     let _ = traversal.await;
                     return Err(AppError::Cancelled);
                 }
-                let dir_str = dir.to_string_lossy().replace('\\', "/");
-                if let Err(create_error) = sftp.create_dir(&dir_str).await {
-                    match sftp.symlink_metadata(&dir_str).await {
+                let dir_str = dir.as_str();
+                if let Err(create_error) = sftp.create_dir(dir_str).await {
+                    match sftp.symlink_metadata(dir_str).await {
                         Ok(attributes) if attributes.is_dir() && !attributes.is_symlink() => {}
                         Ok(_) => {
                             cancel.cancel();
@@ -270,16 +270,15 @@ async fn sftp_upload_dir(
                 discovered_files += 1;
                 discovered_bytes = discovered_bytes.saturating_add(file_size);
                 log::debug!(
-                    "sftp_upload_dir: uploading discovered file \"{}\" → \"{}\" ({file_size} bytes)",
-                    local_path.display(),
-                    remote_path.display()
+                    "sftp_upload_dir: uploading discovered file \"{}\" → \"{remote_path}\" ({file_size} bytes)",
+                    local_path.display()
                 );
                 let mut local_file = match tokio::fs::File::open(&local_path).await {
                     Ok(file) => file,
                     Err(error) => fail_upload!(AppError::msg(format!("open local: {error}"))),
                 };
-                let remote_str = remote_path.to_string_lossy().replace('\\', "/");
-                let temporary = match temporary_remote_sibling(&remote_str, "part") {
+                let remote_str = remote_path.as_str();
+                let temporary = match temporary_remote_sibling(remote_str, "part") {
                     Ok(path) => path,
                     Err(error) => fail_upload!(error),
                 };
@@ -293,7 +292,7 @@ async fn sftp_upload_dir(
                     let mut buffer = vec![0u8; CHUNK];
                     loop {
                         if cancel.is_cancelled() {
-                            let _ = progress.try_send(-1.0);
+                            let _ = progress.try_send(TransferEvent::Cancelled);
                             return Err(AppError::Cancelled);
                         }
                         let read = local_file
@@ -316,7 +315,7 @@ async fn sftp_upload_dir(
                         };
                         if candidate > reported_progress {
                             reported_progress = candidate;
-                            let _ = progress.try_send(reported_progress);
+                            let _ = progress.try_send(TransferEvent::Progress(reported_progress));
                         }
                     }
                     remote_file
@@ -334,7 +333,7 @@ async fn sftp_upload_dir(
                     let _ = traversal.await;
                     return Err(error);
                 }
-                if let Err(error) = finalize_remote_file(sftp, &temporary, &remote_str).await {
+                if let Err(error) = finalize_remote_file(sftp, &temporary, remote_str).await {
                     cancel.cancel();
                     let _ = traversal.await;
                     return Err(error);
@@ -348,10 +347,9 @@ async fn sftp_upload_dir(
         .map_err(|error| AppError::msg(format!("walk local dir task: {error}")))?;
     traversal_result?;
     log::info!(
-        "sftp_upload_dir: \"{}\" → \"{}\" — {discovered_files} files, {discovered_bytes} bytes",
-        local.display(),
-        remote.display()
+        "sftp_upload_dir: \"{}\" → \"{remote}\" — {discovered_files} files, {discovered_bytes} bytes",
+        local.display()
     );
-    let _ = progress.try_send(1.0);
+    let _ = progress.try_send(TransferEvent::Progress(1.0));
     Ok(())
 }

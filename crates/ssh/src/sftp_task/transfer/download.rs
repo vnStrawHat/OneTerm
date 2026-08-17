@@ -7,7 +7,7 @@ use russh_sftp::client::SftpSession as SftpChannel;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
-use oneterm_core::{AppError, Result};
+use oneterm_core::{AppError, RemotePath, Result, TransferEvent};
 
 use crate::sftp_task::{
     create_safe_parent_dirs, map_sftp_err, safe_local_child, validate_remote_entry_name,
@@ -27,14 +27,14 @@ use super::{MAX_TRAVERSAL_DEPTH, MAX_TRAVERSAL_ENTRIES};
 /// If cancelled → returns `Err(AppError::Cancelled)`.
 pub(in crate::sftp_task) async fn sftp_download(
     sftp: &SftpChannel,
-    remote: &Path,
+    remote: &RemotePath,
     local: &Path,
-    progress: &Sender<f64>,
+    progress: &Sender<TransferEvent>,
     cancel: &CancellationToken,
 ) -> Result<()> {
-    let remote_str = remote.to_string_lossy().replace('\\', "/");
+    let remote_str = remote.as_str();
     let attrs = sftp
-        .symlink_metadata(&remote_str)
+        .symlink_metadata(remote_str)
         .await
         .map_err(map_sftp_err)?;
     if attrs.is_symlink() {
@@ -42,9 +42,9 @@ pub(in crate::sftp_task) async fn sftp_download(
     }
 
     if attrs.is_dir() {
-        sftp_download_dir(sftp, &remote_str, local, progress, cancel).await
+        sftp_download_dir(sftp, remote_str, local, progress, cancel).await
     } else {
-        sftp_download_file(sftp, &remote_str, local, progress, cancel).await
+        sftp_download_file(sftp, remote_str, local, progress, cancel).await
     }
 }
 
@@ -53,7 +53,7 @@ async fn sftp_download_file(
     sftp: &SftpChannel,
     remote_str: &str,
     local: &Path,
-    progress: &Sender<f64>,
+    progress: &Sender<TransferEvent>,
     cancel: &CancellationToken,
 ) -> Result<()> {
     // Get the size to compute progress.
@@ -85,7 +85,7 @@ async fn sftp_download_file(
         loop {
             if cancel.is_cancelled() {
                 log::info!("sftp_download_file: cancelled at {read}/{total} bytes");
-                let _ = progress.try_send(-1.0);
+                let _ = progress.try_send(TransferEvent::Cancelled);
                 return Err(AppError::Cancelled);
             }
             let n = remote_file
@@ -105,7 +105,7 @@ async fn sftp_download_file(
             } else {
                 1.0
             };
-            let _ = progress.try_send(pct);
+            let _ = progress.try_send(TransferEvent::Progress(pct));
         }
         local_file
             .flush()
@@ -125,7 +125,7 @@ async fn sftp_download_file(
         return Err(error);
     }
     finalize_local_file(&temporary, local).await?;
-    let _ = progress.try_send(1.0);
+    let _ = progress.try_send(TransferEvent::Progress(1.0));
     Ok(())
 }
 
@@ -137,7 +137,7 @@ async fn sftp_download_dir(
     sftp: &SftpChannel,
     remote_str: &str,
     local: &Path,
-    progress: &Sender<f64>,
+    progress: &Sender<TransferEvent>,
     cancel: &CancellationToken,
 ) -> Result<()> {
     // Create and canonicalize the selected root before trusting remote names.
@@ -159,7 +159,7 @@ async fn sftp_download_dir(
 
     while let Some((remote, local_dir, depth)) = pending.pop() {
         if cancel.is_cancelled() {
-            let _ = progress.try_send(-1.0);
+            let _ = progress.try_send(TransferEvent::Cancelled);
             return Err(AppError::Cancelled);
         }
         if depth > MAX_TRAVERSAL_DEPTH {
@@ -170,7 +170,7 @@ async fn sftp_download_dir(
 
         for entry in sftp.read_dir(&remote).await.map_err(map_sftp_err)? {
             if cancel.is_cancelled() {
-                let _ = progress.try_send(-1.0);
+                let _ = progress.try_send(TransferEvent::Cancelled);
                 return Err(AppError::Cancelled);
             }
             let name = entry.file_name();
@@ -229,7 +229,7 @@ async fn sftp_download_dir(
                 let mut buf = vec![0u8; CHUNK];
                 loop {
                     if cancel.is_cancelled() {
-                        let _ = progress.try_send(-1.0);
+                        let _ = progress.try_send(TransferEvent::Cancelled);
                         return Err(AppError::Cancelled);
                     }
                     let n = remote_file
@@ -252,7 +252,7 @@ async fn sftp_download_dir(
                     };
                     if candidate > reported_progress {
                         reported_progress = candidate;
-                        let _ = progress.try_send(reported_progress);
+                        let _ = progress.try_send(TransferEvent::Progress(reported_progress));
                     }
                 }
                 local_file
@@ -283,6 +283,6 @@ async fn sftp_download_dir(
         "sftp_download_dir: \"{remote_str}\" → \"{}\" — {discovered_files} files, {discovered_bytes} bytes",
         local_root.display()
     );
-    let _ = progress.try_send(1.0);
+    let _ = progress.try_send(TransferEvent::Progress(1.0));
     Ok(())
 }

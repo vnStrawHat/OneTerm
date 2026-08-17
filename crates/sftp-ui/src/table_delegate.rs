@@ -3,7 +3,8 @@
 //! Replaces the manual rendering in `render_list.rs`/`render.rs` with
 //! `gpui_component::table::DataTable`: resizable, sortable columns and virtual
 //! scroll. Column state (width + visibility) is persisted via
-//! `persistence.rs` → `docks.json`.
+//! `persistence.rs` → `docks.json`; [`SftpPanel`] reads and writes it on the
+//! background executor and hands the snapshot to this delegate.
 
 use std::collections::HashMap;
 
@@ -20,7 +21,6 @@ use oneterm_core::{FileEntry, SftpTableState};
 use oneterm_theme::icon::AppIcon;
 
 use super::panel::SftpPanel;
-use super::persistence::{read_sftp_table_state, write_sftp_table_state};
 use super::types::{
     SftpColumnConfig, SortColumn, SortDir, format_date, format_owner, format_permissions,
     format_size, sort_dir_to_column_sort, sort_entries,
@@ -54,7 +54,6 @@ impl SftpTableDelegate {
             loading: false,
             panel,
         };
-        me.apply_persisted_state();
         me.rebuild_visible_indices();
         me
     }
@@ -72,12 +71,9 @@ impl SftpTableDelegate {
             .collect();
     }
 
-    /// Apply the persisted state (width + visibility) from `docks.json`.
+    /// Apply the persisted state (width + visibility) read from `docks.json`.
     /// Ignores invalid keys; Name is always visible.
-    fn apply_persisted_state(&mut self) {
-        let Some(state) = read_sftp_table_state() else {
-            return;
-        };
+    pub(crate) fn apply_persisted_state(&mut self, state: &SftpTableState) {
         log::debug!(
             "SftpTableDelegate: apply persisted state — {} widths, {} visibility",
             state.column_widths.len(),
@@ -94,6 +90,7 @@ impl SftpTableDelegate {
                 cfg.visible = visible || cfg.col == SortColumn::Name;
             }
         }
+        self.rebuild_visible_indices();
     }
 
     /// Read the current config for persistence.
@@ -107,13 +104,6 @@ impl SftpTableDelegate {
         SftpTableState {
             column_widths,
             column_visibility,
-        }
-    }
-
-    /// Persist the current column state to `docks.json`.
-    pub(crate) fn persist(&self) {
-        if let Err(e) = write_sftp_table_state(&self.to_persisted_state()) {
-            log::warn!("SftpTableDelegate: persist failed: {e}");
         }
     }
 

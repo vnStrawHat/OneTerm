@@ -6,8 +6,11 @@
 
 use std::collections::BTreeMap;
 use std::io;
+use std::path::PathBuf;
 
-use oneterm_core::{SftpTableState, migrate_json_value, set_schema_version, update_json_file};
+use oneterm_core::{
+    SftpTableState, migrate_json_value, quarantine_file, set_schema_version, update_json_file,
+};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
@@ -102,30 +105,82 @@ pub fn read_dock_document_from(path: &std::path::Path) -> io::Result<DockDocumen
     )
 }
 
+/// How an update transaction reached the persisted document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DockUpdateOutcome {
+    /// The existing document (or an absent file) was updated in place.
+    Updated,
+    /// The existing file was not a valid dock document. It was moved aside
+    /// (`quarantined` is the sibling it was renamed to, `None` if it vanished in
+    /// between) and the update was applied to `DockDocument::default()`.
+    ///
+    /// Callers should log this at `warn` level so the reset is diagnosable; this
+    /// crate has no logging facility of its own.
+    RecoveredFromInvalidData { quarantined: Option<PathBuf> },
+}
+
 /// Atomically update the complete dock document under the shared file lock.
 pub fn update_dock_document(
     update: impl FnOnce(&mut DockDocument) -> io::Result<()>,
-) -> io::Result<()> {
+) -> io::Result<DockUpdateOutcome> {
     update_dock_document_at(&state_file(), update)
 }
 
 /// Atomically update a dock document at an explicit path.
+///
+/// An unreadable document (`InvalidData`, e.g. truncated by a crash) does not
+/// disable saving: it is quarantined next to the original path and the update
+/// is applied to a default document, reported as
+/// [`DockUpdateOutcome::RecoveredFromInvalidData`].
 pub fn update_dock_document_at(
     path: &std::path::Path,
     update: impl FnOnce(&mut DockDocument) -> io::Result<()>,
-) -> io::Result<()> {
-    update_json_file(path, |value| {
+) -> io::Result<DockUpdateOutcome> {
+    // The closure below only consumes `update` once the existing document has
+    // parsed, so a parse failure leaves it available for the recovery attempt.
+    let mut update = Some(update);
+    let invalid_data = match update_json_file(path, |value| {
         let mut document = if value.as_object().is_some_and(|object| object.is_empty()) {
             DockDocument::default()
         } else {
             parse_document(value.clone())?
         };
-        update(&mut document)?;
-        let mut serialized = serde_json::to_value(document).map_err(io::Error::other)?;
-        set_schema_version(&mut serialized, CURRENT_SCHEMA_VERSION)?;
-        *value = serialized;
-        Ok(())
-    })
+        let update = update.take().ok_or_else(|| {
+            io::Error::other("dock document update callback was already consumed")
+        })?;
+        apply_update(value, &mut document, update)
+    }) {
+        Ok(()) => return Ok(DockUpdateOutcome::Updated),
+        Err(error) if error.kind() == io::ErrorKind::InvalidData => error,
+        Err(error) => return Err(error),
+    };
+
+    // `update` was consumed only when the document parsed, so an `InvalidData`
+    // raised by the caller's own update is not a corrupt file: pass it through
+    // untouched instead of quarantining a healthy document.
+    let Some(update) = update.take() else {
+        return Err(invalid_data);
+    };
+    // The transaction lock is released here; `quarantine_file` takes its own.
+    let quarantined = quarantine_file(path)?;
+    update_json_file(path, |value| {
+        let mut document = DockDocument::default();
+        apply_update(value, &mut document, update)
+    })?;
+    Ok(DockUpdateOutcome::RecoveredFromInvalidData { quarantined })
+}
+
+/// Run `update` on `document` and serialize the result into `value`.
+fn apply_update(
+    value: &mut Value,
+    document: &mut DockDocument,
+    update: impl FnOnce(&mut DockDocument) -> io::Result<()>,
+) -> io::Result<()> {
+    update(document)?;
+    let mut serialized = serde_json::to_value(&*document).map_err(io::Error::other)?;
+    set_schema_version(&mut serialized, CURRENT_SCHEMA_VERSION)?;
+    *value = serialized;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -195,6 +250,59 @@ mod persistence_tests {
             read_dock_document_from(&path).unwrap_err().kind(),
             io::ErrorKind::InvalidData
         );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn invalid_document_is_quarantined_and_updates_keep_working() {
+        let directory = std::env::temp_dir().join(format!(
+            "oneterm-dock-recovery-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("docks.json");
+        std::fs::write(&path, b"{ not json").unwrap();
+
+        let outcome = update_dock_document_at(&path, |document| {
+            document.zoomed_panel = Some("terminal".into());
+            Ok(())
+        })
+        .unwrap();
+
+        let DockUpdateOutcome::RecoveredFromInvalidData { quarantined } = outcome else {
+            panic!("expected recovery, got {outcome:?}");
+        };
+        let quarantined = quarantined.expect("the corrupt file must be moved aside");
+        assert_eq!(quarantined.parent(), Some(directory.as_path()));
+        assert_eq!(std::fs::read(&quarantined).unwrap(), b"{ not json");
+        let restored = read_dock_document_from(&path).unwrap();
+        assert_eq!(restored.zoomed_panel.as_deref(), Some("terminal"));
+        assert_eq!(restored.schema_version, CURRENT_SCHEMA_VERSION);
+
+        // A well-formed document that is not a dock document is recovered too.
+        std::fs::write(&path, b"[1, 2, 3]").unwrap();
+        let outcome = update_dock_document_at(&path, |document| {
+            document.toggle_button_visible = Some(true);
+            Ok(())
+        })
+        .unwrap();
+        assert!(matches!(
+            outcome,
+            DockUpdateOutcome::RecoveredFromInvalidData {
+                quarantined: Some(_)
+            }
+        ));
+        let restored = read_dock_document_from(&path).unwrap();
+        assert_eq!(restored.toggle_button_visible, Some(true));
+        assert_eq!(restored.zoomed_panel, None);
+
+        // Subsequent updates on the healthy document are plain updates.
+        let outcome = update_dock_document_at(&path, |_| Ok(())).unwrap();
+        assert_eq!(outcome, DockUpdateOutcome::Updated);
         let _ = std::fs::remove_dir_all(directory);
     }
 

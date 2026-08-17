@@ -11,7 +11,6 @@
 //!
 //! See `docs/sftp-browser-design.md` §4.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,10 +22,11 @@ use gpui_component::dock::{Panel, PanelControl, PanelEvent};
 use gpui_component::input::{InputEvent, InputState};
 use gpui_component::table::{TableEvent, TableState};
 
-use oneterm_core::SftpBackend;
+use oneterm_core::{RemotePath, SftpBackend};
 use oneterm_state::AppState;
 use oneterm_terminal::CwdSource;
 
+use super::persistence::{read_sftp_table_state, write_sftp_table_state};
 use super::table_delegate::SftpTableDelegate;
 use super::types::{PendingAction, TransferItem};
 
@@ -52,10 +52,14 @@ pub struct SftpPanel {
     /// Last cwd observed from `cwd_source`. The polling task updates this cache
     /// only to trigger toolbar re-rendering when OSC 7 arrives after the panel
     /// was rendered with a disabled sync button; sync actions still read live.
-    pub(crate) terminal_cwd_cache: Option<PathBuf>,
+    pub(crate) terminal_cwd_cache: Option<RemotePath>,
 
     // ── File tree state (active view; mirrored from the store on tab switch) ─
-    pub(crate) cwd: PathBuf,
+    pub(crate) cwd: RemotePath,
+    /// Incremented by every directory request. A listing result is applied only
+    /// when its captured generation (and backend key) still match, so a slower
+    /// earlier request cannot overwrite a newer one.
+    pub(crate) load_generation: u64,
     /// Entries + sort + loading + column config live in the delegate.
     pub(crate) table: Entity<TableState<SftpTableDelegate>>,
     /// Mirror of the selected row index (synced from `TableEvent::SelectRow` +
@@ -85,7 +89,7 @@ pub struct SftpPanel {
     pub(crate) follow_terminal_cwd: bool,
     /// The last terminal cwd we followed to — used by the polling timer to
     /// detect changes (avoids redundant `read_dir` when the cwd hasn't moved).
-    pub(crate) last_followed_cwd: Option<PathBuf>,
+    pub(crate) last_followed_cwd: Option<RemotePath>,
     /// Handle for the auto-follow polling task so we can detach it.
     _follow_task: Option<Task<()>>,
     /// Mutation gate for deferred per-backend browser snapshots.
@@ -184,7 +188,8 @@ impl SftpPanel {
             active_key: None,
             cwd_source: None,
             terminal_cwd_cache: None,
-            cwd: PathBuf::new(),
+            cwd: RemotePath::new(""),
+            load_generation: 0,
             table,
             selected: None,
             error: None,
@@ -211,8 +216,33 @@ impl SftpPanel {
         let active = app_state.read(cx).active_workspace(workspace_id);
         let (sftp, cwd_source) = (active.active_sftp, active.active_cwd_source);
         me.sync_from_app_state(sftp, cwd_source, cx);
+        me.load_table_state(cx);
 
         me
+    }
+
+    /// Read the persisted column state off the UI thread and apply it once it
+    /// arrives. Filesystem reads must not run on the UI thread (see
+    /// `docs/agents/persistence.md`).
+    fn load_table_state(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let state = cx
+                .background_executor()
+                .spawn(async { read_sftp_table_state() })
+                .await;
+            let Some(state) = state else {
+                return;
+            };
+            // The panel may be gone before the read completes; nothing to apply then.
+            _ = this.update(cx, |this, cx| {
+                this.table.update(cx, |table, cx| {
+                    table.delegate_mut().apply_persisted_state(&state);
+                    table.refresh(cx);
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
     }
 
     /// Create an entity bound to a specific dock/workspace.
@@ -285,19 +315,19 @@ impl SftpPanel {
                     store.track_backend(backend);
                 }
                 let state = store.get_or_default(key);
-                let is_fresh = state.cwd.as_os_str().is_empty();
+                let is_fresh = state.cwd.is_empty();
                 self.apply_state(state, cx);
                 if is_fresh {
                     // First time this backend is shown — load its root dir.
                     log::debug!("SftpPanel: loading initial dir \".\" for new backend");
-                    self.load_dir(PathBuf::from("."), cx);
+                    self.load_dir(RemotePath::new("."), cx);
                 }
             }
             None => {
                 // No SFTP backend (local shell / no SFTP) — show the empty state.
                 self.selected = None;
                 self.error = None;
-                self.cwd = PathBuf::new();
+                self.cwd = RemotePath::new("");
                 self.transfers.clear();
                 self.next_transfer_id = 0;
                 self.pending_action = None;
@@ -525,7 +555,7 @@ impl SftpPanel {
                 if path.is_empty() {
                     return;
                 }
-                self.goto_path(PathBuf::from(path), cx);
+                self.goto_path(RemotePath::new(path), cx);
             }
             InputEvent::Change => {
                 // Reset the error highlight when the user types again.
@@ -539,51 +569,65 @@ impl SftpPanel {
         }
     }
 
-    /// Goto path — try read_dir; on error, set path_error.
-    pub(crate) fn goto_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+    /// Goto path — stat it, then `load_dir` when it is a directory; on error, set
+    /// `path_error`. The stat result is discarded when a newer directory request
+    /// or a backend switch happened while it was in flight.
+    pub(crate) fn goto_path(&mut self, path: RemotePath, cx: &mut Context<Self>) {
         let sftp = match &self.sftp {
             Some(s) => s.clone(),
             None => return,
         };
+        let generation = self.load_generation;
+        let key = self.active_key;
         cx.spawn(async move |this, cx| {
             let result = sftp.stat(path.clone()).await;
-            let _ = this.update(cx, |this, cx| match result {
-                Ok(stat) if stat.is_dir => {
-                    this.path_error = false;
-                    this.mark_state_dirty();
-                    this.load_dir(path, cx);
+            // The panel may be gone before the stat completes; nothing to apply then.
+            _ = this.update(cx, |this, cx| {
+                if this.load_generation != generation || this.active_key != key {
+                    log::debug!("SftpPanel::goto_path: discarding stale result for \"{path}\"");
+                    return;
                 }
-                Ok(_) => {
-                    log::warn!(
-                        "SftpPanel::goto_path: not a directory: \"{}\"",
-                        path.display()
-                    );
-                    this.path_error = true;
-                    this.mark_state_dirty();
-                    cx.notify();
-                }
-                Err(error) => {
-                    log::warn!(
-                        "SftpPanel::goto_path: invalid path \"{}\": {error}",
-                        path.display()
-                    );
-                    this.path_error = true;
-                    this.mark_state_dirty();
-                    cx.notify();
+                match result {
+                    Ok(stat) if stat.is_dir => {
+                        this.path_error = false;
+                        this.mark_state_dirty();
+                        this.load_dir(path, cx);
+                    }
+                    Ok(_) => {
+                        log::warn!("SftpPanel::goto_path: not a directory: \"{path}\"");
+                        this.path_error = true;
+                        this.mark_state_dirty();
+                        cx.notify();
+                    }
+                    Err(error) => {
+                        log::warn!("SftpPanel::goto_path: invalid path \"{path}\": {error}");
+                        this.path_error = true;
+                        this.mark_state_dirty();
+                        cx.notify();
+                    }
                 }
             });
         })
         .detach();
     }
 
-    /// Debounce 1s then persist column state (width + visibility) to docks.json.
+    /// Debounce 1s, snapshot the column state (width + visibility) on the UI
+    /// thread, then write it to docks.json on the background executor.
     pub(crate) fn schedule_save_table_state(&mut self, cx: &mut Context<Self>) {
         self._save_table_task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_secs(1)).await;
-            let _ = this.update(cx, |this, cx| {
-                this.table.read(cx).delegate().persist();
-                cx.notify();
-            });
+            let Ok(state) = this.update(cx, |this, cx| {
+                this.table.read(cx).delegate().to_persisted_state()
+            }) else {
+                return;
+            };
+            cx.background_executor()
+                .spawn(async move {
+                    if let Err(error) = write_sftp_table_state(&state) {
+                        log::warn!("SftpPanel: persist table state failed: {error:#}");
+                    }
+                })
+                .await;
         }));
     }
 }

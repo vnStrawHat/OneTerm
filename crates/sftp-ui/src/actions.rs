@@ -3,7 +3,6 @@
 //! Split out from `file_browser.rs` to keep the file shorter.
 //! These methods open a dialog (input/confirm) and then call the SFTP backend.
 
-use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -17,11 +16,18 @@ use gpui_component::{
     notification::NotificationType,
     v_flex,
 };
-use oneterm_core::{FileStat, SftpBackend};
+use oneterm_core::{FileStat, RemotePath, SftpBackend};
 use oneterm_state::notif_ext::notify;
 
 use super::panel::SftpPanel;
 use super::types::{format_date, format_owner, format_permissions, format_size};
+
+/// The remote path an entry gets when it is renamed to `new_name` in place.
+fn rename_target(from: &RemotePath, new_name: &str) -> RemotePath {
+    from.parent()
+        .unwrap_or_else(RemotePath::root)
+        .join(new_name)
+}
 
 impl SftpPanel {
     /// Return the active SFTP backend, or notify the user and yield `None` when
@@ -102,15 +108,8 @@ impl SftpPanel {
                     return false;
                 }
 
-                // Build new path: parent + new_name
-                let parent = from_path.parent().unwrap_or_else(|| Path::new("/"));
-                let to_path = parent.join(&new_name);
-
-                log::info!(
-                    "SftpPanel: rename \"{}\" → \"{}\"",
-                    from_path.display(),
-                    to_path.display()
-                );
+                let to_path = rename_target(&from_path, &new_name);
+                log::info!("SftpPanel: rename \"{from_path}\" → \"{to_path}\"");
 
                 let result_name = new_name.clone();
                 let operation_sftp = sftp.clone();
@@ -201,7 +200,8 @@ impl SftpPanel {
     }
 
     /// Delete selected entry (file or folder).
-    /// Opens a confirm alert dialog → sftp.remove() or sftp.rmdir().
+    /// Opens a confirm alert dialog → `sftp.remove()` for a file, or
+    /// `sftp.remove_dir_all()` for a folder (recursive — the dialog says so).
     pub(crate) fn do_delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let entry = match self.selected_entry(cx) {
             Some(e) => e.clone(),
@@ -232,8 +232,7 @@ impl SftpPanel {
         let path = entry.path.clone();
         let is_dir = entry.is_dir;
         let entry_name = entry.name.clone();
-        let kind_str = if is_dir { "folder" } else { "file" };
-        let desc = format!("Are you sure you want to delete {kind_str} \"{entry_name}\"?");
+        let desc = delete_confirmation(&entry_name, is_dir);
 
         window.open_alert_dialog(cx, move |alert, _window, _cx| {
             alert
@@ -258,7 +257,7 @@ impl SftpPanel {
                                 window
                                     .spawn(cx, async move |cx| {
                                         let result = if is_dir {
-                                            operation_sftp.rmdir(operation_path).await
+                                            operation_sftp.remove_dir_all(operation_path).await
                                         } else {
                                             operation_sftp.remove(operation_path).await
                                         };
@@ -306,7 +305,7 @@ impl SftpPanel {
     /// Create a new folder in the cwd.
     /// Opens a dialog with an InputState → sftp.mkdir().
     pub(crate) fn do_new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        log::info!("SftpPanel::do_new_folder: cwd=\"{}\"", self.cwd.display());
+        log::info!("SftpPanel::do_new_folder: cwd=\"{}\"", self.cwd);
 
         let Some(sftp) = self.require_sftp("do_new_folder", window, cx) else {
             return;
@@ -337,7 +336,7 @@ impl SftpPanel {
                     return false;
                 }
                 let path = cwd.join(&name);
-                log::info!("SftpPanel: mkdir \"{}\"", path.display());
+                log::info!("SftpPanel: mkdir \"{path}\"");
                 let result_name = name.clone();
                 let operation_sftp = sftp.clone();
                 let operation_panel = panel.clone();
@@ -472,6 +471,18 @@ impl SftpPanel {
     }
 }
 
+/// Wording of the delete confirmation. A folder delete is recursive, so the
+/// text must say that its contents go with it.
+fn delete_confirmation(entry_name: &str, is_dir: bool) -> String {
+    if is_dir {
+        format!(
+            "Are you sure you want to delete folder \"{entry_name}\" and all of its contents? This cannot be undone."
+        )
+    } else {
+        format!("Are you sure you want to delete file \"{entry_name}\"?")
+    }
+}
+
 fn open_properties_dialog(stat: FileStat, window: &mut Window, cx: &mut App) {
     log::debug!(
         "SftpPanel: stat OK — size={}, perm={:#o}, uid={:?}, gid={:?}",
@@ -492,7 +503,7 @@ fn open_properties_dialog(stat: FileStat, window: &mut Window, cx: &mut App) {
     let perm_text = Rc::new(format_permissions(stat.permissions));
     let owner_text = Rc::new(format_owner(stat.owner.as_deref(), stat.uid));
     let group_text = Rc::new(format_owner(stat.group.as_deref(), stat.gid));
-    let path_text = Rc::new(stat.path.display().to_string());
+    let path_text = Rc::new(stat.path.to_string());
     let name_text = Rc::new(stat.name.clone());
     let is_symlink = stat.is_symlink;
 
@@ -572,4 +583,32 @@ fn open_properties_dialog(stat: FileStat, window: &mut Window, cx: &mut App) {
                     }),
             )
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ARCH-12: rename and new-folder targets are POSIX paths on every host OS.
+    #[test]
+    fn rename_and_mkdir_targets_use_forward_slashes() {
+        let entry = RemotePath::new("/home/u/a.txt");
+        assert_eq!(rename_target(&entry, "b.txt").as_str(), "/home/u/b.txt");
+        assert_eq!(
+            rename_target(&RemotePath::new("/top"), "renamed").as_str(),
+            "/renamed"
+        );
+
+        let cwd = RemotePath::new("/home/u");
+        assert_eq!(cwd.join("new folder").as_str(), "/home/u/new folder");
+        assert_eq!(RemotePath::root().join("dir").as_str(), "/dir");
+    }
+
+    #[test]
+    fn folder_delete_confirmation_mentions_the_contents() {
+        let text = delete_confirmation("logs", true);
+        assert!(text.contains("\"logs\""));
+        assert!(text.contains("all of its contents"));
+        assert!(!delete_confirmation("a.txt", false).contains("contents"));
+    }
 }
