@@ -27,7 +27,7 @@ use async_channel::Receiver;
 use russh::Pty;
 use russh::client;
 use russh::client::AuthResult;
-use russh::keys::{PrivateKey, PrivateKeyWithHashAlg, load_secret_key};
+use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg, load_secret_key};
 
 use oneterm_terminal::{PtySize, SessionEvent};
 
@@ -64,14 +64,36 @@ pub struct SshSession {
     pub(crate) listener: SshListener,
     pub(crate) event_rx: Mutex<Option<Receiver<SessionEvent>>>,
     pub(crate) state: SharedState,
-    /// Keep the `Sender` alive — the listener has its own clone.
-    #[allow(dead_code)]
-    pub(crate) cmd_tx: async_channel::Sender<Cmd>,
     pub(crate) cell_width: Mutex<f32>,
     pub(crate) line_height: Mutex<f32>,
     pub(crate) marked_text: Mutex<Option<String>>,
     /// SFTP session (None = server does not support SFTP).
     pub(crate) sftp: Mutex<Option<Arc<SftpSession>>>,
+}
+
+impl Drop for SshSession {
+    /// Release the connection when the session is discarded without `close()`
+    /// (for example when connect succeeded after the user cancelled).
+    ///
+    /// `ssh_main_task` holds `cmd_tx` clones through `term`/`listener`, so the
+    /// command channel never closes on its own; the listener's closing flag is
+    /// the task's shutdown signal. `pty_close` sets it and is idempotent, so an
+    /// explicit `close()` followed by drop is fine.
+    fn drop(&mut self) {
+        if !self.listener.is_closing() {
+            log::info!("SshSession: dropped without close — requesting close");
+            if let Err(error) = self.listener.pty_close() {
+                log::debug!("SshSession: close on drop not delivered: {error}");
+            }
+        }
+        // Best effort: `sftp_task` also stops when the last command sender
+        // goes away, but the UI may still hold an `Arc<SftpSession>`.
+        let sftp = self.sftp.lock().ok().and_then(|mut guard| guard.take());
+        if let Some(sftp) = sftp {
+            use oneterm_core::SftpBackend;
+            sftp.close();
+        }
+    }
 }
 
 const CONNECT_DEADLINE: Duration = Duration::from_secs(60);
@@ -162,7 +184,7 @@ pub fn connect(
     let state = new_shared();
     state.lock().unwrap().alive = true;
 
-    let listener = SshListener::new(event_tx, cmd_tx.clone(), state.clone());
+    let listener = SshListener::new(event_tx, cmd_tx, state.clone());
 
     let size = TermSize {
         cols: initial.cols as usize,
@@ -241,7 +263,27 @@ pub fn connect(
                         &key_path,
                         passphrase.as_ref().map(|secret| secret.expose_secret()),
                     )?;
-                    let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key), None);
+                    // RSA keys must not sign with the legacy SHA-1 `ssh-rsa`
+                    // (OpenSSH >= 8.8 rejects it). Ask the server which
+                    // `rsa-sha2-*` it supports (RFC 8308 `server-sig-algs`);
+                    // when it does not say, prefer SHA-512.
+                    let hash_alg = if key.algorithm().is_rsa() {
+                        let advertised = await_phase(
+                            "authentication",
+                            async {
+                                handle
+                                    .best_supported_rsa_hash()
+                                    .await
+                                    .map_err(|e| anyhow::anyhow!("{e}"))
+                            },
+                            cfg.cancellation.clone(),
+                        )
+                        .await?;
+                        rsa_hash_alg(advertised)
+                    } else {
+                        None
+                    };
+                    let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg);
                     await_phase(
                         "authentication",
                         async {
@@ -383,7 +425,6 @@ pub fn connect(
                 listener,
                 event_rx: Mutex::new(Some(event_rx)),
                 state,
-                cmd_tx,
                 cell_width: Mutex::new(0.0),
                 line_height: Mutex::new(0.0),
                 marked_text: Mutex::new(None),
@@ -473,6 +514,17 @@ async fn send_shell_integration_bootstrap(
     Ok(())
 }
 
+/// Pick the RSA signature hash from the server's `server-sig-algs` answer
+/// (`russh::client::Handle::best_supported_rsa_hash`).
+///
+/// `None` = extension not advertised, `Some(None)` = advertised without any
+/// `rsa-sha2-*`. Both fall back to SHA-512 — passing `None` to
+/// `PrivateKeyWithHashAlg` would sign with legacy SHA-1 `ssh-rsa`, which modern
+/// servers refuse and which is no longer considered safe.
+fn rsa_hash_alg(advertised: Option<Option<HashAlg>>) -> Option<HashAlg> {
+    advertised.flatten().or(Some(HashAlg::Sha512))
+}
+
 /// Load a private key from a file, decrypting with the passphrase if needed.
 fn load_private_key(
     path: &std::path::Path,
@@ -524,6 +576,72 @@ mod tests {
         for handle in handles {
             assert_eq!(handle.join().expect("runtime worker must finish"), expected);
         }
+    }
+
+    fn detached_session() -> (SshSession, async_channel::Receiver<Cmd>) {
+        let (cmd_tx, cmd_rx) = async_channel::bounded::<Cmd>(4);
+        let (event_tx, event_rx) = async_channel::bounded::<SessionEvent>(4);
+        let state = new_shared();
+        state.lock().unwrap().alive = true;
+        let listener = SshListener::new(event_tx, cmd_tx, state.clone());
+        let term = Arc::new(FairMutex::new(Term::new(
+            Config::default(),
+            &TermSize {
+                cols: 80,
+                lines: 24,
+            },
+            listener.clone(),
+        )));
+        let session = SshSession {
+            term,
+            listener,
+            event_rx: Mutex::new(Some(event_rx)),
+            state,
+            cell_width: Mutex::new(0.0),
+            line_height: Mutex::new(0.0),
+            marked_text: Mutex::new(None),
+            sftp: Mutex::new(None),
+        };
+        (session, cmd_rx)
+    }
+
+    /// CORR-06: a session discarded without `close()` must still tell the task
+    /// to shut down (closing flag + `Cmd::Close`).
+    #[test]
+    fn dropping_an_unclosed_session_requests_close() {
+        let (session, cmd_rx) = detached_session();
+        let listener = session.listener.clone();
+        assert!(!listener.is_closing());
+
+        drop(session);
+
+        assert!(listener.is_closing());
+        assert!(matches!(cmd_rx.try_recv(), Ok(Cmd::Close)));
+    }
+
+    /// CORR-06: drop after an explicit `close()` does not enqueue a second close.
+    #[test]
+    fn dropping_a_closed_session_is_idempotent() {
+        use oneterm_terminal::TerminalSession;
+
+        let (session, cmd_rx) = detached_session();
+        session.close().unwrap();
+        assert!(matches!(cmd_rx.try_recv(), Ok(Cmd::Close)));
+
+        drop(session);
+
+        assert!(cmd_rx.try_recv().is_err());
+    }
+
+    /// SEC-02: RSA keys never fall back to SHA-1 `ssh-rsa`.
+    #[test]
+    fn rsa_hash_prefers_server_choice_and_never_sha1() {
+        assert_eq!(
+            rsa_hash_alg(Some(Some(HashAlg::Sha256))),
+            Some(HashAlg::Sha256)
+        );
+        assert_eq!(rsa_hash_alg(None), Some(HashAlg::Sha512));
+        assert_eq!(rsa_hash_alg(Some(None)), Some(HashAlg::Sha512));
     }
 
     #[tokio::test]
