@@ -5,7 +5,8 @@
 //!   `keyboard_types` or GPUI. The UI crate maps GPUI key events → `KeySpec`.
 //! - Returns bytes only, with NO side effects (scroll/selection/shift-tracking
 //!   belong to the view/session, not the encoder).
-//! - Returns `None` when unrecognized → the caller decides to ignore it.
+//! - Returns `None` only when the combination has no terminal encoding
+//!   (Ctrl + non-ASCII / multi-codepoint text) → the caller ignores it.
 
 /// Modifier state when encoding a key (bit-agnostic, uses bool for clarity).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -72,7 +73,38 @@ fn modifier_byte(mods: KeyMods) -> u8 {
     1 + mods.shift as u8 + (mods.alt as u8) * 2 + (mods.ctrl as u8) * 4
 }
 
-/// Encode a single key event → escape sequence. Returns `None` if unrecognized.
+/// Bytes for Ctrl + a printable ASCII character, following the xterm table.
+///
+/// Letters map to their C0 control (`byte & 0x1f`, case-insensitive). The
+/// digits and punctuation that share a control byte in xterm are listed
+/// explicitly; every other ASCII character (`0`, `1`, `9`, `,`, `.`, …) is
+/// sent unchanged, as xterm does. Non-ASCII or multi-codepoint text has no
+/// Ctrl encoding → `None`.
+fn ctrl_bytes(text: &str) -> Option<Vec<u8>> {
+    let mut chars = text.chars();
+    let ch = chars.next()?;
+    if chars.next().is_some() || !ch.is_ascii() {
+        return None;
+    }
+    let byte = match ch {
+        'a'..='z' | 'A'..='Z' => (ch as u8) & 0x1f,
+        ' ' | '2' | '@' => 0x00,
+        '3' | '[' => 0x1b,
+        '4' | '\\' => 0x1c,
+        '5' | ']' => 0x1d,
+        '6' | '^' => 0x1e,
+        '7' | '_' | '/' => 0x1f,
+        '8' | '?' => 0x7f,
+        other => other as u8,
+    };
+    Some(vec![byte])
+}
+
+/// Encode a single key event → escape sequence.
+///
+/// Returns `None` only when the combination has no terminal encoding — today
+/// that is Ctrl + a non-ASCII or multi-codepoint `Character` (there is no
+/// control byte for `Ctrl+é`); the caller drops the event.
 ///
 /// `app_cursor` mirrors the terminal's DECCKM state (`TermMode::APP_CURSOR`):
 /// when the program has enabled Application Cursor Keys (e.g. vim/less/man
@@ -80,7 +112,9 @@ fn modifier_byte(mods: KeyMods) -> u8 {
 /// `ESC O{ch}` form instead of `ESC [{ch}` so the program recognizes them.
 ///
 /// Conventions:
-/// - `Character` + `ctrl` + 1 byte → `& 0x1f` (control code).
+/// - `Character` + `ctrl` → xterm control table (see [`ctrl_bytes`]).
+/// - `Character` + `alt` → `ESC` prefix; combined with `ctrl` the prefix is
+///   applied to the control byte (`Ctrl+Alt+a` → `ESC 0x01`).
 /// - `Enter` shift/ctrl → CSI u; plain → `\r`.
 /// - `Backspace`: ctrl → `0x08`, alt → `ESC DEL`, plain → `0x7f`.
 /// - Arrow + (shift|ctrl) → `CSI 1;{mod}{ch}`; plain → `ESC O{ch}` when
@@ -93,14 +127,18 @@ pub fn encode_key(key: &KeySpec, mods: KeyMods, app_cursor: bool) -> Option<Vec<
     let alt = mods.alt;
 
     let seq: Vec<u8> = match key {
-        KeySpec::Character(ch) if ctrl && ch.len() == 1 => vec![ch.as_bytes()[0] & 0x1f],
-        KeySpec::Character(ch) if alt => {
-            // Alt-prefix: ESC + character (approximation for ASCII).
-            let mut v = vec![0x1b];
-            v.extend_from_slice(ch.as_bytes());
-            v
+        KeySpec::Character(ch) => {
+            let mut bytes = if ctrl {
+                ctrl_bytes(ch)?
+            } else {
+                ch.as_bytes().to_vec()
+            };
+            if alt {
+                // Alt (Meta) prefixes ESC — also for Ctrl+Alt chords.
+                bytes.insert(0, 0x1b);
+            }
+            bytes
         }
-        KeySpec::Character(ch) => ch.as_bytes().to_vec(),
 
         KeySpec::Named(NamedKey::Enter) if shift || ctrl => {
             format!("\x1b[13;{}u", modifier_byte(mods)).into_bytes()
@@ -218,7 +256,6 @@ mod tests {
 
     #[test]
     fn ctrl_space_is_nul() {
-        // Ctrl+Space = NUL (0x00): ' ' (0x20) & 0x1f = 0x00.
         let s = encode_key(
             &KeySpec::Character(" ".into()),
             m(false, true, false),
@@ -226,6 +263,88 @@ mod tests {
         )
         .unwrap();
         assert_eq!(s, vec![0x00]);
+    }
+
+    #[test]
+    fn ctrl_uppercase_letter_uses_same_control_byte() {
+        // Ctrl+Shift+A arrives as "A"; the control byte is case-insensitive.
+        let s = encode_key(&KeySpec::Character("A".into()), m(true, true, false), false).unwrap();
+        assert_eq!(s, vec![0x01]);
+    }
+
+    #[test]
+    fn ctrl_punctuation_and_digits_follow_xterm_table() {
+        // xterm: Ctrl+2/@ → NUL, 3/[ → ESC, 4/\ → FS, 5/] → GS, 6/^ → RS,
+        // 7/_ → US, 8/? → DEL.
+        let table: &[(&str, u8)] = &[
+            ("2", 0x00),
+            ("@", 0x00),
+            ("3", 0x1b),
+            ("[", 0x1b),
+            ("4", 0x1c),
+            ("\\", 0x1c),
+            ("5", 0x1d),
+            ("]", 0x1d),
+            ("6", 0x1e),
+            ("^", 0x1e),
+            ("7", 0x1f),
+            ("_", 0x1f),
+            ("/", 0x1f),
+            ("8", 0x7f),
+            ("?", 0x7f),
+        ];
+        for (ch, expected) in table {
+            let s = encode_key(
+                &KeySpec::Character((*ch).into()),
+                m(false, true, false),
+                false,
+            )
+            .unwrap();
+            assert_eq!(s, vec![*expected], "Ctrl+{ch}");
+        }
+    }
+
+    #[test]
+    fn ctrl_unmapped_ascii_passes_through() {
+        // xterm sends the digit itself for Ctrl+0/1/9 (no control byte exists).
+        for ch in ["0", "1", "9", ",", "."] {
+            let s =
+                encode_key(&KeySpec::Character(ch.into()), m(false, true, false), false).unwrap();
+            assert_eq!(s, ch.as_bytes(), "Ctrl+{ch}");
+        }
+    }
+
+    #[test]
+    fn ctrl_non_ascii_has_no_encoding() {
+        assert_eq!(
+            encode_key(
+                &KeySpec::Character("é".into()),
+                m(false, true, false),
+                false
+            ),
+            None
+        );
+        // Multi-codepoint text (IME/compose) with Ctrl is dropped as well.
+        assert_eq!(
+            encode_key(
+                &KeySpec::Character("ab".into()),
+                m(false, true, false),
+                false
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn ctrl_alt_letter_prefixes_esc_to_control_byte() {
+        let s = encode_key(&KeySpec::Character("a".into()), m(false, true, true), false).unwrap();
+        assert_eq!(s, vec![0x1b, 0x01]);
+    }
+
+    #[test]
+    fn ctrl_alt_bracket_prefixes_esc_to_esc() {
+        let s = encode_key(&KeySpec::Character("[".into()), m(false, true, true), false).unwrap();
+        assert_eq!(s, vec![0x1b, 0x1b]);
     }
 
     #[test]
