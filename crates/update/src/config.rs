@@ -9,6 +9,17 @@ use serde_json::Value;
 
 const CURRENT_SCHEMA_VERSION: u32 = 1;
 
+/// Canonical GitHub `owner/repo` that publishes OneTerm releases.
+pub const DEFAULT_UPDATE_REPOSITORY: &str = "vnStrawHat/OneTerm";
+
+/// GitHub `owner/repo` the updater queries. Fixed at compile time: the
+/// canonical repository unless `ONETERM_UPDATE_REPO=owner/repo` is set in the
+/// build environment (forks / mirrors that publish their own releases).
+pub const UPDATE_REPOSITORY: &str = match option_env!("ONETERM_UPDATE_REPO") {
+    Some(repository) => repository,
+    None => DEFAULT_UPDATE_REPOSITORY,
+};
+
 /// Release channel used by the updater.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
