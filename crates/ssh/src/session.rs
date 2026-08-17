@@ -16,6 +16,7 @@
 //!
 //! See `docs/terminal-backend.md` §7, `docs/sftp-browser-design.md`.
 
+use std::borrow::Cow;
 use std::future::Future;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -213,11 +214,12 @@ pub fn connect(
             log::info!("SshSession: connecting to {addr}");
             let handler =
                 SshClientHandler::new(cfg.host.clone(), cfg.port, cfg.host_key_policy.clone());
-            let client_cfg = russh::client::Config {
+            let mut client_cfg = russh::client::Config {
                 keepalive_interval: Some(KEEPALIVE_INTERVAL),
                 keepalive_max: KEEPALIVE_MAX,
                 ..Default::default()
             };
+            client_cfg.preferred.key = Cow::Owned(handler.preferred_key_algorithms());
 
             let mut handle = await_phase(
                 "connect",
