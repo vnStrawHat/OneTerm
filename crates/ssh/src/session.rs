@@ -99,6 +99,11 @@ impl Drop for SshSession {
 
 const CONNECT_DEADLINE: Duration = Duration::from_secs(60);
 const PHASE_DEADLINE: Duration = Duration::from_secs(20);
+// Transport-level keepalive so a dead peer or a NAT that dropped the mapping is
+// detected instead of leaving the tab hanging forever: one `keepalive@openssh.com`
+// request every 30 s, disconnect after 3 unanswered (about 90 s of silence).
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+const KEEPALIVE_MAX: usize = 3;
 // Disable TTY echo while shell integration bootstraps the running shell.
 const SHELL_INTEGRATION_PTY_MODES: &[(Pty, u32)] = &[(Pty::ECHO, 0)];
 
@@ -206,9 +211,13 @@ pub fn connect(
         let operation = async {
             let addr = format!("{}:{}", cfg.host, cfg.port);
             log::info!("SshSession: connecting to {addr}");
-            let client_cfg = russh::client::Config::default();
             let handler =
                 SshClientHandler::new(cfg.host.clone(), cfg.port, cfg.host_key_policy.clone());
+            let client_cfg = russh::client::Config {
+                keepalive_interval: Some(KEEPALIVE_INTERVAL),
+                keepalive_max: KEEPALIVE_MAX,
+                ..Default::default()
+            };
 
             let mut handle = await_phase(
                 "connect",
