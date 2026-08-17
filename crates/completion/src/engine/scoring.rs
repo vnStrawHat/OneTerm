@@ -53,7 +53,12 @@ pub(super) fn match_option(
     if token.is_empty() {
         return Some((true, 0));
     }
-    if flag.len() >= token.len() && flag[..token.len()].eq_ignore_ascii_case(token) {
+    // `get` (not indexing): `token.len()` may land inside a multibyte char of a
+    // history-derived option token.
+    if flag
+        .get(..token.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(token))
+    {
         return Some((true, token.len()));
     }
     if cfg.fuzzy && is_subsequence(flag, token, true) {

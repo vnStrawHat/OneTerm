@@ -63,24 +63,15 @@ pub struct Suggestion {
 }
 
 impl Suggestion {
-    /// The bytes to append to the PTY given the text the user already typed
-    /// (append-only, docs 04 §5). Empty if `text` is not a prefix extension of
-    /// `typed` (a fuzzy match — accept is gated by `allow_fuzzy_accept`).
-    pub fn remainder<'a>(&'a self, typed: &str) -> &'a str {
-        if typed.len() > self.text.len() {
-            return "";
-        }
-        let head = &self.text[..typed.len()];
-        if head.eq_ignore_ascii_case(typed) {
-            &self.text[typed.len()..]
-        } else {
-            ""
-        }
-    }
-
     /// Whether accepting this suggestion is a pure prefix extension of `typed`.
+    ///
+    /// `typed.len()` may fall inside a multibyte char of `text` (fuzzy match
+    /// on a history-derived candidate such as `日x` with typed `x`), so the
+    /// slice is checked with `get` rather than indexed.
     pub fn is_prefix_of_typed(&self, typed: &str) -> bool {
-        typed.len() <= self.text.len() && self.text[..typed.len()].eq_ignore_ascii_case(typed)
+        self.text
+            .get(..typed.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(typed))
     }
 }
 
