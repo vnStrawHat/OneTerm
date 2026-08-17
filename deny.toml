@@ -57,6 +57,12 @@ allow = ["GPL-3.0-or-later"]
 name = "ztracing_macro"
 allow = ["GPL-3.0-or-later"]
 
+# crates/tools (never shipped): doom-fire.rs is a GPL-3.0 port of DOOM-fire-zig, so the
+# package declares `Apache-2.0 AND GPL-3.0-only` (THIRD-PARTY-NOTICES.md).
+[[licenses.exceptions]]
+name = "oneterm-tools"
+allow = ["GPL-3.0-only"]
+
 # Two Zed crates have no `license` field; each carries only a LICENSE-APACHE symlink
 # to the monorepo root (docs/license-analysis.md §2.1), which cargo-deny cannot score
 # from a git checkout. Clarify them as Apache-2.0.

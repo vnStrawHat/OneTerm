@@ -18,6 +18,7 @@ members = [
     "crates/local-shell",
     "crates/ssh",
     "crates/completion",
+    "crates/tools",
 ]
 resolver = "3"
 # Vendored dependency snapshots (patched below). Excluded as workspace members;
@@ -66,8 +67,14 @@ oneterm-update = { path = "crates/update" }
 oneterm-ssh = { path = "crates/ssh" }
 oneterm-completion = { path = "crates/completion" }
 
-# Terminal engine — Zed fork of alacritty_terminal with TerminalContent/display_iter.
-# Keep the revision aligned with GPUI (see docs/agents/dependencies.md §1).
+# Terminal engine — Zed fork of alacritty_terminal with TerminalContent/display_iter,
+# VENDORED at vendor/alacritty_terminal (this rev = the pristine base; OneTerm's delta
+# lives in vendor/patches/alacritty_terminal/*). The git source is kept and redirected
+# by the [patch] section below on purpose (BUILD-10 evaluated and rejected): a direct
+# `path =` dependency would make `cargo fmt --all` / `cargo clippy` treat the vendored
+# tree as a local path dependency (rustfmt would then re-format upstream sources with
+# OneTerm's .rustfmt.toml and fail `--check`), whereas a [patch] source stays outside
+# every workspace-wide tool scope. Cost: one upstream clone on a cold cache.
 alacritty_terminal = { git = "https://github.com/zed-industries/alacritty", rev = "fcf32feacb367b75ec84dd40f041e4fd411d3cc1" }
 # Terminal helpers: URL detect + OSC 52 base64
 linkify = "0.10"
@@ -112,7 +119,7 @@ sysinfo = "0.37"
 itertools = "0.14"
 # Embedded theme JSON + icon assets (theme crate)
 rust-embed = "8.7"
-# Windows FFI (Ctrl handler, file locking / replace, ConPTY example). One version
+# Windows FFI (Ctrl handler, file locking / replace, DOOM-fire console mode). One version
 # for every first-party crate (0.59 = the version alacritty_terminal uses; 0.61 moved
 # `BOOL` to `windows_sys::core`); the feature set is the union of what they need.
 windows-sys = { version = "0.59", features = [
@@ -124,7 +131,7 @@ windows-sys = { version = "0.59", features = [
 ] }
 # Compile assets/oneterm.rc → embed app icon + version info into the exe (app build.rs).
 embed-resource = "3"
-# DOOM-fire example: terminal size detection (local-shell dev-dep).
+# DOOM-fire diagnostic (crates/tools): terminal size detection on Unix.
 libc = "0.2"
 
 [workspace.lints.clippy]
@@ -151,40 +158,57 @@ debug = "limited"
 split-debuginfo = "unpacked"
 
 [profile.dev.package]
+# Third-party hot crates are always optimized in dev: they rarely change (no
+# rebuild cost) and are never stepped through in a debugger.
 gpui = { opt-level = 3 }
 gpui_platform = { opt-level = 3 }
 smol = { opt-level = 3 }
-# Hot render/parse path — keep DOOM-fire (and other full-screen high-fps TUIs)
-# usable and correct under `cargo run`. At opt-level = 0 the per-frame cost is
-# 20-100x slower, so the UI thread never returns to the Windows message pump
-# (window goes "Not Responding") and the render can't keep pace with the pump.
+alacritty_terminal = { opt-level = 3 }
+
+# `fast-dev` — dev profile with OneTerm's own hot-path crates optimized too
+# (`cargo run -p oneterm-app --profile fast-dev`). Use it to run DOOM-fire and
+# other full-screen high-fps TUIs from a debug build: at opt-level = 0 the
+# per-frame cost is 20-100x slower, so the UI thread never returns to the
+# Windows message pump (window goes "Not Responding") and the render can't keep
+# pace with the pump.
 #
-# The hot path spans FOUR of our crates, not just the terminal view:
+# The hot path spans FOUR first-party crates, not just the terminal view:
 #   - oneterm-terminal-view: the ~13k-quad paint loop + box-drawing geometry + layout.
-#   - alacritty_terminal: Term::advance() parsing the fire's escape stream.
 #   - oneterm-terminal:  TerminalContent::from() clones ~5.4k cells per snapshot
 #                        (held under the Term FairMutex) — unoptimized this
 #                        starves the PTY pump thread.
-#   - oneterm-local-shell / -ssh: the PTY pump loop + OSC side-parser + state locks.
+#   - oneterm-local-shell / -ssh: the PTY pump loop + state locks.
 # Leaving any of these at opt-level = 0 leaves a slow link in the chain that
-# blocks the whole pipeline, so DOOM-fire renders choppily / incompletely in
-# debug even after the view crate is optimized.
+# blocks the whole pipeline.
 #
-# Trade-off: stepping through the terminal backend in a debugger is less precise.
-# Drop the crate you need to step through back to opt-level = 0 temporarily.
+# These overrides deliberately live in a named profile rather than in `dev`
+# (BUILD-09): plain `dev` (and `test`, which inherits it) keeps first-party code
+# at opt-level = 0 for precise debugging and fast incremental rebuilds.
+[profile.fast-dev]
+inherits = "dev"
+
+[profile.fast-dev.package]
+gpui = { opt-level = 3 }
+gpui_platform = { opt-level = 3 }
+smol = { opt-level = 3 }
+alacritty_terminal = { opt-level = 3 }
 oneterm-terminal-view = { opt-level = 3 }
 oneterm-core = { opt-level = 3 }
 oneterm-terminal = { opt-level = 3 }
 oneterm-settings = { opt-level = 3 }
 oneterm-local-shell = { opt-level = 3 }
 oneterm-ssh = { opt-level = 3 }
-alacritty_terminal = { opt-level = 3 }
 
 [profile.release]
 # Optimized for the distributable binary.
 # - lto = "fat" + codegen-units = 1: whole-program optimization and a smaller binary.
 # - panic = "unwind": keep the default because alacritty_terminal / smol may rely on unwinding.
-# - strip = "symbols": remove debug symbols for a smaller binary; split debug info remains available.
+# - debug = 0 + strip = "symbols": no debug info is generated and the symbol table is
+#   stripped for a smaller binary. Consequence: NO .pdb/.dSYM exists for a release, so
+#   release crash reports (docs/crash-reporting.md) carry unsymbolicated frames; the
+#   panic message + module offsets are still recorded. To symbolicate a release,
+#   switch to `debug = "line-tables-only"` + `split-debuginfo = "packed"` and publish
+#   the .pdb/.dSYM next to the archive (BUILD-08 follow-up).
 # - opt-level = 3 + overflow-checks = false: production semantics.
 opt-level = 3
 lto = "fat"

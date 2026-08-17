@@ -23,9 +23,4 @@ polling.workspace = true
 log.workspace = true
 
 [dev-dependencies]
-# DOOM-fire example: terminal size detection + Windows VT processing.
-libc.workspace = true
 oneterm-terminal = { workspace = true, features = ["test-support"] }
-
-[target.'cfg(windows)'.dev-dependencies]
-windows-sys.workspace = true

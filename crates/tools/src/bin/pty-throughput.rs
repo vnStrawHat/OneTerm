@@ -10,9 +10,9 @@
 //! far higher, the limiter is elsewhere (VT density or the producer itself).
 //!
 //! Usage:
-//!   cargo run -p oneterm-local-shell --release --example pty_throughput -- <program> [args...]
+//!   cargo run -p oneterm-tools --release --bin pty-throughput -- <program> [args...]
 //! Example (Windows):
-//!   cargo run -p oneterm-local-shell --release --example pty_throughput -- cmd /c type C:\Temp\plain.txt
+//!   cargo run -p oneterm-tools --release --bin pty-throughput -- cmd /c type C:\Temp\plain.txt
 
 use std::io::{Read, Write};
 use std::num::NonZeroUsize;
