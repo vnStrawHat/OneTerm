@@ -381,8 +381,10 @@ truth for registered names — never spell the string literal at a call site):
 ```rust
 use oneterm_state::panel_names;
 
-register_panel(cx, panel_names::TERMINAL, |_, _, _, window, cx| {
-    Box::new(cx.new(|cx| TerminalPanel::new(window, cx)))
+register_panel(cx, panel_names::TERMINAL, |dock_area, _, _, window, cx| {
+    // `TerminalPanel::open(PanelSpec, ..)` is the panel's single constructor.
+    let spec = PanelSpec::DefaultShell { workspace: Some(dock_area.entity_id()) };
+    Box::new(TerminalPanel::open(spec, window, cx))
 });
 register_panel(cx, panel_names::SESSION, |_, _, _, window, cx| {
     Box::new(cx.new(|cx| SessionPanel::new(window, cx)))
@@ -568,7 +570,7 @@ fn reset_default_layout(dock_area: WeakEntity<DockArea>, window: &mut Window, cx
     let weak = dock_area.clone();
 
     let center = DockItem::tabs(
-        vec![ Arc::new(TerminalPanel::new_entity(window, cx)) ],   // 1 default terminal
+        vec![ Arc::new(TerminalPanel::open(PanelSpec::DefaultShell { workspace: None }, window, cx)) ],
         &weak, window, cx,
     );
 
@@ -635,7 +637,7 @@ AppTitleBar::new("OneTerm", window, cx).child(move |_, cx| {
 
 ```rust
 fn on_action_add_panel(&mut self, action: &AddPanel, window, cx) {
-    let panel = Arc::new(TerminalPanel::new_entity(window, cx));
+    let panel = Arc::new(TerminalPanel::open(PanelSpec::DefaultShell { workspace: None }, window, cx));
     self.dock_area.update(cx, |dock_area, cx| {
         dock_area.add_panel(panel, action.0, None, window, cx);
     });

@@ -393,3 +393,144 @@ impl BatchedTextRun {
         let _ = shaped.paint(pos, line_h, gpui::TextAlign::Left, None, window, cx);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use alacritty_terminal::index::{Column, Line, Point};
+    use alacritty_terminal::term::cell::{Cell, Flags};
+    use alacritty_terminal::vte::ansi::{Color, NamedColor};
+    use gpui::{Font, FontFeatures, FontStyle, FontWeight};
+    use gpui_component::Theme;
+    use oneterm_terminal::IndexedCell;
+
+    use super::{layout_row, line_hash};
+    use crate::theme::build_terminal_theme;
+
+    fn font() -> Font {
+        Font {
+            family: "monospace".into(),
+            weight: FontWeight::NORMAL,
+            style: FontStyle::Normal,
+            fallbacks: None,
+            features: FontFeatures(std::sync::Arc::new(vec![])),
+        }
+    }
+
+    fn cell(col: usize, c: char) -> IndexedCell {
+        let mut cell = Cell::default();
+        cell.c = c;
+        IndexedCell {
+            point: Point::new(Line(0), Column(col)),
+            cell,
+        }
+    }
+
+    fn row(text: &str) -> Vec<IndexedCell> {
+        text.chars().enumerate().map(|(i, c)| cell(i, c)).collect()
+    }
+
+    fn run_texts(cells: &[IndexedCell]) -> Vec<(i32, String, usize)> {
+        let theme = build_terminal_theme(&Theme::default());
+        let classes = vec![0u8; cells.len()];
+        let layout = layout_row(cells.iter().collect(), 0, &theme, &font(), &classes);
+        layout
+            .runs
+            .iter()
+            .map(|r| (r.start.column, r.text.clone(), r.cell_count))
+            .collect()
+    }
+
+    #[test]
+    fn adjacent_cells_with_the_same_style_form_one_run() {
+        assert_eq!(run_texts(&row("hello")), vec![(0, "hello".to_string(), 5)]);
+    }
+
+    #[test]
+    fn blank_cells_split_runs_and_are_not_laid_out() {
+        // "ab  cd": the two blanks are skipped and the second word starts a
+        // fresh run at its own absolute column.
+        assert_eq!(
+            run_texts(&row("ab  cd")),
+            vec![(0, "ab".to_string(), 2), (4, "cd".to_string(), 2)]
+        );
+    }
+
+    #[test]
+    fn a_style_change_starts_a_new_run() {
+        let mut cells = row("abcd");
+        cells[2].cell.fg = Color::Named(NamedColor::Red);
+        cells[3].cell.fg = Color::Named(NamedColor::Red);
+        assert_eq!(
+            run_texts(&cells),
+            vec![(0, "ab".to_string(), 2), (2, "cd".to_string(), 2)]
+        );
+        let mut cells = row("abcd");
+        cells[1].cell.flags.insert(Flags::BOLD);
+        assert_eq!(run_texts(&cells).len(), 3, "bold splits the run in three");
+    }
+
+    #[test]
+    fn wide_char_spacers_are_skipped_and_zero_width_marks_are_appended() {
+        // "日" occupies two cells; the second is a spacer that must not
+        // produce text or advance the run's cell count on its own.
+        let mut cells = row("日 x");
+        cells[0].cell.flags.insert(Flags::WIDE_CHAR);
+        cells[1].cell.flags.insert(Flags::WIDE_CHAR_SPACER);
+        cells[2].cell.push_zerowidth('\u{301}');
+        let runs = run_texts(&cells);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0], (0, "日".to_string(), 1));
+        // The zero-width mark is part of the run text but not a cell.
+        assert_eq!(runs[1], (2, "x\u{301}".to_string(), 1));
+    }
+
+    #[test]
+    fn background_rects_merge_horizontally() {
+        let theme = build_terminal_theme(&Theme::default());
+        let mut cells = row("abcd");
+        for c in &mut cells[1..3] {
+            c.cell.bg = Color::Named(NamedColor::Blue);
+        }
+        let classes = vec![0u8; cells.len()];
+        let layout = layout_row(cells.iter().collect(), 0, &theme, &font(), &classes);
+        assert_eq!(layout.rects.len(), 1);
+        assert_eq!(layout.rects[0].point.column, 1);
+        assert_eq!(layout.rects[0].num_cells, 2);
+    }
+
+    #[test]
+    fn full_width_block_runs_coalesce_and_break_text_runs() {
+        let theme = build_terminal_theme(&Theme::default());
+        let cells = row("a███b");
+        let classes = vec![0u8; cells.len()];
+        let layout = layout_row(cells.iter().collect(), 0, &theme, &font(), &classes);
+        // Three identical full blocks become one stretched primitive…
+        assert_eq!(layout.box_draws.len(), 1);
+        assert_eq!(layout.box_draws[0].point.column, 1);
+        assert_eq!(layout.box_draws[0].num_cells, 3);
+        // …and the text on either side is two separate runs at absolute columns.
+        let runs: Vec<_> = layout
+            .runs
+            .iter()
+            .map(|r| (r.start.column, r.text.clone()))
+            .collect();
+        assert_eq!(runs, vec![(0, "a".to_string()), (4, "b".to_string())]);
+    }
+
+    #[test]
+    fn line_hash_tracks_content_and_attributes() {
+        let base = row("abc");
+        let base_hash = line_hash(&base.iter().collect::<Vec<_>>());
+        assert_eq!(base_hash, line_hash(&row("abc").iter().collect::<Vec<_>>()));
+        assert_ne!(base_hash, line_hash(&row("abd").iter().collect::<Vec<_>>()));
+        let mut colored = row("abc");
+        colored[0].cell.fg = Color::Named(NamedColor::Green);
+        assert_ne!(base_hash, line_hash(&colored.iter().collect::<Vec<_>>()));
+        let mut flagged = row("abc");
+        flagged[1].cell.flags.insert(Flags::UNDERLINE);
+        assert_ne!(base_hash, line_hash(&flagged.iter().collect::<Vec<_>>()));
+        let mut marked = row("abc");
+        marked[2].cell.push_zerowidth('\u{301}');
+        assert_ne!(base_hash, line_hash(&marked.iter().collect::<Vec<_>>()));
+    }
+}

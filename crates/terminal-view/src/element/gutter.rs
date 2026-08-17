@@ -117,3 +117,109 @@ pub(crate) fn compute_gutter_entries(
     }
     entries
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+
+    use gpui::{point, px};
+
+    use super::{GutterLayout, compute_gutter_entries, gutter_digits};
+
+    fn times(list: &[&str]) -> VecDeque<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn texts(
+        line_times: &VecDeque<String>,
+        base: usize,
+        absolute: usize,
+        offset: usize,
+        viewport: usize,
+        max: usize,
+    ) -> Vec<String> {
+        compute_gutter_entries(
+            line_times,
+            &GutterLayout {
+                line_time_base: base,
+                absolute_line_count: absolute,
+                display_offset: offset,
+                viewport_lines: viewport,
+                max_entries: max,
+            },
+            point(px(0.0), px(0.0)),
+            px(10.0),
+            1.0,
+        )
+        .into_iter()
+        .map(|e| e.text.to_string())
+        .collect()
+    }
+
+    #[test]
+    fn digits_grow_with_the_absolute_count_but_never_below_two() {
+        assert_eq!(gutter_digits(0), 2);
+        assert_eq!(gutter_digits(9), 2);
+        assert_eq!(gutter_digits(150), 3);
+    }
+
+    #[test]
+    fn entries_look_up_the_time_by_absolute_index() {
+        // 3 lines output, all on a 3-row viewport, not scrolled.
+        let t = times(&["10:00:01", "10:00:02", "10:00:03"]);
+        assert_eq!(
+            texts(&t, 0, 3, 0, 3, 3),
+            vec!["[10:00:01]  1", "[10:00:02]  2", "[10:00:03]  3"]
+        );
+    }
+
+    #[test]
+    fn rows_above_the_first_line_show_a_placeholder() {
+        // Only 1 line output on a 3-row viewport: the two rows above it are
+        // before line 1 (`abs_index < 0`) — but the gutter only renders as many
+        // rows as requested, from the top.
+        let t = times(&["10:00:01"]);
+        assert_eq!(texts(&t, 0, 1, 0, 3, 3)[0], "[--:--:--]  1");
+    }
+
+    #[test]
+    fn newer_lines_than_the_stamps_fall_back_to_the_latest_time() {
+        // 5 lines output but only 3 stamped (read skew) → rows 4/5 reuse the
+        // most recent stamp instead of the placeholder.
+        let t = times(&["10:00:01", "10:00:02", "10:00:03"]);
+        let out = texts(&t, 0, 5, 0, 5, 5);
+        assert_eq!(out[3], "[10:00:03]  4");
+        assert_eq!(out[4], "[10:00:03]  5");
+    }
+
+    #[test]
+    fn lines_older_than_the_tracked_region_use_the_oldest_time() {
+        // Stamps for absolute indices 9.. only (line numbers 10 and 11);
+        // scrolled so line 9 (absolute index 8) is visible above them.
+        let t = times(&["10:00:10", "10:00:11"]);
+        // absolute 12, viewport 3, offset 1 → rows are lines 9, 10, 11.
+        let out = texts(&t, 9, 12, 1, 3, 3);
+        assert_eq!(out, vec!["[10:00:10]  9", "[10:00:10] 10", "[10:00:11] 11"]);
+    }
+
+    #[test]
+    fn entries_are_positioned_one_line_height_apart() {
+        let t = times(&["10:00:01", "10:00:02"]);
+        let entries = compute_gutter_entries(
+            &t,
+            &GutterLayout {
+                line_time_base: 0,
+                absolute_line_count: 2,
+                display_offset: 0,
+                viewport_lines: 2,
+                max_entries: 2,
+            },
+            point(px(0.0), px(4.0)),
+            px(10.0),
+            1.0,
+        );
+        assert_eq!(entries[0].y, px(4.0));
+        assert_eq!(entries[1].y, px(14.0));
+        assert_eq!(entries[0].clock_len, "[10:00:01] ".len());
+    }
+}

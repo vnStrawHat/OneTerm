@@ -323,6 +323,137 @@ mod tests {
         );
     }
 
+    fn text_cells(lines: &[&str]) -> Vec<IndexedCell> {
+        use alacritty_terminal::index::{Column, Line, Point};
+        use alacritty_terminal::term::cell::Cell;
+
+        let mut cells = Vec::new();
+        for (row, text) in lines.iter().enumerate() {
+            for (col, c) in text.chars().enumerate() {
+                let mut cell = Cell::default();
+                cell.c = c;
+                cells.push(IndexedCell {
+                    point: Point::new(Line(row as i32), Column(col)),
+                    cell,
+                });
+            }
+        }
+        cells
+    }
+
+    fn row_text(cache: &RowLayoutCache, row: usize) -> String {
+        cache.rows[row]
+            .runs
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect()
+    }
+
+    /// Scrolling up by one line with only `Partial([])` damage rotates the
+    /// cached rows down and re-lays out only the row that scrolled in.
+    #[test]
+    fn scroll_only_rotates_rows_and_relayouts_the_new_row() {
+        let mut cache = RowLayoutCache::new();
+        let theme = build_terminal_theme(&Theme::default());
+        let font = test_font();
+        let key = test_style_key("monospace", theme.palette);
+        let overlay = test_overlay();
+        let style = RowCacheStyle {
+            theme: &theme,
+            base_font: &font,
+            style_key: &key,
+            overlay: &overlay,
+        };
+
+        let first = text_cells(&["aaa", "bbb", "ccc"]);
+        update_row_cache(
+            &mut cache,
+            &RowCacheFrame {
+                cells: &first,
+                damage: &TermDamageInfo::Full,
+                num_lines: 3,
+                display_offset: 0,
+                grid_size: (3, 80),
+                cursor_display_line: -1,
+            },
+            &style,
+        );
+        assert_eq!(cache.stats.row_layout_calls, 3);
+
+        // Scroll up one line: "zzz" scrolls in at the top, "ccc" scrolls off.
+        let second = text_cells(&["zzz", "aaa", "bbb"]);
+        update_row_cache(
+            &mut cache,
+            &RowCacheFrame {
+                cells: &second,
+                damage: &TermDamageInfo::Partial(vec![]),
+                num_lines: 3,
+                display_offset: 1,
+                grid_size: (3, 80),
+                cursor_display_line: -1,
+            },
+            &style,
+        );
+        assert_eq!(cache.stats.dirty_lines, 1);
+        assert_eq!(cache.stats.row_layout_calls, 1);
+        assert_eq!(row_text(&cache, 0), "zzz");
+        assert_eq!(row_text(&cache, 1), "aaa");
+        assert_eq!(row_text(&cache, 2), "bbb");
+
+        // Scroll back down: rows rotate up and only the bottom row is rebuilt.
+        let third = text_cells(&["aaa", "bbb", "ccc"]);
+        update_row_cache(
+            &mut cache,
+            &RowCacheFrame {
+                cells: &third,
+                damage: &TermDamageInfo::Partial(vec![]),
+                num_lines: 3,
+                display_offset: 0,
+                grid_size: (3, 80),
+                cursor_display_line: -1,
+            },
+            &style,
+        );
+        assert_eq!(cache.stats.row_layout_calls, 1);
+        assert_eq!(row_text(&cache, 2), "ccc");
+    }
+
+    /// Scrolling by a whole viewport (or more) leaves nothing to rotate.
+    #[test]
+    fn scroll_by_a_full_viewport_dirties_every_row() {
+        let mut cache = RowLayoutCache::new();
+        let theme = build_terminal_theme(&Theme::default());
+        let font = test_font();
+        let key = test_style_key("monospace", theme.palette);
+        let overlay = test_overlay();
+        let style = RowCacheStyle {
+            theme: &theme,
+            base_font: &font,
+            style_key: &key,
+            overlay: &overlay,
+        };
+        let cells = text_cells(&["aaa", "bbb", "ccc"]);
+        for (offset, damage) in [
+            (0, TermDamageInfo::Full),
+            (3, TermDamageInfo::Partial(vec![])),
+        ] {
+            update_row_cache(
+                &mut cache,
+                &RowCacheFrame {
+                    cells: &cells,
+                    damage: &damage,
+                    num_lines: 3,
+                    display_offset: offset,
+                    grid_size: (3, 80),
+                    cursor_display_line: -1,
+                },
+                &style,
+            );
+        }
+        assert_eq!(cache.stats.dirty_lines, 3);
+        assert_eq!(cache.stats.row_layout_calls, 3);
+    }
+
     /// Same style key + Partial([]) damage → 0 dirty lines (cache hit).
     #[test]
     fn same_style_key_no_dirty() {
