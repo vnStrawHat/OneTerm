@@ -3,7 +3,7 @@
 //! Windows-first. See `docs/terminal-backend.md` §6.1.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -170,6 +170,50 @@ fn find_in_path(name: &str) -> Option<PathBuf> {
     None
 }
 
+/// How a Unix shell name is looked up on the host — injectable so resolution
+/// can be tested without touching PATH or the filesystem.
+struct UnixShellLookup {
+    /// `find_in_path` equivalent.
+    find_in_path: Box<dyn Fn(&str) -> Option<PathBuf>>,
+    /// Whether a candidate path is an existing file.
+    is_file: Box<dyn Fn(&Path) -> bool>,
+    /// The user's `$SHELL`, if set.
+    shell_env: Option<PathBuf>,
+}
+
+impl UnixShellLookup {
+    fn system() -> Self {
+        Self {
+            find_in_path: Box::new(find_in_path),
+            is_file: Box::new(|path: &Path| path.is_file()),
+            shell_env: std::env::var_os("SHELL").map(PathBuf::from),
+        }
+    }
+}
+
+/// Resolve a requested Unix shell (`bash` / `zsh` / `sh`) to an executable.
+///
+/// Order: PATH, then `/bin/{name}`, then `$SHELL` — but only when `$SHELL`
+/// is that very shell. `$SHELL` is the user's login shell, not the requested
+/// one: falling back to it blindly made `ShellKind::Zsh` spawn bash while
+/// still injecting the zsh PS1. The final `/bin/{name}` default lets the
+/// spawn error report the missing shell by name.
+fn resolve_unix_shell(name: &str, lookup: &UnixShellLookup) -> PathBuf {
+    if let Some(found) = (lookup.find_in_path)(name) {
+        return found;
+    }
+    let default = PathBuf::from(format!("/bin/{name}"));
+    if (lookup.is_file)(&default) {
+        return default;
+    }
+    if let Some(shell) = &lookup.shell_env {
+        if shell.file_name().is_some_and(|file| file == name) {
+            return shell.clone();
+        }
+    }
+    default
+}
+
 /// Resolve `LocalShellConfig` → `(program, args, env)` ready to spawn.
 ///
 /// Returns an error if `Custom` has no `program`, or the default shell cannot be found.
@@ -249,8 +293,7 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
             let prog = cfg
                 .program
                 .clone()
-                .or_else(|| std::env::var_os("SHELL").map(PathBuf::from))
-                .unwrap_or_else(|| PathBuf::from(format!("/bin/{name}")));
+                .unwrap_or_else(|| resolve_unix_shell(name, &UnixShellLookup::system()));
             // Login shell for bash/zsh so the profile is loaded.
             let a = if matches!(cfg.kind, ShellKind::Bash | ShellKind::Zsh) {
                 vec!["-l".into()]
@@ -338,6 +381,69 @@ mod tests {
         let r = resolve_shell(&cfg).unwrap();
         assert_eq!(r.env.get("PS1").map(String::as_str), Some(ZSH_OSC133_PS1));
         assert_eq!(r.args, vec!["-l"]);
+    }
+
+    fn lookup(
+        path_hits: &[(&str, &str)],
+        files: &[&str],
+        shell_env: Option<&str>,
+    ) -> UnixShellLookup {
+        let path_hits: Vec<(String, PathBuf)> = path_hits
+            .iter()
+            .map(|(n, p)| (n.to_string(), PathBuf::from(p)))
+            .collect();
+        let files: Vec<PathBuf> = files.iter().map(PathBuf::from).collect();
+        UnixShellLookup {
+            find_in_path: Box::new(move |name: &str| {
+                path_hits
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .map(|(_, p)| p.clone())
+            }),
+            is_file: Box::new(move |path: &Path| files.iter().any(|f| f == path)),
+            shell_env: shell_env.map(PathBuf::from),
+        }
+    }
+
+    #[test]
+    fn unix_shell_prefers_path_lookup() {
+        let l = lookup(
+            &[("zsh", "/opt/homebrew/bin/zsh")],
+            &["/bin/zsh"],
+            Some("/bin/bash"),
+        );
+        assert_eq!(
+            resolve_unix_shell("zsh", &l),
+            PathBuf::from("/opt/homebrew/bin/zsh")
+        );
+    }
+
+    #[test]
+    fn unix_shell_falls_back_to_bin_before_shell_env() {
+        let l = lookup(&[], &["/bin/zsh"], Some("/usr/local/bin/zsh"));
+        assert_eq!(resolve_unix_shell("zsh", &l), PathBuf::from("/bin/zsh"));
+    }
+
+    #[test]
+    fn unix_shell_uses_shell_env_only_when_it_matches() {
+        // $SHELL is zsh but zsh is neither on PATH nor in /bin → use $SHELL.
+        let l = lookup(&[], &[], Some("/usr/local/bin/zsh"));
+        assert_eq!(
+            resolve_unix_shell("zsh", &l),
+            PathBuf::from("/usr/local/bin/zsh")
+        );
+        // $SHELL is bash: requesting zsh must NOT resolve to bash.
+        let l = lookup(&[], &[], Some("/bin/bash"));
+        assert_eq!(resolve_unix_shell("zsh", &l), PathBuf::from("/bin/zsh"));
+        // Requesting bash while $SHELL is zsh resolves to the bash default.
+        let l = lookup(&[], &[], Some("/bin/zsh"));
+        assert_eq!(resolve_unix_shell("bash", &l), PathBuf::from("/bin/bash"));
+    }
+
+    #[test]
+    fn unix_shell_without_shell_env_defaults_to_bin() {
+        let l = lookup(&[], &[], None);
+        assert_eq!(resolve_unix_shell("sh", &l), PathBuf::from("/bin/sh"));
     }
 
     #[test]
