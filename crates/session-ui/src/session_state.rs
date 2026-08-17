@@ -9,6 +9,7 @@
 //! — same pattern as `terminal.json` and `docks.json`.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use gpui::{App, AppContext, Entity, Global};
 use oneterm_core::{
@@ -84,9 +85,71 @@ impl SshSession {
 /// to re-render when the list changes.
 pub struct SshSessionStore {
     sessions: Vec<SshSession>,
+    /// Coalescing single-flight queue so background writes never complete
+    /// out of order: only the newest pending snapshot reaches disk.
+    persist_queue: Arc<Mutex<SessionPersistQueue>>,
+}
+
+/// Pending snapshot plus the "a worker is draining" flag.
+///
+/// Every mutation replaces `pending`; one background worker drains the queue
+/// until it is empty. A stale snapshot therefore can never overwrite a newer
+/// one, whichever order the executor runs the writes in.
+#[derive(Default)]
+struct SessionPersistQueue {
+    pending: Option<Vec<SshSession>>,
+    saving: bool,
+}
+
+/// Replace the pending snapshot; returns `true` when the caller must start a
+/// drain worker because none is running.
+fn enqueue_snapshot(queue: &Arc<Mutex<SessionPersistQueue>>, sessions: Vec<SshSession>) -> bool {
+    let mut state = lock_persist_queue(queue);
+    state.pending = Some(sessions);
+    if state.saving {
+        return false;
+    }
+    state.saving = true;
+    true
+}
+
+/// Write pending snapshots to `path` until the queue is empty.
+fn drain_persist_queue(queue: &Arc<Mutex<SessionPersistQueue>>, path: &Path) {
+    loop {
+        let snapshot = {
+            let mut state = lock_persist_queue(queue);
+            match state.pending.take() {
+                Some(snapshot) => snapshot,
+                None => {
+                    state.saving = false;
+                    return;
+                }
+            }
+        };
+        SshSessionStore::save_snapshot(&snapshot, path);
+    }
+}
+
+fn lock_persist_queue(
+    queue: &Arc<Mutex<SessionPersistQueue>>,
+) -> MutexGuard<'_, SessionPersistQueue> {
+    match queue.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            log::warn!("ssh session persist queue was poisoned; continuing");
+            poisoned.into_inner()
+        }
+    }
 }
 
 impl SshSessionStore {
+    fn with_sessions(sessions: Vec<SshSession>) -> Self {
+        Self {
+            sessions,
+            persist_queue: Arc::new(Mutex::new(SessionPersistQueue::default())),
+        }
+    }
+
     /// The session list (immutable).
     pub fn sessions(&self) -> &[SshSession] {
         &self.sessions
@@ -198,11 +261,17 @@ impl SshSessionStore {
     }
 
     /// Schedule saving a snapshot of the session list off the UI thread.
+    ///
+    /// Snapshots are coalesced through the single-flight queue so back-to-back
+    /// mutations always leave the newest state on disk.
     fn save(&self, cx: &gpui::Context<Self>) {
-        let sessions = self.sessions.clone();
+        let queue = self.persist_queue.clone();
+        if !enqueue_snapshot(&queue, self.sessions.clone()) {
+            return;
+        }
         cx.background_executor()
             .spawn(async move {
-                Self::save_snapshot(&sessions, &config_dir().join("ssh_session.json"));
+                drain_persist_queue(&queue, &config_dir().join("ssh_session.json"));
             })
             .detach();
     }
@@ -253,7 +322,7 @@ impl SshSessionStore {
     /// Initialize the global store — load `ssh_session.json` (called from `ui::init`).
     pub fn init(cx: &mut App) {
         let sessions = Self::load();
-        let entity = cx.new(|_| Self { sessions });
+        let entity = cx.new(|_| Self::with_sessions(sessions));
         cx.set_global(SshSessionStoreGlobal(entity));
     }
 }
@@ -359,18 +428,16 @@ mod persistence_tests {
         ));
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("ssh_session.json");
-        let store = SshSessionStore {
-            sessions: vec![SshSession {
-                label: "test".into(),
-                host: "example.test".into(),
-                port: 2222,
-                username: Some("user".into()),
-                auth_method: SshAuthPreference::PrivateKey,
-                key_path: Some(PathBuf::from("/keys/test")),
-                color: None,
-                group: Some("group".into()),
-            }],
-        };
+        let store = SshSessionStore::with_sessions(vec![SshSession {
+            label: "test".into(),
+            host: "example.test".into(),
+            port: 2222,
+            username: Some("user".into()),
+            auth_method: SshAuthPreference::PrivateKey,
+            key_path: Some(PathBuf::from("/keys/test")),
+            color: None,
+            group: Some("group".into()),
+        }]);
         store.save_to(&path);
         let loaded = SshSessionStore::load_from(&path);
         assert_eq!(loaded.len(), 1);
@@ -413,6 +480,52 @@ mod persistence_tests {
         assert_eq!(value["schema_version"], CURRENT_SCHEMA_VERSION);
         assert_eq!(value["sessions"][0]["host"], "legacy.example.test");
         assert_eq!(SshSessionStore::load_from(&path)[0].label, "legacy");
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    fn session(label: &str) -> SshSession {
+        SshSession {
+            label: label.into(),
+            host: format!("{label}.example.test"),
+            port: SshSession::DEFAULT_PORT,
+            username: None,
+            auth_method: SshAuthPreference::Password,
+            key_path: None,
+            color: None,
+            group: None,
+        }
+    }
+
+    #[test]
+    fn back_to_back_saves_keep_only_the_newest_snapshot_on_disk() {
+        let directory = std::env::temp_dir().join(format!(
+            "oneterm-session-queue-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("ssh_session.json");
+        let queue = Arc::new(Mutex::new(SessionPersistQueue::default()));
+
+        // add(): the first mutation starts a worker; remove(): a second mutation
+        // scheduled before the worker ran only replaces the pending snapshot.
+        assert!(enqueue_snapshot(&queue, vec![session("a"), session("b")]));
+        assert!(!enqueue_snapshot(&queue, vec![session("a")]));
+
+        drain_persist_queue(&queue, &path);
+
+        let loaded = SshSessionStore::load_from(&path);
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].label, "a");
+        // Exactly one write happened, so the older snapshot never reached disk.
+        assert!(!directory.join("ssh_session.bak").exists());
+        // The drained queue starts a new worker for the next mutation.
+        assert!(enqueue_snapshot(&queue, Vec::new()));
+        drain_persist_queue(&queue, &path);
+        assert!(SshSessionStore::load_from(&path).is_empty());
         let _ = std::fs::remove_dir_all(directory);
     }
 }
