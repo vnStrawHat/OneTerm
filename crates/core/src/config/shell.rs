@@ -125,6 +125,10 @@ pub struct ResolvedShell {
 }
 
 const CMD_OSC7_PROMPT: &str = "$E]7;$P$E\\$E]133;A$E\\$P$G$E]133;B$E\\";
+/// zsh PS1 with OSC 133 A/B markers. Each OSC is terminated by `ESC \` (ST);
+/// the wire must carry exactly one backslash after ESC — a doubled `\\` in
+/// the Rust literal would print a stray `\` and skew the `%{…%}` width.
+const ZSH_OSC133_PS1: &str = "%{\x1b]133;A\x1b\\%}%n@%m:%~ %# %{\x1b]133;B\x1b\\%}";
 const POWERSHELL_OSC7_PROMPT_INIT: &str = r#"$global:__OneTermOriginalPrompt=$function:prompt;function global:prompt{$e=[char]27;[Console]::Write($e+']7;'+$pwd.Path+$e+'\');& $global:__OneTermOriginalPrompt}"#;
 
 fn powershell_init(utf8: bool) -> String {
@@ -289,10 +293,7 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
             // zsh does not support PROMPT_COMMAND — set PS1 with OSC 133 markers.
             // The %{...%} wrapper stops zsh from counting escape chars for cursor position.
             if !env.contains_key("PS1") {
-                env.insert(
-                    "PS1".into(),
-                    "%{\x1b]133;A\x1b\\\\%}%n@%m:%~ %# %{\x1b]133;B\x1b\\\\%}".into(),
-                );
+                env.insert("PS1".into(), ZSH_OSC133_PS1.into());
             }
         }
         _ => {}
@@ -314,6 +315,29 @@ mod tests {
         assert!(POWERSHELL_OSC7_PROMPT_INIT.contains("']7;'+$pwd.Path"));
         assert!(POWERSHELL_OSC7_PROMPT_INIT.contains("& $global:__OneTermOriginalPrompt"));
         assert!(!POWERSHELL_OSC7_PROMPT_INIT.contains('"'));
+    }
+
+    #[test]
+    fn zsh_ps1_carries_exactly_one_backslash_after_esc() {
+        // OSC 133 A/B must be terminated by ST = ESC + one backslash; a second
+        // backslash would print and skew the %{…%} zero-width accounting.
+        assert_eq!(
+            ZSH_OSC133_PS1.as_bytes(),
+            b"%{\x1b]133;A\x1b\\%}%n@%m:%~ %# %{\x1b]133;B\x1b\\%}"
+        );
+        assert!(!ZSH_OSC133_PS1.contains("\\\\"));
+    }
+
+    #[test]
+    fn zsh_kind_injects_ps1_verbatim() {
+        let cfg = LocalShellConfig {
+            kind: ShellKind::Zsh,
+            program: Some(PathBuf::from("/usr/local/bin/zsh")),
+            ..Default::default()
+        };
+        let r = resolve_shell(&cfg).unwrap();
+        assert_eq!(r.env.get("PS1").map(String::as_str), Some(ZSH_OSC133_PS1));
+        assert_eq!(r.args, vec!["-l"]);
     }
 
     #[test]
