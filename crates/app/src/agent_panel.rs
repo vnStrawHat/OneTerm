@@ -23,17 +23,14 @@ use gpui_component::dock::{
 };
 use gpui_component::{ActiveTheme as _, v_flex};
 use oneterm_agent_ui::AgentListView;
-
-/// Panel name registered with the gpui-component `PanelRegistry`.
-///
-/// The feature-agnostic shell builds this panel *by name* via
-/// `build_named_panel("agent_panel", ...)` — it never depends on the concrete
-/// type. Saved layouts deserialize by this name too.
-pub(crate) const AGENT_PANEL_NAME: &str = "agent_panel";
+use oneterm_state::panel_names;
 
 /// Right-dock panel for Agent Mode.
 ///
-/// `panel_name = "agent_panel"`. Rendered raw as a `DockItem::Panel`; hosts the
+/// Registered with the gpui-component `PanelRegistry` as
+/// [`panel_names::AGENT`]; the feature-agnostic shell builds it *by name* and
+/// saved layouts deserialize by that name too. Rendered raw as a
+/// `DockItem::Panel`; hosts the
 /// [`AgentListView`] which renders its own header + scrolling card column.
 pub(crate) struct AgentPanel {
     focus_handle: FocusHandle,
@@ -66,7 +63,7 @@ impl Focusable for AgentPanel {
 
 impl Panel for AgentPanel {
     fn panel_name(&self) -> &'static str {
-        AGENT_PANEL_NAME
+        panel_names::AGENT
     }
 
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -89,7 +86,7 @@ impl Panel for AgentPanel {
         // Persist as `PanelInfo::Panel` so the saved layout records this as a
         // single panel rather than a tab group (mirrors `SshClientPanel::dump`).
         PanelState {
-            panel_name: AGENT_PANEL_NAME.to_string(),
+            panel_name: panel_names::AGENT.to_string(),
             children: Vec::new(),
             info: PanelInfo::panel(serde_json::Value::Null),
         }
@@ -109,11 +106,11 @@ impl Render for AgentPanel {
     }
 }
 
-/// Initialize the Agent panel: register the `"agent_panel"` dock panel with the
+/// Initialize the Agent panel: register the [`panel_names::AGENT`] dock panel with the
 /// gpui-component `PanelRegistry` so the shell can build it by name and saved
 /// layouts can deserialize it. Called by the app aggregator ([`crate::init::init`]).
 pub(crate) fn init(cx: &mut App) {
-    register_panel(cx, AGENT_PANEL_NAME, |_, _, _, window, cx| {
+    register_panel(cx, panel_names::AGENT, |_, _, _, window, cx| {
         Box::new(AgentPanel::new_entity(window, cx))
     });
 }

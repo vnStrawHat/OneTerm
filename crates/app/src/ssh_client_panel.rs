@@ -35,19 +35,16 @@ use gpui_component::{
 };
 use oneterm_session_ui::SessionPanel;
 use oneterm_sftp_ui::SftpPanel;
-
-/// Panel name registered with the gpui-component `PanelRegistry`.
-///
-/// The feature-agnostic shell builds this panel *by name* via
-/// `build_named_panel("ssh_client_panel", ...)` — it never depends on the
-/// concrete type. Saved layouts deserialize by this name too.
-pub(crate) const SSH_CLIENT_PANEL_NAME: &str = "ssh_client_panel";
+use oneterm_state::panel_names;
 
 /// Combined right-dock panel for SSH Client Mode: a vertical resizable split of
 /// [`SessionPanel`] (top) + [`SftpPanel`] (bottom), each with its own header.
 ///
-/// `panel_name = "ssh_client_panel"`. Rendered raw as a `DockItem::Panel`, so
-/// it draws its own title bars + the resize split between the two sections.
+/// Registered with the gpui-component `PanelRegistry` as
+/// [`panel_names::SSH_CLIENT`]; the feature-agnostic shell builds it *by name*
+/// and saved layouts deserialize by that name too. Rendered raw as a
+/// `DockItem::Panel`, so it draws its own title bars + the resize split
+/// between the two sections.
 pub(crate) struct SshClientPanel {
     focus_handle: FocusHandle,
     session: Entity<SessionPanel>,
@@ -112,7 +109,7 @@ impl Focusable for SshClientPanel {
 
 impl Panel for SshClientPanel {
     fn panel_name(&self) -> &'static str {
-        SSH_CLIENT_PANEL_NAME
+        panel_names::SSH_CLIENT
     }
 
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -142,7 +139,7 @@ impl Panel for SshClientPanel {
         // only used for the between-session save/restore of dock openness +
         // size, not to reconstruct the exact `DockItem` variant.)
         PanelState {
-            panel_name: SSH_CLIENT_PANEL_NAME.to_string(),
+            panel_name: panel_names::SSH_CLIENT.to_string(),
             children: Vec::new(),
             info: PanelInfo::panel(serde_json::Value::Null),
         }
@@ -185,12 +182,14 @@ impl Render for SshClientPanel {
     }
 }
 
-/// Initialize the SSH Client panel: register the `"ssh_client_panel"` dock
+/// Initialize the SSH Client panel: register the [`panel_names::SSH_CLIENT`] dock
 /// panel with the gpui-component `PanelRegistry` so the shell can build it by
 /// name and saved layouts can deserialize it. Called by the app aggregator
 /// ([`crate::init::init`]).
 pub(crate) fn init(cx: &mut App) {
-    register_panel(cx, SSH_CLIENT_PANEL_NAME, |dock_area, _, _, window, cx| {
-        Box::new(SshClientPanel::new_entity(dock_area, window, cx))
-    });
+    register_panel(
+        cx,
+        panel_names::SSH_CLIENT,
+        |dock_area, _, _, window, cx| Box::new(SshClientPanel::new_entity(dock_area, window, cx)),
+    );
 }

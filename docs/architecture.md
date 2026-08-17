@@ -12,7 +12,7 @@ Use this page and `docs/agents/structure.md` when locating current implementatio
 | Terminal engine | `oneterm-terminal` | Terminal model, session contract, encoding, OSC, search | `crates/terminal/src/lib.rs`, `crates/terminal/src/model.rs`, `crates/terminal/src/contracts.rs` |
 | Completion engine | `oneterm-completion` | Auto-completion engine (gpui-free): embedded command catalogs, line parsing + subcommand resolution, matching/ranking, in-session history, secret redaction | `crates/completion/src/lib.rs`, `crates/completion/src/engine.rs`, `crates/completion/src/catalog.rs`, `crates/completion/src/history.rs`, `crates/completion/src/redact.rs` |
 | Shared services | `oneterm-settings` | Persistent terminal and UI settings | `crates/settings/src/lib.rs` |
-| Shared services | `oneterm-state` | App-scoped services, workspace state, typed dock persistence, Agent folded model, process-global completion history | `crates/state/src/lib.rs`, `crates/state/src/services.rs`, `crates/state/src/dock_persistence.rs`, `crates/state/src/agent_registry.rs`, `crates/state/src/completion_history.rs` |
+| Shared services | `oneterm-state` | App-scoped services, workspace state, typed dock persistence, registered dock panel names, Agent folded model, process-global completion history | `crates/state/src/lib.rs`, `crates/state/src/services.rs`, `crates/state/src/dock_persistence.rs`, `crates/state/src/panel_names.rs`, `crates/state/src/agent_registry.rs`, `crates/state/src/completion_history.rs` |
 | Shared services | `oneterm-update` | GitHub Releases auto-update service, release selection, download, verification, staging, and install orchestration | `crates/update/src/lib.rs`, `crates/update/src/config.rs`, `crates/update/src/github.rs`, `crates/update/src/archive.rs`, `crates/update/src/install.rs` |
 | Vendor patch | `gpui-component` | Pinned upstream UI crate with the reviewed source and standalone-manifest patches | `vendor/README.md`, `vendor/patches/gpui-component/` |
 | Shell | `oneterm-workspace` | Feature-agnostic window, layout, dock persistence, status bar | `crates/workspace/src/lib.rs`, `crates/workspace/src/layout/` |
@@ -52,6 +52,17 @@ and validates availability during startup. Feature crates retrieve only the hand
 they need through GPUI application context; they do not own registries or backend
 construction. Workspace active terminal and SFTP state remains keyed by DockArea,
 while durable settings and persistence policy remain process-wide where documented.
+
+Dock panels are registered with the gpui-component `PanelRegistry` by their owning
+feature's `init()` (R12) and built by the shell *by name* (R4). The registered
+names are string constants in `crates/state/src/panel_names.rs`
+(`oneterm_state::panel_names::{TERMINAL, TERMINAL_SETTINGS, SFTP, SESSION,
+SSH_CLIENT, AGENT}`, plus `ALL`); the mapping from `oneterm_core::RightDockMode`
+to a panel name is `panel_names::right_dock_panel_name` so `core` stays panel-agnostic.
+Saved layouts deserialize by these names, so the string values are a persisted
+contract. `oneterm_workspace`'s `build_named_panel` logs an error (with the known
+name list) whenever a requested name is not registered instead of silently rendering
+the placeholder panel.
 
 ## Ownership shortcuts
 

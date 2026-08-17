@@ -374,19 +374,28 @@ pub fn build_panel(panel_name, dock_area, panel_state, panel_info, window, cx) -
 }
 ```
 
-**OneTerm registers 3** (in `ui::init` or `app::init`):
+**OneTerm registers** each panel in the owning feature's `init()` (R12), using
+the shared name constants from `oneterm_state::panel_names` (the single source of
+truth for registered names — never spell the string literal at a call site):
 
 ```rust
-register_panel(cx, "terminal", |_, _, _, window, cx| {
+use oneterm_state::panel_names;
+
+register_panel(cx, panel_names::TERMINAL, |_, _, _, window, cx| {
     Box::new(cx.new(|cx| TerminalPanel::new(window, cx)))
 });
-register_panel(cx, "session", |_, _, _, window, cx| {
+register_panel(cx, panel_names::SESSION, |_, _, _, window, cx| {
     Box::new(cx.new(|cx| SessionPanel::new(window, cx)))
 });
-register_panel(cx, "sftp", |_, _, _, window, cx| {
+register_panel(cx, panel_names::SFTP, |_, _, _, window, cx| {
     Box::new(cx.new(|cx| SftpPanel::new(window, cx)))
 });
 ```
+
+The current constants are `TERMINAL`, `TERMINAL_SETTINGS`, `SFTP`, `SESSION`,
+`SSH_CLIENT`, `AGENT` (see `crates/state/src/panel_names.rs`; `ALL` lists them).
+The shell's `build_named_panel` logs an error naming the missing panel when a
+requested name is not registered (stale saved layout / feature `init()` not run).
 
 These panels initially have **no auxiliary state** (only placeholder) so they ignore `PanelInfo`
 — the constructor returns a fresh panel.

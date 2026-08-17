@@ -83,6 +83,11 @@ pub(crate) use oneterm_state::dock_util::set_right_dock_open;
 /// `PanelRegistry`. Each feature crate registers its constructor at init, so the
 /// shell can build the default layout and honor `AddPanel`/`AddSession`/
 /// `AddSftpBrowser` without depending on the concrete panel types.
+///
+/// Names come from [`oneterm_state::panel_names`]. When `name` is not
+/// registered (stale saved layout, or a feature whose `init()` did not run)
+/// gpui-component substitutes a placeholder `InvalidPanel`; that case is
+/// logged at error level here so it never fails silently.
 pub(crate) fn build_named_panel(
     name: &str,
     dock_area: &gpui::WeakEntity<DockArea>,
@@ -95,15 +100,24 @@ pub(crate) fn build_named_panel(
         children: Vec::new(),
         info: PanelInfo::tabs(0),
     };
-    std::sync::Arc::from(PanelRegistry::build_panel(
-        name,
-        dock_area.clone(),
-        &state,
-        &state.info,
-        window,
-        cx,
-    ))
+    let panel: std::sync::Arc<dyn gpui_component::dock::PanelView> = std::sync::Arc::from(
+        PanelRegistry::build_panel(name, dock_area.clone(), &state, &state.info, window, cx),
+    );
+    // `PanelRegistry` does not expose its registered names, but an unregistered
+    // name always yields gpui-component's `InvalidPanel` placeholder.
+    if panel.panel_name(cx) == INVALID_PANEL_NAME && name != INVALID_PANEL_NAME {
+        log::error!(
+            "build_named_panel: panel {name:?} is not registered with PanelRegistry \
+             (known OneTerm panel names: {:?}); rendering placeholder",
+            oneterm_state::panel_names::ALL
+        );
+    }
+    panel
 }
+
+/// `Panel::panel_name` of gpui-component's placeholder for unregistered names
+/// (`dock/invalid_panel.rs`).
+const INVALID_PANEL_NAME: &str = "InvalidPanel";
 
 /// Shared path to the persisted dock document.
 pub use oneterm_state::paths::state_file;
