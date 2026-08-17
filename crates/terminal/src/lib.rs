@@ -3,6 +3,7 @@
 //! Depends on `alacritty_terminal` (types: `TermMode`, `Cell`, colors) but does
 //! **not** depend on GPUI. The UI crate maps these types to GPUI when rendering.
 
+pub mod backend;
 pub mod color_classification;
 pub mod content;
 pub mod contracts;
@@ -23,6 +24,11 @@ pub mod test_support;
 pub mod url;
 pub mod url_policy;
 
+pub use backend::{
+    ColorQueryReplier, DefaultColors, EventQueueDiagnostics, GridSize, LineAccounting, OscRouter,
+    PtyTransport, SessionEventSink, SessionState, SharedSessionState, SharedState,
+    SharedStateCwdSource, TerminalPump,
+};
 pub use color_classification::{
     is_app_chosen_exact_color, is_decorative_character, is_default_background_color,
 };

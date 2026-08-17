@@ -429,3 +429,70 @@ impl<T> FakeTransport<T> {
         self.receiver.is_empty()
     }
 }
+
+/// In-memory [`PtyTransport`](crate::backend::PtyTransport): records writes,
+/// resizes and close requests so pump/router tests need no PTY or network.
+#[derive(Clone, Default)]
+pub struct FakePtyTransport {
+    inner: Arc<FakePtyTransportState>,
+}
+
+#[derive(Default)]
+struct FakePtyTransportState {
+    writes: Mutex<Vec<Vec<u8>>>,
+    resizes: Mutex<Vec<(u16, u16)>>,
+    closed: AtomicBool,
+    fail_writes: AtomicBool,
+}
+
+impl FakePtyTransport {
+    /// Create an empty transport.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Every write in order.
+    pub fn writes(&self) -> Vec<Vec<u8>> {
+        self.inner.writes.lock().unwrap().clone()
+    }
+
+    /// Remove and return every write.
+    pub fn take_writes(&self) -> Vec<Vec<u8>> {
+        std::mem::take(&mut *self.inner.writes.lock().unwrap())
+    }
+
+    /// Every resize `(rows, cols)` in order.
+    pub fn resizes(&self) -> Vec<(u16, u16)> {
+        self.inner.resizes.lock().unwrap().clone()
+    }
+
+    /// Whether `pty_close` was called.
+    pub fn is_closed(&self) -> bool {
+        self.inner.closed.load(Ordering::SeqCst)
+    }
+
+    /// Make every following write fail with `TerminalError::QueueFull`.
+    pub fn fail_writes(&self, fail: bool) {
+        self.inner.fail_writes.store(fail, Ordering::SeqCst);
+    }
+}
+
+impl crate::backend::PtyTransport for FakePtyTransport {
+    fn pty_write(&self, bytes: &[u8]) -> Result<(), TerminalError> {
+        if self.inner.fail_writes.load(Ordering::SeqCst) {
+            return Err(TerminalError::QueueFull);
+        }
+        self.inner.writes.lock().unwrap().push(bytes.to_vec());
+        Ok(())
+    }
+
+    fn pty_resize(&self, rows: u16, cols: u16) -> Result<(), TerminalError> {
+        self.inner.resizes.lock().unwrap().push((rows, cols));
+        Ok(())
+    }
+
+    fn pty_close(&self) -> Result<(), TerminalError> {
+        self.inner.closed.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+}
