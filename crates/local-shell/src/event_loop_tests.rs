@@ -101,3 +101,65 @@ fn resize_is_latest_value_and_shutdown_is_immediate() {
     notifier.send(ShellMsg::Shutdown).unwrap();
     assert!(control.shutdown.load(Ordering::Acquire));
 }
+
+/// TEST-10 / CORR-05: an `Exited(None)` child event (Windows watcher could not
+/// read the exit code) must still end the session: `alive` is cleared and both
+/// `Exited` and `Closed` reach the UI.
+#[test]
+fn child_exit_without_status_still_ends_the_session() {
+    let (event_tx, event_rx) = async_channel::bounded::<SessionEvent>(16);
+    let state = crate::state::new_shared();
+    state.lock().unwrap().alive = true;
+    let listener = LocalListener::new(event_tx, state.clone());
+
+    publish_child_exit(&listener, &state, None);
+
+    {
+        let st = state.lock().unwrap();
+        assert!(!st.alive);
+        assert_eq!(st.exit_code, None);
+    }
+    let events: Vec<SessionEvent> = std::iter::from_fn(|| event_rx.try_recv().ok()).collect();
+    assert_eq!(
+        events,
+        vec![
+            SessionEvent::Exited(None),
+            SessionEvent::Output,
+            SessionEvent::Closed
+        ]
+    );
+}
+
+/// A child exit with a status records the code and also emits `Closed`.
+#[test]
+fn child_exit_with_status_records_code_and_closes() {
+    let (event_tx, event_rx) = async_channel::bounded::<SessionEvent>(16);
+    let state = crate::state::new_shared();
+    state.lock().unwrap().alive = true;
+    let listener = LocalListener::new(event_tx, state.clone());
+
+    publish_child_exit(&listener, &state, Some(exit_status(3)));
+
+    {
+        let st = state.lock().unwrap();
+        assert!(!st.alive);
+        assert_eq!(st.exit_code, Some(3));
+    }
+    let events: Vec<SessionEvent> = std::iter::from_fn(|| event_rx.try_recv().ok()).collect();
+    assert_eq!(events.first(), Some(&SessionEvent::Exited(Some(3))));
+    assert_eq!(events.last(), Some(&SessionEvent::Closed));
+}
+
+#[cfg(unix)]
+fn exit_status(code: i32) -> std::process::ExitStatus {
+    use std::os::unix::process::ExitStatusExt;
+
+    std::process::ExitStatus::from_raw(code << 8)
+}
+
+#[cfg(windows)]
+fn exit_status(code: u32) -> std::process::ExitStatus {
+    use std::os::windows::process::ExitStatusExt;
+
+    std::process::ExitStatus::from_raw(code)
+}

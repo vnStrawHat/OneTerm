@@ -210,19 +210,89 @@ fn coalescible_local_repaint_events_are_counted_when_saturated() {
     assert_eq!(listener.queue_diagnostics().event_closed, 1);
 }
 
+/// Poll a bounded transport until an item arrives or `timeout` elapses.
+fn recv_within(events: &FakeTransport<SessionEvent>, timeout: std::time::Duration) -> SessionEvent {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if let Ok(event) = events.try_recv() {
+            return event;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no event within {timeout:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+/// TEST-06 / CORR-01: `forward` runs from `Term` callbacks with the `Term`
+/// lock held. Even when the event queue is saturated and nobody drains it, it
+/// must return — the UI thread needs that lock to drain the queue, so blocking
+/// here would deadlock the app.
 #[test]
-fn reliable_local_events_wait_for_queue_capacity() {
+fn reliable_local_events_do_not_block_while_term_lock_is_held() {
+    use alacritty_terminal::sync::FairMutex;
+    use alacritty_terminal::term::{Config, Term};
+
+    let events = FakeTransport::bounded(1);
+    let listener = LocalListener::new(events.sender(), new_shared());
+    let term = Arc::new(FairMutex::new(Term::new(
+        Config::default(),
+        &crate::session::TermSize {
+            cols: 80,
+            lines: 24,
+        },
+        listener.clone(),
+    )));
+    events.try_send(SessionEvent::Output).unwrap();
+    let (finished_tx, finished_rx) = std::sync::mpsc::sync_channel(1);
+
+    let pump = {
+        let term = term.clone();
+        let listener = listener.clone();
+        std::thread::spawn(move || {
+            let guard = term.lock();
+            // Term callback context: lock held, queue full, no consumer.
+            for _ in 0..3 {
+                listener.forward(SessionEvent::Bell);
+            }
+            drop(guard);
+            finished_tx.send(()).unwrap();
+        })
+    };
+
+    finished_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("forward must return while the queue is saturated");
+    pump.join().unwrap();
+    assert!(listener.has_deferred_reliable());
+    // Nothing was lost: the queue still holds the repaint hint only.
+    assert_eq!(events.len(), 1);
+    assert_eq!(listener.queue_diagnostics().event_closed, 0);
+}
+
+/// Deferred reliable events are delivered by the flush after the batch, which
+/// waits for queue capacity (backpressure) outside the `Term` lock.
+#[test]
+fn deferred_local_events_flush_in_order_once_the_queue_drains() {
     let events = FakeTransport::bounded(1);
     let listener = LocalListener::new(events.sender(), new_shared());
     events.try_send(SessionEvent::Output).unwrap();
+    listener.forward(SessionEvent::Bell);
+    listener.forward(SessionEvent::Title("t".into()));
+    assert!(listener.has_deferred_reliable());
+    assert_eq!(events.len(), 1);
+
     let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
     let (finished_tx, finished_rx) = std::sync::mpsc::sync_channel(1);
-
-    let sender = std::thread::spawn(move || {
-        started_tx.send(()).unwrap();
-        listener.forward(SessionEvent::Bell);
-        finished_tx.send(()).unwrap();
-    });
+    let flusher = {
+        let listener = listener.clone();
+        std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            listener.flush_reliable();
+            finished_tx.send(()).unwrap();
+        })
+    };
 
     started_rx
         .recv_timeout(std::time::Duration::from_secs(1))
@@ -233,9 +303,36 @@ fn reliable_local_events_wait_for_queue_capacity() {
             .is_err()
     );
     assert_eq!(events.try_recv().unwrap(), SessionEvent::Output);
+    assert_eq!(
+        recv_within(&events, std::time::Duration::from_secs(1)),
+        SessionEvent::Bell
+    );
+    assert_eq!(
+        recv_within(&events, std::time::Duration::from_secs(1)),
+        SessionEvent::Title("t".into())
+    );
     finished_rx
         .recv_timeout(std::time::Duration::from_secs(1))
         .unwrap();
-    sender.join().unwrap();
+    flusher.join().unwrap();
+    assert!(!listener.has_deferred_reliable());
+}
+
+/// Once an event is deferred, later reliable events queue behind it even if the
+/// channel has room again — FIFO order must survive the deferral.
+#[test]
+fn deferred_local_events_keep_fifo_order() {
+    let events = FakeTransport::bounded(2);
+    let listener = LocalListener::new(events.sender(), new_shared());
+    events.try_send(SessionEvent::Output).unwrap();
+    events.try_send(SessionEvent::Output).unwrap();
+    listener.forward(SessionEvent::Bell);
+    assert_eq!(events.try_recv().unwrap(), SessionEvent::Output);
+    assert_eq!(events.try_recv().unwrap(), SessionEvent::Output);
+    // Room again, but Bell is still pending: Title must not jump ahead.
+    listener.forward(SessionEvent::Title("t".into()));
+    assert_eq!(events.len(), 0);
+    listener.flush_reliable();
     assert_eq!(events.try_recv().unwrap(), SessionEvent::Bell);
+    assert_eq!(events.try_recv().unwrap(), SessionEvent::Title("t".into()));
 }

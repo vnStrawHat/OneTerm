@@ -154,6 +154,16 @@ let content = session.snapshot();                     // read cache, no Term loc
 
 Each backend has its own `EP` (`LocalListener` / `SshListener`). No cross-backend routing.
 
+**Never block inside a `Term` callback.** `send_event` runs during
+`Processor::advance` with the `Term` lock held, and the UI thread needs that same
+lock (`snapshot()`, `terminal_info()`) to drain the event queue. The listener
+therefore only `try_send`s from a callback; reliable events that do not fit are
+kept in a listener-side FIFO (`deferred_reliable`) and delivered by
+`flush_reliable` after the parse batch, once the lock is released (event loop:
+blocking send; tokio task: `send().await`). Ordering seen by the UI: reliable
+events emitted during a batch → that batch's `Output` hint. Lifecycle events
+(`Exited`/`Closed`) always flush the deferred queue first so they arrive in order.
+
 ---
 
 ## 6. Local backend (`local` crate, Windows-first)
@@ -308,8 +318,13 @@ owner loops use different channel implementations:
   capacity cannot prevent the owner loop from observing close.
 - `SessionEvent::Output` is the only coalescible event. Clipboard, notification,
   progress, agent, title, working-directory, bell, and lifecycle events use
-  reliable bounded-channel delivery and backpressure; a closed consumer is logged
-  and counted by diagnostic builds.
+  reliable bounded-channel delivery: they are never dropped, and a slow consumer
+  applies backpressure to the pump — but only *between* parse batches, never
+  while the `Term` lock is held (§5.3). A closed consumer is logged and counted by
+  diagnostic builds.
+- Local child exit always ends the session: `alive = false`, then
+  `SessionEvent::Exited(code)` (code may be `None` when the platform watcher could
+  not read it) followed by `SessionEvent::Closed`.
 
 Backends do not retry rejected writes because retrying after returning an error
 could duplicate input. Callers must report failure or explicitly retry the same
@@ -363,7 +378,15 @@ impl SshSession {
 - `SshListener: EventListener` — `PtyWrite(text)` → `cmd_tx.send(Cmd::Write(text.into_bytes()))`.
 - `is_local() == false` (for OSC 7 cwd semantics: ssh can be `file://host/…`).
 - Exit: `ChannelMsg::ExitStatus { exit_status }` → `SessionEvent::Exited(Some(code))`;
-  `Eof`/`Close` → `SessionEvent::Closed`.
+  `Eof`/`Close`/`Cmd::Close`/closing flag → `SessionEvent::Closed`.
+- Shutdown signal: the listener's closing flag (set by `pty_close`) — the task holds
+  `cmd_tx` clones itself, so the command channel never closes on its own.
+  `SshSession` implements `Drop` and requests close (shell + SFTP) when a session is
+  discarded without `close()`; the two are idempotent.
+- Reliable events emitted during `processor.advance` are flushed with
+  `flush_reliable().await` after the batch, before the `Output` hint (§5.3).
+- RSA keys authenticate with `rsa-sha2-*` chosen from the server's `server-sig-algs`
+  (fallback SHA-512); legacy SHA-1 `ssh-rsa` is never used.
 - Auth (MVP): password + key file. Agent later.
 
 > Sync→async bridge: `async_channel::Sender` sends from the main thread, a tokio task

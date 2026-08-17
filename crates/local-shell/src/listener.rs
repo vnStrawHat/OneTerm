@@ -1,8 +1,11 @@
 //! `LocalListener` — `EventListener` for the local PTY.
 //!
 //! Forwards alacritty events → `SessionEvent` through a bounded channel: repaint
-//! hints are coalescible, while stateful events apply backpressure. Also updates
-//! the `SessionState` cache (title/clipboard/alive).
+//! hints are coalescible, while stateful events are reliable — they are never
+//! dropped, but they are also never sent blocking from a `Term` callback (the
+//! `Term` lock is held there). Reliable events that do not fit are deferred and
+//! flushed by the event loop after the parse batch, outside the lock. Also
+//! updates the `SessionState` cache (title/clipboard/alive).
 //! Routes `PtyWrite` through the owner-thread notifier.
 //!
 //! Both `Term<U>` and `EventLoop` receive a **clone** of the same listener
@@ -10,6 +13,7 @@
 //! EventLoop sends Wakeup/ChildExit after reading. See `docs/terminal-backend.md` §5.
 
 use std::borrow::Cow;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
 #[cfg(any(test, feature = "terminal-diagnostics"))]
@@ -66,6 +70,11 @@ pub struct LocalListener {
     /// Diagnostic counters for bounded event-queue failures.
     #[cfg(any(test, feature = "terminal-diagnostics"))]
     queue_counters: Arc<LocalQueueCounters>,
+    /// Reliable events that did not fit in the event queue. `forward` runs from
+    /// `Term` callbacks with the `Term` lock held, so it must never block; the
+    /// event loop drains this queue with `flush_reliable` after each parse
+    /// batch. FIFO order among reliable events is preserved.
+    deferred_reliable: Arc<Mutex<VecDeque<SessionEvent>>>,
 }
 
 fn map_notifier_error(error: std::io::Error) -> TerminalError {
@@ -87,6 +96,7 @@ impl LocalListener {
             notification_limiter: Arc::new(Mutex::new(NotificationRateLimiter::default())),
             #[cfg(any(test, feature = "terminal-diagnostics"))]
             queue_counters: Arc::new(LocalQueueCounters::default()),
+            deferred_reliable: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
@@ -158,9 +168,13 @@ impl LocalListener {
     /// Forward a session event according to its delivery policy.
     ///
     /// Repaint hints may be coalesced when the bounded queue is full. All other
-    /// events use blocking send so a slow consumer creates backpressure instead
-    /// of silently losing clipboard, notification, progress, agent, or lifecycle
-    /// state transitions.
+    /// events are reliable: they are enqueued when the queue has room and
+    /// deferred otherwise, so a slow consumer never loses clipboard,
+    /// notification, progress, agent, or lifecycle state transitions. This
+    /// never blocks — it is called from `Term` callbacks while the `Term` lock
+    /// is held, and the UI thread needs that lock to drain the queue (blocking
+    /// here would deadlock the app). Deferred events are delivered by
+    /// `flush_reliable`, which the event loop calls after every parse batch.
     pub fn forward(&self, ev: SessionEvent) {
         match ev.delivery_policy() {
             oneterm_terminal::SessionEventDelivery::Coalescible => {
@@ -178,26 +192,63 @@ impl LocalListener {
                 }
             }
             oneterm_terminal::SessionEventDelivery::Reliable => {
-                if let Err(error) = self.event_tx.send_blocking(ev) {
-                    #[cfg(any(test, feature = "terminal-diagnostics"))]
-                    self.queue_counters
-                        .event_closed
-                        .fetch_add(1, Ordering::Relaxed);
-                    warn!(
-                        "LocalListener: reliable event lost because channel is closed: {error:?}"
-                    );
+                let mut deferred = self.deferred_reliable.lock().unwrap();
+                // Keep FIFO order: once something is deferred, everything after
+                // it queues behind it until the next flush.
+                if !deferred.is_empty() {
+                    deferred.push_back(ev);
+                    return;
+                }
+                match self.event_tx.try_send(ev) {
+                    Ok(()) => {}
+                    Err(TrySendError::Full(ev)) => deferred.push_back(ev),
+                    Err(error @ TrySendError::Closed(_)) => {
+                        #[cfg(any(test, feature = "terminal-diagnostics"))]
+                        self.record_event_failure(&error);
+                        warn!(
+                            "LocalListener: reliable event lost because channel is closed: {error:?}"
+                        );
+                    }
                 }
             }
         }
     }
 
-    /// Forward a lifecycle `SessionEvent` using the reliable delivery policy.
+    /// Whether reliable events are waiting for `flush_reliable`.
+    #[cfg(test)]
+    pub(crate) fn has_deferred_reliable(&self) -> bool {
+        !self.deferred_reliable.lock().unwrap().is_empty()
+    }
+
+    /// Deliver deferred reliable events, blocking until the UI makes room.
+    /// Must be called **without** the `Term` lock held (the event loop calls it
+    /// after each parse batch and before lifecycle events).
+    pub fn flush_reliable(&self) {
+        loop {
+            let next = self.deferred_reliable.lock().unwrap().pop_front();
+            let Some(ev) = next else {
+                return;
+            };
+            if let Err(error) = self.event_tx.send_blocking(ev) {
+                #[cfg(any(test, feature = "terminal-diagnostics"))]
+                self.queue_counters
+                    .event_closed
+                    .fetch_add(1, Ordering::Relaxed);
+                warn!("LocalListener: reliable event lost because channel is closed: {error:?}");
+            }
+        }
+    }
+
+    /// Forward a lifecycle `SessionEvent` and flush every deferred reliable
+    /// event so the transition reaches the UI in order. Call from the event
+    /// loop only, without the `Term` lock held.
     pub fn forward_lifecycle(&self, ev: SessionEvent) {
         debug_assert_eq!(
             ev.delivery_policy(),
             oneterm_terminal::SessionEventDelivery::Reliable
         );
         self.forward(ev);
+        self.flush_reliable();
     }
 
     /// Enqueue an OSC 10/11/12 color query (from `Event::ColorRequest`). Answered
