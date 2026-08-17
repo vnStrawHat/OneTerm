@@ -415,6 +415,13 @@ impl TerminalPanel {
         let Some(src) = drag.panel.upgrade() else {
             return;
         };
+        // Verify the destination BEFORE taking the terminal out of the source:
+        // once taken, a failed `fill_empty` would leave the live session
+        // orphaned. Everything below runs synchronously on the UI thread, so a
+        // Space that is empty here is still empty at `fill_empty`.
+        if !self.tree.has_leaf(target) || self.tree.leaf_terminal(target).is_some() {
+            return;
+        }
         let is_self = src == cx.entity();
 
         let view = if is_self {
@@ -432,7 +439,15 @@ impl TerminalPanel {
 
         self.attach_split_ctx(&view, target, cx);
         if let Err(view) = self.tree.fill_empty(target, view) {
-            view.update(cx, |view, cx| view.shutdown(cx));
+            // Cannot happen after the guard above; if it ever does, hand the
+            // terminal back to the source's active (just emptied) Space rather
+            // than destroying the user's session.
+            log::error!("handle_tab_drop: target Space is no longer empty; restoring source");
+            if is_self {
+                self.restore_dropped_view(view, cx);
+            } else {
+                src.update(cx, |sp, cx| sp.restore_dropped_view(view, cx));
+            }
             return;
         }
         self.rebuild_title_subs(cx);
@@ -448,6 +463,25 @@ impl TerminalPanel {
                 });
             }
         }
+        cx.notify();
+    }
+
+    /// Put a terminal view taken by `handle_tab_drop` back into this panel's
+    /// active Space (the one `take_active_terminal_view` just emptied). Last
+    /// resort only — the drop path guards the destination before taking.
+    fn restore_dropped_view(
+        &mut self,
+        view: Entity<LocalTerminalView>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let home = self.tree.active();
+        self.attach_split_ctx(&view, home, cx);
+        if let Err(view) = self.tree.fill_empty(home, view) {
+            // Nowhere left to place it: release the session explicitly.
+            log::error!("handle_tab_drop: source Space is no longer empty; closing terminal");
+            view.update(cx, |view, cx| view.shutdown(cx));
+        }
+        self.rebuild_title_subs(cx);
         cx.notify();
     }
 

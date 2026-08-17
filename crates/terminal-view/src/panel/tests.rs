@@ -379,6 +379,53 @@ fn duplicate_action_dispatches_to_the_active_space(cx: &mut TestAppContext) {
     );
 }
 
+#[gpui::test]
+fn tab_drop_onto_occupied_space_keeps_source_terminal(cx: &mut TestAppContext) {
+    // Regression (CORR-03): dropping a tab onto a Space that is not empty must
+    // not take the source terminal out of its tree and shut it down.
+    cx.update(gpui_component::init);
+    cx.update(crate::init);
+    cx.update(oneterm_settings::TerminalSettings::init);
+
+    let (target_session, _) = FakeTerminalSession::boxed(24, 80, "target");
+    let (target, cx) = cx.add_window_view(move |window, cx| {
+        TerminalPanel::from_session(target_session, "Target", window, cx)
+    });
+    let cx: &mut VisualTestContext = cx;
+
+    let (source_session, source_probe) = FakeTerminalSession::boxed(24, 80, "source");
+    let source = cx.update(|window, cx| {
+        cx.new(|cx| TerminalPanel::from_session(source_session, "Source", window, cx))
+    });
+    cx.run_until_parked();
+
+    let source_view = source.read_with(cx, |panel, _| {
+        panel
+            .tree
+            .active_terminal()
+            .expect("source panel must own a terminal")
+    });
+    let drag = crate::space::DragTerminalTab {
+        panel: source.downgrade(),
+        tab_panel: gpui::WeakEntity::new_invalid(),
+        title: "Source".into(),
+    };
+
+    target.update_in(cx, |panel, window, cx| {
+        let occupied = panel.tree.active();
+        assert!(panel.tree.leaf_terminal(occupied).is_some());
+        panel.handle_tab_drop(occupied, &drag, window, cx);
+    });
+    cx.run_until_parked();
+
+    assert_eq!(source_probe.close_calls(), 0);
+    assert!(source_view.read_with(cx, |view, _| view.alive));
+    let still_in_source = source.read_with(cx, |panel, _| {
+        panel.tree.active_terminal().as_ref() == Some(&source_view)
+    });
+    assert!(still_in_source, "source terminal must stay in its Space");
+}
+
 fn agent_state_event(seq: u64) -> oneterm_terminal::AgentStatusEvent {
     oneterm_terminal::AgentStatusEvent::State {
         agent: "pi".into(),
