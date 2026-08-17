@@ -4,28 +4,29 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{
-    App, ClipboardItem, Entity, InteractiveElement as _, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent,
+    App, Entity, InteractiveElement as _, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
 };
 
 use oneterm_terminal::TerminalSession;
 use oneterm_terminal::url_policy::{ExternalTargetPolicy, TargetDecision};
 
-use super::super::element::GridMetrics;
+use super::super::element::RenderCache;
 use super::super::url::detect_url_at;
 use super::super::view::LocalTerminalView;
-use super::map_button;
+use super::super::view::grid::{pixel_to_grid, sel_type};
+use super::{edit, map_button};
 
 fn handle_mouse_down(
     session: &Entity<Box<dyn TerminalSession>>,
-    metrics: &Rc<RefCell<GridMetrics>>,
+    render_cache: &Rc<RefCell<RenderCache>>,
     view: &Entity<LocalTerminalView>,
     e: &MouseDownEvent,
     cx: &mut App,
     button: MouseButton,
     allow_url_open: bool,
 ) {
-    let (row, col) = match LocalTerminalView::pixel_to_grid(&metrics.borrow(), e.position) {
+    let metrics = render_cache.borrow().metrics;
+    let (row, col) = match pixel_to_grid(&metrics, e.position) {
         Some(rc) => rc,
         None => return,
     };
@@ -72,7 +73,7 @@ fn handle_mouse_down(
             row,
             col,
             map_button(button),
-            LocalTerminalView::sel_type(e.click_count, e.modifiers.alt),
+            sel_type(e.click_count, e.modifiers.alt),
             mods,
         )
     });
@@ -81,21 +82,22 @@ fn handle_mouse_down(
     }
     // Trigger a re-render to draw the selection highlight.
     let _ = view.update(cx, |v, cx| {
-        v.last_scroll_time = Some(std::time::Instant::now());
+        v.scrollbar.mark_scrolled();
         cx.notify();
     });
 }
 
 fn handle_mouse_up(
     session: &Entity<Box<dyn TerminalSession>>,
-    metrics: &Rc<RefCell<GridMetrics>>,
+    render_cache: &Rc<RefCell<RenderCache>>,
     view: &Entity<LocalTerminalView>,
     e: &MouseUpEvent,
     cx: &mut App,
     button: MouseButton,
     copy_selection: bool,
 ) {
-    let (row, col) = match LocalTerminalView::pixel_to_grid(&metrics.borrow(), e.position) {
+    let metrics = render_cache.borrow().metrics;
+    let (row, col) = match pixel_to_grid(&metrics, e.position) {
         Some(rc) => rc,
         None => return,
     };
@@ -109,57 +111,62 @@ fn handle_mouse_up(
         cx.stop_propagation();
     }
     if copy_selection {
-        if let Some(text) = session.read(cx).selection_text() {
-            if !text.is_empty() {
-                cx.write_to_clipboard(ClipboardItem::new_string(text));
-            }
-        }
+        edit::copy_selection(session, cx);
     }
     let _ = view.update(cx, |v, cx| {
-        v.last_scroll_time = Some(std::time::Instant::now());
+        v.scrollbar.mark_scrolled();
         cx.notify();
     });
+}
+
+/// End a scrollbar thumb drag if one is in progress. Returns `true` when the
+/// event was consumed by the drag.
+fn end_scrollbar_drag(view: &Entity<LocalTerminalView>, cx: &mut App) -> bool {
+    if !view.read(cx).scrollbar.is_dragging() {
+        return false;
+    }
+    let _ = view.update(cx, |v, cx| {
+        v.scrollbar.end_drag();
+        cx.notify();
+    });
+    true
 }
 
 /// Attach mouse handlers: down / move / up / modifiers.
 pub(crate) fn attach_mouse(
     div: gpui::Stateful<gpui::Div>,
     session: Entity<Box<dyn TerminalSession>>,
-    metrics: Rc<RefCell<GridMetrics>>,
+    render_cache: Rc<RefCell<RenderCache>>,
     view: Entity<LocalTerminalView>,
     pass_right_click: bool,
 ) -> gpui::Stateful<gpui::Div> {
     let div = div.on_mouse_down(MouseButton::Left, {
         let s = session.clone();
-        let m = metrics.clone();
+        let cache = render_cache.clone();
         let view = view.clone();
         move |e: &MouseDownEvent, _w, cx: &mut App| {
-            handle_mouse_down(&s, &m, &view, e, cx, MouseButton::Left, true)
+            handle_mouse_down(&s, &cache, &view, e, cx, MouseButton::Left, true)
         }
     });
 
     let div = if pass_right_click {
         div.on_mouse_down(MouseButton::Right, {
             let s = session.clone();
-            let m = metrics.clone();
+            let cache = render_cache.clone();
             let view = view.clone();
             move |e: &MouseDownEvent, _w, cx: &mut App| {
-                handle_mouse_down(&s, &m, &view, e, cx, MouseButton::Right, false)
+                handle_mouse_down(&s, &cache, &view, e, cx, MouseButton::Right, false)
             }
         })
         .on_mouse_up(MouseButton::Right, {
             let s = session.clone();
-            let m = metrics.clone();
+            let cache = render_cache.clone();
             let view = view.clone();
             move |e: &MouseUpEvent, _w, cx: &mut App| {
-                if view.read(cx).scrollbar_drag_start.is_some() {
-                    let _ = view.update(cx, |v, cx| {
-                        v.scrollbar_drag_start = None;
-                        cx.notify();
-                    });
+                if end_scrollbar_drag(&view, cx) {
                     return;
                 }
-                handle_mouse_up(&s, &m, &view, e, cx, MouseButton::Right, false)
+                handle_mouse_up(&s, &cache, &view, e, cx, MouseButton::Right, false)
             }
         })
     } else {
@@ -168,54 +175,36 @@ pub(crate) fn attach_mouse(
 
     div.on_mouse_move({
         let s = session.clone();
-        let m = metrics.clone();
+        let cache = render_cache.clone();
         let view = view.clone();
         move |e: &MouseMoveEvent, _w, cx: &mut App| {
             // Scrollbar drag: check this BEFORE selection.
-            if view.read(cx).scrollbar_drag_start.is_some() {
+            if view.read(cx).scrollbar.is_dragging() {
                 // Mouse left the terminal and button released → clear drag.
                 if e.pressed_button != Some(MouseButton::Left) {
-                    let _ = view.update(cx, |v, cx| {
-                        v.scrollbar_drag_start = None;
-                        cx.notify();
-                    });
+                    end_scrollbar_drag(&view, cx);
                     return;
                 }
                 // e.position is window coordinates → subtract the terminal origin.
-                let track_y = {
-                    let gm = m.borrow();
-                    match gm.bounds {
-                        Some(b) => f32::from(e.position.y - b.origin.y),
-                        None => return,
-                    }
+                let track_y = match cache.borrow().metrics.bounds {
+                    Some(b) => f32::from(e.position.y - b.origin.y),
+                    None => return,
                 };
                 let _ = view.update(cx, |v, cx| {
-                    let s = v.scroll_handle.state();
-                    let (total, vp, lh) = (s.total_lines, s.viewport_lines, s.line_height);
-                    if lh <= 0.0 {
-                        return;
+                    if v.scrollbar.drag_to(track_y) {
+                        cx.notify();
                     }
-                    let track_h = vp as f32 * lh;
-                    let max_off = total.saturating_sub(vp);
-                    let frac = 1.0 - ((track_y / track_h).clamp(0.0, 1.0));
-                    let new_offset = (frac * max_off as f32).round() as usize;
-                    v.scroll_handle.update(total, vp, new_offset, lh);
-                    v.scroll_handle.future_display_offset.set(Some(new_offset));
-                    v.last_scroll_time = Some(std::time::Instant::now());
-                    cx.notify();
                 });
                 return;
             }
             // Normal mouse move: selection drag / hover.
-            let (row, col) = match LocalTerminalView::pixel_to_grid(&m.borrow(), e.position) {
+            let metrics = cache.borrow().metrics;
+            let (row, col) = match pixel_to_grid(&metrics, e.position) {
                 Some(rc) => rc,
                 None => {
                     // Mouse outside grid — clear hover + save pos.
                     let _ = view.update(cx, |v, cx| {
-                        v.last_mouse_pos = Some(e.position);
-                        if v.hovered_url.is_some() || v.ctrl_held {
-                            v.hovered_url = None;
-                            v.ctrl_held = false;
+                        if v.url_hover.leave(e.position) {
                             cx.notify();
                         }
                     });
@@ -230,7 +219,7 @@ pub(crate) fn attach_mouse(
                 };
                 s.update(cx, |s, _| s.mouse_drag(row, col, mods));
                 let _ = view.update(cx, |v, cx| {
-                    v.last_scroll_time = Some(std::time::Instant::now());
+                    v.scrollbar.mark_scrolled();
                     cx.notify();
                 });
             } else {
@@ -245,23 +234,19 @@ pub(crate) fn attach_mouse(
                 }
             }
             // URL detection on hover — highlight + cursor pointer (Ctrl+click to open).
-            super::url::update_hovered_url(&s, &m, &view, e.position, e.modifiers.control, cx);
+            super::url::update_hovered_url(&s, &cache, &view, e.position, e.modifiers.control, cx);
         }
     })
     .on_mouse_up(MouseButton::Left, {
         let s = session.clone();
-        let m = metrics.clone();
+        let cache = render_cache.clone();
         let view = view.clone();
         move |e: &MouseUpEvent, _w, cx: &mut App| {
             // Scrollbar drag: clear FIRST.
-            if view.read(cx).scrollbar_drag_start.is_some() {
-                let _ = view.update(cx, |v, cx| {
-                    v.scrollbar_drag_start = None;
-                    cx.notify();
-                });
+            if end_scrollbar_drag(&view, cx) {
                 return;
             }
-            handle_mouse_up(&s, &m, &view, e, cx, MouseButton::Left, true);
+            handle_mouse_up(&s, &cache, &view, e, cx, MouseButton::Left, true);
         }
     })
 }

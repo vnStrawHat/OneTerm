@@ -44,8 +44,45 @@ fn visible_window(n: usize, selected: Option<usize>, max_visible: usize) -> (usi
     (offset, max_v)
 }
 
-/// The command line read from under the cursor: the text after the prompt, plus
-/// whether a prompt prefix was found and where the cursor sits.
+/// Auto-completion state owned by the view.
+#[derive(Default)]
+pub(crate) struct CompletionState {
+    /// Controller + overlay state. Lazily created on the first render (needs
+    /// `cx` to read settings + session kind). `None` until then; also idle
+    /// while completion is disabled.
+    pub(crate) controller: Option<CompletionController>,
+    /// Anchor for the overlay: (display line, token-start column) in the grid,
+    /// computed during `update_completion`. `None` when hidden.
+    anchor: Option<(i32, usize)>,
+    /// Last cursor (line, col) seen by `update_completion` — used to skip the
+    /// grid snapshot on frames where the cursor did not move (e.g. blink ticks).
+    last_cursor: Option<(i32, usize)>,
+}
+
+impl CompletionState {
+    /// Hide the overlay (controller dismissed, anchor cleared).
+    fn dismiss(&mut self) {
+        if let Some(c) = self.controller.as_mut() {
+            c.dismiss();
+        }
+        self.anchor = None;
+    }
+
+    /// Anchor the overlay under the start of the token the user is editing
+    /// (when visible), otherwise clear the anchor.
+    fn anchor_at(&mut self, cursor: (i32, usize)) {
+        let Some(c) = self.controller.as_ref() else {
+            self.anchor = None;
+            return;
+        };
+        self.anchor = c.is_visible().then(|| {
+            let (line, col) = cursor;
+            (line, col.saturating_sub(c.typed_len()))
+        });
+    }
+}
+
+/// What a key does while the overlay is visible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CompletionKeyAction {
     Forward,
@@ -96,6 +133,8 @@ fn completion_key_action(
     }
 }
 
+/// The command line read from under the cursor: the text after the prompt, plus
+/// whether a prompt prefix was found and where the cursor sits.
 struct CursorCommand {
     /// Command text after the prompt prefix, up to the cursor column.
     line: String,
@@ -163,7 +202,7 @@ fn strip_prompt(row: &str) -> (String, bool, usize) {
 impl LocalTerminalView {
     /// Lazily create the completion controller (needs `cx` for settings + kind).
     fn ensure_completion(&mut self, cx: &App) {
-        if self.completion.is_some() {
+        if self.completion.controller.is_some() {
             return;
         }
         let settings_entity = TerminalSettings::global(cx);
@@ -180,7 +219,7 @@ impl LocalTerminalView {
             controller.family(),
             controller.enabled()
         );
-        self.completion = Some(controller);
+        self.completion.controller = Some(controller);
     }
 
     /// Per-render update: sync settings, feed gating signals + the live input
@@ -202,13 +241,12 @@ impl LocalTerminalView {
 
         // Sync settings + master-enable gate.
         {
-            let Some(c) = self.completion.as_mut() else {
+            let Some(c) = self.completion.controller.as_mut() else {
                 return;
             };
             c.sync_settings(kind, &settings_snapshot);
             if !c.enabled() {
-                c.dismiss();
-                self.completion_anchor = None;
+                self.completion.dismiss();
                 return;
             }
         }
@@ -218,15 +256,14 @@ impl LocalTerminalView {
         let query = self.session.read(cx).query_state();
         let on_alt = query.mode.contains(TermMode::ALT_SCREEN);
         {
-            let Some(c) = self.completion.as_mut() else {
+            let Some(c) = self.completion.controller.as_mut() else {
                 return;
             };
             c.set_alt_screen(on_alt);
             // Cheap pre-grid gate: enabled + alt-screen only. The prompt-region
             // gate is applied after we read the line (it depends on the line).
             if !c.pre_gate_ok() {
-                c.dismiss();
-                self.completion_anchor = None;
+                self.completion.dismiss();
                 return;
             }
         }
@@ -235,16 +272,17 @@ impl LocalTerminalView {
         // settings/gating change requested a recompute — this avoids cloning the
         // grid on idle frames (cursor blink) and during fast primary-screen output.
         let cursor_pos = (query.cursor_line, query.cursor_col);
-        let cursor_moved = self.completion_last_cursor != Some(cursor_pos);
+        let cursor_moved = self.completion.last_cursor != Some(cursor_pos);
         let wants = self
             .completion
+            .controller
             .as_ref()
             .map(|c| c.wants_recompute(cursor_moved))
             .unwrap_or(false);
         if !wants {
             return;
         }
-        self.completion_last_cursor = Some(cursor_pos);
+        self.completion.last_cursor = Some(cursor_pos);
 
         // At a prompt on the primary screen: read the input line from the grid.
         let content = self.session.read(cx).snapshot_query();
@@ -260,22 +298,21 @@ impl LocalTerminalView {
                 log::warn!(
                     "completion: GlobalCompletionHistory not initialized — completion disabled"
                 );
-                self.completion_anchor = None;
+                self.completion.anchor = None;
                 return;
             }
         };
         let now = now_ms();
         {
             let history = history_entity.read(cx);
-            let Some(c) = self.completion.as_mut() else {
+            let Some(c) = self.completion.controller.as_mut() else {
                 return;
             };
             c.set_in_prompt_region(prompt_found);
             let allowed = c.gating_allows();
             if !allowed {
                 log::debug!("completion: line={line:?} gating=false (hidden)");
-                c.dismiss();
-                self.completion_anchor = None;
+                self.completion.dismiss();
                 return;
             }
             c.recompute(&line, line.len(), now, history, false);
@@ -284,15 +321,9 @@ impl LocalTerminalView {
                 c.is_visible(),
                 c.suggestions().len()
             );
-            if c.is_visible() {
-                // Anchor under the start of the token the user is editing.
-                let (aline, acol) = anchor;
-                let token_start = acol.saturating_sub(c.typed_len());
-                self.completion_anchor = Some((aline, token_start));
-            } else {
-                self.completion_anchor = None;
-            }
         }
+        // Anchor under the start of the token the user is editing.
+        self.completion.anchor_at(anchor);
     }
 
     /// Force-open the overlay at the cursor (the `TriggerCompletion` action),
@@ -313,28 +344,33 @@ impl LocalTerminalView {
             return;
         };
         let now = now_ms();
-        let history = history_entity.read(cx);
-        let Some(c) = self.completion.as_mut() else {
-            return;
-        };
-        c.set_in_prompt_region(prompt_found);
-        c.recompute(&line, line.len(), now, history, true);
-        if c.is_visible() {
-            let (aline, acol) = anchor;
-            let token_start = acol.saturating_sub(c.typed_len());
-            self.completion_anchor = Some((aline, token_start));
+        {
+            let history = history_entity.read(cx);
+            let Some(c) = self.completion.controller.as_mut() else {
+                return;
+            };
+            c.set_in_prompt_region(prompt_found);
+            c.recompute(&line, line.len(), now, history, true);
+        }
+        if self
+            .completion
+            .controller
+            .as_ref()
+            .is_some_and(|c| c.is_visible())
+        {
+            self.completion.anchor_at(anchor);
         }
         cx.notify();
     }
 
     /// Build the positioned completion overlay element, if visible.
     pub(crate) fn completion_overlay_element(&self, cx: &App) -> Option<impl IntoElement> {
-        let c = self.completion.as_ref()?;
+        let c = self.completion.controller.as_ref()?;
         if !c.is_visible() {
             return None;
         }
-        let (line, col) = self.completion_anchor?;
-        let m = self.metrics.borrow();
+        let (line, col) = self.completion.anchor?;
+        let m = self.render_cache.borrow().metrics;
 
         // Only render a window of `max_visible` rows, scrolled to keep the
         // selected row in view; the engine keeps more candidates than we show.
@@ -396,7 +432,7 @@ impl LocalTerminalView {
         ctrl: bool,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(c) = self.completion.as_mut() else {
+        let Some(c) = self.completion.controller.as_mut() else {
             return false;
         };
         if !c.is_visible() {
@@ -425,8 +461,7 @@ impl LocalTerminalView {
                 true
             }
             CompletionKeyAction::Dismiss => {
-                c.dismiss();
-                self.completion_anchor = None;
+                self.completion.dismiss();
                 cx.notify();
                 true
             }
@@ -435,7 +470,11 @@ impl LocalTerminalView {
 
     /// Accept the selected suggestion: write its terminal edit bytes, then dismiss.
     fn completion_accept(&mut self, cx: &mut Context<Self>) {
-        let bytes = self.completion.as_ref().and_then(|c| c.accept_bytes());
+        let bytes = self
+            .completion
+            .controller
+            .as_ref()
+            .and_then(|c| c.accept_bytes());
         if let Some(bytes) = bytes {
             if !bytes.is_empty() {
                 log::debug!("completion: accept → write {bytes:?}");
@@ -446,10 +485,7 @@ impl LocalTerminalView {
                 });
             }
         }
-        if let Some(c) = self.completion.as_mut() {
-            c.dismiss();
-        }
-        self.completion_anchor = None;
+        self.completion.dismiss();
         cx.notify();
     }
 
@@ -465,17 +501,14 @@ impl LocalTerminalView {
             return;
         };
         let now = now_ms();
-        let Some(controller) = self.completion.as_ref() else {
+        let Some(controller) = self.completion.controller.as_ref() else {
             return;
         };
         history_entity.update(cx, |h, _| {
             controller.capture(&line, now, h);
         });
         // The line is being submitted → clear any overlay.
-        if let Some(c) = self.completion.as_mut() {
-            c.dismiss();
-        }
-        self.completion_anchor = None;
+        self.completion.dismiss();
     }
 }
 

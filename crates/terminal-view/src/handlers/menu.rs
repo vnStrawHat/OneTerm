@@ -1,7 +1,7 @@
 //! Context menu for `LocalTerminalView`.
 
-use gpui::{Entity, FocusHandle, Window};
-use gpui_component::menu::{ContextMenu, ContextMenuExt as _, PopupMenuItem};
+use gpui::{Entity, FocusHandle, WeakEntity, Window};
+use gpui_component::menu::{ContextMenu, ContextMenuExt as _, PopupMenu, PopupMenuItem};
 
 use oneterm_terminal::TerminalSession;
 
@@ -10,8 +10,9 @@ use oneterm_actions::{
     TerminalClear, TerminalCopy, TerminalPaste, TerminalSelectAll,
 };
 
-use super::super::panel::DuplicateDestination;
-use super::super::space::{SplitContext, SplitDir};
+use super::super::panel::{DuplicateDestination, TerminalPanel};
+use super::super::space::{SpaceId, SplitContext, SplitDir};
+use super::edit;
 
 /// Attach the right-click context menu.
 ///
@@ -114,12 +115,12 @@ where
 
             // 3–4. Split Right / Left / Up / Down (only inside a Space tree).
             if let Some(ctx) = split_ctx.clone() {
-                menu = menu
-                    .separator()
-                    .item(split_item("Split Right", SplitDir::Right, &ctx, &focus))
-                    .item(split_item("Split Left", SplitDir::Left, &ctx, &focus))
-                    .item(split_item("Split Up", SplitDir::Up, &ctx, &focus))
-                    .item(split_item("Split Down", SplitDir::Down, &ctx, &focus));
+                menu = split_items(
+                    menu.separator(),
+                    ctx.panel.clone(),
+                    ctx.space_id,
+                    Some(&focus),
+                );
             }
 
             // 4. ── separator ──
@@ -127,67 +128,39 @@ where
                 .separator()
                 // 5. Copy
                 .item(
-                    PopupMenuItem::new("Copy")
-                        .action(Box::new(TerminalCopy))
-                        .disabled(!has_selection)
-                        .on_click({
-                            let s = session.clone();
-                            let f = focus.clone();
-                            move |_, window, cx| {
-                                if let Some(text) = s.read(cx).selection_text() {
-                                    if !text.is_empty() {
-                                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                            text,
-                                        ));
-                                    }
-                                }
-                                window.focus(&f, cx);
-                            }
-                        }),
+                    edit_item(
+                        "Copy",
+                        Box::new(TerminalCopy),
+                        &session,
+                        &focus,
+                        edit::copy_selection,
+                    )
+                    .disabled(!has_selection),
                 )
                 // 6. Paste
-                .item(
-                    PopupMenuItem::new("Paste")
-                        .action(Box::new(TerminalPaste))
-                        .on_click({
-                            let s = session.clone();
-                            let f = focus.clone();
-                            move |_, window, cx| {
-                                if let Some(item) = cx.read_from_clipboard() {
-                                    if let Some(text) = item.text() {
-                                        s.update(cx, |s, _| s.paste(&text));
-                                    }
-                                }
-                                window.focus(&f, cx);
-                            }
-                        }),
-                )
+                .item(edit_item(
+                    "Paste",
+                    Box::new(TerminalPaste),
+                    &session,
+                    &focus,
+                    edit::paste_clipboard,
+                ))
                 // 7. Select All
-                .item(
-                    PopupMenuItem::new("Select All")
-                        .action(Box::new(TerminalSelectAll))
-                        .on_click({
-                            let s = session.clone();
-                            let f = focus.clone();
-                            move |_, window, cx| {
-                                s.update(cx, |s, _| s.select_all());
-                                window.focus(&f, cx);
-                            }
-                        }),
-                )
+                .item(edit_item(
+                    "Select All",
+                    Box::new(TerminalSelectAll),
+                    &session,
+                    &focus,
+                    edit::select_all,
+                ))
                 // 8. Clear
-                .item(
-                    PopupMenuItem::new("Clear")
-                        .action(Box::new(TerminalClear))
-                        .on_click({
-                            let s = session.clone();
-                            let f = focus.clone();
-                            move |_, window, cx| {
-                                s.update(cx, |s, _| s.clear());
-                                window.focus(&f, cx);
-                            }
-                        }),
-                )
+                .item(edit_item(
+                    "Clear",
+                    Box::new(TerminalClear),
+                    &session,
+                    &focus,
+                    edit::clear_screen,
+                ))
                 // 9. ── separator ──
                 .separator()
                 // 10. Close Terminal Tab — dispatch the ClosePanel action.
@@ -266,27 +239,56 @@ fn duplicate_item(
     }
 }
 
-/// Build a "Split <dir>" menu item that dispatches to the owning panel.
-fn split_item(
+/// Build one Copy / Paste / Select All / Clear item: the action (for the
+/// shortcut hint + global dispatch) plus a click handler that runs `edit` on
+/// the session and returns focus to the terminal.
+fn edit_item(
     label: &'static str,
-    dir: SplitDir,
-    ctx: &SplitContext,
+    action: Box<dyn gpui::Action>,
+    session: &Entity<Box<dyn TerminalSession>>,
     focus: &FocusHandle,
+    edit: fn(&Entity<Box<dyn TerminalSession>>, &mut gpui::App),
 ) -> PopupMenuItem {
-    let panel = ctx.panel.clone();
-    let space_id = ctx.space_id;
+    let s = session.clone();
     let f = focus.clone();
     PopupMenuItem::new(label)
-        .action(match dir {
-            SplitDir::Right => Box::new(SplitRight),
-            SplitDir::Left => Box::new(SplitLeft),
-            SplitDir::Up => Box::new(SplitUp),
-            SplitDir::Down => Box::new(SplitDown),
-        })
+        .action(action)
         .on_click(move |_, window, cx| {
-            if let Some(panel) = panel.upgrade() {
-                panel.update(cx, |p, cx| p.split_active_at(space_id, dir, window, cx));
-            }
+            edit(&s, cx);
             window.focus(&f, cx);
         })
+}
+
+/// Append the four "Split Right / Left / Up / Down" items that split
+/// `space_id` of `panel`. `focus` (the terminal's handle, when the menu belongs
+/// to a terminal Space) is re-focused after the click.
+pub(crate) fn split_items(
+    menu: PopupMenu,
+    panel: WeakEntity<TerminalPanel>,
+    space_id: SpaceId,
+    focus: Option<&FocusHandle>,
+) -> PopupMenu {
+    let item = |label: &'static str, dir: SplitDir| {
+        let panel = panel.clone();
+        let f = focus.cloned();
+        PopupMenuItem::new(label)
+            .action(match dir {
+                SplitDir::Right => Box::new(SplitRight),
+                SplitDir::Left => Box::new(SplitLeft),
+                SplitDir::Up => Box::new(SplitUp),
+                SplitDir::Down => Box::new(SplitDown),
+            })
+            .on_click(move |_, window, cx| {
+                if let Some(panel) = panel.upgrade() {
+                    panel.update(cx, |p, cx| p.split_active_at(space_id, dir, window, cx));
+                }
+                if let Some(f) = &f {
+                    window.focus(f, cx);
+                }
+            })
+    };
+    menu.item(item("Split Right", SplitDir::Right))
+        .item(item("Split Left", SplitDir::Left))
+        .item(item("Split Up", SplitDir::Up))
+        .item(item("Split Down", SplitDir::Down))
 }

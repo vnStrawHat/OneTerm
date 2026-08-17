@@ -44,7 +44,7 @@ fn relative_luminance(c: Hsla) -> f32 {
 }
 
 /// WCAG contrast ratio between two colors (≥1.0).
-pub fn contrast_ratio(a: Hsla, b: Hsla) -> f32 {
+pub(crate) fn contrast_ratio(a: Hsla, b: Hsla) -> f32 {
     let la = relative_luminance(a);
     let lb = relative_luminance(b);
     let (hi, lo) = if la >= lb { (la, lb) } else { (lb, la) };
@@ -56,7 +56,7 @@ pub fn contrast_ratio(a: Hsla, b: Hsla) -> f32 {
 /// PERF-10: Results are cached in a thread-local HashMap keyed by
 /// (fg, bg, min_contrast). The same (fg, bg) pairs recur across cells
 /// (16 ANSI colors + default fg/bg), so the cache hit rate is very high.
-pub fn ensure_minimum_contrast(fg: Hsla, bg: Hsla, min: f32) -> Hsla {
+pub(crate) fn ensure_minimum_contrast(fg: Hsla, bg: Hsla, min: f32) -> Hsla {
     if contrast_ratio(fg, bg) >= min || min <= 1.0 {
         return fg;
     }

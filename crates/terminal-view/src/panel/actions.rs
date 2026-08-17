@@ -16,6 +16,7 @@ use oneterm_actions::{
     TerminalCopy, TerminalPaste, TerminalSelectAll,
 };
 
+use super::super::handlers::edit;
 use super::super::space::{SplitDir, render_node};
 use super::TerminalPanel;
 
@@ -57,6 +58,19 @@ impl TerminalPanel {
         self.split_active_at(self.tree.active(), SplitDir::Down, window, cx);
     }
 
+    /// Run an edit command (copy/paste/select-all/clear) on the active
+    /// terminal's session, if the active Space has one.
+    fn edit_active(
+        &self,
+        edit: fn(&gpui::Entity<Box<dyn oneterm_terminal::TerminalSession>>, &mut gpui::App),
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(view) = self.active_view() {
+            let session = view.read(cx).session.clone();
+            edit(&session, cx);
+        }
+    }
+
     /// Copy the terminal selection to the clipboard.
     fn on_action_terminal_copy(
         &mut self,
@@ -64,14 +78,7 @@ impl TerminalPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(view) = self.active_view() {
-            let session = view.read(cx).session.clone();
-            if let Some(text) = session.read(cx).selection_text() {
-                if !text.is_empty() {
-                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
-                }
-            }
-        }
+        self.edit_active(edit::copy_selection, cx);
     }
 
     /// Paste the clipboard contents into the active terminal.
@@ -81,14 +88,7 @@ impl TerminalPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(view) = self.active_view() {
-            let session = view.read(cx).session.clone();
-            if let Some(item) = cx.read_from_clipboard() {
-                if let Some(text) = item.text() {
-                    session.update(cx, |s, _| s.paste(&text));
-                }
-            }
-        }
+        self.edit_active(edit::paste_clipboard, cx);
     }
 
     /// Select all text in the active terminal.
@@ -98,10 +98,7 @@ impl TerminalPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(view) = self.active_view() {
-            let session = view.read(cx).session.clone();
-            session.update(cx, |s, _| s.select_all());
-        }
+        self.edit_active(edit::select_all, cx);
     }
 
     /// Clear the active terminal screen.
@@ -111,10 +108,7 @@ impl TerminalPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(view) = self.active_view() {
-            let session = view.read(cx).session.clone();
-            session.update(cx, |s, _| s.clear());
-        }
+        self.edit_active(edit::clear_screen, cx);
     }
 
     /// Close the active terminal Space (not the whole tab).

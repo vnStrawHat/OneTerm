@@ -74,7 +74,7 @@ impl super::TerminalElement {
         let font_size = self.font_size;
         let focused = self.focused;
         let cursor_visible = self.cursor_visible;
-        let row_cache = &self.render_cache.row_cache;
+        let render_cache = &self.render_cache;
 
         window.handle_input(focus, ElementInputHandler::new(bounds, view.clone()), cx);
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
@@ -113,7 +113,8 @@ impl super::TerminalElement {
         let line_h_px = geom.line_h();
 
         let num_lines = layout.num_lines;
-        let cache = row_cache.borrow();
+        let cache_ref = render_cache.borrow();
+        let cache = &cache_ref.rows;
 
         let mut bg_rect_count: usize = 0;
         for i in 0..num_lines {
@@ -192,14 +193,15 @@ impl super::TerminalElement {
                 }
             }
         }
-        drop(cache);
+        drop(cache_ref);
 
         if let Some(cur) = &layout.cursor {
             paint_cursor(cur, focused, cursor_visible, &geom, window, &mut quad_count);
         }
 
         {
-            let mut cache = row_cache.borrow_mut();
+            let mut cache = render_cache.borrow_mut();
+            let cache = &mut cache.rows;
             cache.stats.paint_quad_calls = quad_count;
             cache.stats.bg_rect_count = bg_rect_count;
             cache.stats.text_run_paints = run_count;

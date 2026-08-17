@@ -1,10 +1,10 @@
 //! The [`LocalTerminalView`] type — the GPUI view that renders one terminal
-//! session (local or ssh) — plus its event-loop wiring, lifecycle, and the
-//! grow-only gutter-timestamp bookkeeping.
+//! session (local or ssh) — plus its event loop and lifecycle.
 //!
-//! Per-frame rendering lives in [`crate::render`]; input handling in
-//! [`crate::handlers`]; the split submodules under [`super`] cover completion,
-//! cursor, font, grid, key mapping, and the scrollbar overlay.
+//! Per-frame rendering lives in [`super::render`]; input handling in
+//! [`crate::handlers`]; the sibling modules under [`super`] hold the cohesive
+//! sub-states the view owns (search, scrollbar, gutter timestamps, completion)
+//! and the small helpers (grid coordinates, key mapping, IME).
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -16,15 +16,17 @@ use async_channel::Receiver;
 use gpui::{
     ClipboardItem, Context, Entity, EventEmitter, FocusHandle, KeyBinding, NoAction, Window,
 };
-use gpui_component::input::InputState;
 use oneterm_terminal::{
-    AgentStatusEvent, SearchMatch, SearchOptions, SessionEvent, TerminalInfo, TerminalPalette,
-    TerminalProgress, TerminalSession,
+    AgentStatusEvent, SessionEvent, TerminalPalette, TerminalProgress, TerminalSession,
 };
 
-use crate::element::{GridMetrics, RowLayoutCache};
+use super::completion::CompletionState;
+use super::gutter_timestamps::GutterTimestamps;
+use super::scrollbar::ScrollbarState;
+use super::search::SearchState;
+use crate::element::RenderCache;
 use crate::highlight::SemanticOverlay;
-use crate::scroll_handle::TerminalScrollHandle;
+use crate::url::UrlHover;
 
 const CURSOR_BLINK_INTERVAL_MS: u64 = 500;
 
@@ -33,22 +35,23 @@ const CURSOR_BLINK_INTERVAL_MS: u64 = 500;
 /// only re-runs when the panel (or its `TabPanel`) re-renders — so the view
 /// emits these to let the panel `cx.notify()` and refresh the tab strip.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TerminalViewEvent {
+pub(crate) enum TerminalViewEvent {
     /// The OSC 0/2 window title changed (or was reset via `ResetTitle`). The
     /// panel should re-read the live title via `TerminalSession::title()`.
     TitleChanged,
 }
 
 /// View that renders one terminal session (local or ssh — via `dyn TerminalSession`).
-pub struct LocalTerminalView {
+pub(crate) struct LocalTerminalView {
     pub(crate) session: Entity<Box<dyn TerminalSession>>,
     /// Non-secret launch metadata used by Duplicate Session.
     pub(crate) duplicate_config: Option<oneterm_core::SessionDuplicateConfig>,
     pub(crate) focus: FocusHandle,
-    /// Layout metrics sink (Element writes in prepaint, mouse handler reads).
-    pub(crate) metrics: Rc<RefCell<GridMetrics>>,
-    /// Scrollbar handle — caches scrollback state, applies drag → session.
-    pub(crate) scroll_handle: TerminalScrollHandle,
+    /// Render state shared with the per-frame element and the input handlers:
+    /// row layout cache, gutter width, grid size, and layout metrics.
+    pub(crate) render_cache: Rc<RefCell<RenderCache>>,
+    /// Scrollbar geometry, drag state, pending offset, and auto-hide timer.
+    pub(crate) scrollbar: ScrollbarState,
     /// Whether the cursor is currently shown (blink toggle). True = draw, false = hide.
     pub(crate) cursor_blink_visible: bool,
     /// Bell indicator — true when `\x07` is received, cleared when the user presses a key.
@@ -66,62 +69,20 @@ pub struct LocalTerminalView {
     /// Latest OSC 9;7 coding-agent status event for this terminal
     /// (see `docs/osc-agent-status.md`). `None` until the first event.
     /// `seq` dedup is already applied by the listener; the view just keeps
-    /// the latest for whichever UI wants to render it (the AgentPanel
-    /// placeholder can later consume this).
+    /// the latest for whichever UI wants to render it.
     pub(crate) agent_status: Option<Arc<AgentStatusEvent>>,
-    /// Scrollbar drag state: Some(drag_start_y) while dragging the thumb.
-    pub(crate) scrollbar_drag_start: Option<f32>,
-    /// Last scroll time — used to auto-hide the scrollbar after 2s.
-    pub(crate) last_scroll_time: Option<std::time::Instant>,
-    /// URL currently hovered (Ctrl held) — for highlight + click to open URL.
-    pub(crate) hovered_url: Option<crate::url::DetectedUrl>,
-    /// Ctrl currently held — tracked to toggle the cursor style.
-    pub(crate) ctrl_held: bool,
-    /// Last mouse position — used to re-detect the URL when Ctrl is pressed/released
-    /// without a mouse move.
-    pub(crate) last_mouse_pos: Option<gpui::Point<gpui::Pixels>>,
-    /// Per-line timestamps (gutter). `line_times[j]` = render time of the line whose
-    /// **absolute index** (0-based) = `line_time_base + j`. Grow-only: each line is
-    /// stamped exactly once and never overwritten (see `update_line_times`).
-    pub(crate) line_times: Rc<VecDeque<String>>,
-    /// Absolute index (0-based) of `line_times[0]` — the oldest line still tracked.
-    /// Increases as old lines leave the scrollback.
-    pub(crate) line_time_base: usize,
-    /// `clear_epoch` from the most recent update — when it changes (screen `clear`),
-    /// reset `line_times` so new content is stamped with the current time.
-    pub(crate) last_clear_epoch: usize,
+    /// URL under the mouse + Ctrl state (highlight + Ctrl+click to open).
+    pub(crate) url_hover: UrlHover,
+    /// Grow-only per-line timestamps for the gutter.
+    pub(crate) gutter_times: GutterTimestamps,
     /// Persisted semantic overlay — updated when settings change instead of
-    /// recreated every frame (PERF-06).
+    /// recreated every frame.
     pub(crate) semantic_overlay: SemanticOverlay,
     /// Last theme palette pushed to the backend — skip `set_default_colors`
-    /// when the palette hasn't changed (PERF-06).
+    /// when the palette hasn't changed.
     pub(crate) last_pushed_palette: Option<TerminalPalette>,
-    /// Per-row layout cache — skip recompute for non-dirty rows.
-    pub(crate) row_cache: Rc<RefCell<RowLayoutCache>>,
-    /// Cached gutter width + num_digits — only recompute when num_digits changes.
-    /// Avoids calling shape_line every frame → prevents gutter_width oscillation that
-    /// causes a resize loop.
-    pub(crate) cached_gutter:
-        Rc<RefCell<Option<(gpui::Pixels, usize, gpui::Pixels, gpui::SharedString)>>>,
-    /// Last terminal size (rows, cols) — persisted across frames to avoid calling
-    /// s.resize() every frame (TerminalElement is recreated each frame).
-    pub(crate) last_grid_size: Rc<RefCell<Option<(u16, u16)>>>,
-    // ── In-buffer search (Ctrl+F) ──────────────────────────────
-    /// Whether the search bar is open.
-    pub(crate) search_active: bool,
-    /// The search query (kept in sync with the `InputState`).
-    pub(crate) search_query: String,
-    /// Search options (case-sensitivity, whole-word).
-    pub(crate) search_options: SearchOptions,
-    /// Matches in grid coordinates (top-to-bottom order).
-    pub(crate) search_matches: Vec<SearchMatch>,
-    /// Index into `search_matches` of the active (current) match.
-    pub(crate) search_active_idx: Option<usize>,
-    /// The `InputState` for the search bar input.
-    pub(crate) search_input: Option<gpui::Entity<InputState>>,
-    /// PERF-12: Debounce task for search — delays the full-grid scan by 150ms
-    /// after the last keystroke so typing doesn't fire a search per character.
-    pub(crate) search_debounce_task: Option<gpui::Task<()>>,
+    /// In-buffer search (Ctrl+F).
+    pub(crate) search: SearchState,
     /// Split context — set by the owning `TerminalPanel` so this terminal's
     /// context menu can dispatch Split / Close-Space to the right Space. `None`
     /// until the panel wires it up (always set for a live terminal leaf).
@@ -132,16 +93,8 @@ pub struct LocalTerminalView {
     pub(crate) blink_task: Option<gpui::Task<()>>,
     /// Whether the view is alive (not yet closed). Used to gate the blink task.
     pub(crate) alive: bool,
-    /// Per-terminal auto-completion controller + overlay state. Lazily created on
-    /// the first render (needs `cx` to read settings + session kind). `None` until
-    /// then; also `None`/idle while completion is disabled.
-    pub(crate) completion: Option<crate::completion::CompletionController>,
-    /// Anchor for the completion overlay: (display line, token-start column) in
-    /// the grid, computed during `update_completion`. `None` when hidden.
-    pub(crate) completion_anchor: Option<(i32, usize)>,
-    /// Last cursor (line, col) seen by `update_completion` — used to skip the
-    /// grid snapshot on frames where the cursor did not move (e.g. blink ticks).
-    pub(crate) completion_last_cursor: Option<(i32, usize)>,
+    /// Auto-completion controller + overlay anchor.
+    pub(crate) completion: CompletionState,
 }
 
 impl Drop for LocalTerminalView {
@@ -157,7 +110,7 @@ impl EventEmitter<TerminalViewEvent> for LocalTerminalView {}
 
 impl LocalTerminalView {
     /// Create the view from a session entity. Subscribe to events → re-render task.
-    pub fn new(
+    pub(crate) fn new(
         session: Entity<Box<dyn TerminalSession>>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -179,99 +132,23 @@ impl LocalTerminalView {
                 "LocalTerminalView: session events were already taken; this view will not receive live updates"
             );
         }
-        let session_for_spawn = session.clone();
         let event_task = events.map(|rx| {
             cx.spawn(async move |this, cx| {
                 while let Ok(ev) = rx.recv().await {
-                    match ev {
-                        SessionEvent::Clipboard(Some(t)) => {
-                            let _ = this.update(cx, |_, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(t));
-                            });
-                        }
-                        SessionEvent::Clipboard(None) => {
-                            let _ = this.update(cx, |_, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
-                            });
-                        }
-                        SessionEvent::Output => {
-                            let s = session_for_spawn.clone();
-                            // Coalesce every Output event already queued behind this
-                            // one into a single render. `drain_coalesced_events`
-                            // merges them via `try_recv`, so no wall-clock sleep is
-                            // needed — the previous fixed 1ms timer only added
-                            // latency (capping the frame period at 1ms + render time)
-                            // without adding coalescing. GPUI merges the resulting
-                            // `notify()`s into one paint per frame.
-                            Self::drain_coalesced_events(&rx, &this, cx);
-                            let _ = this.update(cx, |view, cx| {
-                                cx.notify();
-                                s.read(cx).scroll_to_bottom();
-                                // Stamp at the OUTPUT moment (not just at render): the
-                                // subscribe task runs independently of render, so an
-                                // inactive tab (not rendering) still updates timestamps to
-                                // the time the line was created, instead of bunching them at
-                                // the time the tab becomes active again.
-                                let info = s.read(cx).terminal_info();
-                                view.update_line_times(&info);
-                                // New output shifts the alacritty grid coordinate
-                                // system, so stored search matches would point at the
-                                // wrong rows — refresh them (keeps the active index).
-                                view.refresh_search(cx);
-                            });
-                        }
-                        SessionEvent::Bell => {
-                            let _ = this.update(cx, |view, cx| {
-                                view.has_bell = true;
-                                cx.notify();
-                            });
-                        }
-                        SessionEvent::Notification(msg) => {
-                            let _ = this.update(cx, |view, cx| {
-                                view.queue_notification(msg);
-                                cx.notify();
-                            });
-                        }
-                        SessionEvent::ClipboardRead => {
-                            let _ = this.update(cx, |view, cx| view.reply_clipboard_read(cx));
-                        }
-                        SessionEvent::Title(_) => {
-                            // OSC 0/2 title changed — notify the containing panel
-                            // so its `title()` (which reads the live session title)
-                            // re-runs and the tab strip refreshes.
-                            let _ = this.update(cx, |_, cx| {
-                                cx.emit(TerminalViewEvent::TitleChanged);
-                                cx.notify();
-                            });
-                        }
-                        SessionEvent::Progress(p) => {
-                            let _ = this.update(cx, |view, cx| {
-                                view.set_progress(p);
-                                cx.notify();
-                            });
-                        }
-                        SessionEvent::AgentStatus(ev) => {
-                            let _ = this.update(cx, |view, cx| {
-                                view.push_agent_status(&ev, cx);
-                                view.agent_status = Some(ev);
-                                cx.notify();
-                            });
-                        }
-                        SessionEvent::Exited(code) => {
-                            let _ = this.update(cx, |view, cx| {
-                                view.mark_agent_ended(code, cx);
-                                cx.notify();
-                            });
-                        }
-                        SessionEvent::Closed => {
-                            let _ = this.update(cx, |view, cx| {
-                                view.mark_agent_ended(None, cx);
-                                cx.notify();
-                            });
-                        }
-                        _ => {
-                            let _ = this.update(cx, |_, cx| cx.notify());
-                        }
+                    // Coalesce every Output event already queued behind this
+                    // one into a single render. `drain_coalesced_events`
+                    // merges them via `try_recv`, so no wall-clock sleep is
+                    // needed — a fixed timer would only add latency without
+                    // adding coalescing. GPUI merges the resulting
+                    // `notify()`s into one paint per frame.
+                    if matches!(ev, SessionEvent::Output) {
+                        Self::drain_coalesced_events(&rx, &this, cx);
+                    }
+                    if this
+                        .update(cx, |view, cx| view.handle_event(ev, cx))
+                        .is_err()
+                    {
+                        break;
                     }
                 }
             })
@@ -305,8 +182,8 @@ impl LocalTerminalView {
             session,
             duplicate_config: None,
             focus,
-            metrics: Rc::new(RefCell::new(GridMetrics::default())),
-            scroll_handle: TerminalScrollHandle::new(),
+            render_cache: Rc::new(RefCell::new(RenderCache::default())),
+            scrollbar: ScrollbarState::default(),
             cursor_blink_visible: true,
             has_bell: false,
             pending_notifications: VecDeque::new(),
@@ -314,34 +191,86 @@ impl LocalTerminalView {
             notification_policy: oneterm_terminal::TerminalSecurityPolicy::default(),
             progress: None,
             agent_status: None,
-            scrollbar_drag_start: None,
-            last_scroll_time: None,
-            hovered_url: None,
-            ctrl_held: false,
-            last_mouse_pos: None,
-            line_times: Rc::new(VecDeque::new()),
-            line_time_base: 0,
-            last_clear_epoch: 0,
+            url_hover: UrlHover::default(),
+            gutter_times: GutterTimestamps::default(),
             semantic_overlay: SemanticOverlay::default(),
             last_pushed_palette: None,
-            row_cache: Rc::new(RefCell::new(RowLayoutCache::new())),
-            cached_gutter: Rc::new(RefCell::new(None)),
-            last_grid_size: Rc::new(RefCell::new(None)),
-            search_active: false,
-            search_query: String::new(),
-            search_options: SearchOptions::default(),
-            search_matches: Vec::new(),
-            search_active_idx: None,
-            search_input: None,
-            search_debounce_task: None,
+            search: SearchState::default(),
             split_ctx: None,
             event_task,
             blink_task: Some(blink_task),
             alive: true,
-            completion: None,
-            completion_anchor: None,
-            completion_last_cursor: None,
+            completion: CompletionState::default(),
         }
+    }
+
+    /// Drain every event already queued behind an `Output`: consecutive
+    /// `Output`s are coalesced into the one the caller is about to handle,
+    /// every other event is handled immediately through [`Self::handle_event`]
+    /// (a process that prints and exits delivers `Exited`/`Closed` right
+    /// behind `Output` — the common case).
+    fn drain_coalesced_events(
+        rx: &Receiver<SessionEvent>,
+        this: &gpui::WeakEntity<Self>,
+        cx: &mut gpui::AsyncApp,
+    ) {
+        while let Ok(ev) = rx.try_recv() {
+            if matches!(ev, SessionEvent::Output) {
+                continue;
+            }
+            if this
+                .update(cx, |view, cx| view.handle_event(ev, cx))
+                .is_err()
+            {
+                return;
+            }
+        }
+    }
+
+    /// Apply one session event to the view. The single event handler used by
+    /// both the main event loop and the coalescing drain.
+    pub(crate) fn handle_event(&mut self, ev: SessionEvent, cx: &mut Context<Self>) {
+        match ev {
+            SessionEvent::Clipboard(text) => {
+                cx.write_to_clipboard(ClipboardItem::new_string(text.unwrap_or_default()));
+            }
+            SessionEvent::Output => {
+                // The viewport is intentionally left where the user scrolled
+                // it: alacritty keeps `display_offset` anchored to the same
+                // content while output streams, and keyboard input re-snaps
+                // to the bottom (see `handlers::keyboard`).
+                //
+                // Stamp at the OUTPUT moment (not just at render): the
+                // subscribe task runs independently of render, so an
+                // inactive tab (not rendering) still updates timestamps to
+                // the time the line was created, instead of bunching them at
+                // the time the tab becomes active again.
+                let info = self.session.read(cx).terminal_info();
+                self.gutter_times.update(&info);
+                // New output shifts the alacritty grid coordinate system, so
+                // stored search matches would point at the wrong rows —
+                // refresh them (keeps the active index).
+                self.refresh_search(cx);
+            }
+            SessionEvent::Bell => self.has_bell = true,
+            SessionEvent::Notification(msg) => self.queue_notification(msg),
+            SessionEvent::ClipboardRead => self.reply_clipboard_read(cx),
+            SessionEvent::Title(_) => {
+                // OSC 0/2 title changed — notify the containing panel so its
+                // `title()` (which reads the live session title) re-runs and
+                // the tab strip refreshes.
+                cx.emit(TerminalViewEvent::TitleChanged);
+            }
+            SessionEvent::Progress(p) => self.set_progress(p),
+            SessionEvent::AgentStatus(ev) => {
+                self.push_agent_status(&ev, cx);
+                self.agent_status = Some(ev);
+            }
+            SessionEvent::Exited(code) => self.mark_agent_ended(code, cx),
+            SessionEvent::Closed => self.mark_agent_ended(None, cx),
+            _ => {}
+        }
+        cx.notify();
     }
 
     fn queue_notification(&mut self, message: String) {
@@ -386,8 +315,8 @@ impl LocalTerminalView {
 
     /// Return a snapshot of the most recently painted renderer counters.
     #[cfg(any(test, feature = "terminal-diagnostics"))]
-    pub fn render_diagnostics(&self) -> crate::diagnostics::TerminalRenderDiagnostics {
-        crate::diagnostics::TerminalRenderDiagnostics::from_cache(&self.row_cache.borrow())
+    pub(crate) fn render_diagnostics(&self) -> crate::diagnostics::TerminalRenderDiagnostics {
+        crate::diagnostics::TerminalRenderDiagnostics::from_cache(&self.render_cache.borrow().rows)
     }
 
     /// Update the OSC 9;4 progress state. `Remove` clears it (`None`).
@@ -484,173 +413,6 @@ impl LocalTerminalView {
         let reply = format!("\x1b]52;c;{}\x07", oneterm_terminal::encode_osc52(&text));
         if let Err(error) = self.session.read(cx).write(reply.as_bytes()) {
             log::warn!("OSC 52 clipboard response delivery failed: {error}");
-        }
-    }
-
-    /// Drain all pending events in the channel — coalesce Output events,
-    /// handle every other event immediately, mirroring the main loop.
-    pub(crate) fn drain_coalesced_events(
-        rx: &Receiver<SessionEvent>,
-        this: &gpui::WeakEntity<Self>,
-        cx: &mut gpui::AsyncApp,
-    ) {
-        loop {
-            match rx.try_recv() {
-                Ok(SessionEvent::Output) => {}
-                Ok(SessionEvent::Clipboard(Some(t))) => {
-                    let _ = this.update(cx, |_, cx| {
-                        cx.write_to_clipboard(ClipboardItem::new_string(t));
-                    });
-                }
-                Ok(SessionEvent::Clipboard(None)) => {
-                    let _ = this.update(cx, |_, cx| {
-                        cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
-                    });
-                }
-                Ok(SessionEvent::Bell) => {
-                    let _ = this.update(cx, |view, cx| {
-                        view.has_bell = true;
-                        cx.notify();
-                    });
-                }
-                Ok(SessionEvent::Notification(msg)) => {
-                    let _ = this.update(cx, |view, cx| {
-                        view.queue_notification(msg);
-                        cx.notify();
-                    });
-                }
-                Ok(SessionEvent::ClipboardRead) => {
-                    let _ = this.update(cx, |view, cx| view.reply_clipboard_read(cx));
-                }
-                Ok(SessionEvent::Title(_)) => {
-                    // OSC 0/2 title arrived in the same batch as Output —
-                    // emit so the containing panel refreshes its tab title.
-                    let _ = this.update(cx, |_, cx| {
-                        cx.emit(TerminalViewEvent::TitleChanged);
-                        cx.notify();
-                    });
-                }
-                Ok(SessionEvent::Progress(p)) => {
-                    let _ = this.update(cx, |view, cx| {
-                        view.set_progress(p);
-                        cx.notify();
-                    });
-                }
-                Ok(SessionEvent::AgentStatus(ev)) => {
-                    let _ = this.update(cx, |view, cx| {
-                        view.push_agent_status(&ev, cx);
-                        view.agent_status = Some(ev);
-                        cx.notify();
-                    });
-                }
-                // A process that prints and exits delivers `Exited`/`Closed`
-                // right behind `Output` — the common case — so the drain must
-                // run the same exit handling as the main loop.
-                Ok(SessionEvent::Exited(code)) => {
-                    let _ = this.update(cx, |view, cx| {
-                        view.mark_agent_ended(code, cx);
-                        cx.notify();
-                    });
-                }
-                Ok(SessionEvent::Closed) => {
-                    let _ = this.update(cx, |view, cx| {
-                        view.mark_agent_ended(None, cx);
-                        cx.notify();
-                    });
-                }
-                Ok(_) => {
-                    let _ = this.update(cx, |_, cx| cx.notify());
-                }
-                Err(_) => break,
-            }
-        }
-    }
-
-    /// Update `line_times` at **render time**, using a **grow-only** model keyed
-    /// by each line's absolute index.
-    ///
-    /// Each line is assigned a timestamp exactly **once** — on the first frame it
-    /// appears — and is **never overwritten**. This is the key to resisting ConPTY
-    /// repaint / reflow: those operations make `total_lines` (and therefore
-    /// `absolute_line_count` via `terminal_info`) temporarily dip. The old code
-    /// reacted by clearing + refilling with `now` → every line jumped to the same
-    /// time. Here a temporary dip simply means "add nothing", so existing
-    /// timestamps are kept.
-    ///
-    /// `line_times[j]` ↔ the line with absolute index `line_time_base + j`.
-    pub(crate) fn update_line_times(&mut self, info: &TerminalInfo) {
-        let total = info.total_lines;
-        let absolute = info.absolute_line_count;
-        let now = chrono::Local::now().format("%H:%M:%S").to_string();
-
-        // Use Rc::make_mut to get mutable access — O(1) if the Rc is unique
-        // (the previous frame's element has been dropped by render time).
-        let line_times = Rc::make_mut(&mut self.line_times);
-
-        // ── Reset when the screen is cleared (`clear`/`cls`/RIS) ──
-        // `clear` resets the absolute line counter in the event loop → new content
-        // REUSES old indices. If we keep the old `line_times`, new lines would hit
-        // stale timestamps → "time doesn't change". Clear so new lines are stamped
-        // again.
-        if info.clear_epoch != self.last_clear_epoch {
-            self.last_clear_epoch = info.clear_epoch;
-            line_times.clear();
-            self.line_time_base = absolute.saturating_sub(total);
-        }
-
-        // Number of lines that ALREADY HAVE CONTENT (high-water mark).
-        //
-        // `absolute_line_count` is "inflated" to the bottom of the viewport because
-        // `total_lines = history + screen_lines` always includes the EMPTY lines
-        // below the cursor (the grid is always `num_lines` tall). If we stamped up
-        // to `absolute`, those empty lines would get the current time; when later
-        // output overwrites them, they keep the old time → exactly the symptom
-        // "a block of lines carries the wrong time".
-        //
-        // The content mark must match the gutter region actually rendered — i.e. up
-        // to the last line **with content** (`last_content_line`), NOT just up to
-        // the cursor. For TUI / progress bars that use cursor-up, content is BELOW
-        // the cursor; if we stopped stamping at the cursor, those lines would render
-        // `[--:--:--]`.
-        // Absolute index = absolute − num_lines + row.
-        let content_row = info.cursor_line.max(info.last_content_line).max(0) as usize;
-        let content_high = absolute
-            .saturating_sub(info.num_lines)
-            .saturating_add(content_row + 1)
-            .min(absolute);
-
-        // Hard reset: only when new content starts BEFORE the oldest tracked line
-        // (the absolute counter was fully reset). ConPTY repaint/reflow only
-        // fluctuates within existing content, so it does NOT trigger this branch.
-        if absolute < self.line_time_base {
-            line_times.clear();
-            self.line_time_base = absolute.saturating_sub(total);
-        }
-        if line_times.is_empty() {
-            self.line_time_base = absolute.saturating_sub(total);
-        }
-
-        // Stamp the new lines WITH CONTENT (index ≥ covered) with the current render
-        // time. Grow-only: a temporary dip → push nothing; empty lines below the
-        // cursor are not stamped until the cursor (content) actually reaches them.
-        let covered = self.line_time_base + line_times.len();
-        if content_high > covered {
-            let new_lines = content_high - covered;
-            line_times.reserve(new_lines);
-            for _ in 0..new_lines {
-                line_times.push_back(now.clone());
-            }
-        }
-
-        // Drop timestamps of lines that have left the scrollback (front) to bound memory.
-        // VecDeque::pop_front is O(1) amortized — no O(n) shift like Vec::drain.
-        let oldest = absolute.saturating_sub(total);
-        if oldest > self.line_time_base {
-            let drop = (oldest - self.line_time_base).min(line_times.len());
-            for _ in 0..drop {
-                line_times.pop_front();
-            }
-            self.line_time_base += drop;
         }
     }
 }

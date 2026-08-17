@@ -1,15 +1,24 @@
-//! Per-row layout computation.
+//! Per-row layout — turns the cells of one display row into background
+//! rects, batched text runs, and box-drawing primitives, plus the per-cell
+//! helpers it is built from (blank detection, colour resolution with the
+//! semantic merge policy, `TextRun` construction, and the FNV-1a line hash
+//! that detects content changes `Term::damage()` does not track).
 
-use alacritty_terminal::term::cell::Flags;
-use gpui::{FontStyle, FontWeight, TextRun};
+use std::mem;
+
+use alacritty_terminal::term::cell::{Cell, Flags};
+use alacritty_terminal::vte::ansi::{Color, NamedColor};
+use gpui::{Font, FontStyle, FontWeight, Hsla, Pixels, ShapedLine, TextRun, UnderlineStyle};
 
 use oneterm_highlight::{Class, Decoration};
-use oneterm_terminal::{IndexedCell, is_default_background_color};
+use oneterm_terminal::{
+    IndexedCell, is_app_chosen_exact_color, is_decorative_character, is_default_background_color,
+};
 
 use super::super::box_drawing::block::is_full_width_band;
 use super::super::box_drawing::drawing::{has_box_geometry, is_box_drawing};
-use super::super::cell::{cell_colors, cell_style, is_blank};
-use super::super::theme::TerminalTheme;
+use super::super::highlight::to_gpui_hsla;
+use super::super::theme::{TerminalTheme, ensure_minimum_contrast, resolve_cell_color};
 use super::types::{BatchedTextRun, BoxDrawCell, LayoutPoint, LayoutRect, RowLayout};
 
 /// Lay out a single display row — build rects + text runs + box draws for the
@@ -21,7 +30,7 @@ pub(crate) fn layout_row(
     line_cells: Vec<&IndexedCell>,
     display_line: i32,
     theme: &TerminalTheme,
-    base_font: &gpui::Font,
+    base_font: &Font,
     cell_class: &[u8],
 ) -> RowLayout {
     let mut rects: Vec<LayoutRect> = Vec::new();
@@ -96,7 +105,7 @@ pub(crate) fn layout_row(
         // ── Apply class decorations (additive) ──
         // Underline for Error/Warn/Url etc. — additive on top of ANSI fg.
         if class_style.deco == Decoration::Underline && style.underline.is_none() {
-            style.underline = Some(gpui::UnderlineStyle {
+            style.underline = Some(UnderlineStyle {
                 color: Some(style.color),
                 thickness: gpui::px(1.0),
                 wavy: false,
@@ -196,5 +205,191 @@ pub(crate) fn layout_row(
         box_draws,
         shaped_lines: Vec::new(),
         prev_hash: 0,
+    }
+}
+
+// ── Per-cell helpers ──────────────────────────────────────────────────
+
+/// Blank cell = space + default bg + no extras.
+pub(crate) fn is_blank(cell: &Cell) -> bool {
+    cell.c == ' '
+        && is_default_background_color(&cell.bg)
+        && cell.hyperlink().is_none()
+        && !cell.flags.intersects(
+            Flags::INVERSE | Flags::ALL_UNDERLINES | Flags::STRIKEOUT | Flags::WIDE_CHAR_SPACER,
+        )
+}
+
+/// Whether the cell's foreground is the terminal default (no explicit SGR fg).
+fn is_default_foreground(fg: &Color) -> bool {
+    matches!(
+        fg,
+        Color::Named(NamedColor::Foreground)
+            | Color::Named(NamedColor::BrightForeground)
+            | Color::Named(NamedColor::DimForeground)
+    )
+}
+
+/// Convert cell → (fg Hsla, bg Hsla) after inverse + contrast + dim + semantic merge.
+///
+/// After ANSI/SGR resolution, applies the **semantic merge policy** (Layer 2):
+/// class fg overrides only the *default* foreground (no SGR); explicit ANSI fg
+/// is kept. Decorations and font styles are applied additively in `layout_row`.
+///
+/// `class` is the semantic class byte (from `cell_class`). The merge policy:
+/// - Default fg + non-Default class → class fg (the headline case).
+/// - Explicit ANSI fg + non-Default class → keep ANSI fg (unless `override_ansi`).
+/// - Default fg + Default class → theme fg.
+pub(crate) fn cell_colors(cell: &Cell, theme: &TerminalTheme, class: u8) -> (Hsla, Hsla) {
+    let mut fg = cell.fg;
+    let mut bg = cell.bg;
+    if cell.flags.contains(Flags::INVERSE) {
+        mem::swap(&mut fg, &mut bg);
+    }
+    let mut fg_h = resolve_cell_color(&fg, theme);
+    let bg_h = resolve_cell_color(&bg, theme);
+
+    // ── Semantic merge (Layer 2) ──
+    let class_style = theme.class_styles.style(class);
+    if let Some(class_fg) = class_style.fg {
+        let is_default = is_default_foreground(&fg);
+        if is_default || class_style.override_ansi {
+            fg_h = to_gpui_hsla(class_fg);
+        }
+    }
+
+    if !is_app_chosen_exact_color(&fg) && !is_decorative_character(cell.c) {
+        fg_h = ensure_minimum_contrast(fg_h, bg_h, theme.min_contrast);
+    }
+    if cell.flags.contains(Flags::DIM) {
+        fg_h.a *= 0.7;
+    }
+    (fg_h, bg_h)
+}
+
+/// Build a `TextRun` for a cell (bold/italic/underline/strikethrough).
+pub(crate) fn cell_style(cell: &Cell, fg: Hsla, base_font: &Font) -> TextRun {
+    let underline = (cell.flags.intersects(Flags::ALL_UNDERLINES) || cell.hyperlink().is_some())
+        .then(|| UnderlineStyle {
+            color: Some(fg),
+            thickness: gpui::px(1.0),
+            wavy: cell.flags.contains(Flags::UNDERCURL),
+        });
+    let strikethrough = cell
+        .flags
+        .contains(Flags::STRIKEOUT)
+        .then(|| gpui::StrikethroughStyle {
+            color: Some(fg),
+            thickness: gpui::px(1.0),
+        });
+    let weight = if cell.flags.contains(Flags::BOLD) {
+        FontWeight::BOLD
+    } else {
+        base_font.weight
+    };
+    let style = if cell.flags.contains(Flags::ITALIC) {
+        FontStyle::Italic
+    } else {
+        FontStyle::Normal
+    };
+    TextRun {
+        len: cell.c.len_utf8(),
+        color: fg,
+        background_color: None,
+        font: Font {
+            weight,
+            style,
+            ..base_font.clone()
+        },
+        underline,
+        strikethrough,
+    }
+}
+
+/// Hash includes: char, fg, bg, flags, zerowidth, hyperlink.
+pub(crate) fn line_hash(cells: &[&IndexedCell]) -> u64 {
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x100_0000_01b3;
+    let mut h = FNV_OFFSET;
+    for ic in cells {
+        let cell = &ic.cell;
+        h ^= cell.c as u64;
+        h = h.wrapping_mul(FNV_PRIME);
+        h ^= color_hash(cell.fg);
+        h = h.wrapping_mul(FNV_PRIME);
+        h ^= color_hash(cell.bg);
+        h = h.wrapping_mul(FNV_PRIME);
+        h ^= cell.flags.bits() as u64;
+        h = h.wrapping_mul(FNV_PRIME);
+        if let Some(zw) = cell.zerowidth() {
+            for &c in zw {
+                h ^= c as u64;
+                h = h.wrapping_mul(FNV_PRIME);
+            }
+        }
+        if let Some(hl) = cell.hyperlink() {
+            for b in hl.uri().bytes() {
+                h ^= b as u64;
+                h = h.wrapping_mul(FNV_PRIME);
+            }
+        }
+    }
+    h
+}
+
+fn color_hash(c: Color) -> u64 {
+    match c {
+        Color::Named(n) => n as u64,
+        Color::Spec(rgb) => {
+            0x1_0000 | (rgb.r as u64) | ((rgb.g as u64) << 8) | ((rgb.b as u64) << 16)
+        }
+        Color::Indexed(i) => 0x2_0000 | i as u64,
+    }
+}
+
+impl BatchedTextRun {
+    pub(crate) fn new(start: LayoutPoint, c: char, mut style: gpui::TextRun) -> Self {
+        let text = c.to_string();
+        debug_assert_eq!(style.len, c.len_utf8());
+        let _ = &mut style;
+        Self {
+            start,
+            text,
+            cell_count: 1,
+            style,
+        }
+    }
+
+    pub(crate) fn can_append(&self, other: &gpui::TextRun) -> bool {
+        self.style.font == other.font
+            && self.style.color == other.color
+            && self.style.background_color == other.background_color
+            && self.style.underline == other.underline
+            && self.style.strikethrough == other.strikethrough
+    }
+
+    pub(crate) fn append_char(&mut self, c: char) {
+        self.text.push(c);
+        self.cell_count += 1;
+        self.style.len += c.len_utf8();
+    }
+
+    pub(crate) fn append_zw(&mut self, c: char) {
+        self.text.push(c);
+        self.style.len += c.len_utf8();
+    }
+
+    /// Paint the text run using the cached `ShapedLine`.
+    pub(crate) fn paint(
+        &self,
+        shaped: &ShapedLine,
+        x: Pixels,
+        y: Pixels,
+        line_h: Pixels,
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) {
+        let pos = gpui::point(x, y);
+        let _ = shaped.paint(pos, line_h, gpui::TextAlign::Left, None, window, cx);
     }
 }

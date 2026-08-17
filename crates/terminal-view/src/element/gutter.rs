@@ -5,22 +5,24 @@ use std::collections::VecDeque;
 use gpui::{Font, Pixels, SharedString, TextRun, Window, px};
 
 use super::super::layout::GutterEntry;
-use super::super::theme::TerminalTheme;
 use super::measure::snap;
 
-/// Compute the gutter width from the current line count.
+/// Number of digits reserved for the line-number column.
 ///
-/// Uses `absolute_line_count` (monotonically increasing) instead of `line_times.len()`
-/// (capped by scrollback) so the gutter is wide enough for large line numbers.
+/// Uses `absolute_line_count` (monotonically increasing) instead of the number
+/// of stamped lines (capped by scrollback) so the gutter is wide enough for
+/// large line numbers; never fewer than two digits.
+pub(crate) fn gutter_digits(absolute_line_count: usize) -> usize {
+    absolute_line_count.max(1).to_string().len().max(2)
+}
+
+/// Measure the gutter width for `num_digits` line-number digits in `font`.
 pub(crate) fn compute_gutter_width(
-    _line_times: &VecDeque<String>,
-    absolute_line_count: usize,
+    num_digits: usize,
     font: &Font,
     font_size: Pixels,
-    _theme: &TerminalTheme,
     window: &mut Window,
 ) -> Pixels {
-    let num_digits = absolute_line_count.max(1).to_string().len().max(2);
     let gutter_template = format!("[00:00:00] {}", "0".repeat(num_digits));
     let gutter_text_width = window
         .text_system()
@@ -67,7 +69,7 @@ pub(crate) fn compute_gutter_entries(
     line_height: Pixels,
     scale_factor: f32,
 ) -> Vec<GutterEntry> {
-    let num_digits = layout.absolute_line_count.max(1).to_string().len().max(2);
+    let num_digits = gutter_digits(layout.absolute_line_count);
 
     let mut entries = Vec::with_capacity(layout.max_entries);
     for i in 0..layout.max_entries {

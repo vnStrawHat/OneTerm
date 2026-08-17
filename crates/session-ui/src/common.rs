@@ -33,7 +33,7 @@ use oneterm_state::commands::SshDuplicateCompletion;
 use oneterm_state::notif_ext::notify;
 use oneterm_state::{AppServices, AppState};
 use oneterm_terminal::PtySize;
-use oneterm_terminal_view::TerminalPanel;
+use oneterm_terminal_view::{PanelSpec, TerminalPanel};
 
 // ── UI helpers ───────────────────────────────────────────────────────
 
@@ -246,14 +246,15 @@ pub(crate) fn connect_ssh_session(
                     if let Some(completion) = completion {
                         completion(ssh_session, label.clone(), duplicate_config, window, cx);
                     } else {
-                        let panel: Arc<dyn PanelView> =
-                            Arc::new(TerminalPanel::from_session_entity_with_duplicate_config(
-                                ssh_session,
-                                &label,
-                                duplicate_config,
-                                window,
-                                cx,
-                            ));
+                        let panel: Arc<dyn PanelView> = Arc::new(TerminalPanel::open(
+                            PanelSpec::Session {
+                                session: ssh_session,
+                                title: label.clone(),
+                                duplicate_config: Some(duplicate_config),
+                            },
+                            window,
+                            cx,
+                        ));
                         add_ssh_terminal_to_dock(&panel, window, cx);
                     }
                     window.push_notification(

@@ -2,7 +2,7 @@
 
 use gpui::{EntityInputHandler, UTF16Selection, Window};
 
-use super::view::LocalTerminalView;
+use super::LocalTerminalView;
 
 impl EntityInputHandler for LocalTerminalView {
     fn text_for_range(
@@ -57,7 +57,11 @@ impl EntityInputHandler for LocalTerminalView {
     ) {
         // Commit IME or normal character (normal mode). This is the trusted write source —
         // on_key_down skips normal characters while IME is active to avoid doubling (aa).
-        self.session.update(cx, |s, _| s.commit_text(text));
+        // Typed text snaps the viewport back to the live screen.
+        self.session.update(cx, |s, _| {
+            s.scroll_to_bottom();
+            s.commit_text(text);
+        });
         if self.has_bell {
             self.has_bell = false;
         }
@@ -91,7 +95,7 @@ impl EntityInputHandler for LocalTerminalView {
         // Compute the IME cursor rectangle from the terminal cursor's grid
         // position + UI metrics, instead of relying on backend pixel cursor
         // bounds (which start at zero in production and are never wired).
-        let m = *self.metrics.borrow();
+        let m = self.render_cache.borrow().metrics;
         let cw = f32::from(m.cell_width).max(1.0);
         let lh = f32::from(m.line_height).max(1.0);
         // Read the cursor's display position from the session snapshot.

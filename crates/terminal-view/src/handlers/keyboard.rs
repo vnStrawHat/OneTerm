@@ -1,30 +1,22 @@
 //! Keyboard handler for `LocalTerminalView`.
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
-use gpui::{
-    App, ClipboardItem, Entity, FocusHandle, Focusable as _, InteractiveElement as _, KeyDownEvent,
-};
+use gpui::{App, Entity, Focusable as _, InteractiveElement as _, KeyDownEvent};
 use gpui_component::ActiveTheme as _;
 
 use alacritty_terminal::term::TermMode;
-use oneterm_terminal::TerminalSession;
-use oneterm_terminal::{KeySpec, encode_key};
-
-use super::super::element::GridMetrics;
-use super::super::view::LocalTerminalView;
 use oneterm_settings::TerminalSettings;
+use oneterm_terminal::{KeySpec, TerminalSession, encode_key};
+
+use super::super::view::LocalTerminalView;
+use super::super::view::key::map_key;
+use super::edit;
 
 /// Attach the keyboard handler.
 pub(crate) fn attach_key(
     div: gpui::Stateful<gpui::Div>,
     session: Entity<Box<dyn TerminalSession>>,
-    metrics: Rc<RefCell<GridMetrics>>,
     view: Entity<LocalTerminalView>,
-    _focus: FocusHandle,
 ) -> gpui::Stateful<gpui::Div> {
-    let _ = metrics;
     div.on_key_down({
         let s = session.clone();
         let view = view.clone();
@@ -36,13 +28,7 @@ pub(crate) fn attach_key(
 
             // ── Search (platform+F) ──
             if plat && !mods.shift && !mods.alt && e.keystroke.key.as_str() == "f" {
-                let _ = view.update(cx, |v, cx| {
-                    if v.search_active {
-                        v.close_search(cx);
-                    } else {
-                        v.open_search(_w, cx);
-                    }
-                });
+                let _ = view.update(cx, |v, cx| v.toggle_search(_w, cx));
                 cx.stop_propagation();
                 return;
             }
@@ -51,7 +37,7 @@ pub(crate) fn attach_key(
             // propagates Enter by design. Do not let that propagated key reach
             // the terminal while the search input owns focus.
             if matches!(e.keystroke.key.as_str(), "enter" | "return") {
-                let search_input = view.read(cx).search_input.clone();
+                let search_input = view.read(cx).search.input.clone();
                 let search_focused = search_input
                     .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(_w));
                 if search_focused {
@@ -124,70 +110,20 @@ pub(crate) fn attach_key(
 
             // ── Scroll keyboard actions ──
             if mods.shift {
-                let qs = s.read(cx).query_state();
-                let viewport = qs.rows as i32;
-                match e.keystroke.key.as_str() {
-                    "pageup" => {
-                        s.update(cx, |s, _| s.scroll(viewport));
-                        let _ = view.update(cx, |v, cx| {
-                            v.last_scroll_time = Some(std::time::Instant::now());
-                            cx.notify();
-                        });
-                        cx.stop_propagation();
-                        return;
-                    }
-                    "pagedown" => {
-                        s.update(cx, |s, _| s.scroll(-viewport));
-                        let _ = view.update(cx, |v, cx| {
-                            v.last_scroll_time = Some(std::time::Instant::now());
-                            cx.notify();
-                        });
-                        cx.stop_propagation();
-                        return;
-                    }
-                    "home" => {
-                        s.update(cx, |s, _| s.scroll_to_top());
-                        let _ = view.update(cx, |v, cx| {
-                            v.last_scroll_time = Some(std::time::Instant::now());
-                            cx.notify();
-                        });
-                        cx.stop_propagation();
-                        return;
-                    }
-                    "end" => {
-                        s.update(cx, |s, _| s.scroll_to_bottom());
-                        let _ = view.update(cx, |v, cx| {
-                            v.last_scroll_time = Some(std::time::Instant::now());
-                            cx.notify();
-                        });
-                        cx.stop_propagation();
-                        return;
-                    }
-                    _ => {}
-                }
-                // Platform+Shift+Up/Down: scroll 1 line.
-                if plat {
-                    match e.keystroke.key.as_str() {
-                        "up" => {
-                            s.update(cx, |s, _| s.scroll(1));
-                            let _ = view.update(cx, |v, cx| {
-                                v.last_scroll_time = Some(std::time::Instant::now());
-                                cx.notify();
-                            });
-                            cx.stop_propagation();
-                            return;
-                        }
-                        "down" => {
-                            s.update(cx, |s, _| s.scroll(-1));
-                            let _ = view.update(cx, |v, cx| {
-                                v.last_scroll_time = Some(std::time::Instant::now());
-                                cx.notify();
-                            });
-                            cx.stop_propagation();
-                            return;
-                        }
-                        _ => {}
-                    }
+                let viewport = s.read(cx).query_state().rows as i32;
+                let scroll = scroll_key_action(e.keystroke.key.as_str(), plat, viewport);
+                if let Some(action) = scroll {
+                    s.update(cx, |s, _| match action {
+                        ScrollKey::Lines(delta) => s.scroll(delta),
+                        ScrollKey::Top => s.scroll_to_top(),
+                        ScrollKey::Bottom => s.scroll_to_bottom(),
+                    });
+                    let _ = view.update(cx, |v, cx| {
+                        v.scrollbar.mark_scrolled();
+                        cx.notify();
+                    });
+                    cx.stop_propagation();
+                    return;
                 }
             }
 
@@ -196,20 +132,12 @@ pub(crate) fn attach_key(
             if copy_paste {
                 match e.keystroke.key.as_str() {
                     "c" => {
-                        if let Some(text) = s.read(cx).selection_text() {
-                            if !text.is_empty() {
-                                cx.write_to_clipboard(ClipboardItem::new_string(text));
-                            }
-                        }
+                        edit::copy_selection(&s, cx);
                         cx.stop_propagation();
                         return;
                     }
                     "v" => {
-                        if let Some(item) = cx.read_from_clipboard() {
-                            if let Some(text) = item.text() {
-                                s.update(cx, |s, _| s.paste(&text));
-                            }
-                        }
+                        edit::paste_clipboard(&s, cx);
                         cx.stop_propagation();
                         return;
                     }
@@ -219,11 +147,7 @@ pub(crate) fn attach_key(
 
             // ── Shift+Insert = paste (X11 convention) ──
             if mods.shift && e.keystroke.key.as_str() == "insert" {
-                if let Some(item) = cx.read_from_clipboard() {
-                    if let Some(text) = item.text() {
-                        s.update(cx, |s, _| s.paste(&text));
-                    }
-                }
+                edit::paste_clipboard(&s, cx);
                 cx.stop_propagation();
                 return;
             }
@@ -255,7 +179,7 @@ pub(crate) fn attach_key(
                 return;
             }
 
-            let Some((spec, mods)) = LocalTerminalView::map_key(&e.keystroke) else {
+            let Some((spec, mods)) = map_key(&e.keystroke) else {
                 return;
             };
 
@@ -263,7 +187,10 @@ pub(crate) fn attach_key(
             if mods.ctrl && !mods.shift {
                 if let KeySpec::Character(ch) = &spec {
                     if ch == "c" || ch == "C" {
-                        s.update(cx, |s, _| s.send_ctrl_c());
+                        s.update(cx, |s, _| {
+                            s.scroll_to_bottom();
+                            s.send_ctrl_c();
+                        });
                         let _ = view.update(cx, |view, cx| {
                             if view.has_bell {
                                 view.has_bell = false;
@@ -281,6 +208,9 @@ pub(crate) fn attach_key(
                 return;
             };
             s.update(cx, |s, _| {
+                // Typing snaps the viewport back to the live screen (output
+                // alone no longer does — the user may be reading scrollback).
+                s.scroll_to_bottom();
                 if let Err(error) = s.write(&bytes) {
                     log::warn!("terminal key delivery failed: {error}");
                 }
@@ -297,6 +227,30 @@ pub(crate) fn attach_key(
             cx.stop_propagation();
         }
     })
+}
+
+/// A Shift+key scrollback navigation action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScrollKey {
+    /// Scroll by this many lines (positive = towards history).
+    Lines(i32),
+    Top,
+    Bottom,
+}
+
+/// Map a Shift+key chord to a scrollback action: PageUp/PageDown scroll a
+/// viewport, Home/End jump to the ends, and Platform+Shift+Up/Down scroll one
+/// line. `None` for every other key.
+fn scroll_key_action(key: &str, platform: bool, viewport: i32) -> Option<ScrollKey> {
+    match key {
+        "pageup" => Some(ScrollKey::Lines(viewport)),
+        "pagedown" => Some(ScrollKey::Lines(-viewport)),
+        "home" => Some(ScrollKey::Top),
+        "end" => Some(ScrollKey::Bottom),
+        "up" if platform => Some(ScrollKey::Lines(1)),
+        "down" if platform => Some(ScrollKey::Lines(-1)),
+        _ => None,
+    }
 }
 
 /// Whether this platform reports AltGr as Ctrl+Alt (Windows) rather than as a
@@ -325,7 +279,32 @@ pub(crate) fn is_altgr_text(
 mod tests {
     use gpui::Modifiers;
 
-    use super::is_altgr_text;
+    use super::{ScrollKey, is_altgr_text, scroll_key_action};
+
+    #[test]
+    fn shift_page_and_home_end_navigate_scrollback() {
+        assert_eq!(
+            scroll_key_action("pageup", false, 24),
+            Some(ScrollKey::Lines(24))
+        );
+        assert_eq!(
+            scroll_key_action("pagedown", false, 24),
+            Some(ScrollKey::Lines(-24))
+        );
+        assert_eq!(scroll_key_action("home", false, 24), Some(ScrollKey::Top));
+        assert_eq!(scroll_key_action("end", false, 24), Some(ScrollKey::Bottom));
+    }
+
+    #[test]
+    fn line_scroll_needs_the_platform_modifier() {
+        assert_eq!(scroll_key_action("up", false, 24), None);
+        assert_eq!(scroll_key_action("up", true, 24), Some(ScrollKey::Lines(1)));
+        assert_eq!(
+            scroll_key_action("down", true, 24),
+            Some(ScrollKey::Lines(-1))
+        );
+        assert_eq!(scroll_key_action("a", true, 24), None);
+    }
 
     fn ctrl_alt() -> Modifiers {
         Modifiers {

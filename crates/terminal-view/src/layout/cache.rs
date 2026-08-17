@@ -8,11 +8,10 @@ use gpui::Font;
 use oneterm_highlight::Class;
 use oneterm_terminal::{IndexedCell, TermDamageInfo};
 
-use super::super::cell::line_hash;
 use super::super::highlight::SemanticOverlay;
 use super::super::theme::TerminalTheme;
 use super::super::url::url_masks_wrapped;
-use super::row::layout_row;
+use super::row::{layout_row, line_hash};
 use super::types::{RenderStyleKey, RowLayout, RowLayoutCache};
 
 /// Frame inputs for [`update_row_cache`] — the per-frame terminal grid state

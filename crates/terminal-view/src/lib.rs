@@ -2,19 +2,14 @@
 
 pub(crate) mod agent;
 pub(crate) mod box_drawing;
-pub(crate) mod cell;
 pub(crate) mod completion;
 #[cfg(any(test, feature = "terminal-diagnostics"))]
 pub(crate) mod diagnostics;
 pub(crate) mod element;
 pub(crate) mod handlers;
 pub(crate) mod highlight;
-pub(crate) mod ime;
 pub(crate) mod layout;
-pub mod panel;
-pub(crate) mod render;
-pub(crate) mod scroll_handle;
-pub(crate) mod search;
+pub(crate) mod panel;
 pub(crate) mod settings_panel;
 pub(crate) mod space;
 pub(crate) mod status;
@@ -24,11 +19,8 @@ pub(crate) mod view;
 
 #[cfg(any(test, feature = "terminal-diagnostics"))]
 pub use diagnostics::TerminalRenderDiagnostics;
-pub use panel::TerminalPanel;
-pub use settings_panel::TerminalSettingsPanel;
-pub use status::{find_in_active_terminal, new_terminal_with_shell_cmd, register_status_metrics};
-pub use theme::{TerminalTheme, build_terminal_theme, ensure_minimum_contrast, resolve_cell_color};
-pub use view::LocalTerminalView;
+pub use panel::{PanelSpec, TerminalPanel};
+pub use status::{find_in_active_terminal, new_terminal_with_shell_cmd};
 
 use gpui::App;
 use gpui_component::dock::register_panel;
@@ -43,8 +35,10 @@ pub fn init(cx: &mut App) {
     status::register_status_metrics(cx);
     agent::init(cx);
     register_panel(cx, panel_names::TERMINAL, |dock_area, _, _, window, cx| {
-        Box::new(panel::TerminalPanel::new_entity_in_workspace(
-            dock_area.entity_id(),
+        Box::new(TerminalPanel::open(
+            PanelSpec::DefaultShell {
+                workspace: Some(dock_area.entity_id()),
+            },
             window,
             cx,
         ))

@@ -7,6 +7,7 @@
 //! - [`measure`](super::measure) — measure font / cell metrics
 //! - [`gutter`](super::gutter) — compute gutter width / entries
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
@@ -18,10 +19,9 @@ use gpui::{
 use oneterm_terminal::TerminalSession;
 
 use super::super::highlight::SemanticOverlay;
-use super::super::layout::{self, LayoutState};
-use super::super::search::SearchHighlight;
+use super::super::layout::{LayoutState, RenderCache};
 use super::super::theme::TerminalTheme;
-use super::super::view::LocalTerminalView;
+use super::super::view::{LocalTerminalView, SearchHighlight};
 
 /// Element that paints the terminal. Holds `Entity<Box<dyn TerminalSession>>` to
 /// resize in prepaint (per bounds) + get a fresh snapshot. The View passes a
@@ -55,8 +55,9 @@ pub(crate) struct TerminalElement {
     pub(crate) line_times: Rc<VecDeque<String>>,
     /// Absolute index (0-based) of `line_times[0]`.
     pub(crate) line_time_base: usize,
-    /// Render cache bundle — row layout, gutter width, grid size, metrics.
-    pub(crate) render_cache: layout::types::TerminalRenderCache,
+    /// Render cache shared with the view — row layout, gutter width, grid
+    /// size, metrics.
+    pub(crate) render_cache: Rc<RefCell<RenderCache>>,
     /// Search highlights to paint (display coordinates, already filtered to the
     /// visible viewport).
     pub(crate) search_highlights: Vec<SearchHighlight>,

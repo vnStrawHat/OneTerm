@@ -261,12 +261,39 @@ impl Default for RowLayoutCache {
     }
 }
 
-/// Bundle of render cache state — persisted across frames on `LocalTerminalView`,
-/// passed to prepaint as a single unit (ARCH-06).
-pub(crate) struct TerminalRenderCache {
-    pub row_cache: std::rc::Rc<std::cell::RefCell<RowLayoutCache>>,
-    pub cached_gutter:
-        std::rc::Rc<std::cell::RefCell<Option<(Pixels, usize, Pixels, SharedString)>>>,
-    pub last_grid_size: std::rc::Rc<std::cell::RefCell<Option<(u16, u16)>>>,
-    pub metrics: std::rc::Rc<std::cell::RefCell<GridMetrics>>,
+/// Cached gutter width plus the inputs it was computed from. Recomputing
+/// only when `num_digits`, font size, or font family change avoids a
+/// `shape_line` per frame and the gutter-width oscillation that caused a
+/// resize loop with TUI apps.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct GutterCache {
+    pub width: Pixels,
+    pub num_digits: usize,
+    pub font_size: Pixels,
+    pub font_family: SharedString,
+}
+
+impl GutterCache {
+    /// Whether the cached width is still valid for these inputs.
+    pub(crate) fn matches(&self, num_digits: usize, font_size: Pixels, font_family: &str) -> bool {
+        self.num_digits == num_digits
+            && self.font_size == font_size
+            && self.font_family == font_family
+    }
+}
+
+/// Render state persisted across frames on `LocalTerminalView` and shared with
+/// the per-frame `TerminalElement` (which is recreated every frame) and the
+/// input handlers (which read `metrics`) through one `Rc<RefCell<..>>`.
+#[derive(Default)]
+pub(crate) struct RenderCache {
+    /// Per-row layout cache — skip recompute for non-dirty rows.
+    pub rows: RowLayoutCache,
+    /// Cached gutter width (`None` until first measured).
+    pub gutter: Option<GutterCache>,
+    /// Last terminal size `(rows, cols)` pushed to the session — avoids
+    /// `resize()` every frame.
+    pub grid_size: Option<(u16, u16)>,
+    /// Layout metrics sink (the element writes in prepaint, mouse handlers read).
+    pub metrics: GridMetrics,
 }
