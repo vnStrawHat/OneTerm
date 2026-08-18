@@ -21,7 +21,7 @@ use oneterm_core::config::ShellKind;
 use oneterm_highlight::ShellProfile;
 use oneterm_settings::{SemanticHighlightingMode, TerminalBlink, TerminalSettings};
 use oneterm_state::notif_ext::notify;
-use oneterm_terminal::TerminalProgress;
+use oneterm_terminal::{SessionKind, TerminalProgress};
 
 use super::LocalTerminalView;
 use super::scrollbar::ScrollGeometry;
@@ -209,10 +209,9 @@ impl Render for LocalTerminalView {
         // Select the shell profile for semantic highlighting:
         // - Local session: use the configured ShellKind (Cmd/PowerShell/Unix/...)
         // - SSH session: always Unix (remote hosts are virtually always Unix)
-        let profile = if session.read(cx).is_local() {
-            shell_kind_to_profile(settings_entity.read(cx).shell.kind)
-        } else {
-            ShellProfile::Unix
+        let profile = match session.read(cx).kind() {
+            SessionKind::Local => shell_kind_to_profile(settings_entity.read(cx).shell.kind),
+            SessionKind::Ssh => ShellProfile::Unix,
         };
         self.semantic_overlay.set_enabled(semantic_enabled);
         self.semantic_overlay.set_profile(profile);

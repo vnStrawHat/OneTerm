@@ -44,8 +44,6 @@ pub struct SessionState {
     pub prompt_count: usize,
     /// Exit code of the last command (OSC 133;D;exit_code).
     pub last_exit_code: Option<i32>,
-    /// Current foreground process, when the backend can tell.
-    pub foreground_process: Option<String>,
     /// Theme defaults for colour queries.
     pub default_colors: DefaultColors,
     /// Last applied `seq` per agent id (OSC 9;7 dedup, spec §4.1 / §8.3),
@@ -122,11 +120,6 @@ impl SharedSessionState {
     /// Prompt markers seen so far (OSC 133;A).
     pub fn prompt_count(&self) -> usize {
         self.lock().prompt_count
-    }
-
-    /// Current foreground process, when known.
-    pub fn foreground_process(&self) -> Option<String> {
-        self.lock().foreground_process.clone()
     }
 
     /// Replace the theme defaults used for colour-query replies.

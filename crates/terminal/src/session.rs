@@ -1,9 +1,10 @@
-//! `TerminalSession` trait — render/lifecycle interface shared by the local
-//! shell and SSH. The two backends implement it independently, unaware of each other.
+//! `TerminalSession` — the session interface shared by the local shell and SSH,
+//! composed from four focused traits (`TerminalRender`, `TerminalInput`,
+//! `TerminalIme`, `TerminalLifecycle`) plus optional `TerminalCapabilities`.
+//! The two backends implement it independently, unaware of each other.
 //!
 //! Pure: no GPUI dependency. Uses neutral types — the UI crate maps them to GPUI:
 //! - `TerminalMouseButton` (instead of `gpui::MouseButton`).
-//! - `CursorBounds` (instead of `gpui::Bounds<Pixels>`).
 //! - `Receiver<SessionEvent>` from `async-channel` (instead of a GPUI channel).
 //!
 //! See `docs/terminal-backend.md` §9.
@@ -109,8 +110,6 @@ pub enum SessionEvent {
     /// Wrapped in `Arc` so cloning on the fan-out path is cheap. `seq` dedup
     /// is already applied by the listener before forwarding.
     AgentStatus(std::sync::Arc<AgentStatusEvent>),
-    /// Foreground process changed (tab title update).
-    ForegroundProcess(Option<String>),
     /// Process exited (`None` = no exit code).
     Exited(Option<i32>),
     /// Session closed (PTY/SSH channel ended).
@@ -132,7 +131,6 @@ impl SessionEvent {
             | Self::Notification(_)
             | Self::Progress(_)
             | Self::AgentStatus(_)
-            | Self::ForegroundProcess(_)
             | Self::Exited(_)
             | Self::Closed
             | Self::Bell => SessionEventDelivery::Reliable,
@@ -185,77 +183,97 @@ pub struct TerminalCapabilities {
     /// Live OSC 7 working-directory source, if available.
     pub cwd_source: Option<Arc<dyn CwdSource>>,
 }
-/// Pixel rectangle of the cursor — for IME popup positioning.
-/// The UI maps it to `gpui::Bounds<Pixels>`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CursorBounds {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
+/// Which backend a session talks to. Replaces the former `is_local() -> bool`
+/// so call sites read as a domain concept (ARCH-44).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SessionKind {
+    /// A local shell behind a PTY.
+    Local,
+    /// A remote shell over SSH.
+    Ssh,
 }
 
-/// Common render/lifecycle interface for a terminal session.
+impl SessionKind {
+    /// `true` for a local shell — for the few call sites that still hand the
+    /// locality to a boolean API.
+    pub const fn is_local(self) -> bool {
+        matches!(self, Self::Local)
+    }
+}
+
+/// Cells for a window of display lines — see [`TerminalRender::query_line_range_cells`].
+#[derive(Debug, Clone, Default)]
+pub struct LineRangeCells {
+    /// Up to `count × num_cols` cells starting at the requested display line,
+    /// in row-major order. Empty when the range starts below the viewport.
+    pub cells: Vec<IndexedCell>,
+    /// Viewport width in columns; the row stride of `cells`.
+    pub num_cols: usize,
+}
+
+/// Why [`TerminalSession::paste`] did not deliver the text (ERR-04).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PasteError {
+    /// The payload exceeded the paste policy's byte limit; nothing was written.
+    TooLarge {
+        /// Size of the rejected payload in bytes.
+        bytes: usize,
+        /// The policy limit in bytes.
+        max_bytes: usize,
+    },
+    /// The encoded bytes could not be written to the PTY/channel.
+    Write(TerminalError),
+}
+
+impl std::fmt::Display for PasteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooLarge { bytes, max_bytes } => write!(
+                f,
+                "paste rejected: {bytes} bytes exceed the {max_bytes}-byte limit"
+            ),
+            Self::Write(error) => write!(f, "paste failed: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for PasteError {}
+
+impl From<TerminalError> for PasteError {
+    fn from(error: TerminalError) -> Self {
+        Self::Write(error)
+    }
+}
+
+/// Grid reads: render snapshots, damage-free queries, search, selection text
+/// and the colour table.
 ///
-/// Snapshot + input + lifecycle only — does **not** force a shared pump/transport.
-/// `LocalSession` (alacritty tty + EventLoop) and `SshSession` (russh) implement
-/// it independently. The two backends do not depend on each other.
-pub trait TerminalSession: Send + Sync + 'static {
-    // ── Render ───────────────────────────────────────────────
+/// Every method is required — a backend that cannot answer a query returns the
+/// documented empty value (`Vec::new()`, `None`, `DynamicColors::default()`)
+/// explicitly instead of inheriting a silent default.
+pub trait TerminalRender: Send + Sync {
     /// Snapshot the grid for rendering (does not hold the lock while drawing).
     ///
     /// **Consumes and resets** the terminal damage — call this **only** from the
     /// render/prepaint path, exactly once per frame. For any other read
-    /// (cursor bounds, mouse hit-test, URL detection, mode checks) use
+    /// (mouse hit-test, URL detection, mode checks) use
     /// [`snapshot_query`](Self::snapshot_query), which does not touch damage.
     fn snapshot(&self) -> TerminalContent;
 
     /// Snapshot for auxiliary (non-render) reads — does **not** consume/reset the
     /// terminal damage, so it cannot starve the renderer of dirty-row info and
     /// leave stale rows on screen.
-    ///
-    /// Real backends override this with a damage-free snapshot.
     fn snapshot_query(&self) -> TerminalContent;
 
     /// Compact query state for non-render reads — mode, cursor, viewport size.
     /// Does NOT clone the full grid (O(1) vs O(rows×cols) for `snapshot_query`).
     /// Use this for mode checks, cursor positioning, and viewport-size reads.
-    ///
-    /// Default falls back to `snapshot_query()` for compatibility; real backends
-    /// override it with a damage-free, cell-free query.
-    fn query_state(&self) -> TerminalQueryState {
-        let snap = self.snapshot_query();
-        TerminalQueryState {
-            mode: snap.mode,
-            cursor_line: snap.cursor.point.line.0,
-            cursor_col: snap.cursor.point.column.0,
-            cursor_shape: snap.cursor.shape,
-            display_offset: snap.display_offset,
-            rows: snap.terminal_bounds.num_lines,
-            cols: snap.terminal_bounds.num_cols,
-            total_lines: snap.total_lines,
-            alive: self.alive(),
-        }
-    }
+    fn query_state(&self) -> TerminalQueryState;
 
     /// Read cells for a range of display lines (0-based from top of viewport).
     /// Cheaper than `snapshot_query` (O(window×cols) vs O(rows×cols)) — used for
-    /// URL hover detection where only the lines near the cursor are needed.
-    ///
-    /// Returns `(cells, num_cols)` where `cells` has up to `count × num_cols` entries,
-    /// starting from `start_line`. Default falls back to `snapshot_query` for compatibility.
-    fn query_line_range_cells(&self, start_line: usize, count: usize) -> (Vec<IndexedCell>, usize) {
-        let snap = self.snapshot_query();
-        let num_cols = snap.terminal_bounds.num_cols;
-        let start = start_line * num_cols;
-        let end = (start + count * num_cols).min(snap.cells.len());
-        let cells = if start <= snap.cells.len() {
-            snap.cells[start..end].to_vec()
-        } else {
-            Vec::new()
-        };
-        (cells, num_cols)
-    }
+    /// URL hover detection and completion, where only a few lines are needed.
+    fn query_line_range_cells(&self, start_line: usize, count: usize) -> LineRangeCells;
 
     /// Basic info (total_lines, cursor_line) — does NOT call damage()/reset_damage().
     /// Used for line_times updates without clearing damage for prepaint.
@@ -266,26 +284,33 @@ pub trait TerminalSession: Send + Sync + 'static {
 
     /// Dynamic OSC-set foreground/background/cursor colors (OSC 10/11/12).
     /// Read from the live `Term` color table so the renderer can apply them on
-    /// top of the theme. Default = none set (use the theme).
-    fn dynamic_colors(&self) -> DynamicColors {
-        DynamicColors::default()
-    }
+    /// top of the theme. `DynamicColors::default()` = none set (use the theme).
+    fn dynamic_colors(&self) -> DynamicColors;
 
     /// Provide the theme's default colors: foreground/background/cursor plus the
     /// 16-color ANSI palette. Used to answer OSC 10/11/12 and OSC 4 *queries*
     /// when the color was never set via OSC (so a bare query still reports a
     /// sensible color, e.g. for background detection). Called by the UI whenever
-    /// the theme changes. Default = no-op.
-    fn set_default_colors(
-        &self,
-        _foreground: Rgb,
-        _background: Rgb,
-        _cursor: Rgb,
-        _ansi: [Rgb; 16],
-    ) {
-    }
+    /// the theme changes.
+    fn set_default_colors(&self, foreground: Rgb, background: Rgb, cursor: Rgb, ansi: [Rgb; 16]);
 
-    // ── Input ───────────────────────────────────────────────
+    /// Search the full scrollback + viewport for `query` and return matches in
+    /// grid coordinates (top-to-bottom order). Empty query → empty result.
+    ///
+    /// Backends snapshot the grid text under the `Term` lock and match outside
+    /// it ([`crate::search`]).
+    fn search(&self, query: &str, options: SearchOptions) -> Vec<SearchMatch>;
+
+    /// The currently selected text (for copy). `None` if there is no selection.
+    fn selection_text(&self) -> Option<String>;
+
+    /// Whether a non-empty selection exists — O(1), does not materialise the
+    /// selected text (PERF-14). Use it for enabling "Copy" in menus.
+    fn has_selection(&self) -> bool;
+}
+
+/// Bytes into the PTY/channel plus viewport, mouse and selection manipulation.
+pub trait TerminalInput: Send + Sync {
     /// Write bytes to the PTY/channel (keystroke, paste, OSC response).
     fn write(&self, bytes: &[u8]) -> Result<(), TerminalError>;
     /// Flush the PTY output buffer (Windows ConPTY workaround).
@@ -302,7 +327,6 @@ pub trait TerminalSession: Send + Sync + 'static {
     /// Scroll to top (display_offset = max) — Shift+Home.
     fn scroll_to_top(&self);
 
-    // ── Mouse ────────────────────────────────────────────────
     /// `sel` picks the selection type when not in mouse mode: `Simple` (click),
     /// `Semantic` (double-click), `Lines` (triple-click), `Block` (alt-select).
     fn mouse_down(
@@ -322,38 +346,25 @@ pub trait TerminalSession: Send + Sync + 'static {
     fn mouse_up(&self, row: f32, col: f32, button: TerminalMouseButton, mods: MouseModifiers);
     fn wheel(&self, delta_y: f64, row: f32, col: f32, mods: MouseModifiers);
 
-    // ── Selection / clipboard ──────────────────────────────
-    /// The currently selected text (for copy). `None` if there is no selection.
-    fn selection_text(&self) -> Option<String>;
     /// Clear the current selection.
     fn clear_selection(&self);
     /// Select all content (scrollback + visible).
     fn select_all(&self);
     /// Clear screen + scrollback (send a clear escape sequence to the PTY).
     fn clear(&self);
+}
 
-    // ── Search ──────────────────────────────────────────────
-    /// Search the full scrollback + viewport for `query` and return matches in
-    /// grid coordinates (top-to-bottom order). Empty query → empty result.
-    ///
-    /// Default = no matches (sessions that don't implement search just return
-    /// an empty vec). Backends lock their `Term` and call
-    /// [`crate::search::search_term`].
-    fn search(&self, _query: &str, _options: SearchOptions) -> Vec<SearchMatch> {
-        Vec::new()
-    }
-
-    // ── IME ─────────────────────────────────────────────────
+/// IME composition state (marked text) and commit.
+pub trait TerminalIme: Send + Sync {
     fn set_marked_text(&self, text: String);
     fn clear_marked_text(&self);
     fn commit_text(&self, text: &str);
     fn marked_text(&self) -> Option<String>;
-    /// Cursor position (pixels) for the IME popup.
-    fn cursor_bounds(&self) -> Option<CursorBounds>;
+}
 
-    // ── Lifecycle ───────────────────────────────────────────
-    /// Take the session's single event receiver
-    /// (Output/Title/Cwd/Clipboard/ShellIntegration/ForegroundProcess/Exited/Closed).
+/// Events, liveness, close, identity.
+pub trait TerminalLifecycle: Send + Sync {
+    /// Take the session's single event receiver.
     ///
     /// Sessions have exactly one event consumer: the backend owns one bounded
     /// channel and hands its receiver out once. The first call returns
@@ -365,14 +376,33 @@ pub trait TerminalSession: Send + Sync + 'static {
     fn alive(&self) -> bool;
     /// Close the session (shut down PTY / close channel).
     fn close(&self) -> Result<(), TerminalError>;
-    /// true = local shell, false = SSH.
-    fn is_local(&self) -> bool;
+    /// Which backend this session talks to.
+    fn kind(&self) -> SessionKind;
     /// The current title (OSC 0/2).
     fn title(&self) -> Option<String>;
     /// The current cwd (OSC 7).
     fn cwd(&self) -> Option<PathBuf>;
+}
 
-    // ── Send Text / Keystroke ──────────────────────────────────
+/// A terminal session as seen by the UI: the four focused traits composed into
+/// one object-safe façade, plus derived helpers built only on those traits and
+/// the optional [`TerminalCapabilities`].
+///
+/// Snapshot + input + lifecycle only — does **not** force a shared pump/transport.
+/// `LocalSession` (alacritty tty + EventLoop) and `SshSession` (russh) implement
+/// it independently. The two backends do not depend on each other.
+pub trait TerminalSession:
+    TerminalRender + TerminalInput + TerminalIme + TerminalLifecycle + 'static
+{
+    /// Return capabilities provided by this backend without widening the stable
+    /// session façade for every future optional feature. Local sessions return
+    /// the empty default.
+    fn capabilities(&self) -> TerminalCapabilities {
+        TerminalCapabilities::default()
+    }
+
+    // ── Derived helpers — pure functions of the traits above ─────────────
+
     /// Send raw text to the PTY (for automation, extensions, task runners).
     /// Equivalent to Zed `SendText(String)`.
     fn send_text(&self, text: &str) {
@@ -403,53 +433,23 @@ pub trait TerminalSession: Send + Sync + 'static {
 
     /// Paste text into the PTY. Automatically wraps it in bracketed paste markers
     /// if the terminal is in bracketed paste mode.
-    fn paste(&self, text: &str) {
+    ///
+    /// A rejected (too large) or undeliverable paste is returned to the caller
+    /// so the UI can tell the user (ERR-04) — nothing is written in that case.
+    fn paste(&self, text: &str) -> Result<(), PasteError> {
         let mode = if self.is_bracketed_paste() {
             PasteMode::Bracketed
         } else {
             PasteMode::Plain
         };
         let policy = PastePolicy::default();
-        let result = match encode_paste(text, mode, &policy) {
-            PasteResult::Ok(bytes) => self.write(&bytes),
-            PasteResult::TooLarge(_) => {
-                log::warn!("paste rejected: exceeded max paste size");
-                return;
-            }
-        };
-        if let Err(error) = result {
-            log::warn!("terminal paste failed: {error}");
+        match encode_paste(text, mode, &policy) {
+            PasteResult::Ok(bytes) => Ok(self.write(&bytes)?),
+            PasteResult::TooLarge(bytes) => Err(PasteError::TooLarge {
+                bytes,
+                max_bytes: policy.max_bytes,
+            }),
         }
-    }
-
-    // ── Shell Integration (OSC 133) ────────────────────────────
-    /// Number of prompt markers captured (for scroll-to-prompt).
-    /// Each marker is the line position where a prompt starts (OSC 133;A).
-    fn prompt_count(&self) -> usize {
-        0
-    }
-    /// Scroll to the `n`-th prompt (0-based, from the bottom up).
-    /// `n=0` = the most recent prompt, `n=1` = the previous one, etc.
-    fn scroll_to_prompt(&self, _n: usize) {}
-
-    // ── Foreground Process ─────────────────────────────────────
-    /// The current foreground process (e.g. "cargo", "node", "python").
-    /// `None` = shell prompt (no command running).
-    fn foreground_process(&self) -> Option<String> {
-        None
-    }
-
-    // ── Breadcrumb ──────────────────────────────────────────────
-    /// Text shown in the toolbar breadcrumb (e.g. the cwd path).
-    fn breadcrumb_text(&self) -> Option<String> {
-        self.cwd().map(|p| p.display().to_string())
-    }
-
-    // ── Optional capabilities ───────────────────────────────
-    /// Return capabilities provided by this backend without widening the stable
-    /// session façade for every future optional feature.
-    fn capabilities(&self) -> TerminalCapabilities {
-        TerminalCapabilities::default()
     }
 }
 
@@ -642,11 +642,48 @@ mod tests {
         ];
 
         for (text, expected) in vectors {
-            session.paste(text);
+            session.paste(text).unwrap();
             let writes = probe.take_writes();
             assert_eq!(writes.len(), 1, "for text: {text:?}");
             assert_eq!(writes[0], expected, "for text: {text:?}");
         }
+    }
+
+    #[test]
+    fn paste_over_the_size_limit_is_reported_and_not_written() {
+        use crate::test_support::FakeTerminalSession;
+
+        let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
+        let max_bytes = PastePolicy::default().max_bytes;
+        let huge = "x".repeat(max_bytes + 1);
+        assert_eq!(
+            session.paste(&huge),
+            Err(PasteError::TooLarge {
+                bytes: max_bytes + 1,
+                max_bytes
+            })
+        );
+        assert!(probe.writes().is_empty());
+    }
+
+    #[test]
+    fn paste_write_failure_is_reported() {
+        use crate::test_support::FakeTerminalSession;
+
+        let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
+        probe.fail_writes(true);
+        assert_eq!(
+            session.paste("hi"),
+            Err(PasteError::Write(TerminalError::QueueFull))
+        );
+    }
+
+    #[test]
+    fn session_kind_locality() {
+        assert!(SessionKind::Local.is_local());
+        assert!(!SessionKind::Ssh.is_local());
+        let (session, _) = crate::test_support::FakeTerminalSession::boxed(24, 80, "");
+        assert_eq!(session.kind(), SessionKind::Local);
     }
 
     #[test]
@@ -656,7 +693,7 @@ mod tests {
         let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
         // Plain (non-bracketed) paste keeps unicode/controls but rewrites LF → CR.
         let text = "Héllo\n世界\0\u{0001}";
-        session.paste(text);
+        session.paste(text).unwrap();
         assert_eq!(
             probe.writes(),
             vec!["Héllo\r世界\0\u{0001}".as_bytes().to_vec()]

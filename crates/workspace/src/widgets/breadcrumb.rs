@@ -1,5 +1,5 @@
-//! [`BreadcrumbIndicator`] — displays the breadcrumb (cwd path + foreground
-//! process) of the active terminal session in the StatusBar.
+//! [`BreadcrumbIndicator`] — displays the breadcrumb (cwd path) of the active
+//! terminal session in the StatusBar.
 //!
 //! Like `DateTimeClock` / `NetSpeedIndicator`: `Entity` + `Render` + `Focusable`,
 //! updated via a 500ms timer. The timer spawns on the window context
@@ -8,8 +8,7 @@
 //! Each tick:
 //! 1. Find the active terminal panel in the DockArea (via `collect_tab_panels`).
 //! 2. Downcast `AnyView` → `Entity<TerminalPanel>`.
-//! 3. Read `breadcrumb_text()` + `foreground_process()` from the session.
-//! 4. Format the label: `"<process> — <cwd>"` (or just the cwd when no process).
+//! 3. Read `TerminalPanel::breadcrumb_label()` (the session's OSC 7 cwd as text).
 //!
 //! Hidden when no active terminal panel has a breadcrumb (e.g. no cwd yet).
 
@@ -24,11 +23,11 @@ use gpui::{
 use gpui_component::dock::DockArea;
 use gpui_component::{ActiveTheme as _, tooltip::Tooltip};
 
-/// Indicator showing the breadcrumb (cwd path + foreground process) of the
-/// active terminal session in the StatusBar.
+/// Indicator showing the breadcrumb (cwd path) of the active terminal session
+/// in the StatusBar.
 ///
-/// Refreshes every 500ms — the cwd (OSC 7) and foreground process update
-/// asynchronously from the PTY listener.
+/// Refreshes every 500ms — the cwd (OSC 7) updates asynchronously from the
+/// PTY listener.
 pub struct BreadcrumbIndicator {
     focus_handle: FocusHandle,
     dock_area: WeakEntity<DockArea>,

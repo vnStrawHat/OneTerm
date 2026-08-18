@@ -113,7 +113,7 @@
 | ⚡ | **Shell environment detection** | Yes — `ProjectEnvironment`, `capture_unix/windows`, `zed --printenv` | No | Zed: spawn shell in login mode → capture env JSON → inject into terminal. OneTerm: inherits env directly. Shell integration script injects instead of capturing env. |
 | ⚡ | **ShellBuilder (quoting/escaping)** | Yes — `ShellKind::Posix/Fish/Nushell/PowerShell`, `format_task_for_activation` | Partial | `ShellKind` enum (Cmd/PowerShell/Pwsh/Bash/Zsh/Sh/Custom) + shell-specific integration script injection. No `format_task_for_activation` yet. |
 | ✅ | **Activation script** | Yes — `activation_script: Vec<String>` | Yes (fixed) | `shell_integration_script(kind)` → auto-inject OSC 7 + OSC 133 script into PTY after spawn. PowerShell: override `prompt` function. Bash/Zsh: precmd/preexec hooks. Cmd: `prompt` command. |
-| ✅ | **Breadcrumb text** | Yes — `breadcrumb_text: String`, shown in toolbar | Yes (fixed) | `TerminalSession::breadcrumb_text()` → returns cwd path (OSC 7). Terminal view displays breadcrumb bar at bottom (cwd + foreground process). |
+| ✅ | **Breadcrumb text** | Yes — `breadcrumb_text: String`, shown in toolbar | Yes (fixed) | `TerminalPanel::breadcrumb_label()` formats `TerminalSession::cwd()` (OSC 7); the session trait carries no presentation methods (ARCH-02). Shown in the StatusBar breadcrumb widget. |
 
 ---
 

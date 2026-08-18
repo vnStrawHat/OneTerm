@@ -12,7 +12,7 @@ use gpui::{Anchor, App, Context, IntoElement, ParentElement as _, anchored, defe
 
 use alacritty_terminal::term::TermMode;
 use oneterm_core::config::ShellKind;
-use oneterm_terminal::IndexedCell;
+use oneterm_terminal::{IndexedCell, SessionKind};
 
 use super::LocalTerminalView;
 use crate::completion::{CompletionController, overlay::CompletionOverlay};
@@ -206,7 +206,7 @@ impl LocalTerminalView {
         // `query_line_range_cells` addresses display rows; the cursor's grid
         // line is offset by the scroll position.
         let display_row = (query.cursor_line + query.display_offset as i32).max(0) as usize;
-        let (cells, _) = session.query_line_range_cells(display_row, 1);
+        let cells = session.query_line_range_cells(display_row, 1).cells;
         extract_cursor_command(&cells, (query.cursor_line, query.cursor_col))
     }
 
@@ -217,11 +217,10 @@ impl LocalTerminalView {
         }
         let settings_entity = self.deps.settings.clone();
         let settings = settings_entity.read(cx);
-        let kind = if self.session.read(cx).is_local() {
-            settings.shell.kind
-        } else {
+        let kind = match self.session.read(cx).kind() {
+            SessionKind::Local => settings.shell.kind,
             // SSH targets are virtually always Unix (docs 03 §6).
-            ShellKind::Bash
+            SessionKind::Ssh => ShellKind::Bash,
         };
         let controller = CompletionController::new(kind, &settings.completion);
         log::info!(
@@ -242,10 +241,9 @@ impl LocalTerminalView {
         {
             let settings_entity = self.deps.settings.clone();
             let settings = settings_entity.read(cx);
-            let kind = if self.session.read(cx).is_local() {
-                settings.shell.kind
-            } else {
-                ShellKind::Bash
+            let kind = match self.session.read(cx).kind() {
+                SessionKind::Local => settings.shell.kind,
+                SessionKind::Ssh => ShellKind::Bash,
             };
             let Some(c) = self.completion.controller.as_mut() else {
                 return;

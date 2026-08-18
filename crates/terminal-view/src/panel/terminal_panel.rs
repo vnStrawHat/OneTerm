@@ -35,7 +35,7 @@ use super::super::view::{LocalTerminalView, TerminalDeps, TerminalViewEvent};
 
 /// Initial PTY size for a freshly spawned session; the element resizes it to
 /// the real grid on the first prepaint.
-pub(crate) const INITIAL_PTY_SIZE: PtySize = PtySize { rows: 24, cols: 80 };
+pub(crate) const INITIAL_PTY_SIZE: PtySize = PtySize::INITIAL;
 
 /// Panel displaying a Terminal Tab (a tree of Spaces).
 pub struct TerminalPanel {
@@ -264,20 +264,12 @@ impl TerminalPanel {
             .network_stats
     }
 
-    /// Breadcrumb label for the active Space's session. `None` when the active
-    /// Space is empty or has no cwd yet.
+    /// Breadcrumb label for the active Space's session: the OSC 7 cwd as
+    /// displayed text. `None` when the active Space is empty or has no cwd yet.
     pub(crate) fn breadcrumb_label(&self, cx: &App) -> Option<String> {
         let view = self.tree.active_terminal()?;
-        let s = view.read(cx).session.read(cx);
-        let breadcrumb = s.breadcrumb_text();
-        let fg = s.foreground_process();
-        breadcrumb.map(|bc| {
-            if let Some(proc) = fg {
-                format!("{} — {}", proc, bc)
-            } else {
-                bc
-            }
-        })
+        let cwd = view.read(cx).session.read(cx).cwd()?;
+        Some(cwd.display().to_string())
     }
 
     /// Number of Spaces in this tab.

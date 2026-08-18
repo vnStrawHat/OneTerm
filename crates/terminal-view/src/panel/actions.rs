@@ -60,14 +60,10 @@ impl TerminalPanel {
 
     /// Run an edit command (copy/paste/select-all/clear) on the active
     /// terminal's session, if the active Space has one.
-    fn edit_active(
-        &self,
-        edit: fn(&gpui::Entity<Box<dyn oneterm_terminal::TerminalSession>>, &mut gpui::App),
-        cx: &mut Context<Self>,
-    ) {
+    fn edit_active(&self, edit: edit::EditCommand, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(view) = self.active_view() {
             let session = view.read(cx).session.clone();
-            edit(&session, cx);
+            edit(&session, window, cx);
         }
     }
 
@@ -75,40 +71,40 @@ impl TerminalPanel {
     fn on_action_terminal_copy(
         &mut self,
         _: &TerminalCopy,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.edit_active(edit::copy_selection, cx);
+        self.edit_active(edit::copy_selection, window, cx);
     }
 
     /// Paste the clipboard contents into the active terminal.
     fn on_action_terminal_paste(
         &mut self,
         _: &TerminalPaste,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.edit_active(edit::paste_clipboard, cx);
+        self.edit_active(edit::paste_clipboard, window, cx);
     }
 
     /// Select all text in the active terminal.
     fn on_action_terminal_select_all(
         &mut self,
         _: &TerminalSelectAll,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.edit_active(edit::select_all, cx);
+        self.edit_active(edit::select_all, window, cx);
     }
 
     /// Clear the active terminal screen.
     fn on_action_terminal_clear(
         &mut self,
         _: &TerminalClear,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.edit_active(edit::clear_screen, cx);
+        self.edit_active(edit::clear_screen, window, cx);
     }
 
     /// Close the active terminal Space (not the whole tab).

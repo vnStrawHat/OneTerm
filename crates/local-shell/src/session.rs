@@ -31,9 +31,6 @@ pub struct LocalSession {
     pub(crate) event_rx: Mutex<Option<Receiver<SessionEvent>>>,
     pub(crate) state: SharedState,
     pub(crate) config: LocalShellConfig,
-    /// Pixel cell metrics (set by the UI via `set_cell_size`) — for `cursor_bounds`.
-    pub(crate) cell_width: Mutex<f32>,
-    pub(crate) line_height: Mutex<f32>,
     /// IME marked text (compose buffer).
     pub(crate) marked_text: Mutex<Option<String>>,
     owner_join: Mutex<Option<std::thread::JoinHandle<()>>>,
@@ -117,17 +114,9 @@ impl LocalSession {
             event_rx: Mutex::new(Some(event_rx)),
             state,
             config: cfg,
-            cell_width: Mutex::new(0.0),
-            line_height: Mutex::new(0.0),
             marked_text: Mutex::new(None),
             owner_join: Mutex::new(Some(owner_join)),
         })
-    }
-
-    /// UI sets pixel cell metrics (after measuring the font) for `cursor_bounds`.
-    pub fn set_cell_size(&self, cell_width: f32, line_height: f32) {
-        *self.cell_width.lock().unwrap() = cell_width;
-        *self.line_height.lock().unwrap() = line_height;
     }
 
     /// The config this session was spawned with.

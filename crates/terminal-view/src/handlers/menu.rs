@@ -46,11 +46,7 @@ where
         let session = session.clone();
         let focus = focus.clone();
         move |menu, window: &mut Window, cx| {
-            let has_selection = session
-                .read(cx)
-                .selection_text()
-                .map(|t| !t.is_empty())
-                .unwrap_or(false);
+            let has_selection = session.read(cx).has_selection();
 
             // 1. New Terminal — add a new TerminalPanel to the center dock.
             let mut menu = menu.item(
@@ -247,14 +243,14 @@ fn edit_item(
     action: Box<dyn gpui::Action>,
     session: &Entity<Box<dyn TerminalSession>>,
     focus: &FocusHandle,
-    edit: fn(&Entity<Box<dyn TerminalSession>>, &mut gpui::App),
+    edit: edit::EditCommand,
 ) -> PopupMenuItem {
     let s = session.clone();
     let f = focus.clone();
     PopupMenuItem::new(label)
         .action(action)
         .on_click(move |_, window, cx| {
-            edit(&s, cx);
+            edit(&s, window, cx);
             window.focus(&f, cx);
         })
 }

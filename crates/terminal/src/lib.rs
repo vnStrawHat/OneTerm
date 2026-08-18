@@ -61,8 +61,9 @@ pub use paste::{PasteMode, PastePolicy, PasteResult, encode_paste};
 pub use search::{SearchMatch, SearchOptions};
 pub use security_policy::{ClipboardOrigin, NotificationRateLimiter, TerminalSecurityPolicy};
 pub use session::{
-    CursorBounds, CwdSource, NetStats, SessionEvent, SessionEventDelivery, TerminalCapabilities,
-    TerminalInfo, TerminalQueryState, TerminalSession,
+    CwdSource, LineRangeCells, NetStats, PasteError, SessionEvent, SessionEventDelivery,
+    SessionKind, TerminalCapabilities, TerminalIme, TerminalInfo, TerminalInput, TerminalLifecycle,
+    TerminalQueryState, TerminalRender, TerminalSession,
 };
 pub use url_policy::{
     ConfirmReason, DenyReason, ExternalTargetPolicy, TargetDecision, display_matches_target,

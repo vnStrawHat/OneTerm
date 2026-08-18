@@ -4,7 +4,10 @@ use std::time::{Duration, Instant};
 
 use alacritty_terminal::selection::SelectionType;
 use oneterm_terminal::mouse_encode::{MouseModifiers, TerminalMouseButton};
-use oneterm_terminal::{TerminalError, TerminalSecurityPolicy, TerminalSession};
+use oneterm_terminal::{
+    SessionKind, TerminalError, TerminalIme, TerminalInput, TerminalLifecycle, TerminalRender,
+    TerminalSecurityPolicy,
+};
 
 use crate::session::{LocalSession, quote_windows_argument};
 use oneterm_terminal::PtySize;
@@ -129,7 +132,7 @@ fn trait_snapshot_bounds() {
 fn trait_alive_is_local_close() {
     let s = spawn_default();
     assert!(s.alive());
-    assert!(s.is_local());
+    assert_eq!(s.kind(), SessionKind::Local);
     s.close().expect("close and join PTY owner");
     assert_eq!(s.write(b"after-close"), Err(TerminalError::Closed));
     assert!(wait_until(Duration::from_secs(2), || !s.alive()));
@@ -214,22 +217,6 @@ fn trait_ime_commit_writes_and_clears_marked() {
     assert_eq!(s.marked_text().as_deref(), Some("x"));
     s.commit_text("hello");
     assert_eq!(s.marked_text(), None);
-    let _ = s.close();
-}
-
-#[test]
-fn trait_cursor_bounds_needs_cell_size() {
-    let s = spawn_default();
-    // Cell size not set yet → None.
-    assert_eq!(s.cursor_bounds(), None);
-    s.set_cell_size(8.0, 16.0);
-    let b = s.cursor_bounds();
-    // Cursor is visible by default (mock shows the cursor). May be None if Hidden.
-    // At minimum it must not panic and must return the correct shape when present.
-    if let Some(cb) = b {
-        assert_eq!(cb.width, 8.0);
-        assert_eq!(cb.height, 16.0);
-    }
     let _ = s.close();
 }
 
@@ -330,14 +317,6 @@ fn trait_wheel_scroll_does_not_panic() {
     let s = spawn_default();
     s.wheel(3.0, 0.0, 0.0, MouseModifiers::default());
     s.wheel(-3.0, 0.0, 0.0, MouseModifiers::default());
-    let _ = s.close();
-}
-
-#[test]
-fn set_cell_size_stores() {
-    let s = spawn_default();
-    s.set_cell_size(7.5, 15.0);
-    assert_eq!(*s.cell_width.lock().unwrap(), 7.5);
     let _ = s.close();
 }
 
