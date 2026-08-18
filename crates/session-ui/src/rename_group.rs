@@ -8,7 +8,7 @@ use gpui_component::{
 };
 
 use oneterm_state::form_dialog::{FieldRequirement, FormDialog, labelled_field};
-use oneterm_state::notif_ext::notify;
+use oneterm_theme::notif_ext::notify;
 
 use crate::session_state::SshSessionStore;
 

@@ -32,7 +32,7 @@ use gpui_component::{
 use oneterm_core::{AppError, ConnectionCancellation, HostKeyPolicy, SshConfig};
 use oneterm_settings::TerminalSettings;
 use oneterm_state::commands::SshDuplicateCompletion;
-use oneterm_state::notif_ext::notify;
+use oneterm_theme::notif_ext::notify;
 use oneterm_state::{AppServices, AppState};
 use oneterm_terminal::PtySize;
 use oneterm_terminal_view::{PanelSpec, TerminalPanel};

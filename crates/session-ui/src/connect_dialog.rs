@@ -31,7 +31,7 @@ use gpui_component::{
 
 use oneterm_core::{ConnectionCancellation, HostKeyPolicy, SshConfig};
 use oneterm_state::form_dialog::{FieldRequirement, FormDialog, labelled_field};
-use oneterm_state::notif_ext::notify;
+use oneterm_theme::notif_ext::notify;
 
 use super::auth_form::SshAuthForm;
 use super::common::{

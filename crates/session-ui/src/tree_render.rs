@@ -9,7 +9,7 @@ use gpui_component::{
 
 use crate::session_state::{SshSession, SshSessionStore};
 use oneterm_actions::{DeleteSession, NewSession, OpenSession, SessionProperty};
-use oneterm_state::notif_ext::notify;
+use oneterm_theme::notif_ext::notify;
 
 use super::connect_dialog::open_connect_dialog;
 use super::panel::SessionPanel;

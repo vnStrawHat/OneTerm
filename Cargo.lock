@@ -5309,6 +5309,7 @@ dependencies = [
  "oneterm-state",
  "oneterm-terminal",
  "oneterm-terminal-view",
+ "oneterm-theme",
  "serde",
  "serde_json",
 ]

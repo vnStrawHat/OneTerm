@@ -23,7 +23,6 @@ pub mod completion_history;
 pub mod dock_persistence;
 pub mod dock_util;
 pub mod form_dialog;
-pub mod notif_ext;
 pub mod panel_names;
 pub mod paths;
 pub mod services;

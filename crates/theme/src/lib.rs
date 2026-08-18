@@ -7,6 +7,7 @@
 
 pub mod brand;
 pub mod icon;
+pub mod notif_ext;
 pub mod theme;
 
 pub use icon::{AppIcon, UiAssets};

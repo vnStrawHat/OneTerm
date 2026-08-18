@@ -19,7 +19,7 @@ use gpui_component::{
     table::DataTable,
     v_flex,
 };
-use oneterm_state::notif_ext::notify;
+use oneterm_theme::notif_ext::notify;
 use oneterm_theme::icon::AppIcon;
 
 use super::panel::SftpPanel;

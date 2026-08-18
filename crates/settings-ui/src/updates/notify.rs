@@ -2,7 +2,7 @@
 
 use gpui::{App, Window};
 use gpui_component::{WindowExt as _, notification::NotificationType};
-use oneterm_state::notif_ext::{notify, notify_with_title};
+use oneterm_theme::notif_ext::{notify, notify_with_title};
 
 use super::state::{UpdateUiState, UpdateUiStatus};
 

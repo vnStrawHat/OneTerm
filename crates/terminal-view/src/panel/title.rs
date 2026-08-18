@@ -17,7 +17,7 @@ use gpui_component::{
     notification::NotificationType,
 };
 
-use oneterm_state::notif_ext::notify;
+use oneterm_theme::notif_ext::notify;
 
 use super::TerminalPanel;
 

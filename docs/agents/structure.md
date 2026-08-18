@@ -111,7 +111,6 @@ OneTerm/
 │   │       ├── dock_util.rs        # DockArea walking + set_right_dock_open (shared shell/feature helper)
 │   │       ├── panel_names.rs      # Registered dock panel name constants (persisted contract)
 │   │       ├── form_dialog.rs      # FormDialog + labelled_field (shared dialog scaffolding)
-│   │       ├── notif_ext.rs        # Theme-tinted notification builders (UI helper; move to theme pending)
 │   │       └── paths.rs            # docks.json path (shared shell/sftp)
 │   │
 │   ├── update/                     # `oneterm-update` — GitHub Releases updater service + staging/install orchestration
@@ -121,7 +120,7 @@ OneTerm/
 │   │   ├── build.rs                # Sets ONETERM_UI_ICONS_DIR for the icon_named! macro
 │   │   ├── assets/icons/           # OneTerm SVG icons (auto-generate AppIcon variants)
 │   │   ├── themes/                 # 24 built-in JSON themes (2 Zed + 22 gpui-component)
-│   │   └── src/{lib.rs, theme.rs, icon.rs, brand.rs}   # brand.rs = theme-independent brand accent
+│   │   └── src/{lib.rs, theme.rs, icon.rs, brand.rs, notif_ext.rs}   # brand.rs = brand accent; notif_ext.rs = theme-tinted notifications
 │   │
 
 │   ├── workspace/                  # `oneterm-workspace` — feature-AGNOSTIC app shell
@@ -193,13 +192,13 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 | `terminal` (`oneterm-terminal`) | `core` | engine | Terminal engine (alacritty-coupled, no gpui): `TerminalSession`, `TerminalModel`, events, palette/OSC/key/mouse helpers, and `SessionFactory`. |
 | `actions` (`oneterm-actions`) | `core`, gpui | leaf-ui | gpui `Action` structs shared by shell and features; domain placement types come from `core`. |
 | `settings` (`oneterm-settings`) | `core`, gpui, gpui-component | shared | `TerminalConfig`, live `TerminalSettings` (defaults single-sourced from the config), and `UiConfig` including the `Theme` observer that persists `ui_config.json`. |
-| `state` (`oneterm-state`) | `core`, `terminal`, `completion`, gpui, gpui-component | shared | Cross-feature runtime state (`AppState`, `AgentRegistry`, `CompletionHistory`) + injection (`AppServices` bundle: session factory, `WorkspaceCommands`, active-terminal metrics, agent focuser) + shared shell contracts (`docks.json` document owner, panel names, dock helpers, notification helpers). |
+| `state` (`oneterm-state`) | `core`, `terminal`, `completion`, gpui, gpui-component | shared | Cross-feature runtime state (`AppState`, `AgentRegistry`, `CompletionHistory`) + injection (`AppServices` bundle: session factory, `WorkspaceCommands`, active-terminal metrics, agent focuser) + shared shell contracts (`docks.json` document owner, panel names, dock helpers). |
 | `update` (`oneterm-update`) | `core`, `chrono`, `reqwest`, `semver`, `sha2`, `tar`, `flate2`, `zip` | shared | GitHub Releases auto-update checks, asset selection, download verification, staging, and installer orchestration. |
-| `theme` (`oneterm-theme`) | `settings`, `actions`, gpui, gpui-component | shared | Theme registry, built-in themes, and generated `AppIcon`. |
+| `theme` (`oneterm-theme`) | `settings`, `actions`, gpui, gpui-component | shared | Theme registry, built-in themes, generated `AppIcon`, brand accent, and theme-tinted notification builders (`notif_ext`). |
 | `workspace` (`oneterm-workspace`) | `core`, `terminal`, `settings`, `state`, `theme`, `actions`, gpui-component | shell | Feature-agnostic app shell. Maps domain placement types to the UI dock and drives features through `WorkspaceCommands`. |
 | `terminal-view` (`oneterm-terminal-view`) | `core`, `terminal`, `settings`, `state`, `theme`, `actions`, `highlight`, `completion`, gpui-component | feature | Terminal panel, rendering/input, split spaces, the terminal settings panel, and the auto-completion overlay + controller. |
 | `sftp-ui` (`oneterm-sftp-ui`) | `core`, `terminal`, `state`, `theme`, `actions`, gpui-component | feature | SFTP file browser and transfer queue. |
-| `session-ui` (`oneterm-session-ui`) | `core`, `terminal`, `terminal-view`, `settings`, `state`, `actions`, gpui-component | feature | Session tree, connect dialogs, and `SshSessionStore`. |
+| `session-ui` (`oneterm-session-ui`) | `core`, `terminal`, `terminal-view`, `settings`, `state`, `theme`, `actions`, gpui-component | feature | Session tree, connect dialogs, and `SshSessionStore`. |
 | `settings-ui` (`oneterm-settings-ui`) | `core`, `settings`, `state`, `update`, `theme`, `actions`, gpui-component | feature | General Settings window, update status/actions, and key-binding setup. |
 | `agent-ui` (`oneterm-agent-ui`) | `terminal`, `settings`, `state`, gpui-component | feature | Agent Panel fleet view. |
 | `ssh` (`oneterm-ssh`) | `core`, `terminal` | backend | russh client and SFTP; implements `TerminalSession` and `SftpBackend`. |

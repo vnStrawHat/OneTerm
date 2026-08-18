@@ -60,7 +60,8 @@
       "oneterm-settings",
       "oneterm-state",
       "oneterm-terminal",
-      "oneterm-terminal-view"
+      "oneterm-terminal-view",
+      "oneterm-theme"
     ],
     "oneterm-settings": [
       "oneterm-core"

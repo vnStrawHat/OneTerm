@@ -20,7 +20,7 @@ use gpui_component::{ActiveTheme as _, WindowExt as _, notification::Notificatio
 use oneterm_core::config::ShellKind;
 use oneterm_highlight::ShellProfile;
 use oneterm_settings::{SemanticHighlightingMode, TerminalBlink, TerminalSettings};
-use oneterm_state::notif_ext::notify;
+use oneterm_theme::notif_ext::notify;
 use oneterm_terminal::TerminalProgress;
 
 use super::LocalTerminalView;
