@@ -440,7 +440,6 @@ package in the Cargo registry / git checkout.
 | `libm` | 0.2.16 | MIT | crates.io |
 | `linebender_resource_handle` | 0.1.1 | Apache-2.0 OR MIT | crates.io |
 | `link-section` | 0.18.2 | Apache-2.0 OR MIT | crates.io |
-| `linkify` | 0.10.0 | MIT OR Apache-2.0 | crates.io |
 | `linktime-proc-macro` | 0.2.0 | Apache-2.0 OR MIT | crates.io |
 | `linux-raw-sys` | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | crates.io |
 | `linux-raw-sys` | 0.4.15 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | crates.io |
@@ -981,4 +980,4 @@ package in the Cargo registry / git checkout.
 | `zvariant_derive` | 5.12.0 | MIT | crates.io |
 | `zvariant_utils` | 3.4.0 | MIT | crates.io |
 
-_910 third-party packages._
+_909 third-party packages._

@@ -311,9 +311,9 @@ pub(crate) fn connect_ssh_session(
         .spawn(cx, async move |cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move {
-                    factory.connect_ssh(cfg, PtySize::INITIAL, scrollback, security)
-                })
+                .spawn(
+                    async move { factory.connect_ssh(cfg, PtySize::INITIAL, scrollback, security) },
+                )
                 .await;
             if task_cancellation.is_cancelled() {
                 connecting_for_task.store(false, std::sync::atomic::Ordering::Relaxed);

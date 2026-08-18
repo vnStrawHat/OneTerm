@@ -171,9 +171,14 @@ fn spawn_failure_is_a_typed_shell_resolution_error() {
         )),
         ..Default::default()
     };
-    let error = LocalSession::spawn(cfg, PtySize { rows: 24, cols: 80 }, 10_000)
-        .err()
-        .expect("spawning a missing program must fail");
+    let error = LocalSession::spawn(
+        cfg,
+        PtySize { rows: 24, cols: 80 },
+        10_000,
+        TerminalSecurityPolicy::default(),
+    )
+    .err()
+    .expect("spawning a missing program must fail");
     match error {
         oneterm_core::AppError::ShellResolution { shell, .. } => {
             assert!(shell.contains("no-such-shell.exe"), "{shell}");
