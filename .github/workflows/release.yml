@@ -8,7 +8,10 @@
 #     directly (VERSION must already be bumped to match the tag).
 #
 # Targets (matrix): Windows x86_64, Linux x86_64, macOS x86_64 (Intel) + aarch64
-# (Apple Silicon). Release binary = `oneterm` (feature `release-bin`).
+# (Apple Silicon). Release binary = `oneterm` (feature `release-bin`), built and
+# staged by scripts/build-release.{ps1,sh} — the same scripts developers run
+# locally, so `dist/oneterm-<version>-<triple>` has one definition (BUILD-27).
+# Every archive ships with a `.sha256`; the release also publishes `SHA256SUMS`.
 #
 # Version sources: the `VERSION` file at the repo root (this workflow, the macOS
 # bundle) and `[workspace.package] version` in the root Cargo.toml (CARGO_PKG_VERSION
@@ -46,8 +49,9 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   prepare:
     runs-on: ubuntu-latest
+    # Read-only: this job only computes the version (gh release view needs no write).
     permissions:
-      contents: write
+      contents: read
     outputs:
       version: ${{ steps.dispatch.outputs.version || steps.tagpush.outputs.version }}
       tag: ${{ steps.dispatch.outputs.tag || steps.tagpush.outputs.tag }}
@@ -56,7 +60,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
       # Dispatch path: compute the next VERSION only. If the current VERSION
       # is already published, bump from it. If a release commit exists but is
@@ -197,63 +201,40 @@ jobs:
             libgbm-dev libegl-dev \
             libfontconfig1 libfontconfig-dev libfreetype6-dev
 
-      - name: Build release binary
-        run: cargo build --release --no-default-features --features release-bin --target ${{ matrix.target }}
+      # Build only `oneterm-app` (release-bin) and stage + archive + checksum
+      # dist/oneterm-<version>-<target>.{zip|tar.gz}(.sha256) with the same
+      # scripts developers use locally (BUILD-26, BUILD-27). macOS: bundle-macos.sh
+      # assembles OneTerm.app (sips + iconutil on the runner produce the .icns)
+      # and applies an ad-hoc code signature.
+      - name: Build + stage release (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh scripts/build-release.ps1 -Target ${{ matrix.target }}
 
-      - name: Stage dist
+      - name: Build + stage release (Linux / macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash scripts/build-release.sh
+
+      - name: Verify staged archive
         shell: bash
         run: |
           set -euo pipefail
           VERSION="${{ needs.prepare.outputs.version }}"
-          TARGET="${{ matrix.target }}"
-          REL="target/${TARGET}/release"
-          STAGE="dist/oneterm-${VERSION}-${TARGET}"
-          mkdir -p "${STAGE}"
-          # macOS: package into a proper OneTerm.app bundle so double-clicking
-          # launches it directly (no Terminal.app window). See
-          # scripts/bundle-macos.sh for details. sips + iconutil are present
-          # on the macOS runner, so the .icns is generated too.
-          if [[ "${TARGET}" == *darwin* ]]; then
-            bash scripts/bundle-macos.sh "${PWD}" "${REL}" "${STAGE}"
-          else
-            # Binary: oneterm.exe (Windows) or oneterm (Linux).
-            if [ -f "${REL}/oneterm.exe" ]; then
-              cp "${REL}/oneterm.exe" "${STAGE}/"
-            else
-              cp "${REL}/oneterm" "${STAGE}/"
-            fi
-            # Windows runtime assets (build.rs already copied them into target/release).
-            if [ -f "${REL}/conpty.dll" ]; then
-              cp "${REL}/conpty.dll" "${STAGE}/"
-            fi
-            if [ -d "${REL}/x64" ]; then
-              mkdir -p "${STAGE}/x64"
-              cp "${REL}/x64/OpenConsole.exe" "${STAGE}/x64/"
-            fi
-          fi
-          echo "==> Staged files:"
-          find "${STAGE}" -type f | sort
-
-      - name: Archive
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION="${{ needs.prepare.outputs.version }}"
-          TARGET="${{ matrix.target }}"
-          STAGE="oneterm-${VERSION}-${TARGET}"
-          cd dist
-          if [ "${{ matrix.archive }}" = "zip" ]; then
-            7z a "${STAGE}.zip" "${STAGE}"
-          else
-            tar -czf "${STAGE}.tar.gz" "${STAGE}"
-          fi
-          ls -la
+          ARCHIVE="dist/oneterm-${VERSION}-${{ matrix.target }}.${{ matrix.archive }}"
+          [ -f "${ARCHIVE}" ] || { echo "::error::expected archive not found: ${ARCHIVE}"; exit 1; }
+          [ -f "${ARCHIVE}.sha256" ] || { echo "::error::expected checksum not found: ${ARCHIVE}.sha256"; exit 1; }
+          ls -la dist
 
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: oneterm-${{ matrix.target }}
-          path: dist/oneterm-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.*
+          path: |
+            dist/oneterm-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.${{ matrix.archive }}
+            dist/oneterm-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.${{ matrix.archive }}.sha256
 
   # ──────────────────────────────────────────────────────────────────────────
   # release — download all artifacts, generate release notes, create the GitHub
@@ -276,6 +257,19 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+
+      # One combined checksum file (sha256sum -c compatible) next to the archives.
+      - name: Write SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd artifacts
+          rm -f SHA256SUMS
+          cat ./*.sha256 | sort -k2 > SHA256SUMS
+          rm -f ./*.sha256
+          sha256sum -c SHA256SUMS
+          echo "==> SHA256SUMS:"
+          cat SHA256SUMS
 
       - name: Generate release notes
         shell: bash
@@ -425,16 +419,26 @@ jobs:
             if ! git diff --cached --quiet; then
               git commit -m "chore(release): v${VERSION}"
             fi
+            # The matrix build takes 30-40 min; if the branch advanced meanwhile a
+            # plain push is rejected (BUILD-24). Replay the release commit on top of
+            # the current branch head. A conflict on VERSION/Cargo.toml (someone
+            # else bumped the version) is a real error and aborts the release.
+            git fetch origin "${GITHUB_REF_NAME}"
+            if ! git rebase "origin/${GITHUB_REF_NAME}"; then
+              git rebase --abort || true
+              echo "::error::Could not rebase the release commit onto origin/${GITHUB_REF_NAME}; resolve the version bump conflict and re-run."
+              exit 1
+            fi
             git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
             RELEASE_REF="$(git rev-parse HEAD)"
             gh release create "${TAG}" \
               --target "${RELEASE_REF}" \
               --title "OneTerm ${VERSION}" \
               --notes-file notes.md \
-              artifacts/oneterm-*
+              artifacts/oneterm-* artifacts/SHA256SUMS
           else
             gh release create "${TAG}" \
               --title "OneTerm ${VERSION}" \
               --notes-file notes.md \
-              artifacts/oneterm-*
+              artifacts/oneterm-* artifacts/SHA256SUMS
           fi

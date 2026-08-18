@@ -58,6 +58,9 @@ cargo build --workspace --release
 
 # Run the app (dev binary = oneterm-debug, keeps the console for logs)
 cargo run -p oneterm-app
+# Same, with OneTerm's hot-path crates optimized (full-screen TUIs such as DOOM-fire
+# are unusable at opt-level 0; see [profile.fast-dev] in the root Cargo.toml)
+cargo run -p oneterm-app --profile fast-dev
 
 # Test
 cargo test --workspace
@@ -101,8 +104,7 @@ The script runs, in order:
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo build --workspace
+cargo clippy --workspace --all-targets -- -D warnings   # also type-checks every target (no separate build step)
 cargo test --workspace
 python scripts/verify-dependency-graph.py     # crate graph policy + VERSION/Cargo.toml agreement
 python scripts/check-ui-fork.py               # gpui-component vendor baseline
@@ -111,6 +113,7 @@ python -m unittest scripts/test_check_english.py
 python scripts/check-english.py               # English-only contributor text
 python scripts/completion-catalog.py validate # completion catalogs vs schema
 python scripts/benchmark-scale.py --list      # scale benchmark manifest
+python scripts/third-party-notices.py --check # THIRD-PARTY-NOTICES.md matches Cargo.lock
 ```
 
 Optional (need network / extra tools; CI runs them too): `bash vendor/refresh.sh --check`
@@ -145,6 +148,7 @@ with only fmt/clippy/build green.
 | Theme schema & colors | `reference/gpui-component/.theme-schema.json` |
 | gpui internal skills | `reference/gpui-component/skills/` |
 | Documentation (en) | `reference/gpui-component/docs/docs/` |
+| Documentation index (current vs. archived docs) | [`docs/README.md`](docs/README.md) |
 
 <!-- HARNESS:BEGIN -->
 ## Harness

@@ -1,5 +1,28 @@
 # GUI Layout — OneTerm
 
+> **Status (2026-08): historical design record** — the original layout design that
+> the shell was built from. Read it for rationale; for the implemented state read
+> [`architecture.md`](architecture.md) and `crates/workspace/src/layout/`. Known
+> divergences from the text below:
+> - The right dock is **not** a `v_split([Session, SFTP])`: it is a single
+>   `DockItem::Panel` — `SshClientPanel` (`crates/app/src/ssh_client_panel.rs`) hosts the
+>   Session and SFTP panels in its own vertical resizable split; the Agent Panel is the
+>   alternative right-dock mode (`oneterm_core::RightDockMode`, `crates/app/src/agent_panel.rs`).
+> - `MAIN_DOCK_VERSION` is `3` (`crates/workspace/src/layout/workspace/mod.rs`), not `1`.
+> - `docks.json` is not written with `std::fs::write` to `STATE_FILE`: the path comes from
+>   `oneterm_state::paths::state_file()` (`config_dir()/docks.json`; `target/docks.json` in
+>   debug) and every write goes through the schema-versioned, quarantining
+>   `oneterm_state::dock_persistence::update_dock_document` transaction
+>   (`crates/state/src/dock_persistence.rs`, `crates/core/src/persistence.rs`; see
+>   [`agents/persistence.md`](agents/persistence.md)). The shell saves on layout change and
+>   at exit (`crates/workspace/src/layout/workspace/persistence.rs`).
+> - Panels are registered by name in `crates/state/src/panel_names.rs` (R4/R12), not by the
+>   `PanelRegistry` sketches in §5.
+> - The status bar also shows network speed, breadcrumb and a CPU/memory indicator
+>   (`crates/workspace/src/layout/statusbar.rs`, `crates/workspace/src/widgets/`).
+> - `crates/ui` / `crates/app/src/app.rs` in the sketches are today's `crates/workspace`
+>   (shell) and `crates/app/src/lib.rs`.
+>
 > Design document for the OneTerm GUI layout, based on the reference
 > `reference/gpui-component/crates/story/examples/dock.rs`.
 >

@@ -994,9 +994,11 @@ No connection caching/reuse.
 
 ### 9.2. Connection timeout
 
-`SshSession::connect` should have a timeout (e.g. 30s). If the server is unreachable →
-`Err` → `push_notification("SSH connect failed: connection timed out")`.
-See `terminal-backend.md` §13 (risks).
+`SshSession::connect` is bounded by `CONNECT_DEADLINE` (60 s for the whole connect,
+including authentication) and `PHASE_DEADLINE` (20 s per phase: TCP + key exchange,
+each auth step, channel/PTY setup) in `crates/ssh/src/session.rs`. If the server is
+unreachable the deadline fires → `Err` → the connect dialog shows the error and the
+user can retry. See `terminal-backend.md` §13 (risks).
 
 ### 9.3. Host key verification
 

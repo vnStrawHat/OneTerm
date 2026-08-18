@@ -2,7 +2,7 @@
 # scripts/ci-local.sh — run the same quality gate as .github/workflows/ci.yml, locally.
 #
 # Usage:
-#   scripts/ci-local.sh           # fmt, clippy, build, test + the Python policy checks
+#   scripts/ci-local.sh           # fmt, clippy, test + the Python policy checks
 #   scripts/ci-local.sh --full    # also: vendor/refresh.sh --check (network) + cargo deny
 #
 # Stops at the first failing command and prints it. Keep this list in sync with
@@ -26,7 +26,6 @@ step() {
 
 step cargo fmt --all -- --check
 step cargo clippy --workspace --all-targets -- -D warnings
-step cargo build --workspace
 step cargo test --workspace
 step python scripts/verify-dependency-graph.py
 step python scripts/check-ui-fork.py
@@ -35,6 +34,7 @@ step python -m unittest scripts/test_check_english.py
 step python scripts/check-english.py
 step python scripts/completion-catalog.py validate
 step python scripts/benchmark-scale.py --list
+step python scripts/third-party-notices.py --check
 
 if [[ $FULL -eq 1 ]]; then
   step bash vendor/refresh.sh --check

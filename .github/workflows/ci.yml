@@ -11,6 +11,12 @@ on:
       - ".rustfmt.toml"
       - "README.md"
       - "AGENTS.md"
+      - "LICENSE"
+      - "NOTICE"
+      - "THIRD-PARTY-NOTICES.md"
+      - "deny.toml"
+      - "rust-toolchain.toml"
+      - ".gitattributes"
       - "docs/**"
       - "scripts/**"
       - "crates/**"
@@ -23,6 +29,12 @@ on:
       - ".rustfmt.toml"
       - "README.md"
       - "AGENTS.md"
+      - "LICENSE"
+      - "NOTICE"
+      - "THIRD-PARTY-NOTICES.md"
+      - "deny.toml"
+      - "rust-toolchain.toml"
+      - ".gitattributes"
       - "docs/**"
       - "scripts/**"
       - "crates/**"
@@ -31,6 +43,12 @@ on:
 
 permissions:
   contents: read
+
+# One run per ref: a newer push to the same branch/PR cancels the in-progress run
+# (BUILD-28). Release builds have their own group in release.yml.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   dependency-graph:
@@ -56,6 +74,10 @@ jobs:
         run: python scripts/check-doc-paths.py
       - name: Validate scale benchmark manifest
         run: python scripts/benchmark-scale.py --list
+      - name: Verify THIRD-PARTY-NOTICES.md is current
+        # Offline: cargo metadata against Cargo.lock (no build). Also refuses a
+        # Cargo.lock that needs updating (--locked).
+        run: python scripts/third-party-notices.py --check
       - name: Test contributor-facing text checker
         run: python -m unittest scripts/test_check_english.py
       - name: Verify contributor-facing text language
@@ -105,11 +127,10 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Lint workspace
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Build workspace
-        run: cargo build --workspace
+      # No separate `cargo build --workspace`: clippy --all-targets already
+      # type-checks every target and `cargo test` links them (BUILD-28).
       - name: Test workspace
         run: cargo test --workspace
-
 
   windows-quality:
     # Windows is the primary platform, so lint and run the whole workspace

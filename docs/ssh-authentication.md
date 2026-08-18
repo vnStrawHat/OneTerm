@@ -41,7 +41,7 @@ Existing session documents with no authentication metadata load as Password. The
 - `oneterm-session-ui` owns persisted session authentication preferences, credential collection, path selection, and user-facing validation.
 - `oneterm-core` owns `SshConfig`, `SshAuthMethod`, and zeroizing secret types.
 - `oneterm-app` provides the concrete `SessionFactory`.
-- `oneterm-ssh` loads/decrypts the selected key and calls russh public-key authentication; it also owns the keyboard-interactive fallback (`authenticate_with_password` in `crates/ssh/src/session.rs`) and the transport keepalive (`keepalive@openssh.com` every 30 s, disconnect after 3 unanswered).
+- `oneterm-ssh` loads/decrypts the selected key and calls russh public-key authentication. RSA keys never sign with the legacy SHA-1 `ssh-rsa` flavour: the client asks the server for its `server-sig-algs` (RFC 8308) and signs with the advertised `rsa-sha2-*` hash, falling back to SHA-512 (`rsa_hash_alg` in `crates/ssh/src/session.rs`). A session dropped without an explicit `close()` still requests the transport close (`impl Drop for SshSession`). It also owns the keyboard-interactive fallback (`authenticate_with_password` in `crates/ssh/src/session.rs`) and the transport keepalive (`keepalive@openssh.com` every 30 s, disconnect after 3 unanswered).
 
 No UI crate depends directly on `oneterm-ssh`.
 

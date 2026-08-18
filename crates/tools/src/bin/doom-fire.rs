@@ -17,7 +17,7 @@
 //! # Usage
 //!
 //! ```bash
-//! cargo run -p oneterm-local-shell --example doom_fire
+//! cargo run -p oneterm-tools --release --bin doom-fire
 //! ```
 //!
 //! Press `Ctrl+C` to quit during the fire animation.

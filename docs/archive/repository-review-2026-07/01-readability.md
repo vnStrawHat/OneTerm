@@ -2,7 +2,7 @@
 
 ## What is working
 
-- The crate map and ownership rules are unusually explicit in [`docs/architecture.md`](../architecture.md) and [`docs/agents/structure.md`](../agents/structure.md).
+- The crate map and ownership rules are unusually explicit in [`docs/architecture.md`](../../architecture.md) and [`docs/agents/structure.md`](../../agents/structure.md).
 - Modules generally use descriptive names (`sftp_transfer`, `security_policy`, `dock_persistence`, `session_factory`) and explain non-obvious invariants in Rust doc comments.
 - The terminal engine exposes neutral types instead of leaking GPUI into the engine (`crates/terminal/src/session.rs:1-9`), which makes the code's layer boundaries easy to infer.
 - Security-sensitive code states its assumptions near the implementation. For example, SFTP traversal limits and symlink policy are documented directly in `crates/ssh/src/sftp_transfer.rs:139-146` and `crates/ssh/src/sftp_task.rs:378-443`.

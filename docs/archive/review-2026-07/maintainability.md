@@ -7,7 +7,7 @@
 - **MAINT-01:** Resolved for current manifests. The crate table now includes `oneterm-ui` and `oneterm-highlight`; `scripts/verify-dependency-graph.py` checks the machine-readable internal dependency allow-list in CI.
 - **MAINT-02:** Core terminal-model duplication is resolved by `TerminalModel`; transport-specific session/state code remains intentionally separate. Further state consolidation is deferred until the session contract is split.
 - **MAINT-03:** Shared persistence mechanics are centralized in `oneterm-core::persistence`; feature crates retain only domain serialization and field ownership.
-- **MAINT-04:** The runtime error taxonomy is documented in [`docs/agents/error-policy.md`](../agents/error-policy.md). Remaining ignored results should be migrated incrementally with focused behavior changes rather than broad mechanical edits.
+- **MAINT-04:** The runtime error taxonomy is documented in [`docs/agents/error-policy.md`](../../agents/error-policy.md). Remaining ignored results should be migrated incrementally with focused behavior changes rather than broad mechanical edits.
 - **MAINT-05:** The local UI fork now has a pinned-revision procedure and reviewed hash baseline via `scripts/check-ui-fork.py`; the reference checkout remains optional in CI.
 
 ## MAINT-01 — Architecture/document drift makes dependency maintenance unsafe

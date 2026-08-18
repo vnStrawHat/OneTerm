@@ -21,11 +21,12 @@ hosts `oneterm_agent_ui::AgentListView`.
 
 The display implementation lives in `crates/agent-ui`:
 
-- `src/lib.rs` owns `AgentListView`, registry subscriptions, filters, relative
-  time refresh, and stale refresh.
-- `src/view.rs` renders the panel header, filter chips, tab groups, group
-  badges, the empty state, and the scroll column.
-- `src/card.rs` and `src/card/render.rs` render compact agent cards.
+- `src/lib.rs` re-exports `AgentListView` and owns the feature `init()`.
+- `src/view.rs` owns `AgentListView`: registry subscriptions, filters, the
+  refresh task (spinner tick, relative-time refresh, stale refresh), and renders
+  the panel header, filter chips, tab groups, group badges, the empty state, and
+  the scroll column.
+- `src/card.rs` renders compact agent cards.
 
 `crates/agent-ui` does not parse OSC bytes and does not know terminal protocol
 internals. It reads the folded display model from `oneterm_state::AgentRegistry`.
@@ -377,8 +378,10 @@ Stale detection uses `UiConfig::agent_stale_threshold_ms()` with a default of
 300,000 ms. A heartbeat with `interval_ms` raises the effective threshold to at
 least `interval_ms * 3`.
 
-`AgentListView` refreshes every 120 ms for spinner and relative-time labels, and
-runs stale refresh every 15 seconds.
+`AgentListView` runs one 120 ms tick (`ACTIVE_CARD_TICK`, only notifies while a
+visible card is working, for the spinner), refreshes relative-time labels every
+1 s (`RELATIVE_TIME_TICK`) and runs stale refresh every 15 s (`STALE_TICK`) —
+`crates/agent-ui/src/view.rs`.
 
 ---
 

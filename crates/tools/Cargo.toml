@@ -1,0 +1,40 @@
+[package]
+name = "oneterm-tools"
+description = "OneTerm developer diagnostics (not shipped): DOOM-fire terminal workload and a raw ConPTY/PTY throughput probe."
+version.workspace = true
+edition.workspace = true
+# doom-fire.rs is a port of DOOM-fire-zig and keeps that project's GPL-3.0 licence
+# (see THIRD-PARTY-NOTICES.md); pty-throughput.rs is OneTerm's own (Apache-2.0).
+# Neither binary is part of a OneTerm release; deny.toml carries a crate-scoped
+# exception for the GPL term.
+license = "Apache-2.0 AND GPL-3.0-only"
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# Diagnostics only — this crate is never a dependency of the app and depends on
+# no OneTerm crate (docs/agents/crate-dependency-rules.md: it sits outside the
+# L0–L4 layering, like a `tools/` directory).
+[[bin]]
+name = "doom-fire"
+path = "src/bin/doom-fire.rs"
+
+[[bin]]
+name = "pty-throughput"
+path = "src/bin/pty-throughput.rs"
+
+[dependencies]
+# pty-throughput: the same PTY path OneTerm uses (alacritty_terminal::tty + polling).
+alacritty_terminal.workspace = true
+polling.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# doom-fire: terminal size detection (TIOCGWINSZ).
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# doom-fire: console size + VT processing mode.
+windows-sys.workspace = true

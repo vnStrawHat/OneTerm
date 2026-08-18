@@ -17,7 +17,8 @@
     "crates/update",
     "crates/local-shell",
     "crates/ssh",
-    "crates/completion"
+    "crates/completion",
+    "crates/tools"
   ],
   "internal_dependencies": {
     "oneterm-actions": [
@@ -43,10 +44,10 @@
       "oneterm-theme",
       "oneterm-workspace"
     ],
-    "oneterm-core": [],
     "oneterm-completion": [
       "oneterm-core"
     ],
+    "oneterm-core": [],
     "oneterm-highlight": [],
     "oneterm-local-shell": [
       "oneterm-core",
@@ -86,9 +87,6 @@
       "oneterm-core",
       "oneterm-terminal"
     ],
-    "oneterm-update": [
-      "oneterm-core"
-    ],
     "oneterm-terminal": [
       "oneterm-core"
     ],
@@ -105,6 +103,10 @@
     "oneterm-theme": [
       "oneterm-actions",
       "oneterm-settings"
+    ],
+    "oneterm-tools": [],
+    "oneterm-update": [
+      "oneterm-core"
     ],
     "oneterm-workspace": [
       "oneterm-actions",

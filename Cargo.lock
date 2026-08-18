@@ -5298,12 +5298,10 @@ version = "0.3.10"
 dependencies = [
  "alacritty_terminal",
  "async-channel 2.5.0",
- "libc",
  "log",
  "oneterm-core",
  "oneterm-terminal",
  "polling",
- "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5444,6 +5442,16 @@ dependencies = [
  "oneterm-actions",
  "oneterm-settings",
  "rust-embed",
+]
+
+[[package]]
+name = "oneterm-tools"
+version = "0.3.10"
+dependencies = [
+ "alacritty_terminal",
+ "libc",
+ "polling",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

@@ -17,12 +17,16 @@ The workspace is pinned to the exact rev set verified as compatible by `referenc
 | `alacritty_terminal` | `https://github.com/zed-industries/alacritty` (Zed fork) | `fcf32feacb367b75ec84dd40f041e4fd411d3cc1` | `0.26.1-dev` — **vendored** at `vendor/alacritty_terminal`, see [`vendor/README.md`](../../vendor/README.md) |
 | `vte` | crates.io | `0.15.0` (VCS `3b3da71c34cc1256c7e20981cf03f8eb95e08ffc`) | `0.15.0` — **vendored** at `vendor/vte`, see [`vendor/README.md`](../../vendor/README.md) |
 
-Three of these (`gpui-component`, `alacritty_terminal`, `vte`) are **vendored**: the root
-`Cargo.toml` `[patch]` section redirects them to `vendor/<crate>/`. **Policy:** the
-rev-lock above is the *pristine base rev*; every OneTerm delta lives **exclusively** in
-`vendor/patches/<crate>/*.patch` (never hand-edit `vendor/<crate>/`). `bash
-vendor/refresh.sh --check` (CI) proves `vendor/<crate> == pristine @ rev + patches`;
-`python scripts/check-ui-fork.py` additionally hash-pins the gpui-component package.
+Three of these (`gpui-component`, `alacritty_terminal`, `vte`) are **vendored** under
+`vendor/<crate>/` and reached through the root `Cargo.toml` `[patch]` section: the
+upstream sources stay declared so `[patch]` can redirect every edge, and — deliberately —
+so the vendored trees remain outside the scope of workspace-wide tools (`cargo fmt --all`
+formats *path* dependencies but not patched sources; see the comment above
+`alacritty_terminal` in `Cargo.toml`). **Policy:** the rev-lock above is the *pristine base rev*; every
+OneTerm delta lives **exclusively** in `vendor/patches/<crate>/*.patch` (never hand-edit
+`vendor/<crate>/`). `bash vendor/refresh.sh --check` (CI) proves
+`vendor/<crate> == pristine @ rev + patches`; `python scripts/check-ui-fork.py`
+additionally hash-pins the gpui-component package.
 
 > 📌 **Inviolable rules**:
 >
@@ -43,15 +47,18 @@ gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "
 gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "ea6b194db04cc7c0474851f07c7d5b7a9df6a98b" }
 ```
 
-In each sub-crate that uses gpui (e.g. `crates/terminal-view/Cargo.toml`):
+In each sub-crate that renders UI (e.g. `crates/terminal-view/Cargo.toml`):
 
 ```toml
 [dependencies]
 gpui.workspace = true
-gpui_platform.workspace = true
 gpui-component.workspace = true
-gpui-component-assets.workspace = true
 ```
+
+Only the binary crate (`crates/app/Cargo.toml`) additionally depends on `gpui_platform`
+(the platform back-end that owns the event loop / window creation) and on
+`gpui-component-assets` (built-in icons + fonts, merged into `CustomAssets`). Library
+crates never need either — they build against `gpui` + `gpui-component` only.
 
 > ⚠️ **Exact crate name**: in Cargo, the crate name is `gpui_platform` (with an underscore) — not `gpui-platform`. The `use gpui_platform::...` declaration also uses the underscore. See `reference/gpui-component/examples/hello_world/Cargo.toml` for reference (`gpui_platform = { workspace = true }`).
 
@@ -77,7 +84,8 @@ Every third-party dependency is declared **once** in the root `Cargo.toml`
 | Auto-update | `reqwest` (blocking, rustls, system proxy), `semver`, `sha2`, `zip`, `tar`, `flate2` |
 | UI helpers | `chrono` (clock widget / timestamps), `sysinfo` (CPU/memory widget), `rust-embed` (theme + icon assets) |
 | Windows FFI | `windows-sys 0.59` — one workspace entry, feature union of every first-party use |
-| Build / dev only | `embed-resource` (app `.rc`), `libc` (local-shell DOOM-fire example) |
+| Build / dev only | `embed-resource` (app `.rc`) |
+| Diagnostics (`crates/tools`, never shipped) | `libc` (DOOM-fire terminal size on Unix), `windows-sys` (console mode), `alacritty_terminal` + `polling` (raw PTY throughput probe) |
 
 Not used (do not re-add without a design decision): `tracing`/`tracing-subscriber`
 (the workspace logs through `log`), `directories` (`oneterm_core::config_dir` owns
@@ -115,9 +123,9 @@ For changes to the upstream dependency itself:
 - `vendor/gpui-component/src/dock/` — `DockArea`, `Panel`, `StackPanel`, `TabPanel`.
 - `vendor/gpui-component/src/input/` — `InputState`, `Input`.
 - `vendor/gpui-component/src/dialog/` — `Dialog` overlay.
-- `vendor/gpui-component/src/notification/` — toast/notification.
-- `vendor/gpui-component/src/sheet/` — side panel.
-- `vendor/gpui-component/src/theme.rs` — `Theme`, `ActiveTheme`, `ThemeColor`.
+- `vendor/gpui-component/src/notification.rs` — toast/notification.
+- `vendor/gpui-component/src/sheet.rs` — side panel.
+- `vendor/gpui-component/src/theme/` — `Theme`, `ActiveTheme`, `ThemeColor`.
 
 ---
 

@@ -1,5 +1,7 @@
 # Terminal Core and UI Review: Risks and Remediation Plan
 
+> **Status (2026-08): historical — archived.** Pre-restructure terminal review (2026-07-13); the `crates/core/src/terminal/` and `crates/ui/` paths it cites no longer exist (now `crates/terminal/` and `crates/terminal-view/`). The current review lives in [`docs/review-refresh-2026-08/`](../review-refresh-2026-08/README.md).
+
 **Review date:** 2026-07-13  
 **Scope:** `crates/core/src/terminal/` (11 files) and `crates/ui/src/views/terminal/` (62 files). Local and SSH implementations were inspected only where needed to verify the `TerminalSession` contract and lifecycle behavior.  
 **Priority order:** Security, Performance, Readability, Maintainability, Simplicity, Reusability.

@@ -1,5 +1,11 @@
 # Terminal Backend Design — OneTerm
 
+> **Status (2026-08):** design record kept current with the implementation. Rust
+> blocks are design sketches (types/fields are abridged); the "Current
+> implementation" notes and §5.3/§6.5/§7 describe the code as it is. Authoritative
+> signatures live in `crates/terminal/src/session.rs`, `crates/terminal/src/backend/`,
+> `crates/local-shell/src/` and `crates/ssh/src/`.
+>
 > Design document for the terminal part: **local shell** + **SSH session**, sharing a
 > renderer based on `alacritty_terminal`. Windows-first priority. Local shell can be
 > `cmd` / `powershell` / `pwsh` / custom.
@@ -45,7 +51,7 @@
 
 ```
 ┌─────────────────── ui crate (GPUI + gpui-component) ───────────────────┐
-│  LocalTerminalView / SshTerminalView  (impl Render)                    │
+│  LocalTerminalView (impl Render; hosts local AND ssh sessions)          │
 │   ├─ chrome: Button, Tabs, Dock… (gpui-component)                        │
 │   └─ child: TerminalElement  (custom gpui::Element, shared)            │
 │          • reads TerminalContent snapshot → paint_quad / shape_line      │
@@ -75,7 +81,7 @@
 
 **Data flow**:
 - Input: `Keystroke` (GPUI) → `core::key_encode` → `Vec<u8>` → `session.write(bytes)` → PTY/channel.
-- Output: PTY/channel → pump (`EventLoop` local / tokio ssh) → `Term.advance(bytes)` → rebuild `last_content` snapshot → event → View `cx.notify()` → `TerminalElement::paint` reads the snapshot.
+- Output: PTY/channel → pump (`ShellEventLoop` local / `ssh_main_task` tokio ssh) → `TerminalPump::advance` under the `Term` lock → `finish_batch` releases the lock and sends one `SessionEvent::Output` → View `cx.notify()` → `TerminalElement` prepaint calls `session.snapshot()` (short `Term` lock, copies `TerminalContent`, consumes damage) and paints from the copy.
 
 ---
 
@@ -87,24 +93,29 @@
 | `terminal` | `TerminalSession` trait + `SessionEvent`, `TerminalContent` snapshot, `TerminalPalette`, `key_encode`/`mouse_encode`/`osc`/`url`, and the **backend pump layer** (`backend` module: `SharedState`, `SessionEventSink`, `OscRouter`, `ColorQueryReplier`, `LineAccounting`, `TerminalPump`, `PtyTransport`) shared by both backends. |
 | `local-shell` | `LocalSession` implementing `TerminalSession`. Spawns a shell via `alacritty_terminal::tty::new` and pumps it with a custom poll loop (`ShellEventLoop<P: EventedPty>`) feeding `TerminalPump`. ConPTY on Windows. `LocalTransport: PtyTransport` (notifier queue). Only `LocalSession` is public. |
 | `ssh` | `SshSession` implementing `TerminalSession`. russh client on the shared tokio runtime; `ssh_main_task` feeds `TerminalPump`. pty-req + shell + `window_change` + exit-status. `SshTransport: PtyTransport` (bounded `Cmd` channel). SFTP task lifetime tied to the connection. Only `SshSession` + `connect` are public. |
-| `ui` | `TerminalElement` (custom `gpui::Element`), `LocalTerminalView`/`SshTerminalView` (`Render`), IME (`EntityInputHandler`), mouse/wheel, font measure, theme → `TerminalPalette`. |
-| `app` | Wire views into DockArea, settings, host manager. |
+| `terminal-view` | `TerminalElement` (custom `gpui::Element`), `LocalTerminalView` (`Render`; one view type hosts any `TerminalSession`, local or SSH), `TerminalPanel`/`PanelSpec` (dock tab), IME (`EntityInputHandler`), mouse/wheel, font measure, theme → `TerminalPalette`. |
+| `app` | Installs the `SessionFactory` (`AppSessionFactory`) + `WorkspaceCommands` through `AppServices`; only crate that links `ssh`/`local-shell`. |
 
-> Dependency rules unchanged: `app → {ui, ssh, local, core}`, `ui → core`, `ssh → core`,
-> `local → core`. `ui` does **not** import `ssh`/`local` directly — calls via `TerminalSession`.
+> Dependency rules: `app → {terminal-view, ssh, local-shell, terminal, core, …}`, `ssh → {terminal, core}`,
+> `local-shell → {terminal, core}`. No UI crate imports `ssh`/`local-shell` — sessions are created via
+> `oneterm_terminal::SessionFactory` and driven via `TerminalSession` (see `docs/agents/crate-dependency-rules.md` R3).
 
 ---
 
 ## 4. Dependencies & rev lock
 
 ```toml
-# workspace Cargo.toml — add to [workspace.dependencies]
-alacritty_terminal = { git = "https://github.com/zed-industries/alacritty", rev = "fcf32feacb367b75ec84dd40f041e4fd411d3cc1" }
+# root Cargo.toml [workspace.dependencies] (authoritative list: docs/agents/dependencies.md §1/§3)
+alacritty_terminal = { git = "https://github.com/zed-industries/alacritty", rev = "fcf32feacb367b75ec84dd40f041e4fd411d3cc1" }  # redirected to vendor/alacritty_terminal by [patch]
 async-channel = "2"      # event sub (no tokio leaked out)
-russh = "0.46"
-russh-keys = "0.46"
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "io-util", "process", "net", "macros"] }
+russh = { version = "0.61", default-features = false, features = ["ring", "flate2", "rsa"] }  # keys API is russh::keys (russh-keys was merged in)
+russh-sftp = "2.3"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "io-util", "net", "macros", "fs"] }
 ```
+
+> The fork is **vendored**: `vendor/alacritty_terminal` = pristine `fcf32fe` + the
+> patches in `vendor/patches/alacritty_terminal/` (single-pass OSC/clear hook), see
+> [`vendor/README.md`](../vendor/README.md).
 
 > ⚠️ **Mandatory**: `alacritty_terminal` must be taken from the `zed-industries/alacritty` fork @
 > rev `fcf32fe…` (the rev Zed uses for `gpui` rev `1d217ee39…`). NOT the zed monorepo.
@@ -134,23 +145,27 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "io-util",
 | Problem | slow paint (thousands of GPU calls) → pump `term.lock().advance()` **blocks** → jitter under output bursts (`yes`, `cat large file`) | Lock only for µs to copy, pump runs in parallel with paint |
 | Cost | 0 | 1 copy ~thousand cells/frame (far cheaper than paint) |
 
-**Convention**: the backend keeps `last_content: TerminalContent` (cache, built after each pump
-tick). `TerminalElement::paint` only reads `session.snapshot()` — **never locks the
-`FairMutex` inside paint**.
+**Convention (as implemented)**: there is **no cached `last_content`**. The pump only
+sends the `Output` hint; `TerminalSession::snapshot()` (`TerminalModel::snapshot`,
+`crates/terminal/src/model.rs`) takes the `FairMutex` for the microseconds needed to
+copy `TerminalContent` (and consume the damage), releases it, and the element paints
+from that owned copy — the lock is never held **while painting**. Non-render reads use
+`snapshot_query()` (damage-free), `query_state()` (O(1), no cells) or
+`query_line_range_cells()`; every one of them is a short lock too, so the pump and the
+UI contend only briefly (see the "never block inside a `Term` callback" rule in §5.3).
 
 ```rust
-// Pump (local EventLoop callback / ssh task) — after advancing Term:
-let content = TerminalContent::from(&*term.lock());   // short lock
-last_content.store(content);                          // ArcSwap or Mutex<TerminalContent>
-event_tx.send(SessionEvent::Output).ok();              // → View cx.notify()
+// Pump (ShellEventLoop / ssh_main_task) — per read chunk:
+pump.advance(&mut *term.lock(), bytes);       // parse under the Term lock
+pump.finish_batch_blocking(true);             // lock released: flush reliable events, then Output
 
-// Render (TerminalElement::paint):
-let content = session.snapshot();                     // read cache, no Term lock
+// Render (TerminalElement prepaint):
+let content = session.snapshot();             // short Term lock, owned TerminalContent
 // paint from content.cells / content.cursor / content.mode ...
 ```
 
-> Use `arc-swap` for `last_content` (lock-free read) or `Mutex<TerminalContent>`
-> (short lock). Do NOT hold the `FairMutex<Term>` while reading the snapshot in paint.
+> Do NOT hold the `FairMutex<Term>` across layout/paint work; copy, drop the guard,
+> then paint. `snapshot()` is called exactly once per frame from the render path.
 
 ### 5.3. Shared pump layer (`oneterm_terminal::backend`)
 
@@ -240,8 +255,8 @@ Resolving `ShellKind` → executable + args + env (Windows-first):
 | `Bash`/`Zsh`/`Sh` | `$SHELL` / `/bin/bash`… | `-l` (login) per config | env `LANG`/`LC_ALL` |
 | `Custom` | `program` (required) | `args` | per `env`/`utf8` |
 
-> The settings UI (`ui/views/settings/terminal.rs`) lets the user pick `kind`, type a custom
-> `program`, add `args`, set `cwd`, toggle `utf8`. Persisted via `core::config::store`.
+> The terminal settings panel (`crates/terminal-view/src/settings_panel.rs`) lets the user pick `kind`, type a custom
+> `program`, add `args`, set `cwd`, toggle `utf8`. Persisted in `terminal.json` via `oneterm_settings::TerminalConfig`.
 
 ### 6.1.1 Windows local cwd reporting
 
@@ -254,6 +269,10 @@ OneTerm's generated prompt integration emits OSC 7 whenever it controls the Wind
 The local listener already parses forwarded OSC 7 payloads into `SessionEvent::Cwd` and updates `TerminalSession::cwd()`.
 
 ### 6.2. Spawn via `alacritty_terminal::tty`
+
+> Original design sketch (alacritty `EventLoop` + `ArcSwap` cache). The shipped code
+> described below the sketch differs: a custom `ShellEventLoop`, no `last_content`
+> cache, and `LocalTransport`/`OscRouter` from §5.3.
 
 ```rust
 use alacritty_terminal::{event_loop::EventLoop, sync::FairMutex, term::{Config, Term}, tty::{self, Options, Shell, WindowSize}};
@@ -328,8 +347,8 @@ output parsing, input FIFO, resize, colour replies, child exit and shutdown.
 
 ### 6.4. Re-render perf (per Zed)
 
-- The pump doesn't `notify` per byte — `EventLoop` already coalesces; we rebuild `last_content`
-  after each tick and send a **single** `SessionEvent::Output`.
+- The pump doesn't `notify` per byte — a read chunk is parsed as one batch and
+  `finish_batch` sends a **single** coalescible `SessionEvent::Output` (§5.3/§6.5).
 - The View `cx.notify()` only when `display_offset`/`mode`/`cursor`/cells actually change
   (compare old vs new snapshot). Avoids continuous redraw under `yes`.
 - Log `layout took {:?}` for tuning (copy Zed's `log::debug!`).
@@ -368,44 +387,39 @@ payload. Saturation tests use the production policies and constants.
 
 ## 7. SSH backend (`ssh` crate)
 
-Tokio runtime is **hidden** (current-thread, `enable_all`); the exposed API is sync.
+The Tokio runtime is **hidden**: one process-wide `new_multi_thread` runtime with
+`SSH_RUNTIME_WORKERS = 2` worker threads (`crates/ssh/src/session.rs`,
+`shared_runtime()`), shared by every SSH session so the thread count does not grow
+per tab. The exposed API is sync: `connect()` runs the handshake, auth, `pty-req`,
+`shell` and the SFTP channel open inside `runtime.block_on`, then spawns
+`ssh_main_task` + `sftp_task` and returns a `Box<dyn TerminalSession>`.
 
 ```rust
+// abridged — see crates/ssh/src/{session,transport,session_terminal}.rs
 pub struct SshSession {
-    term: Arc<FairMutex<Term<SshListener>>>,
-    last_content: Arc<ArcSwap<TerminalContent>>,
-    cmd_tx: std::sync::mpsc::SyncSender<Cmd>,   // sync→tokio bridge
-    event_tx: Sender<SessionEvent>,
-    runtime: tokio::runtime::Runtime,           // hidden, dropped on close
-    alive: Arc<AtomicBool>,
+    model: TerminalModel<SshListener>,          // Arc<FairMutex<Term<OscRouter<SshTransport>>>>
+    transport: SshTransport,                    // bounded async_channel<Cmd> + closing flag
+    state: SharedState,                         // title / cwd / counters (§5.3)
+    events: Mutex<Option<async_channel::Receiver<SessionEvent>>>, // handed out once
+    sftp: Option<Arc<SftpSession>>,             // same TCP connection, own task
+    // …
 }
 
-enum Cmd { Write(Vec<u8>), Resize, Close }
+enum Cmd { Write(Vec<u8>), Resize { rows, cols }, Close }
 
-impl SshSession {
-    pub fn connect(cfg: SshConfig, initial: PtySize) -> core::Result<Self> {
-        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-        let (cmd_tx, cmd_rx) = async_channel::bounded(256);
-        let term = Arc::new(FairMutex::new(Term::new(/* cfg */, &TermSize::from(initial), SshListener { /* event_tx */ })));
-        let event_tx_clone = event_tx.clone();
-        runtime.block_on(async move {
-            let handle = russh::client::connect(addr, client_cfg, handler).await?;
-            let auth = resolve_auth(&cfg, &handle).await?;     // password / key / agent
-            let auth_ok = handle.authenticate(username, auth).await?;
-            let mut ch = handle.channel_open_session().await?;
-            ch.request_pty("xterm-256color", initial.cols, initial.rows, 0, 0, &[]).await?;
-            ch.request_shell(true).await?;
-            // spawn 2 tasks: data reader + cmd consumer
-            tokio::spawn(async move { /* reader: ch.wait() → term.lock().advance(data) → last_content → event_tx */ });
-            tokio::spawn(async move { /* cmd: while let Ok(c)=cmd_rx.recv() { match c { Write→ch.data, Resize→ch.window_change, Close→ch.close } } */ });
-            Ok::<_, anyhow::Error>(())
-        })?;
-        Ok(Self { term, last_content, cmd_tx, event_tx, runtime, alive })
-    }
-
-    pub fn write(&self, b: &[u8]) { let _ = self.cmd_tx.send(Cmd::Write(b.to_vec())); }
-    pub fn resize(&self, r: u16, c: u16) { let _ = self.cmd_tx.send(Cmd::Resize(r, c)); }
-    pub fn close(&self) { let _ = self.cmd_tx.send(Cmd::Close); }
+pub fn connect(cfg: SshConfig, initial: PtySize, scrollback: usize)
+    -> core::Result<Box<dyn TerminalSession>>
+{
+    let runtime = shared_runtime()?;                       // 2-worker multi-thread runtime
+    runtime.block_on(async {
+        // russh::client::connect (host-key policy in handler.rs, known_hosts)
+        // → authenticate (none / password / private key, keyboard-interactive fallback)
+        // → channel_open_session + request_pty("xterm-256color") + request_shell
+        // → open the SFTP channel
+    })?;
+    runtime.spawn(ssh_main_task(/* channel, term, pump, transport, … */));
+    runtime.spawn(sftp_task(/* … */));
+    Ok(Box::new(session))
 }
 ```
 
@@ -426,15 +440,19 @@ impl SshSession {
   `TerminalPump::finish_batch().await` after the batch, before the `Output` hint (§5.3).
 - RSA keys authenticate with `rsa-sha2-*` chosen from the server's `server-sig-algs`
   (fallback SHA-512); legacy SHA-1 `ssh-rsa` is never used.
-- Auth (MVP): password + key file. Agent later.
+- Auth: `SshAuthMethod::{None, Password, PrivateKey}` (`crates/core/src/ssh_config.rs`)
+  with keyboard-interactive as the password fallback; host keys are checked against
+  `known_hosts` (`crates/ssh/src/handler.rs`) — see [`ssh-client-connect.md`](ssh-client-connect.md).
+  No ssh-agent support yet.
 
-> Sync→async bridge: `async_channel::Sender` sends from the main thread, a tokio task
-> `recv().await` inside the runtime. Avoids nested `block_on`. Outgoing events use
-> `async_channel` (sender Send+Sync, recv in a smol/GPUI task).
+> Sync→async bridge: `async_channel` in both directions — the UI thread sends `Cmd`
+> through `SshTransport`, `ssh_main_task` receives it inside the runtime; outgoing
+> `SessionEvent`s go over the bounded `async_channel` the view drains on the GPUI
+> executor. No `std::sync::mpsc` and no nested `block_on` after connect.
 
 ---
 
-## 8. Rendering (`ui` crate) — `TerminalElement`
+## 8. Rendering (`terminal-view` crate) — `TerminalElement`
 
 Custom `gpui::Element` (Zed `terminal_element.rs` pattern). Paints from the **snapshot**.
 
@@ -507,16 +525,22 @@ let cell_width = probe.width() / cols as f32;
 let line_height = font_size * settings.line_height;     // or ascent+descent+leading
 ```
 
-### 8.4. Colors (`core` + `ui`)
+### 8.4. Colors (`terminal` + `terminal-view`)
 
-- `core::TerminalPalette { default_fg, default_bg, ansi: [Rgba; 16], cursor }` (pure, `Rgba<u8>`).
-- `ui` builds `TerminalPalette` from `cx.theme()` (gpui-component) → converts `Rgba→Hsla`.
-- `core::resolve_color(fg: &AnsiColor, palette) -> Rgba` (named/indexed/truecolor).
-- `ui::ensure_minimum_contrast(fg: Hsla, bg: Hsla, min: f32) -> Hsla` (copy from Zed/UI util).
+- `oneterm_terminal::TerminalPalette` (`crates/terminal/src/palette.rs`, pure `Rgb`).
+- `terminal-view` builds `TerminalTheme`/`TerminalPalette` from `cx.theme()` (`crates/terminal-view/src/theme/`).
+- `oneterm_terminal::palette::resolve_color(&Color, &TerminalPalette) -> Rgb` (named/indexed/truecolor).
+- `ensure_minimum_contrast(fg: Hsla, bg: Hsla, min: f32) -> Hsla` (`crates/terminal-view/src/theme/contrast.rs`, cached).
 
 ---
 
-## 9. `TerminalSession` trait (`core`)
+## 9. `TerminalSession` trait (`terminal` crate)
+
+> Abridged design sketch. The real trait (`crates/terminal/src/session.rs`) is wider:
+> `snapshot_query` / `query_state` / `query_line_range_cells` / `terminal_info` (damage-free
+> reads), `write`/`resize`/`close` return `Result<(), TerminalError>`, plus search,
+> selection, paste, `send_ctrl_c`, `dynamic_colors`, `set_default_colors` and
+> `capabilities()`.
 
 ```rust
 pub trait TerminalSession: Send + Sync + 'static {
@@ -559,8 +583,9 @@ of the required implementation surface for test fakes and future backends. The a
 installs the session factory and workspace callbacks together through `AppServices`;
 feature crates read those handles from their GPUI application context.
 
-`SessionEvent`: `Output | Title(String) | Cwd(PathBuf) | Clipboard(Option<String>) |
-Exited(Option<i32>) | Closed`.
+`SessionEvent`: `Output | Title | Cwd | Clipboard | ClipboardRead | ShellIntegration |
+Notification | Progress | AgentStatus | ForegroundProcess | Exited(Option<i32>) | Closed |
+Bell` — `Output` is the only coalescible event (§6.5).
 
 ### 9.1 Session duplication metadata and cwd
 
@@ -591,8 +616,8 @@ Per the Zed README (4 input paths):
    the cursor with an underline.
 4. **Paste**: `session.commit_text(text)` (bracketed paste if `TermMode::BRACKETED_PASTE`).
 
-IME impl (`ui`):
-- `LocalTerminalView`/`SshTerminalView` impl `gpui::EntityInputHandler`:
+IME impl (`terminal-view`):
+- `LocalTerminalView` (`crates/terminal-view/src/view/ime.rs`) impl `gpui::EntityInputHandler`:
   `selected_text_range`, `marked_text_range`, `replace_text_in_range`,
   `replace_and_mark_text_in_range`, `unmark_text`, `bounds_for_range`,
   `text_for_range`, `character_index_for_point`.
@@ -602,40 +627,38 @@ IME impl (`ui`):
 
 ---
 
-## 11. Expected file layout
+## 11. File layout (current)
 
 ```
 crates/
 ├── core/src/
-│   ├── terminal/
-│   │   ├── mod.rs
-│   │   ├── session.rs         # TerminalSession trait + SessionEvent
-│   │   ├── content.rs         # TerminalContent snapshot struct
-│   │   ├── palette.rs         # TerminalPalette (Rgba), resolve_color
-│   │   ├── colors_util.rs     # is_app_chosen_exact_color, is_decorative_character
-│   │   ├── key_encode.rs      # key_encode(KeySpec, Modifiers) -> Vec<u8>
-│   │   ├── mouse_encode.rs    # mouse press/move/release/wheel → CSI seq
-│   │   ├── osc.rs             # OSC 7/8/52 parse
-│   │   └── url.rs             # linkify
-│   └── config/
-│       ├── settings.rs        # TerminalSettings
-│       └── shell.rs           # ShellKind, LocalShellConfig, resolve_shell
+│   ├── ssh_config.rs         # SshConfig + SshAuthMethod
+│   ├── session_duplicate.rs  # SessionDuplicateConfig (non-secret launch descriptor, §9.1)
+│   └── config/shell.rs       # ShellKind, LocalShellConfig, resolve_shell
 │
-├── terminal/src/backend/     # shared pump layer (§5.3)
-│   ├── transport.rs          # PtyTransport trait
-│   ├── state.rs              # SessionState / SharedState / SharedStateCwdSource
-│   ├── event_sink.rs         # SessionEventSink (delivery policy, deferred flush)
-│   ├── osc_router.rs         # OscRouter<T>: EventListener
-│   ├── color_reply.rs        # ColorQueryReplier
-│   ├── line_accounting.rs    # LineAccounting
-│   ├── pump.rs               # TerminalPump<T>, GridSize
-│   └── backend_tests.rs      # in-memory transport tests
+├── terminal/src/             # engine (no GPUI)
+│   ├── session.rs            # TerminalSession trait + SessionEvent + TerminalCapabilities
+│   ├── model.rs              # TerminalModel<EP>: snapshot / snapshot_query / query_state / input
+│   ├── content.rs            # TerminalContent snapshot struct
+│   ├── palette.rs / color_classification.rs / osc_color.rs
+│   ├── key_encode.rs / mouse_encode.rs / paste.rs / search.rs
+│   ├── osc.rs / osc_agent/ / url.rs / url_policy.rs / security_policy.rs
+│   ├── factory.rs            # PtySize + SessionFactory
+│   └── backend/              # shared pump layer (§5.3)
+│       ├── transport.rs      # PtyTransport trait
+│       ├── state.rs          # SharedState / SharedStateCwdSource
+│       ├── event_sink.rs     # SessionEventSink (delivery policy, deferred flush)
+│       ├── osc_router.rs     # OscRouter<T>: EventListener
+│       ├── color_reply.rs    # ColorQueryReplier
+│       ├── line_accounting.rs
+│       ├── pump.rs           # TerminalPump<T>
+│       └── backend_tests.rs  # in-memory transport tests
 │
 ├── local-shell/src/
 │   ├── lib.rs                # pub: LocalSession
 │   ├── session.rs            # LocalSession: tty + ShellEventLoop
 │   ├── session_terminal.rs   # impl TerminalSession
-│   ├── event_loop.rs         # ShellEventLoop<P>, ShellNotifier
+│   ├── event_loop.rs         # ShellEventLoop<P>, ShellNotifier (+ event_loop_tests.rs)
 │   └── transport.rs          # LocalTransport: PtyTransport; LocalListener alias
 │
 ├── ssh/src/
@@ -644,26 +667,26 @@ crates/
 │   ├── session_terminal.rs   # impl TerminalSession
 │   ├── task.rs               # ssh_main_task: channel ↔ TerminalPump
 │   ├── transport.rs          # SshTransport: PtyTransport; SshListener alias
-│   ├── handler.rs            # host-key policy
-│   └── sftp.rs / sftp_task/  # SftpSession + tokio task
+│   ├── handler.rs            # host-key policy (known_hosts)
+│   ├── counting_stream.rs    # rx/tx byte counters
+│   └── sftp.rs / sftp_task.rs / sftp_task/   # SftpSession + tokio task + transfers
 │
-└── ui/src/views/terminal/
-    ├── mod.rs
-    ├── terminal_view.rs      # Render view (LocalTerminalView / SshTerminalView)
-    ├── terminal_panel.rs     # PanelView (dock)
-    ├── terminal_element.rs   # custom Element: layout_grid + paint
-    ├── input.rs             # EntityInputHandler (IME) + try_keystroke
-    └── theme.rs             # gpui Theme → TerminalPalette, ensure_minimum_contrast
+└── terminal-view/src/        # feature crate (GPUI)
+    ├── panel/                # TerminalPanel + PanelSpec (dock tab, Space tree)
+    ├── view/                 # LocalTerminalView (Render, IME, keys, search, scrollbar)
+    ├── element/              # TerminalElement: prepaint (layout_grid) + paint + measure
+    ├── handlers/ · layout/ · space/ · theme/ · url/ · highlight/ · completion/
+    └── settings_panel.rs     # terminal settings panel
 ```
 
 ---
 
 ## 12. Implementation order (roadmap)
 
-> **Status (full local terminal version):** steps 1–6 are complete.
-> Core 55 tests + local 17 tests (incl. E2E `echo` → snapshot) pass, `cargo build`
-> is clean with 0 warnings, `cargo run` opens a real cmd terminal (ConPTY) without panic.
-> SSH (steps 7–8) and perf tuning (step 9) remain.
+> **Status:** steps 1–7 are complete; step 8 is partial (known_hosts done, agent
+> auth and reconnect not implemented); step 9 is ongoing (see
+> [`terminal-rendering-optimization.md`](terminal-rendering-optimization.md) and
+> [`terminal-fullscreen-perf/`](terminal-fullscreen-perf/README.md)).
 
 1. ✅ **`core`**: `TerminalSession` trait, `SessionEvent`, `TerminalContent`, `TerminalPalette`,
    `key_encode`, `mouse_encode`, `osc`/`url`, `ShellKind`/`LocalShellConfig` + `resolve_shell`.
@@ -678,9 +701,9 @@ crates/
    alt-screen → disable IME, `bounds_for_range` = cursor bounds).
 6. ✅ **`local`**: `powershell`/`pwsh`/`bash`/`zsh`/`sh`/`custom`, child exit detection,
    resize, 10k-line scrollback.
-7. ⬜ **`ssh`**: `SshSession` password + key, pty-req + shell + window_change + exit.
-8. ⬜ **`ssh`**: known_hosts, agent, reconnect.
-9. ⬜ Perf tuning (batch, snapshot diff, debounce notify).
+7. ✅ **`ssh`**: `SshSession` password + key, pty-req + shell + window_change + exit.
+8. 🟡 **`ssh`**: known_hosts ✅, agent ⬜, reconnect ⬜.
+9. 🟡 Perf tuning (batch, snapshot diff, debounce notify).
 
 ---
 
@@ -689,8 +712,8 @@ crates/
 | Risk | Mitigation |
 |---|---|
 | `alacritty_terminal` Zed-internal API changes between revs | Pin rev; open the crate source at the rev when implementing to match signatures. |
-| Holding `FairMutex` in paint → jitter | Snapshot pattern (§5.2). |
-| Tokio (ssh) vs smol (gpui) runtime conflict | Hidden tokio runtime inside `ssh`, sync API, bridge via `std::mpsc` + `async_channel`. |
+| Holding `FairMutex` in paint → jitter | Snapshot pattern (§5.2): short lock to copy, paint from the copy. |
+| Tokio (ssh) vs smol (gpui) runtime conflict | Hidden shared tokio runtime inside `ssh` (2 workers), sync API, bridge via `async_channel`. |
 | Windows cmd codepage not UTF-8 | `chcp 65001` (cmd), env `LANG` (pwsh). Document requires Win10 1903+ for good ConPTY. |
 | `yes` spam → continuous redraw | Snapshot diff + debounce notify (§6.4). |
 | Channel backpressure | 256 command messages plus a 4 MiB write budget; latest-value resize, priority close, coalescible repaint hints, and reliable stateful events (§6.5). |

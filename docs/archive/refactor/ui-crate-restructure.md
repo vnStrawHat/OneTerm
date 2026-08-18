@@ -1,6 +1,8 @@
 # OneTerm workspace crate restructure — layer every crate the way Zed does
 
-> Status: **historical proposal**. The crate split described here has largely been implemented; use [`docs/agents/structure.md`](../agents/structure.md) and [`docs/agents/crate-dependency-rules.md`](../agents/crate-dependency-rules.md) for the current architecture. Audience: OneTerm maintainers / AI agents.
+> **Status (2026-08): historical — archived.** The restructure is complete; [`docs/architecture.md`](../../architecture.md) and [`docs/agents/structure.md`](../../agents/structure.md) describe the current layout.
+
+> Status: **historical proposal**. The crate split described here has largely been implemented; use [`docs/agents/structure.md`](../../agents/structure.md) and [`docs/agents/crate-dependency-rules.md`](../../agents/crate-dependency-rules.md) for the current architecture. Audience: OneTerm maintainers / AI agents.
 > This historical decision record superseded and replaced the three
 > earlier drafts (`docs/ui-crate-refactor-plan.md`,
 > `docs/refactor/ui-crate-restructure-proposal.md`,
