@@ -105,11 +105,10 @@ OneTerm/
 │   │       ├── agent_model.rs      # Folded OSC 9;7 agent card model (+ agent_model_tests.rs)
 │   │       ├── agent_registry.rs   # AgentRegistry (global Entity): fold/lifecycle/stale/summary behind the Agent Panel
 │   │       ├── completion_history.rs # Process-global CompletionHistory entity (memory completion source)
-│   │       ├── dock_persistence.rs # docks.json DockDocument schema owner (read/update transaction, quarantine)
+│   │       ├── dock_persistence.rs # docks.json path + DockDocument schema owner (read/update transaction, quarantine)
 │   │       ├── dock_util.rs        # DockArea walking + set_right_dock_open (shared shell/feature helper)
 │   │       ├── panel_names.rs      # Registered dock panel name constants (persisted contract)
-│   │       ├── form_dialog.rs      # FormDialog + labelled_field (shared dialog scaffolding)
-│   │       └── paths.rs            # docks.json path (shared shell/sftp)
+│   │       └── form_dialog.rs      # FormDialog + labelled_field (shared dialog scaffolding)
 │   │
 │   ├── update/                     # `oneterm-update` — GitHub Releases updater service + staging/install orchestration
 │   │   └── src/                    # lib.rs + config/github (ReleaseClient trait)/archive/install/version; *_tests.rs siblings

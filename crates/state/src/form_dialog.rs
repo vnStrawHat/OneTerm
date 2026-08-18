@@ -17,7 +17,7 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme as _, WindowExt as _,
-    button::{Button, ButtonVariant, ButtonVariants as _},
+    button::Button,
     dialog::{DialogButtonProps, DialogContent, DialogFooter},
     h_flex, v_flex,
 };
@@ -79,7 +79,6 @@ pub struct FormDialog {
     content: ContentFn,
     submit: SubmitFn,
     confirm_label: SharedString,
-    confirm_variant: ButtonVariant,
     confirm: Option<ConfirmFn>,
     on_cancel: Option<CancelFn>,
     on_render: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
@@ -102,7 +101,6 @@ impl FormDialog {
             content: Rc::new(content),
             submit: Rc::new(submit),
             confirm_label: SharedString::from("Save"),
-            confirm_variant: ButtonVariant::Primary,
             confirm: None,
             on_cancel: None,
             on_render: None,
@@ -112,12 +110,6 @@ impl FormDialog {
     /// Text of the confirm button (default `Save`).
     pub fn confirm_label(mut self, label: impl Into<SharedString>) -> Self {
         self.confirm_label = label.into();
-        self
-    }
-
-    /// Style of the confirm button (default primary; use danger for destructive forms).
-    pub fn confirm_variant(mut self, variant: ButtonVariant) -> Self {
-        self.confirm_variant = variant;
         self
     }
 
@@ -199,7 +191,6 @@ impl FormDialog {
                 let submit = self.submit.clone();
                 Button::new("confirm")
                     .label(self.confirm_label.clone())
-                    .with_variant(self.confirm_variant)
                     .on_click(move |_, window, cx| {
                         if submit(window, cx) {
                             window.close_dialog(cx);

@@ -15,7 +15,15 @@ use oneterm_core::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-use crate::paths::state_file;
+
+/// Path to `docks.json` — resolved at runtime via `config_dir().join(...)`:
+/// debug → `target/docks.json`, release → `~/.OneTerm/docks.json`.
+///
+/// Used by both the shell (dock-state save/load) and the SFTP feature (which
+/// stores its table column state in the same file).
+pub fn state_file() -> std::path::PathBuf {
+    oneterm_core::config_dir().join("docks.json")
+}
 
 const CURRENT_SCHEMA_VERSION: u32 = 1;
 const DOCUMENT_NAME: &str = "docks.json";

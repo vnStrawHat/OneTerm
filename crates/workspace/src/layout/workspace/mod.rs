@@ -76,7 +76,7 @@ pub(crate) fn build_named_panel(
 /// (`dock/invalid_panel.rs`).
 const INVALID_PANEL_NAME: &str = "InvalidPanel";
 
-pub use oneterm_state::paths::state_file;
+pub use oneterm_state::dock_persistence::state_file;
 
 /// Main workspace: title bar + dock area + status bar.
 pub struct OneTermWorkspace {
