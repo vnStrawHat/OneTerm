@@ -76,7 +76,7 @@ fetch_vte() {
   fi
   command -v curl >/dev/null || die "vte pristine not in Cargo cache and curl is unavailable"
   log "vte $VTE_VERSION: downloading from crates.io"
-  curl -fsSL "https://crates.io/api/v1/crates/vte/$VTE_VERSION/download" -o "$TMP/vte.crate"
+  curl -fsSL "https://static.crates.io/crates/vte/vte-$VTE_VERSION.crate" -o "$TMP/vte.crate"
   tar -xzf "$TMP/vte.crate" -C "$TMP"; cp -a "$TMP/vte-$VTE_VERSION/." "$dest/"
 }
 
@@ -86,13 +86,23 @@ fetch_ala() {
   co="$(ls -d "$CARGO_HOME"/git/checkouts/alacritty-*/"${ALA_REV:0:7}"*/alacritty_terminal 2>/dev/null | head -1 || true)"
   if [[ -n "$co" ]]; then
     log "alacritty_terminal @ ${ALA_REV:0:7}: cargo git checkout cache (byte-exact)"
-    cp -a "$co/." "$dest/"; return
+    cp -a "$co/." "$dest/"; ala_license "$co/.." "$dest"; return
   fi
   command -v git >/dev/null || die "alacritty pristine not in Cargo cache and git is unavailable"
   log "alacritty_terminal @ ${ALA_REV:0:7}: cloning $ALA_URL"
   git clone --quiet --no-checkout "$ALA_URL" "$TMP/ala"
   git -C "$TMP/ala" checkout --quiet "$ALA_REV"
   cp -a "$TMP/ala/alacritty_terminal/." "$dest/"
+  ala_license "$TMP/ala" "$dest"
+}
+
+# Upstream `alacritty_terminal/LICENSE-APACHE` is a symlink to `../LICENSE-APACHE` (a plain
+# text stub on Windows checkouts). Materialise the real licence text so the vendored tree is
+# self-contained and byte-identical across platforms.
+ala_license() {
+  local root="$1" dest="$2"
+  rm -f "$dest/LICENSE-APACHE"
+  cp "$root/LICENSE-APACHE" "$dest/LICENSE-APACHE"
 }
 
 # ── fetch_gpui <dest> : populate <dest> with the exact upstream gpui-component repo ──────
