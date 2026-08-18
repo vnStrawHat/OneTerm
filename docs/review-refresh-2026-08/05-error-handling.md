@@ -13,14 +13,14 @@ paths is the one place where a panic can cascade.
 
 ---
 
-- [ ] **[Medium] ERR-01 — 61 unjustified `let _ =` in non-test backend code.**
+- [x] **[Medium] ERR-01 — 61 unjustified `let _ =` in non-test backend code.**
   Examples: `crates/ssh/src/task.rs:126,284`; `sftp_task.rs:64,87,92,104,112,119,128,255`;
   `transfer/download.rs:93,113,129,133`; `transfer/staging.rs:64,70,80,82,102,108,115,122,124`;
   `crates/local-shell/src/event_loop.rs:196,200,207,211,269,293,342`; `local-shell/src/session.rs:168,170`.
   *Fix:* a `report_best_effort(op, result)` helper (like `report_generated_input`) that logs the operation
   name at `debug`/`warn`, per policy.
 
-- [ ] **[Medium] ERR-02 — `std::sync::Mutex::lock().unwrap()` on every state/counter access in network/PTY paths.**
+- [x] **[Medium] ERR-02 — `std::sync::Mutex::lock().unwrap()` on every state/counter access in network/PTY paths.**
   `crates/ssh/src/state.rs:80`, `counting_stream.rs:49,67`, `task.rs:128,152,162,…`, both listeners. A panic
   inside a Term callback poisons the mutex and cascades into UI-thread panics.
   *Fix:* `parking_lot::Mutex` (already in the dependency graph via gpui) or
@@ -49,29 +49,29 @@ paths is the one place where a panic can cascade.
   `:133` (`let _ = strip_cols`), `cell/batch.rs:211` (`let _ = &mut style`). *Fix:* comment or handle;
   delete the no-op ones.
 
-- [ ] **[Low] ERR-07 — Drag-and-drop with no connection and file-picker errors are log-only**
+- [x] **[Low] ERR-07 — Drag-and-drop with no connection and file-picker errors are log-only**
   (`sftp-ui/src/render.rs:384-386`, `transfer.rs:253-260,342-349`). *Fix:* notification.
 
-- [ ] **[Low] ERR-08 — `render_file_list` hides the table behind a full-panel `Error:` label** after a failed
+- [x] **[Low] ERR-08 — `render_file_list` hides the table behind a full-panel `Error:` label** after a failed
   listing (`sftp-ui/src/render.rs:351-361`) — the user loses the previous list and toolbar. *Fix:* banner
   over the stale table.
 
-- [ ] **[Low] ERR-09 — `add_ssh_terminal_to_dock` swallows the dock update error with `.ok()`**
+- [x] **[Low] ERR-09 — `add_ssh_terminal_to_dock` swallows the dock update error with `.ok()`**
   (`session-ui/src/common.rs:178-182`) — the terminal silently never appears. *Fix:* notify.
 
-- [ ] **[Low] ERR-10 — `SwitchTheme` with unknown name is ignored silently** (`theme/src/theme.rs:93-97`).
+- [x] **[Low] ERR-10 — `SwitchTheme` with unknown name is ignored silently** (`theme/src/theme.rs:93-97`).
   *Fix:* `log::warn!` (or notify) with the name.
 
-- [ ] **[Low] ERR-11 — Info-level log noise on hot paths:** `workspace/.../mod.rs:341` (every `LayoutChanged`),
+- [x] **[Low] ERR-11 — Info-level log noise on hot paths:** `workspace/.../mod.rs:341` (every `LayoutChanged`),
   `:358,:378`, `persistence.rs:93` (every debounce save). *Fix:* `debug!`.
 
 - [x] **[Low] ERR-12 — `manager.rs:281-283` swallows `remove_dir_all` failure** on staging cleanup. *Fix:*
   `warn` with path.
 
-- [ ] **[Low] ERR-13 — `Events::with_capacity(1024.try_into().unwrap())`** (`local-shell/src/event_loop.rs:230`).
+- [x] **[Low] ERR-13 — `Events::with_capacity(1024.try_into().unwrap())`** (`local-shell/src/event_loop.rs:230`).
   *Fix:* `NonZeroUsize::new(1024)` const or `Events::new()`.
 
 - [ ] **[Low] ERR-14 — Non-NotFound read errors select defaults, later overwritten** — see CORR-61.
 
-- [ ] **[Low] ERR-15 — Temp-file tests clean up with `let _ = remove_file` after assertions**
+- [x] **[Low] ERR-15 — Temp-file tests clean up with `let _ = remove_file` after assertions**
   (`ssh/src/handler_tests.rs:41,60,80`) — leak on failure. *Fix:* RAII guard.

@@ -50,16 +50,16 @@ into the updater.
   gpui@1d217ee vs russh 0.61; nothing tracks it. *Fix:* `cargo deny check bans` (`multiple-versions = "warn"`);
   bump own `sha2` → 0.11, `windows-sys` → 0.61.
 
-- [ ] **[Low] BUILD-08 — Release profile comment is false.** `[profile.release]` l.150-157: `debug = 0` +
+- [x] **[Low] BUILD-08 — Release profile comment is false.** `[profile.release]` l.150-157: `debug = 0` +
   `strip = "symbols"` with "split debug info remains available" — no PDB/dSYM is generated, so release crash
   dumps cannot be symbolicated. *Fix:* `debug = "line-tables-only"` + `split-debuginfo = "packed"` and upload
   `.pdb`/`.dSYM` as a release artifact; or fix the comment.
 
-- [ ] **[Low] BUILD-09 — Seven first-party crates forced to `opt-level = 3` in dev** (`[profile.dev.package]`
+- [x] **[Low] BUILD-09 — Seven first-party crates forced to `opt-level = 3` in dev** (`[profile.dev.package]`
   l.116-142); `profile.test` inherits it. *Fix:* named `[profile.fast-dev]` (`inherits = "dev"`) or override
   only `alacritty_terminal`.
 
-- [ ] **[Low] BUILD-10 — `[patch]` indirection for a fully vendored crate.** `alacritty_terminal = { git = … }`
+- [x] **[Low] BUILD-10 — `[patch]` indirection for a fully vendored crate.** `alacritty_terminal = { git = … }`
   + `[patch."https://github.com/zed-industries/alacritty"]` (l.174) still clones upstream on a cold cache.
   *Fix:* `alacritty_terminal = { path = "vendor/alacritty_terminal" }` directly, documenting the base rev.
 
@@ -80,21 +80,21 @@ into the updater.
   back to `"0.0.0"` where the others panic). *Fix:* with BUILD-02, delete the three copies and use
   `env!("CARGO_PKG_VERSION")`; keep only `app/build.rs` (resources) and `theme/build.rs`.
 
-- [ ] **[Low] BUILD-14 — ConPTY binaries copied for any Windows target; no third-party notice.**
+- [x] **[Low] BUILD-14 — ConPTY binaries copied for any Windows target; no third-party notice.**
   `crates/app/build.rs:85-97` copies x64 `conpty.dll`/`OpenConsole.exe` even for `aarch64-pc-windows-msvc`
   (advertised in README); the redistributed Windows Terminal binaries have no version, source URL, hash or
   MIT notice. *Fix:* gate on `CARGO_CFG_TARGET_ARCH == "x86_64"`; add `THIRD-PARTY-NOTICES.md`.
 
-- [ ] **[Low] BUILD-15 — Release scripts copy developer state into `dist/`.** `scripts/build-release.sh:71-74`,
+- [x] **[Low] BUILD-15 — Release scripts copy developer state into `dist/`.** `scripts/build-release.sh:71-74`,
   `build-release.ps1:58-63` copy `terminal.json`/`docks.json` from the repo root if present (git-ignored
   personal files). *Fix:* remove.
 
-- [ ] **[Low] BUILD-16 — Scripts not wired into CI / duplicated.** `completion-catalog.py validate`,
+- [x] **[Low] BUILD-16 — Scripts not wired into CI / duplicated.** `completion-catalog.py validate`,
   `test_highlight.sh` not run; `.ps1`/`.sh` demo pairs are 300/240 lines of duplicated logic; no
   `scripts/README.md`. *Fix:* add `completion-catalog.py validate` to the dependency-graph job; document
   manual-only scripts.
 
-- [ ] **[Low] BUILD-17 — `check-doc-paths.py` only validates `docs/architecture.md`.**
+- [x] **[Low] BUILD-17 — `check-doc-paths.py` only validates `docs/architecture.md`.**
   `docs/agents/structure.md` (full tree, `update/` listed twice at l.94/l.131, refers to
   `docs/refactor/ui-crate-restructure.md` as "authoritative") is unchecked. *Fix:* extend to `docs/agents/*.md`
   and `README.md`.
@@ -127,7 +127,7 @@ into the updater.
   once merged, delete `vendor/gpui-component`, `check-ui-fork.py`, `ui-fork-baseline.json`; until then,
   correct the rationale.
 
-- [ ] **[Low] BUILD-22 — `.gitattributes` covers only `vendor/gpui-component/**`** (`-whitespace`); no
+- [x] **[Low] BUILD-22 — `.gitattributes` covers only `vendor/gpui-component/**`** (`-whitespace`); no
   `eol=lf` for any vendor tree, so Windows `autocrlf` checkouts differ byte-wise from pristine. *Fix:*
   `vendor/** -whitespace text eol=lf`.
 
@@ -144,7 +144,7 @@ into the updater.
   `on.pull_request.paths` (l.6-27) omit `.github/workflows/**` (and `LICENSE`, `.gitattributes`).
   *Fix:* add `".github/**"` or drop path filtering.
 
-- [ ] **[Medium] BUILD-24 — Release dispatch push can fail after the whole matrix built.**
+- [x] **[Medium] BUILD-24 — Release dispatch push can fail after the whole matrix built.**
   `release.yml` `release` job (l.343-360): checks out a SHA, commits `VERSION`, `git push origin HEAD:refs/heads/main`;
   if `main` advanced during the ~30-40 min build the push is rejected. `prepare` requests `contents: write`
   + `persist-credentials: true` it never uses. *Fix:* `git pull --rebase` before pushing, or make the workflow
@@ -155,15 +155,15 @@ into the updater.
   `zlog ← ztracing ← sum_tree ← gpui`) being dead-stripped — nothing re-verifies. *Fix:* `cargo-deny` job with
   `deny.toml` (`[licenses]`, `[bans]`), plus the two Python checks.
 
-- [ ] **[Low] BUILD-26 — Release build at the virtual-workspace root** (`release.yml` l.196
+- [x] **[Low] BUILD-26 — Release build at the virtual-workspace root** (`release.yml` l.196
   `cargo build --release --no-default-features --features release-bin`) builds every member with default
   features off. *Fix:* `-p oneterm-app --no-default-features --features release-bin`.
 
-- [ ] **[Low] BUILD-27 — Staging/packaging logic triplicated** (workflow l.199-235, `build-release.sh`,
+- [x] **[Low] BUILD-27 — Staging/packaging logic triplicated** (workflow l.199-235, `build-release.sh`,
   `build-release.ps1`); dist names differ (`oneterm-<ver>-<triple>` in CI vs `oneterm-<triple>` locally,
   README documents the local one); macOS bundle unsigned; no `SHA256SUMS`. *Fix:* workflow calls the scripts;
   unify name; publish `SHA256SUMS`; `codesign --force -s -` the .app.
 
-- [ ] **[Low] BUILD-28 — No `concurrency:` group; redundant `cargo build --workspace` after
+- [x] **[Low] BUILD-28 — No `concurrency:` group; redundant `cargo build --workspace` after
   `clippy --all-targets`.** *Fix:* `concurrency: {group: ci-${{ github.ref }}, cancel-in-progress: true}`;
   drop the build step.

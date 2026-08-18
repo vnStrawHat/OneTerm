@@ -73,7 +73,7 @@ drifted from its source of truth.
   even rewrites `this.cwd` from the stale result's first entry, `:64-71`). Same for `goto_path`
   (`panel.rs:548-576`). *Fix:* `load_generation: u64` + `active_key` captured by the task; discard mismatches.
 
-- [ ] **[Medium] CORR-10 — `close()`/`Drop` join the PTY owner thread on the UI thread.**
+- [x] **[Medium] CORR-10 — `close()`/`Drop` join the PTY owner thread on the UI thread.**
   `crates/local-shell/src/session.rs:149-172`, `session_terminal.rs:234-238`. Blocks the UI for the loop's
   current iteration and can deadlock with CORR-01. *Fix:* send `Shutdown` and detach; join on a background
   thread or with a bounded timeout.
@@ -82,7 +82,7 @@ drifted from its source of truth.
   `crates/ssh/src/task.rs:282-290` breaks silently while the closing-flag path (`124-133`) forwards `Closed`;
   which one runs is a race. *Fix:* single teardown block after the loop.
 
-- [ ] **[Medium] CORR-13 — Metadata ops block the SFTP command loop.** `crates/ssh/src/sftp_task.rs:84-129`
+- [x] **[Medium] CORR-13 — Metadata ops block the SFTP command loop.** `crates/ssh/src/sftp_task.rs:84-129`
   awaits `ReadDir/Stat/Rename/Remove/Mkdir` inline, so a slow `read_dir` (up to the 10 s request timeout)
   delays `Cancel`/`Close`. *Fix:* spawn every command into the `JoinSet` (optionally behind a small semaphore).
 
@@ -102,17 +102,17 @@ drifted from its source of truth.
   only in `load_layout` at startup. *Fix:* quarantine and continue from `DockDocument::default()` with a
   recovery log.
 
-- [ ] **[Low] CORR-17 — Blocking I/O on tokio workers:** `check_known_hosts`/`learn_known_hosts` inside async
+- [x] **[Low] CORR-17 — Blocking I/O on tokio workers:** `check_known_hosts`/`learn_known_hosts` inside async
   `check_server_key` (`crates/ssh/src/handler.rs:265-270`), `load_secret_key` (`session.rs:240-243`).
   *Fix:* `spawn_blocking`.
 
-- [ ] **[Low] CORR-18 — Polling instead of notification:** `wait_for_cancellation` sleeps 25 ms
+- [x] **[Low] CORR-18 — Polling instead of notification:** `wait_for_cancellation` sleeps 25 ms
   (`ssh/src/session.rs:102-106`); `send_local_upload_entry` spins with `thread::sleep(1ms)`
   (`sftp_task/transfer/upload.rs:263-277`); event loop uses a 50 ms poll timeout despite `poller.notify()`
   (`event_loop.rs:253-255`), waking every idle tab 20×/s. *Fix:* `Notify`/`CancellationToken`;
   `send_blocking` in the walker; `None` timeout in the poller.
 
-- [ ] **[Low] CORR-19 — `closing` flag uses `Relaxed`** (`ssh/src/listener.rs:198,237`). *Fix:* Release/Acquire.
+- [x] **[Low] CORR-19 — `closing` flag uses `Relaxed`** (`ssh/src/listener.rs:198,237`). *Fix:* Release/Acquire.
 
 - [x] **[Low] CORR-20 — `ChannelMsg::ExitSignal` unhandled** (`ssh/src/task.rs:264-266`). *Fix:* map to `Exited(None)`.
 
@@ -148,7 +148,7 @@ drifted from its source of truth.
   `&s[0..2]`; reachable at startup from a user-edited `terminal.json` (`apply.rs:34,86-99`).
   *Fix:* `if !s.is_ascii() || s.len() != 6 { return None }` or `s.get(0..2)?`.
 
-- [ ] **[Medium] CORR-24 — Contrast cache key collides.** `crates/terminal-view/src/theme/contrast.rs:214-221`
+- [x] **[Medium] CORR-24 — Contrast cache key collides.** `crates/terminal-view/src/theme/contrast.rs:214-221`
   packs four 32-bit floats into a `u64` at 16-bit stride — bits overlap, distinct (fg,bg) pairs can collide
   and return the wrong adjusted colour; the thread-local map (`:205-212`) is unbounded.
   *Fix:* key on `([u32;4],[u32;4],u32)`; clear when `len() > 4096`.
@@ -181,7 +181,7 @@ drifted from its source of truth.
   `PasteMode::Plain` multi-line text is written verbatim; raw-mode apps and cmd/ConPTY expect `\r`
   (alacritty rewrites). *Fix:* rewrite `\r\n`/`\n` → `\r` in Plain mode + test.
 
-- [ ] **[Medium] CORR-30 — Index-based SFTP selection survives re-sort.**
+- [x] **[Medium] CORR-30 — Index-based SFTP selection survives re-sort.**
   `crates/sftp-ui/src/table_delegate.rs:328-353` `perform_sort` resorts `entries` but neither remaps nor
   clears `SftpPanel::selected`; toolbar Delete/Rename then operate on whatever now sits at that index.
   *Fix:* clear or remap by path in `perform_sort`.
@@ -195,28 +195,28 @@ drifted from its source of truth.
   `quick_connect_dialog.rs:224`, `session_dialog.rs:190` all `parse().unwrap_or(22)`; typing `2222x`
   silently connects to port 22. *Fix:* `parse_port(&str) -> Result<u16, String>` + notification.
 
-- [ ] **[Medium] CORR-33 — SSH sessions ignore the user's scrollback setting.** `session-ui/src/common.rs:229`
+- [x] **[Medium] CORR-33 — SSH sessions ignore the user's scrollback setting.** `session-ui/src/common.rs:229`
   passes `10_000` to `SessionFactory::connect_ssh` while local shells use `TerminalSettings.scrollback_history`
   (`terminal-view/src/panel/ops.rs:101`). *Fix:* read the setting (add `oneterm-settings` dep, allowed L1).
 
-- [ ] **[Medium] CORR-34 — Delete session has no confirmation** (`session-ui/src/panel.rs:146-165`), reachable
+- [x] **[Medium] CORR-34 — Delete session has no confirmation** (`session-ui/src/panel.rs:146-165`), reachable
   from a rebindable key. *Fix:* confirm dialog (sftp delete already has one).
 
-- [ ] **[Medium] CORR-35 — Key-binding row descriptions are applied to the group, not the row.**
+- [x] **[Medium] CORR-35 — Key-binding row descriptions are applied to the group, not the row.**
   `crates/settings-ui/src/key_bindings/key_bindings_ui.rs:59-64`: `.item(...).description(...)` calls
   `SettingGroup::description`, so each group shows only the last action's "Default: …". *Fix:* move
   `.description(..)` onto the `SettingItem`.
 
-- [ ] **[Medium] CORR-36 — Unbounded `Box::leak` on every render.** `key_bindings_ui.rs:74-82` leaks a `String`
+- [x] **[Medium] CORR-36 — Unbounded `Box::leak` on every render.** `key_bindings_ui.rs:74-82` leaks a `String`
   per action each time `page()` is built; `SettingsPanel::pages` rebuilds every render (`panel.rs:54-62`).
   `SettingItem::description` takes `impl Into<Text>` (vendored `setting/item.rs:142`), so the `&'static str`
   justification is stale. *Fix:* `SharedString`.
 
-- [ ] **[Medium] CORR-37 — Cached update candidate ignores channel.** `crates/update/src/manager.rs:229-242`
+- [x] **[Medium] CORR-37 — Cached update candidate ignores channel.** `crates/update/src/manager.rs:229-242`
   restores `cached_candidate` on `304` without checking `prerelease` vs current `channel`. *Fix:* store
   `prerelease` in `CachedUpdateCandidate` and filter.
 
-- [ ] **[Medium] CORR-38 — Windows updater helper writes the backup to the *parent* of the install dir**
+- [x] **[Medium] CORR-38 — Windows updater helper writes the backup to the *parent* of the install dir**
   (`crates/update/src/install.rs:61-64` → `%INSTALL%\..\.oneterm-backup-*`); `is_writable_dir` (`:245`) only
   probes the install dir; if the parent is not writable the script exits 1 (`:320-322`) **after** the app
   already quit (`settings-ui/src/updates/install.rs:134`). Backups accumulate forever. *Fix:* backup inside
@@ -226,21 +226,21 @@ drifted from its source of truth.
   (`install.rs:109`) → activates the existing instance, then `cx.quit()` closes it. *Fix:* `open -n` or spawn
   the binary directly.
 
-- [ ] **[Medium] CORR-40 — Update download total timeout is 60 s** (`crates/update/src/github.rs`
+- [x] **[Medium] CORR-40 — Update download total timeout is 60 s** (`crates/update/src/github.rs`
   `DOWNLOAD_TOTAL_TIMEOUT` via `RequestBuilder::timeout`, which spans the whole body in reqwest-blocking).
   A ~50 MB asset on a slow link fails deterministically. *Fix:* connect/read-idle timeout, not total.
 
-- [ ] **[Medium] CORR-41 — Agent "Done" chip counts cards the filter can never show.**
+- [x] **[Medium] CORR-41 — Agent "Done" chip counts cards the filter can never show.**
   `crates/agent-ui/src/view.rs:183-195` `passes_filter` excludes `Lifecycle::Ended`, while `state == done`
   sets `Ended` (`docs/agent-panel-display.md:127`); the Done chip (`:290-296`) is non-zero while the Done
   filter is always empty. *Fix:* show ended cards under Done/All (dimmed) or count only non-ended.
 
-- [ ] **[Medium] CORR-42 — Search bar `refresh_search` runs a full-scrollback search on every Output event**
+- [x] **[Medium] CORR-42 — Search bar `refresh_search` runs a full-scrollback search on every Output event**
   (`terminal-view/src/view/local_view.rs:207` → `search.rs:144-155`); `run_search`'s scroll-to-match is
   immediately undone by the unconditional `scroll_to_bottom()` at `:199`. *Fix:* mark dirty, refresh once per
   frame in `render`; do not force-scroll while `display_offset > 0` (see PERF/UX).
 
-- [ ] **[Medium] CORR-43 — Block cursor occludes the glyph under it.** `terminal-view/src/element/paint.rs:334-338`
+- [x] **[Medium] CORR-43 — Block cursor occludes the glyph under it.** `terminal-view/src/element/paint.rs:334-338`
   paints a solid quad after the text runs; `HollowBlock` (`:335`) is filled; unfocused windows also draw a
   filled block (`:315`). *Fix:* paint the cursor quad before the cell's text run and re-paint that run with
   inverted fg (or `paint_quad` with border for Hollow/unfocused).
@@ -248,31 +248,31 @@ drifted from its source of truth.
 - [ ] **[Medium] CORR-44 — Host key of a *different algorithm* is reported as "unknown host" rather than
   "changed".** See SEC-05 (security file) — listed there.
 
-- [ ] **[Low] CORR-45 — IPv6 host without port yields spurious `NonDefaultPort`.**
+- [x] **[Low] CORR-45 — IPv6 host without port yields spurious `NonDefaultPort`.**
   `crates/terminal/src/url_policy.rs:196-212`: `https://[::1]/` → brackets stripped → `rfind(':')` → port `1`.
   *Fix:* only look for a port after `]` when the host starts with `[`.
 
-- [ ] **[Low] CORR-46 — OSC 7 cwd parsing has no percent-decoding and mangles `file:///C:/…`.**
+- [x] **[Low] CORR-46 — OSC 7 cwd parsing has no percent-decoding and mangles `file:///C:/…`.**
   `crates/terminal/src/osc.rs:179-187`. *Fix:* percent-decode; strip leading `/` when the remainder matches
   `[A-Za-z]:`.
 
-- [ ] **[Low] CORR-47 — Quarantine name collides across runs.** `crates/core/src/persistence.rs:325-331`
+- [x] **[Low] CORR-47 — Quarantine name collides across runs.** `crates/core/src/persistence.rs:325-331`
   `.name.invalid-{seq}` uses a process-local counter and `fs::rename` overwrites. *Fix:* include pid +
   timestamp or use no-replace semantics.
 
-- [ ] **[Low] CORR-48 — Prompt-fallback regexes are far too permissive.** `crates/highlight/src/profile.rs:241,258`,
+- [x] **[Low] CORR-48 — Prompt-fallback regexes are far too permissive.** `crates/highlight/src/profile.rs:241,258`,
   `scanner/prompt.rs:103`: `^[^\s]*[\$#%]` classifies `100%`, `#include`, `$HOME=…` as prompt lines (then
   "Command" mode suppresses keyword/structural highlighting); second alternation branch redundant.
   *Fix:* require the sign followed by EOL/space and preceded by a plausible `user@host:path`; negative tests.
 
-- [ ] **[Low] CORR-49 — `-p` in the secret-flag vocabulary over-redacts** (`crates/completion/src/redact/detect.rs:175`):
+- [x] **[Low] CORR-49 — `-p` in the secret-flag vocabulary over-redacts** (`crates/completion/src/redact/detect.rs:175`):
   `mkdir -p dir`, `docker run -p 8080:80`, `ssh -p 22` lose the next token; attached `-pSECRET` is kept
   (`redact.rs:64`). *Fix:* per-command `-p` handling; attached-form detection.
 
-- [ ] **[Low] CORR-50 — `select_next` underflow hazard.** `terminal-view/src/completion/controller.rs:258`
+- [x] **[Low] CORR-50 — `select_next` underflow hazard.** `terminal-view/src/completion/controller.rs:258`
   `len() - 1` panics if `selected.is_some()` while `suggestions` is empty. *Fix:* `saturating_sub(1)`.
 
-- [ ] **[Low] CORR-51 — `layout_row` skips a space cell after a zero-width cell before the blank check**
+- [x] **[Low] CORR-51 — `layout_row` skips a space cell after a zero-width cell before the blank check**
   (`terminal-view/src/layout/row.rs:43-46`), losing a non-default bg rect; intent undocumented.
   *Fix:* move after `is_blank`, document.
 
@@ -280,10 +280,10 @@ drifted from its source of truth.
   derives the absolute cwd from `entries.first()`; for an empty root the panel keeps `"."`. *Fix:* add
   `realpath` to `SftpBackend` (or `stat(".").path`).
 
-- [ ] **[Low] CORR-53 — Rename/New-Folder accept `/` and `..` in the name** (`sftp-ui/src/actions.rs:96-107,327-339`).
+- [x] **[Low] CORR-53 — Rename/New-Folder accept `/` and `..` in the name** (`sftp-ui/src/actions.rs:96-107,327-339`).
   *Fix:* validate `!name.contains('/') && name != ".." && name != "."`.
 
-- [ ] **[Low] CORR-54 — Quick Connect saves the session before the connection is attempted**
+- [x] **[Low] CORR-54 — Quick Connect saves the session before the connection is attempted**
   (`session-ui/src/quick_connect_dialog.rs:245-262`). *Fix:* save on success.
 
 - [ ] **[Low] CORR-55 — Rebinding has no conflict detection** (`settings-ui/src/key_bindings/key_bindings_ui.rs:200-223`).
@@ -295,10 +295,10 @@ drifted from its source of truth.
 
 - [ ] **[Low] CORR-57 — Multiple Settings windows can be opened** (`settings-ui/src/window.rs:33-75`). *Fix:* dedupe.
 
-- [ ] **[Low] CORR-58 — `check_interval_hours` overflow** (`update/src/config.rs` ~L120,
+- [x] **[Low] CORR-58 — `check_interval_hours` overflow** (`update/src/config.rs` ~L120,
   `Duration::hours(... as i64)`). *Fix:* clamp.
 
-- [ ] **[Low] CORR-59 — Windows updater script `timeout /T 1` fails when stdin is not a console**
+- [x] **[Low] CORR-59 — Windows updater script `timeout /T 1` fails when stdin is not a console**
   (helper spawned with `CREATE_NO_WINDOW`) → busy spin. *Fix:* `ping -n 2 127.0.0.1 >NUL` or `waitfor /t 1`.
 
 - [ ] **[Low] CORR-60 — ANSI palette silently shifts on one bad entry.** `settings/src/terminal_settings/apply.rs:95-99`
@@ -309,19 +309,19 @@ drifted from its source of truth.
   `settings/src/ui_config.rs:129-132`, `terminal_config/document.rs:169-172`: e.g. `PermissionDenied` →
   defaults; next persist overwrites a possibly-valid file. *Fix:* "load failed" flag → refuse to persist.
 
-- [ ] **[Low] CORR-62 — Whole crash-report load aborts on a single I/O error.**
+- [x] **[Low] CORR-62 — Whole crash-report load aborts on a single I/O error.**
   `app/src/crash_report.rs:195-197,202` (`delete_report(old_path)?`, `load_and_sanitize_report(&path)?`).
   *Fix:* log and continue per file.
 
-- [ ] **[Low] CORR-63 — `expect` inside async window setup** (`app/src/window.rs:77`). *Fix:* `?` with context.
+- [x] **[Low] CORR-63 — `expect` inside async window setup** (`app/src/window.rs:77`). *Fix:* `?` with context.
 
-- [ ] **[Low] CORR-64 — `build_named_panel` fakes `PanelInfo::tabs(0)` for a leaf panel** (`workspace/.../mod.rs:89-93`).
+- [x] **[Low] CORR-64 — `build_named_panel` fakes `PanelInfo::tabs(0)` for a leaf panel** (`workspace/.../mod.rs:89-93`).
   *Fix:* `PanelInfo::panel(Value::Null)`.
 
-- [ ] **[Low] CORR-65 — `open_search` subscription is `.detach()`ed** (`terminal-view/src/search.rs:68-92`)
+- [x] **[Low] CORR-65 — `open_search` subscription is `.detach()`ed** (`terminal-view/src/search.rs:68-92`)
   rather than stored; correct only by accident. *Fix:* store the `Subscription`.
 
-- [ ] **[Low] CORR-66 — Two stampers for `line_times`.** `render/view_render.rs:128-133` claims "single source"
+- [x] **[Low] CORR-66 — Two stampers for `line_times`.** `render/view_render.rs:128-133` claims "single source"
   but the Output handler also calls `update_line_times` (`local_view.rs:203`). *Fix:* keep the Output stamp.
 
 - [ ] **[Low] CORR-67 — `SshSessionStore` follow-cwd poll runs `purge_closed()` and ticks every 500 ms even
@@ -333,5 +333,5 @@ drifted from its source of truth.
 - [ ] **[Low] CORR-69 — `ManualInstall` outcome only visible in About status text**
   (`settings-ui/src/updates/notify.rs:45`). *Fix:* Info notification with the package path.
 
-- [ ] **[Low] CORR-70 — Ended agent cards are never pruned** (`AgentRegistry::clear_ended` at
+- [x] **[Low] CORR-70 — Ended agent cards are never pruned** (`AgentRegistry::clear_ended` at
   `state/src/agent_registry.rs:231` has no UI caller). *Fix:* "Clear ended" affordance or auto-clear.

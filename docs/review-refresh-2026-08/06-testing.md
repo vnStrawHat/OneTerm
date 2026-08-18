@@ -26,11 +26,11 @@ crates are effectively untested (`sftp-ui` 0.8/KLOC, `workspace` 0.5, `settings-
   *Fix:* make `run` generic over `EventedReadWrite` and drive it with a pipe/fake; keep one real-shell smoke
   test behind `#[ignore]`.
 
-- [ ] **[Medium] TEST-03 — `handlers/keyboard.rs` decision tree is inside a closure and untestable.**
+- [x] **[Medium] TEST-03 — `handlers/keyboard.rs` decision tree is inside a closure and untestable.**
   *Fix:* extract `fn classify_key(&Keystroke, search_focused, completion_visible, alt_screen) -> KeyAction`
   and test it; same for the `handle_mouse_down` URL/selection branch.
 
-- [ ] **[Medium] TEST-04 — Update flow untestable without network.** *Fix:* mock `GitHubClient` behind a trait
+- [x] **[Medium] TEST-04 — Update flow untestable without network.** *Fix:* mock `GitHubClient` behind a trait
   so `download_and_stage` and `verify_asset_digest` wiring can be tested.
 
 - [ ] **[Medium] TEST-05 — Feature UI crates have almost no tests** (`sftp-ui` 3, `workspace` 1, `settings-ui` 7,
@@ -61,7 +61,7 @@ crates are effectively untested (`sftp-ui` 0.8/KLOC, `workspace` 0.5, `settings-
 - [x] **[Medium] TEST-14 — `AgentRegistry` fold/lifecycle is essentially untested**
   (`state/src/agent_registry.rs:156-274`: `apply`, `set_lifecycle`, `remove_terminal`, `clear_ended`,
   `refresh_stale`, `summary`).
-- [ ] **[Medium] TEST-15 — Updater: no tests for real archives** (zip-slip entry, tar with `..`/symlink, nested
+- [x] **[Medium] TEST-15 — Updater: no tests for real archives** (zip-slip entry, tar with `..`/symlink, nested
   `dist/` layout — only `reject_unsafe_path` unit tests), `should_auto_check` interval math,
   `select_candidate` channel/prerelease/`skipped_version` filtering, cached-candidate-vs-channel.
 
@@ -77,12 +77,12 @@ crates are effectively untested (`sftp-ui` 0.8/KLOC, `workspace` 0.5, `settings-
 - [x] **[Medium] TEST-17 — sftp-ui pure helpers:** `format_size`, `format_permissions` (setuid/sticky),
   `format_owner`, `sort_entries` (folder-first + desc), `SftpTableDelegate::{apply_persisted_state,
   apply_widths, toggle_visibility, to_persisted_state}`, transfer state transitions (after ARCH-32).
-- [ ] **[Medium] TEST-18 — settings-ui:** `keystroke_to_string`/`is_modifier_only`, `save_key_bindings` diffing,
+- [x] **[Medium] TEST-18 — settings-ui:** `keystroke_to_string`/`is_modifier_only`, `save_key_bindings` diffing,
   `apply_check_result` for `Available`/`Disabled`/`Err`, `UpdateUiState::{shows_install_button, can_install_update}`,
   `percent_encode`; the persist-queue test only exercises the mutex struct, not `drain_update_config_persist_queue`.
 - [x] **[Low] TEST-19 — session-ui:** `parse_user_host_port` edge cases (IPv6, empty user, invalid port),
   `build_tree_items` grouping/sorting/filter, `SshSessionStore::rename_group`, quick-connect field precedence.
-- [ ] **[Low] TEST-20 — workspace:** `center_has_no_visible_panel`, `switch_right_dock_mode`, `format_speed`,
+- [x] **[Low] TEST-20 — workspace:** `center_has_no_visible_panel`, `switch_right_dock_mode`, `format_speed`,
   `format_memory`, load→reset_center_only→save flow.
 - [x] **[Low] TEST-21 — theme:** all `EMBEDDED_THEME_FILES` parse and "Zed One Dark"/"Zed One Light" exist
   (`theme.rs:28-61,116-117`).
@@ -95,7 +95,7 @@ crates are effectively untested (`sftp-ui` 0.8/KLOC, `workspace` 0.5, `settings-
 - [x] **[Medium] TEST-23 — Test enshrines the wrong wire format:** `crates/terminal/src/mouse_encode.rs:294-313`
   expects `char::from_u32(233)` (2 UTF-8 bytes) for X11 col 200 (CORR-25). Rewrite against `Vec<u8>` and add
   a `UTF8_MOUSE` case.
-- [ ] **[Low] TEST-24 — Test asserts nothing:** `crates/terminal/src/content.rs:321-335`
+- [x] **[Low] TEST-24 — Test asserts nothing:** `crates/terminal/src/content.rs:321-335`
   `damage_partial_on_unchanged` accepts either enum variant. Assert `Partial(v)` with `v ⊆ {cursor line}` or
   delete.
 - [x] **[Low] TEST-25 — The one gpui test in sftp-ui** (`transfer.rs:501-537`) only checks that a stale download

@@ -15,7 +15,7 @@ authoritative.
 
 ## A. Dead code
 
-- [ ] **[Medium] HYG-01 — Dead action handlers and a dead persistence chain.** `AddSession`, `AddSftpBrowser`,
+- [x] **[Medium] HYG-01 — Dead action handlers and a dead persistence chain.** `AddSession`, `AddSftpBrowser`,
   `ToggleDockToggleButton` (`crates/workspace/src/layout/workspace/actions.rs:134-153,227-238`) are handled
   but dispatched nowhere; the entire `toggle_button_visible` chain — `Arc<AtomicBool>` (`mod.rs:121,186-206`),
   `AppState.toggle_button_visible` (`app_state.rs:41`), docks.json field (`dock_persistence.rs:32`),
@@ -24,7 +24,7 @@ authoritative.
   (`app_menus.rs:24-28,112-120`) is a no-op ("rust-i18n is not wired up") and contains a non-English UI label
   (`:117`); `theme.rs:197` `let _ = cx.theme();`. *Fix:* delete, or wire deliberately.
 
-- [ ] **[Medium] HYG-02 — Dead module + dependency in `terminal`.** `crates/terminal/src/url.rs` (`link_ranges`,
+- [x] **[Medium] HYG-02 — Dead module + dependency in `terminal`.** `crates/terminal/src/url.rs` (`link_ranges`,
   `url_at`) has no callers outside its own tests; `terminal-view/src/url/detect.rs` reimplements detection.
   *Fix:* remove the module and the `linkify` dependency, or make the UI use it. Also dead:
   `Suggestion::remainder` (`completion/src/engine.rs:70`), `ExternalTargetPolicy::validate_with_display`
@@ -47,10 +47,10 @@ authoritative.
   `allow_fuzzy_accept` branch (`completion/controller.rs:290-296`) unreachable and latent-buggy (writes the whole
   suggestion without erasing typed text).
 
-- [ ] **[Low] HYG-05 — agent-ui dead branch:** `view.rs:460-463 group_badges` handles `Ended` but `visible()`
+- [x] **[Low] HYG-05 — agent-ui dead branch:** `view.rs:460-463 group_badges` handles `Ended` but `visible()`
   already filters them out.
 
-- [ ] **[Low] HYG-06 — Redundant/inconsistent code in engines:** `core/src/config/shell.rs:209-210,226-227`
+- [x] **[Low] HYG-06 — Redundant/inconsistent code in engines:** `core/src/config/shell.rs:209-210,226-227`
   (second `find_in_path("….exe")` redundant); `highlight/src/scanner/command.rs:12-14` pass-through wrapper;
   `highlight/src/scanner/prompt.rs:103` `.unwrap()` while sibling regexes use `.expect(...)`;
   `terminal/src/palette.rs:104-119` matches on magic discriminants `256/257/258/259..=266` instead of
@@ -60,23 +60,23 @@ authoritative.
   `GenerateConsoleCtrlEvent`, not implemented); `SftpSession.alive: Arc<Mutex<bool>>` (`sftp.rs:111`) →
   `AtomicBool`; `zoom.rs` is a 17-line re-export shim.
 
-- [ ] **[Low] HYG-07 — Commented-out code** `sftp-ui/src/render_transfer.rs:68`.
+- [x] **[Low] HYG-07 — Commented-out code** `sftp-ui/src/render_transfer.rs:68`.
 
 ## B. Stale comments & docs-in-code
 
-- [ ] **[Medium] HYG-08 — "Split to stay under ~N lines" rationales contradict code-style** (split by
+- [x] **[Medium] HYG-08 — "Split to stay under ~N lines" rationales contradict code-style** (split by
   responsibility, not size): `terminal-view/src/panel/ops.rs:4-5` (file is 509 lines), `layout/mod.rs:3`,
   `cell/mod.rs:3`, `handlers/mod.rs:3` ("was split from …"), `sftp-ui/src/lib.rs:3-4`, `types.rs:38`,
   `panel_ops.rs:4`, `table_delegate_menu.rs:2`, `transfer.rs:3`, `render_transfer.rs:3`
   (`file_browser.rs`/`render_list.rs` no longer exist). *Fix:* delete the historical prose.
 
-- [ ] **[Low] HYG-09 — Stale comments (engines):** `terminal/src/url_policy.rs:155` ("keep core
+- [x] **[Low] HYG-09 — Stale comments (engines):** `terminal/src/url_policy.rs:155` ("keep core
   dependency-free" — this is the terminal crate); `highlight/src/lib.rs:12-14`, `color.rs:285-289`
   ("trivial cast" — bridge divides `h` by 360); `terminal/src/osc_agent/dedup.rs:296` (cites `osc_agent/tests.rs`,
   file is `receiver_tests.rs`); `terminal/src/key_encode.rs:8,75` ("Returns `None` when unrecognized" — never
   does); `paste.rs:3`, `security_policy.rs:4`, `url_policy.rs:3` ("Before Phase 1…" changelog prose in module docs).
 
-- [ ] **[Low] HYG-10 — Stale comments (backends):** `ssh/src/listener.rs:8`, `state.rs:4` cite `local/src/...`
+- [x] **[Low] HYG-10 — Stale comments (backends):** `ssh/src/listener.rs:8`, `state.rs:4` cite `local/src/...`
   (crate is `local-shell`); `local-shell/src/session.rs:4-6` cites "#11/#12 … freya handle.rs";
   `session_terminal.rs:4` "ARCH-05" ticket ids in module docs; `local-shell/src/session_terminal.rs:256-259`
   `scroll_to_prompt` TODO with `let _ = n;`.
@@ -114,13 +114,13 @@ authoritative.
   (`workspace/.../layout.rs:50,104`, `actions.rs:221`); `px(70.)`/`px(50.)` (`title_bar.rs:121,127,133`);
   `1600×1000`/`0.85`/`640×480` (`app/src/window.rs:23-27,40-43`). *Fix:* named `const`s in one place.
 
-- [ ] **[Low] HYG-15 — Duplication hot spots worth a helper:** 6× "scroll + set `last_scroll_time` + notify"
+- [x] **[Low] HYG-15 — Duplication hot spots worth a helper:** 6× "scroll + set `last_scroll_time` + notify"
   and 3× zoom blocks in `terminal-view/src/handlers/keyboard.rs:87-192`; 5× `MouseModifiers { shift, alt, ctrl }`
   construction in `mouse.rs`/`scroll.rs` (add `From<gpui::Modifiers>`); scrollbar drag math (2×).
 
 ## D. Repository & documentation
 
-- [ ] **[Medium] HYG-16 — Doc sprawl and stale "source of truth" pointers.** `docs/` = 134 tracked files, 1.29 MB:
+- [x] **[Medium] HYG-16 — Doc sprawl and stale "source of truth" pointers.** `docs/` = 134 tracked files, 1.29 MB:
   `docs/review/` (14 files, 2026-07-22) and `docs/repository-review/` (14 files, 2026-07-23) are two parallel
   one-day-apart reviews with the same 14 topics; `docs/refactor/ui-crate-restructure.md` is a completed plan
   still called "authoritative" in `structure.md`; `docs/PROJECT.md` is an unfilled template; `docs/spec-intakes/`
@@ -135,7 +135,7 @@ authoritative.
   `check-english.py`, `benchmark-scale.py --list`. Agents following AGENTS.md will push red CI. *Fix:* list the
   full set (or add `scripts/ci-local.{sh,ps1}` and reference it).
 
-- [ ] **[Low] HYG-18 — Design docs drifted from implementation.** `docs/terminal-backend.md` §7 describes a
+- [x] **[Low] HYG-18 — Design docs drifted from implementation.** `docs/terminal-backend.md` §7 describes a
   per-session current-thread runtime, `last_content: ArcSwap` cache and `std::sync::mpsc`; §5.2 says paint
   never locks the FairMutex — the implementation uses a shared 2-worker runtime and `snapshot()` locks Term.
   `docs/ssh-client-connect.md` §9.3 still says "MVP: accept any host key". `docs/terminal-split.md` TL;DR says
@@ -145,20 +145,20 @@ authoritative.
   `docs/agents/dependencies.md` §2 tells every gpui crate to depend on `gpui_platform` (only `app` does).
   *Fix:* update or label historical.
 
-- [ ] **[Low] HYG-19 — README gaps.** Feature list omits auto-update and crash reporting (both shipped);
+- [x] **[Low] HYG-19 — README gaps.** Feature list omits auto-update and crash reporting (both shipped);
   "Release build" documents `dist/oneterm-<triple>/` while CI produces `oneterm-<version>-<triple>`; points to
   `docs/review/performance-benchmark.md` (a historical dir). *Fix:* update.
 
-- [ ] **[Low] HYG-20 — Stray files at repo root** (all git-ignored, but the ignore file grew one-off entries
+- [x] **[Low] HYG-20 — Stray files at repo root** (all git-ignored, but the ignore file grew one-off entries
   instead of the junk being deleted): `NUL` (54 B), `opentui-examples.exe` (142 MB), `harness.db*`, `dist/`
   (10 `.oneterm-backup-*` dirs + 9.9 MB zip), `.pi/` (35 MB). *Fix:* delete `NUL` (`del \\.\NUL`) and the
   exe; replace the two ignore lines with generic patterns.
 
-- [ ] **[Low] HYG-21 — No `NOTICE` / `THIRD-PARTY-NOTICES.md`** (Apache-2.0 §4(d); bundled Windows Terminal
+- [x] **[Low] HYG-21 — No `NOTICE` / `THIRD-PARTY-NOTICES.md`** (Apache-2.0 §4(d); bundled Windows Terminal
   binaries are MIT). *Fix:* generate with `cargo about`.
 
-- [ ] **[Low] HYG-22 — No `.editorconfig`** despite Python/PowerShell/Bash/JSON/MD in the repo. *Fix:* minimal
+- [x] **[Low] HYG-22 — No `.editorconfig`** despite Python/PowerShell/Bash/JSON/MD in the repo. *Fix:* minimal
   file (`end_of_line = lf`, `indent_style = space`, `[*.rs] indent_size = 4`).
 
-- [ ] **[Low] HYG-23 — `local-shell/examples/{doom_fire,pty_throughput}.rs` are diagnostics living in the crate.**
+- [x] **[Low] HYG-23 — `local-shell/examples/{doom_fire,pty_throughput}.rs` are diagnostics living in the crate.**
   *Fix:* `crates/tools` or feature-gate.

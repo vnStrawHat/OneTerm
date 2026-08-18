@@ -70,7 +70,7 @@ all of it raises the cost of the next feature.
   *Fix:* a `TransferHandle { progress: Receiver<TransferEvent>, cancel }` where
   `enum TransferEvent { Progress(f64), Cancelled }`.
 
-- [ ] **[Medium] ARCH-06 — Stringly-typed errors dominate.** `crates/core/src/error.rs:43-51`:
+- [x] **[Medium] ARCH-06 — Stringly-typed errors dominate.** `crates/core/src/error.rs:43-51`:
   `AppError::Other(String)` / `AppError::msg` has ~120 call sites vs ~18 typed uses; `crates/ssh/src/session.rs`
   uses `anyhow` internally and flattens at 394-401 (losing `Cancelled`); `map_sftp_err` (`sftp_task.rs:262-264`)
   flattens SFTP status codes to strings so the UI cannot distinguish permission-denied from not-found.
@@ -90,7 +90,7 @@ all of it raises the cost of the next feature.
 - [x] **[Low] ARCH-10 — Compat shim violates "no compatibility layers".** `crates/ssh/src/config.rs:1-7`
   re-exports core's `SshConfig` "to keep … working". *Fix:* delete; import from core.
 
-- [ ] **[Low] ARCH-11 — Layer docs omit `completion`.** `docs/agents/crate-dependency-rules.md` L0 lists
+- [x] **[Low] ARCH-11 — Layer docs omit `completion`.** `docs/agents/crate-dependency-rules.md` L0 lists
   `core · terminal · highlight`; `state` and `terminal-view` depend on `oneterm-completion`. *Fix:* add it.
 
 ## B. Shell inversion & global state
@@ -104,7 +104,7 @@ all of it raises the cost of the next feature.
   talks to gpui-component (`oneterm-state`), used by both registration and builders; `log::error!` in
   `build_named_panel` when the name is not registered.
 
-- [ ] **[Medium] ARCH-13 — Three ad-hoc injection registries instead of the documented single bundle.**
+- [x] **[Medium] ARCH-13 — Three ad-hoc injection registries instead of the documented single bundle.**
   `crates/state/src/services.rs:145-191` (`AppServices`, dup-checked, validated),
   `crates/state/src/active_terminal.rs:315-327` (`set_provider` → unconditional `set_global`),
   `crates/state/src/agent_focus.rs:142-153` (same); plus `terminal-view` keeps its own mutable global
@@ -151,7 +151,7 @@ all of it raises the cost of the next feature.
   (`app/src/init.rs:19`, `workspace/.../mod.rs:140`); `UiConfig::init` (`ui_config.rs:167-171`) and
   `TerminalSettings::init` (`settings.rs:634-642`) overwrite unconditionally. *Fix:* pick one contract.
 
-- [ ] **[Low] ARCH-20 — Global service-locator coupling in terminal-view.** The view/panel reach into 8
+- [x] **[Low] ARCH-20 — Global service-locator coupling in terminal-view.** The view/panel reach into 8
   process-globals (`TerminalSettings::global`, `AppState::global`, `AppServices::session_factory`,
   `commands::commands`, `AgentRegistry::try_global`, `GlobalCompletionHistory::try_global`,
   `active_terminal::set_provider`, `agent_focus::set_focuser`). *Fix:* pass `Entity<TerminalSettings>` /
@@ -253,7 +253,7 @@ all of it raises the cost of the next feature.
   `index` for later `update`. Any reorder/removal between opening a dialog and saving targets a different
   session. *Fix:* stable `id` on `SshSession` (schema v2), address by id.
 
-- [ ] **[Medium] ARCH-36 — Updater knobs are dead.** `UpdateConfig::should_auto_check`
+- [x] **[Medium] ARCH-36 — Updater knobs are dead.** `UpdateConfig::should_auto_check`
   (`crates/update/src/config.rs` ~L112) is never called; `channel` and `skipped_version` have no UI;
   `docs/auto-update.md` still claims a 24 h interval. *Fix:* wire them (settings items + honour interval in
   `start_auto_check`) or delete fields and doc claims.
@@ -263,11 +263,11 @@ all of it raises the cost of the next feature.
   *Fix:* split "cache metadata" (etag/last_checked/cached_candidate) from "preferences", or route all writes
   through `update_json_file`.
 
-- [ ] **[Low] ARCH-38 — Crash-report dialog and "10 clicks on About panics" live in settings-ui**
+- [x] **[Low] ARCH-38 — Crash-report dialog and "10 clicks on About panics" live in settings-ui**
   (`crates/settings-ui/src/crash_report_dialog.rs`, `about.rs:140-145`). *Fix:* move crash UI to `app`;
   gate the panic trigger behind a debug/env flag.
 
-- [ ] **[Low] ARCH-39 — `SettingsPanel` implements `Panel` (`settings-ui/src/panel.rs:73-89`) but is never
+- [x] **[Low] ARCH-39 — `SettingsPanel` implements `Panel` (`settings-ui/src/panel.rs:73-89`) but is never
   registered** (shown via `Root::new` in its own window). *Fix:* remove the impl or register it.
 
 - [x] **[Low] ARCH-40 — `SftpBrowserStore` is a `Mutex` inside a gpui `Global`** (`sftp-ui/src/browser_state.rs:117`),
@@ -277,11 +277,11 @@ all of it raises the cost of the next feature.
   `crates/terminal/src/osc_agent/mod.rs:64-168`: `agent/seq/ts` duplicated across 7 variants → three 7-arm
   accessor `match`es. *Fix:* `struct AgentStatusEvent { agent, seq, ts, payload: AgentPayload }`.
 
-- [ ] **[Low] ARCH-42 — Presentation-driven struct-of-arrays in highlight theme.**
+- [x] **[Low] ARCH-42 — Presentation-driven struct-of-arrays in highlight theme.**
   `crates/highlight/src/theme.rs:50-63` (five parallel `Box<[…; 32]>`), `RowRoles.role: Box<[u8]>` (`role.rs:82`).
   *Fix:* `Box<[ClassStyle; COUNT]>` and `Box<[RowRole]>`.
 
-- [ ] **[Low] ARCH-43 — Single-file folders.** `crates/completion/src/catalog/schema.rs`,
+- [x] **[Low] ARCH-43 — Single-file folders.** `crates/completion/src/catalog/schema.rs`,
   `crates/completion/src/redact/detect.rs`. *Fix:* `catalog_schema.rs` / `redact_detect.rs` siblings.
 
 - [ ] **[Low] ARCH-44 — Tuple returns / bool params in public trait API.** `core/src/sftp.rs:116-130`,
