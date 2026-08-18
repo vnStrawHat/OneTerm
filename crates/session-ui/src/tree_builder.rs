@@ -211,4 +211,30 @@ mod tests {
         assert_eq!(ids("infra"), vec!["session:2"]);
         assert!(ids("nothing").is_empty());
     }
+
+    #[test]
+    fn item_ids_round_trip_and_reject_foreign_prefixes() {
+        let session = SshSessionId::parse("42").unwrap();
+        let id = SharedString::from(session_item_id(session));
+        assert_eq!(parse_session_id(&id), Some(session));
+        assert_eq!(parse_group_id(&id), None);
+
+        let group = SharedString::from(format!("{GROUP_ID_PREFIX}ops"));
+        assert_eq!(parse_group_id(&group), Some("ops".to_string()));
+        assert_eq!(parse_session_id(&group), None);
+
+        assert_eq!(parse_session_id(&SharedString::from("session:x")), None);
+        assert_eq!(parse_session_id(&SharedString::from("other:1")), None);
+    }
+
+    #[test]
+    fn subtitle_shows_user_only_when_present() {
+        let mut session = entry(1, "prod", None).session;
+        session.host = "10.0.0.1".into();
+        session.port = 2222;
+        session.username = None;
+        assert_eq!(session_subtitle(&session), "10.0.0.1:2222");
+        session.username = Some("root".into());
+        assert_eq!(session_subtitle(&session), "root@10.0.0.1:2222");
+    }
 }
