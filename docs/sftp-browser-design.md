@@ -1429,6 +1429,7 @@ pub trait SftpBackend: Send + Sync + 'static {
     fn session_id(&self) -> SftpSessionId;
     fn read_dir(&self, path: RemotePath) -> SftpFuture<'_, Vec<FileEntry>>;
     fn stat(&self, path: RemotePath) -> SftpFuture<'_, FileEntry>;
+    fn realpath(&self, path: RemotePath) -> SftpFuture<'_, RemotePath>;
     fn rename(&self, from: RemotePath, to: RemotePath) -> SftpFuture<'_, ()>;
     fn remove(&self, path: RemotePath) -> SftpFuture<'_, ()>;
     fn remove_dir_all(&self, path: RemotePath) -> SftpFuture<'_, ()>;
@@ -1440,6 +1441,11 @@ pub trait SftpBackend: Send + Sync + 'static {
     fn alive(&self) -> bool;
 }
 ```
+
+A relative listing request (the initial `.`) is canonicalised through
+`realpath` first, so the panel's `cwd` becomes the absolute directory even when
+the listing is empty (CORR-52); when the server cannot resolve it, the original
+request is listed and the cwd falls back to the parent carried by the entries.
 
 Directory listings in the panel are guarded by a request generation
 (`SftpPanel::load_generation`) plus the active backend key: a `read_dir` result is
