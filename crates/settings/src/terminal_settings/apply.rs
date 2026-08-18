@@ -4,6 +4,8 @@
 //! is `from_config(&TerminalConfig::default())` and the defaults live in one
 //! place. The inverse mapping lives in [`super::persist`].
 
+use gpui::Hsla;
+
 use crate::terminal_config::{
     BellConfig, ColorsConfig, CompletionConfig, CursorConfig, FontConfig, LayoutConfig,
     MouseConfig, ScrollConfig, SecurityConfig, TerminalConfig,
@@ -35,6 +37,24 @@ impl CompletionSettings {
             redact_sensitive: completion.redact_sensitive,
         }
     }
+}
+
+/// Parse the `colors.ansi` list slot by slot. An entry that is not a valid hex
+/// colour keeps its position as `None` (theme colour) and is logged, so the
+/// entries after it are not shifted down (CORR-60).
+fn parse_ansi_overrides(ansi: &[String]) -> Vec<Option<Hsla>> {
+    ansi.iter()
+        .enumerate()
+        .map(|(slot, text)| {
+            let color = parse_hex_color(text);
+            if color.is_none() && !text.trim().is_empty() {
+                log::warn!(
+                    "terminal.json colors.ansi[{slot}] = {text:?} is not a hex colour; keeping the theme colour"
+                );
+            }
+            color
+        })
+        .collect()
 }
 
 impl TerminalSettings {
@@ -99,16 +119,31 @@ impl TerminalSettings {
                 clock_fg: colors.clock_fg.as_deref().and_then(parse_hex_color),
                 line_number_fg: colors.line_number_fg.as_deref().and_then(parse_hex_color),
                 min_contrast: colors.min_contrast,
-                ansi: colors
-                    .ansi
-                    .iter()
-                    .filter_map(|s| parse_hex_color(s))
-                    .collect(),
+                ansi: parse_ansi_overrides(&colors.ansi),
             },
 
             completion: CompletionSettings::from_config(&cfg.completion),
 
             persist_blocked: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_ansi_entry_keeps_its_slot_instead_of_shifting_the_palette() {
+        let ansi: Vec<String> = ["#000000", "not-a-colour", "#00FF00", ""]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        let parsed = parse_ansi_overrides(&ansi);
+        assert_eq!(parsed.len(), 4);
+        assert!(parsed[0].is_some());
+        assert!(parsed[1].is_none(), "invalid entry keeps its position");
+        assert_eq!(parsed[2], parse_hex_color("#00FF00"));
+        assert!(parsed[3].is_none(), "blank entry means no override");
     }
 }

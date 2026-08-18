@@ -99,7 +99,10 @@ pub struct ColorOverrides {
     pub clock_fg: Option<Hsla>,
     pub line_number_fg: Option<Hsla>,
     pub min_contrast: f32,
-    pub ansi: Vec<Hsla>,
+    /// ANSI-16 overrides by slot; `None` keeps the theme colour for that slot.
+    /// One invalid entry in `terminal.json` therefore never shifts the colours
+    /// after it (CORR-60).
+    pub ansi: Vec<Option<Hsla>>,
 }
 
 /// Global terminal config (shell + rendering options).

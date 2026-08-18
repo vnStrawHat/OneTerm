@@ -99,7 +99,7 @@ fn non_default_settings() -> TerminalSettings {
         min_contrast: 2.5,
         ansi: (0..16u32)
             .map(|i| parse_hex_color(&format!("#{:02X}{:02X}{:02X}", i * 10, i * 5, i)))
-            .map(|c| c.expect("valid hex"))
+            .map(|c| Some(c.expect("valid hex")))
             .collect(),
     };
     s

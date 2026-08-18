@@ -149,7 +149,13 @@ impl TerminalSettings {
                 clock_fg: color_to_hex(co.clock_fg),
                 line_number_fg: color_to_hex(co.line_number_fg),
                 min_contrast: co.min_contrast,
-                ansi: co.ansi.iter().map(|c| hsla_to_hex(*c)).collect(),
+                // A slot without an override stays an empty string so the
+                // positions after it survive the round trip.
+                ansi: co
+                    .ansi
+                    .iter()
+                    .map(|c| c.map(hsla_to_hex).unwrap_or_default())
+                    .collect(),
             },
         }
     }
