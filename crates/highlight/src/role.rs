@@ -39,8 +39,8 @@ impl RowRole {
 /// regex fallback determines the state.
 #[derive(Clone, Debug, Default)]
 pub struct RowRoles {
-    /// Per display row → `RowRole` (as `u8`).
-    pub role: Box<[u8]>,
+    /// Per display row → `RowRole`.
+    pub role: Box<[RowRole]>,
     /// Exit code of the command that produced each `Output` row.
     /// `None` for prompt/command rows or when no `OutputEnd` was received.
     pub exit_code: Box<[Option<i32>]>,
@@ -55,18 +55,14 @@ impl RowRoles {
     /// Create a `RowRoles` with all rows set to `Output` and no exit codes.
     pub fn new_output(num_rows: usize) -> Self {
         Self {
-            role: vec![RowRole::Output as u8; num_rows].into_boxed_slice(),
+            role: vec![RowRole::Output; num_rows].into_boxed_slice(),
             exit_code: vec![None; num_rows].into_boxed_slice(),
         }
     }
 
     /// Get the role for a display row (clamped to `Output` if out of range).
     pub fn role_at(&self, row: usize) -> RowRole {
-        self.role
-            .get(row)
-            .copied()
-            .map(RowRole::from_u8)
-            .unwrap_or_default()
+        self.role.get(row).copied().unwrap_or_default()
     }
 
     /// Get the exit code for a display row.

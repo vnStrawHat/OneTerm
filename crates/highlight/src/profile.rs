@@ -80,14 +80,17 @@ impl ShellProfile {
 
 // ── Compiled prompt regexes (DFA, ReDoS-safe) ──────────────────────────────
 
-/// Unix prompt: line starts with optional path/user text, ends with `$` or
-/// `#` or `%` before the command. We match the *sign + optional trailing space*
-/// pattern at a reasonable position from the start of the line.
-static PROMPT_UNIX: LazyLock<Regex> = LazyLock::new(|| {
-    // Accept leading non-whitespace (user@host:path) then a sign + space.
-    // Also accept a bare sign at column 0.
-    Regex::new(r"^(?:[^\s]*[\$#%][ ]?)|(?:^[#\$%][ ]?)").expect("Unix prompt regex is valid")
-});
+/// Unix prompt: an optional plausible prefix (`user@host:~`, `[user@host ~]`,
+/// `~/src`, `/srv`, with an optional `(venv) ` in front) then `$`/`#`/`%`
+/// followed by a space or the end of the line. The prefix must be empty or
+/// contain one of `@ : ~ / ]`, and the sign must not be glued to text, so
+/// `100%`, `#include <stdio.h>` and `$HOME=/root` are not prompts (CORR-48).
+static PROMPT_UNIX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(UNIX_PROMPT_PATTERN).expect("Unix prompt regex is valid"));
+
+/// Shared Unix prompt pattern (also the universal fallback in the scanner).
+pub(crate) const UNIX_PROMPT_PATTERN: &str =
+    r"^(?:\([^)\s]*\) )?(?:\[[^\]]*\]|[^\s]*[@:~/\]][^\s]*)?[\$#%](?: |$)";
 
 /// cmd.exe prompt: `C:\path>` or `>`. The trailing space is optional so the
 /// prompt is detected even when the user has typed right after `>` (the blank
@@ -101,10 +104,10 @@ static PROMPT_PWSH: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(?:PS[^\s>]*>[ ]?)|(?:^>+[ ]?)").expect("PowerShell prompt regex is valid")
 });
 
-/// Dumb / serial / router — most permissive: any of `$ # % > → »` + optional space.
-static PROMPT_DUMB: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(?:[^\s]*[\$#%>»][ ]?)|(?:^[\$#%>»][ ]?)").expect("dumb prompt regex is valid")
-});
+/// Dumb / serial / router — most permissive prefix (`Router#`, `Router>`),
+/// but the sign must still be followed by a space or the end of the line.
+static PROMPT_DUMB: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[^\s]*[\$#%>»](?: |$)").expect("dumb prompt regex is valid"));
 
 #[cfg(test)]
 mod tests {
@@ -112,15 +115,43 @@ mod tests {
 
     #[test]
     fn unix_prompt_matches() {
-        assert!(PROMPT_UNIX.is_match("user@host:~$ "));
-        assert!(PROMPT_UNIX.is_match("# "));
-        assert!(PROMPT_UNIX.is_match("$ echo hi"));
+        for line in [
+            "user@host:~$ ",
+            "user@host:~$ ls",
+            "[user@host ~]$ ",
+            "# ",
+            "$ echo hi",
+            "~/src$ ",
+            "(venv) user@host:~/p$ ",
+            "root@box:/srv# ",
+            "user@host:~%",
+        ] {
+            assert!(PROMPT_UNIX.is_match(line), "{line:?} must be a prompt");
+        }
+    }
+
+    /// CORR-48: a sign glued to text, or a bare word before the sign, is output.
+    #[test]
+    fn unix_prompt_no_match_on_output() {
+        for line in [
+            "hello world",
+            "error: something failed",
+            "100% done",
+            "#include <stdio.h>",
+            "$HOME=/root",
+            "total 100%",
+            "50%",
+        ] {
+            assert!(!PROMPT_UNIX.is_match(line), "{line:?} must not be a prompt");
+        }
     }
 
     #[test]
-    fn unix_prompt_no_match_on_output() {
-        assert!(!PROMPT_UNIX.is_match("hello world"));
-        assert!(!PROMPT_UNIX.is_match("error: something failed"));
+    fn dumb_prompt_requires_space_or_eol_after_sign() {
+        assert!(PROMPT_DUMB.is_match("Router#"));
+        assert!(PROMPT_DUMB.is_match("Router> show ip"));
+        assert!(!PROMPT_DUMB.is_match("#include <stdio.h>"));
+        assert!(!PROMPT_DUMB.is_match("$HOME=/root"));
     }
 
     #[test]

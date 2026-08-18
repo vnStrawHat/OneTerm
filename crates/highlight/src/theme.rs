@@ -1,7 +1,7 @@
-//! Theme mapping — flat `[Style; Class::COUNT]` array, pre-resolved at build.
+//! Theme mapping — flat `[ClassStyle; Class::COUNT]` array, pre-resolved at build.
 //!
-//! Render-time lookup = `styles.fg[class as usize]` — one array index,
-//! branchless, no string-scope selector engine. See §7 of the design doc.
+//! Render-time lookup = `styles.style(class)` — one array index, branchless,
+//! no string-scope selector engine. See §7 of the design doc.
 
 use crate::class::Class;
 use crate::color::Hsla;
@@ -48,16 +48,8 @@ pub struct ClassStyle {
 /// the theme JSON's `terminal.semantic` block + the shipped default asset.
 #[derive(Clone, Debug)]
 pub struct ClassStyles {
-    /// Foreground per class.
-    pub fg: Box<[Option<Hsla>; Class::COUNT]>,
-    /// Background per class.
-    pub bg: Box<[Option<Hsla>; Class::COUNT]>,
-    /// Font style per class.
-    pub font: Box<[FontStyle; Class::COUNT]>,
-    /// Decoration per class.
-    pub deco: Box<[Decoration; Class::COUNT]>,
-    /// Per-class override flag.
-    pub override_ansi: Box<[bool; Class::COUNT]>,
+    /// Resolved style per class.
+    styles: Box<[ClassStyle; Class::COUNT]>,
     /// Line-level: prompt-line background.
     pub prompt_line_bg: Option<Hsla>,
 }
@@ -65,19 +57,24 @@ pub struct ClassStyles {
 impl Default for ClassStyles {
     fn default() -> Self {
         Self {
-            fg: Box::new([const { None }; Class::COUNT]),
-            bg: Box::new([const { None }; Class::COUNT]),
-            font: Box::new(
-                [const {
-                    FontStyle {
-                        bold: false,
-                        italic: false,
-                    }
-                }; Class::COUNT],
-            ),
-            deco: Box::new([const { Decoration::None }; Class::COUNT]),
-            override_ansi: Box::new([false; Class::COUNT]),
+            styles: Box::new([const { ClassStyle::empty() }; Class::COUNT]),
             prompt_line_bg: None,
+        }
+    }
+}
+
+impl ClassStyle {
+    /// The all-`None` style (const so the class array can be built in place).
+    const fn empty() -> Self {
+        Self {
+            fg: None,
+            bg: None,
+            font: FontStyle {
+                bold: false,
+                italic: false,
+            },
+            deco: Decoration::None,
+            override_ansi: false,
         }
     }
 }
@@ -90,33 +87,29 @@ impl ClassStyles {
 
     /// Get the style for a class (clamped to `Default` for out-of-range).
     pub fn style(&self, class: u8) -> ClassStyle {
-        let idx = class as usize;
-        if idx >= Class::COUNT {
-            return ClassStyle::default();
-        }
-        ClassStyle {
-            fg: self.fg[idx],
-            bg: self.bg[idx],
-            font: self.font[idx],
-            deco: self.deco[idx],
-            override_ansi: self.override_ansi[idx],
-        }
+        self.styles.get(class as usize).copied().unwrap_or_default()
+    }
+
+    /// Mutable access to one class's style (for theme loading).
+    pub fn style_mut(&mut self, class: Class) -> &mut ClassStyle {
+        &mut self.styles[class as usize]
     }
 
     /// Set the foreground for a class.
     pub fn set_fg(&mut self, class: Class, color: Hsla) {
-        self.fg[class as usize] = Some(color);
+        self.style_mut(class).fg = Some(color);
     }
 
     /// Set the decoration for a class.
     pub fn set_deco(&mut self, class: Class, deco: Decoration) {
-        self.deco[class as usize] = deco;
+        self.style_mut(class).deco = deco;
     }
 
     /// Whether any semantic styling is configured (all-None → no-op).
     pub fn is_active(&self) -> bool {
-        self.fg.iter().any(|c| c.is_some())
-            || self.bg.iter().any(|c| c.is_some())
+        self.styles
+            .iter()
+            .any(|style| style.fg.is_some() || style.bg.is_some())
             || self.prompt_line_bg.is_some()
     }
 }
@@ -140,5 +133,17 @@ mod tests {
         assert!(s.is_active());
         let st = s.style(Class::Error as u8);
         assert!(st.fg.is_some());
+    }
+
+    #[test]
+    fn style_mut_edits_one_class_only() {
+        let mut s = ClassStyles::empty();
+        s.style_mut(Class::Url).font.bold = true;
+        assert!(s.style(Class::Url as u8).font.bold);
+        assert!(!s.style(Class::Error as u8).font.bold);
+        // Font-only styling does not make Layer 2 active (no colours).
+        assert!(!s.is_active());
+        // Out-of-range class → default style.
+        assert_eq!(s.style(u8::MAX).fg, None);
     }
 }

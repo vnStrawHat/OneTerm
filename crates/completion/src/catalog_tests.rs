@@ -101,3 +101,38 @@ fn command_names_deduped_across_categories() {
     assert!(names.contains(&"git"));
     assert!(!names.contains(&"dir")); // cmd-only, not in unix path
 }
+
+/// PERF-24: the single-pass name list keeps the highest-precedence spelling —
+/// a manual entry beats an external one that differs only by case (cmd family)
+/// regardless of index order, and the first-seen position is preserved.
+#[test]
+fn command_names_prefer_manual_spelling_over_external_case_variant() {
+    const RAW: &[(&str, &str, &str, &str)] = &[
+        (
+            "COPY",
+            "external",
+            "cmd",
+            r#"{ "schema": 1, "name": "COPY", "options": [] }"#,
+        ),
+        (
+            "dir",
+            "external",
+            "cmd",
+            r#"{ "schema": 1, "name": "dir", "options": [] }"#,
+        ),
+        (
+            "copy",
+            "manual",
+            "cmd",
+            r#"{ "schema": 1, "name": "copy", "options": [] }"#,
+        ),
+    ];
+    let c = Catalog::from_raw(RAW);
+    let cmd = ShellFamily::Cmd.categories(false);
+    let names = c.command_names(&cmd, ShellFamily::Cmd);
+    assert_eq!(names, vec!["copy", "dir"]);
+    // Unix is case-sensitive: both spellings are distinct names.
+    let mut unix_names = c.command_names(&[CatalogCategory::Cmd], ShellFamily::Unix);
+    unix_names.sort();
+    assert_eq!(unix_names, vec!["COPY", "copy", "dir"]);
+}

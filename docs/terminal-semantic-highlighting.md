@@ -285,7 +285,7 @@ A shipped **default `semantic` block** (in `crates/ui/assets/highlight/default.j
 merged under any per-theme overrides, so every theme gets sane colors automatically —
 only the ANSI palette + accents come from the gpui-component theme.
 
-**Render-time cost**: `styles.fg[class as usize]` — one array index. No string scope, no
+**Render-time cost**: `styles.style(class).fg` — one array index. No string scope, no
 selector matching, no hashmap. This is the headline Rust win over the TextMate model.
 
 ---
@@ -374,7 +374,7 @@ colorization — overriding only the *default* foreground, never explicit SGR co
 | Keyword pass | one `aho_corasick` find_iter over ≤200 chars | < 1 µs/line (SIMD) |
 | Structural regexes | ~3 `regex` is_match over short strings | ~1-2 µs/line |
 | Hand-written probes | char-class scans | < 0.5 µs/line |
-| Per-cell theme lookup | `styles.fg[class as usize]` × cells | branchless, negligible |
+| Per-cell theme lookup | `styles.style(class).fg` × cells | branchless, negligible |
 | Cache hit | hash compare | skip lex+layout entirely |
 
 Only **visible viewport** lines are lexed (≤~50/frame). With the hash cache, steady
@@ -450,7 +450,7 @@ sign-glyph probe enough?
 
 **Decision.** **Row-level roles only.** Attach a `RowRole` to each display row from the
 OSC 133 stream; detect the prompt *sign glyph* with a tiny in-row probe (not a column
-boundary from OSC 133). Keep `RowRoles` as a cheap `Box<[u8]>`.
+boundary from OSC 133). Keep `RowRoles` as a cheap `Box<[RowRole]>` (a `#[repr(u8)]` enum, one byte per row).
 
 **Rationale.**
 - OSC 133 carries no column data — it is emitted by the shell *before/after* it prints a
@@ -471,7 +471,7 @@ boundary from OSC 133). Keep `RowRoles` as a cheap `Box<[u8]>`.
 pub enum RowRole { #[default] Output = 0, Prompt = 1, Command = 2 }
 
 pub struct RowRoles {
-    pub role:      Box<[u8]>,           // per display row -> RowRole
+    pub role:      Box<[RowRole]>,      // per display row (repr(u8))
     pub exit_code: Box<[Option<i32>]>,  // exit code of the command owning each Output row
 }
 ```

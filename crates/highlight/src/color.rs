@@ -1,7 +1,7 @@
 //! Plain color mirror types — same field layout as `gpui::Hsla`/`gpui::Rgba`.
 //!
 //! This crate must not depend on GPUI. These structs mirror the GPUI color
-//! types so the `ui` crate can convert with a trivial field copy (see
+//! types so the `ui` crate can convert with a field copy plus a hue scale (see
 //! `ui::views::terminal::highlight::bridge`).
 
 /// HSLA color (hue, saturation, lightness, alpha) — mirrors `gpui::Hsla`.

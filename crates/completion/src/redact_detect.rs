@@ -7,12 +7,15 @@
 //! detection rules can grow independently.
 
 /// Flag names (normalized) whose following/inline value is a secret.
+///
+/// Single-letter flags are deliberately absent: `-p` means "password" for
+/// `mysql`, "parents" for `mkdir`, "publish" for `docker run` and "port" for
+/// `ssh`, so short flags are resolved per command by [`short_secret_flags`].
 const SECRET_FLAG_VOCAB: &[&str] = &[
     "password",
     "passwd",
     "pwd",
     "pass",
-    "p",
     "secret",
     "token",
     "api-key",
@@ -38,9 +41,68 @@ fn normalize_flag(name: &str) -> String {
         .replace('_', "-")
 }
 
+/// Whether a long (or Windows `/FLAG`) option name carries a secret value:
+/// either in the vocabulary or a compound ending in a secret noun
+/// (`--http-password`, `--proxy-passwd`, `--client-secret`, `--access-token`).
 pub(super) fn is_secret_flag(name: &str) -> bool {
     let n = normalize_flag(name);
     SECRET_FLAG_VOCAB.contains(&n.as_str())
+        || n.ends_with("-password")
+        || n.ends_with("-passwd")
+        || n.ends_with("-secret")
+        || n.ends_with("-token")
+}
+
+/// Commands whose `-p` short flag takes a password (attached `-pSECRET` or
+/// separate `-p SECRET`).
+const PASSWORD_P_COMMANDS: &[&str] = &[
+    "mysql",
+    "mysqladmin",
+    "mysqldump",
+    "mysqlimport",
+    "mariadb",
+    "mariadb-dump",
+    "sshpass",
+    "az",
+];
+
+/// Container CLIs whose `login` subcommand takes `-p <password>` while other
+/// subcommands use `-p` for port publishing.
+const CONTAINER_LOGIN_COMMANDS: &[&str] = &["docker", "podman", "nerdctl"];
+
+/// The single-letter short flags whose value is a secret for `command`
+/// (already normalized by [`command_name`]), given its first subcommand.
+///
+/// `curl -u user:pass` embeds a password in the credential pair, so it is
+/// treated as secret regardless of the value's shape.
+pub(super) fn short_secret_flags(command: &str, subcommand: Option<&str>) -> &'static [char] {
+    if PASSWORD_P_COMMANDS.contains(&command) {
+        return &['p'];
+    }
+    if CONTAINER_LOGIN_COMMANDS.contains(&command) && subcommand == Some("login") {
+        return &['p'];
+    }
+    if command == "curl" {
+        return &['u'];
+    }
+    &[]
+}
+
+/// Long option names whose value is a secret only for `command` (`curl --user
+/// user:pass`).
+pub(super) fn is_command_secret_long_flag(command: &str, name: &str) -> bool {
+    command == "curl" && normalize_flag(name) == "user"
+}
+
+/// Normalize a command token for per-command rules: basename, lowercase, no
+/// `.exe` suffix (`C:\Tools\MySQL.EXE` → `mysql`).
+pub(super) fn command_name(token: &str) -> String {
+    let base = token
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(token)
+        .to_ascii_lowercase();
+    base.strip_suffix(".exe").unwrap_or(&base).to_string()
 }
 
 pub(super) fn is_secret_key(key: &str) -> bool {
