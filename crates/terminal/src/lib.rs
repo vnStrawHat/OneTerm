@@ -21,7 +21,6 @@ pub mod security_policy;
 pub mod session;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
-pub mod url;
 pub mod url_policy;
 
 pub use backend::{
@@ -48,10 +47,10 @@ pub use osc::{
 #[cfg(any(test, feature = "test-support"))]
 pub use osc_agent::encode_osc97_params;
 pub use osc_agent::{
-    AgentPayload, AgentState, AgentStatusEvent, ApprovalChoice, ApprovalEvent, ApprovalKind,
-    ApprovalRisk, FileAction, FileEvent, HeartbeatEvent, ModelEvent, ModelSource,
-    SessionIdentityEvent, StateEvent, ToolCallEvent, ToolCallPhase, parse_agent_status,
-    should_apply,
+    AgentPayload, AgentSeqWatermarks, AgentState, AgentStatusEvent, ApprovalChoice, ApprovalEvent,
+    ApprovalKind, ApprovalRisk, FileAction, FileEvent, HeartbeatEvent, MAX_AGENT_ID_BYTES,
+    MAX_TRACKED_AGENTS, ModelEvent, ModelSource, SessionIdentityEvent, StateEvent, ToolCallEvent,
+    ToolCallPhase, parse_agent_status, should_apply,
 };
 pub use osc_color::{
     BACKGROUND_INDEX, CURSOR_INDEX, ColorFormatter, DynamicColors, FOREGROUND_INDEX,
@@ -65,5 +64,6 @@ pub use session::{
     CursorBounds, CwdSource, NetStats, SessionEvent, SessionEventDelivery, TerminalCapabilities,
     TerminalInfo, TerminalQueryState, TerminalSession,
 };
-pub use url::{link_ranges, url_at};
-pub use url_policy::{ConfirmReason, DenyReason, ExternalTargetPolicy, TargetDecision};
+pub use url_policy::{
+    ConfirmReason, DenyReason, ExternalTargetPolicy, TargetDecision, display_matches_target,
+};

@@ -11,7 +11,7 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use async_channel::{Sender, TrySendError};
 use log::warn;
@@ -90,7 +90,10 @@ impl SessionEventSink {
                 }
             }
             SessionEventDelivery::Reliable => {
-                let mut deferred = self.deferred_reliable.lock().unwrap();
+                let mut deferred = self
+                    .deferred_reliable
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
                 // Keep FIFO order: once something is deferred, everything after
                 // it queues behind it until the next flush.
                 if !deferred.is_empty() {
@@ -113,11 +116,18 @@ impl SessionEventSink {
 
     /// Whether reliable events are waiting for a flush.
     pub fn has_deferred_reliable(&self) -> bool {
-        !self.deferred_reliable.lock().unwrap().is_empty()
+        !self
+            .deferred_reliable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
     }
 
     fn pop_deferred_reliable(&self) -> Option<SessionEvent> {
-        self.deferred_reliable.lock().unwrap().pop_front()
+        self.deferred_reliable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .pop_front()
     }
 
     fn record_closed(&self, error: impl std::fmt::Debug) {

@@ -1,15 +1,11 @@
 //! Terminal security policy — bounds and sanitizes terminal-controlled data
 //! before it reaches persistent state or the OS.
 //!
-//! Before Phase 1, there was no central policy for OSC-controlled strings.
-//! A local or remote program could:
-//! - Set arbitrarily long tab titles with control characters
-//! - Flood notifications without rate limiting
-//! - Overwrite the clipboard at any time
-//! - Store unlimited cwd/URI strings
-//!
-//! This module provides a single `TerminalSecurityPolicy` with explicit
-//! defaults that all terminal-controlled data must pass through.
+//! Without a central policy a local or remote program could set arbitrarily
+//! long tab titles with control characters, flood notifications, overwrite the
+//! clipboard at any time, or store unlimited cwd/URI strings. This module
+//! provides a single `TerminalSecurityPolicy` with explicit defaults that all
+//! terminal-controlled data must pass through.
 
 use std::time::{Duration, Instant};
 
@@ -186,10 +182,11 @@ impl TerminalSecurityPolicy {
 
     /// Sanitize a cwd path from OSC 7.
     ///
-    /// - Removes C0/C1 controls and BiDi overrides
+    /// - Removes every C0/C1 control (including `\n`, `\r`, `\t` — a path
+    ///   never legitimately contains a line break, SEC-07) and BiDi controls
     /// - Truncates to `max_cwd_bytes`
     pub fn sanitize_cwd(&self, cwd: &str) -> Option<String> {
-        let cleaned = strip_unsafe_chars(cwd);
+        let cleaned = strip_control_chars(cwd);
         let truncated = truncate_utf8(&cleaned, self.max_cwd_bytes);
         if truncated.is_empty() {
             None
@@ -199,38 +196,31 @@ impl TerminalSecurityPolicy {
     }
 }
 
-/// Remove C0 control characters (except \t \n \r), C1 controls,
-/// and BiDi override/embedding/mark characters from a string.
-pub fn strip_unsafe_chars(s: &str) -> String {
+/// Remove C0 control characters (except `\t` `\n` `\r`), DEL, C1 controls,
+/// and BiDi override/embedding/isolate/mark characters from a string.
+pub(crate) fn strip_unsafe_chars(s: &str) -> String {
     s.chars()
-        .filter(|c| {
-            let code = *c as u32;
-            // Allow tab, newline, CR.
-            if code == 0x09 || code == 0x0a || code == 0x0d {
-                return true;
-            }
-            // Reject C0 controls (0x00-0x1F).
-            if code < 0x20 {
-                return false;
-            }
-            // Reject C1 controls (0x80-0x9F).
-            if (0x80..=0x9f).contains(&code) {
-                return false;
-            }
-            // Reject BiDi overrides.
-            if matches!(
-                code,
-                0x202a | 0x202b | 0x202c | 0x202d | 0x202e | 0x200e | 0x200f
-            ) {
-                return false;
-            }
-            true
-        })
+        .filter(|&c| matches!(c, '\t' | '\n' | '\r') || !is_unsafe_char(c))
         .collect()
 }
 
+/// Like [`strip_unsafe_chars`] but also removes `\t`, `\n` and `\r` — for
+/// values that are single-line by construction (cwd paths, URIs).
+pub(crate) fn strip_control_chars(s: &str) -> String {
+    s.chars().filter(|&c| !is_unsafe_char(c)).collect()
+}
+
+/// C0 (including tab/newline/CR), DEL, C1, or BiDi control character.
+fn is_unsafe_char(c: char) -> bool {
+    let code = c as u32;
+    code < 0x20
+        || code == 0x7f
+        || (0x80..=0x9f).contains(&code)
+        || crate::url_policy::is_bidi_control(c)
+}
+
 /// Truncate a string to at most `max_bytes` at a UTF-8 character boundary.
-pub fn truncate_utf8(s: &str, max_bytes: usize) -> String {
+pub(crate) fn truncate_utf8(s: &str, max_bytes: usize) -> String {
     if s.len() <= max_bytes {
         return s.to_string();
     }
@@ -385,6 +375,27 @@ mod tests {
         };
         let result = policy.sanitize_cwd("/home/user\u{0007}/dir").unwrap();
         assert_eq!(result, "/home/user");
+    }
+
+    /// SEC-07: line breaks and tabs never survive in a cwd; BiDi isolates are
+    /// stripped from every terminal-controlled string.
+    #[test]
+    fn cwd_rejects_line_breaks_and_bidi_isolates() {
+        let policy = TerminalSecurityPolicy::default();
+        assert_eq!(
+            policy.sanitize_cwd("/home/us\ner\r/di\tr").unwrap(),
+            "/home/user/dir"
+        );
+        assert_eq!(
+            policy.sanitize_cwd("/home/\u{2066}user\u{2069}").unwrap(),
+            "/home/user"
+        );
+        assert_eq!(policy.sanitize_title("a\u{2067}b\u{2068}c").unwrap(), "abc");
+        // Titles and notifications may still span lines.
+        assert_eq!(
+            policy.sanitize_title("line1\nline2").unwrap(),
+            "line1\nline2"
+        );
     }
 
     #[test]

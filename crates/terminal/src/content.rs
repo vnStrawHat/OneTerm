@@ -318,19 +318,23 @@ mod tests {
         assert_eq!(snap.damage, TermDamageInfo::Full);
     }
 
+    /// TEST-24: a second snapshot with no new output must not report full
+    /// damage; at most the cursor line is dirty.
     #[test]
     fn damage_partial_on_unchanged() {
-        // The second snapshot with no new output → damage must be Partial
-        // (only the cursor line is dirty due to cursor movement).
         let mut term = mock_term("hello");
-        let _snap1 = TerminalContent::from(&mut term);
+        let snap1 = TerminalContent::from(&mut term);
+        let cursor_line = snap1.cursor.point.line.0 as usize;
         // Second snapshot — no changes, only cursor damage.
         let snap2 = TerminalContent::from(&mut term);
-        // May be Full or Partial depending on cursor movement detection.
-        // The key point: no panic, and the damage field exists.
-        assert!(matches!(
-            &snap2.damage,
-            TermDamageInfo::Full | TermDamageInfo::Partial(_)
-        ));
+        match &snap2.damage {
+            TermDamageInfo::Partial(lines) => {
+                assert!(
+                    lines.iter().all(|line| *line == cursor_line),
+                    "only the cursor line may be dirty, got {lines:?} (cursor {cursor_line})"
+                );
+            }
+            TermDamageInfo::Full => panic!("unchanged terminal must not report full damage"),
+        }
     }
 }

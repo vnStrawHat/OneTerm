@@ -190,7 +190,7 @@ ESC ] 8 ; ; ST               ← close link
 |:----:|:-------:|:------------:|:---:|:-------:|:------:|:-----:|:---------:|:-----:|:---:|:-------:|
 | 8 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ |
 
-- **OneTerm**: ✅ — alacritty VTE stores hyperlink in cell; `url.rs` detects (`link_ranges`/`url_at`).
+- **OneTerm**: ✅ — alacritty VTE stores hyperlink in cell; the view reads `cell.hyperlink()` and every target passes `ExternalTargetPolicy` (`crates/terminal/src/url_policy.rs`, display-text vs target check via `validate_with_display`).
 - **Zed**: ✅ — `terminal_hyperlinks.rs` reads `cell.hyperlink()` + `try_osc8_url_to_path`.
 - **Alacritty**: ✅ — commit "Fixes #922" added OSC 8 (the old ansicode page was wrong in listing alacritty ❌).
 - **xterm**: ❌ — does not support OSC 8.
@@ -457,4 +457,4 @@ ESC]133;D;exit ST ← Block end (exit code optional)
 - `crates/core/src/terminal/osc_color.rs` — `DynamicColors`, `PendingColorQuery`, `default_color_for_index` (OSC 10/11/12/110-112)
 - `crates/local/src/listener.rs` & `crates/ssh/src/listener.rs` — `ColorRequest` enqueue → reply after parse batch (event_loop/task)
 - `crates/core/src/config/shell.rs` — `resolve_shell` generates OSC 7/133 by shell kind
-- `crates/core/src/terminal/url.rs` — OSC 8 hyperlink detection
+- `crates/terminal/src/url_policy.rs` — OSC 8 / plain-text target policy (scheme allowlist, display-text mismatch)

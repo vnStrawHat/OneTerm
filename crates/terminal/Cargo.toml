@@ -1,6 +1,6 @@
 [package]
 name = "oneterm-terminal"
-description = "Terminal engine for OneTerm: TerminalSession trait + content/palette/encode/osc/url/search. Owns alacritty_terminal (no GPUI)."
+description = "Terminal engine for OneTerm: TerminalSession trait + content/palette/encode/osc/url-policy/search. Owns alacritty_terminal (no GPUI)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -18,7 +18,6 @@ workspace = true
 oneterm-core.workspace = true
 alacritty_terminal.workspace = true
 async-channel.workspace = true
-linkify.workspace = true
 base64.workspace = true
 log.workspace = true
 serde.workspace = true

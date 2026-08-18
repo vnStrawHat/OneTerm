@@ -616,7 +616,7 @@ crates/
 │   │   ├── key_encode.rs      # key_encode(KeySpec, Modifiers) -> Vec<u8>
 │   │   ├── mouse_encode.rs    # mouse press/move/release/wheel → CSI seq
 │   │   ├── osc.rs             # OSC 7/8/52 parse
-│   │   └── url.rs             # linkify
+│   │   └── url_policy.rs      # ExternalTargetPolicy (OSC 8 / plain-text targets)
 │   └── config/
 │       ├── settings.rs        # TerminalSettings
 │       └── shell.rs           # ShellKind, LocalShellConfig, resolve_shell

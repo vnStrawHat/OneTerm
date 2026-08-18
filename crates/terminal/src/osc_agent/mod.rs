@@ -40,7 +40,7 @@ pub use types::{
     ToolCallPhase,
 };
 
-pub use dedup::should_apply;
+pub use dedup::{AgentSeqWatermarks, MAX_TRACKED_AGENTS, should_apply};
 
 use base64::Engine;
 use serde::Deserialize;
@@ -49,6 +49,11 @@ use serde::Deserialize;
 ///
 /// ~6 KiB of raw JSON after decode. Oversized payloads are dropped silently.
 pub const MAX_AGENT_STATUS_BASE64_BYTES: usize = 8 * 1024;
+
+/// Maximum accepted length of the envelope `agent` id (spec §4.1 says
+/// "lowercase ASCII" identifiers such as `pi`/`codex`). Longer ids are dropped
+/// so a hostile program cannot store kilobytes per tracked agent (SEC-04).
+pub const MAX_AGENT_ID_BYTES: usize = 64;
 
 /// Accepted schema version. Future versions are dropped silently until the
 /// receiver is upgraded to understand them (spec §4.1 `v`).
@@ -151,6 +156,7 @@ struct RawEnvelope {
 /// - invalid UTF-8 after decode,
 /// - invalid JSON,
 /// - unknown schema version (`v != 1`),
+/// - `agent` id empty or longer than [`MAX_AGENT_ID_BYTES`],
 /// - unknown `type`,
 /// - missing required envelope or per-type fields.
 ///
@@ -192,6 +198,14 @@ pub fn parse_agent_status_json(json: &str) -> Option<AgentStatusEvent> {
     }
 
     let agent = raw.agent;
+    if agent.is_empty() || agent.len() > MAX_AGENT_ID_BYTES {
+        log::debug!(
+            "OSC 9;7 dropped: agent id length {} outside 1..={}",
+            agent.len(),
+            MAX_AGENT_ID_BYTES
+        );
+        return None;
+    }
     let seq = raw.seq;
     let ts = raw.ts;
 
