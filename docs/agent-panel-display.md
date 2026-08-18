@@ -41,7 +41,7 @@ internals. It reads the folded display model from `oneterm_state::AgentRegistry`
 | Event delivery to terminal views | `SessionEvent::AgentStatus(Arc<AgentStatusEvent>)` | implemented |
 | Registry fold | `oneterm_state::AgentRegistry` | implemented |
 | Terminal feed into registry | `LocalTerminalView::push_agent_status` | implemented |
-| Card navigation index + focuser | `crates/terminal-view/src/agent.rs` | implemented |
+| Card navigation targets (`AgentRegistry::set_nav` / `nav`) + focuser | `crates/state/src/agent_registry.rs`, `crates/terminal-view/src/agent.rs` | implemented |
 | Right-dock panel shell | `crates/app/src/agent_panel.rs` | implemented |
 | Agent list UI | `crates/agent-ui` | implemented as compact cards |
 
@@ -323,8 +323,11 @@ Current implemented interaction:
 
 - Clicking a card calls `oneterm_state::agent_focus::focus_terminal` with the
   card's `terminal_key`.
-- `terminal-view` registers the focuser. It activates the tab, activates the
-  space, and focuses the terminal using OneTerm dock/space/focus APIs.
+- `terminal-view` registers the focuser. It looks the terminal's navigation
+  target up in `AgentRegistry` (`nav(terminal_key)`) and runs it: this
+  activates the tab, activates the space, and focuses the terminal using
+  OneTerm dock/space/focus APIs. The registry owns the navigation index —
+  there is no separate global map.
 
 Not currently implemented in `agent-ui`:
 
@@ -430,9 +433,8 @@ SessionEvent::AgentStatus(Arc<AgentStatusEvent>)
 LocalTerminalView
         │  push_agent_status(ev)
         │  - resolve Tab/Space grouping
-        │  - register navigation target
+        │  - AgentRegistry::set_nav(terminal_key, nav)
         │  - AgentRegistry::apply(...)
-        │  agent_status = Some(ev)  // latest-event stash
         ▼
 oneterm_state::AgentRegistry
         │  folds events into AgentCard values
@@ -448,8 +450,8 @@ Terminal lifecycle events also feed the registry:
 
 - `SessionEvent::Exited(code)` → `Lifecycle::Ended { exit_code: Some(code) }`
 - `SessionEvent::Closed` → `Lifecycle::Ended { exit_code: None }`
-- true terminal close/drop → `remove_terminal(terminal_key)` and remove navigation
-  entry
+- true terminal close/drop → `remove_terminal(terminal_key)`, which also drops
+  the navigation entry
 
 ---
 

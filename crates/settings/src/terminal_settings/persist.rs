@@ -129,6 +129,7 @@ impl TerminalSettings {
             },
             mouse: MouseConfig {
                 show_context_menu: self.show_context_menu,
+                copy_on_select: self.copy_on_select,
             },
             bell: BellConfig {
                 enabled: self.bell_enabled,

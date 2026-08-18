@@ -10,6 +10,7 @@ pub(crate) mod handlers;
 pub(crate) mod highlight;
 pub(crate) mod layout;
 pub(crate) mod panel;
+pub(crate) mod security;
 pub(crate) mod settings_panel;
 pub(crate) mod space;
 pub(crate) mod status;
@@ -20,6 +21,7 @@ pub(crate) mod view;
 #[cfg(any(test, feature = "terminal-diagnostics"))]
 pub use diagnostics::TerminalRenderDiagnostics;
 pub use panel::{PanelSpec, TerminalPanel};
+pub use security::terminal_security_policy;
 pub use status::{find_in_active_terminal, new_terminal_with_shell_cmd};
 
 use gpui::App;

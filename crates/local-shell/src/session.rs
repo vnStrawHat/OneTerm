@@ -18,7 +18,7 @@ use oneterm_core::config::resolve_shell;
 use oneterm_core::{AppError, LocalShellConfig, home_dir};
 use oneterm_terminal::{
     ClipboardOrigin, GridSize, OscRouter, PtySize, PtyTransport, SessionEvent, SessionEventSink,
-    SharedSessionState, SharedState, TerminalError,
+    SharedSessionState, SharedState, TerminalError, TerminalSecurityPolicy,
 };
 
 use crate::event_loop::ShellEventLoop;
@@ -40,11 +40,13 @@ pub struct LocalSession {
 }
 
 impl LocalSession {
-    /// Spawn a shell from `cfg` with the initial size `initial`.
+    /// Spawn a shell from `cfg` with the initial size `initial`. `security` is
+    /// the user's policy for terminal-controlled side effects (SEC-08).
     pub fn spawn(
         cfg: LocalShellConfig,
         initial: PtySize,
         scrollback_history: usize,
+        security: TerminalSecurityPolicy,
     ) -> Result<Self, AppError> {
         let resolved = resolve_shell(&cfg)?;
         let opts = Options {
@@ -73,11 +75,12 @@ impl LocalSession {
         let state = SharedSessionState::new_alive();
 
         let (event_tx, event_rx) = async_channel::bounded::<SessionEvent>(4096);
-        let listener = OscRouter::new(
+        let listener = OscRouter::with_security(
             LocalTransport::new(),
             SessionEventSink::new(event_tx),
             state.clone(),
             ClipboardOrigin::Local,
+            security,
         );
 
         let size = GridSize {

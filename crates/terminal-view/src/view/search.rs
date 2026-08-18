@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use gpui::{
     App, AppContext, Context, Entity, InteractiveElement as _, IntoElement, KeyDownEvent,
-    MouseButton, ParentElement as _, SharedString, Styled, Task, Window, div, px,
+    MouseButton, ParentElement as _, SharedString, Styled, Subscription, Task, Window, div, px,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{
@@ -73,6 +73,13 @@ pub(crate) struct SearchState {
     /// Debounce task for the search — delays the full-grid scan after the
     /// last keystroke.
     pub(crate) debounce_task: Option<Task<()>>,
+    /// Subscription to the search input's events (kept for the life of the
+    /// bar; dropping it in `clear` unsubscribes — CORR-65).
+    pub(crate) input_subscription: Option<Subscription>,
+    /// Terminal output arrived since the matches were computed: their grid
+    /// coordinates are stale and must be refreshed on the next frame
+    /// (PERF-04: one refresh per frame instead of one per PTY read).
+    dirty: bool,
 }
 
 impl SearchState {
@@ -122,6 +129,16 @@ impl SearchState {
     /// Reset everything (bar closed, no matches, debounce cancelled).
     fn clear(&mut self) {
         *self = Self::default();
+    }
+
+    /// Flag the stored matches as stale (new terminal output).
+    pub(crate) fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Whether a refresh is due: stale matches for an open bar with a query.
+    fn needs_refresh(&self) -> bool {
+        self.dirty && self.has_query()
     }
 
     /// Compute the visible search highlights (display coordinates) for the
@@ -191,31 +208,32 @@ impl LocalTerminalView {
         self.search.input = Some(state.clone());
 
         // Subscribe to input events → drive the search + navigation.
-        cx.subscribe(&state, |this, state, event: &InputEvent, cx| match event {
-            InputEvent::Change => {
-                let query = state.read(cx).value().to_string();
-                this.search.query = query;
-                // Debounce the search — cancel any pending search and schedule
-                // a new one. This prevents a full-grid scan on every keystroke
-                // while typing.
-                this.search.debounce_task = Some(cx.spawn(async move |this, cx| {
-                    cx.background_executor()
-                        .timer(Duration::from_millis(SEARCH_DEBOUNCE_MS))
-                        .await;
-                    this.update(cx, |this, cx| {
-                        this.run_search(cx);
-                        cx.notify();
-                    })
-                    .ok();
-                }));
-            }
-            InputEvent::PressEnter { shift, .. } => {
-                this.goto_match(*shift, cx);
-                cx.notify();
-            }
-            InputEvent::Focus | InputEvent::Blur => {}
-        })
-        .detach();
+        let subscription =
+            cx.subscribe(&state, |this, state, event: &InputEvent, cx| match event {
+                InputEvent::Change => {
+                    let query = state.read(cx).value().to_string();
+                    this.search.query = query;
+                    // Debounce the search — cancel any pending search and schedule
+                    // a new one. This prevents a full-grid scan on every keystroke
+                    // while typing.
+                    this.search.debounce_task = Some(cx.spawn(async move |this, cx| {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(SEARCH_DEBOUNCE_MS))
+                            .await;
+                        this.update(cx, |this, cx| {
+                            this.run_search(cx);
+                            cx.notify();
+                        })
+                        .ok();
+                    }));
+                }
+                InputEvent::PressEnter { shift, .. } => {
+                    this.goto_match(*shift, cx);
+                    cx.notify();
+                }
+                InputEvent::Focus | InputEvent::Blur => {}
+            });
+        self.search.input_subscription = Some(subscription);
 
         state.update(cx, |s, cx| s.focus(window, cx));
         cx.notify();
@@ -248,26 +266,28 @@ impl LocalTerminalView {
             .read(cx)
             .search(&self.search.query, self.search.options);
         self.search.set_matches(matches);
+        self.search.dirty = false;
         // Scroll the first active match into view.
         self.scroll_to_active_match(cx);
     }
 
     /// Re-run the search against the current terminal content **without**
-    /// resetting the active match index.
+    /// resetting the active match index, when output arrived since the last
+    /// run ([`SearchState::mark_dirty`]). Called once per frame from `render`.
     ///
-    /// This is called when new terminal output arrives: the alacritty grid
-    /// coordinate system shifts as lines scroll into history, so the `line`
-    /// values stored in [`SearchState::matches`] would otherwise point at the
-    /// wrong visual rows. Re-running the search
-    /// refreshes them with the current grid coordinates so highlights stay
-    /// aligned with their content.
+    /// New terminal output shifts the alacritty grid coordinate system as
+    /// lines scroll into history, so the `line` values stored in
+    /// [`SearchState::matches`] would otherwise point at the wrong visual rows.
+    /// Re-running the search refreshes them with the current grid coordinates
+    /// so highlights stay aligned with their content.
     ///
     /// Unlike [`run_search`](Self::run_search) this does **not** scroll the
     /// viewport — new output must not move the user's view to the active match.
     /// The active index is kept (clamped to the new length) so the user does
     /// not lose their navigation position.
-    pub(crate) fn refresh_search(&mut self, cx: &mut Context<Self>) {
-        if !self.search.has_query() {
+    pub(crate) fn refresh_search_if_dirty(&mut self, cx: &mut Context<Self>) {
+        if !self.search.needs_refresh() {
+            self.search.dirty = false;
             return;
         }
         let matches = self
@@ -275,6 +295,7 @@ impl LocalTerminalView {
             .read(cx)
             .search(&self.search.query, self.search.options);
         self.search.refresh_matches(matches);
+        self.search.dirty = false;
     }
 
     /// Navigate to the previous (`backward = true`, Shift+Enter) or next match
@@ -303,15 +324,15 @@ impl LocalTerminalView {
 
     /// Render the search bar overlay (top-right). Returns `None` when search is
     /// inactive.
-    pub(crate) fn render_search_bar(
-        &self,
-        _window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Option<impl IntoElement> {
+    pub(crate) fn render_search_bar(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         if !self.search.active {
             return None;
         }
-        let theme = cx.theme().clone();
+        // Read the three colours by value instead of cloning the theme (PERF-05).
+        let (bar_bg, border, foreground) = {
+            let t = cx.theme();
+            (t.background.opacity(0.97), t.border, t.foreground)
+        };
         let input_state = self.search.input.clone()?;
         let view = cx.entity();
         let total = self.search.matches.len();
@@ -340,9 +361,9 @@ impl LocalTerminalView {
                 .px_1p5()
                 .py_1()
                 .rounded_md()
-                .bg(theme.background.opacity(0.97))
+                .bg(bar_bg)
                 .border_1()
-                .border_color(theme.border)
+                .border_color(border)
                 .shadow_sm()
                 // The search bar overlays the terminal grid. Stop left-button
                 // mouse down/up from bubbling into the terminal's mouse handlers,
@@ -381,7 +402,7 @@ impl LocalTerminalView {
                             cx.notify();
                         })),
                 )
-                .child(div().w(px(1.0)).h(px(18.0)).bg(theme.border))
+                .child(div().w(px(1.0)).h(px(18.0)).bg(border))
                 // The text input — grows to fill.
                 .child(
                     div()
@@ -394,7 +415,7 @@ impl LocalTerminalView {
                         .id("search-counter")
                         .px_1()
                         .text_xs()
-                        .text_color(theme.foreground)
+                        .text_color(foreground)
                         .child(counter),
                 )
                 // Previous match (↑).
@@ -525,6 +546,20 @@ mod tests {
         assert_eq!(hl.len(), 1);
         assert_eq!(hl[0].display_line, 0);
         assert!(hl[0].active);
+    }
+
+    #[test]
+    fn dirty_flag_only_requests_a_refresh_for_an_open_query() {
+        let mut s = open_with(vec![m(0, 0, 1)]);
+        assert!(!s.needs_refresh());
+        s.mark_dirty();
+        assert!(s.needs_refresh());
+        // A closed bar (or empty query) never refreshes, dirty or not.
+        s.active = false;
+        assert!(!s.needs_refresh());
+        let mut closed = SearchState::default();
+        closed.mark_dirty();
+        assert!(!closed.needs_refresh());
     }
 
     #[test]

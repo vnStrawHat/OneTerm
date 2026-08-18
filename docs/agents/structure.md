@@ -131,8 +131,9 @@ OneTerm/
 │   ├── terminal-view/              # `oneterm-terminal-view` — TERMINAL feature (has terminal-diagnostics feat)
 │   │   ├── assets/highlight/       # default.json semantic style asset (include_str!)
 │   │   └── src/                    # lib.rs init() (register terminal + terminal-settings panels + status
-│   │                               #   metrics); panel/, view/, element/, layout/, box_drawing/,
-│   │                               #   handlers/, theme/, url/, highlight/, space/, completion/
+│   │                               #   metrics); panel/, view/ (render, search, deps = TerminalDeps),
+│   │                               #   element/, layout/, box_drawing/, handlers/, theme/, url/,
+│   │                               #   highlight/, space/, completion/, agent.rs, security.rs …
 │   │
 │   ├── sftp-ui/                    # `oneterm-sftp-ui` — SFTP feature (file browser + transfer queue)
 │   │   └── src/                    # lib.rs init() (register "sftp" panel); panel + browser_view

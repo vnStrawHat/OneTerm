@@ -79,6 +79,7 @@ impl TerminalSettings {
             tab_title_mode: layout.tab_title,
 
             show_context_menu: mouse.show_context_menu,
+            copy_on_select: mouse.copy_on_select,
 
             scroll_multiplier: scroll.multiplier,
             alternate_scroll: scroll.alternate_scroll,

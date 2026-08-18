@@ -56,8 +56,16 @@ pub fn detect_url_at(
             }
             break;
         }
+        // The visible label of the link, so the click handler can compare it
+        // with the target (SEC-03).
+        let display_text: String = cells[line_start + start..=line_start + end]
+            .iter()
+            .filter(|ic| !ic.cell.flags.contains(Flags::WIDE_CHAR_SPACER))
+            .map(|ic| ic.cell.c)
+            .collect();
         return Some(DetectedUrl {
             url: h.uri().to_string(),
+            display_text: Some(display_text),
             row,
             start_col: start,
             end_col: end + 1,
@@ -167,6 +175,7 @@ pub fn detect_url_at(
 
             return Some(DetectedUrl {
                 url: final_url,
+                display_text: None,
                 row: url_row,
                 start_col: url_start_col,
                 end_col: url_end_col + 1,

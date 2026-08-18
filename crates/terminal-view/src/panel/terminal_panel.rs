@@ -27,10 +27,15 @@ use oneterm_terminal::PtySize;
 use oneterm_terminal::TerminalSession;
 
 use oneterm_actions::{AddPanelWithShell, NewSession};
-use oneterm_settings::{TabTitleMode, TerminalSettings};
+use oneterm_settings::TabTitleMode;
 
+use super::super::security::security_policy_from_settings;
 use super::super::space::{DragTerminalTab, SpaceId, SpaceTree, SplitContext};
-use super::super::view::{LocalTerminalView, TerminalViewEvent};
+use super::super::view::{LocalTerminalView, TerminalDeps, TerminalViewEvent};
+
+/// Initial PTY size for a freshly spawned session; the element resizes it to
+/// the real grid on the first prepaint.
+pub(crate) const INITIAL_PTY_SIZE: PtySize = PtySize { rows: 24, cols: 80 };
 
 /// Panel displaying a Terminal Tab (a tree of Spaces).
 pub struct TerminalPanel {
@@ -52,6 +57,8 @@ pub struct TerminalPanel {
     pub(super) _title_subs: Vec<Subscription>,
     /// Subscription to global `TerminalSettings` changes.
     pub(super) _settings_sub: Subscription,
+    /// The services this panel's terminal views receive (ARCH-20).
+    pub(super) deps: TerminalDeps,
 }
 
 /// What a new terminal tab hosts. Passed to [`TerminalPanel::open`].
@@ -82,14 +89,17 @@ impl TerminalPanel {
     /// (the user can retry from the placeholder).
     pub(crate) fn from_spec(spec: PanelSpec, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let primary = oneterm_state::AppState::primary_workspace_id(cx);
+        // The one place the terminal feature reads its process globals; the
+        // views get them handed down (ARCH-20).
+        let deps = TerminalDeps::from_globals(cx);
         let (view, tab_title, workspace_id) = match spec {
             PanelSpec::DefaultShell { workspace } => (
-                Self::spawn_local_view(None, window, cx),
+                Self::spawn_local_view(&deps, None, window, cx),
                 "Terminal".to_string(),
                 workspace.or(primary),
             ),
             PanelSpec::Shell(kind) => (
-                Self::spawn_local_view(Some(kind), window, cx),
+                Self::spawn_local_view(&deps, Some(kind), window, cx),
                 "Terminal".to_string(),
                 primary,
             ),
@@ -99,8 +109,9 @@ impl TerminalPanel {
                 duplicate_config,
             } => {
                 let session_entity = cx.new(|_| session);
+                let view_deps = deps.clone();
                 let view = cx.new(|cx| {
-                    let mut view = LocalTerminalView::new(session_entity, window, cx);
+                    let mut view = LocalTerminalView::new(session_entity, view_deps, window, cx);
                     view.duplicate_config = duplicate_config;
                     view
                 });
@@ -122,7 +133,7 @@ impl TerminalPanel {
         };
         let active = tree.active();
 
-        let _settings_sub = cx.observe(&TerminalSettings::global(cx), |_this, _settings, cx| {
+        let _settings_sub = cx.observe(&deps.settings, |_this, _settings, cx| {
             cx.notify();
         });
 
@@ -135,6 +146,7 @@ impl TerminalPanel {
             tab_title_override: None,
             _title_subs: Vec::new(),
             _settings_sub,
+            deps,
         };
         if let Some(view) = &view {
             this.attach_split_ctx(view, active, cx);
@@ -147,12 +159,13 @@ impl TerminalPanel {
     /// Returns `None` if the session could not be spawned (e.g. missing shell).
     /// The caller should handle the `None` case by showing an error state.
     pub(super) fn spawn_local_view(
+        deps: &TerminalDeps,
         shell_kind_override: Option<ShellKind>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Entity<LocalTerminalView>> {
         let shell = {
-            let settings = TerminalSettings::global(cx).read(cx);
+            let settings = deps.settings.read(cx);
             match shell_kind_override {
                 Some(kind) => {
                     // Override the shell kind but keep other settings (utf8, cwd, env, args).
@@ -165,20 +178,27 @@ impl TerminalPanel {
                 None => settings.shell.clone(),
             }
         };
-        Self::spawn_local_view_with_config(shell, window, cx)
+        Self::spawn_local_view_with_config(deps, shell, window, cx)
     }
 
     /// Spawn a local terminal view from an exact shell configuration.
     fn spawn_local_view_with_config(
+        deps: &TerminalDeps,
         shell: LocalShellConfig,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Entity<LocalTerminalView>> {
-        let scrollback_history = TerminalSettings::global(cx).read(cx).scrollback_history;
+        let (scrollback_history, security) = {
+            let settings = deps.settings.read(cx);
+            (
+                settings.scrollback_history,
+                security_policy_from_settings(settings),
+            )
+        };
         let factory = AppServices::session_factory(cx);
         let duplicate_config = SessionDuplicateConfig::Local(shell.clone());
         let session: Box<dyn TerminalSession> =
-            match factory.spawn_local(shell, PtySize { rows: 24, cols: 80 }, scrollback_history) {
+            match factory.spawn_local(shell, INITIAL_PTY_SIZE, scrollback_history, security) {
                 Ok(s) => s,
                 Err(e) => {
                     log::error!("Failed to spawn local terminal session: {e}");
@@ -186,8 +206,9 @@ impl TerminalPanel {
                 }
             };
         let session_entity = cx.new(|_| session);
+        let view_deps = deps.clone();
         Some(cx.new(|cx| {
-            let mut view = LocalTerminalView::new(session_entity, window, cx);
+            let mut view = LocalTerminalView::new(session_entity, view_deps, window, cx);
             view.duplicate_config = Some(duplicate_config);
             view
         }))
@@ -275,7 +296,7 @@ impl TerminalPanel {
     /// instead, passing the title fetched from the already-leased view's own
     /// `session.read(cx).title()`.
     pub(crate) fn tab_label(&self, cx: &App) -> String {
-        let mode = TerminalSettings::global(cx).read(cx).tab_title_mode;
+        let mode = self.deps.settings.read(cx).tab_title_mode;
         let session_title = self
             .tree
             .active_terminal()
@@ -298,7 +319,7 @@ impl TerminalPanel {
     /// only used when `tab_title_mode == Osc` and no manual override exists; in
     /// `Default` mode the static `tab_title` fallback is returned.
     pub(crate) fn tab_label_with_title(&self, live_title: Option<&str>, cx: &App) -> String {
-        let mode = TerminalSettings::global(cx).read(cx).tab_title_mode;
+        let mode = self.deps.settings.read(cx).tab_title_mode;
         let live = match mode {
             TabTitleMode::Osc => live_title,
             TabTitleMode::Default => None,
@@ -319,7 +340,7 @@ impl TerminalPanel {
     }
 
     /// Whether this tab has no terminal Spaces left (all empty).
-    pub(crate) fn has_no_terminals(&self, _cx: &App) -> bool {
+    pub(crate) fn has_no_terminals(&self) -> bool {
         self.tree.has_no_terminals()
     }
 
@@ -535,13 +556,13 @@ impl Panel for TerminalPanel {
         self.tab_panel = Some(tab_panel);
     }
 
-    fn set_active(&mut self, active: bool, window: &mut Window, cx: &mut Context<Self>) {
+    fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
         if self.is_active != active {
             self.is_active = active;
             cx.notify();
         }
         if active {
-            self.publish_active_session(window, cx);
+            self.publish_active_session(cx);
         }
     }
 }

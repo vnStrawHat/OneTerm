@@ -1,13 +1,33 @@
 //! Grow-only per-line timestamps for the gutter.
 //!
 //! [`GutterTimestamps`] stamps each scrollback line with the wall-clock time it
-//! first appeared and never overwrites it. The stamping runs both when output
-//! arrives (so inactive tabs keep accurate times) and at render time.
+//! first appeared and never overwrites it. The stamping runs when output
+//! arrives (the single stamper — see `LocalTerminalView::handle_event`), so
+//! inactive tabs keep accurate times too.
 
 use std::collections::VecDeque;
 use std::rc::Rc;
 
+use chrono::Timelike as _;
 use oneterm_terminal::TerminalInfo;
+
+/// A gutter timestamp: seconds since local midnight. Four bytes per scrollback
+/// line instead of a heap `String` (PERF-12); formatted as `HH:MM:SS` only for
+/// the rows actually rendered.
+pub(crate) type SecondsOfDay = u32;
+
+/// Format a [`SecondsOfDay`] as `HH:MM:SS`.
+pub(crate) fn format_hms(seconds: SecondsOfDay) -> String {
+    let h = (seconds / 3600) % 24;
+    let m = (seconds / 60) % 60;
+    let s = seconds % 60;
+    format!("{h:02}:{m:02}:{s:02}")
+}
+
+/// Current local time as seconds since midnight.
+fn now_seconds_of_day() -> SecondsOfDay {
+    chrono::Local::now().num_seconds_from_midnight()
+}
 
 /// Per-line render timestamps, keyed by each line's **absolute index**.
 ///
@@ -16,8 +36,8 @@ use oneterm_terminal::TerminalInfo;
 /// overwritten (see [`GutterTimestamps::update`]).
 #[derive(Debug, Default)]
 pub(crate) struct GutterTimestamps {
-    /// Timestamps (`HH:MM:SS`) shared with the per-frame element via `Rc`.
-    times: Rc<VecDeque<String>>,
+    /// Timestamps shared with the per-frame element via `Rc`.
+    times: Rc<VecDeque<SecondsOfDay>>,
     /// Absolute index (0-based) of `times[0]` — the oldest line still tracked.
     /// Increases as old lines leave the scrollback.
     base: usize,
@@ -29,7 +49,7 @@ pub(crate) struct GutterTimestamps {
 
 impl GutterTimestamps {
     /// The shared timestamp storage (cheap clone for the element).
-    pub(crate) fn times(&self) -> Rc<VecDeque<String>> {
+    pub(crate) fn times(&self) -> Rc<VecDeque<SecondsOfDay>> {
         self.times.clone()
     }
 
@@ -40,8 +60,7 @@ impl GutterTimestamps {
 
     /// Stamp newly appeared lines with the current local time.
     pub(crate) fn update(&mut self, info: &TerminalInfo) {
-        let now = chrono::Local::now().format("%H:%M:%S").to_string();
-        self.update_with(info, &now);
+        self.update_with(info, now_seconds_of_day());
     }
 
     /// Update the timestamps using a **grow-only** model keyed by each line's
@@ -54,7 +73,7 @@ impl GutterTimestamps {
     /// refilling with `now` on every dip would make every line jump to the same
     /// time. Here a temporary dip simply means "add nothing", so existing
     /// timestamps are kept.
-    fn update_with(&mut self, info: &TerminalInfo, now: &str) {
+    fn update_with(&mut self, info: &TerminalInfo, now: SecondsOfDay) {
         let total = info.total_lines;
         let absolute = info.absolute_line_count;
 
@@ -113,7 +132,7 @@ impl GutterTimestamps {
             let new_lines = content_high - covered;
             times.reserve(new_lines);
             for _ in 0..new_lines {
-                times.push_back(now.to_string());
+                times.push_back(now);
             }
         }
 
@@ -134,7 +153,7 @@ impl GutterTimestamps {
 mod tests {
     use oneterm_terminal::TerminalInfo;
 
-    use super::GutterTimestamps;
+    use super::{GutterTimestamps, format_hms};
 
     /// A 10-row viewport with `history` scrolled-off lines and content down to
     /// `content_row` (0-based screen row).
@@ -152,51 +171,58 @@ mod tests {
         }
     }
 
-    fn stamps(g: &GutterTimestamps) -> Vec<String> {
-        g.times().iter().cloned().collect()
+    fn stamps(g: &GutterTimestamps) -> Vec<u32> {
+        g.times().iter().copied().collect()
+    }
+
+    #[test]
+    fn seconds_of_day_format_as_hh_mm_ss() {
+        assert_eq!(format_hms(0), "00:00:00");
+        assert_eq!(format_hms(3661), "01:01:01");
+        assert_eq!(format_hms(23 * 3600 + 59 * 60 + 59), "23:59:59");
     }
 
     #[test]
     fn stamps_only_lines_with_content() {
         let mut g = GutterTimestamps::default();
-        g.update_with(&info(0, 2, 0), "t1");
+        g.update_with(&info(0, 2, 0), 1);
         assert_eq!(g.base(), 0);
-        assert_eq!(stamps(&g), ["t1", "t1", "t1"]);
+        assert_eq!(stamps(&g), [1, 1, 1]);
     }
 
     #[test]
     fn stamps_are_grow_only_and_never_overwritten() {
         let mut g = GutterTimestamps::default();
-        g.update_with(&info(0, 1, 0), "t1");
-        // The cursor moves down two rows: only the two new rows get "t2".
-        g.update_with(&info(0, 3, 0), "t2");
-        assert_eq!(stamps(&g), ["t1", "t1", "t2", "t2"]);
+        g.update_with(&info(0, 1, 0), 1);
+        // The cursor moves down two rows: only the two new rows get "2".
+        g.update_with(&info(0, 3, 0), 2);
+        assert_eq!(stamps(&g), [1, 1, 2, 2]);
         // A temporary dip (ConPTY reflow) adds nothing and keeps old stamps.
-        g.update_with(&info(0, 0, 0), "t3");
-        assert_eq!(stamps(&g), ["t1", "t1", "t2", "t2"]);
+        g.update_with(&info(0, 0, 0), 3);
+        assert_eq!(stamps(&g), [1, 1, 2, 2]);
     }
 
     #[test]
     fn stamps_follow_lines_into_history() {
         let mut g = GutterTimestamps::default();
-        g.update_with(&info(0, 9, 0), "t1");
+        g.update_with(&info(0, 9, 0), 1);
         // Five lines scroll into history; the viewport is full again.
-        g.update_with(&info(5, 9, 0), "t2");
+        g.update_with(&info(5, 9, 0), 2);
         assert_eq!(g.base(), 0);
         assert_eq!(g.times().len(), 15);
-        assert_eq!(g.times()[9], "t1");
-        assert_eq!(g.times()[10], "t2");
+        assert_eq!(g.times()[9], 1);
+        assert_eq!(g.times()[10], 2);
     }
 
     #[test]
     fn drops_stamps_that_left_the_scrollback() {
         let mut g = GutterTimestamps::default();
-        g.update_with(&info(0, 9, 0), "t1");
+        g.update_with(&info(0, 9, 0), 1);
         // The scrollback holds only 12 lines but 20 have been output: the
         // oldest 8 stamps are dropped and `base` advances.
         let mut i = info(10, 9, 0);
         i.total_lines = 12;
-        g.update_with(&i, "t2");
+        g.update_with(&i, 2);
         assert_eq!(g.base(), 8);
         assert_eq!(g.times().len(), 12);
     }
@@ -204,11 +230,11 @@ mod tests {
     #[test]
     fn clear_epoch_change_resets_the_stamps() {
         let mut g = GutterTimestamps::default();
-        g.update_with(&info(0, 5, 0), "t1");
+        g.update_with(&info(0, 5, 0), 1);
         // `clear` restarts the absolute counter; the new content must be
         // stamped with the new time, not the stale entries.
-        g.update_with(&info(0, 0, 1), "t2");
-        assert_eq!(stamps(&g), ["t2"]);
+        g.update_with(&info(0, 0, 1), 2);
+        assert_eq!(stamps(&g), [2]);
     }
 
     #[test]
@@ -217,11 +243,11 @@ mod tests {
         // 60 lines output, scrollback trimmed to 20 → base advances to 40.
         let mut trimmed = info(50, 9, 0);
         trimmed.total_lines = 20;
-        g.update_with(&trimmed, "t1");
+        g.update_with(&trimmed, 1);
         assert_eq!(g.base(), 40);
         // The absolute counter restarts below the oldest tracked line.
-        g.update_with(&info(0, 0, 0), "t2");
+        g.update_with(&info(0, 0, 0), 2);
         assert_eq!(g.base(), 0);
-        assert_eq!(stamps(&g), ["t2"]);
+        assert_eq!(stamps(&g), [2]);
     }
 }

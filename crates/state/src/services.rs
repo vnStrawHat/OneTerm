@@ -154,7 +154,7 @@ impl AppServices {
 mod tests {
     use super::*;
     use oneterm_core::{LocalShellConfig, Result, SshConfig};
-    use oneterm_terminal::{PtySize, TerminalSession};
+    use oneterm_terminal::{PtySize, TerminalSecurityPolicy, TerminalSession};
 
     struct TestFactory;
 
@@ -164,6 +164,7 @@ mod tests {
             _: LocalShellConfig,
             _: PtySize,
             _: usize,
+            _: TerminalSecurityPolicy,
         ) -> Result<Box<dyn TerminalSession>> {
             Err(oneterm_core::AppError::msg("test factory"))
         }
@@ -173,6 +174,7 @@ mod tests {
             _: SshConfig,
             _: PtySize,
             _: usize,
+            _: TerminalSecurityPolicy,
         ) -> Result<Box<dyn TerminalSession>> {
             Err(oneterm_core::AppError::msg("test factory"))
         }

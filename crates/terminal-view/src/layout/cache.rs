@@ -1,7 +1,5 @@
 //! Row layout cache update logic.
 
-use std::collections::HashSet;
-
 use alacritty_terminal::term::cell::Flags;
 use gpui::Font;
 
@@ -75,81 +73,65 @@ pub(crate) fn update_row_cache(
 
     cache.ensure_size(num_lines);
 
-    let mut scroll_dirty: Vec<usize> = Vec::new();
-    if scroll_only {
-        if scroll_delta > 0 {
-            let delta = (scroll_delta as usize).min(num_lines);
-            if delta < num_lines {
-                cache.rows.rotate_right(delta);
-                scroll_dirty = (0..delta).collect();
-            } else {
-                scroll_dirty = (0..num_lines).collect();
-            }
-        } else if scroll_delta < 0 {
-            let delta = ((-scroll_delta) as usize).min(num_lines);
-            if delta < num_lines {
-                cache.rows.rotate_left(delta);
-                scroll_dirty = ((num_lines - delta)..num_lines).collect();
-            } else {
-                scroll_dirty = (0..num_lines).collect();
-            }
-        }
-    }
-
+    // Per-row dirty flags — a reusable bitset (PERF-10) instead of a fresh
+    // `HashSet<usize>` every frame.
     let full_dirty = global_invalidate || matches!(damage, TermDamageInfo::Full);
-    let dirty_set: HashSet<usize> = if full_dirty {
-        (0..num_lines).collect()
-    } else if scroll_only {
-        let mut ds: HashSet<usize> = scroll_dirty.into_iter().collect();
+    cache.dirty_rows.clear();
+    cache.dirty_rows.resize(num_lines, full_dirty);
+    if !full_dirty {
+        if scroll_only {
+            mark_scroll_dirty(
+                &mut cache.rows,
+                &mut cache.dirty_rows,
+                scroll_delta,
+                num_lines,
+            );
+        }
         if let TermDamageInfo::Partial(lines) = damage {
             for &l in lines.iter() {
                 if l < num_lines {
-                    ds.insert(l);
+                    cache.dirty_rows[l] = true;
                 }
             }
         }
-        ds
-    } else if let TermDamageInfo::Partial(lines) = damage {
-        lines.iter().copied().filter(|l| *l < num_lines).collect()
-    } else {
-        HashSet::new()
-    };
+    }
+    let dirty_count = cache.dirty_rows.iter().filter(|d| **d).count();
 
     cache.stats.total_lines = num_lines;
-    cache.stats.dirty_lines = dirty_set.len();
+    cache.stats.dirty_lines = dirty_count;
     cache.stats.hash_calls = 0;
     cache.stats.row_layout_calls = 0;
     cache.stats.allocation_buffer_sites = if num_lines == 0 {
         0
+    } else if dirty_count == 0 {
+        // Only the per-frame row scratch buffer.
+        1
     } else {
-        // `url_masks_wrapped`: masks + wrap flags + chars/mask per row.
-        2 + 2 * num_lines
+        // Row scratch + `url_masks_wrapped`: masks + wrap flags + chars/mask per row.
+        1 + 2 + 2 * num_lines
     };
-    if !dirty_set.is_empty() {
-        // The dirty-row HashSet.
-        cache.stats.allocation_buffer_sites += 1;
-    }
 
     // Pre-compute URL masks for all lines (handles wrapped URLs).
     // PERF-09: Skip recomputation when no rows are dirty (idle terminal) —
     // reuse cached masks from the last frame with dirty rows.
     let num_cols = grid_size.1 as usize;
-    if !dirty_set.is_empty() {
+    if dirty_count > 0 {
         cache.cached_url_masks = url_masks_wrapped(cells, num_lines, num_cols);
     }
     let url_masks = &cache.cached_url_masks;
 
+    // One scratch buffer for the cells of the current row, reused across rows
+    // (PERF-10: no `Vec<&IndexedCell>` per line per frame).
+    let mut line_vec: Vec<&IndexedCell> = Vec::with_capacity(num_cols);
     let linegroups = cells.iter().chunk_by(|ic| ic.point.line);
     for (display_line, (_, line_cells)) in linegroups.into_iter().enumerate() {
         if display_line >= num_lines {
             break;
         }
-        let line_vec: Vec<&IndexedCell> = line_cells.collect();
-        if !line_vec.is_empty() {
-            cache.stats.allocation_buffer_sites += 1;
-        }
+        line_vec.clear();
+        line_vec.extend(line_cells);
 
-        let is_dirty = if dirty_set.contains(&display_line) {
+        let is_dirty = if cache.dirty_rows[display_line] {
             true
         } else if display_line as i32 == cursor_display_line
             && cursor_display_line >= 0
@@ -177,7 +159,13 @@ pub(crate) fn update_row_cache(
             // scan it, flatten to per-column cell_class, then overlay URL mask.
             let cell_class = build_cell_class(&line_vec, num_cols, url_mask, overlay, display_line);
 
-            let layout = layout_row(line_vec, display_line as i32, theme, base_font, &cell_class);
+            let layout = layout_row(
+                &line_vec,
+                display_line as i32,
+                theme,
+                base_font,
+                &cell_class,
+            );
 
             cache.rows[display_line] = RowLayout {
                 rects: layout.rects,
@@ -191,7 +179,38 @@ pub(crate) fn update_row_cache(
 
     cache.prev_grid_size = Some(grid_size);
     cache.prev_display_offset = display_offset;
-    cache.prev_style_key = Some(style_key.clone());
+    // Only clone the key (a `Font` + palette) when it actually changed.
+    if style_changed {
+        cache.prev_style_key = Some(style_key.clone());
+    }
+}
+
+/// Rotate the cached rows for a scroll-only frame and mark the rows that
+/// scrolled into view dirty. A scroll by a whole viewport (or more) leaves
+/// nothing to reuse.
+fn mark_scroll_dirty(
+    rows: &mut [RowLayout],
+    dirty: &mut [bool],
+    scroll_delta: i32,
+    num_lines: usize,
+) {
+    if scroll_delta > 0 {
+        let delta = (scroll_delta as usize).min(num_lines);
+        if delta < num_lines {
+            rows.rotate_right(delta);
+            dirty[..delta].fill(true);
+        } else {
+            dirty.fill(true);
+        }
+    } else if scroll_delta < 0 {
+        let delta = ((-scroll_delta) as usize).min(num_lines);
+        if delta < num_lines {
+            rows.rotate_left(delta);
+            dirty[num_lines - delta..].fill(true);
+        } else {
+            dirty.fill(true);
+        }
+    }
 }
 
 /// Build the per-column `cell_class` array for one display row.

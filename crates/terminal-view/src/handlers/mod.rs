@@ -6,8 +6,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gpui::{AnyElement, Entity, FocusHandle, IntoElement as _, MouseButton};
+use gpui::{AnyElement, Entity, FocusHandle, IntoElement as _, Modifiers, MouseButton};
 use oneterm_terminal::TerminalSession;
+use oneterm_terminal::mouse_encode::MouseModifiers;
 
 use super::element::RenderCache;
 use super::view::LocalTerminalView;
@@ -54,5 +55,14 @@ fn map_button(b: MouseButton) -> oneterm_terminal::TerminalMouseButton {
         MouseButton::Right => oneterm_terminal::TerminalMouseButton::Right,
         MouseButton::Middle => oneterm_terminal::TerminalMouseButton::Middle,
         MouseButton::Navigate(_) => oneterm_terminal::TerminalMouseButton::Left,
+    }
+}
+
+/// The modifier subset the mouse encoders report (Shift/Alt/Ctrl).
+fn mouse_mods(m: &Modifiers) -> MouseModifiers {
+    MouseModifiers {
+        shift: m.shift,
+        alt: m.alt,
+        ctrl: m.control,
     }
 }

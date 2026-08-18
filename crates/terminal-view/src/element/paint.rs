@@ -2,8 +2,8 @@
 
 use alacritty_terminal::vte::ansi::CursorShape;
 use gpui::{
-    App, Bounds, ContentMask, ElementInputHandler, Pixels, Point, TextRun, Window, fill, point, px,
-    size,
+    App, Bounds, ContentMask, ElementInputHandler, Pixels, Point, SharedString, TextRun, Window,
+    fill, point, px, size,
 };
 
 use super::super::box_drawing::{box_drawing_rects_into, rounded_corner_rects_aa};
@@ -69,7 +69,7 @@ impl super::TerminalElement {
     ) {
         let view = &self.view;
         let focus = &self.focus;
-        let theme = &self.theme;
+        let theme: &TerminalTheme = &self.theme;
         let font = &self.font;
         let font_size = self.font_size;
         let focused = self.focused;
@@ -94,7 +94,17 @@ impl super::TerminalElement {
             };
             window.paint_quad(fill(gutter_bounds, layout.gutter_bg));
             quad_count += 1;
-            paint_gutter(window, theme, font, font_size, layout, bounds, cx);
+            let mut cache = render_cache.borrow_mut();
+            paint_gutter(
+                window,
+                &mut cache.gutter_shapes,
+                theme,
+                font,
+                font_size,
+                layout,
+                bounds,
+                cx,
+            );
         }
 
         let scale_factor = window.scale_factor().max(1.0);
@@ -196,7 +206,17 @@ impl super::TerminalElement {
         drop(cache_ref);
 
         if let Some(cur) = &layout.cursor {
-            paint_cursor(cur, focused, cursor_visible, &geom, window, &mut quad_count);
+            paint_cursor(
+                cur,
+                focused,
+                cursor_visible,
+                &geom,
+                font,
+                font_size,
+                window,
+                cx,
+                &mut quad_count,
+            );
         }
 
         {
@@ -253,8 +273,12 @@ impl super::TerminalElement {
     }
 }
 
+/// Paint the gutter rows. Shaped lines are cached by text in `shapes` so a
+/// row is shaped once and re-used until it scrolls away (PERF-02).
+#[allow(clippy::too_many_arguments)]
 fn paint_gutter(
     window: &mut Window,
+    shapes: &mut super::super::layout::GutterShapeCache,
     theme: &TerminalTheme,
     font: &gpui::Font,
     font_size: Pixels,
@@ -265,53 +289,73 @@ fn paint_gutter(
     let glh = layout.line_height;
     let clock_color = theme.clock_fg;
     let ln_color = theme.line_number_fg;
+    shapes.prepare(font_size, &font.family);
     for entry in &layout.gutter_entries {
-        let runs: Vec<TextRun> = if entry.clock_len > 0 && entry.clock_len < entry.text.len() {
-            vec![
-                TextRun {
-                    len: entry.clock_len,
+        if !shapes.lines.contains_key(&entry.text) {
+            let runs: Vec<TextRun> = if entry.clock_len > 0 && entry.clock_len < entry.text.len() {
+                vec![
+                    TextRun {
+                        len: entry.clock_len,
+                        color: clock_color,
+                        background_color: None,
+                        font: font.clone(),
+                        underline: None,
+                        strikethrough: None,
+                    },
+                    TextRun {
+                        len: entry.text.len() - entry.clock_len,
+                        color: ln_color,
+                        background_color: None,
+                        font: font.clone(),
+                        underline: None,
+                        strikethrough: None,
+                    },
+                ]
+            } else {
+                vec![TextRun {
+                    len: entry.text.len(),
                     color: clock_color,
                     background_color: None,
                     font: font.clone(),
                     underline: None,
                     strikethrough: None,
-                },
-                TextRun {
-                    len: entry.text.len() - entry.clock_len,
-                    color: ln_color,
-                    background_color: None,
-                    font: font.clone(),
-                    underline: None,
-                    strikethrough: None,
-                },
-            ]
-        } else {
-            vec![TextRun {
-                len: entry.text.len(),
-                color: clock_color,
-                background_color: None,
-                font: font.clone(),
-                underline: None,
-                strikethrough: None,
-            }]
+                }]
+            };
+            let line = window
+                .text_system()
+                .shape_line(entry.text.clone(), font_size, &runs, None);
+            shapes.lines.insert(entry.text.clone(), line);
+        }
+        let Some(line) = shapes.lines.get(&entry.text) else {
+            continue;
         };
-        let line = window
-            .text_system()
-            .shape_line(entry.text.clone(), font_size, &runs, None);
         let pos = gpui::Point {
-            x: bounds.origin.x + px(4.0),
+            x: bounds.origin.x + GUTTER_TEXT_INSET,
             y: entry.y,
         };
-        let _ = line.paint(pos, glh, gpui::TextAlign::Left, None, window, cx_gutter);
+        if let Err(error) = line.paint(pos, glh, gpui::TextAlign::Left, None, window, cx_gutter) {
+            log::debug!("gutter paint failed: {error}");
+        }
     }
 }
 
+/// Horizontal inset of the gutter text from the gutter's left edge.
+const GUTTER_TEXT_INSET: Pixels = px(4.0);
+
+/// Paint the cursor. A focused, visible block cursor is a filled quad with the
+/// glyph under it re-painted in the cell's background colour on top (CORR-43:
+/// the glyph used to be hidden by the quad); an unfocused window or a
+/// `HollowBlock` shape draws only the outline.
+#[allow(clippy::too_many_arguments)]
 fn paint_cursor(
     cur: &CursorPaint,
     focused: bool,
     cursor_visible: bool,
     geom: &GridGeometry,
+    font: &gpui::Font,
+    font_size: Pixels,
     window: &mut Window,
+    cx: &mut App,
     quad_count: &mut usize,
 ) {
     let should_paint = !focused || cursor_visible;
@@ -333,10 +377,54 @@ fn paint_cursor(
             let ul_h_d = (f32::from(ul_h) * scale_factor).ceil().max(2.0) as i32;
             size(geom.run_w(1), px(ul_h_d as f32 / scale_factor))
         }
-        CursorShape::Block => size(geom.run_w(1), geom.line_h()),
-        CursorShape::HollowBlock => size(geom.run_w(1), geom.line_h()),
+        CursorShape::Block | CursorShape::HollowBlock => size(geom.run_w(1), geom.line_h()),
         CursorShape::Hidden => return,
     };
+    let hollow = !focused || cur.shape == CursorShape::HollowBlock;
+    if hollow && matches!(cur.shape, CursorShape::Block | CursorShape::HollowBlock) {
+        // One device pixel of outline on each edge.
+        let t = px(1.0 / scale_factor);
+        let cell = Bounds::new(pos, sz);
+        let edges = [
+            Bounds::new(cell.origin, size(cell.size.width, t)),
+            Bounds::new(
+                point(cell.origin.x, cell.origin.y + cell.size.height - t),
+                size(cell.size.width, t),
+            ),
+            Bounds::new(cell.origin, size(t, cell.size.height)),
+            Bounds::new(
+                point(cell.origin.x + cell.size.width - t, cell.origin.y),
+                size(t, cell.size.height),
+            ),
+        ];
+        for edge in edges {
+            window.paint_quad(fill(edge, cur.color));
+            *quad_count += 1;
+        }
+        return;
+    }
     window.paint_quad(fill(Bounds::new(pos, sz), cur.color));
     *quad_count += 1;
+    if cur.shape != CursorShape::Block {
+        return;
+    }
+    // Re-paint the glyph over the filled block in the cell's background colour.
+    if let Some((c, color)) = cur.glyph {
+        let text = SharedString::from(c.to_string());
+        let run = TextRun {
+            len: c.len_utf8(),
+            color,
+            background_color: None,
+            font: font.clone(),
+            underline: None,
+            strikethrough: None,
+        };
+        let shaped =
+            window
+                .text_system()
+                .shape_line(text, font_size, std::slice::from_ref(&run), Some(cw));
+        if let Err(error) = shaped.paint(pos, lh, gpui::TextAlign::Left, None, window, cx) {
+            log::debug!("cursor glyph paint failed: {error}");
+        }
+    }
 }

@@ -34,7 +34,7 @@ use tokio_util::sync::CancellationToken;
 use oneterm_core::{SshAuthMethod, SshConfig};
 use oneterm_terminal::{
     ClipboardOrigin, GridSize, OscRouter, PtySize, PtyTransport, SessionEvent, SessionEventSink,
-    SharedSessionState, SharedState,
+    SharedSessionState, SharedState, TerminalSecurityPolicy,
 };
 
 use crate::counting_stream::CountingStream;
@@ -163,10 +163,12 @@ where
 
 /// Connect over SSH to a server. Sync API — uses the shared runtime for connect.
 /// The runtime's bounded worker pool keeps all sessions' background tasks running.
+/// `security` is the user's policy for terminal-controlled side effects (SEC-08).
 pub fn connect(
     mut cfg: SshConfig,
     initial: PtySize,
     scrollback_history: usize,
+    security: TerminalSecurityPolicy,
 ) -> oneterm_core::Result<Box<dyn oneterm_terminal::TerminalSession>> {
     log::info!(
         "SshSession::connect: host={}, port={}, user={}, rows={}, cols={}",
@@ -187,11 +189,12 @@ pub fn connect(
     let state = SharedSessionState::new_alive();
 
     // SSH is remote: OSC 52 clipboard reads/writes default off.
-    let listener = OscRouter::new(
+    let listener = OscRouter::with_security(
         SshTransport::new(cmd_tx),
         SessionEventSink::new(event_tx),
         state.clone(),
         ClipboardOrigin::Remote,
+        security,
     );
     // Cancelled by `ssh_main_task` on exit so the SFTP task dies with the
     // connection (ARCH-28).

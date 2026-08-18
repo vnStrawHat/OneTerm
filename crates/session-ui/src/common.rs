@@ -294,6 +294,8 @@ pub(crate) fn connect_ssh_session(
     let factory = AppServices::session_factory(cx);
     // SSH sessions honour the same scrollback setting as local shells (CORR-33).
     let scrollback = TerminalSettings::global(cx).read(cx).scrollback_history;
+    // The user's OSC security policy for this session (SEC-08).
+    let security = oneterm_terminal_view::terminal_security_policy(cx);
 
     if cancellation.is_cancelled() {
         return cancellation;
@@ -309,7 +311,9 @@ pub(crate) fn connect_ssh_session(
         .spawn(cx, async move |cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { factory.connect_ssh(cfg, PtySize::INITIAL, scrollback) })
+                .spawn(async move {
+                    factory.connect_ssh(cfg, PtySize::INITIAL, scrollback, security)
+                })
                 .await;
             if task_cancellation.is_cancelled() {
                 connecting_for_task.store(false, std::sync::atomic::Ordering::Relaxed);
