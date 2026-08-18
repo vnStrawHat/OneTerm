@@ -15,9 +15,9 @@
 
 ### 1.1 Where the panel lives
 
-The Agent Panel is the right-dock panel used by Agent Mode. The concrete dock
-panel is `crates/app/src/agent_panel.rs` (`panel_name = "agent_panel"`). It
-hosts `oneterm_agent_ui::AgentListView`.
+The Agent Panel is the right-dock panel used by Agent Mode. The dock panel is
+`oneterm_agent_ui::AgentListView` itself (`panel_name = "agent"`), registered by
+the feature's `init()`.
 
 The display implementation lives in `crates/agent-ui`:
 
@@ -42,7 +42,6 @@ internals. It reads the folded display model from `oneterm_state::AgentRegistry`
 | Registry fold | `oneterm_state::AgentRegistry` | implemented |
 | Terminal feed into registry | `LocalTerminalView::push_agent_status` | implemented |
 | Card navigation targets (`AgentRegistry::set_nav` / `nav`) + focuser | `crates/state/src/agent_registry.rs`, `crates/terminal-view/src/agent.rs` | implemented |
-| Right-dock panel shell | `crates/app/src/agent_panel.rs` | implemented |
 | Agent list UI | `crates/agent-ui` | implemented as compact cards |
 
 ---
@@ -442,8 +441,7 @@ oneterm_state::AgentRegistry
         ▼
 oneterm_agent_ui::AgentListView
         │  groups, filters, sorts, renders compact cards
-        ▼
-crates/app::AgentPanel
+        │  and is itself the right-dock `Panel`
 ```
 
 Terminal lifecycle events also feed the registry:

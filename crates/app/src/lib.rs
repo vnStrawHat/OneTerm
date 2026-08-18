@@ -11,7 +11,6 @@ use std::borrow::Cow;
 use gpui::TaskExt as _;
 use oneterm_workspace::OneTermWorkspace;
 
-mod agent_panel;
 mod assets;
 mod crash_report;
 mod crash_report_dialog;

@@ -33,4 +33,4 @@ pub use agent_registry::{
 };
 pub use app_state::AppState;
 pub use completion_history::{CompletionHistory, GlobalCompletionHistory};
-pub use services::{AppServices, AppServicesBuilder};
+pub use services::AppServices;

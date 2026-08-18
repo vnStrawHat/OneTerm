@@ -5,10 +5,11 @@ use gpui::{
     InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
     StatefulInteractiveElement as _, Styled as _, Task, div, prelude::FluentBuilder as _,
 };
+use gpui_component::dock::{Panel, PanelControl, PanelEvent};
 use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 
 use oneterm_settings::UiConfig;
-use oneterm_state::{AgentCard, AgentRegistry, AgentStateCounts, Lifecycle};
+use oneterm_state::{AgentCard, AgentRegistry, AgentStateCounts, Lifecycle, panel_names};
 use oneterm_terminal::AgentState;
 
 use crate::card::Palette;
@@ -225,6 +226,33 @@ fn card_is_working(card: &AgentCard) -> bool {
 impl Focusable for AgentListView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
+    }
+}
+
+impl gpui::EventEmitter<PanelEvent> for AgentListView {}
+
+/// The view *is* the right-dock Agent panel: it renders its own header +
+/// scrolling card column full-bleed, so no wrapper panel is needed. Registered
+/// as a raw `DockItem::Panel` (no tab bar / close / zoom chrome); the default
+/// `dump` already records it as `PanelInfo::Panel`.
+impl Panel for AgentListView {
+    fn panel_name(&self) -> &'static str {
+        panel_names::AGENT
+    }
+
+    fn title(&mut self, _window: &mut gpui::Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        "Agent"
+    }
+
+    fn closable(&self, _: &App) -> bool {
+        // The panel is the whole right dock; closing is the dock's own toggle.
+        false
+    }
+
+    fn zoomable(&self, _: &App) -> Option<PanelControl> {
+        // Zoom is a TabPanel feature; `DockItem::Panel` is not subscribed to
+        // zoom events by the library (see `DockArea::subscribe_item`).
+        None
     }
 }
 

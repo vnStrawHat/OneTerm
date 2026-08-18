@@ -35,7 +35,6 @@ OneTerm/
 │   │       ├── lib.rs              # run(): logging + gpui init + install factory + init() + open window
 │   │       ├── init.rs             # Aggregator: globals + feature init() + WorkspaceCommands assembly
 │   │       ├── ssh_client_panel.rs  # SSH Client right-dock panel (DockItem::Panel) hosting Session + SFTP
-│   │       ├── agent_panel.rs       # Agent Mode right-dock panel (placeholder) (DockItem::Panel)
 │   │       ├── session_factory.rs  # AppSessionFactory: dispatches spawn_local/connect_ssh to local/ssh
 │   │       ├── assets.rs           # CustomAssets (merges oneterm_theme::icon::UiAssets + gpui-component)
 │   │       ├── crash_report.rs     # Crash store: panic hook, native staging promotion, retention (docs/crash-reporting.md)
@@ -99,7 +98,7 @@ OneTerm/
 │   │   └── src/
 │   │       ├── lib.rs
 │   │       ├── app_state.rs        # AppState (global): primary DockArea + per-workspace active terminal/SFTP context
-│   │       ├── services.rs         # AppServices (single injection bundle) + AppServicesBuilder (feature contributions)
+│   │       ├── services.rs         # AppServices (single injection bundle)
 │   │       ├── commands.rs         # WorkspaceCommands fn-pointer struct (shell → feature inversion, read via AppServices)
 │   │       ├── active_terminal.rs  # ActiveTerminalMetricsProvider (breadcrumb/net stats hook, contributed by terminal-view)
 │   │       ├── agent_focus.rs      # AgentFocuser (agent-ui → terminal focus hook, contributed by terminal-view)

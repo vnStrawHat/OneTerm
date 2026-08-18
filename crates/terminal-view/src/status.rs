@@ -9,7 +9,6 @@ use std::sync::Arc;
 use gpui::{App, Entity, Window};
 use gpui_component::dock::{DockArea, PanelView};
 use oneterm_core::ShellKind;
-use oneterm_state::AppServicesBuilder;
 use oneterm_state::active_terminal::ActiveTerminalMetricsProvider;
 use oneterm_state::dock_util::collect_tab_panels;
 use oneterm_terminal::NetStats;
@@ -46,16 +45,12 @@ fn active_net_stats(dock_area: &Entity<DockArea>, cx: &App) -> Option<NetStats> 
     None
 }
 
-/// Contribute the active-terminal metric extractors to `AppServices`.
-pub(crate) fn register_status_metrics(cx: &mut App) {
-    AppServicesBuilder::pending(cx)
-        .and_then(|builder| {
-            builder.active_terminal_metrics(ActiveTerminalMetricsProvider {
-                breadcrumb: active_breadcrumb,
-                net_stats: active_net_stats,
-            })
-        })
-        .expect("terminal feature must contribute its status metrics once during init");
+/// The active-terminal metric extractors this feature contributes to `AppServices`.
+pub fn status_metrics() -> ActiveTerminalMetricsProvider {
+    ActiveTerminalMetricsProvider {
+        breadcrumb: active_breadcrumb,
+        net_stats: active_net_stats,
+    }
 }
 
 /// Construct a terminal panel bound to a specific shell kind.
