@@ -183,7 +183,7 @@ impl SessionPanel {
                         s.remove(id, cx);
                     });
                     window.push_notification(
-                        oneterm_state::notif_ext::notify(
+                        oneterm_theme::notif_ext::notify(
                             NotificationType::Success,
                             "SSH session deleted.",
                             cx,

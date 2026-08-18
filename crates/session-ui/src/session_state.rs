@@ -34,7 +34,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use gpui::{App, AppContext, Entity, Global};
 use oneterm_core::{
-    atomic_write, config_dir, migrate_json_value, quarantine_file, set_schema_version,
+    AppError, atomic_write, config_dir, migrate_json_value, quarantine_file, set_schema_version,
     versioned_object,
 };
 use serde::{Deserialize, Serialize};
@@ -147,6 +147,10 @@ pub struct SshSessionStore {
     /// Coalescing single-flight queue so background writes never complete
     /// out of order: only the newest pending snapshot reaches disk.
     persist_queue: Arc<Mutex<SessionPersistQueue>>,
+    /// `ssh_session.json` existed but could not be read at startup, so this
+    /// store started empty and must not overwrite the possibly valid file
+    /// (CORR-61).
+    persist_blocked: bool,
 }
 
 /// What one save writes: the complete session list plus the id counter.
@@ -157,10 +161,24 @@ struct SessionDocument {
 }
 
 /// Outcome of reading `ssh_session.json`.
+#[derive(Debug)]
 struct LoadedSessions {
     document: SessionDocument,
     /// The on-disk file was an older schema or was repaired; write it back.
     needs_resave: bool,
+}
+
+impl LoadedSessions {
+    /// No saved sessions yet.
+    fn empty() -> Self {
+        Self {
+            document: SessionDocument {
+                entries: Vec::new(),
+                next_id: 1,
+            },
+            needs_resave: false,
+        }
+    }
 }
 
 /// Pending snapshot plus the "a worker is draining" flag.
@@ -221,6 +239,7 @@ impl SshSessionStore {
             entries: document.entries,
             next_id: document.next_id,
             persist_queue: Arc::new(Mutex::new(SessionPersistQueue::default())),
+            persist_blocked: false,
         }
     }
 
@@ -282,40 +301,34 @@ impl SshSessionStore {
         }
     }
 
-    /// Load the session list from `ssh_session.json`.
-    /// If the file does not exist or fails to parse → return an empty list.
-    fn load() -> LoadedSessions {
+    /// Load the session list from `ssh_session.json`. See [`Self::load_from`].
+    fn load() -> Result<LoadedSessions, AppError> {
         Self::load_from(&config_dir().join(DOCUMENT_NAME))
     }
 
     /// Load sessions from an explicit path for deterministic callers and tests.
-    fn load_from(path: &Path) -> LoadedSessions {
-        let empty = || LoadedSessions {
-            document: SessionDocument {
-                entries: Vec::new(),
-                next_id: 1,
-            },
-            needs_resave: false,
-        };
+    ///
+    /// A missing file means no saved sessions yet; a file that does not parse
+    /// or migrate is quarantined (with a recovery log) and an empty list is
+    /// returned. Any other read failure is returned as [`AppError::ConfigLoad`]
+    /// so the caller does not overwrite a possibly valid file (CORR-61).
+    fn load_from(path: &Path) -> Result<LoadedSessions, AppError> {
         match std::fs::read_to_string(path) {
             Ok(raw) => match parse_document(&raw) {
-                Ok(loaded) => loaded,
+                Ok(loaded) => Ok(loaded),
                 Err(e) => {
-                    log::error!("{DOCUMENT_NAME} parse error: {e} — starting empty");
+                    log::error!("{e} — starting empty");
                     if let Err(quarantine_error) = quarantine_file(path) {
                         log::warn!("failed to quarantine {DOCUMENT_NAME}: {quarantine_error}");
                     }
-                    empty()
+                    Ok(LoadedSessions::empty())
                 }
             },
+            // A missing file means there are no saved sessions yet.
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                // A missing file means there are no saved sessions yet.
-                empty()
+                Ok(LoadedSessions::empty())
             }
-            Err(error) => {
-                log::error!("failed to read {DOCUMENT_NAME}: {error}; starting empty");
-                empty()
-            }
+            Err(error) => Err(AppError::config_load(DOCUMENT_NAME, error)),
         }
     }
 
@@ -331,6 +344,12 @@ impl SshSessionStore {
     /// Snapshots are coalesced through the single-flight queue so back-to-back
     /// mutations always leave the newest state on disk.
     fn save(&self, cx: &gpui::Context<Self>) {
+        if self.persist_blocked {
+            log::warn!(
+                "{DOCUMENT_NAME} could not be read at startup; refusing to overwrite it with the in-memory list"
+            );
+            return;
+        }
         let queue = self.persist_queue.clone();
         if !enqueue_snapshot(&queue, self.document()) {
             return;
@@ -386,7 +405,11 @@ fn rename_group_in(entries: &mut [SshSessionEntry], old_name: &str, new_name: &s
 }
 
 /// Parse and migrate one `ssh_session.json` document.
-fn parse_document(raw: &str) -> std::io::Result<LoadedSessions> {
+fn parse_document(raw: &str) -> Result<LoadedSessions, AppError> {
+    parse_document_inner(raw).map_err(|error| AppError::config_load(DOCUMENT_NAME, error))
+}
+
+fn parse_document_inner(raw: &str) -> std::io::Result<LoadedSessions> {
     let invalid = |message: &str| std::io::Error::new(std::io::ErrorKind::InvalidData, message);
     let value: Value = serde_json::from_str(raw).map_err(std::io::Error::other)?;
     let source_version = oneterm_core::schema_version(&value).unwrap_or(0);
@@ -490,9 +513,18 @@ impl SshSessionStore {
     /// Initialize the global store — load `ssh_session.json` (called from `ui::init`).
     /// A file in an older schema is written back in the current one right away.
     pub fn init(cx: &mut App) {
-        let loaded = Self::load();
+        let (loaded, persist_blocked) = match Self::load() {
+            Ok(loaded) => (loaded, false),
+            Err(error) => {
+                log::error!("{error}; starting empty and refusing to overwrite the file");
+                (LoadedSessions::empty(), true)
+            }
+        };
         let needs_resave = loaded.needs_resave;
-        let entity = cx.new(|_| Self::with_document(loaded.document));
+        let entity = cx.new(|_| Self {
+            persist_blocked,
+            ..Self::with_document(loaded.document)
+        });
         if needs_resave {
             log::info!("{DOCUMENT_NAME}: migrated to schema v{CURRENT_SCHEMA_VERSION}; re-saving");
             entity.update(cx, |store, cx| store.save(cx));
@@ -678,6 +710,21 @@ mod persistence_tests {
     }
 
     #[test]
+    fn unreadable_document_is_a_typed_load_error_and_is_left_untouched() {
+        let directory = temporary_dir("unreadable");
+        // A directory in place of the file fails to read with something other
+        // than NotFound on every platform, standing in for a permission failure.
+        let path = directory.join("ssh_session.json");
+        std::fs::create_dir_all(&path).unwrap();
+        let error = SshSessionStore::load_from(&path).unwrap_err();
+        assert!(
+            matches!(&error, AppError::ConfigLoad { document, .. } if document == DOCUMENT_NAME),
+            "expected ConfigLoad, got {error}"
+        );
+        assert!(path.is_dir(), "an unreadable document must not be replaced");
+    }
+
+    #[test]
     fn explicit_path_roundtrip_and_corruption_quarantine_are_isolated() {
         let directory = temporary_dir("store");
         let path = directory.join("ssh_session.json");
@@ -689,7 +736,7 @@ mod persistence_tests {
         key_session.group = Some("group".into());
         SshSessionStore::save_snapshot(&document(vec![(3, key_session)], 4), &path);
 
-        let loaded = SshSessionStore::load_from(&path);
+        let loaded = SshSessionStore::load_from(&path).unwrap();
         assert!(!loaded.needs_resave);
         assert_eq!(loaded.document.entries.len(), 1);
         assert_eq!(loaded.document.entries[0].id, SshSessionId(3));
@@ -701,6 +748,7 @@ mod persistence_tests {
         std::fs::write(&path, b"not-json").unwrap();
         assert!(
             SshSessionStore::load_from(&path)
+                .unwrap()
                 .document
                 .entries
                 .is_empty()
@@ -724,7 +772,7 @@ mod persistence_tests {
             include_str!("../tests/fixtures/persistence/ssh-session-v0.json"),
         )
         .unwrap();
-        let loaded = SshSessionStore::load_from(&path);
+        let loaded = SshSessionStore::load_from(&path).unwrap();
         assert!(loaded.needs_resave);
         assert_eq!(loaded.document.entries[0].session.label, "legacy");
         assert_eq!(loaded.document.entries[0].id, SshSessionId(1));
@@ -736,7 +784,7 @@ mod persistence_tests {
         assert_eq!(value["next_session_id"], 2);
         assert_eq!(value["sessions"][0]["id"], 1);
         assert_eq!(value["sessions"][0]["host"], "legacy.example.test");
-        let reloaded = SshSessionStore::load_from(&path);
+        let reloaded = SshSessionStore::load_from(&path).unwrap();
         assert!(!reloaded.needs_resave);
         assert_eq!(reloaded.document, loaded.document);
     }
@@ -753,7 +801,7 @@ mod persistence_tests {
         )
         .unwrap();
 
-        let loaded = SshSessionStore::load_from(&path);
+        let loaded = SshSessionStore::load_from(&path).unwrap();
         assert!(loaded.needs_resave);
         let ids: Vec<_> = loaded.document.entries.iter().map(|e| e.id).collect();
         assert_eq!(ids, vec![SshSessionId(1), SshSessionId(2), SshSessionId(3)]);
@@ -773,7 +821,7 @@ mod persistence_tests {
         assert_eq!(beta.color.as_deref(), Some("#112233"));
 
         SshSessionStore::save_snapshot(&loaded.document, &path);
-        let reloaded = SshSessionStore::load_from(&path);
+        let reloaded = SshSessionStore::load_from(&path).unwrap();
         assert!(!reloaded.needs_resave);
         assert_eq!(reloaded.document, loaded.document);
     }
@@ -843,7 +891,7 @@ mod persistence_tests {
 
         drain_persist_queue(&queue, &path);
 
-        let loaded = SshSessionStore::load_from(&path);
+        let loaded = SshSessionStore::load_from(&path).unwrap();
         assert_eq!(loaded.document.entries.len(), 1);
         assert_eq!(loaded.document.entries[0].session.label, "a");
         assert_eq!(loaded.document.next_id, 3);
@@ -854,6 +902,7 @@ mod persistence_tests {
         drain_persist_queue(&queue, &path);
         assert!(
             SshSessionStore::load_from(&path)
+                .unwrap()
                 .document
                 .entries
                 .is_empty()

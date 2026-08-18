@@ -8,8 +8,8 @@ use oneterm_state::commands::commands;
 use oneterm_state::panel_names;
 
 use oneterm_actions::{
-    About, AddPanel, AddPanelWithShell, AddSession, AddSftpBrowser, Find, NewSession, OpenSettings,
-    Quit, RightDockMode, SetRightDockMode,
+    About, AddPanel, AddPanelWithShell, Find, NewSession, OpenSettings, Quit, RightDockMode,
+    SetRightDockMode,
 };
 
 impl super::OneTermWorkspace {
@@ -127,30 +127,6 @@ impl super::OneTermWorkspace {
 
     /// Action handler: ensure the right dock (which hosts the combined Side
     /// panel) is open. The Side panel always contains the Session section, so
-    /// "Add Session" simply reveals the right dock rather than adding a new
-    /// panel — the right dock is now a single `DockItem::Panel`, and
-    /// `DockArea::add_panel(Right)` is a no-op on `DockItem::Panel`.
-    pub(crate) fn on_action_add_session(
-        &mut self,
-        _: &AddSession,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        super::set_right_dock_open(&self.dock_area, true, window, cx);
-    }
-
-    /// Action handler: ensure the right dock (which hosts the combined Side
-    /// panel) is open. The Side panel always contains the SFTP section, so
-    /// "Add SFTP Browser" simply reveals the right dock.
-    pub(crate) fn on_action_add_sftp_browser(
-        &mut self,
-        _: &AddSftpBrowser,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        super::set_right_dock_open(&self.dock_area, true, window, cx);
-    }
-
     /// Action handler: switch the right dock to the panels for the given
     /// [`RightDockMode`] (SSH Client = Session + SFTP, Agent = Agent panels).
     ///

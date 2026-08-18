@@ -36,8 +36,8 @@ pub(crate) use oneterm_state::dock_util::set_right_dock_open;
 
 /// Construct a fresh feature panel by its registered name, via the gpui-component
 /// `PanelRegistry`. Each feature crate registers its constructor at init, so the
-/// shell can build the default layout and honor `AddPanel`/`AddSession`/
-/// `AddSftpBrowser` without depending on the concrete panel types.
+/// shell can build the default layout and honor `AddPanel` without depending
+/// on the concrete panel types.
 ///
 /// Names come from [`oneterm_state::panel_names`]. When `name` is not
 /// registered (stale saved layout, or a feature whose `init()` did not run)
@@ -108,6 +108,14 @@ pub struct OneTermWorkspace {
     subscribed_tabs: HashSet<EntityId>,
 }
 
+/// Forget `TabPanel`s that no longer exist in the dock (their subscriptions
+/// ended with the entity) so the subscribed set cannot grow with every tab
+/// open/close (CORR-22).
+fn retain_live_tabs(subscribed: &mut HashSet<EntityId>, live: impl IntoIterator<Item = EntityId>) {
+    let live: HashSet<EntityId> = live.into_iter().collect();
+    subscribed.retain(|id| live.contains(id));
+}
+
 impl OneTermWorkspace {
     /// Create a new workspace: load the old layout (keep right dock + settings),
     /// but reset the center (terminal tabs) to a single default tab.
@@ -134,14 +142,10 @@ impl OneTermWorkspace {
         // rewrites docks.json without the zoom), and the same document feeds
         // the layout load. An unreadable file is left to the first save:
         // `dock_persistence` — the document owner — quarantines it there.
-        let document = match persistence::read_dock_document() {
-            Ok(document) => Some(document),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => {
-                log::warn!("docks.json could not be read ({error}); using the default layout");
-                None
-            }
-        };
+        let document = persistence::read_dock_document().unwrap_or_else(|error| {
+            log::warn!("{error}; using the default layout");
+            None
+        });
         let saved_zoom = document
             .as_ref()
             .and_then(|document| document.zoomed_panel.clone());
@@ -306,6 +310,10 @@ impl OneTermWorkspace {
     fn sync_tab_subscriptions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tabs = zoom::collect_tab_panels(&self.dock_area.read(cx), cx);
         log::debug!("sync_tab_subscriptions → found {} tab panel(s)", tabs.len());
+        retain_live_tabs(
+            &mut self.subscribed_tabs,
+            tabs.iter().map(|tp| tp.entity_id()),
+        );
         for tp in tabs {
             let id = tp.entity_id();
             if self.subscribed_tabs.insert(id) {
@@ -386,8 +394,6 @@ impl Render for OneTermWorkspace {
         div()
             .id("oneterm-workspace")
             .on_action(cx.listener(Self::on_action_add_panel))
-            .on_action(cx.listener(Self::on_action_add_session))
-            .on_action(cx.listener(Self::on_action_add_sftp_browser))
             .on_action(cx.listener(Self::on_action_set_right_dock_mode))
             .on_action(cx.listener(Self::on_action_add_panel_with_shell))
             .on_action(cx.listener(Self::on_action_new_session))

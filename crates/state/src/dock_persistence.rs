@@ -9,7 +9,8 @@ use std::io;
 use std::path::PathBuf;
 
 use oneterm_core::{
-    SftpTableState, migrate_json_value, quarantine_file, set_schema_version, update_json_file,
+    AppError, SftpTableState, migrate_json_value, quarantine_file, set_schema_version,
+    update_json_file,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -17,6 +18,7 @@ use serde_json::Value;
 use crate::paths::state_file;
 
 const CURRENT_SCHEMA_VERSION: u32 = 1;
+const DOCUMENT_NAME: &str = "docks.json";
 
 /// Complete OneTerm-owned `docks.json` document.
 #[derive(Debug, Serialize, Deserialize)]
@@ -85,20 +87,29 @@ impl DockDocument {
 }
 
 /// Read and parse the complete dock document.
-pub fn read_dock_document() -> io::Result<DockDocument> {
+///
+/// `Ok(None)` when no document has been written yet; [`AppError::ConfigLoad`]
+/// when the file exists but cannot be read, parsed or migrated (the owner
+/// quarantines it during the next update; readers only report).
+pub fn read_dock_document() -> Result<Option<DockDocument>, AppError> {
     read_dock_document_from(&state_file())
 }
 
-/// Read and parse a dock document from an explicit path.
+/// [`read_dock_document`] from an explicit path.
 ///
 /// The path-taking variant keeps persistence tests independent from the process
 /// configuration directory while the production wrapper retains the normal path.
-pub fn read_dock_document_from(path: &std::path::Path) -> io::Result<DockDocument> {
-    let raw = std::fs::read_to_string(path)?;
-    parse_document(
-        serde_json::from_str(&raw)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
-    )
+pub fn read_dock_document_from(path: &std::path::Path) -> Result<Option<DockDocument>, AppError> {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(AppError::config_load(DOCUMENT_NAME, error)),
+    };
+    let value: Value =
+        serde_json::from_str(&raw).map_err(|error| AppError::config_load(DOCUMENT_NAME, error))?;
+    parse_document(value)
+        .map(Some)
+        .map_err(|error| AppError::config_load(DOCUMENT_NAME, error))
 }
 
 /// How an update transaction reached the persisted document.
@@ -236,13 +247,20 @@ mod persistence_tests {
             Ok(())
         })
         .unwrap();
-        let restored = read_dock_document_from(&path).unwrap();
+        let restored = read_dock_document_from(&path)
+            .unwrap()
+            .expect("document exists");
         assert_eq!(restored.zoomed_panel.as_deref(), Some("terminal"));
         assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 2);
         std::fs::write(&path, b"not-json").unwrap();
-        assert_eq!(
-            read_dock_document_from(&path).unwrap_err().kind(),
-            io::ErrorKind::InvalidData
+        assert!(matches!(
+            read_dock_document_from(&path),
+            Err(AppError::ConfigLoad { document, .. }) if document == "docks.json"
+        ));
+        assert!(
+            read_dock_document_from(&directory.join("absent.json"))
+                .unwrap()
+                .is_none()
         );
     }
 
@@ -272,7 +290,9 @@ mod persistence_tests {
         let quarantined = quarantined.expect("the corrupt file must be moved aside");
         assert_eq!(quarantined.parent(), Some(directory.as_path()));
         assert_eq!(std::fs::read(&quarantined).unwrap(), b"{ not json");
-        let restored = read_dock_document_from(&path).unwrap();
+        let restored = read_dock_document_from(&path)
+            .unwrap()
+            .expect("document exists");
         assert_eq!(restored.zoomed_panel.as_deref(), Some("terminal"));
         assert_eq!(restored.schema_version, CURRENT_SCHEMA_VERSION);
 
@@ -289,7 +309,9 @@ mod persistence_tests {
                 quarantined: Some(_)
             }
         ));
-        let restored = read_dock_document_from(&path).unwrap();
+        let restored = read_dock_document_from(&path)
+            .unwrap()
+            .expect("document exists");
         assert_eq!(restored.zoomed_panel.as_deref(), Some("sftp"));
         assert!(restored.sftp_table_state.is_none());
 
@@ -315,14 +337,19 @@ mod persistence_tests {
             include_str!("../tests/fixtures/persistence/docks-v0.json"),
         )
         .unwrap();
-        let legacy = read_dock_document_from(&path).unwrap();
+        let legacy = read_dock_document_from(&path)
+            .unwrap()
+            .expect("document exists");
         assert_eq!(legacy.schema_version, CURRENT_SCHEMA_VERSION);
         assert_eq!(legacy.zoomed_panel.as_deref(), Some("terminal"));
         update_dock_document_at(&path, |_| Ok(())).unwrap();
         let value: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(value["schema_version"], CURRENT_SCHEMA_VERSION);
         assert_eq!(
-            read_dock_document_from(&path).unwrap().schema_version,
+            read_dock_document_from(&path)
+                .unwrap()
+                .expect("document exists")
+                .schema_version,
             CURRENT_SCHEMA_VERSION
         );
     }
@@ -393,7 +420,9 @@ mod persistence_tests {
             thread.join().unwrap();
         }
 
-        let restored = read_dock_document_from(&path).unwrap();
+        let restored = read_dock_document_from(&path)
+            .unwrap()
+            .expect("document exists");
         assert_eq!(restored.dock_fields.len(), 8 * 5);
         assert!(restored.zoomed_panel.is_some());
         assert_eq!(restored.schema_version, CURRENT_SCHEMA_VERSION);
@@ -416,7 +445,9 @@ mod persistence_tests {
         })
         .unwrap();
 
-        let backup = read_dock_document_from(&directory.join("docks.bak")).unwrap();
+        let backup = read_dock_document_from(&directory.join("docks.bak"))
+            .unwrap()
+            .expect("document exists");
         assert_eq!(backup.zoomed_panel.as_deref(), Some("first"));
         assert_eq!(
             std::fs::read_to_string(directory.join("docks.bak")).unwrap(),
@@ -425,6 +456,7 @@ mod persistence_tests {
         assert_eq!(
             read_dock_document_from(&path)
                 .unwrap()
+                .expect("document exists")
                 .zoomed_panel
                 .as_deref(),
             Some("second")
@@ -458,6 +490,7 @@ mod persistence_tests {
         assert_eq!(
             read_dock_document_from(&directory.join("docks.bak"))
                 .unwrap()
+                .expect("document exists")
                 .zoomed_panel
                 .as_deref(),
             Some("good"),
@@ -466,6 +499,7 @@ mod persistence_tests {
         assert_eq!(
             read_dock_document_from(&path)
                 .unwrap()
+                .expect("document exists")
                 .zoomed_panel
                 .as_deref(),
             Some("recovered")

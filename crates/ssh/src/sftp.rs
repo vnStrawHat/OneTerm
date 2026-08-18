@@ -33,6 +33,11 @@ pub(crate) enum SftpCmd {
         path: RemotePath,
         reply: oneshot::Sender<Result<FileEntry>>,
     },
+    /// Resolve a path to its absolute canonical form (SFTP `realpath`).
+    Realpath {
+        path: RemotePath,
+        reply: oneshot::Sender<Result<RemotePath>>,
+    },
     /// Rename a file/folder.
     Rename {
         from: RemotePath,
@@ -157,6 +162,10 @@ impl SftpBackend for SftpSession {
 
     fn stat(&self, path: RemotePath) -> oneterm_core::SftpFuture<'_, FileEntry> {
         Box::pin(self.request(|reply| SftpCmd::Stat { path, reply }))
+    }
+
+    fn realpath(&self, path: RemotePath) -> oneterm_core::SftpFuture<'_, RemotePath> {
+        Box::pin(self.request(|reply| SftpCmd::Realpath { path, reply }))
     }
 
     fn rename(&self, from: RemotePath, to: RemotePath) -> oneterm_core::SftpFuture<'_, ()> {

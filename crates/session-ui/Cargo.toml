@@ -17,6 +17,7 @@ oneterm-terminal.workspace = true
 oneterm-terminal-view.workspace = true
 oneterm-settings.workspace = true
 oneterm-state.workspace = true
+oneterm-theme.workspace = true
 oneterm-actions.workspace = true
 
 gpui.workspace = true

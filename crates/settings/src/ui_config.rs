@@ -20,7 +20,7 @@ use std::path::Path;
 use gpui::{App, AppContext, Entity, Global};
 use gpui_component::{ActiveTheme as _, Theme};
 use oneterm_core::{
-    RightDockMode, atomic_write, config_dir, migrate_json_value, quarantine_file,
+    AppError, RightDockMode, atomic_write, config_dir, migrate_json_value, quarantine_file,
     set_schema_version,
 };
 use serde::{Deserialize, Serialize};
@@ -33,7 +33,7 @@ use serde_json::Value;
 
 /// Persisted UI settings. All fields optional — `None` means "use the built-in
 /// default" (so a partial/old config file still works).
-#[derive(Serialize, Deserialize, Default, Clone)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct UiConfig {
     /// UI (non-terminal) font size in px. `None` = default 16.
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -63,28 +63,32 @@ pub struct UiConfig {
     /// `None` = the built-in default ([`UiConfig::DEFAULT_AGENT_STALE_THRESHOLD_MS`], 5 min).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub agent_stale_threshold_ms: Option<u64>,
+
+    /// `ui_config.json` existed but could not be read at startup (e.g.
+    /// permission denied), so this is the built-in default and must not be
+    /// written back over a possibly valid file (CORR-61). Never persisted.
+    #[serde(skip)]
+    pub persist_blocked: bool,
 }
 
 const CURRENT_SCHEMA_VERSION: u32 = 1;
+const DOCUMENT_NAME: &str = "ui_config.json";
 
 impl UiConfig {
-    fn parse_document(raw: &str) -> std::io::Result<Self> {
-        let value: Value = serde_json::from_str(raw).map_err(std::io::Error::other)?;
-        let value = migrate_json_value(
-            value,
-            CURRENT_SCHEMA_VERSION,
-            "ui_config.json",
-            |_, value| {
-                if !value.is_object() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "ui_config.json schema must be an object",
-                    ));
-                }
-                Ok(value)
-            },
-        )?;
-        serde_json::from_value(value).map_err(std::io::Error::other)
+    fn parse_document(raw: &str) -> Result<Self, AppError> {
+        let value: Value = serde_json::from_str(raw)
+            .map_err(|error| AppError::config_load(DOCUMENT_NAME, error))?;
+        let value = migrate_json_value(value, CURRENT_SCHEMA_VERSION, DOCUMENT_NAME, |_, value| {
+            if !value.is_object() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "ui_config.json schema must be an object",
+                ));
+            }
+            Ok(value)
+        })
+        .map_err(|error| AppError::config_load(DOCUMENT_NAME, error))?;
+        serde_json::from_value(value).map_err(|error| AppError::config_load(DOCUMENT_NAME, error))
     }
     /// Built-in default for [`UiConfig::agent_stale_threshold_ms`] — 5 minutes.
     pub const DEFAULT_AGENT_STALE_THRESHOLD_MS: u64 = 300_000;
@@ -96,26 +100,33 @@ impl UiConfig {
             .unwrap_or(Self::DEFAULT_AGENT_STALE_THRESHOLD_MS)
     }
 
-    /// Load the config from file. Missing or invalid input selects defaults;
-    /// invalid JSON is quarantined and only a missing file is initialized.
-    pub fn load() -> Self {
-        Self::load_from(&config_dir().join("ui_config.json"))
+    /// Load the config from `ui_config.json`. See [`Self::load_from`] for the
+    /// outcome contract.
+    pub fn load() -> Result<Self, AppError> {
+        Self::load_from(&config_dir().join(DOCUMENT_NAME))
     }
 
     /// Load the config from an explicit path for deterministic callers and tests.
-    pub fn load_from(path: &Path) -> Self {
-        match std::fs::read_to_string(&path) {
-            Ok(raw) => Self::parse_document(&raw).unwrap_or_else(|e| {
-                log::error!("ui_config.json parse or migration error: {e} — using defaults");
-                if let Err(quarantine_error) = quarantine_file(&path) {
+    ///
+    /// - A missing file is created with the defaults and the defaults are returned.
+    /// - A file that does not parse or migrate is quarantined (with a recovery
+    ///   log) and the defaults are returned.
+    /// - Any other read failure (permissions, I/O) is returned as
+    ///   [`AppError::ConfigLoad`]: the file may still be valid, so the caller
+    ///   must not overwrite it with defaults (CORR-61).
+    pub fn load_from(path: &Path) -> Result<Self, AppError> {
+        match std::fs::read_to_string(path) {
+            Ok(raw) => Ok(Self::parse_document(&raw).unwrap_or_else(|e| {
+                log::error!("{e} — using defaults");
+                if let Err(quarantine_error) = quarantine_file(path) {
                     log::warn!("failed to quarantine ui_config.json: {quarantine_error}");
                 }
                 Self::default()
-            }),
+            })),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 let cfg = Self::default();
                 match serde_json::to_string_pretty(&cfg) {
-                    Ok(json) => match atomic_write(&path, json.as_bytes()) {
+                    Ok(json) => match atomic_write(path, json.as_bytes()) {
                         Ok(()) => log::info!("Created default ui_config.json at {path:?}"),
                         Err(write_error) => log::warn!(
                             "failed to create default ui_config.json at {path:?}: {write_error}"
@@ -125,26 +136,42 @@ impl UiConfig {
                         log::warn!("failed to serialize default ui_config.json: {serialize_error}")
                     }
                 }
-                cfg
+                Ok(cfg)
             }
-            Err(error) => {
-                log::error!("failed to read ui_config.json: {error}; using defaults");
-                Self::default()
-            }
+            Err(error) => Err(AppError::config_load(DOCUMENT_NAME, error)),
         }
     }
 
-    /// Save the config to `ui_config.json` (pretty-printed).
-    pub fn save(&self) -> std::io::Result<()> {
-        self.save_to(&config_dir().join("ui_config.json"))
+    /// The defaults, flagged so they are never written over an unreadable file.
+    fn defaults_with_persist_blocked() -> Self {
+        Self {
+            persist_blocked: true,
+            ..Self::default()
+        }
+    }
+
+    fn persist_blocked_error() -> AppError {
+        AppError::config_load(
+            DOCUMENT_NAME,
+            "the file could not be read at startup; refusing to overwrite it",
+        )
+    }
+
+    /// Save the config to `ui_config.json` (pretty-printed). Refused with
+    /// [`AppError::ConfigLoad`] while [`Self::persist_blocked`] is set.
+    pub fn save(&self) -> Result<(), AppError> {
+        self.save_to(&config_dir().join(DOCUMENT_NAME))
     }
 
     /// Save the config to an explicit path for deterministic callers and tests.
-    pub fn save_to(&self, path: &Path) -> std::io::Result<()> {
-        let mut value = serde_json::to_value(self).map_err(std::io::Error::other)?;
+    pub fn save_to(&self, path: &Path) -> Result<(), AppError> {
+        if self.persist_blocked {
+            return Err(Self::persist_blocked_error());
+        }
+        let mut value = serde_json::to_value(self)?;
         set_schema_version(&mut value, CURRENT_SCHEMA_VERSION)?;
-        let json = serde_json::to_string_pretty(&value).map_err(std::io::Error::other)?;
-        atomic_write(&path, json.as_bytes())?;
+        let json = serde_json::to_string_pretty(&value)?;
+        atomic_write(path, json.as_bytes())?;
         log::debug!("Saved ui_config.json to {path:?}");
         Ok(())
     }
@@ -170,7 +197,10 @@ impl UiConfig {
         if cx.has_global::<UiConfigGlobal>() {
             return;
         }
-        let cfg = Self::load();
+        let cfg = Self::load().unwrap_or_else(|error| {
+            log::error!("{error}; using defaults and refusing to overwrite the file");
+            Self::defaults_with_persist_blocked()
+        });
         let entity = cx.new(|_| cfg);
         cx.set_global(UiConfigGlobal(entity));
     }
@@ -203,8 +233,13 @@ impl UiConfig {
     }
 
     /// Schedule persistence of a snapshot of the global config off the UI thread.
+    /// Does nothing (with a warning) while [`Self::persist_blocked`] is set.
     pub fn persist(cx: &App) {
         let snapshot = Self::global(cx).read(cx).clone();
+        if snapshot.persist_blocked {
+            log::warn!("{}", Self::persist_blocked_error());
+            return;
+        }
         cx.background_executor()
             .spawn(async move {
                 if let Err(e) = snapshot.save() {
@@ -231,7 +266,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("ui_config.json");
-        let missing = UiConfig::load_from(&path);
+        let missing = UiConfig::load_from(&path).unwrap();
         assert_eq!(missing.right_dock_mode, RightDockMode::SshClient);
         assert!(path.exists());
         let config = UiConfig {
@@ -242,9 +277,10 @@ mod tests {
                 .collect(),
             right_dock_mode: RightDockMode::Agent,
             agent_stale_threshold_ms: Some(42),
+            persist_blocked: false,
         };
         config.save_to(&path).unwrap();
-        let restored = UiConfig::load_from(&path);
+        let restored = UiConfig::load_from(&path).unwrap();
         assert_eq!(restored.ui_font_size, Some(18.0));
         assert_eq!(restored.theme_name.as_deref(), Some("Test Theme"));
         assert_eq!(
@@ -256,7 +292,7 @@ mod tests {
         );
         assert_eq!(restored.agent_stale_threshold_ms, Some(42));
         std::fs::write(&path, b"not-json").unwrap();
-        let fallback = UiConfig::load_from(&path);
+        let fallback = UiConfig::load_from(&path).unwrap();
         assert!(fallback.theme_name.is_none());
         assert!(!path.exists());
         assert!(std::fs::read_dir(&directory).unwrap().any(|entry| {
@@ -299,8 +335,39 @@ mod tests {
         config.save_to(&path).unwrap();
         let value: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(value["schema_version"], CURRENT_SCHEMA_VERSION);
-        let restored = UiConfig::load_from(&path);
+        let restored = UiConfig::load_from(&path).unwrap();
         assert_eq!(restored.theme_name, config.theme_name);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn unreadable_document_is_typed_and_blocked_defaults_refuse_to_save() {
+        let directory = std::env::temp_dir().join(format!(
+            "oneterm-ui-unreadable-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        // A directory in place of the file fails to read with something other
+        // than NotFound on every platform, standing in for a permission failure.
+        let path = directory.join("ui_config.json");
+        std::fs::create_dir_all(&path).unwrap();
+        let error = UiConfig::load_from(&path).unwrap_err();
+        assert!(
+            matches!(&error, AppError::ConfigLoad { document, .. } if document == "ui_config.json"),
+            "expected ConfigLoad, got {error}"
+        );
+        assert!(path.is_dir(), "an unreadable document must not be replaced");
+
+        let blocked = UiConfig::defaults_with_persist_blocked();
+        let target = directory.join("other.json");
+        assert!(matches!(
+            blocked.save_to(&target),
+            Err(AppError::ConfigLoad { .. })
+        ));
+        assert!(!target.exists());
         let _ = std::fs::remove_dir_all(directory);
     }
 }

@@ -11,12 +11,14 @@ use std::path::Path;
 use anyhow::{Context as _, Result};
 use gpui::{App, Edges, Entity, PromptLevel, Window};
 use gpui_component::dock::{DockArea, DockAreaState};
+use oneterm_core::AppError;
 use oneterm_state::dock_persistence::{DockDocument, DockUpdateOutcome, update_dock_document_at};
 
 use super::{MAIN_DOCK_VERSION, state_file};
 
 /// Read and parse the persisted dock document (blocking; startup only).
-pub(crate) fn read_dock_document() -> std::io::Result<DockDocument> {
+/// `Ok(None)` when no layout has been saved yet.
+pub(crate) fn read_dock_document() -> Result<Option<DockDocument>, AppError> {
     oneterm_state::dock_persistence::read_dock_document()
 }
 

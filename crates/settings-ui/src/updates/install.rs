@@ -138,10 +138,7 @@ fn apply_install_result(
             cx.quit();
         }
         Ok(InstallOutcome::ManualInstall { package_dir }) => {
-            state.status = UpdateUiStatus::Disabled(format!(
-                "Install location is not writable. Install manually from {}.",
-                package_dir.display()
-            ));
+            state.status = UpdateUiStatus::ManualInstall(package_dir);
         }
         Err(error) => state.status = UpdateUiStatus::Failed(error.to_string()),
     }

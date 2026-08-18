@@ -15,6 +15,9 @@ pub(crate) enum UpdateUiStatus {
     Downloading(String),
     Installing,
     Disabled(String),
+    /// The install location is not writable; the staged package must be
+    /// installed by hand from this directory.
+    ManualInstall(std::path::PathBuf),
     /// The offered version was skipped from Settings/About.
     Skipped(String),
     Failed(String),
@@ -109,6 +112,10 @@ impl UpdateUiState {
             UpdateUiStatus::Downloading(version) => format!("Downloading OneTerm {version}..."),
             UpdateUiStatus::Installing => "Installing update...".to_owned(),
             UpdateUiStatus::Disabled(reason) => reason.clone(),
+            UpdateUiStatus::ManualInstall(package_dir) => format!(
+                "Install location is not writable. Install manually from {}.",
+                package_dir.display()
+            ),
             UpdateUiStatus::Skipped(version) => {
                 format!(
                     "OneTerm {version} was skipped. Clear it in Settings to be offered it again."

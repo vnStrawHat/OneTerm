@@ -12,9 +12,9 @@ use gpui_component::notification::NotificationType;
 use gpui_component::resizable::ResizableState;
 
 use oneterm_core::SessionDuplicateConfig;
-use oneterm_state::notif_ext::notify;
 use oneterm_state::{AppServices, AppState};
 use oneterm_terminal::TerminalSession;
+use oneterm_theme::notif_ext::notify;
 
 use super::super::security::security_policy_from_settings;
 use super::super::space::{

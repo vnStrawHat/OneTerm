@@ -17,7 +17,7 @@ use gpui_component::{
 };
 use oneterm_core::{AppError, FileEntry, RemotePath, SftpBackend, SftpStatus};
 use oneterm_state::form_dialog::{FieldRequirement, FormDialog, labelled_field};
-use oneterm_state::notif_ext::notify;
+use oneterm_theme::notif_ext::notify;
 
 use super::panel::SftpPanel;
 use super::types::{format_date, format_owner, format_permissions, format_size};

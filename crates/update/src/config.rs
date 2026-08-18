@@ -2,12 +2,13 @@ use std::path::Path;
 
 use chrono::{DateTime, Duration, Utc};
 use oneterm_core::{
-    atomic_write, config_dir, migrate_json_value, quarantine_file, set_schema_version,
+    AppError, atomic_write, config_dir, migrate_json_value, quarantine_file, set_schema_version,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const CURRENT_SCHEMA_VERSION: u32 = 1;
+const DOCUMENT_NAME: &str = "update_config.json";
 
 /// Longest accepted automatic check interval (one year). Larger persisted
 /// values are clamped so the interval arithmetic can never overflow (CORR-58).
@@ -26,7 +27,7 @@ pub const UPDATE_REPOSITORY: &str = match option_env!("ONETERM_UPDATE_REPO") {
 
 /// The persisted `update_config.json` document.
 pub(crate) fn update_config_path() -> std::path::PathBuf {
-    config_dir().join("update_config.json")
+    config_dir().join(DOCUMENT_NAME)
 }
 
 /// Release channel used by the updater.
@@ -200,9 +201,7 @@ impl UpdateConfig {
                     needs_document_repair: false,
                 },
                 Err(error) => {
-                    log::error!(
-                        "update_config.json parse or migration error: {error}; using defaults and quarantining on the next save"
-                    );
+                    log::error!("{error}; using defaults and quarantining on the next save");
                     LoadedUpdateConfig {
                         config: Self::default(),
                         needs_document_repair: true,
@@ -214,7 +213,8 @@ impl UpdateConfig {
                 needs_document_repair: true,
             },
             Err(error) => {
-                log::error!("failed to read update_config.json: {error}; using defaults");
+                let error = AppError::config_load(DOCUMENT_NAME, error);
+                log::error!("{error}; using defaults");
                 LoadedUpdateConfig {
                     config: Self::default(),
                     needs_document_repair: false,
@@ -316,23 +316,20 @@ impl UpdateConfig {
         self.last_etag.is_some() && self.last_checked_version.as_deref() == Some(current_version)
     }
 
-    fn parse_document(raw: &str) -> std::io::Result<Self> {
-        let value: Value = serde_json::from_str(raw).map_err(std::io::Error::other)?;
-        let value = migrate_json_value(
-            value,
-            CURRENT_SCHEMA_VERSION,
-            "update_config.json",
-            |_, value| {
-                if !value.is_object() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "update_config.json schema must be an object",
-                    ));
-                }
-                Ok(value)
-            },
-        )?;
-        serde_json::from_value(value).map_err(std::io::Error::other)
+    fn parse_document(raw: &str) -> Result<Self, AppError> {
+        let value: Value = serde_json::from_str(raw)
+            .map_err(|error| AppError::config_load(DOCUMENT_NAME, error))?;
+        let value = migrate_json_value(value, CURRENT_SCHEMA_VERSION, DOCUMENT_NAME, |_, value| {
+            if !value.is_object() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "update_config.json schema must be an object",
+                ));
+            }
+            Ok(value)
+        })
+        .map_err(|error| AppError::config_load(DOCUMENT_NAME, error))?;
+        serde_json::from_value(value).map_err(|error| AppError::config_load(DOCUMENT_NAME, error))
     }
 }
 

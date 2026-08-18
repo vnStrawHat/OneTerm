@@ -16,7 +16,7 @@ use std::sync::Arc;
 use gpui::{AsyncApp, AsyncWindowContext, Context, Entity, Window};
 use gpui_component::{WindowExt as _, notification::NotificationType};
 use oneterm_core::{AppError, RemotePath, SftpBackend, TransferEvent, TransferHandle};
-use oneterm_state::notif_ext::notify;
+use oneterm_theme::notif_ext::notify;
 
 use super::browser_state::BackendKey;
 use super::panel::SftpPanel;

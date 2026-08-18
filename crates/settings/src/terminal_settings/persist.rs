@@ -11,6 +11,7 @@
 //! `"#RRGGBB"` strings via [`hsla_to_hex`](super::hsla_to_hex).
 
 use gpui::{App, FontWeight, Hsla};
+use oneterm_core::AppError;
 
 use crate::terminal_config::{
     BellConfig, ColorsConfig, CompletionConfig, CompletionSources, CursorConfig, FontConfig,
@@ -148,7 +149,13 @@ impl TerminalSettings {
                 clock_fg: color_to_hex(co.clock_fg),
                 line_number_fg: color_to_hex(co.line_number_fg),
                 min_contrast: co.min_contrast,
-                ansi: co.ansi.iter().map(|c| hsla_to_hex(*c)).collect(),
+                // A slot without an override stays an empty string so the
+                // positions after it survive the round trip.
+                ansi: co
+                    .ansi
+                    .iter()
+                    .map(|c| c.map(hsla_to_hex).unwrap_or_default())
+                    .collect(),
             },
         }
     }
@@ -158,13 +165,31 @@ impl TerminalSettings {
     /// Builds a [`TerminalConfig`] snapshot (via [`Self::to_config`]) and writes
     /// it. Callers should first update the in-memory settings and `cx.notify()`,
     /// then call this — the config file is the source of truth across restarts.
-    pub fn save(&self) -> std::io::Result<()> {
-        self.to_config().save()
+    /// Refused with [`AppError::ConfigLoad`] while [`Self::persist_blocked`] is
+    /// set: the file on disk could not be read and may still be the user's.
+    pub fn save(&self) -> Result<(), AppError> {
+        if self.persist_blocked {
+            return Err(Self::persist_blocked_error());
+        }
+        self.to_config().save()?;
+        Ok(())
+    }
+
+    fn persist_blocked_error() -> AppError {
+        AppError::config_load(
+            "terminal.json",
+            "the file could not be read at startup; refusing to overwrite it",
+        )
     }
 
     /// Schedule persistence of the current global settings off the UI thread.
     pub fn persist_global(cx: &App) {
-        let config = Self::global(cx).read(cx).to_config();
+        let settings = Self::global(cx).read(cx);
+        if settings.persist_blocked {
+            log::warn!("{}", Self::persist_blocked_error());
+            return;
+        }
+        let config = settings.to_config();
         cx.background_executor()
             .spawn(async move {
                 if let Err(error) = config.save() {

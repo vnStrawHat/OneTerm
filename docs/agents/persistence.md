@@ -10,6 +10,19 @@ All new user-owned JSON writes must use `atomic_write` or `update_json_file` fro
 serialization, backups, durable replacement, and cleanup. Invalid documents are
 moved with `quarantine_file` before defaults are persisted.
 
+### Load outcomes
+
+Document loaders distinguish three read outcomes. A missing file selects the
+documented defaults (and, for `terminal.json` / `ui_config.json`, creates the
+file). A file that does not parse or migrate is quarantined with a recovery log
+and defaults are used. Any other read failure (permissions, I/O) is returned as
+`AppError::ConfigLoad { document, message }` — never a string — and the file is
+left untouched: the owner keeps in-memory defaults with a `persist_blocked`
+flag (`TerminalSettings`, `UiConfig`, `SshSessionStore`) and refuses to write
+them back over the possibly valid document until the next start. `docks.json`
+readers get `Ok(None)` for "no layout saved yet" and `ConfigLoad` for anything
+else; only `update_dock_document` recovers by quarantining.
+
 ### Cross-process guarantee
 
 Persistence transactions are serialized with a sibling `.<document>.lock` file and

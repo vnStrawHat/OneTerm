@@ -33,6 +33,8 @@ pub(crate) struct TransferRequest {
 struct Script {
     read_dir_replies: VecDeque<Receiver<Result<Vec<FileEntry>>>>,
     read_dir_requests: Vec<RemotePath>,
+    realpath_replies: VecDeque<Result<RemotePath>>,
+    realpath_requests: Vec<RemotePath>,
     transfer_handles: VecDeque<TransferHandle>,
     transfer_requests: Vec<TransferRequest>,
 }
@@ -62,6 +64,20 @@ impl FakeSftpBackend {
     /// Paths requested through `read_dir`, in call order.
     pub(crate) fn read_dir_requests(&self) -> Vec<RemotePath> {
         self.script.lock().unwrap().read_dir_requests.clone()
+    }
+
+    /// Arm the answer for the next `realpath` call (resolved immediately).
+    pub(crate) fn arm_realpath(&self, reply: Result<RemotePath>) {
+        self.script
+            .lock()
+            .unwrap()
+            .realpath_replies
+            .push_back(reply);
+    }
+
+    /// Paths requested through `realpath`, in call order.
+    pub(crate) fn realpath_requests(&self) -> Vec<RemotePath> {
+        self.script.lock().unwrap().realpath_requests.clone()
     }
 
     /// Arm the handle for the next `upload`/`download` call.
@@ -131,6 +147,15 @@ impl SftpBackend for FakeSftpBackend {
 
     fn stat(&self, _path: RemotePath) -> SftpFuture<'_, FileEntry> {
         Self::unused()
+    }
+
+    fn realpath(&self, path: RemotePath) -> SftpFuture<'_, RemotePath> {
+        let reply = {
+            let mut script = self.script.lock().unwrap();
+            script.realpath_requests.push(path);
+            script.realpath_replies.pop_front()
+        };
+        Box::pin(async move { reply.unwrap_or_else(|| Err(AppError::msg("unexpected realpath"))) })
     }
 
     fn rename(&self, _from: RemotePath, _to: RemotePath) -> SftpFuture<'_, ()> {

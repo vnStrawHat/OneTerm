@@ -37,10 +37,6 @@ actions!(
         About,
         /// Toggle the gutter (timestamp + line number) in the terminal.
         ToggleGutter,
-        /// Add a new SessionPanel to the right dock.
-        AddSession,
-        /// Add a new SftpPanel to the right dock.
-        AddSftpBrowser,
         /// Open the dialog to create a new SSH session (saved to `ssh_session.json`).
         NewSession,
         /// Open the General Settings panel (font, theme, key bindings).
@@ -103,16 +99,6 @@ actions!(
         TriggerCompletion,
     ]
 );
-
-/// Action to select the UI font size (used by `FontSizeSelector`).
-#[derive(Clone, PartialEq, Eq, Deserialize, gpui::Action)]
-#[action(namespace = oneterm, no_json)]
-pub struct SelectFont(pub usize);
-
-/// Change the UI language.
-#[derive(Clone, PartialEq, Eq, Deserialize, gpui::Action)]
-#[action(namespace = oneterm, no_json)]
-pub struct SelectLocale(pub SharedString);
 
 /// Switch theme (by name registered in `ThemeRegistry`).
 #[derive(Clone, PartialEq, gpui::Action)]

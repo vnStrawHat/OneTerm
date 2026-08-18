@@ -28,7 +28,7 @@ use oneterm_core::{
 };
 use oneterm_state::commands::SshDuplicateCompletion;
 use oneterm_state::form_dialog::{FieldRequirement, FormDialog, labelled_field};
-use oneterm_state::notif_ext::notify;
+use oneterm_theme::notif_ext::notify;
 
 use super::auth_form::SshAuthForm;
 use super::common::{

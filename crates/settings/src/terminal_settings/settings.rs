@@ -99,7 +99,10 @@ pub struct ColorOverrides {
     pub clock_fg: Option<Hsla>,
     pub line_number_fg: Option<Hsla>,
     pub min_contrast: f32,
-    pub ansi: Vec<Hsla>,
+    /// ANSI-16 overrides by slot; `None` keeps the theme colour for that slot.
+    /// One invalid entry in `terminal.json` therefore never shifts the colours
+    /// after it (CORR-60).
+    pub ansi: Vec<Option<Hsla>>,
 }
 
 /// Global terminal config (shell + rendering options).
@@ -181,6 +184,11 @@ pub struct TerminalSettings {
     // ── Completion ──
     /// Live mirror of the `completion` config group.
     pub completion: CompletionSettings,
+
+    /// `terminal.json` existed but could not be read at startup (e.g. permission
+    /// denied), so these are built-in defaults and must not be written back
+    /// over a possibly valid file (CORR-61). Never persisted.
+    pub persist_blocked: bool,
 }
 
 impl Default for TerminalSettings {
@@ -208,7 +216,17 @@ impl TerminalSettings {
         if cx.has_global::<TerminalSettingsGlobal>() {
             return;
         }
-        let entity = cx.new(|_| Self::from_config(&TerminalConfig::load()));
+        let settings = match TerminalConfig::load() {
+            Ok(config) => Self::from_config(&config),
+            Err(error) => {
+                log::error!("{error}; using defaults and refusing to overwrite the file");
+                Self {
+                    persist_blocked: true,
+                    ..Self::default()
+                }
+            }
+        };
+        let entity = cx.new(|_| settings);
         cx.set_global(TerminalSettingsGlobal(entity));
     }
 }

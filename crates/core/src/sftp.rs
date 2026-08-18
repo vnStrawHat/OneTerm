@@ -252,6 +252,10 @@ pub trait SftpBackend: Send + Sync + 'static {
     /// Get detailed metadata for one path (follows symlinks).
     fn stat(&self, path: RemotePath) -> SftpFuture<'_, FileEntry>;
 
+    /// Resolve `path` — possibly relative to the server's default directory
+    /// (e.g. `.`) or containing symlinks — to its absolute canonical form.
+    fn realpath(&self, path: RemotePath) -> SftpFuture<'_, RemotePath>;
+
     /// Rename a file/folder.
     fn rename(&self, from: RemotePath, to: RemotePath) -> SftpFuture<'_, ()>;
 

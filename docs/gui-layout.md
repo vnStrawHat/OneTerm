@@ -22,6 +22,9 @@
 >   (`crates/workspace/src/layout/statusbar.rs`, `crates/workspace/src/widgets/`).
 > - `crates/ui` / `crates/app/src/app.rs` in the sketches are today's `crates/workspace`
 >   (shell) and `crates/app/src/lib.rs`.
+> - The app menu has no Language submenu and no `SelectLocale` / `SelectFont` /
+>   `AddSession` / `AddSftpBrowser` actions: they were never wired to anything and were
+>   removed (HYG-01). Font size is changed from the Appearance settings page.
 >
 > Design document for the OneTerm GUI layout, based on the reference
 > `reference/gpui-component/crates/story/examples/dock.rs`.

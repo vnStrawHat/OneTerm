@@ -174,6 +174,15 @@ impl AppError {
         Self::Other(message.into())
     }
 
+    /// Build a [`AppError::ConfigLoad`] for `document` from any parse or I/O
+    /// error.
+    pub fn config_load(document: impl Into<String>, error: impl fmt::Display) -> Self {
+        Self::ConfigLoad {
+            document: document.into(),
+            message: error.to_string(),
+        }
+    }
+
     /// The SFTP status carried by this error, if it is an SFTP status error.
     pub fn sftp_status(&self) -> Option<SftpStatus> {
         match self {

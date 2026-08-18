@@ -116,8 +116,8 @@ pub(crate) fn apply_color_overrides(theme: TerminalTheme, co: &ColorOverrides) -
         t.line_number_fg = lnf;
     }
     t.min_contrast = co.min_contrast;
-    for (i, &color) in co.ansi.iter().enumerate() {
-        if i < 16 {
+    for (i, color) in co.ansi.iter().enumerate().take(16) {
+        if let Some(color) = color {
             t.palette.ansi[i] = vte_from_rgba(color.to_rgb());
         }
     }

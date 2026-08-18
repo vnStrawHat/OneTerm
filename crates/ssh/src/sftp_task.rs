@@ -18,7 +18,7 @@ use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-use oneterm_core::{AppError, Result, SftpStatus, report_best_effort};
+use oneterm_core::{AppError, RemotePath, Result, SftpStatus, report_best_effort};
 
 use crate::sftp::SftpCmd;
 
@@ -118,6 +118,18 @@ pub(crate) async fn sftp_task(
                 let (sftp, lookup) = (Arc::clone(&sftp), Arc::clone(&lookup));
                 background_tasks.spawn(async move {
                     reply_to(reply, sftp_stat(&sftp, &path, &lookup).await);
+                });
+            }
+            Ok(SftpCmd::Realpath { path, reply }) => {
+                log::debug!("sftp_task: Realpath path=\"{path}\"");
+                let sftp = Arc::clone(&sftp);
+                background_tasks.spawn(async move {
+                    let result = sftp
+                        .canonicalize(path.as_str())
+                        .await
+                        .map(RemotePath::new)
+                        .map_err(map_sftp_err);
+                    reply_to(reply, result);
                 });
             }
             Ok(SftpCmd::Rename { from, to, reply }) => {

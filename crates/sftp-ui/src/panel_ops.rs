@@ -44,7 +44,26 @@ impl SftpPanel {
         cx.spawn(async move |this, cx| {
             log::debug!("SftpPanel::load_dir: spawning background read_dir for \"{path}\"");
 
-            let result = sftp.read_dir(path.clone()).await;
+            // A relative request (e.g. the initial `.`) is canonicalised first
+            // so the cwd is known even when the listing is empty (CORR-52).
+            let resolved = if path.is_absolute() {
+                None
+            } else {
+                match sftp.realpath(path.clone()).await {
+                    Ok(resolved) => Some(resolved),
+                    Err(error) => {
+                        log::warn!(
+                            "SftpPanel::load_dir: realpath(\"{path}\") failed: {error} — listing the original path"
+                        );
+                        None
+                    }
+                }
+            };
+            let listed = resolved.clone().unwrap_or_else(|| path.clone());
+            let result = sftp
+                .read_dir(listed)
+                .await
+                .map(|entries| (resolved, entries));
 
             // The panel may be gone before the listing arrives; nothing to apply then.
             _ = this.update(cx, |this, cx| {
@@ -61,23 +80,27 @@ impl SftpPanel {
     }
 
     /// Apply the outcome of the most recent `read_dir` to the active view.
+    /// `resolved` is the canonical directory when the request was relative.
     fn apply_listing(
         &mut self,
-        result: oneterm_core::Result<Vec<FileEntry>>,
+        result: oneterm_core::Result<(Option<RemotePath>, Vec<FileEntry>)>,
         cx: &mut Context<Self>,
     ) {
         match result {
-            Ok(entries) => {
+            Ok((resolved, entries)) => {
                 log::info!(
                     "SftpPanel::load_dir: got {} entries for \"{}\"",
                     entries.len(),
                     self.browser().cwd()
                 );
 
-                // A relative request (e.g. the initial `.`) is resolved by the
-                // backend; the entries carry the absolute directory.
-                if let Some(parent) = entries.first().and_then(|first| first.path.parent()) {
-                    self.browser_mut().set_cwd(parent);
+                // Prefer the canonical path from `realpath`; without it (the
+                // backend could not resolve the request) fall back to the
+                // absolute directory carried by the entries.
+                let absolute =
+                    resolved.or_else(|| entries.first().and_then(|first| first.path.parent()));
+                if let Some(absolute) = absolute {
+                    self.browser_mut().set_cwd(absolute);
                 }
 
                 self.table().update(cx, |t, cx| {
@@ -364,6 +387,50 @@ mod tests {
             Some("permission denied".to_string())
         );
         assert!(panel.read_with(cx, |panel, cx| !panel.table().read(cx).delegate().loading));
+    }
+
+    /// CORR-52: a relative request is canonicalised first, so an empty first
+    /// listing still resolves the cwd to the absolute directory.
+    #[gpui::test]
+    fn relative_request_resolves_cwd_even_for_an_empty_listing(cx: &mut TestAppContext) {
+        let (panel, cx) = test_panel(cx);
+        let backend = attach_backend(&panel, cx);
+        let home = RemotePath::new("/home/user");
+        backend.arm_realpath(Ok(home.clone()));
+        let reply = backend.arm_read_dir();
+
+        panel.update(cx, |panel, cx| panel.load_dir(RemotePath::new("."), cx));
+        cx.run_until_parked();
+        assert_eq!(backend.realpath_requests(), vec![RemotePath::new(".")]);
+        assert_eq!(backend.read_dir_requests(), vec![home.clone()]);
+
+        reply.try_send(Ok(Vec::new())).unwrap();
+        cx.run_until_parked();
+        assert!(listed_names(&panel, cx).is_empty());
+        assert_eq!(cwd(&panel, cx), home);
+    }
+
+    /// When `realpath` is unavailable the original request is listed and the
+    /// cwd is derived from the entries, as before.
+    #[gpui::test]
+    fn failed_realpath_falls_back_to_listing_the_request(cx: &mut TestAppContext) {
+        let (panel, cx) = test_panel(cx);
+        let backend = attach_backend(&panel, cx);
+        backend.arm_realpath(Err(oneterm_core::AppError::msg("unsupported")));
+        let reply = backend.arm_read_dir();
+
+        let request = RemotePath::new(".");
+        panel.update(cx, |panel, cx| panel.load_dir(request.clone(), cx));
+        cx.run_until_parked();
+        assert_eq!(backend.read_dir_requests(), vec![request]);
+
+        let dir = RemotePath::new("/srv");
+        reply
+            .try_send(Ok(vec![dir_entry(&dir, "a.txt", false)]))
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(listed_names(&panel, cx), vec!["a.txt"]);
+        assert_eq!(cwd(&panel, cx), dir);
     }
 
     /// A listing that belongs to a backend that is no longer active is discarded.
