@@ -1,6 +1,4 @@
 //! Render transfer queue — show progress for ongoing transfers.
-//!
-//! Split out from `file_browser.rs` to keep the file shorter.
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
@@ -40,7 +38,6 @@ impl SftpPanel {
             .max_h(px(200.0))
             .border_t_1()
             .border_color(theme.border);
-        // .bg(theme.muted.opacity(0.15));
 
         // Header: "Transfers" + count + Clear button
         queue = queue.child(

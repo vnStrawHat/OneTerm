@@ -1,8 +1,7 @@
 //! `impl Render for SftpPanel` + render helpers for the main layout
 //! (toolbar, transfer queue, file list).
 //!
-//! The file list is rendered with `gpui_component::table::DataTable` — replacing
-//! the manual header + rows rendering in `render_list.rs` (removed).
+//! The file list is rendered with `gpui_component::table::DataTable`.
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
@@ -10,15 +9,17 @@ use gpui::{
     Render, Styled, Window, div,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
     input::Input,
     menu::{DropdownMenu as _, PopupMenuItem},
+    notification::NotificationType,
     table::DataTable,
     v_flex,
 };
+use oneterm_state::notif_ext::notify;
 use oneterm_theme::icon::AppIcon;
 
 use super::panel::SftpPanel;
@@ -282,29 +283,34 @@ impl SftpPanel {
             .child(more_btn)
     }
 
-    /// Render file list — DataTable (or error message).
+    /// Render file list — DataTable, with an error banner above it when the
+    /// last listing failed (the previous entries stay visible).
     ///
     /// Loading + empty states are handled by DataTable itself via the delegate
     /// (`loading()`, `render_empty`).
     fn render_file_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-
-        if let Some(err) = self.browser().error() {
-            return div()
-                .flex_1()
-                .flex()
-                .items_center()
-                .justify_center()
+        let error_banner = self.browser().error().map(|err| {
+            div()
+                .id("sftp-listing-error")
+                .w_full()
+                .flex_shrink_0()
                 .px_2()
-                .text_color(theme.danger_foreground)
-                .child(format!("Error: {err}"))
-                .into_any_element();
-        }
+                .py_1()
+                .text_xs()
+                .bg(theme.danger.opacity(0.12))
+                .text_color(theme.danger)
+                .child(format!(
+                    "Could not open \"{}\": {err}",
+                    self.browser().cwd()
+                ))
+        });
 
         v_flex()
             .id("sftp-file-list")
             .flex_1()
             .min_h_0()
+            .children(error_banner)
             .child(
                 DataTable::new(self.table())
                     .bordered(false)
@@ -314,7 +320,7 @@ impl SftpPanel {
             // Drag & drop external files → upload to remote cwd.
             .can_drop(|drag, _window, _cx| drag.is::<ExternalPaths>())
             .on_drop(
-                cx.listener(move |this, external_paths: &ExternalPaths, _window, cx| {
+                cx.listener(move |this, external_paths: &ExternalPaths, window, cx| {
                     let paths: Vec<_> = external_paths.paths().to_vec();
                     log::info!(
                         "SftpPanel: on_drop — {} external path(s) dropped",
@@ -324,6 +330,14 @@ impl SftpPanel {
                         this.do_upload_paths(paths, cx);
                     } else {
                         log::warn!("SftpPanel: on_drop — no SFTP connection, ignoring");
+                        window.push_notification(
+                            notify(
+                                NotificationType::Warning,
+                                "No active SFTP connection — dropped files were not uploaded.",
+                                cx,
+                            ),
+                            cx,
+                        );
                     }
                 }),
             )

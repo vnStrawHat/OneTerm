@@ -1,5 +1,4 @@
-//! Context-menu builders for the SFTP table — extracted from [`super`] to keep
-//! the delegate file under the ~400-line guideline.
+//! Context-menu builders for the SFTP table.
 //!
 //! Both the row context menu and the empty-area context menu are built here.
 //! Each menu item carries a `.action()` (for keyboard-shortcut display) and an

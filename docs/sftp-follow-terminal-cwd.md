@@ -145,7 +145,7 @@ pub trait TerminalSession {
 
 ### In `ssh` — the source of `cwd`
 
-`crates/ssh/src/state.rs` — `SessionState`:
+`crates/terminal/src/backend/state.rs` — `SessionState` (shared by both backends):
 
 ```rust
 pub struct SessionState {
@@ -184,7 +184,7 @@ fn cwd(&self) -> Option<PathBuf> {
 - There is already a **`SessionEvent::Cwd(...)`** being `forward`ed — this is a ready-made hook
   for the auto-follow option (parts 03/05) without needing polling.
 
-`crates/local/src/session_terminal.rs` has a similar `fn cwd()` for the local shell.
+`crates/local-shell/src/session_terminal.rs` has a similar `fn cwd()` for the local shell.
 
 ---
 
@@ -537,11 +537,11 @@ lives in `ssh`/`local`, it shouldn't leak to `core`/`ui`. `CwdSource` is a minim
 
 ## 4.2. `ssh` — implement `CwdSource` sharing `SharedState`
 
-`crates/ssh/src/state.rs` — `SharedState = Arc<Mutex<SessionState>>` already has `cwd`.
+`crates/terminal/src/backend/state.rs` — `SharedState = Arc<Mutex<SessionState>>` already has `cwd`.
 Add a newtype providing `CwdSource`:
 
 ```rust
-// crates/ssh/src/state.rs (or session_terminal.rs)
+// crates/terminal/src/backend/state.rs (or crates/ssh/src/session_terminal.rs)
 use std::path::PathBuf;
 use std::sync::Arc;
 use oneterm_core::CwdSource;
@@ -577,7 +577,7 @@ fn cwd_source(&self) -> Option<Arc<dyn CwdSource>> {
 > refcount, pointing to the same state that `handle_osc`/listener writes `cwd` to. So
 > `cwd_source().cwd()` always reflects the latest OSC 7.
 
-`crates/local/src/session_terminal.rs` — similar (optional; the local shell also has
+`crates/local-shell/src/session_terminal.rs` — similar (optional; the local shell also has
 `cwd`, but SFTP doesn't apply to local so you can skip the override — the SFTP panel will
 hide on a local tab). For consistency you may still implement it.
 

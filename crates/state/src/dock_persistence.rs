@@ -244,7 +244,6 @@ mod persistence_tests {
             read_dock_document_from(&path).unwrap_err().kind(),
             io::ErrorKind::InvalidData
         );
-        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]
@@ -297,7 +296,6 @@ mod persistence_tests {
         // Subsequent updates on the healthy document are plain updates.
         let outcome = update_dock_document_at(&path, |_| Ok(())).unwrap();
         assert_eq!(outcome, DockUpdateOutcome::Updated);
-        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]
@@ -327,11 +325,34 @@ mod persistence_tests {
             read_dock_document_from(&path).unwrap().schema_version,
             CURRENT_SCHEMA_VERSION
         );
-        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    /// Removes the per-test directory when the test ends — on failure too, so a
+    /// panicking assertion never leaks temporary files (ERR-15).
+    struct TempDirGuard(std::path::PathBuf);
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            // Best effort: a directory that is already gone must not fail the test.
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    impl std::ops::Deref for TempDirGuard {
+        type Target = std::path::Path;
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl AsRef<std::path::Path> for TempDirGuard {
+        fn as_ref(&self) -> &std::path::Path {
+            &self.0
+        }
     }
 
     /// A fresh per-test directory; tests never touch the real configuration directory.
-    fn temp_directory(label: &str) -> std::path::PathBuf {
+    fn temp_directory(label: &str) -> TempDirGuard {
         let directory = std::env::temp_dir().join(format!(
             "oneterm-dock-{label}-{}-{}",
             std::process::id(),
@@ -341,7 +362,7 @@ mod persistence_tests {
                 .as_nanos(),
         ));
         std::fs::create_dir_all(&directory).unwrap();
-        directory
+        TempDirGuard(directory)
     }
 
     #[test]
@@ -376,7 +397,6 @@ mod persistence_tests {
         assert_eq!(restored.dock_fields.len(), 8 * 5);
         assert!(restored.zoomed_panel.is_some());
         assert_eq!(restored.schema_version, CURRENT_SCHEMA_VERSION);
-        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]
@@ -409,7 +429,6 @@ mod persistence_tests {
                 .as_deref(),
             Some("second")
         );
-        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]
@@ -451,7 +470,6 @@ mod persistence_tests {
                 .as_deref(),
             Some("recovered")
         );
-        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]
@@ -466,6 +484,5 @@ mod persistence_tests {
         let first = std::fs::read_to_string(&path).unwrap();
         update_dock_document_at(&path, |_| Ok(())).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), first);
-        let _ = std::fs::remove_dir_all(directory);
     }
 }

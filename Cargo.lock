@@ -5313,6 +5313,7 @@ dependencies = [
  "log",
  "oneterm-actions",
  "oneterm-core",
+ "oneterm-settings",
  "oneterm-state",
  "oneterm-terminal",
  "oneterm-terminal-view",
@@ -5485,6 +5486,7 @@ dependencies = [
  "oneterm-settings",
  "oneterm-state",
  "oneterm-terminal",
+ "oneterm-theme",
  "serde_json",
  "sysinfo 0.37.2",
 ]

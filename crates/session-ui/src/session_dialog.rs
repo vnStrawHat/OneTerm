@@ -130,8 +130,10 @@ pub(crate) fn open_session_dialog(
     let auth_form = SshAuthForm::new(auth_method, key_path.as_deref(), window, cx);
 
     // ── ColorPickerState ────────────────────────────────────────
-    // Default: #56B6C2 when creating new, keep the old color when editing.
-    let default_color_hex = color_val.clone().unwrap_or_else(|| "#56B6C2".to_string());
+    // Default colour tag when creating new, keep the old color when editing.
+    let default_color_hex = color_val
+        .clone()
+        .unwrap_or_else(|| SshSession::DEFAULT_COLOR_HEX.to_string());
     let default_color = Hsla::parse_hex(&default_color_hex).unwrap_or(cx.theme().accent);
     let color_state = cx.new(|cx| {
         let mut st = ColorPickerState::new(window, cx);

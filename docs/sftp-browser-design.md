@@ -112,14 +112,15 @@ local → core
 
 ```
 crates/ssh/src/
-├── lib.rs              # Re-export: connect, SshConfig, SshSession, PtySize, Cmd
-├── config.rs           # SshConfig + SshAuthMethod (Password/PrivateKey/Agent)
-├── handler.rs          # SshClientHandler — check_server_key (MVP: accept all)
+├── lib.rs              # Re-export: connect, SshSession, SftpSession …
+├── transport.rs        # SshTransport — PtyTransport over the russh channel
+├── handler.rs          # SshClientHandler — host-key policy (known_hosts)
 ├── session.rs          # connect() — russh connect + auth + pty + shell → SshSession
-├── session_terminal.rs # impl TerminalSession for SshSession (347 lines)
-├── listener.rs         # SshListener — EventListener + Cmd channel (sync→async bridge)
+├── session_terminal.rs # impl TerminalSession for SshSession
 ├── task.rs             # ssh_main_task — tokio task reading channel + handling Cmd
-└── state.rs            # SessionState — cache (title, cwd, clipboard, alive, exit_code)
+├── sftp.rs / sftp_task*  # SftpSession (impl SftpBackend) + the SFTP command task
+└── (SessionState + the OscRouter listener live in crates/terminal/src/backend/;
+     SshListener = OscRouter<SshTransport>)
 ```
 
 ### 2.3. Current SSH connection flow
@@ -1473,9 +1474,14 @@ flag that was drained inside `render()` no longer exists (ARCH-30).
 | `TransferQueueView` | `items: Vec<TransferItem>`, `next_id` | `allocate_id`, `reserve_id`, `push`, `update`, `replace`, `retain_active` |
 | `FollowCwd` | `enabled`, `last`, `cache`, `source: Option<Arc<dyn CwdSource>>` | `toggle`, `set_last`, `set_source`, `refresh_cache`, `terminal_cwd()`, `snapshot()/restore()` |
 
-Every mutator raises its own dirty flag; the 500 ms timer drains them with
+Every mutator raises its own dirty flag; the 500 ms poll timer drains them with
 `take_dirty()` and writes the view into the per-backend store only when something
-changed. Sibling modules reach the state through `SftpPanel::{browser, browser_mut,
+changed. The timer runs only while a backend is active (`ensure_poll_timer`): it
+ends itself when the panel shows "No SFTP connection" and is restarted by the next
+backend switch. A failed listing keeps the previous entries on screen under an
+error banner (`BrowserView::error`) rather than blanking the table; the entries
+carry absolute paths, so navigating from them stays valid. Sorting remaps
+`selected` by entry path so toolbar actions keep addressing the same file. Sibling modules reach the state through `SftpPanel::{browser, browser_mut,
 transfers, transfers_mut, follow, follow_mut, sftp, active_key, table}`; the
 transfer-queue bookkeeping (`push_transfer`, `update_transfer_for`,
 `alloc_transfer_id`, `clear_completed_transfers`, `cancel_transfer`) lives in
@@ -1578,7 +1584,7 @@ crates/
 | gpui-component ContextMenu | `reference/gpui-component/crates/ui/src/menu/` |
 | gpui-component Button | `reference/gpui-component/crates/ui/src/button/` |
 | gpui-component Input | `reference/gpui-component/crates/ui/src/input/` |
-| Cmd/SshListener pattern | `crates/ssh/src/listener.rs` (current) |
+| Cmd/OscRouter pattern | `crates/terminal/src/backend/osc_router.rs` (`SshListener = OscRouter<SshTransport>`) |
 | ssh_main_task pattern | `crates/ssh/src/task.rs` (current) |
 | SshSession::connect | `crates/ssh/src/session.rs` (current) |
 | connect_dialog flow | `crates/ui/src/views/session_tabs/connect_dialog.rs` (current) |

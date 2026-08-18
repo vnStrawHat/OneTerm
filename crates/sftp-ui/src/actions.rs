@@ -1,6 +1,5 @@
 //! File operations for the SFTP browser — rename, delete, new folder, properties.
 //!
-//! Split out from `file_browser.rs` to keep the file shorter.
 //! These methods open a dialog (input/confirm) and then call the SFTP backend.
 
 use std::rc::Rc;
@@ -22,6 +21,43 @@ use oneterm_state::notif_ext::notify;
 
 use super::panel::SftpPanel;
 use super::types::{format_date, format_owner, format_permissions, format_size};
+
+/// Why a typed entry name was rejected. `Display` is the corrective message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EntryNameError {
+    Empty,
+    /// `/` would address another directory instead of naming an entry.
+    ContainsSlash,
+    /// `.` / `..` are the current and parent directory, never a new entry.
+    DotOrDotDot,
+}
+
+impl std::fmt::Display for EntryNameError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => f.write_str("Name cannot be empty."),
+            Self::ContainsSlash => f.write_str("Name cannot contain '/'."),
+            Self::DotOrDotDot => f.write_str("Name cannot be '.' or '..'."),
+        }
+    }
+}
+
+/// Validate a single path component typed into the rename / new-folder
+/// dialogs (CORR-53): the trimmed name must be non-empty, contain no `/`, and
+/// not be `.` or `..`.
+fn validate_entry_name(name: &str) -> Result<&str, EntryNameError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(EntryNameError::Empty);
+    }
+    if name.contains('/') {
+        return Err(EntryNameError::ContainsSlash);
+    }
+    if name == "." || name == ".." {
+        return Err(EntryNameError::DotOrDotDot);
+    }
+    Ok(name)
+}
 
 /// The remote path an entry gets when it is renamed to `new_name` in place.
 fn rename_target(from: &RemotePath, new_name: &str) -> RemotePath {
@@ -95,14 +131,16 @@ impl SftpPanel {
         let submit = {
             let name_state = name_state.clone();
             move |window: &mut Window, cx: &mut App| {
-                let new_name = name_state.read(cx).value().trim().to_string();
-                if new_name.is_empty() {
-                    window.push_notification(
-                        notify(NotificationType::Warning, "Name cannot be empty.", cx),
-                        cx,
-                    );
-                    return false;
-                }
+                let new_name = match validate_entry_name(&name_state.read(cx).value()) {
+                    Ok(name) => name.to_string(),
+                    Err(error) => {
+                        window.push_notification(
+                            notify(NotificationType::Warning, error.to_string(), cx),
+                            cx,
+                        );
+                        return false;
+                    }
+                };
                 let to_path = rename_target(&from_path, &new_name);
                 log::info!("SftpPanel: rename \"{from_path}\" → \"{to_path}\"");
                 let sftp = sftp.clone();
@@ -256,18 +294,16 @@ impl SftpPanel {
         let submit = {
             let name_state = name_state.clone();
             move |window: &mut Window, cx: &mut App| {
-                let name = name_state.read(cx).value().trim().to_string();
-                if name.is_empty() {
-                    window.push_notification(
-                        notify(
-                            NotificationType::Warning,
-                            "Folder name cannot be empty.",
+                let name = match validate_entry_name(&name_state.read(cx).value()) {
+                    Ok(name) => name.to_string(),
+                    Err(error) => {
+                        window.push_notification(
+                            notify(NotificationType::Warning, error.to_string(), cx),
                             cx,
-                        ),
-                        cx,
-                    );
-                    return false;
-                }
+                        );
+                        return false;
+                    }
+                };
                 let path = cwd.join(&name);
                 log::info!("SftpPanel: mkdir \"{path}\"");
                 let sftp = sftp.clone();
@@ -557,6 +593,22 @@ mod tests {
             describe_failure("Rename failed", &AppError::msg("boom")),
             "Rename failed: boom"
         );
+    }
+
+    /// CORR-53: rename / new-folder names are single path components.
+    #[test]
+    fn entry_names_reject_slashes_and_dot_components() {
+        assert_eq!(validate_entry_name("  notes.txt "), Ok("notes.txt"));
+        assert_eq!(validate_entry_name("   "), Err(EntryNameError::Empty));
+        assert_eq!(
+            validate_entry_name("dir/file"),
+            Err(EntryNameError::ContainsSlash)
+        );
+        assert_eq!(validate_entry_name("."), Err(EntryNameError::DotOrDotDot));
+        assert_eq!(validate_entry_name(".."), Err(EntryNameError::DotOrDotDot));
+        // A hidden file is a legitimate name.
+        assert_eq!(validate_entry_name(".env"), Ok(".env"));
+        assert!(EntryNameError::ContainsSlash.to_string().contains('/'));
     }
 
     #[test]

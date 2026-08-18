@@ -1,8 +1,6 @@
 //! Transfer-queue bookkeeping for [`SftpPanel`] — the bridge between the
 //! background transfer tasks in [`super::transfer`], the per-backend store
 //! (source of truth) and the panel's mirrored [`TransferQueueView`].
-//!
-//! Split out from [`super::panel`] to keep each file under the ~400-line guideline.
 
 use gpui::Context;
 

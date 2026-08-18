@@ -15,6 +15,7 @@ workspace = true
 oneterm-core.workspace = true
 oneterm-terminal.workspace = true
 oneterm-terminal-view.workspace = true
+oneterm-settings.workspace = true
 oneterm-state.workspace = true
 oneterm-actions.workspace = true
 

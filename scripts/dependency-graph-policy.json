@@ -56,6 +56,7 @@
     "oneterm-session-ui": [
       "oneterm-actions",
       "oneterm-core",
+      "oneterm-settings",
       "oneterm-state",
       "oneterm-terminal",
       "oneterm-terminal-view"
@@ -113,7 +114,8 @@
       "oneterm-core",
       "oneterm-settings",
       "oneterm-state",
-      "oneterm-terminal"
+      "oneterm-terminal",
+      "oneterm-theme"
     ]
   },
   "backends": [

@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement, MouseButton,
-    ParentElement as _, Render, Styled as _, Window, div, px, rgb, svg,
+    ParentElement as _, Pixels, Render, Styled as _, Window, div, px, svg,
 };
 use gpui_component::{
     ActiveTheme as _, Sizable as _, TitleBar,
@@ -18,8 +18,14 @@ use gpui_component::{
 };
 
 use oneterm_actions::{RightDockMode, SetRightDockMode};
+use oneterm_theme::brand::brand_accent;
 
 use crate::layout::app_menus;
+
+/// Width of the "SSH Client" / "Agent" segments of the mode toggle group.
+const MODE_TOGGLE_WIDE: Pixels = px(70.);
+/// Width of the shorter "None" segment.
+const MODE_TOGGLE_NARROW: Pixels = px(50.);
 
 pub struct AppTitleBar {
     app_menu_bar: Entity<AppMenuBar>,
@@ -63,7 +69,7 @@ impl Render for AppTitleBar {
                     .items_center()
                     .child(
                         svg()
-                            .text_color(rgb(0x58c4dc))
+                            .text_color(brand_accent())
                             .size_5()
                             .flex_none()
                             .path("icons/terminal.svg"),
@@ -118,19 +124,19 @@ pub fn mode_toggle_group(cx: &App) -> AnyElement {
         .child(
             Toggle::new("ssh-client-mode")
                 .label("SSH Client")
-                .w(px(70.))
+                .w(MODE_TOGGLE_WIDE)
                 .checked(current_ix == 0),
         )
         .child(
             Toggle::new("agent-mode")
                 .label("Agent")
-                .w(px(70.))
+                .w(MODE_TOGGLE_WIDE)
                 .checked(current_ix == 1),
         )
         .child(
             Toggle::new("none-mode")
                 .label("None")
-                .w(px(50.))
+                .w(MODE_TOGGLE_NARROW)
                 .checked(current_ix == 2),
         )
         .on_click(move |checks, window, cx| {

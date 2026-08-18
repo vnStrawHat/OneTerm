@@ -35,8 +35,8 @@ use oneterm_state::notif_ext::notify;
 
 use super::auth_form::SshAuthForm;
 use super::common::{
-    ConnectButton, connect_ssh_session, defer_initial_focus_once, parse_user_host_port,
-    server_info_banner,
+    ConnectButton, SshConnectRequest, connect_ssh_session, defer_initial_focus_once,
+    parse_user_host_port, server_info_banner,
 };
 use crate::session_state::{SshSession, SshSessionId, SshSessionStore};
 
@@ -263,9 +263,7 @@ fn on_connect_click(
     window.refresh();
     let cancellation = connect_ssh_session(
         cfg,
-        session.label.clone(),
-        None,
-        None,
+        SshConnectRequest::new(session.label.clone()),
         connecting,
         window,
         cx,

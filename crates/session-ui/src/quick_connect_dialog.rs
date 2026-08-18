@@ -32,7 +32,8 @@ use oneterm_state::notif_ext::notify;
 
 use super::auth_form::SshAuthForm;
 use super::common::{
-    ConnectButton, connect_ssh_session, defer_initial_focus_once, parse_port, parse_user_host_port,
+    ConnectButton, SshConnectRequest, connect_ssh_session, defer_initial_focus_once, parse_port,
+    parse_user_host_port,
 };
 use crate::session_state::{SshAuthPreference, SshSession, SshSessionStore};
 
@@ -203,8 +204,10 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
                 }
             };
 
-            // Optionally save non-secret connection metadata to the SSH session store.
-            if save_session.get() {
+            // Optionally save non-secret connection metadata to the SSH session
+            // store — only once the connection succeeded (CORR-54), so a typo
+            // never becomes a saved session.
+            let on_connected: Option<Rc<dyn Fn(&mut App)>> = save_session.get().then(|| {
                 let session = SshSession {
                     label: target.label(),
                     host: target.host.clone(),
@@ -219,13 +222,20 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
                     color: None,
                     group: None,
                 };
-                SshSessionStore::global(cx).update(cx, |s, cx| {
-                    s.add(session, cx);
-                });
-            }
+                Rc::new(move |cx: &mut App| {
+                    SshSessionStore::global(cx).update(cx, |s, cx| {
+                        s.add(session.clone(), cx);
+                    });
+                }) as Rc<dyn Fn(&mut App)>
+            });
 
             // Build the connection config and connect off-thread.
-            let label = target.label();
+            let request = SshConnectRequest {
+                label: target.label(),
+                initial_cwd: initial_cwd.clone(),
+                completion: completion.clone(),
+                on_connected,
+            };
             let cfg = SshConfig {
                 host: target.host,
                 port: target.port,
@@ -237,15 +247,7 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
             };
             connecting.store(true, Ordering::Relaxed);
             window.refresh();
-            let cancellation = connect_ssh_session(
-                cfg,
-                label,
-                initial_cwd.clone(),
-                completion.clone(),
-                connecting.clone(),
-                window,
-                cx,
-            );
+            let cancellation = connect_ssh_session(cfg, request, connecting.clone(), window, cx);
             *connection_cancellation.borrow_mut() = Some(cancellation);
 
             false

@@ -1,8 +1,7 @@
 //! [`SftpTableDelegate`] — data source + cell rendering for the SFTP DataTable.
 //!
-//! Replaces the manual rendering in `render_list.rs`/`render.rs` with
-//! `gpui_component::table::DataTable`: resizable, sortable columns and virtual
-//! scroll. Column state (width + visibility) is persisted via
+//! The file list is a `gpui_component::table::DataTable`: resizable, sortable
+//! columns and virtual scroll. Column state (width + visibility) is persisted via
 //! `persistence.rs` → `docks.json`; [`SftpPanel`] reads and writes it on the
 //! background executor and hands the snapshot to this delegate.
 
@@ -165,6 +164,11 @@ impl SftpTableDelegate {
         let mut entries = self.entries.to_vec();
         sort_entries(&mut entries, self.sort);
         self.entries = Arc::from(entries);
+    }
+
+    /// Display index of the entry at `path`, if it is listed.
+    fn index_of_path(&self, path: &oneterm_core::RemotePath) -> Option<usize> {
+        self.entries.iter().position(|entry| entry.path == *path)
     }
 
     /// Config for the visible column at `col_ix` (index in visible order).
@@ -355,10 +359,25 @@ impl TableDelegate for SftpTableDelegate {
             col,
             self.sort
         );
+        let Some(panel) = self.panel.upgrade() else {
+            self.resort();
+            return;
+        };
+        // The selection is an index into the listing; remember which entry it
+        // names so it can follow that entry to its new position (CORR-30).
+        let selected_path = panel
+            .read(cx)
+            .browser()
+            .selected()
+            .and_then(|ix| self.entries.get(ix))
+            .map(|entry| entry.path.clone());
         self.resort();
-        if let Some(panel) = self.panel.upgrade() {
-            panel.update(cx, |panel, _| panel.mark_entries_dirty());
-        }
+        let remapped = selected_path.and_then(|path| self.index_of_path(&path));
+        panel.update(cx, |panel, cx| {
+            panel.browser_mut().select(remapped);
+            panel.mark_entries_dirty();
+            cx.notify();
+        });
     }
 
     fn loading(&self, _: &App) -> bool {
@@ -413,9 +432,10 @@ impl TableDelegate for SftpTableDelegate {
 #[cfg(test)]
 mod tests {
     use gpui::{TestAppContext, px};
-    use oneterm_core::SftpTableState;
+    use oneterm_core::{RemotePath, SftpTableState};
 
     use super::*;
+    use crate::test_backend::dir_entry;
 
     /// A delegate wired to a throw-away panel (the delegate needs a back-reference).
     fn delegate(cx: &mut TestAppContext) -> SftpTableDelegate {
@@ -500,5 +520,63 @@ mod tests {
         assert_eq!(width("size"), 800.0);
         // The hidden column keeps its default width.
         assert_eq!(width("modified"), 140.0);
+    }
+
+    /// CORR-30: the selection names an entry, not a row number — after a
+    /// re-sort it must still point at the same file.
+    #[gpui::test]
+    fn sorting_keeps_the_selected_entry_selected(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(oneterm_state::AppState::init);
+        cx.update(crate::browser_state::SftpBrowserStore::init);
+        let (panel, cx) = cx.add_window_view(|window, cx| SftpPanel::new(window, cx));
+        let table = panel.read_with(cx, |panel, _| panel.table().clone());
+        let root = RemotePath::root();
+
+        table.update(cx, |table, _| {
+            table.delegate_mut().set_entries(vec![
+                dir_entry(&root, "a.txt", false),
+                dir_entry(&root, "b.txt", false),
+                dir_entry(&root, "c.txt", false),
+            ]);
+        });
+        panel.update(cx, |panel, _| panel.browser_mut().select(Some(0)));
+
+        // Name column (visible index 0), descending: c, b, a.
+        table.update_in(cx, |table, window, cx| {
+            table
+                .delegate_mut()
+                .perform_sort(0, ColumnSort::Descending, window, cx);
+        });
+        let names: Vec<String> = table.read_with(cx, |table, _| {
+            table
+                .delegate()
+                .entries()
+                .iter()
+                .map(|entry| entry.name.clone())
+                .collect()
+        });
+        assert_eq!(names, vec!["c.txt", "b.txt", "a.txt"]);
+        assert_eq!(
+            panel.read_with(cx, |panel, _| panel.browser().selected()),
+            Some(2)
+        );
+
+        // A selection that no longer names a listed entry is dropped, not left
+        // pointing at whatever now sits at that index.
+        table.update(cx, |table, _| {
+            table
+                .delegate_mut()
+                .set_entries(vec![dir_entry(&root, "x.txt", false)]);
+        });
+        table.update_in(cx, |table, window, cx| {
+            table
+                .delegate_mut()
+                .perform_sort(0, ColumnSort::Ascending, window, cx);
+        });
+        assert_eq!(
+            panel.read_with(cx, |panel, _| panel.browser().selected()),
+            None
+        );
     }
 }

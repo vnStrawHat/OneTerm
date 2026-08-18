@@ -36,11 +36,13 @@ impl DateTimeClock {
                     .background_executor()
                     .timer(Duration::from_secs(1))
                     .await;
-                if let Some(this) = this.upgrade() {
-                    let _ = this.update_in(window, |this, _window, cx| {
-                        this.now = Local::now();
-                        cx.notify();
-                    });
+                // The window or the clock is gone: stop ticking.
+                let ticked = this.update_in(window, |this, _, cx| {
+                    this.now = Local::now();
+                    cx.notify();
+                });
+                if ticked.is_err() {
+                    break;
                 }
             }
         });
