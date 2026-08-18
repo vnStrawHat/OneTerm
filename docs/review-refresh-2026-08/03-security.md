@@ -95,7 +95,7 @@ TLS, and remote-controlled unbounded growth in the agent dedup map.
 - [x] **[Low] SEC-16 — Unbounded reads of `/etc/passwd`/`/etc/group` from an untrusted server**
   (`sftp_task/metadata.rs:44,73`). *Fix:* cap at e.g. 4 MiB.
 
-- [ ] **[Low] SEC-17 — Host-key confirmation closure re-clones the full `SshConfig` (with secret) on every
+- [x] **[Low] SEC-17 — Host-key confirmation closure re-clones the full `SshConfig` (with secret) on every
   render** (`session-ui/src/common.rs:328-356`). *Fix:* `Rc` outside the builder closure.
 
 ## C. Updater

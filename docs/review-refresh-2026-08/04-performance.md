@@ -33,7 +33,7 @@ how obviously they sit on the hot path.
   (`local_view.rs:202`). *Fix:* call once per frame in `render`, thread it into `TerminalElement`; make
   `last_content_line` lazy or maintained incrementally by the listener.
 
-- [ ] **[High] PERF-04 — Full-scrollback regex search on every Output event while searching**
+- [x] **[High] PERF-04 — Full-scrollback regex search on every Output event while searching**
   (`search.rs:150` via `local_view.rs:207`). With a 100k-line scrollback and a streaming build this is
   O(scrollback) per PTY read. *Fix:* `search_dirty = true` on output, refresh in `render` (once per frame).
   Also `crates/terminal/src/search.rs:97-116` is a naive O(lines×cols×needle) scan under the `Term` lock per
@@ -83,7 +83,7 @@ how obviously they sit on the hot path.
   cell** (`cell/style.rs:297-301`, `cell/batch.rs:220-226`). *Fix:* compare `(weight, style)`; build `Font`
   only when starting a run.
 
-- [ ] **[Low] PERF-14 — `has_selection` for the context menu materialises the whole selection string**
+- [x] **[Low] PERF-14 — `has_selection` for the context menu materialises the whole selection string**
   (`handlers/menu.rs:48-52`). *Fix:* `TerminalSession::has_selection()`.
 
 - [x] **[Low] PERF-15 — URL hover query on every mouse move** (`handlers/mouse.rs:248` → `url.rs:37-44`, 11-line

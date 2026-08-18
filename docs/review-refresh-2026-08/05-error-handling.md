@@ -30,7 +30,7 @@ paths is the one place where a panic can cascade.
   `crates/workspace/src/layout/workspace/mod.rs:82-102`: a layout containing a stale name or a feature that
   failed to `init` renders "not registered" text with no log. *Fix:* `log::error!` with the name (see ARCH-08).
 
-- [ ] **[Medium] ERR-04 — Paste rejections and spawn failures are log-only.**
+- [x] **[Medium] ERR-04 — Paste rejections and spawn failures are log-only.**
   `TerminalSession::paste` `TooLarge` → `log::warn` (`crates/terminal/src/session.rs:409-412`);
   `spawn_local_view` failure → `log::warn` + empty tree (`terminal-view/src/panel/terminal_panel.rs:95-102`,
   `ops.rs:339-345`). Policy: user actions must produce a corrective notification. *Fix:* return `Result` to
@@ -71,7 +71,7 @@ paths is the one place where a panic can cascade.
 - [x] **[Low] ERR-13 — `Events::with_capacity(1024.try_into().unwrap())`** (`local-shell/src/event_loop.rs:230`).
   *Fix:* `NonZeroUsize::new(1024)` const or `Events::new()`.
 
-- [ ] **[Low] ERR-14 — Non-NotFound read errors select defaults, later overwritten** — see CORR-61.
+- [x] **[Low] ERR-14 — Non-NotFound read errors select defaults, later overwritten** — see CORR-61.
 
 - [x] **[Low] ERR-15 — Temp-file tests clean up with `let _ = remove_file` after assertions**
   (`ssh/src/handler_tests.rs:41,60,80`) — leak on failure. *Fix:* RAII guard.

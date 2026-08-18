@@ -41,7 +41,7 @@ all of it raises the cost of the next feature.
   *Fix:* introduce a `RemotePath` newtype in `core` (always `/`-separated, with `join`/`parent`/`file_name`)
   and change the trait to take it. Stop-gap: sanitise in `sftp_task.rs` for all three commands + Windows regression test.
 
-- [ ] **[Medium] ARCH-02 — `TerminalSession` is a ~45-method god trait with silent no-op defaults.**
+- [x] **[Medium] ARCH-02 — `TerminalSession` is a ~45-method god trait with silent no-op defaults.**
   `crates/terminal/src/session.rs:196-448` mixes render snapshots, PTY I/O, mouse, selection, search, IME,
   lifecycle, automation (`send_keystroke`), presentation (`breadcrumb_text` "text shown in the toolbar") and
   capabilities. Defaults such as `search()` → `Vec::new()` (l.342) and `scroll_to_prompt()` no-op (l.408)
@@ -120,7 +120,7 @@ all of it raises the cost of the next feature.
   *Fix:* register the on-quit save from the shell with an App-level `cx.on_app_quit` capturing a
   `WeakEntity<DockArea>` + `Rc<Cell<_>>` mirrors; delete both fields (the toggle chain is dead — HYG-01).
 
-- [ ] **[Medium] ARCH-15 — `state` is becoming a dumping ground.** `notif_ext.rs` is UI styling;
+- [x] **[Medium] ARCH-15 — `state` is becoming a dumping ground.** `notif_ext.rs` is UI styling;
   `agent_model.rs`/`agent_registry.rs` (~760 lines) is a feature domain model; `completion_history.rs` is a
   one-entity wrapper; `dock_persistence.rs` is a schema owner. `crates/state/Cargo.toml:3` still says
   "AppState + notification helpers"; `docs/agents/structure.md:84-92` lists none of the new modules.
@@ -284,7 +284,7 @@ all of it raises the cost of the next feature.
 - [x] **[Low] ARCH-43 — Single-file folders.** `crates/completion/src/catalog/schema.rs`,
   `crates/completion/src/redact/detect.rs`. *Fix:* `catalog_schema.rs` / `redact_detect.rs` siblings.
 
-- [ ] **[Low] ARCH-44 — Tuple returns / bool params in public trait API.** `core/src/sftp.rs:116-130`,
+- [x] **[Low] ARCH-44 — Tuple returns / bool params in public trait API.** `core/src/sftp.rs:116-130`,
   `terminal/src/session.rs:246` (`(Vec<IndexedCell>, usize)`), `:361` (`is_local() -> bool`).
   *Fix:* `LineRangeCells { cells, num_cols }`, `SessionKind` enum.
 

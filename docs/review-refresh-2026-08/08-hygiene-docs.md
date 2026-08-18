@@ -30,7 +30,7 @@ authoritative.
   `Suggestion::remainder` (`completion/src/engine.rs:70`), `ExternalTargetPolicy::validate_with_display`
   (unless wired — SEC-03); `strip_unsafe_chars`/`truncate_utf8` are `pub` with no external callers.
 
-- [ ] **[Medium] HYG-03 — Dead trait surface / stale state in backends.** `set_cell_size`/`cell_width`/
+- [x] **[Medium] HYG-03 — Dead trait surface / stale state in backends.** `set_cell_size`/`cell_width`/
   `line_height`/`cursor_bounds` never called (`local-shell/src/session.rs:129-133`,
   `ssh/src/session_terminal.rs:26-29,212-216`); `SessionState.foreground_process` never written and
   `SessionEvent::ForegroundProcess` never emitted; `last_exit_code`/`exit_code` written but never read;
@@ -97,7 +97,7 @@ authoritative.
 
 ## C. Hard-coded colours & magic numbers (project rule: read from theme)
 
-- [ ] **[Medium] HYG-13 — Hard-coded colours.** `terminal-view/src/theme/terminal_theme.rs:65-79`,
+- [x] **[Medium] HYG-13 — Hard-coded colours.** `terminal-view/src/theme/terminal_theme.rs:65-79`,
   `theme/palette.rs:88` (selection, search, gutter dim, Tango ANSI-16); `view/scrollbar_overlay.rs:75`
   (`hsla(0,0,0.5,…)`); `space/placeholder.rs:47` (`rgb(0x58c4dc)`); `completion/overlay.rs:189-191` (`white()`);
   `workspace/src/layout/title_bar.rs:66` (`rgb(0x58c4dc)`); `settings-ui/src/about.rs:138` (`rgb(0x58c4dc)`);

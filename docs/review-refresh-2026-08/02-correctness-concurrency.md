@@ -119,7 +119,7 @@ drifted from its source of truth.
 - [x] **[Low] CORR-21 — Double Term resize on SSH.** UI thread resizes (`ssh/src/session_terminal.rs:112-118`)
   and the task resizes again (`task.rs:139-142`). *Fix:* remove the second.
 
-- [ ] **[Low] CORR-22 — `subscribed_tabs` grows unbounded.** `workspace/.../mod.rs:133,344`: EntityIds of
+- [x] **[Low] CORR-22 — `subscribed_tabs` grows unbounded.** `workspace/.../mod.rs:133,344`: EntityIds of
   dropped `TabPanel`s are never removed. *Fix:* retain only ids present in `collect_tab_panels`.
 
 ## B. Logic errors & panics
@@ -191,7 +191,7 @@ drifted from its source of truth.
   (`:153-155`, `:447-450`) skipping remaining files without marking them. *Fix:* continue with the next file
   (or mark the rest `Cancelled`); set `Cancelled` before returning.
 
-- [ ] **[Medium] CORR-32 — Silent port fallback in three places.** `session-ui/src/common.rs:146`,
+- [x] **[Medium] CORR-32 — Silent port fallback in three places.** `session-ui/src/common.rs:146`,
   `quick_connect_dialog.rs:224`, `session_dialog.rs:190` all `parse().unwrap_or(22)`; typing `2222x`
   silently connects to port 22. *Fix:* `parse_port(&str) -> Result<u16, String>` + notification.
 
@@ -222,7 +222,7 @@ drifted from its source of truth.
   already quit (`settings-ui/src/updates/install.rs:134`). Backups accumulate forever. *Fix:* backup inside
   `update_cache_dir()`, verify before quitting, delete after `start` succeeds.
 
-- [ ] **[Medium] CORR-39 — macOS `Restarted` path launches with `open <bundle>` while the old instance runs**
+- [x] **[Medium] CORR-39 — macOS `Restarted` path launches with `open <bundle>` while the old instance runs**
   (`install.rs:109`) → activates the existing instance, then `cx.quit()` closes it. *Fix:* `open -n` or spawn
   the binary directly.
 
@@ -245,7 +245,7 @@ drifted from its source of truth.
   filled block (`:315`). *Fix:* paint the cursor quad before the cell's text run and re-paint that run with
   inverted fg (or `paint_quad` with border for Hollow/unfocused).
 
-- [ ] **[Medium] CORR-44 — Host key of a *different algorithm* is reported as "unknown host" rather than
+- [x] **[Medium] CORR-44 — Host key of a *different algorithm* is reported as "unknown host" rather than
   "changed".** See SEC-05 (security file) — listed there.
 
 - [x] **[Low] CORR-45 — IPv6 host without port yields spurious `NonDefaultPort`.**
@@ -276,7 +276,7 @@ drifted from its source of truth.
   (`terminal-view/src/layout/row.rs:43-46`), losing a non-default bg rect; intent undocumented.
   *Fix:* move after `is_blank`, document.
 
-- [ ] **[Low] CORR-52 — Empty first SFTP listing never resolves the cwd.** `sftp-ui/src/panel_ops.rs:64-71`
+- [x] **[Low] CORR-52 — Empty first SFTP listing never resolves the cwd.** `sftp-ui/src/panel_ops.rs:64-71`
   derives the absolute cwd from `entries.first()`; for an empty root the panel keeps `"."`. *Fix:* add
   `realpath` to `SftpBackend` (or `stat(".").path`).
 
@@ -286,14 +286,14 @@ drifted from its source of truth.
 - [x] **[Low] CORR-54 — Quick Connect saves the session before the connection is attempted**
   (`session-ui/src/quick_connect_dialog.rs:245-262`). *Fix:* save on success.
 
-- [ ] **[Low] CORR-55 — Rebinding has no conflict detection** (`settings-ui/src/key_bindings/key_bindings_ui.rs:200-223`).
+- [x] **[Low] CORR-55 — Rebinding has no conflict detection** (`settings-ui/src/key_bindings/key_bindings_ui.rs:200-223`).
   *Fix:* warn on duplicate keystroke.
 
-- [ ] **[Low] CORR-56 — Capture mode relies on the settings window having no action handlers** (gpui dispatches
+- [x] **[Low] CORR-56 — Capture mode relies on the settings window having no action handlers** (gpui dispatches
   key bindings before `on_key_down`, vendored `gpui/src/window.rs:4902-4917`). *Fix:* keystroke interceptor
   or document the invariant.
 
-- [ ] **[Low] CORR-57 — Multiple Settings windows can be opened** (`settings-ui/src/window.rs:33-75`). *Fix:* dedupe.
+- [x] **[Low] CORR-57 — Multiple Settings windows can be opened** (`settings-ui/src/window.rs:33-75`). *Fix:* dedupe.
 
 - [x] **[Low] CORR-58 — `check_interval_hours` overflow** (`update/src/config.rs` ~L120,
   `Duration::hours(... as i64)`). *Fix:* clamp.
@@ -301,11 +301,11 @@ drifted from its source of truth.
 - [x] **[Low] CORR-59 — Windows updater script `timeout /T 1` fails when stdin is not a console**
   (helper spawned with `CREATE_NO_WINDOW`) → busy spin. *Fix:* `ping -n 2 127.0.0.1 >NUL` or `waitfor /t 1`.
 
-- [ ] **[Low] CORR-60 — ANSI palette silently shifts on one bad entry.** `settings/src/terminal_settings/apply.rs:95-99`
+- [x] **[Low] CORR-60 — ANSI palette silently shifts on one bad entry.** `settings/src/terminal_settings/apply.rs:95-99`
   `filter_map(parse_hex_color)` drops invalid entries, so colour 3 becomes colour 2. *Fix:* `Option<Hsla>` per
   slot + log.
 
-- [ ] **[Low] CORR-61 — Non-NotFound read errors select defaults, later overwritten.**
+- [x] **[Low] CORR-61 — Non-NotFound read errors select defaults, later overwritten.**
   `settings/src/ui_config.rs:129-132`, `terminal_config/document.rs:169-172`: e.g. `PermissionDenied` →
   defaults; next persist overwrites a possibly-valid file. *Fix:* "load failed" flag → refuse to persist.
 
@@ -330,7 +330,7 @@ drifted from its source of truth.
 - [x] **[Low] CORR-68 — `apply_check_result` leaves a stale `candidate` on `Disabled`**
   (`settings-ui/src/updates/actions.rs:152`). *Fix:* clear.
 
-- [ ] **[Low] CORR-69 — `ManualInstall` outcome only visible in About status text**
+- [x] **[Low] CORR-69 — `ManualInstall` outcome only visible in About status text**
   (`settings-ui/src/updates/notify.rs:45`). *Fix:* Info notification with the package path.
 
 - [x] **[Low] CORR-70 — Ended agent cards are never pruned** (`AgentRegistry::clear_ended` at
