@@ -25,6 +25,10 @@ use super::updates;
 
 const TEST_CRASH_CLICK_COUNT: u8 = 10;
 
+/// Environment variable that enables the hidden About-icon crash trigger in
+/// release builds; debug builds always have it (ARCH-38).
+const CRASH_TRIGGER_ENV: &str = "ONETERM_ENABLE_CRASH_TRIGGER";
+
 static ABOUT_ICON_CLICKS: AtomicU8 = AtomicU8::new(0);
 
 struct AboutUpdateControls;
@@ -57,15 +61,25 @@ impl Render for AboutUpdateControls {
             )
             .when(state.shows_install_button(), |this| {
                 this.child(
-                    h_flex().gap_2().child(
-                        Button::new("about-install-update")
-                            .primary()
-                            .label(state.install_button_label())
-                            .disabled(!state.can_install_update())
-                            .on_click(|_, window, cx| {
-                                updates::download_and_install_update(window, cx)
-                            }),
-                    ),
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            Button::new("about-install-update")
+                                .primary()
+                                .label(state.install_button_label())
+                                .disabled(!state.can_install_update())
+                                .on_click(|_, window, cx| {
+                                    updates::download_and_install_update(window, cx)
+                                }),
+                        )
+                        .when(state.can_skip_update(), |this| {
+                            this.child(
+                                Button::new("about-skip-update")
+                                    .ghost()
+                                    .label("Skip This Version")
+                                    .on_click(|_, _, cx| updates::skip_offered_version(cx)),
+                            )
+                        }),
                 )
             })
             .into_any_element()
@@ -137,7 +151,7 @@ fn app_identity(cx: &App) -> AnyElement {
                         .text_color(rgb(0x58c4dc)),
                 )
                 .on_click(|_, _, _| {
-                    if register_about_icon_click() {
+                    if crash_trigger_enabled() && register_about_icon_click() {
                         // This diagnostic-only panic verifies the crash recovery flow end to end.
                         panic!("Intentional crash triggered by ten clicks on the About icon");
                     }
@@ -183,6 +197,13 @@ fn links_section(cx: &App) -> AnyElement {
                 .child(repository_link("about-open-repo", cx)),
         )
         .into_any_element()
+}
+
+/// The hidden crash trigger is a diagnostics aid: always on in debug builds,
+/// opt-in through `ONETERM_ENABLE_CRASH_TRIGGER` in release builds so a
+/// curious user cannot crash a production build by clicking the icon.
+fn crash_trigger_enabled() -> bool {
+    cfg!(debug_assertions) || std::env::var_os(CRASH_TRIGGER_ENV).is_some()
 }
 
 fn register_about_icon_click() -> bool {

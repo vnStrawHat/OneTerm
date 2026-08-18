@@ -1,5 +1,5 @@
-//! General Settings UI — a dock panel wrapping the gpui-component `Settings`
-//! widget.
+//! General Settings UI — a standalone window wrapping the gpui-component
+//! `Settings` widget.
 //!
 //! The original `terminal/settings_panel.rs` only exposed the shell picker. This
 //! module is the full General Settings (font, theme, key bindings, terminal
@@ -15,7 +15,6 @@
 
 mod about;
 mod appearance;
-mod crash_report_dialog;
 mod general;
 mod key_bindings;
 mod panel;
@@ -24,7 +23,6 @@ mod terminal;
 mod updates;
 mod window;
 
-pub use crash_report_dialog::{CrashReport, show_crash_reports};
 pub use window::open_settings_window;
 
 // Re-exported for `OneTermWorkspace::bind_keys` (snapshot + apply key bindings).
