@@ -44,7 +44,7 @@ Status is stated in each file's header. "Current" = kept in step with the code;
 | [`ssh-authentication.md`](ssh-authentication.md) | SSH authentication methods (password, private key, none), key material handling | accepted product contract |
 | [`ssh-client-connect.md`](ssh-client-connect.md) | SSH connect flow, host keys, timeouts, keepalive | historical design record (contradictions annotated) |
 | [`sftp-browser-design.md`](sftp-browser-design.md) | SFTP browser, transfer queue, `RemotePath` / `TransferHandle` contract | historical + refreshed contract sections |
-| [`sftp-follow-terminal-cwd.md`](sftp-follow-terminal-cwd.md) + [`sftp-follow-terminal-cwd/`](sftp-follow-terminal-cwd/) | SFTP browser follows the terminal CWD (OSC 7) | historical (shipped state summarised in the header) |
+| [`sftp-follow-terminal-cwd/`](sftp-follow-terminal-cwd/) | SFTP browser follows the terminal CWD (OSC 7) | historical (shipped state summarised in the header) |
 | [`auto-update.md`](auto-update.md) | GitHub Releases auto-update: check, download, verify, install, rollback | current (implemented; gaps listed) |
 | [`crash-reporting.md`](crash-reporting.md) | Panic / native crash capture and recovery | current |
 | [`osc-agent-status.md`](osc-agent-status.md) | OSC 9;7 agent-status proposal (the wire spec) | current |
@@ -62,8 +62,6 @@ Status is stated in each file's header. "Current" = kept in step with the code;
 | Document | Status |
 |---|---|
 | [`review-refresh-2026-08/`](review-refresh-2026-08/) | **Live** review checklist (2026-08-17 refresh) and its phased remediation plan. Tick items here as they land. |
-| [`archive/review-2026-07/`](archive/review-2026-07/) | Repository-wide review of 2026-07-22 — archived, superseded by the refresh. |
-| [`archive/repository-review-2026-07/`](archive/repository-review-2026-07/) | Repository-wide review of 2026-07-23 — archived, superseded by the refresh. |
 | [`archive/terminal-code-review-remediation-2026-07.md`](archive/terminal-code-review-remediation-2026-07.md) | Pre-restructure terminal review (2026-07-13) — archived; paths no longer exist. |
 | [`archive/refactor/ui-crate-restructure.md`](archive/refactor/ui-crate-restructure.md) | The (completed) crate restructure plan — archived. |
 

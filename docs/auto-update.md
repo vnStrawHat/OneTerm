@@ -23,7 +23,7 @@ GitHub Releases.
 ## Non-goals
 
 - Silent forced updates.
-- Updating development builds (`oneterm-debug`) by default.
+- Updating development builds by default.
 - Package-manager integration for distro packages, Homebrew, winget, or MSI/DMG
   installers in the first implementation.
 - Delta or binary patch updates. The first implementation downloads complete release
@@ -35,7 +35,7 @@ GitHub Releases.
 ## Release source
 
 The updater reads releases from a repository fixed at compile time
-(`crates/update/src/config.rs`): `DEFAULT_UPDATE_REPOSITORY` is the canonical
+(`crates/update/src/config.rs`): `UPDATE_REPOSITORY` resolves to the canonical
 `owner/repo`; a fork or mirror that publishes its own releases sets
 `ONETERM_UPDATE_REPO=owner/repo` in the build environment. Nothing is inferred
 from the git checkout, so a fork build cannot silently point at the wrong
@@ -55,8 +55,8 @@ Version rules:
 
 - Release tags must be SemVer-compatible: `vMAJOR.MINOR.PATCH` or
   `MAJOR.MINOR.PATCH`.
-- The current app version is `CARGO_PKG_VERSION`, which release builds keep equal
-  to the `VERSION` file.
+- The current app version is `CARGO_PKG_VERSION`, i.e. `[workspace.package] version`
+  in the root `Cargo.toml`.
 - The updater offers an update only when the release version is strictly greater
   than the current version.
 - Build metadata does not make a release newer. Pre-release versions are offered
@@ -414,7 +414,7 @@ Manual smoke tests:
 
 The release workflow must:
 
-1. Bump `VERSION` before tagging.
+1. Bump `[workspace.package] version` in `Cargo.toml` before tagging.
 2. Check out the release tag before building artifacts, so binaries embed the
    same version as the release tag.
 3. Build release artifacts for every supported target triple.

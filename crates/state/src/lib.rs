@@ -11,7 +11,7 @@
 //!   commands / active-terminal metrics / agent focuser the shell and other
 //!   features call without depending on them;
 //! - **shared shell contracts**: `docks.json` document ownership
-//!   ([`dock_persistence`]), panel names, dock traversal helpers and paths.
+//!   ([`dock_persistence`]), panel names and dock traversal helpers.
 
 pub mod active_terminal;
 pub mod agent_focus;
@@ -24,7 +24,6 @@ pub mod dock_persistence;
 pub mod dock_util;
 pub mod form_dialog;
 pub mod panel_names;
-pub mod paths;
 pub mod services;
 
 pub use agent_registry::{
@@ -33,4 +32,4 @@ pub use agent_registry::{
 };
 pub use app_state::AppState;
 pub use completion_history::{CompletionHistory, GlobalCompletionHistory};
-pub use services::{AppServices, AppServicesBuilder};
+pub use services::AppServices;

@@ -46,17 +46,13 @@ CI entry point is [`scripts/verify-dependency-graph.py`](../scripts/verify-depen
 ## Service registration
 
 `oneterm_state::AppServices` is the single application-scoped service bundle and
-the only injection registry. Startup has two phases:
-
-1. Feature `init()`s *contribute* their cross-feature hooks to the pending
-   `oneterm_state::AppServicesBuilder` (`terminal-view` contributes the
-   `ActiveTerminalMetricsProvider` read by the status-bar widgets and the
-   `AgentFocuser` used by the Agent Panel). A duplicate or late contribution is a
-   startup error.
-2. The composition root (`crates/app/src/init.rs`) constructs the backend-neutral
-   `SessionFactory` and the `WorkspaceCommands` callbacks and seals the bundle with
-   `AppServices::install`, which rejects duplicate registration and a missing
-   contribution, then `validate`s availability.
+the only injection registry. The composition root (`crates/app/src/init.rs`)
+constructs the backend-neutral `SessionFactory` and the `WorkspaceCommands`
+callbacks, collects the cross-feature hooks each feature exposes
+(`oneterm_terminal_view::status_metrics` — the `ActiveTerminalMetricsProvider`
+read by the status-bar widgets — and `oneterm_terminal_view::agent_focuser`, the
+`AgentFocuser` used by the Agent Panel), and installs them all with
+`AppServices::install`, which rejects duplicate registration.
 
 Consumers read handles through `AppServices::global(cx)` (or the typed accessors
 `session_factory` / `workspace_commands` / `active_terminal::breadcrumb` /

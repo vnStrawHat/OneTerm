@@ -33,7 +33,6 @@ step python scripts/check-doc-paths.py
 step python -m unittest scripts/test_check_english.py
 step python scripts/check-english.py
 step python scripts/completion-catalog.py validate
-step python scripts/benchmark-scale.py --list
 step python scripts/third-party-notices.py --check
 
 if [[ $FULL -eq 1 ]]; then

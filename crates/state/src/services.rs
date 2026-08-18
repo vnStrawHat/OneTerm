@@ -2,11 +2,9 @@
 //!
 //! Feature crates receive session creation, workspace commands and the
 //! cross-feature hooks (active-terminal metrics, agent focus) through this one
-//! bundle rather than independent process-global registries. Startup runs in
-//! two phases: features *contribute* their hooks during `init()` through
-//! [`AppServicesBuilder`], then the composition root seals the bundle with
-//! [`AppServices::install`]. Test application contexts can install different
-//! bundles without sharing process state.
+//! bundle rather than independent process-global registries. The composition
+//! root installs it once with every feature's contribution. Test application
+//! contexts can install different bundles without sharing process state.
 
 use std::sync::Arc;
 
@@ -16,54 +14,6 @@ use oneterm_terminal::SessionFactory;
 use crate::active_terminal::ActiveTerminalMetricsProvider;
 use crate::agent_focus::AgentFocuser;
 use crate::commands::WorkspaceCommands;
-
-/// Feature contributions gathered during startup, before the bundle is sealed.
-#[derive(Default)]
-pub struct AppServicesBuilder {
-    active_terminal_metrics: Option<ActiveTerminalMetricsProvider>,
-    agent_focuser: Option<AgentFocuser>,
-}
-
-impl Global for AppServicesBuilder {}
-
-impl AppServicesBuilder {
-    /// The pending contributions of this application context, created on first use.
-    ///
-    /// Fails once [`AppServices::install`] has sealed the bundle: late feature
-    /// registration is a startup ordering bug, not a runtime condition.
-    pub fn pending(cx: &mut App) -> Result<&mut Self, &'static str> {
-        if cx.has_global::<AppServices>() {
-            return Err(
-                "application services are already installed; features must contribute during init()",
-            );
-        }
-        if !cx.has_global::<Self>() {
-            cx.set_global(Self::default());
-        }
-        Ok(cx.global_mut::<Self>())
-    }
-
-    /// Contribute the active-terminal metric extractors (terminal feature).
-    pub fn active_terminal_metrics(
-        &mut self,
-        provider: ActiveTerminalMetricsProvider,
-    ) -> Result<&mut Self, &'static str> {
-        if self.active_terminal_metrics.is_some() {
-            return Err("active-terminal metrics provider is already contributed");
-        }
-        self.active_terminal_metrics = Some(provider);
-        Ok(self)
-    }
-
-    /// Contribute the agent focuser (terminal feature).
-    pub fn agent_focuser(&mut self, focuser: AgentFocuser) -> Result<&mut Self, &'static str> {
-        if self.agent_focuser.is_some() {
-            return Err("agent focuser is already contributed");
-        }
-        self.agent_focuser = Some(focuser);
-        Ok(self)
-    }
-}
 
 /// Immutable service handles owned by one GPUI application context.
 pub struct AppServices {
@@ -78,27 +28,17 @@ impl Global for AppServices {}
 impl AppServices {
     /// Seal the service bundle at the application composition root.
     ///
-    /// Takes the feature contributions gathered in [`AppServicesBuilder`] and
-    /// rejects duplicate startup registration or a missing contribution.
+    /// Rejects duplicate startup registration.
     pub fn install(
         cx: &mut App,
         session_factory: Arc<dyn SessionFactory>,
         workspace_commands: WorkspaceCommands,
+        active_terminal_metrics: ActiveTerminalMetricsProvider,
+        agent_focuser: AgentFocuser,
     ) -> Result<(), &'static str> {
         if cx.has_global::<Self>() {
             return Err("application services are already registered");
         }
-        let builder = if cx.has_global::<AppServicesBuilder>() {
-            cx.remove_global::<AppServicesBuilder>()
-        } else {
-            AppServicesBuilder::default()
-        };
-        let Some(active_terminal_metrics) = builder.active_terminal_metrics else {
-            return Err("no feature contributed the active-terminal metrics provider");
-        };
-        let Some(agent_focuser) = builder.agent_focuser else {
-            return Err("no feature contributed the agent focuser");
-        };
         cx.set_global(Self {
             session_factory,
             workspace_commands,
@@ -139,14 +79,6 @@ impl AppServices {
     /// Return the agent focuser for the Agent Panel.
     pub fn agent_focuser(cx: &App) -> AgentFocuser {
         Self::global(cx).agent_focuser
-    }
-
-    /// Validate that the composition-root bundle is installed.
-    pub fn validate(cx: &App) -> Result<(), &'static str> {
-        if !cx.has_global::<Self>() {
-            return Err("application services are not registered");
-        }
-        Ok(())
     }
 }
 
@@ -239,56 +171,29 @@ mod tests {
         AgentFocuser { focus }
     }
 
-    fn contribute_all(cx: &mut App) {
-        AppServicesBuilder::pending(cx)
-            .unwrap()
-            .active_terminal_metrics(metrics())
-            .unwrap()
-            .agent_focuser(focuser())
-            .unwrap();
+    fn install(cx: &mut App) -> std::result::Result<(), &'static str> {
+        AppServices::install(cx, Arc::new(TestFactory), commands(), metrics(), focuser())
     }
 
     #[gpui::test]
-    fn contributions_are_sealed_into_the_installed_bundle(cx: &mut gpui::TestAppContext) {
+    fn contributions_are_readable_from_the_installed_bundle(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            contribute_all(cx);
-            AppServices::install(cx, Arc::new(TestFactory), commands()).unwrap();
-            assert!(AppServices::validate(cx).is_ok());
-            assert!(!cx.has_global::<AppServicesBuilder>());
+            install(cx).unwrap();
             let provider = AppServices::active_terminal_metrics(cx);
             assert_eq!(provider.breadcrumb as usize, metrics().breadcrumb as usize);
+            assert_eq!(
+                AppServices::agent_focuser(cx).focus as usize,
+                focuser().focus as usize
+            );
         });
     }
 
     #[gpui::test]
-    fn install_requires_every_feature_contribution(cx: &mut gpui::TestAppContext) {
+    fn duplicate_installation_is_rejected(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            AppServicesBuilder::pending(cx)
-                .unwrap()
-                .active_terminal_metrics(metrics())
-                .unwrap();
+            install(cx).unwrap();
             assert_eq!(
-                AppServices::install(cx, Arc::new(TestFactory), commands()),
-                Err("no feature contributed the agent focuser")
-            );
-            assert!(AppServices::validate(cx).is_err());
-        });
-    }
-
-    #[gpui::test]
-    fn duplicate_contribution_and_late_contribution_are_rejected(cx: &mut gpui::TestAppContext) {
-        cx.update(|cx| {
-            contribute_all(cx);
-            assert!(
-                AppServicesBuilder::pending(cx)
-                    .unwrap()
-                    .agent_focuser(focuser())
-                    .is_err()
-            );
-            AppServices::install(cx, Arc::new(TestFactory), commands()).unwrap();
-            assert!(AppServicesBuilder::pending(cx).is_err());
-            assert_eq!(
-                AppServices::install(cx, Arc::new(TestFactory), commands()),
+                install(cx),
                 Err("application services are already registered")
             );
         });

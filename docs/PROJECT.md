@@ -28,8 +28,8 @@ product: terminal engine glue, backends, UI, persistence, packaging, and the aut
 - Terminal engine: `alacritty_terminal`; local PTY via `alacritty_terminal::tty` (Windows ConPTY
   with bundled `conpty.dll` / `OpenConsole.exe`); SSH/SFTP via `russh` + `russh-sftp` on a
   tokio runtime hidden inside `crates/ssh`.
-- Binaries: `oneterm` (release, `release-bin` feature) and `oneterm-debug` (dev, keeps the
-  console) from `crates/app`; local diagnostics binaries live in `crates/tools`.
+- Binary: `oneterm` from `crates/app` (keeps the console in debug builds); local
+  diagnostics binaries live in `crates/tools`.
 - Persistence: JSON files in `oneterm_core::config_dir()` (`target/` in debug builds,
   `~/.OneTerm/` in release): `terminal.json`, `ui_config.json`, `docks.json`,
   `ssh_session.json`, `update_config.json`, plus `crashes/`
@@ -68,7 +68,7 @@ product: terminal engine glue, backends, UI, persistence, packaging, and the aut
 - No secrets are persisted (`ui_config.json`, `terminal.json`, `docks.json`, `ssh_session.json`
   never contain passwords or passphrases).
 - English-only contributor text and code comments (`python scripts/check-english.py`).
-- `VERSION` == `[workspace.package] version` (`python scripts/verify-dependency-graph.py`).
+- Every crate inherits `[workspace.package] version` (`python scripts/verify-dependency-graph.py`).
 - Do not hard-code colours in components — read `cx.theme()` / `TerminalTheme`.
 
 ## Verification

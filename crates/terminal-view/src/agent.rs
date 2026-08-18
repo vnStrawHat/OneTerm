@@ -56,13 +56,9 @@ fn focus_agent_terminal(terminal_key: EntityId, window: &mut Window, cx: &mut Ap
     nav(window, cx);
 }
 
-/// Contribute the focuser to `AppServices` (called from [`crate::init`]).
-pub fn init(cx: &mut App) {
-    oneterm_state::AppServicesBuilder::pending(cx)
-        .and_then(|builder| {
-            builder.agent_focuser(oneterm_state::agent_focus::AgentFocuser {
-                focus: focus_agent_terminal,
-            })
-        })
-        .expect("terminal feature must contribute its agent focuser once during init");
+/// The agent focuser this feature contributes to `AppServices`.
+pub fn agent_focuser() -> oneterm_state::agent_focus::AgentFocuser {
+    oneterm_state::agent_focus::AgentFocuser {
+        focus: focus_agent_terminal,
+    }
 }

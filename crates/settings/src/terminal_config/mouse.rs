@@ -4,24 +4,19 @@ use serde::{Deserialize, Serialize};
 
 /// Mouse group.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct MouseConfig {
     /// Show OneTerm's context menu on right click.
     ///
     /// Default `true`: right click opens the terminal panel context menu.
     /// Disable this to let CLI apps receive right click directly.
-    #[serde(default = "default_true")]
     pub show_context_menu: bool,
     /// Copy the selection to the system clipboard as soon as the mouse button
     /// is released (X11 primary-selection habit).
     ///
     /// Default `true` (the historical behaviour). Disable it to keep the
     /// clipboard untouched until an explicit Copy (SEC-10).
-    #[serde(default = "default_true")]
     pub copy_on_select: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 #[cfg(test)]
@@ -55,8 +50,8 @@ mod tests {
 impl Default for MouseConfig {
     fn default() -> Self {
         Self {
-            show_context_menu: default_true(),
-            copy_on_select: default_true(),
+            show_context_menu: true,
+            copy_on_select: true,
         }
     }
 }

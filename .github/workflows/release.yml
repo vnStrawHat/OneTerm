@@ -2,22 +2,21 @@
 #
 # Triggers:
 #   • workflow_dispatch (choose bump: patch / minor / major) — computes the next
-#     version, builds with that VERSION, then commits VERSION and publishes the
+#     version, builds with it, then commits Cargo.toml and publishes the
 #     release only after all builds have succeeded.
 #   • push tag v*                                 — builds & publishes the release
-#     directly (VERSION must already be bumped to match the tag).
+#     directly (Cargo.toml must already be bumped to match the tag).
 #
 # Targets (matrix): Windows x86_64, Linux x86_64, macOS x86_64 (Intel) + aarch64
-# (Apple Silicon). Release binary = `oneterm` (feature `release-bin`), built and
+# (Apple Silicon). Release binary = `oneterm`, built and
 # staged by scripts/build-release.{ps1,sh} — the same scripts developers run
 # locally, so `dist/oneterm-<version>-<triple>` has one definition (BUILD-27).
 # Every archive ships with a `.sha256`; the release also publishes `SHA256SUMS`.
 #
-# Version sources: the `VERSION` file at the repo root (this workflow, the macOS
-# bundle) and `[workspace.package] version` in the root Cargo.toml (CARGO_PKG_VERSION
-# for every crate: About dialog, updater, Windows .rc version info). They must agree;
-# `scripts/bump-version.sh` rewrites both and `scripts/verify-dependency-graph.py`
-# fails CI when they drift.
+# Version source: `[workspace.package] version` in the root Cargo.toml — the single
+# source for every crate (CARGO_PKG_VERSION: About dialog, updater, Windows .rc
+# version info), for this workflow, and for the macOS bundle. Read it with
+# `awk -F'"' '/^version = "/{print $2; exit}' Cargo.toml`.
 
 name: Release
 
@@ -62,10 +61,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # Dispatch path: compute the next VERSION only. If the current VERSION
+      # Dispatch path: compute the next version only. If the current version
       # is already published, bump from it. If a release commit exists but is
-      # not published yet, reuse the version already written in VERSION so a
-      # rerun does not skip a number.
+      # not published yet, reuse the version already in Cargo.toml so a rerun
+      # does not skip a number.
       - id: dispatch
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -73,35 +72,40 @@ jobs:
         run: |
           set -euo pipefail
           SOURCE_REF="$(git rev-parse HEAD)"
-          CURRENT="$(tr -d '[:space:]' < VERSION)"
+          CURRENT="$(awk -F'"' '/^version = "/{print $2; exit}' Cargo.toml)"
+          BUMPED="$(echo "$CURRENT" | awk -F. -v kind="${{ inputs.bump }}" '{
+            major = $1 + 0; minor = $2 + 0; patch = $3 + 0
+            if (kind == "major") { major++; minor = 0; patch = 0 }
+            else if (kind == "minor") { minor++; patch = 0 }
+            else { patch++ }
+            print major "." minor "." patch
+          }')"
           HEAD_SUBJECT="$(git log -1 --pretty=%s)"
           if gh release view "v${CURRENT}" >/dev/null 2>&1; then
-            NEW="$(bash scripts/bump-version.sh "${{ inputs.bump }}")"
-            git checkout -- VERSION
-            echo "==> Bumped release VERSION to $NEW from published v${CURRENT}"
+            NEW="$BUMPED"
+            echo "==> Bumped release version to $NEW from published v${CURRENT}"
           elif [[ "${HEAD_SUBJECT}" == chore\(release\):* ]]; then
             NEW="${CURRENT}"
-            echo "==> Reusing unpublished release VERSION $NEW"
+            echo "==> Reusing unpublished release version $NEW"
           else
-            NEW="$(bash scripts/bump-version.sh "${{ inputs.bump }}")"
-            git checkout -- VERSION
-            echo "==> Computed release VERSION $NEW from current VERSION $CURRENT"
+            NEW="$BUMPED"
+            echo "==> Computed release version $NEW from current version $CURRENT"
           fi
           echo "version=${NEW}" >> "$GITHUB_OUTPUT"
           echo "tag=v${NEW}" >> "$GITHUB_OUTPUT"
           echo "ref=${SOURCE_REF}" >> "$GITHUB_OUTPUT"
 
       # Tag-push path: resolve the version from the tag name; verify it matches
-      # the VERSION file.
+      # the workspace version.
       - id: tagpush
         if: github.event_name == 'push'
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF#refs/tags/}"
           VERSION="${TAG#v}"
-          FILEV="$(tr -d '[:space:]' < VERSION)"
-          if [ "$FILEV" != "$VERSION" ]; then
-            echo "::error::VERSION file ($FILEV) does not match tag ($VERSION). Bump VERSION and commit before tagging."
+          CARGOV="$(awk -F'"' '/^version = "/{print $2; exit}' Cargo.toml)"
+          if [ "$CARGOV" != "$VERSION" ]; then
+            echo "::error::[workspace.package] version ($CARGOV) does not match tag ($VERSION). Bump Cargo.toml and commit before tagging."
             exit 1
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
@@ -141,29 +145,22 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.ref }}
 
-      - name: Apply release VERSION
+      - name: Apply release version
         if: github.event_name == 'workflow_dispatch'
         shell: bash
         run: |
           set -euo pipefail
           VERSION="${{ needs.prepare.outputs.version }}"
-          # bump-version.sh rewrites VERSION + Cargo.toml + Cargo.lock together; it
-          # refuses a no-op, so skip when the source ref already carries the version.
-          if [ "$(tr -d '[:space:]' < VERSION)" != "$VERSION" ]; then
-            bash scripts/bump-version.sh "$VERSION"
-          fi
+          # Cargo refreshes the workspace-member entries in Cargo.lock during the build below.
+          awk -v v="$VERSION" '!d && /^version = "/ { print "version = \"" v "\""; d = 1; next } { print }' \
+            Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
 
-      - name: Verify release VERSION
+      - name: Verify release version
         shell: bash
         run: |
           set -euo pipefail
           VERSION="${{ needs.prepare.outputs.version }}"
-          FILEV="$(tr -d '[:space:]' < VERSION)"
-          if [ "$FILEV" != "$VERSION" ]; then
-            echo "::error::VERSION file ($FILEV) does not match release version ($VERSION)."
-            exit 1
-          fi
-          CARGOV="$(sed -n '/^\[workspace\.package\]/,/^\[workspace\.dependencies\]/s/^version = "\(.*\)"$/\1/p' Cargo.toml)"
+          CARGOV="$(awk -F'"' '/^version = "/{print $2; exit}' Cargo.toml)"
           if [ "$CARGOV" != "$VERSION" ]; then
             echo "::error::[workspace.package] version ($CARGOV) does not match release version ($VERSION)."
             exit 1
@@ -201,7 +198,7 @@ jobs:
             libgbm-dev libegl-dev \
             libfontconfig1 libfontconfig-dev libfreetype6-dev
 
-      # Build only `oneterm-app` (release-bin) and stage + archive + checksum
+      # Build only `oneterm-app` and stage + archive + checksum
       # dist/oneterm-<version>-<target>.{zip|tar.gz}(.sha256) with the same
       # scripts developers use locally (BUILD-26, BUILD-27). macOS: bundle-macos.sh
       # assembles OneTerm.app (sips + iconutil on the runner produce the .icns)
@@ -394,7 +391,7 @@ jobs:
           echo "==> Release notes:"
           cat notes.md
 
-      - name: Commit VERSION and create GitHub release
+      - name: Commit the version bump and create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -412,16 +409,16 @@ jobs:
             fi
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            if [ "$(tr -d '[:space:]' < VERSION)" != "$VERSION" ]; then
-              bash scripts/bump-version.sh "$VERSION"
-            fi
-            git add VERSION Cargo.toml Cargo.lock
+            awk -v v="$VERSION" '!d && /^version = "/ { print "version = \"" v "\""; d = 1; next } { print }' \
+              Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
+            cargo update --workspace --offline --quiet || cargo update --workspace --quiet
+            git add Cargo.toml Cargo.lock
             if ! git diff --cached --quiet; then
               git commit -m "chore(release): v${VERSION}"
             fi
             # The matrix build takes 30-40 min; if the branch advanced meanwhile a
             # plain push is rejected (BUILD-24). Replay the release commit on top of
-            # the current branch head. A conflict on VERSION/Cargo.toml (someone
+            # the current branch head. A conflict on Cargo.toml (someone
             # else bumped the version) is a real error and aborts the release.
             git fetch origin "${GITHUB_REF_NAME}"
             if ! git rebase "origin/${GITHUB_REF_NAME}"; then

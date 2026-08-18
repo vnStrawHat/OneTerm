@@ -56,7 +56,7 @@ cargo build --workspace
 # Release build
 cargo build --workspace --release
 
-# Run the app (dev binary = oneterm-debug, keeps the console for logs)
+# Run the app (keeps the console for logs in debug builds)
 cargo run -p oneterm-app
 # Same, with OneTerm's hot-path crates optimized (full-screen TUIs such as DOOM-fire
 # are unusable at opt-level 0; see [profile.fast-dev] in the root Cargo.toml)
@@ -106,13 +106,12 @@ The script runs, in order:
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings   # also type-checks every target (no separate build step)
 cargo test --workspace
-python scripts/verify-dependency-graph.py     # crate graph policy + VERSION/Cargo.toml agreement
+python scripts/verify-dependency-graph.py     # crate graph policy + workspace version inheritance
 python scripts/check-ui-fork.py               # gpui-component vendor baseline
 python scripts/check-doc-paths.py             # architecture doc paths
 python -m unittest scripts/test_check_english.py
 python scripts/check-english.py               # English-only contributor text
 python scripts/completion-catalog.py validate # completion catalogs vs schema
-python scripts/benchmark-scale.py --list      # scale benchmark manifest
 python scripts/third-party-notices.py --check # THIRD-PARTY-NOTICES.md matches Cargo.lock
 ```
 
@@ -136,7 +135,7 @@ with only fmt/clippy/build green.
 | **Terminal Split design** (Spaces, split R/L/U/D, drag tab into Space) | [`docs/terminal-split.md`](docs/terminal-split.md) |
 | SSH client connect / auth design | [`docs/ssh-client-connect.md`](docs/ssh-client-connect.md) |
 | SFTP file browser design | [`docs/sftp-browser-design.md`](docs/sftp-browser-design.md) |
-| SFTP-follows-terminal-CWD design | [`docs/sftp-follow-terminal-cwd.md`](docs/sftp-follow-terminal-cwd.md) |
+| SFTP-follows-terminal-CWD design | [`docs/sftp-follow-terminal-cwd/README.md`](docs/sftp-follow-terminal-cwd/README.md) |
 | OSC sequence support checklist | [`docs/osc-sequences-checklist.md`](docs/osc-sequences-checklist.md) |
 | Terminal rendering optimization | [`docs/terminal-rendering-optimization.md`](docs/terminal-rendering-optimization.md) |
 | Terminal feature gap analysis | [`docs/terminal-gap-analysis.md`](docs/terminal-gap-analysis.md) |

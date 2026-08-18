@@ -319,6 +319,8 @@ fn duplicate_action_dispatches_to_the_active_space(cx: &mut TestAppContext) {
                 spawned_local_configs: configs_for_factory,
             }),
             duplicate_test_commands(),
+            crate::status_metrics(),
+            crate::agent_focuser(),
         )
         .expect("test services must install once");
     });

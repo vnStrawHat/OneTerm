@@ -14,8 +14,6 @@ use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
 const CRASHES_DIR: &str = "crashes";
 const COMPLETED_SUFFIX: &str = ".crash.txt";
 const NATIVE_SUFFIX: &str = ".native.tmp";
-const LEGACY_CRASH_REPORT_FILE: &str = "pending-crash-report.txt";
-const LEGACY_NATIVE_REPORT_FILE: &str = "native-crash-report.txt";
 const MAX_REPORTS: usize = 20;
 const REDACTED_USER_HOME: &str = "<USER_HOME>";
 
@@ -61,9 +59,7 @@ pub(crate) fn install_panic_hook(paths: &CrashCapturePaths) {
 pub(crate) fn load_pending_reports() -> io::Result<Vec<PendingCrashReport>> {
     let directory = crashes_dir();
     create_private_dir(&directory)?;
-    import_legacy_reports(&directory)?;
     promote_inactive_native_reports(&directory)?;
-    cleanup_legacy_crash_artifacts(&directory)?;
     load_completed_reports(&directory)
 }
 
@@ -105,47 +101,6 @@ fn unique_identity(directory: &Path) -> io::Result<String> {
         io::ErrorKind::AlreadyExists,
         "failed to allocate a unique crash report identity",
     ))
-}
-
-fn import_legacy_reports(directory: &Path) -> io::Result<()> {
-    let config_dir = oneterm_core::config_dir();
-    import_legacy_report(&config_dir.join(LEGACY_CRASH_REPORT_FILE), directory)?;
-    import_legacy_report(&config_dir.join(LEGACY_NATIVE_REPORT_FILE), directory)
-}
-
-fn import_legacy_report(legacy_path: &Path, directory: &Path) -> io::Result<()> {
-    // A legacy report is a plain file we wrote ourselves; a symlink at that
-    // path was planted by someone else and must be neither read (its target
-    // would be copied into a report) nor removed (SEC-25).
-    match fs::symlink_metadata(legacy_path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            log::warn!(
-                "Skipping legacy crash report {} because it is a symlink",
-                legacy_path.display()
-            );
-            return Ok(());
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
-    }
-    let bytes = match fs::read(legacy_path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
-    };
-
-    if !bytes.is_empty() {
-        let identity = unique_identity(directory)?;
-        let destination = directory.join(format!("{identity}{COMPLETED_SUFFIX}"));
-        let text = String::from_utf8_lossy(&bytes);
-        let sanitized = redact_user_home(&text, oneterm_core::home_dir().as_deref());
-        write_new_report(&destination, sanitized.as_bytes())?;
-    }
-
-    remove_if_present(legacy_path)?;
-    remove_if_present(&legacy_path.with_extension("bak"))?;
-    remove_if_present(&report_lock_path(legacy_path))
 }
 
 fn promote_inactive_native_reports(directory: &Path) -> io::Result<()> {
@@ -267,23 +222,6 @@ fn report_paths_with_suffix(directory: &Path, suffix: &str) -> io::Result<Vec<Pa
     Ok(paths)
 }
 
-fn cleanup_legacy_crash_artifacts(directory: &Path) -> io::Result<()> {
-    for entry in fs::read_dir(directory)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_file() {
-            continue;
-        }
-        let should_remove = entry.file_name().to_str().is_some_and(|name| {
-            name.ends_with(".crash.bak")
-                || (name.starts_with('.') && name.ends_with(".crash.txt.lock"))
-        });
-        if should_remove {
-            remove_if_present(&entry.path())?;
-        }
-    }
-    Ok(())
-}
-
 fn identity_from_path<'a>(path: &'a Path, suffix: &str) -> Option<&'a str> {
     path.file_name()?.to_str()?.strip_suffix(suffix)
 }
@@ -310,8 +248,6 @@ fn load_and_sanitize_report(path: &Path) -> io::Result<Option<String>> {
     if sanitized != report {
         overwrite_report(path, sanitized.as_bytes())?;
     }
-    remove_report_artifacts(path)?;
-
     Ok(Some(sanitized))
 }
 
@@ -360,21 +296,7 @@ fn write_and_sync(mut file: fs::File, bytes: &[u8]) -> io::Result<()> {
 }
 
 fn delete_report(path: &Path) -> io::Result<()> {
-    remove_if_present(path)?;
-    remove_report_artifacts(path)
-}
-
-fn remove_report_artifacts(path: &Path) -> io::Result<()> {
-    remove_if_present(&path.with_extension("bak"))?;
-    remove_if_present(&report_lock_path(path))
-}
-
-fn report_lock_path(path: &Path) -> PathBuf {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("oneterm-crash-report");
-    path.with_file_name(format!(".{name}.lock"))
+    remove_if_present(path)
 }
 
 fn remove_if_present(path: &Path) -> io::Result<()> {
@@ -518,7 +440,7 @@ mod tests {
     }
 
     #[test]
-    fn unique_report_write_preserves_first_crash_without_lock_or_backup() {
+    fn unique_report_write_preserves_the_first_crash() {
         let directory = temporary_directory("direct-write");
         let path = completed_path(&directory, "20260811T023500000Z-p1-a7f3c912");
 
@@ -528,47 +450,6 @@ mod tests {
 
         assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(fs::read_to_string(&path).unwrap(), "first crash");
-        assert!(!path.with_extension("bak").exists());
-        assert!(!report_lock_path(&path).exists());
-        fs::remove_dir_all(directory).expect("fixture should be deleted");
-    }
-
-    #[test]
-    fn legacy_report_is_imported_then_removed() {
-        let directory = temporary_directory("legacy-import");
-        let legacy = directory.join("legacy-pending.txt");
-        fs::write(&legacy, "legacy crash").expect("legacy fixture should be written");
-
-        import_legacy_report(&legacy, &directory).expect("legacy report should import");
-
-        assert!(!legacy.exists());
-        let reports = load_completed_reports(&directory).expect("imported report should load");
-        assert_eq!(reports.len(), 1);
-        assert_eq!(reports[0].contents, "legacy crash");
-        fs::remove_dir_all(directory).expect("fixture should be deleted");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn legacy_symlink_is_neither_imported_nor_removed() {
-        let directory = temporary_directory("legacy-symlink");
-        let target = directory.join("secret.txt");
-        fs::write(&target, "not a crash report").expect("target fixture should be written");
-        let legacy = directory.join("legacy-pending.txt");
-        std::os::unix::fs::symlink(&target, &legacy).expect("symlink fixture should be created");
-
-        import_legacy_report(&legacy, &directory).expect("symlink must be skipped, not an error");
-
-        assert!(
-            fs::symlink_metadata(&legacy).is_ok(),
-            "symlink must survive"
-        );
-        assert!(target.exists());
-        assert!(
-            load_completed_reports(&directory)
-                .expect("reports should load")
-                .is_empty()
-        );
         fs::remove_dir_all(directory).expect("fixture should be deleted");
     }
 
@@ -615,22 +496,6 @@ mod tests {
 
         assert_eq!(reports.len(), 1);
         assert_eq!(reports[0].contents, "readable");
-        fs::remove_dir_all(directory).expect("fixture should be deleted");
-    }
-
-    #[test]
-    fn startup_cleanup_removes_orphan_crash_lock_and_backup() {
-        let directory = temporary_directory("artifact-cleanup");
-        let report = completed_path(&directory, "20260811T023500000Z-p1-a7f3c912");
-        let lock = report_lock_path(&report);
-        let backup = report.with_extension("bak");
-        fs::write(&lock, []).expect("lock fixture should be written");
-        fs::write(&backup, "backup").expect("backup fixture should be written");
-
-        cleanup_legacy_crash_artifacts(&directory).expect("artifacts should be cleaned");
-
-        assert!(!lock.exists());
-        assert!(!backup.exists());
         fs::remove_dir_all(directory).expect("fixture should be deleted");
     }
 
@@ -694,8 +559,6 @@ mod tests {
         assert!(combined.contains("panic report"));
         assert!(combined.contains("native report"));
         assert!(!claimed.exists());
-        assert!(!completed.with_extension("bak").exists());
-        assert!(!report_lock_path(&completed).exists());
         fs::remove_dir_all(directory).expect("fixture should be deleted");
     }
 
@@ -734,16 +597,12 @@ mod tests {
     }
 
     #[test]
-    fn loading_legacy_report_rewrites_redacted_content_and_removes_backup() {
-        let directory = temporary_directory("legacy-redaction");
+    fn loading_a_report_rewrites_redacted_content() {
+        let directory = temporary_directory("load-redaction");
         let path = completed_path(&directory, "20260811T023500000Z-p1-a7f3c912");
-        let backup = path.with_extension("bak");
-        let lock = report_lock_path(&path);
         let home = oneterm_core::home_dir().expect("test requires a home directory");
         let report = format!("panic at {}/project/main.rs", home.display());
         fs::write(&path, report).expect("report fixture should be written");
-        fs::write(&backup, "legacy backup").expect("backup fixture should be written");
-        fs::write(&lock, []).expect("lock fixture should be written");
 
         let loaded = load_and_sanitize_report(&path)
             .expect("load should succeed")
@@ -755,8 +614,6 @@ mod tests {
             fs::read_to_string(&path).expect("report should be readable"),
             loaded
         );
-        assert!(!backup.exists());
-        assert!(!lock.exists());
         fs::remove_dir_all(directory).expect("fixture should be deleted");
     }
 

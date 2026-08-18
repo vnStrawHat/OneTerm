@@ -3,9 +3,8 @@
 //! Responsibilities:
 //! 1. Generate a Windows resource script from the `assets/oneterm.rc` template by
 //!    injecting the version (`CARGO_PKG_VERSION`, i.e. the workspace `version`) and
-//!    absolute icon paths, then compile it into a `.res` linked into the exe
-//!    (oneterm-debug in dev, oneterm in release), embedding the app icon
-//!    (48px + 96px) and VS_VERSION_INFO. Windows only.
+//!    absolute icon paths, then compile it into a `.res` linked into the `oneterm`
+//!    exe, embedding the app icon (48px + 96px) and VS_VERSION_INFO. Windows only.
 //! 2. Copy `conpty.dll` + `x64/OpenConsole.exe` to the target directory so they ship with the exe.
 //!
 //! alacritty_terminal loads conpty.dll itself (via LoadLibraryW) if found in the exe's
@@ -14,8 +13,7 @@
 //! the signal reaches only the child process and does not exit the shell or OneTerm.
 //!
 //! Layout after build:
-//!   target/debug/oneterm-debug.exe   (dev bin; gated by the dev-bin feature)
-//!   target/release/oneterm.exe       (release bin; gated by the release-bin feature)
+//!   target/{debug,release}/oneterm.exe
 //!   target/{debug,release}/conpty.dll
 //!   target/{debug,release}/x64/OpenConsole.exe
 

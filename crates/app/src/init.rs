@@ -38,8 +38,7 @@ pub(crate) fn init(cx: &mut App) {
     // Session: SSH session store global + "session" panel.
     oneterm_session_ui::init(cx);
     // Agent: the global AgentRegistry (folded OSC 9;7 model behind the Agent
-    // Panel). Ensures the registry exists so terminals can fold into it even
-    // before the Agent panel is first opened.
+    // Panel) + the "agent" right-dock panel.
     oneterm_agent_ui::init(cx);
     // Settings/About update controls and release-build startup update checks.
     oneterm_settings_ui::init(cx);
@@ -49,15 +48,9 @@ pub(crate) fn init(cx: &mut App) {
     // depend on together (R9).
     crate::ssh_client_panel::init(cx);
 
-    // Agent Mode right-dock panel (placeholder for now) — same reason as the
-    // SSH Client panel: it may later compose feature crates, so it lives in the
-    // omniscient `app` crate (R9).
-    crate::agent_panel::init(cx);
-
-    // Seal all cross-feature services into one composition-root bundle. The
-    // feature inits above contributed their hooks (active-terminal metrics,
-    // agent focuser) to the pending `AppServicesBuilder`; each command callback
-    // belongs to its feature, while the shell consumes only this state API.
+    // Seal all cross-feature services into one composition-root bundle. Each
+    // hook (active-terminal metrics, agent focuser) and command callback belongs
+    // to its feature, while the shell consumes only this state API.
     AppServices::install(
         cx,
         crate::session_factory::build(),
@@ -70,7 +63,8 @@ pub(crate) fn init(cx: &mut App) {
             find_in_active_terminal: oneterm_terminal_view::find_in_active_terminal,
             setup_key_bindings: oneterm_settings_ui::setup_key_bindings,
         },
+        oneterm_terminal_view::status_metrics(),
+        oneterm_terminal_view::agent_focuser(),
     )
-    .expect("application services must be registered exactly once with every feature contribution");
-    AppServices::validate(cx).expect("application services must be available");
+    .expect("application services must be registered exactly once");
 }

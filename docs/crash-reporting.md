@@ -25,17 +25,17 @@ Capture remains best effort. It cannot guarantee a report when process state or 
 
 ## Path privacy
 
-Before a Rust panic report is persisted, every occurrence of the current user's home-directory prefix is replaced with `<USER_HOME>`. Both native and alternate slash separators are recognized; Windows matching is ASCII case-insensitive. Loading every report applies the same redaction defensively, rewrites legacy unredacted report text, and removes an older backup that could retain the unredacted path.
+Before a Rust panic report is persisted, every occurrence of the current user's home-directory prefix is replaced with `<USER_HOME>`. Both native and alternate slash separators are recognized; Windows matching is ASCII case-insensitive. Loading every report applies the same redaction defensively and rewrites the file when it still holds an unredacted path.
 
 This redaction protects the home-directory prefix only. Panic messages and application data may still contain other sensitive host names, remote paths, commands, or user-provided values, so users must review a GitHub draft before submitting it.
 
-## Migration and retention
+## Reconciliation and retention
 
-On first startup after this storage change, non-empty legacy `pending-crash-report.txt` and `native-crash-report.txt` files are imported into `crashes/` and their legacy artifacts are removed after successful persistence. A legacy path that is a symlink is skipped and left untouched (it was not written by OneTerm and its target must not be copied into a report or unlinked). Empty completed/staging artifacts are discarded. Startup reconciliation also removes crash-specific `.crash.bak` and `.<report>.crash.txt.lock` files left by versions that used shared atomic persistence; it does not touch locks for any configuration document outside `crashes/`.
+Empty completed/staging artifacts are discarded at startup.
 
 The process table needed to decide whether a staging file's owner is still alive is enumerated lazily, only when a foreign `.native.tmp` exists, so a normal startup does not pay for it.
 
-After promotion and sanitization, completed reports are ordered newest-first by their sortable names. OneTerm retains the newest 20 completed reports and deletes older reports plus their backups. A single report that cannot be read or pruned is logged and skipped; it never hides the remaining reports. A report created later by another running instance may temporarily exceed the limit until the next startup reconciliation.
+After promotion and sanitization, completed reports are ordered newest-first by their sortable names. OneTerm retains the newest 20 completed reports and deletes older ones. A single report that cannot be read or pruned is logged and skipped; it never hides the remaining reports. A report created later by another running instance may temporarily exceed the limit until the next startup reconciliation.
 
 ## Hidden verification trigger
 

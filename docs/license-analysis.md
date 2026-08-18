@@ -109,7 +109,7 @@ pub fn instrument(
 ```bash
 $ strings target/release/oneterm.exe | grep -ic 'zlog'      # → 0
 $ strings target/release/oneterm.exe | grep -ic 'ztracing'  # → 0
-$ strings target/debug/oneterm-debug.exe | grep -ic 'zlog|ztracing'  # → 0
+$ strings target/debug/oneterm.exe | grep -ic 'zlog|ztracing'  # → 0
 $ nm target/release/oneterm.exe | grep -i 'zlog'             # → (empty)
 ```
 

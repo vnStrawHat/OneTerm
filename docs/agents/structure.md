@@ -27,7 +27,7 @@ OneTerm/
 │
 ├── crates/
 │   ├── app/                        # Binary + wiring: the ONLY crate that knows every other crate
-│   │   ├── Cargo.toml              # name = "oneterm-app", default-run = "oneterm-debug"
+│   │   ├── Cargo.toml              # name = "oneterm-app", one bin: "oneterm"
 │   │   ├── build.rs                # Embed app icon (.rc) + copy conpty.dll/OpenConsole.exe (x86_64 only; THIRD-PARTY-NOTICES.md)
 │   │   ├── assets/                 # Runtime resources (oneterm.rc, conpty.dll, x64/OpenConsole.exe, icons/)
 │   │   ├── macos/Info.plist        # macOS .app bundle descriptor ({{VERSION}})
@@ -35,7 +35,6 @@ OneTerm/
 │   │       ├── lib.rs              # run(): logging + gpui init + install factory + init() + open window
 │   │       ├── init.rs             # Aggregator: globals + feature init() + WorkspaceCommands assembly
 │   │       ├── ssh_client_panel.rs  # SSH Client right-dock panel (DockItem::Panel) hosting Session + SFTP
-│   │       ├── agent_panel.rs       # Agent Mode right-dock panel (placeholder) (DockItem::Panel)
 │   │       ├── session_factory.rs  # AppSessionFactory: dispatches spawn_local/connect_ssh to local/ssh
 │   │       ├── assets.rs           # CustomAssets (merges oneterm_theme::icon::UiAssets + gpui-component)
 │   │       ├── crash_report.rs     # Crash store: panic hook, native staging promotion, retention (docs/crash-reporting.md)
@@ -43,8 +42,7 @@ OneTerm/
 │   │       ├── native_crash.rs     # crash-handler callback (compromised-context-safe writes)
 │   │       ├── window.rs           # open_window(cx) — create window + attach OneTermWorkspace
 │   │       └── bin/
-│   │           ├── oneterm.rs          # Release binary → oneterm(.exe) (WINDOWS subsystem)
-│   │           └── oneterm-debug.rs    # Dev binary → oneterm-debug(.exe) (keeps console)
+│   │           └── oneterm.rs          # Binary → oneterm(.exe) (WINDOWS subsystem in release)
 │   │
 │   ├── core/                       # Domain model — leaf crate (no gpui, no alacritty)
 │   │   ├── Cargo.toml              # name = "oneterm-core"
@@ -100,18 +98,17 @@ OneTerm/
 │   │   └── src/
 │   │       ├── lib.rs
 │   │       ├── app_state.rs        # AppState (global): primary DockArea + per-workspace active terminal/SFTP context
-│   │       ├── services.rs         # AppServices (single injection bundle) + AppServicesBuilder (feature contributions)
+│   │       ├── services.rs         # AppServices (single injection bundle)
 │   │       ├── commands.rs         # WorkspaceCommands fn-pointer struct (shell → feature inversion, read via AppServices)
 │   │       ├── active_terminal.rs  # ActiveTerminalMetricsProvider (breadcrumb/net stats hook, contributed by terminal-view)
 │   │       ├── agent_focus.rs      # AgentFocuser (agent-ui → terminal focus hook, contributed by terminal-view)
 │   │       ├── agent_model.rs      # Folded OSC 9;7 agent card model (+ agent_model_tests.rs)
 │   │       ├── agent_registry.rs   # AgentRegistry (global Entity): fold/lifecycle/stale/summary behind the Agent Panel
 │   │       ├── completion_history.rs # Process-global CompletionHistory entity (memory completion source)
-│   │       ├── dock_persistence.rs # docks.json DockDocument schema owner (read/update transaction, quarantine)
+│   │       ├── dock_persistence.rs # docks.json path + DockDocument schema owner (read/update transaction, quarantine)
 │   │       ├── dock_util.rs        # DockArea walking + set_right_dock_open (shared shell/feature helper)
 │   │       ├── panel_names.rs      # Registered dock panel name constants (persisted contract)
-│   │       ├── form_dialog.rs      # FormDialog + labelled_field (shared dialog scaffolding)
-│   │       └── paths.rs            # docks.json path (shared shell/sftp)
+│   │       └── form_dialog.rs      # FormDialog + labelled_field (shared dialog scaffolding)
 │   │
 │   ├── update/                     # `oneterm-update` — GitHub Releases updater service + staging/install orchestration
 │   │   └── src/                    # lib.rs + config/github (ReleaseClient trait)/archive/install/version; *_tests.rs siblings

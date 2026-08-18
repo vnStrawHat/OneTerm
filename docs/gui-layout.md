@@ -7,7 +7,8 @@
 > - The right dock is **not** a `v_split([Session, SFTP])`: it is a single
 >   `DockItem::Panel` — `SshClientPanel` (`crates/app/src/ssh_client_panel.rs`) hosts the
 >   Session and SFTP panels in its own vertical resizable split; the Agent Panel is the
->   alternative right-dock mode (`oneterm_core::RightDockMode`, `crates/app/src/agent_panel.rs`).
+>   alternative right-dock mode (`oneterm_core::RightDockMode`,
+>   `crates/agent-ui/src/view.rs`).
 > - `MAIN_DOCK_VERSION` is `3` (`crates/workspace/src/layout/workspace/mod.rs`), not `1`.
 > - `docks.json` is not written with `std::fs::write` to `STATE_FILE`: the path comes from
 >   `oneterm_state::paths::state_file()` (`config_dir()/docks.json`; `target/docks.json` in

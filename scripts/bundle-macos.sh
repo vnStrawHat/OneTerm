@@ -13,7 +13,7 @@
 #
 # Usage:
 #   scripts/bundle-macos.sh <repo_root> <release_dir> <stage_dir>
-#     <repo_root>   - repo root (read VERSION + assets/macos/Info.plist, icons)
+#     <repo_root>   - repo root (read Cargo.toml version + assets/macos/Info.plist, icons)
 #     <release_dir> - directory containing the built `oneterm` binary
 #     <stage_dir>   - dist staging dir; OneTerm.app is created under it
 #
@@ -80,8 +80,8 @@ mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 cp "$EXE" "$CONTENTS/MacOS/oneterm"
 chmod +x "$CONTENTS/MacOS/oneterm"
 
-# Info.plist — substitute {{VERSION}} from the repo-root VERSION file.
-VERSION="$(tr -d '[:space:]' < "$REPO_ROOT/VERSION")"
+# Info.plist — substitute {{VERSION}} from [workspace.package] in Cargo.toml.
+VERSION="$(awk -F'"' '/^version = "/{print $2; exit}' "$REPO_ROOT/Cargo.toml")"
 sed "s/{{VERSION}}/$VERSION/g" \
   "$REPO_ROOT/crates/app/assets/macos/Info.plist" > "$CONTENTS/Info.plist"
 
