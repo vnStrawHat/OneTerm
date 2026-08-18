@@ -1,7 +1,7 @@
 # scripts/ci-local.ps1 — run the same quality gate as .github/workflows/ci.yml, locally.
 #
 # Usage:
-#   pwsh scripts/ci-local.ps1           # fmt, clippy, build, test + the Python policy checks
+#   pwsh scripts/ci-local.ps1           # fmt, clippy, test + the Python policy checks
 #   pwsh scripts/ci-local.ps1 -Full     # also: vendor/refresh.sh --check (network, needs bash) + cargo deny
 #
 # Stops at the first failing command and prints it. Keep this list in sync with
@@ -29,7 +29,6 @@ function Invoke-Step {
 
 Invoke-Step @("cargo", "fmt", "--all", "--", "--check")
 Invoke-Step @("cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings")
-Invoke-Step @("cargo", "build", "--workspace")
 Invoke-Step @("cargo", "test", "--workspace")
 Invoke-Step @("python", "scripts/verify-dependency-graph.py")
 Invoke-Step @("python", "scripts/check-ui-fork.py")
@@ -38,6 +37,7 @@ Invoke-Step @("python", "-m", "unittest", "scripts/test_check_english.py")
 Invoke-Step @("python", "scripts/check-english.py")
 Invoke-Step @("python", "scripts/completion-catalog.py", "validate")
 Invoke-Step @("python", "scripts/benchmark-scale.py", "--list")
+Invoke-Step @("python", "scripts/third-party-notices.py", "--check")
 
 if ($Full) {
     if (Get-Command bash -ErrorAction SilentlyContinue) {

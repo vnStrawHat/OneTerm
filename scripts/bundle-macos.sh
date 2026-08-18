@@ -89,5 +89,18 @@ sed "s/{{VERSION}}/$VERSION/g" \
 generate_icns "$REPO_ROOT/crates/app/assets/icons/terminal-96x96.ico" \
   "$CONTENTS/Resources/oneterm.icns"
 
+# Ad-hoc code signature (best-effort). An unsigned bundle built on one Mac may be
+# refused by Gatekeeper on another ("damaged"); an ad-hoc signature (identity "-")
+# is enough for a locally-run, non-notarised app. Only available on macOS.
+if command -v codesign >/dev/null 2>&1; then
+  if codesign --force --deep --sign - "$APP_BUNDLE" >/dev/null 2>&1; then
+    echo "  codesign: ad-hoc signature applied"
+  else
+    echo "  codesign failed — bundle left unsigned"
+  fi
+else
+  echo "  codesign not found — bundle left unsigned"
+fi
+
 echo "==> OneTerm.app assembled at: $APP_BUNDLE"
 ( cd "$STAGE" && find OneTerm.app -type f | sort )
