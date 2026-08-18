@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::archive::{extract_archive, validate_staged_package};
 use crate::config::{CachedUpdateCandidate, UpdateChannel, UpdateCheckCache, UpdateConfig};
-use crate::github::{self, GitHubClient, GitHubRelease};
+use crate::github::{self, GitHubClient, GitHubRelease, ReleaseClient};
 use crate::version::{current_target_triple, expected_asset_name, parse_release_version};
 use crate::{CURRENT_VERSION, UPDATE_REPOSITORY};
 
@@ -23,6 +23,9 @@ pub struct UpdateCandidate {
     pub asset_digest: String,
     pub asset_size: Option<u64>,
     pub target_triple: String,
+    /// Whether the release is a GitHub prerelease (offered on `preview` only).
+    #[serde(default)]
+    pub prerelease: bool,
 }
 
 impl From<&UpdateCandidate> for CachedUpdateCandidate {
@@ -38,6 +41,7 @@ impl From<&UpdateCandidate> for CachedUpdateCandidate {
             asset_digest: candidate.asset_digest.clone(),
             asset_size: candidate.asset_size,
             target_triple: candidate.target_triple.clone(),
+            prerelease: candidate.prerelease,
         }
     }
 }
@@ -55,6 +59,7 @@ impl From<CachedUpdateCandidate> for UpdateCandidate {
             asset_digest: candidate.asset_digest,
             asset_size: candidate.asset_size,
             target_triple: candidate.target_triple,
+            prerelease: candidate.prerelease,
         }
     }
 }
@@ -98,9 +103,30 @@ pub struct StagedUpdate {
 /// GitHub Releases updater.
 pub struct UpdateManager {
     repository: String,
-    current_version: Version,
-    client: GitHubClient,
+    /// `None` when the build's own version is not valid SemVer; every check
+    /// then reports [`UpdateCheckResult::Disabled`] instead of treating each
+    /// release as newer than `0.0.0` (SEC-22).
+    current_version: Option<Version>,
+    client: Box<dyn ReleaseClient>,
     config: UpdateConfig,
+    storage: UpdateStorage,
+}
+
+/// On-disk locations the manager writes to.
+pub(crate) struct UpdateStorage {
+    /// Root for downloads, staged packages, and the Windows install backup.
+    pub(crate) cache_dir: PathBuf,
+    /// The `update_config.json` document that receives the check cache.
+    pub(crate) config_path: PathBuf,
+}
+
+impl Default for UpdateStorage {
+    fn default() -> Self {
+        Self {
+            cache_dir: update_cache_dir(),
+            config_path: crate::config::update_config_path(),
+        }
+    }
 }
 
 impl UpdateManager {
@@ -111,17 +137,42 @@ impl UpdateManager {
 
     /// Build a manager with an explicit repository, used by tests and custom callers.
     pub fn with_repository(repository: String, config: UpdateConfig) -> Self {
-        let current_version =
-            parse_release_version(CURRENT_VERSION).unwrap_or_else(|_| Version::new(0, 0, 0));
+        let client = GitHubClient::new(
+            format!("OneTerm/{CURRENT_VERSION}"),
+            config.proxy_url.clone(),
+            config.verify_certificates,
+        );
+        Self::new(
+            repository,
+            config,
+            Box::new(client),
+            CURRENT_VERSION,
+            UpdateStorage::default(),
+        )
+    }
+
+    fn new(
+        repository: String,
+        config: UpdateConfig,
+        client: Box<dyn ReleaseClient>,
+        current_version: &str,
+        storage: UpdateStorage,
+    ) -> Self {
+        let current_version = match parse_release_version(current_version) {
+            Ok(version) => Some(version),
+            Err(error) => {
+                log::error!(
+                    "the running build's version is not valid SemVer; automatic updates are disabled: {error}"
+                );
+                None
+            }
+        };
         Self {
             repository,
             current_version,
-            client: GitHubClient::new(
-                format!("OneTerm/{CURRENT_VERSION}"),
-                config.proxy_url.clone(),
-                config.verify_certificates,
-            ),
+            client,
             config,
+            storage,
         }
     }
 
@@ -158,8 +209,13 @@ impl UpdateManager {
                 "No GitHub release repository is configured.".to_owned(),
             ));
         }
+        let Some(current_version) = self.current_version.clone() else {
+            return Ok(UpdateCheckResult::Disabled(format!(
+                "This build reports version '{CURRENT_VERSION}', which is not valid SemVer; updates are disabled."
+            )));
+        };
 
-        let current_version = self.current_version.to_string();
+        let current_version = current_version.to_string();
         let reuse_cached_etag = cache_policy == EtagCachePolicy::Reuse
             && self.config.should_reuse_cached_etag(&current_version);
         match cache_policy {
@@ -224,9 +280,7 @@ impl UpdateManager {
             }
             CandidateSelection::None => {
                 self.config.cached_candidate = None;
-                UpdateCheckResult::UpToDate {
-                    current_version: self.current_version.to_string(),
-                }
+                UpdateCheckResult::UpToDate { current_version }
             }
         };
         self.persist_config();
@@ -238,8 +292,13 @@ impl UpdateManager {
         if cached.target_triple != current_target_triple() {
             return None;
         }
+        // The cache was filled under the channel active at that time; the
+        // user may have switched back to stable since (CORR-37).
+        if cached.prerelease && self.config.channel != UpdateChannel::Preview {
+            return None;
+        }
         let version = parse_release_version(&cached.version).ok()?;
-        if version <= self.current_version {
+        if Some(&version) <= self.current_version.as_ref() {
             return None;
         }
         if self.config.skipped_version.as_deref() == Some(cached.version.as_str()) {
@@ -252,14 +311,15 @@ impl UpdateManager {
     /// the settings UI and may have changed while this check was running, so
     /// the manager never writes the whole document.
     fn persist_config(&self) {
-        if let Err(error) = self.config.check_cache().save() {
+        if let Err(error) = self.config.check_cache().save_to(&self.storage.config_path) {
             log::warn!("failed to persist update_config.json cache after check: {error}");
         }
     }
 
     /// Download, verify, extract, and validate a candidate update.
     pub fn download_and_stage(&self, candidate: &UpdateCandidate) -> Result<StagedUpdate> {
-        let stage_root = update_cache_dir().join(format!(
+        github::require_https(&candidate.asset_url)?;
+        let stage_root = self.storage.cache_dir.join(format!(
             "{}-{}-{}",
             candidate.version,
             candidate.target_triple,
@@ -269,8 +329,14 @@ impl UpdateManager {
 
         let result = (|| -> Result<StagedUpdate> {
             let artifact_path = stage_root.join(&candidate.asset_name);
+            // GitHub publishes the exact asset size; anything beyond it (or the
+            // hard cap when the size is unknown) is aborted mid-stream (SEC-20).
+            let max_bytes = candidate
+                .asset_size
+                .filter(|size| *size > 0)
+                .unwrap_or(github::MAX_DOWNLOAD_BYTES);
             self.client
-                .download_to_file(&candidate.asset_url, &artifact_path)?;
+                .download_to_file(&candidate.asset_url, &artifact_path, max_bytes)?;
 
             let actual = github::sha256_file(&artifact_path)?;
             github::verify_asset_digest(&candidate.asset_name, &candidate.asset_digest, &actual)?;
@@ -303,10 +369,13 @@ impl UpdateManager {
     }
 
     fn select_candidate(&self, releases: &[GitHubRelease]) -> Result<CandidateSelection> {
+        let Some(current_version) = self.current_version.as_ref() else {
+            return Ok(CandidateSelection::None);
+        };
         let target = current_target_triple();
         log::info!(
             "Evaluating GitHub releases for current version {} and target {}.",
-            self.current_version,
+            current_version,
             target
         );
         let mut candidates = Vec::new();
@@ -331,11 +400,11 @@ impl UpdateManager {
                 );
                 continue;
             };
-            if version <= self.current_version {
+            if &version <= current_version {
                 log::info!(
                     "Skipping GitHub Release {} because it is not newer than current version {}.",
                     release.tag_name,
-                    self.current_version
+                    current_version
                 );
                 continue;
             }
@@ -376,6 +445,15 @@ impl UpdateManager {
                 );
                 continue;
             };
+            if !github::is_https_url(&asset.browser_download_url) {
+                newer_release_missing_package = true;
+                log::warn!(
+                    "GitHub Release {} asset {} is not served over HTTPS; ignoring it.",
+                    release.tag_name,
+                    asset.name
+                );
+                continue;
+            }
 
             log::info!(
                 "GitHub Release {} matches the current platform package {}.",
@@ -395,7 +473,7 @@ impl UpdateManager {
             } else {
                 log::info!(
                     "No GitHub release is newer than the current version {}.",
-                    self.current_version
+                    current_version
                 );
             }
             return Ok(if newer_release_missing_package {
@@ -416,112 +494,17 @@ impl UpdateManager {
             asset_digest: digest.to_owned(),
             asset_size: asset.size,
             target_triple: target,
+            prerelease: release.prerelease,
         })))
     }
 }
 
-/// Directory for transient update downloads and staged packages.
-fn update_cache_dir() -> PathBuf {
+/// Directory for transient update downloads, staged packages, and the
+/// Windows helper's install backup.
+pub(crate) fn update_cache_dir() -> PathBuf {
     oneterm_core::config_dir().join("updates")
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::github::GitHubAsset;
-
-    #[test]
-    fn expected_asset_matches_current_target() {
-        let target = current_target_triple();
-        let asset = expected_asset_name("0.3.0", &target);
-        assert!(asset.starts_with("oneterm-0.3.0-"));
-        assert!(asset.contains(&target));
-    }
-
-    #[test]
-    fn disabled_when_repository_is_empty() {
-        let mut manager = UpdateManager::with_repository(String::new(), UpdateConfig::default());
-        assert!(matches!(
-            manager.check_now().unwrap(),
-            UpdateCheckResult::Disabled(_)
-        ));
-    }
-    #[test]
-    fn newer_release_without_current_target_is_not_up_to_date() {
-        let manager =
-            UpdateManager::with_repository("owner/repo".to_owned(), UpdateConfig::default());
-        let release = GitHubRelease {
-            tag_name: "v999.0.0".to_owned(),
-            name: None,
-            draft: false,
-            prerelease: false,
-            body: None,
-            html_url: "https://github.com/owner/repo/releases/tag/v999.0.0".to_owned(),
-            assets: vec![GitHubAsset {
-                name: "oneterm-999.0.0-unsupported-target.zip".to_owned(),
-                browser_download_url: "https://example.invalid/oneterm.zip".to_owned(),
-                size: None,
-                digest: None,
-            }],
-        };
-
-        assert!(matches!(
-            manager.select_candidate(&[release]).unwrap(),
-            CandidateSelection::NoCompatiblePackage
-        ));
-    }
-
-    #[test]
-    fn newer_release_with_versioned_current_target_asset_is_available() {
-        let manager =
-            UpdateManager::with_repository("owner/repo".to_owned(), UpdateConfig::default());
-        let target = current_target_triple();
-        let release = GitHubRelease {
-            tag_name: "v999.0.0".to_owned(),
-            name: None,
-            draft: false,
-            prerelease: false,
-            body: None,
-            html_url: "https://github.com/owner/repo/releases/tag/v999.0.0".to_owned(),
-            assets: vec![GitHubAsset {
-                name: expected_asset_name("999.0.0", &target),
-                browser_download_url: "https://example.invalid/oneterm.zip".to_owned(),
-                size: None,
-                digest: Some(format!("sha256:{}", "a".repeat(64))),
-            }],
-        };
-
-        match manager.select_candidate(&[release]).unwrap() {
-            CandidateSelection::Candidate(candidate) => {
-                assert_eq!(candidate.version, "999.0.0");
-                assert_eq!(candidate.asset_digest, format!("sha256:{}", "a".repeat(64)));
-                assert_eq!(candidate.target_triple, target);
-            }
-            other => panic!("expected candidate, got {other:?}"),
-        }
-    }
-    #[test]
-    fn cached_candidate_restores_current_target_update() {
-        let target = current_target_triple();
-        let mut config = UpdateConfig::default();
-        config.cached_candidate = Some(CachedUpdateCandidate {
-            version: "999.0.0".to_owned(),
-            tag_name: "v999.0.0".to_owned(),
-            release_name: Some("OneTerm 999.0.0".to_owned()),
-            release_notes_url: "https://github.com/owner/repo/releases/tag/v999.0.0".to_owned(),
-            body: None,
-            asset_name: expected_asset_name("999.0.0", &target),
-            asset_url: "https://example.invalid/oneterm.zip".to_owned(),
-            asset_digest: format!("sha256:{}", "a".repeat(64)),
-            asset_size: Some(123),
-            target_triple: target.clone(),
-        });
-        let manager = UpdateManager::with_repository("owner/repo".to_owned(), config);
-
-        let candidate = manager.cached_candidate().expect("cached candidate");
-
-        assert_eq!(candidate.version, "999.0.0");
-        assert_eq!(candidate.target_triple, target);
-        assert_eq!(candidate.asset_size, Some(123));
-    }
-}
+#[path = "manager_tests.rs"]
+mod manager_tests;

@@ -58,10 +58,19 @@ fn schedule_windows_update(staged: &StagedUpdate, current_exe: &Path) -> Result<
         .file_name()
         .map(|value| value.to_os_string())
         .unwrap_or_else(|| std::ffi::OsString::from("oneterm.exe"));
-    let backup_dir = install_dir
-        .parent()
-        .unwrap_or(install_dir)
-        .join(format!(".oneterm-backup-{pid}-{timestamp}"));
+    // The backup lives in OneTerm's own update cache, not beside the install
+    // directory: the parent of e.g. `C:\Program Files\OneTerm` is often not
+    // writable, and the helper only discovers that after the app has quit
+    // (CORR-38). Creating it here also verifies the location before we commit.
+    let backup_dir = crate::manager::update_cache_dir().join(format!("backup-{pid}-{timestamp}"));
+    std::fs::create_dir_all(&backup_dir)?;
+    if !is_writable_dir(&backup_dir) {
+        let _ = std::fs::remove_dir(&backup_dir);
+        return Err(AppError::msg(format!(
+            "update backup directory is not writable: {}",
+            backup_dir.display()
+        )));
+    }
 
     std::fs::write(&script, windows_update_script_body())?;
     let helper_env = vec![
@@ -86,7 +95,10 @@ fn schedule_windows_update(staged: &StagedUpdate, current_exe: &Path) -> Result<
         ("ONETERM_SCRIPT_PATH", script.as_os_str().to_os_string()),
     ];
     if let Err(error) = spawn_cmd_helper(&script, &helper_env) {
+        // Best effort: the spawn failure is what gets reported; the leftovers
+        // only waste disk space.
         let _ = std::fs::remove_file(&script);
+        let _ = std::fs::remove_dir(&backup_dir);
         return Err(error);
     }
     Ok(InstallOutcome::RestartScheduled)
@@ -381,27 +393,35 @@ rem All paths are passed through environment variables by the Rust parent proces
 rem Do not inline paths into this file: cmd.exe parses batch files before command
 rem execution, so percent/caret metacharacters can corrupt or inject commands.
 
+rem The helper runs without a console (CREATE_NO_WINDOW), where `timeout` fails
+rem immediately ("input redirection is not supported") and would busy-spin; a
+rem loopback ping is the console-free one-second sleep.
 :wait_for_exit
 tasklist /FI "PID eq %pid%" 2>NUL | find "%pid%" >NUL
 if not errorlevel 1 (
-    timeout /T 1 /NOBREAK >NUL
+    ping -n 2 127.0.0.1 >NUL 2>NUL
     goto wait_for_exit
 )
 
-mkdir "%ONETERM_BACKUP_DIR%" >NUL 2>NUL
+rem The backup directory was created and write-probed by the parent process
+rem inside OneTerm's update cache before it quit.
 xcopy "%ONETERM_INSTALL_DIR%\*" "%ONETERM_BACKUP_DIR%\" /E /I /H /Y >NUL
 if errorlevel 2 exit /B 1
 xcopy "%ONETERM_PACKAGE_DIR%\*" "%ONETERM_INSTALL_DIR%\" /E /I /H /Y >NUL
 if errorlevel 2 goto restore_backup
 start "" "%ONETERM_INSTALL_DIR%\%ONETERM_EXE_NAME%"
+if errorlevel 1 goto restore_backup
+rem The new build launched: the backup has served its purpose.
 cd /d "%TEMP%" >NUL 2>NUL
+rmdir /S /Q "%ONETERM_BACKUP_DIR%" >NUL 2>NUL
 rmdir /S /Q "%ONETERM_STAGING_DIR%" >NUL 2>NUL
 del "%ONETERM_SCRIPT_PATH%" >NUL 2>NUL
 exit /B 0
 
 :restore_backup
 rem The package copy may have partially overwritten files. Clear the install
-rem directory and copy the backup back before reporting helper failure.
+rem directory and copy the backup back before reporting helper failure. The
+rem backup is kept for manual recovery.
 del /F /Q "%ONETERM_INSTALL_DIR%\*" >NUL 2>NUL
 for /D %%D in ("%ONETERM_INSTALL_DIR%\*") do rmdir /S /Q "%%D" >NUL 2>NUL
 xcopy "%ONETERM_BACKUP_DIR%\*" "%ONETERM_INSTALL_DIR%\" /E /I /H /Y >NUL
@@ -682,5 +702,20 @@ mod tests {
         assert!(script.contains("goto restore_backup"));
         assert!(!script.contains("installDir={install_dir}"));
         assert!(!script.contains("packageDir={package_dir}"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_update_script_sleeps_without_a_console_and_removes_backup_after_launch() {
+        let script = windows_update_script_body();
+
+        // CORR-59: `timeout` needs a console; the helper has none.
+        assert!(!script.contains("timeout /T"));
+        assert!(script.contains("ping -n 2 127.0.0.1"));
+        // CORR-38: the backup is deleted only after `start` succeeded.
+        let start = script.find("start \"\"").unwrap();
+        let remove_backup = script.find("rmdir /S /Q \"%ONETERM_BACKUP_DIR%\"").unwrap();
+        assert!(start < remove_backup);
+        assert!(!script.contains("mkdir \"%ONETERM_BACKUP_DIR%\""));
     }
 }
