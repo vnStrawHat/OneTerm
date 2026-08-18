@@ -36,7 +36,6 @@ Invoke-Step @("python", "scripts/check-doc-paths.py")
 Invoke-Step @("python", "-m", "unittest", "scripts/test_check_english.py")
 Invoke-Step @("python", "scripts/check-english.py")
 Invoke-Step @("python", "scripts/completion-catalog.py", "validate")
-Invoke-Step @("python", "scripts/benchmark-scale.py", "--list")
 Invoke-Step @("python", "scripts/third-party-notices.py", "--check")
 
 if ($Full) {

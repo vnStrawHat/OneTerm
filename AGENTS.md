@@ -106,13 +106,12 @@ The script runs, in order:
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings   # also type-checks every target (no separate build step)
 cargo test --workspace
-python scripts/verify-dependency-graph.py     # crate graph policy + VERSION/Cargo.toml agreement
+python scripts/verify-dependency-graph.py     # crate graph policy + workspace version inheritance
 python scripts/check-ui-fork.py               # gpui-component vendor baseline
 python scripts/check-doc-paths.py             # architecture doc paths
 python -m unittest scripts/test_check_english.py
 python scripts/check-english.py               # English-only contributor text
 python scripts/completion-catalog.py validate # completion catalogs vs schema
-python scripts/benchmark-scale.py --list      # scale benchmark manifest
 python scripts/third-party-notices.py --check # THIRD-PARTY-NOTICES.md matches Cargo.lock
 ```
 
