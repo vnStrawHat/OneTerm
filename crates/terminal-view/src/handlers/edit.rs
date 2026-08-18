@@ -4,8 +4,8 @@
 use gpui::{App, ClipboardItem, Entity, Window};
 use gpui_component::{WindowExt as _, notification::NotificationType};
 
-use oneterm_state::notif_ext::notify;
 use oneterm_terminal::TerminalSession;
+use oneterm_theme::notif_ext::notify;
 
 /// One terminal edit command: shared signature for the keyboard handler, the
 /// context menu and the panel actions. `Window` is available on every path and
