@@ -4,11 +4,11 @@ use oneterm_core::Result;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
+use crate::CURRENT_VERSION;
 use crate::archive::{extract_archive, validate_staged_package};
 use crate::config::{CachedUpdateCandidate, UpdateChannel, UpdateCheckCache, UpdateConfig};
 use crate::github::{self, GitHubClient, GitHubRelease, ReleaseClient};
 use crate::version::{current_target_triple, expected_asset_name, parse_release_version};
-use crate::CURRENT_VERSION;
 
 /// A release artifact that can update this build.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

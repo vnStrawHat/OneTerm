@@ -1,9 +1,7 @@
 use std::path::Path;
 
 use chrono::{DateTime, Duration, Utc};
-use oneterm_core::{
-    AppError, config_dir, migrate_json_value, quarantine_file, set_schema_version,
-};
+use oneterm_core::{AppError, config_dir, migrate_json_value, quarantine_file, set_schema_version};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

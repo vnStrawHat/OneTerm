@@ -15,7 +15,6 @@ use oneterm_core::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-
 /// Path to `docks.json` — resolved at runtime via `config_dir().join(...)`:
 /// debug → `target/docks.json`, release → `~/.OneTerm/docks.json`.
 ///
