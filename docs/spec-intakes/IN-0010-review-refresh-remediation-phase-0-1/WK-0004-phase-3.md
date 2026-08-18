@@ -8,8 +8,8 @@ Created: 2026-08-17
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [ ] Planned
-- [x] In progress
-- [ ] Implemented
+- [ ] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -36,8 +36,9 @@ fixed or explicitly deferred with a reason, crate by crate.
 
 ## Acceptance
 
-- [ ] Every in-scope item is either ticked in files 01–08 or listed under Gaps with a reason.
-- [ ] Workspace gate green on the integration branch.
+- [x] Every in-scope item is either ticked in files 01–08 or listed under Gaps with a reason (see
+  `09-remediation-plan.md` "Open items after Phase 3").
+- [x] Workspace gate green on the integration branch (922 tests, 2026-08-18).
 
 ## Documentation
 
@@ -51,11 +52,15 @@ Update required: HYG-16/18/19/20 doc items are themselves documentation work.
 
 ### Reconciliation
 
-Pending.
+Updated: `docs/README.md` (new index), `docs/PROJECT.md`, `README.md`, `docs/archive/**` (July reviews moved),
+`docs/auto-update.md` (hardening, wired knobs, signature decision), `docs/crash-reporting.md`,
+`docs/agents/dependencies.md`, `docs/agents/ui-fork-maintenance.md` (upstreaming), `scripts/README.md`,
+`NOTICE`, `THIRD-PARTY-NOTICES.md` (generated), `.editorconfig`, `docs/auto-completion/08-security-redaction.md`,
+`docs/terminal-semantic-highlighting.md`, `docs/agents/persistence.md` (load outcomes), `docs/gui-layout.md`.
 
 ## Plan
 
-- [ ] Wave E (parallel by crate ownership): E1 terminal + backends; E2 terminal-view; E3 update +
+- [x] Wave D/F (parallel by crate ownership): E1 terminal + backends; E2 terminal-view; E3 update +
   settings-ui + app; E4 sftp-ui + session-ui + state + settings + theme + workspace; E5 highlight +
   completion + core; E6 docs, scripts, manifests, workflows.
 
@@ -64,13 +69,15 @@ Pending.
 Per-crate `cargo test -p`, then full workspace gate on the merged branch.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Platform proof (Windows local; Linux/macOS via CI)
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-Pending.
+- Same merge set and gate as WK-0003 (Phase 2 and Phase 3 were executed by the same crate-owned waves).
+- Gaps: BUILD-07 (duplicate crate versions pinned upstream), BUILD-21 (external), ERR-06 / HYG-04 / HYG-11 /
+  HYG-12 / HYG-14 partial sweeps, TEST-05 partial, CORR-67 partial; the SEC "Info" line is informational.
