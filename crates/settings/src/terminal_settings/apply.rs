@@ -107,6 +107,8 @@ impl TerminalSettings {
             },
 
             completion: CompletionSettings::from_config(&cfg.completion),
+
+            persist_blocked: false,
         }
     }
 }

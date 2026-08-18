@@ -178,17 +178,17 @@ fn explicit_path_persistence_is_isolated_and_quarantines_corruption() {
     ));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("terminal.json");
-    let missing = TerminalConfig::load_from(&path);
+    let missing = TerminalConfig::load_from(&path).unwrap();
     assert_eq!(missing.font.family, FontConfig::default().family);
     assert!(path.exists());
     let config = TerminalConfig::default();
     config.save_to(&path).unwrap();
     assert_eq!(
-        TerminalConfig::load_from(&path).font.family,
+        TerminalConfig::load_from(&path).unwrap().font.family,
         config.font.family
     );
     std::fs::write(&path, b"{not-json").unwrap();
-    let loaded = TerminalConfig::load_from(&path);
+    let loaded = TerminalConfig::load_from(&path).unwrap();
     assert_eq!(loaded.font.family, FontConfig::default().family);
     assert!(!path.exists());
     assert!(std::fs::read_dir(&directory).unwrap().any(|entry| {
@@ -218,7 +218,30 @@ fn legacy_fixture_migrates_and_current_save_is_idempotent() {
     config.save_to(&path).unwrap();
     let value: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(value["schema_version"], CURRENT_SCHEMA_VERSION);
-    let restored = TerminalConfig::load_from(&path);
+    let restored = TerminalConfig::load_from(&path).unwrap();
     assert_eq!(restored.font.family, config.font.family);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn unreadable_document_is_a_typed_load_error_and_is_left_untouched() {
+    let directory = std::env::temp_dir().join(format!(
+        "oneterm-terminal-unreadable-test-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+    ));
+    // A directory in place of the file fails to read with something other than
+    // NotFound on every platform, standing in for a permission failure.
+    let path = directory.join("terminal.json");
+    std::fs::create_dir_all(&path).unwrap();
+    let error = TerminalConfig::load_from(&path).unwrap_err();
+    assert!(
+        matches!(&error, AppError::ConfigLoad { document, .. } if document == "terminal.json"),
+        "expected ConfigLoad, got {error}"
+    );
+    assert!(path.is_dir(), "an unreadable document must not be replaced");
     let _ = std::fs::remove_dir_all(directory);
 }

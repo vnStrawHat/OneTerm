@@ -134,14 +134,10 @@ impl OneTermWorkspace {
         // rewrites docks.json without the zoom), and the same document feeds
         // the layout load. An unreadable file is left to the first save:
         // `dock_persistence` — the document owner — quarantines it there.
-        let document = match persistence::read_dock_document() {
-            Ok(document) => Some(document),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => {
-                log::warn!("docks.json could not be read ({error}); using the default layout");
-                None
-            }
-        };
+        let document = persistence::read_dock_document().unwrap_or_else(|error| {
+            log::warn!("{error}; using the default layout");
+            None
+        });
         let saved_zoom = document
             .as_ref()
             .and_then(|document| document.zoomed_panel.clone());

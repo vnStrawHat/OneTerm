@@ -139,7 +139,9 @@ fn load_reset_center_and_save_round_trip(cx: &mut TestAppContext) {
         .unwrap();
 
     // 2. Next launch: read once, load, reset the center, persist.
-    let document = read_dock_document_from(&path).unwrap();
+    let document = read_dock_document_from(&path)
+        .unwrap()
+        .expect("document exists");
     assert_eq!(
         document.zoomed_panel.as_deref(),
         Some(panel_names::TERMINAL)
@@ -183,7 +185,9 @@ fn load_reset_center_and_save_round_trip(cx: &mut TestAppContext) {
     );
 
     persistence::save_state_to(&path, &reset, None, "test-reset").unwrap();
-    let written = read_dock_document_from(&path).unwrap();
+    let written = read_dock_document_from(&path)
+        .unwrap()
+        .expect("document exists");
     assert_eq!(written.zoomed_panel, None);
     assert_eq!(written.dock_state::<DockAreaState>().unwrap(), reset);
     assert_eq!(

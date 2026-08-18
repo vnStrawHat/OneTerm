@@ -21,10 +21,9 @@ use oneterm_state::dock_persistence::{
 /// or fails to parse.
 pub(crate) fn read_sftp_table_state() -> Option<SftpTableState> {
     match read_dock_document() {
-        Ok(document) => document.sftp_table_state,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Ok(document) => document.and_then(|document| document.sftp_table_state),
         Err(error) => {
-            log::warn!("failed to read SFTP table state from docks.json: {error}");
+            log::warn!("failed to read SFTP table state: {error}");
             None
         }
     }
