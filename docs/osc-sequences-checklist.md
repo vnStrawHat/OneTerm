@@ -190,7 +190,7 @@ ESC ] 8 ; ; ST               ← close link
 |:----:|:-------:|:------------:|:---:|:-------:|:------:|:-----:|:---------:|:-----:|:---:|:-------:|
 | 8 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ |
 
-- **OneTerm**: ✅ — alacritty VTE stores hyperlink in cell; the view reads `cell.hyperlink()` and every target passes `ExternalTargetPolicy` (`crates/terminal/src/url_policy.rs`, display-text vs target check via `validate_with_display`).
+- **OneTerm**: ✅ — alacritty VTE stores hyperlink in cell; the view reads `cell.hyperlink()` and every target passes the external-target policy (`crates/terminal/src/url_policy.rs`, display-text vs target check via `validate_target_with_display`).
 - **Zed**: ✅ — `terminal_hyperlinks.rs` reads `cell.hyperlink()` + `try_osc8_url_to_path`.
 - **Alacritty**: ✅ — commit "Fixes #922" added OSC 8 (the old ansicode page was wrong in listing alacritty ❌).
 - **xterm**: ❌ — does not support OSC 8.
@@ -455,6 +455,6 @@ ESC]133;D;exit ST ← Block end (exit code optional)
 ### OneTerm codebase (internal verification)
 - `crates/terminal/src/osc.rs` — `OscPayload`, `Osc133Kind`, `parse_cwd_url`, `decode_osc52`/`encode_osc52`
 - `crates/terminal/src/osc_color.rs` — `DynamicColors`, `PendingColorQuery`, `default_color_for_index` (OSC 10/11/12/110-112)
-- `crates/terminal/src/backend/osc_router.rs` + `backend/color_reply.rs` — shared `OscRouter` (both backends): OSC routing, `ColorRequest` enqueue → reply after the parse batch
+- `crates/terminal/src/backend/osc_router.rs` + `backend/pump.rs` — shared `OscRouter` (both backends): OSC routing, `ColorRequest` enqueue → reply after the parse batch
 - `crates/core/src/config/shell.rs` — `resolve_shell` generates OSC 7/133 by shell kind
 - `crates/terminal/src/url_policy.rs` — OSC 8 / plain-text target policy (scheme allowlist, display-text mismatch)

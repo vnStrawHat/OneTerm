@@ -9,16 +9,17 @@ use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::term::{RenderableCursor, TermMode};
 use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
-use async_channel::{Receiver, Sender, TryRecvError, TrySendError};
+use async_channel::{Receiver, Sender, TrySendError};
 
-use super::{
-    IndexedCell, LineRangeCells, SessionEvent, SessionKind, TermDamageInfo, TerminalBounds,
-    TerminalContent, TerminalError, TerminalIme, TerminalInfo, TerminalInput, TerminalLifecycle,
-    TerminalMouseButton, TerminalQueryState, TerminalRender, TerminalSession,
-};
+use crate::content::{IndexedCell, TermDamageInfo, TerminalBounds, TerminalContent};
 use crate::mouse_encode::MouseModifiers;
+use crate::mouse_encode::TerminalMouseButton;
 use crate::osc_color::DynamicColors;
 use crate::search::{SearchMatch, SearchOptions};
+use crate::session::{
+    LineRangeCells, SessionEvent, SessionKind, TerminalError, TerminalIme, TerminalInfo,
+    TerminalInput, TerminalLifecycle, TerminalQueryState, TerminalRender, TerminalSession,
+};
 
 /// Whether a fake snapshot consumes the pending damage (render path) or leaves
 /// it intact (auxiliary query path).
@@ -80,29 +81,9 @@ impl FakeSessionProbe {
         self.state.snapshot_calls.load(Ordering::SeqCst)
     }
 
-    /// Return the number of damage-free query snapshots requested.
-    pub fn query_snapshot_calls(&self) -> usize {
-        self.state.query_snapshot_calls.load(Ordering::SeqCst)
-    }
-
-    /// Return the number of compact query-state reads requested.
-    pub fn query_state_calls(&self) -> usize {
-        self.state.query_state_calls.load(Ordering::SeqCst)
-    }
-
-    /// Return the number of terminal-info reads requested.
-    pub fn terminal_info_calls(&self) -> usize {
-        self.state.terminal_info_calls.load(Ordering::SeqCst)
-    }
-
     /// Return the number of close requests received by the fake.
     pub fn close_calls(&self) -> usize {
         self.state.close_calls.load(Ordering::SeqCst)
-    }
-
-    /// Return the number of times the fake session object was dropped.
-    pub fn drop_calls(&self) -> usize {
-        self.state.drop_calls.load(Ordering::SeqCst)
     }
 
     /// Return whether the fake session is alive.
@@ -128,11 +109,7 @@ struct FakeSessionState {
     fail_writes: AtomicBool,
     alive: AtomicBool,
     snapshot_calls: AtomicUsize,
-    query_snapshot_calls: AtomicUsize,
-    query_state_calls: AtomicUsize,
-    terminal_info_calls: AtomicUsize,
     close_calls: AtomicUsize,
-    drop_calls: AtomicUsize,
 }
 
 impl FakeTerminalSession {
@@ -150,11 +127,7 @@ impl FakeTerminalSession {
             fail_writes: AtomicBool::new(false),
             alive: AtomicBool::new(true),
             snapshot_calls: AtomicUsize::new(0),
-            query_snapshot_calls: AtomicUsize::new(0),
-            query_state_calls: AtomicUsize::new(0),
-            terminal_info_calls: AtomicUsize::new(0),
             close_calls: AtomicUsize::new(0),
-            drop_calls: AtomicUsize::new(0),
         });
         let probe = FakeSessionProbe {
             state: state.clone(),
@@ -232,12 +205,6 @@ impl FakeTerminalSession {
     }
 }
 
-impl Drop for FakeTerminalSession {
-    fn drop(&mut self) {
-        self.state.drop_calls.fetch_add(1, Ordering::SeqCst);
-    }
-}
-
 impl TerminalSession for FakeTerminalSession {}
 
 impl TerminalRender for FakeTerminalSession {
@@ -247,14 +214,10 @@ impl TerminalRender for FakeTerminalSession {
     }
 
     fn snapshot_query(&self) -> TerminalContent {
-        self.state
-            .query_snapshot_calls
-            .fetch_add(1, Ordering::SeqCst);
         self.content(DamageMode::Preserve)
     }
 
     fn query_state(&self) -> TerminalQueryState {
-        self.state.query_state_calls.fetch_add(1, Ordering::SeqCst);
         let mode = *self.state.mode.lock().unwrap();
         let snap = self.content(DamageMode::Preserve);
         TerminalQueryState {
@@ -284,9 +247,6 @@ impl TerminalRender for FakeTerminalSession {
     }
 
     fn terminal_info(&self) -> TerminalInfo {
-        self.state
-            .terminal_info_calls
-            .fetch_add(1, Ordering::SeqCst);
         let (rows, cols) = *self.state.rows_cols.lock().unwrap();
         TerminalInfo {
             total_lines: rows,
@@ -433,51 +393,6 @@ impl TerminalLifecycle for FakeTerminalSession {
 
     fn cwd(&self) -> Option<PathBuf> {
         None
-    }
-}
-
-/// A bounded in-memory transport used to drive saturation tests.
-pub struct FakeTransport<T> {
-    sender: Sender<T>,
-    receiver: Receiver<T>,
-}
-
-impl<T> FakeTransport<T> {
-    /// Create a bounded fake transport.
-    pub fn bounded(capacity: usize) -> Self {
-        let (sender, receiver) = async_channel::bounded(capacity);
-        Self { sender, receiver }
-    }
-
-    /// Clone the transport sender for injection into a backend adapter.
-    pub fn sender(&self) -> Sender<T> {
-        self.sender.clone()
-    }
-
-    /// Try to enqueue one item.
-    pub fn try_send(&self, item: T) -> Result<(), TrySendError<T>> {
-        self.sender.try_send(item)
-    }
-
-    /// Try to receive one item.
-    pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        self.receiver.try_recv()
-    }
-
-    /// Close both ends of the fake transport.
-    pub fn close(&self) {
-        self.sender.close();
-        self.receiver.close();
-    }
-
-    /// Return the current number of queued items.
-    pub fn len(&self) -> usize {
-        self.receiver.len()
-    }
-
-    /// Return whether the transport queue is empty.
-    pub fn is_empty(&self) -> bool {
-        self.receiver.is_empty()
     }
 }
 

@@ -69,7 +69,7 @@
         └──────────────┬──────────────────────────┘
                 ┌──────▼──────────┐
                 │ terminal crate  │  backend pump layer: SharedState, SessionEventSink,
-                │ (no GPUI)       │  OscRouter, ColorQueryReplier, LineAccounting,
+                │ (no GPUI)       │  OscRouter, LineAccounting,
                 │                 │  TerminalPump, PtyTransport; TerminalSession,
                 │                 │  TerminalContent, key/mouse encode, osc, url
                 └──────┬──────────┘
@@ -90,7 +90,7 @@
 | Crate | Terminal role |
 |---|---|
 | `core` | `ShellKind` + `LocalShellConfig` + `SshConfig` (config), `SftpBackend`, `AppError` (leaf, no GPUI). |
-| `terminal` | `TerminalSession` trait + `SessionEvent`, `TerminalContent` snapshot, `TerminalPalette`, `key_encode`/`mouse_encode`/`osc`/`url`, and the **backend pump layer** (`backend` module: `SharedState`, `SessionEventSink`, `OscRouter`, `ColorQueryReplier`, `LineAccounting`, `TerminalPump`, `PtyTransport`) shared by both backends. |
+| `terminal` | `TerminalSession` trait + `SessionEvent`, `TerminalContent` snapshot, `TerminalPalette`, `key_encode`/`mouse_encode`/`osc`/`url`, and the **backend pump layer** (`backend` module: `SharedState`, `SessionEventSink`, `OscRouter`, `LineAccounting`, `TerminalPump`, `PtyTransport`) shared by both backends. |
 | `local-shell` | `LocalSession` implementing `TerminalSession`. Spawns a shell via `alacritty_terminal::tty::new` and pumps it with a custom poll loop (`ShellEventLoop<P: EventedPty>`) feeding `TerminalPump`. ConPTY on Windows. `LocalTransport: PtyTransport` (notifier queue). Only `LocalSession` is public. |
 | `ssh` | `SshSession` implementing `TerminalSession`. russh client on the shared tokio runtime; `ssh_main_task` feeds `TerminalPump`. pty-req + shell + `window_change` + exit-status. `SshTransport: PtyTransport` (bounded `Cmd` channel). SFTP task lifetime tied to the connection. Only `SshSession` + `connect` are public. |
 | `terminal-view` | `TerminalElement` (custom `gpui::Element`), `LocalTerminalView` (`Render`; one view type hosts any `TerminalSession`, local or SSH), `TerminalPanel`/`PanelSpec` (dock tab), IME (`EntityInputHandler`), mouse/wheel, font measure, theme → `TerminalPalette`. |
@@ -175,10 +175,9 @@ provide a transport and a read loop.
 | Type | Role |
 |---|---|
 | `PtyTransport` (trait) | The backend half: `pty_write` / `pty_resize` / `pty_close`. Non-blocking, `Clone` (Arc handles). `LocalTransport` wraps the owner-thread notifier queue; `SshTransport` wraps the bounded `Cmd` channel (byte budget, coalesced resize, closing flag). |
-| `SharedState` (`Arc<SharedSessionState>`) | Title / cwd / clipboard / exit code / OSC 133 counters / theme default colours / OSC 9;7 seq watermarks behind one mutex; `alive`, rx/tx bytes, absolute line count and clear epoch as atomics so a parse batch never takes the mutex. `SharedStateCwdSource` exposes cwd to the SFTP browser. |
+| `SharedState` (`Arc<SharedSessionState>`) | Title / cwd / clipboard / exit code / OSC 133 counters / theme default colours / OSC 9;7 seq watermarks behind one mutex; `alive`, rx/tx bytes, absolute line count and clear epoch as atomics so a parse batch never takes the mutex. Handed to the SFTP browser as `TerminalCapabilities::cwd_source` so it can read the live cwd. |
 | `SessionEventSink` | Delivery policy: `Output` is coalescible (dropped when the 4096-slot queue is full), everything else is reliable. `forward` never blocks — reliable events that do not fit go to a FIFO and `flush_reliable[_blocking]` delivers them after the batch, outside the `Term` lock. `forward_lifecycle*` flushes first so `Exited`/`Closed` arrive in order. Counters (`EventQueueDiagnostics`) for tests/diagnostics. |
-| `OscRouter<T: PtyTransport>` | The `EventListener` installed in `Term`: `Wakeup` → `Output`; `Title`/`ResetTitle` → state + `Title`; OSC 52 store/load gated by `TerminalSecurityPolicy` + `ClipboardOrigin` (remote default off — the same code for both backends, so the policy cannot drift; the policy is the user's, derived from `TerminalSettings` by `terminal-view` and passed through `SessionFactory::{spawn_local, connect_ssh}` into `OscRouter::with_security`); `Event::Osc` (OSC 7/9/133/9;7 from the fork) → state + `Cwd`/`Notification`/`Progress`/`ShellIntegration`/`AgentStatus` (rate limit, seq dedup); `ClearScreen` → clear epoch; `ColorRequest` → `ColorQueryReplier`; `PtyWrite` → `transport.pty_write`; `Bell`. |
-| `ColorQueryReplier` | Queue of OSC 10/11/12 (and OSC 4) queries collected during `advance`; `replies(term, defaults, queries)` formats answers from the live `Term` colours with the theme defaults as fallback. |
+| `OscRouter<T: PtyTransport>` | The `EventListener` installed in `Term`: `Wakeup` → `Output`; `Title`/`ResetTitle` → state + `Title`; OSC 52 store/load gated by `TerminalSecurityPolicy` + `ClipboardOrigin` (remote default off — the same code for both backends, so the policy cannot drift; the policy is the user's, derived from `TerminalSettings` by `terminal-view` and passed through `SessionFactory::{spawn_local, connect_ssh}` into `OscRouter::with_security`); `Event::Osc` (OSC 7/9/133/9;7 from the fork) → state + `Cwd`/`Notification`/`Progress`/`ShellIntegration`/`AgentStatus` (rate limit, seq dedup); `ClearScreen` → clear epoch; `ColorRequest` → the pending colour-query queue, drained by `TerminalPump::color_replies` after the batch (answers come from the live `Term` colours with the theme defaults as fallback); `PtyWrite` → `transport.pty_write`; `Bell`. |
 | `LineAccounting` | Absolute-line counter (gutter numbers keep growing after the scrollback is full). Owned by the pump, published to `SharedState` once per batch. |
 | `TerminalPump<T>` | Owns `ansi::Processor` + `LineAccounting` + a router clone. Per chunk: `advance(term, bytes)` under the `Term` lock (or `process_chunk(&term_arc, bytes)` which also answers colour queries and writes the replies), then `finish_batch[_blocking](repaint)` once the lock is released: publish line count → flush deferred reliable events (backpressure) → `Output`. Lifecycle: `publish_exit*` / `publish_closed*`. |
 
@@ -596,14 +595,15 @@ pub trait TerminalSession: TerminalRender + TerminalInput + TerminalIme + Termin
     fn capabilities(&self) -> TerminalCapabilities { TerminalCapabilities::default() }
     // Provided helpers built only on the traits above:
     fn send_text(&self, text: &str);
-    fn send_keystroke(&self, keystroke: &str);
     fn is_bracketed_paste(&self) -> bool;
     fn paste(&self, text: &str) -> Result<(), PasteError>;   // TooLarge | Write(TerminalError)
 }
 ```
 
 > This is only a **render/input/lifecycle interface** — it does not force a shared pump/transport.
-> `LocalSession` and `SshSession` implement it independently. The two backends still don't know each other.
+> `LocalSession` and `SshSession` differ only in `capabilities()`, `kind()` and how the channel is
+> torn down; the four trait impls are generated once by `impl_pty_terminal_session!` (`session.rs`),
+> so the two backends cannot drift. Neither backend knows the other.
 
 Presentation is not part of the trait: the status-bar breadcrumb is formatted by
 `terminal-view` from `cwd()`. Pixel cell metrics (`set_cell_size`/`cursor_bounds`) were
@@ -687,10 +687,9 @@ crates/
 │   ├── factory.rs            # PtySize + SessionFactory
 │   └── backend/              # shared pump layer (§5.3)
 │       ├── transport.rs      # PtyTransport trait
-│       ├── state.rs          # SharedState / SharedStateCwdSource
+│       ├── state.rs          # SharedState (title/cwd/clipboard/counters)
 │       ├── event_sink.rs     # SessionEventSink (delivery policy, deferred flush)
 │       ├── osc_router.rs     # OscRouter<T>: EventListener
-│       ├── color_reply.rs    # ColorQueryReplier
 │       ├── line_accounting.rs
 │       ├── pump.rs           # TerminalPump<T>
 │       └── backend_tests.rs  # in-memory transport tests

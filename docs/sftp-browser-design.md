@@ -1481,7 +1481,7 @@ flag that was drained inside `render()` no longer exists (ARCH-30).
 |---|---|---|
 | `BrowserView` | `cwd`, `selected`, `error`, `path_error` | `begin_load`, `set_cwd`, `select`, `set_error`, `set_path_error` |
 | `TransferQueueView` | `items: Vec<TransferItem>`, `next_id` | `allocate_id`, `reserve_id`, `push`, `update`, `replace`, `retain_active` |
-| `FollowCwd` | `enabled`, `last`, `cache`, `source: Option<Arc<dyn CwdSource>>` | `toggle`, `set_last`, `set_source`, `refresh_cache`, `terminal_cwd()`, `snapshot()/restore()` |
+| `FollowCwd` | `enabled`, `last`, `cache`, `source: Option<SharedState>` | `toggle`, `set_last`, `set_source`, `refresh_cache`, `terminal_cwd()`, `snapshot()/restore()` |
 
 Every mutator raises its own dirty flag; the 500 ms poll timer drains them with
 `take_dirty()` and writes the view into the per-backend store only when something

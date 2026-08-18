@@ -33,7 +33,7 @@ mod theme;
 
 pub use class::Class;
 pub use color::{Hsla, Rgba, parse_hex};
-pub use profile::{PathSep, ShellProfile};
+pub use profile::ShellProfile;
 pub use role::{RowRole, RowRoles};
 pub use rules::RuleSet;
 pub use scanner::scan_line;

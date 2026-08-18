@@ -18,9 +18,9 @@ use gpui::{
     Window,
 };
 use oneterm_settings::TerminalBlink;
+use oneterm_terminal::security_policy::MAX_QUEUED_NOTIFICATIONS;
 use oneterm_terminal::{
-    AgentStatusEvent, SessionEvent, TerminalPalette, TerminalProgress, TerminalSecurityPolicy,
-    TerminalSession,
+    AgentStatusEvent, SessionEvent, TerminalPalette, TerminalProgress, TerminalSession,
 };
 
 use super::completion::CompletionState;
@@ -31,7 +31,6 @@ use super::scrollbar::ScrollbarState;
 use super::search::SearchState;
 use crate::element::RenderCache;
 use crate::highlight::SemanticOverlay;
-use crate::security::security_policy_from_settings;
 use crate::url::UrlHover;
 
 const CURSOR_BLINK_INTERVAL_MS: u64 = 500;
@@ -77,9 +76,6 @@ pub(crate) struct LocalTerminalView {
     pub(crate) pending_notifications: VecDeque<String>,
     /// Number of notifications dropped because the display queue was full.
     pub(crate) dropped_notifications: usize,
-    /// UI-side notification policy, derived from the user's settings (SEC-08);
-    /// listener-side rate limiting happens earlier.
-    pub(crate) notification_policy: TerminalSecurityPolicy,
     /// Current OSC 9;4 taskbar progress (`None` = no progress / removed).
     pub(crate) progress: Option<TerminalProgress>,
     /// URL under the mouse + Ctrl state (highlight + Ctrl+click to open).
@@ -183,13 +179,9 @@ impl LocalTerminalView {
         let subscriptions = vec![
             cx.on_focus(&focus, window, |view, _, _| view.focused = true),
             cx.on_blur(&focus, window, |view, _, _| view.focused = false),
-            cx.observe(&deps.settings, |view, settings, cx| {
-                view.notification_policy = security_policy_from_settings(settings.read(cx));
-            }),
         ];
 
         focus.focus(window, cx);
-        let notification_policy = security_policy_from_settings(deps.settings.read(cx));
 
         Self {
             session,
@@ -204,7 +196,6 @@ impl LocalTerminalView {
             has_bell: false,
             pending_notifications: VecDeque::new(),
             dropped_notifications: 0,
-            notification_policy,
             progress: None,
             url_hover: UrlHover::default(),
             gutter_times: GutterTimestamps::default(),
@@ -304,12 +295,7 @@ impl LocalTerminalView {
     }
 
     fn queue_notification(&mut self, message: String) {
-        let limit = self.notification_policy.max_queued_notifications;
-        if limit == 0 {
-            self.dropped_notifications = self.dropped_notifications.saturating_add(1);
-            return;
-        }
-        if self.pending_notifications.len() >= limit {
+        if self.pending_notifications.len() >= MAX_QUEUED_NOTIFICATIONS {
             self.pending_notifications.pop_front();
             self.dropped_notifications = self.dropped_notifications.saturating_add(1);
         }
@@ -447,7 +433,7 @@ mod tests {
     use gpui::{AppContext as _, TestAppContext, VisualTestContext};
     use oneterm_terminal::test_support::FakeTerminalSession;
 
-    use super::{LocalTerminalView, TerminalDeps};
+    use super::{LocalTerminalView, MAX_QUEUED_NOTIFICATIONS, TerminalDeps};
 
     #[gpui::test]
     fn terminal_notification_queue_is_bounded(cx: &mut TestAppContext) {
@@ -464,10 +450,9 @@ mod tests {
         let cx: &mut VisualTestContext = cx;
 
         view.update(cx, |view, _| {
-            view.notification_policy.max_queued_notifications = 2;
-            view.queue_notification("first".to_string());
-            view.queue_notification("second".to_string());
-            view.queue_notification("third".to_string());
+            for i in 0..=MAX_QUEUED_NOTIFICATIONS {
+                view.queue_notification(format!("n{i}"));
+            }
         });
 
         let (queued, dropped, oldest) = view.read_with(cx, |view, _| {
@@ -477,9 +462,9 @@ mod tests {
                 view.pending_notifications.front().cloned(),
             )
         });
-        assert_eq!(queued, 2);
+        assert_eq!(queued, MAX_QUEUED_NOTIFICATIONS);
         assert_eq!(dropped, 1);
-        assert_eq!(oldest.as_deref(), Some("second"));
+        assert_eq!(oldest.as_deref(), Some("n1"));
     }
 
     /// PERF-07: a blink tick on an unfocused view (or with blinking off) keeps

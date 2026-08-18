@@ -12,7 +12,7 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::dialog::DialogFooter;
 
 use oneterm_terminal::TerminalSession;
-use oneterm_terminal::url_policy::{ExternalTargetPolicy, TargetDecision};
+use oneterm_terminal::url_policy::{TargetDecision, validate_target_with_display};
 
 use super::super::element::RenderCache;
 use super::super::url::DetectedUrl;
@@ -88,8 +88,7 @@ fn confirm_open_url(url: DetectedUrl, window: &mut Window, cx: &mut App) {
 /// Open a detected URL after the target policy has decided: allowed links
 /// open directly, `Confirm` asks first, `Deny` is logged.
 fn open_detected_url(url: DetectedUrl, window: &mut Window, cx: &mut App) {
-    let policy = ExternalTargetPolicy::default();
-    match policy.validate_with_display(&url.url, url.display_text.as_deref()) {
+    match validate_target_with_display(&url.url, url.display_text.as_deref()) {
         TargetDecision::Allow => cx.open_url(&url.url),
         TargetDecision::Confirm(reason) => {
             log::info!(

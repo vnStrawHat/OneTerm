@@ -173,7 +173,7 @@ impl Engine {
                     && c.kind == SuggestionKind::History
                     && redact::contains_secret(&c.text))
             })
-            .map(|c| (score(&c, cfg), c))
+            .map(|c| (score(&c), c))
             .collect();
         // Sort by score desc so dedup keeps the best-scoring duplicate.
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));

@@ -6,10 +6,16 @@
 //! names one site while the target points at another. This module is the
 //! single policy layer that every external-target opening must pass through.
 
-/// Default maximum URL length (256 KiB).
-const DEFAULT_MAX_URL_LEN: usize = 256 * 1024;
+/// Maximum URL length (256 KiB).
+const MAX_URL_LEN: usize = 256 * 1024;
 
-/// Outcome of [`ExternalTargetPolicy::validate`].
+/// Schemes opened without confirmation.
+const ALLOWED_SCHEMES: &[&str] = &["https"];
+
+/// Schemes opened only after user confirmation.
+const CONFIRM_SCHEMES: &[&str] = &["http"];
+
+/// Outcome of [`validate_target`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TargetDecision {
     /// The target is safe to open directly.
@@ -46,103 +52,72 @@ pub enum ConfirmReason {
     NonDefaultPort,
 }
 
-/// Policy governing which external targets may be opened.
-#[derive(Clone, Debug)]
-pub struct ExternalTargetPolicy {
-    /// Schemes that are opened without confirmation.
-    pub allowed_schemes: Vec<String>,
-    /// Schemes that are opened after user confirmation.
-    pub confirm_schemes: Vec<String>,
-    /// Maximum URL length in bytes.
-    pub max_url_len: usize,
-}
-
-impl Default for ExternalTargetPolicy {
-    fn default() -> Self {
-        Self {
-            allowed_schemes: vec!["https".to_string()],
-            confirm_schemes: vec!["http".to_string()],
-            max_url_len: DEFAULT_MAX_URL_LEN,
-        }
-    }
-}
-
-impl ExternalTargetPolicy {
-    /// Validate a target URI for opening.
-    ///
-    /// Returns `Allow`, `Deny(reason)`, or `Confirm(reason)`.
-    pub fn validate(&self, target: &str) -> TargetDecision {
-        // Length check.
-        if target.len() > self.max_url_len {
-            return TargetDecision::Deny(DenyReason::TooLong(target.len()));
-        }
-
-        // Control character check — reject C0 (except tab/newline in path) and C1.
-        if has_control_chars(target) {
-            return TargetDecision::Deny(DenyReason::ControlCharacters);
-        }
-
-        // Parse the URL.
-        let parsed = match parse_url(target) {
-            Some(p) => p,
-            None => return TargetDecision::Deny(DenyReason::InvalidUrl(target.to_string())),
-        };
-
-        // Scheme check (case-insensitive).
-        let scheme_lower = parsed.scheme.to_lowercase();
-        if self
-            .allowed_schemes
-            .iter()
-            .any(|s| s.eq_ignore_ascii_case(&scheme_lower))
-        {
-            // Check for credentials in authority.
-            if parsed.has_credentials {
-                return TargetDecision::Deny(DenyReason::HasCredentials);
-            }
-            // Non-default port requires confirmation.
-            if let Some(port) = parsed.port {
-                let default = default_port(&scheme_lower);
-                if port != default {
-                    return TargetDecision::Confirm(ConfirmReason::NonDefaultPort);
-                }
-            }
-            return TargetDecision::Allow;
-        }
-
-        if self
-            .confirm_schemes
-            .iter()
-            .any(|s| s.eq_ignore_ascii_case(&scheme_lower))
-        {
-            if parsed.has_credentials {
-                return TargetDecision::Deny(DenyReason::HasCredentials);
-            }
-            return TargetDecision::Confirm(ConfirmReason::RequiresConfirmation);
-        }
-
-        TargetDecision::Deny(DenyReason::SchemeNotAllowed(parsed.scheme))
+/// Validate a target URI for opening.
+///
+/// Returns `Allow`, `Deny(reason)`, or `Confirm(reason)`.
+pub fn validate_target(target: &str) -> TargetDecision {
+    // Length check.
+    if target.len() > MAX_URL_LEN {
+        return TargetDecision::Deny(DenyReason::TooLong(target.len()));
     }
 
-    /// Validate a target where the display text may differ from the actual URI
-    /// (OSC 8 hyperlinks: the visible cell text is chosen by the program).
-    ///
-    /// Descriptive text (`click here`, `release notes`) is not suspicious.
-    /// Text that *looks like a URL or host* is compared against the target
-    /// with [`display_matches_target`]; when it names a different host the
-    /// decision becomes `Confirm(DisplayTargetMismatch)` even for allowed
-    /// schemes, so `https://good.com` shown over `https://evil.com` never
-    /// opens silently.
-    pub fn validate_with_display(&self, target: &str, display: Option<&str>) -> TargetDecision {
-        let base = self.validate(target);
-        match &base {
-            TargetDecision::Allow => match display {
-                Some(display) if !display_matches_target(display, target) => {
-                    TargetDecision::Confirm(ConfirmReason::DisplayTargetMismatch)
-                }
-                _ => TargetDecision::Allow,
-            },
-            _ => base,
+    // Control character check — reject C0 (except tab/newline in path) and C1.
+    if has_control_chars(target) {
+        return TargetDecision::Deny(DenyReason::ControlCharacters);
+    }
+
+    // Parse the URL.
+    let parsed = match parse_url(target) {
+        Some(p) => p,
+        None => return TargetDecision::Deny(DenyReason::InvalidUrl(target.to_string())),
+    };
+
+    // Scheme check (case-insensitive).
+    let scheme_lower = parsed.scheme.to_lowercase();
+    if ALLOWED_SCHEMES.contains(&scheme_lower.as_str()) {
+        // Check for credentials in authority.
+        if parsed.has_credentials {
+            return TargetDecision::Deny(DenyReason::HasCredentials);
         }
+        // Non-default port requires confirmation.
+        if let Some(port) = parsed.port {
+            let default = default_port(&scheme_lower);
+            if port != default {
+                return TargetDecision::Confirm(ConfirmReason::NonDefaultPort);
+            }
+        }
+        return TargetDecision::Allow;
+    }
+
+    if CONFIRM_SCHEMES.contains(&scheme_lower.as_str()) {
+        if parsed.has_credentials {
+            return TargetDecision::Deny(DenyReason::HasCredentials);
+        }
+        return TargetDecision::Confirm(ConfirmReason::RequiresConfirmation);
+    }
+
+    TargetDecision::Deny(DenyReason::SchemeNotAllowed(parsed.scheme))
+}
+
+/// Validate a target where the display text may differ from the actual URI
+/// (OSC 8 hyperlinks: the visible cell text is chosen by the program).
+///
+/// Descriptive text (`click here`, `release notes`) is not suspicious.
+/// Text that *looks like a URL or host* is compared against the target
+/// with [`display_matches_target`]; when it names a different host the
+/// decision becomes `Confirm(DisplayTargetMismatch)` even for allowed
+/// schemes, so `https://good.com` shown over `https://evil.com` never
+/// opens silently.
+pub fn validate_target_with_display(target: &str, display: Option<&str>) -> TargetDecision {
+    let base = validate_target(target);
+    match &base {
+        TargetDecision::Allow => match display {
+            Some(display) if !display_matches_target(display, target) => {
+                TargetDecision::Confirm(ConfirmReason::DisplayTargetMismatch)
+            }
+            _ => TargetDecision::Allow,
+        },
+        _ => base,
     }
 }
 
@@ -370,130 +345,113 @@ mod tests {
 
     #[test]
     fn https_allowed_by_default() {
-        let policy = ExternalTargetPolicy::default();
         assert_eq!(
-            policy.validate("https://example.com/path"),
+            validate_target("https://example.com/path"),
             TargetDecision::Allow
         );
     }
 
     #[test]
     fn http_requires_confirmation_by_default() {
-        let policy = ExternalTargetPolicy::default();
         assert_eq!(
-            policy.validate("http://example.com/path"),
+            validate_target("http://example.com/path"),
             TargetDecision::Confirm(ConfirmReason::RequiresConfirmation)
         );
     }
 
     #[test]
     fn custom_scheme_denied() {
-        let policy = ExternalTargetPolicy::default();
         assert_eq!(
-            policy.validate("custom-app://run?action=delete"),
+            validate_target("custom-app://run?action=delete"),
             TargetDecision::Deny(DenyReason::SchemeNotAllowed("custom-app".to_string()))
         );
     }
 
     #[test]
     fn file_scheme_denied() {
-        let policy = ExternalTargetPolicy::default();
         assert_eq!(
-            policy.validate("file:///C:/Windows/System32/cmd.exe"),
+            validate_target("file:///C:/Windows/System32/cmd.exe"),
             TargetDecision::Deny(DenyReason::SchemeNotAllowed("file".to_string()))
         );
     }
 
     #[test]
     fn ssh_scheme_denied() {
-        let policy = ExternalTargetPolicy::default();
         assert_eq!(
-            policy.validate("ssh://user@host/path"),
+            validate_target("ssh://user@host/path"),
             TargetDecision::Deny(DenyReason::SchemeNotAllowed("ssh".to_string()))
         );
     }
 
     #[test]
     fn mixed_case_scheme_allowed() {
-        let policy = ExternalTargetPolicy::default();
         assert_eq!(
-            policy.validate("HtTpS://Example.COM/Path"),
+            validate_target("HtTpS://Example.COM/Path"),
             TargetDecision::Allow
         );
     }
 
     #[test]
     fn unicode_host_allowed() {
-        let policy = ExternalTargetPolicy::default();
         assert_eq!(
-            policy.validate("https://例え.テスト/path"),
+            validate_target("https://例え.テスト/path"),
             TargetDecision::Allow
         );
     }
 
     #[test]
     fn credentials_denied() {
-        let policy = ExternalTargetPolicy::default();
         assert_eq!(
-            policy.validate("https://user:secret@example.com/private"),
+            validate_target("https://user:secret@example.com/private"),
             TargetDecision::Deny(DenyReason::HasCredentials)
         );
     }
 
     #[test]
     fn control_characters_denied() {
-        let policy = ExternalTargetPolicy::default();
         assert_eq!(
-            policy.validate("https://example.com/\u{0007}control"),
+            validate_target("https://example.com/\u{0007}control"),
             TargetDecision::Deny(DenyReason::ControlCharacters)
         );
     }
 
     #[test]
     fn oversized_url_denied() {
-        let policy = ExternalTargetPolicy {
-            max_url_len: 100,
-            ..Default::default()
-        };
-        let oversized = format!("https://example.com/{}", "x".repeat(200));
+        let oversized = format!("https://example.com/{}", "x".repeat(MAX_URL_LEN));
         assert_eq!(
-            policy.validate(&oversized),
+            validate_target(&oversized),
             TargetDecision::Deny(DenyReason::TooLong(oversized.len()))
         );
     }
 
     #[test]
     fn non_default_port_requires_confirmation() {
-        let policy = ExternalTargetPolicy::default();
         assert_eq!(
-            policy.validate("https://example.com:8443/path"),
+            validate_target("https://example.com:8443/path"),
             TargetDecision::Confirm(ConfirmReason::NonDefaultPort)
         );
     }
 
     #[test]
     fn default_port_allowed() {
-        let policy = ExternalTargetPolicy::default();
         assert_eq!(
-            policy.validate("https://example.com:443/path"),
+            validate_target("https://example.com:443/path"),
             TargetDecision::Allow
         );
     }
 
     #[test]
     fn display_target_mismatch_requires_confirmation() {
-        let policy = ExternalTargetPolicy::default();
         assert_eq!(
-            policy.validate_with_display("https://evil.com/steal", Some("https://google.com")),
+            validate_target_with_display("https://evil.com/steal", Some("https://google.com")),
             TargetDecision::Confirm(ConfirmReason::DisplayTargetMismatch)
         );
     }
 
     #[test]
     fn display_matches_target_allowed() {
-        let policy = ExternalTargetPolicy::default();
         assert_eq!(
-            policy.validate_with_display("https://example.com", Some("https://example.com")),
+            validate_target_with_display("https://example.com", Some("https://example.com")),
             TargetDecision::Allow
         );
     }
@@ -529,13 +487,12 @@ mod tests {
                 "{display:?} vs {target:?}"
             );
         }
-        let policy = ExternalTargetPolicy::default();
         assert_eq!(
-            policy.validate_with_display("https://example.com/x", Some("click here")),
+            validate_target_with_display("https://example.com/x", Some("click here")),
             TargetDecision::Allow
         );
         assert_eq!(
-            policy.validate_with_display("https://evil.com/login", Some("good.com/login")),
+            validate_target_with_display("https://evil.com/login", Some("good.com/login")),
             TargetDecision::Confirm(ConfirmReason::DisplayTargetMismatch)
         );
     }
@@ -543,14 +500,13 @@ mod tests {
     /// CORR-45: an IPv6 host without a port is not a non-default port.
     #[test]
     fn ipv6_host_port_detection() {
-        let policy = ExternalTargetPolicy::default();
-        assert_eq!(policy.validate("https://[::1]/"), TargetDecision::Allow);
+        assert_eq!(validate_target("https://[::1]/"), TargetDecision::Allow);
         assert_eq!(
-            policy.validate("https://[2001:db8::1]:443/path"),
+            validate_target("https://[2001:db8::1]:443/path"),
             TargetDecision::Allow
         );
         assert_eq!(
-            policy.validate("https://[::1]:8443/"),
+            validate_target("https://[::1]:8443/"),
             TargetDecision::Confirm(ConfirmReason::NonDefaultPort)
         );
     }
@@ -558,7 +514,6 @@ mod tests {
     /// SEC-07: newline, carriage return, tab and BiDi isolates are rejected.
     #[test]
     fn line_breaks_tabs_and_bidi_isolates_denied() {
-        let policy = ExternalTargetPolicy::default();
         for url in [
             "https://example.com/a\nb",
             "https://example.com/a\rb",
@@ -567,7 +522,7 @@ mod tests {
             "https://example.com/\u{7f}",
         ] {
             assert_eq!(
-                policy.validate(url),
+                validate_target(url),
                 TargetDecision::Deny(DenyReason::ControlCharacters),
                 "{url:?}"
             );
@@ -576,19 +531,17 @@ mod tests {
 
     #[test]
     fn invalid_url_denied() {
-        let policy = ExternalTargetPolicy::default();
         // No scheme.
         assert_eq!(
-            policy.validate("not a url"),
+            validate_target("not a url"),
             TargetDecision::Deny(DenyReason::InvalidUrl("not a url".to_string()))
         );
     }
 
     #[test]
     fn rtl_override_denied() {
-        let policy = ExternalTargetPolicy::default();
         assert_eq!(
-            policy.validate("https://example.com/\u{202e}evil"),
+            validate_target("https://example.com/\u{202e}evil"),
             TargetDecision::Deny(DenyReason::ControlCharacters)
         );
     }
@@ -596,17 +549,15 @@ mod tests {
     #[test]
     fn valid_wrapped_https_allowed() {
         // A long valid HTTPS URL that wraps across terminal lines.
-        let policy = ExternalTargetPolicy::default();
         let url = "https://example.com/very/long/path/that/wraps/across/terminal/lines?q=1&r=2";
-        assert_eq!(policy.validate(url), TargetDecision::Allow);
+        assert_eq!(validate_target(url), TargetDecision::Allow);
     }
 
     #[test]
     fn www_url_prepend_https() {
         // The UI prepends https:// to www. URLs before calling validate.
-        let policy = ExternalTargetPolicy::default();
         assert_eq!(
-            policy.validate("https://www.google.com"),
+            validate_target("https://www.google.com"),
             TargetDecision::Allow
         );
     }

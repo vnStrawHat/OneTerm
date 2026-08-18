@@ -31,7 +31,7 @@ impl SemanticOverlay {
     pub fn new(profile: ShellProfile, enabled: bool) -> Self {
         Self {
             profile,
-            row_roles: RowRoles::empty(),
+            row_roles: RowRoles::default(),
             enabled,
         }
     }
@@ -64,7 +64,7 @@ impl SemanticOverlay {
             return vec![Class::Default as u8; line.chars().count()];
         }
         let rules = RuleSet::global();
-        let role = if self.row_roles.is_present() {
+        let role = if !self.row_roles.role.is_empty() {
             self.row_roles.role_at(display_row)
         } else {
             RowRole::Output

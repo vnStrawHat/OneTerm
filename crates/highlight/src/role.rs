@@ -47,11 +47,6 @@ pub struct RowRoles {
 }
 
 impl RowRoles {
-    /// Create an empty `RowRoles` (no shell integration — all rows are `Output`).
-    pub fn empty() -> Self {
-        Self::default()
-    }
-
     /// Create a `RowRoles` with all rows set to `Output` and no exit codes.
     pub fn new_output(num_rows: usize) -> Self {
         Self {
@@ -69,11 +64,6 @@ impl RowRoles {
     pub fn exit_code_at(&self, row: usize) -> Option<i32> {
         self.exit_code.get(row).copied().flatten()
     }
-
-    /// Whether any shell-integration data is present (non-empty role array).
-    pub fn is_present(&self) -> bool {
-        !self.role.is_empty()
-    }
 }
 
 #[cfg(test)]
@@ -82,13 +72,13 @@ mod tests {
 
     #[test]
     fn empty_is_absent() {
-        assert!(!RowRoles::empty().is_present());
+        assert!(RowRoles::default().role.is_empty());
     }
 
     #[test]
     fn new_output_all_output() {
         let r = RowRoles::new_output(5);
-        assert!(r.is_present());
+        assert!(!r.role.is_empty());
         for i in 0..5 {
             assert_eq!(r.role_at(i), RowRole::Output);
             assert_eq!(r.exit_code_at(i), None);

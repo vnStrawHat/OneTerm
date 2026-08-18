@@ -15,7 +15,7 @@
 //! Reference: alacritty `alacritty/src/event.rs` `TerminalEvent::ColorRequest`
 //! handling + `alacritty_terminal/src/term/color.rs` (`Colors`, index layout).
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use alacritty_terminal::vte::ansi::Rgb;
 
@@ -39,15 +39,6 @@ pub struct PendingColorQuery {
     pub index: usize,
     /// Formats the reply escape sequence for a resolved color.
     pub format: ColorFormatter,
-}
-
-/// Thread-safe queue of pending color queries shared between the `EventListener`
-/// (enqueues) and the backend read loop (drains + replies).
-pub type SharedColorQueries = Arc<Mutex<Vec<PendingColorQuery>>>;
-
-/// Create an empty shared color-query queue.
-pub fn new_color_queries() -> SharedColorQueries {
-    Arc::new(Mutex::new(Vec::new()))
 }
 
 /// Dynamic (OSC-set) colors read from the live `Term` color table for

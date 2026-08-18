@@ -45,12 +45,6 @@ pub struct CompletionParams {
     pub suggest_on_empty: bool,
     /// Redaction guard at suggestion time (defense in depth, docs 08 §5).
     pub redact_sensitive: bool,
-
-    // ── ranking weights (not user-exposed in Phase 1) ─────────────────────
-    pub w_kind: f32,
-    pub w_frec: f32,
-    pub w_prefix: f32,
-    pub w_len: f32,
 }
 
 impl Default for CompletionParams {
@@ -65,10 +59,6 @@ impl Default for CompletionParams {
             allow_fuzzy_accept: false,
             suggest_on_empty: false,
             redact_sensitive: true,
-            w_kind: 10.0,
-            w_frec: 6.0,
-            w_prefix: 4.0,
-            w_len: 1.0,
         }
     }
 }

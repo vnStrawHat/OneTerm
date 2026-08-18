@@ -12,7 +12,7 @@ use alacritty_terminal::vte::ansi::Rgb;
 
 use crate::security_policy::ClipboardOrigin;
 use crate::session::SessionEvent;
-use crate::test_support::{FakePtyTransport, FakeTransport};
+use crate::test_support::FakePtyTransport;
 
 use super::*;
 
@@ -21,23 +21,25 @@ type Router = OscRouter<FakePtyTransport>;
 struct Fixture {
     router: Router,
     transport: FakePtyTransport,
-    events: FakeTransport<SessionEvent>,
+    events_tx: async_channel::Sender<SessionEvent>,
+    events: async_channel::Receiver<SessionEvent>,
     state: SharedState,
 }
 
 fn fixture(origin: ClipboardOrigin, capacity: usize) -> Fixture {
-    let events = FakeTransport::bounded(capacity);
+    let (events_tx, events) = async_channel::bounded(capacity);
     let transport = FakePtyTransport::new();
     let state = SharedSessionState::new_alive();
     let router = OscRouter::new(
         transport.clone(),
-        SessionEventSink::new(events.sender()),
+        SessionEventSink::new(events_tx.clone()),
         state.clone(),
         origin,
     );
     Fixture {
         router,
         transport,
+        events_tx,
         events,
         state,
     }
@@ -58,12 +60,12 @@ fn new_term(router: &Router) -> Arc<FairMutex<Term<Router>>> {
     )))
 }
 
-fn drain(events: &FakeTransport<SessionEvent>) -> Vec<SessionEvent> {
+fn drain(events: &async_channel::Receiver<SessionEvent>) -> Vec<SessionEvent> {
     std::iter::from_fn(|| events.try_recv().ok()).collect()
 }
 
 /// Poll a bounded transport until an item arrives or `timeout` elapses.
-fn recv_within(events: &FakeTransport<SessionEvent>, timeout: Duration) -> SessionEvent {
+fn recv_within(events: &async_channel::Receiver<SessionEvent>, timeout: Duration) -> SessionEvent {
     let deadline = std::time::Instant::now() + timeout;
     loop {
         if let Ok(event) = events.try_recv() {
@@ -201,12 +203,8 @@ fn osc7_cwd_forwards_and_caches() {
         drain(&f.events),
         vec![SessionEvent::Cwd(std::path::PathBuf::from("/tmp"))]
     );
+    // The shared state is what `TerminalCapabilities::cwd_source` hands out.
     assert_eq!(f.state.cwd().as_deref(), Some(std::path::Path::new("/tmp")));
-    let source = SharedStateCwdSource::new(f.state.clone());
-    assert_eq!(
-        crate::session::CwdSource::cwd(&source).as_deref(),
-        Some(std::path::Path::new("/tmp"))
-    );
 }
 
 #[test]
@@ -283,7 +281,7 @@ fn osc97_dedup_drops_stale_seq() {
 #[test]
 fn coalescible_repaint_events_are_counted_when_saturated() {
     let f = local(1);
-    f.events.try_send(SessionEvent::Output).unwrap();
+    f.events_tx.try_send(SessionEvent::Output).unwrap();
 
     f.router.forward(SessionEvent::Output);
 
@@ -303,7 +301,7 @@ fn coalescible_repaint_events_are_counted_when_saturated() {
 fn reliable_events_do_not_block_while_term_lock_is_held() {
     let f = local(1);
     let term = new_term(&f.router);
-    f.events.try_send(SessionEvent::Output).unwrap();
+    f.events_tx.try_send(SessionEvent::Output).unwrap();
     let (finished_tx, finished_rx) = std::sync::mpsc::sync_channel(1);
 
     let pump = {
@@ -335,7 +333,7 @@ fn reliable_events_do_not_block_while_term_lock_is_held() {
 #[test]
 fn deferred_events_flush_in_order_once_the_queue_drains() {
     let f = local(1);
-    f.events.try_send(SessionEvent::Output).unwrap();
+    f.events_tx.try_send(SessionEvent::Output).unwrap();
     f.router.forward(SessionEvent::Bell);
     f.router.forward(SessionEvent::Title("t".into()));
     assert!(f.router.events().has_deferred_reliable());
@@ -373,8 +371,8 @@ fn deferred_events_flush_in_order_once_the_queue_drains() {
 #[test]
 fn deferred_events_keep_fifo_order() {
     let f = local(2);
-    f.events.try_send(SessionEvent::Output).unwrap();
-    f.events.try_send(SessionEvent::Output).unwrap();
+    f.events_tx.try_send(SessionEvent::Output).unwrap();
+    f.events_tx.try_send(SessionEvent::Output).unwrap();
     f.router.forward(SessionEvent::Bell);
     assert_eq!(f.events.try_recv().unwrap(), SessionEvent::Output);
     assert_eq!(f.events.try_recv().unwrap(), SessionEvent::Output);
@@ -392,7 +390,7 @@ fn deferred_events_keep_fifo_order() {
 #[test]
 fn async_flush_delivers_deferred_events() {
     let f = local(1);
-    f.events.try_send(SessionEvent::Output).unwrap();
+    f.events_tx.try_send(SessionEvent::Output).unwrap();
     f.router.forward(SessionEvent::Bell);
     assert!(f.router.events().has_deferred_reliable());
     assert_eq!(f.events.try_recv().unwrap(), SessionEvent::Output);
@@ -570,7 +568,7 @@ fn pump_publish_exit_and_closed_flush_deferred_first() {
     let term = new_term(&f.router);
     let mut pump = TerminalPump::new(f.router.clone());
     // Saturate the queue so the Bell from the batch is deferred.
-    f.events.try_send(SessionEvent::Output).unwrap();
+    f.events_tx.try_send(SessionEvent::Output).unwrap();
     pump.process_chunk(&term, b"\x07");
     assert!(f.router.events().has_deferred_reliable());
 

@@ -5,7 +5,6 @@
 //! trait. The terminal engine (`TerminalSession` + alacritty coupling) lives in
 //! the separate `oneterm-terminal` crate.
 
-pub mod best_effort;
 pub mod config;
 pub mod error;
 pub mod persistence;
@@ -14,7 +13,6 @@ pub mod session_duplicate;
 pub mod sftp;
 pub mod ssh_config;
 
-pub use best_effort::report_best_effort;
 pub use config::{DockPlacement, LocalShellConfig, RightDockMode, ShellKind, config_dir, home_dir};
 pub use error::{AppError, ConnectPhase, SftpStatus};
 pub use persistence::{atomic_write, quarantine_file, update_json_file};
@@ -32,3 +30,30 @@ pub use ssh_config::{
 
 /// Shared result type for the `core` crate.
 pub type Result<T> = std::result::Result<T, AppError>;
+
+/// Log (at `warn`) and discard the failure of a best-effort `operation`.
+///
+/// `docs/agents/error-policy.md` forbids a bare `let _ =` on a runtime
+/// operation: when a failure is deliberately tolerated (cleanup of
+/// temporaries, closing an already-closed channel, notifying a consumer that
+/// may have gone away), the operation name and the error must still reach the
+/// log so the failure can be diagnosed without reproducing the action.
+pub fn report_best_effort<T, E: std::fmt::Display>(
+    operation: &str,
+    result: std::result::Result<T, E>,
+) {
+    if let Err(error) = result {
+        log::warn!("{operation}: best-effort operation failed: {error}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::report_best_effort;
+
+    #[test]
+    fn best_effort_accepts_any_result_shape() {
+        report_best_effort("unit test ok", Ok::<u8, String>(1));
+        report_best_effort("unit test err", Err::<(), _>("boom"));
+    }
+}

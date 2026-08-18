@@ -21,7 +21,7 @@ use crate::osc_color::{ColorFormatter, PendingColorQuery};
 use crate::security_policy::{ClipboardOrigin, NotificationRateLimiter, TerminalSecurityPolicy};
 use crate::session::SessionEvent;
 
-use super::{ColorQueryReplier, PtyTransport, SessionEventSink, SharedState};
+use super::{PtyTransport, SessionEventSink, SharedState};
 
 /// Engine-event router for one session (see module docs).
 #[derive(Clone)]
@@ -29,7 +29,7 @@ pub struct OscRouter<T: PtyTransport> {
     transport: T,
     events: SessionEventSink,
     state: SharedState,
-    color_queries: ColorQueryReplier,
+    color_queries: Arc<Mutex<Vec<PendingColorQuery>>>,
     security: TerminalSecurityPolicy,
     clipboard_origin: ClipboardOrigin,
     notification_limiter: Arc<Mutex<NotificationRateLimiter>>,
@@ -65,7 +65,7 @@ impl<T: PtyTransport> OscRouter<T> {
             transport,
             events,
             state,
-            color_queries: ColorQueryReplier::new(),
+            color_queries: Arc::default(),
             security,
             clipboard_origin,
             notification_limiter: Arc::new(Mutex::new(NotificationRateLimiter::default())),
@@ -87,9 +87,9 @@ impl<T: PtyTransport> OscRouter<T> {
         &self.state
     }
 
-    /// The pending colour-query queue.
-    pub fn color_queries(&self) -> &ColorQueryReplier {
-        &self.color_queries
+    /// Whether any colour query is waiting for an answer.
+    pub fn has_color_queries(&self) -> bool {
+        !self.lock_color_queries().is_empty()
     }
 
     /// Forward a session event (see [`SessionEventSink::forward`]).
@@ -99,12 +99,19 @@ impl<T: PtyTransport> OscRouter<T> {
 
     /// Enqueue an OSC colour query; the pump answers it after the batch.
     pub fn queue_color_query(&self, index: usize, format: ColorFormatter) {
-        self.color_queries.enqueue(index, format);
+        self.lock_color_queries()
+            .push(PendingColorQuery { index, format });
     }
 
     /// Drain the pending colour queries.
     pub fn take_color_queries(&self) -> Vec<PendingColorQuery> {
-        self.color_queries.take()
+        std::mem::take(&mut *self.lock_color_queries())
+    }
+
+    fn lock_color_queries(&self) -> std::sync::MutexGuard<'_, Vec<PendingColorQuery>> {
+        self.color_queries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     fn set_title(&self, title: &str) {
@@ -161,7 +168,7 @@ impl<T: PtyTransport> OscRouter<T> {
                     .notification_limiter
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
-                    .allow(&self.security);
+                    .allow();
                 if allowed {
                     self.forward(SessionEvent::Notification(sanitized));
                 } else {

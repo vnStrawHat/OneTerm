@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use async_channel::{Sender, TrySendError};
 use log::warn;
 
-use crate::session::{SessionEvent, SessionEventDelivery};
+use crate::session::SessionEvent;
 
 /// Snapshot of event-queue failures (diagnostics and tests).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -75,41 +75,38 @@ impl SessionEventSink {
     /// reliable events are delivered by [`Self::flush_reliable_blocking`] /
     /// [`Self::flush_reliable`], which the pump calls after every parse batch.
     pub fn forward(&self, ev: SessionEvent) {
-        match ev.delivery_policy() {
-            SessionEventDelivery::Coalescible => {
-                if let Err(error) = self.event_tx.try_send(ev) {
-                    self.record_failure(&error);
-                    match error {
-                        TrySendError::Full(_) => {
-                            log::debug!("SessionEventSink: coalesced repaint event");
-                        }
-                        TrySendError::Closed(_) => {
-                            warn!("SessionEventSink: event channel is closed");
-                        }
+        // `Output` is a coalescible repaint hint; every other event is reliable.
+        if matches!(ev, SessionEvent::Output) {
+            if let Err(error) = self.event_tx.try_send(ev) {
+                self.record_failure(&error);
+                match error {
+                    TrySendError::Full(_) => {
+                        log::debug!("SessionEventSink: coalesced repaint event");
+                    }
+                    TrySendError::Closed(_) => {
+                        warn!("SessionEventSink: event channel is closed");
                     }
                 }
             }
-            SessionEventDelivery::Reliable => {
-                let mut deferred = self
-                    .deferred_reliable
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
-                // Keep FIFO order: once something is deferred, everything after
-                // it queues behind it until the next flush.
-                if !deferred.is_empty() {
-                    deferred.push_back(ev);
-                    return;
-                }
-                match self.event_tx.try_send(ev) {
-                    Ok(()) => {}
-                    Err(TrySendError::Full(ev)) => deferred.push_back(ev),
-                    Err(error @ TrySendError::Closed(_)) => {
-                        self.record_failure(&error);
-                        warn!(
-                            "SessionEventSink: reliable event lost because channel is closed: {error:?}"
-                        );
-                    }
-                }
+            return;
+        }
+
+        let mut deferred = self
+            .deferred_reliable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        // Keep FIFO order: once something is deferred, everything after
+        // it queues behind it until the next flush.
+        if !deferred.is_empty() {
+            deferred.push_back(ev);
+            return;
+        }
+        match self.event_tx.try_send(ev) {
+            Ok(()) => {}
+            Err(TrySendError::Full(ev)) => deferred.push_back(ev),
+            Err(error @ TrySendError::Closed(_)) => {
+                self.record_failure(&error);
+                warn!("SessionEventSink: reliable event lost because channel is closed: {error:?}");
             }
         }
     }
@@ -159,14 +156,14 @@ impl SessionEventSink {
     /// reliable event so the transition reaches the UI in order. Call from
     /// the pump only, without the `Term` lock held.
     pub fn forward_lifecycle_blocking(&self, ev: SessionEvent) {
-        debug_assert_eq!(ev.delivery_policy(), SessionEventDelivery::Reliable);
+        debug_assert!(!matches!(ev, SessionEvent::Output));
         self.forward(ev);
         self.flush_reliable_blocking();
     }
 
     /// Async variant of [`Self::forward_lifecycle_blocking`].
     pub async fn forward_lifecycle(&self, ev: SessionEvent) {
-        debug_assert_eq!(ev.delivery_policy(), SessionEventDelivery::Reliable);
+        debug_assert!(!matches!(ev, SessionEvent::Output));
         self.forward(ev);
         self.flush_reliable().await;
     }
