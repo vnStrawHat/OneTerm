@@ -1,7 +1,7 @@
 //! Active SFTP transfer cancellation ownership.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use tokio_util::sync::CancellationToken;
 
@@ -25,6 +25,9 @@ impl ActiveTransferGuard {
 
 impl Drop for ActiveTransferGuard {
     fn drop(&mut self) {
-        self.transfers.lock().unwrap().remove(&self.transfer_id);
+        self.transfers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.transfer_id);
     }
 }

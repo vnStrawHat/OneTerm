@@ -5,6 +5,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use russh_sftp::client::SftpSession as SftpChannel;
 use russh_sftp::protocol::FileAttributes;
+use tokio::io::AsyncReadExt;
 
 use oneterm_core::{FileEntry, RemotePath, Result};
 
@@ -33,30 +34,36 @@ impl UidGidLookup {
     }
 }
 
+/// Maximum bytes read from `/etc/passwd` and `/etc/group` on the remote host.
+/// The server is untrusted; a real file is a few KiB, so anything past this
+/// cap is ignored instead of buffered (SEC-16).
+pub(super) const MAX_ID_DATABASE_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Read at most [`MAX_ID_DATABASE_BYTES`] of a remote file. A longer file is
+/// truncated (its last, possibly partial, line is dropped by the parser).
+async fn read_bounded(sftp: &SftpChannel, path: &str) -> std::io::Result<Vec<u8>> {
+    let file = sftp
+        .open(path)
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let mut data = Vec::new();
+    file.take(MAX_ID_DATABASE_BYTES)
+        .read_to_end(&mut data)
+        .await?;
+    if data.len() as u64 >= MAX_ID_DATABASE_BYTES {
+        log::warn!("sftp_task: {path} exceeds {MAX_ID_DATABASE_BYTES} bytes — remainder ignored");
+    }
+    Ok(data)
+}
+
 /// Read /etc/passwd + /etc/group over SFTP, parse uid→name and gid→name maps.
 /// Best-effort: if unreadable → empty map (numbers shown instead).
 pub(super) async fn load_uid_gid_lookup(sftp: &SftpChannel) -> UidGidLookup {
     let mut lookup = UidGidLookup::default();
 
-    // /etc/passwd: `root:x:0:0:root:/root:/bin/bash`
-    //             field 0 = name, field 2 = uid, field 3 = gid
-    match sftp.read("/etc/passwd").await {
+    match read_bounded(sftp, "/etc/passwd").await {
         Ok(data) => {
-            let text = String::from_utf8_lossy(&data);
-            for line in text.lines() {
-                let fields: Vec<&str> = line.split(':').collect();
-                if fields.len() >= 4 {
-                    if let (Ok(uid), Ok(gid)) = (fields[2].parse::<u32>(), fields[3].parse::<u32>())
-                    {
-                        lookup.uid_to_name.insert(uid, fields[0].to_string());
-                        // passwd also has gid → can be used for group lookup.
-                        lookup
-                            .gid_to_name
-                            .entry(gid)
-                            .or_insert_with(|| fields[0].to_string());
-                    }
-                }
-            }
+            parse_passwd(&String::from_utf8_lossy(&data), &mut lookup);
             log::debug!(
                 "sftp_task: /etc/passwd loaded — {} uids",
                 lookup.uid_to_name.len()
@@ -67,19 +74,9 @@ pub(super) async fn load_uid_gid_lookup(sftp: &SftpChannel) -> UidGidLookup {
         }
     }
 
-    // /etc/group: `root:x:0:`
-    //             field 0 = name, field 2 = gid
-    match sftp.read("/etc/group").await {
+    match read_bounded(sftp, "/etc/group").await {
         Ok(data) => {
-            let text = String::from_utf8_lossy(&data);
-            for line in text.lines() {
-                let fields: Vec<&str> = line.split(':').collect();
-                if fields.len() >= 3 {
-                    if let Ok(gid) = fields[2].parse::<u32>() {
-                        lookup.gid_to_name.insert(gid, fields[0].to_string());
-                    }
-                }
-            }
+            parse_group(&String::from_utf8_lossy(&data), &mut lookup);
             log::debug!(
                 "sftp_task: /etc/group loaded — {} gids",
                 lookup.gid_to_name.len()
@@ -89,6 +86,35 @@ pub(super) async fn load_uid_gid_lookup(sftp: &SftpChannel) -> UidGidLookup {
     }
 
     lookup
+}
+
+/// `/etc/passwd`: `root:x:0:0:root:/root:/bin/bash` — field 0 = name,
+/// field 2 = uid, field 3 = gid (also used as a group-name fallback).
+pub(super) fn parse_passwd(text: &str, lookup: &mut UidGidLookup) {
+    for line in text.lines() {
+        let fields: Vec<&str> = line.split(':').collect();
+        if fields.len() >= 4 {
+            if let (Ok(uid), Ok(gid)) = (fields[2].parse::<u32>(), fields[3].parse::<u32>()) {
+                lookup.uid_to_name.insert(uid, fields[0].to_string());
+                lookup
+                    .gid_to_name
+                    .entry(gid)
+                    .or_insert_with(|| fields[0].to_string());
+            }
+        }
+    }
+}
+
+/// `/etc/group`: `root:x:0:` — field 0 = name, field 2 = gid.
+pub(super) fn parse_group(text: &str, lookup: &mut UidGidLookup) {
+    for line in text.lines() {
+        let fields: Vec<&str> = line.split(':').collect();
+        if fields.len() >= 3 {
+            if let Ok(gid) = fields[2].parse::<u32>() {
+                lookup.gid_to_name.insert(gid, fields[0].to_string());
+            }
+        }
+    }
 }
 
 /// Convert `FileAttributes` (russh-sftp) to a `FileEntry`.

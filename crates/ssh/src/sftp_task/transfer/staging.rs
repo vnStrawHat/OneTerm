@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use russh_sftp::client::SftpSession as SftpChannel;
 
-use oneterm_core::{AppError, Result};
+use oneterm_core::{AppError, Result, report_best_effort};
 
 use crate::sftp_task::map_sftp_err;
 
@@ -61,13 +61,19 @@ pub(super) async fn finalize_remote_file(
     let had_target = match sftp.symlink_metadata(target).await {
         Ok(attributes) => {
             if attributes.is_dir() || attributes.is_symlink() {
-                let _ = sftp.remove_file(temporary).await;
+                report_best_effort(
+                    "sftp upload: remove remote temporary",
+                    sftp.remove_file(temporary).await,
+                );
                 return Err(AppError::msg(
                     "refusing to replace a remote directory or symlink",
                 ));
             }
             if let Err(error) = sftp.rename(target, &backup).await {
-                let _ = sftp.remove_file(temporary).await;
+                report_best_effort(
+                    "sftp upload: remove remote temporary",
+                    sftp.remove_file(temporary).await,
+                );
                 return Err(map_sftp_err(error));
             }
             true
@@ -77,9 +83,15 @@ pub(super) async fn finalize_remote_file(
 
     if let Err(error) = sftp.rename(temporary, target).await {
         if had_target {
-            let _ = sftp.rename(&backup, target).await;
+            report_best_effort(
+                "sftp upload: restore remote backup",
+                sftp.rename(&backup, target).await,
+            );
         }
-        let _ = sftp.remove_file(temporary).await;
+        report_best_effort(
+            "sftp upload: remove remote temporary",
+            sftp.remove_file(temporary).await,
+        );
         return Err(map_sftp_err(error));
     }
 
@@ -99,29 +111,44 @@ pub(in crate::sftp_task) async fn finalize_local_file(
     let had_target = match tokio::fs::symlink_metadata(target).await {
         Ok(metadata) => {
             if !metadata.is_file() || metadata.file_type().is_symlink() {
-                let _ = tokio::fs::remove_file(temporary).await;
+                report_best_effort(
+                    "sftp download: remove local temporary",
+                    tokio::fs::remove_file(temporary).await,
+                );
                 return Err(AppError::msg(
                     "refusing to replace a local directory or symlink",
                 ));
             }
             if let Err(error) = tokio::fs::rename(target, &backup).await {
-                let _ = tokio::fs::remove_file(temporary).await;
+                report_best_effort(
+                    "sftp download: remove local temporary",
+                    tokio::fs::remove_file(temporary).await,
+                );
                 return Err(AppError::msg(format!("backup local target: {error}")));
             }
             true
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
         Err(error) => {
-            let _ = tokio::fs::remove_file(temporary).await;
+            report_best_effort(
+                "sftp download: remove local temporary",
+                tokio::fs::remove_file(temporary).await,
+            );
             return Err(AppError::msg(format!("inspect local target: {error}")));
         }
     };
 
     if let Err(error) = tokio::fs::rename(temporary, target).await {
         if had_target {
-            let _ = tokio::fs::rename(&backup, target).await;
+            report_best_effort(
+                "sftp download: restore local backup",
+                tokio::fs::rename(&backup, target).await,
+            );
         }
-        let _ = tokio::fs::remove_file(temporary).await;
+        report_best_effort(
+            "sftp download: remove local temporary",
+            tokio::fs::remove_file(temporary).await,
+        );
         return Err(AppError::msg(format!("finalize local download: {error}")));
     }
 

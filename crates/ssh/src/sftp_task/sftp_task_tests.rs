@@ -155,10 +155,13 @@ fn local_traversal_stops_before_filesystem_access_when_cancelled() {
     assert!(matches!(error, AppError::Cancelled));
 }
 
+/// CORR-18: the walker parks in `send_blocking` while the channel is full;
+/// cancelling and dropping the consumer (what `stop_traversal` does) wakes it
+/// up with `Cancelled` instead of leaving it spinning or stuck.
 #[test]
 fn local_upload_discovery_cancels_while_channel_is_full() {
     let cancel = CancellationToken::new();
-    let (entries, _receiver) = async_channel::bounded(1);
+    let (entries, receiver) = async_channel::bounded(1);
     entries
         .try_send(LocalUploadEntry::Directory(RemotePath::new("/occupied")))
         .unwrap();
@@ -174,6 +177,7 @@ fn local_upload_discovery_cancels_while_channel_is_full() {
 
     std::thread::sleep(std::time::Duration::from_millis(10));
     cancel.cancel();
+    drop(receiver);
     assert!(matches!(
         traversal.join().unwrap().unwrap_err(),
         AppError::Cancelled
@@ -226,4 +230,43 @@ fn local_upload_discovery_streams_directories_and_files() {
         2
     );
     let _ = std::fs::remove_dir_all(root);
+}
+
+/// SEC-16: the id databases are parsed line by line, so a truncated read
+/// (the last line cut by the size cap) still yields every complete entry.
+#[test]
+fn id_database_parsers_tolerate_truncated_input() {
+    let mut lookup = metadata::UidGidLookup::default();
+    metadata::parse_passwd(
+        "root:x:0:0:root:/root:/bin/bash
+alice:x:1000:1000::/home/alice:/bin/sh
+bob:x:10",
+        &mut lookup,
+    );
+    metadata::parse_group(
+        "wheel:x:10:
+users:x:100:
+trunc:x:1",
+        &mut lookup,
+    );
+    assert_eq!(lookup.uid_to_name.get(&0).map(String::as_str), Some("root"));
+    assert_eq!(
+        lookup.uid_to_name.get(&1000).map(String::as_str),
+        Some("alice")
+    );
+    assert_eq!(lookup.uid_to_name.len(), 2);
+    assert_eq!(
+        lookup.gid_to_name.get(&10).map(String::as_str),
+        Some("wheel")
+    );
+    assert_eq!(
+        lookup.gid_to_name.get(&100).map(String::as_str),
+        Some("users")
+    );
+    // The passwd gid fallback is kept for groups /etc/group did not name.
+    assert_eq!(
+        lookup.gid_to_name.get(&1000).map(String::as_str),
+        Some("alice")
+    );
+    assert!(metadata::MAX_ID_DATABASE_BYTES >= 1024 * 1024);
 }

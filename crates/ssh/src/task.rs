@@ -10,6 +10,7 @@ use alacritty_terminal::term::Term;
 use russh::ChannelMsg;
 use tokio_util::sync::CancellationToken;
 
+use oneterm_core::report_best_effort;
 use oneterm_terminal::TerminalPump;
 
 use crate::handler::SshClientHandler;
@@ -116,7 +117,8 @@ pub(crate) async fn ssh_main_task(
 
     // ── Single teardown block (CORR-11 / ARCH-28) ────────────────────────
     log::info!("ssh_main_task: {reason} — tearing down");
-    let _ = channel.close().await;
+    // The peer may already have closed the channel; that is not a failure.
+    report_best_effort("ssh_main_task: close channel", channel.close().await);
     pump.publish_closed().await;
     sftp_shutdown.cancel();
     log::info!("ssh_main_task: exiting");

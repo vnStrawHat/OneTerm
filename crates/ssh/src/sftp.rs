@@ -1,14 +1,15 @@
-//! SFTP types — commands, events, file entries.
+//! SFTP types — commands and the UI-side session handle.
 //!
-//! Sent between the UI thread (sync) and the tokio task (async) via
-//! `async_channel`. Similar to the `Cmd`/`SessionEvent` pattern in `listener.rs`.
+//! Commands are sent from the UI thread (sync) to the tokio task (async) via
+//! `async_channel`, like the `Cmd` pattern in `transport.rs`.
 //!
 //! `FileEntry` and `RemotePath` are defined in the `core` crate (a leaf
 //! crate that does not depend on `ssh`). The `SftpBackend` trait is also in
 //! `core`. `SftpSession` implements `SftpBackend` here.
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_channel::Sender;
 use tokio::sync::oneshot;
@@ -79,26 +80,13 @@ pub(crate) enum SftpCmd {
     Close,
 }
 
-// ── SFTP event: tokio task → UI ──────────────────────────────
-
-/// Lifecycle event emitted by the SFTP task (via `async_channel`). No UI
-/// consumer subscribes today — `SftpBackend::alive()` is the observable state
-/// — so the receiver side is dropped after setup.
-#[derive(Debug, Clone)]
-pub(crate) enum SftpEvent {
-    /// SFTP session is ready (after the handshake).
-    Ready,
-    /// SFTP session is closed.
-    Closed,
-}
-
 // ── SftpSession — async UI ↔ Tokio task bridge ───────────────
 
-/// SFTP session — sends commands over a channel, receives events over a channel.
+/// SFTP session — sends commands over a channel to `sftp_task`.
 ///
 /// Similar to the `SshSession` pattern: object-safe futures bridge UI operations
 /// to the Tokio task. `SftpSession` is the handle the UI holds; `sftp_task` runs
-/// in the background within Tokio.
+/// in the background within Tokio and clears `alive` when it exits.
 pub(crate) struct SftpSession {
     /// Stable process-local identity used by per-session UI state.
     id: SftpSessionId,
@@ -106,13 +94,13 @@ pub(crate) struct SftpSession {
     cmd_tx: Sender<SftpCmd>,
     /// Whether SFTP is alive (task still running; cleared when the task exits,
     /// including when the SSH connection ends — ARCH-28).
-    alive: Arc<Mutex<bool>>,
+    alive: Arc<AtomicBool>,
 }
 
 impl SftpSession {
     /// Create an `SftpSession` from the command channel set up for `sftp_task`.
     /// Uses `Arc` to share across multiple panels (terminal + sftp browser).
-    pub(crate) fn new(cmd_tx: Sender<SftpCmd>, alive: Arc<Mutex<bool>>) -> Arc<Self> {
+    pub(crate) fn new(cmd_tx: Sender<SftpCmd>, alive: Arc<AtomicBool>) -> Arc<Self> {
         Arc::new(Self {
             id: SftpSessionId::next(),
             cmd_tx,
@@ -221,7 +209,7 @@ impl SftpBackend for SftpSession {
     }
 
     fn alive(&self) -> bool {
-        *self.alive.lock().unwrap()
+        self.alive.load(Ordering::Acquire)
     }
 }
 
@@ -231,7 +219,7 @@ mod tests {
 
     fn test_session() -> (Arc<SftpSession>, async_channel::Receiver<SftpCmd>) {
         let (cmd_tx, cmd_rx) = async_channel::bounded(1);
-        let session = SftpSession::new(cmd_tx, Arc::new(Mutex::new(true)));
+        let session = SftpSession::new(cmd_tx, Arc::new(AtomicBool::new(true)));
         (session, cmd_rx)
     }
 

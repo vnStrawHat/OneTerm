@@ -4,10 +4,11 @@ use std::path::Path;
 
 use async_channel::Sender;
 use russh_sftp::client::SftpSession as SftpChannel;
+use russh_sftp::protocol::FileAttributes;
 use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
 
-use oneterm_core::{AppError, RemotePath, Result, TransferEvent};
+use oneterm_core::{AppError, RemotePath, Result, TransferEvent, report_best_effort};
 
 use crate::sftp_task::{
     create_safe_parent_dirs, map_sftp_err, safe_local_child, validate_remote_entry_name,
@@ -15,7 +16,10 @@ use crate::sftp_task::{
 
 use super::pipeline::{copy_sequential, copy_striped, read_handles_for};
 use super::staging::{finalize_local_file, temporary_local_sibling};
-use super::{MAX_TRAVERSAL_DEPTH, MAX_TRAVERSAL_ENTRIES, report_cancellation};
+use super::{
+    MAX_TRAVERSAL_DEPTH, MAX_TRAVERSAL_ENTRIES, apply_remote_metadata_to_local,
+    report_cancellation, send_progress,
+};
 
 /// Download a remote file or directory → local with progress reporting.
 ///
@@ -52,30 +56,33 @@ pub(in crate::sftp_task) async fn sftp_download(
             } else {
                 1.0
             };
-            let _ = progress.try_send(TransferEvent::Progress(fraction));
+            send_progress(progress, TransferEvent::Progress(fraction));
         };
-        download_file_contents(sftp, remote_str, total, local, cancel, &mut on_bytes)
+        download_file_contents(sftp, remote_str, &attrs, local, cancel, &mut on_bytes)
             .await
             .map_err(|error| report_cancellation(progress, error))?;
-        let _ = progress.try_send(TransferEvent::Progress(1.0));
+        send_progress(progress, TransferEvent::Progress(1.0));
         Ok(())
     }
 }
 
-/// Copy one remote file (whose size was just read as `total`) to `local`.
+/// Copy one remote file (whose attributes were just read as `source`) to
+/// `local`.
 ///
 /// The bytes land in a temporary sibling first and replace `local` atomically
-/// on success. `on_bytes` receives the running byte count after every chunk.
-/// Files with a known size use striped, pipelined reads; size-less files fall
-/// back to one sequential handle read to EOF.
+/// on success, then the remote permissions/times are applied (SEC-15).
+/// `on_bytes` receives the running byte count after every chunk. Files with a
+/// known size use striped, pipelined reads; size-less files fall back to one
+/// sequential handle read to EOF.
 async fn download_file_contents(
     sftp: &SftpChannel,
     remote_str: &str,
-    total: u64,
+    source: &FileAttributes,
     local: &Path,
     cancel: &CancellationToken,
     on_bytes: &mut impl FnMut(u64),
 ) -> Result<()> {
+    let total = source.size.unwrap_or(0);
     if let Ok(metadata) = tokio::fs::symlink_metadata(local).await {
         if metadata.file_type().is_symlink() {
             return Err(AppError::msg("refusing to overwrite a local symlink"));
@@ -116,13 +123,20 @@ async fn download_file_contents(
     drop(local_file);
 
     if let Err(error) = transfer_result {
-        let _ = tokio::fs::remove_file(&temporary).await;
+        report_best_effort(
+            "sftp download: remove temporary after failed copy",
+            tokio::fs::remove_file(&temporary).await,
+        );
         return Err(error);
     }
     if let Err(error) = finalize_local_file(&temporary, local).await {
-        let _ = tokio::fs::remove_file(&temporary).await;
+        report_best_effort(
+            "sftp download: remove temporary after failed finalize",
+            tokio::fs::remove_file(&temporary).await,
+        );
         return Err(error);
     }
+    apply_remote_metadata_to_local(local, source).await;
     Ok(())
 }
 
@@ -201,6 +215,7 @@ async fn sftp_download_dir(
             }
 
             let file_size = metadata.size.unwrap_or(0);
+            let source: FileAttributes = metadata.clone();
             discovered_files += 1;
             discovered_bytes = discovered_bytes.saturating_add(file_size);
             log::debug!(
@@ -220,13 +235,13 @@ async fn sftp_download_dir(
                 };
                 if candidate > reported_progress {
                     reported_progress = candidate;
-                    let _ = progress.try_send(TransferEvent::Progress(reported_progress));
+                    send_progress(progress, TransferEvent::Progress(reported_progress));
                 }
             };
             download_file_contents(
                 sftp,
                 &remote_child,
-                file_size,
+                &source,
                 &local_child,
                 cancel,
                 &mut on_bytes,
@@ -240,6 +255,6 @@ async fn sftp_download_dir(
         "sftp_download_dir: \"{remote_str}\" → \"{}\" — {discovered_files} files, {discovered_bytes} bytes",
         local_root.display()
     );
-    let _ = progress.try_send(TransferEvent::Progress(1.0));
+    send_progress(progress, TransferEvent::Progress(1.0));
     Ok(())
 }
