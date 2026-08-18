@@ -6,11 +6,11 @@
 
 use std::collections::HashMap;
 
-use gpui::{App, AppContext as _, FocusHandle, Global, KeyBinding, Keystroke};
+use gpui::{App, AppContext as _, FocusHandle, Global, KeyBinding, Keystroke, Subscription};
 
 use oneterm_settings::UiConfig;
 
-use super::key_bindings_actions::BINDABLE_ACTIONS;
+use super::key_bindings_actions::{BINDABLE_ACTIONS, BindableAction};
 
 // ── Global state ─────────────────────────────────────────────────────
 
@@ -23,6 +23,13 @@ pub(crate) struct KeyBindingsState {
     pub(super) capturing: Option<String>,
     /// Focus handle reused by the single capture element.
     pub(super) capture_focus: FocusHandle,
+    /// Why the last captured keystroke was rejected (shown in the capture row
+    /// until the next key press), e.g. a conflict with another action (CORR-55).
+    pub(super) capture_rejection: Option<String>,
+    /// Keystroke interceptor alive while capturing. It runs before gpui's key
+    /// binding dispatch, so the captured key can never trigger an action bound
+    /// in the settings window (CORR-56).
+    pub(super) capture_interceptor: Option<Subscription>,
 }
 
 /// Global wrapper for `Entity<KeyBindingsState>`.
@@ -64,6 +71,8 @@ pub(crate) fn init_state(cx: &mut App) {
         effective,
         capturing: None,
         capture_focus,
+        capture_rejection: None,
+        capture_interceptor: None,
     });
     cx.set_global(KeyBindingsStateGlobal(entity));
 }
@@ -129,6 +138,29 @@ fn overrides_from_effective(effective: &HashMap<String, String>) -> HashMap<Stri
 }
 
 // ── Keystroke helpers ────────────────────────────────────────────────
+
+/// The other action (same key context) already bound to `binding`, if any.
+/// Keystrokes are compared after parsing, so `ctrl-shift-t` and `shift-ctrl-t`
+/// count as the same key (CORR-55).
+pub(super) fn conflicting_action(
+    effective: &HashMap<String, String>,
+    id: &str,
+    binding: &str,
+) -> Option<&'static BindableAction> {
+    let wanted = Keystroke::parse(binding).ok()?;
+    let context = BINDABLE_ACTIONS
+        .iter()
+        .find(|a| a.id == id)
+        .and_then(|a| a.context);
+    BINDABLE_ACTIONS.iter().find(|other| {
+        other.id != id
+            && other.context == context
+            && effective
+                .get(other.id)
+                .and_then(|current| Keystroke::parse(current).ok())
+                .is_some_and(|current| current == wanted)
+    })
+}
 
 /// Convert a captured `Keystroke` into the binding-string format gpui parses
 /// (`ctrl-`, `alt-`, `shift-`, `cmd-`/`win-`/`fn-` prefixes + key). Built manually
@@ -213,6 +245,34 @@ mod tests {
             "escape",
             Modifiers::default()
         )));
+    }
+
+    #[test]
+    fn conflicts_are_detected_within_the_same_context_only() {
+        let (first, second) = {
+            let mut same_context = BINDABLE_ACTIONS.iter().filter(|a| a.context.is_none());
+            (
+                same_context.next().expect("a context-free action"),
+                same_context.next().expect("a second context-free action"),
+            )
+        };
+
+        let mut effective: HashMap<String, String> = HashMap::new();
+        effective.insert(second.id.to_owned(), "ctrl-shift-t".to_owned());
+
+        // Same key, different modifier order, same (empty) context → conflict.
+        let conflict = conflicting_action(&effective, first.id, "shift-ctrl-t");
+        assert_eq!(conflict.map(|a| a.id), Some(second.id));
+        // The action itself is never its own conflict.
+        assert!(conflicting_action(&effective, second.id, "ctrl-shift-t").is_none());
+        // A different key context does not conflict (only checkable once the
+        // registry contains a contextual action).
+        if let Some(contextual) = BINDABLE_ACTIONS.iter().find(|a| a.context.is_some()) {
+            assert!(conflicting_action(&effective, contextual.id, "ctrl-shift-t").is_none());
+        }
+        // Unbound / different keys are free.
+        assert!(conflicting_action(&effective, first.id, "ctrl-shift-y").is_none());
+        assert!(conflicting_action(&effective, first.id, "").is_none());
     }
 
     #[test]

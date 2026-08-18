@@ -6,9 +6,13 @@
 //! at startup by [`apply_key_bindings`].
 //!
 //! Rebinding is "press-to-rebind": clicking **Edit** on a row focuses a capture
-//! element whose next `key_down` becomes the new binding (Escape cancels). This
-//! avoids a free-text keystroke field (which would fire per-keystroke and
-//! round-trip badly with `SettingField`).
+//! element and installs a gpui keystroke interceptor; the next key becomes the
+//! new binding (Escape cancels). Interceptors run before key-binding dispatch,
+//! so a captured key never triggers an action bound in the settings window
+//! (CORR-56). A key already held by another action in the same key context is
+//! rejected with an inline message naming that action (CORR-55). This avoids a
+//! free-text keystroke field (which would fire per-keystroke and round-trip
+//! badly with `SettingField`).
 //!
 //! Replacing a binding cleanly (freeing the old keystroke) requires clearing the
 //! keymap — gpui has no per-binding remove API. [`apply_key_bindings`] snapshots

@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use gpui::{
     AnyElement, App, AppContext as _, Context, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, StatefulInteractiveElement as _, Styled, Window, div,
-    prelude::FluentBuilder, px, rgb,
+    prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, WindowExt as _,
@@ -148,7 +148,7 @@ fn app_identity(cx: &App) -> AnyElement {
                 .child(
                     Icon::new(AppIcon::Terminal)
                         .with_size(px(96.))
-                        .text_color(rgb(0x58c4dc)),
+                        .text_color(oneterm_theme::brand::brand_accent()),
                 )
                 .on_click(|_, _, _| {
                     if crash_trigger_enabled() && register_about_icon_click() {
