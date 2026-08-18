@@ -252,6 +252,8 @@ pub(crate) fn connect_ssh_session(
     let cancellation = cfg.cancellation.clone();
     let duplicate_config = cfg.duplicate_config();
     let factory = AppServices::session_factory(cx);
+    // The user's OSC security policy for this session (SEC-08).
+    let security = oneterm_terminal_view::terminal_security_policy(cx);
 
     if cancellation.is_cancelled() {
         return cancellation;
@@ -269,9 +271,9 @@ pub(crate) fn connect_ssh_session(
         .spawn(cx, async move |cx| {
             let result = cx
                 .background_executor()
-                .spawn(
-                    async move { factory.connect_ssh(cfg, PtySize { rows: 24, cols: 80 }, 10_000) },
-                )
+                .spawn(async move {
+                    factory.connect_ssh(cfg, PtySize { rows: 24, cols: 80 }, 10_000, security)
+                })
                 .await;
             if task_cancellation.is_cancelled() {
                 connecting_for_task.store(false, std::sync::atomic::Ordering::Relaxed);

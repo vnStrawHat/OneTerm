@@ -3,8 +3,8 @@
 //! Reads the live input line from the grid each render, feeds the gpui-free
 //! [`CompletionController`](crate::completion::CompletionController), renders the
 //! cursor-anchored overlay, and handles the navigation/accept keys before they
-//! reach the PTY. History lives in the process-global
-//! `oneterm_state::GlobalCompletionHistory`.
+//! reach the PTY. History is the cross-tab `CompletionHistory` entity the view
+//! receives through its [`TerminalDeps`](super::deps::TerminalDeps).
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -12,9 +12,7 @@ use gpui::{Anchor, App, Context, IntoElement, ParentElement as _, anchored, defe
 
 use alacritty_terminal::term::TermMode;
 use oneterm_core::config::ShellKind;
-use oneterm_settings::TerminalSettings;
-use oneterm_state::GlobalCompletionHistory;
-use oneterm_terminal::TerminalContent;
+use oneterm_terminal::IndexedCell;
 
 use super::LocalTerminalView;
 use crate::completion::{CompletionController, overlay::CompletionOverlay};
@@ -145,14 +143,14 @@ struct CursorCommand {
 }
 
 /// Extract the command-input text on the cursor's row (up to the cursor column),
-/// stripped of the shell prompt prefix.
-fn extract_cursor_command(content: &TerminalContent) -> CursorCommand {
-    let cur = content.cursor.point;
-    let cursor_line = cur.line.0;
-    let cursor_col = cur.column.0;
+/// stripped of the shell prompt prefix. `cells` are the cells of the cursor's
+/// display row (any other rows are ignored); `cursor` is the cursor's grid
+/// `(line, column)` as reported by `TerminalQueryState`.
+fn extract_cursor_command(cells: &[IndexedCell], cursor: (i32, usize)) -> CursorCommand {
+    let (cursor_line, cursor_col) = cursor;
 
     let mut row: Vec<char> = Vec::new();
-    for ic in &content.cells {
+    for ic in cells {
         if ic.point.line.0 != cursor_line {
             continue;
         }
@@ -166,10 +164,9 @@ fn extract_cursor_command(content: &TerminalContent) -> CursorCommand {
         row[c] = ic.cell.c;
     }
     let row_str: String = row.into_iter().collect();
-    let (command, found, strip_cols) = strip_prompt(&row_str);
+    let (command, found) = strip_prompt(&row_str);
     // The cursor column relative to the grid stays `cursor_col`; the token-start
     // anchor is computed by the caller from `typed_len`.
-    let _ = strip_cols;
     CursorCommand {
         line: command,
         prompt_found: found,
@@ -178,10 +175,10 @@ fn extract_cursor_command(content: &TerminalContent) -> CursorCommand {
 }
 
 /// Strip a shell prompt prefix from a row. Returns `(command_after_prompt,
-/// found, prompt_end_col)`. Best-effort: matches the first `>` (cmd/PowerShell)
-/// or `$`/`#`/`❯`/`➜`/`λ` sign followed by a space (POSIX), skipping trailing
+/// found)`. Best-effort: matches the first `>` (cmd/PowerShell) or
+/// `$`/`#`/`❯`/`➜`/`λ` sign followed by a space (POSIX), skipping trailing
 /// prompt spaces.
-fn strip_prompt(row: &str) -> (String, bool, usize) {
+fn strip_prompt(row: &str) -> (String, bool) {
     let chars: Vec<char> = row.chars().collect();
     for (i, &ch) in chars.iter().enumerate() {
         let is_sign = ch == '>'
@@ -193,19 +190,32 @@ fn strip_prompt(row: &str) -> (String, bool, usize) {
                 j += 1;
             }
             let command: String = chars[j..].iter().collect();
-            return (command, true, j);
+            return (command, true);
         }
     }
-    (row.trim_start().to_string(), false, 0)
+    (row.trim_start().to_string(), false)
 }
 
 impl LocalTerminalView {
+    /// Read the cursor's row from the grid (O(cols) under the lock — PERF-06:
+    /// no full-grid clone) together with the cursor position, in the shape
+    /// [`extract_cursor_command`] expects.
+    fn cursor_row(&self, cx: &App) -> CursorCommand {
+        let session = self.session.read(cx);
+        let query = session.query_state();
+        // `query_line_range_cells` addresses display rows; the cursor's grid
+        // line is offset by the scroll position.
+        let display_row = (query.cursor_line + query.display_offset as i32).max(0) as usize;
+        let (cells, _) = session.query_line_range_cells(display_row, 1);
+        extract_cursor_command(&cells, (query.cursor_line, query.cursor_col))
+    }
+
     /// Lazily create the completion controller (needs `cx` for settings + kind).
     fn ensure_completion(&mut self, cx: &App) {
         if self.completion.controller.is_some() {
             return;
         }
-        let settings_entity = TerminalSettings::global(cx);
+        let settings_entity = self.deps.settings.clone();
         let settings = settings_entity.read(cx);
         let kind = if self.session.read(cx).is_local() {
             settings.shell.kind
@@ -227,24 +237,20 @@ impl LocalTerminalView {
     pub(crate) fn update_completion(&mut self, cx: &mut Context<Self>) {
         self.ensure_completion(cx);
 
-        // Read settings + shell kind (immutable borrows).
-        let settings_entity = TerminalSettings::global(cx);
-        let (kind, settings_snapshot) = {
-            let s = settings_entity.read(cx);
+        // Sync settings + master-enable gate. The settings are borrowed for
+        // the sync — no per-frame clone of `CompletionSettings` (PERF-05).
+        {
+            let settings_entity = self.deps.settings.clone();
+            let settings = settings_entity.read(cx);
             let kind = if self.session.read(cx).is_local() {
-                s.shell.kind
+                settings.shell.kind
             } else {
                 ShellKind::Bash
             };
-            (kind, s.completion.clone())
-        };
-
-        // Sync settings + master-enable gate.
-        {
             let Some(c) = self.completion.controller.as_mut() else {
                 return;
             };
-            c.sync_settings(kind, &settings_snapshot);
+            c.sync_settings(kind, &settings.completion);
             if !c.enabled() {
                 self.completion.dismiss();
                 return;
@@ -285,19 +291,16 @@ impl LocalTerminalView {
         self.completion.last_cursor = Some(cursor_pos);
 
         // At a prompt on the primary screen: read the input line from the grid.
-        let content = self.session.read(cx).snapshot_query();
         let CursorCommand {
             line,
             prompt_found,
             anchor,
-        } = extract_cursor_command(&content);
+        } = self.cursor_row(cx);
 
-        let history_entity = match GlobalCompletionHistory::try_global(cx) {
+        let history_entity = match self.deps.completion_history.clone() {
             Some(h) => h,
             None => {
-                log::warn!(
-                    "completion: GlobalCompletionHistory not initialized — completion disabled"
-                );
+                log::warn!("completion: history not initialized — completion disabled");
                 self.completion.anchor = None;
                 return;
             }
@@ -334,13 +337,12 @@ impl LocalTerminalView {
         if query.mode.contains(TermMode::ALT_SCREEN) {
             return;
         }
-        let content = self.session.read(cx).snapshot_query();
         let CursorCommand {
             line,
             prompt_found,
             anchor,
-        } = extract_cursor_command(&content);
-        let Some(history_entity) = GlobalCompletionHistory::try_global(cx) else {
+        } = self.cursor_row(cx);
+        let Some(history_entity) = self.deps.completion_history.clone() else {
             return;
         };
         let now = now_ms();
@@ -364,7 +366,7 @@ impl LocalTerminalView {
     }
 
     /// Build the positioned completion overlay element, if visible.
-    pub(crate) fn completion_overlay_element(&self, cx: &App) -> Option<impl IntoElement> {
+    pub(crate) fn completion_overlay_element(&self) -> Option<impl IntoElement> {
         let c = self.completion.controller.as_ref()?;
         if !c.is_visible() {
             return None;
@@ -408,7 +410,6 @@ impl LocalTerminalView {
 
         let overlay =
             CompletionOverlay::new(slice, local_selected, None, hidden_above, hidden_below);
-        let _ = cx;
         Some(
             deferred(
                 anchored()
@@ -492,12 +493,11 @@ impl LocalTerminalView {
     /// Capture the current input line into history when a command runs (Enter
     /// with no active selection). Called from the keyboard handler.
     pub(crate) fn completion_capture_current(&mut self, cx: &mut Context<Self>) {
-        let content = self.session.read(cx).snapshot_query();
-        let CursorCommand { line, .. } = extract_cursor_command(&content);
+        let CursorCommand { line, .. } = self.cursor_row(cx);
         if line.trim().is_empty() {
             return;
         }
-        let Some(history_entity) = GlobalCompletionHistory::try_global(cx) else {
+        let Some(history_entity) = self.deps.completion_history.clone() else {
             return;
         };
         let now = now_ms();
@@ -566,28 +566,28 @@ mod tests {
 
     #[test]
     fn strip_cmd_prompt() {
-        let (cmd, found, _) = strip_prompt(r"C:\Users\Trung>d");
+        let (cmd, found) = strip_prompt(r"C:\Users\Trung>d");
         assert!(found);
         assert_eq!(cmd, "d");
     }
 
     #[test]
     fn strip_unix_prompt() {
-        let (cmd, found, _) = strip_prompt("trung@pc:~/proj$ git c");
+        let (cmd, found) = strip_prompt("trung@pc:~/proj$ git c");
         assert!(found);
         assert_eq!(cmd, "git c");
     }
 
     #[test]
     fn no_prompt_falls_back_to_row() {
-        let (cmd, found, _) = strip_prompt("just some text");
+        let (cmd, found) = strip_prompt("just some text");
         assert!(!found);
         assert_eq!(cmd, "just some text");
     }
 
     #[test]
     fn powershell_prompt() {
-        let (cmd, found, _) = strip_prompt(r"PS C:\Users\Trung> Get-Ch");
+        let (cmd, found) = strip_prompt(r"PS C:\Users\Trung> Get-Ch");
         assert!(found);
         assert_eq!(cmd, "Get-Ch");
     }

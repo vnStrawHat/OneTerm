@@ -43,6 +43,7 @@ fn assert_settings_eq(actual: &TerminalSettings, expected: &TerminalSettings) {
     assert_eq!(actual.semantic_highlighting, expected.semantic_highlighting);
     assert_eq!(actual.tab_title_mode, expected.tab_title_mode);
     assert_eq!(actual.show_context_menu, expected.show_context_menu);
+    assert_eq!(actual.copy_on_select, expected.copy_on_select);
     assert_eq!(actual.scroll_multiplier, expected.scroll_multiplier);
     assert_eq!(actual.alternate_scroll, expected.alternate_scroll);
     assert_eq!(actual.scrollback_history, expected.scrollback_history);
@@ -80,6 +81,7 @@ fn non_default_settings() -> TerminalSettings {
     s.alternate_scroll = false;
     s.scrollback_history = 1234;
     s.show_context_menu = false;
+    s.copy_on_select = false;
     s.bell_enabled = false;
     s.allow_clipboard_read = true;
     s.completion.enabled = false;

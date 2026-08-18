@@ -55,7 +55,7 @@ mod tests {
             line_number_fg: Hsla::white(),
             search_match: gpui::hsla(0.13, 0.85, 0.5, 0.35),
             search_active: gpui::hsla(0.13, 0.9, 0.55, 0.7),
-            class_styles: oneterm_highlight::ClassStyles::default(),
+            class_styles: crate::highlight::load_default_styles(),
         };
         let h = resolve_cell_color(&Color::Named(NamedColor::Red), &t);
         let rgba = h.to_rgb();
@@ -76,7 +76,7 @@ mod tests {
             line_number_fg: Hsla::white(),
             search_match: gpui::hsla(0.13, 0.85, 0.5, 0.35),
             search_active: gpui::hsla(0.13, 0.9, 0.55, 0.7),
-            class_styles: oneterm_highlight::ClassStyles::default(),
+            class_styles: crate::highlight::load_default_styles(),
         };
         let h = resolve_cell_color(&Color::Spec(VteRgb { r: 1, g: 2, b: 3 }), &t);
         let rgba = h.to_rgb();

@@ -38,9 +38,10 @@ pub(crate) struct TerminalTheme {
     /// Active search match highlight (the current next/prev target).
     pub search_active: Hsla,
     /// Pre-resolved semantic class styles (Layer 2 — see `highlight`).
-    /// Populated from the default semantic asset; themes without a
-    /// `terminal.semantic` block → all `None` → Layer 2 is a no-op.
-    pub class_styles: ClassStyles,
+    /// Populated from the default semantic asset (parsed once per process);
+    /// themes without a `terminal.semantic` block → all `None` → Layer 2 is a
+    /// no-op.
+    pub class_styles: &'static ClassStyles,
 }
 
 /// Build a `TerminalTheme` from the gpui-component active `Theme`.

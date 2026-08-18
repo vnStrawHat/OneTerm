@@ -10,7 +10,7 @@ use oneterm_terminal::TerminalSession;
 use super::super::element::RenderCache;
 use super::super::view::LocalTerminalView;
 use super::super::view::grid::pixel_to_grid;
-use oneterm_settings::TerminalSettings;
+use super::mouse_mods;
 
 /// Attach the scroll wheel handler.
 pub(crate) fn attach_scroll(
@@ -41,17 +41,13 @@ pub(crate) fn attach_scroll(
                 ScrollDelta::Lines(l) => l.y,
             };
             // Apply scroll_multiplier setting.
-            let multiplier = TerminalSettings::global(cx).read(cx).scroll_multiplier;
+            let multiplier = view.read(cx).deps.settings.read(cx).scroll_multiplier;
             let delta_y = delta_y * multiplier;
             if delta_y.abs() >= 0.001 {
-                let mods = oneterm_terminal::mouse_encode::MouseModifiers {
-                    shift: e.modifiers.shift,
-                    alt: e.modifiers.alt,
-                    ctrl: e.modifiers.control,
-                };
+                let mods = mouse_mods(&e.modifiers);
                 s.update(cx, |s, _| s.wheel(delta_y as f64, row, col, mods));
                 // Re-render + update scrollbar visibility.
-                let _ = view.update(cx, |v, cx| {
+                view.update(cx, |v, cx| {
                     v.scrollbar.mark_scrolled();
                     cx.notify();
                 });

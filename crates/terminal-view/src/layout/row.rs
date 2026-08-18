@@ -8,7 +8,7 @@ use std::mem;
 
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
-use gpui::{Font, FontStyle, FontWeight, Hsla, Pixels, ShapedLine, TextRun, UnderlineStyle};
+use gpui::{Font, FontStyle, FontWeight, Hsla, Pixels, ShapedLine, UnderlineStyle};
 
 use oneterm_highlight::{Class, Decoration};
 use oneterm_terminal::{
@@ -19,7 +19,9 @@ use super::super::box_drawing::block::is_full_width_band;
 use super::super::box_drawing::drawing::{has_box_geometry, is_box_drawing};
 use super::super::highlight::to_gpui_hsla;
 use super::super::theme::{TerminalTheme, ensure_minimum_contrast, resolve_cell_color};
-use super::types::{BatchedTextRun, BoxDrawCell, LayoutPoint, LayoutRect, RowLayout};
+use super::types::{
+    BatchedTextRun, BoxDrawCell, CellTextStyle, LayoutPoint, LayoutRect, RowLayout,
+};
 
 /// Lay out a single display row — build rects + text runs + box draws for the
 /// cells on one line.
@@ -27,7 +29,7 @@ use super::types::{BatchedTextRun, BoxDrawCell, LayoutPoint, LayoutRect, RowLayo
 /// `cell_class` is the per-column semantic class (from the scanner + URL mask).
 /// It replaces the old `url_mask: &[bool]` — `Class::Url` is one variant.
 pub(crate) fn layout_row(
-    line_cells: Vec<&IndexedCell>,
+    line_cells: &[&IndexedCell],
     display_line: i32,
     theme: &TerminalTheme,
     base_font: &Font,
@@ -37,22 +39,21 @@ pub(crate) fn layout_row(
     let mut runs: Vec<BatchedTextRun> = Vec::new();
     let mut box_draws: Vec<BoxDrawCell> = Vec::new();
     let mut current_batch: Option<BatchedTextRun> = None;
+    // Whether the previous laid-out cell carried zero-width (combining)
+    // characters — see the overflow-slot rule below.
     let mut prev_had_extras = false;
     // Reusable scratch buffer for the box-geometry probe — cleared and refilled
     // per cell, but keeps its backing allocation across all cells in this row
     // (no per-cell `Vec` allocation on full-screen block workloads).
     let mut box_probe: Vec<(i32, i32, i32, i32)> = Vec::new();
 
-    for ic in line_cells {
+    for &ic in line_cells {
         let point = ic.point;
         let cell = &ic.cell;
         if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
             continue;
         }
-        if cell.c == ' ' && prev_had_extras {
-            prev_had_extras = false;
-            continue;
-        }
+        let after_extras = prev_had_extras;
         prev_had_extras = matches!(cell.zerowidth(), Some(c) if !c.is_empty());
 
         let lp = LayoutPoint {
@@ -100,7 +101,16 @@ pub(crate) fn layout_row(
             }
         }
 
-        let mut style: TextRun = cell_style(cell, fg, base_font);
+        // A space directly after a cell with combining marks is that glyph's
+        // overflow slot: wide combining sequences (e.g. emoji modifiers)
+        // visually spill into it, so it gets no text run of its own. Its
+        // background rect (above) is still painted, because a non-default bg
+        // on the slot is real content (CORR-51).
+        if cell.c == ' ' && after_extras {
+            continue;
+        }
+
+        let mut style: CellTextStyle = cell_style(cell, fg, base_font);
 
         // ── Apply class decorations (additive) ──
         // Underline for Error/Warn/Url etc. — additive on top of ANSI fg.
@@ -114,10 +124,10 @@ pub(crate) fn layout_row(
 
         // ── Apply class font style (additive OR, never removes) ──
         if class_style.font.bold {
-            style.font.weight = FontWeight::BOLD;
+            style.weight = FontWeight::BOLD;
         }
         if class_style.font.italic {
-            style.font.style = FontStyle::Italic;
+            style.style = FontStyle::Italic;
         }
 
         let zw = cell.zerowidth();
@@ -186,7 +196,7 @@ pub(crate) fn layout_row(
                 if let Some(old) = current_batch.take() {
                     runs.push(old);
                 }
-                let mut nb = BatchedTextRun::new(lp, cell.c, style);
+                let mut nb = BatchedTextRun::new(lp, cell.c, style, base_font);
                 if let Some(cs) = zw {
                     for &c in cs {
                         nb.append_zw(c);
@@ -267,8 +277,10 @@ pub(crate) fn cell_colors(cell: &Cell, theme: &TerminalTheme, class: u8) -> (Hsl
     (fg_h, bg_h)
 }
 
-/// Build a `TextRun` for a cell (bold/italic/underline/strikethrough).
-pub(crate) fn cell_style(cell: &Cell, fg: Hsla, base_font: &Font) -> TextRun {
+/// The text attributes of a cell (bold/italic/underline/strikethrough) on top
+/// of `base_font`. Cheap to build and compare per cell; the `Font` itself is
+/// only built when a run starts ([`CellTextStyle::text_run`]).
+pub(crate) fn cell_style(cell: &Cell, fg: Hsla, base_font: &Font) -> CellTextStyle {
     let underline = (cell.flags.intersects(Flags::ALL_UNDERLINES) || cell.hyperlink().is_some())
         .then(|| UnderlineStyle {
             color: Some(fg),
@@ -292,15 +304,10 @@ pub(crate) fn cell_style(cell: &Cell, fg: Hsla, base_font: &Font) -> TextRun {
     } else {
         FontStyle::Normal
     };
-    TextRun {
-        len: cell.c.len_utf8(),
+    CellTextStyle {
         color: fg,
-        background_color: None,
-        font: Font {
-            weight,
-            style,
-            ..base_font.clone()
-        },
+        weight,
+        style,
         underline,
         strikethrough,
     }
@@ -348,24 +355,29 @@ fn color_hash(c: Color) -> u64 {
 }
 
 impl BatchedTextRun {
-    pub(crate) fn new(start: LayoutPoint, c: char, mut style: gpui::TextRun) -> Self {
+    /// Start a run at `start` with the single cell `c` in `cell_style`; the
+    /// run's `Font` is built here, once, from `base_font`.
+    pub(crate) fn new(
+        start: LayoutPoint,
+        c: char,
+        cell_style: CellTextStyle,
+        base_font: &Font,
+    ) -> Self {
         let text = c.to_string();
-        debug_assert_eq!(style.len, c.len_utf8());
-        let _ = &mut style;
+        let style = cell_style.text_run(base_font, c.len_utf8());
         Self {
             start,
             text,
             cell_count: 1,
+            cell_style,
             style,
         }
     }
 
-    pub(crate) fn can_append(&self, other: &gpui::TextRun) -> bool {
-        self.style.font == other.font
-            && self.style.color == other.color
-            && self.style.background_color == other.background_color
-            && self.style.underline == other.underline
-            && self.style.strikethrough == other.strikethrough
+    /// Whether a cell in `other` can join this run (same colour, weight,
+    /// style, and decorations).
+    pub(crate) fn can_append(&self, other: &CellTextStyle) -> bool {
+        self.cell_style == *other
     }
 
     pub(crate) fn append_char(&mut self, c: char) {
@@ -390,7 +402,9 @@ impl BatchedTextRun {
         cx: &mut gpui::App,
     ) {
         let pos = gpui::point(x, y);
-        let _ = shaped.paint(pos, line_h, gpui::TextAlign::Left, None, window, cx);
+        if let Err(error) = shaped.paint(pos, line_h, gpui::TextAlign::Left, None, window, cx) {
+            log::debug!("text run paint failed: {error}");
+        }
     }
 }
 
@@ -432,7 +446,13 @@ mod tests {
     fn run_texts(cells: &[IndexedCell]) -> Vec<(i32, String, usize)> {
         let theme = build_terminal_theme(&Theme::default());
         let classes = vec![0u8; cells.len()];
-        let layout = layout_row(cells.iter().collect(), 0, &theme, &font(), &classes);
+        let layout = layout_row(
+            &cells.iter().collect::<Vec<_>>(),
+            0,
+            &theme,
+            &font(),
+            &classes,
+        );
         layout
             .runs
             .iter()
@@ -484,6 +504,28 @@ mod tests {
         assert_eq!(runs[1], (2, "x\u{301}".to_string(), 1));
     }
 
+    /// CORR-51: the overflow slot after a combining sequence gets no text run
+    /// but keeps a non-default background.
+    #[test]
+    fn overflow_slot_after_zero_width_keeps_its_background_but_no_run() {
+        let theme = build_terminal_theme(&Theme::default());
+        let mut cells = row("e x");
+        cells[0].cell.push_zerowidth('\u{301}');
+        cells[1].cell.bg = Color::Named(NamedColor::Blue);
+        let classes = vec![0u8; cells.len()];
+        let layout = layout_row(
+            &cells.iter().collect::<Vec<_>>(),
+            0,
+            &theme,
+            &font(),
+            &classes,
+        );
+        let runs: Vec<_> = layout.runs.iter().map(|r| r.start.column).collect();
+        assert_eq!(runs, vec![0, 2], "the slot at column 1 has no run");
+        assert_eq!(layout.rects.len(), 1);
+        assert_eq!(layout.rects[0].point.column, 1);
+    }
+
     #[test]
     fn background_rects_merge_horizontally() {
         let theme = build_terminal_theme(&Theme::default());
@@ -492,7 +534,13 @@ mod tests {
             c.cell.bg = Color::Named(NamedColor::Blue);
         }
         let classes = vec![0u8; cells.len()];
-        let layout = layout_row(cells.iter().collect(), 0, &theme, &font(), &classes);
+        let layout = layout_row(
+            &cells.iter().collect::<Vec<_>>(),
+            0,
+            &theme,
+            &font(),
+            &classes,
+        );
         assert_eq!(layout.rects.len(), 1);
         assert_eq!(layout.rects[0].point.column, 1);
         assert_eq!(layout.rects[0].num_cells, 2);
@@ -503,7 +551,13 @@ mod tests {
         let theme = build_terminal_theme(&Theme::default());
         let cells = row("a███b");
         let classes = vec![0u8; cells.len()];
-        let layout = layout_row(cells.iter().collect(), 0, &theme, &font(), &classes);
+        let layout = layout_row(
+            &cells.iter().collect::<Vec<_>>(),
+            0,
+            &theme,
+            &font(),
+            &classes,
+        );
         // Three identical full blocks become one stretched primitive…
         assert_eq!(layout.box_draws.len(), 1);
         assert_eq!(layout.box_draws[0].point.column, 1);

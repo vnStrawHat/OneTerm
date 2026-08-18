@@ -12,15 +12,16 @@ use gpui_component::notification::NotificationType;
 use gpui_component::resizable::ResizableState;
 
 use oneterm_core::SessionDuplicateConfig;
-use oneterm_settings::TerminalSettings;
 use oneterm_state::notif_ext::notify;
 use oneterm_state::{AppServices, AppState};
-use oneterm_terminal::{PtySize, TerminalSession};
+use oneterm_terminal::TerminalSession;
 
+use super::super::security::security_policy_from_settings;
 use super::super::space::{
     CloseOutcome, DragTerminalTab, SpaceContent, SpaceId, SpaceLeaf, SplitDir,
 };
 use super::super::view::LocalTerminalView;
+use super::terminal_panel::INITIAL_PTY_SIZE;
 use super::{PanelSpec, TerminalPanel};
 
 /// User-facing message when a duplicate's destination disappeared before the
@@ -117,10 +118,16 @@ impl TerminalPanel {
             SessionDuplicateConfig::Local(config) => {
                 let config = apply_duplicate_cwd(config, live_cwd);
                 let factory = AppServices::session_factory(cx);
-                let scrollback = TerminalSettings::global(cx).read(cx).scrollback_history;
+                let (scrollback, security) = {
+                    let settings = self.deps.settings.read(cx);
+                    (
+                        settings.scrollback_history,
+                        security_policy_from_settings(settings),
+                    )
+                };
                 let duplicate_config = SessionDuplicateConfig::Local(config.clone());
                 let session =
-                    match factory.spawn_local(config, PtySize { rows: 24, cols: 80 }, scrollback) {
+                    match factory.spawn_local(config, INITIAL_PTY_SIZE, scrollback, security) {
                         Ok(session) => session,
                         Err(error) => {
                             window.push_notification(
@@ -245,8 +252,9 @@ impl TerminalPanel {
         };
 
         let session = cx.new(|_| session);
+        let deps = self.deps.clone();
         let view = cx.new(|cx| {
-            let mut view = LocalTerminalView::new(session, window, cx);
+            let mut view = LocalTerminalView::new(session, deps, window, cx);
             view.duplicate_config = Some(duplicate_config);
             view
         });
@@ -333,7 +341,7 @@ impl TerminalPanel {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let view = match TerminalPanel::spawn_local_view(None, window, cx) {
+        let view = match TerminalPanel::spawn_local_view(&self.deps, None, window, cx) {
             Some(v) => v,
             None => {
                 log::warn!("new_terminal_here: spawn failed");
@@ -368,7 +376,7 @@ impl TerminalPanel {
         }
         if changed {
             if self.is_active {
-                self.publish_active_session(window, cx);
+                self.publish_active_session(cx);
             }
             cx.notify();
         }
@@ -442,7 +450,7 @@ impl TerminalPanel {
 
         // Remove the emptied source tab (only when the source is a different,
         // now-terminal-less panel).
-        if !is_self && src.read(cx).has_no_terminals(cx) {
+        if !is_self && src.read(cx).has_no_terminals() {
             if let Some(tp) = drag.tab_panel.upgrade() {
                 let panel: Arc<dyn PanelView> = Arc::new(src.clone());
                 tp.update(cx, |tp, cx| {
@@ -472,11 +480,7 @@ impl TerminalPanel {
     }
 
     /// Publish the active Space's session into `AppState` (SFTP / cwd / locality).
-    pub(super) fn publish_active_session(
-        &mut self,
-        _window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
+    pub(super) fn publish_active_session(&mut self, cx: &mut gpui::Context<Self>) {
         let (sftp, cwd_source, is_local) = match self.tree.active_terminal() {
             Some(view) => {
                 let session = view.read(cx).session.read(cx);

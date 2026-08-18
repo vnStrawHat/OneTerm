@@ -5,7 +5,11 @@ use std::collections::VecDeque;
 use gpui::{Font, Pixels, SharedString, TextRun, Window, px};
 
 use super::super::layout::GutterEntry;
+use super::super::view::gutter_timestamps::{SecondsOfDay, format_hms};
 use super::measure::snap;
+
+/// Placeholder shown for rows without a known timestamp.
+const NO_TIME: &str = "--:--:--";
 
 /// Number of digits reserved for the line-number column.
 ///
@@ -63,7 +67,7 @@ pub(crate) struct GutterLayout {
 /// number − 1), so it doesn't drift when `total_lines` fluctuates due to ConPTY
 /// repaint/reflow. See [`GutterLayout`] for the index inputs.
 pub(crate) fn compute_gutter_entries(
-    line_times: &VecDeque<String>,
+    line_times: &VecDeque<SecondsOfDay>,
     layout: &GutterLayout,
     bounds_origin: gpui::Point<Pixels>,
     line_height: Pixels,
@@ -86,23 +90,24 @@ pub(crate) fn compute_gutter_entries(
         // `absolute_line_count` fluctuate — we do NOT show `[--:--:--]` but fall back to
         // the most recent known timestamp. `[--:--:--]` is reserved only for the region
         // ABOVE the first line (`abs_index < 0`) or when there is no timestamp yet.
-        let time_str = if abs_index < 0 {
-            "--:--:--"
+        let time = if abs_index < 0 {
+            None
         } else {
             let ai = abs_index as usize;
             if ai >= layout.line_time_base {
                 let j = ai - layout.line_time_base;
                 line_times
                     .get(j)
-                    .map(|s| s.as_str())
                     // Line newer than the stamped region (read skew) → most recent time.
-                    .or_else(|| line_times.back().map(|s| s.as_str()))
-                    .unwrap_or("--:--:--")
+                    .or_else(|| line_times.back())
+                    .copied()
             } else {
                 // Line older than the tracked region → oldest time still stored.
-                line_times.front().map(|s| s.as_str()).unwrap_or("--:--:--")
+                line_times.front().copied()
             }
         };
+        let time_str = time.map(format_hms);
+        let time_str = time_str.as_deref().unwrap_or(NO_TIME);
         let text = format!("[{}] {:>width$}", time_str, line_num, width = num_digits);
         let clock_len = 1 + time_str.len() + 2;
         let y = px(snap(
@@ -126,12 +131,23 @@ mod tests {
 
     use super::{GutterLayout, compute_gutter_entries, gutter_digits};
 
-    fn times(list: &[&str]) -> VecDeque<String> {
-        list.iter().map(|s| s.to_string()).collect()
+    /// Parse `HH:MM:SS` literals into seconds-of-day stamps.
+    fn times(list: &[&str]) -> VecDeque<u32> {
+        list.iter()
+            .map(|s| {
+                let mut parts = s.split(':').map(|p| p.parse::<u32>().unwrap());
+                let (h, m, sec) = (
+                    parts.next().unwrap(),
+                    parts.next().unwrap(),
+                    parts.next().unwrap(),
+                );
+                h * 3600 + m * 60 + sec
+            })
+            .collect()
     }
 
     fn texts(
-        line_times: &VecDeque<String>,
+        line_times: &VecDeque<u32>,
         base: usize,
         absolute: usize,
         offset: usize,

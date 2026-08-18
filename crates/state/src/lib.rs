@@ -29,8 +29,8 @@ pub mod paths;
 pub mod services;
 
 pub use agent_registry::{
-    AgentCard, AgentRegistry, AgentStateCounts, ApprovalInfo, FileEntry, Grouping, Lifecycle,
-    ModelInfo, ToolRun,
+    AgentCard, AgentNav, AgentRegistry, AgentStateCounts, ApprovalInfo, FileEntry, Grouping,
+    Lifecycle, ModelInfo, ToolRun,
 };
 pub use app_state::AppState;
 pub use completion_history::{CompletionHistory, GlobalCompletionHistory};

@@ -4,10 +4,16 @@ use std::collections::HashMap;
 
 use gpui::Hsla;
 
-/// Cache key: (fg l+chroma bits, bg l+chroma bits, min_contrast bits).
-/// Hsla is (h, s, l, a) — we only adjust `l` in `ensure_minimum_contrast`,
-/// and the result depends on the full (h, s, l, a) of both colors + min.
-type ContrastKey = (u64, u64, u32);
+/// Cache key: the full `(h, s, l, a)` bit patterns of both colours plus the
+/// `min_contrast` bits. Each component keeps its own 32-bit slot (CORR-24:
+/// packing four floats into one `u64` at a 16-bit stride let distinct pairs
+/// collide and return the wrong adjusted colour).
+type ContrastKey = ([u32; 4], [u32; 4], u32);
+
+/// Entries kept before the cache is dropped and rebuilt. The working set is
+/// tiny (16 ANSI colours × a few backgrounds), so this only bounds pathological
+/// true-colour output that would otherwise grow the map without limit.
+const CONTRAST_CACHE_MAX_ENTRIES: usize = 4096;
 
 thread_local! {
     /// PERF-10: Cache contrast-adjusted foreground colors. The same (fg, bg,
@@ -18,13 +24,9 @@ thread_local! {
         std::cell::RefCell::new(HashMap::with_capacity(64));
 }
 
-fn hsla_bits(c: Hsla) -> u64 {
-    // Pack h, s, l, a into a u64 key. Using to_bits avoids f32 equality issues.
-    let h = c.h.to_bits() as u64;
-    let s = c.s.to_bits() as u64;
-    let l = c.l.to_bits() as u64;
-    let a = c.a.to_bits() as u64;
-    h | (s << 16) | (l << 32) | (a << 48)
+fn hsla_bits(c: Hsla) -> [u32; 4] {
+    // `to_bits` avoids f32 equality issues (NaN, -0.0) in the key.
+    [c.h.to_bits(), c.s.to_bits(), c.l.to_bits(), c.a.to_bits()]
 }
 
 /// Relative luminance (WCAG) from `Hsla`.
@@ -68,7 +70,11 @@ pub(crate) fn ensure_minimum_contrast(fg: Hsla, bg: Hsla, min: f32) -> Hsla {
 
     let result = ensure_minimum_contrast_uncached(fg, bg, min);
     CONTRAST_CACHE.with(|c| {
-        c.borrow_mut().insert(key, result);
+        let mut cache = c.borrow_mut();
+        if cache.len() >= CONTRAST_CACHE_MAX_ENTRIES {
+            cache.clear();
+        }
+        cache.insert(key, result);
     });
     result
 }
@@ -112,5 +118,38 @@ fn ensure_minimum_contrast_uncached(fg: Hsla, bg: Hsla, min: f32) -> Hsla {
                 down
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::hsla;
+
+    use super::{CONTRAST_CACHE, ensure_minimum_contrast, hsla_bits};
+
+    /// Regression for CORR-24: two colour pairs whose packed 16-bit-stride
+    /// keys used to collide must resolve independently.
+    #[test]
+    fn distinct_pairs_do_not_share_a_cache_entry() {
+        let bg = hsla(0.0, 0.0, 0.5, 1.0);
+        let fg_a = hsla(0.0, 0.0, 0.5, 1.0);
+        let fg_b = hsla(0.55, 0.9, 0.5, 1.0);
+        assert_ne!(hsla_bits(fg_a), hsla_bits(fg_b));
+        let a = ensure_minimum_contrast(fg_a, bg, 4.5);
+        let b = ensure_minimum_contrast(fg_b, bg, 4.5);
+        // Hue is never touched by the adjustment, so a wrong cache hit would
+        // hand back the other colour's hue.
+        assert!((a.h - fg_a.h).abs() < f32::EPSILON);
+        assert!((b.h - fg_b.h).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn cache_is_bounded() {
+        for i in 0..(super::CONTRAST_CACHE_MAX_ENTRIES + 10) {
+            let l = 0.45 + (i as f32) * 1e-6;
+            let _ = ensure_minimum_contrast(hsla(0.0, 0.0, l, 1.0), hsla(0.0, 0.0, 0.5, 1.0), 4.5);
+        }
+        let len = CONTRAST_CACHE.with(|c| c.borrow().len());
+        assert!(len <= super::CONTRAST_CACHE_MAX_ENTRIES);
     }
 }

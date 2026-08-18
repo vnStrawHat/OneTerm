@@ -19,6 +19,10 @@ pub(crate) use mask::url_masks_wrapped;
 pub(crate) struct DetectedUrl {
     /// URL string (may add an `https://` prefix when it is `www.`).
     pub url: String,
+    /// The visible text of an OSC 8 hyperlink (its cells), which may differ
+    /// from `url`; `None` for plain-text URLs, whose text *is* the URL. The
+    /// click handler asks the target policy to confirm mismatches (SEC-03).
+    pub display_text: Option<String>,
     /// Display row (0-based from top of viewport).
     pub row: usize,
     /// Start column (0-based, inclusive).
@@ -26,6 +30,10 @@ pub(crate) struct DetectedUrl {
     /// End column (0-based, exclusive).
     pub end_col: usize,
 }
+
+/// Number of display rows queried on either side of the pointer for URL
+/// detection: enough for a wrapped URL, far cheaper than cloning the grid.
+pub(crate) const URL_WINDOW: usize = 5;
 
 /// URL protocol prefixes recognised in plain-text scanning.
 pub(super) const PREFIXES: &[&[char]] = &[

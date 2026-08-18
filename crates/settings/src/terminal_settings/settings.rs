@@ -147,6 +147,8 @@ pub struct TerminalSettings {
     /// Show OneTerm's context menu on right click.
     /// Disable this to let CLI apps receive right click directly.
     pub show_context_menu: bool,
+    /// Copy the selection to the clipboard when the mouse button is released.
+    pub copy_on_select: bool,
 
     // ── Tab title ──
     /// How the terminal tab title is determined: static label ("Terminal" /

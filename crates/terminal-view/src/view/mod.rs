@@ -6,10 +6,12 @@
 //! - [`search`], [`scrollbar`], [`gutter_timestamps`], [`completion`] — the
 //!   cohesive sub-states the view owns, each with its own methods
 //! - [`grid`], [`key`], [`ime`] — coordinate mapping, key mapping, IME
+//! - [`deps`] — the services the view receives from its panel
 
 mod local_view;
 
 pub(crate) mod completion;
+pub(crate) mod deps;
 pub(crate) mod grid;
 pub(crate) mod gutter_timestamps;
 mod ime;
@@ -20,5 +22,6 @@ pub(crate) mod search;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use deps::TerminalDeps;
 pub(crate) use local_view::{LocalTerminalView, TerminalViewEvent};
 pub(crate) use search::SearchHighlight;

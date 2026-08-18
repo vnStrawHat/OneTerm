@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use alacritty_terminal::selection::SelectionType;
 use oneterm_terminal::mouse_encode::{MouseModifiers, TerminalMouseButton};
-use oneterm_terminal::{TerminalError, TerminalSession};
+use oneterm_terminal::{TerminalError, TerminalSecurityPolicy, TerminalSession};
 
 use crate::session::{LocalSession, quote_windows_argument};
 use oneterm_terminal::PtySize;
@@ -60,7 +60,13 @@ fn snapshot_contains(session: &LocalSession, needle: &str) -> bool {
 
 fn spawn_default() -> LocalSession {
     let cfg = oneterm_core::LocalShellConfig::default();
-    LocalSession::spawn(cfg, PtySize { rows: 24, cols: 80 }, 10_000).expect("spawn")
+    LocalSession::spawn(
+        cfg,
+        PtySize { rows: 24, cols: 80 },
+        10_000,
+        TerminalSecurityPolicy::default(),
+    )
+    .expect("spawn")
 }
 
 #[cfg(windows)]
@@ -69,8 +75,13 @@ fn assert_powershell_prompt_emits_cwd(kind: oneterm_core::ShellKind, label: &str
         kind,
         ..Default::default()
     };
-    let session = LocalSession::spawn(cfg, PtySize { rows: 24, cols: 80 }, 10_000)
-        .unwrap_or_else(|error| panic!("spawn {label}: {error}"));
+    let session = LocalSession::spawn(
+        cfg,
+        PtySize { rows: 24, cols: 80 },
+        10_000,
+        TerminalSecurityPolicy::default(),
+    )
+    .unwrap_or_else(|error| panic!("spawn {label}: {error}"));
 
     let emitted_cwd = wait_until(Duration::from_secs(15), || session.cwd().is_some());
     let snapshot = session

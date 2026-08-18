@@ -5,21 +5,28 @@
 //! default semantic style asset (`assets/highlight/default.json`) into a
 //! `highlight::ClassStyles` that the `TerminalTheme` carries.
 
+use std::sync::LazyLock;
+
 use gpui::Hsla as GpHsla;
 
 use oneterm_highlight::{Class, ClassStyles, Decoration, Hsla, parse_hex};
+
+/// The default semantic style block, parsed from the embedded asset exactly
+/// once per process (PERF-01: it used to be re-parsed on every render).
+static DEFAULT_STYLES: LazyLock<ClassStyles> = LazyLock::new(|| {
+    let json = include_str!("../../assets/highlight/default.json");
+    parse_semantic_json(json)
+});
 
 /// Convert a `highlight::Hsla` → `gpui::Hsla` (same field layout → trivial copy).
 pub fn to_gpui_hsla(c: Hsla) -> GpHsla {
     gpui::hsla(c.h / 360.0, c.s, c.l, c.a)
 }
 
-/// Load the default semantic style block from the embedded asset JSON into a
-/// `ClassStyles`. This is merged under any per-theme overrides (callers apply
-/// overrides on top).
-pub fn load_default_styles() -> ClassStyles {
-    let json = include_str!("../../assets/highlight/default.json");
-    parse_semantic_json(json)
+/// The default semantic style block (embedded asset JSON, parsed once). This
+/// is merged under any per-theme overrides (callers apply overrides on top).
+pub fn load_default_styles() -> &'static ClassStyles {
+    &DEFAULT_STYLES
 }
 
 /// Parse a semantic style JSON block into `ClassStyles`.

@@ -255,7 +255,7 @@ impl CompletionController {
         let Some(selected) = self.selected else {
             return;
         };
-        self.selected = Some((selected + 1).min(self.suggestions.len() - 1));
+        self.selected = Some((selected + 1).min(self.suggestions.len().saturating_sub(1)));
     }
 
     /// Move an existing selection up (clamped). Does nothing before selection.

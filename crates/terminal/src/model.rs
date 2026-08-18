@@ -336,11 +336,16 @@ impl<EP: EventListener> TerminalModel<EP> {
         let lines = (delta_y.abs().ceil() as i32).clamp(1, 10);
         let scroll_delta = if delta_y > 0.0 { lines } else { -lines };
 
-        let mode = self.mode();
-        let display_offset = self.term.lock().grid().display_offset();
+        // One lock for the whole decision (PERF-17): mode + offset are read
+        // and the scroll applied without releasing it in between.
+        let mut term = self.term.lock();
+        let mode = *term.mode();
+        let display_offset = term.grid().display_offset();
 
         if display_offset > 0 {
-            self.scroll(scroll_delta);
+            if !mode.contains(TermMode::ALT_SCREEN) {
+                term.scroll_display(Scroll::Delta(scroll_delta));
+            }
             None
         } else if mode.intersects(TermMode::MOUSE_MODE) {
             let bytes = encode_wheel_event(row as usize, col as usize, delta_y, mode, mods);
@@ -359,7 +364,7 @@ impl<EP: EventListener> TerminalModel<EP> {
             }
             Some(bytes)
         } else {
-            self.scroll(scroll_delta);
+            term.scroll_display(Scroll::Delta(scroll_delta));
             None
         }
     }
@@ -367,12 +372,17 @@ impl<EP: EventListener> TerminalModel<EP> {
     // ── Cursor bounds ──────────────────────────────────────────────
 
     /// Compute cursor bounds in pixel coordinates for IME positioning.
+    /// Reads the cursor + display offset under one lock without cloning the
+    /// grid (PERF-16).
     pub fn cursor_bounds(&self, cell_width: f32, line_height: f32) -> Option<CursorBounds> {
         if cell_width <= 0.0 || line_height <= 0.0 {
             return None;
         }
-        let snap = self.snapshot_query();
-        let cursor = snap.cursor;
+        let (cursor, display_offset) = {
+            let term = self.term.lock();
+            let content = term.renderable_content();
+            (content.cursor, content.display_offset)
+        };
         if matches!(
             cursor.shape,
             alacritty_terminal::vte::ansi::CursorShape::Hidden
@@ -380,7 +390,7 @@ impl<EP: EventListener> TerminalModel<EP> {
             return None;
         }
         let col = cursor.point.column.0 as f32;
-        let line = (cursor.point.line.0 + snap.display_offset as i32) as f32;
+        let line = (cursor.point.line.0 + display_offset as i32) as f32;
         Some(CursorBounds {
             x: col * cell_width,
             y: line * line_height,

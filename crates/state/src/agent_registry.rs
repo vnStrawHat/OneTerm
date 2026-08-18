@@ -18,8 +18,9 @@
 //! `last_seq` guard purely for defensiveness.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
-use gpui::{App, AppContext, Context, Entity, EntityId, Global};
+use gpui::{App, AppContext, Context, Entity, EntityId, Global, Window};
 
 use oneterm_terminal::{AgentState, AgentStatusEvent};
 
@@ -40,6 +41,19 @@ pub struct AgentStateCounts {
     pub total: usize,
 }
 
+// ── Navigation ─────────────────────────────────────────────────────────
+
+/// How to navigate to the terminal hosting an agent card: activates its Tab
+/// (and, for a split Tab, its Space) and focuses the terminal, through
+/// OneTerm's own dock / focus APIs — never OSC (the protocol is
+/// one-directional, `docs/osc-agent-status.md` §6.3).
+///
+/// The terminal feature registers one per terminal alongside each OSC 9;7
+/// event ([`AgentRegistry::set_nav`]) and it is dropped with the terminal's
+/// cards ([`AgentRegistry::remove_terminal`]). Type-erased so the registry
+/// (below the feature crates) never learns the terminal panel types.
+pub type AgentNav = Rc<dyn Fn(&mut Window, &mut App)>;
+
 // ── The registry ────────────────────────────────────────────────────────
 
 /// Global folded model behind the Agent Panel.
@@ -51,6 +65,8 @@ pub struct AgentStateCounts {
 pub struct AgentRegistry {
     cards: Vec<AgentCard>,
     card_indices: HashMap<(EntityId, String), usize>,
+    /// Navigation target per terminal (see [`AgentNav`]).
+    nav: HashMap<EntityId, AgentNav>,
     stale_threshold_ms: u64,
 }
 
@@ -59,6 +75,7 @@ impl Default for AgentRegistry {
         Self {
             cards: Vec::new(),
             card_indices: HashMap::new(),
+            nav: HashMap::new(),
             stale_threshold_ms: 300_000,
         }
     }
@@ -217,14 +234,27 @@ impl AgentRegistry {
         }
     }
 
-    /// Drop every card for a terminal that was closed / dragged away.
+    /// Drop every card — and the navigation target — for a terminal that was
+    /// closed / dragged away.
     pub fn remove_terminal(&mut self, terminal_key: EntityId, cx: &mut Context<Self>) {
+        self.nav.remove(&terminal_key);
         let before = self.cards.len();
         self.cards.retain(|c| c.terminal_key != terminal_key);
         if self.cards.len() != before {
             self.rebuild_card_indices();
             cx.notify();
         }
+    }
+
+    /// Record / refresh how to navigate to `terminal_key` (no notification:
+    /// nothing visible changes).
+    pub fn set_nav(&mut self, terminal_key: EntityId, nav: AgentNav) {
+        self.nav.insert(terminal_key, nav);
+    }
+
+    /// The navigation target for `terminal_key`, if the terminal is known.
+    pub fn nav(&self, terminal_key: EntityId) -> Option<AgentNav> {
+        self.nav.get(&terminal_key).cloned()
     }
 
     /// Remove all ended cards (the ⚙ "Clear ended" action).
@@ -319,6 +349,22 @@ mod tests {
 
     fn registry(cx: &mut TestAppContext) -> Entity<AgentRegistry> {
         cx.update(|cx| cx.new(|_| AgentRegistry::default()))
+    }
+
+    #[test]
+    fn nav_is_kept_per_terminal_and_dropped_with_it() {
+        let mut reg = AgentRegistry::default();
+        let a = EntityId::from(1u64);
+        let b = EntityId::from(2u64);
+        assert!(reg.nav(a).is_none());
+        reg.set_nav(a, Rc::new(|_, _| {}));
+        reg.set_nav(b, Rc::new(|_, _| {}));
+        assert!(reg.nav(a).is_some());
+        // `remove_terminal` runs outside an entity here: no notify needed
+        // because the terminal never had cards, only a nav entry.
+        reg.nav.remove(&a);
+        assert!(reg.nav(a).is_none());
+        assert!(reg.nav(b).is_some());
     }
 
     fn apply_state(

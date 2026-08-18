@@ -1,7 +1,7 @@
 use gpui::{AppContext as _, TestAppContext, VisualTestContext};
 use oneterm_terminal::test_support::FakeTerminalSession;
 
-use super::LocalTerminalView;
+use super::{LocalTerminalView, TerminalDeps};
 
 #[gpui::test]
 fn completion_overlay_shows_when_typing_d_at_cmd_prompt(cx: &mut TestAppContext) {
@@ -17,7 +17,7 @@ fn completion_overlay_shows_when_typing_d_at_cmd_prompt(cx: &mut TestAppContext)
 
     let (view, cx) = cx.add_window_view(move |window, cx| {
         let session = cx.new(|_| session);
-        LocalTerminalView::new(session, window, cx)
+        LocalTerminalView::new(session, TerminalDeps::from_globals(cx), window, cx)
     });
     let cx: &mut VisualTestContext = cx;
     cx.run_until_parked();
@@ -62,7 +62,7 @@ fn completion_resumes_after_initial_non_prompt_render(cx: &mut TestAppContext) {
     probe.set_cursor(0, 0);
     let (view, cx) = cx.add_window_view(move |window, cx| {
         let session = cx.new(|_| session);
-        LocalTerminalView::new(session, window, cx)
+        LocalTerminalView::new(session, TerminalDeps::from_globals(cx), window, cx)
     });
     let cx: &mut VisualTestContext = cx;
     cx.run_until_parked();
@@ -101,7 +101,7 @@ fn phase0_renderer_baseline_counts_dirty_and_idle_frames(cx: &mut TestAppContext
     );
     let (view, cx) = cx.add_window_view(move |window, cx| {
         let session = cx.new(|_| session);
-        LocalTerminalView::new(session, window, cx)
+        LocalTerminalView::new(session, TerminalDeps::from_globals(cx), window, cx)
     });
     let cx: &mut VisualTestContext = cx;
 

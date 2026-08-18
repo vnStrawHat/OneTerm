@@ -8,6 +8,7 @@
 use oneterm_core::{LocalShellConfig, Result, SshConfig};
 
 use crate::TerminalSession;
+use crate::security_policy::TerminalSecurityPolicy;
 
 /// Initial PTY size (rows × cols).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +24,10 @@ pub struct PtySize {
 /// Implemented by the app crate (the only place that depends on both backend
 /// crates) and installed in the app-scoped `AppServices` bundle. UI feature
 /// crates receive the handle through GPUI context and never depend on backends.
+///
+/// `security` is the user's [`TerminalSecurityPolicy`] (derived from the
+/// terminal settings by the caller); the backend applies it to every
+/// terminal-controlled side effect of the session (SEC-08).
 pub trait SessionFactory: Send + Sync + 'static {
     /// Spawn a local shell session.
     fn spawn_local(
@@ -30,6 +35,7 @@ pub trait SessionFactory: Send + Sync + 'static {
         cfg: LocalShellConfig,
         size: PtySize,
         scrollback: usize,
+        security: TerminalSecurityPolicy,
     ) -> Result<Box<dyn TerminalSession>>;
 
     /// Connect an SSH session (blocking — call on a background executor).
@@ -38,5 +44,6 @@ pub trait SessionFactory: Send + Sync + 'static {
         cfg: SshConfig,
         size: PtySize,
         scrollback: usize,
+        security: TerminalSecurityPolicy,
     ) -> Result<Box<dyn TerminalSession>>;
 }

@@ -16,11 +16,12 @@ use gpui::{
     Pixels, Window,
 };
 
-use oneterm_terminal::TerminalSession;
+use oneterm_terminal::{TerminalInfo, TerminalSession};
 
 use super::super::highlight::SemanticOverlay;
 use super::super::layout::{LayoutState, RenderCache};
 use super::super::theme::TerminalTheme;
+use super::super::view::gutter_timestamps::SecondsOfDay;
 use super::super::view::{LocalTerminalView, SearchHighlight};
 
 /// Element that paints the terminal. Holds `Entity<Box<dyn TerminalSession>>` to
@@ -28,7 +29,13 @@ use super::super::view::{LocalTerminalView, SearchHighlight};
 /// cloned entity + theme + font.
 pub(crate) struct TerminalElement {
     pub(crate) session: Entity<Box<dyn TerminalSession>>,
-    pub(crate) theme: TerminalTheme,
+    /// The frame's fully resolved theme, shared with the view (PERF-05: no
+    /// per-frame copy of the palette + class styles).
+    pub(crate) theme: Rc<TerminalTheme>,
+    /// The `TerminalInfo` the view already read this frame (PERF-03: one
+    /// `terminal_info()` — a full-viewport scan under the `Term` lock — per
+    /// frame instead of one per render step).
+    pub(crate) terminal_info: TerminalInfo,
     pub(crate) font: Font,
     pub(crate) font_size: Pixels,
     pub(crate) line_height_factor: f32,
@@ -52,7 +59,7 @@ pub(crate) struct TerminalElement {
     pub(crate) cursor_shape_override: oneterm_settings::TerminalCursorShape,
     /// Per-line timestamps for gutter. `line_times[j]` ↔ line with absolute index
     /// `line_time_base + j`.
-    pub(crate) line_times: Rc<VecDeque<String>>,
+    pub(crate) line_times: Rc<VecDeque<SecondsOfDay>>,
     /// Absolute index (0-based) of `line_times[0]`.
     pub(crate) line_time_base: usize,
     /// Render cache shared with the view — row layout, gutter width, grid
