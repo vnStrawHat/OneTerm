@@ -19,7 +19,8 @@ pub use config::{DockPlacement, LocalShellConfig, RightDockMode, ShellKind, conf
 pub use error::{AppError, ConnectPhase, SftpStatus};
 pub use persistence::{atomic_write, quarantine_file, update_json_file};
 pub use schema::{
-    SCHEMA_VERSION_FIELD, migrate_json_value, schema_version, set_schema_version, versioned_object,
+    SCHEMA_VERSION_FIELD, migrate_json_value, parse_versioned_document, schema_version,
+    set_schema_version, versioned_object,
 };
 pub use session_duplicate::{SessionDuplicateConfig, SshDuplicateAuth, SshDuplicateConfig};
 pub use sftp::{

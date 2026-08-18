@@ -10,11 +10,10 @@
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use oneterm_core::{
-    AppError, LocalShellConfig, atomic_write, config_dir, migrate_json_value, quarantine_file,
-    set_schema_version,
+    AppError, LocalShellConfig, atomic_write, config_dir, parse_versioned_document,
+    quarantine_file, set_schema_version,
 };
 
 use super::{
@@ -107,19 +106,7 @@ const DOCUMENT_NAME: &str = "terminal.json";
 
 impl TerminalConfig {
     fn parse_document(raw: &str) -> Result<Self, AppError> {
-        let value: Value = serde_json::from_str(raw)
-            .map_err(|error| AppError::config_load(DOCUMENT_NAME, error))?;
-        let value = migrate_json_value(value, CURRENT_SCHEMA_VERSION, DOCUMENT_NAME, |_, value| {
-            if !value.is_object() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "terminal.json schema must be an object",
-                ));
-            }
-            Ok(value)
-        })
-        .map_err(|error| AppError::config_load(DOCUMENT_NAME, error))?;
-        serde_json::from_value(value).map_err(|error| AppError::config_load(DOCUMENT_NAME, error))
+        parse_versioned_document(raw, CURRENT_SCHEMA_VERSION, DOCUMENT_NAME)
     }
 
     fn serialize_document(&self) -> std::io::Result<String> {

@@ -20,11 +20,10 @@ use std::path::Path;
 use gpui::{App, AppContext, Entity, Global};
 use gpui_component::{ActiveTheme as _, Theme};
 use oneterm_core::{
-    AppError, RightDockMode, atomic_write, config_dir, migrate_json_value, quarantine_file,
+    AppError, RightDockMode, atomic_write, config_dir, parse_versioned_document, quarantine_file,
     set_schema_version,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 // File path is resolved at runtime via config_dir().join("ui_config.json") —
 // debug → target/, release → ~/.OneTerm/ (see oneterm_core::config_dir).
@@ -76,19 +75,7 @@ const DOCUMENT_NAME: &str = "ui_config.json";
 
 impl UiConfig {
     fn parse_document(raw: &str) -> Result<Self, AppError> {
-        let value: Value = serde_json::from_str(raw)
-            .map_err(|error| AppError::config_load(DOCUMENT_NAME, error))?;
-        let value = migrate_json_value(value, CURRENT_SCHEMA_VERSION, DOCUMENT_NAME, |_, value| {
-            if !value.is_object() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "ui_config.json schema must be an object",
-                ));
-            }
-            Ok(value)
-        })
-        .map_err(|error| AppError::config_load(DOCUMENT_NAME, error))?;
-        serde_json::from_value(value).map_err(|error| AppError::config_load(DOCUMENT_NAME, error))
+        parse_versioned_document(raw, CURRENT_SCHEMA_VERSION, DOCUMENT_NAME)
     }
     /// Built-in default for [`UiConfig::agent_stale_threshold_ms`] — 5 minutes.
     pub const DEFAULT_AGENT_STALE_THRESHOLD_MS: u64 = 300_000;
@@ -333,7 +320,8 @@ mod tests {
         ));
         let path = directory.join("ui_config.json");
         config.save_to(&path).unwrap();
-        let value: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(value["schema_version"], CURRENT_SCHEMA_VERSION);
         let restored = UiConfig::load_from(&path).unwrap();
         assert_eq!(restored.theme_name, config.theme_name);

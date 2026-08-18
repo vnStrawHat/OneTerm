@@ -5,7 +5,10 @@
 
 use std::io;
 
+use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
+
+use crate::AppError;
 
 /// The field used by every versioned OneTerm JSON document.
 pub const SCHEMA_VERSION_FIELD: &str = "schema_version";
@@ -73,6 +76,32 @@ pub fn migrate_json_value(
         set_schema_version(&mut value, version)?;
     }
     Ok(value)
+}
+
+/// Parse a schema-versioned JSON document into `T`.
+///
+/// The document must be a JSON object at every version; the migration step is
+/// the identity, so an older document deserializes through `T`'s serde
+/// defaults. Errors are normalized to [`AppError::config_load`].
+pub fn parse_versioned_document<T: DeserializeOwned>(
+    raw: &str,
+    current_version: u32,
+    document_name: &str,
+) -> Result<T, AppError> {
+    let value: Value =
+        serde_json::from_str(raw).map_err(|error| AppError::config_load(document_name, error))?;
+    let value = migrate_json_value(value, current_version, document_name, |_, value| {
+        if value.is_object() {
+            Ok(value)
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{document_name} schema must be an object"),
+            ))
+        }
+    })
+    .map_err(|error| AppError::config_load(document_name, error))?;
+    serde_json::from_value(value).map_err(|error| AppError::config_load(document_name, error))
 }
 
 #[cfg(test)]

@@ -216,7 +216,8 @@ fn legacy_fixture_migrates_and_current_save_is_idempotent() {
     ));
     let path = directory.join("terminal.json");
     config.save_to(&path).unwrap();
-    let value: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(value["schema_version"], CURRENT_SCHEMA_VERSION);
     let restored = TerminalConfig::load_from(&path).unwrap();
     assert_eq!(restored.font.family, config.font.family);
