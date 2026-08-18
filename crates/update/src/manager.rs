@@ -8,7 +8,7 @@ use crate::archive::{extract_archive, validate_staged_package};
 use crate::config::{CachedUpdateCandidate, UpdateChannel, UpdateCheckCache, UpdateConfig};
 use crate::github::{self, GitHubClient, GitHubRelease, ReleaseClient};
 use crate::version::{current_target_triple, expected_asset_name, parse_release_version};
-use crate::{CURRENT_VERSION, UPDATE_REPOSITORY};
+use crate::CURRENT_VERSION;
 
 /// A release artifact that can update this build.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -130,11 +130,6 @@ impl Default for UpdateStorage {
 }
 
 impl UpdateManager {
-    /// Build a manager from persisted config and the build-time GitHub repository.
-    pub fn load() -> Self {
-        Self::with_repository(UPDATE_REPOSITORY.to_owned(), UpdateConfig::load())
-    }
-
     /// Build a manager with an explicit repository, used by tests and custom callers.
     pub fn with_repository(repository: String, config: UpdateConfig) -> Self {
         let client = GitHubClient::new(
@@ -176,21 +171,10 @@ impl UpdateManager {
         }
     }
 
-    /// Return the config snapshot this manager was built from, including any
-    /// cache metadata recorded by a completed check.
-    pub fn config(&self) -> &UpdateConfig {
-        &self.config
-    }
-
     /// Cache metadata recorded by the last check. Callers that hold the live
-    /// preferences must merge only this into their config, never `config()`.
+    /// preferences must merge only this into their config.
     pub fn check_cache(&self) -> UpdateCheckCache {
         self.config.check_cache()
-    }
-
-    /// Check whether the automatic interval permits a background check now.
-    pub fn should_auto_check(&self) -> bool {
-        self.config.should_auto_check()
     }
 
     /// Check GitHub Releases and persist cache metadata after a successful request.

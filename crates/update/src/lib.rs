@@ -11,7 +11,7 @@ mod manager;
 mod version;
 
 pub use config::{
-    CachedUpdateCandidate, DEFAULT_UPDATE_REPOSITORY, LoadedUpdateConfig, MAX_CHECK_INTERVAL_HOURS,
+    CachedUpdateCandidate, LoadedUpdateConfig, MAX_CHECK_INTERVAL_HOURS,
     UPDATE_REPOSITORY, UpdateChannel, UpdateCheckCache, UpdateConfig,
 };
 pub use install::{InstallOutcome, install_staged_update};

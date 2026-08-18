@@ -2,7 +2,7 @@ use std::path::Path;
 
 use chrono::{DateTime, Duration, Utc};
 use oneterm_core::{
-    AppError, atomic_write, config_dir, migrate_json_value, quarantine_file, set_schema_version,
+    AppError, config_dir, migrate_json_value, quarantine_file, set_schema_version,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -15,7 +15,7 @@ const DOCUMENT_NAME: &str = "update_config.json";
 pub const MAX_CHECK_INTERVAL_HOURS: u64 = 24 * 365;
 
 /// Canonical GitHub `owner/repo` that publishes OneTerm releases.
-pub const DEFAULT_UPDATE_REPOSITORY: &str = "vnStrawHat/OneTerm";
+const DEFAULT_UPDATE_REPOSITORY: &str = "vnStrawHat/OneTerm";
 
 /// GitHub `owner/repo` the updater queries. Fixed at compile time: the
 /// canonical repository unless `ONETERM_UPDATE_REPO=owner/repo` is set in the
@@ -163,31 +163,13 @@ impl Default for UpdateConfig {
 }
 
 impl UpdateConfig {
-    /// Load persisted update preferences.
-    pub fn load() -> Self {
-        Self::load_from(&update_config_path())
-    }
-
-    /// Load persisted update preferences from an explicit path, repairing the
-    /// document on the calling thread (quarantine on parse failure, default
-    /// document when missing). Callers on the UI thread use [`Self::read`].
-    pub fn load_from(path: &Path) -> Self {
-        let loaded = Self::read_from(path);
-        if loaded.needs_document_repair
-            && let Err(error) = loaded.config.repair_document(path)
-        {
-            log::warn!("failed to repair update_config.json at {path:?}: {error}");
-        }
-        loaded.config
-    }
-
     /// Read persisted update preferences without touching the disk beyond the
     /// read itself, so the UI thread can load them at startup (PERF-27).
     ///
     /// When [`LoadedUpdateConfig::needs_document_repair`] is set, the caller
-    /// must schedule a preference save on the background executor: the
-    /// field-level merge quarantines an unreadable document and creates a
-    /// missing one.
+    /// must schedule a preference save on the background executor:
+    /// [`Self::save_preferences_to`] quarantines an unreadable document and
+    /// creates a missing one.
     pub fn read() -> LoadedUpdateConfig {
         Self::read_from(&update_config_path())
     }
@@ -221,28 +203,6 @@ impl UpdateConfig {
                 }
             }
         }
-    }
-
-    /// Bring a missing or unreadable document back to a valid state: an
-    /// unreadable file is quarantined first, then the defaults are written.
-    fn repair_document(&self, path: &Path) -> std::io::Result<()> {
-        match std::fs::symlink_metadata(path) {
-            Ok(_) => {
-                quarantine_file(path)?;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
-        self.write_default_document(path)
-    }
-
-    /// Write the complete default document for a config file that does not
-    /// exist yet. Runtime writers must use the field-level merges instead.
-    fn write_default_document(&self, path: &Path) -> std::io::Result<()> {
-        let mut value = serde_json::to_value(self).map_err(std::io::Error::other)?;
-        set_schema_version(&mut value, CURRENT_SCHEMA_VERSION)?;
-        let json = serde_json::to_string_pretty(&value).map_err(std::io::Error::other)?;
-        atomic_write(path, json.as_bytes())
     }
 
     /// Merge the preference fields into the default update config document.
@@ -389,7 +349,11 @@ mod tests {
     fn missing_file_uses_defaults_and_creates_document() {
         let dir = test_dir("missing");
         let path = dir.join("update_config.json");
-        let config = UpdateConfig::load_from(&path);
+        let loaded = UpdateConfig::read_from(&path);
+        assert!(loaded.needs_document_repair);
+        let config = loaded.config;
+        std::fs::create_dir_all(&dir).unwrap();
+        config.save_preferences_to(&path).unwrap();
         assert_eq!(config.check_interval_hours, 24);
         assert!(config.auto_check);
         assert_eq!(config.proxy_url, None);
@@ -434,7 +398,10 @@ mod tests {
         let path = dir.join("update_config.json");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(&path, b"not-json").unwrap();
-        let config = UpdateConfig::load_from(&path);
+        let loaded = UpdateConfig::read_from(&path);
+        assert!(loaded.needs_document_repair);
+        let config = loaded.config;
+        config.save_preferences_to(&path).unwrap();
         assert_eq!(config.channel, UpdateChannel::Stable);
         assert_eq!(config.proxy_url, None);
         assert!(config.verify_certificates);
@@ -455,7 +422,8 @@ mod tests {
         let dir = test_dir("merge-check");
         let path = dir.join("update_config.json");
         // The UI entity is the in-memory truth; the checker works on a copy.
-        let mut entity = UpdateConfig::load_from(&path);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut entity = UpdateConfig::read_from(&path).config;
         let mut checker_copy = entity.clone();
 
         // User edits a preference while the check is still running.
@@ -472,7 +440,7 @@ mod tests {
         assert!(!entity.auto_check);
         assert_eq!(entity.last_etag.as_deref(), Some("etag-1"));
 
-        let on_disk = UpdateConfig::load_from(&path);
+        let on_disk = UpdateConfig::read_from(&path).config;
         assert_eq!(on_disk, entity);
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -509,7 +477,7 @@ mod tests {
             writer.join().unwrap();
         }
 
-        let on_disk = UpdateConfig::load_from(&path);
+        let on_disk = UpdateConfig::read_from(&path).config;
         assert!(
             on_disk
                 .proxy_url
@@ -544,7 +512,7 @@ mod tests {
         }
         .save_to(&path)
         .unwrap();
-        let on_disk = UpdateConfig::load_from(&path);
+        let on_disk = UpdateConfig::read_from(&path).config;
         assert_eq!(on_disk.last_etag.as_deref(), Some("etag"));
         assert!(std::fs::read_dir(&dir).unwrap().any(|entry| {
             entry

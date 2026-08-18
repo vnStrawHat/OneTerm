@@ -35,7 +35,7 @@ GitHub Releases.
 ## Release source
 
 The updater reads releases from a repository fixed at compile time
-(`crates/update/src/config.rs`): `DEFAULT_UPDATE_REPOSITORY` is the canonical
+(`crates/update/src/config.rs`): `UPDATE_REPOSITORY` resolves to the canonical
 `owner/repo`; a fork or mirror that publishes its own releases sets
 `ONETERM_UPDATE_REPO=owner/repo` in the build environment. Nothing is inferred
 from the git checkout, so a fork build cannot silently point at the wrong

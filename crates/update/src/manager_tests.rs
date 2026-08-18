@@ -93,7 +93,7 @@ impl Sandbox {
     }
 
     fn persisted_config(&self) -> UpdateConfig {
-        UpdateConfig::load_from(&self.root.join("update_config.json"))
+        UpdateConfig::read_from(&self.root.join("update_config.json")).config
     }
 
     fn cache_entries(&self) -> Vec<PathBuf> {
