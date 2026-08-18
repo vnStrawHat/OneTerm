@@ -34,6 +34,20 @@ pub(super) fn notify_status(state: &UpdateUiState, window: &mut Window, cx: &mut
             ),
             cx,
         ),
+        // The outcome would otherwise only be visible in the About status text
+        // (CORR-69): tell the user where the package is.
+        UpdateUiStatus::ManualInstall(package_dir) => window.push_notification(
+            notify_with_title(
+                NotificationType::Warning,
+                format!(
+                    "The install location is not writable. Install the update manually from {}.",
+                    package_dir.display()
+                ),
+                "Manual install required",
+                cx,
+            ),
+            cx,
+        ),
         UpdateUiStatus::Restarted => window.push_notification(
             notify(
                 NotificationType::Success,

@@ -118,7 +118,10 @@ fn install_macos_update(staged: &StagedUpdate, current_exe: &Path) -> Result<Ins
     }
     let source_bundle = staged.package_dir.join("OneTerm.app");
     let backup = replace_path(&source_bundle, &app_bundle)?;
-    if let Err(error) = Command::new("open").arg(&app_bundle).spawn() {
+    // `open -n` launches a fresh instance of the replaced bundle; a plain
+    // `open` would only activate the still-running old instance, which the
+    // caller is about to quit (CORR-39).
+    if let Err(error) = Command::new("open").arg("-n").arg(&app_bundle).spawn() {
         if let Err(restore_error) =
             restore_path_from_backup(&app_bundle, &backup, source_bundle.is_dir())
         {
