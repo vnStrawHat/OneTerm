@@ -17,8 +17,10 @@
 //! See `docs/terminal-backend.md` §7, `docs/sftp-browser-design.md`.
 
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::future::Future;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 use alacritty_terminal::sync::FairMutex;
@@ -31,15 +33,15 @@ use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg, load_secret_key};
 use russh::{MethodKind, MethodSet};
 use tokio_util::sync::CancellationToken;
 
-use oneterm_core::{SshAuthMethod, SshConfig};
+use oneterm_core::{AppError, ConnectPhase, ConnectionCancellation, SshAuthMethod, SshConfig};
 use oneterm_terminal::{
     ClipboardOrigin, GridSize, OscRouter, PtySize, PtyTransport, SessionEvent, SessionEventSink,
     SharedSessionState, SharedState, TerminalSecurityPolicy,
 };
 
 use crate::counting_stream::CountingStream;
-use crate::handler::{SshClientHandler, SshHandlerError};
-use crate::sftp::{SftpCmd, SftpEvent, SftpSession};
+use crate::handler::SshClientHandler;
+use crate::sftp::{SftpCmd, SftpSession};
 use crate::sftp_task::sftp_task;
 use crate::task::ssh_main_task;
 use crate::transport::{Cmd, SSH_COMMAND_QUEUE_CAPACITY, SshListener, SshTransport};
@@ -66,7 +68,11 @@ impl SshSession {
     /// Ask the SFTP task to stop and drop the handle, so a later `close()` or
     /// drop is a no-op (no-op without SFTP).
     pub(crate) fn close_sftp(&self) {
-        let sftp = self.sftp.lock().unwrap().take();
+        let sftp = self
+            .sftp
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
         if let Some(sftp) = sftp {
             use oneterm_core::SftpBackend;
             sftp.close();
@@ -119,44 +125,70 @@ fn shared_runtime() -> oneterm_core::Result<&'static tokio::runtime::Runtime> {
             .map_err(|error| error.to_string())
     }) {
         Ok(runtime) => Ok(runtime),
-        Err(error) => Err(oneterm_core::AppError::msg(format!(
-            "failed to initialize shared SSH runtime: {error}"
-        ))),
+        Err(error) => Err(AppError::Connect {
+            phase: ConnectPhase::Transport,
+            message: format!("failed to initialize shared SSH runtime: {error}"),
+        }),
     }
 }
 
-async fn wait_for_cancellation(cancellation: oneterm_core::ConnectionCancellation) {
-    while !cancellation.is_cancelled() {
-        tokio::time::sleep(Duration::from_millis(25)).await;
+/// `AppError::Connect` for a transport-level failure in `phase`.
+fn phase_error(phase: ConnectPhase, error: impl std::fmt::Display) -> AppError {
+    AppError::Connect {
+        phase,
+        message: error.to_string(),
     }
 }
 
-async fn await_phase<T, F>(
-    phase: &'static str,
-    future: F,
-    cancellation: oneterm_core::ConnectionCancellation,
-) -> anyhow::Result<T>
-where
-    F: Future<Output = anyhow::Result<T>>,
-{
-    await_phase_with_deadline(phase, future, cancellation, PHASE_DEADLINE).await
+/// Runs each step of a connection attempt under the per-phase deadline and
+/// the user's cancellation, remembering which phase is in flight so the
+/// overall deadline can name it.
+struct ConnectPhases {
+    cancellation: ConnectionCancellation,
+    current: Cell<ConnectPhase>,
 }
 
-async fn await_phase_with_deadline<T, F>(
-    phase: &'static str,
-    future: F,
-    cancellation: oneterm_core::ConnectionCancellation,
-    deadline: Duration,
-) -> anyhow::Result<T>
-where
-    F: Future<Output = anyhow::Result<T>>,
-{
-    tokio::select! {
-        result = tokio::time::timeout(deadline, future) => {
-            result.map_err(|_| anyhow::anyhow!("SSH {phase} phase timed out"))?
+impl ConnectPhases {
+    fn new(cancellation: ConnectionCancellation) -> Self {
+        Self {
+            cancellation,
+            current: Cell::new(ConnectPhase::Transport),
         }
-        _ = wait_for_cancellation(cancellation) => {
-            Err(anyhow::anyhow!("SSH connection cancelled"))
+    }
+
+    /// The phase most recently started.
+    fn current(&self) -> ConnectPhase {
+        self.current.get()
+    }
+
+    async fn run<T, F>(&self, phase: ConnectPhase, future: F) -> oneterm_core::Result<T>
+    where
+        F: Future<Output = oneterm_core::Result<T>>,
+    {
+        self.run_with_deadline(phase, future, PHASE_DEADLINE).await
+    }
+
+    /// Await `future` as `phase`: a timeout becomes `AppError::Connect`
+    /// naming the phase, a user cancellation `AppError::Cancelled` (woken by
+    /// `ConnectionCancellation::cancelled`, no polling — PERF-22).
+    async fn run_with_deadline<T, F>(
+        &self,
+        phase: ConnectPhase,
+        future: F,
+        deadline: Duration,
+    ) -> oneterm_core::Result<T>
+    where
+        F: Future<Output = oneterm_core::Result<T>>,
+    {
+        self.current.set(phase);
+        tokio::select! {
+            result = tokio::time::timeout(deadline, future) => {
+                result.map_err(|_| AppError::Connect {
+                    phase,
+                    message: format!("timed out after {} s", deadline.as_secs()),
+                })?
+            }
+            _ = self.cancellation.cancelled() => Err(AppError::Cancelled),
         }
     }
 }
@@ -180,6 +212,7 @@ pub fn connect(
     );
 
     let runtime = shared_runtime()?;
+    let phases = ConnectPhases::new(cfg.cancellation.clone());
 
     // Input must preserve FIFO ordering without dropping keystrokes when the UI
     // produces a short burst. Control-flow failures remain observable when the
@@ -228,16 +261,13 @@ pub fn connect(
             };
             client_cfg.preferred.key = Cow::Owned(handler.preferred_key_algorithms());
 
-            let mut handle = await_phase(
-                "connect",
-                async {
+            let mut handle = phases
+                .run(ConnectPhase::Transport, async {
                     client::connect(Arc::new(client_cfg), addr, handler)
                         .await
-                        .map_err(anyhow::Error::new)
-                },
-                cfg.cancellation.clone(),
-            )
-            .await?;
+                        .map_err(|error| error.to_app_error())
+                })
+                .await?;
             log::info!("SshSession: TCP connected");
 
             // ── Authenticate ──────────────────────────────────────────────
@@ -247,75 +277,76 @@ pub fn connect(
             let auth_result = match auth {
                 SshAuthMethod::None => {
                     log::info!("SshSession: authenticating with none (no password)");
-                    await_phase(
-                        "authentication",
-                        async {
+                    phases
+                        .run(ConnectPhase::Authentication, async {
                             handle
                                 .authenticate_none(&cfg.username)
                                 .await
-                                .map_err(|e| anyhow::anyhow!("{e}"))
-                        },
-                        cfg.cancellation.clone(),
-                    )
-                    .await?
+                                .map_err(|e| phase_error(ConnectPhase::Authentication, e))
+                        })
+                        .await?
                 }
                 SshAuthMethod::Password { password } => {
                     log::info!("SshSession: authenticating with password");
-                    await_phase(
-                        "authentication",
-                        async {
+                    phases
+                        .run(ConnectPhase::Authentication, async {
                             authenticate_with_password(
                                 &mut handle,
                                 &cfg.username,
                                 password.expose_secret(),
                             )
                             .await
-                        },
-                        cfg.cancellation.clone(),
-                    )
-                    .await?
+                        })
+                        .await?
                 }
                 SshAuthMethod::PrivateKey {
                     key_path,
                     passphrase,
                 } => {
                     log::info!("SshSession: authenticating with key {}", key_path.display());
-                    let key = load_private_key(
-                        &key_path,
-                        passphrase.as_ref().map(|secret| secret.expose_secret()),
-                    )?;
+                    // Key files are read and decrypted on the blocking pool so
+                    // the two SSH runtime workers keep serving other sessions
+                    // (CORR-17).
+                    let key = phases
+                        .run(ConnectPhase::Authentication, async {
+                            tokio::task::spawn_blocking(move || {
+                                load_private_key(
+                                    &key_path,
+                                    passphrase.as_ref().map(|secret| secret.expose_secret()),
+                                )
+                            })
+                            .await
+                            .unwrap_or_else(|join_error| {
+                                Err(phase_error(ConnectPhase::Authentication, join_error))
+                            })
+                        })
+                        .await?;
                     // RSA keys must not sign with the legacy SHA-1 `ssh-rsa`
                     // (OpenSSH >= 8.8 rejects it). Ask the server which
                     // `rsa-sha2-*` it supports (RFC 8308 `server-sig-algs`);
                     // when it does not say, prefer SHA-512.
                     let hash_alg = if key.algorithm().is_rsa() {
-                        let advertised = await_phase(
-                            "authentication",
-                            async {
+                        let advertised = phases
+                            .run(ConnectPhase::Authentication, async {
                                 handle
                                     .best_supported_rsa_hash()
                                     .await
-                                    .map_err(|e| anyhow::anyhow!("{e}"))
-                            },
-                            cfg.cancellation.clone(),
-                        )
-                        .await?;
+                                    .map_err(|e| phase_error(ConnectPhase::Authentication, e))
+                            })
+                            .await?;
                         rsa_hash_alg(advertised)
                     } else {
                         None
                     };
                     let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg);
-                    await_phase(
-                        "authentication",
-                        async {
+                    phases
+                        .run(ConnectPhase::Authentication, async {
                             handle
                                 .authenticate_publickey(&cfg.username, key_with_alg)
                                 .await
-                                .map_err(|e| anyhow::anyhow!("{e}"))
-                        },
-                        cfg.cancellation.clone(),
-                    )
-                    .await?
+                                .map_err(|e| phase_error(ConnectPhase::Authentication, e))
+                        })
+                        .await?
                 }
             };
             log::info!("SshSession: auth result = {auth_result:?}");
@@ -324,24 +355,21 @@ pub fn connect(
                 partial_success,
             } = auth_result
             {
-                return Err(anyhow::anyhow!(
-                    "{}",
-                    authentication_failure_message(&remaining_methods, partial_success)
-                ));
+                return Err(AppError::Connect {
+                    phase: ConnectPhase::Authentication,
+                    message: authentication_failure_message(&remaining_methods, partial_success),
+                });
             }
 
             // ── Open channel + pty + shell ──────────────────────────────
-            let channel = await_phase(
-                "channel open",
-                async {
+            let channel = phases
+                .run(ConnectPhase::ChannelOpen, async {
                     handle
                         .channel_open_session()
                         .await
-                        .map_err(|e| anyhow::anyhow!("{e}"))
-                },
-                cfg.cancellation.clone(),
-            )
-            .await?;
+                        .map_err(|e| phase_error(ConnectPhase::ChannelOpen, e))
+                })
+                .await?;
             log::info!("SshSession: channel opened");
 
             let pty_modes: &[(Pty, u32)] = if cfg.shell_integration {
@@ -350,9 +378,8 @@ pub fn connect(
                 &[]
             };
 
-            await_phase(
-                "PTY request",
-                async {
+            phases
+                .run(ConnectPhase::PtyRequest, async {
                     channel
                         .request_pty(
                             false,
@@ -364,11 +391,9 @@ pub fn connect(
                             pty_modes,
                         )
                         .await
-                        .map_err(|e| anyhow::anyhow!("{e}"))
-                },
-                cfg.cancellation.clone(),
-            )
-            .await?;
+                        .map_err(|e| phase_error(ConnectPhase::PtyRequest, e))
+                })
+                .await?;
             log::info!(
                 "SshSession: pty requested ({}x{})",
                 initial.cols,
@@ -380,44 +405,39 @@ pub fn connect(
             // banner and MOTD / "Last login" output. When enabled, we request the PTY
             // with ECHO off, then inject a bootstrap command that installs the OSC 7
             // prompt hook in the running shell and re-enables echo.
-            await_phase(
-                "shell request",
-                async {
+            phases
+                .run(ConnectPhase::ShellRequest, async {
                     channel
                         .request_shell(true)
                         .await
-                        .map_err(|e| anyhow::anyhow!("{e}"))
-                },
-                cfg.cancellation.clone(),
-            )
-            .await?;
+                        .map_err(|e| phase_error(ConnectPhase::ShellRequest, e))
+                })
+                .await?;
             log::info!("SshSession: shell requested");
 
             if cfg.shell_integration {
-                await_phase(
-                    "shell integration bootstrap",
-                    async { send_shell_integration_bootstrap(&channel, &state).await },
-                    cfg.cancellation.clone(),
-                )
-                .await?;
+                phases
+                    .run(ConnectPhase::ShellIntegration, async {
+                        send_shell_integration_bootstrap(&channel, &state).await
+                    })
+                    .await?;
                 log::info!("SshSession: shell integration bootstrap sent");
             }
 
             // ── Open SFTP channel (optional) ────────────────────────────
             // Open it BEFORE spawning ssh_main_task because the handle is moved into
             // the task. The SFTP channel is split into its own object — no handle needed.
-            let sftp_session = match await_phase(
-                "SFTP setup",
-                async { open_sftp(&handle, &state, sftp_shutdown.clone()).await },
-                cfg.cancellation.clone(),
-            )
-            .await
+            let sftp_session = match phases
+                .run(ConnectPhase::SftpSetup, async {
+                    open_sftp(&handle, &state, sftp_shutdown.clone()).await
+                })
+                .await
             {
                 Ok(sftp) => {
                     log::info!("SshSession: SFTP channel opened");
                     Some(sftp)
                 }
-                Err(e) if cfg.cancellation.is_cancelled() => return Err(e),
+                Err(AppError::Cancelled) => return Err(AppError::Cancelled),
                 Err(e) => {
                     log::warn!("SshSession: SFTP not available: {e} — terminal only");
                     None
@@ -437,12 +457,19 @@ pub fn connect(
             ));
             log::info!("SshSession: main task spawned");
 
-            Ok::<_, anyhow::Error>(sftp_session)
+            Ok::<_, AppError>(sftp_session)
         };
         tokio::time::timeout(CONNECT_DEADLINE, operation)
             .await
-            .map_err(|_| anyhow::anyhow!("SSH connection timed out"))
-            .and_then(|result| result)
+            .unwrap_or_else(|_| {
+                Err(AppError::Connect {
+                    phase: phases.current(),
+                    message: format!(
+                        "connection attempt timed out after {} s",
+                        CONNECT_DEADLINE.as_secs()
+                    ),
+                })
+            })
     });
 
     match connect_result {
@@ -462,11 +489,7 @@ pub fn connect(
         }
         Err(e) => {
             log::error!("SshSession: connect failed: {e}");
-            if let Some(handler_error) = e.downcast_ref::<SshHandlerError>() {
-                Err(handler_error.to_app_error())
-            } else {
-                Err(oneterm_core::AppError::msg(e.to_string()))
-            }
+            Err(e)
         }
     }
 }
@@ -478,25 +501,28 @@ pub fn connect(
 /// 2. `channel.request_subsystem("sftp")` → request the SFTP subsystem
 /// 3. `channel.into_stream()` → convert into `AsyncRead + AsyncWrite`
 /// 4. `russh_sftp::client::SftpSession::new(stream)` → SFTP handshake
-/// 5. Create channels `(cmd_tx, cmd_rx)` + `(event_tx, event_rx)`
+/// 5. Create the command channel `(cmd_tx, cmd_rx)`
 /// 6. `tokio::spawn(sftp_task(...))` — runs in the background
 /// 7. Return `Arc<SftpSession>` — bridge for the UI to call synchronously
 async fn open_sftp(
     handle: &russh::client::Handle<SshClientHandler>,
     state: &SharedState,
     shutdown: CancellationToken,
-) -> anyhow::Result<Arc<SftpSession>> {
+) -> oneterm_core::Result<Arc<SftpSession>> {
+    let sftp_error = |step: &str, error: &dyn std::fmt::Display| {
+        phase_error(ConnectPhase::SftpSetup, format!("{step}: {error}"))
+    };
     // 1. Open a new channel on the same handle.
     let channel = handle
         .channel_open_session()
         .await
-        .map_err(|e| anyhow::anyhow!("SFTP channel_open_session: {e}"))?;
+        .map_err(|e| sftp_error("channel_open_session", &e))?;
 
     // 2. Request SFTP subsystem.
     channel
         .request_subsystem(true, "sftp")
         .await
-        .map_err(|e| anyhow::anyhow!("SFTP request_subsystem: {e}"))?;
+        .map_err(|e| sftp_error("request_subsystem", &e))?;
 
     // 3. Convert channel → stream (AsyncRead + AsyncWrite).
     //    Wrap with CountingStream to count rx/tx bytes — merged into the same
@@ -506,21 +532,17 @@ async fn open_sftp(
     // 4. SFTP handshake — create the SftpChannel.
     let sftp_channel = russh_sftp::client::SftpSession::new(stream)
         .await
-        .map_err(|e| anyhow::anyhow!("SFTP handshake: {e}"))?;
+        .map_err(|e| sftp_error("handshake", &e))?;
 
-    // 5. Create channels bridging sync (UI) ↔ async (tokio task). Nothing
-    //    consumes the lifecycle events today (`alive()` is the observable
-    //    state), so the receiver is dropped here and the task's best-effort
-    //    sends are no-ops.
+    // 5. Create the command channel bridging sync (UI) → async (tokio task);
+    //    `alive` is the task's observable lifecycle state.
     let (sftp_cmd_tx, sftp_cmd_rx) = async_channel::bounded::<SftpCmd>(64);
-    let (sftp_event_tx, _sftp_event_rx) = async_channel::bounded::<SftpEvent>(40);
-    let alive = Arc::new(Mutex::new(true));
+    let alive = Arc::new(AtomicBool::new(true));
 
     // 6. Spawn sftp_task — runs in the background on the same tokio runtime.
     tokio::spawn(sftp_task(
         sftp_channel,
         sftp_cmd_rx,
-        sftp_event_tx,
         alive.clone(),
         shutdown,
     ));
@@ -541,11 +563,12 @@ async fn authenticate_with_password(
     handle: &mut client::Handle<SshClientHandler>,
     username: &str,
     password: &str,
-) -> anyhow::Result<AuthResult> {
+) -> oneterm_core::Result<AuthResult> {
+    let auth_error = |e: russh::Error| phase_error(ConnectPhase::Authentication, e);
     let result = handle
         .authenticate_password(username, password)
         .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        .map_err(auth_error)?;
     let AuthResult::Failure {
         remaining_methods, ..
     } = &result
@@ -559,7 +582,7 @@ async fn authenticate_with_password(
     let response = handle
         .authenticate_keyboard_interactive_start(username, None)
         .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        .map_err(auth_error)?;
     let prompts = match response {
         KeyboardInteractiveAuthResponse::Success => return Ok(AuthResult::Success),
         KeyboardInteractiveAuthResponse::Failure {
@@ -574,15 +597,16 @@ async fn authenticate_with_password(
         KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => prompts,
     };
     if prompts.iter().any(|prompt| prompt.echo) {
-        anyhow::bail!(
-            "SSH keyboard-interactive authentication asked for input other than a password; interactive prompts are not supported"
-        );
+        return Err(phase_error(
+            ConnectPhase::Authentication,
+            "keyboard-interactive authentication asked for input other than a password; interactive prompts are not supported",
+        ));
     }
     let responses = prompts.iter().map(|_| password.to_string()).collect();
     match handle
         .authenticate_keyboard_interactive_respond(responses)
         .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .map_err(auth_error)?
     {
         KeyboardInteractiveAuthResponse::Success => Ok(AuthResult::Success),
         KeyboardInteractiveAuthResponse::Failure {
@@ -592,16 +616,17 @@ async fn authenticate_with_password(
             remaining_methods,
             partial_success,
         }),
-        KeyboardInteractiveAuthResponse::InfoRequest { .. } => anyhow::bail!(
-            "SSH keyboard-interactive authentication requested a second round of prompts; interactive prompts are not supported"
-        ),
+        KeyboardInteractiveAuthResponse::InfoRequest { .. } => Err(phase_error(
+            ConnectPhase::Authentication,
+            "keyboard-interactive authentication requested a second round of prompts; interactive prompts are not supported",
+        )),
     }
 }
 
 /// User-facing message for a rejected authentication attempt, naming the
 /// methods the server still accepts so a wrong method choice is diagnosable.
 fn authentication_failure_message(remaining_methods: &MethodSet, partial_success: bool) -> String {
-    let mut message = String::from("SSH authentication failed");
+    let mut message = String::from("rejected by the server");
     if partial_success {
         message.push_str(" (the server accepted this method but requires another one)");
     }
@@ -622,12 +647,12 @@ const SHELL_INTEGRATION_BOOTSTRAP: &str = r#"__oneterm_osc7() { printf '\x1b]7;f
 async fn send_shell_integration_bootstrap(
     channel: &russh::Channel<russh::client::Msg>,
     state: &SharedState,
-) -> anyhow::Result<()> {
+) -> oneterm_core::Result<()> {
     let payload = format!("{SHELL_INTEGRATION_BOOTSTRAP}\r");
     channel
         .data(payload.as_bytes())
         .await
-        .map_err(|e| anyhow::anyhow!("shell integration bootstrap: {e}"))?;
+        .map_err(|e| phase_error(ConnectPhase::ShellIntegration, e))?;
     state.add_tx_bytes(payload.len() as u64);
     Ok(())
 }
@@ -647,10 +672,13 @@ fn rsa_hash_alg(advertised: Option<Option<HashAlg>>) -> Option<HashAlg> {
 fn load_private_key(
     path: &std::path::Path,
     passphrase: Option<&str>,
-) -> anyhow::Result<PrivateKey> {
-    let key = load_secret_key(path, passphrase)
-        .map_err(|e| anyhow::anyhow!("Failed to load key {}: {e}", path.display()))?;
-    Ok(key)
+) -> oneterm_core::Result<PrivateKey> {
+    load_secret_key(path, passphrase).map_err(|e| {
+        phase_error(
+            ConnectPhase::Authentication,
+            format!("failed to load key {}: {e}", path.display()),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -659,22 +687,58 @@ mod tests {
 
     #[tokio::test]
     async fn phase_wait_stops_when_cancelled() {
-        let cancellation = oneterm_core::ConnectionCancellation::default();
+        let cancellation = ConnectionCancellation::default();
         cancellation.cancel();
 
-        let error = await_phase_with_deadline(
-            "test",
-            async {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                Ok(())
-            },
-            cancellation,
-            Duration::from_secs(1),
-        )
-        .await
-        .expect_err("cancelled phase must fail");
+        let phases = ConnectPhases::new(cancellation);
+        let error = phases
+            .run_with_deadline(
+                ConnectPhase::ChannelOpen,
+                async {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    Ok(())
+                },
+                Duration::from_secs(1),
+            )
+            .await
+            .expect_err("cancelled phase must fail");
 
-        assert_eq!(error.to_string(), "SSH connection cancelled");
+        assert!(matches!(error, AppError::Cancelled), "{error}");
+    }
+
+    /// PERF-22: a cancellation raised while a phase is in flight wakes the
+    /// phase promptly (no 25 ms poll loop) and reports `Cancelled`.
+    #[tokio::test]
+    async fn phase_wait_wakes_on_late_cancellation() {
+        let cancellation = ConnectionCancellation::default();
+        let phases = ConnectPhases::new(cancellation.clone());
+        let canceller = tokio::spawn({
+            let cancellation = cancellation.clone();
+            async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                cancellation.cancel();
+            }
+        });
+
+        let started = std::time::Instant::now();
+        let error = phases
+            .run_with_deadline(
+                ConnectPhase::PtyRequest,
+                async {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    Ok(())
+                },
+                Duration::from_secs(5),
+            )
+            .await
+            .expect_err("cancelled phase must fail");
+        canceller.await.expect("canceller task");
+
+        assert!(matches!(error, AppError::Cancelled), "{error}");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "cancellation must not wait for the deadline"
+        );
     }
 
     #[test]
@@ -693,6 +757,22 @@ mod tests {
 
         for handle in handles {
             assert_eq!(handle.join().expect("runtime worker must finish"), expected);
+        }
+    }
+
+    use crate::handler::SshHandlerError;
+
+    /// Deletes a temporary known_hosts file when the test ends, even when an
+    /// assertion fails (ERR-15).
+    struct TempKnownHosts(std::path::PathBuf);
+
+    impl Drop for TempKnownHosts {
+        fn drop(&mut self) {
+            if let Err(error) = std::fs::remove_file(&self.0) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!("failed to remove {}: {error}", self.0.display());
+                }
+            }
         }
     }
 
@@ -825,19 +905,22 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server_task = tokio::spawn(async move {
             let mut server = KeyboardInteractiveServer;
-            let _ = server.run_on_socket(server_config, &listener).await;
+            // The test aborts this task when done; a run error is expected then.
+            if let Err(error) = server.run_on_socket(server_config, &listener).await {
+                eprintln!("test SSH server stopped: {error}");
+            }
         });
         (address, server_task)
     }
 
     async fn connect_trusting_loopback(
         address: std::net::SocketAddr,
-    ) -> (client::Handle<SshClientHandler>, std::path::PathBuf) {
-        let known_hosts = std::env::temp_dir().join(format!(
+    ) -> (client::Handle<SshClientHandler>, TempKnownHosts) {
+        let known_hosts = TempKnownHosts(std::env::temp_dir().join(format!(
             "oneterm-kbd-known-hosts-{}-{}",
             std::process::id(),
             address.port()
-        ));
+        )));
         // Learn the loopback key with a probe connection so the real
         // connection can run under the strict policy without touching the
         // user's known_hosts.
@@ -849,7 +932,7 @@ mod tests {
                 address.port(),
                 oneterm_core::HostKeyPolicy::Strict,
             )
-            .with_known_hosts_path(known_hosts.clone()),
+            .with_known_hosts_path(known_hosts.0.clone()),
         )
         .await;
         let fingerprint = match probe {
@@ -864,7 +947,7 @@ mod tests {
                 address.port(),
                 oneterm_core::HostKeyPolicy::AcceptNewFingerprint(fingerprint),
             )
-            .with_known_hosts_path(known_hosts.clone()),
+            .with_known_hosts_path(known_hosts.0.clone()),
         )
         .await
         .expect("loopback connect");
@@ -874,7 +957,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn password_falls_back_to_keyboard_interactive() {
         let (address, server_task) = spawn_keyboard_interactive_server().await;
-        let (mut handle, known_hosts) = connect_trusting_loopback(address).await;
+        let (mut handle, _known_hosts) = connect_trusting_loopback(address).await;
 
         let result = authenticate_with_password(&mut handle, "user", "secret")
             .await
@@ -883,13 +966,12 @@ mod tests {
 
         drop(handle);
         server_task.abort();
-        let _ = std::fs::remove_file(known_hosts);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn wrong_password_reports_remaining_methods() {
         let (address, server_task) = spawn_keyboard_interactive_server().await;
-        let (mut handle, known_hosts) = connect_trusting_loopback(address).await;
+        let (mut handle, _known_hosts) = connect_trusting_loopback(address).await;
 
         let result = authenticate_with_password(&mut handle, "user", "wrong")
             .await
@@ -904,7 +986,6 @@ mod tests {
 
         drop(handle);
         server_task.abort();
-        let _ = std::fs::remove_file(known_hosts);
     }
 
     #[test]
@@ -912,18 +993,18 @@ mod tests {
         let none = MethodSet::empty();
         assert_eq!(
             authentication_failure_message(&none, false),
-            "SSH authentication failed"
+            "rejected by the server"
         );
 
         let methods =
             MethodSet::from(&[MethodKind::PublicKey, MethodKind::KeyboardInteractive][..]);
         assert_eq!(
             authentication_failure_message(&methods, false),
-            "SSH authentication failed; the server accepts: publickey, keyboard-interactive"
+            "rejected by the server; the server accepts: publickey, keyboard-interactive"
         );
         assert_eq!(
             authentication_failure_message(&methods, true),
-            "SSH authentication failed (the server accepted this method but requires another one); the server accepts: publickey, keyboard-interactive"
+            "rejected by the server (the server accepted this method but requires another one); the server accepts: publickey, keyboard-interactive"
         );
     }
 
@@ -939,18 +1020,33 @@ mod tests {
 
     #[tokio::test]
     async fn phase_wait_has_a_deadline() {
-        let error = await_phase_with_deadline(
-            "test",
-            async {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                Ok(())
-            },
-            oneterm_core::ConnectionCancellation::default(),
-            Duration::from_millis(1),
-        )
-        .await
-        .expect_err("expired phase must fail");
+        let phases = ConnectPhases::new(ConnectionCancellation::default());
+        let error = phases
+            .run_with_deadline(
+                ConnectPhase::ShellRequest,
+                async {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    Ok(())
+                },
+                Duration::from_millis(1),
+            )
+            .await
+            .expect_err("expired phase must fail");
 
-        assert_eq!(error.to_string(), "SSH test phase timed out");
+        assert!(
+            matches!(
+                error,
+                AppError::Connect {
+                    phase: ConnectPhase::ShellRequest,
+                    ..
+                }
+            ),
+            "{error}"
+        );
+        assert_eq!(
+            error.to_string(),
+            "SSH shell request failed: timed out after 0 s"
+        );
+        assert_eq!(phases.current(), ConnectPhase::ShellRequest);
     }
 }

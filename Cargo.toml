@@ -77,7 +77,6 @@ oneterm-completion = { path = "crates/completion" }
 # every workspace-wide tool scope. Cost: one upstream clone on a cold cache.
 alacritty_terminal = { git = "https://github.com/zed-industries/alacritty", rev = "fcf32feacb367b75ec84dd40f041e4fd411d3cc1" }
 # Terminal helpers: URL detect + OSC 52 base64
-linkify = "0.10"
 aho-corasick = "1"
 regex = "1"
 base64 = "0.22"

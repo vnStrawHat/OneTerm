@@ -5,6 +5,8 @@
 //! pump answers after the parse batch by reading the live colour from the
 //! `Term` colour table, falling back to the theme default the UI registered.
 
+use std::sync::PoisonError;
+
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::term::Term;
 
@@ -33,18 +35,22 @@ impl ColorQueryReplier {
     pub fn enqueue(&self, index: usize, format: ColorFormatter) {
         self.pending
             .lock()
-            .unwrap()
+            .unwrap_or_else(PoisonError::into_inner)
             .push(PendingColorQuery { index, format });
     }
 
     /// Whether any query is waiting for an answer.
     pub fn has_pending(&self) -> bool {
-        !self.pending.lock().unwrap().is_empty()
+        !self
+            .pending
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
     }
 
     /// Drain every pending query.
     pub fn take(&self) -> Vec<PendingColorQuery> {
-        std::mem::take(&mut *self.pending.lock().unwrap())
+        std::mem::take(&mut *self.pending.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
     /// Format the reply sequences for `queries`: the live `Term` colour when the

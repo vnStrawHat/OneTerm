@@ -7,11 +7,14 @@ use crate::class::Class;
 use crate::profile::ShellProfile;
 use crate::rules::RuleSet;
 
-use super::is_word_char;
 use super::structural;
+use super::{LineText, is_word_char};
 
 /// Run the flat matcher set in priority order (first match wins per span).
+///
+/// `text` is the same line as `chars`, kept for the byte-based matchers.
 pub(super) fn scan_output(
+    text: &LineText<'_>,
     chars: &[char],
     classes: &mut [u8],
     rules: &RuleSet,
@@ -33,10 +36,10 @@ pub(super) fn scan_output(
     }
 
     // 3. Keywords — one Aho-Corasick pass.
-    keyword_scan(chars, classes, rules);
+    keyword_scan(text, chars, classes, rules);
 
     // 4. Structural regexes (IPv6, MAC, DateTime) — skip claimed columns.
-    structural::structural_scan(chars, classes, rules);
+    structural::structural_scan(text, chars, classes, rules);
 
     // 5. Hand-written probes (IPv4, Path, Number).
     structural::ipv4_probe(chars, classes);
@@ -207,20 +210,14 @@ fn option_probe(chars: &[char], classes: &mut [u8], profile: &ShellProfile) {
 }
 
 /// 3. Keyword scanning — one Aho-Corasick pass with word-boundary checking.
-fn keyword_scan(chars: &[char], classes: &mut [u8], rules: &RuleSet) {
-    // Build a string from chars for Aho-Corasick (byte-based).
-    let s: String = chars.iter().collect();
-
-    // Precompute byte offset → char index mapping.
-    let byte_to_char = super::byte_to_char_map(&s);
-
-    for m in rules.keywords.find_iter(&s) {
+fn keyword_scan(text: &LineText<'_>, chars: &[char], classes: &mut [u8], rules: &RuleSet) {
+    for m in rules.keywords.find_iter(text.text) {
         let pat = m.pattern();
         let class = rules.class_for_pattern(pat.as_usize()) as u8;
 
         // Convert byte range → char range.
-        let char_start = *byte_to_char.get(m.start()).unwrap_or(&0);
-        let char_end = *byte_to_char.get(m.end()).unwrap_or(&chars.len());
+        let char_start = text.char_index(m.start());
+        let char_end = text.char_index(m.end());
 
         // Word boundary check: the char before and after must not be
         // alphanumeric (prevents "no" matching inside "node").

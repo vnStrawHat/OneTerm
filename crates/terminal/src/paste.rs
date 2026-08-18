@@ -1,11 +1,9 @@
 //! Bracketed paste encoding with ESC sanitization.
 //!
-//! Before Phase 1, `paste()` used `format!("\x1b[200~{}\x1b[201~", text)` which
-//! allowed pasted content containing `\x1b[201~` to terminate bracketed-paste
-//! mode early, causing the remainder to be interpreted as keystrokes/commands.
-//!
-//! The fix strips embedded paste markers and — following alacritty — every
-//! remaining ESC (`\x1b`) byte from the payload before wrapping it in the outer
+//! Pasted content that contains `\x1b[201~` would terminate bracketed-paste
+//! mode early and let the remainder run as keystrokes/commands. Following
+//! alacritty, the encoder strips embedded paste markers and every remaining
+//! ESC (`\x1b`) byte from the payload before wrapping it in the outer
 //! bracketed-paste delimiters. Removing ESC itself (not only marker sequences)
 //! makes it impossible for nested or overlapping fragments to reassemble into
 //! `\x1b[201~` after filtering. `\x03` is also removed because some shells

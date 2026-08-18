@@ -61,7 +61,7 @@ OneTerm/
 │   │           └── dock_mode.rs / placement.rs / env.rs
 │   │
 │   ├── terminal/                   # Terminal ENGINE (alacritty-coupled, no gpui) — `oneterm-terminal`
-│   │   ├── Cargo.toml              # deps: core, alacritty_terminal, async-channel, linkify, base64
+│   │   ├── Cargo.toml              # deps: core, alacritty_terminal, async-channel, base64
 │   │   └── src/
 │   │       ├── lib.rs              # Re-export TerminalSession, SessionEvent, TerminalContent, PtySize…
 │   │       ├── factory.rs          # PtySize (+ PtySize::INITIAL) + SessionFactory trait

@@ -214,6 +214,14 @@ fn resolve_unix_shell(name: &str, lookup: &UnixShellLookup) -> PathBuf {
     default
 }
 
+/// `AppError::ShellResolution` for a shell program that is not on `PATH`.
+fn shell_not_found(shell: &str) -> AppError {
+    AppError::ShellResolution {
+        shell: shell.to_string(),
+        reason: "not found in PATH".to_string(),
+    }
+}
+
 /// Resolve `LocalShellConfig` → `(program, args, env)` ready to spawn.
 ///
 /// Returns an error if `Custom` has no `program`, or the default shell cannot be found.
@@ -256,7 +264,7 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
                 .clone()
                 .or_else(|| find_in_path("powershell"))
                 .or_else(|| find_in_path("powershell.exe"))
-                .ok_or_else(|| AppError::msg("powershell.exe not found in PATH"))?;
+                .ok_or_else(|| shell_not_found("powershell.exe"))?;
             // -NoExit keeps the session interactive after the integration command runs.
             // The prompt wrapper emits OSC 7 before delegating to the original prompt.
             let a = vec![
@@ -273,7 +281,7 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
                 .clone()
                 .or_else(|| find_in_path("pwsh"))
                 .or_else(|| find_in_path("pwsh.exe"))
-                .ok_or_else(|| AppError::msg("pwsh not found in PATH"))?;
+                .ok_or_else(|| shell_not_found("pwsh"))?;
             let a = vec![
                 "-NoLogo".into(),
                 "-NoExit".into(),
@@ -306,7 +314,10 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
             let prog = cfg
                 .program
                 .clone()
-                .ok_or_else(|| AppError::msg("ShellKind::Custom requires `program`"))?;
+                .ok_or_else(|| AppError::ShellResolution {
+                    shell: "custom".to_string(),
+                    reason: "ShellKind::Custom requires `program`".to_string(),
+                })?;
             (prog, Vec::new())
         }
     };

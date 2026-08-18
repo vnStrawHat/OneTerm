@@ -1,9 +1,9 @@
-//! `LocalSession` — spawn a local shell via `alacritty_terminal::tty` +
-//! `EventLoop` (ConPTY on Windows).
+//! `LocalSession` — spawn a local shell via `alacritty_terminal::tty` on a
+//! dedicated PTY owner thread (ConPTY on Windows).
 //!
-//! #11: spawn + struct + inherent methods. #12: `impl TerminalSession`
-//! (mouse/selection/wheel + IME + cursor_bounds). See
-//! `docs/terminal-backend.md` §6.2 + freya `handle.rs`.
+//! This file holds the spawn path, the struct, and its inherent helpers; the
+//! `TerminalSession` implementation lives in `session_terminal.rs`. See
+//! `docs/terminal-backend.md` §6.2.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -49,6 +49,8 @@ impl LocalSession {
         security: TerminalSecurityPolicy,
     ) -> Result<Self, AppError> {
         let resolved = resolve_shell(&cfg)?;
+        // Kept for the spawn-failure error: `resolved` is moved into `Options`.
+        let program_display = resolved.program.display().to_string();
         let opts = Options {
             shell: Some(Shell::new(
                 program_argument(&resolved.program),
@@ -98,8 +100,12 @@ impl LocalSession {
         )));
 
         let (_notifier, owner_join) =
-            ShellEventLoop::spawn_owned(opts, winsize, term.clone(), listener.clone())
-                .map_err(|e| AppError::msg(e.to_string()))?;
+            ShellEventLoop::spawn_owned(opts, winsize, term.clone(), listener.clone()).map_err(
+                |error| AppError::ShellResolution {
+                    shell: program_display,
+                    reason: error.to_string(),
+                },
+            )?;
 
         // Shell integration is injected via env vars in resolve_shell()
         // — fully silent, no temp file, no script written to the PTY.
@@ -142,21 +148,44 @@ impl LocalSession {
         self.listener.transport()
     }
 
-    /// Shut down and join the dedicated PTY owner thread.
+    /// Ask the PTY owner thread to shut down without waiting for it.
+    ///
+    /// The owner loop may be parked in `poll.wait` or blocked on the `Term`
+    /// lock, so joining it here would stall the UI thread (and can deadlock
+    /// with a pump that waits for the UI to drain events — CORR-10). The join
+    /// handle is handed to a detached reaper thread that reports a panicked
+    /// owner; the shutdown request itself is delivered synchronously.
     pub(crate) fn shutdown_owner(&self) -> Result<(), TerminalError> {
         let result = self.transport().pty_close();
-        let join_result = self
+        let join = self
             .owner_join
             .lock()
-            .unwrap()
-            .take()
-            .map(|join| join.join());
-        if let Err(error) = join_result.unwrap_or(Ok(())) {
-            return Err(TerminalError::Transport(format!(
-                "PTY owner thread panicked: {error:?}"
-            )));
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(join) = join {
+            reap_owner_thread(join);
         }
         result
+    }
+}
+
+/// Join the PTY owner thread off the caller's thread and log a panic.
+///
+/// If the reaper thread cannot be spawned the handle is dropped, which detaches
+/// the owner thread — it still exits on its own once it observes the shutdown
+/// flag.
+fn reap_owner_thread(join: std::thread::JoinHandle<()>) {
+    let spawned = std::thread::Builder::new()
+        .name("PTY owner reaper".into())
+        .spawn(move || {
+            if let Err(payload) = join.join() {
+                log::error!("LocalSession: PTY owner thread panicked: {payload:?}");
+            }
+        });
+    if let Err(error) = spawned {
+        log::warn!(
+            "LocalSession: cannot spawn PTY owner reaper ({error}); detaching the owner thread"
+        );
     }
 }
 
@@ -207,10 +236,20 @@ fn quote_windows_argument(token: &str) -> String {
 }
 
 impl Drop for LocalSession {
+    /// Request shutdown when the session is discarded without `close()`; the
+    /// owner thread is reaped off-thread (see [`LocalSession::shutdown_owner`]).
     fn drop(&mut self) {
-        let _ = self.transport().pty_close();
-        if let Some(join) = self.owner_join.get_mut().unwrap().take() {
-            let _ = join.join();
+        if let Err(error) = self.transport().pty_close() {
+            // Drop after an explicit `close()` reports `Closed`; nothing to do.
+            log::debug!("LocalSession: close on drop not delivered: {error}");
+        }
+        let join = self
+            .owner_join
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(join) = join {
+            reap_owner_thread(join);
         }
     }
 }

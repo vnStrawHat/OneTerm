@@ -23,7 +23,6 @@ russh.workspace = true
 tokio.workspace = true
 log.workspace = true
 russh-sftp.workspace = true
-anyhow.workspace = true
 tokio-util.workspace = true
 
 [dev-dependencies]

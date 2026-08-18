@@ -3,7 +3,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use oneterm_core::{AppError, HostKeyPolicy};
+use oneterm_core::{AppError, ConnectPhase, HostKeyPolicy};
 use russh::client;
 use russh::keys::{Algorithm, HashAlg, PublicKey};
 
@@ -118,13 +118,20 @@ impl SshHandlerError {
                 port: *port,
                 fingerprint: fingerprint.clone(),
             },
-            Self::KeyStore(error) => AppError::msg(format!("SSH known-hosts error: {error}")),
-            Self::Russh(error) => AppError::msg(error.to_string()),
+            Self::KeyStore(error) => AppError::Connect {
+                phase: ConnectPhase::Transport,
+                message: format!("known-hosts error: {error}"),
+            },
+            Self::Russh(error) => AppError::Connect {
+                phase: ConnectPhase::Transport,
+                message: error.to_string(),
+            },
         }
     }
 }
 
 /// SSH handler carrying the connection identity and the user's host-key policy.
+#[derive(Clone)]
 pub(crate) struct SshClientHandler {
     host: String,
     port: u16,
@@ -265,11 +272,21 @@ fn preferred_key_algorithms(known: &[PublicKey]) -> Vec<Algorithm> {
 impl client::Handler for SshClientHandler {
     type Error = SshHandlerError;
 
+    /// known_hosts is read (and possibly appended) on the blocking pool so
+    /// the two shared SSH runtime workers never stall on disk I/O (CORR-17).
     async fn check_server_key(
         &mut self,
         server_key: &russh::keys::PublicKey,
     ) -> Result<bool, Self::Error> {
-        self.verify_server_key(server_key)
+        let handler = self.clone();
+        let server_key = server_key.clone();
+        tokio::task::spawn_blocking(move || handler.verify_server_key(&server_key))
+            .await
+            .unwrap_or_else(|join_error| {
+                Err(SshHandlerError::KeyStore(russh::keys::Error::IO(
+                    std::io::Error::other(join_error),
+                )))
+            })
     }
 }
 

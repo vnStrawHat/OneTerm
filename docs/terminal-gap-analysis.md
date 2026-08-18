@@ -92,7 +92,7 @@
 | ✅/❌ | Gap | Zed has | OneTerm has | Description / Example |
 |---|---|---|---|---|
 | ✅ | **OSC 8 hyperlink** | Yes | Yes | `cell.hyperlink()` → Ctrl+click opens URL. |
-| ✅ | **Plain-text URL detection** | Yes | Yes (linkify) | `https://example.com` in output → Ctrl+click opens. |
+| ✅ | **Plain-text URL detection** | Yes | Yes (terminal-view url detection) | `https://example.com` in output → Ctrl+click opens. |
 | ✅ | **Ctrl+click open URL** | Yes | Yes | Ctrl+click on URL → opens browser. |
 | ❌ | **Path-like hyperlink (file:line)** | Yes — `hover_path_like_target`, `open_path_like_target`, regex for `file.rs:42` | No | Zed: hover `src/main.rs:42` → tooltip shows path, Ctrl+click opens file at line 42. OneTerm: URLs only. **Example**: Compiler output `error at src/main.rs:42:10` → Zed: click opens editor. OneTerm: plain text. |
 | ❌ | **Hover tooltip** | Yes — `HoverTarget { tooltip, hovered_word }` | No | Zed: hover URL/path → tooltip shows full URL/path. OneTerm: no tooltip. |

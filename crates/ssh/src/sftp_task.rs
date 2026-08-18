@@ -3,21 +3,24 @@
 //! Runs alongside `ssh_main_task` on the same tokio runtime.
 //! The two channels (shell + sftp) share one TCP connection, multiplexed by russh.
 //!
-//! Upload/download are spawned as separate tokio tasks — the main loop stays
-//! responsive to receive `SftpCmd::Cancel` and signal the `CancellationToken`.
+//! Every command is spawned as its own tokio task (CORR-13) — the main loop
+//! only dispatches, so a slow `read_dir` never delays `Cancel`/`Close`, and
+//! transfers can be cancelled through their `CancellationToken`.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use async_channel::{Receiver, Sender};
+use async_channel::Receiver;
 use russh_sftp::client::SftpSession as SftpChannel;
+use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-use oneterm_core::{AppError, SftpStatus};
+use oneterm_core::{AppError, Result, SftpStatus, report_best_effort};
 
-use crate::sftp::{SftpCmd, SftpEvent};
+use crate::sftp::SftpCmd;
 
 mod metadata;
 mod path_policy;
@@ -36,40 +39,53 @@ pub(crate) use path_policy::{
 
 /// Tokio task that handles SFTP commands.
 ///
-/// Runs alongside `ssh_main_task` on the same tokio runtime.
-/// Receives `SftpCmd` via `cmd_rx`, sends `SftpEvent` via `event_tx`.
-///
-/// Upload/download are spawned as separate tokio tasks — the main loop stays
-/// responsive to receive `SftpCmd::Cancel` and signal the `CancellationToken`.
+/// Runs alongside `ssh_main_task` on the same tokio runtime and receives
+/// `SftpCmd` via `cmd_rx`. Every command runs in its own spawned task so the
+/// dispatch loop stays responsive to `SftpCmd::Cancel`/`Close` even while a
+/// slow metadata request is waiting on the server (CORR-13).
 ///
 /// `shutdown` is cancelled by `ssh_main_task` when the SSH connection ends, so
 /// the SFTP task (and `alive()`) follow the connection lifetime (ARCH-28).
 pub(crate) async fn sftp_task(
     sftp: SftpChannel,
     cmd_rx: Receiver<SftpCmd>,
-    event_tx: Sender<SftpEvent>,
-    alive: std::sync::Arc<std::sync::Mutex<bool>>,
+    alive: Arc<AtomicBool>,
     shutdown: CancellationToken,
 ) {
     log::info!("sftp_task: started");
 
     // Load uid→name and gid→name maps from /etc/passwd + /etc/group.
     // Best-effort: if unreadable → empty map, numbers shown.
-    let lookup = load_uid_gid_lookup(&sftp).await;
+    let lookup = Arc::new(load_uid_gid_lookup(&sftp).await);
     log::info!(
         "sftp_task: uid/gid lookup loaded ({} uids, {} gids)",
         lookup.uid_to_name.len(),
         lookup.gid_to_name.len()
     );
 
-    // Wrap SftpChannel in Arc — cloned for each spawned transfer task.
+    // Wrap SftpChannel in Arc — cloned for each spawned command task.
     let sftp = Arc::new(sftp);
 
-    let _ = event_tx.try_send(SftpEvent::Ready);
-
     // Cancel tokens for running transfers — key = transfer_id.
-    let cancels: ActiveTransfers = Arc::new(std::sync::Mutex::new(HashMap::new()));
+    let cancels: ActiveTransfers = Arc::new(Mutex::new(HashMap::new()));
     let mut background_tasks = JoinSet::new();
+
+    /// Answer a oneshot request; the requester may have given up (dropped
+    /// the receiver), which is not an error worth more than a debug line.
+    fn reply_to<T>(reply: oneshot::Sender<Result<T>>, result: Result<T>) {
+        if reply.send(result).is_err() {
+            log::debug!("sftp_task: requester dropped before the reply");
+        }
+    }
+    fn cancel_all(cancels: &ActiveTransfers) {
+        for cancellation in cancels
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+        {
+            cancellation.cancel();
+        }
+    }
 
     loop {
         let command = tokio::select! {
@@ -82,9 +98,7 @@ pub(crate) async fn sftp_task(
             }
             _ = shutdown.cancelled() => {
                 log::info!("sftp_task: SSH connection ended — shutting down");
-                for cancellation in cancels.lock().unwrap().values() {
-                    cancellation.cancel();
-                }
+                cancel_all(&cancels);
                 break;
             }
         };
@@ -94,39 +108,51 @@ pub(crate) async fn sftp_task(
         match command {
             Ok(SftpCmd::ReadDir { path, reply }) => {
                 log::debug!("sftp_task: ReadDir path=\"{path}\"");
-                let result = sftp_read_dir(&sftp, &path, &lookup).await;
-                let _ = reply.send(result);
+                let (sftp, lookup) = (Arc::clone(&sftp), Arc::clone(&lookup));
+                background_tasks.spawn(async move {
+                    reply_to(reply, sftp_read_dir(&sftp, &path, &lookup).await);
+                });
             }
             Ok(SftpCmd::Stat { path, reply }) => {
                 log::debug!("sftp_task: Stat path=\"{path}\"");
-                let result = sftp_stat(&sftp, &path, &lookup).await;
-                let _ = reply.send(result);
+                let (sftp, lookup) = (Arc::clone(&sftp), Arc::clone(&lookup));
+                background_tasks.spawn(async move {
+                    reply_to(reply, sftp_stat(&sftp, &path, &lookup).await);
+                });
             }
             Ok(SftpCmd::Rename { from, to, reply }) => {
                 log::debug!("sftp_task: Rename from=\"{from}\" to=\"{to}\"");
-                let result = sftp
-                    .rename(from.as_str(), to.as_str())
-                    .await
-                    .map_err(map_sftp_err);
-                let _ = reply.send(result);
+                let sftp = Arc::clone(&sftp);
+                background_tasks.spawn(async move {
+                    let result = sftp
+                        .rename(from.as_str(), to.as_str())
+                        .await
+                        .map_err(map_sftp_err);
+                    reply_to(reply, result);
+                });
             }
             Ok(SftpCmd::Remove { path, reply }) => {
                 log::debug!("sftp_task: Remove path=\"{path}\"");
-                let result = sftp.remove_file(path.as_str()).await.map_err(map_sftp_err);
-                let _ = reply.send(result);
+                let sftp = Arc::clone(&sftp);
+                background_tasks.spawn(async move {
+                    let result = sftp.remove_file(path.as_str()).await.map_err(map_sftp_err);
+                    reply_to(reply, result);
+                });
             }
             Ok(SftpCmd::RemoveDirAll { path, reply }) => {
                 log::debug!("sftp_task: RemoveDirAll path=\"{path}\"");
                 let sftp = Arc::clone(&sftp);
                 background_tasks.spawn(async move {
-                    let result = sftp_remove_recursive(&sftp, &path).await;
-                    let _ = reply.send(result);
+                    reply_to(reply, sftp_remove_recursive(&sftp, &path).await);
                 });
             }
             Ok(SftpCmd::Mkdir { path, reply }) => {
                 log::debug!("sftp_task: Mkdir path=\"{path}\"");
-                let result = sftp.create_dir(path.as_str()).await.map_err(map_sftp_err);
-                let _ = reply.send(result);
+                let sftp = Arc::clone(&sftp);
+                background_tasks.spawn(async move {
+                    let result = sftp.create_dir(path.as_str()).await.map_err(map_sftp_err);
+                    reply_to(reply, result);
+                });
             }
             Ok(SftpCmd::Upload {
                 transfer_id,
@@ -141,11 +167,14 @@ pub(crate) async fn sftp_task(
                 );
                 let cancel = CancellationToken::new();
                 {
-                    let mut active = cancels.lock().unwrap();
+                    let mut active = cancels.lock().unwrap_or_else(PoisonError::into_inner);
                     if active.contains_key(&transfer_id) {
-                        let _ = reply.try_send(Err(AppError::msg(format!(
-                            "duplicate active transfer id: {transfer_id}"
-                        ))));
+                        report_best_effort(
+                            "sftp_task: reject duplicate upload id",
+                            reply.try_send(Err(AppError::msg(format!(
+                                "duplicate active transfer id: {transfer_id}"
+                            )))),
+                        );
                         continue;
                     }
                     active.insert(transfer_id, cancel.clone());
@@ -159,7 +188,7 @@ pub(crate) async fn sftp_task(
                         "sftp_task: Upload #{transfer_id} finished: {}",
                         if result.is_ok() { "OK" } else { "error" }
                     );
-                    let _ = reply.try_send(result);
+                    report_best_effort("sftp_task: deliver upload result", reply.try_send(result));
                 });
             }
             Ok(SftpCmd::Download {
@@ -175,11 +204,14 @@ pub(crate) async fn sftp_task(
                 );
                 let cancel = CancellationToken::new();
                 {
-                    let mut active = cancels.lock().unwrap();
+                    let mut active = cancels.lock().unwrap_or_else(PoisonError::into_inner);
                     if active.contains_key(&transfer_id) {
-                        let _ = reply.try_send(Err(AppError::msg(format!(
-                            "duplicate active transfer id: {transfer_id}"
-                        ))));
+                        report_best_effort(
+                            "sftp_task: reject duplicate download id",
+                            reply.try_send(Err(AppError::msg(format!(
+                                "duplicate active transfer id: {transfer_id}"
+                            )))),
+                        );
                         continue;
                     }
                     active.insert(transfer_id, cancel.clone());
@@ -193,12 +225,19 @@ pub(crate) async fn sftp_task(
                         "sftp_task: Download #{transfer_id} finished: {}",
                         if result.is_ok() { "OK" } else { "error" }
                     );
-                    let _ = reply.try_send(result);
+                    report_best_effort(
+                        "sftp_task: deliver download result",
+                        reply.try_send(result),
+                    );
                 });
             }
             Ok(SftpCmd::Cancel { transfer_id }) => {
                 log::info!("sftp_task: Cancel transfer #{transfer_id}");
-                let cancel = cancels.lock().unwrap().get(&transfer_id).cloned();
+                let cancel = cancels
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .get(&transfer_id)
+                    .cloned();
                 if let Some(cancel) = cancel {
                     cancel.cancel();
                     log::info!("sftp_task: Cancel #{transfer_id} — token signalled");
@@ -208,16 +247,12 @@ pub(crate) async fn sftp_task(
             }
             Ok(SftpCmd::Close) => {
                 log::info!("sftp_task: close requested");
-                for cancellation in cancels.lock().unwrap().values() {
-                    cancellation.cancel();
-                }
+                cancel_all(&cancels);
                 break;
             }
             Err(_) => {
                 log::info!("sftp_task: cmd_rx closed — session dropped");
-                for cancellation in cancels.lock().unwrap().values() {
-                    cancellation.cancel();
-                }
+                cancel_all(&cancels);
                 break;
             }
         }
@@ -245,13 +280,12 @@ pub(crate) async fn sftp_task(
             }
         }
     }
-    cancels.lock().unwrap().clear();
+    cancels
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clear();
 
-    {
-        let mut a = alive.lock().unwrap();
-        *a = false;
-    }
-    let _ = event_tx.try_send(SftpEvent::Closed);
+    alive.store(false, Ordering::Release);
     log::info!("sftp_task: exiting");
 }
 

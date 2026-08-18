@@ -66,7 +66,7 @@ pub fn parse_semantic_json(json: &str) -> ClassStyles {
             }
             if let Some(bg) = val.get("background").and_then(|s| s.as_str()) {
                 if let Some(c) = parse_hex(bg) {
-                    styles.bg[class as usize] = Some(c);
+                    styles.style_mut(class).bg = Some(c);
                 }
             }
             if let Some(deco) = val.get("decoration").and_then(|s| s.as_str()) {
@@ -75,10 +75,10 @@ pub fn parse_semantic_json(json: &str) -> ClassStyles {
                 }
             }
             if let Some(bold) = val.get("bold").and_then(|s| s.as_bool()) {
-                styles.font[class as usize].bold = bold;
+                styles.style_mut(class).font.bold = bold;
             }
             if let Some(italic) = val.get("italic").and_then(|s| s.as_bool()) {
-                styles.font[class as usize].italic = italic;
+                styles.style_mut(class).font.italic = italic;
             }
         }
     }
@@ -125,9 +125,9 @@ mod tests {
     fn default_styles_loaded() {
         let s = load_default_styles();
         assert!(s.is_active());
-        assert!(s.fg[Class::Error as usize].is_some());
-        assert!(s.fg[Class::Url as usize].is_some());
-        assert_eq!(s.deco[Class::Url as usize], Decoration::Underline);
+        assert!(s.style(Class::Error as u8).fg.is_some());
+        assert!(s.style(Class::Url as u8).fg.is_some());
+        assert_eq!(s.style(Class::Url as u8).deco, Decoration::Underline);
         assert!(s.prompt_line_bg.is_some());
     }
 

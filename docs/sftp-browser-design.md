@@ -391,6 +391,9 @@ pub enum SftpCmd {
 }
 
 // ── SFTP event: tokio task → UI ──────────────────────────────
+// (Design-time sketch. The implementation has no `SftpEvent` channel: the UI
+// observes lifecycle through `SftpBackend::alive()` — an `AtomicBool` cleared
+// when `sftp_task` exits — and the dead event channel was removed.)
 
 /// Event from the SFTP task sent to the UI (via `async_channel`).
 #[derive(Debug, Clone)]

@@ -28,24 +28,61 @@ use crate::rules::RuleSet;
 /// `line` is the display text of one row (cells joined, spacers skipped). The
 /// output length equals `line.chars().count()`.
 pub fn scan_line(line: &str, rules: &RuleSet, profile: &ShellProfile, role: RowRole) -> Vec<u8> {
+    let mut classes = Vec::new();
+    scan_line_into(line, rules, profile, role, &mut classes);
+    classes
+}
+
+/// [`scan_line`] into a caller-owned buffer: `out` is cleared and refilled, so
+/// a per-frame scan reuses one allocation per row (PERF-23).
+pub fn scan_line_into(
+    line: &str,
+    rules: &RuleSet,
+    profile: &ShellProfile,
+    role: RowRole,
+    out: &mut Vec<u8>,
+) {
     let chars: Vec<char> = line.chars().collect();
     let n = chars.len();
-    let mut classes = vec![Class::Default as u8; n];
+    out.clear();
+    out.resize(n, Class::Default as u8);
+    let classes = out.as_mut_slice();
 
     match role {
-        RowRole::Prompt => prompt::scan_prompt_line(&chars, &mut classes, profile),
-        RowRole::Command => command::scan_command_mode(&chars, &mut classes, profile),
+        RowRole::Prompt => prompt::scan_prompt_line(&chars, classes, profile),
+        RowRole::Command => command::scan_command_mode(&chars, classes, profile),
         RowRole::Output => {
             // Fallback: if the line looks like a prompt, treat it as one.
             if prompt::looks_like_prompt(line, profile) {
-                prompt::scan_prompt_line(&chars, &mut classes, profile);
+                prompt::scan_prompt_line(&chars, classes, profile);
             } else {
-                output::scan_output(&chars, &mut classes, rules, profile);
+                // The byte-based matchers (keyword automaton, structural
+                // regexes) share one text + byte→char map built here once.
+                let text = LineText {
+                    text: line,
+                    byte_to_char: byte_to_char_map(line),
+                };
+                output::scan_output(&text, &chars, classes, rules, profile);
             }
         }
     }
+}
 
-    classes
+/// One line as the byte-based matchers see it: the original `&str` plus its
+/// byte offset → char index map (built once per line, shared by every matcher).
+pub(super) struct LineText<'a> {
+    pub(super) text: &'a str,
+    byte_to_char: Vec<usize>,
+}
+
+impl LineText<'_> {
+    /// Char index for byte offset `byte` (`byte == len` → char count).
+    pub(super) fn char_index(&self, byte: usize) -> usize {
+        self.byte_to_char
+            .get(byte)
+            .copied()
+            .unwrap_or_else(|| self.byte_to_char.len().saturating_sub(1))
+    }
 }
 
 /// Whether a char is a "word" char (alphanumeric or underscore).
@@ -59,8 +96,8 @@ pub(super) fn is_word_char(c: char) -> bool {
 ///
 /// The keyword automaton and structural regexes match on bytes, but the class
 /// buffer is indexed per char. This lets a byte match range be converted to a
-/// char range. Shared by the [`output`] and [`structural`] submodules.
-pub(super) fn byte_to_char_map(s: &str) -> Vec<usize> {
+/// char range (see [`LineText`]).
+fn byte_to_char_map(s: &str) -> Vec<usize> {
     let mut map: Vec<usize> = Vec::with_capacity(s.len() + 1);
     let mut char_index = 0;
     for _ in s.char_indices() {

@@ -9,17 +9,23 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::class::Class;
-use crate::profile::ShellProfile;
+use crate::profile::{ShellProfile, UNIX_PROMPT_PATTERN};
 
-use super::command::scan_command_mode_from;
+use super::command::scan_command_mode;
 use super::structural;
 
-/// Universal prompt detector — matches both Unix (`$`/`#`) and Windows (`>`)
-/// prompts. Used as a fallback when the profile's own prompt regex doesn't
-/// match (e.g. user runs `wsl` inside `cmd.exe` — prompt changes to Unix but
-/// the profile stays `Cmd`).
-static UNIVERSAL_PROMPT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(?:[A-Za-z]:[^\s>]*>[ ]?|[^\s]*[\$#%][ ]?)").unwrap());
+/// Universal prompt detector — matches both Unix (`$`/`#`/`%`, same rules as
+/// the Unix profile: plausible prefix, sign followed by space/EOL — CORR-48)
+/// and Windows (`C:\path>`) prompts. Used as a fallback when the profile's own
+/// prompt regex doesn't match (e.g. user runs `wsl` inside `cmd.exe` — prompt
+/// changes to Unix but the profile stays `Cmd`).
+static UNIVERSAL_PROMPT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r"^(?:[A-Za-z]:[^\s>]*>[ ]?)|{}",
+        UNIX_PROMPT_PATTERN
+    ))
+    .expect("universal prompt regex is valid")
+});
 
 /// Whether an output row should be treated as a prompt line (no OSC 133).
 ///
@@ -66,6 +72,6 @@ pub(super) fn scan_prompt_line(chars: &[char], classes: &mut [u8], profile: &She
         start += 1;
     }
     if start < n {
-        scan_command_mode_from(&chars[start..], &mut classes[start..], profile);
+        scan_command_mode(&chars[start..], &mut classes[start..], profile);
     }
 }

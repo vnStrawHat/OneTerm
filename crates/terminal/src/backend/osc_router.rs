@@ -10,7 +10,7 @@
 //! fields). `send_event` runs during `Processor::advance` with the `Term` lock
 //! held — it never blocks (see [`SessionEventSink`]).
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use alacritty_terminal::event::{Event, EventListener};
 use log::warn;
@@ -160,7 +160,7 @@ impl<T: PtyTransport> OscRouter<T> {
                 let allowed = self
                     .notification_limiter
                     .lock()
-                    .unwrap()
+                    .unwrap_or_else(PoisonError::into_inner)
                     .allow(&self.security);
                 if allowed {
                     self.forward(SessionEvent::Notification(sanitized));

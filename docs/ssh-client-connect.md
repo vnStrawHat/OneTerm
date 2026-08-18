@@ -992,13 +992,25 @@ When the user clicks the same session item multiple times → opens multiple sep
 (each tab = an independent connection). This is the desired behavior — like Tabby, Termius.
 No connection caching/reuse.
 
-### 9.2. Connection timeout
+### 9.2. Connection timeout, phases and cancellation
 
-`SshSession::connect` is bounded by `CONNECT_DEADLINE` (60 s for the whole connect,
-including authentication) and `PHASE_DEADLINE` (20 s per phase: TCP + key exchange,
-each auth step, channel/PTY setup) in `crates/ssh/src/session.rs`. If the server is
-unreachable the deadline fires → `Err` → the connect dialog shows the error and the
-user can retry. See `terminal-backend.md` §13 (risks).
+`crates/ssh/src/session.rs::connect` runs every step through `ConnectPhases`:
+each step is one `oneterm_core::ConnectPhase` (`Transport` → `Authentication` →
+`ChannelOpen` → `PtyRequest` → `ShellRequest` → `ShellIntegration` → `SftpSetup`)
+awaited under a 20 s per-phase deadline, and the whole attempt under a 60 s
+deadline. Failures are typed (ARCH-06):
+
+| Outcome | Error |
+|---|---|
+| Transport/protocol failure or timeout in a step | `AppError::Connect { phase, message }` — the UI shows `Display` (`SSH <phase> failed: <message>`). |
+| Server rejected authentication | `AppError::Connect { phase: Authentication, message: "rejected by the server; the server accepts: …" }`. |
+| Host-key problems | `AppError::HostKeyUnknown` / `AppError::HostKeyChanged` (see §9.3). |
+| User pressed Cancel | `AppError::Cancelled` — `ConnectionCancellation::cancelled()` is a waker-driven future, so a phase in flight is woken immediately instead of polled every 25 ms (PERF-22). |
+
+Blocking work on the connect path (`known_hosts` read/append in
+`check_server_key`, private-key loading/decryption) runs on
+`tokio::task::spawn_blocking` so the two shared runtime workers keep serving the
+other sessions (CORR-17).
 
 ### 9.3. Host key verification
 

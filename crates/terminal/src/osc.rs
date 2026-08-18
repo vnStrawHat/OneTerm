@@ -176,13 +176,59 @@ pub fn parse_osc(params: &[&[u8]]) -> Option<OscPayload> {
 
 /// Parse an OSC 7 URL payload → `PathBuf`. Accepts `file:///path`,
 /// `file://host/path`, and a plain path.
+///
+/// The path part of a `file://` URL is percent-decoded (`%20` → space, as
+/// shells emit it) and a Windows drive path (`file:///C:/Users`) loses the
+/// leading `/` so it becomes `C:/Users` (CORR-46). Invalid percent escapes
+/// and non-UTF-8 sequences are kept verbatim.
 pub fn parse_cwd_url(url: &str) -> PathBuf {
     let Some(stripped) = url.strip_prefix("file://") else {
         return PathBuf::from(url);
     };
-    match stripped.split_once('/') {
-        Some((_, path)) => PathBuf::from(format!("/{path}")),
-        None => PathBuf::from(stripped),
+    let path = match stripped.split_once('/') {
+        Some((_, path)) => format!("/{path}"),
+        None => stripped.to_string(),
+    };
+    let decoded = percent_decode(&path);
+    let path = strip_windows_drive_slash(&decoded);
+    PathBuf::from(path)
+}
+
+/// Decode `%XX` escapes; malformed escapes are kept as-is and the result is
+/// interpreted as UTF-8 leniently.
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let high = (bytes[i + 1] as char).to_digit(16);
+            let low = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(high), Some(low)) = (high, low) {
+                out.push((high * 16 + low) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// `/C:/Users` → `C:/Users` (a `file:///C:/...` URL on Windows); other paths
+/// are returned unchanged.
+fn strip_windows_drive_slash(path: &str) -> &str {
+    let bytes = path.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0] == b'/'
+        && bytes[1].is_ascii_alphabetic()
+        && bytes[2] == b':'
+        && (bytes.len() == 3 || bytes[3] == b'/' || bytes[3] == b'\\')
+    {
+        &path[1..]
+    } else {
+        path
     }
 }
 
@@ -226,6 +272,31 @@ mod tests {
     #[test]
     fn osc7_bare_path() {
         assert_eq!(parse_cwd_url("/tmp/x"), PathBuf::from("/tmp/x"));
+    }
+
+    /// CORR-46: percent escapes are decoded and a Windows drive URL loses the
+    /// leading slash; malformed escapes stay verbatim.
+    #[test]
+    fn osc7_percent_decoding_and_windows_drive() {
+        assert_eq!(
+            parse_cwd_url("file://host/home/me/My%20Docs"),
+            PathBuf::from("/home/me/My Docs")
+        );
+        assert_eq!(
+            parse_cwd_url("file:///C:/Users/me/src"),
+            PathBuf::from("C:/Users/me/src")
+        );
+        assert_eq!(parse_cwd_url("file:///C:"), PathBuf::from("C:"));
+        assert_eq!(
+            parse_cwd_url("file:///tmp/100%25/x%zz"),
+            PathBuf::from("/tmp/100%/x%zz")
+        );
+        assert_eq!(
+            parse_cwd_url("file:///home/%C3%A9t%C3%A9"),
+            PathBuf::from("/home/été")
+        );
+        // A plain absolute path that happens to start with `/C:` is left alone.
+        assert_eq!(parse_cwd_url("/Cx/y"), PathBuf::from("/Cx/y"));
     }
 
     #[test]

@@ -6,13 +6,13 @@
 //! line count, clear epoch) are atomics so a parse batch never takes the mutex
 //! (PERF-20); the rarely written fields live behind one `Mutex`.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use alacritty_terminal::vte::ansi::Rgb;
 
+use crate::osc_agent::AgentSeqWatermarks;
 use crate::session::{CwdSource, NetStats};
 
 /// Theme defaults used to answer OSC 10/11/12/4 queries for colours the
@@ -48,8 +48,9 @@ pub struct SessionState {
     pub foreground_process: Option<String>,
     /// Theme defaults for colour queries.
     pub default_colors: DefaultColors,
-    /// Last applied `seq` per agent id (OSC 9;7 dedup, spec §4.1 / §8.3).
-    pub last_agent_seq: HashMap<String, u64>,
+    /// Last applied `seq` per agent id (OSC 9;7 dedup, spec §4.1 / §8.3),
+    /// bounded to `MAX_TRACKED_AGENTS` ids (SEC-04).
+    pub last_agent_seq: AgentSeqWatermarks,
 }
 
 /// Arc-shared session state: atomics for the pump hot path, a mutex for the rest.

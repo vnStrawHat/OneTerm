@@ -642,7 +642,7 @@ crates/
 │   ├── content.rs            # TerminalContent snapshot struct
 │   ├── palette.rs / color_classification.rs / osc_color.rs
 │   ├── key_encode.rs / mouse_encode.rs / paste.rs / search.rs
-│   ├── osc.rs / osc_agent/ / url.rs / url_policy.rs / security_policy.rs
+│   ├── osc.rs / osc_agent/ / url_policy.rs / security_policy.rs
 │   ├── factory.rs            # PtySize + SessionFactory
 │   └── backend/              # shared pump layer (§5.3)
 │       ├── transport.rs      # PtyTransport trait

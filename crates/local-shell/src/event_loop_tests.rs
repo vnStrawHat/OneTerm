@@ -20,7 +20,7 @@ fn notifier(
     capacity: usize,
 ) -> (
     ShellNotifier,
-    mpsc::Receiver<ShellMsg>,
+    mpsc::Receiver<Cow<'static, [u8]>>,
     std::sync::Arc<ShellControl>,
 ) {
     let poller = std::sync::Arc::new(Poller::new().unwrap());
@@ -43,10 +43,7 @@ fn input_queue_is_bounded_by_messages_and_bytes() {
         .unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
     assert_eq!(control.queued_input_bytes.load(Ordering::Acquire), 1);
-    assert!(matches!(
-        receiver.try_recv().unwrap(),
-        ShellMsg::Input(bytes) if bytes.as_ref() == [1]
-    ));
+    assert_eq!(receiver.try_recv().unwrap().as_ref(), [1]);
 }
 
 #[test]
@@ -78,14 +75,8 @@ fn local_input_queue_preserves_fifo_order() {
     notifier
         .send(ShellMsg::Input(Cow::Borrowed(b"second")))
         .unwrap();
-    assert!(matches!(
-        receiver.try_recv().unwrap(),
-        ShellMsg::Input(bytes) if bytes.as_ref() == b"first"
-    ));
-    assert!(matches!(
-        receiver.try_recv().unwrap(),
-        ShellMsg::Input(bytes) if bytes.as_ref() == b"second"
-    ));
+    assert_eq!(receiver.try_recv().unwrap().as_ref(), b"first");
+    assert_eq!(receiver.try_recv().unwrap().as_ref(), b"second");
 }
 
 #[test]

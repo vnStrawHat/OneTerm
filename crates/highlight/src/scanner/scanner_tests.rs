@@ -220,6 +220,46 @@ fn prompt_line_tagged() {
     assert_eq!(c[opt_pos], Class::Option);
 }
 
+/// CORR-48: output lines that merely contain a prompt glyph are scanned as
+/// output, not as prompt + command.
+#[test]
+fn output_with_prompt_glyph_is_not_a_prompt_line() {
+    let c = scan("100% done", RowRole::Output);
+    let pct = "100% done".find('%').unwrap();
+    assert_ne!(c[pct], Class::PromptSign);
+    let done = "100% done".find("done").unwrap();
+    assert_ne!(c[done], Class::Command);
+    // `100` is still recognised as a number in output mode.
+    assert_eq!(c[0], Class::Number);
+
+    let c = scan("#include <stdio.h>", RowRole::Output);
+    assert_ne!(c[0], Class::PromptSign);
+    assert_ne!(c[1], Class::Command);
+
+    let c = scan("$HOME=/root", RowRole::Output);
+    assert_ne!(c[0], Class::PromptSign);
+    assert_ne!(c[1], Class::Command);
+
+    // Real prompts still switch to command mode.
+    let c = scan("user@host:~$ ls", RowRole::Output);
+    let dollar = "user@host:~$ ls".find('$').unwrap();
+    assert_eq!(c[dollar], Class::PromptSign);
+    assert_eq!(c[dollar + 2], Class::Command);
+}
+
+/// PERF-23: the buffer-reusing entry point yields the same classes as
+/// `scan_line` and clears stale contents.
+#[test]
+fn scan_line_into_matches_scan_line_and_reuses_buffer() {
+    let rules = RuleSet::global();
+    let profile = ShellProfile::Unix;
+    let mut out = vec![7u8; 100];
+    for line in ["error: x", "$ ls -la", "ping 192.168.1.1", ""] {
+        crate::scanner::scan_line_into(line, rules, &profile, RowRole::Output, &mut out);
+        assert_eq!(out, scan_line(line, rules, &profile, RowRole::Output));
+    }
+}
+
 #[test]
 fn command_role_skips_prompt() {
     // RowRole::Command → first token = Command directly.

@@ -1,12 +1,10 @@
 //! External target (URL) policy for terminal-controlled links.
 //!
-//! Before Phase 1, OSC 8 hyperlinks and plain-text URLs were passed directly
-//! to `cx.open_url` without scheme validation. A remote terminal could embed
-//! a `custom-app://` URI that launches a local application, or a `file://`
-//! URI that opens a local file.
-//!
-//! This module provides a single policy layer that all external-target
-//! openings must pass through.
+//! OSC 8 hyperlinks and plain-text URLs are terminal-controlled: a remote
+//! program could embed a `custom-app://` URI that launches a local application,
+//! a `file://` URI that opens a local file, or an OSC 8 link whose visible text
+//! names one site while the target points at another. This module is the
+//! single policy layer that every external-target opening must pass through.
 
 /// Default maximum URL length (256 KiB).
 const DEFAULT_MAX_URL_LEN: usize = 256 * 1024;
@@ -126,22 +124,128 @@ impl ExternalTargetPolicy {
     }
 
     /// Validate a target where the display text may differ from the actual URI
-    /// (e.g. OSC 8 hyperlinks). If the display text differs from the target,
-    /// confirmation is required even for allowed schemes.
+    /// (OSC 8 hyperlinks: the visible cell text is chosen by the program).
+    ///
+    /// Descriptive text (`click here`, `release notes`) is not suspicious.
+    /// Text that *looks like a URL or host* is compared against the target
+    /// with [`display_matches_target`]; when it names a different host the
+    /// decision becomes `Confirm(DisplayTargetMismatch)` even for allowed
+    /// schemes, so `https://good.com` shown over `https://evil.com` never
+    /// opens silently.
     pub fn validate_with_display(&self, target: &str, display: Option<&str>) -> TargetDecision {
         let base = self.validate(target);
         match &base {
-            TargetDecision::Allow => {
-                if let Some(disp) = display {
-                    if !disp.eq_ignore_ascii_case(target) && !disp.trim().is_empty() {
-                        return TargetDecision::Confirm(ConfirmReason::DisplayTargetMismatch);
-                    }
+            TargetDecision::Allow => match display {
+                Some(display) if !display_matches_target(display, target) => {
+                    TargetDecision::Confirm(ConfirmReason::DisplayTargetMismatch)
                 }
-                TargetDecision::Allow
-            }
+                _ => TargetDecision::Allow,
+            },
             _ => base,
         }
     }
+}
+
+/// Whether OSC 8 display text is consistent with the link target.
+///
+/// Returns `true` (no mismatch) when the display text is empty, is not
+/// URL-shaped (plain words), or is URL-shaped and names the same host as the
+/// target — with or without a scheme, `www.`, path, or trailing slash. Returns
+/// `false` when the display text is URL-shaped and its host differs from the
+/// target host, which is the classic phishing pattern.
+pub fn display_matches_target(display: &str, target: &str) -> bool {
+    let display = display.trim();
+    if display.is_empty() || display.eq_ignore_ascii_case(target.trim()) {
+        return true;
+    }
+    let Some(display_host) = url_like_host(display) else {
+        // Descriptive text: nothing to compare against.
+        return true;
+    };
+    match url_like_host(target) {
+        Some(target_host) => display_host == target_host,
+        // A target without a recognisable host (mailto:, data:) shown as a
+        // URL-looking label is a mismatch.
+        None => false,
+    }
+}
+
+/// The lower-cased host of a URL-shaped string, without a leading `www.` and
+/// without a port. `None` when the text is not URL-shaped: no `scheme://`
+/// prefix and no `host.tld` first segment.
+fn url_like_host(text: &str) -> Option<String> {
+    let text = text.trim();
+    let after_scheme = match text.find("://") {
+        Some(idx) => {
+            let scheme = &text[..idx];
+            let scheme_ok = scheme
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic())
+                && scheme
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.');
+            if !scheme_ok {
+                return None;
+            }
+            &text[idx + 3..]
+        }
+        None => {
+            // `mailto:x@y`, `data:...`: a scheme without an authority has no
+            // host. Distinguish it from `host:port` by the dot-less scheme.
+            if let Some((scheme, rest)) = text.split_once(':') {
+                let opaque_scheme = scheme
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphabetic())
+                    && scheme
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-')
+                    && !rest.starts_with('/')
+                    && !rest.split(['/', '?', '#']).next().is_some_and(|port| {
+                        !port.is_empty() && port.chars().all(|c| c.is_ascii_digit())
+                    });
+                if opaque_scheme {
+                    return None;
+                }
+            }
+            text
+        }
+    };
+    let authority_end = after_scheme
+        .find(|c| c == '/' || c == '?' || c == '#')
+        .unwrap_or(after_scheme.len());
+    let authority = &after_scheme[..authority_end];
+    // Drop userinfo.
+    let host_port = authority.rsplit('@').next().unwrap_or(authority);
+    let host = if let Some(rest) = host_port.strip_prefix('[') {
+        // IPv6 literal.
+        rest.split(']').next().unwrap_or(rest)
+    } else {
+        host_port
+            .rsplit_once(':')
+            .map_or(host_port, |(host, port)| {
+                if port.chars().all(|c| c.is_ascii_digit()) {
+                    host
+                } else {
+                    host_port
+                }
+            })
+    };
+    let host = host.trim_end_matches('.').to_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host).to_string();
+    // A bare word without a dot (and no scheme) is not URL-shaped; a host must
+    // contain only host characters.
+    let has_scheme = text.contains("://");
+    if host.is_empty()
+        || (!has_scheme && !host.contains('.'))
+        || host
+            .chars()
+            .any(|c| c.is_whitespace() || c == '/' || c == '\\' || c == '"' || c == '\'')
+    {
+        return None;
+    }
+    Some(host)
 }
 
 /// Parsed URL components (minimal, dependency-free).
@@ -152,7 +256,8 @@ struct ParsedUrl {
 }
 
 /// Minimal URL parser — extracts scheme, credentials flag, and port.
-/// Does not depend on the `url` crate to keep core dependency-free.
+/// Deliberately hand-written so this engine crate does not carry the `url`
+/// crate for three fields.
 fn parse_url(input: &str) -> Option<ParsedUrl> {
     // Find scheme: must be alpha+digits+'+'+'-'+'.' followed by ':'
     let colon = input.find(':')?;
@@ -192,13 +297,19 @@ fn parse_url(input: &str) -> Option<ParsedUrl> {
 
         // Extract port from the last segment after the last @.
         let host_part = authority.rsplit('@').next().unwrap_or(authority);
-        // Strip IPv6 brackets.
-        let host_part = host_part
-            .strip_prefix('[')
-            .and_then(|s| s.strip_suffix(']'))
-            .unwrap_or(host_part);
-        let port = host_part.rfind(':').and_then(|idx| {
-            let port_str = &host_part[idx + 1..];
+        // For an IPv6 literal (`[::1]:8443`) the port can only follow the
+        // closing bracket; the colons inside the brackets are not a port
+        // separator (CORR-45).
+        let port_source = if host_part.starts_with('[') {
+            host_part
+                .split_once(']')
+                .map(|(_, rest)| rest)
+                .unwrap_or("")
+        } else {
+            host_part
+        };
+        let port = port_source.rfind(':').and_then(|idx| {
+            let port_str = &port_source[idx + 1..];
             if port_str.is_empty() {
                 None
             } else {
@@ -223,23 +334,24 @@ fn parse_url(input: &str) -> Option<ParsedUrl> {
     })
 }
 
-/// Check for C0 control characters (0x00-0x1F, except \t \n \r) and
-/// C1 controls (0x80-0x9F), plus RTL/LTR override characters.
+/// Check for C0 control characters (0x00-0x1F, including `\t`, `\n` and
+/// `\r` — a URL never legitimately contains them, SEC-07), DEL, C1 controls
+/// (0x80-0x9F), and BiDi override/embedding/isolate/mark characters that can
+/// visually reorder the address.
 fn has_control_chars(s: &str) -> bool {
     s.chars().any(|c| {
         let code = c as u32;
-        // C0 controls (0x00-0x1F), except tab (0x09), newline (0x0A), CR (0x0D).
-        (code < 0x20 && code != 0x09 && code != 0x0a && code != 0x0d)
-        // C1 controls (0x80-0x9F).
-        || (0x80..=0x9f).contains(&code)
-        // BiDi override characters.
-        || code == 0x202e // RIGHT-TO-LEFT OVERRIDE
-        || code == 0x202d // LEFT-TO-RIGHT OVERRIDE
-        || code == 0x202a // LEFT-TO-RIGHT EMBEDDING
-        || code == 0x202b // RIGHT-TO-LEFT EMBEDDING
-        || code == 0x200e // LEFT-TO-RIGHT MARK
-        || code == 0x200f // RIGHT-TO-LEFT MARK
+        code < 0x20 || code == 0x7f || (0x80..=0x9f).contains(&code) || is_bidi_control(c)
     })
+}
+
+/// BiDi override, embedding, isolate and mark code points (U+202A..U+202E,
+/// U+2066..U+2069, U+200E/U+200F).
+pub(crate) fn is_bidi_control(c: char) -> bool {
+    matches!(
+        c,
+        '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{200e}' | '\u{200f}'
+    )
 }
 
 /// Default port for a scheme.
@@ -384,6 +496,82 @@ mod tests {
             policy.validate_with_display("https://example.com", Some("https://example.com")),
             TargetDecision::Allow
         );
+    }
+
+    /// SEC-03: descriptive labels and same-host spellings are not mismatches;
+    /// a URL-looking label naming another host is.
+    #[test]
+    fn display_text_comparison_is_host_based() {
+        for (display, target) in [
+            ("click here", "https://example.com/x"),
+            ("Release notes", "https://example.com/x"),
+            ("", "https://example.com/x"),
+            ("example.com", "https://example.com/x"),
+            ("EXAMPLE.com/path", "https://example.com/other"),
+            ("www.example.com", "https://example.com"),
+            ("https://example.com:443/", "https://example.com/"),
+            ("[::1]/", "https://[::1]:8443/"),
+            ("https://user@example.com", "https://example.com"),
+        ] {
+            assert!(
+                display_matches_target(display, target),
+                "{display:?} vs {target:?}"
+            );
+        }
+        for (display, target) in [
+            ("https://good.com", "https://evil.com"),
+            ("good.com/login", "https://evil.com/login"),
+            ("www.good.com", "https://evil.com"),
+            ("https://example.com", "mailto:someone@example.com"),
+        ] {
+            assert!(
+                !display_matches_target(display, target),
+                "{display:?} vs {target:?}"
+            );
+        }
+        let policy = ExternalTargetPolicy::default();
+        assert_eq!(
+            policy.validate_with_display("https://example.com/x", Some("click here")),
+            TargetDecision::Allow
+        );
+        assert_eq!(
+            policy.validate_with_display("https://evil.com/login", Some("good.com/login")),
+            TargetDecision::Confirm(ConfirmReason::DisplayTargetMismatch)
+        );
+    }
+
+    /// CORR-45: an IPv6 host without a port is not a non-default port.
+    #[test]
+    fn ipv6_host_port_detection() {
+        let policy = ExternalTargetPolicy::default();
+        assert_eq!(policy.validate("https://[::1]/"), TargetDecision::Allow);
+        assert_eq!(
+            policy.validate("https://[2001:db8::1]:443/path"),
+            TargetDecision::Allow
+        );
+        assert_eq!(
+            policy.validate("https://[::1]:8443/"),
+            TargetDecision::Confirm(ConfirmReason::NonDefaultPort)
+        );
+    }
+
+    /// SEC-07: newline, carriage return, tab and BiDi isolates are rejected.
+    #[test]
+    fn line_breaks_tabs_and_bidi_isolates_denied() {
+        let policy = ExternalTargetPolicy::default();
+        for url in [
+            "https://example.com/a\nb",
+            "https://example.com/a\rb",
+            "https://example.com/a\tb",
+            "https://example.com/\u{2066}evil\u{2069}",
+            "https://example.com/\u{7f}",
+        ] {
+            assert_eq!(
+                policy.validate(url),
+                TargetDecision::Deny(DenyReason::ControlCharacters),
+                "{url:?}"
+            );
+        }
     }
 
     #[test]

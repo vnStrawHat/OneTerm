@@ -44,6 +44,12 @@ Given a tokenized command line, redaction keeps structure but removes secret
 2. **Drop the value** that follows a secret-bearing option, replacing it with a
    placeholder so the option is still learnable:
    - `az login --password S3cr3t!`  →  `az login --password`
+   - `mysql -pS3cr3t db` / `mysql -p S3cr3t db`  →  `mysql -p db` (attached and
+     separate forms). Single-letter flags are secret **per command** — `-p` is a
+     password for `mysql*`/`mariadb*`/`sshpass`/`az`/`docker login`, `-u` for
+     `curl` — so `mkdir -p dir`, `docker run -p 8080:80`, `ssh -p 22` keep their
+     argument. Long names ending in `-password`/`-passwd`/`-secret`/`-token`
+     (`--http-password`, `--access-token`) are secret everywhere.
    - `curl -H "Authorization: Bearer abc.def"`  →  `curl -H` (the whole header
      value is dropped; the `-H` flag is kept)
 3. **Drop `KEY=VALUE`** environment-style tokens whose key looks secret:
@@ -131,7 +137,8 @@ covered by tests that assert "a suggestion never contains a detected secret".
 `crates/completion` unit tests assert, at minimum:
 
 - `az login --password X` → history stores `az login --password`, never `X`.
-- `--password=X`, `/PASSWORD:X`, `-p X` forms all redact the value.
+- `--password=X`, `/PASSWORD:X`, `mysql -p X`, `mysql -pX`, `curl -uu:p` forms all
+  redact the value; `mkdir -p dir`, `docker run -p 8080:80`, `ssh -p 22` are unchanged.
 - `AWS_SECRET_ACCESS_KEY=… cmd` → stores `cmd`.
 - A bare `ghp_…` / `sk-…` / JWT / `AKIA…` token in a command is never stored or
   suggested.

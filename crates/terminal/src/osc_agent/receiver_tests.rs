@@ -1,7 +1,6 @@
 //! Conformance tests for the OSC 9;7 receiver (spec §8).
 
 use super::*;
-use std::collections::HashMap;
 
 use base64::Engine;
 
@@ -316,49 +315,94 @@ fn state_event(agent: &str, seq: u64) -> AgentStatusEvent {
 
 #[test]
 fn dedup_applies_newer_seq_and_updates_watermark() {
-    let mut last = HashMap::new();
+    let mut last = AgentSeqWatermarks::default();
     assert!(should_apply(&mut last, &state_event("pi", 5)));
-    assert_eq!(last.get("pi"), Some(&5));
+    assert_eq!(last.get("pi"), Some(5));
     // newer seq applied.
     assert!(should_apply(&mut last, &state_event("pi", 6)));
-    assert_eq!(last.get("pi"), Some(&6));
+    assert_eq!(last.get("pi"), Some(6));
 }
 
 #[test]
 fn dedup_drops_equal_seq() {
-    let mut last = HashMap::new();
+    let mut last = AgentSeqWatermarks::default();
     assert!(should_apply(&mut last, &state_event("pi", 5)));
     // equal seq dropped, watermark unchanged.
     assert!(!should_apply(&mut last, &state_event("pi", 5)));
-    assert_eq!(last.get("pi"), Some(&5));
+    assert_eq!(last.get("pi"), Some(5));
 }
 
 #[test]
 fn dedup_drops_stale_seq() {
-    let mut last = HashMap::new();
+    let mut last = AgentSeqWatermarks::default();
     assert!(should_apply(&mut last, &state_event("pi", 5)));
     // older seq dropped.
     assert!(!should_apply(&mut last, &state_event("pi", 4)));
-    assert_eq!(last.get("pi"), Some(&5));
+    assert_eq!(last.get("pi"), Some(5));
 }
 
 #[test]
 fn dedup_is_per_agent() {
-    let mut last = HashMap::new();
+    let mut last = AgentSeqWatermarks::default();
     assert!(should_apply(&mut last, &state_event("pi", 1)));
     // different agent, same seq — must NOT be deduped against pi.
     assert!(should_apply(&mut last, &state_event("codex", 1)));
-    assert_eq!(last.get("pi"), Some(&1));
-    assert_eq!(last.get("codex"), Some(&1));
+    assert_eq!(last.get("pi"), Some(1));
+    assert_eq!(last.get("codex"), Some(1));
     // pi seq=1 again — deduped against pi's last (1).
     assert!(!should_apply(&mut last, &state_event("pi", 1)));
 }
 
 #[test]
 fn dedup_first_event_applied_from_empty_state() {
-    let mut last = HashMap::new();
+    let mut last = AgentSeqWatermarks::default();
     // seq=0 from a fresh agent — still > default watermark (0)? No: 0 <= 0.
     assert!(!should_apply(&mut last, &state_event("pi", 0)));
     // seq=1 from a fresh agent — applied.
     assert!(should_apply(&mut last, &state_event("pi", 1)));
+}
+
+/// SEC-04: the watermark table never grows past `MAX_TRACKED_AGENTS`; the
+/// least recently seen id is evicted, and an evicted id starts over at
+/// watermark 0 (a replay of its old seq is accepted again — bounded memory is
+/// worth more than perfect dedup for ids we have not seen in a long time).
+#[test]
+fn dedup_table_is_bounded_and_evicts_least_recent() {
+    let mut last = AgentSeqWatermarks::default();
+    for i in 0..MAX_TRACKED_AGENTS {
+        assert!(should_apply(&mut last, &state_event(&format!("a{i}"), 1)));
+    }
+    assert_eq!(last.len(), MAX_TRACKED_AGENTS);
+    // Touch a0 so a1 becomes the least recently seen.
+    assert!(!should_apply(&mut last, &state_event("a0", 1)));
+    // A new id evicts a1, not a0.
+    assert!(should_apply(&mut last, &state_event("newcomer", 1)));
+    assert_eq!(last.len(), MAX_TRACKED_AGENTS);
+    assert_eq!(last.get("a0"), Some(1));
+    assert_eq!(last.get("a1"), None);
+    assert_eq!(last.get("newcomer"), Some(1));
+    // Hostile churn: many distinct ids never grow the table.
+    for i in 0..10_000 {
+        should_apply(&mut last, &state_event(&format!("x{i}"), 1));
+    }
+    assert_eq!(last.len(), MAX_TRACKED_AGENTS);
+}
+
+/// SEC-04: over-long agent ids are dropped at parse time.
+#[test]
+fn oversized_agent_id_is_dropped_at_parse() {
+    let ok = "a".repeat(MAX_AGENT_ID_BYTES);
+    assert!(parse_agent_status_json(&format!(
+        "{{\"v\":1,\"agent\":\"{ok}\",\"type\":\"state\",\"seq\":1,\"ts\":1,\"state\":\"idle\"}}"
+    )).is_some());
+    let too_long = "a".repeat(MAX_AGENT_ID_BYTES + 1);
+    assert!(parse_agent_status_json(&format!(
+        "{{\"v\":1,\"agent\":\"{too_long}\",\"type\":\"state\",\"seq\":1,\"ts\":1,\"state\":\"idle\"}}"
+    )).is_none());
+    assert!(
+        parse_agent_status_json(
+            "{\"v\":1,\"agent\":\"\",\"type\":\"state\",\"seq\":1,\"ts\":1,\"state\":\"idle\"}"
+        )
+        .is_none()
+    );
 }

@@ -7,7 +7,7 @@
 //! `OscRouter` specialised to this transport.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 #[cfg(any(test, feature = "terminal-diagnostics"))]
 use std::sync::atomic::AtomicU64;
@@ -141,7 +141,10 @@ impl SshTransport {
 
     /// Latest coalesced resize, clearing the pending marker.
     pub(crate) fn take_pending_resize(&self) -> Option<(u16, u16)> {
-        let mut pending = self.pending_resize.lock().unwrap();
+        let mut pending = self
+            .pending_resize
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         pending.signal_enqueued = false;
         pending.latest.take()
     }
@@ -177,7 +180,10 @@ impl PtyTransport for SshTransport {
         if self.is_closing() {
             return Err(TerminalError::Closed);
         }
-        let mut pending = self.pending_resize.lock().unwrap();
+        let mut pending = self
+            .pending_resize
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         pending.latest = Some((rows, cols));
         if pending.signal_enqueued {
             return Ok(());

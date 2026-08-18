@@ -10,9 +10,10 @@
 //! ## Layering
 //!
 //! This crate is intentionally GPUI-free. The color types ([`Hsla`], [`Rgba`])
-//! are plain mirror structs with the same field layout as `gpui::Hsla` — the
-//! `ui` crate's `highlight::bridge` converts them with a trivial cast. This
-//! keeps the "pure core, GPUI only in ui" layering intact.
+//! are plain mirror structs with the same field layout as `gpui::Hsla` (hue
+//! in degrees, 0..=360, where gpui uses 0..=1) — the `ui` crate's
+//! `highlight::bridge` converts them by copying the fields and scaling the
+//! hue. This keeps the "pure core, GPUI only in ui" layering intact.
 //!
 //! ## Core types
 //!
