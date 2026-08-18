@@ -1,7 +1,7 @@
 //! OneTerm application core.
 //!
 //! Initializes the application, registers the UI, and opens the main window.
-//! Shared logic for both binaries: `oneterm` (release) and `oneterm-debug` (dev).
+//! Shared logic behind the `oneterm` binary.
 //!
 //! The two binaries are thin shims that call [`run`]; this gives each binary its own
 //! source file (avoiding the "file present in multiple build targets" warning).

@@ -128,7 +128,7 @@ QA pass. PRs improving Linux/macOS support are welcome.
 Requires: Rust toolchain (edition 2024).
 
 ```bash
-# Run the app (dev binary = oneterm-debug, keeps the console for logs)
+# Run the app (keeps the console for logs in debug builds)
 cargo run -p oneterm-app
 # Same, with OneTerm's hot-path crates optimized (full-screen TUIs stay smooth in a debug build)
 cargo run -p oneterm-app --profile fast-dev
@@ -147,8 +147,8 @@ cargo test --workspace
 ### Debug logging and terminal diagnostics
 
 OneTerm uses `env_logger` and reads standard `RUST_LOG` directives. The normal development
-run uses the `oneterm-debug` binary and enables application DEBUG logs without enabling the
-extra terminal timing instrumentation.
+run enables application DEBUG logs without enabling the extra terminal timing
+instrumentation.
 
 PowerShell:
 

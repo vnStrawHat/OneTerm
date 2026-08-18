@@ -9,13 +9,11 @@
 #        TARGET=aarch64-unknown-linux-gnu ./scripts/build-release.sh
 #        NO_DIST=1 ./scripts/build-release.sh          # build only, do not stage dist/
 #
-# The release binary is `oneterm` (gated by the `release-bin` feature in
-# crates/app/Cargo.toml). The development binary is `oneterm-debug` (the default
-# `dev-bin` feature). Passing --no-default-features --features release-bin makes
-# the release build produce only `oneterm`. Only `oneterm-app` is built (-p): the
-# other workspace members (diagnostics in crates/tools, …) are not part of a release.
+# The binary is `oneterm` for both dev and release builds. Only `oneterm-app` is
+# built (-p): the other workspace members (diagnostics in crates/tools, …) are not
+# part of a release.
 #
-# Outputs (VERSION = repo-root VERSION file, TRIPLE = target triple):
+# Outputs (VERSION = [workspace.package] version, TRIPLE = target triple):
 #   - target/<triple>/release/oneterm                       (release binary with strip + LTO)
 #   - dist/oneterm-<VERSION>-<triple>/oneterm               (Linux)
 #   - dist/oneterm-<VERSION>-<triple>/OneTerm.app           (macOS application bundle)
@@ -31,10 +29,9 @@ cd "$REPO_ROOT"
 
 TARGET="${TARGET:-}"
 NO_DIST="${NO_DIST:-0}"
-VERSION="$(tr -d '[:space:]' < VERSION)"
+VERSION="$(awk -F'"' '/^version = "/{print $2; exit}' Cargo.toml)"
 
-# Build only `oneterm`: enable release-bin and disable the default dev-bin.
-RELEASE_ARGS=(build -p oneterm-app --release --no-default-features --features release-bin)
+RELEASE_ARGS=(build -p oneterm-app --release)
 echo "==> cargo ${RELEASE_ARGS[*]}${TARGET:+ --target $TARGET}"
 if [[ -n "$TARGET" ]]; then
   cargo "${RELEASE_ARGS[@]}" --target "$TARGET"

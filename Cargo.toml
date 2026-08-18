@@ -30,9 +30,9 @@ exclude = [
 ]
 
 [workspace.package]
-# Single version for every workspace crate. `scripts/bump-version.sh` rewrites this
-# field together with the repo-root `VERSION` file (the release workflow and macOS
-# bundle read `VERSION`); `scripts/verify-dependency-graph.py` fails when they drift.
+# Single version source for every workspace crate, the release workflow, and the
+# macOS bundle. Read it with:
+#   awk -F'"' '/^version = "/{print $2; exit}' Cargo.toml
 version = "0.3.10"
 publish = false
 edition = "2024"

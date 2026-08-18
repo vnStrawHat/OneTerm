@@ -7,13 +7,11 @@
 #        pwsh scripts/build-release.ps1 -Target aarch64-pc-windows-msvc
 #        pwsh scripts/build-release.ps1 -NoDist            # build only, do not stage dist/
 #
-# The release binary is `oneterm` (gated by the `release-bin` feature in
-# crates/app/Cargo.toml). The development binary is `oneterm-debug` (the default
-# `dev-bin` feature). Passing --no-default-features --features release-bin makes
-# the release build produce only `oneterm`. Only `oneterm-app` is built (-p): the
-# other workspace members (diagnostics in crates/tools, …) are not part of a release.
+# The binary is `oneterm` for both dev and release builds. Only `oneterm-app` is
+# built (-p): the other workspace members (diagnostics in crates/tools, …) are not
+# part of a release.
 #
-# Outputs (VERSION = repo-root VERSION file, TRIPLE = target triple):
+# Outputs (VERSION = [workspace.package] version, TRIPLE = target triple):
 #   - target/<triple>/release/oneterm.exe                   (binary with icon + version info)
 #   - target/<triple>/release/conpty.dll                    (copied by build.rs)
 #   - target/<triple>/release/x64/OpenConsole.exe           (copied by build.rs)
@@ -33,10 +31,9 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $repoRoot
 try {
-    $version = (Get-Content (Join-Path $repoRoot "VERSION") -Raw).Trim()
+    $version = (Get-Content (Join-Path $repoRoot "Cargo.toml") | Select-String '^version = "(.+)"' | Select-Object -First 1).Matches.Groups[1].Value
 
-    # Build only `oneterm`: enable release-bin and disable the default dev-bin.
-    $releaseArgs = @("build", "-p", "oneterm-app", "--release", "--no-default-features", "--features", "release-bin")
+    $releaseArgs = @("build", "-p", "oneterm-app", "--release")
     $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repoRoot "target" }
     if ($Target) {
         Write-Host "==> cargo $($releaseArgs -join ' ') --target $Target" -ForegroundColor Cyan

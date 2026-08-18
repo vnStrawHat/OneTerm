@@ -10,7 +10,7 @@ network / extra-tool checks).
 | Script | Purpose | Runs in |
 |---|---|---|
 | `ci-local.sh` / `ci-local.ps1` | Run the whole CI quality gate locally, stop at the first failure. Keep both in sync with `ci.yml` and `AGENTS.md` §4. | local (mirrors CI) |
-| `verify-dependency-graph.py` | Enforce `dependency-graph-policy.json` (workspace members, internal edges, backend/feature rules) and `VERSION` == `[workspace.package] version`. | CI |
+| `verify-dependency-graph.py` | Enforce `dependency-graph-policy.json` (workspace members, internal edges, backend/feature rules) and that every crate inherits `[workspace.package] version`. | CI |
 | `check-ui-fork.py` (+ `ui-fork-baseline.json`) | Hash-pin the vendored `gpui-component` package against the reviewed baseline; `--update` re-clones upstream (network) and refreshes the baseline. | CI |
 | `check-doc-paths.py` | Every back-ticked `crates/`, `docs/`, `scripts/`, `vendor/` path in the current-state docs (`docs/architecture.md`, `docs/agents/*.md`, `docs/README.md`, `README.md`, `AGENTS.md`) must exist. | CI |
 | `check-english.py` (+ `test_check_english.py`) | English-only contributor text (code comments, docs); the unittest file tests the checker itself. | CI |
@@ -24,10 +24,9 @@ network / extra-tool checks).
 
 | Script | Purpose | Runs in |
 |---|---|---|
-| `build-release.ps1` | Windows: build `oneterm.exe` (`-p oneterm-app --features release-bin`), stage `dist/oneterm-<version>-<triple>/` (+ `conpty.dll`, `x64/OpenConsole.exe`), zip + `.sha256`. | `release.yml`, local |
+| `build-release.ps1` | Windows: build `oneterm.exe` (`-p oneterm-app`), stage `dist/oneterm-<version>-<triple>/` (+ `conpty.dll`, `x64/OpenConsole.exe`), zip + `.sha256`. | `release.yml`, local |
 | `build-release.sh` | Linux / macOS twin (`TARGET=<triple>` for cross builds); on macOS calls `bundle-macos.sh`; tar.gz + `.sha256`. | `release.yml`, local |
 | `bundle-macos.sh` | Assemble + ad-hoc-sign `OneTerm.app` from a built binary (Info.plist from `crates/app/assets/macos/`, best-effort `.icns`). | via `build-release.sh` |
-| `bump-version.sh` | Bump `VERSION` + `[workspace.package] version` + `Cargo.lock` together (`patch` / `minor` / `major` / explicit). | `release.yml`, local |
 
 ## Manual test helpers (never run by CI)
 

@@ -27,7 +27,7 @@ OneTerm/
 │
 ├── crates/
 │   ├── app/                        # Binary + wiring: the ONLY crate that knows every other crate
-│   │   ├── Cargo.toml              # name = "oneterm-app", default-run = "oneterm-debug"
+│   │   ├── Cargo.toml              # name = "oneterm-app", one bin: "oneterm"
 │   │   ├── build.rs                # Embed app icon (.rc) + copy conpty.dll/OpenConsole.exe (x86_64 only; THIRD-PARTY-NOTICES.md)
 │   │   ├── assets/                 # Runtime resources (oneterm.rc, conpty.dll, x64/OpenConsole.exe, icons/)
 │   │   ├── macos/Info.plist        # macOS .app bundle descriptor ({{VERSION}})
@@ -43,8 +43,7 @@ OneTerm/
 │   │       ├── native_crash.rs     # crash-handler callback (compromised-context-safe writes)
 │   │       ├── window.rs           # open_window(cx) — create window + attach OneTermWorkspace
 │   │       └── bin/
-│   │           ├── oneterm.rs          # Release binary → oneterm(.exe) (WINDOWS subsystem)
-│   │           └── oneterm-debug.rs    # Dev binary → oneterm-debug(.exe) (keeps console)
+│   │           └── oneterm.rs          # Binary → oneterm(.exe) (WINDOWS subsystem in release)
 │   │
 │   ├── core/                       # Domain model — leaf crate (no gpui, no alacritty)
 │   │   ├── Cargo.toml              # name = "oneterm-core"

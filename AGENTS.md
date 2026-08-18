@@ -56,7 +56,7 @@ cargo build --workspace
 # Release build
 cargo build --workspace --release
 
-# Run the app (dev binary = oneterm-debug, keeps the console for logs)
+# Run the app (keeps the console for logs in debug builds)
 cargo run -p oneterm-app
 # Same, with OneTerm's hot-path crates optimized (full-screen TUIs such as DOOM-fire
 # are unusable at opt-level 0; see [profile.fast-dev] in the root Cargo.toml)
