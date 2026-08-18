@@ -1,5 +1,6 @@
-//! `impl TerminalSession for SshSession` — render, input, mouse/selection,
-//! clipboard, scroll, IME, and lifecycle query methods.
+//! `impl TerminalSession for SshSession` — the four focused session traits
+//! (`TerminalRender`, `TerminalInput`, `TerminalIme`, `TerminalLifecycle`)
+//! plus the SSH `TerminalCapabilities`.
 //!
 //! ARCH-05: Terminal-model operations are delegated to the shared
 //! `TerminalModel` adapter in `oneterm_terminal`. Only transport (SSH channel),
@@ -14,21 +15,15 @@ use oneterm_core::SftpBackend;
 use oneterm_terminal::model::TerminalModel;
 use oneterm_terminal::mouse_encode::{MouseModifiers, TerminalMouseButton};
 use oneterm_terminal::{
-    CursorBounds, DefaultColors, PtyTransport, SearchMatch, SearchOptions, SessionEvent,
-    SharedStateCwdSource, TerminalCapabilities, TerminalError, TerminalSession,
-    report_generated_input,
+    DefaultColors, LineRangeCells, PtyTransport, SearchMatch, SearchOptions, SessionEvent,
+    SessionKind, SharedStateCwdSource, TerminalCapabilities, TerminalError, TerminalIme,
+    TerminalInput, TerminalLifecycle, TerminalRender, TerminalSession, report_generated_input,
 };
 use oneterm_terminal::{DynamicColors, TerminalContent, TerminalInfo, TerminalQueryState};
 
 use crate::session::SshSession;
 
 impl SshSession {
-    /// UI sets pixel cell metrics (after measuring the font) for `cursor_bounds`.
-    pub fn set_cell_size(&self, cell_width: f32, line_height: f32) {
-        *self.cell_width.lock().unwrap() = cell_width;
-        *self.line_height.lock().unwrap() = line_height;
-    }
-
     /// Get a `TerminalModel` adapter for the shared terminal-model operations.
     /// Cheap to create — just wraps the existing `Arc<FairMutex<Term>>`.
     pub(crate) fn model(&self) -> TerminalModel<crate::transport::SshListener> {
@@ -37,7 +32,23 @@ impl SshSession {
 }
 
 impl TerminalSession for SshSession {
-    // ── Render ──────────────────────────────────────────────────────
+    fn capabilities(&self) -> TerminalCapabilities {
+        TerminalCapabilities {
+            network_stats: Some(self.state.net_stats()),
+            sftp: self
+                .sftp
+                .lock()
+                .unwrap()
+                .clone()
+                .map(|session| session as std::sync::Arc<dyn SftpBackend>),
+            cwd_source: Some(std::sync::Arc::new(SharedStateCwdSource::new(
+                self.state.clone(),
+            ))),
+        }
+    }
+}
+
+impl TerminalRender for SshSession {
     fn snapshot(&self) -> TerminalContent {
         self.model().snapshot()
     }
@@ -50,11 +61,7 @@ impl TerminalSession for SshSession {
         self.model().query_state(self.alive())
     }
 
-    fn query_line_range_cells(
-        &self,
-        start_line: usize,
-        count: usize,
-    ) -> (Vec<oneterm_terminal::IndexedCell>, usize) {
+    fn query_line_range_cells(&self, start_line: usize, count: usize) -> LineRangeCells {
         self.model().query_line_range_cells(start_line, count)
     }
 
@@ -86,7 +93,20 @@ impl TerminalSession for SshSession {
         self.model().is_alt_screen()
     }
 
-    // ── Input ───────────────────────────────────────────────────────
+    fn search(&self, query: &str, options: SearchOptions) -> Vec<SearchMatch> {
+        self.model().search(query, options)
+    }
+
+    fn selection_text(&self) -> Option<String> {
+        self.model().selection_text()
+    }
+
+    fn has_selection(&self) -> bool {
+        self.model().has_selection()
+    }
+}
+
+impl TerminalInput for SshSession {
     fn write(&self, bytes: &[u8]) -> Result<(), TerminalError> {
         log::trace!("SshSession::write: {} bytes", bytes.len());
         self.transport().pty_write(bytes)
@@ -164,10 +184,6 @@ impl TerminalSession for SshSession {
     }
 
     // ── Selection / clipboard ───────────────────────────────────────
-    fn selection_text(&self) -> Option<String> {
-        self.model().selection_text()
-    }
-
     fn clear_selection(&self) {
         self.model().clear_selection();
     }
@@ -181,13 +197,9 @@ impl TerminalSession for SshSession {
         report_generated_input("SshSession clear command", self.write(b"clear\r"));
         self.clear_selection();
     }
+}
 
-    // ── Search ─────────────────────────────────────────────────────
-    fn search(&self, query: &str, options: SearchOptions) -> Vec<SearchMatch> {
-        self.model().search(query, options)
-    }
-
-    // ── IME ──────────────────────────────────────────────────────────
+impl TerminalIme for SshSession {
     fn set_marked_text(&self, text: String) {
         *self.marked_text.lock().unwrap() = Some(text);
     }
@@ -204,14 +216,9 @@ impl TerminalSession for SshSession {
     fn marked_text(&self) -> Option<String> {
         self.marked_text.lock().unwrap().clone()
     }
+}
 
-    fn cursor_bounds(&self) -> Option<CursorBounds> {
-        let cw = *self.cell_width.lock().unwrap();
-        let lh = *self.line_height.lock().unwrap();
-        self.model().cursor_bounds(cw, lh)
-    }
-
-    // ── Lifecycle ────────────────────────────────────────────────────
+impl TerminalLifecycle for SshSession {
     fn take_events(&self) -> Option<Receiver<SessionEvent>> {
         self.event_rx.lock().unwrap().take()
     }
@@ -228,8 +235,8 @@ impl TerminalSession for SshSession {
         result
     }
 
-    fn is_local(&self) -> bool {
-        false
+    fn kind(&self) -> SessionKind {
+        SessionKind::Ssh
     }
 
     fn title(&self) -> Option<String> {
@@ -238,31 +245,5 @@ impl TerminalSession for SshSession {
 
     fn cwd(&self) -> Option<PathBuf> {
         self.state.cwd()
-    }
-
-    // ── Shell Integration ───────────────────────────────────────────
-    fn prompt_count(&self) -> usize {
-        self.state.prompt_count()
-    }
-
-    // ── Foreground Process ───────────────────────────────────────────
-    fn foreground_process(&self) -> Option<String> {
-        self.state.foreground_process()
-    }
-
-    // ── Optional capabilities ───────────────────────────────────────
-    fn capabilities(&self) -> TerminalCapabilities {
-        TerminalCapabilities {
-            network_stats: Some(self.state.net_stats()),
-            sftp: self
-                .sftp
-                .lock()
-                .unwrap()
-                .clone()
-                .map(|session| session as std::sync::Arc<dyn SftpBackend>),
-            cwd_source: Some(std::sync::Arc::new(SharedStateCwdSource::new(
-                self.state.clone(),
-            ))),
-        }
     }
 }

@@ -1,5 +1,5 @@
-//! `impl TerminalSession for LocalSession` — render, input, mouse/selection,
-//! clipboard, scroll, IME, and lifecycle query methods.
+//! `impl TerminalSession for LocalSession` — the four focused session traits
+//! (`TerminalRender`, `TerminalInput`, `TerminalIme`, `TerminalLifecycle`).
 //!
 //! Terminal-model operations (snapshot, query, scroll, selection, search,
 //! mouse encoding) are delegated to the shared `TerminalModel` adapter in
@@ -13,14 +13,17 @@ use async_channel::Receiver;
 
 use oneterm_terminal::mouse_encode::{MouseModifiers, TerminalMouseButton};
 use oneterm_terminal::{
-    CursorBounds, DefaultColors, PtyTransport, SearchMatch, SearchOptions, SessionEvent,
-    TerminalError, TerminalSession, report_generated_input,
+    DefaultColors, LineRangeCells, PtyTransport, SearchMatch, SearchOptions, SessionEvent,
+    SessionKind, TerminalError, TerminalIme, TerminalInput, TerminalLifecycle, TerminalRender,
+    TerminalSession, report_generated_input,
 };
 use oneterm_terminal::{DynamicColors, TerminalContent, TerminalInfo, TerminalQueryState};
 
 use crate::session::LocalSession;
 
-impl TerminalSession for LocalSession {
+impl TerminalSession for LocalSession {}
+
+impl TerminalRender for LocalSession {
     fn snapshot(&self) -> TerminalContent {
         self.model().snapshot()
     }
@@ -33,11 +36,7 @@ impl TerminalSession for LocalSession {
         self.model().query_state(self.alive())
     }
 
-    fn query_line_range_cells(
-        &self,
-        start_line: usize,
-        count: usize,
-    ) -> (Vec<oneterm_terminal::IndexedCell>, usize) {
+    fn query_line_range_cells(&self, start_line: usize, count: usize) -> LineRangeCells {
         self.model().query_line_range_cells(start_line, count)
     }
 
@@ -69,7 +68,20 @@ impl TerminalSession for LocalSession {
         self.model().is_alt_screen()
     }
 
-    // ── Input ───────────────────────────────────────────────────────
+    fn search(&self, query: &str, options: SearchOptions) -> Vec<SearchMatch> {
+        self.model().search(query, options)
+    }
+
+    fn selection_text(&self) -> Option<String> {
+        self.model().selection_text()
+    }
+
+    fn has_selection(&self) -> bool {
+        self.model().has_selection()
+    }
+}
+
+impl TerminalInput for LocalSession {
     fn write(&self, bytes: &[u8]) -> Result<(), TerminalError> {
         self.transport().pty_write(bytes)
     }
@@ -159,10 +171,6 @@ impl TerminalSession for LocalSession {
     }
 
     // ── Selection / clipboard ───────────────────────────────────────
-    fn selection_text(&self) -> Option<String> {
-        self.model().selection_text()
-    }
-
     fn clear_selection(&self) {
         self.model().clear_selection();
     }
@@ -176,13 +184,9 @@ impl TerminalSession for LocalSession {
         report_generated_input("LocalSession clear command", self.write(b"clear\r"));
         self.clear_selection();
     }
+}
 
-    // ── Search ─────────────────────────────────────────────────────
-    fn search(&self, query: &str, options: SearchOptions) -> Vec<SearchMatch> {
-        self.model().search(query, options)
-    }
-
-    // ── IME ──────────────────────────────────────────────────────────
+impl TerminalIme for LocalSession {
     fn set_marked_text(&self, text: String) {
         *self.marked_text.lock().unwrap() = Some(text);
     }
@@ -199,14 +203,9 @@ impl TerminalSession for LocalSession {
     fn marked_text(&self) -> Option<String> {
         self.marked_text.lock().unwrap().clone()
     }
+}
 
-    fn cursor_bounds(&self) -> Option<CursorBounds> {
-        let cw = *self.cell_width.lock().unwrap();
-        let lh = *self.line_height.lock().unwrap();
-        self.model().cursor_bounds(cw, lh)
-    }
-
-    // ── Lifecycle ────────────────────────────────────────────────────
+impl TerminalLifecycle for LocalSession {
     fn take_events(&self) -> Option<Receiver<SessionEvent>> {
         self.event_rx.lock().unwrap().take()
     }
@@ -221,8 +220,8 @@ impl TerminalSession for LocalSession {
         result
     }
 
-    fn is_local(&self) -> bool {
-        true
+    fn kind(&self) -> SessionKind {
+        SessionKind::Local
     }
 
     fn title(&self) -> Option<String> {
@@ -232,12 +231,4 @@ impl TerminalSession for LocalSession {
     fn cwd(&self) -> Option<PathBuf> {
         self.state.cwd()
     }
-
-    // ── Shell Integration (OSC 133) ────────────────────────────
-    fn prompt_count(&self) -> usize {
-        self.state.prompt_count()
-    }
-    /// Not implemented for local shells: prompt marker line positions are not
-    /// recorded yet, so this is a no-op (the trait default behaviour).
-    fn scroll_to_prompt(&self, _n: usize) {}
 }

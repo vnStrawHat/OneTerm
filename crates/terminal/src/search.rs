@@ -1,8 +1,10 @@
 //! Terminal scrollback search — framework-agnostic algorithm operating on `Term`.
 //!
-//! The UI asks a `TerminalSession` for matches (`fn search`); the backend locks
-//! its `Term` and calls [`search_term`] here. Matches are reported in **grid
-//! coordinates** (alacritty `Line.0`): negative values are scrollback history,
+//! The UI asks a `TerminalSession` for matches (`fn search`); the backend copies
+//! the grid text under its `Term` lock ([`GridText::from_term`]) and matches
+//! after releasing it ([`search_grid_text`]), so a long scrollback search never
+//! stalls the pump (PERF-04). Matches are reported in **grid coordinates**
+//! (alacritty `Line.0`): negative values are scrollback history,
 //! `0..num_lines-1` is the viewport at `display_offset = 0`.
 //!
 //! The UI converts a match to a display row with `display_row = line + display_offset`
@@ -59,60 +61,90 @@ impl SearchMatch {
     }
 }
 
-/// Search the full grid (scrollback history + viewport) of `term` for `query`.
+/// One `char` per cell for the whole grid (scrollback history + viewport),
+/// copied under the `Term` lock so the search itself can run without it.
+///
+/// Rows are stored top-to-bottom starting at `top_line`; each row is exactly
+/// `num_cols` chars, so `chars.len() == rows × num_cols`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GridText {
+    /// `Line.0` of the first stored row (the topmost history line).
+    top_line: i32,
+    /// Row stride.
+    num_cols: usize,
+    /// Row-major cell characters. Wide-char spacers are `'\0'`.
+    chars: Vec<char>,
+}
+
+impl GridText {
+    /// Copy the grid text of `term`. O(rows×cols) chars; hold the lock only for
+    /// this call.
+    pub(crate) fn from_term<EP: EventListener>(term: &Term<EP>) -> Self {
+        let grid = term.grid();
+        let num_cols = grid.columns();
+        let top = grid.topmost_line().0;
+        let bottom = grid.bottommost_line().0;
+        let rows = usize::try_from(bottom - top + 1).unwrap_or(0);
+        let mut chars = Vec::with_capacity(rows * num_cols);
+        for line in top..=bottom {
+            let row = &grid[Line(line)];
+            for col in 0..num_cols {
+                let cell: &Cell = &row[Column(col)];
+                // Wide-char spacers carry no visible glyph — use a NUL placeholder so
+                // they cannot be part of a match (the needle never contains NUL). This
+                // keeps the column index aligned with the cell column.
+                if cell.flags.intersects(Flags::WIDE_CHAR_SPACER) {
+                    chars.push('\0');
+                } else {
+                    chars.push(cell.c);
+                }
+            }
+        }
+        Self {
+            top_line: top,
+            num_cols,
+            chars,
+        }
+    }
+}
+
+/// Search a [`GridText`] snapshot for `query`.
 ///
 /// Returns matches in **top-to-bottom order** (oldest history first, newest last)
 /// so forward navigation ("next") walks down the scrollback.
 ///
 /// Empty `query` → empty result. The query is matched against the per-line text
 /// (cells joined left-to-right); matches do **not** span line boundaries.
+pub(crate) fn search_grid_text(
+    text: &GridText,
+    query: &str,
+    options: SearchOptions,
+) -> Vec<SearchMatch> {
+    if query.is_empty() || text.num_cols == 0 {
+        return Vec::new();
+    }
+
+    let needle: Vec<char> = query.chars().collect();
+    if needle.is_empty() || needle.len() > text.num_cols {
+        return Vec::new();
+    }
+
+    let mut matches = Vec::new();
+    for (row, line_chars) in text.chars.chunks_exact(text.num_cols).enumerate() {
+        let line = text.top_line + row as i32;
+        find_in_line(line_chars, &needle, line, options, &mut matches);
+    }
+    matches
+}
+
+/// Snapshot `term` and search it in one step (tests and single-shot callers).
+#[cfg(test)]
 pub(crate) fn search_term<EP: EventListener>(
     term: &Term<EP>,
     query: &str,
     options: SearchOptions,
 ) -> Vec<SearchMatch> {
-    if query.is_empty() {
-        return Vec::new();
-    }
-
-    let grid = term.grid();
-    let num_cols = grid.columns();
-    if num_cols == 0 {
-        return Vec::new();
-    }
-
-    let needle: Vec<char> = query.chars().collect();
-    let needle_len = needle.len();
-    if needle_len == 0 || needle_len > num_cols {
-        return Vec::new();
-    }
-
-    let top = grid.topmost_line().0;
-    let bottom = grid.bottommost_line().0;
-    let mut matches = Vec::new();
-
-    // Reusable line buffer (one char per column).
-    let mut line_chars: Vec<char> = Vec::with_capacity(num_cols);
-
-    for line in top..=bottom {
-        let row = &grid[Line(line)];
-        line_chars.clear();
-        for col in 0..num_cols {
-            let cell: &Cell = &row[Column(col)];
-            // Wide-char spacers carry no visible glyph — use a NUL placeholder so
-            // they cannot be part of a match (the needle never contains NUL). This
-            // keeps the column index aligned with the cell column.
-            if cell.flags.intersects(Flags::WIDE_CHAR_SPACER) {
-                line_chars.push('\0');
-            } else {
-                line_chars.push(cell.c);
-            }
-        }
-
-        find_in_line(&line_chars, &needle, line, options, &mut matches);
-    }
-
-    matches
+    search_grid_text(&GridText::from_term(term), query, options)
 }
 
 /// Find all (non-overlapping) occurrences of `needle` in a single line's char
@@ -283,6 +315,21 @@ mod tests {
     fn needle_longer_than_line_no_match() {
         let term = mock_term("ab");
         assert!(search_term(&term, "abc", SearchOptions::default()).is_empty());
+    }
+
+    #[test]
+    fn grid_text_snapshot_matches_live_term_layout() {
+        let term = mock_term("ab\ncd");
+        let text = GridText::from_term(&term);
+        assert_eq!(text.num_cols, term.grid().columns());
+        assert_eq!(text.chars.len() % text.num_cols, 0);
+        assert_eq!(text.top_line, term.grid().topmost_line().0);
+        // Searching the snapshot after the term is gone still yields grid coordinates.
+        drop(term);
+        let m = search_grid_text(&text, "cd", SearchOptions::default());
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].line, 1);
+        assert_eq!(m[0].start_col, 0);
     }
 
     #[test]

@@ -8,14 +8,17 @@ use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::term::{RenderableCursor, TermMode};
-use alacritty_terminal::vte::ansi::CursorShape;
+use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
 use async_channel::{Receiver, Sender, TryRecvError, TrySendError};
 
 use super::{
-    CursorBounds, IndexedCell, SessionEvent, TermDamageInfo, TerminalBounds, TerminalContent,
-    TerminalError, TerminalInfo, TerminalMouseButton, TerminalQueryState, TerminalSession,
+    IndexedCell, LineRangeCells, SessionEvent, SessionKind, TermDamageInfo, TerminalBounds,
+    TerminalContent, TerminalError, TerminalIme, TerminalInfo, TerminalInput, TerminalLifecycle,
+    TerminalMouseButton, TerminalQueryState, TerminalRender, TerminalSession,
 };
 use crate::mouse_encode::MouseModifiers;
+use crate::osc_color::DynamicColors;
+use crate::search::{SearchMatch, SearchOptions};
 
 /// Whether a fake snapshot consumes the pending damage (render path) or leaves
 /// it intact (auxiliary query path).
@@ -60,6 +63,11 @@ impl FakeSessionProbe {
     /// Return every write captured by the fake transport.
     pub fn writes(&self) -> Vec<Vec<u8>> {
         self.state.writes.lock().unwrap().clone()
+    }
+
+    /// Make every following `write` fail with `TerminalError::QueueFull`.
+    pub fn fail_writes(&self, fail: bool) {
+        self.state.fail_writes.store(fail, Ordering::SeqCst);
     }
 
     /// Remove and return all captured writes.
@@ -117,6 +125,7 @@ struct FakeSessionState {
     writes: Mutex<Vec<Vec<u8>>>,
     event_tx: Sender<SessionEvent>,
     full_damage: AtomicBool,
+    fail_writes: AtomicBool,
     alive: AtomicBool,
     snapshot_calls: AtomicUsize,
     query_snapshot_calls: AtomicUsize,
@@ -138,6 +147,7 @@ impl FakeTerminalSession {
             writes: Mutex::new(Vec::new()),
             event_tx,
             full_damage: AtomicBool::new(true),
+            fail_writes: AtomicBool::new(false),
             alive: AtomicBool::new(true),
             snapshot_calls: AtomicUsize::new(0),
             query_snapshot_calls: AtomicUsize::new(0),
@@ -228,7 +238,9 @@ impl Drop for FakeTerminalSession {
     }
 }
 
-impl TerminalSession for FakeTerminalSession {
+impl TerminalSession for FakeTerminalSession {}
+
+impl TerminalRender for FakeTerminalSession {
     fn snapshot(&self) -> TerminalContent {
         self.state.snapshot_calls.fetch_add(1, Ordering::SeqCst);
         self.content(DamageMode::Consume)
@@ -256,6 +268,19 @@ impl TerminalSession for FakeTerminalSession {
             total_lines: snap.total_lines,
             alive: self.alive(),
         }
+    }
+
+    fn query_line_range_cells(&self, start_line: usize, count: usize) -> LineRangeCells {
+        let snap = self.content(DamageMode::Preserve);
+        let num_cols = snap.terminal_bounds.num_cols;
+        let start = start_line * num_cols;
+        let end = (start + count * num_cols).min(snap.cells.len());
+        let cells = if start <= snap.cells.len() {
+            snap.cells[start..end].to_vec()
+        } else {
+            Vec::new()
+        };
+        LineRangeCells { cells, num_cols }
     }
 
     fn terminal_info(&self) -> TerminalInfo {
@@ -290,7 +315,37 @@ impl TerminalSession for FakeTerminalSession {
             .contains(TermMode::ALT_SCREEN)
     }
 
+    fn dynamic_colors(&self) -> DynamicColors {
+        DynamicColors::default()
+    }
+
+    fn set_default_colors(
+        &self,
+        _foreground: Rgb,
+        _background: Rgb,
+        _cursor: Rgb,
+        _ansi: [Rgb; 16],
+    ) {
+    }
+
+    fn search(&self, _query: &str, _options: SearchOptions) -> Vec<SearchMatch> {
+        Vec::new()
+    }
+
+    fn selection_text(&self) -> Option<String> {
+        None
+    }
+
+    fn has_selection(&self) -> bool {
+        false
+    }
+}
+
+impl TerminalInput for FakeTerminalSession {
     fn write(&self, bytes: &[u8]) -> Result<(), TerminalError> {
+        if self.state.fail_writes.load(Ordering::SeqCst) {
+            return Err(TerminalError::QueueFull);
+        }
         self.state.writes.lock().unwrap().push(bytes.to_vec());
         Ok(())
     }
@@ -331,16 +386,14 @@ impl TerminalSession for FakeTerminalSession {
 
     fn wheel(&self, _delta_y: f64, _row: f32, _col: f32, _mods: MouseModifiers) {}
 
-    fn selection_text(&self) -> Option<String> {
-        None
-    }
-
     fn clear_selection(&self) {}
 
     fn select_all(&self) {}
 
     fn clear(&self) {}
+}
 
+impl TerminalIme for FakeTerminalSession {
     fn set_marked_text(&self, _text: String) {}
 
     fn clear_marked_text(&self) {}
@@ -352,11 +405,9 @@ impl TerminalSession for FakeTerminalSession {
     fn marked_text(&self) -> Option<String> {
         None
     }
+}
 
-    fn cursor_bounds(&self) -> Option<CursorBounds> {
-        None
-    }
-
+impl TerminalLifecycle for FakeTerminalSession {
     fn take_events(&self) -> Option<Receiver<SessionEvent>> {
         self.event_rx.lock().unwrap().take()
     }
@@ -372,8 +423,8 @@ impl TerminalSession for FakeTerminalSession {
         Ok(())
     }
 
-    fn is_local(&self) -> bool {
-        true
+    fn kind(&self) -> SessionKind {
+        SessionKind::Local
     }
 
     fn title(&self) -> Option<String> {

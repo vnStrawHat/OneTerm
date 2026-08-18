@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use gpui::{App, Entity, InteractiveElement as _, ModifiersChangedEvent};
 
-use oneterm_terminal::TerminalSession;
+use oneterm_terminal::{LineRangeCells, TerminalSession};
 
 use super::super::element::RenderCache;
 use super::super::url::{DetectedUrl, URL_WINDOW, detect_url_at};
@@ -23,7 +23,7 @@ pub(crate) fn detect_url_at_cell(
     cx: &App,
 ) -> Option<DetectedUrl> {
     let window_start = row.saturating_sub(URL_WINDOW);
-    let (cells, num_cols) = session
+    let LineRangeCells { cells, num_cols } = session
         .read(cx)
         .query_line_range_cells(window_start, URL_WINDOW * 2 + 1);
     let adjusted_row = row - window_start;

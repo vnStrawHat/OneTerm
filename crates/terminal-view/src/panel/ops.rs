@@ -488,7 +488,7 @@ impl TerminalPanel {
                 (
                     capabilities.sftp,
                     capabilities.cwd_source,
-                    session.is_local(),
+                    session.kind().is_local(),
                 )
             }
             None => (None, None, true),

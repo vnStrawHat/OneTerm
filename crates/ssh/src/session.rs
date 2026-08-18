@@ -52,8 +52,6 @@ pub struct SshSession {
     pub(crate) listener: SshListener,
     pub(crate) event_rx: Mutex<Option<Receiver<SessionEvent>>>,
     pub(crate) state: SharedState,
-    pub(crate) cell_width: Mutex<f32>,
-    pub(crate) line_height: Mutex<f32>,
     pub(crate) marked_text: Mutex<Option<String>>,
     /// SFTP session (None = server does not support SFTP).
     pub(crate) sftp: Mutex<Option<Arc<SftpSession>>>,
@@ -480,8 +478,6 @@ pub fn connect(
                 listener,
                 event_rx: Mutex::new(Some(event_rx)),
                 state,
-                cell_width: Mutex::new(0.0),
-                line_height: Mutex::new(0.0),
                 marked_text: Mutex::new(None),
                 sftp: Mutex::new(sftp_session),
             };
@@ -799,8 +795,6 @@ mod tests {
             listener,
             event_rx: Mutex::new(Some(event_rx)),
             state,
-            cell_width: Mutex::new(0.0),
-            line_height: Mutex::new(0.0),
             marked_text: Mutex::new(None),
             sftp: Mutex::new(None),
         };
@@ -824,7 +818,7 @@ mod tests {
     /// CORR-06: drop after an explicit `close()` does not enqueue a second close.
     #[test]
     fn dropping_a_closed_session_is_idempotent() {
-        use oneterm_terminal::TerminalSession;
+        use oneterm_terminal::TerminalLifecycle;
 
         let (session, cmd_rx) = detached_session();
         session.close().unwrap();

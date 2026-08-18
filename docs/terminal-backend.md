@@ -425,7 +425,7 @@ pub fn connect(cfg: SshConfig, initial: PtySize, scrollback: usize)
 
 - `SshListener = OscRouter<SshTransport>` — `PtyWrite(text)` → `SshTransport::pty_write`
   → `Cmd::Write` (256-message queue, 4 MiB byte budget, `Cmd::Resize` coalesced).
-- `is_local() == false` (for OSC 7 cwd semantics: ssh can be `file://host/…`).
+- `kind() == SessionKind::Ssh` (for OSC 7 cwd semantics: ssh can be `file://host/…`).
 - Exit: `ChannelMsg::ExitStatus { exit_status }` → `SessionEvent::Exited(Some(code))`;
   `Eof`/`Close`/`Cmd::Close`/closing flag → `SessionEvent::Closed`.
 - Shutdown signal: the transport's closing flag (set by `pty_close`) — the task holds
@@ -536,45 +536,78 @@ let line_height = font_size * settings.line_height;     // or ascent+descent+lea
 
 ## 9. `TerminalSession` trait (`terminal` crate)
 
-> Abridged design sketch. The real trait (`crates/terminal/src/session.rs`) is wider:
-> `snapshot_query` / `query_state` / `query_line_range_cells` / `terminal_info` (damage-free
-> reads), `write`/`resize`/`close` return `Result<(), TerminalError>`, plus search,
-> selection, paste, `send_ctrl_c`, `dynamic_colors`, `set_default_colors` and
-> `capabilities()`.
+`TerminalSession` (`crates/terminal/src/session.rs`) is a composed façade over four
+focused traits (ARCH-02). The UI holds `Box<dyn TerminalSession>`; a backend
+implements all four plus an empty `impl TerminalSession for X {}` (overriding
+`capabilities()` when it has optional services). Every trait method is **required** —
+a backend that cannot answer returns the documented empty value explicitly
+(`Vec::new()`, `None`, `DynamicColors::default()`); there are no silent no-op defaults.
 
 ```rust
-pub trait TerminalSession: Send + Sync + 'static {
-    /// Grid snapshot for rendering (no FairMutex lock held during the call).
-    fn snapshot(&self) -> TerminalContent;
-    /// Write bytes to the PTY/channel (keystroke, paste, OSC response).
-    fn write(&self, bytes: &[u8]);
-    /// Resize rows×cols (PTY resize / ssh window_change).
-    fn resize(&self, rows: u16, cols: u16);
-    /// Scroll scrollback (only when not alt-screen / not mouse mode).
-    fn scroll(&self, delta: i32);
-    // Mouse
-    fn mouse_down(&self, row: f32, col: f32, button: MouseButton, sel: SelectionType);
-    fn mouse_move(&self, row: f32, col: f32);
-    fn mouse_up(&self, row: f32, col: f32, button: MouseButton);
-    fn wheel(&self, delta_y: f64, row: f32, col: f32);
-    // IME
+/// Grid reads — snapshots, damage-free queries, search, selection, colour table.
+pub trait TerminalRender: Send + Sync {
+    fn snapshot(&self) -> TerminalContent;            // consumes damage; render path only
+    fn snapshot_query(&self) -> TerminalContent;      // damage-free full grid
+    fn query_state(&self) -> TerminalQueryState;      // O(1): mode, cursor, viewport size
+    fn query_line_range_cells(&self, start_line: usize, count: usize) -> LineRangeCells;
+    fn terminal_info(&self) -> TerminalInfo;
+    fn is_alt_screen(&self) -> bool;
+    fn dynamic_colors(&self) -> DynamicColors;        // OSC 10/11/12 + OSC 4
+    fn set_default_colors(&self, fg: Rgb, bg: Rgb, cursor: Rgb, ansi: [Rgb; 16]);
+    fn search(&self, query: &str, options: SearchOptions) -> Vec<SearchMatch>;
+    fn selection_text(&self) -> Option<String>;
+    fn has_selection(&self) -> bool;                  // O(1), no text materialised (PERF-14)
+}
+
+/// Bytes into the PTY/channel plus viewport, mouse and selection manipulation.
+pub trait TerminalInput: Send + Sync {
+    fn write(&self, bytes: &[u8]) -> Result<(), TerminalError>;
+    fn flush_pty(&self);
+    fn send_ctrl_c(&self);
+    fn resize(&self, rows: u16, cols: u16) -> Result<(), TerminalError>;
+    fn scroll(&self, delta: i32); fn scroll_to_bottom(&self); fn scroll_to_top(&self);
+    fn mouse_down(&self, row: f32, col: f32, button: TerminalMouseButton, sel: SelectionType, mods: MouseModifiers);
+    fn mouse_move(&self, row: f32, col: f32, mods: MouseModifiers);
+    fn mouse_drag(&self, row: f32, col: f32, mods: MouseModifiers);
+    fn mouse_up(&self, row: f32, col: f32, button: TerminalMouseButton, mods: MouseModifiers);
+    fn wheel(&self, delta_y: f64, row: f32, col: f32, mods: MouseModifiers);
+    fn clear_selection(&self); fn select_all(&self); fn clear(&self);
+}
+
+/// IME composition state and commit.
+pub trait TerminalIme: Send + Sync {
     fn set_marked_text(&self, text: String);
     fn clear_marked_text(&self);
     fn commit_text(&self, text: &str);
     fn marked_text(&self) -> Option<String>;
-    fn cursor_bounds(&self) -> Option<Bounds<Pixels>>;     // for IME popup
-    // Lifecycle
+}
+
+/// Events, liveness, close, identity.
+pub trait TerminalLifecycle: Send + Sync {
     fn take_events(&self) -> Option<Receiver<SessionEvent>>; // once-only; None after the first call
     fn alive(&self) -> bool;
-    fn close(&self);
-    fn is_local(&self) -> bool;
-    fn title(&self) -> Option<String>;
-    fn cwd(&self) -> Option<PathBuf>;                      // OSC 7
+    fn close(&self) -> Result<(), TerminalError>;
+    fn kind(&self) -> SessionKind;                            // Local | Ssh
+    fn title(&self) -> Option<String>;                        // OSC 0/2
+    fn cwd(&self) -> Option<PathBuf>;                         // OSC 7
+}
+
+pub trait TerminalSession: TerminalRender + TerminalInput + TerminalIme + TerminalLifecycle + 'static {
+    fn capabilities(&self) -> TerminalCapabilities { TerminalCapabilities::default() }
+    // Provided helpers built only on the traits above:
+    fn send_text(&self, text: &str);
+    fn send_keystroke(&self, keystroke: &str);
+    fn is_bracketed_paste(&self) -> bool;
+    fn paste(&self, text: &str) -> Result<(), PasteError>;   // TooLarge | Write(TerminalError)
 }
 ```
 
-> This trait is only a **render/lifecycle interface** — it does not force a shared pump/transport.
+> This is only a **render/input/lifecycle interface** — it does not force a shared pump/transport.
 > `LocalSession` and `SshSession` implement it independently. The two backends still don't know each other.
+
+Presentation is not part of the trait: the status-bar breadcrumb is formatted by
+`terminal-view` from `cwd()`. Pixel cell metrics (`set_cell_size`/`cursor_bounds`) were
+removed — the IME caret position is computed by the element from its own layout.
 
 `TerminalSession::capabilities()` returns optional backend services as one scoped
 `TerminalCapabilities` value. SSH supplies network counters, SFTP, and its live CWD
@@ -583,8 +616,16 @@ of the required implementation surface for test fakes and future backends. The a
 installs the session factory and workspace callbacks together through `AppServices`;
 feature crates read those handles from their GPUI application context.
 
+`paste` returns `Result<(), PasteError>`: a payload over the paste policy limit or an
+undeliverable write is returned to the view, which shows a warning notification
+(ERR-04) instead of dropping the paste silently.
+
+`search` copies the grid text under the `Term` lock (`search::GridText::from_term`) and
+matches after releasing it (`search_grid_text`), so a long scrollback search never stalls
+the pump (PERF-04).
+
 `SessionEvent`: `Output | Title | Cwd | Clipboard | ClipboardRead | ShellIntegration |
-Notification | Progress | AgentStatus | ForegroundProcess | Exited(Option<i32>) | Closed |
+Notification | Progress | AgentStatus | Exited(Option<i32>) | Closed |
 Bell` — `Output` is the only coalescible event (§6.5).
 
 ### 9.1 Session duplication metadata and cwd
@@ -637,7 +678,7 @@ crates/
 │   └── config/shell.rs       # ShellKind, LocalShellConfig, resolve_shell
 │
 ├── terminal/src/             # engine (no GPUI)
-│   ├── session.rs            # TerminalSession trait + SessionEvent + TerminalCapabilities
+│   ├── session.rs            # TerminalRender/Input/Ime/Lifecycle + TerminalSession façade, SessionEvent, TerminalCapabilities
 │   ├── model.rs              # TerminalModel<EP>: snapshot / snapshot_query / query_state / input
 │   ├── content.rs            # TerminalContent snapshot struct
 │   ├── palette.rs / color_classification.rs / osc_color.rs
