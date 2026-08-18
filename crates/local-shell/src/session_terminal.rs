@@ -1,9 +1,9 @@
 //! `impl TerminalSession for LocalSession` — render, input, mouse/selection,
 //! clipboard, scroll, IME, and lifecycle query methods.
 //!
-//! ARCH-05: Terminal-model operations (snapshot, query, scroll, selection,
-//! search, mouse encoding) are delegated to the shared `TerminalModel` adapter
-//! in `oneterm_terminal`. Only transport (PTY write), lifecycle, and state remain
+//! Terminal-model operations (snapshot, query, scroll, selection, search,
+//! mouse encoding) are delegated to the shared `TerminalModel` adapter in
+//! `oneterm_terminal`. Only transport (PTY write), lifecycle, and state remain
 //! on `LocalSession`.
 
 use std::path::PathBuf;
@@ -92,14 +92,8 @@ impl TerminalSession for LocalSession {
     /// Requirement: conpty.dll + OpenConsole.exe must sit in the same directory as
     /// the exe. See crates/app/build.rs — they are copied from assets/ to the
     /// target directory automatically.
-    #[cfg(windows)]
-    fn send_ctrl_c(&self) {
-        if let Err(error) = self.transport().pty_write(b"\x03") {
-            log::warn!("LocalSession: Ctrl+C delivery failed: {error}");
-        }
-    }
-
-    #[cfg(not(windows))]
+    /// Write ETX (`\x03`) to the PTY; the shell's line discipline (or ConPTY)
+    /// turns it into the interrupt.
     fn send_ctrl_c(&self) {
         if let Err(error) = self.transport().pty_write(b"\x03") {
             log::warn!("LocalSession: Ctrl+C delivery failed: {error}");
@@ -243,8 +237,7 @@ impl TerminalSession for LocalSession {
     fn prompt_count(&self) -> usize {
         self.state.prompt_count()
     }
-    fn scroll_to_prompt(&self, n: usize) {
-        // TODO: implement scroll-to-prompt using prompt marker line positions.
-        let _ = n;
-    }
+    /// Not implemented for local shells: prompt marker line positions are not
+    /// recorded yet, so this is a no-op (the trait default behaviour).
+    fn scroll_to_prompt(&self, _n: usize) {}
 }

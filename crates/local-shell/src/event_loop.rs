@@ -14,6 +14,7 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
+use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 
@@ -24,6 +25,7 @@ use alacritty_terminal::tty::{self, EventedPty, Options};
 use log::error;
 use polling::{Event as PollEvent, Events, PollMode, Poller};
 
+use oneterm_core::report_best_effort;
 use oneterm_terminal::TerminalPump;
 
 use crate::transport::{LocalListener, LocalTransport};
@@ -31,6 +33,11 @@ use crate::transport::{LocalListener, LocalTransport};
 /// PTY read buffer size (1 MiB — same as alacritty). Heap-allocated: the owner
 /// thread's default 2 MiB stack must not carry it (PERF-21).
 const READ_BUFFER_SIZE: usize = 0x10_0000;
+/// Poll events collected per `poll.wait` (PTY readable + child watcher).
+const POLL_EVENT_CAPACITY: NonZeroUsize = match NonZeroUsize::new(1024) {
+    Some(capacity) => capacity,
+    None => unreachable!(),
+};
 /// Maximum queued local-shell command messages.
 pub(crate) const LOCAL_COMMAND_QUEUE_CAPACITY: usize = 256;
 /// Maximum aggregate input bytes queued or waiting for PTY delivery.
@@ -55,7 +62,11 @@ fn record_lock_sample(samples: &mut Vec<u64>, started: std::time::Instant) {
 /// token is `0`. We mirror that value here.
 const PTY_CHILD_EVENT_TOKEN: usize = 1;
 
-/// Message sent to the event loop.
+/// Request handed to [`ShellNotifier::send`].
+///
+/// Only `Input` travels through the bounded command queue; `Resize` is
+/// coalesced into `ShellControl::pending_resize` and `Shutdown` sets the
+/// `ShellControl::shutdown` flag, so the loop observes both out of band.
 #[derive(Debug)]
 pub(crate) enum ShellMsg {
     /// Data written to the PTY (keystroke, paste).
@@ -77,7 +88,8 @@ struct ShellControl {
 /// `EventLoopSender`).
 #[derive(Clone)]
 pub(crate) struct ShellNotifier {
-    sender: mpsc::SyncSender<ShellMsg>,
+    /// Bounded queue of PTY input payloads (the only queued request kind).
+    sender: mpsc::SyncSender<Cow<'static, [u8]>>,
     poller: std::sync::Arc<Poller>,
     control: std::sync::Arc<ShellControl>,
 }
@@ -110,7 +122,7 @@ impl ShellNotifier {
                         "local-shell command byte budget is full",
                     ));
                 }
-                if let Err(error) = self.sender.try_send(ShellMsg::Input(bytes)) {
+                if let Err(error) = self.sender.try_send(bytes) {
                     self.control
                         .queued_input_bytes
                         .fetch_sub(length, Ordering::AcqRel);
@@ -127,7 +139,11 @@ impl ShellNotifier {
                 }
             }
             ShellMsg::Resize(size) => {
-                *self.control.pending_resize.lock().unwrap() = Some(size);
+                *self
+                    .control
+                    .pending_resize
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(size);
             }
             ShellMsg::Shutdown => {
                 self.control.shutdown.store(true, Ordering::Release);
@@ -143,7 +159,7 @@ pub(crate) struct ShellEventLoop<P: EventedPty + OnResize> {
     pty: P,
     term: std::sync::Arc<FairMutex<Term<LocalListener>>>,
     pump: TerminalPump<LocalTransport>,
-    msg_rx: mpsc::Receiver<ShellMsg>,
+    input_rx: mpsc::Receiver<Cow<'static, [u8]>>,
     poll: std::sync::Arc<Poller>,
     control: std::sync::Arc<ShellControl>,
 }
@@ -165,22 +181,29 @@ impl ShellEventLoop<tty::Pty> {
                 match result {
                     Ok((mut event_loop, notifier)) => {
                         listener.transport().set_notifier(notifier.clone());
-                        let _ = ready_tx.send(Ok(notifier));
+                        // The spawner may have given up waiting; the loop still
+                        // runs and exits on its own shutdown flag.
+                        report_best_effort("PTY owner ready signal", ready_tx.send(Ok(notifier)));
                         event_loop.run();
                     }
                     Err(error) => {
-                        let _ = ready_tx.send(Err(error.to_string()));
+                        report_best_effort(
+                            "PTY owner spawn-failure signal",
+                            ready_tx.send(Err(error.to_string())),
+                        );
                     }
                 }
             })?;
         match ready_rx.recv() {
             Ok(Ok(notifier)) => Ok((notifier, join)),
             Ok(Err(error)) => {
-                let _ = join.join();
+                // The owner thread has already returned; the join only collects
+                // its (irrelevant) panic status.
+                report_best_effort("join failed PTY owner", join.join().map_err(|_| "panicked"));
                 Err(io::Error::other(error))
             }
             Err(error) => {
-                let _ = join.join();
+                report_best_effort("join failed PTY owner", join.join().map_err(|_| "panicked"));
                 Err(io::Error::new(io::ErrorKind::BrokenPipe, error.to_string()))
             }
         }
@@ -208,7 +231,7 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
                 pty,
                 term,
                 pump: TerminalPump::new(listener),
-                msg_rx: rx,
+                input_rx: rx,
                 poll,
                 control,
             },
@@ -229,7 +252,7 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
             return;
         }
 
-        let mut events = Events::with_capacity(1024.try_into().unwrap());
+        let mut events = Events::with_capacity(POLL_EVENT_CAPACITY);
 
         // Throughput and lock-hold instrumentation is intentionally absent from
         // normal builds. Enable `terminal-diagnostics` and DEBUG logging when
@@ -267,32 +290,23 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
             }
 
             if self.control.shutdown.load(Ordering::Acquire) {
-                let _ = self.pty.deregister(&self.poll);
+                self.deregister_pty();
                 return;
             }
-            if let Some(size) = self.control.pending_resize.lock().unwrap().take() {
+            let pending_resize = self
+                .control
+                .pending_resize
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some(size) = pending_resize {
                 self.pty.on_resize(size);
             }
 
-            // Drain channel messages (non-blocking).
-            let mut shutdown = false;
-            while let Ok(msg) = self.msg_rx.try_recv() {
-                match msg {
-                    ShellMsg::Input(bytes) => {
-                        write_queue.push_back(bytes);
-                    }
-                    ShellMsg::Resize(sz) => {
-                        self.pty.on_resize(sz);
-                    }
-                    ShellMsg::Shutdown => {
-                        shutdown = true;
-                        break;
-                    }
-                }
-            }
-            if shutdown {
-                let _ = self.pty.deregister(&self.poll);
-                return;
+            // Drain queued input (non-blocking). Resize and shutdown never
+            // travel through the queue — see `ShellMsg`.
+            while let Ok(bytes) = self.input_rx.try_recv() {
+                write_queue.push_back(bytes);
             }
 
             // Write pending data to PTY.
@@ -331,7 +345,7 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
                     if let Some(tty::ChildEvent::Exited(status)) = self.pty.next_child_event() {
                         self.term.lock().exit();
                         publish_child_exit(&self.pump, status);
-                        let _ = self.pty.deregister(&self.poll);
+                        self.deregister_pty();
                         return;
                     }
                     continue;
@@ -482,6 +496,16 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
                 }
             }
         }
+    }
+
+    /// Unregister the PTY from the poller on the way out. The PTY is dropped
+    /// with `self` right after, so a failure only means a stale registration
+    /// that dies with the poller.
+    fn deregister_pty(&mut self) {
+        report_best_effort(
+            "ShellEventLoop deregister PTY",
+            self.pty.deregister(&self.poll),
+        );
     }
 }
 

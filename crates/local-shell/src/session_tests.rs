@@ -124,6 +124,53 @@ fn trait_alive_is_local_close() {
     assert!(wait_until(Duration::from_secs(2), || !s.alive()));
 }
 
+/// CORR-10: `close()` must not join the PTY owner thread on the caller's
+/// thread. Hold the `Term` lock (which the owner needs to make progress) and
+/// require `close()` to return promptly regardless; the reaper thread joins
+/// the owner afterwards.
+#[test]
+fn close_returns_without_joining_the_owner_thread() {
+    let s = spawn_default();
+    let _ = s.write(b"echo hold\r");
+    let guard = s.term.lock();
+    let started = Instant::now();
+    s.close().expect("close must succeed");
+    let elapsed = started.elapsed();
+    drop(guard);
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "close() blocked for {elapsed:?} — it must hand the owner thread to the reaper"
+    );
+    assert!(
+        s.owner_join.lock().unwrap().is_none(),
+        "the join handle must have been handed off"
+    );
+    assert!(wait_until(Duration::from_secs(2), || !s.alive()));
+}
+
+/// ARCH-06: a program that cannot be started reports a typed
+/// `ShellResolution` error naming the program.
+#[cfg(windows)]
+#[test]
+fn spawn_failure_is_a_typed_shell_resolution_error() {
+    let cfg = oneterm_core::LocalShellConfig {
+        kind: oneterm_core::ShellKind::Custom,
+        program: Some(std::path::PathBuf::from(
+            r"C:\oneterm-does-not-exist\no-such-shell.exe",
+        )),
+        ..Default::default()
+    };
+    let error = LocalSession::spawn(cfg, PtySize { rows: 24, cols: 80 }, 10_000)
+        .err()
+        .expect("spawning a missing program must fail");
+    match error {
+        oneterm_core::AppError::ShellResolution { shell, .. } => {
+            assert!(shell.contains("no-such-shell.exe"), "{shell}");
+        }
+        other => panic!("expected ShellResolution, got {other:?}"),
+    }
+}
+
 #[test]
 fn trait_take_events_hands_out_the_receiver_once() {
     let s = spawn_default();
