@@ -417,8 +417,12 @@ fn open_host_key_confirmation(
          SHA-256 fingerprint: {fingerprint}\n\n\
          Verify this fingerprint through a trusted channel before continuing.",
     );
+    // The builder closure runs on every render of the dialog: share one copy of
+    // the config (it carries the secret) instead of re-cloning it each time,
+    // and clone it only when the user confirms (SEC-17).
+    let cfg = Rc::new(cfg);
     window.open_alert_dialog(cx, move |alert, _, _| {
-        let cfg = cfg.clone();
+        let cfg = Rc::clone(&cfg);
         let request = request.clone();
         alert
             .confirm()
@@ -433,7 +437,7 @@ fn open_host_key_confirmation(
             )
             .on_ok(move |_, window, cx| {
                 connect_ssh_session(
-                    cfg.clone(),
+                    SshConfig::clone(&cfg),
                     request.clone(),
                     Arc::new(AtomicBool::new(true)),
                     window,

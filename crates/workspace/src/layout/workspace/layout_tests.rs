@@ -2,9 +2,9 @@
 //! switching and the load → reset-center → save round trip against an
 //! isolated `docks.json`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use gpui::{Entity, TestAppContext, VisualTestContext, px};
+use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext, px};
 use gpui_component::dock::{DockArea, DockAreaState, DockItem};
 use oneterm_actions::RightDockMode;
 use oneterm_core::SftpTableState;
@@ -194,4 +194,16 @@ fn load_reset_center_and_save_round_trip(cx: &mut TestAppContext) {
         written.sftp_table_state.unwrap().column_widths.get("name"),
         Some(&321.0)
     );
+}
+
+/// CORR-22: the subscribed-tab set only keeps ids of TabPanels still in the dock.
+#[gpui::test]
+fn stale_tab_subscriptions_are_forgotten(cx: &mut TestAppContext) {
+    let kept = cx.new(|_| ());
+    let gone = cx.new(|_| ());
+    let mut subscribed = HashSet::from([kept.entity_id(), gone.entity_id()]);
+    super::retain_live_tabs(&mut subscribed, [kept.entity_id()]);
+    assert_eq!(subscribed, HashSet::from([kept.entity_id()]));
+    super::retain_live_tabs(&mut subscribed, []);
+    assert!(subscribed.is_empty());
 }

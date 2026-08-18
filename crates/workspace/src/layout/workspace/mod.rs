@@ -108,6 +108,14 @@ pub struct OneTermWorkspace {
     subscribed_tabs: HashSet<EntityId>,
 }
 
+/// Forget `TabPanel`s that no longer exist in the dock (their subscriptions
+/// ended with the entity) so the subscribed set cannot grow with every tab
+/// open/close (CORR-22).
+fn retain_live_tabs(subscribed: &mut HashSet<EntityId>, live: impl IntoIterator<Item = EntityId>) {
+    let live: HashSet<EntityId> = live.into_iter().collect();
+    subscribed.retain(|id| live.contains(id));
+}
+
 impl OneTermWorkspace {
     /// Create a new workspace: load the old layout (keep right dock + settings),
     /// but reset the center (terminal tabs) to a single default tab.
@@ -302,6 +310,10 @@ impl OneTermWorkspace {
     fn sync_tab_subscriptions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tabs = zoom::collect_tab_panels(&self.dock_area.read(cx), cx);
         log::debug!("sync_tab_subscriptions → found {} tab panel(s)", tabs.len());
+        retain_live_tabs(
+            &mut self.subscribed_tabs,
+            tabs.iter().map(|tp| tp.entity_id()),
+        );
         for tp in tabs {
             let id = tp.entity_id();
             if self.subscribed_tabs.insert(id) {
