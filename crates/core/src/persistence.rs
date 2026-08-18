@@ -316,20 +316,42 @@ fn replace_file(temporary: &Path, target: &Path) -> io::Result<()> {
 /// Move an unreadable persisted document aside for diagnosis and recovery.
 ///
 /// The original path becomes available for a default configuration to be
-/// written. The quarantine name is unique within the process.
+/// written. The quarantine name carries the process id, a timestamp and a
+/// process-local sequence, so a quarantine from an earlier run (or another
+/// process) is never overwritten by this one; an unexpected collision is
+/// skipped by advancing the sequence instead of replacing the older file.
 pub fn quarantine_file(path: &Path) -> io::Result<Option<PathBuf>> {
     let _lock = InterProcessLock::acquire(path)?;
     if !path.exists() {
         return Ok(None);
     }
-    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("oneterm-config.json");
-    let quarantined = path.with_file_name(format!(".{name}.invalid-{sequence}"));
-    fs::rename(path, &quarantined)?;
-    Ok(Some(quarantined))
+    let pid = std::process::id();
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0);
+    loop {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let quarantined =
+            path.with_file_name(format!(".{name}.invalid-{pid}-{timestamp}-{sequence}"));
+        // `create_new` reserves the name without replacing an existing file;
+        // the rename below then replaces only our own placeholder.
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&quarantined)
+        {
+            Ok(_placeholder) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+        fs::rename(path, &quarantined)?;
+        return Ok(Some(quarantined));
+    }
 }
 
 #[cfg(test)]
@@ -468,6 +490,43 @@ mod tests {
         let quarantined = quarantine_file(&path).unwrap().unwrap();
         assert!(!path.exists());
         assert_eq!(fs::read(quarantined).unwrap(), b"invalid");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// CORR-47: a second quarantine of the same document (as after a
+    /// restart, when the process-local counter starts over) must not replace
+    /// the earlier quarantined file.
+    #[test]
+    fn quarantine_names_never_collide_across_runs() {
+        let dir = test_dir();
+        let path = dir.join("state.json");
+        fs::create_dir_all(&dir).unwrap();
+
+        // Occupy the names the next quarantine would pick (this second and
+        // the next, in case the clock ticks over) as if an earlier run left
+        // them behind with the same pid and sequence.
+        let pid = std::process::id();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let sequence = TEMP_SEQUENCE.load(Ordering::Relaxed);
+        let occupied: Vec<PathBuf> = [now, now + 1]
+            .iter()
+            .map(|ts| dir.join(format!(".state.json.invalid-{pid}-{ts}-{sequence}")))
+            .collect();
+        for existing in &occupied {
+            fs::write(existing, b"earlier run").unwrap();
+        }
+
+        fs::write(&path, b"current").unwrap();
+        let quarantined = quarantine_file(&path).unwrap().unwrap();
+
+        assert!(!occupied.contains(&quarantined));
+        assert_eq!(fs::read(&quarantined).unwrap(), b"current");
+        for existing in &occupied {
+            assert_eq!(fs::read(existing).unwrap(), b"earlier run");
+        }
         let _ = fs::remove_dir_all(dir);
     }
 }

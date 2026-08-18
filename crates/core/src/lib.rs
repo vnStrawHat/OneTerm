@@ -5,6 +5,7 @@
 //! trait. The terminal engine (`TerminalSession` + alacritty coupling) lives in
 //! the separate `oneterm-terminal` crate.
 
+pub mod best_effort;
 pub mod config;
 pub mod error;
 pub mod persistence;
@@ -13,6 +14,7 @@ pub mod session_duplicate;
 pub mod sftp;
 pub mod ssh_config;
 
+pub use best_effort::report_best_effort;
 pub use config::{DockPlacement, LocalShellConfig, RightDockMode, ShellKind, config_dir, home_dir};
 pub use error::{AppError, ConnectPhase, SftpStatus};
 pub use persistence::{atomic_write, quarantine_file, update_json_file};

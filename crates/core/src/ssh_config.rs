@@ -7,9 +7,12 @@
 //! are zeroized when their final in-memory owner is dropped.
 
 use std::fmt::{self, Debug, Formatter};
+use std::future::Future;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::task::{Context, Poll, Waker};
 
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -51,18 +54,79 @@ impl From<String> for SecretString {
 }
 
 /// Cooperative cancellation handle for one SSH connection attempt.
+///
+/// `cancel()` is called from the UI thread; the SSH backend polls
+/// [`is_cancelled`](Self::is_cancelled) between steps and awaits
+/// [`cancelled`](Self::cancelled) while a step is in flight, so cancellation
+/// wakes the connect future immediately instead of on the next poll tick.
 #[derive(Clone, Debug, Default)]
-pub struct ConnectionCancellation(Arc<AtomicBool>);
+pub struct ConnectionCancellation(Arc<CancellationInner>);
+
+#[derive(Debug, Default)]
+struct CancellationInner {
+    cancelled: AtomicBool,
+    /// Wakers of every pending [`Cancelled`] future; drained by `cancel()`.
+    wakers: Mutex<Vec<Waker>>,
+}
 
 impl ConnectionCancellation {
     /// Request cancellation. The SSH backend checks this during every phase.
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
+        self.0.cancelled.store(true, Ordering::Release);
+        let wakers = std::mem::take(&mut *self.lock_wakers());
+        for waker in wakers {
+            waker.wake();
+        }
     }
 
     /// Return whether cancellation has been requested.
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.0.cancelled.load(Ordering::Acquire)
+    }
+
+    /// A future that resolves once cancellation has been requested.
+    pub fn cancelled(&self) -> Cancelled {
+        Cancelled {
+            cancellation: self.clone(),
+        }
+    }
+
+    fn lock_wakers(&self) -> MutexGuard<'_, Vec<Waker>> {
+        // A poisoned waker list only means a waker's `wake` panicked; the
+        // flag is still authoritative, so keep going.
+        self.0
+            .wakers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+/// Future returned by [`ConnectionCancellation::cancelled`].
+#[derive(Debug)]
+pub struct Cancelled {
+    cancellation: ConnectionCancellation,
+}
+
+impl Future for Cancelled {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        if self.cancellation.is_cancelled() {
+            return Poll::Ready(());
+        }
+        {
+            let mut wakers = self.cancellation.lock_wakers();
+            if !wakers.iter().any(|waker| waker.will_wake(cx.waker())) {
+                wakers.push(cx.waker().clone());
+            }
+        }
+        // Re-check after registering so a `cancel()` that raced between the
+        // first check and the registration is not missed.
+        if self.cancellation.is_cancelled() {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
     }
 }
 /// Policy used for a server key that is not already in OpenSSH `known_hosts`.
@@ -239,5 +303,39 @@ mod tests {
         let output = format!("{config:?}");
         assert!(!output.contains("do-not-print"));
         assert!(output.contains("***"));
+    }
+
+    /// PERF-22: `cancelled()` parks until `cancel()` and is woken by it —
+    /// no polling loop needed on the SSH runtime.
+    #[test]
+    fn cancelled_future_wakes_on_cancel() {
+        use std::sync::atomic::AtomicUsize;
+        use std::task::Wake;
+
+        struct CountingWaker(AtomicUsize);
+        impl Wake for CountingWaker {
+            fn wake(self: Arc<Self>) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let cancellation = ConnectionCancellation::default();
+        let mut future = cancellation.cancelled();
+        let counting = Arc::new(CountingWaker(AtomicUsize::new(0)));
+        let waker = Waker::from(counting.clone());
+        let mut context = Context::from_waker(&waker);
+
+        assert_eq!(Pin::new(&mut future).poll(&mut context), Poll::Pending);
+        // Polling twice with the same waker registers it once.
+        assert_eq!(Pin::new(&mut future).poll(&mut context), Poll::Pending);
+        assert_eq!(counting.0.load(Ordering::SeqCst), 0);
+
+        cancellation.cancel();
+
+        assert_eq!(counting.0.load(Ordering::SeqCst), 1);
+        assert_eq!(Pin::new(&mut future).poll(&mut context), Poll::Ready(()));
+        // A future created after cancellation resolves immediately.
+        let mut late = cancellation.cancelled();
+        assert_eq!(Pin::new(&mut late).poll(&mut context), Poll::Ready(()));
     }
 }
