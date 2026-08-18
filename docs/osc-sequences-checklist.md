@@ -455,6 +455,6 @@ ESC]133;D;exit ST ← Block end (exit code optional)
 ### OneTerm codebase (internal verification)
 - `crates/core/src/terminal/osc.rs` — `OscSink`, `OscPayload`, `Osc133Kind`, `parse_cwd_url`, `decode_osc52`/`encode_osc52`
 - `crates/core/src/terminal/osc_color.rs` — `DynamicColors`, `PendingColorQuery`, `default_color_for_index` (OSC 10/11/12/110-112)
-- `crates/local/src/listener.rs` & `crates/ssh/src/listener.rs` — `ColorRequest` enqueue → reply after parse batch (event_loop/task)
+- `crates/terminal/src/backend/osc_router.rs` + `color_reply.rs` — shared `OscRouter<T>` listener: `ColorRequest` enqueue → reply after parse batch (used by `ssh` and `local-shell`)
 - `crates/core/src/config/shell.rs` — `resolve_shell` generates OSC 7/133 by shell kind
 - `crates/core/src/terminal/url.rs` — OSC 8 hyperlink detection

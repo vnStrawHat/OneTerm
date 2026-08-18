@@ -639,7 +639,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use gpui::{AppContext as _, TestAppContext};
+    use gpui::TestAppContext;
     use oneterm_core::RemotePath;
 
     use super::SftpPanel;
