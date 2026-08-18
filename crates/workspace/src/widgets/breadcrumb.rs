@@ -1,119 +1,30 @@
-//! [`BreadcrumbIndicator`] — displays the breadcrumb (cwd path) of the active
-//! terminal session in the StatusBar.
+//! Breadcrumb (cwd path) of the active terminal session, shown in the StatusBar.
 //!
-//! Like `DateTimeClock` / `NetSpeedIndicator`: `Entity` + `Render` + `Focusable`,
-//! updated via a 500ms timer. The timer spawns on the window context
-//! (`cx.spawn_in`) to fire reliably.
-//!
-//! Each tick:
-//! 1. Find the active terminal panel in the DockArea (via `collect_tab_panels`).
-//! 2. Downcast `AnyView` → `Entity<TerminalPanel>`.
-//! 3. Read `TerminalPanel::breadcrumb_label()` (the session's OSC 7 cwd as text).
-//!
-//! Hidden when no active terminal panel has a breadcrumb (e.g. no cwd yet).
+//! Refreshes every 500ms — the cwd (OSC 7) updates asynchronously from the PTY
+//! listener. Hidden when no active terminal has a breadcrumb (e.g. no cwd yet).
 
 use std::time::Duration;
 
-use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    App, AppContext as _, ClickEvent, ClipboardItem, Context, Entity, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, ParentElement, Render, StatefulInteractiveElement,
-    Styled, Task, WeakEntity, Window, div,
-};
+use gpui::{App, Entity, WeakEntity, Window};
 use gpui_component::dock::DockArea;
-use gpui_component::{ActiveTheme as _, tooltip::Tooltip};
 
-/// Indicator showing the breadcrumb (cwd path) of the active terminal session
-/// in the StatusBar.
-///
-/// Refreshes every 500ms — the cwd (OSC 7) updates asynchronously from the
-/// PTY listener.
-pub struct BreadcrumbIndicator {
-    focus_handle: FocusHandle,
+use super::status_text::StatusText;
+
+/// Indicator showing the breadcrumb (cwd path) of the active terminal session.
+pub fn breadcrumb(
     dock_area: WeakEntity<DockArea>,
-    /// Current formatted label — `None` when no active terminal has a breadcrumb.
-    label: Option<String>,
-    _timer: Task<()>,
-}
-
-impl BreadcrumbIndicator {
-    /// Create a new indicator and start the 500ms timer.
-    pub fn new(
-        dock_area: WeakEntity<DockArea>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let focus_handle = cx.focus_handle();
-        let timer = cx.spawn_in(window, async move |this, window| {
-            loop {
-                window
-                    .background_executor()
-                    .timer(Duration::from_millis(500))
-                    .await;
-                // The window or the indicator is gone: stop ticking.
-                if this.update_in(window, |this, _, cx| this.tick(cx)).is_err() {
-                    break;
-                }
-            }
-        });
-        Self {
-            focus_handle,
-            dock_area,
-            label: None,
-            _timer: timer,
-        }
-    }
-
-    /// Helper to create an `Entity<Self>`.
-    pub fn new_entity(
-        dock_area: WeakEntity<DockArea>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Entity<Self> {
-        cx.new(|cx| Self::new(dock_area, window, cx))
-    }
-
-    /// Sample the breadcrumb from the active terminal panel.
-    fn tick(&mut self, cx: &mut Context<Self>) {
-        let dock_area = match self.dock_area.upgrade() {
-            Some(da) => da,
-            None => {
-                if self.label.take().is_some() {
-                    cx.notify();
-                }
-                return;
-            }
-        };
-
-        let label = oneterm_state::active_terminal::breadcrumb(&dock_area, cx);
-        if label != self.label {
-            self.label = label;
-            cx.notify();
-        }
-    }
-}
-
-impl Focusable for BreadcrumbIndicator {
-    fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.focus_handle.clone()
-    }
-}
-
-impl Render for BreadcrumbIndicator {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let label = self.label.clone();
-
-        div()
-            .id("breadcrumb-indicator")
-            .track_focus(&self.focus_handle)
-            .text_color(cx.theme().muted_foreground)
-            .when_some(label, |this, label| {
-                this.child(label.clone())
-                    .cursor_pointer()
-                    .tooltip(move |window, cx| Tooltip::new("Click to copy").build(window, cx))
-                    .on_click(move |_: &ClickEvent, _window, cx: &mut App| {
-                        cx.write_to_clipboard(ClipboardItem::new_string(label.clone()));
-                    })
-            })
-    }
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<StatusText> {
+    StatusText::new_entity(
+        "breadcrumb-indicator",
+        Duration::from_millis(500),
+        true,
+        Box::new(move |cx| {
+            let dock_area = dock_area.upgrade()?;
+            oneterm_state::active_terminal::breadcrumb(&dock_area, cx)
+        }),
+        window,
+        cx,
+    )
 }

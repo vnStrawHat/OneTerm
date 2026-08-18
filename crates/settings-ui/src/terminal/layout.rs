@@ -6,7 +6,7 @@ use oneterm_settings::{SemanticHighlightingMode, TabTitleMode, TerminalSettings}
 
 use crate::items_with_separators;
 
-use super::persist;
+use super::set;
 
 /// Build the "Layout" settings group.
 pub(super) fn group() -> SettingGroup {
@@ -19,11 +19,7 @@ pub(super) fn group() -> SettingGroup {
                 SettingField::switch(
                     |cx: &App| TerminalSettings::global(cx).read(cx).show_gutter,
                     |val: bool, cx: &mut App| {
-                        TerminalSettings::global(cx).update(cx, |s, cx| {
-                            s.show_gutter = val;
-                            cx.notify();
-                        });
-                        persist(cx);
+                        set(cx, |s| s.show_gutter = val);
                     },
                 ),
             )
@@ -51,11 +47,7 @@ pub(super) fn group() -> SettingGroup {
                             "off" => SemanticHighlightingMode::Off,
                             _ => SemanticHighlightingMode::Auto,
                         };
-                        TerminalSettings::global(cx).update(cx, |s, cx| {
-                            s.semantic_highlighting = mode;
-                            cx.notify();
-                        });
-                        persist(cx);
+                        set(cx, |s| s.semantic_highlighting = mode);
                     },
                 ),
             )
@@ -87,11 +79,7 @@ pub(super) fn group() -> SettingGroup {
                             "osc" => TabTitleMode::Osc,
                             _ => TabTitleMode::Default,
                         };
-                        TerminalSettings::global(cx).update(cx, |s, cx| {
-                            s.tab_title_mode = mode;
-                            cx.notify();
-                        });
-                        persist(cx);
+                        set(cx, |s| s.tab_title_mode = mode);
                     },
                 ),
             )
@@ -106,11 +94,7 @@ pub(super) fn group() -> SettingGroup {
                     },
                     |cx: &App| TerminalSettings::global(cx).read(cx).scrollback_history as f64,
                     |val: f64, cx: &mut App| {
-                        TerminalSettings::global(cx).update(cx, |s, cx| {
-                            s.scrollback_history = val as usize;
-                            cx.notify();
-                        });
-                        persist(cx);
+                        set(cx, |s| s.scrollback_history = val as usize);
                     },
                 ),
             )

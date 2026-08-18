@@ -51,14 +51,11 @@ where
             // 1. New Terminal — add a new TerminalPanel to the center dock.
             let mut menu = menu.item(
                 PopupMenuItem::new("New Terminal")
-                    .action(Box::new(AddPanel(oneterm_actions::DockPlacement::Center)))
+                    .action(Box::new(AddPanel))
                     .on_click({
                         let f = focus.clone();
                         move |_, window, cx| {
-                            window.dispatch_action(
-                                Box::new(AddPanel(oneterm_actions::DockPlacement::Center)),
-                                cx,
-                            );
+                            window.dispatch_action(Box::new(AddPanel), cx);
                             window.focus(&f, cx);
                         }
                     }),

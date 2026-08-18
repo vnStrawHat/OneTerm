@@ -4,7 +4,7 @@ use gpui::App;
 use gpui_component::setting::{SettingField, SettingGroup, SettingItem};
 use oneterm_settings::TerminalSettings;
 
-use super::persist;
+use super::set;
 
 /// Build the "Security" settings group.
 pub(super) fn group() -> SettingGroup {
@@ -14,11 +14,7 @@ pub(super) fn group() -> SettingGroup {
             SettingField::switch(
                 |cx: &App| TerminalSettings::global(cx).read(cx).allow_clipboard_read,
                 |val: bool, cx: &mut App| {
-                    TerminalSettings::global(cx).update(cx, |s, cx| {
-                        s.allow_clipboard_read = val;
-                        cx.notify();
-                    });
-                    persist(cx);
+                    set(cx, |s| s.allow_clipboard_read = val);
                 },
             ),
         )

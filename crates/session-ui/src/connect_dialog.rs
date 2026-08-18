@@ -155,7 +155,7 @@ pub(crate) fn open_connect_dialog(
                         cx,
                     ))
                 })
-                .child(auth_form.render(cx))
+                .child(auth_form.render(true, cx))
                 // "Save username" checkbox — only shown when ask_username.
                 .when_some(username_state.as_ref(), |content, _st| {
                     content.child(

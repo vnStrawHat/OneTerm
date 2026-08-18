@@ -56,7 +56,7 @@ OneTerm/
 │   │       └── config/             # Local shell config + shared UI enums
 │   │           ├── mod.rs
 │   │           ├── shell.rs        # LocalShellConfig + ShellKind + resolve_shell + config_dir
-│   │           └── dock_mode.rs / placement.rs / env.rs
+│   │           └── env.rs
 │   │
 │   ├── terminal/                   # Terminal ENGINE (alacritty-coupled, no gpui) — `oneterm-terminal`
 │   │   ├── Cargo.toml              # deps: core, alacritty_terminal, async-channel, base64
@@ -117,7 +117,7 @@ OneTerm/
 │   │   ├── build.rs                # Sets ONETERM_UI_ICONS_DIR for the icon_named! macro
 │   │   ├── assets/icons/           # OneTerm SVG icons (auto-generate AppIcon variants)
 │   │   ├── themes/                 # 24 built-in JSON themes (2 Zed + 22 gpui-component)
-│   │   └── src/{lib.rs, theme.rs, icon.rs, brand.rs, notif_ext.rs}   # brand.rs = brand accent; notif_ext.rs = theme-tinted notifications
+│   │   └── src/{lib.rs, theme.rs, icon.rs, notif_ext.rs}   # notif_ext.rs = theme-tinted notifications
 │   │
 
 │   ├── workspace/                  # `oneterm-workspace` — feature-AGNOSTIC app shell

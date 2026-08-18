@@ -13,13 +13,7 @@ use oneterm_update::{MAX_CHECK_INTERVAL_HOURS, UpdateChannel, UpdateConfig};
 
 use crate::items_with_separators;
 
-use super::{
-    config::{
-        set_auto_check, set_channel, set_check_interval_hours, set_proxy_url, set_skipped_version,
-        set_verify_certificates,
-    },
-    state::UpdateUiState,
-};
+use super::{config::update_preference, state::UpdateUiState};
 
 const CHANNEL_STABLE: &str = "stable";
 const CHANNEL_PREVIEW: &str = "preview";
@@ -60,7 +54,7 @@ fn auto_check_item(config: UpdateConfig) -> SettingItem {
         SettingField::switch(
             move |_cx| config.auto_check,
             |checked, cx| {
-                set_auto_check(cx, checked);
+                update_preference(cx, |c| c.auto_check = checked);
             },
         ),
     )
@@ -78,7 +72,7 @@ fn interval_item(config: UpdateConfig) -> SettingItem {
             },
             move |_cx| config.effective_check_interval_hours() as f64,
             |hours, cx| {
-                set_check_interval_hours(cx, hours_from_field(hours));
+                update_preference(cx, |c| c.check_interval_hours = hours_from_field(hours));
             },
         ),
     )
@@ -110,7 +104,7 @@ fn channel_item(config: UpdateConfig) -> SettingItem {
             options,
             move |_cx| SharedString::from(channel_key(config.channel)),
             |value, cx| {
-                set_channel(cx, channel_from_key(value.as_ref()));
+                update_preference(cx, |c| c.channel = channel_from_key(value.as_ref()));
             },
         ),
     )
@@ -149,7 +143,9 @@ fn skipped_version_item(skipped: String) -> SettingItem {
                             .ghost()
                             .small()
                             .label("Clear")
-                            .on_click(|_, _, cx| set_skipped_version(cx, None)),
+                            .on_click(|_, _, cx| {
+                                update_preference(cx, |c| c.skipped_version = None)
+                            }),
                     )
                     .into_any_element()
             },
@@ -164,14 +160,9 @@ fn proxy_item(config: UpdateConfig) -> SettingItem {
         SettingField::input(
             move |_cx| config.proxy_url.clone().unwrap_or_default().into(),
             |value, cx| {
-                set_proxy_url(
-                    cx,
-                    if value.is_empty() {
-                        None
-                    } else {
-                        Some(value.to_string())
-                    },
-                );
+                update_preference(cx, |c| {
+                    c.proxy_url = (!value.is_empty()).then(|| value.to_string());
+                });
             },
         ),
     )
@@ -184,7 +175,7 @@ fn certificate_item(config: UpdateConfig) -> SettingItem {
         SettingField::switch(
             move |_cx| config.verify_certificates,
             |checked, cx| {
-                set_verify_certificates(cx, checked);
+                update_preference(cx, |c| c.verify_certificates = checked);
             },
         ),
     )

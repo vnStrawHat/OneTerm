@@ -15,8 +15,6 @@ use oneterm_core::RightDockMode;
 
 /// Terminal tab panel (`terminal-view`).
 pub const TERMINAL: &str = "terminal";
-/// Terminal settings panel (`terminal-view`).
-pub const TERMINAL_SETTINGS: &str = "terminal-settings";
 /// SFTP file browser panel (`sftp-ui`).
 pub const SFTP: &str = "sftp";
 /// SSH session list panel (`session-ui`).
@@ -25,19 +23,6 @@ pub const SESSION: &str = "session";
 pub const SSH_CLIENT: &str = "ssh_client_panel";
 /// Right-dock Agent Mode panel (`app`).
 pub const AGENT: &str = "agent_panel";
-
-/// Every panel name registered with the `PanelRegistry` at startup.
-///
-/// Used by diagnostics (e.g. the shell's "panel not registered" error) and by
-/// the uniqueness test below. Keep in sync when adding a constant.
-pub const ALL: &[&str] = &[
-    TERMINAL,
-    TERMINAL_SETTINGS,
-    SFTP,
-    SESSION,
-    SSH_CLIENT,
-    AGENT,
-];
 
 /// The registered panel name the right dock shows for `mode`.
 ///
@@ -56,15 +41,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registered_names_are_non_empty_and_unique() {
-        let mut seen = std::collections::HashSet::new();
-        for name in ALL {
-            assert!(!name.is_empty(), "panel name must not be empty");
-            assert!(seen.insert(*name), "duplicate panel name: {name}");
-        }
-    }
-
-    #[test]
     fn right_dock_mode_maps_to_registered_names() {
         assert_eq!(
             right_dock_panel_name(RightDockMode::SshClient),
@@ -72,9 +48,5 @@ mod tests {
         );
         assert_eq!(right_dock_panel_name(RightDockMode::Agent), Some(AGENT));
         assert_eq!(right_dock_panel_name(RightDockMode::None), None);
-        for mode in [RightDockMode::SshClient, RightDockMode::Agent] {
-            let name = right_dock_panel_name(mode).expect("mode has a panel");
-            assert!(ALL.contains(&name), "{name} is not a registered panel name");
-        }
     }
 }

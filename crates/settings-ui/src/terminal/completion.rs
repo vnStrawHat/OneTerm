@@ -3,9 +3,7 @@
 //! Binds the `completion` block of `TerminalSettings` to the Terminal settings
 //! page: master toggle, Tab-accept, history/prefix/visible numbers, per-source
 //! toggles, fuzzy, alt-screen gating, coreutils-on-Windows, and a force-family
-//! dropdown. Clearing session history is exposed via the `ClearCompletionHistory`
-//! action (bindable in the key-bindings UI) since the settings widget has no
-//! button field.
+//! dropdown.
 
 use gpui::{App, SharedString};
 use gpui_component::setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem};
@@ -13,7 +11,7 @@ use oneterm_settings::TerminalSettings;
 
 use crate::items_with_separators;
 
-use super::persist;
+use super::set;
 
 fn count_field(
     get: impl Fn(&App) -> usize + 'static,
@@ -99,9 +97,10 @@ pub(super) fn group() -> SettingGroup {
                         TerminalSettings::global(cx)
                             .read(cx)
                             .completion
-                            .source_memory
+                            .sources
+                            .memory
                     },
-                    |val: bool, cx: &mut App| update(cx, move |c| c.source_memory = val),
+                    |val: bool, cx: &mut App| update(cx, move |c| c.sources.memory = val),
                 ),
             )
             .description("Suggest commands you ran this session."),
@@ -112,9 +111,10 @@ pub(super) fn group() -> SettingGroup {
                         TerminalSettings::global(cx)
                             .read(cx)
                             .completion
-                            .source_manual
+                            .sources
+                            .manual
                     },
-                    |val: bool, cx: &mut App| update(cx, move |c| c.source_manual = val),
+                    |val: bool, cx: &mut App| update(cx, move |c| c.sources.manual = val),
                 ),
             )
             .description("Hand-authored bundled catalogs (git, cargo, …)."),
@@ -125,9 +125,10 @@ pub(super) fn group() -> SettingGroup {
                         TerminalSettings::global(cx)
                             .read(cx)
                             .completion
-                            .source_external
+                            .sources
+                            .external
                     },
-                    |val: bool, cx: &mut App| update(cx, move |c| c.source_external = val),
+                    |val: bool, cx: &mut App| update(cx, move |c| c.sources.external = val),
                 ),
             )
             .description("Generated catalogs (Windows commands, coreutils)."),
@@ -202,10 +203,6 @@ pub(super) fn group() -> SettingGroup {
 }
 
 /// Update the live completion settings + persist.
-fn update(cx: &mut App, f: impl FnOnce(&mut oneterm_settings::CompletionSettings)) {
-    TerminalSettings::global(cx).update(cx, |s, cx| {
-        f(&mut s.completion);
-        cx.notify();
-    });
-    persist(cx);
+fn update(cx: &mut App, f: impl FnOnce(&mut oneterm_settings::CompletionConfig)) {
+    set(cx, |s| f(&mut s.completion));
 }

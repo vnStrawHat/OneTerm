@@ -13,12 +13,11 @@ use gpui_component::dock::{DockArea, DockEvent, PanelEvent, ToggleZoom};
 use oneterm_state::AppState;
 
 use crate::layout::{statusbar, title_bar::AppTitleBar};
-use crate::widgets::{BreadcrumbIndicator, DateTimeClock, NetSpeedIndicator, ResourceIndicator};
+use crate::widgets::{StatusText, breadcrumb, datetime_clock, net_speed, resource};
 
 pub(crate) mod actions;
 pub(crate) mod layout;
 pub(crate) mod persistence;
-pub(crate) mod zoom;
 
 #[cfg(test)]
 mod layout_tests;
@@ -64,9 +63,8 @@ pub(crate) fn build_named_panel(
     // name always yields gpui-component's `InvalidPanel` placeholder.
     if panel.panel_name(cx) == INVALID_PANEL_NAME && name != INVALID_PANEL_NAME {
         log::error!(
-            "build_named_panel: panel {name:?} is not registered with PanelRegistry \
-             (known OneTerm panel names: {:?}); rendering placeholder",
-            oneterm_state::panel_names::ALL
+            "build_named_panel: panel {name:?} is not registered with PanelRegistry; \
+             rendering placeholder"
         );
     }
     panel
@@ -83,14 +81,14 @@ pub struct OneTermWorkspace {
     pub title_bar: Entity<AppTitleBar>,
     pub dock_area: Entity<DockArea>,
     /// Datetime clock — created once so the 1s timer fires reliably.
-    pub clock: Entity<DateTimeClock>,
+    pub clock: Entity<StatusText>,
     /// Network speed indicator — created once so the 1s timer fires reliably.
-    pub net_speed: Entity<NetSpeedIndicator>,
+    pub net_speed: Entity<StatusText>,
     /// Breadcrumb (cwd + foreground process) indicator — created once so the
     /// 500ms timer fires reliably.
-    pub breadcrumb: Entity<BreadcrumbIndicator>,
+    pub breadcrumb: Entity<StatusText>,
     /// CPU/memory resource indicator — created once so the 2s timer fires reliably.
-    pub resource: Entity<ResourceIndicator>,
+    pub resource: Entity<StatusText>,
     last_layout_state: Option<gpui_component::dock::DockAreaState>,
     _save_layout_task: Option<Task<()>>,
 
@@ -211,10 +209,10 @@ impl OneTermWorkspace {
                 .child(|_window, cx| crate::layout::title_bar::mode_toggle_group(cx))
         });
 
-        let clock = DateTimeClock::new_entity(window, cx);
-        let net_speed = NetSpeedIndicator::new_entity(dock_area.downgrade(), window, cx);
-        let breadcrumb = BreadcrumbIndicator::new_entity(dock_area.downgrade(), window, cx);
-        let resource = ResourceIndicator::new_entity(window, cx);
+        let clock = datetime_clock(window, cx);
+        let net_speed = net_speed(dock_area.downgrade(), window, cx);
+        let breadcrumb = breadcrumb(dock_area.downgrade(), window, cx);
+        let resource = resource(window, cx);
 
         let mut me = Self {
             title_bar,
@@ -308,7 +306,7 @@ impl OneTermWorkspace {
     /// Subscribe to `PanelEvent` on every not-yet-subscribed `TabPanel` — updates the
     /// `zoomed_panel` mirror. Called after each `DockEvent::LayoutChanged` and at init.
     fn sync_tab_subscriptions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let tabs = zoom::collect_tab_panels(&self.dock_area.read(cx), cx);
+        let tabs = oneterm_state::dock_util::collect_tab_panels(&self.dock_area.read(cx), cx);
         log::debug!("sync_tab_subscriptions → found {} tab panel(s)", tabs.len());
         retain_live_tabs(
             &mut self.subscribed_tabs,
@@ -365,7 +363,8 @@ impl OneTermWorkspace {
     /// dispatch `ToggleZoom` (through gpui-component's proper code path → consistent
     /// toolbar state, `TabPanel.zoomed` set correctly).
     fn restore_zoom(&self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let target = zoom::find_tab_by_panel_name(&self.dock_area.read(cx), name, cx);
+        let target =
+            oneterm_state::dock_util::find_tab_by_panel_name(&self.dock_area.read(cx), name, cx);
         if let Some(tp) = target {
             if let Some(panel) = tp.read(cx).active_panel(cx) {
                 panel.focus_handle(cx).focus(window, cx);

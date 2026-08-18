@@ -4,8 +4,10 @@ pub mod breadcrumb;
 pub mod datetime_clock;
 pub mod net_speed;
 pub mod resource;
+pub mod status_text;
 
-pub use breadcrumb::BreadcrumbIndicator;
-pub use datetime_clock::DateTimeClock;
-pub use net_speed::NetSpeedIndicator;
-pub use resource::ResourceIndicator;
+pub use breadcrumb::breadcrumb;
+pub use datetime_clock::datetime_clock;
+pub use net_speed::net_speed;
+pub use resource::resource;
+pub use status_text::StatusText;

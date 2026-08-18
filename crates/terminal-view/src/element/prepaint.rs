@@ -161,7 +161,6 @@ impl super::TerminalElement {
 
         // Fill the cached ShapedLine for runs not yet shaped.
         let mut shape_line_count: usize = 0;
-        let mut shape_buffer_allocations: usize = 0;
         {
             let mut cache = render_cache.borrow_mut();
             let cache = &mut cache.rows;
@@ -170,9 +169,6 @@ impl super::TerminalElement {
                 if row.shaped_lines.len() != row.runs.len() {
                     row.shaped_lines.clear();
                     row.shaped_lines.reserve(row.runs.len());
-                    if !row.runs.is_empty() {
-                        shape_buffer_allocations += 1;
-                    }
                     for run in &row.runs {
                         // `SharedString::from(&str)` copies the text once into
                         // an `Arc<str>` (PERF-09: no intermediate `String`).
@@ -187,7 +183,6 @@ impl super::TerminalElement {
                     }
                 }
             }
-            cache.stats.allocation_buffer_sites += shape_buffer_allocations;
             cache.stats.shape_line_calls = shape_line_count;
             cache.stats.snapshot_us = snapshot_us;
             cache.stats.prepaint_us = prepaint_start.elapsed().as_micros();

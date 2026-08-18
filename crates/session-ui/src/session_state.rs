@@ -30,13 +30,14 @@
 use std::collections::HashSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 
 use gpui::{App, AppContext, Entity, Global};
 use oneterm_core::{
     AppError, atomic_write, config_dir, migrate_json_value, quarantine_file, set_schema_version,
     versioned_object,
 };
+use oneterm_state::PersistQueue;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -146,7 +147,7 @@ pub struct SshSessionStore {
     next_id: u64,
     /// Coalescing single-flight queue so background writes never complete
     /// out of order: only the newest pending snapshot reaches disk.
-    persist_queue: Arc<Mutex<SessionPersistQueue>>,
+    persist_queue: Arc<Mutex<PersistQueue<SessionDocument>>>,
     /// `ssh_session.json` existed but could not be read at startup, so this
     /// store started empty and must not overwrite the possibly valid file
     /// (CORR-61).
@@ -181,56 +182,11 @@ impl LoadedSessions {
     }
 }
 
-/// Pending snapshot plus the "a worker is draining" flag.
-///
-/// Every mutation replaces `pending`; one background worker drains the queue
-/// until it is empty. A stale snapshot therefore can never overwrite a newer
-/// one, whichever order the executor runs the writes in.
-#[derive(Default)]
-struct SessionPersistQueue {
-    pending: Option<SessionDocument>,
-    saving: bool,
-}
-
-/// Replace the pending snapshot; returns `true` when the caller must start a
-/// drain worker because none is running.
-fn enqueue_snapshot(queue: &Arc<Mutex<SessionPersistQueue>>, document: SessionDocument) -> bool {
-    let mut state = lock_persist_queue(queue);
-    state.pending = Some(document);
-    if state.saving {
-        return false;
-    }
-    state.saving = true;
-    true
-}
-
 /// Write pending snapshots to `path` until the queue is empty.
-fn drain_persist_queue(queue: &Arc<Mutex<SessionPersistQueue>>, path: &Path) {
-    loop {
-        let snapshot = {
-            let mut state = lock_persist_queue(queue);
-            match state.pending.take() {
-                Some(snapshot) => snapshot,
-                None => {
-                    state.saving = false;
-                    return;
-                }
-            }
-        };
-        SshSessionStore::save_snapshot(&snapshot, path);
-    }
-}
-
-fn lock_persist_queue(
-    queue: &Arc<Mutex<SessionPersistQueue>>,
-) -> MutexGuard<'_, SessionPersistQueue> {
-    match queue.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            log::warn!("ssh session persist queue was poisoned; continuing");
-            poisoned.into_inner()
-        }
-    }
+fn drain_persist_queue(queue: &Arc<Mutex<PersistQueue<SessionDocument>>>, path: &Path) {
+    PersistQueue::drain(queue, |snapshot| {
+        SshSessionStore::save_snapshot(snapshot, path)
+    });
 }
 
 impl SshSessionStore {
@@ -238,7 +194,7 @@ impl SshSessionStore {
         Self {
             entries: document.entries,
             next_id: document.next_id,
-            persist_queue: Arc::new(Mutex::new(SessionPersistQueue::default())),
+            persist_queue: PersistQueue::new(),
             persist_blocked: false,
         }
     }
@@ -351,7 +307,7 @@ impl SshSessionStore {
             return;
         }
         let queue = self.persist_queue.clone();
-        if !enqueue_snapshot(&queue, self.document()) {
+        if !PersistQueue::enqueue(&queue, self.document()) {
             return;
         }
         cx.background_executor()
@@ -876,15 +832,15 @@ mod persistence_tests {
     fn back_to_back_saves_keep_only_the_newest_snapshot_on_disk() {
         let directory = temporary_dir("queue");
         let path = directory.join("ssh_session.json");
-        let queue = Arc::new(Mutex::new(SessionPersistQueue::default()));
+        let queue = PersistQueue::new();
 
         // add(): the first mutation starts a worker; remove(): a second mutation
         // scheduled before the worker ran only replaces the pending snapshot.
-        assert!(enqueue_snapshot(
+        assert!(PersistQueue::enqueue(
             &queue,
             document(vec![(1, session("a")), (2, session("b"))], 3)
         ));
-        assert!(!enqueue_snapshot(
+        assert!(!PersistQueue::enqueue(
             &queue,
             document(vec![(1, session("a"))], 3)
         ));
@@ -898,7 +854,7 @@ mod persistence_tests {
         // Exactly one write happened, so the older snapshot never reached disk.
         assert!(!directory.join("ssh_session.bak").exists());
         // The drained queue starts a new worker for the next mutation.
-        assert!(enqueue_snapshot(&queue, document(Vec::new(), 3)));
+        assert!(PersistQueue::enqueue(&queue, document(Vec::new(), 3)));
         drain_persist_queue(&queue, &path);
         assert!(
             SshSessionStore::load_from(&path)

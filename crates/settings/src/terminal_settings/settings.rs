@@ -1,7 +1,7 @@
 //! The live `TerminalSettings` model — global shell config + rendering options.
 //!
 //! The config is loaded from `terminal.json` (see [`crate::terminal_config`]) at
-//! init. `TerminalSettingsPanel` updates the shell kind → notify.
+//! init.
 //!
 //! The reverse mapping (settings → config) and persistence live in
 //! [`super::persist`]; config → settings in [`super::apply`]. Defaults are
@@ -13,37 +13,6 @@ use oneterm_core::LocalShellConfig;
 use crate::terminal_config::{
     CompletionConfig, SemanticHighlightingMode, TabTitleMode, TerminalConfig,
 };
-
-/// Live mirror of the `completion` config group (docs/auto-completion/06).
-///
-/// A plain resolved copy the `terminal-view` layer projects into the engine's
-/// `CompletionParams` (keeping the engine free of a `settings` dependency).
-#[derive(Debug, Clone, PartialEq)]
-pub struct CompletionSettings {
-    pub enabled: bool,
-    pub accept_tab: bool,
-    pub max_history: usize,
-    pub min_prefix_len: usize,
-    pub max_visible_items: usize,
-    pub source_memory: bool,
-    pub source_manual: bool,
-    pub source_external: bool,
-    pub fuzzy: bool,
-    pub inherit_ancestor_options: bool,
-    pub disable_in_alt_screen: bool,
-    pub require_prompt_region: bool,
-    pub windows_allow_coreutils: bool,
-    pub force_family: Option<String>,
-    pub redact_sensitive: bool,
-}
-
-impl Default for CompletionSettings {
-    /// The live defaults are the config defaults — single-sourced in
-    /// [`CompletionConfig::default`].
-    fn default() -> Self {
-        Self::from_config(&CompletionConfig::default())
-    }
-}
 
 /// Terminal cursor shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -183,7 +152,7 @@ pub struct TerminalSettings {
 
     // ── Completion ──
     /// Live mirror of the `completion` config group.
-    pub completion: CompletionSettings,
+    pub completion: CompletionConfig,
 
     /// `terminal.json` existed but could not be read at startup (e.g. permission
     /// denied), so these are built-in defaults and must not be written back

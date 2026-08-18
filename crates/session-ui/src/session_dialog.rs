@@ -296,7 +296,7 @@ pub(crate) fn open_session_dialog(
                     Input::new(&user_state),
                     cx,
                 ))
-                .child(auth_form.render_preference(cx))
+                .child(auth_form.render(false, cx))
                 .child(labelled_field(
                     "Group",
                     FieldRequirement::Optional,

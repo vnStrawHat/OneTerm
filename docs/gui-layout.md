@@ -42,7 +42,7 @@
 5. [Panel serialization registry](#5-panel-serialization-registry)
 6. [Layout state save/load](#6-layout-state-saveload)
 7. [Title bar & App menu bar](#7-title-bar--app-menu-bar)
-8. [Status bar & DateTimeClock](#8-status-bar--datetimeclock)
+8. [Status bar & indicators](#8-status-bar--indicators)
 9. [Resizable behavior](#9-resizable-behavior)
 10. [File structure](#10-file-structure)
 11. [Implementation checklist](#11-implementation-checklist)
@@ -103,7 +103,7 @@ StatusBar.
 | `set_dock_collapsible(Edges{left:true,bottom:true,right:true})` | `set_dock_collapsible(Edges{right:true, ..Default::default()})` | Only right_dock remains |
 | `DockAreaState` save/load `STATE_FILE`, version check, reset prompt | Keep | `STATE_FILE = "target/docks.json"` (debug) |
 | `AddPanel` action + dropdown (add random story) | Dropdown only "New Terminal Tab" + "Show/Hide Dock Toggle Button" | Drop Add to Left/Bottom/Right + menu check Sidebar/Dialog/... |
-| StatusBar: 3 toggle buttons (left/bottom/right) | StatusBar: `.left(DateTimeClock)` + `.right(toggle-right-dock)` | — |
+| StatusBar: 3 toggle buttons (left/bottom/right) | StatusBar: `.left(clock)` + `.right(toggle-right-dock)` | — |
 
 ---
 
@@ -421,8 +421,8 @@ register_panel(cx, panel_names::SFTP, |_, _, _, window, cx| {
 });
 ```
 
-The current constants are `TERMINAL`, `TERMINAL_SETTINGS`, `SFTP`, `SESSION`,
-`SSH_CLIENT`, `AGENT` (see `crates/state/src/panel_names.rs`; `ALL` lists them).
+The current constants are `TERMINAL`, `SFTP`, `SESSION`, `SSH_CLIENT`, `AGENT`
+(see `crates/state/src/panel_names.rs`).
 The shell's `build_named_panel` logs an error naming the missing panel when a
 requested name is not registered (stale saved layout / feature `init()` not run).
 
@@ -648,7 +648,7 @@ AppTitleBar::new("OneTerm", window, cx).child(move |_, cx| {
         .small()
         .ghost()
         .dropdown_menu(move |menu, _, cx| {
-            menu.menu("New Terminal Tab", Box::new(AddPanel(DockPlacement::Center)))
+            menu.menu("New Terminal Tab", Box::new(AddPanel))
                 .separator()
                 .menu("Show / Hide Dock Toggle Button", Box::new(ToggleDockToggleButton))
         })
@@ -669,13 +669,13 @@ fn on_action_add_panel(&mut self, action: &AddPanel, window, cx) {
 
 ---
 
-## 8. Status bar & DateTimeClock
+## 8. Status bar & indicators
 
 ### 8.1 StatusBar wiring
 
 ```rust
 StatusBar::new()
-    .left(DateTimeClock::new(window, cx))                     // left corner: clock
+    .left(datetime_clock(window, cx))                        // left corner: clock
     .right(
         Button::new("toggle-right-dock").ghost().xsmall()
             .icon(IconName::PanelRight)
@@ -692,50 +692,17 @@ StatusBar::new()
 > `.right(...)` pins right, `.child(...)` adds center. With both left+right → center
 > justify_center; left only → center justify_end.
 
-### 8.2 `DateTimeClock` component
+### 8.2 Status-bar indicators
 
-File `crates/ui/src/components/datetime_clock.rs`. `Entity` + `Render` + `Focusable`,
-updates via a `cx.spawn` 1s interval.
+Every status-bar indicator is one `StatusText`
+(`crates/workspace/src/widgets/status_text.rs`): an `Entity` + `Render` holding a
+`Task` that ticks on an interval, calls a sampler closure for the text (`None`
+hides the indicator), and re-renders only when the text changed. The four
+indicators (`datetime_clock`, `breadcrumb`, `net_speed`, `resource`) are just
+constructors supplying an element id, an interval, and a sampler.
 
-```rust
-pub struct DateTimeClock {
-    focus_handle: FocusHandle,
-    now: chrono::DateTime<chrono::Local>,
-    _timer: Task<()>,
-}
-
-impl DateTimeClock {
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let focus_handle = cx.focus_handle();
-        let timer = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
-                _ = this.update(cx, |this, cx| {
-                    this.now = chrono::Local::now();
-                    cx.notify();
-                });
-            }
-        });
-        Self { focus_handle, now: chrono::Local::now(), _timer: timer }
-    }
-}
-
-impl Focusable for DateTimeClock {
-    fn focus_handle(&self, _: &App) -> FocusHandle { self.focus_handle.clone() }
-}
-
-impl Render for DateTimeClock {
-    fn render(&mut self, _window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .id("datetime-clock")
-            .track_focus(&self.focus_handle)
-            .child(self.now.format("%Y-%m-%d %H:%M:%S").to_string())
-    }
-}
-```
-
-> **Dep**: add `chrono` to `crates/ui/Cargo.toml` (or the `time` crate).
-> Recommended `chrono` (popular, easy format string).
+The timer spawns on the window context (`cx.spawn_in`) so it fires regardless of
+focus.
 
 ---
 
@@ -776,7 +743,7 @@ Per [`docs/agents/structure.md`](agents/structure.md):
 | `crates/ui/src/views/terminal/terminal_panel.rs` | `TerminalPanel` `impl Panel` + placeholder |
 | `crates/ui/src/views/session_tabs/tabs.rs` | `SessionPanel` `impl Panel` + placeholder |
 | `crates/ui/src/views/sftp/file_browser.rs` | `SftpPanel` `impl Panel` + placeholder |
-| `crates/ui/src/components/datetime_clock.rs` | `DateTimeClock` |
+| `crates/workspace/src/widgets/status_text.rs` | `StatusText` (clock, breadcrumb, net speed, resources) |
 | `crates/ui/src/state/app_state.rs` | `AppState` |
 
 ---
@@ -814,7 +781,7 @@ Per [`docs/agents/structure.md`](agents/structure.md):
 
 ### Step 5 — Status bar
 
-- [ ] `DateTimeClock` component (chrono, 1s timer).
+- [ ] Clock indicator (chrono, 1s timer).
 - [ ] `StatusBar::new().left(clock).right(toggle-right-dock button)`.
 - [ ] Add `chrono` to `crates/ui/Cargo.toml`.
 

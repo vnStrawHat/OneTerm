@@ -89,57 +89,11 @@ impl SshAuthForm {
         (!value.is_empty()).then(|| PathBuf::from(value))
     }
 
-    /// Render persisted authentication metadata without any credential fields.
-    pub(crate) fn render_preference(&self, cx: &App) -> impl IntoElement {
-        let selected_index = match self.method() {
-            SshAuthPreference::Password => 0,
-            SshAuthPreference::PrivateKey => 1,
-        };
-        let method = self.method.clone();
-
-        v_flex()
-            .gap_3()
-            .w_full()
-            .child(labelled_field(
-                "Authentication",
-                FieldRequirement::Required,
-                RadioGroup::horizontal("ssh-auth-preference")
-                    .children(["Password", "Private Key"])
-                    .selected_index(Some(selected_index))
-                    .on_click(move |selected: &usize, window, _cx| {
-                        method.set(if *selected == 1 {
-                            SshAuthPreference::PrivateKey
-                        } else {
-                            SshAuthPreference::Password
-                        });
-                        window.refresh();
-                    }),
-                cx,
-            ))
-            .when(self.method() == SshAuthPreference::PrivateKey, |form| {
-                let key_path = self.key_path.clone();
-                form.child(labelled_field(
-                    "Private Key",
-                    FieldRequirement::Required,
-                    h_flex()
-                        .gap_2()
-                        .w_full()
-                        .child(Input::new(&self.key_path).flex_1().cleanable(true))
-                        .child(
-                            Button::new("browse-saved-private-key")
-                                .label("Browse")
-                                .outline()
-                                .on_click(move |_, window, cx| {
-                                    browse_for_private_key(key_path.clone(), None, window, cx);
-                                }),
-                        ),
-                    cx,
-                ))
-            })
-    }
-
-    /// Render connect-time authentication fields, including ephemeral credentials.
-    pub(crate) fn render(&self, cx: &App) -> impl IntoElement {
+    /// Render the authentication fields.
+    ///
+    /// `show_secrets` adds the connect-time credential inputs (password /
+    /// passphrase); without it only the persisted metadata is shown.
+    pub(crate) fn render(&self, show_secrets: bool, cx: &App) -> impl IntoElement {
         let selected_index = match self.method() {
             SshAuthPreference::Password => 0,
             SshAuthPreference::PrivateKey => 1,
@@ -164,7 +118,7 @@ impl SshAuthForm {
                             SshAuthPreference::Password
                         });
                         window.refresh();
-                        if private_key_selected {
+                        if private_key_selected && show_secrets {
                             let passphrase = passphrase_for_selection.clone();
                             window.defer(cx, move |window, cx| {
                                 passphrase.read(cx).focus_handle(cx).focus(window, cx);
@@ -173,14 +127,17 @@ impl SshAuthForm {
                     }),
                 cx,
             ))
-            .when(self.method() == SshAuthPreference::Password, |form| {
-                form.child(v_flex().id("password-auth-fields").child(labelled_field(
-                    "Password",
-                    FieldRequirement::Optional,
-                    Input::new(&self.password).mask_toggle().cleanable(true),
-                    cx,
-                )))
-            })
+            .when(
+                show_secrets && self.method() == SshAuthPreference::Password,
+                |form| {
+                    form.child(v_flex().id("password-auth-fields").child(labelled_field(
+                        "Password",
+                        FieldRequirement::Optional,
+                        Input::new(&self.password).mask_toggle().cleanable(true),
+                        cx,
+                    )))
+                },
+            )
             .when(self.method() == SshAuthPreference::PrivateKey, |form| {
                 let key_path = self.key_path.clone();
                 form.child(
@@ -204,7 +161,7 @@ impl SshAuthForm {
                                             move |_, window, cx| {
                                                 browse_for_private_key(
                                                     key_path.clone(),
-                                                    Some(passphrase.clone()),
+                                                    show_secrets.then(|| passphrase.clone()),
                                                     window,
                                                     cx,
                                                 );
@@ -213,12 +170,14 @@ impl SshAuthForm {
                                 ),
                             cx,
                         ))
-                        .child(labelled_field(
-                            "Passphrase",
-                            FieldRequirement::Optional,
-                            Input::new(&self.passphrase).mask_toggle().cleanable(true),
-                            cx,
-                        )),
+                        .when(show_secrets, |form| {
+                            form.child(labelled_field(
+                                "Passphrase",
+                                FieldRequirement::Optional,
+                                Input::new(&self.passphrase).mask_toggle().cleanable(true),
+                                cx,
+                            ))
+                        }),
                 )
             })
     }
@@ -333,7 +292,7 @@ mod tests {
             gpui::div()
                 .w(gpui::px(440.))
                 .p_4()
-                .child(self.form.render(cx))
+                .child(self.form.render(true, cx))
         }
     }
 

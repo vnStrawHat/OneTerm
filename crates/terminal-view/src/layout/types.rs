@@ -151,7 +151,6 @@ pub(crate) struct FrameStats {
     pub text_run_paints: usize,
     pub bg_rect_count: usize,
     pub hash_calls: usize,
-    pub allocation_buffer_sites: usize,
     pub frame_count: u64,
     /// Wall-clock time of the prepaint phase (layout + shaping + snapshot), µs.
     pub prepaint_us: u128,

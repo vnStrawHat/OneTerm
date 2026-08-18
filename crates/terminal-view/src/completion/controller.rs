@@ -11,7 +11,7 @@ use oneterm_completion::{
     CompletionContext, CompletionHistory, CompletionParams, Engine, ShellFamily, Suggestion, redact,
 };
 use oneterm_core::ShellKind;
-use oneterm_settings::CompletionSettings;
+use oneterm_settings::CompletionConfig;
 
 /// Per-terminal completion state + gating.
 pub struct CompletionController {
@@ -38,13 +38,13 @@ pub struct CompletionController {
     last_cursor: usize,
     dirty: bool,
     /// Last-applied settings snapshot — `sync_settings` is a no-op when unchanged.
-    settings_snapshot: CompletionSettings,
+    settings_snapshot: CompletionConfig,
 }
 
 impl CompletionController {
     /// Build a controller for a session whose shell is `kind`, using the live
     /// completion settings.
-    pub fn new(kind: ShellKind, settings: &CompletionSettings) -> Self {
+    pub fn new(kind: ShellKind, settings: &CompletionConfig) -> Self {
         let family = resolve_family(kind, settings);
         Self {
             engine: Engine::from_embedded(),
@@ -68,7 +68,7 @@ impl CompletionController {
 
     /// Re-apply settings live if they changed since the last sync (docs 06 §4).
     /// A no-op when the settings are identical, so it is cheap to call per frame.
-    pub fn sync_settings(&mut self, kind: ShellKind, settings: &CompletionSettings) {
+    pub fn sync_settings(&mut self, kind: ShellKind, settings: &CompletionConfig) {
         if self.settings_snapshot == *settings {
             return;
         }
@@ -362,7 +362,7 @@ fn current_typed_prefix(line: &str, cursor: usize) -> String {
 }
 
 /// Resolve the completion family, honoring `force_family` (docs 03 §5, 06).
-fn resolve_family(kind: ShellKind, settings: &CompletionSettings) -> ShellFamily {
+fn resolve_family(kind: ShellKind, settings: &CompletionConfig) -> ShellFamily {
     settings
         .force_family
         .as_deref()
@@ -371,14 +371,14 @@ fn resolve_family(kind: ShellKind, settings: &CompletionSettings) -> ShellFamily
 }
 
 /// Project the live completion settings into the engine's `CompletionParams`.
-pub(crate) fn params_from_settings(s: &CompletionSettings) -> CompletionParams {
+pub(crate) fn params_from_settings(s: &CompletionConfig) -> CompletionParams {
     let mut p = CompletionParams::default();
     p.min_prefix_len = s.min_prefix_len;
     p.max_visible_items = s.max_visible_items.max(1);
     p.sources = oneterm_completion::SourceToggles {
-        memory: s.source_memory && s.max_history > 0,
-        manual: s.source_manual,
-        external: s.source_external,
+        memory: s.sources.memory && s.max_history > 0,
+        manual: s.sources.manual,
+        external: s.sources.external,
     };
     p.fuzzy = s.fuzzy;
     p.inherit_ancestor_options = s.inherit_ancestor_options;

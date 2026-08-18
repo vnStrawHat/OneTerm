@@ -10,8 +10,8 @@ use crate::terminal_config::{SemanticHighlightingMode, TabTitleMode, TerminalCon
 
 use super::super::font::parse_weight;
 use super::super::{
-    ColorOverrides, CompletionSettings, TerminalBlink, TerminalCursorShape, TerminalPadding,
-    TerminalSettings, parse_hex_color,
+    ColorOverrides, TerminalBlink, TerminalCursorShape, TerminalPadding, TerminalSettings,
+    parse_hex_color,
 };
 use super::weight_to_string;
 
@@ -141,10 +141,6 @@ fn live_defaults_are_the_config_defaults() {
     // ARCH-16: no second copy of the default literals in the live model.
     let from_config = TerminalSettings::from_config(&TerminalConfig::default());
     assert_settings_eq(&TerminalSettings::default(), &from_config);
-    assert_eq!(
-        CompletionSettings::default(),
-        CompletionSettings::from_config(&crate::terminal_config::CompletionConfig::default())
-    );
 }
 
 #[test]

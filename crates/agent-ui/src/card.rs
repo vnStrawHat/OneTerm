@@ -532,7 +532,7 @@ fn fmt_project_dir(path: &str) -> String {
     }
 
     let budget = MAX_LEN.saturating_sub(prefix.chars().count() + 4);
-    format!("{}.../{}", prefix, truncate_tail_chars(&last_two, budget))
+    format!("{}.../{}", prefix, ellipsize_path_middle(&last_two, budget))
 }
 
 fn split_project_dir_prefix(path: &str) -> (String, &str) {
@@ -564,27 +564,6 @@ fn ellipsize_path_middle(path: &str, max_len: usize) -> String {
 
     let keep_tail = max_len - 3;
     let tail: String = path
-        .chars()
-        .rev()
-        .take(keep_tail)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    format!("...{tail}")
-}
-
-fn truncate_tail_chars(text: &str, max_len: usize) -> String {
-    let count = text.chars().count();
-    if count <= max_len {
-        return text.to_string();
-    }
-    if max_len <= 3 {
-        return "...".chars().take(max_len).collect();
-    }
-
-    let keep_tail = max_len - 3;
-    let tail: String = text
         .chars()
         .rev()
         .take(keep_tail)

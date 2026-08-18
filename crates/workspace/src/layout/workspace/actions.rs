@@ -3,7 +3,6 @@
 use gpui::{App, Context, Entity, Window};
 use gpui_component::dock::{DockArea, DockItem, DockPlacement as UiDockPlacement};
 
-use oneterm_core::DockPlacement;
 use oneterm_state::commands::commands;
 use oneterm_state::panel_names;
 
@@ -13,38 +12,23 @@ use oneterm_actions::{
 };
 
 impl super::OneTermWorkspace {
-    fn to_ui_placement(placement: DockPlacement) -> UiDockPlacement {
-        match placement {
-            DockPlacement::Center => UiDockPlacement::Center,
-            DockPlacement::Left => UiDockPlacement::Left,
-            DockPlacement::Bottom => UiDockPlacement::Bottom,
-            DockPlacement::Right => UiDockPlacement::Right,
-        }
-    }
-
-    /// Action handler: add a new TerminalPanel.
-    pub(crate) fn on_action_add_panel(
+    /// Add `panel` to the center dock area.
+    ///
+    /// When all tabs are closed, the center `DockItem` still keeps the old entry
+    /// but the inner `TabPanel` has no panels left → `add_panel` would add to a
+    /// "ghost" `TabPanel` that is not rendered. Detect this and recreate the center.
+    fn place_center_panel(
         &mut self,
-        action: &AddPanel,
+        panel: std::sync::Arc<dyn gpui_component::dock::PanelView>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let panel = super::build_named_panel(
-            panel_names::TERMINAL,
-            &self.dock_area.downgrade(),
-            window,
-            cx,
-        );
-
-        // When all tabs are closed, the center DockItem still keeps the old entry but
-        // the inner TabPanel has no panels left → add_panel would add to a "ghost"
-        // TabPanel that is not rendered. Detect this and recreate the center.
         let center_empty = {
             let dock = self.dock_area.read(cx);
             Self::center_has_no_visible_panel(&dock.center(), cx)
         };
 
-        if center_empty && matches!(action.0, DockPlacement::Center) {
+        if center_empty {
             let weak = self.dock_area.downgrade();
             let center = DockItem::v_split(
                 vec![DockItem::tabs(vec![panel], &weak, window, cx)],
@@ -57,9 +41,25 @@ impl super::OneTermWorkspace {
             });
         } else {
             self.dock_area.update(cx, |dock_area, cx| {
-                dock_area.add_panel(panel, Self::to_ui_placement(action.0), None, window, cx);
+                dock_area.add_panel(panel, UiDockPlacement::Center, None, window, cx);
             });
         }
+    }
+
+    /// Action handler: add a new TerminalPanel.
+    pub(crate) fn on_action_add_panel(
+        &mut self,
+        _: &AddPanel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let panel = super::build_named_panel(
+            panel_names::TERMINAL,
+            &self.dock_area.downgrade(),
+            window,
+            cx,
+        );
+        self.place_center_panel(panel, window, cx);
     }
 
     /// Check whether the center DockItem has any TabPanel with panels left.
@@ -88,28 +88,7 @@ impl super::OneTermWorkspace {
         cx: &mut Context<Self>,
     ) {
         let panel = (commands(cx).new_terminal_with_shell)(action.0, window, cx);
-
-        let center_empty = {
-            let dock = self.dock_area.read(cx);
-            Self::center_has_no_visible_panel(&dock.center(), cx)
-        };
-
-        if center_empty {
-            let weak = self.dock_area.downgrade();
-            let center = DockItem::v_split(
-                vec![DockItem::tabs(vec![panel], &weak, window, cx)],
-                &weak,
-                window,
-                cx,
-            );
-            self.dock_area.update(cx, |dock_area, cx| {
-                dock_area.set_center(center, window, cx);
-            });
-        } else {
-            self.dock_area.update(cx, |dock_area, cx| {
-                dock_area.add_panel(panel, UiDockPlacement::Center, None, window, cx);
-            });
-        }
+        self.place_center_panel(panel, window, cx);
     }
 
     /// Action handler: open the "New SSH Session" dialog.

@@ -255,7 +255,7 @@ Resolving `ShellKind` → executable + args + env (Windows-first):
 | `Bash`/`Zsh`/`Sh` | `$SHELL` / `/bin/bash`… | `-l` (login) per config | env `LANG`/`LC_ALL` |
 | `Custom` | `program` (required) | `args` | per `env`/`utf8` |
 
-> The terminal settings panel (`crates/terminal-view/src/settings_panel.rs`) lets the user pick `kind`, type a custom
+> The Terminal page of the Settings window (`crates/settings-ui/src/terminal/`) lets the user pick `kind`, type a custom
 > `program`, add `args`, set `cwd`, toggle `utf8`. Persisted in `terminal.json` via `oneterm_settings::TerminalConfig`.
 
 ### 6.1.1 Windows local cwd reporting
@@ -717,7 +717,6 @@ crates/
     ├── view/                 # LocalTerminalView (Render, IME, keys, search, scrollbar)
     ├── element/              # TerminalElement: prepaint (layout_grid) + paint + measure
     ├── handlers/ · layout/ · space/ · theme/ · url/ · highlight/ · completion/
-    └── settings_panel.rs     # terminal settings panel
 ```
 
 ---
@@ -734,7 +733,7 @@ crates/
 2. ✅ **`local`** (Windows-first): `LocalSession` spawns `cmd` (ConPTY, `chcp 65001`),
    `LocalListener`, snapshot + event. E2E test: `echo oneterm_e2e` → snapshot contains the string.
 3. ✅ **`ui`**: `TerminalElement` paints grid + cursor + font measure + resize-on-layout.
-   `LocalTerminalView` (`Render`) wired into DockArea. Settings shell picker (`TerminalSettingsPanel`).
+   `LocalTerminalView` (`Render`) wired into DockArea. Settings shell picker (Settings window ▸ Terminal).
 4. ✅ **`ui`**: mouse (down/move/up/wheel), selection (Simple/Semantic/Lines/Block),
    scrollback, hyperlink OSC 8 (Ctrl+click), copy/paste (select-to-copy, middle-click,
    Ctrl+Shift+C/V, OSC 52 clipboard), minimum-contrast.

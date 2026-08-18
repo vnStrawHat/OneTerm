@@ -75,7 +75,7 @@ Every third-party dependency is declared **once** in the root `Cargo.toml`
 | Local shell PTY | `alacritty_terminal::tty` + `polling` (do NOT use `portable-pty` — design decision, see [`docs/terminal-backend.md`](../terminal-backend.md)) |
 | Terminal parser / grid | `alacritty_terminal` (vendored Zed fork, §1) — which pulls the vendored `vte` |
 | Event channel (`SessionEvent`) | `async-channel` (keeps Tokio out of the public API) |
-| Terminal helpers | `base64` (OSC 52), `aho-corasick` + `regex` (highlight engine), `itertools` (terminal-view) |
+| Terminal helpers | `base64` (OSC 52), `aho-corasick` + `regex` (highlight engine) |
 | Serialization | `serde` (`derive`), `serde_json` |
 | Error | `anyhow` (binary / UI glue), `thiserror` (library error types) |
 | Logging | `log` (also used by alacritty_terminal), `env_logger` (app binary) |

@@ -13,7 +13,7 @@
 //! (usually = content background) and `tab_bar.background` (darker), giving the
 //! "active tab merges with content" effect like Zed/editors, with no override needed.
 
-use gpui::{Anchor, App, px};
+use gpui::{Anchor, App, Rgba, px, rgb};
 use gpui_component::{Theme, ThemeRegistry, scroll::ScrollbarShow};
 
 use oneterm_actions::{SwitchTheme, SwitchThemeMode};
@@ -74,6 +74,12 @@ pub fn apply_list_style_override(cx: &mut App) {
     // is drawn by `render_tr` (= `table_hover`, like hover, no border).
     theme.table_active = gpui::transparent_black();
     theme.table_active_border = gpui::transparent_black();
+}
+
+/// The OneTerm logo cyan (`#58c4dc`) — an identity tint that must not follow
+/// the theme (title-bar icon, About page mark, empty-Space placeholder).
+pub fn brand_accent() -> Rgba {
+    rgb(0x58c4dc)
 }
 
 /// Initialize the theme: load embedded themes + wire the `SwitchTheme` / `SwitchThemeMode` actions.

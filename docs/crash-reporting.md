@@ -39,7 +39,7 @@ After promotion and sanitization, completed reports are ordered newest-first by 
 
 ## Hidden verification trigger
 
-Clicking the OneTerm application icon in About ten times triggers an intentional Rust panic. The counter resets after the tenth click. This behavior exists only to verify the panic capture, restart, and recovery workflow; it is intentionally not presented as a normal action. It is always active in debug builds; release builds enable it only when the `ONETERM_ENABLE_CRASH_TRIGGER` environment variable is set, so a production build cannot be crashed by clicking the icon.
+There is no in-app crash trigger. Exercise the panic capture, restart, and recovery workflow from a test or by panicking a debug build directly.
 
 Native callback behavior is verified through `crash-handler`'s platform simulation API in focused tests where the target supports it. The About trigger remains a Rust panic and does not intentionally execute invalid native memory access in normal application builds.
 

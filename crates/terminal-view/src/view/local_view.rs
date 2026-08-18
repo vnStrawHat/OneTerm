@@ -344,8 +344,8 @@ impl LocalTerminalView {
 
     /// Return a snapshot of the most recently painted renderer counters.
     #[cfg(any(test, feature = "terminal-diagnostics"))]
-    pub(crate) fn render_diagnostics(&self) -> crate::diagnostics::TerminalRenderDiagnostics {
-        crate::diagnostics::TerminalRenderDiagnostics::from_cache(&self.render_cache.borrow().rows)
+    pub(crate) fn render_diagnostics(&self) -> crate::layout::types::FrameStats {
+        self.render_cache.borrow().rows.stats
     }
 
     /// Update the OSC 9;4 progress state. `Remove` clears it (`None`).

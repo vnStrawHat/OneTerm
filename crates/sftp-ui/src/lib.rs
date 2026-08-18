@@ -4,7 +4,6 @@ mod actions;
 mod browser_state;
 mod browser_view;
 mod panel;
-mod panel_actions;
 mod panel_ops;
 mod persistence;
 mod render;

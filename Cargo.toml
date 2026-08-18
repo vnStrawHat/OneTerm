@@ -115,7 +115,6 @@ flate2 = "1"
 chrono = "0.4"
 # System resource monitoring (CPU/memory of the OneTerm process)
 sysinfo = "0.37"
-itertools = "0.14"
 # Embedded theme JSON + icon assets (theme crate)
 rust-embed = "8.7"
 # Windows FFI (Ctrl handler, file locking / replace, DOOM-fire console mode). One version

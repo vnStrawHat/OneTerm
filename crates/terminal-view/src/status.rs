@@ -11,38 +11,32 @@ use gpui_component::dock::{DockArea, PanelView};
 use oneterm_core::ShellKind;
 use oneterm_state::active_terminal::ActiveTerminalMetricsProvider;
 use oneterm_state::dock_util::collect_tab_panels;
+use oneterm_state::panel_names;
 use oneterm_terminal::NetStats;
 
 use crate::panel::{PanelSpec, TerminalPanel};
 
+/// The terminal panels that are the active tab of a tab panel, in dock order.
+fn active_terminal_panels(dock_area: &Entity<DockArea>, cx: &App) -> Vec<Entity<TerminalPanel>> {
+    collect_tab_panels(dock_area.read(cx), cx)
+        .into_iter()
+        .filter_map(|tp| tp.read(cx).active_panel(cx))
+        .filter(|panel| panel.panel_name(cx) == panel_names::TERMINAL)
+        .filter_map(|panel| panel.view().downcast::<TerminalPanel>().ok())
+        .collect()
+}
+
 /// Breadcrumb label (cwd + foreground process) of the active terminal panel.
 fn active_breadcrumb(dock_area: &Entity<DockArea>, cx: &App) -> Option<String> {
-    for tp in collect_tab_panels(dock_area.read(cx), cx) {
-        if let Some(panel) = tp.read(cx).active_panel(cx) {
-            if panel.panel_name(cx) == "terminal" {
-                if let Ok(entity) = panel.view().downcast::<TerminalPanel>() {
-                    return entity.read(cx).breadcrumb_label(cx);
-                }
-            }
-        }
-    }
-    None
+    let panel = active_terminal_panels(dock_area, cx).into_iter().next()?;
+    panel.read(cx).breadcrumb_label(cx)
 }
 
 /// Network stats (rx/tx bytes) of the active terminal panel.
 fn active_net_stats(dock_area: &Entity<DockArea>, cx: &App) -> Option<NetStats> {
-    for tp in collect_tab_panels(dock_area.read(cx), cx) {
-        if let Some(panel) = tp.read(cx).active_panel(cx) {
-            if panel.panel_name(cx) == "terminal" {
-                if let Ok(entity) = panel.view().downcast::<TerminalPanel>() {
-                    if let Some(stats) = entity.read(cx).network_stats(cx) {
-                        return Some(stats);
-                    }
-                }
-            }
-        }
-    }
-    None
+    active_terminal_panels(dock_area, cx)
+        .into_iter()
+        .find_map(|panel| panel.read(cx).network_stats(cx))
 }
 
 /// The active-terminal metric extractors this feature contributes to `AppServices`.
@@ -70,18 +64,12 @@ pub fn new_terminal_with_shell_cmd(
 /// Registered as the `find_in_active_terminal` workspace command (the shell's
 /// `Find` handler delegates here without depending on `TerminalPanel`).
 pub fn find_in_active_terminal(dock_area: &Entity<DockArea>, window: &mut Window, cx: &mut App) {
-    for tp in collect_tab_panels(dock_area.read(cx), cx) {
-        if let Some(panel) = tp.read(cx).active_panel(cx) {
-            if panel.panel_name(cx) == "terminal" {
-                if let Ok(entity) = panel.view().downcast::<TerminalPanel>() {
-                    entity.update(cx, |tp, cx| {
-                        if let Some(view) = tp.active_view() {
-                            view.update(cx, |v, cx| v.toggle_search(window, cx));
-                        }
-                    });
-                    return;
-                }
-            }
+    let Some(panel) = active_terminal_panels(dock_area, cx).into_iter().next() else {
+        return;
+    };
+    panel.update(cx, |tp, cx| {
+        if let Some(view) = tp.active_view() {
+            view.update(cx, |v, cx| v.toggle_search(window, cx));
         }
-    }
+    });
 }

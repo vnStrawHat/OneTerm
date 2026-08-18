@@ -5410,7 +5410,6 @@ dependencies = [
  "chrono",
  "gpui",
  "gpui-component",
- "itertools 0.14.0",
  "log",
  "oneterm-actions",
  "oneterm-completion",

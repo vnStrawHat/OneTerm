@@ -181,7 +181,7 @@ pub(crate) fn skip_offered_version(cx: &mut App) {
         };
         candidate.version.clone()
     };
-    super::config::set_skipped_version(cx, Some(version.clone()));
+    super::config::update_preference(cx, |c| c.skipped_version = Some(version.clone()));
     state.update(cx, |state, cx| {
         apply_skipped_version(state, &version);
         cx.notify();

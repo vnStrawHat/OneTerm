@@ -18,7 +18,7 @@ use gpui_component::{
 };
 
 use oneterm_actions::{RightDockMode, SetRightDockMode};
-use oneterm_theme::brand::brand_accent;
+use oneterm_theme::brand_accent;
 
 use crate::layout::app_menus;
 

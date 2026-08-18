@@ -127,7 +127,7 @@ Sizes are rough (S ≈ ½ day, M ≈ 1–2 days, L ≈ 3–5 days) for one engin
 - **Exit:** ✅ config round-trips and live-applies. Note: the `CompletionParams`
   projection lives in `terminal-view` (`completion::params_from_settings`), so the
   engine stays free of a `settings` dependency ([01](01-architecture.md) §5); the
-  `settings` crate exposes the resolved `CompletionSettings` mirror.
+  `settings` crate exposes the live `CompletionConfig` group.
 
 ### M6 — Global history in `state` (S) — ✅ DONE
 
@@ -151,7 +151,7 @@ Sizes are rough (S ≈ ½ day, M ≈ 1–2 days, L ≈ 3–5 days) for one engin
   `Ctrl-N`/`Ctrl-P` navigate only after selection and otherwise pass through;
   `Esc` is swallowed. Accept applies the exact selected suggestion under the active
   family's case rule.
-- ✅ Actions in `oneterm-actions`: `ToggleCompletion`, `ClearCompletionHistory`,
+- ✅ Actions in `oneterm-actions`:
   `TriggerCompletion` (`Ctrl+Shift+Space`, handled in the keyboard handler).
 - ✅ Added `oneterm-completion` to `terminal-view`'s `Cargo.toml`.
 - ✅ Perf: the grid snapshot is skipped on the alternate screen and on frames
@@ -169,9 +169,8 @@ Sizes are rough (S ≈ ½ day, M ≈ 1–2 days, L ≈ 3–5 days) for one engin
 - `crates/settings-ui`: Completion section (toggles + numbers + Clear-history
   button) bound to `TerminalSettings` ([06](06-configuration.md) §5).
 - **Exit:** ✅ settings visibly control behavior at runtime. Note: the settings
-  widget has no button field, so **Clear session history** is exposed via the
-  `ClearCompletionHistory` action (bindable in the key-bindings UI) rather than an
-  in-page button.
+  widget has no button field, so there is no in-page **Clear session history**
+  button; setting `max_history` to `0` clears the store.
 
 ### M9 — External catalog script (M) — parallelizable after M1 — ✅ DONE
 

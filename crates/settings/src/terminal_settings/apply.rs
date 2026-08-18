@@ -7,37 +7,14 @@
 use gpui::Hsla;
 
 use crate::terminal_config::{
-    BellConfig, ColorsConfig, CompletionConfig, CursorConfig, FontConfig, LayoutConfig,
-    MouseConfig, ScrollConfig, SecurityConfig, TerminalConfig,
+    BellConfig, ColorsConfig, CursorConfig, FontConfig, LayoutConfig, MouseConfig, ScrollConfig,
+    SecurityConfig, TerminalConfig,
 };
 
 use super::{
-    ColorOverrides, CompletionSettings, TerminalBlink, TerminalCursorShape, TerminalPadding,
-    TerminalSettings, parse_hex_color, parse_weight,
+    ColorOverrides, TerminalBlink, TerminalCursorShape, TerminalPadding, TerminalSettings,
+    parse_hex_color, parse_weight,
 };
-
-impl CompletionSettings {
-    /// Resolve the live completion settings from the `completion` config group.
-    pub fn from_config(completion: &CompletionConfig) -> Self {
-        Self {
-            enabled: completion.enabled,
-            accept_tab: completion.accept_tab,
-            max_history: completion.max_history,
-            min_prefix_len: completion.min_prefix_len,
-            max_visible_items: completion.max_visible_items,
-            source_memory: completion.sources.memory,
-            source_manual: completion.sources.manual,
-            source_external: completion.sources.external,
-            fuzzy: completion.fuzzy,
-            inherit_ancestor_options: completion.inherit_ancestor_options,
-            disable_in_alt_screen: completion.disable_in_alt_screen,
-            require_prompt_region: completion.require_prompt_region,
-            windows_allow_coreutils: completion.windows_allow_coreutils,
-            force_family: completion.force_family.clone(),
-            redact_sensitive: completion.redact_sensitive,
-        }
-    }
-}
 
 /// Parse the `colors.ansi` list slot by slot. An entry that is not a valid hex
 /// colour keeps its position as `None` (theme colour) and is logged, so the
@@ -122,7 +99,7 @@ impl TerminalSettings {
                 ansi: parse_ansi_overrides(&colors.ansi),
             },
 
-            completion: CompletionSettings::from_config(&cfg.completion),
+            completion: cfg.completion.clone(),
 
             persist_blocked: false,
         }
