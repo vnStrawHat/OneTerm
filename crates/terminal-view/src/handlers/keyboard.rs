@@ -265,8 +265,8 @@ pub(crate) fn attach_key(
                         cx.notify();
                     });
                 }
-                KeyAction::Copy => edit::copy_selection(&s, cx),
-                KeyAction::Paste => edit::paste_clipboard(&s, cx),
+                KeyAction::Copy => edit::copy_selection(&s, window, cx),
+                KeyAction::Paste => edit::paste_clipboard(&s, window, cx),
                 // Let the platform / IME deliver the text: no stop_propagation.
                 KeyAction::LetImeHandle | KeyAction::AltGrText | KeyAction::Ignore => return,
                 KeyAction::Interrupt => {

@@ -154,9 +154,9 @@ fn handle_mouse_up(
     render_cache: &Rc<RefCell<RenderCache>>,
     view: &Entity<LocalTerminalView>,
     e: &MouseUpEvent,
+    window: &mut Window,
     cx: &mut App,
     button: MouseButton,
-    copy_selection: bool,
 ) {
     let metrics = render_cache.borrow().metrics;
     let (row, col) = match pixel_to_grid(&metrics, e.position) {
@@ -168,11 +168,12 @@ fn handle_mouse_up(
     if matches!(button, MouseButton::Right) {
         cx.stop_propagation();
     }
-    // Copy-on-select is a setting (SEC-10): releasing the button after a
+    // Copy-on-select is a setting (SEC-10): releasing the left button after a
     // selection only overwrites the clipboard when the user opted in.
-    let copy_on_select = copy_selection && view.read(cx).deps.settings.read(cx).copy_on_select;
+    let copy_on_select =
+        matches!(button, MouseButton::Left) && view.read(cx).deps.settings.read(cx).copy_on_select;
     if copy_on_select {
-        edit::copy_selection(session, cx);
+        edit::copy_selection(session, window, cx);
     }
     view.update(cx, |v, cx| {
         v.scrollbar.mark_scrolled();
@@ -223,11 +224,11 @@ pub(crate) fn attach_mouse(
             let s = session.clone();
             let cache = render_cache.clone();
             let view = view.clone();
-            move |e: &MouseUpEvent, _w, cx: &mut App| {
+            move |e: &MouseUpEvent, window, cx: &mut App| {
                 if end_scrollbar_drag(&view, cx) {
                     return;
                 }
-                handle_mouse_up(&s, &cache, &view, e, cx, MouseButton::Right, false)
+                handle_mouse_up(&s, &cache, &view, e, window, cx, MouseButton::Right)
             }
         })
     } else {
@@ -293,12 +294,12 @@ pub(crate) fn attach_mouse(
         let s = session.clone();
         let cache = render_cache.clone();
         let view = view.clone();
-        move |e: &MouseUpEvent, _w, cx: &mut App| {
+        move |e: &MouseUpEvent, window, cx: &mut App| {
             // Scrollbar drag: clear FIRST.
             if end_scrollbar_drag(&view, cx) {
                 return;
             }
-            handle_mouse_up(&s, &cache, &view, e, cx, MouseButton::Left, true);
+            handle_mouse_up(&s, &cache, &view, e, window, cx, MouseButton::Left);
         }
     })
 }

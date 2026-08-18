@@ -6,7 +6,7 @@
 
 use gpui::{
     App, ElementId, InteractiveElement, IntoElement, MouseButton, ParentElement, Styled,
-    WeakEntity, Window, rgb,
+    WeakEntity, Window,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, Sizable as _,
@@ -44,7 +44,7 @@ pub(crate) fn render_placeholder(
         .child(
             Icon::new(AppIcon::Terminal)
                 .large()
-                .text_color(rgb(0x58c4dc)),
+                .text_color(oneterm_theme::brand::brand_accent()),
         )
         .child(format!("Space #{number}"))
         .child("Drag a terminal tab here")
