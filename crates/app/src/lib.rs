@@ -8,11 +8,13 @@
 
 use std::borrow::Cow;
 
+use gpui::TaskExt as _;
 use oneterm_workspace::OneTermWorkspace;
 
 mod agent_panel;
 mod assets;
 mod crash_report;
+mod crash_report_dialog;
 mod init;
 mod native_crash;
 mod session_factory;
@@ -110,7 +112,8 @@ pub fn run() {
 
         cx.activate(true);
 
-        // Open the main window.
-        crate::window::open_window(pending_crash_reports, cx).detach();
+        // Open the main window. A failure here leaves the app without a
+        // window, so it must at least reach the log (CORR-63).
+        crate::window::open_window(pending_crash_reports, cx).detach_and_log_err(cx);
     });
 }

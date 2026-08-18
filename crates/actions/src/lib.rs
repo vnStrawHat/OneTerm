@@ -35,8 +35,6 @@ actions!(
         Quit,
         /// Open the About dialog.
         About,
-        /// Toggle the dock toggle button.
-        ToggleDockToggleButton,
         /// Toggle the gutter (timestamp + line number) in the terminal.
         ToggleGutter,
         /// Add a new SessionPanel to the right dock.
