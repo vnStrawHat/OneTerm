@@ -1,5 +1,6 @@
 # Build output
 target/
+target*/
 # Local research clone of gpui-component (docs/agents/dependencies.md §5)
 reference/
 # Release staging output of scripts/build-release.*
@@ -9,6 +10,7 @@ docks.json
 terminal.json
 # Raw upstream downloads for scripts/completion-catalog.py (generated JSON is committed)
 scripts/.cache/
+scripts/__pycache__/
 
 # Harness durable layer — each project instance generates its own data.
 harness.db*
@@ -16,5 +18,8 @@ harness.db*
 # Local tooling / scratch that must never be committed (HYG-20: no one-off entries — use
 # generic patterns).
 .pi/
+.claude/
+.cargo/
+.exe/
 /*.exe
 /[Nn][Uu][Ll]
