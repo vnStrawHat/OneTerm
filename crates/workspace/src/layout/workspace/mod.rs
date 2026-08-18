@@ -36,8 +36,8 @@ pub(crate) use oneterm_state::dock_util::set_right_dock_open;
 
 /// Construct a fresh feature panel by its registered name, via the gpui-component
 /// `PanelRegistry`. Each feature crate registers its constructor at init, so the
-/// shell can build the default layout and honor `AddPanel`/`AddSession`/
-/// `AddSftpBrowser` without depending on the concrete panel types.
+/// shell can build the default layout and honor `AddPanel` without depending
+/// on the concrete panel types.
 ///
 /// Names come from [`oneterm_state::panel_names`]. When `name` is not
 /// registered (stale saved layout, or a feature whose `init()` did not run)
@@ -394,8 +394,6 @@ impl Render for OneTermWorkspace {
         div()
             .id("oneterm-workspace")
             .on_action(cx.listener(Self::on_action_add_panel))
-            .on_action(cx.listener(Self::on_action_add_session))
-            .on_action(cx.listener(Self::on_action_add_sftp_browser))
             .on_action(cx.listener(Self::on_action_set_right_dock_mode))
             .on_action(cx.listener(Self::on_action_add_panel_with_shell))
             .on_action(cx.listener(Self::on_action_new_session))
