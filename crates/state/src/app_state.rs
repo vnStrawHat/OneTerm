@@ -9,15 +9,15 @@ use std::sync::Arc;
 use gpui::{App, AppContext, Entity, EntityId, Global, WeakEntity};
 use gpui_component::dock::DockArea;
 use oneterm_core::SftpBackend;
-use oneterm_terminal::CwdSource;
+use oneterm_terminal::SharedState;
 
 /// Active terminal context belonging to one dock/workspace.
 #[derive(Default, Clone)]
 pub struct WorkspaceActiveState {
     /// SFTP backend of the active terminal tab, if available.
     pub active_sftp: Option<Arc<dyn SftpBackend>>,
-    /// Live cwd source of the active terminal tab, if available.
-    pub active_cwd_source: Option<Arc<dyn CwdSource>>,
+    /// Live OSC 7 cwd state of the active terminal tab, if available.
+    pub active_cwd_source: Option<SharedState>,
     /// Whether the active terminal tab is a local shell.
     pub active_is_local: bool,
 }
@@ -58,7 +58,7 @@ impl AppState {
         &mut self,
         workspace_id: Option<EntityId>,
         sftp: Option<Arc<dyn SftpBackend>>,
-        cwd_source: Option<Arc<dyn CwdSource>>,
+        cwd_source: Option<SharedState>,
         is_local: bool,
     ) {
         if let Some(id) = workspace_id {

@@ -18,7 +18,6 @@ mod catalog;
 mod engine;
 mod family;
 mod history;
-mod index;
 mod params;
 mod parse;
 pub mod redact;

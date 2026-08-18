@@ -1,6 +1,6 @@
 //! The transport half a backend keeps for itself.
 
-use crate::contracts::TerminalError;
+use crate::session::TerminalError;
 
 /// Bytes-out side of a terminal backend: PTY or SSH channel writes, resize
 /// requests, and close. Everything else (parsing, OSC routing, event delivery,

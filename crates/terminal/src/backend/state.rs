@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use alacritty_terminal::vte::ansi::Rgb;
 
 use crate::osc_agent::AgentSeqWatermarks;
-use crate::session::{CwdSource, NetStats};
+use crate::session::NetStats;
 
 /// Theme defaults used to answer OSC 10/11/12/4 queries for colours the
 /// program never set. Written by the UI through `set_default_colors`.
@@ -168,25 +168,5 @@ impl SharedSessionState {
     /// Record one screen clear.
     pub fn bump_clear_epoch(&self) {
         self.clear_epoch.fetch_add(1, Ordering::Relaxed);
-    }
-}
-
-/// Live cwd reader over a [`SharedState`] — reads OSC 7 on demand, so the SFTP
-/// browser's "sync to terminal cwd" always sees the latest `cd`.
-/// See `docs/sftp-follow-terminal-cwd.md`.
-pub struct SharedStateCwdSource {
-    state: SharedState,
-}
-
-impl SharedStateCwdSource {
-    /// Wrap a shared state.
-    pub fn new(state: SharedState) -> Self {
-        Self { state }
-    }
-}
-
-impl CwdSource for SharedStateCwdSource {
-    fn cwd(&self) -> Option<PathBuf> {
-        self.state.cwd()
     }
 }

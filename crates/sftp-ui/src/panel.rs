@@ -28,7 +28,7 @@ use gpui_component::table::{TableEvent, TableState};
 
 use oneterm_core::{RemotePath, SftpBackend};
 use oneterm_state::AppState;
-use oneterm_terminal::CwdSource;
+use oneterm_terminal::SharedState;
 
 use super::browser_state::{BackendKey, SftpBrowserState, SftpBrowserStore, SnapshotGate};
 use super::browser_view::{BrowserView, FollowCwd, TransferQueueView};
@@ -338,7 +338,7 @@ impl SftpPanel {
     fn sync_from_app_state(
         &mut self,
         new_sftp: Option<Arc<dyn SftpBackend>>,
-        new_cwd_source: Option<Arc<dyn CwdSource>>,
+        new_cwd_source: Option<SharedState>,
         cx: &mut Context<Self>,
     ) {
         // Always track the active terminal's cwd source (may change with the tab

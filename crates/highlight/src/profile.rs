@@ -10,7 +10,7 @@ use regex::Regex;
 
 /// Path separator syntax.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PathSep {
+pub(crate) enum PathSep {
     /// Unix — `/` only.
     Unix,
     /// Windows — `\` or `/`.
@@ -36,7 +36,7 @@ pub enum ShellProfile {
 
 impl ShellProfile {
     /// The path separator for this shell.
-    pub fn path_sep(&self) -> PathSep {
+    pub(crate) fn path_sep(&self) -> PathSep {
         match self {
             Self::Unix => PathSep::Unix,
             Self::Cmd | Self::PowerShell | Self::Dumb => PathSep::Windows,

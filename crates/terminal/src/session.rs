@@ -19,15 +19,52 @@ use async_channel::Receiver;
 use oneterm_core::sftp::SftpBackend;
 
 use crate::IndexedCell;
+use crate::backend::SharedState;
 use crate::content::TerminalContent;
-use crate::contracts::TerminalError;
-use crate::key_encode::{KeyMods, KeySpec, NamedKey, encode_key};
 use crate::mouse_encode::{MouseModifiers, TerminalMouseButton};
 use crate::osc::{Osc133Kind, TerminalProgress};
 use crate::osc_agent::AgentStatusEvent;
 use crate::osc_color::DynamicColors;
 use crate::paste::{PasteMode, PastePolicy, PasteResult, encode_paste};
 use crate::search::{SearchMatch, SearchOptions};
+
+/// Error from a terminal input/control operation (write, resize, close).
+///
+/// Backends return this error at the transport boundary so callers can
+/// distinguish saturation, closure, and transport failures instead of silently
+/// dropping input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TerminalError {
+    /// The command queue is full — the caller must retry or report failure.
+    QueueFull,
+    /// The session/channel is closed — no more data can be sent.
+    Closed,
+    /// The PTY/SSH channel encountered a transport error.
+    Transport(String),
+}
+
+impl std::fmt::Display for TerminalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::QueueFull => write!(f, "terminal command queue is full"),
+            Self::Closed => write!(f, "terminal session is closed"),
+            Self::Transport(msg) => write!(f, "terminal transport error: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for TerminalError {}
+
+/// Log a best-effort generated input failure with operation context.
+///
+/// User keystrokes use the typed [`TerminalInput::write`] result directly. Mouse
+/// reports, clear commands, and IME commits currently have void trait methods, so
+/// their delivery failures must remain observable rather than being discarded.
+pub fn report_generated_input(operation: &str, result: Result<(), TerminalError>) {
+    if let Err(error) = result {
+        log::warn!("{operation} delivery failed: {error}");
+    }
+}
 
 /// Basic terminal info — lightweight, does not clear damage.
 /// Used for line_times updates and the scroll handle without affecting
@@ -118,47 +155,6 @@ pub enum SessionEvent {
     Bell,
 }
 
-impl SessionEvent {
-    /// Return the delivery policy required by this event.
-    pub const fn delivery_policy(&self) -> SessionEventDelivery {
-        match self {
-            Self::Output => SessionEventDelivery::Coalescible,
-            Self::Title(_)
-            | Self::Cwd(_)
-            | Self::Clipboard(_)
-            | Self::ClipboardRead
-            | Self::ShellIntegration(_)
-            | Self::Notification(_)
-            | Self::Progress(_)
-            | Self::AgentStatus(_)
-            | Self::Exited(_)
-            | Self::Closed
-            | Self::Bell => SessionEventDelivery::Reliable,
-        }
-    }
-}
-
-/// Delivery policy for session events.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionEventDelivery {
-    /// The event is a repaint hint and may be coalesced under load.
-    Coalescible,
-    /// The event must be delivered or report that the channel is closed.
-    Reliable,
-}
-
-/// Live source of a session's current working directory (OSC 7).
-///
-/// Lets the UI read the cwd on demand without holding a reference to the session
-/// entity or importing the `ssh`/`local` crates. Backends provide an `Arc<dyn CwdSource>`
-/// that shares the same state the OSC 7 parser updates, so reads are always live.
-///
-/// Used by the SFTP browser's "sync to terminal cwd" button.
-pub trait CwdSource: Send + Sync {
-    /// The current working directory (OSC 7). `None` if no OSC 7 has been received.
-    fn cwd(&self) -> Option<PathBuf>;
-}
-
 /// Network statistics for a session (SSH only — local returns `None`).
 /// Used by the StatusBar to display network speed.
 #[derive(Debug, Clone, Copy, Default)]
@@ -180,8 +176,9 @@ pub struct TerminalCapabilities {
     pub network_stats: Option<NetStats>,
     /// SFTP access, if the backend exposes a remote filesystem channel.
     pub sftp: Option<Arc<dyn SftpBackend>>,
-    /// Live OSC 7 working-directory source, if available.
-    pub cwd_source: Option<Arc<dyn CwdSource>>,
+    /// Live OSC 7 working-directory state, if available — read on demand so the
+    /// SFTP browser's "sync to terminal cwd" always sees the latest `cd`.
+    pub cwd_source: Option<SharedState>,
 }
 /// Which backend a session talks to. Replaces the former `is_local() -> bool`
 /// so call sites read as a domain concept (ARCH-44).
@@ -411,20 +408,6 @@ pub trait TerminalSession:
         }
     }
 
-    /// Send an encoded keystroke to the PTY (e.g. "Ctrl+C" → 0x03, "Enter" → \r).
-    /// Equivalent to Zed `SendKeystroke(String)`.
-    /// Parse format: `Ctrl+Shift+V`, `Alt+Enter`, `F1`, `Up`, `a`.
-    fn send_keystroke(&self, keystroke: &str) {
-        if let Some((spec, mods)) = parse_keystroke(keystroke) {
-            let app_cursor = self.query_state().mode.contains(TermMode::APP_CURSOR);
-            if let Some(bytes) = encode_key(&spec, mods, app_cursor) {
-                if let Err(error) = self.write(&bytes) {
-                    log::warn!("terminal send_keystroke failed: {error}");
-                }
-            }
-        }
-    }
-
     /// Bracketed paste mode is on → wrap the paste in `\x1b[200~...\x1b[201~`.
     /// Zed: checks `Modes::BRACKETED_PASTE` then wraps.
     fn is_bracketed_paste(&self) -> bool {
@@ -453,83 +436,271 @@ pub trait TerminalSession:
     }
 }
 
-/// Parse a keystroke string → (KeySpec, KeyMods).
+/// Implement [`TerminalRender`], [`TerminalInput`], [`TerminalIme`] and
+/// [`TerminalLifecycle`] for a backend session that owns the standard fields
+/// (`term`, `listener`, `state`, `marked_text`, `event_rx`).
 ///
-/// Format: `Ctrl+Shift+V`, `Alt+Enter`, `Up`, `F1`, `a`, `Enter`, `Tab`.
-/// Modifiers are separated by `+`, case-insensitive.
-///
-/// Equivalent to Zed `SendKeystroke(String)`.
-pub(crate) fn parse_keystroke(s: &str) -> Option<(KeySpec, KeyMods)> {
-    let parts: Vec<&str> = s.split('+').collect();
-    let mut mods = KeyMods::default();
-    let mut key_part = s;
+/// The local shell and SSH sessions differ only in their
+/// [`TerminalCapabilities`], their [`SessionKind`] and how the channel is torn
+/// down, so those three stay with the backend (`$kind` and `$close`, an
+/// inherent method returning `Result<(), TerminalError>`) and everything else
+/// lives here once. See `docs/terminal-backend.md` §9.
+#[macro_export]
+macro_rules! impl_pty_terminal_session {
+    ($ty:ty, $listener:ty, $label:literal, $kind:expr, $close:ident) => {
+        impl $ty {
+            /// A `TerminalModel` adapter for the shared terminal-model
+            /// operations. Cheap — just wraps the existing `Arc<FairMutex<Term>>`.
+            fn model(&self) -> $crate::model::TerminalModel<$listener> {
+                $crate::model::TerminalModel::new(self.term.clone())
+            }
 
-    // Parse modifiers (all parts except last).
-    if parts.len() > 1 {
-        for part in &parts[..parts.len() - 1] {
-            match part.to_lowercase().as_str() {
-                "ctrl" | "control" => mods.ctrl = true,
-                "shift" => mods.shift = true,
-                "alt" | "option" | "opt" => mods.alt = true,
-                _ => return None, // Unknown modifier
+            /// Write bytes to the PTY / SSH channel.
+            fn pty_write(&self, bytes: &[u8]) -> Result<(), $crate::TerminalError> {
+                $crate::backend::PtyTransport::pty_write(self.listener.transport(), bytes)
             }
         }
-        key_part = parts[parts.len() - 1];
-    }
 
-    let named = match key_part.to_lowercase().as_str() {
-        "enter" | "return" => Some(NamedKey::Enter),
-        "backspace" | "bs" => Some(NamedKey::Backspace),
-        "delete" | "del" => Some(NamedKey::Delete),
-        "tab" => Some(NamedKey::Tab),
-        "escape" | "esc" => Some(NamedKey::Escape),
-        "up" | "arrowup" => Some(NamedKey::ArrowUp),
-        "down" | "arrowdown" => Some(NamedKey::ArrowDown),
-        "left" | "arrowleft" => Some(NamedKey::ArrowLeft),
-        "right" | "arrowright" => Some(NamedKey::ArrowRight),
-        "home" => Some(NamedKey::Home),
-        "end" => Some(NamedKey::End),
-        "pageup" | "pgup" => Some(NamedKey::PageUp),
-        "pagedown" | "pgdn" => Some(NamedKey::PageDown),
-        "insert" | "ins" => Some(NamedKey::Insert),
-        "f1" => Some(NamedKey::F1),
-        "f2" => Some(NamedKey::F2),
-        "f3" => Some(NamedKey::F3),
-        "f4" => Some(NamedKey::F4),
-        "f5" => Some(NamedKey::F5),
-        "f6" => Some(NamedKey::F6),
-        "f7" => Some(NamedKey::F7),
-        "f8" => Some(NamedKey::F8),
-        "f9" => Some(NamedKey::F9),
-        "f10" => Some(NamedKey::F10),
-        "f11" => Some(NamedKey::F11),
-        "f12" => Some(NamedKey::F12),
-        "f13" => Some(NamedKey::F13),
-        "f14" => Some(NamedKey::F14),
-        "f15" => Some(NamedKey::F15),
-        "f16" => Some(NamedKey::F16),
-        "f17" => Some(NamedKey::F17),
-        "f18" => Some(NamedKey::F18),
-        "f19" => Some(NamedKey::F19),
-        "f20" => Some(NamedKey::F20),
-        "f21" => Some(NamedKey::F21),
-        "f22" => Some(NamedKey::F22),
-        "f23" => Some(NamedKey::F23),
-        "f24" => Some(NamedKey::F24),
-        _ => None,
-    };
+        impl $crate::TerminalRender for $ty {
+            fn snapshot(&self) -> $crate::TerminalContent {
+                self.model().snapshot()
+            }
 
-    let spec = if let Some(n) = named {
-        KeySpec::Named(n)
-    } else {
-        // Single character key.
-        if key_part.is_empty() || key_part.chars().count() > 1 {
-            return None;
+            fn snapshot_query(&self) -> $crate::TerminalContent {
+                self.model().snapshot_query()
+            }
+
+            fn query_state(&self) -> $crate::TerminalQueryState {
+                self.model()
+                    .query_state($crate::TerminalLifecycle::alive(self))
+            }
+
+            fn query_line_range_cells(
+                &self,
+                start_line: usize,
+                count: usize,
+            ) -> $crate::LineRangeCells {
+                self.model().query_line_range_cells(start_line, count)
+            }
+
+            fn dynamic_colors(&self) -> $crate::DynamicColors {
+                self.model().dynamic_colors()
+            }
+
+            fn set_default_colors(
+                &self,
+                foreground: ::alacritty_terminal::vte::ansi::Rgb,
+                background: ::alacritty_terminal::vte::ansi::Rgb,
+                cursor: ::alacritty_terminal::vte::ansi::Rgb,
+                ansi: [::alacritty_terminal::vte::ansi::Rgb; 16],
+            ) {
+                self.state.set_default_colors($crate::DefaultColors {
+                    foreground: Some(foreground),
+                    background: Some(background),
+                    cursor: Some(cursor),
+                    ansi: Some(ansi),
+                });
+            }
+
+            fn terminal_info(&self) -> $crate::TerminalInfo {
+                self.model()
+                    .terminal_info(self.state.absolute_line_count(), self.state.clear_epoch())
+            }
+
+            fn is_alt_screen(&self) -> bool {
+                self.model().is_alt_screen()
+            }
+
+            fn search(
+                &self,
+                query: &str,
+                options: $crate::SearchOptions,
+            ) -> Vec<$crate::SearchMatch> {
+                self.model().search(query, options)
+            }
+
+            fn selection_text(&self) -> Option<String> {
+                self.model().selection_text()
+            }
+
+            fn has_selection(&self) -> bool {
+                self.model().has_selection()
+            }
         }
-        KeySpec::Character(key_part.to_string())
-    };
 
-    Some((spec, mods))
+        impl $crate::TerminalInput for $ty {
+            fn write(&self, bytes: &[u8]) -> Result<(), $crate::TerminalError> {
+                self.pty_write(bytes)
+            }
+
+            /// Send a DSR (Device Status Report) query so the terminal answers
+            /// with the cursor position. Windows ConPTY buffers output and only
+            /// flushes on interaction; SSH simply ignores the round trip.
+            fn flush_pty(&self) {
+                if let Err(error) = self.pty_write(b"\x1b[6n") {
+                    log::warn!(concat!($label, ": PTY flush query failed: {}"), error);
+                }
+            }
+
+            /// Write ETX (`\x03`); the shell's line discipline (or ConPTY, with
+            /// OpenConsole.exe next to the exe) turns it into the interrupt so
+            /// only the child process sees it.
+            fn send_ctrl_c(&self) {
+                if let Err(error) = self.pty_write(b"\x03") {
+                    log::warn!(concat!($label, ": Ctrl+C delivery failed: {}"), error);
+                }
+            }
+
+            fn resize(&self, rows: u16, cols: u16) -> Result<(), $crate::TerminalError> {
+                if self.model().needs_resize(rows, cols) {
+                    $crate::backend::PtyTransport::pty_resize(
+                        self.listener.transport(),
+                        rows,
+                        cols,
+                    )?;
+                    self.model().resize_grid(rows, cols);
+                }
+                Ok(())
+            }
+
+            fn scroll(&self, delta: i32) {
+                self.model().scroll(delta);
+            }
+
+            fn scroll_to_bottom(&self) {
+                self.model().scroll_to_bottom();
+            }
+
+            fn scroll_to_top(&self) {
+                self.model().scroll_to_top();
+            }
+
+            fn mouse_down(
+                &self,
+                row: f32,
+                col: f32,
+                button: $crate::TerminalMouseButton,
+                sel: ::alacritty_terminal::selection::SelectionType,
+                mods: $crate::MouseModifiers,
+            ) {
+                if let Some(bytes) = self.model().mouse_down(row, col, button, sel, mods) {
+                    $crate::report_generated_input(
+                        concat!($label, " mouse input"),
+                        self.pty_write(&bytes),
+                    );
+                }
+            }
+
+            fn mouse_move(&self, row: f32, col: f32, mods: $crate::MouseModifiers) {
+                if let Some(bytes) = self.model().mouse_move(row, col, mods) {
+                    $crate::report_generated_input(
+                        concat!($label, " mouse input"),
+                        self.pty_write(&bytes),
+                    );
+                }
+            }
+
+            fn mouse_drag(&self, row: f32, col: f32, mods: $crate::MouseModifiers) {
+                if let Some(bytes) = self.model().mouse_drag(row, col, mods) {
+                    $crate::report_generated_input(
+                        concat!($label, " mouse input"),
+                        self.pty_write(&bytes),
+                    );
+                }
+            }
+
+            fn mouse_up(
+                &self,
+                row: f32,
+                col: f32,
+                button: $crate::TerminalMouseButton,
+                mods: $crate::MouseModifiers,
+            ) {
+                if let Some(bytes) = self.model().mouse_up(row, col, button, mods) {
+                    $crate::report_generated_input(
+                        concat!($label, " mouse input"),
+                        self.pty_write(&bytes),
+                    );
+                }
+            }
+
+            fn wheel(&self, delta_y: f64, row: f32, col: f32, mods: $crate::MouseModifiers) {
+                if let Some(bytes) = self.model().wheel(delta_y, row, col, mods) {
+                    $crate::report_generated_input(
+                        concat!($label, " mouse input"),
+                        self.pty_write(&bytes),
+                    );
+                }
+            }
+
+            fn clear_selection(&self) {
+                self.model().clear_selection();
+            }
+
+            fn select_all(&self) {
+                self.model().select_all();
+            }
+
+            fn clear(&self) {
+                // Send the `clear` command to the shell, exactly as if the user typed it.
+                $crate::report_generated_input(
+                    concat!($label, " clear command"),
+                    self.pty_write(b"clear\r"),
+                );
+                $crate::TerminalInput::clear_selection(self);
+            }
+        }
+
+        impl $crate::TerminalIme for $ty {
+            fn set_marked_text(&self, text: String) {
+                *self.marked_text.lock().unwrap() = Some(text);
+            }
+
+            fn clear_marked_text(&self) {
+                *self.marked_text.lock().unwrap() = None;
+            }
+
+            fn commit_text(&self, text: &str) {
+                $crate::TerminalIme::clear_marked_text(self);
+                $crate::report_generated_input(
+                    concat!($label, " committed text"),
+                    self.pty_write(text.as_bytes()),
+                );
+            }
+
+            fn marked_text(&self) -> Option<String> {
+                self.marked_text.lock().unwrap().clone()
+            }
+        }
+
+        impl $crate::TerminalLifecycle for $ty {
+            fn take_events(&self) -> Option<::async_channel::Receiver<$crate::SessionEvent>> {
+                self.event_rx.lock().unwrap().take()
+            }
+
+            fn alive(&self) -> bool {
+                self.state.alive()
+            }
+
+            fn close(&self) -> Result<(), $crate::TerminalError> {
+                let result = self.$close();
+                self.state.set_alive(false);
+                result
+            }
+
+            fn kind(&self) -> $crate::SessionKind {
+                $kind
+            }
+
+            fn title(&self) -> Option<String> {
+                self.state.title()
+            }
+
+            fn cwd(&self) -> Option<::std::path::PathBuf> {
+                self.state.cwd()
+            }
+        }
+    };
 }
 
 #[cfg(test)]
@@ -556,53 +727,6 @@ mod tests {
         // The receiver taken first is the live one.
         probe.emit(SessionEvent::Bell).unwrap();
         assert!(matches!(events.try_recv(), Ok(SessionEvent::Bell)));
-    }
-
-    #[test]
-    fn parse_ctrl_c() {
-        let (spec, mods) = parse_keystroke("Ctrl+C").unwrap();
-        assert!(matches!(spec, KeySpec::Character(c) if c == "C"));
-        assert!(mods.ctrl);
-        assert!(!mods.shift);
-        assert!(!mods.alt);
-    }
-
-    #[test]
-    fn parse_ctrl_shift_v() {
-        let (spec, mods) = parse_keystroke("Ctrl+Shift+V").unwrap();
-        assert!(matches!(spec, KeySpec::Character(c) if c == "V"));
-        assert!(mods.ctrl);
-        assert!(mods.shift);
-    }
-
-    #[test]
-    fn parse_enter() {
-        let (spec, mods) = parse_keystroke("Enter").unwrap();
-        assert!(matches!(spec, KeySpec::Named(NamedKey::Enter)));
-        assert!(!mods.ctrl);
-    }
-
-    #[test]
-    fn parse_alt_enter() {
-        let (spec, mods) = parse_keystroke("Alt+Enter").unwrap();
-        assert!(matches!(spec, KeySpec::Named(NamedKey::Enter)));
-        assert!(mods.alt);
-    }
-
-    #[test]
-    fn parse_arrow_up() {
-        let (spec, _) = parse_keystroke("Up").unwrap();
-        assert!(matches!(spec, KeySpec::Named(NamedKey::ArrowUp)));
-    }
-
-    #[test]
-    fn parse_unknown_modifier() {
-        assert!(parse_keystroke("Foo+A").is_none());
-    }
-
-    #[test]
-    fn parse_empty() {
-        assert!(parse_keystroke("").is_none());
     }
 
     #[test]

@@ -1,8 +1,9 @@
 # SFTP follow Terminal CWD — Part 1: Overview & goals
 
 > **Status (2026-08): historical design record — see [`docs/architecture.md`](../architecture.md) and the current code for the implemented state.**
-> Shipped state differs from the sketches below: `CwdSource` lives in `oneterm-terminal`
-> (`crates/terminal/src/session.rs`, exposed as `TerminalCapabilities::cwd_source` from `TerminalSession::capabilities()`), the follow state is
+> Shipped state differs from the sketches below: there is no `CwdSource` trait — the backend's
+> `SharedState` is handed out directly as `TerminalCapabilities::cwd_source` from
+> `TerminalSession::capabilities()` (`crates/terminal/src/session.rs`), the follow state is
 > `FollowCwd` in `crates/sftp-ui/src/browser_view.rs`, and the "auto-follow" extension is
 > implemented as an on/off toggle backed by a 500 ms polling timer in
 > `crates/sftp-ui/src/panel.rs` (no `SessionEvent::Cwd` wiring); the browser keeps its cwd as

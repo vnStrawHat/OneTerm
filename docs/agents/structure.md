@@ -67,7 +67,7 @@ OneTerm/
 │   │       ├── backend/            # Shared backend pump used by ssh + local-shell:
 │   │       │                       #   PtyTransport trait, OscRouter<T> (alacritty EventListener),
 │   │       │                       #   SessionState (title/cwd/clipboard/exit), event_sink, pump,
-│   │       │                       #   color_reply, line_accounting
+│   │       │                       #   line_accounting
 │   │       ├── content.rs / model.rs / palette.rs / key_encode.rs / mouse_encode.rs
 │   │       ├── osc.rs / osc_color.rs / osc_agent/ / url.rs / url_policy.rs / search.rs / paste.rs / security_policy.rs …
 │   │       └── test_support.rs     # FakeTerminalSession + FakePtyTransport (feature "test-support")

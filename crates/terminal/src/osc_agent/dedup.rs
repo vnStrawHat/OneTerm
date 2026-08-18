@@ -35,18 +35,15 @@ pub struct AgentSeqWatermarks {
 
 impl AgentSeqWatermarks {
     /// The last applied `seq` for `agent`, if it is currently tracked.
+    #[cfg(test)]
     pub fn get(&self, agent: &str) -> Option<u64> {
         self.entries.get(agent).map(|(seq, _)| *seq)
     }
 
     /// Number of agent ids currently tracked.
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.entries.len()
-    }
-
-    /// Whether no agent id is tracked.
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
     }
 
     fn next_tick(&mut self) -> u64 {

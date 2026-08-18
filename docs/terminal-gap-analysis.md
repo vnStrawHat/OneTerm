@@ -141,7 +141,6 @@
 | ✅ | **Vi mode** | Yes — `ToggleViMode`, `ViMotion::Left/Right/Up/Down/WordRight/WordLeft` | Yes (fixed) | Ctrl+Shift+Space → toggle vi mode. hjkl/arrows navigate, v select, y yank, w/b word jump, gg/G top/bottom, 0/$ line start/end, q quit. Vi cursor overlay + indicator. |
 | ⚡ | **Character palette** | Yes — `ShowCharacterPalette` action | No | Zed: Cmd+Ctrl+Space → character palette (emoji picker). Platform-specific (macOS NSPasteboard). Windows uses native Win+.. |
 | ✅ | **Send text action** | Yes — `SendText(String)` action | Yes (fixed) | `TerminalSession::send_text(text)` — writes raw text to PTY. Default impl on trait. |
-| ✅ | **Send keystroke action** | Yes — `SendKeystroke(String)` | Yes (fixed) | `TerminalSession::send_keystroke(keystroke)` — parse format `Ctrl+C`/`Alt+Enter`/`Up` → encode → write PTY. `parse_keystroke()` public function. |
 | ✅ | **Bracketed paste detection** | Yes — `Modes::BRACKETED_PASTE` | Yes (fixed) | `TerminalSession::is_bracketed_paste()` checks `TermMode::BRACKETED_PASTE`. `paste(text)` auto-wraps in `\x1b[200~...\x1b[201~`. All paste paths (middle-click, Ctrl+Shift+V, context menu) use `paste()`. |
 
 ---

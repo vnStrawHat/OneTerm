@@ -25,10 +25,10 @@ use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
-use crate::osc_color::PendingColorQuery;
+use crate::osc_color::{PendingColorQuery, default_color_for_index};
 use crate::session::SessionEvent;
 
-use super::{ColorQueryReplier, LineAccounting, OscRouter, PtyTransport, SharedState};
+use super::{LineAccounting, OscRouter, PtyTransport, SharedState};
 
 /// Grid dimensions for `Term::new` / `Term::resize`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,7 +91,7 @@ impl<T: PtyTransport> TerminalPump<T> {
 
     /// Whether colour queries are waiting for an answer.
     pub fn has_color_queries(&self) -> bool {
-        self.router.color_queries().has_pending()
+        self.router.has_color_queries()
     }
 
     /// Drain the colour queries collected during `advance`.
@@ -107,7 +107,23 @@ impl<T: PtyTransport> TerminalPump<T> {
         queries: Vec<PendingColorQuery>,
     ) -> Vec<String> {
         let defaults = self.state().default_colors();
-        ColorQueryReplier::replies(term, &defaults, queries)
+        // The live `Term` colour when the program set one via OSC, otherwise the
+        // theme default; queries with no answer are skipped.
+        queries
+            .into_iter()
+            .filter_map(|query| {
+                let color = term.colors()[query.index].or_else(|| {
+                    default_color_for_index(
+                        query.index,
+                        defaults.foreground,
+                        defaults.background,
+                        defaults.cursor,
+                        defaults.ansi.as_ref(),
+                    )
+                });
+                color.map(|color| (query.format)(color))
+            })
+            .collect()
     }
 
     /// Send colour replies back through the transport (no lock needed).

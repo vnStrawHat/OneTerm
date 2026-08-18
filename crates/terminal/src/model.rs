@@ -21,10 +21,10 @@ use crate::mouse_encode::{
     MouseModifiers, TerminalMouseButton, encode_mouse_move, encode_mouse_press,
     encode_mouse_release, encode_wheel_event,
 };
+use crate::osc_color::{BACKGROUND_INDEX, CURSOR_INDEX, DynamicColors, FOREGROUND_INDEX};
 use crate::search::{GridText, search_grid_text};
 use crate::{
-    BACKGROUND_INDEX, CURSOR_INDEX, DynamicColors, FOREGROUND_INDEX, IndexedCell, LineRangeCells,
-    SearchMatch, SearchOptions, TerminalInfo, TerminalQueryState,
+    IndexedCell, LineRangeCells, SearchMatch, SearchOptions, TerminalInfo, TerminalQueryState,
 };
 
 /// Simple grid dimensions for `Term::resize`.

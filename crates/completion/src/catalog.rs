@@ -1,10 +1,13 @@
 //! Catalog data model + loading.
 //!
 //! A catalog file is a recursive **command node** (`{ name, options,
-//! subcommands? }`); see docs/auto-completion/02 §5 and 10-subcommands.md §2. The
-//! embedded index [`crate::index::CATALOG_FILES`] maps every command to its JSON;
-//! nodes are parsed lazily on first reference and cached
-//! (docs/auto-completion/02 §5.3).
+//! subcommands? }`); see docs/auto-completion/02 §5 and 10-subcommands.md §2.
+//! `build.rs` walks `assets/**/*.json` and generates `catalog_index.rs`, which
+//! defines `CATALOG_FILES` as `&[(name, source, category, json)]` where each
+//! `json` is an `include_str!` of the file (docs/auto-completion/07 §5); nodes
+//! are parsed lazily on first reference and cached (docs/auto-completion/02 §5.3).
+
+include!(concat!(env!("OUT_DIR"), "/catalog_index.rs"));
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -93,7 +96,7 @@ pub(crate) struct Catalog {
 impl Catalog {
     /// Build the catalog from the compile-time embedded index.
     pub(crate) fn from_embedded() -> Self {
-        Self::from_raw(crate::index::CATALOG_FILES)
+        Self::from_raw(CATALOG_FILES)
     }
 
     /// Build from an explicit `(name, source, category, json)` slice (tests).

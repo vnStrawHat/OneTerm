@@ -26,16 +26,41 @@ mod metadata;
 mod path_policy;
 mod recursive_delete;
 mod transfer;
-mod transfer_registry;
 
 use metadata::{load_uid_gid_lookup, sftp_read_dir, sftp_stat};
 use recursive_delete::sftp_remove_recursive;
 use transfer::{sftp_download, sftp_upload};
-use transfer_registry::{ActiveTransferGuard, ActiveTransfers};
 
 pub(crate) use path_policy::{
     create_safe_parent_dirs, safe_local_child, validate_remote_entry_name,
 };
+
+/// Cancellation tokens of the running transfers, keyed by transfer id.
+type ActiveTransfers = Arc<Mutex<HashMap<u64, CancellationToken>>>;
+
+/// Removes one transfer's cancellation token when its task ends.
+struct ActiveTransferGuard {
+    transfers: ActiveTransfers,
+    transfer_id: u64,
+}
+
+impl ActiveTransferGuard {
+    fn new(transfers: ActiveTransfers, transfer_id: u64) -> Self {
+        Self {
+            transfers,
+            transfer_id,
+        }
+    }
+}
+
+impl Drop for ActiveTransferGuard {
+    fn drop(&mut self) {
+        self.transfers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.transfer_id);
+    }
+}
 
 /// Tokio task that handles SFTP commands.
 ///

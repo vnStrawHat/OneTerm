@@ -3,7 +3,6 @@
 use std::sync::{Mutex, Once};
 
 use log::{LevelFilter, Log, Metadata, Record};
-use oneterm_terminal::test_support::FakeTransport;
 
 use super::*;
 
@@ -41,15 +40,17 @@ fn capture_logs() {
     LOGGER.records.lock().unwrap().clear();
 }
 
-fn make_transport(command_capacity: usize) -> (SshTransport, FakeTransport<Cmd>) {
-    let commands = FakeTransport::bounded(command_capacity);
-    (SshTransport::new(commands.sender()), commands)
+fn make_transport(
+    command_capacity: usize,
+) -> (SshTransport, Sender<Cmd>, async_channel::Receiver<Cmd>) {
+    let (tx, rx) = async_channel::bounded(command_capacity);
+    (SshTransport::new(tx.clone()), tx, rx)
 }
 
 #[test]
 fn phase1_ssh_input_is_not_logged() {
     capture_logs();
-    let (transport, commands) = make_transport(4);
+    let (transport, _sender, commands) = make_transport(4);
     let sentinel = b"PHASE0_DO_NOT_LOG_SECRET_7fd65c";
 
     assert_eq!(transport.pty_write(sentinel), Ok(()));
@@ -76,8 +77,8 @@ fn phase1_ssh_input_is_not_logged() {
 
 #[test]
 fn ssh_command_failures_are_counted_when_saturated_and_closed() {
-    let (transport, commands) = make_transport(1);
-    commands.try_send(Cmd::Close).unwrap();
+    let (transport, sender, commands) = make_transport(1);
+    sender.try_send(Cmd::Close).unwrap();
 
     assert_eq!(
         transport.pty_write(b"dropped command"),
@@ -93,7 +94,7 @@ fn ssh_command_failures_are_counted_when_saturated_and_closed() {
 
 #[test]
 fn ssh_writes_are_bounded_by_payload_bytes() {
-    let (transport, commands) = make_transport(4);
+    let (transport, _sender, commands) = make_transport(4);
     let budget = vec![0; SSH_COMMAND_BYTE_BUDGET];
     assert_eq!(transport.pty_write(&budget), Ok(()));
     assert_eq!(transport.pty_write(&[1]), Err(TerminalError::QueueFull));
@@ -112,7 +113,7 @@ fn ssh_writes_are_bounded_by_payload_bytes() {
 
 #[test]
 fn ssh_resizes_coalesce_to_the_latest_dimensions() {
-    let (transport, commands) = make_transport(4);
+    let (transport, _sender, commands) = make_transport(4);
     transport.pty_resize(24, 80).unwrap();
     transport.pty_resize(40, 120).unwrap();
     assert_eq!(commands.len(), 1);
@@ -123,7 +124,7 @@ fn ssh_resizes_coalesce_to_the_latest_dimensions() {
 
 #[test]
 fn ssh_write_queue_preserves_fifo_order() {
-    let (transport, commands) = make_transport(4);
+    let (transport, _sender, commands) = make_transport(4);
     transport.pty_write(b"first").unwrap();
     transport.pty_write(b"second").unwrap();
     assert!(matches!(
@@ -139,9 +140,9 @@ fn ssh_write_queue_preserves_fifo_order() {
 
 #[test]
 fn phase1_close_is_honored_even_when_command_queue_is_full() {
-    let (transport, commands) = make_transport(1);
+    let (transport, sender, commands) = make_transport(1);
     // Fill the command queue to capacity.
-    commands.try_send(Cmd::Write(b"x".to_vec())).unwrap();
+    sender.try_send(Cmd::Write(b"x".to_vec())).unwrap();
     assert_eq!(commands.len(), 1);
 
     // A regular write would be dropped (queue full)...

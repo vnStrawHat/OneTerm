@@ -12,10 +12,8 @@
 //! flags with `take_dirty()` and persists the view into the per-backend store
 //! only when something actually changed.
 
-use std::sync::Arc;
-
 use oneterm_core::RemotePath;
-use oneterm_terminal::CwdSource;
+use oneterm_terminal::SharedState;
 
 use super::types::TransferItem;
 
@@ -203,7 +201,7 @@ pub(crate) struct FollowCwd {
     /// always reads `source` live.
     cache: Option<RemotePath>,
     /// Live cwd source of the active terminal. `None` = no cwd available.
-    source: Option<Arc<dyn CwdSource>>,
+    source: Option<SharedState>,
     dirty: bool,
 }
 
@@ -242,7 +240,7 @@ impl FollowCwd {
     }
 
     /// Track the active terminal's cwd source (changes with the active tab).
-    pub(crate) fn set_source(&mut self, source: Option<Arc<dyn CwdSource>>) {
+    pub(crate) fn set_source(&mut self, source: Option<SharedState>) {
         self.source = source;
     }
 

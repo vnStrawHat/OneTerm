@@ -126,12 +126,6 @@ impl LocalSession {
 
     // ── Helpers ──────────────────────────────────────────────────────
 
-    /// Get a `TerminalModel` adapter for the shared terminal-model operations.
-    /// Cheap to create — just wraps the existing `Arc<FairMutex<Term>>`.
-    pub(crate) fn model(&self) -> oneterm_terminal::model::TerminalModel<LocalListener> {
-        oneterm_terminal::model::TerminalModel::new(self.term.clone())
-    }
-
     /// The PTY transport (write / resize / shutdown).
     pub(crate) fn transport(&self) -> &LocalTransport {
         self.listener.transport()
