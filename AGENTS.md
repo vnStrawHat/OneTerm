@@ -136,7 +136,7 @@ with only fmt/clippy/build green.
 | **Terminal Split design** (Spaces, split R/L/U/D, drag tab into Space) | [`docs/terminal-split.md`](docs/terminal-split.md) |
 | SSH client connect / auth design | [`docs/ssh-client-connect.md`](docs/ssh-client-connect.md) |
 | SFTP file browser design | [`docs/sftp-browser-design.md`](docs/sftp-browser-design.md) |
-| SFTP-follows-terminal-CWD design | [`docs/sftp-follow-terminal-cwd.md`](docs/sftp-follow-terminal-cwd.md) |
+| SFTP-follows-terminal-CWD design | [`docs/sftp-follow-terminal-cwd/README.md`](docs/sftp-follow-terminal-cwd/README.md) |
 | OSC sequence support checklist | [`docs/osc-sequences-checklist.md`](docs/osc-sequences-checklist.md) |
 | Terminal rendering optimization | [`docs/terminal-rendering-optimization.md`](docs/terminal-rendering-optimization.md) |
 | Terminal feature gap analysis | [`docs/terminal-gap-analysis.md`](docs/terminal-gap-analysis.md) |

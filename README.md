@@ -184,8 +184,6 @@ renderer latency reports and `[PTY pump]` lock timing reports. The renderer repo
 its first painted frame and then at most once every five seconds while frames are painted;
 the PTY pump reports over two-second sampling windows. These records use DEBUG logging, so
 `oneterm=debug` is sufficient. See
-[`docs/archive/review-2026-07/performance-benchmark.md`](docs/archive/review-2026-07/performance-benchmark.md)
-(historical) for the workload and measurement protocol, and
 [`docs/terminal-fullscreen-perf/README.md`](docs/terminal-fullscreen-perf/README.md) for the
 full-screen rendering investigation. Standalone diagnostics (DOOM-fire workload, raw PTY
 throughput probe) live in `crates/tools`:
@@ -237,7 +235,7 @@ releases also publish a combined `SHA256SUMS`):
 - [`docs/terminal-split.md`](docs/terminal-split.md) — terminal split (Spaces) design
 - [`docs/ssh-client-connect.md`](docs/ssh-client-connect.md) — SSH connection / auth design
 - [`docs/sftp-browser-design.md`](docs/sftp-browser-design.md) — SFTP file browser design
-- [`docs/sftp-follow-terminal-cwd.md`](docs/sftp-follow-terminal-cwd.md) — SFTP-follows-terminal-CWD design
+- [`docs/sftp-follow-terminal-cwd/README.md`](docs/sftp-follow-terminal-cwd/README.md) — SFTP-follows-terminal-CWD design
 - [`docs/osc-agent-status.md`](docs/osc-agent-status.md) — OSC 9;7 agent status proposal/spec
 - [`docs/osc-sequences-checklist.md`](docs/osc-sequences-checklist.md) — OSC sequence support checklist
 - [`docs/auto-update.md`](docs/auto-update.md) — auto-update design

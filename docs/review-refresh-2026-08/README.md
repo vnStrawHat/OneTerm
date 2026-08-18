@@ -1,8 +1,8 @@
 # OneTerm — Full project review (refresh, 2026-08-17)
 
 > **Status:** current. This is a from-scratch review of the whole workspace at commit
-> `c7a757b` (v0.3.9). It intentionally does **not** build on `docs/archive/review-2026-07/` or
-> `docs/archive/repository-review-2026-07/` (July 2026); those are archived as historical.
+> `c7a757b` (v0.3.9). It intentionally does **not** build on the July 2026 reviews,
+> which have been deleted.
 >
 > Every finding was verified by reading the code (file + line given). Findings are
 > written as checklists so they can be ticked off as remediation lands. Line numbers
