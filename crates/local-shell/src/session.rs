@@ -56,6 +56,8 @@ impl LocalSession {
             working_directory: cfg.cwd.clone().or_else(home_dir),
             drain_on_exit: false,
             env: resolved.env,
+            #[cfg(not(windows))]
+            child_signal_mask: None,
             // Escape every argument with the C-runtime rules so user-supplied
             // `Custom` args and the PowerShell `-Command` payload survive
             // `CreateProcessW` command-line re-parsing. The default `cmd /K chcp

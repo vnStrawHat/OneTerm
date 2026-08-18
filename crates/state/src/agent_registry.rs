@@ -589,7 +589,8 @@ mod tests {
         // A threshold of 0 disables staleness marking entirely.
         registry.update(cx, |registry, cx| {
             registry.set_stale_threshold_ms(0, cx);
-            registry.cards[1].last_recv = Instant::now() - Duration::from_secs(3600);
+            // Keep the offset small: `Instant - 1h` overflows on a freshly booted CI VM.
+            registry.cards[1].last_recv = Instant::now() - Duration::from_secs(5);
             registry.refresh_stale(cx);
         });
         registry.read_with(cx, |registry, _| {
