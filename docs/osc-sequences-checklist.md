@@ -14,7 +14,7 @@ Each column has a different source — the reliability is noted here:
 
 | Terminal | Verify source | Confidence | Test date |
 |----------|--------------|:------------:|----------|
-| **OneTerm** | Codebase (`crates/core/src/terminal/osc.rs`, `osc_color.rs`, `listener.rs`, `shell.rs`) | 🟢 Very high | current code |
+| **OneTerm** | Codebase (`crates/terminal/src/osc.rs`, `osc_color.rs`, `backend/osc_router.rs`, `crates/core/src/config/shell.rs`) | 🟢 Very high | current code |
 | **Windows Terminal** | MS Learn docs + GitHub PRs (#15727, #18449, #5823, color-query PR) + ansicode.eversources.app | 🟢 High | docs + PRs 2023–2025 |
 | **Zed** | zed.dev/docs/terminal + source `terminal_hyperlinks.rs` + issue #17848 | 🟢 High | 2025–2026 |
 | **Ghostty** | terminfo.dev (live test, v1.3.1) + `src/terminal/osc.zig` | 🟢 Very high | test 2026-06-18 |
@@ -190,7 +190,7 @@ ESC ] 8 ; ; ST               ← close link
 |:----:|:-------:|:------------:|:---:|:-------:|:------:|:-----:|:---------:|:-----:|:---:|:-------:|
 | 8 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ |
 
-- **OneTerm**: ✅ — alacritty VTE stores hyperlink in cell; `url.rs` detects (`link_ranges`/`url_at`).
+- **OneTerm**: ✅ — alacritty VTE stores hyperlink in cell; the view reads `cell.hyperlink()` and every target passes the external-target policy (`crates/terminal/src/url_policy.rs`, display-text vs target check via `validate_target_with_display`).
 - **Zed**: ✅ — `terminal_hyperlinks.rs` reads `cell.hyperlink()` + `try_osc8_url_to_path`.
 - **Alacritty**: ✅ — commit "Fixes #922" added OSC 8 (the old ansicode page was wrong in listing alacritty ❌).
 - **xterm**: ❌ — does not support OSC 8.
@@ -240,8 +240,8 @@ ESC ] 8 ; ; ST               ← close link
 | 777 (urxvt) | ❌ | ◐ | ❌ | ✅ | ✅ | ✅ | ❌ | ❌ | ◐ | ✅ |
 
 > ✅ **OneTerm** (from the latest version): OSC 9 (notification → toast via `window.push_notification`) and OSC 9;4
-> (progress → thin progress bar at the top edge of the terminal, state 0-4). Parsed in parallel in `OscSink`
-> (alacritty drops OSC 9) → `OscPayload::Notification`/`Progress` → `SessionEvent`. Still ❌: 9;1/2/3
+> (progress → thin progress bar at the top edge of the terminal, state 0-4). Forwarded by the vendored
+> alacritty fork's `Event::Osc` hook (upstream alacritty drops OSC 9) to `OscRouter` → `OscPayload::Notification`/`Progress` → `SessionEvent`. OSC 9;7 (agent status) is also supported, see [`osc-agent-status.md`](osc-agent-status.md). Still ❌: 9;1/2/3
 > (ConEmu misc), 99 (kitty), 777 (urxvt).
 > - **Ghostty**: ✅ all (osc.zig has `conemu_*` for 9;1–9;11 + `show_desktop_notification` for 9/777/99).
 > - **VS Code**: ✅ 9/9;4/99/777 (terminfo); 9;1/2/3 ❌.
@@ -453,8 +453,8 @@ ESC]133;D;exit ST ← Block end (exit code optional)
 - FinalTerm OSC 133 spec — <https://gitlab.freedesktop.org/Per_Bothner/specifications/blob/master/proposals/semantic-prompts.md>
 
 ### OneTerm codebase (internal verification)
-- `crates/core/src/terminal/osc.rs` — `OscSink`, `OscPayload`, `Osc133Kind`, `parse_cwd_url`, `decode_osc52`/`encode_osc52`
-- `crates/core/src/terminal/osc_color.rs` — `DynamicColors`, `PendingColorQuery`, `default_color_for_index` (OSC 10/11/12/110-112)
-- `crates/local/src/listener.rs` & `crates/ssh/src/listener.rs` — `ColorRequest` enqueue → reply after parse batch (event_loop/task)
+- `crates/terminal/src/osc.rs` — `OscPayload`, `Osc133Kind`, `parse_cwd_url`, `decode_osc52`/`encode_osc52`
+- `crates/terminal/src/osc_color.rs` — `DynamicColors`, `PendingColorQuery`, `default_color_for_index` (OSC 10/11/12/110-112)
+- `crates/terminal/src/backend/osc_router.rs` + `backend/pump.rs` — shared `OscRouter` (both backends): OSC routing, `ColorRequest` enqueue → reply after the parse batch
 - `crates/core/src/config/shell.rs` — `resolve_shell` generates OSC 7/133 by shell kind
-- `crates/core/src/terminal/url.rs` — OSC 8 hyperlink detection
+- `crates/terminal/src/url_policy.rs` — OSC 8 / plain-text target policy (scheme allowlist, display-text mismatch)

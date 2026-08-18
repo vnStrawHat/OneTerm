@@ -6,7 +6,7 @@ use oneterm_settings::TerminalSettings;
 
 use crate::items_with_separators;
 
-use super::persist;
+use super::set;
 
 /// Build the "Scroll" settings group.
 pub(super) fn group() -> SettingGroup {
@@ -24,11 +24,7 @@ pub(super) fn group() -> SettingGroup {
                     },
                     |cx: &App| TerminalSettings::global(cx).read(cx).scroll_multiplier as f64,
                     |val: f64, cx: &mut App| {
-                        TerminalSettings::global(cx).update(cx, |s, cx| {
-                            s.scroll_multiplier = val as f32;
-                            cx.notify();
-                        });
-                        persist(cx);
+                        set(cx, |s| s.scroll_multiplier = val as f32);
                     },
                 ),
             )
@@ -38,11 +34,7 @@ pub(super) fn group() -> SettingGroup {
                 SettingField::switch(
                     |cx: &App| TerminalSettings::global(cx).read(cx).alternate_scroll,
                     |val: bool, cx: &mut App| {
-                        TerminalSettings::global(cx).update(cx, |s, cx| {
-                            s.alternate_scroll = val;
-                            cx.notify();
-                        });
-                        persist(cx);
+                        set(cx, |s| s.alternate_scroll = val);
                     },
                 ),
             )

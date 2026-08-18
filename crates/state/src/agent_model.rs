@@ -9,8 +9,8 @@ use std::time::Instant;
 use gpui::EntityId;
 
 use oneterm_terminal::{
-    AgentState, AgentStatusEvent, ApprovalChoice, ApprovalEvent, ApprovalKind, ApprovalRisk,
-    FileAction, ModelEvent, ToolCallEvent, ToolCallPhase,
+    AgentPayload, AgentState, AgentStatusEvent, ApprovalChoice, ApprovalEvent, ApprovalKind,
+    ApprovalRisk, FileAction, ModelEvent, ToolCallEvent, ToolCallPhase,
 };
 
 // ── Display-side truncation caps (chars) ────────────────────────────────
@@ -272,7 +272,9 @@ pub struct AgentCard {
 }
 
 impl AgentCard {
-    pub(crate) fn new(terminal_key: EntityId, agent_id: String, grouping: &Grouping) -> Self {
+    /// A fresh `Idle`/`Live` card for `agent_id` in the terminal `terminal_key`,
+    /// placed by `grouping`; every other field starts empty.
+    pub fn new(terminal_key: EntityId, agent_id: String, grouping: &Grouping) -> Self {
         Self {
             terminal_key,
             agent_id,
@@ -313,8 +315,8 @@ impl AgentCard {
             self.lifecycle = Lifecycle::Live;
         }
 
-        match ev {
-            AgentStatusEvent::State { payload, .. } => {
+        match &ev.payload {
+            AgentPayload::State(payload) => {
                 self.state = payload.state;
                 self.message = sanitize_opt(&payload.message, CAP_MESSAGE);
                 if let Some(sid) = &payload.session_id {
@@ -329,26 +331,26 @@ impl AgentCard {
                     self.lifecycle = Lifecycle::Ended { exit_code: None };
                 }
             }
-            AgentStatusEvent::Session { payload, .. } => {
+            AgentPayload::Session(payload) => {
                 self.session_id = Some(sanitize_line(&payload.session_id, CAP_ID));
                 self.session_reason = sanitize_opt(&payload.reason, CAP_SHORT);
                 self.parent_id = sanitize_opt(&payload.parent_id, CAP_ID);
                 self.project_dir = sanitize_opt(&payload.project_dir, CAP_PATH);
             }
-            AgentStatusEvent::Heartbeat { payload, .. } => {
+            AgentPayload::Heartbeat(payload) => {
                 self.heartbeat_interval = payload.interval_ms;
                 if let Some(st) = payload.state {
                     self.state = st;
                 }
             }
-            AgentStatusEvent::Model { payload, .. } => {
+            AgentPayload::Model(payload) => {
                 self.model = Some(ModelInfo::from_event(payload));
                 if let Some(used) = payload.context_used {
                     self.context_used = Some(used);
                 }
             }
-            AgentStatusEvent::ToolCall { payload, .. } => self.apply_tool_call(payload, ev.ts()),
-            AgentStatusEvent::File { payload, .. } => {
+            AgentPayload::ToolCall(payload) => self.apply_tool_call(payload, ev.ts()),
+            AgentPayload::File(payload) => {
                 let entry = FileEntry {
                     path: sanitize_line(&payload.path, CAP_PATH),
                     action: payload.action,
@@ -360,7 +362,7 @@ impl AgentCard {
                     push_capped(&mut self.recent_files, entry, RECENT_FILES_CAP);
                 }
             }
-            AgentStatusEvent::Approval { payload, .. } => match payload.kind {
+            AgentPayload::Approval(payload) => match payload.kind {
                 ApprovalKind::Resolved => {
                     let note = payload
                         .default

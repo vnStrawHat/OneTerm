@@ -1,9 +1,11 @@
 //! Default workspace layout construction.
 
-use gpui::{App, Window, px};
-use gpui_component::dock::{DockArea, DockItem};
+use gpui::{App, Window};
+use gpui_component::dock::{DockArea, DockAreaState, DockItem};
 
-use super::MAIN_DOCK_VERSION;
+use oneterm_state::panel_names;
+
+use super::{DEFAULT_RIGHT_DOCK_WIDTH, MAIN_DOCK_VERSION};
 
 /// Reset the center (terminal tabs) to a single tab AND re-apply the right
 /// dock as a fresh `DockItem::Panel(SshClientPanel)`.
@@ -17,14 +19,34 @@ use super::MAIN_DOCK_VERSION;
 /// dock.
 pub(crate) fn reset_center_only(
     dock_area: gpui::WeakEntity<DockArea>,
-    toggle_button_visible: bool,
     window: &mut Window,
     cx: &mut App,
 ) {
+    if let Some(state) = apply_center_reset(dock_area, window, cx) {
+        cx.background_executor()
+            .spawn(async move {
+                super::persistence::save_state_logged(&state, None, "reset_center_only");
+            })
+            .detach();
+    }
+}
+
+/// The dock mutation behind [`reset_center_only`]; returns the resulting dock
+/// state for the caller to persist (`None` when the dock area is gone).
+pub(crate) fn apply_center_reset(
+    dock_area: gpui::WeakEntity<DockArea>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<DockAreaState> {
     let weak = dock_area.clone();
     let center = DockItem::v_split(
         vec![DockItem::tabs(
-            vec![super::build_named_panel("terminal", &weak, window, cx)],
+            vec![super::build_named_panel(
+                panel_names::TERMINAL,
+                &weak,
+                window,
+                cx,
+            )],
             &weak,
             window,
             cx,
@@ -33,45 +55,35 @@ pub(crate) fn reset_center_only(
         window,
         cx,
     );
-    let ssh_client_panel = super::build_named_panel("ssh_client_panel", &weak, window, cx);
+    let ssh_client_panel = super::build_named_panel(panel_names::SSH_CLIENT, &weak, window, cx);
     let right = DockItem::panel(ssh_client_panel);
-    let mut saved_state = None;
-    _ = dock_area.update(cx, |view, cx| {
-        // Snapshot the loaded right dock's size + open state so the re-applied
-        // `DockItem::Panel` preserves the user's last dock width + collapsed
-        // state. Falls back to 480px / open when there is no prior right dock
-        // (e.g. first launch, or the saved layout had no right dock).
-        let (right_size, right_open) = view
-            .right_dock()
-            .map(|dock| {
-                let d = dock.read(cx);
-                (Some(d.size()), d.is_open())
-            })
-            .unwrap_or((Some(px(480.)), true));
-        view.set_center(center, window, cx);
-        view.set_right_dock(right, right_size, right_open, window, cx);
-        view.set_dock_collapsible(
-            gpui::Edges {
-                right: true,
-                ..Default::default()
-            },
-            window,
-            cx,
-        );
-        saved_state = Some(view.dump(cx));
-    });
-    if let Some(state) = saved_state {
-        cx.background_executor()
-            .spawn(async move {
-                super::persistence::save_state_logged(
-                    &state,
-                    None,
-                    toggle_button_visible,
-                    "reset_center_only",
-                );
-            })
-            .detach();
-    }
+    // A released dock area (window closing during startup) has nothing to reset.
+    dock_area
+        .update(cx, |view, cx| {
+            // Snapshot the loaded right dock's size + open state so the re-applied
+            // `DockItem::Panel` preserves the user's last dock width + collapsed
+            // state. Falls back to the default width / open when there is no prior
+            // right dock (e.g. first launch, or the saved layout had no right dock).
+            let (right_size, right_open) = view
+                .right_dock()
+                .map(|dock| {
+                    let d = dock.read(cx);
+                    (Some(d.size()), d.is_open())
+                })
+                .unwrap_or((Some(DEFAULT_RIGHT_DOCK_WIDTH), true));
+            view.set_center(center, window, cx);
+            view.set_right_dock(right, right_size, right_open, window, cx);
+            view.set_dock_collapsible(
+                gpui::Edges {
+                    right: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+            view.dump(cx)
+        })
+        .ok()
 }
 
 /// Build the default OneTerm layout: center = terminals, right_dock = SshClientPanel.
@@ -84,7 +96,12 @@ pub(crate) fn reset_default_layout(
 
     let center = DockItem::v_split(
         vec![DockItem::tabs(
-            vec![super::build_named_panel("terminal", &weak, window, cx)],
+            vec![super::build_named_panel(
+                panel_names::TERMINAL,
+                &weak,
+                window,
+                cx,
+            )],
             &weak,
             window,
             cx,
@@ -94,28 +111,30 @@ pub(crate) fn reset_default_layout(
         cx,
     );
 
-    let ssh_client_panel = super::build_named_panel("ssh_client_panel", &weak, window, cx);
+    let ssh_client_panel = super::build_named_panel(panel_names::SSH_CLIENT, &weak, window, cx);
     let right = DockItem::panel(ssh_client_panel);
 
-    let mut saved_state = None;
-    _ = dock_area.update(cx, |view, cx| {
-        view.set_version(MAIN_DOCK_VERSION, window, cx);
-        view.set_center(center, window, cx);
-        view.set_right_dock(right, Some(px(480.)), true, window, cx);
-        view.set_dock_collapsible(
-            gpui::Edges {
-                right: true,
-                ..Default::default()
-            },
-            window,
-            cx,
-        );
-        saved_state = Some(view.dump(cx));
-    });
+    // A released dock area (window closing during startup) has nothing to reset.
+    let saved_state = dock_area
+        .update(cx, |view, cx| {
+            view.set_version(MAIN_DOCK_VERSION, window, cx);
+            view.set_center(center, window, cx);
+            view.set_right_dock(right, Some(DEFAULT_RIGHT_DOCK_WIDTH), true, window, cx);
+            view.set_dock_collapsible(
+                gpui::Edges {
+                    right: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+            view.dump(cx)
+        })
+        .ok();
     if let Some(state) = saved_state {
         cx.background_executor()
             .spawn(async move {
-                super::persistence::save_state_logged(&state, None, true, "reset_default_layout");
+                super::persistence::save_state_logged(&state, None, "reset_default_layout");
             })
             .detach();
     }

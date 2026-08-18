@@ -1,5 +1,32 @@
 # GUI Layout — OneTerm
 
+> **Status (2026-08): historical design record** — the original layout design that
+> the shell was built from. Read it for rationale; for the implemented state read
+> [`architecture.md`](architecture.md) and `crates/workspace/src/layout/`. Known
+> divergences from the text below:
+> - The right dock is **not** a `v_split([Session, SFTP])`: it is a single
+>   `DockItem::Panel` — `SshClientPanel` (`crates/app/src/ssh_client_panel.rs`) hosts the
+>   Session and SFTP panels in its own vertical resizable split; the Agent Panel is the
+>   alternative right-dock mode (`oneterm_core::RightDockMode`,
+>   `crates/agent-ui/src/view.rs`).
+> - `MAIN_DOCK_VERSION` is `3` (`crates/workspace/src/layout/workspace/mod.rs`), not `1`.
+> - `docks.json` is not written with `std::fs::write` to `STATE_FILE`: the path comes from
+>   `oneterm_state::paths::state_file()` (`config_dir()/docks.json`; `target/docks.json` in
+>   debug) and every write goes through the schema-versioned, quarantining
+>   `oneterm_state::dock_persistence::update_dock_document` transaction
+>   (`crates/state/src/dock_persistence.rs`, `crates/core/src/persistence.rs`; see
+>   [`agents/persistence.md`](agents/persistence.md)). The shell saves on layout change and
+>   at exit (`crates/workspace/src/layout/workspace/persistence.rs`).
+> - Panels are registered by name in `crates/state/src/panel_names.rs` (R4/R12), not by the
+>   `PanelRegistry` sketches in §5.
+> - The status bar also shows network speed, breadcrumb and a CPU/memory indicator
+>   (`crates/workspace/src/layout/statusbar.rs`, `crates/workspace/src/widgets/`).
+> - `crates/ui` / `crates/app/src/app.rs` in the sketches are today's `crates/workspace`
+>   (shell) and `crates/app/src/lib.rs`.
+> - The app menu has no Language submenu and no `SelectLocale` / `SelectFont` /
+>   `AddSession` / `AddSftpBrowser` actions: they were never wired to anything and were
+>   removed (HYG-01). Font size is changed from the Appearance settings page.
+>
 > Design document for the OneTerm GUI layout, based on the reference
 > `reference/gpui-component/crates/story/examples/dock.rs`.
 >
@@ -15,7 +42,7 @@
 5. [Panel serialization registry](#5-panel-serialization-registry)
 6. [Layout state save/load](#6-layout-state-saveload)
 7. [Title bar & App menu bar](#7-title-bar--app-menu-bar)
-8. [Status bar & DateTimeClock](#8-status-bar--datetimeclock)
+8. [Status bar & indicators](#8-status-bar--indicators)
 9. [Resizable behavior](#9-resizable-behavior)
 10. [File structure](#10-file-structure)
 11. [Implementation checklist](#11-implementation-checklist)
@@ -64,7 +91,7 @@ StatusBar.
 
 | Reference `dock.rs` component | OneTerm | Notes |
 |---|---|---|
-| `StoryWorkspace { title_bar, dock_area, last_layout_state, toggle_button_visible, _save_layout_task }` | `OneTermWorkspace` (rename, keep fields) | `app/src/app.rs` |
+| `StoryWorkspace { title_bar, dock_area, last_layout_state, toggle_button_visible, _save_layout_task }` | `OneTermWorkspace` (rename; `toggle_button_visible` dropped — the toggle-button action was never dispatched) | `crates/workspace/src/layout/workspace/mod.rs` |
 | `AppTitleBar::new("Examples", ...)` | `AppTitleBar::new("OneTerm", ...)` | Change title |
 | `AppMenuBar` (`app_menus.rs`: Appearance/Theme/Language + Edit/Window/Help) | Keep 100% | Themes + Language + Appearance |
 | `FontSizeSelector` (font-size, gutter toggle) | Keep (drop radius/scrollbar/list-highlight) | radius=0px, scrollbar=Scrolling fixed in `theme::init`; list.active_highlight=true fixed; gutter toggle → `TerminalSettings.show_gutter` |
@@ -76,7 +103,7 @@ StatusBar.
 | `set_dock_collapsible(Edges{left:true,bottom:true,right:true})` | `set_dock_collapsible(Edges{right:true, ..Default::default()})` | Only right_dock remains |
 | `DockAreaState` save/load `STATE_FILE`, version check, reset prompt | Keep | `STATE_FILE = "target/docks.json"` (debug) |
 | `AddPanel` action + dropdown (add random story) | Dropdown only "New Terminal Tab" + "Show/Hide Dock Toggle Button" | Drop Add to Left/Bottom/Right + menu check Sidebar/Dialog/... |
-| StatusBar: 3 toggle buttons (left/bottom/right) | StatusBar: `.left(DateTimeClock)` + `.right(toggle-right-dock)` | — |
+| StatusBar: 3 toggle buttons (left/bottom/right) | StatusBar: `.left(clock)` + `.right(toggle-right-dock)` | — |
 
 ---
 
@@ -374,19 +401,30 @@ pub fn build_panel(panel_name, dock_area, panel_state, panel_info, window, cx) -
 }
 ```
 
-**OneTerm registers 3** (in `ui::init` or `app::init`):
+**OneTerm registers** each panel in the owning feature's `init()` (R12), using
+the shared name constants from `oneterm_state::panel_names` (the single source of
+truth for registered names — never spell the string literal at a call site):
 
 ```rust
-register_panel(cx, "terminal", |_, _, _, window, cx| {
-    Box::new(cx.new(|cx| TerminalPanel::new(window, cx)))
+use oneterm_state::panel_names;
+
+register_panel(cx, panel_names::TERMINAL, |dock_area, _, _, window, cx| {
+    // `TerminalPanel::open(PanelSpec, ..)` is the panel's single constructor.
+    let spec = PanelSpec::DefaultShell { workspace: Some(dock_area.entity_id()) };
+    Box::new(TerminalPanel::open(spec, window, cx))
 });
-register_panel(cx, "session", |_, _, _, window, cx| {
+register_panel(cx, panel_names::SESSION, |_, _, _, window, cx| {
     Box::new(cx.new(|cx| SessionPanel::new(window, cx)))
 });
-register_panel(cx, "sftp", |_, _, _, window, cx| {
+register_panel(cx, panel_names::SFTP, |_, _, _, window, cx| {
     Box::new(cx.new(|cx| SftpPanel::new(window, cx)))
 });
 ```
+
+The current constants are `TERMINAL`, `SFTP`, `SESSION`, `SSH_CLIENT`, `AGENT`
+(see `crates/state/src/panel_names.rs`).
+The shell's `build_named_panel` logs an error naming the missing panel when a
+requested name is not registered (stale saved layout / feature `init()` not run).
 
 These panels initially have **no auxiliary state** (only placeholder) so they ignore `PanelInfo`
 — the constructor returns a fresh panel.
@@ -482,20 +520,16 @@ impl OneTermWorkspace {
             _ => {}
         }).detach();
 
-        // Save layout before quit
-        cx.on_app_quit({
-            let dock_area = dock_area.clone();
-            move |_, cx| {
-                let state = dock_area.read(cx).dump(cx);
-                cx.background_executor().spawn(async move {
-                    Self::save_state(&state).unwrap();
-                })
-            }
-        }).detach();
+        // Save layout at exit — synchronously (gpui does not await detached
+        // background tasks during shutdown). `on_app_quit` covers Quit while
+        // the window is open; `on_release` covers closing the window, which
+        // drops the root view before `cx.quit()`. The first to run writes.
+        cx.on_app_quit(|this, cx| { this.save_layout_on_exit("on_app_quit", cx); async {} }).detach();
+        cx.on_release(|this, cx| this.save_layout_on_exit("on_close", cx)).detach();
 
         let title_bar = cx.new(|cx| AppTitleBar::new("OneTerm", window, cx).child(...));
 
-        Self { dock_area, title_bar, last_layout_state: None, toggle_button_visible: true, _save_layout_task: None }
+        Self { dock_area, title_bar, last_layout_state: None, zoomed_panel: None, layout_saved_on_exit: false, _save_layout_task: None, .. }
     }
 }
 ```
@@ -559,7 +593,7 @@ fn reset_default_layout(dock_area: WeakEntity<DockArea>, window: &mut Window, cx
     let weak = dock_area.clone();
 
     let center = DockItem::tabs(
-        vec![ Arc::new(TerminalPanel::new_entity(window, cx)) ],   // 1 default terminal
+        vec![ Arc::new(TerminalPanel::open(PanelSpec::DefaultShell { workspace: None }, window, cx)) ],
         &weak, window, cx,
     );
 
@@ -614,7 +648,7 @@ AppTitleBar::new("OneTerm", window, cx).child(move |_, cx| {
         .small()
         .ghost()
         .dropdown_menu(move |menu, _, cx| {
-            menu.menu("New Terminal Tab", Box::new(AddPanel(DockPlacement::Center)))
+            menu.menu("New Terminal Tab", Box::new(AddPanel))
                 .separator()
                 .menu("Show / Hide Dock Toggle Button", Box::new(ToggleDockToggleButton))
         })
@@ -626,7 +660,7 @@ AppTitleBar::new("OneTerm", window, cx).child(move |_, cx| {
 
 ```rust
 fn on_action_add_panel(&mut self, action: &AddPanel, window, cx) {
-    let panel = Arc::new(TerminalPanel::new_entity(window, cx));
+    let panel = Arc::new(TerminalPanel::open(PanelSpec::DefaultShell { workspace: None }, window, cx));
     self.dock_area.update(cx, |dock_area, cx| {
         dock_area.add_panel(panel, action.0, None, window, cx);
     });
@@ -635,13 +669,13 @@ fn on_action_add_panel(&mut self, action: &AddPanel, window, cx) {
 
 ---
 
-## 8. Status bar & DateTimeClock
+## 8. Status bar & indicators
 
 ### 8.1 StatusBar wiring
 
 ```rust
 StatusBar::new()
-    .left(DateTimeClock::new(window, cx))                     // left corner: clock
+    .left(datetime_clock(window, cx))                        // left corner: clock
     .right(
         Button::new("toggle-right-dock").ghost().xsmall()
             .icon(IconName::PanelRight)
@@ -658,50 +692,17 @@ StatusBar::new()
 > `.right(...)` pins right, `.child(...)` adds center. With both left+right → center
 > justify_center; left only → center justify_end.
 
-### 8.2 `DateTimeClock` component
+### 8.2 Status-bar indicators
 
-File `crates/ui/src/components/datetime_clock.rs`. `Entity` + `Render` + `Focusable`,
-updates via a `cx.spawn` 1s interval.
+Every status-bar indicator is one `StatusText`
+(`crates/workspace/src/widgets/status_text.rs`): an `Entity` + `Render` holding a
+`Task` that ticks on an interval, calls a sampler closure for the text (`None`
+hides the indicator), and re-renders only when the text changed. The four
+indicators (`datetime_clock`, `breadcrumb`, `net_speed`, `resource`) are just
+constructors supplying an element id, an interval, and a sampler.
 
-```rust
-pub struct DateTimeClock {
-    focus_handle: FocusHandle,
-    now: chrono::DateTime<chrono::Local>,
-    _timer: Task<()>,
-}
-
-impl DateTimeClock {
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let focus_handle = cx.focus_handle();
-        let timer = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
-                _ = this.update(cx, |this, cx| {
-                    this.now = chrono::Local::now();
-                    cx.notify();
-                });
-            }
-        });
-        Self { focus_handle, now: chrono::Local::now(), _timer: timer }
-    }
-}
-
-impl Focusable for DateTimeClock {
-    fn focus_handle(&self, _: &App) -> FocusHandle { self.focus_handle.clone() }
-}
-
-impl Render for DateTimeClock {
-    fn render(&mut self, _window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .id("datetime-clock")
-            .track_focus(&self.focus_handle)
-            .child(self.now.format("%Y-%m-%d %H:%M:%S").to_string())
-    }
-}
-```
-
-> **Dep**: add `chrono` to `crates/ui/Cargo.toml` (or the `time` crate).
-> Recommended `chrono` (popular, easy format string).
+The timer spawns on the window context (`cx.spawn_in`) so it fires regardless of
+focus.
 
 ---
 
@@ -742,7 +743,7 @@ Per [`docs/agents/structure.md`](agents/structure.md):
 | `crates/ui/src/views/terminal/terminal_panel.rs` | `TerminalPanel` `impl Panel` + placeholder |
 | `crates/ui/src/views/session_tabs/tabs.rs` | `SessionPanel` `impl Panel` + placeholder |
 | `crates/ui/src/views/sftp/file_browser.rs` | `SftpPanel` `impl Panel` + placeholder |
-| `crates/ui/src/components/datetime_clock.rs` | `DateTimeClock` |
+| `crates/workspace/src/widgets/status_text.rs` | `StatusText` (clock, breadcrumb, net speed, resources) |
 | `crates/ui/src/state/app_state.rs` | `AppState` |
 
 ---
@@ -768,7 +769,7 @@ Per [`docs/agents/structure.md`](agents/structure.md):
 - [ ] `reset_default_layout`: center = tabs([TerminalPanel]), right_dock = v_split([Session, Sftp]).
 - [ ] `set_dock_collapsible(Edges{right:true, ..})`.
 - [ ] `load_layout` + version check + reset prompt.
-- [ ] `save_layout` (debounce 10s) + `save_state` + `on_app_quit` save.
+- [ ] `save_layout` (debounce) + `save_state` + synchronous exit save (`on_app_quit` / `on_release`).
 
 ### Step 4 — Title bar & menu
 
@@ -780,7 +781,7 @@ Per [`docs/agents/structure.md`](agents/structure.md):
 
 ### Step 5 — Status bar
 
-- [ ] `DateTimeClock` component (chrono, 1s timer).
+- [ ] Clock indicator (chrono, 1s timer).
 - [ ] `StatusBar::new().left(clock).right(toggle-right-dock button)`.
 - [ ] Add `chrono` to `crates/ui/Cargo.toml`.
 

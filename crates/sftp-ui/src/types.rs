@@ -1,8 +1,7 @@
 //! Types + helpers for the SFTP browser — sort state, transfer queue,
 //! column definitions, formatting.
-//!
-//! Split out from `file_browser.rs` to keep the file shorter.
 
+use std::cmp::Reverse;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Local, Utc};
@@ -12,7 +11,7 @@ use oneterm_core::FileEntry;
 // ── Sort state ───────────────────────────────────────────────
 
 /// Column to sort by.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum SortColumn {
     Name,
     Modified,
@@ -23,28 +22,10 @@ pub(crate) enum SortColumn {
 }
 
 /// Sort direction.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum SortDir {
     Asc,
     Desc,
-}
-
-// ── Pending action (for context menu → render execution) ─────
-
-/// Action triggered from the context menu, executed in `render()`.
-/// The context menu's `on_click` only has `&mut App`, not `&mut Window`,
-/// so use the pattern: set a flag → render() executes with full `&mut Window` + `&mut Context<Self>`.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub(crate) enum PendingAction {
-    Open(usize), // Navigate into a folder
-    Download,
-    Rename,
-    Delete,
-    Properties,
-    UploadFiles,
-    UploadFolder,
-    NewFolder,
-    Refresh,
 }
 
 // ── Helpers: formatting ──────────────────────────────────────
@@ -174,30 +155,37 @@ pub(crate) fn format_owner(name: Option<&str>, id: Option<u32>) -> String {
 ///
 /// `sort = None` → default: sort by Name asc (folder-first). `Some((col, dir))`
 /// → sort by that column. Folders always come before files regardless of sort state.
+///
+/// Name sorting is case-insensitive; the lowercase key is computed once per
+/// entry (`sort_by_cached_key`) rather than twice per comparison.
 pub(crate) fn sort_entries(entries: &mut [FileEntry], sort: Option<(SortColumn, SortDir)>) {
     let (col, dir) = sort.unwrap_or((SortColumn::Name, SortDir::Asc));
-    entries.sort_by(|a, b| {
-        // Always folders before files.
-        let folder_cmp = b.is_dir.cmp(&a.is_dir);
-        if folder_cmp != std::cmp::Ordering::Equal {
-            return folder_cmp;
+    // Folders first: `!is_dir` sorts `true` (files) after `false` (folders),
+    // independent of the direction applied to the column key.
+    match (col, dir) {
+        (SortColumn::Name, SortDir::Asc) => {
+            entries.sort_by_cached_key(|e| (!e.is_dir, e.name.to_lowercase()))
         }
-
-        // Same type (both folders or both files) → sort by col.
-        let col_cmp = match col {
-            SortColumn::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-            SortColumn::Modified => a.modified.cmp(&b.modified),
-            SortColumn::Size => a.size.cmp(&b.size),
-            SortColumn::Permissions => a.permissions.cmp(&b.permissions),
-            SortColumn::Owner => a.uid.cmp(&b.uid),
-            SortColumn::Group => a.gid.cmp(&b.gid),
-        };
-
-        match dir {
-            SortDir::Asc => col_cmp,
-            SortDir::Desc => col_cmp.reverse(),
+        (SortColumn::Name, SortDir::Desc) => {
+            entries.sort_by_cached_key(|e| (!e.is_dir, Reverse(e.name.to_lowercase())))
         }
-    });
+        (SortColumn::Modified, SortDir::Asc) => entries.sort_by_key(|e| (!e.is_dir, e.modified)),
+        (SortColumn::Modified, SortDir::Desc) => {
+            entries.sort_by_key(|e| (!e.is_dir, Reverse(e.modified)))
+        }
+        (SortColumn::Size, SortDir::Asc) => entries.sort_by_key(|e| (!e.is_dir, e.size)),
+        (SortColumn::Size, SortDir::Desc) => entries.sort_by_key(|e| (!e.is_dir, Reverse(e.size))),
+        (SortColumn::Permissions, SortDir::Asc) => {
+            entries.sort_by_key(|e| (!e.is_dir, e.permissions))
+        }
+        (SortColumn::Permissions, SortDir::Desc) => {
+            entries.sort_by_key(|e| (!e.is_dir, Reverse(e.permissions)))
+        }
+        (SortColumn::Owner, SortDir::Asc) => entries.sort_by_key(|e| (!e.is_dir, e.uid)),
+        (SortColumn::Owner, SortDir::Desc) => entries.sort_by_key(|e| (!e.is_dir, Reverse(e.uid))),
+        (SortColumn::Group, SortDir::Asc) => entries.sort_by_key(|e| (!e.is_dir, e.gid)),
+        (SortColumn::Group, SortDir::Desc) => entries.sort_by_key(|e| (!e.is_dir, Reverse(e.gid))),
+    }
 }
 
 // ── Column definitions ────────────────────────────────────────
@@ -216,19 +204,17 @@ impl SortColumn {
     }
 }
 
+/// Column resize limits (px), the same for every column.
+pub(crate) const COLUMN_MIN_WIDTH: f32 = 40.0;
+pub(crate) const COLUMN_MAX_WIDTH: f32 = 800.0;
+
 /// Definition of a column in the file list — display config + resize/visibility
 /// state (persisted to `docks.json`).
 #[derive(Clone, Debug)]
 pub(crate) struct SftpColumnConfig {
     pub col: SortColumn,
-    /// Sortable key string — matches `SortColumn::key`.
-    pub key: &'static str,
     /// Header label.
     pub label: &'static str,
-    /// Minimum width (px) — resize limit.
-    pub min_width: f32,
-    /// Maximum width (px) — resize limit.
-    pub max_width: f32,
     /// Right-align text (Size).
     pub right_align: bool,
     /// Whether the column is currently shown (show/hide config).
@@ -240,11 +226,8 @@ pub(crate) struct SftpColumnConfig {
 impl SftpColumnConfig {
     fn new(col: SortColumn, label: &'static str, default_width: f32, right_align: bool) -> Self {
         Self {
-            key: col.key(),
             col,
             label,
-            min_width: 40.0,
-            max_width: 800.0,
             right_align,
             visible: true,
             width: default_width,
@@ -302,4 +285,118 @@ pub(crate) struct TransferItem {
     pub progress: f64, // 0.0 – 1.0
     pub status: TransferStatus,
     pub error: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    use oneterm_core::RemotePath;
+
+    use super::*;
+
+    fn entry(name: &str, is_dir: bool, size: u64, mtime: u64) -> FileEntry {
+        FileEntry {
+            name: name.to_string(),
+            path: RemotePath::new("/d").join(name),
+            is_dir,
+            is_symlink: false,
+            size,
+            modified: Some(UNIX_EPOCH + Duration::from_secs(mtime)),
+            accessed: None,
+            permissions: 0o644,
+            uid: Some(1000),
+            gid: Some(1000),
+            owner: None,
+            group: None,
+        }
+    }
+
+    fn names(entries: &[FileEntry]) -> Vec<&str> {
+        entries.iter().map(|e| e.name.as_str()).collect()
+    }
+
+    #[test]
+    fn format_size_picks_the_largest_unit() {
+        assert_eq!(format_size(0), "0 B");
+        assert_eq!(format_size(1023), "1023 B");
+        assert_eq!(format_size(1024), "1.0 KB");
+        assert_eq!(format_size(1536), "1.5 KB");
+        assert_eq!(format_size(5 * 1024 * 1024), "5.0 MB");
+        assert_eq!(format_size(3 * 1024 * 1024 * 1024), "3.0 GB");
+        assert_eq!(format_size(2 * 1024 * 1024 * 1024 * 1024), "2.0 TB");
+    }
+
+    #[test]
+    fn format_permissions_shows_type_special_bits_and_octal() {
+        assert_eq!(format_permissions(0o100644), "-rw-r--r-- (0644)");
+        assert_eq!(format_permissions(0o040755), "drwxr-xr-x (0755)");
+        assert_eq!(format_permissions(0o120777), "lrwxrwxrwx (0777)");
+        // setuid/setgid with execute → `s`, without → `S`.
+        assert_eq!(format_permissions(0o104755), "-rwsr-xr-x (4755)");
+        assert_eq!(format_permissions(0o104644), "-rwSr--r-- (4644)");
+        assert_eq!(format_permissions(0o102755), "-rwxr-sr-x (2755)");
+        // Sticky bit with/without other-execute → `t` / `T`.
+        assert_eq!(format_permissions(0o041777), "drwxrwxrwt (1777)");
+        assert_eq!(format_permissions(0o041776), "drwxrwxrwT (1776)");
+        // Character device.
+        assert_eq!(format_permissions(0o020666), "crw-rw-rw- (0666)");
+    }
+
+    #[test]
+    fn format_owner_prefers_name_with_id() {
+        assert_eq!(format_owner(Some("root"), Some(0)), "root (0)");
+        assert_eq!(format_owner(Some("root"), None), "root");
+        assert_eq!(format_owner(None, Some(1000)), "1000");
+        assert_eq!(format_owner(None, None), "-");
+    }
+
+    #[test]
+    fn format_date_handles_missing_and_epoch_values() {
+        assert_eq!(format_date(None), "");
+        let text = format_date(Some(UNIX_EPOCH + Duration::from_secs(86_400 * 365)));
+        // Local time zone may shift the day, but the year and layout are stable.
+        assert_eq!(text.len(), "YYYY-MM-DD HH:MM".len());
+        assert!(text.starts_with("197"));
+    }
+
+    #[test]
+    fn default_sort_is_folders_first_then_case_insensitive_name() {
+        let mut entries = vec![
+            entry("zeta.txt", false, 1, 1),
+            entry("Beta", true, 0, 1),
+            entry("alpha.txt", false, 1, 1),
+            entry("alpha", true, 0, 1),
+        ];
+        sort_entries(&mut entries, None);
+        assert_eq!(
+            names(&entries),
+            vec!["alpha", "Beta", "alpha.txt", "zeta.txt"]
+        );
+    }
+
+    #[test]
+    fn descending_sort_keeps_folders_first() {
+        let mut entries = vec![
+            entry("small.txt", false, 1, 1),
+            entry("dir", true, 0, 1),
+            entry("big.txt", false, 100, 1),
+        ];
+        sort_entries(&mut entries, Some((SortColumn::Size, SortDir::Desc)));
+        assert_eq!(names(&entries), vec!["dir", "big.txt", "small.txt"]);
+
+        sort_entries(&mut entries, Some((SortColumn::Name, SortDir::Desc)));
+        assert_eq!(names(&entries), vec!["dir", "small.txt", "big.txt"]);
+    }
+
+    #[test]
+    fn modified_sort_orders_by_timestamp() {
+        let mut entries = vec![
+            entry("new.txt", false, 1, 300),
+            entry("old.txt", false, 1, 100),
+            entry("mid.txt", false, 1, 200),
+        ];
+        sort_entries(&mut entries, Some((SortColumn::Modified, SortDir::Asc)));
+        assert_eq!(names(&entries), vec!["old.txt", "mid.txt", "new.txt"]);
+    }
 }

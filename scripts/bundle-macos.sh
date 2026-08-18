@@ -13,7 +13,7 @@
 #
 # Usage:
 #   scripts/bundle-macos.sh <repo_root> <release_dir> <stage_dir>
-#     <repo_root>   - repo root (read VERSION + assets/macos/Info.plist, icons)
+#     <repo_root>   - repo root (read Cargo.toml version + assets/macos/Info.plist, icons)
 #     <release_dir> - directory containing the built `oneterm` binary
 #     <stage_dir>   - dist staging dir; OneTerm.app is created under it
 #
@@ -80,14 +80,27 @@ mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 cp "$EXE" "$CONTENTS/MacOS/oneterm"
 chmod +x "$CONTENTS/MacOS/oneterm"
 
-# Info.plist — substitute {{VERSION}} from the repo-root VERSION file.
-VERSION="$(tr -d '[:space:]' < "$REPO_ROOT/VERSION")"
+# Info.plist — substitute {{VERSION}} from [workspace.package] in Cargo.toml.
+VERSION="$(awk -F'"' '/^version = "/{print $2; exit}' "$REPO_ROOT/Cargo.toml")"
 sed "s/{{VERSION}}/$VERSION/g" \
   "$REPO_ROOT/crates/app/assets/macos/Info.plist" > "$CONTENTS/Info.plist"
 
 # App icon (best-effort).
 generate_icns "$REPO_ROOT/crates/app/assets/icons/terminal-96x96.ico" \
   "$CONTENTS/Resources/oneterm.icns"
+
+# Ad-hoc code signature (best-effort). An unsigned bundle built on one Mac may be
+# refused by Gatekeeper on another ("damaged"); an ad-hoc signature (identity "-")
+# is enough for a locally-run, non-notarised app. Only available on macOS.
+if command -v codesign >/dev/null 2>&1; then
+  if codesign --force --deep --sign - "$APP_BUNDLE" >/dev/null 2>&1; then
+    echo "  codesign: ad-hoc signature applied"
+  else
+    echo "  codesign failed — bundle left unsigned"
+  fi
+else
+  echo "  codesign not found — bundle left unsigned"
+fi
 
 echo "==> OneTerm.app assembled at: $APP_BUNDLE"
 ( cd "$STAGE" && find OneTerm.app -type f | sort )

@@ -11,10 +11,17 @@ on:
       - ".rustfmt.toml"
       - "README.md"
       - "AGENTS.md"
+      - "LICENSE"
+      - "NOTICE"
+      - "THIRD-PARTY-NOTICES.md"
+      - "deny.toml"
+      - "rust-toolchain.toml"
+      - ".gitattributes"
       - "docs/**"
       - "scripts/**"
       - "crates/**"
       - "vendor/**"
+      - ".github/**"
   pull_request:
     paths:
       - "Cargo.toml"
@@ -22,13 +29,26 @@ on:
       - ".rustfmt.toml"
       - "README.md"
       - "AGENTS.md"
+      - "LICENSE"
+      - "NOTICE"
+      - "THIRD-PARTY-NOTICES.md"
+      - "deny.toml"
+      - "rust-toolchain.toml"
+      - ".gitattributes"
       - "docs/**"
       - "scripts/**"
       - "crates/**"
       - "vendor/**"
+      - ".github/**"
 
 permissions:
   contents: read
+
+# One run per ref: a newer push to the same branch/PR cancels the in-progress run
+# (BUILD-28). Release builds have their own group in release.yml.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   dependency-graph:
@@ -40,27 +60,54 @@ jobs:
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
-      - name: Verify workspace policy
+      - name: Verify workspace policy and crate versions
         run: python scripts/verify-dependency-graph.py
       - name: Verify gpui-component vendor patch
         run: python scripts/check-ui-fork.py
+      - name: Verify vendored forks == pristine + patches
+        # Fetches the pristine vte / alacritty / gpui-component sources (network) and
+        # diffs them, patched, against vendor/**.
+        run: bash vendor/refresh.sh --check
+      - name: Validate completion catalogs
+        run: python scripts/completion-catalog.py validate
       - name: Verify architecture documentation paths
         run: python scripts/check-doc-paths.py
-      - name: Validate scale benchmark manifest
-        run: python scripts/benchmark-scale.py --list
+      - name: Verify THIRD-PARTY-NOTICES.md is current
+        # Offline: cargo metadata against Cargo.lock (no build). Also refuses a
+        # Cargo.lock that needs updating (--locked).
+        run: python scripts/third-party-notices.py --check
       - name: Test contributor-facing text checker
         run: python -m unittest scripts/test_check_english.py
       - name: Verify contributor-facing text language
         run: python scripts/check-english.py
+
+  cargo-deny:
+    name: Licenses, bans, advisories (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: cargo deny check
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check licenses bans advisories
 
   workspace-quality:
     name: Full workspace quality gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Read pinned toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+          [ -n "$channel" ] || { echo "::error::rust-toolchain.toml has no channel"; exit 1; }
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable, 2026-07-23
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 2026-07-23
         with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
           components: rustfmt, clippy
       - name: Cache cargo
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 tag, 2026-07-23
@@ -78,23 +125,57 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Lint workspace
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Build workspace
-        run: cargo build --workspace
+      # No separate `cargo build --workspace`: clippy --all-targets already
+      # type-checks every target and `cargo test` links them (BUILD-28).
       - name: Test workspace
         run: cargo test --workspace
 
-
-  cross-platform-tests:
-    name: Cross-platform backend tests (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+  windows-quality:
+    # Windows is the primary platform, so lint and run the whole workspace
+    # (including the GPUI-based UI crates) there as well.
+    name: Windows workspace quality gate
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Read pinned toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+          [ -n "$channel" ] || { echo "::error::rust-toolchain.toml has no channel"; exit 1; }
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable, 2026-07-23
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 2026-07-23
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+          components: clippy
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 tag, 2026-07-23
+      - name: Lint workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test workspace
+        run: cargo test --workspace
+
+  # Linux and Windows already run `cargo test --workspace` in the two quality
+  # gates above; macOS is the only platform without that coverage.
+  macos-tests:
+    name: macOS backend tests
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Read pinned toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+          [ -n "$channel" ] || { echo "::error::rust-toolchain.toml has no channel"; exit 1; }
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 2026-07-23
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
       - name: Cache cargo
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 tag, 2026-07-23
       - name: Test portable backend contracts

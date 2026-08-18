@@ -2,23 +2,21 @@
 //!
 //! Controls the terminal auto-completion overlay + in-session history. Defaults
 //! are chosen so the feature is **on and safe** out of the box
-//! (docs/auto-completion/06 §2). Every field uses `#[serde(default = …)]` so an
-//! old `terminal.json` without a `completion` block loads with defaults — the
-//! same pattern as `SecurityConfig`.
+//! (docs/auto-completion/06 §2). Each struct is `#[serde(default)]` so an old
+//! `terminal.json` without a `completion` block — or with only some of its
+//! fields — loads the rest from `Default`, the same pattern as `SecurityConfig`.
 
 use serde::{Deserialize, Serialize};
 
 /// Per-source enable toggles (docs 06 §2).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CompletionSources {
     /// In-session command history (`memory` source).
-    #[serde(default = "default_true")]
     pub memory: bool,
     /// Hand-authored bundled catalogs (`manual` source).
-    #[serde(default = "default_true")]
     pub manual: bool,
     /// Script-generated bundled catalogs (`external` source).
-    #[serde(default = "default_true")]
     pub external: bool,
 }
 
@@ -33,46 +31,34 @@ impl Default for CompletionSources {
 }
 
 /// The `completion` config group.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CompletionConfig {
     /// Master on/off for auto-completion.
-    #[serde(default = "default_true")]
     pub enabled: bool,
     /// Whether `Tab` accepts the selection (else `Tab` → shell).
-    #[serde(default = "default_true")]
     pub accept_tab: bool,
     /// Per-family in-session history capacity (`0` disables + clears history).
-    #[serde(default = "default_max_history")]
     pub max_history: usize,
     /// Minimum chars before command suggestions appear.
-    #[serde(default = "default_min_prefix_len")]
     pub min_prefix_len: usize,
     /// Rows shown in the overlay before scrolling.
-    #[serde(default = "default_max_visible_items")]
     pub max_visible_items: usize,
     /// Per-source toggles.
-    #[serde(default)]
     pub sources: CompletionSources,
     /// Allow fuzzy (subsequence) matches as a secondary pass.
-    #[serde(default = "default_true")]
     pub fuzzy: bool,
     /// In subcommand trees, also offer ancestor options (ranked lower).
-    #[serde(default = "default_true")]
     pub inherit_ancestor_options: bool,
     /// Suppress inside the alternate screen (TUIs).
-    #[serde(default = "default_true")]
     pub disable_in_alt_screen: bool,
     /// Only show inside the OSC 133 command-input region.
-    #[serde(default = "default_true")]
     pub require_prompt_region: bool,
     /// Let `Cmd`/`PowerShell` also suggest coreutils+linux commands.
-    #[serde(default = "default_false")]
     pub windows_allow_coreutils: bool,
     /// Override shell detection: `null | "cmd" | "powershell" | "unix"`.
-    #[serde(default)]
     pub force_family: Option<String>,
     /// Strip secret values before recording history (keep `true`).
-    #[serde(default = "default_true")]
     pub redact_sensitive: bool,
 }
 
@@ -81,9 +67,9 @@ impl Default for CompletionConfig {
         Self {
             enabled: true,
             accept_tab: true,
-            max_history: default_max_history(),
-            min_prefix_len: default_min_prefix_len(),
-            max_visible_items: default_max_visible_items(),
+            max_history: 500,
+            min_prefix_len: 1,
+            max_visible_items: 8,
             sources: CompletionSources::default(),
             fuzzy: true,
             inherit_ancestor_options: true,
@@ -94,22 +80,6 @@ impl Default for CompletionConfig {
             redact_sensitive: true,
         }
     }
-}
-
-fn default_true() -> bool {
-    true
-}
-fn default_false() -> bool {
-    false
-}
-fn default_max_history() -> usize {
-    500
-}
-fn default_min_prefix_len() -> usize {
-    1
-}
-fn default_max_visible_items() -> usize {
-    8
 }
 
 #[cfg(test)]

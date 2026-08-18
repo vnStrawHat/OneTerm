@@ -21,9 +21,11 @@ pub struct TerminalPanel {
 
 Constructors:
 
-- `TerminalPanel::new` — build a `SpaceTree` with a single `Terminal` leaf wrapping
-  the spawned `LocalSession` view (today's behavior, just wrapped in a one-leaf tree).
-- `from_session` — same, seeded with the provided `Box<dyn TerminalSession>`.
+- `TerminalPanel::open(PanelSpec::DefaultShell { .. } | PanelSpec::Shell(kind), …)` — build a
+  `SpaceTree` with a single `Terminal` leaf wrapping the spawned local session view
+  (a one-leaf tree; the tree starts empty when the spawn fails).
+- `TerminalPanel::open(PanelSpec::Session { session, title, duplicate_config }, …)` — same,
+  seeded with the provided `Box<dyn TerminalSession>` (SSH connect, duplicate).
 
 ## 2. Methods that must retarget to the active Space
 
@@ -34,7 +36,7 @@ These currently read `self.view`; they must read `self.tree.active_terminal(cx)`
 |---|---|---|
 | `view()` (Edit ▸ Find) | `&self.view` | active leaf's view (`Option`) |
 | `network_stats(cx)` | `self.view…network_stats()` | active terminal's, or `None` if empty |
-| `breadcrumb_label(cx)` | `self.view…breadcrumb_text()` | active terminal's, or `None` |
+| `breadcrumb_label(cx)` | `self.view…session.cwd()` as display text | active terminal's, or `None` |
 | `title()` live OSC title | `self.view…title()` | active terminal's title |
 | `_title_sub` | subscribes to the one view | re-subscribe to the active leaf's view when active changes |
 
@@ -55,7 +57,7 @@ fn set_active(&mut self, active: bool, window, cx) {
     if active {
         let session = self.tree.active_terminal(cx).map(|v| v.read(cx).session.clone());
         let (sftp, cwd_source, is_local) = match session {
-            Some(s) => { let s = s.read(cx); (s.sftp(), s.cwd_source(), s.is_local()) }
+            Some(s) => { let s = s.read(cx); (s.sftp(), s.cwd_source(), s.kind().is_local()) }
             None => (None, None, true),   // empty active Space → treat as local/no-sftp
         };
         AppState::global(cx).update(cx, |st, cx| { /* set fields */ cx.notify(); });

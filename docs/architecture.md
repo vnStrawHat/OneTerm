@@ -9,10 +9,10 @@ Use this page and `docs/agents/structure.md` when locating current implementatio
 | Layer | Crate | Current responsibility | Entry points |
 |---|---|---|---|
 | Domain | `oneterm-core` | Errors, SSH/local configuration, SFTP contracts | `crates/core/src/lib.rs`, `crates/core/src/sftp.rs` |
-| Terminal engine | `oneterm-terminal` | Terminal model, session contract, encoding, OSC, search | `crates/terminal/src/lib.rs`, `crates/terminal/src/model.rs`, `crates/terminal/src/contracts.rs` |
+| Terminal engine | `oneterm-terminal` | Terminal model, session contract, encoding, OSC, search | `crates/terminal/src/lib.rs`, `crates/terminal/src/model.rs`, `crates/terminal/src/session.rs` |
 | Completion engine | `oneterm-completion` | Auto-completion engine (gpui-free): embedded command catalogs, line parsing + subcommand resolution, matching/ranking, in-session history, secret redaction | `crates/completion/src/lib.rs`, `crates/completion/src/engine.rs`, `crates/completion/src/catalog.rs`, `crates/completion/src/history.rs`, `crates/completion/src/redact.rs` |
 | Shared services | `oneterm-settings` | Persistent terminal and UI settings | `crates/settings/src/lib.rs` |
-| Shared services | `oneterm-state` | App-scoped services, workspace state, typed dock persistence, Agent folded model, process-global completion history | `crates/state/src/lib.rs`, `crates/state/src/services.rs`, `crates/state/src/dock_persistence.rs`, `crates/state/src/agent_registry.rs`, `crates/state/src/completion_history.rs` |
+| Shared services | `oneterm-state` | App-scoped services, workspace state, typed dock persistence, registered dock panel names, Agent folded model, process-global completion history | `crates/state/src/lib.rs`, `crates/state/src/services.rs`, `crates/state/src/dock_persistence.rs`, `crates/state/src/panel_names.rs`, `crates/state/src/agent_registry.rs`, `crates/state/src/completion_history.rs` |
 | Shared services | `oneterm-update` | GitHub Releases auto-update service, release selection, download, verification, staging, and install orchestration | `crates/update/src/lib.rs`, `crates/update/src/config.rs`, `crates/update/src/github.rs`, `crates/update/src/archive.rs`, `crates/update/src/install.rs` |
 | Vendor patch | `gpui-component` | Pinned upstream UI crate with the reviewed source and standalone-manifest patches | `vendor/README.md`, `vendor/patches/gpui-component/` |
 | Shell | `oneterm-workspace` | Feature-agnostic window, layout, dock persistence, status bar | `crates/workspace/src/lib.rs`, `crates/workspace/src/layout/` |
@@ -36,8 +36,8 @@ uses command/panel registries rather than importing feature implementations.
 `gpui-component` remains an external dependency in every crate manifest. The root
 Cargo `[patch]` redirects that dependency to `vendor/gpui-component`; the vendor
 package is not a OneTerm workspace member and does not create an internal UI layer.
-Shared action contracts use `oneterm_core::DockPlacement`, and only the workspace
-shell maps that domain value to `gpui_component::dock::DockPlacement`.
+Shared action contracts stay GPUI-free; only the workspace shell touches
+`gpui_component::dock::DockPlacement`.
 
 The machine-readable dependency policy and verification commands are in
 [`docs/agents/crate-dependency-rules.md`](agents/crate-dependency-rules.md), and the
@@ -45,13 +45,44 @@ CI entry point is [`scripts/verify-dependency-graph.py`](../scripts/verify-depen
 
 ## Service registration
 
-`oneterm_state::AppServices` is the single application-scoped service bundle. The
-composition root constructs the backend-neutral `SessionFactory` implementation and
-workspace command callbacks, installs them together, rejects duplicate registration,
-and validates availability during startup. Feature crates retrieve only the handle
-they need through GPUI application context; they do not own registries or backend
-construction. Workspace active terminal and SFTP state remains keyed by DockArea,
+`oneterm_state::AppServices` is the single application-scoped service bundle and
+the only injection registry. The composition root (`crates/app/src/init.rs`)
+constructs the backend-neutral `SessionFactory` and the `WorkspaceCommands`
+callbacks, collects the cross-feature hooks each feature exposes
+(`oneterm_terminal_view::status_metrics` — the `ActiveTerminalMetricsProvider`
+read by the status-bar widgets — and `oneterm_terminal_view::agent_focuser`, the
+`AgentFocuser` used by the Agent Panel), and installs them all with
+`AppServices::install`, which rejects duplicate registration.
+
+Consumers read handles through `AppServices::global(cx)` (or the typed accessors
+`session_factory` / `workspace_commands` / `active_terminal::breadcrumb` /
+`agent_focus::focus_terminal`). Presence is a startup invariant: a missing bundle
+panics with a precise message per the error policy, so shell handlers carry no
+`Option` fallbacks. Feature crates do not own registries or backend construction.
+Workspace active terminal and SFTP state remains keyed by DockArea (`AppState`),
 while durable settings and persistence policy remain process-wide where documented.
+
+Shared globals follow one init contract: `AppState::init`, `UiConfig::init`,
+`TerminalSettings::init`, `AgentRegistry::init` and `GlobalCompletionHistory::init`
+are idempotent — the first call installs, later calls are no-ops. Only the
+composition root calls them; the shell assumes they exist.
+
+The exit-time `docks.json` write is owned by the shell: `OneTermWorkspace`
+registers an entity-bound `on_app_quit` (quit while the window is open) and an
+`on_release` hook (window closed by the user, which drops the root view before
+`cx.quit()`); whichever runs first writes the layout synchronously so the write
+cannot be lost to process exit (CORR-04). `AppState` carries no mirrors for it.
+
+Dock panels are registered with the gpui-component `PanelRegistry` by their owning
+feature's `init()` (R12) and built by the shell *by name* (R4). The registered
+names are string constants in `crates/state/src/panel_names.rs`
+(`oneterm_state::panel_names::{TERMINAL, SFTP, SESSION,
+SSH_CLIENT, AGENT}`, plus `ALL`); the mapping from `oneterm_core::RightDockMode`
+to a panel name is `panel_names::right_dock_panel_name` so `core` stays panel-agnostic.
+Saved layouts deserialize by these names, so the string values are a persisted
+contract. `oneterm_workspace`'s `build_named_panel` logs an error (with the known
+name list) whenever a requested name is not registered instead of silently rendering
+the placeholder panel.
 
 ## Ownership shortcuts
 

@@ -4,10 +4,41 @@ use std::time::{Duration, Instant};
 
 use alacritty_terminal::selection::SelectionType;
 use oneterm_terminal::mouse_encode::{MouseModifiers, TerminalMouseButton};
-use oneterm_terminal::{TerminalError, TerminalSession};
+use oneterm_terminal::{
+    SessionKind, TerminalError, TerminalIme, TerminalInput, TerminalLifecycle, TerminalRender,
+    TerminalSecurityPolicy,
+};
 
-use crate::session::LocalSession;
+use crate::session::{LocalSession, quote_windows_argument};
 use oneterm_terminal::PtySize;
+
+#[test]
+fn program_path_with_spaces_is_quoted_for_conpty() {
+    assert_eq!(
+        quote_windows_argument(r"C:\Program Files\PowerShell\7\pwsh.exe"),
+        r#""C:\Program Files\PowerShell\7\pwsh.exe""#
+    );
+    // A trailing backslash must be doubled so it does not escape the closing quote.
+    assert_eq!(
+        quote_windows_argument(r"C:\Program Files\"),
+        r#""C:\Program Files\\""#
+    );
+    assert_eq!(quote_windows_argument(""), r#""""#);
+}
+
+#[test]
+fn cmd_utf8_command_line_stays_verbatim_under_escaping() {
+    // `cmd /K chcp 65001 >nul`: neither the program nor the arguments contain
+    // whitespace or quotes, so CRT escaping leaves cmd.exe's `/K` command line
+    // untouched — this is why `escape_args` can be enabled unconditionally.
+    assert_eq!(
+        quote_windows_argument(r"C:\Windows\System32\cmd.exe"),
+        r"C:\Windows\System32\cmd.exe"
+    );
+    for arg in ["/K", "chcp", "65001", ">nul"] {
+        assert_eq!(quote_windows_argument(arg), arg);
+    }
+}
 
 fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + timeout;
@@ -32,7 +63,13 @@ fn snapshot_contains(session: &LocalSession, needle: &str) -> bool {
 
 fn spawn_default() -> LocalSession {
     let cfg = oneterm_core::LocalShellConfig::default();
-    LocalSession::spawn(cfg, PtySize { rows: 24, cols: 80 }, 10_000).expect("spawn")
+    LocalSession::spawn(
+        cfg,
+        PtySize { rows: 24, cols: 80 },
+        10_000,
+        TerminalSecurityPolicy::default(),
+    )
+    .expect("spawn")
 }
 
 #[cfg(windows)]
@@ -41,8 +78,13 @@ fn assert_powershell_prompt_emits_cwd(kind: oneterm_core::ShellKind, label: &str
         kind,
         ..Default::default()
     };
-    let session = LocalSession::spawn(cfg, PtySize { rows: 24, cols: 80 }, 10_000)
-        .unwrap_or_else(|error| panic!("spawn {label}: {error}"));
+    let session = LocalSession::spawn(
+        cfg,
+        PtySize { rows: 24, cols: 80 },
+        10_000,
+        TerminalSecurityPolicy::default(),
+    )
+    .unwrap_or_else(|error| panic!("spawn {label}: {error}"));
 
     let emitted_cwd = wait_until(Duration::from_secs(15), || session.cwd().is_some());
     let snapshot = session
@@ -90,19 +132,72 @@ fn trait_snapshot_bounds() {
 fn trait_alive_is_local_close() {
     let s = spawn_default();
     assert!(s.alive());
-    assert!(s.is_local());
+    assert_eq!(s.kind(), SessionKind::Local);
     s.close().expect("close and join PTY owner");
     assert_eq!(s.write(b"after-close"), Err(TerminalError::Closed));
     assert!(wait_until(Duration::from_secs(2), || !s.alive()));
 }
 
+/// CORR-10: `close()` must not join the PTY owner thread on the caller's
+/// thread. Hold the `Term` lock (which the owner needs to make progress) and
+/// require `close()` to return promptly regardless; the reaper thread joins
+/// the owner afterwards.
 #[test]
-fn trait_subscribe_returns_receiver() {
+fn close_returns_without_joining_the_owner_thread() {
     let s = spawn_default();
-    let _rx = s.subscribe();
-    // 2nd subscribe → closed channel (recv → Err Closed) but no panic.
-    let rx2 = s.subscribe();
-    assert!(rx2.recv_blocking().is_err());
+    let _ = s.write(b"echo hold\r");
+    let guard = s.term.lock();
+    let started = Instant::now();
+    s.close().expect("close must succeed");
+    let elapsed = started.elapsed();
+    drop(guard);
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "close() blocked for {elapsed:?} — it must hand the owner thread to the reaper"
+    );
+    assert!(
+        s.owner_join.lock().unwrap().is_none(),
+        "the join handle must have been handed off"
+    );
+    assert!(wait_until(Duration::from_secs(2), || !s.alive()));
+}
+
+/// ARCH-06: a program that cannot be started reports a typed
+/// `ShellResolution` error naming the program.
+#[cfg(windows)]
+#[test]
+fn spawn_failure_is_a_typed_shell_resolution_error() {
+    let cfg = oneterm_core::LocalShellConfig {
+        kind: oneterm_core::ShellKind::Custom,
+        program: Some(std::path::PathBuf::from(
+            r"C:\oneterm-does-not-exist\no-such-shell.exe",
+        )),
+        ..Default::default()
+    };
+    let error = LocalSession::spawn(
+        cfg,
+        PtySize { rows: 24, cols: 80 },
+        10_000,
+        TerminalSecurityPolicy::default(),
+    )
+    .err()
+    .expect("spawning a missing program must fail");
+    match error {
+        oneterm_core::AppError::ShellResolution { shell, .. } => {
+            assert!(shell.contains("no-such-shell.exe"), "{shell}");
+        }
+        other => panic!("expected ShellResolution, got {other:?}"),
+    }
+}
+
+#[test]
+fn trait_take_events_hands_out_the_receiver_once() {
+    let s = spawn_default();
+    let first = s.take_events();
+    assert!(first.is_some());
+    // The single receiver is gone: a second consumer gets nothing instead of
+    // a dead channel that would silently miss every event.
+    assert!(s.take_events().is_none());
     let _ = s.close();
 }
 
@@ -122,22 +217,6 @@ fn trait_ime_commit_writes_and_clears_marked() {
     assert_eq!(s.marked_text().as_deref(), Some("x"));
     s.commit_text("hello");
     assert_eq!(s.marked_text(), None);
-    let _ = s.close();
-}
-
-#[test]
-fn trait_cursor_bounds_needs_cell_size() {
-    let s = spawn_default();
-    // Cell size not set yet → None.
-    assert_eq!(s.cursor_bounds(), None);
-    s.set_cell_size(8.0, 16.0);
-    let b = s.cursor_bounds();
-    // Cursor is visible by default (mock shows the cursor). May be None if Hidden.
-    // At minimum it must not panic and must return the correct shape when present.
-    if let Some(cb) = b {
-        assert_eq!(cb.width, 8.0);
-        assert_eq!(cb.height, 16.0);
-    }
     let _ = s.close();
 }
 
@@ -238,14 +317,6 @@ fn trait_wheel_scroll_does_not_panic() {
     let s = spawn_default();
     s.wheel(3.0, 0.0, 0.0, MouseModifiers::default());
     s.wheel(-3.0, 0.0, 0.0, MouseModifiers::default());
-    let _ = s.close();
-}
-
-#[test]
-fn set_cell_size_stores() {
-    let s = spawn_default();
-    s.set_cell_size(7.5, 15.0);
-    assert_eq!(*s.cell_width.lock().unwrap(), 7.5);
     let _ = s.close();
 }
 

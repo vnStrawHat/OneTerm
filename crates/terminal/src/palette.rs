@@ -103,22 +103,42 @@ pub fn resolve_color(c: &Color, palette: &TerminalPalette) -> Rgb {
 }
 
 fn resolve_named(nc: NamedColor, palette: &TerminalPalette) -> Rgb {
-    let idx = nc as u32;
-    match idx {
-        // 16 ANSI colors (0-15) — honor OSC 4 overrides.
-        0..=15 => palette.ansi_color(idx as usize),
-        // Foreground / Background / Cursor.
-        256 => palette.foreground,
-        257 => palette.background,
-        258 => palette.cursor,
-        // Dim variants (259-266) → dim of the corresponding normal color
-        // (using the OSC 4 override if present).
-        259..=266 => palette.dim(palette.ansi_color((idx - 259) as usize)),
-        // BrightForeground → foreground (no separate bright fg in the palette).
-        267 => palette.foreground,
-        // DimForeground → dim(foreground).
-        268 => palette.dim(palette.foreground),
-        _ => palette.foreground,
+    match nc {
+        // 16 ANSI colors — honor OSC 4 overrides.
+        NamedColor::Black
+        | NamedColor::Red
+        | NamedColor::Green
+        | NamedColor::Yellow
+        | NamedColor::Blue
+        | NamedColor::Magenta
+        | NamedColor::Cyan
+        | NamedColor::White
+        | NamedColor::BrightBlack
+        | NamedColor::BrightRed
+        | NamedColor::BrightGreen
+        | NamedColor::BrightYellow
+        | NamedColor::BrightBlue
+        | NamedColor::BrightMagenta
+        | NamedColor::BrightCyan
+        | NamedColor::BrightWhite => palette.ansi_color(nc as usize),
+        NamedColor::Foreground => palette.foreground,
+        NamedColor::Background => palette.background,
+        NamedColor::Cursor => palette.cursor,
+        // Dim variants → dim of the corresponding normal color (using the
+        // OSC 4 override if present).
+        NamedColor::DimBlack
+        | NamedColor::DimRed
+        | NamedColor::DimGreen
+        | NamedColor::DimYellow
+        | NamedColor::DimBlue
+        | NamedColor::DimMagenta
+        | NamedColor::DimCyan
+        | NamedColor::DimWhite => {
+            palette.dim(palette.ansi_color(nc as usize - NamedColor::DimBlack as usize))
+        }
+        // No separate bright foreground in the palette.
+        NamedColor::BrightForeground => palette.foreground,
+        NamedColor::DimForeground => palette.dim(palette.foreground),
     }
 }
 

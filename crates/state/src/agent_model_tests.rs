@@ -1,6 +1,6 @@
 use super::*;
 use oneterm_terminal::{
-    ApprovalEvent, FileEvent, ModelEvent, StateEvent, ToolCallEvent, ToolCallPhase,
+    AgentPayload, ApprovalEvent, FileEvent, ModelEvent, StateEvent, ToolCallEvent, ToolCallPhase,
 };
 
 fn card() -> AgentCard {
@@ -35,15 +35,15 @@ fn card_keeps_space_number_separate_from_sort_order() {
 }
 
 fn state_ev(seq: u64, state: AgentState, msg: Option<&str>) -> AgentStatusEvent {
-    AgentStatusEvent::State {
+    AgentStatusEvent {
         agent: "pi".into(),
         seq,
         ts: seq * 1000,
-        payload: StateEvent {
+        payload: AgentPayload::State(StateEvent {
             state,
             message: msg.map(|s| s.to_string()),
             session_id: None,
-        },
+        }),
     }
 }
 
@@ -76,11 +76,11 @@ fn done_state_marks_ended() {
 #[test]
 fn tool_call_start_update_end_folds_to_recent() {
     let mut c = card();
-    c.apply_event(&AgentStatusEvent::ToolCall {
+    c.apply_event(&AgentStatusEvent {
         agent: "pi".into(),
         seq: 1,
         ts: 1,
-        payload: ToolCallEvent {
+        payload: AgentPayload::ToolCall(ToolCallEvent {
             tool_call_id: "t1".into(),
             tool: "bash".into(),
             phase: ToolCallPhase::Start,
@@ -93,14 +93,14 @@ fn tool_call_start_update_end_folds_to_recent() {
             duration_ms: None,
             diff_stat: None,
             progress: None,
-        },
+        }),
     });
     assert!(c.current_tool.is_some());
-    c.apply_event(&AgentStatusEvent::ToolCall {
+    c.apply_event(&AgentStatusEvent {
         agent: "pi".into(),
         seq: 2,
         ts: 2,
-        payload: ToolCallEvent {
+        payload: AgentPayload::ToolCall(ToolCallEvent {
             tool_call_id: "t1".into(),
             tool: "bash".into(),
             phase: ToolCallPhase::End,
@@ -113,7 +113,7 @@ fn tool_call_start_update_end_folds_to_recent() {
             duration_ms: Some(42),
             diff_stat: None,
             progress: None,
-        },
+        }),
     });
     assert!(c.current_tool.is_none());
     assert_eq!(c.recent_tools.len(), 1);
@@ -123,16 +123,16 @@ fn tool_call_start_update_end_folds_to_recent() {
 #[test]
 fn file_feed_dedups_consecutive() {
     let mut c = card();
-    let mk = |seq| AgentStatusEvent::File {
+    let mk = |seq| AgentStatusEvent {
         agent: "pi".into(),
         seq,
         ts: seq,
-        payload: FileEvent {
+        payload: AgentPayload::File(FileEvent {
             path: "src/app.rs".into(),
             action: FileAction::Edit,
             tool_call_id: None,
             dest: None,
-        },
+        }),
     };
     c.apply_event(&mk(1));
     c.apply_event(&mk(2));
@@ -142,11 +142,11 @@ fn file_feed_dedups_consecutive() {
 #[test]
 fn approval_sets_and_resolves() {
     let mut c = card();
-    c.apply_event(&AgentStatusEvent::Approval {
+    c.apply_event(&AgentStatusEvent {
         agent: "pi".into(),
         seq: 1,
         ts: 1,
-        payload: ApprovalEvent {
+        payload: AgentPayload::Approval(ApprovalEvent {
             id: "a1".into(),
             kind: ApprovalKind::Confirm,
             prompt: "ok?".into(),
@@ -157,7 +157,7 @@ fn approval_sets_and_resolves() {
             risk: Some(ApprovalRisk::High),
             timeout_ms: None,
             choices: None,
-        },
+        }),
     });
     assert!(c.pending_approval.is_some());
     // A non-blocked state clears the pending approval.
@@ -168,11 +168,11 @@ fn approval_sets_and_resolves() {
 #[test]
 fn model_fold_keeps_latest_context_used() {
     let mut c = card();
-    let mk = |seq, used| AgentStatusEvent::Model {
+    let mk = |seq, used| AgentStatusEvent {
         agent: "pi".into(),
         seq,
         ts: seq,
-        payload: ModelEvent {
+        payload: AgentPayload::Model(ModelEvent {
             provider: "anthropic".into(),
             model_id: "claude".into(),
             model_name: Some("Claude".into()),
@@ -181,7 +181,7 @@ fn model_fold_keeps_latest_context_used() {
             reasoning: Some(true),
             source: None,
             context_used: Some(used),
-        },
+        }),
     };
     c.apply_event(&mk(1, 1000));
     c.apply_event(&mk(2, 2000));

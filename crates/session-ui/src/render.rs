@@ -15,17 +15,22 @@ use super::tree_builder::session_matches;
 impl Render for SessionPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let sessions = self.store.read(cx).sessions().to_vec();
         let focus = self.focus_handle.clone();
         let search_state = self.search_state.clone();
 
         // Current search query — check whether there are any results.
         let query = self.search_state.read(cx).value().to_string();
         let q = query.trim().to_lowercase();
-        let has_results = if q.is_empty() {
-            !sessions.is_empty()
-        } else {
-            sessions.iter().any(|s| session_matches(s, &q))
+        let (has_sessions, has_results) = {
+            let sessions = self.store.read(cx).sessions();
+            let has_results = if q.is_empty() {
+                !sessions.is_empty()
+            } else {
+                sessions
+                    .iter()
+                    .any(|entry| session_matches(&entry.session, &q))
+            };
+            (!sessions.is_empty(), has_results)
         };
 
         // Header: search input + new-session button.
@@ -99,13 +104,9 @@ impl Render for SessionPanel {
                     .id("session-list")
                     .flex_1()
                     .min_h_0()
-                    .when(sessions.is_empty(), |t| t.child(empty))
-                    .when(!sessions.is_empty() && !has_results, |t| {
-                        t.child(no_results)
-                    })
-                    .when(!sessions.is_empty() && has_results, |t| {
-                        t.child(tree_widget)
-                    }),
+                    .when(!has_sessions, |t| t.child(empty))
+                    .when(has_sessions && !has_results, |t| t.child(no_results))
+                    .when(has_sessions && has_results, |t| t.child(tree_widget)),
             )
     }
 }

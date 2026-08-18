@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "sessions": [
+    {
+      "label": "alpha",
+      "host": "alpha.example.test",
+      "port": 22,
+      "group": null
+    },
+    {
+      "label": "beta",
+      "host": "beta.example.test",
+      "port": 2200,
+      "username": "deploy",
+      "auth_method": "private_key",
+      "key_path": "/keys/beta",
+      "color": "#112233",
+      "group": "infra"
+    },
+    {
+      "label": "gamma",
+      "host": "gamma.example.test",
+      "port": 22,
+      "username": "root",
+      "group": "infra"
+    }
+  ]
+}

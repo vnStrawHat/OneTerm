@@ -1,61 +1,18 @@
 //! The live `TerminalSettings` model — global shell config + rendering options.
 //!
 //! The config is loaded from `terminal.json` (see [`crate::terminal_config`]) at
-//! init. `TerminalSettingsPanel` updates the shell kind → notify.
+//! init.
 //!
 //! The reverse mapping (settings → config) and persistence live in
-//! [`super::persist`]; config → settings in [`super::apply`].
+//! [`super::persist`]; config → settings in [`super::apply`]. Defaults are
+//! single-sourced in [`TerminalConfig::default`].
 
 use gpui::{App, AppContext, Entity, FontWeight, Global, Hsla, SharedString};
 use oneterm_core::LocalShellConfig;
 
-use crate::terminal_config::{SemanticHighlightingMode, TabTitleMode, TerminalConfig};
-
-/// Live mirror of the `completion` config group (docs/auto-completion/06).
-///
-/// A plain resolved copy the `terminal-view` layer projects into the engine's
-/// `CompletionParams` (keeping the engine free of a `settings` dependency).
-#[derive(Debug, Clone, PartialEq)]
-pub struct CompletionSettings {
-    pub enabled: bool,
-    pub accept_tab: bool,
-    pub max_history: usize,
-    pub min_prefix_len: usize,
-    pub max_visible_items: usize,
-    pub source_memory: bool,
-    pub source_manual: bool,
-    pub source_external: bool,
-    pub fuzzy: bool,
-    pub inherit_ancestor_options: bool,
-    pub disable_in_alt_screen: bool,
-    pub require_prompt_region: bool,
-    pub windows_allow_coreutils: bool,
-    pub force_family: Option<String>,
-    pub redact_sensitive: bool,
-}
-
-impl Default for CompletionSettings {
-    fn default() -> Self {
-        // Mirrors CompletionConfig::default().
-        Self {
-            enabled: true,
-            accept_tab: true,
-            max_history: 500,
-            min_prefix_len: 1,
-            max_visible_items: 8,
-            source_memory: true,
-            source_manual: true,
-            source_external: true,
-            fuzzy: true,
-            inherit_ancestor_options: true,
-            disable_in_alt_screen: true,
-            require_prompt_region: true,
-            windows_allow_coreutils: false,
-            force_family: None,
-            redact_sensitive: true,
-        }
-    }
-}
+use crate::terminal_config::{
+    CompletionConfig, SemanticHighlightingMode, TabTitleMode, TerminalConfig,
+};
 
 /// Terminal cursor shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -91,7 +48,7 @@ pub enum TerminalBlink {
 }
 
 /// Padding on all 4 sides for the terminal content (px).
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct TerminalPadding {
     pub top: f32,
     pub right: f32,
@@ -100,7 +57,7 @@ pub struct TerminalPadding {
 }
 
 /// Color overrides — if `Some`, override the theme; `None` = use the theme.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ColorOverrides {
     pub foreground: Option<Hsla>,
     pub background: Option<Hsla>,
@@ -111,11 +68,15 @@ pub struct ColorOverrides {
     pub clock_fg: Option<Hsla>,
     pub line_number_fg: Option<Hsla>,
     pub min_contrast: f32,
-    pub ansi: Vec<Hsla>,
+    /// ANSI-16 overrides by slot; `None` keeps the theme colour for that slot.
+    /// One invalid entry in `terminal.json` therefore never shifts the colours
+    /// after it (CORR-60).
+    pub ansi: Vec<Option<Hsla>>,
 }
 
 /// Global terminal config (shell + rendering options).
 /// Loaded from `terminal.json` at init.
+#[derive(Debug, Clone)]
 pub struct TerminalSettings {
     // ── Shell ──
     pub shell: LocalShellConfig,
@@ -158,6 +119,8 @@ pub struct TerminalSettings {
     /// Show OneTerm's context menu on right click.
     /// Disable this to let CLI apps receive right click directly.
     pub show_context_menu: bool,
+    /// Copy the selection to the clipboard when the mouse button is released.
+    pub copy_on_select: bool,
 
     // ── Tab title ──
     /// How the terminal tab title is determined: static label ("Terminal" /
@@ -189,36 +152,19 @@ pub struct TerminalSettings {
 
     // ── Completion ──
     /// Live mirror of the `completion` config group.
-    pub completion: CompletionSettings,
+    pub completion: CompletionConfig,
+
+    /// `terminal.json` existed but could not be read at startup (e.g. permission
+    /// denied), so these are built-in defaults and must not be written back
+    /// over a possibly valid file (CORR-61). Never persisted.
+    pub persist_blocked: bool,
 }
 
 impl Default for TerminalSettings {
+    /// The live defaults are the `terminal.json` defaults — single-sourced in
+    /// [`TerminalConfig::default`] (see [`TerminalSettings::from_config`]).
     fn default() -> Self {
-        Self {
-            shell: LocalShellConfig::default(),
-            font_family: None,
-            font_size: None,
-            base_font_size: None,
-            font_weight: FontWeight::default(),
-            font_features: Vec::new(),
-            cursor_shape: TerminalCursorShape::Block,
-            cursor_blink: TerminalBlink::On,
-            cursor_color: None,
-            line_height_factor: 1.2,
-            cell_width: None,
-            padding: TerminalPadding::default(),
-            show_gutter: false,
-            semantic_highlighting: SemanticHighlightingMode::Auto,
-            tab_title_mode: TabTitleMode::Default,
-            show_context_menu: true,
-            scroll_multiplier: 1.0,
-            alternate_scroll: true,
-            scrollback_history: 10_000,
-            bell_enabled: true,
-            allow_clipboard_read: false,
-            color_overrides: ColorOverrides::default(),
-            completion: CompletionSettings::default(),
-        }
+        Self::from_config(&TerminalConfig::default())
     }
 }
 
@@ -233,14 +179,23 @@ impl TerminalSettings {
         cx.global::<TerminalSettingsGlobal>().0.clone()
     }
 
-    /// Initialize the global — load `terminal.json` and apply it (called from `ui::init`).
+    /// Initialize the global — load `terminal.json` once (called from the
+    /// composition root). Idempotent: later calls keep the loaded entity.
     pub fn init(cx: &mut App) {
-        let cfg = TerminalConfig::load();
-        let entity = cx.new(|_| {
-            let mut settings = Self::default();
-            settings.apply_config(&cfg);
-            settings
-        });
+        if cx.has_global::<TerminalSettingsGlobal>() {
+            return;
+        }
+        let settings = match TerminalConfig::load() {
+            Ok(config) => Self::from_config(&config),
+            Err(error) => {
+                log::error!("{error}; using defaults and refusing to overwrite the file");
+                Self {
+                    persist_blocked: true,
+                    ..Self::default()
+                }
+            }
+        };
+        let entity = cx.new(|_| settings);
         cx.set_global(TerminalSettingsGlobal(entity));
     }
 }

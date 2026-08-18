@@ -30,11 +30,46 @@ pub(crate) struct LayoutRect {
     pub color: Hsla,
 }
 
+/// The per-cell text attributes that decide whether two adjacent cells can
+/// share one text run. Kept separate from `gpui::TextRun` so the per-cell
+/// comparison in `layout_row` compares a few plain fields instead of a whole
+/// `Font` (PERF-13); the `Font` is built once per run.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct CellTextStyle {
+    pub color: Hsla,
+    pub weight: gpui::FontWeight,
+    pub style: gpui::FontStyle,
+    pub underline: Option<gpui::UnderlineStyle>,
+    pub strikethrough: Option<gpui::StrikethroughStyle>,
+}
+
+impl CellTextStyle {
+    /// Build the `TextRun` for a run of `len` bytes in this style on top of
+    /// `base_font`.
+    pub(crate) fn text_run(&self, base_font: &gpui::Font, len: usize) -> TextRun {
+        TextRun {
+            len,
+            color: self.color,
+            background_color: None,
+            font: gpui::Font {
+                weight: self.weight,
+                style: self.style,
+                ..base_font.clone()
+            },
+            underline: self.underline,
+            strikethrough: self.strikethrough,
+        }
+    }
+}
+
 /// Batched text run (consecutive cells with the same style on the same line).
 pub(crate) struct BatchedTextRun {
     pub start: LayoutPoint,
     pub text: String,
     pub cell_count: usize,
+    /// The attributes every cell in the run shares (`can_append` compares
+    /// against this, never against `style.font`).
+    pub cell_style: CellTextStyle,
     pub style: TextRun,
 }
 
@@ -68,6 +103,9 @@ pub(crate) struct CursorPaint {
     pub point: LayoutPoint,
     pub color: Hsla,
     pub shape: alacritty_terminal::vte::ansi::CursorShape,
+    /// The character under the cursor and the colour to re-paint it in over a
+    /// filled block cursor (the cell background). `None` for blank cells.
+    pub glyph: Option<(char, Hsla)>,
 }
 
 /// A box-drawing cell that will be drawn with a primitive fill.
@@ -113,7 +151,6 @@ pub(crate) struct FrameStats {
     pub text_run_paints: usize,
     pub bg_rect_count: usize,
     pub hash_calls: usize,
-    pub allocation_buffer_sites: usize,
     pub frame_count: u64,
     /// Wall-clock time of the prepaint phase (layout + shaping + snapshot), µs.
     pub prepaint_us: u128,
@@ -219,6 +256,9 @@ pub(crate) struct RowLayoutCache {
     /// Cached URL masks from the last frame with dirty rows (PERF-09).
     /// Reused when the terminal is idle to avoid scanning all cells.
     pub cached_url_masks: Vec<Vec<bool>>,
+    /// Per-row dirty flags for the current frame (PERF-10: a reusable bitset
+    /// instead of a fresh `HashSet<usize>` per frame).
+    pub dirty_rows: Vec<bool>,
     /// Rolling p95/p99 source data; omitted from normal production builds.
     #[cfg(any(test, feature = "terminal-diagnostics"))]
     pub latency_samples: LatencySamples,
@@ -236,6 +276,7 @@ impl RowLayoutCache {
             prev_display_offset: 0,
             prev_style_key: None,
             cached_url_masks: Vec::new(),
+            dirty_rows: Vec::new(),
             #[cfg(any(test, feature = "terminal-diagnostics"))]
             latency_samples: LatencySamples::default(),
             #[cfg(feature = "terminal-diagnostics")]
@@ -261,12 +302,75 @@ impl Default for RowLayoutCache {
     }
 }
 
-/// Bundle of render cache state — persisted across frames on `LocalTerminalView`,
-/// passed to prepaint as a single unit (ARCH-06).
-pub(crate) struct TerminalRenderCache {
-    pub row_cache: std::rc::Rc<std::cell::RefCell<RowLayoutCache>>,
-    pub cached_gutter:
-        std::rc::Rc<std::cell::RefCell<Option<(Pixels, usize, Pixels, SharedString)>>>,
-    pub last_grid_size: std::rc::Rc<std::cell::RefCell<Option<(u16, u16)>>>,
-    pub metrics: std::rc::Rc<std::cell::RefCell<GridMetrics>>,
+/// Cached gutter width plus the inputs it was computed from. Recomputing
+/// only when `num_digits`, font size, or font family change avoids a
+/// `shape_line` per frame and the gutter-width oscillation that caused a
+/// resize loop with TUI apps.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct GutterCache {
+    pub width: Pixels,
+    pub num_digits: usize,
+    pub font_size: Pixels,
+    pub font_family: SharedString,
+}
+
+impl GutterCache {
+    /// Whether the cached width is still valid for these inputs.
+    pub(crate) fn matches(&self, num_digits: usize, font_size: Pixels, font_family: &str) -> bool {
+        self.num_digits == num_digits
+            && self.font_size == font_size
+            && self.font_family == font_family
+    }
+}
+
+/// Shaped gutter lines keyed by their text, valid for one (font, font size)
+/// pair. The gutter text of a row (`[HH:MM:SS] <line number>`) only changes
+/// when the row scrolls or a new line is stamped, so shaping once per distinct
+/// text instead of once per row per frame removes a `shape_line` + `TextRun`
+/// allocation per visible row per frame (PERF-02).
+#[derive(Default)]
+pub(crate) struct GutterShapeCache {
+    /// Font size the entries were shaped at.
+    pub font_size: Pixels,
+    /// Font family the entries were shaped with.
+    pub font_family: SharedString,
+    /// Shaped lines by gutter text.
+    pub lines: std::collections::HashMap<SharedString, gpui::ShapedLine>,
+}
+
+impl GutterShapeCache {
+    /// Entries kept before the map is cleared. Roughly a few viewports' worth
+    /// of rows; scrolling through a long buffer keeps replacing entries.
+    pub(crate) const MAX_ENTRIES: usize = 1024;
+
+    /// Drop the cached lines when the font size or family changed, and when
+    /// the map grew past [`Self::MAX_ENTRIES`].
+    pub(crate) fn prepare(&mut self, font_size: Pixels, font_family: &SharedString) {
+        if self.font_size != font_size || self.font_family != *font_family {
+            self.lines.clear();
+            self.font_size = font_size;
+            self.font_family = font_family.clone();
+        }
+        if self.lines.len() >= Self::MAX_ENTRIES {
+            self.lines.clear();
+        }
+    }
+}
+
+/// Render state persisted across frames on `LocalTerminalView` and shared with
+/// the per-frame `TerminalElement` (which is recreated every frame) and the
+/// input handlers (which read `metrics`) through one `Rc<RefCell<..>>`.
+#[derive(Default)]
+pub(crate) struct RenderCache {
+    /// Per-row layout cache — skip recompute for non-dirty rows.
+    pub rows: RowLayoutCache,
+    /// Cached gutter width (`None` until first measured).
+    pub gutter: Option<GutterCache>,
+    /// Shaped gutter lines reused across frames.
+    pub gutter_shapes: GutterShapeCache,
+    /// Last terminal size `(rows, cols)` pushed to the session — avoids
+    /// `resize()` every frame.
+    pub grid_size: Option<(u16, u16)>,
+    /// Layout metrics sink (the element writes in prepaint, mouse handlers read).
+    pub metrics: GridMetrics,
 }

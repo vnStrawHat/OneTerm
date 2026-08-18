@@ -5,21 +5,28 @@
 //! default semantic style asset (`assets/highlight/default.json`) into a
 //! `highlight::ClassStyles` that the `TerminalTheme` carries.
 
+use std::sync::LazyLock;
+
 use gpui::Hsla as GpHsla;
 
 use oneterm_highlight::{Class, ClassStyles, Decoration, Hsla, parse_hex};
+
+/// The default semantic style block, parsed from the embedded asset exactly
+/// once per process (PERF-01: it used to be re-parsed on every render).
+static DEFAULT_STYLES: LazyLock<ClassStyles> = LazyLock::new(|| {
+    let json = include_str!("../../assets/highlight/default.json");
+    parse_semantic_json(json)
+});
 
 /// Convert a `highlight::Hsla` → `gpui::Hsla` (same field layout → trivial copy).
 pub fn to_gpui_hsla(c: Hsla) -> GpHsla {
     gpui::hsla(c.h / 360.0, c.s, c.l, c.a)
 }
 
-/// Load the default semantic style block from the embedded asset JSON into a
-/// `ClassStyles`. This is merged under any per-theme overrides (callers apply
-/// overrides on top).
-pub fn load_default_styles() -> ClassStyles {
-    let json = include_str!("../../assets/highlight/default.json");
-    parse_semantic_json(json)
+/// The default semantic style block (embedded asset JSON, parsed once). This
+/// is merged under any per-theme overrides (callers apply overrides on top).
+pub fn load_default_styles() -> &'static ClassStyles {
+    &DEFAULT_STYLES
 }
 
 /// Parse a semantic style JSON block into `ClassStyles`.
@@ -59,7 +66,7 @@ pub fn parse_semantic_json(json: &str) -> ClassStyles {
             }
             if let Some(bg) = val.get("background").and_then(|s| s.as_str()) {
                 if let Some(c) = parse_hex(bg) {
-                    styles.bg[class as usize] = Some(c);
+                    styles.style_mut(class).bg = Some(c);
                 }
             }
             if let Some(deco) = val.get("decoration").and_then(|s| s.as_str()) {
@@ -68,10 +75,10 @@ pub fn parse_semantic_json(json: &str) -> ClassStyles {
                 }
             }
             if let Some(bold) = val.get("bold").and_then(|s| s.as_bool()) {
-                styles.font[class as usize].bold = bold;
+                styles.style_mut(class).font.bold = bold;
             }
             if let Some(italic) = val.get("italic").and_then(|s| s.as_bool()) {
-                styles.font[class as usize].italic = italic;
+                styles.style_mut(class).font.italic = italic;
             }
         }
     }
@@ -118,9 +125,9 @@ mod tests {
     fn default_styles_loaded() {
         let s = load_default_styles();
         assert!(s.is_active());
-        assert!(s.fg[Class::Error as usize].is_some());
-        assert!(s.fg[Class::Url as usize].is_some());
-        assert_eq!(s.deco[Class::Url as usize], Decoration::Underline);
+        assert!(s.style(Class::Error as u8).fg.is_some());
+        assert!(s.style(Class::Url as u8).fg.is_some());
+        assert_eq!(s.style(Class::Url as u8).deco, Decoration::Underline);
         assert!(s.prompt_line_bg.is_some());
     }
 

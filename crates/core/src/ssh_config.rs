@@ -8,8 +8,6 @@
 
 use std::fmt::{self, Debug, Formatter};
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -51,20 +49,13 @@ impl From<String> for SecretString {
 }
 
 /// Cooperative cancellation handle for one SSH connection attempt.
-#[derive(Clone, Debug, Default)]
-pub struct ConnectionCancellation(Arc<AtomicBool>);
+///
+/// `cancel()` is called from the UI thread; the SSH backend polls
+/// `is_cancelled()` between steps and awaits `cancelled()` while a step is in
+/// flight, so cancellation wakes the connect future immediately instead of on
+/// the next poll tick.
+pub type ConnectionCancellation = tokio_util::sync::CancellationToken;
 
-impl ConnectionCancellation {
-    /// Request cancellation. The SSH backend checks this during every phase.
-    pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
-    }
-
-    /// Return whether cancellation has been requested.
-    pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
-    }
-}
 /// Policy used for a server key that is not already in OpenSSH `known_hosts`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum HostKeyPolicy {

@@ -81,27 +81,25 @@ fn no_url_on_whitespace() {
 
 #[test]
 fn phase1_osc8_targets_are_policy_validated() {
-    use oneterm_terminal::url_policy::{ExternalTargetPolicy, TargetDecision};
-
-    let policy = ExternalTargetPolicy::default();
+    use oneterm_terminal::url_policy::{TargetDecision, validate_target};
 
     // Denied: custom application scheme.
     let cells = make_osc8_cells("click me", "custom-app://run?action=delete");
     let detected = detect_url_at(&cells, cells.len(), 0, 0).unwrap();
     assert!(matches!(
-        policy.validate(&detected.url),
+        validate_target(&detected.url),
         TargetDecision::Deny(_)
     ));
 
     // Allowed: mixed-case HTTPS (case-insensitive scheme).
     let cells = make_osc8_cells("HTTPS link", "HtTpS://Example.COM/Path");
     let detected = detect_url_at(&cells, cells.len(), 0, 0).unwrap();
-    assert_eq!(policy.validate(&detected.url), TargetDecision::Allow);
+    assert_eq!(validate_target(&detected.url), TargetDecision::Allow);
 
     // Allowed: Unicode host.
     let cells = make_osc8_cells("Unicode host", "https://例え.テスト/path");
     let detected = detect_url_at(&cells, cells.len(), 0, 0).unwrap();
-    assert_eq!(policy.validate(&detected.url), TargetDecision::Allow);
+    assert_eq!(validate_target(&detected.url), TargetDecision::Allow);
 
     // Denied: credentials in authority.
     let cells = make_osc8_cells(
@@ -110,7 +108,7 @@ fn phase1_osc8_targets_are_policy_validated() {
     );
     let detected = detect_url_at(&cells, cells.len(), 0, 0).unwrap();
     assert!(matches!(
-        policy.validate(&detected.url),
+        validate_target(&detected.url),
         TargetDecision::Deny(_)
     ));
 
@@ -118,7 +116,7 @@ fn phase1_osc8_targets_are_policy_validated() {
     let cells = make_osc8_cells("safe label", "file:///C:/Windows/System32/cmd.exe");
     let detected = detect_url_at(&cells, cells.len(), 0, 0).unwrap();
     assert!(matches!(
-        policy.validate(&detected.url),
+        validate_target(&detected.url),
         TargetDecision::Deny(_)
     ));
 
@@ -126,7 +124,7 @@ fn phase1_osc8_targets_are_policy_validated() {
     let cells = make_osc8_cells("safe label", "https://example.com/\u{0007}control");
     let detected = detect_url_at(&cells, cells.len(), 0, 0).unwrap();
     assert!(matches!(
-        policy.validate(&detected.url),
+        validate_target(&detected.url),
         TargetDecision::Deny(_)
     ));
 
@@ -135,7 +133,7 @@ fn phase1_osc8_targets_are_policy_validated() {
     let cells = make_osc8_cells("short display text", &oversized);
     let detected = detect_url_at(&cells, cells.len(), 0, 3).unwrap();
     assert!(matches!(
-        policy.validate(&detected.url),
+        validate_target(&detected.url),
         TargetDecision::Deny(_)
     ));
 }

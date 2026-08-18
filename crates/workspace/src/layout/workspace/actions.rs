@@ -1,93 +1,28 @@
 //! Action handlers for `OneTermWorkspace`.
 
-use std::sync::atomic::Ordering;
-
 use gpui::{App, Context, Entity, Window};
 use gpui_component::dock::{DockArea, DockItem, DockPlacement as UiDockPlacement};
-use gpui_component::{WindowExt as _, dialog::DialogButtonProps};
 
-use oneterm_core::DockPlacement;
+use oneterm_state::commands::commands;
+use oneterm_state::panel_names;
 
 use oneterm_actions::{
-    About, AddPanel, AddPanelWithShell, AddSession, AddSftpBrowser, Find, NewSession, OpenSettings,
-    Quit, RightDockMode, SetRightDockMode, ToggleDockToggleButton,
+    About, AddPanel, AddPanelWithShell, Find, NewSession, OpenSettings, Quit, RightDockMode,
+    SetRightDockMode,
 };
 
 impl super::OneTermWorkspace {
-    fn to_ui_placement(placement: DockPlacement) -> UiDockPlacement {
-        match placement {
-            DockPlacement::Center => UiDockPlacement::Center,
-            DockPlacement::Left => UiDockPlacement::Left,
-            DockPlacement::Bottom => UiDockPlacement::Bottom,
-            DockPlacement::Right => UiDockPlacement::Right,
-        }
-    }
-
-    /// Action handler: add a new TerminalPanel.
-    pub(crate) fn on_action_add_panel(
-        &mut self,
-        action: &AddPanel,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let panel = super::build_named_panel("terminal", &self.dock_area.downgrade(), window, cx);
-
-        // When all tabs are closed, the center DockItem still keeps the old entry but
-        // the inner TabPanel has no panels left → add_panel would add to a "ghost"
-        // TabPanel that is not rendered. Detect this and recreate the center.
-        let center_empty = {
-            let dock = self.dock_area.read(cx);
-            Self::center_has_no_visible_panel(&dock.center(), cx)
-        };
-
-        if center_empty && matches!(action.0, DockPlacement::Center) {
-            let weak = self.dock_area.downgrade();
-            let center = DockItem::v_split(
-                vec![DockItem::tabs(vec![panel], &weak, window, cx)],
-                &weak,
-                window,
-                cx,
-            );
-            self.dock_area.update(cx, |dock_area, cx| {
-                dock_area.set_center(center, window, cx);
-            });
-        } else {
-            self.dock_area.update(cx, |dock_area, cx| {
-                dock_area.add_panel(panel, Self::to_ui_placement(action.0), None, window, cx);
-            });
-        }
-    }
-
-    /// Check whether the center DockItem has any TabPanel with panels left.
-    fn center_has_no_visible_panel(center: &DockItem, cx: &gpui::App) -> bool {
-        match center {
-            DockItem::Tabs { view, .. } => view.read(cx).active_panel(cx).is_none(),
-            DockItem::Split { items, .. } => !items.iter().any(|item| {
-                if let DockItem::Tabs { view, .. } = item {
-                    view.read(cx).active_panel(cx).is_some()
-                } else {
-                    false
-                }
-            }),
-            _ => false,
-        }
-    }
-
-    /// Action handler: add a new TerminalPanel with a specific shell kind.
+    /// Add `panel` to the center dock area.
     ///
-    /// Same as `on_action_add_panel` but spawns the terminal with the given
-    /// `ShellKind` instead of the default from settings.
-    pub(crate) fn on_action_add_panel_with_shell(
+    /// When all tabs are closed, the center `DockItem` still keeps the old entry
+    /// but the inner `TabPanel` has no panels left → `add_panel` would add to a
+    /// "ghost" `TabPanel` that is not rendered. Detect this and recreate the center.
+    fn place_center_panel(
         &mut self,
-        action: &AddPanelWithShell,
+        panel: std::sync::Arc<dyn gpui_component::dock::PanelView>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(cmds) = oneterm_state::commands::commands(cx) else {
-            return;
-        };
-        let panel = (cmds.new_terminal_with_shell)(action.0, window, cx);
-
         let center_empty = {
             let dock = self.dock_area.read(cx);
             Self::center_has_no_visible_panel(&dock.center(), cx)
@@ -111,6 +46,51 @@ impl super::OneTermWorkspace {
         }
     }
 
+    /// Action handler: add a new TerminalPanel.
+    pub(crate) fn on_action_add_panel(
+        &mut self,
+        _: &AddPanel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let panel = super::build_named_panel(
+            panel_names::TERMINAL,
+            &self.dock_area.downgrade(),
+            window,
+            cx,
+        );
+        self.place_center_panel(panel, window, cx);
+    }
+
+    /// Check whether the center DockItem has any TabPanel with panels left.
+    pub(crate) fn center_has_no_visible_panel(center: &DockItem, cx: &gpui::App) -> bool {
+        match center {
+            DockItem::Tabs { view, .. } => view.read(cx).active_panel(cx).is_none(),
+            DockItem::Split { items, .. } => !items.iter().any(|item| {
+                if let DockItem::Tabs { view, .. } = item {
+                    view.read(cx).active_panel(cx).is_some()
+                } else {
+                    false
+                }
+            }),
+            _ => false,
+        }
+    }
+
+    /// Action handler: add a new TerminalPanel with a specific shell kind.
+    ///
+    /// Same as `on_action_add_panel` but spawns the terminal with the given
+    /// `ShellKind` instead of the default from settings.
+    pub(crate) fn on_action_add_panel_with_shell(
+        &mut self,
+        action: &AddPanelWithShell,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let panel = (commands(cx).new_terminal_with_shell)(action.0, window, cx);
+        self.place_center_panel(panel, window, cx);
+    }
+
     /// Action handler: open the "New SSH Session" dialog.
     ///
     /// Opens the session creation dialog at the workspace level so it works
@@ -121,37 +101,11 @@ impl super::OneTermWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(cmds) = oneterm_state::commands::commands(cx) {
-            (cmds.open_new_session_dialog)(window, cx);
-        }
+        (commands(cx).open_new_session_dialog)(window, cx);
     }
 
     /// Action handler: ensure the right dock (which hosts the combined Side
     /// panel) is open. The Side panel always contains the Session section, so
-    /// "Add Session" simply reveals the right dock rather than adding a new
-    /// panel — the right dock is now a single `DockItem::Panel`, and
-    /// `DockArea::add_panel(Right)` is a no-op on `DockItem::Panel`.
-    pub(crate) fn on_action_add_session(
-        &mut self,
-        _: &AddSession,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        super::set_right_dock_open(&self.dock_area, true, window, cx);
-    }
-
-    /// Action handler: ensure the right dock (which hosts the combined Side
-    /// panel) is open. The Side panel always contains the SFTP section, so
-    /// "Add SFTP Browser" simply reveals the right dock.
-    pub(crate) fn on_action_add_sftp_browser(
-        &mut self,
-        _: &AddSftpBrowser,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        super::set_right_dock_open(&self.dock_area, true, window, cx);
-    }
-
     /// Action handler: switch the right dock to the panels for the given
     /// [`RightDockMode`] (SSH Client = Session + SFTP, Agent = Agent panels).
     ///
@@ -201,14 +155,14 @@ impl super::OneTermWorkspace {
         window: &mut Window,
         cx: &mut App,
     ) {
-        if mode.is_none() {
+        let Some(panel_name) = panel_names::right_dock_panel_name(mode) else {
             // None mode — hide the right dock without rebuilding its panel, so
             // switching back to SSH Client / Agent restores the previous content.
             super::set_right_dock_open(dock_area, false, window, cx);
             return;
-        }
+        };
         let weak = dock_area.downgrade();
-        let panel = super::build_named_panel(mode.panel_name(), &weak, window, cx);
+        let panel = super::build_named_panel(panel_name, &weak, window, cx);
         let right = DockItem::panel(panel);
         dock_area.update(cx, |view, cx| {
             // Snapshot the current right dock's size so the swap preserves the
@@ -218,29 +172,14 @@ impl super::OneTermWorkspace {
             let right_size = view
                 .right_dock()
                 .map(|dock| Some(dock.read(cx).size()))
-                .unwrap_or(Some(gpui::px(480.)));
+                .unwrap_or(Some(super::DEFAULT_RIGHT_DOCK_WIDTH));
             view.set_right_dock(right, right_size, true, window, cx);
-        });
-    }
-
-    /// Action handler: toggle the dock toggle button (expand/collapse button).
-    pub(crate) fn on_action_toggle_dock_toggle_button(
-        &mut self,
-        _: &ToggleDockToggleButton,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let new_val = !self.toggle_button_visible.load(Ordering::Relaxed);
-        self.toggle_button_visible.store(new_val, Ordering::Relaxed);
-        self.dock_area.update(cx, |dock_area, cx| {
-            dock_area.set_toggle_button_visible(new_val, cx);
         });
     }
 
     /// Action handler: open the General Settings UI in a separate window.
     ///
-    /// The settings window is a standalone `WindowHandle<Root>` wrapping a
-    /// [`SettingsPanel`] (see [`crate::views::settings::open_settings_window`]).
+    /// The settings feature owns the window (`WorkspaceCommands::open_settings`).
     /// Closing it does not quit the app — only the main window's `on_release`
     /// hook does that.
     pub(crate) fn on_action_open_settings(
@@ -249,9 +188,7 @@ impl super::OneTermWorkspace {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(cmds) = oneterm_state::commands::commands(cx) {
-            (cmds.open_settings)(cx);
-        }
+        (commands(cx).open_settings)(cx);
     }
 
     /// Action handler: Quit.
@@ -267,10 +204,8 @@ impl super::OneTermWorkspace {
     /// `LocalTerminalView`. If the search bar is already open, toggles it
     /// closed (same behavior as Ctrl+F).
     pub(crate) fn on_action_find(&mut self, _: &Find, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(cmds) = oneterm_state::commands::commands(cx) {
-            let dock_area = self.dock_area.clone();
-            (cmds.find_in_active_terminal)(&dock_area, window, cx);
-        }
+        let dock_area = self.dock_area.clone();
+        (commands(cx).find_in_active_terminal)(&dock_area, window, cx);
     }
 
     /// Action handler: About — open the About dialog.
@@ -282,20 +217,64 @@ impl super::OneTermWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(cmds) = oneterm_state::commands::commands(cx) {
-            (cmds.open_about)(window, cx);
-            return;
-        }
+        (commands(cx).open_about)(window, cx);
+    }
+}
 
-        window.open_alert_dialog(cx, |alert, _, _| {
-            alert
-                .title("About OneTerm")
-                .description(format!(
-                    "OneTerm v{}\n\nA terminal application for local and SSH sessions.\n\
-                     Built with GPUI + alacritty_terminal.",
-                    env!("ONETERM_VERSION")
-                ))
-                .button_props(DialogButtonProps::default().ok_text("Close"))
+#[cfg(test)]
+mod tests {
+    use gpui::TestAppContext;
+    use gpui_component::dock::{DockArea, DockItem};
+
+    use super::super::OneTermWorkspace;
+    use super::super::test_panels::NamedPanel;
+
+    #[gpui::test]
+    fn center_has_no_visible_panel_detects_empty_and_ghost_layouts(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let (_dock_area, _cx) = cx.add_window_view(|window, cx| {
+            let weak = cx.weak_entity();
+
+            // Empty tab panel: nothing visible.
+            let empty_tabs = DockItem::tabs(Vec::new(), &weak, window, cx);
+            assert!(OneTermWorkspace::center_has_no_visible_panel(
+                &empty_tabs,
+                cx
+            ));
+
+            // A split whose only tab panel is empty is a "ghost" center too.
+            let ghost_split = DockItem::v_split(
+                vec![DockItem::tabs(Vec::new(), &weak, window, cx)],
+                &weak,
+                window,
+                cx,
+            );
+            assert!(OneTermWorkspace::center_has_no_visible_panel(
+                &ghost_split,
+                cx
+            ));
+
+            // One panel anywhere in the split makes the center visible.
+            let panel = NamedPanel::view("blank", cx);
+            let with_panel = DockItem::v_split(
+                vec![
+                    DockItem::tabs(Vec::new(), &weak, window, cx),
+                    DockItem::tabs(vec![panel], &weak, window, cx),
+                ],
+                &weak,
+                window,
+                cx,
+            );
+            assert!(!OneTermWorkspace::center_has_no_visible_panel(
+                &with_panel,
+                cx
+            ));
+
+            // A bare panel item is never treated as empty.
+            let bare = DockItem::panel(NamedPanel::view("blank", cx));
+            assert!(!OneTermWorkspace::center_has_no_visible_panel(&bare, cx));
+
+            DockArea::new("center-test", None, window, cx)
         });
     }
 }

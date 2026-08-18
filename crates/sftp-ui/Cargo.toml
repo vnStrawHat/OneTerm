@@ -1,8 +1,12 @@
 [package]
 name = "oneterm-sftp-ui"
 description = "OneTerm SFTP feature: the file-browser panel, transfer queue, and table rendering."
-publish = false
+version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
 
 [lints]
 workspace = true
@@ -18,8 +22,6 @@ gpui.workspace = true
 gpui-component.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
-serde.workspace = true
-serde_json.workspace = true
 log.workspace = true
 
 [dev-dependencies]

@@ -73,3 +73,67 @@ pub(crate) fn layout_selection(
     }
     rects
 }
+
+#[cfg(test)]
+mod tests {
+    use alacritty_terminal::index::{Column, Line, Point};
+    use alacritty_terminal::selection::SelectionRange;
+    use gpui::Hsla;
+
+    use super::layout_selection;
+
+    fn range(start: (i32, usize), end: (i32, usize), is_block: bool) -> SelectionRange {
+        SelectionRange::new(
+            Point::new(Line(start.0), Column(start.1)),
+            Point::new(Line(end.0), Column(end.1)),
+            is_block,
+        )
+    }
+
+    fn spans(rects: &[super::LayoutRect]) -> Vec<(i32, i32, usize)> {
+        rects
+            .iter()
+            .map(|r| (r.point.line, r.point.column, r.num_cells))
+            .collect()
+    }
+
+    #[test]
+    fn single_line_selection_covers_start_to_end_inclusive() {
+        let rects = layout_selection(&range((2, 3), (2, 6), false), 0, 24, 80, Hsla::default());
+        assert_eq!(spans(&rects), vec![(2, 3, 4)]);
+    }
+
+    #[test]
+    fn multi_line_selection_fills_middle_lines() {
+        let rects = layout_selection(&range((1, 5), (3, 2), false), 0, 24, 80, Hsla::default());
+        // First line from the start column to the end, middle full width,
+        // last line from column 0 through the end column.
+        assert_eq!(spans(&rects), vec![(1, 5, 75), (2, 0, 80), (3, 0, 3)]);
+    }
+
+    #[test]
+    fn block_selection_uses_the_same_columns_on_every_line() {
+        let rects = layout_selection(&range((0, 4), (2, 7), true), 0, 24, 80, Hsla::default());
+        assert_eq!(spans(&rects), vec![(0, 4, 4), (1, 4, 4), (2, 4, 4)]);
+    }
+
+    #[test]
+    fn selection_is_shifted_by_the_display_offset_and_clipped() {
+        // Grid lines −2..=1 with the viewport scrolled up by 1: display rows
+        // −1..=2 → only rows 0..=2 are emitted.
+        let rects = layout_selection(&range((-2, 0), (1, 9), false), 1, 3, 80, Hsla::default());
+        assert_eq!(spans(&rects), vec![(0, 0, 80), (1, 0, 80), (2, 0, 10)]);
+    }
+
+    #[test]
+    fn selection_outside_the_viewport_is_empty() {
+        assert!(
+            layout_selection(&range((-10, 0), (-5, 3), false), 0, 24, 80, Hsla::default())
+                .is_empty()
+        );
+        assert!(
+            layout_selection(&range((30, 0), (31, 3), false), 0, 24, 80, Hsla::default())
+                .is_empty()
+        );
+    }
+}

@@ -42,7 +42,7 @@ impl NativeCrashWriter {
         format_context(context, &mut details);
 
         if !write_direct(&self.file, NATIVE_REPORT_HEADER)
-            || !write_direct(&self.file, env!("ONETERM_VERSION").as_bytes())
+            || !write_direct(&self.file, env!("CARGO_PKG_VERSION").as_bytes())
             || !write_direct(&self.file, NATIVE_REPORT_OS)
             || !write_direct(&self.file, std::env::consts::OS.as_bytes())
             || !write_direct(&self.file, NATIVE_REPORT_ARCH)

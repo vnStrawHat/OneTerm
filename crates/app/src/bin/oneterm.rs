@@ -1,4 +1,4 @@
-//! Release binary entry point → `oneterm` (oneterm.exe / oneterm).
+//! Binary entry point → `oneterm` (oneterm.exe / oneterm).
 //!
 //! Subsystem: WINDOWS (hides the console) in release; keeps the console in dev to view logs/println!.
 //! - `windows_subsystem` is a Windows-only attribute → must be gated on `target_os`.

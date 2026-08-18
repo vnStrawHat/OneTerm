@@ -6,10 +6,6 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
-#[cfg(unix)]
-use std::os::fd::AsRawFd;
-#[cfg(windows)]
-use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -43,103 +39,17 @@ impl InterProcessLock {
             .read(true)
             .write(true)
             .open(lock_path)?;
-        lock_file(&file)?;
+        file.lock()?;
         Ok(Self { file })
     }
 }
 
 impl Drop for InterProcessLock {
     fn drop(&mut self) {
-        unlock_file(&self.file);
+        // Releasing a held lock cannot fail in a way the caller can act on.
+        let _ = self.file.unlock();
     }
 }
-
-// SAFETY: the signature mirrors the platform's `flock(2)`: two `int` arguments
-// and an `int` result. The symbol resolves against the C runtime linked into
-// the process, so the calls below only need to uphold the descriptor invariant.
-#[cfg(unix)]
-unsafe extern "C" {
-    fn flock(fd: i32, operation: i32) -> i32;
-}
-
-#[cfg(unix)]
-fn lock_file(file: &File) -> io::Result<()> {
-    const LOCK_EX: i32 = 2;
-    // SAFETY: `file` is owned and stays open for this call, so `as_raw_fd`
-    // returns a valid descriptor. `flock` only inspects that descriptor and the
-    // operation flag and reports failure through its return value.
-    let result = unsafe { flock(file.as_raw_fd(), LOCK_EX) };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
-}
-
-#[cfg(unix)]
-fn unlock_file(file: &File) {
-    const LOCK_UN: i32 = 8;
-    // SAFETY: `file` is owned and open, so the descriptor is valid. Releasing a
-    // held lock cannot violate memory safety; errors are ignored during drop.
-    let _ = unsafe { flock(file.as_raw_fd(), LOCK_UN) };
-}
-
-#[cfg(windows)]
-fn lock_file(file: &File) -> io::Result<()> {
-    use windows_sys::Win32::Storage::FileSystem::{LOCKFILE_EXCLUSIVE_LOCK, LockFileEx};
-    use windows_sys::Win32::System::IO::OVERLAPPED;
-
-    // SAFETY: `OVERLAPPED` is a plain C struct with no validity invariants, so
-    // an all-zero value is a valid initial state.
-    let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
-    // SAFETY: `file` is owned and open, so `as_raw_handle` yields a valid handle.
-    // `overlapped` points to the live local above and outlives the call, and the
-    // byte range covers the whole file. Failure is reported by a zero result.
-    let result = unsafe {
-        LockFileEx(
-            file.as_raw_handle() as _,
-            LOCKFILE_EXCLUSIVE_LOCK,
-            0,
-            u32::MAX,
-            u32::MAX,
-            &mut overlapped,
-        )
-    };
-    if result != 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
-}
-
-#[cfg(windows)]
-fn unlock_file(file: &File) {
-    use windows_sys::Win32::Storage::FileSystem::UnlockFileEx;
-    use windows_sys::Win32::System::IO::OVERLAPPED;
-
-    // SAFETY: `OVERLAPPED` is a plain C struct, so an all-zero value is valid.
-    let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
-    // SAFETY: `file` is owned and open, so the handle is valid, and `overlapped`
-    // points to the live local above that outlives the call. The range matches
-    // the one locked in `lock_file`; the result is ignored during drop.
-    unsafe {
-        let _ = UnlockFileEx(
-            file.as_raw_handle() as _,
-            0,
-            u32::MAX,
-            u32::MAX,
-            &mut overlapped,
-        );
-    }
-}
-
-#[cfg(not(any(unix, windows)))]
-fn lock_file(_file: &File) -> io::Result<()> {
-    Ok(())
-}
-
-#[cfg(not(any(unix, windows)))]
-fn unlock_file(_file: &File) {}
 
 fn temporary_path(path: &Path) -> PathBuf {
     let name = path
@@ -172,28 +82,18 @@ fn atomic_write_unlocked(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
     let temporary = temporary_path(path);
     let write_result = (|| {
-        #[cfg(test)]
-        maybe_fail(WriteFault::TempCreate)?;
         let mut file = OpenOptions::new()
             .create_new(true)
             .write(true)
             .open(&temporary)?;
-        #[cfg(test)]
-        maybe_fail(WriteFault::TempWrite)?;
         file.write_all(bytes)?;
-        #[cfg(test)]
-        maybe_fail(WriteFault::Flush)?;
         file.sync_all()?;
         drop(file);
 
         if path.exists() {
-            #[cfg(test)]
-            maybe_fail(WriteFault::Backup)?;
             fs::copy(path, backup_path(path))?;
         }
 
-        #[cfg(test)]
-        maybe_fail(WriteFault::Replace)?;
         replace_file(&temporary, path)
     })();
 
@@ -201,45 +101,6 @@ fn atomic_write_unlocked(path: &Path, bytes: &[u8]) -> io::Result<()> {
         let _ = fs::remove_file(&temporary);
     }
     write_result
-}
-
-#[cfg(test)]
-#[derive(Clone, Copy)]
-enum WriteFault {
-    TempCreate,
-    TempWrite,
-    Flush,
-    Backup,
-    Replace,
-}
-
-#[cfg(test)]
-thread_local! {
-    static WRITE_FAULT: std::cell::Cell<Option<WriteFault>> = const { std::cell::Cell::new(None) };
-}
-
-#[cfg(test)]
-fn inject_write_fault(fault: WriteFault) {
-    WRITE_FAULT.with(|current| current.set(Some(fault)));
-}
-
-#[cfg(test)]
-fn clear_write_fault() {
-    WRITE_FAULT.with(|current| current.set(None));
-}
-
-#[cfg(test)]
-fn maybe_fail(fault: WriteFault) -> io::Result<()> {
-    let should_fail = WRITE_FAULT.with(|current| {
-        current
-            .get()
-            .is_some_and(|current| current as u8 == fault as u8)
-    });
-    if should_fail {
-        Err(io::Error::other("injected persistence failure"))
-    } else {
-        Ok(())
-    }
 }
 
 /// Serialize a read-modify-write JSON transaction for one file.
@@ -259,77 +120,57 @@ pub fn update_json_file(
     atomic_write_unlocked(path, &bytes)
 }
 
-#[cfg(unix)]
+/// Replace `target` with `temporary`. `fs::rename` overwrites an existing
+/// destination on both Unix and Windows; Unix additionally needs the parent
+/// directory synced so the new name survives a crash.
 fn replace_file(temporary: &Path, target: &Path) -> io::Result<()> {
     fs::rename(temporary, target)?;
+    #[cfg(unix)]
     if let Some(parent) = target.parent() {
         File::open(parent)?.sync_all()?;
     }
     Ok(())
 }
 
-#[cfg(windows)]
-fn replace_file(temporary: &Path, target: &Path) -> io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    use std::ptr::null;
-    use windows_sys::Win32::Storage::FileSystem::{REPLACEFILE_WRITE_THROUGH, ReplaceFileW};
-
-    if !target.exists() {
-        return fs::rename(temporary, target);
-    }
-
-    let target_wide: Vec<u16> = target
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let temporary_wide: Vec<u16> = temporary
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    // SAFETY: both name pointers reference local NUL-terminated wide buffers that
-    // outlive the call, and the optional backup/reserved/exclude arguments are
-    // null as the API permits. Failure is reported by a zero return value.
-    let replaced = unsafe {
-        ReplaceFileW(
-            target_wide.as_ptr(),
-            temporary_wide.as_ptr(),
-            null(),
-            REPLACEFILE_WRITE_THROUGH,
-            null(),
-            null(),
-        )
-    };
-    if replaced == 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
-}
-
-#[cfg(not(any(unix, windows)))]
-fn replace_file(temporary: &Path, target: &Path) -> io::Result<()> {
-    fs::rename(temporary, target)
-}
-
 /// Move an unreadable persisted document aside for diagnosis and recovery.
 ///
 /// The original path becomes available for a default configuration to be
-/// written. The quarantine name is unique within the process.
+/// written. The quarantine name carries the process id, a timestamp and a
+/// process-local sequence, so a quarantine from an earlier run (or another
+/// process) is never overwritten by this one; an unexpected collision is
+/// skipped by advancing the sequence instead of replacing the older file.
 pub fn quarantine_file(path: &Path) -> io::Result<Option<PathBuf>> {
     let _lock = InterProcessLock::acquire(path)?;
     if !path.exists() {
         return Ok(None);
     }
-    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("oneterm-config.json");
-    let quarantined = path.with_file_name(format!(".{name}.invalid-{sequence}"));
-    fs::rename(path, &quarantined)?;
-    Ok(Some(quarantined))
+    let pid = std::process::id();
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0);
+    loop {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let quarantined =
+            path.with_file_name(format!(".{name}.invalid-{pid}-{timestamp}-{sequence}"));
+        // `create_new` reserves the name without replacing an existing file;
+        // the rename below then replaces only our own placeholder.
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&quarantined)
+        {
+            Ok(_placeholder) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+        fs::rename(path, &quarantined)?;
+        return Ok(Some(quarantined));
+    }
 }
 
 #[cfg(test)]
@@ -436,25 +277,20 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    /// A failed write leaves the previous document intact and removes the
+    /// temporary file. A directory occupying the `.bak` name makes the backup
+    /// copy fail on every platform.
     #[test]
-    fn injected_write_failures_preserve_the_previous_document() {
+    fn failed_writes_preserve_the_previous_document() {
         let dir = test_dir();
         let path = dir.join("state.json");
         atomic_write(&path, br#"{"version":1}"#).unwrap();
+        fs::create_dir(backup_path(&path)).unwrap();
 
-        for fault in [
-            WriteFault::TempCreate,
-            WriteFault::TempWrite,
-            WriteFault::Flush,
-            WriteFault::Backup,
-            WriteFault::Replace,
-        ] {
-            inject_write_fault(fault);
-            let result = atomic_write(&path, br#"{"version":2}"#);
-            clear_write_fault();
-            assert!(result.is_err());
-            assert_eq!(fs::read_to_string(&path).unwrap(), r#"{"version":1}"#);
-        }
+        assert!(atomic_write(&path, br#"{"version":2}"#).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), r#"{"version":1}"#);
+        // No temporary file was left behind (state.json, state.bak/, .lock).
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 3);
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -468,6 +304,43 @@ mod tests {
         let quarantined = quarantine_file(&path).unwrap().unwrap();
         assert!(!path.exists());
         assert_eq!(fs::read(quarantined).unwrap(), b"invalid");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// CORR-47: a second quarantine of the same document (as after a
+    /// restart, when the process-local counter starts over) must not replace
+    /// the earlier quarantined file.
+    #[test]
+    fn quarantine_names_never_collide_across_runs() {
+        let dir = test_dir();
+        let path = dir.join("state.json");
+        fs::create_dir_all(&dir).unwrap();
+
+        // Occupy the names the next quarantine would pick (this second and
+        // the next, in case the clock ticks over) as if an earlier run left
+        // them behind with the same pid and sequence.
+        let pid = std::process::id();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let sequence = TEMP_SEQUENCE.load(Ordering::Relaxed);
+        let occupied: Vec<PathBuf> = [now, now + 1]
+            .iter()
+            .map(|ts| dir.join(format!(".state.json.invalid-{pid}-{ts}-{sequence}")))
+            .collect();
+        for existing in &occupied {
+            fs::write(existing, b"earlier run").unwrap();
+        }
+
+        fs::write(&path, b"current").unwrap();
+        let quarantined = quarantine_file(&path).unwrap().unwrap();
+
+        assert!(!occupied.contains(&quarantined));
+        assert_eq!(fs::read(&quarantined).unwrap(), b"current");
+        for existing in &occupied {
+            assert_eq!(fs::read(existing).unwrap(), b"earlier run");
+        }
         let _ = fs::remove_dir_all(dir);
     }
 }

@@ -1,18 +1,35 @@
 use std::fs::File;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 use flate2::read::GzDecoder;
 use oneterm_core::{AppError, Result};
 
+/// Upper bound for the total bytes an update archive may expand to (SEC-20).
+///
+/// Release packages are tens of megabytes; this only stops a hostile or
+/// corrupt archive from filling the disk.
+pub const MAX_EXTRACTED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
 pub fn extract_archive(archive_path: &Path, destination: &Path) -> Result<()> {
+    extract_archive_with_limit(archive_path, destination, MAX_EXTRACTED_BYTES)
+}
+
+/// [`extract_archive`] with an explicit expansion budget (tests use a small one).
+pub(crate) fn extract_archive_with_limit(
+    archive_path: &Path,
+    destination: &Path,
+    max_extracted_bytes: u64,
+) -> Result<()> {
     let name = archive_path
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or_default();
+    let mut budget = ExtractionBudget::new(max_extracted_bytes);
     if name.ends_with(".zip") {
-        extract_zip(archive_path, destination)
+        extract_zip(archive_path, destination, &mut budget)
     } else if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
-        extract_tar_gz(archive_path, destination)
+        extract_tar_gz(archive_path, destination, &mut budget)
     } else {
         Err(AppError::msg(format!(
             "unsupported update archive format: {name}"
@@ -146,7 +163,57 @@ fn push_unique(values: &mut Vec<PathBuf>, value: PathBuf) {
     }
 }
 
-fn extract_zip(archive_path: &Path, destination: &Path) -> Result<()> {
+/// Remaining bytes an extraction may still write.
+struct ExtractionBudget {
+    remaining: u64,
+    limit: u64,
+}
+
+impl ExtractionBudget {
+    fn new(limit: u64) -> Self {
+        Self {
+            remaining: limit,
+            limit,
+        }
+    }
+
+    fn consume(&mut self, bytes: u64) -> Result<()> {
+        match self.remaining.checked_sub(bytes) {
+            Some(remaining) => {
+                self.remaining = remaining;
+                Ok(())
+            }
+            None => Err(self.exceeded()),
+        }
+    }
+
+    fn exceeded(&self) -> AppError {
+        AppError::msg(format!(
+            "update archive expands beyond the {} byte limit",
+            self.limit
+        ))
+    }
+
+    /// Stream `reader` into `writer`, charging every byte to the budget so a
+    /// header that understates the entry size cannot bypass the limit.
+    fn copy(&mut self, reader: &mut impl Read, writer: &mut impl Write) -> Result<()> {
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let read = reader.read(&mut buffer)?;
+            if read == 0 {
+                return Ok(());
+            }
+            self.consume(read as u64)?;
+            writer.write_all(&buffer[..read])?;
+        }
+    }
+}
+
+fn extract_zip(
+    archive_path: &Path,
+    destination: &Path,
+    budget: &mut ExtractionBudget,
+) -> Result<()> {
     let file = File::open(archive_path)?;
     let mut archive = zip::ZipArchive::new(file)
         .map_err(|error| AppError::msg(format!("invalid zip archive: {error}")))?;
@@ -162,6 +229,14 @@ fn extract_zip(archive_path: &Path, destination: &Path) -> Result<()> {
             )));
         };
         reject_unsafe_path(&relative)?;
+        // Same guard as the tar path: a symlink could point the later package
+        // validation or install copy outside the staging directory (SEC-21).
+        if entry.is_symlink() {
+            return Err(AppError::msg(format!(
+                "update archive contains a symlink, which is not allowed: {}",
+                entry.name()
+            )));
+        }
         let output = destination.join(relative);
         if entry.is_dir() {
             std::fs::create_dir_all(&output)?;
@@ -169,14 +244,23 @@ fn extract_zip(archive_path: &Path, destination: &Path) -> Result<()> {
             if let Some(parent) = output.parent() {
                 std::fs::create_dir_all(parent)?;
             }
+            // Cheap early rejection from the declared size; the streaming copy
+            // below charges the bytes actually produced.
+            if entry.size() > budget.remaining {
+                return Err(budget.exceeded());
+            }
             let mut output_file = File::create(&output)?;
-            std::io::copy(&mut entry, &mut output_file)?;
+            budget.copy(&mut entry, &mut output_file)?;
         }
     }
     Ok(())
 }
 
-fn extract_tar_gz(archive_path: &Path, destination: &Path) -> Result<()> {
+fn extract_tar_gz(
+    archive_path: &Path,
+    destination: &Path,
+    budget: &mut ExtractionBudget,
+) -> Result<()> {
     let file = File::open(archive_path)?;
     let decoder = GzDecoder::new(file);
     let mut archive = tar::Archive::new(decoder);
@@ -189,8 +273,16 @@ fn extract_tar_gz(archive_path: &Path, destination: &Path) -> Result<()> {
                 "update archive contains links, which are not allowed",
             ));
         }
+        if !(kind.is_file() || kind.is_dir()) {
+            return Err(AppError::msg(format!(
+                "update archive contains an unsupported entry type: {kind:?}"
+            )));
+        }
         let relative = entry.path()?.into_owned();
         reject_unsafe_path(&relative)?;
+        // The tar reader yields exactly `size` bytes per entry, so the header
+        // is authoritative for the expansion budget.
+        budget.consume(entry.header().size()?)?;
         let output = destination.join(relative);
         if let Some(parent) = output.parent() {
             std::fs::create_dir_all(parent)?;
@@ -237,57 +329,5 @@ fn require_dir(path: &Path) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rejects_parent_paths() {
-        assert!(reject_unsafe_path(Path::new("../outside")).is_err());
-    }
-
-    #[test]
-    fn accepts_relative_paths() {
-        reject_unsafe_path(Path::new("oneterm-x86_64-unknown-linux-gnu/oneterm")).unwrap();
-    }
-
-    #[test]
-    fn accepts_versioned_windows_package_dir() {
-        let dir = test_dir("versioned-windows");
-        let package_dir = dir.join("oneterm-0.3.1-x86_64-pc-windows-msvc");
-        std::fs::create_dir_all(&package_dir).unwrap();
-        std::fs::write(package_dir.join("oneterm.exe"), b"binary").unwrap();
-        let validated = validate_staged_package(&dir, "x86_64-pc-windows-msvc").unwrap();
-        assert_eq!(validated, package_dir);
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn accepts_versioned_windows_package_dir_inside_dist() {
-        let dir = test_dir("versioned-windows-dist");
-        let package_dir = dir
-            .join("dist")
-            .join("oneterm-0.3.1-x86_64-pc-windows-msvc");
-        std::fs::create_dir_all(&package_dir).unwrap();
-        std::fs::write(package_dir.join("oneterm.exe"), b"binary").unwrap();
-        let validated = validate_staged_package(&dir, "x86_64-pc-windows-msvc").unwrap();
-        assert_eq!(validated, package_dir);
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    fn test_dir(name: &str) -> std::path::PathBuf {
-        // A process-wide sequence keeps directories distinct even when parallel
-        // tests read the same coarse timestamp (as on macOS).
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
-            "oneterm-archive-{name}-{}-{nonce}-{sequence}",
-            std::process::id()
-        ))
-    }
-}
+#[path = "archive_tests.rs"]
+mod archive_tests;

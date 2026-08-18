@@ -10,6 +10,19 @@ All new user-owned JSON writes must use `atomic_write` or `update_json_file` fro
 serialization, backups, durable replacement, and cleanup. Invalid documents are
 moved with `quarantine_file` before defaults are persisted.
 
+### Load outcomes
+
+Document loaders distinguish three read outcomes. A missing file selects the
+documented defaults (and, for `terminal.json` / `ui_config.json`, creates the
+file). A file that does not parse or migrate is quarantined with a recovery log
+and defaults are used. Any other read failure (permissions, I/O) is returned as
+`AppError::ConfigLoad { document, message }` — never a string — and the file is
+left untouched: the owner keeps in-memory defaults with a `persist_blocked`
+flag (`TerminalSettings`, `UiConfig`, `SshSessionStore`) and refuses to write
+them back over the possibly valid document until the next start. `docks.json`
+readers get `Ok(None)` for "no layout saved yet" and `ConfigLoad` for anything
+else; only `update_dock_document` recovers by quarantining.
+
 ### Cross-process guarantee
 
 Persistence transactions are serialized with a sibling `.<document>.lock` file and
@@ -35,17 +48,20 @@ directly on the UI thread.
 | Document | Owner | Notes |
 |---|---|---|
 | `terminal.json` | `oneterm-settings` | Terminal configuration schema and defaults. |
-| `ui_config.json` | `oneterm-settings` | UI theme/font/key-binding schema. |
-| SSH session store | `oneterm-session-ui` | Saved host/session schema. |
-| `update_config.json` | `oneterm-update` | Auto-update channel, cache, proxy/TLS preferences, and skip/version state. |
+| `ui_config.json` | `oneterm-settings` | UI theme/font/key-binding schema. `UiConfig::observe_theme` is the only writer of `theme_name`/`ui_font_size`; it coalesces `Theme` notifications that leave both unchanged. |
+| SSH session store (`ssh_session.json`) | `oneterm-session-ui` | Saved host/session schema, v2: every session has a stable `id`, the document records `next_session_id`; v0/v1 files are migrated in memory and re-saved on load. Whole-document writes are coalesced through a single-flight queue so the newest snapshot always wins. |
+| `update_config.json` | `oneterm-update` | Schema owner. Two field-level writers through `update_json_file`: preferences (`oneterm-settings-ui` persist queue via `UpdateConfig::save_preferences`) and check cache (`UpdateManager` via `UpdateCheckCache::save`). See `docs/auto-update.md`. |
 | `docks.json` document model | `oneterm-state` | `DockDocument` is the typed top-level schema and the only read/update API. |
-| `docks.json` dock fields | `oneterm-workspace` | Dock layout and shell-owned display fields. |
+| `docks.json` dock fields | `oneterm-workspace` | Dock layout and the shell-owned `zoomed_panel` field. The exit write runs synchronously from the workspace's `on_app_quit` / `on_release` hooks. |
 | `docks.json.sftp_table_state` | `oneterm-sftp-ui` | SFTP table field only, represented by `oneterm_core::SftpTableState`. |
 
 A crate may mutate only fields it owns. Callers of the shared dock document must
 use `oneterm_state::dock_persistence`; other shared documents must use
 `update_json_file`. Read-modify-write sequences outside those transactions are
-not allowed.
+not allowed. Only the document owner quarantines: `update_dock_document` moves an
+invalid `docks.json` aside, applies the update to a default document, and reports
+`DockUpdateOutcome::RecoveredFromInvalidData` so the caller can log the recovery
+(`oneterm-state` has no logger of its own); feature crates never quarantine it.
 
 ## Migration rules
 

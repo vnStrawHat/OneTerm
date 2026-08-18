@@ -10,12 +10,12 @@ mod install;
 mod manager;
 mod version;
 
-pub use config::{CachedUpdateCandidate, UpdateChannel, UpdateConfig};
+pub use config::{
+    CachedUpdateCandidate, LoadedUpdateConfig, MAX_CHECK_INTERVAL_HOURS, UPDATE_REPOSITORY,
+    UpdateChannel, UpdateCheckCache, UpdateConfig,
+};
 pub use install::{InstallOutcome, install_staged_update};
 pub use manager::{StagedUpdate, UpdateCandidate, UpdateCheckResult, UpdateManager};
 
-/// Current app version embedded from the repo-root `VERSION` file.
-pub const CURRENT_VERSION: &str = env!("ONETERM_VERSION");
-
-/// GitHub `owner/repo` inferred from `remote.origin.url` at build time.
-pub const UPDATE_REPOSITORY: &str = env!("ONETERM_UPDATE_REPO");
+/// Current app version (the workspace `version` in the root `Cargo.toml`).
+pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");

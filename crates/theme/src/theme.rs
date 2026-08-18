@@ -13,8 +13,8 @@
 //! (usually = content background) and `tab_bar.background` (darker), giving the
 //! "active tab merges with content" effect like Zed/editors, with no override needed.
 
-use gpui::{Anchor, App, px};
-use gpui_component::{ActiveTheme as _, Theme, ThemeRegistry, scroll::ScrollbarShow};
+use gpui::{Anchor, App, Rgba, px, rgb};
+use gpui_component::{Theme, ThemeRegistry, scroll::ScrollbarShow};
 
 use oneterm_actions::{SwitchTheme, SwitchThemeMode};
 
@@ -76,6 +76,12 @@ pub fn apply_list_style_override(cx: &mut App) {
     theme.table_active_border = gpui::transparent_black();
 }
 
+/// The OneTerm logo cyan (`#58c4dc`) — an identity tint that must not follow
+/// the theme (title-bar icon, About page mark, empty-Space placeholder).
+pub fn brand_accent() -> Rgba {
+    rgb(0x58c4dc)
+}
+
 /// Initialize the theme: load embedded themes + wire the `SwitchTheme` / `SwitchThemeMode` actions.
 pub fn init(cx: &mut App) {
     // Load the embedded theme JSON into the ThemeRegistry (in addition to the 2 built-in themes).
@@ -90,9 +96,14 @@ pub fn init(cx: &mut App) {
 
     cx.on_action(|switch: &SwitchTheme, cx| {
         let theme_name = switch.0.clone();
-        if let Some(theme_config) = ThemeRegistry::global(cx).themes().get(&theme_name).cloned() {
-            Theme::global_mut(cx).apply_config(&theme_config);
-            apply_list_style_override(cx);
+        match ThemeRegistry::global(cx).themes().get(&theme_name).cloned() {
+            Some(theme_config) => {
+                Theme::global_mut(cx).apply_config(&theme_config);
+                apply_list_style_override(cx);
+            }
+            // A stale key binding or menu entry can name a theme that is not
+            // registered; say so instead of ignoring the action (ERR-10).
+            None => log::warn!("SwitchTheme: theme {theme_name:?} is not registered — ignored"),
         }
         cx.refresh_windows();
     });
@@ -146,22 +157,13 @@ pub fn init(cx: &mut App) {
         }
     }
 
-    // FontSizeSelector dropped the Border Radius and Scrollbar options, so set fixed
-    // defaults here (after Theme::change so apply_config does not override them —
-    // the theme JSON does not declare a radius, so config.radius = None).
+    // Fixed shape defaults, applied after `Theme::change` so `apply_config`
+    // does not override them (the theme JSON declares no radius, so
+    // `config.radius = None`):
     //
-    // - radius = sub-pixel (0.001px), radius_lg = 0px: sharp/angular UI.
-    // - scrollbar_show = Scrolling: show the scrollbar while scrolling, auto-hide when idle.
-    //   (gpui_component::init may have set it = Hover via sync_scrollbar_appearance,
-    //   so we force it back = Scrolling here.)
-    //
-    // NOTE on radius ≠ 0:
-    // gpui-component forces the scrollbar thumb square when `theme.radius.is_zero()`
-    // (scroll/scrollbar.rs:765). We want the thumb rounded by THUMB_RADIUS, so we use
-    // a sub-pixel value ≠ 0 → is_zero() = false → the thumb gets rounded. Every other
-    // component using `.rounded(theme.radius)` still renders square corners (0.001px <
-    // sub-pixel, not visible). Slider/PieChart also gate on is_zero but the project does
-    // not use them → no impact.
+    // - radius = 4px, radius_lg = 6px: softly rounded controls.
+    // - scrollbar_show = Always: scrollbars stay visible instead of the
+    //   gpui-component default (`sync_scrollbar_appearance` may set Hover).
     {
         let theme = Theme::global_mut(cx);
         theme.radius = px(4.);
@@ -178,21 +180,41 @@ pub fn init(cx: &mut App) {
     // so it only needs to be set once at init.
     Theme::global_mut(cx).notification.placement = Anchor::BottomRight;
 
-    // Observe theme changes — persist the theme name + UI font size to ui_config.json
-    // whenever the global Theme is mutated (View ▸ Font Size menu, Appearance page, theme
-    // menus, …). Registered last so the init mutations above don't trigger a save.
-    cx.observe_global::<Theme>(|cx| {
-        let (name, size) = {
-            let theme = cx.theme();
-            (theme.theme_name().to_string(), theme.font_size.as_f32())
-        };
-        oneterm_settings::UiConfig::global(cx).update(cx, |cfg, _cx| {
-            cfg.theme_name = Some(name);
-            cfg.ui_font_size = Some(size);
-        });
-        oneterm_settings::UiConfig::persist(cx);
-    })
-    .detach();
+    // Persistence of the theme choice (`ui_config.json`) is owned by
+    // `oneterm_settings::UiConfig::observe_theme`, which the composition root
+    // registers after this init so the startup mutations above do not write.
+}
 
-    let _ = cx.theme();
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_embedded_theme_file_parses() {
+        // TEST-21: a broken JSON in `themes/` must fail here, not as a runtime
+        // warning at startup.
+        for (name, content) in EMBEDDED_THEME_FILES {
+            let mut registry = ThemeRegistry::default();
+            registry
+                .load_themes_from_str(content)
+                .unwrap_or_else(|error| panic!("embedded theme {name} failed to parse: {error}"));
+            assert!(
+                !registry.themes().is_empty(),
+                "embedded theme {name} defines no theme variant"
+            );
+        }
+    }
+
+    #[test]
+    fn zed_default_themes_are_present_under_their_registry_names() {
+        // `init` looks these names up to install the Zed defaults; a rename in
+        // the JSON would silently fall back to gpui-component's defaults.
+        let mut registry = ThemeRegistry::default();
+        for (_, content) in EMBEDDED_THEME_FILES {
+            registry.load_themes_from_str(content).unwrap();
+        }
+        assert!(registry.themes().contains_key("Zed One Dark"));
+        assert!(registry.themes().contains_key("Zed One Light"));
+        assert!(registry.themes().len() >= EMBEDDED_THEME_FILES.len());
+    }
 }

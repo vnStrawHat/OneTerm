@@ -13,7 +13,7 @@ use std::task::{Context, Poll};
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use crate::state::SharedState;
+use oneterm_terminal::SharedState;
 
 /// Wrapper that counts rx/tx bytes over an `AsyncRead + AsyncWrite` stream.
 pub(crate) struct CountingStream<S> {
@@ -39,7 +39,7 @@ impl<S: AsyncRead + Unpin> AsyncRead for CountingStream<S> {
                 let filled_after = buf.filled().len();
                 let n = filled_after.saturating_sub(filled_before);
                 if n > 0 {
-                    self.state.lock().unwrap().rx_bytes += n as u64;
+                    self.state.add_rx_bytes(n as u64);
                 }
                 Poll::Ready(Ok(()))
             }
@@ -57,7 +57,7 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for CountingStream<S> {
         match Pin::new(&mut self.inner).poll_write(cx, buf) {
             Poll::Ready(Ok(n)) => {
                 if n > 0 {
-                    self.state.lock().unwrap().tx_bytes += n as u64;
+                    self.state.add_tx_bytes(n as u64);
                 }
                 Poll::Ready(Ok(n))
             }

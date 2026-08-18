@@ -112,14 +112,15 @@ local → core
 
 ```
 crates/ssh/src/
-├── lib.rs              # Re-export: connect, SshConfig, SshSession, PtySize, Cmd
-├── config.rs           # SshConfig + SshAuthMethod (Password/PrivateKey/Agent)
-├── handler.rs          # SshClientHandler — check_server_key (MVP: accept all)
+├── lib.rs              # Re-export: connect, SshSession, SftpSession …
+├── transport.rs        # SshTransport — PtyTransport over the russh channel
+├── handler.rs          # SshClientHandler — host-key policy (known_hosts)
 ├── session.rs          # connect() — russh connect + auth + pty + shell → SshSession
-├── session_terminal.rs # impl TerminalSession for SshSession (347 lines)
-├── listener.rs         # SshListener — EventListener + Cmd channel (sync→async bridge)
+├── session_terminal.rs # impl TerminalSession for SshSession
 ├── task.rs             # ssh_main_task — tokio task reading channel + handling Cmd
-└── state.rs            # SessionState — cache (title, cwd, clipboard, alive, exit_code)
+├── sftp.rs / sftp_task*  # SftpSession (impl SftpBackend) + the SFTP command task
+└── (SessionState + the OscRouter listener live in crates/terminal/src/backend/;
+     SshListener = OscRouter<SshTransport>)
 ```
 
 ### 2.3. Current SSH connection flow
@@ -390,6 +391,9 @@ pub enum SftpCmd {
 }
 
 // ── SFTP event: tokio task → UI ──────────────────────────────
+// (Design-time sketch. The implementation has no `SftpEvent` channel: the UI
+// observes lifecycle through `SftpBackend::alive()` — an `AtomicBool` cleared
+// when `sftp_task` exits — and the dead event channel was removed.)
 
 /// Event from the SFTP task sent to the UI (via `async_channel`).
 #[derive(Debug, Clone)]
@@ -1311,7 +1315,7 @@ Step 1: Dependency + types
 
 - [x] Toolbar buttons: Upload, Download, Rename, Delete, New Folder, Properties
 - [x] Rename: dialog (InputState) → `sftp.rename()`
-- [x] Delete: confirm dialog → `sftp.remove()` / `sftp.rmdir()`
+- [x] Delete: confirm dialog → `sftp.remove()` / `sftp.remove_dir_all()` (recursive; the dialog says so)
 - [x] New Folder: dialog → `sftp.mkdir()`
 - [x] Upload: file picker dialog → `sftp.upload()` → add to transfer queue
 - [x] Download: file picker dialog → `sftp.download()` → add to transfer queue
@@ -1387,6 +1391,145 @@ impl oneterm_core::SftpBackend for SftpSession {
 fn sftp(&self) -> Option<Arc<dyn SftpBackend>> { None }
 ```
 
+### 5.3.1. Current `SftpBackend` contract (review refresh 2026-08)
+
+The sketch above is the original design; the trait as shipped in
+`crates/core/src/sftp.rs` differs in three ways (ARCH-12, ARCH-05, ARCH-04):
+
+**Remote paths are `RemotePath`, never `PathBuf`.** Remote locations are POSIX and
+must stay `/`-separated on every host OS — `PathBuf::join` inserts `\` on Windows,
+which an SFTP server treats as part of the file name. `oneterm_core::RemotePath` is a
+`String` newtype whose constructor normalises `\` → `/`, collapses duplicate slashes
+and drops a trailing slash (except for the root). It offers `root()`, `join(&str)`,
+`parent()`, `file_name()`, `as_str()`, `is_absolute()`, `Display`, `From<&str>` /
+`From<String>` and transparent serde. `FileEntry.path` and every
+remote parameter of the trait use it; only the local side of a transfer
+(`upload` source, `download` destination) remains a host `PathBuf`. The UI keeps
+its `cwd` as a `RemotePath` and converts the terminal's OSC 7 cwd at the boundary.
+
+**Transfers return a `TransferHandle`.** `upload`/`download` return
+`TransferHandle { events: Receiver<TransferEvent>, result: Receiver<Result<()>> }`
+with `enum TransferEvent { Progress(f64), Cancelled }`. Progress is always in
+`0.0..=1.0`; cancellation is an explicit event (and the result is
+`Err(AppError::Cancelled)`), never a negative sentinel. The UI drives one shared
+`run_transfer` loop for both directions: an item always ends `Completed`,
+`Cancelled`, or `Error`, and a cancelled/failed file does not abort the rest of an
+upload batch.
+
+**`rmdir` is `remove_dir_all`.** The method removes a directory and everything
+below it with a bounded traversal (depth and entry limits). It `lstat`s the root
+first: a symlinked root or a non-directory is unlinked with `remove_file`, so a
+symlink to a directory never causes the target's contents to be deleted; symlinks
+below the root are unlinked, not followed; `read_dir` errors are propagated instead
+of being mistaken for "not a directory". The delete confirmation dialog states that
+the folder *and all of its contents* will be deleted.
+
+```rust
+pub trait SftpBackend: Send + Sync + 'static {
+    fn session_id(&self) -> SftpSessionId;
+    fn read_dir(&self, path: RemotePath) -> SftpFuture<'_, Vec<FileEntry>>;
+    fn stat(&self, path: RemotePath) -> SftpFuture<'_, FileEntry>;
+    fn realpath(&self, path: RemotePath) -> SftpFuture<'_, RemotePath>;
+    fn rename(&self, from: RemotePath, to: RemotePath) -> SftpFuture<'_, ()>;
+    fn remove(&self, path: RemotePath) -> SftpFuture<'_, ()>;
+    fn remove_dir_all(&self, path: RemotePath) -> SftpFuture<'_, ()>;
+    fn mkdir(&self, path: RemotePath) -> SftpFuture<'_, ()>;
+    fn upload(&self, transfer_id: u64, local: PathBuf, remote: RemotePath) -> TransferHandle;
+    fn download(&self, transfer_id: u64, remote: RemotePath, local: PathBuf) -> TransferHandle;
+    fn cancel_transfer(&self, transfer_id: u64);
+    fn close(&self);
+    fn alive(&self) -> bool;
+}
+```
+
+A relative listing request (the initial `.`) is canonicalised through
+`realpath` first, so the panel's `cwd` becomes the absolute directory even when
+the listing is empty (CORR-52); when the server cannot resolve it, the original
+request is listed and the cwd falls back to the parent carried by the entries.
+
+Directory listings in the panel are guarded by a request generation
+(`SftpPanel::load_generation`) plus the active backend key: a `read_dir` result is
+applied only when both still match, so a slower earlier listing can neither replace
+a newer one nor rewrite `cwd` (CORR-09).
+
+### 5.3.2. Phase 2 refresh (2026-08): errors, panel state, transfers
+
+**One metadata type.** `FileStat` is gone (ARCH-09); `stat()` returns the same
+`FileEntry` a directory listing row uses, and the properties dialog reads it.
+
+**Typed SFTP errors.** `map_sftp_err` (`crates/ssh/src/sftp_task.rs`) keeps the
+server's status code: a `Status` reply becomes
+`AppError::Sftp { status: SftpStatus, message }` (`SftpStatus::{Eof, NoSuchFile,
+PermissionDenied, Failure, BadMessage, ConnectionLost, OpUnsupported, Other(code)}`),
+transport failures stay `AppError::Other`. `AppError::sftp_status()` lets the UI
+branch; `sftp-ui/src/actions.rs::describe_failure` phrases rename / mkdir /
+delete / stat failures accordingly ("permission denied by the server" vs. "the path
+no longer exists … refresh"). `AppError::Connect { phase: ConnectPhase, message }`,
+`AppError::ShellResolution { shell, reason }` and `AppError::ConfigLoad { document,
+message }` are defined alongside for the SSH connect phases, local-shell resolution
+and configuration loading (adoption in `crates/ssh/src/session.rs`,
+`crates/core/src/config/shell.rs` and `crates/local-shell` is a follow-up).
+
+**No side effects in `render()`.** Context-menu and toolbar-menu items run the
+panel's `do_*` methods directly from their `on_click` handler
+(`PopupMenuItem::on_click` receives `&mut Window`); the former `PendingAction`
+flag that was drained inside `render()` no longer exists (ARCH-30).
+
+**Panel state is grouped and private** (ARCH-31, `crates/sftp-ui/src/browser_view.rs`):
+
+| Group | Fields | Mutators |
+|---|---|---|
+| `BrowserView` | `cwd`, `selected`, `error`, `path_error` | `begin_load`, `set_cwd`, `select`, `set_error`, `set_path_error` |
+| `TransferQueueView` | `items: Vec<TransferItem>`, `next_id` | `allocate_id`, `reserve_id`, `push`, `update`, `replace`, `retain_active` |
+| `FollowCwd` | `enabled`, `last`, `cache`, `source: Option<SharedState>` | `toggle`, `set_last`, `set_source`, `refresh_cache`, `terminal_cwd()`, `snapshot()/restore()` |
+
+Every mutator raises its own dirty flag; the 500 ms poll timer drains them with
+`take_dirty()` and writes the view into the per-backend store only when something
+changed. The timer runs only while a backend is active (`ensure_poll_timer`): it
+ends itself when the panel shows "No SFTP connection" and is restarted by the next
+backend switch. A failed listing keeps the previous entries on screen under an
+error banner (`BrowserView::error`) rather than blanking the table; the entries
+carry absolute paths, so navigating from them stays valid. Sorting remaps
+`selected` by entry path so toolbar actions keep addressing the same file. Sibling modules reach the state through `SftpPanel::{browser, browser_mut,
+transfers, transfers_mut, follow, follow_mut, sftp, active_key, table}`; the
+transfer-queue bookkeeping (`push_transfer`, `update_transfer_for`,
+`alloc_transfer_id`, `clear_completed_transfers`, `cancel_transfer`) lives in
+`crates/sftp-ui/src/transfer_queue.rs`. The store snapshot (`SftpBrowserState`)
+embeds `BrowserView` and `TransferQueueView` plus the follow toggle/last cwd; the
+delegate keeps entries in an `Arc<[FileEntry]>` so a dirty snapshot shares the
+listing instead of cloning every row (PERF-31), and `sort_entries` sorts by a
+cached lower-case key (PERF-25).
+
+**`SftpBrowserStore` is a `RefCell` global** installed by `oneterm_sftp_ui::init`
+(ARCH-40); it is only touched from the UI thread and must not be re-entered from a
+`with_mut` closure.
+
+**Dialogs.** Rename and New Folder use `oneterm_state::form_dialog::FormDialog`
+(ARCH-33): content builder + Cancel/confirm footer, Enter submits, the dialog
+closes itself once the backend confirms (`actions.rs::run_mutation`).
+
+**Pipelined transfers** (PERF-18, `crates/ssh/src/sftp_task/transfer/pipeline.rs`):
+
+- Every request moves `CHUNK_LEN = 255 KiB` — the largest payload that fits one
+  256 KiB SFTP packet under OpenSSH's `limits@openssh.com` read/write caps
+  (261 120 bytes) — instead of 32 KiB.
+- Downloads open up to `READ_PIPELINE_DEPTH = 4` handles onto the same remote
+  file (`read_handles_for(total)` ramps 1 → 4 with the number of chunks, so small
+  files pay no extra `open` round trip) and `copy_striped` keeps one read
+  outstanding per handle; chunks are re-ordered through a bounded buffer
+  (`REORDER_WINDOW = 8` chunks ahead of the oldest unwritten one) before they reach
+  the local temporary file. A file that shrinks mid-transfer ends early without
+  error; bytes beyond the announced size are not read; size-less files fall back to
+  one sequential handle read to EOF.
+- Uploads use `copy_sequential` with the same chunk size; the `russh-sftp` `File`
+  keeps up to `Config::max_concurrent_writes` (8) writes unacknowledged.
+- Both helpers observe the `CancellationToken` between chunks (`tokio::select!`),
+  report a running byte count to the caller, and the callers map it onto
+  `TransferEvent::Progress` exactly as before (file: bytes/total; directory:
+  monotonic bytes/discovered). `TransferEvent::Cancelled` and
+  `Err(AppError::Cancelled)` semantics are unchanged; the four former copy loops are
+  one `download_file_contents` / `upload_file_contents` each.
+
 ### 5.4. Final file layout
 
 ```
@@ -1450,7 +1593,7 @@ crates/
 | gpui-component ContextMenu | `reference/gpui-component/crates/ui/src/menu/` |
 | gpui-component Button | `reference/gpui-component/crates/ui/src/button/` |
 | gpui-component Input | `reference/gpui-component/crates/ui/src/input/` |
-| Cmd/SshListener pattern | `crates/ssh/src/listener.rs` (current) |
+| Cmd/OscRouter pattern | `crates/terminal/src/backend/osc_router.rs` (`SshListener = OscRouter<SshTransport>`) |
 | ssh_main_task pattern | `crates/ssh/src/task.rs` (current) |
 | SshSession::connect | `crates/ssh/src/session.rs` (current) |
 | connect_dialog flow | `crates/ui/src/views/session_tabs/connect_dialog.rs` (current) |

@@ -1,19 +1,20 @@
 [package]
 name = "oneterm-agent-ui"
 description = "OneTerm Agent feature: the Agent Panel (right-dock fleet view of coding agents reporting via OSC 9;7)."
-publish = false
+version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
 
 [lints]
 workspace = true
 
 [dependencies]
-oneterm-core.workspace = true
 oneterm-terminal.workspace = true
 oneterm-state.workspace = true
 oneterm-settings.workspace = true
-oneterm-theme.workspace = true
 
 gpui.workspace = true
 gpui-component.workspace = true
-log.workspace = true

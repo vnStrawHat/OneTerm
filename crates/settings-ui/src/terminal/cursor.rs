@@ -7,7 +7,7 @@ use oneterm_settings::{TerminalBlink, TerminalCursorShape, TerminalSettings};
 
 use crate::items_with_separators;
 
-use super::persist;
+use super::set;
 
 /// Build the "Cursor" settings group.
 pub(super) fn group() -> SettingGroup {
@@ -42,11 +42,7 @@ pub(super) fn group() -> SettingGroup {
                             "underline" => TerminalCursorShape::Underline,
                             _ => TerminalCursorShape::Block,
                         };
-                        TerminalSettings::global(cx).update(cx, |s, cx| {
-                            s.set_cursor_shape(shape);
-                            cx.notify();
-                        });
-                        persist(cx);
+                        set(cx, |s| s.set_cursor_shape(shape));
                     },
                 ),
             )
@@ -66,11 +62,7 @@ pub(super) fn group() -> SettingGroup {
                         } else {
                             TerminalBlink::Off
                         };
-                        TerminalSettings::global(cx).update(cx, |s, cx| {
-                            s.set_cursor_blink(blink);
-                            cx.notify();
-                        });
-                        persist(cx);
+                        set(cx, |s| s.set_cursor_blink(blink));
                     },
                 ),
             )
@@ -91,11 +83,7 @@ pub(super) fn group() -> SettingGroup {
                         } else {
                             parse_hex_color(val.as_ref())
                         };
-                        TerminalSettings::global(cx).update(cx, |s, cx| {
-                            s.cursor_color = color;
-                            cx.notify();
-                        });
-                        persist(cx);
+                        set(cx, |s| s.cursor_color = color);
                     },
                 ),
             )

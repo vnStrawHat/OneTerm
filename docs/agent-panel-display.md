@@ -15,17 +15,18 @@
 
 ### 1.1 Where the panel lives
 
-The Agent Panel is the right-dock panel used by Agent Mode. The concrete dock
-panel is `crates/app/src/agent_panel.rs` (`panel_name = "agent_panel"`). It
-hosts `oneterm_agent_ui::AgentListView`.
+The Agent Panel is the right-dock panel used by Agent Mode. The dock panel is
+`oneterm_agent_ui::AgentListView` itself (`panel_name = "agent"`), registered by
+the feature's `init()`.
 
 The display implementation lives in `crates/agent-ui`:
 
-- `src/lib.rs` owns `AgentListView`, registry subscriptions, filters, relative
-  time refresh, and stale refresh.
-- `src/view.rs` renders the panel header, filter chips, tab groups, group
-  badges, the empty state, and the scroll column.
-- `src/card.rs` and `src/card/render.rs` render compact agent cards.
+- `src/lib.rs` re-exports `AgentListView` and owns the feature `init()`.
+- `src/view.rs` owns `AgentListView`: registry subscriptions, filters, the
+  refresh task (spinner tick, relative-time refresh, stale refresh), and renders
+  the panel header, filter chips, tab groups, group badges, the empty state, and
+  the scroll column.
+- `src/card.rs` renders compact agent cards.
 
 `crates/agent-ui` does not parse OSC bytes and does not know terminal protocol
 internals. It reads the folded display model from `oneterm_state::AgentRegistry`.
@@ -40,8 +41,7 @@ internals. It reads the folded display model from `oneterm_state::AgentRegistry`
 | Event delivery to terminal views | `SessionEvent::AgentStatus(Arc<AgentStatusEvent>)` | implemented |
 | Registry fold | `oneterm_state::AgentRegistry` | implemented |
 | Terminal feed into registry | `LocalTerminalView::push_agent_status` | implemented |
-| Card navigation index + focuser | `crates/terminal-view/src/agent.rs` | implemented |
-| Right-dock panel shell | `crates/app/src/agent_panel.rs` | implemented |
+| Card navigation targets (`AgentRegistry::set_nav` / `nav`) + focuser | `crates/state/src/agent_registry.rs`, `crates/terminal-view/src/agent.rs` | implemented |
 | Agent list UI | `crates/agent-ui` | implemented as compact cards |
 
 ---
@@ -90,8 +90,9 @@ cards in insertion order and exposes:
   `Live`, `Stale`, or `Ended`.
 - `remove_terminal(terminal_key, cx)` — drop cards for a terminal that was truly
   closed.
-- `clear_ended(cx)` — remove ended cards from the registry. There is no current
-  `agent-ui` button wired to this method.
+- `clear_ended(cx)` — remove ended cards from the registry. The panel header
+  shows a `Clear ended (n)` control while any ended card exists; it is the only
+  caller.
 - `refresh_stale(cx)` — mark live cards stale when no event has arrived within
   the effective stale window.
 - `summary()` — aggregate counts for the header chips. `Lifecycle::Ended` counts
@@ -187,8 +188,8 @@ Current card sort order:
 blocked → error → working → stale → idle → done → ended
 ```
 
-`Lifecycle::Ended` cards are sorted last by the model, but the current view
-filters ended cards out before rendering.
+`Lifecycle::Ended` cards are sorted last by the model and are shown (dimmed)
+only under the `All` and `Done` filters.
 
 ---
 
@@ -307,9 +308,8 @@ uses:
 | group/header background | `tokens.tab_bar` |
 | border | `border` |
 
-The left and right card borders use the state accent. Ended cards are dimmed if
-they are rendered by a future view, but the current `AgentListView` filters them
-out.
+The left and right card borders use the state accent. Ended and stale cards
+are rendered dimmed.
 
 ---
 
@@ -322,8 +322,11 @@ Current implemented interaction:
 
 - Clicking a card calls `oneterm_state::agent_focus::focus_terminal` with the
   card's `terminal_key`.
-- `terminal-view` registers the focuser. It activates the tab, activates the
-  space, and focuses the terminal using OneTerm dock/space/focus APIs.
+- `terminal-view` registers the focuser. It looks the terminal's navigation
+  target up in `AgentRegistry` (`nav(terminal_key)`) and runs it: this
+  activates the tab, activates the space, and focuses the terminal using
+  OneTerm dock/space/focus APIs. The registry owns the navigation index —
+  there is no separate global map.
 
 Not currently implemented in `agent-ui`:
 
@@ -342,16 +345,18 @@ The header title is `Agents` with a bot icon. The filter row always contains:
 
 | Label | Filter |
 |---|---|
-| `All` | all non-ended cards |
-| `Work` | `state == working` |
-| `Block` | `state == blocked` |
-| `Err` | `state == error` |
-| `Idle` | `state == idle` |
-| `Done` | `state == done` |
+| `All` | every card, ended ones included |
+| `Work` | `state == working` and not ended |
+| `Block` | `state == blocked` and not ended |
+| `Err` | `state == error` and not ended |
+| `Idle` | `state == idle` and not ended |
+| `Done` | `state == done`, or `Lifecycle::Ended` |
 
-All filters currently exclude `Lifecycle::Ended` cards. The summary counts are
-computed from the registry before filtering; `Lifecycle::Ended` contributes to
-the done count.
+`Lifecycle::Ended` cards match only `All` and `Done`, mirroring the summary
+counts, which are computed from the registry before filtering and count
+`Lifecycle::Ended` as done. Ended cards therefore never inflate a chip whose
+filter cannot show them. A `Clear ended (n)` control appears in the header
+while ended cards exist and calls `AgentRegistry::clear_ended`.
 
 Group badges show counts for:
 
@@ -371,14 +376,16 @@ Group badges show counts for:
 |---|---|---|
 | `Live` | any fresh non-ended event | card renders normally |
 | `Stale` | registry stale refresh | liveness text changes to `stale`; sort rank moves after working |
-| `Ended` | terminal `Exited`/`Closed`, or `state: done` | registry retains the state, summary counts as done, current view hides the card |
+| `Ended` | terminal `Exited`/`Closed`, or `state: done` | registry retains the state, summary counts as done, the view shows the card dimmed under `All`/`Done` until `Clear ended` |
 
 Stale detection uses `UiConfig::agent_stale_threshold_ms()` with a default of
 300,000 ms. A heartbeat with `interval_ms` raises the effective threshold to at
 least `interval_ms * 3`.
 
-`AgentListView` refreshes every 120 ms for spinner and relative-time labels, and
-runs stale refresh every 15 seconds.
+`AgentListView` runs one 120 ms tick (`ACTIVE_CARD_TICK`, only notifies while a
+visible card is working, for the spinner), refreshes relative-time labels every
+1 s (`RELATIVE_TIME_TICK`) and runs stale refresh every 15 s (`STALE_TICK`) —
+`crates/agent-ui/src/view.rs`.
 
 ---
 
@@ -425,9 +432,8 @@ SessionEvent::AgentStatus(Arc<AgentStatusEvent>)
 LocalTerminalView
         │  push_agent_status(ev)
         │  - resolve Tab/Space grouping
-        │  - register navigation target
+        │  - AgentRegistry::set_nav(terminal_key, nav)
         │  - AgentRegistry::apply(...)
-        │  agent_status = Some(ev)  // latest-event stash
         ▼
 oneterm_state::AgentRegistry
         │  folds events into AgentCard values
@@ -435,16 +441,15 @@ oneterm_state::AgentRegistry
         ▼
 oneterm_agent_ui::AgentListView
         │  groups, filters, sorts, renders compact cards
-        ▼
-crates/app::AgentPanel
+        │  and is itself the right-dock `Panel`
 ```
 
 Terminal lifecycle events also feed the registry:
 
 - `SessionEvent::Exited(code)` → `Lifecycle::Ended { exit_code: Some(code) }`
 - `SessionEvent::Closed` → `Lifecycle::Ended { exit_code: None }`
-- true terminal close/drop → `remove_terminal(terminal_key)` and remove navigation
-  entry
+- true terminal close/drop → `remove_terminal(terminal_key)`, which also drops
+  the navigation entry
 
 ---
 
@@ -460,7 +465,7 @@ These are known current gaps, not active behavior:
 - `session_reason` and `parent_id` are folded but not shown.
 - Tab groups are not collapsible.
 - There is no Agent Panel settings/gear menu.
-- Ended cards are retained by the registry but hidden by the current view.
+- Ended cards are retained by the registry until the user clears them.
 - Group order is first-seen registry order, not live dock tab order.
 
 ---

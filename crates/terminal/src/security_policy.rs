@@ -1,15 +1,11 @@
 //! Terminal security policy — bounds and sanitizes terminal-controlled data
 //! before it reaches persistent state or the OS.
 //!
-//! Before Phase 1, there was no central policy for OSC-controlled strings.
-//! A local or remote program could:
-//! - Set arbitrarily long tab titles with control characters
-//! - Flood notifications without rate limiting
-//! - Overwrite the clipboard at any time
-//! - Store unlimited cwd/URI strings
-//!
-//! This module provides a single `TerminalSecurityPolicy` with explicit
-//! defaults that all terminal-controlled data must pass through.
+//! Without a central policy a local or remote program could set arbitrarily
+//! long tab titles with control characters, flood notifications, overwrite the
+//! clipboard at any time, or store unlimited cwd/URI strings. This module
+//! provides a single `TerminalSecurityPolicy` with explicit defaults that all
+//! terminal-controlled data must pass through.
 
 use std::time::{Duration, Instant};
 
@@ -33,59 +29,33 @@ impl ClipboardOrigin {
     }
 }
 
-/// Default maximum title length in bytes (4 KiB).
-const DEFAULT_MAX_TITLE_BYTES: usize = 4 * 1024;
+/// Maximum title length in bytes (4 KiB).
+const MAX_TITLE_BYTES: usize = 4 * 1024;
 
-/// Default maximum notification length in bytes (8 KiB).
-const DEFAULT_MAX_NOTIFICATION_BYTES: usize = 8 * 1024;
+/// Maximum notification length in bytes (8 KiB).
+const MAX_NOTIFICATION_BYTES: usize = 8 * 1024;
 
-/// Default maximum clipboard payload length in bytes (256 KiB).
-const DEFAULT_MAX_CLIPBOARD_BYTES: usize = 256 * 1024;
+/// Maximum clipboard payload length in bytes (256 KiB).
+const MAX_CLIPBOARD_BYTES: usize = 256 * 1024;
 
-/// Default maximum cwd/URI length in bytes (8 KiB).
-const DEFAULT_MAX_CWD_BYTES: usize = 8 * 1024;
+/// Maximum cwd/URI length in bytes (8 KiB).
+const MAX_CWD_BYTES: usize = 8 * 1024;
 
-/// Default maximum notification rate (10 per second).
-const DEFAULT_NOTIFICATION_RATE_PER_SEC: u32 = 10;
+/// Maximum notification rate (10 per second).
+const NOTIFICATION_RATE_PER_SEC: u32 = 10;
 
-/// Default maximum queued notifications (5; older are coalesced/dropped).
-const DEFAULT_MAX_QUEUED_NOTIFICATIONS: usize = 5;
+/// Maximum notifications queued for display (older are coalesced/dropped).
+pub const MAX_QUEUED_NOTIFICATIONS: usize = 5;
 
-/// Policy governing terminal-controlled side effects.
-#[derive(Clone, Debug)]
+/// Policy governing terminal-controlled side effects. The size caps and the
+/// notification rate are fixed (the consts above); only the two remote
+/// clipboard gates are user-configurable, and both are default-off.
+#[derive(Clone, Debug, Default)]
 pub struct TerminalSecurityPolicy {
-    /// Maximum bytes for a terminal title (OSC 0/2).
-    pub max_title_bytes: usize,
-    /// Maximum bytes for a notification message (OSC 9/777).
-    pub max_notification_bytes: usize,
-    /// Maximum bytes for a clipboard write (OSC 52 set).
-    pub max_clipboard_bytes: usize,
-    /// Maximum bytes for a cwd/URI (OSC 7).
-    pub max_cwd_bytes: usize,
-    /// Maximum notifications per second before rate limiting kicks in.
-    pub notification_rate_per_sec: u32,
-    /// Maximum notifications queued for display (older are dropped).
-    pub max_queued_notifications: usize,
     /// Whether remote (SSH) clipboard writes are allowed.
     pub allow_remote_clipboard_write: bool,
     /// Whether remote (SSH) clipboard reads are allowed.
     pub allow_remote_clipboard_read: bool,
-}
-
-impl Default for TerminalSecurityPolicy {
-    fn default() -> Self {
-        Self {
-            max_title_bytes: DEFAULT_MAX_TITLE_BYTES,
-            max_notification_bytes: DEFAULT_MAX_NOTIFICATION_BYTES,
-            max_clipboard_bytes: DEFAULT_MAX_CLIPBOARD_BYTES,
-            max_cwd_bytes: DEFAULT_MAX_CWD_BYTES,
-            notification_rate_per_sec: DEFAULT_NOTIFICATION_RATE_PER_SEC,
-            max_queued_notifications: DEFAULT_MAX_QUEUED_NOTIFICATIONS,
-            // Remote clipboard operations are default-off for security.
-            allow_remote_clipboard_write: false,
-            allow_remote_clipboard_read: false,
-        }
-    }
 }
 
 /// Bounded one-second notification limiter shared by a terminal listener's clones.
@@ -97,16 +67,12 @@ pub struct NotificationRateLimiter {
 
 impl NotificationRateLimiter {
     /// Return whether one more notification may enter the session event stream.
-    pub fn allow(&mut self, policy: &TerminalSecurityPolicy) -> bool {
-        self.allow_at(policy, Instant::now())
+    pub fn allow(&mut self) -> bool {
+        self.allow_at(Instant::now())
     }
 
     /// Testable form of [`Self::allow`].
-    pub fn allow_at(&mut self, policy: &TerminalSecurityPolicy, now: Instant) -> bool {
-        if policy.notification_rate_per_sec == 0 {
-            return false;
-        }
-
+    pub fn allow_at(&mut self, now: Instant) -> bool {
         let reset = self
             .window_start
             .is_none_or(|started| now.duration_since(started) >= Duration::from_secs(1));
@@ -115,7 +81,7 @@ impl NotificationRateLimiter {
             self.accepted = 0;
         }
 
-        if self.accepted >= policy.notification_rate_per_sec {
+        if self.accepted >= NOTIFICATION_RATE_PER_SEC {
             return false;
         }
         self.accepted += 1;
@@ -129,11 +95,11 @@ impl TerminalSecurityPolicy {
     /// - Removes C0 control characters (except tab and newline)
     /// - Removes C1 control characters
     /// - Removes BiDi override/embedding characters
-    /// - Truncates to `max_title_bytes` at a UTF-8 boundary
+    /// - Truncates to [`MAX_TITLE_BYTES`] at a UTF-8 boundary
     /// - Returns `None` if the result is empty
     pub fn sanitize_title(&self, title: &str) -> Option<String> {
         let cleaned = strip_unsafe_chars(title);
-        let truncated = truncate_utf8(&cleaned, self.max_title_bytes);
+        let truncated = truncate_utf8(&cleaned, MAX_TITLE_BYTES);
         if truncated.is_empty() {
             None
         } else {
@@ -144,11 +110,11 @@ impl TerminalSecurityPolicy {
     /// Sanitize a notification message.
     ///
     /// - Removes C0/C1 controls and BiDi overrides
-    /// - Truncates to `max_notification_bytes`
+    /// - Truncates to [`MAX_NOTIFICATION_BYTES`]
     /// - Returns `None` if the result is empty
     pub fn sanitize_notification(&self, msg: &str) -> Option<String> {
         let cleaned = strip_unsafe_chars(msg);
-        let truncated = truncate_utf8(&cleaned, self.max_notification_bytes);
+        let truncated = truncate_utf8(&cleaned, MAX_NOTIFICATION_BYTES);
         if truncated.is_empty() {
             None
         } else {
@@ -158,7 +124,7 @@ impl TerminalSecurityPolicy {
 
     /// Validate a clipboard write payload.
     ///
-    /// - Truncates to `max_clipboard_bytes`
+    /// - Truncates to [`MAX_CLIPBOARD_BYTES`]
     /// - Returns `None` if it exceeds the limit (reject, don't truncate
     ///   security-sensitive data)
     pub fn validate_clipboard_write<'a>(
@@ -169,7 +135,7 @@ impl TerminalSecurityPolicy {
         if origin.is_remote() && !self.allow_remote_clipboard_write {
             return None;
         }
-        if text.len() > self.max_clipboard_bytes {
+        if text.len() > MAX_CLIPBOARD_BYTES {
             return None;
         }
         Some(text)
@@ -186,11 +152,12 @@ impl TerminalSecurityPolicy {
 
     /// Sanitize a cwd path from OSC 7.
     ///
-    /// - Removes C0/C1 controls and BiDi overrides
-    /// - Truncates to `max_cwd_bytes`
+    /// - Removes every C0/C1 control (including `\n`, `\r`, `\t` — a path
+    ///   never legitimately contains a line break, SEC-07) and BiDi controls
+    /// - Truncates to [`MAX_CWD_BYTES`]
     pub fn sanitize_cwd(&self, cwd: &str) -> Option<String> {
-        let cleaned = strip_unsafe_chars(cwd);
-        let truncated = truncate_utf8(&cleaned, self.max_cwd_bytes);
+        let cleaned = strip_control_chars(cwd);
+        let truncated = truncate_utf8(&cleaned, MAX_CWD_BYTES);
         if truncated.is_empty() {
             None
         } else {
@@ -199,38 +166,31 @@ impl TerminalSecurityPolicy {
     }
 }
 
-/// Remove C0 control characters (except \t \n \r), C1 controls,
-/// and BiDi override/embedding/mark characters from a string.
-pub fn strip_unsafe_chars(s: &str) -> String {
+/// Remove C0 control characters (except `\t` `\n` `\r`), DEL, C1 controls,
+/// and BiDi override/embedding/isolate/mark characters from a string.
+pub(crate) fn strip_unsafe_chars(s: &str) -> String {
     s.chars()
-        .filter(|c| {
-            let code = *c as u32;
-            // Allow tab, newline, CR.
-            if code == 0x09 || code == 0x0a || code == 0x0d {
-                return true;
-            }
-            // Reject C0 controls (0x00-0x1F).
-            if code < 0x20 {
-                return false;
-            }
-            // Reject C1 controls (0x80-0x9F).
-            if (0x80..=0x9f).contains(&code) {
-                return false;
-            }
-            // Reject BiDi overrides.
-            if matches!(
-                code,
-                0x202a | 0x202b | 0x202c | 0x202d | 0x202e | 0x200e | 0x200f
-            ) {
-                return false;
-            }
-            true
-        })
+        .filter(|&c| matches!(c, '\t' | '\n' | '\r') || !is_unsafe_char(c))
         .collect()
 }
 
+/// Like [`strip_unsafe_chars`] but also removes `\t`, `\n` and `\r` — for
+/// values that are single-line by construction (cwd paths, URIs).
+pub(crate) fn strip_control_chars(s: &str) -> String {
+    s.chars().filter(|&c| !is_unsafe_char(c)).collect()
+}
+
+/// C0 (including tab/newline/CR), DEL, C1, or BiDi control character.
+fn is_unsafe_char(c: char) -> bool {
+    let code = c as u32;
+    code < 0x20
+        || code == 0x7f
+        || (0x80..=0x9f).contains(&code)
+        || crate::url_policy::is_bidi_control(c)
+}
+
 /// Truncate a string to at most `max_bytes` at a UTF-8 character boundary.
-pub fn truncate_utf8(s: &str, max_bytes: usize) -> String {
+pub(crate) fn truncate_utf8(s: &str, max_bytes: usize) -> String {
     if s.len() <= max_bytes {
         return s.to_string();
     }
@@ -266,13 +226,8 @@ mod tests {
 
     #[test]
     fn title_truncates_at_utf8_boundary() {
-        let policy = TerminalSecurityPolicy {
-            max_title_bytes: 5,
-            ..Default::default()
-        };
-        // "héllo" = 6 bytes (é is 2 bytes); should truncate to "héll" (5 bytes).
-        let result = policy.sanitize_title("héllo").unwrap();
-        assert_eq!(result, "héll");
+        // "héllo" = 6 bytes (é is 2 bytes); a 5-byte cap yields "héll".
+        assert_eq!(truncate_utf8("héllo", 5), "héll");
     }
 
     #[test]
@@ -306,14 +261,13 @@ mod tests {
 
     #[test]
     fn notification_strips_controls_and_truncates() {
-        let policy = TerminalSecurityPolicy {
-            max_notification_bytes: 10,
-            ..Default::default()
-        };
+        let policy = TerminalSecurityPolicy::default();
+        let long = "x".repeat(MAX_NOTIFICATION_BYTES);
         let result = policy
-            .sanitize_notification("hello\u{0007}world this is long")
+            .sanitize_notification(&format!("hello\u{0007}world{long}"))
             .unwrap();
-        assert_eq!(result, "helloworld");
+        assert_eq!(result.len(), MAX_NOTIFICATION_BYTES);
+        assert!(result.starts_with("helloworld"));
     }
 
     #[test]
@@ -354,11 +308,8 @@ mod tests {
 
     #[test]
     fn clipboard_write_oversized_denied() {
-        let policy = TerminalSecurityPolicy {
-            max_clipboard_bytes: 10,
-            ..Default::default()
-        };
-        let large = "x".repeat(100);
+        let policy = TerminalSecurityPolicy::default();
+        let large = "x".repeat(MAX_CLIPBOARD_BYTES + 1);
         assert_eq!(
             policy.validate_clipboard_write(&large, ClipboardOrigin::Local),
             None
@@ -379,12 +330,34 @@ mod tests {
 
     #[test]
     fn cwd_strips_controls_and_truncates() {
-        let policy = TerminalSecurityPolicy {
-            max_cwd_bytes: 10,
-            ..Default::default()
-        };
+        let policy = TerminalSecurityPolicy::default();
         let result = policy.sanitize_cwd("/home/user\u{0007}/dir").unwrap();
-        assert_eq!(result, "/home/user");
+        assert_eq!(result, "/home/user/dir");
+        let long = policy
+            .sanitize_cwd(&"x".repeat(MAX_CWD_BYTES + 10))
+            .unwrap();
+        assert_eq!(long.len(), MAX_CWD_BYTES);
+    }
+
+    /// SEC-07: line breaks and tabs never survive in a cwd; BiDi isolates are
+    /// stripped from every terminal-controlled string.
+    #[test]
+    fn cwd_rejects_line_breaks_and_bidi_isolates() {
+        let policy = TerminalSecurityPolicy::default();
+        assert_eq!(
+            policy.sanitize_cwd("/home/us\ner\r/di\tr").unwrap(),
+            "/home/user/dir"
+        );
+        assert_eq!(
+            policy.sanitize_cwd("/home/\u{2066}user\u{2069}").unwrap(),
+            "/home/user"
+        );
+        assert_eq!(policy.sanitize_title("a\u{2067}b\u{2068}c").unwrap(), "abc");
+        // Titles and notifications may still span lines.
+        assert_eq!(
+            policy.sanitize_title("line1\nline2").unwrap(),
+            "line1\nline2"
+        );
     }
 
     #[test]
@@ -400,7 +373,7 @@ mod tests {
         let policy = TerminalSecurityPolicy::default();
         let title = "x".repeat(5000);
         let result = policy.sanitize_title(&title).unwrap();
-        assert_eq!(result.len(), DEFAULT_MAX_TITLE_BYTES);
+        assert_eq!(result.len(), MAX_TITLE_BYTES);
     }
 }
 
@@ -410,26 +383,13 @@ mod notification_limiter_tests {
 
     #[test]
     fn notification_rate_is_bounded_and_resets() {
-        let policy = TerminalSecurityPolicy {
-            notification_rate_per_sec: 2,
-            ..Default::default()
-        };
         let start = Instant::now();
         let mut limiter = NotificationRateLimiter::default();
 
-        assert!(limiter.allow_at(&policy, start));
-        assert!(limiter.allow_at(&policy, start + Duration::from_millis(10)));
-        assert!(!limiter.allow_at(&policy, start + Duration::from_millis(20)));
-        assert!(limiter.allow_at(&policy, start + Duration::from_secs(1)));
-    }
-
-    #[test]
-    fn zero_rate_rejects_every_notification() {
-        let policy = TerminalSecurityPolicy {
-            notification_rate_per_sec: 0,
-            ..Default::default()
-        };
-        let mut limiter = NotificationRateLimiter::default();
-        assert!(!limiter.allow_at(&policy, Instant::now()));
+        for i in 0..NOTIFICATION_RATE_PER_SEC {
+            assert!(limiter.allow_at(start + Duration::from_millis(u64::from(i))));
+        }
+        assert!(!limiter.allow_at(start + Duration::from_millis(500)));
+        assert!(limiter.allow_at(start + Duration::from_secs(1)));
     }
 }

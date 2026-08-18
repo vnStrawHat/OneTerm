@@ -1,13 +1,12 @@
-#[cfg(unix)]
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[cfg(unix)]
+use oneterm_core::RemotePath;
+
 use super::transfer::staging::{finalize_local_file, temporary_local_sibling};
 use super::transfer::upload::{LocalUploadEntry, stream_local_upload_entries};
 use super::*;
-use std::path::{Path, PathBuf};
 
-#[cfg(unix)]
 fn temporary_dir() -> PathBuf {
     // Distinct per call so parallel tests never share a directory, and so two
     // calls within one test (e.g. `root` and `outside`) can't alias when the
@@ -63,7 +62,6 @@ fn accepts_one_safe_component_and_keeps_it_below_root() {
     }
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn local_finalization_replaces_only_after_complete_write() {
     let root = temporary_dir();
@@ -81,17 +79,43 @@ async fn local_finalization_replaces_only_after_complete_write() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-#[cfg(unix)]
+/// Create a directory symlink `link` → `target`, or `None` when the platform
+/// refuses (Windows requires Developer Mode or `SeCreateSymbolicLinkPrivilege`).
+fn try_symlink_dir(target: &Path, link: &Path) -> Option<()> {
+    #[cfg(unix)]
+    let result = std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    let result = std::os::windows::fs::symlink_dir(target, link);
+    match result {
+        Ok(()) => Some(()),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping symlink test: cannot create symlinks here ({error})");
+            None
+        }
+        // Windows reports the missing privilege as os error 1314, which std
+        // maps to `Uncategorized`.
+        #[cfg(windows)]
+        Err(error) if error.raw_os_error() == Some(1314) => {
+            eprintln!("skipping symlink test: cannot create symlinks here ({error})");
+            None
+        }
+        Err(error) => panic!("symlink creation failed: {error}"),
+    }
+}
+
+/// TEST-11: the download-root symlink guard must run on every client platform.
 #[tokio::test]
 async fn refuses_preexisting_symlink_below_download_root() {
-    use std::os::unix::fs::symlink;
-
     let root = temporary_dir();
     let outside = temporary_dir();
     std::fs::create_dir_all(&root).unwrap();
     std::fs::create_dir_all(&outside).unwrap();
     let root = std::fs::canonicalize(&root).unwrap();
-    symlink(&outside, root.join("linked")).unwrap();
+    if try_symlink_dir(&outside, &root.join("linked")).is_none() {
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+        return;
+    }
     let candidate = root.join("linked").join("file.txt");
 
     let error = create_safe_parent_dirs(&root, &candidate)
@@ -123,7 +147,7 @@ fn local_traversal_stops_before_filesystem_access_when_cancelled() {
     let (entries, _receiver) = async_channel::bounded(1);
     let error = stream_local_upload_entries(
         PathBuf::from("missing"),
-        PathBuf::from("/remote"),
+        RemotePath::new("/remote"),
         cancel,
         &entries,
     )
@@ -131,18 +155,21 @@ fn local_traversal_stops_before_filesystem_access_when_cancelled() {
     assert!(matches!(error, AppError::Cancelled));
 }
 
+/// CORR-18: the walker parks in `send_blocking` while the channel is full;
+/// cancelling and dropping the consumer (what `stop_traversal` does) wakes it
+/// up with `Cancelled` instead of leaving it spinning or stuck.
 #[test]
 fn local_upload_discovery_cancels_while_channel_is_full() {
     let cancel = CancellationToken::new();
-    let (entries, _receiver) = async_channel::bounded(1);
+    let (entries, receiver) = async_channel::bounded(1);
     entries
-        .try_send(LocalUploadEntry::Directory(PathBuf::from("/occupied")))
+        .try_send(LocalUploadEntry::Directory(RemotePath::new("/occupied")))
         .unwrap();
     let traversal_cancel = cancel.clone();
     let traversal = std::thread::spawn(move || {
         stream_local_upload_entries(
             PathBuf::from("missing"),
-            PathBuf::from("/remote"),
+            RemotePath::new("/remote"),
             traversal_cancel,
             &entries,
         )
@@ -150,13 +177,13 @@ fn local_upload_discovery_cancels_while_channel_is_full() {
 
     std::thread::sleep(std::time::Duration::from_millis(10));
     cancel.cancel();
+    drop(receiver);
     assert!(matches!(
         traversal.join().unwrap().unwrap_err(),
         AppError::Cancelled
     ));
 }
 
-#[cfg(unix)]
 #[test]
 fn local_upload_discovery_streams_directories_and_files() {
     let root = temporary_dir();
@@ -167,7 +194,7 @@ fn local_upload_discovery_streams_directories_and_files() {
 
     stream_local_upload_entries(
         root.clone(),
-        PathBuf::from("/remote"),
+        RemotePath::new("/remote"),
         CancellationToken::new(),
         &entries,
     )
@@ -176,6 +203,16 @@ fn local_upload_discovery_streams_directories_and_files() {
     let mut discovered = Vec::new();
     while let Ok(entry) = receiver.try_recv() {
         discovered.push(entry);
+    }
+
+    // Remote targets are built with `/` on every host OS (ARCH-12).
+    for entry in &discovered {
+        let remote = match entry {
+            LocalUploadEntry::Directory(remote) => remote,
+            LocalUploadEntry::File { remote, .. } => remote,
+        };
+        assert!(remote.as_str().starts_with("/remote"), "{remote}");
+        assert!(!remote.as_str().contains('\\'), "{remote}");
     }
 
     assert_eq!(
@@ -193,4 +230,43 @@ fn local_upload_discovery_streams_directories_and_files() {
         2
     );
     let _ = std::fs::remove_dir_all(root);
+}
+
+/// SEC-16: the id databases are parsed line by line, so a truncated read
+/// (the last line cut by the size cap) still yields every complete entry.
+#[test]
+fn id_database_parsers_tolerate_truncated_input() {
+    let mut lookup = metadata::UidGidLookup::default();
+    metadata::parse_passwd(
+        "root:x:0:0:root:/root:/bin/bash
+alice:x:1000:1000::/home/alice:/bin/sh
+bob:x:10",
+        &mut lookup,
+    );
+    metadata::parse_group(
+        "wheel:x:10:
+users:x:100:
+trunc:x:1",
+        &mut lookup,
+    );
+    assert_eq!(lookup.uid_to_name.get(&0).map(String::as_str), Some("root"));
+    assert_eq!(
+        lookup.uid_to_name.get(&1000).map(String::as_str),
+        Some("alice")
+    );
+    assert_eq!(lookup.uid_to_name.len(), 2);
+    assert_eq!(
+        lookup.gid_to_name.get(&10).map(String::as_str),
+        Some("wheel")
+    );
+    assert_eq!(
+        lookup.gid_to_name.get(&100).map(String::as_str),
+        Some("users")
+    );
+    // The passwd gid fallback is kept for groups /etc/group did not name.
+    assert_eq!(
+        lookup.gid_to_name.get(&1000).map(String::as_str),
+        Some("alice")
+    );
+    assert!(metadata::MAX_ID_DATABASE_BYTES >= 1024 * 1024);
 }

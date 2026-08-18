@@ -8,15 +8,15 @@ use crate::class::Class;
 use crate::profile::{PathSep, ShellProfile};
 use crate::rules::RuleSet;
 
-use super::is_word_char;
+use super::{LineText, is_word_char};
 
 /// 4. Structural regexes — IPv6, MAC, DateTime. Skip claimed columns.
-pub(super) fn structural_scan(chars: &[char], classes: &mut [u8], rules: &RuleSet) {
-    let s: String = chars.iter().collect();
-
-    // Byte → char index map.
-    let byte_to_char = super::byte_to_char_map(&s);
-
+pub(super) fn structural_scan(
+    text: &LineText<'_>,
+    chars: &[char],
+    classes: &mut [u8],
+    rules: &RuleSet,
+) {
     let structural: [(&regex::Regex, Class); 3] = [
         (&rules.mac, Class::Mac),
         (&rules.ipv6, Class::Ip),
@@ -24,9 +24,9 @@ pub(super) fn structural_scan(chars: &[char], classes: &mut [u8], rules: &RuleSe
     ];
 
     for (re, cls) in structural {
-        for m in re.find_iter(&s) {
-            let char_start = *byte_to_char.get(m.start()).unwrap_or(&0);
-            let char_end = *byte_to_char.get(m.end()).unwrap_or(&chars.len());
+        for m in re.find_iter(text.text) {
+            let char_start = text.char_index(m.start());
+            let char_end = text.char_index(m.end());
 
             // IPv6-like strings must not start or end inside an identifier/path token.
             if cls == Class::Ip {
@@ -86,12 +86,10 @@ fn try_ipv4(chars: &[char], start: usize) -> Option<usize> {
         if digit_len == 0 || digit_len > 3 {
             return None;
         }
-        // Validate octet value ≤ 255.
-        let octet: u32 = chars[digit_start..pos]
+        // Validate octet value ≤ 255 (at most 3 digits, so no overflow).
+        let octet = chars[digit_start..pos]
             .iter()
-            .collect::<String>()
-            .parse()
-            .ok()?;
+            .fold(0u32, |acc, c| acc * 10 + c.to_digit(10).unwrap_or(0));
         if octet > 255 {
             return None;
         }

@@ -10,12 +10,22 @@ use gpui_component::{
 use oneterm_core::{AppError, LocalShellConfig, Result, SessionDuplicateConfig, SshConfig};
 use oneterm_state::{AppServices, commands::WorkspaceCommands};
 use oneterm_terminal::{
-    PtySize, SessionFactory, TerminalSession, test_support::FakeTerminalSession,
+    PtySize, SessionFactory, TerminalSecurityPolicy, TerminalSession,
+    test_support::FakeTerminalSession,
 };
 
-use crate::panel::TerminalPanel;
+use crate::panel::{PanelSpec, TerminalPanel};
 use crate::space::{CloseOutcome, SplitDir};
 use crate::view::LocalTerminalView;
+
+/// A `PanelSpec` wrapping an existing session without duplication metadata.
+fn session_spec(session: Box<dyn TerminalSession>, title: &str) -> PanelSpec {
+    PanelSpec::Session {
+        session,
+        title: title.to_string(),
+        duplicate_config: None,
+    }
+}
 
 #[gpui::test]
 fn terminal_panel_disables_multi_tab_inner_padding(cx: &mut TestAppContext) {
@@ -25,7 +35,7 @@ fn terminal_panel_disables_multi_tab_inner_padding(cx: &mut TestAppContext) {
 
     let (session, _) = FakeTerminalSession::boxed(24, 80, "");
     let (panel, cx) = cx.add_window_view(move |window, cx| {
-        TerminalPanel::from_session(session, "Terminal", window, cx)
+        TerminalPanel::from_spec(session_spec(session, "Terminal"), window, cx)
     });
     let cx: &mut VisualTestContext = cx;
 
@@ -40,7 +50,7 @@ fn filling_space_one_does_not_renumber_space_two(cx: &mut TestAppContext) {
 
     let (session, _) = FakeTerminalSession::boxed(24, 80, "source");
     let (panel, cx) = cx.add_window_view(move |window, cx| {
-        TerminalPanel::from_session(session, "Terminal", window, cx)
+        TerminalPanel::from_spec(session_spec(session, "Terminal"), window, cx)
     });
     let cx: &mut VisualTestContext = cx;
 
@@ -56,7 +66,7 @@ fn filling_space_one_does_not_renumber_space_two(cx: &mut TestAppContext) {
         let space_one = destinations[1];
         let (duplicate, _) = FakeTerminalSession::boxed(24, 80, "duplicate");
         let duplicate = cx.new(|_| duplicate);
-        let view = cx.new(|cx| LocalTerminalView::new(duplicate, window, cx));
+        let view = cx.new(|cx| LocalTerminalView::new(duplicate, panel.deps.clone(), window, cx));
         panel
             .tree
             .fill_empty(space_one, view)
@@ -74,7 +84,7 @@ fn phase0_close_last_space_calls_session_close(cx: &mut TestAppContext) {
 
     let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
     let (panel, cx) = cx.add_window_view(move |window, cx| {
-        TerminalPanel::from_session(session, "Phase0", window, cx)
+        TerminalPanel::from_spec(session_spec(session, "Phase0"), window, cx)
     });
     let cx: &mut VisualTestContext = cx;
 
@@ -113,8 +123,9 @@ fn phase0_close_non_last_space_closes_removed_session(cx: &mut TestAppContext) {
 
     // First session — will be split and then closed.
     let (session_a, probe_a) = FakeTerminalSession::boxed(24, 80, "session A");
-    let (panel, cx) = cx
-        .add_window_view(move |window, cx| TerminalPanel::from_session(session_a, "A", window, cx));
+    let (panel, cx) = cx.add_window_view(move |window, cx| {
+        TerminalPanel::from_spec(session_spec(session_a, "A"), window, cx)
+    });
     let cx: &mut VisualTestContext = cx;
 
     cx.run_until_parked();
@@ -132,7 +143,7 @@ fn phase0_close_non_last_space_closes_removed_session(cx: &mut TestAppContext) {
     let new_active = panel.read_with(cx, |p, _| p.tree.active());
     panel.update_in(cx, |p, window, cx| {
         let session_entity = cx.new(|_| session_b);
-        let view = cx.new(|cx| LocalTerminalView::new(session_entity, window, cx));
+        let view = cx.new(|cx| LocalTerminalView::new(session_entity, p.deps.clone(), window, cx));
         p.tree
             .fill_empty(new_active, view)
             .expect("new split Space must be empty");
@@ -163,7 +174,7 @@ fn phase1_shutdown_cancels_tasks_and_closes_session(cx: &mut TestAppContext) {
 
     let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
     let (panel, cx) = cx.add_window_view(move |window, cx| {
-        TerminalPanel::from_session(session, "Phase1", window, cx)
+        TerminalPanel::from_spec(session_spec(session, "Phase1"), window, cx)
     });
     let cx: &mut VisualTestContext = cx;
 
@@ -214,7 +225,7 @@ fn phase1_shutdown_is_idempotent(cx: &mut TestAppContext) {
 
     let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
     let (panel, cx) = cx.add_window_view(move |window, cx| {
-        TerminalPanel::from_session(session, "Phase1", window, cx)
+        TerminalPanel::from_spec(session_spec(session, "Phase1"), window, cx)
     });
     let cx: &mut VisualTestContext = cx;
 
@@ -242,6 +253,7 @@ impl SessionFactory for DuplicateSessionFactory {
         config: LocalShellConfig,
         _: PtySize,
         _: usize,
+        _: TerminalSecurityPolicy,
     ) -> Result<Box<dyn TerminalSession>> {
         self.spawned_local_configs
             .lock()
@@ -250,7 +262,13 @@ impl SessionFactory for DuplicateSessionFactory {
         Ok(FakeTerminalSession::boxed(24, 80, "duplicate").0)
     }
 
-    fn connect_ssh(&self, _: SshConfig, _: PtySize, _: usize) -> Result<Box<dyn TerminalSession>> {
+    fn connect_ssh(
+        &self,
+        _: SshConfig,
+        _: PtySize,
+        _: usize,
+        _: TerminalSecurityPolicy,
+    ) -> Result<Box<dyn TerminalSession>> {
         Err(AppError::msg("SSH is not used by this test"))
     }
 }
@@ -295,13 +313,15 @@ fn duplicate_action_dispatches_to_the_active_space(cx: &mut TestAppContext) {
     let spawned_local_configs = Arc::new(Mutex::new(Vec::new()));
     let configs_for_factory = spawned_local_configs.clone();
     cx.update(|cx| {
-        AppServices::new(
+        AppServices::install(
+            cx,
             Arc::new(DuplicateSessionFactory {
                 spawned_local_configs: configs_for_factory,
             }),
             duplicate_test_commands(),
+            crate::status_metrics(),
+            crate::agent_focuser(),
         )
-        .install(cx)
         .expect("test services must install once");
     });
 
@@ -316,10 +336,12 @@ fn duplicate_action_dispatches_to_the_active_space(cx: &mut TestAppContext) {
         let panel = cx.new(|cx| {
             let mut inactive_config = LocalShellConfig::default();
             inactive_config.program = Some("inactive-shell".into());
-            TerminalPanel::from_session_with_duplicate_config(
-                session,
-                "Source",
-                Some(SessionDuplicateConfig::Local(inactive_config)),
+            TerminalPanel::from_spec(
+                PanelSpec::Session {
+                    session,
+                    title: "Source".to_string(),
+                    duplicate_config: Some(SessionDuplicateConfig::Local(inactive_config)),
+                },
                 window,
                 cx,
             )
@@ -332,7 +354,8 @@ fn duplicate_action_dispatches_to_the_active_space(cx: &mut TestAppContext) {
             let (active_session, _) = FakeTerminalSession::boxed(24, 80, "active");
             let active_session = cx.new(|_| active_session);
             let active_view = cx.new(|cx| {
-                let mut view = LocalTerminalView::new(active_session, window, cx);
+                let mut view =
+                    LocalTerminalView::new(active_session, panel.deps.clone(), window, cx);
                 let mut active_config = LocalShellConfig::default();
                 active_config.program = Some("active-shell".into());
                 view.duplicate_config = Some(SessionDuplicateConfig::Local(active_config));
@@ -376,5 +399,132 @@ fn duplicate_action_dispatches_to_the_active_space(cx: &mut TestAppContext) {
     assert_eq!(
         spawned_local_configs[0].program.as_deref(),
         Some(std::path::Path::new("active-shell"))
+    );
+}
+
+#[gpui::test]
+fn tab_drop_onto_occupied_space_keeps_source_terminal(cx: &mut TestAppContext) {
+    // Regression (CORR-03): dropping a tab onto a Space that is not empty must
+    // not take the source terminal out of its tree and shut it down.
+    cx.update(gpui_component::init);
+    cx.update(crate::init);
+    cx.update(oneterm_settings::TerminalSettings::init);
+
+    let (target_session, _) = FakeTerminalSession::boxed(24, 80, "target");
+    let (target, cx) = cx.add_window_view(move |window, cx| {
+        TerminalPanel::from_spec(session_spec(target_session, "Target"), window, cx)
+    });
+    let cx: &mut VisualTestContext = cx;
+
+    let (source_session, source_probe) = FakeTerminalSession::boxed(24, 80, "source");
+    let source = cx.update(|window, cx| {
+        cx.new(|cx| TerminalPanel::from_spec(session_spec(source_session, "Source"), window, cx))
+    });
+    cx.run_until_parked();
+
+    let source_view = source.read_with(cx, |panel, _| {
+        panel
+            .tree
+            .active_terminal()
+            .expect("source panel must own a terminal")
+    });
+    let drag = crate::space::DragTerminalTab {
+        panel: source.downgrade(),
+        tab_panel: gpui::WeakEntity::new_invalid(),
+        title: "Source".into(),
+    };
+
+    target.update_in(cx, |panel, window, cx| {
+        let occupied = panel.tree.active();
+        assert!(panel.tree.leaf_terminal(occupied).is_some());
+        panel.handle_tab_drop(occupied, &drag, window, cx);
+    });
+    cx.run_until_parked();
+
+    assert_eq!(source_probe.close_calls(), 0);
+    assert!(source_view.read_with(cx, |view, _| view.alive));
+    let still_in_source = source.read_with(cx, |panel, _| {
+        panel.tree.active_terminal().as_ref() == Some(&source_view)
+    });
+    assert!(still_in_source, "source terminal must stay in its Space");
+}
+
+fn agent_state_event(seq: u64) -> oneterm_terminal::AgentStatusEvent {
+    oneterm_terminal::AgentStatusEvent {
+        agent: "pi".into(),
+        seq,
+        ts: seq * 1000,
+        payload: oneterm_terminal::AgentPayload::State(oneterm_terminal::StateEvent {
+            state: oneterm_terminal::AgentState::Working,
+            message: None,
+            session_id: None,
+        }),
+    }
+}
+
+fn agent_lifecycle(
+    registry: &gpui::Entity<oneterm_state::AgentRegistry>,
+    terminal_key: gpui::EntityId,
+    cx: &mut VisualTestContext,
+) -> Option<oneterm_state::Lifecycle> {
+    registry.read_with(cx, |reg, _| {
+        reg.cards()
+            .iter()
+            .find(|c| c.terminal_key == terminal_key)
+            .map(|c| c.lifecycle)
+    })
+}
+
+#[gpui::test]
+fn exited_behind_output_batch_marks_agent_ended(cx: &mut TestAppContext) {
+    // Regression (CORR-02): a process that prints and exits in the same batch
+    // delivers `Output` followed by `Exited` on the event channel. The
+    // coalescing drain must run the same exit handling as the main loop.
+    cx.update(gpui_component::init);
+    cx.update(crate::init);
+    cx.update(oneterm_settings::TerminalSettings::init);
+    cx.update(oneterm_state::AgentRegistry::init);
+
+    let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
+    let (panel, cx) = cx.add_window_view(move |window, cx| {
+        TerminalPanel::from_spec(session_spec(session, "Agent"), window, cx)
+    });
+    let cx: &mut VisualTestContext = cx;
+    cx.run_until_parked();
+
+    let terminal_key = panel.read_with(cx, |panel, _| {
+        panel
+            .tree
+            .active_terminal()
+            .expect("panel must own a terminal")
+            .entity_id()
+    });
+
+    probe
+        .emit(oneterm_terminal::SessionEvent::AgentStatus(Arc::new(
+            agent_state_event(1),
+        )))
+        .expect("event channel must accept the agent event");
+    cx.run_until_parked();
+
+    let registry = cx.update(|_, cx| oneterm_state::AgentRegistry::global(cx));
+    assert_eq!(
+        agent_lifecycle(&registry, terminal_key, cx),
+        Some(oneterm_state::Lifecycle::Live)
+    );
+
+    // Queue both events before the subscriber task gets to run so `Exited`
+    // is picked up by the coalescing drain behind `Output`.
+    probe
+        .emit(oneterm_terminal::SessionEvent::Output)
+        .expect("event channel must accept output");
+    probe
+        .emit(oneterm_terminal::SessionEvent::Exited(Some(0)))
+        .expect("event channel must accept exit");
+    cx.run_until_parked();
+
+    assert_eq!(
+        agent_lifecycle(&registry, terminal_key, cx),
+        Some(oneterm_state::Lifecycle::Ended { exit_code: Some(0) })
     );
 }

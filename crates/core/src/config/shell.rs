@@ -3,7 +3,7 @@
 //! Windows-first. See `docs/terminal-backend.md` §6.1.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -125,6 +125,10 @@ pub struct ResolvedShell {
 }
 
 const CMD_OSC7_PROMPT: &str = "$E]7;$P$E\\$E]133;A$E\\$P$G$E]133;B$E\\";
+/// zsh PS1 with OSC 133 A/B markers. Each OSC is terminated by `ESC \` (ST);
+/// the wire must carry exactly one backslash after ESC — a doubled `\\` in
+/// the Rust literal would print a stray `\` and skew the `%{…%}` width.
+const ZSH_OSC133_PS1: &str = "%{\x1b]133;A\x1b\\%}%n@%m:%~ %# %{\x1b]133;B\x1b\\%}";
 const POWERSHELL_OSC7_PROMPT_INIT: &str = r#"$global:__OneTermOriginalPrompt=$function:prompt;function global:prompt{$e=[char]27;[Console]::Write($e+']7;'+$pwd.Path+$e+'\');& $global:__OneTermOriginalPrompt}"#;
 
 fn powershell_init(utf8: bool) -> String {
@@ -164,6 +168,46 @@ fn find_in_path(name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Resolve a requested Unix shell (`bash` / `zsh` / `sh`) to an executable.
+///
+/// Order: PATH, then `/bin/{name}`, then `$SHELL` — but only when `$SHELL`
+/// is that very shell. `$SHELL` is the user's login shell, not the requested
+/// one: falling back to it blindly made `ShellKind::Zsh` spawn bash while
+/// still injecting the zsh PS1. The final `/bin/{name}` default lets the
+/// spawn error report the missing shell by name.
+///
+/// `lookup` and `exists` are parameters so the order can be tested without
+/// touching the host PATH or filesystem; production passes
+/// [`find_in_path`] and `Path::is_file`.
+fn resolve_unix_shell(
+    name: &str,
+    shell_env: Option<&Path>,
+    lookup: impl Fn(&str) -> Option<PathBuf>,
+    exists: impl Fn(&Path) -> bool,
+) -> PathBuf {
+    if let Some(found) = lookup(name) {
+        return found;
+    }
+    let default = PathBuf::from(format!("/bin/{name}"));
+    if exists(&default) {
+        return default;
+    }
+    if let Some(shell) = shell_env {
+        if shell.file_name().is_some_and(|file| file == name) {
+            return shell.to_path_buf();
+        }
+    }
+    default
+}
+
+/// `AppError::ShellResolution` for a shell program that is not on `PATH`.
+fn shell_not_found(shell: &str) -> AppError {
+    AppError::ShellResolution {
+        shell: shell.to_string(),
+        reason: "not found in PATH".to_string(),
+    }
 }
 
 /// Resolve `LocalShellConfig` → `(program, args, env)` ready to spawn.
@@ -208,7 +252,7 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
                 .clone()
                 .or_else(|| find_in_path("powershell"))
                 .or_else(|| find_in_path("powershell.exe"))
-                .ok_or_else(|| AppError::msg("powershell.exe not found in PATH"))?;
+                .ok_or_else(|| shell_not_found("powershell.exe"))?;
             // -NoExit keeps the session interactive after the integration command runs.
             // The prompt wrapper emits OSC 7 before delegating to the original prompt.
             let a = vec![
@@ -225,7 +269,7 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
                 .clone()
                 .or_else(|| find_in_path("pwsh"))
                 .or_else(|| find_in_path("pwsh.exe"))
-                .ok_or_else(|| AppError::msg("pwsh not found in PATH"))?;
+                .ok_or_else(|| shell_not_found("pwsh"))?;
             let a = vec![
                 "-NoLogo".into(),
                 "-NoExit".into(),
@@ -242,11 +286,14 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
                 // remaining kind here is Sh.
                 _ => "sh",
             };
-            let prog = cfg
-                .program
-                .clone()
-                .or_else(|| std::env::var_os("SHELL").map(PathBuf::from))
-                .unwrap_or_else(|| PathBuf::from(format!("/bin/{name}")));
+            let prog = cfg.program.clone().unwrap_or_else(|| {
+                resolve_unix_shell(
+                    name,
+                    std::env::var_os("SHELL").map(PathBuf::from).as_deref(),
+                    find_in_path,
+                    Path::is_file,
+                )
+            });
             // Login shell for bash/zsh so the profile is loaded.
             let a = if matches!(cfg.kind, ShellKind::Bash | ShellKind::Zsh) {
                 vec!["-l".into()]
@@ -259,7 +306,10 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
             let prog = cfg
                 .program
                 .clone()
-                .ok_or_else(|| AppError::msg("ShellKind::Custom requires `program`"))?;
+                .ok_or_else(|| AppError::ShellResolution {
+                    shell: "custom".to_string(),
+                    reason: "ShellKind::Custom requires `program`".to_string(),
+                })?;
             (prog, Vec::new())
         }
     };
@@ -289,10 +339,7 @@ pub fn resolve_shell(cfg: &LocalShellConfig) -> Result<ResolvedShell, AppError> 
             // zsh does not support PROMPT_COMMAND — set PS1 with OSC 133 markers.
             // The %{...%} wrapper stops zsh from counting escape chars for cursor position.
             if !env.contains_key("PS1") {
-                env.insert(
-                    "PS1".into(),
-                    "%{\x1b]133;A\x1b\\\\%}%n@%m:%~ %# %{\x1b]133;B\x1b\\\\%}".into(),
-                );
+                env.insert("PS1".into(), ZSH_OSC133_PS1.into());
             }
         }
         _ => {}
@@ -314,6 +361,94 @@ mod tests {
         assert!(POWERSHELL_OSC7_PROMPT_INIT.contains("']7;'+$pwd.Path"));
         assert!(POWERSHELL_OSC7_PROMPT_INIT.contains("& $global:__OneTermOriginalPrompt"));
         assert!(!POWERSHELL_OSC7_PROMPT_INIT.contains('"'));
+    }
+
+    #[test]
+    fn zsh_ps1_carries_exactly_one_backslash_after_esc() {
+        // OSC 133 A/B must be terminated by ST = ESC + one backslash; a second
+        // backslash would print and skew the %{…%} zero-width accounting.
+        assert_eq!(
+            ZSH_OSC133_PS1.as_bytes(),
+            b"%{\x1b]133;A\x1b\\%}%n@%m:%~ %# %{\x1b]133;B\x1b\\%}"
+        );
+        assert!(!ZSH_OSC133_PS1.contains("\\\\"));
+    }
+
+    #[test]
+    fn zsh_kind_injects_ps1_verbatim() {
+        let cfg = LocalShellConfig {
+            kind: ShellKind::Zsh,
+            program: Some(PathBuf::from("/usr/local/bin/zsh")),
+            ..Default::default()
+        };
+        let r = resolve_shell(&cfg).unwrap();
+        assert_eq!(r.env.get("PS1").map(String::as_str), Some(ZSH_OSC133_PS1));
+        assert_eq!(r.args, vec!["-l"]);
+    }
+
+    /// `resolve_unix_shell` against a fake PATH and filesystem.
+    fn resolve(
+        name: &str,
+        path_hits: &[(&str, &str)],
+        files: &[&str],
+        shell_env: Option<&str>,
+    ) -> PathBuf {
+        resolve_unix_shell(
+            name,
+            shell_env.map(Path::new),
+            |wanted: &str| {
+                path_hits
+                    .iter()
+                    .find(|(n, _)| *n == wanted)
+                    .map(|(_, p)| PathBuf::from(p))
+            },
+            |path: &Path| files.iter().any(|f| Path::new(f) == path),
+        )
+    }
+
+    #[test]
+    fn unix_shell_prefers_path_lookup() {
+        assert_eq!(
+            resolve(
+                "zsh",
+                &[("zsh", "/opt/homebrew/bin/zsh")],
+                &["/bin/zsh"],
+                Some("/bin/bash")
+            ),
+            PathBuf::from("/opt/homebrew/bin/zsh")
+        );
+    }
+
+    #[test]
+    fn unix_shell_falls_back_to_bin_before_shell_env() {
+        assert_eq!(
+            resolve("zsh", &[], &["/bin/zsh"], Some("/usr/local/bin/zsh")),
+            PathBuf::from("/bin/zsh")
+        );
+    }
+
+    #[test]
+    fn unix_shell_uses_shell_env_only_when_it_matches() {
+        // $SHELL is zsh but zsh is neither on PATH nor in /bin → use $SHELL.
+        assert_eq!(
+            resolve("zsh", &[], &[], Some("/usr/local/bin/zsh")),
+            PathBuf::from("/usr/local/bin/zsh")
+        );
+        // $SHELL is bash: requesting zsh must NOT resolve to bash.
+        assert_eq!(
+            resolve("zsh", &[], &[], Some("/bin/bash")),
+            PathBuf::from("/bin/zsh")
+        );
+        // Requesting bash while $SHELL is zsh resolves to the bash default.
+        assert_eq!(
+            resolve("bash", &[], &[], Some("/bin/zsh")),
+            PathBuf::from("/bin/bash")
+        );
+    }
+
+    #[test]
+    fn unix_shell_without_shell_env_defaults_to_bin() {
+        assert_eq!(resolve("sh", &[], &[], None), PathBuf::from("/bin/sh"));
     }
 
     #[test]

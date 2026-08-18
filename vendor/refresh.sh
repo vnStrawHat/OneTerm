@@ -7,7 +7,8 @@
 #
 #     pristine upstream @ pinned rev
 #         └── apply vendor/patches/<crate>/*.patch  (in order)
-#                 └── vendor/<crate>/               (what Cargo builds via [patch])
+#                 └── delete VENDOR_PRUNE_<crate> paths (dead weight, see below)
+#                         └── vendor/<crate>/       (what Cargo builds via [patch])
 #
 # This is the "create-from-rev → apply-patch" half of the workflow. To ADD or CHANGE a
 # patch, use the git-based half documented in vendor/README.md (§ "Editing the patches").
@@ -34,6 +35,17 @@ ALA_URL="https://github.com/zed-industries/alacritty"
 ALA_REV="fcf32feacb367b75ec84dd40f041e4fd411d3cc1"
 GPUI_URL="https://github.com/longbridge/gpui-component"
 GPUI_REV="ea6b194db04cc7c0474851f07c7d5b7a9df6a98b"
+
+# ── Pruned paths (relative to each vendored crate root; shell globs) ─────────────────
+#    Removed from the pristine tree AFTER the patches are applied and BEFORE the
+#    diff/move, so vendor/<crate> never carries them. Everything listed here is dead
+#    weight for a `[patch]`-consumed crate: alacritty's ~46 MB of `tests/ref/`
+#    recordings never run (the crate is excluded from the workspace), and the
+#    crates.io registry metadata (`.cargo-ok`, `.cargo_vcs_info.json`, `Cargo.toml.orig`,
+#    the crate-local `Cargo.lock`) is ignored by Cargo for path dependencies.
+VENDOR_PRUNE_vte=(".cargo-ok" ".cargo_vcs_info.json" "Cargo.toml.orig" "Cargo.lock")
+VENDOR_PRUNE_alacritty_terminal=("tests")
+VENDOR_PRUNE_gpui_component=()
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENDOR="$SCRIPT_DIR"
@@ -108,6 +120,19 @@ apply_patches() {
   [[ $had -eq 1 ]] || die "no patches found in $PATCHES/$crate"
 }
 
+# ── prune <dir> <crate> : delete VENDOR_PRUNE_<crate> entries from the patched tree ─────
+prune() {
+  local dir="$1" crate="${2//-/_}" entry path
+  local -n list="VENDOR_PRUNE_$crate"
+  for entry in "${list[@]}"; do
+    for path in "$dir"/$entry; do
+      [[ -e "$path" ]] || continue
+      log "  prune $entry"
+      rm -rf "$path"
+    done
+  done
+}
+
 # ── regen <crate> <fetch_fn> ─────────────────────────────────────────────────────────────
 regen() {
   local crate="$1" fetch="$2"
@@ -116,6 +141,7 @@ regen() {
   "$fetch" "$build"
   chmod -R u+w "$build"
   apply_patches "$build" "$crate"
+  prune "$build" "$crate"
 
   if [[ $CHECK -eq 1 ]]; then
     if diff -ru -b "$build" "$VENDOR/$crate" >/dev/null; then
@@ -141,6 +167,7 @@ regen_gpui() {
   apply_patches "$checkout" gpui-component
   mkdir -p "$package"
   cp -a "$checkout/crates/ui/." "$package/"
+  prune "$package" gpui-component
   if [[ $CHECK -eq 1 ]]; then
     if diff -ru -b "$package" "$VENDOR/gpui-component" >/dev/null; then
       log "gpui-component: OK — vendor/gpui-component == pristine + patches"

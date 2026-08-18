@@ -39,44 +39,30 @@ impl RowRole {
 /// regex fallback determines the state.
 #[derive(Clone, Debug, Default)]
 pub struct RowRoles {
-    /// Per display row → `RowRole` (as `u8`).
-    pub role: Box<[u8]>,
+    /// Per display row → `RowRole`.
+    pub role: Box<[RowRole]>,
     /// Exit code of the command that produced each `Output` row.
     /// `None` for prompt/command rows or when no `OutputEnd` was received.
     pub exit_code: Box<[Option<i32>]>,
 }
 
 impl RowRoles {
-    /// Create an empty `RowRoles` (no shell integration — all rows are `Output`).
-    pub fn empty() -> Self {
-        Self::default()
-    }
-
     /// Create a `RowRoles` with all rows set to `Output` and no exit codes.
     pub fn new_output(num_rows: usize) -> Self {
         Self {
-            role: vec![RowRole::Output as u8; num_rows].into_boxed_slice(),
+            role: vec![RowRole::Output; num_rows].into_boxed_slice(),
             exit_code: vec![None; num_rows].into_boxed_slice(),
         }
     }
 
     /// Get the role for a display row (clamped to `Output` if out of range).
     pub fn role_at(&self, row: usize) -> RowRole {
-        self.role
-            .get(row)
-            .copied()
-            .map(RowRole::from_u8)
-            .unwrap_or_default()
+        self.role.get(row).copied().unwrap_or_default()
     }
 
     /// Get the exit code for a display row.
     pub fn exit_code_at(&self, row: usize) -> Option<i32> {
         self.exit_code.get(row).copied().flatten()
-    }
-
-    /// Whether any shell-integration data is present (non-empty role array).
-    pub fn is_present(&self) -> bool {
-        !self.role.is_empty()
     }
 }
 
@@ -86,13 +72,13 @@ mod tests {
 
     #[test]
     fn empty_is_absent() {
-        assert!(!RowRoles::empty().is_present());
+        assert!(RowRoles::default().role.is_empty());
     }
 
     #[test]
     fn new_output_all_output() {
         let r = RowRoles::new_output(5);
-        assert!(r.is_present());
+        assert!(!r.role.is_empty());
         for i in 0..5 {
             assert_eq!(r.role_at(i), RowRole::Output);
             assert_eq!(r.exit_code_at(i), None);

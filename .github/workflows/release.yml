@@ -2,17 +2,21 @@
 #
 # Triggers:
 #   • workflow_dispatch (choose bump: patch / minor / major) — computes the next
-#     version, builds with that VERSION, then commits VERSION and publishes the
+#     version, builds with it, then commits Cargo.toml and publishes the
 #     release only after all builds have succeeded.
 #   • push tag v*                                 — builds & publishes the release
-#     directly (VERSION must already be bumped to match the tag).
+#     directly (Cargo.toml must already be bumped to match the tag).
 #
 # Targets (matrix): Windows x86_64, Linux x86_64, macOS x86_64 (Intel) + aarch64
-# (Apple Silicon). Release binary = `oneterm` (feature `release-bin`).
+# (Apple Silicon). Release binary = `oneterm`, built and
+# staged by scripts/build-release.{ps1,sh} — the same scripts developers run
+# locally, so `dist/oneterm-<version>-<triple>` has one definition (BUILD-27).
+# Every archive ships with a `.sha256`; the release also publishes `SHA256SUMS`.
 #
-# Version source: the `VERSION` file at the repo root. The Windows build.rs reads
-# VERSION and injects the version info into the resource script (.rc); the UI
-# build.rs exposes it as ONETERM_VERSION for the About dialog.
+# Version source: `[workspace.package] version` in the root Cargo.toml — the single
+# source for every crate (CARGO_PKG_VERSION: About dialog, updater, Windows .rc
+# version info), for this workflow, and for the macOS bundle. Read it with
+# `awk -F'"' '/^version = "/{print $2; exit}' Cargo.toml`.
 
 name: Release
 
@@ -44,8 +48,9 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   prepare:
     runs-on: ubuntu-latest
+    # Read-only: this job only computes the version (gh release view needs no write).
     permissions:
-      contents: write
+      contents: read
     outputs:
       version: ${{ steps.dispatch.outputs.version || steps.tagpush.outputs.version }}
       tag: ${{ steps.dispatch.outputs.tag || steps.tagpush.outputs.tag }}
@@ -54,12 +59,12 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
-      # Dispatch path: compute the next VERSION only. If the current VERSION
+      # Dispatch path: compute the next version only. If the current version
       # is already published, bump from it. If a release commit exists but is
-      # not published yet, reuse the version already written in VERSION so a
-      # rerun does not skip a number.
+      # not published yet, reuse the version already in Cargo.toml so a rerun
+      # does not skip a number.
       - id: dispatch
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -67,35 +72,40 @@ jobs:
         run: |
           set -euo pipefail
           SOURCE_REF="$(git rev-parse HEAD)"
-          CURRENT="$(tr -d '[:space:]' < VERSION)"
+          CURRENT="$(awk -F'"' '/^version = "/{print $2; exit}' Cargo.toml)"
+          BUMPED="$(echo "$CURRENT" | awk -F. -v kind="${{ inputs.bump }}" '{
+            major = $1 + 0; minor = $2 + 0; patch = $3 + 0
+            if (kind == "major") { major++; minor = 0; patch = 0 }
+            else if (kind == "minor") { minor++; patch = 0 }
+            else { patch++ }
+            print major "." minor "." patch
+          }')"
           HEAD_SUBJECT="$(git log -1 --pretty=%s)"
           if gh release view "v${CURRENT}" >/dev/null 2>&1; then
-            NEW="$(bash scripts/bump-version.sh "${{ inputs.bump }}")"
-            git checkout -- VERSION
-            echo "==> Bumped release VERSION to $NEW from published v${CURRENT}"
+            NEW="$BUMPED"
+            echo "==> Bumped release version to $NEW from published v${CURRENT}"
           elif [[ "${HEAD_SUBJECT}" == chore\(release\):* ]]; then
             NEW="${CURRENT}"
-            echo "==> Reusing unpublished release VERSION $NEW"
+            echo "==> Reusing unpublished release version $NEW"
           else
-            NEW="$(bash scripts/bump-version.sh "${{ inputs.bump }}")"
-            git checkout -- VERSION
-            echo "==> Computed release VERSION $NEW from current VERSION $CURRENT"
+            NEW="$BUMPED"
+            echo "==> Computed release version $NEW from current version $CURRENT"
           fi
           echo "version=${NEW}" >> "$GITHUB_OUTPUT"
           echo "tag=v${NEW}" >> "$GITHUB_OUTPUT"
           echo "ref=${SOURCE_REF}" >> "$GITHUB_OUTPUT"
 
       # Tag-push path: resolve the version from the tag name; verify it matches
-      # the VERSION file.
+      # the workspace version.
       - id: tagpush
         if: github.event_name == 'push'
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF#refs/tags/}"
           VERSION="${TAG#v}"
-          FILEV="$(tr -d '[:space:]' < VERSION)"
-          if [ "$FILEV" != "$VERSION" ]; then
-            echo "::error::VERSION file ($FILEV) does not match tag ($VERSION). Bump VERSION and commit before tagging."
+          CARGOV="$(awk -F'"' '/^version = "/{print $2; exit}' Cargo.toml)"
+          if [ "$CARGOV" != "$VERSION" ]; then
+            echo "::error::[workspace.package] version ($CARGOV) does not match tag ($VERSION). Bump Cargo.toml and commit before tagging."
             exit 1
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
@@ -135,27 +145,40 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.ref }}
 
-      - name: Apply release VERSION
+      - name: Apply release version
         if: github.event_name == 'workflow_dispatch'
         shell: bash
         run: |
           set -euo pipefail
-          printf '%s\n' "${{ needs.prepare.outputs.version }}" > VERSION
+          VERSION="${{ needs.prepare.outputs.version }}"
+          # Cargo refreshes the workspace-member entries in Cargo.lock during the build below.
+          awk -v v="$VERSION" '!d && /^version = "/ { print "version = \"" v "\""; d = 1; next } { print }' \
+            Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
 
-      - name: Verify release VERSION
+      - name: Verify release version
         shell: bash
         run: |
           set -euo pipefail
           VERSION="${{ needs.prepare.outputs.version }}"
-          FILEV="$(tr -d '[:space:]' < VERSION)"
-          if [ "$FILEV" != "$VERSION" ]; then
-            echo "::error::VERSION file ($FILEV) does not match release version ($VERSION)."
+          CARGOV="$(awk -F'"' '/^version = "/{print $2; exit}' Cargo.toml)"
+          if [ "$CARGOV" != "$VERSION" ]; then
+            echo "::error::[workspace.package] version ($CARGOV) does not match release version ($VERSION)."
             exit 1
           fi
 
+      - name: Read pinned toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+          [ -n "$channel" ] || { echo "::error::rust-toolchain.toml has no channel"; exit 1; }
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
       - name: Install Rust toolchain + target
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable, 2026-07-23
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 2026-07-23
         with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
           targets: ${{ matrix.target }}
 
       - name: Cache cargo
@@ -175,63 +198,40 @@ jobs:
             libgbm-dev libegl-dev \
             libfontconfig1 libfontconfig-dev libfreetype6-dev
 
-      - name: Build release binary
-        run: cargo build --release --no-default-features --features release-bin --target ${{ matrix.target }}
+      # Build only `oneterm-app` and stage + archive + checksum
+      # dist/oneterm-<version>-<target>.{zip|tar.gz}(.sha256) with the same
+      # scripts developers use locally (BUILD-26, BUILD-27). macOS: bundle-macos.sh
+      # assembles OneTerm.app (sips + iconutil on the runner produce the .icns)
+      # and applies an ad-hoc code signature.
+      - name: Build + stage release (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh scripts/build-release.ps1 -Target ${{ matrix.target }}
 
-      - name: Stage dist
+      - name: Build + stage release (Linux / macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash scripts/build-release.sh
+
+      - name: Verify staged archive
         shell: bash
         run: |
           set -euo pipefail
           VERSION="${{ needs.prepare.outputs.version }}"
-          TARGET="${{ matrix.target }}"
-          REL="target/${TARGET}/release"
-          STAGE="dist/oneterm-${VERSION}-${TARGET}"
-          mkdir -p "${STAGE}"
-          # macOS: package into a proper OneTerm.app bundle so double-clicking
-          # launches it directly (no Terminal.app window). See
-          # scripts/bundle-macos.sh for details. sips + iconutil are present
-          # on the macOS runner, so the .icns is generated too.
-          if [[ "${TARGET}" == *darwin* ]]; then
-            bash scripts/bundle-macos.sh "${PWD}" "${REL}" "${STAGE}"
-          else
-            # Binary: oneterm.exe (Windows) or oneterm (Linux).
-            if [ -f "${REL}/oneterm.exe" ]; then
-              cp "${REL}/oneterm.exe" "${STAGE}/"
-            else
-              cp "${REL}/oneterm" "${STAGE}/"
-            fi
-            # Windows runtime assets (build.rs already copied them into target/release).
-            if [ -f "${REL}/conpty.dll" ]; then
-              cp "${REL}/conpty.dll" "${STAGE}/"
-            fi
-            if [ -d "${REL}/x64" ]; then
-              mkdir -p "${STAGE}/x64"
-              cp "${REL}/x64/OpenConsole.exe" "${STAGE}/x64/"
-            fi
-          fi
-          echo "==> Staged files:"
-          find "${STAGE}" -type f | sort
-
-      - name: Archive
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION="${{ needs.prepare.outputs.version }}"
-          TARGET="${{ matrix.target }}"
-          STAGE="oneterm-${VERSION}-${TARGET}"
-          cd dist
-          if [ "${{ matrix.archive }}" = "zip" ]; then
-            7z a "${STAGE}.zip" "${STAGE}"
-          else
-            tar -czf "${STAGE}.tar.gz" "${STAGE}"
-          fi
-          ls -la
+          ARCHIVE="dist/oneterm-${VERSION}-${{ matrix.target }}.${{ matrix.archive }}"
+          [ -f "${ARCHIVE}" ] || { echo "::error::expected archive not found: ${ARCHIVE}"; exit 1; }
+          [ -f "${ARCHIVE}.sha256" ] || { echo "::error::expected checksum not found: ${ARCHIVE}.sha256"; exit 1; }
+          ls -la dist
 
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: oneterm-${{ matrix.target }}
-          path: dist/oneterm-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.*
+          path: |
+            dist/oneterm-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.${{ matrix.archive }}
+            dist/oneterm-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.${{ matrix.archive }}.sha256
 
   # ──────────────────────────────────────────────────────────────────────────
   # release — download all artifacts, generate release notes, create the GitHub
@@ -254,6 +254,19 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+
+      # One combined checksum file (sha256sum -c compatible) next to the archives.
+      - name: Write SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd artifacts
+          rm -f SHA256SUMS
+          cat ./*.sha256 | sort -k2 > SHA256SUMS
+          rm -f ./*.sha256
+          sha256sum -c SHA256SUMS
+          echo "==> SHA256SUMS:"
+          cat SHA256SUMS
 
       - name: Generate release notes
         shell: bash
@@ -378,7 +391,7 @@ jobs:
           echo "==> Release notes:"
           cat notes.md
 
-      - name: Commit VERSION and create GitHub release
+      - name: Commit the version bump and create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -396,10 +409,22 @@ jobs:
             fi
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            printf '%s\n' "${VERSION}" > VERSION
-            git add VERSION
+            awk -v v="$VERSION" '!d && /^version = "/ { print "version = \"" v "\""; d = 1; next } { print }' \
+              Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
+            cargo update --workspace --offline --quiet || cargo update --workspace --quiet
+            git add Cargo.toml Cargo.lock
             if ! git diff --cached --quiet; then
               git commit -m "chore(release): v${VERSION}"
+            fi
+            # The matrix build takes 30-40 min; if the branch advanced meanwhile a
+            # plain push is rejected (BUILD-24). Replay the release commit on top of
+            # the current branch head. A conflict on Cargo.toml (someone
+            # else bumped the version) is a real error and aborts the release.
+            git fetch origin "${GITHUB_REF_NAME}"
+            if ! git rebase "origin/${GITHUB_REF_NAME}"; then
+              git rebase --abort || true
+              echo "::error::Could not rebase the release commit onto origin/${GITHUB_REF_NAME}; resolve the version bump conflict and re-run."
+              exit 1
             fi
             git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
             RELEASE_REF="$(git rev-parse HEAD)"
@@ -407,10 +432,10 @@ jobs:
               --target "${RELEASE_REF}" \
               --title "OneTerm ${VERSION}" \
               --notes-file notes.md \
-              artifacts/oneterm-*
+              artifacts/oneterm-* artifacts/SHA256SUMS
           else
             gh release create "${TAG}" \
               --title "OneTerm ${VERSION}" \
               --notes-file notes.md \
-              artifacts/oneterm-*
+              artifacts/oneterm-* artifacts/SHA256SUMS
           fi

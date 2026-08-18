@@ -18,10 +18,13 @@ use oneterm_state::{AppServices, AppState, GlobalCompletionHistory};
 /// `gpui_component::init(cx)` (called in [`crate::run`]) already initializes the
 /// theme, dock, root, and `PanelRegistry`. This runs afterwards.
 pub(crate) fn init(cx: &mut App) {
-    // Shared globals. `UiConfig` first so the saved theme/font apply in
-    // `theme::init`.
+    // Shared globals (each `init` is idempotent: it installs once and later
+    // calls are no-ops). `UiConfig` first so the saved theme/font apply in
+    // `theme::init`; the `ui_config.json` theme observer is registered after
+    // the theme init so startup mutations do not trigger a write.
     UiConfig::init(cx);
     oneterm_theme::theme::init(cx);
+    UiConfig::observe_theme(cx);
     AppState::init(cx);
     TerminalSettings::init(cx);
     // Process-global, cross-tab, non-persistent command history (memory source).
@@ -35,8 +38,7 @@ pub(crate) fn init(cx: &mut App) {
     // Session: SSH session store global + "session" panel.
     oneterm_session_ui::init(cx);
     // Agent: the global AgentRegistry (folded OSC 9;7 model behind the Agent
-    // Panel). Ensures the registry exists so terminals can fold into it even
-    // before the Agent panel is first opened.
+    // Panel) + the "agent" right-dock panel.
     oneterm_agent_ui::init(cx);
     // Settings/About update controls and release-build startup update checks.
     oneterm_settings_ui::init(cx);
@@ -46,14 +48,11 @@ pub(crate) fn init(cx: &mut App) {
     // depend on together (R9).
     crate::ssh_client_panel::init(cx);
 
-    // Agent Mode right-dock panel (placeholder for now) — same reason as the
-    // SSH Client panel: it may later compose feature crates, so it lives in the
-    // omniscient `app` crate (R9).
-    crate::agent_panel::init(cx);
-
-    // Install all cross-feature services as one composition-root bundle. Each
-    // callback belongs to its feature, while the shell consumes only this state API.
-    AppServices::new(
+    // Seal all cross-feature services into one composition-root bundle. Each
+    // hook (active-terminal metrics, agent focuser) and command callback belongs
+    // to its feature, while the shell consumes only this state API.
+    AppServices::install(
+        cx,
         crate::session_factory::build(),
         WorkspaceCommands {
             new_terminal_with_shell: oneterm_terminal_view::new_terminal_with_shell_cmd,
@@ -64,8 +63,8 @@ pub(crate) fn init(cx: &mut App) {
             find_in_active_terminal: oneterm_terminal_view::find_in_active_terminal,
             setup_key_bindings: oneterm_settings_ui::setup_key_bindings,
         },
+        oneterm_terminal_view::status_metrics(),
+        oneterm_terminal_view::agent_focuser(),
     )
-    .install(cx)
     .expect("application services must be registered exactly once");
-    AppServices::validate(cx).expect("application services must be available");
 }

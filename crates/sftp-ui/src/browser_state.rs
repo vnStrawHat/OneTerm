@@ -6,10 +6,12 @@
 //! running. This module gives each SFTP backend its own snapshot of the
 //! browser's UI state, keyed by the backend's stable per-session id.
 //!
-//! The store is a gpui `Global` so it outlives any one `SftpPanel` (e.g. when
-//! the right dock is swapped via the mode toggle: SSH Client → Agent → SSH
-//! Client creates a *new* `SftpPanel` — the store preserves each backend's
-//! cwd + transfers across that swap).
+//! The store is a gpui `Global`, created once by [`crate::init`], so it
+//! outlives any one `SftpPanel` (e.g. when the right dock is swapped via the
+//! mode toggle: SSH Client → Agent → SSH Client creates a *new* `SftpPanel` —
+//! the store preserves each backend's cwd + transfers across that swap). It is
+//! only touched from the UI thread, so a `RefCell` guards it; callers must not
+//! re-enter the store from inside a `with_mut` closure.
 //!
 //! Transfer tasks (upload/download) capture the SFTP backend they run on, so
 //! they can use the same key and update the store directly — independent of
@@ -17,15 +19,16 @@
 //! snapshot; a running transfer keeps progressing in its own backend's
 //! snapshot and reappears when the user switches back to that tab.
 
+use std::cell::{RefCell, RefMut};
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Weak};
 
 use gpui::{App, Global};
 
-use oneterm_core::{FileEntry, SftpBackend, SftpSessionId};
+use oneterm_core::{FileEntry, RemotePath, SftpBackend, SftpSessionId};
 
-use super::types::{PendingAction, SortColumn, SortDir, TransferItem};
+use super::browser_view::{BrowserView, TransferQueueView};
+use super::types::{SortColumn, SortDir};
 
 /// Mutation gate that prevents periodic snapshots while browser state is idle.
 #[derive(Default)]
@@ -66,40 +69,26 @@ pub(crate) fn backend_key(sftp: &Option<Arc<dyn SftpBackend>>) -> Option<Backend
 /// transfer's progress updates land here even while another tab is active.
 #[derive(Clone)]
 pub(crate) struct SftpBrowserState {
-    pub cwd: PathBuf,
+    /// Directory position, selection, and error flags.
+    pub browser: BrowserView,
     /// Immutable entries make unchanged snapshots O(1) in directory size.
     pub entries: Arc<[FileEntry]>,
     pub sort: Option<(SortColumn, SortDir)>,
-    pub selected: Option<usize>,
-    pub error: Option<String>,
-
-    pub transfers: Vec<TransferItem>,
-    pub next_transfer_id: usize,
-
-    pub pending_action: Option<PendingAction>,
-
+    /// Transfer queue + id counter (source of truth for background tasks).
+    pub transfers: TransferQueueView,
     pub follow_terminal_cwd: bool,
-    pub last_followed_cwd: Option<PathBuf>,
-
-    /// Path input error flag, captured so the error highlight survives a tab
-    /// switch. (The input value itself is re-synced from `cwd` in `render`.)
-    pub path_error: bool,
+    pub last_followed_cwd: Option<RemotePath>,
 }
 
 impl Default for SftpBrowserState {
     fn default() -> Self {
         Self {
-            cwd: PathBuf::new(),
+            browser: BrowserView::default(),
             entries: Arc::from([]),
             sort: None,
-            selected: None,
-            error: None,
-            transfers: Vec::new(),
-            next_transfer_id: 0,
-            pending_action: None,
+            transfers: TransferQueueView::default(),
             follow_terminal_cwd: false,
             last_followed_cwd: None,
-            path_error: false,
         }
     }
 }
@@ -114,32 +103,31 @@ struct SftpBrowserStoreData {
 ///
 /// Weak backend registrations let the store purge closed or dropped sessions
 /// without retaining protocol objects solely for UI history.
-pub(crate) struct SftpBrowserStore(Mutex<SftpBrowserStoreData>);
+#[derive(Default)]
+pub(crate) struct SftpBrowserStore(RefCell<SftpBrowserStoreData>);
 
 impl Global for SftpBrowserStore {}
 
 impl SftpBrowserStore {
-    /// Lock the store, recovering the guard if a previous holder panicked.
-    ///
-    /// The store only holds UI state (cwd, transfer snapshots), so a poisoned
-    /// lock never leaves protocol objects in an unsafe state — recovering keeps
-    /// the browser usable instead of cascading the panic across every caller.
-    fn lock(&self) -> MutexGuard<'_, SftpBrowserStoreData> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    /// Install the (empty) global store. Called once from [`crate::init`].
+    pub(crate) fn init(cx: &mut App) {
+        cx.set_global(Self::default());
     }
 
-    /// Get the global store, initializing an empty one if absent.
-    pub(crate) fn global(cx: &mut App) -> &Self {
-        if cx.try_global::<Self>().is_none() {
-            cx.set_global(Self(Mutex::new(SftpBrowserStoreData::default())));
-        }
+    /// The global store. Panics when [`Self::init`] has not run — an
+    /// initialization invariant of the SFTP feature.
+    pub(crate) fn global(cx: &App) -> &Self {
         cx.global::<Self>()
+    }
+
+    fn data(&self) -> RefMut<'_, SftpBrowserStoreData> {
+        self.0.borrow_mut()
     }
 
     /// Register a live backend and ensure its state entry exists.
     pub(crate) fn track_backend(&self, backend: &Arc<dyn SftpBackend>) -> BackendKey {
         let key = backend.session_id();
-        let mut data = self.lock();
+        let mut data = self.data();
         data.backends.insert(key, Arc::downgrade(backend));
         data.states.entry(key).or_default();
         key
@@ -147,12 +135,12 @@ impl SftpBrowserStore {
 
     /// Get the stored snapshot for `key` (cloned), or a default if absent.
     pub(crate) fn get_or_default(&self, key: BackendKey) -> SftpBrowserState {
-        self.lock().states.get(&key).cloned().unwrap_or_default()
+        self.data().states.get(&key).cloned().unwrap_or_default()
     }
 
     /// Return the immutable entry snapshot for a tracked backend.
     pub(crate) fn entries(&self, key: BackendKey) -> Arc<[FileEntry]> {
-        self.lock()
+        self.data()
             .states
             .get(&key)
             .map(|state| Arc::clone(&state.entries))
@@ -161,7 +149,7 @@ impl SftpBrowserStore {
 
     /// Save a snapshot for a tracked backend (overwrites any existing entry).
     pub(crate) fn save(&self, key: BackendKey, state: SftpBrowserState) {
-        let mut data = self.lock();
+        let mut data = self.data();
         if data.backends.contains_key(&key) {
             data.states.insert(key, state);
         }
@@ -173,13 +161,13 @@ impl SftpBrowserStore {
         key: BackendKey,
         f: impl FnOnce(&mut SftpBrowserState) -> R,
     ) -> Option<R> {
-        let mut data = self.lock();
+        let mut data = self.data();
         data.states.get_mut(&key).map(f)
     }
 
     /// Purge browser snapshots whose backend has closed or been dropped.
     pub(crate) fn purge_closed(&self) -> usize {
-        let mut data = self.lock();
+        let mut data = self.data();
         let stale: Vec<_> = data
             .backends
             .iter()
@@ -215,108 +203,23 @@ mod tests {
         assert!(!gate.take());
     }
 
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    use async_channel::Receiver;
-    use oneterm_core::{AppError, FileStat, Result, SftpFuture};
-
     use super::*;
-
-    struct TestBackend {
-        id: SftpSessionId,
-        alive: AtomicBool,
-    }
-
-    impl TestBackend {
-        fn new() -> Self {
-            Self {
-                id: SftpSessionId::next(),
-                alive: AtomicBool::new(true),
-            }
-        }
-
-        fn unused<T: Send + 'static>() -> SftpFuture<'static, T> {
-            Box::pin(async { Err(AppError::msg("unused test operation")) })
-        }
-    }
-
-    impl SftpBackend for TestBackend {
-        fn session_id(&self) -> SftpSessionId {
-            self.id
-        }
-
-        fn read_dir(&self, _path: PathBuf) -> SftpFuture<'_, Vec<FileEntry>> {
-            Self::unused()
-        }
-
-        fn stat(&self, _path: PathBuf) -> SftpFuture<'_, FileStat> {
-            Self::unused()
-        }
-
-        fn rename(&self, _from: PathBuf, _to: PathBuf) -> SftpFuture<'_, ()> {
-            Self::unused()
-        }
-
-        fn remove(&self, _path: PathBuf) -> SftpFuture<'_, ()> {
-            Self::unused()
-        }
-
-        fn rmdir(&self, _path: PathBuf) -> SftpFuture<'_, ()> {
-            Self::unused()
-        }
-
-        fn mkdir(&self, _path: PathBuf) -> SftpFuture<'_, ()> {
-            Self::unused()
-        }
-
-        fn upload(
-            &self,
-            _transfer_id: u64,
-            _local: PathBuf,
-            _remote: PathBuf,
-        ) -> (Receiver<f64>, Receiver<Result<()>>) {
-            let (_progress_tx, progress_rx) = async_channel::bounded(1);
-            let (reply_tx, reply_rx) = async_channel::bounded(1);
-            reply_tx
-                .try_send(Err(AppError::msg("unused test operation")))
-                .unwrap();
-            (progress_rx, reply_rx)
-        }
-
-        fn download(
-            &self,
-            transfer_id: u64,
-            remote: PathBuf,
-            local: PathBuf,
-        ) -> (Receiver<f64>, Receiver<Result<()>>) {
-            self.upload(transfer_id, remote, local)
-        }
-
-        fn cancel_transfer(&self, _transfer_id: u64) {}
-
-        fn close(&self) {
-            self.alive.store(false, Ordering::Relaxed);
-        }
-
-        fn alive(&self) -> bool {
-            self.alive.load(Ordering::Relaxed)
-        }
-    }
+    use crate::test_backend::FakeSftpBackend;
 
     #[test]
     fn closed_backend_state_is_purged_and_cannot_be_recreated() {
-        let store = SftpBrowserStore(std::sync::Mutex::new(SftpBrowserStoreData::default()));
-        let backend: Arc<dyn SftpBackend> = Arc::new(TestBackend::new());
+        let store = SftpBrowserStore::default();
+        let backend: Arc<dyn SftpBackend> = Arc::new(FakeSftpBackend::new());
         let key = store.track_backend(&backend);
         assert!(
             store
-                .with_mut(key, |state| state.cwd = PathBuf::from("/tmp"))
+                .with_mut(key, |state| state.browser.set_cwd(RemotePath::new("/tmp")))
                 .is_some()
         );
 
         backend.close();
         assert_eq!(store.purge_closed(), 1);
         assert!(store.with_mut(key, |_| ()).is_none());
-        assert!(store.0.lock().unwrap().states.is_empty());
+        assert!(store.0.borrow().states.is_empty());
     }
 }

@@ -6,11 +6,11 @@
 
 use std::collections::HashMap;
 
-use gpui::{App, AppContext as _, FocusHandle, Global, KeyBinding, Keystroke};
+use gpui::{App, AppContext as _, FocusHandle, Global, KeyBinding, Keystroke, Subscription};
 
 use oneterm_settings::UiConfig;
 
-use super::key_bindings_actions::BINDABLE_ACTIONS;
+use super::key_bindings_actions::{BINDABLE_ACTIONS, BindableAction};
 
 // ── Global state ─────────────────────────────────────────────────────
 
@@ -23,6 +23,13 @@ pub(crate) struct KeyBindingsState {
     pub(super) capturing: Option<String>,
     /// Focus handle reused by the single capture element.
     pub(super) capture_focus: FocusHandle,
+    /// Why the last captured keystroke was rejected (shown in the capture row
+    /// until the next key press), e.g. a conflict with another action (CORR-55).
+    pub(super) capture_rejection: Option<String>,
+    /// Keystroke interceptor alive while capturing. It runs before gpui's key
+    /// binding dispatch, so the captured key can never trigger an action bound
+    /// in the settings window (CORR-56).
+    pub(super) capture_interceptor: Option<Subscription>,
 }
 
 /// Global wrapper for `Entity<KeyBindingsState>`.
@@ -64,6 +71,8 @@ pub(crate) fn init_state(cx: &mut App) {
         effective,
         capturing: None,
         capture_focus,
+        capture_rejection: None,
+        capture_interceptor: None,
     });
     cx.set_global(KeyBindingsStateGlobal(entity));
 }
@@ -102,26 +111,56 @@ pub(crate) fn apply_key_bindings(cx: &mut App) {
 /// Write the effective bindings (only overrides — entries equal to the built-in
 /// default are omitted) into `ui_config.json` and save.
 pub(super) fn save_key_bindings(cx: &mut App) {
-    let map: HashMap<String, String> = {
+    let map = {
         let state = KeyBindingsState::global(cx).read(cx);
-        BINDABLE_ACTIONS
-            .iter()
-            .filter_map(|a| {
-                let eff = state.effective.get(a.id).map(|s| s.as_str()).unwrap_or("");
-                let def = a.default.unwrap_or("");
-                if eff == def {
-                    None
-                } else {
-                    Some((a.id.to_string(), eff.to_string()))
-                }
-            })
-            .collect()
+        overrides_from_effective(&state.effective)
     };
     UiConfig::global(cx).update(cx, |cfg, _| cfg.key_bindings = map);
     UiConfig::persist(cx);
 }
 
+/// Reduce the effective bindings to the persisted override map: only entries
+/// that differ from the built-in default are kept, and an unbound action whose
+/// default is bound is stored as an empty string.
+fn overrides_from_effective(effective: &HashMap<String, String>) -> HashMap<String, String> {
+    BINDABLE_ACTIONS
+        .iter()
+        .filter_map(|a| {
+            let eff = effective.get(a.id).map(|s| s.as_str()).unwrap_or("");
+            let def = a.default.unwrap_or("");
+            if eff == def {
+                None
+            } else {
+                Some((a.id.to_string(), eff.to_string()))
+            }
+        })
+        .collect()
+}
+
 // ── Keystroke helpers ────────────────────────────────────────────────
+
+/// The other action (same key context) already bound to `binding`, if any.
+/// Keystrokes are compared after parsing, so `ctrl-shift-t` and `shift-ctrl-t`
+/// count as the same key (CORR-55).
+pub(super) fn conflicting_action(
+    effective: &HashMap<String, String>,
+    id: &str,
+    binding: &str,
+) -> Option<&'static BindableAction> {
+    let wanted = Keystroke::parse(binding).ok()?;
+    let context = BINDABLE_ACTIONS
+        .iter()
+        .find(|a| a.id == id)
+        .and_then(|a| a.context);
+    BINDABLE_ACTIONS.iter().find(|other| {
+        other.id != id
+            && other.context == context
+            && effective
+                .get(other.id)
+                .and_then(|current| Keystroke::parse(current).ok())
+                .is_some_and(|current| current == wanted)
+    })
+}
 
 /// Convert a captured `Keystroke` into the binding-string format gpui parses
 /// (`ctrl-`, `alt-`, `shift-`, `cmd-`/`win-`/`fn-` prefixes + key). Built manually
@@ -154,4 +193,113 @@ pub(super) fn is_modifier_only(ks: &Keystroke) -> bool {
         ks.key.to_ascii_lowercase().as_str(),
         "control" | "alt" | "shift" | "platform" | "function" | "cmd" | "super" | "win"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::Modifiers;
+
+    use super::*;
+
+    fn keystroke(key: &str, modifiers: Modifiers) -> Keystroke {
+        Keystroke {
+            modifiers,
+            key: key.to_owned(),
+            key_char: None,
+        }
+    }
+
+    #[test]
+    fn keystroke_string_lists_modifiers_in_gpui_order() {
+        let stroke = keystroke(
+            "t",
+            Modifiers {
+                control: true,
+                alt: true,
+                shift: true,
+                platform: true,
+                function: true,
+            },
+        );
+        assert_eq!(keystroke_to_string(&stroke), "ctrl-alt-shift-cmd-fn-t");
+        assert_eq!(
+            keystroke_to_string(&keystroke("f5", Modifiers::default())),
+            "f5"
+        );
+        // The result must round-trip through gpui's parser.
+        assert!(Keystroke::parse(&keystroke_to_string(&stroke)).is_ok());
+    }
+
+    #[test]
+    fn bare_modifier_presses_are_recognised() {
+        for key in [
+            "control", "Shift", "alt", "platform", "function", "cmd", "super", "win",
+        ] {
+            assert!(
+                is_modifier_only(&keystroke(key, Modifiers::default())),
+                "{key}"
+            );
+        }
+        assert!(!is_modifier_only(&keystroke("t", Modifiers::control())));
+        assert!(!is_modifier_only(&keystroke(
+            "escape",
+            Modifiers::default()
+        )));
+    }
+
+    #[test]
+    fn conflicts_are_detected_within_the_same_context_only() {
+        let (first, second) = {
+            let mut same_context = BINDABLE_ACTIONS.iter().filter(|a| a.context.is_none());
+            (
+                same_context.next().expect("a context-free action"),
+                same_context.next().expect("a second context-free action"),
+            )
+        };
+
+        let mut effective: HashMap<String, String> = HashMap::new();
+        effective.insert(second.id.to_owned(), "ctrl-shift-t".to_owned());
+
+        // Same key, different modifier order, same (empty) context → conflict.
+        let conflict = conflicting_action(&effective, first.id, "shift-ctrl-t");
+        assert_eq!(conflict.map(|a| a.id), Some(second.id));
+        // The action itself is never its own conflict.
+        assert!(conflicting_action(&effective, second.id, "ctrl-shift-t").is_none());
+        // A different key context does not conflict (only checkable once the
+        // registry contains a contextual action).
+        if let Some(contextual) = BINDABLE_ACTIONS.iter().find(|a| a.context.is_some()) {
+            assert!(conflicting_action(&effective, contextual.id, "ctrl-shift-t").is_none());
+        }
+        // Unbound / different keys are free.
+        assert!(conflicting_action(&effective, first.id, "ctrl-shift-y").is_none());
+        assert!(conflicting_action(&effective, first.id, "").is_none());
+    }
+
+    #[test]
+    fn overrides_keep_only_entries_that_differ_from_the_default() {
+        let bound = BINDABLE_ACTIONS
+            .iter()
+            .find(|a| a.default.is_some())
+            .expect("at least one action has a default");
+        let default = bound.default.unwrap();
+
+        // Everything at its default: nothing to persist.
+        let effective: HashMap<String, String> = BINDABLE_ACTIONS
+            .iter()
+            .map(|a| (a.id.to_owned(), a.default.unwrap_or("").to_owned()))
+            .collect();
+        assert!(overrides_from_effective(&effective).is_empty());
+
+        // Rebound: persisted with the new keystroke.
+        let mut rebound = effective.clone();
+        rebound.insert(bound.id.to_owned(), format!("ctrl-alt-{default}"));
+        let overrides = overrides_from_effective(&rebound);
+        assert_eq!(overrides.len(), 1);
+        assert_eq!(overrides[bound.id], format!("ctrl-alt-{default}"));
+
+        // Unbound: persisted as an empty string so the default is suppressed.
+        let mut unbound = effective;
+        unbound.insert(bound.id.to_owned(), String::new());
+        assert_eq!(overrides_from_effective(&unbound)[bound.id], "");
+    }
 }

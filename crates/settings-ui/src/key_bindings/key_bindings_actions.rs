@@ -7,9 +7,7 @@
 
 use gpui::{Action, KeyBinding, Keystroke};
 
-use oneterm_actions::{
-    About, AddPanel, DockPlacement, NewSession, OpenSettings, Quit, ToggleGutter,
-};
+use oneterm_actions::{About, AddPanel, NewSession, OpenSettings, Quit, ToggleGutter};
 
 // ── Bindable action registry ─────────────────────────────────────────
 
@@ -71,7 +69,7 @@ pub(super) const BINDABLE_ACTIONS: &[BindableAction] = &[
         group: "App Menu",
         default: Some("ctrl-t"),
         context: None,
-        make: |ks, ctx| make_binding(ks, AddPanel(DockPlacement::Center), ctx),
+        make: |ks, ctx| make_binding(ks, AddPanel, ctx),
         name_fn: <AddPanel as Action>::name_for_type,
     },
     BindableAction {

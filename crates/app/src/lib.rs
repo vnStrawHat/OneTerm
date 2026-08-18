@@ -1,18 +1,19 @@
 //! OneTerm application core.
 //!
 //! Initializes the application, registers the UI, and opens the main window.
-//! Shared logic for both binaries: `oneterm` (release) and `oneterm-debug` (dev).
+//! Shared logic behind the `oneterm` binary.
 //!
 //! The two binaries are thin shims that call [`run`]; this gives each binary its own
 //! source file (avoiding the "file present in multiple build targets" warning).
 
 use std::borrow::Cow;
 
+use gpui::TaskExt as _;
 use oneterm_workspace::OneTermWorkspace;
 
-mod agent_panel;
 mod assets;
 mod crash_report;
+mod crash_report_dialog;
 mod init;
 mod native_crash;
 mod session_factory;
@@ -110,7 +111,8 @@ pub fn run() {
 
         cx.activate(true);
 
-        // Open the main window.
-        crate::window::open_window(pending_crash_reports, cx).detach();
+        // Open the main window. A failure here leaves the app without a
+        // window, so it must at least reach the log (CORR-63).
+        crate::window::open_window(pending_crash_reports, cx).detach_and_log_err(cx);
     });
 }

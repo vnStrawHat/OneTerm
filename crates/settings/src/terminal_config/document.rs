@@ -10,11 +10,10 @@
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use oneterm_core::{
-    LocalShellConfig, atomic_write, config_dir, migrate_json_value, quarantine_file,
-    set_schema_version,
+    AppError, LocalShellConfig, atomic_write, config_dir, parse_versioned_document,
+    quarantine_file, set_schema_version,
 };
 
 use super::{
@@ -103,24 +102,11 @@ fn strip_json_comments(input: &str) -> String {
     result
 }
 
+const DOCUMENT_NAME: &str = "terminal.json";
+
 impl TerminalConfig {
-    fn parse_document(raw: &str) -> std::io::Result<Self> {
-        let value: Value = serde_json::from_str(raw).map_err(std::io::Error::other)?;
-        let value = migrate_json_value(
-            value,
-            CURRENT_SCHEMA_VERSION,
-            "terminal.json",
-            |_, value| {
-                if !value.is_object() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "terminal.json schema must be an object",
-                    ));
-                }
-                Ok(value)
-            },
-        )?;
-        serde_json::from_value(value).map_err(std::io::Error::other)
+    fn parse_document(raw: &str) -> Result<Self, AppError> {
+        parse_versioned_document(raw, CURRENT_SCHEMA_VERSION, DOCUMENT_NAME)
     }
 
     fn serialize_document(&self) -> std::io::Result<String> {
@@ -128,25 +114,33 @@ impl TerminalConfig {
         set_schema_version(&mut value, CURRENT_SCHEMA_VERSION)?;
         serde_json::to_string_pretty(&value).map_err(std::io::Error::other)
     }
-    /// Load the config from file. If the file does not exist → create a default + return default.
-    /// Supports `//` and `/* */` comments in the JSON.
-    pub fn load() -> Self {
-        Self::load_from(&config_dir().join("terminal.json"))
+
+    /// Load the config from `terminal.json`. Supports `//` and `/* */` comments
+    /// in the JSON. See [`Self::load_from`] for the outcome contract.
+    pub fn load() -> Result<Self, AppError> {
+        Self::load_from(&config_dir().join(DOCUMENT_NAME))
     }
 
     /// Load the config from an explicit path for deterministic callers and tests.
-    pub fn load_from(path: &Path) -> Self {
-        match std::fs::read_to_string(&path) {
+    ///
+    /// - A missing file is created with the defaults and the defaults are returned.
+    /// - A file that does not parse or migrate is quarantined (with a recovery
+    ///   log) and the defaults are returned.
+    /// - Any other read failure (permissions, I/O) is returned as
+    ///   [`AppError::ConfigLoad`]: the file may still be valid, so the caller
+    ///   must not overwrite it with defaults (CORR-61).
+    pub fn load_from(path: &Path) -> Result<Self, AppError> {
+        match std::fs::read_to_string(path) {
             Ok(raw) => {
                 let json = strip_json_comments(&raw);
                 match Self::parse_document(&json) {
-                    Ok(cfg) => cfg,
+                    Ok(cfg) => Ok(cfg),
                     Err(e) => {
-                        log::error!("terminal.json parse error: {e} — using defaults");
-                        if let Err(quarantine_error) = quarantine_file(&path) {
+                        log::error!("{e} — using defaults");
+                        if let Err(quarantine_error) = quarantine_file(path) {
                             log::warn!("failed to quarantine terminal.json: {quarantine_error}");
                         }
-                        Self::default()
+                        Ok(Self::default())
                     }
                 }
             }
@@ -154,7 +148,7 @@ impl TerminalConfig {
                 // A missing file is the only read failure that safely selects defaults.
                 let cfg = Self::default();
                 match cfg.serialize_document() {
-                    Ok(json) => match atomic_write(&path, json.as_bytes()) {
+                    Ok(json) => match atomic_write(path, json.as_bytes()) {
                         Ok(()) => log::info!("Created default terminal.json at {path:?}"),
                         Err(write_error) => log::warn!(
                             "failed to create default terminal.json at {path:?}: {write_error}"
@@ -164,24 +158,21 @@ impl TerminalConfig {
                         log::warn!("failed to serialize default terminal.json: {serialize_error}")
                     }
                 }
-                cfg
+                Ok(cfg)
             }
-            Err(error) => {
-                log::error!("failed to read terminal.json: {error}; using defaults");
-                Self::default()
-            }
+            Err(error) => Err(AppError::config_load(DOCUMENT_NAME, error)),
         }
     }
 
     /// Save the config to `terminal.json` (pretty-printed, no comments).
     pub fn save(&self) -> std::io::Result<()> {
-        self.save_to(&config_dir().join("terminal.json"))
+        self.save_to(&config_dir().join(DOCUMENT_NAME))
     }
 
     /// Save the config to an explicit path for deterministic callers and tests.
     pub fn save_to(&self, path: &Path) -> std::io::Result<()> {
         let json = self.serialize_document()?;
-        atomic_write(&path, json.as_bytes())?;
+        atomic_write(path, json.as_bytes())?;
         log::info!("Saved terminal.json to {path:?}");
         Ok(())
     }

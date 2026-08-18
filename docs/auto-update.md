@@ -2,8 +2,10 @@
 
 ## Status
 
-Planned. This document defines the target behavior and implementation boundaries for
-OneTerm auto-update. The update source is GitHub Releases.
+Implemented through the install phase (`crates/update/`, Settings/About UI in
+`crates/settings-ui/src/updates/`). Release signing (the signing phase below) is
+not implemented; see "Signature verification decision". The update source is
+GitHub Releases.
 
 ## Goals
 
@@ -21,7 +23,7 @@ OneTerm auto-update. The update source is GitHub Releases.
 ## Non-goals
 
 - Silent forced updates.
-- Updating development builds (`oneterm-debug`) by default.
+- Updating development builds by default.
 - Package-manager integration for distro packages, Homebrew, winget, or MSI/DMG
   installers in the first implementation.
 - Delta or binary patch updates. The first implementation downloads complete release
@@ -32,8 +34,13 @@ OneTerm auto-update. The update source is GitHub Releases.
 
 ## Release source
 
-The updater reads releases from the official GitHub repository configured at build
-time or in a trusted static constant:
+The updater reads releases from a repository fixed at compile time
+(`crates/update/src/config.rs`): `UPDATE_REPOSITORY` resolves to the canonical
+`owner/repo`; a fork or mirror that publishes its own releases sets
+`ONETERM_UPDATE_REPO=owner/repo` in the build environment. Nothing is inferred
+from the git checkout, so a fork build cannot silently point at the wrong
+repository (SEC-23/BUILD-12). The About links and the crash-report "Create Issue"
+URL derive from the same constant.
 
 ```text
 https://api.github.com/repos/<owner>/<repo>/releases
@@ -48,8 +55,8 @@ Version rules:
 
 - Release tags must be SemVer-compatible: `vMAJOR.MINOR.PATCH` or
   `MAJOR.MINOR.PATCH`.
-- The current app version is read from the same `VERSION` value used by release
-  builds.
+- The current app version is `CARGO_PKG_VERSION`, i.e. `[workspace.package] version`
+  in the root `Cargo.toml`.
 - The updater offers an update only when the release version is strictly greater
   than the current version.
 - Build metadata does not make a release newer. Pre-release versions are offered
@@ -61,14 +68,27 @@ GitHub API requirements:
 - Cache `ETag` and use `If-None-Match` to avoid unnecessary rate-limit usage.
 - Reuse a cached `ETag` only when the current app version matches the version used
   for the last successful check; a new build must re-evaluate release availability.
-- Treat `304 Not Modified` as a successful check with no new update.
+- Treat `304 Not Modified` as a successful check; the cached candidate is
+  restored only if it still passes the current channel, skipped-version, and
+  target filters (the cache stores the release's `prerelease` flag).
 - Network requests must run off the UI thread.
+- Timeouts: the release list request has a 5 s total budget; downloads use a
+  connect timeout plus a 30 s read-idle timeout applied per body chunk, never a
+  total deadline, so a large asset on a slow link still completes.
+- Downloads are capped at the asset `size` GitHub published (or 512 MiB when
+  unknown) and aborted mid-stream beyond that; extraction is capped at 2 GiB of
+  expanded bytes.
 - If an explicit update proxy is configured, use it for GitHub API and asset
   downloads. Otherwise, allow the HTTP stack to use the system or environment
   proxy configuration.
 - TLS certificate verification is enabled by default. Disabling it is an
   advanced setting for controlled networks only and must not disable checksum
-  verification.
+  verification. While it is disabled the updater logs a warning on every
+  request and the Network settings group shows a red "Insecure" banner: the
+  digest travels over the same connection, so it no longer authenticates the
+  archive.
+- Proxy URLs may embed credentials; error and log text redacts the userinfo
+  part.
 - No GitHub token is required for public releases. If authenticated requests are
   added later, tokens must never be logged or persisted in plaintext.
 
@@ -131,9 +151,14 @@ Entry points:
 Default settings:
 
 - Auto-check is enabled by default and can be disabled in Settings.
-- Auto-check is disabled for debug builds.
-- Check interval is 24 hours.
-- Channel is `stable`.
+- Auto-check is disabled for debug builds (`ONETERM_UPDATE_AUTO_CHECK_DEBUG`
+  re-enables it for testing).
+- Check interval is 24 hours (Settings "Check Interval", 1 hour to 1 year);
+  the startup check runs only when the interval has elapsed since
+  `last_checked_at`. A manual check always runs.
+- Channel is `stable` (Settings "Channel": Stable or Preview).
+- "Skip This Version" in the About dialog stores `skipped_version`; that release
+  is no longer offered until the skip is cleared in Settings.
 - Download and install are confirmed from the About dialog when an update is available.
 - Proxy URL is empty by default, which means automatic system/environment proxy
   detection is used.
@@ -182,24 +207,40 @@ Suggested schema:
 Persistence rules:
 
 - Use the shared atomic persistence helpers from `oneterm-core`.
-- Do not perform filesystem writes on the UI thread.
+- Do not perform filesystem writes on the UI thread. The settings UI loads
+  `update_config.json` with `UpdateConfig::read` (read only); a missing or
+  unreadable document is repaired by the first background preference save.
 - Invalid persisted config must be quarantined before defaults are written.
 - Downloaded artifacts are runtime cache data and should live under a dedicated
   update cache directory, not beside user settings.
 
+Writers and field ownership (`crates/update/src/config.rs`):
+
+| Field group | Fields | Owner / writer | Write path |
+|---|---|---|---|
+| Preferences | `auto_check`, `channel`, `check_interval_hours`, `proxy_url`, `verify_certificates`, `skipped_version` | `oneterm-settings-ui` (`updates/config.rs` persist queue, `UpdateConfig` entity is the in-memory truth) | `UpdateConfig::save_preferences` |
+| Check cache | `last_checked_at`, `last_etag`, `last_checked_version`, `cached_candidate` | `oneterm-update` (`UpdateManager` after a successful GitHub response) | `UpdateCheckCache::save` |
+
+Both write paths are field-level `update_json_file` merges under the shared
+inter-process lock, so neither writer can clobber the other's fields even when a
+preference is edited while a check is running. Only the initial default document
+(created when the file is missing) is written whole. When a check completes, the
+UI merges just the returned `UpdateCheckCache` into the live entity
+(`UpdateConfig::apply_check_cache`); it never replaces the entity with the
+manager's stale pre-check copy.
+
 ## Architecture
 
-Recommended crate split:
+Crate split (as shipped; `oneterm-update` depends on `oneterm-core` only, no GPUI):
 
-- `oneterm-core`: shared error variants and small domain types only when required by
-  multiple lower layers.
-- `oneterm-settings`: persistent update preferences.
-- `oneterm-state`: runtime update status and app-level notification integration, if
-  the status is shared across windows.
-- `oneterm-update` (new shared service crate, to be added only after following the
-  new-crate process): GitHub release checking, asset selection, download, checksum
-  verification, staging, and platform installer orchestration. This crate must not
-  depend on GPUI or feature UI crates.
+- `oneterm-core`: shared error variants, atomic persistence helpers and small domain
+  types only when required by multiple lower layers.
+- `oneterm-update` (`crates/update/`): the `UpdateConfig` document
+  (`update_config.json`, `crates/update/src/config.rs`), GitHub release checking,
+  asset selection, download, checksum verification, staging, and platform installer
+  orchestration. This crate must not depend on GPUI or feature UI crates.
+- `oneterm-settings-ui` (`crates/settings-ui/src/updates/`): the in-memory
+  `UpdateConfig` entity, runtime update status (`UpdateUiState`) and notifications.
 - `oneterm-settings-ui`: settings/about controls that call the update service through
   an app service handle or command callback.
 - `oneterm-app`: composition root that installs the update service and wires platform
@@ -257,7 +298,11 @@ Windows:
   helper path must use a signed helper binary or a minimal `cmd.exe` batch helper.
 - Replace the complete distribution directory, including `oneterm.exe`, `conpty.dll`,
   and `x64/OpenConsole.exe`.
-- Preserve a rollback copy until the new process starts successfully.
+- Preserve a rollback copy until the new process starts successfully. The copy
+  lives under the update cache directory (`<config>/updates/backup-<pid>-<ts>`),
+  which is created and write-probed before the app quits; the helper deletes it
+  after `start` succeeds and keeps it when it has to restore. The helper sleeps
+  with a loopback `ping` because it runs without a console.
 
 Linux:
 
@@ -289,8 +334,8 @@ Minimum for first release:
 - Use HTTPS GitHub API and asset URLs only.
 - Match assets by exact target triple and expected extension.
 - Verify SHA-256 before extraction or installation.
-- Reject archives with absolute paths, parent-directory traversal, or symlinks that
-  escape the staging directory.
+- Reject archives with absolute paths, parent-directory traversal, or symlinks
+  (both zip and tar) — tests build real hostile archives for each case.
 - Do not execute downloaded content before verification.
 - Do not log full download URLs if they contain temporary tokens.
 - Certificate verification may be disabled only through an explicit user setting;
@@ -301,6 +346,19 @@ Required before enabling automatic install by default:
 - Sign release checksums or artifacts.
 - Verify signatures against a public key embedded in the application.
 - Document key rotation.
+
+### Signature verification decision
+
+Decision (2026-08 review, SEC-18): OneTerm does **not** verify release signatures
+yet. The integrity chain is TLS to `api.github.com`/`github.com` plus the
+GitHub-published SHA-256 digest; the digest defends against corrupt or truncated
+downloads and a swapped asset, not against a network attacker who can defeat TLS.
+That is why disabling certificate verification is surfaced as insecure in the
+UI and logs rather than treated as a benign toggle. Building signing
+infrastructure (key generation, secure storage in CI, key rotation, and an
+embedded public key) is release-engineering work outside the code base and is
+tracked as the "Signing phase" below; installation stays user-confirmed
+(never automatic) until it lands.
 
 ## Error handling
 
@@ -333,13 +391,16 @@ Unit tests:
 - Archive path traversal rejection.
 - Update config load/default/quarantine behavior.
 
-Integration tests:
+Integration tests (in-crate, offline through the `ReleaseClient` trait double in
+`crates/update/src/manager_tests.rs`):
 
-- Mock GitHub release endpoint returns no update.
-- Mock endpoint returns update with matching asset.
-- Interrupted download leaves no installable staged update.
-- Verified staged update transitions to `Ready to install`.
-- Platform installer dry-run validates expected files.
+- Fake release source returns no update / an update with matching asset.
+- `304 Not Modified` restores the cached candidate only when channel and
+  skipped-version filters still allow it.
+- Checksum mismatch or an oversized body leaves no staging directory behind.
+- Verified download extracts and validates the staged package directory.
+- Real zip/tar fixtures with zip-slip, `..`, symlink, oversized, and nested
+  `dist/` layouts (`crates/update/src/archive_tests.rs`).
 
 Manual smoke tests:
 
@@ -353,7 +414,7 @@ Manual smoke tests:
 
 The release workflow must:
 
-1. Bump `VERSION` before tagging.
+1. Bump `[workspace.package] version` in `Cargo.toml` before tagging.
 2. Check out the release tag before building artifacts, so binaries embed the
    same version as the release tag.
 3. Build release artifacts for every supported target triple.

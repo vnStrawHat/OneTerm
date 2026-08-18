@@ -1,6 +1,6 @@
 //! Reverse mapping `TerminalSettings` → `TerminalConfig` + persistence.
 //!
-//! `apply_config` (in `apply.rs`) goes config → settings at load time. This
+//! `from_config` (in `apply.rs`) goes config → settings at load time. This
 //! module provides the inverse — `to_config` — so the live settings can be
 //! written back to `terminal.json` when the user changes them in the Settings
 //! UI. `save` is a convenience that builds the config and delegates to
@@ -11,6 +11,7 @@
 //! `"#RRGGBB"` strings via [`hsla_to_hex`](super::hsla_to_hex).
 
 use gpui::{App, FontWeight, Hsla};
+use oneterm_core::AppError;
 
 use crate::terminal_config::{
     BellConfig, ColorsConfig, CursorConfig, FontConfig, LayoutConfig, MouseConfig, PaddingConfig,
@@ -18,6 +19,12 @@ use crate::terminal_config::{
 };
 
 use super::{TerminalBlink, TerminalCursorShape, TerminalSettings, hsla_to_hex};
+
+// Roundtrip tests live in a sibling `persist_tests.rs` (same convention as
+// `terminal_config/document_tests.rs`).
+#[cfg(test)]
+#[path = "persist_tests.rs"]
+mod persist_tests;
 
 /// Map a [`gpui::FontWeight`] back to its config string (the inverse of
 /// [`parse_weight`](super::font::parse_weight)).
@@ -54,7 +61,7 @@ fn color_to_hex(c: Option<Hsla>) -> Option<String> {
 impl TerminalSettings {
     /// Build a [`TerminalConfig`] snapshot from the live settings.
     ///
-    /// This is the inverse of [`TerminalSettings::apply_config`]. The result
+    /// This is the inverse of [`TerminalSettings::from_config`]. The result
     /// can be passed to [`TerminalConfig::save`] to persist the settings.
     pub fn to_config(&self) -> TerminalConfig {
         let co = &self.color_overrides;
@@ -62,7 +69,10 @@ impl TerminalSettings {
         TerminalConfig {
             font: FontConfig {
                 family: self.font_family.as_ref().map(|s| s.to_string()),
-                size: self.font_size,
+                // Persist the configured size, not the live zoom-modified
+                // `font_size`; otherwise a zoomed session becomes the new base
+                // on the next launch (CORR-12).
+                size: self.base_font_size,
                 weight: weight_to_string(self.font_weight),
                 features: self.font_features.iter().map(|s| s.to_string()).collect(),
             },
@@ -92,6 +102,7 @@ impl TerminalSettings {
             },
             mouse: MouseConfig {
                 show_context_menu: self.show_context_menu,
+                copy_on_select: self.copy_on_select,
             },
             bell: BellConfig {
                 enabled: self.bell_enabled,
@@ -99,25 +110,7 @@ impl TerminalSettings {
             security: SecurityConfig {
                 allow_clipboard_read: self.allow_clipboard_read,
             },
-            completion: crate::terminal_config::CompletionConfig {
-                enabled: self.completion.enabled,
-                accept_tab: self.completion.accept_tab,
-                max_history: self.completion.max_history,
-                min_prefix_len: self.completion.min_prefix_len,
-                max_visible_items: self.completion.max_visible_items,
-                sources: crate::terminal_config::CompletionSources {
-                    memory: self.completion.source_memory,
-                    manual: self.completion.source_manual,
-                    external: self.completion.source_external,
-                },
-                fuzzy: self.completion.fuzzy,
-                inherit_ancestor_options: self.completion.inherit_ancestor_options,
-                disable_in_alt_screen: self.completion.disable_in_alt_screen,
-                require_prompt_region: self.completion.require_prompt_region,
-                windows_allow_coreutils: self.completion.windows_allow_coreutils,
-                force_family: self.completion.force_family.clone(),
-                redact_sensitive: self.completion.redact_sensitive,
-            },
+            completion: self.completion.clone(),
             colors: ColorsConfig {
                 foreground: color_to_hex(co.foreground),
                 background: color_to_hex(co.background),
@@ -128,7 +121,13 @@ impl TerminalSettings {
                 clock_fg: color_to_hex(co.clock_fg),
                 line_number_fg: color_to_hex(co.line_number_fg),
                 min_contrast: co.min_contrast,
-                ansi: co.ansi.iter().map(|c| hsla_to_hex(*c)).collect(),
+                // A slot without an override stays an empty string so the
+                // positions after it survive the round trip.
+                ansi: co
+                    .ansi
+                    .iter()
+                    .map(|c| c.map(hsla_to_hex).unwrap_or_default())
+                    .collect(),
             },
         }
     }
@@ -138,13 +137,31 @@ impl TerminalSettings {
     /// Builds a [`TerminalConfig`] snapshot (via [`Self::to_config`]) and writes
     /// it. Callers should first update the in-memory settings and `cx.notify()`,
     /// then call this — the config file is the source of truth across restarts.
-    pub fn save(&self) -> std::io::Result<()> {
-        self.to_config().save()
+    /// Refused with [`AppError::ConfigLoad`] while [`Self::persist_blocked`] is
+    /// set: the file on disk could not be read and may still be the user's.
+    pub fn save(&self) -> Result<(), AppError> {
+        if self.persist_blocked {
+            return Err(Self::persist_blocked_error());
+        }
+        self.to_config().save()?;
+        Ok(())
+    }
+
+    fn persist_blocked_error() -> AppError {
+        AppError::config_load(
+            "terminal.json",
+            "the file could not be read at startup; refusing to overwrite it",
+        )
     }
 
     /// Schedule persistence of the current global settings off the UI thread.
     pub fn persist_global(cx: &App) {
-        let config = Self::global(cx).read(cx).to_config();
+        let settings = Self::global(cx).read(cx);
+        if settings.persist_blocked {
+            log::warn!("{}", Self::persist_blocked_error());
+            return;
+        }
+        let config = settings.to_config();
         cx.background_executor()
             .spawn(async move {
                 if let Err(error) = config.save() {

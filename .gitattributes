@@ -1,3 +1,7 @@
-# Preserve exact upstream vendor snapshots and generated source patches.
-vendor/gpui-component/** -whitespace
-vendor/patches/gpui-component/** -whitespace
+# Vendored forks (vendor/<crate>) must stay byte-identical to pristine upstream + patches
+# (`bash vendor/refresh.sh --check`, `python scripts/check-ui-fork.py`): keep LF endings on
+# every platform (no autocrlf conversion on Windows checkouts) and never rewrite whitespace.
+# `text=auto` leaves files git detects as binary (e.g. vendor/vte/tests/demo.vte) untouched.
+vendor/** text=auto eol=lf -whitespace
+# The patch files themselves are LF-only `git format-patch` output applied with `patch -p1`.
+vendor/patches/** text eol=lf -whitespace

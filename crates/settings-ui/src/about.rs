@@ -1,14 +1,12 @@
 //! "About" settings page — version, description, and links.
 //!
-//! The version string comes from the `ONETERM_VERSION` compile-time env (the
-//! same value shown by the OneTerm ▸ About dialog).
-
-use std::sync::atomic::{AtomicU8, Ordering};
+//! The version string is the workspace `CARGO_PKG_VERSION` (the same value
+//! shown by the OneTerm ▸ About dialog).
 
 use gpui::{
     AnyElement, App, AppContext as _, Context, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, StatefulInteractiveElement as _, Styled, Window, div,
-    prelude::FluentBuilder, px, rgb,
+    prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, WindowExt as _,
@@ -22,11 +20,6 @@ use gpui_component::{
 use oneterm_theme::icon::AppIcon;
 
 use super::updates;
-
-const GITHUB_REPOSITORY_URL: &str = "https://github.com/vnStrawHat/OneTerm";
-const TEST_CRASH_CLICK_COUNT: u8 = 10;
-
-static ABOUT_ICON_CLICKS: AtomicU8 = AtomicU8::new(0);
 
 struct AboutUpdateControls;
 
@@ -58,15 +51,25 @@ impl Render for AboutUpdateControls {
             )
             .when(state.shows_install_button(), |this| {
                 this.child(
-                    h_flex().gap_2().child(
-                        Button::new("about-install-update")
-                            .primary()
-                            .label(state.install_button_label())
-                            .disabled(!state.can_install_update())
-                            .on_click(|_, window, cx| {
-                                updates::download_and_install_update(window, cx)
-                            }),
-                    ),
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            Button::new("about-install-update")
+                                .primary()
+                                .label(state.install_button_label())
+                                .disabled(!state.can_install_update())
+                                .on_click(|_, window, cx| {
+                                    updates::download_and_install_update(window, cx)
+                                }),
+                        )
+                        .when(state.can_skip_update(), |this| {
+                            this.child(
+                                Button::new("about-skip-update")
+                                    .ghost()
+                                    .label("Skip This Version")
+                                    .on_click(|_, _, cx| updates::skip_offered_version(cx)),
+                            )
+                        }),
                 )
             })
             .into_any_element()
@@ -129,24 +132,13 @@ fn app_identity(cx: &App) -> AnyElement {
         .items_center()
         .justify_center()
         .child(
-            div()
-                .id("about-app-icon")
-                .cursor_pointer()
-                .child(
-                    Icon::new(AppIcon::Terminal)
-                        .with_size(px(96.))
-                        .text_color(rgb(0x58c4dc)),
-                )
-                .on_click(|_, _, _| {
-                    if register_about_icon_click() {
-                        // This diagnostic-only panic verifies the crash recovery flow end to end.
-                        panic!("Intentional crash triggered by ten clicks on the About icon");
-                    }
-                }),
+            Icon::new(AppIcon::Terminal)
+                .with_size(px(96.))
+                .text_color(oneterm_theme::brand_accent()),
         )
         .child(Label::new("OneTerm").text_xl())
         .child(
-            Label::new(format!("Version {}", env!("ONETERM_VERSION")))
+            Label::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
                 .text_sm()
                 .text_color(cx.theme().muted_foreground),
         )
@@ -186,16 +178,10 @@ fn links_section(cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-fn register_about_icon_click() -> bool {
-    ABOUT_ICON_CLICKS
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
-            Some(if count + 1 == TEST_CRASH_CLICK_COUNT {
-                0
-            } else {
-                count + 1
-            })
-        })
-        .is_ok_and(|previous| previous + 1 == TEST_CRASH_CLICK_COUNT)
+/// GitHub page of the repository this build was configured for (the same
+/// `owner/repo` the updater queries), so a fork build links to itself.
+fn github_repository_url() -> String {
+    format!("https://github.com/{}", oneterm_update::UPDATE_REPOSITORY)
 }
 
 fn repository_link(id: &'static str, cx: &App) -> AnyElement {
@@ -206,25 +192,9 @@ fn repository_link(id: &'static str, cx: &App) -> AnyElement {
         .text_color(cx.theme().link)
         .text_decoration_1()
         .cursor_pointer()
-        .child(GITHUB_REPOSITORY_URL)
+        .child(github_repository_url())
         .on_click(|_, _, cx| {
-            cx.open_url(GITHUB_REPOSITORY_URL);
+            cx.open_url(&github_repository_url());
         })
         .into_any_element()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn crash_trigger_fires_on_every_tenth_click() {
-        ABOUT_ICON_CLICKS.store(0, Ordering::Relaxed);
-
-        for _ in 0..TEST_CRASH_CLICK_COUNT - 1 {
-            assert!(!register_about_icon_click());
-        }
-        assert!(register_about_icon_click());
-        assert!(!register_about_icon_click());
-    }
 }

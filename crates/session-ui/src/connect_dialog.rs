@@ -4,8 +4,9 @@
 //! - If `SshSession.username = None`, the dialog also asks for a username.
 //! - Authentication fields follow the saved password or private-key preference.
 //!
-//! Footer: **Cancel** + **Connect** — uses direct on_click to bypass
-//! action dispatch through the focus chain (consistent with the SSH Session dialog).
+//! Built on `oneterm_state::form_dialog::FormDialog`: **Cancel** + a stateful
+//! **Connect** button ([`ConnectButton`]); Enter submits, Escape/Cancel abort a
+//! connection attempt in flight.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -18,38 +19,37 @@ use std::sync::{
 use gpui::FocusHandle;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext, ClickEvent, Focusable as _, ParentElement as _, SharedString, Styled, Window,
-    div, px,
+    App, AppContext, Focusable as _, IntoElement as _, ParentElement as _, SharedString, Styled,
+    Window, div,
 };
 use gpui_component::{
     WindowExt as _,
-    button::Button,
     checkbox::Checkbox,
-    dialog::{DialogButtonProps, DialogFooter},
     input::{Input, InputState},
     notification::NotificationType,
 };
 
 use oneterm_core::{ConnectionCancellation, HostKeyPolicy, SshConfig};
-use oneterm_state::notif_ext::notify;
+use oneterm_state::form_dialog::{FieldRequirement, FormDialog, labelled_field};
+use oneterm_theme::notif_ext::notify;
 
 use super::auth_form::SshAuthForm;
 use super::common::{
-    ConnectButton, FieldRequirement, connect_ssh_session, defer_initial_focus_once, field,
+    ConnectButton, SshConnectRequest, connect_ssh_session, defer_initial_focus_once,
     parse_user_host_port, server_info_banner,
 };
-use crate::session_state::{SshSession, SshSessionStore};
+use crate::session_state::{SshSession, SshSessionId, SshSessionStore};
 
 /// Open the SSH connect dialog.
 ///
 /// - `session`: SSH session info from the store.
-/// - `index`: position in the store (used to update the username if the user enters a new one).
+/// - `id`: the session's stable id (used to save a username the user enters).
 ///
 /// When the saved session has no username, the dialog asks for one in addition to
 /// rendering the session's preferred authentication fields.
 pub(crate) fn open_connect_dialog(
     session: SshSession,
-    index: usize,
+    id: SshSessionId,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -88,30 +88,25 @@ pub(crate) fn open_connect_dialog(
     let connecting = Arc::new(AtomicBool::new(false));
     let connection_cancellation: Rc<RefCell<Option<ConnectionCancellation>>> =
         Rc::new(RefCell::new(None));
-    let auth_for_connect = auth_form.clone();
-    let username_for_connect = username_state.clone();
-    let session_for_connect = session.clone();
-    let title_ok = title.clone();
 
-    // ── Shared connect logic (used by both the button on_click and keyboard on_ok) ──
-    let connect_logic: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool> = Rc::new({
-        let username_for_connect = username_for_connect.clone();
-        let auth_for_connect = auth_for_connect.clone();
-        let session_for_connect = session_for_connect.clone();
+    // ── Shared connect logic (Connect button + keyboard Enter) ──
+    let connect_logic: Rc<dyn Fn(&mut Window, &mut App) -> bool> = Rc::new({
+        let username_state = username_state.clone();
+        let auth_form = auth_form.clone();
+        let session = session.clone();
         let save_username = save_username.clone();
         let connection_cancellation = connection_cancellation.clone();
         let connecting = connecting.clone();
-        move |_, window, cx| {
+        move |window, cx| {
             if connecting.load(Ordering::Relaxed) {
                 return false;
             }
-            let save = save_username.get();
             on_connect_click(
-                &session_for_connect,
-                index,
-                &username_for_connect,
-                &auth_for_connect,
-                save,
+                &session,
+                id,
+                &username_state,
+                &auth_form,
+                save_username.get(),
                 &connection_cancellation,
                 connecting.clone(),
                 window,
@@ -120,95 +115,77 @@ pub(crate) fn open_connect_dialog(
         }
     });
 
-    let connect_button = cx.new(|_| ConnectButton::new(connect_logic.clone(), connecting.clone()));
+    let connect_button = cx.new(|_| ConnectButton::new(connect_logic.clone(), connecting));
     let initial_focus_pending = Rc::new(Cell::new(true));
+    let cancel_connection = {
+        let connection_cancellation = connection_cancellation.clone();
+        move |_: &mut Window, _: &mut App| {
+            if let Some(cancellation) = connection_cancellation.borrow().as_ref() {
+                cancellation.cancel();
+            }
+        }
+    };
+    let initial_focus = {
+        let username_state = username_state.clone();
+        let auth_form = auth_form.clone();
+        move |window: &mut Window, cx: &mut App| {
+            let focus = match username_state.as_ref() {
+                Some(state) => state.read(cx).focus_handle(cx),
+                None => auth_form.focus_handle(cx),
+            };
+            defer_initial_focus_once(&initial_focus_pending, focus, window, cx);
+        }
+    };
 
-    window.open_dialog(cx, move |dialog, window, cx| {
-        let initial_focus = match username_state.as_ref() {
-            Some(state) => state.read(cx).focus_handle(cx),
-            None => auth_form.focus_handle(cx),
-        };
-        defer_initial_focus_once(&initial_focus_pending, initial_focus, window, cx);
-
-        // Clone connect_logic for keyboard on_ok; the footer owns the Connect button.
-        let connect_for_kb = connect_logic.clone();
-        let cancellation_for_keyboard = connection_cancellation.clone();
-        dialog
-            .title(title_ok.clone())
-            .w(px(440.))
-            .content({
-                let server_info = server_info.clone();
-                let username_state = username_state.clone();
-                let auth_form = auth_form.clone();
-                let save_username = save_username.clone();
-                move |content, _window, cx| {
-                    content
-                        // Server info banner (read-only).
-                        .child(server_info_banner(
-                            SharedString::from(server_info.clone()),
-                            cx,
-                        ))
-                        // Username field (only when ask_username).
-                        .when_some(username_state.as_ref(), |content, st| {
-                            content.child(field(
-                                "Username",
-                                FieldRequirement::Required,
-                                Input::new(st),
-                                cx,
-                            ))
-                        })
-                        .child(auth_form.render(cx))
-                        // "Save username" checkbox — only shown when ask_username.
-                        .when_some(username_state.as_ref(), |content, _st| {
-                            content.child(
-                                div().pt_1().child(
-                                    Checkbox::new("save-username")
-                                        .label("Save username to session")
-                                        .checked(save_username.get())
-                                        .on_click({
-                                            let save_username = save_username.clone();
-                                            move |checked: &bool, _window, _cx| {
-                                                save_username.set(*checked);
-                                            }
-                                        }),
-                                ),
-                            )
-                        })
-                }
-            })
-            // Footer: Cancel + Connect — uses direct on_click instead of DialogAction/DialogClose
-            // to bypass action dispatch through the focus chain.
-            .footer({
-                let connection_cancellation = connection_cancellation.clone();
-                DialogFooter::new()
-                    .child(Button::new("cancel").label("Cancel").outline().on_click(
-                        move |_, window, cx| {
-                            if let Some(cancellation) = connection_cancellation.borrow().as_ref() {
-                                cancellation.cancel();
-                            }
-                            window.close_dialog(cx);
-                        },
+    FormDialog::new(
+        title,
+        move |content, _window, cx| {
+            content
+                // Server info banner (read-only).
+                .child(server_info_banner(
+                    SharedString::from(server_info.clone()),
+                    cx,
+                ))
+                // Username field (only when ask_username).
+                .when_some(username_state.as_ref(), |content, st| {
+                    content.child(labelled_field(
+                        "Username",
+                        FieldRequirement::Required,
+                        Input::new(st),
+                        cx,
                     ))
-                    .child(connect_button.clone())
-            })
-            .button_props(
-                DialogButtonProps::default()
-                    .on_cancel(move |_, _, _| {
-                        if let Some(cancellation) = cancellation_for_keyboard.borrow().as_ref() {
-                            cancellation.cancel();
-                        }
-                        true
-                    })
-                    .on_ok(move |_, window, cx| connect_for_kb(&ClickEvent::default(), window, cx)),
-            )
-    });
+                })
+                .child(auth_form.render(true, cx))
+                // "Save username" checkbox — only shown when ask_username.
+                .when_some(username_state.as_ref(), |content, _st| {
+                    content.child(
+                        div().pt_1().child(
+                            Checkbox::new("save-username")
+                                .label("Save username to session")
+                                .checked(save_username.get())
+                                .on_click({
+                                    let save_username = save_username.clone();
+                                    move |checked: &bool, _window, _cx| {
+                                        save_username.set(*checked);
+                                    }
+                                }),
+                        ),
+                    )
+                })
+        },
+        move |window, cx| connect_logic(window, cx),
+    )
+    .confirm_element(move |_, _| connect_button.clone().into_any_element())
+    .on_cancel(cancel_connection)
+    .on_render(initial_focus)
+    .open(window, cx);
 }
 
 /// Handler for the Connect button — validates inputs, builds SshConfig, connects.
 #[allow(clippy::too_many_arguments)]
 fn on_connect_click(
     session: &SshSession,
-    index: usize,
+    id: SshSessionId,
     username_state: &Option<gpui::Entity<InputState>>,
     auth_form: &SshAuthForm,
     save_username: bool,
@@ -230,7 +207,20 @@ fn on_connect_click(
                 );
                 return false;
             }
-            parse_user_host_port(&raw, &session.host, session.port)
+            match parse_user_host_port(&raw) {
+                Ok(parsed) => (
+                    parsed.user,
+                    parsed.host.unwrap_or_else(|| session.host.clone()),
+                    parsed.port.unwrap_or(session.port),
+                ),
+                Err(error) => {
+                    window.push_notification(
+                        notify(NotificationType::Warning, error.to_string(), cx),
+                        cx,
+                    );
+                    return false;
+                }
+            }
         }
         None => (
             session.username.clone().unwrap_or_default(),
@@ -255,7 +245,7 @@ fn on_connect_click(
         updated.host = host.clone();
         updated.port = port;
         SshSessionStore::global(cx).update(cx, |s, cx| {
-            s.update(index, updated, cx);
+            s.update(id, updated, cx);
         });
     }
 
@@ -273,9 +263,7 @@ fn on_connect_click(
     window.refresh();
     let cancellation = connect_ssh_session(
         cfg,
-        session.label.clone(),
-        None,
-        None,
+        SshConnectRequest::new(session.label.clone()),
         connecting,
         window,
         cx,

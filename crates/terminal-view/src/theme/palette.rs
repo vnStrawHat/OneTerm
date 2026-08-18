@@ -1,10 +1,13 @@
-//! ANSI palette + VteRgb ↔ Rgba conversion.
+//! ANSI palette, VteRgb ↔ Rgba conversion, and `Color` → `Hsla` resolution.
 
-use alacritty_terminal::vte::ansi::Rgb as VteRgb;
+use alacritty_terminal::vte::ansi::{Color, Rgb as VteRgb};
 use gpui::Rgba;
+use oneterm_terminal::resolve_color;
+
+use super::TerminalTheme;
 
 /// Fixed ANSI 16-color palette (GNOME/Tango default).
-pub const ANSI_16: [VteRgb; 16] = [
+pub(crate) const ANSI_16: [VteRgb; 16] = [
     VteRgb {
         r: 0x00,
         g: 0x00,
@@ -88,7 +91,7 @@ pub const ANSI_16: [VteRgb; 16] = [
 ];
 
 /// `vte::ansi::Rgb` (u8) → `gpui::Rgba` (0..1, alpha 1).
-pub fn rgba_from_vte(c: VteRgb) -> Rgba {
+pub(crate) fn rgba_from_vte(c: VteRgb) -> Rgba {
     Rgba {
         r: c.r as f32 / 255.0,
         g: c.g as f32 / 255.0,
@@ -98,7 +101,7 @@ pub fn rgba_from_vte(c: VteRgb) -> Rgba {
 }
 
 /// `gpui::Rgba` (0..1) → `vte::ansi::Rgb` (u8).
-pub fn vte_from_rgba(c: Rgba) -> VteRgb {
+pub(crate) fn vte_from_rgba(c: Rgba) -> VteRgb {
     VteRgb {
         r: (c.r * 255.0).round().clamp(0.0, 255.0) as u8,
         g: (c.g * 255.0).round().clamp(0.0, 255.0) as u8,
@@ -106,7 +109,12 @@ pub fn vte_from_rgba(c: Rgba) -> VteRgb {
     }
 }
 
-/// `vte::ansi::Rgb` → `gpui::Hsla` (qua `Rgba`).
-pub fn hsla_from_vte(c: VteRgb) -> gpui::Hsla {
+/// `vte::ansi::Rgb` → `gpui::Hsla` (via `Rgba`).
+pub(crate) fn hsla_from_vte(c: VteRgb) -> gpui::Hsla {
     gpui::Hsla::from(rgba_from_vte(c))
+}
+
+/// Resolve an alacritty `Color` to `Hsla` via the theme palette.
+pub(crate) fn resolve_cell_color(c: &Color, theme: &TerminalTheme) -> gpui::Hsla {
+    hsla_from_vte(resolve_color(c, &theme.palette))
 }

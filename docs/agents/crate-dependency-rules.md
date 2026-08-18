@@ -18,14 +18,18 @@ L3  workspace (shell) │ terminal-view · sftp-ui · session-ui · settings-ui 
     │
 L2  state · theme            (shared runtime state / theming)
     │
-L1  actions · settings       (gpui action structs / config load-save)
+L1  actions · settings · update   (gpui action structs / config load-save / GitHub Releases updater)
     │
-L0  core · terminal · highlight   (domain + engine + leaf; core = pure domain)
+L0  core · terminal · completion · highlight   (domain + engines + leaf; core = pure domain)
 ```
 
 An edge `A → B` (A depends on B) is allowed **only** when B sits in a strictly
 lower layer — with the single explicit same-layer exception noted in R5
 (`session-ui → terminal-view`). Same-layer and upward edges are otherwise forbidden.
+Within L0, `terminal` and `completion` depend on `core` (the pure-domain leaf);
+`highlight` is a leaf. `crates/tools` (`oneterm-tools`, developer diagnostics: DOOM-fire
+workload + raw PTY throughput probe) is a workspace member **outside** the layering: it
+depends on no OneTerm crate and nothing depends on it.
 
 ## Invariants
 
@@ -37,11 +41,11 @@ lower layer — with the single explicit same-layer exception noted in R5
 | **R4** | **The shell is feature-agnostic.** `workspace` MUST NOT depend on any `*-ui` feature crate or backend. It builds panels **by name** (gpui-component `PanelRegistry`) and drives features via the `oneterm_state::commands::WorkspaceCommands` fn-pointer registry. | The shell must not know which features exist. | `cargo tree -p oneterm-workspace -e normal` shows no `*-ui`, `oneterm-ssh`, or `oneterm-local-shell`. |
 | **R5** | **Features do not cross-depend.** A feature crate MUST NOT depend on another feature's internals — with the **single allowed edge** `session-ui → terminal-view` (opening an SSH session spawns a `TerminalPanel`). Shared cross-feature logic goes in `state`. | Prevents a feature tangle; keeps the one legitimate edge explicit. | `cargo tree -p <feature> -e normal`: the only `*-ui` dep permitted is `session-ui → terminal-view`. |
 | **R6** | **`core` is pure domain.** No `gpui`, no `gpui-component`, no `alacritty_terminal`. Types + traits (`AppError`, `SftpBackend`, `SshConfig`, `LocalShellConfig`) only. | The domain must not pull in UI or a specific terminal engine. | `cargo tree -p oneterm-core -e normal` shows no `gpui*` and no `alacritty_terminal`. |
-| **R7** | **The engine is gpui-free.** `terminal` is alacritty-coupled but MUST NOT depend on `gpui` / `gpui-component`. | The engine is reusable and unit-testable without a UI. | `cargo tree -p oneterm-terminal -e normal` shows no `gpui*`. |
+| **R7** | **The engines are gpui-free.** `terminal` is alacritty-coupled but MUST NOT depend on `gpui` / `gpui-component`; `completion` and `highlight` depend on neither `gpui` nor `alacritty_terminal`. | The engines are reusable and unit-testable without a UI. | `cargo tree -p oneterm-terminal -e normal`, `-p oneterm-completion`, `-p oneterm-highlight` show no `gpui*`. |
 | **R8** | **Backends implement traits only.** `ssh` / `local-shell` depend on **only** `core` + `terminal` (+ their protocol crates); they implement `TerminalSession` / `SftpBackend` and depend on **no** UI crate. | Backends are swappable behind trait objects. | `cargo tree -p oneterm-ssh -e normal` / `-p oneterm-local-shell` show no UI crate. |
 | **R9** | **`app` is the only omniscient crate.** Only `app` may depend on backends + features + shell together. It installs `AppSessionFactory`, runs each feature's `init()`, and assembles `WorkspaceCommands`. | Single wiring point; everyone else stays layered. | Only `crates/app/Cargo.toml` lists a backend **and** a feature crate. |
 | **R10** | **New shared types go in the lowest crate that needs them.** A type used by two features/shell belongs in `core` / `terminal` / `settings` / `state` (whichever is lowest and fits), never duplicated. | Avoids duplicate/divergent types and up-edges. | Review: is the new type reachable from the lowest common layer? |
-| **R11** | **Naming.** Package name = `oneterm-<dir>`; inside a backend the `core` re-export is aliased `use oneterm_core as core`. New path crates are workspace members and listed in root `members`. | Consistency + discoverability. | Check `crates/<x>/Cargo.toml` `name` and root `Cargo.toml` `members`. |
+| **R11** | **Naming.** Package name = `oneterm-<dir>`; backends import the domain crate as `oneterm_core` directly. New path crates are workspace members and listed in root `members`. | Consistency + discoverability. | Check `crates/<x>/Cargo.toml` `name` and root `Cargo.toml` `members`. |
 | **R12** | **Feature self-registration.** Each feature owns its `init(cx)` that registers its dock panels + feature globals; `app::init` calls them. Neither the shell nor another feature registers a feature's panels. | Feature encapsulation; saved layouts deserialize by panel name. | Panels are registered in the owning feature's `lib.rs init()`. |
 
 ## Full-graph verification (one shot)
@@ -53,6 +57,7 @@ cargo tree -i oneterm-ssh -e normal                       # R3: only oneterm-app
 cargo tree -i oneterm-local-shell -e normal               # R3: only oneterm-app
 cargo tree -p oneterm-core   -e normal                    # R6: no gpui*, no alacritty_terminal
 cargo tree -p oneterm-terminal -e normal                  # R7: no gpui*
+cargo tree -p oneterm-completion -e normal                # R7: no gpui*, no alacritty_terminal
 cargo tree -p oneterm-workspace -e normal                 # R4: no *-ui / backend
 ```
 

@@ -39,67 +39,44 @@ pub enum SemanticHighlightingMode {
 
 /// Layout group: line height, cell width, padding, gutter, tab title.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct LayoutConfig {
     /// Line height multiplier (1.2 = 120% of font size).
-    #[serde(default = "default_line_height")]
     pub line_height: f32,
     /// Cell width override in px (null = auto from the advance width of '0',
     /// like Windows Terminal / the CSS ch unit).
-    #[serde(default = "default_cell_width")]
     pub cell_width: Option<f32>,
     /// Padding around the terminal content (px).
-    #[serde(default)]
     pub padding: PaddingConfig,
     /// Enable/disable the gutter (timestamp + line number on the left of the terminal).
-    #[serde(default = "default_show_gutter")]
     pub show_gutter: bool,
     /// How the terminal tab title is determined (static label vs OSC 0/2).
-    #[serde(default)]
     pub tab_title: TabTitleMode,
     /// Semantic highlighting mode for plain-text terminal output.
-    #[serde(default = "default_semantic_highlighting")]
     pub semantic_highlighting: SemanticHighlightingMode,
 }
 
 impl Default for LayoutConfig {
     fn default() -> Self {
         Self {
-            line_height: default_line_height(),
-            cell_width: default_cell_width(),
+            line_height: 1.2,
+            // Auto: measure the advance width of '0' (CSS ch unit, like Windows Terminal).
+            cell_width: None,
             padding: PaddingConfig::default(),
-            show_gutter: default_show_gutter(),
+            show_gutter: false,
             tab_title: TabTitleMode::default(),
-            semantic_highlighting: default_semantic_highlighting(),
+            semantic_highlighting: SemanticHighlightingMode::Auto,
         }
     }
 }
 
-fn default_line_height() -> f32 {
-    1.2
-}
-
-fn default_cell_width() -> Option<f32> {
-    None // auto: measure the advance width of '0' (CSS ch unit, like Windows Terminal)
-}
-
-fn default_show_gutter() -> bool {
-    false
-}
-
-fn default_semantic_highlighting() -> SemanticHighlightingMode {
-    SemanticHighlightingMode::Auto
-}
-
 /// Padding on all 4 sides (px).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PaddingConfig {
-    #[serde(default)]
     pub top: f32,
-    #[serde(default = "default_padding_right")]
     pub right: f32,
-    #[serde(default)]
     pub bottom: f32,
-    #[serde(default = "default_padding_left")]
     pub left: f32,
 }
 
@@ -107,17 +84,9 @@ impl Default for PaddingConfig {
     fn default() -> Self {
         Self {
             top: 0.0,
-            right: default_padding_right(),
+            right: 5.0,
             bottom: 0.0,
-            left: default_padding_left(),
+            left: 10.0,
         }
     }
-}
-
-fn default_padding_right() -> f32 {
-    5.0
-}
-
-fn default_padding_left() -> f32 {
-    10.0
 }

@@ -53,7 +53,12 @@ pub(super) fn match_option(
     if token.is_empty() {
         return Some((true, 0));
     }
-    if flag.len() >= token.len() && flag[..token.len()].eq_ignore_ascii_case(token) {
+    // `get` (not indexing): `token.len()` may land inside a multibyte char of a
+    // history-derived option token.
+    if flag
+        .get(..token.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(token))
+    {
         return Some((true, token.len()));
     }
     if cfg.fuzzy && is_subsequence(flag, token, true) {
@@ -86,8 +91,14 @@ fn is_subsequence(haystack: &str, needle: &str, ci: bool) -> bool {
     ni == need.len()
 }
 
+/// Ranking weights (docs 04 §4.2) — fixed, never user-exposed.
+const W_KIND: f32 = 10.0;
+const W_FREC: f32 = 6.0;
+const W_PREFIX: f32 = 4.0;
+const W_LEN: f32 = 1.0;
+
 /// Weighted ranking blend (docs 04 §4.2).
-pub(super) fn score(c: &Candidate, cfg: &CompletionParams) -> f32 {
+pub(super) fn score(c: &Candidate) -> f32 {
     let kind_weight = match c.kind {
         SuggestionKind::History => 3.0,
         _ if c.is_manual => 2.0,
@@ -95,8 +106,5 @@ pub(super) fn score(c: &Candidate, cfg: &CompletionParams) -> f32 {
     };
     let prefix_bonus = if c.is_prefix { 1.0 } else { 0.0 };
     let short_bonus = 1.0 / (1.0 + c.text.len() as f32);
-    cfg.w_kind * kind_weight
-        + cfg.w_frec * c.frecency
-        + cfg.w_prefix * prefix_bonus
-        + cfg.w_len * short_bonus
+    W_KIND * kind_weight + W_FREC * c.frecency + W_PREFIX * prefix_bonus + W_LEN * short_bonus
 }

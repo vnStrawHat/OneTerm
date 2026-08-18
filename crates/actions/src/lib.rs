@@ -8,12 +8,12 @@ use serde::Deserialize;
 // reaching into `oneterm_core` directly. Defined in `oneterm_core` (the lowest
 // crate that needs it) so the settings crate can persist it without a
 // same-layer dependency on `oneterm_actions`.
-pub use oneterm_core::{DockPlacement, RightDockMode};
+pub use oneterm_core::RightDockMode;
 
-/// Add a new panel to the dock at the given placement.
+/// Add a new TerminalPanel to the center dock.
 #[derive(Clone, PartialEq, Eq, Deserialize, gpui::Action)]
 #[action(namespace = oneterm, no_json)]
-pub struct AddPanel(pub DockPlacement);
+pub struct AddPanel;
 
 /// Add a new TerminalPanel to the center dock with a specific shell kind.
 #[derive(Clone, PartialEq, Eq, Deserialize, gpui::Action)]
@@ -35,14 +35,8 @@ actions!(
         Quit,
         /// Open the About dialog.
         About,
-        /// Toggle the dock toggle button.
-        ToggleDockToggleButton,
         /// Toggle the gutter (timestamp + line number) in the terminal.
         ToggleGutter,
-        /// Add a new SessionPanel to the right dock.
-        AddSession,
-        /// Add a new SftpPanel to the right dock.
-        AddSftpBrowser,
         /// Open the dialog to create a new SSH session (saved to `ssh_session.json`).
         NewSession,
         /// Open the General Settings panel (font, theme, key bindings).
@@ -97,24 +91,10 @@ actions!(
         /// Refresh the SFTP file listing.
         SftpRefresh,
         // ── Completion actions ──────────────────────────────────────
-        /// Toggle terminal auto-completion on/off.
-        ToggleCompletion,
-        /// Clear the in-session completion history (`memory` source).
-        ClearCompletionHistory,
         /// Force-open the completion overlay at the cursor (default Ctrl+Shift+Space).
         TriggerCompletion,
     ]
 );
-
-/// Action to select the UI font size (used by `FontSizeSelector`).
-#[derive(Clone, PartialEq, Eq, Deserialize, gpui::Action)]
-#[action(namespace = oneterm, no_json)]
-pub struct SelectFont(pub usize);
-
-/// Change the UI language.
-#[derive(Clone, PartialEq, Eq, Deserialize, gpui::Action)]
-#[action(namespace = oneterm, no_json)]
-pub struct SelectLocale(pub SharedString);
 
 /// Switch theme (by name registered in `ThemeRegistry`).
 #[derive(Clone, PartialEq, gpui::Action)]

@@ -1,10 +1,13 @@
 //! Catalog data model + loading.
 //!
 //! A catalog file is a recursive **command node** (`{ name, options,
-//! subcommands? }`); see docs/auto-completion/02 §5 and 10-subcommands.md §2. The
-//! embedded index [`crate::index::CATALOG_FILES`] maps every command to its JSON;
-//! nodes are parsed lazily on first reference and cached
-//! (docs/auto-completion/02 §5.3).
+//! subcommands? }`); see docs/auto-completion/02 §5 and 10-subcommands.md §2.
+//! `build.rs` walks `assets/**/*.json` and generates `catalog_index.rs`, which
+//! defines `CATALOG_FILES` as `&[(name, source, category, json)]` where each
+//! `json` is an `include_str!` of the file (docs/auto-completion/07 §5); nodes
+//! are parsed lazily on first reference and cached (docs/auto-completion/02 §5.3).
+
+include!(concat!(env!("OUT_DIR"), "/catalog_index.rs"));
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -12,6 +15,7 @@ use std::rc::Rc;
 
 use crate::family::{CatalogCategory, ShellFamily};
 
+#[path = "catalog_schema.rs"]
 mod schema;
 #[cfg(test)]
 #[path = "catalog_tests.rs"]
@@ -92,7 +96,7 @@ pub(crate) struct Catalog {
 impl Catalog {
     /// Build the catalog from the compile-time embedded index.
     pub(crate) fn from_embedded() -> Self {
-        Self::from_raw(crate::index::CATALOG_FILES)
+        Self::from_raw(CATALOG_FILES)
     }
 
     /// Build from an explicit `(name, source, category, json)` slice (tests).
@@ -193,28 +197,45 @@ impl Catalog {
 
     /// All distinct top-level command names available in the searched
     /// `categories`, deduped by family case-rules keeping the highest-precedence
-    /// entry. Cheap: reads only the index, never parses JSON.
+    /// entry (same rule as [`Self::best_entry`]), in first-seen order. One pass
+    /// over the index (called per keystroke — PERF-24); never parses JSON.
     pub(crate) fn command_names(
         &self,
         categories: &[CatalogCategory],
         family: ShellFamily,
     ) -> Vec<&'static str> {
-        let mut seen: Vec<&'static str> = Vec::new();
-        let mut out: Vec<&'static str> = Vec::new();
+        // normalized name → (position in `order`, category rank, source)
+        let mut best: HashMap<String, (usize, usize, Source)> = HashMap::new();
+        let mut order: Vec<&'static str> = Vec::new();
         for entry in &self.entries {
-            if !categories.contains(&entry.category) {
+            let Some(rank) = categories.iter().position(|c| *c == entry.category) else {
                 continue;
-            }
-            if seen.iter().any(|s| names_eq(s, entry.name, family)) {
-                continue;
-            }
-            seen.push(entry.name);
-            // Resolve the highest-precedence spelling for display.
-            if let Some(idx) = self.best_entry(entry.name, categories, family) {
-                out.push(self.entries[idx].name);
+            };
+            let key = if family.case_insensitive() {
+                entry.name.to_ascii_lowercase()
+            } else {
+                entry.name.to_string()
+            };
+            match best.get_mut(&key) {
+                None => {
+                    best.insert(key, (order.len(), rank, entry.source));
+                    order.push(entry.name);
+                }
+                Some((position, best_rank, best_source)) => {
+                    let better = match (entry.source, *best_source) {
+                        (Source::Manual, Source::External) => true,
+                        (Source::External, Source::Manual) => false,
+                        _ => rank < *best_rank,
+                    };
+                    if better {
+                        *best_rank = rank;
+                        *best_source = entry.source;
+                        order[*position] = entry.name;
+                    }
+                }
             }
         }
-        out
+        order
     }
 
     /// The source of the highest-precedence entry for `name` within

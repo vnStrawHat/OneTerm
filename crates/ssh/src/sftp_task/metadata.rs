@@ -1,13 +1,13 @@
 //! SFTP UID/GID lookup and remote metadata conversion.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
 use russh_sftp::client::SftpSession as SftpChannel;
 use russh_sftp::protocol::FileAttributes;
+use tokio::io::AsyncReadExt;
 
-use oneterm_core::{FileEntry, FileStat, Result};
+use oneterm_core::{FileEntry, RemotePath, Result};
 
 use super::map_sftp_err;
 
@@ -34,30 +34,36 @@ impl UidGidLookup {
     }
 }
 
+/// Maximum bytes read from `/etc/passwd` and `/etc/group` on the remote host.
+/// The server is untrusted; a real file is a few KiB, so anything past this
+/// cap is ignored instead of buffered (SEC-16).
+pub(super) const MAX_ID_DATABASE_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Read at most [`MAX_ID_DATABASE_BYTES`] of a remote file. A longer file is
+/// truncated (its last, possibly partial, line is dropped by the parser).
+async fn read_bounded(sftp: &SftpChannel, path: &str) -> std::io::Result<Vec<u8>> {
+    let file = sftp
+        .open(path)
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let mut data = Vec::new();
+    file.take(MAX_ID_DATABASE_BYTES)
+        .read_to_end(&mut data)
+        .await?;
+    if data.len() as u64 >= MAX_ID_DATABASE_BYTES {
+        log::warn!("sftp_task: {path} exceeds {MAX_ID_DATABASE_BYTES} bytes — remainder ignored");
+    }
+    Ok(data)
+}
+
 /// Read /etc/passwd + /etc/group over SFTP, parse uid→name and gid→name maps.
 /// Best-effort: if unreadable → empty map (numbers shown instead).
 pub(super) async fn load_uid_gid_lookup(sftp: &SftpChannel) -> UidGidLookup {
     let mut lookup = UidGidLookup::default();
 
-    // /etc/passwd: `root:x:0:0:root:/root:/bin/bash`
-    //             field 0 = name, field 2 = uid, field 3 = gid
-    match sftp.read("/etc/passwd").await {
+    match read_bounded(sftp, "/etc/passwd").await {
         Ok(data) => {
-            let text = String::from_utf8_lossy(&data);
-            for line in text.lines() {
-                let fields: Vec<&str> = line.split(':').collect();
-                if fields.len() >= 4 {
-                    if let (Ok(uid), Ok(gid)) = (fields[2].parse::<u32>(), fields[3].parse::<u32>())
-                    {
-                        lookup.uid_to_name.insert(uid, fields[0].to_string());
-                        // passwd also has gid → can be used for group lookup.
-                        lookup
-                            .gid_to_name
-                            .entry(gid)
-                            .or_insert_with(|| fields[0].to_string());
-                    }
-                }
-            }
+            parse_passwd(&String::from_utf8_lossy(&data), &mut lookup);
             log::debug!(
                 "sftp_task: /etc/passwd loaded — {} uids",
                 lookup.uid_to_name.len()
@@ -68,19 +74,9 @@ pub(super) async fn load_uid_gid_lookup(sftp: &SftpChannel) -> UidGidLookup {
         }
     }
 
-    // /etc/group: `root:x:0:`
-    //             field 0 = name, field 2 = gid
-    match sftp.read("/etc/group").await {
+    match read_bounded(sftp, "/etc/group").await {
         Ok(data) => {
-            let text = String::from_utf8_lossy(&data);
-            for line in text.lines() {
-                let fields: Vec<&str> = line.split(':').collect();
-                if fields.len() >= 3 {
-                    if let Ok(gid) = fields[2].parse::<u32>() {
-                        lookup.gid_to_name.insert(gid, fields[0].to_string());
-                    }
-                }
-            }
+            parse_group(&String::from_utf8_lossy(&data), &mut lookup);
             log::debug!(
                 "sftp_task: /etc/group loaded — {} gids",
                 lookup.gid_to_name.len()
@@ -92,28 +88,48 @@ pub(super) async fn load_uid_gid_lookup(sftp: &SftpChannel) -> UidGidLookup {
     lookup
 }
 
+/// `/etc/passwd`: `root:x:0:0:root:/root:/bin/bash` — field 0 = name,
+/// field 2 = uid, field 3 = gid (also used as a group-name fallback).
+pub(super) fn parse_passwd(text: &str, lookup: &mut UidGidLookup) {
+    for line in text.lines() {
+        let fields: Vec<&str> = line.split(':').collect();
+        if fields.len() >= 4 {
+            if let (Ok(uid), Ok(gid)) = (fields[2].parse::<u32>(), fields[3].parse::<u32>()) {
+                lookup.uid_to_name.insert(uid, fields[0].to_string());
+                lookup
+                    .gid_to_name
+                    .entry(gid)
+                    .or_insert_with(|| fields[0].to_string());
+            }
+        }
+    }
+}
+
+/// `/etc/group`: `root:x:0:` — field 0 = name, field 2 = gid.
+pub(super) fn parse_group(text: &str, lookup: &mut UidGidLookup) {
+    for line in text.lines() {
+        let fields: Vec<&str> = line.split(':').collect();
+        if fields.len() >= 3 {
+            if let Ok(gid) = fields[2].parse::<u32>() {
+                lookup.gid_to_name.insert(gid, fields[0].to_string());
+            }
+        }
+    }
+}
+
 /// Convert `FileAttributes` (russh-sftp) to a `FileEntry`.
-///
-/// IMPORTANT: SFTP paths always use `/` (Unix style), even when the client runs
-/// on Windows. `PathBuf::join` on Windows uses `\` → the SFTP server won't
-/// understand it. So use string concatenation with `/` instead of `Path::join`.
 fn attrs_to_entry(
     name: String,
-    parent: &str,
+    parent: &RemotePath,
     attrs: &FileAttributes,
     lookup: &UidGidLookup,
 ) -> FileEntry {
-    // Join parent + name with `/` — ensures a Unix-style path for SFTP.
-    let path = if parent.ends_with('/') {
-        format!("{parent}{name}")
-    } else {
-        format!("{parent}/{name}")
-    };
+    let path = parent.join(&name);
     let uid = attrs.uid;
     let gid = attrs.gid;
     FileEntry {
         name,
-        path: PathBuf::from(path),
+        path,
         is_dir: attrs.is_dir(),
         is_symlink: attrs.is_symlink(),
         size: attrs.size.unwrap_or(0),
@@ -138,37 +154,30 @@ fn attrs_to_entry(
 /// absolute path first — some SFTP servers don't understand relative paths.
 pub(super) async fn sftp_read_dir(
     sftp: &SftpChannel,
-    path: &Path,
+    path: &RemotePath,
     lookup: &UidGidLookup,
 ) -> Result<Vec<FileEntry>> {
-    // to_string_lossy() may return `\` on Windows → convert to `/`.
-    let path_str = path.to_string_lossy().replace('\\', "/");
-    log::debug!("sftp_read_dir: path=\"{path_str}\"");
+    log::debug!("sftp_read_dir: path=\"{path}\"");
 
     // Resolve relative path → absolute path via SFTP realpath.
-    // Use starts_with('/') instead of Path::is_absolute() because Windows does
-    // not treat `/root` as absolute (it needs a drive letter).
-    let abs_path = if path_str.starts_with('/') {
-        path_str
+    let abs_path = if path.is_absolute() {
+        path.clone()
     } else {
-        match sftp.canonicalize(&path_str).await {
+        match sftp.canonicalize(path.as_str()).await {
             Ok(resolved) => {
-                log::debug!("sftp_read_dir: canonicalize(\"{path_str}\") → \"{resolved}\"");
-                resolved
+                log::debug!("sftp_read_dir: canonicalize(\"{path}\") → \"{resolved}\"");
+                RemotePath::new(resolved)
             }
             Err(e) => {
                 log::warn!(
-                    "sftp_read_dir: canonicalize(\"{path_str}\") failed: {e} — trying original path"
+                    "sftp_read_dir: canonicalize(\"{path}\") failed: {e} — trying original path"
                 );
-                path_str
+                path.clone()
             }
         }
     };
 
-    // abs_path is already a string with `/` separators (from canonicalize or input).
-    // Do NOT use Path::new — PathBuf on Windows would convert `/` → `\`.
-
-    let read_dir = sftp.read_dir(&abs_path).await.map_err(|e| {
+    let read_dir = sftp.read_dir(abs_path.as_str()).await.map_err(|e| {
         log::error!("sftp_read_dir: read_dir(\"{abs_path}\") failed: {e}");
         map_sftp_err(e)
     })?;
@@ -199,37 +208,18 @@ pub(super) async fn sftp_read_dir(
     Ok(entries)
 }
 
-/// Get detailed metadata.
+/// Get detailed metadata for one path (follows symlinks, like `stat(2)`).
 pub(super) async fn sftp_stat(
     sftp: &SftpChannel,
-    path: &Path,
+    path: &RemotePath,
     lookup: &UidGidLookup,
-) -> Result<FileStat> {
-    // Sanitize backslashes → forward slashes for the SFTP server.
-    let path_str = path.to_string_lossy().replace('\\', "/");
-    let attrs = sftp.metadata(&path_str).await.map_err(map_sftp_err)?;
-
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-
-    Ok(FileStat {
-        name,
-        path: path.to_path_buf(),
-        is_dir: attrs.is_dir(),
-        is_symlink: attrs.is_symlink(),
-        size: attrs.size.unwrap_or(0),
-        modified: attrs
-            .mtime
-            .map(|t| UNIX_EPOCH + Duration::from_secs(t as u64)),
-        accessed: attrs
-            .atime
-            .map(|t| UNIX_EPOCH + Duration::from_secs(t as u64)),
-        permissions: attrs.permissions.unwrap_or(0),
-        uid: attrs.uid,
-        gid: attrs.gid,
-        owner: lookup.uid_name(attrs.uid),
-        group: lookup.gid_name(attrs.gid),
-    })
+) -> Result<FileEntry> {
+    let attrs = sftp.metadata(path.as_str()).await.map_err(map_sftp_err)?;
+    let name = path.file_name().unwrap_or_default().to_string();
+    let parent = path.parent().unwrap_or_else(RemotePath::root);
+    let mut entry = attrs_to_entry(name, &parent, &attrs, lookup);
+    // `attrs_to_entry` re-joins parent + name, which loses the original spelling
+    // of the root, `.` and other nameless paths; keep the caller's path verbatim.
+    entry.path = path.clone();
+    Ok(entry)
 }

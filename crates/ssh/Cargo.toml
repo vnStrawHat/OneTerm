@@ -1,8 +1,12 @@
 [package]
 name = "oneterm-ssh"
 description = "SSH + SFTP implementation for OneTerm (russh)."
-publish = false
+version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
 
 [features]
 terminal-diagnostics = []
@@ -19,7 +23,6 @@ russh.workspace = true
 tokio.workspace = true
 log.workspace = true
 russh-sftp.workspace = true
-anyhow.workspace = true
 tokio-util.workspace = true
 
 [dev-dependencies]

@@ -8,14 +8,18 @@ use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::term::{RenderableCursor, TermMode};
-use alacritty_terminal::vte::ansi::CursorShape;
-use async_channel::{Receiver, Sender, TryRecvError, TrySendError};
+use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
+use async_channel::{Receiver, Sender, TrySendError};
 
-use super::{
-    CursorBounds, IndexedCell, SessionEvent, TermDamageInfo, TerminalBounds, TerminalContent,
-    TerminalError, TerminalInfo, TerminalMouseButton, TerminalQueryState, TerminalSession,
-};
+use crate::content::{IndexedCell, TermDamageInfo, TerminalBounds, TerminalContent};
 use crate::mouse_encode::MouseModifiers;
+use crate::mouse_encode::TerminalMouseButton;
+use crate::osc_color::DynamicColors;
+use crate::search::{SearchMatch, SearchOptions};
+use crate::session::{
+    LineRangeCells, SessionEvent, SessionKind, TerminalError, TerminalIme, TerminalInfo,
+    TerminalInput, TerminalLifecycle, TerminalQueryState, TerminalRender, TerminalSession,
+};
 
 /// Whether a fake snapshot consumes the pending damage (render path) or leaves
 /// it intact (auxiliary query path).
@@ -62,6 +66,11 @@ impl FakeSessionProbe {
         self.state.writes.lock().unwrap().clone()
     }
 
+    /// Make every following `write` fail with `TerminalError::QueueFull`.
+    pub fn fail_writes(&self, fail: bool) {
+        self.state.fail_writes.store(fail, Ordering::SeqCst);
+    }
+
     /// Remove and return all captured writes.
     pub fn take_writes(&self) -> Vec<Vec<u8>> {
         std::mem::take(&mut *self.state.writes.lock().unwrap())
@@ -72,29 +81,9 @@ impl FakeSessionProbe {
         self.state.snapshot_calls.load(Ordering::SeqCst)
     }
 
-    /// Return the number of damage-free query snapshots requested.
-    pub fn query_snapshot_calls(&self) -> usize {
-        self.state.query_snapshot_calls.load(Ordering::SeqCst)
-    }
-
-    /// Return the number of compact query-state reads requested.
-    pub fn query_state_calls(&self) -> usize {
-        self.state.query_state_calls.load(Ordering::SeqCst)
-    }
-
-    /// Return the number of terminal-info reads requested.
-    pub fn terminal_info_calls(&self) -> usize {
-        self.state.terminal_info_calls.load(Ordering::SeqCst)
-    }
-
     /// Return the number of close requests received by the fake.
     pub fn close_calls(&self) -> usize {
         self.state.close_calls.load(Ordering::SeqCst)
-    }
-
-    /// Return the number of times the fake session object was dropped.
-    pub fn drop_calls(&self) -> usize {
-        self.state.drop_calls.load(Ordering::SeqCst)
     }
 
     /// Return whether the fake session is alive.
@@ -117,13 +106,10 @@ struct FakeSessionState {
     writes: Mutex<Vec<Vec<u8>>>,
     event_tx: Sender<SessionEvent>,
     full_damage: AtomicBool,
+    fail_writes: AtomicBool,
     alive: AtomicBool,
     snapshot_calls: AtomicUsize,
-    query_snapshot_calls: AtomicUsize,
-    query_state_calls: AtomicUsize,
-    terminal_info_calls: AtomicUsize,
     close_calls: AtomicUsize,
-    drop_calls: AtomicUsize,
 }
 
 impl FakeTerminalSession {
@@ -138,13 +124,10 @@ impl FakeTerminalSession {
             writes: Mutex::new(Vec::new()),
             event_tx,
             full_damage: AtomicBool::new(true),
+            fail_writes: AtomicBool::new(false),
             alive: AtomicBool::new(true),
             snapshot_calls: AtomicUsize::new(0),
-            query_snapshot_calls: AtomicUsize::new(0),
-            query_state_calls: AtomicUsize::new(0),
-            terminal_info_calls: AtomicUsize::new(0),
             close_calls: AtomicUsize::new(0),
-            drop_calls: AtomicUsize::new(0),
         });
         let probe = FakeSessionProbe {
             state: state.clone(),
@@ -222,27 +205,19 @@ impl FakeTerminalSession {
     }
 }
 
-impl Drop for FakeTerminalSession {
-    fn drop(&mut self) {
-        self.state.drop_calls.fetch_add(1, Ordering::SeqCst);
-    }
-}
+impl TerminalSession for FakeTerminalSession {}
 
-impl TerminalSession for FakeTerminalSession {
+impl TerminalRender for FakeTerminalSession {
     fn snapshot(&self) -> TerminalContent {
         self.state.snapshot_calls.fetch_add(1, Ordering::SeqCst);
         self.content(DamageMode::Consume)
     }
 
     fn snapshot_query(&self) -> TerminalContent {
-        self.state
-            .query_snapshot_calls
-            .fetch_add(1, Ordering::SeqCst);
         self.content(DamageMode::Preserve)
     }
 
     fn query_state(&self) -> TerminalQueryState {
-        self.state.query_state_calls.fetch_add(1, Ordering::SeqCst);
         let mode = *self.state.mode.lock().unwrap();
         let snap = self.content(DamageMode::Preserve);
         TerminalQueryState {
@@ -258,10 +233,20 @@ impl TerminalSession for FakeTerminalSession {
         }
     }
 
+    fn query_line_range_cells(&self, start_line: usize, count: usize) -> LineRangeCells {
+        let snap = self.content(DamageMode::Preserve);
+        let num_cols = snap.terminal_bounds.num_cols;
+        let start = start_line * num_cols;
+        let end = (start + count * num_cols).min(snap.cells.len());
+        let cells = if start <= snap.cells.len() {
+            snap.cells[start..end].to_vec()
+        } else {
+            Vec::new()
+        };
+        LineRangeCells { cells, num_cols }
+    }
+
     fn terminal_info(&self) -> TerminalInfo {
-        self.state
-            .terminal_info_calls
-            .fetch_add(1, Ordering::SeqCst);
         let (rows, cols) = *self.state.rows_cols.lock().unwrap();
         TerminalInfo {
             total_lines: rows,
@@ -290,7 +275,37 @@ impl TerminalSession for FakeTerminalSession {
             .contains(TermMode::ALT_SCREEN)
     }
 
+    fn dynamic_colors(&self) -> DynamicColors {
+        DynamicColors::default()
+    }
+
+    fn set_default_colors(
+        &self,
+        _foreground: Rgb,
+        _background: Rgb,
+        _cursor: Rgb,
+        _ansi: [Rgb; 16],
+    ) {
+    }
+
+    fn search(&self, _query: &str, _options: SearchOptions) -> Vec<SearchMatch> {
+        Vec::new()
+    }
+
+    fn selection_text(&self) -> Option<String> {
+        None
+    }
+
+    fn has_selection(&self) -> bool {
+        false
+    }
+}
+
+impl TerminalInput for FakeTerminalSession {
     fn write(&self, bytes: &[u8]) -> Result<(), TerminalError> {
+        if self.state.fail_writes.load(Ordering::SeqCst) {
+            return Err(TerminalError::QueueFull);
+        }
         self.state.writes.lock().unwrap().push(bytes.to_vec());
         Ok(())
     }
@@ -331,16 +346,14 @@ impl TerminalSession for FakeTerminalSession {
 
     fn wheel(&self, _delta_y: f64, _row: f32, _col: f32, _mods: MouseModifiers) {}
 
-    fn selection_text(&self) -> Option<String> {
-        None
-    }
-
     fn clear_selection(&self) {}
 
     fn select_all(&self) {}
 
     fn clear(&self) {}
+}
 
+impl TerminalIme for FakeTerminalSession {
     fn set_marked_text(&self, _text: String) {}
 
     fn clear_marked_text(&self) {}
@@ -352,17 +365,11 @@ impl TerminalSession for FakeTerminalSession {
     fn marked_text(&self) -> Option<String> {
         None
     }
+}
 
-    fn cursor_bounds(&self) -> Option<CursorBounds> {
-        None
-    }
-
-    fn subscribe(&self) -> Receiver<SessionEvent> {
-        self.event_rx
-            .lock()
-            .unwrap()
-            .take()
-            .unwrap_or_else(|| async_channel::bounded(1).1)
+impl TerminalLifecycle for FakeTerminalSession {
+    fn take_events(&self) -> Option<Receiver<SessionEvent>> {
+        self.event_rx.lock().unwrap().take()
     }
 
     fn alive(&self) -> bool {
@@ -376,8 +383,8 @@ impl TerminalSession for FakeTerminalSession {
         Ok(())
     }
 
-    fn is_local(&self) -> bool {
-        true
+    fn kind(&self) -> SessionKind {
+        SessionKind::Local
     }
 
     fn title(&self) -> Option<String> {
@@ -389,47 +396,69 @@ impl TerminalSession for FakeTerminalSession {
     }
 }
 
-/// A bounded in-memory transport used to drive saturation tests.
-pub struct FakeTransport<T> {
-    sender: Sender<T>,
-    receiver: Receiver<T>,
+/// In-memory [`PtyTransport`](crate::backend::PtyTransport): records writes,
+/// resizes and close requests so pump/router tests need no PTY or network.
+#[derive(Clone, Default)]
+pub struct FakePtyTransport {
+    inner: Arc<FakePtyTransportState>,
 }
 
-impl<T> FakeTransport<T> {
-    /// Create a bounded fake transport.
-    pub fn bounded(capacity: usize) -> Self {
-        let (sender, receiver) = async_channel::bounded(capacity);
-        Self { sender, receiver }
+#[derive(Default)]
+struct FakePtyTransportState {
+    writes: Mutex<Vec<Vec<u8>>>,
+    resizes: Mutex<Vec<(u16, u16)>>,
+    closed: AtomicBool,
+    fail_writes: AtomicBool,
+}
+
+impl FakePtyTransport {
+    /// Create an empty transport.
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// Clone the transport sender for injection into a backend adapter.
-    pub fn sender(&self) -> Sender<T> {
-        self.sender.clone()
+    /// Every write in order.
+    pub fn writes(&self) -> Vec<Vec<u8>> {
+        self.inner.writes.lock().unwrap().clone()
     }
 
-    /// Try to enqueue one item.
-    pub fn try_send(&self, item: T) -> Result<(), TrySendError<T>> {
-        self.sender.try_send(item)
+    /// Remove and return every write.
+    pub fn take_writes(&self) -> Vec<Vec<u8>> {
+        std::mem::take(&mut *self.inner.writes.lock().unwrap())
     }
 
-    /// Try to receive one item.
-    pub fn try_recv(&self) -> Result<T, TryRecvError> {
-        self.receiver.try_recv()
+    /// Every resize `(rows, cols)` in order.
+    pub fn resizes(&self) -> Vec<(u16, u16)> {
+        self.inner.resizes.lock().unwrap().clone()
     }
 
-    /// Close both ends of the fake transport.
-    pub fn close(&self) {
-        self.sender.close();
-        self.receiver.close();
+    /// Whether `pty_close` was called.
+    pub fn is_closed(&self) -> bool {
+        self.inner.closed.load(Ordering::SeqCst)
     }
 
-    /// Return the current number of queued items.
-    pub fn len(&self) -> usize {
-        self.receiver.len()
+    /// Make every following write fail with `TerminalError::QueueFull`.
+    pub fn fail_writes(&self, fail: bool) {
+        self.inner.fail_writes.store(fail, Ordering::SeqCst);
+    }
+}
+
+impl crate::backend::PtyTransport for FakePtyTransport {
+    fn pty_write(&self, bytes: &[u8]) -> Result<(), TerminalError> {
+        if self.inner.fail_writes.load(Ordering::SeqCst) {
+            return Err(TerminalError::QueueFull);
+        }
+        self.inner.writes.lock().unwrap().push(bytes.to_vec());
+        Ok(())
     }
 
-    /// Return whether the transport queue is empty.
-    pub fn is_empty(&self) -> bool {
-        self.receiver.is_empty()
+    fn pty_resize(&self, rows: u16, cols: u16) -> Result<(), TerminalError> {
+        self.inner.resizes.lock().unwrap().push((rows, cols));
+        Ok(())
+    }
+
+    fn pty_close(&self) -> Result<(), TerminalError> {
+        self.inner.closed.store(true, Ordering::SeqCst);
+        Ok(())
     }
 }

@@ -14,7 +14,7 @@ use gpui_component::{
 };
 
 use crate::layout::OneTermWorkspace;
-use crate::widgets::{BreadcrumbIndicator, DateTimeClock, NetSpeedIndicator, ResourceIndicator};
+use crate::widgets::StatusText;
 
 /// Build the `StatusBar` for `OneTermWorkspace`.
 ///
@@ -22,10 +22,10 @@ use crate::widgets::{BreadcrumbIndicator, DateTimeClock, NetSpeedIndicator, Reso
 /// 1s timer fires reliably — not recreated each render.
 pub fn build_status_bar(
     dock_area: &Entity<DockArea>,
-    clock: Entity<DateTimeClock>,
-    net_speed: Entity<NetSpeedIndicator>,
-    breadcrumb: Entity<BreadcrumbIndicator>,
-    resource: Entity<ResourceIndicator>,
+    clock: Entity<StatusText>,
+    net_speed: Entity<StatusText>,
+    breadcrumb: Entity<StatusText>,
+    resource: Entity<StatusText>,
     _window: &mut Window,
     cx: &mut Context<OneTermWorkspace>,
 ) -> StatusBar {

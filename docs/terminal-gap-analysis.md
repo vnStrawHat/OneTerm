@@ -92,7 +92,7 @@
 | ✅/❌ | Gap | Zed has | OneTerm has | Description / Example |
 |---|---|---|---|---|
 | ✅ | **OSC 8 hyperlink** | Yes | Yes | `cell.hyperlink()` → Ctrl+click opens URL. |
-| ✅ | **Plain-text URL detection** | Yes | Yes (linkify) | `https://example.com` in output → Ctrl+click opens. |
+| ✅ | **Plain-text URL detection** | Yes | Yes (terminal-view url detection) | `https://example.com` in output → Ctrl+click opens. |
 | ✅ | **Ctrl+click open URL** | Yes | Yes | Ctrl+click on URL → opens browser. |
 | ❌ | **Path-like hyperlink (file:line)** | Yes — `hover_path_like_target`, `open_path_like_target`, regex for `file.rs:42` | No | Zed: hover `src/main.rs:42` → tooltip shows path, Ctrl+click opens file at line 42. OneTerm: URLs only. **Example**: Compiler output `error at src/main.rs:42:10` → Zed: click opens editor. OneTerm: plain text. |
 | ❌ | **Hover tooltip** | Yes — `HoverTarget { tooltip, hovered_word }` | No | Zed: hover URL/path → tooltip shows full URL/path. OneTerm: no tooltip. |
@@ -113,7 +113,7 @@
 | ⚡ | **Shell environment detection** | Yes — `ProjectEnvironment`, `capture_unix/windows`, `zed --printenv` | No | Zed: spawn shell in login mode → capture env JSON → inject into terminal. OneTerm: inherits env directly. Shell integration script injects instead of capturing env. |
 | ⚡ | **ShellBuilder (quoting/escaping)** | Yes — `ShellKind::Posix/Fish/Nushell/PowerShell`, `format_task_for_activation` | Partial | `ShellKind` enum (Cmd/PowerShell/Pwsh/Bash/Zsh/Sh/Custom) + shell-specific integration script injection. No `format_task_for_activation` yet. |
 | ✅ | **Activation script** | Yes — `activation_script: Vec<String>` | Yes (fixed) | `shell_integration_script(kind)` → auto-inject OSC 7 + OSC 133 script into PTY after spawn. PowerShell: override `prompt` function. Bash/Zsh: precmd/preexec hooks. Cmd: `prompt` command. |
-| ✅ | **Breadcrumb text** | Yes — `breadcrumb_text: String`, shown in toolbar | Yes (fixed) | `TerminalSession::breadcrumb_text()` → returns cwd path (OSC 7). Terminal view displays breadcrumb bar at bottom (cwd + foreground process). |
+| ✅ | **Breadcrumb text** | Yes — `breadcrumb_text: String`, shown in toolbar | Yes (fixed) | `TerminalPanel::breadcrumb_label()` formats `TerminalSession::cwd()` (OSC 7); the session trait carries no presentation methods (ARCH-02). Shown in the StatusBar breadcrumb widget. |
 
 ---
 
@@ -141,7 +141,6 @@
 | ✅ | **Vi mode** | Yes — `ToggleViMode`, `ViMotion::Left/Right/Up/Down/WordRight/WordLeft` | Yes (fixed) | Ctrl+Shift+Space → toggle vi mode. hjkl/arrows navigate, v select, y yank, w/b word jump, gg/G top/bottom, 0/$ line start/end, q quit. Vi cursor overlay + indicator. |
 | ⚡ | **Character palette** | Yes — `ShowCharacterPalette` action | No | Zed: Cmd+Ctrl+Space → character palette (emoji picker). Platform-specific (macOS NSPasteboard). Windows uses native Win+.. |
 | ✅ | **Send text action** | Yes — `SendText(String)` action | Yes (fixed) | `TerminalSession::send_text(text)` — writes raw text to PTY. Default impl on trait. |
-| ✅ | **Send keystroke action** | Yes — `SendKeystroke(String)` | Yes (fixed) | `TerminalSession::send_keystroke(keystroke)` — parse format `Ctrl+C`/`Alt+Enter`/`Up` → encode → write PTY. `parse_keystroke()` public function. |
 | ✅ | **Bracketed paste detection** | Yes — `Modes::BRACKETED_PASTE` | Yes (fixed) | `TerminalSession::is_bracketed_paste()` checks `TermMode::BRACKETED_PASTE`. `paste(text)` auto-wraps in `\x1b[200~...\x1b[201~`. All paste paths (middle-click, Ctrl+Shift+V, context menu) use `paste()`. |
 
 ---

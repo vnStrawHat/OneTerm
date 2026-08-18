@@ -24,8 +24,7 @@
    alt-screen + OSC 133), `CompletionOverlay` (cursor-anchored list, tags, keys,
    optional command-path breadcrumb), accept = apply exact suggestion text under
    the active family's case rule, history capture on OSC 133 `C`/`D`.
-6. `settings-ui`: Completion section; `oneterm-actions` `ToggleCompletion` /
-   `ClearCompletionHistory` / `TriggerCompletion` (default binding
+6. `settings-ui`: Completion section; `oneterm-actions` `TriggerCompletion` (default binding
    `Ctrl+Shift+Space`) actions.
 7. Quality gate: `cargo fmt --all --check`, `cargo clippy --workspace
    --all-targets -- -D warnings`, `cargo build --workspace`, `cargo test

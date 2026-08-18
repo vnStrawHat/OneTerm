@@ -1,6 +1,33 @@
 # SSH Client Connect Design — OneTerm
 
 > **Status:** Historical design record. For current crate ownership and paths, see [`docs/architecture.md`](architecture.md). For the accepted password and private-key authentication behavior, see [`docs/ssh-authentication.md`](ssh-authentication.md).
+>
+> **Current state (review refresh 2026-08, Phase 2).** The shipped code in
+> `crates/session-ui/` differs from the sketches below in three ways:
+>
+> - **Sessions are addressed by a stable id, not a `Vec` index.** `ssh_session.json`
+>   is schema v2: `{ "schema_version": 2, "next_session_id": N, "sessions": [{ "id": 1, … }] }`.
+>   `SshSessionStore` exposes `sessions() -> &[SshSessionEntry { id, session }]`,
+>   `get(id)`, `add(session) -> id`, `update(id, session)`, `remove(id)`; tree item ids
+>   are `session:{id}`; `open_connect_dialog(session, id, …)` and
+>   `open_session_dialog(…, Some((id, session)))` capture the id, so a session removed
+>   or reordered while a dialog is open is never retargeted. Loading a v0 (bare array)
+>   or v1 file assigns ids by position and re-saves the file as v2; a v2 file whose rows
+>   lack or repeat an `id` is repaired the same way. No field is dropped
+>   (`crates/session-ui/src/session_state.rs`, fixtures under
+>   `crates/session-ui/tests/fixtures/persistence/`).
+> - **One `user[@host[:port]]` parser** (`common::parse_user_host_port`, used by the
+>   connect and quick-connect dialogs) with an explicit policy: `user` alone leaves
+>   host/port to the caller's defaults; IPv6 hosts are `[addr]`, `[addr]:port` or a
+>   bare address with several colons (no port); an invalid port (`:abc`, `:0`,
+>   `:70000`), an empty user (`@host`) or an empty host (`user@`) is rejected with a
+>   corrective notification — never a silent default, never folded into the host name.
+>   `common::parse_port` applies the same `1..=65535` rule to the Port fields; an empty
+>   Port field means 22. In quick-connect the typed Host / Port fields win over the parts
+>   parsed from the Username field.
+> - **Dialogs share `oneterm_state::form_dialog::FormDialog`** (title, content builder,
+>   Cancel + confirm footer, Enter submits, Escape/Cancel hook) and `labelled_field`;
+>   the connect dialogs plug their stateful `ConnectButton` in via `confirm_element`.
 
 > Design document for the SSH connect feature: click an item in the SSH Session list →
 > open an SSH session to the target server, with a credential-entry dialog when needed.
@@ -965,19 +992,54 @@ When the user clicks the same session item multiple times → opens multiple sep
 (each tab = an independent connection). This is the desired behavior — like Tabby, Termius.
 No connection caching/reuse.
 
-### 9.2. Connection timeout
+### 9.2. Connection timeout, phases and cancellation
 
-`SshSession::connect` should have a timeout (e.g. 30s). If the server is unreachable →
-`Err` → `push_notification("SSH connect failed: connection timed out")`.
-See `terminal-backend.md` §13 (risks).
+`crates/ssh/src/session.rs::connect` runs every step through `ConnectPhases`:
+each step is one `oneterm_core::ConnectPhase` (`Transport` → `Authentication` →
+`ChannelOpen` → `PtyRequest` → `ShellRequest` → `ShellIntegration` → `SftpSetup`)
+awaited under a 20 s per-phase deadline, and the whole attempt under a 60 s
+deadline. Failures are typed (ARCH-06):
+
+| Outcome | Error |
+|---|---|
+| Transport/protocol failure or timeout in a step | `AppError::Connect { phase, message }` — the UI shows `Display` (`SSH <phase> failed: <message>`). |
+| Server rejected authentication | `AppError::Connect { phase: Authentication, message: "rejected by the server; the server accepts: …" }`. |
+| Host-key problems | `AppError::HostKeyUnknown` / `AppError::HostKeyChanged` (see §9.3). |
+| User pressed Cancel | `AppError::Cancelled` — `ConnectionCancellation::cancelled()` is a waker-driven future, so a phase in flight is woken immediately instead of polled every 25 ms (PERF-22). |
+
+Blocking work on the connect path (`known_hosts` read/append in
+`check_server_key`, private-key loading/decryption) runs on
+`tokio::task::spawn_blocking` so the two shared runtime workers keep serving the
+other sessions (CORR-17).
 
 ### 9.3. Host key verification
 
-MVP: accept any host key (NOT recommended for production). Roadmap: add
-known_hosts + an accept/reject prompt (see `terminal-backend.md` §8, step 8).
-When known_hosts is implemented, the connect dialog needs an extra step:
-- Unknown host key → dialog "Accept host key? (fingerprint: xx:xx:...)"
-- Host key mismatch → dialog "WARNING: host key changed!"
+Host keys are verified fail-closed against the OpenSSH `known_hosts` file
+(`~/.ssh/known_hosts`) by `crates/ssh/src/handler.rs` (`SshClientHandler`).
+Every entry recorded for `host` (`[host]:port` when the port is not 22, hashed
+entries included) is loaded and compared with the key the server presents:
+
+| known_hosts state for the host | Result |
+|---|---|
+| An entry matches the presented key exactly | Trusted, connection proceeds. |
+| No entry for the host | `AppError::HostKeyUnknown` (algorithm + SHA-256 fingerprint). The connect UI shows an "accept host key?" dialog; approving retries with `HostKeyPolicy::AcceptNewFingerprint(fingerprint)`, and the handler learns the key only when the presented fingerprint equals the approved one. |
+| An entry with the **same algorithm** but a different key | `AppError::HostKeyChanged` — refused, never approvable from the UI; the user must remove the stale entry by hand. |
+| Entries exist but **only for other algorithms** (for example the host is known by `ssh-ed25519` and the server presents `ecdsa-sha2-nistp256`) | `AppError::HostKeyChanged` as well (`SshHandlerError::HostKeyAlgorithmMismatch`). A man-in-the-middle can always present a key type the client has never recorded, so this case must not fall through to the friendly first-use prompt. |
+| `known_hosts` unreadable / malformed entry for the host | Key-store error, connection refused. |
+
+To keep the algorithm-mismatch rule from firing on legitimate servers that
+gained new key types after the first connection, the client's preferred
+host-key algorithm list is reordered before key exchange so every algorithm
+already recorded for the host is offered first
+(`SshClientHandler::preferred_key_algorithms` → `client::Config.preferred.key`).
+Servers pick the first client-preferred type they hold, so a host known only by
+its RSA key keeps presenting RSA. If a server dropped the recorded key type
+entirely, the mismatch is reported and the user removes the stale entry.
+
+Connections also send `keepalive@openssh.com` requests every 30 s and disconnect
+after 3 unanswered requests (`KEEPALIVE_INTERVAL` / `KEEPALIVE_MAX` in
+`crates/ssh/src/session.rs`) so a dead peer or a dropped NAT mapping surfaces as
+a closed session instead of a tab that hangs forever.
 
 ### 9.4. Password input — don't log it
 

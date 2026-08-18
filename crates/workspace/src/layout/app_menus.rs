@@ -1,15 +1,13 @@
 //! App menu bar — builds the native menu (OneTerm).
 //!
-//! Mirrors `reference/.../story/src/app_menus.rs`, keeping Appearance (Light/Dark),
-//! Theme submenu, and Language. The Edit / View / Help menus were removed; their
+//! Mirrors `reference/.../story/src/app_menus.rs`, keeping Appearance (Light/Dark)
+//! and the Theme submenu. The Edit / View / Help menus were removed; their
 //! actions remain reachable via key bindings and the in-app UI.
 
-use gpui::{App, Entity, Menu, MenuItem, SharedString, px};
+use gpui::{App, Entity, Menu, MenuItem, OwnedMenu, SharedString};
 use gpui_component::{ActiveTheme as _, GlobalState, Theme, ThemeRegistry, menu::AppMenuBar};
 
-use oneterm_actions::{
-    About, OpenSettings, Quit, SelectFont, SelectLocale, SwitchTheme, SwitchThemeMode, ToggleGutter,
-};
+use oneterm_actions::{About, OpenSettings, Quit, SwitchTheme, SwitchThemeMode, ToggleGutter};
 use oneterm_settings::TerminalSettings;
 
 /// Initialize the `AppMenuBar` and wire up theme observation to refresh check states.
@@ -17,15 +15,6 @@ pub fn init(title: impl Into<SharedString>, cx: &mut App) -> Entity<AppMenuBar> 
     let app_menu_bar = AppMenuBar::new(cx);
     let title: SharedString = title.into();
     update_app_menu(title.clone(), app_menu_bar.clone(), cx);
-
-    cx.on_action({
-        let title = title.clone();
-        let app_menu_bar = app_menu_bar.clone();
-        move |_: &SelectLocale, cx: &mut App| {
-            // rust-i18n is not wired up in the skeleton yet — just refresh the menu.
-            update_app_menu(title.clone(), app_menu_bar.clone(), cx);
-        }
-    });
 
     // Observe theme changes to refresh the Light/Dark + Theme + Font Size check states.
     cx.observe_global::<Theme>({
@@ -47,12 +36,6 @@ pub fn init(title: impl Into<SharedString>, cx: &mut App) -> Entity<AppMenuBar> 
     })
     .detach();
 
-    // Font Size — set the global theme font size (kept for key-binding reachability).
-    cx.on_action(|select: &SelectFont, cx| {
-        Theme::global_mut(cx).font_size = px(select.0 as f32);
-        cx.refresh_windows();
-    });
-
     // Gutter — toggle the timestamp + line number column (kept for key-binding reachability).
     cx.on_action(|_: &ToggleGutter, cx| {
         let new_val = !TerminalSettings::global(cx).read(cx).show_gutter;
@@ -70,16 +53,49 @@ pub fn init(title: impl Into<SharedString>, cx: &mut App) -> Entity<AppMenuBar> 
 fn update_app_menu(title: impl Into<SharedString>, app_menu_bar: Entity<AppMenuBar>, cx: &mut App) {
     let title: SharedString = title.into();
 
-    cx.set_menus(build_menus(title.clone(), cx));
-    let menus = build_menus(title, cx)
-        .into_iter()
-        .map(|menu| menu.owned())
-        .collect();
-    GlobalState::global_mut(cx).set_app_menus(menus);
+    // Build the tree once; the platform menu and the in-window menu bar both
+    // need a copy (`Menu` is not `Clone`, `Menu::owned` consumes it).
+    let menus = build_menus(title, cx);
+    let owned: Vec<OwnedMenu> = menus.iter().map(clone_menu).map(Menu::owned).collect();
+    cx.set_menus(menus);
+    GlobalState::global_mut(cx).set_app_menus(owned);
 
     app_menu_bar.update(cx, |menu_bar, cx| {
         menu_bar.reload(cx);
     });
+}
+
+/// Deep-copy a menu tree (actions via `Action::boxed_clone`).
+fn clone_menu(menu: &Menu) -> Menu {
+    Menu {
+        name: menu.name.clone(),
+        items: menu.items.iter().map(clone_menu_item).collect(),
+        disabled: menu.disabled,
+    }
+}
+
+fn clone_menu_item(item: &MenuItem) -> MenuItem {
+    match item {
+        MenuItem::Separator => MenuItem::Separator,
+        MenuItem::Submenu(menu) => MenuItem::Submenu(clone_menu(menu)),
+        MenuItem::SystemMenu(os_menu) => MenuItem::SystemMenu(gpui::OsMenu {
+            name: os_menu.name.clone(),
+            menu_type: os_menu.menu_type,
+        }),
+        MenuItem::Action {
+            name,
+            action,
+            os_action,
+            checked,
+            disabled,
+        } => MenuItem::Action {
+            name: name.clone(),
+            action: action.boxed_clone(),
+            os_action: *os_action,
+            checked: *checked,
+            disabled: *disabled,
+        },
+    }
 }
 
 fn build_menus(title: impl Into<SharedString>, cx: &App) -> Vec<Menu> {
@@ -99,7 +115,6 @@ fn build_menus(title: impl Into<SharedString>, cx: &App) -> Vec<Menu> {
                 disabled: false,
             }),
             theme_menu(cx),
-            language_menu(),
             MenuItem::Separator,
             MenuItem::action("Settings...", OpenSettings),
             MenuItem::Separator,
@@ -107,17 +122,6 @@ fn build_menus(title: impl Into<SharedString>, cx: &App) -> Vec<Menu> {
         ],
         disabled: false,
     }]
-}
-
-fn language_menu() -> MenuItem {
-    MenuItem::Submenu(Menu {
-        name: "Language".into(),
-        items: vec![
-            MenuItem::action("English", SelectLocale("en".into())),
-            MenuItem::action("Tiếng Việt", SelectLocale("vi".into())),
-        ],
-        disabled: false,
-    })
 }
 
 fn theme_menu(cx: &App) -> MenuItem {

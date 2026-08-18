@@ -40,7 +40,7 @@ pub use types::{
     ToolCallPhase,
 };
 
-pub use dedup::should_apply;
+pub use dedup::{AgentSeqWatermarks, MAX_TRACKED_AGENTS, should_apply};
 
 use base64::Engine;
 use serde::Deserialize;
@@ -50,120 +50,86 @@ use serde::Deserialize;
 /// ~6 KiB of raw JSON after decode. Oversized payloads are dropped silently.
 pub const MAX_AGENT_STATUS_BASE64_BYTES: usize = 8 * 1024;
 
+/// Maximum accepted length of the envelope `agent` id (spec §4.1 says
+/// "lowercase ASCII" identifiers such as `pi`/`codex`). Longer ids are dropped
+/// so a hostile program cannot store kilobytes per tracked agent (SEC-04).
+pub const MAX_AGENT_ID_BYTES: usize = 64;
+
 /// Accepted schema version. Future versions are dropped silently until the
 /// receiver is upgraded to understand them (spec §4.1 `v`).
 pub const AGENT_STATUS_SCHEMA_VERSION: u32 = 1;
 
-/// One parsed OSC 9;7 event (envelope + type-specific payload).
+/// One parsed OSC 9;7 event: the envelope (`agent`, `seq`, `ts`) plus the
+/// type-specific [`AgentPayload`].
 ///
-/// The envelope fields (`v`, `agent`, `type`, `seq`, `ts`) are promoted to
-/// direct fields; the `type` discriminator is collapsed into the enum
-/// variant. Unknown future versions / types are dropped during parsing
-/// (see [`parse_agent_status`]).
+/// The `v` version is validated during parsing and the `type` discriminator
+/// is collapsed into the payload variant. Unknown future versions / types are
+/// dropped during parsing (see [`parse_agent_status`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AgentStatusEvent {
+pub struct AgentStatusEvent {
+    /// The agent identifier (envelope `agent`).
+    pub agent: String,
+    /// Monotonic per-(terminal, agent) sequence counter (envelope `seq`).
+    pub seq: u64,
+    /// Epoch milliseconds, agent clock (envelope `ts`).
+    pub ts: u64,
+    /// The type-specific payload (envelope `type` selects the variant).
+    pub payload: AgentPayload,
+}
+
+/// Type-specific payload of an OSC 9;7 event (spec §4.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentPayload {
     /// `type: "state"` — agent lifecycle state.
-    State {
-        agent: String,
-        seq: u64,
-        ts: u64,
-        payload: StateEvent,
-    },
+    State(StateEvent),
     /// `type: "session"` — session identity.
-    Session {
-        agent: String,
-        seq: u64,
-        ts: u64,
-        payload: SessionIdentityEvent,
-    },
+    Session(SessionIdentityEvent),
     /// `type: "heartbeat"` — keepalive.
-    Heartbeat {
-        agent: String,
-        seq: u64,
-        ts: u64,
-        payload: HeartbeatEvent,
-    },
+    Heartbeat(HeartbeatEvent),
     /// `type: "model"` — active model.
-    Model {
-        agent: String,
-        seq: u64,
-        ts: u64,
-        payload: ModelEvent,
-    },
+    Model(ModelEvent),
     /// `type: "tool_call"` — tool invocation.
-    ToolCall {
-        agent: String,
-        seq: u64,
-        ts: u64,
-        payload: ToolCallEvent,
-    },
+    ToolCall(ToolCallEvent),
     /// `type: "file"` — file activity.
-    File {
-        agent: String,
-        seq: u64,
-        ts: u64,
-        payload: FileEvent,
-    },
+    File(FileEvent),
     /// `type: "approval"` — structured approval request.
-    Approval {
-        agent: String,
-        seq: u64,
-        ts: u64,
-        payload: ApprovalEvent,
-    },
+    Approval(ApprovalEvent),
+}
+
+impl AgentPayload {
+    /// The wire `type` discriminator (spec §4.2).
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            AgentPayload::State(_) => "state",
+            AgentPayload::Session(_) => "session",
+            AgentPayload::Heartbeat(_) => "heartbeat",
+            AgentPayload::Model(_) => "model",
+            AgentPayload::ToolCall(_) => "tool_call",
+            AgentPayload::File(_) => "file",
+            AgentPayload::Approval(_) => "approval",
+        }
+    }
 }
 
 impl AgentStatusEvent {
     /// The agent identifier (envelope `agent`).
     pub fn agent(&self) -> &str {
-        match self {
-            AgentStatusEvent::State { agent, .. }
-            | AgentStatusEvent::Session { agent, .. }
-            | AgentStatusEvent::Heartbeat { agent, .. }
-            | AgentStatusEvent::Model { agent, .. }
-            | AgentStatusEvent::ToolCall { agent, .. }
-            | AgentStatusEvent::File { agent, .. }
-            | AgentStatusEvent::Approval { agent, .. } => agent,
-        }
+        &self.agent
     }
 
     /// Monotonic per-(terminal, agent) sequence counter (envelope `seq`).
     pub fn seq(&self) -> u64 {
-        match self {
-            AgentStatusEvent::State { seq, .. }
-            | AgentStatusEvent::Session { seq, .. }
-            | AgentStatusEvent::Heartbeat { seq, .. }
-            | AgentStatusEvent::Model { seq, .. }
-            | AgentStatusEvent::ToolCall { seq, .. }
-            | AgentStatusEvent::File { seq, .. }
-            | AgentStatusEvent::Approval { seq, .. } => *seq,
-        }
+        self.seq
     }
 
     /// Epoch milliseconds, agent clock (envelope `ts`).
     pub fn ts(&self) -> u64 {
-        match self {
-            AgentStatusEvent::State { ts, .. }
-            | AgentStatusEvent::Session { ts, .. }
-            | AgentStatusEvent::Heartbeat { ts, .. }
-            | AgentStatusEvent::Model { ts, .. }
-            | AgentStatusEvent::ToolCall { ts, .. }
-            | AgentStatusEvent::File { ts, .. }
-            | AgentStatusEvent::Approval { ts, .. } => *ts,
-        }
+        self.ts
     }
 
     /// The wire `type` discriminator (spec §4.2).
     pub fn type_name(&self) -> &'static str {
-        match self {
-            AgentStatusEvent::State { .. } => "state",
-            AgentStatusEvent::Session { .. } => "session",
-            AgentStatusEvent::Heartbeat { .. } => "heartbeat",
-            AgentStatusEvent::Model { .. } => "model",
-            AgentStatusEvent::ToolCall { .. } => "tool_call",
-            AgentStatusEvent::File { .. } => "file",
-            AgentStatusEvent::Approval { .. } => "approval",
-        }
+        self.payload.type_name()
     }
 }
 
@@ -190,6 +156,7 @@ struct RawEnvelope {
 /// - invalid UTF-8 after decode,
 /// - invalid JSON,
 /// - unknown schema version (`v != 1`),
+/// - `agent` id empty or longer than [`MAX_AGENT_ID_BYTES`],
 /// - unknown `type`,
 /// - missing required envelope or per-type fields.
 ///
@@ -231,6 +198,14 @@ pub fn parse_agent_status_json(json: &str) -> Option<AgentStatusEvent> {
     }
 
     let agent = raw.agent;
+    if agent.is_empty() || agent.len() > MAX_AGENT_ID_BYTES {
+        log::debug!(
+            "OSC 9;7 dropped: agent id length {} outside 1..={}",
+            agent.len(),
+            MAX_AGENT_ID_BYTES
+        );
+        return None;
+    }
     let seq = raw.seq;
     let ts = raw.ts;
 
@@ -239,31 +214,32 @@ pub fn parse_agent_status_json(json: &str) -> Option<AgentStatusEvent> {
     // missing → `None` (dropped silently per §3.3).
     let value: serde_json::Value = serde_json::from_str(json).ok()?;
 
-    macro_rules! variant {
+    macro_rules! payload {
         ($struct_name:ident, $variant:ident) => {{
             let parsed: $struct_name = serde_json::from_value(value.clone()).ok()?;
-            Some(AgentStatusEvent::$variant {
-                agent,
-                seq,
-                ts,
-                payload: parsed,
-            })
+            AgentPayload::$variant(parsed)
         }};
     }
 
-    match raw.type_name.as_str() {
-        "state" => variant!(StateEvent, State),
-        "session" => variant!(SessionIdentityEvent, Session),
-        "heartbeat" => variant!(HeartbeatEvent, Heartbeat),
-        "model" => variant!(ModelEvent, Model),
-        "tool_call" => variant!(ToolCallEvent, ToolCall),
-        "file" => variant!(FileEvent, File),
-        "approval" => variant!(ApprovalEvent, Approval),
+    let payload = match raw.type_name.as_str() {
+        "state" => payload!(StateEvent, State),
+        "session" => payload!(SessionIdentityEvent, Session),
+        "heartbeat" => payload!(HeartbeatEvent, Heartbeat),
+        "model" => payload!(ModelEvent, Model),
+        "tool_call" => payload!(ToolCallEvent, ToolCall),
+        "file" => payload!(FileEvent, File),
+        "approval" => payload!(ApprovalEvent, Approval),
         other => {
             log::debug!("OSC 9;7 dropped: unknown type {other:?}");
-            None
+            return None;
         }
-    }
+    };
+    Some(AgentStatusEvent {
+        agent,
+        seq,
+        ts,
+        payload,
+    })
 }
 
 /// Build the raw OSC parameter slices for an OSC 9;7 event from a JSON string,

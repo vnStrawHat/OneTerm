@@ -2,10 +2,19 @@
 
 `vendor/gpui-component` is a source snapshot of the upstream `gpui-component`
 `crates/ui` package. It is used through Cargo's `[patch]` mechanism and is not a
-OneTerm workspace member or an `oneterm-ui` crate. The snapshot exists because
-OneTerm's dock implementation needs `pub(crate)` access across the `dock`,
-`resizable`, `tab`, and `history` modules; those items cannot be reached when the
-modules are imported from a separate crate.
+OneTerm workspace member or an `oneterm-ui` crate.
+
+**Why a fork at all.** OneTerm needs two small behaviour changes that cannot be made
+from outside the crate: `TabPanel::set_active_panel` (the Agent Panel activates a
+terminal tab by panel entity; upstream's `set_active_ix` is private and reachable only
+from tab clicks / add-remove — patch `0001`, 45 lines) and a settings-page scroll fix
+(group heights are measured before the first click and sidebar child clicks map to the
+filtered group index — patch `0003`, 41 lines, private state of the settings page). Both
+are candidates for upstreaming; the whole 259-file snapshot exists only to carry those
+~90 lines plus the standalone manifest (`0002`). Once both land upstream and the pinned
+rev is bumped past them, delete `vendor/gpui-component`, `vendor/patches/gpui-component`,
+`scripts/check-ui-fork.py` and `scripts/ui-fork-baseline.json`, drop the `[patch]` entry
+from the root `Cargo.toml`, and this document (BUILD-21).
 
 ## Upstream base
 
@@ -51,6 +60,30 @@ crate, not in the vendor patch.
 7. Run `python scripts/check-ui-fork.py`, then the workspace format, clippy, build,
    and test gates before committing.
 
+## Upstreaming a patch (retiring the fork)
+
+The fork should shrink, not grow. To send a patch upstream:
+
+1. Re-create the change against upstream `main` of
+   `https://github.com/longbridge/gpui-component` (the vendored base `ea6b194` is
+   old; the surrounding code may have moved). Use `git am vendor/patches/gpui-component/000N-*.patch`
+   in a clean clone as the starting point, then rebase.
+2. Keep the upstream PR self-contained: the API name (`TabPanel::set_active_panel`),
+   a story/example exercising it if upstream has one for the component, and no
+   OneTerm-specific wording. Reference this file for the motivation.
+3. Until the PR is merged **and** OneTerm's pinned rev is bumped past it, keep the
+   patch here unchanged; do not "pre-adopt" the upstream shape in the vendor tree.
+4. When the pinned rev finally includes the change: delete the patch file, renumber
+   the remaining ones (`refresh.sh` applies them in order), run
+   `bash vendor/refresh.sh`, `python scripts/check-ui-fork.py --update`, and update
+   the patch table in `vendor/README.md` §2 and the module list above. When no
+   source patch is left, retire the whole fork as described at the top of this page
+   (`0002`, the standalone manifest, only exists to make the snapshot buildable).
+
 The check script does not access the ignored research mirror during normal CI. Its
 `--update` mode performs a clean clone, verifies the pinned commit, compares the
-complete source file set, and rejects deltas outside `dock/tab_panel.rs`.
+complete package file set (`src/**`, `Cargo.toml`, `build.rs`, `locales/**`, licence),
+and rejects deltas outside the four patched paths: `src/dock/tab_panel.rs` (`0001`),
+`Cargo.toml` (`0002`), `src/setting/page.rs` and `src/setting/settings.rs` (`0003`).
+`bash vendor/refresh.sh --check` (also run in CI) is the complementary guard: it
+rebuilds every vendored crate from pristine + patches and diffs it against `vendor/`.

@@ -16,16 +16,15 @@ use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::{Term, event::EventListener};
 
-use crate::CursorBounds;
 use crate::content::TerminalContent;
 use crate::mouse_encode::{
     MouseModifiers, TerminalMouseButton, encode_mouse_move, encode_mouse_press,
     encode_mouse_release, encode_wheel_event,
 };
-use crate::search::search_term;
+use crate::osc_color::{BACKGROUND_INDEX, CURSOR_INDEX, DynamicColors, FOREGROUND_INDEX};
+use crate::search::{GridText, search_grid_text};
 use crate::{
-    BACKGROUND_INDEX, CURSOR_INDEX, DynamicColors, FOREGROUND_INDEX, IndexedCell, SearchMatch,
-    SearchOptions, TerminalInfo, TerminalQueryState,
+    IndexedCell, LineRangeCells, SearchMatch, SearchOptions, TerminalInfo, TerminalQueryState,
 };
 
 /// Simple grid dimensions for `Term::resize`.
@@ -99,16 +98,15 @@ impl<EP: EventListener> TerminalModel<EP> {
     }
 
     /// Read cells for a range of display lines (O(window×cols)).
-    pub fn query_line_range_cells(
-        &self,
-        start_line: usize,
-        count: usize,
-    ) -> (Vec<IndexedCell>, usize) {
+    pub fn query_line_range_cells(&self, start_line: usize, count: usize) -> LineRangeCells {
         let term = self.term.lock();
         let num_cols = term.columns();
         let num_lines = term.screen_lines();
         if start_line >= num_lines || count == 0 {
-            return (Vec::new(), num_cols);
+            return LineRangeCells {
+                cells: Vec::new(),
+                num_cols,
+            };
         }
         let actual_count = count.min(num_lines - start_line);
         let content = term.renderable_content();
@@ -123,7 +121,7 @@ impl<EP: EventListener> TerminalModel<EP> {
                 cell: indexed.cell.clone(),
             })
             .collect();
-        (cells, num_cols)
+        LineRangeCells { cells, num_cols }
     }
 
     /// Dynamic OSC colors (foreground/background/cursor + 256 indexed).
@@ -235,6 +233,15 @@ impl<EP: EventListener> TerminalModel<EP> {
         self.term.lock().selection_to_string()
     }
 
+    /// Whether a non-empty selection exists (no text materialised — PERF-14).
+    pub fn has_selection(&self) -> bool {
+        let term = self.term.lock();
+        term.selection
+            .as_ref()
+            .and_then(|selection| selection.to_range(&term))
+            .is_some()
+    }
+
     /// Clear the current selection.
     pub fn clear_selection(&self) {
         self.term.lock().selection = None;
@@ -253,9 +260,18 @@ impl<EP: EventListener> TerminalModel<EP> {
     // ── Search ─────────────────────────────────────────────────────
 
     /// Search the terminal grid for `query`.
+    ///
+    /// The grid text is copied under the `Term` lock and matched after the lock
+    /// is released, so a long scrollback search never stalls the pump (PERF-04).
     pub fn search(&self, query: &str, options: SearchOptions) -> Vec<SearchMatch> {
-        let term = self.term.lock();
-        search_term(&*term, query, options)
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let text = {
+            let term = self.term.lock();
+            GridText::from_term(&*term)
+        };
+        search_grid_text(&text, query, options)
     }
 
     // ── Mouse ──────────────────────────────────────────────────────
@@ -272,8 +288,8 @@ impl<EP: EventListener> TerminalModel<EP> {
     ) -> Option<Vec<u8>> {
         let mode = self.mode();
         if mode.intersects(TermMode::MOUSE_MODE) {
-            let s = encode_mouse_press(row as usize, col as usize, button, mode, mods);
-            Some(s.into_bytes())
+            let bytes = encode_mouse_press(row as usize, col as usize, button, mode, mods);
+            Some(bytes)
         } else if matches!(button, TerminalMouseButton::Left) {
             self.start_selection(row, col, sel);
             None
@@ -286,8 +302,8 @@ impl<EP: EventListener> TerminalModel<EP> {
     pub fn mouse_move(&self, row: f32, col: f32, mods: MouseModifiers) -> Option<Vec<u8>> {
         let mode = self.mode();
         if mode.contains(TermMode::MOUSE_MOTION) || mode.contains(TermMode::MOUSE_DRAG) {
-            let s = encode_mouse_move(row as usize, col as usize, None, mode, mods);
-            Some(s.into_bytes())
+            let bytes = encode_mouse_move(row as usize, col as usize, None, mode, mods);
+            Some(bytes)
         } else {
             None
         }
@@ -298,14 +314,14 @@ impl<EP: EventListener> TerminalModel<EP> {
     pub fn mouse_drag(&self, row: f32, col: f32, mods: MouseModifiers) -> Option<Vec<u8>> {
         let mode = self.mode();
         if mode.intersects(TermMode::MOUSE_MODE) {
-            let s = encode_mouse_move(
+            let bytes = encode_mouse_move(
                 row as usize,
                 col as usize,
                 Some(TerminalMouseButton::Left),
                 mode,
                 mods,
             );
-            Some(s.into_bytes())
+            Some(bytes)
         } else {
             self.update_selection(row, col);
             None
@@ -322,8 +338,8 @@ impl<EP: EventListener> TerminalModel<EP> {
     ) -> Option<Vec<u8>> {
         let mode = self.mode();
         if mode.intersects(TermMode::MOUSE_MODE) {
-            let s = encode_mouse_release(row as usize, col as usize, button, mode, mods);
-            Some(s.into_bytes())
+            let bytes = encode_mouse_release(row as usize, col as usize, button, mode, mods);
+            Some(bytes)
         } else {
             None
         }
@@ -336,15 +352,20 @@ impl<EP: EventListener> TerminalModel<EP> {
         let lines = (delta_y.abs().ceil() as i32).clamp(1, 10);
         let scroll_delta = if delta_y > 0.0 { lines } else { -lines };
 
-        let mode = self.mode();
-        let display_offset = self.term.lock().grid().display_offset();
+        // One lock for the whole decision (PERF-17): mode + offset are read
+        // and the scroll applied without releasing it in between.
+        let mut term = self.term.lock();
+        let mode = *term.mode();
+        let display_offset = term.grid().display_offset();
 
         if display_offset > 0 {
-            self.scroll(scroll_delta);
+            if !mode.contains(TermMode::ALT_SCREEN) {
+                term.scroll_display(Scroll::Delta(scroll_delta));
+            }
             None
         } else if mode.intersects(TermMode::MOUSE_MODE) {
-            let s = encode_wheel_event(row as usize, col as usize, delta_y, mode, mods);
-            Some(s.into_bytes())
+            let bytes = encode_wheel_event(row as usize, col as usize, delta_y, mode, mods);
+            Some(bytes)
         } else if mode.contains(TermMode::ALT_SCREEN) {
             let app_cursor = mode.contains(TermMode::APP_CURSOR);
             let key = match (delta_y > 0.0, app_cursor) {
@@ -359,34 +380,9 @@ impl<EP: EventListener> TerminalModel<EP> {
             }
             Some(bytes)
         } else {
-            self.scroll(scroll_delta);
+            term.scroll_display(Scroll::Delta(scroll_delta));
             None
         }
-    }
-
-    // ── Cursor bounds ──────────────────────────────────────────────
-
-    /// Compute cursor bounds in pixel coordinates for IME positioning.
-    pub fn cursor_bounds(&self, cell_width: f32, line_height: f32) -> Option<CursorBounds> {
-        if cell_width <= 0.0 || line_height <= 0.0 {
-            return None;
-        }
-        let snap = self.snapshot_query();
-        let cursor = snap.cursor;
-        if matches!(
-            cursor.shape,
-            alacritty_terminal::vte::ansi::CursorShape::Hidden
-        ) {
-            return None;
-        }
-        let col = cursor.point.column.0 as f32;
-        let line = (cursor.point.line.0 + snap.display_offset as i32) as f32;
-        Some(CursorBounds {
-            x: col * cell_width,
-            y: line * line_height,
-            width: cell_width,
-            height: line_height,
-        })
     }
 
     // ── Helpers ────────────────────────────────────────────────────
@@ -403,5 +399,39 @@ impl<EP: EventListener> TerminalModel<EP> {
             Side::Right
         };
         (Point::new(Line(line), Column(column)), side)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alacritty_terminal::term::test::mock_term;
+
+    use super::*;
+
+    fn model(text: &str) -> TerminalModel<alacritty_terminal::event::VoidListener> {
+        TerminalModel::new(Arc::new(FairMutex::new(mock_term(text))))
+    }
+
+    /// PERF-14: `has_selection` agrees with `selection_text` without building the string.
+    #[test]
+    fn has_selection_tracks_selection_state() {
+        let model = model("hello world");
+        assert!(!model.has_selection());
+
+        model.start_selection(0.0, 0.0, SelectionType::Simple);
+        model.update_selection(0.0, 4.9);
+        assert!(model.has_selection());
+        assert_eq!(model.selection_text().as_deref(), Some("hello"));
+
+        model.clear_selection();
+        assert!(!model.has_selection());
+        assert!(model.selection_text().is_none());
+    }
+
+    #[test]
+    fn select_all_marks_a_selection() {
+        let model = model("one\ntwo");
+        model.select_all();
+        assert!(model.has_selection());
     }
 }

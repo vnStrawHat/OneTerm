@@ -1,9 +1,17 @@
-//! OneTerm cross-cutting global application state.
+//! OneTerm cross-feature runtime state + injection.
 //!
-//! [`AppState`] is the shared bus every feature crate and the shell read/write
-//! (active SFTP backend, cwd source, dock area, zoom state). It lives *below*
-//! both the shell and the feature crates, which is what keeps the dependency
-//! graph acyclic. [`notif_ext`] provides theme-tinted notification builders.
+//! This crate sits *below* both the shell and the feature crates, which is what
+//! keeps the dependency graph acyclic. It owns:
+//!
+//! - **runtime state** shared across features: [`AppState`] (active SFTP
+//!   backend / cwd source per workspace), [`AgentRegistry`] (the folded OSC 9;7
+//!   agent model behind the Agent Panel), [`CompletionHistory`];
+//! - **injection**: [`AppServices`] — the single composition-root bundle through
+//!   which features receive the session factory and contribute the workspace
+//!   commands / active-terminal metrics / agent focuser the shell and other
+//!   features call without depending on them;
+//! - **shared shell contracts**: `docks.json` document ownership
+//!   ([`dock_persistence`]), panel names and dock traversal helpers.
 
 pub mod active_terminal;
 pub mod agent_focus;
@@ -14,14 +22,16 @@ pub mod commands;
 pub mod completion_history;
 pub mod dock_persistence;
 pub mod dock_util;
-pub mod notif_ext;
-pub mod paths;
+pub mod form_dialog;
+pub mod panel_names;
+pub mod persist_queue;
 pub mod services;
 
 pub use agent_registry::{
-    AgentCard, AgentRegistry, AgentStateCounts, ApprovalInfo, FileEntry, Grouping, Lifecycle,
-    ModelInfo, ToolRun,
+    AgentCard, AgentNav, AgentRegistry, AgentStateCounts, ApprovalInfo, FileEntry, Grouping,
+    Lifecycle, ModelInfo, ToolRun,
 };
 pub use app_state::AppState;
 pub use completion_history::{CompletionHistory, GlobalCompletionHistory};
+pub use persist_queue::PersistQueue;
 pub use services::AppServices;

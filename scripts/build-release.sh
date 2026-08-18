@@ -1,22 +1,26 @@
 #!/usr/bin/env bash
-# scripts/build-release.sh — Build a OneTerm release for Linux, macOS, or WSL.
+# scripts/build-release.sh — Build and stage a OneTerm release for Linux, macOS, or WSL.
 #
-# On native Windows, use build-release.ps1 to stage dist/ and copy conpty.dll.
-# This script primarily targets Linux and macOS, where conpty.dll and
-# OpenConsole.exe are not required.
+# On native Windows, use build-release.ps1 (it also stages conpty.dll/OpenConsole.exe).
+# The release workflow (.github/workflows/release.yml) calls THIS script for the
+# Linux and macOS targets, so local and CI packaging produce the same layout.
 #
 # Usage: ./scripts/build-release.sh
 #        TARGET=aarch64-unknown-linux-gnu ./scripts/build-release.sh
+#        NO_DIST=1 ./scripts/build-release.sh          # build only, do not stage dist/
 #
-# The release binary is `oneterm` (gated by the `release-bin` feature in
-# crates/app/Cargo.toml). The development binary is `oneterm-debug` (the default
-# `dev-bin` feature). Passing --no-default-features --features release-bin makes
-# the release build produce only `oneterm`.
+# The binary is `oneterm` for both dev and release builds. Only `oneterm-app` is
+# built (-p): the other workspace members (diagnostics in crates/tools, …) are not
+# part of a release.
 #
-# Outputs:
-#   - target/<triple>/release/oneterm       (release binary with strip + LTO)
-#   - dist/oneterm-<triple>/oneterm         (clean Linux distribution)
-#   - dist/oneterm-<triple>/OneTerm.app     (macOS application bundle)
+# Outputs (VERSION = [workspace.package] version, TRIPLE = target triple):
+#   - target/<triple>/release/oneterm                       (release binary with strip + LTO)
+#   - dist/oneterm-<VERSION>-<triple>/oneterm               (Linux)
+#   - dist/oneterm-<VERSION>-<triple>/OneTerm.app           (macOS application bundle)
+#   - dist/oneterm-<VERSION>-<triple>.tar.gz + .sha256      (archive + checksum)
+#
+# The staged directory contains only build outputs — never developer state such as a
+# repo-root terminal.json / docks.json (release builds create ~/.OneTerm/ on first run).
 
 set -euo pipefail
 
@@ -25,10 +29,10 @@ cd "$REPO_ROOT"
 
 TARGET="${TARGET:-}"
 NO_DIST="${NO_DIST:-0}"
+VERSION="$(awk -F'"' '/^version = "/{print $2; exit}' Cargo.toml)"
 
-# Build only `oneterm`: enable release-bin and disable the default dev-bin.
-RELEASE_ARGS=(build --release --no-default-features --features release-bin)
-echo "==> cargo ${RELEASE_ARGS[*]}"
+RELEASE_ARGS=(build -p oneterm-app --release)
+echo "==> cargo ${RELEASE_ARGS[*]}${TARGET:+ --target $TARGET}"
 if [[ -n "$TARGET" ]]; then
   cargo "${RELEASE_ARGS[@]}" --target "$TARGET"
   TRIPLE="$TARGET"
@@ -38,6 +42,10 @@ else
   TRIPLE="$(rustc -vV | awk '/^host:/{print $2}')"
   # Without --target, Cargo writes directly to target/release.
   RELEASE_DIR="target/release"
+fi
+# Honour CARGO_TARGET_DIR the same way Cargo does.
+if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+  RELEASE_DIR="${CARGO_TARGET_DIR}/${RELEASE_DIR#target/}"
 fi
 
 EXE="$RELEASE_DIR/oneterm"
@@ -51,29 +59,32 @@ if [[ "$NO_DIST" == "1" ]]; then
   exit 0
 fi
 
-DIST_DIR="dist/oneterm-$TRIPLE"
-rm -rf "$DIST_DIR"
+DIST_NAME="oneterm-${VERSION}-${TRIPLE}"
+DIST_DIR="dist/${DIST_NAME}"
+rm -rf "$DIST_DIR" "dist/${DIST_NAME}.tar.gz" "dist/${DIST_NAME}.tar.gz.sha256"
 mkdir -p "$DIST_DIR"
 
-OS_FAMILY="$(uname -s)"
-if [[ "$OS_FAMILY" == "Darwin" ]]; then
+if [[ "$TRIPLE" == *darwin* ]]; then
   # Package the release binary into a proper OneTerm.app bundle on macOS.
   #
   # LaunchServices treats a raw GUI binary as a command-line tool, so opening it
   # in Finder routes it through Terminal.app and opens an extra Terminal window.
   # An application bundle with an Info.plist that declares a GUI app launches
-  # directly instead. CI uses this script for the same packaging behavior.
+  # directly instead. bundle-macos.sh also applies an ad-hoc code signature.
   bash scripts/bundle-macos.sh "$REPO_ROOT" "$RELEASE_DIR" "$DIST_DIR"
-
-  # Release builds create and use ~/.OneTerm/ on first run, so no configuration
-  # files need to be shipped inside the application bundle.
 else
-  # Ship the Linux binary and any optional default configuration beside it.
   cp "$EXE" "$DIST_DIR/"
-  for cfg in terminal.json docks.json; do
-    [[ -f "$REPO_ROOT/$cfg" ]] && cp "$REPO_ROOT/$cfg" "$DIST_DIR/" || true
-  done
 fi
 
 echo "==> Distribution staged at: $DIST_DIR"
 ( cd "$DIST_DIR" && find . -type f | sort )
+
+# Archive + checksum (same names the release workflow publishes).
+( cd dist && tar -czf "${DIST_NAME}.tar.gz" "${DIST_NAME}" )
+if command -v sha256sum >/dev/null 2>&1; then
+  ( cd dist && sha256sum "${DIST_NAME}.tar.gz" > "${DIST_NAME}.tar.gz.sha256" )
+else
+  ( cd dist && shasum -a 256 "${DIST_NAME}.tar.gz" > "${DIST_NAME}.tar.gz.sha256" )
+fi
+echo "==> Archive: dist/${DIST_NAME}.tar.gz"
+cat "dist/${DIST_NAME}.tar.gz.sha256"

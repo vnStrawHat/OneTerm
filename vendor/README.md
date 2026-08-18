@@ -12,7 +12,7 @@ OneTerm changed by reading the `.patch` files — nothing else in the tree is ou
 ```
 vendor/
 ├── README.md                     ← this file
-├── refresh.sh                    ← regenerate <crate>/ from pristine + patches (bash)
+├── refresh.sh                    ← regenerate <crate>/ from pristine + patches, minus VENDOR_PRUNE (bash)
 ├── patches/
 │   ├── vte/
 │   │   └── 0001-*.patch          ← OneTerm delta over pristine vte 0.15.0
@@ -108,13 +108,24 @@ terminal crates and always uses a clean clone at the pinned commit for `gpui-com
 The UI crate is copied from upstream `crates/ui` after all gpui-component patches are
 applied. The script never reads `reference/`.
 
+After patching and before diffing/moving, the script deletes the paths listed in the
+`VENDOR_PRUNE_<crate>` arrays at the top of `refresh.sh` — dead weight for a
+`[patch]`-consumed crate: alacritty's ~46 MB `tests/` reference recordings (never run;
+the crate is excluded from the workspace) and the crates.io registry metadata shipped
+inside the `vte` tarball (`.cargo-ok`, `.cargo_vcs_info.json`, `Cargo.toml.orig`, the
+crate-local `Cargo.lock`), which Cargo ignores for path dependencies. Adding a path to
+a prune list is a fork decision like any other: change the list, run `refresh.sh`, commit.
+
 ```bash
 bash vendor/refresh.sh            # rebuild all vendored crates from pristine + patches
 bash vendor/refresh.sh --check    # verify all vendored crates == pristine + patches (CI-friendly, no writes)
 ```
 
 `--check` is the guard against drift: if someone hand-edits a vendored file without
-updating a patch, `--check` fails and prints the diff.
+updating a patch, `--check` fails and prints the diff. CI runs it in the
+`dependency-graph` job (`.github/workflows/ci.yml`), next to
+`python scripts/check-ui-fork.py`, which hash-pins the whole gpui-component package
+(`src/**`, `Cargo.toml`, `build.rs`, `locales/**`) against the reviewed baseline.
 
 ---
 
@@ -172,14 +183,17 @@ Root `Cargo.toml`:
 
 ```toml
 [workspace]
-exclude = ["vendor/vte", "vendor/alacritty_terminal"]   # not workspace members
+exclude = ["vendor/vte", "vendor/alacritty_terminal", "vendor/gpui-component"]   # not workspace members
 
 [patch."https://github.com/zed-industries/alacritty"]
 alacritty_terminal = { path = "vendor/alacritty_terminal" }
+
+[patch."https://github.com/longbridge/gpui-component"]
+gpui-component = { path = "vendor/gpui-component" }
 
 [patch.crates-io]
 vte = { path = "vendor/vte" }
 ```
 
-So any dependency edge that resolves to upstream `vte`/`alacritty_terminal` is redirected
-to these vendored, patched paths.
+So any dependency edge that resolves to upstream `vte`/`alacritty_terminal`/`gpui-component`
+is redirected to these vendored, patched paths.

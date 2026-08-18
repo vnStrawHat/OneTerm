@@ -28,7 +28,7 @@ with its own tab strip) — the "new dock/tab" the requirements forbid.
 
 ## 2. Chosen approach: custom drag payload on the tab title we render
 
-`TerminalPanel::title()` (in `views/terminal/panel.rs`) renders the tab's title
+`TerminalPanel::title()` (in `crates/terminal-view/src/panel/terminal_panel.rs`) renders the tab's title
 element **ourselves**. We attach our own `on_drag` there with a public payload:
 
 ```rust

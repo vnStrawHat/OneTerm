@@ -1,8 +1,12 @@
 [package]
 name = "oneterm-completion"
 description = "Terminal auto-completion engine (gpui-free): catalog model, line parsing, matching/ranking, in-session history, and secret redaction. Embeds the bundled command catalogs."
-publish = false
+version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
 
 [lints]
 workspace = true

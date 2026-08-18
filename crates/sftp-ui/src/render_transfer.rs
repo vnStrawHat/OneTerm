@@ -1,6 +1,4 @@
 //! Render transfer queue — show progress for ongoing transfers.
-//!
-//! Split out from `file_browser.rs` to keep the file shorter.
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
@@ -19,31 +17,10 @@ use super::panel::SftpPanel;
 use super::types::{TransferDirection, TransferStatus};
 
 impl SftpPanel {
-    /// Clear completed and errored transfers from the active backend's queue.
-    ///
-    /// Updates both the active view and the per-backend store so the cleanup
-    /// survives a tab switch (the queue is per-backend).
-    pub(crate) fn clear_completed_transfers(&mut self, cx: &mut Context<Self>) {
-        let before = self.transfers.len();
-        self.transfers
-            .retain(|t| t.status == TransferStatus::InProgress);
-        let removed = before - self.transfers.len();
-        if let Some(key) = self.active_key {
-            super::browser_state::SftpBrowserStore::global(cx).with_mut(key, |st| {
-                st.transfers
-                    .retain(|t| t.status == TransferStatus::InProgress);
-            });
-        }
-        if removed > 0 {
-            log::debug!("SftpPanel: cleared {removed} completed/errored transfers");
-        }
-        cx.notify();
-    }
-
     /// Render transfer queue — show progress for ongoing transfers.
     /// Only renders when self.transfers is not empty.
     pub(crate) fn render_transfer_queue(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.transfers.is_empty() {
+        if self.transfers().is_empty() {
             return div().into_any_element();
         }
 
@@ -52,12 +29,8 @@ impl SftpPanel {
         let danger = theme.danger;
 
         // Count active vs completed
-        let active_count = self
-            .transfers
-            .iter()
-            .filter(|t| t.status == TransferStatus::InProgress)
-            .count();
-        let completed_count = self.transfers.len() - active_count;
+        let active_count = self.transfers().active_count();
+        let completed_count = self.transfers().items().len() - active_count;
 
         let mut queue = v_flex()
             .w_full()
@@ -65,7 +38,6 @@ impl SftpPanel {
             .max_h(px(200.0))
             .border_t_1()
             .border_color(theme.border);
-        // .bg(theme.muted.opacity(0.15));
 
         // Header: "Transfers" + count + Clear button
         queue = queue.child(
@@ -107,7 +79,7 @@ impl SftpPanel {
             .w_full()
             .overflow_y_scroll();
 
-        for item in &self.transfers {
+        for item in self.transfers().items() {
             // Direction icon
             let dir_icon = match item.direction {
                 TransferDirection::Upload => {
@@ -200,28 +172,8 @@ impl SftpPanel {
                                 .icon(IconName::Close)
                                 .tooltip("Cancel transfer")
                                 .on_click(cx.listener(
-                                    move |this_ref, _, _, cx| {
-                                        log::info!("SftpPanel: cancel transfer #{cancel_id}");
-                                        if let Some(ref sftp) = this_ref.sftp.clone() {
-                                            sftp.cancel_transfer(cancel_id as u64);
-                                        }
-                                        if let Some(key) = this_ref.active_key {
-                                            this_ref.update_transfer_for(
-                                                key,
-                                                cancel_id,
-                                                |t| {
-                                                    t.status = TransferStatus::Cancelled;
-                                                },
-                                                cx,
-                                            );
-                                        } else if let Some(t) = this_ref
-                                            .transfers
-                                            .iter_mut()
-                                            .find(|t| t.id == cancel_id)
-                                        {
-                                            t.status = TransferStatus::Cancelled;
-                                            cx.notify();
-                                        }
+                                    move |this, _, _, cx| {
+                                        this.cancel_transfer(cancel_id, cx);
                                     },
                                 )),
                             ),

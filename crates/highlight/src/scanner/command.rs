@@ -8,14 +8,10 @@
 use crate::class::Class;
 use crate::profile::ShellProfile;
 
-/// Scan the entire line in `CommandMode` (used when `RowRole::Command`).
+/// Command-mode scan (the whole line for `RowRole::Command`, or the part after
+/// the sign of a prompt line): first non-space token = `Command`, options =
+/// `Option`, `;`/`|`/`&&`/`||` reset to expect a new `Command`.
 pub(super) fn scan_command_mode(chars: &[char], classes: &mut [u8], profile: &ShellProfile) {
-    scan_command_mode_from(chars, classes, profile);
-}
-
-/// Core command-mode scan: first non-space token = `Command`, options = `Option`,
-/// `;`/`|`/`&&`/`||` reset to expect a new `Command`.
-pub(super) fn scan_command_mode_from(chars: &[char], classes: &mut [u8], profile: &ShellProfile) {
     let n = chars.len();
     let mut i = 0;
     let mut expect_command = true;

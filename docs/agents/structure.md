@@ -19,92 +19,110 @@ OneTerm/
 ├── Cargo.lock
 ├── AGENTS.md                       # Entry-point file for the agent
 ├── README.md                       # Project README
-├── VERSION                         # Single-source version string (read by build scripts)
+├── VERSION                         # Release version (workflow / macOS bundle); mirrors [workspace.package] version
+├── rust-toolchain.toml             # Pinned Rust toolchain (channel + rustfmt/clippy)
+├── deny.toml                       # cargo-deny policy (licenses / bans / advisories)
 ├── .gitignore
 ├── .rustfmt.toml
 │
 ├── crates/
 │   ├── app/                        # Binary + wiring: the ONLY crate that knows every other crate
-│   │   ├── Cargo.toml              # name = "oneterm-app", default-run = "oneterm-debug"
-│   │   ├── build.rs                # Embed app icon (.rc) + copy conpty.dll/OpenConsole.exe
+│   │   ├── Cargo.toml              # name = "oneterm-app", one bin: "oneterm"
+│   │   ├── build.rs                # Embed app icon (.rc) + copy conpty.dll/OpenConsole.exe (x86_64 only; THIRD-PARTY-NOTICES.md)
 │   │   ├── assets/                 # Runtime resources (oneterm.rc, conpty.dll, x64/OpenConsole.exe, icons/)
 │   │   ├── macos/Info.plist        # macOS .app bundle descriptor ({{VERSION}})
 │   │   └── src/
 │   │       ├── lib.rs              # run(): logging + gpui init + install factory + init() + open window
 │   │       ├── init.rs             # Aggregator: globals + feature init() + WorkspaceCommands assembly
 │   │       ├── ssh_client_panel.rs  # SSH Client right-dock panel (DockItem::Panel) hosting Session + SFTP
-│   │       ├── agent_panel.rs       # Agent Mode right-dock panel (placeholder) (DockItem::Panel)
 │   │       ├── session_factory.rs  # AppSessionFactory: dispatches spawn_local/connect_ssh to local/ssh
 │   │       ├── assets.rs           # CustomAssets (merges oneterm_theme::icon::UiAssets + gpui-component)
+│   │       ├── crash_report.rs     # Crash store: panic hook, native staging promotion, retention (docs/crash-reporting.md)
+│   │       ├── crash_report_dialog.rs # Recovery dialogs shown after the main window opens
+│   │       ├── native_crash.rs     # crash-handler callback (compromised-context-safe writes)
 │   │       ├── window.rs           # open_window(cx) — create window + attach OneTermWorkspace
 │   │       └── bin/
-│   │           ├── oneterm.rs          # Release binary → oneterm(.exe) (WINDOWS subsystem)
-│   │           └── oneterm-debug.rs    # Dev binary → oneterm-debug(.exe) (keeps console)
+│   │           └── oneterm.rs          # Binary → oneterm(.exe) (WINDOWS subsystem in release)
 │   │
 │   ├── core/                       # Domain model — leaf crate (no gpui, no alacritty)
 │   │   ├── Cargo.toml              # name = "oneterm-core"
 │   │   └── src/
 │   │       ├── lib.rs              # Re-export AppError, LocalShellConfig, ShellKind, SftpBackend, SshConfig…
 │   │       ├── error.rs            # AppError (thiserror) + Result<T>
-│   │       ├── sftp.rs             # SftpBackend trait + FileEntry + FileStat
+│   │       ├── sftp.rs             # SftpBackend trait + RemotePath + FileEntry + TransferHandle
 │   │       ├── ssh_config.rs       # SshConfig + SshAuthMethod (shared connect params; masked Debug)
-│   │       └── config/             # Local shell config
+│   │       ├── persistence.rs      # atomic_write / update_json_file / quarantine_file + schema helpers
+│   │       ├── session_duplicate.rs # SessionDuplicateConfig (duplicate-tab contract)
+│   │       └── config/             # Local shell config + shared UI enums
 │   │           ├── mod.rs
-│   │           └── shell.rs        # LocalShellConfig + ShellKind + resolve_shell
+│   │           ├── shell.rs        # LocalShellConfig + ShellKind + resolve_shell + config_dir
+│   │           └── env.rs
 │   │
 │   ├── terminal/                   # Terminal ENGINE (alacritty-coupled, no gpui) — `oneterm-terminal`
-│   │   ├── Cargo.toml              # deps: core, alacritty_terminal, async-channel, linkify, base64
+│   │   ├── Cargo.toml              # deps: core, alacritty_terminal, async-channel, base64
 │   │   └── src/
 │   │       ├── lib.rs              # Re-export TerminalSession, SessionEvent, TerminalContent, PtySize…
-│   │       ├── factory.rs          # PtySize + SessionFactory trait + install/get process global
+│   │       ├── factory.rs          # PtySize (+ PtySize::INITIAL) + SessionFactory trait
 │   │       ├── session.rs          # TerminalSession trait + SessionEvent + CursorBounds + NetStats
-│   │       ├── content.rs / palette.rs / colors_util.rs / key_encode.rs / mouse_encode.rs
-│   │       ├── osc.rs / osc_color.rs / url.rs / search.rs / paste.rs / security_policy.rs …
-│   │       └── test_support.rs     # FakeTerminalSession (feature "test-support")
+│   │       ├── backend/            # Shared backend pump used by ssh + local-shell:
+│   │       │                       #   PtyTransport trait, OscRouter<T> (alacritty EventListener),
+│   │       │                       #   SessionState (title/cwd/clipboard/exit), event_sink, pump,
+│   │       │                       #   line_accounting
+│   │       ├── content.rs / model.rs / palette.rs / key_encode.rs / mouse_encode.rs
+│   │       ├── osc.rs / osc_color.rs / osc_agent/ / url.rs / url_policy.rs / search.rs / paste.rs / security_policy.rs …
+│   │       └── test_support.rs     # FakeTerminalSession + FakePtyTransport (feature "test-support")
 │   │
 │   ├── highlight/                  # `oneterm-highlight` — semantic syntax highlighting engine
 │   │
 │   ├── ssh/                        # `oneterm-ssh` — russh client + SFTP (hidden tokio runtime)
-│   │   └── src/                    # SshSession (impl TerminalSession), SftpSession (impl SftpBackend),
-│   │                               #   listener/handler/task/state; config.rs re-exports core's SshConfig
+│   │   └── src/                    # SshSession (impl TerminalSession), SftpSession (impl SftpBackend);
+│   │                               #   transport (SshTransport) / handler / task / session / sftp*;
+│   │                               #   the listener is `SshListener = OscRouter<SshTransport>`
 │   │
 │   ├── local-shell/                # `oneterm-local-shell` — local PTY (alacritty_terminal::tty + ConPTY)
-│   │   └── src/                    # LocalSession (impl TerminalSession) + LocalListener + event_loop
+│   │   └── src/                    # LocalSession (impl TerminalSession) + ShellEventLoop + LocalTransport
 │   │
 │   ├── actions/                    # `oneterm-actions` — leaf: gpui action structs (Copy/Paste/AddPanel…)
 │   │   └── src/lib.rs
 │   │
-│   ├── settings/                   # `oneterm-settings` — config load/save + live settings (no gpui-component)
+│   ├── settings/                   # `oneterm-settings` — config load/save + live settings (no UI views)
 │   │   └── src/
 │   │       ├── lib.rs              # Re-export TerminalConfig, TerminalSettings, UiConfig + types
 │   │       ├── terminal_config/    # terminal.json load/save (font/cursor/layout/scroll/bell/colors/security)
-│   │       ├── terminal_settings/  # Live TerminalSettings + apply/persist/mutators/color helpers
-│   │       └── ui_config.rs        # UiConfig (ui_font_size, theme_name, key_bindings) → ui_config.json
+│   │       ├── terminal_settings/  # Live TerminalSettings (defaults = TerminalConfig::default() via from_config)
+│   │       │                       #   + persist (to_config) / mutators / color helpers
+│   │       └── ui_config.rs        # UiConfig (ui_font_size, theme_name, key_bindings) → ui_config.json;
+│   │                               #   observe_theme(cx) persists the Theme choice (coalesced)
 │   │
-│   ├── state/                      # `oneterm-state` — shared global Entity<T> state + cross-cutting helpers
+│   ├── state/                      # `oneterm-state` — cross-feature runtime state + injection
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── app_state.rs        # AppState (global)
-│   │       ├── notif_ext.rs        # Notification helpers
-│   │       ├── commands.rs         # WorkspaceCommands fn-pointer registry (shell → feature inversion)
+│   │       ├── app_state.rs        # AppState (global): primary DockArea + per-workspace active terminal/SFTP context
+│   │       ├── services.rs         # AppServices (single injection bundle)
+│   │       ├── commands.rs         # WorkspaceCommands fn-pointer struct (shell → feature inversion, read via AppServices)
+│   │       ├── active_terminal.rs  # ActiveTerminalMetricsProvider (breadcrumb/net stats hook, contributed by terminal-view)
+│   │       ├── agent_focus.rs      # AgentFocuser (agent-ui → terminal focus hook, contributed by terminal-view)
+│   │       ├── agent_model.rs      # Folded OSC 9;7 agent card model (+ agent_model_tests.rs)
+│   │       ├── agent_registry.rs   # AgentRegistry (global Entity): fold/lifecycle/stale/summary behind the Agent Panel
+│   │       ├── completion_history.rs # Process-global CompletionHistory entity (memory completion source)
+│   │       ├── dock_persistence.rs # docks.json path + DockDocument schema owner (read/update transaction, quarantine)
 │   │       ├── dock_util.rs        # DockArea walking + set_right_dock_open (shared shell/feature helper)
-│   │       ├── active_terminal.rs  # ActiveTerminalMetricsProvider (breadcrumb/net stats injection)
-│   │       └── paths.rs            # docks.json path + SFTP_TABLE_STATE_FIELD (shared shell/sftp)
+│   │       ├── panel_names.rs      # Registered dock panel name constants (persisted contract)
+│   │       └── form_dialog.rs      # FormDialog + labelled_field (shared dialog scaffolding)
 │   │
 │   ├── update/                     # `oneterm-update` — GitHub Releases updater service + staging/install orchestration
-│   │   └── src/                    # lib.rs + config/github/archive/install/version helpers
+│   │   └── src/                    # lib.rs + config/github (ReleaseClient trait)/archive/install/version; *_tests.rs siblings
 │   │
 │   ├── theme/                      # `oneterm-theme` — theme registry + AppIcon (has build.rs)
 │   │   ├── build.rs                # Sets ONETERM_UI_ICONS_DIR for the icon_named! macro
 │   │   ├── assets/icons/           # OneTerm SVG icons (auto-generate AppIcon variants)
 │   │   ├── themes/                 # 24 built-in JSON themes (2 Zed + 22 gpui-component)
-│   │   └── src/{lib.rs, theme.rs, icon.rs}
+│   │   └── src/{lib.rs, theme.rs, icon.rs, notif_ext.rs}   # notif_ext.rs = theme-tinted notifications
 │   │
 
-│   ├── workspace/                  # `oneterm-workspace` — feature-AGNOSTIC app shell (has build.rs)
-│   │   ├── build.rs                # Publishes ONETERM_VERSION (About action)
+│   ├── workspace/                  # `oneterm-workspace` — feature-AGNOSTIC app shell
 │   │   └── src/
-│   │       ├── lib.rs              # Re-export OneTermWorkspace + save_dock_state_on_close
+│   │       ├── lib.rs              # Re-export OneTermWorkspace
 │   │       ├── layout/             # title_bar, app_menus, statusbar, workspace/{mod,actions,layout,persistence,zoom}
 │   │       │                       #   builds feature panels by NAME via gpui-component PanelRegistry
 │   │       └── widgets/            # statusbar widgets (breadcrumb, net_speed, datetime_clock, resource)
@@ -112,24 +130,23 @@ OneTerm/
 │   ├── terminal-view/              # `oneterm-terminal-view` — TERMINAL feature (has terminal-diagnostics feat)
 │   │   ├── assets/highlight/       # default.json semantic style asset (include_str!)
 │   │   └── src/                    # lib.rs init() (register terminal + terminal-settings panels + status
-│   │                               #   metrics); panel/, view/, render/, element/, layout/, cell/,
-│   │                               #   box_drawing/, handlers/, theme/, url/, highlight/, space/, search…
+│   │                               #   metrics); panel/, view/ (render, search, deps = TerminalDeps),
+│   │                               #   element/, layout/, box_drawing/, handlers/, theme/, url/,
+│   │                               #   highlight/, space/, completion/, agent.rs, security.rs …
 │   │
 │   ├── sftp-ui/                    # `oneterm-sftp-ui` — SFTP feature (file browser + transfer queue)
-│   │   └── src/                    # lib.rs init() (register "sftp" panel); panel/render/transfer/table…
+│   │   └── src/                    # lib.rs init() (register "sftp" panel); panel + browser_view
+│   │                               #   (BrowserView/TransferQueueView/FollowCwd), browser_state (per-backend
+│   │                               #   store), panel_ops/actions/transfer/table_delegate/render…
 │   │
 │   ├── session-ui/                 # `oneterm-session-ui` — session tree + connect dialogs
 │   │   └── src/                    # lib.rs init() (SshSessionStore::init + register "session" panel);
 │   │                               #   panel, connect_dialog, quick_connect_dialog, session_state.rs …
 │   │
-│   ├── settings-ui/                # `oneterm-settings-ui` — General Settings window (has build.rs)
-│   │   ├── build.rs                # Publishes ONETERM_VERSION (About page)
+│   ├── settings-ui/                # `oneterm-settings-ui` — General Settings window
 │   │   └── src/                    # lib.rs: open_settings + setup_key_bindings commands;
 │   │                               #   panel/window/general/terminal/appearance/about/key_bindings …
 │   │                               #   update_controls/updates state
-│   │
-│   ├── update/                     # `oneterm-update` — GitHub Releases updater service + staging/install orchestration
-│   │   └── src/                    # lib.rs, build.rs, config.rs, github.rs, archive.rs, install.rs, version.rs
 │   │
 │   └── agent-ui/                   # `oneterm-agent-ui` — AGENT feature (right-dock fleet view + compact cards)
 │       └── src/                    # lib.rs init() (AgentRegistry::init); view/card render helpers
@@ -139,8 +156,10 @@ OneTerm/
 │   ├── terminal-backend.md / ssh-client-connect.md / sftp-browser-design.md …
 │   └── agents/{code-style.md, dependencies.md, structure.md (this file)}
 │
-├── vendor/                         # Tracked source patches for external dependencies
-│   └── gpui-component/             # patched snapshot; not a workspace member
+├── vendor/                         # Vendored forks = pristine upstream @ rev + patches/ (see vendor/README.md)
+│   ├── patches/{vte,alacritty_terminal,gpui-component}/   # the ONLY place OneTerm deltas live
+│   ├── refresh.sh                  # regenerate / --check the vendored trees (CI runs --check)
+│   ├── vte/ · alacritty_terminal/ · gpui-component/       # consumed via [patch]; not workspace members
 │
 └── reference/                      # Local clone of gpui-component (gitignored, research only)
     └── gpui-component/
@@ -169,19 +188,19 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 | `vendor/gpui-component` | _(Cargo patch; not a workspace member)_ | external shared-ui | Upstream `gpui-component` `crates/ui` snapshot at the pinned revision, with the reviewed `TabPanel::set_active_panel` addition. See [`ui-fork-maintenance.md`](ui-fork-maintenance.md). |
 | `terminal` (`oneterm-terminal`) | `core` | engine | Terminal engine (alacritty-coupled, no gpui): `TerminalSession`, `TerminalModel`, events, palette/OSC/key/mouse helpers, and `SessionFactory`. |
 | `actions` (`oneterm-actions`) | `core`, gpui | leaf-ui | gpui `Action` structs shared by shell and features; domain placement types come from `core`. |
-| `settings` (`oneterm-settings`) | `core`, gpui | shared | `TerminalConfig`, live `TerminalSettings`, and `UiConfig`. |
-| `state` (`oneterm-state`) | `core`, `terminal`, `completion`, gpui, gpui-component | shared | `AppState`, notification helpers, command registry, dock helpers, active-terminal metrics, shared persistence paths, and the process-global `CompletionHistory`. |
+| `settings` (`oneterm-settings`) | `core`, gpui, gpui-component | shared | `TerminalConfig`, live `TerminalSettings` (defaults single-sourced from the config), and `UiConfig` including the `Theme` observer that persists `ui_config.json`. |
+| `state` (`oneterm-state`) | `core`, `terminal`, `completion`, gpui, gpui-component | shared | Cross-feature runtime state (`AppState`, `AgentRegistry`, `CompletionHistory`) + injection (`AppServices` bundle: session factory, `WorkspaceCommands`, active-terminal metrics, agent focuser) + shared shell contracts (`docks.json` document owner, panel names, dock helpers). |
 | `update` (`oneterm-update`) | `core`, `chrono`, `reqwest`, `semver`, `sha2`, `tar`, `flate2`, `zip` | shared | GitHub Releases auto-update checks, asset selection, download verification, staging, and installer orchestration. |
-| `theme` (`oneterm-theme`) | `settings`, `actions`, gpui, gpui-component | shared | Theme registry, built-in themes, and generated `AppIcon`. |
-| `workspace` (`oneterm-workspace`) | `core`, `terminal`, `settings`, `state`, `actions`, `theme`, gpui-component | shell | Feature-agnostic app shell. Maps domain placement types to the UI dock and drives features through `WorkspaceCommands`. |
+| `theme` (`oneterm-theme`) | `settings`, `actions`, gpui, gpui-component | shared | Theme registry, built-in themes, generated `AppIcon`, brand accent, and theme-tinted notification builders (`notif_ext`). |
+| `workspace` (`oneterm-workspace`) | `core`, `terminal`, `settings`, `state`, `theme`, `actions`, gpui-component | shell | Feature-agnostic app shell. Maps domain placement types to the UI dock and drives features through `WorkspaceCommands`. |
 | `terminal-view` (`oneterm-terminal-view`) | `core`, `terminal`, `settings`, `state`, `theme`, `actions`, `highlight`, `completion`, gpui-component | feature | Terminal panel, rendering/input, split spaces, the terminal settings panel, and the auto-completion overlay + controller. |
 | `sftp-ui` (`oneterm-sftp-ui`) | `core`, `terminal`, `state`, `theme`, `actions`, gpui-component | feature | SFTP file browser and transfer queue. |
-| `session-ui` (`oneterm-session-ui`) | `core`, `terminal`, `terminal-view`, `state`, `actions`, gpui-component | feature | Session tree, connect dialogs, and `SshSessionStore`. |
+| `session-ui` (`oneterm-session-ui`) | `core`, `terminal`, `terminal-view`, `settings`, `state`, `theme`, `actions`, gpui-component | feature | Session tree, connect dialogs, and `SshSessionStore`. |
 | `settings-ui` (`oneterm-settings-ui`) | `core`, `settings`, `state`, `update`, `theme`, `actions`, gpui-component | feature | General Settings window, update status/actions, and key-binding setup. |
-| `agent-ui` (`oneterm-agent-ui`) | `core`, `terminal`, `settings`, `state`, `theme`, gpui-component | feature | Agent Panel fleet view. |
+| `agent-ui` (`oneterm-agent-ui`) | `terminal`, `settings`, `state`, gpui-component | feature | Agent Panel fleet view. |
 | `ssh` (`oneterm-ssh`) | `core`, `terminal` | backend | russh client and SFTP; implements `TerminalSession` and `SftpBackend`. |
 | `local-shell` (`oneterm-local-shell`) | `core`, `terminal` | backend | Local PTY; implements `TerminalSession`. |
-| `app` (`oneterm-app`) | shell + all five features + shared layers + gpui-component + both backends | binary | Only crate that knows every layer. Installs `AppSessionFactory`, initializes features and commands, and opens the window. |
+| `app` (`oneterm-app`) | shell + all five features + shared layers (incl. `update`) + gpui-component + both backends | binary | Only crate that knows every layer. Installs `AppSessionFactory`, initializes features and commands, and opens the window. |
 
 ## 3.1 Crate & dependency rules
 
@@ -202,7 +221,7 @@ sessions via `oneterm_terminal::SessionFactory` instead of depending on
 ## 4. When adding a new crate / module
 
 - Open an issue / TODO before adding a crate beyond those in §3.
-- Crate package names use the `oneterm-<name>` form; the `core` re-export inside each backend crate is aliased as `core` (e.g. `use oneterm_core as core`).
+- Crate package names use the `oneterm-<name>` form; backends import the domain crate as `oneterm_core` directly.
 - Path dependencies under the workspace directory are automatically workspace members; still list new crates in the root `members = [...]` for clarity.
 - Add the crate to the dependency table in §3 and the tree in §1.
 - **Respect the layering** (see the hard rules in [`crate-dependency-rules.md`](crate-dependency-rules.md)): a new shared type goes in the lowest crate that needs it (R10); a new feature is its own `*-ui` crate that depends on the shared layers only (R2, R5); keep `ssh`/`local-shell` out of every UI crate — route through `SessionFactory` (R3). After adding a crate, re-run that doc's "full-graph verification" commands.

@@ -56,8 +56,11 @@ cargo build --workspace
 # Release build
 cargo build --workspace --release
 
-# Run the app (dev binary = oneterm-debug, keeps the console for logs)
+# Run the app (keeps the console for logs in debug builds)
 cargo run -p oneterm-app
+# Same, with OneTerm's hot-path crates optimized (full-screen TUIs such as DOOM-fire
+# are unusable at opt-level 0; see [profile.fast-dev] in the root Cargo.toml)
+cargo run -p oneterm-app --profile fast-dev
 
 # Test
 cargo test --workspace
@@ -88,15 +91,36 @@ Refs: #issue
 
 ## 4. Automated quality gate
 
-Before completing a task, the agent **must** run and confirm the following pass:
+Before completing a task, the agent **must** run and confirm the **same set of checks
+CI runs** (`.github/workflows/ci.yml`). Run the bundled script (it stops at the first
+failure and prints the failing command):
+
+```bash
+scripts/ci-local.sh          # bash / Git Bash
+pwsh scripts/ci-local.ps1    # PowerShell (Windows)
+```
+
+The script runs, in order:
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo build --workspace
+cargo clippy --workspace --all-targets -- -D warnings   # also type-checks every target (no separate build step)
+cargo test --workspace
+python scripts/verify-dependency-graph.py     # crate graph policy + workspace version inheritance
+python scripts/check-ui-fork.py               # gpui-component vendor baseline
+python scripts/check-doc-paths.py             # architecture doc paths
+python -m unittest scripts/test_check_english.py
+python scripts/check-english.py               # English-only contributor text
+python scripts/completion-catalog.py validate # completion catalogs vs schema
+python scripts/third-party-notices.py --check # THIRD-PARTY-NOTICES.md matches Cargo.lock
 ```
 
-If any of the three commands above fails → fix it before reporting completion.
+Optional (need network / extra tools; CI runs them too): `bash vendor/refresh.sh --check`
+(vendored forks == pristine + patches) and `cargo deny check licenses bans advisories`
+(`cargo install cargo-deny`). Pass `--full` to `ci-local` to include both.
+
+If any command fails → fix it before reporting completion. Do not report a task done
+with only fmt/clippy/build green.
 
 
 ## 5. Quick reference
@@ -111,7 +135,7 @@ If any of the three commands above fails → fix it before reporting completion.
 | **Terminal Split design** (Spaces, split R/L/U/D, drag tab into Space) | [`docs/terminal-split.md`](docs/terminal-split.md) |
 | SSH client connect / auth design | [`docs/ssh-client-connect.md`](docs/ssh-client-connect.md) |
 | SFTP file browser design | [`docs/sftp-browser-design.md`](docs/sftp-browser-design.md) |
-| SFTP-follows-terminal-CWD design | [`docs/sftp-follow-terminal-cwd.md`](docs/sftp-follow-terminal-cwd.md) |
+| SFTP-follows-terminal-CWD design | [`docs/sftp-follow-terminal-cwd/README.md`](docs/sftp-follow-terminal-cwd/README.md) |
 | OSC sequence support checklist | [`docs/osc-sequences-checklist.md`](docs/osc-sequences-checklist.md) |
 | Terminal rendering optimization | [`docs/terminal-rendering-optimization.md`](docs/terminal-rendering-optimization.md) |
 | Terminal feature gap analysis | [`docs/terminal-gap-analysis.md`](docs/terminal-gap-analysis.md) |
@@ -123,6 +147,7 @@ If any of the three commands above fails → fix it before reporting completion.
 | Theme schema & colors | `reference/gpui-component/.theme-schema.json` |
 | gpui internal skills | `reference/gpui-component/skills/` |
 | Documentation (en) | `reference/gpui-component/docs/docs/` |
+| Documentation index (current vs. archived docs) | [`docs/README.md`](docs/README.md) |
 
 <!-- HARNESS:BEGIN -->
 ## Harness

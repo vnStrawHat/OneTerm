@@ -4,20 +4,20 @@
 //! keyed by DockArea identity so independent windows do not overwrite one another.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use gpui::{App, AppContext, Entity, EntityId, Global, WeakEntity};
 use gpui_component::dock::DockArea;
 use oneterm_core::SftpBackend;
-use oneterm_terminal::CwdSource;
+use oneterm_terminal::SharedState;
 
 /// Active terminal context belonging to one dock/workspace.
 #[derive(Default, Clone)]
 pub struct WorkspaceActiveState {
     /// SFTP backend of the active terminal tab, if available.
     pub active_sftp: Option<Arc<dyn SftpBackend>>,
-    /// Live cwd source of the active terminal tab, if available.
-    pub active_cwd_source: Option<Arc<dyn CwdSource>>,
+    /// Live OSC 7 cwd state of the active terminal tab, if available.
+    pub active_cwd_source: Option<SharedState>,
     /// Whether the active terminal tab is a local shell.
     pub active_is_local: bool,
 }
@@ -25,28 +25,24 @@ pub struct WorkspaceActiveState {
 /// The application's global state.
 #[derive(Default)]
 pub struct AppState {
-    /// Weak reference to the primary DockArea — retained for legacy commands that
-    /// do not yet receive an explicit workspace context.
+    /// Weak reference to the primary workspace's DockArea. Feature crates that
+    /// place panels without an explicit workspace context (SSH connect dialogs,
+    /// panel constructors) resolve the workspace through it; the shell registers
+    /// it in [`AppState::register_workspace`].
     pub dock_area: Option<WeakEntity<DockArea>>,
-    /// Workspace used by legacy constructors that cannot yet receive a DockArea key.
-    pub primary_workspace_id: Option<EntityId>,
     /// Per-DockArea active terminal state. The DockArea entity id is stable for the
     /// lifetime of a workspace and prevents one window's SFTP context from leaking
     /// into another window.
     pub active_workspaces: HashMap<EntityId, WorkspaceActiveState>,
-    /// Mirror of the zoom state (name of the fullscreen panel) — shared with the
-    /// `on_release` callback in `window.rs` to save on window close.
-    pub zoomed_panel: Option<Arc<Mutex<Option<String>>>>,
-    /// Mirror of toggle_button_visible — shared with the `on_release` callback.
-    pub toggle_button_visible: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl AppState {
-    /// Register a DockArea as a workspace and return its key.
+    /// Register a DockArea as a workspace and return its key. The first
+    /// registered DockArea becomes the primary workspace.
     pub fn register_workspace(&mut self, dock_area: &WeakEntity<DockArea>) -> EntityId {
         let id = dock_area.entity_id();
         self.active_workspaces.entry(id).or_default();
-        self.primary_workspace_id.get_or_insert(id);
+        self.dock_area.get_or_insert_with(|| dock_area.clone());
         id
     }
 
@@ -62,7 +58,7 @@ impl AppState {
         &mut self,
         workspace_id: Option<EntityId>,
         sftp: Option<Arc<dyn SftpBackend>>,
-        cwd_source: Option<Arc<dyn CwdSource>>,
+        cwd_source: Option<SharedState>,
         is_local: bool,
     ) {
         if let Some(id) = workspace_id {
@@ -85,15 +81,21 @@ impl AppState {
         cx.global::<AppStateGlobal>().0.clone()
     }
 
-    /// Return the legacy primary workspace id when the registry is initialized.
+    /// Return the primary workspace id (the first registered DockArea), if any.
     pub fn primary_workspace_id(cx: &App) -> Option<EntityId> {
         let global = cx.try_global::<AppStateGlobal>()?;
-        global.0.read(cx).primary_workspace_id
+        global
+            .0
+            .read(cx)
+            .dock_area
+            .as_ref()
+            .map(|dock_area| dock_area.entity_id())
     }
 
-    /// Initialize the global AppState once, preserving existing workspaces.
+    /// Initialize the global AppState once; later calls are no-ops that
+    /// preserve the registered workspaces (init contract: idempotent).
     pub fn init(cx: &mut App) {
-        if cx.try_global::<AppStateGlobal>().is_some() {
+        if cx.has_global::<AppStateGlobal>() {
             return;
         }
         let state = cx.new(|_| Self::default());

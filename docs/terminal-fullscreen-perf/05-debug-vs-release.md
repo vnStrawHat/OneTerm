@@ -7,6 +7,13 @@
 > at `opt-level=0`. Remedy B (Tier 1/2) also landed. Debug now renders continuously.
 > See [`06-results-and-ceiling.md`](06-results-and-ceiling.md) §6.5.
 >
+> **Update (2026-08, BUILD-09):** the first-party `opt-level = 3` overrides now live in
+> the named `[profile.fast-dev]` (`cargo run -p oneterm-app --profile fast-dev`) rather
+> than in `dev`, so plain `dev`/`test` builds keep OneTerm's crates at `opt-level = 0`
+> (precise debugging, fast incremental rebuilds). Third-party hot crates (`gpui`,
+> `gpui_platform`, `smol`, `alacritty_terminal`) stay optimized in both profiles. Use
+> `fast-dev` for DOOM-fire-class workloads in a debug build.
+>
 > The debug build renders one frame and then goes "Not Responding"; release
 > renders steadily. This is **not a logic bug** (a deadlock would hang release
 > too) — it is a performance threshold being crossed.

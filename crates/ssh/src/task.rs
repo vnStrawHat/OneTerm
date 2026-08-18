@@ -5,59 +5,56 @@
 
 use std::sync::Arc;
 
-use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
-use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use russh::ChannelMsg;
+use tokio_util::sync::CancellationToken;
 
-use oneterm_terminal::SessionEvent;
-use oneterm_terminal::default_color_for_index;
+use oneterm_core::report_best_effort;
+use oneterm_terminal::TerminalPump;
 
 use crate::handler::SshClientHandler;
-use crate::listener::{Cmd, SshListener};
-use crate::session::TermSize;
-use crate::state::SharedState;
+use crate::transport::{Cmd, SshListener, SshTransport};
 
 /// Main tokio task: reads data from the SSH channel + receives commands from the
-/// main thread. Feeds bytes to `Term` (via ansi::Processor) in a **single pass**;
-/// OSC 7/9/133 and screen clears arrive via `Event::Osc` / `Event::ClearScreen`
-/// (OneTerm alacritty fork) and are handled in `SshListener` — no second parser.
+/// main thread. Feeds bytes to `Term` through the shared [`TerminalPump`] in a
+/// **single pass**; OSC 7/9/133 and screen clears arrive via `Event::Osc` /
+/// `Event::ClearScreen` (OneTerm alacritty fork) and are handled by the shared
+/// `OscRouter` — no second parser.
+///
+/// The `Term` grid is resized by the UI thread (`TerminalSession::resize`);
+/// this task only forwards the coalesced size to the remote PTY (CORR-21).
 ///
 /// **`handle` must be kept alive** — dropping it closes the SSH connection.
+/// When the task ends it cancels `sftp_shutdown` so the SFTP task dies with the
+/// connection (ARCH-28).
 pub(crate) async fn ssh_main_task(
     _handle: russh::client::Handle<SshClientHandler>,
     mut channel: russh::Channel<russh::client::Msg>,
     term: Arc<FairMutex<Term<SshListener>>>,
     listener: SshListener,
-    state: SharedState,
     cmd_rx: async_channel::Receiver<Cmd>,
+    sftp_shutdown: CancellationToken,
 ) {
     log::info!("ssh_main_task: started");
-    let mut processor = Processor::<StdSyncHandler>::new();
+    let mut pump = TerminalPump::new(listener);
+    let transport: SshTransport = pump.router().transport().clone();
+    let state = pump.state().clone();
 
-    loop {
+    // Every exit path breaks with a reason and falls through to the single
+    // teardown block below (CORR-11), so `Closed` always follows the deferred
+    // reliable events and the SFTP task always dies with the connection.
+    let reason: &'static str = loop {
         // If close was requested (even if Cmd::Close was dropped due to a
         // full queue), honor the closing flag immediately.
-        if listener.is_closing() {
-            log::info!("ssh_main_task: closing flag set, exiting");
-            let _ = channel.close().await;
-            {
-                let mut st = state.lock().unwrap();
-                st.alive = false;
-            }
-            listener.forward_lifecycle(SessionEvent::Closed);
-            break;
+        if transport.is_closing() {
+            break "closing flag set";
         }
-        if let Some((rows, cols)) = listener.take_pending_resize() {
+        if let Some((rows, cols)) = transport.take_pending_resize() {
             log::info!("ssh_main_task: resize {cols}x{rows}");
             if let Err(error) = channel.window_change(cols as u32, rows as u32, 0, 0).await {
                 log::warn!("ssh_main_task: window_change fail: {error}");
             }
-            term.lock().resize(TermSize {
-                cols: cols as usize,
-                lines: rows as usize,
-            });
         }
         tokio::select! {
             // ── Read data from the SSH channel ────────────────────────
@@ -66,119 +63,27 @@ pub(crate) async fn ssh_main_task(
                     Some(ChannelMsg::Data { data }) => {
                         let bytes: &[u8] = data.as_ref();
                         log::debug!("ssh_main_task: recv {} bytes", bytes.len());
-                        // Track network stats — bytes received from server.
-                        state.lock().unwrap().rx_bytes += bytes.len() as u64;
-                        // Feed Term (ansi::Processor).
-                        {
-                            let mut term = term.lock();
-                            processor.advance(&mut *term, bytes);
-
-                            // Track absolute line count.
-                            let total_after = term.total_lines();
-                            let screen_lines = term.screen_lines();
-                            let (mut absolute, mut prev_total) = {
-                                let st = state.lock().unwrap();
-                                (st.absolute_line_count, st.prev_total_lines)
-                            };
-                            if total_after > prev_total {
-                                absolute += total_after - prev_total;
-                            } else if total_after == prev_total
-                                && total_after > screen_lines
-                            {
-                                let nl = bytes.iter().filter(|&&b| b == b'\n').count();
-                                absolute += nl;
-                            } else if total_after < prev_total {
-                                absolute = total_after;
-                            }
-                            prev_total = total_after;
-                            drop(term);
-
-                            let mut st = state.lock().unwrap();
-                            st.absolute_line_count = absolute;
-                            st.prev_total_lines = prev_total;
-                        }
-
-                        // Answer OSC 10/11/12 color queries collected during
-                        // advance: read the current color from `Term`, fall back
-                        // to the theme default, then write the reply to the channel.
-                        let queries = listener.take_color_queries();
-                        if !queries.is_empty() {
-                            let (def_fg, def_bg, def_cursor, def_ansi) = {
-                                let st = state.lock().unwrap();
-                                (
-                                    st.default_foreground,
-                                    st.default_background,
-                                    st.default_cursor,
-                                    st.default_ansi,
-                                )
-                            };
-                            let mut replies: Vec<String> = Vec::new();
-                            {
-                                let term = term.lock();
-                                for q in queries {
-                                    let color = term.colors()[q.index].or_else(|| {
-                                        default_color_for_index(
-                                            q.index,
-                                            def_fg,
-                                            def_bg,
-                                            def_cursor,
-                                            def_ansi.as_ref(),
-                                        )
-                                    });
-                                    if let Some(color) = color {
-                                        replies.push((q.format)(color));
-                                    }
-                                }
-                            }
-                            for reply in replies {
-                                if let Err(error) = listener.pty_write(reply.as_bytes()) {
-                                    log::warn!(
-                                        "ssh_main_task: OSC reply delivery failed: {error}"
-                                    );
-                                }
-                            }
-                        }
-
-                        // Notify UI.
-                        listener.forward(SessionEvent::Output);
+                        state.add_rx_bytes(bytes.len() as u64);
+                        // Parse under the Term lock, answer OSC colour queries,
+                        // then (lock released) flush deferred reliable events
+                        // and post the repaint hint.
+                        pump.process_chunk(&term, bytes);
+                        pump.finish_batch(true).await;
                     }
                     Some(ChannelMsg::ExitStatus { exit_status }) => {
                         let code = exit_status as i32;
                         log::info!("ssh_main_task: exit status = {code}");
-                        {
-                            let mut st = state.lock().unwrap();
-                            st.alive = false;
-                            st.exit_code = Some(code);
-                        }
-                        listener.forward_lifecycle(SessionEvent::Exited(Some(code)));
+                        // Keep draining until the server closes the channel
+                        // so a late `Data` chunk (exit banner) still renders.
+                        pump.publish_exit(Some(code)).await;
                     }
-                    Some(ChannelMsg::Eof) => {
-                        log::info!("ssh_main_task: EOF received");
-                        {
-                            let mut st = state.lock().unwrap();
-                            st.alive = false;
-                        }
-                        listener.forward_lifecycle(SessionEvent::Closed);
-                        break;
+                    Some(ChannelMsg::ExitSignal { signal_name, .. }) => {
+                        log::info!("ssh_main_task: exit signal = {signal_name:?}");
+                        pump.publish_exit(None).await;
                     }
-                    Some(ChannelMsg::Close) => {
-                        log::info!("ssh_main_task: channel closed");
-                        {
-                            let mut st = state.lock().unwrap();
-                            st.alive = false;
-                        }
-                        listener.forward_lifecycle(SessionEvent::Closed);
-                        break;
-                    }
-                    None => {
-                        log::info!("ssh_main_task: channel.wait() = None (disconnected)");
-                        {
-                            let mut st = state.lock().unwrap();
-                            st.alive = false;
-                        }
-                        listener.forward_lifecycle(SessionEvent::Closed);
-                        break;
-                    }
+                    Some(ChannelMsg::Eof) => break "EOF received",
+                    Some(ChannelMsg::Close) => break "channel closed",
+                    None => break "disconnected",
                     Some(other) => {
                         log::debug!("ssh_main_task: unhandled msg: {other:?}");
                     }
@@ -189,30 +94,32 @@ pub(crate) async fn ssh_main_task(
                 match cmd {
                     Ok(Cmd::Write(bytes)) => {
                         log::debug!("ssh_main_task: write {} bytes", bytes.len());
-                        // Track network stats — bytes sent to server.
-                        state.lock().unwrap().tx_bytes += bytes.len() as u64;
+                        state.add_tx_bytes(bytes.len() as u64);
                         if let Err(e) = channel.data(&bytes[..]).await {
                             log::warn!("ssh_main_task: channel.data fail: {e}");
                         }
-                        listener.release_write_bytes(bytes.len());
+                        transport.release_write_bytes(bytes.len());
                     }
                     Ok(Cmd::Resize) => {}
-                    Ok(Cmd::Close) => {
-                        log::info!("ssh_main_task: close requested");
-                        let _ = channel.close().await;
-                        {
-                            let mut st = state.lock().unwrap();
-                            st.alive = false;
-                        }
-                        break;
-                    }
+                    Ok(Cmd::Close) => break "close requested",
                     Err(_) => {
-                        log::info!("ssh_main_task: cmd_rx closed — session dropped");
-                        break;
+                        // Unreachable while the task runs: `term` and `listener`
+                        // both hold a `cmd_tx` clone. The closing flag (checked at
+                        // the top of the loop) is the shutdown signal —
+                        // `SshSession::drop` sets it.
+                        log::warn!("ssh_main_task: cmd_rx closed unexpectedly");
+                        break "command channel closed";
                     }
                 }
             }
         }
-    }
+    };
+
+    // ── Single teardown block (CORR-11 / ARCH-28) ────────────────────────
+    log::info!("ssh_main_task: {reason} — tearing down");
+    // The peer may already have closed the channel; that is not a failure.
+    report_best_effort("ssh_main_task: close channel", channel.close().await);
+    pump.publish_closed().await;
+    sftp_shutdown.cancel();
     log::info!("ssh_main_task: exiting");
 }

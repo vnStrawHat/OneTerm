@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify OneTerm's machine-readable workspace dependency policy."""
+"""Verify OneTerm's machine-readable workspace dependency policy and crate versions."""
 
 from __future__ import annotations
 
@@ -103,6 +103,16 @@ def main() -> None:
         backend_dependencies = sorted(dependencies & set(policy["backends"]))
         if backend_dependencies:
             errors.append(f"{feature} depends on backends: {backend_dependencies}")
+
+    # `[workspace.package] version` is the single version source; every crate
+    # inherits it.
+    workspace_version = manifest["workspace"]["package"].get("version")
+    for package_name, package in sorted(packages.items()):
+        if package["version"] != workspace_version:
+            errors.append(
+                f"{package_name} is version {package['version']!r}, expected the "
+                f"workspace version {workspace_version!r} (use version.workspace = true)"
+            )
 
     for package_name in ("oneterm-core", "oneterm-terminal"):
         dependencies = normal_workspace_dependencies(packages[package_name], workspace_names)

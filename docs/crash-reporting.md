@@ -9,7 +9,7 @@ OneTerm captures diagnostics for unrecoverable **Rust panics** and supported pla
 - A Rust panic hook records the OneTerm version, Unix timestamp, OS/architecture, thread name, panic payload/location, and a forced Rust backtrace. It then invokes the previously installed panic hook.
 - `crash-handler` 0.8.0 catches supported native exceptions/signals. Windows coverage includes structured exceptions and CRT invalid-parameter/purecall failures; Linux/Android coverage includes `SIGABRT`, `SIGBUS`, `SIGFPE`, `SIGILL`, `SIGSEGV`, and `SIGTRAP`; macOS coverage uses Mach exception ports plus `SIGABRT`.
 
-Completed reports live under the platform configuration directory's `crashes/` child. Their sortable names have this form:
+Completed reports live under the platform configuration directory's `crashes/` child. On Unix the directory is created `0700` and every report file `0600`, because panic payloads and backtraces may carry host names, remote paths, or command text beyond the redacted home prefix. Their sortable names have this form:
 
 ```text
 YYYYMMDDTHHMMSSmmmZ-p<PID>-<8 lowercase hex random>.crash.txt
@@ -25,29 +25,31 @@ Capture remains best effort. It cannot guarantee a report when process state or 
 
 ## Path privacy
 
-Before a Rust panic report is persisted, every occurrence of the current user's home-directory prefix is replaced with `<USER_HOME>`. Both native and alternate slash separators are recognized; Windows matching is ASCII case-insensitive. Loading every report applies the same redaction defensively, rewrites legacy unredacted report text, and removes an older backup that could retain the unredacted path.
+Before a Rust panic report is persisted, every occurrence of the current user's home-directory prefix is replaced with `<USER_HOME>`. Both native and alternate slash separators are recognized; Windows matching is ASCII case-insensitive. Loading every report applies the same redaction defensively and rewrites the file when it still holds an unredacted path.
 
 This redaction protects the home-directory prefix only. Panic messages and application data may still contain other sensitive host names, remote paths, commands, or user-provided values, so users must review a GitHub draft before submitting it.
 
-## Migration and retention
+## Reconciliation and retention
 
-On first startup after this storage change, non-empty legacy `pending-crash-report.txt` and `native-crash-report.txt` files are imported into `crashes/` and their legacy artifacts are removed after successful persistence. Empty completed/staging artifacts are discarded. Startup reconciliation also removes crash-specific `.crash.bak` and `.<report>.crash.txt.lock` files left by versions that used shared atomic persistence; it does not touch locks for any configuration document outside `crashes/`.
+Empty completed/staging artifacts are discarded at startup.
 
-After promotion and sanitization, completed reports are ordered newest-first by their sortable names. OneTerm retains the newest 20 completed reports and deletes older reports plus their backups. A report created later by another running instance may temporarily exceed the limit until the next startup reconciliation.
+The process table needed to decide whether a staging file's owner is still alive is enumerated lazily, only when a foreign `.native.tmp` exists, so a normal startup does not pay for it.
+
+After promotion and sanitization, completed reports are ordered newest-first by their sortable names. OneTerm retains the newest 20 completed reports and deletes older ones. A single report that cannot be read or pruned is logged and skipped; it never hides the remaining reports. A report created later by another running instance may temporarily exceed the limit until the next startup reconciliation.
 
 ## Hidden verification trigger
 
-Clicking the OneTerm application icon in About ten times triggers an intentional Rust panic. The counter resets after the tenth click. This behavior exists only to verify the panic capture, restart, and recovery workflow; it is intentionally not presented as a normal action.
+There is no in-app crash trigger. Exercise the panic capture, restart, and recovery workflow from a test or by panicking a debug build directly.
 
 Native callback behavior is verified through `crash-handler`'s platform simulation API in focused tests where the target supports it. The About trigger remains a Rust panic and does not intentionally execute invalid native memory access in normal application builds.
 
 ## Recovery lifecycle
 
-After the main window opens, OneTerm shows completed reports sequentially, newest first:
+After the main window opens, OneTerm shows completed reports sequentially, newest first (`crates/app/src/crash_report_dialog.rs`, next to the crash store in the composition root):
 
 - **Dismiss** closes and deletes only the report currently displayed, then opens the next report if one exists. A failed deletion is logged; the report remains on disk for a later launch, but the in-memory queue may continue.
 - **Copy** copies only the current report to the system clipboard without deleting or advancing it.
-- **Create Issue** opens the OneTerm GitHub new-issue page with only the issue title prefilled. The crash report is deliberately omitted from the URL to avoid browser/GitHub URL-length failures. The local report is retained; users can use Copy and paste it into the issue manually.
+- **Create Issue** opens the new-issue page of the GitHub repository this build was configured for (the updater's `UPDATE_REPOSITORY` constant) with only the issue title prefilled. The crash report is deliberately omitted from the URL to avoid browser/GitHub URL-length failures. The local report is retained; users can use Copy and paste it into the issue manually.
 
 Closing through the dialog close button, Escape, overlay click, application window close, or any non-Dismiss route retains the current and remaining reports and does not advance the queue. They are shown again on a later launch.
 

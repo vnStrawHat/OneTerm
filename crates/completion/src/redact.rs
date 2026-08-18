@@ -11,12 +11,16 @@
 //! `core`), so the control-char/length hygiene is implemented locally rather
 //! than pulling in `oneterm_terminal::security_policy`.
 
+#[path = "redact_detect.rs"]
 mod detect;
 #[cfg(test)]
 #[path = "redact_tests.rs"]
 mod tests;
 
-use detect::{is_secret_flag, is_secret_key, looks_like_secret, strip_url_userinfo};
+use detect::{
+    command_name, is_command_secret_long_flag, is_secret_flag, is_secret_key, looks_like_secret,
+    short_secret_flags, strip_url_userinfo,
+};
 
 /// Cap on a stored history line (defensive length bound).
 const MAX_LINE_LEN: usize = 4096;
@@ -43,6 +47,10 @@ fn scrub_tokens(tokens: &[&str]) -> (Vec<String>, bool) {
     let mut out: Vec<String> = Vec::with_capacity(tokens.len());
     let mut changed = false;
     let mut drop_next_value = false;
+    let (command, subcommand) = command_and_subcommand(tokens);
+    let short_secret = short_secret_flags(&command, subcommand.as_deref());
+    let secret_flag =
+        |name: &str| is_secret_flag(name) || is_command_secret_long_flag(&command, name);
 
     for &tok in tokens {
         if drop_next_value {
@@ -55,13 +63,17 @@ fn scrub_tokens(tokens: &[&str]) -> (Vec<String>, bool) {
         if is_flag(tok) {
             if let Some((name, _value)) = split_inline_flag(tok) {
                 // `--flag=value` / `/FLAG:value` / `-p=value`
-                if is_secret_flag(name) {
+                if secret_flag(name) || is_short_secret_flag(name, short_secret) {
                     out.push(name.to_string());
                     changed = true;
                 } else {
                     out.push(tok.to_string());
                 }
-            } else if is_secret_flag(tok) {
+            } else if let Some(flag) = attached_short_secret(tok, short_secret) {
+                // `-pSECRET` / `-uuser:pass` — keep the flag, drop the value.
+                out.push(flag);
+                changed = true;
+            } else if secret_flag(tok) || is_short_secret_flag(tok, short_secret) {
                 out.push(tok.to_string());
                 drop_next_value = true;
             } else {
@@ -109,6 +121,42 @@ fn scrub_tokens(tokens: &[&str]) -> (Vec<String>, bool) {
 /// Whether a token starts with an option trigger.
 fn is_flag(tok: &str) -> bool {
     tok.starts_with('-') || tok.starts_with('/')
+}
+
+/// The normalized command name and its first subcommand, skipping leading
+/// `KEY=VALUE` assignments and privilege wrappers (`sudo mysql -p…`).
+fn command_and_subcommand(tokens: &[&str]) -> (String, Option<String>) {
+    let mut rest = tokens
+        .iter()
+        .copied()
+        .skip_while(|tok| split_assignment(tok).is_some() || *tok == "sudo" || *tok == "doas");
+    let command = rest.next().map(command_name).unwrap_or_default();
+    let subcommand = rest
+        .find(|tok| !is_flag(tok))
+        .map(|tok| tok.to_ascii_lowercase());
+    (command, subcommand)
+}
+
+/// A single-dash short flag (`-p`) whose letter is a per-command secret flag.
+fn is_short_secret_flag(tok: &str, short_secret: &[char]) -> bool {
+    let mut chars = tok.strip_prefix('-').unwrap_or_default().chars();
+    matches!((chars.next(), chars.next()), (Some(letter), None) if short_secret.contains(&letter))
+}
+
+/// The attached form `-pSECRET` / `-uuser:pass`: returns the bare flag
+/// (`-p`) when the token is a per-command short secret flag with a value glued
+/// on. Long options (`--…`) never take the attached form.
+fn attached_short_secret(tok: &str, short_secret: &[char]) -> Option<String> {
+    let body = tok.strip_prefix('-')?;
+    if body.starts_with('-') {
+        return None;
+    }
+    let mut chars = body.chars();
+    let letter = chars.next()?;
+    if chars.next().is_none() || !short_secret.contains(&letter) {
+        return None;
+    }
+    Some(format!("-{letter}"))
 }
 
 /// Split an inline-value flag into `(flag_name, value)` for `--flag=value`,

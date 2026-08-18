@@ -7,7 +7,7 @@ use oneterm_settings::TerminalSettings;
 
 use crate::items_with_separators;
 
-use super::persist;
+use super::set;
 
 /// Shell presets shown in the dropdown (label is used as both key and value).
 const SHELL_KINDS: &[(ShellKind, &str)] = &[
@@ -49,11 +49,7 @@ pub(super) fn group() -> SettingGroup {
                             .find(|(_, label)| *label == val.as_ref())
                             .map(|(k, _)| *k)
                             .unwrap_or(ShellKind::Custom);
-                        TerminalSettings::global(cx).update(cx, |s, cx| {
-                            s.set_kind(kind);
-                            cx.notify();
-                        });
-                        persist(cx);
+                        set(cx, |s| s.set_kind(kind));
                     },
                 ),
             )
@@ -71,11 +67,7 @@ pub(super) fn group() -> SettingGroup {
                             .unwrap_or_default()
                     },
                     |val: SharedString, cx: &mut App| {
-                        TerminalSettings::global(cx).update(cx, |s, cx| {
-                            s.set_program(val.to_string());
-                            cx.notify();
-                        });
-                        persist(cx);
+                        set(cx, |s| s.set_program(val.to_string()));
                     },
                 ),
             )

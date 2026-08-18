@@ -5,12 +5,12 @@ use std::collections::VecDeque;
 use alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
 use gpui::{App, Bounds, Pixels, SharedString, Window, px};
 
-use super::super::cell::blank::is_blank;
 use super::super::layout::{
-    CursorPaint, GridMetrics, LayoutPoint, LayoutRect, LayoutState, RowCacheFrame, RowCacheStyle,
-    update_row_cache,
+    CursorPaint, GridMetrics, GutterCache, LayoutPoint, LayoutRect, LayoutState, RowCacheFrame,
+    RowCacheStyle, is_blank, update_row_cache,
 };
 use super::super::theme::{TerminalTheme, resolve_cell_color};
+use super::super::view::gutter_timestamps::SecondsOfDay;
 use super::gutter::{GutterLayout, compute_gutter_width};
 use super::measure::{FontMetrics, GridSizing};
 use super::{gutter, measure};
@@ -24,7 +24,7 @@ impl super::TerminalElement {
         cx: &mut App,
     ) -> LayoutState {
         let session = &self.session;
-        let theme = &self.theme;
+        let theme: &TerminalTheme = &self.theme;
         let font = &self.font;
         let font_size = self.font_size;
         let line_height_factor = self.line_height_factor;
@@ -33,12 +33,9 @@ impl super::TerminalElement {
         let cursor_shape_override = self.cursor_shape_override;
         let padding = self.padding;
         let show_gutter = self.show_gutter;
-        let line_times: &VecDeque<String> = &self.line_times;
+        let line_times: &VecDeque<SecondsOfDay> = &self.line_times;
         let line_time_base = self.line_time_base;
-        let cached_gutter = &self.render_cache.cached_gutter;
-        let last_grid_size = &self.render_cache.last_grid_size;
-        let metrics = &self.render_cache.metrics;
-        let row_cache = &self.render_cache.row_cache;
+        let render_cache = &self.render_cache;
         let search_highlights = &self.search_highlights;
         let overlay = &self.overlay;
 
@@ -62,54 +59,35 @@ impl super::TerminalElement {
         let pad_top = px(padding.top);
         let pad_bottom = px(padding.bottom);
 
-        // Read terminal_info early — need absolute_line_count for the gutter width.
-        let terminal_info_start = std::time::Instant::now();
-        let info = session.read(cx).terminal_info();
-        let terminal_info_us = terminal_info_start.elapsed().as_micros();
-        let absolute_line_count = info.absolute_line_count;
+        // The view read `terminal_info()` once this frame and threads it in
+        // (PERF-03); the gutter width needs `absolute_line_count`.
+        let absolute_line_count = self.terminal_info.absolute_line_count;
 
         // ── Gutter width (cached) ──
         // Recompute only when num_digits *or* font *or* font_size changes, to avoid
         // gutter_width fluctuations that cause a resize loop with TUI apps.
         // When show_gutter = false, gutter_width = 0.
-        // PERF-08: cache key includes font family + size so font setting changes
-        // invalidate the cache (not just num_digits changes).
-        let num_digits = absolute_line_count.max(1).to_string().len().max(2);
-        let font_family = font.family.clone();
         let gutter_width = if show_gutter {
-            let cg = cached_gutter.borrow();
-            if let Some((cached_w, cached_digits, cached_fs, cached_ff)) = cg.as_ref() {
-                if *cached_digits == num_digits
-                    && *cached_fs == font_size
-                    && *cached_ff == font_family
-                {
-                    *cached_w
-                } else {
-                    drop(cg); // release the borrow before calling shape_line
-                    let w = compute_gutter_width(
-                        line_times,
-                        absolute_line_count,
-                        font,
+            let num_digits = gutter::gutter_digits(absolute_line_count);
+            let cached = render_cache
+                .borrow()
+                .gutter
+                .as_ref()
+                .filter(|g| g.matches(num_digits, font_size, &font.family))
+                .map(|g| g.width);
+            match cached {
+                Some(w) => w,
+                None => {
+                    // The borrow is released before `shape_line`.
+                    let w = compute_gutter_width(num_digits, font, font_size, window);
+                    render_cache.borrow_mut().gutter = Some(GutterCache {
+                        width: w,
+                        num_digits,
                         font_size,
-                        theme,
-                        window,
-                    );
-                    *cached_gutter.borrow_mut() =
-                        Some((w, num_digits, font_size, font_family.clone()));
+                        font_family: font.family.clone(),
+                    });
                     w
                 }
-            } else {
-                drop(cg);
-                let w = compute_gutter_width(
-                    line_times,
-                    absolute_line_count,
-                    font,
-                    font_size,
-                    theme,
-                    window,
-                );
-                *cached_gutter.borrow_mut() = Some((w, num_digits, font_size, font_family.clone()));
-                w
             }
         } else {
             px(0.)
@@ -127,7 +105,7 @@ impl super::TerminalElement {
                 cell_width,
                 line_height,
             },
-            last_grid_size,
+            &mut render_cache.borrow_mut().grid_size,
             window,
             cx,
         );
@@ -164,7 +142,7 @@ impl super::TerminalElement {
         };
 
         update_row_cache(
-            &mut row_cache.borrow_mut(),
+            &mut render_cache.borrow_mut().rows,
             &RowCacheFrame {
                 cells: &snapshot.cells,
                 damage: &snapshot.damage,
@@ -183,20 +161,19 @@ impl super::TerminalElement {
 
         // Fill the cached ShapedLine for runs not yet shaped.
         let mut shape_line_count: usize = 0;
-        let mut shape_buffer_allocations: usize = 0;
         {
-            let mut cache = row_cache.borrow_mut();
+            let mut cache = render_cache.borrow_mut();
+            let cache = &mut cache.rows;
             for i in 0..num_lines {
                 let row = &mut cache.rows[i];
                 if row.shaped_lines.len() != row.runs.len() {
                     row.shaped_lines.clear();
                     row.shaped_lines.reserve(row.runs.len());
-                    if !row.runs.is_empty() {
-                        shape_buffer_allocations += 1;
-                    }
                     for run in &row.runs {
+                        // `SharedString::from(&str)` copies the text once into
+                        // an `Arc<str>` (PERF-09: no intermediate `String`).
                         let shaped = window.text_system().shape_line(
-                            SharedString::from(run.text.clone()),
+                            SharedString::from(run.text.as_str()),
                             font_size,
                             std::slice::from_ref(&run.style),
                             Some(cell_width),
@@ -206,9 +183,7 @@ impl super::TerminalElement {
                     }
                 }
             }
-            cache.stats.allocation_buffer_sites += shape_buffer_allocations;
             cache.stats.shape_line_calls = shape_line_count;
-            cache.stats.terminal_info_us = terminal_info_us;
             cache.stats.snapshot_us = snapshot_us;
             cache.stats.prepaint_us = prepaint_start.elapsed().as_micros();
         }
@@ -216,6 +191,7 @@ impl super::TerminalElement {
         let cursor = build_cursor(
             &snapshot,
             num_lines,
+            num_cols,
             cursor_color_override,
             cursor_shape_override,
             theme,
@@ -265,7 +241,7 @@ impl super::TerminalElement {
             )),
         };
 
-        *metrics.borrow_mut() = GridMetrics {
+        render_cache.borrow_mut().metrics = GridMetrics {
             bounds: Some(bounds),
             cell_width,
             line_height,
@@ -310,6 +286,7 @@ impl super::TerminalElement {
 fn build_cursor(
     snapshot: &oneterm_terminal::TerminalContent,
     num_lines: usize,
+    num_cols: usize,
     cursor_color_override: Option<gpui::Hsla>,
     cursor_shape_override: oneterm_settings::TerminalCursorShape,
     theme: &TerminalTheme,
@@ -334,6 +311,19 @@ fn build_cursor(
         oneterm_settings::TerminalCursorShape::Bar => CursorShape::Beam,
         oneterm_settings::TerminalCursorShape::Underline => CursorShape::Underline,
     };
+    // The glyph under the cursor, so a filled block can re-paint it on top of
+    // the cursor quad instead of hiding it (CORR-43). Its colour is the cell's
+    // background — the classic inverted-cell cursor.
+    let glyph = snapshot
+        .cells
+        .get(display_line as usize * num_cols + col as usize)
+        .filter(|ic| ic.point.column.0 == col as usize)
+        .map(|ic| &ic.cell)
+        .filter(|cell| !is_blank(cell) && cell.c != ' ')
+        .map(|cell| {
+            let (_, bg) = super::super::layout::cell_colors(cell, theme, 0);
+            (cell.c, bg)
+        });
     Some(CursorPaint {
         point: LayoutPoint {
             line: display_line,
@@ -341,5 +331,6 @@ fn build_cursor(
         },
         color,
         shape,
+        glyph,
     })
 }

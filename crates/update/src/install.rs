@@ -58,10 +58,19 @@ fn schedule_windows_update(staged: &StagedUpdate, current_exe: &Path) -> Result<
         .file_name()
         .map(|value| value.to_os_string())
         .unwrap_or_else(|| std::ffi::OsString::from("oneterm.exe"));
-    let backup_dir = install_dir
-        .parent()
-        .unwrap_or(install_dir)
-        .join(format!(".oneterm-backup-{pid}-{timestamp}"));
+    // The backup lives in OneTerm's own update cache, not beside the install
+    // directory: the parent of e.g. `C:\Program Files\OneTerm` is often not
+    // writable, and the helper only discovers that after the app has quit
+    // (CORR-38). Creating it here also verifies the location before we commit.
+    let backup_dir = crate::manager::update_cache_dir().join(format!("backup-{pid}-{timestamp}"));
+    std::fs::create_dir_all(&backup_dir)?;
+    if !is_writable_dir(&backup_dir) {
+        let _ = std::fs::remove_dir(&backup_dir);
+        return Err(AppError::msg(format!(
+            "update backup directory is not writable: {}",
+            backup_dir.display()
+        )));
+    }
 
     std::fs::write(&script, windows_update_script_body())?;
     let helper_env = vec![
@@ -86,7 +95,10 @@ fn schedule_windows_update(staged: &StagedUpdate, current_exe: &Path) -> Result<
         ("ONETERM_SCRIPT_PATH", script.as_os_str().to_os_string()),
     ];
     if let Err(error) = spawn_cmd_helper(&script, &helper_env) {
+        // Best effort: the spawn failure is what gets reported; the leftovers
+        // only waste disk space.
         let _ = std::fs::remove_file(&script);
+        let _ = std::fs::remove_dir(&backup_dir);
         return Err(error);
     }
     Ok(InstallOutcome::RestartScheduled)
@@ -106,7 +118,10 @@ fn install_macos_update(staged: &StagedUpdate, current_exe: &Path) -> Result<Ins
     }
     let source_bundle = staged.package_dir.join("OneTerm.app");
     let backup = replace_path(&source_bundle, &app_bundle)?;
-    if let Err(error) = Command::new("open").arg(&app_bundle).spawn() {
+    // `open -n` launches a fresh instance of the replaced bundle; a plain
+    // `open` would only activate the still-running old instance, which the
+    // caller is about to quit (CORR-39).
+    if let Err(error) = Command::new("open").arg("-n").arg(&app_bundle).spawn() {
         if let Err(restore_error) =
             restore_path_from_backup(&app_bundle, &backup, source_bundle.is_dir())
         {
@@ -130,15 +145,33 @@ fn install_unix_update(staged: &StagedUpdate, current_exe: &Path) -> Result<Inst
             package_dir: staged.package_dir.clone(),
         });
     }
-    let backup = replace_directory_contents(&staged.package_dir, install_dir)?;
-    if let Err(error) = Command::new(current_exe).spawn() {
-        if let Err(restore_error) = restore_directory_contents(install_dir, &backup) {
+    replace_directory_contents_and_launch(&staged.package_dir, install_dir, || {
+        Command::new(current_exe).spawn().map(|_| ())
+    })?;
+    cleanup_staging_dir(staged);
+    Ok(InstallOutcome::Restarted)
+}
+
+/// Replace the package files inside `install_dir`, then run `launch`.
+///
+/// The previous files are kept in a backup directory until `launch` succeeds;
+/// a launch failure restores them. On success the backup is removed so shared
+/// directories such as `~/.local/bin` are not littered with stale copies.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn replace_directory_contents_and_launch(
+    source_dir: &Path,
+    install_dir: &Path,
+    launch: impl FnOnce() -> std::io::Result<()>,
+) -> Result<()> {
+    let backup = replace_directory_contents(source_dir, install_dir)?;
+    if let Err(error) = launch() {
+        if let Err(restore_error) = restore_directory_contents(source_dir, install_dir, &backup) {
             log::error!("failed to restore previous install after launch error: {restore_error}");
         }
         return Err(error.into());
     }
-    cleanup_staging_dir(staged);
-    Ok(InstallOutcome::Restarted)
+    remove_backup_dir(&backup);
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -190,55 +223,108 @@ fn restore_path_from_backup(
     Ok(())
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
 fn replace_directory_contents(source_dir: &Path, install_dir: &Path) -> Result<PathBuf> {
     let backup = backup_path(install_dir);
     std::fs::create_dir_all(&backup)?;
-    for entry in std::fs::read_dir(install_dir)? {
-        let entry = entry?;
-        let target = backup.join(entry.file_name());
-        std::fs::rename(entry.path(), target)?;
+    // Nothing has been copied yet, so entries still in `install_dir` are the
+    // originals and only the already-moved ones need to come back.
+    if let Err(error) = move_package_entries_to_backup(source_dir, install_dir, &backup) {
+        return Err(rollback_error(
+            install_dir,
+            error,
+            restore_backup_entries(install_dir, &backup),
+        ));
     }
     if let Err(error) = copy_dir_contents(source_dir, install_dir) {
-        if let Err(restore_error) = restore_directory_contents(install_dir, &backup) {
-            return Err(AppError::msg(format!(
-                "failed to replace {}: {error}; rollback failed: {restore_error}",
-                install_dir.display()
-            )));
-        }
-        return Err(error);
+        return Err(rollback_error(
+            install_dir,
+            error,
+            restore_directory_contents(source_dir, install_dir, &backup),
+        ));
     }
     Ok(backup)
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
-fn restore_directory_contents(install_dir: &Path, backup: &Path) -> Result<()> {
-    clear_directory_contents(install_dir)?;
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn rollback_error(install_dir: &Path, error: AppError, restore: Result<()>) -> AppError {
+    match restore {
+        Ok(()) => error,
+        Err(restore_error) => AppError::msg(format!(
+            "failed to replace {}: {error}; rollback failed: {restore_error}",
+            install_dir.display()
+        )),
+    }
+}
+
+/// Move only the entries shipped in the package out of `install_dir`.
+///
+/// The install directory may be a shared location such as `~/.local/bin`, so
+/// unrelated sibling files must never be touched.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn move_package_entries_to_backup(
+    source_dir: &Path,
+    install_dir: &Path,
+    backup: &Path,
+) -> Result<()> {
+    for entry in std::fs::read_dir(source_dir)? {
+        let entry = entry?;
+        let existing = install_dir.join(entry.file_name());
+        // `symlink_metadata` also reports dangling symlinks, which `exists()` hides.
+        if std::fs::symlink_metadata(&existing).is_ok() {
+            std::fs::rename(&existing, backup.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
+}
+
+/// Undo a (possibly partial) package copy and put the backed-up entries back.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn restore_directory_contents(source_dir: &Path, install_dir: &Path, backup: &Path) -> Result<()> {
+    // Entries copied from the package can only exist if the package was readable,
+    // so an unreadable package means there is nothing new to remove.
+    if let Ok(entries) = std::fs::read_dir(source_dir) {
+        for entry in entries {
+            remove_path(&install_dir.join(entry?.file_name()))?;
+        }
+    }
+    restore_backup_entries(install_dir, backup)
+}
+
+/// Move every backed-up entry back into `install_dir` and drop the backup.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn restore_backup_entries(install_dir: &Path, backup: &Path) -> Result<()> {
     for entry in std::fs::read_dir(backup)? {
         let entry = entry?;
         let target = install_dir.join(entry.file_name());
         std::fs::rename(entry.path(), target)?;
     }
+    remove_backup_dir(backup);
     Ok(())
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
-fn clear_directory_contents(path: &Path) -> Result<()> {
-    if !path.exists() {
-        std::fs::create_dir_all(path)?;
+/// Remove a file, symlink, or directory tree; a missing path is not an error.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn remove_path(path: &Path) -> Result<()> {
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
         return Ok(());
-    }
-
-    for entry in std::fs::read_dir(path)? {
-        let entry = entry?;
-        let entry_path = entry.path();
-        if entry.file_type()?.is_dir() {
-            std::fs::remove_dir_all(entry_path)?;
-        } else {
-            std::fs::remove_file(entry_path)?;
-        }
+    };
+    if metadata.is_dir() {
+        std::fs::remove_dir_all(path)?;
+    } else {
+        std::fs::remove_file(path)?;
     }
     Ok(())
+}
+
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn remove_backup_dir(backup: &Path) {
+    if let Err(error) = std::fs::remove_dir_all(backup) {
+        log::warn!(
+            "failed to remove update backup directory {}: {error}",
+            backup.display()
+        );
+    }
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos", unix))]
@@ -263,7 +349,7 @@ fn cleanup_staging_dir(staged: &StagedUpdate) {
     }
 }
 
-#[cfg(any(target_os = "macos", all(unix, not(target_os = "macos"))))]
+#[cfg(any(target_os = "macos", all(unix, not(target_os = "macos")), test))]
 fn backup_path(path: &Path) -> PathBuf {
     let file_name = path
         .file_name()
@@ -276,7 +362,7 @@ fn backup_path(path: &Path) -> PathBuf {
     ))
 }
 
-#[cfg(any(target_os = "macos", all(unix, not(target_os = "macos"))))]
+#[cfg(any(target_os = "macos", all(unix, not(target_os = "macos")), test))]
 fn copy_dir_contents(source: &Path, destination: &Path) -> Result<()> {
     std::fs::create_dir_all(destination)?;
     for entry in std::fs::read_dir(source)? {
@@ -291,7 +377,7 @@ fn copy_dir_contents(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(any(target_os = "macos", all(unix, not(target_os = "macos"))))]
+#[cfg(any(target_os = "macos", all(unix, not(target_os = "macos")), test))]
 fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
     std::fs::create_dir_all(destination)?;
     copy_dir_contents(source, destination)
@@ -310,27 +396,35 @@ rem All paths are passed through environment variables by the Rust parent proces
 rem Do not inline paths into this file: cmd.exe parses batch files before command
 rem execution, so percent/caret metacharacters can corrupt or inject commands.
 
+rem The helper runs without a console (CREATE_NO_WINDOW), where `timeout` fails
+rem immediately ("input redirection is not supported") and would busy-spin; a
+rem loopback ping is the console-free one-second sleep.
 :wait_for_exit
 tasklist /FI "PID eq %pid%" 2>NUL | find "%pid%" >NUL
 if not errorlevel 1 (
-    timeout /T 1 /NOBREAK >NUL
+    ping -n 2 127.0.0.1 >NUL 2>NUL
     goto wait_for_exit
 )
 
-mkdir "%ONETERM_BACKUP_DIR%" >NUL 2>NUL
+rem The backup directory was created and write-probed by the parent process
+rem inside OneTerm's update cache before it quit.
 xcopy "%ONETERM_INSTALL_DIR%\*" "%ONETERM_BACKUP_DIR%\" /E /I /H /Y >NUL
 if errorlevel 2 exit /B 1
 xcopy "%ONETERM_PACKAGE_DIR%\*" "%ONETERM_INSTALL_DIR%\" /E /I /H /Y >NUL
 if errorlevel 2 goto restore_backup
 start "" "%ONETERM_INSTALL_DIR%\%ONETERM_EXE_NAME%"
+if errorlevel 1 goto restore_backup
+rem The new build launched: the backup has served its purpose.
 cd /d "%TEMP%" >NUL 2>NUL
+rmdir /S /Q "%ONETERM_BACKUP_DIR%" >NUL 2>NUL
 rmdir /S /Q "%ONETERM_STAGING_DIR%" >NUL 2>NUL
 del "%ONETERM_SCRIPT_PATH%" >NUL 2>NUL
 exit /B 0
 
 :restore_backup
 rem The package copy may have partially overwritten files. Clear the install
-rem directory and copy the backup back before reporting helper failure.
+rem directory and copy the backup back before reporting helper failure. The
+rem backup is kept for manual recovery.
 del /F /Q "%ONETERM_INSTALL_DIR%\*" >NUL 2>NUL
 for /D %%D in ("%ONETERM_INSTALL_DIR%\*") do rmdir /S /Q "%%D" >NUL 2>NUL
 xcopy "%ONETERM_BACKUP_DIR%\*" "%ONETERM_INSTALL_DIR%\" /E /I /H /Y >NUL
@@ -371,7 +465,6 @@ fn spawn_cmd_helper(script: &Path, env: &[(&str, std::ffi::OsString)]) -> Result
 mod tests {
     use super::*;
 
-    #[cfg(any(target_os = "macos", all(unix, not(target_os = "macos"))))]
     fn test_dir(name: &str) -> PathBuf {
         // A process-wide sequence keeps directories distinct even when parallel
         // tests read the same coarse timestamp (as on macOS).
@@ -384,6 +477,204 @@ mod tests {
             "oneterm-update-{name}-{}-{suffix}-{sequence}",
             std::process::id()
         ))
+    }
+
+    /// Install directory with the app binary plus an unrelated sibling tool,
+    /// and a staged package carrying a new binary and a new asset directory.
+    struct InstallFixture {
+        root: PathBuf,
+        install: PathBuf,
+        package: PathBuf,
+    }
+
+    impl InstallFixture {
+        fn new(name: &str) -> Self {
+            let root = test_dir(name);
+            let install = root.join("install");
+            let package = root.join("package");
+            std::fs::create_dir_all(&install).unwrap();
+            std::fs::create_dir_all(package.join("assets")).unwrap();
+            std::fs::write(install.join("oneterm"), b"old").unwrap();
+            std::fs::write(install.join("other-tool"), b"keep me").unwrap();
+            std::fs::write(package.join("oneterm"), b"new").unwrap();
+            std::fs::write(package.join("assets").join("icon"), b"icon").unwrap();
+            Self {
+                root,
+                install,
+                package,
+            }
+        }
+
+        fn install_entries(&self) -> Vec<String> {
+            let mut names: Vec<String> = std::fs::read_dir(&self.install)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        }
+
+        fn backup_dirs(&self) -> Vec<PathBuf> {
+            std::fs::read_dir(&self.root)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.starts_with(".install.backup-"))
+                })
+                .collect()
+        }
+    }
+
+    impl Drop for InstallFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    /// Keeps a package file unreadable for the duration of the guard so a copy
+    /// from it fails part-way through the package.
+    struct UnreadableFile {
+        #[cfg(unix)]
+        path: PathBuf,
+        #[cfg(windows)]
+        _handle: std::fs::File,
+    }
+
+    impl UnreadableFile {
+        fn new(path: &Path) -> Self {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).unwrap();
+                Self {
+                    path: path.to_path_buf(),
+                }
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt;
+                // Exclusive share mode makes any concurrent open of the file fail.
+                let handle = std::fs::OpenOptions::new()
+                    .read(true)
+                    .share_mode(0)
+                    .open(path)
+                    .unwrap();
+                Self { _handle: handle }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for UnreadableFile {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(0o644));
+        }
+    }
+
+    #[test]
+    fn replace_directory_contents_leaves_unrelated_siblings_untouched() {
+        let fixture = InstallFixture::new("replace-dir-siblings");
+
+        let backup = replace_directory_contents(&fixture.package, &fixture.install).unwrap();
+
+        assert_eq!(
+            std::fs::read(fixture.install.join("other-tool")).unwrap(),
+            b"keep me"
+        );
+        assert!(!backup.join("other-tool").exists());
+    }
+
+    #[test]
+    fn replace_directory_contents_replaces_package_files_and_backs_up_old_ones() {
+        let fixture = InstallFixture::new("replace-dir-package");
+
+        let backup = replace_directory_contents(&fixture.package, &fixture.install).unwrap();
+
+        assert_eq!(
+            fixture.install_entries(),
+            vec!["assets", "oneterm", "other-tool"]
+        );
+        assert_eq!(
+            std::fs::read(fixture.install.join("oneterm")).unwrap(),
+            b"new"
+        );
+        assert_eq!(
+            std::fs::read(fixture.install.join("assets").join("icon")).unwrap(),
+            b"icon"
+        );
+        assert_eq!(std::fs::read(backup.join("oneterm")).unwrap(), b"old");
+    }
+
+    #[test]
+    fn replace_directory_contents_restores_old_install_when_package_is_missing() {
+        let fixture = InstallFixture::new("replace-dir-missing");
+        let missing_source = fixture.root.join("missing-package");
+
+        let result = replace_directory_contents(&missing_source, &fixture.install);
+
+        assert!(result.is_err());
+        assert_eq!(fixture.install_entries(), vec!["oneterm", "other-tool"]);
+        assert_eq!(
+            std::fs::read(fixture.install.join("oneterm")).unwrap(),
+            b"old"
+        );
+        assert!(fixture.backup_dirs().is_empty());
+    }
+
+    #[test]
+    fn replace_directory_contents_restores_old_install_when_copy_fails() {
+        let fixture = InstallFixture::new("replace-dir-rollback");
+        let unreadable = UnreadableFile::new(&fixture.package.join("assets").join("icon"));
+
+        let result = replace_directory_contents(&fixture.package, &fixture.install);
+        drop(unreadable);
+
+        assert!(result.is_err());
+        assert_eq!(fixture.install_entries(), vec!["oneterm", "other-tool"]);
+        assert_eq!(
+            std::fs::read(fixture.install.join("oneterm")).unwrap(),
+            b"old"
+        );
+        assert_eq!(
+            std::fs::read(fixture.install.join("other-tool")).unwrap(),
+            b"keep me"
+        );
+        assert!(fixture.backup_dirs().is_empty());
+    }
+
+    #[test]
+    fn launch_success_removes_backup_directory() {
+        let fixture = InstallFixture::new("launch-success");
+
+        replace_directory_contents_and_launch(&fixture.package, &fixture.install, || Ok(()))
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read(fixture.install.join("oneterm")).unwrap(),
+            b"new"
+        );
+        assert!(fixture.backup_dirs().is_empty());
+    }
+
+    #[test]
+    fn launch_failure_restores_old_install_and_removes_backup_directory() {
+        let fixture = InstallFixture::new("launch-failure");
+
+        let result =
+            replace_directory_contents_and_launch(&fixture.package, &fixture.install, || {
+                Err(std::io::Error::other("launch failed"))
+            });
+
+        assert!(result.is_err());
+        assert_eq!(fixture.install_entries(), vec!["oneterm", "other-tool"]);
+        assert_eq!(
+            std::fs::read(fixture.install.join("oneterm")).unwrap(),
+            b"old"
+        );
+        assert!(fixture.backup_dirs().is_empty());
     }
 
     #[cfg(target_os = "macos")]
@@ -402,22 +693,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    #[cfg(all(unix, not(target_os = "macos")))]
-    #[test]
-    fn replace_directory_contents_restores_old_install_when_copy_fails() {
-        let root = test_dir("replace-dir-rollback");
-        let install = root.join("install");
-        std::fs::create_dir_all(&install).unwrap();
-        std::fs::write(install.join("oneterm"), b"old").unwrap();
-        let missing_source = root.join("missing-package");
-
-        let result = replace_directory_contents(&missing_source, &install);
-
-        assert!(result.is_err());
-        assert_eq!(std::fs::read(install.join("oneterm")).unwrap(), b"old");
-        let _ = std::fs::remove_dir_all(root);
-    }
-
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_update_script_reads_paths_from_environment() {
@@ -430,5 +705,20 @@ mod tests {
         assert!(script.contains("goto restore_backup"));
         assert!(!script.contains("installDir={install_dir}"));
         assert!(!script.contains("packageDir={package_dir}"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_update_script_sleeps_without_a_console_and_removes_backup_after_launch() {
+        let script = windows_update_script_body();
+
+        // CORR-59: `timeout` needs a console; the helper has none.
+        assert!(!script.contains("timeout /T"));
+        assert!(script.contains("ping -n 2 127.0.0.1"));
+        // CORR-38: the backup is deleted only after `start` succeeded.
+        let start = script.find("start \"\"").unwrap();
+        let remove_backup = script.find("rmdir /S /Q \"%ONETERM_BACKUP_DIR%\"").unwrap();
+        assert!(start < remove_backup);
+        assert!(!script.contains("mkdir \"%ONETERM_BACKUP_DIR%\""));
     }
 }

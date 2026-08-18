@@ -1,4 +1,4 @@
-//! [`SettingsPanel`] — the General Settings dock panel.
+//! [`SettingsPanel`] — the General Settings view shown in its own window.
 //!
 //! Wraps the gpui-component [`Settings`] widget (a sidebar + page layout) with
 //! five pages: General (UI font), Key Bindings (configurable shortcuts grouped by
@@ -6,21 +6,24 @@
 //! (theme mode + theme list), and About. The Terminal page reads/writes the global
 //! [`TerminalSettings`] and persists changes to `terminal.json`; the Appearance
 //! page drives the gpui-component [`Theme`] / [`ThemeRegistry`].
+//!
+//! The view is hosted by [`super::window`] inside a [`gpui_component::Root`];
+//! it is not a dock panel and is deliberately not registered with the
+//! `PanelRegistry` (ARCH-39).
 
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
-    ParentElement as _, Render, Styled as _, Window,
+    App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement as _,
+    Render, Styled as _, Window,
 };
 use gpui_component::{
     TitleBar,
-    dock::{Panel, PanelControl, PanelEvent},
     setting::{SettingPage, Settings},
     v_flex,
 };
 
 use super::{about, appearance, general, key_bindings, terminal, updates};
 
-/// General Settings panel (font, theme, key bindings, terminal options, about).
+/// General Settings view (font, theme, key bindings, terminal options, about).
 pub(crate) struct SettingsPanel {
     focus_handle: FocusHandle,
 }
@@ -47,7 +50,7 @@ impl SettingsPanel {
         cx.new(|cx| Self::new(window, cx))
     }
 
-    /// Build the four setting pages.
+    /// Build the setting pages.
     ///
     /// Pages are rebuilt on every render (same pattern as the gpui-component
     /// `settings_story`) so the get-closures always read the latest state.
@@ -62,29 +65,9 @@ impl SettingsPanel {
     }
 }
 
-impl EventEmitter<PanelEvent> for SettingsPanel {}
-
 impl Focusable for SettingsPanel {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
-    }
-}
-
-impl Panel for SettingsPanel {
-    fn panel_name(&self) -> &'static str {
-        "settings"
-    }
-
-    fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        "Settings"
-    }
-
-    fn closable(&self, _: &App) -> bool {
-        true
-    }
-
-    fn zoomable(&self, _: &App) -> Option<PanelControl> {
-        None
     }
 }
 

@@ -5,8 +5,8 @@
 //! helpers.
 
 use gpui::{
-    AnyElement, App, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _,
-    Styled, Window, div,
+    AnyElement, App, InteractiveElement as _, IntoElement, Keystroke, ParentElement as _, Styled,
+    Window, div,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, Sizable as _,
@@ -14,13 +14,15 @@ use gpui_component::{
     h_flex,
     kbd::Kbd,
     setting::{SettingGroup, SettingItem, SettingPage},
+    v_flex,
 };
 
 use crate::separator;
 
 use super::key_bindings_actions::{BINDABLE_ACTIONS, BindableAction};
 use super::state::{
-    KeyBindingsState, apply_key_bindings, is_modifier_only, keystroke_to_string, save_key_bindings,
+    KeyBindingsState, apply_key_bindings, conflicting_action, is_modifier_only,
+    keystroke_to_string, save_key_bindings,
 };
 
 // ── Page builder ─────────────────────────────────────────────────────
@@ -56,12 +58,14 @@ pub(crate) fn page() -> SettingPage {
             current_group = current_group.item(separator());
         }
         group_item_count += 1;
-        current_group = current_group
-            .item(
-                SettingItem::render(move |_, window, cx| render_binding_row(a, window, cx))
-                    .keywords([label]),
-            )
-            .description(show_default(a.default));
+        // The row is a custom element, so its "Default: …" line is rendered by
+        // the row itself; `SettingItem::description` only applies to value
+        // items and `SettingGroup::description` would label the whole group
+        // with the last action's default (CORR-35).
+        current_group = current_group.item(
+            SettingItem::render(move |_, window, cx| render_binding_row(a, window, cx))
+                .keywords([label]),
+        );
     }
     // Flush the last group.
     if current_title.is_some() {
@@ -70,14 +74,11 @@ pub(crate) fn page() -> SettingPage {
     page
 }
 
-/// Description line showing the built-in default keystroke (or "Unbound").
-fn show_default(default: Option<&'static str>) -> &'static str {
-    // Leak a one-time formatted string per default — small fixed set, lives for the
-    // program lifetime, so a 'static leak is acceptable and keeps the API simple
-    // (SettingItem::description takes &'static str).
+/// Description line showing the built-in default keystroke (or "(unbound)").
+fn show_default(default: Option<&str>) -> String {
     match default {
-        Some(d) => Box::leak(format!("Default: {d}").into_boxed_str()),
-        None => "Default: (unbound)",
+        Some(default) => format!("Default: {default}"),
+        None => "Default: (unbound)".to_owned(),
     }
 }
 
@@ -90,21 +91,26 @@ fn render_binding_row(
     _window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
-    let (capturing, eff, handle) = {
+    let (capturing, eff, handle, rejection) = {
         let state = KeyBindingsState::global(cx).read(cx);
         (
             state.capturing.as_deref() == Some(a.id),
             state.effective.get(a.id).cloned().unwrap_or_default(),
             state.capture_focus.clone(),
+            state.capture_rejection.clone(),
         )
     };
 
     if capturing {
-        let id = a.id;
+        // Keys are consumed by the interceptor installed in `on_edit`, which runs
+        // before key-binding dispatch; the element only carries the focus.
+        let prompt = match rejection {
+            Some(reason) => format!("{reason} — press another key (Esc to cancel)"),
+            None => "Press keys…  (Esc to cancel)".to_owned(),
+        };
         div()
             .id("kbd-capture")
             .track_focus(&handle)
-            .on_key_down(move |event: &KeyDownEvent, _window, cx| on_capture_key(id, event, cx))
             .w_full()
             .h_7()
             .flex()
@@ -114,7 +120,7 @@ fn render_binding_row(
             .border_1()
             .border_color(cx.theme().ring)
             .text_sm()
-            .child("Press keys…  (Esc to cancel)")
+            .child(prompt)
             .into_any_element()
     } else {
         let chip = binding_chip(&eff, cx);
@@ -122,7 +128,14 @@ fn render_binding_row(
             .w_full()
             .justify_between()
             .items_center()
-            .child(a.label)
+            .child(
+                v_flex().gap_0p5().child(a.label).child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(show_default(a.default)),
+                ),
+            )
             .child(
                 h_flex()
                     .gap_1()
@@ -169,13 +182,37 @@ fn dash_label(cx: &App) -> AnyElement {
 // ── Event handlers ───────────────────────────────────────────────────
 
 /// "Edit" clicked → enter capture mode + focus the capture element.
+///
+/// A keystroke interceptor consumes every key pressed while the capture element
+/// is focused. Interceptors run before gpui matches key bindings, so the pressed
+/// key can never fire an action registered in the settings window (CORR-56).
 fn on_edit(id: &'static str, window: &mut Window, cx: &mut App) {
     let handle = KeyBindingsState::global(cx).read(cx).capture_focus.clone();
+    let interceptor = cx.intercept_keystrokes(move |event, window, cx| {
+        let armed = {
+            let state = KeyBindingsState::global(cx).read(cx);
+            state.capturing.as_deref() == Some(id) && state.capture_focus.is_focused(window)
+        };
+        if !armed {
+            return;
+        }
+        on_capture_key(id, &event.keystroke, cx);
+        cx.stop_propagation();
+    });
     KeyBindingsState::global(cx).update(cx, |s, cx| {
         s.capturing = Some(id.to_string());
+        s.capture_rejection = None;
+        s.capture_interceptor = Some(interceptor);
         cx.notify();
     });
     handle.focus(window, cx);
+}
+
+/// Leave capture mode (drops the interceptor).
+fn end_capture(s: &mut KeyBindingsState) {
+    s.capturing = None;
+    s.capture_rejection = None;
+    s.capture_interceptor = None;
 }
 
 /// "Reset" clicked → restore the built-in default (or unbind), persist, re-apply.
@@ -188,7 +225,7 @@ fn on_reset(id: &'static str, cx: &mut App) {
         .unwrap_or_default();
     KeyBindingsState::global(cx).update(cx, |s, cx| {
         s.effective.insert(id.to_string(), default);
-        s.capturing = None;
+        end_capture(s);
         cx.notify();
     });
     save_key_bindings(cx);
@@ -196,12 +233,14 @@ fn on_reset(id: &'static str, cx: &mut App) {
 }
 
 /// A key was pressed while capturing → set it as the new binding (Escape cancels;
-/// bare modifiers are ignored; unparseable combinations are ignored).
-fn on_capture_key(id: &'static str, event: &KeyDownEvent, cx: &mut App) {
-    let ks = &event.keystroke;
+/// bare modifiers are ignored; unparseable combinations are ignored). A key
+/// already bound to another action in the same context is rejected and the row
+/// says which action holds it, so a rebind never silently shadows a binding
+/// (CORR-55).
+fn on_capture_key(id: &'static str, ks: &Keystroke, cx: &mut App) {
     if ks.key == "escape" {
         KeyBindingsState::global(cx).update(cx, |s, cx| {
-            s.capturing = None;
+            end_capture(s);
             cx.notify();
         });
         return;
@@ -210,14 +249,34 @@ fn on_capture_key(id: &'static str, event: &KeyDownEvent, cx: &mut App) {
         return;
     }
     let binding = keystroke_to_string(ks);
-    if gpui::Keystroke::parse(&binding).is_err() {
+    if Keystroke::parse(&binding).is_err() {
         return;
     }
-    KeyBindingsState::global(cx).update(cx, |s, cx| {
+    let state = KeyBindingsState::global(cx);
+    let conflict = conflicting_action(&state.read(cx).effective, id, &binding);
+    if let Some(other) = conflict {
+        state.update(cx, |s, cx| {
+            s.capture_rejection = Some(format!("{binding} is already used by {}", other.label));
+            cx.notify();
+        });
+        return;
+    }
+    state.update(cx, |s, cx| {
         s.effective.insert(id.to_string(), binding);
-        s.capturing = None;
+        end_capture(s);
         cx.notify();
     });
     save_key_bindings(cx);
     apply_key_bindings(cx);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_line_names_the_keystroke_or_unbound() {
+        assert_eq!(show_default(Some("ctrl-shift-t")), "Default: ctrl-shift-t");
+        assert_eq!(show_default(None), "Default: (unbound)");
+    }
 }

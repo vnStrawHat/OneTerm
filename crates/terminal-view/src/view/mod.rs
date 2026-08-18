@@ -1,20 +1,27 @@
 //! `LocalTerminalView` — the GPUI view that renders one terminal session
 //! (local or ssh), split across submodules by concern.
 //!
-//! - [`local_view`] — the view type, event loop, lifecycle, gutter timestamps
-//! - [`completion`] — auto-completion wiring (feeds the gpui-free controller)
-//! - [`cursor`], [`font`], [`grid`], [`key`] — small per-concern helpers
-//! - [`scrollbar_overlay`] — the custom scrollbar overlay
+//! - [`local_view`] — the view type, event loop, lifecycle
+//! - [`render`] — the `Render`/`Focusable` impls + overlays
+//! - [`search`], [`scrollbar`], [`gutter_timestamps`], [`completion`] — the
+//!   cohesive sub-states the view owns, each with its own methods
+//! - [`grid`], [`key`], [`ime`] — coordinate mapping, key mapping, IME
+//! - [`deps`] — the services the view receives from its panel
 
 mod local_view;
 
 pub(crate) mod completion;
-pub(crate) mod cursor;
-pub(crate) mod font;
+pub(crate) mod deps;
 pub(crate) mod grid;
+pub(crate) mod gutter_timestamps;
+mod ime;
 pub(crate) mod key;
-pub(crate) mod scrollbar_overlay;
+mod render;
+pub(crate) mod scrollbar;
+pub(crate) mod search;
 #[cfg(test)]
 mod tests;
 
-pub use local_view::{LocalTerminalView, TerminalViewEvent};
+pub(crate) use deps::TerminalDeps;
+pub(crate) use local_view::{LocalTerminalView, TerminalViewEvent};
+pub(crate) use search::SearchHighlight;

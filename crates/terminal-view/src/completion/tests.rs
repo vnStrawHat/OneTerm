@@ -2,20 +2,23 @@
 
 use oneterm_completion::{CompletionHistory, ShellFamily};
 use oneterm_core::ShellKind;
-use oneterm_settings::CompletionSettings;
+use oneterm_settings::{CompletionConfig, CompletionSources};
 
 use super::controller::{CompletionController, params_from_settings};
 
-fn settings() -> CompletionSettings {
-    CompletionSettings::default()
+fn settings() -> CompletionConfig {
+    CompletionConfig::default()
 }
 
-fn memory_only_settings() -> CompletionSettings {
-    CompletionSettings {
-        source_manual: false,
-        source_external: false,
+fn memory_only_settings() -> CompletionConfig {
+    CompletionConfig {
+        sources: CompletionSources {
+            memory: true,
+            manual: false,
+            external: false,
+        },
         fuzzy: false,
-        ..CompletionSettings::default()
+        ..CompletionConfig::default()
     }
 }
 

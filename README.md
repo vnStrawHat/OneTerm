@@ -97,6 +97,19 @@ OneTerm is a Terminal application for SSH/SFTP/Local Shell with a **Zed-style wo
 - Windows ConPTY is bundled; Unix local PTY compiles but is untested
 - Windows is the primary platform; Linux/macOS compile but are untested
 
+### 🔄 Auto-update
+
+- Checks GitHub Releases of this repository (release notes, asset selection per platform)
+- SHA-256-verified download, staged install with rollback, restart from the About page
+- Configurable in Settings (auto-check, proxy, certificate verification) — see
+  [`docs/auto-update.md`](docs/auto-update.md)
+
+### 🧯 Crash reporting
+
+- Rust panics and native crashes are captured into `crashes/*.crash.txt` under the config
+  directory (user paths redacted) and offered for review on the next start — see
+  [`docs/crash-reporting.md`](docs/crash-reporting.md)
+
 ### 🪟 Platform support
 
 - OneTerm is **developed and tested primarily on Windows** — that is the
@@ -115,8 +128,10 @@ QA pass. PRs improving Linux/macOS support are welcome.
 Requires: Rust toolchain (edition 2024).
 
 ```bash
-# Run the app (dev binary = oneterm-debug, keeps the console for logs)
+# Run the app (keeps the console for logs in debug builds)
 cargo run -p oneterm-app
+# Same, with OneTerm's hot-path crates optimized (full-screen TUIs stay smooth in a debug build)
+cargo run -p oneterm-app --profile fast-dev
 
 # Build the whole workspace
 cargo build --workspace
@@ -132,8 +147,8 @@ cargo test --workspace
 ### Debug logging and terminal diagnostics
 
 OneTerm uses `env_logger` and reads standard `RUST_LOG` directives. The normal development
-run uses the `oneterm-debug` binary and enables application DEBUG logs without enabling the
-extra terminal timing instrumentation.
+run enables application DEBUG logs without enabling the extra terminal timing
+instrumentation.
 
 PowerShell:
 
@@ -169,8 +184,10 @@ renderer latency reports and `[PTY pump]` lock timing reports. The renderer repo
 its first painted frame and then at most once every five seconds while frames are painted;
 the PTY pump reports over two-second sampling windows. These records use DEBUG logging, so
 `oneterm=debug` is sufficient. See
-[`docs/review/performance-benchmark.md`](docs/review/performance-benchmark.md) for the
-workload and measurement protocol.
+[`docs/terminal-fullscreen-perf/README.md`](docs/terminal-fullscreen-perf/README.md) for the
+full-screen rendering investigation. Standalone diagnostics (DOOM-fire workload, raw PTY
+throughput probe) live in `crates/tools`:
+`cargo run -p oneterm-tools --release --bin doom-fire`.
 
 ### Release build
 
@@ -186,22 +203,30 @@ pwsh scripts/build-release.ps1 -Target aarch64-pc-windows-msvc
 TARGET=aarch64-unknown-linux-gnu ./scripts/build-release.sh
 ```
 
-Packaged output lands in `dist/oneterm-<triple>/`:
-- **Windows** — `oneterm.exe` plus the runtime assets (`conpty.dll` + `x64/OpenConsole.exe`);
-  the exe has the app icon + version info embedded (build.rs).
+The same scripts run in the release workflow (`.github/workflows/release.yml`), so local
+and published packages are identical. Output lands in `dist/oneterm-<version>-<triple>/`
+plus `dist/oneterm-<version>-<triple>.{zip|tar.gz}` and a `.sha256` checksum (GitHub
+releases also publish a combined `SHA256SUMS`):
+- **Windows** — `oneterm.exe` plus the runtime assets (`conpty.dll` + `x64/OpenConsole.exe`,
+  from Windows Terminal — see [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)); the exe
+  has the app icon + version info embedded (build.rs).
 - **macOS** — `OneTerm.app` bundle (double-click to launch **without** an extra
   Terminal.app window). On macOS a raw GUI binary is treated as a CLI tool, so
   Finder opens Terminal.app to run it; packaging it inside a `.app` bundle with
   an `Info.plist` (`NSPrincipalClass=NSApplication`) makes LaunchServices launch
   it directly — the macOS analog of the Windows `windows_subsystem = "windows"`
-  fix. The `.icns` icon is generated best-effort from the Windows `.ico`.
-- **Linux** — `oneterm` plus optional `terminal.json` / `docks.json` defaults.
+  fix. The `.icns` icon is generated best-effort from the Windows `.ico`; the bundle
+  is ad-hoc signed (not notarised).
+- **Linux** — the `oneterm` binary. Configuration files are created in `~/.OneTerm/` on
+  first run; nothing else is shipped.
 
 ---
 
 ## 📚 Documentation
 
+- [`docs/README.md`](docs/README.md) — documentation index (current vs. archived)
 - [`AGENTS.md`](AGENTS.md) — developer & AI-agent guide
+- [`docs/architecture.md`](docs/architecture.md) — architecture index (crate map, service registration)
 - [`docs/agents/structure.md`](docs/agents/structure.md) — project structure & dependency graph
 - [`docs/agents/crate-dependency-rules.md`](docs/agents/crate-dependency-rules.md) — hard crate & dependency rules (R1–R12)
 - [`docs/agents/code-style.md`](docs/agents/code-style.md) — code conventions
@@ -210,6 +235,10 @@ Packaged output lands in `dist/oneterm-<triple>/`:
 - [`docs/terminal-split.md`](docs/terminal-split.md) — terminal split (Spaces) design
 - [`docs/ssh-client-connect.md`](docs/ssh-client-connect.md) — SSH connection / auth design
 - [`docs/sftp-browser-design.md`](docs/sftp-browser-design.md) — SFTP file browser design
-- [`docs/sftp-follow-terminal-cwd.md`](docs/sftp-follow-terminal-cwd.md) — SFTP-follows-terminal-CWD design
+- [`docs/sftp-follow-terminal-cwd/README.md`](docs/sftp-follow-terminal-cwd/README.md) — SFTP-follows-terminal-CWD design
 - [`docs/osc-agent-status.md`](docs/osc-agent-status.md) — OSC 9;7 agent status proposal/spec
 - [`docs/osc-sequences-checklist.md`](docs/osc-sequences-checklist.md) — OSC sequence support checklist
+- [`docs/auto-update.md`](docs/auto-update.md) — auto-update design
+- [`docs/crash-reporting.md`](docs/crash-reporting.md) — crash reporting and recovery
+- [`docs/auto-completion.md`](docs/auto-completion.md) — command auto-completion design
+- [`LICENSE`](LICENSE) (Apache-2.0) · [`NOTICE`](NOTICE) · [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)

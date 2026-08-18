@@ -1,7 +1,7 @@
 use gpui::{AppContext as _, TestAppContext, VisualTestContext};
 use oneterm_terminal::test_support::FakeTerminalSession;
 
-use super::LocalTerminalView;
+use super::{LocalTerminalView, TerminalDeps};
 
 #[gpui::test]
 fn completion_overlay_shows_when_typing_d_at_cmd_prompt(cx: &mut TestAppContext) {
@@ -17,7 +17,7 @@ fn completion_overlay_shows_when_typing_d_at_cmd_prompt(cx: &mut TestAppContext)
 
     let (view, cx) = cx.add_window_view(move |window, cx| {
         let session = cx.new(|_| session);
-        LocalTerminalView::new(session, window, cx)
+        LocalTerminalView::new(session, TerminalDeps::from_globals(cx), window, cx)
     });
     let cx: &mut VisualTestContext = cx;
     cx.run_until_parked();
@@ -28,6 +28,7 @@ fn completion_overlay_shows_when_typing_d_at_cmd_prompt(cx: &mut TestAppContext)
     let (visible, texts) = view.read_with(cx, |v, _| {
         let c = v
             .completion
+            .controller
             .as_ref()
             .expect("controller must be initialized");
         (
@@ -61,14 +62,16 @@ fn completion_resumes_after_initial_non_prompt_render(cx: &mut TestAppContext) {
     probe.set_cursor(0, 0);
     let (view, cx) = cx.add_window_view(move |window, cx| {
         let session = cx.new(|_| session);
-        LocalTerminalView::new(session, window, cx)
+        LocalTerminalView::new(session, TerminalDeps::from_globals(cx), window, cx)
     });
     let cx: &mut VisualTestContext = cx;
     cx.run_until_parked();
 
     // Frame 1: empty grid / no prompt → not visible (in_prompt_region → false).
     view.update(cx, |v, cx| v.update_completion(cx));
-    let visible1 = view.read_with(cx, |v, _| v.completion.as_ref().unwrap().is_visible());
+    let visible1 = view.read_with(cx, |v, _| {
+        v.completion.controller.as_ref().unwrap().is_visible()
+    });
     assert!(!visible1, "empty prompt must not show an overlay");
 
     // Frame 2: the prompt is drawn and the user typed `d`.
@@ -76,7 +79,9 @@ fn completion_resumes_after_initial_non_prompt_render(cx: &mut TestAppContext) {
     probe.set_text(prompt);
     probe.set_cursor(0, prompt.chars().count());
     view.update(cx, |v, cx| v.update_completion(cx));
-    let visible2 = view.read_with(cx, |v, _| v.completion.as_ref().unwrap().is_visible());
+    let visible2 = view.read_with(cx, |v, _| {
+        v.completion.controller.as_ref().unwrap().is_visible()
+    });
     assert!(
         visible2,
         "overlay must resume after an initial non-prompt render (pre-grid gate bug)"
@@ -96,7 +101,7 @@ fn phase0_renderer_baseline_counts_dirty_and_idle_frames(cx: &mut TestAppContext
     );
     let (view, cx) = cx.add_window_view(move |window, cx| {
         let session = cx.new(|_| session);
-        LocalTerminalView::new(session, window, cx)
+        LocalTerminalView::new(session, TerminalDeps::from_globals(cx), window, cx)
     });
     let cx: &mut VisualTestContext = cx;
 
@@ -110,7 +115,6 @@ fn phase0_renderer_baseline_counts_dirty_and_idle_frames(cx: &mut TestAppContext
     assert!(warm.frame_count >= 1);
     assert!(warm.total_lines > 0);
     assert!(warm.paint_quad_calls > 0);
-    assert!(warm.allocation_buffer_sites > 0);
 
     // ── Dirty frame: change the session text and immediately redraw ──
     // Don't run_until_parked between set_text and draw — the blink task could
@@ -133,7 +137,6 @@ fn phase0_renderer_baseline_counts_dirty_and_idle_frames(cx: &mut TestAppContext
         dirty
     );
     assert!(dirty.paint_quad_calls > 0);
-    assert!(dirty.allocation_buffer_sites > 0);
 
     // ── Idle frame: no content change, rows should be cached ──
     cx.update(|window, cx| {
@@ -149,7 +152,6 @@ fn phase0_renderer_baseline_counts_dirty_and_idle_frames(cx: &mut TestAppContext
     assert_eq!(idle.row_layout_calls, 0, "idle frame should not re-layout");
     assert_eq!(idle.shape_line_calls, 0, "idle frame should not re-shape");
     assert!(idle.paint_quad_calls > 0, "idle frame still paints quads");
-    assert!(idle.allocation_buffer_sites > 0);
 
     eprintln!("phase0_renderer_dirty={dirty:?}");
     eprintln!("phase0_renderer_idle={idle:?}");

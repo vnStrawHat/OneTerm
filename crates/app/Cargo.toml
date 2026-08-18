@@ -1,19 +1,15 @@
 [package]
 name = "oneterm-app"
 description = "Binary entry point for OneTerm."
-publish = false
+version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
 build = "build.rs"
-# Dev: cargo run → oneterm-debug (target/debug/oneterm-debug.exe)
-# Release: cargo build --release --no-default-features --features release-bin → oneterm (target/release/oneterm.exe)
-default-run = "oneterm-debug"
 
 [features]
-default = ["dev-bin"]
-# Bin target for dev build — filename has `-debug` suffix (e.g. oneterm-debug.exe).
-dev-bin = []
-# Bin target for release build — clean filename (oneterm.exe / oneterm).
-release-bin = []
 # Enable terminal render diagnostics across the terminal view + both backends.
 terminal-diagnostics = [
     "oneterm-terminal-view/terminal-diagnostics",
@@ -21,20 +17,14 @@ terminal-diagnostics = [
     "oneterm-ssh/terminal-diagnostics",
 ]
 
-# Shared logic — both bin shims call `oneterm_app::run()`.
+# Shared logic — the bin shim calls `oneterm_app::run()`.
 [lib]
 name = "oneterm_app"
 path = "src/lib.rs"
 
 [[bin]]
-name = "oneterm-debug"
-path = "src/bin/oneterm-debug.rs"
-required-features = ["dev-bin"]
-
-[[bin]]
 name = "oneterm"
 path = "src/bin/oneterm.rs"
-required-features = ["release-bin"]
 
 [lints]
 workspace = true
@@ -55,6 +45,8 @@ oneterm-sftp-ui.workspace = true
 oneterm-session-ui.workspace = true
 oneterm-settings-ui.workspace = true
 oneterm-agent-ui.workspace = true
+# Crash-report dialog derives the GitHub issue URL from the updater repository constant.
+oneterm-update.workspace = true
 
 gpui.workspace = true
 gpui_platform.workspace = true
@@ -71,12 +63,8 @@ sysinfo.workspace = true
 crash-handler.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = [
-    "Win32_System_Console",
-    "Win32_Foundation",
-    "Win32_Storage_FileSystem",
-] }
+windows-sys.workspace = true
 
 [target.'cfg(windows)'.build-dependencies]
-# Compile assets/oneterm.rc → embed app icon + version info into the exe (both oneterm-debug and oneterm).
-embed-resource = "3"
+# Compile assets/oneterm.rc → embed app icon + version info into the exe.
+embed-resource.workspace = true

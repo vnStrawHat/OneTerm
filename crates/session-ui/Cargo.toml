@@ -1,8 +1,12 @@
 [package]
 name = "oneterm-session-ui"
 description = "OneTerm session-management feature: the session tree panel, connect/quick-connect dialogs, and SSH session store."
-publish = false
+version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
 
 [lints]
 workspace = true
@@ -11,12 +15,13 @@ workspace = true
 oneterm-core.workspace = true
 oneterm-terminal.workspace = true
 oneterm-terminal-view.workspace = true
+oneterm-settings.workspace = true
 oneterm-state.workspace = true
+oneterm-theme.workspace = true
 oneterm-actions.workspace = true
 
 gpui.workspace = true
 gpui-component.workspace = true
-anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 log.workspace = true

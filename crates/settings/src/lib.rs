@@ -9,9 +9,10 @@ pub mod terminal_config;
 pub mod terminal_settings;
 pub mod ui_config;
 
-pub use terminal_config::{SemanticHighlightingMode, TabTitleMode, TerminalConfig};
+pub use terminal_config::{
+    CompletionConfig, CompletionSources, SemanticHighlightingMode, TabTitleMode, TerminalConfig,
+};
 pub use terminal_settings::{
-    ColorOverrides, CompletionSettings, TerminalBlink, TerminalCursorShape, TerminalPadding,
-    TerminalSettings,
+    ColorOverrides, TerminalBlink, TerminalCursorShape, TerminalPadding, TerminalSettings,
 };
 pub use ui_config::UiConfig;

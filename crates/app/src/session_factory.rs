@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use oneterm_core::{LocalShellConfig, Result, SshConfig};
-use oneterm_terminal::{PtySize, SessionFactory, TerminalSession};
+use oneterm_terminal::{PtySize, SessionFactory, TerminalSecurityPolicy, TerminalSession};
 
 /// App-owned factory that dispatches to the local + SSH backends.
 struct AppSessionFactory;
@@ -18,8 +18,9 @@ impl SessionFactory for AppSessionFactory {
         cfg: LocalShellConfig,
         size: PtySize,
         scrollback: usize,
+        security: TerminalSecurityPolicy,
     ) -> Result<Box<dyn TerminalSession>> {
-        oneterm_local_shell::LocalSession::spawn(cfg, size, scrollback)
+        oneterm_local_shell::LocalSession::spawn(cfg, size, scrollback, security)
             .map(|s| Box::new(s) as Box<dyn TerminalSession>)
     }
 
@@ -28,8 +29,9 @@ impl SessionFactory for AppSessionFactory {
         cfg: SshConfig,
         size: PtySize,
         scrollback: usize,
+        security: TerminalSecurityPolicy,
     ) -> Result<Box<dyn TerminalSession>> {
-        oneterm_ssh::connect(cfg, size, scrollback)
+        oneterm_ssh::connect(cfg, size, scrollback, security)
     }
 }
 

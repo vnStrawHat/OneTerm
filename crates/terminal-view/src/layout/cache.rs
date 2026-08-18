@@ -1,18 +1,15 @@
 //! Row layout cache update logic.
 
-use std::collections::HashSet;
-
 use alacritty_terminal::term::cell::Flags;
 use gpui::Font;
 
 use oneterm_highlight::Class;
 use oneterm_terminal::{IndexedCell, TermDamageInfo};
 
-use super::super::cell::line_hash;
 use super::super::highlight::SemanticOverlay;
 use super::super::theme::TerminalTheme;
 use super::super::url::url_masks_wrapped;
-use super::row::layout_row;
+use super::row::{layout_row, line_hash};
 use super::types::{RenderStyleKey, RowLayout, RowLayoutCache};
 
 /// Frame inputs for [`update_row_cache`] — the per-frame terminal grid state
@@ -46,8 +43,6 @@ pub(crate) fn update_row_cache(
     frame: &RowCacheFrame,
     style: &RowCacheStyle,
 ) {
-    use itertools::Itertools;
-
     let &RowCacheFrame {
         cells,
         damage,
@@ -76,81 +71,57 @@ pub(crate) fn update_row_cache(
 
     cache.ensure_size(num_lines);
 
-    let mut scroll_dirty: Vec<usize> = Vec::new();
-    if scroll_only {
-        if scroll_delta > 0 {
-            let delta = (scroll_delta as usize).min(num_lines);
-            if delta < num_lines {
-                cache.rows.rotate_right(delta);
-                scroll_dirty = (0..delta).collect();
-            } else {
-                scroll_dirty = (0..num_lines).collect();
-            }
-        } else if scroll_delta < 0 {
-            let delta = ((-scroll_delta) as usize).min(num_lines);
-            if delta < num_lines {
-                cache.rows.rotate_left(delta);
-                scroll_dirty = ((num_lines - delta)..num_lines).collect();
-            } else {
-                scroll_dirty = (0..num_lines).collect();
-            }
-        }
-    }
-
+    // Per-row dirty flags — a reusable bitset (PERF-10) instead of a fresh
+    // `HashSet<usize>` every frame.
     let full_dirty = global_invalidate || matches!(damage, TermDamageInfo::Full);
-    let dirty_set: HashSet<usize> = if full_dirty {
-        (0..num_lines).collect()
-    } else if scroll_only {
-        let mut ds: HashSet<usize> = scroll_dirty.into_iter().collect();
+    cache.dirty_rows.clear();
+    cache.dirty_rows.resize(num_lines, full_dirty);
+    if !full_dirty {
+        if scroll_only {
+            mark_scroll_dirty(
+                &mut cache.rows,
+                &mut cache.dirty_rows,
+                scroll_delta,
+                num_lines,
+            );
+        }
         if let TermDamageInfo::Partial(lines) = damage {
             for &l in lines.iter() {
                 if l < num_lines {
-                    ds.insert(l);
+                    cache.dirty_rows[l] = true;
                 }
             }
         }
-        ds
-    } else if let TermDamageInfo::Partial(lines) = damage {
-        lines.iter().copied().filter(|l| *l < num_lines).collect()
-    } else {
-        HashSet::new()
-    };
+    }
+    let dirty_count = cache.dirty_rows.iter().filter(|d| **d).count();
 
     cache.stats.total_lines = num_lines;
-    cache.stats.dirty_lines = dirty_set.len();
+    cache.stats.dirty_lines = dirty_count;
     cache.stats.hash_calls = 0;
     cache.stats.row_layout_calls = 0;
-    cache.stats.allocation_buffer_sites = if num_lines == 0 {
-        0
-    } else {
-        // `url_masks_wrapped`: masks + wrap flags + chars/mask per row.
-        2 + 2 * num_lines
-    };
-    if !dirty_set.is_empty() {
-        // The dirty-row HashSet.
-        cache.stats.allocation_buffer_sites += 1;
-    }
-
     // Pre-compute URL masks for all lines (handles wrapped URLs).
     // PERF-09: Skip recomputation when no rows are dirty (idle terminal) —
     // reuse cached masks from the last frame with dirty rows.
     let num_cols = grid_size.1 as usize;
-    if !dirty_set.is_empty() {
+    if dirty_count > 0 {
         cache.cached_url_masks = url_masks_wrapped(cells, num_lines, num_cols);
     }
     let url_masks = &cache.cached_url_masks;
 
-    let linegroups = cells.iter().chunk_by(|ic| ic.point.line);
-    for (display_line, (_, line_cells)) in linegroups.into_iter().enumerate() {
+    // One scratch buffer for the cells of the current row, reused across rows
+    // (PERF-10: no `Vec<&IndexedCell>` per line per frame).
+    let mut line_vec: Vec<&IndexedCell> = Vec::with_capacity(num_cols);
+    for (display_line, line_cells) in cells
+        .chunk_by(|a, b| a.point.line == b.point.line)
+        .enumerate()
+    {
         if display_line >= num_lines {
             break;
         }
-        let line_vec: Vec<&IndexedCell> = line_cells.collect();
-        if !line_vec.is_empty() {
-            cache.stats.allocation_buffer_sites += 1;
-        }
+        line_vec.clear();
+        line_vec.extend(line_cells);
 
-        let is_dirty = if dirty_set.contains(&display_line) {
+        let is_dirty = if cache.dirty_rows[display_line] {
             true
         } else if display_line as i32 == cursor_display_line
             && cursor_display_line >= 0
@@ -165,8 +136,6 @@ pub(crate) fn update_row_cache(
 
         if is_dirty {
             cache.stats.row_layout_calls += 1;
-            // Cell classes, text/column maps, and row artifact scratch buffers.
-            cache.stats.allocation_buffer_sites += 7;
             let new_hash = line_hash(&line_vec);
             let url_mask = url_masks
                 .get(display_line)
@@ -178,7 +147,13 @@ pub(crate) fn update_row_cache(
             // scan it, flatten to per-column cell_class, then overlay URL mask.
             let cell_class = build_cell_class(&line_vec, num_cols, url_mask, overlay, display_line);
 
-            let layout = layout_row(line_vec, display_line as i32, theme, base_font, &cell_class);
+            let layout = layout_row(
+                &line_vec,
+                display_line as i32,
+                theme,
+                base_font,
+                &cell_class,
+            );
 
             cache.rows[display_line] = RowLayout {
                 rects: layout.rects,
@@ -192,7 +167,38 @@ pub(crate) fn update_row_cache(
 
     cache.prev_grid_size = Some(grid_size);
     cache.prev_display_offset = display_offset;
-    cache.prev_style_key = Some(style_key.clone());
+    // Only clone the key (a `Font` + palette) when it actually changed.
+    if style_changed {
+        cache.prev_style_key = Some(style_key.clone());
+    }
+}
+
+/// Rotate the cached rows for a scroll-only frame and mark the rows that
+/// scrolled into view dirty. A scroll by a whole viewport (or more) leaves
+/// nothing to reuse.
+fn mark_scroll_dirty(
+    rows: &mut [RowLayout],
+    dirty: &mut [bool],
+    scroll_delta: i32,
+    num_lines: usize,
+) {
+    if scroll_delta > 0 {
+        let delta = (scroll_delta as usize).min(num_lines);
+        if delta < num_lines {
+            rows.rotate_right(delta);
+            dirty[..delta].fill(true);
+        } else {
+            dirty.fill(true);
+        }
+    } else if scroll_delta < 0 {
+        let delta = ((-scroll_delta) as usize).min(num_lines);
+        if delta < num_lines {
+            rows.rotate_left(delta);
+            dirty[num_lines - delta..].fill(true);
+        } else {
+            dirty.fill(true);
+        }
+    }
 }
 
 /// Build the per-column `cell_class` array for one display row.
@@ -322,6 +328,137 @@ mod tests {
                 overlay,
             },
         );
+    }
+
+    fn text_cells(lines: &[&str]) -> Vec<IndexedCell> {
+        use alacritty_terminal::index::{Column, Line, Point};
+        use alacritty_terminal::term::cell::Cell;
+
+        let mut cells = Vec::new();
+        for (row, text) in lines.iter().enumerate() {
+            for (col, c) in text.chars().enumerate() {
+                let mut cell = Cell::default();
+                cell.c = c;
+                cells.push(IndexedCell {
+                    point: Point::new(Line(row as i32), Column(col)),
+                    cell,
+                });
+            }
+        }
+        cells
+    }
+
+    fn row_text(cache: &RowLayoutCache, row: usize) -> String {
+        cache.rows[row]
+            .runs
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect()
+    }
+
+    /// Scrolling up by one line with only `Partial([])` damage rotates the
+    /// cached rows down and re-lays out only the row that scrolled in.
+    #[test]
+    fn scroll_only_rotates_rows_and_relayouts_the_new_row() {
+        let mut cache = RowLayoutCache::new();
+        let theme = build_terminal_theme(&Theme::default());
+        let font = test_font();
+        let key = test_style_key("monospace", theme.palette);
+        let overlay = test_overlay();
+        let style = RowCacheStyle {
+            theme: &theme,
+            base_font: &font,
+            style_key: &key,
+            overlay: &overlay,
+        };
+
+        let first = text_cells(&["aaa", "bbb", "ccc"]);
+        update_row_cache(
+            &mut cache,
+            &RowCacheFrame {
+                cells: &first,
+                damage: &TermDamageInfo::Full,
+                num_lines: 3,
+                display_offset: 0,
+                grid_size: (3, 80),
+                cursor_display_line: -1,
+            },
+            &style,
+        );
+        assert_eq!(cache.stats.row_layout_calls, 3);
+
+        // Scroll up one line: "zzz" scrolls in at the top, "ccc" scrolls off.
+        let second = text_cells(&["zzz", "aaa", "bbb"]);
+        update_row_cache(
+            &mut cache,
+            &RowCacheFrame {
+                cells: &second,
+                damage: &TermDamageInfo::Partial(vec![]),
+                num_lines: 3,
+                display_offset: 1,
+                grid_size: (3, 80),
+                cursor_display_line: -1,
+            },
+            &style,
+        );
+        assert_eq!(cache.stats.dirty_lines, 1);
+        assert_eq!(cache.stats.row_layout_calls, 1);
+        assert_eq!(row_text(&cache, 0), "zzz");
+        assert_eq!(row_text(&cache, 1), "aaa");
+        assert_eq!(row_text(&cache, 2), "bbb");
+
+        // Scroll back down: rows rotate up and only the bottom row is rebuilt.
+        let third = text_cells(&["aaa", "bbb", "ccc"]);
+        update_row_cache(
+            &mut cache,
+            &RowCacheFrame {
+                cells: &third,
+                damage: &TermDamageInfo::Partial(vec![]),
+                num_lines: 3,
+                display_offset: 0,
+                grid_size: (3, 80),
+                cursor_display_line: -1,
+            },
+            &style,
+        );
+        assert_eq!(cache.stats.row_layout_calls, 1);
+        assert_eq!(row_text(&cache, 2), "ccc");
+    }
+
+    /// Scrolling by a whole viewport (or more) leaves nothing to rotate.
+    #[test]
+    fn scroll_by_a_full_viewport_dirties_every_row() {
+        let mut cache = RowLayoutCache::new();
+        let theme = build_terminal_theme(&Theme::default());
+        let font = test_font();
+        let key = test_style_key("monospace", theme.palette);
+        let overlay = test_overlay();
+        let style = RowCacheStyle {
+            theme: &theme,
+            base_font: &font,
+            style_key: &key,
+            overlay: &overlay,
+        };
+        let cells = text_cells(&["aaa", "bbb", "ccc"]);
+        for (offset, damage) in [
+            (0, TermDamageInfo::Full),
+            (3, TermDamageInfo::Partial(vec![])),
+        ] {
+            update_row_cache(
+                &mut cache,
+                &RowCacheFrame {
+                    cells: &cells,
+                    damage: &damage,
+                    num_lines: 3,
+                    display_offset: offset,
+                    grid_size: (3, 80),
+                    cursor_display_line: -1,
+                },
+                &style,
+            );
+        }
+        assert_eq!(cache.stats.dirty_lines, 3);
+        assert_eq!(cache.stats.row_layout_calls, 3);
     }
 
     /// Same style key + Partial([]) damage → 0 dirty lines (cache hit).
