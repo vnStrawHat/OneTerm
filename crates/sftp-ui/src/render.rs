@@ -19,6 +19,10 @@ use gpui_component::{
     table::DataTable,
     v_flex,
 };
+use oneterm_actions::{
+    SftpDelete, SftpDownload, SftpNewFolder, SftpOpen, SftpProperties, SftpRefresh, SftpRename,
+    SftpUploadFiles, SftpUploadFolder,
+};
 use oneterm_theme::icon::AppIcon;
 use oneterm_theme::notif_ext::notify;
 
@@ -51,15 +55,22 @@ impl Render for SftpPanel {
             .size_full()
             .track_focus(self.panel_focus_handle())
             // SFTP context-menu action handlers — also fired by global key bindings.
-            .on_action(cx.listener(Self::on_action_sftp_open))
-            .on_action(cx.listener(Self::on_action_sftp_download))
-            .on_action(cx.listener(Self::on_action_sftp_rename))
-            .on_action(cx.listener(Self::on_action_sftp_delete))
-            .on_action(cx.listener(Self::on_action_sftp_properties))
-            .on_action(cx.listener(Self::on_action_sftp_upload_files))
-            .on_action(cx.listener(Self::on_action_sftp_upload_folder))
-            .on_action(cx.listener(Self::on_action_sftp_new_folder))
-            .on_action(cx.listener(Self::on_action_sftp_refresh))
+            .on_action(cx.listener(|this, _: &SftpOpen, w, cx| {
+                // Open = navigate into a directory, download a file.
+                match (this.browser().selected(), this.selected_entry(cx)) {
+                    (Some(ix), Some(entry)) if entry.is_dir => this.navigate_into(ix, cx),
+                    (Some(_), Some(_)) => this.do_download(w, cx),
+                    _ => {}
+                }
+            }))
+            .on_action(cx.listener(|this, _: &SftpDownload, w, cx| this.do_download(w, cx)))
+            .on_action(cx.listener(|this, _: &SftpRename, w, cx| this.do_rename(w, cx)))
+            .on_action(cx.listener(|this, _: &SftpDelete, w, cx| this.do_delete(w, cx)))
+            .on_action(cx.listener(|this, _: &SftpProperties, w, cx| this.do_properties(w, cx)))
+            .on_action(cx.listener(|this, _: &SftpUploadFiles, w, cx| this.do_upload(false, w, cx)))
+            .on_action(cx.listener(|this, _: &SftpUploadFolder, w, cx| this.do_upload(true, w, cx)))
+            .on_action(cx.listener(|this, _: &SftpNewFolder, w, cx| this.do_new_folder(w, cx)))
+            .on_action(cx.listener(|this, _: &SftpRefresh, _, cx| this.refresh(cx)))
             .bg(theme.background)
             .child(self.render_toolbar(window, cx))
             .child(self.render_file_list(cx))

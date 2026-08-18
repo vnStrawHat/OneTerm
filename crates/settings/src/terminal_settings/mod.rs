@@ -15,6 +15,6 @@ mod settings;
 pub use color::{hsla_to_hex, parse_hex_color};
 pub use font::parse_weight;
 pub use settings::{
-    ColorOverrides, CompletionSettings, TerminalBlink, TerminalCursorShape, TerminalPadding,
-    TerminalSettings, TerminalSettingsGlobal,
+    ColorOverrides, TerminalBlink, TerminalCursorShape, TerminalPadding, TerminalSettings,
+    TerminalSettingsGlobal,
 };

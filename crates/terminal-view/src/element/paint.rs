@@ -245,7 +245,7 @@ impl super::TerminalElement {
                 if should_report {
                     cache.diagnostics_last_report = Some(now);
                     log::debug!(
-                        "[TerminalElement] frame={} lines={} dirty={} row_layouts={} quads={} bg_rects={} shapes={} runs={} hashes={} alloc_sites={} info_us={} snapshot_us={} prepaint_us={} paint_us={} | snapshot p95={}us p99={}us | frame p95={}us p99={}us samples={}",
+                        "[TerminalElement] frame={} lines={} dirty={} row_layouts={} quads={} bg_rects={} shapes={} runs={} hashes={} info_us={} snapshot_us={} prepaint_us={} paint_us={} | snapshot p95={}us p99={}us | frame p95={}us p99={}us samples={}",
                         cache.stats.frame_count,
                         cache.stats.total_lines,
                         cache.stats.dirty_lines,
@@ -255,7 +255,6 @@ impl super::TerminalElement {
                         cache.stats.shape_line_calls,
                         cache.stats.text_run_paints,
                         cache.stats.hash_calls,
-                        cache.stats.allocation_buffer_sites,
                         cache.stats.terminal_info_us,
                         cache.stats.snapshot_us,
                         cache.stats.prepaint_us,

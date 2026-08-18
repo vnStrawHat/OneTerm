@@ -14,13 +14,11 @@ use gpui::{App, FontWeight, Hsla};
 use oneterm_core::AppError;
 
 use crate::terminal_config::{
-    BellConfig, ColorsConfig, CompletionConfig, CompletionSources, CursorConfig, FontConfig,
-    LayoutConfig, MouseConfig, PaddingConfig, ScrollConfig, SecurityConfig, TerminalConfig,
+    BellConfig, ColorsConfig, CursorConfig, FontConfig, LayoutConfig, MouseConfig, PaddingConfig,
+    ScrollConfig, SecurityConfig, TerminalConfig,
 };
 
-use super::{
-    CompletionSettings, TerminalBlink, TerminalCursorShape, TerminalSettings, hsla_to_hex,
-};
+use super::{TerminalBlink, TerminalCursorShape, TerminalSettings, hsla_to_hex};
 
 // Roundtrip tests live in a sibling `persist_tests.rs` (same convention as
 // `terminal_config/document_tests.rs`).
@@ -58,32 +56,6 @@ fn shape_to_string(s: TerminalCursorShape) -> &'static str {
 /// Serialize an optional `Hsla` override into a `"#RRGGBB"` string (or `None`).
 fn color_to_hex(c: Option<Hsla>) -> Option<String> {
     c.map(hsla_to_hex)
-}
-
-impl CompletionSettings {
-    /// Build the `completion` config group from the live settings (inverse of
-    /// [`CompletionSettings::from_config`]).
-    pub fn to_config(&self) -> CompletionConfig {
-        CompletionConfig {
-            enabled: self.enabled,
-            accept_tab: self.accept_tab,
-            max_history: self.max_history,
-            min_prefix_len: self.min_prefix_len,
-            max_visible_items: self.max_visible_items,
-            sources: CompletionSources {
-                memory: self.source_memory,
-                manual: self.source_manual,
-                external: self.source_external,
-            },
-            fuzzy: self.fuzzy,
-            inherit_ancestor_options: self.inherit_ancestor_options,
-            disable_in_alt_screen: self.disable_in_alt_screen,
-            require_prompt_region: self.require_prompt_region,
-            windows_allow_coreutils: self.windows_allow_coreutils,
-            force_family: self.force_family.clone(),
-            redact_sensitive: self.redact_sensitive,
-        }
-    }
 }
 
 impl TerminalSettings {
@@ -138,7 +110,7 @@ impl TerminalSettings {
             security: SecurityConfig {
                 allow_clipboard_read: self.allow_clipboard_read,
             },
-            completion: self.completion.to_config(),
+            completion: self.completion.clone(),
             colors: ColorsConfig {
                 foreground: color_to_hex(co.foreground),
                 background: color_to_hex(co.background),

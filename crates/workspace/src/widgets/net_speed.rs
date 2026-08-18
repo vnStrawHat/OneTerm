@@ -1,145 +1,67 @@
-//! [`NetSpeedIndicator`] — displays the network speed of the active SSH session.
+//! Network speed of the active SSH session, shown in the StatusBar.
 //!
-//! Like `DateTimeClock`: `Entity` + `Render` + `Focusable`, updated every 1s
-//! via a timer. The timer spawns on the window context (`cx.spawn_in`) to fire reliably.
+//! Each 1s tick reads `network_stats()` (rx/tx bytes) from the active terminal
+//! panel and computes the delta against the previous tick → speed in bps.
 //!
-//! Each tick:
-//! 1. Find the active terminal panel in the DockArea (via `collect_tab_panels`).
-//! 2. Downcast `AnyView` → `Entity<TerminalPanel>`.
-//! 3. Read `network_stats()` (rx/tx bytes) from the session.
-//! 4. Compute the delta against the previous tick → speed in bps (bits/s).
-//!
-//! Download (↓ rx) and upload (↑ tx) are shown separately, with auto-scaled units:
-//! bps → Kbps → Mbps → Gbps.
-//!
-//! Only shown for SSH sessions (local returns `None` → indicator hidden).
+//! Download (↓ rx) and upload (↑ tx) are shown separately, with auto-scaled
+//! units: bps → Kbps → Mbps → Gbps. Only shown for SSH sessions (local returns
+//! `None` → indicator hidden).
 
 use std::time::Duration;
 
-use gpui::{
-    App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
-    IntoElement, ParentElement, Render, Styled, Task, WeakEntity, Window, div,
-};
-use gpui_component::ActiveTheme as _;
+use gpui::{App, Entity, WeakEntity, Window};
 use gpui_component::dock::DockArea;
 use oneterm_terminal::NetStats;
 
-/// Indicator showing the network speed (bps) of the active SSH session in the StatusBar.
-pub struct NetSpeedIndicator {
-    focus_handle: FocusHandle,
+use super::status_text::StatusText;
+
+/// Indicator showing the network speed (bps) of the active SSH session.
+pub fn net_speed(
     dock_area: WeakEntity<DockArea>,
-    /// Stats from the previous sample — used to compute the delta.
-    last_stats: Option<NetStats>,
-    /// Current download (rx) speed — bits/s.
-    rx_bps: f64,
-    /// Current upload (tx) speed — bits/s.
-    tx_bps: f64,
-    /// Whether the indicator is shown (active panel is an SSH terminal).
-    visible: bool,
-    _timer: Task<()>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<StatusText> {
+    let mut last_stats: Option<NetStats> = None;
+    StatusText::new_entity(
+        "net-speed",
+        Duration::from_secs(1),
+        false,
+        Box::new(move |cx| {
+            let dock_area = dock_area.upgrade();
+            let stats =
+                dock_area.and_then(|area| oneterm_state::active_terminal::net_stats(&area, cx));
+            let (rx_bps, tx_bps) = sample(&mut last_stats, stats)?;
+            Some(format!(
+                "↓ {}  ↑ {}",
+                format_speed(rx_bps),
+                format_speed(tx_bps)
+            ))
+        }),
+        window,
+        cx,
+    )
 }
 
-impl NetSpeedIndicator {
-    /// Create a new indicator and start the 1s timer.
-    pub fn new(
-        dock_area: WeakEntity<DockArea>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let focus_handle = cx.focus_handle();
-        let timer = cx.spawn_in(window, async move |this, window| {
-            loop {
-                window
-                    .background_executor()
-                    .timer(Duration::from_secs(1))
-                    .await;
-                // The window or the indicator is gone: stop ticking.
-                if this.update_in(window, |this, _, cx| this.tick(cx)).is_err() {
-                    break;
-                }
-            }
-        });
-        Self {
-            focus_handle,
-            dock_area,
-            last_stats: None,
-            rx_bps: 0.0,
-            tx_bps: 0.0,
-            visible: false,
-            _timer: timer,
+/// Fold one sample into the delta state; `None` means "no active SSH terminal".
+fn sample(last_stats: &mut Option<NetStats>, stats: Option<NetStats>) -> Option<(f64, f64)> {
+    match (stats, *last_stats) {
+        (Some(curr), Some(prev)) => {
+            // Delta — if the counter dropped (session changed) → saturating_sub = 0.
+            let drx = curr.rx_bytes.saturating_sub(prev.rx_bytes);
+            let dtx = curr.tx_bytes.saturating_sub(prev.tx_bytes);
+            *last_stats = Some(curr);
+            // bytes/s → bits/s: × 8.
+            Some((drx as f64 * 8.0, dtx as f64 * 8.0))
         }
-    }
-
-    /// Helper to create an `Entity<Self>`.
-    pub fn new_entity(
-        dock_area: WeakEntity<DockArea>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Entity<Self> {
-        cx.new(|cx| Self::new(dock_area, window, cx))
-    }
-
-    /// Sample network stats from the active terminal panel and compute the speed.
-    fn tick(&mut self, cx: &mut Context<Self>) {
-        let dock_area = match self.dock_area.upgrade() {
-            Some(da) => da,
-            None => {
-                if self.visible {
-                    self.visible = false;
-                    cx.notify();
-                }
-                return;
-            }
-        };
-
-        let stats = oneterm_state::active_terminal::net_stats(&dock_area, cx);
-        let (visible, rx_bps, tx_bps) = self.sample(stats);
-
-        // Re-render only when what is shown would change (PERF-29): a hidden
-        // indicator has nothing to repaint, and an idle link keeps its label.
-        let changed = visible != self.visible
-            || (visible && (rx_bps != self.rx_bps || tx_bps != self.tx_bps));
-        self.visible = visible;
-        self.rx_bps = rx_bps;
-        self.tx_bps = tx_bps;
-        if changed {
-            cx.notify();
+        (Some(curr), None) => {
+            // First sample — no delta yet, just store it for the next tick.
+            *last_stats = Some(curr);
+            Some((0.0, 0.0))
         }
-    }
-
-    /// Fold one sample into the delta state; returns `(visible, rx_bps, tx_bps)`.
-    fn sample(&mut self, stats: Option<NetStats>) -> (bool, f64, f64) {
-        match (stats, self.last_stats) {
-            (Some(curr), Some(prev)) => {
-                // Compute delta — if the counter dropped (session changed) → saturating_sub = 0.
-                let drx = curr.rx_bytes.saturating_sub(prev.rx_bytes);
-                let dtx = curr.tx_bytes.saturating_sub(prev.tx_bytes);
-                self.last_stats = Some(curr);
-                // bytes/s → bits/s: × 8.
-                (true, drx as f64 * 8.0, dtx as f64 * 8.0)
-            }
-            (Some(curr), None) => {
-                // First sample — no delta yet, just store it for the next tick.
-                self.last_stats = Some(curr);
-                (true, 0.0, 0.0)
-            }
-            (None, _) => {
-                // No active SSH terminal → hide.
-                self.last_stats = None;
-                (false, 0.0, 0.0)
-            }
+        (None, _) => {
+            *last_stats = None;
+            None
         }
-    }
-
-    /// Format the speed: `↓ 1.2 Kbps  ↑ 300 bps`.
-    ///
-    /// Download (↓) and upload (↑) have separate, auto-scaled units.
-    fn formatted(&self) -> String {
-        format!(
-            "↓ {}  ↑ {}",
-            format_speed(self.rx_bps),
-            format_speed(self.tx_bps)
-        )
     }
 }
 
@@ -159,30 +81,9 @@ fn format_speed(bps: f64) -> String {
     }
 }
 
-impl Focusable for NetSpeedIndicator {
-    fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.focus_handle.clone()
-    }
-}
-
-impl Render for NetSpeedIndicator {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.visible {
-            // Hidden completely when no SSH session is active.
-            return div().id("net-speed");
-        }
-
-        div()
-            .id("net-speed")
-            .track_focus(&self.focus_handle)
-            .child(self.formatted())
-            .text_color(cx.theme().muted_foreground)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::format_speed;
+    use super::*;
 
     #[test]
     fn format_speed_scales_units_at_decimal_thresholds() {
@@ -194,5 +95,22 @@ mod tests {
         assert_eq!(format_speed(999_950_000.0), "1000.0 Mbps");
         assert_eq!(format_speed(1_000_000_000.0), "1.00 Gbps");
         assert_eq!(format_speed(2_500_000_000.0), "2.50 Gbps");
+    }
+
+    #[test]
+    fn sample_needs_two_readings_and_resets_when_the_session_goes_away() {
+        let stats = |rx, tx| {
+            Some(NetStats {
+                rx_bytes: rx,
+                tx_bytes: tx,
+            })
+        };
+        let mut last = None;
+        assert_eq!(sample(&mut last, stats(100, 10)), Some((0.0, 0.0)));
+        assert_eq!(sample(&mut last, stats(200, 20)), Some((800.0, 80.0)));
+        // Counter dropped (session changed) → saturating_sub yields 0.
+        assert_eq!(sample(&mut last, stats(50, 5)), Some((0.0, 0.0)));
+        assert_eq!(sample(&mut last, None), None);
+        assert!(last.is_none());
     }
 }

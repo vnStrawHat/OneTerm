@@ -237,7 +237,7 @@ impl LocalTerminalView {
         self.ensure_completion(cx);
 
         // Sync settings + master-enable gate. The settings are borrowed for
-        // the sync — no per-frame clone of `CompletionSettings` (PERF-05).
+        // the sync — no per-frame clone of `CompletionConfig` (PERF-05).
         {
             let settings_entity = self.deps.settings.clone();
             let settings = settings_entity.read(cx);

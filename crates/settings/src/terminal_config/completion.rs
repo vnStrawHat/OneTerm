@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Per-source enable toggles (docs 06 §2).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompletionSources {
     /// In-session command history (`memory` source).
     #[serde(default = "default_true")]
@@ -33,7 +33,7 @@ impl Default for CompletionSources {
 }
 
 /// The `completion` config group.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompletionConfig {
     /// Master on/off for auto-completion.
     #[serde(default = "default_true")]

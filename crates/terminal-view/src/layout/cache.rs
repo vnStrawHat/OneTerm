@@ -43,8 +43,6 @@ pub(crate) fn update_row_cache(
     frame: &RowCacheFrame,
     style: &RowCacheStyle,
 ) {
-    use itertools::Itertools;
-
     let &RowCacheFrame {
         cells,
         damage,
@@ -101,16 +99,6 @@ pub(crate) fn update_row_cache(
     cache.stats.dirty_lines = dirty_count;
     cache.stats.hash_calls = 0;
     cache.stats.row_layout_calls = 0;
-    cache.stats.allocation_buffer_sites = if num_lines == 0 {
-        0
-    } else if dirty_count == 0 {
-        // Only the per-frame row scratch buffer.
-        1
-    } else {
-        // Row scratch + `url_masks_wrapped`: masks + wrap flags + chars/mask per row.
-        1 + 2 + 2 * num_lines
-    };
-
     // Pre-compute URL masks for all lines (handles wrapped URLs).
     // PERF-09: Skip recomputation when no rows are dirty (idle terminal) —
     // reuse cached masks from the last frame with dirty rows.
@@ -123,8 +111,10 @@ pub(crate) fn update_row_cache(
     // One scratch buffer for the cells of the current row, reused across rows
     // (PERF-10: no `Vec<&IndexedCell>` per line per frame).
     let mut line_vec: Vec<&IndexedCell> = Vec::with_capacity(num_cols);
-    let linegroups = cells.iter().chunk_by(|ic| ic.point.line);
-    for (display_line, (_, line_cells)) in linegroups.into_iter().enumerate() {
+    for (display_line, line_cells) in cells
+        .chunk_by(|a, b| a.point.line == b.point.line)
+        .enumerate()
+    {
         if display_line >= num_lines {
             break;
         }
@@ -146,8 +136,6 @@ pub(crate) fn update_row_cache(
 
         if is_dirty {
             cache.stats.row_layout_calls += 1;
-            // Cell classes, text/column maps, and row artifact scratch buffers.
-            cache.stats.allocation_buffer_sites += 7;
             let new_hash = line_hash(&line_vec);
             let url_mask = url_masks
                 .get(display_line)

@@ -5,10 +5,9 @@
 //! the `AppIcon` icon enum generated from `assets/icons/*.svg` (via `build.rs` +
 //! the `icon_named!` macro). `UiAssets` serves those SVGs to GPUI.
 
-pub mod brand;
 pub mod icon;
 pub mod notif_ext;
 pub mod theme;
 
 pub use icon::{AppIcon, UiAssets};
-pub use theme::{apply_list_style_override, init};
+pub use theme::{apply_list_style_override, brand_accent, init};

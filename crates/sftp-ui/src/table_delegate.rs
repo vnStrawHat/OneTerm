@@ -22,8 +22,8 @@ use oneterm_theme::icon::AppIcon;
 
 use super::panel::SftpPanel;
 use super::types::{
-    SftpColumnConfig, SortColumn, SortDir, format_date, format_owner, format_permissions,
-    format_size, sort_dir_to_column_sort, sort_entries,
+    COLUMN_MAX_WIDTH, COLUMN_MIN_WIDTH, SftpColumnConfig, SortColumn, SortDir, format_date,
+    format_owner, format_permissions, format_size, sort_dir_to_column_sort, sort_entries,
 };
 
 /// Indices into `col_configs` of the currently visible columns (display order).
@@ -83,12 +83,12 @@ impl SftpTableDelegate {
             state.column_visibility.len()
         );
         for cfg in &mut self.col_configs {
-            if let Some(&w) = state.column_widths.get(cfg.key) {
-                if w >= cfg.min_width && w <= cfg.max_width {
+            if let Some(&w) = state.column_widths.get(cfg.col.key()) {
+                if w >= COLUMN_MIN_WIDTH && w <= COLUMN_MAX_WIDTH {
                     cfg.width = w;
                 }
             }
-            if let Some(&visible) = state.column_visibility.get(cfg.key) {
+            if let Some(&visible) = state.column_visibility.get(cfg.col.key()) {
                 // Name is always visible — ignore hidden for Name.
                 cfg.visible = visible || cfg.col == SortColumn::Name;
             }
@@ -101,8 +101,8 @@ impl SftpTableDelegate {
         let mut column_widths = HashMap::new();
         let mut column_visibility = HashMap::new();
         for cfg in &self.col_configs {
-            column_widths.insert(cfg.key.to_string(), cfg.width);
-            column_visibility.insert(cfg.key.to_string(), cfg.visible);
+            column_widths.insert(cfg.col.key().to_string(), cfg.width);
+            column_visibility.insert(cfg.col.key().to_string(), cfg.visible);
         }
         SftpTableState {
             column_widths,
@@ -116,7 +116,7 @@ impl SftpTableDelegate {
         for (vis_ix, w) in widths.iter().enumerate() {
             if let Some(&cfg_ix) = self.visible_indices.get(vis_ix) {
                 let cfg = &mut self.col_configs[cfg_ix];
-                cfg.width = w.as_f32().clamp(cfg.min_width, cfg.max_width);
+                cfg.width = w.as_f32().clamp(COLUMN_MIN_WIDTH, COLUMN_MAX_WIDTH);
             }
         }
     }
@@ -193,10 +193,10 @@ impl TableDelegate for SftpTableDelegate {
             return Column::new(format!("col-{col_ix}"), "");
         };
 
-        let mut col = Column::new(cfg.key, cfg.label)
+        let mut col = Column::new(cfg.col.key(), cfg.label)
             .width(cfg.width)
-            .min_width(cfg.min_width)
-            .max_width(cfg.max_width)
+            .min_width(COLUMN_MIN_WIDTH)
+            .max_width(COLUMN_MAX_WIDTH)
             .resizable(true)
             .movable(false)
             .sortable();
@@ -451,7 +451,7 @@ mod tests {
             .col_configs
             .iter()
             .filter(|c| c.visible)
-            .map(|c| c.key)
+            .map(|c| c.col.key())
             .collect()
     }
 
@@ -473,7 +473,7 @@ mod tests {
             delegate
                 .col_configs
                 .iter()
-                .find(|c| c.key == key)
+                .find(|c| c.col.key() == key)
                 .map(|c| c.width)
                 .unwrap()
         };
@@ -511,7 +511,7 @@ mod tests {
             delegate
                 .col_configs
                 .iter()
-                .find(|c| c.key == key)
+                .find(|c| c.col.key() == key)
                 .map(|c| c.width)
                 .unwrap()
         };

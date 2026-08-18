@@ -1,4 +1,4 @@
-//! Terminal settings page assembly and shared persistence helper.
+//! Terminal settings page assembly and the shared set-and-persist helper.
 //!
 //! Each terminal settings group lives in its own sibling module so each file owns
 //! one cohesive group and stays easy to review.
@@ -33,7 +33,11 @@ pub(crate) fn page() -> SettingPage {
         .group(completion::group())
 }
 
-/// Persist the live [`TerminalSettings`] to `terminal.json`.
-pub(super) fn persist(cx: &mut App) {
+/// Apply `f` to the live [`TerminalSettings`], notify, and persist to `terminal.json`.
+pub(super) fn set(cx: &mut App, f: impl FnOnce(&mut TerminalSettings)) {
+    TerminalSettings::global(cx).update(cx, |s, cx| {
+        f(s);
+        cx.notify();
+    });
     TerminalSettings::persist_global(cx);
 }

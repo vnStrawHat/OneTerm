@@ -3,8 +3,6 @@
 //! The version string is the workspace `CARGO_PKG_VERSION` (the same value
 //! shown by the OneTerm ▸ About dialog).
 
-use std::sync::atomic::{AtomicU8, Ordering};
-
 use gpui::{
     AnyElement, App, AppContext as _, Context, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, StatefulInteractiveElement as _, Styled, Window, div,
@@ -22,14 +20,6 @@ use gpui_component::{
 use oneterm_theme::icon::AppIcon;
 
 use super::updates;
-
-const TEST_CRASH_CLICK_COUNT: u8 = 10;
-
-/// Environment variable that enables the hidden About-icon crash trigger in
-/// release builds; debug builds always have it (ARCH-38).
-const CRASH_TRIGGER_ENV: &str = "ONETERM_ENABLE_CRASH_TRIGGER";
-
-static ABOUT_ICON_CLICKS: AtomicU8 = AtomicU8::new(0);
 
 struct AboutUpdateControls;
 
@@ -142,20 +132,9 @@ fn app_identity(cx: &App) -> AnyElement {
         .items_center()
         .justify_center()
         .child(
-            div()
-                .id("about-app-icon")
-                .cursor_pointer()
-                .child(
-                    Icon::new(AppIcon::Terminal)
-                        .with_size(px(96.))
-                        .text_color(oneterm_theme::brand::brand_accent()),
-                )
-                .on_click(|_, _, _| {
-                    if crash_trigger_enabled() && register_about_icon_click() {
-                        // This diagnostic-only panic verifies the crash recovery flow end to end.
-                        panic!("Intentional crash triggered by ten clicks on the About icon");
-                    }
-                }),
+            Icon::new(AppIcon::Terminal)
+                .with_size(px(96.))
+                .text_color(oneterm_theme::brand_accent()),
         )
         .child(Label::new("OneTerm").text_xl())
         .child(
@@ -199,25 +178,6 @@ fn links_section(cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-/// The hidden crash trigger is a diagnostics aid: always on in debug builds,
-/// opt-in through `ONETERM_ENABLE_CRASH_TRIGGER` in release builds so a
-/// curious user cannot crash a production build by clicking the icon.
-fn crash_trigger_enabled() -> bool {
-    cfg!(debug_assertions) || std::env::var_os(CRASH_TRIGGER_ENV).is_some()
-}
-
-fn register_about_icon_click() -> bool {
-    ABOUT_ICON_CLICKS
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
-            Some(if count + 1 == TEST_CRASH_CLICK_COUNT {
-                0
-            } else {
-                count + 1
-            })
-        })
-        .is_ok_and(|previous| previous + 1 == TEST_CRASH_CLICK_COUNT)
-}
-
 /// GitHub page of the repository this build was configured for (the same
 /// `owner/repo` the updater queries), so a fork build links to itself.
 fn github_repository_url() -> String {
@@ -237,20 +197,4 @@ fn repository_link(id: &'static str, cx: &App) -> AnyElement {
             cx.open_url(&github_repository_url());
         })
         .into_any_element()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn crash_trigger_fires_on_every_tenth_click() {
-        ABOUT_ICON_CLICKS.store(0, Ordering::Relaxed);
-
-        for _ in 0..TEST_CRASH_CLICK_COUNT - 1 {
-            assert!(!register_about_icon_click());
-        }
-        assert!(register_about_icon_click());
-        assert!(!register_about_icon_click());
-    }
 }

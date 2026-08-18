@@ -36,8 +36,8 @@ uses command/panel registries rather than importing feature implementations.
 `gpui-component` remains an external dependency in every crate manifest. The root
 Cargo `[patch]` redirects that dependency to `vendor/gpui-component`; the vendor
 package is not a OneTerm workspace member and does not create an internal UI layer.
-Shared action contracts use `oneterm_core::DockPlacement`, and only the workspace
-shell maps that domain value to `gpui_component::dock::DockPlacement`.
+Shared action contracts stay GPUI-free; only the workspace shell touches
+`gpui_component::dock::DockPlacement`.
 
 The machine-readable dependency policy and verification commands are in
 [`docs/agents/crate-dependency-rules.md`](agents/crate-dependency-rules.md), and the
@@ -80,7 +80,7 @@ cannot be lost to process exit (CORR-04). `AppState` carries no mirrors for it.
 Dock panels are registered with the gpui-component `PanelRegistry` by their owning
 feature's `init()` (R12) and built by the shell *by name* (R4). The registered
 names are string constants in `crates/state/src/panel_names.rs`
-(`oneterm_state::panel_names::{TERMINAL, TERMINAL_SETTINGS, SFTP, SESSION,
+(`oneterm_state::panel_names::{TERMINAL, SFTP, SESSION,
 SSH_CLIENT, AGENT}`, plus `ALL`); the mapping from `oneterm_core::RightDockMode`
 to a panel name is `panel_names::right_dock_panel_name` so `core` stays panel-agnostic.
 Saved layouts deserialize by these names, so the string values are a persisted

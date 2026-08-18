@@ -144,8 +144,6 @@ no new persistence path is introduced.
 Expose `oneterm-actions` action structs so users can bind keys (via the existing
 key-binding UI):
 
-- `ToggleCompletion` — flip `enabled` for the session/global.
-- `ClearCompletionHistory` — clear the `memory` store.
 - `TriggerCompletion` — force-open the overlay at the cursor even below
   `min_prefix_len` (manual trigger). **Default binding: `Ctrl+Shift+Space`.**
 - `RecentCommands` — open the frecency-ranked "recent commands" palette

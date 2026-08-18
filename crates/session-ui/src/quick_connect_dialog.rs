@@ -37,12 +37,6 @@ use super::common::{
 };
 use crate::session_state::{SshAuthPreference, SshSession, SshSessionStore};
 
-#[derive(Clone, Copy)]
-enum QuickConnectKind {
-    New,
-    Duplicate,
-}
-
 enum QuickConnectMode {
     New,
     Duplicate {
@@ -52,32 +46,22 @@ enum QuickConnectMode {
     },
 }
 
-impl QuickConnectMode {
-    fn kind(&self) -> QuickConnectKind {
-        match self {
-            Self::New => QuickConnectKind::New,
-            Self::Duplicate { .. } => QuickConnectKind::Duplicate,
-        }
-    }
-}
-
+/// The "Save to SSH Sessions" checkbox — Quick Connect only; a duplicate
+/// reuses the session it was duplicated from.
 fn save_session_option(
-    kind: QuickConnectKind,
+    is_duplicate: bool,
     save_session: Rc<Cell<bool>>,
 ) -> Option<impl IntoElement> {
-    match kind {
-        QuickConnectKind::Duplicate => None,
-        QuickConnectKind::New => Some(
-            div().pt_1().child(
-                Checkbox::new("save-session")
-                    .label("Save to SSH Sessions")
-                    .checked(save_session.get())
-                    .on_click(move |checked: &bool, _window, _cx| {
-                        save_session.set(*checked);
-                    }),
-            ),
-        ),
-    }
+    (!is_duplicate).then(|| {
+        div().pt_1().child(
+            Checkbox::new("save-session")
+                .label("Save to SSH Sessions")
+                .checked(save_session.get())
+                .on_click(move |checked: &bool, _window, _cx| {
+                    save_session.set(*checked);
+                }),
+        )
+    })
 }
 
 /// Open a dialog that collects SSH connection and authentication details.
@@ -106,8 +90,7 @@ pub fn open_duplicate_ssh_dialog(
 }
 
 fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Window, cx: &mut App) {
-    let kind = mode.kind();
-    let is_duplicate = matches!(kind, QuickConnectKind::Duplicate);
+    let is_duplicate = matches!(mode, QuickConnectMode::Duplicate { .. });
     let (prefill, initial_cwd, completion) = match mode {
         QuickConnectMode::New => (None, None, None),
         QuickConnectMode::Duplicate {
@@ -304,9 +287,9 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
                     Input::new(&username_state),
                     cx,
                 ))
-                .child(auth_form.render(cx))
+                .child(auth_form.render(true, cx))
                 .when_some(
-                    save_session_option(kind, save_session.clone()),
+                    save_session_option(is_duplicate, save_session.clone()),
                     |content, option| content.child(option),
                 )
         },
@@ -421,9 +404,7 @@ mod tests {
 
     #[test]
     fn save_option_element_is_built_only_for_quick_connect() {
-        assert!(
-            save_session_option(QuickConnectKind::Duplicate, Rc::new(Cell::new(false))).is_none()
-        );
-        assert!(save_session_option(QuickConnectKind::New, Rc::new(Cell::new(false))).is_some());
+        assert!(save_session_option(true, Rc::new(Cell::new(false))).is_none());
+        assert!(save_session_option(false, Rc::new(Cell::new(false))).is_some());
     }
 }

@@ -14,7 +14,7 @@ use oneterm_settings::TerminalSettings;
 
 use crate::items_with_separators;
 
-use super::persist;
+use super::set;
 
 const DEFAULT_FONT_SENTINEL: &str = "Default (theme)";
 
@@ -57,12 +57,10 @@ pub(super) fn group() -> SettingGroup {
                     },
                     |val: f64, cx: &mut App| {
                         let size = val as f32;
-                        TerminalSettings::global(cx).update(cx, |s, cx| {
+                        set(cx, |s| {
                             s.font_size = Some(size);
                             s.base_font_size = Some(size);
-                            cx.notify();
                         });
-                        persist(cx);
                     },
                 ),
             )
@@ -74,11 +72,7 @@ pub(super) fn group() -> SettingGroup {
                     |cx: &App| SharedString::from(weight_to_string(cx)),
                     |val: SharedString, cx: &mut App| {
                         let weight = parse_weight(val.as_ref());
-                        TerminalSettings::global(cx).update(cx, |s, cx| {
-                            s.font_weight = weight;
-                            cx.notify();
-                        });
-                        persist(cx);
+                        set(cx, |s| s.font_weight = weight);
                     },
                 ),
             )
@@ -175,11 +169,7 @@ fn font_family_field() -> SettingField<SharedString> {
                                     }
                                 });
                                 state.initial_value = family.clone();
-                                TerminalSettings::global(cx).update(cx, |s, cx| {
-                                    s.font_family = family;
-                                    cx.notify();
-                                });
-                                persist(cx);
+                                set(cx, |s| s.font_family = family);
                             }
                         }
                     }
@@ -315,11 +305,7 @@ fn line_height_field() -> SettingField<SharedString> {
                             if let Ok(val) = val_str.parse::<f64>() {
                                 let rounded = (val * 10.0).round() / 10.0;
                                 let clamped = rounded.clamp(1.0, 3.0);
-                                TerminalSettings::global(cx).update(cx, |s, cx| {
-                                    s.line_height_factor = clamped as f32;
-                                    cx.notify();
-                                });
-                                persist(cx);
+                                set(cx, |s| s.line_height_factor = clamped as f32);
                                 state.initial_value = clamped;
                                 if clamped.to_string() != val_str {
                                     input.set_value(

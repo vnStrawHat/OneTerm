@@ -25,6 +25,7 @@ pub mod dock_util;
 pub mod form_dialog;
 pub mod panel_names;
 pub mod paths;
+pub mod persist_queue;
 pub mod services;
 
 pub use agent_registry::{
@@ -33,4 +34,5 @@ pub use agent_registry::{
 };
 pub use app_state::AppState;
 pub use completion_history::{CompletionHistory, GlobalCompletionHistory};
+pub use persist_queue::PersistQueue;
 pub use services::{AppServices, AppServicesBuilder};

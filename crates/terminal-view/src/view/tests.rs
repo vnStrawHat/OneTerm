@@ -115,7 +115,6 @@ fn phase0_renderer_baseline_counts_dirty_and_idle_frames(cx: &mut TestAppContext
     assert!(warm.frame_count >= 1);
     assert!(warm.total_lines > 0);
     assert!(warm.paint_quad_calls > 0);
-    assert!(warm.allocation_buffer_sites > 0);
 
     // ── Dirty frame: change the session text and immediately redraw ──
     // Don't run_until_parked between set_text and draw — the blink task could
@@ -138,7 +137,6 @@ fn phase0_renderer_baseline_counts_dirty_and_idle_frames(cx: &mut TestAppContext
         dirty
     );
     assert!(dirty.paint_quad_calls > 0);
-    assert!(dirty.allocation_buffer_sites > 0);
 
     // ── Idle frame: no content change, rows should be cached ──
     cx.update(|window, cx| {
@@ -154,7 +152,6 @@ fn phase0_renderer_baseline_counts_dirty_and_idle_frames(cx: &mut TestAppContext
     assert_eq!(idle.row_layout_calls, 0, "idle frame should not re-layout");
     assert_eq!(idle.shape_line_calls, 0, "idle frame should not re-shape");
     assert!(idle.paint_quad_calls > 0, "idle frame still paints quads");
-    assert!(idle.allocation_buffer_sites > 0);
 
     eprintln!("phase0_renderer_dirty={dirty:?}");
     eprintln!("phase0_renderer_idle={idle:?}");

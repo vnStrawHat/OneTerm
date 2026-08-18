@@ -44,7 +44,7 @@ pub(crate) fn render_placeholder(
         .child(
             Icon::new(AppIcon::Terminal)
                 .large()
-                .text_color(oneterm_theme::brand::brand_accent()),
+                .text_color(oneterm_theme::brand_accent()),
         )
         .child(format!("Space #{number}"))
         .child("Drag a terminal tab here")

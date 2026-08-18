@@ -1,6 +1,7 @@
 //! Types + helpers for the SFTP browser — sort state, transfer queue,
 //! column definitions, formatting.
 
+use std::cmp::Reverse;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Local, Utc};
@@ -161,36 +162,29 @@ pub(crate) fn sort_entries(entries: &mut [FileEntry], sort: Option<(SortColumn, 
     let (col, dir) = sort.unwrap_or((SortColumn::Name, SortDir::Asc));
     // Folders first: `!is_dir` sorts `true` (files) after `false` (folders),
     // independent of the direction applied to the column key.
-    match col {
-        SortColumn::Name => {
-            entries.sort_by_cached_key(|e| (!e.is_dir, Directed(e.name.to_lowercase(), dir)))
+    match (col, dir) {
+        (SortColumn::Name, SortDir::Asc) => {
+            entries.sort_by_cached_key(|e| (!e.is_dir, e.name.to_lowercase()))
         }
-        SortColumn::Modified => entries.sort_by_key(|e| (!e.is_dir, Directed(e.modified, dir))),
-        SortColumn::Size => entries.sort_by_key(|e| (!e.is_dir, Directed(e.size, dir))),
-        SortColumn::Permissions => {
-            entries.sort_by_key(|e| (!e.is_dir, Directed(e.permissions, dir)))
+        (SortColumn::Name, SortDir::Desc) => {
+            entries.sort_by_cached_key(|e| (!e.is_dir, Reverse(e.name.to_lowercase())))
         }
-        SortColumn::Owner => entries.sort_by_key(|e| (!e.is_dir, Directed(e.uid, dir))),
-        SortColumn::Group => entries.sort_by_key(|e| (!e.is_dir, Directed(e.gid, dir))),
-    }
-}
-
-/// A sort key that orders ascending or descending according to its direction.
-#[derive(PartialEq, Eq)]
-struct Directed<K: Ord>(K, SortDir);
-
-impl<K: Ord> PartialOrd for Directed<K> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<K: Ord> Ord for Directed<K> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        match self.1 {
-            SortDir::Asc => self.0.cmp(&other.0),
-            SortDir::Desc => other.0.cmp(&self.0),
+        (SortColumn::Modified, SortDir::Asc) => entries.sort_by_key(|e| (!e.is_dir, e.modified)),
+        (SortColumn::Modified, SortDir::Desc) => {
+            entries.sort_by_key(|e| (!e.is_dir, Reverse(e.modified)))
         }
+        (SortColumn::Size, SortDir::Asc) => entries.sort_by_key(|e| (!e.is_dir, e.size)),
+        (SortColumn::Size, SortDir::Desc) => entries.sort_by_key(|e| (!e.is_dir, Reverse(e.size))),
+        (SortColumn::Permissions, SortDir::Asc) => {
+            entries.sort_by_key(|e| (!e.is_dir, e.permissions))
+        }
+        (SortColumn::Permissions, SortDir::Desc) => {
+            entries.sort_by_key(|e| (!e.is_dir, Reverse(e.permissions)))
+        }
+        (SortColumn::Owner, SortDir::Asc) => entries.sort_by_key(|e| (!e.is_dir, e.uid)),
+        (SortColumn::Owner, SortDir::Desc) => entries.sort_by_key(|e| (!e.is_dir, Reverse(e.uid))),
+        (SortColumn::Group, SortDir::Asc) => entries.sort_by_key(|e| (!e.is_dir, e.gid)),
+        (SortColumn::Group, SortDir::Desc) => entries.sort_by_key(|e| (!e.is_dir, Reverse(e.gid))),
     }
 }
 
@@ -210,19 +204,17 @@ impl SortColumn {
     }
 }
 
+/// Column resize limits (px), the same for every column.
+pub(crate) const COLUMN_MIN_WIDTH: f32 = 40.0;
+pub(crate) const COLUMN_MAX_WIDTH: f32 = 800.0;
+
 /// Definition of a column in the file list — display config + resize/visibility
 /// state (persisted to `docks.json`).
 #[derive(Clone, Debug)]
 pub(crate) struct SftpColumnConfig {
     pub col: SortColumn,
-    /// Sortable key string — matches `SortColumn::key`.
-    pub key: &'static str,
     /// Header label.
     pub label: &'static str,
-    /// Minimum width (px) — resize limit.
-    pub min_width: f32,
-    /// Maximum width (px) — resize limit.
-    pub max_width: f32,
     /// Right-align text (Size).
     pub right_align: bool,
     /// Whether the column is currently shown (show/hide config).
@@ -234,11 +226,8 @@ pub(crate) struct SftpColumnConfig {
 impl SftpColumnConfig {
     fn new(col: SortColumn, label: &'static str, default_width: f32, right_align: bool) -> Self {
         Self {
-            key: col.key(),
             col,
             label,
-            min_width: 40.0,
-            max_width: 800.0,
             right_align,
             visible: true,
             width: default_width,
