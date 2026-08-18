@@ -1,6 +1,5 @@
 //! Transfer operations for the SFTP browser — upload, download.
 //!
-//! Split out from `file_browser.rs` to keep the file shorter.
 //! Upload: open the OS-native file/folder picker OR drag & drop external files
 //!         → call the SFTP backend → drive the transfer handle.
 //! Download: open the OS-native Save dialog (prompt_for_new_path) → call the SFTP
@@ -14,7 +13,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gpui::{AsyncApp, Context, Entity, Window};
+use gpui::{AsyncApp, AsyncWindowContext, Context, Entity, Window};
 use gpui_component::{WindowExt as _, notification::NotificationType};
 use oneterm_core::{AppError, RemotePath, SftpBackend, TransferEvent, TransferHandle};
 use oneterm_state::notif_ext::notify;
@@ -22,6 +21,15 @@ use oneterm_state::notif_ext::notify;
 use super::browser_state::BackendKey;
 use super::panel::SftpPanel;
 use super::types::{TransferDirection, TransferItem, TransferStatus};
+
+/// Tell the user that an OS file dialog could not be shown (ERR-07). The
+/// window may already be closed; then there is nobody to tell.
+fn notify_dialog_failure(what: &str, error: &dyn std::fmt::Display, cx: &mut AsyncWindowContext) {
+    let message = format!("{what}: {error}");
+    _ = cx.update(|window, cx| {
+        window.push_notification(notify(NotificationType::Error, message, cx), cx);
+    });
+}
 
 /// Register a queue item for a transfer that is about to start.
 /// Returns the allocated transfer id, or `None` when no backend is active.
@@ -191,7 +199,7 @@ impl SftpPanel {
     pub(crate) fn do_upload(
         &mut self,
         pick_folders: bool,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let mode_str = if pick_folders { "folder" } else { "files" };
@@ -219,7 +227,7 @@ impl SftpPanel {
 
         // Spawn a task to wait for the user to pick a path → delegate to do_upload_paths.
         let panel = cx.entity();
-        cx.spawn(async move |_panel, cx| {
+        cx.spawn_in(window, async move |_panel, cx| {
             let paths = match rx.await {
                 Ok(Ok(Some(paths))) if !paths.is_empty() => paths,
                 Ok(Ok(Some(_))) => {
@@ -232,17 +240,20 @@ impl SftpPanel {
                 }
                 Ok(Err(e)) => {
                     log::error!("SftpPanel: upload — file picker error: {e}");
+                    notify_dialog_failure("Could not open the file picker", &e, cx);
                     return;
                 }
                 Err(e) => {
                     log::error!("SftpPanel: upload — channel error: {e}");
+                    notify_dialog_failure("Could not open the file picker", &e, cx);
                     return;
                 }
             };
 
             log::info!("SftpPanel: upload — {} path(s) selected", paths.len());
 
-            cx.update(|cx| {
+            // The panel may be gone before the picker closes; nothing to upload then.
+            _ = cx.update(|_, cx| {
                 panel.update(cx, |this, cx| {
                     this.do_upload_paths(paths, cx);
                 });
@@ -312,7 +323,7 @@ impl SftpPanel {
         let rx = cx.prompt_for_new_path(&starting_dir, Some(&entry_name));
 
         // Spawn a task to wait for the user to pick a path → download.
-        cx.spawn(async move |_panel, cx| {
+        cx.spawn_in(window, async move |_panel, cx| {
             let local_path = match rx.await {
                 Ok(Ok(Some(path))) => path,
                 Ok(Ok(None)) => {
@@ -321,10 +332,12 @@ impl SftpPanel {
                 }
                 Ok(Err(e)) => {
                     log::error!("SftpPanel: download — save dialog error: {e}");
+                    notify_dialog_failure("Could not open the save dialog", &e, cx);
                     return;
                 }
                 Err(e) => {
                     log::error!("SftpPanel: download — channel error: {e}");
+                    notify_dialog_failure("Could not open the save dialog", &e, cx);
                     return;
                 }
             };

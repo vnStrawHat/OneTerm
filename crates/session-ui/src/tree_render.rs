@@ -7,7 +7,7 @@ use gpui_component::{
     list::ListItem, menu::PopupMenuItem, notification::NotificationType, tree::tree,
 };
 
-use crate::session_state::SshSessionStore;
+use crate::session_state::{SshSession, SshSessionStore};
 use oneterm_actions::{DeleteSession, NewSession, OpenSession, SessionProperty};
 use oneterm_state::notif_ext::notify;
 
@@ -41,11 +41,12 @@ impl SessionPanel {
                 let hover_bg = cx.theme().tokens.list_hover;
 
                 if entry.is_folder() {
-                    // Group folder.
+                    // Group folder — open folders use the theme's info tint,
+                    // closed ones its success tint (no hard-coded colours).
                     let (icon, icon_color) = if entry.is_expanded() {
-                        (IconName::Maximize, gpui::rgb(0x58c4dc))
+                        (IconName::Maximize, cx.theme().info)
                     } else {
-                        (IconName::Minimize, gpui::rgb(0x7c8a15))
+                        (IconName::Minimize, cx.theme().success)
                     };
                     ListItem::new(ix)
                         .w_full()
@@ -89,7 +90,10 @@ impl SessionPanel {
                     let color = session
                         .and_then(|s| s.color.as_deref())
                         .and_then(|hex| Hsla::parse_hex(hex).ok())
-                        .unwrap_or_else(|| Hsla::parse_hex("#56B6C2").unwrap_or(cx.theme().accent));
+                        .unwrap_or_else(|| {
+                            Hsla::parse_hex(SshSession::DEFAULT_COLOR_HEX)
+                                .unwrap_or(cx.theme().accent)
+                        });
 
                     ListItem::new(ix)
                         .w_full()

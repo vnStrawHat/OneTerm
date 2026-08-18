@@ -44,7 +44,13 @@ use gpui::{
     IntoElement, ParentElement, Render, Styled, Task, Window, div,
 };
 use gpui_component::ActiveTheme as _;
-use sysinfo::{Pid, ProcessesToUpdate, System};
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+
+/// Only the two fields the indicator shows — the default kind also walks
+/// disk usage, the exe path, and (on Windows) every process thread (PERF-28).
+fn refresh_kind() -> ProcessRefreshKind {
+    ProcessRefreshKind::nothing().with_cpu().with_memory()
+}
 
 /// Indicator showing the CPU and memory usage of the OneTerm process in the
 /// StatusBar.
@@ -86,7 +92,7 @@ impl ResourceIndicator {
         // (needed for nb_cpus normalisation).
         let mut sys = System::new();
         if let Some(pid) = pid {
-            sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+            sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, refresh_kind());
         }
 
         let timer = cx.spawn_in(window, async move |this, window| {
@@ -95,10 +101,9 @@ impl ResourceIndicator {
                     .background_executor()
                     .timer(Duration::from_secs(2))
                     .await;
-                if let Some(this) = this.upgrade() {
-                    let _ = this.update_in(window, |this, _window, cx| {
-                        this.tick(cx);
-                    });
+                // The window or the indicator is gone: stop ticking.
+                if this.update_in(window, |this, _, cx| this.tick(cx)).is_err() {
+                    break;
                 }
             }
         });
@@ -125,21 +130,27 @@ impl ResourceIndicator {
         };
 
         self.sys
-            .refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+            .refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, refresh_kind());
 
-        if let Some(process) = self.sys.process(pid) {
-            // sysinfo returns per-core CPU (100% = 1 core). Divide by nb_cpus
-            // to get the total-system percentage that Task Manager shows.
-            let nb_cpus = self.sys.cpus().len().max(1) as f32;
-            self.cpu_usage = process.cpu_usage() / nb_cpus;
+        let Some(process) = self.sys.process(pid) else {
+            return;
+        };
+        // sysinfo returns per-core CPU (100% = 1 core). Divide by nb_cpus
+        // to get the total-system percentage that Task Manager shows.
+        let nb_cpus = self.sys.cpus().len().max(1) as f32;
+        let cpu_usage = process.cpu_usage() / nb_cpus;
+        // Use virtual_memory (PrivateUsage on Windows = private committed
+        // bytes) instead of memory() (full working set including shared
+        // DLLs) — closer to Task Manager's default "Memory" column.
+        let memory = process.virtual_memory();
 
-            // Use virtual_memory (PrivateUsage on Windows = private committed
-            // bytes) instead of memory() (full working set including shared
-            // DLLs) — closer to Task Manager's default "Memory" column.
-            self.memory = process.virtual_memory();
+        // Re-render only when the label would change (PERF-29).
+        let before = self.formatted();
+        self.cpu_usage = cpu_usage;
+        self.memory = memory;
+        if self.formatted() != before {
+            cx.notify();
         }
-
-        cx.notify();
     }
 
     /// Format the display: `CPU 12.3%  MEM 45.2 MB`.

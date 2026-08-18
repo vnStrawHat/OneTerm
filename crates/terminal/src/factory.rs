@@ -18,6 +18,12 @@ pub struct PtySize {
     pub cols: u16,
 }
 
+impl PtySize {
+    /// Size a session is spawned with before its view reports the real grid
+    /// (the classic 80×24 terminal); the first resize replaces it.
+    pub const INITIAL: PtySize = PtySize { rows: 24, cols: 80 };
+}
+
 /// Creates terminal sessions from connection parameters.
 ///
 /// Implemented by the app crate (the only place that depends on both backend

@@ -120,6 +120,9 @@ fn default_port() -> u16 {
 impl SshSession {
     /// Default SSH port.
     pub const DEFAULT_PORT: u16 = 22;
+    /// Colour tag a new session gets in the session dialog (persisted per
+    /// session, so it is a data default rather than a theme token).
+    pub const DEFAULT_COLOR_HEX: &'static str = "#56B6C2";
 }
 
 /// One row of `ssh_session.json`: a stable id plus the session record.
@@ -611,7 +614,31 @@ mod tests {
 mod persistence_tests {
     use super::*;
 
-    fn temporary_dir(tag: &str) -> PathBuf {
+    /// Removes the per-test directory when the test ends — on failure too, so a
+    /// panicking assertion never leaks temporary files (ERR-15).
+    struct TempDirGuard(std::path::PathBuf);
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            // Best effort: a directory that is already gone must not fail the test.
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    impl std::ops::Deref for TempDirGuard {
+        type Target = std::path::Path;
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl AsRef<std::path::Path> for TempDirGuard {
+        fn as_ref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    fn temporary_dir(tag: &str) -> TempDirGuard {
         let directory = std::env::temp_dir().join(format!(
             "oneterm-session-{tag}-{}-{}",
             std::process::id(),
@@ -621,7 +648,7 @@ mod persistence_tests {
                 .as_nanos(),
         ));
         std::fs::create_dir_all(&directory).unwrap();
-        directory
+        TempDirGuard(directory)
     }
 
     fn session(label: &str) -> SshSession {
@@ -686,7 +713,6 @@ mod persistence_tests {
                 .to_string_lossy()
                 .contains(".invalid-")
         }));
-        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]
@@ -713,7 +739,6 @@ mod persistence_tests {
         let reloaded = SshSessionStore::load_from(&path);
         assert!(!reloaded.needs_resave);
         assert_eq!(reloaded.document, loaded.document);
-        let _ = std::fs::remove_dir_all(directory);
     }
 
     /// ARCH-35: a v1 file (no ids) loads without loss, gets ids by position,
@@ -751,7 +776,6 @@ mod persistence_tests {
         let reloaded = SshSessionStore::load_from(&path);
         assert!(!reloaded.needs_resave);
         assert_eq!(reloaded.document, loaded.document);
-        let _ = std::fs::remove_dir_all(directory);
     }
 
     /// A v2 file with a hand-edited row lacking `id` (and a duplicate id) is
@@ -834,6 +858,5 @@ mod persistence_tests {
                 .entries
                 .is_empty()
         );
-        let _ = std::fs::remove_dir_all(directory);
     }
 }

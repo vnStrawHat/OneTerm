@@ -5,6 +5,7 @@
 //! - [`parse_user_host_port`] / [`parse_port`] — the one parser for
 //!   `user[@host[:port]]` strings and port fields.
 //! - [`add_ssh_terminal_to_dock`] — add a terminal panel to the DockArea center.
+//! - [`SshConnectRequest`] / [`connect_ssh_session`] — the shared connect flow.
 //!
 //! Form field rendering lives in `oneterm_state::form_dialog::labelled_field`.
 
@@ -29,6 +30,7 @@ use gpui_component::{
     notification::NotificationType,
 };
 use oneterm_core::{AppError, ConnectionCancellation, HostKeyPolicy, SshConfig};
+use oneterm_settings::TerminalSettings;
 use oneterm_state::commands::SshDuplicateCompletion;
 use oneterm_state::notif_ext::notify;
 use oneterm_state::{AppServices, AppState};
@@ -217,34 +219,72 @@ fn remote_cd_command(cwd: &Path) -> String {
 
 // ── Dock integration ─────────────────────────────────────────────────
 
-/// Add the SSH terminal panel to the DockArea center.
+/// Add the SSH terminal panel to the DockArea center. Reports (log +
+/// notification) when the panel could not be placed, so a connected session
+/// never disappears silently (ERR-09).
 pub(crate) fn add_ssh_terminal_to_dock(
     panel: &Arc<dyn PanelView>,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let dock_area = match AppState::global(cx).read(cx).dock_area.clone() {
-        Some(d) => d,
-        None => {
-            log::error!("AppState.dock_area not initialized — cannot add SSH terminal tab");
-            return;
-        }
-    };
+    let placed = AppState::global(cx)
+        .read(cx)
+        .dock_area
+        .clone()
+        .ok_or("the main workspace is not registered")
+        .and_then(|dock_area| {
+            dock_area
+                .update(cx, |dock, cx| {
+                    dock.add_panel(panel.clone(), DockPlacement::Center, None, window, cx);
+                })
+                .map_err(|_| "the main workspace has been released")
+        });
+    if let Err(reason) = placed {
+        log::error!("add_ssh_terminal_to_dock: cannot add the SSH terminal tab — {reason}");
+        window.push_notification(
+            notify(
+                NotificationType::Error,
+                format!("Connected, but the terminal tab could not be opened: {reason}."),
+                cx,
+            ),
+            cx,
+        );
+    }
+}
 
-    dock_area
-        .update(cx, |dock, cx| {
-            dock.add_panel(panel.clone(), DockPlacement::Center, None, window, cx);
-        })
-        .ok();
+/// Everything one SSH connection attempt needs besides the transport config.
+///
+/// Cloned for the host-key retry, so every field is cheap to clone.
+#[derive(Clone)]
+pub(crate) struct SshConnectRequest {
+    /// Tab title / notification label.
+    pub label: String,
+    /// Directory the new remote shell changes into (duplicate-at-cwd).
+    pub initial_cwd: Option<PathBuf>,
+    /// Destination-aware placement for a duplicated session; `None` opens a
+    /// new center tab.
+    pub completion: Option<SshDuplicateCompletion>,
+    /// Runs once the session is authenticated, before the tab opens — e.g. the
+    /// quick-connect "save this session" option (CORR-54: never saved on failure).
+    pub on_connected: Option<Rc<dyn Fn(&mut App)>>,
+}
+
+impl SshConnectRequest {
+    pub(crate) fn new(label: String) -> Self {
+        Self {
+            label,
+            initial_cwd: None,
+            completion: None,
+            on_connected: None,
+        }
+    }
 }
 
 /// Connect one SSH configuration on a background thread and handle host-key
 /// first-use approval without weakening changed-key rejection.
 pub(crate) fn connect_ssh_session(
     cfg: SshConfig,
-    label: String,
-    initial_cwd: Option<PathBuf>,
-    completion: Option<SshDuplicateCompletion>,
+    request: SshConnectRequest,
     connecting: Arc<std::sync::atomic::AtomicBool>,
     window: &mut Window,
     cx: &mut App,
@@ -252,6 +292,8 @@ pub(crate) fn connect_ssh_session(
     let cancellation = cfg.cancellation.clone();
     let duplicate_config = cfg.duplicate_config();
     let factory = AppServices::session_factory(cx);
+    // SSH sessions honour the same scrollback setting as local shells (CORR-33).
+    let scrollback = TerminalSettings::global(cx).read(cx).scrollback_history;
 
     if cancellation.is_cancelled() {
         return cancellation;
@@ -260,18 +302,14 @@ pub(crate) fn connect_ssh_session(
     // Retain one short-lived zeroizing copy only so an unknown key can be
     // explicitly approved and retried without asking for the password again.
     let retry_cfg = cfg.clone();
-    let retry_label = label.clone();
-    let retry_cwd = initial_cwd.clone();
-    let retry_completion = completion.clone();
+    let retry_request = request.clone();
     let connecting_for_task = connecting.clone();
     let task_cancellation = cancellation.clone();
     window
         .spawn(cx, async move |cx| {
             let result = cx
                 .background_executor()
-                .spawn(
-                    async move { factory.connect_ssh(cfg, PtySize { rows: 24, cols: 80 }, 10_000) },
-                )
+                .spawn(async move { factory.connect_ssh(cfg, PtySize::INITIAL, scrollback) })
                 .await;
             if task_cancellation.is_cancelled() {
                 connecting_for_task.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -280,8 +318,17 @@ pub(crate) fn connect_ssh_session(
 
             _ = cx.update(|window, cx| match result {
                 Ok(ssh_session) => {
+                    let SshConnectRequest {
+                        label,
+                        initial_cwd,
+                        completion,
+                        on_connected,
+                    } = request;
                     connecting_for_task.store(false, std::sync::atomic::Ordering::Relaxed);
                     window.close_dialog(cx);
+                    if let Some(on_connected) = on_connected {
+                        on_connected(cx);
+                    }
                     if let Some(cwd) = initial_cwd.as_deref() {
                         ssh_session.send_text(&remote_cd_command(cwd));
                     }
@@ -320,9 +367,7 @@ pub(crate) fn connect_ssh_session(
                     window.close_dialog(cx);
                     open_host_key_confirmation(
                         retry_cfg,
-                        retry_label,
-                        retry_cwd,
-                        retry_completion,
+                        retry_request,
                         host,
                         port,
                         algorithm,
@@ -352,9 +397,7 @@ pub(crate) fn connect_ssh_session(
 #[allow(clippy::too_many_arguments)]
 fn open_host_key_confirmation(
     mut cfg: SshConfig,
-    label: String,
-    initial_cwd: Option<PathBuf>,
-    completion: Option<SshDuplicateCompletion>,
+    request: SshConnectRequest,
     host: String,
     port: u16,
     algorithm: String,
@@ -372,9 +415,7 @@ fn open_host_key_confirmation(
     );
     window.open_alert_dialog(cx, move |alert, _, _| {
         let cfg = cfg.clone();
-        let label = label.clone();
-        let initial_cwd = initial_cwd.clone();
-        let completion = completion.clone();
+        let request = request.clone();
         alert
             .confirm()
             .title("Unknown SSH Host Key")
@@ -389,9 +430,7 @@ fn open_host_key_confirmation(
             .on_ok(move |_, window, cx| {
                 connect_ssh_session(
                     cfg.clone(),
-                    label.clone(),
-                    initial_cwd.clone(),
-                    completion.clone(),
+                    request.clone(),
                     Arc::new(AtomicBool::new(true)),
                     window,
                     cx,

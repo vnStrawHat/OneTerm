@@ -1,7 +1,5 @@
 //! Types + helpers for the SFTP browser — sort state, transfer queue,
 //! column definitions, formatting.
-//!
-//! Split out from `file_browser.rs` to keep the file shorter.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

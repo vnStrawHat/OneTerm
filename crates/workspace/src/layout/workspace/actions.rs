@@ -217,15 +217,14 @@ impl super::OneTermWorkspace {
             let right_size = view
                 .right_dock()
                 .map(|dock| Some(dock.read(cx).size()))
-                .unwrap_or(Some(gpui::px(480.)));
+                .unwrap_or(Some(super::DEFAULT_RIGHT_DOCK_WIDTH));
             view.set_right_dock(right, right_size, true, window, cx);
         });
     }
 
     /// Action handler: open the General Settings UI in a separate window.
     ///
-    /// The settings window is a standalone `WindowHandle<Root>` wrapping a
-    /// [`SettingsPanel`] (see [`crate::views::settings::open_settings_window`]).
+    /// The settings feature owns the window (`WorkspaceCommands::open_settings`).
     /// Closing it does not quit the app — only the main window's `on_release`
     /// hook does that.
     pub(crate) fn on_action_open_settings(
@@ -269,48 +268,16 @@ impl super::OneTermWorkspace {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use gpui::{
-        AppContext as _, Context, EventEmitter, FocusHandle, Focusable, IntoElement, Render,
-        TestAppContext, Window, div,
-    };
-    use gpui_component::dock::{DockArea, DockItem, Panel, PanelEvent, PanelView};
+    use gpui::TestAppContext;
+    use gpui_component::dock::{DockArea, DockItem};
 
     use super::super::OneTermWorkspace;
-
-    /// Minimal panel so the tests can build real `DockItem`s without a feature crate.
-    struct BlankPanel {
-        focus_handle: FocusHandle,
-    }
-
-    impl Panel for BlankPanel {
-        fn panel_name(&self) -> &'static str {
-            "blank"
-        }
-    }
-    impl EventEmitter<PanelEvent> for BlankPanel {}
-    impl Focusable for BlankPanel {
-        fn focus_handle(&self, _: &gpui::App) -> FocusHandle {
-            self.focus_handle.clone()
-        }
-    }
-    impl Render for BlankPanel {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            div()
-        }
-    }
-
-    fn blank_panel(cx: &mut gpui::App) -> Arc<dyn PanelView> {
-        Arc::new(cx.new(|cx| BlankPanel {
-            focus_handle: cx.focus_handle(),
-        }))
-    }
+    use super::super::test_panels::NamedPanel;
 
     #[gpui::test]
     fn center_has_no_visible_panel_detects_empty_and_ghost_layouts(cx: &mut TestAppContext) {
         cx.update(gpui_component::init);
-        let (_dock_area, cx) = cx.add_window_view(|window, cx| {
+        let (_dock_area, _cx) = cx.add_window_view(|window, cx| {
             let weak = cx.weak_entity();
 
             // Empty tab panel: nothing visible.
@@ -333,7 +300,7 @@ mod tests {
             ));
 
             // One panel anywhere in the split makes the center visible.
-            let panel = blank_panel(cx);
+            let panel = NamedPanel::view("blank", cx);
             let with_panel = DockItem::v_split(
                 vec![
                     DockItem::tabs(Vec::new(), &weak, window, cx),
@@ -349,11 +316,10 @@ mod tests {
             ));
 
             // A bare panel item is never treated as empty.
-            let bare = DockItem::panel(blank_panel(cx));
+            let bare = DockItem::panel(NamedPanel::view("blank", cx));
             assert!(!OneTermWorkspace::center_has_no_visible_panel(&bare, cx));
 
             DockArea::new("center-test", None, window, cx)
         });
-        let _ = cx;
     }
 }

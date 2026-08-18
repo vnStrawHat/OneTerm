@@ -104,7 +104,7 @@ impl AgentListView {
             let reg = registry.read(cx);
             (reg.cards().to_vec(), reg.summary())
         };
-        let has_working_cards = cards.iter().any(|card| card.state == AgentState::Working);
+        let has_working_cards = cards.iter().any(card_is_working);
         let groups = build_display_groups(&cards);
 
         let mut subs = Vec::new();
@@ -116,10 +116,7 @@ impl AgentListView {
                 (reg.cards().to_vec(), reg.summary())
             };
             this.cards = cards;
-            this.has_working_cards = this
-                .cards
-                .iter()
-                .any(|card| this.passes_filter(card) && card.state == AgentState::Working);
+            this.has_working_cards = this.any_visible_working();
             this.groups = build_display_groups(&this.cards);
             this.counts = counts;
             cx.notify();
@@ -181,18 +178,48 @@ impl AgentListView {
     }
 
     fn passes_filter(&self, card: &AgentCard) -> bool {
-        if matches!(card.lifecycle, Lifecycle::Ended { .. }) {
-            return false;
-        }
-        match self.filter {
-            Filter::All => true,
-            Filter::Working => card.state == AgentState::Working,
-            Filter::Blocked => card.state == AgentState::Blocked,
-            Filter::Errors => card.state == AgentState::Error,
-            Filter::Idle => card.state == AgentState::Idle,
-            Filter::Done => card.state == AgentState::Done,
-        }
+        card_passes_filter(self.filter, card)
     }
+
+    /// Whether any visible card still needs the spinner cadence.
+    fn any_visible_working(&self) -> bool {
+        self.cards
+            .iter()
+            .any(|card| self.passes_filter(card) && card_is_working(card))
+    }
+
+    /// Number of ended cards in the registry snapshot (the "Clear ended" affordance).
+    fn ended_count(&self) -> usize {
+        self.cards
+            .iter()
+            .filter(|card| matches!(card.lifecycle, Lifecycle::Ended { .. }))
+            .count()
+    }
+}
+
+/// Filter rule shared by the list and the group badges (CORR-41).
+///
+/// An ended card counts as done — `AgentRegistry::summary` folds `Ended` into
+/// `done` — so it stays visible (dimmed) under `All` and `Done`, and the Done
+/// chip never advertises cards the filter cannot show. Its last `state` is
+/// history, so it matches no other chip.
+fn card_passes_filter(filter: Filter, card: &AgentCard) -> bool {
+    if matches!(card.lifecycle, Lifecycle::Ended { .. }) {
+        return matches!(filter, Filter::All | Filter::Done);
+    }
+    match filter {
+        Filter::All => true,
+        Filter::Working => card.state == AgentState::Working,
+        Filter::Blocked => card.state == AgentState::Blocked,
+        Filter::Errors => card.state == AgentState::Error,
+        Filter::Idle => card.state == AgentState::Idle,
+        Filter::Done => card.state == AgentState::Done,
+    }
+}
+
+/// A live/stale card in the `Working` state animates; an ended one never does.
+fn card_is_working(card: &AgentCard) -> bool {
+    card.state == AgentState::Working && !matches!(card.lifecycle, Lifecycle::Ended { .. })
 }
 
 impl Focusable for AgentListView {
@@ -217,6 +244,7 @@ impl AgentListView {
         pal: &Palette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let ended = self.ended_count();
         let title = h_flex()
             .w_full()
             .items_center()
@@ -229,7 +257,26 @@ impl AgentListView {
                     .text_color(pal.foreground)
                     .child("Agents"),
             )
-            .child(div().flex_1());
+            .child(div().flex_1())
+            // Ended cards are kept for review but never pruned on their own
+            // (CORR-70); this is the one place that drops them.
+            .when(ended > 0, |this| {
+                this.child(
+                    div()
+                        .id("agent-clear-ended")
+                        .px_1p5()
+                        .py_0p5()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(pal.muted)
+                        .hover(|this| this.bg(pal.muted.opacity(0.12)))
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            AgentRegistry::global(cx).update(cx, |reg, cx| reg.clear_ended(cx));
+                        }))
+                        .child(format!("Clear ended ({ended})")),
+                )
+            });
 
         v_flex()
             .w_full()
@@ -324,10 +371,7 @@ impl AgentListView {
             .hover(|this| this.bg(chip.color.opacity(0.12)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.filter = chip.filter;
-                this.has_working_cards = this
-                    .cards
-                    .iter()
-                    .any(|card| this.passes_filter(card) && card.state == AgentState::Working);
+                this.has_working_cards = this.any_visible_working();
                 cx.notify();
             }))
             .child(
@@ -488,4 +532,57 @@ fn group_badges<'a>(cards: impl Iterator<Item = &'a AgentCard>, pal: &Palette) -
     push(error, pal.danger);
     push(resting, pal.muted);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use oneterm_state::Grouping;
+
+    use super::*;
+
+    fn card(state: AgentState, lifecycle: Lifecycle) -> AgentCard {
+        let mut card = AgentCard::new(
+            gpui::EntityId::from(1u64),
+            "a".into(),
+            &Grouping {
+                tab_key: gpui::EntityId::from(2u64),
+                tab_title: "tab".into(),
+                space_number: 0,
+                space_order: 0,
+            },
+        );
+        card.state = state;
+        card.lifecycle = lifecycle;
+        card
+    }
+
+    /// CORR-41: ended cards are counted as done by the registry, so the Done
+    /// and All chips must be able to show them; no other chip may.
+    #[test]
+    fn ended_cards_show_under_all_and_done_only() {
+        let ended = card(AgentState::Working, Lifecycle::Ended { exit_code: None });
+        assert!(card_passes_filter(Filter::All, &ended));
+        assert!(card_passes_filter(Filter::Done, &ended));
+        assert!(!card_passes_filter(Filter::Working, &ended));
+        assert!(!card_passes_filter(Filter::Idle, &ended));
+
+        let working = card(AgentState::Working, Lifecycle::Live);
+        assert!(card_passes_filter(Filter::Working, &working));
+        assert!(!card_passes_filter(Filter::Done, &working));
+    }
+
+    /// An ended card never drives the spinner cadence, whatever its last state.
+    #[test]
+    fn ended_cards_never_animate() {
+        assert!(card_is_working(&card(AgentState::Working, Lifecycle::Live)));
+        assert!(card_is_working(&card(
+            AgentState::Working,
+            Lifecycle::Stale
+        )));
+        assert!(!card_is_working(&card(
+            AgentState::Working,
+            Lifecycle::Ended { exit_code: Some(0) }
+        )));
+        assert!(!card_is_working(&card(AgentState::Idle, Lifecycle::Live)));
+    }
 }

@@ -90,8 +90,9 @@ cards in insertion order and exposes:
   `Live`, `Stale`, or `Ended`.
 - `remove_terminal(terminal_key, cx)` — drop cards for a terminal that was truly
   closed.
-- `clear_ended(cx)` — remove ended cards from the registry. There is no current
-  `agent-ui` button wired to this method.
+- `clear_ended(cx)` — remove ended cards from the registry. The panel header
+  shows a `Clear ended (n)` control while any ended card exists; it is the only
+  caller.
 - `refresh_stale(cx)` — mark live cards stale when no event has arrived within
   the effective stale window.
 - `summary()` — aggregate counts for the header chips. `Lifecycle::Ended` counts
@@ -187,8 +188,8 @@ Current card sort order:
 blocked → error → working → stale → idle → done → ended
 ```
 
-`Lifecycle::Ended` cards are sorted last by the model, but the current view
-filters ended cards out before rendering.
+`Lifecycle::Ended` cards are sorted last by the model and are shown (dimmed)
+only under the `All` and `Done` filters.
 
 ---
 
@@ -307,9 +308,8 @@ uses:
 | group/header background | `tokens.tab_bar` |
 | border | `border` |
 
-The left and right card borders use the state accent. Ended cards are dimmed if
-they are rendered by a future view, but the current `AgentListView` filters them
-out.
+The left and right card borders use the state accent. Ended and stale cards
+are rendered dimmed.
 
 ---
 
@@ -342,16 +342,18 @@ The header title is `Agents` with a bot icon. The filter row always contains:
 
 | Label | Filter |
 |---|---|
-| `All` | all non-ended cards |
-| `Work` | `state == working` |
-| `Block` | `state == blocked` |
-| `Err` | `state == error` |
-| `Idle` | `state == idle` |
-| `Done` | `state == done` |
+| `All` | every card, ended ones included |
+| `Work` | `state == working` and not ended |
+| `Block` | `state == blocked` and not ended |
+| `Err` | `state == error` and not ended |
+| `Idle` | `state == idle` and not ended |
+| `Done` | `state == done`, or `Lifecycle::Ended` |
 
-All filters currently exclude `Lifecycle::Ended` cards. The summary counts are
-computed from the registry before filtering; `Lifecycle::Ended` contributes to
-the done count.
+`Lifecycle::Ended` cards match only `All` and `Done`, mirroring the summary
+counts, which are computed from the registry before filtering and count
+`Lifecycle::Ended` as done. Ended cards therefore never inflate a chip whose
+filter cannot show them. A `Clear ended (n)` control appears in the header
+while ended cards exist and calls `AgentRegistry::clear_ended`.
 
 Group badges show counts for:
 
@@ -371,7 +373,7 @@ Group badges show counts for:
 |---|---|---|
 | `Live` | any fresh non-ended event | card renders normally |
 | `Stale` | registry stale refresh | liveness text changes to `stale`; sort rank moves after working |
-| `Ended` | terminal `Exited`/`Closed`, or `state: done` | registry retains the state, summary counts as done, current view hides the card |
+| `Ended` | terminal `Exited`/`Closed`, or `state: done` | registry retains the state, summary counts as done, the view shows the card dimmed under `All`/`Done` until `Clear ended` |
 
 Stale detection uses `UiConfig::agent_stale_threshold_ms()` with a default of
 300,000 ms. A heartbeat with `interval_ms` raises the effective threshold to at
@@ -460,7 +462,7 @@ These are known current gaps, not active behavior:
 - `session_reason` and `parent_id` are folded but not shown.
 - Tab groups are not collapsible.
 - There is no Agent Panel settings/gear menu.
-- Ended cards are retained by the registry but hidden by the current view.
+- Ended cards are retained by the registry until the user clears them.
 - Group order is first-seen registry order, not live dock tab order.
 
 ---

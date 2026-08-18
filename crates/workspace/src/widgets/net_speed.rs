@@ -53,10 +53,9 @@ impl NetSpeedIndicator {
                     .background_executor()
                     .timer(Duration::from_secs(1))
                     .await;
-                if let Some(this) = this.upgrade() {
-                    let _ = this.update_in(window, |this, _window, cx| {
-                        this.tick(cx);
-                    });
+                // The window or the indicator is gone: stop ticking.
+                if this.update_in(window, |this, _, cx| this.tick(cx)).is_err() {
+                    break;
                 }
             }
         });
@@ -94,41 +93,42 @@ impl NetSpeedIndicator {
         };
 
         let stats = oneterm_state::active_terminal::net_stats(&dock_area, cx);
+        let (visible, rx_bps, tx_bps) = self.sample(stats);
 
+        // Re-render only when what is shown would change (PERF-29): a hidden
+        // indicator has nothing to repaint, and an idle link keeps its label.
+        let changed = visible != self.visible
+            || (visible && (rx_bps != self.rx_bps || tx_bps != self.tx_bps));
+        self.visible = visible;
+        self.rx_bps = rx_bps;
+        self.tx_bps = tx_bps;
+        if changed {
+            cx.notify();
+        }
+    }
+
+    /// Fold one sample into the delta state; returns `(visible, rx_bps, tx_bps)`.
+    fn sample(&mut self, stats: Option<NetStats>) -> (bool, f64, f64) {
         match (stats, self.last_stats) {
             (Some(curr), Some(prev)) => {
                 // Compute delta — if the counter dropped (session changed) → saturating_sub = 0.
                 let drx = curr.rx_bytes.saturating_sub(prev.rx_bytes);
                 let dtx = curr.tx_bytes.saturating_sub(prev.tx_bytes);
-                // bytes/s → bits/s: × 8.
-                self.rx_bps = drx as f64 * 8.0;
-                self.tx_bps = dtx as f64 * 8.0;
                 self.last_stats = Some(curr);
-                if !self.visible {
-                    self.visible = true;
-                }
+                // bytes/s → bits/s: × 8.
+                (true, drx as f64 * 8.0, dtx as f64 * 8.0)
             }
             (Some(curr), None) => {
                 // First sample — no delta yet, just store it for the next tick.
                 self.last_stats = Some(curr);
-                self.rx_bps = 0.0;
-                self.tx_bps = 0.0;
-                if !self.visible {
-                    self.visible = true;
-                }
+                (true, 0.0, 0.0)
             }
             (None, _) => {
                 // No active SSH terminal → hide.
                 self.last_stats = None;
-                self.rx_bps = 0.0;
-                self.tx_bps = 0.0;
-                if self.visible {
-                    self.visible = false;
-                }
+                (false, 0.0, 0.0)
             }
         }
-
-        cx.notify();
     }
 
     /// Format the speed: `↓ 1.2 Kbps  ↑ 300 bps`.

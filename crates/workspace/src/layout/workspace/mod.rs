@@ -1,6 +1,4 @@
 //! [`OneTermWorkspace`] — OneTerm's main view.
-//!
-//! The original `workspace.rs` module has been split into `workspace/`.
 
 use std::collections::HashSet;
 use std::time::Duration;
@@ -22,18 +20,18 @@ pub(crate) mod layout;
 pub(crate) mod persistence;
 pub(crate) mod zoom;
 
+#[cfg(test)]
+mod layout_tests;
+#[cfg(test)]
+pub(crate) mod test_panels;
+
 pub const MAIN_DOCK_VERSION: usize = 3;
 pub const MAIN_DOCK_ID: &str = "main-dock";
 
-/// Set the Right Dock open/closed (no-op if there is no right dock).
-///
-/// Used by action handlers that reveal the right dock (Add Session, Add SFTP
-/// Browser, mode toggle).
-///
-/// Generic over a [`gpui::AppContext`] so it can be called from both the
-/// workspace action handler and a terminal panel hook. The `window` is passed
-/// explicitly (same pattern as `DockArea::toggle_dock`) so `Dock::set_open` can
-/// defer its collapse on the right window.
+/// Right-dock width used when no saved layout provides one (first launch, or
+/// a layout without a right dock).
+pub(crate) const DEFAULT_RIGHT_DOCK_WIDTH: gpui::Pixels = gpui::px(480.);
+
 pub(crate) use oneterm_state::dock_util::set_right_dock_open;
 
 /// Construct a fresh feature panel by its registered name, via the gpui-component
@@ -52,10 +50,12 @@ pub(crate) fn build_named_panel(
     cx: &mut App,
 ) -> std::sync::Arc<dyn gpui_component::dock::PanelView> {
     use gpui_component::dock::{PanelInfo, PanelRegistry, PanelState};
+    // A leaf panel carries no layout payload (CORR-64) — `PanelInfo::tabs`
+    // would describe a tab container, which this is not.
     let state = PanelState {
         panel_name: name.to_string(),
         children: Vec::new(),
-        info: PanelInfo::tabs(0),
+        info: PanelInfo::panel(serde_json::Value::Null),
     };
     let panel: std::sync::Arc<dyn gpui_component::dock::PanelView> = std::sync::Arc::from(
         PanelRegistry::build_panel(name, dock_area.clone(), &state, &state.info, window, cx),
@@ -76,7 +76,6 @@ pub(crate) fn build_named_panel(
 /// (`dock/invalid_panel.rs`).
 const INVALID_PANEL_NAME: &str = "InvalidPanel";
 
-/// Shared path to the persisted dock document.
 pub use oneterm_state::paths::state_file;
 
 /// Main workspace: title bar + dock area + status bar.
@@ -130,17 +129,30 @@ impl OneTermWorkspace {
             cx.notify();
         });
 
-        // Read the name of the zoomed panel BEFORE the layout is reset (the center
-        // always resets, and reset_* rewrites docks.json without the zoom → must save first).
-        let saved_zoom = persistence::read_zoomed_panel();
+        // Read docks.json once (PERF-27): the zoomed panel name must be taken
+        // BEFORE the layout is reset (the center always resets, and reset_*
+        // rewrites docks.json without the zoom), and the same document feeds
+        // the layout load. An unreadable file is left to the first save:
+        // `dock_persistence` — the document owner — quarantines it there.
+        let document = match persistence::read_dock_document() {
+            Ok(document) => Some(document),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                log::warn!("docks.json could not be read ({error}); using the default layout");
+                None
+            }
+        };
+        let saved_zoom = document
+            .as_ref()
+            .and_then(|document| document.zoomed_panel.clone());
 
-        match Self::load_layout(dock_area.clone(), window, cx) {
-            Ok(()) => {
-                layout::reset_center_only(weak_dock_area, window, cx);
-            }
-            Err(_) => {
-                layout::reset_default_layout(weak_dock_area, window, cx);
-            }
+        let loaded = document
+            .and_then(|document| persistence::load_layout(&dock_area, &document, window, cx).ok())
+            .is_some();
+        if loaded {
+            layout::reset_center_only(weak_dock_area, window, cx);
+        } else {
+            layout::reset_default_layout(weak_dock_area, window, cx);
         }
 
         // Apply the persisted right-dock mode. Both layout builders above set the
@@ -265,13 +277,15 @@ impl OneTermWorkspace {
         cx: &mut Context<Self>,
     ) {
         let dock_area = dock_area.clone();
-        self._save_layout_task = Some(cx.spawn_in(window, async move |story, window| {
+        self._save_layout_task = Some(cx.spawn_in(window, async move |this, window| {
             window
                 .background_executor()
                 .timer(Duration::from_secs(2))
                 .await;
 
-            _ = story.update_in(window, move |this, _, cx| {
+            // The workspace may be gone before the debounce elapses; the exit
+            // hooks own the final write in that case.
+            _ = this.update_in(window, move |this, _, cx| {
                 let state = dock_area.read(cx).dump(cx);
                 if Some(&state) == this.last_layout_state.as_ref() {
                     return;
@@ -291,7 +305,7 @@ impl OneTermWorkspace {
     /// `zoomed_panel` mirror. Called after each `DockEvent::LayoutChanged` and at init.
     fn sync_tab_subscriptions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tabs = zoom::collect_tab_panels(&self.dock_area.read(cx), cx);
-        log::info!("sync_tab_subscriptions → found {} tab panel(s)", tabs.len());
+        log::debug!("sync_tab_subscriptions → found {} tab panel(s)", tabs.len());
         for tp in tabs {
             let id = tp.entity_id();
             if self.subscribed_tabs.insert(id) {
@@ -305,7 +319,7 @@ impl OneTermWorkspace {
                                 .read(cx)
                                 .active_panel(cx)
                                 .map(|p| p.panel_name(cx).to_string());
-                            log::info!("PanelEvent::ZoomIn → name={name:?}");
+                            log::debug!("PanelEvent::ZoomIn → name={name:?}");
                             this.zoomed_panel = name.clone();
                             // Save to docks.json IMMEDIATELY — independent of quit/debounce.
                             let state = this.dock_area.read(cx).dump(cx);
@@ -321,7 +335,7 @@ impl OneTermWorkspace {
                             cx.notify();
                         }
                         PanelEvent::ZoomOut => {
-                            log::info!("PanelEvent::ZoomOut");
+                            log::debug!("PanelEvent::ZoomOut");
                             this.zoomed_panel = None;
                             let state = this.dock_area.read(cx).dump(cx);
                             cx.background_executor()
@@ -357,7 +371,7 @@ impl OneTermWorkspace {
     ///
     /// Delegates to the settings feature (via the workspace command registry),
     /// which snapshots the current bindings then applies OneTerm's overrides.
-    /// This keeps the shell free of any `views::settings` dependency.
+    /// This keeps the shell free of any settings-UI dependency.
     pub fn bind_keys(cx: &mut App) {
         (oneterm_state::commands::commands(cx).setup_key_bindings)(cx);
     }

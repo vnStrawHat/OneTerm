@@ -1,7 +1,5 @@
 //! File operations for [`SftpPanel`] — directory listing, navigation, refresh,
 //! column toggling, and the auto-follow-terminal-cwd logic.
-//!
-//! Split out from [`super::panel`] to keep each file under the ~400-line guideline.
 
 use gpui::{App, Context};
 
@@ -91,11 +89,13 @@ impl SftpPanel {
                 self.mark_entries_dirty();
             }
             Err(e) => {
+                // Keep the previous listing on screen under an error banner
+                // (ERR-08) so the user does not lose their place; the entries
+                // carry absolute paths, so navigating from them stays valid.
                 log::error!("SftpPanel::load_dir: read_dir failed: {e}");
                 self.browser_mut().set_error(Some(e.to_string()));
                 self.table().update(cx, |t, cx| {
                     t.delegate_mut().loading = false;
-                    t.delegate_mut().set_entries(Vec::new());
                     t.refresh(cx);
                 });
             }
@@ -330,6 +330,39 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(listed_names(&panel, cx), vec!["b.txt"]);
         assert_eq!(cwd(&panel, cx), second_dir);
+        assert!(panel.read_with(cx, |panel, cx| !panel.table().read(cx).delegate().loading));
+    }
+
+    /// ERR-08: a failed listing keeps the previous entries on screen and
+    /// records the error for the banner instead of blanking the table.
+    #[gpui::test]
+    fn failed_listing_keeps_the_previous_entries_and_reports_the_error(cx: &mut TestAppContext) {
+        let (panel, cx) = test_panel(cx);
+        let backend = attach_backend(&panel, cx);
+        let first_reply = backend.arm_read_dir();
+        let second_reply = backend.arm_read_dir();
+
+        let first_dir = RemotePath::new("/first");
+        panel.update(cx, |panel, cx| panel.load_dir(first_dir.clone(), cx));
+        first_reply
+            .try_send(Ok(vec![dir_entry(&first_dir, "a.txt", false)]))
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(listed_names(&panel, cx), vec!["a.txt"]);
+
+        let denied = RemotePath::new("/root");
+        panel.update(cx, |panel, cx| panel.load_dir(denied.clone(), cx));
+        second_reply
+            .try_send(Err(oneterm_core::AppError::msg("permission denied")))
+            .unwrap();
+        cx.run_until_parked();
+
+        assert_eq!(listed_names(&panel, cx), vec!["a.txt"]);
+        assert_eq!(cwd(&panel, cx), denied);
+        assert_eq!(
+            panel.read_with(cx, |panel, _| panel.browser().error().map(str::to_string)),
+            Some("permission denied".to_string())
+        );
         assert!(panel.read_with(cx, |panel, cx| !panel.table().read(cx).delegate().loading));
     }
 

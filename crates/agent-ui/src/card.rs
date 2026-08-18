@@ -9,7 +9,9 @@ use gpui::{
     SharedString, StatefulInteractiveElement as _, Styled as _, TextAlign, div,
     prelude::FluentBuilder as _, px, relative,
 };
-use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
+use gpui_component::{
+    ActiveTheme as _, Colorize as _, Icon, IconName, Sizable as _, h_flex, v_flex,
+};
 
 use oneterm_state::{AgentCard, Lifecycle, ModelInfo, ToolRun};
 use oneterm_terminal::AgentState;
@@ -430,7 +432,7 @@ fn context_bar(card: &AgentCard, model: &ModelInfo, pal: &Palette) -> Option<Any
     match model.context_window {
         Some(window) if window > 0 => {
             let frac = (used as f64 / window as f64).clamp(0.0, 1.0) as f32;
-            let color = usage_color(frac);
+            let color = usage_color(frac, pal);
             let pct = (frac * 100.0).round() as u32;
             let label = format!("{} / {}  {}%", fmt_tokens(used), fmt_tokens(window), pct);
 
@@ -593,10 +595,15 @@ fn truncate_tail_chars(text: &str, max_len: usize) -> String {
     format!("...{tail}")
 }
 
-fn usage_color(frac: f32) -> Hsla {
+/// Context-usage tint: success at 0 %, warning at 50 %, danger at 100 % —
+/// derived from the theme rather than a fixed hue ramp (HYG-13).
+fn usage_color(frac: f32, pal: &Palette) -> Hsla {
     let t = frac.clamp(0.0, 1.0);
-    let hue = (1.0 - t) * (120.0 / 360.0);
-    gpui::hsla(hue, 0.9, 0.48, 1.0)
+    if t <= 0.5 {
+        pal.success.mix_oklab(pal.warning, t * 2.0)
+    } else {
+        pal.warning.mix_oklab(pal.danger, (t - 0.5) * 2.0)
+    }
 }
 
 #[cfg(test)]

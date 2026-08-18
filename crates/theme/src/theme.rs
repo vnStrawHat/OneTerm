@@ -90,9 +90,14 @@ pub fn init(cx: &mut App) {
 
     cx.on_action(|switch: &SwitchTheme, cx| {
         let theme_name = switch.0.clone();
-        if let Some(theme_config) = ThemeRegistry::global(cx).themes().get(&theme_name).cloned() {
-            Theme::global_mut(cx).apply_config(&theme_config);
-            apply_list_style_override(cx);
+        match ThemeRegistry::global(cx).themes().get(&theme_name).cloned() {
+            Some(theme_config) => {
+                Theme::global_mut(cx).apply_config(&theme_config);
+                apply_list_style_override(cx);
+            }
+            // A stale key binding or menu entry can name a theme that is not
+            // registered; say so instead of ignoring the action (ERR-10).
+            None => log::warn!("SwitchTheme: theme {theme_name:?} is not registered — ignored"),
         }
         cx.refresh_windows();
     });
@@ -146,22 +151,13 @@ pub fn init(cx: &mut App) {
         }
     }
 
-    // FontSizeSelector dropped the Border Radius and Scrollbar options, so set fixed
-    // defaults here (after Theme::change so apply_config does not override them —
-    // the theme JSON does not declare a radius, so config.radius = None).
+    // Fixed shape defaults, applied after `Theme::change` so `apply_config`
+    // does not override them (the theme JSON declares no radius, so
+    // `config.radius = None`):
     //
-    // - radius = sub-pixel (0.001px), radius_lg = 0px: sharp/angular UI.
-    // - scrollbar_show = Scrolling: show the scrollbar while scrolling, auto-hide when idle.
-    //   (gpui_component::init may have set it = Hover via sync_scrollbar_appearance,
-    //   so we force it back = Scrolling here.)
-    //
-    // NOTE on radius ≠ 0:
-    // gpui-component forces the scrollbar thumb square when `theme.radius.is_zero()`
-    // (scroll/scrollbar.rs:765). We want the thumb rounded by THUMB_RADIUS, so we use
-    // a sub-pixel value ≠ 0 → is_zero() = false → the thumb gets rounded. Every other
-    // component using `.rounded(theme.radius)` still renders square corners (0.001px <
-    // sub-pixel, not visible). Slider/PieChart also gate on is_zero but the project does
-    // not use them → no impact.
+    // - radius = 4px, radius_lg = 6px: softly rounded controls.
+    // - scrollbar_show = Always: scrollbars stay visible instead of the
+    //   gpui-component default (`sync_scrollbar_appearance` may set Hover).
     {
         let theme = Theme::global_mut(cx);
         theme.radius = px(4.);

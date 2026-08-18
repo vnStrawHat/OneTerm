@@ -272,7 +272,9 @@ pub struct AgentCard {
 }
 
 impl AgentCard {
-    pub(crate) fn new(terminal_key: EntityId, agent_id: String, grouping: &Grouping) -> Self {
+    /// A fresh `Idle`/`Live` card for `agent_id` in the terminal `terminal_key`,
+    /// placed by `grouping`; every other field starts empty.
+    pub fn new(terminal_key: EntityId, agent_id: String, grouping: &Grouping) -> Self {
         Self {
             terminal_key,
             agent_id,

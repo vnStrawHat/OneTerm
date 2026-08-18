@@ -4,7 +4,7 @@
 //! Theme submenu, and Language. The Edit / View / Help menus were removed; their
 //! actions remain reachable via key bindings and the in-app UI.
 
-use gpui::{App, Entity, Menu, MenuItem, SharedString, px};
+use gpui::{App, Entity, Menu, MenuItem, OwnedMenu, SharedString, px};
 use gpui_component::{ActiveTheme as _, GlobalState, Theme, ThemeRegistry, menu::AppMenuBar};
 
 use oneterm_actions::{
@@ -70,16 +70,49 @@ pub fn init(title: impl Into<SharedString>, cx: &mut App) -> Entity<AppMenuBar> 
 fn update_app_menu(title: impl Into<SharedString>, app_menu_bar: Entity<AppMenuBar>, cx: &mut App) {
     let title: SharedString = title.into();
 
-    cx.set_menus(build_menus(title.clone(), cx));
-    let menus = build_menus(title, cx)
-        .into_iter()
-        .map(|menu| menu.owned())
-        .collect();
-    GlobalState::global_mut(cx).set_app_menus(menus);
+    // Build the tree once; the platform menu and the in-window menu bar both
+    // need a copy (`Menu` is not `Clone`, `Menu::owned` consumes it).
+    let menus = build_menus(title, cx);
+    let owned: Vec<OwnedMenu> = menus.iter().map(clone_menu).map(Menu::owned).collect();
+    cx.set_menus(menus);
+    GlobalState::global_mut(cx).set_app_menus(owned);
 
     app_menu_bar.update(cx, |menu_bar, cx| {
         menu_bar.reload(cx);
     });
+}
+
+/// Deep-copy a menu tree (actions via `Action::boxed_clone`).
+fn clone_menu(menu: &Menu) -> Menu {
+    Menu {
+        name: menu.name.clone(),
+        items: menu.items.iter().map(clone_menu_item).collect(),
+        disabled: menu.disabled,
+    }
+}
+
+fn clone_menu_item(item: &MenuItem) -> MenuItem {
+    match item {
+        MenuItem::Separator => MenuItem::Separator,
+        MenuItem::Submenu(menu) => MenuItem::Submenu(clone_menu(menu)),
+        MenuItem::SystemMenu(os_menu) => MenuItem::SystemMenu(gpui::OsMenu {
+            name: os_menu.name.clone(),
+            menu_type: os_menu.menu_type,
+        }),
+        MenuItem::Action {
+            name,
+            action,
+            os_action,
+            checked,
+            disabled,
+        } => MenuItem::Action {
+            name: name.clone(),
+            action: action.boxed_clone(),
+            os_action: *os_action,
+            checked: *checked,
+            disabled: *disabled,
+        },
+    }
 }
 
 fn build_menus(title: impl Into<SharedString>, cx: &App) -> Vec<Menu> {

@@ -66,8 +66,11 @@ pub struct SftpPanel {
     path_input: Entity<InputState>,
     _path_sub: Subscription,
 
-    /// Handle for the auto-follow polling task so we can detach it.
+    /// The poll timer (terminal cwd cache, auto-follow, deferred store
+    /// snapshot). Runs only while a backend is active; see [`Self::ensure_poll_timer`].
     _follow_task: Option<Task<()>>,
+    /// `true` while the poll timer loop is alive.
+    poll_running: bool,
     /// Mutation gate for panel-level changes (column widths, sort) that are
     /// not tracked by one of the views.
     snapshot_gate: SnapshotGate,
@@ -131,30 +134,6 @@ impl SftpPanel {
         })
         .detach();
 
-        // Auto-follow polling timer — checks terminal cwd every 500ms and
-        // syncs the SFTP browser if follow is enabled and the cwd changed.
-        let _follow_task = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(500))
-                    .await;
-                let _ = this.update(cx, |this, cx| {
-                    this.refresh_terminal_cwd_cache(cx);
-                    this.maybe_follow_terminal_cwd(cx);
-                    // Persist only after a browser-state mutation. The timer remains
-                    // responsible for saving changes made by a panel that is removed
-                    // without a backend transition, but it no longer clones directory
-                    // entries while the panel is idle.
-                    SftpBrowserStore::global(cx).purge_closed();
-                    if this.take_dirty() {
-                        if let Some(key) = this.active_key {
-                            this.save_state_for_key(key, cx);
-                        }
-                    }
-                });
-            }
-        });
-
         // Path input — display cwd, Enter → goto path.
         let path_input = cx.new(|cx| InputState::new(window, cx).placeholder("Path"));
         let _path_sub = cx.subscribe_in(&path_input, window, Self::on_path_input_event);
@@ -170,7 +149,8 @@ impl SftpPanel {
             table,
             path_input,
             _path_sub,
-            _follow_task: Some(_follow_task),
+            _follow_task: None,
+            poll_running: false,
             snapshot_gate: SnapshotGate::default(),
             entries_dirty: false,
             _save_table_task: None,
@@ -188,6 +168,58 @@ impl SftpPanel {
         me.load_table_state(cx);
 
         me
+    }
+
+    /// Start the 500 ms poll timer if it is not already running (CORR-67).
+    ///
+    /// Each tick refreshes the cached terminal cwd, auto-follows it when the
+    /// toggle is on, and snapshots the view into the per-backend store after a
+    /// mutation. None of that is needed without an active backend, so the loop
+    /// ends itself when the panel shows "No SFTP connection" and is restarted
+    /// by the next backend switch.
+    fn ensure_poll_timer(&mut self, cx: &mut Context<Self>) {
+        if self.poll_running {
+            return;
+        }
+        self.poll_running = true;
+        self._follow_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(500))
+                    .await;
+                // The panel may be gone; then there is nothing left to poll.
+                let keep_polling = this
+                    .update(cx, |this, cx| {
+                        if this.active_key.is_none() {
+                            this.poll_running = false;
+                            return false;
+                        }
+                        this.refresh_terminal_cwd_cache(cx);
+                        this.maybe_follow_terminal_cwd(cx);
+                        // Persist only after a browser-state mutation. The timer
+                        // remains responsible for saving changes made by a panel
+                        // that is removed without a backend transition, but it no
+                        // longer clones directory entries while the panel is idle.
+                        SftpBrowserStore::global(cx).purge_closed();
+                        if this.take_dirty() {
+                            if let Some(key) = this.active_key {
+                                this.save_state_for_key(key, cx);
+                            }
+                        }
+                        true
+                    })
+                    .unwrap_or(false);
+                if !keep_polling {
+                    break;
+                }
+            }
+        }));
+    }
+
+    /// `true` while the poll timer loop is alive (test hook for CORR-67).
+    #[cfg(test)]
+    pub(crate) fn poll_timer_running(&self) -> bool {
+        self.poll_running
     }
 
     /// Read the persisted column state off the UI thread and apply it once it
@@ -282,6 +314,7 @@ impl SftpPanel {
         self.sftp = Some(backend);
         self.active_key = Some(key);
         self.browser.set_cwd(cwd);
+        self.ensure_poll_timer(cx);
     }
 
     // ── Backend switching ────────────────────────────────────
@@ -340,6 +373,7 @@ impl SftpPanel {
         // Restore (or initialize) the NEW backend's view.
         match new_key {
             Some(key) => {
+                self.ensure_poll_timer(cx);
                 let store = SftpBrowserStore::global(cx);
                 if let Some(backend) = self.sftp.as_ref() {
                     store.track_backend(backend);
@@ -597,5 +631,48 @@ impl Panel for SftpPanel {
 
     fn zoomable(&self, _: &App) -> Option<PanelControl> {
         Some(PanelControl::Both)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use gpui::{AppContext as _, TestAppContext};
+    use oneterm_core::RemotePath;
+
+    use super::SftpPanel;
+    use crate::test_backend::FakeSftpBackend;
+
+    /// CORR-67: the 500 ms poll timer runs only while a backend is active.
+    #[gpui::test]
+    fn poll_timer_stops_without_a_backend_and_restarts_with_one(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(oneterm_state::AppState::init);
+        cx.update(crate::browser_state::SftpBrowserStore::init);
+        let (panel, cx) = cx.add_window_view(|window, cx| SftpPanel::new(window, cx));
+
+        // A fresh panel shows "No SFTP connection" — nothing to poll.
+        assert!(!panel.read_with(cx, |panel, _| panel.poll_timer_running()));
+
+        let backend = Arc::new(FakeSftpBackend::new());
+        panel.update(cx, |panel, cx| {
+            panel.attach_backend_for_test(backend, RemotePath::new("/srv"), cx);
+        });
+        assert!(panel.read_with(cx, |panel, _| panel.poll_timer_running()));
+
+        // Switching to no backend lets the loop end on its next tick.
+        panel.update(cx, |panel, cx| panel.sync_from_app_state(None, None, cx));
+        cx.executor().advance_clock(Duration::from_millis(600));
+        cx.run_until_parked();
+        assert!(!panel.read_with(cx, |panel, _| panel.poll_timer_running()));
+
+        // The next backend restarts it.
+        let backend = Arc::new(FakeSftpBackend::new());
+        panel.update(cx, |panel, cx| {
+            panel.attach_backend_for_test(backend, RemotePath::new("/srv"), cx);
+        });
+        assert!(panel.read_with(cx, |panel, _| panel.poll_timer_running()));
     }
 }

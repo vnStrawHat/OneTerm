@@ -23,7 +23,8 @@ use gpui::{
 };
 use gpui_component::dock::{Panel, PanelControl, PanelEvent};
 use gpui_component::{
-    WindowExt, input::InputState, notification::NotificationType, tree::TreeState,
+    WindowExt, button::ButtonVariant, dialog::DialogButtonProps, input::InputState,
+    notification::NotificationType, tree::TreeState,
 };
 
 use crate::session_state::{SshSessionId, SshSessionStore};
@@ -31,6 +32,11 @@ use oneterm_actions::{DeleteSession, NewSession, OpenSession, SessionProperty};
 
 use super::session_dialog::open_session_dialog;
 use super::tree_builder::build_tree_items;
+
+/// Wording of the delete confirmation for the saved session `label`.
+fn delete_session_confirmation(label: &str) -> String {
+    format!("Delete the saved SSH session \"{label}\"? This cannot be undone.")
+}
 
 /// Id prefix for leaf TreeItems (sessions) — followed by the stable session id.
 pub(crate) const SESSION_ID_PREFIX: &str = "session:";
@@ -142,26 +148,51 @@ impl SessionPanel {
         }
     }
 
-    /// Action handler: delete the selected session from the store.
+    /// Action handler: delete the selected session from the store — after a
+    /// confirmation, since the action is reachable from a rebindable key and
+    /// cannot be undone (CORR-34).
     pub(crate) fn on_delete_session(
         &mut self,
         _: &DeleteSession,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(id) = self.selected_session_id(cx) {
-            self.store.update(cx, |s, cx| {
-                s.remove(id, cx);
-            });
-            window.push_notification(
-                oneterm_state::notif_ext::notify(
-                    NotificationType::Success,
-                    "SSH session deleted.",
-                    cx,
-                ),
-                cx,
-            );
-        }
+        let Some(id) = self.selected_session_id(cx) else {
+            return;
+        };
+        let Some(label) = self.store.read(cx).get(id).map(|s| s.label.clone()) else {
+            return;
+        };
+        let store = self.store.clone();
+        let description = delete_session_confirmation(&label);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let store = store.clone();
+            alert
+                .confirm()
+                .title("Delete SSH Session")
+                .description(description.clone())
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text("Delete")
+                        .ok_variant(ButtonVariant::Danger)
+                        .cancel_text("Cancel")
+                        .show_cancel(true),
+                )
+                .on_ok(move |_, window, cx| {
+                    store.update(cx, |s, cx| {
+                        s.remove(id, cx);
+                    });
+                    window.push_notification(
+                        oneterm_state::notif_ext::notify(
+                            NotificationType::Success,
+                            "SSH session deleted.",
+                            cx,
+                        ),
+                        cx,
+                    );
+                    true
+                })
+        });
     }
 
     /// Action handler: open the property dialog for the selected session.

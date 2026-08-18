@@ -51,10 +51,9 @@ impl BreadcrumbIndicator {
                     .background_executor()
                     .timer(Duration::from_millis(500))
                     .await;
-                if let Some(this) = this.upgrade() {
-                    let _ = this.update_in(window, |this, _window, cx| {
-                        this.tick(cx);
-                    });
+                // The window or the indicator is gone: stop ticking.
+                if this.update_in(window, |this, _, cx| this.tick(cx)).is_err() {
+                    break;
                 }
             }
         });
