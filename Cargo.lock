@@ -5254,6 +5254,7 @@ dependencies = [
  "oneterm-terminal",
  "oneterm-terminal-view",
  "oneterm-theme",
+ "oneterm-update",
  "oneterm-workspace",
  "rand 0.10.1",
  "serde_json",

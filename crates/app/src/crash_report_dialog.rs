@@ -1,4 +1,7 @@
 //! Sequential recovery dialogs for crash reports captured during previous runs.
+//!
+//! Lives in the composition root next to the crash store it presents
+//! (ARCH-38); the settings feature crate knows nothing about crash reports.
 
 use std::{collections::VecDeque, io, path::PathBuf};
 
@@ -14,19 +17,14 @@ use gpui_component::{
     v_flex,
 };
 
-const NEW_ISSUE_URL: &str = "https://github.com/vnStrawHat/OneTerm/issues/new";
-const ISSUE_TITLE: &str = "Crash report";
+use crate::crash_report::PendingCrashReport as CrashReport;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CrashReport {
-    pub path: PathBuf,
-    pub contents: String,
-}
+const ISSUE_TITLE: &str = "Crash report";
 
 type CleanupReport = fn(PathBuf) -> io::Result<()>;
 
 /// Show retained crash reports newest-first after the main window opens.
-pub fn show_crash_reports(
+pub(crate) fn show_crash_reports(
     reports: Vec<CrashReport>,
     cleanup: CleanupReport,
     root: &mut Root,
@@ -134,8 +132,17 @@ fn crash_dialog(
     }
 }
 
+/// New-issue page of the repository this build was configured for (the same
+/// `owner/repo` the updater queries), so a fork build files issues against itself.
+fn new_issue_url() -> String {
+    format!(
+        "https://github.com/{}/issues/new",
+        oneterm_update::UPDATE_REPOSITORY
+    )
+}
+
 fn create_issue_url() -> String {
-    format!("{NEW_ISSUE_URL}?title={}", percent_encode(ISSUE_TITLE))
+    format!("{}?title={}", new_issue_url(), percent_encode(ISSUE_TITLE))
 }
 
 fn percent_encode(value: &str) -> String {
@@ -185,7 +192,9 @@ mod tests {
     fn issue_url_prefills_only_the_title() {
         let url = create_issue_url();
 
-        assert_eq!(url, format!("{NEW_ISSUE_URL}?title=Crash%20report"));
+        assert_eq!(url, format!("{}?title=Crash%20report", new_issue_url()));
+        assert!(url.starts_with("https://github.com/"));
+        assert!(url.contains(oneterm_update::UPDATE_REPOSITORY));
         assert!(!url.contains("body="));
     }
 }

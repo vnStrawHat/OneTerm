@@ -65,19 +65,26 @@ fn main() {
         //
         // Target directory = OUT_DIR up 3 levels
         // (target/debug/build/<hash>/out → target/debug).
-        let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-        let target_dir = out_dir.ancestors().nth(3).unwrap().to_path_buf();
+        //
+        // The vendored ConPTY binaries are x64 builds (see
+        // THIRD-PARTY-NOTICES.md); an aarch64 build must not ship them, it
+        // falls back to the system ConPTY instead (BUILD-14).
+        let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+        if target_arch == "x86_64" {
+            let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+            let target_dir = out_dir.ancestors().nth(3).unwrap().to_path_buf();
 
-        // Copy conpty.dll → target/conpty.dll
-        let conpty_src = assets_dir.join("conpty.dll");
-        let conpty_dst = target_dir.join("conpty.dll");
-        copy_runtime_asset(&conpty_src, &conpty_dst, "conpty.dll");
+            // Copy conpty.dll → target/conpty.dll
+            let conpty_src = assets_dir.join("conpty.dll");
+            let conpty_dst = target_dir.join("conpty.dll");
+            copy_runtime_asset(&conpty_src, &conpty_dst, "conpty.dll");
 
-        // Copy x64/OpenConsole.exe → target/x64/OpenConsole.exe
-        let openconsole_src = assets_dir.join("x64").join("OpenConsole.exe");
-        let openconsole_dst = target_dir.join("x64").join("OpenConsole.exe");
-        let _ = std::fs::create_dir_all(target_dir.join("x64"));
-        copy_runtime_asset(&openconsole_src, &openconsole_dst, "OpenConsole.exe");
+            // Copy x64/OpenConsole.exe → target/x64/OpenConsole.exe
+            let openconsole_src = assets_dir.join("x64").join("OpenConsole.exe");
+            let openconsole_dst = target_dir.join("x64").join("OpenConsole.exe");
+            let _ = std::fs::create_dir_all(target_dir.join("x64"));
+            copy_runtime_asset(&openconsole_src, &openconsole_dst, "OpenConsole.exe");
+        }
 
         // Re-run the build script when assets / resources change (Cargo already
         // re-runs it when the package version changes).

@@ -2,6 +2,7 @@
 //!
 //! Mirrors `reference/.../story/examples/dock.rs` `StoryWorkspace::new_local`.
 
+use anyhow::Context as _;
 use gpui::{
     App, AppContext, Bounds, Size, Task, WindowBounds, WindowHandle, WindowKind, WindowOptions, px,
     size,
@@ -10,8 +11,10 @@ use gpui_component::Root;
 #[cfg(not(target_os = "linux"))]
 use gpui_component::TitleBar;
 
-use oneterm_settings_ui::{CrashReport, show_crash_reports, start_auto_check};
+use oneterm_settings_ui::start_auto_check;
 use oneterm_workspace::OneTermWorkspace;
+
+use crate::crash_report_dialog::show_crash_reports;
 
 /// Open the main window and return its task handle.
 pub(crate) fn open_window(
@@ -53,15 +56,8 @@ pub(crate) fn open_window(
             .update(cx, |root, window, cx| {
                 window.activate_window();
                 start_auto_check(window, cx);
-                let reports = pending_crash_reports
-                    .into_iter()
-                    .map(|report| CrashReport {
-                        path: report.path,
-                        contents: report.contents,
-                    })
-                    .collect();
                 show_crash_reports(
-                    reports,
+                    pending_crash_reports,
                     crate::crash_report::delete_pending_report,
                     root,
                     window,
@@ -75,7 +71,7 @@ pub(crate) fn open_window(
                 // processed by the run loop (CORR-04).
                 cx.on_release(|_, cx| cx.quit()).detach();
             })
-            .expect("failed to update window");
+            .context("failed to configure the main window after opening it")?;
 
         Ok(window)
     })

@@ -28,7 +28,7 @@ OneTerm/
 ├── crates/
 │   ├── app/                        # Binary + wiring: the ONLY crate that knows every other crate
 │   │   ├── Cargo.toml              # name = "oneterm-app", default-run = "oneterm-debug"
-│   │   ├── build.rs                # Embed app icon (.rc) + copy conpty.dll/OpenConsole.exe
+│   │   ├── build.rs                # Embed app icon (.rc) + copy conpty.dll/OpenConsole.exe (x86_64 only; THIRD-PARTY-NOTICES.md)
 │   │   ├── assets/                 # Runtime resources (oneterm.rc, conpty.dll, x64/OpenConsole.exe, icons/)
 │   │   ├── macos/Info.plist        # macOS .app bundle descriptor ({{VERSION}})
 │   │   └── src/
@@ -38,6 +38,9 @@ OneTerm/
 │   │       ├── agent_panel.rs       # Agent Mode right-dock panel (placeholder) (DockItem::Panel)
 │   │       ├── session_factory.rs  # AppSessionFactory: dispatches spawn_local/connect_ssh to local/ssh
 │   │       ├── assets.rs           # CustomAssets (merges oneterm_theme::icon::UiAssets + gpui-component)
+│   │       ├── crash_report.rs     # Crash store: panic hook, native staging promotion, retention (docs/crash-reporting.md)
+│   │       ├── crash_report_dialog.rs # Recovery dialogs shown after the main window opens
+│   │       ├── native_crash.rs     # crash-handler callback (compromised-context-safe writes)
 │   │       ├── window.rs           # open_window(cx) — create window + attach OneTermWorkspace
 │   │       └── bin/
 │   │           ├── oneterm.rs          # Release binary → oneterm(.exe) (WINDOWS subsystem)
@@ -112,7 +115,7 @@ OneTerm/
 │   │       └── paths.rs            # docks.json path (shared shell/sftp)
 │   │
 │   ├── update/                     # `oneterm-update` — GitHub Releases updater service + staging/install orchestration
-│   │   └── src/                    # lib.rs + config/github/archive/install/version helpers
+│   │   └── src/                    # lib.rs + config/github (ReleaseClient trait)/archive/install/version; *_tests.rs siblings
 │   │
 │   ├── theme/                      # `oneterm-theme` — theme registry + AppIcon (has build.rs)
 │   │   ├── build.rs                # Sets ONETERM_UI_ICONS_DIR for the icon_named! macro
@@ -201,7 +204,7 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 | `agent-ui` (`oneterm-agent-ui`) | `terminal`, `settings`, `state`, gpui-component | feature | Agent Panel fleet view. |
 | `ssh` (`oneterm-ssh`) | `core`, `terminal` | backend | russh client and SFTP; implements `TerminalSession` and `SftpBackend`. |
 | `local-shell` (`oneterm-local-shell`) | `core`, `terminal` | backend | Local PTY; implements `TerminalSession`. |
-| `app` (`oneterm-app`) | shell + all five features + shared layers + gpui-component + both backends | binary | Only crate that knows every layer. Installs `AppSessionFactory`, initializes features and commands, and opens the window. |
+| `app` (`oneterm-app`) | shell + all five features + shared layers (incl. `update`) + gpui-component + both backends | binary | Only crate that knows every layer. Installs `AppSessionFactory`, initializes features and commands, and opens the window. |
 
 ## 3.1 Crate & dependency rules
 

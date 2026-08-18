@@ -21,6 +21,15 @@ pub(crate) fn start_auto_check(window: &mut Window, cx: &mut App) {
         log::info!("Automatic update check is disabled in Settings.");
         return;
     }
+    // Honour the configured interval; a manual check bypasses it (ARCH-36).
+    if !config.should_auto_check() {
+        log::info!(
+            "Automatic update check skipped: last check {} is within the {} hour interval.",
+            config.last_checked_at.as_deref().unwrap_or("(unknown)"),
+            config.effective_check_interval_hours()
+        );
+        return;
+    }
     let repository = oneterm_update::UPDATE_REPOSITORY.to_owned();
     state.update(cx, |state, cx| {
         state.status = UpdateUiStatus::Checking;
@@ -158,9 +167,113 @@ fn apply_check_result(state: &mut UpdateUiState, result: oneterm_core::Result<Up
     }
 }
 
+/// Skip the version currently offered: persist the preference so later checks
+/// stop offering it, and withdraw the offer from the UI (ARCH-36).
+pub(crate) fn skip_offered_version(cx: &mut App) {
+    let state = UpdateUiState::global(cx);
+    let version = {
+        let state = state.read(cx);
+        if state.is_busy() {
+            return;
+        }
+        let Some(candidate) = state.candidate.as_ref() else {
+            return;
+        };
+        candidate.version.clone()
+    };
+    super::config::set_skipped_version(cx, Some(version.clone()));
+    state.update(cx, |state, cx| {
+        apply_skipped_version(state, &version);
+        cx.notify();
+    });
+    log::info!("Update {version} skipped in Settings.");
+}
+
+fn apply_skipped_version(state: &mut UpdateUiState, version: &str) {
+    if state
+        .candidate
+        .as_ref()
+        .is_some_and(|candidate| candidate.version == version)
+    {
+        state.candidate = None;
+        state.staged = None;
+        state.status = UpdateUiStatus::Skipped(version.to_owned());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn candidate(version: &str) -> oneterm_update::UpdateCandidate {
+        oneterm_update::UpdateCandidate {
+            version: version.to_owned(),
+            tag_name: format!("v{version}"),
+            release_name: None,
+            release_notes_url: String::new(),
+            body: None,
+            asset_name: String::new(),
+            asset_url: String::new(),
+            asset_digest: String::new(),
+            asset_size: None,
+            target_triple: String::new(),
+            prerelease: false,
+        }
+    }
+
+    #[test]
+    fn available_result_stores_candidate_and_enables_install() {
+        let mut state = UpdateUiState {
+            status: UpdateUiStatus::Checking,
+            candidate: None,
+            staged: None,
+        };
+
+        apply_check_result(
+            &mut state,
+            Ok(UpdateCheckResult::Available(Box::new(candidate("9.9.9")))),
+        );
+
+        assert!(matches!(&state.status, UpdateUiStatus::Available(v) if v == "9.9.9"));
+        assert_eq!(
+            state.candidate.as_ref().map(|c| c.version.as_str()),
+            Some("9.9.9")
+        );
+        assert!(state.shows_install_button());
+        assert!(state.can_install_update());
+    }
+
+    #[test]
+    fn failed_result_keeps_existing_candidate_but_reports_failure() {
+        let mut state = UpdateUiState {
+            status: UpdateUiStatus::Checking,
+            candidate: Some(candidate("9.9.9")),
+            staged: None,
+        };
+
+        apply_check_result(&mut state, Err(oneterm_core::AppError::msg("offline")));
+
+        assert!(matches!(&state.status, UpdateUiStatus::Failed(e) if e.contains("offline")));
+        assert!(!state.is_busy());
+        assert!(state.candidate.is_some());
+    }
+
+    #[test]
+    fn skipping_the_offered_version_withdraws_the_offer() {
+        let mut state = UpdateUiState {
+            status: UpdateUiStatus::Available("9.9.9".to_owned()),
+            candidate: Some(candidate("9.9.9")),
+            staged: None,
+        };
+
+        apply_skipped_version(&mut state, "1.0.0");
+        assert!(state.candidate.is_some());
+
+        apply_skipped_version(&mut state, "9.9.9");
+        assert!(state.candidate.is_none());
+        assert!(!state.shows_install_button());
+        assert!(matches!(&state.status, UpdateUiStatus::Skipped(v) if v == "9.9.9"));
+    }
 
     #[test]
     fn up_to_date_result_clears_checking_status() {
@@ -188,18 +301,7 @@ mod tests {
     fn disabled_result_clears_stale_candidate() {
         let mut state = UpdateUiState {
             status: UpdateUiStatus::Checking,
-            candidate: Some(oneterm_update::UpdateCandidate {
-                version: "9.9.9".to_owned(),
-                tag_name: "v9.9.9".to_owned(),
-                release_name: None,
-                release_notes_url: String::new(),
-                body: None,
-                asset_name: String::new(),
-                asset_url: String::new(),
-                asset_digest: String::new(),
-                asset_size: None,
-                target_triple: String::new(),
-            }),
+            candidate: Some(candidate("9.9.9")),
             staged: None,
         };
 

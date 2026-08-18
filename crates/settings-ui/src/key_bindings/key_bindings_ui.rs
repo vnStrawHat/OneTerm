@@ -14,6 +14,7 @@ use gpui_component::{
     h_flex,
     kbd::Kbd,
     setting::{SettingGroup, SettingItem, SettingPage},
+    v_flex,
 };
 
 use crate::separator;
@@ -56,12 +57,14 @@ pub(crate) fn page() -> SettingPage {
             current_group = current_group.item(separator());
         }
         group_item_count += 1;
-        current_group = current_group
-            .item(
-                SettingItem::render(move |_, window, cx| render_binding_row(a, window, cx))
-                    .keywords([label]),
-            )
-            .description(show_default(a.default));
+        // The row is a custom element, so its "Default: …" line is rendered by
+        // the row itself; `SettingItem::description` only applies to value
+        // items and `SettingGroup::description` would label the whole group
+        // with the last action's default (CORR-35).
+        current_group = current_group.item(
+            SettingItem::render(move |_, window, cx| render_binding_row(a, window, cx))
+                .keywords([label]),
+        );
     }
     // Flush the last group.
     if current_title.is_some() {
@@ -70,14 +73,11 @@ pub(crate) fn page() -> SettingPage {
     page
 }
 
-/// Description line showing the built-in default keystroke (or "Unbound").
-fn show_default(default: Option<&'static str>) -> &'static str {
-    // Leak a one-time formatted string per default — small fixed set, lives for the
-    // program lifetime, so a 'static leak is acceptable and keeps the API simple
-    // (SettingItem::description takes &'static str).
+/// Description line showing the built-in default keystroke (or "(unbound)").
+fn show_default(default: Option<&str>) -> String {
     match default {
-        Some(d) => Box::leak(format!("Default: {d}").into_boxed_str()),
-        None => "Default: (unbound)",
+        Some(default) => format!("Default: {default}"),
+        None => "Default: (unbound)".to_owned(),
     }
 }
 
@@ -122,7 +122,14 @@ fn render_binding_row(
             .w_full()
             .justify_between()
             .items_center()
-            .child(a.label)
+            .child(
+                v_flex().gap_0p5().child(a.label).child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(show_default(a.default)),
+                ),
+            )
             .child(
                 h_flex()
                     .gap_1()
@@ -220,4 +227,15 @@ fn on_capture_key(id: &'static str, event: &KeyDownEvent, cx: &mut App) {
     });
     save_key_bindings(cx);
     apply_key_bindings(cx);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_line_names_the_keystroke_or_unbound() {
+        assert_eq!(show_default(Some("ctrl-shift-t")), "Default: ctrl-shift-t");
+        assert_eq!(show_default(None), "Default: (unbound)");
+    }
 }

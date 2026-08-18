@@ -42,6 +42,7 @@
       "oneterm-terminal",
       "oneterm-terminal-view",
       "oneterm-theme",
+      "oneterm-update",
       "oneterm-workspace"
     ],
     "oneterm-completion": [

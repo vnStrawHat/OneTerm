@@ -9,6 +9,10 @@ use serde_json::Value;
 
 const CURRENT_SCHEMA_VERSION: u32 = 1;
 
+/// Longest accepted automatic check interval (one year). Larger persisted
+/// values are clamped so the interval arithmetic can never overflow (CORR-58).
+pub const MAX_CHECK_INTERVAL_HOURS: u64 = 24 * 365;
+
 /// Canonical GitHub `owner/repo` that publishes OneTerm releases.
 pub const DEFAULT_UPDATE_REPOSITORY: &str = "vnStrawHat/OneTerm";
 
@@ -19,6 +23,11 @@ pub const UPDATE_REPOSITORY: &str = match option_env!("ONETERM_UPDATE_REPO") {
     Some(repository) => repository,
     None => DEFAULT_UPDATE_REPOSITORY,
 };
+
+/// The persisted `update_config.json` document.
+pub(crate) fn update_config_path() -> std::path::PathBuf {
+    config_dir().join("update_config.json")
+}
 
 /// Release channel used by the updater.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -42,6 +51,11 @@ pub struct CachedUpdateCandidate {
     pub asset_digest: String,
     pub asset_size: Option<u64>,
     pub target_triple: String,
+    /// Whether the release was published as a GitHub prerelease. Restoring
+    /// the cache must re-apply the channel filter (CORR-37); documents written
+    /// before this field existed default to a stable release.
+    #[serde(default)]
+    pub prerelease: bool,
 }
 
 /// HTTP cache metadata recorded by the release checker.
@@ -82,7 +96,7 @@ const CACHE_FIELDS: &[&str] = &[
 impl UpdateCheckCache {
     /// Merge the cache fields into the default update config document.
     pub fn save(&self) -> std::io::Result<()> {
-        self.save_to(&config_dir().join("update_config.json"))
+        self.save_to(&update_config_path())
     }
 
     /// Merge the cache fields into the document at `path`, leaving every
@@ -91,6 +105,14 @@ impl UpdateCheckCache {
         let values = serde_json::to_value(self).map_err(std::io::Error::other)?;
         merge_owned_fields(path, CACHE_FIELDS, &values)
     }
+}
+
+/// Result of [`UpdateConfig::read`]: the config plus whether the on-disk
+/// document must be created or quarantined by a background save.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoadedUpdateConfig {
+    pub config: UpdateConfig,
+    pub needs_document_repair: bool,
 }
 
 /// Persisted auto-update preferences and HTTP cache metadata.
@@ -142,33 +164,76 @@ impl Default for UpdateConfig {
 impl UpdateConfig {
     /// Load persisted update preferences.
     pub fn load() -> Self {
-        Self::load_from(&config_dir().join("update_config.json"))
+        Self::load_from(&update_config_path())
     }
 
-    /// Load persisted update preferences from an explicit path.
+    /// Load persisted update preferences from an explicit path, repairing the
+    /// document on the calling thread (quarantine on parse failure, default
+    /// document when missing). Callers on the UI thread use [`Self::read`].
     pub fn load_from(path: &Path) -> Self {
+        let loaded = Self::read_from(path);
+        if loaded.needs_document_repair
+            && let Err(error) = loaded.config.repair_document(path)
+        {
+            log::warn!("failed to repair update_config.json at {path:?}: {error}");
+        }
+        loaded.config
+    }
+
+    /// Read persisted update preferences without touching the disk beyond the
+    /// read itself, so the UI thread can load them at startup (PERF-27).
+    ///
+    /// When [`LoadedUpdateConfig::needs_document_repair`] is set, the caller
+    /// must schedule a preference save on the background executor: the
+    /// field-level merge quarantines an unreadable document and creates a
+    /// missing one.
+    pub fn read() -> LoadedUpdateConfig {
+        Self::read_from(&update_config_path())
+    }
+
+    /// [`Self::read`] from an explicit path.
+    pub fn read_from(path: &Path) -> LoadedUpdateConfig {
         match std::fs::read_to_string(path) {
-            Ok(raw) => Self::parse_document(&raw).unwrap_or_else(|error| {
-                log::error!("update_config.json parse or migration error: {error}; using defaults");
-                if let Err(quarantine_error) = quarantine_file(path) {
-                    log::warn!("failed to quarantine update_config.json: {quarantine_error}");
-                }
-                Self::default()
-            }),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let config = Self::default();
-                if let Err(write_error) = config.write_default_document(path) {
-                    log::warn!(
-                        "failed to create default update_config.json at {path:?}: {write_error}"
+            Ok(raw) => match Self::parse_document(&raw) {
+                Ok(config) => LoadedUpdateConfig {
+                    config,
+                    needs_document_repair: false,
+                },
+                Err(error) => {
+                    log::error!(
+                        "update_config.json parse or migration error: {error}; using defaults and quarantining on the next save"
                     );
+                    LoadedUpdateConfig {
+                        config: Self::default(),
+                        needs_document_repair: true,
+                    }
                 }
-                config
-            }
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => LoadedUpdateConfig {
+                config: Self::default(),
+                needs_document_repair: true,
+            },
             Err(error) => {
                 log::error!("failed to read update_config.json: {error}; using defaults");
-                Self::default()
+                LoadedUpdateConfig {
+                    config: Self::default(),
+                    needs_document_repair: false,
+                }
             }
         }
+    }
+
+    /// Bring a missing or unreadable document back to a valid state: an
+    /// unreadable file is quarantined first, then the defaults are written.
+    fn repair_document(&self, path: &Path) -> std::io::Result<()> {
+        match std::fs::symlink_metadata(path) {
+            Ok(_) => {
+                quarantine_file(path)?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        self.write_default_document(path)
     }
 
     /// Write the complete default document for a config file that does not
@@ -182,7 +247,7 @@ impl UpdateConfig {
 
     /// Merge the preference fields into the default update config document.
     pub fn save_preferences(&self) -> std::io::Result<()> {
-        self.save_preferences_to(&config_dir().join("update_config.json"))
+        self.save_preferences_to(&update_config_path())
     }
 
     /// Merge the preference fields into the document at `path`, leaving the
@@ -212,6 +277,13 @@ impl UpdateConfig {
 
     /// Return whether a startup auto-check should run now.
     pub fn should_auto_check(&self) -> bool {
+        self.should_auto_check_at(Utc::now())
+    }
+
+    /// [`Self::should_auto_check`] evaluated at an explicit instant.
+    ///
+    /// A missing or unparsable `last_checked_at` counts as "never checked".
+    pub fn should_auto_check_at(&self, now: DateTime<Utc>) -> bool {
         if !self.auto_check {
             return false;
         }
@@ -221,8 +293,13 @@ impl UpdateConfig {
         let Ok(last_checked_at) = DateTime::parse_from_rfc3339(last_checked_at) else {
             return true;
         };
-        let interval = Duration::hours(self.check_interval_hours.max(1) as i64);
-        Utc::now().signed_duration_since(last_checked_at.with_timezone(&Utc)) >= interval
+        let interval = Duration::hours(self.effective_check_interval_hours() as i64);
+        now.signed_duration_since(last_checked_at.with_timezone(&Utc)) >= interval
+    }
+
+    /// The check interval clamped to `1..=MAX_CHECK_INTERVAL_HOURS`.
+    pub fn effective_check_interval_hours(&self) -> u64 {
+        self.check_interval_hours.clamp(1, MAX_CHECK_INTERVAL_HOURS)
     }
 
     /// Store cache metadata after a successful GitHub response.
@@ -325,6 +402,36 @@ mod tests {
     }
 
     #[test]
+    fn read_never_writes_but_reports_repair_need() {
+        let dir = test_dir("read-only");
+        let path = dir.join("update_config.json");
+
+        let loaded = UpdateConfig::read_from(&path);
+        assert!(loaded.needs_document_repair);
+        assert!(!path.exists(), "read must not create the document");
+
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, b"not-json").unwrap();
+        let loaded = UpdateConfig::read_from(&path);
+        assert!(loaded.needs_document_repair);
+        assert_eq!(loaded.config, UpdateConfig::default());
+        assert_eq!(std::fs::read(&path).unwrap(), b"not-json");
+
+        // The background preference save repairs it: quarantine + rewrite.
+        loaded.config.save_preferences_to(&path).unwrap();
+        let repaired = UpdateConfig::read_from(&path);
+        assert!(!repaired.needs_document_repair);
+        assert!(std::fs::read_dir(&dir).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".invalid-")
+        }));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn invalid_document_is_quarantined() {
         let dir = test_dir("invalid");
         let path = dir.join("update_config.json");
@@ -334,7 +441,8 @@ mod tests {
         assert_eq!(config.channel, UpdateChannel::Stable);
         assert_eq!(config.proxy_url, None);
         assert!(config.verify_certificates);
-        assert!(!path.exists());
+        // The invalid file is quarantined and a default document takes its place.
+        assert!(!UpdateConfig::read_from(&path).needs_document_repair);
         assert!(std::fs::read_dir(&dir).unwrap().any(|entry| {
             entry
                 .unwrap()
@@ -449,6 +557,59 @@ mod tests {
                 .contains(".invalid-")
         }));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn auto_check_runs_when_never_checked_or_interval_elapsed() {
+        let now = Utc::now();
+        let mut config = UpdateConfig::default();
+        assert!(config.should_auto_check_at(now));
+
+        config.last_checked_at = Some((now - Duration::hours(25)).to_rfc3339());
+        assert!(config.should_auto_check_at(now));
+
+        config.last_checked_at = Some((now - Duration::hours(23)).to_rfc3339());
+        assert!(!config.should_auto_check_at(now));
+
+        config.check_interval_hours = 12;
+        assert!(config.should_auto_check_at(now));
+
+        config.last_checked_at = Some("garbage".to_owned());
+        assert!(config.should_auto_check_at(now));
+
+        config.auto_check = false;
+        assert!(!config.should_auto_check_at(now));
+    }
+
+    #[test]
+    fn check_interval_is_clamped_and_never_overflows() {
+        let now = Utc::now();
+        let mut config = UpdateConfig {
+            check_interval_hours: 0,
+            last_checked_at: Some((now - Duration::minutes(59)).to_rfc3339()),
+            ..Default::default()
+        };
+        assert_eq!(config.effective_check_interval_hours(), 1);
+        assert!(!config.should_auto_check_at(now));
+
+        config.check_interval_hours = u64::MAX;
+        assert_eq!(
+            config.effective_check_interval_hours(),
+            MAX_CHECK_INTERVAL_HOURS
+        );
+        assert!(!config.should_auto_check_at(now));
+    }
+
+    #[test]
+    fn cached_candidate_without_prerelease_field_defaults_to_stable() {
+        let raw = r#"{
+            "version": "9.9.9", "tag_name": "v9.9.9", "release_name": null,
+            "release_notes_url": "https://example.invalid", "body": null,
+            "asset_name": "a.zip", "asset_url": "https://example.invalid/a.zip",
+            "asset_digest": "sha256:00", "asset_size": null, "target_triple": "t"
+        }"#;
+        let candidate: CachedUpdateCandidate = serde_json::from_str(raw).unwrap();
+        assert!(!candidate.prerelease);
     }
 
     #[test]

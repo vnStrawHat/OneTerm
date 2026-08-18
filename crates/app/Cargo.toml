@@ -59,6 +59,8 @@ oneterm-sftp-ui.workspace = true
 oneterm-session-ui.workspace = true
 oneterm-settings-ui.workspace = true
 oneterm-agent-ui.workspace = true
+# Crash-report dialog derives the GitHub issue URL from the updater repository constant.
+oneterm-update.workspace = true
 
 gpui.workspace = true
 gpui_platform.workspace = true

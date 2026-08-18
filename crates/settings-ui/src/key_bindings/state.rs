@@ -102,23 +102,30 @@ pub(crate) fn apply_key_bindings(cx: &mut App) {
 /// Write the effective bindings (only overrides — entries equal to the built-in
 /// default are omitted) into `ui_config.json` and save.
 pub(super) fn save_key_bindings(cx: &mut App) {
-    let map: HashMap<String, String> = {
+    let map = {
         let state = KeyBindingsState::global(cx).read(cx);
-        BINDABLE_ACTIONS
-            .iter()
-            .filter_map(|a| {
-                let eff = state.effective.get(a.id).map(|s| s.as_str()).unwrap_or("");
-                let def = a.default.unwrap_or("");
-                if eff == def {
-                    None
-                } else {
-                    Some((a.id.to_string(), eff.to_string()))
-                }
-            })
-            .collect()
+        overrides_from_effective(&state.effective)
     };
     UiConfig::global(cx).update(cx, |cfg, _| cfg.key_bindings = map);
     UiConfig::persist(cx);
+}
+
+/// Reduce the effective bindings to the persisted override map: only entries
+/// that differ from the built-in default are kept, and an unbound action whose
+/// default is bound is stored as an empty string.
+fn overrides_from_effective(effective: &HashMap<String, String>) -> HashMap<String, String> {
+    BINDABLE_ACTIONS
+        .iter()
+        .filter_map(|a| {
+            let eff = effective.get(a.id).map(|s| s.as_str()).unwrap_or("");
+            let def = a.default.unwrap_or("");
+            if eff == def {
+                None
+            } else {
+                Some((a.id.to_string(), eff.to_string()))
+            }
+        })
+        .collect()
 }
 
 // ── Keystroke helpers ────────────────────────────────────────────────
@@ -154,4 +161,85 @@ pub(super) fn is_modifier_only(ks: &Keystroke) -> bool {
         ks.key.to_ascii_lowercase().as_str(),
         "control" | "alt" | "shift" | "platform" | "function" | "cmd" | "super" | "win"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::Modifiers;
+
+    use super::*;
+
+    fn keystroke(key: &str, modifiers: Modifiers) -> Keystroke {
+        Keystroke {
+            modifiers,
+            key: key.to_owned(),
+            key_char: None,
+        }
+    }
+
+    #[test]
+    fn keystroke_string_lists_modifiers_in_gpui_order() {
+        let stroke = keystroke(
+            "t",
+            Modifiers {
+                control: true,
+                alt: true,
+                shift: true,
+                platform: true,
+                function: true,
+            },
+        );
+        assert_eq!(keystroke_to_string(&stroke), "ctrl-alt-shift-cmd-fn-t");
+        assert_eq!(
+            keystroke_to_string(&keystroke("f5", Modifiers::default())),
+            "f5"
+        );
+        // The result must round-trip through gpui's parser.
+        assert!(Keystroke::parse(&keystroke_to_string(&stroke)).is_ok());
+    }
+
+    #[test]
+    fn bare_modifier_presses_are_recognised() {
+        for key in [
+            "control", "Shift", "alt", "platform", "function", "cmd", "super", "win",
+        ] {
+            assert!(
+                is_modifier_only(&keystroke(key, Modifiers::default())),
+                "{key}"
+            );
+        }
+        assert!(!is_modifier_only(&keystroke("t", Modifiers::control())));
+        assert!(!is_modifier_only(&keystroke(
+            "escape",
+            Modifiers::default()
+        )));
+    }
+
+    #[test]
+    fn overrides_keep_only_entries_that_differ_from_the_default() {
+        let bound = BINDABLE_ACTIONS
+            .iter()
+            .find(|a| a.default.is_some())
+            .expect("at least one action has a default");
+        let default = bound.default.unwrap();
+
+        // Everything at its default: nothing to persist.
+        let effective: HashMap<String, String> = BINDABLE_ACTIONS
+            .iter()
+            .map(|a| (a.id.to_owned(), a.default.unwrap_or("").to_owned()))
+            .collect();
+        assert!(overrides_from_effective(&effective).is_empty());
+
+        // Rebound: persisted with the new keystroke.
+        let mut rebound = effective.clone();
+        rebound.insert(bound.id.to_owned(), format!("ctrl-alt-{default}"));
+        let overrides = overrides_from_effective(&rebound);
+        assert_eq!(overrides.len(), 1);
+        assert_eq!(overrides[bound.id], format!("ctrl-alt-{default}"));
+
+        // Unbound: persisted as an empty string so the default is suppressed.
+        let mut unbound = effective;
+        unbound.insert(bound.id.to_owned(), String::new());
+        assert_eq!(overrides_from_effective(&unbound)[bound.id], "");
+    }
 }
