@@ -8,6 +8,7 @@ mod completion;
 mod cursor;
 mod font;
 mod layout;
+mod logging;
 mod mouse;
 mod scroll;
 mod security;
@@ -26,6 +27,7 @@ pub(crate) fn page() -> SettingPage {
         .group(font::group())
         .group(cursor::group())
         .group(layout::group())
+        .group(logging::group())
         .group(scroll::group())
         .group(mouse::group())
         .group(bell::group())

@@ -8,6 +8,7 @@ pub mod color_classification;
 pub mod content;
 pub mod factory;
 pub mod key_encode;
+pub mod logging;
 pub mod model;
 pub mod mouse_encode;
 pub mod osc;
@@ -32,6 +33,9 @@ pub use color_classification::{
 pub use content::{IndexedCell, TermDamageInfo, TerminalContent, last_content_line};
 pub use factory::{PtySize, SessionFactory};
 pub use key_encode::{KeyMods, KeySpec, NamedKey, encode_key};
+pub use logging::{
+    TerminalLogController, TerminalLogError, TerminalLogState, local_log_identity, ssh_log_identity,
+};
 pub use mouse_encode::{MouseModifiers, TerminalMouseButton};
 pub use osc::{TerminalProgress, encode_osc52};
 pub use osc_agent::{

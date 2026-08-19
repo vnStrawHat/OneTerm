@@ -263,7 +263,10 @@ fn on_connect_click(
     window.refresh();
     let cancellation = connect_ssh_session(
         cfg,
-        SshConnectRequest::new(session.label.clone()),
+        SshConnectRequest {
+            logging_override: session.logging,
+            ..SshConnectRequest::new(session.label.clone())
+        },
         connecting,
         window,
         cx,

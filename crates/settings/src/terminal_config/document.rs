@@ -18,7 +18,7 @@ use oneterm_core::{
 
 use super::{
     BellConfig, ColorsConfig, CompletionConfig, CursorConfig, FontConfig, LayoutConfig,
-    MouseConfig, ScrollConfig, SecurityConfig,
+    LoggingConfig, MouseConfig, ScrollConfig, SecurityConfig,
 };
 
 // File path is resolved at runtime via config_dir().join("terminal.json") —
@@ -49,6 +49,8 @@ pub struct TerminalConfig {
     pub security: SecurityConfig,
     #[serde(default)]
     pub completion: CompletionConfig,
+    #[serde(default)]
+    pub logging: LoggingConfig,
 }
 
 const CURRENT_SCHEMA_VERSION: u32 = 1;

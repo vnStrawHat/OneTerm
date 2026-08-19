@@ -15,7 +15,7 @@ use alacritty_terminal::tty::{Options, Shell};
 use async_channel::Receiver;
 
 use oneterm_core::config::resolve_shell;
-use oneterm_core::{AppError, LocalShellConfig, home_dir};
+use oneterm_core::{AppError, LocalShellConfig, TerminalLogConfig, home_dir};
 use oneterm_terminal::{
     ClipboardOrigin, GridSize, OscRouter, PtySize, PtyTransport, SessionEvent, SessionEventSink,
     SharedSessionState, SharedState, TerminalError, TerminalSecurityPolicy,
@@ -44,9 +44,11 @@ impl LocalSession {
         initial: PtySize,
         scrollback_history: usize,
         security: TerminalSecurityPolicy,
+        logging: TerminalLogConfig,
     ) -> Result<Self, AppError> {
         let resolved = resolve_shell(&cfg)?;
-        // Kept for the spawn-failure error: `resolved` is moved into `Options`.
+        // Kept for the spawn-failure error and logging identity: `resolved` is moved into `Options`.
+        let program = resolved.program.clone();
         let program_display = resolved.program.display().to_string();
         let opts = Options {
             shell: Some(Shell::new(
@@ -98,13 +100,18 @@ impl LocalSession {
             listener.clone(),
         )));
 
-        let (_notifier, owner_join) =
-            ShellEventLoop::spawn_owned(opts, winsize, term.clone(), listener.clone()).map_err(
-                |error| AppError::ShellResolution {
-                    shell: program_display,
-                    reason: error.to_string(),
-                },
-            )?;
+        let (_notifier, owner_join) = ShellEventLoop::spawn_owned(
+            opts,
+            winsize,
+            term.clone(),
+            listener.clone(),
+            program,
+            logging,
+        )
+        .map_err(|error| AppError::ShellResolution {
+            shell: program_display,
+            reason: error.to_string(),
+        })?;
 
         // Shell integration is injected via env vars in resolve_shell()
         // — fully silent, no temp file, no script written to the PTY.

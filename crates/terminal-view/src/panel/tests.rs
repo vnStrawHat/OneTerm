@@ -254,6 +254,7 @@ impl SessionFactory for DuplicateSessionFactory {
         _: PtySize,
         _: usize,
         _: TerminalSecurityPolicy,
+        _: oneterm_core::TerminalLogConfig,
     ) -> Result<Box<dyn TerminalSession>> {
         self.spawned_local_configs
             .lock()
@@ -268,6 +269,7 @@ impl SessionFactory for DuplicateSessionFactory {
         _: PtySize,
         _: usize,
         _: TerminalSecurityPolicy,
+        _: oneterm_core::TerminalLogConfig,
     ) -> Result<Box<dyn TerminalSession>> {
         Err(AppError::msg("SSH is not used by this test"))
     }

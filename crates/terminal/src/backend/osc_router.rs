@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use alacritty_terminal::event::{Event, EventListener};
 use log::warn;
 
+use crate::logging::TerminalLogController;
 use crate::osc::{Osc133Kind, OscPayload, parse_cwd_url, parse_osc};
 use crate::osc_agent::should_apply;
 use crate::osc_color::{ColorFormatter, PendingColorQuery};
@@ -33,6 +34,7 @@ pub struct OscRouter<T: PtyTransport> {
     security: TerminalSecurityPolicy,
     clipboard_origin: ClipboardOrigin,
     notification_limiter: Arc<Mutex<NotificationRateLimiter>>,
+    logging: TerminalLogController,
 }
 
 impl<T: PtyTransport> OscRouter<T> {
@@ -69,6 +71,7 @@ impl<T: PtyTransport> OscRouter<T> {
             security,
             clipboard_origin,
             notification_limiter: Arc::new(Mutex::new(NotificationRateLimiter::default())),
+            logging: TerminalLogController::default(),
         }
     }
 
@@ -85,6 +88,11 @@ impl<T: PtyTransport> OscRouter<T> {
     /// The shared state cache.
     pub fn state(&self) -> &SharedState {
         &self.state
+    }
+
+    /// Per-session printable-output logger.
+    pub fn logging(&self) -> &TerminalLogController {
+        &self.logging
     }
 
     /// Whether any colour query is waiting for an answer.

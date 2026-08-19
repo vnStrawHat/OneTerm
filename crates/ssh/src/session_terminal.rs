@@ -41,6 +41,7 @@ impl TerminalSession for SshSession {
                 .clone()
                 .map(|session| session as Arc<dyn SftpBackend>),
             cwd_source: Some(self.state.clone()),
+            logging: Some(self.listener.logging().clone()),
         }
     }
 }

@@ -33,10 +33,12 @@ use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg, load_secret_key};
 use russh::{MethodKind, MethodSet};
 use tokio_util::sync::CancellationToken;
 
-use oneterm_core::{AppError, ConnectPhase, ConnectionCancellation, SshAuthMethod, SshConfig};
+use oneterm_core::{
+    AppError, ConnectPhase, ConnectionCancellation, SshAuthMethod, SshConfig, TerminalLogConfig,
+};
 use oneterm_terminal::{
     ClipboardOrigin, GridSize, OscRouter, PtySize, PtyTransport, SessionEvent, SessionEventSink,
-    SharedSessionState, SharedState, TerminalSecurityPolicy,
+    SharedSessionState, SharedState, TerminalSecurityPolicy, ssh_log_identity,
 };
 
 use crate::counting_stream::CountingStream;
@@ -199,6 +201,7 @@ pub fn connect(
     initial: PtySize,
     scrollback_history: usize,
     security: TerminalSecurityPolicy,
+    logging: TerminalLogConfig,
 ) -> oneterm_core::Result<Box<dyn oneterm_terminal::TerminalSession>> {
     log::info!(
         "SshSession::connect: host={}, port={}, user={}, rows={}, cols={}",
@@ -209,6 +212,7 @@ pub fn connect(
         initial.cols
     );
 
+    let logging_identity = ssh_log_identity(&cfg.username, &cfg.host, cfg.port);
     let runtime = shared_runtime()?;
     let phases = ConnectPhases::new(cfg.cancellation.clone());
 
@@ -442,7 +446,14 @@ pub fn connect(
                 }
             };
 
-            // ── Spawn main SSH task ──────────────────────────────────────
+            // ── Start logging and spawn main SSH task ────────────────────
+            listener.logging().set_identity(logging_identity);
+            if logging.enabled
+                && let Err(error) = listener.logging().start(&logging)
+            {
+                log::warn!("SSH terminal automatic logging did not start: {error}");
+            }
+
             // IMPORTANT: `handle` must be moved into the task — dropping it closes the
             // connection.
             tokio::spawn(ssh_main_task(

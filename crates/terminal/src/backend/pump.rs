@@ -85,6 +85,7 @@ impl<T: PtyTransport> TerminalPump<T> {
 
     /// Feed one chunk into `term`. The caller holds the `Term` lock.
     pub fn advance(&mut self, term: &mut Term<OscRouter<T>>, bytes: &[u8]) {
+        self.router.logging().process(bytes);
         self.processor.advance(term, bytes);
         self.lines.observe(term, bytes);
     }

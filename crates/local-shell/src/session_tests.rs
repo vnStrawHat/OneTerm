@@ -68,6 +68,7 @@ fn spawn_default() -> LocalSession {
         PtySize { rows: 24, cols: 80 },
         10_000,
         TerminalSecurityPolicy::default(),
+        oneterm_core::TerminalLogConfig::default(),
     )
     .expect("spawn")
 }
@@ -83,6 +84,7 @@ fn assert_powershell_prompt_emits_cwd(kind: oneterm_core::ShellKind, label: &str
         PtySize { rows: 24, cols: 80 },
         10_000,
         TerminalSecurityPolicy::default(),
+        oneterm_core::TerminalLogConfig::default(),
     )
     .unwrap_or_else(|error| panic!("spawn {label}: {error}"));
 
@@ -179,6 +181,7 @@ fn spawn_failure_is_a_typed_shell_resolution_error() {
         PtySize { rows: 24, cols: 80 },
         10_000,
         TerminalSecurityPolicy::default(),
+        oneterm_core::TerminalLogConfig::default(),
     )
     .err()
     .expect("spawning a missing program must fail");

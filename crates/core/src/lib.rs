@@ -12,6 +12,7 @@ pub mod schema;
 pub mod session_duplicate;
 pub mod sftp;
 pub mod ssh_config;
+pub mod terminal_logging;
 
 pub use config::{LocalShellConfig, RightDockMode, ShellKind, config_dir, home_dir};
 pub use error::{AppError, ConnectPhase, SftpStatus};
@@ -27,6 +28,10 @@ pub use sftp::{
 };
 pub use ssh_config::{
     ConnectionCancellation, HostKeyPolicy, SecretString, SshAuthMethod, SshConfig,
+};
+pub use terminal_logging::{
+    LOG_CONTENT_FORMAT, LOG_FILE_NAME_FORMAT, LogWriteMode, TerminalLogConfig,
+    default_terminal_log_dir,
 };
 
 /// Shared result type for the `core` crate.

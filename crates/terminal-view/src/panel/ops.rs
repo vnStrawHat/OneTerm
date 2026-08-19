@@ -118,29 +118,35 @@ impl TerminalPanel {
             SessionDuplicateConfig::Local(config) => {
                 let config = apply_duplicate_cwd(config, live_cwd);
                 let factory = AppServices::session_factory(cx);
-                let (scrollback, security) = {
+                let (scrollback, security, logging) = {
                     let settings = self.deps.settings.read(cx);
                     (
                         settings.scrollback_history,
                         security_policy_from_settings(settings),
+                        settings.logging.local_config(),
                     )
                 };
                 let duplicate_config = SessionDuplicateConfig::Local(config.clone());
-                let session =
-                    match factory.spawn_local(config, INITIAL_PTY_SIZE, scrollback, security) {
-                        Ok(session) => session,
-                        Err(error) => {
-                            window.push_notification(
-                                notify(
-                                    NotificationType::Error,
-                                    format!("Failed to duplicate local session: {error}"),
-                                    cx,
-                                ),
+                let session = match factory.spawn_local(
+                    config,
+                    INITIAL_PTY_SIZE,
+                    scrollback,
+                    security,
+                    logging,
+                ) {
+                    Ok(session) => session,
+                    Err(error) => {
+                        window.push_notification(
+                            notify(
+                                NotificationType::Error,
+                                format!("Failed to duplicate local session: {error}"),
                                 cx,
-                            );
-                            return;
-                        }
-                    };
+                            ),
+                            cx,
+                        );
+                        return;
+                    }
+                };
                 self.place_duplicate_session(
                     DuplicatedSession {
                         session,

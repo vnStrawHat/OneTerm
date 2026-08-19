@@ -2,7 +2,7 @@
 //! teardown; everything else comes from the shared
 //! `impl_pty_terminal_session!` in `oneterm-terminal`.
 
-use oneterm_terminal::{SessionKind, TerminalSession};
+use oneterm_terminal::{SessionKind, TerminalCapabilities, TerminalSession};
 
 use crate::session::LocalSession;
 use crate::transport::LocalListener;
@@ -15,4 +15,11 @@ oneterm_terminal::impl_pty_terminal_session!(
     shutdown_owner
 );
 
-impl TerminalSession for LocalSession {}
+impl TerminalSession for LocalSession {
+    fn capabilities(&self) -> TerminalCapabilities {
+        TerminalCapabilities {
+            logging: Some(self.listener.logging().clone()),
+            ..TerminalCapabilities::default()
+        }
+    }
+}

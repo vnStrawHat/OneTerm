@@ -15,6 +15,7 @@ use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::num::NonZeroUsize;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 
@@ -25,8 +26,8 @@ use alacritty_terminal::tty::{self, EventedPty, Options};
 use log::error;
 use polling::{Event as PollEvent, Events, PollMode, Poller};
 
-use oneterm_core::report_best_effort;
-use oneterm_terminal::TerminalPump;
+use oneterm_core::{TerminalLogConfig, report_best_effort};
+use oneterm_terminal::{TerminalPump, local_log_identity};
 
 use crate::transport::{LocalListener, LocalTransport};
 
@@ -164,6 +165,19 @@ pub(crate) struct ShellEventLoop<P: EventedPty + OnResize> {
     control: std::sync::Arc<ShellControl>,
 }
 
+#[cfg(unix)]
+fn pty_process_id(pty: &tty::Pty) -> io::Result<u32> {
+    Ok(pty.child().id())
+}
+
+#[cfg(windows)]
+fn pty_process_id(pty: &tty::Pty) -> io::Result<u32> {
+    pty.child_watcher()
+        .pid()
+        .map(std::num::NonZeroU32::get)
+        .ok_or_else(|| io::Error::other("ConPTY child process id is unavailable"))
+}
+
 impl ShellEventLoop<tty::Pty> {
     /// Spawn the PTY owner thread. The PTY is constructed, operated, and dropped there.
     pub(crate) fn spawn_owned(
@@ -171,13 +185,25 @@ impl ShellEventLoop<tty::Pty> {
         winsize: WindowSize,
         term: std::sync::Arc<FairMutex<Term<LocalListener>>>,
         listener: LocalListener,
+        program: PathBuf,
+        logging: TerminalLogConfig,
     ) -> io::Result<(ShellNotifier, std::thread::JoinHandle<()>)> {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let join = std::thread::Builder::new()
             .name("PTY owner".into())
             .spawn(move || {
-                let result = tty::new(&opts, winsize, 0)
-                    .and_then(|pty| Self::new(pty, term, listener.clone()));
+                let result = tty::new(&opts, winsize, 0).and_then(|pty| {
+                    let pid = pty_process_id(&pty)?;
+                    listener
+                        .logging()
+                        .set_identity(local_log_identity(&program, pid));
+                    if logging.enabled
+                        && let Err(error) = listener.logging().start(&logging)
+                    {
+                        log::warn!("Local terminal automatic logging did not start: {error}");
+                    }
+                    Self::new(pty, term, listener.clone())
+                });
                 match result {
                     Ok((mut event_loop, notifier)) => {
                         listener.transport().set_notifier(notifier.clone());

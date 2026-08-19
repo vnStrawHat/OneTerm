@@ -100,6 +100,7 @@ impl TerminalSettings {
             },
 
             completion: cfg.completion.clone(),
+            logging: cfg.logging.clone(),
 
             persist_blocked: false,
         }

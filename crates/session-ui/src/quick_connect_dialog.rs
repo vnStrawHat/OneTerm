@@ -35,7 +35,7 @@ use super::common::{
     ConnectButton, SshConnectRequest, connect_ssh_session, defer_initial_focus_once, parse_port,
     parse_user_host_port,
 };
-use crate::session_state::{SshAuthPreference, SshSession, SshSessionStore};
+use crate::session_state::{SshAuthPreference, SshLoggingOverride, SshSession, SshSessionStore};
 
 enum QuickConnectMode {
     New,
@@ -204,6 +204,7 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
                     },
                     color: None,
                     group: None,
+                    logging: SshLoggingOverride::Inherit,
                 };
                 Rc::new(move |cx: &mut App| {
                     SshSessionStore::global(cx).update(cx, |s, cx| {
@@ -218,6 +219,7 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
                 initial_cwd: initial_cwd.clone(),
                 completion: completion.clone(),
                 on_connected,
+                logging_override: SshLoggingOverride::Inherit,
             };
             let cfg = SshConfig {
                 host: target.host,

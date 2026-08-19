@@ -11,7 +11,7 @@ use gpui::{App, AppContext, Entity, FontWeight, Global, Hsla, SharedString};
 use oneterm_core::LocalShellConfig;
 
 use crate::terminal_config::{
-    CompletionConfig, SemanticHighlightingMode, TabTitleMode, TerminalConfig,
+    CompletionConfig, LoggingConfig, SemanticHighlightingMode, TabTitleMode, TerminalConfig,
 };
 
 /// Terminal cursor shape.
@@ -153,6 +153,9 @@ pub struct TerminalSettings {
     // ── Completion ──
     /// Live mirror of the `completion` config group.
     pub completion: CompletionConfig,
+
+    /// Live mirror of the terminal printable-output logging config group.
+    pub logging: LoggingConfig,
 
     /// `terminal.json` existed but could not be read at startup (e.g. permission
     /// denied), so these are built-in defaults and must not be written back

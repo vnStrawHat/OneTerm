@@ -5395,6 +5395,7 @@ dependencies = [
  "alacritty_terminal",
  "async-channel 2.5.0",
  "base64",
+ "chrono",
  "log",
  "oneterm-core",
  "serde",

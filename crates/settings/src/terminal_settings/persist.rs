@@ -111,6 +111,7 @@ impl TerminalSettings {
                 allow_clipboard_read: self.allow_clipboard_read,
             },
             completion: self.completion.clone(),
+            logging: self.logging.clone(),
             colors: ColorsConfig {
                 foreground: color_to_hex(co.foreground),
                 background: color_to_hex(co.background),

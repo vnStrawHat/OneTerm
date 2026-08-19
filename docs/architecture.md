@@ -9,7 +9,7 @@ Use this page and `docs/agents/structure.md` when locating current implementatio
 | Layer | Crate | Current responsibility | Entry points |
 |---|---|---|---|
 | Domain | `oneterm-core` | Errors, SSH/local configuration, SFTP contracts | `crates/core/src/lib.rs`, `crates/core/src/sftp.rs` |
-| Terminal engine | `oneterm-terminal` | Terminal model, session contract, encoding, OSC, search | `crates/terminal/src/lib.rs`, `crates/terminal/src/model.rs`, `crates/terminal/src/session.rs` |
+| Terminal engine | `oneterm-terminal` | Terminal model, session contract, encoding, OSC, search, printable-output logging | `crates/terminal/src/lib.rs`, `crates/terminal/src/model.rs`, `crates/terminal/src/session.rs`, `crates/terminal/src/logging.rs` |
 | Completion engine | `oneterm-completion` | Auto-completion engine (gpui-free): embedded command catalogs, line parsing + subcommand resolution, matching/ranking, in-session history, secret redaction | `crates/completion/src/lib.rs`, `crates/completion/src/engine.rs`, `crates/completion/src/catalog.rs`, `crates/completion/src/history.rs`, `crates/completion/src/redact.rs` |
 | Shared services | `oneterm-settings` | Persistent terminal and UI settings | `crates/settings/src/lib.rs` |
 | Shared services | `oneterm-state` | App-scoped services, workspace state, typed dock persistence, registered dock panel names, Agent folded model, process-global completion history | `crates/state/src/lib.rs`, `crates/state/src/services.rs`, `crates/state/src/dock_persistence.rs`, `crates/state/src/panel_names.rs`, `crates/state/src/agent_registry.rs`, `crates/state/src/completion_history.rs` |
@@ -86,7 +86,7 @@ the placeholder panel.
 
 ## Ownership shortcuts
 
-- Terminal behavior and shared terminal capability changes: `crates/terminal/`.
+- Terminal behavior and shared terminal capability changes: `crates/terminal/`; printable-output logging behavior is documented in [`terminal-logging.md`](terminal-logging.md).
 - Backend transport and lifecycle: `crates/local-shell/` or `crates/ssh/`.
 - Terminal UI and rendering: `crates/terminal-view/`.
 - SFTP UI actions and transfer presentation: `crates/sftp-ui/`.

@@ -97,6 +97,7 @@ mod tests {
             _: PtySize,
             _: usize,
             _: TerminalSecurityPolicy,
+            _: oneterm_core::TerminalLogConfig,
         ) -> Result<Box<dyn TerminalSession>> {
             Err(oneterm_core::AppError::msg("test factory"))
         }
@@ -107,6 +108,7 @@ mod tests {
             _: PtySize,
             _: usize,
             _: TerminalSecurityPolicy,
+            _: oneterm_core::TerminalLogConfig,
         ) -> Result<Box<dyn TerminalSession>> {
             Err(oneterm_core::AppError::msg("test factory"))
         }

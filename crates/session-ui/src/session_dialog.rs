@@ -12,6 +12,7 @@
 //! The Group field uses a [`Combobox`] with `searchable(true)` + a "Create" footer —
 //! the user can **pick an existing group** or **type a new one**.
 
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -23,6 +24,7 @@ use gpui_component::{
     h_flex,
     input::{Input, InputState},
     notification::NotificationType,
+    radio::Radio,
 };
 
 use oneterm_state::form_dialog::{FieldRequirement, FormDialog, labelled_field};
@@ -32,7 +34,8 @@ use super::auth_form::SshAuthForm;
 use super::common::parse_port;
 use super::group_combo::{GroupComboDelegate, SharedCell, group_combobox};
 use crate::session_state::{
-    SshAuthPreference, SshSession, SshSessionEntry, SshSessionId, SshSessionStore,
+    SshAuthPreference, SshLoggingOverride, SshSession, SshSessionEntry, SshSessionId,
+    SshSessionStore,
 };
 
 /// The raw field values of the session form, as typed by the user.
@@ -48,6 +51,7 @@ struct SessionForm {
     auth_method: SshAuthPreference,
     /// The private-key path, when the auth form has a valid one.
     key_path: Option<PathBuf>,
+    logging: SshLoggingOverride,
 }
 
 impl SessionForm {
@@ -82,6 +86,7 @@ impl SessionForm {
             key_path,
             color: self.color,
             group: non_empty(self.group),
+            logging: self.logging,
         })
     }
 }
@@ -104,6 +109,23 @@ fn existing_group_names(sessions: &[SshSessionEntry]) -> Vec<SharedString> {
     groups.into_iter().map(SharedString::from).collect()
 }
 
+fn logging_radio(
+    id: &'static str,
+    label: &'static str,
+    value: SshLoggingOverride,
+    selected: Rc<Cell<SshLoggingOverride>>,
+) -> Radio {
+    Radio::new(id)
+        .label(label)
+        .checked(selected.get() == value)
+        .on_click(move |checked, window, _| {
+            if *checked {
+                selected.set(value);
+                window.refresh();
+            }
+        })
+}
+
 /// Open the dialog to create (when `edit` = `None`) or edit (when `edit` =
 /// `Some((id, session))`) an SSH session.
 pub(crate) fn open_session_dialog(
@@ -120,29 +142,40 @@ pub(crate) fn open_session_dialog(
     };
 
     // Prefill values (empty when creating new).
-    let (label_val, host_val, port_val, user_val, group_val, color_val, auth_method, key_path) =
-        match &edit {
-            Some((_, s)) => (
-                s.label.clone(),
-                s.host.clone(),
-                s.port.to_string(),
-                s.username.clone().unwrap_or_default(),
-                s.group.clone().unwrap_or_default(),
-                s.color.clone(),
-                s.auth_method,
-                s.key_path.clone(),
-            ),
-            None => (
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-                None,
-                SshAuthPreference::Password,
-                None,
-            ),
-        };
+    let (
+        label_val,
+        host_val,
+        port_val,
+        user_val,
+        group_val,
+        color_val,
+        auth_method,
+        key_path,
+        logging_val,
+    ) = match &edit {
+        Some((_, s)) => (
+            s.label.clone(),
+            s.host.clone(),
+            s.port.to_string(),
+            s.username.clone().unwrap_or_default(),
+            s.group.clone().unwrap_or_default(),
+            s.color.clone(),
+            s.auth_method,
+            s.key_path.clone(),
+            s.logging,
+        ),
+        None => (
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            None,
+            SshAuthPreference::Password,
+            None,
+            SshLoggingOverride::Inherit,
+        ),
+    };
 
     // ── Collect existing groups from the store ──────────────────────────
     let existing_groups: Vec<SharedString> = {
@@ -191,6 +224,7 @@ pub(crate) fn open_session_dialog(
         st
     });
     let auth_form = SshAuthForm::new(auth_method, key_path.as_deref(), window, cx);
+    let logging = Rc::new(Cell::new(logging_val));
 
     // ── ColorPickerState ────────────────────────────────────────
     // Default colour tag when creating new, keep the old color when editing.
@@ -223,6 +257,7 @@ pub(crate) fn open_session_dialog(
         let group_value = group_value.clone();
         let color_state = color_state.clone();
         let auth_form = auth_form.clone();
+        let logging = logging.clone();
         move |window: &mut Window, cx: &mut App| {
             let form = SessionForm {
                 label: label_state.read(cx).value().to_string(),
@@ -233,6 +268,7 @@ pub(crate) fn open_session_dialog(
                 color: color_state.read(cx).value().map(|h| h.to_hex()),
                 auth_method: auth_form.method(),
                 key_path: auth_form.key_path_value(cx),
+                logging: logging.get(),
             };
             let session = match form.into_session() {
                 Ok(session) => session,
@@ -303,6 +339,31 @@ pub(crate) fn open_session_dialog(
                     group_combobox(&group_combo_state, &group_value, &query_cell, cx),
                     cx,
                 ))
+                .child(labelled_field(
+                    "Logging",
+                    FieldRequirement::Optional,
+                    h_flex().gap_4().children([
+                        logging_radio(
+                            "ssh-logging-inherit",
+                            "Use global",
+                            SshLoggingOverride::Inherit,
+                            logging.clone(),
+                        ),
+                        logging_radio(
+                            "ssh-logging-on",
+                            "On",
+                            SshLoggingOverride::On,
+                            logging.clone(),
+                        ),
+                        logging_radio(
+                            "ssh-logging-off",
+                            "Off",
+                            SshLoggingOverride::Off,
+                            logging.clone(),
+                        ),
+                    ]),
+                    cx,
+                ))
         },
         submit,
     )
@@ -323,6 +384,7 @@ mod tests {
             color: Some("#56B6C2".into()),
             auth_method: SshAuthPreference::Password,
             key_path: None,
+            logging: SshLoggingOverride::Inherit,
         }
     }
 
@@ -336,6 +398,17 @@ mod tests {
         assert_eq!(session.group.as_deref(), Some("ops"));
         assert_eq!(session.color.as_deref(), Some("#56B6C2"));
         assert_eq!(session.key_path, None);
+        assert_eq!(session.logging, SshLoggingOverride::Inherit);
+    }
+
+    #[test]
+    fn form_preserves_ssh_logging_override() {
+        let mut form = filled_form();
+        form.logging = SshLoggingOverride::Off;
+        assert_eq!(
+            form.into_session().unwrap().logging,
+            SshLoggingOverride::Off
+        );
     }
 
     #[test]
@@ -396,6 +469,7 @@ mod tests {
                 key_path: None,
                 color: None,
                 group: group.map(str::to_string),
+                logging: SshLoggingOverride::Inherit,
             },
         };
         let sessions = [

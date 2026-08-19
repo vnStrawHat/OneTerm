@@ -39,6 +39,7 @@ Status is stated in each file's header. "Current" = kept in step with the code;
 | Document | Area | Status |
 |---|---|---|
 | [`terminal-backend.md`](terminal-backend.md) | Terminal backend: sessions, shared pump, event delivery, locking, SSH/local transports | current (2026-08 refresh) |
+| [`terminal-logging.md`](terminal-logging.md) | Printable terminal-output logging: policy, SSH override precedence, file lifecycle, controls, and indicators | current |
 | [`terminal-split.md`](terminal-split.md) + [`terminal-split/`](terminal-split/) | Split Spaces (right/left/up/down, drag tab into Space) | implemented; index kept current |
 | [`auto-completion.md`](auto-completion.md) + [`auto-completion/`](auto-completion/) | Command auto-completion engine, catalogs, overlay, redaction | design spec + implementation plan |
 | [`ssh-authentication.md`](ssh-authentication.md) | SSH authentication methods (password, private key, none), key material handling | accepted product contract |

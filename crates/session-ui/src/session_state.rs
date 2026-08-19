@@ -67,6 +67,34 @@ fn is_password_auth(auth: &SshAuthPreference) -> bool {
     *auth == SshAuthPreference::Password
 }
 
+/// Saved-session override for automatic terminal logging.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SshLoggingOverride {
+    /// Use the global SSH logging setting.
+    #[default]
+    Inherit,
+    /// Always start logging this saved session.
+    On,
+    /// Never start logging this saved session.
+    Off,
+}
+
+impl SshLoggingOverride {
+    /// Resolve this override against the global SSH setting.
+    pub const fn resolve(self, global: bool) -> bool {
+        match self {
+            Self::Inherit => global,
+            Self::On => true,
+            Self::Off => false,
+        }
+    }
+}
+
+fn is_inherited_logging(value: &SshLoggingOverride) -> bool {
+    *value == SshLoggingOverride::Inherit
+}
+
 /// Stable identity of a stored SSH session (schema v2). Assigned by the store,
 /// never reused within one `ssh_session.json`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -112,6 +140,9 @@ pub struct SshSession {
     pub color: Option<String>,
     /// Group (optional — used to group sessions in the Tree).
     pub group: Option<String>,
+    /// Per-session automatic logging behavior.
+    #[serde(default, skip_serializing_if = "is_inherited_logging")]
+    pub logging: SshLoggingOverride,
 }
 
 fn default_port() -> u16 {
@@ -494,6 +525,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ssh_logging_override_has_explicit_precedence() {
+        assert!(!SshLoggingOverride::Inherit.resolve(false));
+        assert!(SshLoggingOverride::Inherit.resolve(true));
+        assert!(SshLoggingOverride::On.resolve(false));
+        assert!(!SshLoggingOverride::Off.resolve(true));
+    }
+
+    #[test]
+    fn missing_ssh_logging_override_inherits() {
+        let session: SshSession =
+            serde_json::from_str(r#"{ "label": "dev", "host": "localhost" }"#).unwrap();
+        assert_eq!(session.logging, SshLoggingOverride::Inherit);
+        assert!(!serde_json::to_string(&session).unwrap().contains("logging"));
+    }
+
+    #[test]
     fn deserialize_full_session() {
         let json =
             r#"[{ "label": "prod", "host": "10.0.0.1", "port": 2222, "username": "ubuntu" }]"#;
@@ -526,6 +573,7 @@ mod tests {
             key_path: None,
             color: None,
             group: None,
+            logging: SshLoggingOverride::Inherit,
         };
         let json = serde_json::to_string(&session).unwrap();
         assert!(!json.contains("username"));
@@ -542,6 +590,7 @@ mod tests {
             key_path: None,
             color: None,
             group: None,
+            logging: SshLoggingOverride::Inherit,
         };
         let json = serde_json::to_string(&session).unwrap();
         assert!(json.contains("\"username\":\"root\""));
@@ -558,6 +607,7 @@ mod tests {
             key_path: Some(PathBuf::from("/home/user/.ssh/id_ed25519")),
             color: None,
             group: None,
+            logging: SshLoggingOverride::Inherit,
         };
 
         let json = serde_json::to_string(&session).unwrap();
@@ -580,6 +630,7 @@ mod tests {
                 key_path: None,
                 color: None,
                 group: Some("g".into()),
+                logging: SshLoggingOverride::Inherit,
             },
         };
         let json = serde_json::to_value(&entry).unwrap();
@@ -649,6 +700,7 @@ mod persistence_tests {
             key_path: None,
             color: None,
             group: None,
+            logging: SshLoggingOverride::Inherit,
         }
     }
 

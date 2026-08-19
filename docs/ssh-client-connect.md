@@ -15,7 +15,9 @@
 >   or v1 file assigns ids by position and re-saves the file as v2; a v2 file whose rows
 >   lack or repeat an `id` is repaired the same way. No field is dropped
 >   (`crates/session-ui/src/session_state.rs`, fixtures under
->   `crates/session-ui/tests/fixtures/persistence/`).
+>   `crates/session-ui/tests/fixtures/persistence/`). Saved sessions also persist a
+>   terminal-logging override (`inherit`, `on`, or `off`); missing values inherit the
+>   global SSH setting. See [`terminal-logging.md`](terminal-logging.md).
 > - **One `user[@host[:port]]` parser** (`common::parse_user_host_port`, used by the
 >   connect and quick-connect dialogs) with an explicit policy: `user` alone leaves
 >   host/port to the caller's defaults; IPv6 hosts are `[addr]`, `[addr]:port` or a
@@ -129,6 +131,7 @@ a dialog for the user to enter them.
 | 6 | **Footer: Cancel (left) + Connect (right), right-aligned** | `DialogFooter` defaults to `justify_end` → buttons auto-align right. Matches the requirement. |
 | 7 | **Connect runs async** — the dialog closes immediately, the connection runs in the background | Avoids blocking the UI. If connect fails → `window.push_notification` reports the error. |
 | 8 | **Left-click = Open**, right-click keeps the context menu (Open/Delete/Property) | Keeps the current context-menu behavior, adds a left-click shortcut. |
+| 9 | **Saved-session logging is tri-state** (`inherit` / `on` / `off`) | A saved session can use the global SSH policy or explicitly force either outcome; see [`DEC-0003`](decisions/DEC-0003-define-terminal-logging-capture-and-override-semantics.md). |
 
 ---
 

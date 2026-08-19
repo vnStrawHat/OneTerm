@@ -1,9 +1,14 @@
 //! Context menu for `LocalTerminalView`.
 
-use gpui::{Entity, FocusHandle, WeakEntity, Window};
-use gpui_component::menu::{ContextMenu, ContextMenuExt as _, PopupMenu, PopupMenuItem};
+use gpui::{App, Entity, FocusHandle, NoAction, WeakEntity, Window};
+use gpui_component::{
+    WindowExt as _,
+    menu::{ContextMenu, ContextMenuExt as _, PopupMenu, PopupMenuItem},
+    notification::NotificationType,
+};
 
-use oneterm_terminal::TerminalSession;
+use oneterm_settings::TerminalSettings;
+use oneterm_terminal::{TerminalLogController, TerminalLogState, TerminalSession};
 
 use oneterm_actions::{
     AddPanel, CloseSpace, DuplicateSession, SplitDown, SplitLeft, SplitRight, SplitUp,
@@ -13,6 +18,71 @@ use oneterm_actions::{
 use super::super::panel::{DuplicateDestination, TerminalPanel};
 use super::super::space::{SpaceId, SplitContext, SplitDir};
 use super::edit;
+use oneterm_theme::notif_ext::notify;
+
+fn start_logging(logging: TerminalLogController, window: &mut Window, cx: &mut App) {
+    let config = TerminalSettings::global(cx)
+        .read(cx)
+        .logging
+        .ssh_config(true);
+    window
+        .spawn(cx, async move |cx| {
+            let operation = logging.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { operation.start(&config) })
+                .await;
+            _ = cx.update(|window, cx| {
+                match result {
+                    Ok(path) => window.push_notification(
+                        notify(
+                            NotificationType::Success,
+                            format!("Logging to {}", path.display()),
+                            cx,
+                        ),
+                        cx,
+                    ),
+                    Err(error) => {
+                        _ = logging.take_error();
+                        window.push_notification(
+                            notify(NotificationType::Error, error.to_string(), cx),
+                            cx,
+                        )
+                    }
+                }
+                window.refresh();
+            });
+        })
+        .detach();
+}
+
+fn stop_logging(logging: TerminalLogController, window: &mut Window, cx: &mut App) {
+    window
+        .spawn(cx, async move |cx| {
+            let operation = logging.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { operation.stop() })
+                .await;
+            _ = cx.update(|window, cx| {
+                match result {
+                    Ok(()) => window.push_notification(
+                        notify(NotificationType::Success, "Terminal logging stopped.", cx),
+                        cx,
+                    ),
+                    Err(error) => {
+                        _ = logging.take_error();
+                        window.push_notification(
+                            notify(NotificationType::Error, error.to_string(), cx),
+                            cx,
+                        )
+                    }
+                }
+                window.refresh();
+            });
+        })
+        .detach();
+}
 
 /// Attach the right-click context menu.
 ///
@@ -155,24 +225,54 @@ where
                     edit::clear_screen,
                 ))
                 // 9. ── separator ──
-                .separator()
-                // 10. Close Terminal Tab — dispatch the ClosePanel action.
-                .item(
-                    PopupMenuItem::new("Close Terminal Tab")
-                        .action(Box::new(gpui_component::dock::ClosePanel))
-                        .on_click({
-                            let f = focus.clone();
-                            move |_, window, cx| {
-                                window.dispatch_action(
-                                    Box::new(gpui_component::dock::ClosePanel),
-                                    cx,
-                                );
-                                window.focus(&f, cx);
-                            }
-                        }),
-                );
+                .separator();
 
-            // 11. Close Space — directly below Close Terminal Tab, only when the
+            // 10. Log submenu — controls the right-clicked terminal only.
+            if let Some(logging) = session.read(cx).capabilities().logging {
+                let running = matches!(logging.state(), TerminalLogState::Running { .. });
+                menu = menu
+                    .submenu("Log", window, cx, move |submenu, _, _| {
+                        submenu
+                            .item(
+                                PopupMenuItem::new("Start")
+                                    .action(Box::new(NoAction {}))
+                                    .disabled(running)
+                                    .on_click({
+                                        let logging = logging.clone();
+                                        move |_, window, cx| {
+                                            start_logging(logging.clone(), window, cx)
+                                        }
+                                    }),
+                            )
+                            .item(
+                                PopupMenuItem::new("Stop")
+                                    .action(Box::new(NoAction {}))
+                                    .disabled(!running)
+                                    .on_click({
+                                        let logging = logging.clone();
+                                        move |_, window, cx| {
+                                            stop_logging(logging.clone(), window, cx)
+                                        }
+                                    }),
+                            )
+                    })
+                    .separator();
+            }
+
+            // 11. Close Terminal Tab — dispatch the ClosePanel action.
+            menu = menu.item(
+                PopupMenuItem::new("Close Terminal Tab")
+                    .action(Box::new(gpui_component::dock::ClosePanel))
+                    .on_click({
+                        let f = focus.clone();
+                        move |_, window, cx| {
+                            window.dispatch_action(Box::new(gpui_component::dock::ClosePanel), cx);
+                            window.focus(&f, cx);
+                        }
+                    }),
+            );
+
+            // 12. Close Space — directly below Close Terminal Tab, only when the
             // tab has more than one Space.
             if let Some(ctx) = split_ctx.clone() {
                 let can_close_space = ctx

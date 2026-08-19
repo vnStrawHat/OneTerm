@@ -20,7 +20,7 @@ use gpui_component::{ActiveTheme as _, WindowExt as _, notification::Notificatio
 use oneterm_core::config::ShellKind;
 use oneterm_highlight::ShellProfile;
 use oneterm_settings::{SemanticHighlightingMode, TerminalBlink, TerminalSettings};
-use oneterm_terminal::{SessionKind, TerminalProgress};
+use oneterm_terminal::{SessionKind, TerminalLogState, TerminalProgress};
 use oneterm_theme::notif_ext::notify;
 
 use super::LocalTerminalView;
@@ -65,6 +65,12 @@ impl Focusable for LocalTerminalView {
 
 impl Render for LocalTerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(logging) = self.session.read(cx).capabilities().logging
+            && let Some(message) = logging.take_error()
+        {
+            window.push_notification(notify(NotificationType::Error, message, cx), cx);
+        }
+
         // Drain OSC 9 notifications here (needs a `Window`, unavailable in the
         // async subscribe task where they are queued).
         if self.dropped_notifications > 0 {
@@ -94,6 +100,16 @@ impl Render for LocalTerminalView {
 
         let focused = self.focus.is_focused(window);
         let session = self.session.clone();
+        let is_logging = session
+            .read(cx)
+            .capabilities()
+            .logging
+            .is_some_and(|logging| matches!(logging.state(), TerminalLogState::Running { .. }));
+        let is_multi_space = self
+            .split_ctx
+            .as_ref()
+            .and_then(|split| split.panel.upgrade())
+            .is_some_and(|panel| panel.read(cx).leaf_count() > 1);
         let settings_entity = self.deps.settings.clone();
         let overlay_colors = {
             let t = cx.theme();
@@ -247,6 +263,10 @@ impl Render for LocalTerminalView {
                 overlay,
             })
             .children(bell_overlay(has_bell, bell_enabled, overlay_colors))
+            .children(recording_overlay(
+                is_logging && is_multi_space,
+                overlay_colors,
+            ))
             .children(progress_overlay(self.progress, overlay_colors))
             .children(self.completion_overlay_element())
             .children(self.render_scrollbar(&render_cache, cx))
@@ -348,6 +368,20 @@ fn progress_overlay(
                     .bg(color),
             ),
     )
+}
+
+/// Small recording indicator overlay for split Spaces.
+fn recording_overlay(is_logging: bool, colors: OverlayColors) -> Option<impl IntoElement> {
+    is_logging.then(|| {
+        div()
+            .id("terminal-recording")
+            .absolute()
+            .top_1()
+            .right_2()
+            .text_xs()
+            .text_color(colors.danger)
+            .child("●")
+    })
 }
 
 /// Bell indicator overlay (top-right corner).

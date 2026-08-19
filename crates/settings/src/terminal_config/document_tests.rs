@@ -53,6 +53,7 @@ fn default_config_serializes_all_groups() {
     assert!(json.contains("\"scroll\""));
     assert!(json.contains("\"bell\""));
     assert!(json.contains("\"colors\""));
+    assert!(json.contains("\"logging\""));
 }
 
 #[test]
@@ -73,6 +74,33 @@ fn empty_json_uses_defaults() {
     assert_eq!(cfg.colors.selection.as_deref(), Some("#343b48"));
     assert_eq!(cfg.colors.min_contrast, 0.0);
     assert_eq!(cfg.colors.line_number_fg.as_deref(), Some("#2b7f99"));
+    assert!(!cfg.logging.local);
+    assert!(!cfg.logging.ssh);
+    assert_eq!(cfg.logging.write_mode, oneterm_core::LogWriteMode::Append);
+    assert!(
+        cfg.logging
+            .directory
+            .ends_with(std::path::Path::new(".OneTerm/logs"))
+    );
+}
+
+#[test]
+fn logging_config_parses_and_round_trips() {
+    let cfg: TerminalConfig = serde_json::from_str(
+        r#"{ "logging": { "local": true, "ssh": false, "directory": "/tmp/logs", "write_mode": "overwrite" } }"#,
+    )
+    .unwrap();
+    assert!(cfg.logging.local);
+    assert!(!cfg.logging.ssh);
+    assert_eq!(cfg.logging.directory, std::path::Path::new("/tmp/logs"));
+    assert_eq!(
+        cfg.logging.write_mode,
+        oneterm_core::LogWriteMode::Overwrite
+    );
+
+    let restored: TerminalConfig =
+        serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
+    assert_eq!(restored.logging, cfg.logging);
 }
 
 #[test]

@@ -21,6 +21,7 @@ use oneterm_core::sftp::SftpBackend;
 use crate::IndexedCell;
 use crate::backend::SharedState;
 use crate::content::TerminalContent;
+use crate::logging::TerminalLogController;
 use crate::mouse_encode::{MouseModifiers, TerminalMouseButton};
 use crate::osc::{Osc133Kind, TerminalProgress};
 use crate::osc_agent::AgentStatusEvent;
@@ -179,6 +180,8 @@ pub struct TerminalCapabilities {
     /// Live OSC 7 working-directory state, if available — read on demand so the
     /// SFTP browser's "sync to terminal cwd" always sees the latest `cd`.
     pub cwd_source: Option<SharedState>,
+    /// Printable-output logging controller for this terminal.
+    pub logging: Option<TerminalLogController>,
 }
 /// Which backend a session talks to. Replaces the former `is_local() -> bool`
 /// so call sites read as a domain concept (ARCH-44).

@@ -30,6 +30,8 @@ use gpui_component::{
     notification::NotificationType,
 };
 use oneterm_core::{AppError, ConnectionCancellation, HostKeyPolicy, SshConfig};
+
+use crate::session_state::SshLoggingOverride;
 use oneterm_settings::TerminalSettings;
 use oneterm_state::commands::SshDuplicateCompletion;
 use oneterm_state::{AppServices, AppState};
@@ -267,6 +269,8 @@ pub(crate) struct SshConnectRequest {
     /// Runs once the session is authenticated, before the tab opens — e.g. the
     /// quick-connect "save this session" option (CORR-54: never saved on failure).
     pub on_connected: Option<Rc<dyn Fn(&mut App)>>,
+    /// Saved-session automatic logging override.
+    pub logging_override: SshLoggingOverride,
 }
 
 impl SshConnectRequest {
@@ -276,6 +280,7 @@ impl SshConnectRequest {
             initial_cwd: None,
             completion: None,
             on_connected: None,
+            logging_override: SshLoggingOverride::Inherit,
         }
     }
 }
@@ -293,7 +298,16 @@ pub(crate) fn connect_ssh_session(
     let duplicate_config = cfg.duplicate_config();
     let factory = AppServices::session_factory(cx);
     // SSH sessions honour the same scrollback setting as local shells (CORR-33).
-    let scrollback = TerminalSettings::global(cx).read(cx).scrollback_history;
+    let (scrollback, logging) = {
+        let settings = TerminalSettings::global(cx);
+        let settings = settings.read(cx);
+        (
+            settings.scrollback_history,
+            settings
+                .logging
+                .ssh_config(request.logging_override.resolve(settings.logging.ssh)),
+        )
+    };
     // The user's OSC security policy for this session (SEC-08).
     let security = oneterm_terminal_view::terminal_security_policy(cx);
 
@@ -311,9 +325,9 @@ pub(crate) fn connect_ssh_session(
         .spawn(cx, async move |cx| {
             let result = cx
                 .background_executor()
-                .spawn(
-                    async move { factory.connect_ssh(cfg, PtySize::INITIAL, scrollback, security) },
-                )
+                .spawn(async move {
+                    factory.connect_ssh(cfg, PtySize::INITIAL, scrollback, security, logging)
+                })
                 .await;
             if task_cancellation.is_cancelled() {
                 connecting_for_task.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -327,6 +341,7 @@ pub(crate) fn connect_ssh_session(
                         initial_cwd,
                         completion,
                         on_connected,
+                        logging_override: _,
                     } = request;
                     connecting_for_task.store(false, std::sync::atomic::Ordering::Relaxed);
                     window.close_dialog(cx);

@@ -188,23 +188,29 @@ impl TerminalPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Entity<LocalTerminalView>> {
-        let (scrollback_history, security) = {
+        let (scrollback_history, security, logging) = {
             let settings = deps.settings.read(cx);
             (
                 settings.scrollback_history,
                 security_policy_from_settings(settings),
+                settings.logging.local_config(),
             )
         };
         let factory = AppServices::session_factory(cx);
         let duplicate_config = SessionDuplicateConfig::Local(shell.clone());
-        let session: Box<dyn TerminalSession> =
-            match factory.spawn_local(shell, INITIAL_PTY_SIZE, scrollback_history, security) {
-                Ok(s) => s,
-                Err(e) => {
-                    log::error!("Failed to spawn local terminal session: {e}");
-                    return None;
-                }
-            };
+        let session: Box<dyn TerminalSession> = match factory.spawn_local(
+            shell,
+            INITIAL_PTY_SIZE,
+            scrollback_history,
+            security,
+            logging,
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("Failed to spawn local terminal session: {e}");
+                return None;
+            }
+        };
         let session_entity = cx.new(|_| session);
         let view_deps = deps.clone();
         Some(cx.new(|cx| {
@@ -385,6 +391,21 @@ impl Panel for TerminalPanel {
         let highlight = cx.theme().table_active_border;
         let is_active = self.is_active;
         let tab_label = self.tab_label(cx);
+        let show_logging = self.tree.is_single()
+            && self.tree.active_terminal().is_some_and(|view| {
+                view.read(cx)
+                    .session
+                    .read(cx)
+                    .capabilities()
+                    .logging
+                    .is_some_and(|logging| {
+                        matches!(
+                            logging.state(),
+                            oneterm_terminal::TerminalLogState::Running { .. }
+                        )
+                    })
+            });
+        let recording_color = cx.theme().danger;
         let drag_title: SharedString = tab_label.clone().into();
         let rename_title = tab_label.clone();
         let title_label_id = SharedString::from(format!("tab-title-label-{:?}", panel_entity));
@@ -437,6 +458,16 @@ impl Panel for TerminalPanel {
                         });
                     }
                 }
+            })
+            .when(show_logging, |this| {
+                this.child(
+                    div()
+                        .id("tab-recording")
+                        .flex_shrink_0()
+                        .text_xs()
+                        .text_color(recording_color)
+                        .child("●"),
+                )
             })
             .child(
                 super::title::tab_title_label()
