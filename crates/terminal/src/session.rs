@@ -257,22 +257,29 @@ pub trait TerminalRender: Send + Sync {
     /// **Consumes and resets** the terminal damage — call this **only** from the
     /// render/prepaint path, exactly once per frame. For any other read
     /// (mouse hit-test, URL detection, mode checks) use
-    /// [`snapshot_query`](Self::snapshot_query), which does not touch damage.
+    /// [`query_state`](Self::query_state) or
+    /// [`query_line_range_cells`](Self::query_line_range_cells), which do not
+    /// touch damage and never clone the full grid.
     fn snapshot(&self) -> TerminalContent;
 
-    /// Snapshot for auxiliary (non-render) reads — does **not** consume/reset the
-    /// terminal damage, so it cannot starve the renderer of dirty-row info and
-    /// leave stale rows on screen.
-    fn snapshot_query(&self) -> TerminalContent;
+    /// [`snapshot`](Self::snapshot) into a reusable buffer — same contract
+    /// (consumes damage; render path only, once per frame), but reuses `out`'s
+    /// allocations so the steady-state render loop allocates nothing. The
+    /// default falls back to `snapshot()` for simple implementations.
+    fn snapshot_into(&self, out: &mut TerminalContent) {
+        *out = self.snapshot();
+    }
 
     /// Compact query state for non-render reads — mode, cursor, viewport size.
-    /// Does NOT clone the full grid (O(1) vs O(rows×cols) for `snapshot_query`).
-    /// Use this for mode checks, cursor positioning, and viewport-size reads.
+    /// Does NOT clone the full grid (O(1)). Use this for mode checks, cursor
+    /// positioning, and viewport-size reads.
     fn query_state(&self) -> TerminalQueryState;
 
     /// Read cells for a range of display lines (0-based from top of viewport).
-    /// Cheaper than `snapshot_query` (O(window×cols) vs O(rows×cols)) — used for
-    /// URL hover detection and completion, where only a few lines are needed.
+    /// O(window×cols), damage-free — used for URL hover detection and
+    /// completion, where only a few lines are needed. There is deliberately no
+    /// damage-free full-grid snapshot: every non-render read fits `query_state`
+    /// or a line range, and an O(rows×cols) clone per event is a footgun.
     fn query_line_range_cells(&self, start_line: usize, count: usize) -> LineRangeCells;
 
     /// Basic info (total_lines, cursor_line) — does NOT call damage()/reset_damage().
@@ -469,8 +476,8 @@ macro_rules! impl_pty_terminal_session {
                 self.model().snapshot()
             }
 
-            fn snapshot_query(&self) -> $crate::TerminalContent {
-                self.model().snapshot_query()
+            fn snapshot_into(&self, out: &mut $crate::TerminalContent) {
+                self.model().snapshot_into(out)
             }
 
             fn query_state(&self) -> $crate::TerminalQueryState {

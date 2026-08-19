@@ -373,4 +373,7 @@ pub(crate) struct RenderCache {
     pub grid_size: Option<(u16, u16)>,
     /// Layout metrics sink (the element writes in prepaint, mouse handlers read).
     pub metrics: GridMetrics,
+    /// Reusable render snapshot buffer — `snapshot_into` refills it in place
+    /// each frame, so the steady-state render loop allocates nothing.
+    pub snapshot: oneterm_terminal::TerminalContent,
 }

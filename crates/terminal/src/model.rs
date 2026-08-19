@@ -74,10 +74,11 @@ impl<EP: EventListener> TerminalModel<EP> {
         TerminalContent::from(&mut *term)
     }
 
-    /// Snapshot for auxiliary reads (does NOT consume damage).
-    pub fn snapshot_query(&self) -> TerminalContent {
-        let term = self.term.lock();
-        TerminalContent::from_query(&*term)
+    /// Snapshot the grid for rendering into a reusable buffer (consumes damage).
+    /// Reuses `out`'s allocations — zero steady-state allocation per frame.
+    pub fn snapshot_into(&self, out: &mut TerminalContent) {
+        let mut term = self.term.lock();
+        out.refill(&mut term);
     }
 
     /// Compact query state — mode, cursor, viewport size (O(1)).

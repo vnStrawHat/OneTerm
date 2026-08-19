@@ -111,7 +111,13 @@ impl super::TerminalElement {
         );
 
         let snapshot_start = std::time::Instant::now();
-        let snapshot = session.read(cx).snapshot();
+        // One cache borrow spans snapshot → row cache → metrics (field borrows
+        // are disjoint). `snapshot_into` refills the cached buffer in place, so
+        // the steady-state render loop allocates nothing.
+        let mut cache_ref = render_cache.borrow_mut();
+        let cache = &mut *cache_ref;
+        session.read(cx).snapshot_into(&mut cache.snapshot);
+        let snapshot = &cache.snapshot;
         let snapshot_us = snapshot_start.elapsed().as_micros();
         let num_lines = snapshot.terminal_bounds.num_lines;
         let num_cols = snapshot.terminal_bounds.num_cols;
@@ -142,7 +148,7 @@ impl super::TerminalElement {
         };
 
         update_row_cache(
-            &mut render_cache.borrow_mut().rows,
+            &mut cache.rows,
             &RowCacheFrame {
                 cells: &snapshot.cells,
                 damage: &snapshot.damage,
@@ -162,7 +168,6 @@ impl super::TerminalElement {
         // Fill the cached ShapedLine for runs not yet shaped.
         let mut shape_line_count: usize = 0;
         {
-            let mut cache = render_cache.borrow_mut();
             let cache = &mut cache.rows;
             for i in 0..num_lines {
                 let row = &mut cache.rows[i];
@@ -189,7 +194,7 @@ impl super::TerminalElement {
         }
 
         let cursor = build_cursor(
-            &snapshot,
+            snapshot,
             num_lines,
             num_cols,
             cursor_color_override,
@@ -241,7 +246,7 @@ impl super::TerminalElement {
             )),
         };
 
-        render_cache.borrow_mut().metrics = GridMetrics {
+        cache.metrics = GridMetrics {
             bounds: Some(bounds),
             cell_width,
             line_height,

@@ -16,14 +16,21 @@ mod crash_report;
 mod crash_report_dialog;
 mod init;
 mod native_crash;
+mod oom;
 mod session_factory;
 mod ssh_client_panel;
 mod window;
 
 use assets::CustomAssets;
 
+/// Survive system-OOM spikes (see `oom.rs`): retry failed allocations after
+/// releasing a ballast instead of aborting on the first NULL.
+#[global_allocator]
+static GLOBAL_ALLOC: oom::OomResilientAlloc = oom::OomResilientAlloc;
+
 /// Launch OneTerm: initialize logging, the app, the UI, then open the main window.
 pub fn run() {
+    oom::init_ballast();
     let crash_capture_paths = match crash_report::prepare_capture_paths() {
         Ok(paths) => {
             crash_report::install_panic_hook(&paths);
