@@ -6,6 +6,7 @@
 //! the separate `oneterm-terminal` crate.
 
 pub mod config;
+pub mod editor_launcher;
 pub mod error;
 pub mod persistence;
 pub mod schema;
@@ -15,6 +16,7 @@ pub mod ssh_config;
 pub mod terminal_logging;
 
 pub use config::{LocalShellConfig, RightDockMode, ShellKind, config_dir, home_dir};
+pub use editor_launcher::{EditorChoice, launch_editor};
 pub use error::{AppError, ConnectPhase, SftpStatus};
 pub use persistence::{atomic_write, quarantine_file, update_json_file};
 pub use schema::{

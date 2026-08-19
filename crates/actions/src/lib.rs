@@ -74,6 +74,8 @@ actions!(
         // ── SFTP context-menu actions ───────────────────────────────
         /// Open the selected file/folder in the SFTP browser.
         SftpOpen,
+        /// Edit the selected remote file locally (download, open in editor).
+        SftpEdit,
         /// Download the selected file/folder from the remote.
         SftpDownload,
         /// Rename the selected file/folder.

@@ -10,8 +10,8 @@ pub mod terminal_settings;
 pub mod ui_config;
 
 pub use terminal_config::{
-    CompletionConfig, CompletionSources, LoggingConfig, SemanticHighlightingMode, TabTitleMode,
-    TerminalConfig,
+    CompletionConfig, CompletionSources, EditorConfig, EditorMode, LoggingConfig,
+    SemanticHighlightingMode, SftpConfig, TabTitleMode, TerminalConfig,
 };
 pub use terminal_settings::{
     ColorOverrides, TerminalBlink, TerminalCursorShape, TerminalPadding, TerminalSettings,

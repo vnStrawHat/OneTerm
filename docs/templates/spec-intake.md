@@ -25,6 +25,8 @@ Identify affected product surfaces, contracts, users, systems, and existing beha
 
 ## Candidate Work Packets
 
+List one packet per distinct, independently acceptable outcome; an intake usually has several. Do not collapse the whole intake into a single packet, and do not split one outcome into trivially small packets.
+
 - [ ] `US-NNNN` or `BUG-NNNN` — outcome and dependencies.
 
 ## Architecture and Boundary Questions

@@ -38,6 +38,11 @@ pub(super) fn build_entry_menu(
         )
     } else {
         menu.item(
+            PopupMenuItem::new("Edit")
+                .action(Box::new(oneterm_actions::SftpEdit))
+                .on_click(on_click_panel(panel.clone(), SftpPanel::do_edit)),
+        )
+        .item(
             PopupMenuItem::new("Download")
                 .action(Box::new(oneterm_actions::SftpDownload))
                 .on_click(on_click_panel(panel.clone(), SftpPanel::do_download)),

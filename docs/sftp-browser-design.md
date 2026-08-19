@@ -1023,6 +1023,7 @@ impl Render for SftpPanel {
 | **New Folder** | Click `📁` | Dialog to enter name → `sftp.mkdir(path)` |
 | **Properties** | Click `📋` / context menu | `sftp.stat(path)` → detail dialog |
 | **Open** | Double-click file | Download to temp → open local app → (edit → re-upload?) |
+| **Edit** | Context menu → `Edit` (files only) | Size gate (default 1 MB, configurable) → download to a managed temp copy → open in the configured editor → watch for saves → prompt to upload (with a per-file "always" option) → warn on remote-mtime conflict → upload. See §4.14. |
 | **Refresh** | Click `⟳` / F5 | `sftp.read_dir(cwd)` → update `entries` |
 
 ### 4.7. Transfer queue — parallel with the terminal
@@ -1221,6 +1222,62 @@ crates/ui/src/views/sftp/
 ├── context_menu.rs     # NEW — context menu for file/folder/empty area
 └── detail_dialog.rs    # NEW — file/folder properties dialog
 ```
+---
+
+### 4.14. Remote file edit workflow (IN-0011)
+
+The "Edit" action turns a remote file into a short round trip through a local
+editor. It reuses the existing `SftpBackend::{stat, download, upload}` and the
+transfer queue; no backend trait method is added. Owned by
+`crates/sftp-ui/src/edit.rs`; the editor launcher lives in
+`oneterm_core::editor_launcher` (`open` crate + custom argv), and the
+configuration in the `sftp` group of `terminal.json` (see the "SFTP" settings
+page). See `docs/spec-intakes/IN-0011-sftp-remote-file-edit-with-auto-upload/`
+and DEC-0004.
+
+```
+Context menu "Edit" (files only)
+  → do_edit: read sftp config; size gate (default 1 MB, `edit_max_file_size`,
+             0 = no limit) → confirm if larger
+  → download to config_dir()/edit-cache/<pid>/<session-id>/<name> (transfer queue),
+             baseline_mtime = FileEntry.modified
+  → launch_editor(EditorChoice::{OsDefault | Custom { program, args }}, temp)
+  → notify watcher on the temp dir → debounced save → confirm the temp file's
+             (mtime,len) actually changed (editor-open/metadata touches don't) →
+             on_temp_saved
+        → always_upload? else prompt [Upload] [Don't upload]
+                                 + "always upload this file" (this session only)
+        → stat(remote): mtime != baseline (or unknown) → conflict warning
+                                 [Upload anyway] [Cancel]
+        → upload temp → refresh baseline from a fresh stat; refresh listing if
+                        the file is in the current cwd
+  → teardown: an edit session ends when its SFTP session closes (reaped on the
+              poll tick / tab change), on panel drop, or on app exit. The
+              per-process edit-cache/<pid> dir is pruned as soon as it is empty;
+              a startup sweep reclaims any <pid> dir whose process is no longer
+              alive (killed run) while keeping other live instances' dirs
+```
+
+The cache path is `edit-cache/<pid>/<edit-session-id>/<name>`: the pid isolates
+concurrent OneTerm instances and the edit-session id (plus the SFTP session id
+recorded on the session) keeps multiple tabs independent. Editor-exit is not
+tracked — the OS-default opener and GUI editors give no reliable close signal —
+so cleanup is tied to the SFTP session lifecycle.
+
+Invariants:
+
+- Editors are launched with an explicit argv (temp path as a separate argument);
+  no shell string, so a file name cannot inject a command.
+- An upload overwrites only when the remote mtime still equals the baseline or
+  the user chose "Upload anyway"; an unknown mtime warns (never silently
+  clobbers).
+- "Always upload" is per edit session and is never persisted.
+- A watcher event only prompts when the temp copy's `(mtime, len)` fingerprint
+  actually changed; opening the file in an editor (metadata/attribute touches,
+  reads) never pops the upload dialog on its own.
+- Temp copies live only under `edit-cache/` and are removed when their session
+  ends; the empty `<pid>` dir is pruned immediately, and a startup sweep
+  reclaims `<pid>` dirs whose process is no longer alive.
 ---
 
 

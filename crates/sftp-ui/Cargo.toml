@@ -14,6 +14,7 @@ workspace = true
 [dependencies]
 oneterm-core.workspace = true
 oneterm-terminal.workspace = true
+oneterm-settings.workspace = true
 oneterm-state.workspace = true
 oneterm-theme.workspace = true
 oneterm-actions.workspace = true
@@ -21,9 +22,11 @@ oneterm-actions.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
 anyhow.workspace = true
+async-channel.workspace = true
 chrono.workspace = true
 log.workspace = true
+notify.workspace = true
+sysinfo.workspace = true
 
 [dev-dependencies]
-async-channel.workspace = true
 gpui = { workspace = true, features = ["test-support"] }

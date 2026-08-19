@@ -32,7 +32,11 @@ product: terminal engine glue, backends, UI, persistence, packaging, and the aut
   diagnostics binaries live in `crates/tools`.
 - Persistence: JSON files in `oneterm_core::config_dir()` (`target/` in debug builds,
   `~/.OneTerm/` in release): `terminal.json`, `ui_config.json`, `docks.json`,
-  `ssh_session.json`, `update_config.json`, plus `crashes/`
+  `ssh_session.json`, `update_config.json`, plus `crashes/` and the SFTP
+  `edit-cache/<pid>/` (transient local copies of remote files opened with the
+  SFTP "Edit" action; per-process so concurrent instances stay isolated. Each
+  `<pid>` dir is pruned once empty; a startup sweep reclaims `<pid>` dirs whose
+  process is no longer alive — covering runs that were killed before cleanup ran)
   (schemas: `docs/agents/persistence.md`).
 - Distribution: GitHub Releases built by `.github/workflows/release.yml`; the in-app updater
   (`crates/update`) downloads from the same releases.

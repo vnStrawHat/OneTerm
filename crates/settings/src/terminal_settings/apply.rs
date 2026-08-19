@@ -101,6 +101,7 @@ impl TerminalSettings {
 
             completion: cfg.completion.clone(),
             logging: cfg.logging.clone(),
+            sftp: cfg.sftp.clone(),
 
             persist_blocked: false,
         }

@@ -15,6 +15,7 @@ mod logging;
 mod mouse;
 mod scroll;
 mod security;
+mod sftp;
 
 pub use bell::BellConfig;
 pub use colors::ColorsConfig;
@@ -27,3 +28,4 @@ pub use logging::LoggingConfig;
 pub use mouse::MouseConfig;
 pub use scroll::ScrollConfig;
 pub use security::SecurityConfig;
+pub use sftp::{DEFAULT_EDIT_MAX_FILE_SIZE, EditorConfig, EditorMode, SftpConfig};

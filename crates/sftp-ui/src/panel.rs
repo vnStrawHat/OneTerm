@@ -80,6 +80,11 @@ pub struct SftpPanel {
     // ── Debounce save table state ───────────────────────────
     _save_table_task: Option<Task<()>>,
     _table_sub: Subscription,
+
+    /// Active "edit remote file locally" sessions, keyed by a process-local id.
+    /// Populated by [`Self::do_edit`]; the watcher + save-driven upload are
+    /// driven in a later step. See `docs/spec-intakes/IN-0011-*`.
+    edit_sessions: std::collections::HashMap<super::edit::EditSessionId, super::edit::EditSession>,
 }
 
 impl SftpPanel {
@@ -155,6 +160,7 @@ impl SftpPanel {
             entries_dirty: false,
             _save_table_task: None,
             _table_sub: table_sub,
+            edit_sessions: std::collections::HashMap::new(),
         };
 
         // Seed from the current AppState so a freshly-created panel (e.g. after
@@ -196,6 +202,10 @@ impl SftpPanel {
                         }
                         this.refresh_terminal_cwd_cache(cx);
                         this.maybe_follow_terminal_cwd(cx);
+                        // End edit sessions whose SFTP connection has closed so
+                        // their temp copies are removed even while this tab
+                        // stays active.
+                        this.reap_dead_edit_sessions();
                         // Persist only after a browser-state mutation. The timer
                         // remains responsible for saving changes made by a panel
                         // that is removed without a backend transition, but it no
@@ -293,6 +303,20 @@ impl SftpPanel {
         &self.table
     }
 
+    /// The active "edit remote file locally" sessions (accessor for the
+    /// `edit` module, which is a sibling of `panel`).
+    pub(crate) fn edit_sessions_mut(
+        &mut self,
+    ) -> &mut std::collections::HashMap<super::edit::EditSessionId, super::edit::EditSession> {
+        &mut self.edit_sessions
+    }
+
+    pub(crate) fn edit_sessions(
+        &self,
+    ) -> &std::collections::HashMap<super::edit::EditSessionId, super::edit::EditSession> {
+        &self.edit_sessions
+    }
+
     pub(crate) fn path_input(&self) -> &Entity<InputState> {
         &self.path_input
     }
@@ -354,6 +378,10 @@ impl SftpPanel {
 
         // Preserve live backend state, but never retain a closed session's history.
         if let Some(old_key) = self.active_key {
+            // Clean up edit sessions whose SFTP connection has closed. A plain
+            // tab switch keeps a live session's edit sessions (and their temp
+            // copies) so the user can switch back and keep editing.
+            self.reap_dead_edit_sessions();
             if self.sftp.as_ref().is_some_and(|backend| backend.alive()) {
                 self.save_state_for_key(old_key, cx);
             } else {

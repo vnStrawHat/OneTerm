@@ -112,6 +112,7 @@ impl TerminalSettings {
             },
             completion: self.completion.clone(),
             logging: self.logging.clone(),
+            sftp: self.sftp.clone(),
             colors: ColorsConfig {
                 foreground: color_to_hex(co.foreground),
                 background: color_to_hex(co.background),

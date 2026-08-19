@@ -93,6 +93,10 @@ crash-handler = "=0.8.0"
 russh = { version = "0.61", default-features = false, features = ["ring", "flate2", "rsa"] }
 # SFTP subsystem for russh — opens an SFTP channel on the same SSH connection
 russh-sftp = "2.3"
+# Open a path in the OS default application (SFTP "Edit" workflow, OS-default mode).
+open = "5"
+# Filesystem watcher for the SFTP "Edit" workflow (detect local saves of the temp copy).
+notify = "7"
 # russh-keys was merged into russh >= 0.50
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "io-util", "net", "macros", "fs"] }
 tokio-util = { version = "0.7", features = ["rt"] }

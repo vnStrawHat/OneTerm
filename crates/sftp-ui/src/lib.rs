@@ -3,6 +3,7 @@
 mod actions;
 mod browser_state;
 mod browser_view;
+mod edit;
 mod panel;
 mod panel_ops;
 mod persistence;
@@ -26,6 +27,9 @@ use oneterm_state::panel_names;
 /// register the "sftp" dock panel so saved layouts deserialize. Called by the
 /// app aggregator.
 pub fn init(cx: &mut App) {
+    // Remove leftover edit temp files from a previous run before any session
+    // starts creating new ones.
+    edit::sweep_edit_cache();
     browser_state::SftpBrowserStore::init(cx);
     register_panel(cx, panel_names::SFTP, |dock_area, _, _, window, cx| {
         Box::new(panel::SftpPanel::new_entity_in_workspace(

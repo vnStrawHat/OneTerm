@@ -20,8 +20,8 @@ use gpui_component::{
     v_flex,
 };
 use oneterm_actions::{
-    SftpDelete, SftpDownload, SftpNewFolder, SftpOpen, SftpProperties, SftpRefresh, SftpRename,
-    SftpUploadFiles, SftpUploadFolder,
+    SftpDelete, SftpDownload, SftpEdit, SftpNewFolder, SftpOpen, SftpProperties, SftpRefresh,
+    SftpRename, SftpUploadFiles, SftpUploadFolder,
 };
 use oneterm_theme::icon::AppIcon;
 use oneterm_theme::notif_ext::notify;
@@ -64,6 +64,7 @@ impl Render for SftpPanel {
                 }
             }))
             .on_action(cx.listener(|this, _: &SftpDownload, w, cx| this.do_download(w, cx)))
+            .on_action(cx.listener(|this, _: &SftpEdit, w, cx| this.do_edit(w, cx)))
             .on_action(cx.listener(|this, _: &SftpRename, w, cx| this.do_rename(w, cx)))
             .on_action(cx.listener(|this, _: &SftpDelete, w, cx| this.do_delete(w, cx)))
             .on_action(cx.listener(|this, _: &SftpProperties, w, cx| this.do_properties(w, cx)))

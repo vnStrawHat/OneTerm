@@ -33,7 +33,7 @@ fn notify_dialog_failure(what: &str, error: &dyn std::fmt::Display, cx: &mut Asy
 
 /// Register a queue item for a transfer that is about to start.
 /// Returns the allocated transfer id, or `None` when no backend is active.
-fn begin_transfer(
+pub(crate) fn begin_transfer(
     panel: &Entity<SftpPanel>,
     direction: TransferDirection,
     filename: &str,
@@ -65,13 +65,13 @@ fn begin_transfer(
 /// The item ends `Completed`, `Cancelled`, or `Error` — never `InProgress`. A
 /// `Cancelled` event and an `Err(AppError::Cancelled)` result both mark the
 /// item cancelled, so the outcome does not depend on which arrives first.
-async fn run_transfer(
+pub(crate) async fn run_transfer(
     panel: &Entity<SftpPanel>,
     key: BackendKey,
     transfer_id: usize,
     handle: TransferHandle,
     cx: &mut AsyncApp,
-) {
+) -> TransferStatus {
     let apply = |cx: &mut AsyncApp, update: &dyn Fn(&mut TransferItem)| {
         cx.update(|cx| {
             panel.update(cx, |this, cx| {
@@ -103,10 +103,12 @@ async fn run_transfer(
                 item.status = TransferStatus::Completed;
                 item.progress = 1.0;
             });
+            TransferStatus::Completed
         }
         Ok(Err(AppError::Cancelled)) => {
             log::info!("SftpPanel: transfer #{transfer_id} cancelled");
             apply(cx, &|item| item.status = TransferStatus::Cancelled);
+            TransferStatus::Cancelled
         }
         Ok(Err(error)) => {
             log::error!("SftpPanel: transfer #{transfer_id} failed: {error}");
@@ -115,6 +117,7 @@ async fn run_transfer(
                 item.status = TransferStatus::Error;
                 item.error = Some(message.clone());
             });
+            TransferStatus::Error
         }
         Err(_) => {
             log::error!("SftpPanel: transfer #{transfer_id} result channel closed");
@@ -122,6 +125,7 @@ async fn run_transfer(
                 item.status = TransferStatus::Error;
                 item.error = Some("channel closed".to_string());
             });
+            TransferStatus::Error
         }
     }
 }

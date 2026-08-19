@@ -21,7 +21,7 @@ use gpui_component::{
     v_flex,
 };
 
-use super::{about, appearance, general, key_bindings, terminal, updates};
+use super::{about, appearance, general, key_bindings, sftp, terminal, updates};
 
 /// General Settings view (font, theme, key bindings, terminal options, about).
 pub(crate) struct SettingsPanel {
@@ -41,6 +41,13 @@ impl SettingsPanel {
             .detach();
         cx.observe(&updates::UpdateUiState::config(cx), |_, _, cx| cx.notify())
             .detach();
+        // Re-render when terminal settings change so setting-dependent UI (e.g.
+        // the SFTP page's Custom-mode enable/disable) updates live.
+        cx.observe(
+            &oneterm_settings::TerminalSettings::global(cx),
+            |_, _, cx| cx.notify(),
+        )
+        .detach();
         Self {
             focus_handle: cx.focus_handle(),
         }
@@ -59,6 +66,7 @@ impl SettingsPanel {
             general::page(),
             key_bindings::page(),
             terminal::page(),
+            sftp::page(cx),
             appearance::page(cx),
             about::page(cx),
         ]

@@ -19,6 +19,7 @@ mod general;
 mod key_bindings;
 mod panel;
 mod separators;
+mod sftp;
 mod terminal;
 mod updates;
 mod window;
