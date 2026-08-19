@@ -10,8 +10,8 @@ Created: 2026-08-19
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [ ] Planned
-- [x] In progress
-- [ ] Implemented
+- [ ] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -133,6 +133,5 @@ Both docs updated in this change set (see Evidence).
 
 ## Handoff
 
-Working tree on branch `fix/oom-resilience`, not yet committed — user is
-reviewing. Next: user review → commit → manual OOM observation when the
-scenario recurs.
+Committed as `05df6ff` on `fix/oom-resilience` (user-reviewed). Next: merge/
+push per user, then manual OOM observation when the scenario recurs.
