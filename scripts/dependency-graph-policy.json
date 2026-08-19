@@ -77,6 +77,7 @@
     "oneterm-sftp-ui": [
       "oneterm-actions",
       "oneterm-core",
+      "oneterm-settings",
       "oneterm-state",
       "oneterm-terminal",
       "oneterm-theme"
