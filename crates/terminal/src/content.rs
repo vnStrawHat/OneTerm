@@ -119,8 +119,42 @@ impl std::fmt::Debug for TerminalContent {
     }
 }
 
+impl Default for TerminalContent {
+    /// An empty snapshot (no cells, hidden cursor, full damage) — the initial
+    /// value for a reusable buffer passed to [`TerminalContent::refill`].
+    fn default() -> Self {
+        Self {
+            cells: Vec::new(),
+            cursor: RenderableCursor {
+                shape: alacritty_terminal::vte::ansi::CursorShape::Hidden,
+                point: Point::default(),
+            },
+            mode: TermMode::empty(),
+            display_offset: 0,
+            total_lines: 0,
+            selection: None,
+            terminal_bounds: TerminalBounds {
+                num_lines: 0,
+                num_cols: 0,
+            },
+            damage: TermDamageInfo::Full,
+        }
+    }
+}
+
 impl TerminalContent {
     /// Build a snapshot from `Term` (the caller handles locking — pass `&mut Term`).
+    ///
+    /// Allocating convenience over [`refill`](Self::refill) — the render path
+    /// reuses one buffer via `refill` instead.
+    pub fn from<EP: EventListener>(term: &mut Term<EP>) -> Self {
+        let mut content = Self::default();
+        content.refill(term);
+        content
+    }
+
+    /// Refill `self` from `Term`, reusing the `cells` and dirty-line
+    /// allocations — the steady-state render loop allocates nothing (PERF).
     ///
     /// Calls `Term::damage()` to collect dirty rows, `reset_damage()` to clear them,
     /// then reads `renderable_content()` (display_iter + cursor + selection +
@@ -128,30 +162,24 @@ impl TerminalContent {
     ///
     /// `&mut Term` is required because `damage()` needs `&mut self` — unlike
     /// `renderable_content()`, which needs only `&self`. The FairMutex locks both.
-    pub fn from<EP: EventListener>(term: &mut Term<EP>) -> Self {
+    pub fn refill<EP: EventListener>(&mut self, term: &mut Term<EP>) {
         // ── Collect damage before resetting ──
         // Term::damage() returns TermDamage::Full (everything) or Partial (an iterator
         // of LineDamageBounds). The iterator already adds display_offset to ldb.line,
         // so ldb.line is the display line (0-based from the top of the viewport).
+        // An empty Partial is kept as-is so the renderer knows there is nothing
+        // to recompute.
         let num_lines = term.screen_lines();
-        let damage = match term.damage() {
+        let mut dirty = match std::mem::replace(&mut self.damage, TermDamageInfo::Full) {
+            TermDamageInfo::Partial(previous) => previous,
+            TermDamageInfo::Full => Vec::new(),
+        };
+        dirty.clear();
+        self.damage = match term.damage() {
             TermDamage::Full => TermDamageInfo::Full,
             TermDamage::Partial(iter) => {
-                // TermDamageIterator already adds display_offset to ldb.line,
-                // so ldb.line is the display line (0-based from the top of the viewport).
-                // Line(0) = top visible, Line(num_lines-1) = bottom visible.
-                // display_line = ldb.line (no further conversion needed).
-                let dirty: Vec<usize> = iter
-                    .map(|ldb| ldb.line)
-                    .filter(|&dl| dl < num_lines)
-                    .collect();
-                if dirty.is_empty() {
-                    // No visible damage — still return an empty Partial so the
-                    // renderer knows there is nothing to recompute.
-                    TermDamageInfo::Partial(Vec::new())
-                } else {
-                    TermDamageInfo::Partial(dirty)
-                }
+                dirty.extend(iter.map(|ldb| ldb.line).filter(|&dl| dl < num_lines));
+                TermDamageInfo::Partial(dirty)
             }
         };
         term.reset_damage();
@@ -166,74 +194,21 @@ impl TerminalContent {
             selection,
         } = RenderableContentParts::take(content);
 
-        let cells: Vec<IndexedCell> = display_iter
-            .map(|indexed| IndexedCell {
-                point: indexed.point,
-                cell: indexed.cell.clone(),
-            })
-            .collect();
+        self.cells.clear();
+        self.cells.extend(display_iter.map(|indexed| IndexedCell {
+            point: indexed.point,
+            cell: indexed.cell.clone(),
+        }));
 
-        let terminal_bounds = TerminalBounds {
-            num_lines: term.screen_lines(),
+        self.cursor = cursor;
+        self.mode = mode;
+        self.display_offset = display_offset;
+        self.total_lines = term.total_lines();
+        self.selection = selection;
+        self.terminal_bounds = TerminalBounds {
+            num_lines,
             num_cols: term.columns(),
         };
-
-        Self {
-            cells,
-            cursor,
-            mode,
-            display_offset,
-            total_lines: term.total_lines(),
-            selection,
-            terminal_bounds,
-            damage,
-        }
-    }
-
-    /// Build a snapshot for **auxiliary queries** (cursor bounds, mouse hit-test,
-    /// URL detection, mode checks) — **without** touching `Term::damage()` /
-    /// `reset_damage()`.
-    ///
-    /// This is critical: `from()` *consumes* the accumulated damage (and resets
-    /// it), so calling it outside the render would silently discard the dirty-row
-    /// info the renderer needs, leaving stale rows on screen. Query callers ignore
-    /// the `damage` field, so it is set to `Full` (a safe "don't trust for
-    /// incremental" value). Needs only `&Term` (no `&mut`), since it never calls
-    /// `damage()`.
-    pub fn from_query<EP: EventListener>(term: &Term<EP>) -> Self {
-        let content = term.renderable_content();
-        let RenderableContentParts {
-            display_iter,
-            cursor,
-            mode,
-            display_offset,
-            selection,
-        } = RenderableContentParts::take(content);
-
-        let cells: Vec<IndexedCell> = display_iter
-            .map(|indexed| IndexedCell {
-                point: indexed.point,
-                cell: indexed.cell.clone(),
-            })
-            .collect();
-
-        let terminal_bounds = TerminalBounds {
-            num_lines: term.screen_lines(),
-            num_cols: term.columns(),
-        };
-
-        Self {
-            cells,
-            cursor,
-            mode,
-            display_offset,
-            total_lines: term.total_lines(),
-            selection,
-            terminal_bounds,
-            // Auxiliary callers ignore damage; the render path never uses this
-            // constructor, so it must not consume/reset the real damage state.
-            damage: TermDamageInfo::Full,
-        }
     }
 
     /// true if the cursor is visible (shape ≠ Hidden).

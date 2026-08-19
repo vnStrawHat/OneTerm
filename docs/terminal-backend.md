@@ -81,7 +81,7 @@
 
 **Data flow**:
 - Input: `Keystroke` (GPUI) → `core::key_encode` → `Vec<u8>` → `session.write(bytes)` → PTY/channel.
-- Output: PTY/channel → pump (`ShellEventLoop` local / `ssh_main_task` tokio ssh) → `TerminalPump::advance` feeds the per-session printable-output logger and advances the visible terminal under the `Term` lock → `finish_batch` releases the lock and sends one `SessionEvent::Output` → View `cx.notify()` → `TerminalElement` prepaint calls `session.snapshot()` (short `Term` lock, copies `TerminalContent`, consumes damage) and paints from the copy. Logging behavior and file lifecycle are owned by [`terminal-logging.md`](terminal-logging.md).
+- Output: PTY/channel → pump (`ShellEventLoop` local / `ssh_main_task` tokio ssh) → `TerminalPump::advance` feeds the per-session printable-output logger and advances the visible terminal under the `Term` lock → `finish_batch` releases the lock and sends one `SessionEvent::Output` → View `cx.notify()` → `TerminalElement` prepaint calls `session.snapshot_into(&mut cache.snapshot)` (short `Term` lock, refills the reusable `TerminalContent` buffer held in `RenderCache` in place — zero steady-state allocation — and consumes damage) and paints from that buffer; `session.snapshot()` remains as the allocating convenience for tests and one-off reads. Logging behavior and file lifecycle are owned by [`terminal-logging.md`](terminal-logging.md).
 
 ---
 
@@ -150,8 +150,9 @@ sends the `Output` hint; `TerminalSession::snapshot()` (`TerminalModel::snapshot
 `crates/terminal/src/model.rs`) takes the `FairMutex` for the microseconds needed to
 copy `TerminalContent` (and consume the damage), releases it, and the element paints
 from that owned copy — the lock is never held **while painting**. Non-render reads use
-`snapshot_query()` (damage-free), `query_state()` (O(1), no cells) or
-`query_line_range_cells()`; every one of them is a short lock too, so the pump and the
+`query_state()` (O(1), no cells) or `query_line_range_cells()` (damage-free,
+O(window×cols)); there is deliberately no damage-free full-grid snapshot — an
+O(rows×cols) clone per event is a footgun. Every one of them is a short lock too, so the pump and the
 UI contend only briefly (see the "never block inside a `Term` callback" rule in §5.3).
 
 ```rust
@@ -546,7 +547,7 @@ a backend that cannot answer returns the documented empty value explicitly
 /// Grid reads — snapshots, damage-free queries, search, selection, colour table.
 pub trait TerminalRender: Send + Sync {
     fn snapshot(&self) -> TerminalContent;            // consumes damage; render path only
-    fn snapshot_query(&self) -> TerminalContent;      // damage-free full grid
+    fn snapshot_into(&self, out: &mut TerminalContent); // defaulted; reuses out's buffers
     fn query_state(&self) -> TerminalQueryState;      // O(1): mode, cursor, viewport size
     fn query_line_range_cells(&self, start_line: usize, count: usize) -> LineRangeCells;
     fn terminal_info(&self) -> TerminalInfo;
@@ -679,7 +680,7 @@ crates/
 │
 ├── terminal/src/             # engine (no GPUI)
 │   ├── session.rs            # TerminalRender/Input/Ime/Lifecycle + TerminalSession façade, SessionEvent, TerminalCapabilities
-│   ├── model.rs              # TerminalModel<EP>: snapshot / snapshot_query / query_state / input
+│   ├── model.rs              # TerminalModel<EP>: snapshot / snapshot_into / query_state / input
 │   ├── content.rs            # TerminalContent snapshot struct
 │   ├── palette.rs / color_classification.rs / osc_color.rs
 │   ├── key_encode.rs / mouse_encode.rs / paste.rs / search.rs

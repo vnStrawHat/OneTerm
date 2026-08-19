@@ -213,10 +213,6 @@ impl TerminalRender for FakeTerminalSession {
         self.content(DamageMode::Consume)
     }
 
-    fn snapshot_query(&self) -> TerminalContent {
-        self.content(DamageMode::Preserve)
-    }
-
     fn query_state(&self) -> TerminalQueryState {
         let mode = *self.state.mode.lock().unwrap();
         let snap = self.content(DamageMode::Preserve);

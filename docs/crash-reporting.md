@@ -23,6 +23,8 @@ Native callbacks run in a compromised context. They write only bounded, stack-fo
 
 Capture remains best effort. It cannot guarantee a report when process state or the stack/file handle is too damaged for the callback, when another handler terminates first, or for forced OS termination and power loss. Native reports contain bounded exception/signal context rather than a symbolized native stack or minidump.
 
+One abort path bypasses both handlers entirely: a failed heap allocation. Rust's infallible-allocation path (`Vec::push`, `String`, …) responds to a NULL from the OS by aborting through `__fastfail` (exception `0xc0000409`), which skips panic unwinding and SEH — the process dies with at most an empty staging file. This matters on Windows and macOS, which have no OOM killer: system-wide memory exhaustion hands NULL to every allocating process. OneTerm mitigates it with an OOM-resilient global allocator (`crates/app/src/oom.rs`): on failure it releases a 64 MiB startup ballast and retries for ~3 s — long enough for the process that caused the spike to die and free its memory — before aborting as described above. See `docs/decisions/DEC-0005-oom-retry-allocator-no-platform-gate.md` for the recorded trade-offs (possible ~3 s UI stall during a spike; one-shot ballast; not platform-gated).
+
 ## Path privacy
 
 Before a Rust panic report is persisted, every occurrence of the current user's home-directory prefix is replaced with `<USER_HOME>`. Both native and alternate slash separators are recognized; Windows matching is ASCII case-insensitive. Loading every report applies the same redaction defensively and rewrites the file when it still holds an unredacted path.

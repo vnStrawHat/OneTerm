@@ -89,8 +89,9 @@ fn assert_powershell_prompt_emits_cwd(kind: oneterm_core::ShellKind, label: &str
     .unwrap_or_else(|error| panic!("spawn {label}: {error}"));
 
     let emitted_cwd = wait_until(Duration::from_secs(15), || session.cwd().is_some());
+    // `snapshot()` consumes render damage, which is fine here: no renderer runs.
     let snapshot = session
-        .snapshot_query()
+        .snapshot()
         .cells
         .iter()
         .map(|indexed| indexed.cell.c)
