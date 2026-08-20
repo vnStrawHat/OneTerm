@@ -408,10 +408,17 @@ if not errorlevel 1 (
 
 rem The backup directory was created and write-probed by the parent process
 rem inside OneTerm's update cache before it quit.
-xcopy "%ONETERM_INSTALL_DIR%\*" "%ONETERM_BACKUP_DIR%\" /E /I /H /Y >NUL
+rem /R overwrites read-only files: installed binaries under Program Files are
+rem commonly read-only, and without it xcopy aborts with errorlevel 4 and the
+rem update silently rolls back (CORR-60).
+xcopy "%ONETERM_INSTALL_DIR%\*" "%ONETERM_BACKUP_DIR%\" /E /I /H /R /Y >NUL
 if errorlevel 2 exit /B 1
-xcopy "%ONETERM_PACKAGE_DIR%\*" "%ONETERM_INSTALL_DIR%\" /E /I /H /Y >NUL
+xcopy "%ONETERM_PACKAGE_DIR%\*" "%ONETERM_INSTALL_DIR%\" /E /I /H /R /Y >NUL
 if errorlevel 2 goto restore_backup
+rem Reset errorlevel before `start`: the preceding xcopy can leave a non-fatal
+rem errorlevel 1 (e.g. an extra-files warning) that would otherwise make the
+rem `if errorlevel 1` below roll back a launch that actually succeeded (CORR-60).
+(call )
 start "" "%ONETERM_INSTALL_DIR%\%ONETERM_EXE_NAME%"
 if errorlevel 1 goto restore_backup
 rem The new build launched: the backup has served its purpose.
@@ -427,7 +434,7 @@ rem directory and copy the backup back before reporting helper failure. The
 rem backup is kept for manual recovery.
 del /F /Q "%ONETERM_INSTALL_DIR%\*" >NUL 2>NUL
 for /D %%D in ("%ONETERM_INSTALL_DIR%\*") do rmdir /S /Q "%%D" >NUL 2>NUL
-xcopy "%ONETERM_BACKUP_DIR%\*" "%ONETERM_INSTALL_DIR%\" /E /I /H /Y >NUL
+xcopy "%ONETERM_BACKUP_DIR%\*" "%ONETERM_INSTALL_DIR%\" /E /I /H /R /Y >NUL
 exit /B 1
 "#
 }
@@ -720,5 +727,24 @@ mod tests {
         let remove_backup = script.find("rmdir /S /Q \"%ONETERM_BACKUP_DIR%\"").unwrap();
         assert!(start < remove_backup);
         assert!(!script.contains("mkdir \"%ONETERM_BACKUP_DIR%\""));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_update_script_overwrites_read_only_files_and_resets_errorlevel_before_launch() {
+        let script = windows_update_script_body();
+
+        // CORR-60: installed binaries are often read-only; xcopy must use /R or
+        // it aborts with errorlevel 4 and the update silently rolls back.
+        assert!(script.contains("/E /I /H /R /Y"));
+        assert!(!script.contains("/E /I /H /Y"));
+
+        // CORR-60: errorlevel is reset right before `start` so a non-fatal
+        // errorlevel left by the preceding xcopy cannot trip the launch check.
+        let reset = script.find("(call )").unwrap();
+        let start = script.find("start \"\"").unwrap();
+        let launch_check = script.find("if errorlevel 1 goto restore_backup").unwrap();
+        assert!(reset < start);
+        assert!(start < launch_check);
     }
 }
