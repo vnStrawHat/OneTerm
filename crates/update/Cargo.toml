@@ -26,3 +26,8 @@ serde_json.workspace = true
 sha2.workspace = true
 tar.workspace = true
 zip.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# Enumerate and terminate OneTerm's own console-host children before a Windows
+# update replaces the install directory (see install.rs).
+windows-sys.workspace = true

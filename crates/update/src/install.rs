@@ -51,6 +51,15 @@ fn schedule_windows_update(staged: &StagedUpdate, current_exe: &Path) -> Result<
         });
     }
 
+    // ConPTY launches OpenConsole.exe from the install directory. If a
+    // pseudoconsole teardown deadlocks or is skipped, an OpenConsole.exe can
+    // outlive OneTerm and keep an open handle on the very binaries the helper
+    // must overwrite, so xcopy fails and the update silently rolls back
+    // (CORR-61). Terminate only the console hosts whose image lives inside our
+    // own install directory; a bare process-name match would also kill the
+    // Windows Terminal / other apps' OpenConsole.exe.
+    terminate_console_hosts_in_dir(install_dir);
+
     let pid = std::process::id();
     let timestamp = chrono::Utc::now().timestamp_millis();
     let script = std::env::temp_dir().join(format!("oneterm-install-update-{pid}-{timestamp}.cmd"));
@@ -468,6 +477,128 @@ fn spawn_cmd_helper(script: &Path, env: &[(&str, std::ffi::OsString)]) -> Result
     Ok(())
 }
 
+/// Terminate every `OpenConsole.exe` whose executable lives inside `install_dir`.
+///
+/// ConPTY spawns `OpenConsole.exe` from OneTerm's own directory. A console host
+/// that outlives the app keeps a handle on the install-directory binaries, so
+/// the helper's `xcopy` cannot overwrite them and the update rolls back
+/// (CORR-61). Matching on the resolved image path (never the bare process name)
+/// leaves other apps' `OpenConsole.exe` — e.g. Windows Terminal's — untouched.
+#[cfg(target_os = "windows")]
+fn terminate_console_hosts_in_dir(install_dir: &Path) {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+
+    let Ok(install_dir) = std::fs::canonicalize(install_dir) else {
+        return;
+    };
+
+    // SAFETY: `CreateToolhelp32Snapshot` returns a handle we close below; the
+    // entry is zeroed and its `dwSize` is set as the API requires.
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        log::warn!("update: could not snapshot processes to stop stale console hosts");
+        return;
+    }
+
+    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+
+    // SAFETY: `snapshot` is valid and `entry` is initialized with `dwSize`.
+    let mut has_entry = unsafe { Process32FirstW(snapshot, &mut entry) } != 0;
+    while has_entry {
+        if process_entry_name(&entry).eq_ignore_ascii_case("OpenConsole.exe") {
+            terminate_if_in_dir(entry.th32ProcessID, &install_dir);
+        }
+        // SAFETY: same valid snapshot and entry as the `Process32FirstW` call.
+        has_entry = unsafe { Process32NextW(snapshot, &mut entry) } != 0;
+    }
+
+    // SAFETY: `snapshot` came from `CreateToolhelp32Snapshot` and is not used again.
+    unsafe {
+        CloseHandle(snapshot);
+    }
+}
+
+/// The `szExeFile` image name of a process entry, decoded up to its NUL.
+#[cfg(target_os = "windows")]
+fn process_entry_name(
+    entry: &windows_sys::Win32::System::Diagnostics::ToolHelp::PROCESSENTRY32W,
+) -> String {
+    let end = entry
+        .szExeFile
+        .iter()
+        .position(|&unit| unit == 0)
+        .unwrap_or(entry.szExeFile.len());
+    String::from_utf16_lossy(&entry.szExeFile[..end])
+}
+
+/// Terminate `process_id` when its full image path is inside `install_dir`.
+#[cfg(target_os = "windows")]
+fn terminate_if_in_dir(process_id: u32, install_dir: &Path) {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, TerminateProcess,
+    };
+
+    // SAFETY: `OpenProcess` returns null on failure, which we check before use.
+    let handle = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
+            0,
+            process_id,
+        )
+    };
+    if handle.is_null() {
+        return;
+    }
+
+    if let Some(image_path) = process_image_path(handle) {
+        // `canonicalize` resolves both paths through the same rules so the
+        // prefix comparison is not fooled by short (8.3) names or symlinks.
+        if std::fs::canonicalize(&image_path)
+            .is_ok_and(|resolved| resolved.starts_with(install_dir))
+        {
+            // SAFETY: `handle` was opened with PROCESS_TERMINATE and is valid.
+            unsafe {
+                TerminateProcess(handle, 1);
+            }
+            log::info!(
+                "update: terminated stale console host (pid {process_id}) from the install directory"
+            );
+        }
+    }
+
+    // SAFETY: `handle` came from `OpenProcess` and is not used again.
+    unsafe {
+        CloseHandle(handle);
+    }
+}
+
+/// The full image path of an opened process, or `None` if it cannot be read.
+#[cfg(target_os = "windows")]
+fn process_image_path(handle: windows_sys::Win32::Foundation::HANDLE) -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::Threading::{PROCESS_NAME_WIN32, QueryFullProcessImageNameW};
+
+    let mut buffer = vec![0_u16; 1024];
+    let mut size = buffer.len() as u32;
+    // SAFETY: `handle` is valid; `buffer`/`size` describe a writable region and
+    // `size` is updated with the number of characters written.
+    let ok = unsafe {
+        QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, buffer.as_mut_ptr(), &mut size)
+    };
+    if ok == 0 {
+        return None;
+    }
+    Some(PathBuf::from(std::ffi::OsString::from_wide(
+        &buffer[..size as usize],
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -746,5 +877,22 @@ mod tests {
         let launch_check = script.find("if errorlevel 1 goto restore_backup").unwrap();
         assert!(reset < start);
         assert!(start < launch_check);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn process_entry_name_decodes_up_to_the_nul_terminator() {
+        use windows_sys::Win32::System::Diagnostics::ToolHelp::PROCESSENTRY32W;
+
+        let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+        for (slot, unit) in entry
+            .szExeFile
+            .iter_mut()
+            .zip("OpenConsole.exe".encode_utf16())
+        {
+            *slot = unit;
+        }
+
+        assert!(process_entry_name(&entry).eq_ignore_ascii_case("openconsole.exe"));
     }
 }
