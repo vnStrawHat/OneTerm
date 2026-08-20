@@ -51,6 +51,24 @@ fn schedule_windows_update(staged: &StagedUpdate, current_exe: &Path) -> Result<
         });
     }
 
+    // A single, stable log file for the whole Windows update: the pre-quit
+    // phase below writes to it directly, and the detached helper appends its
+    // post-quit steps. In release builds OneTerm has no console, so this file
+    // is the only record of why an update failed.
+    let log_path = windows_update_log_path();
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    append_update_log(
+        &log_path,
+        &format!(
+            "=== update to {} scheduled; install_dir={}, package_dir={} ===",
+            staged.version,
+            install_dir.display(),
+            staged.package_dir.display()
+        ),
+    );
+
     // ConPTY launches OpenConsole.exe from the install directory. If a
     // pseudoconsole teardown deadlocks or is skipped, an OpenConsole.exe can
     // outlive OneTerm and keep an open handle on the very binaries the helper
@@ -58,7 +76,7 @@ fn schedule_windows_update(staged: &StagedUpdate, current_exe: &Path) -> Result<
     // (CORR-61). Terminate only the console hosts whose image lives inside our
     // own install directory; a bare process-name match would also kill the
     // Windows Terminal / other apps' OpenConsole.exe.
-    terminate_console_hosts_in_dir(install_dir);
+    terminate_console_hosts_in_dir(install_dir, &log_path);
 
     let pid = std::process::id();
     let timestamp = chrono::Utc::now().timestamp_millis();
@@ -102,14 +120,23 @@ fn schedule_windows_update(staged: &StagedUpdate, current_exe: &Path) -> Result<
             staged.staging_dir.as_os_str().to_os_string(),
         ),
         ("ONETERM_SCRIPT_PATH", script.as_os_str().to_os_string()),
+        ("ONETERM_UPDATE_LOG", log_path.as_os_str().to_os_string()),
     ];
     if let Err(error) = spawn_cmd_helper(&script, &helper_env) {
         // Best effort: the spawn failure is what gets reported; the leftovers
         // only waste disk space.
+        append_update_log(
+            &log_path,
+            &format!("ERROR: failed to launch update helper: {error}"),
+        );
         let _ = std::fs::remove_file(&script);
         let _ = std::fs::remove_dir(&backup_dir);
         return Err(error);
     }
+    append_update_log(
+        &log_path,
+        "update helper launched; OneTerm is quitting so the install can proceed",
+    );
     Ok(InstallOutcome::RestartScheduled)
 }
 
@@ -397,6 +424,7 @@ fn windows_update_script_body() -> &'static str {
     r#"@echo off
 setlocal DisableDelayedExpansion
 set "pid=%ONETERM_UPDATER_PID%"
+set "log=%ONETERM_UPDATE_LOG%"
 
 rem Wait until the current OneTerm process exits. Avoid PowerShell because it is
 rem blocked by policy in some locked-down environments.
@@ -404,6 +432,12 @@ rem blocked by policy in some locked-down environments.
 rem All paths are passed through environment variables by the Rust parent process.
 rem Do not inline paths into this file: cmd.exe parses batch files before command
 rem execution, so percent/caret metacharacters can corrupt or inject commands.
+
+rem Every step appends to %log% (the :log subroutine) and xcopy output is
+rem redirected there too, so a failed update leaves a full, timestamped record
+rem even though the helper runs without a console (CORR-62).
+call :log "helper started; install=%ONETERM_INSTALL_DIR% package=%ONETERM_PACKAGE_DIR%"
+call :log "waiting for OneTerm (pid %pid%) to exit"
 
 rem The helper runs without a console (CREATE_NO_WINDOW), where `timeout` fails
 rem immediately ("input redirection is not supported") and would busy-spin; a
@@ -414,23 +448,36 @@ if not errorlevel 1 (
     ping -n 2 127.0.0.1 >NUL 2>NUL
     goto wait_for_exit
 )
+call :log "OneTerm exited; backing up the current install"
 
 rem The backup directory was created and write-probed by the parent process
 rem inside OneTerm's update cache before it quit.
 rem /R overwrites read-only files: installed binaries under Program Files are
 rem commonly read-only, and without it xcopy aborts with errorlevel 4 and the
 rem update silently rolls back (CORR-60).
-xcopy "%ONETERM_INSTALL_DIR%\*" "%ONETERM_BACKUP_DIR%\" /E /I /H /R /Y >NUL
-if errorlevel 2 exit /B 1
-xcopy "%ONETERM_PACKAGE_DIR%\*" "%ONETERM_INSTALL_DIR%\" /E /I /H /R /Y >NUL
-if errorlevel 2 goto restore_backup
+>>"%log%" 2>&1 xcopy "%ONETERM_INSTALL_DIR%\*" "%ONETERM_BACKUP_DIR%\" /E /I /H /R /Y
+if errorlevel 2 (
+    call :log "ERROR: backup xcopy failed (errorlevel %errorlevel%); aborting without changes"
+    exit /B 1
+)
+call :log "installing the new package over the install directory"
+>>"%log%" 2>&1 xcopy "%ONETERM_PACKAGE_DIR%\*" "%ONETERM_INSTALL_DIR%\" /E /I /H /R /Y
+if errorlevel 2 (
+    call :log "ERROR: package xcopy failed (errorlevel %errorlevel%); rolling back"
+    goto restore_backup
+)
 rem Reset errorlevel before `start`: the preceding xcopy can leave a non-fatal
 rem errorlevel 1 (e.g. an extra-files warning) that would otherwise make the
 rem `if errorlevel 1` below roll back a launch that actually succeeded (CORR-60).
 (call )
+call :log "launching the new build: %ONETERM_INSTALL_DIR%\%ONETERM_EXE_NAME%"
 start "" "%ONETERM_INSTALL_DIR%\%ONETERM_EXE_NAME%"
-if errorlevel 1 goto restore_backup
+if errorlevel 1 (
+    call :log "ERROR: launch failed (errorlevel %errorlevel%); rolling back"
+    goto restore_backup
+)
 rem The new build launched: the backup has served its purpose.
+call :log "update complete; cleaning up backup and staging directories"
 cd /d "%TEMP%" >NUL 2>NUL
 rmdir /S /Q "%ONETERM_BACKUP_DIR%" >NUL 2>NUL
 rmdir /S /Q "%ONETERM_STAGING_DIR%" >NUL 2>NUL
@@ -443,8 +490,15 @@ rem directory and copy the backup back before reporting helper failure. The
 rem backup is kept for manual recovery.
 del /F /Q "%ONETERM_INSTALL_DIR%\*" >NUL 2>NUL
 for /D %%D in ("%ONETERM_INSTALL_DIR%\*") do rmdir /S /Q "%%D" >NUL 2>NUL
-xcopy "%ONETERM_BACKUP_DIR%\*" "%ONETERM_INSTALL_DIR%\" /E /I /H /R /Y >NUL
+>>"%log%" 2>&1 xcopy "%ONETERM_BACKUP_DIR%\*" "%ONETERM_INSTALL_DIR%\" /E /I /H /R /Y
+call :log "rolled back to the previous install; backup kept at %ONETERM_BACKUP_DIR%"
 exit /B 1
+
+rem Append one timestamped line to %log%. The redirection leads so no trailing
+rem space is captured into the message; %~1 strips the caller's quotes.
+:log
+>>"%log%" echo [%date% %time%] %~1
+goto :eof
 "#
 }
 
@@ -485,7 +539,7 @@ fn spawn_cmd_helper(script: &Path, env: &[(&str, std::ffi::OsString)]) -> Result
 /// (CORR-61). Matching on the resolved image path (never the bare process name)
 /// leaves other apps' `OpenConsole.exe` — e.g. Windows Terminal's — untouched.
 #[cfg(target_os = "windows")]
-fn terminate_console_hosts_in_dir(install_dir: &Path) {
+fn terminate_console_hosts_in_dir(install_dir: &Path, log_path: &Path) {
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
@@ -493,6 +547,10 @@ fn terminate_console_hosts_in_dir(install_dir: &Path) {
     };
 
     let Ok(install_dir) = std::fs::canonicalize(install_dir) else {
+        append_update_log(
+            log_path,
+            "skip console-host cleanup: install dir did not resolve",
+        );
         return;
     };
 
@@ -501,6 +559,10 @@ fn terminate_console_hosts_in_dir(install_dir: &Path) {
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
     if snapshot == INVALID_HANDLE_VALUE {
         log::warn!("update: could not snapshot processes to stop stale console hosts");
+        append_update_log(
+            log_path,
+            "WARN: could not snapshot processes for console-host cleanup",
+        );
         return;
     }
 
@@ -511,7 +573,7 @@ fn terminate_console_hosts_in_dir(install_dir: &Path) {
     let mut has_entry = unsafe { Process32FirstW(snapshot, &mut entry) } != 0;
     while has_entry {
         if process_entry_name(&entry).eq_ignore_ascii_case("OpenConsole.exe") {
-            terminate_if_in_dir(entry.th32ProcessID, &install_dir);
+            terminate_if_in_dir(entry.th32ProcessID, &install_dir, log_path);
         }
         // SAFETY: same valid snapshot and entry as the `Process32FirstW` call.
         has_entry = unsafe { Process32NextW(snapshot, &mut entry) } != 0;
@@ -538,7 +600,7 @@ fn process_entry_name(
 
 /// Terminate `process_id` when its full image path is inside `install_dir`.
 #[cfg(target_os = "windows")]
-fn terminate_if_in_dir(process_id: u32, install_dir: &Path) {
+fn terminate_if_in_dir(process_id: u32, install_dir: &Path, log_path: &Path) {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::Threading::{
         OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, TerminateProcess,
@@ -569,6 +631,13 @@ fn terminate_if_in_dir(process_id: u32, install_dir: &Path) {
             log::info!(
                 "update: terminated stale console host (pid {process_id}) from the install directory"
             );
+            append_update_log(
+                log_path,
+                &format!(
+                    "terminated stale OpenConsole.exe (pid {process_id}) at {}",
+                    image_path.display()
+                ),
+            );
         }
     }
 
@@ -597,6 +666,34 @@ fn process_image_path(handle: windows_sys::Win32::Foundation::HANDLE) -> Option<
     Some(PathBuf::from(std::ffi::OsString::from_wide(
         &buffer[..size as usize],
     )))
+}
+
+/// The stable log file for the Windows update, kept in OneTerm's update cache.
+///
+/// A fixed name (not per-PID) means the user always knows where to look, and
+/// the helper's success cleanup removes only the staging and backup dirs, so
+/// this file survives across attempts.
+#[cfg(target_os = "windows")]
+fn windows_update_log_path() -> PathBuf {
+    crate::manager::update_cache_dir().join("update.log")
+}
+
+/// Append one timestamped line to the update log; failures are ignored because
+/// logging must never block or fail an in-progress update.
+#[cfg(target_os = "windows")]
+fn append_update_log(log_path: &Path, message: &str) {
+    use std::io::Write as _;
+    let line = format!(
+        "[{}] {message}\r\n",
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+    );
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+    {
+        let _ = file.write_all(line.as_bytes());
+    }
 }
 
 #[cfg(test)]
@@ -874,9 +971,24 @@ mod tests {
         // errorlevel left by the preceding xcopy cannot trip the launch check.
         let reset = script.find("(call )").unwrap();
         let start = script.find("start \"\"").unwrap();
-        let launch_check = script.find("if errorlevel 1 goto restore_backup").unwrap();
+        let launch_check = script.find("if errorlevel 1 (").unwrap();
         assert!(reset < start);
         assert!(start < launch_check);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_update_script_logs_every_step_to_the_update_log() {
+        let script = windows_update_script_body();
+
+        // CORR-62: the detached helper has no console, so each step and the
+        // xcopy output must be captured in %ONETERM_UPDATE_LOG% for debugging.
+        assert!(script.contains("set \"log=%ONETERM_UPDATE_LOG%\""));
+        assert!(script.contains(":log"));
+        assert!(script.contains("call :log"));
+        // xcopy output is appended to the log rather than discarded to NUL.
+        assert!(script.contains(">>\"%log%\" 2>&1 xcopy"));
+        assert!(!script.contains("/E /I /H /R /Y >NUL"));
     }
 
     #[cfg(target_os = "windows")]
