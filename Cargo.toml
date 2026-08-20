@@ -33,7 +33,7 @@ exclude = [
 # Single version source for every workspace crate, the release workflow, and the
 # macOS bundle. Read it with:
 #   awk -F'"' '/^version = "/{print $2; exit}' Cargo.toml
-version = "0.4.0"
+version = "0.4.1"
 publish = false
 edition = "2024"
 license = "Apache-2.0"
