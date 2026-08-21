@@ -5,7 +5,7 @@
 //! application composition root installs a [`SessionFactory`] in its scoped
 //! `AppServices` bundle; feature crates consume that handle through GPUI context.
 
-use oneterm_core::{LocalShellConfig, Result, SshConfig, TerminalLogConfig};
+use oneterm_core::{LocalShellConfig, Result, SshConfig, SshKeepaliveConfig, TerminalLogConfig};
 
 use crate::TerminalSession;
 use crate::security_policy::TerminalSecurityPolicy;
@@ -53,5 +53,6 @@ pub trait SessionFactory: Send + Sync + 'static {
         scrollback: usize,
         security: TerminalSecurityPolicy,
         logging: TerminalLogConfig,
+        keepalive: SshKeepaliveConfig,
     ) -> Result<Box<dyn TerminalSession>>;
 }

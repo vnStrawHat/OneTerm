@@ -109,6 +109,7 @@ mod tests {
             _: usize,
             _: TerminalSecurityPolicy,
             _: oneterm_core::TerminalLogConfig,
+            _: oneterm_core::SshKeepaliveConfig,
         ) -> Result<Box<dyn TerminalSession>> {
             Err(oneterm_core::AppError::msg("test factory"))
         }

@@ -86,6 +86,11 @@ impl FakeSessionProbe {
         self.state.close_calls.load(Ordering::SeqCst)
     }
 
+    /// Set whether the fake session accepts outbound input.
+    pub fn set_alive(&self, alive: bool) {
+        self.state.alive.store(alive, Ordering::SeqCst);
+    }
+
     /// Return whether the fake session is alive.
     pub fn alive(&self) -> bool {
         self.state.alive.load(Ordering::SeqCst)
@@ -96,6 +101,7 @@ impl FakeSessionProbe {
 pub struct FakeTerminalSession {
     state: Arc<FakeSessionState>,
     event_rx: Mutex<Option<Receiver<SessionEvent>>>,
+    kind: SessionKind,
 }
 
 struct FakeSessionState {
@@ -115,6 +121,16 @@ struct FakeSessionState {
 impl FakeTerminalSession {
     /// Create a fake session and its observation probe.
     pub fn new(rows: usize, cols: usize, text: impl Into<String>) -> (Self, FakeSessionProbe) {
+        Self::new_with_kind(rows, cols, text, SessionKind::Local)
+    }
+
+    /// Create a fake session with an explicit backend kind.
+    pub fn new_with_kind(
+        rows: usize,
+        cols: usize,
+        text: impl Into<String>,
+        kind: SessionKind,
+    ) -> (Self, FakeSessionProbe) {
         let (event_tx, event_rx) = async_channel::bounded(64);
         let state = Arc::new(FakeSessionState {
             rows_cols: Mutex::new((rows.max(1), cols.max(1))),
@@ -136,6 +152,7 @@ impl FakeTerminalSession {
             Self {
                 state,
                 event_rx: Mutex::new(Some(event_rx)),
+                kind,
             },
             probe,
         )
@@ -147,7 +164,17 @@ impl FakeTerminalSession {
         cols: usize,
         text: impl Into<String>,
     ) -> (Box<dyn TerminalSession>, FakeSessionProbe) {
-        let (session, probe) = Self::new(rows, cols, text);
+        Self::boxed_with_kind(rows, cols, text, SessionKind::Local)
+    }
+
+    /// Create a boxed fake session with an explicit backend kind.
+    pub fn boxed_with_kind(
+        rows: usize,
+        cols: usize,
+        text: impl Into<String>,
+        kind: SessionKind,
+    ) -> (Box<dyn TerminalSession>, FakeSessionProbe) {
+        let (session, probe) = Self::new_with_kind(rows, cols, text, kind);
         (Box::new(session), probe)
     }
 
@@ -299,6 +326,9 @@ impl TerminalRender for FakeTerminalSession {
 
 impl TerminalInput for FakeTerminalSession {
     fn write(&self, bytes: &[u8]) -> Result<(), TerminalError> {
+        if !self.state.alive.load(Ordering::SeqCst) {
+            return Err(TerminalError::Closed);
+        }
         if self.state.fail_writes.load(Ordering::SeqCst) {
             return Err(TerminalError::QueueFull);
         }
@@ -380,7 +410,7 @@ impl TerminalLifecycle for FakeTerminalSession {
     }
 
     fn kind(&self) -> SessionKind {
-        SessionKind::Local
+        self.kind
     }
 
     fn title(&self) -> Option<String> {

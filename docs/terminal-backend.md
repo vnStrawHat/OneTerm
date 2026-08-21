@@ -426,8 +426,9 @@ pub fn connect(cfg: SshConfig, initial: PtySize, scrollback: usize)
 - `SshListener = OscRouter<SshTransport>` — `PtyWrite(text)` → `SshTransport::pty_write`
   → `Cmd::Write` (256-message queue, 4 MiB byte budget, `Cmd::Resize` coalesced).
 - `kind() == SessionKind::Ssh` (for OSC 7 cwd semantics: ssh can be `file://host/…`).
+- The Terminal Settings `ssh` group owns transport keepalive for newly opened sessions: enabled by default, 30-second default interval validated to `5..=3600` seconds, and an unanswered-request limit defaulting to three and validated to `1..=20`. Disabled maps to russh `keepalive_interval = None`; enabled maps to the captured interval; the captured limit maps to russh `keepalive_max`. Existing sessions are not reconfigured.
 - Exit: `ChannelMsg::ExitStatus { exit_status }` → `SessionEvent::Exited(Some(code))`;
-  `Eof`/`Close`/`Cmd::Close`/closing flag → `SessionEvent::Closed`.
+  `Eof`/`Close`/`Cmd::Close`/closing flag → `SessionEvent::Closed`. For a remote SSH close, terminal-view retains prior output for scroll/search/select/copy, blocks outbound writes through the shared alive gate, shows one error toast, and keeps a bottom banner visible: `SSH connection closed. Input is disabled.` Local-shell close presentation is unchanged.
 - Shutdown signal: the transport's closing flag (set by `pty_close`) — the task holds
   `cmd_tx` clones itself, so the command channel never closes on its own.
   `SshSession::close()` and `Drop` request close for the shell **and** SFTP; the

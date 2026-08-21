@@ -113,6 +113,14 @@ impl TerminalSettings {
             completion: self.completion.clone(),
             logging: self.logging.clone(),
             sftp: self.sftp.clone(),
+            ssh: {
+                let keepalive = self.ssh.keepalive();
+                crate::terminal_config::SshSettingsConfig {
+                    keepalive_enabled: keepalive.enabled(),
+                    keepalive_interval_secs: keepalive.interval_secs(),
+                    keepalive_max: keepalive.max(),
+                }
+            },
             colors: ColorsConfig {
                 foreground: color_to_hex(co.foreground),
                 background: color_to_hex(co.background),

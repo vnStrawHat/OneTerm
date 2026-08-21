@@ -465,8 +465,11 @@ macro_rules! impl_pty_terminal_session {
                 $crate::model::TerminalModel::new(self.term.clone())
             }
 
-            /// Write bytes to the PTY / SSH channel.
+            /// Write bytes to the PTY / SSH channel while the session is alive.
             fn pty_write(&self, bytes: &[u8]) -> Result<(), $crate::TerminalError> {
+                if !self.state.alive() {
+                    return Err($crate::TerminalError::Closed);
+                }
                 $crate::backend::PtyTransport::pty_write(self.listener.transport(), bytes)
             }
         }

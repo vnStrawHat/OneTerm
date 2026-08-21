@@ -18,7 +18,7 @@ use oneterm_core::{
 
 use super::{
     BellConfig, ColorsConfig, CompletionConfig, CursorConfig, FontConfig, LayoutConfig,
-    LoggingConfig, MouseConfig, ScrollConfig, SecurityConfig, SftpConfig,
+    LoggingConfig, MouseConfig, ScrollConfig, SecurityConfig, SftpConfig, SshSettingsConfig,
 };
 
 // File path is resolved at runtime via config_dir().join("terminal.json") —
@@ -53,6 +53,8 @@ pub struct TerminalConfig {
     pub logging: LoggingConfig,
     #[serde(default)]
     pub sftp: SftpConfig,
+    #[serde(default)]
+    pub ssh: SshSettingsConfig,
 }
 
 const CURRENT_SCHEMA_VERSION: u32 = 1;

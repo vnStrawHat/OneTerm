@@ -102,6 +102,14 @@ impl TerminalSettings {
             completion: cfg.completion.clone(),
             logging: cfg.logging.clone(),
             sftp: cfg.sftp.clone(),
+            ssh: {
+                let keepalive = cfg.ssh.keepalive();
+                crate::terminal_config::SshSettingsConfig {
+                    keepalive_enabled: keepalive.enabled(),
+                    keepalive_interval_secs: keepalive.interval_secs(),
+                    keepalive_max: keepalive.max(),
+                }
+            },
 
             persist_blocked: false,
         }

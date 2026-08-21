@@ -270,6 +270,7 @@ impl SessionFactory for DuplicateSessionFactory {
         _: usize,
         _: TerminalSecurityPolicy,
         _: oneterm_core::TerminalLogConfig,
+        _: oneterm_core::SshKeepaliveConfig,
     ) -> Result<Box<dyn TerminalSession>> {
         Err(AppError::msg("SSH is not used by this test"))
     }

@@ -100,6 +100,10 @@ pub(crate) struct LocalTerminalView {
     pub(crate) blink_task: Option<gpui::Task<()>>,
     /// Whether the view is alive (not yet closed). Used to gate the blink task.
     pub(crate) alive: bool,
+    /// A remote SSH close keeps the existing terminal content available read-only.
+    pub(crate) ssh_closed: bool,
+    /// Deliver the SSH-close toast once from render, where a `Window` is available.
+    pub(crate) pending_ssh_closed_notification: bool,
     /// Auto-completion controller + overlay anchor.
     pub(crate) completion: CompletionState,
     /// Focus/blur + settings subscriptions (dropped with the view).
@@ -164,7 +168,7 @@ impl LocalTerminalView {
                 // cancelled when the view is dropped/closed via the stored
                 // Task handle.
                 let continue_blinking = this.update(cx, |view, cx| {
-                    if !view.alive {
+                    if !view.alive || view.ssh_closed {
                         return false;
                     }
                     view.blink_tick(cx);
@@ -206,6 +210,8 @@ impl LocalTerminalView {
             event_task,
             blink_task: Some(blink_task),
             alive: true,
+            ssh_closed: false,
+            pending_ssh_closed_notification: false,
             completion: CompletionState::default(),
             _subscriptions: subscriptions,
         }
@@ -288,10 +294,21 @@ impl LocalTerminalView {
             SessionEvent::Progress(p) => self.set_progress(p),
             SessionEvent::AgentStatus(ev) => self.push_agent_status(&ev, cx),
             SessionEvent::Exited(code) => self.mark_agent_ended(code, cx),
-            SessionEvent::Closed => self.mark_agent_ended(None, cx),
+            SessionEvent::Closed => {
+                self.mark_agent_ended(None, cx);
+                let kind = self.session.read(cx).kind();
+                self.handle_session_closed(kind);
+            }
             _ => {}
         }
         cx.notify();
+    }
+
+    fn handle_session_closed(&mut self, kind: oneterm_terminal::SessionKind) {
+        if kind == oneterm_terminal::SessionKind::Ssh && !self.ssh_closed {
+            self.ssh_closed = true;
+            self.pending_ssh_closed_notification = true;
+        }
     }
 
     fn queue_notification(&mut self, message: String) {
@@ -432,8 +449,46 @@ impl LocalTerminalView {
 mod tests {
     use gpui::{AppContext as _, TestAppContext, VisualTestContext};
     use oneterm_terminal::test_support::FakeTerminalSession;
+    use oneterm_terminal::{SessionKind, TerminalError};
 
     use super::{LocalTerminalView, MAX_QUEUED_NOTIFICATIONS, TerminalDeps};
+
+    #[gpui::test]
+    fn ssh_close_is_visible_once_and_rejects_later_input(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(crate::init);
+        cx.update(oneterm_settings::TerminalSettings::init);
+
+        let (session, probe) =
+            FakeTerminalSession::boxed_with_kind(24, 80, "previous output", SessionKind::Ssh);
+        let (view, cx) = cx.add_window_view(move |window, cx| {
+            let session = cx.new(|_| session);
+            let deps = TerminalDeps::from_globals(cx);
+            LocalTerminalView::new(session, deps, window, cx)
+        });
+        let cx: &mut VisualTestContext = cx;
+        probe.set_alive(false);
+
+        view.update(cx, |view, _| view.handle_session_closed(SessionKind::Ssh));
+        let first = view.read_with(cx, |view, _| {
+            (view.ssh_closed, view.pending_ssh_closed_notification)
+        });
+        assert_eq!(first, (true, true));
+
+        view.update(cx, |view, _| {
+            view.pending_ssh_closed_notification = false;
+            view.handle_session_closed(SessionKind::Ssh);
+        });
+        assert!(
+            !view.read_with(cx, |view, _| view.pending_ssh_closed_notification),
+            "a repeated close must not enqueue another toast"
+        );
+        assert_eq!(
+            view.read_with(cx, |view, cx| view.session.read(cx).write(b"ignored")),
+            Err(TerminalError::Closed)
+        );
+        assert!(probe.writes().is_empty());
+    }
 
     #[gpui::test]
     fn terminal_notification_queue_is_bounded(cx: &mut TestAppContext) {

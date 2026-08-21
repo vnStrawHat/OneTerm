@@ -15,7 +15,9 @@ use gpui::{
     App, Context, FocusHandle, Focusable, Font, FontWeight, Hsla, InteractiveElement as _,
     IntoElement, ParentElement as _, Render, SharedString, Styled as _, Window, div, px, relative,
 };
-use gpui_component::{ActiveTheme as _, WindowExt as _, notification::NotificationType};
+use gpui_component::{
+    ActiveTheme as _, WindowExt as _, alert::Alert, notification::NotificationType,
+};
 
 use oneterm_core::config::ShellKind;
 use oneterm_highlight::ShellProfile;
@@ -69,6 +71,12 @@ impl Render for LocalTerminalView {
             && let Some(message) = logging.take_error()
         {
             window.push_notification(notify(NotificationType::Error, message, cx), cx);
+        }
+        if std::mem::take(&mut self.pending_ssh_closed_notification) {
+            window.push_notification(
+                notify(NotificationType::Error, "SSH connection closed.", cx),
+                cx,
+            );
         }
 
         // Drain OSC 9 notifications here (needs a `Window`, unavailable in the
@@ -268,6 +276,7 @@ impl Render for LocalTerminalView {
                 overlay_colors,
             ))
             .children(progress_overlay(self.progress, overlay_colors))
+            .children(ssh_closed_banner(self.ssh_closed))
             .children(self.completion_overlay_element())
             .children(self.render_scrollbar(&render_cache, cx))
             .children(self.render_search_bar(cx));
@@ -339,6 +348,20 @@ pub(crate) fn terminal_font(settings: &TerminalSettings, font_family: &SharedStr
 /// Taskbar progress overlay (OSC 9;4) — a thin bar along the top edge.
 /// The fill width follows the reported percent; the color reflects the
 /// state (normal/error/paused). Indeterminate shows a full-width bar.
+fn ssh_closed_banner(closed: bool) -> Option<impl IntoElement> {
+    closed.then(|| {
+        Alert::warning(
+            "ssh-connection-closed",
+            "SSH connection closed. Input is disabled.",
+        )
+        .banner()
+        .absolute()
+        .bottom_0()
+        .left_0()
+        .right_0()
+    })
+}
+
 fn progress_overlay(
     progress: Option<TerminalProgress>,
     colors: OverlayColors,
@@ -423,7 +446,13 @@ mod tests {
     use gpui::SharedString;
     use oneterm_settings::TerminalSettings;
 
-    use super::{CachedFont, terminal_font};
+    use super::{CachedFont, ssh_closed_banner, terminal_font};
+
+    #[test]
+    fn ssh_closed_banner_is_persistent_only_after_close() {
+        assert!(ssh_closed_banner(true).is_some());
+        assert!(ssh_closed_banner(false).is_none());
+    }
 
     #[test]
     fn font_disables_ligatures_unless_requested() {

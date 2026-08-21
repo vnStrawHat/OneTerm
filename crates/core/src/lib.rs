@@ -29,7 +29,10 @@ pub use sftp::{
     TransferHandle,
 };
 pub use ssh_config::{
-    ConnectionCancellation, HostKeyPolicy, SecretString, SshAuthMethod, SshConfig,
+    ConnectionCancellation, DEFAULT_SSH_KEEPALIVE_INTERVAL_SECS, DEFAULT_SSH_KEEPALIVE_MAX,
+    HostKeyPolicy, MAX_SSH_KEEPALIVE_INTERVAL_SECS, MAX_SSH_KEEPALIVE_MAX,
+    MIN_SSH_KEEPALIVE_INTERVAL_SECS, MIN_SSH_KEEPALIVE_MAX, SecretString, SshAuthMethod, SshConfig,
+    SshKeepaliveConfig,
 };
 pub use terminal_logging::{
     LOG_CONTENT_FORMAT, LOG_FILE_NAME_FORMAT, LogWriteMode, TerminalLogConfig,

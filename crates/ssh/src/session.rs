@@ -34,7 +34,8 @@ use russh::{MethodKind, MethodSet};
 use tokio_util::sync::CancellationToken;
 
 use oneterm_core::{
-    AppError, ConnectPhase, ConnectionCancellation, SshAuthMethod, SshConfig, TerminalLogConfig,
+    AppError, ConnectPhase, ConnectionCancellation, SshAuthMethod, SshConfig, SshKeepaliveConfig,
+    TerminalLogConfig,
 };
 use oneterm_terminal::{
     ClipboardOrigin, GridSize, OscRouter, PtySize, PtyTransport, SessionEvent, SessionEventSink,
@@ -103,11 +104,8 @@ impl Drop for SshSession {
 
 const CONNECT_DEADLINE: Duration = Duration::from_secs(60);
 const PHASE_DEADLINE: Duration = Duration::from_secs(20);
-// Transport-level keepalive so a dead peer or a NAT that dropped the mapping is
-// detected instead of leaving the tab hanging forever: one `keepalive@openssh.com`
-// request every 30 s, disconnect after 3 unanswered (about 90 s of silence).
-const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
-const KEEPALIVE_MAX: usize = 3;
+// Transport-level keepalive detects a dead peer or a NAT that dropped the mapping
+// instead of leaving the tab hanging forever. Its policy is captured per connection.
 // Disable TTY echo while shell integration bootstraps the running shell.
 const SHELL_INTEGRATION_PTY_MODES: &[(Pty, u32)] = &[(Pty::ECHO, 0)];
 
@@ -202,6 +200,7 @@ pub fn connect(
     scrollback_history: usize,
     security: TerminalSecurityPolicy,
     logging: TerminalLogConfig,
+    keepalive: SshKeepaliveConfig,
 ) -> oneterm_core::Result<Box<dyn oneterm_terminal::TerminalSession>> {
     log::info!(
         "SshSession::connect: host={}, port={}, user={}, rows={}, cols={}",
@@ -257,8 +256,8 @@ pub fn connect(
             let handler =
                 SshClientHandler::new(cfg.host.clone(), cfg.port, cfg.host_key_policy.clone());
             let mut client_cfg = russh::client::Config {
-                keepalive_interval: Some(KEEPALIVE_INTERVAL),
-                keepalive_max: KEEPALIVE_MAX,
+                keepalive_interval: keepalive.interval(),
+                keepalive_max: keepalive.max(),
                 ..Default::default()
             };
             client_cfg.preferred.key = Cow::Owned(handler.preferred_key_algorithms());
@@ -810,6 +809,17 @@ mod tests {
             sftp: Mutex::new(None),
         };
         (session, cmd_rx)
+    }
+
+    #[test]
+    fn dead_session_rejects_input_without_touching_the_transport() {
+        use oneterm_terminal::{TerminalError, TerminalInput};
+
+        let (session, cmd_rx) = detached_session();
+        session.state.set_alive(false);
+
+        assert_eq!(session.write(b"ignored"), Err(TerminalError::Closed));
+        assert!(cmd_rx.try_recv().is_err());
     }
 
     /// CORR-06: a session discarded without `close()` must still tell the task

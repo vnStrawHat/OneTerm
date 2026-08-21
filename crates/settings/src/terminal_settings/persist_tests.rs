@@ -51,6 +51,7 @@ fn assert_settings_eq(actual: &TerminalSettings, expected: &TerminalSettings) {
     assert_eq!(actual.allow_clipboard_read, expected.allow_clipboard_read);
     assert_eq!(actual.color_overrides, expected.color_overrides);
     assert_eq!(actual.completion, expected.completion);
+    assert_eq!(actual.ssh, expected.ssh);
 }
 
 /// A settings instance with every persisted field moved off its default.
@@ -87,6 +88,9 @@ fn non_default_settings() -> TerminalSettings {
     s.completion.enabled = false;
     s.completion.max_history = 42;
     s.completion.force_family = Some("bash".into());
+    s.ssh.keepalive_enabled = false;
+    s.ssh.keepalive_interval_secs = 75;
+    s.ssh.keepalive_max = 8;
     s.color_overrides = ColorOverrides {
         foreground: parse_hex_color("#111111"),
         background: parse_hex_color("#222222"),
@@ -118,6 +122,22 @@ fn settings_config_roundtrip_is_stable() {
     assert_eq!(restored.base_font_size, Some(15.0));
     assert_eq!(restored.font_weight, FontWeight::SEMIBOLD);
     assert_eq!(restored.color_overrides.ansi.len(), 16);
+}
+
+#[test]
+fn persistence_normalizes_keepalive_interval() {
+    let mut settings = TerminalSettings::default();
+    settings.ssh.keepalive_interval_secs = 0;
+    settings.ssh.keepalive_max = 0;
+    let config = settings.to_config();
+    assert_eq!(
+        config.ssh.keepalive_interval_secs,
+        oneterm_core::MIN_SSH_KEEPALIVE_INTERVAL_SECS
+    );
+    assert_eq!(
+        config.ssh.keepalive_max,
+        oneterm_core::MIN_SSH_KEEPALIVE_MAX
+    );
 }
 
 #[test]

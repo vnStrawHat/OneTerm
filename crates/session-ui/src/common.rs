@@ -298,7 +298,7 @@ pub(crate) fn connect_ssh_session(
     let duplicate_config = cfg.duplicate_config();
     let factory = AppServices::session_factory(cx);
     // SSH sessions honour the same scrollback setting as local shells (CORR-33).
-    let (scrollback, logging) = {
+    let (scrollback, logging, keepalive) = {
         let settings = TerminalSettings::global(cx);
         let settings = settings.read(cx);
         (
@@ -306,6 +306,7 @@ pub(crate) fn connect_ssh_session(
             settings
                 .logging
                 .ssh_config(request.logging_override.resolve(settings.logging.ssh)),
+            settings.ssh.keepalive(),
         )
     };
     // The user's OSC security policy for this session (SEC-08).
@@ -326,7 +327,14 @@ pub(crate) fn connect_ssh_session(
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    factory.connect_ssh(cfg, PtySize::INITIAL, scrollback, security, logging)
+                    factory.connect_ssh(
+                        cfg,
+                        PtySize::INITIAL,
+                        scrollback,
+                        security,
+                        logging,
+                        keepalive,
+                    )
                 })
                 .await;
             if task_cancellation.is_cancelled() {

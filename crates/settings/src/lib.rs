@@ -11,7 +11,7 @@ pub mod ui_config;
 
 pub use terminal_config::{
     CompletionConfig, CompletionSources, EditorConfig, EditorMode, LoggingConfig,
-    SemanticHighlightingMode, SftpConfig, TabTitleMode, TerminalConfig,
+    SemanticHighlightingMode, SftpConfig, SshSettingsConfig, TabTitleMode, TerminalConfig,
 };
 pub use terminal_settings::{
     ColorOverrides, TerminalBlink, TerminalCursorShape, TerminalPadding, TerminalSettings,

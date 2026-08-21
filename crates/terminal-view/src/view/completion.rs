@@ -234,6 +234,10 @@ impl LocalTerminalView {
     /// Per-render update: sync settings, feed gating signals + the live input
     /// line, and recompute suggestions. Called at the top of `render`.
     pub(crate) fn update_completion(&mut self, cx: &mut Context<Self>) {
+        if self.ssh_closed {
+            self.completion.dismiss();
+            return;
+        }
         self.ensure_completion(cx);
 
         // Sync settings + master-enable gate. The settings are borrowed for

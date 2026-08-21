@@ -8,6 +8,7 @@
 
 use std::fmt::{self, Debug, Formatter};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -55,6 +56,72 @@ impl From<String> for SecretString {
 /// flight, so cancellation wakes the connect future immediately instead of on
 /// the next poll tick.
 pub type ConnectionCancellation = tokio_util::sync::CancellationToken;
+
+/// Minimum supported SSH keepalive interval.
+pub const MIN_SSH_KEEPALIVE_INTERVAL_SECS: u64 = 5;
+/// Maximum supported SSH keepalive interval.
+pub const MAX_SSH_KEEPALIVE_INTERVAL_SECS: u64 = 3600;
+/// Default SSH keepalive interval.
+pub const DEFAULT_SSH_KEEPALIVE_INTERVAL_SECS: u64 = 30;
+/// Minimum unanswered SSH keepalive request limit.
+pub const MIN_SSH_KEEPALIVE_MAX: usize = 1;
+/// Maximum unanswered SSH keepalive request limit.
+pub const MAX_SSH_KEEPALIVE_MAX: usize = 20;
+/// Default unanswered SSH keepalive request limit.
+pub const DEFAULT_SSH_KEEPALIVE_MAX: usize = 3;
+
+/// Runtime SSH keepalive policy captured when a connection starts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SshKeepaliveConfig {
+    enabled: bool,
+    interval_secs: u64,
+    max: usize,
+}
+
+impl SshKeepaliveConfig {
+    /// Build a policy and normalize the interval to the supported range.
+    pub fn new(enabled: bool, interval_secs: u64, max: usize) -> Self {
+        Self {
+            enabled,
+            interval_secs: interval_secs.clamp(
+                MIN_SSH_KEEPALIVE_INTERVAL_SECS,
+                MAX_SSH_KEEPALIVE_INTERVAL_SECS,
+            ),
+            max: max.clamp(MIN_SSH_KEEPALIVE_MAX, MAX_SSH_KEEPALIVE_MAX),
+        }
+    }
+
+    /// Return the russh interval, or `None` when keepalive is disabled.
+    pub fn interval(self) -> Option<Duration> {
+        self.enabled
+            .then(|| Duration::from_secs(self.interval_secs))
+    }
+
+    /// Return the normalized interval in seconds.
+    pub fn interval_secs(self) -> u64 {
+        self.interval_secs
+    }
+
+    /// Return the normalized unanswered-request limit.
+    pub fn max(self) -> usize {
+        self.max
+    }
+
+    /// Return whether transport keepalive is enabled.
+    pub fn enabled(self) -> bool {
+        self.enabled
+    }
+}
+
+impl Default for SshKeepaliveConfig {
+    fn default() -> Self {
+        Self::new(
+            true,
+            DEFAULT_SSH_KEEPALIVE_INTERVAL_SECS,
+            DEFAULT_SSH_KEEPALIVE_MAX,
+        )
+    }
+}
 
 /// Policy used for a server key that is not already in OpenSSH `known_hosts`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -166,6 +233,36 @@ impl Debug for SshConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keepalive_policy_defaults_on_and_normalizes_interval() {
+        let default = SshKeepaliveConfig::default();
+        assert!(default.enabled());
+        assert_eq!(
+            default.interval(),
+            Some(Duration::from_secs(DEFAULT_SSH_KEEPALIVE_INTERVAL_SECS))
+        );
+        assert_eq!(
+            SshKeepaliveConfig::new(true, 0, DEFAULT_SSH_KEEPALIVE_MAX).interval_secs(),
+            MIN_SSH_KEEPALIVE_INTERVAL_SECS
+        );
+        assert_eq!(
+            SshKeepaliveConfig::new(true, u64::MAX, DEFAULT_SSH_KEEPALIVE_MAX).interval_secs(),
+            MAX_SSH_KEEPALIVE_INTERVAL_SECS
+        );
+        assert_eq!(
+            SshKeepaliveConfig::new(false, 30, DEFAULT_SSH_KEEPALIVE_MAX).interval(),
+            None
+        );
+        assert_eq!(
+            SshKeepaliveConfig::new(true, 30, 0).max(),
+            MIN_SSH_KEEPALIVE_MAX
+        );
+        assert_eq!(
+            SshKeepaliveConfig::new(true, 30, usize::MAX).max(),
+            MAX_SSH_KEEPALIVE_MAX
+        );
+    }
 
     #[test]
     fn duplicate_config_keeps_key_path_but_not_passphrase() {

@@ -47,7 +47,7 @@ directly on the UI thread.
 
 | Document | Owner | Notes |
 |---|---|---|
-| `terminal.json` | `oneterm-settings` | Terminal configuration schema and defaults, including the global local/SSH output-logging policy, destination, and write mode, and the `sftp` group (SFTP browser Edit workflow: editor mode/program/args and the max edit file size). |
+| `terminal.json` | `oneterm-settings` | Terminal configuration schema and defaults, including the global local/SSH output-logging policy, destination, and write mode; the `ssh` keepalive policy (`enabled = true`, interval `30` seconds by default, validated to `5..=3600`, unanswered-request limit `3` by default, validated to `1..=20`, captured by newly opened sessions); and the `sftp` group (SFTP browser Edit workflow: editor mode/program/args and the max edit file size). |
 | `ui_config.json` | `oneterm-settings` | UI theme/font/key-binding schema. `UiConfig::observe_theme` is the only writer of `theme_name`/`ui_font_size`; it coalesces `Theme` notifications that leave both unchanged. |
 | SSH session store (`ssh_session.json`) | `oneterm-session-ui` | Saved host/session schema, including the default-compatible terminal-logging tri-state (`inherit` / `on` / `off`). Schema v2 gives every session a stable `id` and records `next_session_id`; v0/v1 files are migrated in memory and re-saved on load. Whole-document writes are coalesced through a single-flight queue so the newest snapshot always wins. |
 | `update_config.json` | `oneterm-update` | Schema owner. Two field-level writers through `update_json_file`: preferences (`oneterm-settings-ui` persist queue via `UpdateConfig::save_preferences`) and check cache (`UpdateManager` via `UpdateCheckCache::save`). See `docs/auto-update.md`. |

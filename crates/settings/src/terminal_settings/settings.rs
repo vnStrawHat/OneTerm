@@ -11,8 +11,8 @@ use gpui::{App, AppContext, Entity, FontWeight, Global, Hsla, SharedString};
 use oneterm_core::LocalShellConfig;
 
 use crate::terminal_config::{
-    CompletionConfig, LoggingConfig, SemanticHighlightingMode, SftpConfig, TabTitleMode,
-    TerminalConfig,
+    CompletionConfig, LoggingConfig, SemanticHighlightingMode, SftpConfig, SshSettingsConfig,
+    TabTitleMode, TerminalConfig,
 };
 
 /// Terminal cursor shape.
@@ -160,6 +160,9 @@ pub struct TerminalSettings {
 
     /// Live mirror of the `sftp` config group (SFTP browser edit workflow).
     pub sftp: SftpConfig,
+
+    /// SSH connection settings captured when a new session starts.
+    pub ssh: SshSettingsConfig,
 
     /// `terminal.json` existed but could not be read at startup (e.g. permission
     /// denied), so these are built-in defaults and must not be written back
