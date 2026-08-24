@@ -1076,3 +1076,9 @@ impl Debug for SshConfig {
 ### 9.6. Authentication status
 
 The accepted current behavior is defined in [`docs/ssh-authentication.md`](ssh-authentication.md). The backend supports no-auth, password, and private-key authentication; the saved-session and Quick Connect UI expose password and private-key choices. SSH-agent authentication remains a roadmap item and is not exposed by `SshAuthMethod` until the backend can support it end to end.
+### 9.7. Remote shell environment — COLORTERM
+
+The remote shell must see `COLORTERM=truecolor` (and `TERM_PROGRAM=OneTerm`) so truecolor-aware CLIs render correctly, matching the local-shell contract in `oneterm_core`'s `base_env()`. Because sshd starts a fresh login environment, OneTerm applies two layers (`crates/ssh/src/session.rs`):
+
+1. **SSH `env` requests (RFC 4254 §6.4)** — after `request_pty` and before `request_shell`, `request_remote_shell_env` sends `COLORTERM=truecolor` and `TERM_PROGRAM=OneTerm` with `want_reply = false`. sshd only honors these when its `AcceptEnv` allows the variables; default OpenSSH accepts only `LANG LC_*` and silently drops the rest, which is harmless.
+2. **Shell-integration bootstrap fallback** — when shell integration is enabled, the injected bootstrap starts with an unconditional `export COLORTERM=truecolor;`, guaranteeing truecolor even on servers that ignore env requests.

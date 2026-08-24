@@ -392,7 +392,14 @@ pub fn connect(
                             pty_modes,
                         )
                         .await
-                        .map_err(|e| phase_error(ConnectPhase::PtyRequest, e))
+                        .map_err(|e| phase_error(ConnectPhase::PtyRequest, e))?;
+                    // Best-effort color env propagation (RFC 4254 §6.4). sshd
+                    // only applies these when AcceptEnv allows them and drops
+                    // the rest silently; want_reply = false keeps that case
+                    // harmless. The shell-integration bootstrap below re-exports
+                    // COLORTERM so truecolor is guaranteed when it is enabled.
+                    request_remote_shell_env(&channel).await?;
+                    Ok(())
                 })
                 .await?;
             log::info!(
@@ -645,9 +652,31 @@ fn authentication_failure_message(remaining_methods: &MethodSet, partial_success
     message
 }
 
+/// Env variables pushed to the remote shell before `request_shell` (RFC 4254
+/// §6.4). Mirrors the local-shell contract in `oneterm_core`'s `base_env()`.
+const REMOTE_SHELL_ENV: [(&str, &str); 2] =
+    [("COLORTERM", "truecolor"), ("TERM_PROGRAM", "OneTerm")];
+
+/// Send [`REMOTE_SHELL_ENV`] on the shell channel. Failures surface as
+/// `PtyRequest` connect errors — with `want_reply = false` this only happens
+/// if the channel/connection is already gone.
+async fn request_remote_shell_env(
+    channel: &russh::Channel<russh::client::Msg>,
+) -> Result<(), AppError> {
+    for (name, value) in REMOTE_SHELL_ENV {
+        channel
+            .set_env(false, name, value)
+            .await
+            .map_err(|e| phase_error(ConnectPhase::PtyRequest, e))?;
+    }
+    Ok(())
+}
+
 /// Bootstrap command injected after `request_shell(true)` to install the
 /// OSC 7 prompt hook in the running shell without showing the script itself.
-const SHELL_INTEGRATION_BOOTSTRAP: &str = r#"__oneterm_osc7() { printf '\x1b]7;file://%s%s\x1b\\' "${HOSTNAME:-$(hostname)}" "$PWD"; printf '\x1b]133;A\x1b\\'; }; case ";${PROMPT_COMMAND:-};" in *";__oneterm_osc7;"*) ;; *) PROMPT_COMMAND="__oneterm_osc7${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;; esac; __oneterm_osc7; stty echo 2>/dev/null"#;
+/// The leading export guarantees `COLORTERM=truecolor` even on servers whose
+/// sshd ignores env requests (default OpenSSH `AcceptEnv LANG LC_*`).
+const SHELL_INTEGRATION_BOOTSTRAP: &str = r#"export COLORTERM=truecolor; __oneterm_osc7() { printf '\x1b]7;file://%s%s\x1b\\' "${HOSTNAME:-$(hostname)}" "$PWD"; printf '\x1b]133;A\x1b\\'; }; case ";${PROMPT_COMMAND:-};" in *";__oneterm_osc7;"*) ;; *) PROMPT_COMMAND="__oneterm_osc7${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;; esac; __oneterm_osc7; stty echo 2>/dev/null"#;
 
 /// Send the shell-integration bootstrap after the shell is open.
 async fn send_shell_integration_bootstrap(
@@ -981,6 +1010,135 @@ mod tests {
 
         drop(handle);
         server_task.abort();
+    }
+
+    /// BUG-0038: the shell channel must carry COLORTERM/TERM_PROGRAM env
+    /// requests before the shell starts so truecolor-aware remote CLIs render
+    /// correctly.
+    #[derive(Clone)]
+    struct EnvRecordingServer {
+        received: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    }
+
+    impl russh::server::Server for EnvRecordingServer {
+        type Handler = Self;
+
+        fn new_client(&mut self, _peer_addr: Option<std::net::SocketAddr>) -> Self::Handler {
+            self.clone()
+        }
+    }
+
+    impl russh::server::Handler for EnvRecordingServer {
+        type Error = russh::Error;
+
+        async fn channel_open_session(
+            &mut self,
+            _channel: russh::Channel<russh::server::Msg>,
+            _session: &mut russh::server::Session,
+        ) -> Result<bool, Self::Error> {
+            Ok(true)
+        }
+
+        async fn auth_password(
+            &mut self,
+            _user: &str,
+            _password: &str,
+        ) -> Result<russh::server::Auth, Self::Error> {
+            Ok(russh::server::Auth::Accept)
+        }
+
+        async fn env_request(
+            &mut self,
+            _channel: russh::ChannelId,
+            variable_name: &str,
+            variable_value: &str,
+            _session: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            self.received
+                .lock()
+                .expect("env recorder")
+                .push((variable_name.to_owned(), variable_value.to_owned()));
+            Ok(())
+        }
+    }
+
+    async fn spawn_env_recording_server(
+        received: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    ) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        use russh::server::Server as _;
+
+        let private_key =
+            russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
+                .unwrap();
+        let server_config = Arc::new(russh::server::Config {
+            keys: vec![private_key],
+            auth_rejection_time: Duration::ZERO,
+            auth_rejection_time_initial: Some(Duration::ZERO),
+            ..Default::default()
+        });
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_task = tokio::spawn(async move {
+            let mut server = EnvRecordingServer { received };
+            if let Err(error) = server.run_on_socket(server_config, &listener).await {
+                eprintln!("test SSH server stopped: {error}");
+            }
+        });
+        (address, server_task)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shell_channel_pushes_colorterm_and_term_program_env_requests() {
+        let received = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (address, server_task) = spawn_env_recording_server(received.clone()).await;
+        let (mut handle, _known_hosts) = connect_trusting_loopback(address).await;
+
+        authenticate_with_password(&mut handle, "user", "secret")
+            .await
+            .expect("password auth must succeed");
+
+        let channel = handle
+            .channel_open_session()
+            .await
+            .expect("session channel must open");
+        request_remote_shell_env(&channel)
+            .await
+            .expect("env requests must send cleanly");
+
+        // want_reply = false means no reply ever comes; poll until the server
+        // task has processed both requests.
+        for _ in 0..100 {
+            if received.lock().expect("env recorder").len() >= REMOTE_SHELL_ENV.len() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let mut got = received.lock().expect("env recorder").clone();
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                ("COLORTERM".to_owned(), "truecolor".to_owned()),
+                ("TERM_PROGRAM".to_owned(), "OneTerm".to_owned()),
+            ]
+        );
+
+        drop(channel);
+        drop(handle);
+        server_task.abort();
+    }
+
+    /// BUG-0038: servers whose sshd ignores env requests still get truecolor
+    /// through the bootstrap export, which must come first.
+    #[test]
+    fn shell_integration_bootstrap_exports_colorterm_first() {
+        assert!(
+            SHELL_INTEGRATION_BOOTSTRAP.starts_with("export COLORTERM=truecolor;"),
+            "{SHELL_INTEGRATION_BOOTSTRAP}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
