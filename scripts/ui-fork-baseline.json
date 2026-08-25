@@ -253,7 +253,7 @@
       "patch_file": false
     },
     "src/dock/tab_panel.rs": {
-      "local_sha256": "6f62a86382247127484d88c26bc6bb93fe96fa12c942b43a0e5132ce41af944c",
+      "local_sha256": "43dfe6e0c1d6ebd1e78bfddb7013956446b6fedaa2dbc4cf774b12d4b84fb1ca",
       "upstream_sha256": "5ccf1583354bc68d97db8edbe02d2ca2a862ad5412c31b3893b68266ab41b976",
       "patch_file": true
     },

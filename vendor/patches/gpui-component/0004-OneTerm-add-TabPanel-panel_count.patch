@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OneTerm <oneterm@local>
+Date: Tue, 25 Aug 2026 00:00:00 +0000
+Subject: [PATCH] OneTerm fork: expose TabPanel panel count
+
+Adds a read-only count used by terminal-specific final-tab close behavior without
+exposing the panel collection or duplicating generic dock mutation logic.
+---
+ crates/ui/src/dock/tab_panel.rs | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/crates/ui/src/dock/tab_panel.rs b/crates/ui/src/dock/tab_panel.rs
+index 5e224642..77777777 100644
+--- a/crates/ui/src/dock/tab_panel.rs
++++ b/crates/ui/src/dock/tab_panel.rs
+@@ -231,6 +231,11 @@ impl TabPanel {
+         self.active_ix
+     }
+ 
++    /// Return the number of panels currently held by this tab strip.
++    pub fn panel_count(&self) -> usize {
++        self.panels.len()
++    }
++
+     fn set_active_ix(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+         if ix == self.active_ix {
+             return;
+-- 
+2.51.0.windows.1

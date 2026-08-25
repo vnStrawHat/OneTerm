@@ -314,7 +314,41 @@ impl TerminalPanel {
         cx.notify();
     }
 
-    /// Close Space `space_id`. Closes the whole tab if it was the last Space.
+    /// Close this terminal tab, retaining an empty panel when it is the last tab.
+    pub(crate) fn close_tab(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        let tab_panel = self
+            .tab_panel
+            .as_ref()
+            .and_then(|tab_panel| tab_panel.upgrade());
+        let has_sibling = tab_panel
+            .as_ref()
+            .is_some_and(|tabs| tabs.read(cx).panel_count() > 1);
+
+        if has_sibling {
+            let panel: Arc<dyn PanelView> = Arc::new(cx.entity());
+            if let Some(tab_panel) = tab_panel {
+                window.defer(cx, move |window, cx| {
+                    tab_panel.update(cx, |tabs, cx| tabs.remove_panel(panel, window, cx));
+                });
+            }
+            return;
+        }
+
+        self.shutdown(window, cx);
+        self.tree = super::super::space::SpaceTree::new_empty(cx.focus_handle());
+        self.tab_title = "Terminal".to_string();
+        self.tab_title_override = None;
+        self.rebuild_title_subs(cx);
+        if let Some(focus) = self.tree.active_focus_handle(cx) {
+            focus.focus(window, cx);
+        }
+        if self.is_active {
+            self.publish_active_session(cx);
+        }
+        cx.notify();
+    }
+
+    /// Close Space `space_id`. Resets the tab if it was the final Space.
     pub(crate) fn close_space(
         &mut self,
         space_id: SpaceId,
@@ -326,12 +360,7 @@ impl TerminalPanel {
             view.update(cx, |v, cx| v.shutdown(cx));
         }
         if outcome == CloseOutcome::LastSpaceClosed {
-            if let Some(tp) = self.tab_panel.as_ref().and_then(|w| w.upgrade()) {
-                let panel: Arc<dyn PanelView> = Arc::new(cx.entity());
-                tp.update(cx, |tp, cx| {
-                    tp.remove_panel(panel, window, cx);
-                });
-            }
+            self.close_tab(window, cx);
             return;
         }
         self.rebuild_title_subs(cx);

@@ -233,6 +233,11 @@ impl TabPanel {
         self.active_ix
     }
 
+    /// Return the number of panels currently held by this tab strip.
+    pub fn panel_count(&self) -> usize {
+        self.panels.len()
+    }
+
     fn set_active_ix(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         if ix == self.active_ix {
             return;

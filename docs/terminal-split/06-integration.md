@@ -71,21 +71,21 @@ SFTP browser / status bar follow the focused Space — call the same update path
 the focus→active handler ([05](05-rendering-theme.md) §4), not only from
 `set_active`.
 
-## 4. Closing the last Space closes the tab
+## 4. Closing the final terminal tab retains its creation entry point
 
-`close_space` maps `CloseOutcome::LastSpaceClosed` to the existing tab-close path:
+All terminal-tab close routes (the tab's × button, middle-click, context-menu or
+keybinding `ClosePanel`, and `close_space` after `LastSpaceClosed`) pass through
+`TerminalPanel::close_tab`.
 
-```rust
-if outcome == CloseOutcome::LastSpaceClosed {
-    if let Some(tp) = self.tab_panel.as_ref().and_then(|w| w.upgrade()) {
-        let panel: Arc<dyn PanelView> = Arc::new(cx.entity());
-        tp.update(cx, |tp, cx| tp.remove_panel(panel, window, cx));
-    }
-}
-```
+- When the containing `TabPanel` has sibling panels, `close_tab` defers the existing
+  `TabPanel::remove_panel` call so normal multi-tab close behavior remains unchanged.
+- When this is the final panel, `close_tab` shuts down all of its terminal views and
+  replaces its Space tree with `SpaceTree::new_empty`. The `TabPanel` stays attached,
+  so its tab bar and `+` New Terminal menu remain visible, and a connected SSH panel
+  can be added as a visible sibling.
 
-This reuses the same `remove_panel` call the tab's × button and middle-click already
-use (`panel.rs`).
+`TerminalPanel::closable` is false so the generic dock action cannot bypass this
+terminal-specific policy; the panel handles `ClosePanel` itself.
 
 ## 5. Focus handling
 

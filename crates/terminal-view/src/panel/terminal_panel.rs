@@ -6,15 +6,13 @@
 //! [`Render`](gpui::Render) impl live in [`super::actions`], and tab-title
 //! resolution lives in [`super::title`].
 
-use std::sync::Arc;
-
 use gpui::{
     Anchor, App, AppContext as _, Context, Entity, EntityId, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, MouseButton, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div,
     prelude::FluentBuilder as _, px,
 };
-use gpui_component::dock::{Panel, PanelControl, PanelEvent, PanelView, TabPanel};
+use gpui_component::dock::{Panel, PanelControl, PanelEvent, TabPanel};
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable,
     button::{Button, ButtonVariants as _},
@@ -43,8 +41,8 @@ pub struct TerminalPanel {
     pub(super) workspace_id: Option<EntityId>,
     /// The pane tree — leaves are terminals or empty placeholders.
     pub(super) tree: SpaceTree,
-    /// Reference to the `TabPanel` containing this panel — used for the close-tab
-    /// button and to remove the tab when the last Space closes.
+    /// Reference to the containing `TabPanel`, used by terminal-tab close policy
+    /// and Agent Panel navigation.
     pub(super) tab_panel: Option<WeakEntity<TabPanel>>,
     /// Whether this panel is the currently selected tab in the `TabPanel`.
     pub(super) is_active: bool,
@@ -343,7 +341,7 @@ impl TerminalPanel {
     }
 
     /// Shut down all terminal sessions and cancel all tasks.
-    /// Called by `Panel::on_removed`, last-space close, and error paths.
+    /// Called by `Panel::on_removed`, terminal-tab close, and error paths.
     /// Idempotent.
     pub(crate) fn shutdown(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         for view in self.tree.terminal_views() {
@@ -447,16 +445,10 @@ impl Panel for TerminalPanel {
             })
             // Middle-click on a tab → close that tab.
             .on_mouse_down(MouseButton::Middle, {
-                let tp = tab_panel.clone();
-                let pe = panel_entity.clone();
+                let panel = panel_entity.clone();
                 move |_, window, cx| {
                     cx.stop_propagation();
-                    if let Some(tp) = tp.as_ref().and_then(|tp| tp.upgrade()) {
-                        let panel: Arc<dyn PanelView> = Arc::new(pe.clone());
-                        tp.update(cx, |tp, cx| {
-                            tp.remove_panel(panel, window, cx);
-                        });
-                    }
+                    panel.update(cx, |panel, cx| panel.close_tab(window, cx));
                 }
             })
             .when(show_logging, |this| {
@@ -490,7 +482,7 @@ impl Panel for TerminalPanel {
                     })
                     .child(tab_label),
             )
-            .when_some(tab_panel, |this, tp| {
+            .when_some(tab_panel, |this, _| {
                 this.child(
                     div()
                         .id("tab-close")
@@ -507,12 +499,7 @@ impl Panel for TerminalPanel {
                         })
                         .on_click(move |_, window, cx| {
                             cx.stop_propagation();
-                            if let Some(tp) = tp.upgrade() {
-                                let panel: Arc<dyn PanelView> = Arc::new(panel_entity.clone());
-                                tp.update(cx, |tp, cx| {
-                                    tp.remove_panel(panel, window, cx);
-                                });
-                            }
+                            panel_entity.update(cx, |panel, cx| panel.close_tab(window, cx));
                         })
                         .child(Icon::new(IconName::Close).xsmall().text_color(theme)),
                 )
@@ -520,7 +507,7 @@ impl Panel for TerminalPanel {
     }
 
     fn closable(&self, _: &App) -> bool {
-        true
+        false
     }
 
     fn zoomable(&self, _: &App) -> Option<PanelControl> {

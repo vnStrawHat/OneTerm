@@ -8,7 +8,7 @@ use gpui::{
     Context, InteractiveElement as _, IntoElement, ParentElement, Render, Styled, Window, div,
 };
 
-use gpui_component::ActiveTheme as _;
+use gpui_component::{ActiveTheme as _, dock::ClosePanel};
 
 use oneterm_actions::{
     CloseSpace, DuplicateSession, SplitDown, SplitLeft, SplitRight, SplitUp, TerminalClear,
@@ -41,6 +41,7 @@ impl Render for TerminalPanel {
             .size_full()
             .bg(cx.theme().background)
             // Terminal context-menu action handlers — also fired by global key bindings.
+            .on_action(cx.listener(|this, _: &ClosePanel, w, cx| this.close_tab(w, cx)))
             .on_action(cx.listener(|this, _: &DuplicateSession, w, cx| {
                 this.duplicate_session(this.tree.active(), w, cx)
             }))

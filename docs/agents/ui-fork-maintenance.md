@@ -4,15 +4,17 @@
 `crates/ui` package. It is used through Cargo's `[patch]` mechanism and is not a
 OneTerm workspace member or an `oneterm-ui` crate.
 
-**Why a fork at all.** OneTerm needs two small behaviour changes that cannot be made
+**Why a fork at all.** OneTerm needs small behaviour changes that cannot be made
 from outside the crate: `TabPanel::set_active_panel` (the Agent Panel activates a
 terminal tab by panel entity; upstream's `set_active_ix` is private and reachable only
-from tab clicks / add-remove — patch `0001`, 45 lines) and a settings-page scroll fix
-(group heights are measured before the first click and sidebar child clicks map to the
-filtered group index — patch `0003`, 41 lines, private state of the settings page). Both
-are candidates for upstreaming; the whole 259-file snapshot exists only to carry those
-~90 lines plus the standalone manifest (`0002`). Once both land upstream and the pinned
-rev is bumped past them, delete `vendor/gpui-component`, `vendor/patches/gpui-component`,
+from tab clicks / add-remove — patch `0001`), `TabPanel::panel_count` (terminal close
+policy needs a read-only sibling count without exposing the panel collection — patch
+`0004`), and a settings-page scroll fix (group heights are measured before the first
+click and sidebar child clicks map to the filtered group index — patch `0003`, private
+state of the settings page). All are candidates for upstreaming; the whole 259-file
+snapshot exists only to carry these small deltas plus the standalone manifest (`0002`).
+Once they land upstream and the pinned rev is bumped past them, delete
+`vendor/gpui-component`, `vendor/patches/gpui-component`,
 `scripts/check-ui-fork.py` and `scripts/ui-fork-baseline.json`, drop the `[patch]` entry
 from the root `Cargo.toml`, and this document (BUILD-21).
 
@@ -28,11 +30,12 @@ only and is not the source used to generate the vendor snapshot.
 
 ## Delta surface
 
-The current OneTerm source patch set is intentionally split across three patch
+The current OneTerm source patch set is intentionally split across four patch
 files:
 
-- `vendor/gpui-component/src/dock/tab_panel.rs` — exposed by `0001`, adds
-  `TabPanel::set_active_panel` for Agent navigation.
+- `vendor/gpui-component/src/dock/tab_panel.rs` — exposed by `0001` and `0004`, adds
+  `TabPanel::set_active_panel` for Agent navigation and the read-only
+  `TabPanel::panel_count` for terminal close policy.
 - `vendor/gpui-component/src/setting/page.rs` — exposed by `0003`, measures
   settings groups up front so section navigation has stable item heights on the
   first click.
@@ -49,8 +52,8 @@ crate, not in the vendor patch.
 1. Check the pinned `gpui-component` revision in `Cargo.toml`.
 2. Clone `https://github.com/longbridge/gpui-component` into a temporary directory,
    check out that exact revision, and verify its `HEAD` before copying `crates/ui`.
-3. Apply all three patches under `vendor/patches/gpui-component/` from the clone root.
-   Verify that `0001` changes only `crates/ui/src/dock/tab_panel.rs`, that
+3. Apply all four patches under `vendor/patches/gpui-component/` from the clone root.
+   Verify that `0001` and `0004` change only `crates/ui/src/dock/tab_panel.rs`, that
    `0002` only makes `crates/ui/Cargo.toml` standalone, and that `0003` changes
    only `crates/ui/src/setting/page.rs` and `crates/ui/src/setting/settings.rs`.
 4. Copy the patched `crates/ui` package into `vendor/gpui-component`.
@@ -83,7 +86,8 @@ The fork should shrink, not grow. To send a patch upstream:
 The check script does not access the ignored research mirror during normal CI. Its
 `--update` mode performs a clean clone, verifies the pinned commit, compares the
 complete package file set (`src/**`, `Cargo.toml`, `build.rs`, `locales/**`, licence),
-and rejects deltas outside the four patched paths: `src/dock/tab_panel.rs` (`0001`),
-`Cargo.toml` (`0002`), `src/setting/page.rs` and `src/setting/settings.rs` (`0003`).
+and rejects deltas outside the four patched paths: `src/dock/tab_panel.rs` (`0001`,
+`0004`), `Cargo.toml` (`0002`), `src/setting/page.rs` and
+`src/setting/settings.rs` (`0003`).
 `bash vendor/refresh.sh --check` (also run in CI) is the complementary guard: it
 rebuilds every vendored crate from pristine + patches and diffs it against `vendor/`.

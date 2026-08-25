@@ -77,6 +77,115 @@ fn filling_space_one_does_not_renumber_space_two(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn closing_only_terminal_tab_keeps_empty_panel_for_new_tabs(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    cx.update(crate::init);
+    cx.update(oneterm_settings::TerminalSettings::init);
+    cx.update(oneterm_state::AppState::init);
+
+    let panel_probe = Rc::new(RefCell::new(None));
+    let tab_probe = Rc::new(RefCell::new(None));
+    let panel_for_window = panel_probe.clone();
+    let tab_for_window = tab_probe.clone();
+    let (session, session_probe) = FakeTerminalSession::boxed(24, 80, "only");
+    let (_root, cx) = cx.add_window_view(move |window, cx| {
+        let dock_area = cx.new(|cx| DockArea::new("last-tab-test", None, window, cx));
+        let tab_panel = cx.new(|cx| TabPanel::new(None, dock_area.downgrade(), window, cx));
+        let panel =
+            cx.new(|cx| TerminalPanel::from_spec(session_spec(session, "Only"), window, cx));
+        tab_panel.update(cx, |tabs, cx| {
+            tabs.add_panel(Arc::new(panel.clone()), window, cx);
+        });
+        *panel_for_window.borrow_mut() = Some(panel.clone());
+        *tab_for_window.borrow_mut() = Some(tab_panel);
+        Root::new(panel, window, cx)
+    });
+    let cx: &mut VisualTestContext = cx;
+    let panel = panel_probe
+        .borrow()
+        .clone()
+        .expect("panel must be initialized");
+    let tab_panel = tab_probe
+        .borrow()
+        .clone()
+        .expect("tab panel must be initialized");
+
+    let focus = panel.read_with(cx, |panel, cx| panel.focus_handle(cx));
+    cx.update(|window, cx| focus.focus(window, cx));
+    cx.dispatch_action(gpui_component::dock::ClosePanel);
+    cx.run_until_parked();
+
+    assert_eq!(session_probe.close_calls(), 1);
+    assert!(panel.read_with(cx, |panel, _| panel.has_no_terminals()));
+    assert_eq!(panel.read_with(cx, |panel, _| panel.leaf_count()), 1);
+    assert_eq!(
+        tab_panel.read_with(cx, |tabs, cx| tabs.dump(cx).children.len()),
+        1
+    );
+
+    let (ssh_session, _) = FakeTerminalSession::boxed(24, 80, "ssh");
+    let ssh_panel = cx.update(|window, cx| {
+        cx.new(|cx| TerminalPanel::from_spec(session_spec(ssh_session, "SSH"), window, cx))
+    });
+    tab_panel.update_in(cx, |tabs, window, cx| {
+        tabs.add_panel(Arc::new(ssh_panel), window, cx);
+    });
+    assert_eq!(
+        tab_panel.read_with(cx, |tabs, cx| tabs.dump(cx).children.len()),
+        2
+    );
+}
+
+#[gpui::test]
+fn closing_terminal_tab_with_sibling_removes_it(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    cx.update(crate::init);
+    cx.update(oneterm_settings::TerminalSettings::init);
+    cx.update(oneterm_state::AppState::init);
+
+    let first_probe = Rc::new(RefCell::new(None));
+    let tabs_probe = Rc::new(RefCell::new(None));
+    let first_for_window = first_probe.clone();
+    let tabs_for_window = tabs_probe.clone();
+    let (first_session, first_session_probe) = FakeTerminalSession::boxed(24, 80, "first");
+    let (second_session, second_session_probe) = FakeTerminalSession::boxed(24, 80, "second");
+    let (_root, cx) = cx.add_window_view(move |window, cx| {
+        let dock_area = cx.new(|cx| DockArea::new("sibling-tab-test", None, window, cx));
+        let tab_panel = cx.new(|cx| TabPanel::new(None, dock_area.downgrade(), window, cx));
+        let first =
+            cx.new(|cx| TerminalPanel::from_spec(session_spec(first_session, "First"), window, cx));
+        let second = cx
+            .new(|cx| TerminalPanel::from_spec(session_spec(second_session, "Second"), window, cx));
+        tab_panel.update(cx, |tabs, cx| {
+            tabs.add_panel(Arc::new(first.clone()), window, cx);
+            tabs.add_panel(Arc::new(second.clone()), window, cx);
+        });
+        *first_for_window.borrow_mut() = Some(first.clone());
+        *tabs_for_window.borrow_mut() = Some(tab_panel);
+        Root::new(first, window, cx)
+    });
+    let cx: &mut VisualTestContext = cx;
+    let first = first_probe
+        .borrow()
+        .clone()
+        .expect("first panel must be initialized");
+    let tab_panel = tabs_probe
+        .borrow()
+        .clone()
+        .expect("tab panel must be initialized");
+
+    first.update_in(cx, |panel, window, cx| panel.close_tab(window, cx));
+    cx.run_until_parked();
+
+    assert_eq!(first_session_probe.close_calls(), 1);
+    assert_eq!(second_session_probe.close_calls(), 0);
+    assert_eq!(
+        tab_panel.read_with(cx, |tabs, cx| tabs.dump(cx).children.len()),
+        1
+    );
+}
+
+#[gpui::test]
 fn phase0_close_last_space_calls_session_close(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     cx.update(crate::init);

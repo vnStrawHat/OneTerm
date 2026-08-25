@@ -22,7 +22,8 @@ vendor/
 │   └── gpui-component/
 │       ├── 0001-*.patch          ← TabPanel source delta
 │       ├── 0002-*.patch          ← standalone Cargo manifest
-│       └── 0003-*.patch          ← Settings scroll source delta
+│       ├── 0003-*.patch          ← Settings scroll source delta
+│       └── 0004-*.patch          ← TabPanel panel-count accessor
 ├── vte/                          ← pristine vte 0.15.0 + patches/vte/*   (built by Cargo)
 ├── alacritty_terminal/           ← pristine alacritty @ fcf32fe + patches/alacritty_terminal/*
 └── gpui-component/               ← pristine gpui-component crates/ui @ ea6b194 + patches
@@ -78,6 +79,9 @@ one `Processor::advance` parse*, so the PTY pump no longer runs a **second** `vt
   scrolling, and maps settings sidebar child clicks to the actual filtered
   group index. *(touches `crates/ui/src/setting/page.rs`,
   `crates/ui/src/setting/settings.rs`)*
+- `0004` — exposes the read-only `TabPanel::panel_count` used to retain the final
+  terminal tab without exposing the panel collection. *(touches
+  `crates/ui/src/dock/tab_panel.rs`)*
 
 The patches are **git `format-patch`** files: each carries the commit message describing
 the change, so `patches/` reads like a changelog of the fork.
