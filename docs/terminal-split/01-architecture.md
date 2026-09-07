@@ -5,9 +5,9 @@
 
 ## 1. Where it lives
 
-The split lives **entirely inside a single `TerminalPanel`** (crate `ui`,
-`views/terminal/panel.rs`). Nothing at the `DockArea` / `TabPanel` /
-`StackPanel` level changes — that is what "no new dock, no new tab" means.
+The split lives **entirely inside a single `TerminalPanel`**
+(`crates/terminal-view/src/panel/`). Nothing at the `DockArea`, `TabGroup`, or
+GPUI Base pane-tree level changes — that is what "no new dock, no new tab" means.
 
 Before:
 
@@ -134,9 +134,9 @@ impl SplitDir {
 
 We deliberately do **not** reuse gpui-component's dock-level split machinery:
 
-- `DockItem::h_split` / `v_split` / `StackPanel` create split **panels within the
-  DockArea**, each carrying its own tab strip — that is exactly the "new dock/tab"
-  the requirements forbid.
+- `DockLayout::h_split` / `v_split` create split **panels within the `DockArea`**,
+  with tab-group nodes as dock containers — exactly the "new dock/tab" the
+  requirements forbid.
 - `Tiles` is a free-floating, draggable canvas of panels — heavier than needed and
   again tab/panel-oriented.
 

@@ -1,14 +1,14 @@
 //! [`OneTermWorkspace`] — OneTerm's main view.
 
-use std::collections::HashSet;
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext, Context, Entity, EntityId, InteractiveElement as _, IntoElement,
-    ParentElement, Render, Styled, Task, Window, div,
+    App, AppContext, Context, Entity, InteractiveElement as _, IntoElement, ParentElement, Render,
+    Styled, Task, Window, div,
 };
 use gpui_component::Root;
-use gpui_component::dock::{DockArea, DockEvent, PanelEvent, ToggleZoom};
+use gpui_component::dock::{DockArea, DockSkin, PanelStyle};
 
 use oneterm_state::AppState;
 
@@ -16,6 +16,7 @@ use crate::layout::{statusbar, title_bar::AppTitleBar};
 use crate::widgets::{StatusText, breadcrumb, datetime_clock, net_speed, resource};
 
 pub(crate) mod actions;
+mod dock_skin;
 pub(crate) mod layout;
 pub(crate) mod persistence;
 
@@ -47,8 +48,8 @@ pub(crate) fn build_named_panel(
     dock_area: &gpui::WeakEntity<DockArea>,
     window: &mut Window,
     cx: &mut App,
-) -> std::sync::Arc<dyn gpui_component::dock::PanelView> {
-    use gpui_component::dock::{PanelInfo, PanelRegistry, PanelState};
+) -> Option<std::sync::Arc<dyn gpui_component::dock::BasePanelView>> {
+    use gpui_component::dock::{PanelBuildContext, PanelInfo, PanelRegistry, PanelState};
     // A leaf panel carries no layout payload (CORR-64) — `PanelInfo::tabs`
     // would describe a tab container, which this is not.
     let state = PanelState {
@@ -56,23 +57,13 @@ pub(crate) fn build_named_panel(
         children: Vec::new(),
         info: PanelInfo::panel(serde_json::Value::Null),
     };
-    let panel: std::sync::Arc<dyn gpui_component::dock::PanelView> = std::sync::Arc::from(
-        PanelRegistry::build_panel(name, dock_area.clone(), &state, &state.info, window, cx),
-    );
-    // `PanelRegistry` does not expose its registered names, but an unregistered
-    // name always yields gpui-component's `InvalidPanel` placeholder.
-    if panel.panel_name(cx) == INVALID_PANEL_NAME && name != INVALID_PANEL_NAME {
-        log::error!(
-            "build_named_panel: panel {name:?} is not registered with PanelRegistry; \
-             rendering placeholder"
-        );
+    let context = PanelBuildContext::new(dock_area.clone(), &state, &state.info);
+    let panel = PanelRegistry::build_panel(name, context, window, cx);
+    if panel.is_none() {
+        log::error!("build_named_panel: panel {name:?} is not registered with PanelRegistry");
     }
     panel
 }
-
-/// `Panel::panel_name` of gpui-component's placeholder for unregistered names
-/// (`dock/invalid_panel.rs`).
-const INVALID_PANEL_NAME: &str = "InvalidPanel";
 
 pub use oneterm_state::dock_persistence::state_file;
 
@@ -80,6 +71,7 @@ pub use oneterm_state::dock_persistence::state_file;
 pub struct OneTermWorkspace {
     pub title_bar: Entity<AppTitleBar>,
     pub dock_area: Entity<DockArea>,
+    _dock_skin: Rc<DockSkin>,
     /// Datetime clock — created once so the 1s timer fires reliably.
     pub clock: Entity<StatusText>,
     /// Network speed indicator — created once so the 1s timer fires reliably.
@@ -92,26 +84,12 @@ pub struct OneTermWorkspace {
     last_layout_state: Option<gpui_component::dock::DockAreaState>,
     _save_layout_task: Option<Task<()>>,
 
-    /// Mirror of the zoom state: name of the panel currently zoomed (fullscreen).
-    /// `gpui-component` keeps `TabPanel.zoomed` (private) + `DockArea.zoom_view`
-    /// (private), so they cannot be read from outside the crate → track it ourselves
-    /// via the `PanelEvent::ZoomIn`/`ZoomOut` subscription.
+    /// Name of the panel currently zoomed (fullscreen), mirrored into docks.json.
     zoomed_panel: Option<String>,
     /// Set once the exit-time layout write has run, so the two exit hooks
     /// (`on_app_quit` while the window is still open, `on_release` when the
     /// window closes) do not write the same document twice.
     layout_saved_on_exit: bool,
-    /// `TabPanel`s already subscribed — avoids duplicate subscriptions (LayoutChanged
-    /// fires multiple times, and TabPanels can be recreated).
-    subscribed_tabs: HashSet<EntityId>,
-}
-
-/// Forget `TabPanel`s that no longer exist in the dock (their subscriptions
-/// ended with the entity) so the subscribed set cannot grow with every tab
-/// open/close (CORR-22).
-fn retain_live_tabs(subscribed: &mut HashSet<EntityId>, live: impl IntoIterator<Item = EntityId>) {
-    let live: HashSet<EntityId> = live.into_iter().collect();
-    subscribed.retain(|id| live.contains(id));
 }
 
 impl OneTermWorkspace {
@@ -121,11 +99,9 @@ impl OneTermWorkspace {
     /// Precondition: the composition root has initialised the shared globals
     /// (`AppState`, `UiConfig`, `AppServices`) before the window opens.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let dock_area = cx.new(|cx| {
-            use gpui_component::dock::PanelStyle;
-            DockArea::new(MAIN_DOCK_ID, Some(MAIN_DOCK_VERSION), window, cx)
-                .panel_style(PanelStyle::TabBar)
-        });
+        let (dock_area, dock_skin) =
+            dock_skin::dock_area(MAIN_DOCK_ID, Some(MAIN_DOCK_VERSION), window, cx);
+        dock_skin.set_panel_style(PanelStyle::TabBar, cx);
         let weak_dock_area = dock_area.downgrade();
 
         // Register the DockArea as the primary workspace in AppState — feature
@@ -169,18 +145,19 @@ impl OneTermWorkspace {
             Self::switch_right_dock_mode(&dock_area, saved_mode, window, cx);
         }
 
-        cx.subscribe_in(
-            &dock_area,
-            window,
-            move |this, dock_area, ev: &DockEvent, window, cx| match ev {
-                DockEvent::LayoutChanged => {
-                    // Subscribe every new TabPanel (dynamically added tab/panel).
-                    this.sync_tab_subscriptions(window, cx);
-                    this.save_layout(dock_area, window, cx);
-                }
-                _ => {}
-            },
-        )
+        cx.observe_in(&dock_area, window, move |this, dock_area, window, cx| {
+            let zoomed_panel = dock_area
+                .read(cx)
+                .zoomed_group()
+                .and_then(|node| {
+                    oneterm_state::dock_util::panel_name_for_tab_node(dock_area.read(cx), node, cx)
+                })
+                .map(str::to_owned);
+            if this.zoomed_panel != zoomed_panel {
+                this.zoomed_panel = zoomed_panel;
+            }
+            this.save_layout(&dock_area, window, cx);
+        })
         .detach();
 
         // Exit-time layout persistence (CORR-04). Both hooks write synchronously
@@ -214,9 +191,10 @@ impl OneTermWorkspace {
         let breadcrumb = breadcrumb(dock_area.downgrade(), window, cx);
         let resource = resource(window, cx);
 
-        let mut me = Self {
+        let me = Self {
             title_bar,
             dock_area: dock_area.clone(),
+            _dock_skin: dock_skin,
             clock,
             net_speed,
             breadcrumb,
@@ -225,32 +203,7 @@ impl OneTermWorkspace {
             _save_layout_task: None,
             zoomed_panel: None,
             layout_saved_on_exit: false,
-            subscribed_tabs: HashSet::new(),
         };
-
-        // Observe dock entities (left/right/bottom) for resize — Dock::resize()
-        // calls cx.notify() which fires observers, but does NOT emit
-        // DockEvent::LayoutChanged. Without this, dock width is lost on restart.
-        {
-            let (right, left, bottom) = {
-                let docks = dock_area.read(cx);
-                (
-                    docks.right_dock().cloned(),
-                    docks.left_dock().cloned(),
-                    docks.bottom_dock().cloned(),
-                )
-            };
-            for dock in right.into_iter().chain(left).chain(bottom) {
-                let da = dock_area.clone();
-                cx.observe_in(&dock, window, move |this, _, window, cx| {
-                    this.save_layout(&da, window, cx);
-                })
-                .detach();
-            }
-        }
-
-        // Subscribe every existing TabPanel (loaded from docks.json / created in reset_*).
-        me.sync_tab_subscriptions(window, cx);
 
         // Restore zoom (fullscreen) for the panel matching the saved name.
         if let Some(name) = saved_zoom {
@@ -303,74 +256,10 @@ impl OneTermWorkspace {
         }));
     }
 
-    /// Subscribe to `PanelEvent` on every not-yet-subscribed `TabPanel` — updates the
-    /// `zoomed_panel` mirror. Called after each `DockEvent::LayoutChanged` and at init.
-    fn sync_tab_subscriptions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let tabs = oneterm_state::dock_util::collect_tab_panels(&self.dock_area.read(cx), cx);
-        log::debug!("sync_tab_subscriptions → found {} tab panel(s)", tabs.len());
-        retain_live_tabs(
-            &mut self.subscribed_tabs,
-            tabs.iter().map(|tp| tp.entity_id()),
-        );
-        for tp in tabs {
-            let id = tp.entity_id();
-            if self.subscribed_tabs.insert(id) {
-                cx.subscribe_in(
-                    &tp,
-                    window,
-                    move |this, tp, ev: &PanelEvent, _window, cx| match ev {
-                        PanelEvent::ZoomIn => {
-                            // Resolve the active panel's name at zoom time.
-                            let name = tp
-                                .read(cx)
-                                .active_panel(cx)
-                                .map(|p| p.panel_name(cx).to_string());
-                            log::debug!("PanelEvent::ZoomIn → name={name:?}");
-                            this.zoomed_panel = name.clone();
-                            // Save to docks.json IMMEDIATELY — independent of quit/debounce.
-                            let state = this.dock_area.read(cx).dump(cx);
-                            cx.background_executor()
-                                .spawn(async move {
-                                    persistence::save_state_logged(
-                                        &state,
-                                        name.as_deref(),
-                                        "zoom_in",
-                                    );
-                                })
-                                .detach();
-                            cx.notify();
-                        }
-                        PanelEvent::ZoomOut => {
-                            log::debug!("PanelEvent::ZoomOut");
-                            this.zoomed_panel = None;
-                            let state = this.dock_area.read(cx).dump(cx);
-                            cx.background_executor()
-                                .spawn(async move {
-                                    persistence::save_state_logged(&state, None, "zoom_out");
-                                })
-                                .detach();
-                            cx.notify();
-                        }
-                        _ => {}
-                    },
-                )
-                .detach();
-            }
-        }
-    }
-
-    /// Restore zoom: find the `TabPanel` whose active panel matches `name` → focus +
-    /// dispatch `ToggleZoom` (through gpui-component's proper code path → consistent
-    /// toolbar state, `TabPanel.zoomed` set correctly).
+    /// Restore zoom for the tab group whose active panel matches `name`.
     fn restore_zoom(&self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let target =
-            oneterm_state::dock_util::find_tab_by_panel_name(&self.dock_area.read(cx), name, cx);
-        if let Some(tp) = target {
-            if let Some(panel) = tp.read(cx).active_panel(cx) {
-                panel.focus_handle(cx).focus(window, cx);
-                window.dispatch_action(Box::new(ToggleZoom), cx);
-                log::info!("Restored zoom for panel \"{name}\"");
-            }
+        if restore_zoom_in_dock(&self.dock_area, name, window, cx) {
+            log::info!("Restored zoom for panel \"{name}\"");
         }
     }
 
@@ -382,6 +271,24 @@ impl OneTermWorkspace {
     pub fn bind_keys(cx: &mut App) {
         (oneterm_state::commands::commands(cx).setup_key_bindings)(cx);
     }
+}
+
+/// Restore zoom for the tab group whose active panel matches `name`.
+fn restore_zoom_in_dock(
+    dock_area: &Entity<DockArea>,
+    name: &str,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    let target =
+        oneterm_state::dock_util::find_tab_node_by_panel_name(dock_area.read(cx), name, cx);
+    let Some(node) = target else {
+        return false;
+    };
+    dock_area.update(cx, |dock_area, cx| {
+        dock_area.set_zoomed_in(node, window, cx)
+    });
+    dock_area.read(cx).zoomed_group() == Some(node)
 }
 
 impl Render for OneTermWorkspace {

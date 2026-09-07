@@ -14,7 +14,7 @@ mod card;
 mod view;
 
 use gpui::App;
-use gpui_component::dock::register_panel;
+use gpui_component::dock::{panel_handle, register_panel};
 
 use oneterm_state::{AgentRegistry, panel_names};
 
@@ -26,7 +26,7 @@ pub use view::AgentListView;
 /// layouts deserialize it.
 pub fn init(cx: &mut App) {
     AgentRegistry::init(cx);
-    register_panel(cx, panel_names::AGENT, |_, _, _, window, cx| {
-        Box::new(AgentListView::new_entity(window, cx))
+    register_panel(cx, panel_names::AGENT, |_, window, cx| {
+        panel_handle(AgentListView::new_entity(window, cx))
     });
 }

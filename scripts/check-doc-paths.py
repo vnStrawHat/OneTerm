@@ -10,9 +10,8 @@ Checked documents (the "current" navigation set — historical records under
 * ``README.md`` and ``AGENTS.md`` at the repository root.
 
 A "path" is any back-ticked token that starts with ``crates/``, ``docs/``,
-``scripts/`` or ``vendor/``. Placeholders (``<name>``, ``*``, ``{a,b}``, ``…``) and
-upstream layout references (``crates/ui/...`` is gpui-component's crate path, quoted
-by the vendor docs) are skipped.
+``scripts/``, ``vendor/`` or ``reference/``. Placeholders (``<name>``, ``*``,
+``{a,b}``, ``…``) are skipped.
 """
 
 from __future__ import annotations
@@ -29,20 +28,15 @@ DOCUMENTS = [
     ROOT / "AGENTS.md",
     *sorted((ROOT / "docs" / "agents").glob("*.md")),
 ]
-PATH_PATTERN = re.compile(r"`((?:crates|docs|scripts|vendor)/[^`]+)`")
+PATH_PATTERN = re.compile(r"`((?:crates|docs|scripts|vendor|reference)/[^`]+)`")
 # Tokens that are templates / globs rather than concrete paths.
 PLACEHOLDER_CHARS = ("<", ">", "*", "{", "}", "…", " ", "|")
-# Prefixes that refer to another repository's layout (upstream gpui-component
-# `crates/ui`), not to a path in this tree.
-FOREIGN_PREFIXES = ("crates/ui",)
 
 
 def is_checkable(path: str) -> bool:
     if any(char in path for char in PLACEHOLDER_CHARS):
         return False
-    return not any(
-        path == prefix or path.startswith(f"{prefix}/") for prefix in FOREIGN_PREFIXES
-    )
+    return True
 
 
 def main() -> None:

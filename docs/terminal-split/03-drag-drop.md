@@ -3,28 +3,11 @@
 > Part of [Terminal Split design](../terminal-split.md). The trickiest part of the
 > feature. Read the constraint (§1) first — it drives the whole approach.
 
-## 1. The constraint: `DragPanel` is `pub(crate)`
+## 1. Why terminal Spaces use a custom drag payload
 
-gpui-component's `TabPanel` already implements tab drag-and-drop. When a tab is
-dragged, the payload it emits is:
+GPUI Kit 0.6 exposes the dock's native `DragPanel`, but that payload represents a dock-panel move. A terminal Space drop moves one terminal view between `SpaceTree` leaves inside a `TerminalPanel`, which is a different ownership operation. OneTerm therefore uses a terminal-specific payload containing the source panel and drag-preview title.
 
-```rust
-// reference/gpui-component/crates/ui/src/dock/tab_panel.rs
-#[derive(Clone)]
-pub(crate) struct DragPanel {          // ← pub(crate): NOT visible outside the crate
-    pub(crate) panel: Arc<dyn PanelView>,
-    pub(crate) tab_panel: Entity<TabPanel>,
-}
-```
-
-Even though `dock/mod.rs` does `pub use tab_panel::*`, a `pub(crate)` item stays
-crate-private. **The `ui` crate cannot name `DragPanel`**, so it cannot write
-`.drag_over::<DragPanel>()` / `.on_drop(|drag: &DragPanel| …)` to intercept the
-dock's built-in tab drag. We must therefore provide our **own** drag payload.
-
-Dropping onto gpui-component's own machinery (`add_panel_at` + `will_split_placement`)
-is also rejected: that splits at the **DockArea/StackPanel** level (new tab-panel
-with its own tab strip) — the "new dock/tab" the requirements forbid.
+Using the dock's own drop machinery is intentionally rejected: it operates at the DockArea/tab-group level and would create or rearrange dock tabs rather than fill an empty terminal Space.
 
 ## 2. Chosen approach: custom drag payload on the tab title we render
 
@@ -32,15 +15,13 @@ with its own tab strip) — the "new dock/tab" the requirements forbid.
 element **ourselves**. We attach our own `on_drag` there with a public payload:
 
 ```rust
-/// Public drag payload for moving a Terminal Tab into a Space.
-/// Defined in ui (e.g. views/terminal/space/drag.rs) so both the drag source
-/// (tab title) and the drop target (a Space) can name it.
+/// Drag payload for moving a Terminal Tab into a Space.
 #[derive(Clone)]
 pub struct DragTerminalTab {
     /// The source terminal panel being dragged.
     pub panel: WeakEntity<TerminalPanel>,
-    /// The TabPanel the source lives in (to remove it on a successful move).
-    pub tab_panel: WeakEntity<TabPanel>,
+    /// The label rendered in the drag preview.
+    pub title: SharedString,
 }
 impl Render for DragTerminalTab { /* small drag preview: the tab label */ }
 ```
@@ -49,15 +30,15 @@ Wire-up on the title element (inside the `h_flex().id("tab-title")` we already b
 
 ```rust
 .on_drag(
-    DragTerminalTab { panel: cx.entity().downgrade(), tab_panel: /* weak */ },
+    DragTerminalTab {
+        panel: cx.entity().downgrade(),
+        title: tab_label.into(),
+    },
     |drag, _pos, _win, cx| { cx.stop_propagation(); cx.new(|_| drag.clone()) },
 )
 ```
 
-`cx.stop_propagation()` in the drag handler prevents the event from bubbling to
-gpui-component's `Tab` wrapper, so **our** drag wins when the gesture starts on the
-title. (This is the load-bearing assumption — verify it early; see §6 and
-[07](07-roadmap-risks.md).)
+`cx.stop_propagation()` keeps this Space-tree gesture separate from the surrounding dock tab gesture.
 
 ## 3. Drop target: **only empty Spaces**
 
@@ -74,7 +55,7 @@ placeholder_wrapper
     .id(("space", leaf.id.0))
     .drag_over::<DragTerminalTab>(|this, _drag, _win, cx| {
         // Visual affordance while hovering a valid drag over this empty Space.
-        this.bg(cx.theme().tokens.drop_target)      // same token TabPanel uses
+        this.bg(cx.theme().tokens.drop_target)      // same token the dock skin uses
     })
     .on_drop(cx.listener(move |panel, drag: &DragTerminalTab, window, cx| {
         panel.handle_tab_drop(leaf_id, drag, window, cx);
@@ -124,17 +105,12 @@ The MVP behavior is well-defined for the primary use case (source = single-termi
 tab): the source becomes empty → the source tab closes → its terminal now lives in
 the target Space.
 
-## 6. Why not just patch gpui-component?
+## 6. Why not use the dock's `DragPanel`?
 
-Making `DragPanel` public in the vendored fork would let a Space accept the dock's
-native tab drag directly. Rejected for the MVP because:
-
-- The project is **rev-locked** to a specific gpui-component revision (see
-  `docs/agents/dependencies.md`); local patches fight upgrades.
-- Our own payload is self-contained and avoids coupling to gpui-component internals.
-
-It remains a documented fallback if the `on_drag`-on-title approach proves unable to
-beat the `Tab` wrapper's own drag in practice (§2, [07](07-roadmap-risks.md)).
+GPUI Kit 0.6 exposes `DragPanel`, but it represents a dock-level panel move. Accepting
+it would couple Space ownership to the dock's tab/group editing rules and could move a
+whole `TerminalPanel` instead of one active terminal leaf. `DragTerminalTab` is a
+stable OneTerm payload with exactly the source and preview data this operation needs.
 
 ## 7. Reference APIs used
 
@@ -143,6 +119,6 @@ beat the `Tab` wrapper's own drag in practice (§2, [07](07-roadmap-risks.md)).
 | Emit our drag payload | `InteractiveElement::on_drag` | gpui |
 | Hover affordance | `.drag_over::<T>()` / `.group_drag_over::<T>()` | gpui-component styled ext |
 | Handle drop | `.on_drop(cx.listener(|_, drag: &T, …| …))` | gpui |
-| Remove source tab | `TabPanel::remove_panel` | `dock/tab_panel.rs` (pub) |
-| Read source active panel | `TabPanel::active_panel` | `dock/tab_panel.rs` (pub) |
-| Drop-target color token | `cx.theme().tokens.drop_target` | theme (used by TabPanel) |
+| Remove an emptied source tab | `DockArea::remove_panel` | `gpui_base::dock::DockArea` |
+| Inspect sibling tabs | `TabGroup::panels` | `gpui_component::dock::TabGroup` |
+| Drop-target color token | `cx.theme().tokens.drop_target` | GPUI Kit theme |

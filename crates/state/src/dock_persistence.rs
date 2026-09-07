@@ -210,6 +210,37 @@ mod tests {
     }
 
     #[test]
+    fn pre_migration_dock_fixture_preserves_document_fields() {
+        let document: DockDocument =
+            serde_json::from_str(include_str!("fixtures/docks-0.5.2.json")).unwrap();
+        let state: gpui_component::dock::DockAreaState = document.dock_state().unwrap();
+
+        assert_eq!(document.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(state.version, Some(3));
+        assert_eq!(state.center.panel_name, "StackPanel");
+        assert_eq!(state.center.children.len(), 1);
+        assert_eq!(state.center.children[0].children.len(), 2);
+        assert_eq!(state.center.children[0].info.active_index(), Some(1));
+        assert_eq!(
+            state.right_dock.as_ref().map(|dock| (
+                dock.panel().panel_name.as_str(),
+                dock.size(),
+                dock.open()
+            )),
+            Some(("ssh_client_panel", gpui::px(443.), true))
+        );
+        assert_eq!(document.zoomed_panel.as_deref(), Some("terminal"));
+        let sftp = document
+            .sftp_table_state
+            .as_ref()
+            .expect("SFTP table state");
+        assert_eq!(sftp.column_widths.get("name"), Some(&321.0));
+        assert_eq!(sftp.column_widths.get("size"), Some(&128.0));
+        assert_eq!(sftp.column_visibility.get("owner"), Some(&false));
+        assert_eq!(sftp.column_visibility.get("permissions"), Some(&true));
+    }
+
+    #[test]
     fn typed_document_roundtrips_layout_and_feature_state() {
         let state = TestDockState {
             version: 7,

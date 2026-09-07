@@ -101,7 +101,7 @@ pub(crate) fn group_combobox(
             let group_value = group_value.clone();
             move |ctx, _, cx| {
                 let val = group_value.borrow().clone();
-                let placeholder = ctx.placeholder.cloned().unwrap_or_default();
+                let placeholder = ctx.placeholder().cloned().unwrap_or_default();
 
                 h_flex()
                     .w_full()
@@ -118,7 +118,7 @@ pub(crate) fn group_combobox(
                             })
                             .when(!val.is_empty(), |this| this.child(SharedString::from(val))),
                     )
-                    .when(!ctx.open, |this| {
+                    .when(!ctx.is_open(), |this| {
                         // Clear (×) button — only shown when the dropdown is closed and a value exists.
                         this.when(!group_value.borrow().is_empty(), |this| {
                             let gv = group_value.clone();

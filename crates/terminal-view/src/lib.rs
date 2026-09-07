@@ -21,7 +21,7 @@ pub use security::terminal_security_policy;
 pub use status::{find_in_active_terminal, new_terminal_with_shell_cmd, status_metrics};
 
 use gpui::App;
-use gpui_component::dock::register_panel;
+use gpui_component::dock::{panel_handle, register_panel};
 use oneterm_state::panel_names;
 
 /// Initialize the terminal feature.
@@ -30,10 +30,10 @@ use oneterm_state::panel_names;
 /// the app aggregator, which also passes [`status_metrics`] and
 /// [`agent_focuser`] to `AppServices::install`.
 pub fn init(cx: &mut App) {
-    register_panel(cx, panel_names::TERMINAL, |dock_area, _, _, window, cx| {
-        Box::new(TerminalPanel::open(
+    register_panel(cx, panel_names::TERMINAL, |context, window, cx| {
+        panel_handle(TerminalPanel::open(
             PanelSpec::DefaultShell {
-                workspace: Some(dock_area.entity_id()),
+                workspace: Some(context.dock_area().entity_id()),
             },
             window,
             cx,

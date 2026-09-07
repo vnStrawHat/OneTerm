@@ -16,7 +16,8 @@ pub(super) fn group() -> SettingGroup {
                 |val: bool, cx: &mut App| {
                     set(cx, |s| s.allow_clipboard_read = val);
                 },
-            ),
+            )
+            .default_value(false),
         )
         .description("Allow OSC 52 clipboard reads."),
     )

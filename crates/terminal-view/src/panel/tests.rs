@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use gpui::{AppContext as _, Focusable as _, TestAppContext, VisualTestContext};
 use gpui_component::{
     Root,
-    dock::{DockArea, Panel as _, PanelView, TabPanel},
+    dock::{DockArea, DockLayout, Panel as _, PanelView, panel_handle},
 };
 use oneterm_core::{AppError, LocalShellConfig, Result, SessionDuplicateConfig, SshConfig};
 use oneterm_state::{AppServices, commands::WorkspaceCommands};
@@ -90,15 +90,26 @@ fn closing_only_terminal_tab_keeps_empty_panel_for_new_tabs(cx: &mut TestAppCont
     let (session, session_probe) = FakeTerminalSession::boxed(24, 80, "only");
     let (_root, cx) = cx.add_window_view(move |window, cx| {
         let dock_area = cx.new(|cx| DockArea::new("last-tab-test", None, window, cx));
-        let tab_panel = cx.new(|cx| TabPanel::new(None, dock_area.downgrade(), window, cx));
         let panel =
             cx.new(|cx| TerminalPanel::from_spec(session_spec(session, "Only"), window, cx));
-        tab_panel.update(cx, |tabs, cx| {
-            tabs.add_panel(Arc::new(panel.clone()), window, cx);
+        dock_area.update(cx, |dock_area, cx| {
+            dock_area.set_center(
+                DockLayout::tabs().panel_view(panel_handle(panel.clone()), cx),
+                window,
+                cx,
+            );
         });
+        oneterm_state::AppState::global(cx).update(cx, |state, _| {
+            state.dock_area = Some(dock_area.downgrade());
+        });
+        let tab_panel = panel
+            .read(cx)
+            .tab_panel_weak()
+            .and_then(|group| group.upgrade())
+            .expect("panel must belong to a tab group");
         *panel_for_window.borrow_mut() = Some(panel.clone());
         *tab_for_window.borrow_mut() = Some(tab_panel);
-        Root::new(panel, window, cx)
+        Root::new(dock_area, window, cx)
     });
     let cx: &mut VisualTestContext = cx;
     let panel = panel_probe
@@ -110,30 +121,55 @@ fn closing_only_terminal_tab_keeps_empty_panel_for_new_tabs(cx: &mut TestAppCont
         .clone()
         .expect("tab panel must be initialized");
 
-    let focus = panel.read_with(cx, |panel, cx| panel.focus_handle(cx));
-    cx.update(|window, cx| focus.focus(window, cx));
+    let dock_focus = panel.read_with(cx, |panel, cx| panel.focus_handle(cx));
+    let content_focus = panel.read_with(cx, |panel, cx| {
+        panel
+            .tree
+            .active_focus_handle(cx)
+            .expect("active Space has a content focus handle")
+    });
+    cx.update(|window, cx| {
+        window.activate_window();
+        dock_focus.focus(window, cx);
+        window.refresh();
+    });
+    // Frame 1 publishes the proxy's focus path and runs its on_focus forwarder;
+    // frame 2 renders the independently tracked content focus.
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.run_until_parked();
+    assert!(cx.update(|window, _| content_focus.is_focused(window)));
+    assert!(!cx.update(|window, _| dock_focus.is_focused(window)));
     cx.dispatch_action(gpui_component::dock::ClosePanel);
     cx.run_until_parked();
 
     assert_eq!(session_probe.close_calls(), 1);
     assert!(panel.read_with(cx, |panel, _| panel.has_no_terminals()));
     assert_eq!(panel.read_with(cx, |panel, _| panel.leaf_count()), 1);
-    assert_eq!(
-        tab_panel.read_with(cx, |tabs, cx| tabs.dump(cx).children.len()),
-        1
-    );
+    assert_eq!(tab_panel.read_with(cx, |tabs, _| tabs.panels().len()), 1);
 
     let (ssh_session, _) = FakeTerminalSession::boxed(24, 80, "ssh");
     let ssh_panel = cx.update(|window, cx| {
         cx.new(|cx| TerminalPanel::from_spec(session_spec(ssh_session, "SSH"), window, cx))
     });
-    tab_panel.update_in(cx, |tabs, window, cx| {
-        tabs.add_panel(Arc::new(ssh_panel), window, cx);
+    cx.update(|window, cx| {
+        let dock_area = oneterm_state::AppState::global(cx)
+            .read(cx)
+            .dock_area
+            .as_ref()
+            .and_then(|dock_area| dock_area.upgrade())
+            .expect("workspace dock must exist");
+        dock_area.update(cx, |dock_area, cx| {
+            dock_area.add_panel_view(
+                panel_handle(ssh_panel),
+                gpui_component::dock::DockPlacement::Center,
+                None,
+                window,
+                cx,
+            );
+        });
     });
-    assert_eq!(
-        tab_panel.read_with(cx, |tabs, cx| tabs.dump(cx).children.len()),
-        2
-    );
+    assert_eq!(tab_panel.read_with(cx, |tabs, _| tabs.panels().len()), 2);
 }
 
 #[gpui::test]
@@ -151,18 +187,30 @@ fn closing_terminal_tab_with_sibling_removes_it(cx: &mut TestAppContext) {
     let (second_session, second_session_probe) = FakeTerminalSession::boxed(24, 80, "second");
     let (_root, cx) = cx.add_window_view(move |window, cx| {
         let dock_area = cx.new(|cx| DockArea::new("sibling-tab-test", None, window, cx));
-        let tab_panel = cx.new(|cx| TabPanel::new(None, dock_area.downgrade(), window, cx));
         let first =
             cx.new(|cx| TerminalPanel::from_spec(session_spec(first_session, "First"), window, cx));
         let second = cx
             .new(|cx| TerminalPanel::from_spec(session_spec(second_session, "Second"), window, cx));
-        tab_panel.update(cx, |tabs, cx| {
-            tabs.add_panel(Arc::new(first.clone()), window, cx);
-            tabs.add_panel(Arc::new(second.clone()), window, cx);
+        dock_area.update(cx, |dock_area, cx| {
+            dock_area.set_center(
+                DockLayout::tabs()
+                    .panel_view(panel_handle(first.clone()), cx)
+                    .panel_view(panel_handle(second), cx),
+                window,
+                cx,
+            );
         });
+        oneterm_state::AppState::global(cx).update(cx, |state, _| {
+            state.dock_area = Some(dock_area.downgrade());
+        });
+        let tab_panel = first
+            .read(cx)
+            .tab_panel_weak()
+            .and_then(|group| group.upgrade())
+            .expect("panel must belong to a tab group");
         *first_for_window.borrow_mut() = Some(first.clone());
         *tabs_for_window.borrow_mut() = Some(tab_panel);
-        Root::new(first, window, cx)
+        Root::new(dock_area, window, cx)
     });
     let cx: &mut VisualTestContext = cx;
     let first = first_probe
@@ -179,10 +227,7 @@ fn closing_terminal_tab_with_sibling_removes_it(cx: &mut TestAppContext) {
 
     assert_eq!(first_session_probe.close_calls(), 1);
     assert_eq!(second_session_probe.close_calls(), 0);
-    assert_eq!(
-        tab_panel.read_with(cx, |tabs, cx| tabs.dump(cx).children.len()),
-        1
-    );
+    assert_eq!(tab_panel.read_with(cx, |tabs, _| tabs.panels().len()), 1);
 }
 
 #[gpui::test]
@@ -444,7 +489,6 @@ fn duplicate_action_dispatches_to_the_active_space(cx: &mut TestAppContext) {
     let (session, _) = FakeTerminalSession::boxed(24, 80, "source");
     let (_root, cx) = cx.add_window_view(move |window, cx| {
         let dock_area = cx.new(|cx| DockArea::new("duplicate-action-test", None, window, cx));
-        let tab_panel = cx.new(|cx| TabPanel::new(None, dock_area.downgrade(), window, cx));
         let panel = cx.new(|cx| {
             let mut inactive_config = LocalShellConfig::default();
             inactive_config.program = Some("inactive-shell".into());
@@ -479,12 +523,24 @@ fn duplicate_action_dispatches_to_the_active_space(cx: &mut TestAppContext) {
                 .expect("new split Space must be empty");
             assert!(panel.empty_space_destinations().is_empty());
         });
-        tab_panel.update(cx, |tabs, cx| {
-            tabs.add_panel(Arc::new(panel.clone()), window, cx);
+        dock_area.update(cx, |dock_area, cx| {
+            dock_area.set_center(
+                DockLayout::tabs().panel_view(panel_handle(panel.clone()), cx),
+                window,
+                cx,
+            );
         });
+        oneterm_state::AppState::global(cx).update(cx, |state, _| {
+            state.dock_area = Some(dock_area.downgrade());
+        });
+        let tab_panel = panel
+            .read(cx)
+            .tab_panel_weak()
+            .and_then(|group| group.upgrade())
+            .expect("panel must belong to a tab group");
         *panel_for_window.borrow_mut() = Some(panel.clone());
         *tab_for_window.borrow_mut() = Some(tab_panel);
-        Root::new(panel, window, cx)
+        Root::new(dock_area, window, cx)
     });
     let cx: &mut VisualTestContext = cx;
     let panel = panel_probe
@@ -497,9 +553,25 @@ fn duplicate_action_dispatches_to_the_active_space(cx: &mut TestAppContext) {
         .expect("tab panel must be initialized");
 
     cx.run_until_parked();
-    let focus = panel.read_with(cx, |panel, cx| panel.focus_handle(cx));
-    cx.update(|window, cx| focus.focus(window, cx));
+    let dock_focus = panel.read_with(cx, |panel, cx| panel.focus_handle(cx));
+    let content_focus = panel.read_with(cx, |panel, cx| {
+        panel
+            .tree
+            .active_focus_handle(cx)
+            .expect("active Space has a content focus handle")
+    });
+    cx.update(|window, cx| {
+        window.activate_window();
+        dock_focus.focus(window, cx);
+        window.refresh();
+    });
+    // Frame 1 publishes the proxy's focus path and runs its on_focus forwarder;
+    // frame 2 renders the independently tracked content focus.
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
     cx.run_until_parked();
+    assert!(cx.update(|window, _| content_focus.is_focused(window)));
+    assert!(!cx.update(|window, _| dock_focus.is_focused(window)));
     cx.dispatch_action(oneterm_actions::DuplicateSession);
     cx.run_until_parked();
 
@@ -542,7 +614,6 @@ fn tab_drop_onto_occupied_space_keeps_source_terminal(cx: &mut TestAppContext) {
     });
     let drag = crate::space::DragTerminalTab {
         panel: source.downgrade(),
-        tab_panel: gpui::WeakEntity::new_invalid(),
         title: "Source".into(),
     };
 

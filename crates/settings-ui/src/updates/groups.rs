@@ -11,8 +11,6 @@ use gpui_component::{
 };
 use oneterm_update::{MAX_CHECK_INTERVAL_HOURS, UpdateChannel, UpdateConfig};
 
-use crate::items_with_separators;
-
 use super::{config::update_preference, state::UpdateUiState};
 
 const CHANNEL_STABLE: &str = "stable";
@@ -31,9 +29,7 @@ pub(crate) fn group(cx: &App) -> SettingGroup {
         items.push(skipped_version_item(skipped));
     }
     items.push(status_item(state));
-    SettingGroup::new()
-        .title("Updates")
-        .items(items_with_separators(items))
+    SettingGroup::new().title("Updates").items(items)
 }
 
 /// Build the About-page update network group.
@@ -43,9 +39,7 @@ pub(crate) fn network_group(cx: &App) -> SettingGroup {
     if !config.verify_certificates {
         items.push(insecure_certificates_warning());
     }
-    SettingGroup::new()
-        .title("Network")
-        .items(items_with_separators(items))
+    SettingGroup::new().title("Network").items(items)
 }
 
 fn auto_check_item(config: UpdateConfig) -> SettingItem {
@@ -56,7 +50,8 @@ fn auto_check_item(config: UpdateConfig) -> SettingItem {
             |checked, cx| {
                 update_preference(cx, |c| c.auto_check = checked);
             },
-        ),
+        )
+        .default_value(UpdateConfig::default().auto_check),
     )
     .description("Check GitHub Releases at startup once the interval has elapsed.")
 }
@@ -74,7 +69,8 @@ fn interval_item(config: UpdateConfig) -> SettingItem {
             |hours, cx| {
                 update_preference(cx, |c| c.check_interval_hours = hours_from_field(hours));
             },
-        ),
+        )
+        .default_value(UpdateConfig::default().effective_check_interval_hours() as f64),
     )
     .description("Minimum time between automatic checks.")
 }
@@ -106,7 +102,8 @@ fn channel_item(config: UpdateConfig) -> SettingItem {
             |value, cx| {
                 update_preference(cx, |c| c.channel = channel_from_key(value.as_ref()));
             },
-        ),
+        )
+        .default_value(CHANNEL_STABLE),
     )
     .description("Preview also offers GitHub prereleases; drafts are never offered.")
 }
@@ -149,6 +146,10 @@ fn skipped_version_item(skipped: String) -> SettingItem {
                     )
                     .into_any_element()
             },
+        )
+        .on_reset(
+            move |cx| UpdateUiState::config(cx).read(cx).skipped_version.is_some(),
+            |_window, cx| update_preference(cx, |config| config.skipped_version = None),
         ),
     )
     .description("Clear to be offered this version again.")
@@ -164,7 +165,8 @@ fn proxy_item(config: UpdateConfig) -> SettingItem {
                     c.proxy_url = (!value.is_empty()).then(|| value.to_string());
                 });
             },
-        ),
+        )
+        .default_value(SharedString::default()),
     )
     .description("Blank uses system proxy.")
 }
@@ -177,7 +179,8 @@ fn certificate_item(config: UpdateConfig) -> SettingItem {
             |checked, cx| {
                 update_preference(cx, |c| c.verify_certificates = checked);
             },
-        ),
+        )
+        .default_value(UpdateConfig::default().verify_certificates),
     )
     .description(
         "Verify GitHub TLS certificates. Turn off only on a trusted network that intercepts TLS.",

@@ -262,17 +262,16 @@ The button (inside the toolbar `h_flex`'s `.child(...)` chain):
 )
 ```
 
-> gpui-component's `Button` supports `.disabled(bool)` and `.tooltip(impl Into<SharedString>)`.
-> Confirm the exact API in `reference/gpui-component/crates/ui/src/button/`. If
-> `.tooltip` takes a closure/`Tooltip`, adjust to the real signature (reference-first per
-> AGENTS.md §3.0).
+> Confirm the exact `Button` API in
+> `reference/gpui-kit/crates/component/src/button/` before changing this control
+> (reference-first per AGENTS.md §3.2).
 
 ---
 
 ## 4.7. Icon
 
 Need an icon suggesting "sync directory / follow". Prefer an existing name in
-`IconName` (check `reference/gpui-component/crates/ui/src/icon.rs`). Candidates:
+`IconName` (check `reference/gpui-kit/crates/component/src/icon.rs`). Candidates:
 `FolderSync`, `FolderInput`, `LocateFixed`, `Crosshair`, `RefreshCw`.
 
 - If the name isn't in gpui-component's `IconName` yet → add a Lucide SVG to

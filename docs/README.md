@@ -16,7 +16,7 @@ navigation set free of dead paths).
 | [`HARNESS.md`](HARNESS.md) | Documentation-first workflow (Spec Intake → work packet → change → verify → reconcile). Templates in [`templates/`](templates/). |
 | [`../README.md`](../README.md) | User-facing README: features, build & run, release packaging. |
 | [`../scripts/README.md`](../scripts/README.md) | Every script under `scripts/`, and which ones CI runs. |
-| [`../vendor/README.md`](../vendor/README.md) | Vendored forks (`vte`, `alacritty_terminal`, `gpui-component`): provenance, patch model, refresh/check. |
+| [`../vendor/README.md`](../vendor/README.md) | Vendored terminal-engine forks (`vte`, `alacritty_terminal`): provenance, patch model, refresh/check. |
 | [`../THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md), [`../NOTICE`](../NOTICE) | Third-party components and licences (generated). |
 
 ## Agent guides — `agents/` (current, mandatory reading before code changes)
@@ -26,10 +26,9 @@ navigation set free of dead paths).
 | [`agents/structure.md`](agents/structure.md) | Directory tree, crate responsibility table, structure conventions. |
 | [`agents/crate-dependency-rules.md`](agents/crate-dependency-rules.md) | Hard crate & dependency rules R1–R12 and their verification commands. |
 | [`agents/code-style.md`](agents/code-style.md) | Rust conventions (mandatory). |
-| [`agents/dependencies.md`](agents/dependencies.md) | Rev lock (`gpui`, `gpui-component`, vendored forks), allowed auxiliary crates, reference-first research. |
+| [`agents/dependencies.md`](agents/dependencies.md) | Dependency version policy, vendored terminal forks, allowed auxiliary crates, reference-first research. |
 | [`agents/error-policy.md`](agents/error-policy.md) | Runtime error handling and recovery rules. |
 | [`agents/persistence.md`](agents/persistence.md) | Persisted files (`terminal.json`, `ui_config.json`, `docks.json`, `ssh_session.json`, …): schema owners and storage mechanics. |
-| [`agents/ui-fork-maintenance.md`](agents/ui-fork-maintenance.md) | Maintaining (and eventually retiring) the vendored `gpui-component` patch set. |
 
 ## Design records — feature docs
 
@@ -65,6 +64,7 @@ Status is stated in each file's header. "Current" = kept in step with the code;
 | [`review-refresh-2026-08/`](review-refresh-2026-08/) | **Live** review checklist (2026-08-17 refresh) and its phased remediation plan. Tick items here as they land. |
 | [`archive/terminal-code-review-remediation-2026-07.md`](archive/terminal-code-review-remediation-2026-07.md) | Pre-restructure terminal review (2026-07-13) — archived; paths no longer exist. |
 | [`archive/refactor/ui-crate-restructure.md`](archive/refactor/ui-crate-restructure.md) | The (completed) crate restructure plan — archived. |
+| [`archive/agents/ui-fork-maintenance.md`](archive/agents/ui-fork-maintenance.md) | Retired gpui-component fork maintenance procedure — archived after the 0.6 migration. |
 
 When the refresh review is superseded, move it under `archive/` with a status header
 and add the new one here.

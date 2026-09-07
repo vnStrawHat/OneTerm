@@ -1,22 +1,14 @@
 //! Default workspace layout construction.
 
 use gpui::{App, Window};
-use gpui_component::dock::{DockArea, DockAreaState, DockItem};
+use gpui_component::dock::{DockArea, DockAreaState, DockLayout, DockPlacement};
 
 use oneterm_state::panel_names;
 
 use super::{DEFAULT_RIGHT_DOCK_WIDTH, MAIN_DOCK_VERSION};
 
-/// Reset the center (terminal tabs) to a single tab AND re-apply the right
-/// dock as a fresh `DockItem::Panel(SshClientPanel)`.
-///
-/// The right dock is rebuilt every launch because the gpui-component
-/// `PanelInfo::Panel` load path round-trips back to `DockItem::tabs` (see
-/// `dock::state::PanelState::to_item`), which would render the SshClientPanel
-/// with an unwanted tab bar. Re-applying a fresh `DockItem::panel(...)` keeps
-/// the raw chromeless rendering stable across restarts. The user's last
-/// right-dock width + open/collapsed state is preserved from the just-loaded
-/// dock.
+/// Reset the center (terminal tabs) and re-apply the right-dock panel while
+/// preserving the loaded right-dock size and open state.
 pub(crate) fn reset_center_only(
     dock_area: gpui::WeakEntity<DockArea>,
     window: &mut Window,
@@ -38,96 +30,51 @@ pub(crate) fn apply_center_reset(
     window: &mut Window,
     cx: &mut App,
 ) -> Option<DockAreaState> {
-    let weak = dock_area.clone();
-    let center = DockItem::v_split(
-        vec![DockItem::tabs(
-            vec![super::build_named_panel(
-                panel_names::TERMINAL,
-                &weak,
-                window,
-                cx,
-            )],
-            &weak,
-            window,
-            cx,
-        )],
-        &weak,
-        window,
-        cx,
-    );
-    let ssh_client_panel = super::build_named_panel(panel_names::SSH_CLIENT, &weak, window, cx);
-    let right = DockItem::panel(ssh_client_panel);
-    // A released dock area (window closing during startup) has nothing to reset.
+    let center_panel = super::build_named_panel(panel_names::TERMINAL, &dock_area, window, cx)?;
+    let right_panel = super::build_named_panel(panel_names::SSH_CLIENT, &dock_area, window, cx)?;
+    let center = DockLayout::v_split().child(DockLayout::tabs().panel_view(center_panel, cx), None);
+    let right = DockLayout::tabs().panel_view(right_panel, cx);
+
     dock_area
         .update(cx, |view, cx| {
-            // Snapshot the loaded right dock's size + open state so the re-applied
-            // `DockItem::Panel` preserves the user's last dock width + collapsed
-            // state. Falls back to the default width / open when there is no prior
-            // right dock (e.g. first launch, or the saved layout had no right dock).
-            let (right_size, right_open) = view
-                .right_dock()
-                .map(|dock| {
-                    let d = dock.read(cx);
-                    (Some(d.size()), d.is_open())
-                })
-                .unwrap_or((Some(DEFAULT_RIGHT_DOCK_WIDTH), true));
+            let right_size = view
+                .dock_size(DockPlacement::Right)
+                .unwrap_or(DEFAULT_RIGHT_DOCK_WIDTH);
             view.set_center(center, window, cx);
-            view.set_right_dock(right, right_size, right_open, window, cx);
-            view.set_dock_collapsible(
-                gpui::Edges {
-                    right: true,
-                    ..Default::default()
-                },
-                window,
-                cx,
-            );
+            view.set_dock(DockPlacement::Right, right, window, cx);
+            view.set_dock_size(DockPlacement::Right, right_size, window, cx);
+            view.set_dock_collapsible(DockPlacement::Right, true, window, cx);
             view.dump(cx)
         })
         .ok()
 }
 
-/// Build the default OneTerm layout: center = terminals, right_dock = SshClientPanel.
+/// Build the default OneTerm layout: center = terminals, right dock = SSH client.
 pub(crate) fn reset_default_layout(
     dock_area: gpui::WeakEntity<DockArea>,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let weak = dock_area.clone();
+    let Some(center_panel) =
+        super::build_named_panel(panel_names::TERMINAL, &dock_area, window, cx)
+    else {
+        return;
+    };
+    let Some(right_panel) =
+        super::build_named_panel(panel_names::SSH_CLIENT, &dock_area, window, cx)
+    else {
+        return;
+    };
+    let center = DockLayout::v_split().child(DockLayout::tabs().panel_view(center_panel, cx), None);
+    let right = DockLayout::tabs().panel_view(right_panel, cx);
 
-    let center = DockItem::v_split(
-        vec![DockItem::tabs(
-            vec![super::build_named_panel(
-                panel_names::TERMINAL,
-                &weak,
-                window,
-                cx,
-            )],
-            &weak,
-            window,
-            cx,
-        )],
-        &weak,
-        window,
-        cx,
-    );
-
-    let ssh_client_panel = super::build_named_panel(panel_names::SSH_CLIENT, &weak, window, cx);
-    let right = DockItem::panel(ssh_client_panel);
-
-    // A released dock area (window closing during startup) has nothing to reset.
     let saved_state = dock_area
         .update(cx, |view, cx| {
-            view.set_version(MAIN_DOCK_VERSION, window, cx);
+            view.set_version(Some(MAIN_DOCK_VERSION), cx);
             view.set_center(center, window, cx);
-            view.set_right_dock(right, Some(DEFAULT_RIGHT_DOCK_WIDTH), true, window, cx);
-            view.set_dock_collapsible(
-                gpui::Edges {
-                    right: true,
-                    ..Default::default()
-                },
-                window,
-                cx,
-            );
+            view.set_dock(DockPlacement::Right, right, window, cx);
+            view.set_dock_size(DockPlacement::Right, DEFAULT_RIGHT_DOCK_WIDTH, window, cx);
+            view.set_dock_collapsible(DockPlacement::Right, true, window, cx);
             view.dump(cx)
         })
         .ok();

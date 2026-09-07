@@ -22,8 +22,8 @@ product: terminal engine glue, backends, UI, persistence, packaging, and the aut
 
 - Rust (edition 2024, toolchain pinned in `rust-toolchain.toml`), one Cargo workspace under
   `crates/` (`oneterm-<dir>` packages; graph in `docs/agents/structure.md`).
-- UI: `gpui` + `gpui-component` (pinned git revisions, `docs/agents/dependencies.md`);
-  `gpui-component`, `alacritty_terminal`, and `vte` are vendored forks under `vendor/`
+- UI: published `gpui-pre` / GPUI Kit 0.6 crates (`docs/agents/dependencies.md`);
+  `alacritty_terminal` and `vte` are vendored terminal forks under `vendor/`
   (pristine upstream + `vendor/patches/`).
 - Terminal engine: `alacritty_terminal`; local PTY via `alacritty_terminal::tty` (Windows ConPTY
   with bundled `conpty.dll` / `OpenConsole.exe`); SSH/SFTP via `russh` + `russh-sftp` on a
@@ -66,9 +66,10 @@ product: terminal engine glue, backends, UI, persistence, packaging, and the aut
 - Crate rules R1–R12 in `docs/agents/crate-dependency-rules.md` (DAG, downward-only edges,
   no UI→backend edge, feature-agnostic shell, `core`/`terminal` gpui-free).
 - Every third-party dependency is declared once in the root `Cargo.toml`
-  `[workspace.dependencies]`; `gpui`/`gpui_platform` and `gpui-component`/`-assets` share revs.
-- Vendored crates are never hand-edited: `vendor/<crate>` == pristine @ rev + `vendor/patches/`
-  (`bash vendor/refresh.sh --check`, `python scripts/check-ui-fork.py`).
+  `[workspace.dependencies]`; the `gpui-pre` pair moves together and the GPUI Kit 0.6 layers
+  (`gpui-base`, `gpui-component`, `gpui-kit-assets`) move together.
+- Vendored terminal crates are never hand-edited: `vendor/<crate>` == pristine @ rev +
+  `vendor/patches/` (`bash vendor/refresh.sh --check`).
 - No secrets are persisted (`ui_config.json`, `terminal.json`, `docks.json`, `ssh_session.json`
   never contain passwords or passphrases).
 - English-only contributor text and code comments (`python scripts/check-english.py`).
@@ -92,5 +93,5 @@ There is no automated end-to-end UI test; UI behaviour is verified manually on W
 ## Open Questions
 
 - Linux/macOS QA: local PTY, packaging, and theming are untested outside Windows.
-- Whether the gpui-component fork can be retired once its two source patches are upstreamed
-  (`docs/agents/ui-fork-maintenance.md`).
+- Whether a future Zed-published GPUI release can replace the maintainer-published `gpui-pre`
+  family without breaking GPUI Kit compatibility.

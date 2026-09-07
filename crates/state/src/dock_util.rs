@@ -5,8 +5,10 @@
 //! this low crate so neither the shell nor the features need to depend on each
 //! other to share them.
 
+use std::sync::Arc;
+
 use gpui::{App, Entity, Window};
-use gpui_component::dock::{DockArea, DockItem, TabPanel};
+use gpui_component::dock::{BasePanelView, DockArea, DockPlacement, NodeId, PaneNode, PaneRef};
 
 /// Set the Right Dock open/closed (no-op if there is no right dock).
 ///
@@ -19,52 +21,116 @@ pub fn set_right_dock_open<C: gpui::AppContext>(
     window: &mut Window,
     cx: &mut C,
 ) {
-    let right = cx.read_entity(dock_area, |da, _| da.right_dock().cloned());
-    if let Some(right) = right {
-        right.update(cx, |dock, cx| {
-            if dock.is_open() != open {
-                dock.set_open(open, window, cx);
-            }
-        });
-    }
+    dock_area.update(cx, |dock_area, cx| {
+        if dock_area.has_dock(DockPlacement::Right)
+            && dock_area.is_dock_open(DockPlacement::Right) != open
+        {
+            dock_area.toggle_dock(DockPlacement::Right, window, cx);
+        }
+    });
 }
 
-/// Walk the entire Dock tree (center + 3 docks) → collect every `Entity<TabPanel>`.
-pub fn collect_tab_panels(dock_area: &DockArea, cx: &App) -> Vec<Entity<TabPanel>> {
-    let mut out = Vec::new();
-    visit_item(dock_area.center(), &mut out);
-    for dock in [
-        dock_area.left_dock(),
-        dock_area.right_dock(),
-        dock_area.bottom_dock(),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        visit_item(dock.read(cx).panel(), &mut out);
+/// Return the active panel of every tab group in dock order.
+pub fn active_tab_panels(dock_area: &DockArea, cx: &App) -> Vec<Arc<dyn BasePanelView>> {
+    let mut panels = Vec::new();
+    for placement in [
+        DockPlacement::Center,
+        DockPlacement::Left,
+        DockPlacement::Right,
+        DockPlacement::Bottom,
+    ] {
+        if let Some(tree) = dock_area.layout(placement) {
+            visit_active_tabs(tree.root(), dock_area, cx, &mut panels);
+        }
     }
-    out
+    panels
 }
 
-fn visit_item(item: &DockItem, out: &mut Vec<Entity<TabPanel>>) {
-    match item {
-        DockItem::Tabs { view, .. } => out.push(view.clone()),
-        DockItem::Split { items, .. } => {
-            for it in items {
-                visit_item(it, out);
+fn visit_active_tabs(
+    node: &PaneNode,
+    dock_area: &DockArea,
+    cx: &App,
+    panels: &mut Vec<Arc<dyn BasePanelView>>,
+) {
+    match node.kind() {
+        PaneRef::Tabs {
+            panels: ids,
+            active_ix,
+        } => {
+            if let Some(panel) = ids.get(active_ix).and_then(|id| dock_area.panel(*id))
+                && panel.visible(cx)
+            {
+                panels.push(panel.clone());
             }
         }
-        _ => {}
+        PaneRef::Split { children, .. } => {
+            for child in children {
+                visit_active_tabs(child, dock_area, cx, panels);
+            }
+        }
+        PaneRef::Tiles { .. } => {}
     }
 }
 
-/// Find the first TabPanel whose active panel matches `name`.
-pub fn find_tab_by_panel_name(
-    dock_area: &DockArea,
-    name: &str,
-    cx: &App,
-) -> Option<Entity<TabPanel>> {
-    collect_tab_panels(dock_area, cx)
-        .into_iter()
-        .find(|tp| tp.read(cx).active_panel(cx).map(|p| p.panel_name(cx)) == Some(name))
+/// Find the first tab-group node whose active panel matches `name`.
+pub fn find_tab_node_by_panel_name(dock_area: &DockArea, name: &str, cx: &App) -> Option<NodeId> {
+    for placement in [
+        DockPlacement::Center,
+        DockPlacement::Left,
+        DockPlacement::Right,
+        DockPlacement::Bottom,
+    ] {
+        let Some(tree) = dock_area.layout(placement) else {
+            continue;
+        };
+        let mut found = None;
+        tree.root().walk(&mut |node| {
+            if found.is_some() {
+                return;
+            }
+            let PaneRef::Tabs { panels, active_ix } = node.kind() else {
+                return;
+            };
+            if panels
+                .get(active_ix)
+                .and_then(|id| dock_area.panel(*id))
+                .is_some_and(|panel| panel.panel_name(cx) == name)
+            {
+                found = Some(node.id());
+            }
+        });
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
+}
+
+/// Return the active panel name for a tab-group node.
+pub fn panel_name_for_tab_node<'a>(
+    dock_area: &'a DockArea,
+    node_id: NodeId,
+    cx: &'a App,
+) -> Option<&'static str> {
+    for placement in [
+        DockPlacement::Center,
+        DockPlacement::Left,
+        DockPlacement::Right,
+        DockPlacement::Bottom,
+    ] {
+        let Some(node) = dock_area
+            .layout(placement)
+            .and_then(|tree| tree.find_node(node_id))
+        else {
+            continue;
+        };
+        let PaneRef::Tabs { panels, active_ix } = node.kind() else {
+            continue;
+        };
+        return panels
+            .get(active_ix)
+            .and_then(|id| dock_area.panel(*id))
+            .map(|panel| panel.panel_name(cx));
+    }
+    None
 }

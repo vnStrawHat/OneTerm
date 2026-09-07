@@ -13,7 +13,8 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, Context, FocusHandle, Focusable, Font, FontWeight, Hsla, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, SharedString, Styled as _, Window, div, px, relative,
+    IntoElement, ParentElement as _, Render, Role, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Window, div, px, relative,
 };
 use gpui_component::{
     ActiveTheme as _, WindowExt as _, alert::Alert, notification::NotificationType,
@@ -243,6 +244,8 @@ impl Render for LocalTerminalView {
 
         let terminal_div = div()
             .id("local-terminal-view")
+            .role(Role::Pane)
+            .aria_label("Terminal")
             .size_full()
             .relative()
             .track_focus(&self.focus)

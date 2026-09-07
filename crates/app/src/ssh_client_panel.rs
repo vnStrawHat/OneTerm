@@ -1,19 +1,13 @@
-//! SSH Client right-dock panel — the right dock's single `DockItem::Panel` for
-//! [`oneterm_core::RightDockMode::SshClient`].
+//! SSH Client right-dock panel for [`oneterm_core::RightDockMode::SshClient`].
 //!
-//! OneTerm's right dock used to be a `DockItem::v_split` of two
-//! `DockItem::tabs` (Session on top, SFTP on the bottom). It is now a single
-//! [`DockItem::Panel`] wrapping this [`SshClientPanel`], which internally hosts
-//! a [`SessionPanel`] and an [`SftpPanel`] in a vertical resizable split, each
-//! with its own header bar (title, no close button).
+//! The right dock contains one tab-group leaf wrapping this [`SshClientPanel`].
+//! The workspace [`gpui_component::dock::DockSkin`] suppresses that group's
+//! outer tab bar, while this panel hosts [`SessionPanel`] and [`SftpPanel`] in a
+//! vertical resizable split with their own header bars.
 //!
-//! Why a composite panel instead of two dock tabs:
-//! - `DockItem::Panel` is rendered *raw* by the library (no tab bar / title bar
-//!   / close / zoom chrome), so this panel owns its own headers + split.
-//! - `DockItem::Panel` cannot be a child of a `v_split`/`h_split`
-//!   (`StackPanel::assert_panel_is_valid` only accepts `TabPanel`/`StackPanel`),
-//!   so the two sections must live *inside* one panel rather than as two dock
-//!   children.
+//! Keeping both sections inside one composite panel preserves OneTerm's
+//! chrome-free right dock while the GPUI Base layout tree remains a normal,
+//! serializable tab-group layout.
 //!
 //! This crate (`oneterm-app`) is the only crate allowed to depend on more than
 //! one feature (R9 in `docs/agents/crate-dependency-rules.md`), so the composite
@@ -22,11 +16,12 @@
 
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Window, div,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, Role,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window, div,
 };
 
 use gpui_component::dock::{
-    DockArea, Panel, PanelControl, PanelEvent, PanelInfo, PanelState, register_panel,
+    DockArea, Panel, PanelEvent, PanelInfo, PanelState, panel_handle, register_panel,
 };
 use gpui_component::{
     ActiveTheme as _, h_flex,
@@ -42,11 +37,13 @@ use oneterm_state::panel_names;
 ///
 /// Registered with the gpui-component `PanelRegistry` as
 /// [`panel_names::SSH_CLIENT`]; the feature-agnostic shell builds it *by name*
-/// and saved layouts deserialize by that name too. Rendered raw as a
-/// `DockItem::Panel`, so it draws its own title bars + the resize split
-/// between the two sections.
+/// and saved layouts deserialize by that name too. The workspace skin hides
+/// the containing single-panel tab bar, so this panel draws the two section
+/// headers and the resize split itself.
 pub(crate) struct SshClientPanel {
-    focus_handle: FocusHandle,
+    /// Focus proxy owned by the containing dock tab group.
+    dock_focus_handle: FocusHandle,
+    _dock_focus_subscription: Subscription,
     session: Entity<SessionPanel>,
     sftp: Entity<SftpPanel>,
 }
@@ -60,9 +57,18 @@ impl SshClientPanel {
     ) -> Self {
         let session = SessionPanel::new_entity(window, cx);
         let sftp = SftpPanel::new_entity_in_workspace(dock_area.entity_id(), window, cx);
+        let dock_focus_handle = cx.focus_handle();
+        let dock_focus_subscription =
+            cx.on_focus(&dock_focus_handle, window, |this, window, cx| {
+                this.session
+                    .read(cx)
+                    .content_focus_handle()
+                    .focus(window, cx);
+            });
 
         Self {
-            focus_handle: cx.focus_handle(),
+            dock_focus_handle,
+            _dock_focus_subscription: dock_focus_subscription,
             session,
             sftp,
         }
@@ -100,20 +106,14 @@ impl SshClientPanel {
 impl EventEmitter<PanelEvent> for SshClientPanel {}
 
 impl Focusable for SshClientPanel {
-    fn focus_handle(&self, cx: &App) -> FocusHandle {
-        // Delegate focus to the session tree first (top section), so keyboard
-        // input reaches it instead of dying at the panel root.
-        self.session.read(cx).focus_handle(cx).clone()
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.dock_focus_handle.clone()
     }
 }
 
-impl Panel for SshClientPanel {
+impl gpui_base::dock::Panel for SshClientPanel {
     fn panel_name(&self) -> &'static str {
         panel_names::SSH_CLIENT
-    }
-
-    fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        "SSH Client"
     }
 
     fn closable(&self, _: &App) -> bool {
@@ -122,27 +122,32 @@ impl Panel for SshClientPanel {
         false
     }
 
-    fn zoomable(&self, _: &App) -> Option<PanelControl> {
-        // Zoom is a TabPanel feature; `DockItem::Panel` is not subscribed to
-        // zoom events by the library (see `DockArea::subscribe_item`). Drop
-        // zoom for this panel — per the design decision to switch to
-        // `DockItem::Panel`.
-        None
+    fn zoomable(&self, _: &App) -> bool {
+        false
     }
 
     fn dump(&self, _cx: &App) -> PanelState {
-        // Persist as `PanelInfo::Panel` so the saved layout records this as a
-        // single panel rather than a tab group. (The gpui-component
-        // `PanelInfo::Panel` load path rebuilds a `DockItem::tabs` wrapper;
-        // the shell always re-applies the right dock fresh on startup — see
-        // `reset_center_only` + the `MAIN_DOCK_VERSION` bump — so this dump is
-        // only used for the between-session save/restore of dock openness +
-        // size, not to reconstruct the exact `DockItem` variant.)
+        // Persist only this leaf's state. The surrounding TabGroup is owned by
+        // the dock layout and is reconstructed from the persisted container.
         PanelState {
             panel_name: panel_names::SSH_CLIENT.to_string(),
             children: Vec::new(),
             info: PanelInfo::panel(serde_json::Value::Null),
         }
+    }
+}
+
+impl Panel for SshClientPanel {
+    fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        "SSH Client"
+    }
+
+    fn zoom_control(&self, _: &App) -> Option<gpui_component::dock::PanelControl> {
+        None
+    }
+
+    fn inner_padding(&self, _: &App) -> bool {
+        false
     }
 }
 
@@ -174,8 +179,9 @@ impl Render for SshClientPanel {
 
         div()
             .id("ssh-client-panel")
+            .role(Role::Pane)
+            .aria_label("SSH client")
             .size_full()
-            .track_focus(&self.focus_handle)
             .bg(bg)
             .child(group)
             .into_any_element()
@@ -187,9 +193,7 @@ impl Render for SshClientPanel {
 /// name and saved layouts can deserialize it. Called by the app aggregator
 /// ([`crate::init::init`]).
 pub(crate) fn init(cx: &mut App) {
-    register_panel(
-        cx,
-        panel_names::SSH_CLIENT,
-        |dock_area, _, _, window, cx| Box::new(SshClientPanel::new_entity(dock_area, window, cx)),
-    );
+    register_panel(cx, panel_names::SSH_CLIENT, |context, window, cx| {
+        panel_handle(SshClientPanel::new_entity(context.dock_area(), window, cx))
+    });
 }

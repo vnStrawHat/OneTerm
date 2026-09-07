@@ -6,7 +6,7 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Context, ExternalPaths, Focusable as _, InteractiveElement as _, IntoElement, ParentElement,
-    Render, Styled, Window, div,
+    Render, Role, StatefulInteractiveElement as _, Styled, Window, div,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, WindowExt as _,
@@ -52,6 +52,8 @@ impl Render for SftpPanel {
 
         v_flex()
             .id("sftp-panel")
+            .role(Role::Pane)
+            .aria_label("SFTP browser")
             .size_full()
             .track_focus(self.panel_focus_handle())
             // SFTP context-menu action handlers — also fired by global key bindings.
@@ -85,6 +87,8 @@ impl SftpPanel {
     fn render_no_connection(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("sftp-panel")
+            .role(Role::Pane)
+            .aria_label("SFTP browser")
             .size_full()
             .track_focus(self.panel_focus_handle())
             .flex()

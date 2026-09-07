@@ -10,7 +10,7 @@ use gpui::{
     App, AppContext as _, Context, EventEmitter, FocusHandle, Focusable, IntoElement, Render,
     Window, div,
 };
-use gpui_component::dock::{Panel, PanelEvent, PanelView, register_panel};
+use gpui_component::dock::{BasePanelView, Panel, PanelEvent, panel_handle, register_panel};
 use oneterm_state::panel_names;
 
 /// A panel that renders nothing and reports the name it was registered under.
@@ -27,15 +27,20 @@ impl NamedPanel {
         }
     }
 
-    /// A boxed panel view for building `DockItem`s directly.
-    pub(crate) fn view(name: &'static str, cx: &mut App) -> Arc<dyn PanelView> {
-        Arc::new(cx.new(|cx| Self::new(name, cx)))
+    /// A wrapped panel view for building dock layouts directly.
+    pub(crate) fn view(name: &'static str, cx: &mut App) -> Arc<dyn BasePanelView> {
+        panel_handle(cx.new(|cx| Self::new(name, cx)))
     }
 }
 
-impl Panel for NamedPanel {
+impl gpui_base::dock::Panel for NamedPanel {
     fn panel_name(&self) -> &'static str {
         self.name
+    }
+}
+impl Panel for NamedPanel {
+    fn tab_name(&self, _: &App) -> Option<gpui::SharedString> {
+        Some(format!("{0} title", self.name).into())
     }
 }
 impl EventEmitter<PanelEvent> for NamedPanel {}
@@ -50,15 +55,17 @@ impl Render for NamedPanel {
     }
 }
 
-/// Register a [`NamedPanel`] for every dock panel name the shell may build.
+/// Register a [`NamedPanel`] for every persisted dock panel name.
 pub(crate) fn register_test_panels(cx: &mut App) {
     for name in [
         panel_names::TERMINAL,
+        panel_names::SFTP,
+        panel_names::SESSION,
         panel_names::SSH_CLIENT,
         panel_names::AGENT,
     ] {
-        register_panel(cx, name, move |_, _, _, _, cx| {
-            Box::new(cx.new(|cx| NamedPanel::new(name, cx)))
+        register_panel(cx, name, move |_, _, cx| {
+            panel_handle(cx.new(|cx| NamedPanel::new(name, cx)))
         });
     }
 }

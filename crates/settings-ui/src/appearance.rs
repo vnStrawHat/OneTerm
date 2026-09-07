@@ -13,6 +13,9 @@ use gpui_component::{
 
 use oneterm_theme::theme::apply_list_style_override;
 
+const DEFAULT_THEME_MODE: &str = "dark";
+const DEFAULT_THEME_NAME: &str = "Zed One Dark";
+
 /// Build the "Appearance" settings page.
 pub(crate) fn page(cx: &App) -> SettingPage {
     SettingPage::new("Appearance")
@@ -54,7 +57,8 @@ fn theme_mode_group() -> SettingGroup {
                         apply_list_style_override(cx);
                         cx.refresh_windows();
                     },
-                ),
+                )
+                .default_value(DEFAULT_THEME_MODE),
             )
             .description("Light or dark."),
         )
@@ -89,7 +93,8 @@ fn theme_group(cx: &App) -> SettingGroup {
                         apply_list_style_override(cx);
                         cx.refresh_windows();
                     },
-                ),
+                )
+                .default_value(DEFAULT_THEME_NAME),
             )
             .description("Choose a built-in theme."),
         )

@@ -13,16 +13,36 @@
 //! `PanelRegistry` (ARCH-39).
 
 use gpui::{
-    App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement as _,
-    Render, Styled as _, Window,
+    App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, Role, StatefulInteractiveElement as _, Styled as _, Window,
 };
 use gpui_component::{
     TitleBar,
+    group_box::GroupBoxVariant,
     setting::{SettingPage, Settings},
     v_flex,
 };
 
 use super::{about, appearance, general, key_bindings, sftp, ssh, terminal, updates};
+
+const SETTINGS_GROUP_VARIANT: GroupBoxVariant = GroupBoxVariant::Outline;
+const SETTINGS_PANEL_ROLE: Role = Role::Pane;
+
+#[cfg(test)]
+fn reset_button_visibility_probe() -> gpui_component::setting::SettingField<f64> {
+    gpui_component::setting::SettingField::number_input(
+        gpui_component::setting::NumberFieldOptions::default(),
+        |cx| cx.global::<ResetProbe>().0,
+        |value, cx| cx.global_mut::<ResetProbe>().0 = value,
+    )
+    .default_value(16.0)
+}
+
+#[cfg(test)]
+struct ResetProbe(f64);
+
+#[cfg(test)]
+impl gpui::Global for ResetProbe {}
 
 /// General Settings view (font, theme, key bindings, terminal options, about).
 pub(crate) struct SettingsPanel {
@@ -84,8 +104,60 @@ impl Focusable for SettingsPanel {
 impl Render for SettingsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
+            .id("settings-panel")
+            .role(SETTINGS_PANEL_ROLE)
+            .aria_label("Settings")
+            .track_focus(&self.focus_handle)
             .size_full()
             .child(TitleBar::new().child("Settings"))
-            .child(Settings::new("oneterm-settings").pages(self.pages(cx)))
+            .child(
+                Settings::new("oneterm-settings")
+                    .with_group_variant(SETTINGS_GROUP_VARIANT)
+                    .pages(self.pages(cx)),
+            )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_groups_match_the_v0_6_story_outline_variant() {
+        assert_eq!(SETTINGS_GROUP_VARIANT, GroupBoxVariant::Outline);
+    }
+
+    #[test]
+    fn settings_panel_focus_target_is_an_accessible_pane() {
+        assert!(matches!(SETTINGS_PANEL_ROLE, Role::Pane));
+    }
+
+    struct ResetProbeView;
+
+    impl Render for ResetProbeView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            gpui::div()
+        }
+    }
+
+    #[gpui::test]
+    fn changed_field_exposes_and_executes_the_conditional_reset_contract(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui_component::setting::AnySettingField as _;
+
+        cx.update(|cx| cx.set_global(ResetProbe(16.0)));
+        let (_view, cx) = cx.add_window_view(|_window, _cx| ResetProbeView);
+        cx.update(|window, cx| {
+            let field = reset_button_visibility_probe();
+            assert!(!field.is_resettable(cx));
+
+            cx.global_mut::<ResetProbe>().0 = 18.0;
+            assert!(field.is_resettable(cx));
+            field.reset(window, cx);
+
+            assert_eq!(cx.global::<ResetProbe>().0, 16.0);
+            assert!(!field.is_resettable(cx));
+        });
     }
 }

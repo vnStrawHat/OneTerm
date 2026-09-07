@@ -63,7 +63,7 @@ splitting Right / Left / Up / Down, nested to any depth.
 - **Active Space** — the Space that currently has focus. It receives keyboard input
   and is the target of tab-level actions (Split, Close Space) and status-bar
   reporting (breadcrumb, SFTP, network stats).
-- **Terminal Tab** — a `TerminalPanel` in the center dock's `TabPanel`. After this
-  feature, a Terminal Tab contains a Space tree instead of a single terminal view.
+- **Terminal Tab** — a `TerminalPanel` in a center-dock `TabGroup`. A Terminal Tab
+  contains a Space tree instead of a single terminal view.
 - **Placeholder** — the empty state of a Space: centered hint text (e.g. *"Drag a
   terminal tab here, or right-click to split"*).

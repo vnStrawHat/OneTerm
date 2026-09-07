@@ -18,7 +18,8 @@ pub(super) fn group() -> SettingGroup {
                     |val: bool, cx: &mut App| {
                         set(cx, |s| s.show_context_menu = val);
                     },
-                ),
+                )
+                .default_value(true),
             )
             .description("Show OneTerm right-click menu."),
         )
@@ -30,7 +31,8 @@ pub(super) fn group() -> SettingGroup {
                     |val: bool, cx: &mut App| {
                         set(cx, |s| s.copy_on_select = val);
                     },
-                ),
+                )
+                .default_value(true),
             )
             .description("Copy the selection to the clipboard when the mouse button is released."),
         )

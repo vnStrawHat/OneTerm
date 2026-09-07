@@ -12,8 +12,6 @@ use gpui_component::{
 };
 use oneterm_settings::TerminalSettings;
 
-use crate::items_with_separators;
-
 use super::set;
 
 const DEFAULT_FONT_SENTINEL: &str = "Default (theme)";
@@ -38,7 +36,7 @@ pub(super) fn group() -> SettingGroup {
     SettingGroup::new()
         .title("Font")
         .description("Family, size, and weight.")
-        .items(items_with_separators(vec![
+        .items(vec![
             SettingItem::new("Font Family", font_family_field())
                 .description("Use \"Default\" for theme font."),
             SettingItem::new(
@@ -62,7 +60,8 @@ pub(super) fn group() -> SettingGroup {
                             s.base_font_size = Some(size);
                         });
                     },
-                ),
+                )
+                .default_value(15.0),
             )
             .description("Size in px (6–72)."),
             SettingItem::new(
@@ -74,12 +73,13 @@ pub(super) fn group() -> SettingGroup {
                         let weight = parse_weight(val.as_ref());
                         set(cx, |s| s.font_weight = weight);
                     },
-                ),
+                )
+                .default_value("normal"),
             )
             .description("Font weight."),
             SettingItem::new("Line Height", line_height_field())
                 .description("Line height multiplier."),
-        ]))
+        ])
 }
 
 // ── Font Family Select field ─────────────────────────────────────────────
@@ -136,7 +136,9 @@ fn font_family_field() -> SettingField<SharedString> {
         move |options: &RenderOptions, window: &mut Window, cx: &mut App| {
             let key = SharedString::from(format!(
                 "font-family-select-{}-{}-{}",
-                options.page_ix, options.group_ix, options.item_ix
+                options.page_ix(),
+                options.group_ix(),
+                options.item_ix()
             ));
 
             let state_entity = window.use_keyed_state(key, cx, |window, cx| {
@@ -200,7 +202,7 @@ fn font_family_field() -> SettingField<SharedString> {
 
             div()
                 .map(|this| {
-                    if options.layout.is_horizontal() {
+                    if options.layout().is_horizontal() {
                         this.w(px(240.))
                     } else {
                         this.w_full()
@@ -212,6 +214,16 @@ fn font_family_field() -> SettingField<SharedString> {
                         .menu_max_h(rems(10.)),
                 )
                 .into_any_element()
+        },
+    )
+    .on_reset(
+        |cx| {
+            TerminalSettings::global(cx).read(cx).font_family
+                != TerminalSettings::default().font_family
+        },
+        |_window, cx| {
+            let font_family = TerminalSettings::default().font_family;
+            set(cx, move |settings| settings.font_family = font_family);
         },
     )
 }
@@ -276,7 +288,9 @@ fn line_height_field() -> SettingField<SharedString> {
 
             let key = SharedString::from(format!(
                 "line-height-input-{}-{}-{}",
-                options.page_ix, options.group_ix, options.item_ix
+                options.page_ix(),
+                options.group_ix(),
+                options.item_ix()
             ));
 
             let state_entity = window.use_keyed_state(key, cx, |window, cx| {
@@ -339,16 +353,28 @@ fn line_height_field() -> SettingField<SharedString> {
             let state = state_entity.read(cx);
 
             NumberInput::new(&state.input)
-                .disabled(options.disabled)
-                .with_size(options.size)
+                .disabled(options.is_disabled())
+                .with_size(options.size())
                 .map(|this| {
-                    if options.layout.is_horizontal() {
+                    if options.layout().is_horizontal() {
                         this.w_32()
                     } else {
                         this.w_full()
                     }
                 })
                 .into_any_element()
+        },
+    )
+    .on_reset(
+        |cx| {
+            TerminalSettings::global(cx).read(cx).line_height_factor
+                != TerminalSettings::default().line_height_factor
+        },
+        |_window, cx| {
+            let line_height = TerminalSettings::default().line_height_factor;
+            set(cx, move |settings| {
+                settings.line_height_factor = line_height
+            });
         },
     )
 }

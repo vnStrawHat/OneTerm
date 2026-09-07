@@ -7,7 +7,7 @@
 //! Load order: UiAssets (custom icons) → gpui-component Assets (built-in icons).
 
 use gpui::{AssetSource, SharedString};
-use gpui_component_assets::Assets;
+use gpui_kit_assets::Assets;
 use oneterm_theme::icon::UiAssets;
 
 pub(crate) struct CustomAssets;

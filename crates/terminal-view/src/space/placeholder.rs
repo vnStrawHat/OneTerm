@@ -5,8 +5,8 @@
 //! See `docs/terminal-split/04-context-menu.md` §3 and `05-rendering-theme.md` §5.
 
 use gpui::{
-    App, ElementId, InteractiveElement, IntoElement, MouseButton, ParentElement, Styled,
-    WeakEntity, Window,
+    App, ElementId, InteractiveElement, IntoElement, MouseButton, ParentElement, Role,
+    StatefulInteractiveElement as _, Styled, WeakEntity, Window,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, Sizable as _,
@@ -34,6 +34,8 @@ pub(crate) fn render_placeholder(
 
     let base = v_flex()
         .id(ElementId::from(("space-empty", id.0 as usize)))
+        .role(Role::Pane)
+        .aria_label(format!("Empty terminal space {number}"))
         .track_focus(&leaf.focus)
         .size_full()
         .items_center()

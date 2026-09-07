@@ -23,11 +23,7 @@ members = [
 resolver = "3"
 # Vendored dependency snapshots (patched below). Excluded as workspace members;
 # they are consumed via [patch] and built as dependencies.
-exclude = [
-    "vendor/vte",
-    "vendor/alacritty_terminal",
-    "vendor/gpui-component",
-]
+exclude = ["vendor/vte", "vendor/alacritty_terminal"]
 
 [workspace.package]
 # Single version source for every workspace crate, the release workflow, and the
@@ -42,11 +38,13 @@ repository = "https://github.com/vnStrawHat/OneTerm"
 rust-version = "1.96.0"
 
 [workspace.dependencies]
-# GPUI core — same revision and monorepo (see docs/agents/dependencies.md §1)
-gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
-gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "ea6b194db04cc7c0474851f07c7d5b7a9df6a98b" }
-gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "ea6b194db04cc7c0474851f07c7d5b7a9df6a98b" }
+# GPUI core — published as the gpui-pre family (see docs/agents/dependencies.md §1)
+gpui = { package = "gpui-pre", version = "0.3" }
+gpui_platform = { package = "gpui-pre-platform", version = "0.3", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+# GPUI Kit layers move together as one release family.
+gpui-base = "0.6"
+gpui-component = "0.6"
+gpui-kit-assets = "0.6"
 
 # Internal crates
 oneterm-core = { path = "crates/core" }
@@ -163,8 +161,8 @@ split-debuginfo = "unpacked"
 [profile.dev.package]
 # Third-party hot crates are always optimized in dev: they rarely change (no
 # rebuild cost) and are never stepped through in a debugger.
-gpui = { opt-level = 3 }
-gpui_platform = { opt-level = 3 }
+gpui-pre = { opt-level = 3 }
+gpui-pre-platform = { opt-level = 3 }
 smol = { opt-level = 3 }
 alacritty_terminal = { opt-level = 3 }
 
@@ -191,8 +189,8 @@ alacritty_terminal = { opt-level = 3 }
 inherits = "dev"
 
 [profile.fast-dev.package]
-gpui = { opt-level = 3 }
-gpui_platform = { opt-level = 3 }
+gpui-pre = { opt-level = 3 }
+gpui-pre-platform = { opt-level = 3 }
 smol = { opt-level = 3 }
 alacritty_terminal = { opt-level = 3 }
 oneterm-terminal-view = { opt-level = 3 }
@@ -223,8 +221,8 @@ panic = "unwind"
 
 [profile.release.package]
 # GPUI/smol are expensive: always build them with opt-level 3 (including dependencies).
-gpui = { opt-level = 3 }
-gpui_platform = { opt-level = 3 }
+gpui-pre = { opt-level = 3 }
+gpui-pre-platform = { opt-level = 3 }
 smol = { opt-level = 3 }
 
 # ── OneTerm fork of the terminal engine (vendored under vendor/) ──────────────
@@ -236,9 +234,6 @@ smol = { opt-level = 3 }
 # docs/agents/dependencies.md §1/§3.
 [patch."https://github.com/zed-industries/alacritty"]
 alacritty_terminal = { path = "vendor/alacritty_terminal" }
-
-[patch."https://github.com/longbridge/gpui-component"]
-gpui-component = { path = "vendor/gpui-component" }
 
 [patch.crates-io]
 vte = { path = "vendor/vte" }

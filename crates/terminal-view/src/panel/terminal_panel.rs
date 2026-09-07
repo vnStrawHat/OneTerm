@@ -12,7 +12,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div,
     prelude::FluentBuilder as _, px,
 };
-use gpui_component::dock::{Panel, PanelControl, PanelEvent, TabPanel};
+use gpui_component::dock::{Panel, PanelControl, PanelEvent, TabGroup};
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable,
     button::{Button, ButtonVariants as _},
@@ -37,14 +37,18 @@ pub(crate) const INITIAL_PTY_SIZE: PtySize = PtySize::INITIAL;
 
 /// Panel displaying a Terminal Tab (a tree of Spaces).
 pub struct TerminalPanel {
+    /// Focus target owned by the dock's tab-group frame. When it receives focus,
+    /// `_dock_focus_subscription` forwards to the active Space in the next frame.
+    pub(super) dock_focus_handle: FocusHandle,
+    pub(super) _dock_focus_subscription: Subscription,
     /// DockArea identity used to publish active state only to this workspace.
     pub(super) workspace_id: Option<EntityId>,
     /// The pane tree — leaves are terminals or empty placeholders.
     pub(super) tree: SpaceTree,
-    /// Reference to the containing `TabPanel`, used by terminal-tab close policy
+    /// Reference to the containing `TabGroup`, used by terminal-tab close policy
     /// and Agent Panel navigation.
-    pub(super) tab_panel: Option<WeakEntity<TabPanel>>,
-    /// Whether this panel is the currently selected tab in the `TabPanel`.
+    pub(super) tab_panel: Option<WeakEntity<TabGroup>>,
+    /// Whether this panel is the currently selected tab in the `TabGroup`.
     pub(super) is_active: bool,
     /// Tab title fallback — "Terminal" for local, session label for SSH.
     pub(super) tab_title: String,
@@ -130,12 +134,21 @@ impl TerminalPanel {
             }
         };
         let active = tree.active();
+        let dock_focus_handle = cx.focus_handle();
+        let dock_focus_subscription =
+            cx.on_focus(&dock_focus_handle, window, |this, window, cx| {
+                if let Some(content_focus) = this.tree.active_focus_handle(cx) {
+                    content_focus.focus(window, cx);
+                }
+            });
 
         let _settings_sub = cx.observe(&deps.settings, |_this, _settings, cx| {
             cx.notify();
         });
 
         let mut this = Self {
+            dock_focus_handle,
+            _dock_focus_subscription: dock_focus_subscription,
             workspace_id,
             tree,
             tab_panel: None,
@@ -330,8 +343,8 @@ impl TerminalPanel {
         self.tree.leaf_index(space_id).unwrap_or(0)
     }
 
-    /// A weak handle to the containing `TabPanel` (for Agent Panel click-to-focus).
-    pub(crate) fn tab_panel_weak(&self) -> Option<WeakEntity<TabPanel>> {
+    /// A weak handle to the containing `TabGroup` (for Agent Panel click-to-focus).
+    pub(crate) fn tab_panel_weak(&self) -> Option<WeakEntity<TabGroup>> {
         self.tab_panel.clone()
     }
 
@@ -353,32 +366,52 @@ impl TerminalPanel {
 impl EventEmitter<PanelEvent> for TerminalPanel {}
 
 impl Focusable for TerminalPanel {
-    fn focus_handle(&self, cx: &App) -> FocusHandle {
-        // Delegate to the active Space — terminal view's handle, or the empty
-        // placeholder's handle.
-        //
-        // Invariant: the tree always holds ≥ 1 leaf and `active` always points at
-        // an existing leaf (`SpaceTree::set_active`/`close` re-point it on
-        // removal), so `active_focus_handle` is always `Some`.
-        self.tree
-            .active_focus_handle(cx)
-            .expect("active Space always has a focus handle")
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        // The tab group owns this proxy. Its focus listener forwards to the
+        // active Space's independently tracked content handle in the next frame,
+        // so accessibility never sees both frames claim one focused handle.
+        self.dock_focus_handle.clone()
     }
 }
 
-impl Panel for TerminalPanel {
+impl gpui_base::dock::Panel for TerminalPanel {
     fn panel_name(&self) -> &'static str {
         "terminal"
     }
 
-    fn inner_padding(&self, _: &App) -> bool {
+    fn closable(&self, _: &App) -> bool {
         false
+    }
+
+    fn on_added_to(
+        &mut self,
+        tab_panel: WeakEntity<TabGroup>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) {
+        self.tab_panel = Some(tab_panel);
     }
 
     fn on_removed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Close all sessions and cancel all tasks when the panel is removed
-        // from the TabPanel (tab close button, middle-click, drag removal).
+        // from the TabGroup (tab close button, middle-click, drag removal).
         self.shutdown(window, cx);
+    }
+
+    fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_active != active {
+            self.is_active = active;
+            cx.notify();
+        }
+        if active {
+            self.publish_active_session(cx);
+        }
+    }
+}
+
+impl Panel for TerminalPanel {
+    fn inner_padding(&self, _: &App) -> bool {
+        false
     }
 
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -428,13 +461,12 @@ impl Panel for TerminalPanel {
                 )
             })
             .mr(-px(5.))
-            // Drag the tab into an empty Space (our own payload — the dock's
-            // native `DragPanel` is `pub(crate)` and unusable here).
-            .when_some(tab_panel.clone(), |this, tpw| {
+            // Drag the tab into an empty Space with the terminal-specific
+            // payload consumed by Space-tree drop targets.
+            .when_some(tab_panel.clone(), |this, _| {
                 this.on_drag(
                     DragTerminalTab {
                         panel: panel_weak.clone(),
-                        tab_panel: tpw,
                         title: drag_title.clone(),
                     },
                     |drag, _pos, _win, cx| {
@@ -506,11 +538,7 @@ impl Panel for TerminalPanel {
             })
     }
 
-    fn closable(&self, _: &App) -> bool {
-        false
-    }
-
-    fn zoomable(&self, _: &App) -> Option<PanelControl> {
+    fn zoom_control(&self, _: &App) -> Option<PanelControl> {
         Some(PanelControl::Both)
     }
 
@@ -555,24 +583,5 @@ impl Panel for TerminalPanel {
             })
             .anchor(Anchor::TopRight);
         Some(btn)
-    }
-
-    fn on_added_to(
-        &mut self,
-        tab_panel: WeakEntity<TabPanel>,
-        _: &mut Window,
-        _: &mut Context<Self>,
-    ) {
-        self.tab_panel = Some(tab_panel);
-    }
-
-    fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.is_active != active {
-            self.is_active = active;
-            cx.notify();
-        }
-        if active {
-            self.publish_active_session(cx);
-        }
     }
 }

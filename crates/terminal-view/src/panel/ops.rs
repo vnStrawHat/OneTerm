@@ -2,12 +2,11 @@
 //! the active-session publish logic.
 
 use std::rc::Rc;
-use std::sync::Arc;
 
 use gpui::{App, AppContext as _, Entity, Window};
 
 use gpui_component::WindowExt as _;
-use gpui_component::dock::PanelView;
+use gpui_component::dock::{DockPlacement, panel_handle};
 use gpui_component::notification::NotificationType;
 use gpui_component::resizable::ResizableState;
 
@@ -208,7 +207,7 @@ impl TerminalPanel {
         } = duplicate;
         let target = match destination {
             DuplicateDestination::NewTab => {
-                let Some(tab_panel) = self.tab_panel.as_ref().and_then(|panel| panel.upgrade())
+                let Some(_tab_panel) = self.tab_panel.as_ref().and_then(|panel| panel.upgrade())
                 else {
                     close_unplaced(
                         Unplaced::Session(session),
@@ -228,9 +227,18 @@ impl TerminalPanel {
                     window,
                     cx,
                 );
-                tab_panel.update(cx, |tabs, cx| {
-                    tabs.add_panel(Arc::new(panel), window, cx);
-                });
+                let dock_area = AppState::global(cx).read(cx).dock_area.clone();
+                if let Some(dock_area) = dock_area.and_then(|dock_area| dock_area.upgrade()) {
+                    dock_area.update(cx, |dock_area, cx| {
+                        dock_area.add_panel_view(
+                            panel_handle(panel),
+                            DockPlacement::Center,
+                            None,
+                            window,
+                            cx,
+                        );
+                    });
+                }
                 return;
             }
             DuplicateDestination::ExistingSpace(target) => target,
@@ -322,13 +330,16 @@ impl TerminalPanel {
             .and_then(|tab_panel| tab_panel.upgrade());
         let has_sibling = tab_panel
             .as_ref()
-            .is_some_and(|tabs| tabs.read(cx).panel_count() > 1);
+            .is_some_and(|tabs| tabs.read(cx).panels().len() > 1);
 
         if has_sibling {
-            let panel: Arc<dyn PanelView> = Arc::new(cx.entity());
-            if let Some(tab_panel) = tab_panel {
+            let panel = cx.entity().clone();
+            let dock_area = AppState::global(cx).read(cx).dock_area.clone();
+            if let Some(dock_area) = dock_area.and_then(|dock_area| dock_area.upgrade()) {
                 window.defer(cx, move |window, cx| {
-                    tab_panel.update(cx, |tabs, cx| tabs.remove_panel(panel, window, cx));
+                    dock_area.update(cx, |dock_area, cx| {
+                        dock_area.remove_panel(panel, window, cx);
+                    });
                 });
             }
             return;
@@ -486,10 +497,10 @@ impl TerminalPanel {
         // Remove the emptied source tab (only when the source is a different,
         // now-terminal-less panel).
         if !is_self && src.read(cx).has_no_terminals() {
-            if let Some(tp) = drag.tab_panel.upgrade() {
-                let panel: Arc<dyn PanelView> = Arc::new(src.clone());
-                tp.update(cx, |tp, cx| {
-                    tp.remove_panel(panel, window, cx);
+            let dock_area = AppState::global(cx).read(cx).dock_area.clone();
+            if let Some(dock_area) = dock_area.and_then(|dock_area| dock_area.upgrade()) {
+                dock_area.update(cx, |dock_area, cx| {
+                    dock_area.remove_panel(src.clone(), window, cx);
                 });
             }
         }

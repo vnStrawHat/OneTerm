@@ -5,8 +5,8 @@
 //! helpers.
 
 use gpui::{
-    AnyElement, App, InteractiveElement as _, IntoElement, Keystroke, ParentElement as _, Styled,
-    Window, div,
+    AnyElement, App, InteractiveElement as _, IntoElement, Keystroke, ParentElement as _, Role,
+    StatefulInteractiveElement as _, Styled, Window, div,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, Sizable as _,
@@ -17,13 +17,13 @@ use gpui_component::{
     v_flex,
 };
 
-use crate::separator;
-
 use super::key_bindings_actions::{BINDABLE_ACTIONS, BindableAction};
 use super::state::{
     KeyBindingsState, apply_key_bindings, conflicting_action, is_modifier_only,
     keystroke_to_string, save_key_bindings,
 };
+
+const KEY_CAPTURE_ROLE: Role = Role::TextInput;
 
 // ── Page builder ─────────────────────────────────────────────────────
 
@@ -39,7 +39,6 @@ pub(crate) fn page() -> SettingPage {
     // the same `group` field into one `SettingGroup` per unique group title.
     let mut current_title: Option<&str> = None;
     let mut current_group = SettingGroup::new();
-    let mut group_item_count = 0;
     for a in BINDABLE_ACTIONS {
         let a: &'static BindableAction = a;
         let label = a.label;
@@ -51,21 +50,18 @@ pub(crate) fn page() -> SettingPage {
             }
             current_title = Some(a.group);
             current_group = current_group.title(a.group);
-            group_item_count = 0;
         }
-        // Insert a separator between consecutive items in the same group.
-        if group_item_count > 0 {
-            current_group = current_group.item(separator());
-        }
-        group_item_count += 1;
         // The row is a custom element, so its "Default: …" line is rendered by
         // the row itself; `SettingItem::description` only applies to value
         // items and `SettingGroup::description` would label the whole group
         // with the last action's default (CORR-35).
-        current_group = current_group.item(
-            SettingItem::render(move |_, window, cx| render_binding_row(a, window, cx))
-                .keywords([label]),
-        );
+        let item = SettingItem::render(move |_, window, cx| render_binding_row(a, window, cx))
+            .keywords([label]);
+        current_group = current_group.item(if a.id == BINDABLE_ACTIONS[0].id {
+            item.on_reset(key_bindings_are_dirty, reset_all_key_bindings)
+        } else {
+            item
+        });
     }
     // Flush the last group.
     if current_title.is_some() {
@@ -110,6 +106,7 @@ fn render_binding_row(
         };
         div()
             .id("kbd-capture")
+            .role(KEY_CAPTURE_ROLE)
             .track_focus(&handle)
             .w_full()
             .h_7()
@@ -232,6 +229,33 @@ fn on_reset(id: &'static str, cx: &mut App) {
     apply_key_bindings(cx);
 }
 
+fn key_bindings_are_dirty(cx: &App) -> bool {
+    let state = KeyBindingsState::global(cx).read(cx);
+    BINDABLE_ACTIONS.iter().any(|action| {
+        state
+            .effective
+            .get(action.id)
+            .map(String::as_str)
+            .unwrap_or_default()
+            != action.default.unwrap_or_default()
+    })
+}
+
+fn reset_all_key_bindings(_window: &mut Window, cx: &mut App) {
+    KeyBindingsState::global(cx).update(cx, |state, cx| {
+        for action in BINDABLE_ACTIONS {
+            state.effective.insert(
+                action.id.to_string(),
+                action.default.unwrap_or_default().to_string(),
+            );
+        }
+        end_capture(state);
+        cx.notify();
+    });
+    save_key_bindings(cx);
+    apply_key_bindings(cx);
+}
+
 /// A key was pressed while capturing → set it as the new binding (Escape cancels;
 /// bare modifiers are ignored; unparseable combinations are ignored). A key
 /// already bound to another action in the same context is rejected and the row
@@ -273,6 +297,11 @@ fn on_capture_key(id: &'static str, ks: &Keystroke, cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capture_target_exposes_text_input_accessibility_role() {
+        assert!(matches!(KEY_CAPTURE_ROLE, Role::TextInput));
+    }
 
     #[test]
     fn default_line_names_the_keystroke_or_unbound() {

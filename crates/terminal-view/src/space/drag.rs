@@ -1,9 +1,9 @@
 //! [`DragTerminalTab`] — the public drag payload for moving a Terminal Tab into
 //! an empty Space.
 //!
-//! gpui-component's own `DragPanel` is `pub(crate)`, so the `ui` crate cannot
-//! intercept the dock's native tab drag. Instead the tab title (rendered by
-//! `TerminalPanel::title`) emits this payload, and an empty Space accepts it.
+//! GPUI Kit 0.6 exposes its native `DragPanel`, but terminal Spaces use a
+//! terminal-specific payload so the drop handler can move a Space-tree view and
+//! render a terminal-title preview without coupling to dock internals.
 //!
 //! See `docs/terminal-split/03-drag-drop.md`.
 
@@ -12,7 +12,6 @@ use gpui::{
     Window, div,
 };
 use gpui_component::ActiveTheme as _;
-use gpui_component::dock::TabPanel;
 
 use super::super::panel::TerminalPanel;
 
@@ -21,8 +20,6 @@ use super::super::panel::TerminalPanel;
 pub struct DragTerminalTab {
     /// The source terminal panel being dragged.
     pub panel: WeakEntity<TerminalPanel>,
-    /// The `TabPanel` the source lives in (to remove it after a successful move).
-    pub tab_panel: WeakEntity<TabPanel>,
     /// The tab label — shown in the small drag preview.
     pub title: SharedString,
 }

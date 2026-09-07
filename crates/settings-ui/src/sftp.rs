@@ -11,8 +11,6 @@ use gpui_component::{
 };
 use oneterm_settings::{EditorMode, TerminalSettings};
 
-use crate::items_with_separators;
-
 const MODE_OS_DEFAULT: &str = "os_default";
 const MODE_CUSTOM: &str = "custom";
 
@@ -34,7 +32,7 @@ fn editor_group(cx: &App) -> SettingGroup {
     SettingGroup::new()
         .title("Editor")
         .description("Which editor the SFTP browser's Edit action opens a remote file with.")
-        .items(items_with_separators(vec![
+        .items(vec![
             SettingItem::new(
                 "Editor",
                 SettingField::dropdown(
@@ -56,7 +54,8 @@ fn editor_group(cx: &App) -> SettingGroup {
                         };
                         update(cx, move |e| e.mode = mode);
                     },
-                ),
+                )
+                .default_value(MODE_OS_DEFAULT),
             )
             .description("OS default opens the associated application; Custom runs your command."),
             SettingItem::new(
@@ -75,7 +74,8 @@ fn editor_group(cx: &App) -> SettingGroup {
                         let program = val.to_string();
                         update(cx, move |e| e.program = program);
                     },
-                ),
+                )
+                .default_value(SharedString::default()),
             )
             .disabled(!is_custom)
             .description("Editor executable (e.g. code, notepad). Used only in Custom mode."),
@@ -98,13 +98,14 @@ fn editor_group(cx: &App) -> SettingGroup {
                             .collect::<Vec<_>>();
                         update(cx, move |e| e.args = args.clone());
                     },
-                ),
+                )
+                .default_value(SharedString::default()),
             )
             .disabled(!is_custom)
             .description(
                 "Arguments passed before the file path (space-separated). Custom mode only.",
             ),
-        ]))
+        ])
 }
 
 /// "Edit" group — the size gate for the Edit action.
@@ -112,7 +113,7 @@ fn edit_group() -> SettingGroup {
     SettingGroup::new()
         .title("Edit")
         .description("Limits for opening remote files for editing.")
-        .items(items_with_separators(vec![
+        .items(vec![
             SettingItem::new(
                 "Max Edit File Size (MB)",
                 SettingField::number_input(
@@ -132,10 +133,11 @@ fn edit_group() -> SettingGroup {
                         let bytes = (val.max(0.0) * BYTES_PER_MB).round() as u64;
                         set_sftp(cx, move |s| s.edit_max_file_size = bytes);
                     },
-                ),
+                )
+                .default_value(1.0),
             )
             .description("Files larger than this prompt before opening. 0 = no limit."),
-        ]))
+        ])
 }
 
 /// Update the live editor config + persist.

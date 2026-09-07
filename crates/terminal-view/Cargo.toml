@@ -27,6 +27,7 @@ oneterm-highlight.workspace = true
 oneterm-completion.workspace = true
 
 gpui.workspace = true
+gpui-base.workspace = true
 gpui-component.workspace = true
 alacritty_terminal.workspace = true
 async-channel.workspace = true

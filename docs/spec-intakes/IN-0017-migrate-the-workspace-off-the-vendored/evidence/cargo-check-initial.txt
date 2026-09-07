@@ -1,0 +1,294 @@
+   Compiling serde_core v1.0.228
+    Checking windows-sys v0.61.2
+    Checking arrayvec v0.7.6
+    Checking fastrand v2.4.1
+   Compiling winnow v1.0.3
+    Checking windows-numerics v0.3.1
+    Checking which v8.0.6
+    Checking either v1.16.0
+   Compiling enumn v0.1.14
+   Compiling gpui-pre-ztracing v0.3.3
+    Checking compression-codecs v0.4.38
+   Compiling derive_more-impl v2.1.1
+    Checking roxmltree v0.21.1
+   Compiling zerocopy v0.8.52
+   Compiling getrandom v0.3.4
+   Compiling gpui-pre-ztracing-macro v0.3.3
+    Checking imagesize v0.14.0
+   Compiling strum_macros v0.28.0
+   Compiling gpui-pre-derive-refineable v0.3.3
+    Checking windows v0.62.2
+    Checking rayon v1.12.0
+    Checking gpui-pre-util v0.3.3
+    Checking futures-lite v2.6.1
+    Checking piper v0.2.5
+    Checking lyon_geom v1.0.19
+    Checking polycool v0.4.0
+    Checking tiny-skia v0.11.4
+    Checking async-compression v0.4.42
+    Checking gpui-pre-collections v0.3.3
+    Checking flume v0.12.0
+    Checking kurbo v0.13.1
+    Checking gpui-pre-zlog v0.3.3
+   Compiling windows-result v0.4.1
+    Checking accesskit v0.24.1
+    Checking lyon_path v1.0.19
+   Compiling windows-strings v0.5.1
+   Compiling ahash v0.8.12
+   Compiling num-traits v0.2.19
+   Compiling linktime-proc-macro v0.2.3
+    Checking link-section v0.19.3
+    Checking gpui-pre-scheduler v0.3.3
+    Checking gpui-pre-shared-string v0.3.3
+    Checking futures-concurrency v7.7.1
+    Checking blocking v1.6.2
+   Compiling windows-registry v0.6.1
+    Checking lyon_tessellation v1.0.20
+   Compiling toml_parser v1.1.2+spec-1.1.0
+    Checking lyon_algorithms v1.0.20
+    Checking taffy v0.13.0
+    Checking gpui-pre-refineable v0.3.3
+    Checking svgtypes v0.16.1
+    Checking itertools v0.14.0
+   Compiling encoding_rs v0.8.35
+   Compiling arraydeque v0.5.1
+   Compiling smallvec v1.15.2
+   Compiling unicode-width v0.2.2
+   Compiling anstyle v1.0.14
+    Checking lyon v1.0.19
+   Compiling gpui-pre-windows v0.3.3
+   Compiling granit-parser v0.0.7
+   Compiling annotate-snippets v0.12.16
+    Checking accesskit_consumer v0.38.0
+    Checking usvg v0.46.0
+    Checking ctor v1.0.13
+    Checking bit-vec v0.8.0
+   Compiling gpui-kit-assets v0.6.0
+   Compiling base64 v0.22.1
+   Compiling nohash-hasher v0.2.0
+    Checking bit-set v0.8.0
+    Checking image v0.25.10
+    Checking kurbo v0.11.3
+    Checking vte v0.15.0 (D:\TrungKFC-Research\Rust\myTerm2\vendor\vte)
+    Checking async-fs v2.2.0
+    Checking fancy-regex v0.16.2
+    Checking async-executor v1.14.0
+    Checking bincode v1.3.3
+    Checking ropey v2.0.0-beta.1
+   Compiling encoding_rs_io v0.1.8
+    Checking strum v0.28.0
+    Checking rust-i18n-support v4.2.1
+   Compiling gpui-component v0.6.0
+    Checking windows v0.58.0
+    Checking itertools v0.13.0
+    Checking rustls-webpki v0.103.13
+    Checking svgtypes v0.15.3
+   Compiling erased-serde v0.4.10
+   Compiling serde_fmt v1.1.0
+   Compiling indexmap v2.14.0
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling serde v1.0.228
+   Compiling serde_spanned v1.1.1
+    Checking resvg v0.46.0
+    Checking usvg v0.45.1
+    Checking rustls v0.23.40
+    Checking derive_more v2.1.1
+   Compiling toml v1.1.2+spec-1.1.0
+    Checking gpui-pre-http-client v0.3.3
+   Compiling value-bag-serde1 v1.12.0
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling triomphe v0.1.15
+   Compiling value-bag v1.12.0
+   Compiling serde_json v1.0.150
+   Compiling toml_edit v0.25.12+spec-1.1.0
+   Compiling toml_edit v0.22.27
+   Compiling log v0.4.32
+   Compiling embed-resource v3.0.9
+   Compiling globset v0.4.18
+   Compiling proc-macro-crate v3.5.0
+   Compiling gpui-pre v0.3.3
+    Checking resvg v0.45.1
+   Compiling oneterm-app v0.4.3 (D:\TrungKFC-Research\Rust\myTerm2\crates\app)
+   Compiling ignore v0.4.26
+   Compiling rust-embed-utils v8.11.0
+   Compiling serde-saphyr v0.0.29
+   Compiling gpui-pre-perf v0.3.3
+   Compiling gpui-pre-macros v0.3.3
+   Compiling gpui-component-macros v0.6.0
+   Compiling rust-embed-impl v8.11.0
+   Compiling gpui-pre-util-macros v0.3.3
+   Compiling globwalk v0.8.1
+   Compiling rust-i18n v4.2.1
+   Compiling toml v0.8.23
+    Checking socket2 v0.6.4
+    Checking mio v1.2.1
+    Checking polling v3.11.0
+    Checking winapi-util v0.1.11
+    Checking nu-ansi-term v0.50.3
+    Checking errno v0.3.14
+    Checking home v0.5.12
+    Checking miow v0.6.1
+    Checking schannel v0.1.29
+    Checking russh-cryptovec v0.61.0
+    Checking anstyle-wincon v3.0.11
+    Checking anstyle-query v1.1.5
+    Checking rustix v1.1.4
+    Checking same-file v1.0.6
+    Checking anstream v1.0.0
+    Checking tracing-subscriber v0.3.23
+    Checking walkdir v2.5.0
+    Checking alacritty_terminal v0.26.1-dev (D:\TrungKFC-Research\Rust\myTerm2\vendor\alacritty_terminal)
+    Checking tokio v1.52.3
+    Checking rustls-native-certs v0.8.4
+    Checking syntect v5.3.0
+    Checking notify v7.0.0
+    Checking env_logger v0.11.11
+    Checking rust-embed v8.11.0
+    Checking async-io v2.6.0
+    Checking async-process v2.5.0
+    Checking async-net v2.0.0
+   Compiling rust-i18n-macro v4.2.1
+    Checking smol v2.0.2
+    Checking gpui-pre-sum-tree v0.3.3
+    Checking oneterm-tools v0.4.3 (D:\TrungKFC-Research\Rust\myTerm2\crates\tools)
+    Checking tokio-util v0.7.18
+    Checking hyper v1.10.1
+    Checking tokio-rustls v0.26.4
+    Checking tower v0.5.3
+    Checking russh-util v0.52.0
+    Checking oneterm-core v0.4.3 (D:\TrungKFC-Research\Rust\myTerm2\crates\core)
+    Checking russh-sftp v2.3.0
+    Checking tower-http v0.6.11
+    Checking hyper-util v0.1.20
+    Checking oneterm-terminal v0.4.3 (D:\TrungKFC-Research\Rust\myTerm2\crates\terminal)
+    Checking oneterm-completion v0.4.3 (D:\TrungKFC-Research\Rust\myTerm2\crates\completion)
+    Checking hyper-rustls v0.27.9
+    Checking oneterm-local-shell v0.4.3 (D:\TrungKFC-Research\Rust\myTerm2\crates\local-shell)
+    Checking reqwest v0.12.28
+    Checking oneterm-update v0.4.3 (D:\TrungKFC-Research\Rust\myTerm2\crates\update)
+    Checking accesskit_windows v0.34.0
+    Checking pageant v0.2.1
+    Checking russh v0.61.2
+    Checking oneterm-ssh v0.4.3 (D:\TrungKFC-Research\Rust\myTerm2\crates\ssh)
+    Checking gpui-pre-platform v0.3.3
+    Checking gpui-base v0.6.0
+    Checking oneterm-settings v0.4.3 (D:\TrungKFC-Research\Rust\myTerm2\crates\settings)
+    Checking oneterm-state v0.4.3 (D:\TrungKFC-Research\Rust\myTerm2\crates\state)
+    Checking oneterm-actions v0.4.3 (D:\TrungKFC-Research\Rust\myTerm2\crates\actions)
+error[E0432]: unresolved imports `gpui_component::dock::DockItem`, `gpui_component::dock::TabPanel`
+ --> crates\state\src\dock_util.rs:9:38
+  |
+9 | use gpui_component::dock::{DockArea, DockItem, TabPanel};
+  |                                      ^^^^^^^^  ^^^^^^^^ no `TabPanel` in `dock`
+  |                                      |
+  |                                      no `DockItem` in `dock`
+
+error[E0599]: no method named `right_dock` found for reference `&DockArea` in the current scope
+   --> crates\state\src\dock_util.rs:22:54
+    |
+ 22 |     let right = cx.read_entity(dock_area, |da, _| da.right_dock().cloned());
+    |                                                      ^^^^^^^^^^
+    |
+help: there is a method `set_dock` with a similar name, but with different arguments
+   --> C:\Users\trunglt\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gpui-base-0.6.0\src\dock\dock_area.rs:275:5
+    |
+275 | /     pub fn set_dock(
+276 | |         &mut self,
+277 | |         placement: DockPlacement,
+278 | |         layout: DockLayout,
+279 | |         window: &mut Window,
+280 | |         cx: &mut Context<Self>,
+281 | |     ) {
+    | |_____^
+
+error[E0599]: no method named `center` found for reference `&DockArea` in the current scope
+   --> crates\state\src\dock_util.rs:35:26
+    |
+ 35 |     visit_item(dock_area.center(), &mut out);
+    |                          ^^^^^^ private field, not a method
+    |
+help: there is a method `set_center` with a similar name, but with different arguments
+   --> C:\Users\trunglt\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gpui-base-0.6.0\src\dock\dock_area.rs:261:5
+    |
+261 |     pub fn set_center(&mut self, layout: DockLayout, window: &mut Window, cx: &mut Context<Self>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no method named `left_dock` found for reference `&DockArea` in the current scope
+   --> crates\state\src\dock_util.rs:37:19
+    |
+ 37 |         dock_area.left_dock(),
+    |                   ^^^^^^^^^
+    |
+help: there is a method `set_dock` with a similar name, but with different arguments
+   --> C:\Users\trunglt\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gpui-base-0.6.0\src\dock\dock_area.rs:275:5
+    |
+275 | /     pub fn set_dock(
+276 | |         &mut self,
+277 | |         placement: DockPlacement,
+278 | |         layout: DockLayout,
+279 | |         window: &mut Window,
+280 | |         cx: &mut Context<Self>,
+281 | |     ) {
+    | |_____^
+
+error[E0599]: no method named `right_dock` found for reference `&DockArea` in the current scope
+   --> crates\state\src\dock_util.rs:38:19
+    |
+ 38 |         dock_area.right_dock(),
+    |                   ^^^^^^^^^^
+    |
+help: there is a method `set_dock` with a similar name, but with different arguments
+   --> C:\Users\trunglt\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gpui-base-0.6.0\src\dock\dock_area.rs:275:5
+    |
+275 | /     pub fn set_dock(
+276 | |         &mut self,
+277 | |         placement: DockPlacement,
+278 | |         layout: DockLayout,
+279 | |         window: &mut Window,
+280 | |         cx: &mut Context<Self>,
+281 | |     ) {
+    | |_____^
+
+    Checking oneterm-theme v0.4.3 (D:\TrungKFC-Research\Rust\myTerm2\crates\theme)
+error[E0599]: no method named `bottom_dock` found for reference `&DockArea` in the current scope
+  --> crates\state\src\dock_util.rs:39:19
+   |
+39 |         dock_area.bottom_dock(),
+   |                   ^^^^^^^^^^^ method not found in `&DockArea`
+
+Some errors have detailed explanations: E0432, E0599.
+For more information about an error, try `rustc --explain E0432`.
+error: could not compile `oneterm-state` (lib) due to 6 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0432]: unresolved import `gpui_component::scroll::ScrollbarShow`
+  --> crates\theme\src\theme.rs:17:44
+   |
+17 | use gpui_component::{Theme, ThemeRegistry, scroll::ScrollbarShow};
+   |                                            ^^^^^^^^^^^^^^^^^^^^^ no `ScrollbarShow` in `scroll`
+   |
+help: a similar name exists in the module
+   |
+17 - use gpui_component::{Theme, ThemeRegistry, scroll::ScrollbarShow};
+17 + use gpui_component::{Theme, ThemeRegistry, scroll::Scrollbar};
+   |
+
+error[E0609]: no field `scrollbar_show` on type `&mut Theme`
+   --> crates\theme\src\theme.rs:171:15
+    |
+171 |         theme.scrollbar_show = ScrollbarShow::Always;
+    |               ^^^^^^^^^^^^^^ unknown field
+    |
+help: a field with a similar name exists
+    |
+171 -         theme.scrollbar_show = ScrollbarShow::Always;
+171 +         theme.scrollbar_mode = ScrollbarShow::Always;
+    |
+help: a field with a similar name exists
+    |
+171 -         theme.scrollbar_show = ScrollbarShow::Always;
+171 +         theme.scrollbar_thumb = ScrollbarShow::Always;
+    |
+
+Some errors have detailed explanations: E0432, E0609.
+error: could not compile `oneterm-theme` (lib) due to 2 previous errors

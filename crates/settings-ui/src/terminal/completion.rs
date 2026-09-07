@@ -9,13 +9,12 @@ use gpui::{App, SharedString};
 use gpui_component::setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem};
 use oneterm_settings::TerminalSettings;
 
-use crate::items_with_separators;
-
 use super::set;
 
 fn count_field(
     get: impl Fn(&App) -> usize + 'static,
     set: impl Fn(usize, &mut App) + 'static,
+    default: usize,
     max: f64,
 ) -> SettingField<f64> {
     SettingField::number_input(
@@ -27,6 +26,7 @@ fn count_field(
         move |cx: &App| get(cx) as f64,
         move |val: f64, cx: &mut App| set(val.max(0.0) as usize, cx),
     )
+    .default_value(default as f64)
 }
 
 /// Build the "Completion" settings group.
@@ -34,7 +34,7 @@ pub(super) fn group() -> SettingGroup {
     SettingGroup::new()
         .title("Completion")
         .description("Command auto-completion overlay + in-session history.")
-        .items(items_with_separators(vec![
+        .items(vec![
             SettingItem::new(
                 "Enable Auto-Completion",
                 SettingField::switch(
@@ -42,7 +42,8 @@ pub(super) fn group() -> SettingGroup {
                     |val: bool, cx: &mut App| {
                         update(cx, move |c| c.enabled = val);
                     },
-                ),
+                )
+                .default_value(true),
             )
             .description("Master switch for the completion overlay + history capture."),
             SettingItem::new(
@@ -50,7 +51,8 @@ pub(super) fn group() -> SettingGroup {
                 SettingField::switch(
                     |cx: &App| TerminalSettings::global(cx).read(cx).completion.accept_tab,
                     |val: bool, cx: &mut App| update(cx, move |c| c.accept_tab = val),
-                ),
+                )
+                .default_value(true),
             )
             .description("When off, Tab is forwarded to the shell."),
             SettingItem::new(
@@ -58,6 +60,7 @@ pub(super) fn group() -> SettingGroup {
                 count_field(
                     |cx| TerminalSettings::global(cx).read(cx).completion.max_history,
                     |v, cx| update(cx, move |c| c.max_history = v),
+                    500,
                     100_000.0,
                 ),
             )
@@ -72,6 +75,7 @@ pub(super) fn group() -> SettingGroup {
                             .min_prefix_len
                     },
                     |v, cx| update(cx, move |c| c.min_prefix_len = v),
+                    1,
                     16.0,
                 ),
             )
@@ -86,6 +90,7 @@ pub(super) fn group() -> SettingGroup {
                             .max_visible_items
                     },
                     |v, cx| update(cx, move |c| c.max_visible_items = v.max(1)),
+                    8,
                     50.0,
                 ),
             )
@@ -101,7 +106,8 @@ pub(super) fn group() -> SettingGroup {
                             .memory
                     },
                     |val: bool, cx: &mut App| update(cx, move |c| c.sources.memory = val),
-                ),
+                )
+                .default_value(true),
             )
             .description("Suggest commands you ran this session."),
             SettingItem::new(
@@ -115,7 +121,8 @@ pub(super) fn group() -> SettingGroup {
                             .manual
                     },
                     |val: bool, cx: &mut App| update(cx, move |c| c.sources.manual = val),
-                ),
+                )
+                .default_value(true),
             )
             .description("Hand-authored bundled catalogs (git, cargo, …)."),
             SettingItem::new(
@@ -129,7 +136,8 @@ pub(super) fn group() -> SettingGroup {
                             .external
                     },
                     |val: bool, cx: &mut App| update(cx, move |c| c.sources.external = val),
-                ),
+                )
+                .default_value(true),
             )
             .description("Generated catalogs (Windows commands, coreutils)."),
             SettingItem::new(
@@ -137,7 +145,8 @@ pub(super) fn group() -> SettingGroup {
                 SettingField::switch(
                     |cx: &App| TerminalSettings::global(cx).read(cx).completion.fuzzy,
                     |val: bool, cx: &mut App| update(cx, move |c| c.fuzzy = val),
-                ),
+                )
+                .default_value(true),
             )
             .description("Secondary subsequence matching."),
             SettingItem::new(
@@ -150,7 +159,8 @@ pub(super) fn group() -> SettingGroup {
                             .disable_in_alt_screen
                     },
                     |val: bool, cx: &mut App| update(cx, move |c| c.disable_in_alt_screen = val),
-                ),
+                )
+                .default_value(true),
             )
             .description("Suppress suggestions in vim/less/htop (alternate screen)."),
             SettingItem::new(
@@ -163,7 +173,8 @@ pub(super) fn group() -> SettingGroup {
                             .windows_allow_coreutils
                     },
                     |val: bool, cx: &mut App| update(cx, move |c| c.windows_allow_coreutils = val),
-                ),
+                )
+                .default_value(false),
             )
             .description(
                 "Also suggest coreutils/linux commands in cmd/PowerShell (Git-Bash users).",
@@ -196,10 +207,11 @@ pub(super) fn group() -> SettingGroup {
                             };
                         });
                     },
-                ),
+                )
+                .default_value(SharedString::default()),
             )
             .description("Override the detected shell family for suggestions."),
-        ]))
+        ])
 }
 
 /// Update the live completion settings + persist.

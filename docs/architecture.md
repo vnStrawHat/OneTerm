@@ -14,7 +14,6 @@ Use this page and `docs/agents/structure.md` when locating current implementatio
 | Shared services | `oneterm-settings` | Persistent terminal and UI settings | `crates/settings/src/lib.rs` |
 | Shared services | `oneterm-state` | App-scoped services, workspace state, typed dock persistence, registered dock panel names, Agent folded model, process-global completion history | `crates/state/src/lib.rs`, `crates/state/src/services.rs`, `crates/state/src/dock_persistence.rs`, `crates/state/src/panel_names.rs`, `crates/state/src/agent_registry.rs`, `crates/state/src/completion_history.rs` |
 | Shared services | `oneterm-update` | GitHub Releases auto-update service, release selection, download, verification, staging, and install orchestration | `crates/update/src/lib.rs`, `crates/update/src/config.rs`, `crates/update/src/github.rs`, `crates/update/src/archive.rs`, `crates/update/src/install.rs` |
-| Vendor patch | `gpui-component` | Pinned upstream UI crate with the reviewed source and standalone-manifest patches | `vendor/README.md`, `vendor/patches/gpui-component/` |
 | Shell | `oneterm-workspace` | Feature-agnostic window, layout, dock persistence, status bar | `crates/workspace/src/lib.rs`, `crates/workspace/src/layout/` |
 | Backend | `oneterm-local-shell` | Local PTY session implementation | `crates/local-shell/src/lib.rs`, `crates/local-shell/src/session_terminal.rs` |
 | Backend | `oneterm-ssh` | SSH shell and SFTP implementations | `crates/ssh/src/lib.rs`, `crates/ssh/src/session_terminal.rs`, `crates/ssh/src/sftp_task.rs`, `crates/ssh/src/sftp_task/`, `crates/ssh/src/sftp_task/transfer/` |
@@ -33,11 +32,10 @@ create sessions through `oneterm_terminal::SessionFactory`; they do not depend o
 `oneterm-ssh` or `oneterm-local-shell`. The workspace shell is feature-agnostic and
 uses command/panel registries rather than importing feature implementations.
 
-`gpui-component` remains an external dependency in every crate manifest. The root
-Cargo `[patch]` redirects that dependency to `vendor/gpui-component`; the vendor
-package is not a OneTerm workspace member and does not create an internal UI layer.
-Shared action contracts stay GPUI-free; only the workspace shell touches
-`gpui_component::dock::DockPlacement`.
+The UI layer uses the published GPUI Kit 0.6 release family: `gpui-pre` is aliased as
+`gpui`, while `gpui-base` and `gpui-component` provide dock behavior and components.
+There is no local patch for this UI layer. Shared action contracts stay GPUI-free;
+only the workspace shell touches `gpui_component::dock::DockPlacement`.
 
 The machine-readable dependency policy and verification commands are in
 [`docs/agents/crate-dependency-rules.md`](agents/crate-dependency-rules.md), and the

@@ -84,7 +84,6 @@ MIT licence text (Windows Terminal):
 |---|---|---|---|---|
 | `vte` 0.15.0 | <https://crates.io/crates/vte> | 0.15.0 | Apache-2.0 OR MIT | `vendor/patches/vte/` |
 | `alacritty_terminal` 0.26.1-dev | <https://github.com/zed-industries/alacritty> | `fcf32feacb367b75ec84dd40f041e4fd411d3cc1` | Apache-2.0 | `vendor/patches/alacritty_terminal/` |
-| `gpui-component` 0.5.2 | <https://github.com/longbridge/gpui-component> | `ea6b194db04cc7c0474851f07c7d5b7a9df6a98b` | Apache-2.0 | `vendor/patches/gpui-component/` |
 
 Each fork is pristine upstream plus the listed patch set (`vendor/README.md`); the
 upstream `LICENSE-*` files are kept inside each vendored tree.

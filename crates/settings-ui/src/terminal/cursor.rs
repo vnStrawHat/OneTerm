@@ -5,8 +5,6 @@ use gpui_component::setting::{SettingField, SettingGroup, SettingItem};
 use oneterm_settings::terminal_settings::{hsla_to_hex, parse_hex_color};
 use oneterm_settings::{TerminalBlink, TerminalCursorShape, TerminalSettings};
 
-use crate::items_with_separators;
-
 use super::set;
 
 /// Build the "Cursor" settings group.
@@ -23,7 +21,7 @@ pub(super) fn group() -> SettingGroup {
     SettingGroup::new()
         .title("Cursor")
         .description("Shape, blink, and color.")
-        .items(items_with_separators(vec![
+        .items(vec![
             SettingItem::new(
                 "Cursor Shape",
                 SettingField::dropdown(
@@ -44,7 +42,8 @@ pub(super) fn group() -> SettingGroup {
                         };
                         set(cx, |s| s.set_cursor_shape(shape));
                     },
-                ),
+                )
+                .default_value("block"),
             )
             .description("Cursor shape."),
             SettingItem::new(
@@ -64,7 +63,8 @@ pub(super) fn group() -> SettingGroup {
                         };
                         set(cx, |s| s.set_cursor_blink(blink));
                     },
-                ),
+                )
+                .default_value(true),
             )
             .description("Blink when focused."),
             SettingItem::new(
@@ -85,8 +85,9 @@ pub(super) fn group() -> SettingGroup {
                         };
                         set(cx, |s| s.cursor_color = color);
                     },
-                ),
+                )
+                .default_value(SharedString::default()),
             )
             .description("Hex color; blank uses theme."),
-        ]))
+        ])
 }

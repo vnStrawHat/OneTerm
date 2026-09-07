@@ -1,804 +1,100 @@
-# GUI Layout — OneTerm
+# GUI layout — current implementation
 
-> **Status (2026-08): historical design record** — the original layout design that
-> the shell was built from. Read it for rationale; for the implemented state read
-> [`architecture.md`](architecture.md) and `crates/workspace/src/layout/`. Known
-> divergences from the text below:
-> - The right dock is **not** a `v_split([Session, SFTP])`: it is a single
->   `DockItem::Panel` — `SshClientPanel` (`crates/app/src/ssh_client_panel.rs`) hosts the
->   Session and SFTP panels in its own vertical resizable split; the Agent Panel is the
->   alternative right-dock mode (`oneterm_core::RightDockMode`,
->   `crates/agent-ui/src/view.rs`).
-> - `MAIN_DOCK_VERSION` is `3` (`crates/workspace/src/layout/workspace/mod.rs`), not `1`.
-> - `docks.json` is not written with `std::fs::write` to `STATE_FILE`: the path comes from
->   `oneterm_state::paths::state_file()` (`config_dir()/docks.json`; `target/docks.json` in
->   debug) and every write goes through the schema-versioned, quarantining
->   `oneterm_state::dock_persistence::update_dock_document` transaction
->   (`crates/state/src/dock_persistence.rs`, `crates/core/src/persistence.rs`; see
->   [`agents/persistence.md`](agents/persistence.md)). The shell saves on layout change and
->   at exit (`crates/workspace/src/layout/workspace/persistence.rs`).
-> - Panels are registered by name in `crates/state/src/panel_names.rs` (R4/R12), not by the
->   `PanelRegistry` sketches in §5.
-> - The status bar also shows network speed, breadcrumb and a CPU/memory indicator
->   (`crates/workspace/src/layout/statusbar.rs`, `crates/workspace/src/widgets/`).
-> - `crates/ui` / `crates/app/src/app.rs` in the sketches are today's `crates/workspace`
->   (shell) and `crates/app/src/lib.rs`.
-> - The app menu has no Language submenu and no `SelectLocale` / `SelectFont` /
->   `AddSession` / `AddSftpBrowser` actions: they were never wired to anything and were
->   removed (HYG-01). Font size is changed from the Appearance settings page.
->
-> Design document for the OneTerm GUI layout, based on the reference
-> `reference/gpui-component/crates/story/examples/dock.rs`.
->
-> All gpui-component APIs are extracted from the reference (see
-> [`docs/agents/dependencies.md` § 5](agents/dependencies.md)), no web_search used.
+This document describes the shipped workspace shell. Historical design sketches live in Git history; current dependency and crate boundaries are in [`architecture.md`](architecture.md) and [`agents/dependencies.md`](agents/dependencies.md).
 
-## Table of contents
+## Frame and ownership
 
-1. [Overview & diagram](#1-overview--diagram)
-2. [Reference → OneTerm mapping](#2-reference--oneterm-mapping)
-3. [DockArea architecture](#3-dockarea-architecture)
-4. [Panel trait — implementation requirements](#4-panel-trait--implementation-requirements)
-5. [Panel serialization registry](#5-panel-serialization-registry)
-6. [Layout state save/load](#6-layout-state-saveload)
-7. [Title bar & App menu bar](#7-title-bar--app-menu-bar)
-8. [Status bar & indicators](#8-status-bar--indicators)
-9. [Resizable behavior](#9-resizable-behavior)
-10. [File structure](#10-file-structure)
-11. [Implementation checklist](#11-implementation-checklist)
+`OneTermWorkspace` (`crates/workspace/src/layout/workspace/`) renders three vertical regions:
 
----
-
-## 1. Overview & diagram
-
-OneTerm keeps the reference `dock.rs` three-block vertical frame:
-**TitleBar → DockArea → StatusBar**, only changing the *contents* of DockArea and
-StatusBar.
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  TitleBar  [OneTerm ▾] [Edit] [Window] [Help]   [⚙][🐙][🔔]      │
-├───────────────────────────────────────────────┬─────────────────┤
-│                                                │                 │
-│   CENTER  (70% width)                          │  RIGHT DOCK     │
-│   ┌──────────────────────────────────────────┐ │  (30% width)    │
-│   │Tab1│Tab2│Tab3│ + │info│zoom│collapse│ ✕  │ │  ┌────────────┐  │
-│   ├──────────────────────────────────────────┤ │  │ Session    │  │
-│   │                                          │ │  │ [placeholder]│  │
-│   │           [Terminal view]                │ │  └────────────┘  │
-│   │      (terminal only, nothing else)       │ │  ↕ v_split       │
-│   │                                          │ │  ┌────────────┐  │
-│   │                                          │ │  │ SFTP       │  │
-│   └──────────────────────────────────────────┘ │  │ [placeholder]│  │
-│                                                │  └────────────┘  │
-│            ↔ resizable center ↔ right_dock    │  [collapse ▸]   │
-├─────────────────────────────────────────────────────────────────┤
-│  🕐 2025-01-15 14:32:07                  [Toggle Right Dock]      │
-└─────────────────────────────────────────────────────────────────┘
+```text
+TitleBar
+DockArea
+StatusBar
 ```
 
-### Finalized design decisions
+The feature-agnostic workspace crate owns the frame, dock layout, dock persistence, right-dock mode switching, and status widgets. Feature crates register their panels by stable names from `oneterm_state::panel_names`; the shell constructs panels through `PanelRegistry` and does not import feature implementations. `oneterm-app` is the composition root and owns the composite SSH Client right-dock panel because it may depend on both Session and SFTP feature crates.
 
-| # | Decision | Rationale |
+## Dock composition
+
+The shell uses the GPUI Kit 0.6 dock tree:
+
+```text
+DockArea (id = "main-dock", version = 3)
+├── Center: DockLayout::v_split
+│   └── DockLayout::tabs
+│       └── one or more TerminalPanel values
+└── Right: DockLayout::tabs
+    └── exactly one mode panel
+        ├── SshClientPanel (SSH Client mode), or
+        └── AgentListView (Agent mode)
+```
+
+`RightDockMode::None` closes the existing right dock without replacing its content. Selecting SSH Client or Agent mode builds the registered panel, replaces the right-dock layout, preserves its width, and opens it.
+
+`SshClientPanel` owns a vertical `v_resizable` split containing `SessionPanel` and `SftpPanel`, each with its own header. The right dock still has a tab-group node internally, but `OneTermDockSkin` suppresses that outer tab bar for the single `ssh_client_panel` or `agent_panel` leaf. Center terminal groups keep the standard GPUI Kit tab chrome.
+
+Layout construction uses `DockLayout::{tabs,v_split}` and `DockArea::{set_center,set_dock,set_dock_size,set_dock_collapsible}`. Runtime traversal uses `DockArea::layout`, `PaneNode`/`PaneRef`, and stable `PanelId`/`NodeId` values. Tab behavior is provided by `TabGroup`; rendering customization is isolated behind `DockSkin`, `DockAreaRenderer`, and `TabGroupRenderer`.
+
+## Settings window
+
+`oneterm-settings-ui` composes the GPUI Kit 0.6 `Settings` widget in a standalone window. It uses `GroupBoxVariant::Outline`, matching the v0.6.0 Settings story so every setting group has the theme border, radius, and content padding supplied by `GroupBox`. Items use GPUI Kit's standard group gap without custom divider rows. Editable fields declare their built-in default or a custom reset handler; GPUI Kit therefore shows the page-level `Reset All` action only while that page differs from its defaults and persists the reset through the same field setters.
+
+Every OneTerm-owned focus target exposes an ID and accessibility role. The Settings root and feature-panel content roots are named `Pane` nodes, the Key Bindings capture target is a `TextInput`, and repository targets are `Link` elements. GPUI Base focuses the host-supplied `DockAreaRenderer`, `TabGroupRenderer`, and `TilesRenderer` frames directly, so `OneTermDockSkin` also assigns pane roles at those seams; this keeps the published dependency unmodified while preventing node-less focus targets. Docked panels return a separate navigation focus proxy to `TabGroup` and forward it to their independently tracked content focus after that frame; a tab-group frame and panel content must never track the same handle because both accessibility nodes would claim focus in one frame.
+
+The upstream sidebar numbers only titled groups, while page scrolling indexes every group. OneTerm therefore keeps untitled groups after all titled groups on a page; the About-page ordering regression protects that alignment without adding a heading to its identity block.
+
+## Panel registration and presentation
+
+The persisted panel-name contract is:
+
+| Name | Owner | Panel |
 |---|---|---|
-| 1 | **Right = `set_right_dock`** (side dock) = `v_split([Session, SFTP])` | Matches "as currently (Image/Icon)" — reference also uses `right_dock` = `v_split([Image, Icon])`. Keeps the native toggle button + collapse/resize. |
-| 2 | **Drop `set_left_dock` and `set_bottom_dock`** entirely | Only need Center (Terminals) + Right (Session/SFTP). StatusBar keeps only toggle Right + datetime. |
-| 3 | **Add Panel menu** → only "New Terminal Tab" + "Show/Hide Dock Toggle Button" | Keeps the "title bar functionality unchanged" spirit, with content rationalized for "terminals only". |
+| `terminal` | `oneterm-terminal-view` | `TerminalPanel` |
+| `session` | `oneterm-session-ui` | `SessionPanel` |
+| `sftp` | `oneterm-sftp-ui` | `SftpPanel` |
+| `ssh_client_panel` | `oneterm-app` | `SshClientPanel` |
+| `agent_panel` | `oneterm-agent-ui` | `AgentListView` |
 
----
+Each registration returns a `panel_handle(...)`, preserving the component-layer `Panel` implementation and tab presentation across the `gpui-base` seam. A bare base panel can compile but would lose its title and controls, so `workspace/layout_tests.rs` verifies all persisted names resolve with their presentation handle.
 
-## 2. Reference → OneTerm mapping
+Panels implement both layers introduced by GPUI Kit 0.6:
 
-| Reference `dock.rs` component | OneTerm | Notes |
-|---|---|---|
-| `StoryWorkspace { title_bar, dock_area, last_layout_state, toggle_button_visible, _save_layout_task }` | `OneTermWorkspace` (rename; `toggle_button_visible` dropped — the toggle-button action was never dispatched) | `crates/workspace/src/layout/workspace/mod.rs` |
-| `AppTitleBar::new("Examples", ...)` | `AppTitleBar::new("OneTerm", ...)` | Change title |
-| `AppMenuBar` (`app_menus.rs`: Appearance/Theme/Language + Edit/Window/Help) | Keep 100% | Themes + Language + Appearance |
-| `FontSizeSelector` (font-size, gutter toggle) | Keep (drop radius/scrollbar/list-highlight) | radius=0px, scrollbar=Scrolling fixed in `theme::init`; list.active_highlight=true fixed; gutter toggle → `TerminalSettings.show_gutter` |
-| `DockArea::new("main-dock", Some(version), window, cx)` | `version = 1` (bump) | Triggers reset prompt when old layout differs from version |
-| Center = `DockItem::v_split` with 19 story tabs | Center = `DockItem::tabs([TerminalPanel, ...])` | Terminal only, nothing else |
-| `set_left_dock(...)` | **Drop** | — |
-| `set_bottom_dock(...)` | **Drop** | — |
-| `set_right_dock(DockItem::v_split([Image, Icon]), Some(px(320.)), true, ...)` | `set_right_dock(DockItem::v_split([Session, Sftp]), Some(px(480.)), true, ...)` | 30% of ~1600px window |
-| `set_dock_collapsible(Edges{left:true,bottom:true,right:true})` | `set_dock_collapsible(Edges{right:true, ..Default::default()})` | Only right_dock remains |
-| `DockAreaState` save/load `STATE_FILE`, version check, reset prompt | Keep | `STATE_FILE = "target/docks.json"` (debug) |
-| `AddPanel` action + dropdown (add random story) | Dropdown only "New Terminal Tab" + "Show/Hide Dock Toggle Button" | Drop Add to Left/Bottom/Right + menu check Sidebar/Dialog/... |
-| StatusBar: 3 toggle buttons (left/bottom/right) | StatusBar: `.left(clock)` + `.right(toggle-right-dock)` | — |
+- `gpui_base::dock::Panel` supplies base identity and layout behavior such as `panel_name`, `zoomable`, and `set_active`.
+- `gpui_component::dock::Panel` supplies presentation behavior such as `tab_name`, `zoom_control`, toolbar/menu content, and `on_added_to(WeakEntity<TabGroup>)`.
 
----
+`TerminalPanel` retains the final empty tab instead of removing it, preserving the tab bar and `+` creation entry point. When sibling tabs exist, terminal close routes remove the panel through `DockArea::remove_panel`. Adding a terminal to a normalized empty center recreates the center `DockLayout`; otherwise it uses `DockArea::add_panel_view`.
 
-## 3. DockArea architecture
+## Zoom
 
-### 3.1 DockItem structure
+Zoom is a tab-group operation. The shell persists the active panel name in the top-level `zoomed_panel` field. On load it finds the tab-group node whose active panel has that name and calls `DockArea::set_zoomed_in(node, ...)`. The `DockArea` reports the current zoom through `zoomed_group`; the shell maps that node back to its active panel name before saving.
 
-```
-DockArea (id="main-dock", version=1)
-├── center:  DockItem::tabs([TerminalPanel, TerminalPanel, ...])
-│            • each tab = 1 Terminal, no other panel added
-│            • zoom/close/info/collapse unchanged (via Panel trait)
-│            • placeholder "No terminal session" when empty
-│
-└── right_dock: DockItem::v_split([
-        DockItem::tab(SessionPanel),    size auto   ← top half
-        DockItem::tab(SftpPanel),                     ← bottom half
-    ])
-    • set_right_dock(panel, Some(window_w * 0.30), true, window, cx)
-    • set_dock_collapsible(Edges{ right:true, .. })
-    • collapse/expand button in corner + toggle button in status bar
-    • v_split resizable (draggable divider between Session/SFTP)
-    • placeholder "No active session" / "No SFTP connection"
-```
+The whole `TerminalPanel` is zoomed, including its internal Space tree and tab-group chrome. Individual terminal Spaces are not dock nodes and are not persisted by the dock layout.
 
-### 3.2 Constructor API (extracted from reference)
+## Persistence
 
-`DockItem` constructors (`reference/.../dock/mod.rs`):
+`oneterm_state::dock_persistence::DockDocument` is the only read/update API for `docks.json`. It owns:
 
-```rust
-// Tabs — center (multiple terminals)
-DockItem::tabs(
-    items: Vec<Arc<dyn PanelView>>,
-    dock_area: &WeakEntity<DockArea>,
-    window: &mut Window, cx: &mut App,
-) -> DockItem
+- `schema_version` (currently `1`),
+- flattened GPUI Kit dock fields (`version`, `center`, and optional side docks),
+- shell-owned `zoomed_panel`, and
+- SFTP-owned `sftp_table_state`.
 
-// Single tab — used for leaf inside v_split
-DockItem::tab<P: Panel>(
-    item: Entity<P>,
-    dock_area: &WeakEntity<DockArea>,
-    window: &mut Window, cx: &mut App,
-) -> DockItem
-// = DockItem::new_tabs(vec![Arc::new(item.clone())], None, ...)
+`MAIN_DOCK_VERSION` remains `3`. GPUI Kit 0.6 retains the shipped JSON container names `"StackPanel"` and `"TabPanel"`; these are persisted schema labels, not current Rust type names. OneTerm preserves the pre-0.6 single-leaf right-dock encoding when saving so older files round-trip without semantic drift.
 
-// Vertical split — right_dock (Session on top, SFTP on bottom)
-DockItem::v_split(
-    items: Vec<DockItem>,
-    dock_area: &WeakEntity<DockArea>,
-    window: &mut Window, cx: &mut App,
-) -> DockItem
-// = DockItem::split(Axis::Vertical, items, ...)
-```
+A loaded document feeds the right-dock layout, width, and open state. Startup intentionally resets the center to one terminal tab while retaining right-dock state and then restores zoom by panel name. Writes use `update_dock_document_at`, preserve `sftp_table_state`, make a backup, and quarantine invalid data rather than overwriting it. See [`agents/persistence.md`](agents/persistence.md) for storage and ownership rules.
 
-DockArea setters (`reference/.../dock/mod.rs`):
+## Status bar
 
-```rust
-dock_area.set_center(center: DockItem, window, cx)
-dock_area.set_right_dock(panel: DockItem, size: Option<Pixels>, open: bool, window, cx)
-dock_area.set_dock_collapsible(edges: Edges<bool>, window, cx)
-dock_area.toggle_dock(placement: DockPlacement, window, cx)   // status bar button
-dock_area.set_toggle_button_visible(visible: bool, cx)
-dock_area.add_panel(panel: Arc<dyn PanelView>, placement, bounds, window, cx)
-dock_area.set_version(version: usize, window, cx)
-dock_area.dump(cx) -> DockAreaState
-dock_area.load(state: DockAreaState, window, cx) -> Result<()>
-```
+The status bar contains the clock, active-terminal network speed, breadcrumb, CPU/memory indicator, and right-dock controls. Terminal-derived widgets resolve the active panel through the dock tree and then the active Space inside `TerminalPanel`; an empty Space yields no terminal metrics.
 
----
+## Source map
 
-## 4. Panel trait — implementation requirements
-
-Terminal/Session/Sftp must implement the `Panel` trait (`reference/.../dock/panel.rs:46`).
-`Panel` requires 3 super-traits: `EventEmitter<PanelEvent> + Render + Focusable`.
-
-### 4.1 Trait signature (abbreviated)
-
-```rust
-pub trait Panel: EventEmitter<PanelEvent> + Render + Focusable {
-    fn panel_name(&self) -> &'static str;                    // ⭐ stable, used for deserialize
-    fn tab_name(&self, cx: &App) -> Option<SharedString> { None }
-    fn title(&mut self, window, cx) -> impl IntoElement { t!("Dock.Unnamed") }
-    fn title_style(&self, cx: &App) -> Option<TitleStyle> { None }
-    fn title_suffix(&mut self, window, cx) -> Option<impl IntoElement> { None }
-    fn closable(&self, cx: &App) -> bool { true }
-    fn zoomable(&self, cx: &App) -> Option<PanelControl> { Some(PanelControl::Menu) }
-    fn visible(&self, cx: &App) -> bool { true }
-    fn set_active(&mut self, active: bool, window, cx) {}
-    fn set_zoomed(&mut self, zoomed: bool, window, cx) {}
-    fn on_added_to(&mut self, tab_panel: WeakEntity<TabPanel>, window, cx) {}
-    fn on_removed(&mut self, window, cx) {}
-    fn dropdown_menu(&mut self, menu: PopupMenu, window, cx) -> PopupMenu { menu }
-    fn toolbar_buttons(&mut self, window, cx) -> Option<Vec<Button>> { None }
-    fn dump(&self, cx: &App) -> PanelState { PanelState::new(self) }
-    fn inner_padding(&self, cx: &App) -> bool { true }
-}
-```
-
-### 4.2 `PanelControl` — controls zoom/menu/toolbar
-
-```rust
-pub enum PanelControl { Both, Menu, Toolbar }
-// Both    → show dropdown menu + toolbar buttons
-// Menu    → dropdown menu only (default)
-// Toolbar → toolbar buttons only
-```
-
-`zoomable` returns `Some(PanelControl::...)` to enable zoom. `None` → zoom disabled.
-Tab panel renders toolbar (zoom/info/close) when `PanelControl::Both | Toolbar`,
-renders dropdown menu when `PanelControl::Both | Menu` (see `tab_panel.rs:479`).
-
-### 4.3 Actions kept as-is
-
-```rust
-// dock/mod.rs
-actions!(dock, [ToggleZoom, ClosePanel]);
-
-// Bind in init()
-KeyBinding::new("shift-escape", ToggleZoom, None)
-KeyBinding::new("ctrl-w", ClosePanel, None)
-```
-
-`TabPanel` handles `ToggleZoom` (fullscreen zoom) and `ClosePanel` (close tab) itself.
-Panel only needs to declare `zoomable()` + `closable()`.
-
-### 4.4 Sample implementation for TerminalPanel
-
-```rust
-pub struct TerminalPanel {
-    focus_handle: FocusHandle,
-    // TODO: TerminalSession handle, scrollback grid, etc.
-}
-
-impl TerminalPanel {
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self { focus_handle: cx.focus_handle() }
-    }
-    pub fn new_entity(window: &mut Window, cx: &mut App) -> Entity<Self> {
-        cx.new(|cx| Self::new(window, cx))
-    }
-}
-
-impl EventEmitter<PanelEvent> for TerminalPanel {}
-impl Focusable for TerminalPanel {
-    fn focus_handle(&self, _: &App) -> FocusHandle { self.focus_handle.clone() }
-}
-
-impl Panel for TerminalPanel {
-    fn panel_name(&self) -> &'static str { "terminal" }
-    fn title(&mut self, _window, _cx) -> impl IntoElement {
-        "Terminal".into()
-    }
-    fn closable(&self, _: &App) -> bool { true }
-    fn zoomable(&self, _: &App) -> Option<PanelControl> { Some(PanelControl::Both) }
-    // dump uses default (PanelState::new) — no auxiliary state yet
-}
-
-impl Render for TerminalPanel {
-    fn render(&mut self, _window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .id("terminal-panel")
-            .size_full()
-            .track_focus(&self.focus_handle)
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_color(cx.theme().muted_foreground)
-            .child("No terminal session. Press Ctrl+N to open.")
-    }
-}
-```
-
-SessionPanel/SftpPanel are similar, change `panel_name` to `"session"`/`"sftp"` and
-the placeholder text.
-
----
-
-## 5. Panel serialization registry
-
-> This section is the result of reading `reference/.../dock/state.rs` + `panel.rs:293` +
-> the `layout.json` fixture. This is the **core** mechanism that must be understood correctly.
-
-### 5.1 Deserialize flow
-
-```
-DockAreaState (JSON)
-    │  dock_area.load(state, window, cx)
-    ▼
-DockArea::load
-    ├── center:     state.center.to_item(dock_area, window, cx)  → DockItem
-    ├── left_dock:  state.left_dock.map(DockState::to_dock)        → Entity<Dock>  (dropped)
-    ├── right_dock: state.right_dock.map(DockState::to_dock)       → Entity<Dock>
-    └── bottom_dock: state.bottom_dock.map(DockState::to_dock)     (dropped)
-```
-
-`DockState::to_dock` (`state.rs:36`) calls `self.panel.to_item(...)` then builds
-`Dock::from_state(placement, size, item, open, ...)`.
-
-### 5.2 `PanelState::to_item` — dispatch by `PanelInfo` (NOT by `panel_name`)
-
-```rust
-// state.rs:168
-match info {
-    PanelInfo::Stack { sizes, axis } => {
-        // RECREATE DockItem::split_with_sizes — NOT via registry
-        // children = self.children.iter().map(|c| c.to_item(...))
-        DockItem::split_with_sizes(axis, items, sizes, dock_area, window, cx)
-    }
-    PanelInfo::Tabs { active_index } => {
-        // RECREATE DockItem::tabs — NOT via registry
-        // If only 1 child → return items[0].clone() (unwrap tab wrapper)
-        DockItem::tabs(items, dock_area, window, cx).active_index(active_index, cx)
-    }
-    PanelInfo::Panel(value) => {
-        // ⭐ ONLY here does it call PanelRegistry::build_panel(panel_name, ...)
-        let view = PanelRegistry::build_panel(&self.panel_name, dock_area, self, &info, window, cx);
-        DockItem::tabs(vec![view.into()], dock_area, window, cx)
-    }
-    PanelInfo::Tiles { metas } => DockItem::tiles(items, metas, dock_area, window, cx),
-}
-```
-
-**Important consequences:**
-
-- The **house structure** (split/tabs/tiles) is **recreated automatically** by gpui-component based on
-  `PanelInfo` — no registration needed.
-- `panel_name = "StackPanel"` / `"TabPanel"` are **only labels** in JSON (used for debug/test);
-  they **do not** go through `PanelRegistry`. `to_item` ignores `panel_name` on the
-  Stack/Tabs/Tiles branches.
-- **Only leaf panels** (`PanelInfo::Panel`) need to be registered via `register_panel`.
-
-### 5.3 JSON structure on save
-
-Right dock of form `DockItem::v_split([tab(Session), tab(Sftp)])` serializes to:
-
-```json
-"right_dock": {
-  "panel": {
-    "panel_name": "StackPanel",
-    "children": [
-      {
-        "panel_name": "TabPanel",
-        "children": [
-          {
-            "panel_name": "session",              // ⭐ LEAF → PanelInfo::Panel
-            "children": [],
-            "info": { "panel": null }
-          }
-        ],
-        "info": { "tabs": { "active_index": 0 } }
-      },
-      {
-        "panel_name": "TabPanel",
-        "children": [ { "panel_name": "sftp", "children": [], "info": { "panel": null } } ],
-        "info": { "tabs": { "active_index": 0 } }
-      }
-    ],
-    "info": { "stack": { "sizes": [...], "axis": 1 } }   // axis 1 = Vertical
-  },
-  "placement": "right",
-  "size": 480.0,
-  "open": true,
-  "resizeable": true
-}
-```
-
-Center of form `DockItem::tabs([TerminalPanel, TerminalPanel])`:
-
-```json
-"center": {
-  "panel_name": "TabPanel",
-  "children": [
-    { "panel_name": "terminal", "children": [], "info": { "panel": null } },
-    { "panel_name": "terminal", "children": [], "info": { "panel": null } }
-  ],
-  "info": { "tabs": { "active_index": 0 } }
-}
-```
-
-### 5.4 `PanelRegistry` — register 3 leaf panels
-
-`panel.rs:293`:
-
-```rust
-pub struct PanelRegistry {
-    items: HashMap<String, Arc<dyn Fn(WeakEntity<DockArea>, &PanelState, &PanelInfo, &mut Window, &mut App) -> Box<dyn PanelView>>>,
-}
-
-pub fn register_panel<F>(cx: &mut App, panel_name: &str, deserialize: F)
-where F: Fn(...) -> Box<dyn PanelView> + 'static
-
-pub fn build_panel(panel_name, dock_area, panel_state, panel_info, window, cx) -> Box<dyn PanelView> {
-    // if in registry → call fn
-    // else → InvalidPanel (shows "The `{}` panel type is not registered")
-}
-```
-
-**OneTerm registers** each panel in the owning feature's `init()` (R12), using
-the shared name constants from `oneterm_state::panel_names` (the single source of
-truth for registered names — never spell the string literal at a call site):
-
-```rust
-use oneterm_state::panel_names;
-
-register_panel(cx, panel_names::TERMINAL, |dock_area, _, _, window, cx| {
-    // `TerminalPanel::open(PanelSpec, ..)` is the panel's single constructor.
-    let spec = PanelSpec::DefaultShell { workspace: Some(dock_area.entity_id()) };
-    Box::new(TerminalPanel::open(spec, window, cx))
-});
-register_panel(cx, panel_names::SESSION, |_, _, _, window, cx| {
-    Box::new(cx.new(|cx| SessionPanel::new(window, cx)))
-});
-register_panel(cx, panel_names::SFTP, |_, _, _, window, cx| {
-    Box::new(cx.new(|cx| SftpPanel::new(window, cx)))
-});
-```
-
-The current constants are `TERMINAL`, `SFTP`, `SESSION`, `SSH_CLIENT`, `AGENT`
-(see `crates/state/src/panel_names.rs`).
-The shell's `build_named_panel` logs an error naming the missing panel when a
-requested name is not registered (stale saved layout / feature `init()` not run).
-
-These panels initially have **no auxiliary state** (only placeholder) so they ignore `PanelInfo`
-— the constructor returns a fresh panel.
-
-> `PanelRegistry::init` is already called by `gpui_component::init(cx)` (`mod.rs:27`).
-> No need to call it again.
-
-### 5.5 `Panel::dump` — leaf panel serializes itself
-
-Default (`panel.rs`):
-
-```rust
-fn dump(&self, cx: &App) -> PanelState {
-    PanelState::new(self)   // panel_name + info = PanelInfo::Panel(Null)
-}
-```
-
-When TerminalPanel has state (host_id, cwd, scrollback hash...) — override:
-
-```rust
-fn dump(&self, _cx: &App) -> PanelState {
-    let mut s = PanelState::new(self);
-    s.info = PanelInfo::panel(serde_json::json!({
-        "host_id": self.host_id,
-        "cwd": self.cwd,
-    }));
-    s
-}
-```
-
-and parse in the registry constructor:
-
-```rust
-register_panel(cx, "terminal", |_, _, info, window, cx| {
-    let value = match info { PanelInfo::Panel(v) => v.clone(), _ => json!(null) };
-    Box::new(cx.new(|cx| TerminalPanel::restore(value, window, cx)))
-});
-```
-
-This pattern mirrors `StoryContainer::dump` + `StoryState::to_value`/`from_value`
-in `reference/.../story/src/lib.rs:603,242`.
-
-### 5.6 Version check
-
-`state.rs:8`:
-
-```rust
-#[serde(default)]
-pub version: Option<usize>,
-```
-
-`dock.rs` `load_layout` compares `state.version != Some(MAIN_DOCK_AREA.version)` →
-prompts "reset to default?". OneTerm sets `version = 1`, bumps it when the panel structure
-changes in a way that invalidates old JSON (e.g. changing `panel_name`, adding a required field).
-
----
-
-## 6. Layout state save/load
-
-Keep the `dock.rs` mechanism as-is. Place it in `OneTermWorkspace` (`app/src/app.rs` or
-`ui/src/layout/workspace.rs`).
-
-### 6.1 Constants
-
-```rust
-const MAIN_DOCK_AREA: DockAreaTab = DockAreaTab { id: "main-dock", version: 1 };
-
-#[cfg(debug_assertions)]
-const STATE_FILE: &str = "target/docks.json";
-#[cfg(not(debug_assertions))]
-const STATE_FILE: &str = "docks.json";
-```
-
-### 6.2 Constructor — load or reset
-
-```rust
-impl OneTermWorkspace {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let dock_area = cx.new(|cx| DockArea::new(MAIN_DOCK_AREA.id, Some(MAIN_DOCK_AREA.version), window, cx));
-        let weak_dock_area = dock_area.downgrade();
-
-        match Self::load_layout(dock_area.clone(), window, cx) {
-            Ok(_) => println!("load layout success"),
-            Err(err) => {
-                eprintln!("load layout error: {:?}", err);
-                Self::reset_default_layout(weak_dock_area, window, cx);
-            }
-        };
-
-        // Subscribe DockEvent::LayoutChanged → save_layout (debounce 10s)
-        cx.subscribe_in(&dock_area, window, |this, dock_area, ev: &DockEvent, window, cx| match ev {
-            DockEvent::LayoutChanged => this.save_layout(dock_area, window, cx),
-            _ => {}
-        }).detach();
-
-        // Save layout at exit — synchronously (gpui does not await detached
-        // background tasks during shutdown). `on_app_quit` covers Quit while
-        // the window is open; `on_release` covers closing the window, which
-        // drops the root view before `cx.quit()`. The first to run writes.
-        cx.on_app_quit(|this, cx| { this.save_layout_on_exit("on_app_quit", cx); async {} }).detach();
-        cx.on_release(|this, cx| this.save_layout_on_exit("on_close", cx)).detach();
-
-        let title_bar = cx.new(|cx| AppTitleBar::new("OneTerm", window, cx).child(...));
-
-        Self { dock_area, title_bar, last_layout_state: None, zoomed_panel: None, layout_saved_on_exit: false, _save_layout_task: None, .. }
-    }
-}
-```
-
-### 6.3 `save_layout` — debounce 10s, skip when unchanged
-
-```rust
-fn save_layout(&mut self, dock_area: &Entity<DockArea>, window: &mut Window, cx: &mut Context<Self>) {
-    let dock_area = dock_area.clone();
-    self._save_layout_task = Some(cx.spawn_in(window, async move |story, window| {
-        window.background_executor().timer(Duration::from_secs(10)).await;
-        _ = story.update_in(window, move |this, _, cx| {
-            let state = dock_area.read(cx).dump(cx);
-            if Some(&state) == this.last_layout_state.as_ref() { return; }
-            Self::save_state(&state).unwrap();
-            this.last_layout_state = Some(state);
-        });
-    }));
-}
-
-fn save_state(state: &DockAreaState) -> Result<()> {
-    let json = serde_json::to_string_pretty(state)?;
-    std::fs::write(STATE_FILE, json)?;
-    Ok(())
-}
-```
-
-### 6.4 `load_layout` — version check + reset prompt
-
-```rust
-fn load_layout(dock_area: Entity<DockArea>, window: &mut Window, cx: &mut Context<Self>) -> Result<()> {
-    let json = std::fs::read_to_string(STATE_FILE)?;
-    let state = serde_json::from_str::<DockAreaState>(&json)?;
-
-    if state.version != Some(MAIN_DOCK_AREA.version) {
-        let answer = window.prompt(
-            PromptLevel::Info,
-            "The default main layout has been updated.\nDo you want to reset the layout to default?",
-            None, &["Yes", "No"], cx,
-        );
-        let weak_dock_area = dock_area.downgrade();
-        cx.spawn_in(window, async move |this, window| {
-            if answer.await == Ok(0) {
-                _ = this.update_in(window, |_, window, cx| Self::reset_default_layout(weak_dock_area, window, cx));
-            }
-        }).detach();
-    }
-
-    dock_area.update(cx, |dock_area, cx| {
-        dock_area.load(state, window, cx).context("load layout")?;
-        dock_area.set_dock_collapsible(Edges { right: true, ..Default::default() }, window, cx);
-        Ok::<(), anyhow::Error>(())
-    })
-}
-```
-
-### 6.5 `reset_default_layout` — build the default OneTerm layout
-
-```rust
-fn reset_default_layout(dock_area: WeakEntity<DockArea>, window: &mut Window, cx: &mut App) {
-    let weak = dock_area.clone();
-
-    let center = DockItem::tabs(
-        vec![ Arc::new(TerminalPanel::open(PanelSpec::DefaultShell { workspace: None }, window, cx)) ],
-        &weak, window, cx,
-    );
-
-    let right = DockItem::v_split(
-        vec![
-            DockItem::tab(SessionPanel::new_entity(window, cx), &weak, window, cx),
-            DockItem::tab(SftpPanel::new_entity(window, cx),   &weak, window, cx),
-        ],
-        &weak, window, cx,
-    );
-
-    _ = dock_area.update(cx, |view, cx| {
-        view.set_version(MAIN_DOCK_AREA.version, window, cx);
-        view.set_center(center, window, cx);
-        view.set_right_dock(right, Some(px(480.)), true, window, cx);  // 30% of 1600
-        view.set_dock_collapsible(Edges { right: true, ..Default::default() }, window, cx);
-        Self::save_state(&view.dump(cx)).unwrap();
-    });
-}
-```
-
----
-
-## 7. Title bar & App menu bar
-
-### 7.1 Keep `AppTitleBar` + `AppMenuBar` as-is
-
-- `AppTitleBar::new("OneTerm", window, cx)` — structure unchanged (`title_bar.rs`).
-- `AppMenuBar` via `app_menus::init(title, cx)` (`app_menus.rs`):
-  - "OneTerm" menu: About, Open..., Appearance (Light/Dark), **Theme submenu**
-    (list from `ThemeRegistry::global(cx).sorted_themes()`), Language, Quit.
-  - Edit: Undo/Redo/Cut/Copy/Paste/Find/SelectAll.
-  - Window: Toggle Search.
-  - Help: Documentation, Open Website.
-- `cx.observe_global::<Theme>` → refresh menu check-state when theme changes.
-- `FontSizeSelector` (font-size, gutter toggle) — keep; drop radius/scrollbar (default radius=0px, scrollbar=Scrolling fixed in `theme::init`) and list highlight (default active_highlight=true, not toggleable). Gutter toggle changes the global `TerminalSettings.show_gutter`.
-
-### 7.2 Theme system — keep 100%
-
-- `Theme::global_mut(cx)` + `ThemeRegistry` + `SwitchTheme`/`SwitchThemeMode` action.
-- Register themes via `crates/ui/src/theme.rs` (pattern like `reference/.../story/src/themes.rs`).
-- No hardcoded colors — read from `cx.theme()`.
-
-### 7.3 Add Panel dropdown — simplified
-
-Child of `AppTitleBar` (replacing the random-story "add-panel" button):
-
-```rust
-AppTitleBar::new("OneTerm", window, cx).child(move |_, cx| {
-    Button::new("add-panel")
-        .icon(IconName::LayoutDashboard)
-        .small()
-        .ghost()
-        .dropdown_menu(move |menu, _, cx| {
-            menu.menu("New Terminal Tab", Box::new(AddPanel))
-                .separator()
-                .menu("Show / Hide Dock Toggle Button", Box::new(ToggleDockToggleButton))
-        })
-        .anchor(Anchor::TopRight)
-})
-```
-
-`on_action_add_panel` only adds a TerminalPanel:
-
-```rust
-fn on_action_add_panel(&mut self, action: &AddPanel, window, cx) {
-    let panel = Arc::new(TerminalPanel::open(PanelSpec::DefaultShell { workspace: None }, window, cx));
-    self.dock_area.update(cx, |dock_area, cx| {
-        dock_area.add_panel(panel, action.0, None, window, cx);
-    });
-}
-```
-
----
-
-## 8. Status bar & indicators
-
-### 8.1 StatusBar wiring
-
-```rust
-StatusBar::new()
-    .left(datetime_clock(window, cx))                        // left corner: clock
-    .right(
-        Button::new("toggle-right-dock").ghost().xsmall()
-            .icon(IconName::PanelRight)
-            .tooltip("Toggle Right Dock")
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.dock_area.update(cx, |area, cx| {
-                    area.toggle_dock(DockPlacement::Right, window, cx);
-                });
-            }))
-    )
-```
-
-> `StatusBar` (`reference/.../ui/src/status_bar.rs`): `.left(...)` pins left,
-> `.right(...)` pins right, `.child(...)` adds center. With both left+right → center
-> justify_center; left only → center justify_end.
-
-### 8.2 Status-bar indicators
-
-Every status-bar indicator is one `StatusText`
-(`crates/workspace/src/widgets/status_text.rs`): an `Entity` + `Render` holding a
-`Task` that ticks on an interval, calls a sampler closure for the text (`None`
-hides the indicator), and re-renders only when the text changed. The four
-indicators (`datetime_clock`, `breadcrumb`, `net_speed`, `resource`) are just
-constructors supplying an element id, an interval, and a sampler.
-
-The timer spawns on the window context (`cx.spawn_in`) so it fires regardless of
-focus.
-
----
-
-## 9. Resizable behavior
-
-GPUI Dock handles resize itself — **no extra code needed**:
-
-- **Center ↔ right_dock**: draggable vertical divider between the two regions. right_dock width
-  initialized to `Some(px(480.))`, user drags to change at runtime → saved into
-  `DockState.size`.
-- **v_split inside right_dock** (Session ↔ SFTP): `DockItem::v_split` creates a
-  `StackPanel` with Vertical axis, draggable horizontal divider. `sizes` auto (50/50) or
-  set via `DockItem::split_with_sizes`. Drag changes → saved into
-  `PanelInfo::Stack.sizes`.
-- **Collapse/expand right_dock**: arrow button in the right_dock corner (from
-  `set_dock_collapsible(Edges{right:true})`) + toggle button in status bar
-  (`toggle_dock(DockPlacement::Right)`).
-
-Tab panel also has toolbar zoom (ToggleZoom → temporary fullscreen) + close (ClosePanel).
-
----
-
-## 10. File structure
-
-Per [`docs/agents/structure.md`](agents/structure.md):
-
-| File | Responsibility |
-|---|---|
-| `crates/app/src/main.rs` | Entry point — calls `run_app()` |
-| `crates/app/src/app.rs` | `OneTermWorkspace` (title_bar, dock_area, save_layout, reset_default_layout) |
-| `crates/app/src/window.rs` | `new_local`, `WindowOptions`, titlebar options |
-| `crates/app/src/actions.rs` | Global actions / key bindings |
-| `crates/ui/src/lib.rs` | Re-exports + `init(cx)` (calls `register_panel`) |
-| `crates/ui/src/root.rs` | Root view wrapper |
-| `crates/ui/src/theme.rs` | Theme registration (pattern `themes.rs`) |
-| `crates/ui/src/layout/workspace.rs` | `OneTermWorkspace::render` (title_bar + dock_area + status_bar) |
-| `crates/ui/src/layout/statusbar.rs` | StatusBar wiring |
-| `crates/ui/src/views/terminal/terminal_panel.rs` | `TerminalPanel` `impl Panel` + placeholder |
-| `crates/ui/src/views/session_tabs/tabs.rs` | `SessionPanel` `impl Panel` + placeholder |
-| `crates/ui/src/views/sftp/file_browser.rs` | `SftpPanel` `impl Panel` + placeholder |
-| `crates/workspace/src/widgets/status_text.rs` | `StatusText` (clock, breadcrumb, net speed, resources) |
-| `crates/ui/src/state/app_state.rs` | `AppState` |
-
----
-
-## 11. Implementation checklist
-
-### Step 1 — Skeleton & registration
-
-- [ ] Create the `OneTermWorkspace` struct (copy fields from `StoryWorkspace`).
-- [ ] `register_panel("terminal"/"session"/"sftp", ...)` in `ui::init`.
-- [ ] Constants `MAIN_DOCK_AREA.version = 1`, `STATE_FILE`.
-
-### Step 2 — Panels (placeholder)
-
-- [ ] `TerminalPanel`: `impl Panel + Render + Focusable + EventEmitter<PanelEvent>`,
-      `panel_name = "terminal"`, placeholder "No terminal session...".
-- [ ] `SessionPanel`: `panel_name = "session"`, placeholder "No active session...".
-- [ ] `SftpPanel`: `panel_name = "sftp"`, placeholder "No SFTP connection...".
-- [ ] Helper `new_entity(window, cx) -> Entity<Self>` for each panel.
-
-### Step 3 — Layout wiring
-
-- [ ] `reset_default_layout`: center = tabs([TerminalPanel]), right_dock = v_split([Session, Sftp]).
-- [ ] `set_dock_collapsible(Edges{right:true, ..})`.
-- [ ] `load_layout` + version check + reset prompt.
-- [ ] `save_layout` (debounce) + `save_state` + synchronous exit save (`on_app_quit` / `on_release`).
-
-### Step 4 — Title bar & menu
-
-- [ ] `AppTitleBar::new("OneTerm", ...)` keep structure.
-- [ ] `app_menus::init` (Appearance/Theme/Language/Edit/Window/Help) — keep.
-- [ ] `FontSizeSelector` — keep (only font-size + Gutter toggle; radius=0px & scrollbar=Scrolling fixed; list.active_highlight=true fixed).
-- [ ] Add Panel dropdown → "New Terminal Tab" + "Show/Hide Dock Toggle Button".
-- [ ] `on_action_add_panel` → only adds TerminalPanel.
-
-### Step 5 — Status bar
-
-- [ ] Clock indicator (chrono, 1s timer).
-- [ ] `StatusBar::new().left(clock).right(toggle-right-dock button)`.
-- [ ] Add `chrono` to `crates/ui/Cargo.toml`.
-
-### Step 6 — Window & entry
-
-- [ ] `new_local`: WindowOptions, titlebar options, `Root::new(OneTermWorkspace, ...)`.
-- [ ] `main()`: `gpui_platform::application().with_assets(Assets).run(...)`.
-
-### Step 7 — Quality gate
-
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
-- [ ] `cargo build --workspace`
-
-### Version bump notes
-
-Bump `MAIN_DOCK_AREA.version` (1 → 2 → ...) when:
-- Changing the `panel_name` of a leaf panel.
-- Adding a required field to `Panel::dump` that breaks deserializing old JSON.
-- Changing the dock structure (e.g. re-adding left_dock).
+- Workspace state and zoom: `crates/workspace/src/layout/workspace/mod.rs`
+- Default/reset layouts: `crates/workspace/src/layout/workspace/layout.rs`
+- Add-panel and right-mode actions: `crates/workspace/src/layout/workspace/actions.rs`
+- GPUI Kit rendering seam: `crates/workspace/src/layout/workspace/dock_skin.rs`
+- Persistence compatibility: `crates/workspace/src/layout/workspace/persistence.rs`
+- Shared dock traversal: `crates/state/src/dock_util.rs`
+- Persisted document owner: `crates/state/src/dock_persistence.rs`
+- Registered names: `crates/state/src/panel_names.rs`
+- Focused layout regressions: `crates/workspace/src/layout/workspace/layout_tests.rs`

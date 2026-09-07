@@ -30,7 +30,7 @@ clear design smell), **Low** (polish, consistency, minor risk).
 
 **Health check (mechanical, run 2026-08-17):** `cargo clippy --workspace --all-targets -D warnings` clean;
 `cargo test --workspace` green (~590 tests); `verify-dependency-graph.py`, `check-doc-paths.py`,
-`check-english.py`, `check-ui-fork.py` all pass. The declared crate rules R1–R12 hold in `cargo tree`.
+`check-english.py` and the then-current UI-fork baseline check all passed. The declared crate rules R1–R12 hold in `cargo tree`.
 
 **Overall:** the project is in good shape structurally — the layered workspace (domain → engine →
 shared → shell/features/backends → app) is real, not aspirational; the persistence layer, host-key

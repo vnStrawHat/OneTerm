@@ -47,7 +47,11 @@ pub(crate) const GROUP_ID_PREFIX: &str = "group:";
 ///
 /// `panel_name = "session"`.
 pub struct SessionPanel {
+    /// Focus target for the Session content itself.
     pub(crate) focus_handle: FocusHandle,
+    /// Focus proxy owned by a containing dock tab group.
+    dock_focus_handle: FocusHandle,
+    _dock_focus_subscription: gpui::Subscription,
     pub(crate) store: Entity<SshSessionStore>,
     pub(crate) tree_state: Entity<TreeState>,
     /// Search input state — filters sessions by label/host/user/group.
@@ -103,14 +107,28 @@ impl SessionPanel {
         })
         .detach();
 
+        let focus_handle = cx.focus_handle();
+        let dock_focus_handle = cx.focus_handle();
+        let dock_focus_subscription =
+            cx.on_focus(&dock_focus_handle, window, |this, window, cx| {
+                this.focus_handle.focus(window, cx);
+            });
+
         Self {
-            focus_handle: cx.focus_handle(),
+            focus_handle,
+            dock_focus_handle,
+            _dock_focus_subscription: dock_focus_subscription,
             store,
             tree_state,
             search_state,
             search_debounce_task: None,
             right_clicked_ix: Rc::new(Cell::new(None)),
         }
+    }
+
+    /// Content focus used by the SSH Client composite after its dock proxy is focused.
+    pub fn content_focus_handle(&self) -> FocusHandle {
+        self.focus_handle.clone()
     }
 
     /// Helper to create an `Entity<Self>`.
@@ -216,24 +234,26 @@ impl EventEmitter<PanelEvent> for SessionPanel {}
 
 impl Focusable for SessionPanel {
     fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.focus_handle.clone()
+        self.dock_focus_handle.clone()
     }
 }
 
-impl Panel for SessionPanel {
+impl gpui_base::dock::Panel for SessionPanel {
     fn panel_name(&self) -> &'static str {
         "session"
-    }
-
-    fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        "Session"
     }
 
     fn closable(&self, _: &App) -> bool {
         true
     }
+}
 
-    fn zoomable(&self, _: &App) -> Option<PanelControl> {
+impl Panel for SessionPanel {
+    fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        "Session"
+    }
+
+    fn zoom_control(&self, _: &App) -> Option<PanelControl> {
         Some(PanelControl::Both)
     }
 }

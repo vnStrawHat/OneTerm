@@ -4,8 +4,6 @@ use gpui::{App, SharedString};
 use gpui_component::setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem};
 use oneterm_settings::{SemanticHighlightingMode, TabTitleMode, TerminalSettings};
 
-use crate::items_with_separators;
-
 use super::set;
 
 /// Build the "Layout" settings group.
@@ -13,7 +11,7 @@ pub(super) fn group() -> SettingGroup {
     SettingGroup::new()
         .title("Layout")
         .description("Gutter and scrollback.")
-        .items(items_with_separators(vec![
+        .items(vec![
             SettingItem::new(
                 "Show Gutter",
                 SettingField::switch(
@@ -21,7 +19,8 @@ pub(super) fn group() -> SettingGroup {
                     |val: bool, cx: &mut App| {
                         set(cx, |s| s.show_gutter = val);
                     },
-                ),
+                )
+                .default_value(false),
             )
             .description("Show line gutter."),
             SettingItem::new(
@@ -49,7 +48,8 @@ pub(super) fn group() -> SettingGroup {
                         };
                         set(cx, |s| s.semantic_highlighting = mode);
                     },
-                ),
+                )
+                .default_value("auto"),
             )
             .description("Highlight paths, commands, and URLs."),
             SettingItem::new(
@@ -81,7 +81,8 @@ pub(super) fn group() -> SettingGroup {
                         };
                         set(cx, |s| s.tab_title_mode = mode);
                     },
-                ),
+                )
+                .default_value("default"),
             )
             .description("Choose static or shell title."),
             SettingItem::new(
@@ -96,8 +97,9 @@ pub(super) fn group() -> SettingGroup {
                     |val: f64, cx: &mut App| {
                         set(cx, |s| s.scrollback_history = val as usize);
                     },
-                ),
+                )
+                .default_value(10_000.0),
             )
             .description("Max scrollback lines."),
-        ]))
+        ])
 }

@@ -3,7 +3,8 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Context, InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled, Window, div,
+    Context, InteractiveElement as _, IntoElement, ParentElement as _, Render, Role,
+    StatefulInteractiveElement as _, Styled, Window, div,
 };
 use gpui_component::{ActiveTheme as _, Sizable as _, h_flex, input::Input, menu::ContextMenuExt};
 
@@ -89,6 +90,8 @@ impl Render for SessionPanel {
 
         div()
             .id("session-panel")
+            .role(Role::Pane)
+            .aria_label("Sessions")
             .size_full()
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_new_session))

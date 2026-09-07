@@ -14,7 +14,7 @@ use oneterm_core::{
 };
 use oneterm_settings::TerminalSettings;
 
-use crate::{items_with_separators, terminal::set};
+use crate::terminal::set;
 
 /// Build the "SSH" settings page.
 pub(crate) fn page() -> SettingPage {
@@ -29,13 +29,14 @@ fn group() -> SettingGroup {
     SettingGroup::new()
         .title("Connection")
         .description("Keepalive settings applied to newly opened SSH sessions.")
-        .items(items_with_separators(vec![
+        .items(vec![
             SettingItem::new(
                 "Enable Keepalive",
                 SettingField::switch(
                     |cx: &App| TerminalSettings::global(cx).read(cx).ssh.keepalive_enabled,
                     |value, cx| set(cx, move |settings| settings.ssh.keepalive_enabled = value),
-                ),
+                )
+                .default_value(oneterm_settings::SshSettingsConfig::default().keepalive_enabled),
             )
             .description("Detect peers or network paths that stop responding."),
             SettingItem::new(
@@ -60,6 +61,9 @@ fn group() -> SettingGroup {
                             );
                         });
                     },
+                )
+                .default_value(
+                    oneterm_settings::SshSettingsConfig::default().keepalive_interval_secs as f64,
                 ),
             )
             .description("Seconds between keepalive requests."),
@@ -78,8 +82,9 @@ fn group() -> SettingGroup {
                                 .clamp(MIN_SSH_KEEPALIVE_MAX, MAX_SSH_KEEPALIVE_MAX);
                         });
                     },
-                ),
+                )
+                .default_value(oneterm_settings::SshSettingsConfig::default().keepalive_max as f64),
             )
             .description("Unanswered requests tolerated before the connection is closed."),
-        ]))
+        ])
 }

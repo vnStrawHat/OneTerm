@@ -2,17 +2,17 @@
 //! switching and the load → reset-center → save round trip against an
 //! isolated `docks.json`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext, px};
-use gpui_component::dock::{DockArea, DockAreaState, DockItem};
+use gpui::{Entity, TestAppContext, VisualTestContext, px};
+use gpui_component::dock::{DockArea, DockAreaState, DockLayout, DockPlacement, PanelHandle};
 use oneterm_actions::RightDockMode;
 use oneterm_core::SftpTableState;
 use oneterm_state::dock_persistence::{read_dock_document_from, update_dock_document_at};
 use oneterm_state::panel_names;
 
 use super::test_panels::{NamedPanel, register_test_panels};
-use super::{MAIN_DOCK_VERSION, OneTermWorkspace, layout, persistence};
+use super::{MAIN_DOCK_VERSION, OneTermWorkspace, layout, persistence, restore_zoom_in_dock};
 
 /// Removes the per-test directory when the test ends — on failure too.
 struct TempDirGuard(std::path::PathBuf);
@@ -46,14 +46,39 @@ fn dock_area(cx: &mut TestAppContext) -> (Entity<DockArea>, &mut VisualTestConte
     })
 }
 
+fn set_right_dock(
+    dock_area: &Entity<DockArea>,
+    panel_name: &'static str,
+    size: gpui::Pixels,
+    open: bool,
+    cx: &mut VisualTestContext,
+) {
+    dock_area.update_in(cx, |dock_area, window, cx| {
+        let layout = DockLayout::tabs().panel_view(NamedPanel::view(panel_name, cx), cx);
+        dock_area.set_dock(DockPlacement::Right, layout, window, cx);
+        dock_area.set_dock_size(DockPlacement::Right, size, window, cx);
+        if dock_area.is_dock_open(DockPlacement::Right) != open {
+            dock_area.toggle_dock(DockPlacement::Right, window, cx);
+        }
+    });
+}
+
 /// `(size, open, panel name)` of the right dock.
 fn right_dock(dock_area: &Entity<DockArea>, cx: &mut VisualTestContext) -> (f32, bool, String) {
     dock_area.read_with(cx, |dock_area, cx| {
-        let dock = dock_area.right_dock().expect("right dock").read(cx);
+        let tree = dock_area.layout(DockPlacement::Right).expect("right dock");
+        let panel = tree
+            .panels()
+            .next()
+            .and_then(|id| dock_area.panel(id))
+            .expect("right dock panel");
         (
-            dock.size().as_f32(),
-            dock.is_open(),
-            dock.panel().view().panel_name(cx).to_string(),
+            dock_area
+                .dock_size(DockPlacement::Right)
+                .expect("right dock size")
+                .as_f32(),
+            dock_area.is_dock_open(DockPlacement::Right),
+            panel.panel_name(cx).to_string(),
         )
     })
 }
@@ -61,12 +86,32 @@ fn right_dock(dock_area: &Entity<DockArea>, cx: &mut VisualTestContext) -> (f32,
 /// TEST-20: switching the right-dock mode swaps the panel, keeps the dock
 /// width, forces the dock open for SSH Client / Agent, and only hides it for None.
 #[gpui::test]
+fn every_persisted_panel_name_resolves_with_its_presentation_handle(cx: &mut TestAppContext) {
+    let (dock_area, cx) = dock_area(cx);
+    for name in [
+        panel_names::TERMINAL,
+        panel_names::SFTP,
+        panel_names::SESSION,
+        panel_names::SSH_CLIENT,
+        panel_names::AGENT,
+    ] {
+        let panel = cx.update(|window, cx| {
+            super::build_named_panel(name, &dock_area.downgrade(), window, cx)
+                .expect("test panel is registered")
+        });
+        let title = cx.update(|_, cx| {
+            PanelHandle::of(&panel)
+                .expect("registered panel must stay wrapped")
+                .tab_name(cx)
+        });
+        assert_eq!(title.as_deref(), Some(format!("{name} title").as_str()));
+    }
+}
+
+#[gpui::test]
 fn switch_right_dock_mode_swaps_panel_and_keeps_width(cx: &mut TestAppContext) {
     let (dock_area, cx) = dock_area(cx);
-    dock_area.update_in(cx, |dock_area, window, cx| {
-        let panel = DockItem::panel(NamedPanel::view(panel_names::SSH_CLIENT, cx));
-        dock_area.set_right_dock(panel, Some(px(333.)), false, window, cx);
-    });
+    set_right_dock(&dock_area, panel_names::SSH_CLIENT, px(333.), false, cx);
     assert_eq!(
         right_dock(&dock_area, cx),
         (333., false, panel_names::SSH_CLIENT.to_string())
@@ -80,7 +125,6 @@ fn switch_right_dock_mode_swaps_panel_and_keeps_width(cx: &mut TestAppContext) {
         (333., true, panel_names::AGENT.to_string())
     );
 
-    // None hides the dock without rebuilding its content.
     cx.update(|window, cx| {
         OneTermWorkspace::switch_right_dock_mode(&dock_area, RightDockMode::None, window, cx)
     });
@@ -99,15 +143,87 @@ fn switch_right_dock_mode_swaps_panel_and_keeps_width(cx: &mut TestAppContext) {
     );
 }
 
-/// TEST-20: a saved layout is loaded, the center reset to one terminal tab
-/// while the right dock keeps its width and collapsed state, and the result
-/// is written back — with the zoom cleared and the SFTP field preserved.
+/// A pre-migration layout keeps its panel tree, active tabs, dock size/open
+/// state, and legacy single-panel right-dock encoding across load and save.
+#[gpui::test]
+fn pre_migration_fixture_loads_and_saves_without_semantic_drift(cx: &mut TestAppContext) {
+    let document: oneterm_state::dock_persistence::DockDocument = serde_json::from_str(
+        include_str!("../../../../state/src/fixtures/docks-0.5.2.json"),
+    )
+    .unwrap();
+    let expected: DockAreaState = document.dock_state().unwrap();
+    let expected_zoom = document.zoomed_panel.clone().expect("fixture zoom");
+    let expected_sftp = document
+        .sftp_table_state
+        .clone()
+        .expect("fixture SFTP table state");
+    let (dock_area, cx) = dock_area(cx);
+
+    cx.update(|window, cx| {
+        dock_area.update(cx, |dock_area, cx| {
+            dock_area.load(expected.clone(), window, cx).unwrap();
+        });
+        assert!(restore_zoom_in_dock(&dock_area, &expected_zoom, window, cx));
+    });
+    assert!(dock_area.read_with(cx, |dock_area, _| dock_area.is_zoomed()));
+
+    let dumped = dock_area.read_with(cx, |dock_area, cx| dock_area.dump(cx));
+    let mut expected_center = serde_json::to_value(&expected.center).unwrap();
+    let mut dumped_center = serde_json::to_value(&dumped.center).unwrap();
+    expected_center["info"]["stack"]["sizes"] = serde_json::Value::Null;
+    dumped_center["info"]["stack"]["sizes"] = serde_json::Value::Null;
+    assert_eq!(dumped_center, expected_center);
+    assert_eq!(
+        dumped
+            .right_dock
+            .as_ref()
+            .map(|dock| (dock.size(), dock.open())),
+        expected
+            .right_dock
+            .as_ref()
+            .map(|dock| (dock.size(), dock.open())),
+    );
+
+    let dir = temp_dir("pre-migration-fixture");
+    let path = dir.0.join("docks.json");
+    std::fs::write(
+        &path,
+        include_bytes!("../../../../state/src/fixtures/docks-0.5.2.json"),
+    )
+    .unwrap();
+    persistence::save_state_to(&path, &dumped, Some(&expected_zoom), "fixture-roundtrip").unwrap();
+    let stored_document = read_dock_document_from(&path)
+        .unwrap()
+        .expect("saved document");
+    assert_eq!(
+        stored_document.zoomed_panel.as_deref(),
+        Some(expected_zoom.as_str())
+    );
+    assert_eq!(
+        stored_document
+            .sftp_table_state
+            .as_ref()
+            .expect("saved SFTP table state")
+            .column_widths,
+        expected_sftp.column_widths
+    );
+    assert_eq!(
+        stored_document
+            .sftp_table_state
+            .as_ref()
+            .expect("saved SFTP table state")
+            .column_visibility,
+        expected_sftp.column_visibility
+    );
+    let stored = stored_document.dock_state::<DockAreaState>().unwrap();
+    assert_eq!(stored.right_dock, expected.right_dock);
+}
+
 #[gpui::test]
 fn load_reset_center_and_save_round_trip(cx: &mut TestAppContext) {
     let dir = temp_dir("roundtrip");
     let path = dir.0.join("docks.json");
 
-    // Another owner's field must survive the shell's writes.
     update_dock_document_at(&path, |document| {
         document.sftp_table_state = Some(SftpTableState {
             column_widths: HashMap::from([("name".to_string(), 321.0)]),
@@ -117,28 +233,22 @@ fn load_reset_center_and_save_round_trip(cx: &mut TestAppContext) {
     })
     .unwrap();
 
-    // 1. A previous run: two center tabs, a collapsed 333px right dock, a zoomed panel.
     let (source, cx) = dock_area(cx);
     let saved: DockAreaState = source.update_in(cx, |dock_area, window, cx| {
-        let weak = cx.entity().downgrade();
-        let center = DockItem::tabs(
-            vec![
-                NamedPanel::view(panel_names::TERMINAL, cx),
-                NamedPanel::view(panel_names::TERMINAL, cx),
-            ],
-            &weak,
-            window,
-            cx,
-        );
+        let center = DockLayout::tabs()
+            .panel_view(NamedPanel::view(panel_names::TERMINAL, cx), cx)
+            .panel_view(NamedPanel::view(panel_names::TERMINAL, cx), cx);
         dock_area.set_center(center, window, cx);
-        let right = DockItem::panel(NamedPanel::view(panel_names::SSH_CLIENT, cx));
-        dock_area.set_right_dock(right, Some(px(333.)), false, window, cx);
+        let right =
+            DockLayout::tabs().panel_view(NamedPanel::view(panel_names::SSH_CLIENT, cx), cx);
+        dock_area.set_dock(DockPlacement::Right, right, window, cx);
+        dock_area.set_dock_size(DockPlacement::Right, px(333.), window, cx);
+        dock_area.toggle_dock(DockPlacement::Right, window, cx);
         dock_area.dump(cx)
     });
     persistence::save_state_to(&path, &saved, Some(panel_names::TERMINAL), "test-first-run")
         .unwrap();
 
-    // 2. Next launch: read once, load, reset the center, persist.
     let document = read_dock_document_from(&path)
         .unwrap()
         .expect("document exists");
@@ -147,36 +257,24 @@ fn load_reset_center_and_save_round_trip(cx: &mut TestAppContext) {
         Some(panel_names::TERMINAL)
     );
 
-    let (target, cx) = {
-        let (target, cx) = cx.add_window_view(|window, cx| {
-            DockArea::new("layout-test-2", Some(MAIN_DOCK_VERSION), window, cx)
-        });
-        (target, cx)
-    };
+    let (target, cx) = cx.add_window_view(|window, cx| {
+        DockArea::new("layout-test-2", Some(MAIN_DOCK_VERSION), window, cx)
+    });
     cx.update(|window, cx| persistence::load_layout(&target, &document, window, cx).unwrap());
-    // gpui-component's `PanelInfo::Panel` load path wraps the panel in a tab
-    // container; the width and collapsed state come back verbatim.
     let (size, open, _) = right_dock(&target, cx);
     assert_eq!((size, open), (333., false));
 
     let reset = cx
         .update(|window, cx| layout::apply_center_reset(target.downgrade(), window, cx))
         .expect("dock area alive");
-    // The center is one terminal tab again; the right dock is untouched.
     let center_terminals = target.read_with(cx, |dock_area, cx| {
-        let DockItem::Split { items, .. } = dock_area.center() else {
-            panic!("center must be a split");
-        };
-        items
-            .iter()
-            .map(|item| match item {
-                DockItem::Tabs { items, .. } => items
-                    .iter()
-                    .filter(|panel| panel.panel_name(cx) == panel_names::TERMINAL)
-                    .count(),
-                _ => 0,
-            })
-            .sum::<usize>()
+        dock_area
+            .layout(DockPlacement::Center)
+            .expect("center layout")
+            .panels()
+            .filter_map(|id| dock_area.panel(id))
+            .filter(|panel| panel.panel_name(cx) == panel_names::TERMINAL)
+            .count()
     });
     assert_eq!(center_terminals, 1);
     assert_eq!(
@@ -189,21 +287,17 @@ fn load_reset_center_and_save_round_trip(cx: &mut TestAppContext) {
         .unwrap()
         .expect("document exists");
     assert_eq!(written.zoomed_panel, None);
-    assert_eq!(written.dock_state::<DockAreaState>().unwrap(), reset);
+    let written_state = written.dock_state::<DockAreaState>().unwrap();
+    assert_eq!(written_state.center, reset.center);
+    assert_eq!(
+        written_state
+            .right_dock
+            .as_ref()
+            .map(|dock| dock.panel().panel_name.as_str()),
+        Some(panel_names::SSH_CLIENT),
+    );
     assert_eq!(
         written.sftp_table_state.unwrap().column_widths.get("name"),
         Some(&321.0)
     );
-}
-
-/// CORR-22: the subscribed-tab set only keeps ids of TabPanels still in the dock.
-#[gpui::test]
-fn stale_tab_subscriptions_are_forgotten(cx: &mut TestAppContext) {
-    let kept = cx.new(|_| ());
-    let gone = cx.new(|_| ());
-    let mut subscribed = HashSet::from([kept.entity_id(), gone.entity_id()]);
-    super::retain_live_tabs(&mut subscribed, [kept.entity_id()]);
-    assert_eq!(subscribed, HashSet::from([kept.entity_id()]));
-    super::retain_live_tabs(&mut subscribed, []);
-    assert!(subscribed.is_empty());
 }

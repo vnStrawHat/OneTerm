@@ -20,6 +20,7 @@ oneterm-theme.workspace = true
 oneterm-actions.workspace = true
 
 gpui.workspace = true
+gpui-base.workspace = true
 gpui-component.workspace = true
 anyhow.workspace = true
 async-channel.workspace = true

@@ -317,9 +317,8 @@ impl LocalSession {
 }
 ```
 
-> For the exact `Notifier` API: note that
-> `reference/gpui-component` **does not have it** — this is Zed's internal API; read directly
-> from the `alacritty_terminal` source at the rev lock: `event_loop.rs` (`Notifier`, `Msg`),
+> For the exact `Notifier` API: GPUI Kit does not provide it; read directly from the
+> vendored `alacritty_terminal` source: `event_loop.rs` (`Notifier`, `Msg`),
 > `tty/{mod,unix,windows}.rs`. When implementing, open that crate's source to match signatures.
 
 **Current implementation** (`crates/local-shell/src/event_loop.rs`): the loop is a
@@ -770,7 +769,7 @@ crates/
 | Model + EventLoop + PTY (local) | Zed `crates/terminal/src/terminal.rs` (rev `1d217ee39…`) |
 | Grid rendering | Zed `crates/terminal_view/src/terminal_element.rs` |
 | IME + View | Zed `crates/terminal_view/src/terminal_view.rs` (`ImeState`) |
-| `Element`/`paint_quad`/`shape_line` | `reference/gpui-component` + GPUI docs (rev lock) |
+| `Element`/`paint_quad`/`shape_line` | `reference/gpui-kit` (tag `v0.6.0`) |
 | `EntityInputHandler` | `gpui::EntityInputHandler` trait (docs.rs matching rev) |
 | `alacritty_terminal` API | source at rev `fcf32fe…` (`event_loop.rs`, `tty/`, `term.rs`, `sync.rs`) — fork `zed-industries/alacritty` |
 | freya key/mouse encode | `freya-terminal` `handle.rs`/`parser.rs` (reference the logic, purify into `core`) |

@@ -42,7 +42,11 @@ use super::table_delegate::SftpTableDelegate;
 /// `panel_name = "sftp"`. One panel per workspace in the right dock.
 /// Observes the active state keyed by its DockArea workspace when the SSH tab changes.
 pub struct SftpPanel {
+    /// Focus target for the SFTP content itself.
     focus_handle: FocusHandle,
+    /// Focus proxy owned by a containing dock tab group.
+    dock_focus_handle: FocusHandle,
+    _dock_focus_subscription: Subscription,
 
     // ── SFTP backend ────────────────────────────────────────
     sftp: Option<Arc<dyn SftpBackend>>,
@@ -111,6 +115,11 @@ impl SftpPanel {
         cx: &mut Context<Self>,
     ) -> Self {
         let focus_handle = cx.focus_handle();
+        let dock_focus_handle = cx.focus_handle();
+        let dock_focus_subscription =
+            cx.on_focus(&dock_focus_handle, window, |this, window, cx| {
+                this.focus_handle.focus(window, cx);
+            });
 
         let app_state = AppState::global(cx);
         log::debug!("SftpPanel::new: observing workspace active state changes");
@@ -145,6 +154,8 @@ impl SftpPanel {
 
         let mut me = Self {
             focus_handle,
+            dock_focus_handle,
+            _dock_focus_subscription: dock_focus_subscription,
             sftp: None,
             active_key: None,
             browser: BrowserView::default(),
@@ -640,24 +651,26 @@ impl EventEmitter<PanelEvent> for SftpPanel {}
 
 impl Focusable for SftpPanel {
     fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.focus_handle.clone()
+        self.dock_focus_handle.clone()
     }
 }
 
-impl Panel for SftpPanel {
+impl gpui_base::dock::Panel for SftpPanel {
     fn panel_name(&self) -> &'static str {
         "sftp"
-    }
-
-    fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        "SFTP Browser"
     }
 
     fn closable(&self, _: &App) -> bool {
         true
     }
+}
 
-    fn zoomable(&self, _: &App) -> Option<PanelControl> {
+impl Panel for SftpPanel {
+    fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        "SFTP Browser"
+    }
+
+    fn zoom_control(&self, _: &App) -> Option<PanelControl> {
         Some(PanelControl::Both)
     }
 }

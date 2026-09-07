@@ -5,7 +5,7 @@
 
 use gpui::{
     AnyElement, App, AppContext as _, Context, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, StatefulInteractiveElement as _, Styled, Window, div,
+    ParentElement as _, Render, Role, StatefulInteractiveElement as _, Styled, Window, div,
     prelude::FluentBuilder, px,
 };
 use gpui_component::{
@@ -20,6 +20,8 @@ use gpui_component::{
 use oneterm_theme::icon::AppIcon;
 
 use super::updates;
+
+const REPOSITORY_LINK_ROLE: Role = Role::Link;
 
 struct AboutUpdateControls;
 
@@ -109,15 +111,39 @@ pub(crate) fn open_about_dialog(window: &mut Window, cx: &mut App) {
     });
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AboutGroup {
+    Links,
+    Network,
+    Updates,
+    Identity,
+}
+
+const ABOUT_GROUP_ORDER: [AboutGroup; 4] = [
+    AboutGroup::Links,
+    AboutGroup::Network,
+    AboutGroup::Updates,
+    // GPUI Kit 0.6 numbers sidebar entries after filtering out untitled
+    // groups, while scroll targets index every group. Keep untitled content
+    // last so both index spaces stay aligned.
+    AboutGroup::Identity,
+];
+
 /// Build the "About" settings page.
 pub(crate) fn page(cx: &gpui::App) -> SettingPage {
-    SettingPage::new("About")
-        .icon(Icon::new(IconName::Info))
-        .resettable(true)
-        .group(about_group())
-        .group(links_group())
-        .group(updates::network_group(cx))
-        .group(updates::group(cx))
+    ABOUT_GROUP_ORDER.into_iter().fold(
+        SettingPage::new("About")
+            .icon(Icon::new(IconName::Info))
+            .resettable(true),
+        |page, group| {
+            page.group(match group {
+                AboutGroup::Links => links_group(),
+                AboutGroup::Network => updates::network_group(cx),
+                AboutGroup::Updates => updates::group(cx),
+                AboutGroup::Identity => about_group(),
+            })
+        },
+    )
 }
 
 /// The "About" group — app name, version, and a short description.
@@ -187,6 +213,7 @@ fn github_repository_url() -> String {
 fn repository_link(id: &'static str, cx: &App) -> AnyElement {
     div()
         .id(id)
+        .role(REPOSITORY_LINK_ROLE)
         .py_0p5()
         .text_sm()
         .text_color(cx.theme().link)
@@ -197,4 +224,24 @@ fn repository_link(id: &'static str, cx: &App) -> AnyElement {
             cx.open_url(&github_repository_url());
         })
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repository_link_exposes_link_accessibility_role() {
+        assert!(matches!(REPOSITORY_LINK_ROLE, Role::Link));
+    }
+
+    #[test]
+    fn untitled_about_group_is_last_so_sidebar_indices_match_scroll_targets() {
+        assert_eq!(ABOUT_GROUP_ORDER.last(), Some(&AboutGroup::Identity));
+        assert!(
+            ABOUT_GROUP_ORDER[..ABOUT_GROUP_ORDER.len() - 1]
+                .iter()
+                .all(|group| *group != AboutGroup::Identity)
+        );
+    }
 }

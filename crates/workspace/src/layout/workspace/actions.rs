@@ -1,7 +1,9 @@
 //! Action handlers for `OneTermWorkspace`.
 
 use gpui::{App, Context, Entity, Window};
-use gpui_component::dock::{DockArea, DockItem, DockPlacement as UiDockPlacement};
+use gpui_component::dock::{
+    BasePanelView, DockArea, DockLayout, DockPlacement as UiDockPlacement, PanelHandle,
+};
 
 use oneterm_state::commands::commands;
 use oneterm_state::panel_names;
@@ -14,36 +16,27 @@ use oneterm_actions::{
 impl super::OneTermWorkspace {
     /// Add `panel` to the center dock area.
     ///
-    /// When all tabs are closed, the center `DockItem` still keeps the old entry
-    /// but the inner `TabPanel` has no panels left → `add_panel` would add to a
-    /// "ghost" `TabPanel` that is not rendered. Detect this and recreate the center.
+    /// A normalized empty center has no tab group to receive the panel, so it is
+    /// recreated; otherwise the panel joins the existing first tab group.
     fn place_center_panel(
         &mut self,
         panel: std::sync::Arc<dyn gpui_component::dock::PanelView>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let center_empty = {
-            let dock = self.dock_area.read(cx);
-            Self::center_has_no_visible_panel(&dock.center(), cx)
-        };
+        let panel: std::sync::Arc<dyn BasePanelView> =
+            std::sync::Arc::new(PanelHandle::from_view(panel));
+        let center_empty = Self::center_has_no_visible_panel(self.dock_area.read(cx), cx);
 
-        if center_empty {
-            let weak = self.dock_area.downgrade();
-            let center = DockItem::v_split(
-                vec![DockItem::tabs(vec![panel], &weak, window, cx)],
-                &weak,
-                window,
-                cx,
-            );
-            self.dock_area.update(cx, |dock_area, cx| {
+        self.dock_area.update(cx, |dock_area, cx| {
+            if center_empty {
+                let center =
+                    DockLayout::v_split().child(DockLayout::tabs().panel_view(panel, cx), None);
                 dock_area.set_center(center, window, cx);
-            });
-        } else {
-            self.dock_area.update(cx, |dock_area, cx| {
-                dock_area.add_panel(panel, UiDockPlacement::Center, None, window, cx);
-            });
-        }
+            } else {
+                dock_area.add_panel_view(panel, UiDockPlacement::Center, None, window, cx);
+            }
+        });
     }
 
     /// Action handler: add a new TerminalPanel.
@@ -53,28 +46,30 @@ impl super::OneTermWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let panel = super::build_named_panel(
+        let Some(panel) = super::build_named_panel(
             panel_names::TERMINAL,
             &self.dock_area.downgrade(),
             window,
             cx,
-        );
-        self.place_center_panel(panel, window, cx);
+        ) else {
+            return;
+        };
+        self.dock_area.update(cx, |dock_area, cx| {
+            if dock_area.is_empty(UiDockPlacement::Center, cx) {
+                dock_area.set_center(
+                    DockLayout::v_split().child(DockLayout::tabs().panel_view(panel, cx), None),
+                    window,
+                    cx,
+                );
+            } else {
+                dock_area.add_panel_view(panel, UiDockPlacement::Center, None, window, cx);
+            }
+        });
     }
 
-    /// Check whether the center DockItem has any TabPanel with panels left.
-    pub(crate) fn center_has_no_visible_panel(center: &DockItem, cx: &gpui::App) -> bool {
-        match center {
-            DockItem::Tabs { view, .. } => view.read(cx).active_panel(cx).is_none(),
-            DockItem::Split { items, .. } => !items.iter().any(|item| {
-                if let DockItem::Tabs { view, .. } = item {
-                    view.read(cx).active_panel(cx).is_some()
-                } else {
-                    false
-                }
-            }),
-            _ => false,
-        }
+    /// Check whether the normalized center tree has any visible panel.
+    pub(crate) fn center_has_no_visible_panel(dock_area: &DockArea, cx: &gpui::App) -> bool {
+        dock_area.is_empty(UiDockPlacement::Center, cx)
     }
 
     /// Action handler: add a new TerminalPanel with a specific shell kind.
@@ -109,8 +104,8 @@ impl super::OneTermWorkspace {
     /// Action handler: switch the right dock to the panels for the given
     /// [`RightDockMode`] (SSH Client = Session + SFTP, Agent = Agent panels).
     ///
-    /// Rebuilds the right dock as a fresh `DockItem::Panel` of the mode's
-    /// registered panel, preserving the dock's current width + open/collapsed
+    /// Rebuilds the right dock as a single-tab `DockLayout` containing the
+    /// mode's registered panel, preserving the dock's current width + open/collapsed
     /// state. Persists the choice to `ui_config.json` so it survives restarts.
     ///
     /// Dispatched by the title bar mode toggle group. No-op if the right dock
@@ -145,8 +140,8 @@ impl super::OneTermWorkspace {
 
     /// Apply `mode` to the right dock. For `None` the dock is hidden (collapsed)
     /// without rebuilding its panel, so the previous content is restored when the
-    /// user switches back. For `SshClient`/`Agent` the dock is rebuilt as a fresh
-    /// `DockItem::Panel` of the mode's registered panel, preserving the dock
+    /// user switches back. For `SshClient`/`Agent` the dock is rebuilt as a
+    /// single-tab `DockLayout` of the mode's registered panel, preserving the dock
     /// width and forcing the dock open. Used by the action handler above and by
     /// the startup apply in `OneTermWorkspace::new`.
     pub(crate) fn switch_right_dock_mode(
@@ -162,18 +157,22 @@ impl super::OneTermWorkspace {
             return;
         };
         let weak = dock_area.downgrade();
-        let panel = super::build_named_panel(panel_name, &weak, window, cx);
-        let right = DockItem::panel(panel);
+        let Some(panel) = super::build_named_panel(panel_name, &weak, window, cx) else {
+            return;
+        };
+        let right = DockLayout::tabs().panel_view(panel, cx);
         dock_area.update(cx, |view, cx| {
             // Snapshot the current right dock's size so the swap preserves the
             // user's last dock width. Force the dock open — selecting SSH Client /
-            // Agent is an explicit request to show the right dock, even if it was
-            // collapsed by the dock toggle button or by a previous None selection.
+            // Agent is an explicit request to show the right dock.
             let right_size = view
-                .right_dock()
-                .map(|dock| Some(dock.read(cx).size()))
-                .unwrap_or(Some(super::DEFAULT_RIGHT_DOCK_WIDTH));
-            view.set_right_dock(right, right_size, true, window, cx);
+                .dock_size(UiDockPlacement::Right)
+                .unwrap_or(super::DEFAULT_RIGHT_DOCK_WIDTH);
+            view.set_dock(UiDockPlacement::Right, right, window, cx);
+            view.set_dock_size(UiDockPlacement::Right, right_size, window, cx);
+            if !view.is_dock_open(UiDockPlacement::Right) {
+                view.toggle_dock(UiDockPlacement::Right, window, cx);
+            }
         });
     }
 
@@ -223,58 +222,36 @@ impl super::OneTermWorkspace {
 
 #[cfg(test)]
 mod tests {
-    use gpui::TestAppContext;
-    use gpui_component::dock::{DockArea, DockItem};
+    use gpui::{AppContext as _, TestAppContext};
+    use gpui_component::dock::{DockArea, DockLayout};
 
     use super::super::OneTermWorkspace;
     use super::super::test_panels::NamedPanel;
 
     #[gpui::test]
-    fn center_has_no_visible_panel_detects_empty_and_ghost_layouts(cx: &mut TestAppContext) {
+    fn center_empty_check_follows_normalized_layout(cx: &mut TestAppContext) {
         cx.update(gpui_component::init);
         let (_dock_area, _cx) = cx.add_window_view(|window, cx| {
-            let weak = cx.weak_entity();
-
-            // Empty tab panel: nothing visible.
-            let empty_tabs = DockItem::tabs(Vec::new(), &weak, window, cx);
+            let dock_area = cx.new(|cx| DockArea::new("center-test", None, window, cx));
             assert!(OneTermWorkspace::center_has_no_visible_panel(
-                &empty_tabs,
-                cx
-            ));
-
-            // A split whose only tab panel is empty is a "ghost" center too.
-            let ghost_split = DockItem::v_split(
-                vec![DockItem::tabs(Vec::new(), &weak, window, cx)],
-                &weak,
-                window,
+                dock_area.read(cx),
                 cx,
-            );
-            assert!(OneTermWorkspace::center_has_no_visible_panel(
-                &ghost_split,
-                cx
             ));
 
-            // One panel anywhere in the split makes the center visible.
             let panel = NamedPanel::view("blank", cx);
-            let with_panel = DockItem::v_split(
-                vec![
-                    DockItem::tabs(Vec::new(), &weak, window, cx),
-                    DockItem::tabs(vec![panel], &weak, window, cx),
-                ],
-                &weak,
-                window,
-                cx,
-            );
+            dock_area.update(cx, |dock_area, cx| {
+                dock_area.set_center(
+                    DockLayout::v_split().child(DockLayout::tabs().panel_view(panel, cx), None),
+                    window,
+                    cx,
+                );
+            });
             assert!(!OneTermWorkspace::center_has_no_visible_panel(
-                &with_panel,
-                cx
+                dock_area.read(cx),
+                cx,
             ));
 
-            // A bare panel item is never treated as empty.
-            let bare = DockItem::panel(NamedPanel::view("blank", cx));
-            assert!(!OneTermWorkspace::center_has_no_visible_panel(&bare, cx));
-
-            DockArea::new("center-test", None, window, cx)
+            DockArea::new("root", None, window, cx)
         });
     }
 }

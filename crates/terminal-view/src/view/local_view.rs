@@ -37,7 +37,7 @@ const CURSOR_BLINK_INTERVAL_MS: u64 = 500;
 
 /// GPUI events emitted by [`LocalTerminalView`] for its containing panel to
 /// observe. The dock's tab title is rendered by `TerminalPanel::title()`, which
-/// only re-runs when the panel (or its `TabPanel`) re-renders — so the view
+/// only re-runs when the panel (or its `TabGroup`) re-renders — so the view
 /// emits these to let the panel `cx.notify()` and refresh the tab strip.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TerminalViewEvent {

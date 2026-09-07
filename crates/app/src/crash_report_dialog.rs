@@ -13,7 +13,7 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     dialog::{Dialog, DialogFooter},
     h_flex,
-    input::{Input, InputState},
+    input::{Textarea, TextareaState},
     v_flex,
 };
 
@@ -52,19 +52,15 @@ fn open_next_report(
     window.open_dialog(cx, crash_dialog(report, reports, cleanup, input));
 }
 
-fn report_input(report: &str, window: &mut Window, cx: &mut App) -> gpui::Entity<InputState> {
-    cx.new(|cx| {
-        InputState::new(window, cx)
-            .multi_line(true)
-            .default_value(report.to_owned())
-    })
+fn report_input(report: &str, window: &mut Window, cx: &mut App) -> gpui::Entity<TextareaState> {
+    cx.new(|cx| TextareaState::new(window, cx).default_value(report.to_owned()))
 }
 
 fn crash_dialog(
     report: CrashReport,
     remaining: VecDeque<CrashReport>,
     cleanup: CleanupReport,
-    report_input: gpui::Entity<InputState>,
+    report_input: gpui::Entity<TextareaState>,
 ) -> impl Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static {
     let issue_url = create_issue_url();
 
@@ -85,7 +81,7 @@ fn crash_dialog(
                     .w_full()
                     .child("OneTerm detected a crash report from a previous run.")
                     .child(
-                        Input::new(&report_input)
+                        Textarea::new(&report_input)
                             .w_full()
                             .h(px(360.))
                             .disabled(true),

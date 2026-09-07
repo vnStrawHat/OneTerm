@@ -14,12 +14,10 @@
 //!    `SpaceTree::set_active` / focus APIs, never OSC (the protocol is
 //!    one-directional, spec §6.3).
 
-use std::rc::Rc;
-use std::sync::Arc;
-
 use gpui::{App, EntityId, WeakEntity, Window};
+use std::rc::Rc;
 
-use gpui_component::dock::{PanelView, TabPanel};
+use gpui_component::dock::{PanelId, TabGroup};
 use oneterm_state::{AgentNav, AgentRegistry};
 
 use crate::TerminalPanel;
@@ -28,7 +26,7 @@ use crate::space::SpaceId;
 /// Build the navigation target for the terminal in Space `space_id` of
 /// `panel` (hosted by `tab_panel`).
 pub(crate) fn agent_nav(
-    tab_panel: Option<WeakEntity<TabPanel>>,
+    tab_panel: Option<WeakEntity<TabGroup>>,
     panel: WeakEntity<TerminalPanel>,
     space_id: SpaceId,
 ) -> AgentNav {
@@ -36,10 +34,18 @@ pub(crate) fn agent_nav(
         let Some(panel) = panel.upgrade() else {
             return;
         };
-        // 1. Select the agent's Tab within its TabPanel (reveals it if scrolled off).
+        // 1. Select the agent's Tab within its TabGroup (reveals it if scrolled off).
         if let Some(tab_panel) = tab_panel.as_ref().and_then(|w| w.upgrade()) {
-            let arc: Arc<dyn PanelView> = Arc::new(panel.clone());
-            tab_panel.update(cx, |tp, cx| tp.set_active_panel(&arc, window, cx));
+            let panel_id = PanelId::from(panel.entity_id());
+            tab_panel.update(cx, |tabs, cx| {
+                if let Some(ix) = tabs
+                    .panels()
+                    .iter()
+                    .position(|candidate| candidate.panel_id(cx) == panel_id)
+                {
+                    tabs.select_tab(ix, window, cx);
+                }
+            });
         }
         // 2. Activate the agent's Space (single-Space tabs no-op past focus) and
         //    focus the terminal so keystrokes go to it.

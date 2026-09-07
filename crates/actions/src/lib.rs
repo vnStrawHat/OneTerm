@@ -23,7 +23,7 @@ pub struct AddPanelWithShell(pub oneterm_core::ShellKind);
 /// Swap the right dock to show the panels for the given [`RightDockMode`].
 ///
 /// Dispatched by the title bar mode toggle group; handled by the workspace,
-/// which rebuilds the right dock `DockItem` and persists the choice.
+/// which rebuilds the right-dock layout and persists the choice.
 #[derive(Clone, PartialEq, Eq, Deserialize, gpui::Action)]
 #[action(namespace = oneterm, no_json)]
 pub struct SetRightDockMode(pub RightDockMode);

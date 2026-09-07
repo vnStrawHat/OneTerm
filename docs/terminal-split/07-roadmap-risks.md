@@ -57,13 +57,13 @@ Run the quality gate after each step: `cargo fmt --all -- --check`,
 
 | # | Risk | Mitigation |
 |---|---|---|
-| R1 | **Drag precedence**: our `on_drag` on the tab title may not beat gpui-component's `Tab` wrapper `on_drag(DragPanel)`. | Prototype step 6 in isolation first. `cx.stop_propagation()` in our drag builder should win when the gesture starts on the title. Fallback: a dedicated drag "grip" affordance in the tab, or patch the fork to expose `DragPanel` (03 §6). |
-| R2 | **`DragPanel` is `pub(crate)`** → cannot reuse the dock's native tab DnD. | Own payload `DragTerminalTab` (03). |
+| R1 | **Drag precedence**: the terminal title's `on_drag` competes with the dock tab wrapper's native drag. | The terminal-specific builder stops propagation when the gesture starts on the title; a dedicated grip remains the fallback. |
+| R2 | **Native `DragPanel` has dock-level semantics**, not Space-leaf ownership semantics. | Keep the OneTerm-owned `DragTerminalTab` payload (03). |
 | R3 | **Space frame vs resize handle overlap**: the handle shares the pane edge and may obscure the outer border. | Keep the outer border neutral and reserve a 1px inner gutter in layout for selection. The handle may cover the outer pixel but cannot erase the active gutter; do not add a content overlay. `resizable/panel.rs` warns against `overflow_hidden` on panels — do not set it. |
 | R4 | **Re-subscription churn**: title/stat subscriptions must follow the active leaf. | Central `SpaceActivated` event; drop+recreate the `Subscription` on activation (06 §2). |
 | R5 | **`ResizableState` identity**: recreating states on re-render loses sizes. | One `Entity<ResizableState>` per `Split` node, created once, reused via `with_state` (05 §1). |
 | R6 | **Grafting a split source on drop** (source tab itself split). | MVP moves only the source's active leaf (03 §5); full-subtree graft deferred. |
-| R7 | **Zoom + split interaction**. | Zoom is `TabPanel`-level; the whole tree zooms as one — no special handling, but test it. |
+| R7 | **Zoom + split interaction**. | Zoom targets the containing `TabGroup`; the whole Space tree zooms as one — no special handling, but test it. |
 
 ## 4. Resolved decisions (previously open)
 

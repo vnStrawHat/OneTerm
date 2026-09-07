@@ -6,12 +6,12 @@
 
 ## 1. `TerminalPanel` field change
 
-`views/terminal/panel.rs`:
+`crates/terminal-view/src/panel/terminal_panel.rs`:
 
 ```rust
 pub struct TerminalPanel {
     tree: SpaceTree,                 // was: view: Entity<LocalTerminalView>
-    tab_panel: Option<WeakEntity<TabPanel>>,
+    tab_panel: Option<WeakEntity<TabGroup>>,
     is_active: bool,
     tab_title: String,
     _title_sub: Subscription,        // now re-subscribed to the active leaf's view
@@ -77,10 +77,10 @@ All terminal-tab close routes (the tab's × button, middle-click, context-menu o
 keybinding `ClosePanel`, and `close_space` after `LastSpaceClosed`) pass through
 `TerminalPanel::close_tab`.
 
-- When the containing `TabPanel` has sibling panels, `close_tab` defers the existing
-  `TabPanel::remove_panel` call so normal multi-tab close behavior remains unchanged.
+- When the containing `TabGroup` has sibling panels, `close_tab` defers a
+  `DockArea::remove_panel` call so normal multi-tab close behavior remains unchanged.
 - When this is the final panel, `close_tab` shuts down all of its terminal views and
-  replaces its Space tree with `SpaceTree::new_empty`. The `TabPanel` stays attached,
+  replaces its Space tree with `SpaceTree::new_empty`. The `TabGroup` stays attached,
   so its tab bar and `+` New Terminal menu remain visible, and a connected SSH panel
   can be added as a visible sibling.
 
@@ -110,8 +110,8 @@ active `TerminalPanel` is resolved via the focused panel in the `DockArea` (same
 
 ## 7. What does NOT change
 
-- `TabPanel`, `DockArea`, `StackPanel`, `docks.json` layout — untouched (no new
-  dock/tab). The Space tree is invisible to the dock layer.
+- `TabGroup`, `DockArea`, the GPUI Base pane tree, and `docks.json` layout —
+  untouched (no new dock/tab). The Space tree is invisible to the dock layer.
 - The terminal view internals (`element/`, `cell/`, `theme/`, IME, mouse) — a leaf
   hosts the exact same `LocalTerminalView`.
 - Zoom, persistence of dock layout, statusbar structure — unchanged (the statusbar

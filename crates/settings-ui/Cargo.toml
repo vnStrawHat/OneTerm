@@ -23,3 +23,6 @@ gpui.workspace = true
 gpui-component.workspace = true
 anyhow.workspace = true
 log.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

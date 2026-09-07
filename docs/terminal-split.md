@@ -19,7 +19,7 @@
 | 0 | [`terminal-split/00-overview.md`](terminal-split/00-overview.md) | Goals, scope, requirements, non-goals, glossary |
 | 1 | [`terminal-split/01-architecture.md`](terminal-split/01-architecture.md) | The Space pane-tree model, data structures, where it lives |
 | 2 | [`terminal-split/02-split-and-close.md`](terminal-split/02-split-and-close.md) | Split operations, Close Space, tree collapse, active tracking |
-| 3 | [`terminal-split/03-drag-drop.md`](terminal-split/03-drag-drop.md) | Dragging a Terminal Tab into a Space + the `DragPanel` constraint |
+| 3 | [`terminal-split/03-drag-drop.md`](terminal-split/03-drag-drop.md) | Dragging a Terminal Tab into a Space with a terminal-specific payload |
 | 4 | [`terminal-split/04-context-menu.md`](terminal-split/04-context-menu.md) | Context-menu changes (Split R/L/U/D, Close Space) |
 | 5 | [`terminal-split/05-rendering-theme.md`](terminal-split/05-rendering-theme.md) | 1px outer border + 1px inner gutter, active-Space highlight, empty placeholder |
 | 6 | [`terminal-split/06-integration.md`](terminal-split/06-integration.md) | Touch points: `TerminalPanel`, `set_active`, statusbar/SFTP, focus |

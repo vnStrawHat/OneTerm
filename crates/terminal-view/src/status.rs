@@ -10,7 +10,7 @@ use gpui::{App, Entity, Window};
 use gpui_component::dock::{DockArea, PanelView};
 use oneterm_core::ShellKind;
 use oneterm_state::active_terminal::ActiveTerminalMetricsProvider;
-use oneterm_state::dock_util::collect_tab_panels;
+use oneterm_state::dock_util::active_tab_panels;
 use oneterm_state::panel_names;
 use oneterm_terminal::NetStats;
 
@@ -18,9 +18,8 @@ use crate::panel::{PanelSpec, TerminalPanel};
 
 /// The terminal panels that are the active tab of a tab panel, in dock order.
 fn active_terminal_panels(dock_area: &Entity<DockArea>, cx: &App) -> Vec<Entity<TerminalPanel>> {
-    collect_tab_panels(dock_area.read(cx), cx)
+    active_tab_panels(dock_area.read(cx), cx)
         .into_iter()
-        .filter_map(|tp| tp.read(cx).active_panel(cx))
         .filter(|panel| panel.panel_name(cx) == panel_names::TERMINAL)
         .filter_map(|panel| panel.view().downcast::<TerminalPanel>().ok())
         .collect()

@@ -34,7 +34,7 @@ OneTerm/
 │   │   └── src/
 │   │       ├── lib.rs              # run(): logging + gpui init + install factory + init() + open window
 │   │       ├── init.rs             # Aggregator: globals + feature init() + WorkspaceCommands assembly
-│   │       ├── ssh_client_panel.rs  # SSH Client right-dock panel (DockItem::Panel) hosting Session + SFTP
+│   │       ├── ssh_client_panel.rs  # SSH Client right-dock panel hosting Session + SFTP; outer TabGroup chrome suppressed by DockSkin
 │   │       ├── session_factory.rs  # AppSessionFactory: dispatches spawn_local/connect_ssh to local/ssh
 │   │       ├── assets.rs           # CustomAssets (merges oneterm_theme::icon::UiAssets + gpui-component)
 │   │       ├── crash_report.rs     # Crash store: panic hook, native staging promotion, retention (docs/crash-reporting.md)
@@ -156,13 +156,13 @@ OneTerm/
 │   ├── terminal-backend.md / ssh-client-connect.md / sftp-browser-design.md …
 │   └── agents/{code-style.md, dependencies.md, structure.md (this file)}
 │
-├── vendor/                         # Vendored forks = pristine upstream @ rev + patches/ (see vendor/README.md)
-│   ├── patches/{vte,alacritty_terminal,gpui-component}/   # the ONLY place OneTerm deltas live
+├── vendor/                         # Terminal forks = pristine upstream @ rev + patches/ (see vendor/README.md)
+│   ├── patches/{vte,alacritty_terminal}/   # the ONLY place terminal-fork deltas live
 │   ├── refresh.sh                  # regenerate / --check the vendored trees (CI runs --check)
-│   ├── vte/ · alacritty_terminal/ · gpui-component/       # consumed via [patch]; not workspace members
+│   └── vte/ · alacritty_terminal/  # consumed via [patch]; not workspace members
 │
-└── reference/                      # Local clone of gpui-component (gitignored, research only)
-    └── gpui-component/
+└── reference/                      # Pinned GPUI Kit checkout (gitignored, research only)
+    └── gpui-kit/                   # longbridge/gpui-kit tag v0.6.0
 ```
 
 ## 2. Structure conventions
@@ -185,7 +185,6 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 | `core` (`oneterm-core`) | _(leaf)_ | domain | Error type, `SftpBackend`, `LocalShellConfig`/`ShellKind`, `SshConfig`/`SshAuthMethod`. No gpui, **no alacritty**. |
 | `highlight` (`oneterm-highlight`) | _(leaf)_ | engine | Semantic syntax-highlighting engine. |
 | `completion` (`oneterm-completion`) | `core` | engine | Terminal auto-completion engine (gpui-free, alacritty-free): catalog model + embedded `assets/**/*.json` catalogs, line parsing + subcommand resolution, matching/ranking, in-session `CompletionHistory`, and secret redaction. See [`../auto-completion.md`](../auto-completion.md). |
-| `vendor/gpui-component` | _(Cargo patch; not a workspace member)_ | external shared-ui | Upstream `gpui-component` `crates/ui` snapshot at the pinned revision, with reviewed `TabPanel::set_active_panel` and read-only `panel_count` additions. See [`ui-fork-maintenance.md`](ui-fork-maintenance.md). |
 | `terminal` (`oneterm-terminal`) | `core` | engine | Terminal engine (alacritty-coupled, no gpui): `TerminalSession`, `TerminalModel`, events, palette/OSC/key/mouse helpers, and `SessionFactory`. |
 | `actions` (`oneterm-actions`) | `core`, gpui | leaf-ui | gpui `Action` structs shared by shell and features; domain placement types come from `core`. |
 | `settings` (`oneterm-settings`) | `core`, gpui, gpui-component | shared | `TerminalConfig`, live `TerminalSettings` (defaults single-sourced from the config), and `UiConfig` including the `Theme` observer that persists `ui_config.json`. |

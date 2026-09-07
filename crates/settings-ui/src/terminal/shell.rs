@@ -5,8 +5,6 @@ use gpui_component::setting::{SettingField, SettingGroup, SettingItem};
 use oneterm_core::config::ShellKind;
 use oneterm_settings::TerminalSettings;
 
-use crate::items_with_separators;
-
 use super::set;
 
 /// Shell presets shown in the dropdown (label is used as both key and value).
@@ -20,6 +18,14 @@ const SHELL_KINDS: &[(ShellKind, &str)] = &[
     (ShellKind::Custom, "Custom"),
 ];
 
+fn shell_label(kind: ShellKind) -> SharedString {
+    SHELL_KINDS
+        .iter()
+        .find(|(candidate, _)| *candidate == kind)
+        .map(|(_, label)| SharedString::from(*label))
+        .unwrap_or_else(|| "Custom".into())
+}
+
 /// Build the "Shell" settings group.
 pub(super) fn group() -> SettingGroup {
     let options: Vec<(SharedString, SharedString)> = SHELL_KINDS
@@ -30,19 +36,12 @@ pub(super) fn group() -> SettingGroup {
     SettingGroup::new()
         .title("Shell")
         .description("Shell for new local terminals.")
-        .items(items_with_separators(vec![
+        .items(vec![
             SettingItem::new(
                 "Shell",
                 SettingField::dropdown(
                     options,
-                    |cx: &App| {
-                        let kind = TerminalSettings::global(cx).read(cx).shell.kind;
-                        SHELL_KINDS
-                            .iter()
-                            .find(|(k, _)| *k == kind)
-                            .map(|(_, label)| SharedString::from(*label))
-                            .unwrap_or_else(|| "Custom".into())
-                    },
+                    |cx: &App| shell_label(TerminalSettings::global(cx).read(cx).shell.kind),
                     |val: SharedString, cx: &mut App| {
                         let kind = SHELL_KINDS
                             .iter()
@@ -51,7 +50,10 @@ pub(super) fn group() -> SettingGroup {
                             .unwrap_or(ShellKind::Custom);
                         set(cx, |s| s.set_kind(kind));
                     },
-                ),
+                )
+                .default_value(shell_label(
+                    oneterm_core::config::LocalShellConfig::default().kind,
+                )),
             )
             .description("Choose shell kind."),
             SettingItem::new(
@@ -69,8 +71,9 @@ pub(super) fn group() -> SettingGroup {
                     |val: SharedString, cx: &mut App| {
                         set(cx, |s| s.set_program(val.to_string()));
                     },
-                ),
+                )
+                .default_value(SharedString::default()),
             )
             .description("Custom shell path."),
-        ]))
+        ])
 }

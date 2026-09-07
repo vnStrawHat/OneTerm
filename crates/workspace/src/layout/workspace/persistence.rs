@@ -9,10 +9,11 @@
 use std::path::Path;
 
 use anyhow::{Context as _, Result};
-use gpui::{App, Edges, Entity, PromptLevel, Window};
-use gpui_component::dock::{DockArea, DockAreaState};
+use gpui::{App, Entity, PromptLevel, Window};
+use gpui_component::dock::{DockArea, DockAreaState, DockPlacement, DockState, PanelInfo};
 use oneterm_core::AppError;
 use oneterm_state::dock_persistence::{DockDocument, DockUpdateOutcome, update_dock_document_at};
+use oneterm_state::panel_names;
 
 use super::{MAIN_DOCK_VERSION, state_file};
 
@@ -61,14 +62,7 @@ pub(crate) fn load_layout(
 
     dock_area.update(cx, |dock_area, cx| {
         dock_area.load(state, window, cx).context("load layout")?;
-        dock_area.set_dock_collapsible(
-            Edges {
-                right: true,
-                ..Default::default()
-            },
-            window,
-            cx,
-        );
+        dock_area.set_dock_collapsible(DockPlacement::Right, true, window, cx);
         Ok::<(), anyhow::Error>(())
     })
 }
@@ -95,7 +89,8 @@ pub(crate) fn save_state_to(
     zoomed_panel: Option<&str>,
     trigger: &str,
 ) -> Result<()> {
-    let state_value = serde_json::to_value(state)?;
+    let state = persistence_compatible_state(state);
+    let state_value = serde_json::to_value(&state)?;
     let right_dock_open = state_value
         .get("right_dock")
         .and_then(|dock| dock.get("open"))
@@ -105,7 +100,7 @@ pub(crate) fn save_state_to(
     log::debug!(
         "Save layout [trigger={trigger}] → zoomed_panel={zoomed_panel:?}, right_dock_open={right_dock_open}",
     );
-    let mut next_document = DockDocument::from_dock_state(state)?;
+    let mut next_document = DockDocument::from_dock_state(&state)?;
     next_document.zoomed_panel = zoomed_panel.map(str::to_owned);
     let outcome = update_dock_document_at(path, move |current| {
         next_document.sftp_table_state = current.sftp_table_state.take();
@@ -118,6 +113,35 @@ pub(crate) fn save_state_to(
         );
     }
     Ok(())
+}
+
+/// Preserve the pre-0.6 single-panel right-dock encoding. GPUI Base loads that
+/// leaf into a tab group internally, so unwrap it again before writing.
+fn persistence_compatible_state(state: &DockAreaState) -> DockAreaState {
+    let mut state = state.clone();
+    let Some(right) = state.right_dock.as_ref() else {
+        return state;
+    };
+    let panel = right.panel();
+    let [child] = panel.children.as_slice() else {
+        return state;
+    };
+    if panel.panel_name != "TabPanel"
+        || !matches!(child.info, PanelInfo::Panel(_))
+        || !matches!(
+            child.panel_name.as_str(),
+            panel_names::SSH_CLIENT | panel_names::AGENT
+        )
+    {
+        return state;
+    }
+    state.right_dock = Some(DockState::new(
+        child.clone(),
+        right.placement(),
+        right.size(),
+        right.open(),
+    ));
+    state
 }
 
 /// Persist a background snapshot and retain an actionable diagnostic on failure.

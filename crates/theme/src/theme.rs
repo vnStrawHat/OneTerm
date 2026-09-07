@@ -14,7 +14,7 @@
 //! "active tab merges with content" effect like Zed/editors, with no override needed.
 
 use gpui::{Anchor, App, Rgba, px, rgb};
-use gpui_component::{Theme, ThemeRegistry, scroll::ScrollbarShow};
+use gpui_component::{Theme, ThemeRegistry, scroll::ScrollbarMode};
 
 use oneterm_actions::{SwitchTheme, SwitchThemeMode};
 
@@ -168,7 +168,7 @@ pub fn init(cx: &mut App) {
         let theme = Theme::global_mut(cx);
         theme.radius = px(4.);
         theme.radius_lg = px(6.);
-        theme.scrollbar_show = ScrollbarShow::Always;
+        theme.scrollbar_mode = ScrollbarMode::Always;
     }
 
     // Selected item = hover look: bg = list_hover, no border.

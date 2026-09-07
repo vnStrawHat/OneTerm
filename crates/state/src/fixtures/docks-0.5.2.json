@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "center": {
+    "panel_name": "StackPanel",
+    "children": [
+      {
+        "panel_name": "TabPanel",
+        "children": [
+          {
+            "panel_name": "terminal",
+            "children": [],
+            "info": {
+              "panel": null
+            }
+          },
+          {
+            "panel_name": "terminal",
+            "children": [],
+            "info": {
+              "panel": null
+            }
+          }
+        ],
+        "info": {
+          "tabs": {
+            "active_index": 1
+          }
+        }
+      }
+    ],
+    "info": {
+      "stack": {
+        "sizes": [
+          969.0
+        ],
+        "axis": 1
+      }
+    }
+  },
+  "right_dock": {
+    "panel": {
+      "panel_name": "ssh_client_panel",
+      "children": [],
+      "info": {
+        "panel": null
+      }
+    },
+    "placement": "right",
+    "size": 443.0,
+    "open": true
+  },
+  "version": 3,
+  "zoomed_panel": "terminal",
+  "sftp_table_state": {
+    "column_widths": {
+      "name": 321.0,
+      "size": 128.0
+    },
+    "column_visibility": {
+      "owner": false,
+      "permissions": true
+    }
+  }
+}

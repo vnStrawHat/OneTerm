@@ -20,7 +20,7 @@ mod types;
 pub use panel::SftpPanel;
 
 use gpui::App;
-use gpui_component::dock::register_panel;
+use gpui_component::dock::{panel_handle, register_panel};
 use oneterm_state::panel_names;
 
 /// Initialize the SFTP feature: install the per-backend browser state store and
@@ -31,9 +31,9 @@ pub fn init(cx: &mut App) {
     // starts creating new ones.
     edit::sweep_edit_cache();
     browser_state::SftpBrowserStore::init(cx);
-    register_panel(cx, panel_names::SFTP, |dock_area, _, _, window, cx| {
-        Box::new(panel::SftpPanel::new_entity_in_workspace(
-            dock_area.entity_id(),
+    register_panel(cx, panel_names::SFTP, |context, window, cx| {
+        panel_handle(panel::SftpPanel::new_entity_in_workspace(
+            context.dock_area().entity_id(),
             window,
             cx,
         ))

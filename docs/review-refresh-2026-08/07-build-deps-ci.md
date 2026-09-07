@@ -107,29 +107,23 @@ into the updater.
   also tracked. *Fix:* `VENDOR_PRUNE` list in `vendor/refresh.sh` (delete after fetch, before diff);
   regenerate; commit the removal.
 
-- [x] **[Medium] BUILD-19 — Only one of three forks is drift-checked in CI.** `ci.yml` runs
-  `check-ui-fork.py` (hash baseline of `vendor/gpui-component/src/`) only; nothing verifies `vendor/vte` or
-  `vendor/alacritty_terminal` against pristine+patches, nor `vendor/gpui-component/{Cargo.toml,build.rs,locales}`
-  (patch `0002` is outside the check surface). *Fix:* CI step `bash vendor/refresh.sh --check`; extend
-  `check-ui-fork.py` to manifest and `build.rs`.
+- [x] **[Medium] BUILD-19 — Only one of three forks was drift-checked in CI.** The old UI-fork
+  baseline covered source files only; nothing verified the terminal forks or the UI package's
+  manifest/build metadata. *Resolved:* CI gained `bash vendor/refresh.sh --check`; the UI fork was
+  later retired by IN-0017, while this command still verifies both terminal forks.
 
-- [x] **[Medium] BUILD-20 — Rev-lock docs do not acknowledge the vendoring.** `docs/agents/dependencies.md`
-  §1/§3 still say the alacritty dep is the Zed fork @ fcf32fe, never mention that it and `vte 0.15.0` are
-  vendored/patched; `vendor/README.md` §6 shows `exclude` without gpui-component; `ui-fork-maintenance.md`
-  says the check "rejects deltas outside `dock/tab_panel.rs`" (now three modules). *Fix:* add rows + a
-  "vendored — see vendor/README.md" column; state the policy: "rev-lock = the pristine base rev; OneTerm
-  deltas live exclusively in `vendor/patches/`".
+- [x] **[Medium] BUILD-20 — Rev-lock docs did not acknowledge vendoring.** The dependency and vendor
+  guides now identify `alacritty_terminal` and `vte` as patched trees, record their pristine bases,
+  and require every OneTerm delta to live exclusively in `vendor/patches/`.
 
-- [ ] **[Medium] BUILD-21 — 259-file gpui-component fork carrying ~40 lines of delta.**
-  `vendor/patches/gpui-component/0001` (45 lines) + `0003` (41 lines); the stated rationale in
-  `ui-fork-maintenance.md` ("pub(crate) access across dock/resizable/tab/history") does not match the patch
-  set. Every upstream bump re-snapshots 259 files. *Fix:* upstream both patches to longbridge/gpui-component;
-  once merged, delete `vendor/gpui-component`, `check-ui-fork.py`, `ui-fork-baseline.json`; until then,
-  correct the rationale.
+- [x] **[Medium] BUILD-21 — The UI fork had disproportionate long-term cost.** Its maintenance
+  rationale did not match the patch set, and every bump re-snapshotted 259 files. *Resolved by
+  IN-0017:* OneTerm now consumes published GPUI Kit 0.6 crates; the snapshot, patch series,
+  baseline tooling, and current maintenance guide were retired.
 
-- [x] **[Low] BUILD-22 — `.gitattributes` covers only `vendor/gpui-component/**`** (`-whitespace`); no
-  `eol=lf` for any vendor tree, so Windows `autocrlf` checkouts differ byte-wise from pristine. *Fix:*
-  `vendor/** -whitespace text eol=lf`.
+- [x] **[Low] BUILD-22 — `.gitattributes` covered only the former UI snapshot.** There was no
+  `eol=lf` for every vendor tree, so Windows `autocrlf` checkouts could differ byte-wise from
+  pristine. *Resolved:* `vendor/** -whitespace text eol=lf`.
 
 ## D. CI & release
 

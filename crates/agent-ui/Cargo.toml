@@ -17,4 +17,5 @@ oneterm-state.workspace = true
 oneterm-settings.workspace = true
 
 gpui.workspace = true
+gpui-base.workspace = true
 gpui-component.workspace = true

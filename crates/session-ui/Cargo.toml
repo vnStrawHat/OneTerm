@@ -21,6 +21,7 @@ oneterm-theme.workspace = true
 oneterm-actions.workspace = true
 
 gpui.workspace = true
+gpui-base.workspace = true
 gpui-component.workspace = true
 serde.workspace = true
 serde_json.workspace = true

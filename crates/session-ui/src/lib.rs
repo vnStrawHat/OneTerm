@@ -22,7 +22,7 @@ pub use session_state::{
 };
 
 use gpui::App;
-use gpui_component::dock::register_panel;
+use gpui_component::dock::{panel_handle, register_panel};
 use oneterm_state::panel_names;
 
 /// Initialize the session feature: initialize the SSH session store global and
@@ -30,7 +30,7 @@ use oneterm_state::panel_names;
 /// the app aggregator.
 pub fn init(cx: &mut App) {
     session_state::SshSessionStore::init(cx);
-    register_panel(cx, panel_names::SESSION, |_, _, _, window, cx| {
-        Box::new(panel::SessionPanel::new_entity(window, cx))
+    register_panel(cx, panel_names::SESSION, |_, window, cx| {
+        panel_handle(panel::SessionPanel::new_entity(window, cx))
     });
 }

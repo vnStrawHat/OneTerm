@@ -22,7 +22,7 @@ use gpui::{
     App, Context, FocusHandle, IntoElement, ParentElement as _, Render, SharedString, Styled,
     Window, div,
 };
-use gpui_component::dock::{DockPlacement, PanelView};
+use gpui_component::dock::{DockPlacement, PanelHandle, PanelView};
 use gpui_component::{
     ActiveTheme, Disableable as _, WindowExt as _,
     button::{Button, ButtonVariant, ButtonVariants as _},
@@ -237,7 +237,13 @@ pub(crate) fn add_ssh_terminal_to_dock(
         .and_then(|dock_area| {
             dock_area
                 .update(cx, |dock, cx| {
-                    dock.add_panel(panel.clone(), DockPlacement::Center, None, window, cx);
+                    dock.add_panel_view(
+                        Arc::new(PanelHandle::from_view(panel.clone())),
+                        DockPlacement::Center,
+                        None,
+                        window,
+                        cx,
+                    );
                 })
                 .map_err(|_| "the main workspace has been released")
         });

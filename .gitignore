@@ -1,7 +1,7 @@
 # Build output
 target/
 target*/
-# Local research clone of gpui-component (docs/agents/dependencies.md §5)
+# Local research clone of GPUI Kit (docs/agents/dependencies.md §5)
 reference/
 # Release staging output of scripts/build-release.*
 dist/

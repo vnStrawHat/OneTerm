@@ -130,10 +130,9 @@ authoritative.
   under `docs/archive/` with a one-line status header; fill or delete `PROJECT.md`; add a `docs/README.md`
   index (current vs historical); make this review the current one and archive it likewise when superseded.
 
-- [x] **[Medium] HYG-17 — AGENTS.md quality gate is narrower than CI.** §4 lists fmt + clippy + build; CI also
-  requires `cargo test --workspace`, `verify-dependency-graph.py`, `check-ui-fork.py`, `check-doc-paths.py`,
-  `check-english.py`, `benchmark-scale.py --list`. Agents following AGENTS.md will push red CI. *Fix:* list the
-  full set (or add `scripts/ci-local.{sh,ps1}` and reference it).
+- [x] **[Medium] HYG-17 — AGENTS.md quality gate was narrower than CI.** §4 originally omitted
+  workspace tests and several policy checks. *Resolved:* `scripts/ci-local.{sh,ps1}` is the single listed
+  gate and mirrors the current CI set; IN-0017 also removed the retired UI-fork baseline step.
 
 - [x] **[Low] HYG-18 — Design docs drifted from implementation.** `docs/terminal-backend.md` §7 describes a
   per-session current-thread runtime, `last_content: ArcSwap` cache and `std::sync::mpsc`; §5.2 says paint

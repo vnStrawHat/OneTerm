@@ -13,8 +13,6 @@ use gpui_component::{
 use oneterm_core::{LOG_CONTENT_FORMAT, LOG_FILE_NAME_FORMAT, LogWriteMode};
 use oneterm_settings::TerminalSettings;
 
-use crate::items_with_separators;
-
 use super::set;
 
 const WRITE_MODES: &[(&str, LogWriteMode)] = &[
@@ -27,13 +25,14 @@ pub(super) fn group() -> SettingGroup {
     SettingGroup::new()
         .title("Logging")
         .description("Write printable terminal output to timestamped log files.")
-        .items(items_with_separators(vec![
+        .items(vec![
             SettingItem::new(
                 "Automatic: Local Shell",
                 SettingField::switch(
                     |cx: &App| TerminalSettings::global(cx).read(cx).logging.local,
                     |value, cx| set(cx, move |settings| settings.logging.local = value),
-                ),
+                )
+                .default_value(false),
             )
             .description("Start logging every new local shell."),
             SettingItem::new(
@@ -41,7 +40,8 @@ pub(super) fn group() -> SettingGroup {
                 SettingField::switch(
                     |cx: &App| TerminalSettings::global(cx).read(cx).logging.ssh,
                     |value, cx| set(cx, move |settings| settings.logging.ssh = value),
-                ),
+                )
+                .default_value(false),
             )
             .description("Start logging new SSH terminals unless a saved session overrides it."),
             SettingItem::new("Log Folder", log_folder_field())
@@ -69,7 +69,8 @@ pub(super) fn group() -> SettingGroup {
                             .unwrap_or_default();
                         set(cx, move |settings| settings.logging.write_mode = mode);
                     },
-                ),
+                )
+                .default_value("Append"),
             )
             .description("Overwrite truncates once when logging starts; Append preserves content."),
             SettingItem::new(
@@ -84,7 +85,7 @@ pub(super) fn group() -> SettingGroup {
             )
             .description("Fixed for this release. %msg is one printable output line.")
             .disabled(true),
-        ]))
+        ])
 }
 
 struct LogFolderInputState {
@@ -102,7 +103,9 @@ fn log_folder_field() -> SettingField<SharedString> {
                 .to_string();
             let key = SharedString::from(format!(
                 "log-folder-input-{}-{}-{}",
-                options.page_ix, options.group_ix, options.item_ix
+                options.page_ix(),
+                options.group_ix(),
+                options.item_ix()
             ));
             let state_entity = window.use_keyed_state(key, cx, {
                 let value = value.clone();
@@ -123,7 +126,7 @@ fn log_folder_field() -> SettingField<SharedString> {
             gpui::div()
                 .relative()
                 .map(|this| {
-                    if options.layout.is_horizontal() {
+                    if options.layout().is_horizontal() {
                         this.w_64()
                     } else {
                         this.w_full()
@@ -131,7 +134,7 @@ fn log_folder_field() -> SettingField<SharedString> {
                 })
                 .child(
                     Input::new(&input)
-                        .with_size(options.size)
+                        .with_size(options.size())
                         .tab_index(-1)
                         .w_full(),
                 )
@@ -142,7 +145,7 @@ fn log_folder_field() -> SettingField<SharedString> {
                         .right_0()
                         .bottom_0()
                         .left_0()
-                        .when(!options.disabled, |this| {
+                        .when(!options.is_disabled(), |this| {
                             this.cursor_pointer().on_mouse_down(
                                 MouseButton::Left,
                                 move |_, window, cx| {
@@ -152,6 +155,16 @@ fn log_folder_field() -> SettingField<SharedString> {
                         }),
                 )
                 .into_any_element()
+        },
+    )
+    .on_reset(
+        |cx| {
+            TerminalSettings::global(cx).read(cx).logging.directory
+                != oneterm_settings::LoggingConfig::default().directory
+        },
+        |_window, cx| {
+            let directory = oneterm_settings::LoggingConfig::default().directory;
+            set(cx, move |settings| settings.logging.directory = directory);
         },
     )
 }

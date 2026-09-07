@@ -56,8 +56,8 @@ pub enum CloseOutcome {
 ```
 
 `TerminalPanel` maps `LastSpaceClosed` through its terminal-tab close policy. When
-sibling tabs exist, the existing `TabPanel::remove_panel` path removes this tab. When
-this is the final terminal tab, its sessions are shut down and its tree is replaced by
+its `TabGroup` has siblings, `DockArea::remove_panel` removes this tab. When this is
+the final terminal tab, its sessions are shut down and its tree is replaced by
 a single empty placeholder, preserving the tab bar and `+` New Terminal menu. See
 [06](06-integration.md).
 
@@ -98,7 +98,7 @@ The newly active leaf is focused (`focus_handle.focus(window, cx)`); if it is a
 | Close an empty Space | Removes it, no session to close; collapse as usual. |
 | Close the only Space | `LastSpaceClosed` → remove the tab when siblings exist; otherwise retain it as one empty placeholder. |
 | Session exits on its own (`Exited`) inside a Space | The Space stays open showing the terminal's exit state, exactly as a single terminal does today; the user closes it via Close Space. *(No auto-close — matches current tab behavior.)* |
-| Zoom (tab fullscreen) while split | Unchanged — zoom is a `TabPanel`-level concern; the whole tab (with its tree) zooms as one unit. |
+| Zoom (tab fullscreen) while split | Unchanged — zoom targets the containing `TabGroup`; the whole tab (with its tree) zooms as one unit. |
 
 ## 6. Active-Space tracking source of truth
 

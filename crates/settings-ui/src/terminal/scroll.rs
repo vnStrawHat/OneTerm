@@ -4,8 +4,6 @@ use gpui::App;
 use gpui_component::setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem};
 use oneterm_settings::TerminalSettings;
 
-use crate::items_with_separators;
-
 use super::set;
 
 /// Build the "Scroll" settings group.
@@ -13,7 +11,7 @@ pub(super) fn group() -> SettingGroup {
     SettingGroup::new()
         .title("Scroll")
         .description("Wheel speed and alt-screen mode.")
-        .items(items_with_separators(vec![
+        .items(vec![
             SettingItem::new(
                 "Scroll Multiplier",
                 SettingField::number_input(
@@ -26,7 +24,8 @@ pub(super) fn group() -> SettingGroup {
                     |val: f64, cx: &mut App| {
                         set(cx, |s| s.scroll_multiplier = val as f32);
                     },
-                ),
+                )
+                .default_value(1.0),
             )
             .description("Wheel speed."),
             SettingItem::new(
@@ -36,8 +35,9 @@ pub(super) fn group() -> SettingGroup {
                     |val: bool, cx: &mut App| {
                         set(cx, |s| s.alternate_scroll = val);
                     },
-                ),
+                )
+                .default_value(true),
             )
             .description("Send arrows in alt-screen."),
-        ]))
+        ])
 }

@@ -28,7 +28,6 @@ step cargo fmt --all -- --check
 step cargo clippy --workspace --all-targets -- -D warnings
 step cargo test --workspace
 step python scripts/verify-dependency-graph.py
-step python scripts/check-ui-fork.py
 step python scripts/check-doc-paths.py
 step python -m unittest scripts/test_check_english.py
 step python scripts/check-english.py

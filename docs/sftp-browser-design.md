@@ -1644,12 +1644,12 @@ crates/
 |-----|-----|
 | russh channel API | `russh` docs.rs — `client::Handle`, `Channel`, `request_subsystem` |
 | russh-sftp client API | `russh-sftp` docs.rs — `SftpSession`, `read_dir`, `metadata`, `open` |
-| gpui-component Tree | `reference/gpui-component/crates/ui/src/tree/` |
-| gpui-component List | `reference/gpui-component/crates/ui/src/list/` |
-| gpui-component Dialog | `reference/gpui-component/crates/ui/src/dialog/` |
-| gpui-component ContextMenu | `reference/gpui-component/crates/ui/src/menu/` |
-| gpui-component Button | `reference/gpui-component/crates/ui/src/button/` |
-| gpui-component Input | `reference/gpui-component/crates/ui/src/input/` |
+| GPUI Kit Tree | `reference/gpui-kit/crates/component/src/tree.rs` |
+| GPUI Kit List | `reference/gpui-kit/crates/component/src/list/` |
+| GPUI Kit Dialog | `reference/gpui-kit/crates/component/src/dialog/` |
+| GPUI Kit ContextMenu | `reference/gpui-kit/crates/component/src/menu/` |
+| GPUI Kit Button | `reference/gpui-kit/crates/component/src/button/` |
+| GPUI Kit Input | `reference/gpui-kit/crates/component/src/input/` |
 | Cmd/OscRouter pattern | `crates/terminal/src/backend/osc_router.rs` (`SshListener = OscRouter<SshTransport>`) |
 | ssh_main_task pattern | `crates/ssh/src/task.rs` (current) |
 | SshSession::connect | `crates/ssh/src/session.rs` (current) |

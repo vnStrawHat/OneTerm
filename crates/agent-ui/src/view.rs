@@ -2,10 +2,10 @@ use std::{collections::HashMap, time::Duration};
 
 use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, FontWeight,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, Role, SharedString,
     StatefulInteractiveElement as _, Styled as _, Task, div, prelude::FluentBuilder as _,
 };
-use gpui_component::dock::{Panel, PanelControl, PanelEvent};
+use gpui_component::dock::{Panel, PanelEvent};
 use gpui_component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 
 use oneterm_settings::UiConfig;
@@ -79,7 +79,10 @@ fn build_display_groups(cards: &[AgentCard]) -> Vec<AgentDisplayGroup> {
 /// re-renders on registry changes and on a periodic tick for relative-time
 /// labels; owns the view-local filter state.
 pub struct AgentListView {
+    /// Focus target for the panel content itself.
     focus_handle: FocusHandle,
+    /// Focus proxy owned by a containing dock tab group.
+    dock_focus_handle: FocusHandle,
     filter: Filter,
     /// Cached registry data. Animation ticks must not clone the registry.
     cards: Vec<AgentCard>,
@@ -93,7 +96,9 @@ pub struct AgentListView {
 impl AgentListView {
     /// Create the view: ensure the registry exists, wire the config-driven stale
     /// threshold, and start the periodic relative-time / stale refresh tick.
-    pub fn new(_window: &mut gpui::Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut gpui::Window, cx: &mut Context<Self>) -> Self {
+        let focus_handle = cx.focus_handle();
+        let dock_focus_handle = cx.focus_handle();
         AgentRegistry::init(cx);
         let registry = AgentRegistry::global(cx);
 
@@ -109,6 +114,9 @@ impl AgentListView {
         let groups = build_display_groups(&cards);
 
         let mut subs = Vec::new();
+        subs.push(cx.on_focus(&dock_focus_handle, window, |this, window, cx| {
+            this.focus_handle.focus(window, cx);
+        }));
         subs.push(cx.observe(&registry, |this, registry, cx| {
             // Clone the model only when the registry changes. Animation and
             // relative-time ticks render the cached snapshot below.
@@ -162,7 +170,8 @@ impl AgentListView {
         });
 
         Self {
-            focus_handle: cx.focus_handle(),
+            focus_handle,
+            dock_focus_handle,
             filter: Filter::All,
             cards,
             groups,
@@ -225,23 +234,17 @@ fn card_is_working(card: &AgentCard) -> bool {
 
 impl Focusable for AgentListView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
-        self.focus_handle.clone()
+        self.dock_focus_handle.clone()
     }
 }
 
 impl gpui::EventEmitter<PanelEvent> for AgentListView {}
 
 /// The view *is* the right-dock Agent panel: it renders its own header +
-/// scrolling card column full-bleed, so no wrapper panel is needed. Registered
-/// as a raw `DockItem::Panel` (no tab bar / close / zoom chrome); the default
-/// `dump` already records it as `PanelInfo::Panel`.
-impl Panel for AgentListView {
+/// scrolling card column full-bleed, so no wrapper panel is needed.
+impl gpui_base::dock::Panel for AgentListView {
     fn panel_name(&self) -> &'static str {
         panel_names::AGENT
-    }
-
-    fn title(&mut self, _window: &mut gpui::Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        "Agent"
     }
 
     fn closable(&self, _: &App) -> bool {
@@ -249,10 +252,22 @@ impl Panel for AgentListView {
         false
     }
 
-    fn zoomable(&self, _: &App) -> Option<PanelControl> {
-        // Zoom is a TabPanel feature; `DockItem::Panel` is not subscribed to
-        // zoom events by the library (see `DockArea::subscribe_item`).
+    fn zoomable(&self, _: &App) -> bool {
+        false
+    }
+}
+
+impl Panel for AgentListView {
+    fn title(&mut self, _window: &mut gpui::Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        "Agent"
+    }
+
+    fn zoom_control(&self, _: &App) -> Option<gpui_component::dock::PanelControl> {
         None
+    }
+
+    fn inner_padding(&self, _: &App) -> bool {
+        false
     }
 }
 
@@ -472,6 +487,8 @@ impl Render for AgentListView {
         if cards.is_empty() {
             return v_flex()
                 .id("agent-list-empty")
+                .role(Role::Pane)
+                .aria_label("Agent activity")
                 .size_full()
                 .track_focus(&self.focus_handle)
                 .bg(pal.background)
@@ -514,6 +531,8 @@ impl Render for AgentListView {
 
         v_flex()
             .id("agent-list")
+            .role(Role::Pane)
+            .aria_label("Agent activity")
             .size_full()
             .track_focus(&self.focus_handle)
             .bg(pal.background)

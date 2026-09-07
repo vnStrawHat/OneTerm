@@ -20,7 +20,6 @@ mod appearance;
 mod general;
 mod key_bindings;
 mod panel;
-mod separators;
 mod sftp;
 mod ssh;
 mod terminal;
@@ -31,7 +30,6 @@ pub use window::open_settings_window;
 
 // Re-exported for `OneTermWorkspace::bind_keys` (snapshot + apply key bindings).
 pub(crate) use key_bindings::{KeyBindingsSnapshotGlobal, apply_key_bindings, init_state};
-pub(crate) use separators::{items_with_separators, separator};
 
 /// Open the General Settings window — command wrapper for the shell.
 pub fn open_settings(cx: &mut gpui::App) {

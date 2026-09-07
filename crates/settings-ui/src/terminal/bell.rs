@@ -16,7 +16,8 @@ pub(super) fn group() -> SettingGroup {
                 |val: bool, cx: &mut App| {
                     set(cx, |s| s.bell_enabled = val);
                 },
-            ),
+            )
+            .default_value(true),
         )
         .description("Show terminal bell indicator."),
     )
