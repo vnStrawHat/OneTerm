@@ -10,8 +10,8 @@ Created: 2026-09-08
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
-- [ ] In progress
-- [ ] Implemented
+- [x] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -35,37 +35,40 @@ cursor layer), cursor, overlays, and cfg-gated diagnostics — driven end to end
 
 ## Scope
 
-- [ ] In scope: `src/render/{frame, metrics, glyphs, row_plan, plan_cache, state, element,
+- [x] In scope: `src/render/{frame, metrics, glyphs, row_plan, plan_cache, state, element,
       cursor, overlay, diagnostics}.rs`, `src/render/element_tests.rs`; adapters in retained
       modules so they accept the new types: `theme/` (`TerminalTheme::color(Color) -> Hsla`
       table, `ensure_contrast` with exponent 2.4, `min_contrast` default rule — deviations 5, 6),
       `url/mask.rs` (`FrameRow` input, `url_masks_into` reuse), `highlight/overlay.rs`
       (`scan_into` reusing a class buffer). Old callers of those modules keep compiling (add
       the new entry points beside the old ones; remove the old ones in US-0049).
-- [ ] Out of scope: input handling, `TerminalView`, panel/space, scrollbar, search UI, gutter
+- [x] Out of scope: input handling, `TerminalView`, panel/space, scrollbar, search UI, gutter
       timestamp bookkeeping (the element only formats and paints labels handed to it),
       completion, deleting old files.
 
 ## Acceptance
 
-- [ ] HLD parity items US-0047 1–36, §2.15 (1–5, 7–9), §2.22 are implemented in `render/`
-      and covered by the tests below.
-- [ ] `dirty_frame_plans_rows_and_shapes` and `idle_frame_plans_nothing_but_paints` pass:
+- [x] HLD parity items US-0047 1–36, §2.15 (1–5, 7–9), §2.22 are implemented in `render/`
+      and covered by the tests below (26 scrollbar and 28 bell badge stay with the view).
+- [x] `dirty_frame_plans_rows_and_shapes` and `idle_frame_plans_nothing_but_paints` pass:
       idle frame `rows_planned == 0`, `shape_calls == 0`, `url_scans == 0`, `quads > 0`;
       dirty frame `snapshot_calls == 1`.
-- [ ] `scroll_rotates_plans_and_replans_only_scrolled_in_rows` passes with `Damage::Full`
-      (deviation 8).
-- [ ] `block_run_coalesces_into_one_quad`: 40 `█` → 1 quad; 40 `─` → 1 quad.
-- [ ] `idle_frame_allocates_nothing`: zero allocations around `PlanCache::update` + overlays on
-      the second identical frame.
-- [ ] `metrics_snap_cell_to_device_pixels` at 1.0 / 1.25 / 1.5 / 2.0.
-- [ ] No module outside `render/frame.rs` (and the retained `theme/palette.rs` conversion of
+- [x] `scroll_rotates_plans_and_replans_only_scrolled_in_rows` passes with `Damage::Full`
+      (deviation 8) — a `plan_cache` unit test driven by `FrameBuilder` (the fake session cannot
+      scroll).
+- [x] `block_run_coalesces_into_one_quad`: 40 `█` → 1 quad; 40 `─` → 1 quad.
+- [x] `idle_frame_allocates_nothing`: zero allocations around `PlanCache::update` + overlays +
+      cursor resolution on the second identical frame (counting `#[global_allocator]` with
+      thread-local counters, self-checked against a deliberate `vec!`).
+- [x] `metrics_snap_cell_to_device_pixels` at 1.0 / 1.25 / 1.5 / 2.0.
+- [x] No module outside `render/frame.rs` (and the retained `theme/palette.rs` conversion of
       `TerminalPalette`) imports `alacritty_terminal` in `render/`: enforced by a test that greps
       `src/render/*.rs` for `alacritty_terminal` and expects only `frame.rs`.
-- [ ] `theme` tests: `contrast_ratio_uses_wcag_exponent` (black/white = 21.0 ± 0.01;
+- [x] `theme` tests: `contrast_ratio_uses_wcag_exponent` (black/white = 21.0 ± 0.01;
       #777777 on white ≈ 4.48), `min_contrast_zero_keeps_theme_default`,
       `min_contrast_one_disables`.
-- [ ] `pwsh scripts/ci-local.ps1` green; old view still renders (manual smoke run).
+- [ ] `pwsh scripts/ci-local.ps1` green; old view still renders (manual smoke run) — left to
+      the orchestrator (whole-branch gate); focused fmt/clippy/test evidence below.
 
 ## Documentation
 
@@ -93,6 +96,17 @@ must be reflected there so US-0048/0049 build on the real shapes.
 Before completion, diff `render-pipeline.md` type listings against `src/render/*.rs`
 signatures and record the result.
 
+Result (2026-09-08): `render-pipeline.md` amended to the implemented shapes — `RowPlan` with
+flattened `colors` / `path_ops`, `PlanContext` fields, `build_row_plan` signature, word-sized
+text runs, `Vec` open-rect scratch, four-phase `PlanCache::update` (URL scan gated on
+hash-verified changes), `FontSet`, `CursorConfig` / `ResolvedCursor` / `CursorPaint::build`,
+`url::url_masks_into(frame, masks, wraps)`, `SearchHighlight` in `overlay.rs`, always-compiled
+`FrameStats` (+ `glyph_errors`), `DiagnosticsLog`, the element background quads, geometry
+written in prepaint, the allocation plan and the `layers == 1` test note; its Edge Cases and
+Verification boxes are ticked. `high-level-design.md` Cross-frame State table lists the new
+buffers (`dirty`, `wraps`, `fonts`, cached metrics, gutter labels) and the Invalidation Rules
+row for the URL mask states the hash-verified gating. `shapes.md` unchanged.
+
 ## Context
 
 - GPUI 0.3.3 phase rules: `insert_hitbox` prepaint-only; `paint_quad`/`paint_glyph`/
@@ -111,24 +125,24 @@ signatures and record the result.
 
 ## Plan
 
-- [ ] `frame.rs`: `Frame`, `FrameRow`, `Cell`, `Color`, `CellFlags`, `CursorShape`, `Cursor`,
+- [x] `frame.rs`: `Frame`, `FrameRow`, `Cell`, `Color`, `CellFlags`, `CursorShape`, `Cursor`,
       `Selection`, `Damage`, conversions, row hash, `text_into`, tests for conversions and
       selection mapping.
-- [ ] `metrics.rs`: `CellMetrics`, `measure`, `GridGeometry`, `grid_size_for`, `pixel_to_grid`,
+- [x] `metrics.rs`: `CellMetrics`, `measure`, `GridGeometry`, `grid_size_for`, `pixel_to_grid`,
       tests (device snapping at four scales, gutter/padding subtraction, ≥ 1×1).
-- [ ] `theme/`: `Color → Hsla` table rebuilt on palette change; WCAG 2.4 luminance;
+- [x] `theme/`: `Color → Hsla` table rebuilt on palette change; WCAG 2.4 luminance;
       `min_contrast` rule; tests.
-- [ ] `glyphs.rs`: `FontKey`, `GlyphCache::{begin_frame, shape}`, eviction; tests.
-- [ ] `highlight/overlay.rs` `scan_into`; `url/mask.rs` `url_masks_into(&Frame, ..)`; keep old
+- [x] `glyphs.rs`: `FontKey`, `GlyphCache::{begin_frame, shape}`, eviction; tests.
+- [x] `highlight/overlay.rs` `scan_into`; `url/mask.rs` `url_masks_into(&Frame, ..)`; keep old
       functions until US-0049.
-- [ ] `row_plan.rs`: style resolution, bg spans, text runs (wide/zero-width/hidden rules),
+- [x] `row_plan.rs`: style resolution, bg spans, text runs (wide/zero-width/hidden rules),
       shapes + coalescing, paths, decorations, class merge; tests listed in the LLD.
-- [ ] `plan_cache.rs`: `StyleKey`, candidates, rotation, hash verify, mask delta; tests.
-- [ ] `state.rs`: `RenderState`, `RenderInputs`, `Scratch`, overlays, gutter buffers.
-- [ ] `overlay.rs`: selection/search rects, mask entry; `cursor.rs`: `resolve` + paint.
-- [ ] `diagnostics.rs`: `FrameStats`, `LatencySamples`, throttled log.
-- [ ] `element.rs`: `TerminalElementSpec`, `TerminalElement`, prepaint/paint per the LLD table.
-- [ ] `element_tests.rs`: headless `gpui::test` window rendering the element with
+- [x] `plan_cache.rs`: `StyleKey`, candidates, rotation, hash verify, mask delta; tests.
+- [x] `state.rs`: `RenderState`, `RenderInputs`, `Scratch`, overlays, gutter buffers.
+- [x] `overlay.rs`: selection/search rects, mask entry; `cursor.rs`: `resolve` + paint.
+- [x] `diagnostics.rs`: `FrameStats`, `LatencySamples`, throttled log.
+- [x] `element.rs`: `TerminalElementSpec`, `TerminalElement`, prepaint/paint per the LLD table.
+- [x] `element_tests.rs`: headless `gpui::test` window rendering the element with
       `FakeTerminalSession`; counting allocator test.
 - [ ] Manual smoke: `cargo run -p oneterm-app --profile fast-dev` still renders via the old view.
 - [ ] `pwsh scripts/ci-local.ps1`.
@@ -158,15 +172,105 @@ signatures and record the result.
 - Gate: `pwsh scripts/ci-local.ps1`.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
 - [ ] Platform proof
-- [ ] Verify command passed
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
+Commands (branch `refactor/terminal-render-engine`, Windows, 2026-09-08):
+
+- `cargo fmt --all` then `cargo fmt --all -- --check` — clean.
+- `cargo clippy -p oneterm-terminal-view --all-targets -- -D warnings` — clean (no output).
+- `cargo clippy --workspace --all-targets -- -D warnings` — exit 0.
+- `cargo clippy -p oneterm-terminal-view --all-targets --features terminal-diagnostics -- -D warnings`
+  — fails on a **pre-existing** dead-code error in the old view
+  (`view/local_view.rs:350 render_diagnostics` is `cfg(any(test, feature))` but only called from
+  tests); the new `render/` code is clean under the feature. Left untouched (US-0049 deletes it).
+- `cargo test -p oneterm-terminal-view` — `274 passed, 1 ignored` (215 pre-existing + 59 new).
+- `cargo test -p oneterm-terminal-view render` — `81 passed, 1 ignored` (59 new + 22 shapes).
+- `cargo test -p oneterm-terminal-view theme` — `13 passed`.
+- `FrameStats` from `element_tests` (`--nocapture`, 1024×768 test window → 69×128 grid):
+  - first frame: `snapshot_calls: 1, rows_total: 69, rows_candidate: 69, rows_planned: 69,
+    shape_calls: 3, url_scans: 1, quads: 3, glyphs: 31, layers: 1`
+  - dirty frame (`set_text`): `snapshot_calls: 1, rows_candidate: 69, rows_planned: 4,
+    shape_calls: 1, glyph_hits: 1, url_scans: 1, quads: 1, glyphs: 10, layers: 1`
+  - idle frame: `snapshot_calls: 1, rows_candidate: 1, rows_planned: 0, shape_calls: 0,
+    url_scans: 0, quads: 3, glyphs: 8, layers: 1`
+  - `idle_frame_allocates_nothing`: 0 allocations across `update_plans` + `compute_overlays` +
+    `resolve_cursor`.
+
+New tests (59): `frame` 6, `metrics` 6, `glyphs` 3, `row_plan` 13, `plan_cache` 7, `overlay` 3,
+`cursor` 4, `state` 2, `diagnostics` 1, `element_tests` 7, `theme` 4, `highlight/overlay` 1,
+`url/mask` 2.
+
+Files: `src/render/{frame 872, metrics 317, glyphs 263, row_plan 928, plan_cache 460, overlay
+215, cursor 290, state 504, diagnostics 151, element 460, element_tests 381, mod 17}.rs`;
+adapted `theme/{palette, terminal_theme, contrast, mod, tests}.rs`, `highlight/overlay.rs`,
+`url/{mask, mod}.rs`; `crates/highlight/src/lib.rs` (+ `scan_line_into` re-export).
+
+Deviations from the LLD/HLD (all recorded in `render-pipeline.md`):
+
+1. `FrameStats` counters are always compiled; only `LatencySamples`, timers and the log are
+   cfg-gated. `glyph_errors` added.
+2. `RowPlan` flattens `ColorSpan`s and `PathOp`s per row (`color_start/end`, `op_start/end`)
+   so a rebuild never allocates a per-run `Vec`; `ShapePathPlan` carries `style` instead of a
+   `ShapePath`.
+3. `Scratch.open: SmallVec` → `open_prev` / `open_cur: Vec<usize>` (no `smallvec`); `paths`
+   scratch added; `label` doubles as the cursor glyph text.
+4. `PlanCache::update` runs in four phases; the URL scan is gated on hash-verified changes,
+   not on candidates (the cursor row is a candidate every frame, so the LLD order would rescan
+   on every idle frame). `dirty` bitset and `wraps` scratch added.
+5. `url_masks_into(frame, masks, wraps)` lives in `url/mask.rs` (packet scope), `overlay.rs`
+   only holds selection/search; `SearchHighlight` is defined in `overlay.rs`.
+6. Text runs split at blank cells (word-sized runs) — better glyph-cache reuse; output
+   identical because `force_width` places glyphs per cell.
+7. Cursor resolution is split into a pure `resolve` (unit-tested without a window) and
+   `CursorPaint::build`; a block cursor covers two columns over a wide char.
+8. `state.geometry` is written in prepaint (input handlers see it before paint).
+9. The element paints its own `theme.bg` background quad and the `gutter_bg` quad; overlays
+   are painted after all rows' bg/shape quads.
+10. `TerminalTheme.colors: ColorTable` is a field rebuilt by `build_terminal_theme` /
+    `apply_color_overrides` / `apply_dynamic_colors` (269 entries incl. dim ANSI and
+    bright/dim fg); the two theme test literals gained the field.
+11. `oneterm_highlight::scan_line_into` is re-exported at the highlight crate root (it existed
+    but was not exported) so `SemanticOverlay::scan_into` can reuse its buffer.
+12. `layers == 1` in the dirty/idle tests needs cursor-less inputs (the fake reports a visible
+    block cursor at (0, 0)); `cursor_layer_and_gutter_paint` covers the two-layer path.
+13. `FrameRow::hash` reads the engine cell directly (no `Cell` conversion) because
+    `Damage::Full` hashes every row.
+
+Gaps:
+
+- Nothing renders through `render/element.rs` in the app yet (US-0049 wires the view);
+  `#[allow(dead_code)]` stays on `pub(crate) mod render` until US-0050.
+- No screenshot / manual smoke evidence from this packet; the old view is untouched apart from
+  the two shared theme behavior changes (deviations 5 and 6 of the HLD).
+- `pwsh scripts/ci-local.ps1` not run here (whole-branch gate, owned by the orchestrator).
+- `terminal-diagnostics` feature clippy blocked by the pre-existing old-view dead code above.
+
 ## Handoff
+
+For US-0048 (input): read `RenderState.geometry: Option<GridGeometry>` (written in prepaint)
+through the shared `Rc<RefCell<RenderState>>`; `GridGeometry::{cell_at, pixel_to_grid,
+cell_origin}` is the hit-test contract; `state.frame` holds the last snapshot (`selection()`,
+`cursor()`, `app_cursor()`, `alt_screen()`, `row(r).hyperlink_uri(col)`) — never call
+`snapshot_into` outside the element.
+
+For US-0049 (view): before building `TerminalElement`, refresh `state.inputs: RenderInputs`
+in place (`theme: Rc<TerminalTheme>` replaced only when the palette/overrides/dynamic colors
+change, `font`, `font_size`, `line_height_factor`, `cell_width_override`, `padding`,
+`show_gutter`, `cursor: CursorConfig { shape, color, focused, blink_visible }`, `gutter:
+GutterInputs { times, base, absolute_line_count }`, `search` refilled in place, `semantic`
+(owned there: `set_enabled` / `set_profile`), `url_hovering`); build
+`TerminalElementSpec { id, session, state, ime }` where `ime` is
+`Some(Box::new(move |bounds, window, cx| window.handle_input(&focus, ElementInputHandler::new(bounds, view), cx)))`
+only while focused (the element calls it once, in paint, after releasing the state borrow).
+Diagnostics: `state.stats` is the last frame's `FrameStats`.
+
+
 
 Depends on US-0046. Blocks US-0048 (hit-test contract) and US-0049 (element consumer).

@@ -36,5 +36,5 @@ pub use color::{Hsla, Rgba, parse_hex};
 pub use profile::ShellProfile;
 pub use role::{RowRole, RowRoles};
 pub use rules::RuleSet;
-pub use scanner::scan_line;
+pub use scanner::{scan_line, scan_line_into};
 pub use theme::{ClassStyle, ClassStyles, Decoration, FontStyle};

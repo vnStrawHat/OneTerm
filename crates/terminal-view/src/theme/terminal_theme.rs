@@ -10,8 +10,13 @@ use oneterm_highlight::ClassStyles;
 use oneterm_settings::ColorOverrides;
 use oneterm_terminal::{DynamicColors, TerminalPalette};
 
-use super::palette::{self, hsla_from_vte, vte_from_rgba};
+use super::contrast::ensure_minimum_contrast;
+use super::palette::{self, ColorTable, hsla_from_vte, vte_from_rgba};
 use crate::highlight::load_default_styles;
+use crate::render::frame::Color;
+
+/// WCAG AA threshold used when settings do not choose one (deviation 6).
+pub(crate) const DEFAULT_MIN_CONTRAST: f32 = 4.5;
 
 /// Terminal theme with a prebuilt palette + bg/fg (Hsla) + contrast threshold.
 #[derive(Clone)]
@@ -42,6 +47,22 @@ pub(crate) struct TerminalTheme {
     /// themes without a `terminal.semantic` block → all `None` → Layer 2 is a
     /// no-op.
     pub class_styles: &'static ClassStyles,
+    /// `Color -> Hsla` lookup for the current palette; rebuilt by every builder
+    /// and override pass below so it never lags the palette.
+    pub colors: ColorTable,
+}
+
+impl TerminalTheme {
+    /// Resolve a cell color through the palette in O(1).
+    #[inline]
+    pub(crate) fn color(&self, c: Color) -> Hsla {
+        self.colors.color(c)
+    }
+
+    /// Push `fg` away from `bg` until the theme's minimum contrast is met.
+    pub(crate) fn ensure_contrast(&self, fg: Hsla, bg: Hsla) -> Hsla {
+        ensure_minimum_contrast(fg, bg, self.min_contrast)
+    }
 }
 
 /// Build a `TerminalTheme` from the gpui-component active `Theme`.
@@ -63,6 +84,7 @@ pub(crate) fn build_terminal_theme(theme: &Theme) -> TerminalTheme {
         indexed: [None; 256],
     };
     TerminalTheme {
+        colors: ColorTable::from_palette(&palette),
         palette,
         bg,
         fg,
@@ -71,7 +93,7 @@ pub(crate) fn build_terminal_theme(theme: &Theme) -> TerminalTheme {
         } else {
             gpui::hsla(0.569, 0.92, 0.949, 1.0) // #e6f4fe light blue
         },
-        min_contrast: 4.5,
+        min_contrast: DEFAULT_MIN_CONTRAST,
         gutter_fg: gpui::hsla(fg.h, fg.s, fg.l * 0.5, fg.a),
         gutter_bg: bg,
         clock_fg: gpui::hsla(fg.h, fg.s, fg.l * 0.5, fg.a),
@@ -115,12 +137,18 @@ pub(crate) fn apply_color_overrides(theme: TerminalTheme, co: &ColorOverrides) -
     if let Some(lnf) = co.line_number_fg {
         t.line_number_fg = lnf;
     }
-    t.min_contrast = co.min_contrast;
+    // Deviation 6: an unset / non-positive setting keeps the theme default
+    // instead of silently disabling enforcement; `0 < v <= 1` is the explicit
+    // "off" (a ratio of 1 is always met); anything above is the threshold.
+    if co.min_contrast > 0.0 {
+        t.min_contrast = co.min_contrast;
+    }
     for (i, color) in co.ansi.iter().enumerate().take(16) {
         if let Some(color) = color {
             t.palette.ansi[i] = vte_from_rgba(color.to_rgb());
         }
     }
+    t.colors = ColorTable::from_palette(&t.palette);
     t
 }
 
@@ -144,5 +172,6 @@ pub(crate) fn apply_dynamic_colors(mut theme: TerminalTheme, dc: &DynamicColors)
     }
     // OSC 4 palette overrides (indices 0-255) — resolution consults these first.
     theme.palette.indexed = dc.indexed;
+    theme.colors = ColorTable::from_palette(&theme.palette);
     theme
 }

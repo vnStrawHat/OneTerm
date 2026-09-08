@@ -204,13 +204,16 @@ input handlers):
 | Field | Lifetime / reuse |
 | --- | --- |
 | `frame: Frame` | wraps the reused `TerminalContent`; `snapshot_into` reuses its `cells` and damage buffers |
-| `plans: PlanCache` | one `RowPlan` per display row; vectors cleared, not reallocated, on rebuild; rotated on scroll |
+| `plans: PlanCache` | one `RowPlan` per display row (color spans and path ops flattened per row); vectors cleared, not reallocated, on rebuild; rotated on scroll; `candidate` / `dirty` bitsets, URL mask double buffer and `wraps` scratch |
 | `glyphs: GlyphCache` | `HashMap<RunKey, (ShapedLine, generation)>`, cap 4096; entries unused for 2 generations are evicted when the cap is hit |
 | `geometry: Option<GridGeometry>` | written in prepaint, read by input handlers (hit-test contract) |
 | `inputs: RenderInputs` | written by `TerminalView::render` before the element is built |
-| `overlays` | `selection: Vec<DeviceRect>`, `search: Vec<SearchRect>`, `url_mask: Vec<Vec<bool>>` (prev/cur double buffer), reused |
-| `scratch` | run text `String`, class `Vec<u8>`, line text `String`, `char_cols: Vec<u16>`, rect scratch, `SmallVec` of open rects |
-| `stats: FrameStats`, `latency: LatencySamples` | cfg(any(test, feature = "terminal-diagnostics")) |
+| `overlays` | `selection: Vec<RowSpan>`, `search: Vec<SearchRect>`, reused (the URL mask double buffer lives in `PlanCache`) |
+| `scratch` | run text `String`, class `Vec<u8>`, line text `String`, `char_cols: Vec<u16>`, `char_wide`, rect / path scratch, two `Vec<usize>` of open rects, label `String` |
+| `fonts: FontSet` + cached `CellMetrics` | four font variants with keys, rebuilt on font/size change; metrics re-measured on font/size/factor/override/scale change |
+| `gutter: GutterLabels` | one shaped label per row (`ShapedLine` clones from the glyph cache) + gutter width |
+| `stats: FrameStats` | always compiled (plain counters) |
+| `latency: LatencySamples`, `log` | cfg(any(test, feature = "terminal-diagnostics")) / cfg(feature) |
 
 The view keeps (outside `RenderState`): `SearchState`, `ScrollbarState`, `GutterTimestamps`,
 `CompletionState`, `UrlHover`, `SemanticOverlay`, notification queue, progress, bell, focus,
@@ -225,7 +228,7 @@ tasks, `last_pushed_palette`, `cached_font`.
 | cursor row | always a candidate (catches undamaged echo) |
 | `display_offset` delta `d`, `abs(d) < rows`, grid unchanged | plans and hashes are rotated (`rotate_right(d)` when `d > 0`, i.e. scrolling into history); the `d` scrolled-in rows are candidates; the rest are hash-verified only if damage says so |
 | `abs(d) >= rows`, grid size change, `StyleKey` change (font family/size/weight/features, palette hash, min contrast, semantic enabled, shell profile, show_gutter) | all rows rebuilt (hash check skipped) |
-| URL mask row changed vs previous frame | that row is a candidate (fixes wrapped-URL continuation rows) |
+| URL mask row changed vs previous frame | that row is rebuilt (fixes wrapped-URL continuation rows); the mask is recomputed only when a hash-verified candidate actually changed, so an idle frame (cursor row always a candidate) never rescans |
 | selection, hover, search matches, cursor blink, focus, scrollbar | never touch plans (painted as overlays / cursor layer) |
 | `GlyphCache` | key includes font family/size/weight/style bits, so a style change naturally misses; stale entries age out |
 | gutter | labels are shaped through `GlyphCache` keyed by label text, so unchanged rows hit the cache |

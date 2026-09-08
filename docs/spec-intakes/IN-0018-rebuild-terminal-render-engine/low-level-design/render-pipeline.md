@@ -112,16 +112,26 @@ padding, floor at device pixels, min 1).
 pub(crate) struct RowPlan {
     pub hash: u64,                       // 0 = never built
     pub bg: Vec<BgSpan>,                 // { col: u16, cols: u16, color: Hsla }  non-default bg, merged
-    pub text: Vec<TextRunPlan>,          // { col: u16, cols: u16, line: ShapedLine, colors: Vec<ColorSpan> }
+    pub text: Vec<TextRunPlan>,          // { col, cols, bold, italic, line: ShapedLine, color_start, color_end }
+    pub colors: Vec<ColorSpan>,          // flattened per row; a run owns colors[color_start..color_end]
     pub shapes: Vec<ShapeQuad>,          // { rect: DeviceRect /* x from grid left, y from row top */, color: Hsla }
-    pub paths: Vec<ShapePathPlan>,       // { col: u16, color: Hsla, path: ShapePath }
+    pub paths: Vec<ShapePathPlan>,       // { col, color, style: PathStyle, op_start, op_end }
+    pub path_ops: Vec<PathOp>,           // flattened per row (cell-relative device px)
     pub decorations: Vec<DecorationSpan>,// { col, cols, kind: Underline { wavy } | Strikethrough, color }
 }
 pub(crate) struct ColorSpan { pub byte_end: u32, pub color: Hsla }   // colors along the run text
+pub(crate) struct PlanContext<'a> { theme: &'a TerminalTheme, fonts: &'a FontSet, font_size: Pixels,
+    cell_width: Pixels, device: CellSizeDevicePx, semantic: Option<&'a SemanticOverlay> /* None = off */,
+    window: &'a Window }
 ```
 
-`build_row_plan(row: FrameRow, ctx: &PlanContext, scratch: &mut Scratch, glyphs: &mut GlyphCache,
-plan: &mut RowPlan)` (every `Vec` is `clear()`ed, never replaced):
+Implementation note (US-0047): color spans and path ops are flattened into the row so a rebuild
+never allocates a per-run `Vec`; `RowPlan::colors_of(run)` / `ops_of(path)` slice them back.
+
+`build_row_plan(row: FrameRow, ctx: &PlanContext, url_mask: &[bool], scratch: &mut Scratch,
+glyphs: &mut GlyphCache, stats: &mut FrameStats, plan: &mut RowPlan)` (every `Vec` is
+`clear()`ed, never replaced; `url_mask` is the row's slice of the cache's current mask, possibly
+empty):
 
 1. **Classes.** If semantic highlighting is enabled: `row.text_into(scratch.line_text,
    char_cols, char_wide)`, `overlay.scan_into(line_text, row_index, &mut scratch.class_chars)`,
@@ -146,7 +156,9 @@ plan: &mut RowPlan)` (every `Vec` is `clear()`ed, never replaced):
      with the same `(weight, italic)`; a `WIDE_CHAR` cell is always its own run of `cols = 2`
      (shaped with `force_width: None`); zero-width chars append to the run text; a blank cell
      directly after a cell with zero-width chars is the overflow slot (no run of its own).
-     Color spans record `(byte_end, fg)` transitions inside the run.
+     Color spans record `(byte_end, fg)` transitions inside the run. "Blank" here is a space /
+     NUL without zero-width chars, so runs are word-sized: shaped words repeat across rows and
+     frames far more than whole lines do, which is what makes the glyph cache hit.
    - **decorations**: `UNDERLINE || hyperlink.is_some()` → `Underline { wavy: UNDERCURL }`;
      else `cs.deco == Underline` → plain underline; `STRIKEOUT` → strikethrough; adjacent spans
      of the same kind and color merge.
@@ -155,7 +167,8 @@ plan: &mut RowPlan)` (every `Vec` is `clear()`ed, never replaced):
 4. `plan.hash = row.hash()`.
 
 **Shape coalescing.** Rects of a cell are compared with the rects of the previous cell that touch
-its right edge (`scratch.open: SmallVec<[usize; 8]>` of indices into `plan.shapes`): a new rect
+its right edge (`scratch.open_prev` / `open_cur: Vec<usize>` — `smallvec` is not a workspace
+dependency — of indices into `plan.shapes`, swapped per column): a new rect
 with equal `y`, `h`, color and `x == prev.x + prev.w` extends `prev.w` instead of being pushed.
 A run of 80 `█` cells or 80 `─` cells becomes one quad; a `▀▄` alternation stays two quads per
 cell (different `y`).
@@ -166,8 +179,9 @@ cell (different `y`).
 pub(crate) struct StyleKey { font_family: u32 /* interned */, font_size_bits: u32, weight_bits: u32,
     features_hash: u64, palette_hash: u64, min_contrast_bits: u32, semantic_enabled: bool,
     shell_profile: u8, show_gutter: bool }
-pub(crate) struct PlanCache { rows: Vec<RowPlan>, candidate: Vec<bool>, style: Option<StyleKey>,
-    grid: Option<GridSize>, display_offset: usize, mask_prev: Vec<Vec<bool>>, mask_cur: Vec<Vec<bool>> }
+pub(crate) struct PlanCache { rows: Vec<RowPlan>, candidate: Vec<bool>, dirty: Vec<bool>,
+    style: Option<StyleKey>, grid: Option<GridSize>, display_offset: usize,
+    mask_prev: Vec<Vec<bool>>, mask_cur: Vec<Vec<bool>>, wraps: Vec<bool> /* url scan scratch */ }
 ```
 
 ```text
@@ -181,27 +195,36 @@ update(frame, style_key, ctx, scratch, glyphs, stats):
       if |d| >= rows: every plan.hash = 0
       else if d > 0: rows.rotate_right(d); plans[0..d].hash = 0          // scrolled into history: content moves down
       else:          rows.rotate_left(-d); plans[rows+d..rows].hash = 0
+  // phase 1: candidates
   candidate.fill(false)
   match frame.damage(): Full => candidate.fill(true); Rows(list) => for r in list { candidate[r] = true }
   if let cursor row in 0..rows: candidate[row] = true
   for r: if plans[r].hash == 0: candidate[r] = true
-  any_dirty = candidate.any()
-  if any_dirty: url_masks_into(frame, &mut mask_cur); for r: if mask_cur[r] != mask_prev[r] { candidate[r] = true }
-  for r where candidate[r]:
-    h = frame.row(r).hash()
-    if h != plans[r].hash: build_row_plan(frame.row(r), ctx, scratch, glyphs, &mut plans[r]); stats.rows_planned += 1
-  if any_dirty: swap(mask_prev, mask_cur)
-  grid = frame.size(); style = style_key; display_offset = frame.display_offset()
   stats.rows_candidate = count(candidate)
+  // phase 2: hash verification
+  dirty.fill(false); for r where candidate[r]: dirty[r] = frame.row(r).hash() != plans[r].hash
+  // phase 3: URL masks, only when a row really changed
+  any_dirty = dirty.any()
+  if any_dirty: url_masks_into(frame, &mut mask_cur, &mut wraps); stats.url_scans += 1
+               for r: if mask_cur[r] != mask_prev[r] { dirty[r] = true }
+  // phase 4: rebuild
+  for r where dirty[r]: build_row_plan(frame.row(r), ctx, mask[r], scratch, glyphs, stats, &mut plans[r]); stats.rows_planned += 1
+  if any_dirty: swap(mask_prev, mask_cur)
+  grid = frame.size(); style = style_key; display_offset = frame.display_offset(); stats.rows_total = rows
 ```
 
 Selection, hover, search, blink, and focus never enter `update`. A style-key change or a grid
-change zeroes every hash, so rows rebuild without hashing.
+change zeroes every hash, so rows rebuild without hashing. Implementation note (US-0047): the
+cursor row is a candidate on every frame, so the URL scan is gated on *hash-verified* changes
+(phase 3), not on candidates — otherwise every idle frame would rescan; `rows_candidate` counts
+phase-1 candidates and `rows_planned` phase-4 rebuilds.
 
 ### Glyph cache (`glyphs.rs`)
 
 ```rust
-pub(crate) struct FontKey { family: u32, size_bits: u32, weight_bits: u32, italic: bool }
+pub(crate) struct FontKey { family: u32 /* FNV of the family name */, size_bits: u32, weight_bits: u32, italic: bool }
+pub(crate) struct FontSet { /* regular, bold, italic, bold-italic: (Font, FontKey) */ }
+impl FontSet { pub fn new(base: &Font, font_size: Pixels) -> Self; pub fn get(&self, bold, italic) -> (&Font, FontKey); pub fn regular(&self) -> (&Font, FontKey) }
 struct RunKey { text_hash: u64 /* FNV-1a over UTF-8 bytes */, len: u32, font: FontKey, forced: bool }
 pub(crate) struct GlyphCache { map: HashMap<RunKey, Entry { line: ShapedLine, used: u32 }>, generation: u32, capacity: usize /* 4096 */ }
 impl GlyphCache {
@@ -246,16 +269,19 @@ pub(crate) struct PrepaintState { hitbox: Hitbox, cursor: Option<CursorPaint>, v
 | `window.paint_layer(cursor_bounds, ..)` cursor pass (only when `cursor.is_some()`) | paint | |
 | `window.set_cursor_style(IBeam | PointingHand when inputs.url_hovering, &hitbox)` | paint | paint-only |
 | `if let Some(ime) = prepaint.ime.take() { ime(bounds, window, cx) }` → `window.handle_input(&focus, ElementInputHandler::new(bounds, view), cx)` inside the closure | paint | paint-only |
-| `state.geometry = Some(geometry)`; stats/latency; throttled log | paint end | none |
+| `state.geometry = Some(geometry)` (prepaint, so input handlers see it before paint); stats/latency; throttled log | prepaint / paint end | none |
 
 Grid pass, per row `r` in `visible_rows` (`row_top = origin.y + r * line_height`, quads via
 `Bounds::from_corners(cell_origin(c0, r), cell_origin(c1, r + 1))` or, for device rects,
 `origin + px(rect.x / scale)` … `px((rect.x + rect.w) / scale)`):
 
+0. one `theme.bg` quad over the element bounds and, when the gutter is shown, one
+   `theme.gutter_bg` quad over the gutter column (US-0047: the element owns its background)
 1. bg spans → `paint_quad(fill(..))`
 2. shape quads → `paint_quad(fill(..))`
 3. search rects → `fill(theme.search_match | search_active)`; selection rects →
-   `fill(theme.selection)` (translucent, insertion order keeps them above bg and shapes)
+   `fill(theme.selection)` (translucent; painted after *all* rows' bg and shape quads —
+   insertion order keeps them above bg and shapes)
 4. paths → `PathBuilder::fill()`/`stroke(px(width / scale))` with points converted to logical,
    `paint_path(path, color)`
 5. decorations → `paint_underline(point(x0, row_top + baseline + px(1)), width, &UnderlineStyle
@@ -270,14 +296,20 @@ Grid pass, per row `r` in `visible_rows` (`row_top = origin.y + r * line_height`
 Cursor pass (`cursor.rs`):
 
 ```rust
+pub(crate) struct CursorConfig { shape: Option<CursorShape> /* override */, color: Option<Hsla>, focused: bool, blink_visible: bool }
+pub(crate) struct ResolvedCursor { row: u16, col: u16, cols: u16 /* 2 over a wide char */, shape, hollow: bool, repaint_glyph: bool }
+pub(crate) fn resolve(frame: &Frame, config: &CursorConfig) -> Option<ResolvedCursor>      // pure, unit-tested
 pub(crate) struct CursorPaint { bounds: Bounds<Pixels>, color: Hsla, shape: CursorShape, hollow: bool,
-                                glyph: Option<(ShapedLine, Hsla /* cell bg */)> }
-resolve: row = frame.cursor().row in 0..rows else None; shape = if snapshot Hidden { Hidden } else { config override or snapshot };
-         Hidden → None; should_paint = !focused || blink_visible else None;
-         color = inputs.cursor_color.unwrap_or(theme.color(Color::Cursor)); hollow = !focused || HollowBlock
-         bounds: Block/HollowBlock = cell; Beam = width max(1 dev px, 20 % cell); Underline = height max(2 dev px, 15 % line), bottom-aligned
-         glyph = (Block && !hollow && cell non-blank) → shape the cell text via GlyphCache, bg = theme.color(cell.bg after inverse)
-paint:  hollow Block → four 1-device-px edge quads; else one quad; then glyph re-painted in cell-bg color over the block
+                                glyph: Option<(ShapedLine, Hsla /* cell bg */)>, .. }
+impl CursorPaint { fn build(resolved, frame, config, theme, geometry, fonts, font_size, glyphs, text_scratch, window, stats) -> Self;
+                   fn paint(&self, font_size, window, stats) }
+resolve: row = frame.cursor().row in 0..rows (and col < cols) else None; snapshot Hidden → None;
+         should_paint = !focused || blink_visible else None; shape = config.shape.unwrap_or(snapshot);
+         hollow = !focused || HollowBlock; repaint_glyph = Block && !hollow && cell non-blank
+build:   color = config.color.unwrap_or(theme.color(Color::Cursor))
+         bounds: Block/HollowBlock = cell (two cells over a wide char); Beam = width max(1 dev px, 20 % cell); Underline = height max(2 dev px, 15 % line), bottom-aligned
+         glyph = repaint_glyph → shape the cell text via GlyphCache (scratch string, no allocation), bg = theme.color(cell.bg after inverse)
+paint:   hollow Block → four 1-device-px edge quads; else one quad; then glyph re-painted in cell-bg color over the block
 ```
 
 ### Overlays (`overlay.rs`)
@@ -287,79 +319,102 @@ paint:  hollow Block → four 1-device-px edge quads; else one quad; then glyph 
   row to EOL, full middle rows, last row from column 0 to `end.col`.
 - `search_rects(highlights: &[SearchHighlight], size, out)`: already display-relative and
   viewport-clamped by the view; copied through unchanged with the `active` flag.
-- `url_masks_into(frame, masks: &mut Vec<Vec<bool>>)`: three-pass algorithm from `url/mask.rs`
-  ported to `FrameRow` (mark hyperlink cells + scheme matches; extend across `wraps()` rows until
-  whitespace; strip trailing punctuation after extension), reusing the inner vectors.
+- `url::url_masks_into(frame, masks: &mut Vec<Vec<bool>>, wraps: &mut Vec<bool>)` (lives beside
+  the old function in `url/mask.rs`; `overlay.rs` holds only selection/search): three-pass
+  algorithm ported to `FrameRow` (mark hyperlink cells + scheme matches; extend across
+  `wraps()` rows until whitespace; strip trailing punctuation after extension), reusing the
+  inner vectors and the `wraps` scratch. `SearchHighlight { display_line, start_col, end_col,
+  active }` is defined in `overlay.rs`; the view fills `RenderInputs.search` with it.
 
-### Diagnostics (`diagnostics.rs`, `cfg(any(test, feature = "terminal-diagnostics"))`)
+### Diagnostics (`diagnostics.rs`)
 
 ```rust
-#[derive(Default, Clone, Copy)] pub(crate) struct FrameStats {
+#[derive(Default, Clone, Copy)] pub(crate) struct FrameStats {          // always compiled
     pub snapshot_calls: u32, pub rows_total: u32, pub rows_candidate: u32, pub rows_planned: u32,
     pub shape_calls: u32, pub glyph_hits: u32, pub url_scans: u32, pub quads: u32, pub paths: u32,
-    pub glyphs: u32, pub layers: u32, pub prepaint_us: u32, pub paint_us: u32,
+    pub glyphs: u32, pub glyph_errors: u32, pub layers: u32, pub prepaint_us: u32, pub paint_us: u32,
 }
+#[cfg(any(test, feature = "terminal-diagnostics"))]
 pub(crate) struct LatencySamples { samples: VecDeque<u32> /* 512 */ }  // p95/p99
+#[cfg(feature = "terminal-diagnostics")] pub(crate) struct DiagnosticsLog { last: Option<Instant> }
 ```
 
-The element resets `FrameStats` at prepaint start and, under the feature, emits one
-`log::debug!` line at most every 5 s with the last frame's counters and p95/p99.
+Implementation note (US-0047): the counters are plain `u32` increments and stay compiled in
+every build (cfg-gating them would scatter `#[cfg]` through the hot path for no measurable
+gain); only the timers, `LatencySamples` and the log are gated. `glyph_errors` counts
+`paint_glyph` failures. The element resets `FrameStats` at prepaint start and, under the
+feature, `DiagnosticsLog::maybe_log` emits one `log::debug!` line at most every 5 s with the
+last frame's counters and p95/p99.
 
 ### Allocation-free steady state
 
-Reused across frames: `Frame.content` buffers, every `RowPlan` vector, `PlanCache.candidate`,
-mask double buffer, `Scratch { line_text: String, char_cols: Vec<u16>, char_wide: Vec<bool>,
-class_chars: Vec<u8>, class: Vec<u8>, run_text: String, rects: Vec<DeviceRect>, open:
-SmallVec<[usize; 8]>, label: String }`, `overlays.selection`, `overlays.search`, `gutter.labels`.
-A `ShapedLine` clone is an `Arc` bump. Cache misses (new text) and grid growth allocate; that is
-not steady state. `PrepaintState` holds only `Copy` data, the hitbox, and the optional IME
-closure (allocated by the view once per frame only while focused — accepted, it is one `Box`).
+Reused across frames: `Frame.content` buffers, every `RowPlan` vector, `PlanCache.candidate`
+and `dirty`, mask double buffer + `wraps`, `Scratch { line_text: String, char_cols: Vec<u16>,
+char_wide: Vec<bool>, class_chars: Vec<u8>, class: Vec<u8>, run_text: String, rects:
+Vec<DeviceRect>, paths: Vec<ShapePath>, open_prev / open_cur: Vec<usize>, label: String (gutter
+labels and the cursor glyph text) }`, `overlays.selection`, `overlays.search`, `gutter.labels`,
+`RenderState.fonts: FontSet` (rebuilt only when font/size change) and the cached `CellMetrics`
+(re-measured only when font/size/factor/override/scale change). A `ShapedLine` clone is an
+`Arc` bump plus an inline `SmallVec` copy (no heap). Cache misses (new text), rounded-corner /
+diagonal / powerline paths (`shape_paths` builds a small `Vec` per path) and grid growth
+allocate; that is not steady state. `PrepaintState` holds only `Copy` data, the hitbox, the
+resolved cursor and the optional IME closure (allocated by the view once per frame only while
+focused — accepted, it is one `Box`). `element_tests::idle_frame_allocates_nothing` proves the
+idle path with a counting `#[global_allocator]` (thread-local counters) around
+`update_plans` + `compute_overlays` + `resolve_cursor` on the second identical frame.
 
 ## Interfaces
 
 Summarized above; the crate-internal entry points are `Frame::snapshot`, `PlanCache::update`,
-`build_row_plan`, `GlyphCache::shape`, `GridGeometry::{cell_origin, pixel_to_grid}`,
-`cursor::resolve`, `overlay::{selection_rects, search_rects, url_masks_into}`, and
-`TerminalElement::new(spec)`.
+`build_row_plan`, `GlyphCache::shape`, `GridGeometry::{cell_origin, pixel_to_grid, cell_at}`,
+`cursor::resolve` + `CursorPaint::build`, `overlay::{selection_rects, search_rects}`,
+`url::url_masks_into`, `RenderState::{new, update_plans, compute_overlays, resolve_cursor,
+gutter_width, build_gutter_labels}`, `RenderInputs::{new, style_key}`, and
+`TerminalElement::new(spec)`. `TerminalTheme` gained `colors: ColorTable` (`[Hsla; 269]`: 256
+indexed, fg, bg, cursor, 8 dim ANSI, bright/dim fg, plus a palette hash), `color(Color)` and
+`ensure_contrast(fg, bg)`; `SemanticOverlay::scan_into`; `oneterm_highlight::scan_line_into` is
+re-exported at that crate's root.
 
 ## Edge Cases and Failure Modes
 
-- [ ] Cursor row outside the viewport (scrolled back) → no cursor, no glyph re-paint.
-- [ ] Grid shrink: `plans.resize` drops trailing rows; grow: new rows have `hash = 0`.
-- [ ] `Damage::Rows` lists a row ≥ `rows` (race with resize) → ignored.
-- [ ] Wide char at the last column (`LEADING_WIDE_CHAR_SPACER`) → spacer contributes bg only.
-- [ ] `paint_glyph` returns `Err` (missing glyph) → counted in stats, frame continues.
-- [ ] `shape_line_by_hash` hit returns an empty `text`; nothing reads `ShapedLine.text`.
-- [ ] Session `resize` error → `log::warn!`, `last_grid` still updated (no resize storm).
-- [ ] `scale_factor < 1` is clamped to 1 in `measure`.
-- [ ] Semantic scan on a row with only spacers → empty text, no scan call.
+- [x] Cursor row outside the viewport (scrolled back) → no cursor, no glyph re-paint.
+- [x] Grid shrink: `plans.resize` drops trailing rows; grow: new rows have `hash = 0`.
+- [x] `Damage::Rows` lists a row ≥ `rows` (race with resize) → ignored.
+- [x] Wide char at the last column (`LEADING_WIDE_CHAR_SPACER`) → spacer contributes bg only.
+- [x] `paint_glyph` returns `Err` (missing glyph) → counted in stats, frame continues.
+- [x] `shape_line_by_hash` hit returns an empty `text`; nothing reads `ShapedLine.text`.
+- [x] Session `resize` error → `log::warn!`, `last_grid` still updated (no resize storm).
+- [x] `scale_factor < 1` is clamped to 1 in `measure`.
+- [x] Semantic scan on a row with only spacers → empty text, no scan call.
 
 ## Verification
 
 `src/render/element_tests.rs` (`#[gpui::test]`, `FakeTerminalSession`, a headless window,
 `RenderInputs` built directly) plus unit tests beside each module:
 
-- [ ] `dirty_frame_plans_rows_and_shapes`: first frame `snapshot_calls == 1`, `rows_planned > 0`,
-      `shape_calls > 0`, `quads > 0`, `layers == 1` (no cursor in the fake by default).
-- [ ] `idle_frame_plans_nothing_but_paints`: second frame with no probe change: `rows_planned ==
+- [x] `dirty_frame_plans_rows_and_shapes`: first frame `snapshot_calls == 1`, `rows_planned > 0`,
+      `shape_calls > 0`, `quads > 0`, `layers == 1` (the fake *does* report a visible block
+      cursor at (0, 0); the test passes focused + blink-off inputs so no cursor layer is
+      painted; `cursor_layer_and_gutter_paint` covers the two-layer case).
+- [x] `idle_frame_plans_nothing_but_paints`: second frame with no probe change: `rows_planned ==
       0`, `shape_calls == 0`, `url_scans == 0`, `quads > 0`.
-- [ ] `idle_frame_allocates_nothing`: counting allocator around the second frame reports 0
+- [x] `idle_frame_allocates_nothing`: counting allocator around the second frame reports 0
       allocations from the crate's code path (GPUI scene allocations excluded by measuring around
       `PlanCache::update` + overlay computation only).
-- [ ] `scroll_rotates_plans_and_replans_only_scrolled_in_rows`: probe scrolls by 3 →
+- [x] `scroll_rotates_plans_and_replans_only_scrolled_in_rows`: probe scrolls by 3 →
       `rows_planned == 3` even with `Damage::Full`.
-- [ ] `cursor_row_replans_on_undamaged_change`, `selection_change_does_not_replan`,
+- [x] `cursor_row_replans_on_undamaged_change`, `selection_change_does_not_replan`,
       `style_key_change_replans_all`, `resize_replans_all_and_resizes_session` (probe resize log).
-- [ ] `block_run_coalesces_into_one_quad`: 40 `█` cells → one `ShapeQuad`; `─` likewise.
-- [ ] `bg_spans_merge_adjacent_same_color`, `inverse_swaps_colors_and_forces_bg`,
+- [x] `block_run_coalesces_into_one_quad`: 40 `█` cells → one `ShapeQuad`; `─` likewise.
+- [x] `bg_spans_merge_adjacent_same_color`, `inverse_swaps_colors_and_forces_bg`,
       `dim_reduces_alpha`, `hidden_cells_have_no_text_run`, `undercurl_maps_to_wavy`,
       `class_underline_only_without_ansi_underline`, `url_mask_forces_url_class`.
-- [ ] `wide_char_occupies_two_columns_one_run`, `zero_width_marks_join_base_run`,
+- [x] `wide_char_occupies_two_columns_one_run`, `zero_width_marks_join_base_run`,
       `overflow_slot_keeps_background`.
-- [ ] `frame_selection_converts_to_display_rows`, `selection_block_and_linear_spans`.
-- [ ] `grid_size_subtracts_gutter_and_padding`, `grid_size_rounds_at_device_pixels`,
+- [x] `frame_selection_converts_to_display_rows`, `selection_block_and_linear_spans`.
+- [x] `grid_size_subtracts_gutter_and_padding`, `grid_size_rounds_at_device_pixels`,
       `grid_size_never_below_one_cell`, `metrics_snap_cell_to_device_pixels` (1.0/1.25/1.5/2.0).
-- [ ] `glyph_cache_hits_across_rows`, `glyph_cache_evicts_stale_generation`.
-- [ ] `cursor_override_respects_hidden`, `cursor_hollow_when_unfocused`,
+- [x] `glyph_cache_hits_across_rows`, `glyph_cache_evicts_stale_generation`.
+- [x] `cursor_override_respects_hidden`, `cursor_hollow_when_unfocused`,
       `cursor_glyph_repaint_only_for_filled_block`, `cursor_blink_gating`.
-- [ ] `gutter_labels_use_fallbacks` (`[--:--:--]`, newest/oldest reuse).
+- [x] `gutter_labels_use_fallbacks` (`[--:--:--]`, newest/oldest reuse).

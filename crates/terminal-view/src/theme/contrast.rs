@@ -29,14 +29,16 @@ fn hsla_bits(c: Hsla) -> [u32; 4] {
     [c.h.to_bits(), c.s.to_bits(), c.l.to_bits(), c.a.to_bits()]
 }
 
-/// Relative luminance (WCAG) from `Hsla`.
+/// Relative luminance (WCAG 2.x) from `Hsla`. The sRGB linearisation uses the
+/// standard 2.4 exponent (deviation 5); the old exponent of 2 overstated the
+/// contrast of mid greys.
 fn relative_luminance(c: Hsla) -> f32 {
     let rgba = c.to_rgb();
     let lin = |ch: f32| {
         if ch <= 0.03928 {
             ch / 12.92
         } else {
-            ((ch + 0.055) / 1.055).powi(2)
+            ((ch + 0.055) / 1.055).powf(2.4)
         }
     };
     let r = lin(rgba.r);

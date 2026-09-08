@@ -5,7 +5,9 @@
 //! and the enabled flag. The shared [`RuleSet`] is global (built once via
 //! `LazyLock`).
 
-use oneterm_highlight::{Class, RowRole, RowRoles, RuleSet, ShellProfile, scan_line};
+use oneterm_highlight::{
+    Class, RowRole, RowRoles, RuleSet, ShellProfile, scan_line, scan_line_into,
+};
 
 /// Per-view semantic overlay — produces `cell_class` for one display row.
 ///
@@ -71,6 +73,23 @@ impl SemanticOverlay {
         };
         scan_line(line, rules, &self.profile, role)
     }
+
+    /// [`Self::scan`] into a caller-owned buffer (cleared and refilled), so a
+    /// per-row scan reuses one allocation across frames.
+    pub fn scan_into(&self, line: &str, display_row: usize, out: &mut Vec<u8>) {
+        out.clear();
+        if !self.enabled {
+            out.resize(line.chars().count(), Class::Default as u8);
+            return;
+        }
+        let rules = RuleSet::global();
+        let role = if !self.row_roles.role.is_empty() {
+            self.row_roles.role_at(display_row)
+        } else {
+            RowRole::Output
+        };
+        scan_line_into(line, rules, &self.profile, role, out);
+    }
 }
 
 #[cfg(test)]
@@ -89,6 +108,19 @@ mod tests {
         let o = SemanticOverlay::new(ShellProfile::Unix, true);
         let c = o.scan("error: failed", 0);
         assert_eq!(c[0], Class::Error as u8);
+    }
+
+    #[test]
+    fn scan_into_matches_scan_and_reuses_buffer() {
+        let o = SemanticOverlay::new(ShellProfile::Unix, true);
+        let mut buf = Vec::with_capacity(64);
+        let ptr = buf.as_ptr();
+        o.scan_into("error: failed", 0, &mut buf);
+        assert_eq!(buf, o.scan("error: failed", 0));
+        assert_eq!(buf.as_ptr(), ptr, "buffer must be reused");
+        let off = SemanticOverlay::new(ShellProfile::Unix, false);
+        off.scan_into("error", 0, &mut buf);
+        assert_eq!(buf, vec![Class::Default as u8; 5]);
     }
 
     #[test]
