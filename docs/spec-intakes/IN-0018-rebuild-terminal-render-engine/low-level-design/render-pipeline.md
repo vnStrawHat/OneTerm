@@ -181,8 +181,17 @@ pub(crate) struct StyleKey { font_family: u32 /* interned */, font_size_bits: u3
     shell_profile: u8, show_gutter: bool }
 pub(crate) struct PlanCache { rows: Vec<RowPlan>, candidate: Vec<bool>, dirty: Vec<bool>,
     style: Option<StyleKey>, grid: Option<GridSize>, display_offset: usize,
+    cell: Option<(CellSizeDevicePx, u32 /* cell_width bits */)>,
     mask_prev: Vec<Vec<bool>>, mask_cur: Vec<Vec<bool>>, wraps: Vec<bool> /* url scan scratch */ }
 ```
+
+`StyleKey` is built from `RenderInputs` alone and therefore cannot see the cell
+geometry, which lives in `PlanContext`. A scale-factor change (the window dragged
+to a monitor with a different DPI) changes `CellMetrics::device` while leaving the
+grid size *and* the style key untouched — `grid_size_for` divides device pixels by
+the device cell size, so it yields the same rows/cols at any scale. Shape quads are
+cached in device pixels and text runs are shaped with `force_width`, so the cache
+also compares `(ctx.device, ctx.cell_width)` and treats a change as a full rebuild.
 
 ```text
 update(frame, style_key, ctx, scratch, glyphs, stats):
@@ -239,7 +248,9 @@ impl GlyphCache {
 
 `TextRun.color` is irrelevant to shaping (GPUI keys by `FontRun`), so one entry serves every
 color; colors are applied at paint from `ColorSpan`s. Gutter labels use the same cache with
-`forced = false`.
+`forced = false`. `FontKey` covers family, size, weight and slant but not `Font::features`
+or `Font::fallbacks`, both of which change shaping; `RenderState::ensure_fonts` therefore
+calls `GlyphCache::clear()` whenever the input `Font` value changes.
 
 ### Element (`element.rs`)
 
@@ -316,7 +327,9 @@ paint:   hollow Block → four 1-device-px edge quads; else one quad; then glyph
 
 - `selection_rects(sel: Selection, size, out: &mut Vec<RowSpan { row, col, cols }>)`: clamp rows
   to `0..rows`; block → same `[start.col, end.col]` on every row; linear → single row, or first
-  row to EOL, full middle rows, last row from column 0 to `end.col`.
+  row to EOL, full middle rows, last row from column 0 to `end.col`. Both the block and the
+  single-row case order the two columns (`min`/`max`) so an inverted span cannot underflow
+  `cols`.
 - `search_rects(highlights: &[SearchHighlight], size, out)`: already display-relative and
   viewport-clamped by the view; copied through unchanged with the `active` flag.
 - `url::url_masks_into(frame, masks: &mut Vec<Vec<bool>>, wraps: &mut Vec<bool>)` (lives beside
@@ -414,7 +427,10 @@ re-exported at that crate's root.
 - [x] `frame_selection_converts_to_display_rows`, `selection_block_and_linear_spans`.
 - [x] `grid_size_subtracts_gutter_and_padding`, `grid_size_rounds_at_device_pixels`,
       `grid_size_never_below_one_cell`, `metrics_snap_cell_to_device_pixels` (1.0/1.25/1.5/2.0).
-- [x] `glyph_cache_hits_across_rows`, `glyph_cache_evicts_stale_generation`.
+- [x] `glyph_cache_hits_across_rows`, `glyph_cache_evicts_stale_generation`,
+      `font_change_clears_the_shaped_run_cache`.
+- [x] `device_cell_size_change_replans_all` (same grid + style key, new scale factor).
+- [x] `selection_rects_normalise_an_inverted_single_row_span`.
 - [x] `cursor_override_respects_hidden`, `cursor_hollow_when_unfocused`,
       `cursor_glyph_repaint_only_for_filled_block`, `cursor_blink_gating`.
 - [x] `gutter_labels_use_fallbacks` (`[--:--:--]`, newest/oldest reuse).

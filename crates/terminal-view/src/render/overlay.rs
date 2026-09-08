@@ -47,7 +47,10 @@ pub(crate) fn selection_rects(sel: Selection, size: GridSize, out: &mut Vec<RowS
             let (a, b) = (clamp(sel.start.col), clamp(sel.end.col));
             (a.min(b), a.max(b))
         } else if sel.start.row == sel.end.row {
-            (clamp(sel.start.col), clamp(sel.end.col))
+            // Normalised like the block case: an inverted single-row span would
+            // underflow `end - col + 1`.
+            let (a, b) = (clamp(sel.start.col), clamp(sel.end.col));
+            (a.min(b), a.max(b))
         } else if row == sel.start.row {
             (clamp(sel.start.col), cols - 1)
         } else if row == sel.end.row {
@@ -179,6 +182,22 @@ mod tests {
         );
         selection_rects(sel((7, 0), (9, 0), false), size(), &mut out);
         assert!(out.is_empty());
+    }
+
+    /// Regression: an inverted single-row span must not underflow the column
+    /// count (the block branch already normalised, the linear one did not).
+    #[test]
+    fn selection_rects_normalise_an_inverted_single_row_span() {
+        let mut out = Vec::new();
+        selection_rects(sel((2, 6), (2, 1), false), size(), &mut out);
+        assert_eq!(
+            out,
+            vec![RowSpan {
+                row: 2,
+                col: 1,
+                cols: 6
+            }]
+        );
     }
 
     #[test]

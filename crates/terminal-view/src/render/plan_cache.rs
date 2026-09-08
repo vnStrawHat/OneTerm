@@ -6,6 +6,7 @@ use super::diagnostics::FrameStats;
 use super::frame::{Damage, Frame, GridSize};
 use super::glyphs::GlyphCache;
 use super::row_plan::{PlanContext, RowPlan, Scratch, build_row_plan};
+use super::shapes::CellSizeDevicePx;
 use crate::url::url_masks_into;
 
 /// Everything besides cell content that changes how a row is planned. A
@@ -33,6 +34,13 @@ pub(crate) struct PlanCache {
     mask_prev: Vec<Vec<bool>>,
     mask_cur: Vec<Vec<bool>>,
     wraps: Vec<bool>,
+    /// Cell geometry the plans were built with: the device cell size and the
+    /// logical cell width (as bits). Shape quads are stored in device pixels
+    /// and text runs are shaped with `force_width`, so a scale-factor change —
+    /// dragging the window to a monitor with a different DPI — must rebuild
+    /// every row even though the grid size and the style key are unchanged
+    /// (`grid_size_for` yields the same rows/cols at any scale).
+    cell: Option<(CellSizeDevicePx, u32)>,
 }
 
 impl Default for PlanCache {
@@ -53,6 +61,7 @@ impl PlanCache {
             mask_prev: Vec::new(),
             mask_cur: Vec::new(),
             wraps: Vec::new(),
+            cell: None,
         }
     }
 
@@ -82,7 +91,9 @@ impl PlanCache {
     ) {
         let size = frame.size();
         let rows = usize::from(size.rows);
-        let full = self.grid != Some(size) || self.style != Some(style_key);
+        let cell = (ctx.device, f32::from(ctx.cell_width).to_bits());
+        let full =
+            self.grid != Some(size) || self.style != Some(style_key) || self.cell != Some(cell);
         if full {
             self.rows.resize_with(rows, RowPlan::default);
             for plan in &mut self.rows {
@@ -169,6 +180,7 @@ impl PlanCache {
         }
         self.grid = Some(size);
         self.style = Some(style_key);
+        self.cell = Some(cell);
         self.display_offset = frame.display_offset();
         stats.rows_total = rows as u32;
     }
@@ -272,6 +284,17 @@ mod tests {
             frame: &Frame,
             key: StyleKey,
         ) -> FrameStats {
+            self.update_with_cell(cx, frame, key, CellSizeDevicePx { w: 8, h: 16 }, 8.0)
+        }
+
+        fn update_with_cell(
+            &mut self,
+            cx: &mut VisualTestContext,
+            frame: &Frame,
+            key: StyleKey,
+            device: CellSizeDevicePx,
+            cell_width: f32,
+        ) -> FrameStats {
             let mut stats = FrameStats::default();
             let Harness {
                 theme,
@@ -285,8 +308,8 @@ mod tests {
                     theme,
                     fonts,
                     font_size: px(13.0),
-                    cell_width: px(8.0),
-                    device: CellSizeDevicePx { w: 8, h: 16 },
+                    cell_width: px(cell_width),
+                    device,
                     semantic: None,
                     window,
                 };
@@ -432,6 +455,40 @@ mod tests {
         let s = h.update(cx, &frame_with(&texts[..3], 30).build(), style_key(13.0));
         assert_eq!(h.cache.rows().len(), 3);
         assert_eq!(s.rows_planned, 3);
+    }
+
+    /// Regression: a scale-factor change (the window dragged to a monitor with
+    /// a different DPI) keeps the grid size and the style key, but the device
+    /// cell size changes and shape quads are cached in device pixels.
+    #[gpui::test]
+    fn device_cell_size_change_replans_all(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let mut h = Harness::new();
+        let frame = FrameBuilder::new(4, 10).text(0, 0, "██ ok").build();
+        h.update_with_cell(
+            cx,
+            &frame,
+            style_key(13.0),
+            CellSizeDevicePx { w: 8, h: 16 },
+            8.0,
+        );
+        assert_eq!(h.cache.rows[0].shapes[0].rect.w, 16, "two 8 px blocks");
+        let idle = FrameBuilder::new(4, 10)
+            .text(0, 0, "██ ok")
+            .damage_rows(&[])
+            .build();
+        let s = h.update_with_cell(
+            cx,
+            &idle,
+            style_key(13.0),
+            CellSizeDevicePx { w: 16, h: 32 },
+            8.0,
+        );
+        assert_eq!(s.rows_planned, 4, "every row rebuilds at the new cell size");
+        assert_eq!(
+            h.cache.rows[0].shapes[0].rect.w, 32,
+            "quads follow the cell size"
+        );
     }
 
     #[gpui::test]

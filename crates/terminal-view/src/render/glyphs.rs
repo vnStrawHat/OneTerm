@@ -118,6 +118,14 @@ impl GlyphCache {
         self.generation = self.generation.wrapping_add(1);
     }
 
+    /// Drop every shaped run. [`FontKey`] cannot see `Font::features` or
+    /// `Font::fallbacks` (both change how a run is shaped without changing the
+    /// family, size, weight or slant), so the whole cache goes when the font
+    /// value changes.
+    pub(crate) fn clear(&mut self) {
+        self.map.clear();
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.map.len()
     }

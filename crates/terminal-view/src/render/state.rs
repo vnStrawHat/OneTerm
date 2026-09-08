@@ -186,13 +186,17 @@ impl RenderState {
         }
     }
 
-    /// Rebuild the font variants when the input font or size changed.
+    /// Rebuild the font variants when the input font or size changed. The
+    /// shaped-run cache goes with them: its key covers only family, size,
+    /// weight and slant, so entries shaped with the old features or fallbacks
+    /// would otherwise be handed back forever.
     pub(crate) fn ensure_fonts(&mut self) {
         if self.fonts_key.0 == self.inputs.font && self.fonts_key.1 == self.inputs.font_size {
             return;
         }
         self.fonts = FontSet::new(&self.inputs.font, self.inputs.font_size);
         self.fonts_key = (self.inputs.font.clone(), self.inputs.font_size);
+        self.glyphs.clear();
     }
 
     /// Cell metrics for the current inputs and window scale, re-measured only
@@ -436,7 +440,45 @@ pub(crate) fn format_gutter_label(
 
 #[cfg(test)]
 mod tests {
+    use gpui::{FontFeatures, FontStyle, FontWeight};
+
     use super::*;
+    use crate::render::diagnostics::FrameStats;
+    use crate::theme::build_terminal_theme;
+
+    /// Regression: `FontKey` does not cover `Font::features`, so a features
+    /// change must drop the shaped-run cache instead of serving runs shaped
+    /// with the old feature set.
+    #[gpui::test]
+    fn font_change_clears_the_shaped_run_cache(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        cx.update(|window, _| {
+            let font = Font {
+                family: "Test Mono".into(),
+                features: FontFeatures::default(),
+                fallbacks: None,
+                weight: FontWeight::NORMAL,
+                style: FontStyle::Normal,
+            };
+            let theme = Rc::new(build_terminal_theme(&gpui_component::Theme::default()));
+            let mut state = RenderState::new(RenderInputs::new(theme, font.clone(), px(13.0)));
+            let mut stats = FrameStats::default();
+            let (f, key) = state.fonts.regular();
+            let f = f.clone();
+            state
+                .glyphs
+                .shape("cached", &f, key, px(13.0), None, window, &mut stats);
+            assert_eq!(state.glyphs.len(), 1);
+
+            // Same family, size, weight and slant: the run key is unchanged.
+            state.ensure_fonts();
+            assert_eq!(state.glyphs.len(), 1, "an unchanged font keeps the cache");
+
+            state.inputs.font.features = FontFeatures::disable_ligatures();
+            state.ensure_fonts();
+            assert_eq!(state.glyphs.len(), 0, "a features change drops the cache");
+        });
+    }
 
     fn times(list: &[&str]) -> VecDeque<u32> {
         list.iter()
