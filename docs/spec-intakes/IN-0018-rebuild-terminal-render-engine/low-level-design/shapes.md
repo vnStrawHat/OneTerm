@@ -49,19 +49,29 @@ half_w: half_thick, half_h: half_len`.
 `snap_interval(center: f32, half: f32, size: i32, anchor: Anchor) -> (i32, i32)`:
 
 1. `t = max(1, round_half_away(2 * half))` — integer thickness.
-2. `c = round_half_away(2 * center) / 2` — nearest integer or half-integer.
+2. `c = round_ties_toward_center(2 * center) / 2` — nearest integer or half-integer, with
+   ties broken **toward the cell center**. `round_half_away` is not mirror covariant
+   (`round(0.5) = 1`, but `7 - round(6.5) = 0`), so every rounding of a coordinate in this
+   module resolves ties toward the reflection's fixed point instead. Braille dot centers,
+   shade tile edges and rounded-corner stubs all land on ties at some cell sizes.
 3. Parity: a symmetric interval needs `t` even when `c` is an integer and `t` odd when `c` is a
    half-integer.
    - `Anchor::Fixed` (the centerline may not move; used for anything centered on `C`): on
      mismatch `t += 1`.
    - `Anchor::Nearest` (the thickness may not change; used for rails, dots, dash segments,
      tiles): on mismatch move `c` by `±0.5` to the nearest parity-valid position, ties broken
-     **away from the cell center** (so gaps between paired features never close).
-4. `lo = c - t/2` (exact integer), `hi = lo + t`, then clip to `[0, size]`.
+     **away from the cell center** (so gaps between paired features never close). Exactly
+     on the cell center there is no "away": `t += 1` as for `Fixed`, since moving would
+     break the feature's own symmetry.
+4. `lo = c - t/2` (exact integer), `hi = lo + t`. An interval that would fall outside the
+   cell is **shifted in** (`lo` clamped into `[min(0, size - t), max(0, size - t)]`) and
+   only then clipped to `[0, size]`: on a one or two pixel cell the rails of a double line
+   and the braille dots must still draw something. The shift is symmetric, so reflection
+   still commutes with snapping.
 
 Properties (asserted by tests): the interval is symmetric about `c`; for any `v`,
-`snap_interval(size - v, ...)` is the mirror of `snap_interval(v, ...)` because
-`round_half_away(size - x) == size - round_half_away(x)` for integer `size`; two strokes with
+`snap_interval(size - v, ...)` is the mirror of `snap_interval(v, ...)`, because ties toward
+the center give `round(size - x) == size - round(x)` for integer `size`; two strokes with
 the same `(center, half)` snap identically, so a horizontal line's y-interval in cell *n* equals
 the one in cell *n + 1* and the joint square of `┼` is exactly `J_x × J_y`.
 
@@ -146,10 +156,14 @@ horizontal right arm (all others follow by transform):
 | no arm on side `s`, but one on the other side | `R-_x.lo` (Double) / `J_x.lo` (single) — closes the outer corner |
 | no vertical arms | `O_x.lo` (Double) / `J_x.lo` (single) — a stub that meets its neighbor |
 
-Opposite double arms merge into two full-length rails **unless** a perpendicular arm exists on a
-rail's side, in which case that rail is split into a left segment ending at `R-_x.hi` (or
-`J_x.hi`) and a right segment starting at `R+_x.lo` (or `J_x.lo`). Single (light) arms in a mixed
-glyph use Family A rules with `J⊥ := O` when the perpendicular axis is Double.
+Rails are emitted per arm and then merged when they share a cross interval and touch, so no
+separate merge rule is needed: the two rails of `═` come out full length and the four rails of
+`╬` come out split, from the same table.
+
+A single (light or heavy) arm whose perpendicular axis is Double stops at the **near** rail when
+it is a stub — no opposite arm, perpendicular arms on both sides (`╤`, `╧`, `╟`, `╢`) — and at
+the far rail (`J⊥ := O`) otherwise, which closes the outer corner of `╒`/`╓` and lets the
+through-going stems of `╪`/`╫` cross both rails.
 
 Worked results on 9 × 19 (`t_l = 1`, `R-_x = [3,4)`, `R+_x = [5,6)`, `R-_y = [8,9)`,
 `R+_y = [10,11)`):
@@ -157,8 +171,11 @@ Worked results on 9 × 19 (`t_l = 1`, `R-_x = [3,4)`, `R+_x = [5,6)`, `R-_y = [8
 - `╔`: `[3,9)×[8,9)`, `[3,4)×[8,19)`, `[5,9)×[10,11)`, `[5,6)×[10,19)`.
 - `╬`: rails `[0,4)×[8,9)`, `[5,9)×[8,9)`, `[0,4)×[10,11)`, `[5,9)×[10,11)` and the vertical
   counterparts; the center `[4,5)×[9,10)` stays empty.
-- `╒` (right Light, down Double): `[3,9)×[9,10)`, `[3,4)×[9,19)`, `[5,6)×[9,19)`;
-  `╘ = mirror_y(╒)`: `[3,9)×[9,10)`, `[3,4)×[0,10)`, `[5,6)×[0,10)` (fixes inventory wart 3).
+- `╓` U+2553 (down Double, right Light): `[3,9)×[9,10)`, `[3,4)×[9,19)`, `[5,6)×[9,19)`;
+  `╙ = mirror_y(╓)`: `[3,9)×[9,10)`, `[3,4)×[0,10)`, `[5,6)×[0,10)`.
+- `╒` U+2552 (right Double, down Light — the transpose of `╓`): `[4,9)×[8,9)`,
+  `[4,9)×[10,11)`, `[4,5)×[8,19)`; `╘ = mirror_y(╒)` differs from it (fixes inventory
+  wart 3).
 
 ### Family D — diagonals and rounded corners (U+256D–2573)
 
@@ -174,7 +191,8 @@ Paths only (`ShapePath`), stroked with width `t_l` (device px, converted to logi
 ### Family E — blocks (U+2580–259F except shades)
 
 Edge-anchored rects; `half_w = (W + 1) / 2`, `half_h = (H + 1) / 2` (integer division, i.e.
-ceil), eighths `e_k(S) = round_half_away(k * S / 8)`.
+ceil), eighths `e_k(S) = clamp(round_half_away(k * S / 8), 1, S)` — a one-eighth block that
+rounds to zero pixels would drop the character entirely on a small cell.
 
 | Code points | Rect |
 | --- | --- |
@@ -194,10 +212,17 @@ Sextants (U+1FB00–1FB3B) are out of scope.
 A dot-grid whose pitch scales with the cell: `p = max(2, round(W / 3))`, `n_x = ceil(W / p) | 1`,
 `n_y = ceil(H / p) | 1` (forced odd so reflection maps tile `i → n − 1 − i` and preserves parity).
 Tile `(i, j)` covers `[C.x + (i − n_x/2) p, C.x + (i + 1 − n_x/2) p) × …` with edges rounded
-half-away and clipped. "On" tiles: `░`: `(i + j) even ∧ j even`; `▒`: `(i + j) even`; `▓`:
+ties-toward-center (as everywhere else in this module: tile edges land on ties whenever `p` is
+even and the cell dimension odd) and clipped. "On" tiles: `░`: `(i + j) even ∧ j even`; `▒`: `(i + j) even`; `▓`:
 `¬((i + j) even ∧ j odd)`. Rects are emitted per tile row with horizontally adjacent on-tiles
-merged, giving ≤ `n_y · ceil(n_x / 2)` rects — for 9 × 19 (`p = 3`, 3 × 7 tiles): `░` 8, `▒` 14,
-`▓` 11; the count is the same at 36 × 76 (`p = 12`). No size cliff (fixes wart 2).
+merged, giving ≤ `n_y · ceil(n_x / 2)` rects — for 9 × 19 (`p = 3`, 3 × 7 tiles): `░` 8, `▒` 11,
+`▓` 10; the same at 36 × 76 (`p = 12`), and 15 / 23 / 17 at 7 × 15 (`p = 2`, 5 × 9 tiles), which
+is the worst case for the budget. No size cliff (fixes wart 2).
+
+Because `n_x` must be odd, a three-column grid has two of its three columns "on" for `░`, so the
+light and dark patterns run up to 13 percentage points heavier than their nominal 25 % / 75 %
+(`▒` stays at 50 %). Making the grid finer would fix the density but break the 24-quad budget on
+tall cells, so the density tolerance is ±13 points.
 
 ### Family G — braille (U+2800–28FF)
 
@@ -225,7 +250,10 @@ both axes. U+2800 emits nothing (still a shape char: no font glyph, keeps bg).
 | E0BC / E0BD | `mirror_y` of E0B8 / E0B9 |
 | E0BE / E0BF | `mirror_x(mirror_y)` of E0B8 / E0B9 |
 
-Fills use `PathStyle::Fill`; strokes use width `t_l`. Fixes inventory wart 1.
+Fills use `PathStyle::Fill`; strokes use width `t_l`. Fixes inventory wart 1: all sixteen have
+real geometry and all eight fills are distinct shapes. The four corner outlines are only two
+distinct diagonals by definition (E0B9 == E0BF and E0BB == E0BD as point sets), which is what
+the powerline-extra font draws as well.
 
 ## Interfaces
 
@@ -254,7 +282,9 @@ Rects are appended in a deterministic order (arms in `up, down, left, right` ord
 
 ## Edge Cases and Failure Modes
 
-- [ ] `W == 1` or `H == 1`: every interval clips to the cell; nothing panics; `┼` is one pixel.
+- [ ] `W == 1` or `H == 1`: every interval clips or shifts into the cell; nothing panics;
+      `┼` is one pixel, and so is every double corner (the `╬` center hole and the
+      `╒`/`╘` distinction need at least 5 × 5).
 - [ ] Even cell dimension: `Fixed` parity widens a nominal 1 px stroke to 2 px (documented).
 - [ ] `W` even and `H` odd: `─` and `│` differ by 1 px; `┼` is still their exact union.
 - [ ] Rails on a narrow cell (`W ≤ 4`): `Nearest` snapping keeps `R-` and `R+` disjoint; when
@@ -284,13 +314,16 @@ Rects are appended in a deterministic order (arms in `up, down, left, right` ord
 - [ ] `builder_commutes_with_transforms`: for every Family A/C arm set,
       `build(mirror(def)) == mirror_rects(build(def))`.
 - [ ] `horizontal_line_abuts_across_cells`: `─` y-interval identical for the same cell size;
-      `x = 0` and `x + w = W`; same for `━`, `═` rails, `┄` outer segments touch the edges.
+      `x = 0` and `x + w = W`; same for `━` and the `═` rails. The outer `┄` segments end
+      within one dash gap of the edge, symmetrically (they touch it only when the snapped
+      pitch happens to reach it).
 - [ ] `cross_equals_union_of_lines`: pixel set of `┼` == `─ ∪ │`; `╋` == `━ ∪ ┃`; `╬` ⊂
       `═ ∪ ║` and leaves the center empty.
 - [ ] `corner_arms_meet_at_joint`: `┌` pixel set == `╶ ∪ ╷` minus nothing (arms overlap at
       `J_x × J_y`).
 - [ ] `double_corner_up_and_down_differ`: `╒ ≠ ╘`, `╓ ≠ ╙`, `╕ ≠ ╛`, `╖ ≠ ╜` (regression for
-      wart 3).
+      wart 3), for cells of at least 5 × 5 device pixels — below that a double line has no
+      room for two rails and every corner collapses onto the same pixels.
 - [ ] `dash_segment_counts`: `╌ 2`, `┄ 3`, `┈ 4` (and heavy/vertical variants) distinct
       along-intervals, symmetric about the center, for `W ≥ 8`.
 - [ ] `block_eighth_fractions_monotone`: heights of `▁..█` non-decreasing, `█` full, `▄` ==
@@ -298,11 +331,14 @@ Rects are appended in a deterministic order (arms in `up, down, left, right` ord
 - [ ] `quadrant_union_is_full_block`: `▘ ∪ ▝ ∪ ▖ ∪ ▗` covers every pixel.
 - [ ] `braille_dot_slots`: each single bit yields exactly one rect in its slot ordering (columns
       left < right, rows top < bottom); U+28FF yields 8 disjoint rects.
-- [ ] `powerline_triangle_apex_at_center_height`: E0B0 apex `(W, H/2)`, E0B2 apex `(0, H/2)`.
-- [ ] `shade_density_and_budget`: rect count ≤ 24 at every size; covered area within ±12 % of
-      25 / 50 / 75 %; each shade's rect set is self-symmetric.
+- [ ] `powerline_triangle_apex_at_center_height`: E0B0 apex `(W, H/2)`, E0B2 apex `(0, H/2)`;
+      every one of the sixteen emits a path and the eight fills are pairwise distinct.
+- [ ] `shade_density_and_budget`: rect count ≤ 24 at every size; covered area within ±13
+      points of 25 / 50 / 75 % (for cells ≥ 7 px wide); each shade's rect set is
+      self-symmetric at every size.
 - [ ] `snap_interval_is_even_about_center`: property test over 10k `(center, half, size)`
       triples for both anchors.
 - [ ] `heavy_thicker_than_light`, `rails_disjoint_with_gap` for all sizes `W ≥ 5`.
 - [ ] `rounded_corner_meets_neighbors`: `╭` arc endpoints lie on `J_x`/`J_y` centerlines.
-- [ ] `per_cell_quad_budget`: Family A/C ≤ 6 rects, braille ≤ 8, shades ≤ 24.
+- [ ] `per_cell_quad_budget`: Family A/C ≤ 8 rects, braille ≤ 8, shades ≤ 24. `╬` needs
+      eight: two split rails per axis, and no two of them are contiguous.

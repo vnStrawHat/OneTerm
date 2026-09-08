@@ -457,7 +457,7 @@ US-0050 ticks every box during sign-off.
 | Steady-state heap allocations | 0 per frame in view code | `element_tests::idle_frame_allocates_nothing` uses a counting global allocator (test-only) around two idle frames |
 | Shaped lines | cached across frames | `glyph_cache_hits_across_rows`: second frame `shape_calls == 0`, `glyph_hits > 0` |
 | Cell width | whole device pixels | `metrics_snap_cell_to_device_pixels` at scale 1.0, 1.25, 1.5, 2.0 |
-| Shape geometry | ≤ 24 quads per shade cell, ≤ 8 per braille cell, ≤ 6 per box cell | `shapes_tests` upper-bound assertions |
+| Shape geometry | ≤ 24 quads per shade cell, ≤ 8 per braille cell, ≤ 8 per box cell (`╬` splits into eight rails) | `shapes_tests` upper-bound assertions |
 
 ## Risks
 

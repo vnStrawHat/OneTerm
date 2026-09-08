@@ -8,6 +8,9 @@ pub(crate) mod handlers;
 pub(crate) mod highlight;
 pub(crate) mod layout;
 pub(crate) mod panel;
+// Temporary: the new render engine is wired in by later packets of IN-0018.
+#[allow(dead_code)]
+pub(crate) mod render;
 pub(crate) mod security;
 pub(crate) mod space;
 pub(crate) mod status;
