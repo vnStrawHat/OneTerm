@@ -6,6 +6,9 @@ pub(crate) mod completion;
 pub(crate) mod element;
 pub(crate) mod handlers;
 pub(crate) mod highlight;
+// Temporary: the new input layer is wired in by later packets of IN-0018.
+#[allow(dead_code, unused_imports)]
+pub(crate) mod input;
 pub(crate) mod layout;
 pub(crate) mod panel;
 // Temporary: the new render engine is wired in by later packets of IN-0018.

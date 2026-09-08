@@ -31,6 +31,50 @@ enum DamageMode {
     Preserve,
 }
 
+/// One [`TerminalInput`] call captured by [`FakeSessionProbe`].
+///
+/// Byte writes stay in `writes()`; this records the calls that carry no bytes
+/// of their own (mouse, wheel, viewport, selection), so a UI test can assert
+/// what actually reached the session.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FakeInputCall {
+    MouseDown {
+        row: f32,
+        col: f32,
+        button: TerminalMouseButton,
+        selection: SelectionType,
+        mods: MouseModifiers,
+    },
+    MouseMove {
+        row: f32,
+        col: f32,
+        mods: MouseModifiers,
+    },
+    MouseDrag {
+        row: f32,
+        col: f32,
+        mods: MouseModifiers,
+    },
+    MouseUp {
+        row: f32,
+        col: f32,
+        button: TerminalMouseButton,
+        mods: MouseModifiers,
+    },
+    Wheel {
+        delta_y: f64,
+        row: f32,
+        col: f32,
+        mods: MouseModifiers,
+    },
+    Scroll(i32),
+    ScrollToTop,
+    ScrollToBottom,
+    ClearSelection,
+    SelectAll,
+    Clear,
+}
+
 /// Shared observation and control handle for a [`FakeTerminalSession`].
 #[derive(Clone)]
 pub struct FakeSessionProbe {
@@ -95,6 +139,21 @@ impl FakeSessionProbe {
     pub fn alive(&self) -> bool {
         self.state.alive.load(Ordering::SeqCst)
     }
+
+    /// Return every non-byte input call captured so far, in order.
+    pub fn input_calls(&self) -> Vec<FakeInputCall> {
+        self.state.input_calls.lock().unwrap().clone()
+    }
+
+    /// Remove and return all captured input calls.
+    pub fn take_input_calls(&self) -> Vec<FakeInputCall> {
+        std::mem::take(&mut *self.state.input_calls.lock().unwrap())
+    }
+
+    /// Set the text `selection_text()` returns; `has_selection()` follows it.
+    pub fn set_selection(&self, text: Option<String>) {
+        *self.state.selection.lock().unwrap() = text;
+    }
 }
 
 /// A deterministic in-memory implementation of [`TerminalSession`].
@@ -110,6 +169,8 @@ struct FakeSessionState {
     mode: Mutex<TermMode>,
     cursor: Mutex<(i32, usize)>,
     writes: Mutex<Vec<Vec<u8>>>,
+    input_calls: Mutex<Vec<FakeInputCall>>,
+    selection: Mutex<Option<String>>,
     event_tx: Sender<SessionEvent>,
     full_damage: AtomicBool,
     fail_writes: AtomicBool,
@@ -138,6 +199,8 @@ impl FakeTerminalSession {
             mode: Mutex::new(TermMode::SHOW_CURSOR),
             cursor: Mutex::new((0, 0)),
             writes: Mutex::new(Vec::new()),
+            input_calls: Mutex::new(Vec::new()),
+            selection: Mutex::new(None),
             event_tx,
             full_damage: AtomicBool::new(true),
             fail_writes: AtomicBool::new(false),
@@ -176,6 +239,11 @@ impl FakeTerminalSession {
     ) -> (Box<dyn TerminalSession>, FakeSessionProbe) {
         let (session, probe) = Self::new_with_kind(rows, cols, text, kind);
         (Box::new(session), probe)
+    }
+
+    /// Append one observed [`TerminalInput`] call.
+    fn record(&self, call: FakeInputCall) {
+        self.state.input_calls.lock().unwrap().push(call);
     }
 
     fn content(&self, damage: DamageMode) -> TerminalContent {
@@ -316,11 +384,16 @@ impl TerminalRender for FakeTerminalSession {
     }
 
     fn selection_text(&self) -> Option<String> {
-        None
+        self.state.selection.lock().unwrap().clone()
     }
 
     fn has_selection(&self) -> bool {
-        false
+        self.state
+            .selection
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|t| !t.is_empty())
     }
 }
 
@@ -348,35 +421,73 @@ impl TerminalInput for FakeTerminalSession {
         Ok(())
     }
 
-    fn scroll(&self, _delta: i32) {}
+    fn scroll(&self, delta: i32) {
+        self.record(FakeInputCall::Scroll(delta));
+    }
 
-    fn scroll_to_bottom(&self) {}
+    fn scroll_to_bottom(&self) {
+        self.record(FakeInputCall::ScrollToBottom);
+    }
 
-    fn scroll_to_top(&self) {}
+    fn scroll_to_top(&self) {
+        self.record(FakeInputCall::ScrollToTop);
+    }
 
     fn mouse_down(
         &self,
-        _row: f32,
-        _col: f32,
-        _button: TerminalMouseButton,
-        _selection: SelectionType,
-        _mods: MouseModifiers,
+        row: f32,
+        col: f32,
+        button: TerminalMouseButton,
+        selection: SelectionType,
+        mods: MouseModifiers,
     ) {
+        self.record(FakeInputCall::MouseDown {
+            row,
+            col,
+            button,
+            selection,
+            mods,
+        });
     }
 
-    fn mouse_move(&self, _row: f32, _col: f32, _mods: MouseModifiers) {}
+    fn mouse_move(&self, row: f32, col: f32, mods: MouseModifiers) {
+        self.record(FakeInputCall::MouseMove { row, col, mods });
+    }
 
-    fn mouse_drag(&self, _row: f32, _col: f32, _mods: MouseModifiers) {}
+    fn mouse_drag(&self, row: f32, col: f32, mods: MouseModifiers) {
+        self.record(FakeInputCall::MouseDrag { row, col, mods });
+    }
 
-    fn mouse_up(&self, _row: f32, _col: f32, _button: TerminalMouseButton, _mods: MouseModifiers) {}
+    fn mouse_up(&self, row: f32, col: f32, button: TerminalMouseButton, mods: MouseModifiers) {
+        self.record(FakeInputCall::MouseUp {
+            row,
+            col,
+            button,
+            mods,
+        });
+    }
 
-    fn wheel(&self, _delta_y: f64, _row: f32, _col: f32, _mods: MouseModifiers) {}
+    fn wheel(&self, delta_y: f64, row: f32, col: f32, mods: MouseModifiers) {
+        self.record(FakeInputCall::Wheel {
+            delta_y,
+            row,
+            col,
+            mods,
+        });
+    }
 
-    fn clear_selection(&self) {}
+    fn clear_selection(&self) {
+        *self.state.selection.lock().unwrap() = None;
+        self.record(FakeInputCall::ClearSelection);
+    }
 
-    fn select_all(&self) {}
+    fn select_all(&self) {
+        self.record(FakeInputCall::SelectAll);
+    }
 
-    fn clear(&self) {}
+    fn clear(&self) {
+        self.record(FakeInputCall::Clear);
+    }
 }
 
 impl TerminalIme for FakeTerminalSession {

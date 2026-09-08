@@ -31,13 +31,20 @@ gates them; the element itself registers no listeners.
 
 ```rust
 pub(crate) enum KeyAction {
-    ToggleSearch, SwallowInSearch, TriggerCompletion, ZoomIn, ZoomOut, ZoomReset,
+    ToggleSearch, SwallowInSearch, TriggerCompletion, Completion(CompletionKey),
+    ZoomIn, ZoomOut, ZoomReset,
     ScrollLines(i32), ScrollPages(i32), ScrollTop, ScrollBottom,
     Copy, Paste, Interrupt, Send(KeySpec, KeyMods), Ignore, Unhandled,
 }
-pub(crate) struct KeyContext { search_focused: bool, alt_screen: bool, completion_visible: bool }
+pub(crate) enum CompletionKey { SelectFirst, SelectNext, SelectPrev, Accept, Dismiss }
+pub(crate) struct KeyContext {
+    search_focused: bool, alt_screen: bool,
+    completion_visible: bool, completion_selected: bool, completion_accept_tab: bool,
+}
 pub(crate) fn classify_key(ks: &Keystroke, prefer_char: bool, ctx: KeyContext) -> KeyAction;
 pub(crate) fn map_key(ks: &Keystroke) -> Option<(KeySpec, KeyMods)>;
+pub(crate) fn send_key(session, spec: &KeySpec, mods: KeyMods, app_cursor: bool, cx) -> bool;
+pub(crate) fn interrupt(session, cx);
 ```
 
 `P` = platform modifier (`cmd` on macOS, `ctrl` elsewhere via `Modifiers::secondary()`);
@@ -57,8 +64,8 @@ pub(crate) fn map_key(ks: &Keystroke) -> Option<(KeySpec, KeyMods)>;
 | 9 | `P+shift+up` / `P+shift+down` | `ScrollLines(+1 / −1)` | |
 | 10 | `ctrl+shift+c` (non-mac) / `cmd+c` (mac) | `Copy` | |
 | 11 | `ctrl+shift+v` (non-mac) / `cmd+v` (mac) / `shift+insert` | `Paste` | |
-| 12 | single printable `key_char`, `plain`, `!alt_screen` | `Ignore` | IME path delivers it (`replace_text_in_range`); no stop_propagation |
-| 13 | `cfg!(windows)`, ctrl+alt, printable `key_char` (AltGr) | `Ignore` | WM_CHAR delivers it |
+| 12 | printable `key_char`, `plain`, `!alt_screen` | `Ignore` | IME path delivers it (`replace_text_in_range`); no stop_propagation |
+| 13 | `cfg!(windows) \|\| prefer_char`, ctrl+alt, printable `key_char` (AltGr) | `Ignore` | WM_CHAR delivers it |
 | 14 | `ctrl+c` (no shift) | `Interrupt` | `send_ctrl_c`, scroll to bottom, regardless of selection |
 | 15 | `map_key(ks) == Some(..)` | `Send(spec, mods)` | `encode_key(spec, mods, app_cursor)`, write, scroll to bottom, clear bell |
 | 16 | otherwise | `Unhandled` | no stop_propagation |
@@ -98,10 +105,23 @@ types. Alt-screen apps get no composition (kept from inventory wart 8).
 ### Mouse (`mouse.rs`)
 
 ```rust
-pub(crate) enum Drag { None, Selecting, Scrollbar { grab_offset: Pixels } }
-pub(crate) struct MouseState { drag: Drag, last_cell: Option<(usize, usize)>, last_ctrl: bool }
+pub(crate) enum Drag { None, Selecting, Scrollbar }
+pub(crate) struct MouseState { drag: Drag }          // last cell / ctrl live in `UrlHover`
+pub(crate) struct MouseInputs {                      // what the view knows, per event
+    geometry: Option<GridGeometry>, over_scrollbar: bool,
+    show_context_menu: bool, copy_on_select: bool, scroll_multiplier: f32,
+}
+pub(crate) enum MouseOutcome {
+    Ignored,                                  // did not reach the grid — no repaint
+    Handled,                                  // mark_scrolled + notify
+    ScrollbarDrag { track_y: f32 },           // view applies `scrollbar.drag_to`
+    OpenUrl(UrlOpen),                         // { url: DetectedUrl, decision: TargetDecision }
+    CopySelection,                            // view runs `edit::copy_selection`
+}
+// down / moved / up / wheel take (&event, &session, &MouseInputs, [&mut UrlHover], &mut App).
 pub(crate) fn selection_type(click_count: usize, alt: bool) -> SelectionType; // Alt → Block; 1 Simple, 2 Semantic, ≥3 Lines
 pub(crate) fn to_mods(m: &Modifiers) -> MouseModifiers; pub(crate) fn to_button(b: MouseButton) -> Option<TerminalMouseButton>;
+pub(crate) fn wheel_lines(delta: ScrollDelta, line_height: Pixels, multiplier: f32) -> f32;
 ```
 
 State machine (all transitions end with `scrollbar.mark_scrolled(); cx.notify()`):
@@ -161,7 +181,7 @@ Reached identically from keys (rows 10–11 and the panel actions), the context 
 
 ### Context menu (`menu.rs`)
 
-`build_menu(menu: PopupMenu, view: &TerminalView, cx) -> PopupMenu` produces, in order: New
+`build_menu(menu: PopupMenu, ctx: &MenuContext, window, cx) -> PopupMenu` produces, in order: New
 Terminal (`AddPanel`); Duplicate Session submenu (only with `split_ctx`: In New Tab, Into Space #N
 per empty destination, separator, Split Right, Split Down); separator (with `split_ctx`); Split
 Right/Left/Up/Down; separator; Copy (disabled without selection); Paste; Select All; Clear;
@@ -209,5 +229,38 @@ move, up, wheel}` (taking `&GridGeometry`, `&ScrollbarState`, `&UrlHover`, setti
       `events_before_first_paint_are_ignored`.
 - [ ] `edit_tests`: `copy_noop_without_selection`, `paste_scrolls_to_bottom_then_pastes`,
       `paste_too_large_notifies`.
+- [ ] `menu_tests`: `close_space_only_with_siblings`, `duplicate_destination_labels`.
+      `PopupMenu::menu_items` is `pub(crate)` to `gpui-component`, so the 16-step order
+      itself has no unit-test seam and is reviewed against this document.
 - [ ] `ime_tests` (US-0049): `ime_disabled_on_alt_screen`, `ime_commit_scrolls_and_clears_bell`,
       `ime_bounds_at_cursor_cell`.
+
+## Amendments (US-0048 implementation)
+
+Recorded when the implementation had to differ from the text above; the tables and
+signatures already carry the change.
+
+1. **`KeyContext` carries the completion selection and `accept_tab`.** Row 0's rules are
+   stated in terms of "if something is selected" and "when `accept_tab`", so the pure
+   `classify_key` needs both facts. Row 0's outcome is `KeyAction::Completion(CompletionKey)`.
+2. **Row 12 drops "single".** `key_char` is treated as layout text when it is non-empty and
+   contains no control character (parity with the old `handlers/keyboard.rs`), so a
+   dead-key composition of more than one `char` is also left to the IME path.
+3. **Row 13 also fires on `prefer_char`.** GPUI sets `KeyDownEvent::prefer_character_input`
+   exactly for the AltGr case, so the parameter is honoured in addition to `cfg!(windows)`.
+4. **`Drag::Scrollbar` carries no `grab_offset`.** `ScrollbarState::drag_to(track_y)` maps
+   the track position to a display offset by itself; there is no second anchor to keep.
+5. **`MouseState` does not duplicate `last_cell` / `last_ctrl`.** `UrlHover` already owns
+   them and already implements the cell-granular re-detect rule
+   (`needs_detection(position, cell, ctrl)` + `set(..)`), which is what
+   `update_if_needed` describes; no new entry point was added to `url/hover.rs`.
+6. **Scrollbar hit-testing is an input, not a lookup.** The view answers
+   `MouseInputs::over_scrollbar` and applies `MouseOutcome::ScrollbarDrag { track_y }`;
+   the mouse module never sees `ScrollbarState`, which `US-0049` owns.
+7. **URL opening is returned, not performed.** `MouseOutcome::OpenUrl` carries the
+   `DetectedUrl` and the `validate_target_with_display` decision; the view opens, shows the
+   confirmation dialog, or logs the denial, because all three need a `Window`.
+8. **`oneterm_terminal::test_support` was extended** (additively) with
+   `FakeInputCall`, `FakeSessionProbe::{input_calls, take_input_calls, set_selection}` and a
+   settable `selection_text` / `has_selection`, so the mouse and edit tests can assert what
+   reached the session. The fake previously recorded byte writes only.
