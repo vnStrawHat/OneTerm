@@ -28,6 +28,11 @@ pub struct AddPanelWithShell(pub oneterm_core::ShellKind);
 #[action(namespace = oneterm, no_json)]
 pub struct SetRightDockMode(pub RightDockMode);
 
+/// Join the active terminal Space to a broadcast input channel.
+#[derive(Clone, PartialEq, Eq, Deserialize, gpui::Action)]
+#[action(namespace = oneterm, no_json)]
+pub struct JoinInputChannel(pub oneterm_core::InputChannel);
+
 actions!(
     oneterm,
     [
@@ -64,6 +69,11 @@ actions!(
         TerminalClear,
         /// Close the active terminal Space (not the whole tab).
         CloseSpace,
+        // ── Broadcast input channel actions ─────────────────────────
+        /// Leave the broadcast input channel of the active terminal Space.
+        LeaveInputChannel,
+        /// Remove every Space from the channel of the active terminal Space.
+        CloseInputChannel,
         // ── Session tabs context-menu actions ───────────────────────
         /// Open the connect dialog for the selected session.
         OpenSession,

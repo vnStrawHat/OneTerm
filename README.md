@@ -50,6 +50,8 @@ OneTerm is a Terminal application for SSH/SFTP/Local Shell with a **Zed-style wo
 - Resizable split Spaces (Right / Left / Up / Down) with nesting
 - Drag a terminal tab into an empty Space to fill it
 - Context-menu driven; closing to one Space restores a single terminal
+- Broadcast input channels A..E: type once into every Space of a channel, across
+  tabs; coloured tab chips and Space frames show who is listening
 
 ### 🔌 SSH connectivity
 

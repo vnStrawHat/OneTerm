@@ -344,6 +344,15 @@ impl Render for TerminalView {
                     let s = session.read(cx);
                     (s.has_selection(), s.capabilities().logging)
                 };
+                // The tab-wide items need the tab, not this Space: a terminal
+                // outside a Space tree is a tab of one.
+                let (tab_spaces, tab_has_member) = split
+                    .as_ref()
+                    .and_then(|split| split.ctx.panel.upgrade())
+                    .map_or((1, false), |panel| {
+                        let tab = panel.read(cx);
+                        (tab.terminal_space_count(), !tab.tab_channels(cx).is_empty())
+                    });
                 let menu_ctx = MenuContext {
                     session: session.clone(),
                     origin: origin.clone(),
@@ -351,6 +360,9 @@ impl Render for TerminalView {
                     has_selection,
                     split,
                     logging,
+                    channel: origin.channel(cx),
+                    tab_spaces,
+                    tab_has_member,
                 };
                 build_menu(menu, &menu_ctx, window, cx)
             })

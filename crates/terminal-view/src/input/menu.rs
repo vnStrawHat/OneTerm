@@ -13,9 +13,11 @@ use gpui_component::{
 };
 
 use oneterm_actions::{
-    AddPanel, CloseSpace, DuplicateSession, SplitDown, SplitLeft, SplitRight, SplitUp,
-    TerminalClear, TerminalCopy, TerminalPaste, TerminalSelectAll,
+    AddPanel, CloseInputChannel, CloseSpace, DuplicateSession, JoinInputChannel, LeaveInputChannel,
+    SplitDown, SplitLeft, SplitRight, SplitUp, TerminalClear, TerminalCopy, TerminalPaste,
+    TerminalSelectAll,
 };
+use oneterm_core::InputChannel;
 use oneterm_settings::TerminalSettings;
 use oneterm_terminal::{TerminalLogController, TerminalLogState, TerminalSession};
 use oneterm_theme::notif_ext::notify;
@@ -40,6 +42,77 @@ pub(crate) struct MenuContext {
     pub split: Option<MenuSplitContext>,
     /// `capabilities().logging` — the Log submenu exists only with it.
     pub logging: Option<TerminalLogController>,
+    /// The broadcast input channel of this Space, if any.
+    pub channel: Option<InputChannel>,
+    /// Terminal Spaces in this tab (1 when the terminal is not in a tree) —
+    /// the tab-wide items only make sense with siblings.
+    pub tab_spaces: usize,
+    /// Whether any Space of this tab is a channel member.
+    pub tab_has_member: bool,
+}
+
+/// One entry of the "Input Channel" submenu, in menu order.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ChannelMenuItem {
+    /// `Channel A`..`Channel E`; the flag marks this Space's own channel.
+    Join(InputChannel, bool),
+    Separator,
+    Leave,
+    Close(InputChannel),
+    JoinTab(InputChannel),
+    LeaveTab,
+}
+
+/// The submenu entries for a Space in `channel`, inside a tab of `tab_spaces`
+/// terminal Spaces of which `tab_has_member` says whether any is a member.
+///
+/// `PopupMenu` keeps its items private, so the conditions live here as data and
+/// [`build_menu`] only turns them into items.
+pub(crate) fn channel_menu_items(
+    channel: Option<InputChannel>,
+    tab_spaces: usize,
+    tab_has_member: bool,
+) -> Vec<ChannelMenuItem> {
+    let mut items: Vec<_> = InputChannel::ALL
+        .into_iter()
+        .map(|ch| ChannelMenuItem::Join(ch, Some(ch) == channel))
+        .collect();
+    if let Some(current) = channel {
+        items.push(ChannelMenuItem::Separator);
+        items.push(ChannelMenuItem::Leave);
+        items.push(ChannelMenuItem::Close(current));
+    }
+    if tab_spaces > 1 {
+        let mut tab_items = Vec::new();
+        if let Some(current) = channel {
+            tab_items.push(ChannelMenuItem::JoinTab(current));
+        }
+        if tab_has_member {
+            tab_items.push(ChannelMenuItem::LeaveTab);
+        }
+        if !tab_items.is_empty() {
+            items.push(ChannelMenuItem::Separator);
+            items.append(&mut tab_items);
+        }
+    }
+    items
+}
+
+/// Label of one submenu entry. The popup menu has no radio mark, so the
+/// current channel is marked with a `* ` prefix and the others are indented by
+/// the same width to keep the letters in one column.
+pub(crate) fn channel_item_label(item: ChannelMenuItem) -> String {
+    match item {
+        ChannelMenuItem::Join(channel, true) => format!("* Channel {}", channel.label()),
+        ChannelMenuItem::Join(channel, false) => format!("  Channel {}", channel.label()),
+        ChannelMenuItem::Separator => String::new(),
+        ChannelMenuItem::Leave => "Leave Channel".to_string(),
+        ChannelMenuItem::Close(channel) => format!("Close Channel {}", channel.label()),
+        ChannelMenuItem::JoinTab(channel) => {
+            format!("Join All Spaces In Tab To {}", channel.label())
+        }
+        ChannelMenuItem::LeaveTab => "Leave With All Spaces In Tab".to_string(),
+    }
 }
 
 /// The Space-tree facts the menu needs, read once by the caller.
@@ -137,6 +210,26 @@ pub(crate) fn build_menu(
             Some(&focus),
         );
     }
+
+    let items = channel_menu_items(ctx.channel, ctx.tab_spaces, ctx.tab_has_member);
+    let channel_session = ctx.session.clone();
+    let channel_origin = ctx.origin.clone();
+    let channel_panel = ctx.split.as_ref().map(|split| split.ctx.panel.clone());
+    let channel_focus = focus.clone();
+    menu = menu
+        .separator()
+        .submenu("Input Channel", window, cx, move |submenu, _, _| {
+            items.iter().fold(submenu, |submenu, item| match item {
+                ChannelMenuItem::Separator => submenu.separator(),
+                item => submenu.item(channel_item(
+                    *item,
+                    &channel_session,
+                    &channel_origin,
+                    channel_panel.as_ref(),
+                    &channel_focus,
+                )),
+            })
+        });
 
     menu = menu
         .separator()
@@ -255,6 +348,76 @@ fn duplicate_item(
     } else {
         item
     }
+}
+
+/// One "Input Channel" submenu item: the action (for the shortcut hint) plus a
+/// click handler that changes membership and returns focus to the terminal.
+///
+/// The item acts on the Space the menu belongs to, which is not necessarily the
+/// active one — hence the direct registry call instead of an action dispatch.
+fn channel_item(
+    item: ChannelMenuItem,
+    session: &Entity<Box<dyn TerminalSession>>,
+    origin: &BroadcastOrigin,
+    panel: Option<&WeakEntity<TerminalPanel>>,
+    focus: &FocusHandle,
+) -> PopupMenuItem {
+    let session = session.clone();
+    let origin = origin.clone();
+    let panel = panel.cloned();
+    let f = focus.clone();
+    let menu_item = PopupMenuItem::new(channel_item_label(item));
+    let menu_item = match item {
+        ChannelMenuItem::Join(channel, _) => menu_item.action(Box::new(JoinInputChannel(channel))),
+        ChannelMenuItem::Leave => menu_item.action(Box::new(LeaveInputChannel)),
+        ChannelMenuItem::Close(_) => menu_item.action(Box::new(CloseInputChannel)),
+        // The tab-wide items are menu-only: nothing binds them to a key.
+        _ => menu_item,
+    };
+    menu_item.on_click(move |_, window, cx| {
+        apply_channel_item(item, &session, &origin, panel.as_ref(), cx);
+        window.focus(&f, cx);
+    })
+}
+
+/// Apply one submenu item to the registry (this Space) or to the panel (the
+/// tab-wide items).
+fn apply_channel_item(
+    item: ChannelMenuItem,
+    session: &Entity<Box<dyn TerminalSession>>,
+    origin: &BroadcastOrigin,
+    panel: Option<&WeakEntity<TerminalPanel>>,
+    cx: &mut App,
+) {
+    match item {
+        ChannelMenuItem::JoinTab(channel) => {
+            if let Some(panel) = panel.and_then(WeakEntity::upgrade) {
+                panel.update(cx, |panel, cx| panel.join_tab_to_channel(channel, cx));
+            }
+            return;
+        }
+        ChannelMenuItem::LeaveTab => {
+            if let Some(panel) = panel.and_then(WeakEntity::upgrade) {
+                panel.update(cx, |panel, cx| panel.leave_tab_channels(cx));
+            }
+            return;
+        }
+        _ => {}
+    }
+    let Some(registry) = origin.channels.clone() else {
+        return;
+    };
+    let id = origin.id;
+    registry.update(cx, |registry, cx| match item {
+        ChannelMenuItem::Join(channel, _) => registry.join(id, channel, session.clone(), cx),
+        ChannelMenuItem::Leave => {
+            registry.leave(id, cx);
+        }
+        ChannelMenuItem::Close(channel) => {
+            registry.close(channel, cx);
+        }
+        _ => {}
+    });
 }
 
 /// The four "Split …" items that split `space_id` of `panel`; shared with the

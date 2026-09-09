@@ -16,9 +16,7 @@ use gpui::{
     NoAction, Subscription, Task, WeakEntity, Window,
 };
 use gpui_component::ActiveTheme as _;
-#[cfg(test)]
-use oneterm_core::InputChannel;
-use oneterm_core::SessionDuplicateConfig;
+use oneterm_core::{InputChannel, SessionDuplicateConfig};
 use oneterm_settings::{TerminalBlink, TerminalSettings};
 use oneterm_state::{
     AgentRegistry, BroadcastInput, CompletionHistory, GlobalCompletionHistory, InputChannelRegistry,
@@ -94,6 +92,11 @@ pub(crate) struct BroadcastOrigin {
 }
 
 impl BroadcastOrigin {
+    /// The channel this origin is in, if any.
+    pub(crate) fn channel(&self, cx: &App) -> Option<InputChannel> {
+        self.channels.as_ref()?.read(cx).channel_of(self.id)
+    }
+
     /// Repeat `input` on this origin's channel peers; a no-op without a registry.
     pub(crate) fn fan_out(&self, input: BroadcastInput<'_>, cx: &mut App) {
         let Some(registry) = self.channels.clone() else {
@@ -412,10 +415,6 @@ impl TerminalView {
     }
 
     /// Join `channel`, leaving whichever channel this Space was in.
-    ///
-    /// Test-gated until US-0056 dispatches the join / leave actions from the
-    /// context menu; `leave_channel` is already used by `shutdown`.
-    #[cfg(test)]
     pub(crate) fn join_channel(&mut self, channel: InputChannel, cx: &mut Context<Self>) {
         let Some(registry) = self.deps.input_channels.clone() else {
             return;
@@ -436,8 +435,7 @@ impl TerminalView {
         });
     }
 
-    /// The channel this Space is in, if any. Test-gated with `join_channel`.
-    #[cfg(test)]
+    /// The channel this Space is in, if any.
     pub(crate) fn channel(&self, cx: &Context<Self>) -> Option<InputChannel> {
         let registry = self.deps.input_channels.as_ref()?;
         registry.read(cx).channel_of(cx.entity_id())

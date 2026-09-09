@@ -8,6 +8,7 @@
 use gpui::{Action, KeyBinding, Keystroke};
 
 use oneterm_actions::{About, AddPanel, NewSession, OpenSettings, Quit, ToggleGutter};
+use oneterm_core::InputChannel;
 
 // ── Bindable action registry ─────────────────────────────────────────
 
@@ -220,6 +221,70 @@ pub(super) const BINDABLE_ACTIONS: &[BindableAction] = &[
         make: |ks, ctx| make_binding(ks, oneterm_actions::CloseSpace, ctx),
         name_fn: <oneterm_actions::CloseSpace as Action>::name_for_type,
     },
+    // ── Broadcast input channel actions ──────────────────────────
+    BindableAction {
+        id: "join_input_channel_a",
+        label: "Join Input Channel A",
+        group: "Input Channel",
+        default: None,
+        context: None,
+        make: |ks, ctx| make_binding(ks, oneterm_actions::JoinInputChannel(InputChannel::A), ctx),
+        name_fn: <oneterm_actions::JoinInputChannel as Action>::name_for_type,
+    },
+    BindableAction {
+        id: "join_input_channel_b",
+        label: "Join Input Channel B",
+        group: "Input Channel",
+        default: None,
+        context: None,
+        make: |ks, ctx| make_binding(ks, oneterm_actions::JoinInputChannel(InputChannel::B), ctx),
+        name_fn: <oneterm_actions::JoinInputChannel as Action>::name_for_type,
+    },
+    BindableAction {
+        id: "join_input_channel_c",
+        label: "Join Input Channel C",
+        group: "Input Channel",
+        default: None,
+        context: None,
+        make: |ks, ctx| make_binding(ks, oneterm_actions::JoinInputChannel(InputChannel::C), ctx),
+        name_fn: <oneterm_actions::JoinInputChannel as Action>::name_for_type,
+    },
+    BindableAction {
+        id: "join_input_channel_d",
+        label: "Join Input Channel D",
+        group: "Input Channel",
+        default: None,
+        context: None,
+        make: |ks, ctx| make_binding(ks, oneterm_actions::JoinInputChannel(InputChannel::D), ctx),
+        name_fn: <oneterm_actions::JoinInputChannel as Action>::name_for_type,
+    },
+    BindableAction {
+        id: "join_input_channel_e",
+        label: "Join Input Channel E",
+        group: "Input Channel",
+        default: None,
+        context: None,
+        make: |ks, ctx| make_binding(ks, oneterm_actions::JoinInputChannel(InputChannel::E), ctx),
+        name_fn: <oneterm_actions::JoinInputChannel as Action>::name_for_type,
+    },
+    BindableAction {
+        id: "leave_input_channel",
+        label: "Leave Input Channel",
+        group: "Input Channel",
+        default: None,
+        context: None,
+        make: |ks, ctx| make_binding(ks, oneterm_actions::LeaveInputChannel, ctx),
+        name_fn: <oneterm_actions::LeaveInputChannel as Action>::name_for_type,
+    },
+    BindableAction {
+        id: "close_input_channel",
+        label: "Close Input Channel",
+        group: "Input Channel",
+        default: None,
+        context: None,
+        make: |ks, ctx| make_binding(ks, oneterm_actions::CloseInputChannel, ctx),
+        name_fn: <oneterm_actions::CloseInputChannel as Action>::name_for_type,
+    },
     // ── Session tabs context-menu actions ────────────────────────
     BindableAction {
         id: "open_session",
@@ -347,5 +412,30 @@ mod tests {
         assert_eq!(action.group, "Terminal Context Menu");
         assert_eq!(action.default, None);
         assert_eq!((action.name_fn)(), "oneterm::DuplicateSession");
+    }
+
+    #[test]
+    fn the_seven_input_channel_actions_ship_unbound() {
+        let ids: Vec<_> = BINDABLE_ACTIONS
+            .iter()
+            .filter(|action| action.group == "Input Channel")
+            .map(|action| {
+                assert_eq!(action.default, None, "{} must ship unbound", action.id);
+                action.id
+            })
+            .collect();
+
+        assert_eq!(
+            ids,
+            vec![
+                "join_input_channel_a",
+                "join_input_channel_b",
+                "join_input_channel_c",
+                "join_input_channel_d",
+                "join_input_channel_e",
+                "leave_input_channel",
+                "close_input_channel",
+            ]
+        );
     }
 }

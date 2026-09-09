@@ -83,6 +83,22 @@ The whole `TerminalPanel` is zoomed, including its internal Space tree and tab-g
 
 A loaded document feeds the right-dock layout, width, and open state. Startup intentionally resets the center to one terminal tab while retaining right-dock state and then restores zoom by panel name. Writes use `update_dock_document_at`, preserve `sftp_table_state`, make a backup, and quarantine invalid data rather than overwriting it. See [`agents/persistence.md`](agents/persistence.md) for storage and ownership rules.
 
+## Broadcast input channels
+
+A terminal Space joins one of five channels (A..E) from its context menu: an "Input Channel"
+submenu sits after the Split items and lists `Channel A`..`Channel E` (the current one marked
+with a `* ` prefix), then `Leave Channel` and `Close Channel <X>` for a member, then
+`Join All Spaces In Tab To <X>` and `Leave With All Spaces In Tab` when the tab holds more
+than one Space. The five joins, the leave, and the close are also actions in
+Settings > Key Bindings (group "Input Channel"), shipped unbound.
+
+Membership is painted in two places. The tab strip shows one chip per distinct channel of the
+tab's Spaces, in A..E order, before the recording dot; the chip is the channel letter in the
+theme's `chart_1..chart_5`. Each member Space is framed in the same colour (55 % opacity while
+another Space is active), including the lone Space of an unsplit tab, which is otherwise drawn
+without a frame. Both read the `InputChannelRegistry`, and every `TerminalPanel` observes it,
+so a `Close Channel` performed in one tab repaints the others.
+
 ## Status bar
 
 The status bar contains the clock, active-terminal network speed, breadcrumb, CPU/memory indicator, and right-dock controls. Terminal-derived widgets resolve the active panel through the dock tree and then the active Space inside `TerminalPanel`; an empty Space yields no terminal metrics.
@@ -97,4 +113,7 @@ The status bar contains the clock, active-terminal network speed, breadcrumb, CP
 - Shared dock traversal: `crates/state/src/dock_util.rs`
 - Persisted document owner: `crates/state/src/dock_persistence.rs`
 - Registered names: `crates/state/src/panel_names.rs`
+- Input channel membership: `crates/state/src/input_channel_registry.rs`
+- Channel submenu, chips, and Space frame: `crates/terminal-view/src/input/menu.rs`,
+  `crates/terminal-view/src/panel/tab_title.rs`, `crates/terminal-view/src/space/render.rs`
 - Focused layout regressions: `crates/workspace/src/layout/workspace/layout_tests.rs`

@@ -20,10 +20,11 @@ use gpui_component::{
 };
 
 use oneterm_actions::{
-    AddPanelWithShell, CloseSpace, DuplicateSession, NewSession, SplitDown, SplitLeft, SplitRight,
-    SplitUp, TerminalClear, TerminalCopy, TerminalPaste, TerminalSelectAll,
+    AddPanelWithShell, CloseInputChannel, CloseSpace, DuplicateSession, JoinInputChannel,
+    LeaveInputChannel, NewSession, SplitDown, SplitLeft, SplitRight, SplitUp, TerminalClear,
+    TerminalCopy, TerminalPaste, TerminalSelectAll,
 };
-use oneterm_core::{LocalShellConfig, SessionDuplicateConfig, ShellKind};
+use oneterm_core::{InputChannel, LocalShellConfig, SessionDuplicateConfig, ShellKind};
 use oneterm_settings::TabTitleMode;
 use oneterm_state::AppServices;
 use oneterm_terminal::{PtySize, TerminalSession};
@@ -64,6 +65,10 @@ pub struct TerminalPanel {
     pub(super) _title_subs: Vec<Subscription>,
     /// Subscription to global `TerminalSettings` changes.
     pub(super) _settings_sub: Subscription,
+    /// Subscription to the broadcast input channel registry, so a join or a
+    /// `Close Channel` performed in another tab repaints this tab's chips and
+    /// Space frames.
+    pub(super) _channels_sub: Option<Subscription>,
     /// The services this panel's terminal views receive (ARCH-20).
     pub(super) deps: TerminalDeps,
 }
@@ -143,6 +148,10 @@ impl TerminalPanel {
         let _settings_sub = cx.observe(&deps.settings, |_this, _settings, cx| {
             cx.notify();
         });
+        let _channels_sub = deps
+            .input_channels
+            .as_ref()
+            .map(|registry| cx.observe(registry, |_this, _registry, cx| cx.notify()));
 
         let mut this = Self {
             dock_focus_handle,
@@ -155,6 +164,7 @@ impl TerminalPanel {
             tab_title_override: None,
             _title_subs: Vec::new(),
             _settings_sub,
+            _channels_sub,
             deps,
         };
         if let Some(view) = &view {
@@ -370,6 +380,55 @@ impl TerminalPanel {
         }
     }
 
+    /// Put every terminal Space of this tab in `channel`.
+    pub(crate) fn join_tab_to_channel(&mut self, channel: InputChannel, cx: &mut Context<Self>) {
+        for view in self.tree.terminal_views() {
+            view.update(cx, |view, cx| view.join_channel(channel, cx));
+        }
+    }
+
+    /// Take every terminal Space of this tab out of its channel.
+    pub(crate) fn leave_tab_channels(&mut self, cx: &mut Context<Self>) {
+        for view in self.tree.terminal_views() {
+            view.update(cx, |view, cx| view.leave_channel(cx));
+        }
+    }
+
+    /// Remove every Space, in any tab, from the channel of the active Space.
+    fn close_active_channel(&mut self, cx: &mut Context<Self>) {
+        let Some(view) = self.active_view() else {
+            return;
+        };
+        let Some(channel) = view.update(cx, |view, cx| view.channel(cx)) else {
+            return;
+        };
+        let Some(registry) = self.deps.input_channels.clone() else {
+            return;
+        };
+        registry.update(cx, |registry, cx| {
+            registry.close(channel, cx);
+        });
+    }
+
+    /// Terminal Spaces in this tab (empty Spaces cannot join a channel).
+    pub(crate) fn terminal_space_count(&self) -> usize {
+        self.tree.terminal_views().len()
+    }
+
+    /// The distinct channels of this tab's Spaces, ordered A..E — the chips.
+    pub(crate) fn tab_channels(&self, cx: &App) -> Vec<InputChannel> {
+        let Some(registry) = &self.deps.input_channels else {
+            return Vec::new();
+        };
+        let ids: Vec<EntityId> = self
+            .tree
+            .terminal_views()
+            .iter()
+            .map(|view| view.entity_id())
+            .collect();
+        registry.read(cx).channels_in(&ids)
+    }
+
     /// Run an edit command (copy/paste/select-all/clear) on the active
     /// terminal's session, if the active Space has one.
     fn edit_active(&self, edit: edit::EditCommand, window: &mut Window, cx: &mut Context<Self>) {
@@ -395,7 +454,12 @@ impl Focusable for TerminalPanel {
 
 impl Render for TerminalPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let body = self.tree.render(cx.entity().downgrade(), window, cx);
+        let body = self.tree.render(
+            cx.entity().downgrade(),
+            self.deps.input_channels.as_ref(),
+            window,
+            cx,
+        );
         div()
             .id("terminal-panel")
             .size_full()
@@ -428,6 +492,19 @@ impl Render for TerminalPanel {
             }))
             .on_action(cx.listener(|this, _: &TerminalClear, w, cx| {
                 this.edit_active(edit::clear_screen, w, cx)
+            }))
+            .on_action(cx.listener(|this, action: &JoinInputChannel, _w, cx| {
+                if let Some(view) = this.active_view() {
+                    view.update(cx, |view, cx| view.join_channel(action.0, cx));
+                }
+            }))
+            .on_action(cx.listener(|this, _: &LeaveInputChannel, _w, cx| {
+                if let Some(view) = this.active_view() {
+                    view.update(cx, |view, cx| view.leave_channel(cx));
+                }
+            }))
+            .on_action(cx.listener(|this, _: &CloseInputChannel, _w, cx| {
+                this.close_active_channel(cx);
             }))
             .on_action(cx.listener(|this, _: &CloseSpace, w, cx| {
                 // Closing the only Space would empty the tab; that is what

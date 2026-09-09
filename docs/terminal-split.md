@@ -41,6 +41,31 @@ neutral 1px outer border plus a 1px inner gutter that takes the accent colour on
 active leaf, and a leaf can be filled by dragging a Terminal Tab onto it. Closing the
 last remaining leaf reverts the tab to a plain single terminal (no borders).
 
+## Broadcast input channels (IN-0022)
+
+A Space can join one of the five broadcast input channels A..E from its context menu
+("Input Channel"), so that one keystroke, typed text, paste or Ctrl+C reaches every other
+member of that channel. What it means for Spaces (DEC-0009):
+
+- Membership belongs to the **Space** — to the `TerminalView` entity, not to the tab or the
+  Space id. A tab dragged into an empty Space keeps its channel because the same view entity
+  moves; Close Space and Close Tab leave the channel with the session.
+- A Space created by Split or Duplicate Session is a **non-member**, even when its siblings
+  are members. "Input Channel > Join All Spaces In Tab To X" is the one-click way to put the
+  whole tab in one channel.
+- Every member Space is framed in its channel colour (`chart_1..chart_5` for A..E), full
+  colour for the active Space and 55 % for the inactive ones. The frame replaces the
+  active/inactive rule of [05](terminal-split/05-rendering-theme.md) for members only; a
+  non-member Space is painted exactly as before. A tab whose single Space is a member draws
+  the 1 px frame too, although a lone Space is otherwise borderless.
+- Membership is in-memory: nothing about channels is persisted, like the split layout itself.
+- Broadcast is **not** suppressed on the alternate screen. A member Space running a
+  full-screen program (`vim`, `htop`) receives the peers' input like any other member, so
+  leave the channel before starting one there.
+
+The owning design is
+[`docs/spec-intakes/IN-0022-broadcast-input-channels/high-level-design.md`](spec-intakes/IN-0022-broadcast-input-channels/high-level-design.md).
+
 ## Confirmed decisions (from clarification)
 
 1. **Drag scope**: only **Terminal Tabs** can be dropped into a Space (not SFTP /

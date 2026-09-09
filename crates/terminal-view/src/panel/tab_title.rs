@@ -6,7 +6,7 @@
 use std::rc::Rc;
 
 use gpui::{
-    App, AppContext as _, ClickEvent, Context, Div, Entity, Focusable as _,
+    App, AppContext as _, ClickEvent, Context, Div, Entity, Focusable as _, FontWeight,
     InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, SharedString,
     StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
@@ -22,6 +22,7 @@ use oneterm_theme::notif_ext::notify;
 
 use super::TerminalPanel;
 use crate::space::DragTerminalTab;
+use crate::theme::channel_color;
 
 impl TerminalPanel {
     /// Return the effective tab label, with a manual override taking priority
@@ -111,6 +112,13 @@ pub(super) fn render_tab_strip(
     let recording_color = cx.theme().danger;
     let is_active = panel.is_active;
     let show_recording = panel.shows_recording_dot(cx);
+    // One chip per distinct channel of this tab's Spaces, in A..E order.
+    let chip_background = cx.theme().background;
+    let chips: Vec<_> = panel
+        .tab_channels(cx)
+        .into_iter()
+        .map(|channel| (channel.label(), channel_color(channel, cx)))
+        .collect();
     let tab_label = panel.tab_label(cx);
     let drag_title: SharedString = tab_label.clone().into();
     let rename_title = tab_label.clone();
@@ -158,6 +166,23 @@ pub(super) fn render_tab_strip(
                 panel.update(cx, |panel, cx| panel.close_tab(window, cx));
             }
         })
+        .children(
+            chips
+                .into_iter()
+                .enumerate()
+                .map(|(index, (label, color))| {
+                    div()
+                        .id(("tab-channel", index))
+                        .flex_shrink_0()
+                        .px_1()
+                        .rounded_sm()
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .bg(color)
+                        .text_color(chip_background)
+                        .child(label)
+                }),
+        )
         .when(show_recording, |this| {
             this.child(
                 div()

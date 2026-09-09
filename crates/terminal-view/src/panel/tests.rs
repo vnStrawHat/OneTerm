@@ -7,8 +7,10 @@ use gpui_component::{
     Root,
     dock::{DockArea, DockLayout, Panel as _, PanelView, panel_handle},
 };
-use oneterm_core::{AppError, LocalShellConfig, Result, SessionDuplicateConfig, SshConfig};
-use oneterm_state::{AppServices, commands::WorkspaceCommands};
+use oneterm_core::{
+    AppError, InputChannel, LocalShellConfig, Result, SessionDuplicateConfig, SshConfig,
+};
+use oneterm_state::{AppServices, InputChannelRegistry, commands::WorkspaceCommands};
 use oneterm_terminal::{
     PtySize, SessionFactory, TerminalSecurityPolicy, TerminalSession,
     test_support::FakeTerminalSession,
@@ -708,5 +710,82 @@ fn exited_behind_output_batch_marks_agent_ended(cx: &mut TestAppContext) {
     assert_eq!(
         agent_lifecycle(&registry, terminal_key, cx),
         Some(oneterm_state::Lifecycle::Ended { exit_code: Some(0) })
+    );
+}
+
+/// The tab chips read `tab_channels`, and the two tab-wide menu items write
+/// through `join_tab_to_channel` / `leave_tab_channels` (US-0056).
+#[gpui::test]
+fn tab_channel_helpers_cover_every_space_of_the_tab(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    cx.update(crate::init);
+    cx.update(oneterm_settings::TerminalSettings::init);
+    cx.update(InputChannelRegistry::init);
+
+    let (session_a, _) = FakeTerminalSession::boxed(24, 80, "A");
+    let (panel, cx) = cx.add_window_view(move |window, cx| {
+        TerminalPanel::from_spec(session_spec(session_a, "A"), window, cx)
+    });
+    let cx: &mut VisualTestContext = cx;
+    cx.run_until_parked();
+
+    let first_space = panel.read_with(cx, |panel, _| panel.tree.active());
+    panel.update_in(cx, |panel, window, cx| {
+        panel.split_active_at(first_space, SplitDir::Right, window, cx);
+    });
+    let second_space = panel.read_with(cx, |panel, _| panel.tree.active());
+    let (session_b, _) = FakeTerminalSession::boxed(24, 80, "B");
+    panel.update_in(cx, |panel, window, cx| {
+        let session = cx.new(|_| session_b);
+        let view = cx.new(|cx| TerminalView::new(session, panel.deps.clone(), window, cx));
+        panel
+            .tree
+            .fill_empty(second_space, view)
+            .expect("the new split Space must be empty");
+    });
+    cx.run_until_parked();
+
+    assert!(
+        panel
+            .read_with(cx, |panel, cx| panel.tab_channels(cx))
+            .is_empty(),
+        "a fresh tab has no member and therefore no chip"
+    );
+
+    let first = panel
+        .read_with(cx, |panel, _| panel.tree.leaf_terminal(first_space))
+        .expect("the first Space holds a terminal");
+    let second = panel
+        .read_with(cx, |panel, _| panel.tree.leaf_terminal(second_space))
+        .expect("the second Space holds a terminal");
+
+    first.update(cx, |view, cx| view.join_channel(InputChannel::A, cx));
+    assert_eq!(
+        panel.read_with(cx, |panel, cx| panel.tab_channels(cx)),
+        vec![InputChannel::A]
+    );
+
+    second.update(cx, |view, cx| view.join_channel(InputChannel::C, cx));
+    assert_eq!(
+        panel.read_with(cx, |panel, cx| panel.tab_channels(cx)),
+        vec![InputChannel::A, InputChannel::C],
+        "a mixed split shows one chip per channel, in A..E order"
+    );
+
+    panel.update(cx, |panel, cx| {
+        panel.join_tab_to_channel(InputChannel::B, cx)
+    });
+    assert_eq!(
+        panel.read_with(cx, |panel, cx| panel.tab_channels(cx)),
+        vec![InputChannel::B],
+        "joining the tab moves every Space, including the one in another channel"
+    );
+
+    panel.update(cx, |panel, cx| panel.leave_tab_channels(cx));
+    assert!(
+        panel
+            .read_with(cx, |panel, cx| panel.tab_channels(cx))
+            .is_empty(),
+        "leaving with the tab clears every Space"
     );
 }

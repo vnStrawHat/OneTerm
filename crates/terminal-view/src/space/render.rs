@@ -3,7 +3,7 @@
 //! and the [`DragTerminalTab`] payload dragged from a tab title onto a Space.
 
 use gpui::{
-    AnyElement, App, Axis, Context, ElementId, Hsla, InteractiveElement as _, IntoElement,
+    AnyElement, App, Axis, Context, ElementId, Entity, Hsla, InteractiveElement as _, IntoElement,
     MouseButton, ParentElement as _, Render, Role, SharedString, StatefulInteractiveElement as _,
     Styled as _, WeakEntity, Window, div, px,
 };
@@ -14,11 +14,13 @@ use gpui_component::{
     resizable::{h_resizable, resizable_panel, v_resizable},
     v_flex,
 };
+use oneterm_state::InputChannelRegistry;
 use oneterm_theme::icon::AppIcon;
 
 use super::tree::{SpaceContent, SpaceId, SpaceLeaf, SpaceNode, SpaceTree};
 use crate::input::menu::split_items;
 use crate::panel::TerminalPanel;
+use crate::theme::channel_color;
 
 /// Payload dragged from a Terminal Tab title onto an empty Space.
 ///
@@ -47,10 +49,13 @@ impl Render for DragTerminalTab {
 }
 
 impl SpaceTree {
-    /// Render the whole tree for `panel`.
+    /// Render the whole tree for `panel`. `channels` is the panel's registry
+    /// handle - passed in because the panel is being rendered and cannot be
+    /// read back to reach its own dependencies.
     pub(crate) fn render(
         &self,
         panel: WeakEntity<TerminalPanel>,
+        channels: Option<&Entity<InputChannelRegistry>>,
         window: &mut Window,
         cx: &mut App,
     ) -> AnyElement {
@@ -59,6 +64,7 @@ impl SpaceTree {
             self.active(),
             self.is_single(),
             panel,
+            channels,
             window,
             cx,
         )
@@ -72,11 +78,14 @@ fn render_node(
     active: SpaceId,
     single: bool,
     panel: WeakEntity<TerminalPanel>,
+    channels: Option<&Entity<InputChannelRegistry>>,
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
     let split = match node {
-        SpaceNode::Leaf(leaf) => return render_leaf(leaf, active, single, panel, window, cx),
+        SpaceNode::Leaf(leaf) => {
+            return render_leaf(leaf, active, single, panel, channels, window, cx);
+        }
         SpaceNode::Split(split) => split,
     };
 
@@ -93,7 +102,7 @@ fn render_node(
     .with_state(&split.state);
 
     for child in &split.children {
-        let el = render_node(child, active, false, panel.clone(), window, cx);
+        let el = render_node(child, active, false, panel.clone(), channels, window, cx);
         group = group.child(resizable_panel().child(el));
     }
     group.into_any_element()
@@ -105,19 +114,37 @@ fn render_leaf(
     active: SpaceId,
     single: bool,
     panel: WeakEntity<TerminalPanel>,
+    channels: Option<&Entity<InputChannelRegistry>>,
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
     let id = leaf.id;
+    let channel = match (&leaf.content, channels) {
+        (SpaceContent::Terminal(view), Some(registry)) => {
+            registry.read(cx).channel_of(view.entity_id())
+        }
+        _ => None,
+    };
+    let channel = channel.map(|channel| channel_color(channel, cx));
     let content: AnyElement = match &leaf.content {
         SpaceContent::Terminal(view) => view.clone().into_any_element(),
         SpaceContent::Empty => render_placeholder(leaf, panel.clone(), window, cx),
     };
 
     // Fast path: the tab's only Space renders with no border / no activation
-    // wrapper — visually identical to the pre-split single terminal.
+    // wrapper — visually identical to the pre-split single terminal, unless it
+    // is a channel member: a lone member must never be unmarked.
     if single {
-        return content;
+        let Some(color) = channel else {
+            return content;
+        };
+        return div()
+            .id(ElementId::from(("space", id.0 as usize)))
+            .size_full()
+            .border_1()
+            .border_color(color)
+            .child(content)
+            .into_any_element();
     }
 
     div()
@@ -133,6 +160,7 @@ fn render_leaf(
         .p(px(1.))
         .bg(space_border_color(
             id == active,
+            channel,
             cx.theme().table_active_border,
             cx.theme().border,
         ))
@@ -143,9 +171,20 @@ fn render_leaf(
         .into_any_element()
 }
 
-/// The 1px frame color of a Space: highlighted while it is the active one.
-fn space_border_color(is_active: bool, active: Hsla, inactive: Hsla) -> Hsla {
-    if is_active { active } else { inactive }
+/// The 1px frame color of a Space: the channel colour for a member (dimmed
+/// while another Space is active), otherwise the theme's active/inactive rule.
+fn space_border_color(
+    is_active: bool,
+    channel: Option<Hsla>,
+    active: Hsla,
+    inactive: Hsla,
+) -> Hsla {
+    match channel {
+        Some(color) if is_active => color,
+        Some(color) => color.opacity(0.55),
+        None if is_active => active,
+        None => inactive,
+    }
 }
 
 /// A mouse-down handler that makes Space `id` of `panel` the active Space.
@@ -252,7 +291,24 @@ mod tests {
         let active = hsla(0.1, 0.8, 0.5, 1.0);
         let inactive = hsla(0.0, 0.0, 0.2, 1.0);
 
-        assert_eq!(space_border_color(true, active, inactive), active);
-        assert_eq!(space_border_color(false, active, inactive), inactive);
+        assert_eq!(space_border_color(true, None, active, inactive), active);
+        assert_eq!(space_border_color(false, None, active, inactive), inactive);
+    }
+
+    #[test]
+    fn a_channel_member_is_framed_in_its_channel_color() {
+        let active = hsla(0.1, 0.8, 0.5, 1.0);
+        let inactive = hsla(0.0, 0.0, 0.2, 1.0);
+        let channel = hsla(0.5, 0.7, 0.5, 1.0);
+
+        assert_eq!(
+            space_border_color(true, Some(channel), active, inactive),
+            channel
+        );
+        assert_eq!(
+            space_border_color(false, Some(channel), active, inactive),
+            channel.opacity(0.55),
+            "an inactive member keeps its channel colour, dimmed"
+        );
     }
 }
