@@ -83,15 +83,14 @@ Before completion, list the docs changed.
 
 ## Plan
 
-- [ ] Owner picks policy (a) no scrollback pull on local grow, (b) conhost repaint, or (c)
-      vendored grid option.
+- [x] Owner picked policy (a): no scrollback pull on local grow (DEC-0008).
 - [ ] Implement behind `SessionKind::Local`, Windows only.
 - [ ] Focused grid test + manual repro screenshots into `evidence/`.
 - [ ] Update `docs/terminal-backend.md`.
 
 ## Decisions
 
-- Record the chosen policy as a decision if it changes the `TerminalRender::resize` contract.
+- `docs/decisions/DEC-0008-local-conpty-grow-resize-keeps-viewport-top.md`.
 
 ## Verification Plan
 
@@ -113,4 +112,4 @@ Before completion, list the docs changed.
 
 ## Handoff
 
-Blocked on the policy decision in IN-0019 "Open Decisions".
+Policy decided (DEC-0008); implementation in progress.
