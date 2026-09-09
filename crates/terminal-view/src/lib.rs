@@ -1,25 +1,17 @@
 //! Terminal panel — each tab is one Terminal.
 
 pub(crate) mod agent;
-pub(crate) mod box_drawing;
 pub(crate) mod completion;
-pub(crate) mod element;
-pub(crate) mod handlers;
 pub(crate) mod highlight;
-// Temporary: the new input layer is wired in by later packets of IN-0018.
-#[allow(dead_code, unused_imports)]
 pub(crate) mod input;
-pub(crate) mod layout;
 pub(crate) mod panel;
-// Temporary: the new render engine is wired in by later packets of IN-0018.
-#[allow(dead_code)]
 pub(crate) mod render;
 pub(crate) mod security;
 pub(crate) mod space;
 pub(crate) mod status;
+pub(crate) mod terminal_view;
 pub(crate) mod theme;
 pub(crate) mod url;
-pub(crate) mod view;
 
 pub use agent::agent_focuser;
 pub use panel::{PanelSpec, TerminalPanel};

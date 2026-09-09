@@ -82,26 +82,6 @@ impl Bitmap {
         self.on[(y * self.w + x) as usize]
     }
 
-    fn mirror_x(&self) -> Self {
-        let mut mirrored = Self::new((self.w, self.h));
-        for y in 0..self.h {
-            for x in 0..self.w {
-                mirrored.on[(y * self.w + (self.w - 1 - x)) as usize] = self.get(x, y);
-            }
-        }
-        mirrored
-    }
-
-    fn mirror_y(&self) -> Self {
-        let mut mirrored = Self::new((self.w, self.h));
-        for y in 0..self.h {
-            for x in 0..self.w {
-                mirrored.on[((self.h - 1 - y) * self.w + x) as usize] = self.get(x, y);
-            }
-        }
-        mirrored
-    }
-
     fn union(&self, other: &Self) -> Self {
         let mut merged = self.clone();
         for (slot, value) in merged.on.iter_mut().zip(other.on.iter()) {

@@ -264,3 +264,32 @@ signatures already carry the change.
    `FakeInputCall`, `FakeSessionProbe::{input_calls, take_input_calls, set_selection}` and a
    settable `selection_text` / `has_selection`, so the mouse and edit tests can assert what
    reached the session. The fake previously recorded byte writes only.
+
+## Amendments (US-0049 implementation)
+
+Recorded where the view-side wiring (`terminal_view/input.rs`, `render.rs`, `ime.rs`) differs
+from the text above; the old `view/` + `handlers/` behavior was the parity reference.
+
+1. **A key send does not mark the scrollbar.** The Send path clears the bell and notifies; the
+   scrollbar is revealed by scroll chords, wheel, drags and thumb clicks only (as before — the
+   bar must not appear on every keystroke). `KeyAction::Send` whose `send_key` returns `false`
+   (no encoding) also does not stop propagation.
+2. **`app_cursor` comes from the last painted `Frame`** (`Frame::app_cursor`), at most one frame
+   stale, instead of a `query_state` lock per key.
+3. **Plain mouse moves repaint only on a hover change.** `MouseOutcome::Handled` for a move with
+   no button held (motion reporting) neither marks the scrollbar nor notifies unless
+   `UrlHover::is_hovering` changed; moves with Left held (drag) do both. Right-button moves and
+   forwarded right presses/releases stop propagation (mouse-mode parity).
+4. **Scrollbar hit test lives in the view.** `ScrollbarState::hit_test(position, element_bounds)`
+   answers `MouseInputs::over_scrollbar`: the 12 px right strip, only while a thumb exists and the
+   bar has not faded out. The strip element has no listeners; a `ScrollbarDrag` outcome stops
+   propagation (the press is not a Space activation). Any release (`on_mouse_up`) or a move
+   without Left held ends the drag.
+5. **`on_mouse_exit` is wired** on the wrapper (`MouseState::exit` → hover cleared).
+6. **IME `bounds_for_range` row is the display row** (`cursor_line + display_offset`), so the
+   candidate window docks correctly while scrolled back; `None` before the first paint.
+7. **A visible completion overlay on the alt screen is dismissed** by the view before
+   classification (the LLD edge case), so row 0 never fires there.
+8. **`menu::split_items` is `pub(crate)`** with `(PopupMenu, WeakEntity<TerminalPanel>, SpaceId,
+   Option<&FocusHandle>)` — shared with the empty-Space placeholder menu (formerly
+   `handlers::menu::split_items`).

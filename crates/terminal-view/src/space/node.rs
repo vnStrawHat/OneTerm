@@ -7,7 +7,7 @@
 use gpui::{Axis, Entity, FocusHandle};
 use gpui_component::resizable::ResizableState;
 
-use super::super::view::LocalTerminalView;
+use crate::terminal_view::TerminalView;
 
 /// Stable identity for a Space leaf — used for active tracking, focus routing,
 /// and drop targeting. Stable for the lifetime of the leaf.
@@ -40,8 +40,8 @@ pub struct SpaceLeaf {
 
 /// The content of a leaf Space.
 pub enum SpaceContent {
-    /// A live terminal view (local or SSH — both are `LocalTerminalView`).
-    Terminal(Entity<LocalTerminalView>),
+    /// A live terminal view (local or SSH — both are `TerminalView`).
+    Terminal(Entity<TerminalView>),
     /// Empty Space: renders placeholder text.
     Empty,
 }
@@ -135,7 +135,7 @@ impl SpaceNode {
     }
 
     /// Collect every terminal view in this subtree.
-    pub fn collect_terminal_views(&self, out: &mut Vec<Entity<LocalTerminalView>>) {
+    pub fn collect_terminal_views(&self, out: &mut Vec<Entity<TerminalView>>) {
         match self {
             SpaceNode::Leaf(leaf) => {
                 if let SpaceContent::Terminal(view) = &leaf.content {

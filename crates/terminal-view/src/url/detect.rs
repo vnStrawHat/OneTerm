@@ -1,28 +1,31 @@
-//! Click-time URL detection — finds the URL under the cursor for Ctrl+Click.
+//! Click-time URL detection — finds the URL under the pointer for Ctrl+Click.
+//!
+//! Works on the `query_line_range_cells` slice around the pointer (a few
+//! rows, never the whole grid), reading cells through the view-owned
+//! [`Cell`] so the engine's cell type stays inside `render/frame.rs`.
 
 use oneterm_terminal::IndexedCell;
 
 use super::{DetectedUrl, PREFIXES, is_trailing_punct};
+use crate::render::frame::{Cell, CellFlags, hyperlink_uri};
 
-/// Find a URL at (row, col) in the terminal snapshot.
+/// Find a URL at display `(row, col)` in `cells` (row-major, `num_cols` wide).
 ///
-/// Handles URLs that wrap across display lines: when a line ends with
+/// Handles URLs that wrap across display rows: when a row ends with
 /// `WRAPLINE` set and the URL extends to its last column, detection continues
-/// on the next display line.
+/// on the next row.
 ///
 /// Check order:
-/// 1. OSC 8 hyperlink — cell has `hyperlink()` → find all cells with the same
-///    hyperlink ID on the same line.
-/// 2. Plain text URL — scan the wrapped line group for `http://`, `https://`,
+/// 1. OSC 8 hyperlink — the cell carries a target → the run of cells with the
+///    same link on the same row is the URL.
+/// 2. Plain text URL — scan the wrapped row group for `http://`, `https://`,
 ///    `ftp://`, `www.`.
-pub fn detect_url_at(
+pub(crate) fn detect_url_at(
     cells: &[IndexedCell],
     num_cols: usize,
     row: usize,
     col: usize,
 ) -> Option<DetectedUrl> {
-    use alacritty_terminal::term::cell::Flags;
-
     let line_start = row * num_cols;
     let line_end = (line_start + num_cols).min(cells.len());
     if line_start >= cells.len() {
@@ -32,39 +35,33 @@ pub fn detect_url_at(
     if col >= n {
         return None;
     }
+    let at = |i: usize| Cell::from_indexed(&cells[i]);
+    let is_spacer = |c: &Cell<'_>| c.flags.contains(CellFlags::WIDE_CHAR_SPACER);
+    let visible_char = |c: &Cell<'_>| match c.ch {
+        '\0' | '\t' => ' ',
+        ch => ch,
+    };
 
-    // 1. OSC 8 hyperlink — per-line, unchanged.
-    if let Some(h) = cells[line_start + col].cell.hyperlink() {
-        let target_id = h.id();
+    // 1. OSC 8 hyperlink — per-row.
+    if let Some(target) = at(line_start + col).hyperlink {
+        let same_link = |i: usize| at(i).hyperlink == Some(target);
         let mut start = col;
-        let mut end = col;
-        while start > 0 {
-            if let Some(h2) = cells[line_start + start - 1].cell.hyperlink() {
-                if h2.id() == target_id {
-                    start -= 1;
-                    continue;
-                }
-            }
-            break;
+        while start > 0 && same_link(line_start + start - 1) {
+            start -= 1;
         }
-        while end < n - 1 {
-            if let Some(h2) = cells[line_start + end + 1].cell.hyperlink() {
-                if h2.id() == target_id {
-                    end += 1;
-                    continue;
-                }
-            }
-            break;
+        let mut end = col;
+        while end < n - 1 && same_link(line_start + end + 1) {
+            end += 1;
         }
         // The visible label of the link, so the click handler can compare it
         // with the target (SEC-03).
-        let display_text: String = cells[line_start + start..=line_start + end]
-            .iter()
-            .filter(|ic| !ic.cell.flags.contains(Flags::WIDE_CHAR_SPACER))
-            .map(|ic| ic.cell.c)
+        let display_text: String = (line_start + start..=line_start + end)
+            .map(at)
+            .filter(|c| !is_spacer(c))
+            .map(|c| c.ch)
             .collect();
         return Some(DetectedUrl {
-            url: h.uri().to_string(),
+            url: hyperlink_uri(&cells[line_start + col])?,
             display_text: Some(display_text),
             row,
             start_col: start,
@@ -72,12 +69,12 @@ pub fn detect_url_at(
         });
     }
 
-    // 2. Plain-text URL — wrap-aware.
-    // Find the start of the wrapped line group (scan backwards for WRAPLINE).
+    // 2. Plain-text URL — wrap-aware. Find the start of the wrapped row group
+    // (scan backwards for WRAPLINE on the previous row's last cell).
     let mut group_start = row;
     while group_start > 0 {
         let prev_end = group_start * num_cols;
-        if prev_end > 0 && cells[prev_end - 1].cell.flags.contains(Flags::WRAPLINE) {
+        if prev_end > 0 && at(prev_end - 1).flags.contains(CellFlags::WRAPLINE) {
             group_start -= 1;
         } else {
             break;
@@ -86,7 +83,7 @@ pub fn detect_url_at(
 
     // Build chars + position map for the entire wrapped group.
     let mut chars: Vec<char> = Vec::new();
-    let mut pos_map: Vec<(usize, usize)> = Vec::new(); // (row, col) per char
+    let mut pos_map: Vec<(usize, usize)> = Vec::new();
 
     let mut current_row = group_start;
     loop {
@@ -101,17 +98,13 @@ pub fn detect_url_at(
             if idx >= le {
                 break;
             }
-            let cell = &cells[idx];
-            if cell.cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+            let cell = at(idx);
+            if is_spacer(&cell) {
                 continue;
             }
-            let ch = match cell.cell.c {
-                '\0' | '\t' => ' ',
-                ch => ch,
-            };
             pos_map.push((current_row, c));
-            chars.push(ch);
-            if c == num_cols - 1 && cell.cell.flags.contains(Flags::WRAPLINE) {
+            chars.push(visible_char(&cell));
+            if c == num_cols - 1 && cell.flags.contains(CellFlags::WRAPLINE) {
                 wraps = true;
             }
         }
@@ -121,15 +114,12 @@ pub fn detect_url_at(
         current_row += 1;
     }
 
-    // Find the char index of the clicked (row, col).
     let click_idx = pos_map.iter().position(|(r, c)| *r == row && *c == col)?;
-
-    // Skip if whitespace at click position.
     if chars[click_idx].is_whitespace() || chars[click_idx] == '\0' {
         return None;
     }
 
-    // Search backwards from click_idx to find a URL prefix.
+    // Search backwards from the click for a URL prefix.
     for start in (0..=click_idx).rev() {
         for prefix in PREFIXES {
             let plen = prefix.len();
@@ -144,21 +134,17 @@ pub fn detect_url_at(
                 continue;
             }
 
-            // Found prefix. Extend to whitespace or end.
+            // Found a prefix: extend to whitespace or the end of the group.
             let mut end = start + plen;
             while end < chars.len() && !chars[end].is_whitespace() && chars[end] != '\0' {
                 end += 1;
             }
-
             if click_idx < start || click_idx >= end {
                 continue;
             }
-
-            // Strip trailing punctuation.
             while end > start + plen && is_trailing_punct(chars[end - 1]) {
                 end -= 1;
             }
-
             if end <= start + plen {
                 continue;
             }
@@ -169,10 +155,8 @@ pub fn detect_url_at(
             } else {
                 url
             };
-
             let (url_row, url_start_col) = pos_map[start];
             let (_, url_end_col) = pos_map[end - 1];
-
             return Some(DetectedUrl {
                 url: final_url,
                 display_text: None,

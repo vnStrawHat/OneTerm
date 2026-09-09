@@ -1,30 +1,20 @@
-//! Terminal in-buffer search — Ctrl+F search bar + match highlighting.
+//! Terminal in-buffer search — the Ctrl+F bar and match highlighting.
 //!
-//! The search state lives in [`SearchState`], owned by [`LocalTerminalView`]
-//! (query, options, matches in grid coordinates, active index). The search bar
-//! is a small overlay (top-right of the terminal panel) built with
-//! `gpui_component::input`.
+//! [`SearchState`] holds the query, options, matches in grid coordinates and
+//! the active index. Matching is delegated to the backend
+//! (`TerminalSession::search`); the view converts a match to a display row
+//! with `display_row = line + display_offset` to highlight it in the viewport
+//! and to scroll it into view.
 //!
-//! Matching is delegated to the backend via
-//! [`TerminalSession::search`](oneterm_terminal::TerminalSession::search), which
-//! returns matches in grid coordinates. The view converts a match to a display
-//! row with `display_row = line + display_offset` (see
-//! `docs/terminal-backend.md`) to highlight it in the viewport and to scroll
-//! it into view.
-//!
-//! Key bindings:
-//! - `Ctrl+F` — toggle the search bar (open / close).
-//! - `Enter` (in the search input) — next match.
-//! - `Shift+Enter` — previous match.
-//! - `Esc` — close the search bar.
-//!
-//! Navigation wraps around (last → first, first → last).
+//! Key bindings: `Ctrl+F` toggles the bar, `Enter` / `Shift+Enter` step
+//! forward / backward (wrapping), `Esc` closes.
 
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext, Context, Entity, InteractiveElement as _, IntoElement, KeyDownEvent,
-    MouseButton, ParentElement as _, SharedString, Styled, Subscription, Task, Window, div, px,
+    App, AppContext, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
+    KeyDownEvent, MouseButton, ParentElement as _, SharedString, Styled, Subscription, Task,
+    Window, div, px,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{
@@ -33,52 +23,36 @@ use gpui_component::{
 };
 use oneterm_terminal::{SearchMatch, SearchOptions};
 
-use super::LocalTerminalView;
+use super::TerminalView;
+use crate::render::overlay::SearchHighlight;
 
 /// Debounce delay between the last keystroke in the search input and the
 /// full-grid scan (typing must not fire a search per character).
 const SEARCH_DEBOUNCE_MS: u64 = 150;
 
-/// A search highlight to paint, already in **display coordinates** (0-based from
-/// the top of the viewport) and filtered to the visible range. Passed from the
-/// view to the element each frame.
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct SearchHighlight {
-    /// Display row (0-based from the top of the viewport).
-    pub display_line: i32,
-    /// Start column (inclusive, 0-based).
-    pub start_col: i32,
-    /// End column (exclusive).
-    pub end_col: i32,
-    /// Whether this is the active (current) match.
-    pub active: bool,
-}
-
 /// In-buffer search state owned by the view.
 #[derive(Default)]
-pub(crate) struct SearchState {
+pub(super) struct SearchState {
     /// Whether the search bar is open.
-    pub(crate) active: bool,
+    active: bool,
     /// The search query (kept in sync with the `InputState`).
-    pub(crate) query: String,
+    query: String,
     /// Search options (case-sensitivity, whole-word).
-    pub(crate) options: SearchOptions,
+    options: SearchOptions,
     /// Matches in grid coordinates (top-to-bottom order).
-    pub(crate) matches: Vec<SearchMatch>,
+    matches: Vec<SearchMatch>,
     /// Index into `matches` of the active (current) match.
-    pub(crate) active_idx: Option<usize>,
+    active_idx: Option<usize>,
     /// The `InputState` for the search bar input.
-    pub(crate) input: Option<Entity<InputState>>,
+    input: Option<Entity<InputState>>,
     /// Debounce task for the search — delays the full-grid scan after the
-    /// last keystroke.
-    pub(crate) debounce_task: Option<Task<()>>,
+    /// last keystroke; replaced on every change.
+    debounce_task: Option<Task<()>>,
     /// Subscription to the search input's events (kept for the life of the
-    /// bar; dropping it in `clear` unsubscribes — CORR-65).
-    pub(crate) input_subscription: Option<Subscription>,
+    /// bar; dropping it in `clear` unsubscribes).
+    input_subscription: Option<Subscription>,
     /// Terminal output arrived since the matches were computed: their grid
-    /// coordinates are stale and must be refreshed on the next frame
-    /// (PERF-04: one refresh per frame instead of one per PTY read).
+    /// coordinates are stale and must be refreshed on the next frame.
     dirty: bool,
 }
 
@@ -132,7 +106,7 @@ impl SearchState {
     }
 
     /// Flag the stored matches as stale (new terminal output).
-    pub(crate) fn mark_dirty(&mut self) {
+    pub(super) fn mark_dirty(&mut self) {
         self.dirty = true;
     }
 
@@ -141,19 +115,27 @@ impl SearchState {
         self.dirty && self.has_query()
     }
 
-    /// Compute the visible search highlights (display coordinates) for the
-    /// current viewport, to pass to the element for painting.
-    pub(crate) fn visible_highlights(
+    /// Whether the search bar's text input owns keyboard focus.
+    pub(super) fn input_is_focused(&self, window: &Window, cx: &App) -> bool {
+        self.input
+            .as_ref()
+            .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window))
+    }
+
+    /// Refill `out` with the visible search highlights (display coordinates,
+    /// clamped to the viewport) for the element to paint.
+    pub(super) fn visible_highlights_into(
         &self,
         display_offset: usize,
         num_lines: usize,
         num_cols: usize,
-    ) -> Vec<SearchHighlight> {
+        out: &mut Vec<SearchHighlight>,
+    ) {
+        out.clear();
         if !self.active || self.matches.is_empty() {
-            return Vec::new();
+            return;
         }
         let active = self.active_idx;
-        let mut out = Vec::new();
         for (i, m) in self.matches.iter().enumerate() {
             let row = m.display_row(display_offset);
             if row < 0 || row >= num_lines as i32 {
@@ -171,33 +153,27 @@ impl SearchState {
                 active: active == Some(i),
             });
         }
-        out
     }
 }
 
 /// The `display_offset` that centres `match_line` (grid line of the match) in
 /// a viewport of `num_lines`, clamped to the scrollback (`total_lines`).
 /// `None` when the viewport is empty.
-pub(crate) fn centered_offset(
-    match_line: i32,
-    total_lines: usize,
-    num_lines: usize,
-) -> Option<usize> {
+fn centered_offset(match_line: i32, total_lines: usize, num_lines: usize) -> Option<usize> {
     if num_lines == 0 {
         return None;
     }
     let max_offset = total_lines.saturating_sub(num_lines);
-    // Center the match: display_row = num_lines / 2 → offset = num_lines/2 - line.
+    // display_row = num_lines / 2 → offset = num_lines / 2 - line.
     let desired = (num_lines / 2) as i32 - match_line;
     Some(desired.clamp(0, max_offset as i32) as usize)
 }
 
-impl LocalTerminalView {
-    /// Open the search bar (Ctrl+F). Creates a fresh `InputState`, focuses it,
-    /// and seeds it with the current query (if reopening without closing).
-    pub(crate) fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+impl TerminalView {
+    /// Open the search bar (Ctrl+F): a fresh `InputState`, focused. Reopening
+    /// an open bar only refocuses the input.
+    fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.search.active {
-            // Already open → focus the input.
             if let Some(state) = self.search.input.as_ref() {
                 state.update(cx, |s, cx| s.focus(window, cx));
             }
@@ -207,15 +183,12 @@ impl LocalTerminalView {
         let state = cx.new(|cx| InputState::new(window, cx).placeholder("Find in terminal"));
         self.search.input = Some(state.clone());
 
-        // Subscribe to input events → drive the search + navigation.
         let subscription =
             cx.subscribe(&state, |this, state, event: &InputEvent, cx| match event {
                 InputEvent::Change => {
-                    let query = state.read(cx).value().to_string();
-                    this.search.query = query;
-                    // Debounce the search — cancel any pending search and schedule
-                    // a new one. This prevents a full-grid scan on every keystroke
-                    // while typing.
+                    this.search.query = state.read(cx).value().to_string();
+                    // Replacing the task cancels the previous scan, so typing
+                    // never runs a full-grid search per keystroke.
                     this.search.debounce_task = Some(cx.spawn(async move |this, cx| {
                         cx.background_executor()
                             .timer(Duration::from_millis(SEARCH_DEBOUNCE_MS))
@@ -241,7 +214,7 @@ impl LocalTerminalView {
 
     /// Close the search bar (Esc) and clear all match state + highlights.
     /// Dropping the debounce task cancels any pending search.
-    pub(crate) fn close_search(&mut self, cx: &mut Context<Self>) {
+    fn close_search(&mut self, cx: &mut Context<Self>) {
         self.search.clear();
         cx.notify();
     }
@@ -255,11 +228,8 @@ impl LocalTerminalView {
         }
     }
 
-    /// Run the search against the session and store the matches. Resets the
-    /// active index to the first match (when navigating forward) — but if the
-    /// cursor/viewport is nearer the bottom we keep the last match active so
-    /// the first `Enter` jumps forward. For simplicity we start at the first
-    /// match; the user navigates from there.
+    /// Run the search against the session, start from the first match and
+    /// scroll it into view.
     fn run_search(&mut self, cx: &mut Context<Self>) {
         let matches = self
             .session
@@ -267,25 +237,15 @@ impl LocalTerminalView {
             .search(&self.search.query, self.search.options);
         self.search.set_matches(matches);
         self.search.dirty = false;
-        // Scroll the first active match into view.
         self.scroll_to_active_match(cx);
     }
 
-    /// Re-run the search against the current terminal content **without**
-    /// resetting the active match index, when output arrived since the last
-    /// run ([`SearchState::mark_dirty`]). Called once per frame from `render`.
-    ///
-    /// New terminal output shifts the alacritty grid coordinate system as
-    /// lines scroll into history, so the `line` values stored in
-    /// [`SearchState::matches`] would otherwise point at the wrong visual rows.
-    /// Re-running the search refreshes them with the current grid coordinates
-    /// so highlights stay aligned with their content.
-    ///
-    /// Unlike [`run_search`](Self::run_search) this does **not** scroll the
-    /// viewport — new output must not move the user's view to the active match.
-    /// The active index is kept (clamped to the new length) so the user does
-    /// not lose their navigation position.
-    pub(crate) fn refresh_search_if_dirty(&mut self, cx: &mut Context<Self>) {
+    /// Re-run the search **without** resetting the active match or moving the
+    /// viewport, when output arrived since the last run. Called once per frame
+    /// from `render`: new output shifts the grid coordinate system as lines
+    /// scroll into history, so the stored `line` values would otherwise point
+    /// at the wrong visual rows.
+    pub(super) fn refresh_search_if_dirty(&mut self, cx: &mut Context<Self>) {
         if !self.search.needs_refresh() {
             self.search.dirty = false;
             return;
@@ -298,9 +258,9 @@ impl LocalTerminalView {
         self.search.dirty = false;
     }
 
-    /// Navigate to the previous (`backward = true`, Shift+Enter) or next match
-    /// and scroll it into view.
-    pub(crate) fn goto_match(&mut self, backward: bool, cx: &mut Context<Self>) {
+    /// Navigate to the previous (`backward`, Shift+Enter) or next match and
+    /// scroll it into view.
+    fn goto_match(&mut self, backward: bool, cx: &mut Context<Self>) {
         if self.search.step(backward) {
             self.scroll_to_active_match(cx);
         }
@@ -322,13 +282,11 @@ impl LocalTerminalView {
         }
     }
 
-    /// Render the search bar overlay (top-right). Returns `None` when search is
-    /// inactive.
-    pub(crate) fn render_search_bar(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    /// The search bar overlay (top-right); `None` while search is inactive.
+    pub(super) fn render_search_bar(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         if !self.search.active {
             return None;
         }
-        // Read the three colours by value instead of cloning the theme (PERF-05).
         let (bar_bg, border, foreground) = {
             let t = cx.theme();
             (t.background.opacity(0.97), t.border, t.foreground)
@@ -342,8 +300,6 @@ impl LocalTerminalView {
         } else {
             format!("{}/{}", current.unwrap_or(0), total).into()
         };
-
-        // Toggle button states.
         let case_on = self.search.options.case_sensitive;
         let word_on = self.search.options.whole_word;
 
@@ -365,16 +321,14 @@ impl LocalTerminalView {
                 .border_1()
                 .border_color(border)
                 .shadow_sm()
-                // The search bar overlays the terminal grid. Stop left-button
-                // mouse down/up from bubbling into the terminal's mouse handlers,
-                // otherwise rapid clicks on the nav buttons accumulate click_count
-                // in the terminal (triple-click → select line) and mouse_up would
-                // copy the terminal selection to the clipboard. Button on_click
-                // still fires: click synthesis runs on the (deeper) button hitbox
-                // before propagation is stopped here.
+                // The bar overlays the grid. Left presses must not bubble into
+                // the terminal's mouse handlers: rapid clicks on the nav
+                // buttons would accumulate `click_count` (triple-click →
+                // select line) and the release would copy the selection.
+                // Button `on_click` still fires: click synthesis runs on the
+                // deeper button hitbox before propagation stops here.
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                // Case-sensitivity toggle (Ghost style).
                 .child(
                     Toggle::new("search-case")
                         .ghost()
@@ -388,7 +342,6 @@ impl LocalTerminalView {
                             cx.notify();
                         })),
                 )
-                // Whole-word toggle (Ghost style).
                 .child(
                     Toggle::new("search-word")
                         .ghost()
@@ -403,7 +356,6 @@ impl LocalTerminalView {
                         })),
                 )
                 .child(div().w(px(1.0)).h(px(18.0)).bg(border))
-                // The text input — grows to fill.
                 .child(
                     div()
                         .flex_1()
@@ -418,7 +370,6 @@ impl LocalTerminalView {
                         .text_color(foreground)
                         .child(counter),
                 )
-                // Previous match (↑).
                 .child(
                     Button::new("search-prev")
                         .ghost()
@@ -432,7 +383,6 @@ impl LocalTerminalView {
                             }
                         }),
                 )
-                // Next match (↓).
                 .child(
                     Button::new("search-next")
                         .ghost()
@@ -446,7 +396,6 @@ impl LocalTerminalView {
                             }
                         }),
                 )
-                // Close (Esc).
                 .child(
                     Button::new("search-close")
                         .ghost()
@@ -460,7 +409,8 @@ impl LocalTerminalView {
                             }
                         }),
                 )
-                // Esc closes the search bar (handled here, scoped to the bar).
+                // Esc closes the bar; scoped to the bar so the terminal never
+                // sees it.
                 .on_key_down({
                     let view = view.clone();
                     move |e: &KeyDownEvent, _, cx: &mut App| {
@@ -478,7 +428,7 @@ impl LocalTerminalView {
 mod tests {
     use oneterm_terminal::SearchMatch;
 
-    use super::{SearchState, centered_offset};
+    use super::{SearchHighlight, SearchState, centered_offset};
 
     fn m(line: i32, start_col: usize, end_col: usize) -> SearchMatch {
         SearchMatch {
@@ -496,6 +446,17 @@ mod tests {
         };
         s.set_matches(matches);
         s
+    }
+
+    fn highlights(
+        s: &SearchState,
+        display_offset: usize,
+        num_lines: usize,
+        num_cols: usize,
+    ) -> Vec<SearchHighlight> {
+        let mut out = Vec::new();
+        s.visible_highlights_into(display_offset, num_lines, num_cols, &mut out);
+        out
     }
 
     #[test]
@@ -533,8 +494,7 @@ mod tests {
     fn visible_highlights_filter_to_the_viewport_and_clamp_columns() {
         // Grid lines: −5 is in history, 0..3 on screen, 3 is past a 3-row viewport.
         let s = open_with(vec![m(-5, 0, 2), m(0, 78, 90), m(1, 4, 4), m(3, 0, 1)]);
-        // display_offset 0, 3 visible rows, 80 columns.
-        let hl = s.visible_highlights(0, 3, 80);
+        let hl = highlights(&s, 0, 3, 80);
         assert_eq!(hl.len(), 1);
         assert_eq!(
             (hl[0].display_line, hl[0].start_col, hl[0].end_col),
@@ -542,7 +502,7 @@ mod tests {
         );
         assert!(!hl[0].active, "the active match (index 0) is scrolled off");
         // Scrolling up 5 lines brings the history match into view as row 0.
-        let hl = s.visible_highlights(5, 3, 80);
+        let hl = highlights(&s, 5, 3, 80);
         assert_eq!(hl.len(), 1);
         assert_eq!(hl[0].display_line, 0);
         assert!(hl[0].active);
@@ -566,7 +526,7 @@ mod tests {
     fn visible_highlights_are_empty_when_the_bar_is_closed() {
         let mut s = open_with(vec![m(0, 0, 1)]);
         s.active = false;
-        assert!(s.visible_highlights(0, 24, 80).is_empty());
+        assert!(highlights(&s, 0, 24, 80).is_empty());
     }
 
     #[test]

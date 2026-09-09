@@ -147,6 +147,7 @@ no renderer structure, and their tests are the acceptance spec).
 | `src/terminal_view/mod.rs` | declarations, `pub(crate) use` of `TerminalView`, `TerminalViewEvent`, `TerminalDeps`, `SplitContext` re-export | 0049 | 30 |
 | `src/terminal_view/view.rs` | `TerminalView` struct, `new`, events pump with coalescing, blink task, focus, `shutdown`, OSC-to-UI | 0049 | 480 |
 | `src/terminal_view/render.rs` | `Render`/`Focusable`: inputs refresh, wrapper div + listeners, element, bars/badges/banner/progress/overlays | 0049 | 320 |
+| `src/terminal_view/input.rs` | the wrapper's key / mouse / wheel / modifiers / exit listeners applying `input/` decisions; zoom, bell clear, URL confirm dialog | 0049 | 360 |
 | `src/terminal_view/ime.rs` | `EntityInputHandler` | 0049 | 130 |
 | `src/terminal_view/search.rs` | `SearchState`, debounce, navigation, bar | 0049 | 360 |
 | `src/terminal_view/scrollbar.rs` | `ScrollbarState`, geometry, drag, auto-hide fade, element | 0049 | 260 |
@@ -286,6 +287,25 @@ impl TerminalView {
 
 `space::SplitContext { panel: WeakEntity<TerminalPanel>, space_id: SpaceId }` and
 `space::SpaceId` keep their paths through the US-0050 rewrite.
+
+Amendments (US-0049 implementation), recorded where the built surface differs from the block
+above:
+
+1. `render_diagnostics` is `#[cfg(test)]`: the `terminal-diagnostics` feature reports through
+   the element's 5 s log line and has no in-crate consumer for a stats snapshot, so a
+   feature-gated method was dead code under `-D warnings`.
+2. `alive`, `event_task` and `blink_task` are `pub(crate)`: the retained `panel/tests.rs`
+   lifecycle tests (`phase1_shutdown_*`, tab drop) observe them; everything else is private.
+3. `TerminalDeps` lives in `terminal_view/view.rs` (no `deps.rs`); the wrapper's listeners live
+   in `terminal_view/input.rs` (module map above).
+4. Retained-module entry points that only the old renderer used were removed:
+   `theme::resolve_cell_color`, `url::url_masks_wrapped`, `SemanticOverlay::scan`.
+   `url::detect_url_at` reads `query_line_range_cells` slices through
+   `render::frame::Cell::from_indexed` + `render::frame::hyperlink_uri`, so `alacritty_terminal`
+   is named only in `render/frame.rs`, `theme/palette.rs` and `input/mouse.rs` (the
+   `SelectionType` in `TerminalInput::mouse_down`'s signature).
+5. Threading: the scrollbar fade re-notifies through `window.request_animation_frame()` while
+   the bar is visible and not being dragged (replaces the `on_next_frame` wording above).
 
 Element constructor input (built by `terminal_view/render.rs` each frame):
 

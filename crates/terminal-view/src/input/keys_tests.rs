@@ -4,7 +4,7 @@
 
 use gpui::{AppContext as _, Keystroke, Modifiers, TestAppContext};
 use oneterm_terminal::test_support::FakeTerminalSession;
-use oneterm_terminal::{KeyMods, KeySpec, NamedKey, TerminalSession, encode_key};
+use oneterm_terminal::{KeyMods, KeySpec, NamedKey, encode_key};
 
 use super::keys::{
     CompletionKey, KeyAction, KeyContext, classify_key, interrupt, map_key, send_key,

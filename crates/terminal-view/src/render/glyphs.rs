@@ -126,6 +126,7 @@ impl GlyphCache {
         self.map.clear();
     }
 
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.map.len()
     }

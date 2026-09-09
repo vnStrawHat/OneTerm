@@ -1,10 +1,9 @@
-//! ANSI palette, VteRgb ↔ Rgba conversion, and `Color` → `Hsla` resolution.
+//! ANSI palette, VteRgb ↔ Rgba conversion, and the per-palette `Color` → `Hsla` table.
 
-use alacritty_terminal::vte::ansi::{Color, Rgb as VteRgb};
+use alacritty_terminal::vte::ansi::Rgb as VteRgb;
 use gpui::{Hsla, Rgba};
 use oneterm_terminal::{TerminalPalette, resolve_color};
 
-use super::TerminalTheme;
 use crate::render::frame::{Color as FrameColor, Fnv1a};
 
 /// Fixed ANSI 16-color palette (GNOME/Tango default).
@@ -113,11 +112,6 @@ pub(crate) fn vte_from_rgba(c: Rgba) -> VteRgb {
 /// `vte::ansi::Rgb` → `gpui::Hsla` (via `Rgba`).
 pub(crate) fn hsla_from_vte(c: VteRgb) -> gpui::Hsla {
     gpui::Hsla::from(rgba_from_vte(c))
-}
-
-/// Resolve an alacritty `Color` to `Hsla` via the theme palette.
-pub(crate) fn resolve_cell_color(c: &Color, theme: &TerminalTheme) -> gpui::Hsla {
-    hsla_from_vte(resolve_color(c, &theme.palette))
 }
 
 /// Every non-truecolor [`FrameColor`] resolved to `Hsla` once per palette, so

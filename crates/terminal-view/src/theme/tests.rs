@@ -1,54 +1,38 @@
 #[cfg(test)]
 mod tests {
-    use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb as VteRgb};
-    use gpui::Hsla;
-    use oneterm_terminal::TerminalPalette;
-
+    use gpui::{Hsla, Rgba};
     use oneterm_settings::ColorOverrides;
+    use oneterm_terminal::{TerminalPalette, resolve_color};
 
-    use super::super::contrast::contrast_ratio;
-    use super::super::palette::{ANSI_16, ColorTable, rgba_from_vte, vte_from_rgba};
+    use super::super::contrast::{contrast_ratio, ensure_minimum_contrast};
+    use super::super::palette::{ColorTable, hsla_from_vte, rgba_from_vte, vte_from_rgba};
     use super::super::terminal_theme::DEFAULT_MIN_CONTRAST;
     use super::super::*;
     use crate::render::frame::Color as FrameColor;
 
-    fn pal() -> TerminalPalette {
-        TerminalPalette {
-            foreground: VteRgb {
-                r: 200,
-                g: 200,
-                b: 200,
-            },
-            background: VteRgb {
-                r: 20,
-                g: 20,
-                b: 20,
-            },
-            cursor: VteRgb {
-                r: 255,
-                g: 255,
-                b: 0,
-            },
-            ansi: ANSI_16,
-            indexed: [None; 256],
+    fn rgb(r: u8, g: u8, b: u8) -> Rgba {
+        Rgba {
+            r: f32::from(r) / 255.0,
+            g: f32::from(g) / 255.0,
+            b: f32::from(b) / 255.0,
+            a: 1.0,
         }
     }
 
-    #[test]
-    fn rgb_roundtrip() {
-        let c = VteRgb {
-            r: 12,
-            g: 34,
-            b: 56,
-        };
-        let rgba = rgba_from_vte(c);
-        assert_eq!(vte_from_rgba(rgba), c);
+    /// A palette with known fg/bg/cursor over the default ANSI 16.
+    fn pal() -> TerminalPalette {
+        let mut palette = build_terminal_theme(&gpui_component::Theme::default()).palette;
+        palette.foreground = vte_from_rgba(rgb(200, 200, 200));
+        palette.background = vte_from_rgba(rgb(20, 20, 20));
+        palette.cursor = vte_from_rgba(rgb(255, 255, 0));
+        palette.indexed = [None; 256];
+        palette
     }
 
-    #[test]
-    fn resolve_named_red_to_hsla() {
-        let t = TerminalTheme {
-            palette: pal(),
+    fn themed_with(palette: TerminalPalette) -> TerminalTheme {
+        TerminalTheme {
+            colors: ColorTable::from_palette(&palette),
+            palette,
             bg: Hsla::black(),
             fg: Hsla::white(),
             min_contrast: 4.5,
@@ -60,37 +44,38 @@ mod tests {
             search_match: gpui::hsla(0.13, 0.85, 0.5, 0.35),
             search_active: gpui::hsla(0.13, 0.9, 0.55, 0.7),
             class_styles: crate::highlight::load_default_styles(),
-            colors: ColorTable::from_palette(&pal()),
-        };
-        let h = resolve_cell_color(&Color::Named(NamedColor::Red), &t);
-        assert_eq!(
-            t.color(FrameColor::Ansi(1)),
-            h,
-            "table lookup must equal palette resolution"
-        );
+        }
+    }
+
+    #[test]
+    fn rgb_roundtrip() {
+        let c = vte_from_rgba(rgb(12, 34, 56));
+        let rgba = rgba_from_vte(c);
+        assert_eq!(vte_from_rgba(rgba), c);
+        assert!((rgba.g - 34.0 / 255.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn resolve_named_red_to_hsla() {
+        let t = themed_with(pal());
+        // The table lookup must equal the engine's palette resolution.
+        let h = hsla_from_vte(resolve_color(&FrameColor::Ansi(1).to_vte(), &t.palette));
+        assert_eq!(t.color(FrameColor::Ansi(1)), h);
         let rgba = h.to_rgb();
         assert!((rgba.r - 0xCC as f32 / 255.0).abs() < 0.01);
     }
 
     #[test]
     fn resolve_spec_truecolor_passthrough() {
-        let t = TerminalTheme {
-            palette: pal(),
-            bg: Hsla::black(),
-            fg: Hsla::white(),
-            min_contrast: 4.5,
-            selection: gpui::hsla(0.6, 0.5, 0.5, 0.3),
-            gutter_fg: Hsla::white(),
-            gutter_bg: Hsla::black(),
-            clock_fg: Hsla::white(),
-            line_number_fg: Hsla::white(),
-            search_match: gpui::hsla(0.13, 0.85, 0.5, 0.35),
-            search_active: gpui::hsla(0.13, 0.9, 0.55, 0.7),
-            class_styles: crate::highlight::load_default_styles(),
-            colors: ColorTable::from_palette(&pal()),
-        };
-        let h = resolve_cell_color(&Color::Spec(VteRgb { r: 1, g: 2, b: 3 }), &t);
-        assert_eq!(t.color(FrameColor::Rgb(1, 2, 3)), h);
+        let t = themed_with(pal());
+        let h = t.color(FrameColor::Rgb(1, 2, 3));
+        assert_eq!(
+            h,
+            hsla_from_vte(resolve_color(
+                &FrameColor::Rgb(1, 2, 3).to_vte(),
+                &t.palette
+            ))
+        );
         let rgba = h.to_rgb();
         assert!((rgba.r - 1.0 / 255.0).abs() < 0.01);
     }
@@ -173,7 +158,11 @@ mod tests {
         let t = apply_color_overrides(plain.clone(), &co);
         assert_eq!(
             t.color(FrameColor::Ansi(0)),
-            resolve_cell_color(&Color::Named(NamedColor::Black), &t)
+            hsla_from_vte(t.palette.ansi[0])
+        );
+        assert_ne!(
+            t.color(FrameColor::Ansi(0)),
+            plain.color(FrameColor::Ansi(0))
         );
         assert_ne!(plain.colors.hash, t.colors.hash);
     }

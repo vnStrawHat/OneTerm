@@ -19,9 +19,9 @@ use super::super::security::security_policy_from_settings;
 use super::super::space::{
     CloseOutcome, DragTerminalTab, SpaceContent, SpaceId, SpaceLeaf, SplitDir,
 };
-use super::super::view::LocalTerminalView;
 use super::terminal_panel::INITIAL_PTY_SIZE;
 use super::{PanelSpec, TerminalPanel};
+use crate::terminal_view::TerminalView;
 
 /// User-facing message when a duplicate's destination disappeared before the
 /// session could be installed.
@@ -53,7 +53,7 @@ enum Unplaced {
     /// A raw session that never got a view.
     Session(Box<dyn TerminalSession>),
     /// A view whose target Space stopped being empty.
-    View(Entity<LocalTerminalView>),
+    View(Entity<TerminalView>),
 }
 
 /// Release an unplaced terminal (close the session / shut the view down) and
@@ -268,7 +268,7 @@ impl TerminalPanel {
         let session = cx.new(|_| session);
         let deps = self.deps.clone();
         let view = cx.new(|cx| {
-            let mut view = LocalTerminalView::new(session, deps, window, cx);
+            let mut view = TerminalView::new(session, deps, window, cx);
             view.duplicate_config = Some(duplicate_config);
             view
         });
@@ -290,10 +290,10 @@ impl TerminalPanel {
     fn place_view(
         &mut self,
         target: SpaceId,
-        view: Entity<LocalTerminalView>,
+        view: Entity<TerminalView>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
-    ) -> Result<(), Entity<LocalTerminalView>> {
+    ) -> Result<(), Entity<TerminalView>> {
         self.attach_split_ctx(&view, target, cx);
         self.tree.fill_empty(target, view)?;
         self.rebuild_title_subs(cx);
@@ -434,7 +434,7 @@ impl TerminalPanel {
         &mut self,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
-    ) -> Option<Entity<LocalTerminalView>> {
+    ) -> Option<Entity<TerminalView>> {
         let id = self.tree.active();
         let view = self.tree.take_leaf_terminal(id)?;
         if self.tree.leaf_count() > 1 {
@@ -512,7 +512,7 @@ impl TerminalPanel {
     /// resort only — the drop path guards the destination before taking.
     fn restore_dropped_view(
         &mut self,
-        view: Entity<LocalTerminalView>,
+        view: Entity<TerminalView>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {

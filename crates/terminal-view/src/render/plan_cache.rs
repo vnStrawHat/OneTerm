@@ -69,12 +69,14 @@ impl PlanCache {
         &self.rows
     }
 
+    #[cfg(test)]
     pub(crate) fn row(&self, r: usize) -> Option<&RowPlan> {
         self.rows.get(r)
     }
 
     /// The URL mask of display row `r` as of the last update (empty when the
     /// row had no URL or was never scanned).
+    #[cfg(test)]
     pub(crate) fn url_mask(&self, r: usize) -> &[bool] {
         self.mask_prev.get(r).map(Vec::as_slice).unwrap_or(&[])
     }

@@ -1,6 +1,6 @@
 //! [`TerminalPanel`] — a Terminal Tab hosting a tree of resizable **Spaces**.
 //!
-//! A panel used to wrap exactly one `LocalTerminalView`; it now owns a
+//! A panel used to wrap exactly one `TerminalView`; it now owns a
 //! [`SpaceTree`](super::space::SpaceTree) whose leaves are terminals or empty
 //! placeholders. A tree with a single leaf renders exactly like the old
 //! single-terminal panel. See `docs/terminal-split/`.

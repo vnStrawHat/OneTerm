@@ -1,7 +1,6 @@
 //! Mouse state machine tests. The session-facing ones drive a
 //! `FakeTerminalSession` and read back the input calls its probe recorded.
 
-use alacritty_terminal::selection::SelectionType;
 use gpui::{
     AppContext as _, Bounds, Capslock, Edges, Modifiers, ModifiersChangedEvent, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollDelta, ScrollWheelEvent,
@@ -93,16 +92,18 @@ fn session(
 
 #[test]
 fn click_count_selects_type() {
-    assert_eq!(selection_type(1, false), SelectionType::Simple);
-    assert_eq!(selection_type(2, false), SelectionType::Semantic);
-    assert_eq!(selection_type(3, false), SelectionType::Lines);
-    assert_eq!(selection_type(7, false), SelectionType::Lines);
+    // Compared through `Debug`: the selection type is the engine's, and this
+    // crate names it only in `render/frame.rs` and the mouse module itself.
+    assert_eq!(format!("{:?}", selection_type(1, false)), "Simple");
+    assert_eq!(format!("{:?}", selection_type(2, false)), "Semantic");
+    assert_eq!(format!("{:?}", selection_type(3, false)), "Lines");
+    assert_eq!(format!("{:?}", selection_type(7, false)), "Lines");
 }
 
 #[test]
 fn alt_click_is_block() {
-    assert_eq!(selection_type(1, true), SelectionType::Block);
-    assert_eq!(selection_type(2, true), SelectionType::Block);
+    assert_eq!(format!("{:?}", selection_type(1, true)), "Block");
+    assert_eq!(format!("{:?}", selection_type(2, true)), "Block");
 }
 
 #[test]
@@ -162,9 +163,9 @@ fn middle_click_forwards_to_session(cx: &mut TestAppContext) {
         probe.input_calls().as_slice(),
         [FakeInputCall::MouseDown {
             button: TerminalMouseButton::Middle,
-            selection: SelectionType::Simple,
+            selection,
             ..
-        }]
+        }] if *selection == selection_type(1, false)
     ));
     assert!(probe.writes().is_empty());
     assert_eq!(state.drag(), Drag::None);

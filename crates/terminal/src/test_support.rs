@@ -94,6 +94,16 @@ impl FakeSessionProbe {
         self.state.full_damage.store(true, Ordering::SeqCst);
     }
 
+    /// Enter or leave the alternate screen (a TUI took over / gave back).
+    pub fn set_alt_screen(&self, on: bool) {
+        self.state
+            .mode
+            .lock()
+            .unwrap()
+            .set(TermMode::ALT_SCREEN, on);
+        self.state.full_damage.store(true, Ordering::SeqCst);
+    }
+
     /// Set the cursor position (display line, column) for future snapshots.
     pub fn set_cursor(&self, line: i32, col: usize) {
         *self.state.cursor.lock().unwrap() = (line, col);

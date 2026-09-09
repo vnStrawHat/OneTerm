@@ -41,9 +41,10 @@ pub(crate) struct ColorSpan {
 #[derive(Clone, Debug)]
 pub(crate) struct TextRunPlan {
     pub col: u16,
+    /// Columns covered; the painter positions by `col` and the shaped line,
+    /// so this is a test seam for run extents (wide chars).
+    #[cfg(test)]
     pub cols: u16,
-    pub bold: bool,
-    pub italic: bool,
     pub line: ShapedLine,
     pub color_start: u32,
     pub color_end: u32,
@@ -315,9 +316,8 @@ impl RowBuilder<'_, '_> {
         );
         self.plan.text.push(TextRunPlan {
             col: run.col,
+            #[cfg(test)]
             cols: run.cols,
-            bold: run.bold,
-            italic: run.italic,
             line,
             color_start: run.color_start,
             color_end: self.plan.colors.len() as u32,
@@ -913,7 +913,6 @@ mod tests {
         assert_eq!(spans.len(), 2, "{spans:?}");
         assert_eq!(spans[0].byte_end, 2);
         assert_eq!(spans[1].byte_end, 3);
-        assert!(plan.text[1].bold);
     }
 
     #[gpui::test]

@@ -16,7 +16,7 @@ use oneterm_terminal::{
 
 use crate::panel::{PanelSpec, TerminalPanel};
 use crate::space::{CloseOutcome, SplitDir};
-use crate::view::LocalTerminalView;
+use crate::terminal_view::TerminalView;
 
 /// A `PanelSpec` wrapping an existing session without duplication metadata.
 fn session_spec(session: Box<dyn TerminalSession>, title: &str) -> PanelSpec {
@@ -66,7 +66,7 @@ fn filling_space_one_does_not_renumber_space_two(cx: &mut TestAppContext) {
         let space_one = destinations[1];
         let (duplicate, _) = FakeTerminalSession::boxed(24, 80, "duplicate");
         let duplicate = cx.new(|_| duplicate);
-        let view = cx.new(|cx| LocalTerminalView::new(duplicate, panel.deps.clone(), window, cx));
+        let view = cx.new(|cx| TerminalView::new(duplicate, panel.deps.clone(), window, cx));
         panel
             .tree
             .fill_empty(space_one, view)
@@ -297,7 +297,7 @@ fn phase0_close_non_last_space_closes_removed_session(cx: &mut TestAppContext) {
     let new_active = panel.read_with(cx, |p, _| p.tree.active());
     panel.update_in(cx, |p, window, cx| {
         let session_entity = cx.new(|_| session_b);
-        let view = cx.new(|cx| LocalTerminalView::new(session_entity, p.deps.clone(), window, cx));
+        let view = cx.new(|cx| TerminalView::new(session_entity, p.deps.clone(), window, cx));
         p.tree
             .fill_empty(new_active, view)
             .expect("new split Space must be empty");
@@ -510,8 +510,7 @@ fn duplicate_action_dispatches_to_the_active_space(cx: &mut TestAppContext) {
             let (active_session, _) = FakeTerminalSession::boxed(24, 80, "active");
             let active_session = cx.new(|_| active_session);
             let active_view = cx.new(|cx| {
-                let mut view =
-                    LocalTerminalView::new(active_session, panel.deps.clone(), window, cx);
+                let mut view = TerminalView::new(active_session, panel.deps.clone(), window, cx);
                 let mut active_config = LocalShellConfig::default();
                 active_config.program = Some("active-shell".into());
                 view.duplicate_config = Some(SessionDuplicateConfig::Local(active_config));

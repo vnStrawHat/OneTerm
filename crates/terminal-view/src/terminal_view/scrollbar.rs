@@ -1,24 +1,20 @@
-//! Scrollbar state + the custom auto-hiding scrollbar overlay for
-//! [`LocalTerminalView`].
+//! Scrollbar state + the auto-hiding scrollbar overlay for [`TerminalView`].
 //!
 //! [`ScrollbarState`] caches the scrollback geometry each frame
 //! (total/viewport/display-offset/line-height), tracks thumb drags and the
 //! auto-hide timer, and queues a `pending_offset` that the view applies on the
-//! next `render()` (calling `session.scroll(delta)`). The pure thumb geometry
-//! and track→offset math live here so the mouse handlers and the overlay share
-//! one implementation.
+//! next `render()` (calling `session.scroll(delta)`). The overlay itself has
+//! no listeners: the wrapper div's mouse handlers hit-test the strip through
+//! [`ScrollbarState::hit_test`] and feed drags back in.
 
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::time::Instant;
 
 use gpui::{
-    App, Context, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent,
-    ParentElement as _, Styled as _, div, px,
+    Bounds, InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Point, Styled as _,
+    Window, div, px,
 };
 
-use super::LocalTerminalView;
-use crate::element::RenderCache;
+use super::TerminalView;
 
 /// Seconds the scrollbar stays fully visible after the last scroll.
 const VISIBLE_SECS: f32 = 2.0;
@@ -26,14 +22,16 @@ const VISIBLE_SECS: f32 = 2.0;
 const HIDDEN_SECS: f32 = 3.0;
 /// Minimum thumb height in pixels.
 const MIN_THUMB_PX: f32 = 24.0;
+/// Width of the strip that catches presses (the thumb is narrower).
+const TRACK_WIDTH_PX: f32 = 12.0;
 
 /// Cached scrollback geometry — updated each frame from `TerminalInfo` + metrics.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct ScrollGeometry {
-    pub(crate) total_lines: usize,
-    pub(crate) viewport_lines: usize,
-    pub(crate) display_offset: usize,
-    pub(crate) line_height: f32,
+pub(super) struct ScrollGeometry {
+    pub(super) total_lines: usize,
+    pub(super) viewport_lines: usize,
+    pub(super) display_offset: usize,
+    pub(super) line_height: f32,
 }
 
 impl Default for ScrollGeometry {
@@ -66,13 +64,13 @@ impl ScrollGeometry {
 
 /// Thumb placement for the overlay.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct ThumbGeometry {
-    pub(crate) top: f32,
-    pub(crate) height: f32,
+struct ThumbGeometry {
+    top: f32,
+    height: f32,
 }
 
 /// Compute the thumb rectangle for `geo`; `None` when nothing scrolls.
-pub(crate) fn thumb_geometry(geo: &ScrollGeometry) -> Option<ThumbGeometry> {
+fn thumb_geometry(geo: &ScrollGeometry) -> Option<ThumbGeometry> {
     if !geo.is_scrollable() {
         return None;
     }
@@ -92,7 +90,7 @@ pub(crate) fn thumb_geometry(geo: &ScrollGeometry) -> Option<ThumbGeometry> {
 
 /// Map a y position on the track (pixels from the top of the terminal bounds)
 /// to a `display_offset`. `None` when the geometry has no usable line height.
-pub(crate) fn track_y_to_offset(geo: &ScrollGeometry, track_y: f32) -> Option<usize> {
+fn track_y_to_offset(geo: &ScrollGeometry, track_y: f32) -> Option<usize> {
     if geo.line_height <= 0.0 {
         return None;
     }
@@ -103,7 +101,7 @@ pub(crate) fn track_y_to_offset(geo: &ScrollGeometry, track_y: f32) -> Option<us
 /// Opacity of the auto-hiding scrollbar `elapsed` seconds after the last
 /// scroll: fully visible for [`VISIBLE_SECS`], then a quartic fade to zero at
 /// [`HIDDEN_SECS`].
-pub(crate) fn fade_opacity(elapsed: f32) -> f32 {
+fn fade_opacity(elapsed: f32) -> f32 {
     if elapsed < VISIBLE_SECS {
         1.0
     } else if elapsed < HIDDEN_SECS {
@@ -116,7 +114,7 @@ pub(crate) fn fade_opacity(elapsed: f32) -> f32 {
 /// Scrollbar state owned by the view: cached geometry, a pending offset from
 /// a thumb drag / track click, the drag anchor, and the auto-hide timer.
 #[derive(Debug, Default)]
-pub(crate) struct ScrollbarState {
+pub(super) struct ScrollbarState {
     geometry: ScrollGeometry,
     /// `display_offset` requested by the user via the scrollbar — applied by
     /// the view on the next render.
@@ -129,37 +127,32 @@ pub(crate) struct ScrollbarState {
 
 impl ScrollbarState {
     /// Refresh the cached geometry — called in `render()`.
-    pub(crate) fn update(&mut self, geometry: ScrollGeometry) {
+    pub(super) fn update(&mut self, geometry: ScrollGeometry) {
         self.geometry = geometry;
     }
 
-    /// The cached geometry.
-    pub(crate) fn geometry(&self) -> ScrollGeometry {
-        self.geometry
-    }
-
     /// Take the pending offset (if any) — consumed by the view.
-    pub(crate) fn take_pending_offset(&mut self) -> Option<usize> {
+    pub(super) fn take_pending_offset(&mut self) -> Option<usize> {
         self.pending_offset.take()
     }
 
     /// Record a scroll so the scrollbar shows (and restarts its fade).
-    pub(crate) fn mark_scrolled(&mut self) {
+    pub(super) fn mark_scrolled(&mut self) {
         self.last_scroll = Some(Instant::now());
     }
 
-    pub(crate) fn is_dragging(&self) -> bool {
+    fn is_dragging(&self) -> bool {
         self.drag_start.is_some()
     }
 
     /// Stop a thumb drag. Returns `true` when a drag was in progress.
-    pub(crate) fn end_drag(&mut self) -> bool {
+    pub(super) fn end_drag(&mut self) -> bool {
         self.drag_start.take().is_some()
     }
 
     /// Jump to the offset under `track_y` and start dragging from there
     /// (track click / drag move). Returns `false` when the geometry is unusable.
-    pub(crate) fn drag_to(&mut self, track_y: f32) -> bool {
+    pub(super) fn drag_to(&mut self, track_y: f32) -> bool {
         let Some(offset) = track_y_to_offset(&self.geometry, track_y) else {
             return false;
         };
@@ -179,22 +172,33 @@ impl ScrollbarState {
         let elapsed = now.duration_since(self.last_scroll?).as_secs_f32();
         (elapsed < HIDDEN_SECS).then(|| fade_opacity(elapsed))
     }
+
+    /// Whether `position` is on the visible scrollbar strip of an element
+    /// with `bounds` — the press then drags the thumb instead of selecting.
+    pub(super) fn hit_test(&self, position: Point<Pixels>, bounds: Bounds<Pixels>) -> bool {
+        if thumb_geometry(&self.geometry).is_none() || self.opacity(Instant::now()).is_none() {
+            return false;
+        }
+        let strip = Bounds::from_corners(
+            gpui::point(bounds.right() - px(TRACK_WIDTH_PX), bounds.top()),
+            bounds.bottom_right(),
+        );
+        strip.contains(&position)
+    }
 }
 
-impl LocalTerminalView {
-    /// Render the custom scrollbar — a div overlay on the right edge.
-    pub(crate) fn render_scrollbar(
-        &mut self,
-        render_cache: &Rc<RefCell<RenderCache>>,
-        cx: &mut Context<LocalTerminalView>,
-    ) -> Option<impl IntoElement> {
-        let thumb = thumb_geometry(&self.scrollbar.geometry())?;
+impl TerminalView {
+    /// The scrollbar overlay on the right edge; `None` when nothing scrolls or
+    /// the bar has faded out. Painted only — the wrapper's listeners drive it.
+    pub(super) fn render_scrollbar(&self, window: &Window) -> Option<impl IntoElement> {
+        let thumb = thumb_geometry(&self.scrollbar.geometry)?;
         let opacity = self.scrollbar.opacity(Instant::now())?;
-
+        // Keep repainting while the fade runs, so the bar disappears on time
+        // even when nothing else (blink, output) requests a frame.
+        if !self.scrollbar.is_dragging() {
+            window.request_animation_frame();
+        }
         let thumb_bg = gpui::hsla(0.0, 0.0, 0.5, opacity * 0.8);
-        let view = cx.entity();
-        let cache = render_cache.clone();
-
         Some(
             div()
                 .id("terminal-scrollbar")
@@ -202,25 +206,7 @@ impl LocalTerminalView {
                 .top_0()
                 .right_0()
                 .bottom_0()
-                .w(px(12.0))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    move |e: &MouseDownEvent, _w, cx: &mut App| {
-                        let track_y = {
-                            let m = &cache.borrow().metrics;
-                            match m.bounds {
-                                Some(b) => f32::from(e.position.y - b.origin.y),
-                                None => return,
-                            }
-                        };
-                        let _ = view.update(cx, |v, cx| {
-                            if v.scrollbar.drag_to(track_y) {
-                                cx.notify();
-                            }
-                        });
-                        cx.stop_propagation();
-                    },
-                )
+                .w(px(TRACK_WIDTH_PX))
                 .child(
                     div()
                         .id("scrollbar-thumb")
@@ -238,6 +224,8 @@ impl LocalTerminalView {
 
 #[cfg(test)]
 mod tests {
+    use gpui::{Bounds, point, px, size};
+
     use super::{ScrollGeometry, ScrollbarState, fade_opacity, thumb_geometry, track_y_to_offset};
 
     fn geo(total: usize, viewport: usize, offset: usize) -> ScrollGeometry {
@@ -261,20 +249,20 @@ mod tests {
     #[test]
     fn thumb_sits_at_the_bottom_when_not_scrolled() {
         // 100 lines, 20 visible, 10 px lines: track 200 px, thumb 40 px.
-        let t = thumb_geometry(&geo(100, 20, 0)).unwrap();
+        let t = thumb_geometry(&geo(100, 20, 0)).expect("scrollable");
         assert_eq!(t.height, 40.0);
         assert_eq!(t.top, 160.0);
     }
 
     #[test]
     fn thumb_reaches_the_top_at_max_offset() {
-        let t = thumb_geometry(&geo(100, 20, 80)).unwrap();
+        let t = thumb_geometry(&geo(100, 20, 80)).expect("scrollable");
         assert_eq!(t.top, 0.0);
     }
 
     #[test]
     fn thumb_never_shrinks_below_the_minimum() {
-        let t = thumb_geometry(&geo(100_000, 20, 0)).unwrap();
+        let t = thumb_geometry(&geo(100_000, 20, 0)).expect("scrollable");
         assert_eq!(t.height, 24.0);
     }
 
@@ -315,10 +303,27 @@ mod tests {
         assert!(!s.is_dragging());
         assert!(s.drag_to(0.0));
         assert!(s.is_dragging());
-        assert_eq!(s.geometry().display_offset, 80);
+        assert_eq!(s.geometry.display_offset, 80);
         assert_eq!(s.take_pending_offset(), Some(80));
         assert_eq!(s.take_pending_offset(), None);
         assert!(s.end_drag());
         assert!(!s.end_drag());
+    }
+
+    #[test]
+    fn hit_test_needs_a_shown_bar_and_the_right_strip() {
+        let bounds = Bounds::new(point(px(100.0), px(50.0)), size(px(400.0), px(200.0)));
+        let on_strip = point(px(495.0), px(100.0));
+        let mut s = ScrollbarState::default();
+        s.update(geo(100, 20, 0));
+        // Never scrolled: the bar is hidden, the press belongs to the grid.
+        assert!(!s.hit_test(on_strip, bounds));
+        s.mark_scrolled();
+        assert!(s.hit_test(on_strip, bounds));
+        assert!(!s.hit_test(point(px(300.0), px(100.0)), bounds), "grid");
+        assert!(!s.hit_test(point(px(495.0), px(10.0)), bounds), "above");
+        // Nothing to scroll: no thumb, no strip.
+        s.update(geo(20, 20, 0));
+        assert!(!s.hit_test(on_strip, bounds));
     }
 }

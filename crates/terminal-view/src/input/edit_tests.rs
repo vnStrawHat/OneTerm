@@ -12,9 +12,7 @@ use oneterm_terminal::test_support::{FakeInputCall, FakeSessionProbe, FakeTermin
 
 use super::edit::{copy_selection, paste_clipboard, select_all};
 
-struct Host {
-    session: Entity<Box<dyn TerminalSession>>,
-}
+struct Host;
 
 impl Render for Host {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -35,9 +33,8 @@ fn window<'a>(
     cx.update(gpui_component::init);
     let (session, probe) = FakeTerminalSession::boxed(4, 20, text);
     let session = cx.update(|cx| cx.new(|_| session));
-    let child = session.clone();
     let (_root, cx) = cx.add_window_view(move |window, cx| {
-        let host = cx.new(|_| Host { session: child });
+        let host = cx.new(|_| Host);
         Root::new(AnyView::from(host), window, cx)
     });
     (session, probe, cx)

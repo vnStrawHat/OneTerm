@@ -17,10 +17,10 @@ use gpui_component::{
 
 use oneterm_theme::icon::AppIcon;
 
-use super::super::handlers::menu::split_items;
 use super::super::panel::TerminalPanel;
 use super::drag::DragTerminalTab;
 use super::node::{SpaceId, SpaceLeaf};
+use crate::input::menu::split_items;
 
 /// Render the empty-Space placeholder for `leaf`.
 pub(crate) fn render_placeholder(

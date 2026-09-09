@@ -1,21 +1,21 @@
-//! `LocalTerminalView` ↔ completion wiring (docs/auto-completion/05, 06, 07).
+//! `TerminalView` ↔ completion wiring.
 //!
 //! Reads the live input line from the grid each render, feeds the gpui-free
-//! [`CompletionController`](crate::completion::CompletionController), renders the
-//! cursor-anchored overlay, and handles the navigation/accept keys before they
-//! reach the PTY. History is the cross-tab `CompletionHistory` entity the view
-//! receives through its [`TerminalDeps`](super::deps::TerminalDeps).
+//! [`CompletionController`](crate::completion::CompletionController), renders
+//! the cursor-anchored overlay, and applies the navigation/accept keys the
+//! keyboard layer intercepted. History is the cross-tab `CompletionHistory`
+//! entity the view receives through its `TerminalDeps`.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui::{Anchor, App, Context, IntoElement, ParentElement as _, anchored, deferred, point, px};
 
-use alacritty_terminal::term::TermMode;
 use oneterm_core::config::ShellKind;
 use oneterm_terminal::{IndexedCell, SessionKind};
 
-use super::LocalTerminalView;
+use super::TerminalView;
 use crate::completion::{CompletionController, overlay::CompletionOverlay};
+use crate::input::CompletionKey;
 
 /// Milliseconds since the Unix epoch — the caller-supplied clock for frecency.
 fn now_ms() -> u64 {
@@ -44,22 +44,38 @@ fn visible_window(n: usize, selected: Option<usize>, max_visible: usize) -> (usi
 
 /// Auto-completion state owned by the view.
 #[derive(Default)]
-pub(crate) struct CompletionState {
+pub(super) struct CompletionState {
     /// Controller + overlay state. Lazily created on the first render (needs
-    /// `cx` to read settings + session kind). `None` until then; also idle
-    /// while completion is disabled.
-    pub(crate) controller: Option<CompletionController>,
+    /// `cx` to read settings + session kind). `None` until then.
+    pub(super) controller: Option<CompletionController>,
     /// Anchor for the overlay: (display line, token-start column) in the grid,
     /// computed during `update_completion`. `None` when hidden.
     anchor: Option<(i32, usize)>,
-    /// Last cursor (line, col) seen by `update_completion` — used to skip the
-    /// grid snapshot on frames where the cursor did not move (e.g. blink ticks).
+    /// Last cursor (line, col) seen by `update_completion` — skips the grid
+    /// read on frames where the cursor did not move (blink ticks).
     last_cursor: Option<(i32, usize)>,
 }
 
 impl CompletionState {
+    /// Whether the overlay is showing.
+    pub(super) fn is_visible(&self) -> bool {
+        self.controller.as_ref().is_some_and(|c| c.is_visible())
+    }
+
+    /// Whether a suggestion is highlighted (navigation and Enter bind then).
+    pub(super) fn has_selection(&self) -> bool {
+        self.controller
+            .as_ref()
+            .is_some_and(|c| c.selected().is_some())
+    }
+
+    /// The `completion.accept_tab` setting as the controller sees it.
+    pub(super) fn accept_tab(&self) -> bool {
+        self.controller.as_ref().is_some_and(|c| c.accept_tab())
+    }
+
     /// Hide the overlay (controller dismissed, anchor cleared).
-    fn dismiss(&mut self) {
+    pub(super) fn dismiss(&mut self) {
         if let Some(c) = self.controller.as_mut() {
             c.dismiss();
         }
@@ -77,57 +93,6 @@ impl CompletionState {
             let (line, col) = cursor;
             (line, col.saturating_sub(c.typed_len()))
         });
-    }
-}
-
-/// What a key does while the overlay is visible.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CompletionKeyAction {
-    Forward,
-    SelectFirst,
-    NavigateNext,
-    NavigatePrev,
-    Accept,
-    Dismiss,
-}
-
-fn completion_key_action(
-    key: &str,
-    ctrl: bool,
-    selected: bool,
-    accept_tab: bool,
-) -> CompletionKeyAction {
-    match key {
-        "down" | "n" if key == "down" || ctrl => {
-            if selected {
-                CompletionKeyAction::NavigateNext
-            } else {
-                CompletionKeyAction::Forward
-            }
-        }
-        "up" | "p" if key == "up" || ctrl => {
-            if selected {
-                CompletionKeyAction::NavigatePrev
-            } else {
-                CompletionKeyAction::Forward
-            }
-        }
-        "escape" => CompletionKeyAction::Dismiss,
-        "enter" | "return" => {
-            if selected {
-                CompletionKeyAction::Accept
-            } else {
-                CompletionKeyAction::Forward
-            }
-        }
-        "tab" if accept_tab => {
-            if selected {
-                CompletionKeyAction::Accept
-            } else {
-                CompletionKeyAction::SelectFirst
-            }
-        }
-        _ => CompletionKeyAction::Forward,
     }
 }
 
@@ -165,8 +130,6 @@ fn extract_cursor_command(cells: &[IndexedCell], cursor: (i32, usize)) -> Cursor
     }
     let row_str: String = row.into_iter().collect();
     let (command, found) = strip_prompt(&row_str);
-    // The cursor column relative to the grid stays `cursor_col`; the token-start
-    // anchor is computed by the caller from `typed_len`.
     CursorCommand {
         line: command,
         prompt_found: found,
@@ -183,7 +146,7 @@ fn strip_prompt(row: &str) -> (String, bool) {
     for (i, &ch) in chars.iter().enumerate() {
         let is_sign = ch == '>'
             || (matches!(ch, '$' | '#' | '❯' | '➜' | 'λ')
-                && chars.get(i + 1).map_or(true, |n| *n == ' '));
+                && chars.get(i + 1).is_none_or(|n| *n == ' '));
         if is_sign {
             let mut j = i + 1;
             while chars.get(j) == Some(&' ') {
@@ -196,10 +159,9 @@ fn strip_prompt(row: &str) -> (String, bool) {
     (row.trim_start().to_string(), false)
 }
 
-impl LocalTerminalView {
-    /// Read the cursor's row from the grid (O(cols) under the lock — PERF-06:
-    /// no full-grid clone) together with the cursor position, in the shape
-    /// [`extract_cursor_command`] expects.
+impl TerminalView {
+    /// Read the cursor's row from the grid (O(cols) under the lock, no
+    /// full-grid clone) together with the cursor position.
     fn cursor_row(&self, cx: &App) -> CursorCommand {
         let session = self.session.read(cx);
         let query = session.query_state();
@@ -210,18 +172,23 @@ impl LocalTerminalView {
         extract_cursor_command(&cells, (query.cursor_line, query.cursor_col))
     }
 
+    /// The shell kind the controller completes for: the configured local
+    /// shell, or Bash for SSH (remote hosts are virtually always Unix).
+    fn completion_shell_kind(&self, cx: &App) -> ShellKind {
+        match self.session.read(cx).kind() {
+            SessionKind::Local => self.deps.settings.read(cx).shell.kind,
+            SessionKind::Ssh => ShellKind::Bash,
+        }
+    }
+
     /// Lazily create the completion controller (needs `cx` for settings + kind).
     fn ensure_completion(&mut self, cx: &App) {
         if self.completion.controller.is_some() {
             return;
         }
+        let kind = self.completion_shell_kind(cx);
         let settings_entity = self.deps.settings.clone();
         let settings = settings_entity.read(cx);
-        let kind = match self.session.read(cx).kind() {
-            SessionKind::Local => settings.shell.kind,
-            // SSH targets are virtually always Unix (docs 03 §6).
-            SessionKind::Ssh => ShellKind::Bash,
-        };
         let controller = CompletionController::new(kind, &settings.completion);
         log::info!(
             "completion: controller initialized (kind={kind:?}, family={:?}, enabled={})",
@@ -232,23 +199,20 @@ impl LocalTerminalView {
     }
 
     /// Per-render update: sync settings, feed gating signals + the live input
-    /// line, and recompute suggestions. Called at the top of `render`.
-    pub(crate) fn update_completion(&mut self, cx: &mut Context<Self>) {
+    /// line, and recompute suggestions.
+    pub(super) fn update_completion(&mut self, cx: &mut Context<Self>) {
         if self.ssh_closed {
             self.completion.dismiss();
             return;
         }
         self.ensure_completion(cx);
 
-        // Sync settings + master-enable gate. The settings are borrowed for
-        // the sync — no per-frame clone of `CompletionConfig` (PERF-05).
+        // Sync settings + master-enable gate, borrowing the settings instead
+        // of cloning `CompletionConfig` per frame.
         {
+            let kind = self.completion_shell_kind(cx);
             let settings_entity = self.deps.settings.clone();
             let settings = settings_entity.read(cx);
-            let kind = match self.session.read(cx).kind() {
-                SessionKind::Local => settings.shell.kind,
-                SessionKind::Ssh => ShellKind::Bash,
-            };
             let Some(c) = self.completion.controller.as_mut() else {
                 return;
             };
@@ -259,53 +223,50 @@ impl LocalTerminalView {
             }
         }
 
-        // Cheap query for the alt-screen gate — skip the full grid clone on the
-        // alternate screen (TUIs), which is the perf-sensitive path.
-        let query = self.session.read(cx).query_state();
-        let on_alt = query.mode.contains(TermMode::ALT_SCREEN);
+        // Cheap pre-grid gate (enabled + alt screen); the prompt-region gate
+        // needs the line and is applied after reading it.
+        let (on_alt, cursor_pos) = {
+            let session = self.session.read(cx);
+            let query = session.query_state();
+            (
+                session.is_alt_screen(),
+                (query.cursor_line, query.cursor_col),
+            )
+        };
         {
             let Some(c) = self.completion.controller.as_mut() else {
                 return;
             };
             c.set_alt_screen(on_alt);
-            // Cheap pre-grid gate: enabled + alt-screen only. The prompt-region
-            // gate is applied after we read the line (it depends on the line).
             if !c.pre_gate_ok() {
                 self.completion.dismiss();
                 return;
             }
         }
 
-        // Skip the expensive grid snapshot when the cursor has not moved and no
-        // settings/gating change requested a recompute — this avoids cloning the
-        // grid on idle frames (cursor blink) and during fast primary-screen output.
-        let cursor_pos = (query.cursor_line, query.cursor_col);
+        // Skip the grid read when the cursor has not moved and no settings /
+        // gating change asked for a recompute (idle blink frames, fast output).
         let cursor_moved = self.completion.last_cursor != Some(cursor_pos);
         let wants = self
             .completion
             .controller
             .as_ref()
-            .map(|c| c.wants_recompute(cursor_moved))
-            .unwrap_or(false);
+            .is_some_and(|c| c.wants_recompute(cursor_moved));
         if !wants {
             return;
         }
         self.completion.last_cursor = Some(cursor_pos);
 
-        // At a prompt on the primary screen: read the input line from the grid.
         let CursorCommand {
             line,
             prompt_found,
             anchor,
         } = self.cursor_row(cx);
 
-        let history_entity = match self.deps.completion_history.clone() {
-            Some(h) => h,
-            None => {
-                log::warn!("completion: history not initialized — completion disabled");
-                self.completion.anchor = None;
-                return;
-            }
+        let Some(history_entity) = self.deps.completion_history.clone() else {
+            log::warn!("completion: history not initialized — completion disabled");
+            self.completion.anchor = None;
+            return;
         };
         let now = now_ms();
         {
@@ -314,8 +275,7 @@ impl LocalTerminalView {
                 return;
             };
             c.set_in_prompt_region(prompt_found);
-            let allowed = c.gating_allows();
-            if !allowed {
+            if !c.gating_allows() {
                 log::debug!("completion: line={line:?} gating=false (hidden)");
                 self.completion.dismiss();
                 return;
@@ -327,16 +287,14 @@ impl LocalTerminalView {
                 c.suggestions().len()
             );
         }
-        // Anchor under the start of the token the user is editing.
         self.completion.anchor_at(anchor);
     }
 
-    /// Force-open the overlay at the cursor (the `TriggerCompletion` action),
-    /// bypassing `min_prefix_len`.
-    pub(crate) fn trigger_completion(&mut self, cx: &mut Context<Self>) {
+    /// Force-open the overlay at the cursor (Ctrl+Shift+Space), bypassing
+    /// `min_prefix_len`.
+    pub(super) fn trigger_completion(&mut self, cx: &mut Context<Self>) {
         self.ensure_completion(cx);
-        let query = self.session.read(cx).query_state();
-        if query.mode.contains(TermMode::ALT_SCREEN) {
+        if self.session.read(cx).is_alt_screen() {
             return;
         }
         let CursorCommand {
@@ -356,28 +314,23 @@ impl LocalTerminalView {
             c.set_in_prompt_region(prompt_found);
             c.recompute(&line, line.len(), now, history, true);
         }
-        if self
-            .completion
-            .controller
-            .as_ref()
-            .is_some_and(|c| c.is_visible())
-        {
+        if self.completion.is_visible() {
             self.completion.anchor_at(anchor);
         }
         cx.notify();
     }
 
-    /// Build the positioned completion overlay element, if visible.
-    pub(crate) fn completion_overlay_element(&self) -> Option<impl IntoElement> {
+    /// The positioned completion overlay element, if visible.
+    pub(super) fn completion_overlay_element(&self) -> Option<impl IntoElement> {
         let c = self.completion.controller.as_ref()?;
         if !c.is_visible() {
             return None;
         }
         let (line, col) = self.completion.anchor?;
-        let m = self.render_cache.borrow().metrics;
+        let geometry = self.render_state.borrow().geometry?;
 
-        // Only render a window of `max_visible` rows, scrolled to keep the
-        // selected row in view; the engine keeps more candidates than we show.
+        // Only a window of `max_visible` rows, scrolled to keep the selected
+        // row in view; the engine keeps more candidates than we show.
         let all = c.suggestions();
         let (offset, count) = visible_window(all.len(), c.selected(), c.max_visible());
         let slice = &all[offset..offset + count];
@@ -388,26 +341,22 @@ impl LocalTerminalView {
         let hidden_above = offset;
         let hidden_below = all.len() - (offset + count);
 
-        // Decide whether the list fits *below* the input row. If not, flip it
-        // *above* the row so it never covers what the user is typing. The number
-        // of visible rows (list + hint rows) times the line height estimates the
-        // overlay height closely enough for the flip decision.
+        // Flip the list above the input row when it does not fit below, so it
+        // never covers what the user is typing. Rows × line height estimates
+        // the overlay height closely enough for the flip decision.
+        let line_height = geometry.metrics.line_height;
         let row_count = count + usize::from(hidden_above > 0) + usize::from(hidden_below > 0);
-        let est_height = m.line_height * (row_count as f32) + px(10.0);
-        let row_top = m.grid_origin.y + m.line_height * (line as f32);
-        let row_bottom = row_top + m.line_height;
-        let viewport_bottom = m
-            .bounds
-            .map(|b| b.origin.y + b.size.height)
-            .unwrap_or_else(|| m.grid_origin.y + m.line_height * (m.rows as f32));
-        let x = m.grid_origin.x + m.cell_width * (col as f32);
-        // `snap_to_window_with_margin` still clamps horizontally on-screen; the
-        // explicit corner flip handles vertical placement so the list never
-        // overlaps the prompt when the cursor sits near the bottom edge.
+        let est_height = line_height * (row_count as f32) + px(10.0);
+        let row = line.max(0) as usize;
+        let cell = geometry.cell_origin(row, col);
+        let row_bottom = cell.y + line_height;
+        let viewport_bottom = geometry.bounds.bottom();
+        // `snap_to_window_with_margin` still clamps horizontally on-screen;
+        // the explicit corner flip handles vertical placement.
         let (anchor, pos_y) = if est_height <= (viewport_bottom - row_bottom) {
             (Anchor::TopLeft, row_bottom)
         } else {
-            (Anchor::BottomLeft, row_top)
+            (Anchor::BottomLeft, cell.y)
         };
 
         let overlay =
@@ -417,58 +366,34 @@ impl LocalTerminalView {
                 anchored()
                     .snap_to_window_with_margin(px(8.0))
                     .anchor(anchor)
-                    .position(point(x, pos_y))
+                    .position(point(cell.x, pos_y))
                     .child(overlay),
             )
             .with_priority(1),
         )
     }
 
-    /// Handle a key while the overlay is visible. Returns `true` if the key was
-    /// consumed (the caller must then `stop_propagation` and not send to the PTY).
-    ///
-    /// Called from the keyboard handler **before** PTY delivery. `key` is the
-    /// gpui key name; `ctrl` indicates the control modifier.
-    pub(crate) fn completion_handle_key(
-        &mut self,
-        key: &str,
-        ctrl: bool,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let Some(c) = self.completion.controller.as_mut() else {
-            return false;
-        };
-        if !c.is_visible() {
-            return false;
-        }
-        let action = completion_key_action(key, ctrl, c.selected().is_some(), c.accept_tab());
-        match action {
-            CompletionKeyAction::Forward => false,
-            CompletionKeyAction::SelectFirst => {
-                c.select_first_if_none();
-                cx.notify();
-                true
-            }
-            CompletionKeyAction::NavigateNext => {
-                c.select_next();
-                cx.notify();
-                true
-            }
-            CompletionKeyAction::NavigatePrev => {
-                c.select_prev();
-                cx.notify();
-                true
-            }
-            CompletionKeyAction::Accept => {
+    /// Apply a key the keyboard layer routed to the visible overlay.
+    pub(super) fn apply_completion_key(&mut self, key: CompletionKey, cx: &mut Context<Self>) {
+        match key {
+            CompletionKey::Accept => {
                 self.completion_accept(cx);
-                true
+                return;
             }
-            CompletionKeyAction::Dismiss => {
-                self.completion.dismiss();
-                cx.notify();
-                true
+            CompletionKey::Dismiss => self.completion.dismiss(),
+            CompletionKey::SelectFirst | CompletionKey::SelectNext | CompletionKey::SelectPrev => {
+                if let Some(c) = self.completion.controller.as_mut() {
+                    match key {
+                        CompletionKey::SelectFirst => {
+                            c.select_first_if_none();
+                        }
+                        CompletionKey::SelectNext => c.select_next(),
+                        _ => c.select_prev(),
+                    }
+                }
             }
         }
+        cx.notify();
     }
 
     /// Accept the selected suggestion: write its terminal edit bytes, then dismiss.
@@ -478,23 +403,23 @@ impl LocalTerminalView {
             .controller
             .as_ref()
             .and_then(|c| c.accept_bytes());
-        if let Some(bytes) = bytes {
-            if !bytes.is_empty() {
-                log::debug!("completion: accept → write {bytes:?}");
-                self.session.update(cx, |s, _| {
-                    if let Err(e) = s.write(&bytes) {
-                        log::warn!("completion: PTY write on accept failed: {e}");
-                    }
-                });
-            }
+        if let Some(bytes) = bytes
+            && !bytes.is_empty()
+        {
+            log::debug!("completion: accept → write {bytes:?}");
+            self.session.update(cx, |s, _| {
+                if let Err(e) = s.write(&bytes) {
+                    log::warn!("completion: PTY write on accept failed: {e}");
+                }
+            });
         }
         self.completion.dismiss();
         cx.notify();
     }
 
     /// Capture the current input line into history when a command runs (Enter
-    /// with no active selection). Called from the keyboard handler.
-    pub(crate) fn completion_capture_current(&mut self, cx: &mut Context<Self>) {
+    /// with no active selection).
+    pub(super) fn completion_capture_current(&mut self, cx: &mut Context<Self>) {
         let CursorCommand { line, .. } = self.cursor_row(cx);
         if line.trim().is_empty() {
             return;
@@ -516,55 +441,7 @@ impl LocalTerminalView {
 
 #[cfg(test)]
 mod tests {
-    use super::{CompletionKeyAction, completion_key_action, strip_prompt, visible_window};
-
-    #[test]
-    fn first_tab_selects_and_later_tab_or_enter_accepts() {
-        assert_eq!(
-            completion_key_action("tab", false, false, true),
-            CompletionKeyAction::SelectFirst
-        );
-        assert_eq!(
-            completion_key_action("tab", false, true, true),
-            CompletionKeyAction::Accept
-        );
-        assert_eq!(
-            completion_key_action("enter", false, true, true),
-            CompletionKeyAction::Accept
-        );
-        assert_eq!(
-            completion_key_action("enter", false, false, true),
-            CompletionKeyAction::Forward
-        );
-    }
-
-    #[test]
-    fn navigation_forwards_until_a_suggestion_is_selected() {
-        for (key, ctrl, expected) in [
-            ("down", false, CompletionKeyAction::NavigateNext),
-            ("up", false, CompletionKeyAction::NavigatePrev),
-            ("n", true, CompletionKeyAction::NavigateNext),
-            ("p", true, CompletionKeyAction::NavigatePrev),
-        ] {
-            assert_eq!(
-                completion_key_action(key, ctrl, false, true),
-                CompletionKeyAction::Forward
-            );
-            assert_eq!(completion_key_action(key, ctrl, true, true), expected);
-        }
-    }
-
-    #[test]
-    fn tab_forwards_when_tab_acceptance_is_disabled() {
-        assert_eq!(
-            completion_key_action("tab", false, false, false),
-            CompletionKeyAction::Forward
-        );
-        assert_eq!(
-            completion_key_action("tab", false, true, false),
-            CompletionKeyAction::Forward
-        );
-    }
+    use super::{strip_prompt, visible_window};
 
     #[test]
     fn strip_cmd_prompt() {

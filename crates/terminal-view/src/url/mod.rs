@@ -1,8 +1,8 @@
 //! URL detection in the terminal grid — always-on highlight + Ctrl+click to open URL.
 //!
 //! Two kinds of URL:
-//! 1. **OSC 8 hyperlink** — the shell sends the escape sequence `\e]8;;URL\e\\` →
-//!    alacritty_terminal attaches a `Hyperlink` to the cell. Available via `cell.hyperlink()`.
+//! 1. **OSC 8 hyperlink** — the shell sends the escape sequence `\e]8;;URL\e\\` and
+//!    the engine attaches the target to the cell (`Cell::hyperlink`).
 //! 2. **Plain text URL** — `http://...`, `https://...`, `www.` appearing in
 //!    output text. Must scan cells to detect.
 
@@ -12,7 +12,7 @@ mod mask;
 
 pub(crate) use detect::detect_url_at;
 pub(crate) use hover::UrlHover;
-pub(crate) use mask::{url_masks_into, url_masks_wrapped};
+pub(crate) use mask::url_masks_into;
 
 /// A URL detected at a position in the terminal.
 #[derive(Clone, Debug, PartialEq)]

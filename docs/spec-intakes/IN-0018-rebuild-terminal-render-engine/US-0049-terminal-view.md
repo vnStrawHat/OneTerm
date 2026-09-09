@@ -10,8 +10,8 @@ Created: 2026-09-08
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
-- [ ] In progress
-- [ ] Implemented
+- [x] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -34,30 +34,31 @@ pointed at it, and `src/view/`, `src/element/`, `src/layout/`, `src/box_drawing/
 
 ## Scope
 
-- [ ] In scope: `src/terminal_view/{mod, view, render, ime, search, scrollbar,
+- [x] In scope: `src/terminal_view/{mod, view, render, ime, search, scrollbar,
       gutter_timestamps, completion, agent_status}.rs` and tests; minimal edits in old
       `panel/*.rs`, `space/*.rs`, `agent.rs`, `status.rs` (type rename `LocalTerminalView →
       TerminalView`, `view::` → `terminal_view::` paths); `completion/` and `url/hover.rs`
       adaptations; `theme/` cleanup of old entry points; deletion of the five old module trees;
       `lib.rs` declarations.
-- [ ] Out of scope: rewriting `panel/` and `space/` (US-0050); removing `#[allow(dead_code)]`
+- [x] Out of scope: rewriting `panel/` and `space/` (US-0050); removing `#[allow(dead_code)]`
       from `render`/`input` roots (US-0050, once nothing old remains); behavior changes beyond the
       HLD deviations.
 
 ## Acceptance
 
-- [ ] HLD parity items US-0049 (§2.9–2.17, 2.19–2.21) are implemented; each old `view/*`
+- [x] HLD parity items US-0049 (§2.9–2.17, 2.19–2.21) are implemented; each old `view/*`
       unit test listed in inventory §4 exists under `terminal_view/` with the same intent.
-- [ ] `TerminalView` exposes exactly the pub(crate) surface in the HLD (`session`,
+- [x] `TerminalView` exposes exactly the pub(crate) surface in the HLD (`session`,
       `duplicate_config`, `split_ctx`, `focus`, `new`, `shutdown`, `toggle_search`,
       `handle_event`, `render_diagnostics`, `TerminalViewEvent::TitleChanged`, `TerminalDeps`).
-- [ ] `phase0_renderer_baseline_counts_dirty_and_idle_frames` (view-level) passes on the new
+- [x] `phase0_renderer_baseline_counts_dirty_and_idle_frames` (view-level) passes on the new
       engine; `exited_behind_output_batch_marks_agent_ended` (panel test) still passes.
-- [ ] `ssh_close_shows_banner_once`, `notification_queue_is_bounded`,
+- [x] `ssh_close_shows_banner_once`, `notification_queue_is_bounded`,
       `blink_tick_gated_by_focus_and_setting`, `ime_disabled_on_alt_screen`,
       `ime_bounds_at_cursor_cell`, `clipboard_read_reply_gated_by_setting` pass.
-- [ ] `grep -rn "alacritty_terminal" crates/terminal-view/src` lists only `render/frame.rs`
-      and `theme/palette.rs`.
+- [x] `grep -rn "alacritty_terminal" crates/terminal-view/src` lists only `render/frame.rs`
+      and `theme/palette.rs` (plus `input/mouse.rs`: `SelectionType` is part of the
+      `TerminalInput::mouse_down` signature and cannot be avoided; recorded in the HLD).
 - [ ] Manual Windows run (`--profile fast-dev`): typing, IME (Vietnamese/CJK composition on
       the primary screen), selection/copy/paste, Ctrl+F search, completion overlay, scrollbar
       drag and fade, gutter toggle, bell badge, OSC 9;4 progress, SSH close banner, box drawing
@@ -92,6 +93,29 @@ contract and must stay accurate about the surface `panel/`/`space/` consume.
 Before completion, confirm the HLD "Public and pub(crate) Interfaces" block matches
 `terminal_view/view.rs` and list the deleted directories.
 
+Done (2026-09-09):
+
+- HLD interface block vs `terminal_view/view.rs`: `session`, `duplicate_config`, `split_ctx`,
+  `focus` (pub(crate) fields), `new`, `shutdown`, `toggle_search`, `handle_event`,
+  `TerminalViewEvent::TitleChanged`, `TerminalDeps::from_globals`, `Focusable`, `EventEmitter`
+  match. Two recorded differences (HLD "Amendments (US-0049 implementation)" 1–2):
+  `render_diagnostics` is `#[cfg(test)]` (dead under the feature alone); `alive`,
+  `event_task`, `blink_task` are `pub(crate)` for the retained `panel/tests.rs`.
+- Deleted directories: `crates/terminal-view/src/view/`, `src/element/`, `src/layout/`,
+  `src/box_drawing/`, `src/handlers/`. `lib.rs` declares `terminal_view` and no
+  `#[allow(dead_code)]` root remains (the US-0050 item is already done).
+- Retained-module cleanup: `theme::resolve_cell_color`, `url::url_masks_wrapped`,
+  `SemanticOverlay::scan` removed; `url/detect.rs`, `url/tests.rs`, `theme/tests.rs`,
+  `input/mouse_tests.rs` no longer name `alacritty_terminal`; `input::menu::split_items` is
+  shared with the placeholder menu (was `handlers::menu::split_items`).
+- LLD amendments: `low-level-design/input.md` "Amendments (US-0049 implementation)" (key send
+  does not mark the scrollbar, hover moves repaint only on change, scrollbar hit test in the
+  view, `on_mouse_exit`, IME row = display row, alt-screen completion dismiss, `split_items`);
+  `low-level-design/render-pipeline.md` "Amendments (US-0049 implementation)" (test-only
+  seams, removed accessors, `Cell::from_indexed` / `hyperlink_uri` bridge).
+- `oneterm_terminal::test_support::FakeSessionProbe::set_alt_screen` added (additive) for the
+  IME tests.
+
 ## Context
 
 - Old `panel/` and `space/` reference `LocalTerminalView::new`, `.session`, `.duplicate_config`,
@@ -112,19 +136,20 @@ Before completion, confirm the HLD "Public and pub(crate) Interfaces" block matc
 
 ## Plan
 
-- [ ] `terminal_view/view.rs`: struct, `TerminalDeps`, `new` (events pump, blink task, focus
+- [x] `terminal_view/view.rs`: struct, `TerminalDeps`, `new` (events pump, blink task, focus
       subs, `set_nav`), `handle_event` table, `shutdown`, notification queue, progress, bell,
       `reply_clipboard_read`.
-- [ ] `terminal_view/render.rs`: `RenderInputs` refresh (font cache, theme cache, palette push,
+- [x] `terminal_view/render.rs`: `RenderInputs` refresh (font cache, theme cache, palette push,
       metrics inputs, cursor config, gutter stamps copy, search highlights), wrapper div with
       listeners delegating to `input/`, `TerminalElementSpec`, bars/badges/banner/progress/
       completion overlay/scrollbar element, notification drain.
-- [ ] `ime.rs`, `search.rs`, `scrollbar.rs`, `gutter_timestamps.rs`, `completion.rs`,
-      `agent_status.rs` ported to the new types with their tests.
-- [ ] Point `panel/`, `space/`, `agent.rs`, `status.rs` at `terminal_view::TerminalView`.
-- [ ] Delete `src/view/`, `src/element/`, `src/layout/`, `src/box_drawing/`, `src/handlers/`;
+- [x] `ime.rs`, `search.rs`, `scrollbar.rs`, `gutter_timestamps.rs`, `completion.rs`,
+      `agent_status.rs` ported to the new types with their tests (+ `input.rs` for the wrapper's
+      listeners, see HLD amendment 3).
+- [x] Point `panel/`, `space/`, `agent.rs`, `status.rs` at `terminal_view::TerminalView`.
+- [x] Delete `src/view/`, `src/element/`, `src/layout/`, `src/box_drawing/`, `src/handlers/`;
       remove the old entry points left in `theme/`, `url/`, `highlight/`, `completion/`.
-- [ ] Port `view/tests.rs` (3), per-file tests (search 7, scrollbar 7, gutter 7, local_view 3,
+- [x] Port `view/tests.rs` (3), per-file tests (search 7, scrollbar 7, gutter 7, local_view 3,
       render 4, completion glue 10, grid 4 → `metrics`, key 6 → `input/keys`).
 - [ ] Manual Windows run per Acceptance; capture screenshots into
       `docs/spec-intakes/IN-0018-rebuild-terminal-render-engine/evidence/`.
@@ -152,14 +177,49 @@ Before completion, confirm the HLD "Public and pub(crate) Interfaces" block matc
 - Gate: `pwsh scripts/ci-local.ps1`.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
+
+Verbatim results (2026-09-09, Windows 11, branch `refactor/terminal-render-engine`):
+
+- `cargo clippy -p oneterm-terminal-view --all-targets -- -D warnings` → exit 0.
+- `cargo clippy -p oneterm-terminal-view --all-targets --features terminal-diagnostics -- -D warnings`
+  → exit 0.
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0.
+- `cargo fmt --all -- --check` → exit 0.
+- `cargo test -p oneterm-terminal-view` →
+  `test result: ok. 259 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out`
+  (panel 11, space 15, url 13, theme 11, highlight, completion, render, input, and
+  `terminal_view` 49: view_tests 10, ime 3, render 6, input 1, search 7, scrollbar 9,
+  gutter 6, completion 7).
+- `cargo test --workspace` → exit 0; every crate `test result: ok` (terminal-view
+  `259 passed; 0 failed; 1 ignored`).
+- `grep -rn "alacritty_terminal" crates/terminal-view/src` → `input/mouse.rs`,
+  `render/frame.rs`, `theme/palette.rs`.
+- Smoke run: `cargo build -p oneterm-app --profile fast-dev` → exit 0; `target/fast-dev/oneterm.exe`
+  started, `PrintWindow` capture after 10 s → `target/US-0049-smoke.png` shows the cmd prompt
+  `C:\Users\trunglt>` with semantic path colours and a `#528BFF` block cursor (Zed One Dark
+  caret) in the cell after `>`; the process was stopped afterwards. With the
+  `terminal-diagnostics` build the 5 s log reported `2 layers`, `rows 1/45 candidate, 0 planned,
+  0 shaped` on idle frames and the cursor toggling `painted=true/false` every 500 ms.
+
+Gaps:
+
+- Manual Windows parity walk (typing, IME, selection, search, completion, scrollbar, gutter,
+  bell, OSC 9;4, SSH close, box-drawing sample) not run yet — interactive step; the smoke run
+  only confirms the prompt and cursor render.
+- `pwsh scripts/ci-local.ps1` not run in this packet (fmt / clippy / tests were run
+  individually; the Python doc/graph checks remain for the gate run).
+- `PrintWindow` captures of a blinking cursor consistently sampled the hidden phase (each
+  readback forces a synchronous redraw); the cursor was verified with `cursor.blink = false`
+  in the debug config (`target/terminal.json`, restored afterwards) and through the
+  diagnostics log.
 
 ## Handoff
 

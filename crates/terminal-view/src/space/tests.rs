@@ -249,7 +249,7 @@ fn fill_empty_replaces_content(cx: &mut gpui::TestAppContext) {
         let tree = SpaceTree::new_empty(focus);
         let leaf_id = tree.active();
 
-        // fill_empty requires an Entity<LocalTerminalView>, which needs a full
+        // fill_empty requires an Entity<TerminalView>, which needs a full
         // session. We test the no-op path: fill a nonexistent leaf.
         // (Full fill test is in panel/tests.rs.)
         let _ = leaf_id;

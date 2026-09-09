@@ -5,7 +5,7 @@
 //! taking them as data keeps the builder callable from the wrapper's
 //! `context_menu` closure without borrowing the view across the call.
 
-use gpui::{App, Entity, FocusHandle, NoAction, Window};
+use gpui::{App, Entity, FocusHandle, NoAction, WeakEntity, Window};
 use gpui_component::{
     WindowExt as _,
     menu::{PopupMenu, PopupMenuItem},
@@ -21,7 +21,7 @@ use oneterm_terminal::{TerminalLogController, TerminalLogState, TerminalSession}
 use oneterm_theme::notif_ext::notify;
 
 use super::edit;
-use crate::panel::DuplicateDestination;
+use crate::panel::{DuplicateDestination, TerminalPanel};
 use crate::space::{SpaceId, SplitContext, SplitDir};
 
 /// What the menu builder needs to know about the terminal it belongs to.
@@ -126,7 +126,12 @@ pub(crate) fn build_menu(
                     false,
                 ))
         });
-        menu = split_items(menu.separator(), &split.ctx, &focus);
+        menu = split_items(
+            menu.separator(),
+            split.ctx.panel.clone(),
+            split.ctx.space_id,
+            Some(&focus),
+        );
     }
 
     menu = menu
@@ -248,12 +253,18 @@ fn duplicate_item(
     }
 }
 
-/// The four "Split …" items that split the right-clicked Space.
-fn split_items(menu: PopupMenu, ctx: &SplitContext, focus: &FocusHandle) -> PopupMenu {
+/// The four "Split …" items that split `space_id` of `panel`; shared with the
+/// empty-Space placeholder menu. `focus` (the terminal's handle, when the menu
+/// belongs to a terminal Space) is re-focused after the click.
+pub(crate) fn split_items(
+    menu: PopupMenu,
+    panel: WeakEntity<TerminalPanel>,
+    space_id: SpaceId,
+    focus: Option<&FocusHandle>,
+) -> PopupMenu {
     let item = |label: &'static str, dir: SplitDir| {
-        let panel = ctx.panel.clone();
-        let space_id = ctx.space_id;
-        let f = focus.clone();
+        let panel = panel.clone();
+        let f = focus.cloned();
         PopupMenuItem::new(label)
             .action(match dir {
                 SplitDir::Right => Box::new(SplitRight) as Box<dyn gpui::Action>,
@@ -265,7 +276,9 @@ fn split_items(menu: PopupMenu, ctx: &SplitContext, focus: &FocusHandle) -> Popu
                 if let Some(panel) = panel.upgrade() {
                     panel.update(cx, |p, cx| p.split_active_at(space_id, dir, window, cx));
                 }
-                window.focus(&f, cx);
+                if let Some(f) = &f {
+                    window.focus(f, cx);
+                }
             })
     };
     menu.item(item("Split Right", SplitDir::Right))

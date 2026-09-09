@@ -8,9 +8,9 @@
 use gpui::Entity;
 use gpui_component::resizable::ResizableState;
 
-use super::super::view::LocalTerminalView;
 use super::node::{SpaceContent, SpaceId, SpaceLeaf, SpaceNode, SpaceSplit};
 use super::{CloseOutcome, SpaceTree, SplitDir};
+use crate::terminal_view::TerminalView;
 
 impl SpaceTree {
     /// Split leaf `target` in `dir`, inserting `empty` (a pre-built empty leaf)
@@ -39,7 +39,7 @@ impl SpaceTree {
     /// Close leaf `target`, collapsing the tree to keep it well-formed. Returns
     /// the removed terminal view (if the leaf held one) so the caller can close
     /// its session, plus the [`CloseOutcome`].
-    pub fn close(&mut self, target: SpaceId) -> (CloseOutcome, Option<Entity<LocalTerminalView>>) {
+    pub fn close(&mut self, target: SpaceId) -> (CloseOutcome, Option<Entity<TerminalView>>) {
         if self.leaf_count() <= 1 {
             return (CloseOutcome::LastSpaceClosed, None);
         }
@@ -70,8 +70,8 @@ impl SpaceTree {
     pub fn fill_empty(
         &mut self,
         target: SpaceId,
-        view: Entity<LocalTerminalView>,
-    ) -> Result<(), Entity<LocalTerminalView>> {
+        view: Entity<TerminalView>,
+    ) -> Result<(), Entity<TerminalView>> {
         if let Some(leaf) = self.cur_mut().find_leaf_mut(target)
             && matches!(leaf.content, SpaceContent::Empty)
         {
@@ -84,7 +84,7 @@ impl SpaceTree {
 
     /// Take the terminal view out of leaf `id`, leaving the leaf empty. Returns
     /// the removed view, or `None` if the leaf was already empty / missing.
-    pub fn take_leaf_terminal(&mut self, id: SpaceId) -> Option<Entity<LocalTerminalView>> {
+    pub fn take_leaf_terminal(&mut self, id: SpaceId) -> Option<Entity<TerminalView>> {
         let leaf = self.cur_mut().find_leaf_mut(id)?;
         match std::mem::replace(&mut leaf.content, SpaceContent::Empty) {
             SpaceContent::Terminal(view) => Some(view),

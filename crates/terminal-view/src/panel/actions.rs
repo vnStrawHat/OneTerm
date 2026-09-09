@@ -15,9 +15,9 @@ use oneterm_actions::{
     TerminalCopy, TerminalPaste, TerminalSelectAll,
 };
 
-use super::super::handlers::edit;
 use super::super::space::{SplitDir, render_node};
 use super::TerminalPanel;
+use crate::input::edit;
 
 impl TerminalPanel {
     /// Run an edit command (copy/paste/select-all/clear) on the active

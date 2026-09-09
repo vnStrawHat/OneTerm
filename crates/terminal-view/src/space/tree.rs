@@ -5,8 +5,8 @@
 
 use gpui::{Axis, Entity, FocusHandle, WeakEntity};
 
-use super::super::view::LocalTerminalView;
 use super::node::{SpaceContent, SpaceId, SpaceLeaf, SpaceNode};
+use crate::terminal_view::TerminalView;
 
 /// Direction to split a Space in.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -43,7 +43,7 @@ pub enum CloseOutcome {
 
 /// Context threaded into a terminal's context menu so its Split / Close-Space
 /// items can target the right Space in the right panel. Cloned onto each
-/// terminal view via [`LocalTerminalView`]'s `split_ctx` field.
+/// terminal view via [`TerminalView`]'s `split_ctx` field.
 #[derive(Clone)]
 pub struct SplitContext {
     /// The panel owning the Space tree this terminal lives in.
@@ -85,7 +85,7 @@ impl SpaceTree {
     }
 
     /// Create a tree with a single terminal leaf wrapping `view`.
-    pub fn new_terminal(view: Entity<LocalTerminalView>, focus: FocusHandle) -> Self {
+    pub fn new_terminal(view: Entity<TerminalView>, focus: FocusHandle) -> Self {
         let id = SpaceId(0);
         let root = SpaceNode::Leaf(SpaceLeaf {
             id,
@@ -171,12 +171,12 @@ impl SpaceTree {
     }
 
     /// The active leaf's terminal view, if the active Space holds one.
-    pub fn active_terminal(&self) -> Option<Entity<LocalTerminalView>> {
+    pub fn active_terminal(&self) -> Option<Entity<TerminalView>> {
         self.leaf_terminal(self.active)
     }
 
     /// The terminal view held by leaf `id`, if any.
-    pub fn leaf_terminal(&self, id: SpaceId) -> Option<Entity<LocalTerminalView>> {
+    pub fn leaf_terminal(&self, id: SpaceId) -> Option<Entity<TerminalView>> {
         match &self.cur().find_leaf(id)?.content {
             SpaceContent::Terminal(view) => Some(view.clone()),
             SpaceContent::Empty => None,
@@ -191,7 +191,7 @@ impl SpaceTree {
     }
 
     /// Every terminal view in the tree (used to (re)subscribe to title events).
-    pub fn terminal_views(&self) -> Vec<Entity<LocalTerminalView>> {
+    pub fn terminal_views(&self) -> Vec<Entity<TerminalView>> {
         let mut out = Vec::new();
         self.cur().collect_terminal_views(&mut out);
         out

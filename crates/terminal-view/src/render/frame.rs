@@ -50,11 +50,6 @@ impl Fnv1a {
         self.write(&v.to_le_bytes());
     }
 
-    #[inline]
-    pub(crate) fn write_u64(&mut self, v: u64) {
-        self.write(&v.to_le_bytes());
-    }
-
     pub(crate) fn finish(self) -> u64 {
         self.0
     }
@@ -177,6 +172,7 @@ const DIM_NAMED: [NamedColor; 8] = [
 pub(crate) struct CellFlags(u16);
 
 impl CellFlags {
+    #[cfg(test)]
     pub(crate) const NONE: Self = Self(0);
     pub(crate) const INVERSE: Self = Self(1 << 0);
     pub(crate) const BOLD: Self = Self(1 << 1);
@@ -232,6 +228,7 @@ impl CellFlags {
         Self(out)
     }
 
+    #[cfg(test)]
     fn to_vte(self) -> Flags {
         let mut out = Flags::empty();
         let pairs = [
@@ -274,26 +271,16 @@ pub(crate) struct Cell<'a> {
 }
 
 impl Cell<'_> {
-    /// Nothing to draw and nothing that changes the cell background.
-    pub(crate) fn is_blank(&self) -> bool {
-        matches!(self.ch, ' ' | '\0')
-            && self.zerowidth.is_empty()
-            && self.bg == Color::Background
-            && !self.flags.intersects(
-                CellFlags::INVERSE
-                    .union(CellFlags::UNDERLINE)
-                    .union(CellFlags::STRIKEOUT),
-            )
-            && self.hyperlink.is_none()
-    }
-
     /// Whether this column holds glyph-less padding of a neighbouring wide char.
     pub(crate) fn is_spacer(&self) -> bool {
         self.flags
             .intersects(CellFlags::WIDE_CHAR_SPACER.union(CellFlags::LEADING_WIDE_CHAR_SPACER))
     }
 
-    fn from_indexed(ic: &IndexedCell) -> Cell<'_> {
+    /// The view-owned cell for a session `IndexedCell` — also the bridge for
+    /// `query_line_range_cells` slices (URL detection), which never become a
+    /// `Frame`.
+    pub(crate) fn from_indexed(ic: &IndexedCell) -> Cell<'_> {
         let c = &ic.cell;
         Cell {
             ch: c.c,
@@ -312,6 +299,11 @@ impl Cell<'_> {
     }
 }
 
+/// The OSC 8 target attached to a session cell, if any (rare path: click).
+pub(crate) fn hyperlink_uri(ic: &IndexedCell) -> Option<String> {
+    ic.cell.hyperlink().map(|h| h.uri().to_string())
+}
+
 /// One display row of the frame.
 #[derive(Clone, Copy)]
 pub(crate) struct FrameRow<'a> {
@@ -326,10 +318,6 @@ impl<'a> FrameRow<'a> {
 
     pub(crate) fn len(&self) -> usize {
         self.cells.len()
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.cells.is_empty()
     }
 
     pub(crate) fn cell(&self, col: usize) -> Cell<'a> {
@@ -377,12 +365,10 @@ impl<'a> FrameRow<'a> {
         h.finish()
     }
 
-    /// The OSC 8 target of the cell at `col`; a rare path (click / hover).
+    /// The OSC 8 target of the cell at `col`.
+    #[cfg(test)]
     pub(crate) fn hyperlink_uri(&self, col: usize) -> Option<String> {
-        self.cells
-            .get(col)
-            .and_then(|c| c.cell.hyperlink())
-            .map(|h| h.uri().to_string())
+        hyperlink_uri(&self.cells[col])
     }
 
     /// The row's display text for the semantic scanner: one entry per
@@ -490,10 +476,6 @@ impl Frame {
         self.content.display_offset
     }
 
-    pub(crate) fn total_lines(&self) -> usize {
-        self.content.total_lines
-    }
-
     pub(crate) fn damage(&self) -> Damage<'_> {
         match &self.content.damage {
             TermDamageInfo::Full => Damage::Full,
@@ -555,10 +537,6 @@ impl Frame {
     /// DECCKM: arrows send `ESC O x` instead of `ESC [ x`.
     pub(crate) fn app_cursor(&self) -> bool {
         self.content.mode.contains(TermMode::APP_CURSOR)
-    }
-
-    pub(crate) fn alt_screen(&self) -> bool {
-        self.content.mode.contains(TermMode::ALT_SCREEN)
     }
 }
 
@@ -685,6 +663,27 @@ pub(crate) mod test_support {
             self
         }
 
+        /// One OSC 8 link spanning `len` cells from `col` (one shared id, like
+        /// a real `\e]8;;uri` run).
+        pub(crate) fn hyperlink_run(
+            mut self,
+            row: usize,
+            col: usize,
+            len: usize,
+            uri: &str,
+        ) -> Self {
+            let link = Hyperlink::new(None::<&str>, uri.to_string());
+            for c in col..col + len {
+                self.cell_mut(row, c).set_hyperlink(Some(link.clone()));
+            }
+            self
+        }
+
+        /// The dense cell slice, in the shape `query_line_range_cells` returns.
+        pub(crate) fn into_cells(self) -> Vec<IndexedCell> {
+            self.content.cells
+        }
+
         pub(crate) fn cursor(mut self, row: i32, col: usize, shape: CursorShape) -> Self {
             self.content.cursor = RenderableCursor {
                 shape: match shape {
@@ -728,13 +727,6 @@ pub(crate) mod test_support {
                 content: self.content,
                 size,
             }
-        }
-    }
-
-    impl Frame {
-        /// Replace the snapshot without a session (second frame of a test).
-        pub(crate) fn replace(&mut self, other: Frame) {
-            *self = other;
         }
     }
 }
@@ -833,7 +825,6 @@ mod tests {
         );
         assert_eq!(frame.display_offset(), 2);
         assert!(!frame.app_cursor());
-        assert!(!frame.alt_screen());
     }
 
     #[test]
@@ -854,7 +845,7 @@ mod tests {
         assert_eq!(wide, vec![false, true, false, false, false]);
         assert_eq!(row.cell(3).zerowidth, &['\u{301}']);
         assert!(row.cell(2).is_spacer());
-        assert!(row.cell(4).is_blank());
+        assert_eq!(row.cell(4).ch, ' ');
         assert!(!row.wraps());
         assert_eq!(row.len(), 6);
     }
@@ -871,6 +862,5 @@ mod tests {
         let full = FrameBuilder::new(1, 1).build();
         assert!(matches!(full.damage(), Damage::Full));
         assert_eq!(full.size(), GridSize { rows: 1, cols: 1 });
-        assert_eq!(full.total_lines(), 1);
     }
 }

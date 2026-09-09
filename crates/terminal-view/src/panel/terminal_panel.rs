@@ -29,7 +29,7 @@ use oneterm_settings::TabTitleMode;
 
 use super::super::security::security_policy_from_settings;
 use super::super::space::{DragTerminalTab, SpaceId, SpaceTree, SplitContext};
-use super::super::view::{LocalTerminalView, TerminalDeps, TerminalViewEvent};
+use crate::terminal_view::{TerminalDeps, TerminalView, TerminalViewEvent};
 
 /// Initial PTY size for a freshly spawned session; the element resizes it to
 /// the real grid on the first prepaint.
@@ -113,7 +113,7 @@ impl TerminalPanel {
                 let session_entity = cx.new(|_| session);
                 let view_deps = deps.clone();
                 let view = cx.new(|cx| {
-                    let mut view = LocalTerminalView::new(session_entity, view_deps, window, cx);
+                    let mut view = TerminalView::new(session_entity, view_deps, window, cx);
                     view.duplicate_config = duplicate_config;
                     view
                 });
@@ -174,7 +174,7 @@ impl TerminalPanel {
         shell_kind_override: Option<ShellKind>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Option<Entity<LocalTerminalView>> {
+    ) -> Option<Entity<TerminalView>> {
         let shell = {
             let settings = deps.settings.read(cx);
             match shell_kind_override {
@@ -198,7 +198,7 @@ impl TerminalPanel {
         shell: LocalShellConfig,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Option<Entity<LocalTerminalView>> {
+    ) -> Option<Entity<TerminalView>> {
         let (scrollback_history, security, logging) = {
             let settings = deps.settings.read(cx);
             (
@@ -225,7 +225,7 @@ impl TerminalPanel {
         let session_entity = cx.new(|_| session);
         let view_deps = deps.clone();
         Some(cx.new(|cx| {
-            let mut view = LocalTerminalView::new(session_entity, view_deps, window, cx);
+            let mut view = TerminalView::new(session_entity, view_deps, window, cx);
             view.duplicate_config = Some(duplicate_config);
             view
         }))
@@ -239,7 +239,7 @@ impl TerminalPanel {
     /// Point `view`'s context menu at Space `space_id` in this panel.
     pub(super) fn attach_split_ctx(
         &self,
-        view: &Entity<LocalTerminalView>,
+        view: &Entity<TerminalView>,
         space_id: SpaceId,
         cx: &mut Context<Self>,
     ) {
@@ -265,7 +265,7 @@ impl TerminalPanel {
 
     /// The active Space's terminal view (used by Edit ▸ Find). `None` when the
     /// active Space is empty.
-    pub(crate) fn active_view(&self) -> Option<Entity<LocalTerminalView>> {
+    pub(crate) fn active_view(&self) -> Option<Entity<TerminalView>> {
         self.tree.active_terminal()
     }
 
@@ -299,7 +299,7 @@ impl TerminalPanel {
     /// title (`docs/agent-panel-display.md` §2.1).
     ///
     /// Reads the active terminal's session title via `v.read(cx)`. Do **not**
-    /// call this from inside a `LocalTerminalView::update` closure on the active
+    /// call this from inside a `TerminalView::update` closure on the active
     /// terminal — it would re-enter the view's lease and panic
     /// (`entity_map::read` double-lease). Use [`Self::tab_label_with_title`]
     /// instead, passing the title fetched from the already-leased view's own
@@ -319,7 +319,7 @@ impl TerminalPanel {
 
     /// Same as [`Self::tab_label`] but takes the live session title as a
     /// parameter instead of reading the active terminal view. Use this from
-    /// contexts where the active `LocalTerminalView` is already being updated
+    /// contexts where the active `TerminalView` is already being updated
     /// (e.g. `push_agent_status` inside the view's `update` closure) — reading
     /// it again would re-enter the view's lease and panic.
     ///

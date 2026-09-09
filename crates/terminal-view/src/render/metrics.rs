@@ -143,7 +143,6 @@ pub(crate) struct GridGeometry {
     pub metrics: CellMetrics,
     pub size: GridSize,
     pub gutter_width: Pixels,
-    pub padding: Edges<Pixels>,
 }
 
 impl GridGeometry {
@@ -165,7 +164,6 @@ impl GridGeometry {
             metrics,
             size: grid_size_for(bounds.size, gutter_width, padding, &metrics),
             gutter_width,
-            padding,
         }
     }
 
@@ -194,12 +192,14 @@ impl GridGeometry {
     }
 
     /// Whole `(row, col)` under `p`; `None` outside the grid.
+    #[cfg(test)]
     pub(crate) fn cell_at(&self, p: Point<Pixels>) -> Option<(usize, usize)> {
         self.pixel_to_grid(p)
             .map(|(row, col)| (row as usize, col as usize))
     }
 
     /// Bottom edge of the last row.
+    #[cfg(test)]
     pub(crate) fn grid_bottom(&self) -> Pixels {
         self.cell_origin(usize::from(self.size.rows), 0).y
     }

@@ -434,3 +434,26 @@ re-exported at that crate's root.
 - [x] `cursor_override_respects_hidden`, `cursor_hollow_when_unfocused`,
       `cursor_glyph_repaint_only_for_filled_block`, `cursor_blink_gating`.
 - [x] `gutter_labels_use_fallbacks` (`[--:--:--]`, newest/oldest reuse).
+
+## Amendments (US-0049 implementation)
+
+Recorded when the swap removed the `#[allow(dead_code)]` roots and every item had to earn its
+place under `-D warnings`:
+
+1. `TextRunPlan` carries `col`, `line`, `color_start`, `color_end`; `cols` is a `#[cfg(test)]`
+   seam (run extents in the row-plan tests) and `bold` / `italic` are gone — the shaped line
+   already binds the font variant.
+2. `GridGeometry` has no `padding` field (the constructor still takes the padding to place the
+   origin); `cell_at` and `grid_bottom` are `#[cfg(test)]`.
+3. Removed as unused by the engine: `Frame::total_lines`, `Frame::alt_screen` (the view asks
+   the session), `FrameRow::is_empty`, `Cell::is_blank`, `Fnv1a::write_u64`,
+   `PlanCache::row`… kept as `#[cfg(test)]` seams: `CellFlags::NONE`, `CellFlags::to_vte`,
+   `FrameRow::hyperlink_uri`, `PlanCache::{row, url_mask}`, `GlyphCache::len`.
+4. `Cell::from_indexed` is `pub(crate)` and `frame::hyperlink_uri(&IndexedCell)` was added:
+   `url/detect.rs` reads `query_line_range_cells` slices through them, keeping the engine's
+   cell type inside `frame.rs`. `FrameBuilder` gained `hyperlink_run` and `into_cells` for the
+   URL tests.
+5. `RenderState::theme` / `background` were removed (the element reads `inputs.theme`);
+   `RenderInputs.search` is refilled in place by `SearchState::visible_highlights_into`.
+6. `RenderState::metrics` is also called from `TerminalView::render` (cached, so free on a
+   steady frame) to size the scrollbar track before the element measures.

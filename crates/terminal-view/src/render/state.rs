@@ -10,7 +10,7 @@ use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::rc::Rc;
 
-use gpui::{App, Edges, Font, Hsla, Pixels, ShapedLine, Window, px};
+use gpui::{App, Edges, Font, Pixels, ShapedLine, Window, px};
 
 use super::cursor::{self, CursorConfig, CursorPaint};
 use super::diagnostics::FrameStats;
@@ -361,14 +361,6 @@ impl RenderState {
     /// Left inset of gutter labels inside the element.
     pub(crate) fn gutter_inset() -> Pixels {
         px(GUTTER_PAD / 2.0)
-    }
-
-    pub(crate) fn theme(&self) -> &TerminalTheme {
-        &self.inputs.theme
-    }
-
-    pub(crate) fn background(&self) -> Hsla {
-        self.inputs.theme.bg
     }
 }
 

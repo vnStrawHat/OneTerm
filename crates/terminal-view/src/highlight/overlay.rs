@@ -5,9 +5,7 @@
 //! and the enabled flag. The shared [`RuleSet`] is global (built once via
 //! `LazyLock`).
 
-use oneterm_highlight::{
-    Class, RowRole, RowRoles, RuleSet, ShellProfile, scan_line, scan_line_into,
-};
+use oneterm_highlight::{Class, RowRole, RowRoles, RuleSet, ShellProfile, scan_line_into};
 
 /// Per-view semantic overlay — produces `cell_class` for one display row.
 ///
@@ -58,24 +56,9 @@ impl SemanticOverlay {
         self.profile = profile;
     }
 
-    /// Scan one line of display text → `Vec<u8>` of `Class` (one per char).
-    ///
-    /// When disabled, returns an all-`Default` vec (the caller skips the merge).
-    pub fn scan(&self, line: &str, display_row: usize) -> Vec<u8> {
-        if !self.enabled {
-            return vec![Class::Default as u8; line.chars().count()];
-        }
-        let rules = RuleSet::global();
-        let role = if !self.row_roles.role.is_empty() {
-            self.row_roles.role_at(display_row)
-        } else {
-            RowRole::Output
-        };
-        scan_line(line, rules, &self.profile, role)
-    }
-
-    /// [`Self::scan`] into a caller-owned buffer (cleared and refilled), so a
-    /// per-row scan reuses one allocation across frames.
+    /// Scan one line of display text into a caller-owned buffer of `Class`
+    /// bytes (one per char, cleared and refilled), so a per-row scan reuses one
+    /// allocation across frames. When disabled the buffer is all `Default`.
     pub fn scan_into(&self, line: &str, display_row: usize, out: &mut Vec<u8>) {
         out.clear();
         if !self.enabled {
@@ -96,27 +79,34 @@ impl SemanticOverlay {
 mod tests {
     use super::*;
 
+    fn scan(o: &SemanticOverlay, line: &str) -> Vec<u8> {
+        let mut out = Vec::new();
+        o.scan_into(line, 0, &mut out);
+        out
+    }
+
     #[test]
     fn disabled_returns_all_default() {
         let o = SemanticOverlay::new(ShellProfile::Unix, false);
-        let c = o.scan("error: failed", 0);
+        let c = scan(&o, "error: failed");
+        assert_eq!(c.len(), "error: failed".chars().count());
         assert!(c.iter().all(|&v| v == Class::Default as u8));
     }
 
     #[test]
     fn enabled_tags_keywords() {
         let o = SemanticOverlay::new(ShellProfile::Unix, true);
-        let c = o.scan("error: failed", 0);
+        let c = scan(&o, "error: failed");
         assert_eq!(c[0], Class::Error as u8);
     }
 
     #[test]
-    fn scan_into_matches_scan_and_reuses_buffer() {
+    fn scan_into_reuses_the_buffer() {
         let o = SemanticOverlay::new(ShellProfile::Unix, true);
         let mut buf = Vec::with_capacity(64);
         let ptr = buf.as_ptr();
         o.scan_into("error: failed", 0, &mut buf);
-        assert_eq!(buf, o.scan("error: failed", 0));
+        assert_eq!(buf, scan(&o, "error: failed"));
         assert_eq!(buf.as_ptr(), ptr, "buffer must be reused");
         let off = SemanticOverlay::new(ShellProfile::Unix, false);
         off.scan_into("error", 0, &mut buf);
@@ -127,7 +117,7 @@ mod tests {
     fn default_overlay_scans() {
         let o = SemanticOverlay::default();
         assert!(o.is_enabled());
-        let c = o.scan("$ ls", 0);
+        let c = scan(&o, "$ ls");
         assert_eq!(c[0], Class::PromptSign as u8);
     }
 }
