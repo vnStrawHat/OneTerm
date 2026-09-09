@@ -53,6 +53,7 @@ OneTerm/
 │   │       ├── ssh_config.rs       # SshConfig + SshAuthMethod (shared connect params; masked Debug)
 │   │       ├── persistence.rs      # atomic_write / update_json_file / quarantine_file + schema helpers
 │   │       ├── session_duplicate.rs # SessionDuplicateConfig (duplicate-tab contract)
+│   │       ├── input_channel.rs    # InputChannel A..E (broadcast input channels; ALL/label/index)
 │   │       └── config/             # Local shell config + shared UI enums
 │   │           ├── mod.rs
 │   │           ├── shell.rs        # LocalShellConfig + ShellKind + resolve_shell + config_dir
@@ -105,6 +106,7 @@ OneTerm/
 │   │       ├── agent_model.rs      # Folded OSC 9;7 agent card model (+ agent_model_tests.rs)
 │   │       ├── agent_registry.rs   # AgentRegistry (global Entity): fold/lifecycle/stale/summary behind the Agent Panel
 │   │       ├── completion_history.rs # Process-global CompletionHistory entity (memory completion source)
+│   │       ├── input_channel_registry.rs # InputChannelRegistry (global Entity): per-Space channel membership + input fan-out
 │   │       ├── dock_persistence.rs # docks.json path + DockDocument schema owner (read/update transaction, quarantine)
 │   │       ├── dock_util.rs        # DockArea walking + set_right_dock_open (shared shell/feature helper)
 │   │       ├── panel_names.rs      # Registered dock panel name constants (persisted contract)

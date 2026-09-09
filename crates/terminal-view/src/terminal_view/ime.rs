@@ -8,6 +8,7 @@
 use std::ops::Range;
 
 use gpui::{Bounds, EntityInputHandler, Pixels, Point, UTF16Selection, Window, size};
+use oneterm_state::BroadcastInput;
 
 use super::TerminalView;
 
@@ -67,6 +68,8 @@ impl EntityInputHandler for TerminalView {
             s.scroll_to_bottom();
             s.commit_text(text);
         });
+        self.deps
+            .fan_out(cx.entity_id(), BroadcastInput::Text(text), cx);
         self.has_bell = false;
         cx.notify();
     }

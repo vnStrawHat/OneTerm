@@ -15,6 +15,7 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     dialog::DialogFooter,
 };
+use oneterm_state::BroadcastInput;
 use oneterm_terminal::TargetDecision;
 
 use super::TerminalView;
@@ -84,13 +85,21 @@ impl TerminalView {
                 session.update(cx, |s, _| s.scroll_to_bottom());
                 self.scrolled(cx);
             }
-            KeyAction::Copy => copy_selection(&session, window, cx),
-            KeyAction::Paste => paste_clipboard(&session, window, cx),
+            KeyAction::Copy => {
+                let origin = self.broadcast_origin(cx);
+                copy_selection(&session, &origin, window, cx);
+            }
+            KeyAction::Paste => {
+                let origin = self.broadcast_origin(cx);
+                paste_clipboard(&session, &origin, window, cx);
+            }
             // The platform / IME path delivers the text: do not stop
             // propagation, or the character never arrives.
             KeyAction::Ignore | KeyAction::Unhandled => return,
             KeyAction::Interrupt => {
                 interrupt(&session, cx);
+                self.deps
+                    .fan_out(cx.entity_id(), BroadcastInput::Interrupt, cx);
                 self.clear_bell(cx);
             }
             KeyAction::Send(spec, mods) => {
@@ -101,9 +110,11 @@ impl TerminalView {
                 }
                 // The frame's DECCKM flag is at most one paint old.
                 let app_cursor = self.render_state.borrow().frame.app_cursor();
-                if !send_key(&session, &spec, mods, app_cursor, cx) {
+                let Some(bytes) = send_key(&session, &spec, mods, app_cursor, cx) else {
                     return;
-                }
+                };
+                self.deps
+                    .fan_out(cx.entity_id(), BroadcastInput::Bytes(&bytes), cx);
                 self.clear_bell(cx);
             }
         }
@@ -252,7 +263,10 @@ impl TerminalView {
                 cx.stop_propagation();
             }
             MouseOutcome::OpenUrl(open) => open_detected_url(open, window, cx),
-            MouseOutcome::CopySelection => copy_selection(&self.session, window, cx),
+            MouseOutcome::CopySelection => {
+                let origin = self.broadcast_origin(cx);
+                copy_selection(&self.session, &origin, window, cx);
+            }
         }
         self.scrolled(cx);
     }

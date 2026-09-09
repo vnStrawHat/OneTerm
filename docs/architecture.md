@@ -12,7 +12,7 @@ Use this page and `docs/agents/structure.md` when locating current implementatio
 | Terminal engine | `oneterm-terminal` | Terminal model, session contract, encoding, OSC, search, printable-output logging | `crates/terminal/src/lib.rs`, `crates/terminal/src/model.rs`, `crates/terminal/src/session.rs`, `crates/terminal/src/logging.rs` |
 | Completion engine | `oneterm-completion` | Auto-completion engine (gpui-free): embedded command catalogs, line parsing + subcommand resolution, matching/ranking, in-session history, secret redaction | `crates/completion/src/lib.rs`, `crates/completion/src/engine.rs`, `crates/completion/src/catalog.rs`, `crates/completion/src/history.rs`, `crates/completion/src/redact.rs` |
 | Shared services | `oneterm-settings` | Persistent terminal and UI settings | `crates/settings/src/lib.rs` |
-| Shared services | `oneterm-state` | App-scoped services, workspace state, typed dock persistence, registered dock panel names, Agent folded model, process-global completion history | `crates/state/src/lib.rs`, `crates/state/src/services.rs`, `crates/state/src/dock_persistence.rs`, `crates/state/src/panel_names.rs`, `crates/state/src/agent_registry.rs`, `crates/state/src/completion_history.rs` |
+| Shared services | `oneterm-state` | App-scoped services, workspace state, typed dock persistence, registered dock panel names, Agent folded model, process-global completion history, broadcast input channel membership | `crates/state/src/lib.rs`, `crates/state/src/services.rs`, `crates/state/src/dock_persistence.rs`, `crates/state/src/panel_names.rs`, `crates/state/src/agent_registry.rs`, `crates/state/src/completion_history.rs`, `crates/state/src/input_channel_registry.rs` |
 | Shared services | `oneterm-update` | GitHub Releases auto-update service, release selection, download, verification, staging, and install orchestration | `crates/update/src/lib.rs`, `crates/update/src/config.rs`, `crates/update/src/github.rs`, `crates/update/src/archive.rs`, `crates/update/src/install.rs` |
 | Shell | `oneterm-workspace` | Feature-agnostic window, layout, dock persistence, status bar | `crates/workspace/src/lib.rs`, `crates/workspace/src/layout/` |
 | Backend | `oneterm-local-shell` | Local PTY session implementation | `crates/local-shell/src/lib.rs`, `crates/local-shell/src/session_terminal.rs` |
@@ -61,9 +61,9 @@ Workspace active terminal and SFTP state remains keyed by DockArea (`AppState`),
 while durable settings and persistence policy remain process-wide where documented.
 
 Shared globals follow one init contract: `AppState::init`, `UiConfig::init`,
-`TerminalSettings::init`, `AgentRegistry::init` and `GlobalCompletionHistory::init`
-are idempotent — the first call installs, later calls are no-ops. Only the
-composition root calls them; the shell assumes they exist.
+`TerminalSettings::init`, `AgentRegistry::init`, `GlobalCompletionHistory::init` and
+`InputChannelRegistry::init` are idempotent — the first call installs, later calls
+are no-ops. Only the composition root calls them; the shell assumes they exist.
 
 The exit-time `docks.json` write is owned by the shell: `OneTermWorkspace`
 registers an entity-bound `on_app_quit` (quit while the window is open) and an

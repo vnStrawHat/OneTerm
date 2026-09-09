@@ -23,10 +23,14 @@ use oneterm_theme::notif_ext::notify;
 use super::edit;
 use crate::panel::{DuplicateDestination, TerminalPanel};
 use crate::space::{SpaceId, SplitContext, SplitDir};
+use crate::terminal_view::BroadcastOrigin;
 
 /// What the menu builder needs to know about the terminal it belongs to.
 pub(crate) struct MenuContext {
     pub session: Entity<Box<dyn TerminalSession>>,
+    /// The terminal the menu belongs to — a paste from here reaches its
+    /// broadcast channel peers like any other input.
+    pub origin: BroadcastOrigin,
     /// Re-focused after every item so typing continues in the terminal.
     pub focus: FocusHandle,
     /// Enables the Copy item.
@@ -296,11 +300,12 @@ fn edit_item(
     command: edit::EditCommand,
 ) -> PopupMenuItem {
     let session = ctx.session.clone();
+    let origin = ctx.origin.clone();
     let f = ctx.focus.clone();
     PopupMenuItem::new(label)
         .action(action)
         .on_click(move |_, window, cx| {
-            command(&session, window, cx);
+            command(&session, &origin, window, cx);
             window.focus(&f, cx);
         })
 }

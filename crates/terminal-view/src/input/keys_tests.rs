@@ -240,7 +240,7 @@ fn ctrl_space_encodes_nul(cx: &mut TestAppContext) {
     let (session, probe) = FakeTerminalSession::boxed(4, 8, "");
     cx.update(|cx| {
         let session = cx.new(|_| session);
-        assert!(send_key(&session, &spec, mods, false, cx));
+        assert!(send_key(&session, &spec, mods, false, cx).is_some());
     });
     assert_eq!(probe.writes(), vec![vec![0u8]]);
 }
@@ -257,7 +257,7 @@ fn unmapped_chord_writes_nothing(cx: &mut TestAppContext) {
     let (session, probe) = FakeTerminalSession::boxed(4, 8, "");
     cx.update(|cx| {
         let session = cx.new(|_| session);
-        assert!(!send_key(&session, &spec, mods, false, cx));
+        assert!(send_key(&session, &spec, mods, false, cx).is_none());
     });
     assert!(probe.writes().is_empty());
 }

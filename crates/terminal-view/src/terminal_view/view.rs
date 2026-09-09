@@ -12,13 +12,17 @@ use std::time::Duration;
 
 use async_channel::Receiver;
 use gpui::{
-    App, AsyncApp, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, KeyBinding, NoAction,
-    Subscription, Task, WeakEntity, Window,
+    App, AsyncApp, ClipboardItem, Context, Entity, EntityId, EventEmitter, FocusHandle, KeyBinding,
+    NoAction, Subscription, Task, WeakEntity, Window,
 };
 use gpui_component::ActiveTheme as _;
+#[cfg(test)]
+use oneterm_core::InputChannel;
 use oneterm_core::SessionDuplicateConfig;
 use oneterm_settings::{TerminalBlink, TerminalSettings};
-use oneterm_state::{AgentRegistry, CompletionHistory, GlobalCompletionHistory};
+use oneterm_state::{
+    AgentRegistry, BroadcastInput, CompletionHistory, GlobalCompletionHistory, InputChannelRegistry,
+};
 use oneterm_terminal::security_policy::MAX_QUEUED_NOTIFICATIONS;
 use oneterm_terminal::{
     SessionEvent, SessionKind, TerminalPalette, TerminalProgress, TerminalSession, encode_osc52,
@@ -51,6 +55,9 @@ pub(crate) struct TerminalDeps {
     /// The cross-tab completion history; `None` when completion is not
     /// initialised.
     pub(crate) completion_history: Option<Entity<CompletionHistory>>,
+    /// Broadcast input channel membership; `None` when the channels are not
+    /// initialised (tests, tools), which makes every fan-out a no-op.
+    pub(crate) input_channels: Option<Entity<InputChannelRegistry>>,
 }
 
 impl TerminalDeps {
@@ -62,7 +69,38 @@ impl TerminalDeps {
             settings: TerminalSettings::global(cx),
             agent_registry: AgentRegistry::try_global(cx),
             completion_history: GlobalCompletionHistory::try_global(cx),
+            input_channels: InputChannelRegistry::try_global(cx),
         }
+    }
+
+    /// Repeat `input` on the channel peers of `origin`. A no-op without a
+    /// registry, and (in the registry) for a view that joined no channel.
+    pub(crate) fn fan_out(&self, origin: EntityId, input: BroadcastInput<'_>, cx: &mut App) {
+        BroadcastOrigin {
+            id: origin,
+            channels: self.input_channels.clone(),
+        }
+        .fan_out(input, cx);
+    }
+}
+
+/// The view an input came from, for the fan-out of the edit commands: they are
+/// reached through a fn pointer shared with the menu and the panel actions, so
+/// the origin travels as data instead of as a view reference.
+#[derive(Clone)]
+pub(crate) struct BroadcastOrigin {
+    pub(crate) id: EntityId,
+    pub(crate) channels: Option<Entity<InputChannelRegistry>>,
+}
+
+impl BroadcastOrigin {
+    /// Repeat `input` on this origin's channel peers; a no-op without a registry.
+    pub(crate) fn fan_out(&self, input: BroadcastInput<'_>, cx: &mut App) {
+        let Some(registry) = self.channels.clone() else {
+            return;
+        };
+        let origin = self.id;
+        registry.update(cx, |registry, cx| registry.fan_out(origin, input, cx));
     }
 }
 
@@ -368,6 +406,48 @@ impl TerminalView {
         let key = cx.entity_id();
         if let Some(registry) = self.deps.agent_registry.clone() {
             registry.update(cx, |reg, cx| reg.remove_terminal(key, cx));
+        }
+        // A closed Space is no longer a broadcast target.
+        self.leave_channel(cx);
+    }
+
+    /// Join `channel`, leaving whichever channel this Space was in.
+    ///
+    /// Test-gated until US-0056 dispatches the join / leave actions from the
+    /// context menu; `leave_channel` is already used by `shutdown`.
+    #[cfg(test)]
+    pub(crate) fn join_channel(&mut self, channel: InputChannel, cx: &mut Context<Self>) {
+        let Some(registry) = self.deps.input_channels.clone() else {
+            return;
+        };
+        let id = cx.entity_id();
+        let session = self.session.clone();
+        registry.update(cx, |registry, cx| registry.join(id, channel, session, cx));
+    }
+
+    /// Leave the channel this Space is in, if any.
+    pub(crate) fn leave_channel(&mut self, cx: &mut Context<Self>) {
+        let Some(registry) = self.deps.input_channels.clone() else {
+            return;
+        };
+        let id = cx.entity_id();
+        registry.update(cx, |registry, cx| {
+            registry.leave(id, cx);
+        });
+    }
+
+    /// The channel this Space is in, if any. Test-gated with `join_channel`.
+    #[cfg(test)]
+    pub(crate) fn channel(&self, cx: &Context<Self>) -> Option<InputChannel> {
+        let registry = self.deps.input_channels.as_ref()?;
+        registry.read(cx).channel_of(cx.entity_id())
+    }
+
+    /// The origin of any input this view produces, for the fan-out.
+    pub(crate) fn broadcast_origin(&self, cx: &Context<Self>) -> BroadcastOrigin {
+        BroadcastOrigin {
+            id: cx.entity_id(),
+            channels: self.deps.input_channels.clone(),
         }
     }
 

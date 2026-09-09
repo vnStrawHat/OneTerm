@@ -293,23 +293,22 @@ fn named_key(key: &str) -> Option<NamedKey> {
 /// Apply [`KeyAction::Send`]: snap the viewport back to the live screen (the
 /// user is typing, so they want to see the echo) and write the encoding.
 ///
-/// Returns `false` when the chord has no encoding (Ctrl + non-ASCII), in which
-/// case nothing was written and nothing failed.
+/// Returns the bytes that were sent so the caller can repeat them on its
+/// broadcast channel, or `None` when the chord has no encoding (Ctrl +
+/// non-ASCII), in which case nothing was written and nothing failed.
 pub(crate) fn send_key(
     session: &Entity<Box<dyn TerminalSession>>,
     spec: &KeySpec,
     mods: KeyMods,
     app_cursor: bool,
     cx: &mut App,
-) -> bool {
-    let Some(bytes) = encode_key(spec, mods, app_cursor) else {
-        return false;
-    };
+) -> Option<Vec<u8>> {
+    let bytes = encode_key(spec, mods, app_cursor)?;
     session.update(cx, |s, _| {
         s.scroll_to_bottom();
         report_generated_input("key", s.write(&bytes));
     });
-    true
+    Some(bytes)
 }
 
 /// Apply [`KeyAction::Interrupt`]: SIGINT, snapping to the live screen. Runs

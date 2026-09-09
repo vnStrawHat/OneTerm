@@ -5,7 +5,8 @@
 //!
 //! - **runtime state** shared across features: [`AppState`] (active SFTP
 //!   backend / cwd source per workspace), [`AgentRegistry`] (the folded OSC 9;7
-//!   agent model behind the Agent Panel), [`CompletionHistory`];
+//!   agent model behind the Agent Panel), [`CompletionHistory`],
+//!   [`InputChannelRegistry`] (broadcast input channel membership + fan-out);
 //! - **injection**: [`AppServices`] — the single composition-root bundle through
 //!   which features receive the session factory and contribute the workspace
 //!   commands / active-terminal metrics / agent focuser the shell and other
@@ -23,6 +24,7 @@ pub mod completion_history;
 pub mod dock_persistence;
 pub mod dock_util;
 pub mod form_dialog;
+pub mod input_channel_registry;
 pub mod panel_names;
 pub mod persist_queue;
 pub mod services;
@@ -33,5 +35,6 @@ pub use agent_registry::{
 };
 pub use app_state::AppState;
 pub use completion_history::{CompletionHistory, GlobalCompletionHistory};
+pub use input_channel_registry::{BroadcastInput, InputChannelRegistry};
 pub use persist_queue::PersistQueue;
 pub use services::AppServices;

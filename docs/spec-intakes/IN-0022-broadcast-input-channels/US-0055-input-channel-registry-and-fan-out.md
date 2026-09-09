@@ -10,8 +10,8 @@ Created: 2026-09-09
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
-- [ ] In progress
-- [ ] Implemented
+- [x] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -32,23 +32,23 @@ non-member. No UI yet: joining is only reachable from code and tests.
 
 ## Scope
 
-- [ ] In scope: `InputChannel` in `oneterm-core`; `InputChannelRegistry`, `Member`,
+- [x] In scope: `InputChannel` in `oneterm-core`; `InputChannelRegistry`, `Member`,
   `BroadcastInput` in `oneterm-state` with `init` wired where `AgentRegistry::init` runs;
   `TerminalDeps.input_channels`; the four hooks in `crates/terminal-view`;
   `TerminalView::{join_channel, leave_channel, channel}`; `shutdown` leaves; unit tests.
-- [ ] Out of scope: actions, menu, chips, frame, key bindings (US-0056); persistence.
+- [x] Out of scope: actions, menu, chips, frame, key bindings (US-0056); persistence.
 
 ## Acceptance
 
-- [ ] `join` moves a member between channels and orders members by join sequence.
-- [ ] `leave` and `close` remove members; `close` returns the removed count.
-- [ ] `fan_out` writes the same payload to every peer of the origin's channel, skips the
+- [x] `join` moves a member between channels and orders members by join sequence.
+- [x] `leave` and `close` remove members; `close` returns the removed count.
+- [x] `fan_out` writes the same payload to every peer of the origin's channel, skips the
   origin, writes nothing for a non-member origin, and continues after one peer's write error.
-- [ ] A member view's `send_key`, IME commit, paste, and Ctrl+C each reach two peer mock
+- [x] A member view's `send_key`, IME commit, paste, and Ctrl+C each reach two peer mock
   sessions and not a third non-member view; the origin's own write path is unchanged.
-- [ ] A view without a registry behaves exactly as today.
-- [ ] `TerminalView::shutdown` removes the member.
-- [ ] `pwsh scripts/ci-local.ps1` green.
+- [x] A view without a registry behaves exactly as today.
+- [x] `TerminalView::shutdown` removes the member.
+- [x] `pwsh scripts/ci-local.ps1` green.
 
 ## Documentation
 
@@ -73,7 +73,14 @@ Reason: the registry is a new global other crates will look for.
 
 ### Reconciliation
 
-Before completion, list docs changed or confirm the recorded no-change reason remains valid.
+- `docs/agents/structure.md` — added `crates/core/src/input_channel.rs` and
+  `crates/state/src/input_channel_registry.rs` to the crate map.
+- `docs/architecture.md` — `oneterm-state` row now lists broadcast input channel membership
+  and the registry file; `InputChannelRegistry::init` added to the idempotent init contract.
+- `docs/terminal-backend.md` §5 — reviewed, unchanged: no `TerminalSession` method changed.
+- `docs/agents/crate-dependency-rules.md` — reviewed, unchanged: no new crate edge
+  (`oneterm-state` already depends on `oneterm-terminal`; the new dev-dependency only enables
+  that crate's existing `test-support` feature).
 
 ## Context
 
@@ -86,11 +93,11 @@ Before completion, list docs changed or confirm the recorded no-change reason re
 
 ## Plan
 
-- [ ] `InputChannel` + tests in `oneterm-core`.
-- [ ] Registry + tests in `oneterm-state`; `init` beside `AgentRegistry::init`.
-- [ ] `TerminalDeps.input_channels`, `fan_out` helper, four hooks, `shutdown` leave.
-- [ ] View-level tests with three views and mock sessions.
-- [ ] Update `docs/agents/structure.md`; run the gate.
+- [x] `InputChannel` + tests in `oneterm-core`.
+- [x] Registry + tests in `oneterm-state`; `init` in the composition root.
+- [x] `TerminalDeps.input_channels`, `fan_out` helper, four hooks, `shutdown` leave.
+- [x] View-level tests with three views and mock sessions.
+- [x] Update `docs/agents/structure.md` + `docs/architecture.md`; run the gate.
 
 ## Decisions
 
@@ -102,17 +109,52 @@ Before completion, list docs changed or confirm the recorded no-change reason re
 - `pwsh scripts/ci-local.ps1`
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
+- [x] Unit proof
 - [ ] Integration proof
 - [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+Commands (Windows 11, `pwsh`):
+
+- `cargo test -p oneterm-core -p oneterm-state -p oneterm-terminal-view` — pass:
+  `oneterm-core` 45, `oneterm-state` 37, `oneterm-terminal-view` 273 (2 ignored). Nine tests
+  are new: one for `InputChannel`, five for the registry (join order + move, leave/close
+  counts, `channels_in` order, fan-out reaches peers only, non-member and lone-member write
+  nothing, a failing peer does not stop the loop), three at view level (the four input paths
+  reach both peers and not the fourth Space, a view without a registry, `shutdown` leaves).
+- `pwsh scripts/ci-local.ps1` — `ci-local: all checks passed` (fmt, clippy `-D warnings`,
+  workspace tests, dependency graph, doc paths, English check, completion catalogs,
+  third-party notices).
+
+Deviations from the LLD, all forced by the existing code:
+
+- `send_key` returns `Option<Vec<u8>>` (the bytes it wrote) instead of taking the origin id
+  and `&TerminalDeps`. The fan-out call then sits in `TerminalView::on_key_down`, where the
+  origin id already is, and `input/keys.rs` stays free of registry knowledge. Same for
+  `interrupt` and the IME commit, which the view calls directly.
+- Paste is reached through the shared `EditCommand` fn pointer (menu, panel action, key
+  chord), so it cannot read the view. `EditCommand` gained one parameter, a
+  `BroadcastOrigin { id, channels }` copied out of the view — the LLD's own suggestion. The
+  three non-input edit commands ignore it.
+- `TerminalView::channel` takes `&Context<Self>` rather than `&App`: the channel is keyed by
+  the view's `EntityId`, which only a `Context` exposes.
+- `join_channel` and `channel` are `#[cfg(test)]` until US-0056 dispatches the actions;
+  without a caller the lib build fails `clippy -D warnings` on `dead_code`, and the
+  repository uses no `allow(dead_code)`. US-0056 removes the gate.
+- `Member` is private to `input_channel_registry`: nothing outside constructs or reads it,
+  and `members()` hands out `(EntityId, session)` pairs as the LLD interface list specifies.
+- `InputChannelRegistry::init` is wired in `crates/app/src/init.rs` beside the other shared
+  globals rather than literally next to the `AgentRegistry::init` call, which lives inside
+  the Agent feature's own `init` — channels are not an agent concern.
+
+Gaps: none for this packet. Peer write failures are logged (`report_generated_input` /
+`report_best_effort`) and never abort the loop; no UI, actions, chips, frame, key bindings or
+persistence — those are US-0056 and out of scope here.
 
 ## Handoff
 
-Waiting for owner review of IN-0022 before implementation starts.
+US-0056 can start.

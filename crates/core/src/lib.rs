@@ -8,6 +8,7 @@
 pub mod config;
 pub mod editor_launcher;
 pub mod error;
+pub mod input_channel;
 pub mod persistence;
 pub mod schema;
 pub mod session_duplicate;
@@ -18,6 +19,7 @@ pub mod terminal_logging;
 pub use config::{LocalShellConfig, RightDockMode, ShellKind, config_dir, home_dir};
 pub use editor_launcher::{EditorChoice, launch_editor};
 pub use error::{AppError, ConnectPhase, SftpStatus};
+pub use input_channel::InputChannel;
 pub use persistence::{atomic_write, quarantine_file, update_json_file};
 pub use schema::{
     SCHEMA_VERSION_FIELD, migrate_json_value, parse_versioned_document, schema_version,

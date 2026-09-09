@@ -11,6 +11,16 @@ use oneterm_terminal::TerminalSession;
 use oneterm_terminal::test_support::{FakeInputCall, FakeSessionProbe, FakeTerminalSession};
 
 use super::edit::{copy_selection, paste_clipboard, select_all};
+use crate::terminal_view::BroadcastOrigin;
+
+/// These tests drive the edit commands directly, without a view: no channel
+/// registry, so every fan-out is a no-op.
+fn origin(session: &Entity<Box<dyn TerminalSession>>) -> BroadcastOrigin {
+    BroadcastOrigin {
+        id: session.entity_id(),
+        channels: None,
+    }
+}
 
 struct Host;
 
@@ -45,20 +55,20 @@ fn copy_noop_without_selection(cx: &mut TestAppContext) {
     let (session, probe, cx) = window(cx, "hello");
     cx.update(|window, cx| {
         cx.write_to_clipboard(ClipboardItem::new_string("untouched".into()));
-        copy_selection(&session, window, cx);
+        copy_selection(&session, &origin(&session), window, cx);
         assert_eq!(
             cx.read_from_clipboard().and_then(|i| i.text()).as_deref(),
             Some("untouched"),
             "copying without a selection must not clear the clipboard"
         );
         probe.set_selection(Some("picked".into()));
-        copy_selection(&session, window, cx);
+        copy_selection(&session, &origin(&session), window, cx);
         assert_eq!(
             cx.read_from_clipboard().and_then(|i| i.text()).as_deref(),
             Some("picked")
         );
         // Select All reaches the session unconditionally.
-        select_all(&session, window, cx);
+        select_all(&session, &origin(&session), window, cx);
         assert!(probe.input_calls().contains(&FakeInputCall::SelectAll));
     });
 }
@@ -68,7 +78,7 @@ fn paste_scrolls_to_bottom_then_pastes(cx: &mut TestAppContext) {
     let (session, probe, cx) = window(cx, "");
     cx.update(|window, cx| {
         cx.write_to_clipboard(ClipboardItem::new_string("ls -al".into()));
-        paste_clipboard(&session, window, cx);
+        paste_clipboard(&session, &origin(&session), window, cx);
     });
     // The viewport snaps back to the live screen before the bytes go out.
     assert_eq!(probe.input_calls(), vec![FakeInputCall::ScrollToBottom]);
@@ -84,7 +94,7 @@ fn paste_too_large_notifies(cx: &mut TestAppContext) {
     cx.update(|window, cx| {
         cx.write_to_clipboard(ClipboardItem::new_string(huge));
         // Pushes the Warning notification; nothing may reach the PTY.
-        paste_clipboard(&session, window, cx);
+        paste_clipboard(&session, &origin(&session), window, cx);
     });
     assert!(probe.writes().is_empty());
 }

@@ -4,14 +4,19 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use gpui::{ClipboardItem, TestAppContext};
+use gpui::{
+    ClipboardItem, EntityInputHandler as _, KeyDownEvent, Keystroke, Modifiers, TestAppContext,
+};
+use oneterm_core::InputChannel;
 use oneterm_settings::TerminalBlink;
+use oneterm_state::InputChannelRegistry;
 use oneterm_terminal::security_policy::MAX_QUEUED_NOTIFICATIONS;
 use oneterm_terminal::test_support::FakeTerminalSession;
 use oneterm_terminal::{SessionEvent, SessionKind, TerminalError};
 
 use super::TerminalViewEvent;
-use super::test_support::open_view;
+use super::test_support::{self, open_view, open_views};
+use crate::input::paste_clipboard;
 
 #[gpui::test]
 fn ssh_close_shows_banner_once(cx: &mut TestAppContext) {
@@ -344,5 +349,113 @@ fn closing_search_refocuses_the_terminal(cx: &mut TestAppContext) {
     assert!(
         terminal_focused,
         "the terminal must own focus again after the search bar closes"
+    );
+}
+
+// ── Broadcast input channels (IN-0022) ──────────────────────────────────
+
+fn key_down(key: &str, modifiers: Modifiers) -> KeyDownEvent {
+    KeyDownEvent {
+        keystroke: Keystroke {
+            modifiers,
+            key: key.to_string(),
+            key_char: None,
+        },
+        is_held: false,
+        prefer_character_input: false,
+    }
+}
+
+/// Every way a Space produces input reaches the other members of its channel,
+/// and only those: the third view stays outside and the origin is never
+/// written to twice.
+#[gpui::test]
+fn member_input_reaches_the_channel_peers_only(cx: &mut TestAppContext) {
+    test_support::init(cx);
+    cx.update(InputChannelRegistry::init);
+    let (origin_session, origin_probe) = FakeTerminalSession::boxed(24, 80, "");
+    let (first_peer, first_probe) = FakeTerminalSession::boxed(24, 80, "");
+    let (second_peer, second_probe) = FakeTerminalSession::boxed(24, 80, "");
+    let (outsider_session, outsider_probe) = FakeTerminalSession::boxed(24, 80, "");
+    let (views, cx) = open_views(
+        cx,
+        vec![origin_session, first_peer, second_peer, outsider_session],
+    );
+    let origin = views[0].clone();
+
+    for view in views.iter().take(3) {
+        view.update(cx, |view, cx| view.join_channel(InputChannel::A, cx));
+    }
+    assert_eq!(
+        origin.update(cx, |view, cx| view.channel(cx)),
+        Some(InputChannel::A)
+    );
+    assert_eq!(views[3].update(cx, |view, cx| view.channel(cx)), None);
+
+    // A key, typed (IME) text, a paste and Ctrl+C — the four write paths.
+    origin.update_in(cx, |view, window, cx| {
+        view.on_key_down(&key_down("enter", Modifiers::default()), window, cx);
+        view.replace_text_in_range(None, "hi", window, cx);
+    });
+    let (session, broadcast) = origin.update(cx, |view, cx| {
+        (view.session.clone(), view.broadcast_origin(cx))
+    });
+    cx.update(|window, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string("ls -al".into()));
+        paste_clipboard(&session, &broadcast, window, cx);
+    });
+    origin.update_in(cx, |view, window, cx| {
+        view.on_key_down(&key_down("c", Modifiers::control()), window, cx);
+    });
+
+    let expected = vec![
+        b"\r".to_vec(),
+        b"hi".to_vec(),
+        b"ls -al".to_vec(),
+        b"\x03".to_vec(),
+    ];
+    assert_eq!(origin_probe.writes(), expected, "the origin writes once");
+    assert_eq!(first_probe.writes(), expected, "the first peer receives it");
+    assert_eq!(second_probe.writes(), expected, "so does the second");
+    assert!(
+        outsider_probe.writes().is_empty(),
+        "a Space outside the channel receives nothing"
+    );
+}
+
+/// Without the registry (tests, tools) every hook is a no-op and the terminal
+/// behaves exactly as before the channels existed.
+#[gpui::test]
+fn a_view_without_a_registry_still_writes_to_its_own_session(cx: &mut TestAppContext) {
+    let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
+    let (view, cx) = open_view(cx, session);
+
+    view.update_in(cx, |view, window, cx| {
+        view.on_key_down(&key_down("enter", Modifiers::default()), window, cx);
+    });
+    assert_eq!(probe.writes(), vec![b"\r".to_vec()]);
+    assert_eq!(view.update(cx, |view, cx| view.channel(cx)), None);
+}
+
+#[gpui::test]
+fn shutdown_leaves_the_channel(cx: &mut TestAppContext) {
+    test_support::init(cx);
+    cx.update(InputChannelRegistry::init);
+    let (session, _) = FakeTerminalSession::boxed(24, 80, "");
+    let (view, cx) = open_view(cx, session);
+    let id = view.entity_id();
+    let registry = cx.update(|_, cx| InputChannelRegistry::global(cx));
+
+    view.update(cx, |view, cx| view.join_channel(InputChannel::A, cx));
+    assert_eq!(
+        registry.read_with(cx, |registry, _| registry.channel_of(id)),
+        Some(InputChannel::A)
+    );
+
+    view.update(cx, |view, cx| view.shutdown(cx));
+    assert_eq!(
+        registry.read_with(cx, |registry, _| registry.channel_of(id)),
+        None,
+        "a closed Space is no longer a broadcast target"
     );
 }

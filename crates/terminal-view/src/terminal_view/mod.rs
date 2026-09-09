@@ -23,4 +23,4 @@ mod test_support;
 #[cfg(test)]
 mod view_tests;
 
-pub(crate) use view::{TerminalDeps, TerminalView, TerminalViewEvent};
+pub(crate) use view::{BroadcastOrigin, TerminalDeps, TerminalView, TerminalViewEvent};

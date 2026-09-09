@@ -328,6 +328,7 @@ impl Render for TerminalView {
         }
         let focus = self.focus.clone();
         let split_ctx = self.split_ctx.clone();
+        let origin = self.broadcast_origin(cx);
         terminal_div
             .context_menu(move |menu, window, cx| {
                 let split = split_ctx.clone().and_then(|ctx| {
@@ -345,6 +346,7 @@ impl Render for TerminalView {
                 };
                 let menu_ctx = MenuContext {
                     session: session.clone(),
+                    origin: origin.clone(),
                     focus: focus.clone(),
                     has_selection,
                     split,

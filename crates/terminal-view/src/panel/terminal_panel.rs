@@ -374,8 +374,10 @@ impl TerminalPanel {
     /// terminal's session, if the active Space has one.
     fn edit_active(&self, edit: edit::EditCommand, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(view) = self.active_view() {
-            let session = view.read(cx).session.clone();
-            edit(&session, window, cx);
+            let (session, origin) = view.update(cx, |view, cx| {
+                (view.session.clone(), view.broadcast_origin(cx))
+            });
+            edit(&session, &origin, window, cx);
         }
     }
 }
