@@ -226,3 +226,12 @@ entry remain E2E gaps; the platform panic path itself is now reproduced and veri
 ## Handoff
 
 Depends on US-0039 and US-0040 (the workspace must compile to see these errors in isolation).
+
+## Acceptance Rework (2026-09-09)
+
+Owner: the About page's identity block (icon, name, version) must be the first group. It had
+been placed last because GPUI Kit 0.6 numbers sidebar entries after filtering out untitled
+groups while scroll targets index every group. The identity group is now first and titled
+"Application", so both index spaces stay aligned; test
+`about::tests::identity_group_leads_the_about_page` replaces the last-position test.
+

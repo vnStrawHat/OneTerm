@@ -119,14 +119,14 @@ enum AboutGroup {
     Identity,
 }
 
+// GPUI Kit 0.6 numbers sidebar entries after filtering out untitled groups,
+// while scroll targets index every group. Every group here carries a title so
+// the identity block can lead the page without desynchronising the sidebar.
 const ABOUT_GROUP_ORDER: [AboutGroup; 4] = [
+    AboutGroup::Identity,
     AboutGroup::Links,
     AboutGroup::Network,
     AboutGroup::Updates,
-    // GPUI Kit 0.6 numbers sidebar entries after filtering out untitled
-    // groups, while scroll targets index every group. Keep untitled content
-    // last so both index spaces stay aligned.
-    AboutGroup::Identity,
 ];
 
 /// Build the "About" settings page.
@@ -137,18 +137,21 @@ pub(crate) fn page(cx: &gpui::App) -> SettingPage {
             .resettable(true),
         |page, group| {
             page.group(match group {
+                AboutGroup::Identity => about_group(),
                 AboutGroup::Links => links_group(),
                 AboutGroup::Network => updates::network_group(cx),
                 AboutGroup::Updates => updates::group(cx),
-                AboutGroup::Identity => about_group(),
             })
         },
     )
 }
 
-/// The "About" group — app name, version, and a short description.
+/// The "Application" group — app name, version, and a short description.
+/// Titled so the sidebar lists it and its scroll target stays index-aligned.
 fn about_group() -> SettingGroup {
-    SettingGroup::new().item(SettingItem::render(|_options, _, cx| app_identity(cx)))
+    SettingGroup::new()
+        .title("Application")
+        .item(SettingItem::render(|_options, _, cx| app_identity(cx)))
 }
 
 fn app_identity(cx: &App) -> AnyElement {
@@ -236,12 +239,7 @@ mod tests {
     }
 
     #[test]
-    fn untitled_about_group_is_last_so_sidebar_indices_match_scroll_targets() {
-        assert_eq!(ABOUT_GROUP_ORDER.last(), Some(&AboutGroup::Identity));
-        assert!(
-            ABOUT_GROUP_ORDER[..ABOUT_GROUP_ORDER.len() - 1]
-                .iter()
-                .all(|group| *group != AboutGroup::Identity)
-        );
+    fn identity_group_leads_the_about_page() {
+        assert_eq!(ABOUT_GROUP_ORDER.first(), Some(&AboutGroup::Identity));
     }
 }
