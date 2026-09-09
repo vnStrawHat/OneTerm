@@ -106,6 +106,22 @@ ascent + descent)` to whole device pixels: `device = round(logical * scale)`, `l
 device / scale`. `grid_size_for` mirrors the old `grid_size_for` arithmetic (subtract gutter and
 padding, floor at device pixels, min 1).
 
+**Baseline derivation (acceptance rework 2).** Glyphs are painted with `paint_glyph` at
+`row_top + baseline`, so `baseline` must be what GPUI's own `ShapedLine::paint` (`paint_line`)
+computes: `padding_top = (line_height − layout.ascent − layout.descent) / 2`, `baseline =
+padding_top + layout.ascent`, with `layout` a `LineLayout`. The two GPUI metric sources use
+opposite sign conventions for the descent: `TextSystem::descent` (`FontMetrics`) is **negative**
+on DirectWrite (`descent: -(Base.descent)`) and CoreText, while `LineLayout::descent` is
+**positive** (DirectWrite: `line height − baseline` from `GetLineMetrics`). Feeding the negative
+value into the formula pushes the baseline down by one descent, which is exactly the "cursor and
+selection sit higher than the text / descenders hang below the cell" report. `measure` therefore
+lays out a one-glyph probe line (`layout_line("M", …)`) and takes `ascent`/`descent` from it;
+`CellMetrics::snapped` additionally uses `descent.abs()` so either convention yields a centered
+glyph box (`baseline_centers_glyph_box_for_either_descent_sign`). The line-height floor keeps the
+`FontMetrics` sum (`descent ≤ 0`, so it is loose) because that is what the previous engine used;
+cell heights and row counts are unchanged. Underline (`baseline + 1 px`) and strikethrough
+(`baseline − x_height / 2`) positions inherit the corrected baseline.
+
 ### Row plan (`row_plan.rs`)
 
 ```rust

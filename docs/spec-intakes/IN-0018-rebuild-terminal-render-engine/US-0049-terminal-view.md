@@ -234,3 +234,52 @@ terminal unfocused. The old view had the same gap. Fixed in `terminal_view/searc
 (`close_search` refocuses the view); regression test
 `terminal_view::view_tests::closing_search_refocuses_the_terminal` fails without the fix.
 
+## Acceptance Rework 2 (2026-09-09)
+
+Two reports from the owner's second GUI pass (`evidence/05a-cursor-block-zoom.png`,
+`evidence/06d-word-selection-zoom.png`, owner screenshot of the post-TUI screen).
+
+**Bug 1 — block cursor and selection sit higher than the text.** Root cause:
+`render/metrics.rs::measure` fed `TextSystem::descent` — a `FontMetrics` value that is
+*negative* on DirectWrite (`gpui-pre-windows/src/direct_write.rs`, `descent: -(Base.descent)`)
+and CoreText — into GPUI's `baseline_offset` formula. The old engine painted through
+`ShapedLine::paint`, whose `paint_line` uses `LineLayout::descent` (*positive*: DirectWrite
+`line height − baseline`), so the new baseline sat one descent (~4 px at 15 px Lilex) too low:
+descenders hung below the cell, quads ended at the baseline, and the last row looked clipped by
+the status bar. Fix: `measure` lays out a one-glyph probe line and takes `ascent`/`descent` from
+its `LineLayout`; `CellMetrics::snapped` uses `descent.abs()`; the line-height floor is
+unchanged, so cell heights and row counts are the same as before. Test:
+`render::metrics::tests::baseline_centers_glyph_box_for_either_descent_sign`. Evidence:
+`evidence/rework2-bug1-cursor-block-zoom.png` (block covers `g` with its descender, equal gaps
+above and below); the per-scanline bright-pixel profile of the same terminal state rendered by
+`main` and by this branch is identical (prompt row: all 22 scanlines equal), i.e. glyphs now land
+where `ShapedLine::paint` put them.
+
+**Bug 2 — stale fragment and cursor mid-screen after an alt-screen TUI exits following a
+maximize.** Not a render-engine defect. A temporary per-frame snapshot dump showed the painted
+rows equal the grid rows and the painted cursor equals the snapshot cursor; the stale text is
+terminal state. On a grow-resize `alacritty_terminal::Grid::grow_lines` pulls the added rows from
+scrollback and moves the cursor down (36 → 52 rows: cursor row 35 → 51) while ConPTY/conhost keeps
+its viewport top and extends downward, then addresses later output with absolute `CUP` in its own
+coordinates — raw PTY stream after the maximize: `ESC[34;65He ESC[34;66Hc …` while the grid's
+prompt is on row 51 — so echoed input and prompt fragments land 18 rows above the prompt. The
+old engine shows exactly the same picture: `evidence/rework2-bug2-resize-desync-{new,main}.png`
+(same script, `echo desync-check` typed after the maximize lands inside the `dir` listing on
+both). The owner's full sequence (opentui-examples, maximize during the TUI, Ctrl+C) rendered
+clean on both builds here (`evidence/rework2-bug2-opentui-exit-{new,main}.png`); whether a
+fragment appears depends on what conhost repaints after `?1049l`. Triage hypotheses (a)–(e)
+were checked and hold: plans are keyed by the snapshot size and hash-verified on `Damage::Full`,
+`Frame::row` slices densely, the element paints at most `plans.len()` rows, the cursor is
+resolved from the snapshot every frame, the scrollbar offset is untouched by the alt screen. The
+fix belongs to the terminal backend (`crates/terminal` / `crates/local-shell`: keep conhost and
+the grid agreeing on the cursor row after a grow — do not pull scrollback for local ConPTY
+sessions, or force a conhost repaint) and changes resize semantics, so it is left for an owner
+decision; no render code changed.
+
+Verification (branch tree, 2026-09-09): `cargo fmt --all` exit 0; `cargo clippy --workspace
+--all-targets -- -D warnings` exit 0; `cargo clippy -p oneterm-terminal-view --all-targets
+--features terminal-diagnostics -- -D warnings` exit 0; `cargo test -p oneterm-terminal-view`:
+`test result: ok. 261 passed; 0 failed; 1 ignored`; `cargo test --workspace`: 46 suites ok,
+1028 passed, 0 failed. `scripts/ci-local.ps1` not run in this rework (Python doc checks pending
+for the gate run).
+

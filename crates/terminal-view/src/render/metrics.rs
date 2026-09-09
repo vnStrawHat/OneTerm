@@ -7,7 +7,7 @@
 //! edges for abutting cells (no seams, no double coverage) and every glyph
 //! lands on the same subpixel variant.
 
-use gpui::{App, Bounds, Edges, Font, Pixels, Point, Size, Window, point, px};
+use gpui::{App, Bounds, Edges, Font, Hsla, Pixels, Point, Size, TextRun, Window, point, px};
 
 use super::frame::GridSize;
 use super::shapes::CellSizeDevicePx;
@@ -30,6 +30,10 @@ pub(crate) struct CellMetrics {
 impl CellMetrics {
     /// Snap raw measurements to whole device pixels. `scale_factor` below 1 is
     /// clamped: a fractional device pixel cannot be painted.
+    ///
+    /// `descent` is taken as a magnitude: GPUI's `FontMetrics::descent` is
+    /// negative (DirectWrite / CoreText convention) while `LineLayout::descent`
+    /// is positive, and only the magnitude centers the glyph box in the cell.
     pub(crate) fn snapped(
         raw_cell_width: f32,
         raw_line_height: f32,
@@ -41,7 +45,9 @@ impl CellMetrics {
         let scale = scale_factor.max(1.0);
         let (cell_width, w) = snap_device(raw_cell_width, scale);
         let (line_height, h) = snap_device(raw_line_height, scale);
-        // Same formula as GPUI's `baseline_offset`, on the snapped line height.
+        // Same formula as GPUI's `paint_line` (`padding_top + ascent`), on the
+        // snapped line height.
+        let descent = descent.abs();
         let baseline = px((f32::from(line_height) - ascent - descent) / 2.0 + ascent);
         Self {
             cell_width,
@@ -93,15 +99,40 @@ pub(crate) fn measure(
             })
             .unwrap_or(FALLBACK_ADVANCE)
     });
-    let ascent = f32::from(text_system.ascent(font_id, font_size));
-    let descent = f32::from(text_system.descent(font_id, font_size));
     let x_height = f32::from(text_system.x_height(font_id, font_size));
-    let raw_height = (f32::from(font_size) * line_height_factor).max(ascent + descent);
+    // Line height: `font_size × factor`, floored at the font's extent as
+    // `FontMetrics` reports it (`descent ≤ 0` there, so the floor is loose);
+    // the previous engine used the same floor, which keeps cell heights and
+    // row counts unchanged.
+    let raw_height = (f32::from(font_size) * line_height_factor).max(
+        f32::from(text_system.ascent(font_id, font_size))
+            + f32::from(text_system.descent(font_id, font_size)),
+    );
+    // Baseline: from a shaped probe line, because glyphs are painted with
+    // `paint_glyph` at `row_top + baseline` and must land exactly where
+    // `ShapedLine::paint` (GPUI's `paint_line`) would put them. That path
+    // centers `LineLayout::ascent + descent` (both positive: on DirectWrite
+    // `descent = line height − baseline`) in the line height, whereas
+    // `FontMetrics::descent` is negative and would push the baseline down by
+    // one descent.
+    let probe = window.text_system().layout_line(
+        "M",
+        font_size,
+        &[TextRun {
+            len: 1,
+            font: font.clone(),
+            color: Hsla::default(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        }],
+        None,
+    );
     CellMetrics::snapped(
         raw_width,
         raw_height,
-        ascent,
-        descent,
+        f32::from(probe.ascent),
+        f32::from(probe.descent),
         x_height,
         window.scale_factor(),
     )
@@ -236,6 +267,23 @@ mod tests {
         let m = metrics(7.3, 16.7, 1.5);
         assert_eq!(m.device, CellSizeDevicePx { w: 11, h: 25 });
         assert_eq!(f32::from(m.logical(11)), f32::from(m.cell_width));
+    }
+
+    /// The baseline centers `ascent + |descent|` in the line height whether the
+    /// descent arrives positive (`LineLayout`) or negative (`FontMetrics`).
+    #[test]
+    fn baseline_centers_glyph_box_for_either_descent_sign() {
+        for descent in [3.0f32, -3.0] {
+            let m = CellMetrics::snapped(8.0, 20.0, 10.0, descent, 5.0, 1.0);
+            let baseline = f32::from(m.baseline);
+            assert_eq!(baseline, 13.5, "descent {descent}");
+            let top_gap = baseline - 10.0;
+            let bottom_gap = 20.0 - baseline - 3.0;
+            assert!((top_gap - bottom_gap).abs() < 1e-5, "descent {descent}");
+        }
+        // A line height equal to the glyph box puts the baseline at the ascent.
+        let m = CellMetrics::snapped(8.0, 13.0, 10.0, -3.0, 5.0, 1.0);
+        assert_eq!(f32::from(m.baseline), 10.0);
     }
 
     #[test]
