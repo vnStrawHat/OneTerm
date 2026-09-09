@@ -36,6 +36,7 @@ pub use key_encode::{KeyMods, KeySpec, NamedKey, encode_key};
 pub use logging::{
     TerminalLogController, TerminalLogError, TerminalLogState, local_log_identity, ssh_log_identity,
 };
+pub use model::ResizePolicy;
 pub use mouse_encode::{MouseModifiers, TerminalMouseButton};
 pub use osc::{TerminalProgress, encode_osc52};
 pub use osc_agent::{

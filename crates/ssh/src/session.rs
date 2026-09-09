@@ -840,6 +840,17 @@ mod tests {
         (session, cmd_rx)
     }
 
+    /// DEC-0008: the remote PTY reflows and repaints, so SSH keeps alacritty's
+    /// grow-resize semantics.
+    #[test]
+    fn ssh_session_keeps_the_default_grow_policy() {
+        let (session, _cmd_rx) = detached_session();
+        assert_eq!(
+            session.resize_policy(),
+            oneterm_terminal::ResizePolicy::Default
+        );
+    }
+
     #[test]
     fn dead_session_rejects_input_without_touching_the_transport() {
         use oneterm_terminal::{TerminalError, TerminalInput};

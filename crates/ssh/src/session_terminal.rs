@@ -17,6 +17,8 @@ oneterm_terminal::impl_pty_terminal_session!(
     SshListener,
     "SshSession",
     SessionKind::Ssh,
+    // The remote PTY reflows and repaints on its side (DEC-0008).
+    oneterm_terminal::ResizePolicy::Default,
     close_channel
 );
 

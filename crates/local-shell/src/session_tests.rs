@@ -122,6 +122,18 @@ fn pwsh_prompt_emits_cwd_without_parser_errors() {
     assert_powershell_prompt_emits_cwd(oneterm_core::ShellKind::Pwsh, "pwsh");
 }
 
+/// DEC-0008: a ConPTY session must not pull scrollback into a grown viewport.
+#[test]
+fn local_session_grow_policy_matches_conpty() {
+    let session = spawn_default();
+    let expected = if cfg!(windows) {
+        oneterm_terminal::ResizePolicy::KeepViewportTop
+    } else {
+        oneterm_terminal::ResizePolicy::Default
+    };
+    assert_eq!(session.resize_policy(), expected);
+}
+
 #[test]
 fn trait_snapshot_bounds() {
     let s = spawn_default();

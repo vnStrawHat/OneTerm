@@ -33,7 +33,8 @@ selected by the backend that constructs the terminal model, not by the view.
 
 ## Consequences
 
-- [ ] Benefit to confirm: `echo` after a maximize lands on the prompt row; TUI exit after a
-      maximize leaves no stale rows.
-- [ ] Tradeoff: local sessions show blank rows at the bottom after a grow instead of recovered
+- [x] Benefit confirmed (BUG-0051, 2026-09-09): `echo` after a maximize lands on the prompt
+      row; TUI exit after a maximize leaves no stale rows
+      (`docs/spec-intakes/IN-0019-conpty-resize-scrollback-desync/evidence/`).
+- [x] Tradeoff: local sessions show blank rows at the bottom after a grow instead of recovered
       history; scrollback still holds those rows.

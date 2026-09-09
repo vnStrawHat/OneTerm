@@ -451,18 +451,24 @@ pub trait TerminalSession:
 /// (`term`, `listener`, `state`, `marked_text`, `event_rx`).
 ///
 /// The local shell and SSH sessions differ only in their
-/// [`TerminalCapabilities`], their [`SessionKind`] and how the channel is torn
-/// down, so those three stay with the backend (`$kind` and `$close`, an
-/// inherent method returning `Result<(), TerminalError>`) and everything else
-/// lives here once. See `docs/terminal-backend.md` §9.
+/// [`TerminalCapabilities`], their [`SessionKind`], their grow-resize
+/// [`ResizePolicy`](crate::model::ResizePolicy) and how the channel is torn
+/// down, so those stay with the backend (`$kind`, `$resize_policy` and
+/// `$close`, an inherent method returning `Result<(), TerminalError>`) and
+/// everything else lives here once. See `docs/terminal-backend.md` §9.
 #[macro_export]
 macro_rules! impl_pty_terminal_session {
-    ($ty:ty, $listener:ty, $label:literal, $kind:expr, $close:ident) => {
+    ($ty:ty, $listener:ty, $label:literal, $kind:expr, $resize_policy:expr, $close:ident) => {
         impl $ty {
             /// A `TerminalModel` adapter for the shared terminal-model
             /// operations. Cheap — just wraps the existing `Arc<FairMutex<Term>>`.
             fn model(&self) -> $crate::model::TerminalModel<$listener> {
-                $crate::model::TerminalModel::new(self.term.clone())
+                $crate::model::TerminalModel::new(self.term.clone(), self.resize_policy())
+            }
+
+            /// How this backend grows the grid (DEC-0008).
+            pub(crate) fn resize_policy(&self) -> $crate::model::ResizePolicy {
+                $resize_policy
             }
 
             /// Write bytes to the PTY / SSH channel while the session is alive.

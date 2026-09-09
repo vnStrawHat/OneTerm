@@ -7,9 +7,10 @@
 //! This module provides a single `TerminalModel<EP>` that both backends
 //! delegate to, so the logic lives in one place.
 
+use std::mem;
 use std::sync::Arc;
 
-use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::grid::{Dimensions, Grid, Scroll};
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
@@ -45,20 +46,42 @@ impl Dimensions for TerminalSize {
     }
 }
 
+/// How a grow-resize treats the primary grid's scrollback (DEC-0008).
+///
+/// Chosen by the backend that owns the PTY, because it must agree with whatever
+/// sits on the other side of that PTY.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ResizePolicy {
+    /// alacritty's behaviour: added rows are pulled from scrollback into the
+    /// top of the viewport and the cursor moves down by the same amount. Right
+    /// for Unix PTYs and SSH, where the remote side reflows and repaints.
+    #[default]
+    Default,
+    /// Existing rows keep their index, added rows are blank at the bottom, the
+    /// cursor row is unchanged and scrollback is untouched. Matches conhost
+    /// behind ConPTY, which keeps its viewport top on a resize and addresses
+    /// later output with absolute cursor positions in its own coordinates.
+    KeepViewportTop,
+}
+
 /// Shared terminal-model operations backed by an `alacritty_terminal::Term`.
 ///
 /// Created once per session and stored inside the `LocalSession` / `SshSession`
 /// struct. All methods are identical across backends — the only differences
-/// (transport: PTY vs SSH channel, lifecycle, state fields) remain on the
-/// session structs themselves.
+/// (transport: PTY vs SSH channel, lifecycle, state fields, resize policy)
+/// remain on the session structs themselves.
 pub struct TerminalModel<EP: EventListener> {
     term: Arc<FairMutex<Term<EP>>>,
+    resize_policy: ResizePolicy,
 }
 
 impl<EP: EventListener> TerminalModel<EP> {
     /// Wrap an existing `Arc<FairMutex<Term<EP>>>`.
-    pub fn new(term: Arc<FairMutex<Term<EP>>>) -> Self {
-        Self { term }
+    pub fn new(term: Arc<FairMutex<Term<EP>>>, resize_policy: ResizePolicy) -> Self {
+        Self {
+            term,
+            resize_policy,
+        }
     }
 
     /// Borrow the underlying `Arc<FairMutex<Term<EP>>>` (for external access).
@@ -179,11 +202,18 @@ impl<EP: EventListener> TerminalModel<EP> {
     }
 
     /// Actually resize the terminal grid. Should be called **after** `pty_resize`.
+    ///
+    /// Shrinks and column-only changes always use alacritty's semantics; a grow
+    /// follows the session's [`ResizePolicy`].
     pub fn resize_grid(&self, rows: u16, cols: u16) {
-        self.term.lock().resize(TerminalSize {
-            cols: cols as usize,
-            lines: rows as usize,
-        });
+        let (lines, cols) = (rows as usize, cols as usize);
+        let mut term = self.term.lock();
+        let lines_added = lines.saturating_sub(term.screen_lines());
+        if self.resize_policy == ResizePolicy::KeepViewportTop && lines_added > 0 {
+            grow_keeping_viewport_top(&mut term, lines, cols, lines_added);
+        } else {
+            term.resize(TerminalSize { cols, lines });
+        }
     }
 
     /// Scroll the scrollback by `delta` lines (no-op in alt-screen).
@@ -403,14 +433,259 @@ impl<EP: EventListener> TerminalModel<EP> {
     }
 }
 
+/// Grow the viewport by `lines_added` rows without pulling scrollback into it
+/// ([`ResizePolicy::KeepViewportTop`]).
+///
+/// `Grid::grow_lines` (vendored `grid/resize.rs`) grows the ring buffer with
+/// the bottom row anchored, which pulls `pulled = min(history_size,
+/// lines_added)` history rows into the top of the viewport, moves the cursor
+/// and saved cursor down by `pulled`, subtracts `lines_added` from
+/// `display_offset` and drops `pulled` rows of history. This runs that resize
+/// and then undoes the pull on the primary grid. Invariants relied on:
+///
+/// - `Grid::scroll_up` over the whole screen by `pulled` rotates the top
+///   `pulled` rows back into history and clears the bottom `pulled` rows. Its
+///   `increase_scroll_limit` always finds room for exactly `pulled` rows,
+///   because the resize removed that many and the scroll limit never shrank,
+///   so `history_size` returns to its pre-resize value and every pre-resize
+///   row keeps its `Line` index; the ring buffer stays consistent because the
+///   rotation only moves `zero` and the rows it exposes are reset.
+/// - Both cursors moved down by exactly `pulled`, so moving them back up keeps
+///   them inside the viewport.
+/// - The pre-resize `display_offset` is restored (clamped to history): the top
+///   visible row stays where it was and the viewport extends downward, for a
+///   user scrolled back as much as for one at the bottom.
+/// - Rows are resized before columns so the correction is exact; the column
+///   reflow then runs on the corrected grid.
+/// - `Term::resize` marks the whole terminal damaged and nothing resets damage
+///   while the lock is held, so the corrected rows repaint on the next
+///   snapshot. The selection is dropped: alacritty rotated it by `pulled`.
+///
+/// While the alt screen is active the primary grid is `Term::inactive_grid`,
+/// which has no accessor. The alt grid (no history, so nothing to correct) is
+/// parked in a local and replaced by a placeholder, `swap_alt` makes the primary
+/// grid active for the resize and the correction, then `swap_alt` returns to the
+/// alt screen — that direction clones the primary cursor into, and clears, the
+/// placeholder only — and the parked alt grid, resized exactly as `Term::resize`
+/// would have (no reflow), is put back. The two swaps restore the keyboard-mode
+/// stacks and the mode flags; `Term::resize` runs with the same reflow flags as
+/// before the swap.
+fn grow_keeping_viewport_top<EP: EventListener>(
+    term: &mut Term<EP>,
+    lines: usize,
+    cols: usize,
+    lines_added: usize,
+) {
+    let old_cols = term.columns();
+    let parked_alt = term.mode().contains(TermMode::ALT_SCREEN).then(|| {
+        let placeholder = Grid::new(term.screen_lines(), old_cols, 0);
+        let alt = mem::replace(term.grid_mut(), placeholder);
+        term.swap_alt();
+        alt
+    });
+
+    let pulled = term.history_size().min(lines_added);
+    let display_offset = term.grid().display_offset();
+    term.resize(TerminalSize {
+        cols: old_cols,
+        lines,
+    });
+    if pulled > 0 {
+        let grid = term.grid_mut();
+        grid.scroll_up(&(Line(0)..Line(lines as i32)), pulled);
+        grid.cursor.point.line -= pulled;
+        grid.saved_cursor.point.line -= pulled;
+        let offset_delta = display_offset as i32 - grid.display_offset() as i32;
+        grid.scroll_display(Scroll::Delta(offset_delta));
+        term.selection = None;
+    }
+    if cols != old_cols {
+        term.resize(TerminalSize { cols, lines });
+    }
+
+    if let Some(mut alt) = parked_alt {
+        alt.resize(false, lines, cols);
+        term.swap_alt();
+        *term.grid_mut() = alt;
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use alacritty_terminal::event::VoidListener;
+    use alacritty_terminal::term::Config;
     use alacritty_terminal::term::test::mock_term;
+    use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
     use super::*;
 
-    fn model(text: &str) -> TerminalModel<alacritty_terminal::event::VoidListener> {
-        TerminalModel::new(Arc::new(FairMutex::new(mock_term(text))))
+    fn model(text: &str) -> TerminalModel<VoidListener> {
+        TerminalModel::new(
+            Arc::new(FairMutex::new(mock_term(text))),
+            ResizePolicy::Default,
+        )
+    }
+
+    /// A 5x10 terminal whose primary screen was fed `lines` numbered lines and
+    /// a prompt, so the cursor sits on the last row and the oldest lines are in
+    /// scrollback. `bytes` are fed last.
+    fn fed_term(lines: usize, bytes: &[u8]) -> Term<VoidListener> {
+        let config = Config {
+            scrolling_history: 100,
+            ..Default::default()
+        };
+        let mut term = Term::new(config, &TerminalSize { cols: 10, lines: 5 }, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+        for i in 0..lines {
+            parser.advance(&mut term, format!("line{i}\r\n").as_bytes());
+        }
+        parser.advance(&mut term, b"prompt>");
+        parser.advance(&mut term, bytes);
+        term
+    }
+
+    fn resize_model(term: Term<VoidListener>, policy: ResizePolicy) -> TerminalModel<VoidListener> {
+        TerminalModel::new(Arc::new(FairMutex::new(term)), policy)
+    }
+
+    fn row_text(term: &Term<VoidListener>, line: i32) -> String {
+        let row = &term.grid()[Line(line)];
+        (0..term.columns())
+            .map(|col| row[Column(col)].c)
+            .collect::<String>()
+            .trim_end()
+            .to_owned()
+    }
+
+    fn feed(term: &mut Term<VoidListener>, bytes: &[u8]) {
+        Processor::<StdSyncHandler>::new().advance(term, bytes);
+    }
+
+    #[test]
+    fn keep_viewport_top_grow_keeps_rows_cursor_and_history() {
+        let model = resize_model(fed_term(20, b""), ResizePolicy::KeepViewportTop);
+        model.resize_grid(8, 10);
+
+        let term = model.term().lock();
+        assert_eq!(term.grid().cursor.point.line, Line(4));
+        assert_eq!(row_text(&term, 0), "line16");
+        assert_eq!(row_text(&term, 4), "prompt>");
+        for line in 5..8 {
+            assert_eq!(row_text(&term, line), "", "row {line} must be blank");
+        }
+        assert_eq!(row_text(&term, -1), "line15");
+        assert_eq!(term.history_size(), 16);
+        assert_eq!(term.grid().display_offset(), 0);
+    }
+
+    #[test]
+    fn default_grow_pulls_history_and_moves_the_cursor_down() {
+        let model = resize_model(fed_term(20, b""), ResizePolicy::Default);
+        model.resize_grid(8, 10);
+
+        let term = model.term().lock();
+        assert_eq!(term.grid().cursor.point.line, Line(7));
+        assert_eq!(row_text(&term, 0), "line13");
+        assert_eq!(row_text(&term, 7), "prompt>");
+        assert_eq!(term.history_size(), 13);
+    }
+
+    #[test]
+    fn keep_viewport_top_grow_larger_than_history() {
+        // Two history lines, five rows added: only two could have been pulled.
+        let model = resize_model(fed_term(6, b""), ResizePolicy::KeepViewportTop);
+        model.resize_grid(10, 10);
+
+        let term = model.term().lock();
+        assert_eq!(term.grid().cursor.point.line, Line(4));
+        assert_eq!(row_text(&term, 0), "line2");
+        assert_eq!(row_text(&term, -2), "line0");
+        for line in 5..10 {
+            assert_eq!(row_text(&term, line), "", "row {line} must be blank");
+        }
+        assert_eq!(term.history_size(), 2);
+    }
+
+    #[test]
+    fn keep_viewport_top_repeated_grows_and_column_change() {
+        let model = resize_model(fed_term(20, b""), ResizePolicy::KeepViewportTop);
+        model.resize_grid(8, 12);
+        model.resize_grid(12, 20);
+
+        let term = model.term().lock();
+        assert_eq!(term.columns(), 20);
+        assert_eq!(term.grid().cursor.point.line, Line(4));
+        assert_eq!(row_text(&term, 0), "line16");
+        assert_eq!(row_text(&term, 4), "prompt>");
+        assert_eq!(row_text(&term, 11), "");
+        assert_eq!(term.history_size(), 16);
+    }
+
+    #[test]
+    fn keep_viewport_top_restores_a_scrolled_back_viewport() {
+        let model = resize_model(fed_term(20, b""), ResizePolicy::KeepViewportTop);
+        model.term().lock().scroll_display(Scroll::Delta(3));
+        model.resize_grid(8, 10);
+
+        let term = model.term().lock();
+        assert_eq!(term.grid().display_offset(), 3);
+        assert_eq!(term.grid().cursor.point.line, Line(4));
+    }
+
+    #[test]
+    fn keep_viewport_top_leaves_shrink_and_history_less_grow_to_alacritty() {
+        for (rows, lines) in [(3, 20), (8, 2)] {
+            let keep = resize_model(fed_term(lines, b""), ResizePolicy::KeepViewportTop);
+            let default = resize_model(fed_term(lines, b""), ResizePolicy::Default);
+            keep.resize_grid(rows, 10);
+            default.resize_grid(rows, 10);
+
+            let (keep, default) = (keep.term().lock(), default.term().lock());
+            assert_eq!(keep.grid().cursor.point, default.grid().cursor.point);
+            assert_eq!(keep.history_size(), default.history_size());
+            for line in -(keep.history_size() as i32)..rows as i32 {
+                assert_eq!(row_text(&keep, line), row_text(&default, line));
+            }
+        }
+    }
+
+    #[test]
+    fn keep_viewport_top_grow_during_alt_screen_corrects_the_primary_grid() {
+        let model = resize_model(
+            fed_term(20, b"\x1b[?1049h\x1b[Htui"),
+            ResizePolicy::KeepViewportTop,
+        );
+        model.resize_grid(8, 10);
+
+        {
+            let term = model.term().lock();
+            assert!(term.mode().contains(TermMode::ALT_SCREEN));
+            assert_eq!(row_text(&term, 0), "tui");
+            assert_eq!(term.grid().cursor.point, Point::new(Line(0), Column(3)));
+            assert_eq!(term.history_size(), 0);
+        }
+
+        let mut term = model.term().lock();
+        feed(&mut term, b"\x1b[?1049l");
+        assert!(!term.mode().contains(TermMode::ALT_SCREEN));
+        assert_eq!(term.grid().cursor.point, Point::new(Line(4), Column(7)));
+        assert_eq!(row_text(&term, 0), "line16");
+        assert_eq!(row_text(&term, 4), "prompt>");
+        for line in 5..8 {
+            assert_eq!(row_text(&term, line), "", "row {line} must be blank");
+        }
+        assert_eq!(term.history_size(), 16);
+    }
+
+    #[test]
+    fn default_grow_during_alt_screen_pulls_the_primary_history() {
+        let model = resize_model(fed_term(20, b"\x1b[?1049h\x1b[Htui"), ResizePolicy::Default);
+        model.resize_grid(8, 10);
+
+        let mut term = model.term().lock();
+        feed(&mut term, b"\x1b[?1049l");
+        assert_eq!(term.grid().cursor.point.line, Line(7));
+        assert_eq!(term.history_size(), 13);
     }
 
     /// PERF-14: `has_selection` agrees with `selection_text` without building the string.

@@ -185,7 +185,41 @@ provide a transport and a read loop.
 Local (`ShellEventLoop<P>`) uses the blocking variants on the PTY owner thread;
 SSH (`ssh_main_task`) uses the async ones on the tokio runtime. Neither backend
 resizes the `Term` grid from its loop — the UI thread does that in
-`TerminalSession::resize` before asking the transport for `pty_resize`.
+`TerminalSession::resize`: `PtyTransport::pty_resize` first, so the process learns
+the new size before any output for it arrives, then `TerminalModel::resize_grid`.
+
+**Grow-resize policy (`ResizePolicy`, DEC-0008).** Shrinks and column-only changes
+always use alacritty's semantics. For a grow, `Grid::grow_lines` pulls
+`min(history_size, lines_added)` rows out of scrollback into the top of the viewport
+and moves the cursor down by that amount. That matches a Unix PTY or a remote shell,
+which reflow on their side and repaint, so SSH keeps `ResizePolicy::Default`. conhost
+behind ConPTY does neither: it keeps its viewport top, extends downward and addresses
+later output with absolute cursor positions in its own coordinates, so with the
+default policy typed input lands above the prompt and an exiting alt-screen TUI
+leaves stale rows (IN-0019). Local sessions on Windows therefore select
+`ResizePolicy::KeepViewportTop` (`crates/local-shell/src/session_terminal.rs`; the
+policy is a macro argument of `impl_pty_terminal_session!`, so it stays with the
+backend). Under that policy `TerminalModel::resize_grid` runs `Term::resize` for the
+rows, then undoes the pull on the primary grid (`grow_keeping_viewport_top` in
+`crates/terminal/src/model.rs`), then resizes the columns so the reflow runs on the
+corrected grid. Invariants after a grow by `N` rows with `pulled` history rows:
+
+- every pre-resize row keeps its `Line` index, the `N` new rows at the bottom are
+  blank, and `history_size` is unchanged (the pulled rows go back to scrollback);
+- the cursor and saved-cursor rows are unchanged;
+- the pre-resize `display_offset` is kept (clamped to history), so a scrolled-back
+  viewport keeps its top row and extends downward;
+- the correction also applies while the alt screen is active (the primary grid is
+  the inactive one; the alt grid has no history and is left to alacritty), so the
+  shell's prompt lands on its row after the TUI exits;
+- the selection is dropped (alacritty had rotated it), and `Term::resize` leaves the
+  whole terminal damaged, so the next snapshot repaints every row.
+
+The visible tradeoff is blank rows below the prompt after a maximize instead of
+recovered scrollback; the rows are still in history. Tests:
+`crates/terminal/src/model.rs` (`keep_viewport_top_*`, `default_grow_*`),
+`crates/local-shell/src/session_tests.rs::local_session_grow_policy_matches_conpty`,
+`crates/ssh/src/session.rs::ssh_session_keeps_the_default_grow_policy`.
 
 **Never block inside a `Term` callback.** `send_event` runs during
 `Processor::advance` with the `Term` lock held, and the UI thread needs that same
@@ -341,6 +375,8 @@ output parsing, input FIFO, resize, colour replies, child exit and shutdown.
   `LANG`/`LC_ALL` + (optionally) an init arg `[Console]::OutputEncoding`.
 - **TERM**: always `xterm-256color`, `COLORTERM=truecolor`.
 - **Resize**: `Notifier::notify_resize` → ConPTY handles it (no SIGWINCH on Windows).
+  A grow never pulls scrollback into the viewport (`ResizePolicy::KeepViewportTop`,
+  §5.3, DEC-0008) because conhost keeps its viewport top.
 - **Ctrl-C**: byte `0x03` → shell handles it. OK.
 - **Child exit**: `tty::Pty` provides `ChildExitWatcher` (race-free) → `SessionEvent::Exited(code)`.
 
