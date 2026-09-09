@@ -7,11 +7,14 @@
 //! cell-local device-pixel space whose origin is the cell's top-left corner and
 //! is expressed as offsets from the cell **center**; mirrored code points reuse
 //! a canonical definition through a reflection of that definition. Snapping to
-//! whole device pixels preserves the reflection (see [`snap_interval`]), so a
-//! glyph is symmetric about both cell axes and identical features in adjacent
-//! cells land on identical intervals: a horizontal line in cell *n* abuts the
-//! one in cell *n + 1*, and the cross glyph is exactly the union of the two
-//! lines it is made of.
+//! whole device pixels keeps the nominal thickness on both axes (see
+//! [`snap_interval`]): a stroke is centred exactly when the pixel grid allows
+//! and otherwise sits half a pixel toward the top/left, the same way for every
+//! code point, so identical features in adjacent cells land on identical
+//! intervals: a horizontal line in cell *n* abuts the one in cell *n + 1*, `─`
+//! and `│` are equally thick, and the cross glyph is exactly the union of the
+//! two lines it is made of. Reflection is exact on a cell axis whose parity
+//! matches the stroke and off by that one-pixel bias otherwise.
 //!
 //! Curves and diagonals (rounded corners, `╱╲╳`, powerline) are not paths: they
 //! are rasterized here into coverage rects with a fractional `alpha`, sampled on
@@ -81,12 +84,17 @@ pub(crate) fn stroke_thickness(cell: CellSizeDevicePx) -> StrokeThickness {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Anchor {
-    /// The centerline may not move; the thickness grows by one pixel on a
-    /// parity mismatch. Used for anything centered on the cell axes.
+    /// A stroke on a cell axis: the thickness may not change, and on a parity
+    /// mismatch the centerline moves half a pixel toward the top/left (DEC-0007
+    /// item 4, amendment 2026-09-09). Every stroke of every code point moves the
+    /// same way, so joins stay seamless and `─` is as thick as `│`.
     Fixed,
-    /// The thickness may not change; the centerline moves half a pixel away
-    /// from the cell center on a parity mismatch. Used for rails, braille dots
-    /// and dash segments, where a fatter stroke would close a gap.
+    /// An off-axis feature: the thickness may not change; the centerline moves
+    /// half a pixel away from the cell center on a parity mismatch. Used for
+    /// rails, braille dots and dash segments, where a fatter stroke would close
+    /// a gap. Exactly on the cell center (the middle dash segment, `▬`) it
+    /// widens by one pixel instead, which keeps a *length* symmetric; the bias
+    /// is reserved for thicknesses.
     Nearest,
 }
 
@@ -108,19 +116,21 @@ fn round_ties_toward(v: f32, center: f32) -> i32 {
     (if up { lower + 1.0 } else { lower }) as i32
 }
 
-/// Snap a centered extent to whole device pixels without breaking symmetry.
+/// Snap a centered extent to whole device pixels.
 ///
-/// Returns the half-open interval `[lo, hi)` clipped to `[0, size]`. A symmetric
+/// Returns the half-open interval `[lo, hi)` clipped to `[0, size]`. A centred
 /// interval needs an even thickness around an integer center and an odd
-/// thickness around a half-integer center; `anchor` decides which of the two
-/// gives way when the parities disagree.
+/// thickness around a half-integer center; `anchor` decides where the interval
+/// goes when the parities disagree. The thickness never changes for `Fixed`.
 fn snap_interval(center: f32, half: f32, size: i32, anchor: Anchor) -> Interval {
     let mut thickness = ((2.0 * half).round() as i32).max(1);
     // Work in half pixels so the center stays exact.
     let mut center_halves = round_ties_toward(2.0 * center, size as f32);
     if (center_halves - thickness) % 2 != 0 {
         match anchor {
-            Anchor::Fixed => thickness += 1,
+            // Toward the top/left, for every stroke alike: a horizontal and a
+            // vertical line stay equally thick and still meet at a cross.
+            Anchor::Fixed => center_halves -= 1,
             Anchor::Nearest => {
                 // Both half-pixel moves are equally near, so the tie is broken
                 // away from the cell center: paired features keep their gap.
@@ -137,8 +147,7 @@ fn snap_interval(center: f32, half: f32, size: i32, anchor: Anchor) -> Interval 
     }
     // A feature that would land outside the cell is shifted in rather than
     // clipped away: on a tiny cell the rails of a double line and the braille
-    // dots must still show something. The shift is symmetric, so reflection
-    // still commutes with snapping.
+    // dots must still show something.
     let lo = ((center_halves - thickness) / 2)
         .clamp((size - thickness).min(0), (size - thickness).max(0));
     Interval {
@@ -256,11 +265,20 @@ impl Geometry {
         snap_interval(center, thickness as f32 / 2.0, size, Anchor::Fixed)
     }
 
+    /// Where a light stroke on `axis` actually sits: the cell center, or half a
+    /// pixel toward the top/left when the parities disagree. Rails and the
+    /// rounded corner are laid out around this point, not around the ideal
+    /// center, so they stay concentric with the strokes they meet.
+    fn axis_center(&self, axis: Axis) -> f32 {
+        let joint = self.joint(axis, self.thickness.light);
+        (joint.lo + joint.hi) as f32 / 2.0
+    }
+
     /// Interval covered on `axis` by one rail of a double line.
     fn rail(&self, axis: Axis, side: Side) -> Interval {
-        let (center, size) = self.span(axis);
+        let size = self.span(axis).1;
         snap_interval(
-            center + side.sign() * self.rail_offset,
+            self.axis_center(axis) + side.sign() * self.rail_offset,
             self.thickness.rail as f32 / 2.0,
             size,
             Anchor::Nearest,
@@ -696,14 +714,10 @@ fn build_dashes(axis: Axis, count: i32, weight: Weight, g: &Geometry, out: &mut 
     loop {
         for (k, segment) in segments.iter_mut().take(segments_count).enumerate() {
             let segment_center = center + (k as f32 + 0.5 - count as f32 / 2.0) * pitch;
-            // The middle segment of an odd count sits on the cell axis and has
-            // to stay there; the others may shift half a pixel outwards.
-            let anchor = if count % 2 == 1 && k == (count / 2) as usize {
-                Anchor::Fixed
-            } else {
-                Anchor::Nearest
-            };
-            *segment = snap_interval(segment_center, half, size, anchor);
+            // Segment lengths are not thicknesses: the outer ones may shift half
+            // a pixel outwards and the middle one of an odd count grows by a
+            // pixel, so the gaps stay symmetric.
+            *segment = snap_interval(segment_center, half, size, Anchor::Nearest);
         }
         let overlaps = (1..segments_count).any(|k| segments[k].lo < segments[k - 1].hi);
         if !overlaps || half <= 0.5 {
@@ -850,11 +864,13 @@ fn build_block(code: u32, g: &Geometry, out: &mut Vec<DeviceRect>) {
                 }
             }
         }
-        // U+25AC BLACK RECTANGLE: one centered half-height bar.
+        // U+25AC BLACK RECTANGLE: one centered half-height bar. Its height is
+        // a length, not a stroke, so it stays exactly centered (`Nearest`
+        // widens on the axis rather than biasing).
         0x25AC => push_rect(
             out,
             full_x,
-            snap_interval(g.cy, g.h as f32 / 4.0, g.h, Anchor::Fixed),
+            snap_interval(g.cy, g.h as f32 / 4.0, g.h, Anchor::Nearest),
         ),
         _ => {}
     }
@@ -977,15 +993,19 @@ const AA_PIXEL_CAP: i32 = 64 * 128;
 /// Rasterize a region given in **center-origin** coordinates into coverage
 /// rects, run-length merged along each scanline and then downwards.
 ///
-/// `inside(u, v)` receives a sample point as its offset from the cell center in
-/// device pixels, after `mirror` has been applied, so a region is written once in
-/// its canonical orientation. Sample `i` of pixel `x` sits at
-/// `x + (i + 0.5) / n`; as an offset from the center that is the odd numerator
-/// `2nx + 2i + 1 - nW` over `2n`, exactly representable, and reflecting the pixel
-/// to `W - 1 - x` (with sample `n - 1 - i`) negates the numerator without any
-/// rounding. Regions are built from `abs`, squares, and comparisons of those
-/// values, so the coverage of pixel `(x, y)` for a mirrored code point is
-/// bit-identical to the coverage of pixel `(W - 1 - x, y)` for the original.
+/// `inside(u, v)` receives a sample point as its offset from the cell center
+/// moved by `shift` (the parity bias of the strokes the shape meets; zero for
+/// shapes anchored to the cell edges), after `mirror` has been applied, so a
+/// region is written once in its canonical orientation. Sample `i` of pixel `x`
+/// sits at `x + (i + 0.5) / n`; as an offset from the center that is the odd
+/// numerator `2nx + 2i + 1 - nW` over `2n`, exactly representable (and still
+/// exact after a half-pixel shift), and reflecting the pixel to `W - 1 - x`
+/// (with sample `n - 1 - i`) negates the numerator without any rounding. Regions
+/// are built from `abs`, squares, and comparisons of those values, so the
+/// coverage of pixel `(x, y)` for a mirrored code point is bit-identical to the
+/// coverage of pixel `(W - 1 - x, y)` for the original, or of `(W - 2 - x, y)`
+/// when the shape is shifted on that axis. The shift is applied before the
+/// reflection so that every orientation shares the biased stub position.
 ///
 /// The only allocation is into `out`. Every emitted rect has `alpha > 0`; pixels
 /// of equal coverage merge horizontally, and a run whose extent and alpha match
@@ -993,6 +1013,7 @@ const AA_PIXEL_CAP: i32 = 64 * 128;
 fn rasterize(
     g: &Geometry,
     mirror: Mirror,
+    shift: (f32, f32),
     inside: impl Fn(f32, f32) -> bool,
     out: &mut Vec<DeviceRect>,
 ) {
@@ -1013,10 +1034,10 @@ fn rasterize(
         for x in 0..g.w {
             let mut count = 0;
             for j in 0..n {
-                let v = ((2 * n * y + 2 * j + 1) - n * g.h) as f32 / denominator;
+                let v = ((2 * n * y + 2 * j + 1) - n * g.h) as f32 / denominator - shift.1;
                 let v = if mirror.y { -v } else { v };
                 for i in 0..n {
-                    let u = ((2 * n * x + 2 * i + 1) - n * g.w) as f32 / denominator;
+                    let u = ((2 * n * x + 2 * i + 1) - n * g.w) as f32 / denominator - shift.0;
                     let u = if mirror.x { -u } else { u };
                     if inside(u, v) {
                         count += 1;
@@ -1096,22 +1117,26 @@ fn rounded_mirror(code: u32) -> Option<Mirror> {
 }
 
 /// Canonical U+256D (arc down and right): a quarter of an elliptical band
-/// centered on `(r, r)` (offsets from the cell center) plus straight stubs from
-/// its ends to the bottom and right edges.
+/// centered on `(r, r)` (offsets from the snapped light-stroke position, see
+/// [`Geometry::axis_center`]) plus straight stubs from its ends to the bottom
+/// and right edges.
 ///
-/// The band is as thick as the snapped joint interval of the stub it meets on
-/// each axis (`J_x` where it turns into the vertical stub, `J_y` where it turns
-/// into the horizontal one), so the arc blends into the stubs and into the light
-/// lines of the neighbouring cells with neither gap nor overshoot; in between the
-/// two thicknesses interpolate. The radius is the largest for which the band's
-/// outer edge still touches the cell edge, which keeps the tangent ends solid.
+/// The stubs are exactly the snapped joint intervals `J_x` and `J_y`, bias
+/// included, so the corner meets `│` below and `─` to the right pixel for
+/// pixel. The band is as thick as the stub it turns into on each axis and the
+/// two thicknesses interpolate in between. The radius is the largest for which
+/// the band's outer edge still touches the cell edge, which keeps the tangent
+/// ends solid.
 fn rounded_corner(mirror: Mirror, g: &Geometry, out: &mut Vec<DeviceRect>) {
     let hx = g.joint(Axis::X, g.thickness.light).len() as f32 / 2.0;
     let hy = g.joint(Axis::Y, g.thickness.light).len() as f32 / 2.0;
-    let r = (g.cx - hx).min(g.cy - hy).max(0.0);
+    let sx = g.axis_center(Axis::X) - g.cx;
+    let sy = g.axis_center(Axis::Y) - g.cy;
+    let r = (g.cx - hx - sx).min(g.cy - hy - sy).max(0.0);
     rasterize(
         g,
         mirror,
+        (sx, sy),
         |u, v| {
             if (v >= r && u.abs() <= hx) || (u >= r && v.abs() <= hy) {
                 return true;
@@ -1183,13 +1208,20 @@ fn powerline(code: u32, g: &Geometry, out: &mut Vec<DeviceRect>) {
     let half = t / 2.0;
     match shape {
         // Base on the left edge, apex at `(W, C.y)`.
-        Powerline::Triangle => rasterize(g, mirror, |u, v| v.abs() * w <= cy * (cx - u), out),
+        Powerline::Triangle => rasterize(
+            g,
+            mirror,
+            (0.0, 0.0),
+            |u, v| v.abs() * w <= cy * (cx - u),
+            out,
+        ),
         // Both legs of the triangle as one stroke: `|v|` folds the lower leg
         // onto the upper one. The apex is inset by half the width so the
         // stroke's round join does not spill into the next cell.
         Powerline::Chevron => rasterize(
             g,
             mirror,
+            (0.0, 0.0),
             |u, v| segment_distance_sq(u, v.abs(), (-cx, cy), (cx - half, 0.0)) <= half * half,
             out,
         ),
@@ -1197,18 +1229,26 @@ fn powerline(code: u32, g: &Geometry, out: &mut Vec<DeviceRect>) {
         Powerline::HalfDisc => rasterize(
             g,
             mirror,
+            (0.0, 0.0),
             |u, v| ((u + cx) / w).powi(2) + (v / cy).powi(2) <= 1.0,
             out,
         ),
         Powerline::HalfDiscOutline => rasterize(
             g,
             mirror,
+            (0.0, 0.0),
             |u, v| in_elliptic_band(u + cx, v, w - t, cy - t, w, cy),
             out,
         ),
         // Below the top-left to bottom-right diagonal.
-        Powerline::Corner => rasterize(g, mirror, |u, v| v * w >= u * h, out),
-        Powerline::CornerOutline => rasterize(g, mirror, |u, v| on_diagonal(g, u, v, half), out),
+        Powerline::Corner => rasterize(g, mirror, (0.0, 0.0), |u, v| v * w >= u * h, out),
+        Powerline::CornerOutline => rasterize(
+            g,
+            mirror,
+            (0.0, 0.0),
+            |u, v| on_diagonal(g, u, v, half),
+            out,
+        ),
     }
 }
 
@@ -1241,11 +1281,12 @@ pub(crate) fn shape_quads(c: char, cell: CellSizeDevicePx, out: &mut Vec<DeviceR
     let half = g.thickness.light as f32 / 2.0;
     match code {
         // U+2571 is the reflection of U+2572; U+2573 is both diagonals.
-        0x2571 => rasterize(&g, MX, |u, v| on_diagonal(&g, u, v, half), out),
-        0x2572 => rasterize(&g, ID, |u, v| on_diagonal(&g, u, v, half), out),
+        0x2571 => rasterize(&g, MX, (0.0, 0.0), |u, v| on_diagonal(&g, u, v, half), out),
+        0x2572 => rasterize(&g, ID, (0.0, 0.0), |u, v| on_diagonal(&g, u, v, half), out),
         0x2573 => rasterize(
             &g,
             ID,
+            (0.0, 0.0),
             |u, v| on_diagonal(&g, u, v, half) || on_diagonal(&g, -u, v, half),
             out,
         ),

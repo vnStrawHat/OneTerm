@@ -335,7 +335,7 @@ gutter stamps, search highlights, semantic overlay, shell profile) travels in
 | 6 | settings `min_contrast` 0.0 silently disables enforcement (wart 10) | `min_contrast <= 0.0` keeps the theme default 4.5; `0.0 < v <= 1.0` disables; `> 1.0` is the threshold | inventory wart |
 | 7 | rounded corners via 4×4 supersampled alpha rects; diagonals and most powerline glyphs from the font or as blocks | coverage-anti-aliased quads, as the old engine, but symmetric: 4×4 samples on a mirror-exact grid for rounded corners, `╱╲╳` and all sixteen powerline glyphs, run-length merged | acceptance rework 2026-09-09 — the first cut used GPUI stroked/filled paths, which the DirectX backend paints without anti-aliasing at cell sizes (visible stair steps); quads with coverage alpha are what the old engine did and look smooth |
 | 8 | scroll with `Damage::Full` rebuilt every row | rotation + hash verification rebuilds only changed rows | performance; observable output identical |
-| 9 | light stroke thickness `round(cw/6)` etc. | thickness table in `shapes.md`, parity-matched per axis | symmetric snapping (DEC-0007 item 4) |
+| 9 | light stroke thickness `round(cw/6)` etc. | thickness table in `shapes.md`; the painted thickness equals the nominal on both axes, a stroke that cannot be centred sits half a pixel toward the top/left (never widens) | symmetric snapping (DEC-0007 item 4, amended 2026-09-09: uniform thickness across axes) |
 | 10 | URL continuation rows only replanned when themselves damaged | mask delta marks them dirty | correctness of always-on URL underline across wraps |
 
 Kept as-is on purpose (out of scope, from inventory §6): no middle-click paste (6), IME on the
@@ -487,7 +487,7 @@ US-0050 ticks every box during sign-off.
 
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
-| Parity-matched symmetric snapping makes 1 px strokes 2 px on even device cell sizes, and `─`/`│` may differ by 1 px when width and height parity differ | box drawing looks heavier at 1× with even cell widths | documented in `shapes.md`; thickness nominal is `round(W/8)` so ≥ 16 px cells are unaffected; revisit as a decision if the owner objects after the sign-off screenshots |
+| Parity snapping (DEC-0007 item 4 amendment, 2026-09-09): a stroke whose thickness cannot be centred on the cell axis sits half a device pixel toward the top/left, so on that axis a glyph is one pixel off its reflection and light/heavy strokes of different parity have centres 0.5 px apart | box drawing is very slightly off-centre in the cell at e.g. 9 × 18 or 8 × 16; not visible at 1× since every code point shifts alike and joins stay seamless | replaces the earlier "widen by one pixel" risk, which the owner rejected (`─` 2 px vs `│` 1 px at 9 × 18); documented in `shapes.md` with worked examples; `stroke_thickness_uniform_across_axes`, `double_rails_equidistant_from_joint` and the parity-aware symmetry tests guard it; `evidence/rework4-parity*.png` |
 | `force_width` shaping treats a wide glyph as one base and misplaces following glyphs | CJK misalignment | text runs break at wide chars (own run, no force width) |
 | `shape_line_by_hash` collision | wrong glyphs for a run | 64-bit FNV over bytes + font key + byte length; accepted by GPUI's own contract |
 | alacritty reports `Damage::Full` on every scroll | old crate replanned all rows | hash-verify makes rebuild proportional to real change; hashing 80×40 cells is µs-scale |

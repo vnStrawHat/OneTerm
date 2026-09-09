@@ -3,7 +3,7 @@
 Intake: IN-0018
 HLD: ../high-level-design.md
 Topic: shapes
-Date: 2026-09-08 (curves reworked 2026-09-09)
+Date: 2026-09-08 (curves reworked 2026-09-09; parity snapping amended 2026-09-09, see DEC-0007 item 4)
 
 > One concern per file. Keep this focused on implementation-level mechanics for a single area of the HLD so it stays reviewable. Do not restate the whole intake here.
 
@@ -56,30 +56,52 @@ half_w: half_thick, half_h: half_len`.
    (`round(0.5) = 1`, but `7 - round(6.5) = 0`), so every rounding of a coordinate in this
    module resolves ties toward the reflection's fixed point instead. Braille dot centers,
    shade tile edges and rounded-corner stubs all land on ties at some cell sizes.
-3. Parity: a symmetric interval needs `t` even when `c` is an integer and `t` odd when `c` is a
-   half-integer.
-   - `Anchor::Fixed` (the centerline may not move; used for anything centered on `C`): on
-     mismatch `t += 1`.
-   - `Anchor::Nearest` (the thickness may not change; used for rails, dots, dash segments,
-     tiles): on mismatch move `c` by `±0.5` to the nearest parity-valid position, ties broken
-     **away from the cell center** (so gaps between paired features never close). Exactly
-     on the cell center there is no "away": `t += 1` as for `Fixed`, since moving would
-     break the feature's own symmetry.
+3. Parity: a centered interval needs `t` even when `c` is an integer and `t` odd when `c` is a
+   half-integer. **The thickness never changes for a stroke** (DEC-0007 item 4, amendment
+   2026-09-09).
+   - `Anchor::Fixed` (a stroke on a cell axis: joints `J_x`/`J_y`, full-length lines, arm
+     cross-sections): on mismatch move `c` by **−0.5, toward the top/left**, for every code
+     point alike. Exact centring whenever the grid allows it; the same half-pixel bias
+     everywhere when it does not, so joins stay seamless and `─` is as thick as `│`.
+   - `Anchor::Nearest` (an off-axis feature whose thickness may not change: rails, dots,
+     dash segments, tiles): on mismatch move `c` by `±0.5` to the nearest parity-valid
+     position, ties broken **away from the cell center** (so gaps between paired features
+     never close). Exactly on the cell center there is no "away": `t += 1`, since moving
+     would break the feature's own symmetry. This branch is reached only by *lengths* (the
+     middle dash segment, the `▬` bar height), never by a thickness.
 4. `lo = c - t/2` (exact integer), `hi = lo + t`. An interval that would fall outside the
    cell is **shifted in** (`lo` clamped into `[min(0, size - t), max(0, size - t)]`) and
    only then clipped to `[0, size]`: on a one or two pixel cell the rails of a double line
-   and the braille dots must still draw something. The shift is symmetric, so reflection
-   still commutes with snapping.
+   and the braille dots must still draw something.
 
-Properties (asserted by tests): the interval is symmetric about `c`; for any `v`,
-`snap_interval(size - v, ...)` is the mirror of `snap_interval(v, ...)`, because ties toward
-the center give `round(size - x) == size - round(x)` for integer `size`; two strokes with
-the same `(center, half)` snap identically, so a horizontal line's y-interval in cell *n* equals
-the one in cell *n + 1* and the joint square of `┼` is exactly `J_x × J_y`.
+The **stroke position** `C'` of an axis is the midpoint of `J(t_l)`: `C` when `(size − t_l)`
+is even, `C − 0.5` otherwise (`Geometry::axis_center`). Rails and the rounded corner are laid
+out around `C'`, not `C`, so they stay concentric with the strokes they meet.
 
-Consequence to accept: on an even cell dimension a nominal 1 px centered stroke becomes 2 px
-(`Fixed` parity), and when `W` and `H` have different parity `─` and `│` can differ by one
-device pixel. This is the price of exact symmetry and is recorded in the HLD risks.
+Properties (asserted by tests): the interval is symmetric about `c` (or `c − 0.5`); ties
+toward the center give `round(size - x) == size - round(x)` for integer `size`, so for
+`Nearest` and for a parity-matched `Fixed`, `snap_interval(size - v, ...)` is the exact mirror
+of `snap_interval(v, ...)`; for a mismatched `Fixed` it is the mirror translated by exactly one
+pixel toward the top/left (both intervals carry the same bias). Two strokes with the same
+`(center, half)` snap identically, so a horizontal line's y-interval in cell *n* equals the one
+in cell *n + 1* and the joint square of `┼` is exactly `J_x × J_y`.
+
+Worked examples (`t_l = 1`): at **9 × 18** `C = (4.5, 9)`; `J_x = [4, 5)` (exact), `J_y`:
+`c = 9` is an integer and `t = 1` odd, so `c' = 8.5` and `J_y = [8, 9)` — `─` occupies row 8
+only, `│` column 4, `┼` is their union, `━` (`t_h = 3`) is rows `[7, 10)`; the double rails
+sit at `C'.y ± 1 = 7.5, 9.5` → rows 7 and 9 with the light line running exactly between them.
+At **8 × 16** `C = (4, 8)`, both axes mismatch: `J_x = [3, 4)`, `J_y = [7, 8)`, `┼` is column 3
+and row 7, rails at columns 2 / 4 and rows 6 / 8. At **9 × 19** nothing shifts.
+
+Consequence to accept: a stroke is exactly centered only when the cell dimension and the
+stroke thickness have the same parity; otherwise the whole box-drawing family sits half a
+device pixel toward the top/left of the cell centre. Reflection is then off by one pixel
+(`build(mirror_y(def)) == mirror_y(build(def))` translated by 1 px toward the top, arms that
+reach the cell edge still reaching it). Light and heavy strokes of different parity (e.g.
+`t_l = 2`, `t_h = 5` at 14 px) can have centres 0.5 px apart on the same axis; the light
+interval is always inside the heavy one, so joints remain unions. This replaces the earlier
+"widen by one pixel" rule, which made `─` 2 px and `│` 1 px at 9 × 18 (owner complaint,
+acceptance rework 2 of US-0046).
 
 ### Transforms
 
@@ -112,13 +134,15 @@ stores a canonical definition plus a transform; the test
 | rail offset `d` | `(t_d + g) / 2` (nominal, `Nearest`-snapped) | 1 | 1 | 1 | 2 | 2 |
 | dash gap `g_dash` | `max(1, round(W / 8))` | 1 | 1 | 1 | 2 | 2 |
 
-Nominal values pass through `snap_interval`, so the painted thickness may be one pixel more
-(parity). Height uses the same table with `W` (not `H`) so horizontal and vertical strokes start
-from the same nominal.
+Nominal values pass through `snap_interval`; the painted thickness equals the nominal on both
+axes (a stroke shifts, it never widens). Height uses the same table with `W` (not `H`) so
+horizontal and vertical strokes are equally thick.
 
 Joint intervals: `J_x = snap_interval(C.x, t/2, W, Fixed)`, `J_y = snap_interval(C.y, t/2,
-H, Fixed)` for `t ∈ {t_l, t_h}`. Double rails: `R±_x = snap_interval(C.x ± d, t_d/2, W,
-Nearest)`, likewise `R±_y`; the **outer interval** `O_x = [R-_x.lo, R+_x.hi)`.
+H, Fixed)` for `t ∈ {t_l, t_h}`. Double rails: `R±_x = snap_interval(C'.x ± d, t_d/2, W,
+Nearest)` around the stroke position `C'`, likewise `R±_y`; since `2d = t_d + g` is even the
+rails always land parity-exact, equidistant from `J(t_l)` and abutting it (`R-.hi == J.lo`,
+`J.hi == R+.lo`). The **outer interval** `O_x = [R-_x.lo, R+_x.hi)`.
 
 ### Family A — lines, corners, tees, crosses, half lines (U+2500–254B, U+2574–257F)
 
@@ -144,8 +168,9 @@ adjacent `─` cells share `J_y`.
 ### Family B — dashes (U+2504–250B, U+254C–254F)
 
 `n ∈ {2, 3, 4}` segments of a light/heavy stroke: segment pitch `p = W/n` (or `H/n`), segment
-half-length `(p - g_dash)/2`, centers at `C + (k + 0.5 - n/2) * p` for `k in 0..n`; the middle
-segment of odd `n` is `Fixed`, others `Nearest`. Along-extents are clipped so segments never
+half-length `(p - g_dash)/2`, centers at `C + (k + 0.5 - n/2) * p` for `k in 0..n`; every
+segment is `Nearest` (the middle one of an odd `n` sits on the cell center and widens by a
+pixel rather than shifting, so the gaps stay symmetric). Along-extents are clipped so segments never
 overlap (`hi_k ≤ lo_{k+1}`); if snapping closes a gap the later segment's `lo` is raised by one
 pixel and its `hi` kept, and the symmetric partner is adjusted identically by construction.
 Cross-extent = `J_y(w)` / `J_x(w)`.
@@ -217,8 +242,10 @@ rounded corner). **Fills** are inside tests against the ideal boundary.
   direction `(W, H)`: `|u · H − v · W| ≤ (t_l / 2) · √(W² + H²)`. `╱` = `mirror_x`; `╳` is the
   union of both bands (one predicate, self-symmetric).
 - `╭` U+256D (canonical, arc down and right). Let `hx = |J_x| / 2`, `hy = |J_y| / 2` (half the
-  snapped light joint widths, `Fixed`), `r = max(0, min(C.x − hx, C.y − hy))`. The region is
-  the union of
+  snapped light joint widths, `Fixed`), and let offsets be taken from the **stroke position**
+  `C'` (the rasterizer subtracts `C' − C` from every sample *before* reflecting, so all four
+  orientations share the biased stub columns/rows); `r = max(0, min(W − C'.x − hx,
+  H − C'.y − hy))`. The region is the union of
   - the vertical stub `v ≥ r ∧ |u| ≤ hx` (to the bottom edge),
   - the horizontal stub `u ≥ r ∧ |v| ≤ hy` (to the right edge; empty when `r = C.x − hx`),
   - the arc: with `(du, dv) = (u − r, v − r)`, `du ≤ 0 ∧ dv ≤ 0` and inside the elliptical band
@@ -231,7 +258,10 @@ rounded corner). **Fills** are inside tests against the ideal boundary.
   thickness interpolates along the arc, and the band's midline is the circle of radius `r`
   about `(r, r)`. `r` is the largest radius whose outer band edge still touches the cell edge,
   so the tangent ends fall on whole pixels and the joins are solid. `╮ = mirror_x(╭)`,
-  `╰ = mirror_y(╭)`, `╯ = mirror_x(mirror_y(╭))`.
+  `╰ = mirror_y(╭)`, `╯ = mirror_x(mirror_y(╭))`. Diagonals and the powerline strokes are
+  anchored to the cell corners and edges, meet no box line, and are anti-aliased, so they
+  keep the true centre `C` (a shift would clip half a pixel at one edge and leave a gap at
+  the other); fills keep `C` too.
 
 Worked example, `╭` at 9 × 19 (`t_l = 1`, `J_x = [4, 5)`, `J_y = [9, 10)`, `hx = hy = 0.5`,
 `r = min(4.5 − 0.5, 9.5 − 0.5) = 4`, arc center `C + (4, 4) = (8.5, 13.5)`, band radii 3.5 … 4.5).
@@ -249,7 +279,9 @@ row 18  ....#....
 
 13 rects. Pixel `(8, 9)` is solid, so `─` in the next cell (`[0, 9) × [9, 10)`) continues the
 stroke; pixel `(4, 18)` is solid, so `│` below continues it. `╮` at the same size is the exact
-mirror: `(0, 9)` solid, `(3, 9) 14/16`, `(2, 9) 8/16`, ….
+mirror: `(0, 9)` solid, `(3, 9) 14/16`, `(2, 9) 8/16`, …. At 9 × 18 (`C'.y = 8.5`) the same
+picture starts one row higher (`.....058#` on row 8, stub on column 4 from row 12), meeting
+`─` on row 8 and `│` on column 4 exactly; `╮` there is the mirror moved one pixel left.
 
 ### Family E — blocks (U+2580–259F except shades)
 
@@ -266,7 +298,7 @@ rounds to zero pixels would drop the character entirely on a small cell.
 | `▘` U+2598 | `[0, half_w) × [0, half_h)`; `▝`/`▖`/`▗` by `mirror_x`/`mirror_y`/both |
 | `▚` U+259A, `▞` U+259E | `▘ ∪ ▗`, `▝ ∪ ▖` |
 | `▙ ▛ ▜ ▟` U+2599, 259B, 259C, 259F | three quadrants (all but `▝`, `▗`, `▖`, `▘`) |
-| `▬` U+25AC | `Stroke { H, cross 0, along 0, half_len W/2, half_thick H/4 }` |
+| `▬` U+25AC | `Stroke { H, cross 0, along 0, half_len W/2, half_thick H/4 }`, snapped `Nearest` (a bar height is a length: it widens by a pixel on parity mismatch and stays exactly centered) |
 
 Sextants (U+1FB00–1FB3B) are out of scope.
 
@@ -351,8 +383,11 @@ painter stays a plain `paint_quad`, and coalesces across cells only when the fin
 - [ ] `W == 1` or `H == 1`: every interval clips or shifts into the cell; nothing panics;
       `┼` is one pixel, and so is every double corner (the `╬` center hole and the
       `╒`/`╘` distinction need at least 5 × 5).
-- [ ] Even cell dimension: `Fixed` parity widens a nominal 1 px stroke to 2 px (documented).
-- [ ] `W` even and `H` odd: `─` and `│` differ by 1 px; `┼` is still their exact union.
+- [ ] Cell dimension and stroke thickness of different parity: the stroke keeps its
+      thickness and sits half a pixel toward the top/left; `┼` is still the exact union of
+      `─` and `│`, and mirrored code points are one pixel off their reflection on that axis.
+- [ ] `W` even and `H` odd (or `t_l` and `t_h` of different parity): `─` and `│` are still
+      equally thick; only the bias differs per axis / per weight.
 - [ ] Rails on a narrow cell (`W ≤ 4`): `Nearest` snapping keeps `R-` and `R+` disjoint; when
       impossible (`W < 2 t_d + 1`) the rails may touch but never cross.
 - [ ] Dash gaps at tiny widths (`W < 2n`): segments degrade to 1 px each, gaps may vanish; the
@@ -368,27 +403,45 @@ painter stays a plain `paint_quad`, and coalesces across cells only when the fin
 
 ## Verification
 
-`src/render/shapes_tests.rs`, all pure `#[test]`s, run on cell sizes `{7×15, 8×16, 9×19, 14×29,
-18×38, 36×76, 1×1}` unless stated:
+`src/render/shapes_tests.rs`, all pure `#[test]`s, run on cell sizes `{7×15, 8×16, 8×17, 9×18,
+9×19, 14×29, 18×38, 36×76, 1×1}` unless stated (`PARITY_SIZES = {9×18, 8×16, 9×19, 8×17,
+14×28, 14×29}` for the parity-specific tests):
 
 - [ ] `every_supported_code_point_emits_geometry`: for each code point in U+2500–257F,
       U+2580–259F, U+25AC, U+2800–28FF, U+E0B0–E0BF, `is_shape_char` is true and
       `shape_quads` appends something (U+2800 exempt from the emit check).
 - [ ] `all_rects_within_cell_bounds`: inside the cell, `0 < alpha ≤ 1`.
 - [ ] `solid_families_unchanged_and_opaque`: rect sets of `┌ ┼ ╬ ╤ ┄ ┋ ▄ ▚ ░ ▒ ▓ ⣿ ▬ ━ ╟` at
-      9 × 19 and 14 × 29 equal the snapshot taken before the curves moved to coverage
-      rasterization; every rect of every non-D/H code point has `alpha == 1.0` at every size.
+      9 × 18, 9 × 19 and 14 × 29 equal the snapshot (taken before the curves moved to coverage
+      rasterization, regenerated 2026-09-09 for the parity amendment and reviewed by eye via
+      `shape_bitmaps_for_visual_review`; 9 × 19 unchanged); every rect of every non-D/H code
+      point has `alpha == 1.0` at every size.
 - [ ] `curved_edges_have_fractional_coverage`: `╭`, E0B4, E0B0, `╱` each emit rects with
       `0 < alpha < 1` at 9 × 19 and 14 × 29, and every alpha is a multiple of 1/16.
 - [ ] `mirror_x_pairs_match`: `┌/┐ ┗/┛ ├/┤ ╭/╮ ╔/╗ ╠/╣ ▌/▐ ▏/▕ ▘/▝ ╱/╲ E0B0/E0B2 E0B4/E0B6
       E0B8/E0BA` and braille `0x01/0x08` — coverage maps equal pixel for pixel including
-      alpha, and the mirrored rect set equals the other glyph's rect set.
+      alpha, and the mirrored rect set equals the other glyph's rect set, on every axis whose
+      parity matches the glyph's stroke; on a mismatched axis (`(size − t) odd`, `t` the
+      glyph's nominal — `t_h` for heavy glyphs, none for blocks / braille / fills / diagonals)
+      the coverage map equals the reflection moved exactly one pixel toward the top/left
+      (`Bitmap::shifted`: the far edge keeps its own pixels). The shift is computed from
+      `(size, t)` in `assert_mirrored`, never inferred, so a shift the other way or by more
+      than one pixel fails.
 - [ ] `mirror_y_pairs_match`: `┌/└ ┬/┴ ╭/╰ ╒/╘ ╓/╙ ╔/╚ ▀/▄ ▔/▁ ▘/▖ E0B8/E0BC` and braille
       `0x01/0x40`, same comparison.
 - [ ] `self_symmetric_glyphs`: `─ │ ┼ ━ ┃ ╋ ═ ║ ╬ █ ╳ ▒ ▬` equal their own mirror_x and
-      mirror_y coverage maps and rect sets.
-- [ ] `builder_commutes_with_transforms`: for every Family A/C arm set,
-      `build(mirror(def)) == mirror_rects(build(def))` (rects compare alpha too).
+      mirror_y coverage maps (and rect sets where exact), same comparison.
+- [ ] `builder_commutes_with_transforms`: for every Family A/C arm set and reflection, every
+      rect of `build(mirror(def))` has exactly one counterpart in `mirror_rects(build(def))`
+      whose interior boundaries on a mirrored axis are equal or moved one pixel toward the
+      top/left (cell-edge boundaries stay); a shift is only allowed on an axis where `t_l`
+      or `t_h` cannot be centered (mixed-weight glyphs shift per rect).
+- [ ] `stroke_thickness_uniform_across_axes` (PARITY_SIZES): `─` and `│` are one rect each,
+      `t_l` thick; `━` and `┃` are `t_h` thick; each is centered on `C` or on `C − 0.5`,
+      never `C + 0.5`.
+- [ ] `double_rails_equidistant_from_joint` (all sizes ≥ 5 × 5): on both axes
+      `R-.hi ≤ J.lo`, `J.hi ≤ R+.lo`, `J.lo − R-.hi == R+.lo − J.hi`, equal rail lengths;
+      `╪ == ═ ∪ │` and `╫ == ║ ∪ ─` pixel for pixel.
 - [ ] `horizontal_line_abuts_across_cells`: `─` y-interval identical for the same cell size;
       `x = 0` and `x + w = W`; same for `━` and the `═` rails. The outer `┄` segments end
       within one dash gap of the edge, symmetrically (they touch it only when the snapped
@@ -401,7 +454,8 @@ painter stays a plain `paint_quad`, and coalesces across cells only when the fin
       wart 3), for cells of at least 5 × 5 device pixels — below that a double line has no
       room for two rails and every corner collapses onto the same pixels.
 - [ ] `dash_segment_counts`: `╌ 2`, `┄ 3`, `┈ 4` (and heavy/vertical variants) distinct
-      along-intervals, symmetric about the center, for `W ≥ 8`.
+      along-intervals, and the rect set is its own exact mirror along the dash axis at every
+      size (lengths never shift), for `W ≥ 8`.
 - [ ] `block_eighth_fractions_monotone`: heights of `▁..█` non-decreasing, `█` full, `▄` ==
       `H − (H+1)/2 .. H`; widths of `▏..▉` likewise.
 - [ ] `quadrant_union_is_full_block`: `▘ ∪ ▝ ∪ ▖ ∪ ▗` covers every pixel.
@@ -415,10 +469,13 @@ painter stays a plain `paint_quad`, and coalesces across cells only when the fin
       points of 25 / 50 / 75 % (for cells ≥ 7 px wide); each shade's rect set is
       self-symmetric at every size.
 - [ ] `snap_interval_is_even_about_center`: property test over 10k `(center, half, size)`
-      triples for both anchors.
+      triples for both anchors: exact mirror for `Nearest` and parity-matched `Fixed`; for a
+      mismatched `Fixed` the mirror translated by one pixel toward the top/left (or exact,
+      where the cell edge clamps), with the nominal thickness and the midpoint at exactly
+      `c − 0.5` when the interval is interior.
 - [ ] `heavy_thicker_than_light`, `rails_disjoint_with_gap` for all sizes `W ≥ 5`.
-- [ ] `rounded_corner_matches_straight_stubs`: for `╭` at every size, rows below `C.y + r` are
-      exactly `J_x` at alpha 1 and nothing else, columns right of `C.x + r` are exactly `J_y`
+- [ ] `rounded_corner_matches_straight_stubs`: for `╭` at every size, rows below `C'.y + r` are
+      exactly `J_x` at alpha 1 and nothing else, columns right of `C'.x + r` are exactly `J_y`
       at alpha 1 (no overshoot); the join pixels on the bottom and right edges are solid (cells
       ≥ 3 × 3); every row from the arc's top and every column from its left edge has coverage
       (no gap); some coverage lies off both stub axes (it is an arc, not a mitre).

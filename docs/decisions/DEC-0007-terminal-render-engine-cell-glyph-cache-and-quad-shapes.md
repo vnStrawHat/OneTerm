@@ -31,6 +31,16 @@ Future work on the terminal view inherits these choices:
    horizontal center axes: rects are computed from the cell center and half-extents, and
    mirrored variants are derived by reflection, not by separate left-to-right or
    top-to-bottom accumulation. Tests assert the symmetry.
+
+   Amendment 2026-09-09 (US-0046 acceptance rework 2): snapping to device pixels never
+   changes a stroke's thickness. A stroke is centred exactly whenever the pixel grid allows
+   it (cell dimension and thickness of equal parity); when it does not, the stroke keeps its
+   nominal thickness and sits half a pixel toward the top/left, the same way for every code
+   point of the family, so joins stay seamless and `─` is as thick as `│` on every cell size.
+   The earlier rule widened the stroke by one pixel instead, which made the horizontal light
+   line 2 px and the vertical one 1 px at the owner's 9 x 18 cell. Reflection symmetry is
+   exact on a parity-matched axis and off by exactly that one pixel on a mismatched one;
+   the tests assert the shift is 0 or 1 and always toward the top/left.
 5. Per-frame work is bounded by dirty rows: unchanged rows reuse their row plan; shaped
    text is cached per cluster/style; an idle terminal produces no shaping and no plans.
 

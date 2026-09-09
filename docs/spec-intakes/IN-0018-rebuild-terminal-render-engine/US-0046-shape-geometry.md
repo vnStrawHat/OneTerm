@@ -235,3 +235,71 @@ was left alone), sample printed with `chcp 65001 & powershell -NoProfile -Comman
 neighbour): rounded boxes, `╭─┬─╮`, `╱╲╳`, all sixteen powerline glyphs on coloured
 backgrounds and a `seg1 seg2` prompt — edges are soft, joins are solid, no stair steps.
 Gate results are in the final report of the rework session.
+
+## Acceptance rework 2 (2026-09-09): uniform thickness across parity
+
+**Complaint.** At the owner's 9 × 18 device-pixel cell the horizontal light line `─` was 2 px
+and the vertical `│` 1 px (the horizontal stroke visibly thicker than the vertical one).
+`snap_interval(.., Anchor::Fixed)`
+widened a stroke by one pixel whenever its parity did not match the cell axis (a 1 px stroke
+cannot be centred on the pixel boundary at `y = 9.0`).
+
+**Decision (DEC-0007 item 4, amendment 2026-09-09).** Snapping never changes a stroke's
+thickness: exact centring when the grid allows, otherwise the nominal thickness shifted half a
+pixel toward the top/left, identically for every code point, so joins stay seamless and both
+axes are equally thick.
+
+**Change** (`src/render/shapes.rs`). `Anchor::Fixed` now moves the centre by −0.5 px on a
+parity mismatch instead of widening. `Geometry::axis_center(axis)` is the midpoint of the
+light joint (`C` or `C − 0.5`); rails are laid out around it, so `R−`/`R+` stay equidistant from
+the light stroke and abut it on both sides (`╪ == ═ ∪ │`, `╫ == ║ ∪ ─`). The rounded corner
+takes its stubs and arc centre from the same biased position; `rasterize` gained a `shift`
+argument applied *before* the reflection so all four orientations share the biased stub
+column/row (`╭` at 9 × 18 meets `─` on row 8 and `│` on column 4). Diagonals and the powerline
+strokes are edge-anchored, meet no box line and are anti-aliased, so they keep the true centre
+(a shift would clip half a pixel at one edge and open a gap at the other); fills keep it too.
+Lengths are not thicknesses: the middle dash segment and the `▬` bar height now use
+`Anchor::Nearest`, whose on-centre branch widens by a pixel and keeps dashes exactly symmetric
+(a shifted middle segment would make the dash gaps 1 px / 2 px).
+
+Resulting geometry at 9 × 18: `─` = row 8, `│` = column 4, `┼` = their union, `━` = rows 7–9,
+`╬` rails on rows 7 / 9 and columns 3 / 5 with the 1 × 1 hole at (4, 8). At 8 × 16: column 3,
+row 7, rails 2 / 4 and 6 / 8. 9 × 19 is unchanged. At 14 × 29 the light strokes are now 2 px
+(were 3) and the heavy dash cross 5 px (was 6).
+
+**Symmetry contract.** On an axis whose parity matches the stroke, mirror equality stays exact;
+on a mismatched axis `build(mirror(def))` equals `mirror(build(def))` moved exactly one pixel
+toward the top/left (arms that reach the cell edge still reach it).
+
+**Tests** (`shapes_tests.rs`, 27 + 1 ignored). `SIZES` gained 8 × 17 and 9 × 18;
+`PARITY_SIZES = {9×18, 8×16, 9×19, 8×17, 14×28, 14×29}`. `assert_mirrored` computes the expected
+shift from `(size, t)` via `stroke_nominal` (`t_h` for heavy glyphs, none for blocks / braille /
+fills / diagonals) and compares against `Bitmap::shifted` (far edge keeps its pixels); rect
+sets are compared where exact. `builder_commutes_with_transforms` matches rects one to one
+with interior boundaries equal or moved one pixel toward the top/left on an axis where `t_l`
+or `t_h` cannot be centred. `snap_interval_is_even_about_center` asserts the exact mirror for
+`Nearest` and matched `Fixed`, and the one-pixel translation, nominal thickness and midpoint
+`c − 0.5` for a mismatched interior `Fixed`. `dash_segment_counts` asserts exact self-mirror of
+the segment rects. `rounded_corner_matches_straight_stubs` measures from `axis_center`.
+New: `stroke_thickness_uniform_across_axes`, `double_rails_equidistant_from_joint`.
+`solid_families_unchanged_and_opaque` snapshot regenerated (9 × 18 added, 14 × 29 updated,
+9 × 19 unchanged) after reviewing `shape_bitmaps_for_visual_review` at 9 × 18 / 9 × 19 / 8 × 16
+for `┌ ┼ ╔ ╬ ╒ ╘ ╭`: joints meet, rails clear the light stroke, arms reach the cell edges.
+`cross_equals_union_of_lines`, `horizontal_line_abuts_across_cells`, `corner_arms_meet_at_joint`
+still hold at every size.
+
+**Docs.** `low-level-design/shapes.md` (Symmetric snapping, stroke position `C'`, worked
+examples 9 × 18 / 8 × 16, thickness rules, rails, Family B/D/E, edge cases, verification list),
+`DEC-0007` item 4 amendment, HLD deviation 9 and the parity risk row, this packet.
+
+**Evidence.** `cargo fmt --all`; `cargo clippy --workspace --all-targets -- -D warnings`:
+`Finished dev profile`, exit 0; `cargo clippy -p oneterm-terminal-view --all-targets --features
+terminal-diagnostics -- -D warnings`: `Finished dev profile`, exit 0; `cargo test -p
+oneterm-terminal-view`: `265 passed; 0 failed; 1 ignored`; `cargo test --workspace`: all
+`test result: ok` (no failures); `python scripts/check-english.py` and `check-doc-paths.py`
+passed. GUI: `target/fast-dev/oneterm.exe` (own pid, started and stopped by the agent; the
+owner's `dist` build pid 15476 left alone) printed the sample via `chcp 65001 & powershell
+-NoProfile -Command "Get-Content -Encoding utf8 <file>"`; captured with `PrintWindow(.., 2)`:
+`evidence/rework4-parity.png` (full window, 9 × 18 cells) and `evidence/rework4-parity-zoom.png`
+(4×, nearest neighbour): light, heavy and double boxes have the same stroke thickness on both
+axes, `┼╪╫╬┿╂` joints are clean, `╭──╮╰──╯` meets its lines, the `─│─│` row is uniform.

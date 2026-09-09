@@ -1,16 +1,23 @@
 use super::*;
 
 /// Cell sizes every geometry test runs over: odd and even widths, matching and
-/// mismatched parity, a large HiDPI cell, and the degenerate one-pixel cell.
-const SIZES: [(i32, i32); 7] = [
+/// mismatched parity on one or both axes (9 x 18 is the owner's cell size at
+/// 1x), a large HiDPI cell, and the degenerate one-pixel cell.
+const SIZES: [(i32, i32); 9] = [
     (7, 15),
     (8, 16),
+    (8, 17),
+    (9, 18),
     (9, 19),
     (14, 29),
     (18, 38),
     (36, 76),
     (1, 1),
 ];
+
+/// Cell sizes at which some nominal thickness cannot be centred on some axis,
+/// the ones the parity rule is about.
+const PARITY_SIZES: [(i32, i32); 6] = [(9, 18), (8, 16), (9, 19), (8, 17), (14, 28), (14, 29)];
 
 fn cell(size: (i32, i32)) -> CellSizeDevicePx {
     CellSizeDevicePx {
@@ -106,6 +113,21 @@ impl Bitmap {
             .all(|(mine, theirs)| *mine <= 0.0 || *theirs > 0.0)
     }
 
+    /// The bitmap moved one pixel toward the top/left on the chosen axes. The
+    /// far edge keeps its own pixels: an arm or stub that reaches the cell edge
+    /// continues into the neighbouring cell, so nothing new comes in from there.
+    fn shifted(&self, x: bool, y: bool) -> Self {
+        let mut out = Self::new((self.w, self.h));
+        for py in 0..self.h {
+            for px in 0..self.w {
+                let sx = if x && px + 1 < self.w { px + 1 } else { px };
+                let sy = if y && py + 1 < self.h { py + 1 } else { py };
+                out.alpha[(py * self.w + px) as usize] = self.alpha(sx, sy);
+            }
+        }
+        out
+    }
+
     /// `.` empty, `#` solid, a digit for `floor(alpha * 10)` in between.
     fn ascii(&self) -> String {
         let mut text = String::new();
@@ -154,23 +176,71 @@ fn mirror_rects(rects: &[DeviceRect], size: (i32, i32), mirror: Mirror) -> Vec<D
     )
 }
 
-/// `b` is the reflection of `a`: pixel for pixel including coverage alpha,
-/// and rect set for rect set (run-length merging mirrors exactly too).
+/// Nominal thickness of the strokes of `c`, which decides on which cell axes the
+/// glyph sits half a pixel toward the top/left. `None` for shapes that never
+/// shift: blocks, `▬`, shades, braille, and the edge-anchored rasterized
+/// diagonals and powerline glyphs. Box glyphs mixing light and heavy arms are
+/// not classified (none is in the symmetry lists).
+fn stroke_nominal(c: char, size: (i32, i32)) -> Option<i32> {
+    let t = stroke_thickness(cell(size));
+    match c as u32 {
+        0x2571..=0x2573 => None,
+        0x2500..=0x257F => {
+            let heavy = box_arms(c)
+                .map(|arms| arms.contains(&Some(Weight::Heavy)))
+                .or_else(|| dash_def(c).map(|(_, weight, _)| weight == Weight::Heavy))
+                .unwrap_or(false);
+            Some(if heavy { t.heavy } else { t.light })
+        }
+        _ => None,
+    }
+}
+
+/// On which mirrored axes the reflection of `c` is one pixel off: exactly those
+/// where the cell size and the stroke thickness have different parity, so the
+/// stroke cannot be centred and sits half a pixel toward the top/left instead.
+fn expected_shift(c: char, size: (i32, i32), mirror: Mirror) -> (bool, bool) {
+    let Some(t) = stroke_nominal(c, size) else {
+        return (false, false);
+    };
+    (
+        mirror.x && (size.0 - t) % 2 != 0,
+        mirror.y && (size.1 - t) % 2 != 0,
+    )
+}
+
+/// `b` is the reflection of `a`: pixel for pixel including coverage alpha, and
+/// rect set for rect set (run-length merging mirrors exactly too). On an axis
+/// whose parity does not match the stroke, `b` is the reflection moved exactly
+/// one pixel toward the top/left (never the other way, never more), because both
+/// glyphs carry the same half-pixel bias.
 fn assert_mirrored(a: char, b: char, mirror: Mirror, size: (i32, i32)) {
     let mirrored = mirror_rects(&quads(a, size), size, mirror);
-    let expected = Bitmap::from_rects(size, &mirrored);
+    let (shift_x, shift_y) = expected_shift(a, size, mirror);
+    let expected = Bitmap::from_rects(size, &mirrored).shifted(shift_x, shift_y);
     let actual = Bitmap::of(b, size);
     assert!(
         expected == actual,
-        "{a:?} mirrored is not {b:?} at {size:?}\nexpected:\n{}\nactual:\n{}",
+        "{a:?} mirrored (shift x {shift_x}, y {shift_y}) is not {b:?} at {size:?}\nexpected:\n{}\nactual:\n{}",
         expected.ascii(),
         actual.ascii()
     );
-    assert_eq!(
-        mirrored,
-        sorted(quads(b, size)),
-        "{a:?} mirrored rect set is not {b:?}'s at {size:?}"
-    );
+    if !shift_x && !shift_y {
+        assert_eq!(
+            mirrored,
+            sorted(quads(b, size)),
+            "{a:?} mirrored rect set is not {b:?}'s at {size:?}"
+        );
+    }
+}
+
+/// `[lo, hi)` moved `shift` pixels toward the origin; a boundary on the cell
+/// edge stays there (the arm continues into the next cell).
+fn shift_interval(lo: i32, hi: i32, size: i32, shift: i32) -> (i32, i32) {
+    (
+        if lo == 0 { 0 } else { lo - shift },
+        if hi == size { size } else { hi - shift },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -223,11 +293,31 @@ fn all_rects_within_cell_bounds() {
     }
 }
 
-/// Rect sets of the solid families at two cell sizes, recorded before the
-/// curved families moved to coverage rasterization: those families must stay
-/// bit-identical, and every rect of theirs is fully covered.
+/// Rect sets of the solid families at three cell sizes. Recorded before the
+/// curved families moved to coverage rasterization and regenerated on
+/// 2026-09-09 for the parity decision (DEC-0007 item 4 amendment): strokes keep
+/// their nominal thickness and sit half a pixel toward the top/left where the
+/// grid cannot centre them, so at 9 x 18 `─` is row 8 (was rows 8-9) and at
+/// 14 x 29 the light strokes are 2 px (were 3) with the double rails and the
+/// heavy dash cross following; 9 x 19 is unchanged. Every rect is fully covered.
+/// Reviewed by eye through `shape_bitmaps_for_visual_review`.
 #[rustfmt::skip]
 const SOLID_SNAPSHOT: &[(char, (i32, i32), &[(i32, i32, i32, i32)])] = &[
+    ('┌', (9, 18), &[(4, 8, 1, 10), (4, 8, 5, 1)]),
+    ('┼', (9, 18), &[(4, 0, 1, 18), (0, 8, 9, 1)]),
+    ('╬', (9, 18), &[(3, 0, 1, 8), (5, 0, 1, 8), (3, 9, 1, 9), (5, 9, 1, 9), (0, 7, 4, 1), (0, 9, 4, 1), (5, 7, 4, 1), (5, 9, 4, 1)]),
+    ('╤', (9, 18), &[(4, 9, 1, 9), (0, 7, 9, 1), (0, 9, 9, 1)]),
+    ('┄', (9, 18), &[(0, 8, 2, 1), (3, 8, 3, 1), (7, 8, 2, 1)]),
+    ('┋', (9, 18), &[(3, 0, 3, 4), (3, 5, 3, 4), (3, 9, 3, 4), (3, 14, 3, 4)]),
+    ('▄', (9, 18), &[(0, 9, 9, 9)]),
+    ('▚', (9, 18), &[(0, 0, 5, 9), (4, 9, 5, 9)]),
+    ('░', (9, 18), &[(0, 0, 3, 2), (6, 0, 3, 2), (0, 5, 3, 3), (6, 5, 3, 3), (0, 10, 3, 3), (6, 10, 3, 3), (0, 16, 3, 2), (6, 16, 3, 2)]),
+    ('▒', (9, 18), &[(0, 0, 3, 2), (6, 0, 3, 2), (3, 2, 3, 3), (0, 5, 3, 3), (6, 5, 3, 3), (3, 8, 3, 2), (0, 10, 3, 3), (6, 10, 3, 3), (3, 13, 3, 3), (0, 16, 3, 2), (6, 16, 3, 2)]),
+    ('▓', (9, 18), &[(0, 0, 9, 2), (0, 2, 3, 3), (6, 2, 3, 3), (0, 5, 9, 3), (0, 8, 3, 2), (6, 8, 3, 2), (0, 10, 9, 3), (0, 13, 3, 3), (6, 13, 3, 3), (0, 16, 9, 2)]),
+    ('⣿', (9, 18), &[(1, 1, 3, 3), (1, 5, 3, 3), (1, 10, 3, 3), (5, 1, 3, 3), (5, 5, 3, 3), (5, 10, 3, 3), (1, 14, 3, 3), (5, 14, 3, 3)]),
+    ('▬', (9, 18), &[(0, 4, 9, 10)]),
+    ('━', (9, 18), &[(0, 7, 9, 3)]),
+    ('╟', (9, 18), &[(3, 0, 1, 18), (5, 0, 1, 18), (5, 8, 4, 1)]),
     ('┌', (9, 19), &[(4, 9, 1, 10), (4, 9, 5, 1)]),
     ('┼', (9, 19), &[(4, 0, 1, 19), (0, 9, 9, 1)]),
     ('╬', (9, 19), &[(3, 0, 1, 9), (5, 0, 1, 9), (3, 10, 1, 9), (5, 10, 1, 9), (0, 8, 4, 1), (0, 10, 4, 1), (5, 8, 4, 1), (5, 10, 4, 1)]),
@@ -243,12 +333,12 @@ const SOLID_SNAPSHOT: &[(char, (i32, i32), &[(i32, i32, i32, i32)])] = &[
     ('▬', (9, 19), &[(0, 4, 9, 11)]),
     ('━', (9, 19), &[(0, 8, 9, 3)]),
     ('╟', (9, 19), &[(3, 0, 1, 19), (5, 0, 1, 19), (5, 9, 4, 1)]),
-    ('┌', (14, 29), &[(6, 13, 2, 16), (6, 13, 8, 3)]),
-    ('┼', (14, 29), &[(6, 0, 2, 29), (0, 13, 14, 3)]),
-    ('╬', (14, 29), &[(4, 0, 2, 13), (8, 0, 2, 13), (4, 16, 2, 13), (8, 16, 2, 13), (0, 11, 6, 2), (0, 16, 6, 2), (8, 11, 6, 2), (8, 16, 6, 2)]),
-    ('╤', (14, 29), &[(6, 16, 2, 13), (0, 11, 14, 2), (0, 16, 14, 2)]),
-    ('┄', (14, 29), &[(1, 13, 3, 3), (5, 13, 4, 3), (10, 13, 3, 3)]),
-    ('┋', (14, 29), &[(4, 1, 6, 5), (4, 8, 6, 5), (4, 16, 6, 5), (4, 23, 6, 5)]),
+    ('┌', (14, 29), &[(6, 13, 2, 16), (6, 13, 8, 2)]),
+    ('┼', (14, 29), &[(6, 0, 2, 29), (0, 13, 14, 2)]),
+    ('╬', (14, 29), &[(4, 0, 2, 13), (8, 0, 2, 13), (4, 15, 2, 14), (8, 15, 2, 14), (0, 11, 6, 2), (0, 15, 6, 2), (8, 11, 6, 2), (8, 15, 6, 2)]),
+    ('╤', (14, 29), &[(6, 15, 2, 14), (0, 11, 14, 2), (0, 15, 14, 2)]),
+    ('┄', (14, 29), &[(1, 13, 3, 2), (5, 13, 4, 2), (10, 13, 3, 2)]),
+    ('┋', (14, 29), &[(4, 1, 5, 5), (4, 8, 5, 5), (4, 16, 5, 5), (4, 23, 5, 5)]),
     ('▄', (14, 29), &[(0, 14, 14, 15)]),
     ('▚', (14, 29), &[(0, 0, 7, 15), (7, 14, 7, 15)]),
     ('░', (14, 29), &[(0, 0, 5, 2), (9, 0, 5, 2), (0, 7, 5, 5), (9, 7, 5, 5), (0, 17, 5, 5), (9, 17, 5, 5), (0, 27, 5, 2), (9, 27, 5, 2)]),
@@ -257,7 +347,7 @@ const SOLID_SNAPSHOT: &[(char, (i32, i32), &[(i32, i32, i32, i32)])] = &[
     ('⣿', (14, 29), &[(1, 1, 4, 4), (1, 9, 4, 4), (1, 16, 4, 4), (9, 1, 4, 4), (9, 9, 4, 4), (9, 16, 4, 4), (1, 24, 4, 4), (9, 24, 4, 4)]),
     ('▬', (14, 29), &[(0, 7, 14, 15)]),
     ('━', (14, 29), &[(0, 12, 14, 5)]),
-    ('╟', (14, 29), &[(4, 0, 2, 29), (8, 0, 2, 29), (8, 13, 6, 3)]),
+    ('╟', (14, 29), &[(4, 0, 2, 29), (8, 0, 2, 29), (8, 13, 6, 2)]),
 ];
 
 #[test]
@@ -383,6 +473,18 @@ fn self_symmetric_glyphs() {
 fn builder_commutes_with_transforms() {
     for size in SIZES {
         let g = Geometry::new(cell(size));
+        let t = g.thickness;
+        // On an axis where a nominal thickness cannot be centred, a rect of that
+        // weight sits one pixel toward the top/left of its reflection; where
+        // both weights centre, the reflection is exact. Never the other way.
+        let allowed = |n: i32| {
+            if (n - t.light) % 2 != 0 || (n - t.heavy) % 2 != 0 {
+                vec![0, 1]
+            } else {
+                vec![0]
+            }
+        };
+        let (shifts_x, shifts_y) = (allowed(size.0), allowed(size.1));
         for (c, arms, mirror) in BOX_ARMS.iter().copied() {
             let canonical = mirror.apply(arms);
             for reflection in [MX, MY, MXY] {
@@ -390,10 +492,30 @@ fn builder_commutes_with_transforms() {
                 build_arms(&reflection.apply(canonical), &g, &mut direct);
                 let mut built = Vec::new();
                 build_arms(&canonical, &g, &mut built);
-                assert_eq!(
-                    sorted(direct),
-                    mirror_rects(&built, size, reflection),
-                    "builder does not commute with {reflection:?} for {c:?} at {size:?}"
+                let mut remaining = mirror_rects(&built, size, reflection);
+                for rect in &direct {
+                    let matches = |m: &DeviceRect| {
+                        shifts_x.iter().any(|&sx| {
+                            shifts_y.iter().any(|&sy| {
+                                let sx = if reflection.x { sx } else { 0 };
+                                let sy = if reflection.y { sy } else { 0 };
+                                let (x0, x1) = shift_interval(m.x, m.x + m.w, size.0, sx);
+                                let (y0, y1) = shift_interval(m.y, m.y + m.h, size.1, sy);
+                                (x0, x1, y0, y1)
+                                    == (rect.x, rect.x + rect.w, rect.y, rect.y + rect.h)
+                            })
+                        })
+                    };
+                    let index = remaining.iter().position(matches).unwrap_or_else(|| {
+                        panic!(
+                            "builder does not commute with {reflection:?} for {c:?} at {size:?}: {rect:?} has no reflected counterpart in {remaining:?}"
+                        )
+                    });
+                    remaining.swap_remove(index);
+                }
+                assert!(
+                    remaining.is_empty(),
+                    "builder does not commute with {reflection:?} for {c:?} at {size:?}: unmatched {remaining:?}"
                 );
             }
         }
@@ -520,14 +642,24 @@ fn dash_segment_counts() {
                     "{dash:?} segments touch at {size:?}"
                 );
             }
-            assert_mirrored(dash, dash, MX, size);
+            // Segment lengths are exactly symmetric along the dash's own axis
+            // at every size: the middle segment widens rather than shifting.
+            assert_eq!(
+                rects,
+                mirror_rects(&rects, size, MX),
+                "{dash:?} segments are not symmetric at {size:?}"
+            );
         }
         if size.1 >= 8 {
             for (dash, count) in [('╎', 2), ('┆', 3), ('┊', 4), ('╏', 2), ('┇', 3), ('┋', 4)]
             {
-                let rects = quads(dash, size);
+                let rects = sorted(quads(dash, size));
                 assert_eq!(rects.len(), count, "{dash:?} at {size:?}");
-                assert_mirrored(dash, dash, MY, size);
+                assert_eq!(
+                    rects,
+                    mirror_rects(&rects, size, MY),
+                    "{dash:?} segments are not symmetric at {size:?}"
+                );
             }
         }
     }
@@ -738,14 +870,39 @@ fn snap_interval_is_even_about_center() {
         for anchor in [Anchor::Fixed, Anchor::Nearest] {
             let interval = snap_interval(center, half, size, anchor);
             let mirrored = snap_interval(size as f32 - center, half, size, anchor);
-            assert_eq!(
-                mirrored,
-                Interval {
-                    lo: size - interval.hi,
-                    hi: size - interval.lo,
-                },
-                "snap_interval({center}, {half}, {size}, {anchor:?}) is not mirror symmetric"
-            );
+            let reflected = Interval {
+                lo: size - interval.hi,
+                hi: size - interval.lo,
+            };
+            let thickness = ((2.0 * half).round() as i32).max(1);
+            let center_halves = round_ties_toward(2.0 * center, size as f32);
+            let biased = anchor == Anchor::Fixed && (center_halves - thickness) % 2 != 0;
+            let interior =
+                interval.lo > 0 && interval.hi < size && mirrored.lo > 0 && mirrored.hi < size;
+            if biased {
+                // Both intervals keep the nominal thickness and sit half a pixel
+                // toward the top/left of their centre, so the mirror image is
+                // one pixel off unless the cell edge clamps it back.
+                let (lo, hi) = (reflected.lo - 1, reflected.hi - 1);
+                assert!(
+                    mirrored == reflected || mirrored == Interval { lo, hi },
+                    "snap_interval({center}, {half}, {size}, {anchor:?}) is off by more than the parity bias: {interval:?} vs {mirrored:?}"
+                );
+                if interior {
+                    assert_eq!(mirrored, Interval { lo, hi });
+                    assert_eq!(interval.len(), thickness, "Fixed changed the thickness");
+                    assert_eq!(
+                        (interval.lo + interval.hi) as f32 / 2.0,
+                        (center_halves - 1) as f32 / 2.0,
+                        "Fixed did not move exactly half a pixel toward the top/left"
+                    );
+                }
+            } else {
+                assert_eq!(
+                    mirrored, reflected,
+                    "snap_interval({center}, {half}, {size}, {anchor:?}) is not mirror symmetric"
+                );
+            }
             assert!(interval.lo >= 0 && interval.hi <= size);
             if !interval.is_empty() && interval.lo > 0 && interval.hi < size {
                 let midpoint = (interval.lo + interval.hi) as f32 / 2.0;
@@ -769,6 +926,72 @@ fn heavy_thicker_than_light() {
         assert!(
             heavy.h > light.h,
             "heavy line is not thicker at {size:?}: {heavy:?} vs {light:?}"
+        );
+    }
+}
+
+/// The owner's complaint (2026-09-09): at 9 x 18 the horizontal light line was
+/// 2 px and the vertical one 1 px. Both axes now paint the nominal thickness,
+/// centred exactly or half a pixel toward the top/left, never the other way.
+#[test]
+fn stroke_thickness_uniform_across_axes() {
+    for size in PARITY_SIZES {
+        let t = stroke_thickness(cell(size));
+        for (horizontal, vertical, nominal) in [('─', '│', t.light), ('━', '┃', t.heavy)] {
+            let h = quads(horizontal, size);
+            let v = quads(vertical, size);
+            assert_eq!(h.len(), 1);
+            assert_eq!(v.len(), 1);
+            assert_eq!(h[0].h, nominal, "{horizontal:?} at {size:?}: {:?}", h[0]);
+            assert_eq!(v[0].w, nominal, "{vertical:?} at {size:?}: {:?}", v[0]);
+            for (lo, len, center) in [
+                (h[0].y, h[0].h, size.1 as f32 / 2.0),
+                (v[0].x, v[0].w, size.0 as f32 / 2.0),
+            ] {
+                let midpoint = lo as f32 + len as f32 / 2.0;
+                assert!(
+                    midpoint == center || midpoint == center - 0.5,
+                    "stroke at {size:?} is centred on {midpoint}, cell centre {center}"
+                );
+            }
+        }
+    }
+}
+
+/// The rails of a double line sit at equal distance from the light stroke that
+/// runs between them, on the biased position too, so `═` and `─` (or `║` and
+/// `│`) combine into `╪` / `╫` without a rail touching the single stroke.
+#[test]
+fn double_rails_equidistant_from_joint() {
+    for size in SIZES
+        .iter()
+        .chain(PARITY_SIZES.iter())
+        .copied()
+        .filter(|size| size.0 >= 5 && size.1 >= 5)
+    {
+        let g = Geometry::new(cell(size));
+        for axis in [Axis::X, Axis::Y] {
+            let joint = g.joint(axis, g.thickness.light);
+            let minus = g.rail(axis, Side::Minus);
+            let plus = g.rail(axis, Side::Plus);
+            assert!(
+                minus.hi <= joint.lo && joint.hi <= plus.lo,
+                "rails overlap the light stroke on {axis:?} at {size:?}: {minus:?} {joint:?} {plus:?}"
+            );
+            assert_eq!(
+                joint.lo - minus.hi,
+                plus.lo - joint.hi,
+                "rails are not equidistant from the stroke on {axis:?} at {size:?}"
+            );
+            assert_eq!(minus.len(), plus.len());
+        }
+        assert!(
+            Bitmap::of('╪', size) == Bitmap::of('═', size).union(&Bitmap::of('│', size)),
+            "double horizontal and single vertical do not combine at {size:?}"
+        );
+        assert!(
+            Bitmap::of('╫', size) == Bitmap::of('║', size).union(&Bitmap::of('─', size)),
+            "double vertical and single horizontal do not combine at {size:?}"
         );
     }
 }
@@ -805,14 +1028,16 @@ fn rounded_corner_matches_straight_stubs() {
         let in_y = |y: i32| y >= joint_y.lo && y < joint_y.hi;
         let map = Bitmap::of('\u{256D}', size);
         let ascii = map.ascii();
-        // The arc's radius: its ends are tangent to the stubs at `C + r`.
+        // The arc's radius: its ends are tangent to the stubs at `r` from the
+        // (parity-biased) stroke position on each axis.
         let hx = joint_x.len() as f32 / 2.0;
         let hy = joint_y.len() as f32 / 2.0;
-        let r = (g.cx - hx).min(g.cy - hy).max(0.0);
+        let (ax, ay) = (g.axis_center(Axis::X), g.axis_center(Axis::Y));
+        let r = (g.w as f32 - ax - hx).min(g.h as f32 - ay - hy).max(0.0);
 
         // Below the arc's lower end the glyph is exactly the vertical stub:
         // solid on `J_x`, nothing beside it (no overshoot).
-        for y in (g.cy + r).ceil() as i32..h {
+        for y in (ay + r).ceil() as i32..h {
             for x in 0..w {
                 let expected = if in_x(x) { 1.0 } else { 0.0 };
                 assert_eq!(
@@ -823,7 +1048,7 @@ fn rounded_corner_matches_straight_stubs() {
             }
         }
         // Right of the arc's upper end the glyph is exactly the horizontal stub.
-        for x in (g.cx + r).ceil() as i32..w {
+        for x in (ax + r).ceil() as i32..w {
             for y in 0..h {
                 let expected = if in_y(y) { 1.0 } else { 0.0 };
                 assert_eq!(
@@ -932,7 +1157,7 @@ fn coverage_quad_counts() {
 #[test]
 #[ignore = "visual review only"]
 fn shape_bitmaps_for_visual_review() {
-    for size in [(9, 19), (8, 16)] {
+    for size in [(9, 18), (9, 19), (8, 16)] {
         for c in [
             '┌', '┼', '╔', '╬', '╒', '╘', '╤', '╟', '▚', '░', '▒', '▓', '\u{28FF}', '╭', '╯', '╱',
             '╳', '\u{E0B0}', '\u{E0B1}', '\u{E0B4}', '\u{E0B5}', '\u{E0B8}', '\u{E0B9}',
