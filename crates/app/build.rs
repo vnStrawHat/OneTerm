@@ -119,16 +119,42 @@ fn generate_rc(template: &Path, out: &Path, assets_dir: &Path) -> std::io::Resul
     Ok(())
 }
 
+/// Copy a runtime asset next to the binary, but only when it differs from
+/// what is already there, and never in place: a running or just-launched
+/// OneTerm loads these files, and a half-written `OpenConsole.exe` makes every
+/// console child fail with STATUS_DLL_INIT_FAILED (0xc0000142). Writing to a
+/// temporary file and renaming keeps the destination whole at every instant.
 #[cfg(target_os = "windows")]
 fn copy_runtime_asset(src: &Path, dst: &Path, label: &str) {
     if !src.exists() {
         return;
     }
-    if let Err(error) = std::fs::copy(src, dst) {
+    if runtime_asset_is_current(src, dst) {
+        return;
+    }
+    let tmp = dst.with_extension("tmp");
+    let result = std::fs::copy(src, &tmp).and_then(|_| std::fs::rename(&tmp, dst));
+    if let Err(error) = result {
+        let _ = std::fs::remove_file(&tmp);
         if dst.exists() {
             return;
         }
         println!("cargo:warning=Failed to copy {label}: {error}");
+    }
+}
+
+/// Same size and a destination at least as new as the source: nothing to do.
+#[cfg(target_os = "windows")]
+fn runtime_asset_is_current(src: &Path, dst: &Path) -> bool {
+    let (Ok(src_meta), Ok(dst_meta)) = (std::fs::metadata(src), std::fs::metadata(dst)) else {
+        return false;
+    };
+    if src_meta.len() != dst_meta.len() {
+        return false;
+    }
+    match (src_meta.modified(), dst_meta.modified()) {
+        (Ok(src_time), Ok(dst_time)) => dst_time >= src_time,
+        _ => false,
     }
 }
 
