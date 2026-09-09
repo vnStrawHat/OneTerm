@@ -6,7 +6,7 @@ use oneterm_terminal::{TerminalPalette, resolve_color};
 
 use crate::render::frame::{Color as FrameColor, Fnv1a};
 
-/// Fixed ANSI 16-color palette (GNOME/Tango default).
+/// Fixed ANSI 16-color palette (the Tango color scheme).
 pub(crate) const ANSI_16: [VteRgb; 16] = [
     VteRgb {
         r: 0x00,

@@ -16,7 +16,7 @@ overwrite those files (Windows forbids overwriting an open image), so the update
 rolls back to the old build and never relaunches on the new version.
 
 The updater must proactively terminate the offending console host, but
-`OpenConsole.exe` is a shared Windows component: Windows Terminal and other apps
+`OpenConsole.exe` is a shared Windows component: other applications
 run their own copies. Killing by process name would terminate unrelated,
 in-use console hosts belonging to other applications.
 

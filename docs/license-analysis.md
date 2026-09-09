@@ -141,30 +141,22 @@ $ nm target/release/oneterm.exe | grep -i 'zlog'             # → (empty)
 
 ---
 
-## 3. License Violation Assessment: Using Techniques from Zed Terminal & Windows Terminal
+## 3. Third-party source policy
 
-### 3.1. Windows Terminal — **MIT** ✅ completely safe
+OneTerm carries no source copied from another terminal emulator. The rules that keep the
+licence position clean are:
 
-- Repo: `microsoft/terminal` → `LICENSE` = MIT.
-- **Copying code**: MIT allows free use — just retain the copyright notice.
-- **Using techniques/algorithms**: ideas are not copyrightable → no violation.
-- Project already uses: `windows`, `windows-sys`, `winapi`, `uds_windows` (MIT/Apache).
-- **Conclusion**: No risk. You can study and re-implement any technique (ConPTY, rendering pipeline, buffer ring, text shaping…).
-
-### 3.2. Zed Terminal — distinguish 3 levels clearly
-
-| Activity | Source crate license | Violation? |
-|---|---|---|
-| **Copying source** from `crates/terminal/` (GPL-3.0) or `crates/terminal_view/` (GPL-3.0) | GPL-only (only has `LICENSE-GPL`) | **Violation** if project is not GPL-3.0. **No violation** if project is GPL-3.0+ |
-| **Studying & re-implementing ideas** (damage tracking, cell diff, scrollback, IME, OSC 52, link detection…) | Ideas are not copyrightable | **No violation** — independent re-implementation under any license |
-| **Using `alacritty_terminal`** (Zed fork, Apache-2.0) | Apache-2.0 | **No violation** — already used, compatible with any license |
-
-#### Practical recommendations for Zed Terminal
-
-1. **Do NOT copy source** from `crates/terminal/` or `crates/terminal_view/` unless the project accepts GPL-3.0.
-2. **You may** read the source to understand the algorithm → write your own (clean-room). Note the reference source.
-3. **You may** use `alacritty_terminal` (Apache-2.0) — the project already does this correctly.
-4. When referencing `terminal_view` for rendering a cell grid with gpui, only study the **pattern/API shape** — do not paste code.
+- **Never copy source from a GPL-licensed project** into this repository. Ideas are not
+  copyrightable, but source is; anything learned from a GPL codebase must be re-implemented
+  independently.
+- **MIT/Apache-2.0 source may be reused** if the copyright notice is retained in `NOTICE` /
+  `THIRD-PARTY-NOTICES.md`. This covers the crates the project already depends on
+  (`windows`, `windows-sys`, `winapi`, `uds_windows`, `alacritty_terminal`, `vte`, gpui,
+  gpui-component).
+- **The terminal render engine is written from scratch** (see
+  [`docs/spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md`](spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md)
+  and [`docs/decisions/DEC-0007-terminal-render-engine-cell-glyph-cache-and-quad-shapes.md`](decisions/DEC-0007-terminal-render-engine-cell-glyph-cache-and-quad-shapes.md)),
+  so no external renderer's licence enters the picture at all.
 
 ---
 
@@ -261,9 +253,9 @@ The initial analysis (in the previous version of this file) concluded GPL-3.0 co
 ## 7. Compliance Checklist for Distribution
 
 1. **LICENSE file** at project root: Apache-2.0 (the shipped choice; see the status note at the top).
-2. **NOTICE / third-party credit file** listing all dependencies + their licenses (generated from the Cargo metadata; the bundled Windows Terminal ConPTY binaries are MIT and need their own entry).
+2. **NOTICE / third-party credit file** listing all dependencies + their licenses (generated from the Cargo metadata; the bundled ConPTY binaries `conpty.dll` / `OpenConsole.exe` are MIT and need their own entry).
 3. Retain copyright notices from: Zed Industries (gpui, sum_tree, ztracing…), Longbridge (gpui-component), Alacritty contributors, Microsoft (windows crates), Rust ecosystem contributors.
 4. **Do NOT set `ZTRACING=1`** when building a release binary — prevents pulling `zlog` (GPL) into the binary.
-5. If copying code from Windows Terminal (MIT): retain the Microsoft copyright notice in the NOTICE file.
-6. If referencing algorithms from Zed `terminal_view` (GPL): re-implement independently, do NOT copy source.
+5. Retain the Microsoft copyright notice in the NOTICE file for every MIT-licensed Microsoft component that ships (the ConPTY binaries, the `windows*` crates).
+6. Never copy source from a GPL-licensed project; re-implement independently instead (see §3).
 7. When upgrading gpui to a new version: **re-run** `strings target/release/*.exe | grep -i 'zlog'` to verify zlog is still dead-stripped.

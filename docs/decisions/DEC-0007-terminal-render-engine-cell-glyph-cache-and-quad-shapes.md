@@ -20,8 +20,8 @@ Future work on the terminal view inherits these choices:
 1. The terminal **engine** (grid, VT parsing, PTY/SSH pumps) stays in `crates/terminal`
    on the vendored `alacritty_terminal`; the **view** crate owns rendering and input only.
 2. The render engine is written from scratch against the GPUI API. No external terminal
-   renderer (Zed, wezterm, alacritty's GL renderer, Windows Terminal, ...) is used as a
-   reference or copied from; only GPUI's own sources and docs are consulted.
+   renderer is used as a reference or copied from; only GPUI's own sources and docs are
+   consulted.
 3. Box drawing (U+2500-257F), block elements (U+2580-259F), braille (U+2800-28FF),
    powerline (U+E0B0-E0BF) and related symbols are painted with quads, never with font
    glyphs. Arcs and diagonals are quads too, carrying a coverage alpha from a symmetric

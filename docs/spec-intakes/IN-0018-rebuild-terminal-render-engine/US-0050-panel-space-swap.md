@@ -37,8 +37,8 @@ historical with a pointer to IN-0018.
       `src/space/{mod, tree, node, ops, placeholder, render, drag, tests}.rs` (file set may be
       consolidated; keep `crate::space::{SpaceId, SplitContext}` and
       `crate::panel::{PanelSpec, TerminalPanel, DuplicateDestination}` paths), `lib.rs`,
-      `status.rs`/`agent.rs`/`security.rs` touch-ups, `docs/terminal-rendering-optimization.md`,
-      `docs/terminal-gap-analysis.md`, `docs/terminal-split/*.md`, `docs/README.md` index,
+      `status.rs`/`agent.rs`/`security.rs` touch-ups, `docs/terminal-split/*.md`,
+      `docs/README.md` index,
       `docs/agents/structure.md` directory tree for `crates/terminal-view`.
 - [x] Out of scope: layout persistence for terminal panels, pane swap / focus traversal,
       middle-click paste, any `crates/terminal` change.
@@ -85,8 +85,7 @@ historical with a pointer to IN-0018.
 
 ### Documentation Action
 
-Update required: `docs/terminal-rendering-optimization.md`, `docs/terminal-gap-analysis.md`,
-`docs/terminal-split/00-overview.md` … `07-roadmap-risks.md` (historical banner);
+Update required: `docs/terminal-split/00-overview.md` … `07-roadmap-risks.md` (historical banner);
 `docs/README.md` (index: IN-0018 HLD/LLDs current, old docs historical);
 `docs/agents/structure.md` (new `crates/terminal-view` tree); `IN-0018.md` (tick packets, close
 the intake); HLD parity checklist ticks.
@@ -101,10 +100,6 @@ Before completion, list every doc changed and confirm no current (non-historical
 
 Done (2026-09-09) — docs changed by this packet:
 
-- `docs/terminal-rendering-optimization.md` — header replaced with "Historical — superseded by
-  IN-0018", pointing at the HLD as the current owning design for rendering.
-- `docs/terminal-gap-analysis.md` — same banner; notes that the deliberate remaining gaps are
-  listed in the HLD.
 - `docs/terminal-split.md` — banner: the Spaces *behavior* is still current, the mechanism
   (file layout, `ops.rs`/`actions.rs`/`drag.rs`/`placeholder.rs`, call paths) is superseded;
   points at the HLD and its §2.2 parity list. The `terminal-split/0X-*.md` sub-documents are
@@ -129,8 +124,8 @@ Kit 0.6 and the vendored terminal forks, not the view's module structure (review
 
 Stale-name confirmation: `RowLayoutCache`, `LocalTerminalView` and `box_drawing` now appear
 only in documents whose header and `docs/README.md` row say historical —
-`terminal-rendering-optimization.md`, `terminal-gap-analysis.md`, `terminal-split.md`,
-`terminal-semantic-highlighting.md` and `ssh-client-connect.md`. No current doc names them.
+`terminal-split.md`, `terminal-semantic-highlighting.md` and `ssh-client-connect.md`. No
+current doc names them.
 `TerminalElement` still exists as the live type in `crates/terminal-view/src/render/element.rs`,
 so `terminal-backend.md` keeps the name under the superseded-sketch banner.
 

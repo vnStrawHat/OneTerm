@@ -72,7 +72,7 @@ pub fn run() {
             });
 
     // Windows: SetConsoleCtrlHandler safety net — ignore CTRL_C_EVENT.
-    // With OpenConsole.exe (from Windows Terminal), \x03 over the PTY is handled
+    // With the bundled OpenConsole.exe, \x03 over the PTY is handled
     // correctly, so OneTerm never receives the signal. This handler is a backup
     // for the case where OpenConsole.exe is missing → fallback to system ConPTY.
     #[cfg(windows)]

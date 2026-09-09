@@ -74,7 +74,7 @@ Add only relevant code, decisions, dependencies, and invariants not already clea
 
 ## Decisions
 
-No decision record: the two-layer approach follows existing terminal-client convention (WezTerm/Kitty-style) and the accepted local-shell contract in `base_env()`.
+No decision record: the two-layer approach follows existing terminal-client convention and the accepted local-shell contract in `base_env()`.
 
 ## Verification Plan
 

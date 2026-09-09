@@ -48,7 +48,7 @@ the OSC 9 family).
 | Candidate | Verdict |
 |---|---|
 | `OSC 9;7` (sub-code of OSC 9 family) | **Chosen.** OSC 9 is widely implemented for desktop notifications (`9;msg`) and progress (`9;4;st;pr`). Sub-codes `0..4` are taken (ConEmu misc + progress); `7` is free and reads naturally as "agent event". Unknown terminals ignore it. |
-| `OSC 1337;Agent` (iTerm2 vendor) | Rejected — 1337 carries unrelated iTerm2 semantics (inline images, etc.). |
+| `OSC 1337;Agent` | Rejected — 1337 already carries unrelated vendor semantics (inline images, etc.). |
 | `OSC 633;Agent` (VS Code) | Rejected — 633 is VS Code shell-integration-specific. |
 | `OSC 777;…` (urxvt 3-field) | Rejected — would require a new parser branch for the 777 family. |
 | Brand-new number (e.g. `OSC 9001`) | Rejected — breaks the "lives in the OSC 9 family" reading and gains nothing, since compatibility with other terminals is zero either way for a private extension. |

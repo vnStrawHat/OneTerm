@@ -82,7 +82,7 @@ into the updater.
 
 - [x] **[Low] BUILD-14 — ConPTY binaries copied for any Windows target; no third-party notice.**
   `crates/app/build.rs:85-97` copies x64 `conpty.dll`/`OpenConsole.exe` even for `aarch64-pc-windows-msvc`
-  (advertised in README); the redistributed Windows Terminal binaries have no version, source URL, hash or
+  (advertised in README); the redistributed ConPTY binaries have no version, source URL, hash or
   MIT notice. *Fix:* gate on `CARGO_CFG_TARGET_ARCH == "x86_64"`; add `THIRD-PARTY-NOTICES.md`.
 
 - [x] **[Low] BUILD-15 — Release scripts copy developer state into `dist/`.** `scripts/build-release.sh:71-74`,

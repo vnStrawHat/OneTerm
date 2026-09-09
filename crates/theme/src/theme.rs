@@ -11,7 +11,7 @@
 //!
 //! Active tab distinction: each theme defines its own `tab.active.background`
 //! (usually = content background) and `tab_bar.background` (darker), giving the
-//! "active tab merges with content" effect like Zed/editors, with no override needed.
+//! "active tab merges with content" effect used by code editors, with no override needed.
 
 use gpui::{Anchor, App, Rgba, px, rgb};
 use gpui_component::{Theme, ThemeRegistry, scroll::ScrollbarMode};

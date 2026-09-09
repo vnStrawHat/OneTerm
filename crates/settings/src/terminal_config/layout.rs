@@ -44,7 +44,7 @@ pub struct LayoutConfig {
     /// Line height multiplier (1.2 = 120% of font size).
     pub line_height: f32,
     /// Cell width override in px (null = auto from the advance width of '0',
-    /// like Windows Terminal / the CSS ch unit).
+    /// i.e. the CSS ch unit).
     pub cell_width: Option<f32>,
     /// Padding around the terminal content (px).
     pub padding: PaddingConfig,
@@ -60,7 +60,7 @@ impl Default for LayoutConfig {
     fn default() -> Self {
         Self {
             line_height: 1.2,
-            // Auto: measure the advance width of '0' (CSS ch unit, like Windows Terminal).
+            // Auto: measure the advance width of '0' (the CSS ch unit).
             cell_width: None,
             padding: PaddingConfig::default(),
             show_gutter: false,

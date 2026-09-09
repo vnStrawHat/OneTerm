@@ -183,9 +183,7 @@ The `terminal-diagnostics` feature is intentionally opt-in. It enables `[Termina
 renderer latency reports and `[PTY pump]` lock timing reports. The renderer reports after
 its first painted frame and then at most once every five seconds while frames are painted;
 the PTY pump reports over two-second sampling windows. These records use DEBUG logging, so
-`oneterm=debug` is sufficient. See
-[`docs/terminal-fullscreen-perf/README.md`](docs/terminal-fullscreen-perf/README.md) for the
-full-screen rendering investigation. Standalone diagnostics (DOOM-fire workload, raw PTY
+`oneterm=debug` is sufficient. Standalone diagnostics (DOOM-fire workload, raw PTY
 throughput probe) live in `crates/tools`:
 `cargo run -p oneterm-tools --release --bin doom-fire`.
 
@@ -207,8 +205,8 @@ The same scripts run in the release workflow (`.github/workflows/release.yml`), 
 and published packages are identical. Output lands in `dist/oneterm-<version>-<triple>/`
 plus `dist/oneterm-<version>-<triple>.{zip|tar.gz}` and a `.sha256` checksum (GitHub
 releases also publish a combined `SHA256SUMS`):
-- **Windows** — `oneterm.exe` plus the runtime assets (`conpty.dll` + `x64/OpenConsole.exe`,
-  from Windows Terminal — see [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)); the exe
+- **Windows** — `oneterm.exe` plus the runtime assets (`conpty.dll` + `x64/OpenConsole.exe`
+  — see [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)); the exe
   has the app icon + version info embedded (build.rs).
 - **macOS** — `OneTerm.app` bundle (double-click to launch **without** an extra
   Terminal.app window). On macOS a raw GUI binary is treated as a CLI tool, so

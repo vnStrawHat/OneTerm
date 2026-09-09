@@ -80,7 +80,6 @@ cursor layer), cursor, overlays, and cfg-gated diagnostics — driven end to end
 - `docs/decisions/DEC-0007-terminal-render-engine-cell-glyph-cache-and-quad-shapes.md` — items 1, 2, 5.
 - `docs/PROJECT.md` — invariants; `docs/architecture.md` — crate boundaries (engine stays in `crates/terminal`).
 - `docs/agents/crate-dependency-rules.md` — R7 (view maps engine types to GPUI).
-- `docs/terminal-rendering-optimization.md` — historical after this intake; read for PERF tags referenced by the inventory only.
 
 ### Documentation Action
 

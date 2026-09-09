@@ -686,12 +686,11 @@ See [`decisions/0002-ssh-duplicate-auth.md`](decisions/0002-ssh-duplicate-auth.m
 
 ## 10. Input: keystroke → byte + IME
 
-Per the Zed README (4 input paths):
+Four input paths:
 
 1. **Raw keystroke** (`on_key_down` in the element): `try_keystroke(keystroke, mods)`
    → `core::key_encode` → `session.write(bytes)`. Mapping: Ctrl+char → `& 0x1f`, F-key /
    arrow → ANSI escape, Enter → `\r`, Backspace → `0x7f`, Tab → `\t` / `\x1b[Z`…
-   (copy `freya-terminal::write_key` logic, purify into `core::key_encode`).
 2. **GPUI action** (Ctrl-Shift-C/V copy/paste, Ctrl-Tab…): map → `try_keystroke` or
    clipboard.
 3. **IME**: keystroke not mapped → yield to GPUI IME → `EntityInputHandler` calls back
@@ -768,9 +767,7 @@ crates/
 ## 12. Implementation order (roadmap)
 
 > **Status:** steps 1–7 are complete; step 8 is partial (known_hosts done, agent
-> auth and reconnect not implemented); step 9 is ongoing (see
-> [`terminal-rendering-optimization.md`](terminal-rendering-optimization.md) and
-> [`terminal-fullscreen-perf/`](terminal-fullscreen-perf/README.md)).
+> auth and reconnect not implemented); step 9 is ongoing.
 
 1. ✅ **`core`**: `TerminalSession` trait, `SessionEvent`, `TerminalContent`, `TerminalPalette`,
    `key_encode`, `mouse_encode`, `osc`/`url`, `ShellKind`/`LocalShellConfig` + `resolve_shell`.
@@ -810,10 +807,8 @@ crates/
 
 | Need | Read |
 |---|---|
-| Model + EventLoop + PTY (local) | Zed `crates/terminal/src/terminal.rs` (rev `1d217ee39…`) |
-| Grid rendering | Zed `crates/terminal_view/src/terminal_element.rs` |
-| IME + View | Zed `crates/terminal_view/src/terminal_view.rs` (`ImeState`) |
+| Render engine + input (current design) | [`docs/spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md`](spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md) |
 | `Element`/`paint_quad`/`shape_line` | `reference/gpui-kit` (tag `v0.6.0`) |
 | `EntityInputHandler` | `gpui::EntityInputHandler` trait (docs.rs matching rev) |
-| `alacritty_terminal` API | source at rev `fcf32fe…` (`event_loop.rs`, `tty/`, `term.rs`, `sync.rs`) — fork `zed-industries/alacritty` |
-| freya key/mouse encode | `freya-terminal` `handle.rs`/`parser.rs` (reference the logic, purify into `core`) |
+| `alacritty_terminal` API | source at rev `fcf32fe…` (`event_loop.rs`, `tty/`, `term.rs`, `sync.rs`) |
+| Vendored fork deltas | [`vendor/README.md`](../vendor/README.md) |

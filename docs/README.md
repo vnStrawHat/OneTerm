@@ -52,9 +52,6 @@ Status is stated in each file's header. "Current" = kept in step with the code;
 | [`agent-panel-display.md`](agent-panel-display.md) | Agent Panel model, folding, display rules | current |
 | [`osc-sequences-checklist.md`](osc-sequences-checklist.md) | Which OSC sequences OneTerm handles and where | current |
 | [`gui-layout.md`](gui-layout.md) | Original workspace layout design (docks, persistence) | historical |
-| [`terminal-rendering-optimization.md`](terminal-rendering-optimization.md) | Row cache / damage tracking work | historical — superseded by IN-0018 |
-| [`terminal-fullscreen-perf/`](terminal-fullscreen-perf/) | Full-screen animation performance investigation (DOOM-fire), alacritty fork rationale | historical (implemented) |
-| [`terminal-gap-analysis.md`](terminal-gap-analysis.md) | Terminal feature gap analysis | historical — superseded by IN-0018 |
 | [`terminal-semantic-highlighting.md`](terminal-semantic-highlighting.md) | Semantic highlight engine design | historical |
 | [`license-analysis.md`](license-analysis.md) | Dependency licence analysis (GPL crates in the Zed graph) | snapshot; policy enforced by `deny.toml` |
 

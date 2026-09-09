@@ -20,7 +20,7 @@ SessionFactory startup config
  Local PTY / SSH channel bytes
              │
              ▼
- TerminalPump ───────────────► existing alacritty parser/rendering
+ TerminalPump ───────────────► existing VT parser + render pipeline
              │
              └───────────────► TerminalLogController
                                  ├─ VTE printable-line collector

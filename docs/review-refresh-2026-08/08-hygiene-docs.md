@@ -77,7 +77,7 @@ authoritative.
   does); `paste.rs:3`, `security_policy.rs:4`, `url_policy.rs:3` ("Before Phase 1…" changelog prose in module docs).
 
 - [x] **[Low] HYG-10 — Stale comments (backends):** `ssh/src/listener.rs:8`, `state.rs:4` cite `local/src/...`
-  (crate is `local-shell`); `local-shell/src/session.rs:4-6` cites "#11/#12 … freya handle.rs";
+  (crate is `local-shell`); `local-shell/src/session.rs:4-6` cites "#11/#12 …" plus an external key-encoding source;
   `session_terminal.rs:4` "ARCH-05" ticket ids in module docs; `local-shell/src/session_terminal.rs:256-259`
   `scroll_to_prompt` TODO with `let _ = n;`.
 
@@ -153,7 +153,7 @@ authoritative.
   (10 `.oneterm-backup-*` dirs + 9.9 MB zip), `.pi/` (35 MB). *Fix:* delete `NUL` (`del \\.\NUL`) and the
   exe; replace the two ignore lines with generic patterns.
 
-- [x] **[Low] HYG-21 — No `NOTICE` / `THIRD-PARTY-NOTICES.md`** (Apache-2.0 §4(d); bundled Windows Terminal
+- [x] **[Low] HYG-21 — No `NOTICE` / `THIRD-PARTY-NOTICES.md`** (Apache-2.0 §4(d); the bundled ConPTY
   binaries are MIT). *Fix:* generate with `cargo about`.
 
 - [x] **[Low] HYG-22 — No `.editorconfig`** despite Python/PowerShell/Bash/JSON/MD in the repo. *Fix:* minimal

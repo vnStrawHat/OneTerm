@@ -8,8 +8,8 @@
 //! 2. Copy `conpty.dll` + `x64/OpenConsole.exe` to the target directory so they ship with the exe.
 //!
 //! alacritty_terminal loads conpty.dll itself (via LoadLibraryW) if found in the exe's
-//! directory or on PATH. conpty.dll uses OpenConsole.exe (from the Windows Terminal
-//! project) instead of the system conhost.exe, so ConPTY handles Ctrl+C correctly:
+//! directory or on PATH. conpty.dll uses the bundled OpenConsole.exe instead of the
+//! system conhost.exe, so ConPTY handles Ctrl+C correctly:
 //! the signal reaches only the child process and does not exit the shell or OneTerm.
 //!
 //! Layout after build:

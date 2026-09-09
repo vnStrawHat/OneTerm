@@ -26,7 +26,7 @@ Keep these values synchronized with root `Cargo.toml`, `vendor/refresh.sh`, and 
 
 ## 2. OneTerm deltas
 
-The patches implement the single-pass OSC/clear hook described in [`docs/terminal-fullscreen-perf/09-patch-alacritty-fork.md`](../docs/terminal-fullscreen-perf/09-patch-alacritty-fork.md):
+The patches implement a single-pass OSC/clear hook: the embedder receives OSC payloads and screen clears as terminal events, so OneTerm never has to run a second VT parser over the same byte stream.
 
 - `patches/vte/0001` adds `Handler::report_osc(params, bell_terminated)` and forwards otherwise-unhandled OSC sequences to the embedder.
 - `patches/alacritty_terminal/0001` makes the crate manifest standalone outside the upstream workspace.

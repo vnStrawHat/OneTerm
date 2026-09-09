@@ -77,7 +77,6 @@ pointed at it, and `src/view/`, `src/element/`, `src/layout/`, `src/box_drawing/
 - `docs/osc-sequences-checklist.md` — which OSCs reach the UI (Cwd/ShellIntegration stay unhandled).
 - `docs/sftp-follow-terminal-cwd/README.md` — cwd is read on demand via capabilities, not through `SessionEvent::Cwd`.
 - `docs/terminal-backend.md` — snapshot/damage and event channel contract.
-- `docs/terminal-rendering-optimization.md`, `docs/terminal-gap-analysis.md` — historical; consulted for PERF/CORR tags only.
 
 ### Documentation Action
 

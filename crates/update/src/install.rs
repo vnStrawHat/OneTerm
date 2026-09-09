@@ -75,7 +75,7 @@ fn schedule_windows_update(staged: &StagedUpdate, current_exe: &Path) -> Result<
     // must overwrite, so xcopy fails and the update silently rolls back
     // (CORR-61). Terminate only the console hosts whose image lives inside our
     // own install directory; a bare process-name match would also kill the
-    // Windows Terminal / other apps' OpenConsole.exe.
+    // other apps' OpenConsole.exe.
     terminate_console_hosts_in_dir(install_dir, &log_path);
 
     let pid = std::process::id();
@@ -537,7 +537,7 @@ fn spawn_cmd_helper(script: &Path, env: &[(&str, std::ffi::OsString)]) -> Result
 /// that outlives the app keeps a handle on the install-directory binaries, so
 /// the helper's `xcopy` cannot overwrite them and the update rolls back
 /// (CORR-61). Matching on the resolved image path (never the bare process name)
-/// leaves other apps' `OpenConsole.exe` — e.g. Windows Terminal's — untouched.
+/// leaves other apps' `OpenConsole.exe` untouched.
 #[cfg(target_os = "windows")]
 fn terminate_console_hosts_in_dir(install_dir: &Path, log_path: &Path) {
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};

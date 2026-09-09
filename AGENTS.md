@@ -130,14 +130,12 @@ with only fmt/clippy/build green.
 | **Crate & dependency rules (R1–R12)** | [`docs/agents/crate-dependency-rules.md`](docs/agents/crate-dependency-rules.md) |
 | Code conventions | [`docs/agents/code-style.md`](docs/agents/code-style.md) |
 | Dependency versions and reference-first research | [`docs/agents/dependencies.md`](docs/agents/dependencies.md) |
-| **Terminal backend design** (local + ssh, alacritty render) | [`docs/terminal-backend.md`](docs/terminal-backend.md) |
+| **Terminal backend design** (local + ssh, `alacritty_terminal` VT engine) | [`docs/terminal-backend.md`](docs/terminal-backend.md) |
 | **Terminal Split design** (Spaces, split R/L/U/D, drag tab into Space) | [`docs/terminal-split.md`](docs/terminal-split.md) |
 | SSH client connect / auth design | [`docs/ssh-client-connect.md`](docs/ssh-client-connect.md) |
 | SFTP file browser design | [`docs/sftp-browser-design.md`](docs/sftp-browser-design.md) |
 | SFTP-follows-terminal-CWD design | [`docs/sftp-follow-terminal-cwd/README.md`](docs/sftp-follow-terminal-cwd/README.md) |
 | OSC sequence support checklist | [`docs/osc-sequences-checklist.md`](docs/osc-sequences-checklist.md) |
-| Terminal rendering optimization | [`docs/terminal-rendering-optimization.md`](docs/terminal-rendering-optimization.md) |
-| Terminal feature gap analysis | [`docs/terminal-gap-analysis.md`](docs/terminal-gap-analysis.md) |
 | GPUI Kit API overview | `reference/gpui-kit/CLAUDE.md` |
 | Component source | `reference/gpui-kit/crates/component/src/` |
 | Dock behavior / component skin | `reference/gpui-kit/crates/base/src/dock/`, `reference/gpui-kit/crates/component/src/dock/` |

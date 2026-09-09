@@ -379,8 +379,7 @@ colorization — overriding only the *default* foreground, never explicit SGR co
 
 Only **visible viewport** lines are lexed (≤~50/frame). With the hash cache, steady
 output re-lexes only the newly-appended lines + the active input line. Target: zero
-perceptual cost at 120 fps scroll (the existing
-`terminal-rendering-optimization.md` bar). No C dependency, no backtracking (ReDoS-safe),
+perceptual cost at 120 fps scroll. No C dependency, no backtracking (ReDoS-safe),
 no per-line JSON interpretation, no string-scope hashing.
 
 ---

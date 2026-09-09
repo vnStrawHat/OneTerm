@@ -44,7 +44,7 @@ reopening the old version.
   is terminated before the app quits, so the helper can overwrite the binaries.
 - [x] Termination never matches by bare process name — only by resolved full
   image path under the install directory (see DEC-0005), so other apps'
-  `OpenConsole.exe` (e.g. Windows Terminal) is left running.
+  `OpenConsole.exe` is left running.
 - [x] `xcopy` overwrites read-only installed files (uses `/R`); a read-only
   `conpty.dll`/`oneterm.exe` no longer forces a rollback.
 - [x] A non-fatal errorlevel left by `xcopy` cannot make the post-`start`
