@@ -103,18 +103,23 @@ Reason: resize semantics are an operator-visible backend contract.
 ## Implementation
 
 `crates/terminal/src/model.rs`: `ResizePolicy { Default, KeepViewportTop }` is a field of
-`TerminalModel`; `resize_grid` keeps alacritty's semantics for shrinks, column-only changes
-and `Default`, and for a `KeepViewportTop` grow runs `grow_keeping_viewport_top`: compute
-`pulled = min(history_size, lines_added)` on the primary grid, `Term::resize` the rows only,
-then `Grid::scroll_up` over the whole screen by `pulled` (the pulled rows rotate back into
-history, the bottom `pulled` rows are cleared, `history_size` returns to its old value),
-move the cursor and saved cursor up by `pulled`, restore the pre-resize `display_offset`
-(clamped), drop the selection, then resize the columns. While the alt screen is active the
-primary grid is `Term::inactive_grid` (no accessor): the alt grid is parked in a local behind a
-placeholder, `swap_alt` makes the primary active for the resize and the correction, `swap_alt`
-returns (its clear-and-copy-cursor step hits the placeholder only) and the parked alt grid,
-resized with `Grid::resize(false, ..)` as `Term::resize` would have, is put back.
-`Term::resize` marks the whole terminal damaged, so no extra damage call is needed.
+`TerminalModel`; `resize_grid` keeps alacritty's semantics for `Default` and, for
+`KeepViewportTop`, runs `resize_keeping_viewport_top` on every resize: `conhost_cursor_row`
+copies the viewport rows from the top down to the cursor row into a history-less scratch
+`Grid<Cell>` (plus a few blank rows above so `shrink_columns` cannot clamp the scratch cursor
+at `Line(0)`), reflows it to the new width with the vendored `Grid::resize` and reads back the
+cursor's distance from the top row (`history_size + line`, so split rows count); then
+`Term::resize` runs and the viewport is shifted by `cursor row - measured row`: a positive
+shift is `Grid::scroll_up` over the whole screen (top rows rotate back into history, bottom
+rows cleared, cursor and saved cursor moved up), a negative shift grows the rows by that
+amount (pulling the split rows back from history) and shrinks them again (dropping the blank
+bottom rows). The pre-resize `display_offset` is restored (clamped) and the selection dropped
+when rows moved. While the alt screen is active the primary grid is `Term::inactive_grid` (no
+accessor): the alt grid is parked in a local behind a placeholder, `swap_alt` makes the
+primary active for the measurement, the resize and the correction, `swap_alt` returns (its
+clear-and-copy-cursor step hits the placeholder only) and the parked alt grid, resized with
+`Grid::resize(false, ..)` as `Term::resize` would have, is put back. `Term::resize` marks the
+whole terminal damaged, so no extra damage call is needed.
 The policy is a new argument of `impl_pty_terminal_session!`
 (`crates/terminal/src/session.rs`): `crates/local-shell/src/session_terminal.rs` passes
 `KeepViewportTop` under `cfg!(windows)` (ConPTY) and `Default` elsewhere;
@@ -177,7 +182,8 @@ Gaps:
   three-line accessor patch under `vendor/patches/alacritty_terminal/` would remove that
   dance; kept out per the "no vendor change" scope.
 - Column reflow on a width change is still alacritty's; conhost reflows its own buffer
-  independently. Only the row pull is corrected (the decided scope).
+  independently. Only the row pull is corrected (the decided scope). Superseded by the
+  acceptance rework below.
 - Linux/macOS local sessions keep `ResizePolicy::Default`; not exercised here.
 
 ## Handoff
@@ -192,3 +198,99 @@ window so long lines wrap, maximize, type any character: the grid cursor stays o
 but the echoed character lands 4 rows above it (`evidence/owner-ls-lath-maximize-desync.png`):
 conhost and alacritty reflow the wrapped rows differently on the column change.
 
+### Measurements (raw PTY dump before the parser + grid dump around `resize_grid`, both
+temporary and removed)
+
+Windows 11, cmd.exe, fast-dev build, window restored to 900x700 (33x43 cells) then resized by
+`ShowWindow`/`MoveWindow`; conhost's next output after the resize was the echo of one typed
+character, addressed with `CUP`.
+
+- (a) Long lines arrive as one continuous line (implicit wrap): `ls -lath` rows carry
+  `WRAPLINE` in the grid, 86 flagged rows in a 162-row buffer, 21 of them inside the 33-row
+  viewport. Only cmd's cooked-read echo writes a space past the margin and then `CUP`s to the
+  next row, which also leaves `WRAPLINE` set.
+- (b) After `ResizePseudoConsole` conhost emits nothing until the keystroke. Maximize
+  33x43 -> 52x158: `ESC[12;18H` (row 11, 0-based) while the grid prompt was on row 32,
+  i.e. 21 rows up = the 21 wrapped rows joined. Widen only 33x43 -> 33x132: `ESC[14;18H`
+  (row 13, 19 joined; two lines still wrap at 132). Rows grow + columns shrink 33x43 -> 49x34:
+  `ESC[38;18H` (row 37, 5 split rows). Seven synthetic `for /L` cases with the top row being
+  the head, a middle row or the tail of a 149-char wrapped line at 71, 99 and 34 columns
+  all fit one rule: conhost re-wraps the old viewport rows at the new width as if the top row
+  started a line (the visible part of that line keeps `ceil(visible_chars / new_cols)` rows:
+  149->3, 106->2, 63->1, 20->1 at 71 columns; 106->2, 63->1 at 99; 38->1 at 158; 106->4 at
+  34), keeps that content on top, and the cursor row is its distance from the top. History
+  above the viewport never enters the count.
+- (c) alacritty with the shipped rows-then-columns fix: the row step restored the cursor to
+  row 32; the column step joined the 21 rows above the cursor and, being bottom-anchored,
+  pulled 21 history rows into the top while the cursor stayed on row 32, so the grid was 21
+  rows below conhost (4 in the owner's wider window). A single combined `Term::resize`
+  gives the same picture (cursor 51 after the pull, still 21 rows off after the join).
+
+### Root cause
+
+DEC-0008 only undid the history pull of `grow_lines`. The column reflow moves rows too:
+alacritty keeps the cursor index and fills the freed rows from history (or pushes the top
+rows out when it splits rows); conhost keeps its top row and lets the cursor move with the
+joined or split rows. Every wrapped row above the cursor therefore desynchronised the two by
+one row, on any width change, not only on a maximize.
+
+### Fix
+
+`resize_keeping_viewport_top` (see Implementation) applies to every resize and measures
+conhost's cursor row with the vendored reflow itself (`conhost_cursor_row`), so joins,
+partial joins, splits, the cursor's own row and wide-character spacers are decided by the
+same code that reflows the real grid; the viewport is then shifted by the measured difference.
+No vendor patch. Rows below the top row that start at column 0 hold the same text as in
+conhost; when the top row continued a wrapped line from history the grid shows that line
+joined whole while conhost keeps it torn (top rows only, recorded in DEC-0008).
+
+### Tests (`crates/terminal/src/model.rs`)
+
+`keep_viewport_top_widen_joins_wrapped_rows_and_keeps_the_top_row` (the `ls -lath` shape:
+rows grow and columns grow, two joined rows, cursor row 4 -> 2, joined rows back to history,
+`WRAPLINE` cleared), `keep_viewport_top_widen_without_row_change_moves_the_cursor_up`,
+`keep_viewport_top_top_row_continuing_a_history_line_keeps_the_cursor_row`,
+`keep_viewport_top_widen_joins_the_cursor_row` (cursor moves up one row and right by the
+joined width), `keep_viewport_top_narrow_with_a_mid_screen_cursor_pulls_split_rows_back`
+(negative shift), `keep_viewport_top_narrow_with_the_cursor_at_the_bottom_matches_alacritty`,
+`keep_viewport_top_widen_during_alt_screen_joins_the_primary_rows`; the eight earlier policy
+tests are unchanged and still pass.
+
+### Verification
+
+Run on 2026-09-09, branch `refactor/terminal-render-engine`, Windows 11.
+
+- `cargo fmt --all -- --check` -> exit 0.
+- `cargo clippy --workspace --all-targets -- -D warnings` -> `Finished `dev` profile
+  [unoptimized + debuginfo] target(s) in 6.68s`.
+- `cargo test -p oneterm-terminal` -> `test result: ok. 245 passed; 0 failed; 0 ignored`.
+- `cargo test -p oneterm-local-shell` -> `test result: ok. 30 passed; 0 failed; 0 ignored`
+  (one earlier run, concurrent with the GUI captures, failed
+  `mouse_drag_updates_selection_not_mouse_move` on its 2 s real-PTY wait; two isolated runs
+  passed; the crate is untouched).
+- `cargo test -p oneterm-ssh` -> `test result: ok. 50 passed; 0 failed; 0 ignored`.
+- `cargo test --workspace` -> every suite `test result: ok`, 0 failed, 3 ignored.
+- `python scripts/check-english.py` -> `English contributor-text check passed for 536 files.`
+- `python scripts/check-doc-paths.py` -> `Doc path check passed for 146 current paths in 10
+  documents.`
+- Instrumented fast-dev build, conhost `CUP` row vs grid cursor row after the resize:
+  `ls -lath` maximize 11/11, `for` maximize 12/12, `ls` widen 13/13, `ls` 49x34 37/37,
+  `for` chain widen 30/30, `dir` maximize 17/17 (all match).
+- Clean fast-dev build, `PostMessage` driver (`WM_CHAR`, `WM_KEYDOWN` Enter, `ShowWindow(3)`,
+  `PrintWindow`): `evidence/BUG-0051-rework-ls-lath.png` (the typed `l` echoes on the prompt
+  row after the maximize), `evidence/BUG-0051-rework-dir-echo.png` (`echo desync-check` under
+  the listing), `evidence/BUG-0051-rework-tui.png` (prompt directly under the TUI command
+  line, no fragment).
+
+### Gaps
+
+- The TUI flow was run six times; five put the prompt directly under the command line, one
+  (before the alt-screen path had been unit-tested) put it 18 blank rows lower with no stale
+  fragment and no dump to explain it. The alt-screen path is covered by
+  `keep_viewport_top_widen_during_alt_screen_joins_the_primary_rows`; not reproduced since.
+- `pwsh scripts/ci-local.ps1` was not run (out of scope for the rework); the gates it wraps
+  were run individually above except the dependency, catalog and notice checks, which this
+  change does not touch.
+- A row shrink still relies on alacritty's `shrink_lines` matching conhost (cursor kept
+  unless it falls off the bottom); the measured shift is zero there and no counter-example
+  was seen, but conhost's row-shrink behaviour was not dumped.

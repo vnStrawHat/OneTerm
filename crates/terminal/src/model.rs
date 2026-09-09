@@ -15,6 +15,7 @@ use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::TermMode;
+use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::{Term, event::EventListener};
 
 use crate::content::TerminalContent;
@@ -203,14 +204,12 @@ impl<EP: EventListener> TerminalModel<EP> {
 
     /// Actually resize the terminal grid. Should be called **after** `pty_resize`.
     ///
-    /// Shrinks and column-only changes always use alacritty's semantics; a grow
-    /// follows the session's [`ResizePolicy`].
+    /// Follows the session's [`ResizePolicy`].
     pub fn resize_grid(&self, rows: u16, cols: u16) {
         let (lines, cols) = (rows as usize, cols as usize);
         let mut term = self.term.lock();
-        let lines_added = lines.saturating_sub(term.screen_lines());
-        if self.resize_policy == ResizePolicy::KeepViewportTop && lines_added > 0 {
-            grow_keeping_viewport_top(&mut term, lines, cols, lines_added);
+        if self.resize_policy == ResizePolicy::KeepViewportTop {
+            resize_keeping_viewport_top(&mut term, lines, cols);
         } else {
             term.resize(TerminalSize { cols, lines });
         }
@@ -433,36 +432,40 @@ impl<EP: EventListener> TerminalModel<EP> {
     }
 }
 
-/// Grow the viewport by `lines_added` rows without pulling scrollback into it
+/// Resize the primary grid the way conhost resizes its buffer behind ConPTY
 /// ([`ResizePolicy::KeepViewportTop`]).
 ///
-/// `Grid::grow_lines` (vendored `grid/resize.rs`) grows the ring buffer with
-/// the bottom row anchored, which pulls `pulled = min(history_size,
-/// lines_added)` history rows into the top of the viewport, moves the cursor
-/// and saved cursor down by `pulled`, subtracts `lines_added` from
-/// `display_offset` and drops `pulled` rows of history. This runs that resize
-/// and then undoes the pull on the primary grid. Invariants relied on:
+/// Measured on Windows 11 (BUG-0051, raw PTY dumps): conhost repaints nothing
+/// after `ResizePseudoConsole`. It re-wraps the rows of the old viewport at the
+/// new width as if the top row started a line, keeps that content at the top,
+/// leaves the rows below blank and addresses later output with absolute cursor
+/// positions in those coordinates. alacritty anchors the bottom row instead:
+/// `grow_lines` pulls history into the top, `grow_columns` lets history fill the
+/// rows freed by joining wrapped rows, `shrink_columns` pushes the top rows out
+/// when it splits rows. So this runs alacritty's resize, measures the row
+/// conhost puts the cursor on ([`conhost_cursor_row`]) and shifts the viewport
+/// by the difference:
 ///
-/// - `Grid::scroll_up` over the whole screen by `pulled` rotates the top
-///   `pulled` rows back into history and clears the bottom `pulled` rows. Its
-///   `increase_scroll_limit` always finds room for exactly `pulled` rows,
-///   because the resize removed that many and the scroll limit never shrank,
-///   so `history_size` returns to its pre-resize value and every pre-resize
-///   row keeps its `Line` index; the ring buffer stays consistent because the
-///   rotation only moves `zero` and the rows it exposes are reset.
-/// - Both cursors moved down by exactly `pulled`, so moving them back up keeps
-///   them inside the viewport.
-/// - The pre-resize `display_offset` is restored (clamped to history): the top
-///   visible row stays where it was and the viewport extends downward, for a
-///   user scrolled back as much as for one at the bottom.
-/// - Rows are resized before columns so the correction is exact; the column
-///   reflow then runs on the corrected grid.
-/// - `Term::resize` marks the whole terminal damaged and nothing resets damage
-///   while the lock is held, so the corrected rows repaint on the next
-///   snapshot. The selection is dropped: alacritty rotated it by `pulled`.
+/// - a positive shift is `Grid::scroll_up` over the whole screen: the top rows
+///   rotate back into history (`increase_scroll_limit` makes room while below
+///   the scroll limit; the ring stays consistent because only `zero` moves and
+///   the exposed bottom rows are reset) and the cursors move up with the rows;
+/// - a negative shift (a column shrink split rows above the cursor) grows the
+///   rows by the shift, which pulls those rows back from history and moves the
+///   cursors down, then shrinks the rows again, which drops the bottom rows
+///   (blank: they were below the cursor);
+/// - the pre-resize `display_offset` is restored (clamped to history), so a
+///   scrolled-back viewport keeps its top row; the selection is dropped
+///   (alacritty rotated it); `Term::resize` leaves the whole terminal damaged
+///   and nothing resets damage while the lock is held.
+///
+/// Only the cursor row is aligned. When the top row continues a wrapped line
+/// from history, conhost shows that line torn at the old top row while this
+/// grid shows it re-wrapped whole, so the top rows can hold other text than
+/// conhost's; every row that starts at column 0 below it agrees.
 ///
 /// While the alt screen is active the primary grid is `Term::inactive_grid`,
-/// which has no accessor. The alt grid (no history, so nothing to correct) is
+/// which has no accessor. The alt grid (no history, nothing to correct) is
 /// parked in a local and replaced by a placeholder, `swap_alt` makes the primary
 /// grid active for the resize and the correction, then `swap_alt` returns to the
 /// alt screen — that direction clones the primary cursor into, and clears, the
@@ -470,37 +473,34 @@ impl<EP: EventListener> TerminalModel<EP> {
 /// would have (no reflow), is put back. The two swaps restore the keyboard-mode
 /// stacks and the mode flags; `Term::resize` runs with the same reflow flags as
 /// before the swap.
-fn grow_keeping_viewport_top<EP: EventListener>(
-    term: &mut Term<EP>,
-    lines: usize,
-    cols: usize,
-    lines_added: usize,
-) {
-    let old_cols = term.columns();
+fn resize_keeping_viewport_top<EP: EventListener>(term: &mut Term<EP>, lines: usize, cols: usize) {
     let parked_alt = term.mode().contains(TermMode::ALT_SCREEN).then(|| {
-        let placeholder = Grid::new(term.screen_lines(), old_cols, 0);
+        let placeholder = Grid::new(term.screen_lines(), term.columns(), 0);
         let alt = mem::replace(term.grid_mut(), placeholder);
         term.swap_alt();
         alt
     });
 
-    let pulled = term.history_size().min(lines_added);
     let display_offset = term.grid().display_offset();
-    term.resize(TerminalSize {
-        cols: old_cols,
-        lines,
-    });
-    if pulled > 0 {
-        let grid = term.grid_mut();
-        grid.scroll_up(&(Line(0)..Line(lines as i32)), pulled);
-        grid.cursor.point.line -= pulled;
-        grid.saved_cursor.point.line -= pulled;
+    let conhost_row = conhost_cursor_row(term.grid(), cols).min(lines - 1) as i32;
+    term.resize(TerminalSize { cols, lines });
+
+    let grid = term.grid_mut();
+    let shift = grid.cursor.point.line.0 - conhost_row;
+    if shift > 0 {
+        let shift = shift as usize;
+        grid.scroll_up(&(Line(0)..Line(lines as i32)), shift);
+        grid.cursor.point.line -= shift;
+        grid.saved_cursor.point.line = Line((grid.saved_cursor.point.line.0 - shift as i32).max(0));
+    } else if shift < 0 {
+        let pull = (shift.unsigned_abs() as usize).min(grid.history_size());
+        grid.resize(true, lines + pull, cols);
+        grid.resize(true, lines, cols);
+    }
+    if shift != 0 {
         let offset_delta = display_offset as i32 - grid.display_offset() as i32;
         grid.scroll_display(Scroll::Delta(offset_delta));
         term.selection = None;
-    }
-    if cols != old_cols {
-        term.resize(TerminalSize { cols, lines });
     }
 
     if let Some(mut alt) = parked_alt {
@@ -510,10 +510,36 @@ fn grow_keeping_viewport_top<EP: EventListener>(
     }
 }
 
+/// The viewport row conhost puts the cursor on after re-wrapping the viewport
+/// to `cols` columns (measured behaviour, see [`resize_keeping_viewport_top`]).
+///
+/// The rows from the top of the viewport down to the cursor row are copied into
+/// a history-less scratch grid and reflowed there, so the vendored reflow
+/// decides which rows join or split exactly as it will for the real grid, and
+/// the cursor's distance from the top row is read back as its buffer row
+/// (`history_size` + line: a shrink pushes split rows into the scratch history).
+/// `pad` blank rows above the copy keep the scratch cursor off `Line(0)`, where
+/// `shrink_columns` clamps it instead of letting rows split below it.
+fn conhost_cursor_row(grid: &Grid<Cell>, cols: usize) -> usize {
+    let old_cols = grid.columns();
+    let cursor = &grid.cursor;
+    let pad = old_cols / cols + 1;
+    let rows = pad + cursor.point.line.0 as usize + 1;
+    let mut probe: Grid<Cell> = Grid::new(rows, old_cols, rows * old_cols);
+    for line in 0..=cursor.point.line.0 {
+        probe[Line(pad as i32 + line)] = grid[Line(line)].clone();
+    }
+    probe.cursor.point = Point::new(Line(rows as i32 - 1), cursor.point.column);
+    probe.cursor.input_needs_wrap = cursor.input_needs_wrap;
+    probe.resize(true, rows, cols);
+    probe.history_size() + probe.cursor.point.line.0 as usize - pad
+}
+
 #[cfg(test)]
 mod tests {
     use alacritty_terminal::event::VoidListener;
     use alacritty_terminal::term::Config;
+    use alacritty_terminal::term::cell::Flags;
     use alacritty_terminal::term::test::mock_term;
     use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
@@ -542,6 +568,27 @@ mod tests {
         parser.advance(&mut term, b"prompt>");
         parser.advance(&mut term, bytes);
         term
+    }
+
+    /// A 5x10 terminal fed `rows` (each followed by CR LF) and then `prompt`.
+    fn term_with(rows: &[&str], prompt: &str) -> Term<VoidListener> {
+        let config = Config {
+            scrolling_history: 100,
+            ..Default::default()
+        };
+        let mut term = Term::new(config, &TerminalSize { cols: 10, lines: 5 }, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+        for row in rows {
+            parser.advance(&mut term, format!("{row}\r\n").as_bytes());
+        }
+        parser.advance(&mut term, prompt.as_bytes());
+        term
+    }
+
+    fn wraps(term: &Term<VoidListener>, line: i32) -> bool {
+        term.grid()[Line(line)][Column(term.columns() - 1)]
+            .flags
+            .contains(Flags::WRAPLINE)
     }
 
     fn resize_model(term: Term<VoidListener>, policy: ResizePolicy) -> TerminalModel<VoidListener> {
@@ -686,6 +733,175 @@ mod tests {
         feed(&mut term, b"\x1b[?1049l");
         assert_eq!(term.grid().cursor.point.line, Line(7));
         assert_eq!(term.history_size(), 13);
+    }
+
+    /// `ls -lath` case (BUG-0051 rework): a wrapped line inside the viewport
+    /// joins on a widen; conhost keeps the top row and moves the cursor up by
+    /// the rows that vanished, so must the grid. The joined rows return to
+    /// history instead of being replaced by pulled history.
+    #[test]
+    fn keep_viewport_top_widen_joins_wrapped_rows_and_keeps_the_top_row() {
+        let rows: Vec<String> = (0..10).map(|i| format!("line{i}")).collect();
+        let mut rows: Vec<&str> = rows.iter().map(String::as_str).collect();
+        rows.push("abcdefghijklmnopqrstuvwxyz");
+        let term = term_with(&rows, "prompt>");
+        assert_eq!(row_text(&term, 0), "line9");
+        assert!(wraps(&term, 1) && wraps(&term, 2) && !wraps(&term, 3));
+        assert_eq!(term.grid().cursor.point, Point::new(Line(4), Column(7)));
+
+        let model = resize_model(term, ResizePolicy::KeepViewportTop);
+        model.resize_grid(8, 30);
+
+        let term = model.term().lock();
+        assert_eq!(term.grid().cursor.point, Point::new(Line(2), Column(7)));
+        assert_eq!(row_text(&term, 0), "line9");
+        assert_eq!(row_text(&term, 1), "abcdefghijklmnopqrstuvwxyz");
+        assert!(!wraps(&term, 1));
+        assert_eq!(row_text(&term, 2), "prompt>");
+        for line in 3..8 {
+            assert_eq!(row_text(&term, line), "", "row {line} must be blank");
+        }
+        assert_eq!(row_text(&term, -1), "line8");
+        assert_eq!(term.history_size(), 9);
+    }
+
+    /// A pure widen (rows unchanged) needs the same correction: conhost moves
+    /// the cursor up by the joined rows while alacritty keeps its index.
+    #[test]
+    fn keep_viewport_top_widen_without_row_change_moves_the_cursor_up() {
+        let rows: Vec<String> = (0..10).map(|i| format!("line{i}")).collect();
+        let mut rows: Vec<&str> = rows.iter().map(String::as_str).collect();
+        rows.push("abcdefghijklmnopqrstuvwxyz");
+        let model = resize_model(term_with(&rows, "prompt>"), ResizePolicy::KeepViewportTop);
+        model.resize_grid(5, 30);
+
+        let term = model.term().lock();
+        assert_eq!(term.grid().cursor.point, Point::new(Line(2), Column(7)));
+        assert_eq!(row_text(&term, 0), "line9");
+        assert_eq!(row_text(&term, 1), "abcdefghijklmnopqrstuvwxyz");
+        assert_eq!(row_text(&term, 2), "prompt>");
+        assert_eq!(row_text(&term, 3), "");
+        assert_eq!(row_text(&term, 4), "");
+        assert_eq!(term.history_size(), 9);
+    }
+
+    /// The top row is the tail of a line wrapped from history. conhost re-wraps
+    /// the viewport from its top row, so nothing above the cursor changes and
+    /// the cursor row stays; alacritty joins the tail into the history line,
+    /// which then shows whole on the top row.
+    #[test]
+    fn keep_viewport_top_top_row_continuing_a_history_line_keeps_the_cursor_row() {
+        let rows: Vec<String> = (0..8).map(|i| format!("line{i}")).collect();
+        let mut rows: Vec<&str> = rows.iter().map(String::as_str).collect();
+        rows.extend(["abcdefghijklmnopqrstuvwxyz", "a", "b", "c"]);
+        let term = term_with(&rows, "prompt>");
+        assert_eq!(row_text(&term, 0), "uvwxyz");
+        assert!(wraps(&term, -1) && !wraps(&term, 0));
+
+        let model = resize_model(term, ResizePolicy::KeepViewportTop);
+        model.resize_grid(8, 30);
+
+        let term = model.term().lock();
+        assert_eq!(term.grid().cursor.point, Point::new(Line(4), Column(7)));
+        assert_eq!(row_text(&term, 0), "abcdefghijklmnopqrstuvwxyz");
+        assert_eq!(row_text(&term, 1), "a");
+        assert_eq!(row_text(&term, 3), "c");
+        assert_eq!(row_text(&term, 4), "prompt>");
+        assert_eq!(row_text(&term, 5), "");
+        assert_eq!(row_text(&term, -1), "line7");
+        assert_eq!(term.history_size(), 8);
+    }
+
+    /// The cursor sits on the continuation row of a wrapped command line: the
+    /// join moves it up one row and right by the joined width, as in conhost.
+    #[test]
+    fn keep_viewport_top_widen_joins_the_cursor_row() {
+        let rows: Vec<String> = (0..10).map(|i| format!("line{i}")).collect();
+        let rows: Vec<&str> = rows.iter().map(String::as_str).collect();
+        let term = term_with(&rows, "prompt>abcdef");
+        assert!(wraps(&term, 3));
+        assert_eq!(term.grid().cursor.point, Point::new(Line(4), Column(3)));
+
+        let model = resize_model(term, ResizePolicy::KeepViewportTop);
+        model.resize_grid(5, 30);
+
+        let term = model.term().lock();
+        assert_eq!(term.grid().cursor.point, Point::new(Line(3), Column(13)));
+        assert_eq!(row_text(&term, 0), "line7");
+        assert_eq!(row_text(&term, 3), "prompt>abcdef");
+        assert_eq!(row_text(&term, 4), "");
+        assert_eq!(term.history_size(), 7);
+    }
+
+    /// A column shrink splits a row above a mid-screen cursor: conhost keeps
+    /// the top row and the cursor moves down; alacritty pushed the split row
+    /// into history, so the grid pulls it back and drops a blank bottom row.
+    #[test]
+    fn keep_viewport_top_narrow_with_a_mid_screen_cursor_pulls_split_rows_back() {
+        let term = term_with(&["abcdefgh"], "p>");
+        assert_eq!(term.grid().cursor.point, Point::new(Line(1), Column(2)));
+
+        let model = resize_model(term, ResizePolicy::KeepViewportTop);
+        model.resize_grid(5, 6);
+
+        let term = model.term().lock();
+        assert_eq!(term.grid().cursor.point, Point::new(Line(2), Column(2)));
+        assert_eq!(row_text(&term, 0), "abcdef");
+        assert!(wraps(&term, 0));
+        assert_eq!(row_text(&term, 1), "gh");
+        assert_eq!(row_text(&term, 2), "p>");
+        assert_eq!(row_text(&term, 3), "");
+        assert_eq!(row_text(&term, 4), "");
+        assert_eq!(term.history_size(), 0);
+    }
+
+    /// A column shrink with the cursor on the bottom row: the split row pushes
+    /// the top row out on both sides, so the default result already matches.
+    #[test]
+    fn keep_viewport_top_narrow_with_the_cursor_at_the_bottom_matches_alacritty() {
+        let rows: Vec<String> = (0..10).map(|i| format!("line{i}")).collect();
+        let mut rows: Vec<&str> = rows.iter().map(String::as_str).collect();
+        rows.push("abcdefgh");
+        let keep = resize_model(term_with(&rows, "p>"), ResizePolicy::KeepViewportTop);
+        let default = resize_model(term_with(&rows, "p>"), ResizePolicy::Default);
+        keep.resize_grid(5, 6);
+        default.resize_grid(5, 6);
+
+        let (keep, default) = (keep.term().lock(), default.term().lock());
+        assert_eq!(keep.grid().cursor.point, Point::new(Line(4), Column(2)));
+        assert_eq!(keep.grid().cursor.point, default.grid().cursor.point);
+        assert_eq!(keep.history_size(), default.history_size());
+        for line in -(keep.history_size() as i32)..5 {
+            assert_eq!(row_text(&keep, line), row_text(&default, line));
+        }
+    }
+
+    /// Wrapped rows on the primary screen join while a TUI holds the alt
+    /// screen: the correction runs on the inactive primary grid and the prompt
+    /// lands on the joined row after the TUI exits.
+    #[test]
+    fn keep_viewport_top_widen_during_alt_screen_joins_the_primary_rows() {
+        let rows: Vec<String> = (0..10).map(|i| format!("line{i}")).collect();
+        let mut rows: Vec<&str> = rows.iter().map(String::as_str).collect();
+        rows.push("abcdefghijklmnopqrstuvwxyz");
+        let mut term = term_with(&rows, "prompt>tui\r\n");
+        assert_eq!(term.grid().cursor.point, Point::new(Line(4), Column(0)));
+        feed(&mut term, b"\x1b[?1049h\x1b[Htui");
+
+        let model = resize_model(term, ResizePolicy::KeepViewportTop);
+        model.resize_grid(8, 30);
+
+        let mut term = model.term().lock();
+        assert!(term.mode().contains(TermMode::ALT_SCREEN));
+        feed(&mut term, b"\x1b[?1049l");
+        assert!(!term.mode().contains(TermMode::ALT_SCREEN));
+        assert_eq!(term.grid().cursor.point, Point::new(Line(2), Column(0)));
+        assert_eq!(row_text(&term, 0), "abcdefghijklmnopqrstuvwxyz");
+        assert_eq!(row_text(&term, 1), "prompt>tui");
+        for line in 2..8 {
+            assert_eq!(row_text(&term, line), "", "row {line} must be blank");
+        }
+        assert_eq!(term.history_size(), 10);
     }
 
     /// PERF-14: `has_selection` agrees with `selection_text` without building the string.

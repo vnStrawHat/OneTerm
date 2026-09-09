@@ -188,35 +188,53 @@ resizes the `Term` grid from its loop — the UI thread does that in
 `TerminalSession::resize`: `PtyTransport::pty_resize` first, so the process learns
 the new size before any output for it arrives, then `TerminalModel::resize_grid`.
 
-**Grow-resize policy (`ResizePolicy`, DEC-0008).** Shrinks and column-only changes
-always use alacritty's semantics. For a grow, `Grid::grow_lines` pulls
-`min(history_size, lines_added)` rows out of scrollback into the top of the viewport
-and moves the cursor down by that amount. That matches a Unix PTY or a remote shell,
-which reflow on their side and repaint, so SSH keeps `ResizePolicy::Default`. conhost
-behind ConPTY does neither: it keeps its viewport top, extends downward and addresses
-later output with absolute cursor positions in its own coordinates, so with the
-default policy typed input lands above the prompt and an exiting alt-screen TUI
-leaves stale rows (IN-0019). Local sessions on Windows therefore select
-`ResizePolicy::KeepViewportTop` (`crates/local-shell/src/session_terminal.rs`; the
-policy is a macro argument of `impl_pty_terminal_session!`, so it stays with the
-backend). Under that policy `TerminalModel::resize_grid` runs `Term::resize` for the
-rows, then undoes the pull on the primary grid (`grow_keeping_viewport_top` in
-`crates/terminal/src/model.rs`), then resizes the columns so the reflow runs on the
-corrected grid. Invariants after a grow by `N` rows with `pulled` history rows:
+**Resize policy (`ResizePolicy`, DEC-0008).** `Term::resize` anchors the bottom row:
+on a row grow `Grid::grow_lines` pulls `min(history_size, lines_added)` rows out of
+scrollback into the top of the viewport and moves the cursor down by that amount; on a
+column change `grow_columns` joins rows flagged `WRAPLINE` and lets history fill the rows
+that vanished (the cursor keeps its index), and `shrink_columns` splits rows and pushes the
+top rows into history. That matches a Unix PTY or a remote shell, which reflow on their
+side and repaint, so SSH keeps `ResizePolicy::Default`. conhost behind ConPTY does neither
+(measured with raw PTY dumps in BUG-0051): after `ResizePseudoConsole` it repaints
+nothing, re-wraps the rows of the old viewport at the new width as if the top row started
+a line, keeps that content at the top, leaves the rows below blank and addresses later
+output with absolute cursor positions (`CUP`) in those coordinates. Long lines reach the
+parser as continuous text (implicit wrap, so alacritty flags them `WRAPLINE`), and after a
+maximize from 33x43 to 52x158 with `ls -lath` output conhost's next `CUP` named row 12
+while the grid cursor sat on row 33 (21 joined rows); a pure widen to 132 columns gave
+row 14 (19 joined); a grow to 49x34 gave row 38 (5 split rows). With the default policy
+typed input therefore lands inside the listing and an exiting alt-screen TUI leaves stale
+rows (IN-0019). Local sessions on Windows select `ResizePolicy::KeepViewportTop`
+(`crates/local-shell/src/session_terminal.rs`; the policy is a macro argument of
+`impl_pty_terminal_session!`, so it stays with the backend). Under that policy every
+resize goes through `resize_keeping_viewport_top` (`crates/terminal/src/model.rs`):
+`conhost_cursor_row` copies the viewport rows from the top down to the cursor row into a
+history-less scratch grid, reflows it to the new width with the vendored `Grid::resize`
+(so the same code decides which rows join or split) and reads the cursor's distance from
+the top row back; then `Term::resize` runs and the viewport is shifted by the difference
+between alacritty's cursor row and that measured row: `Grid::scroll_up` over the whole
+screen for a positive shift (top rows rotate back into history, bottom rows are cleared),
+a grow-then-shrink of the rows for a negative one (history rows come back, blank bottom
+rows are dropped). Invariants after the correction:
 
-- every pre-resize row keeps its `Line` index, the `N` new rows at the bottom are
-  blank, and `history_size` is unchanged (the pulled rows go back to scrollback);
-- the cursor and saved-cursor rows are unchanged;
+- the cursor row equals the row conhost's next `CUP` names; the saved cursor moves with
+  it (clamped to the screen);
+- every row below the top row that starts at column 0 has the same text as in conhost;
+  when the top row continued a wrapped line from history the grid shows that line joined
+  whole while conhost shows it torn at the old top row, so the top rows may differ;
+- the joined or pulled rows return to scrollback, and blank rows fill the bottom;
 - the pre-resize `display_offset` is kept (clamped to history), so a scrolled-back
   viewport keeps its top row and extends downward;
-- the correction also applies while the alt screen is active (the primary grid is
-  the inactive one; the alt grid has no history and is left to alacritty), so the
-  shell's prompt lands on its row after the TUI exits;
-- the selection is dropped (alacritty had rotated it), and `Term::resize` leaves the
-  whole terminal damaged, so the next snapshot repaints every row.
+- the correction also applies while the alt screen is active (the primary grid is the
+  inactive one; the alt grid has no history and is left to alacritty), so the shell's
+  prompt lands on its row after the TUI exits;
+- the selection is dropped when rows moved (alacritty had rotated it), and `Term::resize`
+  leaves the whole terminal damaged, so the next snapshot repaints every row;
+- a row shrink and a column shrink with the cursor on the bottom row produce alacritty's
+  own result (the measured shift is zero).
 
-The visible tradeoff is blank rows below the prompt after a maximize instead of
-recovered scrollback; the rows are still in history. Tests:
+The visible tradeoff is blank rows below the prompt after a maximize instead of recovered
+scrollback; the rows are still in history. Tests:
 `crates/terminal/src/model.rs` (`keep_viewport_top_*`, `default_grow_*`),
 `crates/local-shell/src/session_tests.rs::local_session_grow_policy_matches_conpty`,
 `crates/ssh/src/session.rs::ssh_session_keeps_the_default_grow_policy`.
@@ -375,8 +393,10 @@ output parsing, input FIFO, resize, colour replies, child exit and shutdown.
   `LANG`/`LC_ALL` + (optionally) an init arg `[Console]::OutputEncoding`.
 - **TERM**: always `xterm-256color`, `COLORTERM=truecolor`.
 - **Resize**: `Notifier::notify_resize` → ConPTY handles it (no SIGWINCH on Windows).
-  A grow never pulls scrollback into the viewport (`ResizePolicy::KeepViewportTop`,
-  §5.3, DEC-0008) because conhost keeps its viewport top.
+  The grid is realigned to conhost after every resize (`ResizePolicy::KeepViewportTop`,
+  §5.3, DEC-0008): conhost keeps its viewport top, re-wraps the viewport rows in place
+  and never repaints, so scrollback is not pulled in and joined or split wrapped rows
+  move the cursor row exactly as they do in conhost.
 - **Ctrl-C**: byte `0x03` → shell handles it. OK.
 - **Child exit**: `tty::Pty` provides `ChildExitWatcher` (race-free) → `SessionEvent::Exited(code)`.
 
