@@ -13,10 +13,13 @@
 //! one in cell *n + 1*, and the cross glyph is exactly the union of the two
 //! lines it is made of.
 //!
-//! The module is pure: no GPUI, no alacritty, no state. The only allocation is
-//! into the caller's output vector, except that [`ShapePath::ops`] owns a small
-//! `Vec` - paths exist for eight code points that occur at most a few times per
-//! row (arcs, diagonals, powerline), so the allocation is not on a hot path.
+//! Curves and diagonals (rounded corners, `╱╲╳`, powerline) are not paths: they
+//! are rasterized here into coverage rects with a fractional `alpha`, sampled on
+//! a grid that is exactly mirror symmetric (see [`rasterize`]), so they are
+//! anti-aliased and obey the same reflection contract as the solid shapes.
+//!
+//! The module is pure: no GPUI, no alacritty, no state, and no allocation other
+//! than into the caller's output vector.
 
 #[cfg(test)]
 #[path = "shapes_tests.rs"]
@@ -33,46 +36,18 @@ pub(crate) struct CellSizeDevicePx {
     pub h: i32,
 }
 
-/// An axis-aligned rectangle in cell-relative device pixels. Row planning adds
-/// the cell origin and converts to logical pixels (`device / scale_factor`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// An axis-aligned rectangle in cell-relative device pixels, every pixel of
+/// which has coverage `alpha`. Solid shapes emit `alpha == 1.0`; the curved and
+/// diagonal shapes emit their anti-aliased edge pixels with a fractional alpha
+/// (a multiple of 1/16). Row planning adds the cell origin, converts to logical
+/// pixels (`device / scale_factor`) and multiplies `alpha` into the color.
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) struct DeviceRect {
     pub x: i32,
     pub y: i32,
     pub w: i32,
     pub h: i32,
-}
-
-/// A point of a [`ShapePath`], in cell-relative device pixels.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub(crate) struct DevicePoint {
-    pub x: f32,
-    pub y: f32,
-}
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub(crate) enum PathOp {
-    Move(DevicePoint),
-    Line(DevicePoint),
-    /// Cubic bezier: two control points and the end point.
-    Cubic(DevicePoint, DevicePoint, DevicePoint),
-    Close,
-}
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub(crate) enum PathStyle {
-    Fill,
-    /// Centered stroke of `width` device pixels.
-    Stroke {
-        width: f32,
-    },
-}
-
-/// One sub-path of a shape. `ops` always starts with [`PathOp::Move`].
-#[derive(Clone, PartialEq, Debug)]
-pub(crate) struct ShapePath {
-    pub style: PathStyle,
-    pub ops: Vec<PathOp>,
+    pub alpha: f32,
 }
 
 /// Stroke widths derived from the cell width, in device pixels.
@@ -308,6 +283,7 @@ fn push_rect(out: &mut Vec<DeviceRect>, x: Interval, y: Interval) {
         y: y.lo,
         w: x.len(),
         h: y.len(),
+        alpha: 1.0,
     });
 }
 
@@ -986,79 +962,127 @@ fn build_braille(c: char, g: &Geometry, out: &mut Vec<DeviceRect>) {
 }
 
 // ---------------------------------------------------------------------------
-// Families D and H - paths (arcs, diagonals, powerline)
+// Families D and H - coverage rasterization (arcs, diagonals, powerline)
 // ---------------------------------------------------------------------------
 
-/// Control point ratio that turns a cubic bezier into a quarter circle.
-const KAPPA: f32 = 0.5523;
+/// Sample points per pixel axis: 4 x 4 gives sixteen coverage levels, which is
+/// what the old engine used and enough that a stroke edge reads as smooth.
+const SAMPLES: i32 = 4;
 
-/// Builds a path in canonical orientation and reflects every point as it is
-/// written, so a mirrored code point is the reflection of the definition.
-struct Pen<'a> {
-    g: &'a Geometry,
+/// Above this many device pixels per cell the rasterizer takes one sample per
+/// pixel (no anti-aliasing) so that replanning a row of huge cells stays cheap.
+/// 64 x 128 device pixels is a 64 px font at 2x; nobody reads a terminal there.
+const AA_PIXEL_CAP: i32 = 64 * 128;
+
+/// Rasterize a region given in **center-origin** coordinates into coverage
+/// rects, run-length merged along each scanline and then downwards.
+///
+/// `inside(u, v)` receives a sample point as its offset from the cell center in
+/// device pixels, after `mirror` has been applied, so a region is written once in
+/// its canonical orientation. Sample `i` of pixel `x` sits at
+/// `x + (i + 0.5) / n`; as an offset from the center that is the odd numerator
+/// `2nx + 2i + 1 - nW` over `2n`, exactly representable, and reflecting the pixel
+/// to `W - 1 - x` (with sample `n - 1 - i`) negates the numerator without any
+/// rounding. Regions are built from `abs`, squares, and comparisons of those
+/// values, so the coverage of pixel `(x, y)` for a mirrored code point is
+/// bit-identical to the coverage of pixel `(W - 1 - x, y)` for the original.
+///
+/// The only allocation is into `out`. Every emitted rect has `alpha > 0`; pixels
+/// of equal coverage merge horizontally, and a run whose extent and alpha match
+/// the run directly above extends it, so a straight stub is one rect.
+fn rasterize(
+    g: &Geometry,
     mirror: Mirror,
-    ops: Vec<PathOp>,
+    inside: impl Fn(f32, f32) -> bool,
+    out: &mut Vec<DeviceRect>,
+) {
+    // ponytail: brute force, every pixel x every sample; a 36 x 76 cell is ~40k
+    // predicate calls per glyph, only when its row is replanned. Cache per
+    // (glyph, cell size) if profiling ever shows this on a prompt row.
+    let n = if g.w * g.h <= AA_PIXEL_CAP {
+        SAMPLES
+    } else {
+        1
+    };
+    let total = n * n;
+    let denominator = (2 * n) as f32;
+    let base = out.len();
+    for y in 0..g.h {
+        let mut run_start = 0;
+        let mut run_count = 0;
+        for x in 0..g.w {
+            let mut count = 0;
+            for j in 0..n {
+                let v = ((2 * n * y + 2 * j + 1) - n * g.h) as f32 / denominator;
+                let v = if mirror.y { -v } else { v };
+                for i in 0..n {
+                    let u = ((2 * n * x + 2 * i + 1) - n * g.w) as f32 / denominator;
+                    let u = if mirror.x { -u } else { u };
+                    if inside(u, v) {
+                        count += 1;
+                    }
+                }
+            }
+            if count != run_count {
+                emit_run(out, base, run_start, y, x - run_start, run_count, total);
+                run_start = x;
+                run_count = count;
+            }
+        }
+        emit_run(out, base, run_start, y, g.w - run_start, run_count, total);
+    }
 }
 
-impl<'a> Pen<'a> {
-    fn new(g: &'a Geometry, mirror: Mirror) -> Self {
-        Self {
-            g,
-            mirror,
-            ops: Vec::new(),
-        }
+fn emit_run(
+    out: &mut Vec<DeviceRect>,
+    base: usize,
+    x: i32,
+    y: i32,
+    w: i32,
+    count: i32,
+    total: i32,
+) {
+    if count == 0 || w <= 0 {
+        return;
     }
+    let alpha = count as f32 / total as f32;
+    // Rects of this glyph only (`base..`); the one ending on this row with the
+    // same extent and coverage grows by a row instead of a new rect.
+    if let Some(above) = out[base..]
+        .iter_mut()
+        .find(|r| r.x == x && r.w == w && r.y + r.h == y && r.alpha.to_bits() == alpha.to_bits())
+    {
+        above.h += 1;
+        return;
+    }
+    out.push(DeviceRect {
+        x,
+        y,
+        w,
+        h: 1,
+        alpha,
+    });
+}
 
-    fn point(&self, x: f32, y: f32) -> DevicePoint {
-        DevicePoint {
-            x: if self.mirror.x {
-                self.g.w as f32 - x
-            } else {
-                x
-            },
-            y: if self.mirror.y {
-                self.g.h as f32 - y
-            } else {
-                y
-            },
-        }
-    }
+/// Squared distance from `(u, v)` to the segment `a -> b`.
+fn segment_distance_sq(u: f32, v: f32, a: (f32, f32), b: (f32, f32)) -> f32 {
+    let (abx, aby) = (b.0 - a.0, b.1 - a.1);
+    let (apx, apy) = (u - a.0, v - a.1);
+    let length_sq = abx * abx + aby * aby;
+    let t = if length_sq > 0.0 {
+        ((apx * abx + apy * aby) / length_sq).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let (dx, dy) = (apx - t * abx, apy - t * aby);
+    dx * dx + dy * dy
+}
 
-    fn move_to(&mut self, x: f32, y: f32) {
-        let point = self.point(x, y);
-        self.ops.push(PathOp::Move(point));
-    }
-
-    fn line_to(&mut self, x: f32, y: f32) {
-        let point = self.point(x, y);
-        self.ops.push(PathOp::Line(point));
-    }
-
-    fn cubic_to(&mut self, c1: (f32, f32), c2: (f32, f32), end: (f32, f32)) {
-        let c1 = self.point(c1.0, c1.1);
-        let c2 = self.point(c2.0, c2.1);
-        let end = self.point(end.0, end.1);
-        self.ops.push(PathOp::Cubic(c1, c2, end));
-    }
-
-    fn close(&mut self) {
-        self.ops.push(PathOp::Close);
-    }
-
-    fn fill(self) -> ShapePath {
-        ShapePath {
-            style: PathStyle::Fill,
-            ops: self.ops,
-        }
-    }
-
-    fn stroke(self) -> ShapePath {
-        let width = self.g.thickness.light as f32;
-        ShapePath {
-            style: PathStyle::Stroke { width },
-            ops: self.ops,
-        }
-    }
+/// Inside the elliptical band between the ellipse with semi-axes `(a0, b0)`
+/// (the hole; empty when either is `<= 0`) and the one with `(a1, b1)`.
+fn in_elliptic_band(du: f32, dv: f32, a0: f32, b0: f32, a1: f32, b1: f32) -> bool {
+    let outside_hole = a0 <= 0.0 || b0 <= 0.0 || (du / a0).powi(2) + (dv / b0).powi(2) >= 1.0;
+    outside_hole && (du / a1).powi(2) + (dv / b1).powi(2) <= 1.0
 }
 
 fn rounded_mirror(code: u32) -> Option<Mirror> {
@@ -1071,62 +1095,39 @@ fn rounded_mirror(code: u32) -> Option<Mirror> {
     })
 }
 
-/// Radius of a rounded corner: the arc always fits inside the cell.
-fn corner_radius(g: &Geometry) -> f32 {
-    g.w.min(g.h) as f32 / 2.0
-}
-
-fn rounded_corner_path(mirror: Mirror, g: &Geometry) -> ShapePath {
-    let r = corner_radius(g);
-    let mut pen = Pen::new(g, mirror);
-    // Canonical: the arc of U+256D, from the vertical stub up into the
-    // horizontal one, centered on the cell axes so both ends meet the joints.
-    pen.move_to(g.cx, g.cy + r);
-    pen.cubic_to(
-        (g.cx, g.cy + r - KAPPA * r),
-        (g.cx + r - KAPPA * r, g.cy),
-        (g.cx + r, g.cy),
+/// Canonical U+256D (arc down and right): a quarter of an elliptical band
+/// centered on `(r, r)` (offsets from the cell center) plus straight stubs from
+/// its ends to the bottom and right edges.
+///
+/// The band is as thick as the snapped joint interval of the stub it meets on
+/// each axis (`J_x` where it turns into the vertical stub, `J_y` where it turns
+/// into the horizontal one), so the arc blends into the stubs and into the light
+/// lines of the neighbouring cells with neither gap nor overshoot; in between the
+/// two thicknesses interpolate. The radius is the largest for which the band's
+/// outer edge still touches the cell edge, which keeps the tangent ends solid.
+fn rounded_corner(mirror: Mirror, g: &Geometry, out: &mut Vec<DeviceRect>) {
+    let hx = g.joint(Axis::X, g.thickness.light).len() as f32 / 2.0;
+    let hy = g.joint(Axis::Y, g.thickness.light).len() as f32 / 2.0;
+    let r = (g.cx - hx).min(g.cy - hy).max(0.0);
+    rasterize(
+        g,
+        mirror,
+        |u, v| {
+            if (v >= r && u.abs() <= hx) || (u >= r && v.abs() <= hy) {
+                return true;
+            }
+            let (du, dv) = (u - r, v - r);
+            du <= 0.0 && dv <= 0.0 && in_elliptic_band(du, dv, r - hx, r - hy, r + hx, r + hy)
+        },
+        out,
     );
-    pen.stroke()
 }
 
-/// The straight parts of a rounded corner are quads; only the arc is a path.
-fn rounded_corner_stubs(mirror: Mirror, g: &Geometry, out: &mut Vec<DeviceRect>) {
-    let r = corner_radius(g);
-    let joint_x = g.joint(Axis::X, g.thickness.light);
-    let joint_y = g.joint(Axis::Y, g.thickness.light);
-    let vertical = if mirror.y {
-        Interval {
-            lo: 0,
-            hi: g.snap_edge(Axis::Y, g.cy - r),
-        }
-    } else {
-        Interval {
-            lo: g.snap_edge(Axis::Y, g.cy + r),
-            hi: g.h,
-        }
-    };
-    let horizontal = if mirror.x {
-        Interval {
-            lo: 0,
-            hi: g.snap_edge(Axis::X, g.cx - r),
-        }
-    } else {
-        Interval {
-            lo: g.snap_edge(Axis::X, g.cx + r),
-            hi: g.w,
-        }
-    };
-    push_rect(out, joint_x, vertical);
-    push_rect(out, horizontal, joint_y);
-}
-
-/// Canonical diagonal: U+2572, upper left to lower right.
-fn diagonal_path(mirror: Mirror, g: &Geometry) -> ShapePath {
-    let mut pen = Pen::new(g, mirror);
-    pen.move_to(0.0, 0.0);
-    pen.line_to(g.w as f32, g.h as f32);
-    pen.stroke()
+/// Distance band of half width `half` around the diagonal of canonical U+2572,
+/// top-left to bottom-right through the cell center.
+fn on_diagonal(g: &Geometry, u: f32, v: f32, half: f32) -> bool {
+    let (w, h) = (g.w as f32, g.h as f32);
+    (u * h - v * w).abs() <= half * (w * w + h * h).sqrt()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1166,47 +1167,49 @@ const POWERLINE: [(Powerline, Mirror); 16] = [
     (Powerline::CornerOutline, MXY),   // E0BF
 ];
 
-fn powerline_path(code: u32, g: &Geometry) -> Option<ShapePath> {
-    let (shape, mirror) = *POWERLINE.get((code.checked_sub(0xE0B0)?) as usize)?;
-    let w = g.w as f32;
-    let h = g.h as f32;
-    let mut pen = Pen::new(g, mirror);
-    Some(match shape {
-        Powerline::Triangle | Powerline::Chevron => {
-            pen.move_to(0.0, 0.0);
-            pen.line_to(w, g.cy);
-            pen.line_to(0.0, h);
-            if shape == Powerline::Triangle {
-                pen.close();
-                pen.fill()
-            } else {
-                pen.stroke()
-            }
-        }
-        Powerline::HalfDisc | Powerline::HalfDiscOutline => {
-            pen.move_to(0.0, 0.0);
-            pen.cubic_to((KAPPA * w, 0.0), (w, g.cy - KAPPA * g.cy), (w, g.cy));
-            pen.cubic_to((w, g.cy + KAPPA * (h - g.cy)), (KAPPA * w, h), (0.0, h));
-            if shape == Powerline::HalfDisc {
-                pen.close();
-                pen.fill()
-            } else {
-                pen.stroke()
-            }
-        }
-        Powerline::Corner => {
-            pen.move_to(0.0, 0.0);
-            pen.line_to(w, h);
-            pen.line_to(0.0, h);
-            pen.close();
-            pen.fill()
-        }
-        Powerline::CornerOutline => {
-            pen.move_to(0.0, 0.0);
-            pen.line_to(w, h);
-            pen.stroke()
-        }
-    })
+/// Canonical powerline regions, in offsets from the cell center. Fills are
+/// inside tests against the ideal boundary; strokes are distance bands of half
+/// width `t_l / 2`, inset so that they stay within the cell.
+fn powerline(code: u32, g: &Geometry, out: &mut Vec<DeviceRect>) {
+    let Some(&(shape, mirror)) = code
+        .checked_sub(0xE0B0)
+        .and_then(|index| POWERLINE.get(index as usize))
+    else {
+        return;
+    };
+    let (w, h) = (g.w as f32, g.h as f32);
+    let (cx, cy) = (g.cx, g.cy);
+    let t = g.thickness.light as f32;
+    let half = t / 2.0;
+    match shape {
+        // Base on the left edge, apex at `(W, C.y)`.
+        Powerline::Triangle => rasterize(g, mirror, |u, v| v.abs() * w <= cy * (cx - u), out),
+        // Both legs of the triangle as one stroke: `|v|` folds the lower leg
+        // onto the upper one. The apex is inset by half the width so the
+        // stroke's round join does not spill into the next cell.
+        Powerline::Chevron => rasterize(
+            g,
+            mirror,
+            |u, v| segment_distance_sq(u, v.abs(), (-cx, cy), (cx - half, 0.0)) <= half * half,
+            out,
+        ),
+        // Half of the ellipse centered on the left edge with semi-axes `(W, C.y)`.
+        Powerline::HalfDisc => rasterize(
+            g,
+            mirror,
+            |u, v| ((u + cx) / w).powi(2) + (v / cy).powi(2) <= 1.0,
+            out,
+        ),
+        Powerline::HalfDiscOutline => rasterize(
+            g,
+            mirror,
+            |u, v| in_elliptic_band(u + cx, v, w - t, cy - t, w, cy),
+            out,
+        ),
+        // Below the top-left to bottom-right diagonal.
+        Powerline::Corner => rasterize(g, mirror, |u, v| v * w >= u * h, out),
+        Powerline::CornerOutline => rasterize(g, mirror, |u, v| on_diagonal(g, u, v, half), out),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1223,11 +1226,11 @@ pub(crate) fn is_shape_char(c: char) -> bool {
 }
 
 /// Append the quads of `c`. Returns whether anything was appended: `false` for a
-/// code point this module does not draw, and for the few shape characters made
-/// only of paths.
+/// code point this module does not draw and for U+2800.
 ///
 /// Rects are appended in a deterministic order (arms up, down, left, right;
-/// rails minus then plus) so that row plans are reproducible.
+/// rails minus then plus; rasterized shapes top to bottom, left to right) so
+/// that row plans are reproducible.
 pub(crate) fn shape_quads(c: char, cell: CellSizeDevicePx, out: &mut Vec<DeviceRect>) -> bool {
     if !is_shape_char(c) {
         return false;
@@ -1235,14 +1238,24 @@ pub(crate) fn shape_quads(c: char, cell: CellSizeDevicePx, out: &mut Vec<DeviceR
     let g = Geometry::new(cell);
     let start = out.len();
     let code = c as u32;
+    let half = g.thickness.light as f32 / 2.0;
     match code {
+        // U+2571 is the reflection of U+2572; U+2573 is both diagonals.
+        0x2571 => rasterize(&g, MX, |u, v| on_diagonal(&g, u, v, half), out),
+        0x2572 => rasterize(&g, ID, |u, v| on_diagonal(&g, u, v, half), out),
+        0x2573 => rasterize(
+            &g,
+            ID,
+            |u, v| on_diagonal(&g, u, v, half) || on_diagonal(&g, -u, v, half),
+            out,
+        ),
         0x2500..=0x257F => {
             if let Some(arms) = box_arms(c) {
                 build_arms(&arms, &g, out);
             } else if let Some((count, weight, axis)) = dash_def(c) {
                 build_dashes(axis, count, weight, &g, out);
             } else if let Some(mirror) = rounded_mirror(code) {
-                rounded_corner_stubs(mirror, &g, out);
+                rounded_corner(mirror, &g, out);
             }
         }
         0x2591 => build_shade(Shade::Light, &g, out),
@@ -1250,40 +1263,8 @@ pub(crate) fn shape_quads(c: char, cell: CellSizeDevicePx, out: &mut Vec<DeviceR
         0x2593 => build_shade(Shade::Dark, &g, out),
         0x2580..=0x259F | 0x25AC => build_block(code, &g, out),
         0x2800..=0x28FF => build_braille(c, &g, out),
+        0xE0B0..=0xE0BF => powerline(code, &g, out),
         _ => {}
     }
     out.len() > start
-}
-
-/// Append the paths of `c` (rounded corners, diagonals, powerline). Returns
-/// whether anything was appended.
-pub(crate) fn shape_paths(c: char, cell: CellSizeDevicePx, out: &mut Vec<ShapePath>) -> bool {
-    if !is_shape_char(c) {
-        return false;
-    }
-    let g = Geometry::new(cell);
-    let code = c as u32;
-    match code {
-        0x256D..=0x2570 => {
-            let Some(mirror) = rounded_mirror(code) else {
-                return false;
-            };
-            out.push(rounded_corner_path(mirror, &g));
-        }
-        // U+2571 is the reflection of U+2572; U+2573 is both diagonals.
-        0x2571 => out.push(diagonal_path(MX, &g)),
-        0x2572 => out.push(diagonal_path(ID, &g)),
-        0x2573 => {
-            out.push(diagonal_path(ID, &g));
-            out.push(diagonal_path(MX, &g));
-        }
-        0xE0B0..=0xE0BF => {
-            let Some(path) = powerline_path(code, &g) else {
-                return false;
-            };
-            out.push(path);
-        }
-        _ => return false,
-    }
-    true
 }

@@ -11,8 +11,8 @@ use std::rc::Rc;
 
 use gpui::{
     App, Bounds, CursorStyle, Element, ElementId, Entity, GlobalElementId, Hitbox, HitboxBehavior,
-    Hsla, InspectorElementId, IntoElement, LayoutId, PathBuilder, Pixels, ShapedLine, Size,
-    StrikethroughStyle, Style, UnderlineStyle, Window, fill, point, px,
+    Hsla, InspectorElementId, IntoElement, LayoutId, Pixels, ShapedLine, Size, StrikethroughStyle,
+    Style, UnderlineStyle, Window, fill, point, px,
 };
 use oneterm_terminal::TerminalSession;
 
@@ -22,7 +22,6 @@ use super::frame::GridSize;
 use super::metrics::GridGeometry;
 use super::overlay::RowSpan;
 use super::row_plan::{ColorSpan, DecorationKind, RowPlan};
-use super::shapes::{DevicePoint, PathOp, PathStyle};
 use super::state::{Overlays, RenderState};
 use crate::theme::TerminalTheme;
 
@@ -298,50 +297,18 @@ impl GridPainter<'_> {
             );
         }
 
-        // Pass 3: paths, decorations and glyphs. GPUI orders these kinds
-        // Quad → Path → Underline → Sprite within the layer regardless of
-        // call order, so the walk is per row for cache locality only.
+        // Pass 3: decorations and glyphs. GPUI orders these kinds
+        // Quad → Underline → Sprite within the layer regardless of call
+        // order, so the walk is per row for cache locality only.
         for row in rows {
             let Some(plan) = plans.get(row) else {
                 break;
             };
-            self.paint_paths(row, plan, window);
             self.paint_decorations(row, plan, window);
             self.paint_text(row, plan, window);
         }
 
         self.paint_gutter(window);
-    }
-
-    fn paint_paths(&mut self, row: usize, plan: &RowPlan, window: &mut Window) {
-        if plan.paths.is_empty() {
-            return;
-        }
-        let scale = self.geometry.metrics.scale_factor;
-        let row_top = self.geometry.cell_origin(row, 0).y;
-        for path in &plan.paths {
-            let cell_x = self.geometry.cell_origin(row, usize::from(path.col)).x;
-            let to_point =
-                |p: DevicePoint| point(cell_x + px(p.x / scale), row_top + px(p.y / scale));
-            let mut builder = match path.style {
-                PathStyle::Fill => PathBuilder::fill(),
-                PathStyle::Stroke { width } => PathBuilder::stroke(px(width / scale)),
-            };
-            for op in plan.ops_of(path) {
-                match *op {
-                    PathOp::Move(p) => builder.move_to(to_point(p)),
-                    PathOp::Line(p) => builder.line_to(to_point(p)),
-                    PathOp::Cubic(c1, c2, end) => {
-                        builder.cubic_bezier_to(to_point(end), to_point(c1), to_point(c2));
-                    }
-                    PathOp::Close => builder.close(),
-                }
-            }
-            if let Ok(built) = builder.build() {
-                window.paint_path(built, path.color);
-                self.stats.paths += 1;
-            }
-        }
     }
 
     fn paint_decorations(&mut self, row: usize, plan: &RowPlan, window: &mut Window) {

@@ -1,6 +1,5 @@
 //! One display row turned into paint-ready primitives: background spans,
-//! shaped text runs with color spans, coalesced shape quads, shape paths and
-//! decorations. Built only for rows whose hash changed; every vector is
+//! shaped text runs with color spans, coalesced shape quads and decorations. Built only for rows whose hash changed; every vector is
 //! cleared and refilled, never replaced, so a rebuild allocates nothing once
 //! the row has been planned once at this width.
 
@@ -11,10 +10,7 @@ use oneterm_terminal::is_decorative_character;
 use super::diagnostics::FrameStats;
 use super::frame::{Cell, CellFlags, Color, FrameRow};
 use super::glyphs::{FontKey, FontSet, GlyphCache};
-use super::shapes::{
-    CellSizeDevicePx, DeviceRect, PathOp, PathStyle, ShapePath, is_shape_char, shape_paths,
-    shape_quads,
-};
+use super::shapes::{CellSizeDevicePx, DeviceRect, is_shape_char, shape_quads};
 use crate::highlight::{SemanticOverlay, to_gpui_hsla};
 use crate::theme::TerminalTheme;
 
@@ -51,21 +47,12 @@ pub(crate) struct TextRunPlan {
 }
 
 /// A quad of a shape glyph; `rect.x` is measured from the grid's left edge,
-/// `rect.y` from the row top, both in device pixels.
+/// `rect.y` from the row top, both in device pixels. The rect's coverage
+/// `alpha` is already multiplied into `color`, so painting is a plain quad.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ShapeQuad {
     pub rect: DeviceRect,
     pub color: Hsla,
-}
-
-/// A path of a shape glyph; `ops` indexes `RowPlan::path_ops`, cell-relative.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct ShapePathPlan {
-    pub col: u16,
-    pub color: Hsla,
-    pub style: PathStyle,
-    pub op_start: u32,
-    pub op_end: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -91,8 +78,6 @@ pub(crate) struct RowPlan {
     pub text: Vec<TextRunPlan>,
     pub colors: Vec<ColorSpan>,
     pub shapes: Vec<ShapeQuad>,
-    pub paths: Vec<ShapePathPlan>,
-    pub path_ops: Vec<PathOp>,
     pub decorations: Vec<DecorationSpan>,
 }
 
@@ -103,8 +88,6 @@ impl RowPlan {
         self.text.clear();
         self.colors.clear();
         self.shapes.clear();
-        self.paths.clear();
-        self.path_ops.clear();
         self.decorations.clear();
     }
 
@@ -115,10 +98,6 @@ impl RowPlan {
 
     pub(crate) fn colors_of(&self, run: &TextRunPlan) -> &[ColorSpan] {
         &self.colors[run.color_start as usize..run.color_end as usize]
-    }
-
-    pub(crate) fn ops_of(&self, path: &ShapePathPlan) -> &[PathOp] {
-        &self.path_ops[path.op_start as usize..path.op_end as usize]
     }
 }
 
@@ -132,7 +111,6 @@ pub(crate) struct Scratch {
     pub class: Vec<u8>,
     pub run_text: String,
     pub rects: Vec<DeviceRect>,
-    pub paths: Vec<ShapePath>,
     /// Indices into `RowPlan::shapes` of the previous column's rects, which a
     /// new rect may extend instead of being pushed.
     pub open_prev: Vec<usize>,
@@ -150,7 +128,6 @@ impl Scratch {
             class: Vec::with_capacity(256),
             run_text: String::with_capacity(256),
             rects: Vec::with_capacity(32),
-            paths: Vec::with_capacity(4),
             open_prev: Vec::with_capacity(8),
             open_cur: Vec::with_capacity(8),
             label: String::with_capacity(32),
@@ -392,6 +369,12 @@ impl RowBuilder<'_, '_> {
                 x: rect.x + x_offset,
                 ..*rect
             };
+            // Coverage becomes color alpha; equal-alpha neighbours still
+            // coalesce because the comparison below is on the final color.
+            let color = Hsla {
+                a: color.a * rect.alpha,
+                ..color
+            };
             let extended = self.scratch.open_prev.iter().copied().find(|&i| {
                 let prev = &self.plan.shapes[i];
                 prev.color == color
@@ -411,21 +394,6 @@ impl RowBuilder<'_, '_> {
             }
         }
         std::mem::swap(&mut self.scratch.open_prev, &mut self.scratch.open_cur);
-
-        self.scratch.paths.clear();
-        if shape_paths(ch, device, &mut self.scratch.paths) {
-            for path in self.scratch.paths.drain(..) {
-                let op_start = self.plan.path_ops.len() as u32;
-                self.plan.path_ops.extend_from_slice(&path.ops);
-                self.plan.paths.push(ShapePathPlan {
-                    col,
-                    color,
-                    style: path.style,
-                    op_start,
-                    op_end: self.plan.path_ops.len() as u32,
-                });
-            }
-        }
     }
 }
 
@@ -916,12 +884,26 @@ mod tests {
     }
 
     #[gpui::test]
-    fn rounded_corner_emits_quads_and_a_path(cx: &mut TestAppContext) {
+    fn rounded_corner_emits_coverage_quads(cx: &mut TestAppContext) {
         let frame = FrameBuilder::new(1, 3).text(0, 1, "╭").build();
         let plan = Fixture::new(false).plan(cx, &frame, 0, &[]);
-        assert!(!plan.shapes.is_empty());
-        assert_eq!(plan.paths.len(), 1);
-        assert_eq!(plan.paths[0].col, 1);
-        assert!(!plan.ops_of(&plan.paths[0]).is_empty());
+        let solid = plan.shapes.iter().filter(|q| q.color.a == 1.0).count();
+        let edges = plan
+            .shapes
+            .iter()
+            .filter(|q| q.color.a > 0.0 && q.color.a < 1.0)
+            .count();
+        assert!(solid > 0, "the arc has no solid pixels: {:?}", plan.shapes);
+        assert!(
+            edges > 0,
+            "the arc has no anti-aliased edge: {:?}",
+            plan.shapes
+        );
+        for quad in &plan.shapes {
+            assert!(
+                (quad.color.a - quad.rect.alpha).abs() < 1e-6,
+                "coverage not multiplied into the color: {quad:?}"
+            );
+        }
     }
 }

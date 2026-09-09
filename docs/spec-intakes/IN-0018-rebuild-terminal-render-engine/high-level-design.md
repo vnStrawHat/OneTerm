@@ -21,8 +21,9 @@ Three ideas drive the design:
    and a handful of draw calls. An idle terminal shapes nothing and plans nothing.
 2. **Shapes are geometry, not glyphs.** Box drawing, blocks, shades, braille, and powerline
    code points are built in a center-origin cell space from `Stroke`/`Rect` primitives, mirrored
-   by reflection, snapped symmetrically to device pixels, and painted as quads (paths only for
-   arcs and diagonals). They join seamlessly across cells in any font.
+   by reflection, snapped symmetrically to device pixels, and painted as quads — arcs,
+   diagonals and powerline as coverage-anti-aliased quads rasterized on a mirror-exact sample
+   grid. They join seamlessly across cells in any font.
 3. **Alacritty stops at `render/frame.rs`.** That file is the only module that names an
    alacritty type; everything above it works with view-owned `Cell`, `CellFlags`, `Color`,
    `CursorShape`, `Selection`, and `Damage`.
@@ -96,7 +97,7 @@ the contract).
    .update(...)` rebuilds changed rows; compute selection/search rects and the cursor paint;
    insert the hitbox; return `PrepaintState`.
 6. `TerminalElement::paint`: `paint_layer(bounds)` → background quads, shape quads, search and
-   selection quads, paths, decorations, glyphs, gutter labels; second `paint_layer` for the cursor;
+   selection quads, decorations, glyphs, gutter labels; second `paint_layer` for the cursor;
    set the mouse cursor style; install the IME handler when the view is focused.
 7. Input: the wrapper div's listeners map pixel → grid through `GridGeometry`, classify keys
    (`input/keys.rs`) and mouse events (`input/mouse.rs`), and call `TerminalSession` methods; the
@@ -128,11 +129,11 @@ no renderer structure, and their tests are the acceptance spec).
 | --- | --- | --- | --- |
 | `src/lib.rs` | module declarations, the 7 public items, `init` | 0050 | 50 |
 | `src/render/mod.rs` | declarations only | 0046 | 20 |
-| `src/render/shapes.rs` + `shapes_tests.rs` | `shape_quads`, `shape_paths`, `Stroke`/`DeviceRect`, mirror/rotate, symmetric snap | 0046 | 650 + 450 |
+| `src/render/shapes.rs` + `shapes_tests.rs` | `shape_quads`, `Stroke`/`DeviceRect` (with coverage alpha), mirror/rotate, symmetric snap, coverage rasterizer for arcs/diagonals/powerline | 0046 | 650 + 450 |
 | `src/render/frame.rs` | `Frame`, `FrameRow`, `Cell`, `Color`, `CellFlags`, `CursorShape`, `Selection`, `Damage`; the only alacritty-typed file | 0047 | 320 |
 | `src/render/metrics.rs` | `CellMetrics` (device-snapped cell), `GridGeometry` (origin, padding, gutter, rows/cols, hit-test), `grid_size_for` | 0047 | 220 |
 | `src/render/glyphs.rs` | `GlyphCache`: run text → `ShapedLine` via `shape_line_by_hash`/`force_width`, generation eviction | 0047 | 160 |
-| `src/render/row_plan.rs` | `RowPlan` + `build_row_plan` (bg spans, text runs, shape quads coalesced, paths, decorations, class merge, contrast) | 0047 | 480 |
+| `src/render/row_plan.rs` | `RowPlan` + `build_row_plan` (bg spans, text runs, shape quads coalesced, decorations, class merge, contrast) | 0047 | 480 |
 | `src/render/plan_cache.rs` | `PlanCache`: candidates (damage ∪ cursor row ∪ mask delta), scroll rotation, hash verify, style-key invalidation | 0047 | 260 |
 | `src/render/state.rs` | `RenderState` (frame, plans, glyphs, geometry, inputs, overlays, scratch, stats) shared by view/element/input | 0047 | 150 |
 | `src/render/element.rs` + `element_tests.rs` | `TerminalElement` (`Element` impl), `PrepaintState`, paint order, IME install hook | 0047 | 380 + 260 |
@@ -187,11 +188,11 @@ Per frame:
 | --- | --- | --- |
 | `request_layout` | none | `window.request_layout(Style{size: full}, [], cx)` |
 | `prepaint` | `GridGeometry` from bounds; resize session if `(rows, cols)` changed; `frame.snapshot`; `plan_cache.update`; overlays; cursor; gutter labels for visible rows | `insert_hitbox(bounds, Normal)` |
-| `paint` | layer 1: bg quads → shape quads → search quads → selection quads → paths → underlines/strikes → glyphs (mono/subpixel via `paint_glyph`, emoji via `paint_emoji`) → gutter glyphs; layer 2: cursor quads and cursor glyph | `paint_layer`, `paint_quad`, `paint_path`, `paint_underline`, `paint_strikethrough`, `paint_glyph`, `paint_emoji`, `set_cursor_style`, `handle_input` |
+| `paint` | layer 1: bg quads → shape quads → search quads → selection quads → underlines/strikes → glyphs (mono/subpixel via `paint_glyph`, emoji via `paint_emoji`) → gutter glyphs; layer 2: cursor quads and cursor glyph | `paint_layer`, `paint_quad`, `paint_underline`, `paint_strikethrough`, `paint_glyph`, `paint_emoji`, `set_cursor_style`, `handle_input` |
 
 Quads inside one layer keep insertion order, so backgrounds, then shapes, then translucent
-search/selection produce the intended stacking; the kind order (Quad → Path → Underline →
-Sprite) guarantees glyphs over quads regardless of call order. The cursor needs its own layer
+search/selection produce the intended stacking; the kind order (Quad → Underline → Sprite)
+guarantees glyphs over quads regardless of call order. The cursor needs its own layer
 because a block cursor must cover glyphs.
 
 All quad edges are computed as `origin + px(device_x / scale)` from whole-device-pixel values so
@@ -205,12 +206,12 @@ input handlers):
 | Field | Lifetime / reuse |
 | --- | --- |
 | `frame: Frame` | wraps the reused `TerminalContent`; `snapshot_into` reuses its `cells` and damage buffers |
-| `plans: PlanCache` | one `RowPlan` per display row (color spans and path ops flattened per row); vectors cleared, not reallocated, on rebuild; rotated on scroll; `candidate` / `dirty` bitsets, URL mask double buffer and `wraps` scratch |
+| `plans: PlanCache` | one `RowPlan` per display row (color spans flattened per row); vectors cleared, not reallocated, on rebuild; rotated on scroll; `candidate` / `dirty` bitsets, URL mask double buffer and `wraps` scratch |
 | `glyphs: GlyphCache` | `HashMap<RunKey, (ShapedLine, generation)>`, cap 4096; entries unused for 2 generations are evicted when the cap is hit |
 | `geometry: Option<GridGeometry>` | written in prepaint, read by input handlers (hit-test contract) |
 | `inputs: RenderInputs` | written by `TerminalView::render` before the element is built |
 | `overlays` | `selection: Vec<RowSpan>`, `search: Vec<SearchRect>`, reused (the URL mask double buffer lives in `PlanCache`) |
-| `scratch` | run text `String`, class `Vec<u8>`, line text `String`, `char_cols: Vec<u16>`, `char_wide`, rect / path scratch, two `Vec<usize>` of open rects, label `String` |
+| `scratch` | run text `String`, class `Vec<u8>`, line text `String`, `char_cols: Vec<u16>`, `char_wide`, rect scratch, two `Vec<usize>` of open rects, label `String` |
 | `fonts: FontSet` + cached `CellMetrics` | four font variants with keys, rebuilt on font/size change; metrics re-measured on font/size/factor/override/scale change |
 | `gutter: GutterLabels` | one shaped label per row (`ShapedLine` clones from the glyph cache) + gutter width |
 | `stats: FrameStats` | always compiled (plain counters) |
@@ -332,7 +333,7 @@ gutter stamps, search highlights, semantic overlay, shell profile) travels in
 | 4 | SGR hidden ignored (wart 5) | `CellFlags::HIDDEN` cells emit background but no text run | inventory wart |
 | 5 | contrast luminance exponent 2 (wart 9) | WCAG exponent 2.4 | inventory wart |
 | 6 | settings `min_contrast` 0.0 silently disables enforcement (wart 10) | `min_contrast <= 0.0` keeps the theme default 4.5; `0.0 < v <= 1.0` disables; `> 1.0` is the threshold | inventory wart |
-| 7 | rounded corners via 4×4 supersampled alpha rects | GPUI stroked arc paths | paths are the sanctioned primitive for arcs; fewer primitives |
+| 7 | rounded corners via 4×4 supersampled alpha rects; diagonals and most powerline glyphs from the font or as blocks | coverage-anti-aliased quads, as the old engine, but symmetric: 4×4 samples on a mirror-exact grid for rounded corners, `╱╲╳` and all sixteen powerline glyphs, run-length merged | acceptance rework 2026-09-09 — the first cut used GPUI stroked/filled paths, which the DirectX backend paints without anti-aliasing at cell sizes (visible stair steps); quads with coverage alpha are what the old engine did and look smooth |
 | 8 | scroll with `Damage::Full` rebuilt every row | rotation + hash verification rebuilds only changed rows | performance; observable output identical |
 | 9 | light stroke thickness `round(cw/6)` etc. | thickness table in `shapes.md`, parity-matched per axis | symmetric snapping (DEC-0007 item 4) |
 | 10 | URL continuation rows only replanned when themselves damaged | mask delta marks them dirty | correctness of always-on URL underline across wraps |
@@ -348,8 +349,8 @@ US-0050 ticks every box during sign-off.
 
 ### US-0046 shapes (§2.3 items 37–42)
 
-- [ ] 37 lines/corners/tees/crosses/dashes/doubles U+2500–257F as quads, centered strokes, seamless across cells; diagonals as paths (were font fallback)
-- [ ] 38 rounded corners U+256D–2570 anti-aliased (paths)
+- [ ] 37 lines/corners/tees/crosses/dashes/doubles U+2500–257F as quads, centered strokes, seamless across cells; diagonals as anti-aliased coverage quads (were font fallback)
+- [ ] 38 rounded corners U+256D–2570 anti-aliased (coverage quads, 4×4 samples)
 - [ ] 39 block elements U+2580–259F as rects; identical full-width-band runs coalesce into one quad
 - [ ] 40 powerline U+E0B0–E0BF (deviation 1: all 16 real)
 - [ ] 41 shades U+2591–2593 (deviation 2: scaled pattern)
@@ -480,7 +481,7 @@ US-0050 ticks every box during sign-off.
 | Steady-state heap allocations | 0 per frame in view code | `element_tests::idle_frame_allocates_nothing` uses a counting global allocator (test-only) around two idle frames |
 | Shaped lines | cached across frames | `glyph_cache_hits_across_rows`: second frame `shape_calls == 0`, `glyph_hits > 0` |
 | Cell width | whole device pixels | `metrics_snap_cell_to_device_pixels` at scale 1.0, 1.25, 1.5, 2.0 |
-| Shape geometry | ≤ 24 quads per shade cell, ≤ 8 per braille cell, ≤ 8 per box cell (`╬` splits into eight rails) | `shapes_tests` upper-bound assertions |
+| Shape geometry | ≤ 24 quads per shade cell, ≤ 8 per braille cell, ≤ 8 per box cell (`╬` splits into eight rails); rasterized curves ≤ 5 H per cell (`╳` ≤ 6 H), measured `╭` 13 / 22, E0B4 39 / 61, E0B0 42 / 66 quads at 9 × 19 / 14 × 29; rasterization is `W · H · 16` predicate calls per glyph on replan only, and falls back to 1 sample per pixel above 64 × 128 device px per cell | `shapes_tests` upper-bound assertions (`per_cell_quad_budget`, `coverage_quad_counts`) |
 
 ## Risks
 
@@ -491,6 +492,6 @@ US-0050 ticks every box during sign-off.
 | `shape_line_by_hash` collision | wrong glyphs for a run | 64-bit FNV over bytes + font key + byte length; accepted by GPUI's own contract |
 | alacritty reports `Damage::Full` on every scroll | old crate replanned all rows | hash-verify makes rebuild proportional to real change; hashing 80×40 cells is µs-scale |
 | GPUI phase assertions (`insert_hitbox` prepaint-only, `handle_input` paint-only) | debug panics | element tests run under `gpui::test` in debug |
-| Path tessellation per frame for rounded corners / powerline / diagonals | CPU cost on prompt rows | paths are built only for those code points; a prompt row has a handful; if profiling shows cost, cache built `Path<Pixels>` per (glyph, cell size, origin) |
+| Coverage rasterization of rounded corners / powerline / diagonals on replan | CPU cost on prompt rows with many such glyphs at large cells | `W · H · 16` predicate calls per glyph, only for replanned rows (≈ 3k at 9 × 19, ≈ 44k at 36 × 76); above 64 × 128 device px per cell it drops to one sample per pixel; if profiling shows cost, cache rect sets per (glyph, cell size) |
 | Old `panel/`/`space/` compiling against the new view during US-0049 | one packet with both old and new code | `TerminalView` keeps the four field names and three method names the old modules use |
 | Manual UAT is Windows-only | Linux/macOS regressions unobserved | unchanged project limitation (`docs/PROJECT.md`) |

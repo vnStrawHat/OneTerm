@@ -25,10 +25,9 @@ fn quads(c: char, size: (i32, i32)) -> Vec<DeviceRect> {
     out
 }
 
-fn paths(c: char, size: (i32, i32)) -> Vec<ShapePath> {
-    let mut out = Vec::new();
-    shape_paths(c, cell(size), &mut out);
-    out
+/// The rasterized families: rounded corners, diagonals and powerline.
+fn is_coverage_shape(c: char) -> bool {
+    matches!(c as u32, 0x256D..=0x2573 | 0xE0B0..=0xE0BF)
 }
 
 /// Every code point this module claims, in one iterator.
@@ -42,14 +41,16 @@ fn all_shape_chars() -> impl Iterator<Item = char> {
 }
 
 // ---------------------------------------------------------------------------
-// Pixel sets
+// Coverage maps
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, PartialEq, Eq)]
+/// Per-pixel coverage of a rect set: the maximum alpha of the rects over each
+/// pixel (solid families overlap at joints, rasterized ones never overlap).
+#[derive(Clone, PartialEq)]
 struct Bitmap {
     w: i32,
     h: i32,
-    on: Vec<bool>,
+    alpha: Vec<f32>,
 }
 
 impl Bitmap {
@@ -57,7 +58,7 @@ impl Bitmap {
         Self {
             w: size.0,
             h: size.1,
-            on: vec![false; (size.0 * size.1) as usize],
+            alpha: vec![0.0; (size.0 * size.1) as usize],
         }
     }
 
@@ -71,41 +72,53 @@ impl Bitmap {
             for y in rect.y..rect.y + rect.h {
                 for x in rect.x..rect.x + rect.w {
                     let index = (y * bitmap.w + x) as usize;
-                    bitmap.on[index] = true;
+                    bitmap.alpha[index] = bitmap.alpha[index].max(rect.alpha);
                 }
             }
         }
         bitmap
     }
 
+    fn alpha(&self, x: i32, y: i32) -> f32 {
+        self.alpha[(y * self.w + x) as usize]
+    }
+
     fn get(&self, x: i32, y: i32) -> bool {
-        self.on[(y * self.w + x) as usize]
+        self.alpha(x, y) > 0.0
     }
 
     fn union(&self, other: &Self) -> Self {
         let mut merged = self.clone();
-        for (slot, value) in merged.on.iter_mut().zip(other.on.iter()) {
-            *slot |= *value;
+        for (slot, value) in merged.alpha.iter_mut().zip(other.alpha.iter()) {
+            *slot = slot.max(*value);
         }
         merged
     }
 
     fn count(&self) -> usize {
-        self.on.iter().filter(|on| **on).count()
+        self.alpha.iter().filter(|a| **a > 0.0).count()
     }
 
     fn is_subset_of(&self, other: &Self) -> bool {
-        self.on
+        self.alpha
             .iter()
-            .zip(other.on.iter())
-            .all(|(mine, theirs)| !*mine || *theirs)
+            .zip(other.alpha.iter())
+            .all(|(mine, theirs)| *mine <= 0.0 || *theirs > 0.0)
     }
 
+    /// `.` empty, `#` solid, a digit for `floor(alpha * 10)` in between.
     fn ascii(&self) -> String {
         let mut text = String::new();
         for y in 0..self.h {
             for x in 0..self.w {
-                text.push(if self.get(x, y) { '#' } else { '.' });
+                let alpha = self.alpha(x, y);
+                text.push(if alpha <= 0.0 {
+                    '.'
+                } else if alpha >= 1.0 {
+                    '#'
+                } else {
+                    char::from(b'0' + ((alpha * 10.0) as u8).min(9))
+                });
             }
             text.push('\n');
         }
@@ -114,7 +127,7 @@ impl Bitmap {
 }
 
 fn sorted(mut rects: Vec<DeviceRect>) -> Vec<DeviceRect> {
-    rects.sort_by_key(|rect| (rect.x, rect.y, rect.w, rect.h));
+    rects.sort_by_key(|rect| (rect.x, rect.y, rect.w, rect.h, rect.alpha.to_bits()));
     rects
 }
 
@@ -135,44 +148,17 @@ fn mirror_rects(rects: &[DeviceRect], size: (i32, i32), mirror: Mirror) -> Vec<D
                 },
                 w: rect.w,
                 h: rect.h,
+                alpha: rect.alpha,
             })
             .collect(),
     )
 }
 
-/// Points of a path set, mirrored and ordered so that two reflections can be
-/// compared without depending on the direction the path was drawn in.
-fn path_points(paths: &[ShapePath], size: (i32, i32), mirror: Mirror) -> Vec<(i32, i32)> {
-    let mut points: Vec<(i32, i32)> = paths
-        .iter()
-        .flat_map(|path| path.ops.iter())
-        .flat_map(|op| match op {
-            PathOp::Move(p) | PathOp::Line(p) => vec![*p],
-            PathOp::Cubic(a, b, c) => vec![*a, *b, *c],
-            PathOp::Close => Vec::new(),
-        })
-        .map(|point| {
-            let x = if mirror.x {
-                size.0 as f32 - point.x
-            } else {
-                point.x
-            };
-            let y = if mirror.y {
-                size.1 as f32 - point.y
-            } else {
-                point.y
-            };
-            // Compare at 1/16 pixel: the reflection is exact in theory but the
-            // arithmetic runs through f32.
-            ((x * 16.0).round() as i32, (y * 16.0).round() as i32)
-        })
-        .collect();
-    points.sort_unstable();
-    points
-}
-
+/// `b` is the reflection of `a`: pixel for pixel including coverage alpha,
+/// and rect set for rect set (run-length merging mirrors exactly too).
 fn assert_mirrored(a: char, b: char, mirror: Mirror, size: (i32, i32)) {
-    let expected = Bitmap::from_rects(size, &mirror_rects(&quads(a, size), size, mirror));
+    let mirrored = mirror_rects(&quads(a, size), size, mirror);
+    let expected = Bitmap::from_rects(size, &mirrored);
     let actual = Bitmap::of(b, size);
     assert!(
         expected == actual,
@@ -181,9 +167,9 @@ fn assert_mirrored(a: char, b: char, mirror: Mirror, size: (i32, i32)) {
         actual.ascii()
     );
     assert_eq!(
-        path_points(&paths(a, size), size, mirror),
-        path_points(&paths(b, size), size, ID),
-        "{a:?} mirrored paths are not {b:?} at {size:?}"
+        mirrored,
+        sorted(quads(b, size)),
+        "{a:?} mirrored rect set is not {b:?}'s at {size:?}"
     );
 }
 
@@ -202,7 +188,7 @@ fn every_supported_code_point_emits_geometry() {
                 continue;
             }
             assert!(
-                !quads(c, size).is_empty() || !paths(c, size).is_empty(),
+                !quads(c, size).is_empty(),
                 "{c:?} emits no geometry at {size:?}"
             );
         }
@@ -228,27 +214,102 @@ fn all_rects_within_cell_bounds() {
                         && rect.y + rect.h <= size.1,
                     "{c:?} emits {rect:?} outside {size:?}"
                 );
+                assert!(
+                    rect.alpha > 0.0 && rect.alpha <= 1.0,
+                    "{c:?} emits {rect:?} with coverage outside (0, 1] at {size:?}"
+                );
+            }
+        }
+    }
+}
+
+/// Rect sets of the solid families at two cell sizes, recorded before the
+/// curved families moved to coverage rasterization: those families must stay
+/// bit-identical, and every rect of theirs is fully covered.
+#[rustfmt::skip]
+const SOLID_SNAPSHOT: &[(char, (i32, i32), &[(i32, i32, i32, i32)])] = &[
+    ('┌', (9, 19), &[(4, 9, 1, 10), (4, 9, 5, 1)]),
+    ('┼', (9, 19), &[(4, 0, 1, 19), (0, 9, 9, 1)]),
+    ('╬', (9, 19), &[(3, 0, 1, 9), (5, 0, 1, 9), (3, 10, 1, 9), (5, 10, 1, 9), (0, 8, 4, 1), (0, 10, 4, 1), (5, 8, 4, 1), (5, 10, 4, 1)]),
+    ('╤', (9, 19), &[(4, 10, 1, 9), (0, 8, 9, 1), (0, 10, 9, 1)]),
+    ('┄', (9, 19), &[(0, 9, 2, 1), (3, 9, 3, 1), (7, 9, 2, 1)]),
+    ('┋', (9, 19), &[(3, 0, 3, 4), (3, 5, 3, 4), (3, 10, 3, 4), (3, 15, 3, 4)]),
+    ('▄', (9, 19), &[(0, 9, 9, 10)]),
+    ('▚', (9, 19), &[(0, 0, 5, 10), (4, 9, 5, 10)]),
+    ('░', (9, 19), &[(0, 0, 3, 2), (6, 0, 3, 2), (0, 5, 3, 3), (6, 5, 3, 3), (0, 11, 3, 3), (6, 11, 3, 3), (0, 17, 3, 2), (6, 17, 3, 2)]),
+    ('▒', (9, 19), &[(0, 0, 3, 2), (6, 0, 3, 2), (3, 2, 3, 3), (0, 5, 3, 3), (6, 5, 3, 3), (3, 8, 3, 3), (0, 11, 3, 3), (6, 11, 3, 3), (3, 14, 3, 3), (0, 17, 3, 2), (6, 17, 3, 2)]),
+    ('▓', (9, 19), &[(0, 0, 9, 2), (0, 2, 3, 3), (6, 2, 3, 3), (0, 5, 9, 3), (0, 8, 3, 3), (6, 8, 3, 3), (0, 11, 9, 3), (0, 14, 3, 3), (6, 14, 3, 3), (0, 17, 9, 2)]),
+    ('⣿', (9, 19), &[(1, 1, 3, 3), (1, 5, 3, 3), (1, 11, 3, 3), (5, 1, 3, 3), (5, 5, 3, 3), (5, 11, 3, 3), (1, 15, 3, 3), (5, 15, 3, 3)]),
+    ('▬', (9, 19), &[(0, 4, 9, 11)]),
+    ('━', (9, 19), &[(0, 8, 9, 3)]),
+    ('╟', (9, 19), &[(3, 0, 1, 19), (5, 0, 1, 19), (5, 9, 4, 1)]),
+    ('┌', (14, 29), &[(6, 13, 2, 16), (6, 13, 8, 3)]),
+    ('┼', (14, 29), &[(6, 0, 2, 29), (0, 13, 14, 3)]),
+    ('╬', (14, 29), &[(4, 0, 2, 13), (8, 0, 2, 13), (4, 16, 2, 13), (8, 16, 2, 13), (0, 11, 6, 2), (0, 16, 6, 2), (8, 11, 6, 2), (8, 16, 6, 2)]),
+    ('╤', (14, 29), &[(6, 16, 2, 13), (0, 11, 14, 2), (0, 16, 14, 2)]),
+    ('┄', (14, 29), &[(1, 13, 3, 3), (5, 13, 4, 3), (10, 13, 3, 3)]),
+    ('┋', (14, 29), &[(4, 1, 6, 5), (4, 8, 6, 5), (4, 16, 6, 5), (4, 23, 6, 5)]),
+    ('▄', (14, 29), &[(0, 14, 14, 15)]),
+    ('▚', (14, 29), &[(0, 0, 7, 15), (7, 14, 7, 15)]),
+    ('░', (14, 29), &[(0, 0, 5, 2), (9, 0, 5, 2), (0, 7, 5, 5), (9, 7, 5, 5), (0, 17, 5, 5), (9, 17, 5, 5), (0, 27, 5, 2), (9, 27, 5, 2)]),
+    ('▒', (14, 29), &[(0, 0, 5, 2), (9, 0, 5, 2), (5, 2, 4, 5), (0, 7, 5, 5), (9, 7, 5, 5), (5, 12, 4, 5), (0, 17, 5, 5), (9, 17, 5, 5), (5, 22, 4, 5), (0, 27, 5, 2), (9, 27, 5, 2)]),
+    ('▓', (14, 29), &[(0, 0, 14, 2), (0, 2, 5, 5), (9, 2, 5, 5), (0, 7, 14, 5), (0, 12, 5, 5), (9, 12, 5, 5), (0, 17, 14, 5), (0, 22, 5, 5), (9, 22, 5, 5), (0, 27, 14, 2)]),
+    ('⣿', (14, 29), &[(1, 1, 4, 4), (1, 9, 4, 4), (1, 16, 4, 4), (9, 1, 4, 4), (9, 9, 4, 4), (9, 16, 4, 4), (1, 24, 4, 4), (9, 24, 4, 4)]),
+    ('▬', (14, 29), &[(0, 7, 14, 15)]),
+    ('━', (14, 29), &[(0, 12, 14, 5)]),
+    ('╟', (14, 29), &[(4, 0, 2, 29), (8, 0, 2, 29), (8, 13, 6, 3)]),
+];
+
+#[test]
+fn solid_families_unchanged_and_opaque() {
+    for (c, size, rects) in SOLID_SNAPSHOT {
+        let expected: Vec<DeviceRect> = rects
+            .iter()
+            .map(|&(x, y, w, h)| DeviceRect {
+                x,
+                y,
+                w,
+                h,
+                alpha: 1.0,
+            })
+            .collect();
+        assert_eq!(quads(*c, *size), expected, "{c:?} changed at {size:?}");
+    }
+    for size in SIZES {
+        for c in all_shape_chars().filter(|c| !is_coverage_shape(*c)) {
+            for rect in quads(c, size) {
+                assert_eq!(
+                    rect.alpha, 1.0,
+                    "{c:?} emits a translucent rect at {size:?}"
+                );
             }
         }
     }
 }
 
 #[test]
-fn all_path_points_within_cell_bounds() {
-    for size in SIZES {
-        for c in all_shape_chars() {
-            for path in paths(c, size) {
-                for (x, y) in path_points(std::slice::from_ref(&path), size, ID) {
-                    let (x, y) = (x as f32 / 16.0, y as f32 / 16.0);
-                    assert!(
-                        x >= -0.5 && x <= size.0 as f32 + 0.5,
-                        "{c:?} path x {x} outside {size:?}"
-                    );
-                    assert!(
-                        y >= -0.5 && y <= size.1 as f32 + 0.5,
-                        "{c:?} path y {y} outside {size:?}"
-                    );
-                }
+fn curved_edges_have_fractional_coverage() {
+    for size in [(9, 19), (14, 29)] {
+        for c in ['\u{256D}', '\u{E0B4}', '\u{E0B0}', '\u{2571}'] {
+            let rects = quads(c, size);
+            let fractional = rects
+                .iter()
+                .filter(|rect| rect.alpha > 0.0 && rect.alpha < 1.0)
+                .count();
+            assert!(
+                fractional > 0,
+                "{c:?} has no anti-aliased edge at {size:?}:\n{}",
+                Bitmap::from_rects(size, &rects).ascii()
+            );
+            // Sixteen samples per pixel: every alpha is a multiple of 1/16.
+            for rect in &rects {
+                let sixteenths = rect.alpha * 16.0;
+                assert_eq!(
+                    sixteenths,
+                    sixteenths.round(),
+                    "{c:?} alpha {} at {size:?}",
+                    rect.alpha
+                );
             }
         }
     }
@@ -602,39 +663,60 @@ fn shade_density_and_budget() {
 #[test]
 fn powerline_triangle_apex_at_center_height() {
     for size in SIZES {
-        let apex = |c: char, x: f32| {
-            let points = path_points(&paths(c, size), size, ID);
-            let expected = (
-                (x * 16.0).round() as i32,
-                (size.1 as f32 / 2.0 * 16.0) as i32,
-            );
+        let (w, h) = size;
+        let middle = (h - 1) / 2;
+        for (c, base, apex) in [('\u{E0B0}', 0, w - 1), ('\u{E0B2}', w - 1, 0)] {
+            let map = Bitmap::of(c, size);
+            // The base spans the whole edge (its corner pixels are cut by the
+            // sloping edges) and is solid on the center line.
+            if w > 1 {
+                assert_eq!(map.alpha(base, middle), 1.0, "{c:?} base at {size:?}");
+            }
+            for y in 0..h {
+                assert!(map.alpha(base, y) > 0.0, "{c:?} base column at {size:?}");
+                // The apex column is symmetric about the center line and peaks
+                // there, so the apex sits at `C.y`.
+                assert_eq!(
+                    map.alpha(apex, y),
+                    map.alpha(apex, h - 1 - y),
+                    "{c:?} apex column is lopsided at {size:?}\n{}",
+                    map.ascii()
+                );
+                assert!(
+                    map.alpha(apex, y) <= map.alpha(apex, middle),
+                    "{c:?} apex column peaks off center at {size:?}\n{}",
+                    map.ascii()
+                );
+            }
             assert!(
-                points.contains(&expected),
-                "{c:?} has no apex at {expected:?} in {points:?} at {size:?}"
+                map.alpha(apex, middle) > 0.0,
+                "{c:?} has no apex at {size:?}"
             );
-        };
-        apex('\u{E0B0}', size.0 as f32);
-        apex('\u{E0B2}', 0.0);
+        }
 
         // All sixteen powerline code points have real geometry, and the eight
         // filled ones are all different shapes. The four corner outlines are
         // only two diagonals by definition: the outline of the lower left
-        // triangle is the same stroke as the outline of the upper right one.
-        let mut filled: Vec<Vec<(i32, i32)>> = Vec::new();
+        // triangle is the same stroke as the outline of the upper right one,
+        // and both are the box drawing diagonal.
+        let mut filled: Vec<Bitmap> = Vec::new();
         for code in 0xE0B0..=0xE0BFu32 {
             let c = char::from_u32(code).expect("valid powerline code point");
-            let built = paths(c, size);
-            assert_eq!(built.len(), 1, "{c:?} has no path at {size:?}");
-            let points = path_points(&built, size, ID);
-            assert!(points.len() >= 2, "{c:?} has a degenerate path at {size:?}");
-            if built[0].style == PathStyle::Fill && size.0 > 1 && size.1 > 1 {
-                assert!(!filled.contains(&points), "{c:?} duplicates another fill");
-                filled.push(points);
+            let rects = quads(c, size);
+            assert!(!rects.is_empty(), "{c:?} has no geometry at {size:?}");
+            if code % 2 == 0 && w > 1 && h > 1 {
+                let map = Bitmap::from_rects(size, &rects);
+                assert!(!filled.contains(&map), "{c:?} duplicates another fill");
+                filled.push(map);
             }
         }
-        if size.0 > 1 && size.1 > 1 {
+        if w > 1 && h > 1 {
             assert_eq!(filled.len(), 8);
         }
+        assert!(
+            Bitmap::of('\u{E0B9}', size) == Bitmap::of('\u{2572}', size),
+            "corner outline is not the box diagonal at {size:?}"
+        );
     }
 }
 
@@ -713,27 +795,81 @@ fn rails_disjoint_with_gap() {
 }
 
 #[test]
-fn rounded_corner_meets_neighbors() {
+fn rounded_corner_matches_straight_stubs() {
     for size in SIZES {
+        let (w, h) = size;
         let g = Geometry::new(cell(size));
         let joint_x = g.joint(Axis::X, g.thickness.light);
         let joint_y = g.joint(Axis::Y, g.thickness.light);
-        let built = paths('╭', size);
-        assert_eq!(built.len(), 1);
-        let ops = &built[0].ops;
-        let PathOp::Move(start) = ops[0] else {
-            panic!("arc does not start with a move");
-        };
-        let PathOp::Cubic(_, _, end) = ops[1] else {
-            panic!("arc is not a cubic");
-        };
+        let in_x = |x: i32| x >= joint_x.lo && x < joint_x.hi;
+        let in_y = |y: i32| y >= joint_y.lo && y < joint_y.hi;
+        let map = Bitmap::of('\u{256D}', size);
+        let ascii = map.ascii();
+        // The arc's radius: its ends are tangent to the stubs at `C + r`.
+        let hx = joint_x.len() as f32 / 2.0;
+        let hy = joint_y.len() as f32 / 2.0;
+        let r = (g.cx - hx).min(g.cy - hy).max(0.0);
+
+        // Below the arc's lower end the glyph is exactly the vertical stub:
+        // solid on `J_x`, nothing beside it (no overshoot).
+        for y in (g.cy + r).ceil() as i32..h {
+            for x in 0..w {
+                let expected = if in_x(x) { 1.0 } else { 0.0 };
+                assert_eq!(
+                    map.alpha(x, y),
+                    expected,
+                    "vertical stub at {size:?}\n{ascii}"
+                );
+            }
+        }
+        // Right of the arc's upper end the glyph is exactly the horizontal stub.
+        for x in (g.cx + r).ceil() as i32..w {
+            for y in 0..h {
+                let expected = if in_y(y) { 1.0 } else { 0.0 };
+                assert_eq!(
+                    map.alpha(x, y),
+                    expected,
+                    "horizontal stub at {size:?}\n{ascii}"
+                );
+            }
+        }
+        if w < 3 || h < 3 {
+            continue;
+        }
+        // The joins to the neighbouring cells are solid: the tangent ends of
+        // the band sit inside the cell, so the light lines below and to the
+        // right continue the stroke with neither a gap nor a lighter pixel.
+        for x in joint_x.lo..joint_x.hi {
+            assert_eq!(map.alpha(x, h - 1), 1.0, "bottom join at {size:?}\n{ascii}");
+        }
+        for y in joint_y.lo..joint_y.hi {
+            assert_eq!(map.alpha(w - 1, y), 1.0, "right join at {size:?}\n{ascii}");
+        }
+        // No gap anywhere along the stroke: every row from the arc's top and
+        // every column from the arc's left edge has coverage.
+        let top = (0..h)
+            .find(|&y| (0..w).any(|x| map.get(x, y)))
+            .expect("arc top");
+        let left = (0..w)
+            .find(|&x| (0..h).any(|y| map.get(x, y)))
+            .expect("arc left");
+        for y in top..h {
+            assert!(
+                (0..w).any(|x| map.get(x, y)),
+                "gap in row {y} at {size:?}\n{ascii}"
+            );
+        }
+        for x in left..w {
+            assert!(
+                (0..h).any(|y| map.get(x, y)),
+                "gap in column {x} at {size:?}\n{ascii}"
+            );
+        }
+        // The arc is not a mitre: somewhere off both stub axes there is
+        // coverage.
         assert!(
-            (start.x - (joint_x.lo + joint_x.hi) as f32 / 2.0).abs() < 1e-3,
-            "arc does not start on the vertical joint at {size:?}"
-        );
-        assert!(
-            (end.y - (joint_y.lo + joint_y.hi) as f32 / 2.0).abs() < 1e-3,
-            "arc does not end on the horizontal joint at {size:?}"
+            (0..h).any(|y| (0..w).any(|x| map.get(x, y) && !in_x(x) && !in_y(y))),
+            "no arc between the stubs at {size:?}\n{ascii}"
         );
     }
 }
@@ -743,9 +879,16 @@ fn per_cell_quad_budget() {
     for size in SIZES {
         for c in all_shape_chars() {
             let count = quads(c, size).len();
+            let h = size.1 as usize;
             let budget = match c as u32 {
                 0x2800..=0x28FF => 8,
                 0x2591..=0x2593 => 24,
+                // Coverage rasterized: a stroke is one or two runs per
+                // scanline plus its anti-aliased edge pixels, and the cross
+                // is two strokes; the measured counts at the reference sizes
+                // are in `coverage_quad_counts`.
+                0x2573 => 6 * h,
+                0x256D..=0x2572 | 0xE0B0..=0xE0BF => 5 * h,
                 _ => 8,
             };
             assert!(
@@ -753,6 +896,33 @@ fn per_cell_quad_budget() {
                 "{c:?} emits {count} rects at {size:?}, budget {budget}"
             );
         }
+    }
+}
+
+/// Actual quad counts of the rasterized shapes at the two reference sizes,
+/// recorded as upper bounds so a regression in run-length merging shows up.
+#[test]
+fn coverage_quad_counts() {
+    let bounds: [(char, (i32, i32), usize); 8] = [
+        // The arc glyph stays well under 2 x H; the filled and diagonal
+        // shapes need a solid run plus one or two edge pixels per scanline
+        // and land between 2 x H and 2.7 x H.
+        ('\u{256D}', (9, 19), 13),
+        ('\u{256D}', (14, 29), 22),
+        ('\u{E0B4}', (9, 19), 39),
+        ('\u{E0B4}', (14, 29), 61),
+        ('\u{E0B0}', (9, 19), 42),
+        ('\u{E0B0}', (14, 29), 66),
+        ('\u{2571}', (9, 19), 41),
+        ('\u{2571}', (14, 29), 77),
+    ];
+    for (c, size, bound) in bounds {
+        let count = quads(c, size).len();
+        println!("{c:?} at {size:?}: {count} rects");
+        assert!(
+            count <= bound,
+            "{c:?} emits {count} rects at {size:?}, bound {bound}"
+        );
     }
 }
 
@@ -764,9 +934,15 @@ fn per_cell_quad_budget() {
 fn shape_bitmaps_for_visual_review() {
     for size in [(9, 19), (8, 16)] {
         for c in [
-            '┌', '┼', '╔', '╬', '╒', '╘', '╤', '╟', '▚', '░', '▒', '▓', '\u{28FF}', '\u{E0B0}',
+            '┌', '┼', '╔', '╬', '╒', '╘', '╤', '╟', '▚', '░', '▒', '▓', '\u{28FF}', '╭', '╯', '╱',
+            '╳', '\u{E0B0}', '\u{E0B1}', '\u{E0B4}', '\u{E0B5}', '\u{E0B8}', '\u{E0B9}',
         ] {
             println!("{c:?} at {size:?}\n{}", Bitmap::of(c, size).ascii());
+            if is_coverage_shape(c) {
+                for rect in quads(c, size) {
+                    println!("  {rect:?}");
+                }
+            }
         }
     }
 }

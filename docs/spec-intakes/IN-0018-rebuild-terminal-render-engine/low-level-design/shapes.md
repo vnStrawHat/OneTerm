@@ -3,16 +3,17 @@
 Intake: IN-0018
 HLD: ../high-level-design.md
 Topic: shapes
-Date: 2026-09-08
+Date: 2026-09-08 (curves reworked 2026-09-09)
 
 > One concern per file. Keep this focused on implementation-level mechanics for a single area of the HLD so it stays reviewable. Do not restate the whole intake here.
 
 ## Concern
 
 `src/render/shapes.rs`: pure geometry that turns one code point plus a device-pixel cell size
-into quads (`DeviceRect`) and, for arcs/diagonals, paths (`ShapePath`). No GPUI types, no
-alacritty types, no allocation beyond the caller's output vectors. Owns the symmetry contract of
-DEC-0007 item 4.
+into quads (`DeviceRect`, each carrying a coverage `alpha`). Solid families emit opaque rects;
+arcs, diagonals and powerline are rasterized here into anti-aliased coverage rects. No GPUI
+types, no alacritty types, no allocation beyond the caller's output vector. Owns the symmetry
+contract of DEC-0007 item 4.
 
 ## Design
 
@@ -23,7 +24,8 @@ DEC-0007 item 4.
 - The **center** is `C = (W/2, H/2)` as `f32` — an integer when the size is even, a
   half-integer when odd. All definitions are offsets from `C`.
 - A **device interval** is `[lo, hi)` with integer `lo < hi`; a `DeviceRect` is the product of
-  an x-interval and a y-interval, clipped to `[0, W) × [0, H)`; empty rects are dropped.
+  an x-interval and a y-interval, clipped to `[0, W) × [0, H)`, plus a coverage `alpha` in
+  `(0, 1]` shared by every pixel of the rect; empty rects are dropped.
 
 ### Primitives
 
@@ -37,7 +39,7 @@ struct Stroke { axis: Axis, cross: f32, along: f32, half_len: f32, half_thick: f
 /// An axis-aligned rect given by its center and half extents (used for blocks, dots, tiles).
 struct CenterRect { cx: f32, cy: f32, half_w: f32, half_h: f32 }
 
-struct DeviceRect { x: i32, y: i32, w: i32, h: i32 }    // cell-relative device pixels
+struct DeviceRect { x: i32, y: i32, w: i32, h: i32, alpha: f32 }    // cell-relative device pixels
 ```
 
 A `Stroke` on `Axis::Horizontal` becomes `CenterRect { cx: C.x + along, cy: C.y + cross,
@@ -85,9 +87,13 @@ Applied to **definitions**, never to emitted rects:
 
 | Transform | `Stroke` (axis H) | `Stroke` (axis V) | `CenterRect` | path point `(x, y)` |
 | --- | --- | --- | --- | --- |
-| `mirror_x` | `along = -along` | `cross = -cross` | `cx = W - cx` | `(W - x, y)` |
-| `mirror_y` | `cross = -cross` | `along = -along` | `cy = H - cy` | `(x, H - y)` |
-| `rotate_cw` | applies only to arm sets (slot permutation below); never to strokes, rects, or paths | | | |
+| `mirror_x` | `along = -along` | `cross = -cross` | `cx = W - cx` | `(-u, v)` |
+| `mirror_y` | `cross = -cross` | `along = -along` | `cy = H - cy` | `(u, -v)` |
+| `rotate_cw` | applies only to arm sets (slot permutation below); never to strokes, rects, or regions | | | |
+
+The last column is for the rasterized families: a region is a predicate over sample points
+`(u, v)` given as offsets from `C`, and a mirrored code point evaluates the canonical predicate
+on the negated offset (see Family D).
 
 Arm sets (below) are transformed by permuting arm slots: `mirror_x` swaps `left ↔ right`,
 `mirror_y` swaps `up ↔ down`, `rotate_cw` maps `up → right → down → left → up` (the builder
@@ -179,14 +185,71 @@ Worked results on 9 × 19 (`t_l = 1`, `R-_x = [3,4)`, `R+_x = [5,6)`, `R-_y = [8
 
 ### Family D — diagonals and rounded corners (U+256D–2573)
 
-Paths only (`ShapePath`), stroked with width `t_l` (device px, converted to logical at paint):
+Coverage-rasterized (no paths). The rasterizer and its symmetry argument:
 
-- `╱` U+2571: line `(0, H) → (W, 0)`; `╲` = `mirror_x`; `╳` = both.
-- `╭` U+256D (arc down and right): radius `r = min(W, H) / 2`, arc from `(C.x, C.y + r)` to
-  `(C.x + r, C.y)` around `(C.x + r, C.y + r)` as one cubic with `κ = 0.5523`:
-  `P1 = (C.x, C.y + r − κr)`, `P2 = (C.x + r − κr, C.y)`. Straight stubs to the edges are
-  quads: `J_x × [C.y + r, H)` and `[C.x + r, W) × J_y` (empty when `r` reaches the edge).
-  `╮ = mirror_x(╭)`, `╰ = mirror_y(╭)`, `╯ = mirror_x(mirror_y(╭))`.
+**Coverage rasterization.** A shape is a region predicate `inside(u, v)` over offsets from the
+cell center. Every device pixel `(x, y)` is sampled on an `n × n` grid, `n = 4` (sixteen
+levels, as the old engine's rounded corners), at `x + (i + 0.5) / n`, `y + (j + 0.5) / n`. As an
+offset from `C.x = W / 2` the sample is the odd numerator `(2nx + 2i + 1 − nW) / 2n`: exactly
+representable in `f32`, and reflecting the pixel to `W − 1 − x` with sample `n − 1 − i` gives
+`(2n(W − 1 − x) + 2(n − 1 − i) + 1 − nW) = −(2nx + 2i + 1 − nW)`, the exact negation. A
+mirrored code point evaluates the canonical predicate on `(−u, v)` (or `(u, −v)`, or both), and
+every predicate is built from `abs`, squares, products and comparisons of `u`, `v` and constants,
+so the coverage count of pixel `(x, y)` for `mirror_x(def)` is **bit-identical** to the count of
+pixel `(W − 1 − x, y)` for `def` — no rounding tolerance anywhere. Sample offsets are odd
+multiples of `1 / 2n` while every boundary in this module lies on a multiple of `1 / 2`, so no
+sample ever sits on a boundary and `<=` versus `<` never matters.
+
+Emission: `alpha = count / n²`; along each scanline, neighbouring pixels of equal count merge
+into one run; a run whose `x`, `w` and `alpha` equal a rect ending on the row above extends that
+rect downwards (so a straight stub is one rect); zero-coverage runs are dropped. Run-length
+merging commutes with reflection because maximal runs of a mirrored coverage image are the
+mirrored runs. Cost is `W · H · n²` predicate calls per glyph, only when its row is replanned;
+above `64 × 128` device pixels per cell (`AA_PIXEL_CAP`) the rasterizer falls back to `n = 1`
+(one centered sample, no anti-aliasing) so a row of gigantic cells cannot stall a replan.
+
+**Strokes** are distance bands `|d| ≤ t / 2` around an ideal curve, so both edges of a stroke
+are equidistant from it and the stroke is symmetric by construction; `t = t_l` from the
+thickness table (the snapped joint width where a band has to meet a snapped stub, see the
+rounded corner). **Fills** are inside tests against the ideal boundary.
+
+- `╲` U+2572 (canonical): band of half width `t_l / 2` around the line through `C` with
+  direction `(W, H)`: `|u · H − v · W| ≤ (t_l / 2) · √(W² + H²)`. `╱` = `mirror_x`; `╳` is the
+  union of both bands (one predicate, self-symmetric).
+- `╭` U+256D (canonical, arc down and right). Let `hx = |J_x| / 2`, `hy = |J_y| / 2` (half the
+  snapped light joint widths, `Fixed`), `r = max(0, min(C.x − hx, C.y − hy))`. The region is
+  the union of
+  - the vertical stub `v ≥ r ∧ |u| ≤ hx` (to the bottom edge),
+  - the horizontal stub `u ≥ r ∧ |v| ≤ hy` (to the right edge; empty when `r = C.x − hx`),
+  - the arc: with `(du, dv) = (u − r, v − r)`, `du ≤ 0 ∧ dv ≤ 0` and inside the elliptical band
+    between semi-axes `(r − hx, r − hy)` (the hole; absent when either is `≤ 0`) and
+    `(r + hx, r + hy)`.
+
+  The band is `2hx` wide where it meets the vertical stub and `2hy` where it meets the
+  horizontal one, so it blends into both stubs, and into `│` below and `─` to the right in the
+  neighbouring cells, with neither a gap nor an overshoot; when `|J_x| ≠ |J_y|` (parity) the
+  thickness interpolates along the arc, and the band's midline is the circle of radius `r`
+  about `(r, r)`. `r` is the largest radius whose outer band edge still touches the cell edge,
+  so the tangent ends fall on whole pixels and the joins are solid. `╮ = mirror_x(╭)`,
+  `╰ = mirror_y(╭)`, `╯ = mirror_x(mirror_y(╭))`.
+
+Worked example, `╭` at 9 × 19 (`t_l = 1`, `J_x = [4, 5)`, `J_y = [9, 10)`, `hx = hy = 0.5`,
+`r = min(4.5 − 0.5, 9.5 − 0.5) = 4`, arc center `C + (4, 4) = (8.5, 13.5)`, band radii 3.5 … 4.5).
+Coverage per pixel (`.` = 0, `#` = 1, digit = tenths), rows 9–18; rows 0–8 are empty:
+
+```text
+row  9  .....058#      rects: (5,9) 1/16  (6,9) 8/16  (7,9) 14/16  (8,9) 16/16
+row 10  ....0861.             (4,10) 1/16  (5,10) 13/16  (6,10) 11/16  (7,10) 2/16
+row 11  ....56...             (4,11) 8/16  (5,11) 11/16
+row 12  ....81...             (4,12) 14/16  (5,12) 2/16
+row 13  ....#....      one rect [4,5) × [13,19) alpha 1: the arc's lower end (row 13)
+  …     ....#....      and the vertical stub merged
+row 18  ....#....
+```
+
+13 rects. Pixel `(8, 9)` is solid, so `─` in the next cell (`[0, 9) × [9, 10)`) continues the
+stroke; pixel `(4, 18)` is solid, so `│` below continues it. `╮` at the same size is the exact
+mirror: `(0, 9)` solid, `(3, 9) 14/16`, `(2, 9) 8/16`, ….
 
 ### Family E — blocks (U+2580–259F except shades)
 
@@ -234,51 +297,54 @@ both axes. U+2800 emits nothing (still a shape char: no font glyph, keeps bg).
 9 × 19: `s = 3`; x centers `2.5 → [1,4)`, `6.5 → [5,8)`; y centers `2.5, 7.5, 11.5, 16.5 →
 [1,4) [6,9) [10,13) [15,18)`.
 
-### Family H — powerline (U+E0B0–E0BF), all paths
+### Family H — powerline (U+E0B0–E0BF), coverage-rasterized
 
-| Code | Definition (device px, unsnapped) |
-| --- | --- |
-| E0B0 | fill `(0,0) → (W, C.y) → (0,H)`; **apex at `C.y`** |
-| E0B1 | stroke polyline `(0,0) → (W, C.y) → (0,H)` |
-| E0B2 / E0B3 | `mirror_x` of E0B0 / E0B1 |
-| E0B4 | fill: `(0,0)`, cubic arc through `(W, C.y)` to `(0,H)` (two cubics, `κ`), close |
-| E0B5 | stroke of the same arc |
-| E0B6 / E0B7 | `mirror_x` of E0B4 / E0B5 |
-| E0B8 | fill `(0,0) → (W,H) → (0,H)` (lower-left triangle) |
-| E0B9 | stroke `(0,0) → (W,H)` |
-| E0BA / E0BB | `mirror_x` of E0B8 / E0B9 |
-| E0BC / E0BD | `mirror_y` of E0B8 / E0B9 |
-| E0BE / E0BF | `mirror_x(mirror_y)` of E0B8 / E0B9 |
+Canonical regions in offsets from `C` (`t = t_l`, `h = t / 2`); every other code point is a
+reflection of one of these and inherits exact symmetry from the rasterizer.
 
-Fills use `PathStyle::Fill`; strokes use width `t_l`. Fixes inventory wart 1: all sixteen have
-real geometry and all eight fills are distinct shapes. The four corner outlines are only two
-distinct diagonals by definition (E0B9 == E0BF and E0BB == E0BD as point sets), which is what
-the powerline-extra font draws as well.
+| Code | Kind | Canonical region |
+| --- | --- | --- |
+| E0B0 | fill | triangle, base on the left edge, apex at `(W, C.y)`: `\|v\| · W ≤ C.y · (C.x − u)` |
+| E0B1 | stroke | both legs of that triangle: distance from `(u, \|v\|)` to the segment `(−C.x, C.y) → (C.x − h, 0)` is `≤ h`; the apex is inset by `h` so the round join stays inside the cell |
+| E0B2 / E0B3 | | `mirror_x` of E0B0 / E0B1 |
+| E0B4 | fill | half ellipse centered on the left edge, semi-axes `(W, C.y)`: `((u + C.x) / W)² + (v / C.y)² ≤ 1` |
+| E0B5 | stroke | band between the ellipses with semi-axes `(W − t, C.y − t)` and `(W, C.y)` (the ideal curve inset by `h`, so the outline stays inside the cell) |
+| E0B6 / E0B7 | | `mirror_x` of E0B4 / E0B5 |
+| E0B8 | fill | lower-left triangle: `v · W ≥ u · H` |
+| E0B9 | stroke | the `╲` band (`Family D`) |
+| E0BA / E0BB | | `mirror_x` of E0B8 / E0B9 |
+| E0BC / E0BD | | `mirror_y` of E0B8 / E0B9 |
+| E0BE / E0BF | | `mirror_x(mirror_y)` of E0B8 / E0B9 |
+
+Fixes inventory wart 1: all sixteen have real geometry and all eight fills are distinct
+coverage maps. The four corner outlines are only two distinct diagonals by definition
+(E0B9 == E0BF, E0BB == E0BD, and E0B9 == `╲` pixel for pixel), which is what the
+powerline-extra font draws as well.
 
 ## Interfaces
 
 ```rust
 pub(crate) struct CellSizeDevicePx { pub w: i32, pub h: i32 }
-pub(crate) struct DeviceRect { pub x: i32, pub y: i32, pub w: i32, pub h: i32 }
-
-pub(crate) enum PathOp { Move(DevicePoint), Line(DevicePoint), Cubic(DevicePoint, DevicePoint, DevicePoint), Close }
-pub(crate) struct DevicePoint { pub x: f32, pub y: f32 }
-pub(crate) enum PathStyle { Fill, Stroke { width: f32 } }
-pub(crate) struct ShapePath { pub style: PathStyle, pub ops: SmallVec<[PathOp; 8]> }
+/// Cell-relative device pixels; every pixel of the rect has coverage `alpha` in (0, 1]
+/// (a multiple of 1/16; exactly 1.0 for the solid families A/B/C/E/F/G).
+pub(crate) struct DeviceRect { pub x: i32, pub y: i32, pub w: i32, pub h: i32, pub alpha: f32 }
 
 /// True for every code point this module draws (row planning skips the font for them).
 pub(crate) fn is_shape_char(c: char) -> bool;
-/// Append the quads of `c`; returns false (and appends nothing) when `c` is not a shape char.
+/// Append the quads of `c`; returns false (and appends nothing) when `c` is not a shape char
+/// (and for U+2800, which draws nothing).
 pub(crate) fn shape_quads(c: char, cell: CellSizeDevicePx, out: &mut Vec<DeviceRect>) -> bool;
-/// Append the paths of `c` (rounded corners, diagonals, powerline); false when it has none.
-pub(crate) fn shape_paths(c: char, cell: CellSizeDevicePx, out: &mut Vec<ShapePath>) -> bool;
 /// Exposed for tests and metrics: light/heavy thickness for a cell width.
 pub(crate) fn stroke_thickness(cell: CellSizeDevicePx) -> StrokeThickness { light, heavy, rail, gap }
 ```
 
 Rects are appended in a deterministic order (arms in `up, down, left, right` order, rails
-`−` then `+`), which row planning relies on only for reproducibility, not correctness.
-`shape_quads` and `shape_paths` are pure and allocation-free apart from `out`.
+`−` then `+`; rasterized shapes top to bottom, left to right), which row planning relies on only
+for reproducibility, not correctness. `shape_quads` is pure and allocation-free apart from
+`out`; the rasterizer keeps no buffer (runs are merged on the fly and the downward merge scans
+the rects already in `out`). Row planning multiplies `alpha` into the quad color's `a`, so the
+painter stays a plain `paint_quad`, and coalesces across cells only when the final colors
+(hence alphas) are equal.
 
 ## Edge Cases and Failure Modes
 
@@ -295,6 +361,10 @@ Rects are appended in a deterministic order (arms in `up, down, left, right` ord
 - [ ] Unknown code point in a family range (none exist in U+2500–259F; U+E0B0–E0BF fully
       covered) returns `false`.
 - [ ] Braille U+2800 draws nothing but is a shape char (no font fallback).
+- [ ] Cells above 64 × 128 device pixels: curves and diagonals rasterize without
+      anti-aliasing (one sample per pixel); still symmetric, still bounded in cost.
+- [ ] `╭` on a 1 × 1 or 2 × 2 cell: `r = 0`, the arc degenerates to a blob, something is
+      still drawn.
 
 ## Verification
 
@@ -303,16 +373,22 @@ Rects are appended in a deterministic order (arms in `up, down, left, right` ord
 
 - [ ] `every_supported_code_point_emits_geometry`: for each code point in U+2500–257F,
       U+2580–259F, U+25AC, U+2800–28FF, U+E0B0–E0BF, `is_shape_char` is true and
-      `shape_quads || shape_paths` (U+2800 exempt from the emit check).
-- [ ] `all_rects_within_cell_bounds`, `all_path_points_within_cell_bounds` (±0.5 px).
+      `shape_quads` appends something (U+2800 exempt from the emit check).
+- [ ] `all_rects_within_cell_bounds`: inside the cell, `0 < alpha ≤ 1`.
+- [ ] `solid_families_unchanged_and_opaque`: rect sets of `┌ ┼ ╬ ╤ ┄ ┋ ▄ ▚ ░ ▒ ▓ ⣿ ▬ ━ ╟` at
+      9 × 19 and 14 × 29 equal the snapshot taken before the curves moved to coverage
+      rasterization; every rect of every non-D/H code point has `alpha == 1.0` at every size.
+- [ ] `curved_edges_have_fractional_coverage`: `╭`, E0B4, E0B0, `╱` each emit rects with
+      `0 < alpha < 1` at 9 × 19 and 14 × 29, and every alpha is a multiple of 1/16.
 - [ ] `mirror_x_pairs_match`: `┌/┐ ┗/┛ ├/┤ ╭/╮ ╔/╗ ╠/╣ ▌/▐ ▏/▕ ▘/▝ ╱/╲ E0B0/E0B2 E0B4/E0B6
-      E0B8/E0BA` and braille `0x01/0x08`.
+      E0B8/E0BA` and braille `0x01/0x08` — coverage maps equal pixel for pixel including
+      alpha, and the mirrored rect set equals the other glyph's rect set.
 - [ ] `mirror_y_pairs_match`: `┌/└ ┬/┴ ╭/╰ ╒/╘ ╓/╙ ╔/╚ ▀/▄ ▔/▁ ▘/▖ E0B8/E0BC` and braille
-      `0x01/0x40`.
+      `0x01/0x40`, same comparison.
 - [ ] `self_symmetric_glyphs`: `─ │ ┼ ━ ┃ ╋ ═ ║ ╬ █ ╳ ▒ ▬` equal their own mirror_x and
-      mirror_y rect sets.
+      mirror_y coverage maps and rect sets.
 - [ ] `builder_commutes_with_transforms`: for every Family A/C arm set,
-      `build(mirror(def)) == mirror_rects(build(def))`.
+      `build(mirror(def)) == mirror_rects(build(def))` (rects compare alpha too).
 - [ ] `horizontal_line_abuts_across_cells`: `─` y-interval identical for the same cell size;
       `x = 0` and `x + w = W`; same for `━` and the `═` rails. The outer `┄` segments end
       within one dash gap of the edge, symmetrically (they touch it only when the snapped
@@ -331,14 +407,25 @@ Rects are appended in a deterministic order (arms in `up, down, left, right` ord
 - [ ] `quadrant_union_is_full_block`: `▘ ∪ ▝ ∪ ▖ ∪ ▗` covers every pixel.
 - [ ] `braille_dot_slots`: each single bit yields exactly one rect in its slot ordering (columns
       left < right, rows top < bottom); U+28FF yields 8 disjoint rects.
-- [ ] `powerline_triangle_apex_at_center_height`: E0B0 apex `(W, H/2)`, E0B2 apex `(0, H/2)`;
-      every one of the sixteen emits a path and the eight fills are pairwise distinct.
+- [ ] `powerline_triangle_apex_at_center_height`: the base column of E0B0 / E0B2 is covered on
+      every row and solid on the center row; the apex column is symmetric about `C.y` and
+      peaks there; every one of the sixteen emits quads, the eight fills are pairwise distinct
+      coverage maps, and E0B9 equals `╲`.
 - [ ] `shade_density_and_budget`: rect count ≤ 24 at every size; covered area within ±13
       points of 25 / 50 / 75 % (for cells ≥ 7 px wide); each shade's rect set is
       self-symmetric at every size.
 - [ ] `snap_interval_is_even_about_center`: property test over 10k `(center, half, size)`
       triples for both anchors.
 - [ ] `heavy_thicker_than_light`, `rails_disjoint_with_gap` for all sizes `W ≥ 5`.
-- [ ] `rounded_corner_meets_neighbors`: `╭` arc endpoints lie on `J_x`/`J_y` centerlines.
-- [ ] `per_cell_quad_budget`: Family A/C ≤ 8 rects, braille ≤ 8, shades ≤ 24. `╬` needs
-      eight: two split rails per axis, and no two of them are contiguous.
+- [ ] `rounded_corner_matches_straight_stubs`: for `╭` at every size, rows below `C.y + r` are
+      exactly `J_x` at alpha 1 and nothing else, columns right of `C.x + r` are exactly `J_y`
+      at alpha 1 (no overshoot); the join pixels on the bottom and right edges are solid (cells
+      ≥ 3 × 3); every row from the arc's top and every column from its left edge has coverage
+      (no gap); some coverage lies off both stub axes (it is an arc, not a mitre).
+- [ ] `per_cell_quad_budget`: Family A/C ≤ 8 rects, braille ≤ 8, shades ≤ 24 (`╬` needs
+      eight: two split rails per axis, and no two of them are contiguous); rasterized shapes
+      ≤ 5 H (`╳`, two strokes, ≤ 6 H).
+- [ ] `coverage_quad_counts`: measured counts recorded as upper bounds — `╭` 13 / 22, E0B4
+      39 / 61, E0B0 42 / 66, `╱` 41 / 77 rects at 9 × 19 / 14 × 29. The arc glyph is well under
+      2 H; a filled or diagonal shape needs a solid run plus one or two edge pixels per
+      scanline and lands between 2 H and 2.7 H.

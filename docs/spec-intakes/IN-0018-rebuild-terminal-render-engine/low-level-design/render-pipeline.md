@@ -130,9 +130,7 @@ pub(crate) struct RowPlan {
     pub bg: Vec<BgSpan>,                 // { col: u16, cols: u16, color: Hsla }  non-default bg, merged
     pub text: Vec<TextRunPlan>,          // { col, cols, bold, italic, line: ShapedLine, color_start, color_end }
     pub colors: Vec<ColorSpan>,          // flattened per row; a run owns colors[color_start..color_end]
-    pub shapes: Vec<ShapeQuad>,          // { rect: DeviceRect /* x from grid left, y from row top */, color: Hsla }
-    pub paths: Vec<ShapePathPlan>,       // { col, color, style: PathStyle, op_start, op_end }
-    pub path_ops: Vec<PathOp>,           // flattened per row (cell-relative device px)
+    pub shapes: Vec<ShapeQuad>,          // { rect: DeviceRect /* x from grid left, y from row top */, color: Hsla /* rect.alpha multiplied into a */ }
     pub decorations: Vec<DecorationSpan>,// { col, cols, kind: Underline { wavy } | Strikethrough, color }
 }
 pub(crate) struct ColorSpan { pub byte_end: u32, pub color: Hsla }   // colors along the run text
@@ -141,8 +139,9 @@ pub(crate) struct PlanContext<'a> { theme: &'a TerminalTheme, fonts: &'a FontSet
     window: &'a Window }
 ```
 
-Implementation note (US-0047): color spans and path ops are flattened into the row so a rebuild
-never allocates a per-run `Vec`; `RowPlan::colors_of(run)` / `ops_of(path)` slice them back.
+Implementation note (US-0047): color spans are flattened into the row so a rebuild never
+allocates a per-run `Vec`; `RowPlan::colors_of(run)` slices them back. There are no paths: the
+curved shapes arrive from `shape_quads` as coverage rects (US-0046 rework, 2026-09-09).
 
 `build_row_plan(row: FrameRow, ctx: &PlanContext, url_mask: &[bool], scratch: &mut Scratch,
 glyphs: &mut GlyphCache, stats: &mut FrameStats, plan: &mut RowPlan)` (every `Vec` is
@@ -165,8 +164,8 @@ empty):
    - **bg span**: if `bg != default background || force_bg`: extend the last span when adjacent
      and same color, else push.
    - **shape**: if `is_shape_char(ch)`: `shape_quads(ch, device, &mut scratch.rects)`, offset
-     by `col * device.w`, color fg, then **coalesce** (below); `shape_paths` → `paths`. Ends the
-     current text run.
+     by `col * device.w`, color `fg` with `a *= rect.alpha` (anti-aliased edge pixels of arcs,
+     diagonals and powerline), then **coalesce** (below). Ends the current text run.
    - **hidden**: `HIDDEN` cells end the run and emit no glyph (deviation 4).
    - **text run**: a run is a maximal span of consecutive non-blank, non-shape, non-hidden cells
      with the same `(weight, italic)`; a `WIDE_CHAR` cell is always its own run of `cols = 2`
@@ -186,8 +185,10 @@ empty):
 its right edge (`scratch.open_prev` / `open_cur: Vec<usize>` — `smallvec` is not a workspace
 dependency — of indices into `plan.shapes`, swapped per column): a new rect
 with equal `y`, `h`, color and `x == prev.x + prev.w` extends `prev.w` instead of being pushed.
-A run of 80 `█` cells or 80 `─` cells becomes one quad; a `▀▄` alternation stays two quads per
-cell (different `y`).
+The color carries the coverage alpha, so only quads of equal alpha merge (a solid `─` extends the
+solid tangent end of `╭`; a half-covered edge pixel never merges with a solid run). A run of 80
+`█` cells or 80 `─` cells becomes one quad; a `▀▄` alternation stays two quads per cell
+(different `y`).
 
 ### Plan cache (`plan_cache.rs`)
 
@@ -305,12 +306,12 @@ Grid pass, per row `r` in `visible_rows` (`row_top = origin.y + r * line_height`
 0. one `theme.bg` quad over the element bounds and, when the gutter is shown, one
    `theme.gutter_bg` quad over the gutter column (US-0047: the element owns its background)
 1. bg spans → `paint_quad(fill(..))`
-2. shape quads → `paint_quad(fill(..))`
+2. shape quads → `paint_quad(fill(..))` (translucent for anti-aliased edge pixels; they blend
+   over the bg quads painted before them in the same layer)
 3. search rects → `fill(theme.search_match | search_active)`; selection rects →
    `fill(theme.selection)` (translucent; painted after *all* rows' bg and shape quads —
    insertion order keeps them above bg and shapes)
-4. paths → `PathBuilder::fill()`/`stroke(px(width / scale))` with points converted to logical,
-   `paint_path(path, color)`
+4. (no path pass: since the US-0046 rework every shape is a quad)
 5. decorations → `paint_underline(point(x0, row_top + baseline + px(1)), width, &UnderlineStyle
    { thickness: px(1), color: Some(color), wavy })`, `paint_strikethrough(point(x0, row_top +
    baseline - x_height / 2), width, &StrikethroughStyle { thickness: px(1), color })`
@@ -360,7 +361,7 @@ paint:   hollow Block → four 1-device-px edge quads; else one quad; then glyph
 ```rust
 #[derive(Default, Clone, Copy)] pub(crate) struct FrameStats {          // always compiled
     pub snapshot_calls: u32, pub rows_total: u32, pub rows_candidate: u32, pub rows_planned: u32,
-    pub shape_calls: u32, pub glyph_hits: u32, pub url_scans: u32, pub quads: u32, pub paths: u32,
+    pub shape_calls: u32, pub glyph_hits: u32, pub url_scans: u32, pub quads: u32,
     pub glyphs: u32, pub glyph_errors: u32, pub layers: u32, pub prepaint_us: u32, pub paint_us: u32,
 }
 #[cfg(any(test, feature = "terminal-diagnostics"))]
@@ -380,13 +381,13 @@ last frame's counters and p95/p99.
 Reused across frames: `Frame.content` buffers, every `RowPlan` vector, `PlanCache.candidate`
 and `dirty`, mask double buffer + `wraps`, `Scratch { line_text: String, char_cols: Vec<u16>,
 char_wide: Vec<bool>, class_chars: Vec<u8>, class: Vec<u8>, run_text: String, rects:
-Vec<DeviceRect>, paths: Vec<ShapePath>, open_prev / open_cur: Vec<usize>, label: String (gutter
+Vec<DeviceRect>, open_prev / open_cur: Vec<usize>, label: String (gutter
 labels and the cursor glyph text) }`, `overlays.selection`, `overlays.search`, `gutter.labels`,
 `RenderState.fonts: FontSet` (rebuilt only when font/size change) and the cached `CellMetrics`
 (re-measured only when font/size/factor/override/scale change). A `ShapedLine` clone is an
-`Arc` bump plus an inline `SmallVec` copy (no heap). Cache misses (new text), rounded-corner /
-diagonal / powerline paths (`shape_paths` builds a small `Vec` per path) and grid growth
-allocate; that is not steady state. `PrepaintState` holds only `Copy` data, the hitbox, the
+`Arc` bump plus an inline `SmallVec` copy (no heap). Cache misses (new text) and grid growth
+allocate; that is not steady state. Rasterizing a curve allocates nothing (runs are merged
+straight into `scratch.rects`). `PrepaintState` holds only `Copy` data, the hitbox, the
 resolved cursor and the optional IME closure (allocated by the view once per frame only while
 focused — accepted, it is one `Box`). `element_tests::idle_frame_allocates_nothing` proves the
 idle path with a counting `#[global_allocator]` (thread-local counters) around

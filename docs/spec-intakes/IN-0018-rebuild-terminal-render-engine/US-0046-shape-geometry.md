@@ -12,8 +12,8 @@ Created: 2026-09-08
 - [x] Planned
 - [x] In progress
 - [x] Implemented
-- [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Changed
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -27,8 +27,9 @@ Created: 2026-09-08
 
 `crates/terminal-view/src/render/shapes.rs` exists and turns any code point in U+2500–257F,
 U+2580–259F, U+25AC, U+2800–28FF, U+E0B0–E0BF plus a device-pixel cell size into symmetric,
-seam-free quads (and paths for arcs/diagonals) exactly as specified in
-`low-level-design/shapes.md`, with the exhaustive test suite green. Nothing renders through it
+seam-free quads (arcs, diagonals and powerline as coverage-anti-aliased quads since the
+2026-09-09 rework, see below) exactly as specified in `low-level-design/shapes.md`, with the
+exhaustive test suite green. Nothing renders through it
 yet; the module root carries `#[allow(dead_code)]` until US-0047 wires it.
 
 ## Scope
@@ -178,3 +179,59 @@ Gaps:
 ## Handoff
 
 Blocks US-0047 (row planning consumes `shape_quads`/`shape_paths`).
+
+## Acceptance rework (2026-09-09): anti-aliased curves
+
+**Complaint.** Rounded corners U+256D–2570, the powerline half-discs / triangles / chevrons /
+diagonals E0B0–E0BF and the box diagonals `╱╲╳` showed hard stair-stepped edges
+(`evidence/03b-braille-powerline-zoom.png`, `evidence/01b-box-boxes-zoom.png`). The first cut
+emitted GPUI `Path`s for them; the DirectX backend fills paths without anti-aliasing at cell
+sizes. The old engine drew rounded corners as 4×4 supersampled coverage rects and looked smooth.
+
+**Change.** Paths are gone. `shape_quads` is the only geometry entry point; `DeviceRect` gained
+`alpha: f32` (1.0 for the solid families A/B/C/E/F/G, whose rect sets are bit-identical to
+before — asserted against a snapshot taken before the change). Families D and H are rasterized
+by `rasterize(g, mirror, inside, out)`: every pixel is sampled on a 4×4 grid whose offsets from
+the cell center are odd multiples of 1/8, so reflecting a pixel negates the offset exactly and
+the coverage of `mirror_x(def)` at `(W−1−x, y)` is bit-identical to `def` at `(x, y)`; a
+mirrored code point evaluates the canonical predicate on the negated offset. Strokes are
+distance bands `|d| ≤ t_l / 2` around the ideal curve; the rounded corner is an elliptical band
+whose thickness equals the snapped joint width of the stub it meets on each axis (`|J_x|`,
+`|J_y|`), with radius `r = min(C.x − hx, C.y − hy)` so its tangent ends are solid pixels that
+`│` / `─` in the neighbouring cells continue. Runs of equal coverage merge along a scanline and
+downwards. Above 64 × 128 device px per cell the rasterizer takes one sample per pixel.
+Row planning multiplies `alpha` into the quad color and coalesces across cells only when the
+final colors are equal; `render/element.rs` lost its path pass and `PathBuilder`,
+`RowPlan` lost `paths` / `path_ops` / `ShapePathPlan`, `Scratch` lost `paths`, `FrameStats`
+lost `paths`.
+
+**Quad counts** (before → after; "before" is quads + 1 path): `╭` 9×19 `1 + path → 13`,
+14×29 `1 + path → 22`; E0B4 9×19 `0 + path → 39`, 14×29 `0 + path → 61`; E0B0 9×19
+`0 + path → 42`, 14×29 `0 + path → 66`. The arc glyph stays under 2 H; fills need a solid run
+plus one or two edge pixels per scanline.
+
+**Tests** (`shapes_tests.rs`, 25 tests + 1 ignored): `assert_mirrored` now compares coverage
+maps with alpha and the mirrored rect sets (`mirror_x_pairs_match`, `mirror_y_pairs_match`,
+`self_symmetric_glyphs`, dashes, shades); `builder_commutes_with_transforms` compares rects with
+alpha; new `solid_families_unchanged_and_opaque` (snapshot of 15 glyphs at 9×19 and 14×29, alpha
+1.0 for every non-D/H rect at every size), `curved_edges_have_fractional_coverage`,
+`rounded_corner_matches_straight_stubs`, `coverage_quad_counts`;
+`powerline_triangle_apex_at_center_height` rewritten over coverage maps (base solid, apex column
+symmetric and peaking at `C.y`, eight distinct fills, E0B9 == `╲`); removed
+`all_path_points_within_cell_bounds`, `rounded_corner_meets_neighbors`;
+`row_plan::tests::rounded_corner_emits_coverage_quads` replaces the path assertion;
+`per_cell_quad_budget` bounds rasterized shapes at 5 H (`╳` 6 H).
+
+**Docs.** `low-level-design/shapes.md` (Family D/H, Interfaces, worked `╭` at 9×19, verification
+list), `low-level-design/render-pipeline.md` (RowPlan fields, shape step, paint order, stats,
+allocation note), HLD (principle 2, module map, paint row, deviation 7, parity 37/38,
+performance budget, risk row), DEC-0007 item 3 amended.
+
+**Evidence.** `cargo test -p oneterm-terminal-view`: 263 passed, 1 ignored. GUI:
+`target/fast-dev/oneterm.exe` (pid started and stopped by the agent; the owner's `dist` build
+was left alone), sample printed with `chcp 65001 & powershell -NoProfile -Command "Get-Content
+-Encoding utf8 <file>"`, captured with `PrintWindow(.., 2)`:
+`evidence/rework3-curves.png` (full window) and `evidence/rework3-curves-zoom.png` (4×, nearest
+neighbour): rounded boxes, `╭─┬─╮`, `╱╲╳`, all sixteen powerline glyphs on coloured
+backgrounds and a `seg1 seg2` prompt — edges are soft, joins are solid, no stair steps.
+Gate results are in the final report of the rework session.

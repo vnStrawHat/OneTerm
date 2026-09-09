@@ -20,7 +20,6 @@ pub(crate) struct FrameStats {
     pub glyph_hits: u32,
     pub url_scans: u32,
     pub quads: u32,
-    pub paths: u32,
     pub glyphs: u32,
     /// `paint_glyph` failures (missing glyph); counted, never propagated.
     pub glyph_errors: u32,
@@ -107,7 +106,7 @@ impl DiagnosticsLog {
         let p99 = latency.percentile(0.99);
         log::debug!(
             "terminal render: rows {}/{} candidate, {} planned, {} shaped, {} glyph hits, \
-             {} url scans, {} quads, {} paths, {} glyphs, {} layers, prepaint {} us, paint {} us, \
+             {} url scans, {} quads, {} glyphs, {} layers, prepaint {} us, paint {} us, \
              p95 {} us, p99 {} us over {} frames",
             stats.rows_candidate,
             stats.rows_total,
@@ -116,7 +115,6 @@ impl DiagnosticsLog {
             stats.glyph_hits,
             stats.url_scans,
             stats.quads,
-            stats.paths,
             stats.glyphs,
             stats.layers,
             stats.prepaint_us,

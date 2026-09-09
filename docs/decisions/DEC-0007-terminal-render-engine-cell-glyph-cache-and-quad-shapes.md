@@ -23,8 +23,10 @@ Future work on the terminal view inherits these choices:
    renderer (Zed, wezterm, alacritty's GL renderer, Windows Terminal, ...) is used as a
    reference or copied from; only GPUI's own sources and docs are consulted.
 3. Box drawing (U+2500-257F), block elements (U+2580-259F), braille (U+2800-28FF),
-   powerline (U+E0B0-E0BF) and related symbols are painted with quads (and paths for
-   arcs/diagonals), never with font glyphs.
+   powerline (U+E0B0-E0BF) and related symbols are painted with quads, never with font
+   glyphs. Arcs and diagonals are quads too, carrying a coverage alpha from a symmetric
+   4x4 supersampling (amended 2026-09-09, US-0046 acceptance rework: GPUI paths were tried
+   first and are not anti-aliased at cell sizes on the DirectX backend).
 4. Every such shape is defined by geometry that is symmetric about the cell's vertical and
    horizontal center axes: rects are computed from the cell center and half-extents, and
    mirrored variants are derived by reflection, not by separate left-to-right or
