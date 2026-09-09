@@ -213,16 +213,19 @@ impl TerminalView {
     }
 
     /// Close the search bar (Esc) and clear all match state + highlights.
-    /// Dropping the debounce task cancels any pending search.
-    fn close_search(&mut self, cx: &mut Context<Self>) {
+    /// Dropping the debounce task cancels any pending search. Keyboard focus
+    /// returns to the terminal: the bar's input owned it and is being dropped,
+    /// so without this the window would be left with nothing focused.
+    fn close_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.search.clear();
+        window.focus(&self.focus, cx);
         cx.notify();
     }
 
     /// Ctrl+F / Edit ▸ Find: open the bar, or close it when already open.
     pub(crate) fn toggle_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.search.active {
-            self.close_search(cx);
+            self.close_search(window, cx);
         } else {
             self.open_search(window, cx);
         }
@@ -404,8 +407,8 @@ impl TerminalView {
                         .tooltip("Close (Esc)")
                         .on_click({
                             let view = view.clone();
-                            move |_, _, cx| {
-                                view.update(cx, |v, cx| v.close_search(cx));
+                            move |_, window, cx| {
+                                view.update(cx, |v, cx| v.close_search(window, cx));
                             }
                         }),
                 )
@@ -413,9 +416,9 @@ impl TerminalView {
                 // sees it.
                 .on_key_down({
                     let view = view.clone();
-                    move |e: &KeyDownEvent, _, cx: &mut App| {
+                    move |e: &KeyDownEvent, window: &mut Window, cx: &mut App| {
                         if e.keystroke.key.as_str() == "escape" {
-                            view.update(cx, |v, cx| v.close_search(cx));
+                            view.update(cx, |v, cx| v.close_search(window, cx));
                             cx.stop_propagation();
                         }
                     }

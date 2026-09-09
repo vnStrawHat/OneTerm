@@ -322,3 +322,27 @@ fn focused_view_paints_the_cursor_layer(cx: &mut TestAppContext) {
     assert!(config.focused, "the view takes focus on creation");
     assert_eq!(stats.layers, 2, "grid layer + cursor layer: {stats:?}");
 }
+
+/// Closing the search bar hands keyboard focus back to the terminal: the
+/// bar's input owned it, so without an explicit refocus the window is left
+/// with nothing focused and typing goes nowhere until the user clicks.
+#[gpui::test]
+fn closing_search_refocuses_the_terminal(cx: &mut TestAppContext) {
+    let (session, _) = FakeTerminalSession::boxed(24, 80, "C:>");
+    let (view, cx) = open_view(cx, session);
+
+    view.update_in(cx, |view, window, cx| view.toggle_search(window, cx));
+    cx.run_until_parked();
+    let input_focused = view.update_in(cx, |view, window, cx| {
+        view.search.input_is_focused(window, cx)
+    });
+    assert!(input_focused, "opening the bar focuses its input");
+
+    view.update_in(cx, |view, window, cx| view.toggle_search(window, cx));
+    cx.run_until_parked();
+    let terminal_focused = view.update_in(cx, |view, window, _| view.focus.is_focused(window));
+    assert!(
+        terminal_focused,
+        "the terminal must own focus again after the search bar closes"
+    );
+}

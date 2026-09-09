@@ -13,7 +13,7 @@ Created: 2026-09-08
 - [x] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -224,3 +224,13 @@ Gaps:
 ## Handoff
 
 Depends on US-0047 and US-0048. Blocks US-0050.
+
+## Acceptance Rework (2026-09-09)
+
+GUI parity walk (`evidence/US-0049-gui-walk.md`, 60 screenshots): 13 PASS, 2 PARTIAL
+(`[--:--:--]` gutter fallback is a sub-second state; URL hover/IME/SSH banner/tab drag not
+exercised on a locked workstation), 1 FAIL: closing the search bar (Esc, x, Ctrl+F) left the
+terminal unfocused. The old view had the same gap. Fixed in `terminal_view/search.rs`
+(`close_search` refocuses the view); regression test
+`terminal_view::view_tests::closing_search_refocuses_the_terminal` fails without the fix.
+

@@ -261,3 +261,14 @@ Gaps:
 ## Handoff
 
 Depends on US-0049. Closes IN-0018.
+
+## Sign-off Evidence (2026-09-09)
+
+- GUI parity walk on the swapped engine: `evidence/US-0049-gui-walk.md` (split, placeholder,
+  New Terminal Here, Close Space guard exercised; tab rename, middle-click close and tab drag
+  were not driven on the locked workstation and rely on the unchanged element construction).
+- DOOM-fire comparison old vs new (`evidence/US-0050-doom-fire-perf.md`, same 52-row grid):
+  paint 9 210 -> 493 us/frame, prepaint+paint 16 930 -> 7 838 us, p99 21 885 -> 9 015 us,
+  30 -> ~60 fps, one grid layer per frame, PTY throughput unchanged.
+- `pwsh scripts/ci-local.ps1` exit 0 (1027 workspace tests).
+
