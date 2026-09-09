@@ -1,6 +1,6 @@
 //! Encode mouse events → CSI escape sequences (X10 / X11 / 1005 UTF-8 / SGR-1006).
 //!
-//! Reference: `freya-terminal/parser.rs`, refined + added modifier support.
+//! Mouse-event encoding with modifier support.
 //! Mode flags (`TermMode::MOUSE_REPORT_CLICK` / `MOUSE_DRAG` / `MOUSE_MOTION` /
 //! `SGR_MOUSE`) decide whether the caller sends; this module only handles encoding.
 

@@ -411,7 +411,6 @@ pub trait TerminalSession:
     // ── Derived helpers — pure functions of the traits above ─────────────
 
     /// Send raw text to the PTY (for automation, extensions, task runners).
-    /// Equivalent to Zed `SendText(String)`.
     fn send_text(&self, text: &str) {
         if let Err(error) = self.write(text.as_bytes()) {
             log::warn!("terminal send_text failed: {error}");
@@ -419,7 +418,6 @@ pub trait TerminalSession:
     }
 
     /// Bracketed paste mode is on → wrap the paste in `\x1b[200~...\x1b[201~`.
-    /// Zed: checks `Modes::BRACKETED_PASTE` then wraps.
     fn is_bracketed_paste(&self) -> bool {
         self.query_state().mode.contains(TermMode::BRACKETED_PASTE)
     }

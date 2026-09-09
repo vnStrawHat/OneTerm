@@ -3,7 +3,7 @@
 //! integration). These are the OSCs vte does not dispatch to a dedicated
 //! `Handler` method; the OneTerm alacritty fork routes them through
 //! `Handler::report_osc` → `Event::Osc`, so we parse the VT stream **once**
-//! (no second `vte::Parser`). See `docs/terminal-fullscreen-perf/09-*.md`.
+//! (no second `vte::Parser`).
 //!
 //! OSC 0/2 (title), OSC 4/10/11/12 (colors), OSC 8 (hyperlink) and OSC 52
 //! (clipboard) are handled by the engine itself and surface via their own
@@ -30,11 +30,10 @@ pub enum Osc133Kind {
     OutputEnd { exit_code: Option<i32> },
 }
 
-/// OSC 9;4 progress state (ConEmu / Windows Terminal taskbar progress).
+/// OSC 9;4 progress state (ConEmu taskbar progress).
 ///
 /// Sequence: `OSC 9 ; 4 ; st ; pr ST` where `st` is the state and `pr` a 0-100
-/// percentage. Reference: ConEmu progress + Windows Terminal `DispatchTypes::
-/// TaskbarState`.
+/// percentage. Reference: ConEmu progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalProgress {
     /// `st=0` — remove/clear the progress indicator (`pr` ignored).
@@ -56,9 +55,9 @@ pub enum OscPayload {
     Cwd(String),
     /// OSC 133 — shell integration marker (prompt/command boundary).
     ShellIntegration(Osc133Kind),
-    /// OSC 9 — desktop notification (iTerm2 / Windows Terminal). Payload = message.
+    /// OSC 9 — desktop notification. Payload = message.
     Notification(String),
-    /// OSC 9;4 — taskbar progress (ConEmu / Windows Terminal).
+    /// OSC 9;4 — taskbar progress (ConEmu).
     Progress(TerminalProgress),
     /// OSC 9;7 — coding-agent status event (see `docs/osc-agent-status.md`).
     /// The payload is the base64-wrapped JSON event, already parsed +
@@ -94,7 +93,7 @@ pub fn parse_osc(params: &[&[u8]]) -> Option<OscPayload> {
             Some(OscPayload::Cwd(url.to_owned()))
         }
         // OSC 9: notification (`9;msg`) OR taskbar progress (`9;4;st;pr`).
-        // Windows Terminal disambiguates: sub-param "4" = progress, else notify.
+        // Sub-param "4" = progress, else notify.
         "9" if params.len() >= 2 => {
             if params[1] == b"7" {
                 // OSC 9;7;<base64-json> — coding-agent status event

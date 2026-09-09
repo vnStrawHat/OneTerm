@@ -1,16 +1,13 @@
 //! Color & character utilities for terminal rendering.
 //!
-//! Reference: Zed `crates/terminal_view/src/terminal_element.rs`
-//! (`is_decorative_character`, `is_app_chosen_exact_color`) +
-//! `crates/terminal/src/terminal.rs` (`is_default_background_color`).
-//! Works with raw `vte::ansi::Color` (no extra wrapping layer like Zed).
+//! Works with raw `vte::ansi::Color` (no extra wrapping layer).
 
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 
 /// Decorative characters (box-drawing, block, geometric, powerline) — keep their
 /// exact color, do NOT adjust contrast (they must match the adjacent background).
 ///
-/// Fixes zed#34234: regular icons (git, folder…) are excluded so they stay readable.
+/// Regular icons (git, folder…) are excluded so they stay readable.
 pub fn is_decorative_character(ch: char) -> bool {
     matches!(
         ch as u32,

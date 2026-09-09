@@ -4,7 +4,7 @@
 //! routing + line accounting) in a **single pass**. OSC 7/9/133 and screen
 //! clears (`CSI 2J/3J`, RIS) are surfaced by the OneTerm alacritty fork via
 //! `Event::Osc` / `Event::ClearScreen` and handled by the shared `OscRouter` —
-//! there is no second `vte::Parser`. See docs/terminal-fullscreen-perf/09-*.md.
+//! there is no second `vte::Parser`.
 //!
 //! The loop is generic over the PTY (`EventedPty + OnResize`) so tests drive it
 //! with an in-memory transport instead of a real shell (TEST-02).

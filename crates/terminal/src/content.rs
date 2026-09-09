@@ -4,13 +4,13 @@
 //! (display_iter + cursor + selection + mode + display_offset) into owned data.
 //! Rendering only reads the snapshot and never holds the `FairMutex` while drawing.
 //!
-//! From AtlasEngine: integrates `Term::damage()` + `Term::reset_damage()` to expose
+//! Integrates `Term::damage()` + `Term::reset_damage()` to expose
 //! per-row dirty info (`TermDamageInfo`) — the renderer only recomputes layout for
 //! dirty rows instead of the entire viewport every frame.
 //!
 //! The exposed types (`Cell`, `RenderableCursor`, `TermMode`, `SelectionRange`,
 //! `Point`) are `alacritty_terminal` types — the UI crate also depends on
-//! `alacritty_terminal`, so they map directly. See Zed `terminal::Content`.
+//! `alacritty_terminal`, so they map directly.
 
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
@@ -62,9 +62,9 @@ pub struct IndexedCell {
 
 /// Dirty-row info from `Term::damage()` — converted to display line indices
 /// (0-based from the top of the viewport). The renderer uses it to skip layout
-/// for unchanged rows — like AtlasEngine's `invalidatedRows`.
+/// for unchanged rows.
 ///
-/// AtlasEngine uses `range<u16> { start, end }` (a row range). We use `Vec<usize>`
+/// We use `Vec<usize>` of damaged row indices rather than a single row range
 /// because `Term::damage()` gives per-line damage (it could skip columns within a
 /// line, but we currently track only at line level).
 #[derive(Clone, Debug, PartialEq, Eq)]

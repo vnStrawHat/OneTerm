@@ -1,6 +1,6 @@
 //! Encode keyboard events → escape sequences for the terminal.
 //!
-//! Reference: `freya-terminal/handle.rs::write_key`, refined:
+//! Key-to-byte encoding rules:
 //! - Defines neutral types (`KeySpec`/`KeyMods`/`NamedKey`) — no dependency on
 //!   `keyboard_types` or GPUI. The UI crate maps GPUI key events → `KeySpec`.
 //! - Returns bytes only, with NO side effects (scroll/selection/shift-tracking

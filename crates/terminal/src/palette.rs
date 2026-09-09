@@ -2,7 +2,6 @@
 //!
 //! The UI crate (`ui::TerminalTheme`) builds a `TerminalPalette` from the
 //! gpui-component `Theme`, then maps `Rgb` → `gpui::Hsla` when rendering.
-//! See Zed `convert_color` (`terminal_element.rs`), but core returns plain `Rgb`.
 
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
 
