@@ -14,3 +14,19 @@ that file is scratch state outside the repository and was restored afterwards.
 | `US-0056-tab-chips-dark.png` | Tab-strip close-up: the split tab with a Space in A and a Space in B shows two chips in A..E order and truncates its title; the second tab shows one. |
 | `US-0056-after-close-channel-dark.png` | After `Close Channel A` from the first tab: both tabs lost their chip and both frames returned to the theme rule — the registry observer repainted the other tab. |
 | `US-0056-split-broadcast-light.png` | The same layout in the Zed One Light theme: chips `A` and `B`, the active member framed in `chart_1` (`#4078F2`), the inactive `B` member framed in `chart_2` at 55 % (sampled `#9DC99C` over the light background). |
+
+## Rework walk (2026-09-09): the per-Space channel badge
+
+Same method, same build (`CARGO_TARGET_DIR=target/in22-target`, `fast-dev`). The scratch
+`target/ui_config.json` bound `f2` = Split Right, `f3` = Split Down, `f5` = Join Channel A and
+`f6` = Join Channel B so that every step is a plain key (posted messages carry no modifier
+state); terminals were put into the new Spaces through the placeholder menu ("New Terminal
+Here") with posted mouse messages. The file was restored afterwards and every launched
+instance was stopped.
+
+| Screenshot | What it shows |
+|---|---|
+| `US-0056-rework-one-member-dark.png` | One tab, three Spaces, only the top-right one in channel A: it carries the `A` badge in its top-right corner. The active Space is the bottom-right non-member, so the blue active border and the channel-A frame are both on screen — the badge is what tells the member apart. |
+| `US-0056-rework-two-channels-dark.png` | The same tab with the two right Spaces in channel A and the left one in channel B: badges `A`, `A`, `B`, and the tab strip shows the matching `A` and `B` chips. |
+| `US-0056-rework-one-member-light.png` | The first case in the Zed One Light theme: the badge keeps the chip's look (white letter on `chart_1`) against the light background. |
+

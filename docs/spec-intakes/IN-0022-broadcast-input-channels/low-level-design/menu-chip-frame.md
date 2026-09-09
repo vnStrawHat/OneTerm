@@ -53,16 +53,33 @@ pub tab_has_member: bool,            // any Space in the tab is a member
 renders, before the recording dot, one chip per channel:
 
 ```text
-div().id(("tab-channel", index)).flex_shrink_0().px_1().rounded_sm()
-    .text_xs().font_weight(FontWeight::BOLD)
-    .bg(channel_color(ch, cx)).text_color(cx.theme().background)
-    .child(ch.label())
+channel_chip(ch, ("tab-channel", index), cx)   // crates/terminal-view/src/theme
+// = div().id(id).flex_shrink_0().px_1().rounded_sm()
+//       .text_xs().font_weight(FontWeight::BOLD)
+//       .bg(channel_color(ch, cx)).text_color(cx.theme().background)
+//       .child(ch.label())
 ```
 
-`channel_color(ch, cx)` returns `[chart_1, chart_2, chart_3, chart_4, chart_5][ch.index()]`
-from `cx.theme()`; it lives in `crates/terminal-view/src/theme/` so the chip and the frame
-share it. Chip text uses `cx.theme().background` for contrast on the saturated chart colour;
+`channel_chip` is the one chip builder, used by the tab strip and by the Space badge below;
+its label/colour triple comes from the pure `channel_chip_style`, which is what the test
+checks. `channel_color(ch, cx)` returns `[chart_1, chart_2, chart_3, chart_4,
+chart_5][ch.index()]` from `cx.theme()`; it lives in `crates/terminal-view/src/theme/` so the
+chip, the badge and the frame share it. Chip text uses `cx.theme().background` for contrast on the saturated chart colour;
 if a theme's chart colour is too light for that, the theme JSON owns the fix, not the chip.
+
+### Space badge (`space/render.rs`)
+
+`render_leaf` reads the leaf's channel once and, for a member, renders
+`channel_chip(ch, ("space-channel", id), cx).absolute().top(px(3.)).right(px(15.))` as the
+last child of the Space wrapper (both the split path and the single-Space fast path, which
+therefore becomes `.relative()`). The 15 px inset clears the terminal's 12 px scrollbar
+track (`TRACK_WIDTH_PX` in `terminal_view/scrollbar.rs`).
+
+The badge, not the frame, is the per-Space marker: in the dark theme the channel-A colour
+(`chart_1`) is close to `table_active_border`, so a frame alone cannot say which Space of a
+split joined. The badge takes no focus (a plain `div` with an id, no `track_focus`) and
+carries no click handler; a click on it reaches the Space's own activation handler like any
+other click inside the Space.
 
 ### Space frame (`space/render.rs`)
 
@@ -86,6 +103,9 @@ frames.
 ```text
 // crates/terminal-view/src/theme
 pub(crate) fn channel_color(channel: InputChannel, cx: &App) -> Hsla;
+pub(crate) fn channel_chip_style(channel: InputChannel, cx: &App) -> (&'static str, Hsla, Hsla);
+pub(crate) fn channel_chip(channel: InputChannel, id: impl Into<ElementId>, cx: &App)
+    -> Stateful<Div>;
 
 // panel/terminal_panel.rs
 pub(crate) fn join_tab_to_channel(&mut self, channel: InputChannel, cx: &mut Context<Self>);
@@ -111,6 +131,8 @@ pub(crate) fn tab_channels(&self, cx: &App) -> Vec<InputChannel>;
   mixed split, `[]` for none; `join_tab_to_channel` joins every Space; `leave_tab_channels`
   clears them.
 - [ ] `space/tests.rs`: `space_border_color` truth table incl. the opacity branch.
+- [ ] `theme/input_channel.rs`: `channel_chip_style` returns the channel's letter, its chart
+  colour and the theme background for every channel.
 - [ ] `input/menu` tests: items 2 and 3 appear only under their conditions.
 - [ ] GUI evidence (PrintWindow screenshot): split tab with two members and one non-member,
   plus a lone member tab, both light and dark theme.

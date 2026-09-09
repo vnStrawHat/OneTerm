@@ -72,19 +72,24 @@ Tab strip and Space frames (tab "fleet" split into three Spaces, tab "db" with o
 
 ```text
 +-[A] fleet ------------+-[A] db --------+-[B][C] mixed --+- local ------+
-|╔═[A]══════════╦═[A]══════════╗                                         |
-|║ $ echo hi    ║ $ echo hi    ║  <- member Space: 1 px frame in the     |
-|║ hi           ║ hi           ║     channel colour (chart_1 for A);     |
-|╠══════════════╩══════════════╣     active member: full colour,         |
-|│ htop ...                    │     inactive member: colour at 55 %     |
-|│                             │  <- non-member: today's theme border    |
-|└─────────────────────────────┘                                         |
+|╔══════════[A]╦══════════[A]╗                                        |
+|║ $ echo hi    ║ $ echo hi    ║  <- member Space: the channel badge in   |
+|║ hi           ║ hi           ║     its top-right corner, plus a 1 px    |
+|╠══════════════╩══════════════╣     frame in the channel colour        |
+|│ htop ...                    │     (chart_1 for A; 55 % while another   |
+|│                             │     Space is active)                     |
+|└─────────────────────────────┘  <- non-member: no badge, today's theme |
+|                                     border                              |
 ```
 
 - One chip per distinct channel in the tab, ordered A..E ("[B][C]" above). A tab with no
   member Space shows no chip.
-- A tab whose single Space is a member draws the frame too (today a single Space draws no
-  frame); the chip alone is too easy to miss when a password is about to fan out.
+- Every member Space repeats that chip as a badge in its own top-right corner. The badge is
+  the per-Space marker: in a tab of three Spaces where only one joined, the frame colour is
+  too close to the active-Space border to be read on its own.
+- A tab whose single Space is a member draws the badge and the frame too (today a single
+  Space draws no frame); the chip alone is too easy to miss when a password is about to fan
+  out.
 
 ## Data Flow
 

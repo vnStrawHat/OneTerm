@@ -13,7 +13,7 @@ Created: 2026-09-09
 - [x] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -160,6 +160,39 @@ Gaps: the GUI walk ran while the workstation was locked, so it used posted windo
 the seven actions were bound temporarily in the scratch `target/ui_config.json` to reach them
 by key (they ship unbound, as the Key Bindings test asserts). No status-bar segment and no
 persistence — out of scope here.
+
+## Rework 2026-09-09
+
+Owner feedback on `evidence/US-0056-split-broadcast-dark.png` (translated): "I cannot tell
+apart the case of one tab with three Spaces where only one Space joined channel A."
+
+Cause: the frame is the only per-Space marker, and in the dark theme the channel-A colour
+(`chart_1`) is nearly the same blue as `table_active_border`, the active-Space border, while
+the inactive member's 55 % frame reads like the plain theme border. A frame colour alone
+cannot say which Space is a member.
+
+Change: every member Space now draws the tab chip again as a badge in its top-right corner
+(bold channel letter, `channel_color`, text `cx.theme().background`), inset 3 px from the top
+and 15 px from the right so it clears the terminal's 12 px scrollbar track. It renders in both
+paths of `space/render.rs` (split and the single-Space fast path, which becomes `.relative()`),
+takes no keyboard focus and carries no click handler. The chip builder moved from
+`panel/tab_title.rs` into `theme/input_channel.rs` (`channel_chip` plus the pure
+`channel_chip_style`), so the tab chip and the Space badge are one function. The frame rule is
+unchanged and is now the secondary cue.
+
+New test: `every_channel_chip_shows_its_letter_on_its_channel_color`
+(`theme/input_channel.rs`) asserts the label/background/foreground triple for A..E.
+
+Docs updated with the change: this packet, `low-level-design/menu-chip-frame.md` (Space badge
+section, interfaces, verification), `high-level-design.md` (wireframe and bullets),
+`docs/gui-layout.md`, `docs/terminal-split.md`.
+
+Evidence (rework GUI walk, described in `evidence/US-0056-gui-walk.md`):
+`evidence/US-0056-rework-one-member-dark.png` (three Spaces, only one in channel A, the active
+Space being a non-member), `evidence/US-0056-rework-two-channels-dark.png` (two Spaces in A,
+one in B), `evidence/US-0056-rework-one-member-light.png` (the first case in the light theme).
+
+Verification: `cargo test -p oneterm-terminal-view` and `pwsh scripts/ci-local.ps1`.
 
 ## Handoff
 

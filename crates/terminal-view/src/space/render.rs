@@ -20,7 +20,7 @@ use oneterm_theme::icon::AppIcon;
 use super::tree::{SpaceContent, SpaceId, SpaceLeaf, SpaceNode, SpaceTree};
 use crate::input::menu::split_items;
 use crate::panel::TerminalPanel;
-use crate::theme::channel_color;
+use crate::theme::{channel_chip, channel_color};
 
 /// Payload dragged from a Terminal Tab title onto an empty Space.
 ///
@@ -125,6 +125,15 @@ fn render_leaf(
         }
         _ => None,
     };
+    // The badge names the channel where the frame alone cannot: it stays
+    // readable next to the active-Space border, which is a close blue in the
+    // dark theme. Inset past the terminal's 12 px scrollbar track.
+    let badge = channel.map(|channel| {
+        channel_chip(channel, ("space-channel", id.0 as usize), cx)
+            .absolute()
+            .top(px(3.))
+            .right(px(15.))
+    });
     let channel = channel.map(|channel| channel_color(channel, cx));
     let content: AnyElement = match &leaf.content {
         SpaceContent::Terminal(view) => view.clone().into_any_element(),
@@ -140,10 +149,12 @@ fn render_leaf(
         };
         return div()
             .id(ElementId::from(("space", id.0 as usize)))
+            .relative()
             .size_full()
             .border_1()
             .border_color(color)
             .child(content)
+            .children(badge)
             .into_any_element();
     }
 
@@ -168,6 +179,7 @@ fn render_leaf(
         // the terminal view handles its own selection first, then this fires.
         .on_mouse_down(MouseButton::Left, activate_space(panel, id))
         .child(content)
+        .children(badge)
         .into_any_element()
 }
 
