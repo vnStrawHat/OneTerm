@@ -1,9 +1,9 @@
 //! [`SettingsPanel`] — the General Settings view shown in its own window.
 //!
 //! Wraps the gpui-component [`Settings`] widget (a sidebar + page layout) with
-//! seven pages: General (UI font), Key Bindings (configurable shortcuts grouped by
+//! six pages: General (UI font), Key Bindings (configurable shortcuts grouped by
 //! origin), Terminal (shell/font/cursor/layout/scroll/bell/security), SSH
-//! (connection keepalive), SFTP (editor workflow), Appearance
+//! (connection keepalive + the SFTP editor workflow), Appearance
 //! (theme mode + theme list), and About. The Terminal page reads/writes the global
 //! [`TerminalSettings`] and persists changes to `terminal.json`; the Appearance
 //! page drives the gpui-component [`Theme`] / [`ThemeRegistry`].
@@ -23,7 +23,7 @@ use gpui_component::{
     v_flex,
 };
 
-use super::{about, appearance, general, key_bindings, sftp, ssh, terminal, updates};
+use super::{about, appearance, general, key_bindings, ssh, terminal, updates};
 
 const SETTINGS_GROUP_VARIANT: GroupBoxVariant = GroupBoxVariant::Outline;
 const SETTINGS_PANEL_ROLE: Role = Role::Pane;
@@ -63,7 +63,7 @@ impl SettingsPanel {
         cx.observe(&updates::UpdateUiState::config(cx), |_, _, cx| cx.notify())
             .detach();
         // Re-render when terminal settings change so setting-dependent UI (e.g.
-        // the SFTP page's Custom-mode enable/disable) updates live.
+        // the SSH page's SFTP Custom-mode enable/disable) updates live.
         cx.observe(
             &oneterm_settings::TerminalSettings::global(cx),
             |_, _, cx| cx.notify(),
@@ -87,8 +87,7 @@ impl SettingsPanel {
             general::page(),
             key_bindings::page(),
             terminal::page(),
-            ssh::page(),
-            sftp::page(cx),
+            ssh::page(cx),
             appearance::page(cx),
             about::page(cx),
         ]

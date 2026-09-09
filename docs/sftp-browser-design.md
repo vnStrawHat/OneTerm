@@ -1231,8 +1231,8 @@ editor. It reuses the existing `SftpBackend::{stat, download, upload}` and the
 transfer queue; no backend trait method is added. Owned by
 `crates/sftp-ui/src/edit.rs`; the editor launcher lives in
 `oneterm_core::editor_launcher` (`open` crate + custom argv), and the
-configuration in the `sftp` group of `terminal.json` (see the "SFTP" settings
-page). See `docs/spec-intakes/IN-0011-sftp-remote-file-edit-with-auto-upload/`
+configuration in the `sftp` group of `terminal.json` (see the "SFTP Editor" and
+"SFTP Edit Limit" groups of the "SSH" settings page, merged there by IN-0021). See `docs/spec-intakes/IN-0011-sftp-remote-file-edit-with-auto-upload/`
 and DEC-0004.
 
 ```

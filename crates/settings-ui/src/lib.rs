@@ -8,8 +8,7 @@
 //! - [`general`] — UI font size.
 //! - [`key_bindings`] — configurable key bindings (grouped by origin).
 //! - [`terminal`] — shell, font, cursor, layout, scroll, bell, security.
-//! - [`ssh`] — SSH connection keepalive.
-//! - [`sftp`] — SFTP browser editor workflow.
+//! - [`ssh`] — SSH connection keepalive and the SFTP browser editor workflow.
 //! - [`appearance`] — theme mode + theme list.
 //! - [`about`] — version info + links.
 //!
@@ -20,7 +19,6 @@ mod appearance;
 mod general;
 mod key_bindings;
 mod panel;
-mod sftp;
 mod ssh;
 mod terminal;
 mod updates;
