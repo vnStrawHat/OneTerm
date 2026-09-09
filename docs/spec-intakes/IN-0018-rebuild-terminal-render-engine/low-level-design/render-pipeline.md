@@ -135,8 +135,8 @@ pub(crate) struct RowPlan {
 }
 pub(crate) struct ColorSpan { pub byte_end: u32, pub color: Hsla }   // colors along the run text
 pub(crate) struct PlanContext<'a> { theme: &'a TerminalTheme, fonts: &'a FontSet, font_size: Pixels,
-    cell_width: Pixels, device: CellSizeDevicePx, semantic: Option<&'a SemanticOverlay> /* None = off */,
-    window: &'a Window }
+    font_weight: f32 /* settings weight, CSS scale */, cell_width: Pixels, device: CellSizeDevicePx,
+    semantic: Option<&'a SemanticOverlay> /* None = off */, window: &'a Window }
 ```
 
 Implementation note (US-0047): color spans are flattened into the row so a rebuild never
@@ -163,8 +163,11 @@ empty):
      cs.font.italic`.
    - **bg span**: if `bg != default background || force_bg`: extend the last span when adjacent
      and same color, else push.
-   - **shape**: if `is_shape_char(ch)`: `shape_quads(ch, device, &mut scratch.rects)`, offset
-     by `col * device.w`, color `fg` with `a *= rect.alpha` (anti-aliased edge pixels of arcs,
+   - **shape**: if `is_shape_char(ch)`: `shape_quads(ch, device, weight, &mut scratch.rects)`
+     with the cell's effective weight `weight = bold ? min(900, ctx.font_weight + 300) :
+     ctx.font_weight` (US-0052: strokes follow the font weight, see `shapes.md` thickness
+     rules; `bold` is the same flag that picks the bold text variant), offset by
+     `col * device.w`, color `fg` with `a *= rect.alpha` (anti-aliased edge pixels of arcs,
      diagonals and powerline), then **coalesce** (below). Ends the current text run.
    - **hidden**: `HIDDEN` cells end the run and emit no glyph (deviation 4).
    - **text run**: a run is a maximal span of consecutive non-blank, non-shape, non-hidden cells
@@ -188,7 +191,9 @@ with equal `y`, `h`, color and `x == prev.x + prev.w` extends `prev.w` instead o
 The color carries the coverage alpha, so only quads of equal alpha merge (a solid `─` extends the
 solid tangent end of `╭`; a half-covered edge pixel never merges with a solid run). A run of 80
 `█` cells or 80 `─` cells becomes one quad; a `▀▄` alternation stays two quads per cell
-(different `y`).
+(different `y`). The comparison is on the rect, never on the cell, so a bold `─` (thicker, a
+different `y` / `h`) next to a plain one stays its own quad; `row_plan::tests::
+bold_cell_uses_heavier_strokes` and `settings_weight_scales_strokes` cover both cases.
 
 ### Plan cache (`plan_cache.rs`)
 
@@ -240,7 +245,9 @@ update(frame, style_key, ctx, scratch, glyphs, stats):
 ```
 
 Selection, hover, search, blink, and focus never enter `update`. A style-key change or a grid
-change zeroes every hash, so rows rebuild without hashing. Implementation note (US-0047): the
+change zeroes every hash, so rows rebuild without hashing; `weight_bits` is part of the key, so
+a settings `font_weight` change replans every row and the shape strokes follow it
+(`weight_change_replans_all`). Implementation note (US-0047): the
 cursor row is a candidate on every frame, so the URL scan is gated on *hash-verified* changes
 (phase 3), not on candidates — otherwise every idle frame would rescan; `rows_candidate` counts
 phase-1 candidates and `rows_planned` phase-4 rebuilds.

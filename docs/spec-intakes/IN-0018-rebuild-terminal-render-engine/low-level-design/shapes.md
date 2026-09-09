@@ -3,14 +3,14 @@
 Intake: IN-0018
 HLD: ../high-level-design.md
 Topic: shapes
-Date: 2026-09-08 (curves reworked 2026-09-09; parity snapping amended 2026-09-09, see DEC-0007 item 4)
+Date: 2026-09-08 (curves reworked 2026-09-09; parity snapping amended 2026-09-09, see DEC-0007 item 4; stroke weight added 2026-09-09, US-0052)
 
 > One concern per file. Keep this focused on implementation-level mechanics for a single area of the HLD so it stays reviewable. Do not restate the whole intake here.
 
 ## Concern
 
 `src/render/shapes.rs`: pure geometry that turns one code point plus a device-pixel cell size
-into quads (`DeviceRect`, each carrying a coverage `alpha`). Solid families emit opaque rects;
+and a font weight into quads (`DeviceRect`, each carrying a coverage `alpha`). Solid families emit opaque rects;
 arcs, diagonals and powerline are rasterized here into anti-aliased coverage rects. No GPUI
 types, no alacritty types, no allocation beyond the caller's output vector. Owns the symmetry
 contract of DEC-0007 item 4.
@@ -123,20 +123,48 @@ re-derives thickness per axis, so rotation is valid on non-square cells). The co
 stores a canonical definition plus a transform; the test
 `build(transform(def)) == transform_rects(build(def))` proves the builder is symmetric.
 
-### Thickness rules (device px; `W` = device cell width)
+### Thickness rules (device px; `W` = device cell width, `weight` = font weight)
 
-| Name | Value | 7 px | 8 px | 9 px | 14 px | 18 px |
-| --- | --- | --- | --- | --- | --- | --- |
-| light `t_l` | `max(1, round(W / 8))` | 1 | 1 | 1 | 2 | 2 |
-| heavy `t_h` | `max(t_l + 2, round(W / 3))` | 3 | 3 | 3 | 5 | 6 |
-| double rail `t_d` | `t_l` | 1 | 1 | 1 | 2 | 2 |
-| double gap `g` | `max(1, t_l)` | 1 | 1 | 1 | 2 | 2 |
-| rail offset `d` | `(t_d + g) / 2` (nominal, `Nearest`-snapped) | 1 | 1 | 1 | 2 | 2 |
-| dash gap `g_dash` | `max(1, round(W / 8))` | 1 | 1 | 1 | 2 | 2 |
+Strokes follow the font weight (US-0052, owner request 2026-09-09: bold text next to a box frame
+that stayed hairline). `weight` is the CSS weight `100..900` (`gpui::FontWeight.0`); the scale
+`k = clamp(weight / 400, 1, 2.25)` is applied to the **nominal** thickness before snapping, so
+DEC-0007 item 4 (snapping never changes a thickness) is untouched. `k == 1.0` exactly for every
+weight at or below 400, which therefore draws the weight-independent geometry bit for bit.
+
+| Name | Value |
+| --- | --- |
+| scale `k` | `clamp(weight / 400, 1, 2.25)` |
+| light `t_l` | `max(1, round(W / 8 · k))` |
+| heavy `t_h` | `max(t_l + 2, round(W / 3 · k))` |
+| double rail `t_d` | `t_l` |
+| double gap `g` | `t_l` (so `2d = t_d + g` is even: the rails stay parity-exact and abut `J(t_l)` at every weight; a fixed gap would let the rails overlap the light joint at e.g. 9 px / 900) |
+| rail offset `d` | `(t_d + g) / 2` (nominal, `Nearest`-snapped) |
+| dash gap `g_dash` | `max(1, round(W / 8))` — the weight-400 light thickness, so a heavier dash keeps its segment lengths instead of turning into dots |
+
+`t_l / t_h` by cell width and weight (`thickness_table_for_docs` prints it):
+
+| `W` | 400 | 600 (`k` 1.5) | 700 (`k` 1.75) | 900 (`k` 2.25) |
+| --- | --- | --- | --- | --- |
+| 7 px | 1 / 3 | 1 / 4 | 2 / 4 | 2 / 5 |
+| 8 px | 1 / 3 | 2 / 4 | 2 / 5 | 2 / 6 |
+| 9 px | 1 / 3 | 2 / 5 | 2 / 5 | 3 / 7 |
+| 14 px | 2 / 5 | 3 / 7 | 3 / 8 | 4 / 11 |
+| 18 px | 2 / 6 | 3 / 9 | 4 / 11 | 5 / 14 |
+
+`t_d = g = t_l` in every cell; `g_dash` is 1 px up to 9 px and 2 px at 14 / 18 px regardless of
+the weight. The **effective weight** of a cell is chosen by row planning
+(`render-pipeline.md`): the settings weight, or `min(900, settings + 300)` for a cell with
+`CellFlags::BOLD` or a bold class style, so SGR bold on a normal font draws at 700 and the
+strokes get heavier together with the text. Fills (blocks, triangles, half discs), shades and
+braille dots have no stroke and do not change with the weight.
 
 Nominal values pass through `snap_interval`; the painted thickness equals the nominal on both
 axes (a stroke shifts, it never widens). Height uses the same table with `W` (not `H`) so
-horizontal and vertical strokes are equally thick.
+horizontal and vertical strokes are equally thick. A heavier weight can reach the parity bias
+on a cell the base weight did not: at 7 px / 700 (`t_l = 2`) the rails of `║` are `[0, 2)` and
+`[4, 6)`, half a pixel left of centre like every stroke of the family; the mirror tests skip
+the far-edge line on such an axis (`Bitmap::without_far_edge`), the only place where "reflect
+and move one pixel toward the top/left" is ambiguous.
 
 Joint intervals: `J_x = snap_interval(C.x, t/2, W, Fixed)`, `J_y = snap_interval(C.y, t/2,
 H, Fixed)` for `t ∈ {t_l, t_h}`. Double rails: `R±_x = snap_interval(C'.x ± d, t_d/2, W,
@@ -363,12 +391,16 @@ pub(crate) struct DeviceRect { pub x: i32, pub y: i32, pub w: i32, pub h: i32, p
 
 /// True for every code point this module draws (row planning skips the font for them).
 pub(crate) fn is_shape_char(c: char) -> bool;
-/// Append the quads of `c`; returns false (and appends nothing) when `c` is not a shape char
-/// (and for U+2800, which draws nothing).
-pub(crate) fn shape_quads(c: char, cell: CellSizeDevicePx, out: &mut Vec<DeviceRect>) -> bool;
-/// Exposed for tests and metrics: light/heavy thickness for a cell width.
-pub(crate) fn stroke_thickness(cell: CellSizeDevicePx) -> StrokeThickness { light, heavy, rail, gap }
+/// Append the quads of `c` drawn at `font_weight` (CSS scale 100..900, `gpui::FontWeight.0`);
+/// returns false (and appends nothing) when `c` is not a shape char (and for U+2800, which
+/// draws nothing).
+pub(crate) fn shape_quads(c: char, cell: CellSizeDevicePx, font_weight: f32, out: &mut Vec<DeviceRect>) -> bool;
+/// Exposed for tests and metrics: light/heavy thickness for a cell width and font weight.
+pub(crate) fn stroke_thickness(cell: CellSizeDevicePx, font_weight: f32) -> StrokeThickness { light, heavy, rail, gap, dash_gap }
 ```
+
+The module stays GPUI-free: the weight is a plain `f32` on the CSS scale, which is exactly what
+`gpui::FontWeight` wraps.
 
 Rects are appended in a deterministic order (arms in `up, down, left, right` order, rails
 `−` then `+`; rasterized shapes top to bottom, left to right), which row planning relies on only
@@ -405,7 +437,13 @@ painter stays a plain `paint_quad`, and coalesces across cells only when the fin
 
 `src/render/shapes_tests.rs`, all pure `#[test]`s, run on cell sizes `{7×15, 8×16, 8×17, 9×18,
 9×19, 14×29, 18×38, 36×76, 1×1}` unless stated (`PARITY_SIZES = {9×18, 8×16, 9×19, 8×17,
-14×28, 14×29}` for the parity-specific tests):
+14×28, 14×29}` for the parity-specific tests). The symmetry, joint, thickness and budget
+suites (`mirror_x_pairs_match`, `mirror_y_pairs_match`, `self_symmetric_glyphs`,
+`builder_commutes_with_transforms`, `horizontal_line_abuts_across_cells`,
+`cross_equals_union_of_lines`, `corner_arms_meet_at_joint`, `heavy_thicker_than_light`,
+`stroke_thickness_uniform_across_axes`, `double_rails_equidistant_from_joint`,
+`rails_disjoint_with_gap`, `rounded_corner_matches_straight_stubs`, `per_cell_quad_budget`)
+run at `WEIGHTS = {400, 700}`; everything else at 400:
 
 - [ ] `every_supported_code_point_emits_geometry`: for each code point in U+2500–257F,
       U+2580–259F, U+25AC, U+2800–28FF, U+E0B0–E0BF, `is_shape_char` is true and
@@ -486,3 +524,11 @@ painter stays a plain `paint_quad`, and coalesces across cells only when the fin
       39 / 61, E0B0 42 / 66, `╱` 41 / 77 rects at 9 × 19 / 14 × 29. The arc glyph is well under
       2 H; a filled or diagonal shape needs a solid run plus one or two edge pixels per
       scanline and lands between 2 H and 2.7 H.
+- [ ] `weight_400_matches_baseline_geometry`: for every code point and size, weights 100, 300
+      and 399 emit exactly the weight-400 rect set, and the weight-400 table is the width-only
+      rule (`(t_l, t_h)` = 1/3, 1/3, 1/3, 2/5, 2/6 at 7, 8, 9, 14, 18 px).
+- [ ] `heavier_weight_thickens_strokes` (9 × 19, 14 × 29): at 700 vs 400 `─ │ ━ ┃` are
+      thicker, the `═` rails are thicker and still disjoint, the `╭` band covers more pixels
+      and its stub is wider, the `╲` / E0B1 / E0B5 bands cover more; `█ ▚ ▒ ⣿` E0B0 E0B4 are
+      identical; `dash_gap` equals the 400 light thickness, `rail == gap == light`; weights
+      above 900 clamp to the 900 scale.

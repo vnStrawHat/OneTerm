@@ -310,6 +310,7 @@ mod tests {
                     theme,
                     fonts,
                     font_size: px(13.0),
+                    font_weight: 400.0,
                     cell_width: px(cell_width),
                     device,
                     semantic: None,
@@ -441,6 +442,25 @@ mod tests {
         let frame = frame_with(&texts, 20).damage_rows(&[]).build();
         let s = h.update(cx, &frame, style_key(14.0));
         assert_eq!(s.rows_planned, 5);
+    }
+
+    /// The settings font weight is part of the style key, so shapes (whose
+    /// stroke thickness follows the weight) are replanned when it changes.
+    #[gpui::test]
+    fn weight_change_replans_all(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let mut h = Harness::new();
+        let texts = lines(5);
+        h.update(cx, &frame_with(&texts, 20).build(), style_key(13.0));
+        let frame = frame_with(&texts, 20).damage_rows(&[]).build();
+        let key = StyleKey {
+            weight_bits: 700f32.to_bits(),
+            ..style_key(13.0)
+        };
+        let s = h.update(cx, &frame, key);
+        assert_eq!(s.rows_planned, 5);
+        let s = h.update(cx, &frame, key);
+        assert_eq!(s.rows_planned, 0, "the new weight is remembered");
     }
 
     #[gpui::test]

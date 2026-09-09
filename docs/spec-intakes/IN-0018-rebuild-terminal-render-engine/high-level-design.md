@@ -335,7 +335,7 @@ gutter stamps, search highlights, semantic overlay, shell profile) travels in
 | 6 | settings `min_contrast` 0.0 silently disables enforcement (wart 10) | `min_contrast <= 0.0` keeps the theme default 4.5; `0.0 < v <= 1.0` disables; `> 1.0` is the threshold | inventory wart |
 | 7 | rounded corners via 4×4 supersampled alpha rects; diagonals and most powerline glyphs from the font or as blocks | coverage-anti-aliased quads, as the old engine, but symmetric: 4×4 samples on a mirror-exact grid for rounded corners, `╱╲╳` and all sixteen powerline glyphs, run-length merged | acceptance rework 2026-09-09 — the first cut used GPUI stroked/filled paths, which the DirectX backend paints without anti-aliasing at cell sizes (visible stair steps); quads with coverage alpha are what the old engine did and look smooth |
 | 8 | scroll with `Damage::Full` rebuilt every row | rotation + hash verification rebuilds only changed rows | performance; observable output identical |
-| 9 | light stroke thickness `round(cw/6)` etc. | thickness table in `shapes.md`; the painted thickness equals the nominal on both axes, a stroke that cannot be centred sits half a pixel toward the top/left (never widens) | symmetric snapping (DEC-0007 item 4, amended 2026-09-09: uniform thickness across axes) |
+| 9 | light stroke thickness `round(cw/6)` etc., independent of the font weight | thickness table in `shapes.md`, scaled by `clamp(weight / 400, 1, 2.25)` for the cell's effective font weight (settings weight, +300 under SGR bold; US-0052); the painted thickness equals the nominal on both axes, a stroke that cannot be centred sits half a pixel toward the top/left (never widens) | symmetric snapping (DEC-0007 item 4, amended 2026-09-09: uniform thickness across axes); bold box frames were thinner than bold text (owner request 2026-09-09) |
 | 10 | URL continuation rows only replanned when themselves damaged | mask delta marks them dirty | correctness of always-on URL underline across wraps |
 
 Kept as-is on purpose (out of scope, from inventory §6): no middle-click paste (6), IME on the
@@ -356,6 +356,10 @@ US-0050 ticks every box during sign-off.
 - [ ] 41 shades U+2591–2593 (deviation 2: scaled pattern)
 - [ ] 42 U+25AC single half-height centered rect
 - [ ] braille U+2800–28FF as dot quads (new coverage required by DEC-0007)
+
+### US-0052 stroke weight (owner request 2026-09-09, not in the inventory)
+
+- [x] stroke thickness follows the effective font weight (settings weight, +300 under SGR bold / class bold; weight ≤ 400 unchanged bit for bit) — `heavier_weight_thickens_strokes`, `weight_400_matches_baseline_geometry`, `bold_cell_uses_heavier_strokes`, `settings_weight_scales_strokes`, `weight_change_replans_all`; `evidence/US-0052-weight.png`
 
 ### US-0047 render core (§2.3 items 1–36, §2.15, §2.22)
 
@@ -481,7 +485,7 @@ US-0050 ticks every box during sign-off.
 | Steady-state heap allocations | 0 per frame in view code | `element_tests::idle_frame_allocates_nothing` uses a counting global allocator (test-only) around two idle frames |
 | Shaped lines | cached across frames | `glyph_cache_hits_across_rows`: second frame `shape_calls == 0`, `glyph_hits > 0` |
 | Cell width | whole device pixels | `metrics_snap_cell_to_device_pixels` at scale 1.0, 1.25, 1.5, 2.0 |
-| Shape geometry | ≤ 24 quads per shade cell, ≤ 8 per braille cell, ≤ 8 per box cell (`╬` splits into eight rails); rasterized curves ≤ 5 H per cell (`╳` ≤ 6 H), measured `╭` 13 / 22, E0B4 39 / 61, E0B0 42 / 66 quads at 9 × 19 / 14 × 29; rasterization is `W · H · 16` predicate calls per glyph on replan only, and falls back to 1 sample per pixel above 64 × 128 device px per cell | `shapes_tests` upper-bound assertions (`per_cell_quad_budget`, `coverage_quad_counts`) |
+| Shape geometry | ≤ 24 quads per shade cell, ≤ 8 per braille cell, ≤ 8 per box cell (`╬` splits into eight rails); rasterized curves ≤ 5 H per cell (`╳` ≤ 6 H), measured `╭` 13 / 22, E0B4 39 / 61, E0B0 42 / 66 quads at 9 × 19 / 14 × 29; the per-cell budget holds at font weight 700 as well as 400; rasterization is `W · H · 16` predicate calls per glyph on replan only, and falls back to 1 sample per pixel above 64 × 128 device px per cell | `shapes_tests` upper-bound assertions (`per_cell_quad_budget` at weights 400 and 700, `coverage_quad_counts`) |
 
 ## Risks
 

@@ -19,6 +19,13 @@ const SIZES: [(i32, i32); 9] = [
 /// the ones the parity rule is about.
 const PARITY_SIZES: [(i32, i32); 6] = [(9, 18), (8, 16), (9, 19), (8, 17), (14, 28), (14, 29)];
 
+/// Font weights the geometry suites run at: the baseline and SGR bold on a
+/// normal-weight font (`400 + 300`).
+const WEIGHTS: [f32; 2] = [NORMAL, 700.0];
+
+/// The weight at which strokes have their nominal thickness.
+const NORMAL: f32 = 400.0;
+
 fn cell(size: (i32, i32)) -> CellSizeDevicePx {
     CellSizeDevicePx {
         w: size.0,
@@ -26,10 +33,18 @@ fn cell(size: (i32, i32)) -> CellSizeDevicePx {
     }
 }
 
-fn quads(c: char, size: (i32, i32)) -> Vec<DeviceRect> {
+fn quads_at(c: char, size: (i32, i32), weight: f32) -> Vec<DeviceRect> {
     let mut out = Vec::new();
-    shape_quads(c, cell(size), &mut out);
+    shape_quads(c, cell(size), weight, &mut out);
     out
+}
+
+fn quads(c: char, size: (i32, i32)) -> Vec<DeviceRect> {
+    quads_at(c, size, NORMAL)
+}
+
+fn thickness(size: (i32, i32), weight: f32) -> StrokeThickness {
+    stroke_thickness(cell(size), weight)
 }
 
 /// The rasterized families: rounded corners, diagonals and powerline.
@@ -70,7 +85,11 @@ impl Bitmap {
     }
 
     fn of(c: char, size: (i32, i32)) -> Self {
-        Self::from_rects(size, &quads(c, size))
+        Self::of_at(c, size, NORMAL)
+    }
+
+    fn of_at(c: char, size: (i32, i32), weight: f32) -> Self {
+        Self::from_rects(size, &quads_at(c, size, weight))
     }
 
     fn from_rects(size: (i32, i32), rects: &[DeviceRect]) -> Self {
@@ -116,6 +135,8 @@ impl Bitmap {
     /// The bitmap moved one pixel toward the top/left on the chosen axes. The
     /// far edge keeps its own pixels: an arm or stub that reaches the cell edge
     /// continues into the neighbouring cell, so nothing new comes in from there.
+    /// That is a guess for a feature that merely *touches* the near edge because
+    /// of the bias (bold rails on a 7 px cell): see [`Bitmap::without_far_edge`].
     fn shifted(&self, x: bool, y: bool) -> Self {
         let mut out = Self::new((self.w, self.h));
         for py in 0..self.h {
@@ -123,6 +144,24 @@ impl Bitmap {
                 let sx = if x && px + 1 < self.w { px + 1 } else { px };
                 let sy = if y && py + 1 < self.h { py + 1 } else { py };
                 out.alpha[(py * self.w + px) as usize] = self.alpha(sx, sy);
+            }
+        }
+        out
+    }
+
+    /// The bitmap with the far-edge column (`x`) and row (`y`) cleared. On a
+    /// parity-mismatched axis a feature biased onto the near edge of one glyph
+    /// ends one pixel short of the far edge in its reflection (the thickness
+    /// never changes), while an arm reaching the far edge still reaches it;
+    /// the far edge line is the one place where "reflect and move one pixel"
+    /// is ambiguous, so it is compared through the abutting tests instead.
+    fn without_far_edge(&self, x: bool, y: bool) -> Self {
+        let mut out = self.clone();
+        for py in 0..self.h {
+            for px in 0..self.w {
+                if (x && px == self.w - 1) || (y && py == self.h - 1) {
+                    out.alpha[(py * self.w + px) as usize] = 0.0;
+                }
             }
         }
         out
@@ -181,8 +220,8 @@ fn mirror_rects(rects: &[DeviceRect], size: (i32, i32), mirror: Mirror) -> Vec<D
 /// shift: blocks, `▬`, shades, braille, and the edge-anchored rasterized
 /// diagonals and powerline glyphs. Box glyphs mixing light and heavy arms are
 /// not classified (none is in the symmetry lists).
-fn stroke_nominal(c: char, size: (i32, i32)) -> Option<i32> {
-    let t = stroke_thickness(cell(size));
+fn stroke_nominal(c: char, size: (i32, i32), weight: f32) -> Option<i32> {
+    let t = thickness(size, weight);
     match c as u32 {
         0x2571..=0x2573 => None,
         0x2500..=0x257F => {
@@ -199,8 +238,8 @@ fn stroke_nominal(c: char, size: (i32, i32)) -> Option<i32> {
 /// On which mirrored axes the reflection of `c` is one pixel off: exactly those
 /// where the cell size and the stroke thickness have different parity, so the
 /// stroke cannot be centred and sits half a pixel toward the top/left instead.
-fn expected_shift(c: char, size: (i32, i32), mirror: Mirror) -> (bool, bool) {
-    let Some(t) = stroke_nominal(c, size) else {
+fn expected_shift(c: char, size: (i32, i32), mirror: Mirror, weight: f32) -> (bool, bool) {
+    let Some(t) = stroke_nominal(c, size, weight) else {
         return (false, false);
     };
     (
@@ -213,34 +252,46 @@ fn expected_shift(c: char, size: (i32, i32), mirror: Mirror) -> (bool, bool) {
 /// rect set for rect set (run-length merging mirrors exactly too). On an axis
 /// whose parity does not match the stroke, `b` is the reflection moved exactly
 /// one pixel toward the top/left (never the other way, never more), because both
-/// glyphs carry the same half-pixel bias.
+/// glyphs carry the same half-pixel bias; the far-edge line of such an axis is
+/// left out of the comparison (see [`Bitmap::without_far_edge`]).
 fn assert_mirrored(a: char, b: char, mirror: Mirror, size: (i32, i32)) {
-    let mirrored = mirror_rects(&quads(a, size), size, mirror);
-    let (shift_x, shift_y) = expected_shift(a, size, mirror);
-    let expected = Bitmap::from_rects(size, &mirrored).shifted(shift_x, shift_y);
-    let actual = Bitmap::of(b, size);
+    assert_mirrored_at(a, b, mirror, size, NORMAL);
+}
+
+fn assert_mirrored_at(a: char, b: char, mirror: Mirror, size: (i32, i32), weight: f32) {
+    let mirrored = mirror_rects(&quads_at(a, size, weight), size, mirror);
+    let (shift_x, shift_y) = expected_shift(a, size, mirror, weight);
+    let expected = Bitmap::from_rects(size, &mirrored)
+        .shifted(shift_x, shift_y)
+        .without_far_edge(shift_x, shift_y);
+    let actual = Bitmap::of_at(b, size, weight).without_far_edge(shift_x, shift_y);
     assert!(
         expected == actual,
-        "{a:?} mirrored (shift x {shift_x}, y {shift_y}) is not {b:?} at {size:?}\nexpected:\n{}\nactual:\n{}",
+        "{a:?} mirrored (shift x {shift_x}, y {shift_y}) is not {b:?} at {size:?} weight {weight}\nexpected:\n{}\nactual:\n{}",
         expected.ascii(),
         actual.ascii()
     );
     if !shift_x && !shift_y {
         assert_eq!(
             mirrored,
-            sorted(quads(b, size)),
-            "{a:?} mirrored rect set is not {b:?}'s at {size:?}"
+            sorted(quads_at(b, size, weight)),
+            "{a:?} mirrored rect set is not {b:?}'s at {size:?} weight {weight}"
         );
     }
 }
 
 /// `[lo, hi)` moved `shift` pixels toward the origin; a boundary on the cell
-/// edge stays there (the arm continues into the next cell).
-fn shift_interval(lo: i32, hi: i32, size: i32, shift: i32) -> (i32, i32) {
-    (
-        if lo == 0 { 0 } else { lo - shift },
-        if hi == size { size } else { hi - shift },
-    )
+/// edge stays there (the arm continues into the next cell). A far boundary on
+/// the edge may also move: a rail biased onto the near edge of the original
+/// stops one pixel short of the far edge in the reflection (bold rails on a
+/// 7 px cell), the same ambiguity as [`Bitmap::without_far_edge`].
+fn shift_interval(lo: i32, hi: i32, size: i32, shift: i32) -> Vec<(i32, i32)> {
+    let lo = if lo == 0 { 0 } else { lo - shift };
+    if hi == size && shift != 0 {
+        vec![(lo, size), (lo, size - shift)]
+    } else {
+        vec![(lo, if hi == size { size } else { hi - shift })]
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -427,9 +478,9 @@ fn mirror_x_pairs_match() {
         ('\u{E0B8}', '\u{E0BA}'),
         ('\u{2801}', '\u{2808}'),
     ];
-    for size in SIZES {
+    for (size, weight) in SIZES.iter().flat_map(|s| WEIGHTS.map(|w| (*s, w))) {
         for (a, b) in pairs {
-            assert_mirrored(a, b, MX, size);
+            assert_mirrored_at(a, b, MX, size, weight);
         }
     }
 }
@@ -449,9 +500,9 @@ fn mirror_y_pairs_match() {
         ('\u{E0B8}', '\u{E0BC}'),
         ('\u{2801}', '\u{2840}'),
     ];
-    for size in SIZES {
+    for (size, weight) in SIZES.iter().flat_map(|s| WEIGHTS.map(|w| (*s, w))) {
         for (a, b) in pairs {
-            assert_mirrored(a, b, MY, size);
+            assert_mirrored_at(a, b, MY, size, weight);
         }
     }
 }
@@ -461,18 +512,18 @@ fn self_symmetric_glyphs() {
     let glyphs = [
         '─', '│', '┼', '━', '┃', '╋', '═', '║', '╬', '█', '╳', '▒', '▬',
     ];
-    for size in SIZES {
+    for (size, weight) in SIZES.iter().flat_map(|s| WEIGHTS.map(|w| (*s, w))) {
         for glyph in glyphs {
-            assert_mirrored(glyph, glyph, MX, size);
-            assert_mirrored(glyph, glyph, MY, size);
+            assert_mirrored_at(glyph, glyph, MX, size, weight);
+            assert_mirrored_at(glyph, glyph, MY, size, weight);
         }
     }
 }
 
 #[test]
 fn builder_commutes_with_transforms() {
-    for size in SIZES {
-        let g = Geometry::new(cell(size));
+    for (size, weight) in SIZES.iter().flat_map(|s| WEIGHTS.map(|w| (*s, w))) {
+        let g = Geometry::new(cell(size), weight);
         let t = g.thickness;
         // On an axis where a nominal thickness cannot be centred, a rect of that
         // weight sits one pixel toward the top/left of its reflection; where
@@ -499,23 +550,27 @@ fn builder_commutes_with_transforms() {
                             shifts_y.iter().any(|&sy| {
                                 let sx = if reflection.x { sx } else { 0 };
                                 let sy = if reflection.y { sy } else { 0 };
-                                let (x0, x1) = shift_interval(m.x, m.x + m.w, size.0, sx);
-                                let (y0, y1) = shift_interval(m.y, m.y + m.h, size.1, sy);
-                                (x0, x1, y0, y1)
-                                    == (rect.x, rect.x + rect.w, rect.y, rect.y + rect.h)
+                                let xs = shift_interval(m.x, m.x + m.w, size.0, sx);
+                                let ys = shift_interval(m.y, m.y + m.h, size.1, sy);
+                                xs.iter().any(|&(x0, x1)| {
+                                    ys.iter().any(|&(y0, y1)| {
+                                        (x0, x1, y0, y1)
+                                            == (rect.x, rect.x + rect.w, rect.y, rect.y + rect.h)
+                                    })
+                                })
                             })
                         })
                     };
                     let index = remaining.iter().position(matches).unwrap_or_else(|| {
                         panic!(
-                            "builder does not commute with {reflection:?} for {c:?} at {size:?}: {rect:?} has no reflected counterpart in {remaining:?}"
+                            "builder does not commute with {reflection:?} for {c:?} at {size:?} weight {weight}: {rect:?} has no reflected counterpart in {remaining:?}"
                         )
                     });
                     remaining.swap_remove(index);
                 }
                 assert!(
                     remaining.is_empty(),
-                    "builder does not commute with {reflection:?} for {c:?} at {size:?}: unmatched {remaining:?}"
+                    "builder does not commute with {reflection:?} for {c:?} at {size:?} weight {weight}: unmatched {remaining:?}"
                 );
             }
         }
@@ -528,24 +583,24 @@ fn builder_commutes_with_transforms() {
 
 #[test]
 fn horizontal_line_abuts_across_cells() {
-    for size in SIZES {
+    for (size, weight) in SIZES.iter().flat_map(|s| WEIGHTS.map(|w| (*s, w))) {
         for line in ['─', '━'] {
-            let rects = quads(line, size);
+            let rects = quads_at(line, size, weight);
             assert_eq!(rects.len(), 1, "{line:?} at {size:?} is not one bar");
             assert_eq!(rects[0].x, 0);
             assert_eq!(rects[0].x + rects[0].w, size.0);
         }
         // Both rails of a double line span the full cell width, so they meet the
         // rails of the neighbouring cell.
-        let rails = quads('═', size);
+        let rails = quads_at('═', size, weight);
         for rail in &rails {
             assert_eq!(rail.x, 0, "double rail does not start at the cell edge");
             assert_eq!(rail.x + rail.w, size.0);
         }
         // The outer dash segments end within one dash gap of the cell edge, so
         // the pitch of a dashed run carries across the cell boundary.
-        let dashes = sorted(quads('┄', size));
-        let gap = stroke_thickness(cell(size)).light;
+        let dashes = sorted(quads_at('┄', size, weight));
+        let gap = thickness(size, weight).dash_gap;
         let head = dashes.first().map(|rect| rect.x).unwrap_or_default();
         let tail = dashes
             .last()
@@ -558,18 +613,19 @@ fn horizontal_line_abuts_across_cells() {
 
 #[test]
 fn cross_equals_union_of_lines() {
-    for size in SIZES {
+    for (size, weight) in SIZES.iter().flat_map(|s| WEIGHTS.map(|w| (*s, w))) {
+        let of = |c: char| Bitmap::of_at(c, size, weight);
         assert!(
-            Bitmap::of('┼', size) == Bitmap::of('─', size).union(&Bitmap::of('│', size)),
-            "light cross is not the union of its lines at {size:?}"
+            of('┼') == of('─').union(&of('│')),
+            "light cross is not the union of its lines at {size:?} weight {weight}"
         );
         assert!(
-            Bitmap::of('╋', size) == Bitmap::of('━', size).union(&Bitmap::of('┃', size)),
-            "heavy cross is not the union of its lines at {size:?}"
+            of('╋') == of('━').union(&of('┃')),
+            "heavy cross is not the union of its lines at {size:?} weight {weight}"
         );
 
-        let double_cross = Bitmap::of('╬', size);
-        let double_lines = Bitmap::of('═', size).union(&Bitmap::of('║', size));
+        let double_cross = of('╬');
+        let double_lines = of('═').union(&of('║'));
         assert!(double_cross.is_subset_of(&double_lines));
 
         // The middle of a double cross stays open. A one pixel cell has no
@@ -577,14 +633,14 @@ fn cross_equals_union_of_lines() {
         if size.0 < 5 || size.1 < 5 {
             continue;
         }
-        let g = Geometry::new(cell(size));
+        let g = Geometry::new(cell(size), weight);
         let joint_x = g.joint(Axis::X, g.thickness.light);
         let joint_y = g.joint(Axis::Y, g.thickness.light);
         for y in joint_y.lo..joint_y.hi {
             for x in joint_x.lo..joint_x.hi {
                 assert!(
                     !double_cross.get(x, y),
-                    "double cross fills its center at {size:?}\n{}",
+                    "double cross fills its center at {size:?} weight {weight}\n{}",
                     double_cross.ascii()
                 );
             }
@@ -594,14 +650,15 @@ fn cross_equals_union_of_lines() {
 
 #[test]
 fn corner_arms_meet_at_joint() {
-    for size in SIZES {
+    for (size, weight) in SIZES.iter().flat_map(|s| WEIGHTS.map(|w| (*s, w))) {
+        let of = |c: char| Bitmap::of_at(c, size, weight);
         assert!(
-            Bitmap::of('┌', size) == Bitmap::of('╶', size).union(&Bitmap::of('╷', size)),
-            "light corner is not its two half lines at {size:?}"
+            of('┌') == of('╶').union(&of('╷')),
+            "light corner is not its two half lines at {size:?} weight {weight}"
         );
         assert!(
-            Bitmap::of('┏', size) == Bitmap::of('╺', size).union(&Bitmap::of('╻', size)),
-            "heavy corner is not its two half lines at {size:?}"
+            of('┏') == of('╺').union(&of('╻')),
+            "heavy corner is not its two half lines at {size:?} weight {weight}"
         );
     }
 }
@@ -918,11 +975,15 @@ fn snap_interval_is_even_about_center() {
 
 #[test]
 fn heavy_thicker_than_light() {
-    for size in SIZES.iter().copied().filter(|size| size.0 >= 5) {
-        let thickness = stroke_thickness(cell(size));
+    for (size, weight) in SIZES
+        .iter()
+        .filter(|size| size.0 >= 5)
+        .flat_map(|s| WEIGHTS.map(|w| (*s, w)))
+    {
+        let thickness = thickness(size, weight);
         assert!(thickness.heavy >= thickness.light + 2);
-        let light = quads('─', size)[0];
-        let heavy = quads('━', size)[0];
+        let light = quads_at('─', size, weight)[0];
+        let heavy = quads_at('━', size, weight)[0];
         assert!(
             heavy.h > light.h,
             "heavy line is not thicker at {size:?}: {heavy:?} vs {light:?}"
@@ -935,11 +996,11 @@ fn heavy_thicker_than_light() {
 /// centred exactly or half a pixel toward the top/left, never the other way.
 #[test]
 fn stroke_thickness_uniform_across_axes() {
-    for size in PARITY_SIZES {
-        let t = stroke_thickness(cell(size));
+    for (size, weight) in PARITY_SIZES.iter().flat_map(|s| WEIGHTS.map(|w| (*s, w))) {
+        let t = thickness(size, weight);
         for (horizontal, vertical, nominal) in [('─', '│', t.light), ('━', '┃', t.heavy)] {
-            let h = quads(horizontal, size);
-            let v = quads(vertical, size);
+            let h = quads_at(horizontal, size, weight);
+            let v = quads_at(vertical, size, weight);
             assert_eq!(h.len(), 1);
             assert_eq!(v.len(), 1);
             assert_eq!(h[0].h, nominal, "{horizontal:?} at {size:?}: {:?}", h[0]);
@@ -963,13 +1024,14 @@ fn stroke_thickness_uniform_across_axes() {
 /// `│`) combine into `╪` / `╫` without a rail touching the single stroke.
 #[test]
 fn double_rails_equidistant_from_joint() {
-    for size in SIZES
+    for (size, weight) in SIZES
         .iter()
         .chain(PARITY_SIZES.iter())
-        .copied()
         .filter(|size| size.0 >= 5 && size.1 >= 5)
+        .flat_map(|s| WEIGHTS.map(|w| (*s, w)))
     {
-        let g = Geometry::new(cell(size));
+        let g = Geometry::new(cell(size), weight);
+        let of = |c: char| Bitmap::of_at(c, size, weight);
         for axis in [Axis::X, Axis::Y] {
             let joint = g.joint(axis, g.thickness.light);
             let minus = g.rail(axis, Side::Minus);
@@ -986,20 +1048,24 @@ fn double_rails_equidistant_from_joint() {
             assert_eq!(minus.len(), plus.len());
         }
         assert!(
-            Bitmap::of('╪', size) == Bitmap::of('═', size).union(&Bitmap::of('│', size)),
-            "double horizontal and single vertical do not combine at {size:?}"
+            of('╪') == of('═').union(&of('│')),
+            "double horizontal and single vertical do not combine at {size:?} weight {weight}"
         );
         assert!(
-            Bitmap::of('╫', size) == Bitmap::of('║', size).union(&Bitmap::of('─', size)),
-            "double vertical and single horizontal do not combine at {size:?}"
+            of('╫') == of('║').union(&of('─')),
+            "double vertical and single horizontal do not combine at {size:?} weight {weight}"
         );
     }
 }
 
 #[test]
 fn rails_disjoint_with_gap() {
-    for size in SIZES.iter().copied().filter(|size| size.0 >= 5) {
-        let g = Geometry::new(cell(size));
+    for (size, weight) in SIZES
+        .iter()
+        .filter(|size| size.0 >= 5)
+        .flat_map(|s| WEIGHTS.map(|w| (*s, w)))
+    {
+        let g = Geometry::new(cell(size), weight);
         let minus = g.rail(Axis::X, Side::Minus);
         let plus = g.rail(Axis::X, Side::Plus);
         assert!(
@@ -1019,14 +1085,14 @@ fn rails_disjoint_with_gap() {
 
 #[test]
 fn rounded_corner_matches_straight_stubs() {
-    for size in SIZES {
+    for (size, weight) in SIZES.iter().flat_map(|s| WEIGHTS.map(|w| (*s, w))) {
         let (w, h) = size;
-        let g = Geometry::new(cell(size));
+        let g = Geometry::new(cell(size), weight);
         let joint_x = g.joint(Axis::X, g.thickness.light);
         let joint_y = g.joint(Axis::Y, g.thickness.light);
         let in_x = |x: i32| x >= joint_x.lo && x < joint_x.hi;
         let in_y = |y: i32| y >= joint_y.lo && y < joint_y.hi;
-        let map = Bitmap::of('\u{256D}', size);
+        let map = Bitmap::of_at('\u{256D}', size, weight);
         let ascii = map.ascii();
         // The arc's radius: its ends are tangent to the stubs at `r` from the
         // (parity-biased) stroke position on each axis.
@@ -1101,9 +1167,9 @@ fn rounded_corner_matches_straight_stubs() {
 
 #[test]
 fn per_cell_quad_budget() {
-    for size in SIZES {
+    for (size, weight) in SIZES.iter().flat_map(|s| WEIGHTS.map(|w| (*s, w))) {
         for c in all_shape_chars() {
-            let count = quads(c, size).len();
+            let count = quads_at(c, size, weight).len();
             let h = size.1 as usize;
             let budget = match c as u32 {
                 0x2800..=0x28FF => 8,
@@ -1118,7 +1184,7 @@ fn per_cell_quad_budget() {
             };
             assert!(
                 count <= budget,
-                "{c:?} emits {count} rects at {size:?}, budget {budget}"
+                "{c:?} emits {count} rects at {size:?} weight {weight}, budget {budget}"
             );
         }
     }
@@ -1148,6 +1214,126 @@ fn coverage_quad_counts() {
             count <= bound,
             "{c:?} emits {count} rects at {size:?}, bound {bound}"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Font weight
+// ---------------------------------------------------------------------------
+
+/// Weight 400 is the nominal geometry, and any lighter weight draws exactly
+/// the same thing: `k = clamp(weight / 400, 1, 2.25)` is `1.0` for all of them.
+#[test]
+fn weight_400_matches_baseline_geometry() {
+    for size in SIZES {
+        assert_eq!(thickness(size, NORMAL), thickness(size, 100.0));
+        assert_eq!(thickness(size, NORMAL), thickness(size, 399.0));
+        for c in all_shape_chars() {
+            let baseline = quads(c, size);
+            for weight in [100.0, 300.0, 399.0] {
+                assert_eq!(
+                    quads_at(c, size, weight),
+                    baseline,
+                    "{c:?} at {size:?} changes at weight {weight}"
+                );
+            }
+        }
+    }
+    // The snapshot in `solid_families_unchanged_and_opaque` is the weight-400
+    // geometry; the light thickness there is the width-only rule.
+    for (w, light, heavy) in [(7, 1, 3), (8, 1, 3), (9, 1, 3), (14, 2, 5), (18, 2, 6)] {
+        let t = thickness((w, 2 * w), NORMAL);
+        assert_eq!(
+            (t.light, t.heavy, t.rail, t.gap, t.dash_gap),
+            (light, heavy, light, light, light)
+        );
+    }
+}
+
+/// SGR bold (700 on a normal-weight font) thickens every stroke family that
+/// has a thickness: single lines, heavy lines, the rails of a double line and
+/// the arc band; the rails stay disjoint and the dash gap stays put.
+#[test]
+fn heavier_weight_thickens_strokes() {
+    for size in [(9, 19), (14, 29)] {
+        let bar = |c: char, weight: f32| {
+            let rects = quads_at(c, size, weight);
+            assert_eq!(rects.len(), 1, "{c:?} at {size:?} weight {weight}");
+            rects[0]
+        };
+        assert!(bar('─', 700.0).h > bar('─', NORMAL).h, "light at {size:?}");
+        assert!(bar('━', 700.0).h > bar('━', NORMAL).h, "heavy at {size:?}");
+        assert!(
+            bar('┃', 700.0).w > bar('┃', NORMAL).w,
+            "heavy vertical at {size:?}"
+        );
+        assert!(
+            bar('│', 700.0).w > bar('│', NORMAL).w,
+            "light vertical at {size:?}"
+        );
+
+        let rails = |weight: f32| sorted(quads_at('═', size, weight));
+        let (normal, bold) = (rails(NORMAL), rails(700.0));
+        assert_eq!(bold.len(), 2);
+        assert!(bold[0].h > normal[0].h, "rails at {size:?}");
+        assert!(
+            bold[0].y + bold[0].h < bold[1].y,
+            "bold rails touch at {size:?}: {bold:?}"
+        );
+
+        // The arc: more covered pixels on the diagonal through the band, and a
+        // thicker stub (the band meets a thicker `│`).
+        let arc = |weight: f32| Bitmap::of_at('\u{256D}', size, weight);
+        let (normal, bold) = (arc(NORMAL), arc(700.0));
+        assert!(bold.count() > normal.count(), "arc band at {size:?}");
+        let stub_width = |map: &Bitmap| (0..size.0).filter(|&x| map.get(x, size.1 - 1)).count();
+        assert!(
+            stub_width(&bold) > stub_width(&normal),
+            "arc stub at {size:?}"
+        );
+
+        // A diagonal and a powerline outline are bands of `t_l` too.
+        for c in ['\u{2572}', '\u{E0B1}', '\u{E0B5}'] {
+            assert!(
+                Bitmap::of_at(c, size, 700.0).count() > Bitmap::of_at(c, size, NORMAL).count(),
+                "{c:?} band at {size:?}"
+            );
+        }
+
+        // Fills, blocks, shades and braille are not strokes.
+        for c in ['█', '▚', '▒', '\u{28FF}', '\u{E0B0}', '\u{E0B4}'] {
+            assert_eq!(
+                quads_at(c, size, 700.0),
+                quads(c, size),
+                "{c:?} changes with the weight at {size:?}"
+            );
+        }
+
+        let t = thickness(size, 700.0);
+        assert_eq!(t.dash_gap, thickness(size, NORMAL).light);
+        assert_eq!(t.rail, t.light);
+        assert_eq!(t.gap, t.light);
+    }
+    // Weights above 900 clamp to the 900 scale.
+    for size in SIZES {
+        assert_eq!(thickness(size, 1000.0), thickness(size, 900.0));
+    }
+}
+
+/// Not an assertion: prints the thickness table documented in
+/// `low-level-design/shapes.md` (`cargo test -p oneterm-terminal-view
+/// thickness_table -- --ignored --nocapture`).
+#[test]
+#[ignore = "documentation table only"]
+fn thickness_table_for_docs() {
+    for w in [7, 8, 9, 14, 18] {
+        for weight in [400.0, 600.0, 700.0, 900.0] {
+            let t = thickness((w, 2 * w), weight);
+            println!(
+                "W {w:2} weight {weight:3}: light {} heavy {} rail {} gap {} dash_gap {}",
+                t.light, t.heavy, t.rail, t.gap, t.dash_gap
+            );
+        }
     }
 }
 

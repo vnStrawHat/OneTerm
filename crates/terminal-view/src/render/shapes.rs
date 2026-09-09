@@ -21,6 +21,11 @@
 //! a grid that is exactly mirror symmetric (see [`rasterize`]), so they are
 //! anti-aliased and obey the same reflection contract as the solid shapes.
 //!
+//! Stroke thickness follows the cell width and the font weight (see
+//! [`stroke_thickness`]): a heavier weight thickens the nominal strokes before
+//! snapping, so bold box frames match bold text; weight 400 and below draw the
+//! weight-independent geometry.
+//!
 //! The module is pure: no GPUI, no alacritty, no state, and no allocation other
 //! than into the caller's output vector.
 
@@ -53,28 +58,47 @@ pub(crate) struct DeviceRect {
     pub alpha: f32,
 }
 
-/// Stroke widths derived from the cell width, in device pixels.
+/// Stroke widths derived from the cell width and the font weight, in device
+/// pixels.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct StrokeThickness {
     pub light: i32,
     pub heavy: i32,
     /// Thickness of one rail of a double line.
     pub rail: i32,
-    /// Nominal empty space between the two rails of a double line.
+    /// Nominal empty space between the two rails of a double line. Follows
+    /// `light` so that `rail + gap` is even and the rails stay parity-exact,
+    /// abutting the light joint on every weight.
     pub gap: i32,
+    /// Empty space between dash segments: the weight-400 light thickness, so a
+    /// heavier dash keeps its segment lengths instead of turning into dots.
+    pub dash_gap: i32,
 }
 
-/// Light/heavy/double stroke widths for a cell. Both axes use the cell **width**
-/// so that a horizontal and a vertical stroke start from the same nominal.
-pub(crate) fn stroke_thickness(cell: CellSizeDevicePx) -> StrokeThickness {
+/// The font weight at which strokes have their nominal thickness (CSS scale,
+/// `gpui::FontWeight::NORMAL`); lighter weights draw the same geometry.
+const BASE_FONT_WEIGHT: f32 = 400.0;
+/// The heaviest CSS weight, `900 / 400`: the largest scale a stroke can get.
+const MAX_WEIGHT_SCALE: f32 = 2.25;
+
+/// Light/heavy/double stroke widths for a cell at a font weight (CSS scale
+/// 100..900, `gpui::FontWeight.0`). Both axes use the cell **width** so that a
+/// horizontal and a vertical stroke start from the same nominal. The weight
+/// scales the nominal thickness by `k = clamp(weight / 400, 1, 2.25)` before
+/// snapping; at weight 400 (or lower) `k == 1.0` exactly and the geometry is
+/// the weight-independent one.
+pub(crate) fn stroke_thickness(cell: CellSizeDevicePx, font_weight: f32) -> StrokeThickness {
     let w = cell.w.max(1) as f32;
-    let light = ((w / 8.0).round() as i32).max(1);
-    let heavy = (w / 3.0).round() as i32;
+    let k = (font_weight / BASE_FONT_WEIGHT).clamp(1.0, MAX_WEIGHT_SCALE);
+    let base_light = ((w / 8.0).round() as i32).max(1);
+    let light = ((w / 8.0 * k).round() as i32).max(1);
+    let heavy = (w / 3.0 * k).round() as i32;
     StrokeThickness {
         light,
         heavy: heavy.max(light + 2),
         rail: light,
         gap: light,
+        dash_gap: base_light,
     }
 }
 
@@ -231,10 +255,10 @@ struct Geometry {
 }
 
 impl Geometry {
-    fn new(cell: CellSizeDevicePx) -> Self {
+    fn new(cell: CellSizeDevicePx, font_weight: f32) -> Self {
         let w = cell.w.max(1);
         let h = cell.h.max(1);
-        let thickness = stroke_thickness(CellSizeDevicePx { w, h });
+        let thickness = stroke_thickness(CellSizeDevicePx { w, h }, font_weight);
         Self {
             w,
             h,
@@ -707,8 +731,8 @@ fn build_dashes(axis: Axis, count: i32, weight: Weight, g: &Geometry, out: &mut 
     }
     let segments_count = count as usize;
     let pitch = size as f32 / count as f32;
-    // The dash gap equals the light thickness at every cell size.
-    let gap = g.thickness.light as f32;
+    // The dash gap equals the weight-400 light thickness at every cell size.
+    let gap = g.thickness.dash_gap as f32;
     let mut half = ((pitch - gap) / 2.0).max(0.5);
     let mut segments = [Interval::EMPTY; 4];
     loop {
@@ -1265,17 +1289,23 @@ pub(crate) fn is_shape_char(c: char) -> bool {
     )
 }
 
-/// Append the quads of `c`. Returns whether anything was appended: `false` for a
+/// Append the quads of `c` drawn at `font_weight` (CSS scale, see
+/// [`stroke_thickness`]). Returns whether anything was appended: `false` for a
 /// code point this module does not draw and for U+2800.
 ///
 /// Rects are appended in a deterministic order (arms up, down, left, right;
 /// rails minus then plus; rasterized shapes top to bottom, left to right) so
 /// that row plans are reproducible.
-pub(crate) fn shape_quads(c: char, cell: CellSizeDevicePx, out: &mut Vec<DeviceRect>) -> bool {
+pub(crate) fn shape_quads(
+    c: char,
+    cell: CellSizeDevicePx,
+    font_weight: f32,
+    out: &mut Vec<DeviceRect>,
+) -> bool {
     if !is_shape_char(c) {
         return false;
     }
-    let g = Geometry::new(cell);
+    let g = Geometry::new(cell, font_weight);
     let start = out.len();
     let code = c as u32;
     let half = g.thickness.light as f32 / 2.0;

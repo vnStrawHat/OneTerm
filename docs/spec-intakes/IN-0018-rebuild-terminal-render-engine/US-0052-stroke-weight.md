@@ -11,7 +11,7 @@ Created: 2026-09-09
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
 - [x] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -51,31 +51,31 @@ produces today's geometry bit for bit. Fills, blocks, shades and braille dots do
 
 ## Acceptance
 
-- [ ] `stroke_thickness(cell, weight)`: `k = clamp(weight / 400, 1, 2.25)`,
+- [x] `stroke_thickness(cell, weight)`: `k = clamp(weight / 400, 1, 2.25)`,
       `t_l = max(1, round(W/8 * k))`, `t_h = max(t_l + 2, round(W/3 * k))`, `t_d = t_l`; at
       weight 400 (and any lower weight) every value equals today's; the table in `shapes.md`
       lists W = 7, 8, 9, 14, 18 at 400 / 600 / 700 / 900.
-- [ ] `shape_quads(c, cell, weight, out)`: for every code point and cell size, weight 400 and
+- [x] `shape_quads(c, cell, weight, out)`: for every code point and cell size, weight 400 and
       weight 100 emit exactly the rect set the current code emits (`SOLID_SNAPSHOT` and every
       existing test pass unchanged at 400: `weight_400_matches_baseline_geometry`,
       `solid_families_unchanged_and_opaque`).
-- [ ] At 9 × 19 and 14 × 29, weight 700 vs 400: `─` thicker, `━` and `┃` thicker, the `╭` band
+- [x] At 9 × 19 and 14 × 29, weight 700 vs 400: `─` thicker, `━` and `┃` thicker, the `╭` band
       thicker, the `═` rails thicker and still disjoint (`heavier_weight_thickens_strokes`).
-- [ ] The symmetry and joint invariants hold at weight 700 as well as 400:
+- [x] The symmetry and joint invariants hold at weight 700 as well as 400:
       `mirror_x_pairs_match`, `mirror_y_pairs_match`, `self_symmetric_glyphs`,
       `builder_commutes_with_transforms`, `cross_equals_union_of_lines`,
       `horizontal_line_abuts_across_cells`, `double_rails_equidistant_from_joint`,
       `rails_disjoint_with_gap`, `rounded_corner_matches_straight_stubs`, and the quad budget
       (`per_cell_quad_budget`) at 700.
-- [ ] Row planning: a cell with `CellFlags::BOLD` (or class-style bold) is drawn at
+- [x] Row planning: a cell with `CellFlags::BOLD` (or class-style bold) is drawn at
       `min(900, base + 300)`; a `┌` cell with BOLD yields a different, thicker rect set than
       the same cell without (`bold_cell_uses_heavier_strokes`); `PlanContext.font_weight = 700`
       thickens `─` (`settings_weight_scales_strokes`); coalescing across cells compares rects,
       so quads of different weights never merge.
-- [ ] A settings weight change replans every row (`weight_change_replans_all`).
-- [ ] Visual: in the running app a bold box frame is visibly heavier than a plain one and still
+- [x] A settings weight change replans every row (`weight_change_replans_all`).
+- [x] Visual: in the running app a bold box frame is visibly heavier than a plain one and still
       joins cleanly (`evidence/US-0052-weight.png`, `US-0052-weight-zoom.png`).
-- [ ] Gates: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] Gates: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo clippy -p oneterm-terminal-view --all-targets --features terminal-diagnostics
       -- -D warnings`, `cargo test -p oneterm-terminal-view`, `cargo test --workspace`,
       `python scripts/check-english.py`, `python scripts/check-doc-paths.py`.
@@ -120,7 +120,7 @@ only.
 
 ### Reconciliation
 
-To fill at completion: docs changed by this packet (planned list):
+Done (2026-09-09) — docs changed by this packet:
 
 - `low-level-design/shapes.md`: "Thickness rules" rewritten as a function of `(W, weight)` with
   the `k` rule, the 5 × 4 table, the double-gap / dash-gap note, effective-weight note;
@@ -155,17 +155,17 @@ To fill at completion: docs changed by this packet (planned list):
 
 ## Plan
 
-- [ ] Packet (this file) and intake list entry.
-- [ ] `shapes.rs`: `stroke_thickness(cell, font_weight)` with the `k` scale and a `dash_gap`
+- [x] Packet (this file) and intake list entry.
+- [x] `shapes.rs`: `stroke_thickness(cell, font_weight)` with the `k` scale and a `dash_gap`
       field; `Geometry::new(cell, font_weight)`; `shape_quads(c, cell, font_weight, out)`;
       dashes use `dash_gap`.
-- [ ] `shapes_tests.rs`: `quads_at` / `Bitmap::of_at` / `assert_mirrored_at` with a weight,
+- [x] `shapes_tests.rs`: `quads_at` / `Bitmap::of_at` / `assert_mirrored_at` with a weight,
       `WEIGHTS = [400, 700]` loops on the symmetry / joint / budget suites, new tests.
-- [ ] `row_plan.rs`: `PlanContext.font_weight: f32`; `push_shape(ch, col, color, bold)`
+- [x] `row_plan.rs`: `PlanContext.font_weight: f32`; `push_shape(ch, col, color, bold)`
       computes the effective weight; tests.
-- [ ] `state.rs`: `font_weight: inputs.font.weight.0`; `plan_cache.rs` test harness field and
+- [x] `state.rs`: `font_weight: inputs.font.weight.0`; `plan_cache.rs` test harness field and
       `weight_change_replans_all`.
-- [ ] Docs (see Documentation Action), visual evidence, gates.
+- [x] Docs (see Documentation Action), visual evidence, gates.
 
 ## Decisions
 
@@ -187,16 +187,74 @@ To fill at completion: docs changed by this packet (planned list):
   (backed up, restored byte-identical).
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
+- [x] Unit proof
 - [ ] Integration proof
-- [ ] E2E proof
+- [x] E2E proof
 - [ ] Platform proof
-- [ ] Verify command passed
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-To fill at completion.
+Commands (branch `refactor/terminal-render-engine`, Windows, 2026-09-09):
+
+- `cargo fmt --all` — clean.
+- `cargo clippy --workspace --all-targets -- -D warnings` — `Finished dev profile`, no warnings
+  (`clippy exit 0`).
+- `cargo clippy -p oneterm-terminal-view --all-targets --features terminal-diagnostics -- -D
+  warnings` — no issues.
+- `cargo test -p oneterm-terminal-view` — `270 passed, 2 ignored` (`shapes`: 29 passed, 2
+  ignored — `shape_bitmaps_for_visual_review`, `thickness_table_for_docs`).
+- `cargo test --workspace` — 44 suites, 1037 passed, 0 failed (`test exit 0`).
+- `python scripts/check-english.py` — `English contributor-text check passed for 545 files.`
+- `python scripts/check-doc-paths.py` — `Doc path check passed for 149 current paths in 10
+  documents.`
+- Thickness table (from `thickness_table_for_docs`): 9 px `t_l / t_h` = 1/3 at 400, 2/5 at
+  600, 2/5 at 700, 3/7 at 900; full table in `shapes.md`.
+
+Tests added: `shapes_tests::{heavier_weight_thickens_strokes,
+weight_400_matches_baseline_geometry, thickness_table_for_docs (ignored)}`; the symmetry /
+joint / thickness / budget suites now iterate `WEIGHTS = [400, 700]`
+(`mirror_x_pairs_match`, `mirror_y_pairs_match`, `self_symmetric_glyphs`,
+`builder_commutes_with_transforms`, `horizontal_line_abuts_across_cells`,
+`cross_equals_union_of_lines`, `corner_arms_meet_at_joint`, `heavy_thicker_than_light`,
+`stroke_thickness_uniform_across_axes`, `double_rails_equidistant_from_joint`,
+`rails_disjoint_with_gap`, `rounded_corner_matches_straight_stubs`, `per_cell_quad_budget`);
+`row_plan::tests::{bold_cell_uses_heavier_strokes, settings_weight_scales_strokes}`;
+`plan_cache::tests::weight_change_replans_all`.
+
+Visual (fast-dev build 10:45:35, `target/fast-dev/oneterm.exe`, pids 20452 / 9332 started and
+stopped by the driver; the owner's `dist` build pid 15476 untouched; workstation locked, input
+posted with `PostMessage`, capture `PrintWindow(hwnd, hdc, 2)`; Lilex 15 px, cell 9 × 18):
+
+- `evidence/US-0052-weight.png` — a plain and an SGR-bold row of `┌ ╔ ┏ ╭` frames with tees
+  and crosses, plus `╭──╮ ═══ ━━━ ╱╲╳ ┄┄┄ E0B1 E0B5` bold and plain and a `───` plain / bold /
+  plain run. Bold frames are visibly heavier and join cleanly.
+- `evidence/US-0052-weight-zoom.png` — 4× nearest-neighbour zoom of the same region: bold light
+  strokes 2 px (plain 1 px), bold rails 2 px, bold heavy 5 px (plain 3 px), thicker arc and
+  diagonal bands, dashes keep their 1 px gaps, tees / crosses meet without gaps, the mixed run
+  changes thickness at the bold cell only.
+- `evidence/US-0052-weight-700.png` — `target/terminal.json` `font.weight = "bold"` (backed up,
+  restored byte-identical, verified with `SequenceEqual`): the settings row now draws 2 px
+  light strokes, and SGR bold on top (capped at 900) 3 px.
+
+Test-helper change worth knowing: at 7 px / 700 (`t_l = 2`) the `║` rails are `[0, 2)` and
+`[4, 6)` — the family's half-pixel-left bias reaches the cell edge. The mirror helper used to
+assume a far-edge pixel always continues into the next cell and so expected a 3 px rail; the
+comparison now ignores the far-edge line on a parity-mismatched axis (`Bitmap::without_far_edge`,
+`shift_interval` accepts both edge outcomes). Edge reach is still asserted by
+`horizontal_line_abuts_across_cells` at both weights. Geometry unchanged.
+
+Gaps:
+
+- Deviation from the brief: the double-line gap scales with `t_l` (see Context); the dash gap
+  stays fixed as asked.
+- `pwsh scripts/ci-local.ps1` not run (instructed); `bash vendor/refresh.sh --check` and
+  `cargo deny` not run.
+- The `cargo test --workspace` run included unrelated uncommitted changes present in the working
+  tree (`crates/terminal`, `crates/ssh`, `crates/local-shell`, IN-0019 work by another agent).
+- No screenshot at a HiDPI scale; the 14 × 29 and 36 × 76 cases are covered by the geometry
+  tests only.
 
 ## Handoff
 

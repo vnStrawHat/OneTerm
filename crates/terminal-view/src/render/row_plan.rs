@@ -135,11 +135,19 @@ impl Scratch {
     }
 }
 
+/// A bold cell draws its shapes this much heavier than the settings weight
+/// (CSS scale, capped at 900), the same step as normal -> bold text.
+const BOLD_WEIGHT_STEP: f32 = 300.0;
+const MAX_FONT_WEIGHT: f32 = 900.0;
+
 /// Frame-constant inputs of row planning.
 pub(crate) struct PlanContext<'a> {
     pub theme: &'a TerminalTheme,
     pub fonts: &'a FontSet,
     pub font_size: Pixels,
+    /// The settings font weight (CSS scale); the shape strokes of a bold cell
+    /// use `min(900, font_weight + 300)`.
+    pub font_weight: f32,
     pub cell_width: Pixels,
     pub device: CellSizeDevicePx,
     /// `None` when semantic highlighting is disabled.
@@ -353,7 +361,7 @@ impl RowBuilder<'_, '_> {
         }
     }
 
-    fn push_shape(&mut self, ch: char, col: u16, color: Hsla) {
+    fn push_shape(&mut self, ch: char, col: u16, color: Hsla, bold: bool) {
         let device = self.ctx.device;
         let touching = self.last_shape_col == Some(col.wrapping_sub(1));
         self.last_shape_col = Some(col);
@@ -362,7 +370,12 @@ impl RowBuilder<'_, '_> {
         }
         self.scratch.open_cur.clear();
         self.scratch.rects.clear();
-        shape_quads(ch, device, &mut self.scratch.rects);
+        let weight = if bold {
+            (self.ctx.font_weight + BOLD_WEIGHT_STEP).min(MAX_FONT_WEIGHT)
+        } else {
+            self.ctx.font_weight
+        };
+        shape_quads(ch, device, weight, &mut self.scratch.rects);
         let x_offset = i32::from(col) * device.w;
         for rect in self.scratch.rects.iter() {
             let rect = DeviceRect {
@@ -375,6 +388,8 @@ impl RowBuilder<'_, '_> {
                 a: color.a * rect.alpha,
                 ..color
             };
+            // The comparison is by rect, so a bold cell (thicker strokes)
+            // never extends the quads of a plain neighbour.
             let extended = self.scratch.open_prev.iter().copied().find(|&i| {
                 let prev = &self.plan.shapes[i];
                 prev.color == color
@@ -476,7 +491,7 @@ pub(crate) fn build_row_plan(
         push_decorations(builder.plan, &cell, col16, cols, &style);
         if is_shape_char(cell.ch) {
             builder.flush_run();
-            builder.push_shape(cell.ch, col16, style.fg);
+            builder.push_shape(cell.ch, col16, style.fg, style.bold);
             continue;
         }
         if matches!(cell.ch, ' ' | '\0') && cell.zerowidth.is_empty() {
@@ -513,6 +528,7 @@ mod tests {
         theme: TerminalTheme,
         fonts: FontSet,
         semantic: Option<SemanticOverlay>,
+        font_weight: f32,
     }
 
     impl Fixture {
@@ -521,7 +537,13 @@ mod tests {
                 theme: build_terminal_theme(&gpui_component::Theme::default()),
                 fonts: FontSet::new(&font(), px(13.0)),
                 semantic: semantic.then(|| SemanticOverlay::new(ShellProfile::Unix, true)),
+                font_weight: FontWeight::NORMAL.0,
             }
+        }
+
+        fn with_weight(mut self, font_weight: f32) -> Self {
+            self.font_weight = font_weight;
+            self
         }
 
         fn plan(
@@ -538,6 +560,7 @@ mod tests {
                     theme: &self.theme,
                     fonts: &self.fonts,
                     font_size: px(13.0),
+                    font_weight: self.font_weight,
                     cell_width: px(8.0),
                     device: CellSizeDevicePx { w: 8, h: 16 },
                     semantic: self.semantic.as_ref(),
@@ -881,6 +904,99 @@ mod tests {
         assert_eq!(spans.len(), 2, "{spans:?}");
         assert_eq!(spans[0].byte_end, 2);
         assert_eq!(spans[1].byte_end, 3);
+    }
+
+    /// Rects of the plan's shapes with the column offset removed, sorted.
+    fn cell_rects(plan: &RowPlan, col: u16) -> Vec<DeviceRect> {
+        let mut rects: Vec<DeviceRect> = plan
+            .shapes
+            .iter()
+            .map(|q| DeviceRect {
+                x: q.rect.x - i32::from(col) * 8,
+                ..q.rect
+            })
+            .collect();
+        rects.sort_by_key(|r| (r.x, r.y, r.w, r.h));
+        rects
+    }
+
+    fn sorted_quads(c: char, font_weight: f32) -> Vec<DeviceRect> {
+        let mut rects = Vec::new();
+        shape_quads(c, CellSizeDevicePx { w: 8, h: 16 }, font_weight, &mut rects);
+        rects.sort_by_key(|r| (r.x, r.y, r.w, r.h));
+        rects
+    }
+
+    #[gpui::test]
+    fn bold_cell_uses_heavier_strokes(cx: &mut TestAppContext) {
+        let fx = Fixture::new(false);
+        let corner = "\u{250C}";
+        let plain = fx.plan(
+            cx,
+            &FrameBuilder::new(1, 3).text(0, 1, corner).build(),
+            0,
+            &[],
+        );
+        let bold_frame = FrameBuilder::new(1, 3)
+            .text(0, 1, corner)
+            .flags(0, 1, CellFlags::BOLD)
+            .build();
+        let bold = fx.plan(cx, &bold_frame, 0, &[]);
+        let (plain, bold) = (cell_rects(&plain, 1), cell_rects(&bold, 1));
+        assert_ne!(plain, bold, "bold does not change the corner");
+        assert_eq!(
+            bold,
+            sorted_quads('\u{250C}', FontWeight::NORMAL.0 + BOLD_WEIGHT_STEP),
+            "bold cell is not drawn at base + 300"
+        );
+        let thickness = |rects: &[DeviceRect]| rects.iter().map(|r| r.w.min(r.h)).max();
+        assert!(
+            thickness(&bold) > thickness(&plain),
+            "bold strokes are not thicker: {bold:?} vs {plain:?}"
+        );
+
+        // A bold cell next to a plain one keeps its own quads: the
+        // coalescing comparison is by rect.
+        let mixed = FrameBuilder::new(1, 4)
+            .text(0, 0, "\u{2500}\u{2500}")
+            .flags(0, 1, CellFlags::BOLD)
+            .build();
+        let plan = fx.plan(cx, &mixed, 0, &[]);
+        assert_eq!(plan.shapes.len(), 2, "{:?}", plan.shapes);
+        assert!(plan.shapes[1].rect.h > plan.shapes[0].rect.h);
+    }
+
+    #[gpui::test]
+    fn settings_weight_scales_strokes(cx: &mut TestAppContext) {
+        let frame = FrameBuilder::new(1, 3)
+            .text(0, 0, "\u{2500}\u{2500}\u{2500}")
+            .build();
+        let normal = Fixture::new(false).plan(cx, &frame, 0, &[]);
+        let heavy = Fixture::new(false)
+            .with_weight(FontWeight::BOLD.0)
+            .plan(cx, &frame, 0, &[]);
+        assert_eq!(normal.shapes.len(), 1);
+        assert_eq!(heavy.shapes.len(), 1, "same-weight cells still coalesce");
+        assert!(
+            heavy.shapes[0].rect.h > normal.shapes[0].rect.h,
+            "{:?} vs {:?}",
+            heavy.shapes[0],
+            normal.shapes[0]
+        );
+        assert_eq!(heavy.shapes[0].rect.w, 3 * 8);
+
+        // Bold on top of a heavy setting caps at 900.
+        let bold_on_heavy = FrameBuilder::new(1, 1)
+            .text(0, 0, "\u{2500}")
+            .flags(0, 0, CellFlags::BOLD)
+            .build();
+        let capped = Fixture::new(false)
+            .with_weight(800.0)
+            .plan(cx, &bold_on_heavy, 0, &[]);
+        assert_eq!(
+            cell_rects(&capped, 0),
+            sorted_quads('\u{2500}', MAX_FONT_WEIGHT)
+        );
     }
 
     #[gpui::test]

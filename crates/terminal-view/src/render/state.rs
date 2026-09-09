@@ -244,6 +244,7 @@ impl RenderState {
             theme: &inputs.theme,
             fonts,
             font_size: inputs.font_size,
+            font_weight: inputs.font.weight.0,
             cell_width: metrics.cell_width,
             device: metrics.device,
             semantic: inputs.semantic.is_enabled().then_some(&inputs.semantic),
