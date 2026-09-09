@@ -164,7 +164,7 @@ fn sftp_editor_group(cx: &App) -> SettingGroup {
                 .default_value(SharedString::default()),
             )
             .disabled(!is_custom)
-            .description("Editor executable (e.g. code, notepad). Used only in Custom mode."),
+            .description("Executable (e.g. code, notepad). Custom mode only."),
             SettingItem::new(
                 "Custom Arguments",
                 SettingField::input(
@@ -188,9 +188,7 @@ fn sftp_editor_group(cx: &App) -> SettingGroup {
                 .default_value(SharedString::default()),
             )
             .disabled(!is_custom)
-            .description(
-                "Arguments passed before the file path (space-separated). Custom mode only.",
-            ),
+            .description("Space-separated, before the file path. Custom mode only."),
         ])
 }
 

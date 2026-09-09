@@ -77,7 +77,7 @@ pub(super) fn group() -> SettingGroup {
                 "File Name Format",
                 SettingField::input(|_| LOG_FILE_NAME_FORMAT.into(), |_, _| {}),
             )
-            .description("Fixed for this release. %n is the local process or SSH endpoint.")
+            .description("Fixed for this release. %n = process or SSH endpoint.")
             .disabled(true),
             SettingItem::new(
                 "Content Format",

@@ -143,3 +143,76 @@ Gaps:
 ## Handoff
 
 None.
+
+## Acceptance Rework (2026-09-09): input alignment
+
+Reported on the built work: in Settings > Terminal > Logging the "File Name Format" text input
+sat further right than "Log Folder" and "Content Format" and overflowed the card; the
+"Custom Program" and "Custom Arguments" inputs of Settings > SSH > SFTP Editor did the same.
+
+### Cause
+
+The horizontal `SettingItem` row in `gpui-component-0.6.0`
+(`src/setting/item.rs`, `render_item`) is an `h_flex().justify_between().gap_3()` with two
+children: a label column styled `flex_1().max_w_3_5()` and an unstyled `div().id("field")`
+that wraps the rendered field. `StringField` gives the input a fixed `w_64()` (256 px).
+
+At the Settings window's default size the row is 634 px wide, so the label column's
+`max_w_3_5` cap is 0.6 x 634 = 380 px. A description whose unwrapped text is wider than that
+cap pins the label column at 380 px instead of letting it grow to the 366 px that leaves room
+for the field. The row then needs 380 + 12 (gap) + 256 = 648 px in a 634 px row, and the
+14 px shortfall pushes the input right, past the card padding. Rows whose description fits
+under the cap are unaffected, and rows with a narrow control (switch, dropdown, number field)
+are unaffected too, because `justify_between` still has free space to right-align them.
+
+An earlier attempt added `flex_shrink_0()` to every `SettingField::input(..)`. It had no
+effect and was reverted: the input is not the flex item of the row, the `div().id("field")`
+wrapper is, and that wrapper's automatic minimum size is already the input's fixed 256 px, so
+it never shrank in the first place. The box was overflowing, not being squashed.
+
+The label column cannot be restyled from our side: `SettingItem::description` takes
+`impl Into<Text>` (a plain string or a `TextView`, not an element), and neither `SettingGroup`
+nor `SettingsPage` exposes a label-width option.
+
+### Fix
+
+Bring the three over-long descriptions under the 60 % label cap, keeping the 256 px input
+width that every other row uses:
+
+- `crates/settings-ui/src/terminal/logging.rs` — "File Name Format":
+  "Fixed for this release. %n = process or SSH endpoint."
+- `crates/settings-ui/src/ssh.rs` — "Custom Program":
+  "Executable (e.g. code, notepad). Custom mode only."
+- `crates/settings-ui/src/ssh.rs` — "Custom Arguments":
+  "Space-separated, before the file path. Custom mode only."
+
+Known ceiling: the cap scales with the row, so a description longer than roughly 60 characters,
+or a Settings window narrower than about 900 px, reproduces the overflow on any 256 px input
+row. That is upstream row-layout behaviour shared by the whole settings UI; escaping it would
+mean re-rendering these rows with `SettingItem::render`, which loses the built-in search
+matching and reset handling.
+
+### Verification
+
+- `cargo fmt --all -- --check` — clean (exit 0).
+- `cargo clippy --workspace --all-targets -- -D warnings` — `Finished dev profile`, no warnings.
+- `cargo test -p oneterm-settings-ui` — `test result: ok. 25 passed; 0 failed; 0 ignored`.
+
+Visual (Windows, `target/fast-dev/oneterm.exe`, driven with PostMessage mouse events and
+captured with `PrintWindow(h, hdc, 2)`; edges measured from the PNGs):
+
+- `evidence/US-0054-rework-logging.png` — Terminal > Logging. Log Folder, File Name Format and
+  Content Format inputs all span x = 669..924 (256 px); the "Existing File" dropdown and both
+  switches end at x = 924. Nothing overflows the card.
+- `evidence/US-0054-rework-sftp-editor.png` — SSH > SFTP Editor (Editor left at "OS default
+  application", so the two inputs are shown disabled; the row geometry is identical in Custom
+  mode). Custom Program and Custom Arguments inputs both span x = 669..924 (256 px); the Editor
+  dropdown and the "Max Edit File Size (MB)" number field end at x = 924.
+
+Before the fix the same measurement put "File Name Format" at x = 683..938 against x = 669..924
+for its neighbours.
+
+Additionally the default Settings window width is 1000 px (was 950): at that width a 60 %
+label column plus a 256 px input always fits a setting row, so the ceiling above only applies
+when the user shrinks the window.
+

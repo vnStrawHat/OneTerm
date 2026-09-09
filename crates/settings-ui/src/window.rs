@@ -75,7 +75,9 @@ pub fn open_settings_window(cx: &mut App) -> Task<anyhow::Result<WindowHandle<Ro
     }
     cx.set_global(SettingsWindowGlobal(SettingsWindow::Opening));
 
-    let mut window_size = size(px(950.0), px(700.0));
+    // 1000 px keeps a 60 % label column plus a 256 px input inside every
+    // setting row, so long descriptions cannot push inputs past the card edge.
+    let mut window_size = size(px(1000.0), px(700.0));
     if let Some(display) = cx.primary_display() {
         let display_size = display.bounds().size;
         window_size.width = window_size.width.min(display_size.width * 0.9);
