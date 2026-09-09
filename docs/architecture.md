@@ -17,7 +17,7 @@ Use this page and `docs/agents/structure.md` when locating current implementatio
 | Shell | `oneterm-workspace` | Feature-agnostic window, layout, dock persistence, status bar | `crates/workspace/src/lib.rs`, `crates/workspace/src/layout/` |
 | Backend | `oneterm-local-shell` | Local PTY session implementation | `crates/local-shell/src/lib.rs`, `crates/local-shell/src/session_terminal.rs` |
 | Backend | `oneterm-ssh` | SSH shell and SFTP implementations | `crates/ssh/src/lib.rs`, `crates/ssh/src/session_terminal.rs`, `crates/ssh/src/sftp_task.rs`, `crates/ssh/src/sftp_task/`, `crates/ssh/src/sftp_task/transfer/` |
-| Feature | `oneterm-terminal-view` | Terminal panel, rendering, input, split spaces, auto-completion overlay | `crates/terminal-view/src/lib.rs`, `crates/terminal-view/src/panel/`, `crates/terminal-view/src/completion/` |
+| Feature | `oneterm-terminal-view` | Terminal panel, rendering, input, split spaces, auto-completion overlay | `crates/terminal-view/src/lib.rs`, `crates/terminal-view/src/render/`, `crates/terminal-view/src/input/`, `crates/terminal-view/src/terminal_view/`, `crates/terminal-view/src/space/`, `crates/terminal-view/src/panel/`, `crates/terminal-view/src/completion/` |
 | Feature | `oneterm-sftp-ui` | SFTP browser, transfer queue, persistence UI | `crates/sftp-ui/src/lib.rs`, `crates/sftp-ui/src/panel.rs` |
 | Feature | `oneterm-session-ui` | Session tree and SSH connection dialogs | `crates/session-ui/src/lib.rs`, `crates/session-ui/src/connect_dialog.rs` |
 | Feature | `oneterm-settings-ui` | General Settings window | `crates/settings-ui/src/lib.rs` |
@@ -86,7 +86,8 @@ the placeholder panel.
 
 - Terminal behavior and shared terminal capability changes: `crates/terminal/`; printable-output logging behavior is documented in [`terminal-logging.md`](terminal-logging.md).
 - Backend transport and lifecycle: `crates/local-shell/` or `crates/ssh/`.
-- Terminal UI and rendering: `crates/terminal-view/`.
+- Terminal UI and rendering: `crates/terminal-view/`; the render engine, input layer, view, Spaces and panel
+  are designed in `docs/spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md` (current owning design).
 - SFTP UI actions and transfer presentation: `crates/sftp-ui/`.
 - SSH saved sessions and connection UX: `crates/session-ui/`.
 - Cross-feature runtime state: `crates/state/`.

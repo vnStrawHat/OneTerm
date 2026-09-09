@@ -1,25 +1,68 @@
-//! Tab-title resolution for [`TerminalPanel`] and the rename-tab dialog.
-//!
-//! Owns the OSC 0/2 title → tab-label logic ([`resolve_tab_label`]) plus the
-//! manual-override state accessors on [`TerminalPanel`].
+//! Everything about a Terminal Tab's label: resolving it from the live OSC 0/2
+//! title, the manual rename override and its dialog, and the tab-strip element
+//! (recording dot, active bar, drag source, middle-click / × close,
+//! double-click rename).
 
 use std::rc::Rc;
 
 use gpui::{
-    App, AppContext as _, ClickEvent, Context, Div, Entity, Focusable as _, ParentElement as _,
-    Styled as _, Window, div, px,
+    App, AppContext as _, ClickEvent, Context, Div, Entity, Focusable as _,
+    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme as _, WindowExt as _,
+    ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dialog::{DialogButtonProps, DialogFooter},
     input::{Input, InputState},
     notification::NotificationType,
 };
-
+use oneterm_terminal::TerminalLogState;
 use oneterm_theme::notif_ext::notify;
 
 use super::TerminalPanel;
+use crate::space::DragTerminalTab;
+
+impl TerminalPanel {
+    /// Return the effective tab label, with a manual override taking priority
+    /// over the live OSC 0/2 title and the fallback shell label.
+    pub(super) fn effective_tab_label(&self, live_title: Option<&str>) -> String {
+        if let Some(title) = &self.tab_title_override {
+            return title.clone();
+        }
+        resolve_tab_label(live_title, &self.tab_title)
+    }
+
+    /// Update the manual tab-title override and mirror the change to the agent
+    /// registry so tab groups refresh immediately.
+    fn set_custom_tab_title(&mut self, title: String, cx: &mut Context<Self>) {
+        self.tab_title_override = Some(title.clone());
+        let tab_key = cx.entity_id();
+        if let Some(registry) = self.deps.agent_registry.clone() {
+            registry.update(cx, |reg, cx| {
+                reg.rename_tab_title(tab_key, title.clone(), cx)
+            });
+        }
+        cx.notify();
+    }
+
+    /// Whether the tab shows the recording dot: only an unsplit tab whose
+    /// terminal is currently logging (a split tab has no room to say which
+    /// Space is recording).
+    fn shows_recording_dot(&self, cx: &App) -> bool {
+        self.tree.is_single()
+            && self.tree.active_terminal().is_some_and(|view| {
+                view.read(cx)
+                    .session
+                    .read(cx)
+                    .capabilities()
+                    .logging
+                    .is_some_and(|logging| {
+                        matches!(logging.state(), TerminalLogState::Running { .. })
+                    })
+            })
+    }
+}
 
 /// Resolve the tab label from the live OSC 0/2 title and the static fallback.
 fn resolve_tab_label(live: Option<&str>, fallback: &str) -> String {
@@ -47,38 +90,126 @@ fn trim_path_title(title: &str) -> &str {
     }
 }
 
-pub(super) fn tab_title_label() -> Div {
+fn tab_title_label() -> Div {
     // GPUI creates a rectangular content mask when either overflow axis is
     // hidden, which clips glyph descenders to this label's line box.
     div().flex_1().min_w_0().text_ellipsis().whitespace_nowrap()
 }
 
-impl TerminalPanel {
-    /// Return the effective tab label, with a manual override taking priority
-    /// over the live OSC 0/2 title and the fallback shell label.
-    pub(super) fn effective_tab_label(&self, live_title: Option<&str>) -> String {
-        if let Some(title) = &self.tab_title_override {
-            return title.clone();
-        }
-        resolve_tab_label(live_title, &self.tab_title)
-    }
+/// Build the tab-strip row for `panel`: active bar, drag source, middle-click
+/// close, recording dot, the (double-click to rename) label, and the × button.
+pub(super) fn render_tab_strip(
+    panel: &mut TerminalPanel,
+    _window: &mut Window,
+    cx: &mut Context<TerminalPanel>,
+) -> impl IntoElement {
+    let tab_panel = panel.tab_panel.clone();
+    let panel_entity = cx.entity().clone();
+    let panel_weak = cx.entity().downgrade();
+    let muted = cx.theme().muted_foreground;
+    let highlight = cx.theme().table_active_border;
+    let recording_color = cx.theme().danger;
+    let is_active = panel.is_active;
+    let show_recording = panel.shows_recording_dot(cx);
+    let tab_label = panel.tab_label(cx);
+    let drag_title: SharedString = tab_label.clone().into();
+    let rename_title = tab_label.clone();
+    let title_label_id = SharedString::from(format!("tab-title-label-{panel_entity:?}"));
 
-    /// Update the manual tab-title override and mirror the change to the agent
-    /// registry so tab groups refresh immediately.
-    pub(super) fn set_custom_tab_title(&mut self, title: String, cx: &mut Context<Self>) {
-        self.tab_title_override = Some(title.clone());
-        let tab_key = cx.entity_id();
-        if let Some(registry) = self.deps.agent_registry.clone() {
-            registry.update(cx, |reg, cx| {
-                reg.rename_tab_title(tab_key, title.clone(), cx)
-            });
-        }
-        cx.notify();
-    }
+    gpui_component::h_flex()
+        .id("tab-title")
+        .relative()
+        .h_full()
+        .w_full()
+        .min_w(px(100.))
+        .items_center()
+        .gap_1()
+        .when(is_active, |this| {
+            this.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left(-px(20.))
+                    .right(-px(20.))
+                    .h(px(2.))
+                    .bg(highlight),
+            )
+        })
+        .mr(-px(5.))
+        // Drag the tab into an empty Space with the terminal-specific
+        // payload consumed by Space-tree drop targets.
+        .when_some(tab_panel.clone(), |this, _| {
+            this.on_drag(
+                DragTerminalTab {
+                    panel: panel_weak.clone(),
+                    title: drag_title.clone(),
+                },
+                |drag, _pos, _win, cx| {
+                    cx.stop_propagation();
+                    cx.new(|_| drag.clone())
+                },
+            )
+        })
+        // Middle-click on a tab → close that tab.
+        .on_mouse_down(MouseButton::Middle, {
+            let panel = panel_entity.clone();
+            move |_, window, cx| {
+                cx.stop_propagation();
+                panel.update(cx, |panel, cx| panel.close_tab(window, cx));
+            }
+        })
+        .when(show_recording, |this| {
+            this.child(
+                div()
+                    .id("tab-recording")
+                    .flex_shrink_0()
+                    .text_xs()
+                    .text_color(recording_color)
+                    .child("●"),
+            )
+        })
+        .child(
+            tab_title_label()
+                .id(title_label_id)
+                .on_click({
+                    let panel = panel_entity.clone();
+                    move |event, window, cx| {
+                        if event.click_count() != 2 {
+                            return;
+                        }
+                        cx.stop_propagation();
+                        open_tab_title_dialog(panel.clone(), rename_title.clone(), window, cx);
+                    }
+                })
+                .child(tab_label),
+        )
+        .when_some(tab_panel, |this, _| {
+            this.child(
+                div()
+                    .id("tab-close")
+                    .flex_shrink_0()
+                    .cursor_pointer()
+                    .size_4()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(3.))
+                    .hover(move |this| this.bg(muted.opacity(0.15)))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                        cx.stop_propagation();
+                    })
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        panel_entity.update(cx, |panel, cx| panel.close_tab(window, cx));
+                    })
+                    .child(Icon::new(IconName::Close).xsmall().text_color(muted)),
+            )
+        })
 }
 
-/// Open the rename-tab dialog for a terminal panel.
-pub(crate) fn open_tab_title_dialog(
+/// Open the rename-tab dialog for a terminal panel. An empty title keeps the
+/// dialog open with a warning; Cancel never saves.
+fn open_tab_title_dialog(
     panel: Entity<TerminalPanel>,
     current_title: String,
     window: &mut Window,
@@ -89,14 +220,13 @@ pub(crate) fn open_tab_title_dialog(
         st.set_value(current_title.clone(), window, cx);
         st
     });
-    let title_ok = title_state.clone();
-    let panel_ok = panel.clone();
 
-    let save_logic: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool> = Rc::new({
-        let title_ok = title_ok.clone();
-        let panel_ok = panel_ok.clone();
+    // Shared by the Save button and the dialog's keyboard OK; returns whether
+    // the dialog may close.
+    let save: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool> = Rc::new({
+        let title_state = title_state.clone();
         move |_, window, cx| {
-            let new_title = title_ok.read(cx).value().trim().to_string();
+            let new_title = title_state.read(cx).value().trim().to_string();
             if new_title.is_empty() {
                 window.push_notification(
                     notify(NotificationType::Warning, "Tab title cannot be empty.", cx),
@@ -104,7 +234,7 @@ pub(crate) fn open_tab_title_dialog(
                 );
                 return false;
             }
-            panel_ok.update(cx, |panel, cx| {
+            panel.update(cx, |panel, cx| {
                 panel.set_custom_tab_title(new_title.clone(), cx)
             });
             true
@@ -112,8 +242,8 @@ pub(crate) fn open_tab_title_dialog(
     });
 
     window.open_dialog(cx, move |dialog, window, cx| {
-        let save_for_click = save_logic.clone();
-        let save_for_kb = save_logic.clone();
+        let save_for_click = save.clone();
+        let save_for_kb = save.clone();
         let focus_handle = title_state.read(cx).focus_handle(cx);
         focus_handle.focus(window, cx);
 
@@ -137,7 +267,7 @@ pub(crate) fn open_tab_title_dialog(
                     )
                 }
             })
-            .footer({
+            .footer(
                 DialogFooter::new()
                     .child(Button::new("cancel").label("Cancel").outline().on_click(
                         |_, window, cx| {
@@ -150,8 +280,8 @@ pub(crate) fn open_tab_title_dialog(
                                 window.close_dialog(cx);
                             }
                         },
-                    ))
-            })
+                    )),
+            )
             .button_props(
                 DialogButtonProps::default()
                     .on_cancel(|_, _, _| true)

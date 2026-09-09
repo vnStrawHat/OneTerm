@@ -451,23 +451,23 @@ US-0050 ticks every box during sign-off.
 
 ### US-0050 panel, spaces, swap (§1, §2.1, §2.2, §2.18, §4)
 
-- [ ] §1 public API: 7 items + `init` + feature; consumers `app/init.rs`, `session-ui/common.rs` compile unchanged
-- [ ] §1.6 ten `on_action` handlers on `TerminalPanel`
-- [ ] §1.7 no `dump` override; restore = fresh default shell
-- [ ] 2.1.1–2 open/from_spec single leaf; spawn failure → empty tree + warn
-- [ ] 2.1.3–4 close with siblings removes the panel; last tab resets in place (title "Terminal", override cleared, subs rebuilt, focus)
-- [ ] 2.1.5 no confirm dialog
-- [ ] 2.1.6–7 close Space; `CloseSpace` guarded by `leaf_count > 1`
+- [x] §1 public API: 7 items + `init` + feature; consumers `app/init.rs`, `session-ui/common.rs` compile unchanged
+- [x] §1.6 ten `on_action` handlers on `TerminalPanel`
+- [x] §1.7 no `dump` override; restore = fresh default shell
+- [x] 2.1.1–2 open/from_spec single leaf; spawn failure → empty tree + warn
+- [x] 2.1.3–4 close with siblings removes the panel; last tab resets in place (title "Terminal", override cleared, subs rebuilt, focus)
+- [x] 2.1.5 no confirm dialog
+- [x] 2.1.6–7 close Space; `CloseSpace` guarded by `leaf_count > 1`
 - [ ] 2.1.8–9 middle-click title and × close the tab
-- [ ] 2.1.10–12 duplicate to new tab / existing Space / split; failures never leak a session
+- [x] 2.1.10–12 duplicate to new tab / existing Space / split; failures never leak a session
 - [ ] 2.1.13–17 rename dialog rules; override wins; live title resolution; path basename trimming; subscription-driven repaint
-- [ ] 2.1.18 placeholder numbering, `new_terminal_here`
+- [x] 2.1.18 placeholder numbering, `new_terminal_here`
 - [ ] 2.1.19–21 recording dot, active bar, draggable title
-- [ ] 2.1.22–24 drop no-ops (occupied, self) and move semantics incl. empty source panel removal
-- [ ] 2.1.25–29 zoom both, "+" dropdown makes tabs, focus proxy, republish rules
-- [ ] 2.2.1–18 tree model, split/close/collapse, resizable delegation, no swap/traversal, fill/take, set_active guard, stable numbering, whole-pane drop, no drop-split, placeholder content and menu, single-leaf fast path, bordered leaf rendering, no persistence
-- [ ] §2.18 status metrics, agent focuser, security policy bridges unchanged
-- [ ] §4 tests carried: panel 11, space 15, ops duplicate 2, title tests, completion 15, url 13, theme 7, highlight 7
+- [x] 2.1.22–24 drop no-ops (occupied, self) and move semantics incl. empty source panel removal
+- [x] 2.1.25–29 zoom both, "+" dropdown makes tabs, focus proxy, republish rules
+- [x] 2.2.1–18 tree model, split/close/collapse, resizable delegation, no swap/traversal, fill/take, set_active guard, stable numbering, whole-pane drop, no drop-split, placeholder content and menu, single-leaf fast path, bordered leaf rendering, no persistence
+- [x] §2.18 status metrics, agent focuser, security policy bridges unchanged
+- [x] §4 tests carried: panel 11, space 15, ops duplicate 2, title tests, completion 15, url 13, theme 7, highlight 7
 - [ ] performance sign-off (below) recorded in the packet evidence
 
 ## Performance Budget and How It Is Measured

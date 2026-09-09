@@ -1,9 +1,14 @@
 # Terminal Split — Design (index)
 
-> **Status (2026-08):** implemented — `crates/terminal-view/src/space/` (`SpaceTree`,
-> `render.rs`, `drag.rs`, `placeholder.rs`) and `crates/terminal-view/src/panel/`
-> (`TerminalPanel` + `PanelSpec`, `ops.rs`, `actions.rs`). The sub-documents track
-> the shipped behaviour; the decisions below are annotated where reality moved on.
+> **Status: Historical — superseded by IN-0018.** Spaces still work exactly as described here
+> (split R/L/U/D, drag a tab into an empty Space, close/collapse, the placeholder and its menu), so
+> this document remains the readable narrative of the feature. Its mechanism sections are stale: the
+> Space tree and the panel were rewritten and now live in `crates/terminal-view/src/space/`
+> (`tree.rs`, `render.rs`) and `crates/terminal-view/src/panel/` (`terminal_panel.rs`, `spaces.rs`,
+> `duplicate.rs`, `tab_title.rs`) — the module names, file layout and call paths below no longer
+> match the code. The current owning design is
+> [`docs/spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md`](spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md)
+> (behavior parity for Spaces is its §2.2 checklist).
 >
 > Design for **Terminal Split**: splitting a single Terminal Tab into multiple
 > resizable **Spaces** (Right / Left / Up / Down), nested recursively, *inside

@@ -1,6 +1,11 @@
 # Gap Analysis: OneTerm Terminal vs Zed Terminal
 
-> **Status:** Historical gap analysis. Current terminal ownership and paths are documented in [`docs/architecture.md`](architecture.md).
+> **Status: Historical — superseded by IN-0018.** This gap analysis compared the 2025 terminal
+> against Zed's; the paths it names are gone and most of the gaps it lists were closed by the render
+> engine rebuild. The current owning design (including the deliberate remaining gaps — no middle-click
+> paste, no pane swap or focus traversal, no split persistence) is
+> [`docs/spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md`](spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md). Kept as a
+> record of what was compared and why.
 
 > Created: 2025-07-14
 > Zed reference: `zed-industries/zed` @ commit `20a3f770` (main branch)

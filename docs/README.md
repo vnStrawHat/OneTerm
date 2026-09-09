@@ -37,9 +37,10 @@ Status is stated in each file's header. "Current" = kept in step with the code;
 
 | Document | Area | Status |
 |---|---|---|
+| [`spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md`](spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md) + its `low-level-design/` | Terminal render engine, input layer, terminal view, Spaces and panel — module map, interfaces, parity and performance budget | **current owning design** for `crates/terminal-view/` |
 | [`terminal-backend.md`](terminal-backend.md) | Terminal backend: sessions, shared pump, event delivery, locking, SSH/local transports | current (2026-08 refresh) |
 | [`terminal-logging.md`](terminal-logging.md) | Printable terminal-output logging: policy, SSH override precedence, file lifecycle, controls, and indicators | current |
-| [`terminal-split.md`](terminal-split.md) + [`terminal-split/`](terminal-split/) | Split Spaces (right/left/up/down, drag tab into Space) | implemented; index kept current |
+| [`terminal-split.md`](terminal-split.md) + [`terminal-split/`](terminal-split/) | Split Spaces (right/left/up/down, drag tab into Space) | historical — behavior current, mechanism superseded by IN-0018 |
 | [`auto-completion.md`](auto-completion.md) + [`auto-completion/`](auto-completion/) | Command auto-completion engine, catalogs, overlay, redaction | design spec + implementation plan |
 | [`ssh-authentication.md`](ssh-authentication.md) | SSH authentication methods (password, private key, none), key material handling | accepted product contract |
 | [`ssh-client-connect.md`](ssh-client-connect.md) | SSH connect flow, host keys, timeouts, keepalive | historical design record (contradictions annotated) |
@@ -51,9 +52,9 @@ Status is stated in each file's header. "Current" = kept in step with the code;
 | [`agent-panel-display.md`](agent-panel-display.md) | Agent Panel model, folding, display rules | current |
 | [`osc-sequences-checklist.md`](osc-sequences-checklist.md) | Which OSC sequences OneTerm handles and where | current |
 | [`gui-layout.md`](gui-layout.md) | Original workspace layout design (docks, persistence) | historical |
-| [`terminal-rendering-optimization.md`](terminal-rendering-optimization.md) | Row cache / damage tracking work | historical |
+| [`terminal-rendering-optimization.md`](terminal-rendering-optimization.md) | Row cache / damage tracking work | historical — superseded by IN-0018 |
 | [`terminal-fullscreen-perf/`](terminal-fullscreen-perf/) | Full-screen animation performance investigation (DOOM-fire), alacritty fork rationale | historical (implemented) |
-| [`terminal-gap-analysis.md`](terminal-gap-analysis.md) | Terminal feature gap analysis | historical |
+| [`terminal-gap-analysis.md`](terminal-gap-analysis.md) | Terminal feature gap analysis | historical — superseded by IN-0018 |
 | [`terminal-semantic-highlighting.md`](terminal-semantic-highlighting.md) | Semantic highlight engine design | historical |
 | [`license-analysis.md`](license-analysis.md) | Dependency licence analysis (GPL crates in the Zed graph) | snapshot; policy enforced by `deny.toml` |
 

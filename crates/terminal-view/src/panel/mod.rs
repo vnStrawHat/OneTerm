@@ -1,22 +1,23 @@
 //! [`TerminalPanel`] — a Terminal Tab hosting a tree of resizable **Spaces**.
 //!
-//! A panel used to wrap exactly one `TerminalView`; it now owns a
-//! [`SpaceTree`](super::space::SpaceTree) whose leaves are terminals or empty
-//! placeholders. A tree with a single leaf renders exactly like the old
-//! single-terminal panel. See `docs/terminal-split/`.
+//! A tab owns a [`SpaceTree`](crate::space::SpaceTree) whose leaves are
+//! terminals or empty placeholders; a tree with a single leaf renders exactly
+//! like a plain single-terminal panel.
 //!
-//! The [`TerminalPanel`] type and its dock trait impls live in
-//! [`terminal_panel`], Space operations in [`ops`], the context-menu action
-//! handlers + [`Render`](gpui::Render) impl in [`actions`], and tab-title
-//! resolution + the rename dialog in [`title`].
+//! - [`terminal_panel`] — the type, its construction, accessors and dock traits
+//! - [`spaces`] — split / close / fill / drag-drop over the Space tree
+//! - [`duplicate`] — duplicating a session into a tab, Space, or split
+//! - [`tab_title`] — tab label resolution, the rename dialog, the tab strip
+//!
+//! The current owning design is
+//! `docs/spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md`.
 
+mod duplicate;
+mod spaces;
+mod tab_title;
+mod terminal_panel;
 #[cfg(test)]
 mod tests;
 
-mod actions;
-mod ops;
-mod terminal_panel;
-mod title;
-
-pub(crate) use ops::DuplicateDestination;
+pub(crate) use duplicate::DuplicateDestination;
 pub use terminal_panel::{PanelSpec, TerminalPanel};

@@ -51,7 +51,7 @@
 
 ```
 ┌─────────────────── ui crate (GPUI + gpui-component) ───────────────────┐
-│  LocalTerminalView (impl Render; hosts local AND ssh sessions)          │
+│  TerminalView (impl Render; hosts local AND ssh sessions)          │
 │   ├─ chrome: Button, Tabs, Dock… (gpui-component)                        │
 │   └─ child: TerminalElement  (custom gpui::Element, shared)            │
 │          • reads TerminalContent snapshot → paint_quad / shape_line      │
@@ -93,7 +93,7 @@
 | `terminal` | `TerminalSession` trait + `SessionEvent`, `TerminalContent` snapshot, `TerminalPalette`, printable-output logging controller/parser, `key_encode`/`mouse_encode`/`osc`/`url`, and the **backend pump layer** (`backend` module: `SharedState`, `SessionEventSink`, `OscRouter`, `LineAccounting`, `TerminalPump`, `PtyTransport`) shared by both backends. |
 | `local-shell` | `LocalSession` implementing `TerminalSession`. Spawns a shell via `alacritty_terminal::tty::new` and pumps it with a custom poll loop (`ShellEventLoop<P: EventedPty>`) feeding `TerminalPump`. ConPTY on Windows. `LocalTransport: PtyTransport` (notifier queue). Only `LocalSession` is public. |
 | `ssh` | `SshSession` implementing `TerminalSession`. russh client on the shared tokio runtime; `ssh_main_task` feeds `TerminalPump`. pty-req + shell + `window_change` + exit-status. `SshTransport: PtyTransport` (bounded `Cmd` channel). SFTP task lifetime tied to the connection. Only `SshSession` + `connect` are public. |
-| `terminal-view` | `TerminalElement` (custom `gpui::Element`), `LocalTerminalView` (`Render`; one view type hosts any `TerminalSession`, local or SSH), `TerminalPanel`/`PanelSpec` (dock tab), IME (`EntityInputHandler`), mouse/wheel, font measure, theme → `TerminalPalette`. |
+| `terminal-view` | `TerminalElement` (custom `gpui::Element`), `TerminalView` (`Render`; one view type hosts any `TerminalSession`, local or SSH), `TerminalPanel`/`PanelSpec` (dock tab), IME (`EntityInputHandler`), mouse/wheel, font measure, theme → `TerminalPalette`. |
 | `app` | Installs the `SessionFactory` (`AppSessionFactory`) + `WorkspaceCommands` through `AppServices`; only crate that links `ssh`/`local-shell`. |
 
 > Dependency rules: `app → {terminal-view, ssh, local-shell, terminal, core, …}`, `ssh → {terminal, core}`,
@@ -454,7 +454,13 @@ pub fn connect(cfg: SshConfig, initial: PtySize, scrollback: usize)
 
 ## 8. Rendering (`terminal-view` crate) — `TerminalElement`
 
-Custom `gpui::Element` (Zed `terminal_element.rs` pattern). Paints from the **snapshot**.
+Custom `gpui::Element`. Paints from the **snapshot**.
+
+> **Superseded:** the view-layer rendering below is the pre-IN-0018 sketch. The element now lives in
+> `crates/terminal-view/src/render/element.rs` and draws from a `Frame` + cached row plans; its
+> current owning design is
+> [`docs/spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md`](spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md).
+> Everything about the backend (sections 1-7) is unaffected.
 
 ### 8.1. Structure
 
@@ -659,7 +665,7 @@ Per the Zed README (4 input paths):
 4. **Paste**: `session.commit_text(text)` (bracketed paste if `TermMode::BRACKETED_PASTE`).
 
 IME impl (`terminal-view`):
-- `LocalTerminalView` (`crates/terminal-view/src/view/ime.rs`) impl `gpui::EntityInputHandler`:
+- `TerminalView` (`crates/terminal-view/src/terminal_view/ime.rs`) impl `gpui::EntityInputHandler`:
   `selected_text_range`, `marked_text_range`, `replace_text_in_range`,
   `replace_and_mark_text_in_range`, `unmark_text`, `bounds_for_range`,
   `text_for_range`, `character_index_for_point`.
@@ -714,9 +720,11 @@ crates/
 │
 └── terminal-view/src/        # feature crate (GPUI)
     ├── panel/                # TerminalPanel + PanelSpec (dock tab, Space tree)
-    ├── view/                 # LocalTerminalView (Render, IME, keys, search, scrollbar)
-    ├── element/              # TerminalElement: prepaint (layout_grid) + paint + measure
-    ├── handlers/ · layout/ · space/ · theme/ · url/ · highlight/ · completion/
+    ├── space/                # SpaceTree (split/close/fill) + its rendering
+    ├── terminal_view/        # TerminalView (Render, IME, keys, search, scrollbar, completion)
+    ├── render/               # frame, metrics, glyphs, row plans, shapes, TerminalElement
+    ├── input/                # key/mouse/menu/edit decisions
+    └── theme/ · url/ · highlight/ · completion/
 ```
 
 ---
@@ -733,7 +741,7 @@ crates/
 2. ✅ **`local`** (Windows-first): `LocalSession` spawns `cmd` (ConPTY, `chcp 65001`),
    `LocalListener`, snapshot + event. E2E test: `echo oneterm_e2e` → snapshot contains the string.
 3. ✅ **`ui`**: `TerminalElement` paints grid + cursor + font measure + resize-on-layout.
-   `LocalTerminalView` (`Render`) wired into DockArea. Settings shell picker (Settings window ▸ Terminal).
+   `TerminalView` (`Render`) wired into DockArea. Settings shell picker (Settings window ▸ Terminal).
 4. ✅ **`ui`**: mouse (down/move/up/wheel), selection (Simple/Semantic/Lines/Block),
    scrollback, hyperlink OSC 8 (Ctrl+click), copy/paste (select-to-copy, middle-click,
    Ctrl+Shift+C/V, OSC 52 clipboard), minimum-contrast.

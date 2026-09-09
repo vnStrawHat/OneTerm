@@ -1,6 +1,13 @@
 # Terminal Rendering Optimization — Technical Document
 
-> **Status:** Historical implementation record. Current terminal code lives under `crates/terminal/` and `crates/terminal-view/`; see [`docs/architecture.md`](architecture.md).
+> **Status: Historical — superseded by IN-0018.** This document records the row-cache /
+> damage-tracking renderer that `crates/terminal-view/src/element/` and `layout/` used before the
+> render engine was rebuilt; those modules no longer exist. The techniques described here (device
+> pixel snapping, custom box drawing, damage-driven row planning) survive in reworked form, but the
+> current owning design for terminal rendering is
+> [`docs/spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md`](spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md) with its
+> low-level designs; read it, not this file, before changing the renderer. Kept for the rationale and
+> the measurements behind the original optimizations.
 
 > A comprehensive technical document describing the methods, technologies, and techniques applied in OneTerm's `TerminalElement` to achieve terminal rendering quality close to **Windows Terminal AtlasEngine**.
 >

@@ -1,39 +1,44 @@
-//! The [`TerminalPanel`] type: [`PanelSpec`] + the [`TerminalPanel::open`]
-//! constructor, accessors, and the dock [`Panel`]/[`Focusable`]/[`EventEmitter`]
-//! trait implementations (including the tab-strip `title()` element).
+//! The [`TerminalPanel`] type: [`PanelSpec`], the [`TerminalPanel::open`]
+//! constructor, the session-spawn helpers, the read-only accessors used by the
+//! status bar / Agent Panel, and the dock trait implementations (including the
+//! [`Render`] impl with the panel's action handlers).
 //!
-//! Space operations live in [`super::ops`], the context-menu action handlers +
-//! [`Render`](gpui::Render) impl live in [`super::actions`], and tab-title
-//! resolution lives in [`super::title`].
+//! Space operations live in [`super::spaces`], the duplicate-session flows in
+//! [`super::duplicate`], and tab-label resolution + the tab-strip element in
+//! [`super::tab_title`].
 
 use gpui::{
     Anchor, App, AppContext as _, Context, Entity, EntityId, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, MouseButton, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div,
-    prelude::FluentBuilder as _, px,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Subscription,
+    WeakEntity, Window, div,
 };
-use gpui_component::dock::{Panel, PanelControl, PanelEvent, TabGroup};
+use gpui_component::dock::{ClosePanel, Panel, PanelControl, PanelEvent, TabGroup};
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable,
+    ActiveTheme as _, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
-    h_flex,
     menu::DropdownMenu as _,
 };
+
+use oneterm_actions::{
+    AddPanelWithShell, CloseSpace, DuplicateSession, NewSession, SplitDown, SplitLeft, SplitRight,
+    SplitUp, TerminalClear, TerminalCopy, TerminalPaste, TerminalSelectAll,
+};
 use oneterm_core::{LocalShellConfig, SessionDuplicateConfig, ShellKind};
-use oneterm_state::AppServices;
-use oneterm_terminal::PtySize;
-use oneterm_terminal::TerminalSession;
-
-use oneterm_actions::{AddPanelWithShell, NewSession};
 use oneterm_settings::TabTitleMode;
+use oneterm_state::AppServices;
+use oneterm_terminal::{PtySize, TerminalSession};
 
-use super::super::security::security_policy_from_settings;
-use super::super::space::{DragTerminalTab, SpaceId, SpaceTree, SplitContext};
+use crate::input::edit;
+use crate::security::security_policy_from_settings;
+use crate::space::{SpaceId, SpaceTree, SplitContext, SplitDir};
 use crate::terminal_view::{TerminalDeps, TerminalView, TerminalViewEvent};
 
 /// Initial PTY size for a freshly spawned session; the element resizes it to
 /// the real grid on the first prepaint.
-pub(crate) const INITIAL_PTY_SIZE: PtySize = PtySize::INITIAL;
+pub(super) const INITIAL_PTY_SIZE: PtySize = PtySize::INITIAL;
+
+/// Tab label for a local shell, and the label a reset tab falls back to.
+pub(super) const DEFAULT_TAB_TITLE: &str = "Terminal";
 
 /// Panel displaying a Terminal Tab (a tree of Spaces).
 pub struct TerminalPanel {
@@ -97,12 +102,12 @@ impl TerminalPanel {
         let (view, tab_title, workspace_id) = match spec {
             PanelSpec::DefaultShell { workspace } => (
                 Self::spawn_local_view(&deps, None, window, cx),
-                "Terminal".to_string(),
+                DEFAULT_TAB_TITLE.to_string(),
                 workspace.or(primary),
             ),
             PanelSpec::Shell(kind) => (
                 Self::spawn_local_view(&deps, Some(kind), window, cx),
-                "Terminal".to_string(),
+                DEFAULT_TAB_TITLE.to_string(),
                 primary,
             ),
             PanelSpec::Session {
@@ -110,13 +115,8 @@ impl TerminalPanel {
                 title,
                 duplicate_config,
             } => {
-                let session_entity = cx.new(|_| session);
-                let view_deps = deps.clone();
-                let view = cx.new(|cx| {
-                    let mut view = TerminalView::new(session_entity, view_deps, window, cx);
-                    view.duplicate_config = duplicate_config;
-                    view
-                });
+                let session = cx.new(|_| session);
+                let view = Self::new_view(&deps, session, duplicate_config, window, cx);
                 (Some(view), title, primary)
             }
         };
@@ -137,9 +137,7 @@ impl TerminalPanel {
         let dock_focus_handle = cx.focus_handle();
         let dock_focus_subscription =
             cx.on_focus(&dock_focus_handle, window, |this, window, cx| {
-                if let Some(content_focus) = this.tree.active_focus_handle(cx) {
-                    content_focus.focus(window, cx);
-                }
+                this.focus_active_space(window, cx);
             });
 
         let _settings_sub = cx.observe(&deps.settings, |_this, _settings, cx| {
@@ -166,9 +164,9 @@ impl TerminalPanel {
         this
     }
 
-    /// Spawn a fresh default local session + view.
-    /// Returns `None` if the session could not be spawned (e.g. missing shell).
-    /// The caller should handle the `None` case by showing an error state.
+    /// Spawn a fresh local session + view from the current settings, optionally
+    /// overriding the shell kind. `None` when the session could not be spawned
+    /// (e.g. missing shell); the caller shows an empty Space instead.
     pub(super) fn spawn_local_view(
         deps: &TerminalDeps,
         shell_kind_override: Option<ShellKind>,
@@ -189,16 +187,30 @@ impl TerminalPanel {
                 None => settings.shell.clone(),
             }
         };
-        Self::spawn_local_view_with_config(deps, shell, window, cx)
+        let session = match Self::spawn_local_session(deps, shell.clone(), cx) {
+            Ok(session) => session,
+            Err(error) => {
+                log::error!("Failed to spawn local terminal session: {error}");
+                return None;
+            }
+        };
+        let session = cx.new(|_| session);
+        Some(Self::new_view(
+            deps,
+            session,
+            Some(SessionDuplicateConfig::Local(shell)),
+            window,
+            cx,
+        ))
     }
 
-    /// Spawn a local terminal view from an exact shell configuration.
-    fn spawn_local_view_with_config(
+    /// Spawn a local session from an exact shell configuration, applying the
+    /// settings-derived scrollback / OSC security / logging policy (SEC-08).
+    pub(super) fn spawn_local_session(
         deps: &TerminalDeps,
         shell: LocalShellConfig,
-        window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Option<Entity<TerminalView>> {
+    ) -> oneterm_core::Result<Box<dyn TerminalSession>> {
         let (scrollback_history, security, logging) = {
             let settings = deps.settings.read(cx);
             (
@@ -207,33 +219,29 @@ impl TerminalPanel {
                 settings.logging.local_config(),
             )
         };
-        let factory = AppServices::session_factory(cx);
-        let duplicate_config = SessionDuplicateConfig::Local(shell.clone());
-        let session: Box<dyn TerminalSession> = match factory.spawn_local(
+        AppServices::session_factory(cx).spawn_local(
             shell,
             INITIAL_PTY_SIZE,
             scrollback_history,
             security,
             logging,
-        ) {
-            Ok(s) => s,
-            Err(e) => {
-                log::error!("Failed to spawn local terminal session: {e}");
-                return None;
-            }
-        };
-        let session_entity = cx.new(|_| session);
-        let view_deps = deps.clone();
-        Some(cx.new(|cx| {
-            let mut view = TerminalView::new(session_entity, view_deps, window, cx);
-            view.duplicate_config = Some(duplicate_config);
-            view
-        }))
+        )
     }
 
-    /// Empty Space ids in visual tree order.
-    pub(crate) fn empty_space_destinations(&self) -> Vec<SpaceId> {
-        self.tree.empty_space_destinations()
+    /// Build the view for an already-created session entity.
+    pub(super) fn new_view(
+        deps: &TerminalDeps,
+        session: Entity<Box<dyn TerminalSession>>,
+        duplicate_config: Option<SessionDuplicateConfig>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<TerminalView> {
+        let deps = deps.clone();
+        cx.new(|cx| {
+            let mut view = TerminalView::new(session, deps, window, cx);
+            view.duplicate_config = duplicate_config;
+            view
+        })
     }
 
     /// Point `view`'s context menu at Space `space_id` in this panel.
@@ -252,8 +260,9 @@ impl TerminalPanel {
     /// (Re)subscribe to `TitleChanged` on every terminal leaf so the tab strip
     /// refreshes on OSC 0/2 title changes regardless of which leaf changed.
     pub(super) fn rebuild_title_subs(&mut self, cx: &mut Context<Self>) {
-        let views = self.tree.terminal_views();
-        self._title_subs = views
+        self._title_subs = self
+            .tree
+            .terminal_views()
             .into_iter()
             .map(|view| {
                 cx.subscribe(&view, |_this, _view, _ev: &TerminalViewEvent, cx| {
@@ -261,6 +270,11 @@ impl TerminalPanel {
                 })
             })
             .collect();
+    }
+
+    /// Empty Space ids in visual tree order.
+    pub(crate) fn empty_space_destinations(&self) -> Vec<SpaceId> {
+        self.tree.empty_space_destinations()
     }
 
     /// The active Space's terminal view (used by Edit ▸ Find). `None` when the
@@ -295,8 +309,8 @@ impl TerminalPanel {
     }
 
     /// The resolved tab label (manual override, live OSC 0/2 title, or static
-    /// fallback), respecting the `tab_title_mode` setting. Used as the Agent Panel tab-group
-    /// title (`docs/agent-panel-display.md` §2.1).
+    /// fallback), respecting the `tab_title_mode` setting. Used as the Agent
+    /// Panel tab-group title (`docs/agent-panel-display.md` §2.1).
     ///
     /// Reads the active terminal's session title via `v.read(cx)`. Do **not**
     /// call this from inside a `TerminalView::update` closure on the active
@@ -305,16 +319,11 @@ impl TerminalPanel {
     /// instead, passing the title fetched from the already-leased view's own
     /// `session.read(cx).title()`.
     pub(crate) fn tab_label(&self, cx: &App) -> String {
-        let mode = self.deps.settings.read(cx).tab_title_mode;
         let session_title = self
             .tree
             .active_terminal()
             .and_then(|v| v.read(cx).session.read(cx).title());
-        let live = match mode {
-            TabTitleMode::Osc => session_title.as_deref(),
-            TabTitleMode::Default => None,
-        };
-        self.effective_tab_label(live)
+        self.tab_label_with_title(session_title.as_deref(), cx)
     }
 
     /// Same as [`Self::tab_label`] but takes the live session title as a
@@ -328,8 +337,7 @@ impl TerminalPanel {
     /// only used when `tab_title_mode == Osc` and no manual override exists; in
     /// `Default` mode the static `tab_title` fallback is returned.
     pub(crate) fn tab_label_with_title(&self, live_title: Option<&str>, cx: &App) -> String {
-        let mode = self.deps.settings.read(cx).tab_title_mode;
-        let live = match mode {
+        let live = match self.deps.settings.read(cx).tab_title_mode {
             TabTitleMode::Osc => live_title,
             TabTitleMode::Default => None,
         };
@@ -361,6 +369,15 @@ impl TerminalPanel {
             view.update(cx, |v, cx| v.shutdown(cx));
         }
     }
+
+    /// Run an edit command (copy/paste/select-all/clear) on the active
+    /// terminal's session, if the active Space has one.
+    fn edit_active(&self, edit: edit::EditCommand, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(view) = self.active_view() {
+            let session = view.read(cx).session.clone();
+            edit(&session, window, cx);
+        }
+    }
 }
 
 impl EventEmitter<PanelEvent> for TerminalPanel {}
@@ -371,6 +388,53 @@ impl Focusable for TerminalPanel {
         // active Space's independently tracked content handle in the next frame,
         // so accessibility never sees both frames claim one focused handle.
         self.dock_focus_handle.clone()
+    }
+}
+
+impl Render for TerminalPanel {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let body = self.tree.render(cx.entity().downgrade(), window, cx);
+        div()
+            .id("terminal-panel")
+            .size_full()
+            .bg(cx.theme().background)
+            // Terminal context-menu action handlers — also fired by global key bindings.
+            .on_action(cx.listener(|this, _: &ClosePanel, w, cx| this.close_tab(w, cx)))
+            .on_action(cx.listener(|this, _: &DuplicateSession, w, cx| {
+                this.duplicate_session(this.tree.active(), w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SplitRight, w, cx| {
+                this.split_active_at(this.tree.active(), SplitDir::Right, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SplitLeft, w, cx| {
+                this.split_active_at(this.tree.active(), SplitDir::Left, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SplitUp, w, cx| {
+                this.split_active_at(this.tree.active(), SplitDir::Up, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SplitDown, w, cx| {
+                this.split_active_at(this.tree.active(), SplitDir::Down, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &TerminalCopy, w, cx| {
+                this.edit_active(edit::copy_selection, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &TerminalPaste, w, cx| {
+                this.edit_active(edit::paste_clipboard, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &TerminalSelectAll, w, cx| {
+                this.edit_active(edit::select_all, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &TerminalClear, w, cx| {
+                this.edit_active(edit::clear_screen, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CloseSpace, w, cx| {
+                // Closing the only Space would empty the tab; that is what
+                // "Close Terminal Tab" is for.
+                if this.tree.leaf_count() > 1 {
+                    this.close_space(this.tree.active(), w, cx);
+                }
+            }))
+            .child(body)
     }
 }
 
@@ -403,6 +467,8 @@ impl gpui_base::dock::Panel for TerminalPanel {
             self.is_active = active;
             cx.notify();
         }
+        // Becoming the selected tab always republishes, even when the active
+        // Space did not change: another tab published over this state.
         if active {
             self.publish_active_session(cx);
         }
@@ -414,128 +480,8 @@ impl Panel for TerminalPanel {
         false
     }
 
-    fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let tab_panel = self.tab_panel.clone();
-        let panel_entity = cx.entity().clone();
-        let panel_weak = cx.entity().downgrade();
-        let theme = cx.theme().muted_foreground;
-        let highlight = cx.theme().table_active_border;
-        let is_active = self.is_active;
-        let tab_label = self.tab_label(cx);
-        let show_logging = self.tree.is_single()
-            && self.tree.active_terminal().is_some_and(|view| {
-                view.read(cx)
-                    .session
-                    .read(cx)
-                    .capabilities()
-                    .logging
-                    .is_some_and(|logging| {
-                        matches!(
-                            logging.state(),
-                            oneterm_terminal::TerminalLogState::Running { .. }
-                        )
-                    })
-            });
-        let recording_color = cx.theme().danger;
-        let drag_title: SharedString = tab_label.clone().into();
-        let rename_title = tab_label.clone();
-        let title_label_id = SharedString::from(format!("tab-title-label-{:?}", panel_entity));
-
-        h_flex()
-            .id("tab-title")
-            .relative()
-            .h_full()
-            .w_full()
-            .min_w(px(100.))
-            .items_center()
-            .gap_1()
-            .when(is_active, |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .left(-px(20.))
-                        .right(-px(20.))
-                        .h(px(2.))
-                        .bg(highlight),
-                )
-            })
-            .mr(-px(5.))
-            // Drag the tab into an empty Space with the terminal-specific
-            // payload consumed by Space-tree drop targets.
-            .when_some(tab_panel.clone(), |this, _| {
-                this.on_drag(
-                    DragTerminalTab {
-                        panel: panel_weak.clone(),
-                        title: drag_title.clone(),
-                    },
-                    |drag, _pos, _win, cx| {
-                        cx.stop_propagation();
-                        cx.new(|_| drag.clone())
-                    },
-                )
-            })
-            // Middle-click on a tab → close that tab.
-            .on_mouse_down(MouseButton::Middle, {
-                let panel = panel_entity.clone();
-                move |_, window, cx| {
-                    cx.stop_propagation();
-                    panel.update(cx, |panel, cx| panel.close_tab(window, cx));
-                }
-            })
-            .when(show_logging, |this| {
-                this.child(
-                    div()
-                        .id("tab-recording")
-                        .flex_shrink_0()
-                        .text_xs()
-                        .text_color(recording_color)
-                        .child("●"),
-                )
-            })
-            .child(
-                super::title::tab_title_label()
-                    .id(title_label_id)
-                    .on_click({
-                        let panel = cx.entity().clone();
-                        let rename_title = rename_title.clone();
-                        move |event, window, cx| {
-                            if event.click_count() != 2 {
-                                return;
-                            }
-                            cx.stop_propagation();
-                            super::title::open_tab_title_dialog(
-                                panel.clone(),
-                                rename_title.clone(),
-                                window,
-                                cx,
-                            );
-                        }
-                    })
-                    .child(tab_label),
-            )
-            .when_some(tab_panel, |this, _| {
-                this.child(
-                    div()
-                        .id("tab-close")
-                        .flex_shrink_0()
-                        .cursor_pointer()
-                        .size_4()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(3.))
-                        .hover(move |this| this.bg(theme.opacity(0.15)))
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                            cx.stop_propagation();
-                        })
-                        .on_click(move |_, window, cx| {
-                            cx.stop_propagation();
-                            panel_entity.update(cx, |panel, cx| panel.close_tab(window, cx));
-                        })
-                        .child(Icon::new(IconName::Close).xsmall().text_color(theme)),
-                )
-            })
+    fn title(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        super::tab_title::render_tab_strip(self, window, cx)
     }
 
     fn zoom_control(&self, _: &App) -> Option<PanelControl> {

@@ -40,7 +40,7 @@ internals. It reads the folded display model from `oneterm_state::AgentRegistry`
 | Per-`(terminal, agent)` `seq` dedup | `oneterm_terminal::osc_agent::should_apply` | implemented by backend listeners |
 | Event delivery to terminal views | `SessionEvent::AgentStatus(Arc<AgentStatusEvent>)` | implemented |
 | Registry fold | `oneterm_state::AgentRegistry` | implemented |
-| Terminal feed into registry | `LocalTerminalView::push_agent_status` | implemented |
+| Terminal feed into registry | `TerminalView::push_agent_status` | implemented |
 | Card navigation targets (`AgentRegistry::set_nav` / `nav`) + focuser | `crates/state/src/agent_registry.rs`, `crates/terminal-view/src/agent.rs` | implemented |
 | Agent list UI | `crates/agent-ui` | implemented as compact cards |
 
@@ -62,7 +62,7 @@ Agent Panel
 
 | Key | Type | Source | Current use |
 |---|---|---|---|
-| `terminal_key` | `gpui::EntityId` of `LocalTerminalView` | terminal view context | Card identity and click-to-focus target. |
+| `terminal_key` | `gpui::EntityId` of `TerminalView` | terminal view context | Card identity and click-to-focus target. |
 | `agent_id` | `String` from envelope `agent` | OSC 9;7 event | Card identity. Multiple agents per terminal are supported by the model. |
 | `tab_key` | `gpui::EntityId` of `TerminalPanel` | `SplitContext.panel` | Group cards into tab sections. |
 | `tab_title` | `String` | terminal panel title helper | Rendered as the tab-group header. Renamed tabs update existing cards. |
@@ -429,7 +429,7 @@ backend listener (local-shell / ssh)
         ▼
 SessionEvent::AgentStatus(Arc<AgentStatusEvent>)
         │
-LocalTerminalView
+TerminalView
         │  push_agent_status(ev)
         │  - resolve Tab/Space grouping
         │  - AgentRegistry::set_nav(terminal_key, nav)

@@ -6,7 +6,7 @@
 
 use gpui::{AppContext as _, FocusHandle};
 
-use super::node::{SpaceContent, SpaceId, SpaceLeaf, SpaceNode};
+use super::tree::{SpaceContent, SpaceId, SpaceLeaf, SpaceNode};
 use super::{CloseOutcome, SpaceTree, SplitDir};
 
 /// Helper: build a `SpaceLeaf` with `Empty` content and a dummy focus handle.
