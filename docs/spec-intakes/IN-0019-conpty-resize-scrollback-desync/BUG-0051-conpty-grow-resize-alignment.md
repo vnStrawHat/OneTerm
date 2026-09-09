@@ -13,7 +13,7 @@ Created: 2026-09-09
 - [ ] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -184,3 +184,11 @@ Gaps:
 
 Implemented and verified on Windows; awaiting owner acceptance of the two screenshots and the
 blank-rows-below-the-prompt tradeoff recorded in DEC-0008.
+
+## Acceptance Rework (2026-09-09, owner)
+
+TUI flow passes. New failing case: `ls -lath` (Git for Windows `ls` under cmd) at a narrow
+window so long lines wrap, maximize, type any character: the grid cursor stays on the prompt row
+but the echoed character lands 4 rows above it (`evidence/owner-ls-lath-maximize-desync.png`):
+conhost and alacritty reflow the wrapped rows differently on the column change.
+
