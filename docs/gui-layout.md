@@ -92,14 +92,13 @@ with a `* ` prefix), then `Leave Channel` and `Close Channel <X>` for a member, 
 than one Space. The five joins, the leave, and the close are also actions in
 Settings > Key Bindings (group "Input Channel"), shipped unbound.
 
-Membership is painted in three places. The tab strip shows one chip per distinct channel of
+Membership is painted in two places. The tab strip shows one chip per distinct channel of
 the tab's Spaces, in A..E order, before the recording dot; the chip is the channel letter in
 the theme's `chart_1..chart_5`. Each member Space carries the same chip as a badge in its
-top-right corner, inset past the 12 px scrollbar track; the badge is the per-Space marker,
-because the frame colour alone cannot be told apart from the active-Space border. Each member
-Space is also framed in the channel colour (55 % opacity while another Space is active),
-including the lone Space of an unsplit tab, which is otherwise drawn without a frame; the
-frame is the secondary cue. The badge takes no focus and its clicks activate the Space like
+top-right corner, inset past the 12 px scrollbar track, including the lone Space of an
+unsplit tab. The badge is the only per-Space marker: Space borders keep the active/inactive
+theme rule, because a border in the channel colour cannot be told apart from the
+active-Space border. The badge takes no focus and its clicks activate the Space like
 any other click in it. Both read the `InputChannelRegistry`, and every `TerminalPanel` observes it,
 so a `Close Channel` performed in one tab repaints the others.
 
@@ -118,6 +117,6 @@ The status bar contains the clock, active-terminal network speed, breadcrumb, CP
 - Persisted document owner: `crates/state/src/dock_persistence.rs`
 - Registered names: `crates/state/src/panel_names.rs`
 - Input channel membership: `crates/state/src/input_channel_registry.rs`
-- Channel submenu, chips, and Space frame: `crates/terminal-view/src/input/menu.rs`,
+- Channel submenu, chips, and Space badge: `crates/terminal-view/src/input/menu.rs`,
   `crates/terminal-view/src/panel/tab_title.rs`, `crates/terminal-view/src/space/render.rs`
 - Focused layout regressions: `crates/workspace/src/layout/workspace/layout_tests.rs`

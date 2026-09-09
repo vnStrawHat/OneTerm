@@ -20,7 +20,7 @@ use oneterm_theme::icon::AppIcon;
 use super::tree::{SpaceContent, SpaceId, SpaceLeaf, SpaceNode, SpaceTree};
 use crate::input::menu::split_items;
 use crate::panel::TerminalPanel;
-use crate::theme::{channel_chip, channel_color};
+use crate::theme::channel_chip;
 
 /// Payload dragged from a Terminal Tab title onto an empty Space.
 ///
@@ -125,36 +125,34 @@ fn render_leaf(
         }
         _ => None,
     };
-    // The badge names the channel where the frame alone cannot: it stays
-    // readable next to the active-Space border, which is a close blue in the
-    // dark theme. Inset past the terminal's 12 px scrollbar track.
+    // The badge is the only per-Space channel marker: a frame in the channel
+    // colour is not distinguishable from the active-Space border, which is a
+    // close blue in the dark theme. Inset past the terminal's 12 px scrollbar
+    // track.
     let badge = channel.map(|channel| {
         channel_chip(channel, ("space-channel", id.0 as usize), cx)
             .absolute()
             .top(px(3.))
             .right(px(15.))
     });
-    let channel = channel.map(|channel| channel_color(channel, cx));
     let content: AnyElement = match &leaf.content {
         SpaceContent::Terminal(view) => view.clone().into_any_element(),
         SpaceContent::Empty => render_placeholder(leaf, panel.clone(), window, cx),
     };
 
     // Fast path: the tab's only Space renders with no border / no activation
-    // wrapper — visually identical to the pre-split single terminal, unless it
-    // is a channel member: a lone member must never be unmarked.
+    // wrapper — visually identical to the pre-split single terminal. A lone
+    // member still gets its badge, so it needs a positioned wrapper.
     if single {
-        let Some(color) = channel else {
+        let Some(badge) = badge else {
             return content;
         };
         return div()
             .id(ElementId::from(("space", id.0 as usize)))
             .relative()
             .size_full()
-            .border_1()
-            .border_color(color)
             .child(content)
-            .children(badge)
+            .child(badge)
             .into_any_element();
     }
 
@@ -171,7 +169,6 @@ fn render_leaf(
         .p(px(1.))
         .bg(space_border_color(
             id == active,
-            channel,
             cx.theme().table_active_border,
             cx.theme().border,
         ))
@@ -183,20 +180,9 @@ fn render_leaf(
         .into_any_element()
 }
 
-/// The 1px frame color of a Space: the channel colour for a member (dimmed
-/// while another Space is active), otherwise the theme's active/inactive rule.
-fn space_border_color(
-    is_active: bool,
-    channel: Option<Hsla>,
-    active: Hsla,
-    inactive: Hsla,
-) -> Hsla {
-    match channel {
-        Some(color) if is_active => color,
-        Some(color) => color.opacity(0.55),
-        None if is_active => active,
-        None => inactive,
-    }
+/// The 1px frame color of a Space: highlighted while it is the active one.
+fn space_border_color(is_active: bool, active: Hsla, inactive: Hsla) -> Hsla {
+    if is_active { active } else { inactive }
 }
 
 /// A mouse-down handler that makes Space `id` of `panel` the active Space.
@@ -303,24 +289,7 @@ mod tests {
         let active = hsla(0.1, 0.8, 0.5, 1.0);
         let inactive = hsla(0.0, 0.0, 0.2, 1.0);
 
-        assert_eq!(space_border_color(true, None, active, inactive), active);
-        assert_eq!(space_border_color(false, None, active, inactive), inactive);
-    }
-
-    #[test]
-    fn a_channel_member_is_framed_in_its_channel_color() {
-        let active = hsla(0.1, 0.8, 0.5, 1.0);
-        let inactive = hsla(0.0, 0.0, 0.2, 1.0);
-        let channel = hsla(0.5, 0.7, 0.5, 1.0);
-
-        assert_eq!(
-            space_border_color(true, Some(channel), active, inactive),
-            channel
-        );
-        assert_eq!(
-            space_border_color(false, Some(channel), active, inactive),
-            channel.opacity(0.55),
-            "an inactive member keeps its channel colour, dimmed"
-        );
+        assert_eq!(space_border_color(true, active, inactive), active);
+        assert_eq!(space_border_color(false, active, inactive), inactive);
     }
 }

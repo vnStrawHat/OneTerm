@@ -10,9 +10,10 @@ Five fixed input channels (A..E) group terminal Spaces. A global `InputChannelRe
 (same shape as `AgentRegistry`) maps each member `TerminalView` to its channel and session
 handle. The originating view writes to its own session exactly as today, then asks the
 registry to repeat the same write on every other member of its channel. Membership is shown
-by a lettered chip per channel in the tab strip and a coloured frame around each member
-Space, both using the theme's `chart_1..chart_5` colours so A..E stay distinct in light and
-dark themes.
+by a lettered chip per channel in the tab strip and the same chip repeated as a badge in the
+top-right corner of each member Space, both using the theme's `chart_1..chart_5` colours so
+A..E stay distinct in light and dark themes. Space borders keep their existing
+active/inactive rule; membership never recolours them.
 
 The unit of membership is the Space (DEC-0009). A tab is a container: its chip row lists the
 channels of its Spaces, and two tab-wide menu items apply a join or leave to every Space in
@@ -68,28 +69,27 @@ Context menu of a Space (submenu shown for a Space in channel B inside a split t
   Tab To <X>" needs this Space to be a member (it copies this Space's channel to its
   siblings); "Leave With All Spaces In Tab" appears when any Space in the tab is a member.
 
-Tab strip and Space frames (tab "fleet" split into three Spaces, tab "db" with one Space):
+Tab strip and Space badges (tab "fleet" split into three Spaces, tab "db" with one Space):
 
 ```text
 +-[A] fleet ------------+-[A] db --------+-[B][C] mixed --+- local ------+
-|╔══════════[A]╦══════════[A]╗                                        |
-|║ $ echo hi    ║ $ echo hi    ║  <- member Space: the channel badge in   |
-|║ hi           ║ hi           ║     its top-right corner, plus a 1 px    |
-|╠══════════════╩══════════════╣     frame in the channel colour        |
-|│ htop ...                    │     (chart_1 for A; 55 % while another   |
-|│                             │     Space is active)                     |
-|└─────────────────────────────┘  <- non-member: no badge, today's theme |
-|                                     border                              |
+|┌──────────[A]┬──────────[A]┐                                         |
+|│ $ echo hi    │ $ echo hi    │  <- member Space: the channel badge in   |
+|│ hi           │ hi           │     its top-right corner (chart_1 for A) |
+|├──────────────┴──────────────┤                                          |
+|│ htop ...                    │  <- non-member: no badge                 |
+|│                             │                                          |
+|└─────────────────────────────┘     Space borders follow the theme's     |
+|                                    active/inactive rule in both cases   |
 ```
 
 - One chip per distinct channel in the tab, ordered A..E ("[B][C]" above). A tab with no
   member Space shows no chip.
 - Every member Space repeats that chip as a badge in its own top-right corner. The badge is
-  the per-Space marker: in a tab of three Spaces where only one joined, the frame colour is
-  too close to the active-Space border to be read on its own.
-- A tab whose single Space is a member draws the badge and the frame too (today a single
-  Space draws no frame); the chip alone is too easy to miss when a password is about to fan
-  out.
+  the only per-Space marker: a border in the channel colour is too close to the
+  active-Space border to be read on its own, so Space borders stay on the theme rule.
+- A tab whose single Space is a member draws the badge too; the tab chip alone is too easy
+  to miss when a password is about to fan out.
 
 ## Data Flow
 
@@ -100,7 +100,7 @@ Tab strip and Space frames (tab "fleet" split into three Spaces, tab "db" with o
    Space (one channel per Space). "Join All Spaces In Tab To A" calls the same for every
    `tree.terminal_views()` of the panel.
 2. The registry notifies; tab strips read `registry.channels_in(&[entity_ids])` and Space
-   frames read `registry.channel_of(entity_id)` during render.
+   badges read `registry.channel_of(entity_id)` during render.
 3. A key press in a member Space goes through `on_key_down` → `send_key` as today. After its
    own write the view calls `registry.fan_out(entity_id, Bytes(&bytes), cx)`. Typed text
    (`replace_text_in_range` in `ime.rs`), paste (`paste_text` in `edit.rs`), and Ctrl+C
@@ -139,8 +139,8 @@ and persistence (sessions are not restored across restarts, see `docs/agents/per
 - `crates/terminal-view`: `TerminalDeps.input_channels: Option<Entity<InputChannelRegistry>>`
   resolved in `from_globals`; hooks in `input/keys.rs`, `terminal_view/ime.rs`,
   `input/edit.rs`; submenu in `input/menu.rs` (`MenuContext` gains the Space's channel and
-  the tab's member count); chips in `panel/tab_title.rs`; frame colour in
-  `space/render.rs`; `on_action` handlers in `panel/terminal_panel.rs`.
+  the tab's member count); chips in `theme/input_channel.rs`, used by
+  `panel/tab_title.rs` and the Space badge in `space/render.rs`; `on_action` handlers in `panel/terminal_panel.rs`.
 - `crates/settings-ui/src/key_bindings`: seven `BindableAction` entries (five joins, leave,
   close) in group "Input Channel", all `default: None`.
 - Theme: `cx.theme().chart_1..chart_5` map to A..E in that order.
@@ -149,5 +149,5 @@ and persistence (sessions are not restored across restarts, see `docs/agents/per
 
 - [x] Detail design: added (optional)
 - Reason: two concerns are worth pinning before code: the registry and fan-out contract
-  (`low-level-design/registry-and-fan-out.md`) and the menu, chip, and frame rules
+  (`low-level-design/registry-and-fan-out.md`) and the menu, chip, and badge rules
   (`low-level-design/menu-chip-frame.md`).

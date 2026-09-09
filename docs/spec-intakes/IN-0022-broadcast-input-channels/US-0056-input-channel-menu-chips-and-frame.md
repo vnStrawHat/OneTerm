@@ -26,8 +26,8 @@ Created: 2026-09-09
 ## Outcome
 
 From a Space's context menu the user joins channel A..E, leaves, closes the channel, or
-applies a join or leave to every Space in the tab. Every member Space shows a frame in its
-channel colour, every tab shows one chip per channel present in it, and the seven actions
+applies a join or leave to every Space in the tab. Every member Space shows a badge with its
+channel letter, every tab shows one chip per channel present in it, and the seven actions
 are bindable in Settings › Key Bindings. Depends on US-0055.
 
 ## Scope
@@ -35,8 +35,8 @@ are bindable in Settings › Key Bindings. Depends on US-0055.
 - [x] In scope: actions in `crates/actions`; `on_action` handlers and
   `join_tab_to_channel` / `leave_tab_channels` / `tab_channels` on `TerminalPanel`;
   `MenuContext` fields and the "Input Channel" submenu; `channel_color` in
-  `crates/terminal-view/src/theme`; chips in `tab_title.rs`; `space_border_color` with the
-  channel branch and the single-Space frame; registry observer on the panel; `BindableAction`
+  `crates/terminal-view/src/theme`; chips in `tab_title.rs`; the member badge in
+  `space/render.rs`; registry observer on the panel; `BindableAction`
   entries; owning-doc updates.
 - [x] Out of scope: status-bar segment; persistence; a tab-strip context menu.
 
@@ -46,12 +46,12 @@ are bindable in Settings › Key Bindings. Depends on US-0055.
   `Close Channel <X>` only for a member; the two tab-wide items only when the tab has more
   than one Space (join-all only when this Space is a member, leave-all only when any Space
   in the tab is a member).
-- [x] Member Spaces draw a 1 px frame in the channel colour (full for the active Space,
-  55 % for inactive ones); a lone member Space in a single-Space tab draws it too;
-  non-members are pixel-identical to today.
+- [x] Member Spaces draw the channel badge in their top-right corner, the lone Space of an
+  unsplit tab included; Space borders keep the theme's active/inactive rule for members and
+  non-members alike, and the single-Space fast path stays borderless.
 - [x] Tab chips list the distinct channels of the tab in A..E order and disappear when the
   tab has no member.
-- [x] `Close Channel` from one tab repaints every other tab's chips and frames.
+- [x] `Close Channel` from one tab repaints every other tab's chips and badges.
 - [x] Seven actions appear in Settings › Key Bindings, group "Input Channel", unbound.
 - [x] E2E: a tab split into three Spaces (two in A, one non-member) plus a second tab in A;
   `echo hi` typed once appears in the three members only. Screenshots in `evidence/`.
@@ -101,7 +101,7 @@ Reason: three owning docs describe surfaces this packet changes.
 - [x] Actions + `BindableAction` entries.
 - [x] Panel handlers and tab-wide helpers; registry observer.
 - [x] `MenuContext` fields and submenu; menu tests.
-- [x] `channel_color`, chips, frame; tests.
+- [x] `channel_color`, chips, badge; tests.
 - [x] Docs, GUI evidence, gate.
 
 ## Decisions
@@ -191,6 +191,34 @@ Evidence (rework GUI walk, described in `evidence/US-0056-gui-walk.md`):
 `evidence/US-0056-rework-one-member-dark.png` (three Spaces, only one in channel A, the active
 Space being a non-member), `evidence/US-0056-rework-two-channels-dark.png` (two Spaces in A,
 one in B), `evidence/US-0056-rework-one-member-light.png` (the first case in the light theme).
+
+Verification: `cargo test -p oneterm-terminal-view` and `pwsh scripts/ci-local.ps1`.
+
+## Rework 2 2026-09-09
+
+Owner feedback: "Remove the coloured frame."
+
+Change: a member Space no longer draws a frame in its channel colour. The top-right badge
+added by the first rework is the only per-Space marker, and Space borders return to the
+pre-IN-0022 rule for every Space: `table_active_border` for the active Space, `border` for
+the inactive ones, and no border at all on the single-Space fast path. That path keeps
+`.relative()` and the badge, so a lone member is still marked without changing the pixel
+layout of an unsplit tab. `space_border_color(is_active, active, inactive)` is back to its
+original signature and its original truth-table test; the channel-branch test is gone, and
+`space/render.rs` no longer imports `channel_color` (the chip builder in
+`theme/input_channel.rs` still uses it, so the function itself stays).
+
+Docs updated with the change: this packet, `low-level-design/menu-chip-frame.md` (the Space
+frame section dropped, the badge section states the border rule), `high-level-design.md`
+(Idea, wireframe, bullets), `IN-0022.md` (surfaces and safety bullets), `docs/gui-layout.md`,
+`docs/terminal-split.md`, `docs/decisions/DEC-0009-input-channel-membership-is-per-space.md`,
+`README.md`.
+
+Evidence (described in `evidence/US-0056-gui-walk.md` under "Rework 2"):
+`evidence/US-0056-rework2-one-member-dark.png` (one tab, three Spaces, only one in channel A,
+the active Space a non-member) and `evidence/US-0056-rework2-two-channels-dark.png`
+(two Spaces in A, one in B). Pixel sampling of both confirms the member borders equal the
+theme rule.
 
 Verification: `cargo test -p oneterm-terminal-view` and `pwsh scripts/ci-local.ps1`.
 

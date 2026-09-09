@@ -30,3 +30,26 @@ instance was stopped.
 | `US-0056-rework-two-channels-dark.png` | The same tab with the two right Spaces in channel A and the left one in channel B: badges `A`, `A`, `B`, and the tab strip shows the matching `A` and `B` chips. |
 | `US-0056-rework-one-member-light.png` | The first case in the Zed One Light theme: the badge keeps the chip's look (white letter on `chart_1`) against the light background. |
 
+## Rework 2 walk (2026-09-09): the channel frame removed
+
+Same method and build (`CARGO_TARGET_DIR=target/in22-target`, `fast-dev`). The scratch
+`target/ui_config.json` bound `f2` = Split Right, `f3` = Split Down, `f5` = Join Channel A and
+`f6` = Join Channel B; terminals were put into the new Spaces through the placeholder menu
+("New Terminal Here"). The file was restored afterwards and every launched instance was
+stopped.
+
+| Screenshot | What it shows |
+|---|---|
+| `US-0056-rework2-one-member-dark.png` | One tab, three Spaces, only the top-right one in channel A: it carries the `A` badge and nothing else. The active Space is the bottom-right non-member, so the only coloured border on screen is its own active border. |
+| `US-0056-rework2-two-channels-dark.png` | The same tab with the two right Spaces in channel A and the left one in channel B: badges `A`, `A`, `B` and the matching `A`/`B` tab chips; no Space is framed in a channel colour. |
+
+Pixel samples (Zed One Dark: `border` `#3E4451`, `table.active.border` `#528BFF`, channel A
+`chart.1` `#61AFEF`, channel B `chart.2` `#98C379`):
+
+- `US-0056-rework2-one-member-dark.png`: the channel-A member's top border is `#3E4451`
+  (the theme's inactive rule), the active non-member's gutter is `#528BFF`.
+- `US-0056-rework2-two-channels-dark.png`: the active channel-B member is `#3E4451` outside
+  and `#528BFF` in the gutter; both inactive channel-A members are `#3E4451`. The channel
+  colours appear only in the badges and the tab chips.
+- Single-Space fast path: a lone Space that joins channel A gains the badge and stays
+  borderless — its window edges sample the same `#23272E` background as before the join.

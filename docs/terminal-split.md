@@ -56,12 +56,11 @@ member of that channel. What it means for Spaces (DEC-0009):
 - Every member Space shows a badge with its channel letter in the top-right corner — the
   same chip the tab strip uses (bold letter on `chart_1..chart_5`) — inset past the scrollbar
   track. The badge is what tells the Spaces of one tab apart when only some of them joined.
-- Every member Space is also framed in its channel colour, full colour for the active Space
-  and 55 % for the inactive ones; the frame is a secondary cue, because its colour is close
-  to the active-Space border in some themes. The frame replaces the active/inactive rule of
-  [05](terminal-split/05-rendering-theme.md) for members only; a non-member Space is painted
-  exactly as before. A tab whose single Space is a member draws the badge and the 1 px frame
-  too, although a lone Space is otherwise borderless.
+- The badge is the only per-Space marker. Space borders are untouched by membership: they
+  follow the active/inactive rule of [05](terminal-split/05-rendering-theme.md), and the
+  single Space of an unsplit tab stays borderless — it only gains the badge. A border in the
+  channel colour was tried and dropped, because its colour is close to the active-Space
+  border in some themes.
 - Membership is in-memory: nothing about channels is persisted, like the split layout itself.
 - Broadcast is **not** suppressed on the alternate screen. A member Space running a
   full-screen program (`vim`, `htop`) receives the peers' input like any other member, so

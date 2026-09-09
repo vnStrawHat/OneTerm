@@ -43,7 +43,7 @@ Space or a Close Space does to membership, and how the tab strip can show it hon
 ## Consequences
 
 - [ ] Benefit to confirm: a split tab can hold members of one channel, members of different
-  channels, and non-members at once, and the chips and frames show which is which.
+  channels, and non-members at once, and the tab chips and Space badges show which is which.
 - [ ] Tradeoff: joining a whole tab is two menu clicks (join this Space, then join all
   Spaces in the tab) instead of one.
 - [ ] Follow-up: if session restore ever lands, decide then whether channels persist with it.

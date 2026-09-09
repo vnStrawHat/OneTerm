@@ -1,4 +1,4 @@
-# Low-Level Design: Input Channel menu, tab chips, and Space frame
+# Low-Level Design: Input Channel menu, tab chips, and Space badge
 
 Intake: IN-0022
 HLD: ../high-level-design.md
@@ -8,7 +8,7 @@ Date: 2026-09-09
 ## Concern
 
 How a Space joins, leaves, or closes a channel from the UI, and how membership is painted on
-the tab strip and the Space frame.
+the tab strip and on the member Space itself.
 
 ## Design
 
@@ -64,7 +64,7 @@ channel_chip(ch, ("tab-channel", index), cx)   // crates/terminal-view/src/theme
 its label/colour triple comes from the pure `channel_chip_style`, which is what the test
 checks. `channel_color(ch, cx)` returns `[chart_1, chart_2, chart_3, chart_4,
 chart_5][ch.index()]` from `cx.theme()`; it lives in `crates/terminal-view/src/theme/` so the
-chip, the badge and the frame share it. Chip text uses `cx.theme().background` for contrast on the saturated chart colour;
+chip and the badge share it. Chip text uses `cx.theme().background` for contrast on the saturated chart colour;
 if a theme's chart colour is too light for that, the theme JSON owns the fix, not the chip.
 
 ### Space badge (`space/render.rs`)
@@ -75,28 +75,21 @@ last child of the Space wrapper (both the split path and the single-Space fast p
 therefore becomes `.relative()`). The 15 px inset clears the terminal's 12 px scrollbar
 track (`TRACK_WIDTH_PX` in `terminal_view/scrollbar.rs`).
 
-The badge, not the frame, is the per-Space marker: in the dark theme the channel-A colour
-(`chart_1`) is close to `table_active_border`, so a frame alone cannot say which Space of a
-split joined. The badge takes no focus (a plain `div` with an id, no `track_focus`) and
+The badge is the only per-Space marker. A frame in the channel colour was tried and
+dropped: in the dark theme the channel-A colour (`chart_1`) is close to
+`table_active_border`, so a frame cannot say which Space of a split joined, and it costs the
+active-Space cue it overwrites. Space borders therefore keep the theme's rule unchanged
+(`space_border_color(is_active, active, inactive)`): `table_active_border` for the active
+Space, `border` otherwise, and no border at all on the single-Space fast path. The badge
+takes no focus (a plain `div` with an id, no `track_focus`) and
 carries no click handler; a click on it reaches the Space's own activation handler like any
 other click inside the Space.
 
-### Space frame (`space/render.rs`)
-
-`space_border_color(is_active, active, inactive)` becomes
-`space_border_color(is_active, channel: Option<Hsla>, active, inactive)`:
-
-- `Some(c)` and active → `c`;
-- `Some(c)` and inactive → `c.opacity(0.55)`;
-- `None` → today's rule.
-
-The single-Space fast path (no border today) draws the 1 px frame when the Space is a
-member, so a lone member tab is never unmarked; it stays borderless otherwise, preserving
-the current pixel layout for non-members.
+### Registry observer (`panel/terminal_panel.rs`)
 
 `TerminalPanel` observes the registry entity (`cx.observe`) once at construction so a join
 from another tab (for example `Close Channel` elsewhere) repaints this tab's chips and
-frames.
+badges.
 
 ## Interfaces
 
@@ -119,7 +112,7 @@ pub(crate) fn tab_channels(&self, cx: &App) -> Vec<InputChannel>;
 - [ ] Terminal outside a Space tree (`split: None`): the submenu shows items 1 and 2 only.
 - [ ] Tab chip row with five channels: five chips; the tab keeps its `min_w(px(100.))` and
   the title truncates as it does for a long title today.
-- [ ] Theme switch: chips and frames recolour on the next render; no cached colours.
+- [ ] Theme switch: chips and badges recolour on the next render; no cached colours.
 - [ ] `JoinInputChannel` dispatched by key binding while the active Space is empty: handler
   finds no terminal and does nothing.
 - [ ] `Close Channel` from a tab that is not focused (via another tab's menu): the observer
@@ -130,7 +123,8 @@ pub(crate) fn tab_channels(&self, cx: &App) -> Vec<InputChannel>;
 - [ ] `panel/tests.rs`: `tab_channels` returns `[A]` for one member Space, `[A, C]` for a
   mixed split, `[]` for none; `join_tab_to_channel` joins every Space; `leave_tab_channels`
   clears them.
-- [ ] `space/tests.rs`: `space_border_color` truth table incl. the opacity branch.
+- [ ] `space/render.rs` tests: the `space_border_color` truth table — membership is not
+  one of its inputs.
 - [ ] `theme/input_channel.rs`: `channel_chip_style` returns the channel's letter, its chart
   colour and the theme background for every channel.
 - [ ] `input/menu` tests: items 2 and 3 appear only under their conditions.
