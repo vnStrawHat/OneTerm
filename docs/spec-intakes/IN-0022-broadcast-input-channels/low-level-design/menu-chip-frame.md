@@ -54,8 +54,8 @@ renders, before the recording dot, one chip per channel:
 
 ```text
 channel_chip(ch, ("tab-channel", index), cx)   // crates/terminal-view/src/theme
-// = div().id(id).flex_shrink_0().px_1().rounded_sm()
-//       .text_xs().font_weight(FontWeight::BOLD)
+// = div().id(id).flex_shrink_0().size(px(16.)).flex().items_center().justify_center()
+//       .rounded_sm().text_xs().font_weight(FontWeight::BOLD)
 //       .bg(channel_color(ch, cx)).text_color(cx.theme().background)
 //       .child(ch.label())
 ```
@@ -70,10 +70,11 @@ if a theme's chart colour is too light for that, the theme JSON owns the fix, no
 ### Space badge (`space/render.rs`)
 
 `render_leaf` reads the leaf's channel once and, for a member, renders
-`channel_chip(ch, ("space-channel", id), cx).absolute().top(px(3.)).right(px(15.))` as the
+`channel_chip(ch, ("space-channel", id), cx).absolute().top(px(5.)).right(px(5.))` as the
 last child of the Space wrapper (both the split path and the single-Space fast path, which
-therefore becomes `.relative()`). The 15 px inset clears the terminal's 12 px scrollbar
-track (`TRACK_WIDTH_PX` in `terminal_view/scrollbar.rs`).
+therefore becomes `.relative()`). The chip is a fixed 16 px square, so the tab chip and the
+badge have the same footprint; 5 px from both edges is the owner's placement. It overlaps
+the scrollbar track, which is empty at the top unless the view is scrolled up.
 
 The badge is the only per-Space marker. A frame in the channel colour was tried and
 dropped: in the dark theme the channel-A colour (`chart_1`) is close to

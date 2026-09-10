@@ -54,8 +54,9 @@ member of that channel. What it means for Spaces (DEC-0009):
   are members. "Input Channel > Join All Spaces In Tab To X" is the one-click way to put the
   whole tab in one channel.
 - Every member Space shows a badge with its channel letter in the top-right corner — the
-  same chip the tab strip uses (bold letter on `chart_1..chart_5`) — inset past the scrollbar
-  track. The badge is what tells the Spaces of one tab apart when only some of them joined.
+  same 16 px square chip the tab strip uses (bold letter on `chart_1..chart_5`) — 5 px from
+  the top and right edges. The badge is what tells the Spaces of one tab apart when only
+  some of them joined.
 - The badge is the only per-Space marker. Space borders are untouched by membership: they
   follow the active/inactive rule of [05](terminal-split/05-rendering-theme.md), and the
   single Space of an unsplit tab stays borderless — it only gains the badge. A border in the

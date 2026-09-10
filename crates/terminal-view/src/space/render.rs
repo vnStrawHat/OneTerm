@@ -127,13 +127,14 @@ fn render_leaf(
     };
     // The badge is the only per-Space channel marker: a frame in the channel
     // colour is not distinguishable from the active-Space border, which is a
-    // close blue in the dark theme. Inset past the terminal's 12 px scrollbar
-    // track.
+    // close blue in the dark theme. Sits in the corner, 5 px from both edges
+    // (the owner's placement); it overlaps the scrollbar track, which is
+    // empty at the top unless the view is scrolled up.
     let badge = channel.map(|channel| {
         channel_chip(channel, ("space-channel", id.0 as usize), cx)
             .absolute()
-            .top(px(3.))
-            .right(px(15.))
+            .top(px(5.))
+            .right(px(5.))
     });
     let content: AnyElement = match &leaf.content {
         SpaceContent::Terminal(view) => view.clone().into_any_element(),

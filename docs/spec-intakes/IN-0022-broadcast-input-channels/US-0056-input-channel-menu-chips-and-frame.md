@@ -222,6 +222,22 @@ theme rule.
 
 Verification: `cargo test -p oneterm-terminal-view` and `pwsh scripts/ci-local.ps1`.
 
+## Rework 3 2026-09-10
+
+Owner feedback: "The channel chip on the tab title is not square", then "put the Space
+badge at top 5 px, right 5 px".
+
+Change: `channel_chip` is a fixed 16 px square (`size`, flex-centred letter, rounded
+corners kept) instead of a padded box whose width followed the letter, so the tab chip and
+the Space badge share one footprint. The badge moved from 3 px / 15 px to 5 px from the top
+and right edges of the Space; it now overlaps the scrollbar track, which only shows a thumb
+at the top when the view is scrolled up. Docs updated: `low-level-design/menu-chip-frame.md`
+and `docs/terminal-split.md`.
+
+Evidence: `cargo test -p oneterm-terminal-view` and `pwsh scripts/ci-local.ps1` (recorded
+below in Evidence and Gaps). No new screenshot: the owner placed the badge by hand in the
+running build and asked for exactly that offset.
+
 ## Handoff
 
 IN-0022 is complete as specified: US-0055 (registry + fan-out) and US-0056 (menu, chips,

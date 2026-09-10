@@ -4,7 +4,7 @@
 
 use gpui::{
     App, Div, ElementId, FontWeight, Hsla, InteractiveElement as _, ParentElement as _, Stateful,
-    Styled as _, div,
+    Styled as _, div, px,
 };
 use gpui_component::ActiveTheme as _;
 
@@ -44,7 +44,12 @@ pub(crate) fn channel_chip(
     div()
         .id(id)
         .flex_shrink_0()
-        .px_1()
+        // A fixed square box, so the tab chip and the Space badge have the
+        // same footprint and the letter is centred instead of padded.
+        .size(px(16.))
+        .flex()
+        .items_center()
+        .justify_center()
         .rounded_sm()
         .text_xs()
         .font_weight(FontWeight::BOLD)
