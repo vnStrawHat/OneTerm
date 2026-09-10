@@ -213,6 +213,9 @@ pub struct SshConfig {
     pub jump_hops: Vec<SshHop>,
     /// Port forwards started once the target shell is up (US-0059).
     pub port_forwards: Vec<crate::PortForward>,
+    /// Let the remote host use the local SSH agent while the session is open
+    /// (US-0060). Off unless the saved session turns it on (DEC-0011).
+    pub agent_forwarding: bool,
 }
 
 impl Debug for SshAuthMethod {
@@ -257,6 +260,7 @@ impl SshConfig {
             auth: self.auth.duplicate_auth(),
             shell_integration: self.shell_integration,
             port_forwards: self.port_forwards.clone(),
+            agent_forwarding: self.agent_forwarding,
             jump_hops: self
                 .jump_hops
                 .iter()
@@ -333,6 +337,7 @@ mod tests {
             shell_integration: true,
             jump_hops: Vec::new(),
             port_forwards: Vec::new(),
+            agent_forwarding: false,
         };
 
         let duplicate = config.duplicate_config();
@@ -359,6 +364,7 @@ mod tests {
             shell_integration: true,
             jump_hops: Vec::new(),
             port_forwards: Vec::new(),
+            agent_forwarding: false,
         };
         assert_eq!(
             config.duplicate_config().auth,
@@ -386,6 +392,7 @@ mod tests {
                 host_key_policy: HostKeyPolicy::Strict,
             }],
             port_forwards: Vec::new(),
+            agent_forwarding: false,
         };
 
         let duplicate = config.duplicate_config();
@@ -434,6 +441,7 @@ mod tests {
             shell_integration: true,
             jump_hops: Vec::new(),
             port_forwards: Vec::new(),
+            agent_forwarding: false,
         };
 
         let output = format!("{config:?}");

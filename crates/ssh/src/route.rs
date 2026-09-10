@@ -10,9 +10,7 @@ use std::sync::Arc;
 use russh::client::{self, AuthResult, Handle};
 use russh::keys::PrivateKeyWithHashAlg;
 
-use oneterm_core::{AppError, ConnectPhase, HostKeyPolicy, SshAuthMethod, SshKeepaliveConfig};
-
-use tokio_util::sync::CancellationToken;
+use oneterm_core::{AppError, ConnectPhase, SshAuthMethod, SshKeepaliveConfig};
 
 use crate::agent::authenticate_with_agent;
 use crate::handler::SshClientHandler;
@@ -20,7 +18,6 @@ use crate::session::{
     ConnectPhases, authenticate_with_password, authentication_failure_message, load_private_key,
     phase_error, rsa_hash_alg,
 };
-use crate::tunnel::ForwardTable;
 
 /// Authenticated jump-host handles, innermost last. Dropping the set closes
 /// the hops from the innermost outwards, so no hop's connection closes under
@@ -166,30 +163,25 @@ pub(crate) async fn authenticate(
     }
 }
 
-/// Open the transport to one hop (or the target) and authenticate it, each
-/// step under its connect phase deadline. Only the target carries `forwards`:
-/// a hop never serves `forwarded-tcpip` channels.
-#[allow(clippy::too_many_arguments)]
+/// Open the transport to the hop (or target) `handler` describes and
+/// authenticate it, each step under its connect phase deadline. The caller
+/// builds the handler, so only the target's carries forwards and the agent
+/// bridge; a hop never serves server-opened channels.
 pub(crate) async fn connect_hop(
     phases: &ConnectPhases,
     carrier: Option<&Handle<SshClientHandler>>,
-    host: &str,
-    port: u16,
+    handler: SshClientHandler,
     username: &str,
     auth: SshAuthMethod,
-    host_key_policy: HostKeyPolicy,
     keepalive: SshKeepaliveConfig,
-    forwards: Option<(ForwardTable, CancellationToken)>,
 ) -> oneterm_core::Result<Handle<SshClientHandler>> {
-    let mut handler = SshClientHandler::new(host.to_string(), port, host_key_policy);
-    if let Some((table, shutdown)) = forwards {
-        handler = handler.with_forwards(table, shutdown);
-    }
+    let host = handler.host().to_string();
+    let port = handler.port();
     let config = client_config(&handler, keepalive);
     let mut handle = phases
         .run(
             ConnectPhase::Transport,
-            open_transport(carrier, host, port, handler, config),
+            open_transport(carrier, &host, port, handler, config),
         )
         .await?;
     log::info!(

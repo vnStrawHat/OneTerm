@@ -41,6 +41,8 @@ pub struct SshDuplicateConfig {
     /// Port forwards of the source session; the duplicate tries to bind them too
     /// and warns about the ones already taken (DEC-0011).
     pub port_forwards: Vec<crate::PortForward>,
+    /// Whether the source session forwarded the local SSH agent.
+    pub agent_forwarding: bool,
 }
 
 /// Launch metadata required to create a fresh session of the same kind.

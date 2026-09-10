@@ -6,10 +6,16 @@
 //! the `openssh-ssh-agent` named pipe then Pageant on Windows, `SSH_AUTH_SOCK`
 //! on Unix. See `docs/ssh-authentication.md`.
 
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
 use russh::MethodKind;
-use russh::client::{AuthResult, Handle};
+use russh::client::{AuthResult, Handle, Msg};
 use russh::keys::agent::AgentIdentity;
 use russh::keys::agent::client::{AgentClient, AgentStream};
+use russh::{Channel, ChannelMsg};
+use tokio_util::sync::CancellationToken;
 
 use oneterm_core::{AppError, ConnectPhase};
 
@@ -166,6 +172,70 @@ where
         authentication_failure_message(&remaining_methods, partial_success),
         if offered == 1 { "y" } else { "ies" }
     )))
+}
+
+/// Opens a fresh connection to the local agent; injectable so the forwarding
+/// bridge can be tested against an in-memory agent.
+pub(crate) type AgentConnector = Arc<
+    dyn Fn() -> Pin<Box<dyn Future<Output = oneterm_core::Result<BoxedAgentStream>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// The real agent, found the same way authentication finds it.
+pub(crate) fn local_agent_connector() -> AgentConnector {
+    Arc::new(|| Box::pin(connect_agent_stream()))
+}
+
+/// Ask the server to forward the agent on the session channel (US-0060);
+/// `Ok(false)` when the server refuses (`AllowAgentForwarding no`), which is
+/// not a connection failure. The reply is the next `Success` / `Failure` on
+/// the channel; nothing else is outstanding before the PTY request.
+pub(crate) async fn request_agent_forwarding(
+    channel: &mut Channel<Msg>,
+) -> oneterm_core::Result<bool> {
+    let error = |e: &dyn std::fmt::Display| {
+        phase_error(
+            ConnectPhase::ChannelOpen,
+            format!("agent forwarding request: {e}"),
+        )
+    };
+    channel.agent_forward(true).await.map_err(|e| error(&e))?;
+    loop {
+        match channel.wait().await {
+            Some(ChannelMsg::Success) => return Ok(true),
+            Some(ChannelMsg::Failure) => return Ok(false),
+            Some(other) => log::debug!("SshSession: message before the agent reply: {other:?}"),
+            None => return Err(error(&"channel closed")),
+        }
+    }
+}
+
+/// Bridge one server-opened `auth-agent@openssh.com` channel to a fresh local
+/// agent connection until either side ends or the session shuts down.
+pub(crate) fn spawn_agent_bridge(
+    channel: Channel<Msg>,
+    connector: AgentConnector,
+    shutdown: CancellationToken,
+) {
+    tokio::spawn(async move {
+        let mut agent = match connector().await {
+            Ok(agent) => agent,
+            Err(error) => {
+                log::warn!("SshSession: agent forwarding: {error}");
+                return;
+            }
+        };
+        let mut remote = channel.into_stream();
+        tokio::select! {
+            _ = shutdown.cancelled() => {}
+            result = tokio::io::copy_bidirectional(&mut remote, &mut agent) => {
+                if let Err(error) = result {
+                    log::debug!("SshSession: agent forwarding channel ended: {error}");
+                }
+            }
+        }
+    });
 }
 
 fn identity_comment(identity: &AgentIdentity) -> String {

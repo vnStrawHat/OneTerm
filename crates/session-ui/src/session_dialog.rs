@@ -19,6 +19,7 @@ use std::rc::Rc;
 use gpui::{App, AppContext, Hsla, ParentElement as _, SharedString, Styled, Window, px};
 use gpui_component::{
     ActiveTheme, Colorize as _, IndexPath, Sizable as _, WindowExt as _,
+    checkbox::Checkbox,
     color_picker::{ColorPicker, ColorPickerState},
     combobox::ComboboxState,
     h_flex,
@@ -57,6 +58,7 @@ struct SessionForm {
     logging: SshLoggingOverride,
     jump_host: Option<SshSessionId>,
     port_forwards: Vec<PortForward>,
+    agent_forwarding: bool,
 }
 
 impl SessionForm {
@@ -94,6 +96,7 @@ impl SessionForm {
             logging: self.logging,
             jump_host: self.jump_host,
             port_forwards: self.port_forwards,
+            agent_forwarding: self.agent_forwarding,
         })
     }
 }
@@ -192,6 +195,9 @@ pub(crate) fn open_session_dialog(
         .map(|(_, s)| s.port_forwards.clone())
         .unwrap_or_default();
     let forward_rows = PortForwardRows::new(&saved_forwards, window, cx);
+    let agent_forwarding = Rc::new(Cell::new(
+        edit.as_ref().is_some_and(|(_, s)| s.agent_forwarding),
+    ));
 
     // ── Collect existing groups from the store ──────────────────────────
     let existing_groups: Vec<SharedString> = {
@@ -276,6 +282,7 @@ pub(crate) fn open_session_dialog(
         let logging = logging.clone();
         let jump_host_picker = jump_host_picker.clone();
         let forward_rows = forward_rows.clone();
+        let agent_forwarding = agent_forwarding.clone();
         move |window: &mut Window, cx: &mut App| {
             let store = SshSessionStore::global(cx);
             let port_forwards = match forward_rows.take(cx) {
@@ -305,6 +312,7 @@ pub(crate) fn open_session_dialog(
                 logging: logging.get(),
                 jump_host,
                 port_forwards,
+                agent_forwarding: agent_forwarding.get(),
             };
             let session = match form.into_session() {
                 Ok(session) => session,
@@ -369,6 +377,15 @@ pub(crate) fn open_session_dialog(
                 ))
                 .child(auth_form.render(false, cx))
                 .child(jump_host_picker.render(cx))
+                .child(
+                    Checkbox::new("agent-forwarding")
+                        .label("Forward the SSH agent to the remote host")
+                        .checked(agent_forwarding.get())
+                        .on_click({
+                            let agent_forwarding = agent_forwarding.clone();
+                            move |checked: &bool, _window, _cx| agent_forwarding.set(*checked)
+                        }),
+                )
                 .child(forward_rows.render(cx))
                 .child(labelled_field(
                     "Group",
@@ -428,7 +445,16 @@ mod tests {
             logging: SshLoggingOverride::Inherit,
             jump_host: None,
             port_forwards: Vec::new(),
+            agent_forwarding: false,
         }
+    }
+
+    #[test]
+    fn form_keeps_the_agent_forwarding_switch() {
+        let mut form = filled_form();
+        form.agent_forwarding = true;
+        assert!(form.into_session().unwrap().agent_forwarding);
+        assert!(!filled_form().into_session().unwrap().agent_forwarding);
     }
 
     #[test]
@@ -521,6 +547,7 @@ mod tests {
                 logging: SshLoggingOverride::Inherit,
                 jump_host: None,
                 port_forwards: Vec::new(),
+                agent_forwarding: false,
             },
         };
         let sessions = [

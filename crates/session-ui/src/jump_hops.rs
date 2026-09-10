@@ -240,6 +240,7 @@ mod tests {
                 logging: SshLoggingOverride::Inherit,
                 jump_host: None,
                 port_forwards: Vec::new(),
+                agent_forwarding: false,
             },
         }
     }

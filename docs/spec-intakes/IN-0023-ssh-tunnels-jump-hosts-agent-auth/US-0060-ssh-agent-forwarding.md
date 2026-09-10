@@ -10,8 +10,8 @@ Created: 2026-09-10
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
-- [ ] In progress
-- [ ] Implemented
+- [x] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -34,25 +34,25 @@ shell still opens.
 
 ## Scope
 
-- [ ] In scope: `SshConfig.agent_forwarding` (`oneterm-core`); `channel.agent_forward(true)`
+- [x] In scope: `SshConfig.agent_forwarding` (`oneterm-core`); `channel.agent_forward(true)`
   after `channel_open_session`; `SshClientHandler { agent_forwarding, shutdown }` and
   `server_channel_open_agent_forward` bridge (`spawn_agent_bridge`); refusal warning;
   `SshSession.agent_forwarding` + the checkbox in the session dialog; Duplicate Session
   copies the switch; tests.
-- [ ] Out of scope: Quick Connect switch; forwarding through jump hops to the target only
+- [x] Out of scope: Quick Connect switch; forwarding through jump hops to the target only
   (the request is made on the target's session channel; hops never see an agent channel);
   a global "always forward" setting; key-use confirmation prompts (that is the agent's job,
   `ssh-add -c`).
 
 ## Acceptance
 
-- [ ] Session dialog checkbox, unchecked by default; saved as `"agent_forwarding": true` only when on.
-- [ ] With the switch on and a key in the local agent: `ssh-add -l` on the remote host lists the key; `git fetch` from a private repository on the remote host succeeds without a remote key.
-- [ ] With the switch off: `ssh-add -l` on the remote host reports no agent; a test server that opens an agent channel anyway sees it closed and OneTerm never connects to the local agent.
-- [ ] Server with `AllowAgentForwarding no`: one warning toast naming the session; the shell opens.
-- [ ] Local agent stopped mid-session: the remote `ssh` sees a refused agent; the terminal keeps working.
-- [ ] Works with Password, Private key, and SSH agent authentication alike (the switch is independent of the auth method).
-- [ ] `pwsh scripts/ci-local.ps1` green.
+- [x] Session dialog checkbox, unchecked by default; saved as `"agent_forwarding": true` only when on (GUI walked; serde test).
+- [ ] With the switch on and a key in the local agent: `ssh-add -l` on the remote host lists the key (unit-proven: a server-opened agent channel round-trips bytes through the injected local agent connector; no real host).
+- [x] With the switch off: a test server that opens an agent channel anyway sees it closed and the local agent connector is never called.
+- [x] Server with `AllowAgentForwarding no`: `request_agent_forwarding` returns `Ok(false)` (unit-tested against a refusing server) and `connect` turns it into one `SessionEvent::Notification` naming `user@host:port`; the toast itself not walked.
+- [ ] Local agent stopped mid-session: the bridge task logs the connector error and ends; the terminal is untouched (by construction; not exercised).
+- [x] Works with Password, Private key, and SSH agent authentication alike: the switch lives on `SshConfig`, not on `SshAuthMethod` (the tests authenticate with a password).
+- [x] `pwsh scripts/ci-local.ps1` green.
 
 ## Documentation
 
@@ -73,7 +73,11 @@ Reason: the authentication contract's security policy must state what the remote
 
 ### Reconciliation
 
-Before completion, list docs changed or confirm the recorded no-change reason remains valid.
+- `docs/ssh-authentication.md` — "Agent forwarding" bullet (switch, request point, bridge, refusal, off-by-default refusal of server-opened channels, security note); the Out of Scope entry for forwarding removed.
+- `docs/ssh-client-connect.md` — §9.9 names the request point between `ChannelOpen` and `PtyRequest` and the handler bridge.
+- `docs/agents/persistence.md` — `agent_forwarding` field.
+- `docs/decisions/DEC-0011-forwarding-defaults-loopback-and-opt-in.md` — reviewed, unchanged: implemented as decided (per session, off by default, handler closes unrequested channels).
+- `docs/agents/structure.md` — reviewed, unchanged: no new file; the bridge lives in `agent.rs`.
 
 ## Context
 
@@ -84,11 +88,11 @@ Before completion, list docs changed or confirm the recorded no-change reason re
 
 ## Plan
 
-- [ ] `SshConfig.agent_forwarding`, `SshSession.agent_forwarding` (serde default false) + round-trip test.
-- [ ] Handler flag + `server_channel_open_agent_forward` + `spawn_agent_bridge`; request after `channel_open_session`; refusal warning.
-- [ ] Tests: server opens an agent channel with the flag off (closed, agent untouched); with the flag on, bytes flow to a fake agent over duplex; request refused yields the warning event.
-- [ ] Dialog checkbox; Duplicate Session copies it.
-- [ ] Docs + gate; manual `ssh-add -l` on the remote host on/off.
+- [x] `SshConfig.agent_forwarding`, `SshDuplicateConfig.agent_forwarding`, `SshSession.agent_forwarding` (serde default false, omitted when false) + round-trip test.
+- [x] `SshClientHandler::with_agent_forwarding(connector, token)` + `server_channel_open_agent_forward` + `agent::spawn_agent_bridge`; `agent::request_agent_forwarding` after `channel_open_session` (waits for the channel reply); refusal notification. `connect_hop` now takes the prebuilt handler so only the target's carries forwards and the bridge.
+- [x] Tests: refused request is `Ok(false)`; accepted request bridges a server-opened agent channel to an in-memory echo agent exactly once; without the switch the channel is closed and the connector never called.
+- [x] Dialog checkbox ("Forward the SSH agent to the remote host"); the duplicate dialog passes the flag through.
+- [x] Docs + gate + GUI walk. Manual `ssh-add -l` on a remote host not run (no host).
 
 ## Decisions
 
@@ -101,17 +105,46 @@ Before completion, list docs changed or confirm the recorded no-change reason re
 - Manual (Windows + Linux host): `ssh-add -l` on the remote host with the switch on and off; `AllowAgentForwarding no` on the test server for the refusal toast.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+Commands (Windows 11, `pwsh`, branch `feat/ssh-agent-forwarding`, 2026-09-10):
+
+- `rtk proxy cargo test -p oneterm-core -p oneterm-ssh -p oneterm-session-ui` — 50 + 66 + 51
+  passed; the three new agent-forwarding tests run an in-process server whose `agent_request`
+  answers success or failure and then opens agent channels from its server handle (repeated
+  three times).
+- `rtk proxy cargo clippy --workspace --all-targets -- -D warnings` — clean.
+- `rtk proxy pwsh scripts/ci-local.ps1` — `ci-local: all checks passed`, 1105 tests.
+- GUI walk: `evidence/US-0060-gui-walk.md`.
+
+Found by the tests: dropping a `russh` channel on the client does not tell the server; the
+handler now calls `channel.close()` on an unrequested agent channel (and, the same way, on an
+unrequested forwarded-tcpip channel from US-0059) so the server sees `Close`.
+
+Deviations from the LLD:
+
+- The bridge takes an injectable `AgentConnector` (a boxed async factory) instead of calling
+  `connect_agent_stream` directly, so the tests can hand it an in-memory agent; production
+  passes `local_agent_connector()`.
+- `request_agent_forwarding` waits for the channel `Success` / `Failure` itself because
+  `russh` channel requests do not return their reply; it runs under the `ChannelOpen` phase
+  deadline.
+- No `agent_forwarding` on `SshHop`: hops never carry the switch, matching the packet scope.
+
+Gaps:
+
+- No real-host E2E: `ssh-add -l` / `git fetch` on a remote host, the refusal toast in a live
+  terminal, and stopping the local agent mid-session.
+- Quick Connect has no switch (scope); a duplicate of a forwarding session forwards too.
 
 ## Handoff
 
-Not started. Depends on US-0057 (`connect_agent_stream`).
+Implemented, gate green, GUI walked, not committed. This closes the last packet of IN-0023;
+next is owner acceptance and merging the four `feat/ssh-*` branches into `main`.

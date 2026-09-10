@@ -3,11 +3,12 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use oneterm_core::{AppError, ConnectPhase, HostKeyPolicy};
+use oneterm_core::{AppError, ConnectPhase, HostKeyPolicy, report_best_effort};
 use russh::client;
 use russh::keys::{Algorithm, HashAlg, PublicKey};
 use tokio_util::sync::CancellationToken;
 
+use crate::agent::{AgentConnector, spawn_agent_bridge};
 use crate::tunnel::{ForwardTable, forwarded_target, spawn_forwarded_tcpip};
 
 /// Handler errors that preserve enough host-key information for the UI to ask
@@ -143,6 +144,9 @@ pub(crate) struct SshClientHandler {
     /// Remote forwards this connection asked for, and the session token their
     /// relays die with; `None` for jump hops and connections without forwards.
     forwards: Option<(ForwardTable, CancellationToken)>,
+    /// Set only when the session forwards the local agent; without it every
+    /// agent channel the server opens is closed unanswered (DEC-0011).
+    agent_bridge: Option<(AgentConnector, CancellationToken)>,
 }
 
 impl SshClientHandler {
@@ -154,7 +158,26 @@ impl SshClientHandler {
             policy,
             known_hosts_path: None,
             forwards: None,
+            agent_bridge: None,
         }
+    }
+
+    /// Bridge server-opened agent channels to the local agent.
+    pub(crate) fn with_agent_forwarding(
+        mut self,
+        connector: AgentConnector,
+        shutdown: CancellationToken,
+    ) -> Self {
+        self.agent_bridge = Some((connector, shutdown));
+        self
+    }
+
+    pub(crate) fn host(&self) -> &str {
+        &self.host
+    }
+
+    pub(crate) fn port(&self) -> u16 {
+        self.port
     }
 
     /// Accept `forwarded-tcpip` channels for the remote forwards in `table`.
@@ -306,6 +329,27 @@ impl client::Handler for SshClientHandler {
             })
     }
 
+    /// The server wants the local agent. Bridged only when this session turned
+    /// forwarding on; otherwise the channel is dropped, never answered.
+    async fn server_channel_open_agent_forward(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        match &self.agent_bridge {
+            Some((connector, shutdown)) => {
+                spawn_agent_bridge(channel, connector.clone(), shutdown.clone());
+            }
+            None => {
+                log::warn!(
+                    "SshClientHandler: the server opened an agent channel but forwarding is off for this session"
+                );
+                report_best_effort("close unrequested agent channel", channel.close().await);
+            }
+        }
+        Ok(())
+    }
+
     /// A connection to one of this session's remote forwards. Channels for
     /// listeners OneTerm never asked for are dropped, never bridged.
     async fn server_channel_open_forwarded_tcpip(
@@ -332,9 +376,9 @@ impl client::Handler for SshClientHandler {
             }
             _ => {
                 log::warn!(
-                    "SshClientHandler: dropping a forwarded-tcpip channel for {connected_address}:{connected_port} that was never requested"
+                    "SshClientHandler: closing a forwarded-tcpip channel for {connected_address}:{connected_port} that was never requested"
                 );
-                drop(channel);
+                report_best_effort("close unrequested forwarded channel", channel.close().await);
             }
         }
         Ok(())

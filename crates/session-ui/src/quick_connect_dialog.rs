@@ -165,6 +165,9 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
         .as_ref()
         .map(|config| config.port_forwards.clone())
         .unwrap_or_default();
+    let agent_forwarding = prefill
+        .as_ref()
+        .is_some_and(|config| config.agent_forwarding);
     let (host, port, username, auth_method, key_path, shell_integration) = match prefill {
         Some(config) => {
             let (method, key_path) = match config.auth {
@@ -291,6 +294,7 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
                     logging: SshLoggingOverride::Inherit,
                     jump_host: hops.selected(cx),
                     port_forwards: Vec::new(),
+                    agent_forwarding: false,
                 };
                 Rc::new(move |cx: &mut App| {
                     SshSessionStore::global(cx).update(cx, |s, cx| {
@@ -317,6 +321,7 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
                 shell_integration,
                 jump_hops,
                 port_forwards: port_forwards.clone(),
+                agent_forwarding,
             };
             connecting.store(true, Ordering::Relaxed);
             window.refresh();

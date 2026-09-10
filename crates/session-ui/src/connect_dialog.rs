@@ -291,6 +291,7 @@ fn on_connect_click(
         shell_integration: true,
         jump_hops,
         port_forwards: session.port_forwards.clone(),
+        agent_forwarding: session.agent_forwarding,
     };
     connecting.store(true, Ordering::Relaxed);
     window.refresh();

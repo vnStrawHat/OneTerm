@@ -41,6 +41,7 @@ use oneterm_terminal::{
     SharedSessionState, SharedState, TerminalSecurityPolicy, ssh_log_identity,
 };
 
+use crate::agent::{local_agent_connector, request_agent_forwarding};
 use crate::counting_stream::CountingStream;
 use crate::handler::SshClientHandler;
 use crate::route::{JumpHandles, connect_hop, hop_error};
@@ -262,16 +263,14 @@ pub fn connect(
             for hop in hops {
                 let label = hop.label();
                 log::info!("SshSession: connecting to jump host {label}");
+                let handler = SshClientHandler::new(hop.host, hop.port, hop.host_key_policy);
                 let handle = connect_hop(
                     &phases,
                     carriers.last(),
-                    &hop.host,
-                    hop.port,
+                    handler,
                     &hop.username,
                     hop.auth,
-                    hop.host_key_policy,
                     keepalive,
-                    None,
                 )
                 .await
                 .map_err(|error| hop_error(&label, error))?;
@@ -280,21 +279,25 @@ pub fn connect(
             let target_auth = std::mem::replace(&mut cfg.auth, SshAuthMethod::None);
             log::info!("SshSession: connecting to {}:{}", cfg.host, cfg.port);
             let forward_table: ForwardTable = Arc::default();
+            let mut handler =
+                SshClientHandler::new(cfg.host.clone(), cfg.port, cfg.host_key_policy.clone())
+                    .with_forwards(forward_table.clone(), session_shutdown.clone());
+            if cfg.agent_forwarding {
+                handler = handler
+                    .with_agent_forwarding(local_agent_connector(), session_shutdown.clone());
+            }
             let handle = connect_hop(
                 &phases,
                 carriers.last(),
-                &cfg.host,
-                cfg.port,
+                handler,
                 &cfg.username,
                 target_auth,
-                cfg.host_key_policy.clone(),
                 keepalive,
-                Some((forward_table.clone(), session_shutdown.clone())),
             )
             .await?;
 
             // ── Open channel + pty + shell ──────────────────────────────
-            let channel = phases
+            let mut channel = phases
                 .run(ConnectPhase::ChannelOpen, async {
                     handle
                         .channel_open_session()
@@ -303,6 +306,29 @@ pub fn connect(
                 })
                 .await?;
             log::info!("SshSession: channel opened");
+
+            // ── Agent forwarding (opt-in per session, DEC-0011) ─────────
+            // A refusal (`AllowAgentForwarding no`) is a warning, not a failure.
+            if cfg.agent_forwarding {
+                let accepted = phases
+                    .run(
+                        ConnectPhase::ChannelOpen,
+                        request_agent_forwarding(&mut channel),
+                    )
+                    .await?;
+                if accepted {
+                    log::info!("SshSession: agent forwarding accepted");
+                } else {
+                    let message = format!(
+                        "The server refused agent forwarding for {}@{}:{}.",
+                        cfg.username, cfg.host, cfg.port
+                    );
+                    log::warn!("SshSession: {message}");
+                    if let Err(error) = notify_tx.try_send(SessionEvent::Notification(message)) {
+                        log::debug!("SshSession: agent forwarding warning not delivered: {error}");
+                    }
+                }
+            }
 
             let pty_modes: &[(Pty, u32)] = if cfg.shell_integration {
                 SHELL_INTEGRATION_PTY_MODES

@@ -153,6 +153,9 @@ pub struct SshSession {
     /// Port forwards started with every connection of this session (US-0059).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub port_forwards: Vec<PortForward>,
+    /// Forward the local SSH agent to the remote host (US-0060); off by default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub agent_forwarding: bool,
 }
 
 /// Why a `jump_host` chain cannot be followed.
@@ -639,6 +642,7 @@ mod tests {
             logging: SshLoggingOverride::Inherit,
             jump_host: None,
             port_forwards: Vec::new(),
+            agent_forwarding: false,
         };
         let json = serde_json::to_string(&session).unwrap();
         assert!(!json.contains("username"));
@@ -658,6 +662,7 @@ mod tests {
             logging: SshLoggingOverride::Inherit,
             jump_host: None,
             port_forwards: Vec::new(),
+            agent_forwarding: false,
         };
         let json = serde_json::to_string(&session).unwrap();
         assert!(json.contains("\"username\":\"root\""));
@@ -677,6 +682,7 @@ mod tests {
             logging: SshLoggingOverride::Inherit,
             jump_host: None,
             port_forwards: Vec::new(),
+            agent_forwarding: false,
         };
 
         let json = serde_json::to_string(&session).unwrap();
@@ -700,6 +706,7 @@ mod tests {
             logging: SshLoggingOverride::Inherit,
             jump_host: None,
             port_forwards: Vec::new(),
+            agent_forwarding: false,
         };
 
         let json = serde_json::to_string(&session).unwrap();
@@ -724,6 +731,7 @@ mod tests {
             logging: SshLoggingOverride::Inherit,
             jump_host: None,
             port_forwards: Vec::new(),
+            agent_forwarding: false,
         };
         assert!(
             !serde_json::to_string(&session)
@@ -755,6 +763,7 @@ mod tests {
                     logging: SshLoggingOverride::Inherit,
                     jump_host: jump.map(SshSessionId),
                     port_forwards: Vec::new(),
+                    agent_forwarding: false,
                 },
             });
         }
@@ -829,6 +838,7 @@ mod tests {
             logging: SshLoggingOverride::Inherit,
             jump_host: None,
             port_forwards: Vec::new(),
+            agent_forwarding: false,
         };
         assert!(
             !serde_json::to_string(&session)
@@ -850,6 +860,34 @@ mod tests {
     }
 
     #[test]
+    fn agent_forwarding_is_omitted_when_off_and_round_trips_when_on() {
+        let mut session = SshSession {
+            label: "target".into(),
+            host: "10.0.5.20".into(),
+            port: 22,
+            username: Some("deploy".into()),
+            auth_method: SshAuthPreference::Password,
+            key_path: None,
+            color: None,
+            group: None,
+            logging: SshLoggingOverride::Inherit,
+            jump_host: None,
+            port_forwards: Vec::new(),
+            agent_forwarding: false,
+        };
+        assert!(
+            !serde_json::to_string(&session)
+                .unwrap()
+                .contains("agent_forwarding")
+        );
+        session.agent_forwarding = true;
+        let json = serde_json::to_string(&session).unwrap();
+        assert!(json.contains("\"agent_forwarding\":true"), "{json}");
+        let back: SshSession = serde_json::from_str(&json).unwrap();
+        assert!(back.agent_forwarding);
+    }
+
+    #[test]
     fn entry_flattens_the_session_next_to_its_id() {
         let entry = SshSessionEntry {
             id: SshSessionId(7),
@@ -865,6 +903,7 @@ mod tests {
                 logging: SshLoggingOverride::Inherit,
                 jump_host: None,
                 port_forwards: Vec::new(),
+                agent_forwarding: false,
             },
         };
         let json = serde_json::to_value(&entry).unwrap();
@@ -937,6 +976,7 @@ mod persistence_tests {
             logging: SshLoggingOverride::Inherit,
             jump_host: None,
             port_forwards: Vec::new(),
+            agent_forwarding: false,
         }
     }
 
