@@ -57,9 +57,9 @@ member of that channel. What it means for Spaces (DEC-0009):
   same 16 px square chip the tab strip uses (bold letter on `chart_1..chart_5`, its glyph
   centred by the text node) — 5 px from the top and right edges. The badge is what tells the
   Spaces of one tab apart when only some of them joined.
-- A member Space is also framed in its channel colour, at full strength whether or not it is
-  the active Space; the badge says which channel and the border repeats it at the edge. A
-  Space in no channel keeps the active/inactive rule of
+- While a member Space is the selected one, its active-Space highlight takes the channel
+  colour instead of the theme's active colour; unselected Spaces keep the plain border,
+  member or not. A Space in no channel keeps the active/inactive rule of
   [05](terminal-split/05-rendering-theme.md). The single Space of an unsplit tab stays
   borderless in either case — it only gains the badge, so an unsplit tab keeps its layout.
 - Membership is in-memory: nothing about channels is persisted, like the split layout itself.

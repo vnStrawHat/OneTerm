@@ -85,10 +85,10 @@ Tab strip and Space badges (tab "fleet" split into three Spaces, tab "db" with o
 - One chip per distinct channel in the tab, ordered A..E ("[B][C]" above). A tab with no
   member Space shows no chip. The chip is a 16 px square with square corners and its letter
   centred by the text node, so the tab chip and the Space badge look identical.
-- Every member Space repeats that chip as a badge in its own top-right corner, and its
-  border takes the channel colour at full strength whether or not it is the active Space.
-  The badge says which channel; the border repeats it at the Space's edge. A Space in no
-  channel keeps the theme's active/inactive border rule.
+- Every member Space repeats that chip as a badge in its own top-right corner. While a
+  member Space is the selected one, its active-Space highlight takes the channel colour
+  instead of the theme's active colour; unselected Spaces keep the plain border, member or
+  not.
 - A tab whose single Space is a member draws the badge too; the tab chip alone is too easy
   to miss when a password is about to fan out. That lone Space stays borderless, so an
   unsplit tab keeps its pixel layout.

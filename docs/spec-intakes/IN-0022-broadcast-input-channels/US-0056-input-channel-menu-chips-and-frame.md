@@ -47,9 +47,10 @@ are bindable in Settings › Key Bindings. Depends on US-0055.
   than one Space (join-all only when this Space is a member, leave-all only when any Space
   in the tab is a member).
 - [x] Member Spaces draw the channel badge in their top-right corner, the lone Space of an
-  unsplit tab included, and are framed in their channel colour whether or not they are
-  active; a Space in no channel keeps the theme's active/inactive rule, and the single-Space
-  fast path stays borderless. The chip letter is centred within 1 px of the 16 px box.
+  unsplit tab included. The selected Space's highlight is its channel colour when it is a
+  member and the theme's active colour otherwise; unselected Spaces keep the plain border,
+  and the single-Space fast path stays borderless. The chip letter is centred within 1 px
+  of the 16 px box.
 - [x] Tab chips list the distinct channels of the tab in A..E order and disappear when the
   tab has no member.
 - [x] `Close Channel` from one tab repaints every other tab's chips and badges.
@@ -322,6 +323,22 @@ and the "Rework 4 walk" section of `evidence/US-0056-gui-walk.md`.
 
 Verification: `cargo test -p oneterm-terminal-view` (282 passed, 2 ignored) and
 `pwsh scripts/ci-local.ps1`.
+
+## Rework 5 2026-09-10
+
+Owner feedback: "About the Space border colour, I meant the colour when that Space is
+selected only; otherwise it stays the normal border colour."
+
+Change: `space_border_color` highlights only the selected Space: in its channel colour when
+it is a member, in `table_active_border` otherwise; every unselected Space keeps `border`,
+member or not. Rework 4 had coloured member borders whether or not they were selected. The
+truth-table test now asserts the unselected member returns the plain colour. Docs updated:
+`low-level-design/menu-chip-frame.md`, `high-level-design.md`, `docs/gui-layout.md`,
+`docs/terminal-split.md`, `README.md`.
+
+Evidence: `cargo test -p oneterm-terminal-view` and `pwsh scripts/ci-local.ps1` (recorded
+below). No new screenshot: the rule is the rework-4 one with the inactive-member branch
+returning the theme border, which the unit test pins.
 
 ## Handoff
 

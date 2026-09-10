@@ -182,20 +182,20 @@ fn render_leaf(
         .into_any_element()
 }
 
-/// The 1px frame color of a Space. A member Space wears its `channel` colour
-/// whether or not it is the active one — the badge says which channel, and the
-/// border repeats it at the Space's edge. A Space in no channel is highlighted
-/// while it is the active one.
+/// The 1px frame color of a Space. Only the active Space is highlighted: in
+/// its `channel` colour when it is a member, in the theme's active colour
+/// otherwise. Every inactive Space keeps the plain border; the badge alone
+/// says which channel it is in.
 fn space_border_color(
     is_active: bool,
     channel: Option<Hsla>,
     active: Hsla,
     inactive: Hsla,
 ) -> Hsla {
-    match channel {
-        Some(color) => color,
-        None if is_active => active,
-        None => inactive,
+    if is_active {
+        channel.unwrap_or(active)
+    } else {
+        inactive
     }
 }
 
@@ -308,7 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn member_space_uses_its_channel_color_active_or_not() {
+    fn member_space_uses_its_channel_color_only_while_selected() {
         let active = hsla(0.1, 0.8, 0.5, 1.0);
         let inactive = hsla(0.0, 0.0, 0.2, 1.0);
         let channel = hsla(0.6, 0.7, 0.6, 1.0);
@@ -319,7 +319,7 @@ mod tests {
         );
         assert_eq!(
             space_border_color(false, Some(channel), active, inactive),
-            channel
+            inactive
         );
     }
 }

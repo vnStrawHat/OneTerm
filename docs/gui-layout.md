@@ -97,9 +97,9 @@ the tab's Spaces, in A..E order, before the recording dot; the chip is a 16 px s
 square corners holding the channel letter in the theme's `chart_1..chart_5`, centred by the
 text node rather than by flex so the glyph sits in the middle of the square. Each member
 Space carries the same chip as a badge in its top-right corner, inset past the 12 px
-scrollbar track, including the lone Space of an unsplit tab, and is framed in its channel
-colour whether or not it is the active Space. A Space in no channel keeps the theme's
-active/inactive border rule, and the single Space of an unsplit tab stays borderless. The
+scrollbar track, including the lone Space of an unsplit tab. While a member Space is the
+selected one, its active-Space highlight takes the channel colour; unselected Spaces keep
+the plain border, and the single Space of an unsplit tab stays borderless. The
 badge takes no focus and its clicks activate the Space like any other click in it. Both read the `InputChannelRegistry`, and every `TerminalPanel` observes it,
 so a `Close Channel` performed in one tab repaints the others.
 

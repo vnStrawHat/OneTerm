@@ -85,18 +85,16 @@ therefore becomes `.relative()`). The chip is a fixed 16 px square, so the tab c
 badge have the same footprint; 5 px from both edges is the owner's placement. It overlaps
 the scrollbar track, which is empty at the top unless the view is scrolled up.
 
-The badge says *which* channel a Space is in; the border repeats it. With the badge in place
-the colour clash that once ruled the frame out (in the dark theme `chart_1` is close to
-`table_active_border`) no longer misleads, so:
+The badge says *which* channel a Space is in; the active-Space highlight repeats it:
 
 ```text
 space_border_color(is_active: bool, channel: Option<Hsla>, active: Hsla, inactive: Hsla)
-// Some(colour) -> colour        a member, active or not
-// None         -> is_active ? active : inactive
+// is_active  -> channel.unwrap_or(active)   the selected Space, in its channel colour if any
+// otherwise  -> inactive                    every unselected Space, member or not
 ```
 
-A member Space is framed in its channel colour at full strength whether or not it is the
-active Space; a Space in no channel keeps the theme's active/inactive rule. The split path
+Only the selected Space is highlighted, in its channel colour when it is a member and in the
+theme's active colour otherwise; unselected Spaces keep the plain border. The split path
 passes `channel.map(|ch| channel_color(ch, cx))`. The single-Space fast path stays
 borderless: a lone Space is marked by its badge alone, so an unsplit tab keeps its pixel
 layout. The badge takes no focus (a plain `div` with an id, no `track_focus`) and carries no
@@ -141,8 +139,9 @@ pub(crate) fn tab_channels(&self, cx: &App) -> Vec<InputChannel>;
 - [ ] `panel/tests.rs`: `tab_channels` returns `[A]` for one member Space, `[A, C]` for a
   mixed split, `[]` for none; `join_tab_to_channel` joins every Space; `leave_tab_channels`
   clears them.
-- [ ] `space/render.rs` tests: the `space_border_color` truth table — a member returns its
-  channel colour whether active or not; a non-member returns the active/inactive colour.
+- [ ] `space/render.rs` tests: the `space_border_color` truth table — the selected Space
+  returns its channel colour (or the theme active colour when it has none); an unselected
+  Space returns the plain border colour, member or not.
 - [ ] `theme/input_channel.rs`: `channel_chip_style` returns the channel's letter, its chart
   colour and the theme background for every channel.
 - [ ] `input/menu` tests: items 2 and 3 appear only under their conditions.
