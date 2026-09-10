@@ -47,11 +47,16 @@ pub(crate) fn channel_chip(
         // A fixed square box, so the tab chip and the Space badge have the
         // same footprint and the letter is centred instead of padded.
         .size(px(16.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_sm()
         .text_xs()
+        // The letter is centred by the text node, not by flex. A flex
+        // `justify_center` centres the text node's box after Taffy rounds it to
+        // whole pixels, which pushed the glyph about 1 px to the left: the
+        // 8.4375 px advance of a bold "A" at 12 px became a 9 px box at offset 3
+        // instead of 3.78, and the glyph is painted at that box's left edge.
+        // A block box plus a full-square line height lets the text fill the chip,
+        // and `text_center` aligns the shaped run inside it in floating point.
+        .line_height(px(16.))
+        .text_center()
         .font_weight(FontWeight::BOLD)
         .bg(background)
         .text_color(foreground)

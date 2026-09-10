@@ -54,11 +54,20 @@ renders, before the recording dot, one chip per channel:
 
 ```text
 channel_chip(ch, ("tab-channel", index), cx)   // crates/terminal-view/src/theme
-// = div().id(id).flex_shrink_0().size(px(16.)).flex().items_center().justify_center()
-//       .rounded_sm().text_xs().font_weight(FontWeight::BOLD)
+// = div().id(id).flex_shrink_0().size(px(16.))
+//       .text_xs().line_height(px(16.)).text_center().font_weight(FontWeight::BOLD)
 //       .bg(channel_color(ch, cx)).text_color(cx.theme().background)
 //       .child(ch.label())
 ```
+
+The chip is a square with square corners, and the letter is centred by the text node, not by
+flex. A flex `justify_center` centres the text node's *rounded* box: Taffy rounds that box to
+whole pixels, so a 8.4375 px advance becomes a 9 px box at offset 3 instead of 3.78, the glyph
+is painted at the box's left edge, and the letter lands about 1 px left of centre. Giving the
+text node the whole square instead — block layout (no `.flex()`), `line_height(px(16.))`, and
+`text_center()` — makes GPUI align the shaped run inside the text bounds in floating point at
+paint time, with no integer rounding between the box and the glyph. Measured ink must be
+centred within 1 px in both directions, in the tab chip and in the Space badge alike.
 
 `channel_chip` is the one chip builder, used by the tab strip and by the Space badge below;
 its label/colour triple comes from the pure `channel_chip_style`, which is what the test
@@ -76,15 +85,23 @@ therefore becomes `.relative()`). The chip is a fixed 16 px square, so the tab c
 badge have the same footprint; 5 px from both edges is the owner's placement. It overlaps
 the scrollbar track, which is empty at the top unless the view is scrolled up.
 
-The badge is the only per-Space marker. A frame in the channel colour was tried and
-dropped: in the dark theme the channel-A colour (`chart_1`) is close to
-`table_active_border`, so a frame cannot say which Space of a split joined, and it costs the
-active-Space cue it overwrites. Space borders therefore keep the theme's rule unchanged
-(`space_border_color(is_active, active, inactive)`): `table_active_border` for the active
-Space, `border` otherwise, and no border at all on the single-Space fast path. The badge
-takes no focus (a plain `div` with an id, no `track_focus`) and
-carries no click handler; a click on it reaches the Space's own activation handler like any
-other click inside the Space.
+The badge says *which* channel a Space is in; the border repeats it. With the badge in place
+the colour clash that once ruled the frame out (in the dark theme `chart_1` is close to
+`table_active_border`) no longer misleads, so:
+
+```text
+space_border_color(is_active: bool, channel: Option<Hsla>, active: Hsla, inactive: Hsla)
+// Some(colour) -> colour        a member, active or not
+// None         -> is_active ? active : inactive
+```
+
+A member Space is framed in its channel colour at full strength whether or not it is the
+active Space; a Space in no channel keeps the theme's active/inactive rule. The split path
+passes `channel.map(|ch| channel_color(ch, cx))`. The single-Space fast path stays
+borderless: a lone Space is marked by its badge alone, so an unsplit tab keeps its pixel
+layout. The badge takes no focus (a plain `div` with an id, no `track_focus`) and carries no
+click handler; a click on it reaches the Space's own activation handler like any other click
+inside the Space.
 
 ### Registry observer (`panel/terminal_panel.rs`)
 
@@ -124,8 +141,8 @@ pub(crate) fn tab_channels(&self, cx: &App) -> Vec<InputChannel>;
 - [ ] `panel/tests.rs`: `tab_channels` returns `[A]` for one member Space, `[A, C]` for a
   mixed split, `[]` for none; `join_tab_to_channel` joins every Space; `leave_tab_channels`
   clears them.
-- [ ] `space/render.rs` tests: the `space_border_color` truth table — membership is not
-  one of its inputs.
+- [ ] `space/render.rs` tests: the `space_border_color` truth table — a member returns its
+  channel colour whether active or not; a non-member returns the active/inactive colour.
 - [ ] `theme/input_channel.rs`: `channel_chip_style` returns the channel's letter, its chart
   colour and the theme background for every channel.
 - [ ] `input/menu` tests: items 2 and 3 appear only under their conditions.

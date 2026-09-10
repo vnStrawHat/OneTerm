@@ -54,14 +54,14 @@ member of that channel. What it means for Spaces (DEC-0009):
   are members. "Input Channel > Join All Spaces In Tab To X" is the one-click way to put the
   whole tab in one channel.
 - Every member Space shows a badge with its channel letter in the top-right corner — the
-  same 16 px square chip the tab strip uses (bold letter on `chart_1..chart_5`) — 5 px from
-  the top and right edges. The badge is what tells the Spaces of one tab apart when only
-  some of them joined.
-- The badge is the only per-Space marker. Space borders are untouched by membership: they
-  follow the active/inactive rule of [05](terminal-split/05-rendering-theme.md), and the
-  single Space of an unsplit tab stays borderless — it only gains the badge. A border in the
-  channel colour was tried and dropped, because its colour is close to the active-Space
-  border in some themes.
+  same 16 px square chip the tab strip uses (bold letter on `chart_1..chart_5`, its glyph
+  centred by the text node) — 5 px from the top and right edges. The badge is what tells the
+  Spaces of one tab apart when only some of them joined.
+- A member Space is also framed in its channel colour, at full strength whether or not it is
+  the active Space; the badge says which channel and the border repeats it at the edge. A
+  Space in no channel keeps the active/inactive rule of
+  [05](terminal-split/05-rendering-theme.md). The single Space of an unsplit tab stays
+  borderless in either case — it only gains the badge, so an unsplit tab keeps its layout.
 - Membership is in-memory: nothing about channels is persisted, like the split layout itself.
 - Broadcast is **not** suppressed on the alternate screen. A member Space running a
   full-screen program (`vim`, `htop`) receives the peers' input like any other member, so

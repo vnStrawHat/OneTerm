@@ -47,8 +47,9 @@ are bindable in Settings › Key Bindings. Depends on US-0055.
   than one Space (join-all only when this Space is a member, leave-all only when any Space
   in the tab is a member).
 - [x] Member Spaces draw the channel badge in their top-right corner, the lone Space of an
-  unsplit tab included; Space borders keep the theme's active/inactive rule for members and
-  non-members alike, and the single-Space fast path stays borderless.
+  unsplit tab included, and are framed in their channel colour whether or not they are
+  active; a Space in no channel keeps the theme's active/inactive rule, and the single-Space
+  fast path stays borderless. The chip letter is centred within 1 px of the 16 px box.
 - [x] Tab chips list the distinct channels of the tab in A..E order and disappear when the
   tab has no member.
 - [x] `Close Channel` from one tab repaints every other tab's chips and badges.
@@ -237,6 +238,90 @@ and `docs/terminal-split.md`.
 Evidence: `cargo test -p oneterm-terminal-view` and `pwsh scripts/ci-local.ps1` (recorded
 below in Evidence and Gaps). No new screenshot: the owner placed the badge by hand in the
 running build and asked for exactly that offset.
+
+## Rework 4 2026-09-10
+
+Owner feedback: "The letter A inside `channel_chip` is not centred; it is shifted to the
+left." and "The Space border colour must be the channel colour; a Space in no channel uses
+the default colour."
+
+### The letter is one pixel left of centre
+
+Measured on the `fast-dev` build at device scale 1.0 (Zed One Dark, tab chip at window
+`(20,42)-(35,57)`, Space badge at `(771,71)-(786,86)`; both boxes are exactly 16x16 px):
+
+| | tab chip | Space badge |
+|---|---|---|
+| ink bounding box | `(2,4)-(11,12)` | `(2,3)-(11,11)` |
+| margins L / R | 2 / 4 | 2 / 4 |
+| margins T / B | 4 / 3 | 3 / 4 |
+| ink centre minus box centre | dx -1.00, dy +0.50 | dx -1.00, dy -0.50 |
+
+Reading the anti-aliasing ramp of the bottom row gives the sub-pixel span: the ink runs from
+x 2.90 to x 11.15 (8.25 px wide), where a centred glyph would run from 3.855 to 12.145 — a
+**0.95 px shift to the left**. Vertically both chips are within half a pixel, so only the
+horizontal shift is a defect.
+
+Cause: `justify_center` centres the *text node's rounded box*, not the glyph. A diagnostic
+build that painted the text node's own background showed that box as **9 px wide at offset 3**
+inside the 16 px square (and 12 px tall at offset 2). Segoe UI Bold "A" at `text_xs` (12 px)
+has an advance of 8.4375 px and an ink width of 8.29 px, so the ideal left offset is
+`(16 - 8.4375) / 2 = 3.78`. Taffy rounds the text node's layout to whole pixels: the box
+becomes 9 px wide and lands at 3. The glyph is painted at that box's left edge, so all of the
+0.56 px of rounding slack is added on the right — the ink ends up 0.95 px left of centre. The
+same rounding is why the tab chip and the badge disagree by a pixel vertically.
+
+Change: the chip no longer uses flex to place the glyph. `channel_chip` keeps the 16 px
+square and gives the text node the whole square instead: no `.flex()` (a `div` is a block box,
+so the text node fills its width), `.line_height(px(16.))` so the line box is the full square,
+and `.text_center()` so GPUI aligns the shaped run inside the text bounds in floating point at
+paint time (`paint_line` -> `aligned_origin_x` with the element bounds as the align width).
+No integer rounding sits between the box and the glyph any more, and no pixel nudge is needed.
+`line_height` also pins the vertical placement, which the theme's own line height had left to
+the flex box.
+
+### The Space border carries the channel colour
+
+`space_border_color(is_active, active, inactive)` becomes
+`space_border_color(is_active, channel: Option<Hsla>, active, inactive)`: a member Space uses
+its channel colour at full strength whether or not it is the active Space, a non-member keeps
+today's `table_active_border` / `border` rule. The split path passes
+`channel.map(|ch| channel_color(ch, cx))`. The single-Space fast path stays borderless — a
+lone Space is marked by its badge only, as rework 2 asked. The truth-table test grew the two
+membership rows.
+
+The colour clash that removed the frame in rework 2 is no longer a problem: the badge added
+in rework 1 is what says *which* channel a Space is in, so the border only has to repeat it,
+and the owner asked for the repetition.
+
+Docs updated with the change: this packet, `low-level-design/menu-chip-frame.md` (chip
+centring rule, border rule in its new form), `high-level-design.md` (Idea, wireframe,
+bullets), `IN-0022.md`, `docs/gui-layout.md`, `docs/terminal-split.md`, `README.md`, and
+`evidence/US-0056-gui-walk.md` ("Rework 4 walk").
+
+### Result
+
+Re-measured on the same build and window: the ink's horizontal offset from the box centre
+went from -0.95 px to **-0.03 px** in the tab chip and in the Space badge alike (margins
+L/R 2/4 -> 3/3). The vertical offset stays at +0.77 px in both, inside the 1 px bar; it is
+the font's own asymmetry (Segoe UI's ascent 12.95 px + descent 3.01 px fill the 16 px line
+box, so the baseline lands at 12.97 px while the cap height of "A" is 8.40 px), so no pixel
+nudge was added. The tab chip and the badge now agree to the pixel in both directions.
+
+Border pixel samples on `evidence/US-0056-rework4-border-dark.png` (Zed One Dark, gutter =
+second pixel in from the edge): channel-A Space (inactive) `#61AFEF`, channel-B Space
+(active) `#98C379`, non-member (inactive) `#3E4451`, the same non-member made active
+`#528BFF`.
+
+New test: `member_space_uses_its_channel_color_active_or_not` (`space/render.rs`), next to
+the existing `selected_space_uses_active_gutter_color` truth table.
+
+Evidence: `evidence/US-0056-rework4-chip-before.png`, `evidence/US-0056-rework4-chip-after.png`
+(both chips at 8x with the box centre drawn), `evidence/US-0056-rework4-border-dark.png`,
+and the "Rework 4 walk" section of `evidence/US-0056-gui-walk.md`.
+
+Verification: `cargo test -p oneterm-terminal-view` (282 passed, 2 ignored) and
+`pwsh scripts/ci-local.ps1`.
 
 ## Handoff
 

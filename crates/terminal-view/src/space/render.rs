@@ -20,7 +20,7 @@ use oneterm_theme::icon::AppIcon;
 use super::tree::{SpaceContent, SpaceId, SpaceLeaf, SpaceNode, SpaceTree};
 use crate::input::menu::split_items;
 use crate::panel::TerminalPanel;
-use crate::theme::channel_chip;
+use crate::theme::{channel_chip, channel_color};
 
 /// Payload dragged from a Terminal Tab title onto an empty Space.
 ///
@@ -125,11 +125,10 @@ fn render_leaf(
         }
         _ => None,
     };
-    // The badge is the only per-Space channel marker: a frame in the channel
-    // colour is not distinguishable from the active-Space border, which is a
-    // close blue in the dark theme. Sits in the corner, 5 px from both edges
-    // (the owner's placement); it overlaps the scrollbar track, which is
-    // empty at the top unless the view is scrolled up.
+    // The badge names the channel; the Space border below repeats its colour.
+    // Sits in the corner, 5 px from both edges (the owner's placement); it
+    // overlaps the scrollbar track, which is empty at the top unless the view
+    // is scrolled up.
     let badge = channel.map(|channel| {
         channel_chip(channel, ("space-channel", id.0 as usize), cx)
             .absolute()
@@ -162,14 +161,16 @@ fn render_leaf(
         .relative()
         .size_full()
         // Keep a neutral outer border for separation and reserve a one-pixel
-        // inner gutter for selection. The resize handle may paint over the outer
-        // shared edge, but cannot erase this gutter; padding keeps it outside the
-        // terminal's content bounds instead of overlaying terminal cells.
+        // inner gutter for the channel colour or the selection. The resize
+        // handle may paint over the outer shared edge, but cannot erase this
+        // gutter; padding keeps it outside the terminal's content bounds
+        // instead of overlaying terminal cells.
         .border_1()
         .border_color(cx.theme().border)
         .p(px(1.))
         .bg(space_border_color(
             id == active,
+            channel.map(|ch| channel_color(ch, cx)),
             cx.theme().table_active_border,
             cx.theme().border,
         ))
@@ -181,9 +182,21 @@ fn render_leaf(
         .into_any_element()
 }
 
-/// The 1px frame color of a Space: highlighted while it is the active one.
-fn space_border_color(is_active: bool, active: Hsla, inactive: Hsla) -> Hsla {
-    if is_active { active } else { inactive }
+/// The 1px frame color of a Space. A member Space wears its `channel` colour
+/// whether or not it is the active one — the badge says which channel, and the
+/// border repeats it at the Space's edge. A Space in no channel is highlighted
+/// while it is the active one.
+fn space_border_color(
+    is_active: bool,
+    channel: Option<Hsla>,
+    active: Hsla,
+    inactive: Hsla,
+) -> Hsla {
+    match channel {
+        Some(color) => color,
+        None if is_active => active,
+        None => inactive,
+    }
 }
 
 /// A mouse-down handler that makes Space `id` of `panel` the active Space.
@@ -290,7 +303,23 @@ mod tests {
         let active = hsla(0.1, 0.8, 0.5, 1.0);
         let inactive = hsla(0.0, 0.0, 0.2, 1.0);
 
-        assert_eq!(space_border_color(true, active, inactive), active);
-        assert_eq!(space_border_color(false, active, inactive), inactive);
+        assert_eq!(space_border_color(true, None, active, inactive), active);
+        assert_eq!(space_border_color(false, None, active, inactive), inactive);
+    }
+
+    #[test]
+    fn member_space_uses_its_channel_color_active_or_not() {
+        let active = hsla(0.1, 0.8, 0.5, 1.0);
+        let inactive = hsla(0.0, 0.0, 0.2, 1.0);
+        let channel = hsla(0.6, 0.7, 0.6, 1.0);
+
+        assert_eq!(
+            space_border_color(true, Some(channel), active, inactive),
+            channel
+        );
+        assert_eq!(
+            space_border_color(false, Some(channel), active, inactive),
+            channel
+        );
     }
 }

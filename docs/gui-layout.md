@@ -93,13 +93,14 @@ than one Space. The five joins, the leave, and the close are also actions in
 Settings > Key Bindings (group "Input Channel"), shipped unbound.
 
 Membership is painted in two places. The tab strip shows one chip per distinct channel of
-the tab's Spaces, in A..E order, before the recording dot; the chip is the channel letter in
-the theme's `chart_1..chart_5`. Each member Space carries the same chip as a badge in its
-top-right corner, inset past the 12 px scrollbar track, including the lone Space of an
-unsplit tab. The badge is the only per-Space marker: Space borders keep the active/inactive
-theme rule, because a border in the channel colour cannot be told apart from the
-active-Space border. The badge takes no focus and its clicks activate the Space like
-any other click in it. Both read the `InputChannelRegistry`, and every `TerminalPanel` observes it,
+the tab's Spaces, in A..E order, before the recording dot; the chip is a 16 px square with
+square corners holding the channel letter in the theme's `chart_1..chart_5`, centred by the
+text node rather than by flex so the glyph sits in the middle of the square. Each member
+Space carries the same chip as a badge in its top-right corner, inset past the 12 px
+scrollbar track, including the lone Space of an unsplit tab, and is framed in its channel
+colour whether or not it is the active Space. A Space in no channel keeps the theme's
+active/inactive border rule, and the single Space of an unsplit tab stays borderless. The
+badge takes no focus and its clicks activate the Space like any other click in it. Both read the `InputChannelRegistry`, and every `TerminalPanel` observes it,
 so a `Close Channel` performed in one tab repaints the others.
 
 ## Status bar

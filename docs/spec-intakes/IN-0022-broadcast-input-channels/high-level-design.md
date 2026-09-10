@@ -12,8 +12,8 @@ handle. The originating view writes to its own session exactly as today, then as
 registry to repeat the same write on every other member of its channel. Membership is shown
 by a lettered chip per channel in the tab strip and the same chip repeated as a badge in the
 top-right corner of each member Space, both using the theme's `chart_1..chart_5` colours so
-A..E stay distinct in light and dark themes. Space borders keep their existing
-active/inactive rule; membership never recolours them.
+A..E stay distinct in light and dark themes. A member Space is also framed in its channel
+colour; a Space in no channel keeps the theme's active/inactive border rule.
 
 The unit of membership is the Space (DEC-0009). A tab is a container: its chip row lists the
 channels of its Spaces, and two tab-wide menu items apply a join or leave to every Space in
@@ -73,23 +73,25 @@ Tab strip and Space badges (tab "fleet" split into three Spaces, tab "db" with o
 
 ```text
 +-[A] fleet ------------+-[A] db --------+-[B][C] mixed --+- local ------+
-|┌──────────[A]┬──────────[A]┐                                         |
-|│ $ echo hi    │ $ echo hi    │  <- member Space: the channel badge in   |
-|│ hi           │ hi           │     its top-right corner (chart_1 for A) |
-|├──────────────┴──────────────┤                                          |
-|│ htop ...                    │  <- non-member: no badge                 |
-|│                             │                                          |
-|└─────────────────────────────┘     Space borders follow the theme's     |
-|                                    active/inactive rule in both cases   |
+|┏━━━━━━━━━━[A]┳━━━━━━━━━━[A]┓  <- member Spaces: the channel badge in  |
+|┃ $ echo hi    ┃ $ echo hi    ┃     the top-right corner and a frame in  |
+|┃ hi           ┃ hi           ┃     the same chart_1 colour              |
+|┣━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━┫                                          |
+|│ htop ...                    │  <- non-member: no badge, and the        |
+|│                             │     theme's active/inactive border       |
+|└─────────────────────────────┘                                          |
 ```
 
 - One chip per distinct channel in the tab, ordered A..E ("[B][C]" above). A tab with no
-  member Space shows no chip.
-- Every member Space repeats that chip as a badge in its own top-right corner. The badge is
-  the only per-Space marker: a border in the channel colour is too close to the
-  active-Space border to be read on its own, so Space borders stay on the theme rule.
+  member Space shows no chip. The chip is a 16 px square with square corners and its letter
+  centred by the text node, so the tab chip and the Space badge look identical.
+- Every member Space repeats that chip as a badge in its own top-right corner, and its
+  border takes the channel colour at full strength whether or not it is the active Space.
+  The badge says which channel; the border repeats it at the Space's edge. A Space in no
+  channel keeps the theme's active/inactive border rule.
 - A tab whose single Space is a member draws the badge too; the tab chip alone is too easy
-  to miss when a password is about to fan out.
+  to miss when a password is about to fan out. That lone Space stays borderless, so an
+  unsplit tab keeps its pixel layout.
 
 ## Data Flow
 
