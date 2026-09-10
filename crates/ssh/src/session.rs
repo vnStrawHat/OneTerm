@@ -48,6 +48,7 @@ use crate::sftp::{SftpCmd, SftpSession};
 use crate::sftp_task::sftp_task;
 use crate::task::ssh_main_task;
 use crate::transport::{Cmd, SSH_COMMAND_QUEUE_CAPACITY, SshListener, SshTransport};
+use crate::tunnel::{ForwardContext, ForwardTable, HANDLE_REQUEST_CAPACITY, start_forwards};
 
 /// An SSH session whose asynchronous tasks run on the shared SSH runtime.
 pub struct SshSession {
@@ -220,6 +221,8 @@ pub fn connect(
     // receiver closes; tests use bounded transports to exercise saturation.
     let (cmd_tx, cmd_rx) = async_channel::bounded::<Cmd>(SSH_COMMAND_QUEUE_CAPACITY);
     let (event_tx, event_rx) = async_channel::bounded::<SessionEvent>(4096);
+    // Warnings raised while forwards start reach the terminal as toasts.
+    let notify_tx = event_tx.clone();
     let state = SharedSessionState::new_alive();
 
     // SSH is remote: OSC 52 clipboard reads/writes default off.
@@ -230,9 +233,9 @@ pub fn connect(
         ClipboardOrigin::Remote,
         security,
     );
-    // Cancelled by `ssh_main_task` on exit so the SFTP task dies with the
-    // connection (ARCH-28).
-    let sftp_shutdown = CancellationToken::new();
+    // Cancelled by `ssh_main_task` on exit so the SFTP task, the forward
+    // listeners, and every relay die with the connection (ARCH-28).
+    let session_shutdown = CancellationToken::new();
 
     let size = GridSize {
         cols: initial.cols as usize,
@@ -268,6 +271,7 @@ pub fn connect(
                     hop.auth,
                     hop.host_key_policy,
                     keepalive,
+                    None,
                 )
                 .await
                 .map_err(|error| hop_error(&label, error))?;
@@ -275,6 +279,7 @@ pub fn connect(
             }
             let target_auth = std::mem::replace(&mut cfg.auth, SshAuthMethod::None);
             log::info!("SshSession: connecting to {}:{}", cfg.host, cfg.port);
+            let forward_table: ForwardTable = Arc::default();
             let handle = connect_hop(
                 &phases,
                 carriers.last(),
@@ -284,6 +289,7 @@ pub fn connect(
                 target_auth,
                 cfg.host_key_policy.clone(),
                 keepalive,
+                Some((forward_table.clone(), session_shutdown.clone())),
             )
             .await?;
 
@@ -362,7 +368,7 @@ pub fn connect(
             // the task. The SFTP channel is split into its own object — no handle needed.
             let sftp_session = match phases
                 .run(ConnectPhase::SftpSetup, async {
-                    open_sftp(&handle, &state, sftp_shutdown.clone()).await
+                    open_sftp(&handle, &state, session_shutdown.clone()).await
                 })
                 .await
             {
@@ -376,6 +382,31 @@ pub fn connect(
                     None
                 }
             };
+
+            // ── Port forwards (before the handle moves into the task) ───
+            // A forward that cannot start warns and is skipped; the shell
+            // still opens (DEC-0011). Accepted connections ask the task for
+            // direct-tcpip channels through `open_tx`.
+            let (open_tx, open_rx) = tokio::sync::mpsc::channel(HANDLE_REQUEST_CAPACITY);
+            if !cfg.port_forwards.is_empty() {
+                let context = ForwardContext {
+                    open_tx,
+                    shutdown: session_shutdown.clone(),
+                    notify: notify_tx,
+                };
+                let bound =
+                    start_forwards(&cfg.port_forwards, &handle, &forward_table, &context).await;
+                log::info!(
+                    "SshSession: {} of {} forwards started ({} local listeners)",
+                    bound.len()
+                        + forward_table
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .len(),
+                    cfg.port_forwards.len(),
+                    bound.len()
+                );
+            }
 
             // ── Start logging and spawn main SSH task ────────────────────
             listener.logging().set_identity(logging_identity);
@@ -394,7 +425,8 @@ pub fn connect(
                 term.clone(),
                 listener.clone(),
                 cmd_rx,
-                sftp_shutdown,
+                open_rx,
+                session_shutdown,
             ));
             log::info!("SshSession: main task spawned");
 

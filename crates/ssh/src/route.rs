@@ -12,12 +12,15 @@ use russh::keys::PrivateKeyWithHashAlg;
 
 use oneterm_core::{AppError, ConnectPhase, HostKeyPolicy, SshAuthMethod, SshKeepaliveConfig};
 
+use tokio_util::sync::CancellationToken;
+
 use crate::agent::authenticate_with_agent;
 use crate::handler::SshClientHandler;
 use crate::session::{
     ConnectPhases, authenticate_with_password, authentication_failure_message, load_private_key,
     phase_error, rsa_hash_alg,
 };
+use crate::tunnel::ForwardTable;
 
 /// Authenticated jump-host handles, innermost last. Dropping the set closes
 /// the hops from the innermost outwards, so no hop's connection closes under
@@ -164,7 +167,8 @@ pub(crate) async fn authenticate(
 }
 
 /// Open the transport to one hop (or the target) and authenticate it, each
-/// step under its connect phase deadline.
+/// step under its connect phase deadline. Only the target carries `forwards`:
+/// a hop never serves `forwarded-tcpip` channels.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn connect_hop(
     phases: &ConnectPhases,
@@ -175,8 +179,12 @@ pub(crate) async fn connect_hop(
     auth: SshAuthMethod,
     host_key_policy: HostKeyPolicy,
     keepalive: SshKeepaliveConfig,
+    forwards: Option<(ForwardTable, CancellationToken)>,
 ) -> oneterm_core::Result<Handle<SshClientHandler>> {
-    let handler = SshClientHandler::new(host.to_string(), port, host_key_policy);
+    let mut handler = SshClientHandler::new(host.to_string(), port, host_key_policy);
+    if let Some((table, shutdown)) = forwards {
+        handler = handler.with_forwards(table, shutdown);
+    }
     let config = client_config(&handler, keepalive);
     let mut handle = phases
         .run(

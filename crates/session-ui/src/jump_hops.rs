@@ -239,6 +239,7 @@ mod tests {
                 group: None,
                 logging: SshLoggingOverride::Inherit,
                 jump_host: None,
+                port_forwards: Vec::new(),
             },
         }
     }

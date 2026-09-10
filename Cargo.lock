@@ -5549,6 +5549,7 @@ dependencies = [
  "rand 0.10.1",
  "russh",
  "russh-sftp",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-util",
 ]

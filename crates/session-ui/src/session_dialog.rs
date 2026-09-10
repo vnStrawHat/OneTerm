@@ -16,7 +16,7 @@ use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use gpui::{App, AppContext, Hsla, ParentElement as _, SharedString, Styled, Window};
+use gpui::{App, AppContext, Hsla, ParentElement as _, SharedString, Styled, Window, px};
 use gpui_component::{
     ActiveTheme, Colorize as _, IndexPath, Sizable as _, WindowExt as _,
     color_picker::{ColorPicker, ColorPickerState},
@@ -27,11 +27,13 @@ use gpui_component::{
     radio::Radio,
 };
 
+use oneterm_core::PortForward;
 use oneterm_state::form_dialog::{FieldRequirement, FormDialog, labelled_field};
 use oneterm_theme::notif_ext::notify;
 
 use super::auth_form::SshAuthForm;
 use super::common::parse_port;
+use super::forward_rows::PortForwardRows;
 use super::group_combo::{GroupComboDelegate, SharedCell, group_combobox};
 use super::jump_hops::JumpHostPicker;
 use crate::session_state::{
@@ -54,6 +56,7 @@ struct SessionForm {
     key_path: Option<PathBuf>,
     logging: SshLoggingOverride,
     jump_host: Option<SshSessionId>,
+    port_forwards: Vec<PortForward>,
 }
 
 impl SessionForm {
@@ -90,6 +93,7 @@ impl SessionForm {
             group: non_empty(self.group),
             logging: self.logging,
             jump_host: self.jump_host,
+            port_forwards: self.port_forwards,
         })
     }
 }
@@ -183,6 +187,11 @@ pub(crate) fn open_session_dialog(
         ),
     };
     let jump_host_picker = JumpHostPicker::new(edit_id, jump_host_val, window, cx);
+    let saved_forwards: Vec<PortForward> = edit
+        .as_ref()
+        .map(|(_, s)| s.port_forwards.clone())
+        .unwrap_or_default();
+    let forward_rows = PortForwardRows::new(&saved_forwards, window, cx);
 
     // ── Collect existing groups from the store ──────────────────────────
     let existing_groups: Vec<SharedString> = {
@@ -266,8 +275,16 @@ pub(crate) fn open_session_dialog(
         let auth_form = auth_form.clone();
         let logging = logging.clone();
         let jump_host_picker = jump_host_picker.clone();
+        let forward_rows = forward_rows.clone();
         move |window: &mut Window, cx: &mut App| {
             let store = SshSessionStore::global(cx);
+            let port_forwards = match forward_rows.take(cx) {
+                Ok(forwards) => forwards,
+                Err(message) => {
+                    window.push_notification(notify(NotificationType::Warning, message, cx), cx);
+                    return false;
+                }
+            };
             let jump_host = jump_host_picker.selected(cx);
             if let Err(error) = store.read(cx).jump_chain(jump_host, edit_id) {
                 window.push_notification(
@@ -287,6 +304,7 @@ pub(crate) fn open_session_dialog(
                 key_path: auth_form.key_path_value(cx),
                 logging: logging.get(),
                 jump_host,
+                port_forwards,
             };
             let session = match form.into_session() {
                 Ok(session) => session,
@@ -351,6 +369,7 @@ pub(crate) fn open_session_dialog(
                 ))
                 .child(auth_form.render(false, cx))
                 .child(jump_host_picker.render(cx))
+                .child(forward_rows.render(cx))
                 .child(labelled_field(
                     "Group",
                     FieldRequirement::Optional,
@@ -385,6 +404,10 @@ pub(crate) fn open_session_dialog(
         },
         submit,
     )
+    // Wide enough for one port-forward row per line. ponytail: FormDialog does
+    // not scroll; a session with more than about five forwards outgrows a
+    // 1080p window, make the dialog body scroll when that happens.
+    .width(px(560.))
     .open(window, cx);
 }
 
@@ -404,6 +427,7 @@ mod tests {
             key_path: None,
             logging: SshLoggingOverride::Inherit,
             jump_host: None,
+            port_forwards: Vec::new(),
         }
     }
 
@@ -496,6 +520,7 @@ mod tests {
                 group: group.map(str::to_string),
                 logging: SshLoggingOverride::Inherit,
                 jump_host: None,
+                port_forwards: Vec::new(),
             },
         };
         let sessions = [

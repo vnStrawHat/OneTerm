@@ -33,11 +33,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use gpui::{App, AppContext, Entity, Global};
-use oneterm_core::MAX_JUMP_HOPS;
 use oneterm_core::{
     AppError, atomic_write, config_dir, migrate_json_value, quarantine_file, set_schema_version,
     versioned_object,
 };
+use oneterm_core::{MAX_JUMP_HOPS, PortForward};
 use oneterm_state::PersistQueue;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -150,6 +150,9 @@ pub struct SshSession {
     /// own `jump_host` extends the chain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jump_host: Option<SshSessionId>,
+    /// Port forwards started with every connection of this session (US-0059).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub port_forwards: Vec<PortForward>,
 }
 
 /// Why a `jump_host` chain cannot be followed.
@@ -635,6 +638,7 @@ mod tests {
             group: None,
             logging: SshLoggingOverride::Inherit,
             jump_host: None,
+            port_forwards: Vec::new(),
         };
         let json = serde_json::to_string(&session).unwrap();
         assert!(!json.contains("username"));
@@ -653,6 +657,7 @@ mod tests {
             group: None,
             logging: SshLoggingOverride::Inherit,
             jump_host: None,
+            port_forwards: Vec::new(),
         };
         let json = serde_json::to_string(&session).unwrap();
         assert!(json.contains("\"username\":\"root\""));
@@ -671,6 +676,7 @@ mod tests {
             group: None,
             logging: SshLoggingOverride::Inherit,
             jump_host: None,
+            port_forwards: Vec::new(),
         };
 
         let json = serde_json::to_string(&session).unwrap();
@@ -693,6 +699,7 @@ mod tests {
             group: None,
             logging: SshLoggingOverride::Inherit,
             jump_host: None,
+            port_forwards: Vec::new(),
         };
 
         let json = serde_json::to_string(&session).unwrap();
@@ -716,6 +723,7 @@ mod tests {
             group: None,
             logging: SshLoggingOverride::Inherit,
             jump_host: None,
+            port_forwards: Vec::new(),
         };
         assert!(
             !serde_json::to_string(&session)
@@ -746,6 +754,7 @@ mod tests {
                     group: None,
                     logging: SshLoggingOverride::Inherit,
                     jump_host: jump.map(SshSessionId),
+                    port_forwards: Vec::new(),
                 },
             });
         }
@@ -807,6 +816,40 @@ mod tests {
     }
 
     #[test]
+    fn port_forwards_round_trip_and_are_omitted_when_empty() {
+        let mut session = SshSession {
+            label: "target".into(),
+            host: "10.0.5.20".into(),
+            port: 22,
+            username: Some("deploy".into()),
+            auth_method: SshAuthPreference::Password,
+            key_path: None,
+            color: None,
+            group: None,
+            logging: SshLoggingOverride::Inherit,
+            jump_host: None,
+            port_forwards: Vec::new(),
+        };
+        assert!(
+            !serde_json::to_string(&session)
+                .unwrap()
+                .contains("port_forwards")
+        );
+
+        session.port_forwards = vec![PortForward::Dynamic {
+            bind: oneterm_core::loopback(),
+            bind_port: 1080,
+        }];
+        let json = serde_json::to_string(&session).unwrap();
+        assert!(
+            json.contains("\"port_forwards\":[{\"kind\":\"dynamic\""),
+            "{json}"
+        );
+        let back: SshSession = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, session);
+    }
+
+    #[test]
     fn entry_flattens_the_session_next_to_its_id() {
         let entry = SshSessionEntry {
             id: SshSessionId(7),
@@ -821,6 +864,7 @@ mod tests {
                 group: Some("g".into()),
                 logging: SshLoggingOverride::Inherit,
                 jump_host: None,
+                port_forwards: Vec::new(),
             },
         };
         let json = serde_json::to_value(&entry).unwrap();
@@ -892,6 +936,7 @@ mod persistence_tests {
             group: None,
             logging: SshLoggingOverride::Inherit,
             jump_host: None,
+            port_forwards: Vec::new(),
         }
     }
 

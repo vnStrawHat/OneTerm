@@ -6,6 +6,9 @@ use std::path::PathBuf;
 use oneterm_core::{AppError, ConnectPhase, HostKeyPolicy};
 use russh::client;
 use russh::keys::{Algorithm, HashAlg, PublicKey};
+use tokio_util::sync::CancellationToken;
+
+use crate::tunnel::{ForwardTable, forwarded_target, spawn_forwarded_tcpip};
 
 /// Handler errors that preserve enough host-key information for the UI to ask
 /// for explicit first-use approval.
@@ -137,6 +140,9 @@ pub(crate) struct SshClientHandler {
     port: u16,
     policy: HostKeyPolicy,
     known_hosts_path: Option<PathBuf>,
+    /// Remote forwards this connection asked for, and the session token their
+    /// relays die with; `None` for jump hops and connections without forwards.
+    forwards: Option<(ForwardTable, CancellationToken)>,
 }
 
 impl SshClientHandler {
@@ -147,7 +153,18 @@ impl SshClientHandler {
             port,
             policy,
             known_hosts_path: None,
+            forwards: None,
         }
+    }
+
+    /// Accept `forwarded-tcpip` channels for the remote forwards in `table`.
+    pub(crate) fn with_forwards(
+        mut self,
+        table: ForwardTable,
+        shutdown: CancellationToken,
+    ) -> Self {
+        self.forwards = Some((table, shutdown));
+        self
     }
 
     #[cfg(test)]
@@ -287,6 +304,40 @@ impl client::Handler for SshClientHandler {
                     std::io::Error::other(join_error),
                 )))
             })
+    }
+
+    /// A connection to one of this session's remote forwards. Channels for
+    /// listeners OneTerm never asked for are dropped, never bridged.
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        originator_address: &str,
+        originator_port: u32,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        let target = self
+            .forwards
+            .as_ref()
+            .and_then(|(table, _)| forwarded_target(table, connected_address, connected_port));
+        match (target, &self.forwards) {
+            (Some(target), Some((_, shutdown))) => {
+                log::debug!(
+                    "SshClientHandler: forwarded-tcpip {connected_address}:{connected_port} from {originator_address}:{originator_port} -> {}:{}",
+                    target.0,
+                    target.1
+                );
+                spawn_forwarded_tcpip(channel, target, shutdown.clone());
+            }
+            _ => {
+                log::warn!(
+                    "SshClientHandler: dropping a forwarded-tcpip channel for {connected_address}:{connected_port} that was never requested"
+                );
+                drop(channel);
+            }
+        }
+        Ok(())
     }
 }
 

@@ -51,6 +51,7 @@ OneTerm/
 │   │       ├── error.rs            # AppError (thiserror) + Result<T>
 │   │       ├── sftp.rs             # SftpBackend trait + RemotePath + FileEntry + TransferHandle
 │   │       ├── ssh_config.rs       # SshConfig + SshAuthMethod (shared connect params; masked Debug)
+│   │       ├── port_forward.rs     # PortForward spec (local / remote / dynamic) + validation, persisted by session-ui
 │   │       ├── persistence.rs      # atomic_write / update_json_file / quarantine_file + schema helpers
 │   │       ├── session_duplicate.rs # SessionDuplicateConfig (duplicate-tab contract)
 │   │       ├── input_channel.rs    # InputChannel A..E (broadcast input channels; ALL/label/index)
@@ -80,6 +81,7 @@ OneTerm/
 │   │                               #   transport (SshTransport) / handler / task / session / sftp*;
 │   │                               #   agent.rs = SSH agent authentication (discovery + identity loop);
 │   │                               #   route.rs = jump-host route (open_transport / authenticate / JumpHandles);
+│   │                               #   tunnel.rs = port forwards (listeners, SOCKS5, remote relays, HandleRequest);
 │   │                               #   the listener is `SshListener = OscRouter<SshTransport>`;
 │   │                               #   test_support.rs (cfg(test)) = in-process russh server helpers
 │   │
@@ -151,7 +153,8 @@ OneTerm/
 │   ├── session-ui/                 # `oneterm-session-ui` — session tree + connect dialogs
 │   │   └── src/                    # lib.rs init() (SshSessionStore::init + register "session" panel);
 │   │                               #   panel, connect_dialog, quick_connect_dialog, session_state.rs,
-│   │                               #   jump_hops.rs (jump-host picker + per-hop credential blocks) …
+│   │                               #   jump_hops.rs (jump-host picker + per-hop credential blocks),
+│   │                               #   forward_rows.rs (port-forward rows of the session dialog) …
 │   │
 │   ├── settings-ui/                # `oneterm-settings-ui` — General Settings window
 │   │   └── src/                    # lib.rs: open_settings + setup_key_bindings commands;

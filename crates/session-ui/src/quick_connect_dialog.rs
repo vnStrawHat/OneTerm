@@ -159,6 +159,12 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
                 .collect()
         })
         .unwrap_or_default();
+    // A duplicate tries the source session's forwards too; taken ports warn
+    // and the shell still opens (DEC-0011). Quick Connect itself has none.
+    let port_forwards = prefill
+        .as_ref()
+        .map(|config| config.port_forwards.clone())
+        .unwrap_or_default();
     let (host, port, username, auth_method, key_path, shell_integration) = match prefill {
         Some(config) => {
             let (method, key_path) = match config.auth {
@@ -284,6 +290,7 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
                     group: None,
                     logging: SshLoggingOverride::Inherit,
                     jump_host: hops.selected(cx),
+                    port_forwards: Vec::new(),
                 };
                 Rc::new(move |cx: &mut App| {
                     SshSessionStore::global(cx).update(cx, |s, cx| {
@@ -309,6 +316,7 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
                 host_key_policy: HostKeyPolicy::Strict,
                 shell_integration,
                 jump_hops,
+                port_forwards: port_forwards.clone(),
             };
             connecting.store(true, Ordering::Relaxed);
             window.refresh();

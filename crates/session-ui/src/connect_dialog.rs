@@ -290,6 +290,7 @@ fn on_connect_click(
         host_key_policy: HostKeyPolicy::Strict,
         shell_integration: true,
         jump_hops,
+        port_forwards: session.port_forwards.clone(),
     };
     connecting.store(true, Ordering::Relaxed);
     window.refresh();

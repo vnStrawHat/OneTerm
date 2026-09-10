@@ -10,6 +10,7 @@ pub mod editor_launcher;
 pub mod error;
 pub mod input_channel;
 pub mod persistence;
+pub mod port_forward;
 pub mod schema;
 pub mod session_duplicate;
 pub mod sftp;
@@ -21,6 +22,7 @@ pub use editor_launcher::{EditorChoice, launch_editor};
 pub use error::{AppError, ConnectPhase, SftpStatus};
 pub use input_channel::InputChannel;
 pub use persistence::{atomic_write, quarantine_file, update_json_file};
+pub use port_forward::{PortForward, PortForwardError, loopback};
 pub use schema::{
     SCHEMA_VERSION_FIELD, migrate_json_value, parse_versioned_document, schema_version,
     set_schema_version, versioned_object,

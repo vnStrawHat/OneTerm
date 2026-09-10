@@ -211,6 +211,8 @@ pub struct SshConfig {
     pub shell_integration: bool,
     /// Jump hosts from the client outwards; empty for a direct connection.
     pub jump_hops: Vec<SshHop>,
+    /// Port forwards started once the target shell is up (US-0059).
+    pub port_forwards: Vec<crate::PortForward>,
 }
 
 impl Debug for SshAuthMethod {
@@ -254,6 +256,7 @@ impl SshConfig {
             username: self.username.clone(),
             auth: self.auth.duplicate_auth(),
             shell_integration: self.shell_integration,
+            port_forwards: self.port_forwards.clone(),
             jump_hops: self
                 .jump_hops
                 .iter()
@@ -329,6 +332,7 @@ mod tests {
             host_key_policy: HostKeyPolicy::Strict,
             shell_integration: true,
             jump_hops: Vec::new(),
+            port_forwards: Vec::new(),
         };
 
         let duplicate = config.duplicate_config();
@@ -354,6 +358,7 @@ mod tests {
             host_key_policy: HostKeyPolicy::Strict,
             shell_integration: true,
             jump_hops: Vec::new(),
+            port_forwards: Vec::new(),
         };
         assert_eq!(
             config.duplicate_config().auth,
@@ -380,6 +385,7 @@ mod tests {
                 },
                 host_key_policy: HostKeyPolicy::Strict,
             }],
+            port_forwards: Vec::new(),
         };
 
         let duplicate = config.duplicate_config();
@@ -427,6 +433,7 @@ mod tests {
             host_key_policy: HostKeyPolicy::Strict,
             shell_integration: true,
             jump_hops: Vec::new(),
+            port_forwards: Vec::new(),
         };
 
         let output = format!("{config:?}");

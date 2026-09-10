@@ -38,6 +38,9 @@ pub struct SshDuplicateConfig {
     pub shell_integration: bool,
     /// Jump hosts from the client outwards; empty for a direct connection.
     pub jump_hops: Vec<SshDuplicateHop>,
+    /// Port forwards of the source session; the duplicate tries to bind them too
+    /// and warns about the ones already taken (DEC-0011).
+    pub port_forwards: Vec<crate::PortForward>,
 }
 
 /// Launch metadata required to create a fresh session of the same kind.

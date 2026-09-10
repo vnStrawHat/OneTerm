@@ -6,6 +6,7 @@ pub mod session_state;
 mod auth_form;
 mod common;
 mod connect_dialog;
+mod forward_rows;
 mod group_combo;
 mod jump_hops;
 mod panel;

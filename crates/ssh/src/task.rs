@@ -16,6 +16,7 @@ use oneterm_terminal::TerminalPump;
 use crate::handler::SshClientHandler;
 use crate::route::JumpHandles;
 use crate::transport::{Cmd, SshListener, SshTransport};
+use crate::tunnel::{HandleRequest, serve_handle_request};
 
 /// Main tokio task: reads data from the SSH channel + receives commands from the
 /// main thread. Feeds bytes to `Term` through the shared [`TerminalPump`] in a
@@ -28,8 +29,10 @@ use crate::transport::{Cmd, SshListener, SshTransport};
 ///
 /// **`handle` must be kept alive** — dropping it closes the SSH connection;
 /// `jump_handles` likewise keeps every hop the connection rides on. When the
-/// task ends it cancels `sftp_shutdown` so the SFTP task dies with the
-/// connection (ARCH-28), then drops the target before the hops.
+/// task ends it cancels `session_shutdown` so the SFTP task, the forward
+/// listeners, and every relay die with the connection (ARCH-28), then drops
+/// the target before the hops.
+#[allow(clippy::too_many_arguments)] // one owner for everything that must die with the connection
 pub(crate) async fn ssh_main_task(
     handle: russh::client::Handle<SshClientHandler>,
     jump_handles: JumpHandles,
@@ -37,7 +40,8 @@ pub(crate) async fn ssh_main_task(
     term: Arc<FairMutex<Term<SshListener>>>,
     listener: SshListener,
     cmd_rx: async_channel::Receiver<Cmd>,
-    sftp_shutdown: CancellationToken,
+    mut open_rx: tokio::sync::mpsc::Receiver<HandleRequest>,
+    session_shutdown: CancellationToken,
 ) {
     log::info!("ssh_main_task: started");
     let mut pump = TerminalPump::new(listener);
@@ -92,6 +96,10 @@ pub(crate) async fn ssh_main_task(
                     }
                 }
             }
+            // ── Serve the forward listeners (direct-tcpip opens) ─────
+            Some(request) = open_rx.recv() => {
+                serve_handle_request(&handle, request).await;
+            }
             // ── Receive commands from the main thread ─────────────────
             cmd = cmd_rx.recv() => {
                 match cmd {
@@ -123,7 +131,8 @@ pub(crate) async fn ssh_main_task(
     // The peer may already have closed the channel; that is not a failure.
     report_best_effort("ssh_main_task: close channel", channel.close().await);
     pump.publish_closed().await;
-    sftp_shutdown.cancel();
+    // Listeners, relays, and the SFTP task die with the session (ARCH-28).
+    session_shutdown.cancel();
     // The target's connection closes first, then the hops from the innermost
     // outwards (`JumpHandles::drop`), so nothing closes under a live carrier.
     drop(handle);
