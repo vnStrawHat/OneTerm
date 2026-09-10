@@ -491,7 +491,9 @@ pub fn connect(cfg: SshConfig, initial: PtySize, scrollback: usize)
 - `ssh_main_task` ends in a single teardown block: `channel.close()`,
   `publish_closed()` (flushes deferred reliable events, then `Closed`), then it
   cancels the SFTP `CancellationToken` so `sftp_task` exits and
-  `SftpBackend::alive()` turns false with the connection.
+  `SftpBackend::alive()` turns false with the connection, and finally drops the
+  target handle and then the jump-host handles (`route::JumpHandles`, innermost
+  first) so no hop closes under a connection that still rides on it.
 - Reliable events emitted during `processor.advance` are flushed by
   `TerminalPump::finish_batch().await` after the batch, before the `Output` hint (§5.3).
 - RSA keys authenticate with `rsa-sha2-*` chosen from the server's `server-sig-algs`

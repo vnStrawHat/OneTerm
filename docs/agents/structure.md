@@ -79,6 +79,7 @@ OneTerm/
 │   │   └── src/                    # SshSession (impl TerminalSession), SftpSession (impl SftpBackend);
 │   │                               #   transport (SshTransport) / handler / task / session / sftp*;
 │   │                               #   agent.rs = SSH agent authentication (discovery + identity loop);
+│   │                               #   route.rs = jump-host route (open_transport / authenticate / JumpHandles);
 │   │                               #   the listener is `SshListener = OscRouter<SshTransport>`;
 │   │                               #   test_support.rs (cfg(test)) = in-process russh server helpers
 │   │
@@ -149,7 +150,8 @@ OneTerm/
 │   │
 │   ├── session-ui/                 # `oneterm-session-ui` — session tree + connect dialogs
 │   │   └── src/                    # lib.rs init() (SshSessionStore::init + register "session" panel);
-│   │                               #   panel, connect_dialog, quick_connect_dialog, session_state.rs …
+│   │                               #   panel, connect_dialog, quick_connect_dialog, session_state.rs,
+│   │                               #   jump_hops.rs (jump-host picker + per-hop credential blocks) …
 │   │
 │   ├── settings-ui/                # `oneterm-settings-ui` — General Settings window
 │   │   └── src/                    # lib.rs: open_settings + setup_key_bindings commands;

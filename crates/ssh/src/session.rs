@@ -16,7 +16,6 @@
 //!
 //! See `docs/terminal-backend.md` §7, `docs/sftp-browser-design.md`.
 
-use std::borrow::Cow;
 use std::cell::Cell;
 use std::future::Future;
 use std::sync::atomic::AtomicBool;
@@ -29,7 +28,7 @@ use async_channel::Receiver;
 use russh::Pty;
 use russh::client;
 use russh::client::{AuthResult, KeyboardInteractiveAuthResponse};
-use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg, load_secret_key};
+use russh::keys::{HashAlg, PrivateKey, load_secret_key};
 use russh::{MethodKind, MethodSet};
 use tokio_util::sync::CancellationToken;
 
@@ -42,9 +41,9 @@ use oneterm_terminal::{
     SharedSessionState, SharedState, TerminalSecurityPolicy, ssh_log_identity,
 };
 
-use crate::agent::authenticate_with_agent;
 use crate::counting_stream::CountingStream;
 use crate::handler::SshClientHandler;
+use crate::route::{JumpHandles, connect_hop, hop_error};
 use crate::sftp::{SftpCmd, SftpSession};
 use crate::sftp_task::sftp_task;
 use crate::task::ssh_main_task;
@@ -142,7 +141,7 @@ pub(crate) fn phase_error(phase: ConnectPhase, error: impl std::fmt::Display) ->
 /// Runs each step of a connection attempt under the per-phase deadline and
 /// the user's cancellation, remembering which phase is in flight so the
 /// overall deadline can name it.
-struct ConnectPhases {
+pub(crate) struct ConnectPhases {
     cancellation: ConnectionCancellation,
     current: Cell<ConnectPhase>,
 }
@@ -160,7 +159,7 @@ impl ConnectPhases {
         self.current.get()
     }
 
-    async fn run<T, F>(&self, phase: ConnectPhase, future: F) -> oneterm_core::Result<T>
+    pub(crate) async fn run<T, F>(&self, phase: ConnectPhase, future: F) -> oneterm_core::Result<T>
     where
         F: Future<Output = oneterm_core::Result<T>>,
     {
@@ -252,125 +251,41 @@ pub fn connect(
     // ── Connect (block_on) ──────────────────────────────────────────
     let connect_result = runtime.block_on(async {
         let operation = async {
-            let addr = format!("{}:{}", cfg.host, cfg.port);
-            log::info!("SshSession: connecting to {addr}");
-            let handler =
-                SshClientHandler::new(cfg.host.clone(), cfg.port, cfg.host_key_policy.clone());
-            let mut client_cfg = russh::client::Config {
-                keepalive_interval: keepalive.interval(),
-                keepalive_max: keepalive.max(),
-                ..Default::default()
-            };
-            client_cfg.preferred.key = Cow::Owned(handler.preferred_key_algorithms());
-
-            let mut handle = phases
-                .run(ConnectPhase::Transport, async {
-                    client::connect(Arc::new(client_cfg), addr, handler)
-                        .await
-                        .map_err(|error| error.to_app_error())
-                })
-                .await?;
-            log::info!("SshSession: TCP connected");
-
-            // ── Authenticate ──────────────────────────────────────────────
-            // Move authentication material out of the long-lived config so it is
-            // zeroized as soon as authentication completes.
-            let auth = std::mem::replace(&mut cfg.auth, SshAuthMethod::None);
-            let auth_result = match auth {
-                SshAuthMethod::None => {
-                    log::info!("SshSession: authenticating with none (no password)");
-                    phases
-                        .run(ConnectPhase::Authentication, async {
-                            handle
-                                .authenticate_none(&cfg.username)
-                                .await
-                                .map_err(|e| phase_error(ConnectPhase::Authentication, e))
-                        })
-                        .await?
-                }
-                SshAuthMethod::Password { password } => {
-                    log::info!("SshSession: authenticating with password");
-                    phases
-                        .run(ConnectPhase::Authentication, async {
-                            authenticate_with_password(
-                                &mut handle,
-                                &cfg.username,
-                                password.expose_secret(),
-                            )
-                            .await
-                        })
-                        .await?
-                }
-                SshAuthMethod::PrivateKey {
-                    key_path,
-                    passphrase,
-                } => {
-                    log::info!("SshSession: authenticating with key {}", key_path.display());
-                    // Key files are read and decrypted on the blocking pool so
-                    // the two SSH runtime workers keep serving other sessions
-                    // (CORR-17).
-                    let key = phases
-                        .run(ConnectPhase::Authentication, async {
-                            tokio::task::spawn_blocking(move || {
-                                load_private_key(
-                                    &key_path,
-                                    passphrase.as_ref().map(|secret| secret.expose_secret()),
-                                )
-                            })
-                            .await
-                            .unwrap_or_else(|join_error| {
-                                Err(phase_error(ConnectPhase::Authentication, join_error))
-                            })
-                        })
-                        .await?;
-                    // RSA keys must not sign with the legacy SHA-1 `ssh-rsa`
-                    // (OpenSSH >= 8.8 rejects it). Ask the server which
-                    // `rsa-sha2-*` it supports (RFC 8308 `server-sig-algs`);
-                    // when it does not say, prefer SHA-512.
-                    let hash_alg = if key.algorithm().is_rsa() {
-                        let advertised = phases
-                            .run(ConnectPhase::Authentication, async {
-                                handle
-                                    .best_supported_rsa_hash()
-                                    .await
-                                    .map_err(|e| phase_error(ConnectPhase::Authentication, e))
-                            })
-                            .await?;
-                        rsa_hash_alg(advertised)
-                    } else {
-                        None
-                    };
-                    let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg);
-                    phases
-                        .run(ConnectPhase::Authentication, async {
-                            handle
-                                .authenticate_publickey(&cfg.username, key_with_alg)
-                                .await
-                                .map_err(|e| phase_error(ConnectPhase::Authentication, e))
-                        })
-                        .await?
-                }
-                SshAuthMethod::Agent => {
-                    log::info!("SshSession: authenticating with the local SSH agent");
-                    phases
-                        .run(
-                            ConnectPhase::Authentication,
-                            authenticate_with_agent(&mut handle, &cfg.username),
-                        )
-                        .await?
-                }
-            };
-            log::info!("SshSession: auth result = {auth_result:?}");
-            if let AuthResult::Failure {
-                remaining_methods,
-                partial_success,
-            } = auth_result
-            {
-                return Err(AppError::Connect {
-                    phase: ConnectPhase::Authentication,
-                    message: authentication_failure_message(&remaining_methods, partial_success),
-                });
+            // ── Route: every jump hop, then the target ──────────────────
+            // Each hop's credential is moved out of the config so it is
+            // zeroized as soon as that hop is authenticated.
+            let hops = std::mem::take(&mut cfg.jump_hops);
+            let mut carriers = JumpHandles::default();
+            for hop in hops {
+                let label = hop.label();
+                log::info!("SshSession: connecting to jump host {label}");
+                let handle = connect_hop(
+                    &phases,
+                    carriers.last(),
+                    &hop.host,
+                    hop.port,
+                    &hop.username,
+                    hop.auth,
+                    hop.host_key_policy,
+                    keepalive,
+                )
+                .await
+                .map_err(|error| hop_error(&label, error))?;
+                carriers.push(handle);
             }
+            let target_auth = std::mem::replace(&mut cfg.auth, SshAuthMethod::None);
+            log::info!("SshSession: connecting to {}:{}", cfg.host, cfg.port);
+            let handle = connect_hop(
+                &phases,
+                carriers.last(),
+                &cfg.host,
+                cfg.port,
+                &cfg.username,
+                target_auth,
+                cfg.host_key_policy.clone(),
+                keepalive,
+            )
+            .await?;
 
             // ── Open channel + pty + shell ──────────────────────────────
             let channel = phases
@@ -474,6 +389,7 @@ pub fn connect(
             // connection.
             tokio::spawn(ssh_main_task(
                 handle,
+                carriers,
                 channel,
                 term.clone(),
                 listener.clone(),
@@ -582,7 +498,7 @@ async fn open_sftp(
 /// runs a single round: every prompt of the first info request is answered with
 /// the same password; a second info request or a prompt that echoes (so it is
 /// not a password prompt) aborts with an explicit error instead of guessing.
-async fn authenticate_with_password(
+pub(crate) async fn authenticate_with_password(
     handle: &mut client::Handle<SshClientHandler>,
     username: &str,
     password: &str,
@@ -717,7 +633,7 @@ pub(crate) fn rsa_hash_alg(advertised: Option<Option<HashAlg>>) -> Option<HashAl
 }
 
 /// Load a private key from a file, decrypting with the passphrase if needed.
-fn load_private_key(
+pub(crate) fn load_private_key(
     path: &std::path::Path,
     passphrase: Option<&str>,
 ) -> oneterm_core::Result<PrivateKey> {

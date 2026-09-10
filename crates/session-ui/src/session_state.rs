@@ -33,6 +33,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use gpui::{App, AppContext, Entity, Global};
+use oneterm_core::MAX_JUMP_HOPS;
 use oneterm_core::{
     AppError, atomic_write, config_dir, migrate_json_value, quarantine_file, set_schema_version,
     versioned_object,
@@ -145,6 +146,34 @@ pub struct SshSession {
     /// Per-session automatic logging behavior.
     #[serde(default, skip_serializing_if = "is_inherited_logging")]
     pub logging: SshLoggingOverride,
+    /// The saved session to connect through first (DEC-0010); that session's
+    /// own `jump_host` extends the chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jump_host: Option<SshSessionId>,
+}
+
+/// Why a `jump_host` chain cannot be followed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JumpChainError {
+    /// A referenced session no longer exists.
+    Missing(SshSessionId),
+    /// The chain returns to a session already on it (or to the target).
+    Cycle(SshSessionId),
+    /// More than `MAX_JUMP_HOPS` hops.
+    TooLong(usize),
+}
+
+impl fmt::Display for JumpChainError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Missing(id) => write!(f, "jump host session {id} no longer exists"),
+            Self::Cycle(_) => f.write_str("the jump host chain loops back on itself"),
+            Self::TooLong(count) => write!(
+                f,
+                "the jump host chain has {count} hops; at most {MAX_JUMP_HOPS} are supported"
+            ),
+        }
+    }
 }
 
 fn default_port() -> u16 {
@@ -243,6 +272,35 @@ impl SshSessionStore {
             .iter()
             .find(|entry| entry.id == id)
             .map(|entry| &entry.session)
+    }
+
+    /// Follow `jump_host` links from `first` and return the hops outermost
+    /// first. `target` is the session being connected or edited: a chain that
+    /// reaches it is a cycle. `None` for `first` is the empty chain.
+    pub fn jump_chain(
+        &self,
+        first: Option<SshSessionId>,
+        target: Option<SshSessionId>,
+    ) -> Result<Vec<SshSessionEntry>, JumpChainError> {
+        let mut chain: Vec<SshSessionEntry> = Vec::new();
+        let mut next = first;
+        while let Some(id) = next {
+            if Some(id) == target || chain.iter().any(|entry| entry.id == id) {
+                return Err(JumpChainError::Cycle(id));
+            }
+            if chain.len() == MAX_JUMP_HOPS {
+                return Err(JumpChainError::TooLong(chain.len() + 1));
+            }
+            let entry = self
+                .entries
+                .iter()
+                .find(|entry| entry.id == id)
+                .ok_or(JumpChainError::Missing(id))?;
+            next = entry.session.jump_host;
+            chain.push(entry.clone());
+        }
+        chain.reverse();
+        Ok(chain)
     }
 
     /// Add a new session under a fresh id + save the file + notify observers.
@@ -576,6 +634,7 @@ mod tests {
             color: None,
             group: None,
             logging: SshLoggingOverride::Inherit,
+            jump_host: None,
         };
         let json = serde_json::to_string(&session).unwrap();
         assert!(!json.contains("username"));
@@ -593,6 +652,7 @@ mod tests {
             color: None,
             group: None,
             logging: SshLoggingOverride::Inherit,
+            jump_host: None,
         };
         let json = serde_json::to_string(&session).unwrap();
         assert!(json.contains("\"username\":\"root\""));
@@ -610,6 +670,7 @@ mod tests {
             color: None,
             group: None,
             logging: SshLoggingOverride::Inherit,
+            jump_host: None,
         };
 
         let json = serde_json::to_string(&session).unwrap();
@@ -631,6 +692,7 @@ mod tests {
             color: None,
             group: None,
             logging: SshLoggingOverride::Inherit,
+            jump_host: None,
         };
 
         let json = serde_json::to_string(&session).unwrap();
@@ -639,6 +701,109 @@ mod tests {
         let back: SshSession = serde_json::from_str(&json).unwrap();
         assert_eq!(back.auth_method, SshAuthPreference::Agent);
         assert_eq!(back, session);
+    }
+
+    #[test]
+    fn jump_host_round_trips_and_is_omitted_when_absent() {
+        let mut session = SshSession {
+            label: "target".into(),
+            host: "10.0.5.20".into(),
+            port: 22,
+            username: Some("deploy".into()),
+            auth_method: SshAuthPreference::Password,
+            key_path: None,
+            color: None,
+            group: None,
+            logging: SshLoggingOverride::Inherit,
+            jump_host: None,
+        };
+        assert!(
+            !serde_json::to_string(&session)
+                .unwrap()
+                .contains("jump_host")
+        );
+
+        session.jump_host = Some(SshSessionId(3));
+        let json = serde_json::to_string(&session).unwrap();
+        assert!(json.contains("\"jump_host\":3"), "{json}");
+        let back: SshSession = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.jump_host, Some(SshSessionId(3)));
+    }
+
+    fn chained_store(links: &[(u64, Option<u64>)]) -> SshSessionStore {
+        let mut entries = Vec::new();
+        for (id, jump) in links {
+            entries.push(SshSessionEntry {
+                id: SshSessionId(*id),
+                session: SshSession {
+                    label: format!("s{id}"),
+                    host: "h".into(),
+                    port: 22,
+                    username: Some("u".into()),
+                    auth_method: SshAuthPreference::Password,
+                    key_path: None,
+                    color: None,
+                    group: None,
+                    logging: SshLoggingOverride::Inherit,
+                    jump_host: jump.map(SshSessionId),
+                },
+            });
+        }
+        SshSessionStore::with_document(SessionDocument {
+            entries,
+            next_id: 100,
+        })
+    }
+
+    #[test]
+    fn jump_chain_lists_hops_outermost_first() {
+        // target 1 -> bastion 2 -> outer relay 3 (no further hop)
+        let store = chained_store(&[(1, Some(2)), (2, Some(3)), (3, None)]);
+        let chain = store
+            .jump_chain(Some(SshSessionId(2)), Some(SshSessionId(1)))
+            .unwrap();
+        let ids: Vec<u64> = chain.iter().map(|entry| entry.id.0).collect();
+        assert_eq!(ids, vec![3, 2]);
+        assert!(
+            store
+                .jump_chain(None, Some(SshSessionId(1)))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn jump_chain_rejects_missing_cycles_and_long_chains() {
+        let store = chained_store(&[(1, Some(2)), (2, Some(1)), (3, Some(9))]);
+        assert_eq!(
+            store.jump_chain(Some(SshSessionId(2)), Some(SshSessionId(1))),
+            Err(JumpChainError::Cycle(SshSessionId(1)))
+        );
+        // A self-contained loop that never reaches the target is a cycle too.
+        assert_eq!(
+            store.jump_chain(Some(SshSessionId(1)), None),
+            Err(JumpChainError::Cycle(SshSessionId(1)))
+        );
+        assert_eq!(
+            store.jump_chain(Some(SshSessionId(3)), None),
+            Err(JumpChainError::Missing(SshSessionId(9)))
+        );
+
+        let long = chained_store(&[
+            (1, Some(2)),
+            (2, Some(3)),
+            (3, Some(4)),
+            (4, Some(5)),
+            (5, None),
+        ]);
+        assert_eq!(
+            long.jump_chain(Some(SshSessionId(1)), None),
+            Err(JumpChainError::TooLong(5))
+        );
+        assert_eq!(
+            long.jump_chain(Some(SshSessionId(2)), None).unwrap().len(),
+            4
+        );
     }
 
     #[test]
@@ -655,6 +820,7 @@ mod tests {
                 color: None,
                 group: Some("g".into()),
                 logging: SshLoggingOverride::Inherit,
+                jump_host: None,
             },
         };
         let json = serde_json::to_value(&entry).unwrap();
@@ -725,6 +891,7 @@ mod persistence_tests {
             color: None,
             group: None,
             logging: SshLoggingOverride::Inherit,
+            jump_host: None,
         }
     }
 

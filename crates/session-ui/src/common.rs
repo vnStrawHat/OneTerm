@@ -439,10 +439,26 @@ fn open_host_key_confirmation(
     cx: &mut App,
 ) {
     cfg.cancellation = ConnectionCancellation::default();
-    cfg.host_key_policy = HostKeyPolicy::AcceptNewFingerprint(fingerprint.clone());
+    // The failing key belongs to the hop with this address, else to the
+    // target; accepting it never accepts any other hop's key (DEC-0010).
+    let policy = HostKeyPolicy::AcceptNewFingerprint(fingerprint.clone());
+    let via = match cfg
+        .jump_hops
+        .iter_mut()
+        .find(|hop| hop.host == host && hop.port == port)
+    {
+        Some(hop) => {
+            hop.host_key_policy = policy;
+            format!("  (jump host for {})", request.label)
+        }
+        None => {
+            cfg.host_key_policy = policy;
+            String::new()
+        }
+    };
     let description = format!(
         "The server is not present in your OpenSSH known_hosts file.\n\n\
-         Host: {host}:{port}\nAlgorithm: {algorithm}\n\
+         Host: {host}:{port}{via}\nAlgorithm: {algorithm}\n\
          SHA-256 fingerprint: {fingerprint}\n\n\
          Verify this fingerprint through a trusted channel before continuing.",
     );

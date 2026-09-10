@@ -10,8 +10,8 @@ Created: 2026-09-10
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
-- [ ] In progress
-- [ ] Implemented
+- [x] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -33,25 +33,25 @@ persisted.
 
 ## Scope
 
-- [ ] In scope: `SshHop`, `SshConfig.jump_hops`, `MAX_JUMP_HOPS`, `route()` (`oneterm-core`);
+- [x] In scope: `SshHop`, `SshConfig.jump_hops`, `MAX_JUMP_HOPS` (`oneterm-core`; `route()` was not needed, `connect` iterates the hops then the target directly);
   `crates/ssh/src/route.rs` (`open_transport`, `JumpHandles`, `hop_error`) and the
   `ssh_main_task` handle ownership; `SshSession.jump_host`, `resolve_jump_chain`, jump-host
   combobox in the session dialog and Quick Connect, per-hop credential blocks in the connect
   dialog, hop-aware host-key confirmation, Duplicate Session prompting per hop; tests.
-- [ ] Out of scope: `ProxyCommand`; client-side HTTP/SOCKS proxies; per-hop keepalive
+- [x] Out of scope: `ProxyCommand`; client-side HTTP/SOCKS proxies; per-hop keepalive
   settings; counting jump-hop bytes in the bandwidth indicator.
 
 ## Acceptance
 
-- [ ] Session dialog offers "Jump host: None | <other saved sessions>"; the edited session is not listed; saving a cycle or a chain longer than four hops is rejected with a message.
-- [ ] Connect to a session with one jump host shows two credential blocks (hop then target) and opens a shell on the target; `who` on the target shows the bastion as the origin.
-- [ ] Two-hop chain works the same way with three blocks.
-- [ ] Unknown host key on the jump host: the confirmation dialog names the jump host and "(jump host for <label>)"; accepting once connects; the target's own unknown key prompts separately.
-- [ ] Bastion with `AllowTcpForwarding no`: the error reads `jump host user@host:port: ...` and names the next hop's address.
-- [ ] Deleted jump host: connect reports the missing session; the dialog shows "None (missing session)".
-- [ ] Closing the tab closes the target and every hop (no lingering TCP connections in `netstat`).
-- [ ] `ssh_session.json` without `jump_host` loads unchanged; no secret is written.
-- [ ] `pwsh scripts/ci-local.ps1` green.
+- [x] Session dialog offers "Jump host: None | <other saved sessions>"; the edited session is not listed; saving a cycle or a chain longer than four hops is rejected with a message (picker walked in the GUI; cycle / length rejection unit-tested in `jump_chain`, the Save path calls it).
+- [ ] Connect to a session with one jump host shows two credential blocks (hop then target) and opens a shell on the target; `who` on the target shows the bastion as the origin (dialog walked in the GUI; the shell through a bastion is proven by the in-process two-server test, not against a real host).
+- [ ] Two-hop chain works the same way with three blocks (chain resolution unit-tested; not walked).
+- [ ] Unknown host key on the jump host: the confirmation dialog names the jump host and "(jump host for <label>)"; accepting once connects; the target's own unknown key prompts separately (backend attribution unit-tested: an unknown key behind the bastion names the target; the dialog text needs a real host).
+- [x] Bastion with `AllowTcpForwarding no`: the error reads `jump host user@host:port: ...` and names the next hop's address (unit-tested against a refusing in-process bastion + `hop_error`).
+- [x] Deleted jump host: connect reports the missing session (`JumpChainError::Missing`, shown as a notification before the dialog opens); the edit dialog shows "None" for a dangling reference and Save clears it (the picker ignores an unknown id).
+- [ ] Closing the tab closes the target and every hop (`JumpHandles` dropped after the target in the teardown block; `netstat` check needs a real host).
+- [x] `ssh_session.json` without `jump_host` loads unchanged; no secret is written.
+- [x] `pwsh scripts/ci-local.ps1` green.
 
 ## Documentation
 
@@ -74,7 +74,12 @@ Reason: the connect flow document describes one TCP connection and one authentic
 
 ### Reconciliation
 
-Before completion, list docs changed or confirm the recorded no-change reason remains valid.
+- `docs/ssh-client-connect.md` — §9.2 names the per-hop phases and the hop-prefixed error row; §9.6 now lists the agent method (it still called agent auth a roadmap item after US-0057; fixed here); new §9.8 "Connection route — jump hosts" (transport, per-hop host keys, credential zeroization, `JumpHandles` drop order, saved reference model).
+- `docs/ssh-authentication.md` — secret policy applied per hop.
+- `docs/agents/persistence.md` — `jump_host` field and its dangling-reference rule.
+- `docs/agents/structure.md` — `crates/ssh/src/route.rs`, `crates/session-ui/src/jump_hops.rs`.
+- `docs/terminal-backend.md` — teardown block drops the target then the hop handles.
+- `docs/decisions/0002-ssh-duplicate-auth.md` — reviewed, unchanged: duplicates now carry `SshDuplicateHop` metadata and prompt per hop, which is the same rule applied to more hosts.
 
 ## Context
 
@@ -86,12 +91,12 @@ Before completion, list docs changed or confirm the recorded no-change reason re
 
 ## Plan
 
-- [ ] Core types + `route()` + tests.
-- [ ] `route.rs`: `open_transport`, `JumpHandles` (reverse-order drop), `hop_error`; `connect` loops over the route; `ssh_main_task` takes `_jump_handles`.
-- [ ] Two-server test (`connect` through hop; refused direct-tcpip; unknown hop key).
-- [ ] `SshSession.jump_host`, `resolve_jump_chain` + tests (missing, cycle, too long).
-- [ ] Dialog combobox (session + Quick Connect), connect dialog blocks, host-key text, Duplicate Session.
-- [ ] Docs + gate.
+- [x] Core types (`SshHop`, `MAX_JUMP_HOPS`, `SshDuplicateHop`) + tests.
+- [x] `route.rs`: `open_transport`, `authenticate` (the extraction US-0057 deferred), `connect_hop`, `JumpHandles` (reverse-order drop), `hop_error`; `connect` loops over the hops then the target; `ssh_main_task` drops the target before the hops.
+- [x] Two-server tests (session channel through a relaying bastion; refused direct-tcpip; unknown key behind the bastion names the target; `hop_error` shape).
+- [x] `SshSession.jump_host`, `SshSessionStore::jump_chain` + tests (outermost-first order, missing, cycle, self-loop, too long).
+- [x] `jump_hops.rs`: `HopSpec`, `JumpHopForms`, `JumpHostPicker` (a `Select` over the other saved sessions); session dialog + Quick Connect pickers, hop credential blocks in the connect and Quick Connect dialogs, hop-aware host-key confirmation, Duplicate Session prefill.
+- [x] Docs + gate + GUI walk (`evidence/US-0058-gui-walk.md`).
 
 ## Decisions
 
@@ -104,17 +109,58 @@ Before completion, list docs changed or confirm the recorded no-change reason re
 - Manual: real bastion + target; unknown-key prompts per hop; `netstat` after close.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable, partial, or failing.
+Commands (Windows 11, `pwsh`, branch `feat/ssh-jump-hosts`, 2026-09-10):
+
+- `rtk proxy cargo test -p oneterm-ssh -p oneterm-core` — 58 + 47 passed; the four new route
+  tests run two in-process `russh` servers (a relaying bastion and a session-only target).
+- `rtk proxy cargo test -p oneterm-session-ui` — 48 passed (chain resolution, `jump_host`
+  round-trip, `HopSpec` from a saved session and from duplicate metadata, the form rejecting a
+  stale key path for agent auth).
+- `rtk proxy cargo clippy --workspace --all-targets -- -D warnings` — clean.
+- `rtk proxy pwsh scripts/ci-local.ps1` — `ci-local: all checks passed`, 1091 tests.
+- GUI walk: `evidence/US-0058-gui-walk.md` with five screenshots (Quick Connect rows and
+  dropdown, the hop block after picking a jump host, the connect dialog with the bastion block
+  focused above the target, the edit dialog with the saved jump host selected).
+
+Deviations from the LLD:
+
+- No `SshConfig::route()` iterator: `connect` takes the hops out of the config with
+  `mem::take`, loops them, then connects the target with the same `connect_hop`; simpler than a
+  borrowed `HopRef` while still moving each credential out before its hop authenticates.
+- `authenticate` returns `Result<()>` (a server rejection is already the `Authentication` error)
+  instead of `Result<AuthResult>`; callers never needed the success value.
+- `JumpChainError` and `jump_chain(first, target)` replace `resolve_jump_chain(target)` so the
+  same function serves the connect dialog (first = the saved reference, target = the session),
+  Quick Connect (first = the picked session, no target), and the session dialog's Save check.
+- A hop must have a saved username (`HopSpec::from_entry`); there is no per-hop username prompt.
+- The jump-host picker is a GPUI Kit `Select` over `Vec<String>` rather than the searchable
+  `Combobox` pattern of the Group field; it needs no custom trigger or footer.
+- In Quick Connect the hop credential blocks are rebuilt inside the dialog's render closure when
+  the picker selection changes (`QuickConnectHops::forms`); a chain error is shown as a red line
+  under the picker and blocks Connect.
+- `crates/ssh/src/agent.rs` lost its private `Agent` arm in `connect`; the arm lives in
+  `route::authenticate` now.
+
+Gaps:
+
+- No real-host E2E: the shell through a bastion, `who` on the target, the hop-attributed
+  host-key prompt text, `netstat` after close, a two-hop chain in the dialog, and Duplicate
+  Session of a jump-host session are not exercised against real servers.
+- `JumpHandles` drop order is asserted by construction (explicit drops in the teardown block),
+  not by a test.
+- Bandwidth indicator counts target-channel bytes only (documented out of scope).
 
 ## Handoff
 
-Not started. Shares the `authenticate` helper with US-0057; whichever lands first extracts it.
+Implemented, gate green, GUI walked, not committed. Next: owner acceptance, then US-0059 (port
+forwarding), which will add the `open_rx` request arm to `ssh_main_task` beside the new
+`jump_handles` parameter.

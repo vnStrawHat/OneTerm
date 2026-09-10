@@ -12,6 +12,7 @@
 mod agent;
 mod counting_stream;
 mod handler;
+mod route;
 mod session;
 mod session_terminal;
 mod sftp;

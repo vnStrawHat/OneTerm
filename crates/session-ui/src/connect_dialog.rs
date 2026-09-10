@@ -38,6 +38,7 @@ use super::common::{
     ConnectButton, SshConnectRequest, connect_ssh_session, defer_initial_focus_once,
     parse_user_host_port, server_info_banner,
 };
+use super::jump_hops::{HopSpec, JumpHopForms};
 use crate::session_state::{SshSession, SshSessionId, SshSessionStore};
 
 /// Open the SSH connect dialog.
@@ -72,6 +73,20 @@ pub(crate) fn open_connect_dialog(
         None => format!("ssh://{}:{}", session.host, session.port),
     };
 
+    // The jump chain is resolved now, so a broken reference is reported before
+    // any credential is typed.
+    let hop_specs: Result<Vec<HopSpec>, String> = SshSessionStore::global(cx)
+        .read(cx)
+        .jump_chain(session.jump_host, Some(id))
+        .map_err(|error| error.to_string())
+        .and_then(|chain| chain.iter().map(HopSpec::from_entry).collect());
+    let hop_forms = match hop_specs {
+        Ok(specs) => JumpHopForms::new(specs, window, cx),
+        Err(message) => {
+            window.push_notification(notify(NotificationType::Warning, message, cx), cx);
+            return;
+        }
+    };
     let auth_form = SshAuthForm::new(session.auth_method, session.key_path.as_deref(), window, cx);
 
     // Username state — only created when needed.
@@ -93,6 +108,7 @@ pub(crate) fn open_connect_dialog(
     let connect_logic: Rc<dyn Fn(&mut Window, &mut App) -> bool> = Rc::new({
         let username_state = username_state.clone();
         let auth_form = auth_form.clone();
+        let hop_forms = hop_forms.clone();
         let session = session.clone();
         let save_username = save_username.clone();
         let connection_cancellation = connection_cancellation.clone();
@@ -106,6 +122,7 @@ pub(crate) fn open_connect_dialog(
                 id,
                 &username_state,
                 &auth_form,
+                &hop_forms,
                 save_username.get(),
                 &connection_cancellation,
                 connecting.clone(),
@@ -128,10 +145,13 @@ pub(crate) fn open_connect_dialog(
     let initial_focus = {
         let username_state = username_state.clone();
         let auth_form = auth_form.clone();
+        let hop_forms = hop_forms.clone();
         move |window: &mut Window, cx: &mut App| {
             let focus = match username_state.as_ref() {
                 Some(state) => Some(state.read(cx).focus_handle(cx)),
-                None => auth_form.focus_handle(cx),
+                None => hop_forms
+                    .first_secret_focus(cx)
+                    .or_else(|| auth_form.focus_handle(cx)),
             };
             if let Some(focus) = focus {
                 defer_initial_focus_once(&initial_focus_pending, focus, window, cx);
@@ -143,6 +163,7 @@ pub(crate) fn open_connect_dialog(
         title,
         move |content, _window, cx| {
             content
+                .child(hop_forms.render(cx))
                 // Server info banner (read-only).
                 .child(server_info_banner(
                     SharedString::from(server_info.clone()),
@@ -190,6 +211,7 @@ fn on_connect_click(
     id: SshSessionId,
     username_state: &Option<gpui::Entity<InputState>>,
     auth_form: &SshAuthForm,
+    hop_forms: &JumpHopForms,
     save_username: bool,
     connection_cancellation: &Rc<RefCell<Option<ConnectionCancellation>>>,
     connecting: Arc<AtomicBool>,
@@ -231,7 +253,14 @@ fn on_connect_click(
         ),
     };
 
-    // 2. Validate and collect the selected authentication material.
+    // 2. Validate and collect the selected authentication material, hops first.
+    let jump_hops = match hop_forms.take_hops(window, cx) {
+        Ok(hops) => hops,
+        Err(message) => {
+            window.push_notification(notify(NotificationType::Warning, message, cx), cx);
+            return false;
+        }
+    };
     let auth = match auth_form.take_auth(window, cx) {
         Ok(auth) => auth,
         Err(message) => {
@@ -260,6 +289,7 @@ fn on_connect_click(
         cancellation: ConnectionCancellation::default(),
         host_key_policy: HostKeyPolicy::Strict,
         shell_integration: true,
+        jump_hops,
     };
     connecting.store(true, Ordering::Relaxed);
     window.refresh();

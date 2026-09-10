@@ -25,16 +25,18 @@ pub use schema::{
     SCHEMA_VERSION_FIELD, migrate_json_value, parse_versioned_document, schema_version,
     set_schema_version, versioned_object,
 };
-pub use session_duplicate::{SessionDuplicateConfig, SshDuplicateAuth, SshDuplicateConfig};
+pub use session_duplicate::{
+    SessionDuplicateConfig, SshDuplicateAuth, SshDuplicateConfig, SshDuplicateHop,
+};
 pub use sftp::{
     FileEntry, RemotePath, SftpBackend, SftpFuture, SftpSessionId, SftpTableState, TransferEvent,
     TransferHandle,
 };
 pub use ssh_config::{
     ConnectionCancellation, DEFAULT_SSH_KEEPALIVE_INTERVAL_SECS, DEFAULT_SSH_KEEPALIVE_MAX,
-    HostKeyPolicy, MAX_SSH_KEEPALIVE_INTERVAL_SECS, MAX_SSH_KEEPALIVE_MAX,
+    HostKeyPolicy, MAX_JUMP_HOPS, MAX_SSH_KEEPALIVE_INTERVAL_SECS, MAX_SSH_KEEPALIVE_MAX,
     MIN_SSH_KEEPALIVE_INTERVAL_SECS, MIN_SSH_KEEPALIVE_MAX, SecretString, SshAuthMethod, SshConfig,
-    SshKeepaliveConfig,
+    SshHop, SshKeepaliveConfig,
 };
 pub use terminal_logging::{
     LOG_CONTENT_FORMAT, LOG_FILE_NAME_FORMAT, LogWriteMode, TerminalLogConfig,

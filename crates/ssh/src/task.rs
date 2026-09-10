@@ -14,6 +14,7 @@ use oneterm_core::report_best_effort;
 use oneterm_terminal::TerminalPump;
 
 use crate::handler::SshClientHandler;
+use crate::route::JumpHandles;
 use crate::transport::{Cmd, SshListener, SshTransport};
 
 /// Main tokio task: reads data from the SSH channel + receives commands from the
@@ -25,11 +26,13 @@ use crate::transport::{Cmd, SshListener, SshTransport};
 /// The `Term` grid is resized by the UI thread (`TerminalSession::resize`);
 /// this task only forwards the coalesced size to the remote PTY (CORR-21).
 ///
-/// **`handle` must be kept alive** — dropping it closes the SSH connection.
-/// When the task ends it cancels `sftp_shutdown` so the SFTP task dies with the
-/// connection (ARCH-28).
+/// **`handle` must be kept alive** — dropping it closes the SSH connection;
+/// `jump_handles` likewise keeps every hop the connection rides on. When the
+/// task ends it cancels `sftp_shutdown` so the SFTP task dies with the
+/// connection (ARCH-28), then drops the target before the hops.
 pub(crate) async fn ssh_main_task(
-    _handle: russh::client::Handle<SshClientHandler>,
+    handle: russh::client::Handle<SshClientHandler>,
+    jump_handles: JumpHandles,
     mut channel: russh::Channel<russh::client::Msg>,
     term: Arc<FairMutex<Term<SshListener>>>,
     listener: SshListener,
@@ -121,5 +124,9 @@ pub(crate) async fn ssh_main_task(
     report_best_effort("ssh_main_task: close channel", channel.close().await);
     pump.publish_closed().await;
     sftp_shutdown.cancel();
+    // The target's connection closes first, then the hops from the innermost
+    // outwards (`JumpHandles::drop`), so nothing closes under a live carrier.
+    drop(handle);
+    drop(jump_handles);
     log::info!("ssh_main_task: exiting");
 }

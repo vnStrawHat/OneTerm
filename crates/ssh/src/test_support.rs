@@ -53,16 +53,13 @@ where
     (address, server_task)
 }
 
-/// Connect to a loopback test server under the strict host-key policy after
-/// learning its key with a probe connection into a temporary `known_hosts`.
-pub(crate) async fn connect_trusting_loopback(
+/// The SHA-256 fingerprint of a loopback test server, learned with a probe
+/// connection under the strict policy against `known_hosts` (which must not
+/// already hold the key).
+pub(crate) async fn loopback_fingerprint(
     address: SocketAddr,
-) -> (client::Handle<SshClientHandler>, TempKnownHosts) {
-    let known_hosts = TempKnownHosts(std::env::temp_dir().join(format!(
-        "oneterm-test-known-hosts-{}-{}",
-        std::process::id(),
-        address.port()
-    )));
+    known_hosts: &TempKnownHosts,
+) -> String {
     let probe = client::connect(
         Arc::new(client::Config::default()),
         address,
@@ -74,10 +71,23 @@ pub(crate) async fn connect_trusting_loopback(
         .with_known_hosts_path(known_hosts.0.clone()),
     )
     .await;
-    let fingerprint = match probe {
+    match probe {
         Err(SshHandlerError::UnknownHostKey { fingerprint, .. }) => fingerprint,
         other => panic!("expected an unknown host key, got {:?}", other.err()),
-    };
+    }
+}
+
+/// Connect to a loopback test server under the strict host-key policy after
+/// learning its key with a probe connection into a temporary `known_hosts`.
+pub(crate) async fn connect_trusting_loopback(
+    address: SocketAddr,
+) -> (client::Handle<SshClientHandler>, TempKnownHosts) {
+    let known_hosts = TempKnownHosts(std::env::temp_dir().join(format!(
+        "oneterm-test-known-hosts-{}-{}",
+        std::process::id(),
+        address.port()
+    )));
+    let fingerprint = loopback_fingerprint(address, &known_hosts).await;
     let handle = client::connect(
         Arc::new(client::Config::default()),
         address,

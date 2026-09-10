@@ -17,7 +17,7 @@ use gpui::{
     prelude::FluentBuilder as _,
 };
 use gpui_component::{
-    WindowExt as _,
+    ActiveTheme as _, WindowExt as _,
     checkbox::Checkbox,
     input::{Input, InputState},
     notification::NotificationType,
@@ -35,7 +35,57 @@ use super::common::{
     ConnectButton, SshConnectRequest, connect_ssh_session, defer_initial_focus_once, parse_port,
     parse_user_host_port,
 };
-use crate::session_state::{SshAuthPreference, SshLoggingOverride, SshSession, SshSessionStore};
+use super::jump_hops::{HopSpec, JumpHopForms, JumpHostPicker};
+use crate::session_state::{
+    SshAuthPreference, SshLoggingOverride, SshSession, SshSessionId, SshSessionStore,
+};
+
+/// The hop credential blocks of a Quick Connect: fixed for a duplicate, and
+/// rebuilt whenever the picker's selection changes for a new connection.
+struct QuickConnectHops {
+    picker: Option<JumpHostPicker>,
+    /// The picker selection the forms were built for, and the forms (or the
+    /// chain error shown under the picker).
+    built: RefCell<(Option<SshSessionId>, Result<JumpHopForms, String>)>,
+}
+
+impl QuickConnectHops {
+    fn fixed(forms: JumpHopForms) -> Self {
+        Self {
+            picker: None,
+            built: RefCell::new((None, Ok(forms))),
+        }
+    }
+
+    fn picked(picker: JumpHostPicker, window: &mut Window, cx: &mut App) -> Self {
+        Self {
+            picker: Some(picker),
+            built: RefCell::new((None, Ok(JumpHopForms::new(Vec::new(), window, cx)))),
+        }
+    }
+
+    /// The forms for the current selection, rebuilt when the selection moved.
+    fn forms(&self, window: &mut Window, cx: &mut App) -> Result<JumpHopForms, String> {
+        let Some(picker) = &self.picker else {
+            return self.built.borrow().1.clone();
+        };
+        let selected = picker.selected(cx);
+        if self.built.borrow().0 != selected {
+            let specs: Result<Vec<HopSpec>, String> = SshSessionStore::global(cx)
+                .read(cx)
+                .jump_chain(selected, None)
+                .map_err(|error| error.to_string())
+                .and_then(|chain| chain.iter().map(HopSpec::from_entry).collect());
+            let forms = specs.map(|specs| JumpHopForms::new(specs, window, cx));
+            *self.built.borrow_mut() = (selected, forms);
+        }
+        self.built.borrow().1.clone()
+    }
+
+    fn selected(&self, cx: &App) -> Option<SshSessionId> {
+        self.picker.as_ref().and_then(|picker| picker.selected(cx))
+    }
+}
 
 enum QuickConnectMode {
     New,
@@ -99,6 +149,16 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
             completion,
         } => (Some(config), initial_cwd, Some(completion)),
     };
+    let duplicate_hops: Vec<HopSpec> = prefill
+        .as_ref()
+        .map(|config| {
+            config
+                .jump_hops
+                .iter()
+                .map(HopSpec::from_duplicate)
+                .collect()
+        })
+        .unwrap_or_default();
     let (host, port, username, auth_method, key_path, shell_integration) = match prefill {
         Some(config) => {
             let (method, key_path) = match config.auth {
@@ -146,6 +206,12 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
             .default_value(username)
     });
     let auth_form = SshAuthForm::new(auth_method, key_path.as_deref(), window, cx);
+    let hops = Rc::new(if is_duplicate {
+        QuickConnectHops::fixed(JumpHopForms::new(duplicate_hops, window, cx))
+    } else {
+        let picker = JumpHostPicker::new(None, None, window, cx);
+        QuickConnectHops::picked(picker, window, cx)
+    });
 
     // ── Save-to-store checkbox state ───────────────────────────────────
     let save_session = Rc::new(Cell::new(false));
@@ -159,6 +225,7 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
         let port_state = port_state.clone();
         let username_state = username_state.clone();
         let auth_form = auth_form.clone();
+        let hops = hops.clone();
         let save_session = save_session.clone();
         let connection_cancellation = connection_cancellation.clone();
         let connecting = connecting.clone();
@@ -168,6 +235,16 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
             if connecting.load(Ordering::Relaxed) {
                 return false;
             }
+            let jump_hops = match hops
+                .forms(window, cx)
+                .and_then(|forms| forms.take_hops(window, cx))
+            {
+                Ok(jump_hops) => jump_hops,
+                Err(message) => {
+                    window.push_notification(notify(NotificationType::Warning, message, cx), cx);
+                    return false;
+                }
+            };
             let host_field = host_state.read(cx).value().trim().to_string();
             let port_field = port_state.read(cx).value().trim().to_string();
             let username_raw = username_state.read(cx).value().trim().to_string();
@@ -206,6 +283,7 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
                     color: None,
                     group: None,
                     logging: SshLoggingOverride::Inherit,
+                    jump_host: hops.selected(cx),
                 };
                 Rc::new(move |cx: &mut App| {
                     SshSessionStore::global(cx).update(cx, |s, cx| {
@@ -230,6 +308,7 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
                 cancellation: ConnectionCancellation::default(),
                 host_key_policy: HostKeyPolicy::Strict,
                 shell_integration,
+                jump_hops,
             };
             connecting.store(true, Ordering::Relaxed);
             window.refresh();
@@ -252,8 +331,16 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
     };
     let initial_focus = {
         let auth_form = auth_form.clone();
+        let hops = hops.clone();
         move |window: &mut Window, cx: &mut App| {
-            if is_duplicate && let Some(focus) = auth_form.secret_focus_handle(cx) {
+            if !is_duplicate {
+                return;
+            }
+            let hop_focus = hops
+                .forms(window, cx)
+                .ok()
+                .and_then(|forms| forms.first_secret_focus(cx));
+            if let Some(focus) = hop_focus.or_else(|| auth_form.secret_focus_handle(cx)) {
                 defer_initial_focus_once(&initial_focus_pending, focus, window, cx);
             }
         }
@@ -265,8 +352,12 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
         } else {
             "SSH Quick Connect"
         },
-        move |content, _window, cx| {
+        move |content, window, cx| {
+            let hop_forms = hops.forms(window, cx);
             content
+                .when_some(hop_forms.as_ref().ok(), |content, forms| {
+                    content.child(forms.render(cx))
+                })
                 .child(labelled_field(
                     "Host",
                     FieldRequirement::Required,
@@ -285,6 +376,17 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
                     Input::new(&username_state),
                     cx,
                 ))
+                .when_some(hops.picker.as_ref(), |content, picker| {
+                    content.child(picker.render(cx))
+                })
+                .when_some(hop_forms.as_ref().err(), |content, message| {
+                    content.child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().danger)
+                            .child(message.clone()),
+                    )
+                })
                 .child(auth_form.render(true, cx))
                 .when_some(
                     save_session_option(is_duplicate, save_session.clone()),

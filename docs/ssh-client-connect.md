@@ -1001,12 +1001,14 @@ No connection caching/reuse.
 each step is one `oneterm_core::ConnectPhase` (`Transport` → `Authentication` →
 `ChannelOpen` → `PtyRequest` → `ShellRequest` → `ShellIntegration` → `SftpSetup`)
 awaited under a 20 s per-phase deadline, and the whole attempt under a 60 s
-deadline. Failures are typed (ARCH-06):
+deadline. With jump hosts (§9.8) the `Transport` and `Authentication` pair runs
+once per hop before the target's. Failures are typed (ARCH-06):
 
 | Outcome | Error |
 |---|---|
 | Transport/protocol failure or timeout in a step | `AppError::Connect { phase, message }` — the UI shows `Display` (`SSH <phase> failed: <message>`). |
 | Server rejected authentication | `AppError::Connect { phase: Authentication, message: "rejected by the server; the server accepts: …" }`. |
+| A jump hop failed | The hop's `Connect` error with its message prefixed `jump host user@host:port: …` (`route::hop_error`); host-key errors and `Cancelled` are passed through unchanged because they already name the hop or belong to no hop. |
 | Host-key problems | `AppError::HostKeyUnknown` / `AppError::HostKeyChanged` (see §9.3). |
 | User pressed Cancel | `AppError::Cancelled` — `ConnectionCancellation::cancelled()` is a waker-driven future, so a phase in flight is woken immediately instead of polled every 25 ms (PERF-22). |
 
@@ -1075,10 +1077,22 @@ impl Debug for SshConfig {
 
 ### 9.6. Authentication status
 
-The accepted current behavior is defined in [`docs/ssh-authentication.md`](ssh-authentication.md). The backend supports no-auth, password, and private-key authentication; the saved-session and Quick Connect UI expose password and private-key choices. SSH-agent authentication remains a roadmap item and is not exposed by `SshAuthMethod` until the backend can support it end to end.
+The accepted current behavior is defined in [`docs/ssh-authentication.md`](ssh-authentication.md). The backend supports no-auth, password, private-key, and SSH-agent authentication (`SshAuthMethod::{None, Password, PrivateKey, Agent}`); the saved-session, Quick Connect, and connect dialogs expose all three user choices. Every hop of a jump-host route authenticates with its own method (§9.8).
+
 ### 9.7. Remote shell environment — COLORTERM
 
 The remote shell must see `COLORTERM=truecolor` (and `TERM_PROGRAM=OneTerm`) so truecolor-aware CLIs render correctly, matching the local-shell contract in `oneterm_core`'s `base_env()`. Because sshd starts a fresh login environment, OneTerm applies two layers (`crates/ssh/src/session.rs`):
 
 1. **SSH `env` requests (RFC 4254 §6.4)** — after `request_pty` and before `request_shell`, `request_remote_shell_env` sends `COLORTERM=truecolor` and `TERM_PROGRAM=OneTerm` with `want_reply = false`. sshd only honors these when its `AcceptEnv` allows the variables; default OpenSSH accepts only `LANG LC_*` and silently drops the rest, which is harmless.
 2. **Shell-integration bootstrap fallback** — when shell integration is enabled, the injected bootstrap starts with an unconditional `export COLORTERM=truecolor;`, guaranteeing truecolor even on servers that ignore env requests.
+
+### 9.8. Connection route — jump hosts (IN-0023 / US-0058)
+
+`SshConfig::jump_hops: Vec<SshHop>` lists the jump hosts from the client outwards (at most `MAX_JUMP_HOPS` = 4); each `SshHop` carries its own host, port, username, `SshAuthMethod`, and `HostKeyPolicy`. `crates/ssh/src/route.rs` walks the route in `connect`:
+
+1. `connect_hop` opens the transport (`open_transport`): plain TCP for the first entry, otherwise `channel_open_direct_tcpip(host, port, "127.0.0.1", 0)` on the previous hop's handle turned into a stream for `russh::client::connect_stream`. A jump host that refuses the channel (`AllowTcpForwarding no`) fails the `Transport` phase with the next hop's address in the message.
+2. Each hop gets its own `SshClientHandler`, so `known_hosts` checks, `HostKeyUnknown`, and `HostKeyChanged` name that hop's host and port; the UI's host-key confirmation marks `AcceptNewFingerprint` on the matching hop only and says "(jump host for <label>)". Accepting a hop's key never accepts the target's.
+3. `authenticate` (the former inline match) runs the hop's method; the credential is moved out of the config first so it is zeroized as soon as that hop is authenticated. Agent hops need no input.
+4. The authenticated hop handles are kept in `JumpHandles`, moved into `ssh_main_task` with the target handle. In the teardown block the target is dropped first, then the hops from the innermost outwards, so no connection closes under a live carrier.
+
+The saved-session model stores a reference, not a copy: `SshSession::jump_host: Option<SshSessionId>` names another saved session, and `SshSessionStore::jump_chain` follows the references (rejecting a missing session, a cycle, or more than four hops) when a session is saved, when Quick Connect picks a jump host, and when a connect dialog opens. The connect dialog shows one credential block per hop above the target's; Duplicate Session keeps each hop's non-secret metadata (`SshDuplicateHop`) and prompts again for every hop (DEC 0002). Rationale: [`decisions/DEC-0010-jump-hosts-reference-saved-sessions.md`](decisions/DEC-0010-jump-hosts-reference-saved-sessions.md).

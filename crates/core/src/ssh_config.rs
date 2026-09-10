@@ -159,6 +159,33 @@ pub enum SshAuthMethod {
     Agent,
 }
 
+/// Maximum number of jump hosts between the client and the target (DEC-0010).
+pub const MAX_JUMP_HOPS: usize = 4;
+
+/// One jump host on the way to the target: its own address, user, credential,
+/// and host-key policy. `SshConfig::jump_hops` lists hops from the client
+/// outwards; each is authenticated with its own `auth` (DEC-0010).
+#[derive(Clone, Debug)]
+pub struct SshHop {
+    /// Hostname or IP of the jump host.
+    pub host: String,
+    /// SSH port of the jump host.
+    pub port: u16,
+    /// Username on the jump host.
+    pub username: String,
+    /// Credential for this hop (RAM only, zeroized after its authentication).
+    pub auth: SshAuthMethod,
+    /// Host-key policy for this hop; accepting a hop's key never accepts the target's.
+    pub host_key_policy: HostKeyPolicy,
+}
+
+impl SshHop {
+    /// `user@host:port`, the name used in hop-attributed errors and prompts.
+    pub fn label(&self) -> String {
+        format!("{}@{}:{}", self.username, self.host, self.port)
+    }
+}
+
 /// SSH connection config.
 ///
 /// Built from `SshSession` info (UI store) + credentials the user enters in the
@@ -182,6 +209,8 @@ pub struct SshConfig {
     /// terminal cwd" button on servers whose shell does not emit OSC 7 by default.
     /// Idempotent + shell-guarded (bash/zsh); no-op on unrecognized shells.
     pub shell_integration: bool,
+    /// Jump hosts from the client outwards; empty for a direct connection.
+    pub jump_hops: Vec<SshHop>,
 }
 
 impl Debug for SshAuthMethod {
@@ -202,23 +231,39 @@ impl Debug for SshAuthMethod {
     }
 }
 
+impl SshAuthMethod {
+    /// The non-secret shape of this method, for Duplicate Session prefill.
+    pub fn duplicate_auth(&self) -> crate::SshDuplicateAuth {
+        match self {
+            Self::None => crate::SshDuplicateAuth::None,
+            Self::Password { .. } => crate::SshDuplicateAuth::Password,
+            Self::PrivateKey { key_path, .. } => crate::SshDuplicateAuth::PrivateKey {
+                key_path: key_path.clone(),
+            },
+            Self::Agent => crate::SshDuplicateAuth::Agent,
+        }
+    }
+}
+
 impl SshConfig {
     /// Build the non-secret metadata retained for Duplicate Session.
     pub fn duplicate_config(&self) -> crate::SshDuplicateConfig {
-        let auth = match &self.auth {
-            SshAuthMethod::None => crate::SshDuplicateAuth::None,
-            SshAuthMethod::Password { .. } => crate::SshDuplicateAuth::Password,
-            SshAuthMethod::PrivateKey { key_path, .. } => crate::SshDuplicateAuth::PrivateKey {
-                key_path: key_path.clone(),
-            },
-            SshAuthMethod::Agent => crate::SshDuplicateAuth::Agent,
-        };
         crate::SshDuplicateConfig {
             host: self.host.clone(),
             port: self.port,
             username: self.username.clone(),
-            auth,
+            auth: self.auth.duplicate_auth(),
             shell_integration: self.shell_integration,
+            jump_hops: self
+                .jump_hops
+                .iter()
+                .map(|hop| crate::SshDuplicateHop {
+                    host: hop.host.clone(),
+                    port: hop.port,
+                    username: hop.username.clone(),
+                    auth: hop.auth.duplicate_auth(),
+                })
+                .collect(),
         }
     }
 }
@@ -231,6 +276,7 @@ impl Debug for SshConfig {
             .field("username", &self.username)
             .field("auth", &self.auth)
             .field("host_key_policy", &self.host_key_policy)
+            .field("jump_hops", &self.jump_hops)
             .finish()
     }
 }
@@ -282,6 +328,7 @@ mod tests {
             cancellation: ConnectionCancellation::default(),
             host_key_policy: HostKeyPolicy::Strict,
             shell_integration: true,
+            jump_hops: Vec::new(),
         };
 
         let duplicate = config.duplicate_config();
@@ -306,11 +353,46 @@ mod tests {
             cancellation: ConnectionCancellation::default(),
             host_key_policy: HostKeyPolicy::Strict,
             shell_integration: true,
+            jump_hops: Vec::new(),
         };
         assert_eq!(
             config.duplicate_config().auth,
             crate::SshDuplicateAuth::Agent
         );
+    }
+
+    #[test]
+    fn duplicate_config_keeps_hop_metadata_without_secrets() {
+        let config = SshConfig {
+            host: "target".to_string(),
+            port: 22,
+            username: "deploy".to_string(),
+            auth: SshAuthMethod::Agent,
+            cancellation: ConnectionCancellation::default(),
+            host_key_policy: HostKeyPolicy::Strict,
+            shell_integration: true,
+            jump_hops: vec![SshHop {
+                host: "bastion".to_string(),
+                port: 2222,
+                username: "ops".to_string(),
+                auth: SshAuthMethod::Password {
+                    password: SecretString::new("do-not-retain"),
+                },
+                host_key_policy: HostKeyPolicy::Strict,
+            }],
+        };
+
+        let duplicate = config.duplicate_config();
+        assert_eq!(duplicate.jump_hops.len(), 1);
+        assert_eq!(duplicate.jump_hops[0].host, "bastion");
+        assert_eq!(duplicate.jump_hops[0].port, 2222);
+        assert_eq!(duplicate.jump_hops[0].username, "ops");
+        assert_eq!(
+            duplicate.jump_hops[0].auth,
+            crate::SshDuplicateAuth::Password
+        );
+        assert_eq!(config.jump_hops[0].label(), "ops@bastion:2222");
+        assert!(!format!("{config:?}").contains("do-not-retain"));
     }
 
     #[test]
@@ -344,6 +426,7 @@ mod tests {
             cancellation: ConnectionCancellation::default(),
             host_key_policy: HostKeyPolicy::Strict,
             shell_integration: true,
+            jump_hops: Vec::new(),
         };
 
         let output = format!("{config:?}");

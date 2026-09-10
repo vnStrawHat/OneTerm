@@ -19,6 +19,15 @@ pub enum SshDuplicateAuth {
     Agent,
 }
 
+/// Non-secret metadata of one jump host, prompted for again on duplicate.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SshDuplicateHop {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth: SshDuplicateAuth,
+}
+
 /// Non-secret SSH connection metadata retained by a terminal view.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SshDuplicateConfig {
@@ -27,6 +36,8 @@ pub struct SshDuplicateConfig {
     pub username: String,
     pub auth: SshDuplicateAuth,
     pub shell_integration: bool,
+    /// Jump hosts from the client outwards; empty for a direct connection.
+    pub jump_hops: Vec<SshDuplicateHop>,
 }
 
 /// Launch metadata required to create a fresh session of the same kind.

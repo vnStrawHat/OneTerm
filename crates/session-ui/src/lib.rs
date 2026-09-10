@@ -7,6 +7,7 @@ mod auth_form;
 mod common;
 mod connect_dialog;
 mod group_combo;
+mod jump_hops;
 mod panel;
 mod quick_connect_dialog;
 mod rename_group;
@@ -18,7 +19,7 @@ mod tree_render;
 pub use panel::SessionPanel;
 pub use quick_connect_dialog::{open_duplicate_ssh_dialog, open_quick_connect_dialog};
 pub use session_state::{
-    SshAuthPreference, SshSession, SshSessionEntry, SshSessionId, SshSessionStore,
+    JumpChainError, SshAuthPreference, SshSession, SshSessionEntry, SshSessionId, SshSessionStore,
 };
 
 use gpui::App;

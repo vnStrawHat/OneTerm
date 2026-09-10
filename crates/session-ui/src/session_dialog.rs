@@ -33,6 +33,7 @@ use oneterm_theme::notif_ext::notify;
 use super::auth_form::SshAuthForm;
 use super::common::parse_port;
 use super::group_combo::{GroupComboDelegate, SharedCell, group_combobox};
+use super::jump_hops::JumpHostPicker;
 use crate::session_state::{
     SshAuthPreference, SshLoggingOverride, SshSession, SshSessionEntry, SshSessionId,
     SshSessionStore,
@@ -52,6 +53,7 @@ struct SessionForm {
     /// The private-key path, when the auth form has a valid one.
     key_path: Option<PathBuf>,
     logging: SshLoggingOverride,
+    jump_host: Option<SshSessionId>,
 }
 
 impl SessionForm {
@@ -87,6 +89,7 @@ impl SessionForm {
             color: self.color,
             group: non_empty(self.group),
             logging: self.logging,
+            jump_host: self.jump_host,
         })
     }
 }
@@ -152,6 +155,7 @@ pub(crate) fn open_session_dialog(
         auth_method,
         key_path,
         logging_val,
+        jump_host_val,
     ) = match &edit {
         Some((_, s)) => (
             s.label.clone(),
@@ -163,6 +167,7 @@ pub(crate) fn open_session_dialog(
             s.auth_method,
             s.key_path.clone(),
             s.logging,
+            s.jump_host,
         ),
         None => (
             String::new(),
@@ -174,8 +179,10 @@ pub(crate) fn open_session_dialog(
             SshAuthPreference::Password,
             None,
             SshLoggingOverride::Inherit,
+            None,
         ),
     };
+    let jump_host_picker = JumpHostPicker::new(edit_id, jump_host_val, window, cx);
 
     // ── Collect existing groups from the store ──────────────────────────
     let existing_groups: Vec<SharedString> = {
@@ -258,7 +265,17 @@ pub(crate) fn open_session_dialog(
         let color_state = color_state.clone();
         let auth_form = auth_form.clone();
         let logging = logging.clone();
+        let jump_host_picker = jump_host_picker.clone();
         move |window: &mut Window, cx: &mut App| {
+            let store = SshSessionStore::global(cx);
+            let jump_host = jump_host_picker.selected(cx);
+            if let Err(error) = store.read(cx).jump_chain(jump_host, edit_id) {
+                window.push_notification(
+                    notify(NotificationType::Warning, error.to_string(), cx),
+                    cx,
+                );
+                return false;
+            }
             let form = SessionForm {
                 label: label_state.read(cx).value().to_string(),
                 host: host_state.read(cx).value().to_string(),
@@ -269,6 +286,7 @@ pub(crate) fn open_session_dialog(
                 auth_method: auth_form.method(),
                 key_path: auth_form.key_path_value(cx),
                 logging: logging.get(),
+                jump_host,
             };
             let session = match form.into_session() {
                 Ok(session) => session,
@@ -277,7 +295,6 @@ pub(crate) fn open_session_dialog(
                     return false;
                 }
             };
-            let store = SshSessionStore::global(cx);
             match edit_id {
                 Some(id) => store.update(cx, |s, cx| s.update(id, session, cx)),
                 None => {
@@ -333,6 +350,7 @@ pub(crate) fn open_session_dialog(
                     cx,
                 ))
                 .child(auth_form.render(false, cx))
+                .child(jump_host_picker.render(cx))
                 .child(labelled_field(
                     "Group",
                     FieldRequirement::Optional,
@@ -385,6 +403,7 @@ mod tests {
             auth_method: SshAuthPreference::Password,
             key_path: None,
             logging: SshLoggingOverride::Inherit,
+            jump_host: None,
         }
     }
 
@@ -476,6 +495,7 @@ mod tests {
                 color: None,
                 group: group.map(str::to_string),
                 logging: SshLoggingOverride::Inherit,
+                jump_host: None,
             },
         };
         let sessions = [
