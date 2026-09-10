@@ -61,6 +61,8 @@ pub enum SshAuthPreference {
     Password,
     /// Use a private-key file and ask for its optional passphrase when connecting.
     PrivateKey,
+    /// Sign with an identity held by the local SSH agent; nothing to ask for.
+    Agent,
 }
 
 fn is_password_auth(auth: &SshAuthPreference) -> bool {
@@ -615,6 +617,28 @@ mod tests {
         assert!(json.contains("\"key_path\""));
         assert!(!json.contains("passphrase"));
         assert!(!json.contains("password"));
+    }
+
+    #[test]
+    fn agent_auth_round_trips_and_carries_no_key_path() {
+        let session = SshSession {
+            label: "agent host".into(),
+            host: "example.test".into(),
+            port: 22,
+            username: Some("user".into()),
+            auth_method: SshAuthPreference::Agent,
+            key_path: None,
+            color: None,
+            group: None,
+            logging: SshLoggingOverride::Inherit,
+        };
+
+        let json = serde_json::to_string(&session).unwrap();
+        assert!(json.contains("\"auth_method\":\"agent\""));
+        assert!(!json.contains("key_path"));
+        let back: SshSession = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.auth_method, SshAuthPreference::Agent);
+        assert_eq!(back, session);
     }
 
     #[test]

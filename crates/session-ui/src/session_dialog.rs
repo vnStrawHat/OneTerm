@@ -75,7 +75,7 @@ impl SessionForm {
                 self.key_path
                     .ok_or_else(|| "Private key path is required.".to_string())?,
             ),
-            SshAuthPreference::Password => None,
+            SshAuthPreference::Password | SshAuthPreference::Agent => None,
         };
         Ok(SshSession {
             label,
@@ -450,10 +450,16 @@ mod tests {
             Some(std::path::Path::new("/keys/id_ed25519"))
         );
 
-        // A stale key path is dropped when password auth is selected.
+        // A stale key path is dropped when password or agent auth is selected.
         let mut password_auth = filled_form();
         password_auth.key_path = Some(PathBuf::from("/keys/id_ed25519"));
         assert_eq!(password_auth.into_session().unwrap().key_path, None);
+        let mut agent_auth = filled_form();
+        agent_auth.auth_method = SshAuthPreference::Agent;
+        agent_auth.key_path = Some(PathBuf::from("/keys/id_ed25519"));
+        let session = agent_auth.into_session().unwrap();
+        assert_eq!(session.auth_method, SshAuthPreference::Agent);
+        assert_eq!(session.key_path, None);
     }
 
     #[test]

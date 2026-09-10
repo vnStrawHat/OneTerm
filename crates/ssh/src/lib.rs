@@ -9,6 +9,7 @@
 //! The only public items are [`SshSession`] and [`connect`]; everything else
 //! is crate-private. See `docs/terminal-backend.md` §7.
 
+mod agent;
 mod counting_stream;
 mod handler;
 mod session;
@@ -16,6 +17,8 @@ mod session_terminal;
 mod sftp;
 mod sftp_task;
 mod task;
+#[cfg(test)]
+mod test_support;
 mod transport;
 
 pub use session::{SshSession, connect};

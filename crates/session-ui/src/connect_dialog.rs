@@ -130,10 +130,12 @@ pub(crate) fn open_connect_dialog(
         let auth_form = auth_form.clone();
         move |window: &mut Window, cx: &mut App| {
             let focus = match username_state.as_ref() {
-                Some(state) => state.read(cx).focus_handle(cx),
+                Some(state) => Some(state.read(cx).focus_handle(cx)),
                 None => auth_form.focus_handle(cx),
             };
-            defer_initial_focus_once(&initial_focus_pending, focus, window, cx);
+            if let Some(focus) = focus {
+                defer_initial_focus_once(&initial_focus_pending, focus, window, cx);
+            }
         }
     };
 

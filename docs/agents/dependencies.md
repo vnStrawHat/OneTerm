@@ -71,7 +71,7 @@ Every third-party dependency is declared once in root `[workspace.dependencies]`
 | Auto-update | `reqwest`, `semver`, `sha2`, `zip`, `tar`, `flate2` |
 | UI helpers | `chrono`, `sysinfo`, `rust-embed` |
 | Windows FFI | `windows-sys 0.59` with a workspace-wide feature union |
-| Build / development | `embed-resource`; diagnostics also use `libc`, `polling`, and `alacritty_terminal` |
+| Build / development | `embed-resource`; diagnostics also use `libc`, `polling`, and `alacritty_terminal`; `futures` (dev-only) feeds russh's in-process SSH agent server in `oneterm-ssh` tests |
 
 Do not re-add without a design decision: `tracing` / `tracing-subscriber`, `directories`, `toml`, `russh-cryptovec`, `ssh-key`, `smol`, or `rust-i18n`.
 

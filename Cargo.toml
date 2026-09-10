@@ -99,6 +99,8 @@ notify = "7"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "io-util", "net", "macros", "fs"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 rand = "0.10"
+# Test-only: `futures::stream::once` feeds the in-process SSH agent server used by oneterm-ssh tests
+futures = "0.3"
 
 # Async / serialization / error
 anyhow = "1"

@@ -15,6 +15,8 @@ pub enum SshDuplicateAuth {
     Password,
     /// Prompt for an optional passphrase while retaining the non-secret key path.
     PrivateKey { key_path: PathBuf },
+    /// Ask the local SSH agent again; nothing to prompt for.
+    Agent,
 }
 
 /// Non-secret SSH connection metadata retained by a terminal view.

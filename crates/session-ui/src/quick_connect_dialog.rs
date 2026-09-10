@@ -108,6 +108,7 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
                 SshDuplicateAuth::None | SshDuplicateAuth::Password => {
                     (SshAuthPreference::Password, None)
                 }
+                SshDuplicateAuth::Agent => (SshAuthPreference::Agent, None),
             };
             (
                 config.host,
@@ -252,13 +253,8 @@ fn open_quick_connect_dialog_internal(mode: QuickConnectMode, window: &mut Windo
     let initial_focus = {
         let auth_form = auth_form.clone();
         move |window: &mut Window, cx: &mut App| {
-            if is_duplicate {
-                defer_initial_focus_once(
-                    &initial_focus_pending,
-                    auth_form.secret_focus_handle(cx),
-                    window,
-                    cx,
-                );
+            if is_duplicate && let Some(focus) = auth_form.secret_focus_handle(cx) {
+                defer_initial_focus_once(&initial_focus_pending, focus, window, cx);
             }
         }
     };

@@ -154,6 +154,9 @@ pub enum SshAuthMethod {
         /// Zeroizing passphrase to decrypt the key, if encrypted.
         passphrase: Option<SecretString>,
     },
+    /// Sign with an identity held by the local SSH agent (Windows OpenSSH
+    /// agent, Pageant, or `$SSH_AUTH_SOCK`). No key material enters OneTerm.
+    Agent,
 }
 
 /// SSH connection config.
@@ -189,6 +192,7 @@ impl Debug for SshAuthMethod {
                 .field("password", &"***")
                 .finish(),
             Self::None => f.write_str("None"),
+            Self::Agent => f.write_str("Agent"),
             Self::PrivateKey { key_path, .. } => f
                 .debug_struct("PrivateKey")
                 .field("key_path", key_path)
@@ -207,6 +211,7 @@ impl SshConfig {
             SshAuthMethod::PrivateKey { key_path, .. } => crate::SshDuplicateAuth::PrivateKey {
                 key_path: key_path.clone(),
             },
+            SshAuthMethod::Agent => crate::SshDuplicateAuth::Agent,
         };
         crate::SshDuplicateConfig {
             host: self.host.clone(),
@@ -288,6 +293,23 @@ mod tests {
             crate::SshDuplicateAuth::PrivateKey {
                 key_path: PathBuf::from("id_ed25519")
             }
+        );
+    }
+
+    #[test]
+    fn duplicate_config_keeps_agent_auth() {
+        let config = SshConfig {
+            host: "example.com".to_string(),
+            port: 22,
+            username: "alice".to_string(),
+            auth: SshAuthMethod::Agent,
+            cancellation: ConnectionCancellation::default(),
+            host_key_policy: HostKeyPolicy::Strict,
+            shell_integration: true,
+        };
+        assert_eq!(
+            config.duplicate_config().auth,
+            crate::SshDuplicateAuth::Agent
         );
     }
 

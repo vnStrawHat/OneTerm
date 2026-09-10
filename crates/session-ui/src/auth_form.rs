@@ -11,6 +11,7 @@ use gpui::{
     PathPromptOptions, Styled, Window,
 };
 use gpui_component::{
+    ActiveTheme as _,
     button::Button,
     h_flex,
     input::{Input, InputState},
@@ -69,18 +70,23 @@ impl SshAuthForm {
         self.method.get()
     }
 
-    pub(crate) fn focus_handle(&self, cx: &App) -> gpui::FocusHandle {
+    /// The first input of the selected method; `None` when the method has no
+    /// input (SSH agent).
+    pub(crate) fn focus_handle(&self, cx: &App) -> Option<gpui::FocusHandle> {
         match self.method() {
-            SshAuthPreference::Password => self.password.read(cx).focus_handle(cx),
-            SshAuthPreference::PrivateKey => self.key_path.read(cx).focus_handle(cx),
+            SshAuthPreference::Password => Some(self.password.read(cx).focus_handle(cx)),
+            SshAuthPreference::PrivateKey => Some(self.key_path.read(cx).focus_handle(cx)),
+            SshAuthPreference::Agent => None,
         }
     }
 
-    /// Focus the credential field appropriate for the selected method.
-    pub(crate) fn secret_focus_handle(&self, cx: &App) -> gpui::FocusHandle {
+    /// The credential field appropriate for the selected method; `None` when
+    /// the method asks for no secret (SSH agent).
+    pub(crate) fn secret_focus_handle(&self, cx: &App) -> Option<gpui::FocusHandle> {
         match self.method() {
-            SshAuthPreference::Password => self.password.read(cx).focus_handle(cx),
-            SshAuthPreference::PrivateKey => self.passphrase.read(cx).focus_handle(cx),
+            SshAuthPreference::Password => Some(self.password.read(cx).focus_handle(cx)),
+            SshAuthPreference::PrivateKey => Some(self.passphrase.read(cx).focus_handle(cx)),
+            SshAuthPreference::Agent => None,
         }
     }
 
@@ -97,6 +103,7 @@ impl SshAuthForm {
         let selected_index = match self.method() {
             SshAuthPreference::Password => 0,
             SshAuthPreference::PrivateKey => 1,
+            SshAuthPreference::Agent => 2,
         };
         let method = self.method.clone();
         let passphrase_for_selection = self.passphrase.clone();
@@ -108,14 +115,14 @@ impl SshAuthForm {
                 "Authentication",
                 FieldRequirement::Required,
                 RadioGroup::horizontal("ssh-auth-method")
-                    .children(["Password", "Private Key"])
+                    .children(["Password", "Private Key", "SSH Agent"])
                     .selected_index(Some(selected_index))
                     .on_click(move |selected: &usize, window, cx| {
                         let private_key_selected = *selected == 1;
-                        method.set(if private_key_selected {
-                            SshAuthPreference::PrivateKey
-                        } else {
-                            SshAuthPreference::Password
+                        method.set(match *selected {
+                            1 => SshAuthPreference::PrivateKey,
+                            2 => SshAuthPreference::Agent,
+                            _ => SshAuthPreference::Password,
                         });
                         window.refresh();
                         if private_key_selected && show_secrets {
@@ -136,6 +143,18 @@ impl SshAuthForm {
                         Input::new(&self.password).mask_toggle().cleanable(true),
                         cx,
                     )))
+                },
+            )
+            .when(
+                show_secrets && self.method() == SshAuthPreference::Agent,
+                |form| {
+                    form.child(
+                        v_flex()
+                            .id("agent-auth-fields")
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Keys come from the running SSH agent; nothing to enter."),
+                    )
                 },
             )
             .when(self.method() == SshAuthPreference::PrivateKey, |form| {
@@ -212,6 +231,7 @@ impl SshAuthForm {
                     passphrase: (!passphrase.is_empty()).then(|| SecretString::new(passphrase)),
                 })
             }
+            SshAuthPreference::Agent => Ok(SshAuthMethod::Agent),
         }
     }
 }
@@ -313,7 +333,9 @@ mod tests {
             .borrow()
             .clone()
             .expect("view must be initialized");
-        let secret_focus = view.read_with(cx, |view, cx| view.form.secret_focus_handle(cx));
+        let secret_focus = view
+            .read_with(cx, |view, cx| view.form.secret_focus_handle(cx))
+            .expect("password auth has a secret field");
         cx.update(|window, cx| secret_focus.focus(window, cx));
         cx.run_until_parked();
 
@@ -345,7 +367,9 @@ mod tests {
             .borrow()
             .clone()
             .expect("view must be initialized");
-        let secret_focus = view.read_with(cx, |view, cx| view.form.secret_focus_handle(cx));
+        let secret_focus = view
+            .read_with(cx, |view, cx| view.form.secret_focus_handle(cx))
+            .expect("private key auth has a secret field");
         cx.update(|window, cx| secret_focus.focus(window, cx));
         cx.run_until_parked();
 
@@ -396,6 +420,31 @@ mod tests {
             "test-passphrase",
             "focused passphrase input must accept keyboard text",
         );
+    }
+
+    #[gpui::test]
+    fn agent_auth_has_no_input_to_focus_and_takes_agent_auth(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let view_probe = Rc::new(RefCell::new(None));
+        let probe_for_window = view_probe.clone();
+        let (_root, cx) = cx.add_window_view(move |window, cx| {
+            let view = cx.new(|cx| AuthFormTestView {
+                form: SshAuthForm::new(SshAuthPreference::Agent, None, window, cx),
+            });
+            *probe_for_window.borrow_mut() = Some(view.clone());
+            Root::new(view, window, cx)
+        });
+        let cx: &mut VisualTestContext = cx;
+        let view = view_probe
+            .borrow()
+            .clone()
+            .expect("view must be initialized");
+
+        assert!(view.read_with(cx, |view, cx| view.form.focus_handle(cx).is_none()));
+        assert!(view.read_with(cx, |view, cx| view.form.secret_focus_handle(cx).is_none()));
+        let form = view.read_with(cx, |view, _| view.form.clone());
+        let auth = cx.update(|window, cx| form.take_auth(window, cx));
+        assert!(matches!(auth, Ok(SshAuthMethod::Agent)), "{auth:?}");
     }
 
     #[test]

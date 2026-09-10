@@ -42,6 +42,7 @@ use oneterm_terminal::{
     SharedSessionState, SharedState, TerminalSecurityPolicy, ssh_log_identity,
 };
 
+use crate::agent::authenticate_with_agent;
 use crate::counting_stream::CountingStream;
 use crate::handler::SshClientHandler;
 use crate::sftp::{SftpCmd, SftpSession};
@@ -131,7 +132,7 @@ fn shared_runtime() -> oneterm_core::Result<&'static tokio::runtime::Runtime> {
 }
 
 /// `AppError::Connect` for a transport-level failure in `phase`.
-fn phase_error(phase: ConnectPhase, error: impl std::fmt::Display) -> AppError {
+pub(crate) fn phase_error(phase: ConnectPhase, error: impl std::fmt::Display) -> AppError {
     AppError::Connect {
         phase,
         message: error.to_string(),
@@ -347,6 +348,15 @@ pub fn connect(
                                 .await
                                 .map_err(|e| phase_error(ConnectPhase::Authentication, e))
                         })
+                        .await?
+                }
+                SshAuthMethod::Agent => {
+                    log::info!("SshSession: authenticating with the local SSH agent");
+                    phases
+                        .run(
+                            ConnectPhase::Authentication,
+                            authenticate_with_agent(&mut handle, &cfg.username),
+                        )
                         .await?
                 }
             };
@@ -638,7 +648,10 @@ async fn authenticate_with_password(
 
 /// User-facing message for a rejected authentication attempt, naming the
 /// methods the server still accepts so a wrong method choice is diagnosable.
-fn authentication_failure_message(remaining_methods: &MethodSet, partial_success: bool) -> String {
+pub(crate) fn authentication_failure_message(
+    remaining_methods: &MethodSet,
+    partial_success: bool,
+) -> String {
     let mut message = String::from("rejected by the server");
     if partial_success {
         message.push_str(" (the server accepted this method but requires another one)");
@@ -699,7 +712,7 @@ async fn send_shell_integration_bootstrap(
 /// `rsa-sha2-*`. Both fall back to SHA-512 — passing `None` to
 /// `PrivateKeyWithHashAlg` would sign with legacy SHA-1 `ssh-rsa`, which modern
 /// servers refuse and which is no longer considered safe.
-fn rsa_hash_alg(advertised: Option<Option<HashAlg>>) -> Option<HashAlg> {
+pub(crate) fn rsa_hash_alg(advertised: Option<Option<HashAlg>>) -> Option<HashAlg> {
     advertised.flatten().or(Some(HashAlg::Sha512))
 }
 
@@ -795,21 +808,7 @@ mod tests {
         }
     }
 
-    use crate::handler::SshHandlerError;
-
-    /// Deletes a temporary known_hosts file when the test ends, even when an
-    /// assertion fails (ERR-15).
-    struct TempKnownHosts(std::path::PathBuf);
-
-    impl Drop for TempKnownHosts {
-        fn drop(&mut self) {
-            if let Err(error) = std::fs::remove_file(&self.0) {
-                if error.kind() != std::io::ErrorKind::NotFound {
-                    eprintln!("failed to remove {}: {error}", self.0.display());
-                }
-            }
-        }
-    }
+    use crate::test_support::{connect_trusting_loopback, spawn_server};
 
     fn detached_session() -> (SshSession, async_channel::Receiver<Cmd>) {
         let (cmd_tx, cmd_rx) = async_channel::bounded::<Cmd>(4);
@@ -943,70 +942,7 @@ mod tests {
 
     async fn spawn_keyboard_interactive_server()
     -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
-        use russh::server::Server as _;
-
-        let private_key =
-            russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
-                .unwrap();
-        let server_config = Arc::new(russh::server::Config {
-            keys: vec![private_key],
-            auth_rejection_time: Duration::ZERO,
-            auth_rejection_time_initial: Some(Duration::ZERO),
-            ..Default::default()
-        });
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .unwrap();
-        let address = listener.local_addr().unwrap();
-        let server_task = tokio::spawn(async move {
-            let mut server = KeyboardInteractiveServer;
-            // The test aborts this task when done; a run error is expected then.
-            if let Err(error) = server.run_on_socket(server_config, &listener).await {
-                eprintln!("test SSH server stopped: {error}");
-            }
-        });
-        (address, server_task)
-    }
-
-    async fn connect_trusting_loopback(
-        address: std::net::SocketAddr,
-    ) -> (client::Handle<SshClientHandler>, TempKnownHosts) {
-        let known_hosts = TempKnownHosts(std::env::temp_dir().join(format!(
-            "oneterm-kbd-known-hosts-{}-{}",
-            std::process::id(),
-            address.port()
-        )));
-        // Learn the loopback key with a probe connection so the real
-        // connection can run under the strict policy without touching the
-        // user's known_hosts.
-        let probe = client::connect(
-            Arc::new(client::Config::default()),
-            address,
-            SshClientHandler::new(
-                address.ip().to_string(),
-                address.port(),
-                oneterm_core::HostKeyPolicy::Strict,
-            )
-            .with_known_hosts_path(known_hosts.0.clone()),
-        )
-        .await;
-        let fingerprint = match probe {
-            Err(SshHandlerError::UnknownHostKey { fingerprint, .. }) => fingerprint,
-            other => panic!("expected an unknown host key, got {:?}", other.err()),
-        };
-        let handle = client::connect(
-            Arc::new(client::Config::default()),
-            address,
-            SshClientHandler::new(
-                address.ip().to_string(),
-                address.port(),
-                oneterm_core::HostKeyPolicy::AcceptNewFingerprint(fingerprint),
-            )
-            .with_known_hosts_path(known_hosts.0.clone()),
-        )
-        .await
-        .expect("loopback connect");
-        (handle, known_hosts)
+        spawn_server(KeyboardInteractiveServer).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1076,28 +1012,7 @@ mod tests {
     async fn spawn_env_recording_server(
         received: Arc<std::sync::Mutex<Vec<(String, String)>>>,
     ) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
-        use russh::server::Server as _;
-
-        let private_key =
-            russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
-                .unwrap();
-        let server_config = Arc::new(russh::server::Config {
-            keys: vec![private_key],
-            auth_rejection_time: Duration::ZERO,
-            auth_rejection_time_initial: Some(Duration::ZERO),
-            ..Default::default()
-        });
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .unwrap();
-        let address = listener.local_addr().unwrap();
-        let server_task = tokio::spawn(async move {
-            let mut server = EnvRecordingServer { received };
-            if let Err(error) = server.run_on_socket(server_config, &listener).await {
-                eprintln!("test SSH server stopped: {error}");
-            }
-        });
-        (address, server_task)
+        spawn_server(EnvRecordingServer { received }).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

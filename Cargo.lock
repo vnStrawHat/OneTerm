@@ -5542,6 +5542,7 @@ version = "0.4.3"
 dependencies = [
  "alacritty_terminal",
  "async-channel",
+ "futures",
  "log",
  "oneterm-core",
  "oneterm-terminal",

@@ -78,7 +78,9 @@ OneTerm/
 │   ├── ssh/                        # `oneterm-ssh` — russh client + SFTP (hidden tokio runtime)
 │   │   └── src/                    # SshSession (impl TerminalSession), SftpSession (impl SftpBackend);
 │   │                               #   transport (SshTransport) / handler / task / session / sftp*;
-│   │                               #   the listener is `SshListener = OscRouter<SshTransport>`
+│   │                               #   agent.rs = SSH agent authentication (discovery + identity loop);
+│   │                               #   the listener is `SshListener = OscRouter<SshTransport>`;
+│   │                               #   test_support.rs (cfg(test)) = in-process russh server helpers
 │   │
 │   ├── local-shell/                # `oneterm-local-shell` — local PTY (alacritty_terminal::tty + ConPTY)
 │   │   └── src/                    # LocalSession (impl TerminalSession) + ShellEventLoop + LocalTransport
