@@ -23,6 +23,10 @@ pub(crate) struct FrameStats {
     pub glyphs: u32,
     /// `paint_glyph` failures (missing glyph); counted, never propagated.
     pub glyph_errors: u32,
+    /// Sixel images painted this frame (one call per visible image).
+    pub images: u32,
+    /// Sixel images uploaded to the store this frame.
+    pub images_uploaded: u32,
     pub layers: u32,
     pub prepaint_us: u32,
     pub paint_us: u32,

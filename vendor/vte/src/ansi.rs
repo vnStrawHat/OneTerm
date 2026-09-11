@@ -627,6 +627,19 @@ pub trait Handler {
     /// single VT pass instead of running a second parser. Default: ignored.
     fn report_osc(&mut self, _params: &[&[u8]], _bell_terminated: bool) {}
 
+    /// A DCS sequence started: `params` and `intermediates` precede the final
+    /// byte `action` (`'q'` for Sixel). Followed by `dcs_put` per data byte and
+    /// `dcs_unhook` at `ST`.
+    ///
+    /// OneTerm fork addition. Default: ignored.
+    fn dcs_hook(&mut self, _params: &Params, _intermediates: &[u8], _ignore: bool, _action: char) {}
+
+    /// One data byte of the current DCS sequence. OneTerm fork addition.
+    fn dcs_put(&mut self, _byte: u8) {}
+
+    /// The current DCS sequence ended (`ST`). OneTerm fork addition.
+    fn dcs_unhook(&mut self) {}
+
     /// Reverse Index.
     ///
     /// Move the active position to the same horizontal position on the
@@ -1316,22 +1329,20 @@ where
         }
     }
 
+    // OneTerm fork: DCS sequences (Sixel `DCS q`) are forwarded to the handler.
     #[inline]
     fn hook(&mut self, params: &Params, intermediates: &[u8], ignore: bool, action: char) {
-        debug!(
-            "[unhandled hook] params={:?}, ints: {:?}, ignore: {:?}, action: {:?}",
-            params, intermediates, ignore, action
-        );
+        self.handler.dcs_hook(params, intermediates, ignore, action);
     }
 
     #[inline]
     fn put(&mut self, byte: u8) {
-        debug!("[unhandled put] byte={:?}", byte);
+        self.handler.dcs_put(byte);
     }
 
     #[inline]
     fn unhook(&mut self) {
-        debug!("[unhandled unhook]");
+        self.handler.dcs_unhook();
     }
 
     #[inline]

@@ -6,13 +6,17 @@
 //! `Selection` and `Damage`, so the rest of the engine never depends on the
 //! grid implementation (HLD idea 3).
 
+use std::sync::Arc;
+
 use alacritty_terminal::selection::SelectionRange;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::vte::ansi::{
     Color as VteColor, CursorShape as VteCursorShape, NamedColor, Rgb as VteRgb,
 };
-use oneterm_terminal::{IndexedCell, TermDamageInfo, TerminalContent, TerminalSession};
+use oneterm_terminal::{
+    GraphicData, IndexedCell, TermDamageInfo, TerminalContent, TerminalSession,
+};
 
 /// FNV-1a, the hash used for row hashes, shaped-run keys and the style key.
 /// Deterministic across processes so tests can reason about hash equality.
@@ -257,6 +261,15 @@ impl CellFlags {
     }
 }
 
+/// The fragment of a Sixel image anchored to a cell: `(col, row)` is the cell's
+/// offset inside the image's cell grid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GraphicRef {
+    pub id: u64,
+    pub col: u16,
+    pub row: u16,
+}
+
 /// One grid cell, borrowed from the frame.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Cell<'a> {
@@ -268,6 +281,8 @@ pub(crate) struct Cell<'a> {
     pub zerowidth: &'a [char],
     /// FNV of the OSC 8 id + uri, for hashing and span detection.
     pub hyperlink: Option<u64>,
+    /// Image fragment painted over this cell, if any.
+    pub graphic: Option<GraphicRef>,
 }
 
 impl Cell<'_> {
@@ -294,6 +309,11 @@ impl Cell<'_> {
                 hasher.write_u8(0);
                 hasher.write(h.uri().as_bytes());
                 hasher.finish()
+            }),
+            graphic: c.graphic().map(|g| GraphicRef {
+                id: g.id.0,
+                col: g.col,
+                row: g.row,
             }),
         }
     }
@@ -474,6 +494,11 @@ impl Frame {
 
     pub(crate) fn display_offset(&self) -> usize {
         self.content.display_offset
+    }
+
+    /// Images the engine decoded since the previous snapshot (each appears once).
+    pub(crate) fn graphics(&self) -> &[Arc<GraphicData>] {
+        &self.content.graphics
     }
 
     pub(crate) fn damage(&self) -> Damage<'_> {

@@ -32,6 +32,7 @@ OneTerm is a Terminal application for SSH/SFTP/Local Shell with a **Zed-style wo
 - Mouse selection, middle-click paste (switchable in Settings), search, scrollback, and custom scrollbar
 - URL / OSC 8 detection, IME support, clipboard via OSC 52, bell
 - OSC 9 toasts, OSC 9;4 progress, and shell integration (OSC 7 / 133 / 0 / 2 / 4 / 104 / 10 / 11 / 12)
+- Sixel graphics (`img2sixel`, `chafa -f sixel`, `lsix`, `timg`): images are drawn in the grid, scroll with the text, and DA1 advertises them
 
 ### ⌨️ Command auto-completion
 

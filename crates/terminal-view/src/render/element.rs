@@ -10,15 +10,16 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use gpui::{
-    App, Bounds, CursorStyle, Element, ElementId, Entity, GlobalElementId, Hitbox, HitboxBehavior,
-    Hsla, InspectorElementId, IntoElement, LayoutId, Pixels, ShapedLine, Size, StrikethroughStyle,
-    Style, UnderlineStyle, Window, fill, point, px,
+    App, Bounds, Corners, CursorStyle, Element, ElementId, Entity, GlobalElementId, Hitbox,
+    HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId, Pixels, ShapedLine, Size,
+    StrikethroughStyle, Style, UnderlineStyle, Window, fill, point, px, size,
 };
 use oneterm_terminal::TerminalSession;
 
 use super::cursor::CursorPaint;
 use super::diagnostics::FrameStats;
-use super::frame::GridSize;
+use super::frame::{Frame, GridSize};
+use super::graphics::GraphicStore;
 use super::metrics::GridGeometry;
 use super::overlay::RowSpan;
 use super::row_plan::{ColorSpan, DecorationKind, RowPlan};
@@ -115,10 +116,22 @@ impl Element for TerminalElement {
             // resize storm.
             state.last_grid = Some(geometry.size);
         }
+        // Sixel placement needs the cell size in pixels; push it when it changes.
+        let cell_size = (
+            f32::from(metrics.cell_width).round().clamp(1.0, 65535.0) as u16,
+            f32::from(metrics.line_height).round().clamp(1.0, 65535.0) as u16,
+        );
+        if state.last_cell_size != Some(cell_size) {
+            self.spec.session.update(cx, |session, _| {
+                session.set_cell_size(cell_size.0, cell_size.1);
+            });
+            state.last_cell_size = Some(cell_size);
+        }
 
         // The frame's only `snapshot_into`: it consumes the engine's damage.
         state.frame.snapshot(&**self.spec.session.read(cx));
         state.stats.snapshot_calls += 1;
+        state.stats.images_uploaded = state.graphics.ingest(state.frame.graphics(), window);
         state.glyphs.begin_frame();
         state.update_plans(&metrics, window);
         state.compute_overlays();
@@ -167,6 +180,8 @@ impl Element for TerminalElement {
                 overlays,
                 gutter,
                 stats,
+                frame,
+                graphics,
                 ..
             } = state;
             let mut painter = GridPainter {
@@ -177,6 +192,8 @@ impl Element for TerminalElement {
                 gutter_labels: &gutter.labels,
                 gutter_inset: RenderState::gutter_inset(),
                 font_size,
+                frame,
+                graphics,
                 stats,
             };
             window.paint_layer(bounds, |window| {
@@ -221,6 +238,8 @@ struct GridPainter<'a> {
     gutter_labels: &'a [super::state::GutterLabel],
     gutter_inset: Pixels,
     font_size: Pixels,
+    frame: &'a Frame,
+    graphics: &'a GraphicStore,
     stats: &'a mut FrameStats,
 }
 
@@ -297,6 +316,8 @@ impl GridPainter<'_> {
             );
         }
 
+        self.paint_graphics(rows.clone(), window);
+
         // Pass 3: decorations and glyphs. GPUI orders these kinds
         // Quad → Underline → Sprite within the layer regardless of call
         // order, so the walk is per row for cache locality only.
@@ -309,6 +330,55 @@ impl GridPainter<'_> {
         }
 
         self.paint_gutter(window);
+    }
+
+    /// Sixel images: one `paint_image` per image visible in `rows`, anchored at
+    /// the first cell (row-major) that references it; the layer's content mask
+    /// clips the parts that scrolled out. Images are polychrome sprites, which
+    /// GPUI draws after glyphs inside the layer.
+    ///
+    /// ponytail: the whole image is painted from any surviving cell, so cells
+    /// erased or overwritten inside it still show pixels; upgrade to per-row
+    /// bands in a lower layer when text over images must show.
+    fn paint_graphics(&mut self, rows: Range<usize>, window: &mut Window) {
+        let mut seen: Vec<u64> = Vec::new();
+        let m = self.geometry.metrics;
+        for row in rows {
+            let frame_row = self.frame.row(row);
+            for (col, cell) in frame_row.cells().enumerate() {
+                let Some(graphic) = cell.graphic else {
+                    continue;
+                };
+                if seen.contains(&graphic.id) {
+                    continue;
+                }
+                seen.push(graphic.id);
+                let Some(stored) = self.graphics.get(graphic.id) else {
+                    continue;
+                };
+                let anchor = self.geometry.cell_origin(row, col);
+                let origin = point(
+                    anchor.x - m.cell_width * f32::from(graphic.col),
+                    anchor.y - m.line_height * f32::from(graphic.row),
+                );
+                let image_bounds = Bounds {
+                    origin,
+                    size: size(px(stored.width as f32), px(stored.height as f32)),
+                };
+                // Only the part inside the grid is drawn (scrolled-out rows are cut).
+                let painted = window.paint_image(
+                    self.bounds,
+                    image_bounds,
+                    Corners::default(),
+                    stored.image.clone(),
+                    0,
+                    false,
+                );
+                if painted.is_ok() {
+                    self.stats.images += 1;
+                }
+            }
+        }
     }
 
     fn paint_decorations(&mut self, row: usize, plan: &RowPlan, window: &mut Window) {

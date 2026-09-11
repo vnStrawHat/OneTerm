@@ -19,10 +19,13 @@ pub(crate) mod paste;
 pub mod search;
 pub mod security_policy;
 pub mod session;
+#[cfg(test)]
+mod sixel_tests;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 pub mod url_policy;
 
+pub use alacritty_terminal::term::graphics::{GraphicCell, GraphicData, GraphicId};
 pub use backend::{
     DefaultColors, GridSize, OscRouter, PtyTransport, SessionEventSink, SharedSessionState,
     SharedState, TerminalPump,

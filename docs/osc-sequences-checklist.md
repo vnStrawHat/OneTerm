@@ -206,8 +206,9 @@ ESC]133;D;exit ST ← Block end (exit code optional)
 | ☐ | **66** | Text sizing | `ESC]66;... ST` | ❌ |
 | ☐ | **3008** | systemd context signal (UAPI) | `ESC]3008;... ST` | ❌ |
 
-- **OneTerm**: ❌ all vendor-specific. Inline images have no single standard (OSC 1337, an APC graphics
-  protocol, and Sixel all compete), so none is implemented.
+- **OneTerm**: ❌ all vendor-specific OSCs. Inline images: **Sixel** (`DCS P1;P2;P3 q ... ST`, not an
+  OSC) is implemented (IN-0028: decoded in the vendored `Term`, anchored to cells, DA1 answers
+  `CSI ? 62 ; 4 c`); OSC 1337 and the Kitty APC protocol are not.
 
 ---
 
@@ -241,11 +242,11 @@ ESC]133;D;exit ST ← Block end (exit code optional)
 | 9 + 9;4 notification/progress | ✅ | OK (toast + progress bar) |
 | 99/777 notifications | ❌ | **Gap** |
 | 633 shell integration | ❌ | **Gap** (133 only) |
-| 1337 image | ❌ | **Gap** |
+| 1337 image | ❌ | **Gap** (Sixel via DCS is supported instead) |
 
 > OneTerm currently **covers** the 5 core groups (title/CWD/hyperlink/clipboard/shell-integration) **+ default colors
-> (OSC 10/11/12/110-112) + color palette (OSC 4/104) + notification/progress (OSC 9, 9;4)**, but **lacks**
-> special colors (5), pointer/selection (13–19), notification 99/777, 633, inline image.
+> (OSC 10/11/12/110-112) + color palette (OSC 4/104) + notification/progress (OSC 9, 9;4) + Sixel images (DCS)**, but **lacks**
+> special colors (5), pointer/selection (13–19), notification 99/777, 633, OSC 1337 / Kitty images.
 
 ---
 

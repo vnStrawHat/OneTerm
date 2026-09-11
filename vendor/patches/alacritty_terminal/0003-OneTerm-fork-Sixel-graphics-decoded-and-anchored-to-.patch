@@ -1,0 +1,563 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OneTerm <oneterm@local>
+Date: Fri, 11 Sep 2026 00:00:00 +0000
+Subject: [PATCH] OneTerm fork: Sixel graphics decoded and anchored to cells
+
+Adds term::graphics (SixelParser, GraphicId/GraphicCell/GraphicData),
+CellExtra.graphic with Cell::graphic()/set_graphic(), Term::dcs_hook/dcs_put/
+dcs_unhook (decode DCS q, place the image at the cursor cell by cell, move the
+cursor below it through linefeed), Term::take_graphics(), Term::set_cell_size(),
+and a DA1 answer of CSI ? 62 ; 4 c so programs detect Sixel.
+See docs/spec-intakes/IN-0028-sixel-graphics/low-level-design/vendor-graphics.md.
+---
+ src/term/cell.rs     |  42 ++++--
+ src/term/graphics.rs | 335 +++++++++++++++++++++++++++++++++++++++++++
+ src/term/mod.rs      |  66 ++++++++-
+ 3 files changed, 434 insertions(+), 9 deletions(-)
+ create mode 100644 src/term/graphics.rs
+
+diff --git a/src/term/cell.rs b/src/term/cell.rs
+index 484eabe..b14e7c2 100644
+--- a/src/term/cell.rs
++++ b/src/term/cell.rs
+@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
+ 
+ use crate::grid::{self, GridCell};
+ use crate::index::Column;
++use crate::term::graphics::GraphicCell;
+ use crate::vte::ansi::{Color, Hyperlink as VteHyperlink, NamedColor};
+ 
+ bitflags! {
+@@ -126,6 +127,8 @@ pub struct CellExtra {
+     zerowidth: Vec<char>,
+     underline_color: Option<Color>,
+     hyperlink: Option<Hyperlink>,
++    /// OneTerm fork: the image fragment anchored to this cell.
++    graphic: Option<GraphicCell>,
+ }
+ 
+ /// Content and attributes of a single cell in the terminal grid.
+@@ -180,10 +183,9 @@ impl Cell {
+     pub fn set_underline_color(&mut self, color: Option<Color>) {
+         // If we reset color and we don't have zerowidth we should drop extra storage.
+         if color.is_none()
+-            && self
+-                .extra
+-                .as_ref()
+-                .is_none_or(|extra| extra.zerowidth.is_empty() && extra.hyperlink.is_none())
++            && self.extra.as_ref().is_none_or(|extra| {
++                extra.zerowidth.is_empty() && extra.hyperlink.is_none() && extra.graphic.is_none()
++            })
+         {
+             self.extra = None;
+         } else {
+@@ -201,10 +203,11 @@ impl Cell {
+     /// Set hyperlink.
+     pub fn set_hyperlink(&mut self, hyperlink: Option<Hyperlink>) {
+         let should_drop = hyperlink.is_none()
+-            && self
+-                .extra
+-                .as_ref()
+-                .is_none_or(|extra| extra.zerowidth.is_empty() && extra.underline_color.is_none());
++            && self.extra.as_ref().is_none_or(|extra| {
++                extra.zerowidth.is_empty()
++                    && extra.underline_color.is_none()
++                    && extra.graphic.is_none()
++            });
+ 
+         if should_drop {
+             self.extra = None;
+@@ -214,6 +217,29 @@ impl Cell {
+         }
+     }
+ 
++    /// OneTerm fork: the image fragment anchored to this cell.
++    #[inline]
++    pub fn graphic(&self) -> Option<GraphicCell> {
++        self.extra.as_ref()?.graphic
++    }
++
++    /// OneTerm fork: anchor an image fragment to this cell (`None` removes it).
++    pub fn set_graphic(&mut self, graphic: Option<GraphicCell>) {
++        let should_drop = graphic.is_none()
++            && self.extra.as_ref().is_none_or(|extra| {
++                extra.zerowidth.is_empty()
++                    && extra.underline_color.is_none()
++                    && extra.hyperlink.is_none()
++            });
++
++        if should_drop {
++            self.extra = None;
++        } else {
++            let extra = self.extra.get_or_insert(Default::default());
++            Arc::make_mut(extra).graphic = graphic;
++        }
++    }
++
+     /// Hyperlink stored in this cell.
+     #[inline]
+     pub fn hyperlink(&self) -> Option<Hyperlink> {
+diff --git a/src/term/graphics.rs b/src/term/graphics.rs
+new file mode 100644
+index 0000000..69233d6
+--- /dev/null
++++ b/src/term/graphics.rs
+@@ -0,0 +1,335 @@
++//! OneTerm fork: Sixel graphics decoded inside the terminal and anchored to grid cells.
++//!
++//! A `DCS q` sequence is decoded by [`SixelParser`] as its bytes arrive; on `ST` the
++//! terminal writes a [`GraphicCell`] reference into every cell the image covers and moves
++//! the cursor below it. The pixels wait in [`Graphics::pending`] until the embedder takes
++//! them with `Term::take_graphics`. See
++//! docs/spec-intakes/IN-0028-sixel-graphics/low-level-design/vendor-graphics.md.
++
++use std::sync::Arc;
++
++#[cfg(feature = "serde")]
++use serde::{Deserialize, Serialize};
++
++use crate::vte::Params;
++
++/// Largest width or height a Sixel image may have; pixels beyond it are dropped.
++pub const MAX_DIMENSION: u32 = 4096;
++
++/// Cell size assumed until the embedder calls `Term::set_cell_size`.
++pub const DEFAULT_CELL_SIZE: (u16, u16) = (8, 16);
++
++/// Identifier of a decoded image, unique per `Term`.
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
++#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
++pub struct GraphicId(pub u64);
++
++/// A cell's share of an image: `(col, row)` is the cell's offset inside the image grid.
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
++#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
++pub struct GraphicCell {
++    pub id: GraphicId,
++    pub col: u16,
++    pub row: u16,
++}
++
++/// Decoded image pixels, RGBA row-major, straight (not premultiplied) alpha.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct GraphicData {
++    pub id: GraphicId,
++    pub width: u32,
++    pub height: u32,
++    pub rgba: Vec<u8>,
++}
++
++/// Per-terminal graphics state.
++pub(crate) struct Graphics {
++    next_id: u64,
++    /// Images decoded since the embedder last took them.
++    pub(crate) pending: Vec<Arc<GraphicData>>,
++    /// Cell size in pixels, used to turn an image into rows and columns.
++    pub(crate) cell_size: (u16, u16),
++    /// The Sixel sequence currently being received, if any.
++    pub(crate) parser: Option<SixelParser>,
++}
++
++impl Default for Graphics {
++    fn default() -> Self {
++        Self { next_id: 1, pending: Vec::new(), cell_size: DEFAULT_CELL_SIZE, parser: None }
++    }
++}
++
++impl Graphics {
++    pub(crate) fn next_id(&mut self) -> GraphicId {
++        let id = GraphicId(self.next_id);
++        self.next_id += 1;
++        id
++    }
++
++    pub(crate) fn set_cell_size(&mut self, width: u16, height: u16) {
++        if width > 0 && height > 0 {
++            self.cell_size = (width, height);
++        }
++    }
++}
++
++#[derive(Clone, Copy, PartialEq, Eq)]
++enum State {
++    Ground,
++    /// `!` followed by a repeat count.
++    Repeat,
++    /// `#` followed by a register and an optional colour definition.
++    Color,
++    /// `"` followed by raster attributes.
++    Raster,
++}
++
++/// Streaming Sixel decoder (DEC STD 070 subset: raster attributes, colour registers in
++/// RGB and HLS, repeat, `$`, `-`). Untouched pixels stay transparent whatever P2 says.
++pub(crate) struct SixelParser {
++    palette: [[u8; 4]; 256],
++    color: usize,
++    x: u32,
++    band: u32,
++    /// Extents of the data received so far (clamped to `MAX_DIMENSION`).
++    width: u32,
++    height: u32,
++    /// `"Pan;Pad;Ph;Pv` size, when given.
++    raster: Option<(u32, u32)>,
++    state: State,
++    args: Vec<u32>,
++    /// Pixels of the image so far, `stride` wide, `height` tall.
++    pixels: Vec<[u8; 4]>,
++    stride: u32,
++}
++
++impl SixelParser {
++    /// `params` are the DCS parameters `P1;P2;P3`; only their presence matters today.
++    pub(crate) fn new(_params: &Params) -> Self {
++        Self {
++            palette: default_palette(),
++            color: 0,
++            x: 0,
++            band: 0,
++            width: 0,
++            height: 0,
++            raster: None,
++            state: State::Ground,
++            args: Vec::with_capacity(5),
++            pixels: Vec::new(),
++            stride: 0,
++        }
++    }
++
++    pub(crate) fn put(&mut self, byte: u8) {
++        match self.state {
++            State::Ground => self.ground(byte),
++            State::Repeat | State::Color | State::Raster => {
++                match byte {
++                    b'0'..=b'9' => {
++                        let last = self.args.last_mut().expect("args never empty in a command");
++                        *last = last.saturating_mul(10).saturating_add(u32::from(byte - b'0'));
++                    },
++                    b';' => self.args.push(0),
++                    _ => {
++                        let state = self.state;
++                        self.state = State::Ground;
++                        match state {
++                            State::Repeat => {
++                                let count = self.args[0].max(1);
++                                if (0x3F..=0x7E).contains(&byte) {
++                                    self.sixel(byte - 0x3F, count);
++                                } else {
++                                    self.ground(byte);
++                                }
++                            },
++                            State::Color => {
++                                self.color_command();
++                                self.ground(byte);
++                            },
++                            State::Raster => {
++                                self.raster_command();
++                                self.ground(byte);
++                            },
++                            State::Ground => unreachable!(),
++                        }
++                    },
++                }
++            },
++        }
++    }
++
++    fn ground(&mut self, byte: u8) {
++        match byte {
++            0x3F..=0x7E => self.sixel(byte - 0x3F, 1),
++            b'!' => self.begin(State::Repeat),
++            b'#' => self.begin(State::Color),
++            b'"' => self.begin(State::Raster),
++            b'$' => self.x = 0,
++            b'-' => {
++                self.x = 0;
++                self.band = self.band.saturating_add(1);
++            },
++            _ => {},
++        }
++    }
++
++    fn begin(&mut self, state: State) {
++        self.state = state;
++        self.args.clear();
++        self.args.push(0);
++    }
++
++    fn color_command(&mut self) {
++        let register = self.args[0] as usize & 0xFF;
++        if self.args.len() >= 5 {
++            let (mode, a, b, c) = (self.args[1], self.args[2], self.args[3], self.args[4]);
++            let rgb = match mode {
++                2 => [percent(a), percent(b), percent(c)],
++                1 => hls_to_rgb(a, b, c),
++                _ => return,
++            };
++            self.palette[register] = [rgb[0], rgb[1], rgb[2], 255];
++        }
++        self.color = register;
++    }
++
++    fn raster_command(&mut self) {
++        if self.args.len() >= 4 {
++            let width = self.args[2].min(MAX_DIMENSION);
++            let height = self.args[3].min(MAX_DIMENSION);
++            if width > 0 && height > 0 {
++                self.raster = Some((width, height));
++                self.ensure_stride(width);
++            }
++        }
++    }
++
++    /// Paint one sixel column (`bits` = rows `y..y+6`) `count` times, then advance.
++    fn sixel(&mut self, bits: u8, count: u32) {
++        let y0 = self.band.saturating_mul(6);
++        if y0 >= MAX_DIMENSION {
++            return;
++        }
++        let x_end = self.x.saturating_add(count).min(MAX_DIMENSION);
++        let y_end = y0.saturating_add(6).min(MAX_DIMENSION);
++        if bits != 0 && x_end > self.x {
++            self.ensure_size(x_end, y_end);
++            let color = self.palette[self.color];
++            for bit in 0..6u32 {
++                let y = y0 + bit;
++                if bits & (1 << bit) == 0 || y >= y_end {
++                    continue;
++                }
++                let row = (y * self.stride) as usize;
++                for x in self.x..x_end {
++                    self.pixels[row + x as usize] = color;
++                }
++            }
++        }
++        self.x = x_end;
++        self.width = self.width.max(x_end);
++        self.height = self.height.max(y_end);
++    }
++
++    /// Grow the buffer so `width x height` is addressable; the stride doubles so a
++    /// band that widens one column at a time does not reallocate per byte.
++    fn ensure_size(&mut self, width: u32, height: u32) {
++        self.ensure_stride(width);
++        let needed = (height * self.stride) as usize;
++        if self.pixels.len() < needed {
++            self.pixels.resize(needed, [0; 4]);
++        }
++    }
++
++    fn ensure_stride(&mut self, width: u32) {
++        if width <= self.stride {
++            return;
++        }
++        let new_stride = width.max(self.stride.saturating_mul(2)).max(64).min(MAX_DIMENSION);
++        if self.stride == 0 {
++            self.stride = new_stride;
++            return;
++        }
++        let rows = self.pixels.len() / self.stride as usize;
++        let mut pixels = vec![[0u8; 4]; rows * new_stride as usize];
++        for row in 0..rows {
++            let src = row * self.stride as usize;
++            let dst = row * new_stride as usize;
++            pixels[dst..dst + self.stride as usize]
++                .copy_from_slice(&self.pixels[src..src + self.stride as usize]);
++        }
++        self.pixels = pixels;
++        self.stride = new_stride;
++    }
++
++    /// The finished image as `(width, height, rgba)`; `None` when nothing was drawn.
++    pub(crate) fn finish(self) -> Option<(u32, u32, Vec<u8>)> {
++        let (width, height) = self.raster.unwrap_or((self.width, self.height));
++        if width == 0 || height == 0 {
++            return None;
++        }
++        let mut rgba = vec![0u8; (width * height * 4) as usize];
++        let buffered_rows = if self.stride == 0 { 0 } else { self.pixels.len() / self.stride as usize };
++        let copy_w = width.min(self.stride) as usize;
++        for y in 0..(height as usize).min(buffered_rows) {
++            let src = &self.pixels[y * self.stride as usize..y * self.stride as usize + copy_w];
++            let dst = &mut rgba[y * width as usize * 4..(y * width as usize + copy_w) * 4];
++            for (px, out) in src.iter().zip(dst.chunks_exact_mut(4)) {
++                out.copy_from_slice(px);
++            }
++        }
++        Some((width, height, rgba))
++    }
++}
++
++fn percent(value: u32) -> u8 {
++    (value.min(100) * 255 / 100) as u8
++}
++
++/// DEC HLS: hue 0 is blue, lightness and saturation are percentages.
++fn hls_to_rgb(hue: u32, lightness: u32, saturation: u32) -> [u8; 3] {
++    let h = ((hue + 240) % 360) as f32;
++    let l = lightness.min(100) as f32 / 100.0;
++    let s = saturation.min(100) as f32 / 100.0;
++    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
++    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
++    let m = l - c / 2.0;
++    let (r, g, b) = match (h / 60.0) as u32 {
++        0 => (c, x, 0.0),
++        1 => (x, c, 0.0),
++        2 => (0.0, c, x),
++        3 => (0.0, x, c),
++        4 => (x, 0.0, c),
++        _ => (c, 0.0, x),
++    };
++    let to_u8 = |v: f32| ((v + m) * 255.0).round().clamp(0.0, 255.0) as u8;
++    [to_u8(r), to_u8(g), to_u8(b)]
++}
++
++/// The VT340 default colour registers (percentages), registers 16.. black.
++fn default_palette() -> [[u8; 4]; 256] {
++    const VT340: [[u32; 3]; 16] = [
++        [0, 0, 0],
++        [20, 20, 80],
++        [80, 13, 13],
++        [20, 80, 20],
++        [80, 20, 80],
++        [20, 80, 80],
++        [80, 80, 20],
++        [53, 53, 53],
++        [26, 26, 26],
++        [33, 33, 60],
++        [60, 26, 26],
++        [33, 60, 33],
++        [60, 33, 60],
++        [33, 60, 60],
++        [60, 60, 33],
++        [80, 80, 80],
++    ];
++    let mut palette = [[0, 0, 0, 255]; 256];
++    for (slot, rgb) in palette.iter_mut().zip(VT340.iter()) {
++        *slot = [percent(rgb[0]), percent(rgb[1]), percent(rgb[2]), 255];
++    }
++    palette
++}
+diff --git a/src/term/mod.rs b/src/term/mod.rs
+index 4ef7a88..da39c29 100644
+--- a/src/term/mod.rs
++++ b/src/term/mod.rs
+@@ -19,7 +19,9 @@ use crate::index::{self, Boundary, Column, Direction, Line, Point, Side};
+ use crate::selection::{Selection, SelectionRange, SelectionType};
+ use crate::term::cell::{Cell, Flags, LineLength};
+ use crate::term::color::Colors;
++use crate::term::graphics::{GraphicCell, GraphicData, Graphics, SixelParser};
+ use crate::vi_mode::{ViModeCursor, ViMotion};
++use crate::vte::Params;
+ use crate::vte::ansi::{
+     self, Attr, CharsetIndex, Color, CursorShape, CursorStyle, Handler, Hyperlink, KeyboardModes,
+     KeyboardModesApplyBehavior, NamedColor, NamedMode, NamedPrivateMode, PrivateMode, Rgb,
+@@ -28,6 +30,7 @@ use crate::vte::ansi::{
+ 
+ pub mod cell;
+ pub mod color;
++pub mod graphics;
+ pub mod search;
+ 
+ /// Minimum number of columns.
+@@ -327,6 +330,9 @@ pub struct Term<T> {
+ 
+     /// Config directly for the terminal.
+     config: Config,
++
++    /// OneTerm fork: Sixel decoder state and images not yet taken by the embedder.
++    graphics: Graphics,
+ }
+ 
+ /// Configuration options for the [`Term`].
+@@ -441,9 +447,22 @@ impl<T> Term<T> {
+             selection: Default::default(),
+             title: Default::default(),
+             mode: Default::default(),
++            graphics: Default::default(),
+         }
+     }
+ 
++    /// OneTerm fork: images decoded since the last call, oldest first. Each image is
++    /// returned exactly once; the grid cells keep their [`GraphicCell`] references.
++    pub fn take_graphics(&mut self) -> Vec<Arc<GraphicData>> {
++        mem::take(&mut self.graphics.pending)
++    }
++
++    /// OneTerm fork: the cell size in pixels, which decides how many rows and columns
++    /// an image covers. Zero is ignored.
++    pub fn set_cell_size(&mut self, width: u16, height: u16) {
++        self.graphics.set_cell_size(width, height);
++    }
++
+     /// Collect the information about the changes in the lines, which
+     /// could be used to minimize the amount of drawing operations.
+     ///
+@@ -1258,7 +1277,9 @@ impl<T: EventListener> Handler for Term<T> {
+         match intermediate {
+             None => {
+                 trace!("Reporting primary device attributes");
+-                let text = String::from("\x1b[?6c");
++                // OneTerm fork: VT220 with Sixel graphics (4), so `tmux`, `lsix`,
++                // `chafa` and `timg` pick Sixel.
++                let text = String::from("\x1b[?62;4c");
+                 self.event_proxy.send_event(Event::PtyWrite(text));
+             },
+             Some('>') => {
+@@ -1846,6 +1867,9 @@ impl<T: EventListener> Handler for Term<T> {
+         }
+         self.active_charset = Default::default();
+         self.cursor_style = None;
++        // OneTerm fork: images not yet taken by the embedder die with the screen.
++        self.graphics.pending.clear();
++        self.graphics.parser = None;
+         self.grid.reset();
+         self.inactive_grid.reset();
+         self.scroll_region = Line(0)..Line(self.screen_lines() as i32);
+@@ -2252,6 +2276,46 @@ impl<T: EventListener> Handler for Term<T> {
+         });
+     }
+ 
++    /// OneTerm fork: only Sixel (`DCS q`) is decoded; other DCS sequences are dropped.
++    #[inline]
++    fn dcs_hook(&mut self, params: &Params, _intermediates: &[u8], _ignore: bool, action: char) {
++        self.graphics.parser = (action == 'q').then(|| SixelParser::new(params));
++    }
++
++    #[inline]
++    fn dcs_put(&mut self, byte: u8) {
++        if let Some(parser) = self.graphics.parser.as_mut() {
++            parser.put(byte);
++        }
++    }
++
++    /// OneTerm fork: place the finished image at the cursor (xterm Sixel scrolling
++    /// model). Every covered cell gets a [`GraphicCell`]; the cursor moves down one
++    /// line per image row through `linefeed`, so the scroll region and scrollback
++    /// apply, and ends on the line below the image at column 0.
++    fn dcs_unhook(&mut self) {
++        let Some(parser) = self.graphics.parser.take() else { return };
++        let Some((width, height, rgba)) = parser.finish() else { return };
++        let id = self.graphics.next_id();
++        let (cell_w, cell_h) = self.graphics.cell_size;
++        let start = self.grid.cursor.point.column.0;
++        let cols = (width.div_ceil(u32::from(cell_w)) as usize).min(self.columns() - start);
++        let rows = height.div_ceil(u32::from(cell_h)) as usize;
++        for row in 0..rows {
++            let line = self.grid.cursor.point.line;
++            for col in 0..cols {
++                let cell = GraphicCell { id, col: col as u16, row: row as u16 };
++                self.grid[line][Column(start + col)].set_graphic(Some(cell));
++            }
++            if cols > 0 {
++                self.damage.damage_line(line.0 as usize, start, start + cols - 1);
++            }
++            self.linefeed();
++        }
++        self.carriage_return();
++        self.graphics.pending.push(Arc::new(GraphicData { id, width, height, rgba }));
++    }
++
+     #[inline]
+     fn push_title(&mut self) {
+         trace!("Pushing '{:?}' onto title stack", self.title);
