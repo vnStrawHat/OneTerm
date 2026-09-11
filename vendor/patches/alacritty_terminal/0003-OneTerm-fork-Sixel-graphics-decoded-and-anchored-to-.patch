@@ -5,15 +5,17 @@ Subject: [PATCH] OneTerm fork: Sixel graphics decoded and anchored to cells
 
 Adds term::graphics (SixelParser, GraphicId/GraphicCell/GraphicData),
 CellExtra.graphic with Cell::graphic()/set_graphic(), Term::dcs_hook/dcs_put/
-dcs_unhook (decode DCS q, place the image at the cursor cell by cell, move the
-cursor below it through linefeed), Term::take_graphics(), Term::set_cell_size(),
-and a DA1 answer of CSI ? 62 ; 4 c so programs detect Sixel.
+dcs_unhook (decode DCS q, anchor the image to cells at the cursor measured in
+the VT340 virtual 10x20 cell, move the cursor through linefeed onto the row of
+the last sixel band keeping its column, as DEC terminals and Windows conhost
+do), Term::take_graphics(), and a DA1 answer of CSI ? 62 ; 4 c so programs
+detect Sixel.
 See docs/spec-intakes/IN-0028-sixel-graphics/low-level-design/vendor-graphics.md.
 ---
- src/term/cell.rs     |  42 ++++--
- src/term/graphics.rs | 335 +++++++++++++++++++++++++++++++++++++++++++
- src/term/mod.rs      |  66 ++++++++-
- 3 files changed, 434 insertions(+), 9 deletions(-)
+ src/term/cell.rs     |  42 +++++-
+ src/term/graphics.rs | 340 +++++++++++++++++++++++++++++++++++++++++++
+ src/term/mod.rs      |  73 +++++++++-
+ 3 files changed, 446 insertions(+), 9 deletions(-)
  create mode 100644 src/term/graphics.rs
 
 diff --git a/src/term/cell.rs b/src/term/cell.rs
@@ -99,10 +101,10 @@ index 484eabe..b14e7c2 100644
      pub fn hyperlink(&self) -> Option<Hyperlink> {
 diff --git a/src/term/graphics.rs b/src/term/graphics.rs
 new file mode 100644
-index 0000000..69233d6
+index 0000000..717be55
 --- /dev/null
 +++ b/src/term/graphics.rs
-@@ -0,0 +1,335 @@
+@@ -0,0 +1,340 @@
 +//! OneTerm fork: Sixel graphics decoded inside the terminal and anchored to grid cells.
 +//!
 +//! A `DCS q` sequence is decoded by [`SixelParser`] as its bytes arrive; on `ST` the
@@ -121,8 +123,20 @@ index 0000000..69233d6
 +/// Largest width or height a Sixel image may have; pixels beyond it are dropped.
 +pub const MAX_DIMENSION: u32 = 4096;
 +
-+/// Cell size assumed until the embedder calls `Term::set_cell_size`.
-+pub const DEFAULT_CELL_SIZE: (u16, u16) = (8, 16);
++/// The virtual cell size Sixel pixels are measured in (VT240/VT340: 10 x 20), the
++/// same value Windows conhost uses, so the cursor rows an image consumes agree
++/// with a ConPTY host. The renderer scales the image to the real cell size.
++pub const VIRTUAL_CELL: (u32, u32) = (10, 20);
++
++/// A finished Sixel image.
++pub(crate) struct DecodedSixel {
++    pub width: u32,
++    pub height: u32,
++    pub rgba: Vec<u8>,
++    /// Rows the text cursor moves down: the row that holds the top of the last
++    /// sixel band (`bands_advanced * 6 / 20`), as DEC terminals and conhost do.
++    pub cursor_rows: u32,
++}
 +
 +/// Identifier of a decoded image, unique per `Term`.
 +#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -152,15 +166,13 @@ index 0000000..69233d6
 +    next_id: u64,
 +    /// Images decoded since the embedder last took them.
 +    pub(crate) pending: Vec<Arc<GraphicData>>,
-+    /// Cell size in pixels, used to turn an image into rows and columns.
-+    pub(crate) cell_size: (u16, u16),
 +    /// The Sixel sequence currently being received, if any.
 +    pub(crate) parser: Option<SixelParser>,
 +}
 +
 +impl Default for Graphics {
 +    fn default() -> Self {
-+        Self { next_id: 1, pending: Vec::new(), cell_size: DEFAULT_CELL_SIZE, parser: None }
++        Self { next_id: 1, pending: Vec::new(), parser: None }
 +    }
 +}
 +
@@ -169,12 +181,6 @@ index 0000000..69233d6
 +        let id = GraphicId(self.next_id);
 +        self.next_id += 1;
 +        id
-+    }
-+
-+    pub(crate) fn set_cell_size(&mut self, width: u16, height: u16) {
-+        if width > 0 && height > 0 {
-+            self.cell_size = (width, height);
-+        }
 +    }
 +}
 +
@@ -368,12 +374,13 @@ index 0000000..69233d6
 +        self.stride = new_stride;
 +    }
 +
-+    /// The finished image as `(width, height, rgba)`; `None` when nothing was drawn.
-+    pub(crate) fn finish(self) -> Option<(u32, u32, Vec<u8>)> {
++    /// The finished image; `None` when nothing was drawn.
++    pub(crate) fn finish(self) -> Option<DecodedSixel> {
 +        let (width, height) = self.raster.unwrap_or((self.width, self.height));
 +        if width == 0 || height == 0 {
 +            return None;
 +        }
++        let cursor_rows = self.band.saturating_mul(6) / VIRTUAL_CELL.1;
 +        let mut rgba = vec![0u8; (width * height * 4) as usize];
 +        let buffered_rows = if self.stride == 0 { 0 } else { self.pixels.len() / self.stride as usize };
 +        let copy_w = width.min(self.stride) as usize;
@@ -384,7 +391,7 @@ index 0000000..69233d6
 +                out.copy_from_slice(px);
 +            }
 +        }
-+        Some((width, height, rgba))
++        Some(DecodedSixel { width, height, rgba, cursor_rows })
 +    }
 +}
 +
@@ -439,20 +446,22 @@ index 0000000..69233d6
 +    palette
 +}
 diff --git a/src/term/mod.rs b/src/term/mod.rs
-index 4ef7a88..da39c29 100644
+index 4ef7a88..ad7e332 100644
 --- a/src/term/mod.rs
 +++ b/src/term/mod.rs
-@@ -19,7 +19,9 @@ use crate::index::{self, Boundary, Column, Direction, Line, Point, Side};
+@@ -19,7 +19,11 @@ use crate::index::{self, Boundary, Column, Direction, Line, Point, Side};
  use crate::selection::{Selection, SelectionRange, SelectionType};
  use crate::term::cell::{Cell, Flags, LineLength};
  use crate::term::color::Colors;
-+use crate::term::graphics::{GraphicCell, GraphicData, Graphics, SixelParser};
++use crate::term::graphics::{
++    DecodedSixel, GraphicCell, GraphicData, Graphics, SixelParser, VIRTUAL_CELL,
++};
  use crate::vi_mode::{ViModeCursor, ViMotion};
 +use crate::vte::Params;
  use crate::vte::ansi::{
      self, Attr, CharsetIndex, Color, CursorShape, CursorStyle, Handler, Hyperlink, KeyboardModes,
      KeyboardModesApplyBehavior, NamedColor, NamedMode, NamedPrivateMode, PrivateMode, Rgb,
-@@ -28,6 +30,7 @@ use crate::vte::ansi::{
+@@ -28,6 +32,7 @@ use crate::vte::ansi::{
  
  pub mod cell;
  pub mod color;
@@ -460,7 +469,7 @@ index 4ef7a88..da39c29 100644
  pub mod search;
  
  /// Minimum number of columns.
-@@ -327,6 +330,9 @@ pub struct Term<T> {
+@@ -327,6 +332,9 @@ pub struct Term<T> {
  
      /// Config directly for the terminal.
      config: Config,
@@ -470,7 +479,7 @@ index 4ef7a88..da39c29 100644
  }
  
  /// Configuration options for the [`Term`].
-@@ -441,9 +447,22 @@ impl<T> Term<T> {
+@@ -441,9 +449,16 @@ impl<T> Term<T> {
              selection: Default::default(),
              title: Default::default(),
              mode: Default::default(),
@@ -484,16 +493,10 @@ index 4ef7a88..da39c29 100644
 +        mem::take(&mut self.graphics.pending)
 +    }
 +
-+    /// OneTerm fork: the cell size in pixels, which decides how many rows and columns
-+    /// an image covers. Zero is ignored.
-+    pub fn set_cell_size(&mut self, width: u16, height: u16) {
-+        self.graphics.set_cell_size(width, height);
-+    }
-+
      /// Collect the information about the changes in the lines, which
      /// could be used to minimize the amount of drawing operations.
      ///
-@@ -1258,7 +1277,9 @@ impl<T: EventListener> Handler for Term<T> {
+@@ -1258,7 +1273,9 @@ impl<T: EventListener> Handler for Term<T> {
          match intermediate {
              None => {
                  trace!("Reporting primary device attributes");
@@ -504,7 +507,7 @@ index 4ef7a88..da39c29 100644
                  self.event_proxy.send_event(Event::PtyWrite(text));
              },
              Some('>') => {
-@@ -1846,6 +1867,9 @@ impl<T: EventListener> Handler for Term<T> {
+@@ -1846,6 +1863,9 @@ impl<T: EventListener> Handler for Term<T> {
          }
          self.active_charset = Default::default();
          self.cursor_style = None;
@@ -514,7 +517,7 @@ index 4ef7a88..da39c29 100644
          self.grid.reset();
          self.inactive_grid.reset();
          self.scroll_region = Line(0)..Line(self.screen_lines() as i32);
-@@ -2252,6 +2276,46 @@ impl<T: EventListener> Handler for Term<T> {
+@@ -2252,6 +2272,57 @@ impl<T: EventListener> Handler for Term<T> {
          });
      }
  
@@ -531,30 +534,41 @@ index 4ef7a88..da39c29 100644
 +        }
 +    }
 +
-+    /// OneTerm fork: place the finished image at the cursor (xterm Sixel scrolling
-+    /// model). Every covered cell gets a [`GraphicCell`]; the cursor moves down one
-+    /// line per image row through `linefeed`, so the scroll region and scrollback
-+    /// apply, and ends on the line below the image at column 0.
++    /// OneTerm fork: place the finished image at the cursor the way DEC terminals
++    /// and Windows conhost do (Sixel scrolling mode). Pixels are measured in
++    /// [`VIRTUAL_CELL`] units; every covered cell gets a [`GraphicCell`]; the
++    /// cursor moves down through `linefeed` (scroll region and scrollback apply)
++    /// onto the row that holds the top of the last sixel band, and keeps its
++    /// column. Rows of the image below that row are placed without moving the
++    /// cursor and clipped at the bottom of the screen.
 +    fn dcs_unhook(&mut self) {
 +        let Some(parser) = self.graphics.parser.take() else { return };
-+        let Some((width, height, rgba)) = parser.finish() else { return };
++        let Some(image) = parser.finish() else { return };
++        let DecodedSixel { width, height, rgba, cursor_rows } = image;
 +        let id = self.graphics.next_id();
-+        let (cell_w, cell_h) = self.graphics.cell_size;
 +        let start = self.grid.cursor.point.column.0;
-+        let cols = (width.div_ceil(u32::from(cell_w)) as usize).min(self.columns() - start);
-+        let rows = height.div_ceil(u32::from(cell_h)) as usize;
-+        for row in 0..rows {
-+            let line = self.grid.cursor.point.line;
-+            for col in 0..cols {
-+                let cell = GraphicCell { id, col: col as u16, row: row as u16 };
-+                self.grid[line][Column(start + col)].set_graphic(Some(cell));
++        let cols = (width.div_ceil(VIRTUAL_CELL.0) as usize).min(self.columns() - start);
++        let rows = height.div_ceil(VIRTUAL_CELL.1) as usize;
++        let cursor_rows = cursor_rows as usize;
++        for row in 0..rows.max(cursor_rows + 1) {
++            let line = if row <= cursor_rows {
++                self.grid.cursor.point.line
++            } else {
++                self.grid.cursor.point.line + (row - cursor_rows) as i32
++            };
++            if row < rows && line.0 < self.screen_lines() as i32 {
++                for col in 0..cols {
++                    let cell = GraphicCell { id, col: col as u16, row: row as u16 };
++                    self.grid[line][Column(start + col)].set_graphic(Some(cell));
++                }
++                if cols > 0 {
++                    self.damage.damage_line(line.0 as usize, start, start + cols - 1);
++                }
 +            }
-+            if cols > 0 {
-+                self.damage.damage_line(line.0 as usize, start, start + cols - 1);
++            if row < cursor_rows {
++                self.linefeed();
 +            }
-+            self.linefeed();
 +        }
-+        self.carriage_return();
 +        self.graphics.pending.push(Arc::new(GraphicData { id, width, height, rgba }));
 +    }
 +

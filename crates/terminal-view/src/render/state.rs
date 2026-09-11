@@ -157,8 +157,6 @@ pub(crate) struct RenderState {
     pub gutter: GutterLabels,
     /// The grid last pushed to `session.resize`.
     pub last_grid: Option<GridSize>,
-    /// The cell size last pushed to `session.set_cell_size`.
-    pub last_cell_size: Option<(u16, u16)>,
     /// Sixel images by id, GPU-ready.
     pub graphics: GraphicStore,
     pub stats: FrameStats,
@@ -186,7 +184,6 @@ impl RenderState {
             scratch: Scratch::new(),
             gutter: GutterLabels::default(),
             last_grid: None,
-            last_cell_size: None,
             graphics: GraphicStore::default(),
             stats: FrameStats::default(),
             #[cfg(any(test, feature = "terminal-diagnostics"))]

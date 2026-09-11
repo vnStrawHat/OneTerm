@@ -13,7 +13,7 @@ Created: 2026-09-11
 - [x] In progress
 - [ ] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -32,10 +32,10 @@ out once, and DA1 advertises Sixel.
 ## Scope
 
 - [x] In scope: `vendor/patches/vte/0002` (DCS hooks); `vendor/patches/alacritty_terminal/0003`
-  (`graphics.rs`, `CellExtra.graphic`, `Term` hooks, `take_graphics`, `set_cell_size`, DA1);
-  `TerminalContent.graphics`; `TerminalInput::set_cell_size` (required, per the "no silent
-  defaults" rule in `docs/terminal-backend.md` § 9) + model + session macro + fake session;
-  tests in `crates/terminal`; `vendor/README.md`, `docs/terminal-backend.md` § 5.2 / § 9.
+  (`graphics.rs`, `CellExtra.graphic`, `Term` hooks, `take_graphics`, DA1);
+  `TerminalContent.graphics`; tests in `crates/terminal`; `vendor/README.md`,
+  `docs/terminal-backend.md` § 5.2. (Rework removed the `set_cell_size` API from the
+  engine, `TerminalInput`, model, macro and fake session.)
 - [x] Out of scope: rendering (US-0067); XTSMGRAPHICS; DECSDM (sixel display mode); Kitty /
   iTerm2 protocols; per-Term image memory limits (pending images leave the `Term` at the next
   snapshot).
@@ -52,6 +52,12 @@ out once, and DA1 advertises Sixel.
   image_wider_than_the_grid_is_clipped_on_the_right, image_at_the_bottom_scrolls_into_history,
   erase_and_overwrite_drop_the_reference, cell_size_changes_the_row_count}`.
 - [x] `CSI c` answers `\x1b[?62;4c` (`primary_device_attributes_advertise_sixel`).
+- [x] Acceptance rework (owner trial, 2026-09-11, `snake.six`): the cursor lands where a
+  ConPTY host expects it. Pixels are measured in the VT340 virtual 10 x 20 cell and the
+  cursor ends on the row holding the top of the last band, column kept
+  (`places_cells_and_leaves_the_cursor_on_the_last_band_row`, `band_count_decides_the_cursor_row`,
+  `image_at_the_bottom_scrolls_into_history`); verified against conhost's `SixelParser`
+  and a raw ConPTY capture (`\x1b[28;35H` after a 450 px image at row 5 = 5 + 22 + 1).
 - [x] `bash vendor/refresh.sh --check` passes with the new patches (2026-09-11).
 - [x] `pwsh scripts/ci-local.ps1` green (2026-09-11, run once for the intake with US-0067 on
   the same branch).
@@ -64,8 +70,8 @@ out once, and DA1 advertises Sixel.
   `low-level-design/vendor-graphics.md` — the design.
 - `vendor/README.md` § 2 / § 4 — patch list and generation procedure; must list the new
   patches.
-- `docs/terminal-backend.md` § 5.2 (snapshot contents) and § 9 (`TerminalSession` trait) —
-  must mention `graphics` and `set_cell_size`.
+- `docs/terminal-backend.md` § 5.2 (snapshot contents) — must mention `graphics`; § 9
+  unchanged after the rework (no new trait method).
 - `docs/agents/dependencies.md` § 1 rule 6 — forks are never hand-edited; followed.
 - `docs/PROJECT.md` — invariant "vendored trees == pristine + patches"; followed.
 
@@ -78,7 +84,8 @@ Reason: both enumerate the fork deltas and the session contract.
 ### Reconciliation
 
 Changed: `vendor/README.md` § 2 (patches `vte/0002`, `alacritty_terminal/0003`),
-`docs/terminal-backend.md` § 5.2 (snapshot `graphics`) and § 9 (`set_cell_size`).
+`docs/terminal-backend.md` § 5.2 (snapshot `graphics`). Rework: LLD placement section and
+HLD steps 4/7 + risk rows rewritten for the virtual cell; § 9 line removed again.
 
 ## Context
 
@@ -124,9 +131,13 @@ Changed: `vendor/README.md` § 2 (patches `vte/0002`, `alacritty_terminal/0003`)
   corrected, behaviour matches xterm).
 - `cargo clippy --workspace --all-targets -- -D warnings`: clean.
 - `bash vendor/refresh.sh --check`: both crates verified.
+- Rework (2026-09-11): `cargo test -p oneterm-terminal`: 256 passed with the rewritten
+  placement tests; `bash vendor/refresh.sh --check` OK after amending patch 0003
+  (`DecodedSixel.cursor_rows`, `VIRTUAL_CELL`, no `set_cell_size`).
 - Gaps: P2 (background select) is ignored, untouched pixels are always transparent; Pan/Pad
   aspect ratio ignored; XTSMGRAPHICS not answered; no test for a hostile stream without
-  `ST` beyond the dimension clamp (bounded by construction).
+  `ST` beyond the dimension clamp (bounded by construction); DECSDM (sixel display mode)
+  not implemented.
 
 ## Handoff
 

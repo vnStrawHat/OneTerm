@@ -116,17 +116,6 @@ impl Element for TerminalElement {
             // resize storm.
             state.last_grid = Some(geometry.size);
         }
-        // Sixel placement needs the cell size in pixels; push it when it changes.
-        let cell_size = (
-            f32::from(metrics.cell_width).round().clamp(1.0, 65535.0) as u16,
-            f32::from(metrics.line_height).round().clamp(1.0, 65535.0) as u16,
-        );
-        if state.last_cell_size != Some(cell_size) {
-            self.spec.session.update(cx, |session, _| {
-                session.set_cell_size(cell_size.0, cell_size.1);
-            });
-            state.last_cell_size = Some(cell_size);
-        }
 
         // The frame's only `snapshot_into`: it consumes the engine's damage.
         state.frame.snapshot(&**self.spec.session.read(cx));
@@ -333,9 +322,9 @@ impl GridPainter<'_> {
     }
 
     /// Sixel images: one `paint_image` per image visible in `rows`, anchored at
-    /// the first cell (row-major) that references it; the layer's content mask
-    /// clips the parts that scrolled out. Images are polychrome sprites, which
-    /// GPUI draws after glyphs inside the layer.
+    /// the first cell (row-major) that references it and scaled from the engine's
+    /// virtual 10 x 20 cell to the real cell, clipped to the grid bounds. Images
+    /// are polychrome sprites, which GPUI draws after glyphs inside the layer.
     ///
     /// ponytail: the whole image is painted from any surviving cell, so cells
     /// erased or overwritten inside it still show pixels; upgrade to per-row
@@ -361,9 +350,13 @@ impl GridPainter<'_> {
                     anchor.x - m.cell_width * f32::from(graphic.col),
                     anchor.y - m.line_height * f32::from(graphic.row),
                 );
+                let (vw, vh) = oneterm_terminal::SIXEL_VIRTUAL_CELL;
                 let image_bounds = Bounds {
                     origin,
-                    size: size(px(stored.width as f32), px(stored.height as f32)),
+                    size: size(
+                        m.cell_width * (stored.width as f32 / vw as f32),
+                        m.line_height * (stored.height as f32 / vh as f32),
+                    ),
                 };
                 // Only the part inside the grid is drawn (scrolled-out rows are cut).
                 let painted = window.paint_image(

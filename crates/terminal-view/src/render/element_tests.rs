@@ -411,11 +411,6 @@ fn sixel_image_paints_once_per_frame(cx: &mut TestAppContext) {
     use oneterm_terminal::{GraphicCell, GraphicData, GraphicId};
     let mut h = Harness::open(cx, 6, 12, "", inputs_without_cursor());
     let _ = h.first_frame();
-    assert!(
-        h.probe.cell_size().0 > 0 && h.probe.cell_size().1 > 0,
-        "cell size pushed to the session: {:?}",
-        h.probe.cell_size()
-    );
     let id = GraphicId(7);
     h.probe.push_graphic(std::sync::Arc::new(GraphicData {
         id,

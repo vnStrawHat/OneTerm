@@ -110,14 +110,17 @@ fn empty_and_non_sixel_dcs_place_nothing() {
     assert_eq!(graphic_at(&t, 1, 1), None);
 }
 
+/// Pixels are virtual 10 x 20 cells (VT340 / conhost). A 25 x 45 image with five
+/// bands covers 3 x 3 cells; the cursor ends on the row holding the top of the
+/// last band (`4 * 6 / 20 = 1` rows down) in its original column, and the image
+/// row below the cursor is still placed.
 #[test]
-fn places_cells_and_moves_the_cursor_below_the_image() {
-    let mut t = term(10, 5);
-    t.set_cell_size(8, 16);
+fn places_cells_and_leaves_the_cursor_on_the_last_band_row() {
+    let mut t = term(10, 6);
     feed(&mut t, b"\x1b[3;4H"); // line 2, column 3
-    feed(&mut t, &sixel("\"1;1;20;20#0~")); // 20 x 20 px -> 3 cols x 2 rows
+    feed(&mut t, &sixel("\"1;1;25;45#0~-~-~-~-~"));
     let image = one_image(&mut t);
-    for (row, line) in [(0u16, 2i32), (1, 3)] {
+    for (row, line) in [(0u16, 2i32), (1, 3), (2, 4)] {
         for (col, column) in [(0u16, 3usize), (1, 4), (2, 5)] {
             assert_eq!(
                 graphic_at(&t, line, column),
@@ -140,8 +143,12 @@ fn places_cells_and_moves_the_cursor_below_the_image() {
             "line {line}: nothing before the image"
         );
     }
-    assert_eq!(t.grid().cursor.point.line, Line(4));
-    assert_eq!(t.grid().cursor.point.column, Column(0));
+    assert_eq!(
+        t.grid().cursor.point.line,
+        Line(3),
+        "row of the last band's top"
+    );
+    assert_eq!(t.grid().cursor.point.column, Column(3), "column is kept");
     assert_eq!(
         t.grid()[Line(2)][Column(3)].c,
         ' ',
@@ -152,7 +159,6 @@ fn places_cells_and_moves_the_cursor_below_the_image() {
 #[test]
 fn image_wider_than_the_grid_is_clipped_on_the_right() {
     let mut t = term(4, 5);
-    t.set_cell_size(8, 16);
     feed(&mut t, b"\x1b[1;3H"); // column 2 of 4
     feed(&mut t, &sixel("\"1;1;80;8#0~"));
     let image = one_image(&mut t);
@@ -164,21 +170,24 @@ fn image_wider_than_the_grid_is_clipped_on_the_right() {
             row: 0
         })
     );
-    assert_eq!(t.grid().cursor.point.line, Line(1));
+    assert_eq!(
+        t.grid().cursor.point.line,
+        Line(0),
+        "one band: cursor row unchanged"
+    );
 }
 
 #[test]
 fn image_at_the_bottom_scrolls_into_history() {
     let mut t = term(10, 3);
-    t.set_cell_size(8, 16);
     feed(&mut t, b"\x1b[3;1H"); // last line
-    feed(&mut t, &sixel("\"1;1;8;32#0~")); // 1 col x 2 rows
+    feed(&mut t, &sixel("\"1;1;8;32#0~-~-~-~-~")); // 1 col x 2 rows, cursor 1 row down
     let image = one_image(&mut t);
-    // Each linefeed at the bottom pushes the top line into history, so the two
-    // blank lines above the cursor scroll out and the image rows end at lines 0-1.
-    assert_eq!(t.total_lines(), 5, "two lines scrolled into history");
+    // The linefeed at the bottom pushes the top line into history: the image
+    // rows end at lines 1-2 and the cursor stays on the last line.
+    assert_eq!(t.total_lines(), 4, "one line scrolled into history");
     assert_eq!(
-        graphic_at(&t, 0, 0),
+        graphic_at(&t, 1, 0),
         Some(GraphicCell {
             id: image.id,
             col: 0,
@@ -186,7 +195,7 @@ fn image_at_the_bottom_scrolls_into_history() {
         })
     );
     assert_eq!(
-        graphic_at(&t, 1, 0),
+        graphic_at(&t, 2, 0),
         Some(GraphicCell {
             id: image.id,
             col: 0,
@@ -200,7 +209,6 @@ fn image_at_the_bottom_scrolls_into_history() {
 #[test]
 fn erase_and_overwrite_drop_the_reference() {
     let mut t = term(10, 5);
-    t.set_cell_size(8, 16);
     feed(&mut t, &sixel("\"1;1;16;16#0~"));
     assert!(graphic_at(&t, 0, 0).is_some());
     feed(&mut t, b"\x1b[1;2Hx"); // overwrite column 1
@@ -214,16 +222,30 @@ fn erase_and_overwrite_drop_the_reference() {
     assert!(t.take_graphics().is_empty(), "RIS drops pending images");
 }
 
+/// The band count, not the raster height, decides how far the cursor moves:
+/// two bands (top of the last at 6 px) stay on the row, four bands (18 px) too,
+/// five bands (24 px) move one row, as `bands * 6 / 20` on a VT340.
 #[test]
-fn cell_size_changes_the_row_count() {
-    let mut t = term(10, 6);
-    t.set_cell_size(4, 8);
-    feed(&mut t, &sixel("\"1;1;8;16#0~")); // 2 cols x 2 rows at 4 x 8
-    let _ = one_image(&mut t);
-    assert_eq!(t.grid().cursor.point.line, Line(2));
-    t.set_cell_size(0, 0); // ignored
-    feed(&mut t, &sixel("\"1;1;8;16#0~"));
-    assert_eq!(t.grid().cursor.point.line, Line(4));
+fn band_count_decides_the_cursor_row() {
+    for (body, rows_down) in [
+        ("#0~-~", 0),
+        ("#0~-~-~-~", 0),
+        ("#0~-~-~-~-~", 1),
+        ("#0~-~-~-~-~-~-~-~", 2),
+    ] {
+        let mut t = term(10, 8);
+        feed(&mut t, &sixel(&format!("\"1;1;8;60{body}")));
+        let _ = one_image(&mut t);
+        assert_eq!(t.grid().cursor.point.line, Line(rows_down), "{body}");
+        // Every one of the three cell rows the 60 px image covers is referenced.
+        for row in 0..3 {
+            assert_eq!(
+                graphic_at(&t, row, 0).map(|g| g.row),
+                Some(row as u16),
+                "{body} row {row}"
+            );
+        }
+    }
 }
 
 #[derive(Clone, Default)]

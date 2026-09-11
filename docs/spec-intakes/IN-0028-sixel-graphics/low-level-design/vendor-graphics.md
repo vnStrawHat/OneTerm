@@ -36,10 +36,14 @@ pub trait Handler {
 pub struct GraphicId(pub u64);                       // Copy, Eq, Hash, Debug (+ serde)
 pub struct GraphicCell { pub id: GraphicId, pub col: u16, pub row: u16 }   // in CellExtra
 pub struct GraphicData { pub id: GraphicId, pub width: u32, pub height: u32, pub rgba: Vec<u8> }
-pub(crate) struct Graphics { next_id: u64, pending: Vec<Arc<GraphicData>>, cell_size: (u16, u16) }
+pub(crate) struct Graphics { next_id: u64, pending: Vec<Arc<GraphicData>>, parser: Option<SixelParser> }
 pub(crate) struct SixelParser { ... }
 pub const MAX_DIMENSION: u32 = 4096;
+pub const VIRTUAL_CELL: (u32, u32) = (10, 20);
 ```
+
+`Graphics` holds `next_id`, `pending` and the in-flight `parser`. `SixelParser::finish`
+returns `DecodedSixel { width, height, rgba, cursor_rows }`.
 
 `CellExtra` gains `graphic: Option<GraphicCell>`; `Cell::graphic()`, `Cell::set_graphic()`.
 `set_underline_color`/`set_hyperlink` drop-`extra` conditions also test `graphic.is_none()`
@@ -80,28 +84,40 @@ per band and bounds a hostile one by the clamp (64 MB RGBA max).
 
 ### Placement (`Term::dcs_unhook`)
 
+Sixel pixels are measured in the **virtual VT340 cell of 10 x 20 px**
+(`graphics::VIRTUAL_CELL`), never in the real font cell. Windows conhost does the same
+(`SixelParser::CellSizeForLevel` in the Windows Terminal sources), and a ConPTY host keeps
+its own cursor model and re-syncs the terminal with absolute `CUP`s, so any other rule
+puts the prompt inside the image (acceptance rework, 2026-09-11). The renderer scales
+the image by `real cell / virtual cell`.
+
 ```text
-let (cw, ch) = self.graphics.cell_size;            // default (8, 16)
-let cols = min(ceil(width / cw), columns - cursor.col)
-let rows = ceil(height / ch)
-for r in 0..rows:
-    line = cursor.line
-    for c in 0..cols: grid[line][cursor.col + c].set_graphic(GraphicCell { id, col: c, row: r })
-    damage line (left = cursor.col, right = cursor.col + cols - 1)
-    if r + 1 < rows: self.linefeed()               // scroll region + scrollback rules
-self.linefeed(); self.carriage_return();           // cursor below the image, column 0
+cols        = min(ceil(width / 10), columns - cursor.col)
+rows        = ceil(height / 20)                  // cells that hold a fragment
+cursor_rows = bands_advanced * 6 / 20            // DEC / conhost: row holding the top of the last band
+for r in 0..max(rows, cursor_rows + 1):
+    line = cursor.line (+ r - cursor_rows once r > cursor_rows)
+    if r < rows and line on screen:
+        for c in 0..cols: grid[line][cursor.col + c].set_graphic(GraphicCell { id, col: c, row: r })
+        damage line (left = cursor.col, right = cursor.col + cols - 1)
+    if r < cursor_rows: self.linefeed()          // scroll region + scrollback rules
+// cursor: cursor_rows lines lower, same column (no carriage return)
 self.graphics.pending.push(Arc::new(GraphicData { .. }))
 ```
 
-`linefeed` scrolls the grid when the cursor is at the bottom of the scroll region, so an
-image taller than the screen leaves its top rows in scrollback, as xterm does with sixel
-scrolling enabled (DECSDM off, the default). Placement never touches `cell.c`, `fg`, `bg` or
-flags. A `GraphicCell` is overwritten together with `extra` when text is written into the
-cell (`write_at_cursor` copies the template `extra`), erased by `Cell::reset`, and moves
-with the row on scroll and resize.
+`bands_advanced` is the number of `-` seen, so a file that ends without `-` leaves the
+cursor on the image's last row and a trailing `-` may move it one further, exactly like
+conhost's `_imageCursor.y / cellSize.height`. Rows of fragments below the cursor row (a
+raster taller than the bands) are placed without moving the cursor and dropped when off
+screen. `linefeed` scrolls the grid when the cursor is at the bottom of the scroll region,
+so an image taller than the screen leaves its top rows in scrollback (sixel scrolling,
+DECSDM off). Placement never touches `cell.c`, `fg`, `bg` or flags. A `GraphicCell` is
+overwritten together with `extra` when text is written into the cell (`write_at_cursor`
+copies the template `extra`), erased by `Cell::reset`, and moves with the row on scroll and
+resize.
 
-`Term::take_graphics(&mut self) -> Vec<Arc<GraphicData>>` uses `mem::take`.
-`Term::set_cell_size(w, h)` ignores zero. `reset_state` clears `pending`.
+`Term::take_graphics(&mut self) -> Vec<Arc<GraphicData>>` uses `mem::take`. `reset_state`
+clears `pending`. There is no cell-size API: the engine never needs the real font cell.
 
 ### DA1
 
@@ -111,10 +127,10 @@ with the row on scroll and resize.
 
 - decoder: 2x2 image with two colours, repeat `!3`, HLS colour, raster attributes crop,
   clamp at `MAX_DIMENSION`, empty image places nothing.
-- placement: cursor at (2, 3) with cell 8x16 and a 20x20 image -> cells (2,3..5) and
-  (3,3..5) hold `(id, c, r)`, cursor ends at (4, 0); image at the last screen line scrolls
-  one line into history; `CSI 2J` clears the refs; typing over a cell drops its ref;
-  `take_graphics` returns the image once.
+- placement: cursor at (2, 3) and a 25x45 image with five bands -> cells (2..4, 3..5)
+  hold `(id, c, r)`, cursor ends at (3, 3); the band count alone decides the cursor rows;
+  an image at the last screen line scrolls into history; `CSI 2J` clears the refs; typing
+  over a cell drops its ref; `take_graphics` returns the image once.
 - DA1: `CSI c` yields a `PtyWrite("\x1b[?62;4c")` event.
 
 ## Patch generation

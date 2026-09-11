@@ -42,7 +42,7 @@ the image origin from that cell's `(col, row)` offset, and paints the whole imag
               ├─ Cell.graphic: Option<GraphicRef { id, col, row }>
               └─ paint pass: first visible cell per id ─▶ origin = cell_origin - (col*cw, row*ch)
                                                       ─▶ window.paint_image(Bounds{origin, (w,h)}, ..)
-        metrics change ─▶ session.set_cell_size(cw, ch) ─▶ Term::set_cell_size (image rows/cols)
+        (pixels are virtual 10 x 20 cells; the painter scales by real cell / virtual cell)
 ```
 
 ## UI Wireframe
@@ -72,20 +72,24 @@ bounds. `cls` erases the cells, so the image disappears.
    `None` and `dcs_put` drops bytes.
 3. `SixelParser` (LLD) decodes into `width x height` RGBA. Clamp: 4096 x 4096; bytes beyond
    are ignored. Missing raster attributes: size grows with the data.
-4. `dcs_unhook`: `cols = ceil(width / cell_w)`, `rows = ceil(height / cell_h)` with the cell
-   size from `Term::set_cell_size` (default 8 x 16 until the view pushes real metrics).
-   Columns beyond the grid width are not placed (the image is clipped on the right). For each
-   row: write `GraphicCell` into the covered cells (cell text and colours untouched), damage
-   the line, `linefeed()` (scrolls when at the bottom of the scroll region). Finally
-   `carriage_return()`. Cursor ends on the line after the image.
+4. `dcs_unhook`: `cols = ceil(width / 10)`, `rows = ceil(height / 20)` in the VT340 virtual
+   cell (`VIRTUAL_CELL`), the unit Windows conhost also uses, so a ConPTY host's cursor
+   model and ours agree. Columns beyond the grid width are not placed (the image is clipped
+   on the right). For each row: write `GraphicCell` into the covered cells (cell text and
+   colours untouched), damage the line; the cursor moves down `bands * 6 / 20` rows through
+   `linefeed()` (scrolls when at the bottom of the scroll region) and keeps its column, so
+   it ends on the row holding the top of the last sixel band, as DEC terminals do. The
+   program's own `\r\n` then moves below the image. (Acceptance rework 2026-09-11: the first
+   cut used the real cell size and moved the cursor below the image, which put the prompt
+   inside the image through conhost's absolute cursor syncs.)
 5. `Term::graphics.pending` receives `Arc<GraphicData { id, width, height, rgba }>`;
    `Term::take_graphics()` moves the vector out. `reset_state` (RIS) clears pending.
 6. `TerminalContent::refill` calls `take_graphics()` after `renderable_content()` and stores
    the vector in `TerminalContent.graphics`. `IndexedCell.cell` already clones the
    `Arc<CellExtra>`, so the graphic reference reaches the view for free.
-7. `TerminalInput::set_cell_size(width, height)` (default no-op) forwards to
-   `TerminalModel::set_cell_size` -> `Term::set_cell_size`. The view calls it from `prepaint`
-   whenever the metrics changed (same place as `resize`).
+7. The engine needs no font metrics; the view scales each image by
+   `cell_width / 10` and `line_height / 20` when painting, so a 600 x 450 Sixel covers
+   60 x 23 cells at any font size.
 8. View `Frame`: `graphics()` returns the new images; `Cell` gains
    `graphic: Option<GraphicRef>`. `RenderState.graphics: GraphicStore` converts RGBA to BGRA
    (GPUI's `RenderImage` layout, as `img.rs` does), builds `RenderImage::new(vec![Frame::new(buf)])`,
@@ -109,7 +113,8 @@ bounds. `cls` erases the cells, so the image disappears.
 | Text written over an image | GPUI paints polychrome sprites after glyphs, so the image covers the text | accepted for v1 (Sixel programs do not overlay text); `ponytail:` note in the painter, upgrade: per-row image bands in a lower layer |
 | Erased cells inside an image | whole image still painted from any surviving cell | accepted for v1; same upgrade path |
 | Evicted image still referenced by cells | nothing painted for those cells | bounded store is the memory contract; scrollback images older than 64 images vanish |
-| Cell size unknown at decode time | wrong row count | view pushes `set_cell_size` before the first byte can arrive (prepaint precedes the pump for a new session in practice); default 8 x 16 otherwise |
+| Cursor model differs from the ConPTY host | prompt drawn inside the image after conhost's absolute `CUP` | same virtual cell (10 x 20) and same final cursor row as conhost's `SixelParser`; verified against the Windows Terminal sources and a raw ConPTY capture |
+| ConPTY drops one byte per 32 KiB `WriteFile` inside a DCS (OpenConsole 1.23, seen with Git's `cat.exe`; cmd's `type` is intact) | garbled sixel bands ("black streaks") | not ours: reproduced with a raw pipe capture and no parser; candidate fix is bundling OpenConsole 1.24+ (owner decision) |
 | DA1 change | programs treat OneTerm as VT220 | xterm/mintty/foot report 62/64 + 4 already; no known regression |
 | Vendored patch drift | `refresh.sh --check` fails | patches regenerated with `git format-patch` per `vendor/README.md` § 4 |
 

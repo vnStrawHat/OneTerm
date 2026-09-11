@@ -641,7 +641,6 @@ pub trait TerminalInput: Send + Sync {
     fn flush_pty(&self);
     fn send_ctrl_c(&self);
     fn resize(&self, rows: u16, cols: u16) -> Result<(), TerminalError>;
-    fn set_cell_size(&self, width: u16, height: u16); // px; Sixel rows/cols (IN-0028)
     fn scroll(&self, delta: i32); fn scroll_to_bottom(&self); fn scroll_to_top(&self);
     fn mouse_down(&self, row: f32, col: f32, button: TerminalMouseButton, sel: SelectionType, mods: MouseModifiers);
     fn mouse_move(&self, row: f32, col: f32, mods: MouseModifiers);

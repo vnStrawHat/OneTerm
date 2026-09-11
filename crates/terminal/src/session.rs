@@ -330,9 +330,6 @@ pub trait TerminalInput: Send + Sync {
     fn send_ctrl_c(&self);
     /// Resize rows×cols (PTY resize / ssh window_change).
     fn resize(&self, rows: u16, cols: u16) -> Result<(), TerminalError>;
-    /// The cell size in pixels, so the engine can turn a Sixel image into rows and
-    /// columns. Called by the view whenever its font metrics change.
-    fn set_cell_size(&self, width: u16, height: u16);
     /// Scroll the scrollback (only when not alt-screen / not mouse mode).
     fn scroll(&self, delta: i32);
     /// Scroll to bottom (display_offset = 0) — used when there is new output.
@@ -588,10 +585,6 @@ macro_rules! impl_pty_terminal_session {
                     self.model().resize_grid(rows, cols);
                 }
                 Ok(())
-            }
-
-            fn set_cell_size(&self, width: u16, height: u16) {
-                self.model().set_cell_size(width, height);
             }
 
             fn scroll(&self, delta: i32) {

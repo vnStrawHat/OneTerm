@@ -166,11 +166,6 @@ impl FakeSessionProbe {
         *self.state.selection.lock().unwrap() = text;
     }
 
-    /// The last `set_cell_size` the session received (`(0, 0)` = never).
-    pub fn cell_size(&self) -> (u16, u16) {
-        *self.state.cell_size.lock().unwrap()
-    }
-
     /// Anchor an image fragment to a cell of future snapshots (as the engine
     /// does after a Sixel sequence).
     pub fn set_graphic(&self, line: i32, col: usize, fragment: GraphicCell) {
@@ -209,7 +204,6 @@ struct FakeSessionState {
     writes: Mutex<Vec<Vec<u8>>>,
     input_calls: Mutex<Vec<FakeInputCall>>,
     selection: Mutex<Option<String>>,
-    cell_size: Mutex<(u16, u16)>,
     /// `(display line, column, fragment)` applied to future snapshots.
     graphic_cells: Mutex<Vec<(i32, usize, GraphicCell)>>,
     /// Images handed out by the next render snapshot, once.
@@ -244,7 +238,6 @@ impl FakeTerminalSession {
             writes: Mutex::new(Vec::new()),
             input_calls: Mutex::new(Vec::new()),
             selection: Mutex::new(None),
-            cell_size: Mutex::new((0, 0)),
             graphic_cells: Mutex::new(Vec::new()),
             pending_graphics: Mutex::new(Vec::new()),
             event_tx,
@@ -487,10 +480,6 @@ impl TerminalInput for FakeTerminalSession {
         *self.state.rows_cols.lock().unwrap() = (rows.max(1) as usize, cols.max(1) as usize);
         self.state.full_damage.store(true, Ordering::SeqCst);
         Ok(())
-    }
-
-    fn set_cell_size(&self, width: u16, height: u16) {
-        *self.state.cell_size.lock().unwrap() = (width, height);
     }
 
     fn scroll(&self, delta: i32) {

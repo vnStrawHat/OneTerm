@@ -16,8 +16,20 @@ use crate::vte::Params;
 /// Largest width or height a Sixel image may have; pixels beyond it are dropped.
 pub const MAX_DIMENSION: u32 = 4096;
 
-/// Cell size assumed until the embedder calls `Term::set_cell_size`.
-pub const DEFAULT_CELL_SIZE: (u16, u16) = (8, 16);
+/// The virtual cell size Sixel pixels are measured in (VT240/VT340: 10 x 20), the
+/// same value Windows conhost uses, so the cursor rows an image consumes agree
+/// with a ConPTY host. The renderer scales the image to the real cell size.
+pub const VIRTUAL_CELL: (u32, u32) = (10, 20);
+
+/// A finished Sixel image.
+pub(crate) struct DecodedSixel {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+    /// Rows the text cursor moves down: the row that holds the top of the last
+    /// sixel band (`bands_advanced * 6 / 20`), as DEC terminals and conhost do.
+    pub cursor_rows: u32,
+}
 
 /// Identifier of a decoded image, unique per `Term`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -47,15 +59,13 @@ pub(crate) struct Graphics {
     next_id: u64,
     /// Images decoded since the embedder last took them.
     pub(crate) pending: Vec<Arc<GraphicData>>,
-    /// Cell size in pixels, used to turn an image into rows and columns.
-    pub(crate) cell_size: (u16, u16),
     /// The Sixel sequence currently being received, if any.
     pub(crate) parser: Option<SixelParser>,
 }
 
 impl Default for Graphics {
     fn default() -> Self {
-        Self { next_id: 1, pending: Vec::new(), cell_size: DEFAULT_CELL_SIZE, parser: None }
+        Self { next_id: 1, pending: Vec::new(), parser: None }
     }
 }
 
@@ -64,12 +74,6 @@ impl Graphics {
         let id = GraphicId(self.next_id);
         self.next_id += 1;
         id
-    }
-
-    pub(crate) fn set_cell_size(&mut self, width: u16, height: u16) {
-        if width > 0 && height > 0 {
-            self.cell_size = (width, height);
-        }
     }
 }
 
@@ -263,12 +267,13 @@ impl SixelParser {
         self.stride = new_stride;
     }
 
-    /// The finished image as `(width, height, rgba)`; `None` when nothing was drawn.
-    pub(crate) fn finish(self) -> Option<(u32, u32, Vec<u8>)> {
+    /// The finished image; `None` when nothing was drawn.
+    pub(crate) fn finish(self) -> Option<DecodedSixel> {
         let (width, height) = self.raster.unwrap_or((self.width, self.height));
         if width == 0 || height == 0 {
             return None;
         }
+        let cursor_rows = self.band.saturating_mul(6) / VIRTUAL_CELL.1;
         let mut rgba = vec![0u8; (width * height * 4) as usize];
         let buffered_rows = if self.stride == 0 { 0 } else { self.pixels.len() / self.stride as usize };
         let copy_w = width.min(self.stride) as usize;
@@ -279,7 +284,7 @@ impl SixelParser {
                 out.copy_from_slice(px);
             }
         }
-        Some((width, height, rgba))
+        Some(DecodedSixel { width, height, rgba, cursor_rows })
     }
 }
 

@@ -19,7 +19,9 @@ use crate::index::{self, Boundary, Column, Direction, Line, Point, Side};
 use crate::selection::{Selection, SelectionRange, SelectionType};
 use crate::term::cell::{Cell, Flags, LineLength};
 use crate::term::color::Colors;
-use crate::term::graphics::{GraphicCell, GraphicData, Graphics, SixelParser};
+use crate::term::graphics::{
+    DecodedSixel, GraphicCell, GraphicData, Graphics, SixelParser, VIRTUAL_CELL,
+};
 use crate::vi_mode::{ViModeCursor, ViMotion};
 use crate::vte::Params;
 use crate::vte::ansi::{
@@ -455,12 +457,6 @@ impl<T> Term<T> {
     /// returned exactly once; the grid cells keep their [`GraphicCell`] references.
     pub fn take_graphics(&mut self) -> Vec<Arc<GraphicData>> {
         mem::take(&mut self.graphics.pending)
-    }
-
-    /// OneTerm fork: the cell size in pixels, which decides how many rows and columns
-    /// an image covers. Zero is ignored.
-    pub fn set_cell_size(&mut self, width: u16, height: u16) {
-        self.graphics.set_cell_size(width, height);
     }
 
     /// Collect the information about the changes in the lines, which
@@ -2289,30 +2285,41 @@ impl<T: EventListener> Handler for Term<T> {
         }
     }
 
-    /// OneTerm fork: place the finished image at the cursor (xterm Sixel scrolling
-    /// model). Every covered cell gets a [`GraphicCell`]; the cursor moves down one
-    /// line per image row through `linefeed`, so the scroll region and scrollback
-    /// apply, and ends on the line below the image at column 0.
+    /// OneTerm fork: place the finished image at the cursor the way DEC terminals
+    /// and Windows conhost do (Sixel scrolling mode). Pixels are measured in
+    /// [`VIRTUAL_CELL`] units; every covered cell gets a [`GraphicCell`]; the
+    /// cursor moves down through `linefeed` (scroll region and scrollback apply)
+    /// onto the row that holds the top of the last sixel band, and keeps its
+    /// column. Rows of the image below that row are placed without moving the
+    /// cursor and clipped at the bottom of the screen.
     fn dcs_unhook(&mut self) {
         let Some(parser) = self.graphics.parser.take() else { return };
-        let Some((width, height, rgba)) = parser.finish() else { return };
+        let Some(image) = parser.finish() else { return };
+        let DecodedSixel { width, height, rgba, cursor_rows } = image;
         let id = self.graphics.next_id();
-        let (cell_w, cell_h) = self.graphics.cell_size;
         let start = self.grid.cursor.point.column.0;
-        let cols = (width.div_ceil(u32::from(cell_w)) as usize).min(self.columns() - start);
-        let rows = height.div_ceil(u32::from(cell_h)) as usize;
-        for row in 0..rows {
-            let line = self.grid.cursor.point.line;
-            for col in 0..cols {
-                let cell = GraphicCell { id, col: col as u16, row: row as u16 };
-                self.grid[line][Column(start + col)].set_graphic(Some(cell));
+        let cols = (width.div_ceil(VIRTUAL_CELL.0) as usize).min(self.columns() - start);
+        let rows = height.div_ceil(VIRTUAL_CELL.1) as usize;
+        let cursor_rows = cursor_rows as usize;
+        for row in 0..rows.max(cursor_rows + 1) {
+            let line = if row <= cursor_rows {
+                self.grid.cursor.point.line
+            } else {
+                self.grid.cursor.point.line + (row - cursor_rows) as i32
+            };
+            if row < rows && line.0 < self.screen_lines() as i32 {
+                for col in 0..cols {
+                    let cell = GraphicCell { id, col: col as u16, row: row as u16 };
+                    self.grid[line][Column(start + col)].set_graphic(Some(cell));
+                }
+                if cols > 0 {
+                    self.damage.damage_line(line.0 as usize, start, start + cols - 1);
+                }
             }
-            if cols > 0 {
-                self.damage.damage_line(line.0 as usize, start, start + cols - 1);
+            if row < cursor_rows {
+                self.linefeed();
             }
-            self.linefeed();
         }
-        self.carriage_return();
         self.graphics.pending.push(Arc::new(GraphicData { id, width, height, rgba }));
     }
 

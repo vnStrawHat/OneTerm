@@ -13,7 +13,7 @@ Created: 2026-09-11
 - [x] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -33,7 +33,7 @@ images / 64 MB of decoded pixels.
 
 - [x] In scope: `image` workspace dependency (core types only); `Frame::graphics()`,
   `Cell.graphic`; `GraphicStore` (`render/graphics.rs`) in `RenderState`; `paint_graphics`
-  pass; `set_cell_size` call from `prepaint`; IN-0018 HLD paint row, `docs/osc-sequences-checklist.md`,
+  pass scaled by real cell / virtual cell; IN-0018 HLD paint row, `docs/osc-sequences-checklist.md`,
   `docs/agents/dependencies.md`, `README.md`; GUI walk with a generated Sixel file.
 - [x] Out of scope: per-row image bands (text over image, partial erase); selection colour
   over images; a setting to disable graphics.
@@ -52,6 +52,12 @@ images / 64 MB of decoded pixels.
   the image scrolls into history and comes back clipped at the grid edge, `cls` removes it
   (`evidence/gui-walk.md`, `evidence/US-0067-*.png`).
 - [x] `pwsh scripts/ci-local.ps1` green (2026-09-11).
+- [x] Acceptance rework (owner trial, 2026-09-11): after `type snake.six` the prompt and the
+  next command's echo appear below the image (GUI,
+  `evidence/US-0067-rework-prompt-below-image.png`, 600 x 450 px drawn as 60 x 23 cells); the
+  "black streaks" seen with `cat snake.six` are ConPTY dropping one byte per 32 KiB write
+  inside the DCS (reproduced without OneTerm's parser; `type` is intact) and are recorded
+  as a host limitation, not fixed here.
 
 ## Documentation
 
@@ -96,7 +102,8 @@ describes it as clipping by the grid bounds, which holds.
 - [x] `frame.rs`: `GraphicRef`, `Cell.graphic`, `Frame::graphics()`.
 - [x] `graphics.rs`: `GraphicStore` (ingest, get, evict + `drop_image`); `FrameStats.images`
   and `images_uploaded`.
-- [x] `element.rs`: `set_cell_size` on metrics change; `paint_graphics` pass; tests.
+- [x] `element.rs`: `paint_graphics` pass (rework: image bounds = pixels x real cell /
+  virtual 10 x 20 cell; the `set_cell_size` push was removed); tests.
 - [x] Docs, GUI walk (`evidence/make_sixel.py` writes the test card).
 - [x] CI.
 
@@ -124,10 +131,23 @@ describes it as clipping by the grid bounds, which holds.
   `store_uploads_once_and_evicts_oldest` and `sixel_image_paints_once_per_frame`.
 - GUI: `evidence/gui-walk.md` with three crops; the local cmd shell's `type` carried the DCS
   through ConPTY unchanged.
+- Rework (2026-09-11, owner trial with libsixel's `snake.six`): the cursor landed inside
+  the image because conhost measures Sixel in a virtual 10 x 20 cell and puts the cursor on
+  the last band's row, then re-syncs the terminal with `CSI row;col H`. Diagnosis chain:
+  decoding the file straight through the engine was pixel-perfect; a raw ConPTY capture
+  showed one verbatim DCS followed by `\x1b[28;35H` for the next command; conhost's
+  `SixelParser.cpp` confirmed the virtual cell and `_updateTextCursor`. The engine now uses
+  the same model and the painter scales images by real cell / virtual cell, so the image is
+  drawn 10 % narrower/shorter than its pixel size on a 9 x 18 cell (as in Windows Terminal).
+- Rework, "black streaks": reproduced only with Git's `cat.exe`; a parser-free capture of
+  the ConPTY output showed 7 bytes missing from the 262,914-byte DCS, the first at offset
+  32,769 (one per 32 KiB `WriteFile`). cmd's `type` delivers the sequence intact. Host
+  limitation of the bundled OpenConsole 1.23.2512 (`evidence/US-0067-rework-conpty-cat-byte-loss.png`);
+  Windows Terminal 1.24.11911 (2026-07) exists and is the candidate upgrade.
 - Gaps: text typed over an image is hidden by it and a partially erased image is painted
   whole (`ponytail:` note in `paint_graphics`, DEC-0012 upgrade path); selection quads sit
-  under images; HiDPI maps image pixels to logical pixels (upscaled on a 2x display); no
-  real Sixel producer or SSH host available for the walk; XTSMGRAPHICS queries unanswered.
+  under images; images are scaled to the cell (bilinear), so pixel art is not 1:1; no real
+  Sixel producer or SSH host available for the walk; XTSMGRAPHICS queries unanswered.
 
 ## Handoff
 

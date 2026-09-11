@@ -25,7 +25,9 @@ mod sixel_tests;
 pub mod test_support;
 pub mod url_policy;
 
-pub use alacritty_terminal::term::graphics::{GraphicCell, GraphicData, GraphicId};
+pub use alacritty_terminal::term::graphics::{
+    GraphicCell, GraphicData, GraphicId, VIRTUAL_CELL as SIXEL_VIRTUAL_CELL,
+};
 pub use backend::{
     DefaultColors, GridSize, OscRouter, PtyTransport, SessionEventSink, SharedSessionState,
     SharedState, TerminalPump,
