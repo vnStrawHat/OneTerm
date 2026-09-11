@@ -18,6 +18,7 @@ use super::diagnostics::FrameStats;
 use super::diagnostics::LatencySamples;
 use super::frame::{Fnv1a, Frame, GridSize};
 use super::glyphs::{FontSet, GlyphCache};
+use super::graphics::GraphicStore;
 use super::metrics::{CellMetrics, GridGeometry, measure};
 use super::overlay::{RowSpan, SearchHighlight, SearchRect, search_rects, selection_rects};
 use super::plan_cache::{PlanCache, StyleKey};
@@ -150,6 +151,10 @@ pub(crate) struct RenderState {
     pub gutter: GutterLabels,
     /// The grid last pushed to `session.resize`.
     pub last_grid: Option<GridSize>,
+    /// The cell size last pushed to `session.set_cell_size`.
+    pub last_cell_size: Option<(u16, u16)>,
+    /// Sixel images by id, GPU-ready.
+    pub graphics: GraphicStore,
     pub stats: FrameStats,
     #[cfg(any(test, feature = "terminal-diagnostics"))]
     pub latency: LatencySamples,
@@ -175,6 +180,8 @@ impl RenderState {
             scratch: Scratch::new(),
             gutter: GutterLabels::default(),
             last_grid: None,
+            last_cell_size: None,
+            graphics: GraphicStore::default(),
             stats: FrameStats::default(),
             #[cfg(any(test, feature = "terminal-diagnostics"))]
             latency: LatencySamples::new(),

@@ -379,3 +379,46 @@ fn render_has_single_alacritty_file() {
         "only frame.rs may name the engine crate: {offenders:?}"
     );
 }
+
+/// A 2 x 2 cell Sixel image: uploaded once, painted once per frame from its
+/// first visible cell, gone when its cells lose their references.
+#[gpui::test]
+fn sixel_image_paints_once_per_frame(cx: &mut TestAppContext) {
+    use oneterm_terminal::{GraphicCell, GraphicData, GraphicId};
+    let mut h = Harness::open(cx, 6, 12, "", inputs_without_cursor());
+    let _ = h.first_frame();
+    assert!(
+        h.probe.cell_size().0 > 0 && h.probe.cell_size().1 > 0,
+        "cell size pushed to the session: {:?}",
+        h.probe.cell_size()
+    );
+    let id = GraphicId(7);
+    h.probe.push_graphic(std::sync::Arc::new(GraphicData {
+        id,
+        width: 16,
+        height: 16,
+        rgba: vec![255; 16 * 16 * 4],
+    }));
+    for (line, col, row, column) in [(1, 2, 0, 0), (1, 3, 0, 1), (2, 2, 1, 0), (2, 3, 1, 1)] {
+        h.probe.set_graphic(
+            line,
+            col,
+            GraphicCell {
+                id,
+                col: column,
+                row,
+            },
+        );
+    }
+    let stats = h.draw();
+    assert_eq!((stats.images_uploaded, stats.images), (1, 1), "{stats:?}");
+    let stats = h.draw();
+    assert_eq!(
+        (stats.images_uploaded, stats.images),
+        (0, 1),
+        "known id is not re-uploaded: {stats:?}"
+    );
+    h.probe.clear_graphics();
+    let stats = h.draw();
+    assert_eq!(stats.images, 0, "{stats:?}");
+}

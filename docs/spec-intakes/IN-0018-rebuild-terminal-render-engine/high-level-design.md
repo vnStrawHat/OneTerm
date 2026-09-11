@@ -187,13 +187,15 @@ Per frame:
 | Phase | Work | GPUI calls |
 | --- | --- | --- |
 | `request_layout` | none | `window.request_layout(Style{size: full}, [], cx)` |
-| `prepaint` | `GridGeometry` from bounds; resize session if `(rows, cols)` changed; `frame.snapshot`; `plan_cache.update`; overlays; cursor; gutter labels for visible rows | `insert_hitbox(bounds, Normal)` |
-| `paint` | layer 1: bg quads → shape quads → search quads → selection quads → underlines/strikes → glyphs (mono/subpixel via `paint_glyph`, emoji via `paint_emoji`) → gutter glyphs; layer 2: cursor quads and cursor glyph | `paint_layer`, `paint_quad`, `paint_underline`, `paint_strikethrough`, `paint_glyph`, `paint_emoji`, `set_cursor_style`, `handle_input` |
+| `prepaint` | `GridGeometry` from bounds; resize session if `(rows, cols)` changed; push `set_cell_size` if the cell pixel size changed; `frame.snapshot`; upload new Sixel images into the `GraphicStore`; `plan_cache.update`; overlays; cursor; gutter labels for visible rows | `insert_hitbox(bounds, Normal)` |
+| `paint` | layer 1: bg quads → shape quads → search quads → selection quads → Sixel images (one `paint_image` per visible image, anchored at its first visible cell, clipped to the grid bounds; IN-0028) → underlines/strikes → glyphs (mono/subpixel via `paint_glyph`, emoji via `paint_emoji`) → gutter glyphs; layer 2: cursor quads and cursor glyph | `paint_layer`, `paint_quad`, `paint_image`, `paint_underline`, `paint_strikethrough`, `paint_glyph`, `paint_emoji`, `set_cursor_style`, `handle_input` |
 
 Quads inside one layer keep insertion order, so backgrounds, then shapes, then translucent
 search/selection produce the intended stacking; the kind order (Quad → Underline → Sprite)
 guarantees glyphs over quads regardless of call order. The cursor needs its own layer
-because a block cursor must cover glyphs.
+because a block cursor must cover glyphs. Images are polychrome sprites, drawn after the
+monochrome glyph sprites, so text inside an image's cells sits under the image (accepted in
+IN-0028; per-row bands in a lower layer are the upgrade).
 
 All quad edges are computed as `origin + px(device_x / scale)` from whole-device-pixel values so
 `snap_bounds` reproduces identical edges for abutting cells (no seams, no double coverage).
@@ -214,6 +216,7 @@ input handlers):
 | `scratch` | run text `String`, class `Vec<u8>`, line text `String`, `char_cols: Vec<u16>`, `char_wide`, rect scratch, two `Vec<usize>` of open rects, label `String` |
 | `fonts: FontSet` + cached `CellMetrics` | four font variants with keys, rebuilt on font/size change; metrics re-measured on font/size/factor/override/scale change |
 | `gutter: GutterLabels` | one shaped label per row (`ShapedLine` clones from the glyph cache) + gutter width |
+| `graphics: GraphicStore` | Sixel images by id as `Arc<RenderImage>` (BGRA), insertion order; oldest evicted past 64 images or 64 MB with `drop_image`; `last_cell_size` remembers what was pushed to the session (IN-0028) |
 | `stats: FrameStats` | always compiled (plain counters) |
 | `latency: LatencySamples`, `log` | cfg(any(test, feature = "terminal-diagnostics")) / cfg(feature) |
 

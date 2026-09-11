@@ -10,8 +10,8 @@ Created: 2026-09-11
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
-- [ ] In progress
-- [ ] Implemented
+- [x] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -31,26 +31,27 @@ images / 64 MB of decoded pixels.
 
 ## Scope
 
-- [ ] In scope: `image` workspace dependency (core types only); `Frame::graphics()`,
-  `Cell.graphic`; `GraphicStore` in `RenderState`; `paint_graphics` pass; `set_cell_size`
-  call from `prepaint`; IN-0018 HLD paint row, `docs/osc-sequences-checklist.md`,
+- [x] In scope: `image` workspace dependency (core types only); `Frame::graphics()`,
+  `Cell.graphic`; `GraphicStore` (`render/graphics.rs`) in `RenderState`; `paint_graphics`
+  pass; `set_cell_size` call from `prepaint`; IN-0018 HLD paint row, `docs/osc-sequences-checklist.md`,
   `docs/agents/dependencies.md`, `README.md`; GUI walk with a generated Sixel file.
-- [ ] Out of scope: per-row image bands (text over image, partial erase); selection colour
+- [x] Out of scope: per-row image bands (text over image, partial erase); selection colour
   over images; a setting to disable graphics.
 
 ## Acceptance
 
-- [ ] A frame whose snapshot carries a new image registers it once; the same id in later
-  frames is not re-uploaded (store test).
-- [ ] The 65th image (or the first over 64 MB) evicts the oldest and the evicted id is no
-  longer painted (store test).
-- [ ] A visible image contributes exactly one `paint_image` call per frame, at the origin
-  derived from its first visible cell (paint stats test with a fake session whose grid holds
-  graphic cells).
-- [ ] GUI (Windows): a generated 96 x 48 Sixel test card prints in a local shell at the cursor,
-  the prompt returns below it, scrolling moves it, `cls` removes it
-  (`evidence/US-0067-*.png`).
-- [ ] `pwsh scripts/ci-local.ps1` green.
+- [x] A frame whose snapshot carries a new image registers it once; the same id in later
+  frames is not re-uploaded (`graphics::tests::store_uploads_once_and_evicts_oldest`,
+  `element_tests::sixel_image_paints_once_per_frame` via `images_uploaded`).
+- [x] Past the image or byte cap the oldest entry is evicted and its id is no longer served
+  (`store_uploads_once_and_evicts_oldest` with test limits; production caps 64 / 64 MB).
+- [x] A visible image contributes exactly one `paint_image` call per frame and none once its
+  cells lose their references (`sixel_image_paints_once_per_frame`, `stats.images`); the
+  origin rule (`cell origin - fragment offset`) is exercised by the GUI walk.
+- [x] GUI (Windows): the 96 x 48 test card prints at the cursor, `after` follows below it,
+  the image scrolls into history and comes back clipped at the grid edge, `cls` removes it
+  (`evidence/gui-walk.md`, `evidence/US-0067-*.png`).
+- [x] `pwsh scripts/ci-local.ps1` green (2026-09-11).
 
 ## Documentation
 
@@ -71,7 +72,12 @@ Reason: each enumerates the thing this packet adds.
 
 ### Reconciliation
 
-Pending.
+Changed: IN-0018 HLD (prepaint/paint rows, primitive-order note, `graphics: GraphicStore`
+row), `docs/osc-sequences-checklist.md` § Group J and the status summary,
+`docs/agents/dependencies.md` § 3 (`image`), `README.md` § Terminal emulator. The published
+`gpui-pre 0.3.3` `paint_image` takes `(bounds, image_bounds, ..)` and draws their
+intersection, so the grid bounds clip the image without a content mask; IN-0028 HLD step 9
+describes it as clipping by the grid bounds, which holds.
 
 ## Context
 
@@ -85,12 +91,14 @@ Pending.
 
 ## Plan
 
-- [ ] `Cargo.toml`: `image = { version = "0.25", default-features = false }`; terminal-view
+- [x] `Cargo.toml`: `image = { version = "0.25", default-features = false }`; terminal-view
   dependency.
-- [ ] `frame.rs`: `GraphicRef`, `Cell.graphic`, `Frame::graphics()`.
-- [ ] `state.rs`: `GraphicStore` (insert, get, evict + `drop_image`), `FrameStats.images`.
-- [ ] `element.rs`: `set_cell_size` on metrics change; `paint_graphics` pass; tests.
-- [ ] Docs, CI, GUI walk (Python Sixel encoder in the scratchpad writes the test card).
+- [x] `frame.rs`: `GraphicRef`, `Cell.graphic`, `Frame::graphics()`.
+- [x] `graphics.rs`: `GraphicStore` (ingest, get, evict + `drop_image`); `FrameStats.images`
+  and `images_uploaded`.
+- [x] `element.rs`: `set_cell_size` on metrics change; `paint_graphics` pass; tests.
+- [x] Docs, GUI walk (`evidence/make_sixel.py` writes the test card).
+- [x] CI.
 
 ## Decisions
 
@@ -103,16 +111,23 @@ Pending.
 - GUI: fast-dev build, `type` the Sixel file through `chcp 65001`, screenshots.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
+- [x] Unit proof
 - [ ] Integration proof
-- [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] E2E proof
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-Pending.
+- `cargo test -p oneterm-terminal-view`: 284 passed (2026-09-11), including
+  `store_uploads_once_and_evicts_oldest` and `sixel_image_paints_once_per_frame`.
+- GUI: `evidence/gui-walk.md` with three crops; the local cmd shell's `type` carried the DCS
+  through ConPTY unchanged.
+- Gaps: text typed over an image is hidden by it and a partially erased image is painted
+  whole (`ponytail:` note in `paint_graphics`, DEC-0012 upgrade path); selection quads sit
+  under images; HiDPI maps image pixels to logical pixels (upscaled on a 2x display); no
+  real Sixel producer or SSH host available for the walk; XTSMGRAPHICS queries unanswered.
 
 ## Handoff
 

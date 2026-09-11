@@ -9,6 +9,7 @@ pub(crate) mod diagnostics;
 pub(crate) mod element;
 pub(crate) mod frame;
 pub(crate) mod glyphs;
+pub(crate) mod graphics;
 pub(crate) mod metrics;
 pub(crate) mod overlay;
 pub(crate) mod plan_cache;

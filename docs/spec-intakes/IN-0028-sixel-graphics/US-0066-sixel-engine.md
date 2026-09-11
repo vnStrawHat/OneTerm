@@ -53,7 +53,8 @@ out once, and DA1 advertises Sixel.
   erase_and_overwrite_drop_the_reference, cell_size_changes_the_row_count}`.
 - [x] `CSI c` answers `\x1b[?62;4c` (`primary_device_attributes_advertise_sixel`).
 - [x] `bash vendor/refresh.sh --check` passes with the new patches (2026-09-11).
-- [ ] `pwsh scripts/ci-local.ps1` green.
+- [x] `pwsh scripts/ci-local.ps1` green (2026-09-11, run once for the intake with US-0067 on
+  the same branch).
 
 ## Documentation
 
@@ -95,7 +96,7 @@ Changed: `vendor/README.md` § 2 (patches `vte/0002`, `alacritty_terminal/0003`)
   series, implement, export patches, `refresh.sh --check`.
 - [x] `oneterm-terminal`: snapshot field, trait method, model, macro, fake session, tests.
 - [x] Docs.
-- [ ] `ci-local` (run once for the intake after US-0067).
+- [x] `ci-local` (run once for the intake after US-0067).
 
 ## Decisions
 
@@ -111,8 +112,8 @@ Changed: `vendor/README.md` § 2 (patches `vte/0002`, `alacritty_terminal/0003`)
 - [x] Unit proof
 - [ ] Integration proof
 - [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
