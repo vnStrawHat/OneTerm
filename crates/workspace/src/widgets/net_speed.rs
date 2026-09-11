@@ -10,10 +10,10 @@
 use std::time::Duration;
 
 use gpui::{App, Entity, WeakEntity, Window};
-use gpui_component::dock::DockArea;
+use gpui_component::{Icon, IconName, dock::DockArea};
 use oneterm_terminal::NetStats;
 
-use super::status_text::StatusText;
+use super::status_text::{Label, StatusText};
 
 /// Indicator showing the network speed (bps) of the active SSH session.
 pub fn net_speed(
@@ -26,16 +26,17 @@ pub fn net_speed(
         "net-speed",
         Duration::from_secs(1),
         false,
+        Some(Icon::new(IconName::Network)),
         Box::new(move |cx| {
             let dock_area = dock_area.upgrade();
             let stats =
                 dock_area.and_then(|area| oneterm_state::active_terminal::net_stats(&area, cx));
             let (rx_bps, tx_bps) = sample(&mut last_stats, stats)?;
-            Some(format!(
+            Some(Label::from(format!(
                 "↓ {}  ↑ {}",
                 format_speed(rx_bps),
                 format_speed(tx_bps)
-            ))
+            )))
         }),
         window,
         cx,

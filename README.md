@@ -85,7 +85,7 @@ OneTerm is a Terminal application for SSH/SFTP/Local Shell with a **Zed-style wo
 
 - Zed-style workspace with a flexible DockArea, left / right / bottom docks, and center tabs
 - Multiple concurrent sessions across tabs
-- Title bar, menu bar, status bar, zoom, and quick close
+- Title bar, menu bar, status bar (clock, cwd breadcrumb, git branch/dirty state of the local shell, network speed, CPU/memory), zoom, and quick close
 - Remembers dock layout across sessions (`docks.json`)
 
 ### ⚙️ Settings & theming

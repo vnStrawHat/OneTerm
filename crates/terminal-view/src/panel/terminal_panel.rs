@@ -27,7 +27,8 @@ use oneterm_actions::{
 use oneterm_core::{InputChannel, LocalShellConfig, SessionDuplicateConfig, ShellKind};
 use oneterm_settings::TabTitleMode;
 use oneterm_state::AppServices;
-use oneterm_terminal::{PtySize, TerminalSession};
+use oneterm_terminal::{PtySize, SessionKind, TerminalSession};
+use std::path::PathBuf;
 
 use crate::input::edit;
 use crate::security::security_policy_from_settings;
@@ -311,6 +312,16 @@ impl TerminalPanel {
         let view = self.tree.active_terminal()?;
         let cwd = view.read(cx).session.read(cx).cwd()?;
         Some(cwd.display().to_string())
+    }
+
+    /// The OSC 7 cwd of the active Space when its session is a local shell.
+    /// `None` for SSH (the path is remote), an empty Space, or no cwd yet.
+    pub(crate) fn local_cwd(&self, cx: &App) -> Option<PathBuf> {
+        let view = self.tree.active_terminal()?;
+        let session = view.read(cx).session.read(cx);
+        (session.kind() == SessionKind::Local)
+            .then(|| session.cwd())
+            .flatten()
     }
 
     /// Number of Spaces in this tab.

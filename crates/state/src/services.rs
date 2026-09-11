@@ -163,9 +163,16 @@ mod tests {
         ) -> Option<oneterm_terminal::NetStats> {
             None
         }
+        fn local_cwd(
+            _: &gpui::Entity<gpui_component::dock::DockArea>,
+            _: &gpui::App,
+        ) -> Option<std::path::PathBuf> {
+            None
+        }
         ActiveTerminalMetricsProvider {
             breadcrumb,
             net_stats,
+            local_cwd,
         }
     }
 

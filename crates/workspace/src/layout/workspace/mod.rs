@@ -13,7 +13,7 @@ use gpui_component::dock::{DockArea, DockSkin, PanelStyle};
 use oneterm_state::AppState;
 
 use crate::layout::{statusbar, title_bar::AppTitleBar};
-use crate::widgets::{StatusText, breadcrumb, datetime_clock, net_speed, resource};
+use crate::widgets::{StatusText, breadcrumb, datetime_clock, git_status, net_speed, resource};
 
 pub(crate) mod actions;
 mod dock_skin;
@@ -79,6 +79,9 @@ pub struct OneTermWorkspace {
     /// Breadcrumb (cwd + foreground process) indicator — created once so the
     /// 500ms timer fires reliably.
     pub breadcrumb: Entity<StatusText>,
+    /// Git status of the active local terminal's cwd — created once so the
+    /// 500ms timer fires reliably.
+    pub git_status: Entity<StatusText>,
     /// CPU/memory resource indicator — created once so the 2s timer fires reliably.
     pub resource: Entity<StatusText>,
     last_layout_state: Option<gpui_component::dock::DockAreaState>,
@@ -189,6 +192,7 @@ impl OneTermWorkspace {
         let clock = datetime_clock(window, cx);
         let net_speed = net_speed(dock_area.downgrade(), window, cx);
         let breadcrumb = breadcrumb(dock_area.downgrade(), window, cx);
+        let git_status = git_status(dock_area.downgrade(), window, cx);
         let resource = resource(window, cx);
 
         let me = Self {
@@ -198,6 +202,7 @@ impl OneTermWorkspace {
             clock,
             net_speed,
             breadcrumb,
+            git_status,
             resource,
             last_layout_state: None,
             _save_layout_task: None,
@@ -313,15 +318,7 @@ impl Render for OneTermWorkspace {
             .flex_col()
             .child(self.title_bar.clone())
             .child(div().flex_1().min_h_0().child(self.dock_area.clone()))
-            .child(statusbar::build_status_bar(
-                &self.dock_area,
-                self.clock.clone(),
-                self.net_speed.clone(),
-                self.breadcrumb.clone(),
-                self.resource.clone(),
-                window,
-                cx,
-            ))
+            .child(statusbar::build_status_bar(self, window, cx))
             .children(sheet_layer)
             .children(dialog_layer)
             .children(notification_layer)

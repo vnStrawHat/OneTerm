@@ -1,9 +1,10 @@
 //! Status-bar metric extractors for the active terminal panel.
 //!
 //! Registered into the low `oneterm-state` crate at init so the shell's
-//! breadcrumb / network-speed widgets can read the active terminal's metrics
+//! breadcrumb / network-speed / git-status widgets can read the active terminal's metrics
 //! without depending on `TerminalPanel`. This keeps the shell feature-agnostic.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::{App, Entity, Window};
@@ -38,11 +39,18 @@ fn active_net_stats(dock_area: &Entity<DockArea>, cx: &App) -> Option<NetStats> 
         .find_map(|panel| panel.read(cx).network_stats(cx))
 }
 
+/// Cwd of the active terminal panel when it is a local shell.
+fn active_local_cwd(dock_area: &Entity<DockArea>, cx: &App) -> Option<PathBuf> {
+    let panel = active_terminal_panels(dock_area, cx).into_iter().next()?;
+    panel.read(cx).local_cwd(cx)
+}
+
 /// The active-terminal metric extractors this feature contributes to `AppServices`.
 pub fn status_metrics() -> ActiveTerminalMetricsProvider {
     ActiveTerminalMetricsProvider {
         breadcrumb: active_breadcrumb,
         net_stats: active_net_stats,
+        local_cwd: active_local_cwd,
     }
 }
 

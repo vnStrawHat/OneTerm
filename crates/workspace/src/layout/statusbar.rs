@@ -1,12 +1,12 @@
-//! Status bar — left side: datetime clock + network speed + breadcrumb;
+//! Status bar — left side: datetime clock + breadcrumb + git status;
 //! right side: resource indicator (CPU/memory) + toggle Right Dock.
 //!
-//! The clock, net-speed, breadcrumb, and resource entities are created once in
+//! The clock, net-speed, breadcrumb, git-status, and resource entities are created once in
 //! `OneTermWorkspace::new` and passed in here, avoiding a fresh one each render
 //! (which would drop the timer Task → updates stop).
 
-use gpui::{Context, Entity, Styled, Window, div, px};
-use gpui_component::dock::{DockArea, DockEvent, DockPlacement};
+use gpui::{Context, Styled, Window, div, px};
+use gpui_component::dock::{DockEvent, DockPlacement};
 use gpui_component::{
     ActiveTheme as _, IconName, Sizable,
     button::{Button, ButtonVariants as _},
@@ -14,22 +14,22 @@ use gpui_component::{
 };
 
 use crate::layout::OneTermWorkspace;
-use crate::widgets::StatusText;
 
 /// Build the `StatusBar` for `OneTermWorkspace`.
 ///
-/// The clock entity (`clock`) is held by the workspace and created only once so the
-/// 1s timer fires reliably — not recreated each render.
+/// The indicator entities are read from the workspace, which created them once
+/// so their timers fire reliably — not recreated each render.
 pub fn build_status_bar(
-    dock_area: &Entity<DockArea>,
-    clock: Entity<StatusText>,
-    net_speed: Entity<StatusText>,
-    breadcrumb: Entity<StatusText>,
-    resource: Entity<StatusText>,
+    workspace: &OneTermWorkspace,
     _window: &mut Window,
     cx: &mut Context<OneTermWorkspace>,
 ) -> StatusBar {
-    let dock_area = dock_area.clone();
+    let dock_area = workspace.dock_area.clone();
+    let clock = workspace.clock.clone();
+    let net_speed = workspace.net_speed.clone();
+    let breadcrumb = workspace.breadcrumb.clone();
+    let git_status = workspace.git_status.clone();
+    let resource = workspace.resource.clone();
 
     StatusBar::new()
         // Sync the top border color with the Dock border (cx.theme().border)
@@ -40,6 +40,11 @@ pub fn build_status_bar(
             div().w(px(1.)).h(px(12.)).bg(cx.theme().border),
         )
         .left(breadcrumb)
+        .left(
+            // Separator + git status (branch, dirty marker, ahead/behind).
+            div().w(px(1.)).h(px(12.)).bg(cx.theme().border),
+        )
+        .left(git_status)
         .right(net_speed)
         .right(
             // Separator before the toggle button.

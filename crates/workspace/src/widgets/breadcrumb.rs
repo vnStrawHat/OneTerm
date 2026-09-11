@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use gpui::{App, Entity, WeakEntity, Window};
-use gpui_component::dock::DockArea;
+use gpui_component::{Icon, IconName, dock::DockArea};
 
 use super::status_text::StatusText;
 
@@ -20,9 +20,10 @@ pub fn breadcrumb(
         "breadcrumb-indicator",
         Duration::from_millis(500),
         true,
+        Some(Icon::new(IconName::FolderOpen)),
         Box::new(move |cx| {
             let dock_area = dock_area.upgrade()?;
-            oneterm_state::active_terminal::breadcrumb(&dock_area, cx)
+            oneterm_state::active_terminal::breadcrumb(&dock_area, cx).map(Into::into)
         }),
         window,
         cx,

@@ -1,10 +1,12 @@
 //! Injectable "active terminal metrics" provider.
 //!
-//! The status-bar widgets (breadcrumb, network speed) live in the shell but must
+//! The status-bar widgets (breadcrumb, network speed, git status) live in the shell but must
 //! not depend on the terminal feature crate. Instead, the terminal feature
 //! contributes extractor functions to [`crate::AppServices`] at init; the
 //! widgets call them each tick. This preserves the exact polling behavior while
 //! removing the shell → feature type dependency.
+
+use std::path::PathBuf;
 
 use gpui::{App, Entity};
 use gpui_component::dock::DockArea;
@@ -19,6 +21,8 @@ pub struct ActiveTerminalMetricsProvider {
     pub breadcrumb: fn(&Entity<DockArea>, &App) -> Option<String>,
     /// Network stats (rx/tx bytes) of the active terminal panel.
     pub net_stats: fn(&Entity<DockArea>, &App) -> Option<NetStats>,
+    /// Cwd (OSC 7) of the active terminal panel when it is a local shell.
+    pub local_cwd: fn(&Entity<DockArea>, &App) -> Option<PathBuf>,
 }
 
 /// Breadcrumb label of the active terminal panel, or `None` if no active
@@ -30,4 +34,10 @@ pub fn breadcrumb(dock_area: &Entity<DockArea>, cx: &App) -> Option<String> {
 /// Network stats of the active terminal panel, or `None` if unavailable.
 pub fn net_stats(dock_area: &Entity<DockArea>, cx: &App) -> Option<NetStats> {
     (AppServices::active_terminal_metrics(cx).net_stats)(dock_area, cx)
+}
+
+/// Cwd of the active terminal panel when it is a local shell, or `None` for
+/// an SSH session or before the shell reported a cwd.
+pub fn local_cwd(dock_area: &Entity<DockArea>, cx: &App) -> Option<PathBuf> {
+    (AppServices::active_terminal_metrics(cx).local_cwd)(dock_area, cx)
 }

@@ -35,9 +35,10 @@
 use std::time::Duration;
 
 use gpui::{App, Entity, Window};
+use gpui_component::{Icon, IconName};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
-use super::status_text::StatusText;
+use super::status_text::{Label, StatusText};
 
 /// Only the two fields the indicator shows — the default kind also walks
 /// disk usage, the exe path, and (on Windows) every process thread (PERF-28).
@@ -69,6 +70,7 @@ pub fn resource(window: &mut Window, cx: &mut App) -> Entity<StatusText> {
         "resource-indicator",
         Duration::from_secs(2),
         false,
+        Some(Icon::new(IconName::Cpu)),
         Box::new(move |_| {
             let pid = pid?;
             sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, refresh_kind());
@@ -79,11 +81,11 @@ pub fn resource(window: &mut Window, cx: &mut App) -> Entity<StatusText> {
             // Use virtual_memory (PrivateUsage on Windows = private committed
             // bytes) instead of memory() (full working set including shared
             // DLLs) — closer to Task Manager's default "Memory" column.
-            Some(format!(
+            Some(Label::from(format!(
                 "CPU {:.1}%  MEM {}",
                 process.cpu_usage() / nb_cpus,
                 format_memory(process.virtual_memory())
-            ))
+            )))
         }),
         window,
         cx,

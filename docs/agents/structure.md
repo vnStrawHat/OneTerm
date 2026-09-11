@@ -106,7 +106,7 @@ OneTerm/
 │   │       ├── app_state.rs        # AppState (global): primary DockArea + per-workspace active terminal/SFTP context
 │   │       ├── services.rs         # AppServices (single injection bundle)
 │   │       ├── commands.rs         # WorkspaceCommands fn-pointer struct (shell → feature inversion, read via AppServices)
-│   │       ├── active_terminal.rs  # ActiveTerminalMetricsProvider (breadcrumb/net stats hook, contributed by terminal-view)
+│   │       ├── active_terminal.rs  # ActiveTerminalMetricsProvider (breadcrumb/net stats/local cwd hook, contributed by terminal-view)
 │   │       ├── agent_focus.rs      # AgentFocuser (agent-ui → terminal focus hook, contributed by terminal-view)
 │   │       ├── agent_model.rs      # Folded OSC 9;7 agent card model (+ agent_model_tests.rs)
 │   │       ├── agent_registry.rs   # AgentRegistry (global Entity): fold/lifecycle/stale/summary behind the Agent Panel
@@ -132,7 +132,7 @@ OneTerm/
 │   │       ├── lib.rs              # Re-export OneTermWorkspace
 │   │       ├── layout/             # title_bar, app_menus, statusbar, workspace/{mod,actions,layout,persistence,zoom}
 │   │       │                       #   builds feature panels by NAME via gpui-component PanelRegistry
-│   │       └── widgets/            # statusbar widgets (breadcrumb, net_speed, datetime_clock, resource)
+│   │       └── widgets/            # statusbar widgets (breadcrumb, git_status, net_speed, datetime_clock, resource)
 │   │
 │   ├── terminal-view/              # `oneterm-terminal-view` — TERMINAL feature (has terminal-diagnostics feat)
 │   │   ├── assets/highlight/       # default.json semantic style asset (include_str!)
