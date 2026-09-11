@@ -19,7 +19,9 @@ use crate::index::{self, Boundary, Column, Direction, Line, Point, Side};
 use crate::selection::{Selection, SelectionRange, SelectionType};
 use crate::term::cell::{Cell, Flags, LineLength};
 use crate::term::color::Colors;
+use crate::term::graphics::{GraphicCell, GraphicData, Graphics, SixelParser};
 use crate::vi_mode::{ViModeCursor, ViMotion};
+use crate::vte::Params;
 use crate::vte::ansi::{
     self, Attr, CharsetIndex, Color, CursorShape, CursorStyle, Handler, Hyperlink, KeyboardModes,
     KeyboardModesApplyBehavior, NamedColor, NamedMode, NamedPrivateMode, PrivateMode, Rgb,
@@ -28,6 +30,7 @@ use crate::vte::ansi::{
 
 pub mod cell;
 pub mod color;
+pub mod graphics;
 pub mod search;
 
 /// Minimum number of columns.
@@ -327,6 +330,9 @@ pub struct Term<T> {
 
     /// Config directly for the terminal.
     config: Config,
+
+    /// OneTerm fork: Sixel decoder state and images not yet taken by the embedder.
+    graphics: Graphics,
 }
 
 /// Configuration options for the [`Term`].
@@ -441,7 +447,20 @@ impl<T> Term<T> {
             selection: Default::default(),
             title: Default::default(),
             mode: Default::default(),
+            graphics: Default::default(),
         }
+    }
+
+    /// OneTerm fork: images decoded since the last call, oldest first. Each image is
+    /// returned exactly once; the grid cells keep their [`GraphicCell`] references.
+    pub fn take_graphics(&mut self) -> Vec<Arc<GraphicData>> {
+        mem::take(&mut self.graphics.pending)
+    }
+
+    /// OneTerm fork: the cell size in pixels, which decides how many rows and columns
+    /// an image covers. Zero is ignored.
+    pub fn set_cell_size(&mut self, width: u16, height: u16) {
+        self.graphics.set_cell_size(width, height);
     }
 
     /// Collect the information about the changes in the lines, which
@@ -1258,7 +1277,9 @@ impl<T: EventListener> Handler for Term<T> {
         match intermediate {
             None => {
                 trace!("Reporting primary device attributes");
-                let text = String::from("\x1b[?6c");
+                // OneTerm fork: VT220 with Sixel graphics (4), so `tmux`, `lsix`,
+                // `chafa` and `timg` pick Sixel.
+                let text = String::from("\x1b[?62;4c");
                 self.event_proxy.send_event(Event::PtyWrite(text));
             },
             Some('>') => {
@@ -1846,6 +1867,9 @@ impl<T: EventListener> Handler for Term<T> {
         }
         self.active_charset = Default::default();
         self.cursor_style = None;
+        // OneTerm fork: images not yet taken by the embedder die with the screen.
+        self.graphics.pending.clear();
+        self.graphics.parser = None;
         self.grid.reset();
         self.inactive_grid.reset();
         self.scroll_region = Line(0)..Line(self.screen_lines() as i32);
@@ -2250,6 +2274,46 @@ impl<T: EventListener> Handler for Term<T> {
             params: params.iter().map(|p| p.to_vec()).collect(),
             bell_terminated,
         });
+    }
+
+    /// OneTerm fork: only Sixel (`DCS q`) is decoded; other DCS sequences are dropped.
+    #[inline]
+    fn dcs_hook(&mut self, params: &Params, _intermediates: &[u8], _ignore: bool, action: char) {
+        self.graphics.parser = (action == 'q').then(|| SixelParser::new(params));
+    }
+
+    #[inline]
+    fn dcs_put(&mut self, byte: u8) {
+        if let Some(parser) = self.graphics.parser.as_mut() {
+            parser.put(byte);
+        }
+    }
+
+    /// OneTerm fork: place the finished image at the cursor (xterm Sixel scrolling
+    /// model). Every covered cell gets a [`GraphicCell`]; the cursor moves down one
+    /// line per image row through `linefeed`, so the scroll region and scrollback
+    /// apply, and ends on the line below the image at column 0.
+    fn dcs_unhook(&mut self) {
+        let Some(parser) = self.graphics.parser.take() else { return };
+        let Some((width, height, rgba)) = parser.finish() else { return };
+        let id = self.graphics.next_id();
+        let (cell_w, cell_h) = self.graphics.cell_size;
+        let start = self.grid.cursor.point.column.0;
+        let cols = (width.div_ceil(u32::from(cell_w)) as usize).min(self.columns() - start);
+        let rows = height.div_ceil(u32::from(cell_h)) as usize;
+        for row in 0..rows {
+            let line = self.grid.cursor.point.line;
+            for col in 0..cols {
+                let cell = GraphicCell { id, col: col as u16, row: row as u16 };
+                self.grid[line][Column(start + col)].set_graphic(Some(cell));
+            }
+            if cols > 0 {
+                self.damage.damage_line(line.0 as usize, start, start + cols - 1);
+            }
+            self.linefeed();
+        }
+        self.carriage_return();
+        self.graphics.pending.push(Arc::new(GraphicData { id, width, height, rgba }));
     }
 
     #[inline]

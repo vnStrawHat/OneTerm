@@ -29,8 +29,10 @@ Keep these values synchronized with root `Cargo.toml`, `vendor/refresh.sh`, and 
 The patches implement a single-pass OSC/clear hook: the embedder receives OSC payloads and screen clears as terminal events, so OneTerm never has to run a second VT parser over the same byte stream.
 
 - `patches/vte/0001` adds `Handler::report_osc(params, bell_terminated)` and forwards otherwise-unhandled OSC sequences to the embedder.
+- `patches/vte/0002` adds `Handler::dcs_hook/dcs_put/dcs_unhook` (default no-ops) and forwards DCS sequences to them instead of dropping them.
 - `patches/alacritty_terminal/0001` makes the crate manifest standalone outside the upstream workspace.
 - `patches/alacritty_terminal/0002` adds `Event::Osc` and `Event::ClearScreen`, forwarding parser and terminal events without a second parsing pass.
+- `patches/alacritty_terminal/0003` adds Sixel graphics (IN-0028): `term::graphics` (streaming `SixelParser`, `GraphicId`/`GraphicCell`/`GraphicData`), `CellExtra.graphic` with `Cell::graphic()`/`set_graphic()`, the `Term` DCS handlers that decode `DCS q` and anchor the image to the cells under the cursor (moving the cursor below it through `linefeed`), `Term::take_graphics()`, `Term::set_cell_size()`, and a DA1 answer of `CSI ? 62 ; 4 c`.
 
 Patch files are the only OneTerm-owned source delta and should read as the fork changelog.
 

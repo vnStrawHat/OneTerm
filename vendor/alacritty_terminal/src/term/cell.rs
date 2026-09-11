@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::grid::{self, GridCell};
 use crate::index::Column;
+use crate::term::graphics::GraphicCell;
 use crate::vte::ansi::{Color, Hyperlink as VteHyperlink, NamedColor};
 
 bitflags! {
@@ -126,6 +127,8 @@ pub struct CellExtra {
     zerowidth: Vec<char>,
     underline_color: Option<Color>,
     hyperlink: Option<Hyperlink>,
+    /// OneTerm fork: the image fragment anchored to this cell.
+    graphic: Option<GraphicCell>,
 }
 
 /// Content and attributes of a single cell in the terminal grid.
@@ -180,10 +183,9 @@ impl Cell {
     pub fn set_underline_color(&mut self, color: Option<Color>) {
         // If we reset color and we don't have zerowidth we should drop extra storage.
         if color.is_none()
-            && self
-                .extra
-                .as_ref()
-                .is_none_or(|extra| extra.zerowidth.is_empty() && extra.hyperlink.is_none())
+            && self.extra.as_ref().is_none_or(|extra| {
+                extra.zerowidth.is_empty() && extra.hyperlink.is_none() && extra.graphic.is_none()
+            })
         {
             self.extra = None;
         } else {
@@ -201,16 +203,40 @@ impl Cell {
     /// Set hyperlink.
     pub fn set_hyperlink(&mut self, hyperlink: Option<Hyperlink>) {
         let should_drop = hyperlink.is_none()
-            && self
-                .extra
-                .as_ref()
-                .is_none_or(|extra| extra.zerowidth.is_empty() && extra.underline_color.is_none());
+            && self.extra.as_ref().is_none_or(|extra| {
+                extra.zerowidth.is_empty()
+                    && extra.underline_color.is_none()
+                    && extra.graphic.is_none()
+            });
 
         if should_drop {
             self.extra = None;
         } else {
             let extra = self.extra.get_or_insert(Default::default());
             Arc::make_mut(extra).hyperlink = hyperlink;
+        }
+    }
+
+    /// OneTerm fork: the image fragment anchored to this cell.
+    #[inline]
+    pub fn graphic(&self) -> Option<GraphicCell> {
+        self.extra.as_ref()?.graphic
+    }
+
+    /// OneTerm fork: anchor an image fragment to this cell (`None` removes it).
+    pub fn set_graphic(&mut self, graphic: Option<GraphicCell>) {
+        let should_drop = graphic.is_none()
+            && self.extra.as_ref().is_none_or(|extra| {
+                extra.zerowidth.is_empty()
+                    && extra.underline_color.is_none()
+                    && extra.hyperlink.is_none()
+            });
+
+        if should_drop {
+            self.extra = None;
+        } else {
+            let extra = self.extra.get_or_insert(Default::default());
+            Arc::make_mut(extra).graphic = graphic;
         }
     }
 

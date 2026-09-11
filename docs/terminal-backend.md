@@ -155,6 +155,12 @@ O(window×cols)); there is deliberately no damage-free full-grid snapshot — an
 O(rows×cols) clone per event is a footgun. Every one of them is a short lock too, so the pump and the
 UI contend only briefly (see the "never block inside a `Term` callback" rule in §5.3).
 
+The snapshot also carries `graphics`: the Sixel images the vendored `Term` decoded since
+the previous snapshot (`Term::take_graphics`, each image handed out once). Cells reference
+them through `Cell::graphic()` (`GraphicCell { id, col, row }`), so an image scrolls, is
+erased and is resized with its cells; the view keeps the pixels in a bounded store
+(IN-0028, DEC-0012).
+
 ```rust
 // Pump (ShellEventLoop / ssh_main_task) — per read chunk:
 pump.advance(&mut *term.lock(), bytes);       // parse under the Term lock
@@ -635,6 +641,7 @@ pub trait TerminalInput: Send + Sync {
     fn flush_pty(&self);
     fn send_ctrl_c(&self);
     fn resize(&self, rows: u16, cols: u16) -> Result<(), TerminalError>;
+    fn set_cell_size(&self, width: u16, height: u16); // px; Sixel rows/cols (IN-0028)
     fn scroll(&self, delta: i32); fn scroll_to_bottom(&self); fn scroll_to_top(&self);
     fn mouse_down(&self, row: f32, col: f32, button: TerminalMouseButton, sel: SelectionType, mods: MouseModifiers);
     fn mouse_move(&self, row: f32, col: f32, mods: MouseModifiers);

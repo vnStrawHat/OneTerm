@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::cell::Cell;
+use alacritty_terminal::term::graphics::{GraphicCell, GraphicData};
 use alacritty_terminal::term::{RenderableCursor, TermMode};
 use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
 use async_channel::{Receiver, Sender, TrySendError};
@@ -164,6 +165,33 @@ impl FakeSessionProbe {
     pub fn set_selection(&self, text: Option<String>) {
         *self.state.selection.lock().unwrap() = text;
     }
+
+    /// The last `set_cell_size` the session received (`(0, 0)` = never).
+    pub fn cell_size(&self) -> (u16, u16) {
+        *self.state.cell_size.lock().unwrap()
+    }
+
+    /// Anchor an image fragment to a cell of future snapshots (as the engine
+    /// does after a Sixel sequence).
+    pub fn set_graphic(&self, line: i32, col: usize, fragment: GraphicCell) {
+        self.state
+            .graphic_cells
+            .lock()
+            .unwrap()
+            .push((line, col, fragment));
+        self.state.full_damage.store(true, Ordering::SeqCst);
+    }
+
+    /// Remove every image fragment from future snapshots.
+    pub fn clear_graphics(&self) {
+        self.state.graphic_cells.lock().unwrap().clear();
+        self.state.full_damage.store(true, Ordering::SeqCst);
+    }
+
+    /// Hand `image` out with the next render snapshot, once.
+    pub fn push_graphic(&self, image: Arc<GraphicData>) {
+        self.state.pending_graphics.lock().unwrap().push(image);
+    }
 }
 
 /// A deterministic in-memory implementation of [`TerminalSession`].
@@ -181,6 +209,11 @@ struct FakeSessionState {
     writes: Mutex<Vec<Vec<u8>>>,
     input_calls: Mutex<Vec<FakeInputCall>>,
     selection: Mutex<Option<String>>,
+    cell_size: Mutex<(u16, u16)>,
+    /// `(display line, column, fragment)` applied to future snapshots.
+    graphic_cells: Mutex<Vec<(i32, usize, GraphicCell)>>,
+    /// Images handed out by the next render snapshot, once.
+    pending_graphics: Mutex<Vec<Arc<GraphicData>>>,
     event_tx: Sender<SessionEvent>,
     full_damage: AtomicBool,
     fail_writes: AtomicBool,
@@ -211,6 +244,9 @@ impl FakeTerminalSession {
             writes: Mutex::new(Vec::new()),
             input_calls: Mutex::new(Vec::new()),
             selection: Mutex::new(None),
+            cell_size: Mutex::new((0, 0)),
+            graphic_cells: Mutex::new(Vec::new()),
+            pending_graphics: Mutex::new(Vec::new()),
             event_tx,
             full_damage: AtomicBool::new(true),
             fail_writes: AtomicBool::new(false),
@@ -267,6 +303,7 @@ impl FakeTerminalSession {
             }
         }
 
+        let graphic_cells = self.state.graphic_cells.lock().unwrap();
         let cells = characters
             .into_iter()
             .enumerate()
@@ -275,19 +312,31 @@ impl FakeTerminalSession {
                 let col = index % cols;
                 let mut cell = Cell::default();
                 cell.c = character;
+                if let Some((_, _, fragment)) = graphic_cells
+                    .iter()
+                    .find(|(line, column, _)| *line == row as i32 && *column == col)
+                {
+                    cell.set_graphic(Some(*fragment));
+                }
                 IndexedCell {
                     point: Point::new(Line(row as i32), Column(col)),
                     cell,
                 }
             })
             .collect();
+        drop(graphic_cells);
 
-        let damage = if damage == DamageMode::Consume
-            && self.state.full_damage.swap(false, Ordering::SeqCst)
-        {
-            TermDamageInfo::Full
+        let (damage, graphics) = if damage == DamageMode::Consume {
+            let full = self.state.full_damage.swap(false, Ordering::SeqCst);
+            let graphics = std::mem::take(&mut *self.state.pending_graphics.lock().unwrap());
+            let damage = if full {
+                TermDamageInfo::Full
+            } else {
+                TermDamageInfo::Partial(Vec::new())
+            };
+            (damage, graphics)
         } else {
-            TermDamageInfo::Partial(Vec::new())
+            (TermDamageInfo::Partial(Vec::new()), Vec::new())
         };
 
         let (cursor_line, cursor_col) = *self.state.cursor.lock().unwrap();
@@ -306,6 +355,7 @@ impl FakeTerminalSession {
                 num_cols: cols,
             },
             damage,
+            graphics,
         }
     }
 }
@@ -437,6 +487,10 @@ impl TerminalInput for FakeTerminalSession {
         *self.state.rows_cols.lock().unwrap() = (rows.max(1) as usize, cols.max(1) as usize);
         self.state.full_damage.store(true, Ordering::SeqCst);
         Ok(())
+    }
+
+    fn set_cell_size(&self, width: u16, height: u16) {
+        *self.state.cell_size.lock().unwrap() = (width, height);
     }
 
     fn scroll(&self, delta: i32) {

@@ -12,11 +12,14 @@
 //! `Point`) are `alacritty_terminal` types — the UI crate also depends on
 //! `alacritty_terminal`, so they map directly.
 
+use std::sync::Arc;
+
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::selection::SelectionRange;
 use alacritty_terminal::term::cell::{Cell, Flags};
+use alacritty_terminal::term::graphics::GraphicData;
 use alacritty_terminal::term::{RenderableCursor, Term, TermDamage, TermMode};
 
 use super::color_classification::is_default_background_color;
@@ -103,12 +106,16 @@ pub struct TerminalContent {
     /// Dirty rows from `Term::damage()` — converted to display line indices.
     /// The renderer skips layout for rows not in this list.
     pub damage: TermDamageInfo,
+    /// Images decoded since the previous snapshot (Sixel), each handed out once;
+    /// the cells reference them through `Cell::graphic()`.
+    pub graphics: Vec<Arc<GraphicData>>,
 }
 
 impl std::fmt::Debug for TerminalContent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TerminalContent")
             .field("cells_len", &self.cells.len())
+            .field("graphics_len", &self.graphics.len())
             .field("cursor_shape", &self.cursor.shape)
             .field("mode", &self.mode)
             .field("display_offset", &self.display_offset)
@@ -138,6 +145,7 @@ impl Default for TerminalContent {
                 num_cols: 0,
             },
             damage: TermDamageInfo::Full,
+            graphics: Vec::new(),
         }
     }
 }
@@ -205,6 +213,8 @@ impl TerminalContent {
         self.display_offset = display_offset;
         self.total_lines = term.total_lines();
         self.selection = selection;
+        // `mem::take` inside: no allocation when no image arrived.
+        self.graphics = term.take_graphics();
         self.terminal_bounds = TerminalBounds {
             num_lines,
             num_cols: term.columns(),

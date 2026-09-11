@@ -207,6 +207,11 @@ impl<EP: EventListener> TerminalModel<EP> {
         term.columns() != cols as usize || term.screen_lines() != rows as usize
     }
 
+    /// The cell size in pixels for Sixel placement (zero is ignored by the engine).
+    pub fn set_cell_size(&self, width: u16, height: u16) {
+        self.term.lock().set_cell_size(width, height);
+    }
+
     /// Actually resize the terminal grid. Should be called **after** `pty_resize`.
     ///
     /// Follows the session's [`ResizePolicy`].
