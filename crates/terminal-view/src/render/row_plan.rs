@@ -44,6 +44,12 @@ pub(crate) struct TextRunPlan {
     pub line: ShapedLine,
     pub color_start: u32,
     pub color_end: u32,
+    /// Range into `RowPlan::cell_starts`: the run-text byte offset where each
+    /// of the run's cells begins. The painter anchors every glyph at the cell
+    /// its byte index falls in, so a ligature (one glyph for several bytes)
+    /// does not pull the following glyphs left.
+    pub cells_start: u32,
+    pub cells_end: u32,
 }
 
 /// A quad of a shape glyph; `rect.x` is measured from the grid's left edge,
@@ -77,6 +83,7 @@ pub(crate) struct RowPlan {
     pub bg: Vec<BgSpan>,
     pub text: Vec<TextRunPlan>,
     pub colors: Vec<ColorSpan>,
+    pub cell_starts: Vec<u32>,
     pub shapes: Vec<ShapeQuad>,
     pub decorations: Vec<DecorationSpan>,
 }
@@ -87,6 +94,7 @@ impl RowPlan {
         self.bg.clear();
         self.text.clear();
         self.colors.clear();
+        self.cell_starts.clear();
         self.shapes.clear();
         self.decorations.clear();
     }
@@ -98,6 +106,10 @@ impl RowPlan {
 
     pub(crate) fn colors_of(&self, run: &TextRunPlan) -> &[ColorSpan] {
         &self.colors[run.color_start as usize..run.color_end as usize]
+    }
+
+    pub(crate) fn cells_of(&self, run: &TextRunPlan) -> &[u32] {
+        &self.cell_starts[run.cells_start as usize..run.cells_end as usize]
     }
 }
 
@@ -261,6 +273,7 @@ struct OpenRun {
     font: FontKey,
     forced: bool,
     color_start: u32,
+    cells_start: u32,
     last_color: Hsla,
 }
 
@@ -306,6 +319,8 @@ impl RowBuilder<'_, '_> {
             line,
             color_start: run.color_start,
             color_end: self.plan.colors.len() as u32,
+            cells_start: run.cells_start,
+            cells_end: self.plan.cell_starts.len() as u32,
         });
         self.scratch.run_text.clear();
     }
@@ -333,10 +348,12 @@ impl RowBuilder<'_, '_> {
                 font,
                 forced,
                 color_start: self.plan.colors.len() as u32 - 1,
+                cells_start: self.plan.cell_starts.len() as u32,
                 last_color: style.fg,
             });
         }
         let text_len = self.scratch.run_text.len() as u32;
+        self.plan.cell_starts.push(text_len);
         if let Some(run) = self.run.as_mut() {
             if run.last_color != style.fg {
                 if let Some(last) = self.plan.colors.last_mut() {
@@ -814,6 +831,11 @@ mod tests {
         assert_eq!(plan.text.len(), 1);
         assert_eq!(plan.text[0].cols, 3);
         assert_eq!(plan.text[0].line.len(), "ab\u{301}c".len());
+        assert_eq!(
+            plan.cells_of(&plan.text[0]),
+            &[0, 1, 4],
+            "the mark shares its base cell"
+        );
     }
 
     #[gpui::test]

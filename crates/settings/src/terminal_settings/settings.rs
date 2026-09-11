@@ -95,6 +95,10 @@ pub struct TerminalSettings {
     pub font_weight: FontWeight,
     /// Font features (OpenType): e.g. ["calt", "liga"].
     pub font_features: Vec<SharedString>,
+    /// Contextual ligatures (`calt`) on; an explicit `calt` in `font_features` wins.
+    pub font_ligatures: bool,
+    /// Fallback families for glyphs the primary font lacks, in priority order.
+    pub font_fallbacks: Vec<SharedString>,
 
     // ── Cursor ──
     /// Cursor shape (Block/Bar/Underline).

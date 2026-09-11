@@ -89,10 +89,16 @@ impl RenderInputs {
     pub(crate) fn style_key(&self) -> StyleKey {
         let mut family = Fnv1a::new();
         family.write(self.font.family.as_bytes());
+        // Features and fallbacks share one hash: both change how a run is
+        // shaped without changing the family, size or weight.
         let mut features = Fnv1a::new();
         for (name, value) in self.font.features.0.iter() {
             features.write(name.as_bytes());
             features.write_u32(*value);
+        }
+        for family in self.font.fallbacks.iter().flat_map(|f| f.fallback_list()) {
+            features.write(family.as_bytes());
+            features.write_u32(0);
         }
         StyleKey {
             font_family: family.finish() as u32,

@@ -47,6 +47,8 @@ pub(super) struct CachedFont {
     family: SharedString,
     weight: FontWeight,
     features: Vec<SharedString>,
+    fallbacks: Vec<SharedString>,
+    ligatures: bool,
     font: Font,
 }
 
@@ -56,6 +58,8 @@ impl CachedFont {
         self.family == *family
             && self.weight == settings.font_weight
             && self.features == settings.font_features
+            && self.fallbacks == settings.font_fallbacks
+            && self.ligatures == settings.font_ligatures
     }
 }
 
@@ -413,6 +417,8 @@ impl TerminalView {
             family: family.clone(),
             weight: settings.font_weight,
             features: settings.font_features.clone(),
+            fallbacks: settings.font_fallbacks.clone(),
+            ligatures: settings.font_ligatures,
             font: font.clone(),
         });
         font
@@ -463,16 +469,26 @@ impl TerminalView {
 /// Build the terminal GPUI font from settings: `calt` (ligatures) off unless
 /// listed in `font_features`; every listed feature is enabled.
 pub(super) fn terminal_font(settings: &TerminalSettings, font_family: &SharedString) -> Font {
-    let mut features: Vec<(String, u32)> = vec![("calt".to_string(), 0)];
+    let mut features: Vec<(String, u32)> =
+        vec![("calt".to_string(), u32::from(settings.font_ligatures))];
     for f in &settings.font_features {
         features.retain(|(tag, _)| tag != f);
         features.push((f.to_string(), 1u32));
     }
+    let fallbacks = (!settings.font_fallbacks.is_empty()).then(|| {
+        gpui::FontFallbacks::from_fonts(
+            settings
+                .font_fallbacks
+                .iter()
+                .map(|f| f.to_string())
+                .collect(),
+        )
+    });
     Font {
         family: font_family.clone(),
         weight: settings.font_weight,
         style: gpui::FontStyle::Normal,
-        fallbacks: None,
+        fallbacks,
         features: gpui::FontFeatures(std::sync::Arc::new(features)),
     }
 }
@@ -624,14 +640,45 @@ mod tests {
     }
 
     #[test]
-    fn font_disables_ligatures_unless_requested() {
-        let settings = TerminalSettings::default();
-        let font = terminal_font(&settings, &SharedString::from("Mono"));
-        assert!(
-            font.features
+    fn font_calt_follows_the_ligatures_switch() {
+        let calt = |settings: &TerminalSettings| {
+            terminal_font(settings, &SharedString::from("Mono"))
+                .features
                 .0
                 .iter()
-                .any(|(tag, on)| tag == "calt" && *on == 0)
+                .find(|(tag, _)| tag == "calt")
+                .map(|(_, on)| *on)
+        };
+        assert_eq!(calt(&TerminalSettings::default()), Some(1));
+        let off = TerminalSettings {
+            font_ligatures: false,
+            ..TerminalSettings::default()
+        };
+        assert_eq!(calt(&off), Some(0));
+    }
+
+    #[test]
+    fn font_carries_the_configured_fallbacks() {
+        let settings = TerminalSettings::default();
+        let font = terminal_font(&settings, &SharedString::from("Mono"));
+        let list = font.fallbacks.as_ref().map(|f| f.fallback_list().to_vec());
+        assert_eq!(
+            list.as_deref(),
+            Some(
+                &[
+                    "Symbols Nerd Font Mono".to_string(),
+                    "Symbols Nerd Font".to_string()
+                ][..]
+            )
+        );
+        let none = TerminalSettings {
+            font_fallbacks: Vec::new(),
+            ..TerminalSettings::default()
+        };
+        assert!(
+            terminal_font(&none, &SharedString::from("Mono"))
+                .fallbacks
+                .is_none()
         );
     }
 
@@ -639,6 +686,7 @@ mod tests {
     fn font_enables_listed_features_and_overrides_calt() {
         let settings = TerminalSettings {
             font_features: vec!["calt".into(), "ss01".into()],
+            font_ligatures: false,
             ..TerminalSettings::default()
         };
         let font = terminal_font(&settings, &SharedString::from("Mono"));
@@ -656,9 +704,21 @@ mod tests {
             family: family.clone(),
             weight: settings.font_weight,
             features: settings.font_features.clone(),
+            fallbacks: settings.font_fallbacks.clone(),
+            ligatures: settings.font_ligatures,
             font: terminal_font(&settings, &family),
         };
         assert!(cached.matches(&family, &settings));
+        let no_ligatures = TerminalSettings {
+            font_ligatures: false,
+            ..TerminalSettings::default()
+        };
+        assert!(!cached.matches(&family, &no_ligatures));
+        let other_fallbacks = TerminalSettings {
+            font_fallbacks: vec!["Noto Sans Symbols".into()],
+            ..TerminalSettings::default()
+        };
+        assert!(!cached.matches(&family, &other_fallbacks));
         assert!(!cached.matches(&SharedString::from("Other"), &settings));
         let bold = TerminalSettings {
             font_weight: gpui::FontWeight::BOLD,

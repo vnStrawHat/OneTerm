@@ -54,6 +54,8 @@ impl TerminalSettings {
             base_font_size: font.size,
             font_weight: parse_weight(&font.weight),
             font_features: font.features.iter().map(|s| s.clone().into()).collect(),
+            font_ligatures: font.ligatures,
+            font_fallbacks: font.fallbacks.iter().map(|s| s.clone().into()).collect(),
 
             cursor_shape: TerminalCursorShape::from_str(&cursor.shape),
             cursor_blink: if cursor.blink {

@@ -75,6 +75,8 @@ impl TerminalSettings {
                 size: self.base_font_size,
                 weight: weight_to_string(self.font_weight),
                 features: self.font_features.iter().map(|s| s.to_string()).collect(),
+                ligatures: self.font_ligatures,
+                fallbacks: self.font_fallbacks.iter().map(|s| s.to_string()).collect(),
             },
             cursor: CursorConfig {
                 shape: shape_to_string(self.cursor_shape).to_string(),

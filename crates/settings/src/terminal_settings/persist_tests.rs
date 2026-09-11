@@ -33,6 +33,8 @@ fn assert_settings_eq(actual: &TerminalSettings, expected: &TerminalSettings) {
     assert_eq!(actual.base_font_size, expected.base_font_size);
     assert_eq!(actual.font_weight, expected.font_weight);
     assert_eq!(actual.font_features, expected.font_features);
+    assert_eq!(actual.font_fallbacks, expected.font_fallbacks);
+    assert_eq!(actual.font_ligatures, expected.font_ligatures);
     assert_eq!(actual.cursor_shape, expected.cursor_shape);
     assert_eq!(actual.cursor_blink, expected.cursor_blink);
     assert_eq!(actual.cursor_color, expected.cursor_color);
@@ -63,6 +65,8 @@ fn non_default_settings() -> TerminalSettings {
     s.base_font_size = Some(15.0);
     s.font_weight = FontWeight::SEMIBOLD;
     s.font_features = vec!["calt".into(), "liga".into()];
+    s.font_fallbacks = vec!["Noto Sans Symbols".into()];
+    s.font_ligatures = false;
     s.cursor_shape = TerminalCursorShape::Bar;
     s.cursor_blink = TerminalBlink::Off;
     s.cursor_color = parse_hex_color("#FF8800");

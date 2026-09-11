@@ -12,11 +12,35 @@ use gpui::{
 use oneterm_terminal::TerminalSession;
 use oneterm_terminal::test_support::{FakeSessionProbe, FakeTerminalSession};
 
-use super::{TerminalElement, TerminalElementSpec};
+use super::{CellAnchor, TerminalElement, TerminalElementSpec};
 use crate::render::diagnostics::FrameStats;
 use crate::render::frame::GridSize;
 use crate::render::state::{RenderInputs, RenderState};
 use crate::theme::build_terminal_theme;
+
+/// Run text `=>e\u{301}` over three cells: the `=>` ligature is one glyph for
+/// bytes 0..2 (cells 0 and 1), `e` starts cell 2 at byte 2, the mark (byte 3)
+/// shares its cell. GPUI's `force_width` pass put `e` at 8 px (glyph number 1)
+/// instead of 16 px.
+#[test]
+fn glyphs_are_anchored_at_their_cell() {
+    let cells = [0u32, 1, 2];
+    let w = px(8.0);
+    let mut anchor = CellAnchor::default();
+    assert_eq!(anchor.x(&cells, w, 0, px(0.0)), px(0.0));
+    assert_eq!(
+        anchor.x(&cells, w, 2, px(8.0)),
+        px(16.0),
+        "`e` moves to cell 2"
+    );
+    assert_eq!(
+        anchor.x(&cells, w, 3, px(10.0)),
+        px(18.0),
+        "the mark keeps its 2 px offset from `e`"
+    );
+    // No cell map (gutter labels): the shaped position is used as-is.
+    assert_eq!(CellAnchor::default().x(&[], w, 5, px(40.0)), px(40.0));
+}
 
 /// Counts heap allocations on the current thread between `start` and `stop`.
 /// The counters are `const`-initialised, `Drop`-free thread locals, so reading

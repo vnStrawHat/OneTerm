@@ -13,9 +13,22 @@ pub struct FontConfig {
     /// Font weight: "thin" | "extra_light" | "light" | "normal" | "medium"
     /// | "semibold" | "bold" | "extra_bold" | "black".
     pub weight: String,
-    /// Font features (OpenType): e.g. ["calt", "liga"] → enable ligatures.
-    /// The terminal disables calt by default; add "calt" to the list to re-enable it.
+    /// Extra font features (OpenType), e.g. ["ss01", "zero"]. An entry here
+    /// wins over `ligatures` for the `calt` feature.
     pub features: Vec<String>,
+    /// Render contextual ligatures (`calt`: `=>`, `->`, `!=`) when the font has them.
+    pub ligatures: bool,
+    /// Fallback families tried, in order, for glyphs `family` lacks (Nerd Font
+    /// icons, CJK, symbols) before the system fallback. Families that are not
+    /// installed are skipped.
+    pub fallbacks: Vec<String>,
+}
+
+impl FontConfig {
+    /// The Nerd Font symbol-only fonts, which most prompt themes rely on.
+    pub fn default_fallbacks() -> Vec<String> {
+        vec!["Symbols Nerd Font Mono".into(), "Symbols Nerd Font".into()]
+    }
 }
 
 impl Default for FontConfig {
@@ -25,6 +38,8 @@ impl Default for FontConfig {
             size: Some(15.0),
             weight: "normal".into(),
             features: Vec::new(),
+            ligatures: true,
+            fallbacks: Self::default_fallbacks(),
         }
     }
 }

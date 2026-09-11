@@ -28,6 +28,7 @@ OneTerm is a Terminal application for SSH/SFTP/Local Shell with a **Zed-style wo
 
 - ANSI / VT rendering via `alacritty_terminal`
 - 24-bit colors, box drawing, and multiple cursor styles
+- Fallback fonts for Nerd Font prompt icons (`font.fallbacks`, defaults to the Nerd Font symbol fonts) and font ligatures (`font.ligatures`, on by default)
 - Mouse selection, middle-click paste (switchable in Settings), search, scrollback, and custom scrollbar
 - URL / OSC 8 detection, IME support, clipboard via OSC 52, bell
 - OSC 9 toasts, OSC 9;4 progress, and shell integration (OSC 7 / 133 / 0 / 2 / 4 / 104 / 10 / 11 / 12)

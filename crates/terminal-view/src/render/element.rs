@@ -351,6 +351,8 @@ impl GridPainter<'_> {
                 &run.line,
                 point(run_x, baseline_y),
                 colors,
+                plan.cells_of(run),
+                self.geometry.metrics.cell_width,
                 self.font_size,
                 window,
                 self.stats,
@@ -382,6 +384,8 @@ impl GridPainter<'_> {
                 &label.line,
                 point(x, y),
                 &spans,
+                &[],
+                self.geometry.metrics.cell_width,
                 self.font_size,
                 window,
                 self.stats,
@@ -391,24 +395,30 @@ impl GridPainter<'_> {
 }
 
 /// Paint the glyphs of `line` at `origin` (pen position, baseline), coloring
-/// each glyph by the span its byte index falls in. Failures (a glyph the font
-/// cannot rasterize) are counted, never propagated.
+/// each glyph by the span its byte index falls in and anchoring it at the
+/// cell its byte index falls in (`cells`; empty = keep the shaped `x`).
+/// Failures (a glyph the font cannot rasterize) are counted, never propagated.
+#[allow(clippy::too_many_arguments)]
 fn paint_shaped_line(
     line: &ShapedLine,
     origin: gpui::Point<Pixels>,
     colors: &[ColorSpan],
+    cells: &[u32],
+    cell_width: Pixels,
     font_size: Pixels,
     window: &mut Window,
     stats: &mut FrameStats,
 ) {
     let mut span = 0;
+    let mut anchor = CellAnchor::default();
     for run in &line.runs {
         for glyph in &run.glyphs {
             while span + 1 < colors.len() && glyph.index as u32 >= colors[span].byte_end {
                 span += 1;
             }
             let color = colors.get(span).map(|c| c.color).unwrap_or(gpui::black());
-            let at = point(origin.x + glyph.position.x, origin.y + glyph.position.y);
+            let x = anchor.x(cells, cell_width, glyph.index, glyph.position.x);
+            let at = point(origin.x + x, origin.y + glyph.position.y);
             let painted = if glyph.is_emoji {
                 window.paint_emoji(at, run.font_id, glyph.id, font_size)
             } else {
@@ -419,6 +429,39 @@ fn paint_shaped_line(
                 Err(_) => stats.glyph_errors += 1,
             }
         }
+    }
+}
+
+/// Maps a glyph's shaped `x` to its cell. GPUI's `force_width` pass numbers
+/// glyphs, not cells, so after a ligature (one glyph for several bytes) every
+/// later glyph sits one cell too far left; the within-cell offset it computed
+/// for combining marks is still right, so only the cell origin is replaced.
+#[derive(Default)]
+pub(super) struct CellAnchor {
+    cell: Option<usize>,
+    /// `cell * cell_width - shaped x of the cell's first glyph`.
+    shift: Pixels,
+}
+
+impl CellAnchor {
+    pub(super) fn x(
+        &mut self,
+        cells: &[u32],
+        cell_width: Pixels,
+        byte_index: usize,
+        shaped_x: Pixels,
+    ) -> Pixels {
+        if cells.is_empty() {
+            return shaped_x;
+        }
+        let cell = cells
+            .partition_point(|&start| start as usize <= byte_index)
+            .saturating_sub(1);
+        if self.cell != Some(cell) {
+            self.cell = Some(cell);
+            self.shift = cell_width * cell as f32 - shaped_x;
+        }
+        shaped_x + self.shift
     }
 }
 

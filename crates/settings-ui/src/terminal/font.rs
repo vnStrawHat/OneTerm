@@ -79,6 +79,49 @@ pub(super) fn group() -> SettingGroup {
             .description("Font weight."),
             SettingItem::new("Line Height", line_height_field())
                 .description("Line height multiplier."),
+            SettingItem::new(
+                "Fallback Fonts",
+                SettingField::input(
+                    |cx: &App| {
+                        SharedString::from(
+                            TerminalSettings::global(cx)
+                                .read(cx)
+                                .font_fallbacks
+                                .iter()
+                                .map(|f| f.as_ref())
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        )
+                    },
+                    |val: SharedString, cx: &mut App| {
+                        let list: Vec<SharedString> = val
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(|s| SharedString::from(s.to_string()))
+                            .collect();
+                        set(cx, |s| s.font_fallbacks = list);
+                    },
+                )
+                .default_value(SharedString::from(
+                    TerminalSettings::default()
+                        .font_fallbacks
+                        .iter()
+                        .map(|f| f.as_ref())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                )),
+            )
+            .description("Comma-separated families tried, in order, for glyphs the font lacks (Nerd Font icons)."),
+            SettingItem::new(
+                "Ligatures",
+                SettingField::switch(
+                    |cx: &App| TerminalSettings::global(cx).read(cx).font_ligatures,
+                    |val: bool, cx: &mut App| set(cx, |s| s.font_ligatures = val),
+                )
+                .default_value(true),
+            )
+            .description("Render ligatures (=>, ->, !=) when the font has them."),
         ])
 }
 
