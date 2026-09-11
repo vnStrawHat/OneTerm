@@ -3,7 +3,9 @@
 mod actions;
 mod browser_state;
 mod browser_view;
+mod drag;
 mod edit;
+mod local_pane;
 mod panel;
 mod panel_ops;
 mod persistence;
@@ -17,7 +19,7 @@ mod transfer;
 mod transfer_queue;
 mod types;
 
-pub use panel::SftpPanel;
+pub use panel::{SftpExpandedChanged, SftpPanel};
 
 use gpui::App;
 use gpui_component::dock::{panel_handle, register_panel};

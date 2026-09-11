@@ -5624,6 +5624,10 @@ dependencies = [
  "alacritty_terminal",
  "libc",
  "polling",
+ "rand 0.10.1",
+ "russh",
+ "russh-sftp",
+ "tokio",
  "windows-sys 0.59.0",
 ]
 

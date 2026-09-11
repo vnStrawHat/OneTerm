@@ -53,7 +53,7 @@ directly on the UI thread.
 | `update_config.json` | `oneterm-update` | Schema owner. Two field-level writers through `update_json_file`: preferences (`oneterm-settings-ui` persist queue via `UpdateConfig::save_preferences`) and check cache (`UpdateManager` via `UpdateCheckCache::save`). See `docs/auto-update.md`. |
 | `docks.json` document model | `oneterm-state` | `DockDocument` is the typed top-level schema and the only read/update API. |
 | `docks.json` dock fields | `oneterm-workspace` | Dock layout and the shell-owned `zoomed_panel` field. The exit write runs synchronously from the workspace's `on_app_quit` / `on_release` hooks. |
-| `docks.json.sftp_table_state` | `oneterm-sftp-ui` | SFTP table field only, represented by `oneterm_core::SftpTableState`. |
+| `docks.json.sftp_table_state` | `oneterm-sftp-ui` | SFTP browser field only, represented by `oneterm_core::SftpTableState`: remote column widths/visibility plus the dual-pane mode (`expanded`, default `false`) and the Local pane's last directory (`local_dir`, omitted when unknown; the home directory is used instead). |
 
 A crate may mutate only fields it owns. Callers of the shared dock document must
 use `oneterm_state::dock_persistence`; other shared documents must use

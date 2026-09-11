@@ -31,7 +31,7 @@ DockArea (id = "main-dock", version = 3)
 
 `RightDockMode::None` closes the existing right dock without replacing its content. Selecting SSH Client or Agent mode builds the registered panel, replaces the right-dock layout, preserves its width, and opens it.
 
-`SshClientPanel` owns a vertical `v_resizable` split containing `SessionPanel` and `SftpPanel`, each with its own header. The right dock still has a tab-group node internally, but `OneTermDockSkin` suppresses that outer tab bar for the single `ssh_client_panel` or `agent_panel` leaf. Center terminal groups keep the standard GPUI Kit tab chrome.
+`SshClientPanel` owns a vertical `v_resizable` split containing `SessionPanel` and `SftpPanel`, each with its own header. Its section headers show the hosted panel's `title_suffix` (the SFTP Browser's expand/collapse toggle) in a control group framed like the center tab bar's trailing buttons. It is zoomable: expanding the SFTP Browser (IN-0025) zooms this node so the browser fills the workspace like a zoomed terminal tab, with the Session section hidden until it collapses. The right dock still has a tab-group node internally, but `OneTermDockSkin` suppresses that outer tab bar for the single `ssh_client_panel` or `agent_panel` leaf. Center terminal groups keep the standard GPUI Kit tab chrome.
 
 Layout construction uses `DockLayout::{tabs,v_split}` and `DockArea::{set_center,set_dock,set_dock_size,set_dock_collapsible}`. Runtime traversal uses `DockArea::layout`, `PaneNode`/`PaneRef`, and stable `PanelId`/`NodeId` values. Tab behavior is provided by `TabGroup`; rendering customization is isolated behind `DockSkin`, `DockAreaRenderer`, and `TabGroupRenderer`.
 

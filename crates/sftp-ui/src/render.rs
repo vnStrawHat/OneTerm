@@ -16,6 +16,7 @@ use gpui_component::{
     input::Input,
     menu::{DropdownMenu as _, PopupMenuItem},
     notification::NotificationType,
+    resizable::{h_resizable, resizable_panel},
     table::DataTable,
     v_flex,
 };
@@ -26,8 +27,9 @@ use oneterm_actions::{
 use oneterm_theme::icon::AppIcon;
 use oneterm_theme::notif_ext::notify;
 
+use super::drag::LocalRowDrag;
 use super::panel::SftpPanel;
-use super::table_delegate_menu::on_click_panel;
+use super::table_delegate_menu::on_click_entity;
 use super::types::SortColumn;
 
 impl Render for SftpPanel {
@@ -48,7 +50,28 @@ impl Render for SftpPanel {
             });
         }
 
-        let theme = cx.theme();
+        let background = cx.theme().background;
+
+        // Remote side: toolbar + file list. Expanded puts the Local pane to
+        // its left in a resizable split; collapsed is exactly the old layout.
+        let remote = v_flex()
+            .size_full()
+            .child(self.render_toolbar(window, cx))
+            .child(self.render_file_list(cx));
+        let body = if self.expanded() {
+            div()
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .child(
+                    h_resizable("sftp-panes")
+                        .child(resizable_panel().child(self.local().clone()))
+                        .child(resizable_panel().child(remote)),
+                )
+                .into_any_element()
+        } else {
+            remote.flex_1().min_h_0().into_any_element()
+        };
 
         v_flex()
             .id("sftp-panel")
@@ -74,17 +97,61 @@ impl Render for SftpPanel {
             .on_action(cx.listener(|this, _: &SftpUploadFolder, w, cx| this.do_upload(true, w, cx)))
             .on_action(cx.listener(|this, _: &SftpNewFolder, w, cx| this.do_new_folder(w, cx)))
             .on_action(cx.listener(|this, _: &SftpRefresh, _, cx| this.refresh(cx)))
-            .bg(theme.background)
-            .child(self.render_toolbar(window, cx))
-            .child(self.render_file_list(cx))
+            .bg(background)
+            .child(body)
             .child(self.render_transfer_queue(cx))
             .into_any_element()
     }
 }
 
 impl SftpPanel {
-    /// Render when there is no SFTP connection.
+    /// The expand/collapse toggle, shown at the trailing end of the panel
+    /// title (`Panel::title_suffix`) like the terminal tab's zoom button and
+    /// with its icons: expanding fills the workspace with the Local + Remote
+    /// layout, collapsing docks the remote browser again.
+    pub(crate) fn render_expand_button(&self, cx: &mut Context<Self>) -> Button {
+        let expanded = self.expanded();
+        Button::new("sftp-expand")
+            .icon(
+                Icon::new(if expanded {
+                    IconName::Minimize
+                } else {
+                    IconName::Maximize
+                })
+                .small(),
+            )
+            .xsmall()
+            .ghost()
+            .tab_stop(false)
+            .tooltip(if expanded {
+                "Collapse: back to the docked remote browser"
+            } else {
+                "Expand: Local + Remote files across the workspace"
+            })
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.set_expanded(!expanded, cx);
+            }))
+    }
+
+    /// Render when there is no SFTP connection. While expanded the Local pane
+    /// stays usable (the toggle lives in the panel title, so a zoomed browser
+    /// never traps the user without a way back to the dock).
     fn render_no_connection(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let placeholder = div()
+            .flex_1()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_color(cx.theme().muted_foreground)
+            .child("No SFTP connection.");
+        let body = if self.expanded() {
+            h_resizable("sftp-panes")
+                .child(resizable_panel().child(self.local().clone()))
+                .child(resizable_panel().child(placeholder))
+                .into_any_element()
+        } else {
+            placeholder.into_any_element()
+        };
         div()
             .id("sftp-panel")
             .role(Role::Pane)
@@ -92,10 +159,7 @@ impl SftpPanel {
             .size_full()
             .track_focus(self.panel_focus_handle())
             .flex()
-            .items_center()
-            .justify_center()
-            .text_color(cx.theme().muted_foreground)
-            .child("No SFTP connection.")
+            .child(body)
     }
 
     /// Render toolbar — path input (flex-1) + back, refresh, "..." (right-aligned).
@@ -156,41 +220,47 @@ impl SftpPanel {
                     .item(
                         PopupMenuItem::new("New Folder")
                             .icon(Icon::new(IconName::Plus))
-                            .on_click(on_click_panel(panel_weak.clone(), SftpPanel::do_new_folder)),
+                            .on_click(on_click_entity(
+                                panel_weak.clone(),
+                                SftpPanel::do_new_folder,
+                            )),
                     )
                     .item(
                         PopupMenuItem::new("Upload Files")
                             .icon(Icon::new(IconName::ArrowUp))
-                            .on_click(on_click_panel(panel_weak.clone(), |this, window, cx| {
+                            .on_click(on_click_entity(panel_weak.clone(), |this, window, cx| {
                                 this.do_upload(false, window, cx)
                             })),
                     )
                     .item(
                         PopupMenuItem::new("Upload Folder")
                             .icon(Icon::new(IconName::ArrowUp))
-                            .on_click(on_click_panel(panel_weak.clone(), |this, window, cx| {
+                            .on_click(on_click_entity(panel_weak.clone(), |this, window, cx| {
                                 this.do_upload(true, window, cx)
                             })),
                     )
                     .item(
                         PopupMenuItem::new("Download")
                             .icon(Icon::new(IconName::ArrowDown))
-                            .on_click(on_click_panel(panel_weak.clone(), SftpPanel::do_download)),
+                            .on_click(on_click_entity(panel_weak.clone(), SftpPanel::do_download)),
                     )
                     .item(
                         PopupMenuItem::new("Rename")
                             .icon(Icon::new(IconName::Replace))
-                            .on_click(on_click_panel(panel_weak.clone(), SftpPanel::do_rename)),
+                            .on_click(on_click_entity(panel_weak.clone(), SftpPanel::do_rename)),
                     )
                     .item(
                         PopupMenuItem::new("Delete")
                             .icon(Icon::new(IconName::Delete))
-                            .on_click(on_click_panel(panel_weak.clone(), SftpPanel::do_delete)),
+                            .on_click(on_click_entity(panel_weak.clone(), SftpPanel::do_delete)),
                     )
                     .item(
                         PopupMenuItem::new("Properties")
                             .icon(Icon::new(IconName::Info))
-                            .on_click(on_click_panel(panel_weak.clone(), SftpPanel::do_properties)),
+                            .on_click(on_click_entity(
+                                panel_weak.clone(),
+                                SftpPanel::do_properties,
+                            )),
                     )
                     .separator()
                     .item({
@@ -241,6 +311,8 @@ impl SftpPanel {
                 menu
             });
 
+        let expanded = self.expanded();
+
         h_flex()
             .w_full()
             .h_8()
@@ -251,6 +323,15 @@ impl SftpPanel {
             .py_5()
             .border_b_1()
             .border_color(theme.border)
+            .when(expanded, |this| {
+                this.child(
+                    div()
+                        .flex_shrink_0()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child("Remote"),
+                )
+            })
             // Path input — flex-1, border-bottom only, transparent bg.
             .child(
                 Input::new(self.path_input())
@@ -333,8 +414,12 @@ impl SftpPanel {
                     .scrollbar_visible(true, true)
                     .small(),
             )
-            // Drag & drop external files → upload to remote cwd.
-            .can_drop(|drag, _window, _cx| drag.is::<ExternalPaths>())
+            // Drag & drop external files (or a Local pane row) → upload to remote cwd.
+            .can_drop(|drag, _window, _cx| drag.is::<ExternalPaths>() || drag.is::<LocalRowDrag>())
+            .on_drop(cx.listener(|this, drag: &LocalRowDrag, _, cx| {
+                log::info!("SftpPanel: local row \"{}\" dropped — upload", drag.name);
+                this.do_upload_paths(vec![drag.path.clone()], cx);
+            }))
             .on_drop(
                 cx.listener(move |this, external_paths: &ExternalPaths, window, cx| {
                     let paths: Vec<_> = external_paths.paths().to_vec();

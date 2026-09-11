@@ -228,6 +228,7 @@ fn load_reset_center_and_save_round_trip(cx: &mut TestAppContext) {
         document.sftp_table_state = Some(SftpTableState {
             column_widths: HashMap::from([("name".to_string(), 321.0)]),
             column_visibility: HashMap::new(),
+            ..SftpTableState::default()
         });
         Ok(())
     })

@@ -7,7 +7,7 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use async_channel::{Receiver, Sender};
 
@@ -208,5 +208,27 @@ pub(crate) fn dir_entry(parent: &RemotePath, name: &str, is_dir: bool) -> FileEn
         gid: None,
         owner: None,
         group: None,
+    }
+}
+
+/// A fresh, empty directory under the OS temp dir; removed by `Drop`.
+pub(crate) struct TempDir(pub PathBuf);
+
+impl TempDir {
+    pub(crate) fn new() -> Self {
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "oneterm-local-pane-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        _ = std::fs::remove_dir_all(&self.0);
     }
 }

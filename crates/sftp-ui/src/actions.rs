@@ -24,9 +24,10 @@ use super::types::{format_date, format_owner, format_permissions, format_size};
 
 /// Why a typed entry name was rejected. `Display` is the corrective message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EntryNameError {
+pub(super) enum EntryNameError {
     Empty,
-    /// `/` would address another directory instead of naming an entry.
+    /// `/` (or `\`, a separator on Windows and mangled by `RemotePath`) would
+    /// address another directory instead of naming an entry.
     ContainsSlash,
     /// `.` / `..` are the current and parent directory, never a new entry.
     DotOrDotDot,
@@ -36,21 +37,21 @@ impl std::fmt::Display for EntryNameError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Empty => f.write_str("Name cannot be empty."),
-            Self::ContainsSlash => f.write_str("Name cannot contain '/'."),
+            Self::ContainsSlash => f.write_str("Name cannot contain '/' or '\\'."),
             Self::DotOrDotDot => f.write_str("Name cannot be '.' or '..'."),
         }
     }
 }
 
 /// Validate a single path component typed into the rename / new-folder
-/// dialogs (CORR-53): the trimmed name must be non-empty, contain no `/`, and
-/// not be `.` or `..`.
-fn validate_entry_name(name: &str) -> Result<&str, EntryNameError> {
+/// dialogs (CORR-53), remote and local alike: the trimmed name must be
+/// non-empty, contain no `/` or `\`, and not be `.` or `..`.
+pub(super) fn validate_entry_name(name: &str) -> Result<&str, EntryNameError> {
     let name = name.trim();
     if name.is_empty() {
         return Err(EntryNameError::Empty);
     }
-    if name.contains('/') {
+    if name.contains(['/', '\\']) {
         return Err(EntryNameError::ContainsSlash);
     }
     if name == "." || name == ".." {
@@ -386,7 +387,7 @@ impl SftpPanel {
 
 /// Wording of the delete confirmation. A folder delete is recursive, so the
 /// text must say that its contents go with it.
-fn delete_confirmation(entry_name: &str, is_dir: bool) -> String {
+pub(super) fn delete_confirmation(entry_name: &str, is_dir: bool) -> String {
     if is_dir {
         format!(
             "Are you sure you want to delete folder \"{entry_name}\" and all of its contents? This cannot be undone."
@@ -602,6 +603,10 @@ mod tests {
         assert_eq!(validate_entry_name("   "), Err(EntryNameError::Empty));
         assert_eq!(
             validate_entry_name("dir/file"),
+            Err(EntryNameError::ContainsSlash)
+        );
+        assert_eq!(
+            validate_entry_name("dir\\file"),
             Err(EntryNameError::ContainsSlash)
         );
         assert_eq!(validate_entry_name("."), Err(EntryNameError::DotOrDotDot));

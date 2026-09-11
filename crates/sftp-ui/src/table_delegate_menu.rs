@@ -27,25 +27,25 @@ pub(super) fn build_entry_menu(
         menu.item(
             PopupMenuItem::new("Open")
                 .action(Box::new(oneterm_actions::SftpOpen))
-                .on_click(on_click_panel(panel.clone(), move |this, _, cx| {
+                .on_click(on_click_entity(panel.clone(), move |this, _, cx| {
                     this.navigate_into(row_ix, cx)
                 })),
         )
         .item(
             PopupMenuItem::new("Download")
                 .action(Box::new(oneterm_actions::SftpDownload))
-                .on_click(on_click_panel(panel.clone(), SftpPanel::do_download)),
+                .on_click(on_click_entity(panel.clone(), SftpPanel::do_download)),
         )
     } else {
         menu.item(
             PopupMenuItem::new("Edit")
                 .action(Box::new(oneterm_actions::SftpEdit))
-                .on_click(on_click_panel(panel.clone(), SftpPanel::do_edit)),
+                .on_click(on_click_entity(panel.clone(), SftpPanel::do_edit)),
         )
         .item(
             PopupMenuItem::new("Download")
                 .action(Box::new(oneterm_actions::SftpDownload))
-                .on_click(on_click_panel(panel.clone(), SftpPanel::do_download)),
+                .on_click(on_click_entity(panel.clone(), SftpPanel::do_download)),
         )
     };
 
@@ -54,45 +54,45 @@ pub(super) fn build_entry_menu(
         .item(
             PopupMenuItem::new("Rename")
                 .action(Box::new(oneterm_actions::SftpRename))
-                .on_click(on_click_panel(panel.clone(), SftpPanel::do_rename)),
+                .on_click(on_click_entity(panel.clone(), SftpPanel::do_rename)),
         )
         .item(
             PopupMenuItem::new("Delete")
                 .action(Box::new(oneterm_actions::SftpDelete))
-                .on_click(on_click_panel(panel.clone(), SftpPanel::do_delete)),
+                .on_click(on_click_entity(panel.clone(), SftpPanel::do_delete)),
         )
         // Properties.
         .separator()
         .item(
             PopupMenuItem::new("Properties")
                 .action(Box::new(oneterm_actions::SftpProperties))
-                .on_click(on_click_panel(panel.clone(), SftpPanel::do_properties)),
+                .on_click(on_click_entity(panel.clone(), SftpPanel::do_properties)),
         )
         // Upload + New Folder + Refresh.
         .separator()
         .item(
             PopupMenuItem::new("Upload Files")
                 .action(Box::new(oneterm_actions::SftpUploadFiles))
-                .on_click(on_click_panel(panel.clone(), |this, window, cx| {
+                .on_click(on_click_entity(panel.clone(), |this, window, cx| {
                     this.do_upload(false, window, cx)
                 })),
         )
         .item(
             PopupMenuItem::new("Upload Folder")
                 .action(Box::new(oneterm_actions::SftpUploadFolder))
-                .on_click(on_click_panel(panel.clone(), |this, window, cx| {
+                .on_click(on_click_entity(panel.clone(), |this, window, cx| {
                     this.do_upload(true, window, cx)
                 })),
         )
         .item(
             PopupMenuItem::new("New Folder")
                 .action(Box::new(oneterm_actions::SftpNewFolder))
-                .on_click(on_click_panel(panel.clone(), SftpPanel::do_new_folder)),
+                .on_click(on_click_entity(panel.clone(), SftpPanel::do_new_folder)),
         )
         .item(
             PopupMenuItem::new("Refresh")
                 .action(Box::new(oneterm_actions::SftpRefresh))
-                .on_click(on_click_panel(panel.clone(), |this, _, cx| {
+                .on_click(on_click_entity(panel.clone(), |this, _, cx| {
                     this.refresh(cx)
                 })),
         )
@@ -110,42 +110,42 @@ pub(super) fn build_empty_menu(
         .item(
             PopupMenuItem::new("Upload Files")
                 .action(Box::new(oneterm_actions::SftpUploadFiles))
-                .on_click(on_click_panel(panel.clone(), |this, window, cx| {
+                .on_click(on_click_entity(panel.clone(), |this, window, cx| {
                     this.do_upload(false, window, cx)
                 })),
         )
         .item(
             PopupMenuItem::new("Upload Folder")
                 .action(Box::new(oneterm_actions::SftpUploadFolder))
-                .on_click(on_click_panel(panel.clone(), |this, window, cx| {
+                .on_click(on_click_entity(panel.clone(), |this, window, cx| {
                     this.do_upload(true, window, cx)
                 })),
         )
         .item(
             PopupMenuItem::new("New Folder")
                 .action(Box::new(oneterm_actions::SftpNewFolder))
-                .on_click(on_click_panel(panel.clone(), SftpPanel::do_new_folder)),
+                .on_click(on_click_entity(panel.clone(), SftpPanel::do_new_folder)),
         )
         .separator()
         .item(
             PopupMenuItem::new("Refresh")
                 .action(Box::new(oneterm_actions::SftpRefresh))
-                .on_click(on_click_panel(panel.clone(), |this, _, cx| {
+                .on_click(on_click_entity(panel.clone(), |this, _, cx| {
                     this.refresh(cx)
                 })),
         );
     menu
 }
 
-/// Create an `on_click` closure that runs `action` on the panel (if it is
-/// still alive) with the window the click arrived on.
-pub(super) fn on_click_panel(
-    panel: gpui::WeakEntity<SftpPanel>,
-    action: impl Fn(&mut SftpPanel, &mut Window, &mut gpui::Context<SftpPanel>) + 'static,
+/// Create an `on_click` closure that runs `action` on `entity` (the panel or
+/// the local pane, if it is still alive) with the window the click arrived on.
+pub(super) fn on_click_entity<T: 'static>(
+    entity: gpui::WeakEntity<T>,
+    action: impl Fn(&mut T, &mut Window, &mut gpui::Context<T>) + 'static,
 ) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
     move |_, window, cx| {
-        if let Some(panel) = panel.upgrade() {
-            panel.update(cx, |this, cx| action(this, window, cx));
+        if let Some(entity) = entity.upgrade() {
+            entity.update(cx, |this, cx| action(this, window, cx));
         }
     }
 }

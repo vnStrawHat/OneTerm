@@ -65,6 +65,7 @@ OneTerm is a Terminal application for SSH/SFTP/Local Shell with a **Zed-style wo
 
 - Browse remote directories with breadcrumbs and sortable columns
 - Upload / download, rename / delete, create folders, view properties
+- Expand the browser across the workspace (like zooming a terminal tab) into a dual-pane Local + Remote view: browse local folders, upload / download with a click, a double-click, or drag & drop between the panes
 - Transfer queue with progress bars and cancellation
 - Sync the browser to the active SSH session CWD via OSC 7
 

@@ -167,6 +167,7 @@ mod tests {
         document.sftp_table_state = Some(SftpTableState {
             column_widths: HashMap::from([("name".into(), 320.0)]),
             column_visibility: HashMap::from([("permissions".into(), false)]),
+            ..SftpTableState::default()
         });
 
         let json = serde_json::to_string_pretty(&document).unwrap();

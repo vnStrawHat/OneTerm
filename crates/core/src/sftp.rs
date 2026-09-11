@@ -172,13 +172,20 @@ pub struct FileEntry {
     pub group: Option<String>,
 }
 
-/// SFTP table presentation state persisted with the dock document.
+/// SFTP browser presentation state persisted with the dock document: the
+/// remote table's column layout plus the dual-pane (Local + Remote) mode.
 #[derive(Default, Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SftpTableState {
     #[serde(default)]
     pub column_widths: HashMap<String, f32>,
     #[serde(default)]
     pub column_visibility: HashMap<String, bool>,
+    /// `true` when the browser shows the Local pane next to the Remote pane.
+    #[serde(default)]
+    pub expanded: bool,
+    /// Directory the Local pane last showed; the home directory when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_dir: Option<PathBuf>,
 }
 
 /// Stable process-local identity for one SFTP backend instance.
@@ -294,6 +301,8 @@ pub trait SftpBackend: Send + Sync + 'static {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
 
     #[test]
@@ -364,6 +373,33 @@ mod tests {
         assert_eq!(serde_json::to_string(&path).unwrap(), "\"/home/u\"");
         let restored: RemotePath = serde_json::from_str("\"/var\\\\log\"").unwrap();
         assert_eq!(restored, RemotePath::new("/var/log"));
+    }
+
+    /// A `docks.json` written before the dual-pane mode loads collapsed with no
+    /// local directory; the two fields round-trip once set.
+    #[test]
+    fn table_state_defaults_to_collapsed_and_round_trips_the_local_dir() {
+        let old: SftpTableState =
+            serde_json::from_str(r#"{"column_widths":{"name":300.0}}"#).unwrap();
+        assert!(!old.expanded);
+        assert!(old.local_dir.is_none());
+        assert_eq!(old.column_widths["name"], 300.0);
+
+        let state = SftpTableState {
+            expanded: true,
+            local_dir: Some(PathBuf::from("C:/work")),
+            ..SftpTableState::default()
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        let restored: SftpTableState = serde_json::from_str(&json).unwrap();
+        assert!(restored.expanded);
+        assert_eq!(restored.local_dir.as_deref(), Some(Path::new("C:/work")));
+        // Absent local_dir is omitted rather than written as null.
+        assert!(
+            !serde_json::to_string(&SftpTableState::default())
+                .unwrap()
+                .contains("local_dir")
+        );
     }
 
     #[test]

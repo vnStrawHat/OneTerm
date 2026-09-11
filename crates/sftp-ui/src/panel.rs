@@ -32,10 +32,19 @@ use oneterm_terminal::SharedState;
 
 use super::browser_state::{BackendKey, SftpBrowserState, SftpBrowserStore, SnapshotGate};
 use super::browser_view::{BrowserView, FollowCwd, TransferQueueView};
+use super::local_pane::LocalPane;
 use super::persistence::{read_sftp_table_state, write_sftp_table_state};
 use super::table_delegate::SftpTableDelegate;
 
 // ── SftpPanel ────────────────────────────────────────────────
+
+/// Emitted when the browser expands into the Local + Remote layout or
+/// collapses back. The hosting right-dock panel zooms the dock in step, so
+/// an expanded browser fills the workspace like a zoomed terminal tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SftpExpandedChanged {
+    pub expanded: bool,
+}
 
 /// Panel displaying the SFTP browser.
 ///
@@ -65,6 +74,13 @@ pub struct SftpPanel {
     load_generation: u64,
     /// Entries + sort + loading + column config live in the delegate.
     table: Entity<TableState<SftpTableDelegate>>,
+
+    // ── Dual-pane mode (IN-0025) ────────────────────────────
+    /// `true` shows the Local pane next to the Remote pane. Persisted in
+    /// `docks.json` with the column state.
+    expanded: bool,
+    /// The Local pane: one per panel, independent of the active SSH backend.
+    local: Entity<LocalPane>,
 
     // ── Path input (toolbar) ────────────────────────────────
     path_input: Entity<InputState>,
@@ -126,7 +142,7 @@ impl SftpPanel {
 
         // DataTable state — delegate owns entries + column config (persisted).
         let panel_weak = cx.entity().downgrade();
-        let delegate = SftpTableDelegate::new(panel_weak);
+        let delegate = SftpTableDelegate::new(panel_weak.clone());
         let table = cx.new(|cx| {
             TableState::new(delegate, window, cx)
                 .col_movable(false)
@@ -152,6 +168,8 @@ impl SftpPanel {
         let path_input = cx.new(|cx| InputState::new(window, cx).placeholder("Path"));
         let _path_sub = cx.subscribe_in(&path_input, window, Self::on_path_input_event);
 
+        let local = cx.new(|cx| LocalPane::new(panel_weak.clone(), window, cx));
+
         let mut me = Self {
             focus_handle,
             dock_focus_handle,
@@ -163,6 +181,8 @@ impl SftpPanel {
             follow: FollowCwd::default(),
             load_generation: 0,
             table,
+            expanded: false,
+            local,
             path_input,
             _path_sub,
             _follow_task: None,
@@ -262,9 +282,43 @@ impl SftpPanel {
                     table.refresh(cx);
                     cx.notify();
                 });
+                this.local.update(cx, |local, cx| {
+                    local.set_initial_dir(state.local_dir.clone(), cx)
+                });
+                if state.expanded && !this.expanded {
+                    this.set_expanded(true, cx);
+                }
             });
         })
         .detach();
+    }
+
+    /// Whether the Local pane is shown next to the Remote pane.
+    pub fn expanded(&self) -> bool {
+        self.expanded
+    }
+
+    pub(crate) fn local(&self) -> &Entity<LocalPane> {
+        &self.local
+    }
+
+    /// Show or hide the Local pane. The first show loads its directory; the
+    /// flag is persisted with the column state.
+    pub fn set_expanded(&mut self, expanded: bool, cx: &mut Context<Self>) {
+        if self.expanded == expanded {
+            return;
+        }
+        self.expanded = expanded;
+        log::info!(
+            "SftpPanel: local pane {}",
+            if expanded { "shown" } else { "hidden" }
+        );
+        if expanded {
+            self.local.update(cx, |local, cx| local.ensure_loaded(cx));
+        }
+        self.schedule_save_table_state(cx);
+        cx.emit(SftpExpandedChanged { expanded });
+        cx.notify();
     }
 
     /// Create an entity bound to a specific dock/workspace.
@@ -624,14 +678,21 @@ impl SftpPanel {
         self.load_generation == generation && self.active_key == key
     }
 
-    /// Debounce 1s, snapshot the column state (width + visibility) on the UI
-    /// thread, then write it to docks.json on the background executor.
+    /// The persisted SFTP browser state: column layout + dual-pane fields.
+    pub(crate) fn persisted_state(&self, cx: &App) -> oneterm_core::SftpTableState {
+        let mut state = self.table.read(cx).delegate().to_persisted_state();
+        state.expanded = self.expanded;
+        state.local_dir = self.local.read(cx).dir_for_persistence();
+        state
+    }
+
+    /// Debounce 1s, snapshot the browser state (column widths + visibility,
+    /// expanded flag, local directory) on the UI thread, then write it to
+    /// docks.json on the background executor.
     pub(crate) fn schedule_save_table_state(&mut self, cx: &mut Context<Self>) {
         self._save_table_task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_secs(1)).await;
-            let Ok(state) = this.update(cx, |this, cx| {
-                this.table.read(cx).delegate().to_persisted_state()
-            }) else {
+            let Ok(state) = this.update(cx, |this, cx| this.persisted_state(cx)) else {
                 return;
             };
             cx.background_executor()
@@ -648,6 +709,7 @@ impl SftpPanel {
 // ── Trait impls ──────────────────────────────────────────────
 
 impl EventEmitter<PanelEvent> for SftpPanel {}
+impl EventEmitter<SftpExpandedChanged> for SftpPanel {}
 
 impl Focusable for SftpPanel {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -672,6 +734,16 @@ impl Panel for SftpPanel {
 
     fn zoom_control(&self, _: &App) -> Option<PanelControl> {
         Some(PanelControl::Both)
+    }
+
+    /// The expand/collapse toggle at the trailing end of the "SFTP Browser"
+    /// title; the hosting right-dock panel draws the title and asks for this.
+    fn title_suffix(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement> {
+        Some(self.render_expand_button(cx))
     }
 }
 

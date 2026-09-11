@@ -1278,6 +1278,25 @@ Invariants:
 - Temp copies live only under `edit-cache/` and are removed when their session
   ends; the empty `<pid>` dir is pruned immediately, and a startup sweep
   reclaims `<pid>` dirs whose process is no longer alive.
+
+### 4.15. Dual-pane mode — Local + Remote (IN-0025)
+
+The expand button in the section title (`Panel::title_suffix`, the terminal tab's Maximize / Minimize icons) zooms the
+hosting `SshClientPanel` dock node — the browser fills the workspace like a zoomed
+terminal tab, the Session section is hidden — and splits it into a Local pane (left)
+and the Remote pane (right) in an `h_resizable` group above the shared transfer queue;
+collapsed (the same button, or any other zoom-out) is the docked single remote pane
+described above. `SftpExpandedChanged` and the base `Panel::set_zoomed` hook keep the
+two states in step. The Local pane
+(`crates/sftp-ui/src/local_pane.rs`) is a `std::fs` browser on the background
+executor with its own `DataTable` (Name / Date Modified / Size), path box, back,
+refresh, and New Folder / Rename / Delete; it never touches `SftpBackend`.
+Transfers between the panes reuse `do_upload_paths` (local selection → remote
+cwd via button, menu, double-click, or dragging a row onto the remote list) and
+`download_to` (remote selection → the Local pane's directory, without a save
+dialog, confirming before an existing file is replaced; also the drop target of
+a remote row). `docks.json` `sftp_table_state` carries `expanded` and
+`local_dir`. Design and guards: `docs/spec-intakes/IN-0025-sftp-dual-pane/`.
 ---
 
 

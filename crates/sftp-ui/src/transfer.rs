@@ -13,9 +13,14 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gpui::{AsyncApp, AsyncWindowContext, Context, Entity, Window};
-use gpui_component::{WindowExt as _, notification::NotificationType};
-use oneterm_core::{AppError, RemotePath, SftpBackend, TransferEvent, TransferHandle};
+use gpui::{App, AsyncApp, AsyncWindowContext, Context, Entity, ParentElement as _, Window};
+use gpui_component::{
+    WindowExt as _,
+    button::{Button, ButtonVariants as _},
+    dialog::{DialogButtonProps, DialogFooter},
+    notification::NotificationType,
+};
+use oneterm_core::{AppError, FileEntry, RemotePath, SftpBackend, TransferEvent, TransferHandle};
 use oneterm_theme::notif_ext::notify;
 
 use super::browser_state::BackendKey;
@@ -312,6 +317,11 @@ impl SftpPanel {
             entry.name,
             entry.is_dir
         );
+        // With the Local pane shown, download straight into its directory.
+        if self.expanded() {
+            self.download_entry_to_local(entry, window, cx);
+            return;
+        }
         let backend_key = sftp.session_id();
         let panel = cx.entity();
         let remote_path = entry.path.clone();
@@ -365,7 +375,125 @@ impl SftpPanel {
         .detach();
     }
 
-    /// Register a download in the queue and drive it to completion.
+    /// Download `entry` into the Local pane's directory (dual-pane mode): no
+    /// save dialog, but an existing target must be confirmed first (IN-0025
+    /// LLD). Also the drop target of a remote row dragged onto the local list.
+    pub(crate) fn download_entry_to_local(
+        &mut self,
+        entry: FileEntry,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(sftp) = self.sftp().cloned() else {
+            log::warn!("SftpPanel::download_entry_to_local: no active SFTP backend");
+            window.push_notification(
+                notify(
+                    NotificationType::Warning,
+                    "No active SFTP connection is available.",
+                    cx,
+                ),
+                cx,
+            );
+            return;
+        };
+        let local_dir = self.local().read(cx).cwd().to_path_buf();
+        if local_dir.as_os_str().is_empty() {
+            window.push_notification(
+                notify(
+                    NotificationType::Warning,
+                    "The local pane has no directory open yet.",
+                    cx,
+                ),
+                cx,
+            );
+            return;
+        }
+        let target = local_dir.join(&entry.name);
+        let backend_key = sftp.session_id();
+        let panel = cx.entity();
+        log::info!(
+            "SftpPanel: download \"{}\" → \"{}\" (local pane)",
+            entry.path,
+            target.display()
+        );
+
+        cx.spawn_in(window, async move |_panel, cx| {
+            let probe = target.clone();
+            let exists = cx
+                .background_executor()
+                .spawn(async move { probe.exists() })
+                .await;
+            let start = {
+                let panel = panel.clone();
+                let sftp = sftp.clone();
+                let remote_path = entry.path.clone();
+                let entry_name = entry.name.clone();
+                let target = target.clone();
+                move |window: &mut Window, cx: &mut App| {
+                    let panel = panel.clone();
+                    let sftp = sftp.clone();
+                    let remote_path = remote_path.clone();
+                    let entry_name = entry_name.clone();
+                    let target = target.clone();
+                    window
+                        .spawn(cx, async move |cx| {
+                            Self::download_to(
+                                &panel,
+                                sftp,
+                                backend_key,
+                                remote_path,
+                                &entry_name,
+                                target,
+                                cx,
+                            )
+                            .await;
+                        })
+                        .detach();
+                }
+            };
+            if !exists {
+                _ = cx.update(|window, cx| start(window, cx));
+                return;
+            }
+            let description = format!(
+                "\"{}\" already exists in the local folder. Replace it?",
+                entry.name
+            );
+            let start = std::rc::Rc::new(start);
+            _ = cx.update(|window, cx| {
+                window.open_alert_dialog(cx, move |alert, _window, _cx| {
+                    let start = start.clone();
+                    alert
+                        .confirm()
+                        .title("Replace Local File")
+                        .description(description.clone())
+                        .footer(
+                            DialogFooter::new()
+                                .child(Button::new("cancel").label("Cancel").outline().on_click(
+                                    |_, window, cx| {
+                                        window.close_dialog(cx);
+                                    },
+                                ))
+                                .child(Button::new("replace").label("Replace").danger().on_click(
+                                    move |_, window, cx| {
+                                        window.close_dialog(cx);
+                                        start(window, cx);
+                                    },
+                                )),
+                        )
+                        .button_props(
+                            DialogButtonProps::default()
+                                .on_cancel(|_, _, _| true)
+                                .on_ok(|_, _, _| false),
+                        )
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// Register a download in the queue and drive it to completion; the Local
+    /// pane (when shown) refreshes afterwards so a new file appears.
     async fn download_to(
         panel: &Entity<SftpPanel>,
         sftp: Arc<dyn SftpBackend>,
@@ -381,6 +509,13 @@ impl SftpPanel {
         };
         let handle = sftp.download(transfer_id as u64, remote_path, local_path);
         run_transfer(panel, backend_key, transfer_id, handle, cx).await;
+        cx.update(|cx| {
+            panel.update(cx, |this, cx| {
+                if this.expanded() {
+                    this.local().update(cx, |local, cx| local.refresh(cx));
+                }
+            })
+        });
     }
 }
 
@@ -392,8 +527,10 @@ mod tests {
     use gpui::{AppContext as _, TestAppContext, VisualTestContext};
     use oneterm_core::{AppError, RemotePath, TransferEvent};
 
+    use gpui_component::WindowExt as _;
+
     use super::SftpPanel;
-    use crate::test_backend::{FakeSftpBackend, dir_entry};
+    use crate::test_backend::{FakeSftpBackend, TempDir, dir_entry};
     use crate::types::TransferStatus;
 
     struct Harness {
@@ -538,6 +675,132 @@ mod tests {
         transfer.result.try_send(Ok(())).unwrap();
         cx.run_until_parked();
         assert_eq!(harness.statuses(cx), vec![TransferStatus::Completed]);
+    }
+
+    impl Harness {
+        /// Show the Local pane on `dir` (no persistence involved).
+        fn expand_into(&self, dir: &std::path::Path, cx: &mut VisualTestContext) {
+            self.panel.update(cx, |panel, cx| {
+                panel.local().update(cx, |local, cx| {
+                    local.set_initial_dir(Some(dir.to_path_buf()), cx)
+                });
+                panel.set_expanded(true, cx);
+            });
+            cx.run_until_parked();
+        }
+
+        fn has_dialog(&self, cx: &mut VisualTestContext) -> bool {
+            self.panel
+                .update_in(cx, |_, window, cx| window.has_active_dialog(cx))
+        }
+    }
+
+    /// IN-0025: with the Local pane shown, a download goes straight into its
+    /// directory — no save dialog — and the local list refreshes afterwards.
+    #[gpui::test]
+    fn expanded_download_targets_the_local_directory_without_a_dialog(cx: &mut TestAppContext) {
+        let temp = TempDir::new();
+        let (harness, cx) = test_panel(cx);
+        let backend = harness.attach_backend(cx);
+        let transfer = backend.arm_transfer();
+        harness.expand_into(&temp.0, cx);
+        harness.list_and_select(
+            vec![dir_entry(&RemotePath::new("/home/u"), "example.txt", false)],
+            Some(0),
+            cx,
+        );
+
+        harness.panel.update_in(cx, |panel, window, cx| {
+            panel.do_download(window, cx);
+        });
+        cx.run_until_parked();
+
+        let requests = backend.transfer_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].remote.as_str(), "/home/u/example.txt");
+        assert_eq!(
+            requests[0].local,
+            std::path::absolute(&temp.0).unwrap().join("example.txt")
+        );
+        assert!(!harness.has_dialog(cx));
+        assert_eq!(harness.statuses(cx), vec![TransferStatus::InProgress]);
+
+        // The backend "writes" the file; settling the transfer refreshes the pane.
+        std::fs::write(temp.0.join("example.txt"), b"downloaded").unwrap();
+        drop(transfer.events);
+        transfer.result.try_send(Ok(())).unwrap();
+        cx.run_until_parked();
+        assert_eq!(harness.statuses(cx), vec![TransferStatus::Completed]);
+        let local_names: Vec<String> = harness.panel.read_with(cx, |panel, cx| {
+            let local = panel.local().read(cx);
+            local
+                .table()
+                .read(cx)
+                .delegate()
+                .entries()
+                .iter()
+                .map(|e| e.name.clone())
+                .collect()
+        });
+        assert_eq!(local_names, vec!["example.txt"]);
+    }
+
+    /// IN-0025 LLD: an existing local file is never replaced without a
+    /// confirmation; the dialog opens and nothing is transferred until then.
+    #[gpui::test]
+    fn expanded_download_onto_an_existing_file_asks_first(cx: &mut TestAppContext) {
+        let temp = TempDir::new();
+        std::fs::write(temp.0.join("example.txt"), b"keep me").unwrap();
+        let (harness, cx) = test_panel(cx);
+        let backend = harness.attach_backend(cx);
+        harness.expand_into(&temp.0, cx);
+        harness.list_and_select(
+            vec![dir_entry(&RemotePath::new("/home/u"), "example.txt", false)],
+            Some(0),
+            cx,
+        );
+
+        harness.panel.update_in(cx, |panel, window, cx| {
+            panel.do_download(window, cx);
+        });
+        cx.run_until_parked();
+
+        assert!(harness.has_dialog(cx));
+        assert!(backend.transfer_requests().is_empty());
+        assert!(harness.statuses(cx).is_empty());
+        assert_eq!(
+            std::fs::read(temp.0.join("example.txt")).unwrap(),
+            b"keep me"
+        );
+    }
+
+    /// IN-0025: the Local pane's selection uploads into the remote cwd through
+    /// the shared upload path.
+    #[gpui::test]
+    fn local_selection_uploads_into_the_remote_cwd(cx: &mut TestAppContext) {
+        let temp = TempDir::new();
+        std::fs::write(temp.0.join("notes.md"), b"# hi").unwrap();
+        let (harness, cx) = test_panel(cx);
+        let backend = harness.attach_backend(cx);
+        let _transfer = backend.arm_transfer();
+        harness.expand_into(&temp.0, cx);
+
+        let local = harness
+            .panel
+            .read_with(cx, |panel, _| panel.local().clone());
+        local.update_in(cx, |local, window, cx| {
+            local.select(Some(0));
+            local.upload_selected(window, cx);
+        });
+        cx.run_until_parked();
+
+        let requests = backend.transfer_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].remote.as_str(), "/home/u/notes.md");
+        assert_eq!(
+            requests[0].local,
+            std::path::absolute(&temp.0).unwrap().join("notes.md")
+        );
     }
 
     /// Cancelling the save dialog leaves the queue untouched.

@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use gpui::{
-    App, Context, Div, InteractiveElement as _, IntoElement, ParentElement, Stateful, Styled,
-    TextAlign, Window, div, px,
+    App, AppContext as _, Context, Div, InteractiveElement as _, IntoElement, ParentElement,
+    Stateful, StatefulInteractiveElement as _, Styled, TextAlign, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme as _, h_flex,
@@ -28,6 +28,32 @@ use super::types::{
 
 /// Indices into `col_configs` of the currently visible columns (display order).
 type VisibleIndices = Vec<usize>;
+
+/// The Name cell (folder/file icon + truncated name), shared by the remote and
+/// local tables.
+pub(crate) fn name_cell(name: &str, is_dir: bool, cx: &App) -> impl IntoElement {
+    let icon = if is_dir {
+        AppIcon::Folder.colored().size(px(19.))
+    } else {
+        AppIcon::File.colored().size(px(19.))
+    };
+    h_flex()
+        .w_full()
+        .h_full()
+        .items_center()
+        .gap_1()
+        .min_w_0()
+        .child(div().w_4().flex_shrink_0().child(icon))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_sm()
+                .text_color(cx.theme().foreground)
+                .truncate()
+                .child(name.to_string()),
+        )
+}
 
 /// DataTable delegate for the SFTP file list.
 ///
@@ -74,7 +100,8 @@ impl SftpTableDelegate {
             .collect();
     }
 
-    /// Apply the persisted state (width + visibility) read from `docks.json`.
+    /// Apply the persisted column state (width + visibility) read from
+    /// `docks.json`; the panel applies the dual-pane fields itself.
     /// Ignores invalid keys; Name is always visible.
     pub(crate) fn apply_persisted_state(&mut self, state: &SftpTableState) {
         log::debug!(
@@ -96,7 +123,8 @@ impl SftpTableDelegate {
         self.rebuild_visible_indices();
     }
 
-    /// Read the current config for persistence.
+    /// Read the current column config for persistence (the panel fills in the
+    /// dual-pane fields).
     pub(crate) fn to_persisted_state(&self) -> SftpTableState {
         let mut column_widths = HashMap::new();
         let mut column_visibility = HashMap::new();
@@ -107,6 +135,7 @@ impl SftpTableDelegate {
         SftpTableState {
             column_widths,
             column_visibility,
+            ..SftpTableState::default()
         }
     }
 
@@ -248,15 +277,26 @@ impl TableDelegate for SftpTableDelegate {
         // Read `selected` directly from SftpPanel (single source of truth) instead of
         // syncing via events — avoids re-entrancy when `clear_selection` emits inside
         // `table.update`.
-        let selected = self
-            .panel
-            .upgrade()
-            .and_then(|p| p.read(cx).browser().selected());
+        let panel = self.panel.upgrade();
+        let selected = panel.as_ref().and_then(|p| p.read(cx).browser().selected());
+        let expanded = panel.is_some_and(|p| p.read(cx).expanded());
         let row = div().id(("row", row_ix));
-        if selected == Some(row_ix) {
+        let row = if selected == Some(row_ix) {
             row.bg(cx.theme().tokens.table_hover)
         } else {
             row
+        };
+        // While the Local pane is shown a row can be dragged onto it (download).
+        match self.entries.get(row_ix) {
+            Some(entry) if expanded => {
+                let drag = super::drag::RemoteRowDrag {
+                    entry: entry.clone(),
+                };
+                row.on_drag(drag, |drag, _, _, cx| {
+                    cx.new(|_| super::drag::DragPreview::new(&drag.entry.name))
+                })
+            }
+            _ => row,
         }
     }
     fn render_td(
@@ -277,31 +317,7 @@ impl TableDelegate for SftpTableDelegate {
         let muted = theme.muted_foreground;
 
         match cfg.col {
-            SortColumn::Name => {
-                let icon = if entry.is_dir {
-                    AppIcon::Folder.colored().size(px(19.))
-                } else {
-                    AppIcon::File.colored().size(px(19.))
-                };
-
-                h_flex()
-                    .w_full()
-                    .h_full()
-                    .items_center()
-                    .gap_1()
-                    .min_w_0()
-                    .child(div().w_4().flex_shrink_0().child(icon))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .truncate()
-                            .child(entry.name.clone()),
-                    )
-                    .into_any_element()
-            }
+            SortColumn::Name => name_cell(&entry.name, entry.is_dir, cx).into_any_element(),
             SortColumn::Modified => div()
                 .text_xs()
                 .text_color(muted)

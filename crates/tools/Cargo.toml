@@ -1,6 +1,6 @@
 [package]
 name = "oneterm-tools"
-description = "OneTerm developer diagnostics (not shipped): DOOM-fire terminal workload and a raw ConPTY/PTY throughput probe."
+description = "OneTerm developer diagnostics (not shipped): DOOM-fire terminal workload, a raw ConPTY/PTY throughput probe, and a loopback SSH/SFTP server for SFTP-browser walks."
 version.workspace = true
 edition.workspace = true
 # doom-fire.rs is a port of DOOM-fire-zig and keeps that project's GPL-3.0 licence
@@ -26,10 +26,19 @@ path = "src/bin/doom-fire.rs"
 name = "pty-throughput"
 path = "src/bin/pty-throughput.rs"
 
+[[bin]]
+name = "sftp-dev-server"
+path = "src/bin/sftp-dev-server.rs"
+
 [dependencies]
 # pty-throughput: the same PTY path OneTerm uses (alacritty_terminal::tty + polling).
 alacritty_terminal.workspace = true
 polling.workspace = true
+# sftp-dev-server: the same SSH/SFTP crates OneTerm's client uses, server side.
+russh.workspace = true
+russh-sftp.workspace = true
+tokio.workspace = true
+rand.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 # doom-fire: terminal size detection (TIOCGWINSZ).

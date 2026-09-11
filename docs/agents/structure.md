@@ -148,7 +148,8 @@ OneTerm/
 │   ├── sftp-ui/                    # `oneterm-sftp-ui` — SFTP feature (file browser + transfer queue)
 │   │   └── src/                    # lib.rs init() (register "sftp" panel); panel + browser_view
 │   │                               #   (BrowserView/TransferQueueView/FollowCwd), browser_state (per-backend
-│   │                               #   store), panel_ops/actions/transfer/table_delegate/render…
+│   │                               #   store), panel_ops/actions/transfer/table_delegate/render…,
+│   │                               #   local_pane (Local side of the dual-pane mode) + drag (row drag payloads)
 │   │
 │   ├── session-ui/                 # `oneterm-session-ui` — session tree + connect dialogs
 │   │   └── src/                    # lib.rs init() (SshSessionStore::init + register "session" panel);
