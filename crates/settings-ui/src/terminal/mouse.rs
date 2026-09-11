@@ -36,4 +36,19 @@ pub(super) fn group() -> SettingGroup {
             )
             .description("Copy the selection to the clipboard when the mouse button is released."),
         )
+        .item(
+            SettingItem::new(
+                "Middle-Click Paste",
+                SettingField::switch(
+                    |cx: &App| TerminalSettings::global(cx).read(cx).middle_click_paste,
+                    |val: bool, cx: &mut App| {
+                        set(cx, |s| s.middle_click_paste = val);
+                    },
+                )
+                .default_value(true),
+            )
+            .description(
+                "Paste the clipboard on a middle click. A program in mouse mode gets the click instead unless Shift is held.",
+            ),
+        )
 }

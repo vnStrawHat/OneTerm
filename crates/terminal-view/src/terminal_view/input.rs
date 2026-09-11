@@ -242,6 +242,7 @@ impl TerminalView {
             },
             show_context_menu: settings.show_context_menu,
             copy_on_select: settings.copy_on_select,
+            middle_click_paste: settings.middle_click_paste,
             scroll_multiplier: settings.scroll_multiplier,
         }
     }
@@ -266,6 +267,11 @@ impl TerminalView {
             MouseOutcome::CopySelection => {
                 let origin = self.broadcast_origin(cx);
                 copy_selection(&self.session, &origin, window, cx);
+            }
+            MouseOutcome::Paste => {
+                let origin = self.broadcast_origin(cx);
+                paste_clipboard(&self.session, &origin, window, cx);
+                self.clear_bell(cx);
             }
         }
         self.scrolled(cx);

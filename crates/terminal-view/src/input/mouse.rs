@@ -54,6 +54,8 @@ pub(crate) struct MouseInputs {
     pub show_context_menu: bool,
     /// `terminal.copy_on_select`.
     pub copy_on_select: bool,
+    /// `terminal.middle_click_paste`: the middle button pastes the clipboard.
+    pub middle_click_paste: bool,
     /// `terminal.scroll_multiplier`.
     pub scroll_multiplier: f32,
 }
@@ -80,6 +82,9 @@ pub(crate) enum MouseOutcome {
     OpenUrl(UrlOpen),
     /// copy-on-select fired: run [`crate::input::copy_selection`].
     CopySelection,
+    /// A middle click with `middle_click_paste` on: run
+    /// [`crate::input::paste_clipboard`].
+    Paste,
 }
 
 impl MouseState {
@@ -114,6 +119,14 @@ impl MouseState {
         {
             let decision = validate_target_with_display(&url.url, url.display_text.as_deref());
             return MouseOutcome::OpenUrl(UrlOpen { url, decision });
+        }
+        // Middle-click paste (IN-0024): the program keeps the click while it
+        // reports the mouse, unless Shift overrides it (the xterm convention).
+        if event.button == MouseButton::Middle
+            && inputs.middle_click_paste
+            && (event.modifiers.shift || !session.read(cx).is_mouse_mode())
+        {
+            return MouseOutcome::Paste;
         }
         let Some(button) = to_button(event.button) else {
             return MouseOutcome::Ignored;

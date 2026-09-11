@@ -621,6 +621,7 @@ pub trait TerminalRender: Send + Sync {
     fn query_line_range_cells(&self, start_line: usize, count: usize) -> LineRangeCells;
     fn terminal_info(&self) -> TerminalInfo;
     fn is_alt_screen(&self) -> bool;
+    fn is_mouse_mode(&self) -> bool;                  // any MOUSE_MODE bit: clicks belong to the program
     fn dynamic_colors(&self) -> DynamicColors;        // OSC 10/11/12 + OSC 4
     fn set_default_colors(&self, fg: Rgb, bg: Rgb, cursor: Rgb, ansi: [Rgb; 16]);
     fn search(&self, query: &str, options: SearchOptions) -> Vec<SearchMatch>;

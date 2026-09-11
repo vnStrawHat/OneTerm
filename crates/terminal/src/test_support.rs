@@ -376,6 +376,14 @@ impl TerminalRender for FakeTerminalSession {
             .contains(TermMode::ALT_SCREEN)
     }
 
+    fn is_mouse_mode(&self) -> bool {
+        self.state
+            .mode
+            .lock()
+            .unwrap()
+            .intersects(TermMode::MOUSE_MODE)
+    }
+
     fn dynamic_colors(&self) -> DynamicColors {
         DynamicColors::default()
     }

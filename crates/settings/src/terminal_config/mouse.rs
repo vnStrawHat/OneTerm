@@ -17,6 +17,11 @@ pub struct MouseConfig {
     /// Default `true` (the historical behaviour). Disable it to keep the
     /// clipboard untouched until an explicit Copy (SEC-10).
     pub copy_on_select: bool,
+    /// Paste the clipboard on a middle-button click (IN-0024).
+    ///
+    /// Default `true`. A program in mouse mode receives the click instead
+    /// unless Shift is held; when disabled the middle button never pastes.
+    pub middle_click_paste: bool,
 }
 
 #[cfg(test)]
@@ -40,6 +45,16 @@ mod tests {
     }
 
     #[test]
+    fn middle_click_paste_defaults_to_enabled_and_can_be_disabled() {
+        assert!(MouseConfig::default().middle_click_paste);
+        let config: MouseConfig = serde_json::from_str("{}").unwrap();
+        assert!(config.middle_click_paste);
+        let config: MouseConfig =
+            serde_json::from_str(r#"{ "middle_click_paste": false }"#).unwrap();
+        assert!(!config.middle_click_paste);
+    }
+
+    #[test]
     fn right_click_context_menu_can_be_disabled_explicitly() {
         let config: MouseConfig =
             serde_json::from_str(r#"{ "show_context_menu": false }"#).unwrap();
@@ -52,6 +67,7 @@ impl Default for MouseConfig {
         Self {
             show_context_menu: true,
             copy_on_select: true,
+            middle_click_paste: true,
         }
     }
 }

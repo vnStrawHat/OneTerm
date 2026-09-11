@@ -288,6 +288,9 @@ pub trait TerminalRender: Send + Sync {
 
     /// Alt-screen is on (e.g. vim/less) → disable IME, plain keys go through on_key_down.
     fn is_alt_screen(&self) -> bool;
+    /// The program enabled mouse reporting (any `TermMode::MOUSE_MODE` bit),
+    /// so clicks belong to it rather than to the terminal's own gestures.
+    fn is_mouse_mode(&self) -> bool;
 
     /// Dynamic OSC-set foreground/background/cursor colors (OSC 10/11/12).
     /// Read from the live `Term` color table so the renderer can apply them on
@@ -526,6 +529,10 @@ macro_rules! impl_pty_terminal_session {
 
             fn is_alt_screen(&self) -> bool {
                 self.model().is_alt_screen()
+            }
+
+            fn is_mouse_mode(&self) -> bool {
+                self.model().is_mouse_mode()
             }
 
             fn search(

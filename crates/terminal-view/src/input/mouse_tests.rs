@@ -35,6 +35,7 @@ fn inputs() -> MouseInputs {
         over_scrollbar: false,
         show_context_menu: false,
         copy_on_select: false,
+        middle_click_paste: true,
         scroll_multiplier: 1.0,
     }
 }
@@ -147,18 +148,22 @@ fn ctrl_click_on_url_opens_not_selects(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn middle_click_forwards_to_session(cx: &mut TestAppContext) {
+fn middle_click_forwards_to_session_when_paste_is_off(cx: &mut TestAppContext) {
     let (session, probe) = session(cx, "hello");
     let mut state = MouseState::default();
+    let paste_off = MouseInputs {
+        middle_click_paste: false,
+        ..inputs()
+    };
     cx.update(|cx| {
         state.down(
             &down(MouseButton::Middle, cell(1, 2), Modifiers::default()),
             &session,
-            &inputs(),
+            &paste_off,
             cx,
         )
     });
-    // Middle click is mouse-mode input, never a primary-selection paste.
+    // With the setting off, a middle click is plain mouse input (IN-0024).
     assert!(matches!(
         probe.input_calls().as_slice(),
         [FakeInputCall::MouseDown {
@@ -192,6 +197,56 @@ fn right_click_forwards_when_menu_disabled(cx: &mut TestAppContext) {
             ..
         }]
     ));
+}
+
+/// IN-0024: a middle click pastes when the setting is on; a program in mouse
+/// mode keeps the click unless Shift is held; the setting off forwards it.
+#[gpui::test]
+fn middle_click_pastes_unless_the_program_owns_the_mouse(cx: &mut TestAppContext) {
+    let (session, probe) = session(cx, "hello");
+    let mut state = MouseState::default();
+    let event = down(MouseButton::Middle, cell(0, 1), Modifiers::default());
+
+    let outcome = cx.update(|cx| state.down(&event, &session, &inputs(), cx));
+    assert_eq!(outcome, MouseOutcome::Paste);
+    assert!(
+        probe.input_calls().is_empty(),
+        "a paste never reaches mouse_down"
+    );
+
+    // The program turned mouse reporting on: the click is its.
+    probe.set_mode(alacritty_terminal::term::TermMode::MOUSE_REPORT_CLICK);
+    let outcome = cx.update(|cx| state.down(&event, &session, &inputs(), cx));
+    assert_eq!(outcome, MouseOutcome::Handled);
+    assert!(matches!(
+        probe.input_calls().as_slice(),
+        [FakeInputCall::MouseDown {
+            button: TerminalMouseButton::Middle,
+            ..
+        }]
+    ));
+
+    // Shift overrides mouse mode, as in xterm and alacritty.
+    let shifted = down(
+        MouseButton::Middle,
+        cell(0, 1),
+        Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        },
+    );
+    let outcome = cx.update(|cx| state.down(&shifted, &session, &inputs(), cx));
+    assert_eq!(outcome, MouseOutcome::Paste);
+
+    // Setting off: the middle button is forwarded like any other button.
+    probe.set_mode(alacritty_terminal::term::TermMode::SHOW_CURSOR);
+    let off = MouseInputs {
+        middle_click_paste: false,
+        ..inputs()
+    };
+    let outcome = cx.update(|cx| state.down(&event, &session, &off, cx));
+    assert_eq!(outcome, MouseOutcome::Handled);
+    assert_eq!(probe.input_calls().len(), 2);
 }
 
 #[gpui::test]

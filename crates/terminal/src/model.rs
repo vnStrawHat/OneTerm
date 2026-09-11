@@ -192,6 +192,11 @@ impl<EP: EventListener> TerminalModel<EP> {
         self.mode().contains(TermMode::ALT_SCREEN)
     }
 
+    /// Whether the program enabled any mouse-reporting mode.
+    pub fn is_mouse_mode(&self) -> bool {
+        self.mode().intersects(TermMode::MOUSE_MODE)
+    }
+
     // ── Resize / scroll ────────────────────────────────────────────
 
     /// Check whether the terminal grid needs resizing (without performing it).
