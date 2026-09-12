@@ -163,6 +163,9 @@ unicode-width = "0.2"
 unicode-segmentation = "1"
 # Dev-only: property tests for the packed-cell round trips, and later for reflow.
 proptest = "1"
+# The adapter's lock (IN-0029 US-0081, HLD decision 7). Declared by `crates/terminal`,
+# never by the engine: `oneterm-vt` holds no lock and the embedder picks the strategy.
+parking_lot = "0.12"
 
 [workspace.lints.clippy]
 # Preserve compatibility with upstream gpui-component (see reference/Cargo.toml)
@@ -222,6 +225,12 @@ gpui-pre = { opt-level = 3 }
 gpui-pre-platform = { opt-level = 3 }
 smol = { opt-level = 3 }
 alacritty_terminal = { opt-level = 3 }
+# The engine the swap moved the hot path onto (IN-0029 `US-0081`): it inherits
+# `alacritty_terminal`'s place in this list, not `dev`'s opt-level = 0.
+oneterm-vt = { opt-level = 3 }
+# The transport was on the hot path before the swap too and was simply never
+# listed; added opportunistically while measuring the engine, not required by it.
+oneterm-pty = { opt-level = 3 }
 oneterm-terminal-view = { opt-level = 3 }
 oneterm-core = { opt-level = 3 }
 oneterm-terminal = { opt-level = 3 }

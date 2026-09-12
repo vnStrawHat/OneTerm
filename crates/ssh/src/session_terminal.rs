@@ -10,11 +10,9 @@ use oneterm_terminal::{
 };
 
 use crate::session::SshSession;
-use crate::transport::SshListener;
 
 oneterm_terminal::impl_pty_terminal_session!(
     SshSession,
-    SshListener,
     "SshSession",
     SessionKind::Ssh,
     // The remote PTY reflows and repaints on its side (DEC-0008).

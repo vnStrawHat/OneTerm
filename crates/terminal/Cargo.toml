@@ -1,6 +1,6 @@
 [package]
 name = "oneterm-terminal"
-description = "Terminal engine for OneTerm: TerminalSession trait + content/palette/encode/osc/url-policy/search. Owns alacritty_terminal (no GPUI)."
+description = "Terminal adapter for OneTerm: TerminalSession trait + content/palette/encode/osc/url-policy/search over the oneterm-vt engine (no GPUI)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -16,7 +16,15 @@ workspace = true
 
 [dependencies]
 oneterm-core.workspace = true
+oneterm-vt.workspace = true
+# The engine being replaced. From US-0081 it runs nothing: what is left is the
+# value vocabulary of `TerminalContent` (Cell, Flags, Point, TermMode, Rgb,
+# SelectionRange, RenderableCursor, the graphics re-exports), which
+# `crates/terminal-view` still reads. US-0085 moves the view onto the engine's
+# own types and US-0087 deletes this line (`migration.md` § "Deletion list").
 alacritty_terminal.workspace = true
+# The adapter owns the lock; the engine holds none (HLD decision 6 and 7).
+parking_lot.workspace = true
 async-channel.workspace = true
 base64.workspace = true
 chrono.workspace = true

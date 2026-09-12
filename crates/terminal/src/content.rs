@@ -1,39 +1,51 @@
 //! Terminal content snapshot for rendering — framework-agnostic.
 //!
-//! `TerminalContent::from(&mut Term)` locks `Term` briefly, collects `RenderableContent`
-//! (display_iter + cursor + selection + mode + display_offset) into owned data.
-//! Rendering only reads the snapshot and never holds the `FairMutex` while drawing.
+//! `TerminalContent::refill(&mut Engine)` runs one `Terminal::render_update`
+//! under the adapter lock and reshapes the result — cells, cursor, selection,
+//! mode, scroll offset, damage — into owned data. Rendering only reads the
+//! snapshot and never holds the lock while drawing.
 //!
-//! Integrates `Term::damage()` + `Term::reset_damage()` to expose
-//! per-row dirty info (`TermDamageInfo`) — the renderer only recomputes layout for
-//! dirty rows instead of the entire viewport every frame.
+//! The damage the renderer sees is the engine's per-row sequence number read
+//! through this consumer's watermark ([`crate::engine_shim::LegacySnapshot`]),
+//! converted into the display-line shape the view already consumes, so a row
+//! that did not change is not laid out again.
 //!
 //! The exposed types (`Cell`, `RenderableCursor`, `TermMode`, `SelectionRange`,
-//! `Point`) are `alacritty_terminal` types — the UI crate also depends on
-//! `alacritty_terminal`, so they map directly.
+//! `Point`) are still `alacritty_terminal` types: they are the seam's value
+//! vocabulary until `US-0085` moves `crates/terminal-view` onto the engine's
+//! own `RenderRow` / `RenderCell`.
 
 use std::sync::Arc;
 
-use alacritty_terminal::event::EventListener;
-use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Line, Point};
+use alacritty_terminal::index::Point;
 use alacritty_terminal::selection::SelectionRange;
-use alacritty_terminal::term::cell::{Cell, Flags};
+use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::term::graphics::GraphicData;
-use alacritty_terminal::term::{RenderableCursor, Term, TermDamage, TermMode};
+use alacritty_terminal::term::{RenderableCursor, TermMode};
+use oneterm_vt::{Attrs, CellWidth, Color, NamedColor, Terminal};
 
-use super::color_classification::is_default_background_color;
+use crate::engine::Engine;
 
-/// A blank cell = space + default background + no decoration (hyperlink, underline,
-/// inverse…). Matches the UI's `is_blank` definition so the gutter and stamping
-/// agree on which lines have content.
-pub fn is_blank_cell(cell: &Cell) -> bool {
-    cell.c == ' '
-        && is_default_background_color(&cell.bg)
-        && cell.hyperlink().is_none()
-        && !cell.flags.intersects(
-            Flags::INVERSE | Flags::ALL_UNDERLINES | Flags::STRIKEOUT | Flags::WIDE_CHAR_SPACER,
-        )
+/// A blank cell = space + default background + no decoration (hyperlink,
+/// underline, inverse…). Matches the UI's `is_blank` definition so the gutter
+/// and stamping agree on which lines have content.
+///
+/// Read straight off the engine's packed cell: `last_content_line` runs on every
+/// `terminal_info()` call, and converting a whole viewport into legacy cells to
+/// answer it would allocate a `Hyperlink` per decorated cell.
+fn is_blank_cell(cell: oneterm_vt::Cell, term: &Terminal) -> bool {
+    let style = term.interner().resolve_style(cell.style_id());
+    cell.text_char(&term.interner().graphemes) == ' '
+        && style.bg == Color::Named(NamedColor::Background)
+        && cell.width() != CellWidth::WideSpacer
+        && !style
+            .attrs
+            .intersects(Attrs::INVERSE | Attrs::ALL_UNDERLINES | Attrs::STRIKEOUT)
+        && term
+            .interner()
+            .resolve_extras(cell.extras_id())
+            .hyperlink
+            .is_none()
 }
 
 /// Index (0-based, in the active/viewport `Line` frame — same reference as
@@ -43,14 +55,14 @@ pub fn is_blank_cell(cell: &Cell) -> bool {
 /// Used for `line_times` stamping: the gutter renders up to the last non-blank
 /// line, so timestamps must be stamped up to there too; otherwise lines below
 /// the cursor (TUI, progress bars using cursor-up…) show `[--:--:--]`.
-pub fn last_content_line<EP: EventListener>(term: &Term<EP>) -> i32 {
-    let screen_lines = term.screen_lines();
-    let cols = term.columns();
-    let grid = term.grid();
-    for i in (0..screen_lines).rev() {
-        let row = &grid[Line(i as i32)];
-        if (0..cols).any(|c| !is_blank_cell(&row[Column(c)])) {
-            return i as i32;
+pub fn last_content_line(term: &Terminal) -> i32 {
+    let screen = term.screen();
+    let rows = screen.rows();
+    let top = screen.screen_top();
+    for index in (0..rows).rev() {
+        let row = screen.row(top + u64::from(index));
+        if row.cells().iter().any(|cell| !is_blank_cell(*cell, term)) {
+            return i32::from(index);
         }
     }
     0
@@ -63,13 +75,12 @@ pub struct IndexedCell {
     pub cell: Cell,
 }
 
-/// Dirty-row info from `Term::damage()` — converted to display line indices
-/// (0-based from the top of the viewport). The renderer uses it to skip layout
-/// for unchanged rows.
+/// Dirty-row info — display line indices (0-based from the top of the
+/// viewport). The renderer uses it to skip layout for unchanged rows.
 ///
 /// We use `Vec<usize>` of damaged row indices rather than a single row range
-/// because `Term::damage()` gives per-line damage (it could skip columns within a
-/// line, but we currently track only at line level).
+/// because damage is per line (it could skip columns within a line, but we
+/// currently track only at line level).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TermDamageInfo {
     /// The entire viewport is dirty — repaint all rows.
@@ -103,8 +114,8 @@ pub struct TerminalContent {
     pub selection: Option<SelectionRange>,
     /// Grid size.
     pub terminal_bounds: TerminalBounds,
-    /// Dirty rows from `Term::damage()` — converted to display line indices.
-    /// The renderer skips layout for rows not in this list.
+    /// Dirty rows — converted to display line indices. The renderer skips
+    /// layout for rows not in this list.
     pub damage: TermDamageInfo,
     /// Images decoded since the previous snapshot (Sixel), each handed out once;
     /// the cells reference them through `Cell::graphic()`.
@@ -151,74 +162,23 @@ impl Default for TerminalContent {
 }
 
 impl TerminalContent {
-    /// Build a snapshot from `Term` (the caller handles locking — pass `&mut Term`).
+    /// Build a snapshot from the engine (the caller handles locking).
     ///
     /// Allocating convenience over [`refill`](Self::refill) — the render path
     /// reuses one buffer via `refill` instead.
-    pub fn from<EP: EventListener>(term: &mut Term<EP>) -> Self {
+    pub fn from(engine: &mut Engine) -> Self {
         let mut content = Self::default();
-        content.refill(term);
+        content.refill(engine);
         content
     }
 
-    /// Refill `self` from `Term`, reusing the `cells` and dirty-line
+    /// Refill `self` from the engine, reusing the `cells` and dirty-line
     /// allocations — the steady-state render loop allocates nothing (PERF).
     ///
-    /// Calls `Term::damage()` to collect dirty rows, `reset_damage()` to clear them,
-    /// then reads `renderable_content()` (display_iter + cursor + selection +
-    /// mode + display_offset) + `Dimensions` to get num_lines/num_cols.
-    ///
-    /// `&mut Term` is required because `damage()` needs `&mut self` — unlike
-    /// `renderable_content()`, which needs only `&self`. The FairMutex locks both.
-    pub fn refill<EP: EventListener>(&mut self, term: &mut Term<EP>) {
-        // ── Collect damage before resetting ──
-        // Term::damage() returns TermDamage::Full (everything) or Partial (an iterator
-        // of LineDamageBounds). The iterator already adds display_offset to ldb.line,
-        // so ldb.line is the display line (0-based from the top of the viewport).
-        // An empty Partial is kept as-is so the renderer knows there is nothing
-        // to recompute.
-        let num_lines = term.screen_lines();
-        let mut dirty = match std::mem::replace(&mut self.damage, TermDamageInfo::Full) {
-            TermDamageInfo::Partial(previous) => previous,
-            TermDamageInfo::Full => Vec::new(),
-        };
-        dirty.clear();
-        self.damage = match term.damage() {
-            TermDamage::Full => TermDamageInfo::Full,
-            TermDamage::Partial(iter) => {
-                dirty.extend(iter.map(|ldb| ldb.line).filter(|&dl| dl < num_lines));
-                TermDamageInfo::Partial(dirty)
-            }
-        };
-        term.reset_damage();
-
-        // ── Snapshot content (renderable_content needs only &self) ──
-        let content = term.renderable_content();
-        let RenderableContentParts {
-            display_iter,
-            cursor,
-            mode,
-            display_offset,
-            selection,
-        } = RenderableContentParts::take(content);
-
-        self.cells.clear();
-        self.cells.extend(display_iter.map(|indexed| IndexedCell {
-            point: indexed.point,
-            cell: indexed.cell.clone(),
-        }));
-
-        self.cursor = cursor;
-        self.mode = mode;
-        self.display_offset = display_offset;
-        self.total_lines = term.total_lines();
-        self.selection = selection;
-        // `mem::take` inside: no allocation when no image arrived.
-        self.graphics = term.take_graphics();
-        self.terminal_bounds = TerminalBounds {
-            num_lines,
-            num_cols: term.columns(),
-        };
+    /// Consumes this consumer's damage: the render state's watermark advances,
+    /// so the next call reports only what changed after this one.
+    pub fn refill(&mut self, engine: &mut Engine) {
+        engine.refill(self);
     }
 
     /// true if the cursor is visible (shape ≠ Hidden).
@@ -231,75 +191,55 @@ impl TerminalContent {
     }
 }
 
-/// Helper that extracts the Copy/move parts of `RenderableContent` (avoids
-/// messy partial-moves in `from`).
-struct RenderableContentParts<'a> {
-    display_iter: alacritty_terminal::grid::GridIterator<'a, Cell>,
-    cursor: RenderableCursor,
-    mode: TermMode,
-    display_offset: usize,
-    selection: Option<SelectionRange>,
-}
-
-impl<'a> RenderableContentParts<'a> {
-    fn take(content: alacritty_terminal::term::RenderableContent<'a>) -> Self {
-        let alacritty_terminal::term::RenderableContent {
-            display_iter,
-            cursor,
-            mode,
-            display_offset,
-            selection,
-            colors: _,
-        } = content;
-        Self {
-            display_iter,
-            cursor,
-            mode,
-            display_offset,
-            selection,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alacritty_terminal::term::test::mock_term;
+    use crate::backend::GridSize;
+    use crate::test_engine::{engine, feed};
+
+    fn snapshot(engine: &mut Engine) -> TerminalContent {
+        TerminalContent::from(engine)
+    }
 
     #[test]
     fn snapshot_has_cells_and_bounds() {
-        let mut term = mock_term("hello\r\nworld");
-        let snap = TerminalContent::from(&mut term);
+        let mut term = engine(GridSize { cols: 5, lines: 2 });
+        feed(&mut term, b"hello\r\nworld");
+        let snap = snapshot(&mut term);
         assert_eq!(snap.terminal_bounds.num_cols, 5);
-        // mock_term's default screen_lines.
-        assert!(snap.terminal_bounds.num_lines > 0);
-        assert!(!snap.cells.is_empty());
+        assert_eq!(snap.terminal_bounds.num_lines, 2);
+        assert_eq!(snap.cells.len(), 10);
+        assert_eq!(snap.cells[0].cell.c, 'h');
+        assert_eq!(snap.cells[5].cell.c, 'w');
     }
 
     #[test]
     fn snapshot_is_owned_clone() {
-        let mut term = mock_term("ab");
-        let snap = TerminalContent::from(&mut term);
-        let _clone = snap.clone();
-        // Clone does not borrow term → the snapshot is truly owned.
+        let mut term = engine(GridSize { cols: 4, lines: 1 });
+        feed(&mut term, b"ab");
+        let snap = snapshot(&mut term);
+        let clone = snap.clone();
+        // Clone does not borrow the engine → the snapshot is truly owned.
         drop(term);
-        assert!(!_clone.cells.is_empty());
+        assert!(!clone.cells.is_empty());
     }
 
     #[test]
     fn cursor_visible_default() {
-        let mut term = mock_term("x");
-        let snap = TerminalContent::from(&mut term);
-        // mock_term shows the cursor by default.
+        let mut term = engine(GridSize { cols: 4, lines: 1 });
+        feed(&mut term, b"x");
+        let snap = snapshot(&mut term);
+        // The cursor is visible at power-on.
         assert!(snap.cursor_visible());
+        assert_eq!(snap.cursor.point.column.0, 1);
     }
 
     #[test]
     fn damage_full_on_first_snapshot() {
-        // The first snapshot after creating the term → damage must be Full
-        // (Term::damage() is always full until reset_damage).
-        let mut term = mock_term("hello");
-        let snap = TerminalContent::from(&mut term);
+        // The first snapshot of a fresh render state must be Full.
+        let mut term = engine(GridSize { cols: 5, lines: 2 });
+        feed(&mut term, b"hello");
+        let snap = snapshot(&mut term);
         assert_eq!(snap.damage, TermDamageInfo::Full);
     }
 
@@ -307,12 +247,14 @@ mod tests {
     /// damage; at most the cursor line is dirty.
     #[test]
     fn damage_partial_on_unchanged() {
-        let mut term = mock_term("hello");
-        let snap1 = TerminalContent::from(&mut term);
-        let cursor_line = snap1.cursor.point.line.0 as usize;
+        let mut term = engine(GridSize { cols: 5, lines: 2 });
+        feed(&mut term, b"hello");
+        let mut content = TerminalContent::default();
+        content.refill(&mut term);
+        let cursor_line = content.cursor.point.line.0 as usize;
         // Second snapshot — no changes, only cursor damage.
-        let snap2 = TerminalContent::from(&mut term);
-        match &snap2.damage {
+        content.refill(&mut term);
+        match &content.damage {
             TermDamageInfo::Partial(lines) => {
                 assert!(
                     lines.iter().all(|line| *line == cursor_line),
@@ -321,5 +263,12 @@ mod tests {
             }
             TermDamageInfo::Full => panic!("unchanged terminal must not report full damage"),
         }
+    }
+
+    #[test]
+    fn last_content_line_finds_the_last_written_row() {
+        let mut term = engine(GridSize { cols: 8, lines: 5 });
+        feed(&mut term, b"one\r\ntwo\r\n");
+        assert_eq!(last_content_line(&term), 1);
     }
 }

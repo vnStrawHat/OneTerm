@@ -22,8 +22,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
-use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::{Config, Term};
 use async_channel::Receiver;
 use russh::Pty;
 use russh::client;
@@ -38,7 +36,8 @@ use oneterm_core::{
 };
 use oneterm_terminal::{
     ClipboardOrigin, GridSize, OscRouter, PtySize, PtyTransport, SessionEvent, SessionEventSink,
-    SharedSessionState, SharedState, TerminalSecurityPolicy, ssh_log_identity,
+    SharedSessionState, SharedState, SharedTerminal, TerminalSecurityPolicy, new_shared_terminal,
+    ssh_log_identity,
 };
 
 use crate::agent::{local_agent_connector, request_agent_forwarding};
@@ -53,7 +52,7 @@ use crate::tunnel::{ForwardContext, ForwardTable, HANDLE_REQUEST_CAPACITY, start
 
 /// An SSH session whose asynchronous tasks run on the shared SSH runtime.
 pub struct SshSession {
-    pub(crate) term: Arc<FairMutex<Term<SshListener>>>,
+    pub(crate) term: SharedTerminal,
     pub(crate) listener: SshListener,
     pub(crate) event_rx: Mutex<Option<Receiver<SessionEvent>>>,
     pub(crate) state: SharedState,
@@ -242,15 +241,7 @@ pub fn connect(
         cols: initial.cols as usize,
         lines: initial.rows as usize,
     };
-    let term_config = Config {
-        scrolling_history: scrollback_history,
-        ..Default::default()
-    };
-    let term = Arc::new(FairMutex::new(Term::new(
-        term_config,
-        &size,
-        listener.clone(),
-    )));
+    let term = new_shared_terminal(size, scrollback_history);
 
     // ── Connect (block_on) ──────────────────────────────────────────
     let connect_result = runtime.block_on(async {
@@ -794,14 +785,13 @@ mod tests {
             state.clone(),
             ClipboardOrigin::Remote,
         );
-        let term = Arc::new(FairMutex::new(Term::new(
-            Config::default(),
-            &GridSize {
+        let term = new_shared_terminal(
+            GridSize {
                 cols: 80,
                 lines: 24,
             },
-            listener.clone(),
-        )));
+            oneterm_terminal::DEFAULT_SCROLLBACK_LINES,
+        );
         let session = SshSession {
             term,
             listener,

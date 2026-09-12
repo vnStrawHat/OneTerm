@@ -3,15 +3,11 @@
 //! **`handle` must be kept alive** — dropping `russh::client::Handle` closes the
 //! connection. The handle is moved into the task and held until the session closes.
 
-use std::sync::Arc;
-
-use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::Term;
 use russh::ChannelMsg;
 use tokio_util::sync::CancellationToken;
 
 use oneterm_core::report_best_effort;
-use oneterm_terminal::TerminalPump;
+use oneterm_terminal::{SharedTerminal, TerminalPump};
 
 use crate::handler::SshClientHandler;
 use crate::route::JumpHandles;
@@ -37,7 +33,7 @@ pub(crate) async fn ssh_main_task(
     handle: russh::client::Handle<SshClientHandler>,
     jump_handles: JumpHandles,
     mut channel: russh::Channel<russh::client::Msg>,
-    term: Arc<FairMutex<Term<SshListener>>>,
+    term: SharedTerminal,
     listener: SshListener,
     cmd_rx: async_channel::Receiver<Cmd>,
     mut open_rx: tokio::sync::mpsc::Receiver<HandleRequest>,

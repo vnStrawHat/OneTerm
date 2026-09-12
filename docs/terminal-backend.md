@@ -130,14 +130,28 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "io-util",
 
 ---
 
-## 5. Concurrency model: `Arc<FairMutex<Term<EP>>>` + snapshot
+## 5. Concurrency model: `Arc<FairMutex<Engine>>` + snapshot
 
 ### 5.1. Why
 
-- The **pump** (local `EventLoop` thread / ssh tokio task) advances Term on another thread.
+- The **pump** (local `EventLoop` thread / ssh tokio task) feeds bytes to the engine on
+  another thread.
 - **Render** (`TerminalElement::paint`) runs on the GPUI main thread.
-- Both need access to the same `Term` ⇒ use `alacritty_terminal::sync::FairMutex`
-  (fair = the main thread doesn't starve for the lock while the pump is busy).
+- Both need access to the same engine ⇒ use a fair mutex (fair = the main thread doesn't
+  starve for the lock while the pump is busy).
+
+Since IN-0029 `US-0081` the engine is `oneterm_vt::Terminal`, which holds **no lock, no
+atomic and no interior mutability** and takes `&mut self`: the synchronisation is the
+embedder's choice, and `crates/terminal` makes it `parking_lot::FairMutex` behind
+`oneterm_terminal::sync::FairMutex`. The shared handle is
+`oneterm_terminal::SharedTerminal` = `Arc<FairMutex<Engine>>`, where `Engine` is the
+terminal plus the render state this consumer reads its damage through.
+
+The demand/yield handshake the design adds on top of fairness
+(`oneterm_vt::render::Demand`) is **not wired yet**: raising the flag and yielding are
+the backends' read loops' business, and those belong to `US-0083` / `US-0084`. What is
+already in place is the half that costs nothing and matters most — reply bytes leave
+before anything else in the batch (§ 5.3).
 
 ### 5.2. Snapshot vs live borrow (IMPORTANT)
 
@@ -150,35 +164,44 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "io-util",
 **Convention (as implemented)**: there is **no cached `last_content`**. The pump only
 sends the `Output` hint; `TerminalSession::snapshot()` (`TerminalModel::snapshot`,
 `crates/terminal/src/model.rs`) takes the `FairMutex` for the microseconds needed to
-copy `TerminalContent` (and consume the damage), releases it, and the element paints
+copy `TerminalContent` (and advance this consumer's damage watermark), releases it, and the element paints
 from that owned copy — the lock is never held **while painting**. Non-render reads use
 `query_state()` (O(1), no cells) or `query_line_range_cells()` (damage-free,
 O(window×cols)); there is deliberately no damage-free full-grid snapshot — an
 O(rows×cols) clone per event is a footgun. Every one of them is a short lock too, so the pump and the
 UI contend only briefly (see the "never block inside a `Term` callback" rule in §5.3).
 
-The snapshot also carries `graphics`: the Sixel images the vendored `Term` decoded since
-the previous snapshot (`Term::take_graphics`, each image handed out once). Cells reference
-them through `Cell::graphic()` (`GraphicCell { id, col, row }`), so an image scrolls, is
-erased and is resized with its cells; the view keeps the pixels in a bounded store
-(IN-0028, DEC-0012).
+**Damage is a per-row sequence number, not a reset pass.** The engine stamps every row
+it mutates with the batch's `SeqNo`; a consumer keeps a **watermark** and "changed for me"
+is `row.seq > watermark`. Nobody clears anybody else's damage, so a second consumer needs
+no engine change. `crates/terminal` owns one such consumer — the `RenderState` inside
+`Engine` — and `LegacySnapshot` reshapes its tri-state result (`Unchanged` /
+`Partial { scrolled }` / `Full`) into the display-line `TermDamageInfo` the view already
+consumes. A scroll is still reported as `Full`, because that is what the view does with
+it today; consuming the delta as a cache shift is `US-0085`.
+
+The snapshot also carries `graphics`: the Sixel images decoded since the previous
+snapshot (each image handed out once). Cells reference them through `Cell::graphic()`
+(`GraphicCell { id, col, row }`), so an image scrolls, is erased and is resized with its
+cells; the view keeps the pixels in a bounded store (IN-0028, DEC-0012). The engine's own
+graphics decoder is `US-0080`; until it lands the vector is empty.
 
 ```rust
 // Pump (ShellEventLoop / ssh_main_task) — per read chunk:
-pump.advance(&mut *term.lock(), bytes);       // parse under the Term lock
+pump.advance(&mut *term.lock(), bytes);       // feed + drain under the engine lock
 pump.finish_batch_blocking(true);             // lock released: flush reliable events, then Output
 
 // Render (TerminalElement prepaint):
-let content = session.snapshot();             // short Term lock, owned TerminalContent
+let content = session.snapshot();             // short engine lock, owned TerminalContent
 // paint from content.cells / content.cursor / content.mode ...
 ```
 
-> Do NOT hold the `FairMutex<Term>` across layout/paint work; copy, drop the guard,
+> Do NOT hold the `FairMutex<Engine>` across layout/paint work; copy, drop the guard,
 > then paint. `snapshot()` is called exactly once per frame from the render path.
 
 ### 5.3. Shared pump layer (`oneterm_terminal::backend`)
 
-Both backends use the same `EventListener` and the same batch driver; they only
+Both backends use the same event drain and the same batch driver; they only
 provide a transport and a read loop.
 
 | Type | Role |
@@ -186,13 +209,13 @@ provide a transport and a read loop.
 | `PtyTransport` (trait) | The backend half: `pty_write` / `pty_resize` / `pty_close`. Non-blocking, `Clone` (Arc handles). `LocalTransport` wraps the owner-thread notifier queue; `SshTransport` wraps the bounded `Cmd` channel (byte budget, coalesced resize, closing flag). |
 | `SharedState` (`Arc<SharedSessionState>`) | Title / cwd / clipboard / exit code / OSC 133 counters / theme default colours / OSC 9;7 seq watermarks behind one mutex; `alive`, rx/tx bytes, absolute line count and clear epoch as atomics so a parse batch never takes the mutex. Handed to the SFTP browser as `TerminalCapabilities::cwd_source` so it can read the live cwd. |
 | `SessionEventSink` | Delivery policy: `Output` is coalescible (dropped when the 4096-slot queue is full), everything else is reliable. `forward` never blocks — reliable events that do not fit go to a FIFO and `flush_reliable[_blocking]` delivers them after the batch, outside the `Term` lock. `forward_lifecycle*` flushes first so `Exited`/`Closed` arrive in order. Counters (`EventQueueDiagnostics`) for tests/diagnostics. |
-| `OscRouter<T: PtyTransport>` | The `EventListener` installed in `Term`: `Wakeup` → `Output`; `Title`/`ResetTitle` → state + `Title`; OSC 52 store/load gated by `TerminalSecurityPolicy` + `ClipboardOrigin` (remote default off — the same code for both backends, so the policy cannot drift; the policy is the user's, derived from `TerminalSettings` by `terminal-view` and passed through `SessionFactory::{spawn_local, connect_ssh}` into `OscRouter::with_security`); `Event::Osc` (OSC 7/9/133/9;7 from the fork) → state + `Cwd`/`Notification`/`Progress`/`ShellIntegration`/`AgentStatus` (rate limit, seq dedup); `ClearScreen` → clear epoch; `ColorRequest` → the pending colour-query queue, drained by `TerminalPump::color_replies` after the batch (answers come from the live `Term` colours with the theme defaults as fallback); `PtyWrite` → `transport.pty_write`; `Bell`. |
+| `OscRouter<T: PtyTransport>` | The drain over the `EventBatch` `Terminal::feed` fills — **not** a callback installed in the engine, so nothing runs inside it while the caller holds the lock. `drain()` writes every `VtEvent::Reply` to the transport **first** (conhost blocks up to a second for the DA1 answer at session start), then routes the rest in byte order: `Repaint` → `Output`; `Title`/`ResetTitle` → state + `Title`; OSC 52 store/load gated by `TerminalSecurityPolicy` + `ClipboardOrigin` (remote default off — the same code for both backends, so the policy cannot drift; the policy is the user's, derived from `TerminalSettings` by `terminal-view` and passed through `SessionFactory::{spawn_local, connect_ssh}` into `OscRouter::with_security`); `Event::Osc` (OSC 7/9/133/9;7 from the fork) → state + `Cwd`/`Notification`/`Progress`/`ShellIntegration`/`AgentStatus` (rate limit, seq dedup); `ClearScreen` → clear epoch; `ColorRequest` → the pending colour-query queue, drained by `TerminalPump::color_replies` after the batch (answers come from the live `Term` colours with the theme defaults as fallback); `Reply` → `transport.pty_write`; `Bell`. `RowsScrolled` / `RowsTrimmed` / `GraphicReleased` are dropped until a `RowId`-keyed consumer exists (`US-0085`). |
 | `LineAccounting` | Absolute-line counter (gutter numbers keep growing after the scrollback is full). Owned by the pump, published to `SharedState` once per batch. |
-| `TerminalPump<T>` | Owns `ansi::Processor` + `LineAccounting` + a router clone. Per chunk: `advance(term, bytes)` under the `Term` lock (or `process_chunk(&term_arc, bytes)` which also answers colour queries and writes the replies), then `finish_batch[_blocking](repaint)` once the lock is released: publish line count → flush deferred reliable events (backpressure) → `Output`. Lifecycle: `publish_exit*` / `publish_closed*`. |
+| `TerminalPump<T>` | Owns one reusable `EventBatch` + `LineAccounting` + a router clone. Per chunk: `advance(engine, bytes)` under the engine lock — `Terminal::feed` into the batch, then `OscRouter::drain` — (or `process_chunk(&term_arc, bytes)` which also answers colour queries and writes the replies), then `finish_batch[_blocking](repaint)` once the lock is released: publish line count → flush deferred reliable events (backpressure) → `Output`. Lifecycle: `publish_exit*` / `publish_closed*`. |
 
 Local (`ShellEventLoop<P>`) uses the blocking variants on the PTY owner thread;
 SSH (`ssh_main_task`) uses the async ones on the tokio runtime. Neither backend
-resizes the `Term` grid from its loop — the UI thread does that in
+resizes the grid from its loop — the UI thread does that in
 `TerminalSession::resize`: `PtyTransport::pty_resize` first, so the process learns
 the new size before any output for it arrives, then `TerminalModel::resize_grid`.
 

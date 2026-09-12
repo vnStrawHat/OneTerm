@@ -6,8 +6,6 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::term::Config;
 use oneterm_pty::{ChildEvent, EventedReadWrite};
 use oneterm_terminal::{
     ClipboardOrigin, GridSize, OscRouter, SessionEvent, SessionEventSink, SharedSessionState,
@@ -333,7 +331,7 @@ impl OnResize for LoopbackPty {
 }
 
 struct RunningLoop {
-    term: Arc<FairMutex<Term<LocalListener>>>,
+    term: oneterm_terminal::SharedTerminal,
     notifier: ShellNotifier,
     events: async_channel::Receiver<SessionEvent>,
     state: oneterm_terminal::SharedState,
@@ -343,14 +341,12 @@ struct RunningLoop {
 impl RunningLoop {
     fn screen_text(&self) -> String {
         let term = self.term.lock();
+        let screen = term.screen();
+        let graphemes = &term.interner().graphemes;
         let mut text = String::new();
-        for line in 0..term.screen_lines() {
-            for col in 0..term.columns() {
-                let point = alacritty_terminal::index::Point::new(
-                    alacritty_terminal::index::Line(line as i32),
-                    alacritty_terminal::index::Column(col),
-                );
-                text.push(term.grid()[point].c);
+        for index in 0..screen.rows() {
+            for cell in screen.row(screen.screen_top() + u64::from(index)).cells() {
+                text.push(cell.text_char(graphemes));
             }
         }
         text
@@ -373,14 +369,13 @@ impl Drop for RunningLoop {
 fn start_loop() -> (RunningLoop, LoopbackPeer) {
     let (pty, peer) = loopback_pty();
     let (listener, events, state) = router_and_events();
-    let term = Arc::new(FairMutex::new(Term::new(
-        Config::default(),
-        &GridSize {
+    let term = oneterm_terminal::new_shared_terminal(
+        GridSize {
             cols: 80,
             lines: 24,
         },
-        listener.clone(),
-    )));
+        oneterm_terminal::DEFAULT_SCROLLBACK_LINES,
+    );
     let (mut event_loop, notifier) = ShellEventLoop::new(pty, term.clone(), listener.clone())
         .expect("event loop over loopback pty");
     listener.transport().set_notifier(notifier.clone());

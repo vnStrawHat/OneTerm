@@ -3,9 +3,10 @@
 //!
 //! A backend read loop owns one pump and, per chunk of transport bytes:
 //!
-//! 1. locks the `Term` and calls [`TerminalPump::advance`] (parse + line
-//!    accounting; router callbacks run inside, never blocking);
-//! 2. answers OSC colour queries collected during the parse — either through
+//! 1. locks the engine and calls [`TerminalPump::advance`], which feeds the
+//!    chunk through `Terminal::feed` and drains the returned [`EventBatch`]
+//!    through the router (never blocking — see [`super::SessionEventSink`]);
+//! 2. answers OSC colour queries collected during the drain — either through
 //!    [`TerminalPump::process_chunk`] (lock managed here) or the split
 //!    `take_color_queries` / `color_replies` / `write_color_replies` steps when
 //!    the loop manages the guard itself;
@@ -17,20 +18,25 @@
 //!
 //! Lifecycle: `publish_exit*` / `publish_closed*` record the state and forward
 //! `Exited` / `Closed` after flushing everything queued before them.
+//!
+//! Since `US-0081` the engine returns events as **values** instead of calling
+//! back, so `advance` decides when each one is routed. The order is the design's
+//! (`damage-and-render-state.md` § "Fairness and reply latency", R-37):
+//! `VtEvent::Reply` bytes reach the transport **first**, before anything else in
+//! the batch, because conhost blocks for up to a second waiting for the DA1
+//! answer at session start — which is exactly when a burst is arriving.
 
-use std::sync::Arc;
+use std::time::Instant;
 
-use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::Term;
-use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+use oneterm_vt::{ColorKey, EventBatch};
 
+use crate::engine::{Engine, SharedTerminal};
 use crate::osc_color::{PendingColorQuery, default_color_for_index};
 use crate::session::SessionEvent;
 
 use super::{LineAccounting, OscRouter, PtyTransport, SharedState};
 
-/// Grid dimensions for `Term::new` / `Term::resize`.
+/// Grid dimensions for [`crate::engine::new_shared_terminal`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GridSize {
     /// Columns.
@@ -39,31 +45,22 @@ pub struct GridSize {
     pub lines: usize,
 }
 
-impl Dimensions for GridSize {
-    fn total_lines(&self) -> usize {
-        self.lines
-    }
-    fn screen_lines(&self) -> usize {
-        self.lines
-    }
-    fn columns(&self) -> usize {
-        self.cols
-    }
-}
-
 /// Parse-batch driver for one session (see module docs).
 pub struct TerminalPump<T: PtyTransport> {
     router: OscRouter<T>,
-    processor: Processor<StdSyncHandler>,
+    /// Reused across chunks: the arena and the event vector grow to a
+    /// high-water mark and stay, which is what makes the steady state
+    /// allocation-free.
+    batch: EventBatch,
     lines: LineAccounting,
 }
 
 impl<T: PtyTransport> TerminalPump<T> {
-    /// Create a pump around the router that is also installed in the `Term`.
+    /// Create a pump around the router the session also holds.
     pub fn new(router: OscRouter<T>) -> Self {
         Self {
             router,
-            processor: Processor::new(),
+            batch: EventBatch::new(),
             lines: LineAccounting::new(),
         }
     }
@@ -83,11 +80,17 @@ impl<T: PtyTransport> TerminalPump<T> {
         self.lines.absolute()
     }
 
-    /// Feed one chunk into `term`. The caller holds the `Term` lock.
-    pub fn advance(&mut self, term: &mut Term<OscRouter<T>>, bytes: &[u8]) {
+    /// Feed one chunk into the engine. The caller holds the lock.
+    pub fn advance(&mut self, engine: &mut Engine, bytes: &[u8]) {
         self.router.logging().process(bytes);
-        self.processor.advance(term, bytes);
-        self.lines.observe(term, bytes);
+        engine.feed(bytes, &mut self.batch, Instant::now());
+        self.router.drain(&self.batch);
+        let screen = engine.screen();
+        self.lines.observe(
+            screen.history_len() as usize + usize::from(screen.rows()),
+            usize::from(screen.rows()),
+            bytes,
+        );
     }
 
     /// Whether colour queries are waiting for an answer.
@@ -100,28 +103,27 @@ impl<T: PtyTransport> TerminalPump<T> {
         self.router.take_color_queries()
     }
 
-    /// Format replies for `queries` against the live `Term` colours (caller
+    /// Format replies for `queries` against the live engine colours (caller
     /// holds the lock) with the theme defaults as fallback.
-    pub fn color_replies(
-        &self,
-        term: &Term<OscRouter<T>>,
-        queries: Vec<PendingColorQuery>,
-    ) -> Vec<String> {
+    pub fn color_replies(&self, engine: &Engine, queries: Vec<PendingColorQuery>) -> Vec<String> {
         let defaults = self.state().default_colors();
-        // The live `Term` colour when the program set one via OSC, otherwise the
+        // The live override when the program set one via OSC, otherwise the
         // theme default; queries with no answer are skipped.
         queries
             .into_iter()
             .filter_map(|query| {
-                let color = term.colors()[query.index].or_else(|| {
-                    default_color_for_index(
-                        query.index,
-                        defaults.foreground,
-                        defaults.background,
-                        defaults.cursor,
-                        defaults.ansi.as_ref(),
-                    )
-                });
+                let color = ColorKey::from_index(query.index)
+                    .and_then(|key| engine.color(key))
+                    .map(crate::engine_shim::legacy_rgb)
+                    .or_else(|| {
+                        default_color_for_index(
+                            query.index,
+                            defaults.foreground,
+                            defaults.background,
+                            defaults.cursor,
+                            defaults.ansi.as_ref(),
+                        )
+                    });
                 color.map(|color| (query.format)(color))
             })
             .collect()
@@ -136,9 +138,9 @@ impl<T: PtyTransport> TerminalPump<T> {
         }
     }
 
-    /// Lock `term`, feed `bytes`, answer colour queries, unlock, and write the
-    /// replies. Call `finish_batch*` afterwards.
-    pub fn process_chunk(&mut self, term: &Arc<FairMutex<Term<OscRouter<T>>>>, bytes: &[u8]) {
+    /// Lock the engine, feed `bytes`, answer colour queries, unlock, and write
+    /// the replies. Call `finish_batch*` afterwards.
+    pub fn process_chunk(&mut self, term: &SharedTerminal, bytes: &[u8]) {
         let replies = {
             let mut guard = term.lock();
             self.advance(&mut guard, bytes);

@@ -1,0 +1,178 @@
+//! `TerminalModel` over the new engine.
+//!
+//! The ten ConPTY resize tests this file used to hold live in
+//! [`super::legacy_resize`], still pinned against the engine being replaced
+//! (R-44). What is left here is what the *adapter* owns: that the model's
+//! operations reach the engine and come back in the reference's coordinates.
+
+use std::sync::Arc;
+
+use alacritty_terminal::selection::SelectionType;
+
+use super::{ResizePolicy, TerminalModel};
+use crate::backend::GridSize;
+use crate::sync::FairMutex;
+use crate::test_engine::feed;
+
+fn model(size: GridSize, bytes: &[u8], policy: ResizePolicy) -> TerminalModel {
+    let mut engine = crate::test_engine::engine(size);
+    feed(&mut engine, bytes);
+    TerminalModel::new(Arc::new(FairMutex::new(engine)), policy)
+}
+
+fn row_text(model: &TerminalModel, line: usize) -> String {
+    let cells = model.query_line_range_cells(line, 1);
+    cells
+        .cells
+        .iter()
+        .map(|indexed| indexed.cell.c)
+        .collect::<String>()
+        .trim_end()
+        .to_owned()
+}
+
+/// PERF-14: `has_selection` agrees with `selection_text` without building the string.
+#[test]
+fn has_selection_tracks_selection_state() {
+    let model = model(
+        GridSize { cols: 11, lines: 1 },
+        b"hello world",
+        ResizePolicy::Default,
+    );
+    assert!(!model.has_selection());
+
+    model.start_selection(0.0, 0.0, SelectionType::Simple);
+    model.update_selection(0.0, 4.9);
+    assert!(model.has_selection());
+    assert_eq!(model.selection_text().as_deref(), Some("hello"));
+
+    model.clear_selection();
+    assert!(!model.has_selection());
+    assert!(model.selection_text().is_none());
+}
+
+#[test]
+fn select_all_marks_a_selection() {
+    let model = model(
+        GridSize { cols: 3, lines: 2 },
+        b"one\r\ntwo",
+        ResizePolicy::Default,
+    );
+    model.select_all();
+    assert!(model.has_selection());
+    assert_eq!(model.selection_text().as_deref(), Some("one\ntwo"));
+}
+
+/// The snapshot's coordinates are the reference's: `cursor_line` counts from
+/// the viewport top at `display_offset == 0`, and history is negative.
+#[test]
+fn scrolling_back_moves_the_display_offset_not_the_cursor_line() {
+    let model = model(
+        GridSize { cols: 8, lines: 2 },
+        b"one\r\ntwo\r\nthree\r\nfour",
+        ResizePolicy::Default,
+    );
+    let before = model.query_state(true);
+    assert_eq!(before.display_offset, 0);
+    assert_eq!(before.cursor_line, 1);
+    assert_eq!(row_text(&model, 0), "three");
+
+    model.scroll(1);
+    let after = model.query_state(true);
+    assert_eq!(after.display_offset, 1);
+    assert_eq!(after.cursor_line, 1, "the cursor did not move");
+    assert_eq!(row_text(&model, 0), "two");
+
+    model.scroll_to_bottom();
+    assert_eq!(model.query_state(true).display_offset, 0);
+}
+
+/// DEC-0008 at the adapter: the policy the backend picked reaches the engine.
+/// The cell-exact contract is `legacy_resize`'s (old engine) and
+/// `oneterm_vt::reflow::tests::keep_viewport_top_*` (new engine).
+#[test]
+fn resize_grid_applies_the_backend_policy() {
+    let size = GridSize { cols: 10, lines: 5 };
+    let mut bytes = Vec::new();
+    for index in 0..20 {
+        bytes.extend_from_slice(format!("line{index}\r\n").as_bytes());
+    }
+    bytes.extend_from_slice(b"prompt>");
+
+    let keep = model(size, &bytes, ResizePolicy::KeepViewportTop);
+    let default = model(size, &bytes, ResizePolicy::Default);
+    assert!(keep.needs_resize(8, 10));
+    keep.resize_grid(8, 10);
+    default.resize_grid(8, 10);
+    assert!(!keep.needs_resize(8, 10));
+
+    // conhost keeps the viewport top and leaves the added rows blank.
+    assert_eq!(keep.query_state(true).cursor_line, 4);
+    assert_eq!(row_text(&keep, 0), "line16");
+    assert_eq!(row_text(&keep, 4), "prompt>");
+    assert_eq!(row_text(&keep, 7), "");
+
+    // The reference pulls history into the top and moves the cursor down.
+    assert_eq!(default.query_state(true).cursor_line, 7);
+    assert_eq!(row_text(&default, 0), "line13");
+    assert_eq!(row_text(&default, 7), "prompt>");
+}
+
+/// The snapshot still hands each decoded image out exactly once, and the cells
+/// it covers still carry the offset inside the image's own cell grid — the
+/// per-cell `GraphicCell { id, col, row }` the painter reads
+/// (`crates/terminal-view/src/render/frame.rs:313-317`). The engine keeps only
+/// the id; the offset is derived from the placement (R-21).
+#[test]
+fn a_sixel_reaches_the_snapshot_once_with_per_cell_offsets() {
+    // Two columns wide and one band tall: `#0;2;100;0;0` makes register 0 red,
+    // `~~` fills both columns, so the image is 2x6 pixels = one 10x20 cell.
+    let model = model(
+        GridSize { cols: 10, lines: 4 },
+        b"\x1bPq#0;2;100;0;0~~\x1b\\",
+        ResizePolicy::Default,
+    );
+
+    let first = model.snapshot();
+    assert_eq!(first.graphics.len(), 1, "the image is handed out once");
+    let image = &first.graphics[0];
+    assert_eq!((image.width, image.height), (2, 6));
+
+    let covered: Vec<_> = first
+        .cells
+        .iter()
+        .filter_map(|indexed| {
+            indexed
+                .cell
+                .graphic()
+                .map(|graphic| (indexed.point.line.0, indexed.point.column.0, graphic))
+        })
+        .collect();
+    assert_eq!(covered.len(), 1, "a 2x6 image covers one virtual cell");
+    let (line, column, graphic) = covered[0];
+    assert_eq!((line, column), (0, 0), "placed at the cursor");
+    assert_eq!((graphic.col, graphic.row), (0, 0), "top-left of the image");
+    assert_eq!(graphic.id, image.id);
+
+    // The drain is the adapter's, once per snapshot: a second snapshot still
+    // sees the cells, but not the pixels again.
+    let second = model.snapshot();
+    assert!(second.graphics.is_empty(), "handed out exactly once");
+    assert!(second.cells.iter().any(|c| c.cell.graphic().is_some()));
+}
+
+#[test]
+fn search_reports_matches_in_grid_lines() {
+    let model = model(
+        GridSize { cols: 8, lines: 2 },
+        b"alpha\r\nbeta\r\nalpha",
+        ResizePolicy::Default,
+    );
+    let matches = model.search("alpha", crate::SearchOptions::default());
+    assert_eq!(matches.len(), 2);
+    // The first match scrolled into history; the second is on the last row.
+    assert_eq!(matches[0].line, -1);
+    assert_eq!(matches[1].line, 1);
+    assert_eq!(matches[1].start_col, 0);
+    assert_eq!(matches[1].end_col, 5);
+}

@@ -1,11 +1,17 @@
 //! Terminal rendering & input helpers (framework-agnostic).
 //!
-//! Depends on `alacritty_terminal` (types: `TermMode`, `Cell`, colors) but does
-//! **not** depend on GPUI. The UI crate maps these types to GPUI when rendering.
+//! The engine is `oneterm-vt` (IN-0029). `alacritty_terminal` is still a
+//! dependency, but since `US-0081` it **runs nothing**: what is left is the
+//! value vocabulary of the render snapshot — `TermMode`, `Cell`, `Point`,
+//! `SelectionRange`, the colour types — which `crates/terminal-view` reads
+//! directly. `US-0085` moves the view onto the engine's own types and
+//! `US-0087` deletes the dependency. No GPUI here either way.
 
 pub mod backend;
 pub mod color_classification;
 pub mod content;
+pub mod engine;
+pub(crate) mod engine_shim;
 pub mod factory;
 pub mod key_encode;
 pub mod logging;
@@ -21,6 +27,9 @@ pub mod security_policy;
 pub mod session;
 #[cfg(test)]
 mod sixel_tests;
+pub mod sync;
+#[cfg(test)]
+pub(crate) mod test_engine;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 pub mod url_policy;
@@ -36,6 +45,7 @@ pub use color_classification::{
     is_app_chosen_exact_color, is_decorative_character, is_default_background_color,
 };
 pub use content::{IndexedCell, TermDamageInfo, TerminalContent, last_content_line};
+pub use engine::{DEFAULT_SCROLLBACK_LINES, Engine, SharedTerminal, new_shared_terminal};
 pub use factory::{PtySize, SessionFactory};
 pub use key_encode::{KeyMods, KeySpec, NamedKey, encode_key};
 pub use logging::{
@@ -58,4 +68,5 @@ pub use session::{
     TerminalIme, TerminalInfo, TerminalInput, TerminalLifecycle, TerminalQueryState,
     TerminalRender, TerminalSession, report_generated_input,
 };
+pub use sync::FairMutex;
 pub use url_policy::TargetDecision;

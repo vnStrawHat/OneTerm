@@ -96,7 +96,8 @@
       "oneterm-terminal"
     ],
     "oneterm-terminal": [
-      "oneterm-core"
+      "oneterm-core",
+      "oneterm-vt"
     ],
     "oneterm-terminal-view": [
       "oneterm-actions",
