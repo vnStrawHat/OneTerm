@@ -90,6 +90,59 @@ impl Row {
         }
     }
 
+    /// Build a row the reflow has just laid out (`US-0077`).
+    ///
+    /// `hints` is the **complete** content-hint set: the reflow visits every
+    /// cell as it lays the row out, so it accumulates the hints there rather
+    /// than paying a second pass over the same cells here. It also carries
+    /// `HAS_GRAPHIC`, which needs the interner to derive and which the caller
+    /// brings over from the logical line's source rows. The id is assigned when
+    /// the row is placed in the ring.
+    pub(crate) fn from_cells(cells: Vec<Cell>, wrapped: bool, hints: RowFlags, seq: SeqNo) -> Row {
+        let mut flags = RowFlags::DIRTY | hints;
+        flags.set(RowFlags::WRAPPED, wrapped);
+        Row {
+            header: RowHeader {
+                seq,
+                id: RowId::default(),
+                flags,
+                // Over-approximating, which is all `occ` promises: the row was
+                // laid out cell by cell, so nothing above its width was touched.
+                occ: cells.len() as u16,
+            },
+            cells,
+        }
+    }
+
+    /// Hand a row that already fits the new width straight through.
+    ///
+    /// The reference's own rule: a row is a reflow target only when it is short
+    /// **and** carries the wrap flag; everything else it merely grows in place
+    /// (`vendor/alacritty_terminal/src/grid/resize.rs:103-107, 231-238`). The
+    /// caller has checked that this row is a whole logical line and that nothing
+    /// above `keep` is content, so only the width changes — no copy, no
+    /// allocation and no hint rescan.
+    ///
+    /// The tail is cleared so the result is cell-for-cell what laying the row
+    /// out from scratch would have produced. The existing hints stay: they can
+    /// only over-approximate now, which is what a content hint promises.
+    ///
+    /// No `repair_wide_pairs` sweep: neither half of a wide pair is a trimmable
+    /// blank, so nothing at or above `keep` is one and the clear cannot split a
+    /// pair; and the caller refuses a row whose last content cell is a
+    /// `LeadingWideSpacer`, which is the only other width the clear could
+    /// strand. `Screen::assert_integrity` re-checks every row after every resize
+    /// in debug builds, so the argument is not left standing on its own.
+    pub(crate) fn into_refitted(mut self, cols: u16, keep: u16, seq: SeqNo) -> Row {
+        self.cells.resize(cols as usize, Cell::EMPTY);
+        self.cells[keep as usize..].fill(Cell::EMPTY);
+        self.header.occ = cols;
+        self.header.seq = seq;
+        self.header.flags.insert(RowFlags::DIRTY);
+        self.header.flags.remove(RowFlags::WRAPPED);
+        self
+    }
+
     pub fn header(&self) -> &RowHeader {
         &self.header
     }
@@ -140,7 +193,7 @@ impl Row {
 }
 
 /// The content hints a cell implies. Never cleared by a write, only by a reset.
-fn flags_for(cell: Cell) -> RowFlags {
+pub(crate) fn flags_for(cell: Cell) -> RowFlags {
     let mut flags = RowFlags::empty();
     if matches!(cell.content(), CellContent::Grapheme(_)) {
         flags.insert(RowFlags::HAS_GRAPHEME);
@@ -177,6 +230,11 @@ pub fn repair_wide_pairs(cells: &mut [Cell]) {
                 if !paired {
                     cells[col] = blank_out(cells[col]);
                 }
+            }
+            // Only the last column can hold the place of a glyph that wrapped,
+            // so a shift or a width change that moved one inland releases it.
+            CellWidth::LeadingWideSpacer if col + 1 != cells.len() => {
+                cells[col] = blank_out(cells[col]);
             }
             CellWidth::Narrow | CellWidth::LeadingWideSpacer => {}
         }

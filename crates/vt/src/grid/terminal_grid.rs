@@ -14,6 +14,7 @@ use crate::grid::row::SeqNo;
 use crate::grid::screen::{DisplayClear, PrintMode, Screen, ScreenKind, ScrollReport};
 use crate::grid::{Pos, RowId, ScrollRegion, Size};
 use crate::intern::Interner;
+use crate::reflow::{ResizeOutcome, ResizePolicy};
 
 /// The primary and alternate screens, plus what they share.
 #[derive(Debug)]
@@ -200,11 +201,21 @@ impl TerminalGrid {
         self.assert_integrity(None);
     }
 
-    pub fn resize(&mut self, size: Size) {
-        self.primary.resize(size, &mut self.anchors);
-        self.alt.resize(size, &mut self.anchors);
-        self.sync_anchors();
+    /// Resize both screens under one policy (`US-0077`).
+    ///
+    /// The primary screen reflows; the alternate screen never does (trap 29).
+    /// `KeepViewportTop` always corrects the **primary** screen, including while
+    /// a TUI holds the alternate one, which is what `DEC-0008` requires.
+    pub fn resize(&mut self, size: Size, policy: ResizePolicy) -> ResizeOutcome {
+        let outcome = crate::reflow::resize(
+            &mut self.primary,
+            &mut self.alt,
+            size,
+            policy,
+            &mut self.anchors,
+        );
         self.assert_integrity(None);
+        outcome
     }
 
     /// The user edited the configured scrollback depth. Only the primary screen

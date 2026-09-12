@@ -5,6 +5,7 @@
 use super::*;
 use crate::cell::{Attrs, Cell, CellContent, CellWidth, Color, Style};
 use crate::intern::{Extras, GraphicId, Interner};
+use crate::reflow::ResizePolicy;
 
 struct Fixture {
     grid: TerminalGrid,
@@ -242,7 +243,8 @@ fn lines_produced_is_unchanged_by_reflow_and_by_clear() {
     f.grid.swap_alt();
     f.grid.swap_alt();
     assert_eq!(f.grid.lines_produced(), produced, "alternate-screen swap");
-    f.grid.resize(Size { rows: 8, cols: 20 });
+    f.grid
+        .resize(Size { rows: 8, cols: 20 }, ResizePolicy::BottomAnchor);
     assert_eq!(f.grid.lines_produced(), produced, "resize");
     f.grid.reset();
     assert_eq!(f.grid.lines_produced(), produced, "RIS");
@@ -275,15 +277,22 @@ fn ring_mask_is_constant_across_resizes() {
     let ring_len = f.screen().ring_len();
     assert_eq!(ring_len, 16_384, "next_power_of_two(10_000 + MAX_ROWS)");
 
-    f.grid.resize(Size {
-        rows: 60,
-        cols: 200,
-    });
-    f.grid.resize(Size { rows: 10, cols: 40 });
-    f.grid.resize(Size {
-        rows: 4_000,
-        cols: 9_000,
-    });
+    f.grid.resize(
+        Size {
+            rows: 60,
+            cols: 200,
+        },
+        ResizePolicy::BottomAnchor,
+    );
+    f.grid
+        .resize(Size { rows: 10, cols: 40 }, ResizePolicy::BottomAnchor);
+    f.grid.resize(
+        Size {
+            rows: 4_000,
+            cols: 9_000,
+        },
+        ResizePolicy::BottomAnchor,
+    );
 
     assert_eq!(f.screen().ring_mask(), mask);
     assert_eq!(f.screen().ring_len(), ring_len);
@@ -891,14 +900,16 @@ fn tab_stops_survive_and_regrow_across_a_resize() {
     f.grid.screen_mut().tabs_mut().clear(8);
     assert!(!f.screen().tabs().is_stop(8));
 
-    f.grid.resize(Size { rows: 4, cols: 12 });
+    f.grid
+        .resize(Size { rows: 4, cols: 12 }, ResizePolicy::BottomAnchor);
     assert!(f.screen().tabs().is_stop(0));
     assert!(
         !f.screen().tabs().is_stop(8),
         "a cleared stop stays cleared"
     );
 
-    f.grid.resize(Size { rows: 4, cols: 32 });
+    f.grid
+        .resize(Size { rows: 4, cols: 32 }, ResizePolicy::BottomAnchor);
     assert!(
         !f.screen().tabs().is_stop(8),
         "trap 27: the prefix is retained"

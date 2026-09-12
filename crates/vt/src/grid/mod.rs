@@ -21,6 +21,8 @@ mod screen;
 mod terminal_grid;
 
 pub use anchor::{Anchor, AnchorId, AnchorKind, Anchors};
+/// The content hints one cell implies, for the reflow's single-pass layout.
+pub(crate) use row::flags_for;
 pub use row::{Row, RowFlags, RowHeader, RowMut, RowRef, SeqNo};
 pub use screen::{
     Charset, Cursor, CursorOrigin, DisplayClear, LineClear, PrintMode, RowsScrolled, Screen,

@@ -24,6 +24,7 @@ pub mod event;
 pub mod grid;
 pub mod intern;
 pub mod parser;
+pub mod reflow;
 pub mod render;
 pub mod width;
 
@@ -35,6 +36,7 @@ pub use grid::{Pos, RowId, RowRef, SeqNo, Size, TerminalGrid, Viewport};
 pub use intern::{
     Extras, ExtrasId, GRAPHEME_MAX_LEN, GraphemeId, GraphicId, HyperlinkId, Interner, StyleId,
 };
+pub use reflow::{ResizeOutcome, ResizePolicy};
 pub use render::{
     Demand, EngineView, ModeSnapshot, MouseEncoding, MouseProtocol, MouseReporting, Palette,
     RenderCell, RenderContent, RenderCursor, RenderRow, RenderState, RenderUpdate, StyleRun,

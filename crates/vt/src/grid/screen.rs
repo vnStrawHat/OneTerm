@@ -14,13 +14,14 @@
 //! out-of-range row reads as blanks, and a glyph that cannot be placed is
 //! dropped and counted.
 
+use std::cmp::Ordering;
 use std::ops::Range;
 
 use crate::cell::Style;
 use crate::cell::{Cell, CellContent, CellWidth};
 use crate::grid::anchor::{AnchorId, AnchorKind, Anchors};
 use crate::grid::row::{Row, RowFlags, RowMut, RowRef, SeqNo};
-use crate::grid::{MAX_ROWS, Pos, RowId, ScrollRegion, Size, Viewport};
+use crate::grid::{MAX_COLS, MAX_ROWS, Pos, RowId, ScrollRegion, Size, Viewport};
 use crate::intern::{GraphemeArena, Interner, StyleId};
 use crate::width::scalar_width;
 
@@ -434,7 +435,7 @@ impl Screen {
         RowMut::new(row, seq)
     }
 
-    fn take_row(&mut self, id: RowId) -> Option<Row> {
+    pub(crate) fn take_row(&mut self, id: RowId) -> Option<Row> {
         let slot = self.slot_of(id);
         if self.slots[slot].as_ref().map(Row::id) == Some(id) {
             return self.slots[slot].take();
@@ -482,6 +483,15 @@ impl Screen {
     /// Allocate `n` fresh rows at the bottom, trimming history to the limit.
     /// Returns the new oldest row when anything was dropped.
     fn push_rows(&mut self, n: u16) -> Option<RowId> {
+        let template = self.cursor.erase;
+        self.push_rows_with(n, template)
+    }
+
+    /// The same, with an explicit fill. A resize passes `Cell::EMPTY`: the
+    /// reference swaps its cursor template out for the default cell so rows
+    /// created by a resize never inherit the current background
+    /// (`research/engine-semantics.md` § 2.16).
+    fn push_rows_with(&mut self, n: u16, template: Cell) -> Option<RowId> {
         let mut trimmed = None;
         for _ in 0..n {
             self.newest = self.newest + 1;
@@ -492,14 +502,14 @@ impl Screen {
                 trimmed = Some(self.oldest);
             }
             let newest = self.newest;
-            self.blank_slot(newest);
+            self.blank_slot(newest, template);
         }
         trimmed
     }
 
-    fn blank_slot(&mut self, id: RowId) {
+    fn blank_slot(&mut self, id: RowId, template: Cell) {
         let slot = self.slot_of(id);
-        let (cols, seq, template) = (self.cols, self.seq, self.cursor.erase);
+        let (cols, seq) = (self.cols, self.seq);
         self.slots[slot] = if template == Cell::EMPTY {
             None
         } else {
@@ -1236,61 +1246,223 @@ impl Screen {
     }
 
     // ── Resize ──────────────────────────────────────────────────────────────
+    //
+    // The column half and the two policies live in `crate::reflow`, which drives
+    // the entry points below. What stays here is everything that touches the
+    // ring: its session-constant mask (R-30), the scroll-region reset (trap 28)
+    // and the tab-stop regrow rule (trap 27).
 
-    /// Rows-only resize plus a non-reflowing column change.
+    /// The rows-only half of a resize, with `BottomAnchor` semantics.
     ///
-    /// `US-0077` replaces the column half with the reflow iterator and adds the
-    /// two resize policies; what stays is the ring's session-constant mask, the
-    /// scroll-region reset (trap 28) and the tab-stop regrow rule (trap 27).
-    pub fn resize(&mut self, size: Size, anchors: &mut Anchors) {
-        let size = size.clamped();
-        if size.rows == self.rows && size.cols == self.cols {
-            return;
-        }
-        if size.cols != self.cols {
-            let (seq, range) = (self.seq, self.row_range());
-            let mut id = range.start;
-            while id < range.end {
-                let slot = self.slot_of(id);
-                if let Some(row) = &mut self.slots[slot]
-                    && row.id() == id
-                {
-                    RowMut::new(row, seq).resize(size.cols, Cell::EMPTY, seq);
+    /// Grow pulls what history has into the top and appends the rest; shrink
+    /// pushes `(cursor_row_index + 1) - rows` rows into history when that is
+    /// positive and drops the remainder off the bottom, which is what the
+    /// reference's `shrink_lines` does with its rotate.
+    ///
+    /// Trap 30, R-06: the viewport is restated from the row that held the first
+    /// visible character, and a viewport at the bottom stays at the bottom.
+    pub(crate) fn resize_rows(&mut self, rows: u16, anchors: &mut Anchors) -> u32 {
+        let rows = rows.clamp(1, MAX_ROWS);
+        let visible_top = self.visible_top();
+        let sticky = self.offset == 0;
+        match rows.cmp(&self.rows) {
+            Ordering::Greater => {
+                // The new height is applied before the append, so the pull *is*
+                // the height change and the trim measures history against it.
+                let added = rows - self.rows;
+                let pulled = self.history_len().min(u32::from(added)) as u16;
+                self.rows = rows;
+                let deficit = added - pulled;
+                if deficit > 0 {
+                    self.push_rows_with(deficit, Cell::EMPTY);
                 }
-                id = id + 1;
             }
-            self.cols = size.cols;
-            self.tabs.resize(size.cols);
-            // An anchor must never point past the last column. This is the same
-            // `remap` call reflow makes (`US-0077`), with the trivial closure.
-            let last = size.cols - 1;
-            anchors.remap(|pos| {
-                Some(Pos {
-                    row: pos.row,
-                    col: pos.col.min(last),
-                })
-            });
-        }
-        if size.rows > self.rows {
-            // Grow by pulling what history has and appending the rest. The new
-            // height is applied first, so the pull *is* the height change and
-            // the trim inside `push_rows` measures history against it.
-            let added = size.rows - self.rows;
-            let pulled = self.history_len().min(u32::from(added)) as u16;
-            self.rows = size.rows;
-            let deficit = added - pulled;
-            if deficit > 0 {
-                self.push_rows(deficit);
+            Ordering::Less => {
+                let lost = self.rows - rows;
+                let pushed = (self.cursor_row_index() + 1).saturating_sub(rows);
+                self.rows = rows;
+                // Lowering `rows` alone moves the whole screen window down by
+                // `lost`; dropping the rows that should have come off the bottom
+                // instead of entering history moves it back up.
+                self.drop_trailing_rows(lost - pushed.min(lost), anchors);
             }
-        } else {
-            self.rows = size.rows;
+            Ordering::Equal => {}
         }
+        // Rows pushed into history by a shrink can take it over its limit, and
+        // the alternate screen has no history at all (trap 32).
+        let trimmed = self.trim_history(anchors);
         // Trap 28: a resize unconditionally resets the scroll region.
         self.region = ScrollRegion::full(self.rows);
+        self.clamp_cursors();
+        self.restate_viewport(visible_top, sticky);
+        self.sync_anchors(anchors);
+        self.debug_assert_integrity();
+        trimmed
+    }
+
+    /// Drop rows off the oldest end until history is inside its limit.
+    fn trim_history(&mut self, anchors: &mut Anchors) -> u32 {
+        let mut trimmed = 0;
+        while self.history_len() > self.scrollback_limit {
+            let slot = self.slot_of(self.oldest);
+            self.slots[slot] = None;
+            self.oldest = self.oldest + 1;
+            trimmed += 1;
+        }
+        if trimmed > 0 {
+            anchors.trim(self.kind.origin(), self.oldest);
+            self.offset = self.offset.min(self.history_len());
+        }
+        trimmed
+    }
+
+    /// The alternate screen's column change: truncate or pad, never reflow
+    /// (trap 29). Only the columns of live rows and of every anchor in this
+    /// screen's lane move.
+    pub(crate) fn truncate_columns(&mut self, cols: u16, anchors: &mut Anchors) {
+        let cols = cols.clamp(1, MAX_COLS);
+        if cols == self.cols {
+            return;
+        }
+        let (seq, range) = (self.seq, self.row_range());
+        let mut id = range.start;
+        while id < range.end {
+            let slot = self.slot_of(id);
+            if let Some(row) = &mut self.slots[slot]
+                && row.id() == id
+            {
+                RowMut::new(row, seq).resize(cols, Cell::EMPTY, seq);
+            }
+            id = id + 1;
+        }
+        self.cols = cols;
+        self.tabs.resize(cols);
+        // An anchor must never point past the last column. Lane-scoped, because
+        // `Anchors` is shared by both screens and only this one changed width.
+        let (last, lane) = (cols - 1, self.row_range());
+        anchors.remap(|pos| {
+            let col = if lane.contains(&pos.row) {
+                pos.col.min(last)
+            } else {
+                pos.col
+            };
+            Some(Pos { row: pos.row, col })
+        });
+        self.clamp_cursors();
+        self.debug_assert_integrity();
+    }
+
+    /// Replace every live row with the reflow's output and adopt the new width.
+    ///
+    /// `rows` is oldest first and must not be empty; ids are allocated fresh
+    /// above the current newest, which is what `DEC-0015` means by "reflow: every
+    /// row gets a fresh id". The caller has already capped the count at
+    /// `scrollback_limit + rows`, so the write always fits the ring.
+    pub(crate) fn install_rows(&mut self, rows: Vec<Option<Row>>, cols: u16) {
+        debug_assert!(!rows.is_empty(), "reflow produced no rows");
+        debug_assert!(
+            rows.len() <= self.slots.len(),
+            "reflow produced more rows than the ring holds"
+        );
+        let base = self.newest + 1;
+        let (seq, len) = (self.seq, rows.len() as u64);
+        self.cols = cols;
+        self.tabs.resize(cols);
+        for (step, row) in rows.into_iter().enumerate() {
+            let id = base + step as u64;
+            let slot = self.slot_of(id);
+            self.slots[slot] = row.map(|row| row.take_rehomed(id, seq));
+        }
+        self.oldest = base;
+        self.newest = base + (len - 1);
+    }
+
+    /// Append `n` blank rows at the bottom without moving either cursor.
+    ///
+    /// The rows already on the screen keep their ids, so lowering the screen
+    /// window is exactly "scroll the whole screen up by `n`": the top rows
+    /// return to history and every anchor, cursor included, loses `n` from its
+    /// screen index. `US-0077`'s positive `KeepViewportTop` shift.
+    pub(crate) fn append_blank_rows(&mut self, n: u16, anchors: &mut Anchors) {
+        if n == 0 {
+            return;
+        }
+        if self.push_rows_with(n, Cell::EMPTY).is_some() {
+            anchors.trim(self.kind.origin(), self.oldest);
+        }
         self.clamp_cursors();
         self.offset = self.offset.min(self.history_len());
         self.sync_anchors(anchors);
         self.debug_assert_integrity();
+    }
+
+    /// Drop `n` rows off the bottom, pulling the same number back out of
+    /// history into the screen. The negative `KeepViewportTop` shift, and the
+    /// part of a row shrink that must not enter history.
+    pub(crate) fn drop_trailing_rows(&mut self, n: u16, anchors: &mut Anchors) {
+        let n = u64::from(n)
+            .min(u64::from(self.history_len()))
+            .min(self.newest.distance(self.cursor.pos.row));
+        if n == 0 {
+            return;
+        }
+        let kill = self.newest - (n - 1)..self.newest + 1;
+        let mut id = kill.start;
+        while id < kill.end {
+            let slot = self.slot_of(id);
+            self.slots[slot] = None;
+            id = id + 1;
+        }
+        anchors.shift_region(kill.clone(), 0, kill);
+        self.newest = self.newest - n;
+        // A logical line must never dangle past the end of the buffer: the row
+        // that has just become the bottom one has nothing left to continue onto.
+        let newest = self.newest;
+        if self.row(newest).wrapped() {
+            self.row_mut(newest).set_wrapped(false);
+        }
+        self.offset = self.offset.min(self.history_len());
+        self.clamp_cursors();
+        self.sync_anchors(anchors);
+        self.debug_assert_integrity();
+    }
+
+    /// Put the viewport back on the row that held the first visible character.
+    ///
+    /// R-06: "the top row is unchanged" is not well formed once reflow gives
+    /// every row a fresh id, so the invariant is stated about the character
+    /// instead. A viewport that was at the bottom stays at the bottom.
+    pub(crate) fn restate_viewport(&mut self, visible_top: RowId, sticky: bool) {
+        self.offset = if sticky {
+            0
+        } else {
+            let distance = self.screen_top().distance(visible_top);
+            distance.min(u64::from(self.history_len())) as u32
+        };
+    }
+
+    pub(crate) fn set_scroll_offset(&mut self, offset: u32) {
+        self.offset = offset.min(self.history_len());
+    }
+
+    /// Install the cursor the reflow read back out of the anchor list.
+    ///
+    /// **Only `reflow::read_back` may call this**, and only in the window
+    /// between `Anchors::remap` and the next [`Screen::sync_anchors`]. It writes
+    /// the field without writing the entry, which is exactly the staleness the
+    /// read-back exists to repair: called anywhere else it would recreate it.
+    /// Every other cursor move goes through [`Screen::goto`] and its siblings.
+    pub(crate) fn restate_cursor_after_reflow(&mut self, pos: Pos, pending_wrap: bool) {
+        self.cursor.pos = pos;
+        self.cursor.pending_wrap = pending_wrap;
+        self.clamp_cursors();
+    }
+
+    /// As [`Screen::restate_cursor_after_reflow`], for the `DECSC` slot, and
+    /// under the same restriction.
+    pub(crate) fn restate_saved_cursor_after_reflow(&mut self, pos: Pos) {
+        self.saved_cursor.pos = pos;
+        self.clamp_cursors();
     }
 
     /// The one rehome: the user edited the configured scrollback depth. O(live
