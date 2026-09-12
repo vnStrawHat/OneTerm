@@ -1,0 +1,37 @@
+[2026-09-12 14:00:22] C:\Users\trunglt\AppData\Local\Temp\claude\D--TrungKFC-Research-Rust-myTerm2\fa2d0135-9c28-4a69-a255-ba7479e604cb\scratchpad\home71>echo hi
+[2026-09-12 14:00:22] hi
+[2026-09-12 14:00:26] C:\Users\trunglt\AppData\Local\Temp\claude\D--TrungKFC-Research-Rust-myTerm2\fa2d0135-9c28-4a69-a255-ba7479e604cb\scratchpad\home71>mode con
+[2026-09-12 14:00:26] Status for device CON:
+[2026-09-12 14:00:26] ----------------------
+[2026-09-12 14:00:26]     Lines:          52
+[2026-09-12 14:00:26]     Columns:        229
+[2026-09-12 14:00:26]     Keyboard rate:  31
+[2026-09-12 14:00:26]     Keyboard delay: 1
+[2026-09-12 14:00:26]     Code page:      65001
+[2026-09-12 14:00:35] C:\Users\trunglt\AppData\Local\Temp\claude\D--TrungKFC-Research-Rust-myTerm2\fa2d0135-9c28-4a69-a255-ba7479e604cb\scratchpad\home71>mode con
+[2026-09-12 14:00:35] Status for device CON:
+[2026-09-12 14:00:35] ----------------------
+[2026-09-12 14:00:35]     Lines:          33
+[2026-09-12 14:00:35]     Columns:        65
+[2026-09-12 14:00:35]     Keyboard rate:  31
+[2026-09-12 14:00:35]     Keyboard delay: 1
+[2026-09-12 14:00:35]     Code page:      65001
+[2026-09-12 14:00:43] C:\Users\trunglt\AppData\Local\Temp\claude\D--TrungKFC-Research-Rust-myTerm2\fa2d0135-9c28-4a69-a255-ba7479e604cb\scratchpad\home71>ping -t 127.0.0.1
+[2026-09-12 14:00:43] Pinging 127.0.0.1 with 32 bytes of data:
+[2026-09-12 14:00:43] Reply from 127.0.0.1: bytes=32 time<1ms TTL=128
+[2026-09-12 14:00:44] Reply from 127.0.0.1: bytes=32 time<1ms TTL=128
+[2026-09-12 14:00:45] Reply from 127.0.0.1: bytes=32 time<1ms TTL=128
+[2026-09-12 14:00:46] Reply from 127.0.0.1: bytes=32 time<1ms TTL=128
+[2026-09-12 14:00:47] Reply from 127.0.0.1: bytes=32 time<1ms TTL=128
+[2026-09-12 14:00:48] Reply from 127.0.0.1: bytes=32 time<1ms TTL=128
+[2026-09-12 14:00:48] Ping statistics for 127.0.0.1:
+[2026-09-12 14:00:48]     Packets: Sent = 6, Received = 6, Lost = 0 (0% loss),
+[2026-09-12 14:00:48] Approximate round trip times in milli-seconds:
+[2026-09-12 14:00:48]     Minimum = 0ms, Maximum = 0ms, Average = 0ms
+[2026-09-12 14:00:48] Control-C
+[2026-09-12 14:00:48] ^C
+[2026-09-12 14:00:57] C:\Users\trunglt\AppData\Local\Temp\claude\D--TrungKFC-Research-Rust-myTerm2\fa2d0135-9c28-4a69-a255-ba7479e604cb\scratchpad\home71>type C:\Users\trunglt\AppData\Local\Temp\claude\D--TrungKFC-Research-Rust-myTerm2\fa2d0135-9c28-4 
+[2026-09-12 14:00:59] a69-a255-ba7479e604cb\scratchpad\snake.six
+[2026-09-12 14:01:06] C:\Users\trunglt\AppData\Local\Temp\claude\D--TrungKFC-Research-Rust-myTerm2\fa2d0135-9c28-4a69-a255-ba7479e604cb\scratchpad\home71>echo after-sixel
+[2026-09-12 14:01:06] after-sixel
+[2026-09-12 14:01:10] C:\Users\trunglt\AppData\Local\Temp\claude\D--TrungKFC-Research-Rust-myTerm2\fa2d0135-9c28-4a69-a255-ba7479e604cb\scratchpad\home71>exit

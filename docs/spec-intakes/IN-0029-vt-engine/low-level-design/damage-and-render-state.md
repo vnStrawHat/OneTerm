@@ -185,9 +185,14 @@ nothing.
 
 `scrolled` is the signed change in the viewport's bottom row since the consumer's watermark, in
 rows. A consumer with a per-row cache keyed by `RowId` shifts it instead of rebuilding.
-`VtEvent::RowsScrolled { top, bottom, delta }` reports in-region motion separately, because that
-moves content without moving the viewport
-([`grid-and-scrollback.md`](grid-and-scrollback.md)).
+`VtEvent::RowsScrolled { top, bottom, delta }` reports **content motion between row ids**, which is
+a different question from the viewport delta above. Its contract is the table in
+[`grid-and-scrollback.md`](grid-and-scrollback.md) § "Tracked anchors", restated here so the two
+cannot drift: a **whole-viewport** scroll reports **nothing** (every surviving id keeps its
+content, so a `RowId`-keyed cache is already correct and a delta would corrupt it); a region
+anchored at row 0 with a bounded bottom reports the region with `delta = -n` **and** the tail below
+it with `delta = +n`; a region not anchored at row 0 reports one event over its own id range; an
+invalid or empty region reports nothing and never a range with `bottom < top`.
 
 `Full` is returned by: the first call on a fresh `RenderState`; any resize or reflow; an
 alternate-screen swap; `RIS`; a palette epoch change; a generation mismatch; and a `scrolled`

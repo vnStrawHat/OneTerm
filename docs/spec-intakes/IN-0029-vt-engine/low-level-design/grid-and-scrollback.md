@@ -5,8 +5,11 @@ HLD: ../high-level-design.md
 Topic: grid-and-scrollback
 Date: 2026-09-12
 
-> One concern per file. Implementation-level mechanics for `crates/vt/src/grid.rs` and
-> `crates/vt/src/anchor.rs`.
+> One concern per file. Implementation-level mechanics for `crates/vt/src/grid/`
+> (`mod.rs`, `row.rs`, `anchor.rs`, `screen.rs`, `terminal_grid.rs` — a folder, because the concern
+> genuinely splits). `TerminalGrid` is the grid half of the future `Terminal`: it owns the two
+> screens, the shared anchor list, the batch `SeqNo` and `lines_produced`, and `US-0079`'s
+> `Terminal` holds one.
 
 ## Concern
 
@@ -15,8 +18,9 @@ the alternate screen, the print path's cursor and wrap bookkeeping, and the eras
 delete operations. Replaces `vendor/alacritty_terminal/src/grid/{mod,storage,row}.rs` and the
 screen half of `term/mod.rs`.
 
-Reflow and resize are a separate concern
-([`reflow-and-resize.md`](reflow-and-resize.md)); selection is
+Reflow and the column half of resize are a separate concern
+([`reflow-and-resize.md`](reflow-and-resize.md), `US-0077`); this file owns only the rows-only
+`Screen::resize_rows`, which truncates and pads; selection is
 [`selection.md`](selection.md); damage stamping is
 [`damage-and-render-state.md`](damage-and-render-state.md); which escape sequence calls which
 operation is [`dispatch-and-modes.md`](dispatch-and-modes.md).
@@ -29,9 +33,19 @@ operation is [`dispatch-and-modes.md`](dispatch-and-modes.md).
 pub struct RowId(pub u64);   // a POSITION in the output stream, not a piece of content
 ```
 
-Allocated from **one terminal-wide counter**, shared by the primary and alternate screens, so an
-id is never ambiguous and `Terminal::row(id)` always names one row. Each screen keeps its own
-contiguous run of that space; `assert_integrity` checks the two runs never overlap.
+**Two lanes, one id space.** Each screen allocates from its own origin —
+`PRIMARY_ORIGIN = 0` and `ALT_ORIGIN = 1 << 63` — and every id is unambiguous because the lanes
+cannot meet: `TerminalGrid::screen_of(id)` routes on the high bit, and `assert_integrity` checks
+each screen's run stays inside its lane. A single shared counter cannot work: both screens allocate
+independently, so a shared counter leaves gaps in each screen's run and
+`history_len = newest - oldest + 1 - rows` stops holding. `slot(id) = id & mask` is unaffected,
+because `ALT_ORIGIN & mask == 0` and the two screens own separate rings.
+
+Everything that compares a `RowId` against a bound must therefore be **lane-scoped**. In
+particular `Anchors::trim(origin, oldest)` kills only anchors in `origin..oldest`: the alternate
+screen has `scrollback_limit = 0`, so it trims on every scroll, and a lane-blind trim would kill
+every primary-screen mark, selection anchor and graphics placement on the first line feed inside
+vim or tmux.
 
 `slot(id) = (id.0 as usize) & mask` — the ring index **is** the id. That has a direct
 consequence, and `DEC-0015` now states it:
@@ -80,16 +94,32 @@ impl Anchors {
     // (N-13: one coordinate space inside the anchor list, converted at the boundary):
     pub(crate) fn shift_region(&mut self, rows: Range<RowId>, delta: i32, kill: Range<RowId>);
     pub(crate) fn remap(&mut self, f: impl Fn(Pos) -> Option<Pos>);   // reflow
-    pub(crate) fn trim(&mut self, oldest: RowId);
+    pub(crate) fn trim(&mut self, origin: RowId, oldest: RowId);   // lane-scoped: origin..oldest
 }
 ```
 
-**The cursor and the viewport top are anchors with a cached field (N-01).** `Screen::cursor.pos`
-and `Viewport::offset` stay ordinary fields, because the print path writes the cursor on every
-glyph and must not pay a lookup. The **anchor entry is the authority across row motion**: every
-primitive that calls `shift_region`, `remap` or `trim` writes the moved value back into the field
-before it returns, and a debug assertion checks that the field and its anchor agree at the end of
-`feed`, `resize` and `render_update`. Nothing outside those primitives may move a row.
+**`Cursor`, `SavedCursor` and `ViewportTop` are registered per screen**, so the list holds one of
+each per lane rather than one in total. That is not a duplicate: it is what gives the primary and
+the alternate screen independent `DECSC` slots and independent scroll offsets, which is the
+behaviour `? 1049` requires. A consumer reads them through the screen, never by scanning the list
+for a kind — because today `AnchorKind::Cursor` alone cannot say *which* screen's cursor it is.
+**Adding a screen discriminant to `AnchorKind` is owned by `US-0077`**, which is the first packet
+that walks the list generically: reflow runs on the primary screen only, so `Anchors::remap` must
+select that screen's entries rather than every `Cursor` in the list. Until then the pairing is the
+documented contract, and `assert_integrity` counts the three screen-owned entries **per lane**.
+
+**The field is the authority across a scroll; the anchor entry is the authority across a reflow.**
+`Screen::cursor.pos`, `Screen::saved_cursor.pos` and `Viewport::offset` stay ordinary fields,
+because the print path writes the cursor on every glyph and must not pay a lookup, and because the
+region primitives deliberately do **not** move them: `IL` and `DL` read the cursor's screen row as
+their origin, which a content shift would destroy, and the reference's `saved_cursor` is
+screen-relative so no scroll touches it either. `Anchors::shift_region` therefore **skips** those
+three kinds and moves only `SelectionStart`, `SelectionEnd`, `Graphic` and `Mark`;
+`Anchors::remap` (reflow) moves all of them, which is what
+[`reflow-and-resize.md`](reflow-and-resize.md) needs. After a reflow the moved entries are read
+back into the fields **before** the next `sync_anchors`, which otherwise overwrites them from the
+fields. A debug assertion checks field and entry agree at the end of `feed`, `resize` and
+`render_update`.
 
 - The list is small and bounded: one saved cursor, two selection anchors, one per live graphics
   placement, one per visible OSC 133 mark. A linear scan per scroll is cheaper than any index.
@@ -99,7 +129,19 @@ before it returns, and a debug assertion checks that the field and its anchor ag
   reflow property tests as well as by the scroll tests.
 - The engine additionally emits `VtEvent::RowsScrolled { top, bottom, delta }` so a consumer with
   its own cache (the renderer's row plan, a search index) can shift it instead of rebuilding.
-  The event is a **notification**; it is not how anchors move.
+  The event is a **notification**; it is not how anchors move. Its contract, which
+  [`damage-and-render-state.md`](damage-and-render-state.md) § "Scroll damage" states in the same
+  words:
+
+  `ScrollReport::scrolled` is an `Option<RowsScrolled>` for exactly this reason: `None` means no
+  row's content changed id.
+
+  | Case | Reported |
+  | --- | --- |
+  | Whole-viewport scroll | **`None`**. Every surviving id keeps its content and the new rows are new ids, so a `RowId`-keyed cache is already correct; a `delta` here would make it corrupt itself. The viewport's own motion reaches the renderer as `RenderUpdate::Partial { scrolled }` instead |
+  | Region anchored at row 0 with a bounded bottom | one event over the **region's** id range with `delta = -n`, and a **second** event over the tail below the region with `delta = +n`, because those rows kept their content but changed id |
+  | Region not anchored at row 0 | one event over the region's id range, `delta = -n` for `SU` / `IL`, `+n` for `SD` / `DL` |
+  | Invalid or empty region | **nothing**, and never a malformed range with `bottom < top` |
 - Debug assertion: every live anchor's row is inside `oldest..=newest`.
 
 ### Viewport anchoring
@@ -129,7 +171,7 @@ Effect of every operation that moves rows, stated once:
 | `SU` / `SD` / `IL` / `DL` / `RI` inside a region that is **not** anchored at row 0 | unchanged (nothing enters history) |
 | `scroll_viewport(delta)` | `clamp(offset - delta, 0, history_len())`; negative delta scrolls towards history |
 | `scroll_to_bottom()` | `0` |
-| `ED 2` on the primary screen (`clear_viewport`) | `offset` unchanged while the bottom moves down by `positions`, i.e. the scrolled-back user keeps seeing the same content — trap 9 |
+| `ED 2` on the primary screen (`clear_viewport`) | it scrolls the occupied rows into history, so the sticky rule applies like any other push: `0` stays `0`, otherwise `min(offset + positions, history_len())`. The scrolled-back user keeps seeing the same content because the offset grows with the bottom — trap 9 |
 | `ED 3` (`clear_history`) | `0` — trap 10 |
 | Trim (history full) | `min(offset, history_len())` |
 | Resize, rows only | preserved, clamped |
@@ -224,8 +266,9 @@ pub struct Cursor {
 so `DECSC`/`DECRC` do not save it and the alternate screen does not swap it — reference
 behaviour.
 
-The saved cursor's row is a **tracked anchor** (`AnchorKind::SavedCursor`), so `DECRC` after a
-region scroll lands where the reference lands.
+The saved cursor keeps a screen-relative row, like the reference's, so a region scroll does not
+move it and `DECRC` after `SU` lands on the same screen row the reference lands on. Its anchor
+entry exists for reflow, which does move it.
 
 `pending_wrap` is set when a glyph lands on the last column and cleared by every explicit
 positioning operation: `goto`, `move_forward`, `move_backward`, `carriage_return`, `backspace`,
@@ -284,7 +327,7 @@ visibly on any wrapped output — a user-visible change that no deviation table 
 | Case | Behaviour | Ids | `offset` | Anchors |
 | --- | --- | --- | --- | --- |
 | `region == 0..rows` (whole viewport) | `newest += n`; `n` fresh rows at the bottom; rows leave the top **into scrollback**; trim if over the limit. The only path that fills history (trap 17) | new ids at the bottom, existing ids keep their content | sticky rule above | `trim` only |
-| `region.top == 0`, `region.bottom < rows` | content inside the region moves up into scrollback as above, then the rows **below** `region.bottom` are put back at their original positions. The reference does this by rotating the storage and swapping the fixed bottom rows back (`grid/mod.rs:252-307`) | rows below the region keep their ids **and** their content; rows inside the region are rewritten | as above | `shift_region(region, -n, kill = top n rows of the region)` |
+| `region.top == 0`, `region.bottom < rows` | the region's rows move up into scrollback as above, then the rows **below** `region.bottom` are lifted out and put back at the same screen positions — the reference's lift, rotate, put-back (`grid/mod.rs:285-292`) | rows below the region keep their **content and their screen position**, but not their ids: `newest` advanced, so every id below the region shifts by `n`. The LLD previously said "keep their ids and their content", which cannot both hold | as above | `shift_region` over the **region's** id range only, `kill` = the `n` rows that left the top. Anchors below the region are **not** killed (their content is safe) and are **not** shifted by the region call; the id shift is the ordinary push, handled by the same `+n` that moves the rest of the screen |
 | `region.top != 0`, `region.height() > n` | content moves up **inside** the region only; the bottom `n` rows of the region are reset. Nothing enters history | ids fixed, content copied | unchanged | `shift_region(region, -n, kill = top n)` |
 | `region.top != 0`, `region.height() <= n` | **Spec-correct (C3)**: the region rotates by its own height and is then blank, reached by the same path as every other count. The reference short-circuits and blanks with no rotation at all | ids fixed | unchanged | every anchor in the region dies |
 
@@ -307,12 +350,24 @@ never reflows. `swap_alt()`:
 if entering:
     alt.cursor        = primary.cursor with pos.row replaced by alt's row at the same INDEX
     primary.saved_cursor = primary.cursor      // clobbers the primary DECSC slot (trap 14)
-    alt.reset_all_rows()
+    alt.reset_rows_with(primary.cursor.erase_cell)   // BCE clear, NOT a reset
 swap(keyboard_mode_stack, inactive_keyboard_mode_stack)
 swap(primary, alt); mode ^= ALT_SCREEN
 selection = None
 full damage
 ```
+
+**Entering the alternate screen is not `RIS` on that screen.** Three things must not happen, and
+each was observed going wrong when the entry path called a screen-level reset:
+
+| Shared or preserved | Why |
+| --- | --- |
+| The **scroll region** | the reference keeps one `scroll_region` on `Term`, shared by both screens, so a `DECSTBM` set before `? 1049 h` still applies inside the alternate screen and survives the return |
+| The **tab stops** | one `tabs` table on `Term` for the same reason; resetting them on entry resurrects stops a `TBC 3` had cleared |
+| The **clear is BCE** | the alternate screen's rows are reset with the *entering cursor's* erase cell, not with the default background, because the reference clones the primary cursor into the inactive grid before resetting its region |
+
+Getting any of the three wrong moves `alt_reset`, `wrapline_alt_toggle`, `saved_cursor_alt`,
+`tmux_htop`, `tmux_git_log` and the `vim_*` recordings, with no declared difference.
 
 The cursor copy carries the **row index within the viewport** and the column, never a `RowId`
 from the other screen (R-04). Leaving takes none of the `if` branch, so the primary screen
@@ -337,13 +392,37 @@ regression: the gate still fails on any difference that is not declared.
 | `EL 0` (right) | `col..cols`. **Returns immediately, erasing nothing, if `pending_wrap` is set** (trap 2; see G3 for when the flag can be set) |
 | `EL 1` (left) | `0..=col` |
 | `EL 2` | `0..cols` |
-| `ECH` (`CSI X`) | `col..min(col + n, cols)`, filled with the template background |
+| `ECH` (`CSI X`) | `col..min(col + n, cols)`, filled with the **erase cell** (see below) |
 | `DCH` (`CSI P`) | **Spec-correct (C1)**: shift `row[col + n..]` left to `col` and fill the last `min(n, cols - col)` cells with the template background. The reference clamps `end` to `cols - 1`, which for a large `n` is not a plain shift (trap 19) |
-| `ICH` (`CSI @`) | `n = min(count, cols - col)`; swap from the end; fill `col..col+n` with the template background |
+| `ICH` (`CSI @`) | `n = min(count, cols - col)`; swap from the end; fill `col..col+n` with the **erase cell** |
 | `ED 0` (below) | clear `col..` on the cursor row, then reset every row below |
 | `ED 1` (above) | **Spec-correct (C2)**: reset every row above the cursor, then clear `0..=col` on the cursor row. The reference guards with `cursor_row_index > 1`, so row 0 survives when the cursor is on row 1 (trap 11) |
 | `ED 2` (all) | alternate screen: reset every viewport row. Primary: scroll the occupied part of the viewport into scrollback (`clear_viewport`), keeping the content, moving the bottom down by `positions` and leaving the scroll offset unchanged so a scrolled-back user keeps seeing the same content (trap 9). The cursor does not move |
 | `ED 3` (saved) | when history is non-empty, drop it and set `offset = 0` (trap 10). `VtEvent::ScreenCleared` is emitted **before** the "is there history" check (trap 12) |
+
+**Accepted simplification (M10):** `repair_wide_pairs` sweeps the **whole** row after every
+in-row mutation (`EL`, `ECH`, `DCH`, `ICH`, the insert shift), where the reference repairs only the
+boundary cells. It is correctness-neutral and O(cols) on operations that are already O(cols), and
+narrowing it would trade a plainly-correct invariant for a micro-optimisation the intake forbids as
+an outcome. Revisit only if a measurement asks.
+
+**The erase cell, and why it is not the SGR template.** `Cursor::template` is a `Cell`, not a
+`Style`: it carries the interned `StyleId`, the extras id and the OSC 133 semantic, so
+`Row::reset`'s background-change discriminant can be read from it without touching the interner.
+But **every erase fills with the template's background only** — never with its foreground,
+attributes, hyperlink or semantic — because the reference fills with `bg.into()`
+(`term/mod.rs:1669-1671`, `:1548-1553`, `:1583-1588`, `:1216-1219`, `:1789-1800`). Erasing while
+an underline, a strikeout, an inverse or an open `OSC 8` hyperlink is active must not leave
+underlined or clickable blanks.
+
+**The cursor therefore carries two cells, not one.** `Cursor::template` is the reference's
+`cursor.template` — the SGR style, the open hyperlink or image, the OSC 133 semantic — and is what
+a *printed* glyph inherits. `Cursor::erase` is the reference's `bg.into()`: the default cell with
+only the template's background. Both are derived once in `Screen::set_template`, the **only**
+writer, so the erase paths never reach into the interner and an erase under an open underline,
+strikeout or `OSC 8` hyperlink still leaves plain blanks. Consequence to keep in mind:
+`Row::reset`'s background-erase discriminant is the **erase** cell's interned style id, which now
+differs exactly when the background differs, because nothing else is left in that style.
 
 `ED 2`'s occupancy scan walks backwards from the bottom-right for the last non-blank cell using
 `Cell::is_erasable()`, which decides how many rows enter scrollback. **A cell carrying a graphic
@@ -394,6 +473,7 @@ regression: the gate still fails on any difference that is not declared.
 | C4 | Insert mode repairs wide pairs instead of leaving orphaned spacers | 7 | `US-0075` | **1 recording**: `vttest_insert` (IRM set once, one non-ASCII character printed) — possible, not certain |
 | C8 | `? 47` / `? 1047` / `? 1048` implemented | 13 | `US-0076` | **none of the 45** — `wrapline_alt_toggle`, `alt_reset` and `saved_cursor_alt` all use `? 1049`. Free |
 | C10 | `CSI ? 5 W` restores the default tab stops | 27 | `US-0076` | **none of the 45**. Free |
+| C12 | Wide pairs are repaired after every in-row mutation, so `EL` / `ECH` / `DCH` / `ICH` and the insert shift never leave an orphaned spacer | 6 | `US-0075` | **none measured**: the US-0075 verification UTF-8-decoded all 45 recordings and found **no width-2 glyph**. Upper bound if that scan missed one — recordings carrying both non-ASCII bytes and an in-row erase — is 22 of 45, the material ones being `vim_large_window_scroll`, `vim_24bitcolors_bce`, `tmux_git_log`, `tmux_htop`, `region_scroll_down`, `zerowidth`, `wrapline_alt_toggle`, `issue_855`, `fish_cc`, `colored_underline`. The reference leaves the orphans; the design's own integrity assertion forbids that state, so the repair is compulsory |
 
 Kept deliberately, because they are correct behaviour or OneTerm product behaviour rather than
 defects: pending wrap and its interaction with `BS`, `EL 0` and `HT` (traps 1, 2, 3); `ED 2`
@@ -416,6 +496,10 @@ impl Screen {
     pub fn scroll_viewport(&mut self, delta: i32);
     pub fn scroll_to_bottom(&mut self);
     pub fn history_len(&self) -> u32;
+
+    /// Rows only: truncate or pad. Columns and reflow are `Terminal::resize` in `US-0077`
+    /// ([`reflow-and-resize.md`](reflow-and-resize.md)); this entry point never reflows.
+    pub fn resize_rows(&mut self, rows: u16, anchors: &mut Anchors);
 
     pub fn scroll_up(&mut self, region: ScrollRegion, n: u16, anchors: &mut Anchors);
     pub fn scroll_down(&mut self, region: ScrollRegion, n: u16, anchors: &mut Anchors);
@@ -479,9 +563,23 @@ Anchors:
 
 - [ ] `anchor::tests::region_scroll_moves_anchors_with_their_content`
 - [ ] `anchor::tests::anchor_in_a_blanked_region_dies`
-- [ ] `anchor::tests::trim_kills_anchors_below_oldest`
+- [ ] `anchor::tests::trim_kills_anchors_below_oldest_within_the_lane`
+- [ ] `anchor::tests::an_alt_screen_scroll_leaves_primary_anchors_alone` — the lane rule; one alt
+  line feed must not kill a primary mark, selection anchor or graphics placement.
 - [ ] `anchor::tests::saved_cursor_survives_a_region_scroll` — `DECSC`, `SU`, `DECRC`.
-- [ ] `anchor::tests::rows_scrolled_event_matches_the_anchor_shift`
+- [ ] `anchor::tests::rows_scrolled_event_matches_the_anchor_shift` — per the contract table:
+  a whole-viewport scroll reports nothing, a bottom-bounded region reports the region **and** the
+  tail, an invalid region reports nothing.
+- [ ] `grid::tests::erased_cells_keep_only_the_background` — an `ECH` under an active underline and
+  hyperlink leaves plain blanks (reading 7).
+- [ ] `grid::tests::tab_does_not_orphan_a_wide_pair` — the `put_tab` rule above.
+- [ ] `grid::tests::wide_char_wrapping_over_an_existing_pair_keeps_the_grid_intact` — the wrapping
+  `LeadingWideSpacer` goes through `write_at_cursor`, which repairs first.
+- [ ] `anchor::tests::rows_scrolled_is_silent_for_a_whole_screen_scroll`,
+  `anchor::tests::rows_scrolled_reports_the_tail_shift_of_a_bounded_region` — the `Option` contract.
+- [ ] `grid::tests::entering_alt_screen_keeps_the_region_and_the_tab_stops`,
+  `grid::tests::entering_alt_screen_clears_with_the_background_template`
+- [ ] `grid::tests::resize_rows_truncates_and_pads_without_reflowing`
 
 Scrolling, erase and tabs (trap-mapped):
 

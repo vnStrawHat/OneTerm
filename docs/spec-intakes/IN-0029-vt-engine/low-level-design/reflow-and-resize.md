@@ -37,7 +37,16 @@ pub struct ResizeOutcome { pub reflowed: bool, pub rows_trimmed: u32 }
 **There is no public tracking-point slice and no public `RowRemap` (R-31).** Everything that
 needs to move is already an entry in the engine's tracked-anchor list, whose canonical
 `AnchorKind` list is in [`grid-and-scrollback.md`](grid-and-scrollback.md) § "Tracked anchors" and
-includes `Cursor` and `ViewportTop` for exactly this reason (N-01). Reflow calls `Anchors::remap` with the same closure it uses to move the cursor, so there is
+includes `Cursor` and `ViewportTop` for exactly this reason (N-01).
+
+**This packet owns the screen discriminant on `AnchorKind` (M6).** Each screen registers its own
+`Cursor`, `SavedCursor` and `ViewportTop`, so the list holds two of each; reflow runs on the
+**primary** screen only, which makes it the first code that must select one screen's entries rather
+than every entry of a kind. `US-0077` therefore adds the discriminant (or an equivalent lane check
+in `Anchors::remap`) and updates the canonical list in
+[`grid-and-scrollback.md`](grid-and-scrollback.md) § "Tracked anchors" and `DEC-0015` with it.
+Reading the remapped entries back into the fields must happen **before** the next
+`Screen::sync_anchors`, which otherwise overwrites them from the fields. Reflow calls `Anchors::remap` with the same closure it uses to move the cursor, so there is
 **one** anchor mechanism, shared with the scroll primitives and exercised by both test suites. A
 consumer that wants its own anchor registers one; it never passes a slice into `resize` and never
 receives an O(scrollback) remap table to walk.

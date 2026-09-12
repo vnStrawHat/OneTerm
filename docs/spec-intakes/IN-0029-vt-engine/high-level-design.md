@@ -129,8 +129,9 @@ packet gate (R-47).
 **Module layout (R-49).** `docs/agents/code-style.md` forbids a folder holding a single file, so
 the engine is flat files — `cell.rs`, `intern.rs`, `grid.rs`, `anchor.rs`, `selection.rs`,
 `reflow.rs`, `damage.rs`, `render.rs`, `dispatch.rs`, `event.rs`, `strip.rs`, `testing.rs` — with
-two folders that genuinely split: `parser/` (`state.rs`, `params.rs`, `osc.rs`, `utf8.rs`) and
-`graphics/` (`mod.rs`, `sixel.rs`) (N-14).
+three folders that genuinely split: `parser/` (`state.rs`, `params.rs`, `osc.rs`, `utf8.rs`),
+`grid/` (`mod.rs`, `row.rs`, `anchor.rs`, `screen.rs`, `terminal_grid.rs`, as shipped by `US-0075`)
+and `graphics/` (`mod.rs`, `sixel.rs`) (N-14).
 
 ### Why one engine crate and not three
 

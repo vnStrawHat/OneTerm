@@ -16,6 +16,7 @@
     "crates/highlight",
     "crates/update",
     "crates/local-shell",
+    "crates/pty",
     "crates/ssh",
     "crates/completion",
     "crates/tools",
@@ -53,8 +54,10 @@
     "oneterm-highlight": [],
     "oneterm-local-shell": [
       "oneterm-core",
+      "oneterm-pty",
       "oneterm-terminal"
     ],
+    "oneterm-pty": [],
     "oneterm-session-ui": [
       "oneterm-actions",
       "oneterm-core",
@@ -109,11 +112,13 @@
       "oneterm-actions",
       "oneterm-settings"
     ],
-    "oneterm-tools": [],
+    "oneterm-tools": [
+      "oneterm-pty"
+    ],
+    "oneterm-vt": [],
     "oneterm-update": [
       "oneterm-core"
     ],
-    "oneterm-vt": [],
     "oneterm-workspace": [
       "oneterm-actions",
       "oneterm-core",

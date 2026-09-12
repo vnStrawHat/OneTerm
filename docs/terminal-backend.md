@@ -25,7 +25,9 @@
 >    event delivery and the state cache come from the shared pump layer in
 >    `oneterm-terminal::backend` (§5.3).
 > 2. **Rendering shares `alacritty_terminal`** via a custom GPUI `Element`.
-> 3. **Local uses `alacritty_terminal::tty` + `EventLoop`** (not `portable-pty`).
+> 3. **Local uses `oneterm-pty` + OneTerm's own poll loop** (not `portable-pty`, and not
+>    alacritty's `EventLoop`). `oneterm-pty` owns the ConPTY / `openpty` transport and nothing
+>    else; see `docs/spec-intakes/IN-0029-vt-engine/low-level-design/pty.md`.
 > 4. **`alacritty_terminal` is taken from the `zed-industries/alacritty` fork** @ rev `fcf32feacb367b75ec84dd40f041e4fd411d3cc1`
 >    (patched version with `TerminalContent`/`display_iter`/`content()`). This is the rev Zed
 >    uses for `gpui` rev `1d217ee39…`, but it is a separate repo — not the zed monorepo.
@@ -60,8 +62,8 @@
         │ TerminalSession trait (terminal)       │
    ┌────┴────────────────┐               ┌────────┴───────────────┐
    │  local-shell crate  │               │  ssh crate             │  ← INDEPENDENT
-   │  tty::Pty + poll    │               │  russh + shared tokio   │     don't know each other
-   │  loop (ConPTY)      │               │  channel + pty-req      │
+   │  PseudoConsole +    │               │  russh + shared tokio   │     don't know each other
+   │  poll loop (ConPTY) │               │  channel + pty-req      │
    │  LocalTransport     │               │  SshTransport (Cmd)     │
    │  Term<OscRouter<    │               │  Term<OscRouter<        │
    │   LocalTransport>>  │               │   SshTransport>>        │
@@ -91,7 +93,7 @@
 |---|---|
 | `core` | `ShellKind` + `LocalShellConfig` + `SshConfig` (config), `SftpBackend`, `AppError` (leaf, no GPUI). |
 | `terminal` | `TerminalSession` trait + `SessionEvent`, `TerminalContent` snapshot, `TerminalPalette`, printable-output logging controller/parser, `key_encode`/`mouse_encode`/`osc`/`url`, and the **backend pump layer** (`backend` module: `SharedState`, `SessionEventSink`, `OscRouter`, `LineAccounting`, `TerminalPump`, `PtyTransport`) shared by both backends. |
-| `local-shell` | `LocalSession` implementing `TerminalSession`. Spawns a shell via `alacritty_terminal::tty::new` and pumps it with a custom poll loop (`ShellEventLoop<P: EventedPty>`) feeding `TerminalPump`. ConPTY on Windows. `LocalTransport: PtyTransport` (notifier queue). Only `LocalSession` is public. |
+| `local-shell` | `LocalSession` implementing `TerminalSession`. Spawns a shell via `oneterm_pty::PseudoConsole::spawn` and pumps it with a custom poll loop (`ShellEventLoop<P: EventedPty>`) feeding `TerminalPump`. ConPTY on Windows. `LocalTransport: PtyTransport` (notifier queue). Only `LocalSession` is public. |
 | `ssh` | `SshSession` implementing `TerminalSession`. russh client on the shared tokio runtime; `ssh_main_task` feeds `TerminalPump`. pty-req + shell + `window_change` + exit-status. `SshTransport: PtyTransport` (bounded `Cmd` channel). SFTP task lifetime tied to the connection. Only `SshSession` + `connect` are public. |
 | `terminal-view` | `TerminalElement` (custom `gpui::Element`), `TerminalView` (`Render`; one view type hosts any `TerminalSession`, local or SSH), `TerminalPanel`/`PanelSpec` (dock tab), IME (`EntityInputHandler`), mouse/wheel, font measure, theme → `TerminalPalette`. |
 | `app` | Installs the `SessionFactory` (`AppSessionFactory`) + `WorkspaceCommands` through `AppServices`; only crate that links `ssh`/`local-shell`. |
@@ -326,7 +328,7 @@ OneTerm's generated prompt integration emits OSC 7 whenever it controls the Wind
 
 The local listener already parses forwarded OSC 7 payloads into `SessionEvent::Cwd` and updates `TerminalSession::cwd()`.
 
-### 6.2. Spawn via `alacritty_terminal::tty`
+### 6.2. Spawn via `oneterm-pty`
 
 > Original design sketch (alacritty `EventLoop` + `ArcSwap` cache). The shipped code
 > described below the sketch differs: a custom `ShellEventLoop`, no `last_content`
@@ -393,8 +395,9 @@ output parsing, input FIFO, resize, colour replies, child exit and shutdown.
 
 ### 6.3. Windows-specific
 
-- **ConPTY**: `alacritty_terminal::tty` picks ConPTY automatically on Win10 1809+. No need
-  to hand-code `CreatePseudoConsole`.
+- **ConPTY**: `oneterm-pty` resolves the bundled `conpty.dll` next to the executable first and
+  falls back to `kernel32!CreatePseudoConsole` (Win10 1809+) only when it is missing — DEC-0013.
+  The resolved host is logged once at `info` (`conpty: bundled` / `conpty: system`).
 - **UTF-8**: `Cmd` → `chcp 65001` (via `/K` args). `pwsh`/`powershell` → set env
   `LANG`/`LC_ALL` + (optionally) an init arg `[Console]::OutputEncoding`.
 - **TERM**: always `xterm-256color`, `COLORTERM=truecolor`.
@@ -404,7 +407,8 @@ output parsing, input FIFO, resize, colour replies, child exit and shutdown.
   and never repaints, so scrollback is not pulled in and joined or split wrapped rows
   move the cursor row exactly as they do in conhost.
 - **Ctrl-C**: byte `0x03` → shell handles it. OK.
-- **Child exit**: `tty::Pty` provides `ChildExitWatcher` (race-free) → `SessionEvent::Exited(code)`.
+- **Child exit**: `oneterm-pty` watches the child handle (race-free) and reports
+  `ChildEvent::Exited` on `PTY_CHILD_EVENT_TOKEN` → `SessionEvent::Exited(code)`.
 
 ### 6.4. Re-render perf (per Zed)
 

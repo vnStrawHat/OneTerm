@@ -144,8 +144,7 @@ strings under the lock by `render_update`
 
 ```rust
 pub const GRAPHEME_MAX_LEN: usize = 16;        // codepoints per cell
-pub const GRAPHEME_SWEEP_ENTRIES: usize = 65_536;   // absolute trigger, see below
-pub const GRAPHEME_SWEEP_CHARS: usize = 1 << 20;
+pub const GRAPHEME_SWEEP_ENTRIES: usize = 65_536;   // the single trigger, see below
 
 pub struct GraphemeArena {
     chars: Vec<char>,                  // one flat arena
@@ -163,11 +162,19 @@ pub struct GraphemeArena {
   documents exactly this failure). GC by remap: steal the arena, walk both screens skipping rows
   without `RowFlags::HAS_GRAPHEME`, re-intern only referenced sequences, rewrite each cell's
   content bits.
-- **The trigger is an absolute constant, not a fraction of an id space (R-27).** The id space is
-  the cell's 21 content bits (2 097 152 entries), not 65 536; the earlier "half the id space"
-  figures were wrong. `GRAPHEME_SWEEP_ENTRIES = 65_536` and `GRAPHEME_SWEEP_CHARS = 1 MiB` are
-  chosen so the arena stays inside a few megabytes and a sweep is rare; both have a test that
-  drives them.
+- **One trigger, an absolute constant (R-27, F2).** The id space is the cell's 21 content bits
+  (2 097 152 entries), not 65 536; the earlier "half the id space" figures were wrong.
+  `GRAPHEME_SWEEP_ENTRIES = 65_536` keeps the arena inside a few megabytes and makes a sweep rare.
+  A second, character-count trigger was specified and is **deleted**: with `GRAPHEME_MAX_LEN = 16`
+  the arena holds at most `16 x entries` characters, so a one-megabyte character trigger can only
+  fire once the entry trigger already has. It is unreachable by construction and no test could
+  drive it — the US-0074 verification proved it empirically, firing the entry trigger at 65 536
+  entries and 1 048 561 characters, fifteen short of the deleted constant at its maximum.
+- **Ladder step four: the id space itself can fill (F5).** If the 21-bit id space is exhausted and
+  a sweep frees nothing, `grapheme()` returns a reserved id-0 cluster (one blank), counts it in
+  `FeedStats::grapheme_table_exhausted` and warns **once per session** — the same shape as the
+  style ladder's step 3, and required by `docs/agents/error-policy.md`, which forbids a panic or a
+  silent wrap on untrusted input.
 - The sweep runs only at the end of `feed()`, never mid-sequence, so no borrowed id is live
   across it. Because grapheme ids live in the cell's content bits and **style ids never move**
   (see above), a render copy taken under the lock cannot be invalidated by a later sweep — it
@@ -175,8 +182,8 @@ pub struct GraphemeArena {
 
 ### Width
 
-`unicode-width` 2.x for scalar width, `unicode-segmentation` 1.x for cluster boundaries. Both are
-already in `Cargo.lock`.
+`unicode-width` 0.2.x for scalar width, `unicode-segmentation` 1.x for cluster boundaries. Both
+are already in `Cargo.lock`; there is no `unicode-width` 2.x release (F7).
 
 **Mode 2027 is not implemented in this intake (R-56, R-38).** The research asks that the
 *storage* decision — intern, and cap the cluster length — be made early, and it is, above. The
@@ -213,7 +220,7 @@ Three questions, three answers, because they are genuinely different (R-12, R-13
 | --- | --- | --- |
 | `is_blank()` | content is `' '` **and** `style_id == 0` **and** `extras_id == 0` | the renderer's fast paths, `Cell::EMPTY` comparisons |
 | `is_erasable()` | the reference's looser `is_empty` rule — content in `{' ', '\t'}`, default fg/bg, none of `INVERSE`, any underline, `STRIKEOUT`, `WideSpacer`, `LeadingWideSpacer`, and no grapheme — **and additionally false when the cell carries a `GraphicId`** (R-13) | `Row::shrink`, the `ED 2` occupancy scan |
-| `text_char()` | `' '` for a blank, `'\t'` for a tab cell, the scalar or the grapheme otherwise | `row_text`, search, URL detection, the session log, the corpus snapshot |
+| `text_char(&GraphemeArena)` | `' '` for a blank, a tab character for a tab cell, the scalar otherwise, and the cluster's first scalar for a grapheme cell — the arena is needed because a grapheme cell's content bits hold an id, not a character (F6) | `row_text`, search, URL detection, the session log, the corpus snapshot |
 
 **The `\t` cell (R-12).** `put_tab` writes a literal `\t` into a cell that held a space, which the
 `tab_rendering` recording pins. Downstream: `text_char()` returns `'\t'`; `row_text` emits it
@@ -238,7 +245,9 @@ impl Cell {
     pub fn extras_id(self) -> ExtrasId;        // 0 = none
     pub fn semantic(self) -> Semantic;
     pub fn is_blank(self) -> bool;
-    pub fn is_erasable(self, ex: &ExtrasTable) -> bool;   // needs the table to see a GraphicId
+    pub fn is_erasable(self, intern: &Interner) -> bool;  // the rule reads the Style behind
+                                                          // style_id as well as the extras, so it
+                                                          // takes the whole interner (F6)
     pub fn with_style(self, id: StyleId) -> Cell;
     pub fn with_content(self, c: CellContent) -> Cell;
 }
@@ -262,18 +271,22 @@ pub fn cluster_width(cluster: &[char]) -> u8;   // implemented now, used when 20
 
 ## Edge Cases and Failure Modes
 
-- [ ] **Trap 5 — wide character at the last column.** With wrap on: a `LeadingWideSpacer`
-  carrying the current style goes into the last column, the line wraps, the glyph lands in
-  columns 0-1 of the next row. With wrap off: the glyph is dropped and the column stays.
-- [ ] **Trap 6 — overwriting half a wide pair.** Writing a narrow character over a `Wide` cell
-  clears the `WideSpacer` to its right; writing over a `WideSpacer` clears the `Wide` cell to its
-  left (dropping its grapheme, leaving a space); at column 0 or 1 the previous row's trailing
-  `LeadingWideSpacer` is cleared too.
-- [ ] **Trap 7 — insert mode over a wide character.** **Spec-correct (C4)**: the shift repairs any
+- [ ] **Trap 5 — wide character at the last column** (print path, owned by `US-0075`). With wrap
+  on a `LeadingWideSpacer` goes into the last column, the line wraps and the glyph lands in columns
+  0-1 of the next row; with wrap off the glyph is dropped. This file owns the cell **shapes**; the
+  wrap decision needs a grid.
+- [ ] **Trap 6 — overwriting half a wide pair.** The two **same-row** cases are this file's:
+  writing a narrow character over a `Wide` cell clears the `WideSpacer` to its right, and writing
+  over a `WideSpacer` clears the `Wide` cell to its left (dropping its grapheme, leaving a space).
+  The **cross-row** case — at column 0 or 1 the previous row's trailing `LeadingWideSpacer` is
+  cleared — needs a grid and is owned by `US-0075`.
+- [ ] **Trap 7 — insert mode over a wide character** (print path, owned by `US-0075`).
+  **Spec-correct (C4)**: the shift repairs any
   wide pair it splits, the same repair `write_at_cursor` performs, instead of leaving the orphaned
   spacers the reference produces. The reference also skips the shift entirely when
   `col + width >= cols`; that clamp is kept, because it is the correct "no room" case.
-- [ ] **Trap 8 — zero-width character at column 0** attaches to column 0.
+- [ ] **Trap 8 — zero-width character at column 0** attaches to column 0 (print path, owned by
+  `US-0075`: it reads the cursor and the pending-wrap flag).
 - [ ] **Trap 37 — two predicates**, above.
 - [ ] **Style table exhaustion** degrades to the default style and logs once; no sweep, no
   renumbering, so no id a render copy might hold can ever move.
@@ -292,10 +305,12 @@ pub fn cluster_width(cluster: &[char]) -> u8;   // implemented now, used when 20
 - [ ] `cell::tests::zero_cell_is_a_blank_space_with_the_default_style`
 - [ ] `cell::tests::content_roundtrips_for_max_scalar_and_max_grapheme_id`
 - [ ] `cell::tests::width_enum_covers_every_wide_pair_shape`
-- [ ] `cell::tests::wide_char_at_last_column_wrap_on_and_off` — trap 5.
-- [ ] `cell::tests::wide_pair_repair_on_overwrite` — trap 6, all three sub-cases.
-- [ ] `cell::tests::insert_mode_over_wide_char_repairs_the_pair` — correction C4, trap 7.
-- [ ] `cell::tests::zero_width_at_column_zero_attaches_to_column_zero` — trap 8.
+- [ ] `grid::tests::wide_char_at_last_column_wrap_on_and_off` — trap 5, **`US-0075`**.
+- [ ] `cell::tests::wide_pair_repair_on_overwrite` — trap 6, the two same-row sub-cases.
+- [ ] `grid::tests::wide_pair_repair_across_rows` — trap 6's cross-row case, **`US-0075`**.
+- [ ] `grid::tests::insert_mode_over_wide_char_repairs_the_pair` — correction C4, trap 7,
+  **`US-0075`**.
+- [ ] `grid::tests::zero_width_at_column_zero_attaches_to_column_zero` — trap 8, **`US-0075`**.
 - [ ] `cell::tests::blank_and_erasable_predicates_differ_on_a_bold_space` — trap 37.
 - [ ] `cell::tests::tab_cell_is_erasable_but_not_blank_and_reads_back_as_tab` — R-12.
 - [ ] `cell::tests::graphic_cell_is_not_erasable` — R-13.
@@ -312,7 +327,9 @@ pub fn cluster_width(cluster: &[char]) -> u8;   // implemented now, used when 20
 - [ ] `intern::tests::cluster_longer_than_cap_is_truncated_and_counted`
 - [ ] `intern::tests::grapheme_gc_preserves_every_live_cell` — a stream of unique clusters, a
   forced sweep, then a full-grid text comparison against a pre-sweep snapshot.
-- [ ] `intern::tests::grapheme_sweep_trigger_is_the_documented_constant` — R-27.
+- [ ] `intern::tests::grapheme_sweep_trigger_is_the_documented_constant` — R-27, one trigger.
+- [ ] `intern::tests::grapheme_arena_exhaustion_falls_back_to_a_blank_and_logs_once` — ladder step
+  four (F5).
 - [ ] `width::tests::scalar_widths_cjk_emoji_combining`
 - [ ] `width::tests::zwj_family_splits_without_mode_2027` — pins today's behaviour.
 - [ ] `width::tests::cluster_width_is_correct_for_emoji_flags_and_skin_tones` — the function is

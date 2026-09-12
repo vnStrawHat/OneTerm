@@ -8,8 +8,7 @@
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
 
-use alacritty_terminal::event::WindowSize;
-
+use oneterm_pty::WindowSize;
 use oneterm_terminal::{OscRouter, PtyTransport, TerminalError};
 
 use crate::event_loop::{ShellMsg, ShellNotifier};
@@ -62,8 +61,8 @@ impl PtyTransport for LocalTransport {
 
     fn pty_resize(&self, rows: u16, cols: u16) -> Result<(), TerminalError> {
         self.send(ShellMsg::Resize(WindowSize {
-            num_lines: rows,
-            num_cols: cols,
+            rows,
+            cols,
             cell_width: 0,
             cell_height: 0,
         }))

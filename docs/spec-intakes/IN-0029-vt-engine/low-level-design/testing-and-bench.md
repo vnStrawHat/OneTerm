@@ -49,6 +49,12 @@ into a multi-minute job. Ghostty's equivalent is per *page*, not per grid. So:
 | End of `feed`, `resize`, `render_update` | the full two-screen walk, in debug builds |
 | Property tests and fuzz targets | the full walk after every step, behind the `vt-paranoid` feature |
 
+**`vt-paranoid` is not wired yet (M12).** `US-0075` could not add it: the feature needs a
+`crates/vt/Cargo.toml` entry, which was outside that packet's file scope, so the full walk currently
+runs unconditionally in the property tests. **`US-0076` owns the one-line manifest entry** and the
+`#[cfg(feature = "vt-paranoid")]` gate, after which the three tiers above are real rather than
+aspirational.
+
 The debug test-suite runtime budget is recorded in the packet: `cargo test -p oneterm-vt` must
 stay under 60 s on the owner's machine, measured at `US-0075` and re-measured at `US-0077`.
 
@@ -268,11 +274,11 @@ All 48 items from [`../research/engine-semantics.md`](../research/engine-semanti
 | 2 | Pending wrap then `EL 0` erases nothing | grid | `grid::tests::pending_wrap_then_el0_erases_nothing` |
 | 3 | Pending wrap then `HT` | grid | `grid::tests::pending_wrap_then_tab_wraps_and_returns` |
 | 4 | Pending wrap with `DECAWM` off | grid (G3) | `grid::tests::decawm_off_then_el0_erases`, `grid::tests::decawm_off_then_tab_moves_to_the_next_stop` |
-| 5 | Wide char at the last column | cell-and-style | `cell::tests::wide_char_at_last_column_wrap_on_and_off` |
-| 6 | Overwriting half a wide pair | cell-and-style | `cell::tests::wide_pair_repair_on_overwrite` |
-| 7 | Insert mode over a wide char | cell-and-style | `cell::tests::insert_mode_over_wide_char_leaves_orphan_spacer` |
-| 8 | Zero-width char at column 0 | cell-and-style | `cell::tests::zero_width_at_column_zero_attaches_to_column_zero` |
-| 9 | `ED 2` scrolls into scrollback | grid | `grid::tests::ed2_scrolls_the_viewport_into_history`, `grid::tests::ed2_keeps_the_scrolled_back_viewport_position` |
+| 5 | Wide char at the last column | grid (print path) | `grid::tests::wide_char_at_last_column_wrap_on_and_off` (`US-0075`) |
+| 6 | Overwriting half a wide pair | cell-and-style (same row) + grid (cross row) | `cell::tests::wide_pair_repair_on_overwrite`, `grid::tests::wide_pair_repair_across_rows` (`US-0075`) |
+| 7 | Insert mode over a wide char | grid (print path) | `grid::tests::insert_mode_over_wide_char_repairs_the_pair` (`US-0075`, correction C4 — the old name `..._leaves_orphan_spacer` described the behaviour the correction replaced) |
+| 8 | Zero-width char at column 0 | grid (print path) | `grid::tests::zero_width_at_column_zero_attaches_to_column_zero` (`US-0075`) |
+| 9 | `ED 2` scrolls the occupied viewport into scrollback and **bumps the scroll offset** like any other push, so a scrolled-back view keeps its content | grid | `grid::tests::ed2_scrolls_the_viewport_into_history`, `grid::tests::ed2_bumps_the_scroll_offset` |
 | 10 | `ED 3` resets the viewport offset | grid | `grid::tests::ed3_resets_the_viewport_to_the_bottom` |
 | 11 | `ED 1` skips row 0 when the cursor is on row 1 | grid | `grid::tests::ed1_with_cursor_on_row_one_keeps_row_zero` |
 | 12 | `ScreenCleared` scope and ordering | dispatch | `dispatch::tests::screen_cleared_fires_only_for_ed2_ed3_and_ris`, `dispatch::tests::ed3_with_no_history_still_fires_screen_cleared` |

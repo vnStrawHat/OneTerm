@@ -5464,8 +5464,19 @@ dependencies = [
  "async-channel",
  "log",
  "oneterm-core",
+ "oneterm-pty",
  "oneterm-terminal",
  "polling",
+]
+
+[[package]]
+name = "oneterm-pty"
+version = "0.5.2"
+dependencies = [
+ "libc",
+ "log",
+ "polling",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5625,6 +5636,7 @@ dependencies = [
  "alacritty_terminal",
  "anyhow",
  "libc",
+ "oneterm-pty",
  "polling",
  "rand 0.10.1",
  "russh",
@@ -5657,7 +5669,13 @@ dependencies = [
 name = "oneterm-vt"
 version = "0.5.2"
 dependencies = [
+ "bitflags 2.13.0",
+ "log",
  "memchr",
+ "proptest",
+ "rustc-hash 2.1.2",
+ "unicode-segmentation",
+ "unicode-width",
  "vte",
 ]
 
