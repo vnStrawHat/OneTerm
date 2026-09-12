@@ -56,6 +56,9 @@ impl Engine {
             generation: self.generation,
             palette_epoch: self.palette_epoch,
             selection: self.selection,
+            // No `Terminal`, so no graphics state: `graphics::tests` owns the
+            // placement copy.
+            placements: &[],
         }
     }
 

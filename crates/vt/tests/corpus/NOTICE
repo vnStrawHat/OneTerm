@@ -41,3 +41,13 @@ Changes made by OneTerm
   `docs/spec-intakes/IN-0029-vt-engine/low-level-design/testing-and-bench.md`.
 * `expected-diffs.json`, where present, is a OneTerm file declaring the cells a
   deliberate correction is allowed to change.
+
+oneterm/
+--------
+
+Every file under `oneterm/` is a OneTerm file (Apache-2.0), written for
+behaviour the vendored set never reaches. `sixel_basic` covers `DCS q` image
+placement, the VT340 10x20 virtual cell and the conhost cursor rule (`US-0080`,
+`IN-0028`). The recordings are synthetic — hand-written byte streams, not
+captures — and their `grid.expect` / `state.expect` are blessed by the engine
+being replaced and then frozen, exactly like `alacritty-ref/`.
