@@ -10,14 +10,23 @@ script's header text or the manifests, not this file.
 
 | Component | Version | Source | Licence |
 |---|---|---|---|
-| `conpty.dll` | 1.23.2512.16003 (Windows Terminal) | <https://github.com/microsoft/terminal> | MIT — Copyright (c) Microsoft Corporation |
-| `x64/OpenConsole.exe` | 1.23.2512.16003 (Windows Terminal) | <https://github.com/microsoft/terminal> | MIT — Copyright (c) Microsoft Corporation |
+| `conpty.dll` | 1.24.2607.10001 (Windows Terminal) | <https://github.com/microsoft/terminal> | MIT — Copyright (c) Microsoft Corporation |
+| `x64/OpenConsole.exe` | 1.24.2607.10001 (Windows Terminal) | <https://github.com/microsoft/terminal> | MIT — Copyright (c) Microsoft Corporation |
 
-`crates/app/build.rs` copies both files from `crates/app/assets/` next to `oneterm.exe`
-so ConPTY uses Windows Terminal's console host instead of the system `conhost.exe`
-(correct Ctrl+C delivery). They are unmodified upstream binaries; SHA-256 of the tracked
-copies: `conpty.dll` `1f5ffd52ff118db975eeb25bac0051f4ceff3e051313fa03a5afffa9e75ee502`,
-`OpenConsole.exe` `6b2915a9a91c0738346a6c6a7b3ee2b74e26582b0c92b1b16066e72570dddd68`.
+`crates/app/build.rs` copies both files from `crates/app/assets/` next to
+`oneterm.exe`, so ConPTY uses Windows Terminal's console host instead of the inbox
+`conhost.exe` (Sixel passthrough, host control); without them OneTerm falls back to
+the OS ConPTY. They are unmodified x64 binaries from the NuGet package
+`Microsoft.Windows.Console.ConPTY` 1.24.260710001 (downloaded 2026-09-12):
+
+<https://api.nuget.org/v3-flatcontainer/microsoft.windows.console.conpty/1.24.260710001/microsoft.windows.console.conpty.1.24.260710001.nupkg>
+
+Bump them with `pwsh scripts/bump-conpty.ps1`, which also writes
+`crates/app/assets/conpty-manifest.json` — the source of this section. SHA-256 of
+the tracked copies:
+
+- `conpty.dll` `39fba2713e2495117b1591ae8c32a3b904bea7aa66069cf7815e2844c76d75d8`
+- `x64/OpenConsole.exe` `b7fd936c2668b87b9ecf7b3366dc6568afc1c6f981874cba3e955a1c35cf8160`
 
 MIT licence text (Windows Terminal):
 

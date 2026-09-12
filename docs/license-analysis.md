@@ -253,7 +253,7 @@ The initial analysis (in the previous version of this file) concluded GPL-3.0 co
 ## 7. Compliance Checklist for Distribution
 
 1. **LICENSE file** at project root: Apache-2.0 (the shipped choice; see the status note at the top).
-2. **NOTICE / third-party credit file** listing all dependencies + their licenses (generated from the Cargo metadata; the bundled ConPTY binaries `conpty.dll` / `OpenConsole.exe` are MIT and need their own entry).
+2. **NOTICE / third-party credit file** listing all dependencies + their licenses (generated from the Cargo metadata; the bundled ConPTY binaries `conpty.dll` / `OpenConsole.exe` are MIT and need their own entry). Their version, source and digests come from `crates/app/assets/conpty-manifest.json`, written by `scripts/bump-conpty.ps1` and rendered into `THIRD-PARTY-NOTICES.md` §1 — never edit either by hand (`docs/decisions/DEC-0013-bundled-conpty-host-and-bump-script.md`).
 3. Retain copyright notices from: Zed Industries (gpui, sum_tree, ztracing…), Longbridge (gpui-component), Alacritty contributors, Microsoft (windows crates), Rust ecosystem contributors.
 4. **Do NOT set `ZTRACING=1`** when building a release binary — prevents pulling `zlog` (GPL) into the binary.
 5. Retain the Microsoft copyright notice in the NOTICE file for every MIT-licensed Microsoft component that ships (the ConPTY binaries, the `windows*` crates).

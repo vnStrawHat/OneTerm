@@ -114,7 +114,7 @@ bounds. `cls` erases the cells, so the image disappears.
 | Erased cells inside an image | whole image still painted from any surviving cell | accepted for v1; same upgrade path |
 | Evicted image still referenced by cells | nothing painted for those cells | bounded store is the memory contract; scrollback images older than 64 images vanish |
 | Cursor model differs from the ConPTY host | prompt drawn inside the image after conhost's absolute `CUP` | same virtual cell (10 x 20) and same final cursor row as conhost's `SixelParser`; verified against the Windows Terminal sources and a raw ConPTY capture |
-| ConPTY drops one byte per 32 KiB `WriteFile` inside a DCS (OpenConsole 1.23, seen with Git's `cat.exe`; cmd's `type` is intact) | garbled sixel bands ("black streaks") | not ours: reproduced with a raw pipe capture and no parser; candidate fix is bundling OpenConsole 1.24+ (owner decision) |
+| ConPTY drops one byte per 32 KiB `WriteFile` inside a DCS (OpenConsole 1.23, seen with Git's `cat.exe`; cmd's `type` is intact) | garbled sixel bands ("black streaks") | not ours: reproduced with a raw pipe capture and no parser. **Still present on OpenConsole 1.24.2607.10001** (bundled 2026-09-12, `IN-0030`): same artefact, same places — see `../IN-0030-conpty-host-bump/evidence/gui-walk.md` |
 | DA1 change | programs treat OneTerm as VT220 | xterm/mintty/foot report 62/64 + 4 already; no known regression |
 | Vendored patch drift | `refresh.sh --check` fails | patches regenerated with `git format-patch` per `vendor/README.md` § 4 |
 

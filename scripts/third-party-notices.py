@@ -11,10 +11,16 @@ the shipped binary (`oneterm-app`, normal + build dependencies, all release targ
 listed with its version, declared SPDX licence expression and source. The hand-written
 header (bundled non-Rust components, vendored forks, GPL analysis) lives in
 ``HEADER`` below — edit it here, not in the generated file.
+
+Section 1 (the bundled ConPTY pair) is generated from
+``crates/app/assets/conpty-manifest.json``, written by ``scripts/bump-conpty.ps1``.
+Generating it also verifies the tracked binaries still hash to what the manifest
+records, so ``--check`` fails when the assets and the manifest drift apart.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -22,6 +28,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "THIRD-PARTY-NOTICES.md"
+ASSETS = ROOT / "crates" / "app" / "assets"
+CONPTY_MANIFEST = ASSETS / "conpty-manifest.json"
 APP_PACKAGE = "oneterm-app"
 # Same target set as deny.toml [graph].targets — the platforms OneTerm ships for.
 TARGETS = (
@@ -47,19 +55,7 @@ third-party components below. This file is **generated** by
 `python scripts/third-party-notices.py` (CI verifies it with `--check`); edit the
 script's header text or the manifests, not this file.
 
-## 1. Bundled non-Rust components (Windows releases)
-
-| Component | Version | Source | Licence |
-|---|---|---|---|
-| `conpty.dll` | 1.23.2512.16003 (Windows Terminal) | <https://github.com/microsoft/terminal> | MIT — Copyright (c) Microsoft Corporation |
-| `x64/OpenConsole.exe` | 1.23.2512.16003 (Windows Terminal) | <https://github.com/microsoft/terminal> | MIT — Copyright (c) Microsoft Corporation |
-
-`crates/app/build.rs` copies both files from `crates/app/assets/` next to `oneterm.exe`
-so ConPTY uses Windows Terminal's console host instead of the system `conhost.exe`
-(correct Ctrl+C delivery). They are unmodified upstream binaries; SHA-256 of the tracked
-copies: `conpty.dll` `1f5ffd52ff118db975eeb25bac0051f4ceff3e051313fa03a5afffa9e75ee502`,
-`OpenConsole.exe` `6b2915a9a91c0738346a6c6a7b3ee2b74e26582b0c92b1b16066e72570dddd68`.
-
+{{CONPTY}}
 MIT licence text (Windows Terminal):
 
 > Copyright (c) Microsoft Corporation.
@@ -110,6 +106,55 @@ package in the Cargo registry / git checkout.
 """
 
 
+def conpty_section() -> str:
+    """Render section 1 from the ConPTY manifest, verifying the tracked binaries.
+
+    Raises SystemExit when an asset no longer matches the SHA-256 the manifest
+    records — a bump that forgot `scripts/bump-conpty.ps1`, or an edited binary.
+    """
+    manifest = json.loads(CONPTY_MANIFEST.read_text(encoding="utf-8"))
+    rows = []
+    digests = []
+    for name, entry in manifest["files"].items():
+        actual = hashlib.sha256((ASSETS / name).read_bytes()).hexdigest()
+        if actual != entry["sha256"]:
+            raise SystemExit(
+                f"error: crates/app/assets/{name} does not match conpty-manifest.json\n"
+                f"  manifest {entry['sha256']}\n  on disk  {actual}\n"
+                "  bump both with `pwsh scripts/bump-conpty.ps1 -Version <version>`"
+            )
+        rows.append(
+            f"| `{name}` | {entry['file_version']} (Windows Terminal) "
+            f"| <{manifest['project']}> "
+            f"| {manifest['licence']} — Copyright (c) Microsoft Corporation |"
+        )
+        digests.append(f"- `{name}` `{actual}`")
+    return "\n".join(
+        [
+            "## 1. Bundled non-Rust components (Windows releases)",
+            "",
+            "| Component | Version | Source | Licence |",
+            "|---|---|---|---|",
+            *rows,
+            "",
+            "`crates/app/build.rs` copies both files from `crates/app/assets/` next to",
+            "`oneterm.exe`, so ConPTY uses Windows Terminal's console host instead of the inbox",
+            "`conhost.exe` (Sixel passthrough, host control); without them OneTerm falls back to",
+            "the OS ConPTY. They are unmodified x64 binaries from the NuGet package",
+            f"`{manifest['package']}` {manifest['version']} (downloaded {manifest['downloaded']}):",
+            "",
+            f"<{manifest['source']}>",
+            "",
+            "Bump them with `pwsh scripts/bump-conpty.ps1`, which also writes",
+            "`crates/app/assets/conpty-manifest.json` — the source of this section. SHA-256 of",
+            "the tracked copies:",
+            "",
+            *digests,
+            "",
+        ]
+    )
+
+
 def cargo_metadata() -> dict:
     cmd = ["cargo", "metadata", "--format-version", "1", "--locked"]
     for target in TARGETS:
@@ -156,7 +201,8 @@ def render(meta: dict) -> str:
         (p for p in meta["packages"] if p["id"] in wanted),
         key=lambda p: (p["name"].lower(), p["version"]),
     )
-    lines = [HEADER, "| Crate | Version | Licence | Source |", "|---|---|---|---|"]
+    header = HEADER.replace("{{CONPTY}}", conpty_section())
+    lines = [header, "| Crate | Version | Licence | Source |", "|---|---|---|---|"]
     for pkg in packages:
         licence = (
             pkg.get("license")

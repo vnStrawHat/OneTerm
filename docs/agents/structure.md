@@ -29,7 +29,8 @@ OneTerm/
 │   ├── app/                        # Binary + wiring: the ONLY crate that knows every other crate
 │   │   ├── Cargo.toml              # name = "oneterm-app", one bin: "oneterm"
 │   │   ├── build.rs                # Embed app icon (.rc) + copy conpty.dll/OpenConsole.exe (x86_64 only; THIRD-PARTY-NOTICES.md)
-│   │   ├── assets/                 # Runtime resources (oneterm.rc, conpty.dll, x64/OpenConsole.exe, icons/)
+│   │   ├── assets/                 # Runtime resources (oneterm.rc, conpty.dll + x64/OpenConsole.exe
+│   │   │                           #   with conpty-manifest.json — bump via scripts/bump-conpty.ps1, icons/)
 │   │   ├── macos/Info.plist        # macOS .app bundle descriptor ({{VERSION}})
 │   │   └── src/
 │   │       ├── lib.rs              # run(): logging + gpui init + install factory + init() + open window
