@@ -23,6 +23,7 @@ pub mod cell;
 pub mod event;
 pub mod grid;
 pub mod intern;
+pub mod parser;
 pub mod render;
 pub mod width;
 

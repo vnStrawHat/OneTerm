@@ -62,7 +62,7 @@ Every third-party dependency is declared once in root `[workspace.dependencies]`
 | SSH runtime | `tokio`, `tokio-util`, `rand` |
 | Local shell PTY | `oneterm-pty` (OneTerm's own crate) over `polling` + `windows-sys` / `libc` (do not use `portable-pty`) |
 | Terminal parser / grid | vendored `alacritty_terminal`, which pulls vendored `vte` |
-| OneTerm's own VT engine (`oneterm-vt`, IN-0029) | `bitflags 2.x` (cell and row attribute flags), `rustc-hash 2.x` (`FxHashMap` for the interners), `unicode-width 0.2.x` (scalar width), `unicode-segmentation 1.x` (grapheme clusters); `proptest 1.x` dev-only. All already resolved in `Cargo.lock`, so the graph does not grow; `bitflags` and `rustc-hash` each resolve to two versions, and the engine pins the 2.x line. |
+| OneTerm's own VT engine (`oneterm-vt`, IN-0029) | `memchr 2.x` (the parser's ground-state scan for the next escape), `bitflags 2.x` (cell and row attribute flags), `rustc-hash 2.x` (`FxHashMap` for the interners), `unicode-width 0.2.x` (scalar width), `unicode-segmentation 1.x` (grapheme clusters); dev-only: `proptest 1.x`, and `vte 0.15` as the parser's differential oracle — the vendored fork resolved through `[patch]`, whose patches touch only `src/ansi.rs`, so its raw state machine is unmodified upstream (`crates/vt/tests/differential.rs`; retires with the fork at `US-0087`). All already resolved in `Cargo.lock`, so the graph does not grow; `bitflags` and `rustc-hash` each resolve to two versions, and the engine pins the 2.x line. |
 | Event channel | `async-channel` |
 | Terminal helpers | `base64`, `aho-corasick`, `regex` |
 | Serialization | `serde`, `serde_json` |

@@ -78,6 +78,12 @@ oneterm-vt = { path = "crates/vt" }
 # OneTerm's .rustfmt.toml and fail `--check`), whereas a [patch] source stays outside
 # every workspace-wide tool scope. Cost: one upstream clone on a cold cache.
 alacritty_terminal = { git = "https://github.com/zed-industries/alacritty", rev = "fcf32feacb367b75ec84dd40f041e4fd411d3cc1" }
+# `vte` is the vendored fork (see the [patch] block below). `oneterm-vt` takes it
+# as a DEV dependency only, as the differential oracle for its own state machine
+# (IN-0029 US-0073); it is never a runtime dependency and retires at US-0087.
+vte = "0.15"
+# SIMD byte scan for the VT parser's ground state (oneterm-vt).
+memchr = "2"
 # Terminal helpers: URL detect + OSC 52 base64
 aho-corasick = "1"
 regex = "1"

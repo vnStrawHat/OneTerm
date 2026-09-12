@@ -5671,10 +5671,12 @@ version = "0.5.2"
 dependencies = [
  "bitflags 2.13.0",
  "log",
+ "memchr",
  "proptest",
  "rustc-hash 2.1.2",
  "unicode-segmentation",
  "unicode-width",
+ "vte",
 ]
 
 [[package]]
