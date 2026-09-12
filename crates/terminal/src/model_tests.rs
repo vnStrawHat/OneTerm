@@ -118,6 +118,49 @@ fn resize_grid_applies_the_backend_policy() {
     assert_eq!(row_text(&default, 7), "prompt>");
 }
 
+/// The snapshot still hands each decoded image out exactly once, and the cells
+/// it covers still carry the offset inside the image's own cell grid — the
+/// per-cell `GraphicCell { id, col, row }` the painter reads
+/// (`crates/terminal-view/src/render/frame.rs:313-317`). The engine keeps only
+/// the id; the offset is derived from the placement (R-21).
+#[test]
+fn a_sixel_reaches_the_snapshot_once_with_per_cell_offsets() {
+    // Two columns wide and one band tall: `#0;2;100;0;0` makes register 0 red,
+    // `~~` fills both columns, so the image is 2x6 pixels = one 10x20 cell.
+    let model = model(
+        GridSize { cols: 10, lines: 4 },
+        b"\x1bPq#0;2;100;0;0~~\x1b\\",
+        ResizePolicy::Default,
+    );
+
+    let first = model.snapshot();
+    assert_eq!(first.graphics.len(), 1, "the image is handed out once");
+    let image = &first.graphics[0];
+    assert_eq!((image.width, image.height), (2, 6));
+
+    let covered: Vec<_> = first
+        .cells
+        .iter()
+        .filter_map(|indexed| {
+            indexed
+                .cell
+                .graphic()
+                .map(|graphic| (indexed.point.line.0, indexed.point.column.0, graphic))
+        })
+        .collect();
+    assert_eq!(covered.len(), 1, "a 2x6 image covers one virtual cell");
+    let (line, column, graphic) = covered[0];
+    assert_eq!((line, column), (0, 0), "placed at the cursor");
+    assert_eq!((graphic.col, graphic.row), (0, 0), "top-left of the image");
+    assert_eq!(graphic.id, image.id);
+
+    // The drain is the adapter's, once per snapshot: a second snapshot still
+    // sees the cells, but not the pixels again.
+    let second = model.snapshot();
+    assert!(second.graphics.is_empty(), "handed out exactly once");
+    assert!(second.cells.iter().any(|c| c.cell.graphic().is_some()));
+}
+
 #[test]
 fn search_reports_matches_in_grid_lines() {
     let model = model(

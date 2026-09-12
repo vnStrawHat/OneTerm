@@ -22,7 +22,7 @@ use oneterm_vt::{SelectionKind, Size};
 use crate::content::TerminalContent;
 use crate::engine::SharedTerminal;
 use crate::engine_shim::{
-    legacy_cursor_shape, legacy_mode, legacy_rgb, push_grid_row, row_to_line,
+    Placements, legacy_cursor_shape, legacy_mode, legacy_rgb, push_grid_row, row_to_line,
 };
 use crate::mouse_encode::{
     MouseModifiers, TerminalMouseButton, encode_mouse_move, encode_mouse_press,
@@ -140,12 +140,13 @@ impl TerminalModel {
         let actual_count = count.min(num_lines - start_line);
         let offset = screen.scroll_offset() as usize;
         let top = screen.visible_top();
+        let placements = Placements::new(&term);
         let mut cells: Vec<IndexedCell> = Vec::with_capacity(actual_count * num_cols);
         for index in 0..actual_count {
             let display_line = start_line + index;
             let line = Line(display_line as i32 - offset as i32);
             let row = screen.row(top + display_line as u64);
-            push_grid_row(row, term.interner(), line, &mut cells);
+            push_grid_row(row, term.interner(), &placements, line, &mut cells);
         }
         LineRangeCells { cells, num_cols }
     }

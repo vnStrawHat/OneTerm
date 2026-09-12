@@ -25,18 +25,24 @@
 //! snapshot is display-row shaped end to end — and `US-0082` moves the
 //! consumers that would need it.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::selection::SelectionRange as LegacySelectionRange;
 use alacritty_terminal::term::cell::{Cell as LegacyCell, Flags, Hyperlink as LegacyHyperlink};
+use alacritty_terminal::term::graphics::{
+    GraphicCell as LegacyGraphicCell, GraphicData as LegacyGraphicData,
+    GraphicId as LegacyGraphicId,
+};
 use alacritty_terminal::term::{RenderableCursor, TermMode};
 use alacritty_terminal::vte::ansi::{
     Color as LegacyColor, CursorShape as LegacyCursorShape, NamedColor as LegacyNamedColor,
     Rgb as LegacyRgb,
 };
-use oneterm_vt::grid::{RowId, RowRef};
-use oneterm_vt::intern::{ExtrasId, Interner};
+use oneterm_vt::graphics::{GraphicData, Placement};
+use oneterm_vt::grid::{Anchors, RowId, RowRef};
+use oneterm_vt::intern::{ExtrasId, GraphicId, Interner};
 use oneterm_vt::render::{ModeSnapshot, MouseEncoding, MouseReporting, RenderContent, RenderRow};
 use oneterm_vt::{
     Attrs, Cell as VtCell, CellContent, CellWidth, Color as VtColor, CursorShape, NamedColor,
@@ -101,9 +107,12 @@ impl LegacySnapshot {
         };
         let screen = term.screen();
         out.total_lines = screen.history_len() as usize + usize::from(screen.rows());
-        // `US-0080` owns the engine's graphics; until it lands nothing decodes
-        // an image, so the vector is empty rather than stale.
+        // The engine is the one drain (R-16): `render_update` never takes the
+        // pixels, so the adapter does, right here, once per snapshot — which is
+        // the hand-out-once contract `TerminalContent.graphics` already had.
         out.graphics.clear();
+        out.graphics
+            .extend(term.take_graphics().iter().map(legacy_graphic));
 
         let cursor_row = cursor
             .row
@@ -174,6 +183,18 @@ fn push_render_row(state: &RenderState, row: &RenderRow, line: Line, out: &mut V
                 link.uri.to_string(),
             )));
         }
+        // The cell carries only *which* image (R-21); the offset inside the
+        // image's own cell grid — what the reference stored per cell — is
+        // derived from the placement.
+        if let Some(id) = cell.graphic
+            && let Some((across, down)) = state.graphic_offset(id, row.id, col as u16)
+        {
+            legacy.set_graphic(Some(LegacyGraphicCell {
+                id: LegacyGraphicId(id.0),
+                col: across,
+                row: down,
+            }));
+        }
         out.push(IndexedCell {
             point: Point::new(line, Column(col)),
             cell: legacy,
@@ -186,9 +207,14 @@ fn push_render_row(state: &RenderState, row: &RenderRow, line: Line, out: &mut V
 /// `query_line_range_cells`, `last_content_line` and the search snapshot all
 /// need cells without touching the render watermark, which is exactly what the
 /// reference's `renderable_content()` gave them.
+///
+/// `placements` is `Terminal::placements()`: the same table `RenderState`
+/// copies, so a cell read this way carries the same `GraphicCell` the render
+/// path would give it.
 pub(crate) fn push_grid_row(
     row: RowRef<'_>,
     interner: &Interner,
+    placements: &Placements<'_>,
     line: Line,
     out: &mut Vec<IndexedCell>,
 ) {
@@ -198,13 +224,27 @@ pub(crate) fn push_grid_row(
     for (col, cell) in cells.iter().enumerate() {
         out.push(IndexedCell {
             point: Point::new(line, Column(col)),
-            cell: grid_cell(*cell, interner, wrapped && col == last),
+            cell: grid_cell(
+                *cell,
+                interner,
+                placements,
+                row.id(),
+                col as u16,
+                wrapped && col == last,
+            ),
         });
     }
 }
 
 /// One grid cell as the legacy snapshot spells it.
-pub(crate) fn grid_cell(cell: VtCell, interner: &Interner, wrapline: bool) -> LegacyCell {
+fn grid_cell(
+    cell: VtCell,
+    interner: &Interner,
+    placements: &Placements<'_>,
+    row: RowId,
+    col: u16,
+    wrapline: bool,
+) -> LegacyCell {
     let style = interner.resolve_style(cell.style_id());
     let mut legacy = legacy_cell(style, cell.width(), wrapline);
     match cell.content() {
@@ -222,8 +262,58 @@ pub(crate) fn grid_cell(cell: VtCell, interner: &Interner, wrapline: bool) -> Le
                 link.uri.to_string(),
             )));
         }
+        if let Some(id) = extras.graphic
+            && let Some((across, down)) = placements.offset(id, row, col)
+        {
+            legacy.set_graphic(Some(LegacyGraphicCell {
+                id: LegacyGraphicId(id.0),
+                col: across,
+                row: down,
+            }));
+        }
     }
     legacy
+}
+
+/// The live placements plus the anchor list they resolve their top-left cell
+/// through, for the readers that do not go through a [`RenderState`].
+pub(crate) struct Placements<'a> {
+    placements: &'a [Placement],
+    anchors: &'a Anchors,
+}
+
+impl<'a> Placements<'a> {
+    pub(crate) fn new(term: &'a Terminal) -> Placements<'a> {
+        Placements {
+            placements: term.placements(),
+            anchors: term.grid().anchors(),
+        }
+    }
+
+    /// The cell's `(col, row)` offset inside the image's own cell grid — the
+    /// same arithmetic `RenderState::graphic_offset` does, against the anchor
+    /// rather than against a copied position.
+    fn offset(&self, id: GraphicId, row: RowId, col: u16) -> Option<(u16, u16)> {
+        let placement = self.placements.iter().find(|entry| entry.id == id)?;
+        let top_left = self.anchors.get(placement.anchor)?;
+        let down = u16::try_from(row.distance(top_left.row)).ok()?;
+        let across = col.checked_sub(top_left.col)?;
+        (row >= top_left.row && down < placement.rows && across < placement.cols)
+            .then_some((across, down))
+    }
+}
+
+/// The decoded image as `TerminalContent.graphics` still spells it.
+///
+/// One copy of the pixels per image, on the drain path only: `US-0085` moves
+/// the view onto `oneterm_vt::GraphicData` and this disappears with it.
+fn legacy_graphic(image: &Arc<GraphicData>) -> Arc<LegacyGraphicData> {
+    Arc::new(LegacyGraphicData {
+        id: LegacyGraphicId(image.id.0),
+        width: image.width,
+        height: image.height,
+        rgba: image.rgba.clone(),
+    })
 }
 
 /// The base cell: colours, attributes and the width class.
