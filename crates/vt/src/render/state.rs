@@ -94,6 +94,13 @@ pub struct RenderState {
     hyperlinks: Vec<(HyperlinkId, Hyperlink)>,
     force_full: bool,
     rows_copied: u64,
+    /// A mode or cursor change observed while frames were suppressed.
+    ///
+    /// Sticky until a frame actually reports it: a synchronized update that
+    /// touches no row would otherwise swallow `DECTCEM` or a cursor move, since
+    /// the snapshot is refreshed on the skipped frame and the next frame then
+    /// compares equal.
+    meta_dirty: bool,
 }
 
 impl RenderState {
@@ -124,8 +131,11 @@ impl RenderState {
         self.cursor = cursor;
 
         // Mode 2026: the bytes are already applied; the renderer just does not
-        // look yet.
-        if sync.suppresses_frame(now) {
+        // look yet. A state that has never been built is built first, because
+        // `rows()` holds the full viewport for every result, `Unchanged`
+        // included (R-15); suppression starts from the frame after that.
+        if sync.suppresses_frame(now) && !self.rows.is_empty() {
+            self.meta_dirty |= modes_changed || cursor_changed;
             self.changed.clear();
             return RenderUpdate::Unchanged;
         }
@@ -165,15 +175,25 @@ impl RenderState {
         // Every row was copied, so there is nothing for a consumer to shift and
         // nothing to keep: that is what Full means. This is also how RIS and a
         // full-screen repaint reach the renderer.
-        if full || self.changed.len() == self.rows.len() {
-            return RenderUpdate::Full;
+        let update = if full || self.changed.len() == self.rows.len() {
+            RenderUpdate::Full
+        } else if self.changed.is_empty()
+            && scrolled == Some(0)
+            && !modes_changed
+            && !cursor_changed
+            && !self.meta_dirty
+        {
+            RenderUpdate::Unchanged
+        } else {
+            RenderUpdate::Partial {
+                scrolled: scrolled.unwrap_or(0),
+            }
+        };
+        if update != RenderUpdate::Unchanged {
+            // Whatever was held back by a skipped frame has now been reported.
+            self.meta_dirty = false;
         }
-        if self.changed.is_empty() && scrolled == Some(0) && !modes_changed && !cursor_changed {
-            return RenderUpdate::Unchanged;
-        }
-        RenderUpdate::Partial {
-            scrolled: scrolled.unwrap_or(0),
-        }
+        update
     }
 
     /// Phase 2, outside the lock: named and palette colours become pixels.
@@ -212,22 +232,33 @@ impl RenderState {
         &self.changed
     }
 
+    /// The viewport this state holds, which the view needs every frame to lay
+    /// out its grid. Zero in both dimensions until the first update.
+    pub fn size(&self) -> Size {
+        self.size.unwrap_or(Size { rows: 0, cols: 0 })
+    }
+
+    /// Where the cursor is and whether it is visible, refreshed every update.
     pub fn cursor(&self) -> &RenderCursor {
         &self.cursor
     }
 
+    /// The modes the view reads at paint time, refreshed every update.
     pub fn modes(&self) -> ModeSnapshot {
         self.modes
     }
 
+    /// How far this consumer has read the engine's per-row sequence numbers.
     pub fn watermark(&self) -> Watermark {
         self.watermark
     }
 
+    /// The first visible row.
     pub fn viewport_top(&self) -> RowId {
         self.viewport_top
     }
 
+    /// Rows between the viewport and the newest row; `0` is the sticky bottom.
     pub fn scroll_offset(&self) -> u32 {
         self.scroll_offset
     }

@@ -67,6 +67,7 @@ impl EventBatch {
         }
     }
 
+    /// Every event in this batch, in byte order.
     pub fn events(&self) -> &[VtEvent] {
         &self.events
     }
@@ -163,9 +164,13 @@ impl EventBatch {
         }
     }
 
-    /// An out-of-range span reads as empty rather than panicking: a consumer
-    /// that stored raw indices past a `clear` gets nothing, not a slice of the
-    /// next batch.
+    /// An out-of-range span reads as empty rather than panicking.
+    ///
+    /// A span is an index, not a borrow, so a consumer that squirrels one away
+    /// across a `clear` reads whatever now sits at that offset — wrong bytes,
+    /// never unsafety, and still valid UTF-8 because the arena only ever holds
+    /// what was validated at insert. Holding an *event* across a `clear` is what
+    /// the borrow checker prevents, and that is the case worth preventing.
     pub fn str(&self, span: StrSpan) -> &str {
         let start = span.start as usize;
         let end = start + span.len as usize;

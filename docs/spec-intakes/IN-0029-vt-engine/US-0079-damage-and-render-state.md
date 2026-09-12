@@ -189,20 +189,60 @@ listed in "Evidence and Gaps" for the design owner to fold in when `Terminal` ex
 
 ## Evidence and Gaps
 
+### Verifier rework (merge after fixes)
+
+Report: [`evidence/US-0079-verify.md`](evidence/US-0079-verify.md), verdict **merge after fixes**
+against `b080858`. Applied here:
+
+- **F1 (major) — the suppressed frame no longer short-circuits the state.**
+  `begin_update` now builds a never-built state before mode 2026 can suppress anything
+  (`sync.suppresses_frame(now) && !self.rows.is_empty()`), which closes the R-15 hole the
+  verifier proved (`rows()` empty on a first update inside a sync block), and a sticky
+  `meta_dirty` flag carries a mode or cursor change observed during a skipped frame to the next
+  reported frame, cleared on any non-`Unchanged` result. Three tests:
+  `sync::tests::{a_first_update_inside_a_sync_block_still_builds_the_state,
+  a_mode_change_inside_a_sync_block_reaches_the_next_frame,
+  a_cursor_move_inside_a_sync_block_reaches_the_next_frame}` — the last two also assert the
+  change is reported **once**, not forever.
+- **F3 (minor) — the crate doc is true again.** `lib.rs` now says the crate holds no lock and no
+  interior mutability, and names `render::Demand` as the adapter's flag that no engine type can
+  reach. The placement is recorded as deviation 10 below for the design owner.
+- **F4 (minor) — dim follows OneTerm's rule.** `Palette::dim` is a 50 % mix with **this palette's
+  background** (`crates/terminal/src/palette.rs`, `TerminalPalette::dim`), not a fraction toward
+  black, and it is public so an adapter that swaps the background gets matching dim colours.
+  `render::tests::dim_colours_match_oneterms_palette` pins the arithmetic against the live
+  function, including the rounding, on two backgrounds.
+- **F5 (minor) — `RenderState::size() -> Size`**, with
+  `render::tests::size_reports_the_viewport` (zero before the first update, and it follows a
+  resize).
+- **F7** the span doc no longer overstates its guarantee (a stored raw span reads the new
+  batch's bytes; it is the *event* the borrow checker keeps from escaping). **F8** the fairness
+  test is renamed `…_within_a_bounded_number_of_chunks`, matching its assertion. **F6 (half)**
+  `render::sync` is a private module again, public only through its re-exports; the `events/`
+  directory keeps its one `#[path]` line because the packet's file scope names that directory.
+  **F10 (half)** the undocumented accessors on `RenderState` and `EventBatch` now carry doc
+  comments.
+- **F2** is not this packet's: `Screen::place_row` / `reset_row` drop a row's batch stamp when
+  they de-allocate it, which is being filed as a BUG against `US-0075`. `RenderRow::allocated`
+  stays either way — the verifier confirmed it is complete for `RenderState`.
+- **F9** (linear hyperlink lookups, table cleared only on a `Full` rebuild) and the rest of
+  **F10** (surface with no consumer until `US-0081`) stay as recorded gaps; **F11** is answered
+  in the Gaps list below.
+
 ### Evidence
 
 **Base correction.** This worktree was branched from `main` (`c936ac0`), not from `feat/vt-engine`,
 so `crates/vt` was missing entirely. The branch was `git reset --hard 83933b9` before any file was
 written; `git log --oneline -1` is the US-0075 merge and `crates/vt/src/grid/` is present.
 
-**Gate.** `pwsh scripts/ci-local.ps1` green: **54 test-result sections, 1310 passed / 0 failed /
-6 ignored**. `US-0075`'s recorded baseline on this branch was 54 sections / 1267 passed /
-5 ignored, so the delta is exactly this packet's 43 new passing tests plus the one
-release-only benchmark.
+**Gate.** `pwsh scripts/ci-local.ps1` green after the verifier rework: **54 test-result sections,
+1315 passed / 0 failed / 6 ignored** (it was 1310 before the rework's five new tests).
+`US-0075`'s recorded baseline on this branch was 54 sections / 1267 passed / 5 ignored, so the
+delta is exactly this packet's 48 new passing tests plus the one release-only benchmark.
 
-**Crate.** `cargo test -p oneterm-vt`: **133 tests, 132 passed, 0 failed, 1 ignored, 0.56 s** —
-27 `render::tests`, 5 `render::sync::tests`, 11 `event::tests`, 1 `render::bench` (ignored in
-debug). The suite is also green in release (`cargo test -p oneterm-vt --release`: 133 passed).
+**Crate.** `cargo test -p oneterm-vt`: **138 tests, 137 passed, 0 failed, 1 ignored, 0.53 s** —
+29 `render::tests`, 8 `render::sync::tests`, 11 `event::tests`, 1 `render::bench` (ignored in
+debug). The suite is also green in release (`cargo test -p oneterm-vt --release`: 138 passed).
 
 **Tri-state.** `RenderState::rows_copied()` is the counter the proofs read:
 
@@ -304,6 +344,11 @@ added.
    and needs only the flag. No dependency was added for the test.
 9. **`Watermark`** is a newtype over `SeqNo` in `render::state` rather than in a `damage` module,
    which R-24 / R-54 deleted.
+10. **`Demand` lives in `crates/vt`**, while the LLD and `high-level-design.md` both place it in
+    `crates/terminal` ("the adapter owns this; the engine has no atomics"). It is here because
+    this packet's file scope is `crates/vt`, and it holds the crate's only atomic. It is
+    reachable from no engine type and nothing in the engine reads it; `lib.rs` says so. The
+    design owner decides whether `US-0081` moves the file or the rule.
 
 ### Gaps
 
@@ -332,6 +377,17 @@ added.
   `oneterm-vt` yet; `US-0081` is where the four GUI walks first cover this code.
 - **The 50-row frame is at parity with the old snapshot, not faster** (see the benchmark table).
   Recorded for the design owner; nothing in the intake asks for a throughput win here.
+- **This bench is not tier 3** (F11). `testing-and-bench.md` defines tier 3 as parse + grid +
+  `render_update` + `map_colors` per simulated frame at 160x45; this times the hand-off only, at
+  the 200x50 geometry `perf-baseline.md` § 4 measured the 29.9 us against, because no parser
+  exists yet. The real tier 3 belongs to `US-0072`'s `vt-bench render` once `US-0076` lands the
+  parser.
+- **A mode 2026 watchdog has no cooldown**: after it forces the mode off, the next
+  `CSI ? 2026 h` arms a fresh 1 s watchdog, so a hostile stream still costs roughly one frame per
+  second. The LLD specifies no cooldown; flagged for the design owner.
+- **`changed().len() == rows().len()` is unreachable under `Partial`** (deviation 5), so a
+  consumer's "all rows changed" branch would be dead code. Worth one line in the LLD when
+  `US-0076` folds these readings in.
 
 ## Handoff
 

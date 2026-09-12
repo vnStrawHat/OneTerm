@@ -531,6 +531,55 @@ fn map_colors_resolves_named_colours_and_is_idempotent() {
 }
 
 #[test]
+fn size_reports_the_viewport() {
+    let mut engine = Engine::new(10, 20);
+    let mut state = RenderState::new();
+    assert_eq!(state.size(), Size { rows: 0, cols: 0 });
+
+    engine.update(&mut state);
+    assert_eq!(state.size(), Size { rows: 10, cols: 20 });
+
+    engine.batch();
+    engine.grid.resize(Size { rows: 12, cols: 40 });
+    engine.bump_generation();
+    engine.update(&mut state);
+    assert_eq!(state.size(), Size { rows: 12, cols: 40 });
+}
+
+#[test]
+fn dim_colours_match_oneterms_palette() {
+    // `crates/terminal/src/palette.rs`: a dim colour is a 50 % mix with the
+    // background, and the reference rounds. Pinning the arithmetic here is what
+    // keeps the seam at `US-0081` from visibly recolouring every dim cell.
+    let mut palette = Palette::new();
+    palette.background = crate::cell::Rgb { r: 0, g: 0, b: 0 };
+    palette.indexed[1] = crate::cell::Rgb { r: 205, g: 0, b: 0 };
+
+    assert_eq!(
+        palette.resolve(Color::Named(NamedColor::DimRed)),
+        crate::cell::Rgb { r: 103, g: 0, b: 0 }
+    );
+
+    palette.background = crate::cell::Rgb {
+        r: 40,
+        g: 40,
+        b: 60,
+    };
+    assert_eq!(
+        palette.resolve(Color::Named(NamedColor::DimRed)),
+        crate::cell::Rgb {
+            r: 123,
+            g: 20,
+            b: 30
+        }
+    );
+    assert_eq!(
+        palette.resolve(Color::Named(NamedColor::DimForeground)),
+        palette.dim(palette.foreground)
+    );
+}
+
+#[test]
 fn a_palette_epoch_change_rebuilds_and_remaps_every_row() {
     let mut engine = Engine::new(4, 8);
     let mut state = RenderState::new();
@@ -650,7 +699,7 @@ fn an_in_region_scroll_moves_content_between_row_ids() {
 }
 
 #[test]
-fn pump_yields_to_the_render_demand_within_one_chunk() {
+fn pump_yields_to_the_render_demand_within_a_bounded_number_of_chunks() {
     let engine = Arc::new(Mutex::new(Engine::new(24, 80)));
     let demand = Demand::new();
     let stop = Arc::new(AtomicBool::new(false));

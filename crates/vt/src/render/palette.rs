@@ -12,9 +12,10 @@
 
 use crate::cell::{Color, NamedColor, Rgb};
 
-/// The reference's `DIM_FACTOR`, as integer arithmetic: two thirds.
-const DIM_NUMERATOR: u16 = 2;
-const DIM_DENOMINATOR: u16 = 3;
+// A dim colour is a 50 % mix with the **background**, which is what OneTerm
+// paints today (`crates/terminal/src/palette.rs`, `TerminalPalette::dim`) — not
+// a fraction toward black, which would visibly change every dim cell at the
+// seam. Integer arithmetic, rounding half up, matches that function's `round()`.
 
 /// Every colour a cell can name, resolved.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -88,15 +89,32 @@ impl Palette {
             NamedColor::Background => self.background,
             NamedColor::Cursor => self.cursor,
             NamedColor::BrightForeground => self.bright_foreground.unwrap_or(self.foreground),
-            NamedColor::DimForeground => self.dim_foreground.unwrap_or(dim(self.foreground)),
-            NamedColor::DimBlack => dim(self.indexed[0]),
-            NamedColor::DimRed => dim(self.indexed[1]),
-            NamedColor::DimGreen => dim(self.indexed[2]),
-            NamedColor::DimYellow => dim(self.indexed[3]),
-            NamedColor::DimBlue => dim(self.indexed[4]),
-            NamedColor::DimMagenta => dim(self.indexed[5]),
-            NamedColor::DimCyan => dim(self.indexed[6]),
-            NamedColor::DimWhite => dim(self.indexed[7]),
+            NamedColor::DimForeground => self.dim_foreground.unwrap_or(self.dim(self.foreground)),
+            NamedColor::DimBlack => self.dim(self.indexed[0]),
+            NamedColor::DimRed => self.dim(self.indexed[1]),
+            NamedColor::DimGreen => self.dim(self.indexed[2]),
+            NamedColor::DimYellow => self.dim(self.indexed[3]),
+            NamedColor::DimBlue => self.dim(self.indexed[4]),
+            NamedColor::DimMagenta => self.dim(self.indexed[5]),
+            NamedColor::DimCyan => self.dim(self.indexed[6]),
+            NamedColor::DimWhite => self.dim(self.indexed[7]),
+        }
+    }
+
+    /// SGR 2 against this palette's own background.
+    ///
+    /// Public because the embedder's theme owns the background: an adapter that
+    /// swaps `background` gets the matching dim colours for free, and one that
+    /// needs different dim colours entirely sets `indexed` and
+    /// `dim_foreground` instead.
+    pub fn dim(&self, color: Rgb) -> Rgb {
+        let mix = |channel: u8, background: u8| {
+            (u16::from(channel) + u16::from(background)).div_ceil(2) as u8
+        };
+        Rgb {
+            r: mix(color.r, self.background.r),
+            g: mix(color.g, self.background.g),
+            b: mix(color.b, self.background.b),
         }
     }
 }
@@ -104,15 +122,6 @@ impl Palette {
 impl Default for Palette {
     fn default() -> Palette {
         Palette::new()
-    }
-}
-
-fn dim(color: Rgb) -> Rgb {
-    let scale = |channel: u8| (u16::from(channel) * DIM_NUMERATOR / DIM_DENOMINATOR) as u8;
-    Rgb {
-        r: scale(color.r),
-        g: scale(color.g),
-        b: scale(color.b),
     }
 }
 

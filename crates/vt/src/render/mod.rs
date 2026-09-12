@@ -13,7 +13,7 @@ mod modes;
 mod palette;
 mod row;
 mod state;
-pub mod sync;
+mod sync;
 
 pub use demand::Demand;
 pub use modes::{ModeSnapshot, MouseEncoding, MouseProtocol, MouseReporting};
