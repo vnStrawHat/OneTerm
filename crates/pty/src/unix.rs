@@ -179,7 +179,7 @@ impl PseudoConsole {
         let (exit_signal, waker) = UnixStream::pair()?;
         exit_signal.set_nonblocking(true)?;
         let (events_tx, exit_events) = mpsc::channel();
-        reap_in_background(child, events_tx, waker);
+        reap_in_background(child, events_tx, waker)?;
 
         Ok(Self {
             master: File::from(master),
@@ -196,35 +196,34 @@ impl PseudoConsole {
 }
 
 /// Wait for `child` off-thread and report its exit through `events` + `waker`.
+///
+/// A failure to spawn is fatal to the session: nothing else ever reports the
+/// child's exit, so the caller would own a tab that can never close.
 fn reap_in_background(
     mut child: std::process::Child,
     events: mpsc::Sender<ChildEvent>,
     mut waker: UnixStream,
-) {
-    let body = move || {
-        let status = child.wait().ok();
-        // Both sends are best effort: a torn-down session has already dropped
-        // the receiving ends.
-        let _ = events.send(ChildEvent::Exited(status));
-        let _ = io::Write::write_all(&mut waker, &[1]);
-    };
-    if let Err(error) = std::thread::Builder::new()
+) -> io::Result<()> {
+    std::thread::Builder::new()
         .name("oneterm-pty-reaper".to_owned())
-        .spawn(body)
-    {
-        log::error!("oneterm-pty: cannot spawn the child reaper: {error}");
-    }
+        .spawn(move || {
+            let status = child.wait().ok();
+            // Both sends are best effort: a torn-down session has already
+            // dropped the receiving ends.
+            let _ = events.send(ChildEvent::Exited(status));
+            let _ = io::Write::write_all(&mut waker, &[1]);
+        })
+        .map(drop)
 }
 
-impl Drop for PseudoConsole {
-    fn drop(&mut self) {
-        // Hang up the terminal; the reaper thread collects the child.
-        //
-        // SAFETY: `kill` with a pid this process started is always defined; a
-        // pid that has already been reaped simply reports ESRCH.
-        unsafe { libc::kill(self.pid as libc::pid_t, libc::SIGHUP) };
-    }
-}
+// No `Drop` sends a signal, and that is the invariant: the reaper thread owns
+// the `Child` and its `wait()` reaps the zombie, which releases the pid for
+// reuse. A `kill(self.pid, …)` here would therefore be aimed at whatever the
+// kernel handed the pid to next — and the common reason to drop a session is
+// that the child already exited. Closing `master` instead is both safe and
+// sufficient: the last close of the controlling terminal makes the line
+// discipline send `SIGHUP` to the child's foreground process group, which is
+// exactly the hang-up that was wanted.
 
 impl EventedReadWrite for PseudoConsole {
     type Reader = File;

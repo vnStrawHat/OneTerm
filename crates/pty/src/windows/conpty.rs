@@ -23,8 +23,8 @@ use windows_sys::Win32::System::Console::{
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
-    CREATE_UNICODE_ENVIRONMENT, CreateProcessW, EXTENDED_STARTUPINFO_PRESENT,
-    InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
+    CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
+    EXTENDED_STARTUPINFO_PRESENT, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
     PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW,
     STARTUPINFOW, UpdateProcThreadAttribute,
 };
@@ -315,11 +315,20 @@ pub(super) fn spawn(options: &Options, size: WindowSize) -> io::Result<PseudoCon
     // SAFETY: as above; ownership of the process handle moves to the watcher.
     let process_handle = unsafe { OwnedHandle::from_raw_handle(process.hProcess) };
 
+    // Bound to locals first, not built inside the struct literal: a `?` inside
+    // the literal would drop the already-evaluated fields in reverse order of
+    // *evaluation*, closing the conout reader before `ClosePseudoConsole` runs —
+    // the deadlock the field order in `PseudoConsole` exists to prevent. Locals
+    // drop in reverse declaration order, which is the right one.
+    let conout = PipeReader::new(conout, PIPE_CAPACITY)?;
+    let conin = PipeWriter::new(conin, PIPE_CAPACITY)?;
+    let child = ChildExitWatcher::new(process_handle)?;
+
     Ok(PseudoConsole {
         conpty,
-        conout: PipeReader::new(conout, PIPE_CAPACITY),
-        conin: PipeWriter::new(conin, PIPE_CAPACITY),
-        child: ChildExitWatcher::new(process_handle)?,
+        conout,
+        conin,
+        child,
     })
 }
 
@@ -399,6 +408,15 @@ impl ProcThreadAttributeList {
 
     fn as_mut_ptr(&mut self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
         self.storage.as_mut_ptr().cast()
+    }
+}
+
+impl Drop for ProcThreadAttributeList {
+    fn drop(&mut self) {
+        // SAFETY: the list was initialized by `with_capacity` and is deleted
+        // exactly once, before its backing buffer is freed. `CreateProcessW` has
+        // already consumed it by this point.
+        unsafe { DeleteProcThreadAttributeList(self.as_mut_ptr()) };
     }
 }
 

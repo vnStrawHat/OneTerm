@@ -5,6 +5,14 @@
 //! exited by the time the watcher is installed. The callback records the exit
 //! status and posts a completion packet, so the caller learns about the exit
 //! through the same `poll.wait` it uses for output.
+//!
+//! The shape — a wait callback feeding an `mpsc` channel plus an IOCP completion
+//! packet, with the poll interest behind a mutex — follows `alacritty_terminal`'s
+//! `tty/windows/child.rs` (<https://github.com/alacritty/alacritty>), Copyright
+//! the Alacritty contributors, licensed under the Apache License 2.0, and is
+//! modified here: the callback borrows an `Arc` the watcher owns and
+//! `UnregisterWaitEx` fences it, instead of the original's `Box::into_raw` /
+//! `UnregisterWait` pair.
 
 use std::ffi::c_void;
 use std::io;

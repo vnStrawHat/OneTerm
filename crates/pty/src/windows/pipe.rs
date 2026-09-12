@@ -9,6 +9,13 @@
 //! One `Mutex<VecDeque<u8>>` guards each ring. A pseudo-console delivers tens of
 //! MiB/s; a single uncontended lock per 64 KiB chunk is not the limiter, and the
 //! alternative (a lock-free ring crate) is a dependency this crate does not need.
+//!
+//! The registration semantics — readable/writable gating, clearing a one-shot
+//! interest after posting, and the priming packet on first registration — follow
+//! `alacritty_terminal`'s `tty/windows/blocking.rs`
+//! (<https://github.com/alacritty/alacritty>), Copyright the Alacritty
+//! contributors, licensed under the Apache License 2.0, and are modified here:
+//! the `piper` ring and its wakers are replaced by `std` synchronisation.
 
 use std::collections::VecDeque;
 use std::io;
@@ -152,7 +159,7 @@ pub struct PipeReader {
 
 impl PipeReader {
     /// Spawn the thread that drains `pipe` into a `capacity`-byte ring.
-    pub(super) fn new(pipe: OwnedHandle, capacity: usize) -> Self {
+    pub(super) fn new(pipe: OwnedHandle, capacity: usize) -> io::Result<Self> {
         let ring = Ring::new(capacity, Side::Read);
         let thread_ring = ring.clone();
         spawn_pipe_thread("oneterm-pty-conout", move || {
@@ -170,11 +177,11 @@ impl PipeReader {
                     return;
                 }
             }
-        });
-        Self {
+        })?;
+        Ok(Self {
             ring,
             first_register: true,
-        }
+        })
     }
 
     pub(super) fn register(&mut self, poller: &Arc<Poller>, event: Event, mode: PollMode) {
@@ -245,7 +252,7 @@ pub struct PipeWriter {
 
 impl PipeWriter {
     /// Spawn the thread that drains a `capacity`-byte ring into `pipe`.
-    pub(super) fn new(pipe: OwnedHandle, capacity: usize) -> Self {
+    pub(super) fn new(pipe: OwnedHandle, capacity: usize) -> io::Result<Self> {
         let ring = Ring::new(capacity, Side::Write);
         let thread_ring = ring.clone();
         spawn_pipe_thread("oneterm-pty-conin", move || {
@@ -259,8 +266,8 @@ impl PipeWriter {
                     return;
                 }
             }
-        });
-        Self { ring }
+        })?;
+        Ok(Self { ring })
     }
 
     pub(super) fn register(&self, poller: &Arc<Poller>, event: Event, mode: PollMode) {
@@ -329,13 +336,15 @@ impl Drop for PipeWriter {
 
 /// A pipe thread that cannot be joined: it is parked in a blocking `ReadFile` or
 /// `WriteFile` and only returns when the pipe breaks.
-fn spawn_pipe_thread(name: &str, body: impl FnOnce() + Send + 'static) {
-    if let Err(error) = std::thread::Builder::new()
+///
+/// A failure to spawn is fatal to the session — without this thread the
+/// pseudo-console can never move a byte in that direction — so it is reported
+/// rather than logged (`docs/agents/error-policy.md`, transport row).
+fn spawn_pipe_thread(name: &str, body: impl FnOnce() + Send + 'static) -> io::Result<()> {
+    std::thread::Builder::new()
         .name(name.to_owned())
         .spawn(body)
-    {
-        log::error!("oneterm-pty: cannot spawn the {name} thread: {error}");
-    }
+        .map(drop)
 }
 
 fn read_pipe(pipe: &OwnedHandle, buf: &mut [u8]) -> io::Result<usize> {

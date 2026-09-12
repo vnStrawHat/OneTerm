@@ -150,10 +150,25 @@ heading and the § 6.3 ConPTY and child-exit rows), `docs/PROJECT.md`, `README.m
   lose their fake PTY, so `oneterm-pty` gets its own `loopback_implements_the_evented_contract`
   test and `crates/local-shell` keeps its `LoopbackPty` — now implementing the `oneterm-pty`
   traits, which is the actual out-of-crate proof that the contract is implementable.
-- **`GlyphWidth` is new behaviour.** The fork passes `0` for `CreatePseudoConsole`'s flags; this
-  crate passes `PSEUDOCONSOLE_GLYPH_WIDTH_WCSWIDTH (0x10)` by default, which pty.md requires so
-  the host and the engine can never disagree about cluster width. Hosts older than the flag ignore
-  it. The GUI walk includes a CJK line so a width regression would be visible.
+- **`GlyphWidth` is a declared, intentional behaviour change.** The fork passes `0` for
+  `CreatePseudoConsole`'s flags; this crate passes `PSEUDOCONSOLE_GLYPH_WIDTH_WCSWIDTH (0x10)` by
+  default, which pty.md requires so the host and the engine can never disagree about cluster
+  width. The bundled host **does** honour the bit, measured A/B on 1.24.2607.10001 by reading
+  `[Console]::CursorLeft` after writing each string (the verifier's numbers, recorded in
+  [`evidence/US-0071-verify.md`](evidence/US-0071-verify.md)):
+
+  | Host configuration | `[日本語 🙂 x]` | `[👨‍👩‍👧]` |
+  |---|---|---|
+  | before this packet, flags = `0` | 13 | **4** |
+  | after this packet, flags = `0x10` | 13 | **8** |
+
+  The host's default is grapheme measurement; `0x10` switches it to per-codepoint `wcswidth`,
+  which is what the engine does today (`unicode-width` per `char`: 👨 2 + ZWJ 0 + 👩 2 + ZWJ 0 +
+  👧 2 = 6, i.e. 8 with the brackets). **The change removes a 4-column drift between host and
+  engine that existed before this packet**; plain CJK and single emoji are unaffected. The flag
+  must be flipped to `GlyphWidth::Graphemes` in the same packet that gives the engine grapheme
+  width (mode 2027, a later intake) — otherwise the drift comes back inverted. Hosts older than
+  the flag ignore it.
 
 ## Plan
 
@@ -232,6 +247,13 @@ OneTerm stayed up.
 
 ### Gaps
 
+- **The visual GUI walk is unverified.** The Windows desktop session was disconnected for both
+  the implementer's run and the verifier's re-run (`quser` state `Disc`,
+  `GetForegroundWindow() = 0`, `SM_REMOTESESSION = 1`); the verifier's captures came out fully
+  black. Nothing that needs eyes — the rendered Sixel image, the on-screen echo, the reflowed
+  text — has been seen. **The transport-level evidence stands** (session transcript, child
+  process tree, `mode con` dimensions, exit behaviour) and is what every claim below rests on;
+  a connected desktop is the only way to close the pixel gap.
 - **The Windows session was disconnected for the walk** (`quser` state `Disc`). GPUI stops
   presenting frames for the terminal pane, so the screenshots hold stale frames: **the Sixel
   image and the on-screen echo were not seen**, only proven to have passed through the
@@ -243,9 +265,11 @@ OneTerm stayed up.
 - **Unix is compile-and-CI-tested only.** This box is Windows. The `openpty` backend, the
   reaper thread and the `SignalMask` port have never run here; CI's ubuntu and macOS jobs are
   their only proof, and `docs/PROJECT.md` already records that Linux/macOS are not QA-tested.
-- **`GlyphWidth::Graphemes` is unverified behaviourally.** Only the flag bits are asserted. The
-  crate now passes `PSEUDOCONSOLE_GLYPH_WIDTH_WCSWIDTH (0x10)` where the fork passed `0`; no
-  width change was observed in the walk, but no host known to honour the bit was tested.
+- **The glyph-width default changed, on purpose and measured.** See Context: the bundled host
+  honours `0x10`, and a ZWJ cluster that the host used to report as 4 columns is now 8, which is
+  what the engine already assumed. This is an intended fix, not an unverified risk — but
+  `GlyphWidth::Graphemes` itself is still only asserted at flag-bit level, and the flag must flip
+  when the engine gains grapheme width (mode 2027, a later intake).
 - **Deviations from `pty.md`, all deliberate and all narrower than the design:**
   `Options::drain_on_exit` is not ported (it only ever configured alacritty's own `EventLoop`);
   `ConptyApi::resolve()` is infallible rather than `io::Result` (the `kernel32` fallback cannot
@@ -256,6 +280,16 @@ OneTerm stayed up.
   while `crates/local-shell` keeps its own `LoopbackPty` — moving it out would have left the
   local-shell loop tests without a fake PTY, and the local-shell one is the real out-of-crate
   proof.
+- **Verifier findings applied after the first commit** (report:
+  [`evidence/US-0071-verify.md`](evidence/US-0071-verify.md)): the Unix `Drop` no longer signals a
+  pid the reaper may already have released (closing the master hangs the session up instead);
+  `spawn` binds the watcher before the struct literal so an error there cannot invert the
+  `ClosePseudoConsole` drop order; `DeleteProcThreadAttributeList` is now paired; a failed pipe or
+  reaper thread spawn returns `io::Error` instead of logging and leaving a dead session; and
+  `child.rs` / `pipe.rs` carry the Apache-2.0 derivation header, with `NOTICE` widened to match.
+  Left open by agreement: `ConptyApi::resolve()` still runs per spawn (M7 — one extra module
+  reference, no behavioural effect) and neither implementation sets `FD_CLOEXEC` on the Unix pty
+  fds (parity with the fork).
 - **The 1 MiB pipe ring can still park its thread while `ClosePseudoConsole` drains**, the same
   shape of hazard the fork has. The drop-order invariant is commented and covered by
   `drop_order_drains_the_output_pipe`, but a consumer that stops reading entirely while output

@@ -1,0 +1,57 @@
+US-0071 independent verification — OneTerm local-shell session transcripts
+(OneTerm's own printable-output logging, logging.local = true, worktree target/terminal.json,
+restored afterwards). Build: cargo build -p oneterm-app --profile fast-dev in
+.claude/worktrees/agent-a665224a2944fdbdd @ f729107.
+
+== run 1 (walk71v.ps1, app pid 12984, shell pid 21584) ==
+[2026-09-12 14:17:24] ...\scratchpad\home71v>echo hi
+[2026-09-12 14:17:24] hi
+[2026-09-12 14:17:29] ...\home71v>mode con
+[2026-09-12 14:17:29] Status for device CON:
+[2026-09-12 14:17:29]     Lines:          52
+[2026-09-12 14:17:29]     Columns:        229
+[2026-09-12 14:17:29]     Code page:      65001
+[2026-09-12 14:17:37] ...\home71v>mode con          (after the window was resized to 1100x700)
+[2026-09-12 14:17:37]     Lines:          33
+[2026-09-12 14:17:37]     Columns:         65
+[2026-09-12 14:17:44] ...\home71v>ping -t 127.0.0.1
+[2026-09-12 14:17:44] Pinging 127.0.0.1 with 32 bytes of data:
+[2026-09-12 14:17:44..55] Reply from 127.0.0.1: bytes=32 time<1ms TTL=128     (11 replies)
+[2026-09-12 14:17:55] Ping statistics for 127.0.0.1:
+[2026-09-12 14:17:55]     Packets: Sent = 11, Received = 11, Lost = 0 (0% loss),
+[2026-09-12 14:17:55] Control-C
+[2026-09-12 14:17:55] ^C
+   (a posted VK_CONTROL+C keystroke did NOT interrupt it — ping still alive after 3 s;
+    the interrupt above is a console CTRL_C_EVENT, same limitation as the implementer's walk)
+[2026-09-12 14:18:03] ...\home71v>ctype ...\snake.six      <- verifier typo (stray leading 'c'),
+[2026-09-12 14:18:05] 'ctype' is not recognized ...            the Sixel step was redone in run 2
+[2026-09-12 14:18:14] ...\home71v>echo after-sixel
+[2026-09-12 14:18:14] after-sixel
+[2026-09-12 14:18:19] ...\home71v>powershell -NoProfile -File ...\width-probe.ps1 ...\probe-conpty.txt
+[2026-09-12 14:18:27] [日本語 🙂 x]
+[2026-09-12 14:18:27] [👨‍👩‍👧]
+[2026-09-12 14:18:30] WIDTH-PROBE cjk=13 zwj=8
+[2026-09-12 14:18:37] ...\home71v>exit
+
+== run 2 (walk71v-sixel.ps1, app pid 2204, shell pid 22956) ==
+[2026-09-12 14:28:37] ...\home71v>echo before-sixel
+[2026-09-12 14:28:37] before-sixel
+[2026-09-12 14:28:44] ...\home71v>type ...\scratchpad\snake.six      (257 KiB DCS payload)
+[2026-09-12 14:28:57] ...\home71v>echo after-sixel
+[2026-09-12 14:28:57] after-sixel
+[2026-09-12 14:29:02] ...\home71v>exit
+   children of the app after exit: only its own C:\WINDOWS\system32\conhost.exe
+   (cmd.exe and target\fast-dev\x64\OpenConsole.exe both gone; OneTerm still alive)
+
+== run 3 (walk71v-control.ps1) — A/B control, PRE-US-0071 binary ==
+D:\TrungKFC-Research\Rust\myTerm2\target\fast-dev\oneterm.exe (built 2026-09-11 18:50, i.e.
+alacritty_terminal::tty, CreatePseudoConsole flags = 0), copied to the scratchpad and run with
+the SAME bundled conpty.dll + x64\OpenConsole.exe 1.24.2607.10001 as the new build:
+[2026-09-12 14:30:16] [日本語 🙂 x]
+[2026-09-12 14:30:16] [👨‍👩‍👧]
+[2026-09-12 14:30:17] WIDTH-PROBE cjk=13 zwj=4
+
+== width probe summary (host-side cursor column, [Console]::CursorLeft) ==
+  flags = 0 (previous implementation, bundled host)   : cjk=13  zwj=4
+  flags = 0x10 WCSWIDTH (US-0071 default, same host)  : cjk=13  zwj=8
+  system conhost 10.0.26100, no ConPTY                : cjk=13  zwj=4
