@@ -127,6 +127,12 @@ jobs:
       # type-checks every target and `cargo test` links them (BUILD-28).
       - name: Test workspace
         run: cargo test --workspace
+      # The VT engine's whole-history integrity walk (IN-0029 R-28). It is
+      # bounded to the rows an operation touched by default, because at a
+      # 100 000-row scrollback the full walk costs milliseconds per `feed`; CI
+      # is where the unbounded invariants are gated.
+      - name: Test the VT engine with the full integrity walk
+        run: cargo test -p oneterm-vt --features vt-paranoid
 
   windows-quality:
     # Windows is the primary platform, so lint and run the whole workspace
@@ -154,6 +160,12 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test workspace
         run: cargo test --workspace
+      # The VT engine's whole-history integrity walk (IN-0029 R-28). It is
+      # bounded to the rows an operation touched by default, because at a
+      # 100 000-row scrollback the full walk costs milliseconds per `feed`; CI
+      # is where the unbounded invariants are gated.
+      - name: Test the VT engine with the full integrity walk
+        run: cargo test -p oneterm-vt --features vt-paranoid
 
   vt-bench:
     # The VT engine benchmark (IN-0029). It RECORDS and never gates: at

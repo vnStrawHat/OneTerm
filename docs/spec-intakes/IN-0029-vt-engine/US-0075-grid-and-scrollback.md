@@ -521,7 +521,86 @@ allocation, so `US-0074`'s grapheme sweep and `US-0080`'s `GraphicReleased` scan
 trim end from `RowsTrimmed` / `oldest`, not from `DIRTY`. Stated here so neither packet assumes
 otherwise.
 
+## Rework (2026-09-13) — bounded integrity
+
+**Reported by `US-0081`.** In a `fast-dev` / debug build the engine spent milliseconds per `feed`
+and per `render_update` where the engine being replaced spends about 200 us in total, because
+`TerminalGrid::assert_integrity` walked **both screens' whole history** — every live row and every
+cell, twice over (`Screen::assert_integrity` and `Screen::assert_interned_ids_resolve`) — on every
+call. R-28 in [`testing-and-bench.md`](low-level-design/testing-and-bench.md) § 1 set a budget for
+exactly this and the walk had outgrown it: at the 100 000-row scrollback the intake targets, one
+call is a pass over sixteen million cells.
+
+**What is bounded, and how.** `Screen` gained one field, `batch_lo`: the screen top as it was when
+the current batch opened, written by `Screen::set_seq`, which `TerminalGrid::begin_batch` already
+calls on both screens at the top of every `feed`. Every row a batch can write, scroll or blank is
+at or above that id — the print path, the erase and insert/delete paths and the scroll primitives
+all address rows between the screen top and `newest`, and a row pushed into history inside the
+batch was a screen row when it was written; `clear_history` and the trim only *drop* rows, they do
+not rewrite one. `Screen::integrity_lo` is therefore `min(batch_lo, visible_top)` clamped into the
+live range, and both walkers start there instead of at `oldest`. `visible_top` is in the bound so
+a scrolled-back viewport is still checked. Every invariant is unchanged; only the row range they
+are checked over is. The cost is O(rows) and does not move with the history depth, which is the
+property the probe measures.
+
+**`vt-paranoid` restores the full walk.** The feature `US-0076` added to `crates/vt/Cargo.toml` is
+now wired: with it, `integrity_lo` returns `oldest` and every call is the whole-history two-screen
+walk again. `scripts/ci-local.{ps1,sh}` and both quality jobs in `.github/workflows/ci.yml` gained
+one step, `cargo test -p oneterm-vt --features vt-paranoid`, so the unbounded invariants still gate
+every change. Release builds compile both tiers out exactly as before — the `cfg!(debug_assertions)`
+guards are untouched.
+
+**Measured** — `render::bench::integrity_walk_cost_per_feed_and_render_update`, a debug build,
+160x45, a full 100 000-row history, ten calls each:
+
+| | `feed` (one line) | `render_update` |
+| --- | --- | --- |
+| before (`--features vt-paranoid`) | 258 615.5 us | 252 771.9 us |
+| after (default) | 142.9 us | 150.2 us |
+| ratio | 1810x | 1683x |
+
+The residual ~150 us is the floor this bound describes — two 45-row screens, each cell visited by
+both walkers — and it is flat in the scrollback depth. The probe asserts a 1 ms ceiling when the
+feature is off: a regression detector with three orders of magnitude of margin, not a benchmark
+gate.
+
+**Verification.**
+
+- `pwsh scripts/ci-local.ps1` green: raw totals **61 `test result:` sections, 1919 passed /
+  0 failed / 11 ignored** (including the new `--features vt-paranoid` step).
+- `cargo test -p oneterm-vt` and `cargo test -p oneterm-vt --features vt-paranoid`: 359 + 5 + 5
+  passed / 0 failed / 3 ignored in both states, and again with `VT_PROPTEST_CASES=5000`.
+- Parity: `cargo run -p oneterm-tools --bin vt-diff` reports **45 recordings, 45 identical,
+  0 differing** with and without `--features oneterm-vt/vt-paranoid`;
+  `cargo test -p oneterm-tools --test corpus_check` 4 passed.
+- `ext_memory_stays_bounded` still passes under its documented invocation (`--ignored
+  --test-threads=1`) with the feature on.
+
+**Gaps — for the design owner. No LLD was edited by this rework.**
+
+- `testing-and-bench.md` § 1's R-28 table still reads "End of `feed`, `resize`, `render_update`:
+  the full two-screen walk, in debug builds". That row is now "the walk bounded to the rows the
+  operation touched plus the viewport window, in debug builds; the whole-history walk under
+  `vt-paranoid`", and the third row's "property tests and fuzz targets" tier is in practice "the
+  whole suite, under `vt-paranoid`, which is what CI runs".
+- The same paragraph still says **"`vt-paranoid` is not wired yet (M12)"** and gives `US-0076` the
+  manifest entry. The entry exists; this rework wired the `cfg!` gate and the CI step. M12 closes.
+- `grid-and-scrollback.md`'s integrity section describes the walk as covering every live row. That
+  is now the `vt-paranoid` reading of it.
+- A resize, a scrollback-limit change, a `RIS` and an alternate-screen swap rewrite rows outside
+  any batch, so their debug check runs under the same bound rather than fully. Their full check is
+  the `vt-paranoid` CI run, where `reflow::props::integrity_holds_after_any_resize_sequence` walks
+  everything. Widening only those four would need a widen/narrow pair of methods on `TerminalGrid`
+  — more state than this rework was willing to add for a path CI already covers; say so if the
+  owner wants it in every debug build.
+
 ## Handoff
+
+**Bounded-integrity rework branch** `worktree-agent-aea9b4dea012780de` off `feat/vt-engine`
+@f5b06dd (the worktree was created on `fix/sixel-cursor-model` @c936ac0 and `git reset --hard
+f5b06dd` before any file was read or written; the brief named @3538047, and f5b06dd is its
+descendant and the branch tip), one commit, **not merged and not pushed**. It also touches
+`US-0079`'s files, which carry the same section.
 
 **Rework branch** `worktree-agent-a402d6aa668c85293` off `feat/vt-engine` @4b833a0 (the worktree
 was created on `fix/sixel-cursor-model` @c936ac0 and `git reset --hard 4b833a0` before any file was

@@ -260,6 +260,12 @@ pub struct Screen {
     /// Wide glyphs that could not be placed at all: `cols == 1`, or the last
     /// column with `DECAWM` reset.
     dropped_wide: u32,
+    /// The oldest row id a mutation since the last batch boundary can have
+    /// reached: the screen top as it was when the batch opened. A row written
+    /// and *then* scrolled into history inside the same batch is still at or
+    /// above it, which is what lets the full walk start here instead of at
+    /// `oldest` (R-28 as reworked; see [`Screen::integrity_lo`]).
+    batch_lo: RowId,
 }
 
 fn ring_len_for(scrollback_limit: u32) -> usize {
@@ -304,6 +310,7 @@ impl Screen {
                 },
             ),
             dropped_wide: 0,
+            batch_lo: origin,
         };
         screen.debug_assert_integrity();
         screen
@@ -1596,8 +1603,11 @@ impl Screen {
         self.seq
     }
 
+    /// Opens a batch: the stamp every row written from here on carries, and the
+    /// lower bound of the rows this batch can have touched.
     pub fn set_seq(&mut self, seq: SeqNo) {
         self.seq = seq;
+        self.batch_lo = self.screen_top();
     }
 
     // ── Anchors ─────────────────────────────────────────────────────────────
@@ -1699,6 +1709,26 @@ impl Screen {
         );
     }
 
+    /// Where the row walk starts.
+    ///
+    /// R-28 as reworked (`US-0075` / `US-0079`, 2026-09-13): starting at
+    /// `oldest` makes every walk O(history), and with a 100 000-row scrollback
+    /// that is milliseconds per `feed` and per `render_update` in a debug
+    /// build. Without `vt-paranoid` the walk therefore covers only what the
+    /// operation can have touched — the rows written, scrolled or blanked since
+    /// the batch opened ([`Screen::batch_lo`]) plus the viewport window when the
+    /// user has scrolled back — which is O(rows). `vt-paranoid` restores the
+    /// whole-history walk; CI runs the suite with it, so the full invariants
+    /// still gate every change.
+    fn integrity_lo(&self) -> RowId {
+        if cfg!(feature = "vt-paranoid") {
+            return self.oldest;
+        }
+        self.batch_lo
+            .min(self.visible_top())
+            .clamp(self.oldest, self.newest)
+    }
+
     /// The full walk. Every row's id matches its slot, every row is the right
     /// width, no wide pair is broken, and no content hint has a false negative.
     pub fn assert_integrity(&self) {
@@ -1708,7 +1738,7 @@ impl Screen {
         }
         let origin = self.kind.origin();
         debug_assert!(self.oldest >= origin, "row id below this screen's origin");
-        let mut id = self.oldest;
+        let mut id = self.integrity_lo();
         while id <= self.newest {
             let row = self.row(id);
             debug_assert_eq!(row.id(), id, "row id does not match its slot");
@@ -1735,7 +1765,7 @@ impl Screen {
         if !cfg!(debug_assertions) {
             return;
         }
-        let mut id = self.oldest;
+        let mut id = self.integrity_lo();
         while id <= self.newest {
             for cell in self.row(id).cells() {
                 debug_assert!(

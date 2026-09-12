@@ -27,6 +27,10 @@ step() {
 step cargo fmt --all -- --check
 step cargo clippy --workspace --all-targets -- -D warnings
 step cargo test --workspace
+# IN-0029 R-28: the VT engine's integrity walk is bounded to the rows an
+# operation touched unless `vt-paranoid` is on. This is where the unbounded
+# whole-history invariants are gated.
+step cargo test -p oneterm-vt --features vt-paranoid
 step python scripts/verify-dependency-graph.py
 step python scripts/check-doc-paths.py
 step python -m unittest scripts/test_check_english.py
