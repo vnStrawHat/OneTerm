@@ -49,6 +49,12 @@ into a multi-minute job. Ghostty's equivalent is per *page*, not per grid. So:
 | End of `feed`, `resize`, `render_update` | the full two-screen walk, in debug builds |
 | Property tests and fuzz targets | the full walk after every step, behind the `vt-paranoid` feature |
 
+**`vt-paranoid` is not wired yet (M12).** `US-0075` could not add it: the feature needs a
+`crates/vt/Cargo.toml` entry, which was outside that packet's file scope, so the full walk currently
+runs unconditionally in the property tests. **`US-0076` owns the one-line manifest entry** and the
+`#[cfg(feature = "vt-paranoid")]` gate, after which the three tiers above are real rather than
+aspirational.
+
 The debug test-suite runtime budget is recorded in the packet: `cargo test -p oneterm-vt` must
 stay under 60 s on the owner's machine, measured at `US-0075` and re-measured at `US-0077`.
 
