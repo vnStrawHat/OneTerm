@@ -203,12 +203,17 @@ No new decision: every choice this packet makes is already recorded in the LLD.
 
 ### Commands
 
-- `pwsh scripts/ci-local.ps1` — green on 2026-09-12, every step.
-- `cargo test --workspace` raw totals: **52 `test result:` sections, 1188 passed / 0 failed /
+- `pwsh scripts/ci-local.ps1` — green on 2026-09-12, every step; re-run green after the
+  verifier's F3 fix.
+- `cargo test --workspace` raw totals: **52 `test result:` sections, 1189 passed / 0 failed /
   5 ignored**. The `US-0072` baseline was 50 sections and 1156 passed, so this packet adds two
-  sections (the `oneterm-vt` unit binary and its empty doc-test) and exactly the 32 tests below.
-- `cargo test -p oneterm-vt` — **32 passed / 0 failed / 0 ignored, 0.07 s**
-  (`cell::tests` 15, of which 3 are proptest properties; `intern::tests` 13; `width::tests` 4).
+  sections (the `oneterm-vt` unit binary and its empty doc-test) and exactly the 33 tests below.
+- Verifier report: [`evidence/US-0074-verify.md`](evidence/US-0074-verify.md) — "merge after
+  fixes". F1 (commit trailer) and F3 (`is_blank` ignores width: doc comment plus
+  `cell::tests::a_default_styled_spacer_is_blank_but_is_not_the_empty_cell`) are applied here;
+  F2 and the `HyperlinkTable` ladder are recorded below for the design owner.
+- `cargo test -p oneterm-vt` — **33 passed / 0 failed / 0 ignored**
+  (`cell::tests` 16, of which 3 are proptest properties; `intern::tests` 13; `width::tests` 4).
   The whole crate's suite is well inside `testing-and-bench.md`'s 60 s debug budget.
 - `cargo fmt --all -- --check` — clean.
 - `cargo clippy --workspace --all-targets -- -D warnings` — clean, with no new `#[allow]`.
@@ -285,6 +290,16 @@ No new decision: every choice this packet makes is already recorded in the LLD.
 - **Nothing consumes this code.** There is no integration, E2E or platform proof, and there
   cannot be one until `US-0081` puts the engine behind the seam. The proof here is the unit suite
   plus the compile-time size assertion.
+- **For the design owner: `GRAPHEME_SWEEP_CHARS` can never be the clause that fires.** With
+  `GRAPHEME_MAX_LEN = 16`, `GRAPHEME_SWEEP_ENTRIES = 65_536` clusters hold at most
+  `16 x 65_535 = 1_048_560` codepoints, which is 16 short of the 1 MiB char trigger, so the
+  entries clause always wins and the LLD's claim that "both have a test that drives them" cannot
+  be met. The clause is implemented as specified and the entries trigger is tested; either lower
+  `GRAPHEME_SWEEP_CHARS` in `cell-and-style.md` or drop it and the claim. Not changed here —
+  implementers do not edit the LLD.
+- **For the design owner: `HyperlinkTable` is the one table with no ladder.** Styles, extras and
+  graphemes each degrade to id 0 when full; hyperlinks grow unbounded, and the LLD does not say
+  what should stop them. Assigned to `US-0076`, which owns OSC 8, RIS and reset.
 - **An implicit OSC 8 link is one table entry per occurrence**, as the reference produces and as
   the LLD's "per-terminal counter" wording implies, so a stream of unique un-`id=`-ed links grows
   `HyperlinkTable` without bound. That is a dispatch-side concern (`US-0076` owns OSC 8, RIS and

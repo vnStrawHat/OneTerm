@@ -211,6 +211,11 @@ impl Cell {
     /// Deliberately stricter than [`Cell::is_erasable`]: a bold space is blank
     /// to the reference's erase scan (trap 37) but must not take the
     /// renderer's blank fast path, because its background may differ.
+    ///
+    /// **Width is ignored by design.** A default-styled `WideSpacer` or
+    /// `LeadingWideSpacer` is blank — correctly, since a spacer paints nothing —
+    /// yet it is not equal to [`Cell::EMPTY`]. A caller asking "is this cell
+    /// identical to a fresh one?" must compare against `Cell::EMPTY` instead.
     pub fn is_blank(self) -> bool {
         matches!(self.content(), CellContent::Scalar(' '))
             && self.style_id() == StyleId::DEFAULT

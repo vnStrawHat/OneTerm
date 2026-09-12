@@ -200,6 +200,17 @@ fn blank_and_erasable_predicates_differ_on_a_bold_space() {
 }
 
 #[test]
+fn a_default_styled_spacer_is_blank_but_is_not_the_empty_cell() {
+    // `is_blank` ignores width by design: a spacer paints nothing, so skipping
+    // it is right, but it is not a fresh cell and must not be compared as one.
+    for width in [CellWidth::WideSpacer, CellWidth::LeadingWideSpacer] {
+        let cell = Cell::EMPTY.with_width(width);
+        assert!(cell.is_blank());
+        assert_ne!(cell, Cell::EMPTY);
+    }
+}
+
+#[test]
 fn tab_cell_is_erasable_but_not_blank_and_reads_back_as_tab() {
     let interner = Interner::default();
     let tab = Cell::EMPTY.with_content(CellContent::Scalar('\t'));
