@@ -144,7 +144,8 @@ upstream coverage and the most new code (R-59):
 
 | Recording | Covers |
 | --- | --- |
-| `sixel_basic`, `sixel_scroll` | the IN-0028 decoder, placement, release |
+| `sixel_basic` | the IN-0028 decoder, placement and release. **Shipped by `US-0080`** at `crates/vt/tests/corpus/oneterm/sixel_basic/`, outside `alacritty-ref/`, blessed by the **old** engine like every other expectation and checked by the same `vt-corpus check` and `vt-diff` runs |
+| `sixel_scroll` | an image scrolling into history and being trimmed |
 | `osc_9_7_agent` | the agent channel end to end |
 | `osc_133_prompt` | shell integration marks |
 | `conpty_resize` | the BUG-0051 capture |

@@ -47,7 +47,7 @@ pub enum VtEvent {
     Osc { code: u32, params: ParamSpans, terminator: StringTerm, truncated: bool },
     RowsScrolled { top: RowId, bottom: RowId, delta: i32 },
     RowsTrimmed { oldest: RowId },
-    GraphicReleased(GraphicId),
+    GraphicReleased(GraphicId),   // queued by feed/resize, delivered by feed — including feed(&[])
 }
 ```
 
@@ -282,7 +282,10 @@ Everything else is `pub(crate)`, including the whole `parser` and `dispatch` mod
   stores the raw `u32`s, which a debug generation counter on the batch catches.
 - [ ] **An enormous single event** (an 8 MiB OSC 52 payload) grows the arena once; the arena
   shrinks back after a batch that exceeded `EVENT_ARENA_SOFT = 1 MiB`.
-- [ ] **`feed` with an empty slice** returns zeroed stats, appends nothing, and is a no-op.
+- [ ] **`feed` with an empty slice** returns zeroed stats and appends no *parse* events — but it
+  **does** deliver anything a previous `resize` queued, which today means `GraphicReleased`. It is
+  therefore not a no-op, and the adapter must issue one after every resize
+  ([`graphics.md`](graphics.md)).
 - [ ] **A sequence split across `feed` calls** produces exactly one event, at the call that
   completes it.
 - [ ] **A reply generated while the transport is closed** is still emitted; discarding it is the

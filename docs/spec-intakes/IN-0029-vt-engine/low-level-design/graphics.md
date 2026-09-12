@@ -77,14 +77,13 @@ claims one exists and is stale; the replacement docs must not repeat the claim.
 The capability the current engine lacks: nothing tells the embedder that an image died, so
 `crates/terminal-view`'s texture store guesses with an LRU and a 64-image / 64 MB cap.
 
-**Liveness is derived from rows, not from a counter (R-22).** The earlier design decremented a
-`live_cells` counter "in exactly one place: the cell writer", which misses every way a cell
-actually stops referencing an image: `Row::reset`, scroll blanking, `clear_viewport`,
-`reset_all_rows` on alt-screen entry, and reflow destroying rows — that is, `CSI 2 J`, `clear`
-and every TUI repaint, which is the common case and precisely the capability being added.
+**Liveness is derived from rows, not from a counter (R-22).** An earlier design decremented a
+`live_cells` counter "in exactly one place: the cell writer", which misses every way a cell actually
+stops referencing an image: `Row::reset`, scroll blanking, `clear_viewport`, an alt-screen wipe, and
+reflow destroying rows.
 
-Instead, at the end of `feed()` (and after `resize`), a lazy sweep runs over the placements whose
-anchor row was touched this batch:
+**The scan runs in `feed`, never in `render_update`.** At the end of `feed` (and after `resize`
+queues releases), the engine sweeps the placements whose anchor rows were touched:
 
 ```
 for placement in placements:
@@ -93,9 +92,43 @@ for placement in placements:
             anchor.row .. anchor.row + rows carries RowFlags::HAS_GRAPHIC  -> release
 ```
 
-`HAS_GRAPHIC` is a row-header bit already written by the stamping pass, so the check is one load
-per row of the placement's extent, and only for placements whose rows were touched. Releasing
-drops the pixels the engine still holds and emits `VtEvent::GraphicReleased(id)`.
+`render_update` cannot do it: it has no `EventBatch` to deliver a `GraphicReleased` into, and R-16
+keeps `RenderState` out of graphics ownership entirely, so a release discovered there would be
+unobservable. The consequence for the embedder is a contract, not an accident: **a `resize` queues
+releases that reach the batch only on the next `feed` — including an empty one.** The adapter must
+issue `feed(&[])` after a resize, or a reflow that killed an anchor leaves the view's texture live
+until the next byte arrives.
+
+**What releases an image, and what does not.** Liveness is the `HAS_GRAPHIC` **row** flag, which is
+a deliberate false positive (set on write, cleared only on reset), so:
+
+| Releases the placement | Does **not** release it |
+| --- | --- |
+| `Row::reset` — scroll blanking, `reset_rows`, an alt-screen wipe, `RIS` | Overwriting every covered cell with text: the cell references drop, the flag stays, the placement stays live |
+| A history trim that drops the anchor row | `EL 2` over every covered row: same shape — the cells are cleared, the row flag is not |
+| A reflow that kills the anchor (delivered on the next `feed`) | Two images sharing cells: the older placement stays live while the newer one owns the cells |
+| `MAX_PLACEMENTS` eviction, oldest first | Primary-screen `CSI 2 J` — see below |
+
+The false positives are bounded and visually correct: the painter draws from the cells, so an image
+whose cells are all overwritten is invisible while its placement is retained. It costs a table slot
+and, through the view, a retained texture, until the row is reset or eviction reclaims it — which is
+why `US-0081`'s texture store must tolerate up to `MAX_PLACEMENTS` live textures.
+
+**Bound: `MAX_PLACEMENTS = 256`, oldest released first.** An unbounded placement table plus a linear
+sweep is a denial-of-service surface, so the table is a ring: the 257th image releases the first and
+emits its `GraphicReleased`. Note what this does **not** bound: `MAX_DIMENSION` allows one image to
+be 64 MiB of RGBA, so 256 placements have no total-pixel-bytes budget. That matches the engine being
+replaced, so it is not a regression; a later packet may add a byte budget if a workload ever holds
+many large images.
+
+**Primary-screen `CSI 2 J` keeps the image alive, in scrollback.** `ED 2` on the primary screen
+scrolls the occupied viewport into history rather than discarding it (trap 9), and a cell carrying a
+`GraphicId` is not erasable (R-13), so the image travels into scrollback with its rows. The engine
+being replaced destroys it outright, because its `is_empty` ignores the graphic reference. **The
+user-visible behaviour that IN-0028's walk records — "`cls` removes the image" — is preserved**: the
+image leaves the viewport. What changes is that scrolling back now reveals it, which is the
+improvement R-13 exists for, not a regression. On the **alternate** screen `ED 2` is a row reset, so
+it does release.
 
 Two debug invariants borrowed from foot, checked in `assert_integrity()`: no two placements with
 overlapping column ranges on the same bottom row, and every `GraphicId` in a cell resolves to a
@@ -120,6 +153,11 @@ Grammar (DEC STD 070 subset, unchanged from IN-0028):
 | `$` | graphics carriage return (back to the start of the band) |
 | `-` | graphics newline (next band) |
 
+- **Colour-mode divergence (parity break).** `#Pr;Pu;Px;Py;Pz` with `Pu` outside `{1, 2}` now
+  **selects** register `Pr` and ignores the definition; the engine being replaced selects nothing at
+  all. Measured at 72 of 96 RGBA bytes differing on a synthetic probe. No real producer emits
+  `Pu ∉ {1, 2}` and no corpus recording or fixture reaches it, so the parity gate cannot see it —
+  which is exactly why it is declared here rather than left as "the LLD text was followed".
 - DCS parameters `P1;P2;P3` are parsed and unused. In particular **`P2` background-select is
   ignored and untouched pixels stay fully transparent**, which differs from a strict VT340 and
   is what `sixel_tests.rs` pins. Kept (deviation none — this is parity).
@@ -265,8 +303,14 @@ New behaviour:
   extras table by exactly one.
 - [ ] `graphics::tests::placement_moves_with_an_in_region_scroll` — R-02; an image inside a
   `DECSTBM` region followed by `SU` still paints over its content.
-- [ ] `graphics::tests::release_event_fires_on_clear_screen` — R-22, the case the per-cell
-  counter missed.
+- [ ] `graphics::tests::release_event_fires_on_alt_screen_clear` — R-22, the case the per-cell
+  counter missed. `ED 2` on the **alternate** screen is a row reset and releases.
+- [ ] `graphics::tests::primary_clear_screen_keeps_the_image_in_history` — R-13; the placement
+  survives, the viewport has no graphic cells, and no `GraphicReleased` fires.
+- [ ] `graphics::tests::overwriting_every_covered_cell_does_not_release` and
+  `graphics::tests::el2_over_the_covered_rows_does_not_release` — the declared false positives.
+- [ ] `graphics::tests::placements_are_bounded_and_evict_oldest_first` — `MAX_PLACEMENTS`.
+- [ ] `graphics::tests::a_resize_release_is_delivered_by_the_next_feed` — including `feed(&[])`.
 - [ ] `graphics::tests::release_event_fires_on_row_reset_and_scroll_blank` — R-22.
 - [ ] `graphics::tests::release_event_fires_when_the_anchor_row_is_trimmed`
 - [ ] `graphics::tests::release_event_fires_when_reflow_drops_the_anchor`
