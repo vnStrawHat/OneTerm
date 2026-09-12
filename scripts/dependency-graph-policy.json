@@ -113,7 +113,8 @@
       "oneterm-settings"
     ],
     "oneterm-tools": [
-      "oneterm-pty"
+      "oneterm-pty",
+      "oneterm-vt"
     ],
     "oneterm-vt": [],
     "oneterm-update": [

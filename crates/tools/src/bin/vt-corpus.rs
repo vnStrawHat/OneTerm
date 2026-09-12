@@ -88,7 +88,7 @@ fn run() -> Result<bool> {
 
 fn print_usage() {
     println!(
-        "vt-corpus check          [--filter <substring>]\n\
+        "vt-corpus check          [--filter <substring>] [--engine old|new]\n\
          vt-corpus bless --engine old [--deviation <id> --filter <recording>]\n\
          vt-corpus cross-check --grid-json <dir> [--filter <substring>]\n\
          vt-corpus grep-deviations [--out <file.md>]"
@@ -113,13 +113,11 @@ fn engine(args: &Args) -> Result<Engine> {
 }
 
 fn check(args: &Args) -> Result<bool> {
-    if engine(args)? == Engine::New {
-        bail!("`--engine new` needs oneterm-vt, which arrives with US-0073");
-    }
+    let engine = engine(args)?;
     let mut failed = 0;
     let recordings = recordings(args)?;
     for recording in &recordings {
-        let report = corpus::check_recording(recording)?;
+        let report = corpus::check_recording(recording, engine)?;
         if report.passed() {
             let accepted: usize = report.accepted.values().sum();
             let note = if accepted == 0 {
@@ -135,15 +133,18 @@ fn check(args: &Args) -> Result<bool> {
         for stale in &report.stale {
             println!("        stale declared diff: {stale}");
         }
-        for difference in report.undeclared.iter().take(20) {
+        // A filtered run is someone reading one recording's diff, so it prints
+        // the lot; an unfiltered run is a summary and stays readable.
+        let shown = if args.filter.is_some() { 2000 } else { 20 };
+        for difference in report.undeclared.iter().take(shown) {
             println!("        {difference}");
         }
-        if report.undeclared.len() > 20 {
-            println!("        ... and {} more", report.undeclared.len() - 20);
+        if report.undeclared.len() > shown {
+            println!("        ... and {} more", report.undeclared.len() - shown);
         }
     }
     println!(
-        "\n{} recordings, {} passed, {failed} failed",
+        "\n{} recordings, {} passed, {failed} failed ({engine:?} engine)",
         recordings.len(),
         recordings.len() - failed
     );

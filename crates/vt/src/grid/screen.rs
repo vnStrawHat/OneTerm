@@ -424,14 +424,23 @@ impl Screen {
     }
 
     /// Allocate the slot if needed and stamp the current batch on it.
+    ///
+    /// Materialising an unwritten slot fills it with [`Cell::EMPTY`], **not**
+    /// with the cursor's erase cell: an unwritten slot already reads as plain
+    /// blanks, so giving it the current background-erase colour would repaint
+    /// every untouched column of the row the moment one glyph lands on it.
+    /// Deliberate background-erase blanking is [`Screen::blank_row`] and
+    /// [`Screen::blank_slot`], which the scroll and reset paths call explicitly.
+    /// (Found by the `US-0076` parity gate: it is what made `sgr`'s trailing
+    /// blanks carry `48;5;1` where the reference leaves them default.)
     pub fn row_mut(&mut self, id: RowId) -> RowMut<'_> {
         let slot = self.slot_of(id);
-        let (cols, seq, template) = (self.cols, self.seq, self.cursor.erase);
+        let (cols, seq) = (self.cols, self.seq);
         let entry = &mut self.slots[slot];
         if entry.as_ref().map(Row::id) != Some(id) {
             *entry = None;
         }
-        let row = entry.get_or_insert_with(|| Row::new(id, cols, seq, template));
+        let row = entry.get_or_insert_with(|| Row::new(id, cols, seq, Cell::EMPTY));
         RowMut::new(row, seq)
     }
 

@@ -18,7 +18,7 @@ use std::time::Instant;
 use crate::cell::{Cell, CellContent, Color, NamedColor, Rgb, Semantic, Style};
 use crate::event::{ClipboardKind, VtEvent};
 use crate::grid::{
-    AnchorKind, Charset, DisplayClear, LineClear, PrintMode, Pos, ScrollRegion, ScrollReport,
+    AnchorKind, Charset, DisplayClear, LineClear, Pos, PrintMode, ScrollRegion, ScrollReport,
 };
 use crate::parser::{Dispatch, MAX_OSC_PARAMS, OscParams, ParamGroups, Params, StringTerm};
 
@@ -111,9 +111,7 @@ impl Handler<'_> {
     }
 
     fn set_template(&mut self, cell: Cell) {
-        let State {
-            grid, interner, ..
-        } = self.state;
+        let State { grid, interner, .. } = self.state;
         grid.screen_mut().set_template(cell, interner);
     }
 
@@ -172,9 +170,7 @@ impl Handler<'_> {
             cursor.charsets[self.state.active_charset]
         };
         let mode = self.print_mode();
-        let State {
-            grid, interner, ..
-        } = self.state;
+        let State { grid, interner, .. } = self.state;
         grid.print(map_charset(charset, c), mode, interner);
     }
 
@@ -187,9 +183,7 @@ impl Handler<'_> {
         if matches!(mode, DisplayClear::All | DisplayClear::Saved) {
             self.out.push(VtEvent::ScreenCleared);
         }
-        let State {
-            grid, interner, ..
-        } = self.state;
+        let State { grid, interner, .. } = self.state;
         let report = grid.erase_display(mode, interner);
         self.report(report);
     }
@@ -521,11 +515,8 @@ impl Handler<'_> {
             Some(uri) => match self.state.interner.hyperlinks.intern(id, uri) {
                 Some(link) => Some(link),
                 None => {
-                    self.state.stats.hyperlink_table_exhausted = self
-                        .state
-                        .stats
-                        .hyperlink_table_exhausted
-                        .saturating_add(1);
+                    self.state.stats.hyperlink_table_exhausted =
+                        self.state.stats.hyperlink_table_exhausted.saturating_add(1);
                     if !self.state.hyperlink_warned {
                         self.state.hyperlink_warned = true;
                         log::warn!(
@@ -746,8 +737,10 @@ fn colon_color(rest: &[u16]) -> Option<Color> {
 }
 
 /// `CARGO_PKG_VERSION` as `major * 10000 + minor * 100 + patch`.
-fn version_number(version: &str) -> u32 {
-    let mut parts = version.split('.').map(|part| part.parse::<u32>().unwrap_or(0));
+pub(super) fn version_number(version: &str) -> u32 {
+    let mut parts = version
+        .split('.')
+        .map(|part| part.parse::<u32>().unwrap_or(0));
     let major = parts.next().unwrap_or(0);
     let minor = parts.next().unwrap_or(0);
     let patch = parts.next().unwrap_or(0);
@@ -1167,7 +1160,13 @@ impl Dispatch for Handler<'_> {
         }
     }
 
-    fn osc(&mut self, code: Option<u32>, params: &OscParams<'_>, term: StringTerm, truncated: bool) {
+    fn osc(
+        &mut self,
+        code: Option<u32>,
+        params: &OscParams<'_>,
+        term: StringTerm,
+        truncated: bool,
+    ) {
         self.state.dispatched = true;
         if truncated {
             self.state.stats.truncated_osc = self.state.stats.truncated_osc.saturating_add(1);

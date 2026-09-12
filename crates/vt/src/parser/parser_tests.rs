@@ -629,8 +629,12 @@ fn osc_params_past_sixteen_join_into_the_last() {
         panic!("expected an OSC dispatch, got {actions:?}");
     };
     assert_eq!(params.len(), MAX_OSC_PARAMS);
-    // The bytes of the dropped parameters are still there, joined into the last.
-    assert_eq!(params[MAX_OSC_PARAMS - 1], b"op;q;r;s;t".to_vec());
+    // The bytes of the dropped parameters are still there, joined into the last
+    // — **with** every separator, which is what makes the join reversible. The
+    // dispatch layer splits this back on `;` for a bulk `OSC 4` palette set
+    // (P9); it could not do that if the separator closing the last slot had
+    // been eaten.
+    assert_eq!(params[MAX_OSC_PARAMS - 1], b"o;p;q;r;s;t".to_vec());
 }
 
 #[test]

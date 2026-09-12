@@ -151,11 +151,20 @@ impl OscAccumulator {
         self.nparams += 1;
     }
 
-    /// Whether the parameter list is full, so a further `;` is payload rather
-    /// than a separator: past the limit the bytes keep accumulating into the
-    /// last parameter, which is what OSC 8's `;`-joined URIs rely on.
+    /// Whether the **last** parameter slot is the one being filled, so a `;` is
+    /// payload rather than a separator: past the limit the bytes keep
+    /// accumulating into the last parameter, which is what OSC 8's `;`-joined
+    /// URIs rely on.
+    ///
+    /// The boundary is one slot *before* the limit, not at it. Closing the last
+    /// slot would consume the separator that ends it, and that one byte is
+    /// exactly what a re-split needs: `US-0076`'s `OSC 4` handler splits this
+    /// parameter back on `;` to recover a bulk palette set, which passes sixteen
+    /// at nine colours, and it cannot invent a separator the parser ate. Joining
+    /// is information-preserving only if *every* separator inside the join
+    /// survives.
     pub(crate) fn params_full(&self) -> bool {
-        self.nparams == MAX_OSC_PARAMS
+        self.nparams + 1 >= MAX_OSC_PARAMS
     }
 
     /// The number this OSC carries, once the first parameter is known.

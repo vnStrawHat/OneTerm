@@ -780,14 +780,19 @@ fn diff_state(expected: &StateExpect, actual: &StateExpect) -> Vec<Difference> {
         .collect()
 }
 
-/// Replay one recording through the engine being replaced and compare it with
-/// its frozen expectations.
+/// Replay one recording through `engine` and compare it with the frozen
+/// expectations.
 ///
 /// This is the gate: `vt-corpus check` prints its report, and
 /// `crates/tools/tests/corpus_check.rs` asserts on it inside
 /// `cargo test --workspace`, so an expectation that drifts fails the build.
-pub fn check_recording(recording: &Recording) -> Result<CheckReport> {
-    let (grid, state) = crate::corpus_replay::replay_old(recording);
+/// [`Engine::Old`] against the frozen files is the comparator's own self-test;
+/// [`Engine::New`] is `US-0076`'s exit criterion.
+pub fn check_recording(recording: &Recording, engine: Engine) -> Result<CheckReport> {
+    let (grid, state) = match engine {
+        Engine::Old => crate::corpus_replay::replay_old(recording),
+        Engine::New => crate::corpus_replay_new::replay_new(recording),
+    };
     let read = |path: PathBuf| -> Result<String> {
         fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))
     };

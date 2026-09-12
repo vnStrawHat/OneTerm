@@ -374,6 +374,21 @@ impl Terminal {
     }
 }
 
+#[cfg(test)]
+impl Terminal {
+    /// Reach past the public surface, so a test can drive a table to its bound
+    /// without paying a print per entry.
+    pub(crate) fn state_for_tests(&mut self) -> &mut State {
+        &mut self.state
+    }
+}
+
+/// `CARGO_PKG_VERSION` as the DA2 answer encodes it.
+#[cfg(test)]
+pub(crate) fn dispatch_version_for_tests() -> u32 {
+    dispatch::version_number(env!("CARGO_PKG_VERSION"))
+}
+
 impl std::fmt::Debug for Terminal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Terminal")
