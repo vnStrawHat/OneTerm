@@ -450,7 +450,10 @@ are unoccupied and discard them instead of scrolling them into history. See
 [`cell-and-style.md`](cell-and-style.md) for both predicates.
 
 Selection invalidation follows the reference and is specified in
-[`selection.md`](selection.md).
+[`selection.md`](selection.md) § "Invalidation matrix", including the two rules this file's scroll
+primitives produce: a partial region scroll may **split** a selection (parity with the reference's
+`Selection::rotate`, accepted behaviour), and an endpoint scrolled out of a region top **kills** it
+(correction C15).
 
 ### Tab stops
 
@@ -495,6 +498,7 @@ regression: the gate still fails on any difference that is not declared.
 | C12 | Wide pairs are repaired after every in-row mutation, so `EL` / `ECH` / `DCH` / `ICH` and the insert shift never leave an orphaned spacer | 6 | `US-0075` | **none measured**: the US-0075 verification UTF-8-decoded all 45 recordings and found **no width-2 glyph**. Upper bound if that scan missed one — recordings carrying both non-ASCII bytes and an in-row erase — is 22 of 45, the material ones being `vim_large_window_scroll`, `vim_24bitcolors_bce`, `tmux_git_log`, `tmux_htop`, `region_scroll_down`, `zerowidth`, `wrapline_alt_toggle`, `issue_855`, `fish_cc`, `colored_underline`. The reference leaves the orphans; the design's own integrity assertion forbids that state, so the repair is compulsory |
 | C13 | A column **grow** preserves the tail of a wrapped logical line that lies below the cursor. The reference's `grow_columns` drives row placement off `cursor_line_delta`, so widening while the cursor sits above the tail **drops the tail and leaves a dangling `WRAPLINE`** on the bottom row — reachable with any `CUP` or arrow-key move inside a wrapped line before a resize | — | `US-0077` | **to measure in `US-0076`**: any recording that moves the cursor inside a wrapped line and then resizes |
 | C14 | A trailing blank carrying **BOLD / DIM / ITALIC / HIDDEN** is kept by the reflow trim. The reference's `is_empty` ignores those attributes (trap 37), so it trims such a cell; the trim here uses `Cell::is_blank`, which requires the default style. Both remaining differences — tabs, and this one — are in the "keep more" direction | 37 | `US-0077` | **to measure in `US-0076`** |
+| C15 | An endpoint scrolled out of a **scroll-region top** kills the selection, where the reference clamps it to `(range_top, column 0, Left)` and keeps it alive over content the user never selected (`vendor/alacritty_terminal/src/selection.rs:160-166`) | — | `US-0078` | **to measure in `US-0076`**: any recording that selects — none do, so this is expected to be free; declared because it is user-visible |
 
 Kept deliberately, because they are correct behaviour or OneTerm product behaviour rather than
 defects: pending wrap and its interaction with `BS`, `EL 0` and `HT` (traps 1, 2, 3); `ED 2`

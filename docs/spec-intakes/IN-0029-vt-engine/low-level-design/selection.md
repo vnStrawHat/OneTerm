@@ -77,7 +77,7 @@ by kind:
 | Kind | Rule |
 | --- | --- |
 | `Simple` | Drop the last cell when the end side is `Left` (wrapping to the previous row's last column when the end column is 0), and drop the first cell when the start side is `Right` (wrapping forward). Empty when the anchors coincide, or when they are adjacent with `Right` then `Left` |
-| `Block` | Normalise to top-left / bottom-right by swapping **columns and sides only**, never rows; `is_block = true`. Empty by the same column-only rule |
+| `Block` | Normalise to top-left / bottom-right by swapping **columns and sides only**, never rows; `is_block = true`. Empty by the same column-only rule. **Correction:** the range is never inverted or out of bounds. An exhaustive oracle over all 576 (position, side) pairs on a 4-column grid found the reference emitting an inverted rectangle in **24 of 576** cases — every one a same-column, opposite-side pair on different rows, two of them also past the last column (`start.col 4` on a four-column grid). Those drags cover zero columns, so OneTerm returns `None`. The same guard on `range_simple` is provably unreachable (0/576 divergences) and is kept so the property holds by construction |
 | `Semantic` | If start and end coincide, try `bracket_search` first (matching `()[]{}<>` across rows); otherwise expand left and right with `semantic_escape_chars`. **Never empty** |
 | `Lines` | Expand to whole logical lines: walk left and right across `RowFlags::WRAPPED` continuations, then snap to column 0 and the last column. **Never empty** |
 
@@ -112,13 +112,27 @@ One function, shared by copy, the clipboard policy path and `selection_text()`:
 
 Stated once, so `grid-and-scrollback.md` can refer to it instead of restating rules:
 
+Two rules that look like gaps and are not:
+
+- **A partial region scroll can split a selection**, leaving the two endpoints describing text that
+  was never contiguous. That is **parity**: the reference's `Selection::rotate` moves both anchors
+  independently by the same delta and has the same effect. Accepted behaviour, not a gap.
+- **An endpoint scrolled out of a region top kills the selection (correction C15).** The reference
+  clamps that endpoint to `(range_top, column 0, Left)` for non-`Block` kinds
+  (`vendor/alacritty_terminal/src/selection.rs:160-166`, pinned by its own `rotate_in_region_up`
+  test), keeping the selection alive over content the user never selected. **Kill is the confirmed
+  rule here**: the anchored content was genuinely discarded by the scroll, and clamping is exactly
+  what this file's own principle forbids — "cleared rather than pointing at unrelated text". It is
+  a user-visible difference from the reference, so it is declared, not silent.
+
 | Operation | Effect on the selection |
 | --- | --- |
 | `EL 0` / `EL 1` / `EL 2` | cleared when the range intersects the cursor row |
-| `ED 0` / `ED 1` | cleared when the range intersects the cleared rows |
+| `ED 0` | cleared when the range intersects the cleared rows |
+| `ED 1` | cleared when the range intersects `screen_top..=cursor`. **Bounded at the screen top**: `ED 1` never touches scrollback, so a selection lying entirely in history survives it |
 | `ED 2` | cleared |
 | `ED 3` | cleared when the range intersects history |
-| `SU` / `SD` / `IL` / `DL` / `RI` | anchors move with their content; cleared if either anchor lands in a blanked range |
+| `SU` / `SD` / `IL` / `DL` / `RI` | anchors move with their content; cleared if either anchor lands in a blanked range, **including an endpoint scrolled out of a region top** (C15) |
 | Scroll into history | anchors move; cleared when an anchor is trimmed |
 | `swap_alt` | cleared |
 | `RIS` | cleared |
@@ -136,8 +150,25 @@ forced outward, covering history and viewport.
 
 ## Interfaces
 
+**Shape, as shipped.** The module is written against **`TerminalGrid`**, not `Terminal`, because
+`Terminal` does not exist until `US-0079`. The functions below are free functions or methods on the
+selection value taking `&TerminalGrid`; the seven `impl Terminal` wrappers are **one line each and
+owned by `US-0076`**, which is also where the escape set moves from a `&str` parameter (default
+published as `SEMANTIC_ESCAPE_CHARS`) onto `Config::semantic_escape_chars`.
+
+`US-0076` inherits one obligation beyond the seven wrappers: the invalidation matrix is a
+**predicate**, `Selection::invalidated_by(grid, Invalidation::…)`, not a set of call sites inside
+the grid. Its dispatch of `erase_line`, `erase_display`, `reset` and `swap_alt` must evaluate the
+predicate **before** performing the operation, because the matrix is stated against the pre-operation
+grid. A dispatch that forgets it leaves a selection pointing at erased cells.
+
+Two further shape notes: `WRAPPED` is read as the **row** flag (deviation G1), not as a flag on the
+last cell — equivalent, including the reference's `line_length` short-circuit; and `contains_cell`
+takes the block-cursor position as `Option<Pos>` rather than a `CursorShape`, because `CursorShape`
+is `US-0076`'s type. The quirk it guards is unchanged.
+
 ```rust
-// crates/vt/src/selection.rs
+// crates/vt/src/selection/ — against &TerminalGrid; the wrappers below land in US-0076
 impl Terminal {
     pub fn selection_start(&mut self, pos: Pos, side: Side, kind: SelectionKind);
     pub fn selection_update(&mut self, pos: Pos, side: Side);
@@ -177,6 +208,8 @@ painter never asks the engine a second question
 - [ ] `selection::tests::simple_side_rules_drop_the_right_cells`
 - [ ] `selection::tests::simple_is_empty_when_anchors_coincide_or_are_adjacent`
 - [ ] `selection::tests::block_normalises_columns_not_rows`
+- [ ] `selection::tests::block_range_is_never_inverted_or_out_of_bounds` — the 24-of-576 correction,
+  driven by the exhaustive oracle.
 - [ ] `selection::tests::block_text_extracts_a_rectangle`
 - [ ] `selection::tests::semantic_expansion_uses_the_escape_chars`
 - [ ] `selection::tests::semantic_stops_at_an_unwrapped_row_boundary`
@@ -190,6 +223,10 @@ painter never asks the engine a second question
   property `has_selection()` depends on.
 - [ ] `selection::tests::anchors_follow_a_region_scroll` — the improvement over the reference.
 - [ ] `selection::tests::selection_clears_when_an_anchor_is_trimmed`
+- [ ] `selection::tests::endpoint_scrolled_out_of_a_region_top_kills_the_selection` — C15.
+- [ ] `selection::tests::ed1_does_not_clear_a_selection_wholly_in_history` — the screen-top bound.
+- [ ] `selection::tests::a_partial_region_scroll_splits_the_selection` — parity, pinned so it is not
+  later "fixed".
 - [ ] `selection::tests::selection_survives_a_row_only_resize_and_clears_on_a_column_resize` — trap 28.
 - [ ] `selection::tests::viewport_scrolling_does_not_change_the_range`
 - [ ] `selection::tests::invalidation_matrix` — one table-driven test per row of the matrix above.
