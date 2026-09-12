@@ -1,22 +1,24 @@
 //! Session state cache shared between the pump (writer) and the
 //! `TerminalSession` accessors (reader).
 //!
-//! alacritty `Term` does not expose title/cwd/clipboard/OSC 133 state, so the
-//! router caches them here. Hot-path counters (alive, rx/tx bytes, absolute
-//! line count, clear epoch) are atomics so a parse batch never takes the mutex
-//! (PERF-20); the rarely written fields live behind one `Mutex`.
+//! The engine owns the grid, not the session: title, cwd, clipboard and the
+//! OSC 133 counters are the embedder's, so the router caches them here. Hot-path
+//! counters (alive, rx/tx bytes, absolute line count, clear epoch) are atomics
+//! so a parse batch never takes the mutex (PERF-20); the rarely written fields
+//! live behind one `Mutex`.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use alacritty_terminal::vte::ansi::Rgb;
+use oneterm_vt::Rgb;
 
 use crate::osc_agent::AgentSeqWatermarks;
 use crate::session::NetStats;
 
 /// Theme defaults used to answer OSC 10/11/12/4 queries for colours the
-/// program never set. Written by the UI through `set_default_colors`.
+/// program never set. Written by the UI through `set_default_colors`, which
+/// converts from the legacy `Rgb` the view still passes (`US-0085`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DefaultColors {
     /// Default foreground (OSC 10).
@@ -27,6 +29,26 @@ pub struct DefaultColors {
     pub cursor: Option<Rgb>,
     /// Default 16-colour ANSI palette (OSC 4 indices 0-15).
     pub ansi: Option<[Rgb; 16]>,
+}
+
+impl DefaultColors {
+    /// Build from the legacy colours `TerminalRender::set_default_colors` still
+    /// takes. The conversion disappears with that signature at `US-0085`.
+    pub fn from_legacy(
+        foreground: alacritty_terminal::vte::ansi::Rgb,
+        background: alacritty_terminal::vte::ansi::Rgb,
+        cursor: alacritty_terminal::vte::ansi::Rgb,
+        ansi: [alacritty_terminal::vte::ansi::Rgb; 16],
+    ) -> DefaultColors {
+        use crate::engine_shim::engine_rgb;
+
+        DefaultColors {
+            foreground: Some(engine_rgb(foreground)),
+            background: Some(engine_rgb(background)),
+            cursor: Some(engine_rgb(cursor)),
+            ansi: Some(ansi.map(engine_rgb)),
+        }
+    }
 }
 
 /// Mutex-guarded part of the session state (rarely written).
@@ -150,7 +172,7 @@ impl SharedSessionState {
         }
     }
 
-    /// Absolute lines output since spawn (see [`super::LineAccounting`]).
+    /// Absolute lines output since spawn (`Terminal::lines_produced`).
     pub fn absolute_line_count(&self) -> usize {
         self.absolute_line_count.load(Ordering::Relaxed)
     }

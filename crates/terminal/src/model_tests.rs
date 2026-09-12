@@ -5,19 +5,17 @@
 //! (R-44). What is left here is what the *adapter* owns: that the model's
 //! operations reach the engine and come back in the reference's coordinates.
 
-use std::sync::Arc;
-
 use alacritty_terminal::selection::SelectionType;
 
 use super::{ResizePolicy, TerminalModel};
 use crate::backend::GridSize;
-use crate::sync::FairMutex;
+use crate::handle::{DEFAULT_SCROLLBACK_LINES, new_shared_terminal};
 use crate::test_engine::feed;
 
 fn model(size: GridSize, bytes: &[u8], policy: ResizePolicy) -> TerminalModel {
-    let mut engine = crate::test_engine::engine(size);
-    feed(&mut engine, bytes);
-    TerminalModel::new(Arc::new(FairMutex::new(engine)), policy)
+    let term = new_shared_terminal(size, DEFAULT_SCROLLBACK_LINES);
+    feed(&mut term.lock(), bytes);
+    TerminalModel::new(term, policy)
 }
 
 fn row_text(model: &TerminalModel, line: usize) -> String {

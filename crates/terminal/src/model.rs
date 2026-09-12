@@ -8,22 +8,22 @@
 //! `TerminalModel` that both backends delegate to, so the logic lives in one
 //! place.
 //!
-//! Coordinates leaving this module are still the reference's: `cursor_line`,
-//! `SearchMatch::line` and `SelectionRange`'s ends are grid lines where `0` is
-//! the viewport top at `display_offset == 0` and negative values are
-//! scrollback. The engine has no negative rows; the conversion lives in
-//! [`crate::engine_shim`] and `US-0082` deletes it.
+//! Inside the module every position is a `RowId`. Four published values still
+//! carry the reference's signed grid line — `TerminalQueryState::cursor_line`,
+//! `TerminalInfo::{cursor_line,last_content_line}` and `IndexedCell::point` —
+//! because `crates/terminal-view` reads them; each is converted once, at the
+//! point it is published, and `US-0085` deletes the conversion with the fields.
 
 use alacritty_terminal::index::Line;
 use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::TermMode;
-use oneterm_vt::{SelectionKind, Size};
+use oneterm_vt::{SelectionKind, Size, Terminal};
 
 use crate::content::TerminalContent;
-use crate::engine::SharedTerminal;
 use crate::engine_shim::{
     Placements, legacy_cursor_shape, legacy_mode, legacy_rgb, push_grid_row, row_to_line,
 };
+use crate::handle::SharedTerminal;
 use crate::mouse_encode::{
     MouseModifiers, TerminalMouseButton, encode_mouse_move, encode_mouse_press,
     encode_mouse_release, encode_wheel_event,
@@ -38,8 +38,11 @@ use crate::{
 ///
 /// Chosen by the backend that owns the PTY, because it must agree with whatever
 /// sits on the other side of that PTY. Both are native engine policies since
-/// `US-0077`; this enum survives only so the backends' `resize_policy()` — which
-/// `US-0083` / `US-0084` own — keeps compiling.
+/// `US-0077`, and [`TerminalModel::new`] takes anything that converts into one:
+/// this enum survives only because the backends name `ResizePolicy::Default`
+/// through `impl_pty_terminal_session!`, and `US-0083` / `US-0084` replace that
+/// one token each with `oneterm_vt::ResizePolicy::BottomAnchor` /
+/// `::KeepViewportTop`, after which it is deleted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ResizePolicy {
     /// The reference's behaviour: added rows are pulled from scrollback into the
@@ -71,15 +74,19 @@ impl From<ResizePolicy> for oneterm_vt::ResizePolicy {
 /// [`crate::engine::Engine`].
 pub struct TerminalModel {
     term: SharedTerminal,
-    resize_policy: ResizePolicy,
+    resize_policy: oneterm_vt::ResizePolicy,
 }
 
 impl TerminalModel {
     /// Wrap an existing [`SharedTerminal`].
-    pub fn new(term: SharedTerminal, resize_policy: ResizePolicy) -> Self {
+    ///
+    /// Takes anything that converts into the engine's policy, so a backend can
+    /// pass either this crate's [`ResizePolicy`] or `oneterm_vt::ResizePolicy`
+    /// — which is what lets `US-0083` / `US-0084` switch without a change here.
+    pub fn new(term: SharedTerminal, resize_policy: impl Into<oneterm_vt::ResizePolicy>) -> Self {
         Self {
             term,
-            resize_policy,
+            resize_policy: resize_policy.into(),
         }
     }
 
@@ -90,16 +97,20 @@ impl TerminalModel {
 
     // ── Render ──────────────────────────────────────────────────────
 
-    /// Snapshot the grid for rendering (consumes damage).
+    /// Snapshot the grid for rendering.
+    ///
+    /// Allocates a fresh buffer, so it carries a fresh watermark and reports
+    /// `Full`: it cannot steal the renderer's damage, which the shared render
+    /// state it used to go through could.
     pub fn snapshot(&self) -> TerminalContent {
-        let mut term = self.term.lock();
+        let mut term = self.term.lock_for_render();
         TerminalContent::from(&mut term)
     }
 
-    /// Snapshot the grid for rendering into a reusable buffer (consumes damage).
+    /// Refill the caller's frame buffer (advances **its** watermark).
     /// Reuses `out`'s allocations — zero steady-state allocation per frame.
     pub fn snapshot_into(&self, out: &mut TerminalContent) {
-        let mut term = self.term.lock();
+        let mut term = self.term.lock_for_render();
         out.refill(&mut term);
     }
 
@@ -123,9 +134,9 @@ impl TerminalModel {
 
     /// Read cells for a range of display lines (O(window×cols)).
     ///
-    /// Damage-free: it reads the grid directly instead of going through the
-    /// render state, so a URL hover or a completion lookup never consumes the
-    /// renderer's damage.
+    /// Damage-free: it reads the rows by `RowId` straight off the screen instead
+    /// of going through a render state, so a URL hover or a completion lookup
+    /// never consumes the renderer's damage.
     pub fn query_line_range_cells(&self, start_line: usize, count: usize) -> LineRangeCells {
         let term = self.term.lock();
         let screen = term.screen();
@@ -144,8 +155,10 @@ impl TerminalModel {
         let mut cells: Vec<IndexedCell> = Vec::with_capacity(actual_count * num_cols);
         for index in 0..actual_count {
             let display_line = start_line + index;
-            let line = Line(display_line as i32 - offset as i32);
             let row = screen.row(top + display_line as u64);
+            // Published in the reference's signed frame, converted here and
+            // nowhere else in this function.
+            let line = Line(display_line as i32 - offset as i32);
             push_grid_row(row, term.interner(), &placements, line, &mut cells);
         }
         LineRangeCells { cells, num_cols }
@@ -219,7 +232,7 @@ impl TerminalModel {
     /// reference's bottom-anchored resize are gone (P13).
     pub fn resize_grid(&self, rows: u16, cols: u16) {
         let mut term = self.term.lock();
-        term.resize(Size { rows, cols }, self.resize_policy.into());
+        term.resize(Size { rows, cols }, self.resize_policy);
     }
 
     /// Scroll the scrollback by `delta` lines (no-op in alt-screen).
@@ -421,7 +434,7 @@ impl TerminalModel {
 /// `Screen::scroll_viewport` updates the cached offset only; the anchor entry
 /// is refreshed at the end of a `feed`, and a resize arriving before the next
 /// one would otherwise read a stale viewport top.
-fn scroll_viewport(term: &mut oneterm_vt::Terminal, delta: i32) {
+fn scroll_viewport(term: &mut Terminal, delta: i32) {
     term.grid_mut().screen_mut().scroll_viewport(delta);
     term.grid_mut().sync_anchors();
 }

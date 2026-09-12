@@ -1,21 +1,26 @@
 //! Tests for the shared backend pump layer: router event mapping, event-sink
-//! delivery policy, colour-query replies, line accounting, and the pump
+//! delivery policy, colour-query replies, the gutter's line count, and the pump
 //! driven end to end through an in-memory transport (TEST-01 / TEST-02).
 //!
-//! `US-0081` changed how an event reaches the router — the engine returns a
-//! batch of values instead of calling back — so every test that used to build
-//! an `alacritty_terminal::event::Event` now builds the same thing as a
-//! `VtEvent` in an [`EventBatch`]. The **coverage is unchanged**: one test per
-//! event kind, the colour-query deferral, the delivery policy and the ordering
-//! guarantees. `migration.md` § "Tests that change" records the two deletions.
+//! `US-0082` changed **where** an event is delivered, not what it means:
+//! [`OscRouter::drain`] appends to a caller-owned vector under the engine lock
+//! and [`TerminalPump`] sends that vector once the lock is released. The router
+//! tests therefore assert on what the drain returns; the pump tests still assert
+//! on what reaches the channel, because that is the property the UI depends on.
+//!
+//! Deleted with the deferred tier, each named in the packet: the CORR-01
+//! deadlock case and the three deferred-flush/FIFO cases — a drain that cannot
+//! send cannot deadlock, and a vector cannot reorder. What replaces them is
+//! `the_drain_never_waits_on_a_full_queue` (the property CORR-01 protected) and
+//! `pending_events_apply_backpressure_outside_the_lock` (the property the FIFO
+//! provided).
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use alacritty_terminal::vte::ansi::Rgb;
-use oneterm_vt::{ClipboardKind, ColorKey, EventBatch, StringTerm, VtEvent};
+use oneterm_vt::{ClipboardKind, ColorKey, EventBatch, RowId, StringTerm, VtEvent};
 
-use crate::engine::{SharedTerminal, new_shared_terminal};
+use crate::handle::{DEFAULT_SCROLLBACK_LINES, SharedTerminal, new_shared_terminal};
 use crate::security_policy::ClipboardOrigin;
 use crate::session::SessionEvent;
 use crate::test_support::FakePtyTransport;
@@ -61,15 +66,18 @@ fn new_term() -> SharedTerminal {
             cols: 80,
             lines: 24,
         },
-        crate::engine::DEFAULT_SCROLLBACK_LINES,
+        DEFAULT_SCROLLBACK_LINES,
     )
 }
 
-/// Route one batch, built the way `Terminal::feed` would have built it.
-fn route(router: &Router, build: impl FnOnce(&mut EventBatch)) {
+/// Route one batch, built the way `Terminal::feed` would have built it, and
+/// return the UI-facing events the drain collected.
+fn route(router: &Router, build: impl FnOnce(&mut EventBatch)) -> Vec<SessionEvent> {
     let mut batch = EventBatch::new();
     build(&mut batch);
-    router.drain(&batch);
+    let mut out = Vec::new();
+    router.drain(&batch, &mut out);
+    out
 }
 
 fn osc(batch: &mut EventBatch, params: &[&[u8]]) {
@@ -107,38 +115,32 @@ fn recv_within(events: &async_channel::Receiver<SessionEvent>, timeout: Duration
 #[test]
 fn forwards_title_and_drops_the_batch_repaint_hint() {
     let f = local(16);
-    route(&f.router, |batch| {
+    let events = route(&f.router, |batch| {
         batch.push_title(b"hello");
         batch.push_repaint();
     });
-    assert_eq!(drain(&f.events), vec![SessionEvent::Title("hello".into())]);
+    assert_eq!(events, vec![SessionEvent::Title("hello".into())]);
     assert_eq!(f.state.title().as_deref(), Some("hello"));
 }
 
 #[test]
 fn reset_title_clears_cache() {
     let f = local(16);
-    route(&f.router, |batch| {
+    let events = route(&f.router, |batch| {
         batch.push_title(b"x");
         batch.push(VtEvent::TitleReset);
     });
     assert_eq!(f.state.title(), None);
-    assert_eq!(
-        drain(&f.events).last(),
-        Some(&SessionEvent::Title(String::new()))
-    );
+    assert_eq!(events.last(), Some(&SessionEvent::Title(String::new())));
 }
 
 #[test]
 fn local_clipboard_store_caches_and_forwards() {
     let f = local(16);
-    route(&f.router, |batch| {
+    let events = route(&f.router, |batch| {
         batch.push_clipboard_store(ClipboardKind::Clipboard, b"secret");
     });
-    assert_eq!(
-        drain(&f.events),
-        vec![SessionEvent::Clipboard(Some("secret".into()))]
-    );
+    assert_eq!(events, vec![SessionEvent::Clipboard(Some("secret".into()))]);
     assert_eq!(f.state.clipboard().as_deref(), Some("secret"));
 }
 
@@ -147,25 +149,25 @@ fn local_clipboard_store_caches_and_forwards() {
 #[test]
 fn remote_clipboard_is_refused_by_default_policy() {
     let f = fixture(ClipboardOrigin::Remote, 16);
-    route(&f.router, |batch| {
+    let events = route(&f.router, |batch| {
         batch.push_clipboard_store(ClipboardKind::Clipboard, b"secret");
         batch.push(VtEvent::ClipboardLoad {
             selection: ClipboardKind::Clipboard,
         });
     });
-    assert!(drain(&f.events).is_empty());
+    assert!(events.is_empty());
     assert_eq!(f.state.clipboard(), None);
 }
 
 #[test]
 fn local_clipboard_load_forwards_read_request() {
     let f = local(16);
-    route(&f.router, |batch| {
+    let events = route(&f.router, |batch| {
         batch.push(VtEvent::ClipboardLoad {
             selection: ClipboardKind::Clipboard,
         });
     });
-    assert_eq!(drain(&f.events), vec![SessionEvent::ClipboardRead]);
+    assert_eq!(events, vec![SessionEvent::ClipboardRead]);
 }
 
 #[test]
@@ -185,19 +187,56 @@ fn reply_failure_is_logged_not_panicked() {
 
 /// R-37: the DA1 answer must not wait behind the rest of the batch — conhost
 /// blocks for up to a second for it at session start, which is exactly when a
-/// burst of output is arriving.
+/// burst of output is arriving. The reply reaches the transport during the
+/// drain; everything else is still sitting in the vector.
 #[test]
 fn replies_are_written_before_the_rest_of_the_batch_is_routed() {
     let f = local(1);
-    // One slot, already taken: every reliable event in the batch defers.
-    f.events_tx.try_send(SessionEvent::Output).unwrap();
-    route(&f.router, |batch| {
-        batch.push_title(b"slow");
-        batch.push(VtEvent::Bell);
-        batch.push_reply(b"\x1b[?62;4c");
-    });
+    let mut batch = EventBatch::new();
+    batch.push_title(b"slow");
+    batch.push(VtEvent::Bell);
+    batch.push_reply(b"\x1b[?62;4c");
+
+    let mut out = Vec::new();
+    f.router.drain(&batch, &mut out);
+
     assert_eq!(f.transport.writes(), vec![b"\x1b[?62;4c".to_vec()]);
-    assert!(f.router.events().has_deferred_reliable());
+    assert_eq!(
+        out,
+        vec![SessionEvent::Title("slow".into()), SessionEvent::Bell],
+        "the UI-facing events are collected, not sent"
+    );
+}
+
+/// The property the deleted CORR-01 test protected, now structural: the drain
+/// runs with the engine lock held and cannot touch the channel at all, so a
+/// saturated queue with no consumer cannot stall it.
+#[test]
+fn the_drain_never_waits_on_a_full_queue() {
+    let f = local(1);
+    f.events_tx.try_send(SessionEvent::Output).unwrap();
+    let term = new_term();
+    let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
+
+    let router = f.router.clone();
+    let worker = std::thread::spawn(move || {
+        let guard = term.lock();
+        let mut batch = EventBatch::new();
+        batch.push(VtEvent::Bell);
+        for _ in 0..3 {
+            let mut out = Vec::new();
+            router.drain(&batch, &mut out);
+            assert_eq!(out, vec![SessionEvent::Bell]);
+        }
+        drop(guard);
+        done_tx.send(()).unwrap();
+    });
+
+    done_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("the drain must return while the queue is saturated");
+    worker.join().unwrap();
+    assert_eq!(f.events.len(), 1, "nothing was sent and nothing was lost");
 }
 
 #[test]
@@ -211,11 +250,11 @@ fn clear_screen_bumps_clear_epoch() {
 #[test]
 fn osc7_cwd_forwards_and_caches() {
     let f = local(16);
-    route(&f.router, |batch| {
+    let events = route(&f.router, |batch| {
         osc(batch, &[b"7", b"file:///tmp"]);
     });
     assert_eq!(
-        drain(&f.events),
+        events,
         vec![SessionEvent::Cwd(std::path::PathBuf::from("/tmp"))]
     );
     // The shared state is what `TerminalCapabilities::cwd_source` hands out.
@@ -225,11 +264,10 @@ fn osc7_cwd_forwards_and_caches() {
 #[test]
 fn osc133_prompt_forwards_and_counts() {
     let f = local(16);
-    route(&f.router, |batch| {
+    let events = route(&f.router, |batch| {
         osc(batch, &[b"133", b"A"]);
         osc(batch, &[b"133", b"D", b"3"]);
     });
-    let events = drain(&f.events);
     assert_eq!(events.len(), 2);
     assert!(matches!(events[0], SessionEvent::ShellIntegration(_)));
     assert_eq!(f.state.prompt_count(), 1);
@@ -245,12 +283,12 @@ fn osc97_agent_status_forwards() {
          "state":"working","message":"hi"}
     );
     let params = crate::osc_agent::encode_osc97_params(json);
-    route(&f.router, |batch| {
+    let events = route(&f.router, |batch| {
         let refs: Vec<&[u8]> = params.iter().map(Vec::as_slice).collect();
         osc(batch, &refs);
     });
-    match f.events.try_recv().unwrap() {
-        SessionEvent::AgentStatus(ev) => {
+    match events.first() {
+        Some(SessionEvent::AgentStatus(ev)) => {
             assert_eq!(ev.agent(), "pi");
             assert_eq!(ev.seq(), 1);
             assert_eq!(ev.type_name(), "state");
@@ -262,7 +300,7 @@ fn osc97_agent_status_forwards() {
 #[test]
 fn osc97_dedup_drops_stale_seq() {
     let f = local(16);
-    let send = |seq: u64| {
+    let send = |seq: u64| -> Vec<SessionEvent> {
         let json = format!(
             "{{\"v\":1,\"agent\":\"pi\",\"type\":\"state\",
              \"seq\":{seq},\"ts\":1700000000000,
@@ -272,36 +310,59 @@ fn osc97_dedup_drops_stale_seq() {
         route(&f.router, |batch| {
             let refs: Vec<&[u8]> = params.iter().map(Vec::as_slice).collect();
             osc(batch, &refs);
-        });
+        })
     };
-    send(5);
     assert!(matches!(
-        f.events.try_recv().unwrap(),
-        SessionEvent::AgentStatus(_)
+        send(5).first(),
+        Some(SessionEvent::AgentStatus(_))
     ));
-    send(5);
-    send(3);
-    assert!(f.events.try_recv().is_err());
-    send(6);
+    assert!(send(5).is_empty());
+    assert!(send(3).is_empty());
     assert!(matches!(
-        f.events.try_recv().unwrap(),
-        SessionEvent::AgentStatus(_)
+        send(6).first(),
+        Some(SessionEvent::AgentStatus(_))
     ));
 }
 
 /// Row bookkeeping is a `RowId`-keyed consumer's business, and nothing above
-/// the seam speaks `RowId` until `US-0085`: these three must reach the UI as
-/// nothing at all rather than as a stray repaint.
+/// the seam speaks `RowId` until `US-0085`: these must reach the UI as nothing
+/// at all rather than as a stray repaint.
 #[test]
 fn row_events_are_not_forwarded() {
     let f = local(16);
-    route(&f.router, |batch| {
-        batch.push(VtEvent::RowsTrimmed {
-            oldest: oneterm_vt::grid::RowId(3),
-        });
+    let events = route(&f.router, |batch| {
+        batch.push(VtEvent::RowsTrimmed { oldest: RowId(3) });
         batch.push(VtEvent::GraphicReleased(oneterm_vt::intern::GraphicId(1)));
     });
-    assert!(drain(&f.events).is_empty());
+    assert!(events.is_empty());
+}
+
+/// The engine reports a colour query with a typed [`ColorKey`], which is what
+/// replaced the 256 / 257 / 258 indices three files used to agree on. The queue
+/// carries the key through to the pump unchanged.
+#[test]
+fn color_queries_are_queued_with_their_typed_key() {
+    let f = local(16);
+    assert!(!f.router.has_color_queries());
+    route(&f.router, |batch| {
+        batch.push(VtEvent::ColorQuery {
+            key: ColorKey::Background,
+            terminator: StringTerm::Bel,
+        });
+        batch.push(VtEvent::ColorQuery {
+            key: ColorKey::Palette(7),
+            terminator: StringTerm::St,
+        });
+    });
+    assert!(f.router.has_color_queries());
+    let keys: Vec<ColorKey> = f
+        .router
+        .take_color_queries()
+        .into_iter()
+        .map(|query| query.key)
+        .collect();
+    assert_eq!(keys, vec![ColorKey::Background, ColorKey::Palette(7)]);
+    assert!(!f.router.has_color_queries());
 }
 
 // ── Event sink: delivery policy ──────────────────────────────────────────
@@ -311,120 +372,71 @@ fn coalescible_repaint_events_are_counted_when_saturated() {
     let f = local(1);
     f.events_tx.try_send(SessionEvent::Output).unwrap();
 
-    f.router.forward(SessionEvent::Output);
+    f.router.events().post_repaint();
 
     assert_eq!(f.router.events().diagnostics().event_full, 1);
     assert_eq!(f.events.len(), 1);
 
     f.events.close();
-    f.router.forward(SessionEvent::Output);
+    f.router.events().post_repaint();
     assert_eq!(f.router.events().diagnostics().event_closed, 1);
 }
 
-/// TEST-06 / CORR-01: the drain still runs with the engine lock held (the
-/// backends' read loops are `US-0083` / `US-0084`'s), so `forward` must return
-/// even when the queue is saturated and nobody drains it — the UI thread needs
-/// that lock to drain the queue, so blocking here would deadlock the app.
+/// A reliable event into a closed channel is counted, never a panic and never a
+/// silent loss (`docs/agents/error-policy.md`, transport-closure row).
 #[test]
-fn reliable_events_do_not_block_while_the_engine_lock_is_held() {
-    let f = local(1);
-    let term = new_term();
-    f.events_tx.try_send(SessionEvent::Output).unwrap();
-    let (finished_tx, finished_rx) = std::sync::mpsc::sync_channel(1);
-
-    let pump = {
-        let term = term.clone();
-        let router = f.router.clone();
-        std::thread::spawn(move || {
-            let guard = term.lock();
-            // Drain context: lock held, queue full, no consumer.
-            for _ in 0..3 {
-                router.forward(SessionEvent::Bell);
-            }
-            drop(guard);
-            finished_tx.send(()).unwrap();
-        })
-    };
-
-    finished_rx
-        .recv_timeout(Duration::from_secs(2))
-        .expect("forward must return while the queue is saturated");
-    pump.join().unwrap();
-    assert!(f.router.events().has_deferred_reliable());
-    // Nothing was lost: the queue still holds the repaint hint only.
-    assert_eq!(f.events.len(), 1);
-    assert_eq!(f.router.events().diagnostics().event_closed, 0);
+fn a_closed_channel_is_counted_not_panicked() {
+    let f = local(4);
+    f.events.close();
+    f.router.events().send_blocking(SessionEvent::Bell);
+    assert_eq!(f.router.events().diagnostics().event_closed, 1);
 }
 
-/// Deferred reliable events are delivered by the flush after the batch, which
-/// waits for queue capacity (backpressure) outside the engine lock.
+/// What the deferred FIFO used to provide: the batch's events arrive in order
+/// and none is dropped, with the pump waiting for the UI to make room — outside
+/// the engine lock, which is why it may now simply block.
 #[test]
-fn deferred_events_flush_in_order_once_the_queue_drains() {
+fn pending_events_apply_backpressure_outside_the_lock() {
     let f = local(1);
+    let term = new_term();
+    let mut pump = TerminalPump::new(f.router.clone());
+    // One slot, already taken: the flush has to wait for the UI.
     f.events_tx.try_send(SessionEvent::Output).unwrap();
-    f.router.forward(SessionEvent::Bell);
-    f.router.forward(SessionEvent::Title("t".into()));
-    assert!(f.router.events().has_deferred_reliable());
-    assert_eq!(f.events.len(), 1);
+    pump.process_chunk(&term, b"\x1b]2;t\x07\x07");
 
     let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
     let (finished_tx, finished_rx) = std::sync::mpsc::sync_channel(1);
-    let flusher = {
-        let sink = f.router.events().clone();
-        std::thread::spawn(move || {
-            started_tx.send(()).unwrap();
-            sink.flush_reliable_blocking();
-            finished_tx.send(()).unwrap();
-        })
-    };
+    let flusher = std::thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        pump.finish_batch_blocking(true);
+        finished_tx.send(()).unwrap();
+    });
 
     started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    assert!(finished_rx.recv_timeout(Duration::from_millis(20)).is_err());
+    assert!(
+        finished_rx.recv_timeout(Duration::from_millis(20)).is_err(),
+        "the flush must wait for room"
+    );
+    // Draining the one slot lets the parked sender through, in order.
     assert_eq!(f.events.try_recv().unwrap(), SessionEvent::Output);
+    assert_eq!(
+        recv_within(&f.events, Duration::from_secs(1)),
+        SessionEvent::Title("t".into())
+    );
     assert_eq!(
         recv_within(&f.events, Duration::from_secs(1)),
         SessionEvent::Bell
     );
-    assert_eq!(
-        recv_within(&f.events, Duration::from_secs(1)),
-        SessionEvent::Title("t".into())
-    );
     finished_rx.recv_timeout(Duration::from_secs(1)).unwrap();
     flusher.join().unwrap();
-    assert!(!f.router.events().has_deferred_reliable());
-}
-
-/// Once an event is deferred, later reliable events queue behind it even if the
-/// channel has room again — FIFO order must survive the deferral.
-#[test]
-fn deferred_events_keep_fifo_order() {
-    let f = local(2);
-    f.events_tx.try_send(SessionEvent::Output).unwrap();
-    f.events_tx.try_send(SessionEvent::Output).unwrap();
-    f.router.forward(SessionEvent::Bell);
-    assert_eq!(f.events.try_recv().unwrap(), SessionEvent::Output);
-    assert_eq!(f.events.try_recv().unwrap(), SessionEvent::Output);
-    // Room again, but Bell is still pending: Title must not jump ahead.
-    f.router.forward(SessionEvent::Title("t".into()));
-    assert_eq!(f.events.len(), 0);
-    f.router.events().flush_reliable_blocking();
-    assert_eq!(f.events.try_recv().unwrap(), SessionEvent::Bell);
-    assert_eq!(
-        f.events.try_recv().unwrap(),
-        SessionEvent::Title("t".into())
+    // The repaint hint that followed them is coalescible: with one slot and a
+    // reliable event just delivered into it, dropping it is the policy, and the
+    // next batch's hint carries the same information.
+    let dropped = f.router.events().diagnostics().event_full;
+    assert!(
+        dropped <= 1,
+        "only the coalescible hint may be dropped, {dropped} were"
     );
-}
-
-#[test]
-fn async_flush_delivers_deferred_events() {
-    let f = local(1);
-    f.events_tx.try_send(SessionEvent::Output).unwrap();
-    f.router.forward(SessionEvent::Bell);
-    assert!(f.router.events().has_deferred_reliable());
-    assert_eq!(f.events.try_recv().unwrap(), SessionEvent::Output);
-    futures_lite_block_on(f.router.events().flush_reliable());
-    assert_eq!(f.events.try_recv().unwrap(), SessionEvent::Bell);
-    assert!(!f.router.events().has_deferred_reliable());
 }
 
 /// Minimal executor for the async sink/pump variants: the futures only await
@@ -444,23 +456,49 @@ fn futures_lite_block_on<F: std::future::Future>(future: F) -> F::Output {
     }
 }
 
-// ── Line accounting ──────────────────────────────────────────────────────
+// ── The gutter's line count ──────────────────────────────────────────────
 
+/// `LineAccounting`'s three-branch heuristic over `total_lines` is replaced by
+/// the engine's exact count (R-05) under the floor the gutter's arithmetic
+/// needs.
 #[test]
-fn line_accounting_tracks_growth_saturation_and_reset() {
-    let mut lines = LineAccounting::new();
-    // Fresh grid: total == screen.
-    lines.observe(24, 24, b"");
-    assert_eq!(lines.absolute(), 24);
-    // Scrollback growing.
-    lines.observe(30, 24, b"a\nb\nc\nd\ne\nf\n");
-    assert_eq!(lines.absolute(), 30);
-    // Scrollback full: total unchanged, count newlines.
-    lines.observe(30, 24, b"x\ny\n");
-    assert_eq!(lines.absolute(), 32);
-    // Clear: total shrank, restart from it.
-    lines.observe(24, 24, b"");
-    assert_eq!(lines.absolute(), 24);
+fn the_gutter_line_count_is_the_engines_output_line_count() {
+    let f = local(64);
+    let term = new_shared_terminal(GridSize { cols: 8, lines: 4 }, 16);
+    let mut pump = TerminalPump::new(f.router.clone());
+
+    // The floor: never below the rows the grid holds, or the gutter would label
+    // its top rows from below zero.
+    pump.process_chunk(&term, b"one");
+    pump.finish_batch_blocking(false);
+    assert_eq!(pump.absolute_line_count(), 4);
+    assert_eq!(f.state.absolute_line_count(), 4);
+
+    // Past the scrollback cap the count keeps growing where `total_lines`, which
+    // is what the heuristic watched, cannot.
+    for _ in 0..40 {
+        pump.process_chunk(&term, b"x\r\n");
+    }
+    pump.finish_batch_blocking(false);
+    assert_eq!(pump.absolute_line_count(), 40);
+    let total = {
+        let guard = term.lock();
+        let screen = guard.screen();
+        screen.history_len() as usize + usize::from(screen.rows())
+    };
+    assert!(total < 40, "the scrollback capped total_lines at {total}");
+
+    // An implicit wrap is not an output line.
+    pump.process_chunk(&term, b"0123456789abcdef");
+    pump.finish_batch_blocking(false);
+    assert_eq!(pump.absolute_line_count(), 40, "a wrap is not a line");
+
+    // A clear does not reset it — `TerminalInfo::absolute_line_count` says
+    // "monotonically increasing", which the heuristic broke on every `cls`.
+    pump.process_chunk(&term, b"\x1b[2J\x1b[3J");
+    pump.finish_batch_blocking(false);
+    assert_eq!(pump.absolute_line_count(), 40);
+    assert!(f.state.clear_epoch() > 0);
 }
 
 // ── Pump: end to end through the in-memory transport ─────────────────────
@@ -484,7 +522,7 @@ fn pump_batch_orders_reliable_events_before_repaint() {
         "exactly one repaint hint per batch, after the reliable events"
     );
     assert_eq!(f.state.title().as_deref(), Some("hello"));
-    assert!(pump.absolute_line_count() >= 24);
+    assert!(pump.absolute_line_count() >= 24, "floored at the viewport");
     assert_eq!(f.state.absolute_line_count(), pump.absolute_line_count());
 }
 
@@ -522,13 +560,41 @@ fn each_chunk_posts_exactly_one_output_after_its_reliable_events() {
     );
 }
 
+/// Several `advance` calls can share one batch boundary — the local read loop
+/// feeds until the pipe is empty before it unlocks — so their events must all
+/// survive to the one `finish_batch`, in order.
+#[test]
+fn events_from_several_advances_survive_to_one_finish_batch() {
+    let f = local(64);
+    let term = new_term();
+    let mut pump = TerminalPump::new(f.router.clone());
+
+    {
+        let mut guard = term.lock();
+        pump.advance(&mut guard, b"\x1b]2;first\x07");
+        pump.advance(&mut guard, b"\x07");
+        pump.advance(&mut guard, b"\x1b]2;second\x07");
+    }
+    pump.finish_batch_blocking(true);
+
+    assert_eq!(
+        drain(&f.events),
+        vec![
+            SessionEvent::Title("first".into()),
+            SessionEvent::Bell,
+            SessionEvent::Title("second".into()),
+            SessionEvent::Output,
+        ]
+    );
+}
+
 #[test]
 fn pump_answers_color_queries_with_live_then_default_colors() {
     let f = local(16);
     let term = new_term();
     let mut pump = TerminalPump::new(f.router.clone());
     f.state.set_default_colors(DefaultColors {
-        foreground: Some(Rgb {
+        foreground: Some(oneterm_vt::Rgb {
             r: 0x11,
             g: 0x22,
             b: 0x33,
@@ -584,32 +650,17 @@ fn pump_split_color_reply_steps_match_process_chunk() {
     assert!(writes[0].starts_with(b"\x1b]11;rgb:0000/1111/2222"));
 }
 
-/// The typed `ColorKey` the engine reports is the index space `osc_color.rs`
-/// still publishes, so a query round-trips without the 256/257/258 constants
-/// drifting apart (`US-0082` deletes them).
 #[test]
-fn color_key_indices_match_the_adapter_constants() {
-    assert_eq!(
-        ColorKey::Foreground.index(),
-        crate::osc_color::FOREGROUND_INDEX
-    );
-    assert_eq!(
-        ColorKey::Background.index(),
-        crate::osc_color::BACKGROUND_INDEX
-    );
-    assert_eq!(ColorKey::Cursor.index(), crate::osc_color::CURSOR_INDEX);
-    assert_eq!(ColorKey::Palette(7).index(), 7);
-}
-
-#[test]
-fn pump_publish_exit_and_closed_flush_deferred_first() {
+fn pump_publish_exit_and_closed_flush_pending_first() {
     let f = local(1);
     let term = new_term();
-    let mut pump = TerminalPump::new(f.router.clone());
-    // Saturate the queue so the Bell from the batch is deferred.
-    f.events_tx.try_send(SessionEvent::Output).unwrap();
-    pump.process_chunk(&term, b"\x07");
-    assert!(f.router.events().has_deferred_reliable());
+    let pump = {
+        let mut pump = TerminalPump::new(f.router.clone());
+        // Saturate the queue so the Bell from the batch has to wait.
+        f.events_tx.try_send(SessionEvent::Output).unwrap();
+        pump.process_chunk(&term, b"\x07");
+        pump
+    };
 
     let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
     let publisher = std::thread::spawn(move || {
@@ -679,13 +730,12 @@ fn shared_state_counters_are_lock_free_and_visible() {
 }
 
 /// `Arc` is still what the pump and the session share, so a clone of the router
-/// sees the same state — the property the deferred queue and the counters rely
-/// on.
+/// sees the same state — the property the colour queue and the counters rely on.
 #[test]
 fn router_clones_share_their_state() {
     let f = local(16);
     let clone = f.router.clone();
-    clone.forward(SessionEvent::Bell);
-    assert_eq!(drain(&f.events), vec![SessionEvent::Bell]);
+    clone.events().post_repaint();
+    assert_eq!(drain(&f.events), vec![SessionEvent::Output]);
     assert!(Arc::ptr_eq(f.router.state(), clone.state()));
 }

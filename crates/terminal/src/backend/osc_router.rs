@@ -6,19 +6,21 @@
 //! policy is applied here for both backends, so local and SSH cannot drift
 //! (SEC-08).
 //!
-//! Since `US-0081` the engine returns events as values instead of calling back,
-//! so this is a plain function over a drained [`EventBatch`]
-//! (`events-and-api.md` § "`feed` and drain") rather than an `EventListener`
-//! installed inside the terminal. Two consequences, both deliberate:
+//! The engine returns events as values instead of calling back, so this is a
+//! plain function over a drained [`EventBatch`] (`events-and-api.md` § "`feed`
+//! and drain") rather than an `EventListener` installed inside the terminal.
 //!
-//! * **Replies leave first** (R-37). `VtEvent::Reply` carries the DA1 / DSR /
-//!   DECRQM answers, and conhost blocks for up to a second at session start
-//!   waiting for DA1 — which is exactly when a burst of output is arriving.
-//! * The [`SessionEventSink`] deferred tier is **kept**. The backends' read
-//!   loops still call `finish_batch*` after the lock is released, and
-//!   `US-0083` / `US-0084` are where the drain moves out from under the lock;
-//!   deleting the tier here would change delivery ordering in the packet whose
-//!   acceptance is "zero behaviour diff".
+//! `US-0082` splits the drain by **what may block**, not by what an event means:
+//!
+//! * [`OscRouter::drain`] runs where the caller already holds the engine lock
+//!   and does only the things that must happen there and cannot wait — write
+//!   every `VtEvent::Reply` to the transport **first** (R-37: conhost blocks for
+//!   up to a second at session start waiting for DA1, which is exactly when a
+//!   burst is arriving), queue colour queries so the pump can answer them off
+//!   the live engine colours, and update the `SharedState` caches.
+//! * Everything the UI sees is **appended to the caller's vector** and sent by
+//!   [`super::TerminalPump::finish_batch_blocking`] once the guard is dropped.
+//!   That is what let the deferred tier and its deadlock rule go.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -110,15 +112,10 @@ impl<T: PtyTransport> OscRouter<T> {
         !self.lock_color_queries().is_empty()
     }
 
-    /// Forward a session event (see [`SessionEventSink::forward`]).
-    pub fn forward(&self, ev: SessionEvent) {
-        self.events.forward(ev);
-    }
-
     /// Enqueue an OSC colour query; the pump answers it after the batch.
-    pub fn queue_color_query(&self, index: usize, format: ColorFormatter) {
+    pub fn queue_color_query(&self, key: ColorKey, format: ColorFormatter) {
         self.lock_color_queries()
-            .push(PendingColorQuery { index, format });
+            .push(PendingColorQuery { key, format });
     }
 
     /// Drain the pending colour queries.
@@ -132,8 +129,12 @@ impl<T: PtyTransport> OscRouter<T> {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Route one parse batch: replies first, then everything in byte order.
-    pub fn drain(&self, batch: &EventBatch) {
+    /// Route one parse batch: replies first, then everything in byte order,
+    /// appending the UI-facing events to `out`.
+    ///
+    /// Called with the engine lock held, so nothing here waits on the UI. `out`
+    /// is the pump's pending vector, flushed after the guard is dropped.
+    pub fn drain(&self, batch: &EventBatch, out: &mut Vec<SessionEvent>) {
         for event in batch.iter() {
             if let VtEvent::Reply(span) = event {
                 self.reply(batch.bytes(*span));
@@ -141,13 +142,13 @@ impl<T: PtyTransport> OscRouter<T> {
         }
         for event in batch.iter() {
             if !matches!(event, VtEvent::Reply(_)) {
-                self.handle(batch, event);
+                self.handle(batch, event, out);
             }
         }
     }
 
     /// Route one event. `batch` owns every payload the event points at.
-    pub fn handle(&self, batch: &EventBatch, event: &VtEvent) {
+    fn handle(&self, batch: &EventBatch, event: &VtEvent, out: &mut Vec<SessionEvent>) {
         match event {
             // ── Render signal ──────────────────────────────────────────
             //
@@ -159,15 +160,15 @@ impl<T: PtyTransport> OscRouter<T> {
             // it here too would double the hints and put the first one first.
             VtEvent::Repaint => {}
             // ── Title (OSC 0/2) ─────────────────────────────────────────
-            VtEvent::Title(span) => self.set_title(batch.str(*span)),
-            VtEvent::TitleReset => self.set_title(""),
+            VtEvent::Title(span) => self.set_title(batch.str(*span), out),
+            VtEvent::TitleReset => self.set_title("", out),
             // ── Clipboard (OSC 52) ─────────────────────────────────────
             VtEvent::ClipboardStore { text, .. } => {
-                self.store_clipboard(batch.str(*text).to_owned())
+                self.store_clipboard(batch.str(*text).to_owned(), out)
             }
             VtEvent::ClipboardLoad { .. } => {
                 if self.security.allow_clipboard_read(self.clipboard_origin) {
-                    self.forward(SessionEvent::ClipboardRead);
+                    out.push(SessionEvent::ClipboardRead);
                 } else {
                     log::debug!("OscRouter: OSC 52 clipboard read refused by policy");
                 }
@@ -175,12 +176,12 @@ impl<T: PtyTransport> OscRouter<T> {
             // ── Terminal reply (DA / DSR / DECRQM / XTVERSION) ──────────
             VtEvent::Reply(span) => self.reply(batch.bytes(*span)),
             // ── Bell ──────────────────────────────────────────────────
-            VtEvent::Bell => self.forward(SessionEvent::Bell),
+            VtEvent::Bell => out.push(SessionEvent::Bell),
             // ── OSC 7/9/133 (the engine's OSC registration table) ───────
             VtEvent::Osc { params, .. } => {
                 let params: Vec<&[u8]> = batch.params(*params).collect();
                 match parse_osc(&params) {
-                    Some(payload) => self.handle_osc_payload(payload),
+                    Some(payload) => self.handle_osc_payload(payload, out),
                     None => log::debug!(
                         "OscRouter: unparsed VtEvent::Osc with {} params",
                         params.len()
@@ -192,12 +193,12 @@ impl<T: PtyTransport> OscRouter<T> {
             // ── OSC 4/10/11/12 colour query (`?`): answered by the pump
             //    after the batch, when the engine colours can be read ────
             VtEvent::ColorQuery { key, terminator } => {
-                self.queue_color_query(key.index(), color_formatter(*key, *terminator));
+                self.queue_color_query(*key, color_formatter(*key, *terminator));
             }
             // ── Row bookkeeping: a `RowId`-keyed consumer's business, and
             //    nothing above the seam speaks `RowId` until `US-0085` ───
             VtEvent::RowsScrolled(_) | VtEvent::RowsTrimmed { .. } => {}
-            // ── Graphics: `US-0080` owns the producer ───────────────────
+            // ── Graphics: the view's store still evicts by LRU ──────────
             VtEvent::GraphicReleased(_) => {}
         }
     }
@@ -208,13 +209,13 @@ impl<T: PtyTransport> OscRouter<T> {
         }
     }
 
-    fn set_title(&self, title: &str) {
+    fn set_title(&self, title: &str, out: &mut Vec<SessionEvent>) {
         let sanitized = self.security.sanitize_title(title);
         self.state.lock().title = sanitized.clone();
-        self.forward(SessionEvent::Title(sanitized.unwrap_or_default()));
+        out.push(SessionEvent::Title(sanitized.unwrap_or_default()));
     }
 
-    fn store_clipboard(&self, text: String) {
+    fn store_clipboard(&self, text: String, out: &mut Vec<SessionEvent>) {
         let Some(validated) = self
             .security
             .validate_clipboard_write(&text, self.clipboard_origin)
@@ -224,19 +225,19 @@ impl<T: PtyTransport> OscRouter<T> {
         };
         let validated = validated.to_string();
         self.state.lock().clipboard = Some(validated.clone());
-        self.forward(SessionEvent::Clipboard(Some(validated)));
+        out.push(SessionEvent::Clipboard(Some(validated)));
     }
 
     /// Handle an OSC forwarded by the engine (OSC 7/9/133) — update the state
-    /// cache and forward the matching `SessionEvent`.
-    fn handle_osc_payload(&self, payload: OscPayload) {
+    /// cache and queue the matching `SessionEvent`.
+    fn handle_osc_payload(&self, payload: OscPayload, out: &mut Vec<SessionEvent>) {
         match payload {
             OscPayload::Cwd(url) => {
                 let cwd = parse_cwd_url(&url);
                 if let Some(sanitized) = self.security.sanitize_cwd(&cwd.to_string_lossy()) {
                     let path = std::path::PathBuf::from(&sanitized);
                     self.state.lock().cwd = Some(path.clone());
-                    self.forward(SessionEvent::Cwd(path));
+                    out.push(SessionEvent::Cwd(path));
                 }
             }
             OscPayload::ShellIntegration(kind) => {
@@ -252,7 +253,7 @@ impl<T: PtyTransport> OscRouter<T> {
                         _ => {}
                     }
                 }
-                self.forward(SessionEvent::ShellIntegration(kind));
+                out.push(SessionEvent::ShellIntegration(kind));
             }
             OscPayload::Notification(msg) => {
                 let Some(sanitized) = self.security.sanitize_notification(&msg) else {
@@ -264,12 +265,12 @@ impl<T: PtyTransport> OscRouter<T> {
                     .unwrap_or_else(PoisonError::into_inner)
                     .allow();
                 if allowed {
-                    self.forward(SessionEvent::Notification(sanitized));
+                    out.push(SessionEvent::Notification(sanitized));
                 } else {
                     log::debug!("OscRouter: notification rate limit exceeded");
                 }
             }
-            OscPayload::Progress(progress) => self.forward(SessionEvent::Progress(progress)),
+            OscPayload::Progress(progress) => out.push(SessionEvent::Progress(progress)),
             OscPayload::AgentStatus(ev) => {
                 // OSC 9;7 seq dedup (spec §4.1 / §8.3): drop events whose `seq`
                 // is <= the last applied `seq` for the same agent id. `ev` is
@@ -283,7 +284,7 @@ impl<T: PtyTransport> OscRouter<T> {
                         ev.type_name(),
                         ev.seq()
                     );
-                    self.forward(SessionEvent::AgentStatus(Arc::new(ev)));
+                    out.push(SessionEvent::AgentStatus(Arc::new(ev)));
                 } else {
                     log::debug!(
                         "OSC 9;7 dropped by dedup: agent={} type={} seq={}",

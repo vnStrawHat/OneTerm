@@ -104,37 +104,40 @@ pub fn resolve_color(c: &Color, palette: &TerminalPalette) -> Rgb {
 fn resolve_named(nc: NamedColor, palette: &TerminalPalette) -> Rgb {
     match nc {
         // 16 ANSI colors — honor OSC 4 overrides.
-        NamedColor::Black
-        | NamedColor::Red
-        | NamedColor::Green
-        | NamedColor::Yellow
-        | NamedColor::Blue
-        | NamedColor::Magenta
-        | NamedColor::Cyan
-        | NamedColor::White
-        | NamedColor::BrightBlack
-        | NamedColor::BrightRed
-        | NamedColor::BrightGreen
-        | NamedColor::BrightYellow
-        | NamedColor::BrightBlue
-        | NamedColor::BrightMagenta
-        | NamedColor::BrightCyan
-        | NamedColor::BrightWhite => palette.ansi_color(nc as usize),
+        NamedColor::Black => palette.ansi_color(0),
+        NamedColor::Red => palette.ansi_color(1),
+        NamedColor::Green => palette.ansi_color(2),
+        NamedColor::Yellow => palette.ansi_color(3),
+        NamedColor::Blue => palette.ansi_color(4),
+        NamedColor::Magenta => palette.ansi_color(5),
+        NamedColor::Cyan => palette.ansi_color(6),
+        NamedColor::White => palette.ansi_color(7),
+        NamedColor::BrightBlack => palette.ansi_color(8),
+        NamedColor::BrightRed => palette.ansi_color(9),
+        NamedColor::BrightGreen => palette.ansi_color(10),
+        NamedColor::BrightYellow => palette.ansi_color(11),
+        NamedColor::BrightBlue => palette.ansi_color(12),
+        NamedColor::BrightMagenta => palette.ansi_color(13),
+        NamedColor::BrightCyan => palette.ansi_color(14),
+        NamedColor::BrightWhite => palette.ansi_color(15),
         NamedColor::Foreground => palette.foreground,
         NamedColor::Background => palette.background,
         NamedColor::Cursor => palette.cursor,
         // Dim variants → dim of the corresponding normal color (using the
         // OSC 4 override if present).
-        NamedColor::DimBlack
-        | NamedColor::DimRed
-        | NamedColor::DimGreen
-        | NamedColor::DimYellow
-        | NamedColor::DimBlue
-        | NamedColor::DimMagenta
-        | NamedColor::DimCyan
-        | NamedColor::DimWhite => {
-            palette.dim(palette.ansi_color(nc as usize - NamedColor::DimBlack as usize))
-        }
+        //
+        // Matched member by member rather than by subtracting discriminants
+        // (`US-0082`): the engine's `NamedColor` orders its variants differently
+        // and an arithmetic mapping is a silent mistranslation waiting for the
+        // seam to flip.
+        NamedColor::DimBlack => palette.dim(palette.ansi_color(0)),
+        NamedColor::DimRed => palette.dim(palette.ansi_color(1)),
+        NamedColor::DimGreen => palette.dim(palette.ansi_color(2)),
+        NamedColor::DimYellow => palette.dim(palette.ansi_color(3)),
+        NamedColor::DimBlue => palette.dim(palette.ansi_color(4)),
+        NamedColor::DimMagenta => palette.dim(palette.ansi_color(5)),
+        NamedColor::DimCyan => palette.dim(palette.ansi_color(6)),
+        NamedColor::DimWhite => palette.dim(palette.ansi_color(7)),
         // No separate bright foreground in the palette.
         NamedColor::BrightForeground => palette.foreground,
         NamedColor::DimForeground => palette.dim(palette.foreground),

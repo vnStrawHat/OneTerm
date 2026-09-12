@@ -517,12 +517,13 @@ macro_rules! impl_pty_terminal_session {
                 cursor: ::alacritty_terminal::vte::ansi::Rgb,
                 ansi: [::alacritty_terminal::vte::ansi::Rgb; 16],
             ) {
-                self.state.set_default_colors($crate::DefaultColors {
-                    foreground: Some(foreground),
-                    background: Some(background),
-                    cursor: Some(cursor),
-                    ansi: Some(ansi),
-                });
+                // The seam still takes the legacy colour because
+                // `crates/terminal-view/src/theme/palette.rs` still passes it
+                // (`US-0085`); the cache behind it is the engine's `Rgb`.
+                self.state
+                    .set_default_colors($crate::DefaultColors::from_legacy(
+                        foreground, background, cursor, ansi,
+                    ));
             }
 
             fn terminal_info(&self) -> $crate::TerminalInfo {
