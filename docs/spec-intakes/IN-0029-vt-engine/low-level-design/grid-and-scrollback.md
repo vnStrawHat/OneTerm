@@ -286,7 +286,7 @@ visibly on any wrapped output — a user-visible change that no deviation table 
 | `region == 0..rows` (whole viewport) | `newest += n`; `n` fresh rows at the bottom; rows leave the top **into scrollback**; trim if over the limit. The only path that fills history (trap 17) | new ids at the bottom, existing ids keep their content | sticky rule above | `trim` only |
 | `region.top == 0`, `region.bottom < rows` | content inside the region moves up into scrollback as above, then the rows **below** `region.bottom` are put back at their original positions. The reference does this by rotating the storage and swapping the fixed bottom rows back (`grid/mod.rs:252-307`) | rows below the region keep their ids **and** their content; rows inside the region are rewritten | as above | `shift_region(region, -n, kill = top n rows of the region)` |
 | `region.top != 0`, `region.height() > n` | content moves up **inside** the region only; the bottom `n` rows of the region are reset. Nothing enters history | ids fixed, content copied | unchanged | `shift_region(region, -n, kill = top n)` |
-| `region.top != 0`, `region.height() <= n` | the region is blanked with no rotation at all — reference behaviour, deliberately reproduced | ids fixed | unchanged | every anchor in the region dies |
+| `region.top != 0`, `region.height() <= n` | **Spec-correct (C3)**: the region rotates by its own height and is then blank, reached by the same path as every other count. The reference short-circuits and blanks with no rotation at all | ids fixed | unchanged | every anchor in the region dies |
 
 `scroll_down(region, n)` (`SD`, `CSI T`, and `RI` at the region top) never pulls rows back out of
 scrollback; it always blanks the top `n` rows of the region (trap 18), and calls
@@ -318,16 +318,19 @@ The cursor copy carries the **row index within the viewport** and the column, ne
 from the other screen (R-04). Leaving takes none of the `if` branch, so the primary screen
 returns with exactly the cursor and saved cursor it had on entry.
 
-**Deviation G4 (deferred to `US-0086`, R-53):** `CSI ? 47 h/l`, `? 1047` and `? 1048` are
-implemented, where the reference recognises only `1049` and silently drops the others (trap 13).
-Because `wrapline_alt_toggle`, `alt_reset` and `saved_cursor_alt` are exactly the recordings that
-exercise alt-screen toggling, this must not land in the packet whose exit criterion is the parity
-gate. `US-0072` greps the recordings for `?47`, `?1047` and `?1048` and records the result in the
-deviation table's "Recording risk" column before the deviation is implemented.
+**Correction C8:** `CSI ? 47 h/l`, `? 1047` and `? 1048` are implemented, where the reference
+recognises only `1049` and silently drops the others (trap 13). `US-0072` greps the recordings for
+them and records any affected cells as declared expected differences, so the behaviour is correct
+from the start and the gate stays meaningful.
 
 ### Erase, insert, delete
 
-Reference semantics, reproduced. Parity-first is the rule for every row here.
+**Correctness first (owner ruling, 2026-09-12).** The engine is a new build, not a copy: where the
+reference's behaviour is a defect, this engine does the spec-correct thing from the start, and the
+difference is declared as a `C`-row in the deviation table with the recordings it affects. The
+parity harness carries per-recording, cell-level expected differences keyed by deviation id
+([`testing-and-bench.md`](testing-and-bench.md) § 2), so a corrected quirk never hides a
+regression: the gate still fails on any difference that is not declared.
 
 | Op | Behaviour |
 | --- | --- |
@@ -335,10 +338,10 @@ Reference semantics, reproduced. Parity-first is the rule for every row here.
 | `EL 1` (left) | `0..=col` |
 | `EL 2` | `0..cols` |
 | `ECH` (`CSI X`) | `col..min(col + n, cols)`, filled with the template background |
-| `DCH` (`CSI P`) | `n = min(count, cols)`; `end = min(col + n, cols - 1)`; swap `row[col+o]` with `row[end+o]` for `o in 0..(cols - end)`; clear the last `n`. The `cols - 1` clamp is reproduced literally (trap 19) |
+| `DCH` (`CSI P`) | **Spec-correct (C1)**: shift `row[col + n..]` left to `col` and fill the last `min(n, cols - col)` cells with the template background. The reference clamps `end` to `cols - 1`, which for a large `n` is not a plain shift (trap 19) |
 | `ICH` (`CSI @`) | `n = min(count, cols - col)`; swap from the end; fill `col..col+n` with the template background |
 | `ED 0` (below) | clear `col..` on the cursor row, then reset every row below |
-| `ED 1` (above) | **`if cursor_row_index > 1`** reset rows above; then clear `0..=col` on the cursor row (trap 11) |
+| `ED 1` (above) | **Spec-correct (C2)**: reset every row above the cursor, then clear `0..=col` on the cursor row. The reference guards with `cursor_row_index > 1`, so row 0 survives when the cursor is on row 1 (trap 11) |
 | `ED 2` (all) | alternate screen: reset every viewport row. Primary: scroll the occupied part of the viewport into scrollback (`clear_viewport`), keeping the content, moving the bottom down by `positions` and leaving the scroll offset unchanged so a scrolled-back user keeps seeing the same content (trap 9). The cursor does not move |
 | `ED 3` (saved) | when history is non-empty, drop it and set `offset = 0` (trap 10). `VtEvent::ScreenCleared` is emitted **before** the "is there history" check (trap 12) |
 
@@ -363,20 +366,42 @@ Selection invalidation follows the reference and is specified in
   [`cell-and-style.md`](cell-and-style.md) (R-12).
 - On resize, stops in the retained prefix keep their cleared state and the regrown region gets
   default stops at absolute multiples of eight (trap 27). Reproduced.
-- **Deviation G5 (deferred to `US-0086`):** `CSI ? 5 W` (reset every stop to the default
-  eight-column grid) is implemented; the reference parses it and does nothing.
+- **Correction C10:** `CSI ? 5 W` (reset every stop to the default eight-column grid) is
+  implemented; the reference parses it and does nothing.
 
 ### Deliberate deviations
 
 | # | Deviation | Packet | Recording risk |
 | --- | --- | --- | --- |
-| G1 | `WRAPPED` is a row flag, not a flag on the last cell | `US-0075` | none — a representation change; the corpus compares rendered content and the wrap flag per row |
+| G1 | `WRAPPED` is a row flag, not a flag on the last cell | `US-0075` | none — a representation change |
 | G2 | `RowId` replaces signed `Line`; no negative indices | `US-0075` | none |
-| G3 | With `DECAWM` off the pending-wrap flag is not set (observable through `EL 0` and `HT`, R-09) | `US-0086` | **to be measured in `US-0072`**: grep the recordings for `?7l` |
-| G4 | `? 47` / `? 1047` / `? 1048` implemented (trap 13) | `US-0086` | **to be measured in `US-0072`**: grep for `?47`, `?1047`, `?1048` |
-| G5 | `CSI ? 5 W` implemented (trap 27) | `US-0086` | **to be measured in `US-0072`** |
+| G3 | With `DECAWM` off the pending-wrap flag is not set, so `EL 0` erases and `HT` moves (R-09) | `US-0075` | **measure in `US-0072`**: grep for `?7l`; any difference is declared as an expected diff |
 | G6 | The ring index is the row id; no `zero` rotation and no free list | `US-0075` | none — removes trap 45 |
 | G7 | One row representation; dual-form rows deferred (R-51) | `US-0075` | none |
+
+**Corrections — spec-correct from the start, with declared expected differences.** Each row below
+is a defect in the engine being replaced, fixed rather than reproduced (owner ruling, 2026-09-12).
+`US-0072`'s scripted grep names the affected recordings and writes the exact cells into that
+recording's `expected-diffs.toml`, so a corrected quirk can never hide a regression: the gate still
+fails on any difference that is not declared.
+
+| C | Correction | Trap | Packet | Affected recordings (confirmed in `US-0072`) |
+| --- | --- | --- | --- | --- |
+| C1 | `DCH` is a plain shift left by `n` | 19 | `US-0075` | `delete_chars_reset`, only where a count reaches `cols - col`; the grep confirms |
+| C2 | `ED 1` clears row 0 | 11 | `US-0075` | any recording sending `CSI 1 J` with the cursor on row 1; the grep confirms |
+| C3 | A short region scroll rotates, then blanks | 17 | `US-0075` | `region_scroll_down`, `scroll_in_region_up_preserves_history` if either uses a count at or above its region height |
+| C4 | Insert mode repairs wide pairs instead of leaving orphaned spacers | 7 | `US-0075` | `vttest_insert` if it inserts over a wide character |
+| C8 | `? 47` / `? 1047` / `? 1048` implemented | 13 | `US-0076` | `wrapline_alt_toggle`, `alt_reset`, `saved_cursor_alt` if any sends them rather than `1049` |
+| C10 | `CSI ? 5 W` restores the default tab stops | 27 | `US-0076` | none expected; the grep confirms |
+
+Kept deliberately, because they are correct behaviour or OneTerm product behaviour rather than
+defects: pending wrap and its interaction with `BS`, `EL 0` and `HT` (traps 1, 2, 3); `ED 2`
+scrolling the viewport into scrollback instead of discarding it (trap 9, which users rely on);
+`ED 3` snapping to the bottom (trap 10); `DECSTBM` validation (trap 15); the cursor-outside-region
+rules (trap 16); `SD` never pulling from history (trap 18); scrollback filling only from a region
+anchored at row 0 (the other half of trap 17, which is what xterm does); `occ`-bounded row resets
+(trap 36); and entering the alternate screen taking the primary `DECSC` slot (trap 14, which is
+what `? 1049` means).
 
 ## Interfaces
 
@@ -418,7 +443,7 @@ over-approximation by definition.
 - [ ] **Trap 1 — pending wrap then `BS`.** `BS` decrements the column and clears the pending
   wrap. `BS` at column 0 is a no-op **while `Mode::ReverseWrap` (`? 45`) is reset, which is the
   default** (R-08); with it set, `BS` at column 0 moves to the previous row's last column when
-  that row is `WRAPPED`. `? 45` lands in `US-0086` with the rest of the deviations.
+  that row is `WRAPPED`. `? 45` is an additive feature and lands in `US-0086`.
 - [ ] **Trap 2 / 3 — pending wrap then `EL 0` / `HT`**, including the G3 combinations.
 - [ ] **Trap 9 / 10 / 11 — `ED 2` / `ED 3` / `ED 1`**, each stated against the offset table.
 - [ ] **Trap 14 — entering the alternate screen clobbers the primary DECSC slot.**
@@ -469,16 +494,16 @@ Scrolling, erase and tabs (trap-mapped):
   offset table.
 - [ ] `grid::tests::ed2_over_an_image_keeps_the_image_rows` — R-13.
 - [ ] `grid::tests::ed3_resets_the_viewport_to_the_bottom` — trap 10.
-- [ ] `grid::tests::ed1_with_cursor_on_row_one_keeps_row_zero` — trap 11.
+- [ ] `grid::tests::ed1_clears_row_zero` — correction C2, trap 11.
 - [ ] `grid::tests::entering_alt_screen_overwrites_the_saved_cursor` — trap 14.
 - [ ] `grid::tests::leaving_alt_screen_restores_the_entry_cursor` — trap 14.
 - [ ] `grid::tests::linefeed_below_the_region_does_not_scroll` — trap 16.
 - [ ] `grid::tests::insert_and_delete_lines_outside_the_region_are_noops` — trap 16.
 - [ ] `grid::tests::scroll_up_fills_history_only_from_row_zero` — trap 17.
 - [ ] `grid::tests::scroll_up_with_a_bottom_bounded_region_keeps_the_rows_below` — R-03.
-- [ ] `grid::tests::small_region_scroll_blanks_without_rotating` — trap 17.
+- [ ] `grid::tests::small_region_scroll_rotates_then_blanks` — correction C3, trap 17.
 - [ ] `grid::tests::scroll_down_never_pulls_from_history` — trap 18.
-- [ ] `grid::tests::delete_chars_clamps_end_to_last_column` — trap 19.
+- [ ] `grid::tests::delete_chars_shifts_left_by_n` — correction C1, trap 19.
 - [ ] `grid::tests::decstbm_invalid_range_is_a_noop_and_valid_homes_the_cursor` — trap 15.
 - [ ] `grid::tests::tab_stops_survive_and_regrow_across_a_resize` — trap 27.
 - [ ] `grid::tests::row_reset_respects_occ_and_the_background_template` — trap 36.
@@ -486,9 +511,9 @@ Scrolling, erase and tabs (trap-mapped):
 - [ ] `grid::tests::wide_char_dropped_when_cols_is_one`
 - [ ] `grid::tests::trimmed_slot_is_cleared_before_reuse`
 
-Deferred to `US-0086` with their own tests: `grid::tests::alt_screen_47_and_1047_and_1048` (G4),
-`grid::tests::csi_5_w_restores_default_tab_stops` (G5),
-`grid::tests::reverse_wrap_crosses_a_wrapped_row` (R-08).
+In `US-0076` with the other corrections: `grid::tests::alt_screen_47_and_1047_and_1048` (C8) and
+`grid::tests::csi_5_w_restores_default_tab_stops` (C10). Deferred to `US-0086` as an additive
+feature rather than a correction: `grid::tests::reverse_wrap_crosses_a_wrapped_row` (`? 45`).
 
 Property test: `grid::props::scroll_and_erase_preserve_integrity` — a random sequence of scrolls,
 erases, inserts and deletes with anchors registered throughout, then `assert_integrity()`.

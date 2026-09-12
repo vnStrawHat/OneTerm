@@ -83,6 +83,36 @@ revision; `THIRD-PARTY-NOTICES.md` gains a corpus row as the two fork rows are r
    position and shape, the pending-wrap flag, every non-default mode, the colour-override table,
    the title and title stack, the tab stops, and the scroll region.
 
+**Per-recording expected differences (owner ruling, 2026-09-12).** The engine is correctness-first,
+so some recordings will legitimately differ from expectations blessed by the engine being replaced.
+That is declared per recording and **per cell**, never as a skipped recording:
+
+```toml
+# crates/vt/tests/corpus/alacritty-ref/delete_chars_reset/expected-diffs.toml
+[[diff]]
+deviation = "C1"                 # must name a row in a corrections table
+rows      = "4"                  # viewport row index, or a range
+cols      = "70..80"
+fields    = ["content", "attrs"] # which parts of grid.expect may differ
+reason    = "DCH is a plain shift left; the reference clamps end to cols - 1"
+```
+
+Harness rules, and they are what keep the gate a gate:
+
+- A difference **inside** a declared window, in a declared field, passes. Anything else fails —
+  a different row, a different column, a different field, or a difference in a recording with no
+  `expected-diffs.toml`.
+- A declared window that produces **no** difference also fails (`stale declared diff`), so a
+  correction that is later re-implemented as parity cannot leave a permanent hole.
+- Every `deviation` id must resolve to a row in the corrections tables of
+  [`grid-and-scrollback.md`](grid-and-scrollback.md) or
+  [`dispatch-and-modes.md`](dispatch-and-modes.md); an unknown id fails.
+- `state.expect` takes the same mechanism for its own fields (palette after `RIS` for C6, for
+  example).
+- The files are written by `US-0072`'s scripted grep where it can prove the window, and by the
+  packet that implements the correction otherwise; either way the diff and the reason land in the
+  commit that changes the behaviour.
+
 **Who blesses (R-58).** `US-0072` generates both files **with the old engine**, they are reviewed
 once, committed, and **frozen**. The new engine never blesses. `vt-corpus bless` refuses to write
 under `corpus/alacritty-ref/` unless given `--deviation <row-id>` naming a row in a deviation
@@ -206,9 +236,10 @@ gates.
 
 ### 8. Deviation grep (R-53)
 
-`US-0072` runs one scripted pass over the 45 recordings for every sequence a deferred deviation
-touches — `?47`, `?1047`, `?1048`, `?5W`, `!p`, `?6n`, `>0q`, `?45`, `>4;m`, SGR 5 / 6 / 53 — and
-fills in the "Recording risk" column of the deviation tables in
+`US-0072` runs one scripted pass over the 45 recordings for every sequence a correction or a
+deferred feature touches — `?47`, `?1047`, `?1048`, `?5W`, `!p`, `?6n`, `>0q`, `?45`, `>4;m`,
+SGR 5 / 6 / 53, `CSI P` with a large count, `CSI 1 J`, `OSC 4` with an even count, `RIS` after a
+palette change — and fills in the "Affected recordings" column of the corrections tables in
 [`dispatch-and-modes.md`](dispatch-and-modes.md) and
 [`grid-and-scrollback.md`](grid-and-scrollback.md) with a measured answer. Until then those cells
 read "measure in `US-0072`", never "none".
@@ -288,9 +319,9 @@ All 48 items from [`../research/engine-semantics.md`](../research/engine-semanti
 
 ## Edge Cases and Failure Modes
 
-- [ ] **A recording that legitimately differs** — listed in a deviation table with its reason and
-  its measured recording risk; the corpus test is annotated with that row. There is no silent
-  `#[ignore]`.
+- [ ] **A recording that legitimately differs** — it carries an `expected-diffs.toml` naming the
+  correction, the cells and the fields. There is no whole-recording skip and no silent `#[ignore]`,
+  and a declared window that stops differing fails the gate.
 - [ ] **`bless` used to hide a regression** — refused without `--deviation <row-id>`; the
   expectation diff and the named row are both in the commit.
 - [ ] **The differential runner diverging on a captured session** — it prints the first differing
@@ -313,7 +344,8 @@ All 48 items from [`../research/engine-semantics.md`](../research/engine-semanti
 - [ ] `US-0073`: `cargo test -p oneterm-vt --test differential` green, including
   `oracle_precondition_patches_do_not_touch_the_state_machine`.
 - [ ] `US-0076`: `cargo test -p oneterm-vt --test ref_corpus` green on all 45 recordings, both
-  files, with the new engine and the **frozen** expectations.
+  files, with the new engine and the **frozen** expectations — every difference covered by a
+  declared `expected-diffs.toml` window naming a correction, and no stale declared window.
 - [ ] `US-0077`: `reflow::props` green over 10 000 cases; the debug-suite runtime budget
   re-measured.
 - [ ] `US-0081`-`US-0085`: `vt-diff` green over all recordings plus the captured session at the

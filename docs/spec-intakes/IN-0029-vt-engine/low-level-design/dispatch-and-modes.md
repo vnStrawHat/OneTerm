@@ -16,9 +16,12 @@ extension-point APIs (OSC registration, colour keys, title stack, keyboard flag 
 Replaces `vendor/vte/src/ansi.rs` — the file where every OneTerm patch has lived — and the
 control half of `vendor/alacritty_terminal/src/term/mod.rs`.
 
-The governing rule for this file: **parity-first**. Anything the 45 ref recordings pin is
-reproduced exactly, quirks included. Anything the corpus is silent about is implemented
-spec-correct, and every such divergence is one row in the deliberate-deviation table at the end.
+The governing rule for this file: **correctness first** (owner ruling, 2026-09-12 — *"think as a
+new build, not as a copy of the old one"*). Where the engine being replaced is wrong, this engine
+is right from the start; where it is right, it is reproduced exactly. Every correction is a `C`-row
+in the table at the end, naming the recordings it affects, and the parity harness carries
+per-recording, cell-level expected differences keyed by that id
+([`testing-and-bench.md`](testing-and-bench.md) § 2), so a correction never masks a regression.
 
 ## Design
 
@@ -122,13 +125,13 @@ but now counted in `FeedStats::unhandled_sequences`.
 | `0` or none | reset the style template |
 | `1` `2` `3` | bold, dim, italic |
 | `4`, `4:1` | underline; `4:0` cancel; `4:2` double; `4:3` curly; `4:4` dotted; `4:5` dashed. Any underline attribute clears the other underline bits first (trap 21) |
-| `5` `6` | blink slow / fast — **stored** (deviation D11, `US-0086`) |
+| `5` `6` | blink slow / fast — **stored** (correction C11, `US-0076`) |
 | `7` `8` `9` | inverse, hidden, strikeout |
 | `21` | cancel bold — **not** double underline (trap 21) |
 | `22` `23` `24` `25` `27` `28` `29` | cancel bold+dim, italic, underline, blink, inverse, hidden, strikeout |
 | `30-37` / `40-47` / `90-97` / `100-107` | named foreground / background, normal and bright |
 | `39` / `49` | default foreground / background |
-| `53` / `55` | overline / cancel overline — **stored** (deviation D11, `US-0086`) |
+| `53` / `55` | overline / cancel overline — **stored** (correction C11, `US-0076`) |
 | `38` / `48` / `58` | extended colour, below |
 | `59` | reset the underline colour |
 | anything else | skipped; the rest of the SGR list still processes |
@@ -160,7 +163,7 @@ accessor, `Terminal::mouse_reporting() -> Option<MouseProtocol>`, replacing the
 | `LineWrap` (DECAWM) | `? 7` | **set** | real | gates `wrapline()` and the wide-char-at-last-column path |
 | `CursorBlink` | `? 12` | reset | real | |
 | `ShowCursor` (DECTCEM) | `? 25` | **set** | real | clearing it makes the reported cursor shape `Hidden` |
-| `ReverseWrap` | `? 45` | reset | real | deviation D12, deferred to `US-0086`: while reset (the default) `BS` at column 0 is a no-op, which is trap 1; while set it crosses into a `WRAPPED` row ([`grid-and-scrollback.md`](grid-and-scrollback.md), R-08) |
+| `ReverseWrap` | `? 45` | reset | real | additive feature D12, `US-0086`: while reset (the default) `BS` at column 0 is a no-op, which is trap 1; while set it crosses into a `WRAPPED` row ([`grid-and-scrollback.md`](grid-and-scrollback.md), R-08) |
 | `MouseClick` | `? 1000` | reset | real | setting any mouse mode clears the other mouse modes first; unsetting clears only that one (the reference's asymmetry, reproduced) |
 | `MouseDrag` | `? 1002` | reset | real | |
 | `MouseMotion` | `? 1003` | reset | real | |
@@ -169,9 +172,9 @@ accessor, `Terminal::mouse_reporting() -> Option<MouseProtocol>`, replacing the
 | `SgrMouse` | `? 1006` | reset | real | |
 | `AlternateScroll` | `? 1007` | **set** | real | |
 | `UrgencyHints` | `? 1042` | **set** | real | |
-| `AltScreen47` | `? 47` | reset | real | deviation D3, deferred to `US-0086` (trap 13) |
-| `AltScreen1047` | `? 1047` | reset | real | deviation D3, deferred to `US-0086` |
-| `SaveCursor1048` | `? 1048` | reset | real | deviation D3, deferred to `US-0086` |
+| `AltScreen47` | `? 47` | reset | real | correction C8, `US-0076` (trap 13) |
+| `AltScreen1047` | `? 1047` | reset | real | correction C8, `US-0076` |
+| `SaveCursor1048` | `? 1048` | reset | real | correction C8, `US-0076` |
 | `AltScreen` | `? 1049` | reset | real | save cursor, switch, clear |
 | `BracketedPaste` | `? 2004` | reset | real | |
 | `SyncUpdate` | `? 2026` | reset | **real** | reference hardcodes `Reset`; here it reports `Set` while an update is open ([`damage-and-render-state.md`](damage-and-render-state.md)) |
@@ -196,7 +199,7 @@ permanently reset.
 | DA1 `CSI c`, `ESC Z` | `CSI ? 62 ; 4 ; 22 c` | VT220, Sixel, ANSI colour. Today the fork answers `CSI ? 62 ; 4 c`; upstream answers `CSI ? 6 c`. `4` is what `tmux`, `lsix`, `chafa` and `timg` look for. Adding `22` is deviation D13 |
 | DA2 `CSI > c` | `CSI > 0 ; {version} ; 1 c` | `version` from `CARGO_PKG_VERSION` as `major*10000 + minor*100 + patch` |
 | DSR 5 | `CSI 0 n` | |
-| DSR 6 (CPR) | `CSI {row};{col} R` | **absolute, ignoring origin mode** (trap 38), because that is what conhost's post-resize CPR handshake expects ([`../research/prior-art.md`](../research/prior-art.md) § 5.4, § 5.6) |
+| DSR 6 (CPR) | `CSI {row};{col} R` | **Spec-correct (C5)**: region-relative while `DECOM` is set, absolute otherwise (trap 38). Conhost's handshake is unaffected because conhost never sets origin mode |
 | DECXCPR `CSI ? 6 n` | `CSI ? {row};{col};1 R` | deviation D7 |
 | XTVERSION `CSI > 0 q` | `DCS > \| OneTerm({version}) ST` | deviation D8 |
 | `CSI 18 t` | `CSI 8 ; {rows} ; {cols} t` | |
@@ -258,7 +261,7 @@ Handled natively:
 | OSC | Behaviour |
 | --- | --- |
 | `0`, `2` | set the title -> `VtEvent::Title`; requires at least two parameters |
-| `4` | set or query palette entries; odd parameter count required; `?` queries -> `VtEvent::ColorQuery { key: Palette(i) }` |
+| `4` | set or query palette entries. **Spec-correct (C7)**: every complete `index;spec` pair is applied and a trailing odd parameter is ignored, where the reference rejects an even parameter count wholesale (trap 26); `?` queries -> `VtEvent::ColorQuery { key: Palette(i) }` |
 | `8` | hyperlink; `id=` parsed from `params[1]`, the URI rejoined from `params[2..]`; an empty URI clears it |
 | `10` / `11` / `12` | foreground / background / cursor, set or `?` query; a multi-parameter form advances the key and stops past `Cursor` |
 | `104` / `110` / `111` / `112` | reset |
@@ -327,8 +330,9 @@ keyboard intake needs no engine change.
 **RIS (`ESC c`)** — reset both grids (clearing history, cursors and the viewport offset), the
 scroll region, tab stops, title and title stack, selection, both keyboard stacks, the active
 charset, the cursor style and the mode set; drop pending graphics and any in-flight DCS; emit
-`VtEvent::ScreenCleared`; full damage. **Row ids are not reset** (`DEC-0015`). The colour
-override table survives RIS, as it does in the reference (trap 39).
+`VtEvent::ScreenCleared`; full damage. **Row ids are not reset** (`DEC-0015`). **Spec-correct
+(C6): the colour override table is reset too**, where the reference leaves OSC 4 / 10 / 11 / 12
+overrides in place across `RIS` (trap 39).
 
 **DECSTR (`CSI ! p`)** — soft reset, deviation D6: cursor home, origin mode off, insert mode
 off, `DECAWM` on, scroll region to the full screen, style template reset, saved cursor reset,
@@ -340,35 +344,42 @@ reference does not implement it at all, so programs that send it currently get n
 Every row here is behaviour that differs from the engine being replaced, with the reason and
 the recording risk.
 
-**Scheduling (R-53).** Every row marked `US-0086` lands **after** the parity gate is green and
-after the adapter swap. A rewrite that changes behaviour and breaks the gate in the same packet
-cannot tell the two apart — the intake's own stated principle, applied to itself. The
-"Recording risk" column is no longer an assertion: `US-0072` greps the 45 recordings for every
-sequence each deferred deviation touches and fills the column in with a measured answer before
-the deviation is implemented.
+**Scheduling.** After the owner's correctness-first ruling (2026-09-12), every behaviour
+*correction* lands in its natural packet with a declared expected difference; only **additive
+features** — capabilities the reference never had and no recording exercises — wait for `US-0086`.
+`US-0072` still greps the 45 recordings for every sequence a correction touches and fills the
+"Affected recordings" column with a measured answer.
 
 | # | Deviation | Packet | Reason | Recording risk |
 | --- | --- | --- | --- | --- |
 | D1 | Typed `Mode` enum and `ColorKey` instead of bitflags and magic indices | `US-0076` | `DEC-0015`; removes discriminant arithmetic from three files | none — representation only |
 | D2 | Insert mode does not force full damage (trap 34) | `US-0076` | the reference silently disables partial redraw for the session | none — damage is not compared |
-| D3 | `? 47`, `? 1047`, `? 1048` implemented (trap 13) | **`US-0086`** | nearly free correctness | **measure in `US-0072`** — `wrapline_alt_toggle`, `alt_reset` and `saved_cursor_alt` are exactly the alt-screen recordings |
+| D3 | *superseded* — now correction C8 (`? 47` / `? 1047` / `? 1048`) | `US-0076` | correctness first (owner ruling, 2026-09-12) | see the corrections table |
 | D4 | Mode 2026 reports its real state and needs no external polling (trap 41) | `US-0076` | the reference can never report "set" and freezes if the host forgets to poll | none |
-| D5 | `CSI ? 5 W` implemented (trap 27) | **`US-0086`** | the reference offers no way but `RIS` to restore default stops | **measure in `US-0072`** |
-| D6 | DECSTR implemented | **`US-0086`** | programs send it today and get nothing | **measure in `US-0072`** |
+| D5 | *superseded* — now correction C10 (`CSI ? 5 W`) | `US-0076` | correctness first (owner ruling, 2026-09-12) | see the corrections table |
+| D6 | *superseded* — now correction C9 (DECSTR) | `US-0076` | correctness first (owner ruling, 2026-09-12) | see the corrections table |
 | D7 | DECXCPR (`CSI ? 6 n`) answered | **`US-0086`** | cheap, and asked for by real programs | none — answers are discarded by the harness |
 | D8 | XTVERSION answered | **`US-0086`** | feature detection by modern programs | none — answers are discarded |
 | D9 | LNM tracked but inert | `US-0076` | matches the reference; recorded so it is not read as an oversight | none |
 | D10 | `modifyOtherKeys` level stored and reportable | **`US-0086`** | the reference parses both and implements neither | none |
-| D11 | Blink and overline attributes stored (not yet rendered) | **`US-0086`** | bits already allocated; a later renderer packet needs no engine change. **Moved out of the parity packet (N-03)**: `grid.expect` is cell-exact on `attrs` and was blessed by an engine that drops SGR 5/6/53, so storing them inside `US-0076` would turn the gate red for `sgr` and `underline` — the exact failure R-53 exists to prevent | **measure in `US-0072`** — `sgr` and `underline` exercise SGR 5/6/53 |
+| D11 | *superseded* — now correction C11 (blink and overline stored, with a declared expected diff; the cell-level diff mechanism replaces N-03's deferral) | `US-0076` | correctness first (owner ruling, 2026-09-12) | see the corrections table |
 | D12 | Reverse wrap (`? 45`) implemented | **`US-0086`** | cheap; gated on the mode, default off, so trap 1 is unaffected until then (R-08) | **measure in `US-0072`** |
 | D13 | DA1 answers `CSI ? 62 ; 4 ; 22 c` | `US-0076` | adds the ANSI-colour claim to today's answer | none — DA answers are discarded by the harness |
 | D14 | Title stack capped at 16, oldest dropped | `US-0076` | 4096 is a memory sink no program needs | none |
 | D15 | Kitty stack overflow pops the right stack (trap 42) | `US-0076` | fixes a reference bug | none |
 
-Parity kept deliberately, listed so nobody "fixes" it: traps 11, 15, 16, 17, 18, 19, 21, 22,
-25, 26, 38, 39, 40, 43 and the insert-mode wide-character behaviour of trap 7. Mode 2027 is
-deferred whole (R-56), so it is not a deviation at all — it is simply unimplemented, and DECRQM
-says so.
+**Corrections in this file — spec-correct from the start.**
+
+| C | Correction | Trap | Packet | Affected recordings (confirmed in `US-0072`) |
+| --- | --- | --- | --- | --- |
+| C5 | `CPR` is region-relative under `DECOM` | 38 | `US-0076` | `vttest_origin_mode_1`, `vttest_origin_mode_2` if either reads back a position; DA/DSR answers are discarded by the harness, so the grid is unaffected |
+| C6 | `RIS` resets the colour overrides | 39 | `US-0076` | `colored_reset`, `grid_reset`, `decaln_reset` if any sets a palette entry before `RIS`; the grep confirms |
+| C7 | `OSC 4` applies complete pairs and ignores a trailing parameter | 26 | `US-0076` | `indexed_256_colors` if it sends an even count; the grep confirms |
+| C9 | `DECSTR` (`CSI ! p`) implemented | — | `US-0076` | none expected; the reference ignores it |
+| C11 | Blink and overline attributes stored (SGR 5 / 6 / 53 / 55) | — | `US-0076` | `sgr`, `underline` — the old engine drops these bits, so the cells differ in `attrs` and the diff is declared |
+
+Kept deliberately, because they are correct: traps 15, 16, 18, 21, 22, 25, 40 and 43. Mode 2027 is
+deferred whole (R-56), so it is not a deviation — it is unimplemented, and DECRQM says so.
 
 ## Interfaces
 
@@ -447,11 +458,11 @@ impl Terminal { pub fn set_cell_pixels(&mut self, w: u16, h: u16); }  // one own
 - [ ] `dispatch::tests::sgr_21_is_cancel_bold_and_underline_styles_are_exclusive` — trap 21.
 - [ ] `dispatch::tests::screen_cleared_fires_only_for_ed2_ed3_and_ris` — trap 12.
 - [ ] `dispatch::tests::ed3_with_no_history_still_fires_screen_cleared` — trap 12.
-- [ ] `dispatch::tests::osc_4_requires_an_odd_parameter_count` — trap 26.
+- [ ] `dispatch::tests::osc_4_applies_complete_pairs` — correction C7, trap 26.
 - [ ] `dispatch::tests::osc_104_does_not_reset_the_special_colours` — trap 26.
 - [ ] `dispatch::tests::osc_52_selection_byte_validation` — trap 25.
-- [ ] `dispatch::tests::cpr_ignores_origin_mode` — trap 38.
-- [ ] `dispatch::tests::ris_keeps_the_palette_and_the_row_ids` — trap 39.
+- [ ] `dispatch::tests::cpr_honours_origin_mode` — correction C5, trap 38.
+- [ ] `dispatch::tests::ris_resets_the_palette_and_keeps_the_row_ids` — correction C6, trap 39.
 - [ ] `dispatch::tests::deccolm_does_not_change_the_width` — trap 40.
 - [ ] `dispatch::tests::rep_replays_through_the_print_path` — trap 43, asserting that a `REP`
   at the last column wraps.
@@ -459,9 +470,10 @@ impl Terminal { pub fn set_cell_pixels(&mut self, w: u16, h: u16); }  // one own
 - [ ] `dispatch::tests::kitty_pop_beyond_len_resets_the_stack` — deviation D15.
 - [ ] `dispatch::tests::decrqm_answers_match_the_mode_table` — a table test over every mode.
 - [ ] `dispatch::tests::da1_da2_dsr_xtversion_answers`
-- [ ] `dispatch::tests::decstr_soft_reset_scope` — deviation D6.
+- [ ] `dispatch::tests::decstr_soft_reset_scope` — correction C9.
 - [ ] `dispatch::tests::mouse_modes_are_exclusive_on_set_not_on_unset`
 - [ ] `dispatch::tests::title_stack_caps_at_sixteen_dropping_the_oldest` — deviation D14.
+- [ ] `dispatch::tests::blink_and_overline_are_stored` — correction C11.
 - [ ] `dispatch::tests::unhandled_sequences_are_counted_not_echoed` — R-35, over an unknown CSI,
   an unknown ESC, an unclaimed OSC and an unknown DCS.
 - [ ] `dispatch::tests::win32_input_mode_is_accepted_silently` — R-36; `ESC [ ? 9001 h` sent

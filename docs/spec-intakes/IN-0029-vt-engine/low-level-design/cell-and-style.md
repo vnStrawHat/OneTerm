@@ -269,9 +269,10 @@ pub fn cluster_width(cluster: &[char]) -> u8;   // implemented now, used when 20
   clears the `WideSpacer` to its right; writing over a `WideSpacer` clears the `Wide` cell to its
   left (dropping its grapheme, leaving a space); at column 0 or 1 the previous row's trailing
   `LeadingWideSpacer` is cleared too.
-- [ ] **Trap 7 — insert mode over a wide character.** The reference shifts with raw swaps, never
-  repairs the pair, and skips the shift entirely when `col + width >= cols`. Reproduced, because
-  `vttest_insert` pins it.
+- [ ] **Trap 7 — insert mode over a wide character.** **Spec-correct (C4)**: the shift repairs any
+  wide pair it splits, the same repair `write_at_cursor` performs, instead of leaving the orphaned
+  spacers the reference produces. The reference also skips the shift entirely when
+  `col + width >= cols`; that clamp is kept, because it is the correct "no room" case.
 - [ ] **Trap 8 — zero-width character at column 0** attaches to column 0.
 - [ ] **Trap 37 — two predicates**, above.
 - [ ] **Style table exhaustion** degrades to the default style and logs once; no sweep, no
@@ -293,7 +294,7 @@ pub fn cluster_width(cluster: &[char]) -> u8;   // implemented now, used when 20
 - [ ] `cell::tests::width_enum_covers_every_wide_pair_shape`
 - [ ] `cell::tests::wide_char_at_last_column_wrap_on_and_off` — trap 5.
 - [ ] `cell::tests::wide_pair_repair_on_overwrite` — trap 6, all three sub-cases.
-- [ ] `cell::tests::insert_mode_over_wide_char_leaves_orphan_spacer` — trap 7.
+- [ ] `cell::tests::insert_mode_over_wide_char_repairs_the_pair` — correction C4, trap 7.
 - [ ] `cell::tests::zero_width_at_column_zero_attaches_to_column_zero` — trap 8.
 - [ ] `cell::tests::blank_and_erasable_predicates_differ_on_a_bold_space` — trap 37.
 - [ ] `cell::tests::tab_cell_is_erasable_but_not_blank_and_reads_back_as_tab` — R-12.
