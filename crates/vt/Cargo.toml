@@ -1,0 +1,24 @@
+[package]
+name = "oneterm-vt"
+description = "OneTerm's own VT engine: parser, dispatch, cell/grid, reflow, damage and graphics. Depends on no OneTerm crate and no GPUI."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The ground-state control-byte scan (`memchr3(ESC, LF, CR)`); already in Cargo.lock.
+memchr.workspace = true
+
+[dev-dependencies]
+# The differential oracle (IN-0029 R-41), retired with the fork at US-0087. The
+# workspace `[patch]` redirects this at vendor/vte, whose two patches touch only
+# `src/ansi.rs` — so `vte::Parser` + `vte::Perform`, the raw state machine this
+# test compares against, are unmodified upstream. `tests/differential.rs`
+# asserts that precondition rather than trusting it.
+vte.workspace = true

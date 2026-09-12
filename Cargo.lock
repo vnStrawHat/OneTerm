@@ -5654,6 +5654,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "oneterm-vt"
+version = "0.5.2"
+dependencies = [
+ "memchr",
+ "vte",
+]
+
+[[package]]
 name = "oneterm-workspace"
 version = "0.5.2"
 dependencies = [
