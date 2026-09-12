@@ -90,6 +90,31 @@ impl Row {
         }
     }
 
+    /// Build a row the reflow has just laid out (`US-0077`).
+    ///
+    /// `extra` carries the content hints the cells cannot imply — only
+    /// `HAS_GRAPHIC`, which needs the interner to derive and which the caller
+    /// therefore carries over from the logical line's source rows. The id is
+    /// assigned when the row is placed in the ring.
+    pub(crate) fn from_cells(cells: Vec<Cell>, wrapped: bool, extra: RowFlags, seq: SeqNo) -> Row {
+        let mut flags = RowFlags::DIRTY | extra;
+        flags.set(RowFlags::WRAPPED, wrapped);
+        for cell in &cells {
+            flags.insert(flags_for(*cell));
+        }
+        Row {
+            header: RowHeader {
+                seq,
+                id: RowId::default(),
+                flags,
+                // Over-approximating, which is all `occ` promises: the row was
+                // laid out cell by cell, so nothing above its width was touched.
+                occ: cells.len() as u16,
+            },
+            cells,
+        }
+    }
+
     pub fn header(&self) -> &RowHeader {
         &self.header
     }
@@ -177,6 +202,11 @@ pub fn repair_wide_pairs(cells: &mut [Cell]) {
                 if !paired {
                     cells[col] = blank_out(cells[col]);
                 }
+            }
+            // Only the last column can hold the place of a glyph that wrapped,
+            // so a shift or a width change that moved one inland releases it.
+            CellWidth::LeadingWideSpacer if col + 1 != cells.len() => {
+                cells[col] = blank_out(cells[col]);
             }
             CellWidth::Narrow | CellWidth::LeadingWideSpacer => {}
         }

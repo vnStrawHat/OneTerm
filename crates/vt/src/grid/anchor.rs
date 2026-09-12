@@ -163,6 +163,22 @@ impl Anchors {
         }
     }
 
+    /// Trap 28: a resize that changed the column count invalidates the
+    /// selection, and so does a `KeepViewportTop` correction that moved the
+    /// screen. Killing rather than releasing keeps the consumer's handles valid,
+    /// so it observes that its selection disappeared instead of reading an
+    /// unrelated one.
+    pub(crate) fn kill_selection(&mut self) {
+        for anchor in &mut self.entries {
+            if matches!(
+                anchor.kind,
+                AnchorKind::SelectionStart | AnchorKind::SelectionEnd
+            ) {
+                anchor.alive = false;
+            }
+        }
+    }
+
     /// History was trimmed: anything in `origin..oldest` is gone.
     ///
     /// **Lane-scoped on purpose.** The two screens draw from disjoint runs of
