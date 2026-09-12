@@ -513,8 +513,13 @@ fn select_all_covers_history_and_the_viewport() {
 
 // ── Membership ──────────────────────────────────────────────────────────────
 
+/// The LLD's verification list calls this
+/// `contains_cell_extends_a_wide_char_to_its_spacer`, which states the rule
+/// backwards: the reference asks whether a `Wide` cell's **trailing spacer** is
+/// selected, so the pull runs from the spacer to the glyph. Renamed to match the
+/// behaviour; the LLD sentence is the design owner's to correct.
 #[test]
-fn contains_cell_extends_a_wide_char_to_its_spacer() {
+fn contains_cell_pulls_in_the_wide_partner_of_a_selected_spacer() {
     let mut f = fixture(5, 10, 100);
     f.feed("a中b");
 
@@ -525,6 +530,13 @@ fn contains_cell_extends_a_wide_char_to_its_spacer() {
     assert!(!range.contains(f.at(0, 1)));
     assert!(range.contains_cell(screen, f.at(0, 1), None));
     assert!(!range.contains_cell(screen, f.at(0, 0), None));
+    selection.release(&mut f.grid);
+
+    // And not the other way: selecting only the glyph leaves its spacer alone.
+    let glyph_only = f.span(SelectionKind::Simple, f.at(0, 0), f.at(0, 1));
+    let range = f.range(&glyph_only).expect("a range");
+    let screen = f.grid.screen();
+    assert!(!range.contains_cell(screen, f.at(0, 2), None));
 }
 
 #[test]
@@ -591,6 +603,35 @@ fn delete_lines_inside_a_region_moves_the_selection_and_kills_a_deleted_one() {
     f.goto(1, 0);
     f.grid.delete_lines(1);
     assert_eq!(f.range(&deleted), None);
+}
+
+/// Correction C15, for the design owner to confirm.
+///
+/// A region scroll discards the rows at the region top. The reference keeps the
+/// selection alive and clamps the endpoint that was discarded to
+/// `(range_top, column 0, Side::Left)`
+/// (`vendor/alacritty_terminal/src/selection.rs:160-166`, pinned by its own
+/// `rotate_in_region_up`). Here the anchor dies with its content and the whole
+/// selection resolves to `None`.
+///
+/// Deliberate: the clamp leaves the selection covering text the user never
+/// selected, which is exactly what `selection.md` says not to do — "cleared
+/// rather than pointing at unrelated text". Declared because it is a
+/// user-visible change from the reference either way.
+#[test]
+fn an_endpoint_scrolled_out_of_a_region_top_is_killed_not_clamped() {
+    let mut f = fixture(5, 10, 100);
+    f.feed("aaa\r\nbbb\r\nccc\r\nddd");
+
+    // The start sits on the row the scroll is about to discard; the end does not.
+    let selection = f.span(SelectionKind::Simple, f.at(1, 0), f.at(3, 2));
+    assert!(f.range(&selection).is_some());
+
+    f.grid.scroll_up(ScrollRegion { top: 1, bottom: 4 }, 1);
+
+    // The reference would report `(row 1, col 0)..=(row 2, col 2)`.
+    assert_eq!(f.range(&selection), None);
+    assert_eq!(f.text(&selection), None);
 }
 
 #[test]
@@ -739,6 +780,12 @@ fn invalidation_matrix() {
     }
     let in_history = f.span(SelectionKind::Simple, f.at(-2, 0), f.at(-2, 4));
     assert!(in_history.invalidated_by(&f.grid, Invalidation::EraseHistory));
+    // And only `ED 3` reaches it: `ED 1` erases the screen top down to the
+    // cursor, which is the whole screen here and still none of history.
+    f.goto(2, 0);
+    assert!(!in_history.invalidated_by(&f.grid, Invalidation::EraseAbove));
+    assert!(!in_history.invalidated_by(&f.grid, Invalidation::EraseBelow));
+    assert!(!in_history.invalidated_by(&f.grid, Invalidation::EraseLine));
     in_history.release(&mut f.grid);
 
     let on_screen = f.span(SelectionKind::Simple, f.at(1, 0), f.at(1, 4));

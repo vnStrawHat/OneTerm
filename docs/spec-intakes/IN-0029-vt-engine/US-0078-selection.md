@@ -139,9 +139,23 @@ the escape chars, the matrix, the extraction policy — is implemented exactly a
 
 ### Reconciliation
 
-Docs changed: none. The no-change reason above still holds at completion. The readings and the
-two deviations are recorded here, in this packet, which is where the intake's other packets
-record theirs.
+Docs changed: none. The no-change reason above still holds after the verification round. The
+readings and the corrections are recorded here, in this packet, which is where the intake's
+other packets record theirs.
+
+Two sentences in `selection.md` are **wrong** and are the design owner's to correct; neither is
+edited here, because this packet must not modify the LLD:
+
+- the `to_range` table's `contains_cell` line, and the verification list's
+  `contains_cell_extends_a_wide_char_to_its_spacer`, state the wide-cell membership rule
+  backwards (reading 6);
+- the invalidation matrix's `ED 0` / `ED 1` rows say "cleared when the range intersects the
+  cleared rows", which is correct but reads as a one-sided bound — and a one-sided bound is
+  exactly what this packet shipped until the verification round caught it (F1). The matrix is
+  worth a sentence saying each erase is bounded at the screen top and bottom.
+
+Correction **C15** (kill-over-clamp on a region scroll) needs the design owner's confirmation,
+and the region-scroll split is a new behaviour nobody has specified. Both are under "Gaps".
 
 ## Context
 
@@ -160,6 +174,7 @@ record theirs.
    | `Terminal::selection_clear()` | `Selection::release(self, &mut TerminalGrid)` |
    | `Terminal::select_all()` | `Selection::all(&mut TerminalGrid) -> Selection` |
    | `Terminal::hit_test(row, col)` | `selection::hit_test(&TerminalGrid, row, col) -> (Pos, Side)` |
+   | *(no LLD method — deviation 4 below)* | `Selection::invalidated_by(&TerminalGrid, Invalidation)`, which `Terminal`'s `EL` / `ED 0` / `ED 1` / `ED 2` / `ED 3` / `RIS` / `swap_alt` dispatch must evaluate **before** performing the operation, clearing the selection when it returns `true`. Nothing clears a selection today because nothing asks |
 
    `Terminal` will hold `selection: Option<Selection>` and route each method through it. That is
    also why `release` consumes `self`: the anchors must be released exactly once, and the
@@ -207,7 +222,14 @@ record theirs.
    the end of a row belongs to the glyph on the row **below**. This packet implements the rule
    the way it is described rather than the way it is coded, and pins it with
    `text_includes_a_wide_glyph_whose_leading_spacer_ends_the_selection`.
-6. `semantic_search_right` steps back one cell without skipping spacers, where
+6. **The LLD's `to_range` table and its test name state the wide-cell membership rule
+   backwards.** They say "a `Wide` cell's membership extends to its `WideSpacer`"; the reference
+   asks the inverse — `vendor/alacritty_terminal/src/selection.rs:82-84`, comment "Check if a
+   wide char's trailing spacer is selected" — so a selected **spacer** pulls in its `Wide`
+   partner, and selecting only the glyph leaves the spacer unpainted. The code implements the
+   reference; the doc comment and the test name were corrected here, and the LLD sentence is the
+   design owner's to fix.
+7. `semantic_search_right` steps back one cell without skipping spacers, where
    `semantic_search_left` steps forward one cell **and** skips them. The asymmetry is the
    reference's; it is not observable in the extracted text, because a range whose end lands on
    a `WideSpacer` still covers its `Wide` partner at `end - 1`. Reproduced rather than
@@ -259,6 +281,39 @@ The worktree was created on `main` (`c936ac0`), which has no `crates/vt` at all.
 `git reset --hard 4b833a0` — the tip of `feat/vt-engine`, `US-0077`'s last commit — before any
 file was read or written. Same correction `US-0079` recorded.
 
+### Verification round
+
+Independent verification at `9ef7d9c`:
+[`evidence/US-0078-verify.md`](evidence/US-0078-verify.md). **Verdict: merge after fixes** — one
+correctness defect, two documentation-accuracy findings, four minors. The verifier reproduced
+every gate and number, ran the properties at 20 000 cases, and wrote fourteen probes, two of
+them **exhaustive oracles**: the reference's `is_empty` + `range_simple` / `range_block`
+transcribed literally and compared against `to_range` over all 576 anchor combinations on a
+3×4 grid per kind. `Simple` diverged **0/576**. `Block` diverged 24/576, every one of them
+declared correction 1, and two of those were also out of bounds in the reference.
+
+All findings are addressed here:
+
+| # | Finding | Fix |
+| --- | --- | --- |
+| **F1** | `ED 1` cleared a selection lying wholly in history: `EraseAbove` had no lower bound, where the reference bounds the erase at the screen top (`term/mod.rs:1791`) | `bottom >= screen.screen_top()` added, and the mirror bound on `EraseBelow` for symmetry. `invalidation_matrix` now asserts a history-only selection survives `EL`, `ED 0` and `ED 1` |
+| **F2** | The region-scroll gap claimed the reference deletes the selection. Measured, it does not | Gap rewritten: both engines split it, this is parity, and the coherent-split rule is a **new** behaviour for the design owner |
+| **F3** | The real divergence — an endpoint scrolled out of a region top is killed here, clamped to `(range_top, 0, Left)` there — was undeclared | Declared as **correction C15** with `an_endpoint_scrolled_out_of_a_region_top_is_killed_not_clamped`; kill-over-clamp routed to the design owner |
+| **F4** | `contains_cell`'s wide-cell prose and test name were inverted (the code was right) | Doc comment reworded, test renamed, and a second assertion added proving the rule does **not** run the other way. Reading 6 hands the LLD sentence to the design owner |
+| **F5** | `Selection::kind()` was dead public surface | Removed |
+| **F6** | The `US-0076` table omitted the `invalidated_by` obligation | Row added |
+| **F7** | `bracket_search` is unbounded on an unmatched bracket (parity with the reference) | Recorded as a gap, owner `US-0076` |
+| **F8** | The adopted tail glyph must be a scalar, so a clustered one is dropped | Recorded as a gap, owner this module |
+
+Also noted by the verifier, no action: `clamp` clamps row and column independently where the
+reference's `Point::grid_clamp` snaps to a corner. Unreachable — anchors are only set from live
+positions and `hit_test` clamps first — but a later `Terminal::selection_update` from a stale
+viewport could reach it.
+
+Verifier's measurement of PERF-14, on a 100 000-line scrollback with a 99 000-row selection:
+`to_range` **1 µs**, `text` **97 ms** for 2 564 975 bytes. Three orders of magnitude apart, which
+is the `O(1)` / `O(n)` split the design asks for.
+
 ### Upstream merge
 
 `feat/vt-engine` moved to `02962f4` mid-packet (`US-0075` rework: `Screen::blank_row` as the
@@ -269,13 +324,15 @@ is green on the merge.
 
 ### Commands
 
+All numbers below are **after** the verification round's fixes.
+
 | Command | Result |
 | --- | --- |
 | `pwsh scripts/ci-local.ps1` | **green** — fmt, clippy `-D warnings`, `cargo test --workspace`, and all five Python policy checks |
-| `cargo test --workspace` | raw totals over **56** `test result:` sections: **1455 passed / 0 failed / 8 ignored** (the `US-0077` baseline on this branch was 54 sections / 1317 / 6; this packet's 46 new tests and the merged `US-0075` rework account for the delta) |
-| `cargo test -p oneterm-vt` | 267 passed / 0 failed / 2 ignored in 0.54 s |
-| `cargo test -p oneterm-vt selection::` | **45 passed / 0 failed** in 0.07 s — 41 `selection::tests`, 4 `selection::props` |
-| `VT_PROPTEST_CASES=10000 cargo test -p oneterm-vt selection::props` | 4 passed in 0.77 s |
+| `cargo test --workspace` | raw totals over **56** `test result:` sections: **1456 passed / 0 failed / 8 ignored** (the `US-0077` baseline on this branch was 54 sections / 1317 / 6; this packet's 47 new tests and the merged `US-0075` rework account for the delta. Before the fixes: 1455, the delta being correction C15's test) |
+| `cargo test -p oneterm-vt` | 268 passed / 0 failed / 2 ignored |
+| `cargo test -p oneterm-vt selection::` | **46 passed / 0 failed** in 0.05 s — 42 `selection::tests`, 4 `selection::props` |
+| `VT_PROPTEST_CASES=10000 cargo test -p oneterm-vt selection::props` | 4 passed in 0.77 s; the verifier repeated it at 20 000 in 3.24 s |
 
 ### What the tests pin
 
@@ -295,7 +352,7 @@ described the behaviour and under a corrected one where it did not:
 | `text_joins_wrapped_rows_without_a_newline` | same |
 | `text_skips_wide_spacers_and_emits_whole_graphemes` | same |
 | `text_emits_tab_cells_as_tabs` | same |
-| `contains_cell_extends_a_wide_char_to_its_spacer` | same |
+| `contains_cell_extends_a_wide_char_to_its_spacer` | **renamed** `contains_cell_pulls_in_the_wide_partner_of_a_selected_spacer` — the LLD's name states the rule backwards; see reading 6 |
 | `range_is_o1_and_does_not_allocate` | same |
 | `anchors_follow_a_region_scroll` | same |
 | `selection_clears_when_an_anchor_is_trimmed` | same |
@@ -319,6 +376,7 @@ Beyond the list: `reversed_anchors_produce_the_same_range_for_every_kind`,
 `delete_lines_inside_a_region_moves_the_selection_and_kills_a_deleted_one`,
 `a_selection_survives_a_scroll_into_history`,
 `a_column_reflow_round_trip_carries_the_anchors_and_the_text`,
+`an_endpoint_scrolled_out_of_a_region_top_is_killed_not_clamped` (correction C15),
 `a_selection_reads_the_screen_its_anchors_are_on`,
 `a_cell_carrying_only_a_grapheme_id_still_reads_as_text`, and in
 `crates/vt/src/render/render_tests.rs`,
@@ -358,18 +416,53 @@ kinds and both sides on both anchors; `a_region_scroll_leaves_the_range_well_for
 4. **Block text passes `include_wrapped_wide` only on the last row**, where the reference passes
    `start.column != 0` on every other row. The reference's condition has no stated meaning and
    would emit the same glyph on several rows of one rectangle.
+5. **C15 — an endpoint scrolled out of a region top is killed, where the reference clamps it.**
+   A region scroll discards the rows at the region top. The reference keeps the selection alive
+   and rewrites the discarded endpoint to `(range_top, column 0, Side::Left)` for every
+   non-`Block` kind (`vendor/alacritty_terminal/src/selection.rs:160-166`, pinned by its own
+   `rotate_in_region_up`). Here the anchor dies with its content and the selection resolves to
+   `None`.
+
+   Deliberate, and the reason is `selection.md`'s own: the clamp leaves the selection covering
+   text the user never selected, which is what the design calls "pointing at unrelated text". It
+   also needs no selection-specific code — `Anchors::shift_region` already kills an anchor in a
+   blanked range, which is the same mechanism `IL`/`DL`/`SU` use.
+
+   **The design owner confirms kill-over-clamp.** Test:
+   `an_endpoint_scrolled_out_of_a_region_top_is_killed_not_clamped`. Numbered C15 as the next
+   free correction id after `US-0077`'s C14.
 
 ### Gaps
 
-- **A region scroll can split a selection.** When a scroll region contains one endpoint and not
-  the other, the anchor list moves that endpoint alone, so the selection legitimately grows or
-  shrinks. The reference deletes it (`Selection::rotate` returns `None` when the start rotates
-  out of the region while the end has not). The anchor list cannot express "these two entries
-  must move together", so this is **not** implemented; the property
-  `a_region_scroll_leaves_the_range_well_formed` asserts only that the result is ordered, in
-  bounds and materialisable. Closing it needs either a `SelectionKind`-aware rotation hook on
-  `Anchors` or a post-scroll consistency check on the terminal, and it is the design owner's
-  call which. Found by the property test, which originally asserted the stronger property.
+- **A region scroll can split a selection, in both engines.** When a scroll region contains one
+  endpoint and not the other, the anchor list moves that endpoint alone, so the selection grows
+  or shrinks and can end up with an unrelated row interposed.
+
+  **This is parity, not a regression.** `Selection::rotate`
+  (`vendor/alacritty_terminal/src/selection.rs:137-189`) moves an endpoint only when it lies in
+  `range_top..range_bottom`, so an endpoint outside the region stays exactly where
+  `Anchors::shift_region` leaves it here; hand-running `rotate` on the same selection produces
+  the same split and the same interposed blank row. The reference returns `None` in only two
+  sub-cases — a scroll **down** that rotates the start past `range_bottom` while the end is
+  still inside, and the end overtaking the start — neither of which is the split case. An
+  earlier version of this bullet claimed the reference deletes the selection; it does not, and
+  the verifier measured it.
+
+  So this is a **new behaviour for the design owner**, not a defect against the reference:
+  neither engine keeps a partially contained selection coherent. The property
+  `a_region_scroll_leaves_the_range_well_formed` asserts what does hold — the result is ordered,
+  in bounds and materialisable. Closing it needs a rule nobody has written: either a
+  `SelectionKind`-aware rotation hook on `Anchors` or a post-scroll consistency check on
+  `Terminal`. Owner: the `IN-0029` design owner.
+- **F7 — `bracket_search` is unbounded.** An unmatched bracket walks to the oldest or newest
+  live row: eight million cells on a 100 000 × 80 scrollback. The reference's `iter_from` does
+  the same, so this is parity, and a double-click on a lone `(` is rare. A row or cell budget
+  belongs with the packet that gives `Terminal` a cost model. Owner: `US-0076`.
+- **F8 — the adopted tail glyph must be a scalar.** `text.rs` matches only
+  `CellContent::Scalar` when adopting the glyph a `LeadingWideSpacer` pushed onto the next row,
+  so a clustered glyph there (an emoji with a variation selector) is silently omitted; the
+  reference pushes `cell.c` unconditionally. One `match` arm, and it needs the interner lookup
+  that arm currently avoids. Owner: this module, at the first packet that touches it.
 - **The invalidation matrix is not wired to anything**, because nothing calls it yet: `Terminal`
   and the dispatch table are `US-0076`'s. The matrix is a predicate with its own test; the
   packet that adds `ED`/`EL` dispatch must call it. `grid/screen.rs` and

@@ -164,10 +164,6 @@ impl Selection {
         anchors.release(self.end);
     }
 
-    pub fn kind(&self) -> SelectionKind {
-        self.kind
-    }
-
     /// The cells this selection covers, or `None` when it is empty or an
     /// endpoint's content is gone. `Terminal::selection_range`.
     ///
@@ -228,10 +224,14 @@ impl Selection {
         };
         let screen = grid.screen_of(top);
         let cursor = screen.cursor().pos.row;
+        // Each erase names a range of rows; the rule is always "does the
+        // selection meet it". Both bounds are stated even where one cannot be
+        // crossed, because the asymmetry is exactly how `ED 1` came to clear a
+        // selection lying wholly in history.
         match op {
             Invalidation::EraseLine => top <= cursor && cursor <= bottom,
-            Invalidation::EraseBelow => bottom >= cursor,
-            Invalidation::EraseAbove => top <= cursor,
+            Invalidation::EraseBelow => bottom >= cursor && top <= screen.newest(),
+            Invalidation::EraseAbove => top <= cursor && bottom >= screen.screen_top(),
             Invalidation::EraseHistory => top < screen.screen_top(),
             Invalidation::EraseScreen | Invalidation::SwapAlt | Invalidation::Reset => true,
         }
@@ -261,8 +261,10 @@ impl SelectionRange {
     /// Whether the **cell** at `pos` paints as selected.
     ///
     /// Keeps the reference's two quirks: a block-shaped cursor sitting exactly
-    /// on a corner of the selection is not inverted, and a `Wide` cell's
-    /// membership extends to its `WideSpacer`. `block_cursor` is `Some(pos)`
+    /// on a corner of the selection is not inverted, and a selected
+    /// `WideSpacer` pulls in the `Wide` cell to its left — the direction runs
+    /// from the spacer to the glyph, not the other way, so selecting only the
+    /// `Wide` cell leaves its spacer unpainted. `block_cursor` is `Some(pos)`
     /// when a block-shaped cursor is at that position and `None` for every
     /// other cursor shape — `CursorShape` itself is `US-0076`'s type.
     pub fn contains_cell(&self, screen: &Screen, pos: Pos, block_cursor: Option<Pos>) -> bool {
