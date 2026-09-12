@@ -41,9 +41,13 @@ invented instead (`docs/terminal-backend.md:151-155`), and because damage is sin
 
 **1. Rows are named by an absolute, monotonically increasing position in the output stream.**
 
-- `RowId(u64)` names a **position**, not a piece of content. It is allocated from one
-  terminal-wide counter when a row is created, never reused and never decremented, and it is the
-  ring index: `slot = id & mask`.
+- `RowId(u64)` names a **position**, not a piece of content. It is never reused, never
+  decremented, and it is the ring index: `slot = id & mask`.
+- **Two lanes.** The primary screen allocates from `0` and the alternate from `1 << 63`, each
+  keeping a contiguous run, because one shared counter would leave gaps in both runs once the two
+  screens allocate independently. The lanes never meet, so an id is still unambiguous and the high
+  bit routes it to its screen. Everything that compares an id against a bound — trimming above
+  all — must be lane-scoped.
 - **What "stable" means, precisely.** A `RowId` keeps naming the same content across the
   operation that dominates a terminal's life — pushing rows into scrollback as output arrives —
   and across `RIS`, `ED 2`, `ED 3` and viewport scrolling. It does **not** survive an operation
@@ -51,8 +55,8 @@ invented instead (`docs/terminal-backend.md:151-155`), and because damage is sin
   scroll whose region is not the whole viewport, or reflow. Those copy content between fixed
   ids, which is the normal case inside tmux, vim and htop.
 - **Anchors are therefore engine-owned, not consumer-owned.** One tracked-anchor list holds the cursor,
-  the saved cursor, the viewport top, both selection anchors, every graphics placement and every
-  OSC 133 mark (the canonical `AnchorKind` list lives in
+  the saved cursor and the viewport top **per screen**, both selection anchors, every graphics
+  placement and every OSC 133 mark (the canonical `AnchorKind` list lives in
   `docs/spec-intakes/IN-0029-vt-engine/low-level-design/grid-and-scrollback.md`). Every row-moving
   primitive adjusts it, and reflow remaps it through the same mechanism. A consumer
   never re-derives an anchor from a `RowId` it stored earlier; it reads the anchor back from the
