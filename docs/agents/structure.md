@@ -86,8 +86,13 @@ OneTerm/
 │   │                               #   the listener is `SshListener = OscRouter<SshTransport>`;
 │   │                               #   test_support.rs (cfg(test)) = in-process russh server helpers
 │   │
-│   ├── local-shell/                # `oneterm-local-shell` — local PTY (alacritty_terminal::tty + ConPTY)
+│   ├── local-shell/                # `oneterm-local-shell` — local PTY backend (oneterm-pty + its own poll loop)
 │   │   └── src/                    # LocalSession (impl TerminalSession) + ShellEventLoop + LocalTransport
+│   │
+│   ├── pty/                        # `oneterm-pty` — pseudo-console transport, no grid (L0 leaf)
+│   │   └── src/                    # Options/Shell/WindowSize/GlyphWidth + EventedReadWrite/EventedPty/OnResize;
+│   │                               #   windows.rs + windows/{conpty,pipe,child}.rs = ConPTY (bundled conpty.dll
+│   │                               #   first, kernel32 fallback — DEC-0013); unix.rs = openpty + reaper thread
 │   │
 │   ├── actions/                    # `oneterm-actions` — leaf: gpui action structs (Copy/Paste/AddPanel…)
 │   │   └── src/lib.rs
@@ -215,6 +220,7 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 | `highlight` (`oneterm-highlight`) | _(leaf)_ | engine | Semantic syntax-highlighting engine. |
 | `completion` (`oneterm-completion`) | `core` | engine | Terminal auto-completion engine (gpui-free, alacritty-free): catalog model + embedded `assets/**/*.json` catalogs, line parsing + subcommand resolution, matching/ranking, in-session `CompletionHistory`, and secret redaction. See [`../auto-completion.md`](../auto-completion.md). |
 | `terminal` (`oneterm-terminal`) | `core` | engine | Terminal engine (alacritty-coupled, no gpui): `TerminalSession`, `TerminalModel`, events, palette/OSC/key/mouse helpers, and `SessionFactory`. |
+| `pty` (`oneterm-pty`) | _(leaf)_ | transport | Pseudo-console transport, no grid and no OneTerm dependency: `PseudoConsole` (ConPTY with the bundled `conpty.dll` preferred over `kernel32` — [`DEC-0013`](../decisions/DEC-0013-bundled-conpty-host-and-bump-script.md) — or `openpty`), the `EventedReadWrite` / `EventedPty` / `OnResize` traits the caller's own poll loop drives, and the two poll tokens. |
 | `actions` (`oneterm-actions`) | `core`, gpui | leaf-ui | gpui `Action` structs shared by shell and features; domain placement types come from `core`. |
 | `settings` (`oneterm-settings`) | `core`, gpui, gpui-component | shared | `TerminalConfig`, live `TerminalSettings` (defaults single-sourced from the config), and `UiConfig` including the `Theme` observer that persists `ui_config.json`. |
 | `state` (`oneterm-state`) | `core`, `terminal`, `completion`, gpui, gpui-component | shared | Cross-feature runtime state (`AppState`, `AgentRegistry`, `CompletionHistory`) + injection (`AppServices` bundle: session factory, `WorkspaceCommands`, active-terminal metrics, agent focuser) + shared shell contracts (`docks.json` document owner, panel names, dock helpers). |
@@ -227,7 +233,7 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 | `settings-ui` (`oneterm-settings-ui`) | `core`, `settings`, `state`, `update`, `theme`, `actions`, gpui-component | feature | General Settings window, update status/actions, and key-binding setup. |
 | `agent-ui` (`oneterm-agent-ui`) | `terminal`, `settings`, `state`, gpui-component | feature | Agent Panel fleet view. |
 | `ssh` (`oneterm-ssh`) | `core`, `terminal` | backend | russh client and SFTP; implements `TerminalSession` and `SftpBackend`. |
-| `local-shell` (`oneterm-local-shell`) | `core`, `terminal` | backend | Local PTY; implements `TerminalSession`. |
+| `local-shell` (`oneterm-local-shell`) | `core`, `terminal`, `pty` | backend | Local PTY; implements `TerminalSession` and owns the poll loop over `oneterm-pty`. |
 | `app` (`oneterm-app`) | shell + all five features + shared layers (incl. `update`) + gpui-component + both backends | binary | Only crate that knows every layer. Installs `AppSessionFactory`, initializes features and commands, and opens the window. |
 | `tools` (`oneterm-tools`) | `alacritty_terminal`, `russh`, `russh-sftp`, `tokio`, `polling`, `rand`, `anyhow`, `serde`, `serde_json` — **no OneTerm crate** | diagnostics | Outside the L0-L4 layering, never a dependency of the app. Binaries: `doom-fire`, `pty-throughput`, `sftp-dev-server`, and (IN-0029) `vt-corpus` — the VT parity corpus: bless, check, cross-check, deviation grep — plus `vt-bench`, the five benchmark tiers. `tests/corpus_check.rs` is the parity drift gate that runs in `cargo test --workspace`. |
 

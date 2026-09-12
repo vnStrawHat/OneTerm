@@ -15,9 +15,9 @@ publish.workspace = true
 [lints]
 workspace = true
 
-# Diagnostics only — this crate is never a dependency of the app and depends on
-# no OneTerm crate (docs/agents/crate-dependency-rules.md: it sits outside the
-# L0–L4 layering, like a `tools/` directory).
+# Diagnostics only — this crate is never a dependency of the app; it sits
+# outside the L0–L4 layering (docs/agents/crate-dependency-rules.md), like a
+# `tools/` directory, and may only reach down to leaf crates.
 [[bin]]
 name = "doom-fire"
 path = "src/bin/doom-fire.rs"
@@ -47,8 +47,8 @@ path = "src/bin/vt-bench.rs"
 # ---------------------------------------------------------------------------
 
 [dependencies]
-# pty-throughput: the same PTY path OneTerm uses (alacritty_terminal::tty + polling).
-alacritty_terminal.workspace = true
+# pty-throughput: the same PTY path OneTerm uses (oneterm-pty + polling).
+oneterm-pty.workspace = true
 polling.workspace = true
 # sftp-dev-server: the same SSH/SFTP crates OneTerm's client uses, server side.
 russh.workspace = true

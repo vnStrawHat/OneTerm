@@ -1,5 +1,5 @@
-//! `LocalSession` — spawn a local shell via `alacritty_terminal::tty` on a
-//! dedicated PTY owner thread (ConPTY on Windows).
+//! `LocalSession` — spawn a local shell via `oneterm-pty` on a dedicated PTY
+//! owner thread (ConPTY on Windows).
 //!
 //! This file holds the spawn path, the struct, and its inherent helpers; the
 //! `TerminalSession` implementation lives in `session_terminal.rs`. See
@@ -8,11 +8,10 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use alacritty_terminal::event::WindowSize;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config, Term};
-use alacritty_terminal::tty::{Options, Shell};
 use async_channel::Receiver;
+use oneterm_pty::{Options, Shell, WindowSize};
 
 use oneterm_core::config::resolve_shell;
 use oneterm_core::{AppError, LocalShellConfig, TerminalLogConfig, home_dir};
@@ -56,9 +55,11 @@ impl LocalSession {
                 resolved.args,
             )),
             working_directory: cfg.cwd.clone().or_else(home_dir),
-            drain_on_exit: false,
             env: resolved.env,
-            #[cfg(not(windows))]
+            // The engine measures cluster widths with `wcswidth`, so the console
+            // host is asked for the same rule.
+            glyph_width: oneterm_pty::GlyphWidth::WcsWidth,
+            #[cfg(unix)]
             child_signal_mask: None,
             // Escape every argument with the C-runtime rules so user-supplied
             // `Custom` args and the PowerShell `-Command` payload survive
@@ -69,8 +70,8 @@ impl LocalSession {
             escape_args: true,
         };
         let winsize = WindowSize {
-            num_lines: initial.rows,
-            num_cols: initial.cols,
+            rows: initial.rows,
+            cols: initial.cols,
             cell_width: 0,
             cell_height: 0,
         };
@@ -181,9 +182,9 @@ fn reap_owner_thread(join: std::thread::JoinHandle<()>) {
     }
 }
 
-/// The program string handed to alacritty for `resolved.program`.
+/// The program string handed to `oneterm-pty` for `resolved.program`.
 ///
-/// On Windows alacritty joins the program and its arguments into one
+/// On Windows the transport joins the program and its arguments into one
 /// `CreateProcessW` command line with `lpApplicationName = NULL`, so an unquoted
 /// path containing spaces (`C:\Program Files\PowerShell\7\pwsh.exe`) is
 /// resolved ambiguously (CWE-428). `Options::escape_args` only escapes the
@@ -199,7 +200,7 @@ fn program_argument(program: &Path) -> String {
 }
 
 /// Quote one token with the C-runtime command-line rules that `CreateProcessW`
-/// consumers use (the same rules alacritty applies to arguments): wrap in double
+/// consumers use (the same rules `Options::escape_args` applies): wrap in double
 /// quotes when the token is empty or contains whitespace, and double the
 /// backslashes that precede an embedded or closing quote.
 fn quote_windows_argument(token: &str) -> String {

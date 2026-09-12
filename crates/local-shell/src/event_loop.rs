@@ -19,11 +19,13 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 
-use alacritty_terminal::event::{OnResize, WindowSize};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
-use alacritty_terminal::tty::{self, EventedPty, Options};
 use log::error;
+use oneterm_pty::{
+    ChildEvent, EventedPty, OnResize, Options, PTY_CHILD_EVENT_TOKEN, PTY_READ_WRITE_TOKEN,
+    PseudoConsole, WindowSize,
+};
 use polling::{Event as PollEvent, Events, PollMode, Poller};
 
 use oneterm_core::{TerminalLogConfig, report_best_effort};
@@ -54,14 +56,6 @@ fn record_lock_sample(samples: &mut Vec<u64>, started: std::time::Instant) {
         samples.push(started.elapsed().as_micros() as u64);
     }
 }
-
-/// Token used by `alacritty_terminal`'s PTY to signal child (signal) events.
-///
-/// `alacritty_terminal::tty::PTY_CHILD_EVENT_TOKEN` is `pub(crate)` on Unix (only
-/// `pub` on Windows), so it is not accessible from this crate. Its value is fixed
-/// at `1` in alacritty's `tty/unix.rs` and `tty/windows/mod.rs`; the read/write
-/// token is `0`. We mirror that value here.
-const PTY_CHILD_EVENT_TOKEN: usize = 1;
 
 /// Request handed to [`ShellNotifier::send`].
 ///
@@ -165,20 +159,7 @@ pub(crate) struct ShellEventLoop<P: EventedPty + OnResize> {
     control: std::sync::Arc<ShellControl>,
 }
 
-#[cfg(unix)]
-fn pty_process_id(pty: &tty::Pty) -> io::Result<u32> {
-    Ok(pty.child().id())
-}
-
-#[cfg(windows)]
-fn pty_process_id(pty: &tty::Pty) -> io::Result<u32> {
-    pty.child_watcher()
-        .pid()
-        .map(std::num::NonZeroU32::get)
-        .ok_or_else(|| io::Error::other("ConPTY child process id is unavailable"))
-}
-
-impl ShellEventLoop<tty::Pty> {
+impl ShellEventLoop<PseudoConsole> {
     /// Spawn the PTY owner thread. The PTY is constructed, operated, and dropped there.
     pub(crate) fn spawn_owned(
         opts: Options,
@@ -192,8 +173,10 @@ impl ShellEventLoop<tty::Pty> {
         let join = std::thread::Builder::new()
             .name("PTY owner".into())
             .spawn(move || {
-                let result = tty::new(&opts, winsize, 0).and_then(|pty| {
-                    let pid = pty_process_id(&pty)?;
+                let result = PseudoConsole::spawn(&opts, winsize).and_then(|pty| {
+                    let pid = pty.child_pid().ok_or_else(|| {
+                        io::Error::other("the PTY child process id is unavailable")
+                    })?;
                     listener
                         .logging()
                         .set_identity(local_log_identity(&program, pid));
@@ -271,7 +254,7 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
         let mut write_queue: VecDeque<Cow<'static, [u8]>> = VecDeque::new();
 
         // Register PTY with poller.
-        let interest = PollEvent::readable(0);
+        let interest = PollEvent::readable(PTY_READ_WRITE_TOKEN);
         let poll_opts = PollMode::Level;
         if let Err(err) = unsafe { self.pty.register(&self.poll, interest, poll_opts) } {
             error!("ShellEventLoop: register error: {err}");
@@ -325,8 +308,12 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take();
-            if let Some(size) = pending_resize {
-                self.pty.on_resize(size);
+            if let Some(size) = pending_resize
+                && let Err(error) = self.pty.on_resize(size)
+            {
+                // The session is still usable at the old size, so keep it alive
+                // (docs/agents/error-policy.md, transport row).
+                log::warn!("ShellEventLoop: PTY resize failed: {error}");
             }
 
             // Drain queued input (non-blocking). Resize and shutdown never
@@ -368,7 +355,7 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
                 }
 
                 if event.key == PTY_CHILD_EVENT_TOKEN {
-                    if let Some(tty::ChildEvent::Exited(status)) = self.pty.next_child_event() {
+                    if let Some(ChildEvent::Exited(status)) = self.pty.next_child_event() {
                         self.term.lock().exit();
                         publish_child_exit(&self.pump, status);
                         self.deregister_pty();

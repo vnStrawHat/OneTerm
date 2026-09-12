@@ -25,9 +25,10 @@ product: terminal engine glue, backends, UI, persistence, packaging, and the aut
 - UI: published `gpui-pre` / GPUI Kit 0.6 crates (`docs/agents/dependencies.md`);
   `alacritty_terminal` and `vte` are vendored terminal forks under `vendor/`
   (pristine upstream + `vendor/patches/`).
-- Terminal engine: `alacritty_terminal`; local PTY via `alacritty_terminal::tty` (Windows ConPTY
-  with bundled `conpty.dll` / `OpenConsole.exe`); SSH/SFTP via `russh` + `russh-sftp` on a
-  tokio runtime hidden inside `crates/ssh`.
+- Terminal engine: `alacritty_terminal`; local PTY via `oneterm-pty` (`crates/pty`, OneTerm's
+  own transport: Windows ConPTY with the bundled `conpty.dll` / `OpenConsole.exe` preferred over
+  `kernel32`, `openpty` on Unix); SSH/SFTP via `russh` + `russh-sftp` on a tokio runtime hidden
+  inside `crates/ssh`.
 - Binary: `oneterm` from `crates/app` (keeps the console in debug builds); local
   diagnostics binaries live in `crates/tools`.
 - Persistence: JSON files in `oneterm_core::config_dir()` (`target/` in debug builds,

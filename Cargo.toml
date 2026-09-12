@@ -16,6 +16,7 @@ members = [
     "crates/highlight",
     "crates/update",
     "crates/local-shell",
+    "crates/pty",
     "crates/ssh",
     "crates/completion",
     "crates/tools",
@@ -61,6 +62,7 @@ oneterm-settings-ui = { path = "crates/settings-ui" }
 oneterm-agent-ui = { path = "crates/agent-ui" }
 oneterm-highlight = { path = "crates/highlight" }
 oneterm-local-shell = { path = "crates/local-shell" }
+oneterm-pty = { path = "crates/pty" }
 oneterm-update = { path = "crates/update" }
 oneterm-ssh = { path = "crates/ssh" }
 oneterm-completion = { path = "crates/completion" }
@@ -129,10 +131,13 @@ rust-embed = "8.7"
 # `BOOL` to `windows_sys::core`); the feature set is the union of what they need.
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_IO",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Pipes",
     "Win32_System_Threading",
 ] }
 # Compile assets/oneterm.rc → embed app icon + version info into the exe (app build.rs).

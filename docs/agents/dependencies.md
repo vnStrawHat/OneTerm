@@ -60,7 +60,7 @@ Every third-party dependency is declared once in root `[workspace.dependencies]`
 |---|---|
 | SSH and SFTP | `russh` (features `ring`, `flate2`, `rsa`), `russh-sftp` |
 | SSH runtime | `tokio`, `tokio-util`, `rand` |
-| Local shell PTY | `alacritty_terminal::tty` + `polling` (do not use `portable-pty`) |
+| Local shell PTY | `oneterm-pty` (OneTerm's own crate) over `polling` + `windows-sys` / `libc` (do not use `portable-pty`) |
 | Terminal parser / grid | vendored `alacritty_terminal`, which pulls vendored `vte` |
 | Event channel | `async-channel` |
 | Terminal helpers | `base64`, `aho-corasick`, `regex` |
@@ -71,10 +71,25 @@ Every third-party dependency is declared once in root `[workspace.dependencies]`
 | Auto-update | `reqwest`, `semver`, `sha2`, `zip`, `tar`, `flate2` |
 | UI helpers | `chrono`, `sysinfo`, `rust-embed` |
 | Terminal graphics | `image` (default features off: only the pixel-buffer types `gpui::RenderImage` takes; same major as GPUI's own `image`) |
-| Windows FFI | `windows-sys 0.59` with a workspace-wide feature union |
-| Build / development | `embed-resource`; diagnostics also use `libc`, `polling`, and `alacritty_terminal`; `futures` (dev-only) feeds russh's in-process SSH agent server in `oneterm-ssh` tests |
+| Windows FFI | `windows-sys 0.59` with a workspace-wide feature union (`Win32_System_Pipes` + `Win32_Security` are `oneterm-pty`'s `CreatePipe`) |
+| Build / development | `embed-resource`; diagnostics also use `libc`, `polling`, and `oneterm-pty`; `futures` (dev-only) feeds russh's in-process SSH agent server in `oneterm-ssh` tests |
 
 Do not re-add without a design decision: `tracing` / `tracing-subscriber`, `directories`, `toml`, `russh-cryptovec`, `ssh-key`, `smol`, or `rust-i18n`.
+
+### `oneterm-pty`'s direct dependencies (`US-0071`)
+
+| Crate | Why | Note |
+|---|---|---|
+| `polling` | the caller's poll loop | **Public**: `Poller`, `Event` and `PollMode` appear in `EventedReadWrite`'s signatures, so a `polling` bump is a breaking change to `oneterm-pty`'s own API. |
+| `windows-sys` | ConPTY, `CreatePipe`, the child-exit wait callback | Windows only, at the workspace pin. |
+| `libc` | `openpty`, `TIOCSCTTY`/`TIOCSWINSZ`, the signal mask | Unix only. |
+| `log` | one `info` line naming the resolved ConPTY host | |
+
+The crate deliberately reproduces `miow` (anonymous pipes), `piper` (the reader/writer ring)
+and `signal-hook` + `rustix-openpty` (Unix child exit) with the platform APIs and `std` instead
+of depending on them: a transport crate must not install a process-global `SIGCHLD` handler, and
+the ring is a `Mutex<VecDeque<u8>>` because a pseudo-console is nowhere near fast enough for the
+lock to matter.
 
 Before adding a dependency, check whether the GPUI Kit release already provides the capability and inspect root `Cargo.toml`. If a new crate is still required, open an issue, add one workspace declaration, and update this table when it introduces a new dependency category.
 
