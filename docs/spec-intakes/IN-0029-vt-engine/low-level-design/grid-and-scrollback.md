@@ -383,12 +383,12 @@ Selection invalidation follows the reference and is specified in
 is a defect in the engine being replaced, fixed rather than reproduced (owner ruling, 2026-09-12).
 `US-0072`'s scripted grep has measured which recordings each correction can touch (below, from
 `evidence/US-0072-recording-risk.md`); the packet that implements a correction writes the exact
-cells into that recording's `expected-diffs.toml`, so a corrected quirk can never hide a
+cells into that recording's `expected-diffs.json`, so a corrected quirk can never hide a
 regression: the gate still fails on any difference that is not declared.
 
 | C | Correction | Trap | Packet | Affected recordings (**measured in `US-0072`**, `evidence/US-0072-recording-risk.md`) |
 | --- | --- | --- | --- | --- |
-| C1 | `DCH` is a plain shift left by `n` | 19 | `US-0075` | **8 recordings send `DCH`**: `decaln_reset`, `deccolm_reset`, `delete_chars_reset`, `erase_chars_reset`, `insert_blank_reset`, `region_scroll_down`, `scroll_up_reset`, `underline`. The quirk needs `count >= cols - col`, so the large counts are the likely ones — `erase_chars_reset` (max 21), `deccolm_reset` (max 15), `scroll_up_reset` (max 11). The packet writes the exact cells into each affected `expected-diffs.toml` |
+| C1 | `DCH` is a plain shift left by `n` | 19 | `US-0075` | **8 recordings send `DCH`**: `decaln_reset`, `deccolm_reset`, `delete_chars_reset`, `erase_chars_reset`, `insert_blank_reset`, `region_scroll_down`, `scroll_up_reset`, `underline`. The quirk needs `count >= cols - col`, so the large counts are the likely ones — `erase_chars_reset` (max 21), `deccolm_reset` (max 15), `scroll_up_reset` (max 11). The packet writes the exact cells into each affected `expected-diffs.json` |
 | C2 | `ED 1` clears row 0 | 11 | `US-0075` | **2 recordings**: `vttest_cursor_movement_1`, `vttest_origin_mode_1` |
 | C3 | A short region scroll rotates, then blanks | 17 | `US-0075` | **2 recordings** pair `DECSTBM` with `IL`/`DL`: `vim_24bitcolors_bce` and `vttest_insert`. `vttest_insert`'s 22-row region with counts up to 24 is exactly the "count at or above the region height" case. (The earlier guesses `region_scroll_down` and `scroll_in_region_up_preserves_history` pair no region with a region-scroll primitive) |
 | C4 | Insert mode repairs wide pairs instead of leaving orphaned spacers | 7 | `US-0075` | **1 recording**: `vttest_insert` (IRM set once, one non-ASCII character printed) — possible, not certain |

@@ -91,21 +91,24 @@ revision; `THIRD-PARTY-NOTICES.md` gains a corpus row as the two fork rows are r
 so some recordings will legitimately differ from expectations blessed by the engine being replaced.
 That is declared per recording and **per cell**, never as a skipped recording:
 
-```toml
-# crates/vt/tests/corpus/alacritty-ref/delete_chars_reset/expected-diffs.toml
-[[diff]]
-deviation = "C1"                 # must name a row in a corrections table
-rows      = "4"                  # viewport row index, or a range
-cols      = "70..80"
-fields    = ["content", "attrs"] # which parts of grid.expect may differ
-reason    = "DCH is a plain shift left; the reference clamps end to cols - 1"
+```json
+// crates/vt/tests/corpus/alacritty-ref/delete_chars_reset/expected-diffs.json
+// JSON rather than TOML: `serde_json` is already in the graph, `toml` is on the
+// do-not-re-add list in docs/agents/dependencies.md section 3 (US-0072 verify, F1).
+{ "diff": [ {
+  "deviation": "C1",
+  "rows": "4",
+  "cols": "70..80",
+  "fields": ["content", "attrs"],
+  "reason": "DCH is a plain shift left; the reference clamps end to cols - 1"
+} ] }
 ```
 
 Harness rules, and they are what keep the gate a gate:
 
 - A difference **inside** a declared window, in a declared field, passes. Anything else fails —
   a different row, a different column, a different field, or a difference in a recording with no
-  `expected-diffs.toml`.
+  `expected-diffs.json`.
 - A declared window that produces **no** difference also fails (`stale declared diff`), so a
   correction that is later re-implemented as parity cannot leave a permanent hole.
 - Every `deviation` id must resolve to a row in the corrections tables of
@@ -330,7 +333,7 @@ All 48 items from [`../research/engine-semantics.md`](../research/engine-semanti
 
 ## Edge Cases and Failure Modes
 
-- [ ] **A recording that legitimately differs** — it carries an `expected-diffs.toml` naming the
+- [ ] **A recording that legitimately differs** — it carries an `expected-diffs.json` naming the
   correction, the cells and the fields. There is no whole-recording skip and no silent `#[ignore]`,
   and a declared window that stops differing fails the gate.
 - [ ] **`bless` used to hide a regression** — refused without `--deviation <row-id>`; the
@@ -356,7 +359,7 @@ All 48 items from [`../research/engine-semantics.md`](../research/engine-semanti
   `oracle_precondition_patches_do_not_touch_the_state_machine`.
 - [ ] `US-0076`: `cargo test -p oneterm-vt --test ref_corpus` green on all 45 recordings, both
   files, with the new engine and the **frozen** expectations — every difference covered by a
-  declared `expected-diffs.toml` window naming a correction, and no stale declared window.
+  declared `expected-diffs.json` window naming a correction, and no stale declared window.
 - [ ] `US-0077`: `reflow::props` green over 10 000 cases; the debug-suite runtime budget
   re-measured.
 - [ ] `US-0081`-`US-0085`: `vt-diff` green over all recordings plus the captured session at the
