@@ -678,6 +678,18 @@ impl Screen {
         true
     }
 
+    /// `DECSTBM` with bounds the dispatch layer has already validated
+    /// (`US-0076`): the reference's one-based validity test can produce an
+    /// **empty** region, which [`Screen::set_region`]'s `top < bottom` contract
+    /// cannot express, and it never homes the cursor itself.
+    pub fn set_region_raw(&mut self, top: u16, bottom: u16) {
+        let bottom = bottom.min(self.rows);
+        self.region = ScrollRegion {
+            top: top.min(bottom),
+            bottom,
+        };
+    }
+
     const fn no_scroll() -> ScrollReport {
         ScrollReport {
             scrolled: None,

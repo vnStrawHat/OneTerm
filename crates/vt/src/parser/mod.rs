@@ -24,7 +24,9 @@ mod utf8;
 mod parser_tests;
 
 pub use osc::{MAX_OSC_PARAMS, OSC_INLINE, OSC_LARGE, OscParams, StringTerm};
-pub use params::{Intermediates, MAX_INTERMEDIATES, MAX_PARAMS, ParamSep, Params};
+pub use params::{
+    Intermediates, MAX_INTERMEDIATES, MAX_PARAMS, ParamGroups, ParamSep, Params,
+};
 
 use osc::OscAccumulator;
 use params::ParamSep::Semicolon;

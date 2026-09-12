@@ -10,6 +10,7 @@
 use crate::event::batch::{ByteSpan, ParamSpans, StrSpan};
 use crate::grid::{RowId, RowsScrolled};
 use crate::intern::GraphicId;
+use crate::terminal::ColorKey;
 
 /// Which OSC 52 selection a clipboard event names.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -54,6 +55,13 @@ pub enum VtEvent {
     },
     /// Bytes the terminal owes the host: DA / DSR / DECRQM / XTVERSION.
     Reply(ByteSpan),
+    /// `OSC 4 / 10 / 11 / 12` with a `?` value. The engine holds only the
+    /// override layer, so the embedder — which owns the theme — formats the
+    /// reply, and it has to terminate it the way the question was terminated.
+    ColorQuery {
+        key: ColorKey,
+        terminator: StringTerm,
+    },
     /// `ED 2`, `ED 3` and `RIS` only — never `ED 0` / `ED 1`.
     ScreenCleared,
     /// An OSC the engine does not implement itself, forwarded in byte order.
@@ -90,4 +98,7 @@ pub struct FeedStats {
     pub grapheme_truncated: u32,
     pub unhandled_sequences: u32,
     pub style_table_exhausted: u32,
+    /// `OSC 8` links dropped because the hyperlink table was full. The text
+    /// still renders; the link is simply not clickable.
+    pub hyperlink_table_exhausted: u32,
 }

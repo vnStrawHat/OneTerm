@@ -27,6 +27,7 @@ pub mod parser;
 pub mod reflow;
 pub mod render;
 pub mod selection;
+pub mod terminal;
 pub mod width;
 
 pub use cell::{Attrs, Cell, CellContent, CellWidth, Color, NamedColor, Rgb, Semantic, Style};
@@ -45,5 +46,9 @@ pub use render::{
 };
 pub use selection::{
     Invalidation, SEMANTIC_ESCAPE_CHARS, Selection, SelectionKind, SelectionRange, Side,
+};
+pub use terminal::{
+    ColorKey, ColorOverrides, Config, CursorShape, CursorStyle, KeyboardFlags, Mode, ModeState,
+    OscClaims, Terminal, ThemeColors,
 };
 pub use width::{cluster_width, scalar_width};
