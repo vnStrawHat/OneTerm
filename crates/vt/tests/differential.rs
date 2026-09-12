@@ -20,7 +20,7 @@
 //! | # | Difference | How it is filtered |
 //! | --- | --- | --- |
 //! | P1 | `print_str(&str)` instead of `print(char)` per character | the recorder splits every run back into characters |
-//! | P2 | `memchr3(ESC, LF, CR)` instead of `memchr(ESC)` | no filter: the actions are identical, only the scan differs |
+//! | P2 | withdrawn — the scan is `memchr(ESC)`, as the reference's is (packet deviation V9) | none |
 //! | P3 | the separator is kept per parameter | no filter: `Params::groups()` reproduces the reference's grouping exactly |
 //! | P4 | OSC bounded at 2 KiB / 8 MiB with truncation | an OSC the new parser marks `truncated` is accepted against the reference's unbounded one |
 //! | P5 | DCS bounded at 16 MiB, and `dcs_unhook` carries an `aborted` flag | the flag has no reference counterpart, so `Unhook` is compared without it. The cap itself cannot fire on inputs this size — 16 MiB against at most a megabyte — and is proven by `parser::parser_tests::dcs_aborts_past_byte_cap` |
@@ -43,7 +43,11 @@ use oneterm_vt::parser::{Dispatch, OscParams, Params, Parser, StringTerm};
 enum Action {
     Print(char),
     Execute(u8),
-    Esc(Vec<u8>, u8),
+    Esc {
+        intermediates: Vec<u8>,
+        ignore: bool,
+        byte: u8,
+    },
     Csi {
         params: Vec<Vec<u16>>,
         intermediates: Vec<u8>,
@@ -82,8 +86,12 @@ impl Dispatch for NewEngine {
         self.actions.push(Action::Execute(byte));
     }
 
-    fn esc(&mut self, intermediates: &[u8], byte: u8) {
-        self.actions.push(Action::Esc(intermediates.to_vec(), byte));
+    fn esc(&mut self, intermediates: &[u8], ignore: bool, byte: u8) {
+        self.actions.push(Action::Esc {
+            intermediates: intermediates.to_vec(),
+            ignore,
+            byte,
+        });
     }
 
     fn csi(&mut self, params: &Params, intermediates: &[u8], ignore: bool, byte: u8) {
@@ -147,8 +155,12 @@ impl vte::Perform for Oracle {
         self.actions.push(Action::Execute(byte));
     }
 
-    fn esc_dispatch(&mut self, intermediates: &[u8], _ignore: bool, byte: u8) {
-        self.actions.push(Action::Esc(intermediates.to_vec(), byte));
+    fn esc_dispatch(&mut self, intermediates: &[u8], ignore: bool, byte: u8) {
+        self.actions.push(Action::Esc {
+            intermediates: intermediates.to_vec(),
+            ignore,
+            byte,
+        });
     }
 
     fn csi_dispatch(
@@ -276,7 +288,10 @@ fn accept(mine: &Action, theirs: &Action, filters: &mut Filters) -> bool {
                 filters.joined_osc_params += 1;
                 return true;
             }
-            if *truncated {
+            // A truncated payload must still be a *prefix* of the reference's,
+            // parameter for parameter: accepting any pair once `truncated` is
+            // set would mask a genuine bug inside a truncated OSC.
+            if *truncated && is_prefix_of(mine, theirs) {
                 filters.truncated_osc += 1;
                 return true;
             }
@@ -284,6 +299,19 @@ fn accept(mine: &Action, theirs: &Action, filters: &mut Filters) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether the truncated parameter list is a prefix of the reference's: every
+/// parameter before the truncated one identical, and the truncated one a prefix
+/// of its counterpart.
+fn is_prefix_of(mine: &[Vec<u8>], theirs: &[Vec<u8>]) -> bool {
+    if mine.len() > theirs.len() {
+        return false;
+    }
+    let Some((last, head)) = mine.split_last() else {
+        return true;
+    };
+    head == &theirs[..head.len()] && theirs[head.len()].starts_with(last)
 }
 
 fn corpus_dir() -> PathBuf {

@@ -35,7 +35,11 @@ impl Parser {
     /// Advance one byte in every state but `Ground`.
     pub(super) fn advance_one<D: Dispatch>(&mut self, dispatch: &mut D, byte: u8) {
         match self.state {
-            State::Ground => unreachable!("ground is handled by the run scanner"),
+            // Unreachable: `advance` tests for the ground state before every
+            // call. A module whose contract is "never panics on input" should
+            // not carry the proof in a panic macro, so a release build drops
+            // the byte instead.
+            State::Ground => debug_assert!(false, "ground is handled by the run scanner"),
             State::Escape => self.advance_escape(dispatch, byte),
             State::EscapeIntermediate => self.advance_escape_intermediate(dispatch, byte),
             State::CsiEntry => self.advance_csi_entry(dispatch, byte),
@@ -78,7 +82,7 @@ impl Parser {
                 self.state = State::ApcString;
             }
             0x30..=0x4F | 0x51..=0x57 | 0x59..=0x5A | 0x5C | 0x60..=0x7E => {
-                dispatch.esc(self.intermediates.as_slice(), byte);
+                dispatch.esc(self.intermediates.as_slice(), self.params.ignored(), byte);
                 self.state = State::Ground;
             }
             0x18 | 0x1A => {
@@ -96,7 +100,7 @@ impl Parser {
             0x00..=0x17 | 0x19 | 0x1C..=0x1F => dispatch.execute(byte),
             0x20..=0x2F => self.collect(byte),
             0x30..=0x7E => {
-                dispatch.esc(self.intermediates.as_slice(), byte);
+                dispatch.esc(self.intermediates.as_slice(), self.params.ignored(), byte);
                 self.state = State::Ground;
             }
             0x7F => (),

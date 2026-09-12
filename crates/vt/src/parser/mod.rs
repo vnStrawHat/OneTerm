@@ -56,8 +56,10 @@ pub trait Dispatch {
     /// as an introducer.
     fn execute(&mut self, byte: u8);
 
-    /// The final byte of an escape sequence.
-    fn esc(&mut self, intermediates: &[u8], byte: u8);
+    /// The final byte of an escape sequence. `ignore` is set when a third
+    /// intermediate arrived, so a malformed `ESC SP ! # 8` is distinguishable
+    /// from a well-formed `ESC SP ! 8` and can be dropped whole.
+    fn esc(&mut self, intermediates: &[u8], ignore: bool, byte: u8);
 
     /// The final byte of a control sequence. `ignore` is set when a parameter or
     /// intermediate limit was hit; the sequence is still reported so the

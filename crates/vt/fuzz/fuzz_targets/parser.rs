@@ -16,7 +16,7 @@ struct Sink;
 impl Dispatch for Sink {
     fn print_str(&mut self, _text: &str) {}
     fn execute(&mut self, _byte: u8) {}
-    fn esc(&mut self, _intermediates: &[u8], _byte: u8) {}
+    fn esc(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
     fn csi(&mut self, _params: &Params, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
 
     fn osc(

@@ -115,6 +115,14 @@ impl OscAccumulator {
             if spill.is_empty() {
                 spill.extend_from_slice(self.inline.as_slice());
             }
+            // Doubling, so the peak is 1.5x the ceiling for one memcpy: at
+            // 4 MiB the reallocation to 8 MiB holds both buffers, which a
+            // 9 MiB claimed payload shows as a 12 MiB peak. That transient is
+            // the cheapest of the options — fixed-step growth reallocates near
+            // the ceiling instead and peaks higher (7 MiB live while 8 MiB is
+            // allocated), and reserving OSC_LARGE up front would cost 8 MiB for
+            // every clipboard write. The steady state is exact: doubling from
+            // 4 MiB lands on OSC_LARGE, never past it.
             spill.push(byte);
         }
         self.len += 1;

@@ -68,9 +68,10 @@ It is a module behind one narrow trait, so the state machine can be replaced wit
   action trace at 1-, 7- and 64 KiB chunking.
 - [x] Tier 1 throughput recorded against the US-0072 old-engine baseline
   ([`evidence/US-0072-bench-baseline.md`](evidence/US-0072-bench-baseline.md)) as a ratio, never as
-  a gate (R-29). 0.85x to 7.71x, and the two columns do not measure the same thing — see the
-  evidence file's caveats.
-- [x] `pwsh scripts/ci-local.ps1` green: 53 sections, 1086 passed, 0 failed, 2 ignored.
+  a gate (R-29). **0.89x to 8.24x**, measured same-session after the rework
+  ([`evidence/US-0073-verify.md`](evidence/US-0073-verify.md) § 7); the two columns still do not
+  measure the same thing — see that file's caveats.
+- [x] `pwsh scripts/ci-local.ps1` green.
 
 ## Documentation
 
@@ -119,10 +120,18 @@ Update required, but owned elsewhere and recorded as a gap:
 
 ### Reconciliation
 
-Docs changed: none. `scripts/dependency-graph-policy.json` gained the `crates/vt` member and an
-empty internal-dependency list — that is a policy file, not a contract doc, and it has to move in
-the commit that adds the member or `verify-dependency-graph.py` fails. The two rows above remain
-open and are listed under Gaps.
+Docs changed, after the merge with `feat/vt-engine` and the independent verification:
+
+- `docs/agents/dependencies.md` § 3 and `docs/agents/structure.md` § 3 — both rows exist on the
+  merged tree (US-0074 and US-0075 wrote them) and enumerate `oneterm-vt`'s *complete* dependency
+  set, so omitting `memchr` and the `vte` dev-oracle made them **wrong** rather than merely
+  incomplete. That is finding M-A, and it is why the write-scope exclusion recorded above no longer
+  applies. The structure row also gained the parser module and the grid.
+- `scripts/dependency-graph-policy.json` and the workspace manifest moved with the crate, as they
+  must, or `verify-dependency-graph.py` fails.
+
+No LLD edited. `parser.md`'s P2, P8 and P9 rows are now stale against the implementation; each is
+recorded as a packet deviation (V9, V2, V7) and the edit is the design owner's (finding M-C).
 
 ## Context
 
@@ -190,7 +199,9 @@ differential filter counts and the tier 1 table.
 | V4 | `differential::action_traces_agree_on_fuzz_seeds` over Ghostty's AFL++ seeds | `action_traces_agree_on_generated_streams` over four generated families (uniform random, escape-biased, corpus splices, corpus bit flips) | The Ghostty seed corpus is not vendored and vendoring an MIT corpus is a third-party-notices change this packet does not own. |
 | V5 | tier 1 runs through `vt-bench` | a `#[test]` timing note reading fixtures from `ONETERM_VT_BENCH_FIXTURES` | `vt-bench` has no `--engine new` hook and adding one means an `oneterm-vt` dependency in `crates/tools`, a graph-policy edit and a collision with US-0074. `vt-bench fixtures --out <dir>` already writes the same fixtures the baseline used, so the note is comparable without touching the tool. |
 | V6 | the UTF-8 carry is "ported from the reference verbatim" | the carry consumes only the **first** character's bytes where the reference consumes its whole valid prefix | The reference drops a character when the four-byte carry holds a completed codepoint, a second one, and then an error: `C5 93 \| 40 97` loses the `@`. Copying that would break the contract the same LLD states two sections earlier — an arbitrary chunking of one stream produces one action sequence — and the property test found it immediately. Regression: `utf8_carry_does_not_swallow_the_next_character`. Not visible to the oracle, which is fed whole buffers. |
-| V7 | "Parameters past the 16th are dropped but their bytes keep accumulating into the 16th, **which is the reference behaviour**" | the bytes do accumulate, separators included — but this is **not** the reference behaviour | `vte`'s `action_osc_put_param` returns early once sixteen parameters exist, so the sixteenth stops growing at the seventeenth `;` and the tail is unreachable. The LLD's stated intent (OSC 8's `;`-joined URIs) only works if the tail is kept, so the intent wins over the citation, and the difference is filtered as **P9** in the differential with its reason. |
+| V7 | "Parameters past the 16th are dropped but their bytes keep accumulating into the 16th, **which is the reference behaviour**" | the bytes do accumulate, separators included — but this is **not** the reference behaviour | `vte`'s `action_osc_put_param` returns early once sixteen parameters exist, so the sixteenth stops growing at the seventeenth `;` and the tail is unreachable. The LLD's stated intent (OSC 8's `;`-joined URIs) only works if the tail is kept, so the intent wins over the citation, and the difference is filtered as **P9** in the differential with its reason. The independent verifier confirmed both halves and corrected the motive: the number that actually exceeds sixteen parameters is OSC 4/104, not OSC 8. |
+| V8 | the UTF-8 carry is "ported from the reference verbatim" (second instance) | a C1 control completed across a chunk boundary is **executed**, where the reference prints it | `vte`'s `advance_partial_utf8` calls `print(c)` with no control filtering while its ground path executes `U+0080..=U+009F`, so `C2 | 9B` is CSI in one buffer and a printable glyph in two. The carry here goes through the same ground rules, so the meaning does not depend on where the read boundary fell. Found by the independent verifier; unreachable by the oracle, which is fed whole buffers. |
+| V9 | P2 — `memchr3(ESC, LF, CR)` "so `\n` and `\r` leave the per-character loop" | `memchr(ESC)`, as the reference has | There is no per-character loop to leave: `print_run` already splits the validated run at every byte below `0x20`, so P2 bought nothing and cost a SIMD restart every eighty bytes of ordinary CRLF output. Measured by the independent verifier and reproduced: `plain_ascii` 0.88x to 1.08x, `scroll_region` 0.82x to 1.09x. **P2's row in the LLD is now stale**; the design owner owns the edit, as with P8 and P9. |
 
 ### Gaps
 
@@ -199,8 +210,10 @@ differential filter counts and the tier 1 table.
 - `cargo-fuzz` cannot run on this host (libFuzzer is unavailable on `x86_64-pc-windows-msvc` and the
   pinned toolchain is stable). `crates/vt/fuzz/` is committed and unbuilt; the in-tree byte-budget
   test is the substitute that Windows CI runs. Per R-47 this is not a packet gate.
-- `docs/agents/dependencies.md` § 3 and `docs/agents/structure.md` still have no `oneterm-vt` rows
-  (see Documentation Action).
+- ~~`docs/agents/dependencies.md` § 3 and `docs/agents/structure.md` still have no `oneterm-vt`
+  rows~~ — closed by the rework (finding M-A); both rows now list `memchr` and the `vte` oracle.
+- Minors m-D, m-F, m-G, m-H and finding M-C are left open with their reasons in
+  [`evidence/US-0073-verify.md`](evidence/US-0073-verify.md) § 7.
 - Tier 1 is a single-machine, three-run median with the same variance the baseline records
   (up to 30 % between runs); read it as an order of magnitude.
 - The parser has no `FeedStats` to increment yet — truncation and abort are reported through the

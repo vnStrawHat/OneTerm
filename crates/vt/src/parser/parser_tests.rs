@@ -42,6 +42,8 @@ enum Action {
 struct Recorder {
     actions: Vec<Action>,
     runs: Vec<String>,
+    /// The `ignore` flag of each `esc` dispatch, in order.
+    esc_ignored: Vec<bool>,
     /// OSC numbers this recorder plays the embedder for.
     large: Vec<u32>,
 }
@@ -75,7 +77,10 @@ impl Dispatch for Recorder {
         self.actions.push(Action::Execute(byte));
     }
 
-    fn esc(&mut self, intermediates: &[u8], byte: u8) {
+    fn esc(&mut self, intermediates: &[u8], ignore: bool, byte: u8) {
+        // Kept beside the action rather than inside it: only one test asserts
+        // the flag, and folding it into `Esc` would noise up every expectation.
+        self.esc_ignored.push(ignore);
         self.actions.push(Action::Esc(intermediates.to_vec(), byte));
     }
 
@@ -150,7 +155,7 @@ struct Counter {
 impl Dispatch for Counter {
     fn print_str(&mut self, _text: &str) {}
     fn execute(&mut self, _byte: u8) {}
-    fn esc(&mut self, _intermediates: &[u8], _byte: u8) {}
+    fn esc(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
     fn csi(&mut self, _params: &Params, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
 
     fn osc(
@@ -434,6 +439,24 @@ fn intermediate_overflow_dispatches_with_ignore() {
     };
     assert_eq!(intermediates.len(), MAX_INTERMEDIATES);
     assert!(ignore);
+}
+
+#[test]
+fn escape_overflow_dispatches_with_ignore() {
+    // A third intermediate is the only way an escape overflows. Without the
+    // flag a malformed `ESC SP ! # 8` is indistinguishable from `ESC SP ! 8`
+    // at the handler, which is asked to drop the first and obey the second.
+    let well_formed = feed(b"\x1b !8");
+    assert_eq!(well_formed.actions, vec![Action::Esc(b" !".to_vec(), b'8')]);
+    assert_eq!(well_formed.esc_ignored, vec![false]);
+
+    let overflowed = feed(b"\x1b !#8");
+    assert_eq!(overflowed.actions, vec![Action::Esc(b" !".to_vec(), b'8')]);
+    assert_eq!(
+        overflowed.esc_ignored,
+        vec![true],
+        "the third intermediate must set ignore"
+    );
 }
 
 #[test]
@@ -833,7 +856,7 @@ struct SepRecorder {
 impl Dispatch for SepRecorder {
     fn print_str(&mut self, _text: &str) {}
     fn execute(&mut self, _byte: u8) {}
-    fn esc(&mut self, _intermediates: &[u8], _byte: u8) {}
+    fn esc(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
 
     fn csi(&mut self, params: &Params, _intermediates: &[u8], _ignore: bool, _byte: u8) {
         self.values = params.values().to_vec();
@@ -968,7 +991,7 @@ mod bench_note {
     impl Dispatch for Null {
         fn print_str(&mut self, _text: &str) {}
         fn execute(&mut self, _byte: u8) {}
-        fn esc(&mut self, _intermediates: &[u8], _byte: u8) {}
+        fn esc(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
         fn csi(&mut self, _params: &Params, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
         fn osc(
             &mut self,

@@ -1,10 +1,19 @@
 //! The ground state: the control-byte scan, UTF-8 validation and print runs.
 //!
 //! Ported from the reference because the parity recordings pin its replacement
-//! rules byte for byte, with two deliberate changes (IN-0029 P1, P2): the scan
-//! is `memchr3(ESC, LF, CR)` rather than `memchr(ESC)`, so a line feed leaves
-//! the per-character loop, and a validated run is handed over whole as
-//! [`Dispatch::print_str`] instead of one call per character.
+//! rules byte for byte, with one deliberate change (IN-0029 P1): a validated
+//! run is handed over whole as [`Dispatch::print_str`] instead of one call per
+//! character.
+//!
+//! The scan is `memchr(ESC)`, as the reference's is. The design's P2 asked for
+//! `memchr3(ESC, LF, CR)` so that line feeds leave the per-character loop, but
+//! there is no per-character loop to leave: [`print_run`] already splits the
+//! validated run at every byte below `0x20`, so `LF` and `CR` are handled
+//! either way, and ending the SIMD scan at every line feed only restarts it
+//! every eighty bytes on ordinary CRLF output. Measured, that restart cost
+//! `plain_ascii` 0.88x and `scroll_region` 0.82x against the engine being
+//! replaced; scanning for `ESC` alone puts both at 1.07x. See the packet's
+//! deviation V9.
 
 use super::state::State;
 use super::{Dispatch, Parser};
@@ -16,11 +25,11 @@ impl Parser {
     /// Consume bytes from the ground state, returning how many were used.
     pub(super) fn advance_ground<D: Dispatch>(&mut self, dispatch: &mut D, bytes: &[u8]) -> usize {
         let num_bytes = bytes.len();
-        let plain = memchr::memchr3(0x1B, 0x0A, 0x0D, bytes).unwrap_or(num_bytes);
+        let plain = memchr::memchr(0x1B, bytes).unwrap_or(num_bytes);
 
-        // The run is empty: the first byte is the control byte itself.
+        // The run is empty: the first byte is the escape itself.
         if plain == 0 {
-            self.take_ground_control(dispatch, bytes[0]);
+            self.enter_escape();
             return 1;
         }
 
@@ -28,7 +37,7 @@ impl Parser {
             Ok(text) => {
                 print_run(dispatch, text);
                 if plain < num_bytes {
-                    self.take_ground_control(dispatch, bytes[plain]);
+                    self.enter_escape();
                     return plain + 1;
                 }
                 plain
@@ -53,14 +62,23 @@ impl Parser {
                         valid + len
                     }
                     None if plain < num_bytes => {
-                        // Truncated by the control byte, so it can never complete.
+                        // Truncated by the escape, so it can never complete.
                         dispatch.print_str(REPLACEMENT);
-                        self.take_ground_control(dispatch, bytes[plain]);
+                        self.enter_escape();
                         plain + 1
                     }
                     None => {
                         // Truncated by the end of the chunk: carry it over.
-                        let extra = num_bytes - valid;
+                        //
+                        // The carry is empty here — the ground state is only
+                        // reached with nothing pending — and a truncated UTF-8
+                        // tail is at most three bytes, which is what keeps the
+                        // four-byte buffer in range.
+                        debug_assert_eq!(
+                            self.partial_utf8_len, 0,
+                            "ground state with a pending carry"
+                        );
+                        let extra = (num_bytes - valid).min(self.partial_utf8.len());
                         let end = self.partial_utf8_len + extra;
                         self.partial_utf8[self.partial_utf8_len..end]
                             .copy_from_slice(&bytes[valid..valid + extra]);
@@ -72,14 +90,10 @@ impl Parser {
         }
     }
 
-    /// Act on the control byte that ended a ground run.
-    fn take_ground_control<D: Dispatch>(&mut self, dispatch: &mut D, byte: u8) {
-        if byte == 0x1B {
-            self.reset_params();
-            self.state = State::Escape;
-        } else {
-            dispatch.execute(byte);
-        }
+    /// Consume the escape that ended a ground run.
+    fn enter_escape(&mut self) {
+        self.reset_params();
+        self.state = State::Escape;
     }
 
     /// Continue a codepoint carried over from the previous chunk, returning how

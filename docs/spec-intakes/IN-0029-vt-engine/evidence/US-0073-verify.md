@@ -30,16 +30,15 @@ Raw totals, summed over every `test result:` line of that run:
 
 | Sections | Passed | Failed | Ignored |
 | ---: | ---: | ---: | ---: |
-| 53 | 1086 | 0 | 2 |
+| 53 | 1192 | 0 | 5 |
 
 Three of those sections are new: `oneterm-vt` unit tests (**31 passed**), `tests/differential.rs`
-(**5 passed**) and the crate's empty doc-test section. The two ignored tests are pre-existing
-(`shapes_tests::shape_bitmaps_for_visual_review` and its sibling), not this packet's.
+(**5 passed**) and the crate's empty doc-test section.
 
-**Read the total against this packet's base, not against `US-0072`'s note.** That note records
-1156 passed, measured on its own worktree off `852206d`; this run is off `f3cf1a5`, a different
-base. Nothing here removes a test: the change is additive apart from four lines in the root
-manifest and two in `scripts/dependency-graph-policy.json`.
+**Correction.** This file and the harness row first reported *1086 passed / 2 ignored* for this
+run. That was a summing error, not a different run: the totals were added through a shell wrapper
+that pages long `grep` output, so it silently dropped sections. Re-counted from the same log with
+an exact regex, the run is 1192 / 0 / 5. The superseding figure for the merged tree is in § 7.
 
 `THIRD-PARTY-NOTICES.md` is unchanged because both new direct declarations (`memchr 2.8.2`,
 `vte 0.15.0`) were already in `Cargo.lock` and the notices file lists what is reachable from
@@ -126,7 +125,12 @@ ONETERM_VT_BENCH_FIXTURES=<dir> cargo test --release -p oneterm-vt --lib -- --no
 100 MiB per fixture, median of three passes, release profile, a `Dispatch` that does nothing.
 Old-engine column from [`US-0072-bench-baseline.md`](US-0072-bench-baseline.md).
 
-| Fixture | old MiB/s | new MiB/s | ratio | new ns/B |
+**Superseded by § 7.** The table below compares against US-0072's *recorded baseline file* rather
+than a same-session run, which the independent verifier showed does not reproduce; the
+`memchr3`-scan regression it reports is also gone. It is kept only so the two measurements can be
+told apart.
+
+| Fixture | old MiB/s (recorded file) | new MiB/s | ratio | new ns/B |
 | --- | ---: | ---: | ---: | ---: |
 | `plain_ascii` | 1192.0 | 1028.5 | 0.86x | 0.93 |
 | `long_lines` | 1345.7 | 1377.1 | 1.02x | 0.69 |
@@ -137,7 +141,7 @@ Old-engine column from [`US-0072-bench-baseline.md`](US-0072-bench-baseline.md).
 | `dense_cells` | 220.1 | 331.3 | 1.51x | 2.88 |
 | `scrolling` | 752.1 | 1318.4 | 1.75x | 0.72 |
 | `sixel` | 443.3 | 562.6 | 1.27x | 1.70 |
-| `osc_9_7` | 65.9 | 508.2 | **7.71x** | 1.88 |
+| `osc_9_7` | 65.9 | 508.2 | 7.71x | 1.88 |
 
 **Recorded, never gated** (R-29). Read every row next to the ConPTY transport ceiling: about
 1.2 MiB/s for a `cmd.exe` producer and about 30 MiB/s for a DOOM-fire-class one, one to two orders
@@ -169,3 +173,93 @@ Three caveats, and they matter more than the numbers:
   union is four lines and is listed in the packet's Handoff.
 - No `FeedStats` yet: truncation and abort are reported through the `Dispatch` arguments, which is
   where US-0079 will read them.
+
+## 7. Rework after independent verification
+
+Verdict was *merge after fixes*
+([`US-0073-independent-verify.md`](US-0073-independent-verify.md)); this section records what
+changed. Everything below is measured on the **merged** tree (`506e3c1`, `feat/vt-engine` @
+`1ef1414`).
+
+### M-A — the two dependency rows
+
+`docs/agents/dependencies.md` § 3 and `docs/agents/structure.md` § 3 were written by US-0074 and
+US-0075 and enumerate `oneterm-vt`'s complete dependency set, so after the merge they were
+*wrong* rather than absent — neither listed `memchr` or the `vte` dev-oracle. Both now do, checked
+against `crates/vt/Cargo.toml`. The structure row also now names the parser module and the grid,
+which had gone stale for the same reason.
+
+### M-B — deviation P2 withdrawn, and the measured range restated
+
+The verifier's finding reproduced exactly. `memchr3(ESC, LF, CR)` restarts the SIMD scan at every
+line feed — every eighty bytes on CRLF output — and buys nothing, because `print_run` already
+splits the validated run at every byte below `0x20`. `crates/vt/src/parser/utf8.rs` now scans for
+`ESC` alone, as the reference does, which also deletes the `take_ground_control` branch from the
+hot path.
+
+Three-run medians, same machine, same session, 20 MiB fixtures, release, `vt-bench parser` against
+`bench_note::tier1_parser_throughput`:
+
+| Fixture | old MiB/s | new MiB/s | ratio | before the fix |
+| --- | ---: | ---: | ---: | ---: |
+| `osc_9_7` | 69.9 | 576.2 | **8.24x** | 4.94x |
+| `dense_cells` | 331.8 | 420.8 | 1.27x | 1.25x |
+| `heavy_sgr` | 374.3 | 470.1 | 1.26x | 1.10x |
+| `tui_redraw` | 431.8 | 519.4 | 1.20x | 1.16x |
+| `scrolling` | 1346.3 | 1490.4 | 1.11x | 0.99x |
+| `scroll_region` | 1089.3 | 1187.0 | 1.09x | **0.82x** |
+| `plain_ascii` | 1167.5 | 1256.8 | 1.08x | **0.88x** |
+| `long_lines` | 1414.3 | 1455.0 | 1.03x | 0.91x |
+| `sixel` | 666.3 | 636.9 | 0.96x | 0.90x |
+| `cjk_wide` | 1045.9 | 930.0 | 0.89x | 0.77x |
+
+**The measured range is 0.89x to 8.24x**, and that supersedes the 0.85x-7.71x the packet and the
+DB row carried. Eight of ten fixtures are at or above parity; `sixel` at 0.96x is inside the
+run-to-run spread, and `cjk_wide` at 0.89x is the one real remaining cost — `print_run`'s byte scan
+walks every continuation byte of an all-multibyte stream. Still recorded, never gated (R-29), and
+still not the same measurement on both sides: the old column includes `vte`'s `ansi.rs` translation
+layer, the new one is the state machine alone.
+
+### The gate, re-run on the merged tree
+
+```
+pwsh scripts/ci-local.ps1
+...
+==> python scripts/verify-dependency-graph.py
+Dependency graph policy passed for 21 workspace packages and 21 explicit members.
+==> python scripts/check-english.py
+English contributor-text check passed for 695 files.
+==> python scripts/third-party-notices.py --check
+THIRD-PARTY-NOTICES.md is up to date.
+
+ci-local: all checks passed.
+```
+
+| Sections | Passed | Failed | Ignored |
+| ---: | ---: | ---: | ---: |
+| 56 | 1309 | 0 | 6 |
+
+That is the verifier's 55 / 1303 / 5 plus this rework: one new unit test
+(`escape_overflow_dispatches_with_ignore`) and the committed `ext_differential.rs`
+(5 passed, 1 ignored, one new section).
+
+### Minors fixed
+
+| # | Fix |
+| --- | --- |
+| m-A | `Dispatch::esc` now carries `ignore`, so a third intermediate is visible to the handler. New test `escape_overflow_dispatches_with_ignore`; the differential now compares the flag against the oracle's on both sides, over the corpus and every generated buffer. |
+| m-B | Documented rather than changed. The 12 MiB peak is one memcpy of doubling; fixed-step growth peaks *higher* (7 MiB live while 8 MiB is allocated) and reserving `OSC_LARGE` up front would cost 8 MiB per clipboard write. Doubling from 4 MiB lands exactly on `OSC_LARGE`. Comment at `osc.rs`. |
+| m-C | The P4 filter now requires the truncated parameter list to be a **prefix** of the reference's (`is_prefix_of`), so a bug inside a truncated OSC can no longer hide behind the flag. |
+| m-E | `unreachable!` in `state.rs` is now `debug_assert!(false, …)` plus a dropped byte, so the "never panics on input" contract is structural rather than a proof a later edit could break. |
+| m-I | `debug_assert_eq!(self.partial_utf8_len, 0, …)` pins the invariant behind the carry copy, and the copy length is clamped to the buffer. |
+| — | The verifier's `crates/vt/tests/ext_differential.rs` is **committed** rather than discarded: 2 000 buffers on a second seed, ~70 adversarial sequences at five chunkings, every split point of seven sequences, and the memory probe. `ext_memory_stays_bounded` is `#[ignore]`d because its counting `#[global_allocator]` is process-wide — the command to run it alone is in the file's header, and its output is § 4 of the verifier's report. |
+
+### Minors left, with reasons
+
+| # | Why it is not fixed here |
+| --- | --- |
+| m-D | `testing-and-bench.md` pins the trap-map names as `parser::tests::*` where the code is `parser::parser_tests::*`. The **code** is right — `code-style.md` mandates the sibling `*_tests.rs` file — so the LLD is the stale side, and LLDs are the design owner's. |
+| m-F | `joined_from(i)` cannot be written for free: the `;` separators are **not** stored in the payload (they are structure, not bytes), so rejoining OSC 8's URI needs either a payload-format change or a scratch buffer. The verifier's premise that the bytes are already contiguous holds only past the sixteenth parameter. US-0076 owns the consumer and should specify which it wants; changing the payload format now would move the truncation boundary under a well-verified parser for a caller that does not exist yet. |
+| m-G | `FeedStats::malformed_sequences` has no signal because `FeedStats` does not exist yet — it is `events-and-api.md`'s type and US-0079's packet. Recorded there. |
+| m-H | `crates/vt/fuzz/` is outside the workspace by design (libFuzzer has no Windows MSVC support). A Linux CI `cargo check` is the mitigation and there is no Linux job to add it to yet. The signature change in this rework did break the target, which is the risk exactly — it was caught by hand and fixed. |
+| M-C | `parser.md`'s P8/P9 rows are the design owner's; this packet does not edit LLDs. P2's row is now stale too — see deviation V9. |
