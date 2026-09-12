@@ -163,7 +163,7 @@ accessor, `Terminal::mouse_reporting() -> Option<MouseProtocol>`, replacing the
 | `LineWrap` (DECAWM) | `? 7` | **set** | real | gates `wrapline()` and the wide-char-at-last-column path |
 | `CursorBlink` | `? 12` | reset | real | |
 | `ShowCursor` (DECTCEM) | `? 25` | **set** | real | clearing it makes the reported cursor shape `Hidden` |
-| `ReverseWrap` | `? 45` | reset | real | additive feature D12, `US-0086`: while reset (the default) `BS` at column 0 is a no-op, which is trap 1; while set it crosses into a `WRAPPED` row ([`grid-and-scrollback.md`](grid-and-scrollback.md), R-08) |
+| `ReverseWrap` | `? 45` | reset | **`Reset`** | additive feature D12, `US-0086`. **DECRQM must never answer `Set` for a mode that does nothing**: until the mode has a reader, `CSI ? 45 $ p` answers `Reset` even after `CSI ? 45 h`, the same rule `? 9001` already follows. Answering `Set` tells a program a capability exists when it does not: while reset (the default) `BS` at column 0 is a no-op, which is trap 1; while set it crosses into a `WRAPPED` row ([`grid-and-scrollback.md`](grid-and-scrollback.md), R-08) |
 | `MouseClick` | `? 1000` | reset | real | setting any mouse mode clears the other mouse modes first; unsetting clears only that one (the reference's asymmetry, reproduced) |
 | `MouseDrag` | `? 1002` | reset | real | |
 | `MouseMotion` | `? 1003` | reset | real | |
@@ -380,10 +380,10 @@ touches; the "Affected recordings" columns below carry that measurement
 | D4 | Mode 2026 reports its real state and needs no external polling (trap 41) | `US-0076` | the reference can never report "set" and freezes if the host forgets to poll | none |
 | D5 | *superseded* — now correction C10 (`CSI ? 5 W`) | `US-0076` | correctness first (owner ruling, 2026-09-12) | see the corrections table |
 | D6 | *superseded* — now correction C9 (DECSTR) | `US-0076` | correctness first (owner ruling, 2026-09-12) | see the corrections table |
-| D7 | DECXCPR (`CSI ? 6 n`) answered | **`US-0086`** | cheap, and asked for by real programs | none — answers are discarded by the harness |
-| D8 | XTVERSION answered | **`US-0086`** | feature detection by modern programs | none — answers are discarded |
+| D7 | DECXCPR (`CSI ? 6 n`) answered | `US-0076` (implemented) | cheap, and asked for by real programs | none — answers are discarded by the harness |
+| D8 | XTVERSION answered | `US-0076` (implemented) | feature detection by modern programs | none — answers are discarded |
 | D9 | LNM tracked but inert | `US-0076` | matches the reference; recorded so it is not read as an oversight | none |
-| D10 | `modifyOtherKeys` level stored and reportable | **`US-0086`** | the reference parses both and implements neither | none |
+| D10 | `modifyOtherKeys` level stored and reportable | `US-0076` (implemented) | the reference parses both and implements neither | none |
 | D11 | *superseded* — now correction C11 (blink and overline stored) | `US-0076` | correctness first (owner ruling, 2026-09-12); the `US-0072` measurement shows no recording sends SGR 5 / 6 / 53 / 55, so it needs no declared diff at all | see the corrections table |
 | D12 | Reverse wrap (`? 45`) implemented | **`US-0086`** | cheap; gated on the mode, default off, so trap 1 is unaffected until then (R-08) | **measured: none** — six recordings only ever reset `? 45`, none sets it |
 | D13 | DA1 answers `CSI ? 62 ; 4 ; 22 c` | `US-0076` | adds the ANSI-colour claim to today's answer | none — DA answers are discarded by the harness |
@@ -392,7 +392,12 @@ touches; the "Affected recordings" columns below carry that measurement
 
 **Corrections in this file — spec-correct from the start.**
 
-| C | Correction | Trap | Packet | Affected recordings (**measured in `US-0072`**, `evidence/US-0072-recording-risk.md`) |
+**Gate result (`US-0076`, `evidence/US-0076-parity-gate.md`): 45 of 45 green with no
+`expected-diffs` file.** Every correction below is measured **free**, C9 included — `grid_reset`
+does send `CSI ! p`, but `RIS` and `OSC 104` precede it and a run of mode sets and SGR follows, so
+the soft reset's effects are overwritten before the grid is compared.
+
+| C | Correction | Trap | Packet | Affected recordings (**measured**) |
 | --- | --- | --- | --- | --- |
 | C5 | `CPR` is region-relative under `DECOM` | 38 | `US-0076` | **none**. Eight recordings touch one half or the other and **no recording sends both**: five set `DECOM` without asking for a position, three send `CSI 6 n` without `DECOM`. DSR answers are discarded by the harness anyway |
 | C6 | `RIS` resets the colour overrides | 39 | `US-0076` | **1 recording**: `grid_reset` (one `RIS`, one `OSC 104`). `OSC 104` already empties indices 0-255, so no `state.expect` palette key is expected to move |
@@ -401,6 +406,15 @@ touches; the "Affected recordings" columns below carry that measurement
 | C15 | An endpoint scrolled out of a scroll-region top kills the selection, where the reference clamps it | — | `US-0078` | see [`selection.md`](selection.md); **to measure in `US-0076`**, expected free (no recording selects) |
 | C13 / C14 | Reflow corrections — a grow keeps the tail below the cursor; a bold trailing blank is kept | — | `US-0077` | see [`grid-and-scrollback.md`](grid-and-scrollback.md) § "Corrections"; both **to measure in `US-0076`** |
 | C11 | Blink and overline attributes stored (SGR 5 / 6 / 53 / 55) | — | `US-0076` | **none of the 45** — no recording sends those parameters (`sgr` exercises 9, 4 and the colour forms; `underline` exercises `4:0`-`4:3`, 21, 24). **Free, with no declared diff**: N-03's reason for deferring it does not survive the measurement |
+
+**Two behaviours that look like bugs and are parity, not corrections.** Both follow the vendored
+reference and neither has a correction id, because the gate compares against that reference and a
+difference would have nowhere to be declared:
+
+- **`DECALN` does not home the cursor.** It fills the screen with `E` and leaves the cursor where
+  it was. The reference does the same, and `decaln_reset` compares the cursor position.
+- **`SUB` (`0x1A`) is a no-op**, not a replacement-glyph write. No recording sends it; the
+  reference ignores it.
 
 Kept deliberately, because they are correct: traps 15, 16, 18, 21, 22, 25, 40 and 43. Mode 2027 is
 deferred whole (R-56), so it is not a deviation — it is unimplemented, and DECRQM says so.
@@ -440,9 +454,28 @@ impl Terminal {
 }
 pub struct Config { pub osc_claims: OscClaims, pub default_cursor_style: CursorStyle,
                     pub scrollback_limit: u32, pub semantic_escape_chars: String,
-                    pub accept_c1: bool }
+                    pub accept_c1: bool }   // see the note below
 impl Terminal { pub fn set_cell_pixels(&mut self, w: u16, h: u16); }  // one owner (R-40, N-08)
+
+// `accept_c1` is currently a dead knob: the parser hard-codes the 7-bit behaviour, so setting it
+// changes nothing. It is either threaded into the parser or deleted, and this line records which
+// once the `US-0076` follow-up lands:
+//     STATUS: <wired | removed>  —  fill in when the fix merges.
 ```
+
+## By-design differential divergences
+
+`vt-diff` (old engine against new) is **identical on all 45 recordings and all 10 bench fixtures**
+today. The three families below would diverge if a stream exercised them, and they are listed so a
+future verifier does not re-derive them from a red diff:
+
+| Family | What differs | Why it is by design |
+| --- | --- | --- |
+| **C8 — legacy alt screen** | `? 47`, `? 1047`, `? 1048` change the screen here and do nothing in the reference | The reference recognises only `? 1049` and silently drops the rest (trap 13). No recording sends them |
+| **C9 — `DECSTR`** | `CSI ! p` performs a soft reset here and is ignored by the reference | The reference has no handler at all. `grid_reset` sends it, but its effects are overwritten before the comparison |
+| **Mode 2026 — synchronized output** | The reference **buffers up to 2 MiB of unparsed bytes**; this engine applies everything and suppresses frames in the renderer | A grid snapshot taken mid-block therefore shows different content in the two engines: the reference has not applied the block yet, this engine has. Both are correct at the closing sequence. `vt-diff` compares final grids, so it only appears if a fixture ends inside an open block |
+
+Every other difference is a defect until a correction id says otherwise.
 
 ## Edge Cases and Failure Modes
 
@@ -495,7 +528,8 @@ impl Terminal { pub fn set_cell_pixels(&mut self, w: u16, h: u16); }  // one own
   at the last column wraps.
 - [ ] `dispatch::tests::kitty_query_reads_the_stack_top` — trap 42.
 - [ ] `dispatch::tests::kitty_pop_beyond_len_resets_the_stack` — deviation D15.
-- [ ] `dispatch::tests::decrqm_answers_match_the_mode_table` — a table test over every mode.
+- [ ] `dispatch::tests::decrqm_answers_match_the_mode_table` — a table test over every mode,
+  including that no accepted-but-inert mode (`? 45`, `? 9001`) ever answers `Set`.
 - [ ] `dispatch::tests::da1_da2_dsr_xtversion_answers`
 - [ ] `dispatch::tests::decstr_soft_reset_scope` — correction C9.
 - [ ] `dispatch::tests::mouse_modes_are_exclusive_on_set_not_on_unset`

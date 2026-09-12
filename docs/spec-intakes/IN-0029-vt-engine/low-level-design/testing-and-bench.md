@@ -339,9 +339,10 @@ All 48 items from [`../research/engine-semantics.md`](../research/engine-semanti
 
 ## Edge Cases and Failure Modes
 
-- [ ] **A recording that legitimately differs** — it carries an `expected-diffs.json` naming the
-  correction, the cells and the fields. There is no whole-recording skip and no silent `#[ignore]`,
-  and a declared window that stops differing fails the gate.
+- [ ] **A recording that legitimately differs** — it carries an `expected-diffs.json` entry naming
+  the correction, the cells and the fields. There is no whole-recording skip and no silent
+  `#[ignore]`, and a declared window that stops differing fails the gate. **No recording needs one
+  today**; the first that does is a signal to re-read the correction, not to bless.
 - [ ] **`bless` used to hide a regression** — refused without `--deviation <row-id>`; the
   expectation diff and the named row are both in the commit.
 - [ ] **The differential runner diverging on a captured session** — it prints the first differing
@@ -363,9 +364,13 @@ All 48 items from [`../research/engine-semantics.md`](../research/engine-semanti
   the comparator); the Windows bench job exists in CI and records without gating.
 - [ ] `US-0073`: `cargo test -p oneterm-vt --test differential` green, including
   `oracle_precondition_patches_do_not_touch_the_state_machine`.
-- [ ] `US-0076`: `cargo test -p oneterm-vt --test ref_corpus` green on all 45 recordings, both
-  files, with the new engine and the **frozen** expectations — every difference covered by a
-  declared `expected-diffs.json` window naming a correction, and no stale declared window.
+- [x] `US-0076`: **met — 45 of 45 green with no `expected-diffs.json` file at all**
+  (`evidence/US-0076-parity-gate.md`). Every correction the tables predicted would need a declared
+  window is measured free, C9 included. `vt-diff` old-against-new is identical on all 45 recordings
+  **and** on all 10 `vt-bench` fixtures. The declared-window mechanism stays for corrections that
+  land later, and the three families that would diverge if a stream exercised them are listed in
+  [`dispatch-and-modes.md`](dispatch-and-modes.md) § "By-design differential divergences" so a
+  future verifier does not re-derive them from a red diff.
 - [ ] `US-0077`: `reflow::props` green over 10 000 cases; the debug-suite runtime budget
   re-measured.
 - [ ] `US-0081`-`US-0085`: `vt-diff` green over all recordings plus the captured session at the

@@ -274,14 +274,13 @@ entry exists for reflow, which does move it.
 positioning operation: `goto`, `move_forward`, `move_backward`, `carriage_return`, `backspace`,
 `wrapline`. It is **not** cleared by `linefeed` or `reverse_index`.
 
-**Deviation G3, with its real scope (R-09).** With `DECAWM` off the reference never clears the
-flag, so it stays set forever. Here, with `DECAWM` off the flag is simply not set and the column
-clamps at the last column. The printing result is identical, but the flag is read by two other
-paths, so this is **observable**: after `DECAWM` off plus a glyph in the last column, `EL 0`
-erases (the reference erases nothing, trap 2) and `HT` moves to the next tab stop (the reference
-consumes the wrap, trap 3). Both combinations have a test. The deviation is kept because "the
-flag is stuck forever" is not a state worth reproducing, and it lands in `US-0086`, after the
-parity gate (R-53).
+**Deviation G3 is withdrawn.** The pending-wrap flag is set **unconditionally**, as the reference
+does, whether or not `DECAWM` is on. The draft deviation — "with `DECAWM` off the flag is simply not
+set" — loses a real line break: `? 7 l`, a glyph in the last column, `? 7 h`, then another glyph
+must wrap, because the reference's flag was armed while autowrap was off and is honoured when it
+comes back on. The `US-0076` verification proved the loss and the gate cannot catch it (the four
+recordings that send `? 7 l` never re-enable it). Parity is one line, so parity it is; traps 2 and
+3 revert to their reference behaviour and their `decawm_off_*` tests are deleted.
 
 ### Print path
 
@@ -400,6 +399,25 @@ regression: the gate still fails on any difference that is not declared.
 | `ED 2` (all) | alternate screen: reset every viewport row. Primary: scroll the occupied part of the viewport into scrollback (`clear_viewport`), keeping the content, moving the bottom down by `positions` and leaving the scroll offset unchanged so a scrolled-back user keeps seeing the same content (trap 9). The cursor does not move |
 | `ED 3` (saved) | when history is non-empty, drop it and set `offset = 0` (trap 10). `VtEvent::ScreenCleared` is emitted **before** the "is there history" check (trap 12) |
 
+**Three rules the parity gate found, each now a unit test.** All three were real defects the
+45-recording comparison surfaced and no unit test had:
+
+1. **`row_mut` materialises a slot with the erase cell, never with `Cell::EMPTY`.** Allocating a
+   row lazily under a non-default background must fill it with the background the cursor carries,
+   or a single glyph on a fresh row leaves default-coloured cells beside it. Only the `sgr`
+   recording caught this; the unit test must be
+   `grid::tests::materialising_a_row_uses_the_erase_cell` — set a background-erase colour, write one
+   glyph onto a fresh row, assert the untouched columns carry that background.
+2. **`WRAPPED` is cleared by any write to the last column.** The row flag outlives the cell that
+   caused it otherwise, and reflow rejoins lines that were never wrapped. The rule covers the
+   leading-wide-spacer path too: a wide glyph that cannot fit the last column writes a
+   `LeadingWideSpacer` there and **then** sets `WRAPPED`, so the spacer write must not clear the
+   flag it is about to set. Test: `grid::tests::overwriting_the_last_cell_clears_the_wrap_flag`,
+   with a wide-character-at-the-last-column case.
+3. **The OSC accumulator opens the sixteenth slot one parameter early**, so a bulk `OSC 4` keeps
+   its separators inside parameter 16 (see [`parser.md`](parser.md) P9). Test:
+   `terminal::tests::osc_parameters_past_the_sixteenth_are_re_split`.
+
 **Blanking a row is a mutation, and must be stamped — `US-0075` rework.** `place_row` and
 `reset_row` (`crates/vt/src/grid/screen.rs:445-469`) currently store `None` when the source slot
 was unallocated or the erase template is empty, which drops the row header: the row keeps its
@@ -476,7 +494,7 @@ primitives produce: a partial region scroll may **split** a selection (parity wi
 | --- | --- | --- | --- |
 | G1 | `WRAPPED` is a row flag, not a flag on the last cell | `US-0075` | none — a representation change |
 | G2 | `RowId` replaces signed `Line`; no negative indices | `US-0075` | none |
-| G3 | With `DECAWM` off the pending-wrap flag is not set, so `EL 0` erases and `HT` moves (R-09) | `US-0075` | **measured**: 4 recordings reset `? 7` — `vttest_origin_mode_1`, `vttest_origin_mode_2`, `vttest_scroll`, `vttest_tab_clear_set`. Observable only through `EL 0` or `HT` while the flag would have been armed, so one or more may need a declared diff |
+| G3 | *withdrawn* — the pending-wrap flag is set unconditionally, as the reference does; the draft behaviour lost a line break across `? 7 l` / `? 7 h` | — | none |
 | G6 | The ring index is the row id; no `zero` rotation and no free list | `US-0075` | none — removes trap 45 |
 | G7 | One row representation; dual-form rows deferred (R-51) | `US-0075` | none |
 
@@ -554,7 +572,8 @@ over-approximation by definition.
   wrap. `BS` at column 0 is a no-op **while `Mode::ReverseWrap` (`? 45`) is reset, which is the
   default** (R-08); with it set, `BS` at column 0 moves to the previous row's last column when
   that row is `WRAPPED`. `? 45` is an additive feature and lands in `US-0086`.
-- [ ] **Trap 2 / 3 — pending wrap then `EL 0` / `HT`**, including the G3 combinations.
+- [ ] **Trap 2 / 3 — pending wrap then `EL 0` / `HT`**, reference behaviour in both, including
+  while `DECAWM` is off (G3 withdrawn).
 - [ ] **Trap 9 / 10 / 11 — `ED 2` / `ED 3` / `ED 1`**, each stated against the offset table.
 - [ ] **Trap 14 — entering the alternate screen clobbers the primary DECSC slot.**
 - [ ] **Trap 16 / 17 / 18 / 19 / 27 / 36 / 46** as tabulated above.
@@ -610,9 +629,7 @@ Scrolling, erase and tabs (trap-mapped):
 
 - [ ] `grid::tests::pending_wrap_then_backspace`, `..::backspace_at_column_zero_is_a_noop` — trap 1.
 - [ ] `grid::tests::pending_wrap_then_el0_erases_nothing` — trap 2.
-- [ ] `grid::tests::decawm_off_then_el0_erases` — deviation G3's observable half (R-09).
 - [ ] `grid::tests::pending_wrap_then_tab_wraps_and_returns` — trap 3.
-- [ ] `grid::tests::decawm_off_then_tab_moves_to_the_next_stop` — G3, second half.
 - [ ] `grid::tests::ed2_scrolls_the_viewport_into_history` — trap 9.
 - [ ] `grid::tests::ed2_keeps_the_scrolled_back_viewport_position` — trap 9, written against the
   offset table.
