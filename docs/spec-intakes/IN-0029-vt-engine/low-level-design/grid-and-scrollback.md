@@ -559,7 +559,13 @@ impl Screen {
 }
 ```
 
-`assert_integrity` (debug only, budget in [`testing-and-bench.md`](testing-and-bench.md)) checks:
+`assert_integrity` (debug only) checks the list below. **It is bounded to
+`integrity_lo() = min(batch_lo, visible_top)`**, clamped into the live range, not to `oldest`:
+`batch_lo` is the screen top as `begin_batch` found it, every row a batch can write, scroll or blank
+is at or above it, and `visible_top` keeps a scrolled-back viewport in range. No invariant is
+weakened — only the row range. `--features vt-paranoid` sets `integrity_lo()` back to `oldest` for
+the whole-history walk, and CI runs both tiers; the rule, the measurement and the 1 ms guarding
+probe are in [`testing-and-bench.md`](testing-and-bench.md) § 1. The checks are:
 `oldest <= newest`; the two screens' live ranges do not overlap; the viewport offset is within
 `history_len()`; no `Wide` cell without its `WideSpacer` and no `WideSpacer` without its `Wide`;
 every row's `id` matches its slot; `RowFlags` has no false negative; every live anchor is inside

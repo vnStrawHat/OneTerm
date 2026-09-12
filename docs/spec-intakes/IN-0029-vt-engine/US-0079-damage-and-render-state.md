@@ -12,7 +12,7 @@ Created: 2026-09-12
 - [ ] Planned
 - [ ] In progress
 - [x] Implemented
-- [ ] Changed
+- [x] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
@@ -389,7 +389,50 @@ added.
   consumer's "all rows changed" branch would be dead code. Worth one line in the LLD when
   `US-0076` folds these readings in.
 
+## Rework (2026-09-13) — bounded integrity
+
+**Reported by `US-0081`.** `RenderState::update` calls `TerminalGrid::assert_integrity` once per
+render update (R-28), and that walk was the whole history of both screens: at a 100 000-row
+scrollback it cost **252 771.9 us per `render_update`** in a debug build, against about 200 us for
+the whole of the engine being replaced. The same walk at the end of `feed` cost the same again.
+
+The fix is in the grid — `Screen::integrity_lo` now starts the walk at the screen top as it was
+when the batch opened, or at the visible top when the viewport is scrolled back, instead of at
+`oldest`, and the new `vt-paranoid` feature restores the whole-history walk for CI, the property
+tests and the fuzz targets. The full account, the CI wiring and the gaps for the design owner are
+in the matching section of [`US-0075`](US-0075-grid-and-scrollback.md#rework-2026-09-13--bounded-integrity);
+what belongs to this packet is:
+
+- **The `render_update` call site is unchanged.** `render/state.rs` still calls
+  `grid.assert_integrity(Some(interner))` on every update that is not suppressed by mode 2026, and
+  still before the rebuild-or-copy decision. Only the row range the call covers changed, so the
+  R-17 ordering and the `Unchanged` path are untouched.
+- **The probe lives here**, next to the tier-3 bench it belongs with:
+  `render::bench::integrity_walk_cost_per_feed_and_render_update` in
+  `crates/vt/src/render/render_bench.rs`. It fills a 100 000-row history in one `feed`, then
+  reports the per-`feed` and per-`render_update` cost; run it with `--features vt-paranoid` for the
+  "before" number. Debug only — the walk does not exist in a release build — and it asserts a 1 ms
+  ceiling when the feature is off, so a walk that goes back to O(history) fails here rather than in
+  a user's session.
+
+| | `feed` (one line) | `render_update` |
+| --- | --- | --- |
+| before (`--features vt-paranoid`) | 258 615.5 us | 252 771.9 us |
+| after (default) | 142.9 us | 150.2 us |
+
+**Verification.** `pwsh scripts/ci-local.ps1` green — raw totals **61 `test result:` sections,
+1919 passed / 0 failed / 11 ignored**. `cargo test -p oneterm-vt` with and without `--features
+vt-paranoid`, plain and at `VT_PROPTEST_CASES=5000`: 359 + 5 + 5 passed / 0 failed / 3 ignored in
+every combination. `vt-diff` reports 45 of 45 recordings identical in both feature states.
+
+**Gap.** The render half of R-28 in `testing-and-bench.md` still reads "the full two-screen walk"
+at `render_update`; see the `US-0075` gap list for the wording the design owner needs to change and
+for the `vt-paranoid` M12 note that can now close.
+
 ## Handoff
+
+The bounded-integrity rework is on branch `worktree-agent-aea9b4dea012780de` off `feat/vt-engine`
+@f5b06dd, one commit, **not merged and not pushed**; it also touches `US-0075`'s files.
 
 `US-0076` (dispatch) owns `Terminal`, `Modes`, `ColorKey` and `feed`; it wires `EngineView` into
 `Terminal::render_update`, adds `VtEvent::ColorQuery`, and calls `EventBatch::clear` at the top of

@@ -165,6 +165,25 @@ incremental off the row sequence numbers; that is not this intake.
 `plan_cache` keys on `(RowId, SeqNo)`; `theme/palette.rs` and `input/mouse.rs` move to the engine's
 `Rgb` and `SelectionKind`; `mouse_tests.rs` follows.
 
+### Debug-build cost at the shim, measured by `US-0081`
+
+The flip is where a debug-build cost becomes visible, because `fast-dev` is how the app is actually
+run during development. Measured on a flood workload:
+
+| Build | Per-frame cost |
+| --- | --- |
+| Old engine | ~200 us total |
+| New engine, first measurement | 44 ms |
+| After adding `oneterm-vt` to the `fast-dev` `opt-level = 3` list | 6.5 ms |
+| After the bounded-integrity rework (`US-0075` / `US-0079`) | **pending re-measure** |
+
+Two things follow. **`oneterm-vt` now sits in the `[profile.fast-dev]` opt-level-3 list in the root
+`Cargo.toml`**, beside the other hot-path crates, for the same reason they are there: a debug-level
+VT engine makes a full-screen TUI unusable. And the residual 6.5 ms was the unbounded
+`assert_integrity` walk, which the rework reduced by three orders of magnitude
+([`testing-and-bench.md`](testing-and-bench.md) § 1); `US-0081` re-measures and records the final
+number, which is the one the GUI walks are performed against.
+
 ### Deletion list
 
 Deleted outright (code), each in the packet named:

@@ -38,25 +38,48 @@ let batch = testing::feed(&mut t, b"\x1b[3;5Hhello");
 assert_eq!(testing::row_text(&t, t.viewport().top + 2), "    hello");
 ```
 
-**Integrity-check budget (R-28).** `assert_integrity()` walks both screens and every interned id.
-Called at the end of every mutating method, in debug, over a 1200-row recording, 45 replays and
-10 000 proptest cases, it would turn `cargo test --workspace` — the CI gate, which runs in debug —
-into a multi-minute job. Ghostty's equivalent is per *page*, not per grid. So:
+**Integrity-check budget (R-28).** `assert_integrity()` walks the screens and every interned id.
+Called at the end of every mutating method over a 1200-row recording, 45 replays and 10 000 proptest
+cases, an unbounded walk would turn `cargo test --workspace` — the CI gate, which runs in debug —
+into a multi-minute job. Ghostty's equivalent is per *page*, not per grid. The rule, as shipped:
 
 | Where | Check |
 | --- | --- |
 | Every mutating public method | an O(1) check: counters ordered, cursor inside the active screen, viewport offset within history |
-| End of `feed`, `resize`, `render_update` | the full two-screen walk, in debug builds |
-| Property tests and fuzz targets | the full walk after every step, behind the `vt-paranoid` feature |
+| End of `feed`, `resize`, `render_update`, in debug builds | the full invariant set, **bounded to `integrity_lo() = min(batch_lo, visible_top)`** clamped into the live range |
+| Under `--features vt-paranoid` | `integrity_lo()` returns `oldest`, so every call is the whole-history, two-screen walk |
+| Release builds | both tiers compile out; the `cfg!(debug_assertions)` guards are unchanged |
 
-**`vt-paranoid` is not wired yet (M12).** `US-0075` could not add it: the feature needs a
-`crates/vt/Cargo.toml` entry, which was outside that packet's file scope, so the full walk currently
-runs unconditionally in the property tests. **`US-0076` owns the one-line manifest entry** and the
-`#[cfg(feature = "vt-paranoid")]` gate, after which the three tiers above are real rather than
-aspirational.
+**Why that bound is sound.** `batch_lo` is the screen top as it was when the current batch opened,
+written by `Screen::set_seq`, which `begin_batch` calls on both screens at the top of every `feed`.
+Every row a batch can write, scroll or blank is at or above it: the print, erase, insert/delete and
+scroll paths all address rows between the screen top and `newest`, and a row pushed into history
+inside the batch was a screen row when it was written. `clear_history` and the trim only *drop*
+rows, they never rewrite one. `visible_top` is in the bound so a scrolled-back viewport is still
+checked. **No invariant is weakened — only the row range they are checked over.** The cost becomes
+O(touched rows) and is flat in the scrollback depth.
 
-The debug test-suite runtime budget is recorded in the packet: `cargo test -p oneterm-vt` must
-stay under 60 s on the owner's machine, measured at `US-0075` and re-measured at `US-0077`.
+**Measured** (debug, 160x45, a full 100 000-row history, ten calls each):
+
+| | `feed` (one line) | `render_update` |
+| --- | --- | --- |
+| whole-history walk (`--features vt-paranoid`) | 258 615 us | 252 772 us |
+| bounded (default) | 143 us | 150 us |
+
+The residual ~150 us is the floor the bound describes — two 45-row screens, each cell visited by
+both walkers.
+
+**CI runs both tiers.** `scripts/ci-local.ps1`, `scripts/ci-local.sh` and both quality jobs in
+`.github/workflows/ci.yml` carry an extra step,
+`cargo test -p oneterm-vt --features vt-paranoid`, so the unbounded invariants still gate every
+change. **M12 is closed**: the manifest entry landed with `US-0076` and the `cfg!` gate and CI step
+with the `US-0075` / `US-0079` rework.
+
+**The guarding test** is `render::bench::integrity_walk_cost_per_feed_and_render_update`
+(`crates/vt/src/render/render_bench.rs`): it fills a 100 000-row history in one `feed`, reports the
+per-`feed` and per-`render_update` cost, and **asserts a 1 ms ceiling** when the feature is off.
+Debug only — the walk does not exist in a release build. It is a regression detector with three
+orders of magnitude of margin, not a benchmark gate, so it never fails on a slow machine.
 
 ### 2. The parity corpus
 
@@ -144,7 +167,8 @@ upstream coverage and the most new code (R-59):
 
 | Recording | Covers |
 | --- | --- |
-| `sixel_basic`, `sixel_scroll` | the IN-0028 decoder, placement, release |
+| `sixel_basic` | the IN-0028 decoder, placement and release. **Shipped by `US-0080`** at `crates/vt/tests/corpus/oneterm/sixel_basic/`, outside `alacritty-ref/`, blessed by the **old** engine like every other expectation and checked by the same `vt-corpus check` and `vt-diff` runs |
+| `sixel_scroll` | an image scrolling into history and being trimmed |
 | `osc_9_7_agent` | the agent channel end to end |
 | `osc_133_prompt` | shell integration marks |
 | `conpty_resize` | the BUG-0051 capture |

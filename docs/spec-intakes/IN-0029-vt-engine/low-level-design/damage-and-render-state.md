@@ -69,8 +69,10 @@ impl Terminal {
 }
 ```
 
-`&mut self` because it advances nothing the caller can see but does touch the graphics release
-scan and the sync deadline; `now` is passed in rather than read from the clock (R-11) so a replay
+`&mut self` because it advances nothing the caller can see but does touch the sync deadline (the
+graphics release scan runs in `feed`, **never here**: `render_update` has no `EventBatch` to deliver
+a `GraphicReleased` into, and R-16 keeps `RenderState` out of graphics ownership — see
+[`graphics.md`](graphics.md) § "Liveness and the release signal"); `now` is passed in rather than read from the clock (R-11) so a replay
 is deterministic and the sync tests are not time-dependent. `feed` takes `now` for the same
 reason.
 
