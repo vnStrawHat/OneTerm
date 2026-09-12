@@ -353,6 +353,11 @@ impl Handler<'_> {
             Mode::GraphemeClusters => ModeState::NotSupported,
             // R-36: accepted silently, but the encoding is not implemented.
             Mode::Win32Input => ModeState::Reset,
+            // D12, deferred to `US-0086`: the mode is stored, but `backspace` is
+            // unconditional, so nothing reads it. Answering `Set` would tell a
+            // program it may rely on reverse wrap when it may not — the same
+            // reason `? 9001` answers `Reset`. `US-0076` verification, M4.
+            Mode::ReverseWrap => ModeState::Reset,
             Mode::SyncUpdate => self.state.sync.is_set().into(),
             Mode::AltScreen | Mode::AltScreen47 | Mode::AltScreen1047 => {
                 self.state.grid.alt_active().into()
@@ -830,7 +835,10 @@ impl Dispatch for Handler<'_> {
     fn execute(&mut self, byte: u8) {
         self.state.dispatched = true;
         match byte {
-            0x09 => self.state.grid.put_tab(1),
+            0x09 => {
+                let autowrap = self.state.modes.contains(Mode::LineWrap);
+                self.state.grid.put_tab(1, autowrap);
+            }
             0x08 => self.state.grid.screen_mut().backspace(),
             0x0d => self.state.grid.screen_mut().carriage_return(),
             0x0a..=0x0c => {

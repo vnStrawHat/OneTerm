@@ -467,6 +467,20 @@ fn decrqm_answers_match_the_mode_table() {
         );
     }
 
+    // A mode that is accepted but does nothing must never answer `Set`: that
+    // would tell a program it may rely on a capability the engine has not
+    // implemented. `? 9001` (win32 input) and `? 45` (reverse wrap) are both in
+    // that state today, and `? 2027` (grapheme clusters) says `NotSupported`.
+    for code in [45, 9001] {
+        let mut session = Session::new(10, 3);
+        session.feed(format!("\x1b[?{code}h\x1b[?{code}$p").as_bytes());
+        assert_eq!(
+            session.replies(),
+            format!("\x1b[?{code};2$y"),
+            "mode {code} is stored but unread, so it must answer Reset"
+        );
+    }
+
     // And that the answer follows the real state.
     let mut session = Session::new(10, 3);
     session.feed(b"\x1b[?1h\x1b[?1$p");
@@ -1524,6 +1538,70 @@ fn overwriting_the_last_cell_clears_the_wrap_flag() {
     );
 }
 
+#[test]
+fn releasing_a_leading_wide_spacer_keeps_the_row_above_wrapped() {
+    // The `US-0076` verification's M2. A wide glyph that does not fit leaves a
+    // `LeadingWideSpacer` in the last column and wraps, so the row is wrapped
+    // *and* its last cell is the spacer. Overwriting the pair at the start of
+    // the next row releases that spacer — and the reference releases it by
+    // clearing one flag bit, which leaves `WRAPLINE` alone. Clearing the row's
+    // wrap flag instead splits a wrapped CJK line at the next reflow.
+    let mut session = Session::new(4, 3);
+    session.feed("abc\u{3042}".as_bytes());
+
+    let first = session.term.screen().row_of_index(0);
+    assert_eq!(
+        session.cell(0, 3).width(),
+        crate::cell::CellWidth::LeadingWideSpacer
+    );
+    assert!(session.term.screen().row(first).wrapped());
+    assert_eq!(session.cell(1, 0).width(), crate::cell::CellWidth::Wide);
+
+    // Repaint over the wide pair at the head of the wrapped row.
+    session.feed(b"\x1b[2;1HX");
+
+    assert_eq!(
+        session.cell(0, 3).width(),
+        crate::cell::CellWidth::Narrow,
+        "the spacer is released"
+    );
+    assert!(
+        session.term.screen().row(first).wrapped(),
+        "but the row above stays wrapped"
+    );
+}
+
+#[test]
+fn a_fresh_row_is_materialised_blank_not_background_erased() {
+    // The `US-0076` verification's M3. `Screen::row_mut` materialised an
+    // unwritten ring slot with the cursor's **erase** cell, so one glyph landing
+    // on a fresh row repainted every untouched column with the live
+    // background-erase colour. Only the `sgr` recording caught it; this pins it
+    // where a trimmed corpus cannot lose it.
+    let mut session = Session::new(6, 3);
+    session.feed(b"\x1b[41m\x1b[2;1HX");
+
+    assert_eq!(
+        session.style_at(1, 0).bg,
+        Color::Named(NamedColor::Red),
+        "the glyph itself carries the template background"
+    );
+    for col in 1..6 {
+        assert_eq!(
+            session.style_at(1, col),
+            crate::cell::Style::DEFAULT,
+            "column {col} was never written and must stay default"
+        );
+    }
+
+    // A deliberate background erase still fills with the template background,
+    // which is the behaviour the fix must not have broken.
+    session.feed(b"\x1b[K");
+    for col in 1..6 {
+        assert_eq!(session.style_at(1, col).bg, Color::Named(NamedColor::Red));
+    }
+}
+
 // ── Cursor style ────────────────────────────────────────────────────────────
 
 #[test]
@@ -1631,10 +1709,16 @@ fn hit_test_maps_a_pointer_to_a_cell_and_a_side() {
         )
     );
     // Out of range clamps rather than panicking: the coordinate comes from a
-    // hit test on a viewport that may since have been resized.
+    // hit test on a viewport that may since have been resized. The side is the
+    // fraction of the raw coordinate, which is `selection::hit_test`'s rule —
+    // this wrapper delegates rather than keeping a second opinion (M5).
     assert_eq!(
         session.term.hit_test(-5.0, 999.0),
-        (Pos { row: top, col: 19 }, Side::Right)
+        (Pos { row: top, col: 19 }, Side::Left)
+    );
+    assert_eq!(
+        session.term.hit_test(0.0, 3.2),
+        crate::selection::hit_test(session.term.grid(), 0.0, 3.2)
     );
 }
 

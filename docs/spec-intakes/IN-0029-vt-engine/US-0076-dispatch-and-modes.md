@@ -11,8 +11,8 @@ Created: 2026-09-12
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
 - [ ] In progress
-- [x] Implemented
-- [ ] Changed
+- [ ] Implemented
+- [x] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
@@ -30,7 +30,7 @@ Created: 2026-09-12
 **the 45-recording parity gate is green**: every vendored alacritty reference recording replays
 through the new engine and matches the frozen old-engine `grid.expect` and `state.expect`
 cell-exactly, except cells covered by an `expected-diffs.json` window naming a correction id
-(C1-C14). An undeclared difference, or a declared window that stops differing, fails.
+(C1-C15). An undeclared difference, or a declared window that stops differing, fails.
 
 ## Scope
 
@@ -51,13 +51,13 @@ cell-exactly, except cells covered by an `expected-diffs.json` window naming a c
     old-versus-new differential binary.
   - `crates/vt/tests/corpus/alacritty-ref/<name>/expected-diffs.json` for exactly the recordings
     the deviation tables list, measured.
+  - The seven `Terminal::selection_*` wrappers and the
+    `invalidated_by`-before-operation obligation — added to scope mid-packet when `US-0078`
+    landed (`selection.md` § Interfaces assigns them here).
 - [ ] Out of scope:
   - Sixel / graphics (`US-0078`): `DCS` is parsed, dropped and counted.
   - Selection (`US-0078`), `pub mod testing` / `pub mod strip` (`US-0080`+), the adapter swap
     (`US-0081`+).
-  - The seven `Terminal::selection_*` wrappers and the `invalidated_by`-before-operation
-    obligation — added to scope mid-packet when `US-0078` landed (`selection.md` § Interfaces
-    assigns them here).
   - Reflow itself (`US-0077`, merged): this packet only calls `TerminalGrid::resize`.
   - Additive features assigned to `US-0086` by the deviation table (D7 DECXCPR, D8 XTVERSION,
     D10 `modifyOtherKeys`, D12 reverse wrap) — but see Gaps: the CSI table, the answers table and
@@ -70,7 +70,7 @@ cell-exactly, except cells covered by an `expected-diffs.json` window naming a c
 - [x] `crates/tools/tests/corpus_check.rs` runs the new engine inside `cargo test --workspace`.
 - [x] Every difference is covered by a declared `expected-diffs.json` window naming a correction
       id; no stale window. **Measured: there is no difference at all, so no file was written.**
-- [x] Every test the LLD's Verification list names exists and passes (61 `terminal::tests`).
+- [x] Every test the LLD's Verification list names exists and passes (63 `terminal::tests`).
 - [x] The trap-map rows owned by `dispatch` (12, 20, 21, 22, 25, 26, 38, 39, 40, 42, 43) pass.
 - [x] `vt-diff` feeds the same bytes to both engines and diffs in `grid.expect` form; run over
       all 45 recordings and over the bench fixtures, with the result reported.
@@ -188,6 +188,23 @@ them is in Gaps below, not edited into the contract.
 - [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
+## Acceptance rework after the independent verification
+
+The verifier's report is [`evidence/US-0076-verify.md`](evidence/US-0076-verify.md): **merge after
+fixes**, no blocker, the gate proven genuine by tamper and mutation. All seven majors are applied.
+
+| # | Finding | Resolution |
+| --- | --- | --- |
+| M1 | Deviation **G3's stated scope is wrong**: gating the pending-wrap flag on `DECAWM` loses a line break when a program fills the row with the mode off and re-enables it | **G3 withdrawn.** `Screen::advance` arms the flag unconditionally, exactly as the reference arms `input_needs_wrap`; `DECAWM` is now read where the reference reads it, at the wrap. `Screen::print` and `put_tab` gate there, and the wide-glyph out-of-bounds guard arms the flag like the reference. The two G3 trap-map tests are rewritten for reference parity and `grid::tests::decawm_re_enabled_over_a_pending_wrap_still_breaks_the_line` is the case the deviation claimed was unobservable |
+| M2 | Residual wrap-flag divergence on a wide glyph at the last column | **Root cause found and fixed.** The cross-row wide-pair release wrote a whole cell, where the reference clears one flag bit and leaves `WRAPLINE`; under deviation G1 that cleared the row above's wrap flag. New `RowMut::repair` is the write that says "repair, not overwrite", used by the cross-row release and by `put_tab` (which the reference also writes flag-preserving). Fixes the verifier's `c2_wide_scroll`, `c3_wide_goto` and `c8_wide_at_edge` outright |
+| M3 | Evidence over-claimed: defect 1 had no unit test | `terminal::tests::a_fresh_row_is_materialised_blank_not_background_erased`, plus a scripted mutation run that reinstates each of the five fixes in turn and shows its test go red — reproduced below |
+| M4 | DECRQM answered `Set` for `? 45`, a stored-but-unread mode | `Mode::ReverseWrap => ModeState::Reset`, like `? 9001`. The table was audited: every other mode either has a live reader, is read by the embedder (`? 1004`, `? 1042`), or already answers `NotSupported` / `Reset` |
+| M5 | Two disagreeing `hit_test` implementations | `Terminal::hit_test` delegates to `selection::hit_test`; the duplicate and its contradicting expectation are gone |
+| M6 | `Config::accept_c1` was a dead knob | Removed. The parser hard-codes trap 48; the field returns with the change that honours it |
+| M7 | The packet contradicted itself on the selection wrappers | Moved into `In scope`; `(C1-C14)` corrected to `C1-C15` |
+
+Minors are recorded in Gaps (13-16) rather than fixed, except where a major covered them.
+
 ## Evidence
 
 Parity gate output, per recording: [`evidence/US-0076-parity-gate.md`](evidence/US-0076-parity-gate.md).
@@ -199,8 +216,8 @@ identical** over the corpus and **10 of 10 identical** over the `vt-bench` fixtu
 256 KiB each. `vt-corpus check --engine old` is still 45/45, so the expectations did not move.
 
 `pwsh scripts/ci-local.ps1` green. Raw totals over 57 `test result:` sections:
-**1518 passed / 0 failed / 8 ignored**. `cargo test -p oneterm-vt --lib`: 329 passed / 0 failed /
-2 ignored in 0.60 s, of which **61 are `terminal::tests`**; `cargo test -p oneterm-tools --test
+**1521 passed / 0 failed / 8 ignored**. `cargo test -p oneterm-vt --lib`: 332 passed / 0 failed /
+2 ignored in 0.58 s, of which **63 are `terminal::tests`**; `cargo test -p oneterm-tools --test
 corpus_check`: 2 passed (old engine and new, both against the frozen files).
 
 **The corrections, measured rather than assumed.** The design tables predicted C9 (`DECSTR` in
@@ -209,6 +226,28 @@ corpus_check`: 2 passed (old engine and new, both against the frozen files).
 and the soft reset's effects are all overwritten by what follows it in that recording. C1-C8,
 C10-C12 are likewise free, C13-C15 are unreachable from a corpus that never resizes and carries no
 selection. The full table is in the evidence file.
+
+**Every fix is pinned by a test that fails without it.** Scripted mutation run
+(`scratchpad/mutate.py`), each fix reinstated in turn:
+
+```text
+RED   defect 1 (row_mut materialises with the erase cell) -> a_fresh_row_is_materialised_blank_not_background_erased
+RED   defect 2 (the wrap flag outlives its cell)          -> overwriting_the_last_cell_clears_the_wrap_flag
+RED   defect 3 (the sixteenth OSC separator is eaten)     -> osc_parameters_past_the_sixteenth_are_re_split
+RED   M1 (pending wrap gated on DECAWM)                   -> decawm_re_enabled_over_a_pending_wrap_still_breaks_the_line
+RED   M2 (the spacer release clears the row above)        -> releasing_a_leading_wide_spacer_keeps_the_row_above_wrapped
+```
+
+**Beyond the corpus: the verifier's 110 differential fixtures.** The 45 recordings are real
+captured sessions and reach only part of the engine. Re-run over every family the verifier left in
+the scratchpad (`fam`, `micro`, `repro`, `combo`, `clean`, `clean2`, `widecase`, `zcase`, `fuzz`),
+**every remaining divergence is attributable to a declared id**, and the attribution is by
+mutation, not by inspection: disabling `repair_wide_pairs` alone turns the family the verifier
+could not explain (`clean2/clean08`, delta-debugged here to a 182-byte reproducer starting
+`CSI 4 h` and mixing insert mode with wide glyphs) identical. The residual families are C1, C2,
+C3, C4/C12, C6, C8, C9, C10 and synchronised output, which is a design difference rather than a
+correction — the reference buffers up to 2 MiB of unapplied bytes where this engine applies them
+and skips frames (`damage-and-render-state.md`, D4). `widecase` and `zcase` are fully identical.
 
 **Three real defects the gate found**, each fixed with a named regression test:
 
@@ -253,6 +292,9 @@ one-line accessors:
 | `grid/screen.rs` | `set_region_raw`, three lines | the reference's one-based `DECSTBM` test can produce an **empty** region, which `set_region`'s `top < bottom` contract cannot express |
 | `grid/screen.rs` | `row_mut` allocates with `Cell::EMPTY` | defect 1 above |
 | `grid/row.rs` | `clear_wrap_at` plus five call sites | defect 2 above |
+| `grid/row.rs` | `repair`, a write that keeps the row's wrap flag | M2: the reference's wide-pair repairs and `put_tab` change flag bits rather than assigning a cell |
+| `grid/screen.rs` | `advance` arms the pending wrap unconditionally; `print`, `put_tab` and the wide out-of-bounds guard read `DECAWM` where the reference does | M1, and deviation G3 is withdrawn with it |
+| `grid/terminal_grid.rs`, `grid/grid_tests.rs`, `grid/grid_props.rs`, `selection/selection_tests.rs` | `put_tab` takes `autowrap` | M1; the three test files are mechanical call-site updates |
 | `intern.rs`, `intern_tests.rs`, `render/render_tests.rs` | `HyperlinkTable::intern` returns `Option` | the ladder the LLD assigns to this packet; the two test files are mechanical call-site updates |
 
 ## Gaps
@@ -304,6 +346,30 @@ Ambiguities and conflicts found while implementing. None is edited into the desi
 12. **`Invalidation` is also evaluated for `DECCOLM` and `DECALN`**, which `selection.md` does not
     list among the four. Both blank the whole screen, so leaving a selection over them is exactly
     the bug the obligation exists to prevent.
+13. **Deviation G3 is withdrawn by this packet** (M1). `grid-and-scrollback.md:277-284` still
+    declares it and still says the printing result is identical and the flag is observable "only
+    through `EL 0` or `HT``" — both provably false. The code now has no such deviation; the LLD
+    row needs deleting by its owner, and `G3` is left in `corpus::KNOWN_DEVIATIONS` because a
+    stale *id* cannot widen the gate (only a stale declared *window* can, and there is none).
+14. **`feed`'s contract clause 1** — a debug assertion on an undrained batch — is not implemented.
+    Detecting it from a `&self` accessor needs interior mutability the crate forbids, so it would
+    have to be a generation counter on `EventBatch`, which is `US-0079`'s type.
+15. **`terminal::tests::the_invalidation_predicate_runs_before_the_operation` does not test
+    ordering**, only the outcome; a mutant that moved the predicate after the mutation would stay
+    green. The obligation is met at all six sites and was read back by the verifier line by line,
+    but it is unpinned.
+16. **Cursor shape and `lines_produced` do not reach `RenderState`**, which is what the LLD
+    specifies, so the adapter at `US-0081` needs a second locked read for both. Also unfixed from
+    the minor list: `set_scrollback_limit` does not `prune_selection` (self-heals on the next
+    feed), `DECSTR` does not reset the charsets, `OSC 52`'s selection byte is first-byte-wins as
+    in the reference, `RIS` clears the title without emitting `TitleReset` (the reference's own
+    wart), `? 9` and `? 1015` are absent from the mode table, and a claimed `OSC 133` with an
+    unknown sub-code is both counted unhandled and forwarded.
+17. **The `GRAPHEME_MAX_LEN` cap (16 codepoints) is a differential divergence**, not just a
+    documented bound: the reference stores an unbounded `Vec<char>` per cell, so a stream that
+    piles more than sixteen combining marks on one cell differs in content. It is
+    `cell-and-style.md`'s declared bound with a `FeedStats` counter, and no corpus recording or
+    realistic stream reaches it, but it has no `C` id and would need one if a future fixture did.
 
 ## Handoff
 

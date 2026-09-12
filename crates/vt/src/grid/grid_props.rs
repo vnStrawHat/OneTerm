@@ -172,7 +172,7 @@ proptest! {
                 Op::SetRegion(top, bottom) => {
                     grid.screen_mut().set_region(top, bottom, CursorOrigin::Screen);
                 }
-                Op::Tab(count) => grid.put_tab(count),
+                Op::Tab(count) => grid.put_tab(count, true),
                 Op::ScrollViewport(delta) => grid.screen_mut().scroll_viewport(delta),
                 Op::SwapAlt => grid.swap_alt(),
                 Op::Mark(index) => {

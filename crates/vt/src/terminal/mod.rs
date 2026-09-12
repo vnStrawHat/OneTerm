@@ -65,9 +65,12 @@ pub struct Config {
     /// Word-selection characters (`selection.md`); carried here so the engine
     /// has one configuration object.
     pub semantic_escape_chars: String,
-    /// The `S8C1T` hook. `false`, so an 8-bit C1 byte is executed rather than
-    /// treated as an introducer (trap 48).
-    pub accept_c1: bool,
+    // `accept_c1` (the `S8C1T` hook) is deliberately **absent**. The LLD
+    // publishes it, but the parser hard-codes trap 48 — an 8-bit C1 byte is
+    // executed, never treated as an introducer — so the field would be a knob
+    // that silently does nothing, which is exactly the dead-configuration
+    // problem that `Config` section sets out to avoid. It comes back with the
+    // parser change that honours it (`US-0076` verification, M6).
 }
 
 impl Default for Config {
@@ -77,7 +80,6 @@ impl Default for Config {
             osc_claims: OscClaims::new(),
             default_cursor_style: CursorStyle::default(),
             semantic_escape_chars: ",│`|:\"' ()[]{}<>\t".to_owned(),
-            accept_c1: false,
         }
     }
 }
@@ -265,27 +267,13 @@ impl Terminal {
 
     /// A pointer position in viewport coordinates to a grid position and the
     /// half of the cell it fell on.
+    ///
+    /// Delegates rather than re-deriving: this had its own copy of the
+    /// arithmetic that disagreed with `selection::hit_test` off the right edge,
+    /// and each copy had a green test pinning the opposite answer
+    /// (`US-0076` verification, M5). The selection module owns the rule.
     pub fn hit_test(&self, viewport_row: f32, col: f32) -> (Pos, Side) {
-        let viewport = self.viewport();
-        let row = (viewport_row.max(0.0) as u64).min(u64::from(viewport.rows.saturating_sub(1)));
-        let column = col.max(0.0);
-        let last = u32::from(viewport.cols.saturating_sub(1));
-        let raw = column as u32;
-        let index = raw.min(last) as u16;
-        // A drag that ran off the right edge selects the whole last cell, which
-        // is the right half of it; inside the grid the half is the fraction.
-        let side = if raw > last || column - column.floor() >= 0.5 {
-            Side::Right
-        } else {
-            Side::Left
-        };
-        (
-            Pos {
-                row: viewport.top + row,
-                col: index,
-            },
-            side,
-        )
+        crate::selection::hit_test(&self.state.grid, viewport_row, col)
     }
 
     /// The modes the view reads at paint time.

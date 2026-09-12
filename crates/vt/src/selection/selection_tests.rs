@@ -33,7 +33,7 @@ impl Fixture {
                 '\n' => {
                     self.grid.linefeed();
                 }
-                '\t' => self.grid.put_tab(1),
+                '\t' => self.grid.put_tab(1, true),
                 _ => self.grid.print(c, PrintMode::default(), &mut self.interner),
             }
         }

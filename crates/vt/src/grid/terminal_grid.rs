@@ -177,9 +177,11 @@ impl TerminalGrid {
         screen.print(c, mode, interner, anchors);
     }
 
-    pub fn put_tab(&mut self, count: u16) {
+    /// `HT`. `autowrap` is `DECAWM`, which decides whether a pending wrap turns
+    /// into a line break or is merely consumed (trap 3).
+    pub fn put_tab(&mut self, count: u16, autowrap: bool) {
         let (screen, anchors) = self.active();
-        screen.put_tab(count, anchors);
+        screen.put_tab(count, autowrap, anchors);
     }
 
     pub fn erase_display(

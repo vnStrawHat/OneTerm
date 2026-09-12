@@ -351,6 +351,28 @@ impl<'a> RowMut<'a> {
         self.clear_wrap_at(col as usize + 1);
     }
 
+    /// Write one cell **without** clearing the row's wrap flag.
+    ///
+    /// The reference's wide-pair repairs change flag *bits* on a cell — its
+    /// `clear_wide`, and `flags.remove(LEADING_WIDE_CHAR_SPACER)` on the row
+    /// above — rather than assigning a whole new cell, so `WRAPLINE` survives
+    /// them. `put_tab` is the same shape: it assigns `cell.c` alone. Under
+    /// deviation G1 the flag lives on the row, so those paths need a write that
+    /// says "this is a repair, not an overwrite".
+    ///
+    /// Found by the `US-0076` verification (M2): a wide glyph repainted over the
+    /// first columns of a row released the previous row's trailing
+    /// `LeadingWideSpacer` and cleared **that row's** wrap flag with it, which
+    /// would split a wrapped CJK line on the next reflow.
+    pub fn repair(&mut self, col: u16, cell: Cell) {
+        let Some(slot) = self.row.cells.get_mut(col as usize) else {
+            return;
+        };
+        *slot = cell;
+        self.row.header.occ = self.row.header.occ.max(col.saturating_add(1));
+        self.row.header.flags.insert(flags_for(cell));
+    }
+
     /// The wrap flag dies with the cell that carried it.
     ///
     /// The reference keeps `WRAPLINE` on the row's last **cell** and assigns the
