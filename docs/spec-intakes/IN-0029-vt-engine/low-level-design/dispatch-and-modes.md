@@ -454,13 +454,12 @@ impl Terminal {
 }
 pub struct Config { pub osc_claims: OscClaims, pub default_cursor_style: CursorStyle,
                     pub scrollback_limit: u32, pub semantic_escape_chars: String,
-                    pub accept_c1: bool }   // see the note below
+                    }   // accept_c1 removed, see the note below
 impl Terminal { pub fn set_cell_pixels(&mut self, w: u16, h: u16); }  // one owner (R-40, N-08)
 
-// `accept_c1` is currently a dead knob: the parser hard-codes the 7-bit behaviour, so setting it
-// changes nothing. It is either threaded into the parser or deleted, and this line records which
-// once the `US-0076` follow-up lands:
-//     STATUS: <wired | removed>  —  fill in when the fix merges.
+// `accept_c1`: STATUS = **removed** (`US-0076`). It was a dead knob — the parser hard-codes the
+// 7-bit behaviour of trap 48, so setting it changed nothing. The field comes back with the change
+// that actually honours it (a future `S8C1T`), not before.
 ```
 
 ## By-design differential divergences
@@ -468,6 +467,24 @@ impl Terminal { pub fn set_cell_pixels(&mut self, w: u16, h: u16); }  // one own
 `vt-diff` (old engine against new) is **identical on all 45 recordings and all 10 bench fixtures**
 today. The three families below would diverge if a stream exercised them, and they are listed so a
 future verifier does not re-derive them from a red diff:
+
+`vt-diff` was additionally run over the verifier's 110 differential fixtures (`fam`, `micro`,
+`repro`, `combo`, `clean`, `clean2`, `widecase`, `zcase`, `fuzz`). **Every remaining divergence is
+attributable to a declared id**, established by mutation rather than inspection — disabling
+`repair_wide_pairs` alone made the one unexplained family identical. `widecase` and `zcase` are
+fully identical. The residual families:
+
+| Family | Declared as |
+| --- | --- |
+| `DCH` shifting left by `n` | C1 |
+| `ED 1` clearing row 0 | C2 |
+| A short region scroll rotating before blanking | C3 |
+| Insert mode and erase repairing wide pairs | C4 / C12 |
+| `RIS` resetting the colour overrides | C6 |
+| Legacy alt screen `? 47` / `? 1047` / `? 1048` | C8 |
+| `DECSTR` | C9 |
+| `CSI ? 5 W` | C10 |
+| Synchronized output | a design difference, not a correction — see the table below |
 
 | Family | What differs | Why it is by design |
 | --- | --- | --- |

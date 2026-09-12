@@ -4,6 +4,18 @@ Intake: IN-0028
 Lane: normal
 Date: 2026-09-11
 
+> **Superseded in place for the engine half (`US-0080`, IN-0029).** The decoder,
+> the VT340 10x20 virtual cell, the conhost cursor rule and the cell anchoring
+> described here now live in first-party code under `crates/vt/src/graphics/`,
+> designed by
+> [`../IN-0029-vt-engine/low-level-design/graphics.md`](../IN-0029-vt-engine/low-level-design/graphics.md).
+> The behaviour contract is unchanged — the eleven expectations this intake
+> pinned are reproduced there test for test — and the vendored patch stays the
+> engine the application runs on until the shim lands at `US-0081`/`US-0082`.
+> Read this document for **why** the rules are what they are (the acceptance
+> rework that produced them is the record); read `graphics.md` for how they are
+> implemented.
+
 ## Idea
 
 Sixel arrives as one DCS sequence. The vendored `vte` already parses DCS but drops it; a

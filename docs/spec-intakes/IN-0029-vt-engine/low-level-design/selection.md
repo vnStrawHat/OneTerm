@@ -158,9 +158,18 @@ published as `SEMANTIC_ESCAPE_CHARS`) onto `Config::semantic_escape_chars`.
 
 `US-0076` inherits one obligation beyond the seven wrappers: the invalidation matrix is a
 **predicate**, `Selection::invalidated_by(grid, Invalidation::…)`, not a set of call sites inside
-the grid. Its dispatch of `erase_line`, `erase_display`, `reset` and `swap_alt` must evaluate the
-predicate **before** performing the operation, because the matrix is stated against the pre-operation
-grid. A dispatch that forgets it leaves a selection pointing at erased cells.
+the grid. Its dispatch of `erase_line`, `erase_display`, `reset` and `swap_alt` must evaluate the predicate
+**before** performing the operation, because the matrix is stated against the pre-operation grid. A
+dispatch that forgets it leaves a selection pointing at erased cells.
+
+**That ordering must be pinned by a test that fails when the order is wrong, not merely when the
+outcome is wrong.** A test asserting only "the selection is gone afterwards" stays green if the
+predicate is moved after the mutation — the mutation makes the predicate true anyway. The pin is a
+test that arranges a selection the predicate rejects **before** the operation and accepts **after**
+it, and asserts the selection survives: for example a selection wholly inside the region an
+`erase_display` is about to clear, where evaluating late would clear it and evaluating early must
+not. `terminal::tests::the_invalidation_predicate_runs_before_the_operation` currently asserts the
+outcome only and is the test to strengthen.
 
 Two further shape notes: `WRAPPED` is read as the **row** flag (deviation G1), not as a flag on the
 last cell — equivalent, including the reference's `line_length` short-circuit; and `contains_cell`

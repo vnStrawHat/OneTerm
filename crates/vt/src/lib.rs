@@ -21,6 +21,7 @@ pub mod cell;
 // its files live in `events/`, one concept each.
 #[path = "events/mod.rs"]
 pub mod event;
+pub mod graphics;
 pub mod grid;
 pub mod intern;
 pub mod parser;
@@ -34,6 +35,7 @@ pub use cell::{Attrs, Cell, CellContent, CellWidth, Color, NamedColor, Rgb, Sema
 pub use event::{
     ByteSpan, ClipboardKind, EventBatch, FeedStats, ParamSpans, StrSpan, StringTerm, VtEvent,
 };
+pub use graphics::{GraphicData, MAX_DIMENSION, Placement, VIRTUAL_CELL};
 pub use grid::{Pos, RowId, RowRef, SeqNo, Size, TerminalGrid, Viewport};
 pub use intern::{
     Extras, ExtrasId, GRAPHEME_MAX_LEN, GraphemeId, GraphicId, HyperlinkId, Interner, StyleId,
@@ -41,8 +43,8 @@ pub use intern::{
 pub use reflow::{ResizeOutcome, ResizePolicy};
 pub use render::{
     Demand, EngineView, ModeSnapshot, MouseEncoding, MouseProtocol, MouseReporting, Palette,
-    RenderCell, RenderContent, RenderCursor, RenderRow, RenderState, RenderUpdate, StyleRun,
-    SyncState, Watermark,
+    RenderCell, RenderContent, RenderCursor, RenderPlacement, RenderRow, RenderState, RenderUpdate,
+    StyleRun, SyncState, Watermark,
 };
 pub use selection::{
     Invalidation, SEMANTIC_ESCAPE_CHARS, Selection, SelectionKind, SelectionRange, Side,

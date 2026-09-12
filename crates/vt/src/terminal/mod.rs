@@ -23,6 +23,7 @@ mod osc;
 mod tests;
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::Instant;
 
 pub use color::{COLOR_COUNT, ColorKey, ColorOverrides};
@@ -34,6 +35,7 @@ pub use osc::OscClaims;
 
 use crate::cell::{Cell, Style};
 use crate::event::{EventBatch, FeedStats};
+use crate::graphics::{self, GraphicData, GraphicsState};
 use crate::grid::{
     AnchorId, Charset, DEFAULT_SCROLLBACK, Pos, RowId, Screen, Size, TerminalGrid, Viewport,
 };
@@ -93,6 +95,9 @@ pub(crate) struct State {
     pub(crate) title: TitleState,
     pub(crate) keyboard: KeyboardStacks,
     pub(crate) sync: SyncState,
+    /// Decoded images, their placements and the in-flight Sixel decoder
+    /// (`US-0080`). Owns one anchor entry per live placement.
+    pub(crate) graphics: GraphicsState,
     /// Owns two entries in the anchor list while it lives, which is why every
     /// path that drops it goes through `Terminal::selection_clear`.
     pub(crate) selection: Option<Selection>,
@@ -140,6 +145,7 @@ impl Terminal {
                 title: TitleState::default(),
                 keyboard: KeyboardStacks::default(),
                 sync: SyncState::new(),
+                graphics: GraphicsState::default(),
                 selection: None,
                 theme: ThemeColors::new(),
                 cursor_style: None,
@@ -173,6 +179,9 @@ impl Terminal {
         };
         self.state.dispatched = false;
         if bytes.is_empty() {
+            // Still the delivery point: a `resize` releases placements and has
+            // no batch of its own to report them in.
+            graphics::drain_released(&mut self.state, batch);
             return self.state.stats;
         }
         self.state.grid.begin_batch();
@@ -186,12 +195,35 @@ impl Terminal {
 
         self.state.grid.sync_anchors();
         self.prune_selection();
+        // R-22: the release sweep is end-of-batch, never per mutation, because
+        // liveness is derived from the rows the batch left behind.
+        graphics::sweep(&mut self.state);
+        graphics::drain_released(&mut self.state, batch);
         if self.state.dispatched {
             batch.push_repaint();
         }
         // R-28: the full two-screen walk runs once per feed, never per mutation.
         self.state.grid.assert_integrity(Some(&self.state.interner));
+        graphics::assert_integrity(&self.state);
         self.state.stats
+    }
+
+    // ── Graphics ────────────────────────────────────────────────────────────
+
+    /// Take the images decoded since the last call, oldest first.
+    ///
+    /// **The only drain (R-16).** `DEC-0015` allows several render states, so a
+    /// drain inside `render_update` would hand an image to the first caller and
+    /// nothing to anybody else, the adapter included. A frame skipped by mode
+    /// 2026 therefore loses nothing: the pixels wait here.
+    pub fn take_graphics(&mut self) -> Vec<Arc<GraphicData>> {
+        std::mem::take(&mut self.state.graphics.pending)
+    }
+
+    /// Every live placement, for a consumer that is not going through a
+    /// [`RenderState`]. The painter reads `RenderState::placements` instead.
+    pub fn placements(&self) -> &[crate::graphics::Placement] {
+        &self.state.graphics.placements
     }
 
     // ── Render hand-off ─────────────────────────────────────────────────────
@@ -207,6 +239,7 @@ impl Terminal {
             sync: &mut self.state.sync,
             modes,
             selection,
+            placements: &self.state.graphics.placements,
             generation: self.state.generation,
             palette_epoch: self.state.palette_epoch,
         };
@@ -297,6 +330,9 @@ impl Terminal {
         let outcome = self.state.grid.resize(size, policy);
         self.state.generation = self.state.generation.wrapping_add(1);
         self.prune_selection();
+        // A reflow can destroy the rows a placement was anchored to; the
+        // releases queue until the next `feed` delivers them.
+        graphics::sweep(&mut self.state);
         outcome
     }
 

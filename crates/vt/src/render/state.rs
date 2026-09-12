@@ -20,9 +20,10 @@
 
 use std::time::Instant;
 
+use crate::graphics::Placement;
 use crate::grid::SeqNo;
 use crate::grid::{RowId, Screen, Size, TerminalGrid, Viewport};
-use crate::intern::{Hyperlink, HyperlinkId, Interner};
+use crate::intern::{GraphicId, Hyperlink, HyperlinkId, Interner};
 use crate::render::modes::ModeSnapshot;
 use crate::render::palette::Palette;
 use crate::render::row::RenderRow;
@@ -60,6 +61,26 @@ pub struct RenderCursor {
     pub visible: bool,
 }
 
+/// One image's place on the grid, with its anchor already resolved.
+///
+/// The cell carries only the [`GraphicId`]; the painter derives the cell's
+/// offset inside the image from this record
+/// (`graphics.md` § "Ownership", [`RenderState::graphic_offset`]), which is what
+/// keeps a whole image to **one** interned extras entry.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct RenderPlacement {
+    pub id: GraphicId,
+    /// The row holding the image's top-left cell.
+    pub row: RowId,
+    /// The column holding the image's top-left cell.
+    pub col: u16,
+    pub cols: u16,
+    pub rows: u16,
+    /// The decoded image's size in pixels; the renderer rescales it by
+    /// `cell_width / 10` and `line_height / 20`.
+    pub pixel_size: (u32, u32),
+}
+
 /// The engine fields one update reads, borrowed as the disjoint fields they are.
 ///
 /// `US-0076`'s `Terminal::render_update(&mut self, state, now)` is a shim that
@@ -81,6 +102,10 @@ pub struct EngineView<'a> {
     /// but a drag over static content must still produce a frame, so a change
     /// here defeats `Unchanged`.
     pub selection: Option<SelectionRange>,
+    /// The live placements, copied into the state next to the rows so the
+    /// painter needs no engine access. **Never the pixels** (R-16): those are
+    /// drained once, by `Terminal::take_graphics`.
+    pub placements: &'a [Placement],
 }
 
 /// One consumer's view of the terminal, reused across frames.
@@ -95,6 +120,7 @@ pub struct RenderState {
     changed: Vec<u16>,
     cursor: RenderCursor,
     selection: Option<SelectionRange>,
+    placements: Vec<RenderPlacement>,
     modes: ModeSnapshot,
     palette_epoch: u32,
     mapped_epoch: Option<u32>,
@@ -125,9 +151,27 @@ impl RenderState {
             generation,
             palette_epoch,
             selection,
+            placements,
         } = engine;
         let screen = grid.screen();
         let viewport = screen.viewport();
+
+        // Refreshed on every update, a suppressed one included: a placement is
+        // cheap to copy (usually none at all) and the painter must never hold a
+        // placement whose anchor has moved under it.
+        self.placements.clear();
+        self.placements
+            .extend(placements.iter().filter_map(|placement| {
+                let pos = grid.anchors().get(placement.anchor)?;
+                Some(RenderPlacement {
+                    id: placement.id,
+                    row: pos.row,
+                    col: pos.col,
+                    cols: placement.cols,
+                    rows: placement.rows,
+                    pixel_size: placement.pixel_size,
+                })
+            }));
 
         // R-17: the modes and the cursor are refreshed on every update,
         // including one that returns Unchanged, because the view reads both at
@@ -258,6 +302,36 @@ impl RenderState {
     /// reads it here rather than asking the engine a second question.
     pub fn selection(&self) -> Option<SelectionRange> {
         self.selection
+    }
+
+    /// The live image placements, refreshed every update. Ids only — the pixels
+    /// come from `Terminal::take_graphics`, which is the one drain (R-16).
+    pub fn placements(&self) -> &[RenderPlacement] {
+        &self.placements
+    }
+
+    /// The placement a cell's [`GraphicId`] names, or `None` once the image is
+    /// gone — a stale reference paints nothing rather than painting wrongly.
+    pub fn placement(&self, id: GraphicId) -> Option<&RenderPlacement> {
+        self.placements.iter().find(|placement| placement.id == id)
+    }
+
+    /// The cell's `(col, row)` offset **inside the image's cell grid**, which is
+    /// what the painter used to read out of the cell itself.
+    ///
+    /// ```text
+    /// offset    = (col - placement.col, row - placement.row)
+    /// origin_px = cell_origin(row, col) - offset * cell_size
+    /// ```
+    ///
+    /// `None` when the image is gone, or when the cell is outside the placement
+    /// — which an `IL` or `SD` splitting an image can produce.
+    pub fn graphic_offset(&self, id: GraphicId, row: RowId, col: u16) -> Option<(u16, u16)> {
+        let placement = self.placement(id)?;
+        let down = u16::try_from(row.distance(placement.row)).ok()?;
+        let across = col.checked_sub(placement.col)?;
+        (row >= placement.row && down < placement.rows && across < placement.cols)
+            .then_some((across, down))
     }
 
     /// The modes the view reads at paint time, refreshed every update.

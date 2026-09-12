@@ -19,7 +19,7 @@ pub use demand::Demand;
 pub use modes::{ModeSnapshot, MouseEncoding, MouseProtocol, MouseReporting};
 pub use palette::Palette;
 pub use row::{RenderCell, RenderContent, RenderRow, StyleRun};
-pub use state::{EngineView, RenderCursor, RenderState, RenderUpdate, Watermark};
+pub use state::{EngineView, RenderCursor, RenderPlacement, RenderState, RenderUpdate, Watermark};
 pub use sync::{SYNC_REFRESH, SYNC_WATCHDOG, SyncState};
 
 #[cfg(test)]

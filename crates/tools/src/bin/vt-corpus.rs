@@ -48,6 +48,8 @@ struct Args {
     deviation: Option<String>,
     grid_json: Option<PathBuf>,
     out: Option<PathBuf>,
+    /// Which corpus directory to read; the vendored alacritty set by default.
+    dir: Option<PathBuf>,
 }
 
 fn run() -> Result<bool> {
@@ -63,6 +65,7 @@ fn run() -> Result<bool> {
             "--filter" => args.filter = Some(value()?),
             "--engine" => args.engine = Some(value()?),
             "--deviation" => args.deviation = Some(value()?),
+            "--dir" => args.dir = Some(PathBuf::from(value()?)),
             "--grid-json" => args.grid_json = Some(PathBuf::from(value()?)),
             "--out" => args.out = Some(PathBuf::from(value()?)),
             "--help" | "-h" => {
@@ -88,15 +91,18 @@ fn run() -> Result<bool> {
 
 fn print_usage() {
     println!(
-        "vt-corpus check          [--filter <substring>] [--engine old|new]\n\
-         vt-corpus bless --engine old [--deviation <id> --filter <recording>]\n\
+        "vt-corpus check          [--filter <substring>] [--engine old|new] [--dir <corpus dir>]\n\
+         vt-corpus bless --engine old [--deviation <id> --filter <recording>] [--dir <corpus dir>]\n\
          vt-corpus cross-check --grid-json <dir> [--filter <substring>]\n\
-         vt-corpus grep-deviations [--out <file.md>]"
+         vt-corpus grep-deviations [--out <file.md>]\n\
+         \n\
+         --dir defaults to crates/vt/tests/corpus/alacritty-ref; OneTerm's own\n\
+         recordings live next to it under oneterm/."
     );
 }
 
 fn recordings(args: &Args) -> Result<Vec<Recording>> {
-    let dir = alacritty_ref_dir();
+    let dir = args.dir.clone().unwrap_or_else(alacritty_ref_dir);
     let found = corpus::load_all(&dir, args.filter.as_deref())?;
     if found.is_empty() {
         bail!("no recordings under {} matched the filter", dir.display());
