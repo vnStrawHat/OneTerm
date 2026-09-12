@@ -268,10 +268,10 @@ All 48 items from [`../research/engine-semantics.md`](../research/engine-semanti
 | 2 | Pending wrap then `EL 0` erases nothing | grid | `grid::tests::pending_wrap_then_el0_erases_nothing` |
 | 3 | Pending wrap then `HT` | grid | `grid::tests::pending_wrap_then_tab_wraps_and_returns` |
 | 4 | Pending wrap with `DECAWM` off | grid (G3) | `grid::tests::decawm_off_then_el0_erases`, `grid::tests::decawm_off_then_tab_moves_to_the_next_stop` |
-| 5 | Wide char at the last column | cell-and-style | `cell::tests::wide_char_at_last_column_wrap_on_and_off` |
-| 6 | Overwriting half a wide pair | cell-and-style | `cell::tests::wide_pair_repair_on_overwrite` |
-| 7 | Insert mode over a wide char | cell-and-style | `cell::tests::insert_mode_over_wide_char_leaves_orphan_spacer` |
-| 8 | Zero-width char at column 0 | cell-and-style | `cell::tests::zero_width_at_column_zero_attaches_to_column_zero` |
+| 5 | Wide char at the last column | grid (print path) | `grid::tests::wide_char_at_last_column_wrap_on_and_off` (`US-0075`) |
+| 6 | Overwriting half a wide pair | cell-and-style (same row) + grid (cross row) | `cell::tests::wide_pair_repair_on_overwrite`, `grid::tests::wide_pair_repair_across_rows` (`US-0075`) |
+| 7 | Insert mode over a wide char | grid (print path) | `grid::tests::insert_mode_over_wide_char_repairs_the_pair` (`US-0075`, correction C4 — the old name `..._leaves_orphan_spacer` described the behaviour the correction replaced) |
+| 8 | Zero-width char at column 0 | grid (print path) | `grid::tests::zero_width_at_column_zero_attaches_to_column_zero` (`US-0075`) |
 | 9 | `ED 2` scrolls into scrollback | grid | `grid::tests::ed2_scrolls_the_viewport_into_history`, `grid::tests::ed2_keeps_the_scrolled_back_viewport_position` |
 | 10 | `ED 3` resets the viewport offset | grid | `grid::tests::ed3_resets_the_viewport_to_the_bottom` |
 | 11 | `ED 1` skips row 0 when the cursor is on row 1 | grid | `grid::tests::ed1_with_cursor_on_row_one_keeps_row_zero` |

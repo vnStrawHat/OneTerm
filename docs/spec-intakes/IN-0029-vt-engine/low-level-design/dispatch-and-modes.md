@@ -262,7 +262,7 @@ Handled natively:
 | --- | --- |
 | `0`, `2` | set the title -> `VtEvent::Title`; requires at least two parameters |
 | `4` | set or query palette entries. **Spec-correct (C7)**: every complete `index;spec` pair is applied and a trailing odd parameter is ignored, where the reference rejects an even parameter count wholesale (trap 26); `?` queries -> `VtEvent::ColorQuery { key: Palette(i) }` |
-| `8` | hyperlink; `id=` parsed from `params[1]`, the URI rejoined from `params[2..]`; an empty URI clears it |
+| `8` | hyperlink; `id=` parsed from `params[1]`, the URI rejoined from `params[2..]`; an empty URI clears it. **This packet owns the `HyperlinkTable` bound** — see below |
 | `10` / `11` / `12` | foreground / background / cursor, set or `?` query; a multi-parameter form advances the key and stops past `Cursor` |
 | `104` / `110` / `111` / `112` | reset |
 | `52` | clipboard; `?` -> `VtEvent::ClipboardLoad`, otherwise base64-decode -> `VtEvent::ClipboardStore`. The selection byte must be `c`, `p` or `s`; anything else drops the request; undecodable base64 or invalid UTF-8 is dropped silently (trap 25). **The engine never applies a policy** — the decision stays in `crates/terminal/src/security_policy.rs` |
@@ -300,6 +300,27 @@ extension point. Its collision with ConEmu's "run some process with arguments" s
 sub-code wins is a one-line change to the claim.
 
 A claimed number whose handler is missing is a debug assertion, never a panic.
+
+### The hyperlink table needs a ladder, and `US-0076` owns it
+
+`HyperlinkTable` ([`cell-and-style.md`](cell-and-style.md) § "Extras") is the one interned table
+with no bound: a link **without** an explicit `id=` gets a fresh implicit id on every occurrence,
+so a stream of un-`id=`-ed OSC 8 links grows `entries` and its index map without limit. That is
+attacker-reachable from any SSH session, so it cannot be left to a later packet:
+
+| Step | Condition | Action |
+| --- | --- | --- |
+| 1 | the link is already interned (same `id` and URI) | reuse |
+| 2 | `entries.len() < HYPERLINK_TABLE_LIMIT` (65 535, matching the other tables) | insert |
+| 3 | full | drop the hyperlink attribute for that cell — the text still renders, the link is simply not clickable — count it in `FeedStats::hyperlink_table_exhausted` and `log::warn!` once per session |
+
+Additionally, implicit ids are **recycled by `RIS` and by a full reset**, which `US-0076` also
+owns: both clear the table, so a long session that never repeats a URI cannot accumulate across a
+`clear`-and-restart cycle. An explicit `id=` still interns by value, so a program that groups its
+links pays one entry per group, which is the case the protocol was designed for.
+
+The US-0074 verification recorded this as the most substantive open risk that packet left behind;
+it is written here so it cannot be dropped.
 
 ### Title stack
 
@@ -462,6 +483,9 @@ impl Terminal { pub fn set_cell_pixels(&mut self, w: u16, h: u16); }  // one own
 - [ ] `dispatch::tests::osc_4_applies_complete_pairs` — correction C7, trap 26.
 - [ ] `dispatch::tests::osc_104_does_not_reset_the_special_colours` — trap 26.
 - [ ] `dispatch::tests::osc_52_selection_byte_validation` — trap 25.
+- [ ] `dispatch::tests::hyperlink_table_exhaustion_drops_the_attribute_and_logs_once` — the ladder
+  above; drives 65 535 implicit-id links and asserts the text still renders.
+- [ ] `dispatch::tests::ris_clears_the_hyperlink_table`
 - [ ] `dispatch::tests::cpr_honours_origin_mode` — correction C5, trap 38.
 - [ ] `dispatch::tests::ris_resets_the_palette_and_keeps_the_row_ids` — correction C6, trap 39.
 - [ ] `dispatch::tests::deccolm_does_not_change_the_width` — trap 40.
