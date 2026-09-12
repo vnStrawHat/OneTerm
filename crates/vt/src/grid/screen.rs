@@ -1445,16 +1445,22 @@ impl Screen {
         self.offset = offset.min(self.history_len());
     }
 
-    /// Install the cursor the reflow read back out of the anchor list, before
-    /// the next [`Screen::sync_anchors`] would overwrite the entry from the
-    /// field.
-    pub(crate) fn set_cursor(&mut self, pos: Pos, pending_wrap: bool) {
+    /// Install the cursor the reflow read back out of the anchor list.
+    ///
+    /// **Only `reflow::read_back` may call this**, and only in the window
+    /// between `Anchors::remap` and the next [`Screen::sync_anchors`]. It writes
+    /// the field without writing the entry, which is exactly the staleness the
+    /// read-back exists to repair: called anywhere else it would recreate it.
+    /// Every other cursor move goes through [`Screen::goto`] and its siblings.
+    pub(crate) fn restate_cursor_after_reflow(&mut self, pos: Pos, pending_wrap: bool) {
         self.cursor.pos = pos;
         self.cursor.pending_wrap = pending_wrap;
         self.clamp_cursors();
     }
 
-    pub(crate) fn set_saved_cursor_pos(&mut self, pos: Pos) {
+    /// As [`Screen::restate_cursor_after_reflow`], for the `DECSC` slot, and
+    /// under the same restriction.
+    pub(crate) fn restate_saved_cursor_after_reflow(&mut self, pos: Pos) {
         self.saved_cursor.pos = pos;
         self.clamp_cursors();
     }

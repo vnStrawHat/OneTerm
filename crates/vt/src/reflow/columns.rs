@@ -15,7 +15,7 @@
 use std::collections::VecDeque;
 
 use crate::cell::{Cell, CellContent, CellWidth};
-use crate::grid::{Anchors, Pos, Row, RowFlags, RowId, Screen, SeqNo};
+use crate::grid::{Anchors, Pos, Row, RowFlags, RowId, Screen, SeqNo, flags_for};
 
 /// One position the reflow was asked to carry, and where it landed.
 ///
@@ -34,6 +34,8 @@ trait RowSink {
     /// A row with nothing in it: the ring stores `None` and allocates no cells,
     /// which is where the engine's empty-scrollback memory figure comes from.
     fn push_blank(&mut self) -> usize;
+    /// A row handed through untouched by the fast path below.
+    fn push_existing(&mut self, row: Row) -> usize;
     /// The index the next pushed row will get.
     fn next_index(&self) -> usize;
 }
@@ -57,6 +59,10 @@ impl RowSink for RingSink {
 
     fn push_blank(&mut self) -> usize {
         self.store(None)
+    }
+
+    fn push_existing(&mut self, row: Row) -> usize {
+        self.store(Some(row))
     }
 
     fn next_index(&self) -> usize {
@@ -91,6 +97,10 @@ impl RowSink for CountSink {
         let index = self.produced;
         self.produced += 1;
         index
+    }
+
+    fn push_existing(&mut self, _row: Row) -> usize {
+        self.push_blank()
     }
 
     fn next_index(&self) -> usize {
@@ -139,14 +149,50 @@ pub(crate) fn reflow_columns(
     let mut next_point = 0;
     let (oldest, newest) = (screen.oldest(), screen.newest());
     let mut id = oldest;
+    let seq = screen.seq();
     loop {
         let row = screen.take_row(id);
         let flags = row
             .as_ref()
             .map_or(RowFlags::empty(), |row| row.header().flags);
-        line.push_row(id, row.as_ref().map(Row::cells), flags);
         let last = id == newest;
-        if last || !flags.contains(RowFlags::WRAPPED) {
+        let ends_line = last || !flags.contains(RowFlags::WRAPPED);
+
+        // The reference's own rule: a row is a reflow target only when it is
+        // short and carries the wrap flag; everything else it merely grows in
+        // place. A row that is a whole logical line, has content, already fits
+        // the new width and carries no tracked position is therefore handed
+        // through untouched — no copy, no allocation, no hint rescan. Most of a
+        // real scrollback is exactly that.
+        if line.is_empty()
+            && ends_line
+            && !flags.contains(RowFlags::WRAPPED)
+            && points
+                .get(next_point)
+                .is_none_or(|point| point.key.row != id)
+            && let Some(row) = row
+        {
+            let keep = trimmed_len(row.cells());
+            // A trailing `LeadingWideSpacer` has to go through the slow path: it
+            // is the placeholder for a glyph that wrapped, and on a row that
+            // ends its own logical line it is junk the layout has to drop.
+            if keep > 0
+                && keep <= new_cols as usize
+                && row.cells()[keep - 1].width() != CellWidth::LeadingWideSpacer
+            {
+                sink.push_existing(row.into_refitted(new_cols, keep as u16, seq));
+                if last {
+                    break;
+                }
+                id = id + 1;
+                continue;
+            }
+            line.push_row(id, Some(row.cells()), flags);
+        } else {
+            line.push_row(id, row.as_ref().map(Row::cells), flags);
+        }
+
+        if ends_line {
             let points = line.claim_points(&mut points, &mut next_point);
             line.finish(new_cols, cursor_key, points, &mut sink);
         }
@@ -173,6 +219,9 @@ pub(crate) fn reflow_columns(
             col,
         })
     };
+    // Sorted, because `points` is: a long shell session accumulates one or more
+    // `Mark` anchors per prompt, and a linear scan per anchor would make the
+    // remap quadratic in them.
     let table: Vec<(Pos, Option<Pos>)> = points
         .iter()
         .map(|point| (point.key, resolve(point.dest)))
@@ -185,10 +234,8 @@ pub(crate) fn reflow_columns(
         if !lane.contains(&pos.row) {
             return Some(pos);
         }
-        let mapped = table
-            .iter()
-            .find(|(key, _)| *key == pos)
-            .and_then(|(_, mapped)| *mapped)?;
+        let found = table.binary_search_by(|(key, _)| key.cmp(&pos)).ok()?;
+        let mapped = table[found].1?;
         Some(Pos {
             row: mapped.row,
             col: mapped.col.min(last_col),
@@ -269,6 +316,10 @@ struct Line {
 }
 
 impl Line {
+    fn is_empty(&self) -> bool {
+        self.starts.is_empty()
+    }
+
     fn push_row(&mut self, id: RowId, cells: Option<&[Cell]>, flags: RowFlags) {
         self.starts.push((id, self.cells.len()));
         if let Some(cells) = cells {
@@ -315,10 +366,7 @@ impl Line {
         sink: &mut dyn RowSink,
     ) {
         let cursor_offset = self.offset_of(cursor_key);
-        let mut length = self.cells.len();
-        while length > 0 && is_trimmable(self.cells[length - 1]) {
-            length -= 1;
-        }
+        let length = trimmed_len(&self.cells);
         // Windows Terminal's `REFLOW_JANK_CURSOR_WRAP` assumption: on the
         // cursor's logical line the trailing blanks up to the cursor are treated
         // as content, which is what keeps the cursor's distance from the text
@@ -358,6 +406,9 @@ fn emit_line(
     }
 
     let mut row: Vec<Cell> = Vec::with_capacity(cols);
+    // Accumulated as the cells are laid down, so `Row::from_cells` does not walk
+    // the same cells a second time to derive them.
+    let mut row_hints = hints;
     let mut i = 0;
     loop {
         // Trap 33: a wide glyph that would straddle the new last column is
@@ -365,8 +416,9 @@ fn emit_line(
         if i < len && cols >= 2 && row.len() + 2 > cols && is_wide_pair(cells, i) {
             row.push(Cell::EMPTY.with_width(CellWidth::LeadingWideSpacer));
             row.resize(cols, Cell::EMPTY);
-            sink.push(row, true, hints);
+            sink.push(row, true, row_hints);
             row = Vec::with_capacity(cols);
+            row_hints = hints;
         }
         let here = (sink.next_index(), row.len() as u16);
         for point in points.iter_mut().filter(|point| point.offset == i) {
@@ -374,7 +426,7 @@ fn emit_line(
         }
         if i == len {
             row.resize(cols, Cell::EMPTY);
-            sink.push(row, false, hints);
+            sink.push(row, false, row_hints);
             return;
         }
 
@@ -385,18 +437,23 @@ fn emit_line(
             for point in points.iter_mut().filter(|point| point.offset == i + 1) {
                 point.dest = Some(spacer);
             }
+            row_hints.insert(flags_for(cells[i]));
+            row_hints.insert(flags_for(cells[i + 1]));
             row.push(cells[i]);
             row.push(cells[i + 1]);
             i += 2;
         } else {
-            row.push(narrowed(cells[i]));
+            let cell = narrowed(cells[i]);
+            row_hints.insert(flags_for(cell));
+            row.push(cell);
             i += 1;
         }
 
         if row.len() >= cols {
             let wrapped = i < len;
-            let index = sink.push(row, wrapped, hints);
+            let index = sink.push(row, wrapped, row_hints);
             row = Vec::with_capacity(cols);
+            row_hints = hints;
             if !wrapped {
                 // The line ended exactly at the row boundary, so a point at its
                 // end sits past the last column — the pending wrap (trap 31).
@@ -435,6 +492,15 @@ fn narrowed(cell: Cell) -> Cell {
 /// stays: its background is content.
 fn is_trimmable(cell: Cell) -> bool {
     cell.width() == CellWidth::Narrow && cell.is_blank()
+}
+
+/// How much of `cells` is content, once the trailing blanks are dropped.
+fn trimmed_len(cells: &[Cell]) -> usize {
+    let mut length = cells.len();
+    while length > 0 && is_trimmable(cells[length - 1]) {
+        length -= 1;
+    }
+    length
 }
 
 /// Every live anchor in this screen's lane, plus the cursor's pending-wrap

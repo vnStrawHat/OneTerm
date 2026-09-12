@@ -214,15 +214,16 @@ LLD.
   `python scripts/completion-catalog.py validate`, `python scripts/third-party-notices.py
   --check`.
 - `cargo test --workspace` — raw totals summed over the 54 `test result:` sections:
-  **1315 passed / 0 failed / 6 ignored**. Against this branch's base (`US-0075`: 1267 / 0 / 5)
-  the delta is exactly this packet's **48 new tests plus the one ignored measurement**.
-- `cargo test -p oneterm-vt` — **137 passed / 0 failed / 1 ignored**, `finished in 0.65 s`;
-  `--list` counts 138 against 89 before. Breakdown: 39 `reflow::tests::`, 10
+  **1317 passed / 0 failed / 6 ignored**. Against this branch's base (`US-0075`: 1267 / 0 / 5)
+  the delta is exactly this packet's **50 new tests plus the one ignored measurement**.
+- `cargo test -p oneterm-vt` — **139 passed / 0 failed / 1 ignored**, `finished in 0.49 s`;
+  `--list` counts 140 against 89 before. Breakdown: 41 `reflow::tests::`, 10
   `reflow::props::`, of which **14 are `keep_viewport_top_*`**.
 - `VT_PROPTEST_CASES=10000 cargo test -p oneterm-vt reflow::props` — **10 passed / 0 failed**,
-  `finished in 6.62 s`.
-- **R-28 budget re-measured:** the whole `oneterm-vt` debug suite is 0.65 s at the default 256
-  cases and 6.6 s at 10 000, against the stated 60 s budget. The full two-screen integrity walk
+  `finished in 2.41 s`. The verifier additionally ran 3 x 20 000 and 1 x 40 000 fresh-seed
+  cases, all green.
+- **R-28 budget re-measured:** the whole `oneterm-vt` debug suite is 0.49 s at the default 256
+  cases and 2.4 s at 10 000, against the stated 60 s budget. The full two-screen integrity walk
   runs once per resize (`TerminalGrid::resize`) and the O(1) tier at the end of every mutating
   method, which is the tiering R-28 mandates.
 - No `unsafe` anywhere in `crates/vt`; no dependency added (`crates/vt/Cargo.toml` untouched).
@@ -266,30 +267,73 @@ trick are deleted rather than ported.
 `cargo test -p oneterm-vt --release resize_latency -- --ignored --nocapture`, 80x24 to 100x40,
 median of 20 runs, the same geometry and filler shape as `vt-bench resize`:
 
-| Scrollback rows | grow (us) | shrink (us) | old engine grow / shrink (us) |
+The benchmark measures **two content shapes**, because they exercise different halves of the
+algorithm: 96-character logical lines, which wrap at 80 columns so every one of them is rebuilt,
+and 40-character lines, which do not — the shape a real scrollback is mostly made of.
+
+| Scrollback rows | wrapped grow / shrink (us) | short grow / shrink (us) | old engine grow / shrink (us) |
 | ---: | ---: | ---: | ---: |
-| 0 | **1.6** (1.4-4.1) | **2.1** (1.8-5.2) | 1186 / 20 |
-| 10 000 | **4 395** (3 913-5 264) | **4 874** (3 775-4 895) | 4 704 / 3 361 |
-| 100 000 | **32 947** (30 420-40 913) | **33 701** (30 478-41 568) | 53 182 / 39 146 |
+| 0 | **1.8 / 2.4** | **2.5 / 3.1** | 1186 / 20 |
+| 10 000 | **2 809 / 2 636** | **821 / 931** | 4704 / 3361 |
+| 100 000 | **26 895 / 26 161** | **14 306 / 15 740** | 53 182 / 39 146 |
 
 Old-engine figures from [`evidence/US-0072-bench-baseline.md`](evidence/US-0072-bench-baseline.md)
-§ "Tier 4". Ranges are across four runs on the same machine; the depth-0 figures are close
-enough to the timer's resolution that the run-to-run spread is larger than the measurement.
+§ "Tier 4", measured on 96-character content, so the wrapped column is the comparable one. The
+depth-0 figures sit close to the timer's resolution and vary by a microsecond or two between runs.
 
-- **At 0 scrollback the research target is met**: single-digit microseconds, against the old
-  engine's 1186 us to grow — **two to three orders of magnitude**. The old engine's grow cost
-  at depth 0 was the history the grow itself creates; the new one allocates one row per live
-  row and there are only 24.
-- **At depth it is a ratio, not a win**: 0.9-1.1x at 10 000 rows and 0.6-0.8x at 100 000. The
-  LLD's cost model predicted exactly this — the algorithm is O(live rows x cols) and no amount
-  of care changes that while the whole history is reflowed eagerly.
+- **At 0 scrollback the research target is met**: single-digit microseconds against the old
+  engine's 1186 us to grow — **two to three orders of magnitude**. The old engine's depth-0 grow
+  cost was the history the grow itself creates.
+- **At depth, 2.0x faster on wrapped content and 3.7x on short**, against the engine being
+  replaced. The shape is still O(live rows x cols) exactly as the LLD's cost model says; what
+  changed is the constant.
 - **Where the time goes.** The same test times a rows-only round trip (40 rows and back at an
-  unchanged width) at each depth: **0.1-0.3 us regardless of scrollback**. The rows-only path
-  moves counters and never walks a row, so *all* of the cost above is the column reflow, and it
-  is one `Vec<Cell>` allocation plus two cell copies plus an O(cols) flag scan per produced row
-  — about 330 ns per row at 100 000 rows of 96-column content. The lever the LLD names
-  (reflow the viewport eagerly and the history lazily) is the only thing that changes the shape;
-  it is out of scope here, and this measurement is the argument for it.
+  unchanged width) at each depth: **0.1-0.2 us regardless of scrollback**, because that path
+  moves counters and never walks a row. *All* of the cost above is therefore the column reflow.
+
+**Three constant-factor wins the verifier measured, two applied.** The verifier's
+`p14_cost_breakdown` attributed the original 33 ms at 100 000 rows to allocator traffic first
+(~23 ms of allocate-and-fill plus ~18 ms of dropping the old rows) and per-cell rescanning
+second (~6-12 ms in `Row::from_cells`). Applied here:
+
+1. **Skip untouched unwrapped rows** (`columns.rs`, the fast path in `reflow_columns`, plus
+   `Row::into_refitted`). This is the reference's own rule — `grid/resize.rs:103-107` makes a row
+   a reflow target only when it is short **and** carries `WRAPLINE`. A row that is a whole
+   logical line, has content, already fits the new width and carries no tracked position now
+   changes width in place: no copy, no allocation, no hint rescan, nothing dropped. Measured by
+   disabling the branch and re-running: **short content at 100 000 rows goes 29 640 / 30 665 us
+   to 14 306 / 15 740 us (2.1x), and at 10 000 rows 2 562 / 2 698 to 821 / 931 (3.1x)**. Wrapped
+   content is unchanged, as expected — the branch never fires there.
+2. **Fold the hint computation into `emit_line`** (`columns.rs`, `Row::from_cells` no longer
+   rescans). **Wrapped content at 100 000 rows: 32 947 / 33 701 us to 26 895 / 26 161 us (1.2x).**
+3. **Recycling row allocations is *not* applied.** With (1) in place the rows that still allocate
+   are only the ones a wrap actually splits or joins, which is where an allocation is doing real
+   work; a free list would need `Row::into_cells`, a pool with a bound, and capacity handling for
+   a width change that reallocates anyway. Recorded as a follow-up with its number: the remaining
+   **26 ms at 100 000 rows of wrapped content** is still allocator-dominated, so a pool is worth
+   roughly the ~23 ms of allocate-and-fill the verifier measured, minus whatever the width change
+   forces it to realloc.
+
+The lever that changes the *shape* rather than the constant is still the LLD's own: reflow the
+viewport eagerly and the history lazily. Out of scope here; these measurements are the argument
+for it, and the packet no longer claims that "no amount of care" helps.
+
+### C13 and C14 against the parity corpus — **no recording can reach them**
+
+Both corrections change what a **resize** does, and the parity harness never resizes:
+`crates/tools/src/corpus_replay.rs:62-116` builds one `CaptureSize` from the recording's
+`size.json` and replays the whole byte stream at that single geometry. The only column-changing
+escape in the corpus is `DECCOLM` (`deccolm_reset`), and the reference's `deccolm`
+(`vendor/alacritty_terminal/src/term/mod.rs:807-818`) clears the scrolling region and the grid
+**without resizing**, so it does not reach `grid/resize.rs` either. A byte scan finds CUP
+(`ESC [ … H` / `f`) in **20 of the 45** recordings, which is what C13 would need — but without a
+resize it is inert.
+
+**Therefore `US-0076` needs no `expected-diffs.json` entry for C13 or C14.** What it does need,
+if either is ever declared in the corrections table, is the id itself:
+`KNOWN_DEVIATIONS` in `crates/tools/src/corpus.rs:44-48` lists `C1`-`C11` and already omits
+`US-0075`'s `C12`, so `vt-corpus bless --deviation C13` would be rejected today. That array is
+outside this packet's file scope; `US-0076` owns it.
 
 ### Two defects the property tests found
 
@@ -328,11 +372,29 @@ and both now have a named unit test as well:
 3. **`ResizeOutcome::rows_trimmed` counts both trims.** The reflow's own cap (trap 32) and the
    `trim_history` a rows shrink can trigger. The LLD names only the first; reporting both is what
    makes the number mean "rows this resize removed from history".
-4. **The trailing-blank trim uses `Cell::is_blank`, not `Cell::is_erasable`.** The reference
-   trims tab cells too (its `is_empty` accepts `'\t'`), but `is_erasable` needs the interner and
-   reflow has no reason to hold one. A tab cell therefore survives a reflow as content. No
-   recording exercises it; R-12 says a tab cell carries meaning, so keeping it is the safer
-   direction. Worth a line in the LLD either way.
+4. **The trailing-blank trim uses `Cell::is_blank`, not `Cell::is_erasable`.** Checked against
+   `vendor/alacritty_terminal/src/term/cell.rs`'s `GridCell::is_empty`, which accepts `' '` **or
+   `'\t'`** and tests `fg`, `bg`, `INVERSE`, the underlines and `STRIKEOUT`. Three differences,
+   all in the "keep more" direction:
+   - a **coloured** trailing blank is kept by **both** engines — no divergence;
+   - a **tab** cell is trimmed there and kept here (`is_erasable` needs the interner, and R-12
+     says a tab cell carries meaning);
+   - a **bold, dim, italic or hidden** trailing blank is trimmed there and kept here, because
+     `is_empty` ignores the attributes that paint nothing on a space (trap 37) while `is_blank`
+     asks for the default style outright. **Declared as correction C14** below.
+9. **A grow no longer loses the tail of a wrapped line below the cursor. Declared as correction
+   C13.** Found by the verifier's differential run against the old engine (`evidence/
+   US-0077-verify.md` § 3.3) and now pinned by
+   `reflow::tests::a_widen_keeps_the_tail_below_the_cursor_where_the_reference_drops_it`.
+   `vendor/alacritty_terminal/src/grid/resize.rs:101-242` (`grow_columns`) drives row placement
+   off `cursor_line_delta` and ends with
+   `reversed.truncate(reversed.len() + overflow - cursor_line_delta)` (`:216-222`), which drops
+   rows off the **newest** end when the cursor did not move as far as the join did: in the
+   verifier's scenario `"23456789"` vanishes and a `WRAPLINE` is left dangling on the bottom row.
+   Here the layout is driven by the logical lines alone and the cursor is one more tracked point,
+   so nothing below it can be truncated away. Reachable in one keystroke (any `CUP` or arrow-key
+   move inside a wrapped command line before a resize), so it is a real correction, not a
+   curiosity.
 5. **A resize creates rows with `Cell::EMPTY`, never the erase cell.** The reference swaps its
    cursor template out for the default cell for exactly the length of a resize
    (`research/engine-semantics.md` § 2.16), so `push_rows_with(n, Cell::EMPTY)` is used on the
@@ -348,6 +410,25 @@ and both now have a named unit test as well:
    trap 28 reads as unconditional and the two want reconciling in one sentence.
 8. **`measure_rows` is `u16` and clamps at the API boundary.** `min(size.rows - 1)`, as the
    deleted `conhost_cursor_row` call site did.
+
+### Verification round (`evidence/US-0077-verify.md`)
+
+An independent review of `efaa186` returned **merge after fixes**: no blockers, one major, four
+minors and three documentation points. It reproduced every gate and every number in this packet,
+ran the properties at 3 x 20 000 and 1 x 40 000 fresh-seed cases, and wrote fifteen independent
+probes of its own (wide pairs, ZWJ clusters, pending wrap, `DECSC`, marks, the alternate screen,
+`cols == 1`, trim order, 1 000 random resizes) — all green.
+
+| # | Finding | Fix |
+| --- | --- | --- |
+| M1 | The correction over the old engine (a grow that loses the tail below the cursor) was undeclared, so `US-0076`'s parity gate would meet an unexplained diff | Declared as **C13** with the reference lines, pinned by `reflow::tests::a_widen_keeps_the_tail_below_the_cursor_where_the_reference_drops_it`, and the corpus checked: **no recording can reach it** (above) |
+| d1 | Reading 4 recorded the tab divergence but not the `BOLD`-blank one, and worried about a coloured blank that in fact both engines keep | Reading 4 rewritten with all three cases; the bold one declared as **C14** and pinned by `reflow::tests::a_styled_trailing_blank_is_content` |
+| m1 | The attribution gap named no owner and no id | Assigned to `US-0087` |
+| m2 | The in-place-shrink recommendation was deviated from without citing it | The peak-memory gap now cites `prior-art.md` § 9.3 and carries the 1 000 000-row figure |
+| m3 | `set_cursor` / `set_saved_cursor_pos` were unguarded back doors that could recreate the staleness reading 2 exists to fix | Renamed `restate_cursor_after_reflow` / `restate_saved_cursor_after_reflow`, each with a doc line naming the only legal caller |
+| m4 | The anchor remap was O(anchors squared) — ~100 ms per resize at 10 000 marks | `binary_search_by` over the already-sorted table |
+| d2, d3 | The LLD's off-by-one bullet and the kind-scoped `kill_selection` | Recorded above for the design owner |
+| perf 1-3 | Three constant-factor wins measured and proposed | Two applied and re-measured (above); the third recorded with its number |
 
 ### Shape differences from the design text
 
@@ -381,8 +462,11 @@ and both now have a named unit test as well:
   `research/prior-art.md` § 9.3, against OneTerm's own cell, row and anchor types. The LLD also
   asks for a line in `NOTICE` and in `THIRD-PARTY-NOTICES.md`; both files are outside this
   packet's file scope, and `THIRD-PARTY-NOTICES.md` is generated and CI-checked against
-  `Cargo.lock`, so a hand-written section needs the generator's owner. **Left for the owner or a
-  follow-up packet**, with the file header carrying the credit in the meantime.
+  `Cargo.lock`, so a hand-written section needs the generator's owner. **Assigned to `US-0087`**
+  ("Decommission the fork … delete `vendor/`, the `[patch]` block, the `vte` dev-oracle **and the
+  notices rows**; reconcile every remaining owning doc"), which is the packet that already opens
+  both files — adding the `avt` line while removing the `alacritty_terminal` ones is one edit
+  rather than two. The file header carries the credit until then.
 - **The `measure_rows` fixtures are synthetic, not replayed captures (R-39).** BUG-0051's raw
   PTY and grid dumps came from instrumentation the document itself records as "both temporary
   and removed", so there is nothing to replay. `measure_rows_matches_the_recorded_conhost_rows`
@@ -397,12 +481,18 @@ and both now have a named unit test as well:
   `IN-0030`'s bump checklist.
 - **No lazy history reflow.** The cost table above is the argument for it and the LLD says it is
   out of scope. A drag-resize on a 100 000-row buffer still costs ~33 ms per frame.
-- **Peak memory during a reflow is roughly double the live cells.** The output rows are built in
-  a `VecDeque` capped at `scrollback_limit + rows` before they are written into the ring, so the
-  old cells and the new ones are alive at the same time. The reference has the same shape
-  (`take_all` plus a `new_raw` vector) and the cap is what keeps the write inside the ring, so
-  this is the straightforward implementation rather than a defect — but it is a real ceiling for
-  a 1 000 000-row scrollback and no test measures it.
+- **The shrink is not backward and in place, and peak memory is roughly double the live cells.**
+  `research/prior-art.md` § 9.3 recommends, from xterm.js's scar tissue, to "shrink **backwards,
+  in place** (no temp buffer)"; the LLD's own step list does not restate it and this
+  implementation does the opposite. `RingSink` builds the whole output into a `VecDeque` capped at
+  `scrollback_limit + rows`, which `install_rows` then writes into the ring, so the old cells and
+  the new ones are alive at once. It is not a free choice: against a ring whose slot for one row
+  may be another row's destination, an in-place backward shrink has no safe order, and the cap is
+  what keeps the write inside the ring at all. The reference has the same shape (`take_all` plus a
+  `new_raw` vector). **The number:** at 160 columns a row's cells cost 1280 B, so a full
+  1 000 000-row scrollback holds ~1.28 GB and the reflow's peak is ~2.56 GB. The fast path above
+  does not help — it moves the `Row` rather than copying it, but the moved row still sits in the
+  deque until `install_rows` runs. No test measures the peak.
 - **No integration, E2E or platform proof.** Nothing in the workspace depends on `oneterm-vt`:
   the old `keep_viewport_top_*` suite still runs against the old engine (R-44), the parity gate
   is `US-0076` and the first time the engine is behind the application is `US-0081`. The
@@ -413,6 +503,23 @@ and both now have a named unit test as well:
 - **A `drop_trailing_rows` that would drop the cursor's row is clamped, not reported.** The LLD
   says a cursor with more text below it than fits "clamps to the last row"; the clamp is silent
   because there is no event surface yet to carry it.
+
+### Two LLD corrections for the design owner
+
+- **The `measure_rows` verification bullet is off by one.**
+  [`low-level-design/reflow-and-resize.md`](low-level-design/reflow-and-resize.md), Verification,
+  names "the three measured BUG-0051 cases (… giving row 12; … row 14; … row 38)". BUG-0051
+  § Measurements (b) records `ESC[12;18H` / `ESC[14;18H` / `ESC[38;18H`, whose **0-based** rows
+  are **11 / 13 / 37** — which is what `measure_rows_matches_the_recorded_conhost_rows` asserts
+  and what the engine's row indices mean everywhere else. The bullet reads the CUP parameters
+  1-based and will make the next reader think the test is wrong.
+- **`Anchors::kill_selection` is kind-scoped where everything else is lane-scoped.**
+  `crates/vt/src/grid/anchor.rs` — it matches on `AnchorKind::SelectionStart` / `SelectionEnd`
+  and therefore kills a selection registered on the **alternate** screen's lane as well.
+  Harmless today (there is one selection at a time, and a resize invalidates an alternate-screen
+  selection anyway) but it is the single place where not adding the `AnchorKind` screen
+  discriminant (reading 1) is observable, so it is the thing to revisit if a second selection is
+  ever tracked.
 
 ## Handoff
 

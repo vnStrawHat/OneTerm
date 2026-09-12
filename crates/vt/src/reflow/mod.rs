@@ -146,13 +146,13 @@ fn read_back(
             false,
         ),
     };
-    screen.set_cursor(pos, pending_wrap);
+    screen.restate_cursor_after_reflow(pos, pending_wrap);
 
     let saved = anchors.get(screen.saved_cursor_anchor()).unwrap_or(Pos {
         row: last_row,
         col: 0,
     });
-    screen.set_saved_cursor_pos(saved);
+    screen.restate_saved_cursor_after_reflow(saved);
 
     let top = anchors
         .get(screen.viewport_anchor())

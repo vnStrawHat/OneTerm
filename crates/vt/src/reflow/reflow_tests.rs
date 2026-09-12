@@ -8,11 +8,11 @@
 //! against the old engine until the adapter packet (R-44).
 
 use super::*;
-use crate::cell::{CellContent, CellWidth};
+use crate::cell::{Attrs, Cell, CellContent, CellWidth, Style};
 use crate::grid::{
     AnchorKind, PrintMode, RowFlags, RowId, Screen, ScrollRegion, TerminalGrid, Viewport,
 };
-use crate::intern::Interner;
+use crate::intern::{Interner, StyleId};
 
 struct Fixture {
     grid: TerminalGrid,
@@ -66,6 +66,12 @@ impl Fixture {
 
     fn resize(&mut self, rows: u16, cols: u16, policy: ResizePolicy) -> ResizeOutcome {
         self.grid.resize(Size { rows, cols }, policy)
+    }
+
+    fn set_style(&mut self, style: StyleId) {
+        self.grid
+            .screen_mut()
+            .set_template(Cell::EMPTY.with_style(style), &mut self.interner);
     }
 
     fn screen(&self) -> &Screen {
@@ -824,6 +830,81 @@ fn an_anchor_on_trimmed_whitespace_lands_at_the_end_of_its_line() {
     assert_eq!(moved.col, 3, "the end of the logical line, not column 8");
 }
 
+// ── Declared corrections over the engine being replaced ─────────────────────
+
+/// **Correction C13.** The reference loses the tail of a wrapped logical line
+/// when the cursor sits above that tail, and leaves the wrap flag dangling on
+/// the bottom row; this engine keeps the text and the flags consistent.
+///
+/// `vendor/alacritty_terminal/src/grid/resize.rs:101-242` (`grow_columns`)
+/// decides where rows land from `cursor_line_delta`, and its final
+/// `reversed.truncate(reversed.len() + overflow - cursor_line_delta)`
+/// (`:216-222`) drops rows off the **newest** end when the cursor did not move
+/// as far as the join did. Here the layout is driven by the logical lines alone
+/// and the cursor is carried as one more tracked point, so nothing below it can
+/// be truncated away.
+///
+/// Reachable in one keystroke: any `CUP` or arrow-key move inside a wrapped
+/// command line before a window resize. Declared for `US-0076`'s parity gate —
+/// see the packet's reading 9 for why no recording can reach it.
+#[test]
+fn a_widen_keeps_the_tail_below_the_cursor_where_the_reference_drops_it() {
+    let mut f = fixture(5, 10, 100);
+    for index in 0..6 {
+        f.feed(&format!("line{index}\r\n"));
+    }
+    f.feed("abcdefghijklmnopqrstuvwxyz0123456789");
+    // The cursor parks inside the wrapped line, above its tail.
+    f.grid.screen_mut().goto(2, 3);
+
+    f.resize(5, 6, ResizePolicy::BottomAnchor);
+    // Identical to the reference at this step, cell for cell.
+    assert_eq!(f.cursor(), (1, 1));
+    assert_eq!(f.history(), 7);
+    assert_eq!(f.row_text(-1), "abcdef");
+    assert_eq!(f.row_text(4), "456789");
+
+    f.resize(5, 14, ResizePolicy::BottomAnchor);
+
+    assert_eq!(f.cursor(), (2, 13));
+    assert_eq!(f.history(), 4);
+    assert_eq!(f.row_text(1), "line5");
+    assert_eq!(f.row_text(2), "abcdefghijklmn");
+    assert_eq!(f.row_text(3), "opqrstuvwxyz01");
+    // The reference drops this row and dangles its wrap flag on "…yz01".
+    assert_eq!(f.row_text(4), "23456789");
+    assert!(f.wraps(2) && f.wraps(3) && !f.wraps(4));
+}
+
+/// **Correction C14.** The reference's trailing-blank trim ignores `BOLD`,
+/// `DIM`, `ITALIC` and `HIDDEN` (trap 37), so it drops a bold trailing space;
+/// this engine keeps every styled blank, because `Cell::is_blank` asks for the
+/// default style and nothing else.
+///
+/// `vendor/alacritty_terminal/src/term/cell.rs`'s `GridCell::is_empty` tests
+/// `fg`, `bg`, `INVERSE`, the underlines and `STRIKEOUT` — an attribute that
+/// paints nothing on a space is invisible to it. Keeping more is the safe
+/// direction: a background or an attribute a program set deliberately survives
+/// the resize.
+#[test]
+fn a_styled_trailing_blank_is_content() {
+    let mut f = fixture(2, 10, 10);
+    f.feed("ab");
+    let bold = f.interner.style(&Style {
+        attrs: Attrs::BOLD,
+        ..Style::DEFAULT
+    });
+    f.set_style(bold);
+    f.feed(" ");
+    f.set_style(StyleId::DEFAULT);
+
+    f.resize(2, 20, ResizePolicy::BottomAnchor);
+
+    let row = f.row_id(0);
+    assert_eq!(f.screen().row(row).cell(2).style_id(), bold);
+    assert_eq!(f.screen().row(row).cell(3).style_id(), StyleId::DEFAULT);
+}
+
 /// Found by `reflow::props::integrity_holds_after_any_resize_sequence`: a row
 /// shrink pushes `(cursor_row_index + 1) - rows` rows into history, and the
 /// alternate screen has none to push them into.
@@ -887,15 +968,30 @@ fn a_graphic_hint_survives_a_reflow() {
 #[test]
 #[ignore = "measurement, run in release"]
 fn resize_latency() {
+    for width in [96usize, 40] {
+        println!(
+            "-- {} content: {width}-character lines",
+            if width > 80 { "wrapped" } else { "short" }
+        );
+        resize_latency_for(width);
+    }
+}
+
+/// One depth sweep over content whose logical lines are `width` characters.
+///
+/// 96 characters wrap at 80 columns, so every logical line is rebuilt; 40 do
+/// not, so every line takes `Row::into_refitted`. Real scrollback is mostly the
+/// second shape, which is why both are measured.
+fn resize_latency_for(width: usize) {
     use std::time::Instant;
 
     const RUNS: usize = 20;
     for depth in [0u32, 10_000, 100_000] {
         let mut f = fixture(24, 80, depth);
-        // Content that actually has to reflow: 96-character lines wrap at 80.
-        let lines = (depth as usize + 24).div_ceil(2).max(1);
+        let rows_per_line = width.div_ceil(80);
+        let lines = (depth as usize + 24).div_ceil(rows_per_line).max(1);
         for index in 0..lines {
-            f.feed(&format!("{:0>96}\r\n", index % 1000));
+            f.feed(&format!("{:0>width$}\r\n", index % 1000));
         }
         let (mut grow, mut shrink) = (Vec::new(), Vec::new());
         for _ in 0..RUNS {
