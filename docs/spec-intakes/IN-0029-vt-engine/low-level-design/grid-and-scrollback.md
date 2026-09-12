@@ -400,6 +400,25 @@ regression: the gate still fails on any difference that is not declared.
 | `ED 2` (all) | alternate screen: reset every viewport row. Primary: scroll the occupied part of the viewport into scrollback (`clear_viewport`), keeping the content, moving the bottom down by `positions` and leaving the scroll offset unchanged so a scrolled-back user keeps seeing the same content (trap 9). The cursor does not move |
 | `ED 3` (saved) | when history is non-empty, drop it and set `offset = 0` (trap 10). `VtEvent::ScreenCleared` is emitted **before** the "is there history" check (trap 12) |
 
+**Blanking a row is a mutation, and must be stamped — `US-0075` rework.** `place_row` and
+`reset_row` (`crates/vt/src/grid/screen.rs:445-469`) currently store `None` when the source slot
+was unallocated or the erase template is empty, which drops the row header: the row keeps its
+`RowId` but its `seq` reads back as the default and its `DIRTY` bit is gone. The rule is the
+opposite, and it is the documented damage contract:
+
+> Every operation that de-allocates or re-places a row stamps that row with the **current batch
+> sequence number** and sets `RowFlags::DIRTY`, exactly as a write does. A blanked row is a changed
+> row.
+
+Without it `DEC-0015`'s "a second consumer becomes possible without an engine change" is false —
+any consumer reading `row.seq() > watermark`, which is the documented mechanism, misses the
+blanking — and `DIRTY` produces a **false negative**, which
+[`damage-and-render-state.md`](damage-and-render-state.md) forbids: a de-allocated row that held a
+`GraphemeId` leaks an arena entry, and one that held a `GraphicId` never fires
+`VtEvent::GraphicReleased`, so the view's texture never evicts. Both are latent until `US-0074`'s
+sweep and `US-0080`'s release scan read `DIRTY`. `US-0079` works around it today with a private
+`RenderRow::allocated` flag, which is correct for that one consumer and only that one.
+
 **Accepted simplification (M10):** `repair_wide_pairs` sweeps the **whole** row after every
 in-row mutation (`EL`, `ECH`, `DCH`, `ICH`, the insert shift), where the reference repairs only the
 boundary cells. It is correctness-neutral and O(cols) on operations that are already O(cols), and
@@ -609,6 +628,8 @@ Scrolling, erase and tabs (trap-mapped):
 - [ ] `grid::tests::first_visible_cell_is_viewport_top_column_zero` — trap 46.
 - [ ] `grid::tests::wide_char_dropped_when_cols_is_one`
 - [ ] `grid::tests::trimmed_slot_is_cleared_before_reuse`
+- [ ] `grid::tests::blanking_a_row_stamps_it_dirty_with_the_batch_seq` — the `US-0075` rework
+  above, over both `place_row` and the `reset_row` empty-template path.
 
 In `US-0076` with the other corrections: `grid::tests::alt_screen_47_and_1047_and_1048` (C8) and
 `grid::tests::csi_5_w_restores_default_tab_stops` (C10). Deferred to `US-0086` as an additive

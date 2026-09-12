@@ -135,6 +135,13 @@ Phase 2, **outside the lock**, is `RenderState::map_colors(&Palette)`: it maps
 small `PaletteSnapshot` under the lock, versioned by `palette_epoch`) into concrete `Rgb`. That is
 the only work that genuinely needs no engine state.
 
+**`Palette` carries OneTerm's dim rule, it does not derive one.** A dim colour is a **50 % mix
+with the background** (`crates/terminal/src/palette.rs:128-137`), not a fixed fraction toward
+black, and the view applies its own alpha on top (`row_plan.rs:197-199`). `Palette` therefore
+takes its dim entries from the adapter alongside the sixteen ANSI colours; it must not hard-code a
+derivation with no override hook, or the adapter cannot supply the colours the product already
+ships.
+
 This kills the whole hazard class the earlier design had: interned ids could be renumbered by the
 pump thread between `render_update` and `resolve`, and no assertion could catch the wrong colours
 that resulted. It also removes the need for the style sweep that created the hazard
@@ -196,15 +203,37 @@ invalid or empty region reports nothing and never a range with `bottom < top`.
 
 `Full` is returned by: the first call on a fresh `RenderState`; any resize or reflow; an
 alternate-screen swap; `RIS`; a palette epoch change; a generation mismatch; and a `scrolled`
-larger than the viewport height.
+larger than the viewport height. **The list is inclusive, not exhaustive**: returning `Full`
+whenever every viewport row was copied this update is correct and expected — `Full` means "rebuild
+everything", and a `Partial` naming every row says the same thing more expensively.
 
 ### Fairness and reply latency
 
 ```rust
-// crates/terminal (the adapter owns this; the engine has no atomics)
+// crates/vt/src/render/demand.rs — ONE atomic, and the only one in the engine
 pub struct Demand(Arc<AtomicBool>);
-impl Demand { pub fn raise(&self); pub fn take(&self) -> bool; }
+impl Demand {
+    pub fn raise(&self);          // store(Release)      — the render thread
+    pub fn take(&self) -> bool;   // swap(false, AcqRel) — the pump, at a chunk boundary
+}
 ```
+
+**Placement: the engine crate, as shipped, and it is a stated exception.** The HLD says
+"`oneterm-vt` itself contains no lock, no atomic and no interior mutability". `Demand` is the one
+exception, and it is written down here rather than quietly tolerated:
+
+- It is **not engine state**. It holds no terminal data, `Terminal` does not own one, and no
+  engine method reads it. It is a two-thread handshake primitive that happens to live next to the
+  render state it serves, so that the contract and the primitive are reviewed together.
+- `Terminal` therefore stays `Send + !Sync` and still contains no atomic; the rule the HLD is
+  really protecting — that engine state is reached only through `&mut self` under the caller's
+  lock — is untouched.
+- The alternative, defining it in `crates/terminal`, would put the primitive in one crate and its
+  protocol in another, and the adapter would still be the only caller of both. One atomic is not
+  worth that split.
+
+The adapter owns the **policy**: who raises it, when the pump tests it, and how long it parks.
+Nothing in the engine parks or yields.
 
 The pump's loop, in this order, and the order is the contract (R-37):
 
@@ -238,7 +267,16 @@ const SYNC_WATCHDOG: Duration = Duration::from_secs(1);
   `watchdog = now + SYNC_WATCHDOG`. A further `h` refreshes `open_until` only. `CSI ? 2026 l`
   closes immediately.
 - `render_update(state, now)` returns `Unchanged` while the update is open and neither deadline
-  has passed. Both deadlines are evaluated against the `now` the caller passes, so a replay with a
+  has passed — but **never `Unchanged` over an incomplete state**. A suppressed frame must still
+  fill the render state to its full-viewport invariant (R-15) before it returns, so the first
+  update on a fresh `RenderState` that lands inside a sync block yields `rows().len() ==
+  viewport.rows`, not zero.
+- **A change made inside a sync block is reported on the next frame, never swallowed.** Mode and
+  cursor changes are refreshed on every call, including a suppressed one, so a suppressed frame
+  that overwrites `state.modes` or `state.cursor` must carry that difference forward: the next
+  unsuppressed update compares against the values the consumer last *saw*, not against the values
+  the suppressed frame silently stored. `? 2026 h` then `? 25 l` then `? 2026 l` must end in a
+  `Partial`, or the view keeps painting a cursor the program turned off. Both deadlines are evaluated against the `now` the caller passes, so a replay with a
   synthetic clock is deterministic and the tests are not flaky.
 - Nothing is buffered: the reference's 2 MiB `SYNC_BUFFER_SIZE` of unapplied bytes disappears, and
   with it a memory amplifier a hostile stream can aim at us. `DECRQM` reports the real state.
@@ -308,6 +346,9 @@ impl RenderState {
 - [ ] `render::tests::style_runs_carry_resolved_values` — R-14; asserts a run holds a `Style`,
   and that a subsequent grapheme sweep cannot change a previously copied row.
 - [ ] `render::tests::uniform_row_is_one_style_run`
+- [ ] `render::tests::dim_colours_come_from_the_palette_not_from_a_derivation` — the 50 %-with-bg
+  rule survives `map_colors`.
+- [ ] `render::tests::size_is_readable_from_the_render_state`
 - [ ] `render::tests::hyperlink_strings_are_resolved_under_the_lock`
 - [ ] `render::tests::render_state_never_drains_graphics` — R-16; asserts
   `Terminal::take_graphics` still returns the image after any number of `render_update` calls, and
@@ -328,6 +369,10 @@ Sync (deterministic, with an injected clock):
   eight-byte memcmp cannot do this (trap 41).
 - [ ] `sync::tests::decrqm_reports_2026_as_set_while_open`
 - [ ] `sync::tests::images_survive_a_skipped_frame`
+- [ ] `sync::tests::a_suppressed_frame_still_fills_the_full_viewport` — R-15 holds inside a sync
+  block, including on the very first update.
+- [ ] `sync::tests::a_mode_change_inside_a_sync_block_is_reported_after_it_closes`
+- [ ] `sync::tests::a_cursor_move_inside_a_sync_block_is_reported_after_it_closes`
 
 Adapter-side, at the shim packet:
 

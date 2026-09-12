@@ -120,6 +120,30 @@ None of the five can run behind the old engine, which is exactly why `US-0081` e
 one flip, it changes no behaviour, and every later slice is a refactor with the differential
 runner still available.
 
+### What the view still needs from the engine, and who owns it
+
+Taken from the `US-0079` verification, which inventoried `crates/terminal/src/content.rs` and
+`crates/terminal-view/src/render/frame.rs` against the shipped `RenderState`. **`RenderState`
+alone cannot drive `frame.rs` yet**; every gap has an owner and none of them is the adapter's to
+invent.
+
+| Gap | View site | Owner |
+| --- | --- | --- |
+| **Cursor shape** — Block / Beam / Underline / HollowBlock / Hidden | `render/frame.rs:421-440`, `render/cursor.rs:54-55` | **`US-0076`** — `CursorStyle` is part of the dispatch packet (`DECSCUSR`) |
+| **Selection range** — `start`, `end`, `is_block` | `render/frame.rs:451-463`, `:547-560`, `render/overlay.rs:32-67` | **`US-0078`** — [`selection.md`](selection.md) |
+| **Per-cell graphic offset** — `RenderCell.graphic` carries the id only; the painter needs the `(col, row)` offset *inside the image's cell grid*, plus `width` / `height` / `rgba` and the virtual cell | `render/frame.rs:264-271`, `:313-317`, `render/element.rs:332-375` | **`US-0080`** — the `Placement` table must be able to reproduce that offset; see [`graphics.md`](graphics.md) § "Ownership" |
+| **Absolute output-line count** for the gutter | `terminal_view/gutter_timestamps.rs:66`, `:84` | **`US-0076`** — `Terminal::lines_produced()` |
+| **`size()` on the render state** — the view reads `GridSize { rows, cols }` | `render/frame.rs:577-582`, `render/element.rs:108-118`, `render/overlay.rs:36-44` | **`US-0079`** — a public accessor over the field it already stores |
+| **Dim colour rule** — see below | `render/row_plan.rs:197-199` | **`US-0079`** — the `Palette` must be able to express it |
+| **`last_content_line` / the clear epoch** | `terminal_view/gutter_timestamps.rs:91` | **`US-0081`** — adapter-side, read off the grid, not the render state |
+
+**The dim rule is OneTerm's, not the generic one.** `Palette` must reproduce
+`crates/terminal/src/palette.rs:128-137`: a dim colour is a **50 % mix with the background**, not a
+fixed fraction toward black. The view then applies its own `fg.a *= 0.7`
+(`render/row_plan.rs:197-199`) on top, and that stays where it is. A `Palette` whose `named()`
+hard-codes a dim derivation with no override hook cannot express this, so the type takes the dim
+colours from the adapter like every other themed colour.
+
 ### Per-crate swap detail
 
 **`US-0082` — `crates/terminal`.** `model.rs`, `session.rs`, `content.rs`, `search.rs`, `url.rs`,
