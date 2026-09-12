@@ -5464,8 +5464,19 @@ dependencies = [
  "async-channel",
  "log",
  "oneterm-core",
+ "oneterm-pty",
  "oneterm-terminal",
  "polling",
+]
+
+[[package]]
+name = "oneterm-pty"
+version = "0.5.2"
+dependencies = [
+ "libc",
+ "log",
+ "polling",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5622,8 +5633,8 @@ dependencies = [
 name = "oneterm-tools"
 version = "0.5.2"
 dependencies = [
- "alacritty_terminal",
  "libc",
+ "oneterm-pty",
  "polling",
  "rand 0.10.1",
  "russh",

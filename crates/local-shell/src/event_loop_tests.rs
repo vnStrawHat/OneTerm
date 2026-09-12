@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::Config;
-use alacritty_terminal::tty::{ChildEvent, EventedReadWrite};
+use oneterm_pty::{ChildEvent, EventedReadWrite};
 use oneterm_terminal::{
     ClipboardOrigin, GridSize, OscRouter, SessionEvent, SessionEventSink, SharedSessionState,
 };
@@ -83,14 +83,14 @@ fn local_input_queue_preserves_fifo_order() {
 fn resize_is_latest_value_and_shutdown_is_immediate() {
     let (notifier, receiver, control) = notifier(1);
     let first = WindowSize {
-        num_lines: 24,
-        num_cols: 80,
+        rows: 24,
+        cols: 80,
         cell_width: 0,
         cell_height: 0,
     };
     let latest = WindowSize {
-        num_lines: 40,
-        num_cols: 120,
+        rows: 40,
+        cols: 120,
         cell_width: 0,
         cell_height: 0,
     };
@@ -100,7 +100,7 @@ fn resize_is_latest_value_and_shutdown_is_immediate() {
     notifier.send(ShellMsg::Resize(first)).unwrap();
     notifier.send(ShellMsg::Resize(latest)).unwrap();
     let pending = control.pending_resize.lock().unwrap().take().unwrap();
-    assert_eq!((pending.num_lines, pending.num_cols), (40, 120));
+    assert_eq!((pending.rows, pending.cols), (40, 120));
     assert_eq!(receiver.try_iter().count(), 1);
 
     notifier.send(ShellMsg::Shutdown).unwrap();
@@ -277,7 +277,7 @@ impl EventedReadWrite for LoopbackPty {
         mut interest: PollEvent,
         mode: PollMode,
     ) -> io::Result<()> {
-        interest.key = 0;
+        interest.key = PTY_READ_WRITE_TOKEN;
         unsafe {
             poll.add_with_mode(&self.io, interest, mode)?;
             poll.add_with_mode(
@@ -294,7 +294,7 @@ impl EventedReadWrite for LoopbackPty {
         mut interest: PollEvent,
         mode: PollMode,
     ) -> io::Result<()> {
-        interest.key = 0;
+        interest.key = PTY_READ_WRITE_TOKEN;
         poll.modify_with_mode(&self.io, interest, mode)?;
         poll.modify_with_mode(
             &self.child_signal,
@@ -326,8 +326,9 @@ impl EventedPty for LoopbackPty {
 }
 
 impl OnResize for LoopbackPty {
-    fn on_resize(&mut self, window_size: WindowSize) {
+    fn on_resize(&mut self, window_size: WindowSize) -> io::Result<()> {
         self.resizes.lock().unwrap().push(window_size);
+        Ok(())
     }
 }
 
@@ -448,9 +449,9 @@ fn loop_answers_color_queries_through_the_pty() {
 #[test]
 fn loop_applies_latest_resize_to_the_pty() {
     let (running, peer) = start_loop();
-    let size = |lines, cols| WindowSize {
-        num_lines: lines,
-        num_cols: cols,
+    let size = |rows, cols| WindowSize {
+        rows,
+        cols,
         cell_width: 0,
         cell_height: 0,
     };
@@ -462,7 +463,7 @@ fn loop_applies_latest_resize_to_the_pty() {
         !peer.resizes.lock().unwrap().is_empty()
     }));
     let applied = peer.resizes.lock().unwrap().last().copied().unwrap();
-    assert_eq!((applied.num_lines, applied.num_cols), (30, 100));
+    assert_eq!((applied.rows, applied.cols), (30, 100));
 }
 
 #[test]

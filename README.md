@@ -99,7 +99,7 @@ OneTerm is a Terminal application for SSH/SFTP/Local Shell with a **Zed-style wo
 
 ### 💻 Local shell
 
-- Local PTY via `alacritty_terminal::tty`
+- Local PTY via `oneterm-pty` (OneTerm's own ConPTY / `openpty` transport)
 - Windows ConPTY is bundled; Unix local PTY compiles but is untested
 - Windows is the primary platform; Linux/macOS compile but are untested
 
