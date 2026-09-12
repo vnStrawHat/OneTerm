@@ -39,5 +39,5 @@ Changes made by OneTerm
 * `grid.expect` and `state.expect` are OneTerm files (Apache-2.0), generated from
   the recordings by the engine being replaced and frozen at `US-0072`. See
   `docs/spec-intakes/IN-0029-vt-engine/low-level-design/testing-and-bench.md`.
-* `expected-diffs.toml`, where present, is a OneTerm file declaring the cells a
+* `expected-diffs.json`, where present, is a OneTerm file declaring the cells a
   deliberate correction is allowed to change.

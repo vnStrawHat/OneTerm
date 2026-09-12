@@ -333,3 +333,64 @@ fn probe(recording: &Recording) -> (String, String) {
 
     (tab_stops, format!("top={top} bottom={bottom}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_hyperlink_ids_are_renumbered_but_sharing_survives() {
+        let mut links = LinkIds::default();
+
+        // Two cells sharing one generated link, then a second generated link.
+        // The absolute numbers come from a process-global counter, so only the
+        // grouping is reproducible — and the grouping is what the corpus pins.
+        assert_eq!(links.normalize("7_alacritty"), "#0");
+        assert_eq!(links.normalize("7_alacritty"), "#0");
+        assert_eq!(links.normalize("8_alacritty"), "#1");
+    }
+
+    #[test]
+    fn explicit_hyperlink_ids_are_kept_verbatim() {
+        let mut links = LinkIds::default();
+
+        // Not generated: no digits, or digits without the suffix, or the
+        // suffix with an empty prefix.
+        assert_eq!(links.normalize("hello"), "hello");
+        assert_eq!(links.normalize("42"), "42");
+        assert_eq!(links.normalize("_alacritty"), "_alacritty");
+        assert_eq!(links.normalize("v2_alacritty"), "v2_alacritty");
+    }
+
+    #[test]
+    fn percent_encoding_escapes_every_field_separator() {
+        // `;` `|` `*` `~` are the run, field and link separators; a URI
+        // carrying one raw would split a cell token in two.
+        let encoded = percent_encode("a;b|c*d~e f%g");
+
+        assert_eq!(encoded, "a%3Bb%7Cc%2Ad%7Ee%20f%25g");
+        assert!(!encoded.contains([';', '|', '*', '~']));
+    }
+
+    #[test]
+    fn percent_encoding_keeps_a_plain_uri_readable() {
+        assert_eq!(
+            percent_encode("https://example.com/a-b.c"),
+            "https://example.com/a-b.c"
+        );
+    }
+
+    #[test]
+    fn flags_encode_in_bit_order_and_cover_every_primitive_bit() {
+        assert_eq!(encode_flags(0), "-");
+        assert_eq!(
+            encode_flags(Flags::UNDERLINE.bits() | Flags::INVERSE.bits()),
+            "INVERSE.UNDERLINE"
+        );
+
+        // The 15 primitive names must span every bit `Flags` defines, or a
+        // composite-only bit would silently vanish from `grid.expect`.
+        let covered = FLAG_NAMES.iter().fold(0u16, |bits, (bit, _)| bits | bit);
+        assert_eq!(covered, Flags::all().bits());
+    }
+}

@@ -18,7 +18,7 @@
 //! those would mean reimplementing the engine this packet exists to measure.
 //! The report names the recordings that *can* trigger each correction; the
 //! packet that implements the correction writes the exact cells into that
-//! recording's `expected-diffs.toml`.
+//! recording's `expected-diffs.json`.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;

@@ -61,9 +61,11 @@ rand.workspace = true
 # and the only one that ever blesses an expectation.
 anyhow.workspace = true
 serde = { workspace = true, features = ["derive"] }
+# Reads size.json / config.json, writes the bench JSON table, and parses
+# `expected-diffs.json` — the per-recording, cell-level declared differences.
+# JSON rather than TOML because `toml` is on `docs/agents/dependencies.md` § 3's
+# do-not-re-add list and a test harness does not justify reopening it.
 serde_json.workspace = true
-# `expected-diffs.toml`: the per-recording, cell-level declared differences.
-toml.workspace = true
 # ---------------------------------------------------------------------------
 
 [target.'cfg(unix)'.dependencies]

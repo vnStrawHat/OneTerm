@@ -222,7 +222,7 @@ fn an_unknown_deviation_id_is_refused() {
         windows: vec![window("C99", "0", "0", &["content"])],
     };
 
-    let error = validate_expected_diffs(&diffs, Path::new("expected-diffs.toml"))
+    let error = validate_expected_diffs(&diffs, Path::new("expected-diffs.json"))
         .expect_err("C99 is not a row in either design table");
 
     assert!(
@@ -237,7 +237,7 @@ fn an_unknown_cell_field_is_refused() {
         windows: vec![window("C1", "0", "0", &["colour"])],
     };
 
-    let error = validate_expected_diffs(&diffs, Path::new("expected-diffs.toml"))
+    let error = validate_expected_diffs(&diffs, Path::new("expected-diffs.json"))
         .expect_err("`colour` is not a cell field");
 
     assert!(error.to_string().contains("unknown grid field"), "{error}");
@@ -250,26 +250,29 @@ fn a_grid_window_without_a_column_range_is_refused() {
     };
     diffs.windows[0].cols = None;
 
-    let error = validate_expected_diffs(&diffs, Path::new("expected-diffs.toml"))
+    let error = validate_expected_diffs(&diffs, Path::new("expected-diffs.json"))
         .expect_err("a grid window needs both ranges");
 
     assert!(error.to_string().contains("needs both"), "{error}");
 }
 
 #[test]
-fn the_declared_toml_shape_from_the_design_parses() {
-    // The example in testing-and-bench.md § 2, verbatim in shape.
-    let text = r#"
-[[diff]]
-deviation = "C1"
-rows      = "4"
-cols      = "70..80"
-fields    = ["content", "attrs"]
-reason    = "DCH is a plain shift left; the reference clamps end to cols - 1"
-"#;
+fn the_declared_shape_from_the_design_parses() {
+    // The example in testing-and-bench.md § 2, same schema, JSON spelling.
+    let text = r#"{
+      "diff": [
+        {
+          "deviation": "C1",
+          "rows": "4",
+          "cols": "70..80",
+          "fields": ["content", "attrs"],
+          "reason": "DCH is a plain shift left; the reference clamps end to cols - 1"
+        }
+      ]
+    }"#;
 
-    let diffs: ExpectedDiffs = toml::from_str(text).expect("the design's example parses");
-    validate_expected_diffs(&diffs, Path::new("expected-diffs.toml")).expect("and validates");
+    let diffs: ExpectedDiffs = serde_json::from_str(text).expect("the design's example parses");
+    validate_expected_diffs(&diffs, Path::new("expected-diffs.json")).expect("and validates");
 
     assert_eq!(diffs.windows.len(), 1);
     assert_eq!(diffs.windows[0].file, "grid");

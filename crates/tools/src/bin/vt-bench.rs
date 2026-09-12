@@ -25,9 +25,17 @@ use oneterm_tools::bench::{
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
+const USAGE: &str = "vt-bench all|parser|grid|render|resize|rss|fixtures \
+                     [--mib N] [--frames N] [--json] [--out DIR]";
+
 fn main() -> ExitCode {
     let mut raw = std::env::args().skip(1);
     let command = raw.next().unwrap_or_else(|| "all".to_owned());
+    // `--help` as the first argument is a request for usage, not a command.
+    if matches!(command.as_str(), "--help" | "-h" | "help") {
+        println!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
     let mut mib = DEFAULT_MIB;
     let mut frames = 600;
     let mut json = false;
@@ -45,10 +53,7 @@ fn main() -> ExitCode {
             "--json" => json = true,
             "--out" => out = raw.next().map(PathBuf::from),
             "--help" | "-h" => {
-                println!(
-                    "vt-bench all|parser|grid|render|resize|rss|fixtures \
-                     [--mib N] [--frames N] [--json] [--out DIR]"
-                );
+                println!("{USAGE}");
                 return ExitCode::SUCCESS;
             }
             other => {

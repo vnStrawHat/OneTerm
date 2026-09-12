@@ -13,7 +13,7 @@
 //!
 //! Because the new engine is built correctness-first, a recording may
 //! legitimately differ. That is declared per recording and **per cell** in an
-//! `expected-diffs.toml`, never as a skipped recording. The rules in
+//! `expected-diffs.json`, never as a skipped recording. The rules in
 //! [`check`] are what keep the gate a gate: an undeclared difference fails, and
 //! so does a declared window that produces no difference.
 //!
@@ -38,7 +38,7 @@ pub const CELL_FIELDS: [&str; 6] = ["content", "attrs", "fg", "bg", "underline",
 ///
 /// `C*` rows are corrections (a defect in the engine being replaced, fixed
 /// rather than reproduced); `D*` and `G*` rows are the remaining deliberate
-/// deviations. An `expected-diffs.toml` naming anything else is a typo, and a
+/// deviations. An `expected-diffs.json` naming anything else is a typo, and a
 /// typo that silently disabled part of the gate would be the worst outcome
 /// this harness can have.
 pub const KNOWN_DEVIATIONS: [&str; 27] = [
@@ -165,7 +165,7 @@ impl Recording {
 
     /// Path of the declared per-cell expected differences, if any.
     pub fn expected_diffs_path(&self) -> PathBuf {
-        self.dir.join("expected-diffs.toml")
+        self.dir.join("expected-diffs.json")
     }
 }
 
@@ -345,7 +345,7 @@ fn decode_runs(text: &str) -> Result<Vec<String>> {
 ///
 /// An ordered key/value list rather than a struct, because it is a frozen file
 /// read by a diff, and because the fields a correction may change are named by
-/// key in `expected-diffs.toml`.
+/// key in `expected-diffs.json`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StateExpect {
     /// Key/value pairs in write order.
@@ -402,7 +402,7 @@ impl StateExpect {
 // Declared expected differences
 // ---------------------------------------------------------------------------
 
-/// A recording's `expected-diffs.toml`.
+/// A recording's `expected-diffs.json`.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ExpectedDiffs {
     /// Declared windows; each must produce at least one difference.
@@ -489,7 +489,7 @@ pub fn load_expected_diffs(recording: &Recording) -> Result<ExpectedDiffs> {
     }
     let text = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let diffs: ExpectedDiffs =
-        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
     validate_expected_diffs(&diffs, &path)?;
     Ok(diffs)
 }

@@ -22,7 +22,7 @@ bite under a runtime condition (`C1` needs a `DCH` count that reaches `cols - co
 needs the cursor on row 1), and deciding those would mean reimplementing the engine this
 packet exists to measure. The table names the recordings that **can** trigger each
 correction; the packet that implements it writes the exact cells into that recording's
-`expected-diffs.toml`, and the gate then fails on any difference outside that window.
+`expected-diffs.json`, and the gate then fails on any difference outside that window.
 
 ## Results
 
@@ -36,7 +36,7 @@ correction; the packet that implements it writes the exact cells into that recor
 | **C6** | `RIS` resets the colour overrides | `US-0076` | **1 recording**: `grid_reset` (1 `RIS`, 1 `OSC 104`). `OSC 104` with no argument already resets indices 0-255, so the palette is empty before the `RIS` either way. Risk to `state.expect`'s `palette.*` keys: none measured. The design's guesses `colored_reset` and `decaln_reset` set no palette entry. |
 | **C7** | `OSC 4` applies complete pairs | `US-0076` | **None of the 45.** `indexed_256_colors` sends 240 `OSC 4` sequences, every one of them a well-formed `4;<index>;rgb:..` triple (odd total parameter count), which the engine being replaced already accepts. The design's "`indexed_256_colors` if it sends an even count" resolves to **no**. |
 | **C8** | `? 47` / `? 1047` / `? 1048` implemented | `US-0076` | **None of the 45.** The three recordings the design named — `wrapline_alt_toggle`, `alt_reset`, `saved_cursor_alt` — all use `? 1049`, which the engine being replaced already implements. This correction is free. |
-| **C9** | `DECSTR` implemented | `US-0076` | **1 recording**: `grid_reset` sends one `CSI ! p`. The engine being replaced ignores it, so implementing it **will** change that recording's grid. The design said "none expected"; that is wrong, and `grid_reset` needs an `expected-diffs.toml` at `US-0076`. |
+| **C9** | `DECSTR` implemented | `US-0076` | **1 recording**: `grid_reset` sends one `CSI ! p`. The engine being replaced ignores it, so implementing it **will** change that recording's grid. The design said "none expected"; that is wrong, and `grid_reset` needs an `expected-diffs.json` at `US-0076`. |
 | **C10** | `CSI ? 5 W` restores the default tab stops | `US-0076` | **None of the 45.** Confirms the design's "none expected". |
 | **C11** | Blink and overline attributes stored | `US-0076` | **None of the 45.** No recording sends `SGR 5`, `6`, `53` or `55`. The design predicted `sgr` and `underline` would go red on `attrs`; both were inspected and neither carries those parameters (`sgr` exercises `9`, `4` and the `38`/`48` colour forms; `underline` exercises `4:0`-`4:3`, `21` and `24`). N-03's reason for deferring D11 to `US-0086` therefore does not hold — the correction can land in `US-0076` with no declared diff at all. |
 | **G3** | Pending wrap not armed while `DECAWM` is off | `US-0075` | **4 recordings reset `? 7`**: `vttest_origin_mode_1`, `vttest_origin_mode_2`, `vttest_scroll`, `vttest_tab_clear_set` (each: `? 7` set 3x, reset 1x). Observable only through `EL 0` and `HT` while the flag would have been armed, so a declared diff may be needed in one or more of the four. |

@@ -109,10 +109,6 @@ futures = "0.3"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Diagnostics only (crates/tools): the VT parity corpus reads each recording's
-# `expected-diffs.toml`. Already in Cargo.lock transitively, so the graph does
-# not grow.
-toml = "1"
 thiserror = "2"
 zeroize = { version = "1.8", features = ["derive"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-native-roots", "system-proxy"] }

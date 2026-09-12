@@ -202,3 +202,98 @@ fn parse_flags(text: &str, path: &Path) -> Result<u16> {
     }
     Ok(bits)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_grid_json(name: &str, body: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("oneterm-vt-corpus-upstream-tests");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        std::fs::write(dir.join(format!("{name}.json")), body).expect("fixture");
+        dir
+    }
+
+    /// A 1x1 grid in upstream's serialized shape.
+    fn one_cell(zero: usize, len: usize) -> String {
+        format!(
+            r#"{{"raw":{{"inner":[{{"inner":[{{"c":"A","fg":{{"Named":"Foreground"}},
+               "bg":{{"Indexed":3}},"flags":"BOLD | ITALIC","extra":null}}],"occ":1}}],
+               "zero":{zero},"visible_lines":1,"len":{len}}},
+               "columns":1,"lines":1,"display_offset":0,"max_scroll_limit":0}}"#
+        )
+    }
+
+    #[test]
+    fn a_rotated_ring_is_refused_rather_than_compared() {
+        // Upstream's own `Storage::PartialEq` asserts `zero == 0` and panics
+        // otherwise (trap 45). A rotated ring would compare rows in the wrong
+        // order, so it must be rejected, never silently accepted.
+        let dir = write_grid_json("rotated", &one_cell(2, 1));
+
+        let error = load_grid_json(&dir, "rotated").expect_err("a rotated ring is not comparable");
+
+        assert!(error.to_string().contains("raw.zero is 2"), "{error}");
+    }
+
+    #[test]
+    fn a_len_beyond_the_rows_present_is_refused() {
+        let dir = write_grid_json("short", &one_cell(0, 4));
+
+        let error = load_grid_json(&dir, "short").expect_err("len exceeds the rows present");
+
+        assert!(error.to_string().contains("raw.len is 4"), "{error}");
+    }
+
+    #[test]
+    fn a_well_formed_grid_encodes_to_the_same_cell_token_as_a_replay() {
+        let dir = write_grid_json("ok", &one_cell(0, 1));
+
+        let grid = load_grid_json(&dir, "ok").expect("a well-formed grid");
+
+        assert_eq!(grid.columns, 1);
+        assert_eq!(grid.rows.len(), 1);
+        // Colours are encoded by variant name and index, flags in bit order,
+        // exactly as `corpus_replay::encode_cell` writes them.
+        assert_eq!(grid.rows[0].cells[0], "0041;BOLD.ITALIC;nForeground;i3;-;-");
+        assert!(!grid.rows[0].wrap);
+    }
+
+    #[test]
+    fn composite_flag_aliases_resolve_to_their_full_bit_pattern() {
+        let path = Path::new("grid.json");
+
+        // `bitflags` may serialize `BOLD | ITALIC` as the alias `BOLD_ITALIC`;
+        // a hand-written name table would read that as an unknown flag.
+        assert_eq!(
+            parse_flags("BOLD_ITALIC", path).expect("alias"),
+            Flags::BOLD.bits() | Flags::ITALIC.bits()
+        );
+        assert_eq!(
+            parse_flags("DIM_BOLD", path).expect("alias"),
+            Flags::DIM.bits() | Flags::BOLD.bits()
+        );
+        assert_eq!(
+            parse_flags("ALL_UNDERLINES", path).expect("alias"),
+            Flags::ALL_UNDERLINES.bits()
+        );
+        assert_eq!(parse_flags("", path).expect("no flags"), 0);
+        assert!(parse_flags("NOT_A_FLAG", path).is_err());
+    }
+
+    #[test]
+    fn a_wrapline_on_the_last_cell_lifts_to_the_row() {
+        let body = r#"{"raw":{"inner":[{"inner":[
+            {"c":"A","fg":{"Named":"Foreground"},"bg":{"Named":"Background"},"flags":"","extra":null},
+            {"c":"B","fg":{"Named":"Foreground"},"bg":{"Named":"Background"},"flags":"WRAPLINE","extra":null}
+            ],"occ":2}],"zero":0,"visible_lines":1,"len":1},
+            "columns":2,"lines":1,"display_offset":0,"max_scroll_limit":0}"#;
+        let dir = write_grid_json("wrapped", body);
+
+        let grid = load_grid_json(&dir, "wrapped").expect("a well-formed grid");
+
+        assert!(grid.rows[0].wrap);
+        // Still carried per cell too: nothing is trimmed.
+        assert!(grid.rows[0].cells[1].contains("WRAPLINE"));
+    }
+}

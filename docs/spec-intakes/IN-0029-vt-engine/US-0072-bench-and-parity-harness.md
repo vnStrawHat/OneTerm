@@ -42,7 +42,8 @@ engine code is written:
 
 - [ ] In scope:
   - `crates/vt/tests/corpus/alacritty-ref/<name>/{recording,size.json,config.json}` (45), the
-    corpus `NOTICE`, `deviations.json`, and the generated `grid.expect` / `state.expect`.
+    corpus `NOTICE` and the generated `grid.expect` / `state.expect`. The per-recording
+    `expected-diffs.json` is *supported*; no recording needs one yet.
   - `crates/tools`: a new `lib.rs` with `corpus` and `bench` modules, the `vt-corpus` and
     `vt-bench` binaries, and one integration test that is the drift gate.
   - `.github/workflows/ci.yml`: a Windows `vt-bench` job that records and never gates.
@@ -69,11 +70,17 @@ engine code is written:
       `grid.expect` is cell-exact and nothing is trimmed: every column of every row, including
       trailing blanks, carries content, width class, fg, bg, attrs, underline colour and
       hyperlink; per grid the row count, column count and viewport position are recorded.
-- [x] `bless` refuses to overwrite an existing expectation without `--deviation <id>`, and
-      refuses `--engine new` outright. The deviation id must name a row in the LLD tables.
-- [x] A per-recording, cell-level deviation overlay (`deviations.json`, keyed by deviation id)
-      exists and is applied by `check`; a unit test proves an overlay entry turns a mismatch into
-      a pass and that an unknown id is rejected.
+- [x] `bless` refuses to overwrite an existing expectation without `--deviation <id>`, refuses
+      `--engine new` outright, refuses an id that names no row in the LLD tables, and refuses
+      `--deviation` without `--filter` — a correction changes named recordings, so re-blessing all
+      45 under one id is not a reviewable diff.
+- [x] The per-recording, cell-level declared-difference mechanism
+      (`<name>/expected-diffs.json`, keyed by deviation id) is implemented and applied by
+      `check`: a difference inside a declared window in a declared field passes, any other
+      difference fails, a declared window that produces no difference fails as stale, and an
+      unknown deviation id, an unknown field or a missing range is refused. Proven by 14 unit
+      tests. **No recording carries one yet** — every correction lands in `US-0075` / `US-0076`,
+      so the mechanism has not run against a real correction.
 - [x] `vt-corpus cross-check --grid-json <dir>` ran once over upstream's `grid.json` set; the
       per-recording match/mismatch result and an explanation for every mismatch are recorded in
       `evidence/US-0072-cross-check.md`. The comparison rezeroes the ring and ignores
@@ -135,6 +142,15 @@ Update required:
 No contract change for `docs/terminal-backend.md`: this packet adds no runtime behaviour and
 changes nothing the document describes. It was read to copy the engine construction exactly.
 
+No contract change for `docs/agents/dependencies.md` either, and this is deliberate. The LLD
+assigns "§ 3 rows for the new declarations" to this packet, but the packet ends up declaring
+**nothing new**: `anyhow`, `serde` and `serde_json` are already in `[workspace.dependencies]`
+and only gain a consumer. The declared-difference file was going to be TOML, which would have
+needed `toml` — a crate `dependencies.md` § 3 lists as "do not re-add without a design
+decision". Rather than reopen that ruling for a test harness, the file is
+`expected-diffs.json`, parsed with the `serde_json` already in the tree. The `Cargo.lock` diff
+is therefore three added names inside the `oneterm-tools` node and nothing else.
+
 Reason: vendoring third-party data and adding two developer binaries are both facts the
 structure and licence documents own; everything else this packet touches is test-only.
 
@@ -142,7 +158,8 @@ structure and licence documents own; everything else this packet touches is test
 
 Changed: `docs/agents/structure.md`, `docs/license-analysis.md`,
 `scripts/third-party-notices.py` + the regenerated `THIRD-PARTY-NOTICES.md`.
-`docs/terminal-backend.md` no-change reason above still valid — verified at completion.
+`docs/terminal-backend.md` and `docs/agents/dependencies.md` no-change reasons above still
+valid — verified at completion.
 
 ## Context
 
@@ -171,7 +188,7 @@ Changed: `docs/agents/structure.md`, `docs/license-analysis.md`,
 
 - [x] Vendor the 45 recordings + `size.json` + `config.json`, with a corpus `NOTICE`.
 - [x] `crates/tools/src/corpus/`: replay, `grid.expect` encode, `state.expect` capture, compare
-      with a readable diff, deviation overlay, upstream `grid.json` conversion, deviation grep.
+      with a readable diff, `expected-diffs.json`, upstream `grid.json` conversion, deviation grep.
 - [x] `vt-corpus` CLI: `bless`, `check`, `cross-check`, `grep-deviations`.
 - [x] Bless all 45 with the old engine; review the output; freeze.
 - [x] Run the cross-check against upstream `grid.json`; explain every mismatch.
@@ -190,7 +207,7 @@ the new engine never does) without reopening either.
 ## Verification Plan
 
 - Focused: `cargo test -p oneterm-tools` — the corpus drift gate over all 45 recordings, plus
-  unit tests for the RLE round trip, the deviation overlay, the `bless` guard and the flag-name
+  unit tests for the RLE round trip, the declared-difference rules, the cross-check normalisation (hyperlink-id renumbering, the `raw.zero` rezero refusal, composite flag aliases, percent-encoding) and the flag-name
   parsing used by the cross-check.
 - Integration: `cargo test --workspace` — the drift gate runs in the workspace test set.
 - Manual proof, recorded as evidence: `vt-corpus cross-check --grid-json <scratch>` over all 45,
@@ -271,11 +288,12 @@ Notable secondary result: **none of the fork's three alacritty patches changes a
 - `pwsh scripts/ci-local.ps1` — **all checks passed** (2026-09-12), including
   `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`, `cargo test
   --workspace`, `verify-dependency-graph.py` (19 packages), `check-doc-paths.py`,
-  `check-english.py` (648 files) and `third-party-notices.py --check`.
+  `check-english.py` (650 files) and `third-party-notices.py --check`.
 - Raw workspace test totals (`rtk proxy cargo test --workspace`, summed over all 50
-  `test result:` lines including doctests): **1146 passed, 0 failed, 5 ignored**. The
-  pre-packet baseline was 1131; this packet adds 15 (14 unit tests in
-  `corpus_tests.rs`, 1 integration test that is the drift gate).
+  `test result:` lines including doctests): **1156 passed, 0 failed, 5 ignored**. The
+  pre-packet baseline was 1131; this packet adds 25 (14 declared-difference and encoding tests
+  in `corpus_tests.rs`, 5 in `corpus_replay.rs` and 5 in `corpus_upstream.rs` for the
+  cross-check normalisation, 1 integration test that is the drift gate).
 - `vt-corpus check` — 45 recordings, 45 passed, 0 failed. Old-against-old, which is the
   self-test of the comparator this packet owes.
 - `vt-corpus bless --engine old` refuses a second time without `--deviation`; verified by
@@ -288,7 +306,8 @@ Notable secondary result: **none of the fork's three alacritty patches changes a
   concurrently, so the measured answers live in `evidence/US-0072-recording-risk.md`
   instead of in their "Affected recordings" cells. **Next owner action:** copy the four
   findings above into those tables.
-- **No `expected-diffs.toml` exists yet**, because every correction lands in `US-0075` /
+- **The declared-difference file is JSON, not TOML.** The revised LLD spells it `expected-diffs.toml`; `toml` is on `docs/agents/dependencies.md` § 3's do-not-re-add list, so the same schema is parsed from `expected-diffs.json` with the `serde_json` already in the tree. The coordinator's ruling; the LLD is being renamed to match.
+- **No `expected-diffs.json` exists yet**, because every correction lands in `US-0075` /
   `US-0076`. The mechanism is implemented and unit-tested (declared window passes,
   wrong row/column/field fails, stale window fails, unknown id fails, the design's own
   TOML example parses), but it has never run against a real correction.

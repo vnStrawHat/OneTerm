@@ -9,7 +9,7 @@
 //!
 //! `check` replays every recording through the engine being replaced and
 //! compares it, cell for cell, against the frozen expectations, applying each
-//! recording's declared `expected-diffs.toml`. `cargo test -p oneterm-tools`
+//! recording's declared `expected-diffs.json`. `cargo test -p oneterm-tools`
 //! runs the same comparison, so this binary is for reading the diff, not for
 //! the gate.
 //!
@@ -89,7 +89,7 @@ fn run() -> Result<bool> {
 fn print_usage() {
     println!(
         "vt-corpus check          [--filter <substring>]\n\
-         vt-corpus bless --engine old [--deviation <id>] [--filter <substring>]\n\
+         vt-corpus bless --engine old [--deviation <id> --filter <recording>]\n\
          vt-corpus cross-check --grid-json <dir> [--filter <substring>]\n\
          vt-corpus grep-deviations [--out <file.md>]"
     );
@@ -158,13 +158,23 @@ fn bless(args: &Args) -> Result<bool> {
         ),
         Engine::Old => {}
     }
-    if let Some(deviation) = args.deviation.as_deref()
-        && !KNOWN_DEVIATIONS.contains(&deviation)
-    {
-        bail!(
-            "unknown deviation id {deviation:?}: it must name a row in the corrections or \
-             deviation tables of dispatch-and-modes.md or grid-and-scrollback.md"
-        );
+    if let Some(deviation) = args.deviation.as_deref() {
+        if !KNOWN_DEVIATIONS.contains(&deviation) {
+            bail!(
+                "unknown deviation id {deviation:?}: it must name a row in the corrections or \
+                 deviation tables of dispatch-and-modes.md or grid-and-scrollback.md"
+            );
+        }
+        // A correction changes named recordings, never all of them. Without
+        // this, one `--deviation` would rewrite all 45 expectations at once and
+        // the reviewable diff the flag exists to produce would be the whole
+        // corpus.
+        if args.filter.is_none() {
+            bail!(
+                "--deviation needs --filter <recording>: re-blessing every recording under one \
+                 deviation id is not a reviewable diff"
+            );
+        }
     }
 
     let mut written = 0;
