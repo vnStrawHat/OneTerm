@@ -56,12 +56,7 @@ impl Fixture {
         }
     }
 
-    fn select(
-        &mut self,
-        kind: SelectionKind,
-        from: (Pos, Side),
-        to: (Pos, Side),
-    ) -> Selection {
+    fn select(&mut self, kind: SelectionKind, from: (Pos, Side), to: (Pos, Side)) -> Selection {
         let mut selection = Selection::new(&mut self.grid, kind, from.0, from.1);
         selection.update(&mut self.grid, to.0, to.1);
         selection
@@ -166,7 +161,9 @@ fn the_last_half_cell_of_a_row_through_the_first_of_the_next_keeps_that_cell() {
         (f.at(0, 9), Side::Right),
         (f.at(1, 0), Side::Left),
     );
-    let range = f.range(&selection).expect("the reference keeps the last cell");
+    let range = f
+        .range(&selection)
+        .expect("the reference keeps the last cell");
     assert_eq!((range.start, range.end), (f.at(0, 9), f.at(0, 9)));
     assert_eq!(f.text(&selection).as_deref(), Some("j"));
 }
@@ -558,13 +555,7 @@ fn anchors_follow_a_region_scroll() {
 
     // The reference rotates a viewport-relative range; here the content carries
     // its anchors, so a region scroll simply moves the selection with it.
-    f.grid.scroll_up(
-        ScrollRegion {
-            top: 1,
-            bottom: 4,
-        },
-        1,
-    );
+    f.grid.scroll_up(ScrollRegion { top: 1, bottom: 4 }, 1);
     assert_eq!(f.text(&selection).as_deref(), Some("ccc"));
     assert_eq!(f.range(&selection).unwrap().start, f.at(1, 0));
 }
@@ -777,7 +768,10 @@ fn hit_test_side_and_clamping() {
     // Out of range clamps rather than leaving the live rows.
     assert_eq!(hit_test(&f.grid, -4.0, -2.0), (f.at(0, 0), Side::Left));
     assert_eq!(hit_test(&f.grid, 99.0, 99.0), (f.at(4, 9), Side::Left));
-    assert_eq!(hit_test(&f.grid, f32::NAN, f32::NAN), (f.at(0, 0), Side::Left));
+    assert_eq!(
+        hit_test(&f.grid, f32::NAN, f32::NAN),
+        (f.at(0, 0), Side::Left)
+    );
 
     // Scrolled back, row 0 is the first *visible* row, not the screen top.
     f.grid.screen_mut().scroll_viewport(-2);

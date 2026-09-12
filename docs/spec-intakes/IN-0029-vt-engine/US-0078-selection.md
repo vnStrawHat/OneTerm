@@ -259,16 +259,158 @@ The worktree was created on `main` (`c936ac0`), which has no `crates/vt` at all.
 `git reset --hard 4b833a0` — the tip of `feat/vt-engine`, `US-0077`'s last commit — before any
 file was read or written. Same correction `US-0079` recorded.
 
+### Upstream merge
+
+`feat/vt-engine` moved to `02962f4` mid-packet (`US-0075` rework: `Screen::blank_row` as the
+single blanking path, `RenderRow::allocated` removed). Merged cleanly — the rework touches
+`grid/screen.rs`, `grid/grid_tests.rs`, `grid/grid_props.rs` and `render/row.rs`, none of which
+this packet edits, and `render/state.rs` / `render/render_tests.rs` auto-merged. The whole suite
+is green on the merge.
+
 ### Commands
 
-*(filled in after the run — see the table below)*
+| Command | Result |
+| --- | --- |
+| `pwsh scripts/ci-local.ps1` | **green** — fmt, clippy `-D warnings`, `cargo test --workspace`, and all five Python policy checks |
+| `cargo test --workspace` | raw totals over **56** `test result:` sections: **1455 passed / 0 failed / 8 ignored** (the `US-0077` baseline on this branch was 54 sections / 1317 / 6; this packet's 46 new tests and the merged `US-0075` rework account for the delta) |
+| `cargo test -p oneterm-vt` | 267 passed / 0 failed / 2 ignored in 0.54 s |
+| `cargo test -p oneterm-vt selection::` | **45 passed / 0 failed** in 0.07 s — 41 `selection::tests`, 4 `selection::props` |
+| `VT_PROPTEST_CASES=10000 cargo test -p oneterm-vt selection::props` | 4 passed in 0.77 s |
+
+### What the tests pin
+
+Every test the LLD's Verification section names exists, under its own name where the name still
+described the behaviour and under a corrected one where it did not:
+
+| LLD name | Here |
+| --- | --- |
+| `simple_side_rules_drop_the_right_cells` | same |
+| `simple_is_empty_when_anchors_coincide_or_are_adjacent` | same |
+| `block_normalises_columns_not_rows` | same |
+| `block_text_extracts_a_rectangle` | same |
+| `semantic_expansion_uses_the_escape_chars` | same |
+| `semantic_stops_at_an_unwrapped_row_boundary` | same |
+| `semantic_bracket_match_when_the_anchors_coincide` | same |
+| `lines_expands_across_wrapped_continuations` | same |
+| `text_joins_wrapped_rows_without_a_newline` | same |
+| `text_skips_wide_spacers_and_emits_whole_graphemes` | same |
+| `text_emits_tab_cells_as_tabs` | same |
+| `contains_cell_extends_a_wide_char_to_its_spacer` | same |
+| `range_is_o1_and_does_not_allocate` | same |
+| `anchors_follow_a_region_scroll` | same |
+| `selection_clears_when_an_anchor_is_trimmed` | same |
+| `selection_survives_a_row_only_resize_and_clears_on_a_column_resize` | same |
+| `viewport_scrolling_does_not_change_the_range` | same |
+| `invalidation_matrix` | same, table-driven over the seven operations plus the history case |
+| `hit_test_side_and_clamping` | same |
+| `anchors_are_released_on_clear` | same |
+
+Beyond the list: `reversed_anchors_produce_the_same_range_for_every_kind`,
+`the_last_half_cell_of_a_row_through_the_first_of_the_next_keeps_that_cell`,
+`block_is_empty_by_the_column_rule_alone`, `block_that_would_invert_its_columns_is_empty`,
+`block_text_trims_each_row_on_its_own`, `block_with_wide_chars_at_the_edges`,
+`semantic_runs_across_a_wrapped_row`,
+`semantic_expands_over_wide_chars_without_splitting_a_pair`, `semantic_is_never_empty`,
+`lines_is_never_empty`, `text_puts_a_newline_between_unwrapped_rows_and_trims_trailing_blanks`,
+`text_includes_a_wide_glyph_whose_leading_spacer_ends_the_selection`,
+`text_of_an_empty_selection_is_empty`, `select_all_covers_history_and_the_viewport`,
+`a_block_cursor_on_a_corner_is_not_inverted`,
+`insert_lines_inside_a_region_moves_the_selection`,
+`delete_lines_inside_a_region_moves_the_selection_and_kills_a_deleted_one`,
+`a_selection_survives_a_scroll_into_history`,
+`a_column_reflow_round_trip_carries_the_anchors_and_the_text`,
+`a_selection_reads_the_screen_its_anchors_are_on`,
+`a_cell_carrying_only_a_grapheme_id_still_reads_as_text`, and in
+`crates/vt/src/render/render_tests.rs`,
+`selection_change_only_returns_partial_and_refreshes_the_range`.
+
+Properties (`selection::props`): `to_range_is_ordered_and_within_bounds` and
+`text_covers_exactly_the_cells_in_the_range` over random grids, random wrap flags, all four
+kinds and both sides on both anchors; `a_region_scroll_leaves_the_range_well_formed`; and
+`the_property_grid_is_dense`, which stops the first two being vacuously true.
+
+### Rotation and reflow, concretely
+
+- **Scroll into history** — `a_selection_survives_a_scroll_into_history`: five line feeds later
+  the range starts five rows above the screen top and `selection_text` is still `"aaa"`.
+- **`IL` / `DL`** — the selection moves from screen row 1 to row 2 (`IL`) and from row 2 to row 1
+  (`DL`), with the same text; a selection on the row `DL` discards resolves to `None`.
+- **Region scroll** — `anchors_follow_a_region_scroll`: `SU 1` over rows 1..4 moves the selection
+  from row 2 to row 1 with the text unchanged. The reference needs `Selection::rotate` here.
+- **Trim** — with a two-row scrollback the selection resolves to `None` once its row is dropped.
+- **Reflow** — `a_column_reflow_round_trip_carries_the_anchors_and_the_text`: 10 → 6 → 10
+  columns; `"cdefghijklmno"` before, `None` for the selection afterwards (trap 28), and
+  `"cdefghijklmno"` again from the two `AnchorKind::Mark` anchors that rode the same
+  `Anchors::remap`. That single test carries both halves of the intake's outcome line and pins
+  `kill_selection` as **kind**-scoped.
+
+### Declared corrections over the reference
+
+1. **`range_block` never returns an inverted rectangle.** A one-column block whose end cannot
+   step left (`end.col == 0`) leaves `start.col > end.col` in the reference, which its own
+   `SelectionRange::new` would assert on. Here it is empty.
+   Test: `block_that_would_invert_its_columns_is_empty`.
+2. **`range_simple` has the same guard**, though it is unreachable: the end is adjusted before
+   the start, so the two coincide before the start could overshoot. Kept so the property holds
+   by construction rather than by argument, and the reference's outcome is pinned by
+   `the_last_half_cell_of_a_row_through_the_first_of_the_next_keeps_that_cell`.
+3. **The `LeadingWideSpacer` tail rule reads the row below**, not the row above. See reading 5.
+4. **Block text passes `include_wrapped_wide` only on the last row**, where the reference passes
+   `start.column != 0` on every other row. The reference's condition has no stated meaning and
+   would emit the same glyph on several rows of one rectangle.
 
 ### Gaps
 
-*(filled in after the run)*
+- **A region scroll can split a selection.** When a scroll region contains one endpoint and not
+  the other, the anchor list moves that endpoint alone, so the selection legitimately grows or
+  shrinks. The reference deletes it (`Selection::rotate` returns `None` when the start rotates
+  out of the region while the end has not). The anchor list cannot express "these two entries
+  must move together", so this is **not** implemented; the property
+  `a_region_scroll_leaves_the_range_well_formed` asserts only that the result is ordered, in
+  bounds and materialisable. Closing it needs either a `SelectionKind`-aware rotation hook on
+  `Anchors` or a post-scroll consistency check on the terminal, and it is the design owner's
+  call which. Found by the property test, which originally asserted the stronger property.
+- **The invalidation matrix is not wired to anything**, because nothing calls it yet: `Terminal`
+  and the dispatch table are `US-0076`'s. The matrix is a predicate with its own test; the
+  packet that adds `ED`/`EL` dispatch must call it. `grid/screen.rs` and
+  `grid/terminal_grid.rs` are deliberately untouched, so `RIS` and `swap_alt` do **not**
+  currently kill a selection by themselves — the caller must ask.
+- **A grapheme cell is never an escape character or a bracket.** `to_range` does not take the
+  interner (PERF-14), so a cluster reads as `NUL`. A bracket or a space carrying a combining
+  mark therefore behaves as word content, where the reference matches on the base scalar. Fixing
+  it costs an `&Interner` parameter on `to_range`; recorded rather than taken.
+- **`range_is_o1_and_does_not_allocate` proves the weaker half.** A counting allocator needs
+  `GlobalAlloc`, an `unsafe` trait this crate does not have, so the test watches
+  `TerminalGrid::heap_bytes()` across a 1 500-row selection and checks the returned type is a
+  small `Copy` value. `US-0075` and `US-0079` set the same precedent.
+- **No integration, E2E or platform proof.** Nothing in the workspace depends on `oneterm-vt`
+  yet; the eleven search tests and the mouse tests keep running against the old engine until
+  `US-0082` / `US-0085` (R-44). The `SelectionKind` the view maps click counts to is still the
+  fork's.
+- **`hit_test` takes the *active* screen's viewport** while `to_range` resolves against the
+  screen the anchors are on. A selection made on the primary screen and dragged while the
+  alternate screen is active would mix the two — except that the matrix clears the selection on
+  `swap_alt`, so the situation cannot arise once the caller asks. Named because it is an
+  invariant the caller upholds rather than one the types enforce.
+- **`Selection` is `Copy`.** Copying it duplicates two anchor handles, and releasing twice would
+  free slots another selection may already have taken. It is `Copy` because the tests hold it by
+  value across `&mut TerminalGrid` calls; `Terminal` will own exactly one in an `Option`, and
+  `release` consuming `self` is what keeps that honest. Dropping `Copy` when `Terminal` lands
+  would make it stricter still.
 
 ## Handoff
 
-Branch `worktree-agent-a3a509ddbf185b930`, off `feat/vt-engine` @ `4b833a0`. Not merged, not
-pushed. Next owner: the integrator for `IN-0029`, then `US-0076` (`Terminal` wrappers) and
-`US-0085` (the view's `SelectionKind`).
+Branch `worktree-agent-a3a509ddbf185b930`, off `feat/vt-engine` @ `4b833a0` and merged up to
+`02962f4`. Not merged into `feat/vt-engine`, not pushed.
+
+Next owner: the integrator for `IN-0029`. Then:
+
+- **`US-0076`** — the seven `Terminal::selection_*` wrappers in the table above, and the
+  `Invalidation` call in the `EL` / `ED` / `RIS` / `swap_alt` dispatch paths. Nothing clears a
+  selection today because nothing asks.
+- **`US-0079`'s owner** — the `EngineView::selection` field this packet added, and the
+  `selection_changed` term that stops a drag over static content returning `Unchanged`.
+- **`US-0085`** — the view's click-count to `SelectionKind` mapping and `render/frame.rs`'s
+  `SelectionRange`.
+- **The design owner** — the region-scroll split under "Gaps" is the one behaviour the anchor
+  list cannot express, and the choice of mechanism is theirs.

@@ -14,7 +14,7 @@ use proptest::prelude::*;
 
 use super::*;
 use crate::cell::CellContent;
-use crate::grid::{PrintMode, RowFlags, RowId, Screen, Size, TerminalGrid};
+use crate::grid::{PrintMode, RowFlags, Screen, Size, TerminalGrid};
 use crate::intern::Interner;
 
 const ROWS: u16 = 5;
@@ -279,5 +279,10 @@ fn the_property_grid_is_dense() {
             );
         }
     }
-    assert!(!screen.row(screen.newest()).flags().contains(RowFlags::WRAPPED));
+    assert!(
+        !screen
+            .row(screen.newest())
+            .flags()
+            .contains(RowFlags::WRAPPED)
+    );
 }
