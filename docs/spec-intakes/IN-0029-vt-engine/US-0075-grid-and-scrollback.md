@@ -9,10 +9,10 @@ Created: 2026-09-12
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [ ] Planned
-- [ ] In progress
+- [x] Planned
+- [x] In progress
 - [x] Implemented
-- [ ] Changed
+- [x] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
@@ -77,6 +77,13 @@ The grid half of the engine exists and is proven against
 - [x] Every test the LLD's Verification section names for `grid::` and `anchor::` exists under the
       name the LLD gives it, plus the four trap-map rows re-homed here (traps 5, 7, 8 and the
       cross-row half of 6) and `grid::props::scroll_and_erase_preserve_integrity`.
+      *(Was not true until the 2026-09-12 rework: `blanking_a_row_stamps_it_dirty_with_the_batch_seq`
+      was missing, along with the behaviour it names.)*
+- [x] **Blanking a row is a mutation (rework, 2026-09-12).** Every operation that de-allocates or
+      re-places a **live** row stamps it with the current batch `SeqNo` and sets `RowFlags::DIRTY`,
+      so a consumer holding only a watermark — `DEC-0015`'s second consumer — sees the blanking,
+      and the `DIRTY`-driven sweeps get no false negative. A row leaving the live range at the
+      oldest end is reported by `oldest` / `RowsTrimmed` instead; see the Rework section.
 - [x] The viewport-offset table is proven row by row (R-01): sticky bottom, a scrolled-back view
       holding still, the `history_len()` cap, `ED 2` keeping the offset, `ED 3` snapping to 0.
 - [x] All four `scroll_up` cases behave as tabulated (R-03), including the bottom-bounded region
@@ -415,10 +422,114 @@ this packet's file scope.
   the parity gate is `US-0076`, and the first time the engine is behind the application is
   `US-0081`.
 
+## Rework (2026-09-12) — blanking a row is a mutation
+
+**Why.** `US-0079`'s independent verification
+([`evidence/US-0079-verify.md`](evidence/US-0079-verify.md) § 3d, finding **F2**) proved this
+packet's grid drops the damage stamp when a row is blanked: `place_row` stored `None` when the
+source slot was unwritten, and `reset_row`'s else branch stored `None` for an empty erase
+template, so the row kept its `RowId` but read back `SeqNo::default()` — **below every watermark**
+— with `RowFlags::DIRTY` gone along with the header. `US-0079` worked around it with a private
+`RenderRow::allocated` flag, which made `DEC-0015`'s "a second consumer becomes possible without
+an engine change" false and left the `DIRTY`-driven sweeps (grapheme GC, `GraphicReleased`) with a
+false negative the damage LLD forbids. The rule this rework implements is quoted verbatim in
+[`low-level-design/grid-and-scrollback.md`](low-level-design/grid-and-scrollback.md) under
+"Blanking a row is a mutation, and must be stamped — `US-0075` rework". This is acceptance rework
+of this packet, not a new `BUG`: the grid was never accepted with this behaviour.
+
+**What changed.** `crates/vt/src/grid/screen.rs`, one new private helper and three call sites:
+
+- `Screen::blank_row(id, template)` — the single blanking path. A row blanked **in place** is
+  always materialised, because an unwritten slot cannot carry a `SeqNo` or a `DIRTY` bit. Either
+  arm stamps: an existing row of the right width is `reset` in place, anything else is rebuilt
+  with `Row::new`. (The width test catches a row that left the live range and came back; a column
+  resize only walks live rows.)
+- `place_row(id, None)` → `blank_row(id, Cell::EMPTY)`. This is the in-region `SU`/`SD` path, and
+  therefore `IL`/`DL` and the bounded-region tail restore of `scroll_up` — the one the verifier
+  reproduced, which hits rows in the *middle* of a region, not just the blanked tail.
+- `reset_row(id)` → `blank_row(id, self.cursor.erase)`, which covers `reset_rows`, `ED 0/1/2`,
+  `clear_viewport`, `clear_all_rows` (so `swap_alt`) and `Screen::reset`. This also closes a
+  second hole the `RenderRow::allocated` flag was hiding: a scroll `take_row`s its source and the
+  tail `reset_row` then found an empty slot, so the old code blanked a row that *had* content with
+  no stamp at all.
+- `blank_slot(id, template)` (the `push_rows_with` bottom) keeps `None` for a brand-new id with an
+  empty template — no consumer has ever seen that id, and this is where "an unwritten row costs no
+  cells" lives — but routes an id the slot still holds through `blank_row`.
+- `drop_trailing_rows` now blanks through `blank_slot` instead of writing `None` directly: a row
+  shrink drops ids off the bottom that a later grow re-creates from the same `newest`, so that one
+  id *is* re-observed and needs the stamp.
+
+Deliberately **not** stamped, and why: a row leaving the live range at the **oldest** end
+(`push_rows_with`'s trim, `trim_history`, `clear_history`, `set_scrollback_limit`) is freed, not
+stamped. Its id never becomes live again, nothing can read it, and materialising trimmed rows
+would destroy the memory claim; `oldest` and `VtEvent::RowsTrimmed` are that end's report, as the
+damage LLD already says. `reflow::install_rows` was reviewed and left alone: it only ever writes
+ids freshly allocated above `newest`, which no consumer has seen.
+
+`crates/vt/src/render/`: `RenderRow::allocated` is **removed**, not kept. It became dead the
+moment the grid stamped — `copy_changed` now tests `slot.id != id || row.seq() > watermark` and
+nothing else — and keeping a private allocation mirror in one consumer is exactly what made the
+second-consumer clause untrue. It was never an optimisation (it was an extra `||` term), and the
+grid-level property below is a stronger diagnostic than the flag was.
+
+**Cost of the reading.** Blanking a live row in place keeps its cells allocated. That is bounded
+by the screen height: only screen rows are ever blanked in place (history rows are *created* by
+`blank_slot` and *dropped* by a trim), so `ED 2` on a 45x160 screen materialises 45 rows it is
+about to be repainted over. The acceptance criterion it could have touched —
+`empty_scrollback_costs_only_its_ring_slots` — is unchanged and still reports
+`allocated_rows() == 0` for 100 000 never-written rows, because a line feed reaches `blank_slot`,
+not `reset_row`.
+
+**Verification.**
+
+- `grid::tests::blanking_a_row_stamps_it_dirty_with_the_batch_seq` — the test the LLD's
+  Verification list names, over both paths: an in-region scroll pulling an unwritten row over a
+  written one (`place_row`) and `reset_rows` with the default template. It reads only the public
+  `row.seq()` / `row.flags()`, the way a consumer that is not `RenderState` would have to.
+- `render::tests::a_blanked_row_reaches_a_consumer_holding_only_a_watermark` — the render half:
+  write row 3, consume it, blank it, consume again, and the row comes back in `changed()` from the
+  sequence number alone. Ends with the bare watermark comparison a second consumer would make.
+- `render::tests::an_in_region_scroll_moves_content_between_row_ids` keeps its assertions but no
+  longer asserts on the deleted flag.
+- `grid::props::scroll_and_erase_preserve_integrity` gained the general detector: a snapshot of
+  every live row of **both** screens before each operation, and afterwards "a row whose cells or
+  wrap flag changed carries this batch's `SeqNo` and `DIRTY`". A de-allocated row with a stale
+  stamp fails it whatever produced it — this is the check the rework brief asked `assert_integrity`
+  to grow, put where it can see *change* rather than a single state. The property now honours
+  `VT_PROPTEST_CASES`, as `reflow::props` already did.
+- All three fail against the pre-rework code (verified by reintroducing `place_row`'s `None`
+  store: `grid::tests::blanking_a_row_stamps_it_dirty_with_the_batch_seq`,
+  `render::tests::a_blanked_row_reaches_a_consumer_holding_only_a_watermark` and
+  `grid::props::scroll_and_erase_preserve_integrity` all FAILED, 218 passed / 3 failed).
+- `pwsh scripts/ci-local.ps1` green: raw totals **56 `test result:` sections, 1409 passed /
+  0 failed / 8 ignored**.
+- `cargo test -p oneterm-vt` at `VT_PROPTEST_CASES=5000`: 221 + 5 + 5 passed / 0 failed /
+  3 ignored, lib suite 5.80 s — inside the 60 s R-28 debug-suite budget.
+- One regression found and fixed while reworking: a row resurrected by a grow after
+  `drop_trailing_rows` could be reused at the **old** column count
+  (`reflow::props::integrity_holds_after_any_resize_sequence`, "row is the wrong width"), hence the
+  width test in `blank_row`.
+
+**Documentation.** No owning doc changed, and the earlier no-change reason still holds: the rule
+is already written in `grid-and-scrollback.md` (including the test name) and in
+`damage-and-render-state.md` / `DEC-0015`. That LLD paragraph's "currently store `None`" is now
+historical — the defect it describes is fixed — and belongs to the design owner to retire, as this
+packet may not edit the intake documents.
+
+**Gap.** A row that leaves the live range at the oldest end still loses its `DIRTY` bit with its
+allocation, so `US-0074`'s grapheme sweep and `US-0080`'s `GraphicReleased` scan must drive the
+trim end from `RowsTrimmed` / `oldest`, not from `DIRTY`. Stated here so neither packet assumes
+otherwise.
+
 ## Handoff
 
-Branch `worktree-agent-a8c57df6ea2ef0000` off `feat/vt-engine` @3b60094, one commit, **not merged
-and not pushed**. `crates/vt/src/parser/` is being implemented concurrently on another branch and
+**Rework branch** `worktree-agent-a402d6aa668c85293` off `feat/vt-engine` @4b833a0 (the worktree
+was created on `fix/sixel-cursor-model` @c936ac0 and `git reset --hard 4b833a0` before any file was
+read or written), one commit, **not merged and not pushed**. `crates/vt/src/terminal/` and
+`crates/vt/src/reflow/` were not touched (`US-0076` is in flight concurrently).
+
+Original implementation: branch `worktree-agent-a8c57df6ea2ef0000` off `feat/vt-engine` @3b60094,
+one commit, **not merged and not pushed**. `crates/vt/src/parser/` is being implemented concurrently on another branch and
 was not touched; `src/lib.rs` gained only the `pub mod grid;` line and its re-export.
 
 Next: `US-0076` (dispatch and modes) and `US-0077` (reflow) both build directly on this. `US-0077`
