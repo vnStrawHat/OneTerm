@@ -38,8 +38,9 @@ Transition table, differences from the reference marked **[new]**:
 
 | State | Bytes | Action |
 | --- | --- | --- |
-| `Ground` | scan to the next control byte | `memchr3(0x1B, 0x0A, 0x0D)` **[new]** — the reference scans only for `0x1B`, so `\n` and `\r` leave the per-char loop only here. Validate the run as UTF-8 once, then **one** `print_str(&str)` **[new]** instead of `print(char)` per character |
-| | `0x00..=0x1F`, `0x7F` | `execute(byte)` |
+| `Ground` | scan to the next `ESC` | `memchr(0x1B, bytes)` — **one SIMD scan per run**. An earlier draft scanned with `memchr3(0x1B, 0x0A, 0x0D)` (deviation P2); that is **redundant and slower**, because `print_run` already splits the returned run at every byte below `0x20`, so `LF` and `CR` are handled either way while ending the scan on them restarts it every line. Measured on CRLF-terminated fixtures: `plain_ascii` 1069 -> 1290 MB/s, `scroll_region` 903 -> 1188 MB/s, with all 120 unit tests, the differential suite and the extended suite green. Validate each run as UTF-8 once, then **one** `print_str(&str)` **[new]** instead of `print(char)` per character |
+| | `0x00..=0x1F` | `execute(byte)` |
+| | `0x7F` (`DEL`) | `execute(0x7F)` **[new, P8]**, and the dispatch layer routes it nowhere — xterm, kitty, Ghostty and foot all ignore `DEL` in ground. The reference `print`s it, so an embedder that writes whatever it is handed puts `U+007F` in a cell |
 | | `0x80..=0x9F` arriving as an invalid UTF-8 lead of length 1 | `execute(byte)` — 8-bit C1 is executed, never an introducer (trap 48) |
 | | `0x1B` | `reset_params()`, to `Escape` |
 | `Escape` | `00-17,19,1C-1F` | `execute` |
@@ -123,8 +124,14 @@ struct OscAccumulator {
   `crates/terminal/src/security_policy.rs`. `OSC_LARGE` is only a memory ceiling, not a policy.
 - Truncation sets `truncated` and the sequence **still dispatches**, so an over-long title becomes
   a short title rather than a dropped one. `FeedStats::truncated_osc` counts it.
-- Parameters past the 16th are dropped but their bytes keep accumulating into the 16th, which is
-  the reference behaviour and what OSC 8's `;`-joined URIs rely on.
+- Parameters past the 16th keep accumulating into the 16th, so the dispatch layer can re-split it
+  on `;`. This is **not** the reference behaviour (P9): `vendor/vte/src/lib.rs:530` returns at
+  `MAX_OSC_PARAMS` without extending the sixteenth slice, so every byte after the sixteenth `;`
+  sits in `osc_raw` reachable by no parameter and is silently discarded. Joining is
+  information-preserving, which is why it is kept. The sequence that actually reaches sixteen is
+  **OSC 4 / OSC 104**, a bulk palette set (`4 ; idx ; spec ; idx ; spec …` passes sixteen at nine
+  colours) — not OSC 8, which is three parameters. **`US-0076` must re-split parameter 16 on `;`**
+  when it handles OSC 4, or the preserved information is read by nobody.
 - Terminators: `BEL` and `ESC \`. C1 `ST` (`0x9C`) is payload, not a terminator (trap 24). `ESC \`
   produces the OSC dispatch and then an `esc_dispatch(b'\\')` that `dispatch/` ignores.
 - An empty OSC (`ESC ] BEL`) dispatches with one empty parameter.
@@ -224,7 +231,11 @@ Each is excluded from the differential test with this reason.
 | # | Deviation | Reason |
 | --- | --- | --- |
 | P1 | `print_str(&str)` instead of `print(char)` per character | enables the grid-side run writes; the observable grid is identical |
-| P2 | `memchr3(0x1B, 0x0A, 0x0D)` instead of `memchr(0x1B)` | `\n` and `\r` leave the per-character loop; same actions |
+| P2 | *withdrawn* — the scan is plain `memchr(0x1B)`; `print_run`'s own `< 0x20` split makes a three-byte scan redundant and measurably slower | — |
+| P8 | `DEL` (`0x7F`) is `execute`d in ground and routed nowhere, where the reference `print`s it | Matches xterm, kitty, Ghostty and foot, and keeps `DEL` out of the grapheme-cluster and width path |
+| P9 | The sixteenth OSC parameter absorbs the rest of the payload, where the reference discards it (`vendor/vte/src/lib.rs:530` returns without extending it) | Information-preserving: the dispatch layer can re-split it. Reached by OSC 4 / 104, never by OSC 8 |
+| V6 | A carry byte is **not** lost across a chunk boundary | Reference bug: `advance_partial_utf8` prints only the first character of a completed prefix but consumes the whole prefix (`vendor/vte/src/lib.rs:694-701`), so `C5 93 40 97` loses the `@` when chunked and keeps it when whole |
+| V8 | An 8-bit C1 split across a chunk boundary still `execute`s | Reference bug: the carry path calls `print` with no control filtering, so `C2 9B` is `Execute(155)` in one buffer and `Print(U+009B)` in two |
 | P3 | Separator kept per parameter | structural; the reference re-derives it from run lengths |
 | P4 | OSC bounded at 2 KiB / 8 MiB with truncation | the reference is unbounded under `std`; a remote DoS vector |
 | P5 | DCS bounded at 16 MiB in the parser | the reference delegates the bound to a sink that may not have one |
@@ -303,12 +314,15 @@ log.
 - [ ] `parser::tests::osc_truncates_at_inline_cap_and_still_dispatches`.
 - [ ] `parser::tests::osc_spills_only_for_numbers_claimed_large` — R-55; asserts an unclaimed
   number truncates at 2 KiB and a claimed one does not.
-- [ ] `parser::tests::osc_params_past_sixteen_join_into_the_last`.
+- [ ] `parser::tests::osc_params_past_sixteen_join_into_the_last` — P9, with the OSC 4 shape.
 - [ ] `parser::tests::dcs_streams_without_buffering`, `parser::tests::dcs_aborts_past_byte_cap`.
 - [ ] `parser::tests::dcs_exit_via_esc_resets_intermediates` — trap 47.
 - [ ] `parser::tests::c1_is_executed_not_an_introducer` — trap 48.
 - [ ] `parser::tests::utf8_*` — the seven ported reference cases, each also byte-at-a-time.
 - [ ] `parser::tests::print_runs_are_batched` — a 4 KiB ASCII run produces one `print_str`.
+- [ ] `parser::tests::del_is_executed_not_printed` — P8.
+- [ ] `parser::props::utf8_carry_does_not_swallow_the_next_character` — V6.
+- [ ] `parser::props::a_split_c1_still_executes` — V8.
 - [ ] `parser::tests::unhandled_sequence_is_counted_not_echoed` — R-35.
 - [ ] `parser::tests::sync_mode_with_leading_param_is_recognised` — deviation P6.
 - [ ] `strip::tests::removes_sequences_keeps_text`.
@@ -339,7 +353,7 @@ silently weakening it. The oracle and the dev-dependency retire with the fork at
 `crates/vt/tests/differential.rs`:
 
 - [ ] `differential::action_traces_agree_on_ref_corpus` — all 45 vendored recordings through both
-  state machines, normalising `print_str` runs to per-character `print` and applying the P1-P7
+  state machines, normalising `print_str` runs to per-character `print` and applying the deviation table's
   exclusions.
 - [ ] `differential::action_traces_agree_on_fuzz_seeds` — the same over the MIT-licensed Ghostty
   AFL++ seeds.

@@ -398,6 +398,7 @@ touches; the "Affected recordings" columns below carry that measurement
 | C6 | `RIS` resets the colour overrides | 39 | `US-0076` | **1 recording**: `grid_reset` (one `RIS`, one `OSC 104`). `OSC 104` already empties indices 0-255, so no `state.expect` palette key is expected to move |
 | C7 | `OSC 4` applies complete pairs and ignores a trailing parameter | 26 | `US-0076` | **none of the 45**. `indexed_256_colors` sends 240 well-formed triples, which the old engine already accepts. Free |
 | C9 | `DECSTR` (`CSI ! p`) implemented | — | `US-0076` | **1 recording, and it is the one certain diff in this table**: `grid_reset` sends `CSI ! p`, which the old engine drops, so implementing it **will** change that recording's grid. `US-0076` writes `grid_reset`'s `expected-diffs.json` naming C9 |
+| C13 / C14 | Reflow corrections — a grow keeps the tail below the cursor; a bold trailing blank is kept | — | `US-0077` | see [`grid-and-scrollback.md`](grid-and-scrollback.md) § "Corrections"; both **to measure in `US-0076`** |
 | C11 | Blink and overline attributes stored (SGR 5 / 6 / 53 / 55) | — | `US-0076` | **none of the 45** — no recording sends those parameters (`sgr` exercises 9, 4 and the colour forms; `underline` exercises `4:0`-`4:3`, 21, 24). **Free, with no declared diff**: N-03's reason for deferring it does not survive the measurement |
 
 Kept deliberately, because they are correct: traps 15, 16, 18, 21, 22, 25, 40 and 43. Mode 2027 is

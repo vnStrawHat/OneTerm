@@ -39,7 +39,18 @@ needs to move is already an entry in the engine's tracked-anchor list, whose can
 `AnchorKind` list is in [`grid-and-scrollback.md`](grid-and-scrollback.md) § "Tracked anchors" and
 includes `Cursor` and `ViewportTop` for exactly this reason (N-01).
 
-**This packet owns the screen discriminant on `AnchorKind` (M6).** Each screen registers its own
+**The lane check stands in for the discriminant, with one exception (d3).** `Screen::row_range()`
+is exactly `oldest..newest + 1` and each screen's rows live in its own lane, so **lane membership
+is screen membership**: reflow collects and walks the primary screen's range, and a position
+outside it is returned unchanged. That is the "or an equivalent lane check" the rule below allows,
+and it is why the discriminant was not added.
+
+The one place the missing discriminant is observable is `Anchors::kill_selection`, which matches on
+**kind**, not lane, so it also kills a selection registered on the alternate lane. Harmless today —
+there is one selection at a time, and a column resize invalidates an alternate-screen selection
+anyway — and recorded here so the choice can be revisited the moment a second selection is tracked.
+
+**This packet owns the screen discriminant on `AnchorKind` (M6), if it is ever needed.** Each screen registers its own
 `Cursor`, `SavedCursor` and `ViewportTop`, so the list holds two of each; reflow runs on the
 **primary** screen only, which makes it the first code that must select one screen's entries rather
 than every entry of a kind. `US-0077` therefore adds the discriminant (or an equivalent lane check
@@ -55,6 +66,18 @@ Internally the remap is a closure over the reflow iterator's state, not a materi
 drag frame allocates nothing proportional to the scrollback.
 
 ### Order of operations
+
+**Two rules that look like deviations and are not** — both are what the reference does:
+
+- **A resize fills new cells with `Cell::EMPTY`, never with the erase cell.**
+  `vendor/alacritty_terminal/src/grid/resize.rs:14-36` does
+  `let template = mem::take(&mut self.cursor.template);` for the duration of the resize, so newly
+  created cells never inherit the current background. The scroll paths keep using the erase cell;
+  only the resize paths use `Cell::EMPTY`.
+- **An identity resize keeps `DECSTBM`.** Step 1 returns before step 5, and so does the reference:
+  `Term::resize` early-returns when both dimensions are unchanged, *before* it resets the scroll
+  region. Trap 28's "a resize destroys the scroll region" therefore means *a resize that changes a
+  dimension*.
 
 ```
 1. if size == current: return early (identity, no damage)     [kitty's memcpy fast path]
@@ -73,8 +96,13 @@ is needed here (R-30).
 
 ### `reflow_columns` — the iterator
 
-Ported from `avt`'s `Reflow` iterator (Apache-2.0, proptest-covered; attribution in the file
-header, in `NOTICE` and in `THIRD-PARTY-NOTICES.md`).
+Written from the six steps below against OneTerm's own cell, row and anchor types, with the design
+taken from `avt`'s `Reflow` iterator (Apache-2.0, proptest-covered). **No `avt` source is copied**,
+and the file header credits it by name, licence and URL. `docs/license-analysis.md` § 3 requires a
+`NOTICE` / `THIRD-PARTY-NOTICES.md` entry for reused *source*, so the header is arguably enough;
+the two lines are added anyway, and because `THIRD-PARTY-NOTICES.md` is generated and CI-checked
+against `Cargo.lock`, a hand-written section needs the generator's owner: **`US-0087` owns the
+`NOTICE` and `THIRD-PARTY-NOTICES.md` lines**, alongside the removal rows it already carries.
 
 1. Walk the old rows from `oldest` to `newest`, grouping them into **logical lines**: a run of
    rows where each but the last carries `RowFlags::WRAPPED`.
@@ -192,9 +220,27 @@ ratio is trustworthy.
 
 What the benchmark records instead: resize latency at three scrollback depths (0, 10 000 and
 100 000 rows) for both engines, so the change is visible as a ratio against the engine being
-replaced. The real lever for drag-resize responsiveness is **reflowing the viewport eagerly and
-the history lazily**; that is not in this intake, and the cost model above is the reason a later
-packet may want it.
+replaced.
+
+**Measured breakdown, and the cheap wins before the expensive one.** At 100 000 rows of 96 cells
+the reflow's roughly 30 ms splits as: a fresh `Vec<Cell>` allocation and fill per produced row
+**23 ms**, the drop of the old rows **18 ms**, the `flags_for` rescan inside `Row::from_cells`
+**12 ms**, and one `extend_from_slice` cell-copy pass **15 ms** (the phases overlap; the point is
+the ranking). It is **allocator traffic first, per-cell rescanning second** — not an irreducible
+`O(live rows x cols)`. In order of value per line changed:
+
+1. **Skip untouched unwrapped rows**, as the reference does: a row that is not `WRAPPED`, is not
+   adjacent to one, and already fits the new width needs no new allocation at all.
+2. **Recycle the row allocations** instead of allocating a new `Vec<Cell>` per produced row and
+   dropping the old one — the two largest items above are the same object churning.
+3. **Fold the flag computation into `emit_line`**, so `Row::from_cells` does not rescan cells the
+   emitter has just walked.
+
+Only after those does **lazy history reflow** — reflow the viewport eagerly and the history on
+demand — earn its complexity: it is the only change that alters the *shape* of the work
+(viewport-sized per drag frame instead of history-sized), and it is a second implementation with
+its own invalidation rules. Sequence it last, and let the recorded ratio at 100 000 rows be the
+argument for it.
 
 ## Interfaces
 
@@ -265,8 +311,9 @@ ConPTY policy tests — the engine-side equivalents of `crates/terminal/src/mode
 - [ ] `reflow::tests::keep_viewport_top_shrink_with_the_cursor_on_the_bottom_row_matches_bottom_anchor`
 - [ ] `reflow::tests::default_policy_grow_anchors_the_bottom_row`
 - [ ] `reflow::tests::measure_rows_matches_the_recorded_conhost_rows` — the three measured
-  BUG-0051 cases (33x43 to 52x158 giving row 12; the widen to 132 columns giving row 14; the grow
-  to 49x34 giving row 38). **Each fixture records the `OpenConsole.exe` version it was captured
+  BUG-0051 cases. The measured rows are **11, 13 and 37, zero-based** (the bug report's `ESC[12;18H`
+  is a one-based CUP parameter); an earlier draft of this bullet read them one-based and would have
+  made the next reviewer think the test was wrong. **Each fixture records the `OpenConsole.exe` version it was captured
   against** (R-39), because those numbers are a property of a specific host build; IN-0030's
   version-bump checklist gains a line to re-capture them when the bundled pair moves.
 
