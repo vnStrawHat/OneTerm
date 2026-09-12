@@ -5633,6 +5633,7 @@ dependencies = [
 name = "oneterm-tools"
 version = "0.5.2"
 dependencies = [
+ "alacritty_terminal",
  "anyhow",
  "libc",
  "oneterm-pty",
