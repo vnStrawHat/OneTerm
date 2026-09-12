@@ -3,7 +3,7 @@
 //! (traps 5, 7, 8 and the cross-row half of trap 6).
 
 use super::*;
-use crate::cell::{Cell, CellContent, CellWidth};
+use crate::cell::{Attrs, Cell, CellContent, CellWidth, Color, Style};
 use crate::intern::{Extras, GraphicId, Interner};
 
 struct Fixture {
@@ -45,6 +45,17 @@ impl Fixture {
 
     fn goto(&mut self, index: u16, col: u16) {
         self.grid.screen_mut().goto(index, col);
+    }
+
+    fn set_template(&mut self, template: Cell) {
+        self.grid
+            .screen_mut()
+            .set_template(template, &mut self.interner);
+    }
+
+    fn set_style(&mut self, style: Style) {
+        let id = self.interner.style(&style);
+        self.set_template(Cell::EMPTY.with_style(id));
     }
 
     fn row_text(&self, id: RowId) -> String {
@@ -515,12 +526,8 @@ fn ed1_clears_row_zero() {
 #[test]
 fn row_reset_respects_occ_and_the_background_template() {
     let mut f = fixture(2, 8);
-    let blue = f.interner.style(&crate::cell::Style {
-        bg: crate::cell::Color::Palette(4),
-        ..crate::cell::Style::DEFAULT
-    });
-    let template = Cell::EMPTY.with_style(blue);
-    f.grid.screen_mut().cursor_mut().template = template;
+    f.set_style(blue_underlined());
+    let erase = f.screen().cursor().erase();
     f.goto(0, 0);
     f.print("xyz");
     let id = f.screen().row_of_index(0);
@@ -534,17 +541,13 @@ fn row_reset_respects_occ_and_the_background_template() {
         "trap 36: a reset leaves nothing written"
     );
     assert!(
-        f.screen()
-            .row(id)
-            .cells()
-            .iter()
-            .all(|cell| *cell == template),
-        "the background-erase template fills the row"
+        f.screen().row(id).cells().iter().all(|cell| *cell == erase),
+        "the background-erase cell fills the row"
     );
 
     // A reset with a different template cannot take the occ fast path, so the
     // whole row is rewritten.
-    f.grid.screen_mut().cursor_mut().template = Cell::EMPTY;
+    f.set_template(Cell::EMPTY);
     f.grid.screen_mut().reset_rows(0..1);
     assert!(
         f.screen()
@@ -552,6 +555,74 @@ fn row_reset_respects_occ_and_the_background_template() {
             .cells()
             .iter()
             .all(|cell| *cell == Cell::EMPTY)
+    );
+    f.integrity();
+}
+
+/// A template that is wrong to erase with in every way: a foreground, an
+/// attribute and a background that must survive.
+fn blue_underlined() -> Style {
+    Style {
+        fg: Color::Palette(1),
+        bg: Color::Palette(4),
+        attrs: Attrs::UNDERLINE,
+        ..Style::DEFAULT
+    }
+}
+
+#[test]
+fn erased_cells_keep_only_the_background() {
+    let mut f = fixture(3, 8);
+    f.set_style(blue_underlined());
+    let background = f.interner.style(&Style {
+        bg: Color::Palette(4),
+        ..Style::DEFAULT
+    });
+    let expected = Cell::EMPTY.with_style(background);
+
+    // Every in-row erase and every row reset fills with the background alone —
+    // the reference's `bg.into()`. Each op is checked on a freshly printed row,
+    // over the whole width, so nothing survives by accident.
+    for op in ["ECH", "DCH", "ICH", "EL 2"] {
+        f.goto(0, 0);
+        f.print("abcdefgh");
+        f.goto(0, 0);
+        match op {
+            "ECH" => f.grid.screen_mut().erase_chars(8),
+            "DCH" => f.grid.screen_mut().delete_chars(8),
+            "ICH" => f.grid.screen_mut().insert_blanks(8),
+            _ => f.grid.screen_mut().erase_line(LineClear::All),
+        }
+        let row = f.screen().row_of_index(0);
+        for (col, cell) in f.screen().row(row).cells().iter().enumerate() {
+            assert_eq!(
+                *cell, expected,
+                "{op} left column {col} carrying more than the background"
+            );
+        }
+    }
+
+    // `ED 0` erases the cursor row's tail and resets every row below it.
+    f.goto(2, 0);
+    f.print("below");
+    f.goto(1, 0);
+    f.grid.erase_display(DisplayClear::Below, &f.interner);
+    for index in 1..3 {
+        let row = f.screen().row_of_index(index);
+        assert!(
+            f.screen()
+                .row(row)
+                .cells()
+                .iter()
+                .all(|cell| *cell == expected),
+            "row {index} is filled the same way"
+        );
+    }
+
+    assert_ne!(
+        f.screen().cursor().template(),
+        f.screen().cursor().erase(),
+        "the printed template still carries fg, attrs and extras"
     );
     f.integrity();
 }
@@ -595,6 +666,52 @@ fn leaving_alt_screen_restores_the_entry_cursor() {
     assert_eq!(
         (f.screen().cursor_row_index(), f.screen().cursor().pos.col),
         (2, 3)
+    );
+    f.integrity();
+}
+
+#[test]
+fn entering_alt_screen_keeps_the_region_and_the_tab_stops() {
+    let mut f = fixture(6, 24);
+    f.grid.screen_mut().set_region(1, 4, CursorOrigin::Screen);
+    f.grid.screen_mut().tabs_mut().clear(8);
+
+    f.grid.swap_alt();
+
+    assert_eq!(
+        f.screen().region(),
+        ScrollRegion { top: 1, bottom: 4 },
+        "the reference keeps one scroll region for both screens, so entering is not a RIS"
+    );
+    assert!(
+        !f.screen().tabs().is_stop(8),
+        "nor does it restore tab stops"
+    );
+
+    // And the pair is shared in the other direction too.
+    f.grid.screen_mut().set_region(2, 5, CursorOrigin::Screen);
+    f.grid.swap_alt();
+    assert_eq!(f.screen().region(), ScrollRegion { top: 2, bottom: 5 });
+    f.integrity();
+}
+
+#[test]
+fn entering_alt_screen_clears_with_the_background_template() {
+    let mut f = fixture(4, 10);
+    f.print("primary");
+    f.set_style(blue_underlined());
+    let erase = f.screen().cursor().erase();
+
+    f.grid.swap_alt();
+
+    let top = f.screen().row_of_index(0);
+    assert!(
+        f.screen()
+            .row(top)
+            .cells()
+            .iter()
+            .all(|cell| *cell == erase),
+        "the entry wipe is a background erase with the entering template"
     );
     f.integrity();
 }
@@ -878,6 +995,58 @@ fn wide_char_at_last_column_wrap_on_and_off() {
 }
 
 #[test]
+fn wide_char_wrapping_over_an_existing_pair_keeps_the_grid_intact() {
+    // The last column already holds the `WideSpacer` of a pair, and the leading
+    // spacer is about to be written over it. Writing that spacer without the
+    // repair leaves the `Wide` at `cols - 2` orphaned — reachable in three
+    // operations and caught by `assert_integrity`.
+    let mut f = fixture(3, 8);
+    f.goto(0, 6);
+    f.print("\u{ff21}");
+    let top = f.screen().row_of_index(0);
+    assert_eq!(f.screen().row(top).cell(6).width(), CellWidth::Wide);
+    assert_eq!(f.screen().row(top).cell(7).width(), CellWidth::WideSpacer);
+
+    f.goto(0, 7);
+    f.print("\u{ff22}");
+
+    assert_eq!(
+        f.screen().row(top).cell(6).width(),
+        CellWidth::Narrow,
+        "the orphaned half is released, not left behind"
+    );
+    assert_eq!(
+        f.screen().row(top).cell(7).width(),
+        CellWidth::LeadingWideSpacer
+    );
+    let next = f.screen().row_of_index(1);
+    assert_eq!(f.screen().row(next).cell(0).width(), CellWidth::Wide);
+    f.integrity();
+}
+
+#[test]
+fn tab_does_not_orphan_a_wide_pair() {
+    // Both spacer halves of a wide pair read as a space, so a tab that replaced
+    // one with a narrow cell would leave its glyph orphaned. Found by the
+    // property test once it could choose the column it printed at.
+    let mut f = fixture(2, 8);
+    f.goto(0, 6);
+    f.print("\u{ff21}");
+    f.goto(0, 7);
+
+    f.grid.put_tab(1);
+
+    let id = f.screen().row_of_index(0);
+    assert_eq!(f.screen().row(id).cell(6).width(), CellWidth::Wide);
+    assert_eq!(
+        f.screen().row(id).cell(7).width(),
+        CellWidth::WideSpacer,
+        "the tab changed the content, not the width"
+    );
+    f.integrity();
+}
+
+#[test]
 fn wide_pair_repair_across_rows() {
     let mut f = fixture(3, 4);
     f.goto(0, 3);
@@ -1016,18 +1185,25 @@ fn empty_scrollback_costs_only_its_ring_slots() {
         "{per_row} B/row is not the lazily allocated figure"
     );
 
-    // For the ratio the packet records: the same rows once they carry text.
-    let mut written = fixture_with(45, 160, 1_000);
-    for _ in 0..1_000 {
+    // For the ratio the packet records: the same scrollback once every row
+    // carries text, so the two figures share a ring and are comparable.
+    let mut written = fixture_with(45, 160, SCROLLBACK);
+    for _ in 0..SCROLLBACK + 45 {
         written.goto(44, 0);
         written.print("x");
         written.newline();
     }
     let written_bytes = written.screen().heap_bytes();
+    let written_per_row = written_bytes as f64 / f64::from(SCROLLBACK);
+    let ring_share = ring as f64 * slot as f64 / f64::from(SCROLLBACK);
+    let cells = written.screen().cols() as usize * size_of::<Cell>();
     println!(
-        "written rows: {} allocated, {written_bytes} B total, {:.1} B/row",
-        written.screen().allocated_rows(),
-        written_bytes as f64 / 1_000.0
+        "written rows: {} allocated, {written_bytes} B total, {written_per_row:.1} B/row \
+         ({ring_share:.1} B of ring share + {cells} B of cells)",
+        written.screen().allocated_rows()
     );
+    // Every row but the fresh blanks below the cursor carries cells now.
+    assert!(written.screen().allocated_rows() >= SCROLLBACK as usize);
     f.integrity();
+    written.integrity();
 }

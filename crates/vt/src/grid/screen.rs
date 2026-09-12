@@ -16,6 +16,7 @@
 
 use std::ops::Range;
 
+use crate::cell::Style;
 use crate::cell::{Cell, CellContent, CellWidth};
 use crate::grid::anchor::{AnchorId, AnchorKind, Anchors};
 use crate::grid::row::{Row, RowFlags, RowMut, RowRef, SeqNo};
@@ -59,16 +60,26 @@ pub enum CursorOrigin {
 
 /// Where the next glyph lands and what it will look like.
 ///
-/// `template` is the reference's `cursor.template`: a blank cell carrying the
-/// current SGR style, the open hyperlink or image, and the OSC 133 semantic. It
-/// is also the fill for every erase, which is what makes background colour erase
-/// work without the erase paths reaching into the interner.
+/// Two cells, because the reference erases with less than it prints:
+///
+/// * `template` is the reference's `cursor.template` — a blank carrying the SGR
+///   style, the open hyperlink or image and the OSC 133 semantic. It is what a
+///   printed glyph inherits.
+/// * `erase` is the reference's `bg.into()` / `Cell::reset` — the **default**
+///   cell with only the template's background. It is what every erase and every
+///   row reset fills with, so an erase under an open underline or hyperlink
+///   leaves plain blanks rather than decorated ones.
+///
+/// Keeping both on the cursor is what lets the erase paths stay off the
+/// interner: the pair is recomputed once, in [`Screen::set_template`], whenever
+/// the SGR template changes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Cursor {
     pub pos: Pos,
     pub pending_wrap: bool,
-    pub template: Cell,
     pub charsets: [Charset; 4],
+    template: Cell,
+    erase: Cell,
 }
 
 impl Cursor {
@@ -76,9 +87,20 @@ impl Cursor {
         Cursor {
             pos: Pos { row, col: 0 },
             pending_wrap: false,
-            template: Cell::EMPTY,
             charsets: [Charset::Ascii; 4],
+            template: Cell::EMPTY,
+            erase: Cell::EMPTY,
         }
+    }
+
+    /// What a printed glyph inherits.
+    pub fn template(&self) -> Cell {
+        self.template
+    }
+
+    /// What an erase fills with: the default cell plus the template background.
+    pub fn erase(&self) -> Cell {
+        self.erase
     }
 }
 
@@ -118,10 +140,17 @@ pub enum DisplayClear {
     Saved,
 }
 
-/// Content moved inside `top..=bottom` by `delta` rows.
+/// Content moved from `top..=bottom` **onto other row ids** by `delta` rows.
 ///
-/// A notification for a consumer holding its own per-row cache; it is **not**
-/// how anchors move. `US-0079` wraps it in `VtEvent::RowsScrolled`.
+/// `damage-and-render-state.md` defines this as in-region motion, "because that
+/// moves content without moving the viewport": a consumer holding a `RowId`-keyed
+/// row cache shifts the named rows by `delta` instead of rebuilding them. A whole
+/// screen scroll therefore reports **nothing** — every row keeps its id and its
+/// content, and the viewport's own motion reaches the renderer as
+/// `RenderUpdate::Partial { scrolled }` instead.
+///
+/// It is a notification, not how anchors move; but it always agrees with what the
+/// anchors did (R-02). `US-0079` wraps it in `VtEvent::RowsScrolled`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct RowsScrolled {
     pub top: RowId,
@@ -132,7 +161,9 @@ pub struct RowsScrolled {
 /// What one scroll primitive did.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ScrollReport {
-    pub scrolled: RowsScrolled,
+    /// `None` when no row's content changed id: a no-op, or a whole-screen
+    /// scroll where the rows simply left the viewport into history.
+    pub scrolled: Option<RowsScrolled>,
     /// The new oldest row when history was trimmed. `US-0079` wraps it in
     /// `VtEvent::RowsTrimmed`.
     pub trimmed: Option<RowId>,
@@ -379,6 +410,10 @@ impl Screen {
     }
 
     /// A slot that was never written reads as blanks and allocates nothing.
+    ///
+    /// So does a row that has been trimmed out of history, and the two are
+    /// indistinguishable here by design: [`Screen::row_range`] is what tells a
+    /// consumer which ids are still live.
     pub fn row(&self, id: RowId) -> RowRef<'_> {
         let slot = self.slot_of(id);
         match &self.slots[slot] {
@@ -390,7 +425,7 @@ impl Screen {
     /// Allocate the slot if needed and stamp the current batch on it.
     pub fn row_mut(&mut self, id: RowId) -> RowMut<'_> {
         let slot = self.slot_of(id);
-        let (cols, seq, template) = (self.cols, self.seq, self.cursor.template);
+        let (cols, seq, template) = (self.cols, self.seq, self.cursor.erase);
         let entry = &mut self.slots[slot];
         if entry.as_ref().map(Row::id) != Some(id) {
             *entry = None;
@@ -421,7 +456,7 @@ impl Screen {
     /// the render state has to see that it changed.
     fn reset_row(&mut self, id: RowId) {
         let slot = self.slot_of(id);
-        let (cols, seq, template) = (self.cols, self.seq, self.cursor.template);
+        let (cols, seq, template) = (self.cols, self.seq, self.cursor.erase);
         match &mut self.slots[slot] {
             Some(row) if row.id() == id => row.reset(template, seq),
             entry => {
@@ -464,7 +499,7 @@ impl Screen {
 
     fn blank_slot(&mut self, id: RowId) {
         let slot = self.slot_of(id);
-        let (cols, seq, template) = (self.cols, self.seq, self.cursor.template);
+        let (cols, seq, template) = (self.cols, self.seq, self.cursor.erase);
         self.slots[slot] = if template == Cell::EMPTY {
             None
         } else {
@@ -494,6 +529,22 @@ impl Screen {
 
     pub fn cursor_mut(&mut self) -> &mut Cursor {
         &mut self.cursor
+    }
+
+    /// Set the SGR template, deriving the erase cell once.
+    ///
+    /// This is the only writer of either cell, so an erase can never pick up the
+    /// foreground, the attributes, the hyperlink or the semantic that a printed
+    /// glyph would inherit — the reference's `bg.into()` rule — while the erase
+    /// paths themselves never touch the interner.
+    pub fn set_template(&mut self, template: Cell, interner: &mut Interner) {
+        let bg = interner.resolve_style(template.style_id()).bg;
+        let erase = interner.style(&Style {
+            bg,
+            ..Style::DEFAULT
+        });
+        self.cursor.template = template;
+        self.cursor.erase = Cell::EMPTY.with_style(erase);
     }
 
     pub fn saved_cursor(&self) -> &Cursor {
@@ -593,14 +644,9 @@ impl Screen {
         true
     }
 
-    fn no_scroll(&self, region: ScrollRegion) -> ScrollReport {
-        let ids = self.rows_of(region);
+    const fn no_scroll() -> ScrollReport {
         ScrollReport {
-            scrolled: RowsScrolled {
-                top: ids.start,
-                bottom: ids.end - 1,
-                delta: 0,
-            },
+            scrolled: None,
             trimmed: None,
             history_rows: 0,
         }
@@ -620,7 +666,7 @@ impl Screen {
         let region = self.clamp_region(region);
         let n = n.min(region.height());
         if n == 0 {
-            return self.no_scroll(region);
+            return Screen::no_scroll();
         }
         let report = if region.top == 0 {
             self.scroll_up_into_history(region, n, anchors)
@@ -669,27 +715,31 @@ impl Screen {
             self.offset = (self.offset + u32::from(n)).min(self.history_len());
         }
 
+        // Only the rows below the region change id: everything inside the region
+        // kept its content where it was and merely left the viewport, which is
+        // why the whole-screen case reports no motion at all.
+        let mut scrolled = None;
         if bounded {
-            anchors.shift_region(tail_ids, i32::from(n), RowId(0)..RowId(0));
+            anchors.shift_region(tail_ids.clone(), i32::from(n), RowId(0)..RowId(0));
             for (step, row) in tail.into_iter().enumerate() {
                 let id = self.screen_top() + (region.bottom as u64 + step as u64);
                 self.place_row(id, row);
             }
             self.reset_rows(region.bottom - n..region.bottom);
+            scrolled = Some(RowsScrolled {
+                top: tail_ids.start + u64::from(n),
+                bottom: self.newest,
+                delta: i32::from(n),
+            });
         }
 
         if trimmed.is_some() {
-            anchors.trim(self.oldest);
+            anchors.trim(self.kind.origin(), self.oldest);
             self.offset = self.offset.min(self.history_len());
         }
 
-        let ids = self.rows_of(region);
         ScrollReport {
-            scrolled: RowsScrolled {
-                top: ids.start,
-                bottom: ids.end - 1,
-                delta: -i32::from(n),
-            },
+            scrolled,
             trimmed,
             history_rows: n,
         }
@@ -713,11 +763,11 @@ impl Screen {
         let kill = ids.start..ids.start + u64::from(n);
         anchors.shift_region(ids.clone(), -i32::from(n), kill);
         ScrollReport {
-            scrolled: RowsScrolled {
+            scrolled: Some(RowsScrolled {
                 top: ids.start,
                 bottom: ids.end - 1,
                 delta: -i32::from(n),
-            },
+            }),
             trimmed: None,
             history_rows: 0,
         }
@@ -734,7 +784,7 @@ impl Screen {
         let region = self.clamp_region(region);
         let n = n.min(region.height());
         if n == 0 {
-            return self.no_scroll(region);
+            return Screen::no_scroll();
         }
         for index in (region.top + n..region.bottom).rev() {
             let src = self.screen_top() + (index as u64 - n as u64);
@@ -750,11 +800,11 @@ impl Screen {
         self.sync_anchors(anchors);
         self.debug_assert_integrity();
         ScrollReport {
-            scrolled: RowsScrolled {
+            scrolled: Some(RowsScrolled {
                 top: ids.start,
                 bottom: ids.end - 1,
                 delta: i32::from(n),
-            },
+            }),
             trimmed: None,
             history_rows: 0,
         }
@@ -819,6 +869,11 @@ impl Screen {
     }
 
     /// The implicit wrap at the end of a row.
+    ///
+    /// Unconditional: the reference returns immediately with `DECAWM` reset, so
+    /// the caller must not reach here in that state. The print path here never
+    /// does, because deviation G3 means the pending-wrap flag is never armed
+    /// with `DECAWM` reset.
     pub fn wrapline(&mut self, anchors: &mut Anchors) {
         let id = self.cursor.pos.row;
         self.row_mut(id).set_wrapped(true);
@@ -856,9 +911,14 @@ impl Screen {
             // never overwrites text (R-12).
             let id = self.cursor.pos.row;
             let col = self.cursor.pos.col;
-            if matches!(self.row(id).cell(col).content(), CellContent::Scalar(' ')) {
-                let cell = self.cursor.template.with_content(CellContent::Scalar('\t'));
-                self.row_mut(id).set(col, cell);
+            let existing = self.row(id).cell(col);
+            if matches!(existing.content(), CellContent::Scalar(' ')) {
+                // Only the content changes, exactly as the reference's `put_tab`
+                // assigns `cell.c`. Keeping the width matters: the spacer halves
+                // of a wide pair also read as a space, and replacing one with a
+                // narrow tab cell would orphan its glyph.
+                self.row_mut(id)
+                    .set(col, existing.with_content(CellContent::Scalar('\t')));
             }
             while self.cursor.pos.col < last_col {
                 self.cursor.pos.col += 1;
@@ -896,8 +956,11 @@ impl Screen {
         if self.cursor.pending_wrap {
             self.wrapline(anchors);
         }
-        if mode.insert {
-            let (id, col) = (self.cursor.pos.row, self.cursor.pos.col);
+        let (id, col) = (self.cursor.pos.row, self.cursor.pos.col);
+        // The reference's own gate: at the columns where the shift would move
+        // nothing it does not run at all, so the row is not opened, stamped or
+        // swept (M9).
+        if mode.insert && col + u16::from(width) < self.cols {
             // Correction C4: the pair the shift splits is repaired, where the
             // reference leaves an orphaned spacer.
             self.row_mut(id).shift_right_from(col, u16::from(width));
@@ -914,13 +977,11 @@ impl Screen {
                     self.dropped_wide += 1;
                     return;
                 }
-                let spacer = self
-                    .cursor
-                    .template
-                    .with_content(CellContent::Scalar(' '))
-                    .with_width(CellWidth::LeadingWideSpacer);
-                let (id, col) = (self.cursor.pos.row, self.cursor.pos.col);
-                self.row_mut(id).set(col, spacer);
+                // Through the repairing write, exactly as the reference routes
+                // it: the last column may already hold the `WideSpacer` of a
+                // pair, and overwriting it with `set` would leave the `Wide` at
+                // `cols - 2` orphaned — the state `assert_integrity` forbids.
+                self.write_at_cursor(CellContent::Scalar(' '), CellWidth::LeadingWideSpacer);
                 self.wrapline(anchors);
             }
             self.write_at_cursor(CellContent::Scalar(c), CellWidth::Wide);
@@ -1011,7 +1072,7 @@ impl Screen {
             LineClear::Left => 0..col.saturating_add(1).min(cols),
             LineClear::All => 0..cols,
         };
-        let (id, template) = (self.cursor.pos.row, self.cursor.template);
+        let (id, template) = (self.cursor.pos.row, self.cursor.erase);
         self.row_mut(id).fill(range, template);
         self.debug_assert_integrity();
     }
@@ -1020,29 +1081,21 @@ impl Screen {
     pub fn erase_chars(&mut self, n: u16) {
         let (col, cols) = (self.cursor.pos.col, self.cols);
         let end = col.saturating_add(n).min(cols);
-        let (id, template) = (self.cursor.pos.row, self.cursor.template);
+        let (id, template) = (self.cursor.pos.row, self.cursor.erase);
         self.row_mut(id).fill(col..end, template);
         self.debug_assert_integrity();
     }
 
     /// `DCH`, correction C1: a plain shift left by `n`.
     pub fn delete_chars(&mut self, n: u16) {
-        let (id, col, template) = (
-            self.cursor.pos.row,
-            self.cursor.pos.col,
-            self.cursor.template,
-        );
+        let (id, col, template) = (self.cursor.pos.row, self.cursor.pos.col, self.cursor.erase);
         self.row_mut(id).delete_cells(col, n, template);
         self.debug_assert_integrity();
     }
 
     /// `ICH`.
     pub fn insert_blanks(&mut self, n: u16) {
-        let (id, col, template) = (
-            self.cursor.pos.row,
-            self.cursor.pos.col,
-            self.cursor.template,
-        );
+        let (id, col, template) = (self.cursor.pos.row, self.cursor.pos.col, self.cursor.erase);
         self.row_mut(id).insert_cells(col, n, template);
         self.debug_assert_integrity();
     }
@@ -1059,7 +1112,7 @@ impl Screen {
             self.cursor.pos.row,
             self.cursor.pos.col,
             self.cols,
-            self.cursor.template,
+            self.cursor.erase,
         );
         match mode {
             DisplayClear::Below => {
@@ -1136,7 +1189,7 @@ impl Screen {
             id = id + 1;
         }
         self.oldest = top;
-        anchors.trim(self.oldest);
+        anchors.trim(self.kind.origin(), self.oldest);
         self.clamp_cursors();
         self.sync_anchors(anchors);
         self.debug_assert_integrity();
@@ -1154,6 +1207,32 @@ impl Screen {
         self.reset_rows(0..self.rows);
         self.sync_anchors(anchors);
         self.debug_assert_integrity();
+    }
+
+    /// Wipe every row with the current erase cell, keeping the scroll region,
+    /// the tab stops and the cursor.
+    ///
+    /// This is the alternate screen's entry wipe — the reference's
+    /// `inactive_grid.reset_region(..)`, which is a background-erase clear and
+    /// emphatically not a `RIS`.
+    pub fn clear_all_rows(&mut self, anchors: &mut Anchors) {
+        let rows = self.rows_of(ScrollRegion::full(self.rows));
+        anchors.shift_region(rows.clone(), 0, rows);
+        self.offset = 0;
+        self.reset_rows(0..self.rows);
+        self.sync_anchors(anchors);
+        self.debug_assert_integrity();
+    }
+
+    /// Adopt another screen's scroll region and tab stops.
+    ///
+    /// The reference keeps one `scroll_region` and one `tabs` table on `Term`,
+    /// shared by both screens. Here each screen owns its own, so the swap copies
+    /// them across in both directions, which is observationally the same thing.
+    pub(crate) fn adopt_region_and_tabs(&mut self, other: &Screen) {
+        self.region = self.clamp_region(other.region);
+        self.tabs = other.tabs.clone();
+        self.tabs.resize(self.cols);
     }
 
     // ── Resize ──────────────────────────────────────────────────────────────
@@ -1243,7 +1322,7 @@ impl Screen {
         }
         self.scrollback_limit = limit;
         self.offset = self.offset.min(self.history_len());
-        anchors.trim(self.oldest);
+        anchors.trim(self.kind.origin(), self.oldest);
         self.sync_anchors(anchors);
         self.debug_assert_integrity();
     }

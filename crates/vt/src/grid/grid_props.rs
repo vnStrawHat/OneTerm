@@ -22,6 +22,9 @@ const GLYPHS: [char; 5] = ['a', ' ', '\u{ff21}', '\u{0301}', 'Z'];
 
 #[derive(Debug, Clone, Copy)]
 enum Op {
+    /// Glyph, insert mode, autowrap, and the column to print it at — the column
+    /// matters because the wide-pair invariants only break at specific ones.
+    PrintAt(usize, bool, bool, u16),
     Print(usize, bool, bool),
     Linefeed,
     ReverseIndex,
@@ -49,6 +52,8 @@ fn op() -> impl Strategy<Value = Op> {
     prop_oneof![
         (0..GLYPHS.len(), any::<bool>(), any::<bool>())
             .prop_map(|(glyph, insert, autowrap)| Op::Print(glyph, insert, autowrap)),
+        (0..GLYPHS.len(), any::<bool>(), any::<bool>(), 0..COLS)
+            .prop_map(|(glyph, insert, autowrap, col)| Op::PrintAt(glyph, insert, autowrap, col)),
         Just(Op::Linefeed),
         Just(Op::ReverseIndex),
         Just(Op::Wrapline),
@@ -97,13 +102,26 @@ proptest! {
     fn scroll_and_erase_preserve_integrity(ops in prop::collection::vec(op(), 1..40)) {
         let mut grid = TerminalGrid::new(Size { rows: ROWS, cols: COLS }, SCROLLBACK);
         let mut interner = Interner::default();
-        let mut marks: Vec<AnchorId> = Vec::new();
+        // Each mark remembers the lane it was registered on, so the walk below
+        // can assert that work on one screen never kills the other's anchors.
+        let mut marks: Vec<(AnchorId, bool)> = Vec::new();
         let mut tag = 0u32;
 
         for step in ops {
             grid.begin_batch();
+            let active_alt = grid.alt_active();
+            let inactive_alive: Vec<AnchorId> = marks
+                .iter()
+                .filter(|(id, alt)| *alt != active_alt && grid.anchors().get(*id).is_some())
+                .map(|(id, _)| *id)
+                .collect();
             match step {
                 Op::Print(glyph, insert, autowrap) => {
+                    grid.print(GLYPHS[glyph], PrintMode { insert, autowrap }, &mut interner);
+                }
+                Op::PrintAt(glyph, insert, autowrap, col) => {
+                    let row = grid.screen().cursor_row_index();
+                    grid.screen_mut().goto(row, col);
                     grid.print(GLYPHS[glyph], PrintMode { insert, autowrap }, &mut interner);
                 }
                 Op::Linefeed => { grid.linefeed(); }
@@ -133,10 +151,10 @@ proptest! {
                     let pos = Pos { row: grid.screen().row_of_index(index), col: 0 };
                     tag += 1;
                     let id = grid.anchors_mut().register(AnchorKind::Mark(tag), pos);
-                    marks.push(id);
+                    marks.push((id, grid.alt_active()));
                 }
                 Op::ReleaseMark => {
-                    if let Some(id) = marks.pop() {
+                    if let Some((id, _)) = marks.pop() {
                         grid.anchors_mut().release(id);
                     }
                 }
@@ -144,6 +162,17 @@ proptest! {
             }
             grid.sync_anchors();
             grid.assert_integrity(Some(&interner));
+
+            // B2's class: only `swap_alt`, `reset` and an explicit release touch
+            // anchors on the inactive screen. Nothing else may.
+            if !matches!(step, Op::SwapAlt | Op::Reset | Op::ReleaseMark) {
+                for id in inactive_alive {
+                    prop_assert!(
+                        grid.anchors().get(id).is_some(),
+                        "an operation on one screen killed an anchor on the other"
+                    );
+                }
+            }
         }
 
         // The invariants the walk cannot express as a debug assertion.

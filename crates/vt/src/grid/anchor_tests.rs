@@ -5,7 +5,7 @@
 //! "the list can be mutated".
 
 use super::*;
-use crate::grid::{Pos, Screen, ScreenKind, ScrollRegion, Size};
+use crate::grid::{Pos, Screen, ScreenKind, ScrollRegion, Size, TerminalGrid};
 
 struct Fixture {
     screen: Screen,
@@ -132,23 +132,92 @@ fn rows_scrolled_event_matches_the_anchor_shift() {
         .scroll_up(ScrollRegion { top: 1, bottom: 5 }, 2, &mut f.anchors);
 
     let after = f.anchors.get(mark).expect("still live").row;
-    assert_eq!(report.scrolled.delta, -2);
+    let scrolled = report.scrolled.expect("content moved between ids");
+    assert_eq!(scrolled.delta, -2);
     assert_eq!(
         after,
         before - 2,
         "the reported delta is the shift the anchors took"
     );
-    assert_eq!(report.scrolled.top, f.screen.row_of_index(1));
-    assert_eq!(report.scrolled.bottom, f.screen.row_of_index(4));
+    assert_eq!(scrolled.top, f.screen.row_of_index(1));
+    assert_eq!(scrolled.bottom, f.screen.row_of_index(4));
     assert_eq!(
         report.history_rows, 0,
         "a region above row 0 fills no history"
     );
-
-    let report = f.screen.scroll_up(ScrollRegion::full(6), 3, &mut f.anchors);
-    assert_eq!(report.history_rows, 3);
-    assert_eq!(report.scrolled.delta, -3);
     f.screen.assert_integrity();
+}
+
+#[test]
+fn rows_scrolled_is_silent_for_a_whole_screen_scroll() {
+    let mut f = fixture(6, 10);
+    let mark = f.mark(3, 1);
+    let before = f.anchors.get(mark).expect("just registered").row;
+
+    let report = f.screen.scroll_up(ScrollRegion::full(6), 2, &mut f.anchors);
+
+    assert_eq!(
+        f.anchors.get(mark).map(|pos| pos.row),
+        Some(before),
+        "the rows kept their ids and their content; only the screen moved"
+    );
+    assert_eq!(
+        report.scrolled, None,
+        "so there is no in-region motion to report"
+    );
+    assert_eq!(report.history_rows, 2);
+    f.screen.assert_integrity();
+}
+
+#[test]
+fn rows_scrolled_reports_the_tail_shift_of_a_bounded_region() {
+    let mut f = fixture(6, 10);
+    let tail = f.mark(5, 1);
+    let before = f.anchors.get(tail).expect("just registered").row;
+
+    // Region 0..4: the rows below it keep their place on the screen, which means
+    // their content moves forward onto the new bottom ids.
+    let report = f
+        .screen
+        .scroll_up(ScrollRegion { top: 0, bottom: 4 }, 2, &mut f.anchors);
+
+    let after = f.anchors.get(tail).expect("still live").row;
+    let scrolled = report.scrolled.expect("the tail moved between ids");
+    assert_eq!(after, before + 2);
+    assert_eq!(scrolled.delta, 2, "and the report names that shift");
+    assert_eq!(scrolled.top, f.screen.row_of_index(4));
+    assert_eq!(scrolled.bottom, f.screen.newest());
+    assert_eq!(f.screen.index_of(after), Some(5), "still the bottom row");
+    f.screen.assert_integrity();
+}
+
+#[test]
+fn an_alt_screen_scroll_leaves_primary_anchors_alone() {
+    // The alternate screen has no scrollback, so it trims on every scroll with
+    // an `oldest` far above every primary row id. A lane-blind trim would kill
+    // every mark, selection end and graphics placement on the primary screen.
+    let mut grid = TerminalGrid::new(Size { rows: 4, cols: 10 }, 100);
+    for _ in 0..8 {
+        grid.linefeed();
+    }
+    let row = grid.primary().row_of_index(1);
+    let mark = grid
+        .anchors_mut()
+        .register(AnchorKind::Mark(1), Pos { row, col: 0 });
+    let selection = grid
+        .anchors_mut()
+        .register(AnchorKind::SelectionStart, Pos { row, col: 3 });
+
+    grid.swap_alt();
+    grid.linefeed();
+
+    assert_eq!(grid.anchors().get(mark).map(|pos| pos.row), Some(row));
+    assert_eq!(grid.anchors().get(selection).map(|pos| pos.row), Some(row));
+
+    grid.swap_alt();
+    assert_eq!(grid.anchors().get(mark).map(|pos| pos.row), Some(row));
+    assert_eq!(grid.anchors().get(selection).map(|pos| pos.row), Some(row));
+    grid.assert_integrity(None);
 }
 
 #[test]

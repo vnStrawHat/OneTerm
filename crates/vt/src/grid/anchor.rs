@@ -163,13 +163,40 @@ impl Anchors {
         }
     }
 
-    /// History was trimmed: anything below `oldest` is gone.
-    pub(crate) fn trim(&mut self, oldest: RowId) {
+    /// History was trimmed: anything in `origin..oldest` is gone.
+    ///
+    /// **Lane-scoped on purpose.** The two screens draw from disjoint runs of
+    /// the id space, and the alternate screen has no scrollback at all, so it
+    /// trims on every scroll with an `oldest` that is above *every* primary row
+    /// id. A bound of "below `oldest`" alone would therefore kill every mark,
+    /// selection end and graphics placement on the primary screen the first time
+    /// a program inside the alternate screen printed a line.
+    pub(crate) fn trim(&mut self, origin: RowId, oldest: RowId) {
         for anchor in &mut self.entries {
-            if anchor.alive && anchor.pos.row < oldest {
+            if anchor.alive && anchor.pos.row >= origin && anchor.pos.row < oldest {
                 anchor.alive = false;
             }
         }
+    }
+
+    /// Live entries inside one screen's run, for the integrity walk.
+    pub fn live_in(&self, lane: Range<RowId>) -> usize {
+        self.entries
+            .iter()
+            .filter(|anchor| anchor.alive && lane.contains(&anchor.pos.row))
+            .count()
+    }
+
+    /// Live screen-owned entries inside one screen's run. Always exactly three —
+    /// the cursor, the saved cursor and the viewport top — because a screen
+    /// registers them once and never releases them.
+    pub(crate) fn live_screen_owned_in(&self, lane: Range<RowId>) -> usize {
+        self.entries
+            .iter()
+            .filter(|anchor| {
+                anchor.alive && anchor.kind.is_screen_owned() && lane.contains(&anchor.pos.row)
+            })
+            .count()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (AnchorId, &Anchor)> {

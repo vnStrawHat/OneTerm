@@ -210,14 +210,12 @@ the LLD.
   `python scripts/check-english.py` (681 files) and
   `python scripts/third-party-notices.py --check`.
 - `cargo test --workspace` — raw totals summed over the 54 `test result:` sections:
-  **1259 passed / 0 failed / 5 ignored**. The `US-0074` baseline recorded 52 sections / 1189
-  passed against its own commit; against this branch's base the delta is exactly the **48 new
-  `grid::` tests** (`cargo test -p oneterm-vt -- --list` counts 81 total, 48 of them under
-  `grid::`, against 33 before).
-- `cargo test -p oneterm-vt` — **81 passed / 0 failed**, `finished in 0.26 s` (0.84 s of wall
-  clock including cargo). The R-28 debug-suite budget is 60 s, so there is headroom for
-  `US-0077`'s reflow property tests.
-- Test breakdown: 41 `grid::tests::`, 6 `grid::anchor::tests::` (the path contains
+  **1267 passed / 0 failed / 5 ignored**. Against this branch's base the delta is exactly the
+  **56 new `grid::` tests** (`cargo test -p oneterm-vt -- --list` counts 89 total, against 33
+  before).
+- `cargo test -p oneterm-vt` — **89 passed / 0 failed**, `finished in 0.46 s`. The R-28
+  debug-suite budget is 60 s, so there is headroom for `US-0077`'s reflow property tests.
+- Test breakdown: 46 `grid::tests::`, 9 `grid::anchor::tests::` (the path contains
   `anchor::tests::`, so `cargo test -p oneterm-vt anchor::` still selects them), 1
   `grid::props::scroll_and_erase_preserve_integrity` over 256 proptest cases with the full
   two-screen integrity walk after **every** operation.
@@ -231,12 +229,18 @@ filled entirely by line feeds and never written:
 | | This engine | Old engine (`US-0072`) |
 | --- | --- | --- |
 | 100 000 empty scrollback rows | **6 291 616 B total, 62.9 B/row** (131 072 ring slots x 48 B) | 4138 B/row |
-| One written 160-column row | 1378.5 B/row (48 B slot + 160 x 8 B of cells) | 4138 B/row |
+| 100 000 written 160-column rows | **134 347 936 B total, 1343.5 B/row** (62.9 B of ring share + 1280 B of cells) | 4138 B/row |
 
-**65.8x less for empty scrollback, 3.0x less for written rows.** `size_of::<Option<Row>>() == 48`
+**65.8x less for empty scrollback, 3.1x less for written rows.** `size_of::<Option<Row>>() == 48`
 and equals `size_of::<Row>()`, so the `Option` is niche-packed into the row's `Vec` exactly as the
 HLD's memory table assumes, and `Screen::allocated_rows()` is **0** after all 100 000 rows: not one
 row of cells is materialised.
+
+**The lazy-row win is conditional on the background.** A row is left unallocated only when the erase
+cell is `Cell::EMPTY`; a program holding a non-default background (`CSI 4x m` then a clear, which is
+what `vim_24bitcolors_bce` does all day) makes every reset materialise its row, and the empty
+figure above becomes the written one. That is correct background-erase behaviour, not a defect, but
+it is the boundary of the claim and belongs in the HLD's memory table.
 
 The figure is read off the structure's own capacities (`Screen::heap_bytes()`), not off a counting
 allocator: a `GlobalAlloc` implementation requires `unsafe`, which this packet forbids. The
@@ -272,19 +276,51 @@ will report it for the new engine once `Terminal` exists.
    two agree.
 5. **Wide-pair repair is compulsory on erase and shift.** The reference leaves orphaned spacers
    behind `EL` / `ECH` / `DCH` / `ICH`; the design's own integrity assertion ("no `Wide` without its
-   `WideSpacer`") forbids that state, so `repair_wide_pairs` runs after every in-row mutation. This
-   may produce cells that differ from the frozen expectations — **`US-0076` should expect a
-   declared difference here**, and it is not covered by any of C1-C4.
+   `WideSpacer`") forbids that state, so `repair_wide_pairs` runs after every in-row mutation. The
+   verifier measured the corpus exposure: **none of the 45 recordings contains a width-2 glyph**, so
+   this produces no parity difference today, and the upper bound if the scan missed one is the 22
+   recordings carrying both non-ASCII bytes and an in-row erase. Still worth a `C` row, because the
+   state it forbids is reachable in principle.
 6. **The wide repair is gated on the cell being overwritten.** Both the same-row and the cross-row
    repair only run when the cell under the cursor is itself half of a pair, exactly as the reference
    gates them. Without the gate, the `LeadingWideSpacer` a wrapping wide glyph has just placed is
    released by its own glyph on the next row.
-7. **`Cursor::template` is a `Cell`, not a `Style`.** It carries the SGR style id, the open
-   hyperlink or image and the OSC 133 semantic in one word — the reference's `cursor.template` — so
-   every erase path fills with it without reaching into the interner. Consequence: `Row::reset`'s
-   background-erase discriminant is the interned **style id** rather than the background colour.
-   That is an over-approximation in the safe direction (it can only clear more of the row than
-   strictly necessary, never less), and style ids never move (R-52).
+7. **The cursor carries two cells, not one.** `template` is the reference's `cursor.template` (the
+   SGR style, the open hyperlink or image, the OSC 133 semantic) and is what a *printed* glyph
+   inherits. `erase` is the reference's `bg.into()` / `Cell::reset` — the default cell with only the
+   template's background — and is what every erase and every row reset fills with. Both are derived
+   once in `Screen::set_template`, which is the only writer, so the erase paths still never reach
+   into the interner *and* an erase under an open underline, strikeout or `OSC 8` hyperlink leaves
+   plain blanks rather than decorated ones. Consequence: `Row::reset`'s background-erase
+   discriminant is the erase cell's interned **style id**, which now differs exactly when the
+   background differs, because nothing else is left in that style.
+8. **`RowsScrolled` reports content moving between row ids, not the viewport moving.** That is
+   `damage-and-render-state.md`'s definition ("in-region motion, because that moves content without
+   moving the viewport"), so `ScrollReport::scrolled` is an `Option`: a whole-screen scroll reports
+   **nothing** (every row kept its id and its content; the viewport's own motion reaches the
+   renderer as `RenderUpdate::Partial { scrolled }`), a bottom-bounded region reports the tail's
+   `+n`, and an in-region scroll reports its `-n` / `+n`. R-02 — "anchors match the report" — now
+   holds in every case, with a test for each.
+9. **The LLD's `scroll_up` case-2 anchor column is wrong.** It says
+   `shift_region(region, -n, kill = top n)`, which would kill anchors whose content is safely in
+   scrollback and shift anchors whose content never moved. The correct bookkeeping is the opposite:
+   nothing inside the region moves, and the **tail** below the region shifts by `+n`.
+10. **`ED 2`: the offset table cell and research § 8's trap 9 are both wrong.** Both say the offset
+    is unchanged. `Grid::clear_viewport` itself does not touch `display_offset`, but the
+    `scroll_up(0..lines, positions)` it calls does (`grid/mod.rs:265-268`), so the reference bumps
+    it — which is also the only way the row's own prose ("the scrolled-back user keeps seeing the
+    same content") can be true. Measured here: offset 3 → 6 with the visible top row unchanged.
+11. **The alternate screen shares the scroll region and the tab stops.** The reference keeps one
+    `scroll_region` and one `tabs` table on `Term`, so entering the alternate screen resets neither,
+    and the entry wipe is a background erase with the *entering* cursor's template, not a `RIS`.
+    `swap_alt` copies both across in each direction, which is observationally the same as sharing.
+    If per-screen region and tabs were the intended model, that is a deviation the LLD must declare
+    along with what `? 1049 l` restores.
+12. **One `AnchorKind::Cursor` per lane.** `DEC-0015` and the LLD describe `Cursor` as "the active
+    screen's cursor", singular, but each screen registers its own three screen-owned entries, so the
+    list holds two of each. A consumer reading the list cannot tell them apart without checking
+    which lane the row id is in. Either the kind needs a screen discriminant or the pairing needs
+    documenting; this packet documents it.
 
 ### Shape differences from the design text
 
@@ -304,6 +340,41 @@ will report it for the new engine once `Terminal` exists.
   by `assert_integrity`: the grid cannot resolve an extras id without the interner. The other three
   content hints are checked for false negatives.
 
+### Verification round (`evidence/US-0075-verify.md`)
+
+An independent review of `864c81c` returned **merge after fixes**: two blockers, three majors, nine
+minors. All five blockers and majors are fixed in the follow-up commit, each with the test the
+report asked for:
+
+| # | Defect | Fix | Test |
+| --- | --- | --- | --- |
+| B1 | A wide glyph wrapping over an existing pair wrote its `LeadingWideSpacer` with `RowMut::set`, orphaning the `Wide` at `cols - 2` — reachable in three operations, and exactly the state `assert_integrity` forbids | the spacer goes through `write_at_cursor`, which repairs first, as the reference routes it | `grid::tests::wide_char_wrapping_over_an_existing_pair_keeps_the_grid_intact` |
+| B2 | `Anchors::trim` was lane-blind, so one line feed inside the alternate screen (scrollback 0, therefore trimming on every scroll with an `oldest` above every primary row id) destroyed **every** primary mark, selection end and graphics placement | `trim(origin, oldest)` is lane-scoped; `assert_integrity` now counts the three screen-owned anchors **per lane**, and the property test asserts that no operation on one screen kills an anchor on the other | `anchor::tests::an_alt_screen_scroll_leaves_primary_anchors_alone`, `grid::props::scroll_and_erase_preserve_integrity` |
+| F3 | `RowsScrolled` was emitted for every scroll, including whole-screen ones where no row's content changed id — a `RowId`-keyed cache following it corrupted itself — and never reported the bounded region's tail shift | `ScrollReport::scrolled` is an `Option<RowsScrolled>`, `None` when no content changed id, `Some(+n)` over the tail for a bounded region | `anchor::tests::rows_scrolled_is_silent_for_a_whole_screen_scroll`, `..::rows_scrolled_reports_the_tail_shift_of_a_bounded_region`, `..::rows_scrolled_event_matches_the_anchor_shift` |
+| F4 | Every erase filled with the whole SGR template, so erasing under an open underline or `OSC 8` hyperlink left decorated blanks, where the reference fills with `bg.into()` | the cursor carries a second, derived `erase` cell (reading 7 above); every erase and every row reset uses it | `grid::tests::erased_cells_keep_only_the_background` |
+| F5 | `swap_alt` called `Screen::reset`, i.e. a `RIS`: it destroyed the alternate screen's scroll region and tab stops and cleared with the default background | region and tabs are copied across in both directions (the reference shares one of each), and the wipe is `clear_all_rows` with the entering cursor's erase cell | `grid::tests::entering_alt_screen_keeps_the_region_and_the_tab_stops`, `..::entering_alt_screen_clears_with_the_background_template` |
+
+**One further defect, found by the strengthened property test itself.** Adding the verifier's
+suggested `PrintAt` operation — a print at a chosen column — immediately produced
+`[PrintAt('Z', col 5), Print(wide), Tab(1)]`: `put_tab` wrote its `'\t'` into any cell whose content
+was a space, and **both spacer halves of a wide pair read as a space**, so the tab replaced one with
+a narrow cell and orphaned its glyph. `put_tab` now changes only the content and keeps the width,
+which is what the reference does (it assigns `cell.c` and nothing else).
+Test: `grid::tests::tab_does_not_orphan_a_wide_pair`.
+
+Minors fixed: **M7** (the written-row memory figure, now measured at the same ring as the empty one),
+**M9** (the insert-mode shift now carries the reference's `col + width < cols` gate, so it no longer
+dirties a row per glyph at the columns the reference skips), **M11** (the background caveat on the
+memory claim, above), **M13** and **M14** (doc comments on `Screen::row` and `Screen::wrapline`).
+
+Minors left, with reasons: **M6** (two `AnchorKind::Cursor` entries) is documented as design-owner
+reading 12 rather than fixed, because adding a screen discriminant changes the canonical
+`AnchorKind` list, which this packet may not edit. **M10** (`repair_wide_pairs` sweeps the whole row
+where the reference repairs only the boundary) is correctness-neutral and O(cols) on operations that
+are already O(cols); narrowing it would trade a clearly-correct invariant for a micro-optimisation
+the intake forbids as an outcome. **M12** (`vt-paranoid`) still needs a `Cargo.toml` entry outside
+this packet's file scope.
+
 ### Gaps
 
 - **`assert_integrity` tiering.** `testing-and-bench.md` § 1 (R-28) and `events-and-api.md` both
@@ -320,8 +391,8 @@ will report it for the new engine once `Terminal` exists.
   and the tab-stop regrow rule (trap 27).
 - **No `expected-diffs.json` for C1-C4.** The parity harness first runs against the new engine in
   `US-0076`; the exact cells cannot be measured before then. C1-C4 each have a unit test here, and
-  item 5 above names a fifth source of expected differences that the corrections table does not
-  list.
+  item 5 above names a fifth candidate that the corrections table does not list — though the
+  verifier measured its corpus exposure at zero.
 - **No ASCII run fast path** on the print path. It is a throughput optimisation with no behavioural
   contract, and the intake forbids a throughput outcome for this packet; `print` takes one scalar
   and decides width with `scalar_width`, which is what the corpus pins.

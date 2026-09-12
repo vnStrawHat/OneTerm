@@ -226,9 +226,13 @@ impl TerminalGrid {
         if !self.alt_active {
             let index = self.primary.cursor_row_index();
             let cursor = *self.primary.cursor();
-            self.alt.reset(&mut self.anchors);
+            // The reference keeps one scroll region and one tab table on `Term`,
+            // shared by both screens, so entering does not reset either; copying
+            // them across in both directions reproduces that.
+            self.alt.adopt_region_and_tabs(&self.primary);
             // The cursor carries its row INDEX across, never a row id from the
-            // other screen (R-04).
+            // other screen (R-04). It is installed *before* the wipe, so the
+            // wipe is a background erase with the entering template.
             let row = self.alt.row_of_index(index);
             let alt_cursor = self.alt.cursor_mut();
             *alt_cursor = cursor;
@@ -236,7 +240,10 @@ impl TerminalGrid {
                 row,
                 col: cursor.pos.col,
             };
+            self.alt.clear_all_rows(&mut self.anchors);
             self.primary.save_cursor();
+        } else {
+            self.primary.adopt_region_and_tabs(&self.alt);
         }
         self.alt_active = !self.alt_active;
         self.sync_anchors();
@@ -278,6 +285,18 @@ impl TerminalGrid {
                 anchor.pos.row >= screen.oldest() && anchor.pos.row <= screen.newest(),
                 "anchor {:?} is outside the live row range",
                 anchor.kind
+            );
+        }
+        // Counted per lane, because a lane-blind bound is exactly how one
+        // screen's trim used to kill the other screen's anchors: each screen
+        // registers its cursor, saved cursor and viewport top once and never
+        // releases them, so three of each must always be live in its own run.
+        for screen in [&self.primary, &self.alt] {
+            debug_assert_eq!(
+                self.anchors.live_screen_owned_in(screen.row_range()),
+                3,
+                "{:?} lost a screen-owned anchor",
+                screen.kind()
             );
         }
         if let Some(interner) = interner {
