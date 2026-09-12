@@ -30,6 +30,22 @@ path = "src/bin/pty-throughput.rs"
 name = "sftp-dev-server"
 path = "src/bin/sftp-dev-server.rs"
 
+# --- IN-0029 / US-0072: the VT benchmark and parity harness -----------------
+# A library half so the corpus comparison can be both a tool and a `#[test]`
+# (tests/corpus_check.rs is the drift gate that runs in `cargo test --workspace`).
+[lib]
+name = "oneterm_tools"
+path = "src/lib.rs"
+
+[[bin]]
+name = "vt-corpus"
+path = "src/bin/vt-corpus.rs"
+
+[[bin]]
+name = "vt-bench"
+path = "src/bin/vt-bench.rs"
+# ---------------------------------------------------------------------------
+
 [dependencies]
 # pty-throughput: the same PTY path OneTerm uses (alacritty_terminal::tty + polling).
 alacritty_terminal.workspace = true
@@ -39,6 +55,16 @@ russh.workspace = true
 russh-sftp.workspace = true
 tokio.workspace = true
 rand.workspace = true
+
+# --- IN-0029 / US-0072: the VT benchmark and parity harness -----------------
+# vt-corpus / vt-bench: `alacritty_terminal` above is the engine being replaced
+# and the only one that ever blesses an expectation.
+anyhow.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+# `expected-diffs.toml`: the per-recording, cell-level declared differences.
+toml.workspace = true
+# ---------------------------------------------------------------------------
 
 [target.'cfg(unix)'.dependencies]
 # doom-fire: terminal size detection (TIOCGWINSZ).

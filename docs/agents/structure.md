@@ -163,8 +163,22 @@ OneTerm/
 │   │                               #   panel/window/general/terminal/appearance/about/key_bindings …
 │   │                               #   update_controls/updates state
 │   │
-│   └── agent-ui/                   # `oneterm-agent-ui` — AGENT feature (right-dock fleet view + compact cards)
-│       └── src/                    # lib.rs init() (AgentRegistry::init); view/card render helpers
+│   ├── agent-ui/                   # `oneterm-agent-ui` — AGENT feature (right-dock fleet view + compact cards)
+│   │   └── src/                    # lib.rs init() (AgentRegistry::init); view/card render helpers
+│   │
+│   ├── tools/                      # `oneterm-tools` — developer diagnostics, never shipped, no OneTerm dep
+│   │   └── src/
+│   │       ├── lib.rs              # corpus + bench modules (a lib so the parity gate can be a #[test])
+│   │       ├── corpus.rs           # grid.expect / state.expect encoding, expected-diffs.toml, the comparison
+│   │       ├── corpus_replay.rs    # replay through the vendored engine — the only thing that ever blesses
+│   │       ├── corpus_upstream.rs  # upstream grid.json → grid.expect (the US-0072 cross-check oracle)
+│   │       ├── corpus_grep.rs      # which recordings carry each correction's sequences
+│   │       ├── bench.rs            # the five VT benchmark tiers (recorded, never gated)
+│   │       └── bin/                # doom-fire, pty-throughput, sftp-dev-server, vt-corpus, vt-bench
+│   │
+│   └── vt/                         # `oneterm-vt` (IN-0029) — data only until US-0073 adds the crate
+│       └── tests/corpus/           # the parity corpus: NOTICE + alacritty-ref/<name>/
+│                                   #   {recording, size.json, config.json, grid.expect, state.expect}
 │
 ├── docs/                           # Development documentation
 │   ├── refactor/ui-crate-restructure.md   # This restructure's authoritative plan
@@ -215,6 +229,7 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 | `ssh` (`oneterm-ssh`) | `core`, `terminal` | backend | russh client and SFTP; implements `TerminalSession` and `SftpBackend`. |
 | `local-shell` (`oneterm-local-shell`) | `core`, `terminal` | backend | Local PTY; implements `TerminalSession`. |
 | `app` (`oneterm-app`) | shell + all five features + shared layers (incl. `update`) + gpui-component + both backends | binary | Only crate that knows every layer. Installs `AppSessionFactory`, initializes features and commands, and opens the window. |
+| `tools` (`oneterm-tools`) | `alacritty_terminal`, `russh`, `polling`, `toml` — **no OneTerm crate** | diagnostics | Outside the L0-L4 layering, never a dependency of the app. Binaries: `doom-fire`, `pty-throughput`, `sftp-dev-server`, and (IN-0029) `vt-corpus` — the VT parity corpus: bless, check, cross-check, deviation grep — plus `vt-bench`, the five benchmark tiers. `tests/corpus_check.rs` is the parity drift gate that runs in `cargo test --workspace`. |
 
 ## 3.1 Crate & dependency rules
 

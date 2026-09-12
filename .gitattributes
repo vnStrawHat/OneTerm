@@ -4,3 +4,8 @@
 vendor/** text=auto eol=lf -whitespace
 # The patch files themselves are LF-only `git format-patch` output applied with `patch -p1`.
 vendor/patches/** text eol=lf -whitespace
+
+# The VT parity corpus is compared byte-for-byte and cell-for-cell: the captured
+# PTY recordings are raw bytes and the expectation files are frozen LF text that
+# must survive a round trip on every platform. No end-of-line conversion, ever.
+crates/vt/tests/corpus/** -text -whitespace

@@ -1,0 +1,9 @@
+# OneTerm VT parity expectation: cursor, modes, palette, title, tab stops,
+# scroll region. Blessed by the vendored engine at US-0072 and FROZEN.
+version 1
+cursor row=0 col=0 shape=Hidden
+pending_wrap 0
+modes ALTERNATE_SCROLL ALT_SCREEN APP_CURSOR APP_KEYPAD LINE_WRAP MOUSE_REPORT_CLICK SGR_MOUSE URGENCY_HINTS
+title_events 0
+tab_stops 8,16,24,32,40,48,56,64,72,80,88,96,104
+scroll_region top=0 bottom=23

@@ -1,0 +1,44 @@
+# OneTerm VT parity expectation: the grid, cell-exact, nothing trimmed.
+# Blessed by the vendored alacritty_terminal engine at US-0072 and FROZEN.
+# Rows are newest first. Each run is `<count>*<content>;<attrs>;<fg>;<bg>;<underline>;<hyperlink>`.
+# Do not hand-edit: regenerate with `vt-corpus bless --engine old --deviation <id>`.
+version 1
+columns 139
+lines 35
+display_offset 0
+rows 35
+row 0 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 1 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 2 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 3 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 4 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 5 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 6 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 7 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 8 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 9 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 10 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 11 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 12 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 13 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 14 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 15 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 16 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 17 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 18 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 19 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 20 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 21 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 22 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 23 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 24 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 25 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 26 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 27 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 28 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 29 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 30 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 31 wrap=0 139*0020;-;nForeground;nBackground;-;-
+row 32 wrap=0 1*0020;-;nBlack;nBrightRed;-;-|1*0055;-;nBlack;nBrightRed;-;-|1*004c;-;nBlack;nBrightRed;-;-|1*0020;-;nBlack;nBrightRed;-;-|1*0020;-;nWhite;nBrightBlack;-;-|1*007e;-;nWhite;nBrightBlack;-;-|1*002f;-;nWhite;nBrightBlack;-;-|1*2026;-;nWhite;nBrightBlack;-;-|1*002f;-;nWhite;nBrightBlack;-;-|1*0074;-;nWhite;nBrightBlack;-;-|1*0065;-;nWhite;nBrightBlack;-;-|1*0073;-;nWhite;nBrightBlack;-;-|1*0074;-;nWhite;nBrightBlack;-;-|1*0073;-;nWhite;nBrightBlack;-;-|1*002f;-;nWhite;nBrightBlack;-;-|1*0072;-;nWhite;nBrightBlack;-;-|1*0065;-;nWhite;nBrightBlack;-;-|1*0066;-;nWhite;nBrightBlack;-;-|1*002f;-;nWhite;nBrightBlack;-;-|1*007a;-;nWhite;nBrightBlack;-;-|1*0065;-;nWhite;nBrightBlack;-;-|1*0072;-;nWhite;nBrightBlack;-;-|1*006f;-;nWhite;nBrightBlack;-;-|1*0077;-;nWhite;nBrightBlack;-;-|1*0069;-;nWhite;nBrightBlack;-;-|1*0064;-;nWhite;nBrightBlack;-;-|1*0074;-;nWhite;nBrightBlack;-;-|1*0068;-;nWhite;nBrightBlack;-;-|1*0020;-;nWhite;nBrightBlack;-;-|1*0020;-;nBlack;nBrightRed;-;-|1*007a;-;nBlack;nBrightRed;-;-|1*0065;-;nBlack;nBrightRed;-;-|1*0072;-;nBlack;nBrightRed;-;-|1*006f;-;nBlack;nBrightRed;-;-|1*0077;-;nBlack;nBrightRed;-;-|1*0069;-;nBlack;nBrightRed;-;-|1*0064;-;nBlack;nBrightRed;-;-|1*0074;-;nBlack;nBrightRed;-;-|1*0068;-;nBlack;nBrightRed;-;-|1*002d;-;nBlack;nBrightRed;-;-|1*0073;-;nBlack;nBrightRed;-;-|1*006c;-;nBlack;nBrightRed;-;-|1*0069;-;nBlack;nBrightRed;-;-|1*0063;-;nBlack;nBrightRed;-;-|1*0065;-;nBlack;nBrightRed;-;-|1*0020;-;nBlack;nBrightRed;-;-|93*0020;-;nForeground;nBackground;-;-
+row 33 wrap=0 1*0028;-;nForeground;nBackground;-;-|1*0020+0361;-;nForeground;nBackground;-;-|1*00b0;-;nForeground;nBackground;-;-|1*0020+035c;-;nForeground;nBackground;-;-|1*0296;-;nForeground;nBackground;-;-|1*0020+0361;-;nForeground;nBackground;-;-|1*00b0;-;nForeground;nBackground;-;-|1*0029;-;nForeground;nBackground;-;-|131*0020;-;nForeground;nBackground;-;-
+row 34 wrap=0 1*0020;-;nBlack;nBrightRed;-;-|1*0055;-;nBlack;nBrightRed;-;-|1*004c;-;nBlack;nBrightRed;-;-|1*0020;-;nBlack;nBrightRed;-;-|1*0020;-;nWhite;nBrightBlack;-;-|1*007e;-;nWhite;nBrightBlack;-;-|1*002f;-;nWhite;nBrightBlack;-;-|1*2026;-;nWhite;nBrightBlack;-;-|1*002f;-;nWhite;nBrightBlack;-;-|1*0074;-;nWhite;nBrightBlack;-;-|1*0065;-;nWhite;nBrightBlack;-;-|1*0073;-;nWhite;nBrightBlack;-;-|1*0074;-;nWhite;nBrightBlack;-;-|1*0073;-;nWhite;nBrightBlack;-;-|1*002f;-;nWhite;nBrightBlack;-;-|1*0072;-;nWhite;nBrightBlack;-;-|1*0065;-;nWhite;nBrightBlack;-;-|1*0066;-;nWhite;nBrightBlack;-;-|1*002f;-;nWhite;nBrightBlack;-;-|1*007a;-;nWhite;nBrightBlack;-;-|1*0065;-;nWhite;nBrightBlack;-;-|1*0072;-;nWhite;nBrightBlack;-;-|1*006f;-;nWhite;nBrightBlack;-;-|1*0077;-;nWhite;nBrightBlack;-;-|1*0069;-;nWhite;nBrightBlack;-;-|1*0064;-;nWhite;nBrightBlack;-;-|1*0074;-;nWhite;nBrightBlack;-;-|1*0068;-;nWhite;nBrightBlack;-;-|1*0020;-;nWhite;nBrightBlack;-;-|1*0020;-;nBlack;nBrightRed;-;-|1*007a;-;nBlack;nBrightRed;-;-|1*0065;-;nBlack;nBrightRed;-;-|1*0072;-;nBlack;nBrightRed;-;-|1*006f;-;nBlack;nBrightRed;-;-|1*0077;-;nBlack;nBrightRed;-;-|1*0069;-;nBlack;nBrightRed;-;-|1*0064;-;nBlack;nBrightRed;-;-|1*0074;-;nBlack;nBrightRed;-;-|1*0068;-;nBlack;nBrightRed;-;-|1*002d;-;nBlack;nBrightRed;-;-|1*0073;-;nBlack;nBrightRed;-;-|1*006c;-;nBlack;nBrightRed;-;-|1*0069;-;nBlack;nBrightRed;-;-|1*0063;-;nBlack;nBrightRed;-;-|1*0065;-;nBlack;nBrightRed;-;-|1*0020;-;nBlack;nBrightRed;-;-|1*0020;-;nForeground;nBackground;-;-|1*0065;-;nForeground;nBackground;-;-|1*0063;-;nForeground;nBackground;-;-|1*0068;-;nForeground;nBackground;-;-|1*006f;-;nForeground;nBackground;-;-|1*0020;-;nForeground;nBackground;-;-|1*0022;-;nForeground;nBackground;-;-|1*0028;-;nForeground;nBackground;-;-|1*0020;-;nForeground;nBackground;-;-|1*003c;INVERSE;nForeground;nBackground;-;-|1*0030;INVERSE;nForeground;nBackground;-;-|1*0033;INVERSE;nForeground;nBackground;-;-|1*0036;INVERSE;nForeground;nBackground;-;-|1*0031;INVERSE;nForeground;nBackground;-;-|1*003e;INVERSE;nForeground;nBackground;-;-|1*00b0;-;nForeground;nBackground;-;-|1*0020;-;nForeground;nBackground;-;-|1*003c;INVERSE;nForeground;nBackground;-;-|1*0030;INVERSE;nForeground;nBackground;-;-|1*0033;INVERSE;nForeground;nBackground;-;-|1*0035;INVERSE;nForeground;nBackground;-;-|1*0063;INVERSE;nForeground;nBackground;-;-|1*003e;INVERSE;nForeground;nBackground;-;-|1*0296;-;nForeground;nBackground;-;-|1*0020;-;nForeground;nBackground;-;-|1*003c;INVERSE;nForeground;nBackground;-;-|1*0030;INVERSE;nForeground;nBackground;-;-|1*0033;INVERSE;nForeground;nBackground;-;-|1*0036;INVERSE;nForeground;nBackground;-;-|1*0031;INVERSE;nForeground;nBackground;-;-|1*003e;INVERSE;nForeground;nBackground;-;-|1*00b0;-;nForeground;nBackground;-;-|1*0029;-;nForeground;nBackground;-;-|1*0022;-;nForeground;nBackground;-;-|59*0020;-;nForeground;nBackground;-;-

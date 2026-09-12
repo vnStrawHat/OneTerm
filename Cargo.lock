@@ -5623,12 +5623,16 @@ name = "oneterm-tools"
 version = "0.5.2"
 dependencies = [
  "alacritty_terminal",
+ "anyhow",
  "libc",
  "polling",
  "rand 0.10.1",
  "russh",
  "russh-sftp",
+ "serde",
+ "serde_json",
  "tokio",
+ "toml 1.1.2+spec-1.1.0",
  "windows-sys 0.59.0",
 ]
 
