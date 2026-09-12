@@ -142,9 +142,15 @@ Contract, and every clause is a test:
 3. Parser state, the OSC accumulator and the UTF-8 carry survive between calls, so an arbitrary
    chunking of the same stream produces the same grid and the same event sequence. (There is no
    sequence echo: R-35 cut it, N-09.)
-4. Events are in byte order. `Repaint` is appended at most once, at the end, when anything
-   changed. Ordering among the rest is the order the bytes produced them — which is what
+4. Events are in byte order. `Repaint` is appended at most once, at the end, when anything changed.
+   Ordering among the rest is the order the bytes produced them — which is what
    `docs/osc-sequences-checklist.md` promises for multiple OSCs in one read batch.
+   **`Repaint` is the engine's statement that something changed, not the embedder's repaint hint.**
+   The adapter does **not** forward it: the pump posts exactly one `SessionEvent::Output` per batch,
+   *after* that batch's reliable events have been flushed. Forwarding `Repaint` as well produces a
+   second, earlier hint that arrives mid-drain, doubling the hints under load and inverting the
+   order `docs/terminal-backend.md` promises ([`migration.md`](migration.md) § "The event-order
+   rule").
 5. `feed` never panics on input. Every malformed case increments a `FeedStats` counter and
    continues.
 6. The engine holds no lock and spawns no thread. The caller's lock discipline is the caller's

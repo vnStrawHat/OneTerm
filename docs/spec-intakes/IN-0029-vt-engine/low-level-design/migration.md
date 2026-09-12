@@ -165,17 +165,72 @@ incremental off the row sequence numbers; that is not this intake.
 `plan_cache` keys on `(RowId, SeqNo)`; `theme/palette.rs` and `input/mouse.rs` move to the engine's
 `Rgb` and `SelectionKind`; `mouse_tests.rs` follows.
 
+### Snapshot deviations the shim declares (S1-S5)
+
+`LegacySnapshot` produces the old engine's `TerminalContent`, and the differential proves it does so
+exactly — **except** in five ways. The intake's `C` and `D` tables cannot express them, because
+those compare `grid.expect` and `state.expect`, not the snapshot, so they live here. Each has no
+reader today, and each names the packet that may remove it.
+
+| # | Delta | Why it is not user-visible | Removed by |
+| --- | --- | --- | --- |
+| S1 | `TermMode::LINE_WRAP` and `URGENCY_HINTS` are never set (all 81 streams) | `ModeSnapshot` does not carry them, and `research/api-surface.md` § 3.5 lists both under the unused mode bits OneTerm never queries. The only reader is the corpus dumper in `crates/tools` | `US-0085`, when the view stops reading `TermMode` at all |
+| S2 | `TermMode::ORIGIN` is never set (15 streams) | Same list, same absence of a reader. `DECOM` is honoured inside the engine; only the snapshot bit is missing | `US-0085` |
+| S3 | A hyperlink with no `id=` gets `1`, `2`, … where the reference gave `0_alacritty` | The implicit-id counter is per terminal by design ([`cell-and-style.md`](cell-and-style.md)), not the reference's process-global atomic. The view hashes `id + " " + uri`, so only distinctness matters, and an explicit `id=` passes through verbatim | `US-0085`, when the view keys on `HyperlinkId` |
+| S4 | `total_lines` is one smaller after a Sixel (`sixel_basic`: 10 versus 9) | Engine-level, not the shim: the image's history depth. It reaches the user as a scrollbar one row short in a session that printed an image | `US-0080` follow-up |
+| S5 | Damage is **narrower** | The reference damages a row on any write, the engine on an actual change. `us0081_parity::damage_soundness_detail` proves the property that matters — every row whose rendered content changed, plus a visible cursor's row, is always in the new `Partial` list — with **zero violations over all 81 streams**. Nothing is under-damaged, so no stale row survives a frame | never; this one is an improvement |
+
+One engine-level answer also changed and is recorded here because the shim is where it became
+observable: **DA2 replies `ESC [ > 0 ; 502 ; 1 c` instead of `ESC [ > 0 ; 2601 ; 1 c`**. The formula
+is unchanged — it encodes `CARGO_PKG_VERSION`, which is now the workspace's version rather than the
+fork's. Programs read DA2 to identify the terminal, so its long-term home is
+[`dispatch-and-modes.md`](dispatch-and-modes.md) § "Answers".
+
+**The differential that proves all of this** is `crates/terminal/tests/us0081_parity.rs`: 81 byte
+streams fed to both engines, snapshots compared field by field, with **only the S-kinds above
+allow-listed**. Anything else fails. It is the seam-level counterpart to `vt-diff` and, like the
+old-engine paths it drives, it **retires at `US-0087`**.
+
+### The event-order rule
+
+Exactly **one** repaint hint per batch, emitted **after** that batch's reliable events. The pump
+owns it: `TerminalPump::finish_batch` posts the single `SessionEvent::Output` once the deferred
+reliable events have been flushed, which is what `docs/terminal-backend.md` promises — "reliable
+events emitted during a batch, then that batch's `Output`".
+
+**The engine's `VtEvent::Repaint` is therefore not forwarded.** Routing it to
+`SessionEvent::Output` in `OscRouter::drain` produces a second, *earlier* hint: it arrives while the
+batch is still draining, before the reliable flush, which both doubles the repaint hints under load
+and inverts the documented order. The engine still emits `Repaint` — it is the engine's statement
+that something changed — but at the seam it is dropped, because the pump already knows.
+
 ### Debug-build cost at the shim, measured by `US-0081`
 
 The flip is where a debug-build cost becomes visible, because `fast-dev` is how the app is actually
 run during development. Measured on a flood workload:
 
-| Build | Per-frame cost |
+In-process, 4 MiB of coloured text through 4 KiB chunks, grid 120x30, scrollback 10 000, snapshot
+after every chunk, `fast-dev`:
+
+| | new | old | ratio |
+| --- | --- | --- | --- |
+| `feed` / `advance` | 97 ms | 54 ms | 1.8x |
+| snapshot | 78 ms | 24 ms | 3.3x |
+| **total** | **177 ms** | **79 ms** | **2.2x** |
+
+Release: **90 ms against 43 ms**. The residue is not the engine: it is **the shim's own
+full-viewport legacy-cell rebuild**, which exists only to produce the old `TerminalContent` shape
+and which `US-0082` deletes. It is well inside a frame budget, and the intake forbids a performance
+number as an exit criterion, so this is recorded, never gated.
+
+The path to it, kept because it is how two real defects were found:
+
+| Stage | Per-frame cost |
 | --- | --- |
-| Old engine | ~200 us total |
+| Old engine | ~200 us |
 | New engine, first measurement | 44 ms |
 | After adding `oneterm-vt` to the `fast-dev` `opt-level = 3` list | 6.5 ms |
-| After the bounded-integrity rework (`US-0075` / `US-0079`) | **pending re-measure** |
+| After the bounded-integrity rework (`US-0075` / `US-0079`) | the table above |
 
 Two things follow. **`oneterm-vt` now sits in the `[profile.fast-dev]` opt-level-3 list in the root
 `Cargo.toml`**, beside the other hot-path crates, for the same reason they are there: a debug-level
@@ -217,7 +272,7 @@ Deleted outright (the fork and its scaffolding), all at `US-0087`:
 | The `alacritty_terminal` git dependency and its comment block | `Cargo.toml:68-76` |
 | The profile overrides for the fork | `Cargo.toml:172`, `Cargo.toml:200` |
 | The `[patch]` block | `Cargo.toml:234-244` |
-| `alacritty_terminal.workspace = true` in five manifests | `crates/terminal/Cargo.toml:19`, `crates/local-shell/Cargo.toml:20`, `crates/ssh/Cargo.toml:20`, `crates/terminal-view/Cargo.toml:32`, `crates/tools/Cargo.toml:35` |
+| `alacritty_terminal.workspace = true` — the **last** manifest lines, if any survive; each crate's line is deleted by the packet that stops importing the fork: `crates/terminal` at `US-0082`, `crates/local-shell` at `US-0083`, **`crates/ssh` at `US-0084` (its line is already dead — the crate imports nothing from the fork after the shim)**, `crates/terminal-view` at `US-0085`, `crates/tools` at `US-0087` with `vt-diff` | `crates/terminal/Cargo.toml:19`, `crates/local-shell/Cargo.toml:20`, `crates/ssh/Cargo.toml:20`, `crates/terminal-view/Cargo.toml:32`, `crates/tools/Cargo.toml:35` |
 | The two fork rows in the notices header | `scripts/third-party-notices.py:85-86` |
 | The `--full` step running `vendor/refresh.sh --check` | `scripts/ci-local.sh`, `scripts/ci-local.ps1` |
 | The `vte` dev-dependency and the differential oracle | `crates/vt/Cargo.toml`, `crates/vt/tests/differential.rs` |
