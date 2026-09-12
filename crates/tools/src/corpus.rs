@@ -41,8 +41,13 @@ pub const CELL_FIELDS: [&str; 6] = ["content", "attrs", "fg", "bg", "underline",
 /// deviations. An `expected-diffs.json` naming anything else is a typo, and a
 /// typo that silently disabled part of the gate would be the worst outcome
 /// this harness can have.
-pub const KNOWN_DEVIATIONS: [&str; 27] = [
-    "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", //
+pub const KNOWN_DEVIATIONS: [&str; 31] = [
+    // C12 is `US-0075`'s wide-pair repair, C13 and C14 are `US-0077`'s reflow
+    // corrections and C15 is `US-0078`'s selection kill. All four are measured
+    // free against the 45 recordings (`US-0076`); the ids exist so a later
+    // packet can declare a window without reopening this array.
+    "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14",
+    "C15", //
     "D1", "D2", "D4", "D7", "D8", "D9", "D10", "D12", "D13", "D14", "D15", //
     "G1", "G2", "G3", "G6", "G7",
 ];
