@@ -128,8 +128,15 @@ impl Terminal {
 
 Contract, and every clause is a test:
 
-1. `feed` clears `batch` first. A caller who has not drained the previous batch loses it; that
-   is a programming error and a debug assertion catches it.
+1. `feed` clears `batch` first. A caller who has not drained the previous batch loses it; that is
+   a programming error and a debug assertion catches it.
+   **The rule, and who must satisfy it: `US-0079` owns `EventBatch`, so `US-0079` owns the
+   assertion.** It cannot be a `&self` check — detecting "not drained" from an accessor would need
+   interior mutability the engine forbids — so it is a **generation counter on `EventBatch`**:
+   `feed` bumps it, every accessor (`iter`, `str`, `bytes`, `params`) records the generation it
+   read, and `feed` debug-asserts that the previous batch was read at its own generation before
+   clearing it. `US-0076` could not implement this, because the type is not its own; it is listed
+   here so the obligation does not evaporate between packets.
 2. `feed` **never blocks, never calls back, never allocates in the steady state** (the arena and
    the event vector grow to a high-water mark and stay).
 3. Parser state, the OSC accumulator and the UTF-8 carry survive between calls, so an arbitrary

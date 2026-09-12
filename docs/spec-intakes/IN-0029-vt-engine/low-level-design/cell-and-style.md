@@ -155,8 +155,13 @@ pub struct GraphemeArena {
 
 - A cell needing more than one scalar stores a `GraphemeId` in its content bits. Identical
   sequences deduplicate for free, which is the reason to intern rather than to box per cell.
-- Sequences longer than `GRAPHEME_MAX_LEN` are **truncated**, not rejected, and counted. This is
-  the direct fix for the unbounded `Vec<char>` in the pinned fork.
+- Sequences longer than `GRAPHEME_MAX_LEN` are **truncated**, not rejected, and counted in
+  `FeedStats::grapheme_truncated`. This is the direct fix for the unbounded `Vec<char>` in the
+  pinned fork — and therefore a **differential divergence, correction C16**, not merely a documented
+  bound: a stream that piles seventeen combining marks on one cell renders differently in the two
+  engines. No corpus recording and no bench fixture reaches it; a future fixture that does needs a
+  declared window. The rule the engine must keep is that truncation is **silent to the grid and
+  loud to the counter** — never an error, never a dropped cell.
 - **This is the one place a sweep is kept**, because unbounded growth here is attacker-reachable:
   a stream of unique multi-codepoint cells grows the arena without bound (kitty's header
   documents exactly this failure). GC by remap: steal the arena, walk both screens skipping rows
@@ -324,7 +329,8 @@ pub fn cluster_width(cluster: &[char]) -> u8;   // implemented now, used when 20
   image and asserts the extras table grew by one.
 - [ ] `intern::tests::hyperlink_ids_are_per_terminal_not_global`
 - [ ] `intern::tests::identical_clusters_dedupe`
-- [ ] `intern::tests::cluster_longer_than_cap_is_truncated_and_counted`
+- [ ] `intern::tests::cluster_longer_than_cap_is_truncated_and_counted` — correction C16; the
+  seventeenth codepoint is dropped, the cell still renders, and the counter moves.
 - [ ] `intern::tests::grapheme_gc_preserves_every_live_cell` — a stream of unique clusters, a
   forced sweep, then a full-grid text comparison against a pre-sweep snapshot.
 - [ ] `intern::tests::grapheme_sweep_trigger_is_the_documented_constant` — R-27, one trigger.

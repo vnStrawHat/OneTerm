@@ -388,7 +388,7 @@ regression: the gate still fails on any difference that is not declared.
 
 | Op | Behaviour |
 | --- | --- |
-| `EL 0` (right) | `col..cols`. **Returns immediately, erasing nothing, if `pending_wrap` is set** (trap 2; see G3 for when the flag can be set) |
+| `EL 0` (right) | `col..cols`. **Returns immediately, erasing nothing, if `pending_wrap` is set** (trap 2) |
 | `EL 1` (left) | `0..=col` |
 | `EL 2` | `0..cols` |
 | `ECH` (`CSI X`) | `col..min(col + n, cols)`, filled with the **erase cell** (see below) |
@@ -494,7 +494,6 @@ primitives produce: a partial region scroll may **split** a selection (parity wi
 | --- | --- | --- | --- |
 | G1 | `WRAPPED` is a row flag, not a flag on the last cell | `US-0075` | none — a representation change |
 | G2 | `RowId` replaces signed `Line`; no negative indices | `US-0075` | none |
-| G3 | *withdrawn* — the pending-wrap flag is set unconditionally, as the reference does; the draft behaviour lost a line break across `? 7 l` / `? 7 h` | — | none |
 | G6 | The ring index is the row id; no `zero` rotation and no free list | `US-0075` | none — removes trap 45 |
 | G7 | One row representation; dual-form rows deferred (R-51) | `US-0075` | none |
 
@@ -517,6 +516,7 @@ regression: the gate still fails on any difference that is not declared.
 | C13 | A column **grow** preserves the tail of a wrapped logical line that lies below the cursor. The reference's `grow_columns` drives row placement off `cursor_line_delta`, so widening while the cursor sits above the tail **drops the tail and leaves a dangling `WRAPLINE`** on the bottom row — reachable with any `CUP` or arrow-key move inside a wrapped line before a resize | — | `US-0077` | **to measure in `US-0076`**: any recording that moves the cursor inside a wrapped line and then resizes |
 | C14 | A trailing blank carrying **BOLD / DIM / ITALIC / HIDDEN** is kept by the reflow trim. The reference's `is_empty` ignores those attributes (trap 37), so it trims such a cell; the trim here uses `Cell::is_blank`, which requires the default style. Both remaining differences — tabs, and this one — are in the "keep more" direction | 37 | `US-0077` | **to measure in `US-0076`** |
 | C15 | An endpoint scrolled out of a **scroll-region top** kills the selection, where the reference clamps it to `(range_top, column 0, Left)` and keeps it alive over content the user never selected (`vendor/alacritty_terminal/src/selection.rs:160-166`) | — | `US-0078` | **to measure in `US-0076`**: any recording that selects — none do, so this is expected to be free; declared because it is user-visible |
+| C16 | A cell stores at most `GRAPHEME_MAX_LEN = 16` codepoints; the rest are truncated and counted in `FeedStats::grapheme_truncated`. The reference stores an **unbounded `Vec<char>`** per cell, so a stream that piles more than sixteen combining marks on one cell differs in content ([`cell-and-style.md`](cell-and-style.md) § "Graphemes") | 2 (P2 in the HLD table) | `US-0074` | **none measured**: no corpus recording and no bench fixture reaches seventeen codepoints on one cell. A future fixture that does needs a declared window |
 
 Kept deliberately, because they are correct behaviour or OneTerm product behaviour rather than
 defects: pending wrap and its interaction with `BS`, `EL 0` and `HT` (traps 1, 2, 3); `ED 2`
