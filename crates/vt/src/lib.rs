@@ -11,10 +11,12 @@
 //! truncated or degraded to a documented fallback, and counted.
 
 pub mod cell;
+pub mod grid;
 pub mod intern;
 pub mod width;
 
 pub use cell::{Attrs, Cell, CellContent, CellWidth, Color, NamedColor, Rgb, Semantic, Style};
+pub use grid::{Pos, RowId, RowRef, SeqNo, Size, TerminalGrid, Viewport};
 pub use intern::{
     Extras, ExtrasId, GRAPHEME_MAX_LEN, GraphemeId, GraphicId, HyperlinkId, Interner, StyleId,
 };
