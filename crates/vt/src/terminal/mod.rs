@@ -35,7 +35,7 @@ pub use osc::OscClaims;
 use crate::cell::{Cell, Style};
 use crate::event::{EventBatch, FeedStats};
 use crate::grid::{
-    AnchorId, Charset, DEFAULT_SCROLLBACK, RowId, Screen, Size, TerminalGrid, Viewport,
+    AnchorId, Charset, DEFAULT_SCROLLBACK, Pos, RowId, Screen, Size, TerminalGrid, Viewport,
 };
 use crate::intern::Interner;
 use crate::parser::Parser;
@@ -43,6 +43,7 @@ use crate::reflow::{ResizeOutcome, ResizePolicy};
 use crate::render::{
     EngineView, ModeSnapshot, MouseProtocol, Palette, RenderState, RenderUpdate, SyncState,
 };
+use crate::selection::{Selection, SelectionKind, SelectionRange, Side};
 
 /// The theme the engine needs to answer a colour query. The renderer still
 /// resolves final colours itself, including bold-to-bright and dim mixing.
@@ -90,6 +91,9 @@ pub(crate) struct State {
     pub(crate) title: TitleState,
     pub(crate) keyboard: KeyboardStacks,
     pub(crate) sync: SyncState,
+    /// Owns two entries in the anchor list while it lives, which is why every
+    /// path that drops it goes through `Terminal::selection_clear`.
+    pub(crate) selection: Option<Selection>,
     pub(crate) config: Config,
     pub(crate) theme: ThemeColors,
     pub(crate) cursor_style: Option<CursorStyle>,
@@ -134,6 +138,7 @@ impl Terminal {
                 title: TitleState::default(),
                 keyboard: KeyboardStacks::default(),
                 sync: SyncState::new(),
+                selection: None,
                 theme: ThemeColors::new(),
                 cursor_style: None,
                 active_charset: 0,
@@ -178,6 +183,7 @@ impl Terminal {
         self.parser.advance(&mut handler, bytes);
 
         self.state.grid.sync_anchors();
+        self.prune_selection();
         if self.state.dispatched {
             batch.push_repaint();
         }
@@ -192,15 +198,94 @@ impl Terminal {
     /// `damage-and-render-state.md` names.
     pub fn render_update(&mut self, render: &mut RenderState, now: Instant) -> RenderUpdate {
         let modes = self.mode_snapshot();
+        let selection = self.selection_range();
         let view = EngineView {
             grid: &self.state.grid,
             interner: &self.state.interner,
             sync: &mut self.state.sync,
             modes,
+            selection,
             generation: self.state.generation,
             palette_epoch: self.state.palette_epoch,
         };
         render.begin_update(view, now)
+    }
+
+    // ── Selection ───────────────────────────────────────────────────────────
+    //
+    // Seven one-line wrappers over `crate::selection`, which is written against
+    // `TerminalGrid` because it shipped before this type did. The escape set
+    // moves here too: the module takes it as a parameter, `Config` owns it.
+
+    /// Begin a drag, releasing whatever was selected before.
+    pub fn selection_start(&mut self, pos: Pos, side: Side, kind: SelectionKind) {
+        self.selection_clear();
+        self.state.selection = Some(Selection::new(&mut self.state.grid, kind, pos, side));
+    }
+
+    /// Move the drag's far end.
+    pub fn selection_update(&mut self, pos: Pos, side: Side) {
+        if let Some(selection) = &mut self.state.selection {
+            selection.update(&mut self.state.grid, pos, side);
+        }
+    }
+
+    /// The resolved range. `O(1)`, and it never materialises text.
+    pub fn selection_range(&self) -> Option<SelectionRange> {
+        self.state
+            .selection
+            .as_ref()?
+            .to_range(&self.state.grid, &self.state.config.semantic_escape_chars)
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.selection_range().is_some()
+    }
+
+    /// The selected text, materialised.
+    pub fn selection_text(&self) -> Option<String> {
+        self.state.selection.as_ref()?.text(
+            &self.state.grid,
+            &self.state.interner,
+            &self.state.config.semantic_escape_chars,
+        )
+    }
+
+    /// Release both anchors. Idempotent.
+    pub fn selection_clear(&mut self) {
+        if let Some(selection) = self.state.selection.take() {
+            selection.release(&mut self.state.grid);
+        }
+    }
+
+    pub fn select_all(&mut self) {
+        self.selection_clear();
+        self.state.selection = Some(Selection::all(&mut self.state.grid));
+    }
+
+    /// A pointer position in viewport coordinates to a grid position and the
+    /// half of the cell it fell on.
+    pub fn hit_test(&self, viewport_row: f32, col: f32) -> (Pos, Side) {
+        let viewport = self.viewport();
+        let row = (viewport_row.max(0.0) as u64).min(u64::from(viewport.rows.saturating_sub(1)));
+        let column = col.max(0.0);
+        let last = u32::from(viewport.cols.saturating_sub(1));
+        let raw = column as u32;
+        let index = raw.min(last) as u16;
+        // A drag that ran off the right edge selects the whole last cell, which
+        // is the right half of it; inside the grid the half is the fraction.
+        let side = if raw > last || column - column.floor() >= 0.5 {
+            Side::Right
+        } else {
+            Side::Left
+        };
+        (
+            Pos {
+                row: viewport.top + row,
+                col: index,
+            },
+            side,
+        )
     }
 
     /// The modes the view reads at paint time.
@@ -223,7 +308,21 @@ impl Terminal {
     pub fn resize(&mut self, size: Size, policy: ResizePolicy) -> ResizeOutcome {
         let outcome = self.state.grid.resize(size, policy);
         self.state.generation = self.state.generation.wrapping_add(1);
+        self.prune_selection();
         outcome
+    }
+
+    /// Give back the anchor entries of a selection whose content is gone.
+    ///
+    /// A reflow kills selection anchors where it stands (trap 28) and a history
+    /// trim kills anything that fell off the oldest end, neither of which can
+    /// reach the `Selection` value that owns the entries. It already reads as
+    /// "no selection" through [`Terminal::selection_range`]; this is what stops
+    /// the two entries leaking across a drag-resize.
+    fn prune_selection(&mut self) {
+        if self.state.selection.is_some() && self.selection_range().is_none() {
+            self.selection_clear();
+        }
     }
 
     /// Cell metrics have one owner (R-40, N-08): the embedder passes them when

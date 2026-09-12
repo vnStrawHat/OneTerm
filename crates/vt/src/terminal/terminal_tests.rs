@@ -1565,6 +1565,116 @@ fn decscusr_sets_the_shape_and_the_blink() {
     assert_eq!(session.replies(), "\x1b[?12;1$y");
 }
 
+// ── Selection ───────────────────────────────────────────────────────────────
+
+#[test]
+fn the_selection_wrappers_carry_the_config_escape_set() {
+    let mut session = Session::new(20, 4);
+    session.feed(b"hello world\r\nsecond line");
+
+    let top = session.term.viewport().top;
+    session.term.selection_start(
+        Pos { row: top, col: 0 },
+        Side::Left,
+        crate::selection::SelectionKind::Simple,
+    );
+    session
+        .term
+        .selection_update(Pos { row: top, col: 4 }, Side::Right);
+
+    assert!(session.term.has_selection());
+    assert_eq!(session.term.selection_text().as_deref(), Some("hello"));
+
+    // `Semantic` reads the escape set off `Config`, which is where the module's
+    // `&str` parameter moves in this packet.
+    session.term.selection_start(
+        Pos { row: top, col: 8 },
+        Side::Left,
+        crate::selection::SelectionKind::Semantic,
+    );
+    assert_eq!(session.term.selection_text().as_deref(), Some("world"));
+
+    session.term.selection_clear();
+    assert!(!session.term.has_selection());
+    assert_eq!(session.term.selection_range(), None);
+
+    // `select_all` spans the whole live range.
+    session.term.select_all();
+    let text = session.term.selection_text().expect("all is selected");
+    assert!(text.contains("hello world"));
+    assert!(text.contains("second line"));
+}
+
+#[test]
+fn hit_test_maps_a_pointer_to_a_cell_and_a_side() {
+    let session = Session::new(20, 4);
+    let top = session.term.viewport().top;
+
+    assert_eq!(
+        session.term.hit_test(2.0, 3.2),
+        (
+            Pos {
+                row: top + 2,
+                col: 3
+            },
+            Side::Left
+        )
+    );
+    assert_eq!(
+        session.term.hit_test(2.9, 3.7),
+        (
+            Pos {
+                row: top + 2,
+                col: 3
+            },
+            Side::Right
+        )
+    );
+    // Out of range clamps rather than panicking: the coordinate comes from a
+    // hit test on a viewport that may since have been resized.
+    assert_eq!(
+        session.term.hit_test(-5.0, 999.0),
+        (Pos { row: top, col: 19 }, Side::Right)
+    );
+}
+
+#[test]
+fn the_invalidation_predicate_runs_before_the_operation() {
+    // The matrix is stated against the **pre-operation** grid, so an erase that
+    // covers the selection must clear it — which is only decidable before the
+    // rows are blanked.
+    let select_then = |bytes: &[u8]| -> bool {
+        let mut session = Session::new(20, 4);
+        session.feed(b"hello\r\nworld\r\n");
+        let top = session.term.viewport().top;
+        session.term.selection_start(
+            Pos { row: top, col: 0 },
+            Side::Left,
+            crate::selection::SelectionKind::Simple,
+        );
+        session
+            .term
+            .selection_update(Pos { row: top, col: 4 }, Side::Right);
+        assert!(session.term.has_selection());
+        session.feed(bytes);
+        session.term.has_selection()
+    };
+
+    // The selection is on row 0; the cursor is on row 2.
+    assert!(!select_then(b"\x1b[2J"), "ED 2 must clear it");
+    assert!(!select_then(b"\x1bc"), "RIS must clear it");
+    assert!(!select_then(b"\x1b[?1049h"), "an alt swap must clear it");
+    assert!(!select_then(b"\x1b#8"), "DECALN must clear it");
+    assert!(!select_then(b"\x1b[?3h"), "DECCOLM must clear it");
+    // `ED 1` clears from the top of the screen down to the cursor, so it covers
+    // row 0 as well.
+    assert!(!select_then(b"\x1b[1J"), "ED 1 must clear it");
+    // An erase that cannot reach row 0 leaves it alone.
+    assert!(select_then(b"\x1b[K"), "EL on row 2 must not clear it");
+    assert!(select_then(b"\x1b[0J"), "ED 0 from row 2 must not clear it");
+    assert!(select_then(b"\x1b[3J"), "ED 3 has no history to clear");
+}
+
 // ── DECALN ──────────────────────────────────────────────────────────────────
 
 #[test]

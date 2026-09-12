@@ -21,6 +21,7 @@ use crate::grid::{
     AnchorKind, Charset, DisplayClear, LineClear, Pos, PrintMode, ScrollRegion, ScrollReport,
 };
 use crate::parser::{Dispatch, MAX_OSC_PARAMS, OscParams, ParamGroups, Params, StringTerm};
+use crate::selection::Invalidation;
 
 /// The parser and the event module each carry the "how did this string end"
 /// distinction; they are the same two cases, so the boundary converts.
@@ -176,6 +177,20 @@ impl Handler<'_> {
 
     // ── Erase and scroll ────────────────────────────────────────────────────
 
+    /// The invalidation matrix is a **predicate**, and it is stated against the
+    /// grid **before** the operation runs — every rule is about the rows the
+    /// operation is going to blank. A dispatch that evaluates it afterwards, or
+    /// forgets it, leaves a selection pointing at erased cells.
+    fn invalidate_selection(&mut self, op: Invalidation) {
+        let Some(selection) = self.state.selection else {
+            return;
+        };
+        if selection.invalidated_by(&self.state.grid, op) {
+            self.state.selection = None;
+            selection.release(&mut self.state.grid);
+        }
+    }
+
     fn erase_display(&mut self, mode: DisplayClear) {
         // Trap 12: `ED 2` and `ED 3` clear the screen for the embedder, and the
         // event fires before the "is there history" check, so an `ED 3` with an
@@ -183,6 +198,12 @@ impl Handler<'_> {
         if matches!(mode, DisplayClear::All | DisplayClear::Saved) {
             self.out.push(VtEvent::ScreenCleared);
         }
+        self.invalidate_selection(match mode {
+            DisplayClear::Below => Invalidation::EraseBelow,
+            DisplayClear::Above => Invalidation::EraseAbove,
+            DisplayClear::All => Invalidation::EraseScreen,
+            DisplayClear::Saved => Invalidation::EraseHistory,
+        });
         let State { grid, interner, .. } = self.state;
         let report = grid.erase_display(mode, interner);
         self.report(report);
@@ -207,6 +228,9 @@ impl Handler<'_> {
     /// **do not change the column count** (trap 40).
     fn deccolm(&mut self) {
         self.set_scrolling_region(1, None);
+        // Not in the design's list of four, but it blanks the whole screen, so
+        // the same rule applies: a selection must not survive over wiped cells.
+        self.invalidate_selection(Invalidation::EraseScreen);
         let rows = self.rows();
         self.state.grid.screen_mut().reset_rows(0..rows);
         self.state.generation = self.state.generation.wrapping_add(1);
@@ -216,6 +240,7 @@ impl Handler<'_> {
     /// `Cell::default()` with `c = 'E'`, which deliberately ignores the SGR
     /// template — and the cursor does not move.
     fn decaln(&mut self) {
+        self.invalidate_selection(Invalidation::EraseScreen);
         let (rows, cols) = (self.rows(), self.cols());
         let fill = Cell::EMPTY.with_content(CellContent::Scalar('E'));
         let screen = self.state.grid.screen_mut();
@@ -229,6 +254,7 @@ impl Handler<'_> {
     // ── Screens, modes and resets ───────────────────────────────────────────
 
     fn swap_alt(&mut self) {
+        self.invalidate_selection(Invalidation::SwapAlt);
         self.state.grid.swap_alt();
         self.state.keyboard.swap();
         self.state.generation = self.state.generation.wrapping_add(1);
@@ -348,6 +374,7 @@ impl Handler<'_> {
     /// Correction C6: the colour override table is reset too, where the
     /// reference leaves `OSC 4 / 10 / 11 / 12` overrides in place (trap 39).
     fn reset_state(&mut self) {
+        self.invalidate_selection(Invalidation::Reset);
         self.state.grid.reset();
         self.state.active_charset = 0;
         self.state.cursor_style = None;
@@ -1012,6 +1039,7 @@ impl Dispatch for Handler<'_> {
                         return;
                     }
                 };
+                self.invalidate_selection(Invalidation::EraseLine);
                 self.state.grid.screen_mut().erase_line(mode);
             }
             // SCP: parsed and ignored, as today, but now counted.
