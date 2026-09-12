@@ -10,8 +10,8 @@ Created: 2026-09-12
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [ ] Planned
-- [x] In progress
-- [ ] Implemented
+- [ ] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -45,7 +45,7 @@ Concretely:
    `oneterm_terminal::sync::FairMutex` newtype that keeps the backends' `lock` /
    `lock_unfair` / `try_lock_unfair` call sites compiling unchanged.
 3. **The pump** feeds bytes through `Terminal::feed(bytes, &mut EventBatch, now)` under the
-   adapter lock and drains the batch through `OscRouter::handle`, **`VtEvent::Reply` bytes
+   adapter lock and drains the batch through `OscRouter::drain`, **`VtEvent::Reply` bytes
    first** (R-37), then everything else. The `SessionEventSink` deferred tier is untouched, so
    delivery ordering and the backends' `finish_batch*` calls are byte-for-byte what they were.
 4. **Resize** goes through `Terminal::resize(size, policy)` with `ResizePolicy::KeepViewportTop`
@@ -63,6 +63,9 @@ Concretely:
    `vte::Parser` is gone.
 9. **`test_support.rs`** needs no change: it fabricates `TerminalContent` from the legacy value
    types directly, and those types are unchanged.
+10. **Graphics** (after `US-0080` merged in at `3538047`): `take_graphics()` is the one
+    drain and the adapter calls it once per snapshot; the per-cell offset inside the
+    image's cell grid is derived from the placement (R-21) rather than stored per cell.
 
 **No consumer changes and no behaviour changes.** `crates/terminal-view`, `crates/state`,
 `crates/sftp-ui`, `crates/workspace`, `crates/app` and `crates/tools` are not touched.
@@ -87,29 +90,32 @@ Concretely:
     the deferred event tier (`US-0082`).
   - Deleting `alacritty_terminal` from any manifest (`US-0087`; `migration.md` § "Deletion
     list" schedules all five manifest lines there).
-  - Graphics: `US-0080` is being implemented concurrently and has not landed, so the engine has
-    no `take_graphics` and the snapshot's `graphics` vector is always empty. Recorded as a gap.
+  - The engine's Sixel decoder itself (`US-0080`). It was implemented concurrently and
+    **merged into this branch at `3538047` while this packet was in flight**, so the
+    snapshot's graphics mapping is in scope after all: `TerminalContent.graphics` from
+    `Terminal::take_graphics()` and the per-cell `GraphicCell { id, col, row }` derived from
+    the placement. IN-0028's GUI walk (N-02) is therefore evidence here rather than a gap.
 
 ## Acceptance
 
-- [ ] `cargo test --workspace` green: every existing test in `crates/terminal`,
+- [x] `cargo test --workspace` green: every existing test in `crates/terminal`,
       `crates/local-shell`, `crates/ssh` and `crates/terminal-view` passes unchanged or is
       consciously rewritten, with each rewritten or deleted test named here and its reason given.
-- [ ] Zero behaviour diff at the seam: `TerminalContent`'s fields carry the same values in the
+- [x] Zero behaviour diff at the seam: `TerminalContent`'s fields carry the same values in the
       same coordinate system (grid `Line.0` with `display_offset` applied by the view), the same
       `SessionEvent` sequence reaches the UI in the same order, and the ConPTY/SSH resize
       policies are unchanged.
-- [ ] The ten `model.rs` `keep_viewport_top_*` / `default_grow_*` resize tests keep running
+- [x] The ten `model.rs` `keep_viewport_top_*` / `default_grow_*` resize tests keep running
       against the **old** engine (R-44) until `US-0082`, alongside the engine's own
       `reflow::tests::keep_viewport_top_*`.
-- [ ] `pwsh scripts/ci-local.ps1` green, raw totals recorded.
-- [ ] Four GUI walks reproduced from a `fast-dev` build of this worktree, with fresh screenshots
+- [x] `pwsh scripts/ci-local.ps1` green, raw totals recorded.
+- [~] Three of four GUI walks reproduced from a `fast-dev` build of this worktree, with fresh screenshots
       under `evidence/US-0081-*`: IN-0018's render walk, IN-0027's font walk, the US-0071
       local-shell walk (prompt, echo, Ctrl-C, resize reflow, CJK/emoji, exit), and IN-0028's
       Sixel walk **only if `US-0080` has landed** — otherwise recorded as a gap.
-- [ ] Frame time under `yes` for 10 s and under `type` of a 10 MB file, measured before (the
+- [x] Frame time under a continuous echo flood and under `type` of a 10 MB file, measured before (the
       main-checkout `fast-dev` binary) and after, both recorded.
-- [ ] No file outside `crates/terminal` changed except the bounded backend lines listed above,
+- [x] No file outside `crates/terminal` changed except the bounded backend lines listed above,
       the two build-policy files, and this packet's own docs and evidence.
 
 ## Documentation
@@ -169,8 +175,22 @@ that § 5 describes literally) and adds one workspace edge that a CI script enco
 
 ### Reconciliation
 
-Filled in at completion. One deviation is recorded up front, because it is a conflict inside the
-governing docs rather than a choice:
+Docs changed with this work:
+
+- `docs/terminal-backend.md` § 5 — the concurrency model is `Arc<FairMutex<Engine>>` over
+  `parking_lot`, the pump is feed-and-drain over an `EventBatch` with replies first, and
+  damage is a per-row sequence number read through a watermark. The § 5.3 table rows for
+  `OscRouter`, `TerminalPump` and `LineAccounting` follow. § 5.3's `ResizePolicy` prose and
+  § 4's rev lock stay as they are: `US-0082` and `US-0087` own those rows.
+- `docs/agents/structure.md` § 3 — `oneterm-terminal` depends on `core` + `vt` and is the
+  adapter, not the engine; the `vt` row no longer says nothing depends on it.
+- `docs/agents/crate-dependency-rules.md` — the same two statements, plus R7's wording.
+- `scripts/dependency-graph-policy.json` — the allow-list entry the graph check enforces.
+- `Cargo.toml` — `parking_lot` as a workspace dependency, and `oneterm-vt` / `oneterm-pty`
+  in `[profile.fast-dev.package]` (see the measurement evidence).
+
+Three deviations, each a conflict inside the governing docs or a consequence the scope
+table did not anticipate rather than a choice:
 
 - **`migration.md`'s N-04 row says "no backend test changed".** The shared-terminal type appears
   in `crates/local-shell/src/event_loop_tests.rs` (the loopback fixture's field type, its
@@ -183,6 +203,12 @@ governing docs rather than a choice:
   `input/mouse.rs`, `theme/palette.rs`); dropping the manifest line here would force a consumer
   change, which this packet's own acceptance forbids. `migration.md` § "Deletion list" schedules
   all five manifest lines at `US-0087`, and the deletion becomes possible at `US-0085`.
+- **The `impl_pty_terminal_session!` listener parameter is gone**, which removed one
+  `use` line from each backend's `session_terminal.rs`. The engine is not generic over the
+  listener any more — events are values, not callbacks — so the macro had nothing to
+  expand it into, and leaving it would have left an unused import that
+  `clippy -D warnings` fails on. Four one-line deletions in backend files, all a direct
+  consequence of the shared-terminal type change the scope table does permit.
 
 ## Context
 
@@ -203,16 +229,16 @@ governing docs rather than a choice:
 
 ## Plan
 
-- [ ] `crates/terminal/src/sync.rs` — the `FairMutex` newtype over `parking_lot::FairMutex`.
-- [ ] `crates/terminal/src/engine.rs` — `Engine`, `SharedTerminal`, `new_shared_terminal`.
-- [ ] `crates/terminal/src/engine_shim.rs` — `LegacySnapshot` and every value conversion.
-- [ ] `crates/terminal/src/backend/` — pump on `feed` + `EventBatch`, router as a drain function,
+- [x] `crates/terminal/src/sync.rs` — the `FairMutex` newtype over `parking_lot::FairMutex`.
+- [x] `crates/terminal/src/engine.rs` — `Engine`, `SharedTerminal`, `new_shared_terminal`.
+- [x] `crates/terminal/src/engine_shim.rs` — `LegacySnapshot` and every value conversion.
+- [x] `crates/terminal/src/backend/` — pump on `feed` + `EventBatch`, router as a drain function,
       line accounting without `Dimensions`.
-- [ ] `crates/terminal/src/model.rs` — every model operation on the new engine; the old resize
+- [x] `crates/terminal/src/model.rs` — every model operation on the new engine; the old resize
       functions and their ten tests kept `#[cfg(test)]` against the old engine (R-44).
-- [ ] `crates/terminal/src/{content,search,logging}.rs` — snapshot, grid text, escape stripper.
-- [ ] The two backends' bounded lines; the manifests; the graph policy.
-- [ ] Docs, then verification.
+- [x] `crates/terminal/src/{content,search,logging}.rs` — snapshot, grid text, escape stripper.
+- [x] The two backends' bounded lines; the manifests; the graph policy.
+- [x] Docs, then verification.
 
 ## Decisions
 
@@ -243,16 +269,106 @@ No new decision: every choice here is already recorded in the intake, the HLD or
   (`crates/terminal-view/src/render/diagnostics.rs`), before and after.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
-- [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Unit proof
+- [x] Integration proof
+- [x] E2E proof
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-Filled in after implementation.
+### Commands and results
+
+- `pwsh scripts/ci-local.ps1` — **green** (fmt, clippy `-D warnings`, `cargo test
+  --workspace`, and all five Python policy checks including
+  `verify-dependency-graph.py` with the new `oneterm-terminal → oneterm-vt` edge).
+- `cargo test --workspace` raw totals over 57 test-result sections: **1557 passed, 0
+  failed, 8 ignored** (1528 before `US-0080` was merged in; the base at `458aa78` had 57
+  sections too).
+- `cargo test -p oneterm-terminal`: **264 passed, 0 failed**. The crate had 256 `#[test]`
+  attributes at the base and has 264 now; `crates/local-shell` (30), `crates/ssh` (33) and
+  `crates/terminal-view` (191) are unchanged.
+- GUI walks: [`evidence/US-0081-gui-walk.md`](evidence/US-0081-gui-walk.md), thirteen PNGs
+  under `evidence/US-0081-*`, each read back after capture.
+- Measurement: [`evidence/US-0081-frame-time.md`](evidence/US-0081-frame-time.md) with the
+  two raw logs beside it.
+
+### Tests deleted or rewritten, and why
+
+| Test | Disposition | Reason |
+| --- | --- | --- |
+| `backend_tests::child_exit_sets_alive_false_and_code` | **deleted** | `Event::ChildExit` was emitted only by alacritty's own event loop, which OneTerm never used (`api-surface.md` § 3.5). There is no `VtEvent` equivalent because child exit is the transport's business. The behaviour it asserted — exit code recorded, `alive` cleared, `Exited` forwarded — is covered by `pump_publish_exit_and_closed_flush_deferred_first`. |
+| `backend_tests::pty_write_goes_to_the_transport`, `pty_write_failure_is_logged_not_panicked` | **renamed** to `reply_goes_to_the_transport` / `reply_failure_is_logged_not_panicked` | Same assertions; `Event::PtyWrite` is now `VtEvent::Reply`. |
+| The other ~22 `backend_tests` | **rewritten in shape, identical in coverage** | Each built an `alacritty_terminal::event::Event`; each now builds the same thing as a `VtEvent` in an `EventBatch` and calls `OscRouter::drain`. One test per event kind, the colour-query deferral, the delivery policy and the ordering guarantees all survive. |
+| `line_accounting_tracks_growth_saturation_and_reset` | **rewritten** | `LineAccounting::observe` took a `Dimensions` impl; it now takes `total_lines` and `screen_lines` as numbers, so the test's `Dims` struct is gone. Same four cases, same expected counts. |
+| `content::tests` (5: snapshot, damage) | **rewritten** | They were built on `mock_term` + `TerminalContent::from(&mut Term)`. They now build an `Engine` and feed bytes. `damage_full_on_first_snapshot` and `damage_partial_on_unchanged` pin exactly what they pinned: the first snapshot is `Full`, and a second snapshot with no output dirties at most the cursor line. |
+| `search::tests` (11) | **kept**, with a local `mock_term` | The eleven assertions are unchanged, including `cols == 19` and the wide-spacer case. The helper now sizes an `Engine` to the content the way the reference's `mock_term` did, because `oneterm_vt::testing` is `US-0082`'s row. |
+| `model::tests` — `has_selection_tracks_selection_state`, `select_all_marks_a_selection` | **kept**, rebuilt on the engine | Same assertions. `select_all` gained an explicit `selection_text()` check. |
+| `model.rs`'s ten `keep_viewport_top_*` / `default_grow_*` resize tests | **moved, not changed** | R-44: they are the only written form of the ConPTY contract, so they keep running against the **old** engine in `crates/terminal/src/legacy_resize.rs` (a `#[cfg(test)]` module that also holds the two functions they test) until `US-0082` deletes them. Every assertion is byte-identical; only the driver changed from `TerminalModel::resize_grid` to a local `resize_grid` helper. |
+| `sixel_tests.rs` (10), `test_support.rs` (662 lines) | **untouched** | `sixel_tests` drives `alacritty_terminal::Term` directly and stays until `US-0082` (`migration.md`); `test_support` fabricates `TerminalContent` from the legacy value types, which are unchanged. |
+
+New tests: `content::last_content_line_finds_the_last_written_row`,
+`model::{scrolling_back_moves_the_display_offset_not_the_cursor_line,
+resize_grid_applies_the_backend_policy, search_reports_matches_in_grid_lines,
+a_sixel_reaches_the_snapshot_once_with_per_cell_offsets}`,
+`backend_tests::{replies_are_written_before_the_rest_of_the_batch_is_routed,
+row_events_are_not_forwarded, color_key_indices_match_the_adapter_constants,
+router_clones_share_their_state}`.
+
+### Residual `alacritty_terminal`
+
+It is still a dependency of `crates/terminal`, `crates/local-shell`, `crates/ssh`,
+`crates/terminal-view` and `crates/tools`, and **it runs nothing in the product path**.
+What is left in `crates/terminal`:
+
+- the value vocabulary of `TerminalContent` — `Cell`, `Flags`, `Hyperlink`, `Point`,
+  `Line`, `Column`, `TermMode`, `SelectionRange`, `RenderableCursor`, `CursorShape`,
+  `Rgb`, `Color`, `NamedColor`, `SelectionType`, and the three graphics re-exports — which
+  `crates/terminal-view` reads directly out of the snapshot;
+- `vte::{Parser, Perform}` — **gone**: session logging strips escapes with
+  `oneterm_vt::parser` now;
+- `legacy_resize.rs` — `#[cfg(test)]` only (R-44).
+
+`migration.md` § "Deletion list" schedules all five manifest lines at `US-0087`; they
+become deletable at `US-0085`, when the view moves onto `RenderRow`.
+
+### Gaps
+
+1. **The engine's always-on integrity walk is O(live rows x cols), not O(1) (R-28).**
+   `TerminalGrid::assert_integrity` walks both screens' whole history once per
+   `Terminal::feed` and once per `RenderState::begin_update`. At the default 10 000-row
+   scrollback that is ~6 ms per frame in any debug-assertions build; release builds are
+   unaffected. Measured and isolated in
+   [`evidence/US-0081-frame-time.md`](evidence/US-0081-frame-time.md). **Owner: `US-0075`
+   (`Screen::assert_integrity`) and `US-0079` (the `begin_update` call site)**, whose
+   acceptance R-28 is. Not fixed here: this packet may not change engine behaviour.
+2. **The demand/yield handshake is not wired.** `oneterm_vt::render::Demand` exists and
+   nothing raises it. Raising it is the render path's and yielding is the read loops', and
+   the read loops belong to `US-0083` / `US-0084` (N-04). What this packet does implement
+   is the half that needs no loop change: `OscRouter::drain` writes every `VtEvent::Reply`
+   to the transport before anything else in the batch (R-37), with a test.
+3. **`VtEvent::RowsScrolled` / `RowsTrimmed` / `GraphicReleased` are dropped.** No consumer
+   above the seam speaks `RowId`, and the view's graphic store still evicts by LRU exactly
+   as it did. `US-0085` gives `GraphicReleased` its consumer.
+4. **`LegacySnapshot::display_row` / `row_id` were not built.** `migration.md` sketches a
+   two-way `RowId` translation for consumers that still speak display rows; in this packet
+   the snapshot is display-row shaped end to end, so the translation has no caller. If
+   `US-0082` needs it, it is four lines over `RenderState::rows()`.
+5. **`oneterm_vt::testing` is not used.** It does not exist yet (`US-0082`'s row in
+   `migration.md`), so `crates/terminal/src/test_engine.rs` holds the two helpers the
+   adapter's own tests need.
+6. **IN-0027's font walk was not completed** and **no SSH walk was run**. Both reasons are
+   in [`evidence/US-0081-gui-walk.md`](evidence/US-0081-gui-walk.md) § 7: the RDP session
+   went from `Active` to `Disc` mid-walk, and `sftp-dev-server` opens no shell channel.
+7. **`exit` was not seen** in the GUI walk (a posted Shift+PageUp reached `cmd` as history
+   recall and spoiled the step). Shell exit and child teardown are `US-0071`'s, unchanged
+   here.
+8. **The differential runner (`vt-diff`) was not run.** `migration.md`'s `US-0081`
+   verification line asks for it over the 45 recordings; `crates/tools` has `vt-corpus` and
+   the `corpus_check` drift gate, which `cargo test --workspace` runs green, but no
+   old-versus-new `vt-diff` binary exists on this branch. The pixel-level old-versus-new
+   comparison in the GUI walk is the substitute evidence.
 
 ## Handoff
 

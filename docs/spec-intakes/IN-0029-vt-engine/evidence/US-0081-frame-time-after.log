@@ -1,0 +1,67 @@
+[2026-09-12T14:59:44Z WARN  gpui_windows::directx_devices] Failed to get DXGI debug interface. DirectX debugging features will be disabled.
+[2026-09-12T14:59:44Z INFO  gpui_windows::directx_devices] Using GPU: Intel(R) UHD Graphics 770
+[2026-09-12T14:59:44Z INFO  gpui_windows::directx_devices] Created device with Direct3D 11.1 feature level.
+[2026-09-12T14:59:44Z INFO  gpui_windows::direct_write] Use Segoe UI as UI font.
+[2026-09-12T14:59:44Z INFO  oneterm_terminal_view::terminal_view::completion] completion: controller initialized (kind=Cmd, family=Cmd, enabled=true)
+[2026-09-12T14:59:44Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:59:44Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 45/45 candidate, 45 planned, 0 shaped, 0 glyph hits, 1 url scans, 2 quads, 0 glyphs, 2 layers, prepaint 1340 us, paint 41 us, p95 1381 us, p99 1381 us over 1 frames
+[2026-09-12T14:59:44Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" prompt_found=true visible=false n=0
+[2026-09-12T14:59:46Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" prompt_found=true visible=false n=0
+[2026-09-12T14:59:50Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 1/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 2 quads, 140 glyphs, 2 layers, prepaint 281 us, paint 112 us, p95 3555 us, p99 17223 us over 13 frames
+[2026-09-12T14:59:52Z DEBUG oneterm_terminal_view::completion::controller] completion: 17 suggestion(s) for "e" (token "e")
+[2026-09-12T14:59:52Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="e" prompt_found=true visible=true n=17
+[2026-09-12T14:59:53Z DEBUG oneterm_terminal_view::completion::controller] completion: overlay hidden for "echo meas"
+[2026-09-12T14:59:53Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="echo meas" prompt_found=true visible=false n=0
+[2026-09-12T14:59:53Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="echo measure-start" prompt_found=true visible=false n=0
+[2026-09-12T14:59:53Z DEBUG oneterm_terminal_view::completion::controller] completion: capture → history (Cmd): "echo measure-start"
+[2026-09-12T14:59:54Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" prompt_found=true visible=false n=0
+[2026-09-12T14:59:55Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 1/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 2 quads, 310 glyphs, 2 layers, prepaint 183 us, paint 117 us, p95 3555 us, p99 17223 us over 28 frames
+[2026-09-12T15:00:00Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 1/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 2 quads, 310 glyphs, 2 layers, prepaint 196 us, paint 329 us, p95 1381 us, p99 17223 us over 38 frames
+[2026-09-12T15:00:00Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="for /L" prompt_found=true visible=false n=0
+[2026-09-12T15:00:01Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="for /L %i in (" prompt_found=true visible=false n=0
+[2026-09-12T15:00:01Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="for /L %i in (1,1,4000" prompt_found=true visible=false n=0
+[2026-09-12T15:00:01Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="for /L %i in (1,1,400000) do @" prompt_found=true visible=false n=0
+[2026-09-12T15:00:01Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="for /L %i in (1,1,400000) do @echo yyy" prompt_found=true visible=false n=0
+[2026-09-12T15:00:02Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="for /L %i in (1,1,400000) do @echo yyyyyyyyyyy" prompt_found=true visible=false n=0
+[2026-09-12T15:00:02Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="for /L %i in (1,1,400000) do @echo yyyyyyyyyyyyyyyyyyy" prompt_found=true visible=false n=0
+[2026-09-12T15:00:02Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="for /L %i in (1,1,400000) do @echo yyyyyyyyyyyyyyyyyyyyyyyyyyy" prompt_found=true visible=false n=0
+[2026-09-12T15:00:02Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="for /L %i in (1,1,400000) do @echo yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy" prompt_found=true visible=false n=0
+[2026-09-12T15:00:03Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="for /L %i in (1,1,400000) do @echo yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy" prompt_found=true visible=false n=0
+[2026-09-12T15:00:03Z DEBUG oneterm_terminal_view::completion::controller] completion: capture → history (Cmd): "for /L %i in (1,1,400000) do @echo yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+[2026-09-12T15:00:22Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T15:00:22Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 52/52 candidate, 51 planned, 0 shaped, 51 glyph hits, 1 url scans, 2 quads, 2040 glyphs, 2 layers, prepaint 8589 us, paint 585 us, p95 3555 us, p99 17223 us over 50 frames
+[2026-09-12T15:00:22Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T15:00:29Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T15:00:29Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 52/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 1 quads, 2040 glyphs, 1 layers, prepaint 6157 us, paint 392 us, p95 6549 us, p99 9174 us over 52 frames
+[2026-09-12T15:00:37Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" prompt_found=true visible=false n=0
+[2026-09-12T15:00:37Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 52/52 candidate, 2 planned, 0 shaped, 1 glyph hits, 1 url scans, 1 quads, 2140 glyphs, 1 layers, prepaint 6587 us, paint 405 us, p95 6905 us, p99 9174 us over 53 frames
+[2026-09-12T15:00:42Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 1/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 1 quads, 2140 glyphs, 1 layers, prepaint 6842 us, paint 387 us, p95 9174 us, p99 11230 us over 63 frames
+[2026-09-12T15:00:45Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="type C:" prompt_found=true visible=false n=0
+[2026-09-12T15:00:45Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="type C:\\Users\\" prompt_found=true visible=false n=0
+[2026-09-12T15:00:45Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="type C:\\Users\\trunglt\\" prompt_found=true visible=false n=0
+[2026-09-12T15:00:45Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="type C:\\Users\\trunglt\\AppData\\" prompt_found=true visible=false n=0
+[2026-09-12T15:00:46Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="type C:\\Users\\trunglt\\AppData\\Local\\Tem" prompt_found=true visible=false n=0
+[2026-09-12T15:00:46Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="type C:\\Users\\trunglt\\AppData\\Local\\Temp\\claude" prompt_found=true visible=false n=0
+[2026-09-12T15:00:46Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="type C:\\Users\\trunglt\\AppData\\Local\\Temp\\claude\\D--Trun" prompt_found=true visible=false n=0
+[2026-09-12T15:00:46Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="type C:\\Users\\trunglt\\AppData\\Local\\Temp\\claude\\D--TrungKFC-Res" prompt_found=true visible=false n=0
+[2026-09-12T15:00:47Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="type C:\\Users\\trunglt\\AppData\\Local\\Temp\\claude\\D--TrungKFC-Research-Ru" prompt_found=true visible=false n=0
+[2026-09-12T15:00:47Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 1/52 candidate, 1 planned, 1 shaped, 1 glyph hits, 1 url scans, 1 quads, 2210 glyphs, 1 layers, prepaint 7711 us, paint 428 us, p95 9174 us, p99 11230 us over 79 frames
+[2026-09-12T15:00:47Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="type C:\\Users\\trunglt\\AppData\\Local\\Temp\\claude\\D--TrungKFC-Research-Rust-myTer" prompt_found=true visible=false n=0
+[2026-09-12T15:00:47Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="type C:\\Users\\trunglt\\AppData\\Local\\Temp\\claude\\D--TrungKFC-Research-Rust-myTerm2\\fa2d0" prompt_found=true visible=false n=0
+[2026-09-12T15:00:47Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="5-9c28" gating=false (hidden)
+[2026-09-12T15:00:48Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="5-9c28-4a69-a2" gating=false (hidden)
+[2026-09-12T15:00:48Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="5-9c28-4a69-a255-ba74" gating=false (hidden)
+[2026-09-12T15:00:48Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="5-9c28-4a69-a255-ba7479e604cb\\" gating=false (hidden)
+[2026-09-12T15:00:49Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="5-9c28-4a69-a255-ba7479e604cb\\scratchp" gating=false (hidden)
+[2026-09-12T15:00:49Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="5-9c28-4a69-a255-ba7479e604cb\\scratchpad\\big10" gating=false (hidden)
+[2026-09-12T15:00:49Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="5-9c28-4a69-a255-ba7479e604cb\\scratchpad\\big10mb.txt" gating=false (hidden)
+[2026-09-12T15:00:49Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="5-9c28-4a69-a255-ba7479e604cb\\scratchpad\\big10mb.txt" gating=false (hidden)
+[2026-09-12T15:00:50Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="5-9c28-4a69-a255-ba7479e604cb\\scratchpad\\big10mb.txt" gating=false (hidden)
+[2026-09-12T15:00:50Z DEBUG oneterm_terminal_view::completion::controller] completion: capture → history (Cmd): "5-9c28-4a69-a255-ba7479e604cb\\scratchpad\\big10mb.txt"
+[2026-09-12T15:00:54Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" prompt_found=true visible=false n=0
+[2026-09-12T15:00:54Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 52/52 candidate, 52 planned, 1 shaped, 50 glyph hits, 1 url scans, 2 quads, 6090 glyphs, 2 layers, prepaint 8746 us, paint 1212 us, p95 10691 us, p99 11735 us over 91 frames
+[2026-09-12T15:00:59Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 1/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 1 quads, 6090 glyphs, 1 layers, prepaint 6212 us, paint 959 us, p95 10628 us, p99 11735 us over 102 frames
+[2026-09-12T15:01:04Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 1/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 1 quads, 6090 glyphs, 1 layers, prepaint 6025 us, paint 1171 us, p95 10628 us, p99 12092 us over 112 frames
+[2026-09-12T15:01:09Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 1/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 1 quads, 6090 glyphs, 1 layers, prepaint 5994 us, paint 962 us, p95 10628 us, p99 12092 us over 122 frames
+[2026-09-12T15:01:15Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 1/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 1 quads, 6090 glyphs, 1 layers, prepaint 6975 us, paint 1024 us, p95 10371 us, p99 12092 us over 132 frames
+[2026-09-12T15:01:20Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 1/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 1 quads, 6090 glyphs, 1 layers, prepaint 5828 us, paint 954 us, p95 10628 us, p99 12092 us over 142 frames
