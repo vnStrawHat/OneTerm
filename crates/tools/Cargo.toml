@@ -57,8 +57,10 @@ tokio.workspace = true
 rand.workspace = true
 
 # --- IN-0029 / US-0072: the VT benchmark and parity harness -----------------
-# vt-corpus / vt-bench: `alacritty_terminal` above is the engine being replaced
-# and the only one that ever blesses an expectation.
+# vt-corpus / vt-bench: `alacritty_terminal` is the engine being replaced and
+# the only one that ever blesses an expectation (pty-throughput no longer needs
+# it since US-0071; it goes away with US-0087).
+alacritty_terminal.workspace = true
 anyhow.workspace = true
 serde = { workspace = true, features = ["derive"] }
 # Reads size.json / config.json, writes the bench JSON table, and parses
