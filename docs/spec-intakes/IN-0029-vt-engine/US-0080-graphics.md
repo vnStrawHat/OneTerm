@@ -56,9 +56,16 @@ without engine access.
       § Verification exists under that exact name in `graphics::tests`.
 - [x] All eleven expectations in `crates/terminal/src/sixel_tests.rs:46-271` are reproduced at
       engine level with the same inputs and the same expected cells and cursor.
-- [x] A placement moves with an in-region scroll, `IL` and `DL`, and is dropped by an erase,
-      an overwrite of every covered cell, a history trim and a reflow that kills its anchor —
-      each firing `GraphicReleased` exactly once.
+- [x] A placement moves with an in-region scroll, `IL` and `DL`, and is dropped when a **row
+      reset** clears `HAS_GRAPHIC` — the alternate screen's `ED 2`, `RIS`, a scroll blank — or
+      when its anchor dies to a history trim or a reflow, each firing `GraphicReleased`
+      exactly once.
+- [x] Overwriting a covered cell with text drops **that cell's** reference and no other. It
+      does **not** release the placement, and neither does `EL 2`: neither path resets the
+      row, so `RowFlags::HAS_GRAPHIC` survives as the false positive R-22 explicitly allows,
+      and the renderer keeps painting the whole image from its placement (`DEC-0012`, the
+      documented v1 limitation). Nor does `CSI 2 J` on the **primary** screen, where R-13
+      scrolls the graphic-bearing row into scrollback alive.
 - [x] An image emitted at the bottom scrolls its top bands into history with its cells.
 - [x] An image wider or taller than the grid is clipped, never wrapped.
 - [x] A 32 MiB unterminated Sixel stream stays bounded and stamps no cells.
@@ -272,9 +279,15 @@ Recorded, not applied to the LLD; each is the design owner's to reconcile.
 6. **`MAX_PLACEMENTS = 256`, oldest-released.** The LLD bounds nothing. A stream emitting an
    image per line of a million-row scrollback would otherwise grow the placement table and the
    linear release sweep without limit; the bound frees the view's texture rather than leaking.
-7. **An unknown colour mode selects the register.** The LLD's grammar table says "other modes
-   select only"; the vendored code returns early and selects nothing. The LLD text is followed.
-   No test in either suite reaches it.
+7. **An unknown colour mode selects the register — a parity break.** For
+   `#Pr;Pu;Px;Py;Pz` with `Pu` outside `{1, 2}`, the old engine returns early and selects
+   **nothing**, leaving the previously selected register in force; this engine selects `Pr`
+   without defining it. The LLD's grammar table ("other modes select only") is followed over
+   the port. It is a deliberate, undeclared behaviour difference from the engine being
+   replaced, not an accident: harmless because no Sixel producer emits a mode outside
+   `{1, 2}`, unreachable from the corpus and the fixtures (both are identical), and covered by
+   no test in either suite. Flagged here so the design owner can confirm the LLD text or ask
+   for the port's behaviour back.
 8. **`SixelParser::new()` takes no parameters.** The LLD's `start(&Params, u8)` passed `P1;P2;P3`
    to a decoder that has never read them (parity: `P2` is ignored deliberately). The dispatch
    layer does the `q` test instead.
