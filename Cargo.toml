@@ -225,9 +225,11 @@ gpui-pre = { opt-level = 3 }
 gpui-pre-platform = { opt-level = 3 }
 smol = { opt-level = 3 }
 alacritty_terminal = { opt-level = 3 }
-# The engine and the transport the swap moved the hot path onto (IN-0029): they
-# inherit `alacritty_terminal`'s place in this list, not `dev`'s opt-level = 0.
+# The engine the swap moved the hot path onto (IN-0029 `US-0081`): it inherits
+# `alacritty_terminal`'s place in this list, not `dev`'s opt-level = 0.
 oneterm-vt = { opt-level = 3 }
+# The transport was on the hot path before the swap too and was simply never
+# listed; added opportunistically while measuring the engine, not required by it.
 oneterm-pty = { opt-level = 3 }
 oneterm-terminal-view = { opt-level = 3 }
 oneterm-core = { opt-level = 3 }

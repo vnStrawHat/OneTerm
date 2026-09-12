@@ -101,17 +101,17 @@ fn recv_within(events: &async_channel::Receiver<SessionEvent>, timeout: Duration
 
 // ── Router: event → state + SessionEvent ─────────────────────────────────
 
+/// The repaint hint has one owner, the pump: the engine's end-of-batch
+/// `Repaint` is dropped here, or every chunk would post two `Output`s and the
+/// first would arrive before that batch's reliable events.
 #[test]
-fn forwards_title_and_wakeup() {
+fn forwards_title_and_drops_the_batch_repaint_hint() {
     let f = local(16);
     route(&f.router, |batch| {
         batch.push_title(b"hello");
         batch.push_repaint();
     });
-    assert_eq!(
-        drain(&f.events),
-        vec![SessionEvent::Title("hello".into()), SessionEvent::Output]
-    );
+    assert_eq!(drain(&f.events), vec![SessionEvent::Title("hello".into())]);
     assert_eq!(f.state.title().as_deref(), Some("hello"));
 }
 
@@ -480,13 +480,46 @@ fn pump_batch_orders_reliable_events_before_repaint() {
             SessionEvent::Title("hello".into()),
             SessionEvent::Bell,
             SessionEvent::Output,
-            SessionEvent::Output,
         ],
-        "the batch's own Repaint hint, then the pump's"
+        "exactly one repaint hint per batch, after the reliable events"
     );
     assert_eq!(f.state.title().as_deref(), Some("hello"));
     assert!(pump.absolute_line_count() >= 24);
     assert_eq!(f.state.absolute_line_count(), pump.absolute_line_count());
+}
+
+/// One repaint hint per chunk, last — the property the old listener had because
+/// the pump was the only source of `Output`, and the engine's per-batch
+/// `Repaint` must not become a second source. Three chunks, each carrying
+/// reliable events, must produce three `Output`s, each after its own chunk's
+/// reliable events.
+#[test]
+fn each_chunk_posts_exactly_one_output_after_its_reliable_events() {
+    let f = local(64);
+    let term = new_term();
+    let mut pump = TerminalPump::new(f.router.clone());
+
+    for index in 0..3u8 {
+        pump.process_chunk(&term, format!("\x1b]2;t{index}\x07\x07").as_bytes());
+        pump.finish_batch_blocking(true);
+    }
+
+    let events = drain(&f.events);
+    assert_eq!(
+        events,
+        vec![
+            SessionEvent::Title("t0".into()),
+            SessionEvent::Bell,
+            SessionEvent::Output,
+            SessionEvent::Title("t1".into()),
+            SessionEvent::Bell,
+            SessionEvent::Output,
+            SessionEvent::Title("t2".into()),
+            SessionEvent::Bell,
+            SessionEvent::Output,
+        ],
+        "{events:?}"
+    );
 }
 
 #[test]
@@ -621,7 +654,6 @@ fn pump_async_variants_publish_lifecycle_in_order() {
         drain(&f.events),
         vec![
             SessionEvent::Bell,
-            SessionEvent::Output,
             SessionEvent::Output,
             SessionEvent::Exited(None),
             SessionEvent::Closed

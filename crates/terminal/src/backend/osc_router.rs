@@ -150,7 +150,14 @@ impl<T: PtyTransport> OscRouter<T> {
     pub fn handle(&self, batch: &EventBatch, event: &VtEvent) {
         match event {
             // ── Render signal ──────────────────────────────────────────
-            VtEvent::Repaint => self.forward(SessionEvent::Output),
+            //
+            // Dropped on purpose. The engine appends `Repaint` to every batch
+            // that dispatched anything, but the repaint hint has exactly one
+            // owner and always has: `TerminalPump::finish_batch*`, which posts
+            // it **after** the deferred reliable events so a frame never shows
+            // content before that batch's title, cwd or agent event. Forwarding
+            // it here too would double the hints and put the first one first.
+            VtEvent::Repaint => {}
             // ── Title (OSC 0/2) ─────────────────────────────────────────
             VtEvent::Title(span) => self.set_title(batch.str(*span)),
             VtEvent::TitleReset => self.set_title(""),

@@ -351,8 +351,10 @@ fn width_flag(width: CellWidth) -> Flags {
     }
 }
 
-/// Blink and overline have no reference bit and the renderer draws neither, so
-/// they are dropped rather than approximated (deviation D11, `US-0086`).
+/// Blink and overline are dropped because the legacy `Flags` has no bit for
+/// either: `US-0076`'s correction C11 stores them in the engine, and the
+/// snapshot cannot carry them until `US-0085` puts the view on `RenderRow`.
+/// Structural, not a behaviour change — the renderer draws neither today.
 fn legacy_flags(attrs: Attrs) -> Flags {
     let pairs = [
         (Attrs::BOLD, Flags::BOLD),

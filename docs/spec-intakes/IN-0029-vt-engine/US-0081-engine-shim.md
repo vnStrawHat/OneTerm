@@ -105,7 +105,7 @@ Concretely:
       same coordinate system (grid `Line.0` with `display_offset` applied by the view), the same
       `SessionEvent` sequence reaches the UI in the same order, and the ConPTY/SSH resize
       policies are unchanged.
-- [x] The ten `model.rs` `keep_viewport_top_*` / `default_grow_*` resize tests keep running
+- [x] The fifteen `model.rs` `keep_viewport_top_*` / `default_grow_*` resize tests keep running
       against the **old** engine (R-44) until `US-0082`, alongside the engine's own
       `reflow::tests::keep_viewport_top_*`.
 - [x] `pwsh scripts/ci-local.ps1` green, raw totals recorded.
@@ -305,8 +305,11 @@ No new decision: every choice here is already recorded in the intake, the HLD or
 | `content::tests` (5: snapshot, damage) | **rewritten** | They were built on `mock_term` + `TerminalContent::from(&mut Term)`. They now build an `Engine` and feed bytes. `damage_full_on_first_snapshot` and `damage_partial_on_unchanged` pin exactly what they pinned: the first snapshot is `Full`, and a second snapshot with no output dirties at most the cursor line. |
 | `search::tests` (11) | **kept**, with a local `mock_term` | The eleven assertions are unchanged, including `cols == 19` and the wide-spacer case. The helper now sizes an `Engine` to the content the way the reference's `mock_term` did, because `oneterm_vt::testing` is `US-0082`'s row. |
 | `model::tests` — `has_selection_tracks_selection_state`, `select_all_marks_a_selection` | **kept**, rebuilt on the engine | Same assertions. `select_all` gained an explicit `selection_text()` check. |
-| `model.rs`'s ten `keep_viewport_top_*` / `default_grow_*` resize tests | **moved, not changed** | R-44: they are the only written form of the ConPTY contract, so they keep running against the **old** engine in `crates/terminal/src/legacy_resize.rs` (a `#[cfg(test)]` module that also holds the two functions they test) until `US-0082` deletes them. Every assertion is byte-identical; only the driver changed from `TerminalModel::resize_grid` to a local `resize_grid` helper. |
+| `model.rs`'s fifteen `keep_viewport_top_*` / `default_grow_*` resize tests (13 + 2) | **moved, not changed** | R-44: they are the only written form of the ConPTY contract, so they keep running against the **old** engine in `crates/terminal/src/legacy_resize.rs` (a `#[cfg(test)]` module that also holds the two functions they test) until `US-0082` deletes them. Every assertion is byte-identical; only the driver changed from `TerminalModel::resize_grid` to a local `resize_grid` helper. |
 | `sixel_tests.rs` (10), `test_support.rs` (662 lines) | **untouched** | `sixel_tests` drives `alacritty_terminal::Term` directly and stays until `US-0082` (`migration.md`); `test_support` fabricates `TerminalContent` from the legacy value types, which are unchanged. |
+
+Adopted from the verification round: `crates/terminal/tests/us0081_parity.rs`, the
+old-versus-new differential (see gap 8). It retires with the fork at `US-0087`.
 
 New tests: `content::last_content_line_finds_the_last_written_row`,
 `model::{scrolling_back_moves_the_display_offset_not_the_cursor_line,
@@ -314,7 +317,19 @@ resize_grid_applies_the_backend_policy, search_reports_matches_in_grid_lines,
 a_sixel_reaches_the_snapshot_once_with_per_cell_offsets}`,
 `backend_tests::{replies_are_written_before_the_rest_of_the_batch_is_routed,
 row_events_are_not_forwarded, color_key_indices_match_the_adapter_constants,
-router_clones_share_their_state}`.
+router_clones_share_their_state,
+each_chunk_posts_exactly_one_output_after_its_reliable_events}`.
+
+**Verification rework (the one real defect).** `OscRouter::drain` forwarded
+`SessionEvent::Output` on the engine's end-of-batch `VtEvent::Repaint`, and the pump's
+`finish_batch*` forwarded it again — two hints per chunk, the first of them *before* the
+batch's deferred reliable events, where the old path emitted exactly one, last. That
+contradicted this packet's own acceptance. The `Repaint` arm is now dropped: the repaint
+hint has one owner, the pump. `forwards_title_and_wakeup` became
+`forwards_title_and_drops_the_batch_repaint_hint`, the two pump tests went back to the
+sequences they pinned before this packet, and
+`each_chunk_posts_exactly_one_output_after_its_reliable_events` drives three chunks and
+pins `[Title, Bell, Output] x3`.
 
 ### Residual `alacritty_terminal`
 
@@ -330,8 +345,12 @@ What is left in `crates/terminal`:
   `oneterm_vt::parser` now;
 - `legacy_resize.rs` — `#[cfg(test)]` only (R-44).
 
-`migration.md` § "Deletion list" schedules all five manifest lines at `US-0087`; they
-become deletable at `US-0085`, when the view moves onto `RenderRow`.
+`migration.md` § "Deletion list" schedules all five manifest lines at `US-0087`. Four of
+them become deletable at `US-0085`, when the view moves onto `RenderRow` — but
+**`crates/ssh/Cargo.toml`'s is dead already**: after this packet no `crates/ssh` source
+references the crate at all (three comments aside). It is left in place because deleting a
+manifest line is not in this packet's scope table; `US-0084` can take it without waiting
+for anything.
 
 ### Gaps
 
@@ -364,11 +383,39 @@ become deletable at `US-0085`, when the view moves onto `RenderRow`.
 7. **`exit` was not seen** in the GUI walk (a posted Shift+PageUp reached `cmd` as history
    recall and spoiled the step). Shell exit and child teardown are `US-0071`'s, unchanged
    here.
-8. **The differential runner (`vt-diff`) was not run.** `migration.md`'s `US-0081`
-   verification line asks for it over the 45 recordings; `crates/tools` has `vt-corpus` and
-   the `corpus_check` drift gate, which `cargo test --workspace` runs green, but no
-   old-versus-new `vt-diff` binary exists on this branch. The pixel-level old-versus-new
-   comparison in the GUI walk is the substitute evidence.
+8. **~~The differential runner was not run.~~ Closed by the verification round.**
+   `crates/terminal/tests/us0081_parity.rs` — written by the packet's independent verifier
+   and adopted into the workspace gate — is the differential `migration.md` asks for: the
+   same bytes into the old `Term` and the new `Engine`, every field of `TerminalContent`
+   diffed after each 4 KiB chunk, over the 45 vendored recordings, `sixel_basic` and 35
+   hand-written streams, plus a damage-soundness property, a three-thread lock stress and
+   an old-versus-new flood bench (the last two `#[ignore]`d so the gate stays fast; the
+   suite runs in 4.6 s). It ends in the allow-list below: five declared differences,
+   anything else fails. It retires with the fork at `US-0087`.
+
+### Snapshot deviations
+
+The `TerminalContent` the shim produces differs from the old engine's in exactly five ways,
+each proved by the differential and each with no reader. The intake's `C` / `D` deviation
+tables cannot express them — those compare `grid.expect` / `state.expect`, not the
+snapshot — so they are declared here.
+
+| # | Delta | Why it is not user-visible |
+| --- | --- | --- |
+| S1 | `TermMode::LINE_WRAP` and `URGENCY_HINTS` are never set (all 81 streams) | `ModeSnapshot` does not carry them, and `research/api-surface.md` § 3.5 lists both under "unused mode bits … OneTerm just never queries them". No reader outside `crates/tools`' corpus dumper. |
+| S2 | `TermMode::ORIGIN` is never set (15 streams) | Same line of `api-surface.md`, same absence of a reader. `DECOM` itself is honoured inside the engine; only the snapshot bit is missing. |
+| S3 | A hyperlink with no `id=` gets `1`, `2`, … where the reference gave `0_alacritty` | The engine's implicit-id counter is per terminal by design (`cell-and-style.md`), not the reference's process-global atomic. The view hashes `id + " " + uri` (`render/frame.rs:306-312`), so only distinctness matters, and that was verified; an explicit `id=` is passed through verbatim. |
+| S4 | `total_lines` is one smaller after a Sixel (`sixel_basic`: 10 versus 9) | Engine-level, not the shim: the image's history depth. It reaches the user as a scrollbar one row short in a session that printed an image. Raised as gap 9. |
+| S5 | Damage is narrower | The reference damages a row on any write, the engine on an actual change. `us0081_parity::damage_soundness_detail` proves the property that matters — every row whose rendered content changed, plus a visible cursor's row, is always in the new `Partial` list — with **0 violations over all 81 streams**. Nothing is under-damaged, so no stale row can survive a frame. |
+
+One engine-level answer also changed and is declared here rather than in the packet that
+caused it: **DA2 replies `ESC[>0;502;1c` instead of `ESC[>0;2601;1c`**. The formula is
+unchanged; the number is `CARGO_PKG_VERSION`, which is now the workspace's `0.5.2` instead
+of the fork's. Programs read DA2 to identify the terminal, so it is worth writing down;
+`dispatch-and-modes.md` § "Answers" is its long-term home.
+
+9. **Sixel `total_lines` is one short (S4).** Owner: `US-0080`. Invisible to the parity
+   gate, because neither `grid.expect` nor `state.expect` records history depth.
 
 ## Handoff
 
