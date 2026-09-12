@@ -451,15 +451,3 @@ fn selection_kind(sel: SelectionType) -> SelectionKind {
 #[cfg(test)]
 #[path = "model_tests.rs"]
 mod tests;
-
-/// The ConPTY resize contract, still pinned against the **old** engine.
-///
-/// R-44: the ten `keep_viewport_top_*` / `default_grow_*` tests in
-/// [`legacy_resize`] are the only written form of what conhost does behind
-/// ConPTY, so they keep running against `alacritty_terminal` until `US-0082`
-/// deletes them — by which time the engine's own `reflow::tests::*` have been
-/// green in the same commit. Nothing in the product path calls into this
-/// module; it exists so the independent check survives the flip.
-#[cfg(test)]
-#[path = "legacy_resize.rs"]
-mod legacy_resize;

@@ -33,11 +33,6 @@ pub(crate) mod paste;
 pub mod search;
 pub mod security_policy;
 pub mod session;
-/// R-44: the ten Sixel tests drive `alacritty_terminal::Term` directly and are
-/// deleted in this packet's last commit, once the engine's own
-/// `graphics::tests::*` (`US-0080`) have been green beside them.
-#[cfg(test)]
-mod sixel_tests;
 #[cfg(test)]
 pub(crate) mod test_engine;
 #[cfg(any(test, feature = "test-support"))]
