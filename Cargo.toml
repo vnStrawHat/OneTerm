@@ -19,6 +19,7 @@ members = [
     "crates/ssh",
     "crates/completion",
     "crates/tools",
+    "crates/vt",
 ]
 resolver = "3"
 # Vendored dependency snapshots (patched below). Excluded as workspace members;
@@ -64,6 +65,7 @@ oneterm-local-shell = { path = "crates/local-shell" }
 oneterm-update = { path = "crates/update" }
 oneterm-ssh = { path = "crates/ssh" }
 oneterm-completion = { path = "crates/completion" }
+oneterm-vt = { path = "crates/vt" }
 
 # Terminal engine — Zed fork of alacritty_terminal with TerminalContent/display_iter,
 # VENDORED at vendor/alacritty_terminal (this rev = the pristine base; OneTerm's delta
@@ -139,6 +141,17 @@ windows-sys = { version = "0.59", features = [
 embed-resource = "3"
 # DOOM-fire diagnostic (crates/tools): terminal size detection on Unix.
 libc = "0.2"
+
+# ── oneterm-vt (IN-0029) ─────────────────────────────────────────────────────
+# All of these already resolved in Cargo.lock as transitive dependencies, so the
+# graph does not grow. `bitflags` and `rustc-hash` each resolve to two versions
+# (deny.toml:88 sets multiple-versions = "warn"); the engine pins the 2.x line.
+bitflags = "2"
+rustc-hash = "2"
+unicode-width = "0.2"
+unicode-segmentation = "1"
+# Dev-only: property tests for the packed-cell round trips, and later for reflow.
+proptest = "1"
 
 [workspace.lints.clippy]
 # Preserve compatibility with upstream gpui-component (see reference/Cargo.toml)

@@ -176,7 +176,12 @@ OneTerm/
 │   │       ├── bench.rs            # the five VT benchmark tiers (recorded, never gated)
 │   │       └── bin/                # doom-fire, pty-throughput, sftp-dev-server, vt-corpus, vt-bench
 │   │
-│   └── vt/                         # `oneterm-vt` (IN-0029) — data only until US-0073 adds the crate
+│   └── vt/                         # `oneterm-vt` (IN-0029) — OneTerm's own VT engine, in progress
+│       ├── src/
+│       │   ├── lib.rs              # module declarations + public re-exports only
+│       │   ├── cell.rs             # 8-byte packed Cell, CellWidth, Semantic, Style, Attrs, Color
+│       │   ├── intern.rs           # per-terminal style / extras / grapheme / hyperlink tables
+│       │   └── width.rs            # scalar_width + cluster_width (mode 2027 storage, not the mode)
 │       └── tests/corpus/           # the parity corpus: NOTICE + alacritty-ref/<name>/
 │                                   #   {recording, size.json, config.json, grid.expect, state.expect}
 │
@@ -229,6 +234,7 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 | `ssh` (`oneterm-ssh`) | `core`, `terminal` | backend | russh client and SFTP; implements `TerminalSession` and `SftpBackend`. |
 | `local-shell` (`oneterm-local-shell`) | `core`, `terminal` | backend | Local PTY; implements `TerminalSession`. |
 | `app` (`oneterm-app`) | shell + all five features + shared layers (incl. `update`) + gpui-component + both backends | binary | Only crate that knows every layer. Installs `AppSessionFactory`, initializes features and commands, and opens the window. |
+| `vt` (`oneterm-vt`) | `bitflags`, `rustc-hash`, `unicode-width`, `unicode-segmentation`, `log` — **no OneTerm crate**, no gpui | engine | OneTerm's own VT engine (IN-0029), being built packet by packet. Today: the storage layer — the 8-byte packed `Cell`, the per-terminal interned style / extras / grapheme / hyperlink tables, and the width rules. Nothing depends on it yet; `crates/terminal` still owns `alacritty_terminal` until the migration packets land. |
 | `tools` (`oneterm-tools`) | `alacritty_terminal`, `russh`, `russh-sftp`, `tokio`, `polling`, `rand`, `anyhow`, `serde`, `serde_json` — **no OneTerm crate** | diagnostics | Outside the L0-L4 layering, never a dependency of the app. Binaries: `doom-fire`, `pty-throughput`, `sftp-dev-server`, and (IN-0029) `vt-corpus` — the VT parity corpus: bless, check, cross-check, deviation grep — plus `vt-bench`, the five benchmark tiers. `tests/corpus_check.rs` is the parity drift gate that runs in `cargo test --workspace`. |
 
 ## 3.1 Crate & dependency rules
