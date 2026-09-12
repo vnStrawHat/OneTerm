@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use crate::cell::{Cell, CellContent, Color, NamedColor, Style};
 use crate::grid::{PrintMode, RowId, ScrollRegion, Size, TerminalGrid};
 use crate::intern::{Extras, GraphicId, Interner};
+use crate::reflow::ResizePolicy;
 use crate::render::{
     Demand, EngineView, ModeSnapshot, Palette, RenderContent, RenderState, RenderUpdate, SyncState,
 };
@@ -218,7 +219,9 @@ fn resize_and_alt_swap_and_ris_each_return_full() {
     engine.update(&mut state);
 
     engine.batch();
-    engine.grid.resize(Size { rows: 12, cols: 20 });
+    engine
+        .grid
+        .resize(Size { rows: 12, cols: 20 }, ResizePolicy::BottomAnchor);
     engine.bump_generation();
     assert_eq!(engine.update(&mut state), RenderUpdate::Full);
     assert_eq!(state.rows().len(), 12);
@@ -540,7 +543,9 @@ fn size_reports_the_viewport() {
     assert_eq!(state.size(), Size { rows: 10, cols: 20 });
 
     engine.batch();
-    engine.grid.resize(Size { rows: 12, cols: 40 });
+    engine
+        .grid
+        .resize(Size { rows: 12, cols: 40 }, ResizePolicy::BottomAnchor);
     engine.bump_generation();
     engine.update(&mut state);
     assert_eq!(state.size(), Size { rows: 12, cols: 40 });
