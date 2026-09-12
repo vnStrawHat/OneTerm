@@ -19,7 +19,8 @@
     "crates/pty",
     "crates/ssh",
     "crates/completion",
-    "crates/tools"
+    "crates/tools",
+    "crates/vt"
   ],
   "internal_dependencies": {
     "oneterm-actions": [
@@ -114,6 +115,7 @@
     "oneterm-tools": [
       "oneterm-pty"
     ],
+    "oneterm-vt": [],
     "oneterm-update": [
       "oneterm-core"
     ],
