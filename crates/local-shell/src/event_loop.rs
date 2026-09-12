@@ -19,8 +19,6 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 
-use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::Term;
 use log::error;
 use oneterm_pty::{
     ChildEvent, EventedPty, OnResize, Options, PTY_CHILD_EVENT_TOKEN, PTY_READ_WRITE_TOKEN,
@@ -29,7 +27,7 @@ use oneterm_pty::{
 use polling::{Event as PollEvent, Events, PollMode, Poller};
 
 use oneterm_core::{TerminalLogConfig, report_best_effort};
-use oneterm_terminal::{TerminalPump, local_log_identity};
+use oneterm_terminal::{SharedTerminal, TerminalPump, local_log_identity};
 
 use crate::transport::{LocalListener, LocalTransport};
 
@@ -152,7 +150,7 @@ impl ShellNotifier {
 /// surfaced via `Event::Osc` / `Event::ClearScreen`, no second parser).
 pub(crate) struct ShellEventLoop<P: EventedPty + OnResize> {
     pty: P,
-    term: std::sync::Arc<FairMutex<Term<LocalListener>>>,
+    term: SharedTerminal,
     pump: TerminalPump<LocalTransport>,
     input_rx: mpsc::Receiver<Cow<'static, [u8]>>,
     poll: std::sync::Arc<Poller>,
@@ -164,7 +162,7 @@ impl ShellEventLoop<PseudoConsole> {
     pub(crate) fn spawn_owned(
         opts: Options,
         winsize: WindowSize,
-        term: std::sync::Arc<FairMutex<Term<LocalListener>>>,
+        term: SharedTerminal,
         listener: LocalListener,
         program: PathBuf,
         logging: TerminalLogConfig,
@@ -224,7 +222,7 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
     /// owner thread.
     pub(crate) fn new(
         pty: P,
-        term: std::sync::Arc<FairMutex<Term<LocalListener>>>,
+        term: SharedTerminal,
         listener: LocalListener,
     ) -> io::Result<(Self, ShellNotifier)> {
         let poll = std::sync::Arc::new(Poller::new()?);

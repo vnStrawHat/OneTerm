@@ -163,6 +163,9 @@ unicode-width = "0.2"
 unicode-segmentation = "1"
 # Dev-only: property tests for the packed-cell round trips, and later for reflow.
 proptest = "1"
+# The adapter's lock (IN-0029 US-0081, HLD decision 7). Declared by `crates/terminal`,
+# never by the engine: `oneterm-vt` holds no lock and the embedder picks the strategy.
+parking_lot = "0.12"
 
 [workspace.lints.clippy]
 # Preserve compatibility with upstream gpui-component (see reference/Cargo.toml)

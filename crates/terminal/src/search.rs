@@ -1,10 +1,11 @@
-//! Terminal scrollback search — framework-agnostic algorithm operating on `Term`.
+//! Terminal scrollback search — framework-agnostic algorithm over a copied grid.
 //!
 //! The UI asks a `TerminalSession` for matches (`fn search`); the backend copies
-//! the grid text under its `Term` lock ([`GridText::from_term`]) and matches
+//! the grid text under the engine lock ([`GridText::from_terminal`]) and matches
 //! after releasing it ([`search_grid_text`]), so a long scrollback search never
-//! stalls the pump (PERF-04). Matches are reported in **grid coordinates**
-//! (alacritty `Line.0`): negative values are scrollback history,
+//! stalls the pump (PERF-04). The copy is kept deliberately (R-19): search is
+//! user-initiated and rare, unlike a per-frame snapshot. Matches are reported in
+//! **grid coordinates**: negative values are scrollback history,
 //! `0..num_lines-1` is the viewport at `display_offset = 0`.
 //!
 //! The UI converts a match to a display row with `display_row = line + display_offset`
@@ -16,11 +17,7 @@
 //! character so column positions stay exact, and covers the dominant terminal
 //! use case (commands, logs, paths are ASCII).
 
-use alacritty_terminal::event::EventListener;
-use alacritty_terminal::grid::Dimensions as _;
-use alacritty_terminal::index::{Column, Line};
-use alacritty_terminal::term::Term;
-use alacritty_terminal::term::cell::{Cell, Flags};
+use oneterm_vt::{CellWidth, Terminal};
 
 /// Search options.
 ///
@@ -39,7 +36,7 @@ pub struct SearchOptions {
 
 /// One search match in **grid coordinates**.
 ///
-/// `line` is the alacritty `Line.0` value:
+/// `line` is the signed grid line:
 /// - negative → scrollback history (`-1` = newest history line, just above the viewport top at `display_offset = 0`);
 /// - `0..num_lines-1` → the viewport rows when `display_offset = 0`.
 ///
@@ -68,7 +65,7 @@ impl SearchMatch {
 /// `num_cols` chars, so `chars.len() == rows × num_cols`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GridText {
-    /// `Line.0` of the first stored row (the topmost history line).
+    /// Grid line of the first stored row (the topmost history line).
     top_line: i32,
     /// Row stride.
     num_cols: usize,
@@ -77,31 +74,30 @@ pub(crate) struct GridText {
 }
 
 impl GridText {
-    /// Copy the grid text of `term`. O(rows×cols) chars; hold the lock only for
-    /// this call.
-    pub(crate) fn from_term<EP: EventListener>(term: &Term<EP>) -> Self {
-        let grid = term.grid();
-        let num_cols = grid.columns();
-        let top = grid.topmost_line().0;
-        let bottom = grid.bottommost_line().0;
-        let rows = usize::try_from(bottom - top + 1).unwrap_or(0);
+    /// Copy the grid text of `term`, history and viewport. O(rows×cols) chars;
+    /// hold the lock only for this call.
+    pub(crate) fn from_terminal(term: &Terminal) -> Self {
+        let screen = term.screen();
+        let graphemes = &term.interner().graphemes;
+        let num_cols = usize::from(screen.cols());
+        let oldest = screen.oldest();
+        let rows = (screen.newest().distance(oldest) + 1) as usize;
+        let top_line = -(screen.history_len() as i32);
         let mut chars = Vec::with_capacity(rows * num_cols);
-        for line in top..=bottom {
-            let row = &grid[Line(line)];
-            for col in 0..num_cols {
-                let cell: &Cell = &row[Column(col)];
+        for index in 0..rows {
+            for cell in screen.row(oldest + index as u64).cells() {
                 // Wide-char spacers carry no visible glyph — use a NUL placeholder so
                 // they cannot be part of a match (the needle never contains NUL). This
                 // keeps the column index aligned with the cell column.
-                if cell.flags.intersects(Flags::WIDE_CHAR_SPACER) {
+                if cell.width() == CellWidth::WideSpacer {
                     chars.push('\0');
                 } else {
-                    chars.push(cell.c);
+                    chars.push(cell.text_char(graphemes));
                 }
             }
         }
         Self {
-            top_line: top,
+            top_line,
             num_cols,
             chars,
         }
@@ -139,12 +135,12 @@ pub(crate) fn search_grid_text(
 
 /// Snapshot `term` and search it in one step (tests and single-shot callers).
 #[cfg(test)]
-pub(crate) fn search_term<EP: EventListener>(
-    term: &Term<EP>,
+pub(crate) fn search_term(
+    term: &Terminal,
     query: &str,
     options: SearchOptions,
 ) -> Vec<SearchMatch> {
-    search_grid_text(&GridText::from_term(term), query, options)
+    search_grid_text(&GridText::from_terminal(term), query, options)
 }
 
 /// Find all (non-overlapping) occurrences of `needle` in a single line's char
@@ -221,7 +217,33 @@ fn is_word_boundary(line: &[char], at: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alacritty_terminal::term::test::mock_term;
+    use crate::backend::GridSize;
+    use crate::engine::Engine;
+
+    /// The `mock_term` contract the eleven tests below were written against:
+    /// the grid is sized to the content — columns = the widest line by display
+    /// width, rows = the line count — so nothing scrolls and row `0` is the
+    /// first line. Lines are separated with `\r\n`, because none of these tests
+    /// asks anything about a wrap flag.
+    fn mock_term(text: &str) -> Engine {
+        let lines: Vec<&str> = text.split('\n').collect();
+        let cols = lines
+            .iter()
+            .map(|line| {
+                line.chars()
+                    .map(|c| usize::from(oneterm_vt::scalar_width(c).unwrap_or(0)))
+                    .sum::<usize>()
+            })
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        let mut engine = crate::test_engine::engine(GridSize {
+            cols,
+            lines: lines.len(),
+        });
+        crate::test_engine::feed(&mut engine, lines.join("\r\n").as_bytes());
+        engine
+    }
 
     #[test]
     fn empty_query_no_matches() {
@@ -254,9 +276,8 @@ mod tests {
     #[test]
     fn multiple_matches_on_one_line_non_overlapping() {
         let term = mock_term("foo bar foo baz foo");
-        let cols = term.grid().columns();
         // "foo bar foo baz foo" — three "foo".
-        assert_eq!(cols, 19);
+        assert_eq!(term.screen().cols(), 19);
         let m = search_term(&term, "foo", SearchOptions::default());
         assert_eq!(m.len(), 3);
         assert_eq!(m[0].start_col, 0);
@@ -320,10 +341,10 @@ mod tests {
     #[test]
     fn grid_text_snapshot_matches_live_term_layout() {
         let term = mock_term("ab\ncd");
-        let text = GridText::from_term(&term);
-        assert_eq!(text.num_cols, term.grid().columns());
+        let text = GridText::from_terminal(&term);
+        assert_eq!(text.num_cols, usize::from(term.screen().cols()));
         assert_eq!(text.chars.len() % text.num_cols, 0);
-        assert_eq!(text.top_line, term.grid().topmost_line().0);
+        assert_eq!(text.top_line, -(term.screen().history_len() as i32));
         // Searching the snapshot after the term is gone still yields grid coordinates.
         drop(term);
         let m = search_grid_text(&text, "cd", SearchOptions::default());

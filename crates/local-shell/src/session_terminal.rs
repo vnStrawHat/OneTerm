@@ -5,7 +5,6 @@
 use oneterm_terminal::{ResizePolicy, SessionKind, TerminalCapabilities, TerminalSession};
 
 use crate::session::LocalSession;
-use crate::transport::LocalListener;
 
 /// ConPTY's conhost keeps its viewport top on a grow and addresses later output
 /// in its own coordinates, so the grid must not pull scrollback (DEC-0008). Unix
@@ -20,7 +19,6 @@ const fn local_resize_policy() -> ResizePolicy {
 
 oneterm_terminal::impl_pty_terminal_session!(
     LocalSession,
-    LocalListener,
     "LocalSession",
     SessionKind::Local,
     local_resize_policy(),

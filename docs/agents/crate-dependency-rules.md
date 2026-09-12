@@ -29,8 +29,9 @@ lower layer — with the single explicit same-layer exception noted in R5
 Within L0, `terminal` and `completion` depend on `core` (the pure-domain leaf);
 `highlight` is a leaf, and so are `pty` (`oneterm-pty`, the pseudo-console transport) and
 `vt` (`oneterm-vt`, IN-0029, OneTerm's own VT engine): each depends on **no** OneTerm crate at
-all, which is stricter than R2 requires. Nothing depends on `vt` yet: `crates/terminal` still
-owns `alacritty_terminal` until the IN-0029 migration packets land. `crates/tools`
+all, which is stricter than R2 requires. `crates/terminal` depends on `vt` since `US-0081`
+(both L0, so R2 holds); it also still lists `alacritty_terminal`, which runs nothing and is
+deleted at `US-0087`. `crates/tools`
 (`oneterm-tools`, developer diagnostics: DOOM-fire workload, raw PTY throughput probe, VT
 parity and bench harness) is a workspace member **outside** the layering: nothing depends on
 it, and it may only reach down to L0 leaves (`pty`).

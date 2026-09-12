@@ -7,10 +7,10 @@
 //! - [`SessionEventSink`] — delivery policy for `SessionEvent`s: repaint hints
 //!   coalesce, reliable events never block under the `Term` lock and are
 //!   flushed by the pump after each parse batch.
-//! - [`OscRouter`] — the alacritty `EventListener`: routes `Event`s into state
+//! - [`OscRouter`] — the event drain: routes the engine's `VtEvent`s into state
 //!   updates + `SessionEvent`s and applies the security policy.
 //! - [`LineAccounting`] — absolute-line counter decoupled from scrollback.
-//! - [`TerminalPump`] — glues the above around `ansi::Processor` so a backend
+//! - [`TerminalPump`] — glues the above around `Terminal::feed` so a backend
 //!   read loop only feeds bytes and calls `finish_batch`.
 //!
 //! See `docs/terminal-backend.md` §5.

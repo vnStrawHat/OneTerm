@@ -5589,6 +5589,8 @@ dependencies = [
  "chrono",
  "log",
  "oneterm-core",
+ "oneterm-vt",
+ "parking_lot",
  "serde",
  "serde_json",
 ]

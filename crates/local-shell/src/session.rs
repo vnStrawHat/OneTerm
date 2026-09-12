@@ -6,10 +6,8 @@
 //! `docs/terminal-backend.md` §6.2.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
-use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::{Config, Term};
 use async_channel::Receiver;
 use oneterm_pty::{Options, Shell, WindowSize};
 
@@ -17,7 +15,8 @@ use oneterm_core::config::resolve_shell;
 use oneterm_core::{AppError, LocalShellConfig, TerminalLogConfig, home_dir};
 use oneterm_terminal::{
     ClipboardOrigin, GridSize, OscRouter, PtySize, PtyTransport, SessionEvent, SessionEventSink,
-    SharedSessionState, SharedState, TerminalError, TerminalSecurityPolicy,
+    SharedSessionState, SharedState, SharedTerminal, TerminalError, TerminalSecurityPolicy,
+    new_shared_terminal,
 };
 
 use crate::event_loop::ShellEventLoop;
@@ -25,7 +24,7 @@ use crate::transport::{LocalListener, LocalTransport};
 
 /// A local shell session.
 pub struct LocalSession {
-    pub(crate) term: Arc<FairMutex<Term<LocalListener>>>,
+    pub(crate) term: SharedTerminal,
     pub(crate) listener: LocalListener,
     pub(crate) event_rx: Mutex<Option<Receiver<SessionEvent>>>,
     pub(crate) state: SharedState,
@@ -91,15 +90,7 @@ impl LocalSession {
             cols: initial.cols as usize,
             lines: initial.rows as usize,
         };
-        let term_config = Config {
-            scrolling_history: scrollback_history,
-            ..Default::default()
-        };
-        let term = Arc::new(FairMutex::new(Term::new(
-            term_config,
-            &size,
-            listener.clone(),
-        )));
+        let term = new_shared_terminal(size, scrollback_history);
 
         let (_notifier, owner_join) = ShellEventLoop::spawn_owned(
             opts,

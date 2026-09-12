@@ -1,19 +1,29 @@
-//! `OscRouter` — the alacritty `EventListener` shared by every backend.
+//! `OscRouter` — the event drain shared by every backend.
 //!
 //! Routes engine events into the state cache + `SessionEvent`s: title, OSC 52
-//! clipboard, OSC 7/9/133 side-channel payloads (`Event::Osc` from the OneTerm
-//! fork), screen clears, colour queries, bell, and PTY responses (`PtyWrite`
-//! → transport). The security policy is applied here for both backends, so
-//! local and SSH cannot drift (SEC-08).
+//! clipboard, OSC 7/9/133 side-channel payloads, screen clears, colour queries,
+//! bell, and terminal replies (`VtEvent::Reply` → transport). The security
+//! policy is applied here for both backends, so local and SSH cannot drift
+//! (SEC-08).
 //!
-//! `Term<OscRouter<T>>` and the pump hold clones of the same router (Arc
-//! fields). `send_event` runs during `Processor::advance` with the `Term` lock
-//! held — it never blocks (see [`SessionEventSink`]).
+//! Since `US-0081` the engine returns events as values instead of calling back,
+//! so this is a plain function over a drained [`EventBatch`]
+//! (`events-and-api.md` § "`feed` and drain") rather than an `EventListener`
+//! installed inside the terminal. Two consequences, both deliberate:
+//!
+//! * **Replies leave first** (R-37). `VtEvent::Reply` carries the DA1 / DSR /
+//!   DECRQM answers, and conhost blocks for up to a second at session start
+//!   waiting for DA1 — which is exactly when a burst of output is arriving.
+//! * The [`SessionEventSink`] deferred tier is **kept**. The backends' read
+//!   loops still call `finish_batch*` after the lock is released, and
+//!   `US-0083` / `US-0084` are where the drain moves out from under the lock;
+//!   deleting the tier here would change delivery ordering in the packet whose
+//!   acceptance is "zero behaviour diff".
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use alacritty_terminal::event::{Event, EventListener};
 use log::warn;
+use oneterm_vt::{ColorKey, EventBatch, StringTerm, VtEvent};
 
 use crate::logging::TerminalLogController;
 use crate::osc::{Osc133Kind, OscPayload, parse_cwd_url, parse_osc};
@@ -122,6 +132,75 @@ impl<T: PtyTransport> OscRouter<T> {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Route one parse batch: replies first, then everything in byte order.
+    pub fn drain(&self, batch: &EventBatch) {
+        for event in batch.iter() {
+            if let VtEvent::Reply(span) = event {
+                self.reply(batch.bytes(*span));
+            }
+        }
+        for event in batch.iter() {
+            if !matches!(event, VtEvent::Reply(_)) {
+                self.handle(batch, event);
+            }
+        }
+    }
+
+    /// Route one event. `batch` owns every payload the event points at.
+    pub fn handle(&self, batch: &EventBatch, event: &VtEvent) {
+        match event {
+            // ── Render signal ──────────────────────────────────────────
+            VtEvent::Repaint => self.forward(SessionEvent::Output),
+            // ── Title (OSC 0/2) ─────────────────────────────────────────
+            VtEvent::Title(span) => self.set_title(batch.str(*span)),
+            VtEvent::TitleReset => self.set_title(""),
+            // ── Clipboard (OSC 52) ─────────────────────────────────────
+            VtEvent::ClipboardStore { text, .. } => {
+                self.store_clipboard(batch.str(*text).to_owned())
+            }
+            VtEvent::ClipboardLoad { .. } => {
+                if self.security.allow_clipboard_read(self.clipboard_origin) {
+                    self.forward(SessionEvent::ClipboardRead);
+                } else {
+                    log::debug!("OscRouter: OSC 52 clipboard read refused by policy");
+                }
+            }
+            // ── Terminal reply (DA / DSR / DECRQM / XTVERSION) ──────────
+            VtEvent::Reply(span) => self.reply(batch.bytes(*span)),
+            // ── Bell ──────────────────────────────────────────────────
+            VtEvent::Bell => self.forward(SessionEvent::Bell),
+            // ── OSC 7/9/133 (the engine's OSC registration table) ───────
+            VtEvent::Osc { params, .. } => {
+                let params: Vec<&[u8]> = batch.params(*params).collect();
+                match parse_osc(&params) {
+                    Some(payload) => self.handle_osc_payload(payload),
+                    None => log::debug!(
+                        "OscRouter: unparsed VtEvent::Osc with {} params",
+                        params.len()
+                    ),
+                }
+            }
+            // ── Screen cleared (CSI 2J/3J, RIS) ─────────────────────────
+            VtEvent::ScreenCleared => self.state.bump_clear_epoch(),
+            // ── OSC 4/10/11/12 colour query (`?`): answered by the pump
+            //    after the batch, when the engine colours can be read ────
+            VtEvent::ColorQuery { key, terminator } => {
+                self.queue_color_query(key.index(), color_formatter(*key, *terminator));
+            }
+            // ── Row bookkeeping: a `RowId`-keyed consumer's business, and
+            //    nothing above the seam speaks `RowId` until `US-0085` ───
+            VtEvent::RowsScrolled(_) | VtEvent::RowsTrimmed { .. } => {}
+            // ── Graphics: `US-0080` owns the producer ───────────────────
+            VtEvent::GraphicReleased(_) => {}
+        }
+    }
+
+    fn reply(&self, bytes: &[u8]) {
+        if let Err(error) = self.transport.pty_write(bytes) {
+            warn!("OscRouter: terminal reply delivery failed: {error}");
+        }
+    }
+
     fn set_title(&self, title: &str) {
         let sanitized = self.security.sanitize_title(title);
         self.state.lock().title = sanitized.clone();
@@ -141,8 +220,8 @@ impl<T: PtyTransport> OscRouter<T> {
         self.forward(SessionEvent::Clipboard(Some(validated)));
     }
 
-    /// Handle an OSC forwarded by the engine (`Event::Osc`, OSC 7/9/133) —
-    /// update the state cache and forward the matching `SessionEvent`.
+    /// Handle an OSC forwarded by the engine (OSC 7/9/133) — update the state
+    /// cache and forward the matching `SessionEvent`.
     fn handle_osc_payload(&self, payload: OscPayload) {
         match payload {
             OscPayload::Cwd(url) => {
@@ -211,59 +290,23 @@ impl<T: PtyTransport> OscRouter<T> {
     }
 }
 
-impl<T: PtyTransport> EventListener for OscRouter<T> {
-    fn send_event(&self, event: Event) {
-        match event {
-            // ── Render signal ──────────────────────────────────────────
-            Event::Wakeup => self.forward(SessionEvent::Output),
-            // ── Title (OSC 0/2) ─────────────────────────────────────────
-            Event::Title(title) => self.set_title(&title),
-            Event::ResetTitle => self.set_title(""),
-            // ── Clipboard (OSC 52) ─────────────────────────────────────
-            Event::ClipboardStore(_, text) => self.store_clipboard(text),
-            Event::ClipboardLoad(_, _) => {
-                if self.security.allow_clipboard_read(self.clipboard_origin) {
-                    self.forward(SessionEvent::ClipboardRead);
-                } else {
-                    log::debug!("OscRouter: OSC 52 clipboard read refused by policy");
-                }
-            }
-            // ── PTY write (OSC/DA response) ─────────────────────────────
-            Event::PtyWrite(text) => {
-                if let Err(error) = self.transport.pty_write(text.as_bytes()) {
-                    warn!("OscRouter: PTY response delivery failed: {error}");
-                }
-            }
-            // ── Process exit (only alacritty's own EventLoop emits this;
-            //    OneTerm pumps publish exit themselves) ─────────────────
-            Event::ChildExit(status) => {
-                let code = status.code();
-                self.state.record_exit(code);
-                self.forward(SessionEvent::Exited(code));
-            }
-            // ── Shutdown: `close()` drives the transport directly ────────
-            Event::Exit => {}
-            // ── Bell ──────────────────────────────────────────────────
-            Event::Bell => self.forward(SessionEvent::Bell),
-            // ── OSC 7/9/133 (fork: Handler::report_osc → Event::Osc) ────
-            Event::Osc { params, .. } => {
-                let refs: Vec<&[u8]> = params.iter().map(|p| p.as_slice()).collect();
-                match parse_osc(&refs) {
-                    Some(payload) => self.handle_osc_payload(payload),
-                    None => {
-                        log::debug!("OscRouter: unparsed Event::Osc with {} params", refs.len())
-                    }
-                }
-            }
-            // ── Screen cleared (CSI 2J/3J, RIS) ─────────────────────────
-            Event::ClearScreen => self.state.bump_clear_epoch(),
-            // ── OSC 10/11/12 colour query (`?`): answered by the pump after
-            //    the batch, when the `Term` colours can be read ───────────
-            Event::ColorRequest(index, format) => self.queue_color_query(index, format),
-            // ── Ignored ─────────────────────────────────────────────────
-            Event::MouseCursorDirty
-            | Event::CursorBlinkingChange
-            | Event::TextAreaSizeRequest(_) => {}
-        }
-    }
+/// The reply the reference formatted inside the engine.
+///
+/// Byte-for-byte the fork's `dynamic_color_sequence`
+/// (`vendor/alacritty_terminal/src/term/mod.rs:1692-1705`): the OSC prefix the
+/// question used, each channel doubled to 16-bit precision, and the same
+/// terminator the question carried. The engine reports the request and leaves
+/// the formatting here because only the embedder owns the theme fallback.
+fn color_formatter(key: ColorKey, terminator: StringTerm) -> ColorFormatter {
+    let prefix = key.query_prefix();
+    let terminator = match terminator {
+        StringTerm::Bel => "\x07",
+        StringTerm::St => "\x1b\\",
+    };
+    Arc::new(move |color| {
+        format!(
+            "\x1b]{};rgb:{1:02x}{1:02x}/{2:02x}{2:02x}/{3:02x}{3:02x}{4}",
+            prefix, color.r, color.g, color.b, terminator
+        )
+    })
 }
