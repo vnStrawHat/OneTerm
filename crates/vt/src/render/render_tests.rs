@@ -10,12 +10,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::cell::{Cell, CellContent, Color, NamedColor, Style};
-use crate::grid::{PrintMode, RowId, ScrollRegion, Size, TerminalGrid};
+use crate::grid::{Pos, PrintMode, RowId, ScrollRegion, Size, TerminalGrid};
 use crate::intern::{Extras, GraphicId, Interner};
 use crate::reflow::ResizePolicy;
 use crate::render::{
     Demand, EngineView, ModeSnapshot, Palette, RenderContent, RenderState, RenderUpdate, SyncState,
 };
+use crate::selection::SelectionRange;
 
 /// The fields `US-0076`'s `Terminal` will own, in the shape `EngineView` wants.
 ///
@@ -28,6 +29,7 @@ pub(crate) struct Engine {
     pub modes: ModeSnapshot,
     pub generation: u32,
     pub palette_epoch: u32,
+    pub selection: Option<SelectionRange>,
     pub now: Instant,
 }
 
@@ -40,6 +42,7 @@ impl Engine {
             modes: ModeSnapshot::default(),
             generation: 0,
             palette_epoch: 0,
+            selection: None,
             now: Instant::now(),
         }
     }
@@ -52,6 +55,7 @@ impl Engine {
             modes: self.modes,
             generation: self.generation,
             palette_epoch: self.palette_epoch,
+            selection: self.selection,
         }
     }
 
@@ -277,6 +281,34 @@ fn cursor_only_movement_returns_partial_with_no_changed_rows() {
     assert!(state.changed().is_empty());
     assert_eq!(state.cursor().row, Some(4));
     assert_eq!(state.cursor().col, 7);
+}
+
+/// `US-0078`: a drag over static content changes no row, so only the selection
+/// field can tell the renderer it must paint again.
+#[test]
+fn selection_change_only_returns_partial_and_refreshes_the_range() {
+    let mut engine = Engine::new(10, 20);
+    let mut state = RenderState::new();
+    engine.update(&mut state);
+    assert_eq!(state.selection(), None);
+
+    let top = engine.grid.screen().screen_top();
+    let range = SelectionRange {
+        start: Pos { row: top, col: 2 },
+        end: Pos { row: top, col: 5 },
+        is_block: false,
+    };
+    engine.selection = Some(range);
+
+    assert_eq!(
+        engine.update(&mut state),
+        RenderUpdate::Partial { scrolled: 0 }
+    );
+    assert!(state.changed().is_empty());
+    assert_eq!(state.selection(), Some(range));
+
+    // Unchanged again once the renderer has seen it.
+    assert_eq!(engine.update(&mut state), RenderUpdate::Unchanged);
 }
 
 #[test]

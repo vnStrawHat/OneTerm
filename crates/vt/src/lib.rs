@@ -26,6 +26,7 @@ pub mod intern;
 pub mod parser;
 pub mod reflow;
 pub mod render;
+pub mod selection;
 pub mod width;
 
 pub use cell::{Attrs, Cell, CellContent, CellWidth, Color, NamedColor, Rgb, Semantic, Style};
@@ -41,5 +42,8 @@ pub use render::{
     Demand, EngineView, ModeSnapshot, MouseEncoding, MouseProtocol, MouseReporting, Palette,
     RenderCell, RenderContent, RenderCursor, RenderRow, RenderState, RenderUpdate, StyleRun,
     SyncState, Watermark,
+};
+pub use selection::{
+    Invalidation, SEMANTIC_ESCAPE_CHARS, Selection, SelectionKind, SelectionRange, Side,
 };
 pub use width::{cluster_width, scalar_width};

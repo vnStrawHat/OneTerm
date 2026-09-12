@@ -27,6 +27,7 @@ use crate::render::modes::ModeSnapshot;
 use crate::render::palette::Palette;
 use crate::render::row::RenderRow;
 use crate::render::sync::SyncState;
+use crate::selection::SelectionRange;
 
 /// How far a consumer has read the engine's per-row sequence numbers.
 ///
@@ -75,6 +76,11 @@ pub struct EngineView<'a> {
     pub generation: u32,
     /// Bumped when the theme or the OSC colour overrides change.
     pub palette_epoch: u32,
+    /// The active selection, already resolved (`US-0078`). Refreshed every
+    /// update like the cursor, because a drag must not force a row rebuild —
+    /// but a drag over static content must still produce a frame, so a change
+    /// here defeats `Unchanged`.
+    pub selection: Option<SelectionRange>,
 }
 
 /// One consumer's view of the terminal, reused across frames.
@@ -88,6 +94,7 @@ pub struct RenderState {
     rows: Vec<RenderRow>,
     changed: Vec<u16>,
     cursor: RenderCursor,
+    selection: Option<SelectionRange>,
     modes: ModeSnapshot,
     palette_epoch: u32,
     mapped_epoch: Option<u32>,
@@ -117,6 +124,7 @@ impl RenderState {
             modes,
             generation,
             palette_epoch,
+            selection,
         } = engine;
         let screen = grid.screen();
         let viewport = screen.viewport();
@@ -129,13 +137,15 @@ impl RenderState {
         let cursor = cursor_of(screen, modes.show_cursor);
         let cursor_changed = self.cursor != cursor;
         self.cursor = cursor;
+        let selection_changed = self.selection != selection;
+        self.selection = selection;
 
         // Mode 2026: the bytes are already applied; the renderer just does not
         // look yet. A state that has never been built is built first, because
         // `rows()` holds the full viewport for every result, `Unchanged`
         // included (R-15); suppression starts from the frame after that.
         if sync.suppresses_frame(now) && !self.rows.is_empty() {
-            self.meta_dirty |= modes_changed || cursor_changed;
+            self.meta_dirty |= modes_changed || cursor_changed || selection_changed;
             self.changed.clear();
             return RenderUpdate::Unchanged;
         }
@@ -181,6 +191,7 @@ impl RenderState {
             && scrolled == Some(0)
             && !modes_changed
             && !cursor_changed
+            && !selection_changed
             && !self.meta_dirty
         {
             RenderUpdate::Unchanged
@@ -241,6 +252,12 @@ impl RenderState {
     /// Where the cursor is and whether it is visible, refreshed every update.
     pub fn cursor(&self) -> &RenderCursor {
         &self.cursor
+    }
+
+    /// The active selection, refreshed every update (`US-0078`). The painter
+    /// reads it here rather than asking the engine a second question.
+    pub fn selection(&self) -> Option<SelectionRange> {
+        self.selection
     }
 
     /// The modes the view reads at paint time, refreshed every update.
