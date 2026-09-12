@@ -1,0 +1,20 @@
+# OneTerm VT parity expectation: cursor, modes, palette, title, tab stops,
+# scroll region. Blessed by the vendored engine at US-0072 and FROZEN.
+version 1
+cursor row=29 col=32 shape=Block
+pending_wrap 0
+modes ALTERNATE_SCROLL BRACKETED_PASTE LINE_WRAP SHOW_CURSOR URGENCY_HINTS
+title_events 11
+title_event.0 set:undeadleech%40archhq:%7E/programming/alacritty/alacritty
+title_event.1 set:undeadleech%40archhq:%7E/programming/alacritty/alacritty
+title_event.2 set:undeadleech%40archhq:%7E/programming/alacritty/alacritty
+title_event.3 set:undeadleech%40archhq:%7E/programming/alacritty/alacritty
+title_event.4 set:undeadleech%40archhq:%7E/programming/alacritty/alacritty
+title_event.5 set:undeadleech%40archhq:%7E/programming/alacritty/alacritty
+title_event.6 set:undeadleech%40archhq:%7E/programming/alacritty/alacritty
+title_event.7 set:undeadleech%40archhq:%7E/programming/alacritty/alacritty
+title_event.8 set:undeadleech%40archhq:%7E/programming/alacritty/alacritty
+title_event.9 set:undeadleech%40archhq:%7E/programming/alacritty/alacritty
+title_event.10 set:undeadleech%40archhq:%7E/programming/alacritty/alacritty
+tab_stops 8,16,24,32,40,48,56,64,72,79
+scroll_region top=1 bottom=29

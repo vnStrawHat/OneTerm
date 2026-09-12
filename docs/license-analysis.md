@@ -153,6 +153,14 @@ licence position clean are:
   `THIRD-PARTY-NOTICES.md`. This covers the crates the project already depends on
   (`windows`, `windows-sys`, `winapi`, `uds_windows`, `alacritty_terminal`, `vte`, gpui,
   gpui-component).
+- **Vendored test data follows the same rule as vendored source.** The VT parity corpus at
+  `crates/vt/tests/corpus/alacritty-ref/` is 45 reference captures reused from Alacritty
+  (Apache-2.0, revision `fcf32feacb367b75ec84dd40f041e4fd411d3cc1`). Only `alacritty.recording`
+  (carried as `recording`), `size.json` and `config.json` are taken — 936 KiB; upstream's 44 MiB
+  of `grid.json` is deliberately **not** carried, having been used once as a cross-check oracle at
+  `US-0072`. Attribution lives in `crates/vt/tests/corpus/NOTICE` and in
+  `THIRD-PARTY-NOTICES.md` § 2.1. The expectation files next to each recording (`grid.expect`,
+  `state.expect`, `expected-diffs.json`) are OneTerm's own work, Apache-2.0.
 - **The terminal render engine is written from scratch** (see
   [`docs/spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md`](spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md)
   and [`docs/decisions/DEC-0007-terminal-render-engine-cell-glyph-cache-and-quad-shapes.md`](decisions/DEC-0007-terminal-render-engine-cell-glyph-cache-and-quad-shapes.md)),
