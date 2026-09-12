@@ -30,6 +30,10 @@ function Invoke-Step {
 Invoke-Step @("cargo", "fmt", "--all", "--", "--check")
 Invoke-Step @("cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings")
 Invoke-Step @("cargo", "test", "--workspace")
+# IN-0029 R-28: the VT engine's integrity walk is bounded to the rows an
+# operation touched unless `vt-paranoid` is on. This is where the unbounded
+# whole-history invariants are gated.
+Invoke-Step @("cargo", "test", "-p", "oneterm-vt", "--features", "vt-paranoid")
 Invoke-Step @("python", "scripts/verify-dependency-graph.py")
 Invoke-Step @("python", "scripts/check-doc-paths.py")
 Invoke-Step @("python", "-m", "unittest", "scripts/test_check_english.py")
