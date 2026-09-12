@@ -424,14 +424,23 @@ impl Screen {
     }
 
     /// Allocate the slot if needed and stamp the current batch on it.
+    ///
+    /// Materialising an unwritten slot fills it with [`Cell::EMPTY`], **not**
+    /// with the cursor's erase cell: an unwritten slot already reads as plain
+    /// blanks, so giving it the current background-erase colour would repaint
+    /// every untouched column of the row the moment one glyph lands on it.
+    /// Deliberate background-erase blanking is [`Screen::blank_row`] and
+    /// [`Screen::blank_slot`], which the scroll and reset paths call explicitly.
+    /// (Found by the `US-0076` parity gate: it is what made `sgr`'s trailing
+    /// blanks carry `48;5;1` where the reference leaves them default.)
     pub fn row_mut(&mut self, id: RowId) -> RowMut<'_> {
         let slot = self.slot_of(id);
-        let (cols, seq, template) = (self.cols, self.seq, self.cursor.erase);
+        let (cols, seq) = (self.cols, self.seq);
         let entry = &mut self.slots[slot];
         if entry.as_ref().map(Row::id) != Some(id) {
             *entry = None;
         }
-        let row = entry.get_or_insert_with(|| Row::new(id, cols, seq, template));
+        let row = entry.get_or_insert_with(|| Row::new(id, cols, seq, Cell::EMPTY));
         RowMut::new(row, seq)
     }
 
@@ -678,6 +687,18 @@ impl Screen {
         true
     }
 
+    /// `DECSTBM` with bounds the dispatch layer has already validated
+    /// (`US-0076`): the reference's one-based validity test can produce an
+    /// **empty** region, which [`Screen::set_region`]'s `top < bottom` contract
+    /// cannot express, and it never homes the cursor itself.
+    pub fn set_region_raw(&mut self, top: u16, bottom: u16) {
+        let bottom = bottom.min(self.rows);
+        self.region = ScrollRegion {
+            top: top.min(bottom),
+            bottom,
+        };
+    }
+
     const fn no_scroll() -> ScrollReport {
         ScrollReport {
             scrolled: None,
@@ -904,10 +925,11 @@ impl Screen {
 
     /// The implicit wrap at the end of a row.
     ///
-    /// Unconditional: the reference returns immediately with `DECAWM` reset, so
-    /// the caller must not reach here in that state. The print path here never
-    /// does, because deviation G3 means the pending-wrap flag is never armed
-    /// with `DECAWM` reset.
+    /// Unconditional, because `DECAWM` is read by the caller: the reference's
+    /// `wrapline` returns immediately with the mode reset, which is the same
+    /// thing said one level down. Every caller here gates on `autowrap` and
+    /// leaves the pending-wrap flag armed when it does not wrap, exactly as the
+    /// reference leaves `input_needs_wrap` set.
     pub fn wrapline(&mut self, anchors: &mut Anchors) {
         let id = self.cursor.pos.row;
         self.row_mut(id).set_wrapped(true);
@@ -934,9 +956,13 @@ impl Screen {
 
     /// `HT`. Trap 3: a pending wrap wraps the line and **returns**, consuming
     /// the tab.
-    pub fn put_tab(&mut self, count: u16, anchors: &mut Anchors) {
+    pub fn put_tab(&mut self, count: u16, autowrap: bool, anchors: &mut Anchors) {
         if self.cursor.pending_wrap {
-            self.wrapline(anchors);
+            // The reference returns either way: with `DECAWM` reset its
+            // `wrapline` does nothing and the tab is still consumed.
+            if autowrap {
+                self.wrapline(anchors);
+            }
             return;
         }
         let last_col = self.cols - 1;
@@ -952,7 +978,7 @@ impl Screen {
                 // of a wide pair also read as a space, and replacing one with a
                 // narrow tab cell would orphan its glyph.
                 self.row_mut(id)
-                    .set(col, existing.with_content(CellContent::Scalar('\t')));
+                    .repair(col, existing.with_content(CellContent::Scalar('\t')));
             }
             while self.cursor.pos.col < last_col {
                 self.cursor.pos.col += 1;
@@ -987,7 +1013,10 @@ impl Screen {
             self.debug_assert_integrity();
             return;
         }
-        if self.cursor.pending_wrap {
+        // The reference's `wrapline` is a no-op with `DECAWM` reset, which
+        // leaves the cursor on the last column and the flag armed, so the glyph
+        // overwrites that column and the next one overwrites it again.
+        if self.cursor.pending_wrap && mode.autowrap {
             self.wrapline(anchors);
         }
         let (id, col) = (self.cursor.pos.row, self.cursor.pos.col);
@@ -1006,8 +1035,10 @@ impl Screen {
             }
             if self.cursor.pos.col + 1 >= self.cols {
                 if !mode.autowrap {
-                    // Deviation G3: the pending-wrap flag is not armed with
-                    // `DECAWM` reset, so the glyph is simply dropped.
+                    // The reference's own out-of-bounds guard: it arms the
+                    // pending-wrap flag and drops the glyph, so the flag still
+                    // means "the last column is full".
+                    self.cursor.pending_wrap = true;
                     self.dropped_wide += 1;
                     return;
                 }
@@ -1051,7 +1082,10 @@ impl Screen {
                     .cell(last)
                     .with_width(CellWidth::Narrow)
                     .with_content(CellContent::Scalar(' '));
-                self.row_mut(previous).set(last, cell);
+                // A repair, not an overwrite: the reference only removes the
+                // `LEADING_WIDE_CHAR_SPACER` bit here and leaves `WRAPLINE` on
+                // that cell, so the row above must keep its wrap flag.
+                self.row_mut(previous).repair(last, cell);
             }
         }
         let cell = self.cursor.template.with_content(content).with_width(width);
@@ -1059,10 +1093,22 @@ impl Screen {
         self.row_mut(id).write_repairing(col, cell);
     }
 
-    fn advance(&mut self, mode: PrintMode) {
+    /// The pending-wrap flag is armed **unconditionally** at the last column,
+    /// exactly as the reference arms `input_needs_wrap`.
+    ///
+    /// It used to be gated on `DECAWM` (deviation G3), on the argument that the
+    /// printing result was identical and only `EL 0` and `HT` could see the
+    /// difference. Both halves were false, and the `US-0076` verification found
+    /// the case that proves it: `DECAWM` off, fill the row, `DECAWM` on, print
+    /// one glyph. The reference wraps — the flag it armed while the mode was off
+    /// is still there — and the gated version overwrote the last column instead,
+    /// **losing a line break**. `DECAWM` is now read where the reference reads
+    /// it, at the wrap itself, so the flag means "the last column is full" and
+    /// nothing more.
+    fn advance(&mut self, _mode: PrintMode) {
         if self.cursor.pos.col + 1 < self.cols {
             self.cursor.pos.col += 1;
-        } else if mode.autowrap {
+        } else {
             self.cursor.pending_wrap = true;
         }
     }
@@ -1085,6 +1131,12 @@ impl Screen {
         };
         cluster.push(c);
         let grapheme = interner.grapheme(&cluster);
+        // `set`, not `repair`, deliberately. The reference's `push_zerowidth`
+        // keeps the cell's flags, so in principle a mark landing on the last
+        // column should not clear the row's wrap flag — but that state is
+        // unreachable: the cursor only sits on the last column with the pending
+        // wrap armed right after a write to that column, and the write clears
+        // the flag first. Measured, not assumed (`US-0076` verification).
         self.row_mut(id)
             .set(col, cell.with_content(CellContent::Grapheme(grapheme)));
     }

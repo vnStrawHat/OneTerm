@@ -14,4 +14,5 @@ pub mod bench;
 pub mod corpus;
 pub mod corpus_grep;
 pub mod corpus_replay;
+pub mod corpus_replay_new;
 pub mod corpus_upstream;

@@ -206,21 +206,27 @@ fn hyperlink_ids_are_per_terminal_not_global() {
 
     // Two terminals that see the same stream issue the same ids.
     for table in [&mut first, &mut second] {
-        assert_eq!(table.intern(None, "https://example.com"), HyperlinkId(0));
-        assert_eq!(table.intern(None, "https://example.com"), HyperlinkId(1));
+        assert_eq!(
+            table.intern(None, "https://example.com"),
+            Some(HyperlinkId(0))
+        );
+        assert_eq!(
+            table.intern(None, "https://example.com"),
+            Some(HyperlinkId(1))
+        );
         assert_eq!(
             table.intern(Some("a"), "https://example.com"),
-            HyperlinkId(2)
+            Some(HyperlinkId(2))
         );
         // An explicit id identifies a link run, so it deduplicates.
         assert_eq!(
             table.intern(Some("a"), "https://example.com"),
-            HyperlinkId(2)
+            Some(HyperlinkId(2))
         );
         // The same id with a different URI is a different link.
         assert_eq!(
             table.intern(Some("a"), "https://other.example"),
-            HyperlinkId(3)
+            Some(HyperlinkId(3))
         );
     }
 

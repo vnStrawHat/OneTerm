@@ -11,6 +11,13 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# The full two-screen integrity walk after every step, for the property tests
+# and the fuzz targets (IN-0029 R-28, `testing-and-bench.md` M12). The always-on
+# tier stays O(1); this one is off by default because it turns a 10 000-case
+# property run into a multi-minute job.
+vt-paranoid = []
+
 [dependencies]
 bitflags.workspace = true
 log.workspace = true

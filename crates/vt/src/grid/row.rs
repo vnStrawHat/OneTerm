@@ -348,6 +348,47 @@ impl<'a> RowMut<'a> {
         *slot = cell;
         self.row.header.occ = self.row.header.occ.max(col.saturating_add(1));
         self.row.header.flags.insert(flags_for(cell));
+        self.clear_wrap_at(col as usize + 1);
+    }
+
+    /// Write one cell **without** clearing the row's wrap flag.
+    ///
+    /// The reference's wide-pair repairs change flag *bits* on a cell — its
+    /// `clear_wide`, and `flags.remove(LEADING_WIDE_CHAR_SPACER)` on the row
+    /// above — rather than assigning a whole new cell, so `WRAPLINE` survives
+    /// them. `put_tab` is the same shape: it assigns `cell.c` alone. Under
+    /// deviation G1 the flag lives on the row, so those paths need a write that
+    /// says "this is a repair, not an overwrite".
+    ///
+    /// Found by the `US-0076` verification (M2): a wide glyph repainted over the
+    /// first columns of a row released the previous row's trailing
+    /// `LeadingWideSpacer` and cleared **that row's** wrap flag with it, which
+    /// would split a wrapped CJK line on the next reflow.
+    pub fn repair(&mut self, col: u16, cell: Cell) {
+        let Some(slot) = self.row.cells.get_mut(col as usize) else {
+            return;
+        };
+        *slot = cell;
+        self.row.header.occ = self.row.header.occ.max(col.saturating_add(1));
+        self.row.header.flags.insert(flags_for(cell));
+    }
+
+    /// The wrap flag dies with the cell that carried it.
+    ///
+    /// The reference keeps `WRAPLINE` on the row's last **cell** and assigns the
+    /// whole template over it on any write, so overwriting or erasing that cell
+    /// wipes the flag. Here the flag lives on the row (deviation G1), so every
+    /// write that reaches the last column clears it explicitly — otherwise a TUI
+    /// repainting over the end of a wrapped row leaves a stale flag behind and a
+    /// later reflow rejoins two rows that are not one logical line.
+    ///
+    /// `end` is the exclusive end of what was written. Found by the `US-0076`
+    /// old-versus-new differential on the `tui_redraw` bench fixture; no corpus
+    /// recording reaches it.
+    fn clear_wrap_at(&mut self, end: usize) {
+        if end >= self.row.cells.len() {
+            self.row.header.flags.remove(RowFlags::WRAPPED);
+        }
     }
 
     /// Fill `range` with `template`, repairing any wide pair the fill splits.
@@ -362,6 +403,7 @@ impl<'a> RowMut<'a> {
         repair_wide_pairs(&mut self.row.cells);
         self.row.header.occ = self.row.header.occ.max(end as u16);
         self.row.header.flags.insert(flags_for(template));
+        self.clear_wrap_at(end);
     }
 
     /// `DCH`, correction C1: a plain shift left by `n`, not the reference's
@@ -378,6 +420,7 @@ impl<'a> RowMut<'a> {
         repair_wide_pairs(&mut self.row.cells);
         self.row.header.occ = cols as u16;
         self.row.header.flags.insert(flags_for(template));
+        self.clear_wrap_at(cols);
     }
 
     /// `ICH`: shift right from `col` by `n`, filling the opened cells.
@@ -393,6 +436,7 @@ impl<'a> RowMut<'a> {
         repair_wide_pairs(&mut self.row.cells);
         self.row.header.occ = cols as u16;
         self.row.header.flags.insert(flags_for(template));
+        self.clear_wrap_at(cols);
     }
 
     /// Insert mode's shift, which moves the whole row right by the glyph width.
@@ -408,6 +452,7 @@ impl<'a> RowMut<'a> {
         self.row.cells.copy_within(col..cols - n, col + n);
         repair_wide_pairs(&mut self.row.cells);
         self.row.header.occ = cols as u16;
+        self.clear_wrap_at(cols);
     }
 
     pub fn set_wrapped(&mut self, wrapped: bool) {

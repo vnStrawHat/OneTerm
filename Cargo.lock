@@ -5637,6 +5637,7 @@ dependencies = [
  "anyhow",
  "libc",
  "oneterm-pty",
+ "oneterm-vt",
  "polling",
  "rand 0.10.1",
  "russh",

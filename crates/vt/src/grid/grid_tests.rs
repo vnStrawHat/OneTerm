@@ -374,7 +374,11 @@ fn pending_wrap_then_el0_erases_nothing() {
 }
 
 #[test]
-fn decawm_off_then_el0_erases() {
+fn decawm_off_then_el0_erases_nothing() {
+    // Deviation G3 is **withdrawn** (`US-0076` verification, M1). The flag is
+    // armed at the last column whether or not `DECAWM` is set, exactly as the
+    // reference arms `input_needs_wrap`; `DECAWM` is read at the wrap itself.
+    // So `EL 0` behaves the same with the mode on or off — trap 2, unqualified.
     let mut f = fixture(2, 4);
     let no_wrap = PrintMode {
         insert: false,
@@ -382,14 +386,39 @@ fn decawm_off_then_el0_erases() {
     };
     f.print_with(no_wrap, "abcd");
     assert!(
-        !f.screen().cursor().pending_wrap,
-        "deviation G3: the flag is not armed with DECAWM reset"
+        f.screen().cursor().pending_wrap,
+        "the flag is armed at the last column regardless of DECAWM"
     );
-    assert_eq!(f.screen().cursor().pos.col, 3, "the column clamps instead");
+    assert_eq!(f.screen().cursor().pos.col, 3);
+    assert_eq!(f.index_text(0), "abcd");
 
     f.grid.screen_mut().erase_line(LineClear::Right);
 
-    assert_eq!(f.index_text(0), "abc ", "G3's observable half: EL 0 erases");
+    assert_eq!(f.index_text(0), "abcd", "trap 2: EL 0 erases nothing");
+    f.integrity();
+}
+
+#[test]
+fn decawm_re_enabled_over_a_pending_wrap_still_breaks_the_line() {
+    // The case deviation G3 claimed was unobservable: fill the row with the
+    // mode off, turn it back on, print one glyph. The reference wraps, because
+    // the flag it armed while the mode was off is still there. Gating the flag
+    // on `DECAWM` lost the line break outright.
+    let mut f = fixture(2, 4);
+    let no_wrap = PrintMode {
+        insert: false,
+        autowrap: false,
+    };
+    f.print_with(no_wrap, "abcde");
+    // With the mode off the fifth glyph overwrote the last column.
+    assert_eq!(f.index_text(0), "abce");
+
+    f.print("X");
+
+    assert_eq!(f.index_text(0), "abce");
+    assert_eq!(f.index_text(1), "X   ");
+    assert_eq!(f.screen().cursor_row_index(), 1);
+    assert_eq!(f.screen().cursor().pos.col, 1);
     f.integrity();
 }
 
@@ -399,7 +428,7 @@ fn pending_wrap_then_tab_wraps_and_returns() {
     f.print("abcdefghijkl");
     assert!(f.screen().cursor().pending_wrap);
 
-    f.grid.put_tab(1);
+    f.grid.put_tab(1, true);
 
     assert_eq!(f.screen().cursor_row_index(), 1, "trap 3: the line wrapped");
     assert_eq!(f.screen().cursor().pos.col, 0, "and the tab was consumed");
@@ -407,22 +436,26 @@ fn pending_wrap_then_tab_wraps_and_returns() {
 }
 
 #[test]
-fn decawm_off_then_tab_moves_to_the_next_stop() {
+fn decawm_off_then_tab_is_consumed_without_moving() {
+    // Deviation G3 withdrawn (M1): the flag is armed either way, so `HT` takes
+    // the reference's pending-wrap branch — which returns whether or not the
+    // wrap happened. With `DECAWM` off the tab is simply eaten.
     let mut f = fixture(3, 12);
     let no_wrap = PrintMode {
         insert: false,
         autowrap: false,
     };
     f.print_with(no_wrap, "abcdefghijkl");
-    assert!(!f.screen().cursor().pending_wrap);
+    assert!(f.screen().cursor().pending_wrap);
 
-    f.grid.put_tab(1);
+    f.grid.put_tab(1, false);
 
-    // G3's second half: the reference would consume a stuck wrap and move the
-    // cursor to the next row. Here HT runs its own rule, which stops at the last
-    // column, so the cursor never leaves its row.
     assert_eq!(f.screen().cursor_row_index(), 0);
     assert_eq!(f.screen().cursor().pos.col, 11);
+    assert!(
+        f.screen().cursor().pending_wrap,
+        "a consumed tab leaves the flag armed"
+    );
     f.integrity();
 }
 
@@ -1094,7 +1127,7 @@ fn tab_does_not_orphan_a_wide_pair() {
     f.print("\u{ff21}");
     f.goto(0, 7);
 
-    f.grid.put_tab(1);
+    f.grid.put_tab(1, true);
 
     let id = f.screen().row_of_index(0);
     assert_eq!(f.screen().row(id).cell(6).width(), CellWidth::Wide);

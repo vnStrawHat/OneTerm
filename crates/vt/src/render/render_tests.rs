@@ -504,7 +504,8 @@ fn hyperlink_strings_are_resolved_under_the_lock() {
     let link = engine
         .interner
         .hyperlinks
-        .intern(Some("1"), "https://example.invalid/a");
+        .intern(Some("1"), "https://example.invalid/a")
+        .expect("the table is empty");
     let extras = engine.interner.extras(&Extras {
         hyperlink: Some(link),
         graphic: None,
