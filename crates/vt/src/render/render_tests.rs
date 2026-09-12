@@ -700,6 +700,52 @@ fn scroll_damage_is_consumed_as_a_move_instruction() {
     assert_eq!(state.changed(), &[6, 7]);
 }
 
+/// The `US-0075` rework at the render seam: write row 3, consume it, blank it
+/// back to what used to be an unwritten slot, consume again — the row must come
+/// back as changed, **from the sequence number alone**.
+///
+/// The render state used to carry a private `allocated` flag for this, which
+/// made `DEC-0015`'s "a second consumer becomes possible without an engine
+/// change" false. The plain watermark reader at the end is that second
+/// consumer, holding nothing but a `SeqNo` and the public row API.
+#[test]
+fn a_blanked_row_reaches_a_consumer_holding_only_a_watermark() {
+    let mut engine = Engine::new(6, 20);
+    let mut state = RenderState::new();
+
+    engine.batch();
+    engine.write(3, "row3");
+    assert_eq!(engine.update(&mut state), RenderUpdate::Full);
+    assert_eq!(state.rows()[3].cells[0].content, RenderContent::Scalar('r'));
+    // What a second consumer would have taken away from the same frame.
+    let watermark = engine.grid.seq();
+    let id = engine.row_id(3);
+
+    // Row 4 was never written; the in-region scroll pulls it over row 3.
+    engine.batch();
+    engine.grid.scroll_up(ScrollRegion { top: 1, bottom: 5 }, 1);
+
+    assert_eq!(
+        engine.update(&mut state),
+        RenderUpdate::Partial { scrolled: 0 }
+    );
+    assert!(
+        state.changed().contains(&3),
+        "the blanked row was not reported as changed"
+    );
+    assert!(
+        state.rows()[3]
+            .cells
+            .iter()
+            .all(|cell| cell.content == RenderContent::Scalar(' ')),
+        "the consumer kept painting the old content"
+    );
+    assert!(
+        engine.grid.screen().row(id).seq() > watermark,
+        "a watermark consumer would have missed the blanking"
+    );
+}
+
 #[test]
 fn an_in_region_scroll_moves_content_between_row_ids() {
     let mut engine = Engine::new(8, 20);
@@ -718,14 +764,10 @@ fn an_in_region_scroll_moves_content_between_row_ids() {
 
     assert!(report.scrolled.is_some());
     assert_eq!(update, RenderUpdate::Partial { scrolled: 0 });
-    // Row 3 is the one the scroll blanked: the ring dropped it back to an
-    // unwritten slot, which loses the batch stamp, so it is only copied because
-    // the render state tracks the allocation itself.
+    // Row 3 is the one the scroll blanked. The grid stamps a blanked row
+    // (`US-0075`'s rework), so it is copied for the same reason as the other
+    // two: its sequence number is above the watermark.
     assert_eq!(state.changed(), &[1, 2, 3]);
-    assert!(
-        !state.rows()[3].allocated,
-        "the blanked row kept its allocation"
-    );
     assert!(
         state.rows()[3]
             .cells

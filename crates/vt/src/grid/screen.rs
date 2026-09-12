@@ -444,30 +444,47 @@ impl Screen {
     }
 
     fn place_row(&mut self, id: RowId, row: Option<Row>) {
-        let slot = self.slot_of(id);
-        let seq = self.seq;
-        self.slots[slot] = row.map(|row| row.take_rehomed(id, seq));
+        match row {
+            Some(row) => {
+                let (slot, seq) = (self.slot_of(id), self.seq);
+                self.slots[slot] = Some(row.take_rehomed(id, seq));
+            }
+            // The source was an unwritten slot, so this row has just been
+            // blanked — which is a mutation, not the absence of one.
+            None => self.blank_row(id, Cell::EMPTY),
+        }
     }
 
-    /// Clear one row to the current template.
+    /// Blank one live row, keeping its allocation and stamping it.
     ///
-    /// A row that was never written stays unallocated: it already reads as
-    /// blanks, and leaving it `None` is where the memory claim comes from. A row
-    /// that *was* written keeps its allocation and gets the batch stamp, because
-    /// the render state has to see that it changed.
-    fn reset_row(&mut self, id: RowId) {
+    /// **A blanked row is a changed row.** The damage contract
+    /// (`damage-and-render-state.md`, `DEC-0015`) is a per-row `SeqNo` plus
+    /// `RowFlags::DIRTY`, and an unwritten slot can carry neither: dropping the
+    /// row back to `None` reads back as `SeqNo::default()`, below every
+    /// watermark, so a consumer keeps painting the old content and the
+    /// `DIRTY`-driven sweeps (grapheme GC, `GraphicReleased`) get a false
+    /// negative. So a row that is blanked **in place** is always materialised.
+    ///
+    /// This is bounded by the screen height: only screen rows are ever blanked
+    /// in place. History rows are created by [`Screen::blank_slot`] and dropped
+    /// by a trim, which is where "an unwritten row costs no cells" lives.
+    fn blank_row(&mut self, id: RowId, template: Cell) {
         let slot = self.slot_of(id);
-        let (cols, seq, template) = (self.cols, self.seq, self.cursor.erase);
+        let (cols, seq) = (self.cols, self.seq);
         match &mut self.slots[slot] {
-            Some(row) if row.id() == id => row.reset(template, seq),
-            entry => {
-                *entry = if template == Cell::EMPTY {
-                    None
-                } else {
-                    Some(Row::new(id, cols, seq, template))
-                };
+            // The width test is for a row that left the live range and came
+            // back (see `blank_slot`): a column resize only walks live rows, so
+            // that one can be the wrong width. Either arm stamps.
+            Some(row) if row.id() == id && row.cells().len() == cols as usize => {
+                row.reset(template, seq);
             }
+            entry => *entry = Some(Row::new(id, cols, seq, template)),
         }
+    }
+
+    /// Clear one row to the current background-erase template.
+    fn reset_row(&mut self, id: RowId) {
+        self.blank_row(id, self.cursor.erase);
     }
 
     /// Reset a screen-relative range with the background-erase template.
@@ -507,14 +524,21 @@ impl Screen {
         trimmed
     }
 
+    /// Blank the slot of a row that is **entering** the live range at the
+    /// bottom, or leaving it there.
+    ///
+    /// A brand-new id no consumer has ever seen needs no stamp, so an empty
+    /// template leaves the slot unwritten — this is where the memory claim
+    /// comes from. The exception is an id a row shrink dropped and a later push
+    /// re-creates ([`Screen::drop_trailing_rows`]): that row *has* been seen, so
+    /// it is blanked in place, stamp and all.
     fn blank_slot(&mut self, id: RowId, template: Cell) {
         let slot = self.slot_of(id);
-        let (cols, seq) = (self.cols, self.seq);
-        self.slots[slot] = if template == Cell::EMPTY {
-            None
-        } else {
-            Some(Row::new(id, cols, seq, template))
-        };
+        if template == Cell::EMPTY && self.slots[slot].as_ref().map(Row::id) != Some(id) {
+            self.slots[slot] = None;
+            return;
+        }
+        self.blank_row(id, template);
     }
 
     // ── Viewport ────────────────────────────────────────────────────────────
@@ -1409,8 +1433,11 @@ impl Screen {
         let kill = self.newest - (n - 1)..self.newest + 1;
         let mut id = kill.start;
         while id < kill.end {
-            let slot = self.slot_of(id);
-            self.slots[slot] = None;
+            // These ids leave the live range but a later grow re-creates them
+            // (`push_rows_with` walks up from the same `newest`), so a row that
+            // was written is blanked in place rather than dropped: the stamp is
+            // what tells a consumer the id came back empty.
+            self.blank_slot(id, Cell::EMPTY);
             id = id + 1;
         }
         anchors.shift_region(kill.clone(), 0, kill);
