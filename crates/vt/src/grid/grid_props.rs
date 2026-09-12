@@ -8,6 +8,7 @@
 use proptest::prelude::*;
 
 use super::*;
+use crate::cell::Cell;
 use crate::intern::Interner;
 
 /// Deliberately small, so a sequence of twenty operations reaches every edge:
@@ -78,6 +79,32 @@ fn op() -> impl Strategy<Value = Op> {
     ]
 }
 
+/// `VT_PROPTEST_CASES` raises the case count for an exhaustive run, the same
+/// knob `reflow::props` reads; the default keeps the debug suite inside the
+/// R-28 budget.
+fn config() -> ProptestConfig {
+    let cases = std::env::var("VT_PROPTEST_CASES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(256);
+    ProptestConfig::with_cases(cases)
+}
+
+/// Every live row of both screens, as a consumer reads it: the content, and the
+/// stamp that is supposed to announce a change to it.
+fn snapshot(grid: &TerminalGrid) -> Vec<(RowId, Vec<Cell>, bool, SeqNo)> {
+    let mut out = Vec::new();
+    for screen in [grid.primary(), grid.alt()] {
+        let mut id = screen.oldest();
+        while id <= screen.newest() {
+            let row = screen.row(id);
+            out.push((id, row.cells().to_vec(), row.wrapped(), row.seq()));
+            id = id + 1;
+        }
+    }
+    out
+}
+
 fn line_clear(mode: u8) -> LineClear {
     match mode {
         0 => LineClear::Right,
@@ -96,7 +123,7 @@ fn display_clear(mode: u8) -> DisplayClear {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(config())]
 
     #[test]
     fn scroll_and_erase_preserve_integrity(ops in prop::collection::vec(op(), 1..40)) {
@@ -108,7 +135,8 @@ proptest! {
         let mut tag = 0u32;
 
         for step in ops {
-            grid.begin_batch();
+            let before = snapshot(&grid);
+            let seq = grid.begin_batch();
             let active_alt = grid.alt_active();
             let inactive_alive: Vec<AnchorId> = marks
                 .iter()
@@ -162,6 +190,36 @@ proptest! {
             }
             grid.sync_anchors();
             grid.assert_integrity(Some(&interner));
+
+            // The `US-0075` rework, stated as the property the whole damage
+            // contract rests on: a row whose content changed carries this
+            // batch's stamp and `DIRTY`. A de-allocated row that kept a stale
+            // stamp — the shape of the original defect, where blanking dropped
+            // the row header — fails here whatever produced it.
+            let after = snapshot(&grid);
+            for (id, cells, wrapped, was) in before {
+                let Some((_, now, wraps, stamp)) =
+                    after.iter().find(|(other, ..)| *other == id)
+                else {
+                    // Trimmed, or dropped off the bottom: the row left the live
+                    // range, which `oldest` / `RowsTrimmed` reports instead.
+                    continue;
+                };
+                if *now == cells && *wraps == wrapped {
+                    continue;
+                }
+                prop_assert_eq!(
+                    *stamp, seq,
+                    "{:?} changed under {:?} but still reads the stamp {:?}",
+                    id, step, was
+                );
+                prop_assert!(
+                    grid.screen_of(id).row(id).flags().contains(RowFlags::DIRTY),
+                    "{:?} changed under {:?} but is not DIRTY",
+                    id,
+                    step
+                );
+            }
 
             // B2's class: only `swap_alt`, `reset` and an explicit release touch
             // anchors on the inactive screen. Nothing else may.

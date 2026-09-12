@@ -361,10 +361,11 @@ impl RenderState {
             let row = screen.row(id);
             let slot = &mut rows[index as usize];
             // Either the row itself changed since this consumer last looked, or
-            // the scroll moved a different row into this position, or the row
-            // was blanked back to an unwritten slot — which drops the batch
-            // stamp with the allocation, so the flag is the only witness.
-            if slot.id != id || row.seq() > watermark.0 || (slot.allocated && !row.is_allocated()) {
+            // the scroll moved a different row into this position. Blanking is
+            // covered by the first test: the grid stamps a row it blanks
+            // (`Screen::blank_row`), which is what makes a second watermark
+            // consumer possible without an engine change (`DEC-0015`).
+            if slot.id != id || row.seq() > watermark.0 {
                 slot.copy_from(row, interner, hyperlinks);
                 changed.push(index);
                 *rows_copied += 1;

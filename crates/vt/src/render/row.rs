@@ -55,14 +55,6 @@ pub struct RenderRow {
     pub runs: Vec<StyleRun>,
     /// Backs every [`RenderContent::Cluster`] in this row.
     pub clusters: Vec<char>,
-    /// Whether the grid row had a backing allocation when this copy was taken.
-    ///
-    /// The ring drops a row back to an unwritten slot when it is blanked with
-    /// the default background, and an unwritten slot carries no batch stamp —
-    /// so "this row became blank" is a content change the sequence number alone
-    /// cannot express. Keeping the flag is what lets
-    /// [`crate::render::RenderState`] notice it.
-    pub allocated: bool,
 }
 
 impl RenderRow {
@@ -94,7 +86,6 @@ impl RenderRow {
         self.id = row.id();
         self.seq = row.seq();
         self.wrapped = row.wrapped();
-        self.allocated = row.is_allocated();
         self.cells.clear();
         self.runs.clear();
         self.clusters.clear();

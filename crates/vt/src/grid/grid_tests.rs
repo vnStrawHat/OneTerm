@@ -943,6 +943,55 @@ fn first_visible_cell_is_viewport_top_column_zero() {
     f.integrity();
 }
 
+/// The `US-0075` rework: a blanked row is a **changed** row, over both the
+/// `place_row` path (an in-region scroll pulling an unwritten row over a written
+/// one) and the `reset_row` empty-template path.
+///
+/// This is the grid half of `DEC-0015`'s "a second consumer becomes possible
+/// without an engine change": everything here is read through the public
+/// `row.seq()` / `row.flags()`, the way a consumer that is not `RenderState`
+/// would have to.
+#[test]
+fn blanking_a_row_stamps_it_dirty_with_the_batch_seq() {
+    for blank_with_a_scroll in [true, false] {
+        let mut f = fixture(6, 10);
+        // Row 3 is written; row 4 is left unwritten, so the scroll below pulls
+        // an unallocated slot over an allocated one.
+        let written = f.grid.begin_batch();
+        f.goto(3, 0);
+        f.print("row3");
+        let id = f.screen().row_of_index(3);
+        assert_eq!(f.screen().row(id).seq(), written);
+
+        // A consumer renders here and takes the watermark with it.
+        let watermark = written;
+
+        let blanked = f.grid.begin_batch();
+        if blank_with_a_scroll {
+            // `place_row(.., None)`: row 4 is unwritten and moves onto row 3.
+            f.grid.scroll_up(ScrollRegion { top: 1, bottom: 5 }, 1);
+        } else {
+            // `reset_row` with the default (empty) erase template.
+            f.grid.screen_mut().reset_rows(3..4);
+        }
+
+        let row = f.screen().row(id);
+        assert_eq!(trimmed(&f.row_text(id)), "", "the row was not blanked");
+        assert!(
+            row.seq() > watermark,
+            "blanking left a stale stamp: {:?} is not above the watermark {watermark:?}",
+            row.seq()
+        );
+        assert_eq!(row.seq(), blanked);
+        assert!(
+            row.flags().contains(RowFlags::DIRTY),
+            "blanking left DIRTY clear, which is the false negative the \
+             grapheme sweep and the graphics release scan must never see"
+        );
+        f.integrity();
+    }
+}
+
 #[test]
 fn trimmed_slot_is_cleared_before_reuse() {
     let mut f = fixture_with(2, 10, 2);
