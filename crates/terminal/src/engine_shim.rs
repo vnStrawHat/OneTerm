@@ -139,6 +139,10 @@ fn refresh_cells(
     display_offset: usize,
 ) {
     let dense = rows * cols;
+    // Already dense at this geometry and offset: every stored `point` is still
+    // the right one, so a rebuild writes cells only. That is the flood's case —
+    // it scrolls far enough to force a `Full` every chunk while the offset stays
+    // at the sticky bottom.
     let laid_out = cells.len() == dense && *built_offset == Some(display_offset);
     if laid_out && matches!(update, RenderUpdate::Unchanged) {
         return;
@@ -149,20 +153,32 @@ fn refresh_cells(
         cells.clear();
         cells.resize_with(dense, blank_indexed);
     }
+    let points = Points {
+        write: !laid_out,
+        display_offset,
+    };
 
     if incremental {
         for &index in state.changed() {
             let index = usize::from(index);
             if let Some(row) = state.rows().get(index) {
-                write_row(cells, state, row, index, cols, display_offset);
+                write_row(cells, state, row, index, cols, points);
             }
         }
     } else {
         for (index, row) in state.rows().iter().enumerate() {
-            write_row(cells, state, row, index, cols, display_offset);
+            write_row(cells, state, row, index, cols, points);
         }
     }
     *built_offset = Some(display_offset);
+}
+
+/// Whether this refresh has to restate each cell's grid position, and the offset
+/// it is measured against.
+#[derive(Clone, Copy)]
+struct Points {
+    write: bool,
+    display_offset: usize,
 }
 
 /// One display row of the dense vector, written in place.
@@ -175,13 +191,19 @@ fn write_row(
     row: &RenderRow,
     index: usize,
     cols: usize,
-    display_offset: usize,
+    points: Points,
 ) {
-    let line = Line(index as i32 - display_offset as i32);
+    let line = Line(index as i32 - points.display_offset as i32);
     let base = index * cols;
     let Some(out) = cells.get_mut(base..base + cols) else {
         return;
     };
+    // Once per row, not once per cell: skipping the position write is only sound
+    // while the row already carries the position this refresh would give it.
+    debug_assert!(
+        points.write || out.first().is_none_or(|cell| cell.point.line == line),
+        "a reused row kept a stale grid line"
+    );
     let last = row.cells.len().saturating_sub(1);
     for run in &row.runs {
         let (fg, bg, attrs) = legacy_style(&run.style);
@@ -223,7 +245,9 @@ fn write_row(
                     row: down,
                 }));
             }
-            slot.point = Point::new(line, Column(col));
+            if points.write {
+                slot.point = Point::new(line, Column(col));
+            }
             slot.cell = legacy;
         }
     }
