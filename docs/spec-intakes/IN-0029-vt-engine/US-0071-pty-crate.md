@@ -68,8 +68,14 @@ scratch against [`low-level-design/pty.md`](low-level-design/pty.md):
 - [x] `grep -rn "alacritty_terminal::tty" crates/` is empty.
 - [x] `pwsh scripts/ci-local.ps1` is green.
 - [x] A local shell opens, echoes, keeps the bundled `OpenConsole.exe` as its console host,
-      interrupts a running command, reflows on resize, renders a Sixel image, and closes its tab
-      on shell exit (GUI walk on Windows).
+      interrupts a running command (a real Ctrl-C keystroke), reflows on resize, renders a Sixel
+      image, and on shell `exit` takes the shell **and its console host** down while the app
+      stays up (GUI walk on Windows, every step seen on screen:
+      [`evidence/US-0071-gui-walk-visual.md`](evidence/US-0071-gui-walk-visual.md)).
+      *Wording corrected 2026-09-12*: this line used to read "closes its tab on shell exit". The
+      app does not close the tab — `SessionEvent::Closed` in `crates/terminal-view` only marks the
+      agent ended — so the original phrasing described behaviour OneTerm never had. The
+      transport half of the claim is what this packet owns and is proven.
 
 ## Documentation
 
@@ -203,9 +209,9 @@ No new decision: every choice here is already fixed by pty.md and DEC-0013.
 - `pwsh scripts/ci-local.ps1` — fmt, clippy `-D warnings`, `cargo test --workspace`, the graph
   policy, the doc-path check, the English check, the completion catalogs, the notices check.
 - `grep -rn "alacritty_terminal::tty" crates/` — empty.
-- GUI walk on Windows from this worktree's `fast-dev` build: prompt, `echo hi`, the console host
+- GUI walk on Windows from a `fast-dev` build: prompt, `echo hi`, the console host
   child is the bundled `OpenConsole.exe`, Ctrl-C interrupts `ping -t 127.0.0.1`, resize reflows,
-  `type snake.six` renders, shell exit closes the tab.
+  `type snake.six` renders, shell `exit` takes the shell and its console host down.
 
 <!-- HARNESS:PROOF:BEGIN -->
 - [x] Unit proof
@@ -245,23 +251,45 @@ interrupted, leaving the shell and OneTerm alive; `type snake.six` passing a 257
 without wedging the session; and `exit` taking both the shell and its console host away while
 OneTerm stayed up.
 
+### Visual GUI walk (2026-09-12, connected desktop)
+
+[`evidence/US-0071-gui-walk-visual.md`](evidence/US-0071-gui-walk-visual.md), nine screenshots
+`evidence/US-0071-visual-*.png`. Re-run on `feat/vt-engine` @ `1ef1414` in the main checkout with
+the desktop **interactive** (`quser` → `Active`, `GetForegroundWindow()` non-zero and equal to
+OneTerm's `hwnd`), so every frame is live and each PNG was re-read and checked against the claim:
+the prompt and `echo hi` output; the in-terminal child list naming
+`target\fast-dev\x64\OpenConsole.exe` (1.24.2607.10001) as the console host with `conpty: bundled`
+logged once; `ping -t 127.0.0.1` stopped by **a real injected Ctrl-C keystroke** (`Control-C`,
+`^C`, prompt back, `ping.exe` gone, shell and host alive); twelve ~110-column lines reflowed from
+one row each to two when the window was resized from 2560x1032 to 1084x752; `type ..\snake.six`
+rendering the image with the prompt on the row below it, matching
+`IN-0028`'s `US-0067-rework-prompt-below-image.png`; `日本語 🙂 x` printed at code page 65001 with
+the trailing `x` and every following prompt aligned at column 0; and `exit` removing `cmd.exe`
+and the bundled `OpenConsole.exe` while OneTerm stayed up.
+
 ### Gaps
 
-- **The visual GUI walk is unverified.** The Windows desktop session was disconnected for both
-  the implementer's run and the verifier's re-run (`quser` state `Disc`,
-  `GetForegroundWindow() = 0`, `SM_REMOTESESSION = 1`); the verifier's captures came out fully
-  black. Nothing that needs eyes — the rendered Sixel image, the on-screen echo, the reflowed
-  text — has been seen. **The transport-level evidence stands** (session transcript, child
-  process tree, `mode con` dimensions, exit behaviour) and is what every claim below rests on;
-  a connected desktop is the only way to close the pixel gap.
-- **The Windows session was disconnected for the walk** (`quser` state `Disc`). GPUI stops
-  presenting frames for the terminal pane, so the screenshots hold stale frames: **the Sixel
-  image and the on-screen echo were not seen**, only proven to have passed through the
-  transport. The window chrome and the post-resize reflow did repaint and are genuine.
-- **Ctrl-C was a console `CTRL_C_EVENT`, not a keystroke** — the same limitation `US-0070`
-  recorded. A posted `VK_CONTROL`+`C` and a `WM_CHAR 0x03` were both tried first and ignored,
-  because GPUI reads the modifier state a posted message does not set. OneTerm's own
-  key-to-`0x03` encoding is untouched by this packet.
+- **Closed 2026-09-12: the visual GUI walk is done.** The earlier runs captured black/stale
+  frames because the Windows session was disconnected (`quser` `Disc`, `GetForegroundWindow() = 0`);
+  re-run on a connected desktop, every step was seen on screen —
+  [`evidence/US-0071-gui-walk-visual.md`](evidence/US-0071-gui-walk-visual.md). The rendered Sixel
+  image, the on-screen echo and the reflowed grid are no longer taken on trust. The earlier
+  transport-level evidence (session transcript, child process tree, exit behaviour) stands
+  unchanged alongside it; the black captures `evidence/US-0071-verify-*.png` are superseded.
+- **Closed 2026-09-12: Ctrl-C is now proven as a keystroke.** The interrupt was injected as a
+  real Ctrl+C (`keybd_event` VK_CONTROL + `C` into the focused window), not a console
+  `CTRL_C_EVENT`: `ping -t` stopped, `Control-C` / `^C` printed, the prompt returned, and the
+  shell and its host survived. The earlier failure was the disconnected session, not the key path.
+- **Typed non-ASCII input is still unverified.** In the visual walk, `日本語 🙂` typed through the
+  harness's posted `WM_CHAR` reached the shell low-byte-truncated (`å,ž =B`), so the wide-glyph
+  step was driven from shell **output** (a UTF-8 file) instead — the side the glyph-width flag
+  governs. Whether the truncation is the harness or OneTerm's key path was not chased down; it is
+  keyboard-side, outside this packet's transport scope, and no real-keyboard/IME entry of
+  non-ASCII has been tested here.
+- **`exit` does not close the tab** (found in the visual walk): the shell and the bundled
+  `OpenConsole.exe` both go away and the app stays up, but the `Terminal` tab remains with its
+  final scrollback — OneTerm has no close-on-exit path (`SessionEvent::Closed` only marks the
+  agent ended). The acceptance line that claimed otherwise has been corrected above.
 - **Unix is compile-and-CI-tested only.** This box is Windows. The `openpty` backend, the
   reaper thread and the `SignalMask` port have never run here; CI's ubuntu and macOS jobs are
   their only proof, and `docs/PROJECT.md` already records that Linux/macOS are not QA-tested.
