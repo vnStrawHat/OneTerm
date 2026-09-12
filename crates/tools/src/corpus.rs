@@ -117,6 +117,16 @@ pub fn alacritty_ref_dir() -> PathBuf {
     corpus_root().join("alacritty-ref")
 }
 
+/// OneTerm's own recordings, for behaviour the vendored set does not reach.
+///
+/// Kept apart from `alacritty-ref/` so the vendored set stays exactly what
+/// upstream published, and so its NOTICE keeps covering only those files. Both
+/// directories are gated identically: blessed once by the **old** engine and
+/// then frozen (R-58).
+pub fn oneterm_dir() -> PathBuf {
+    corpus_root().join("oneterm")
+}
+
 /// Load every recording under `dir`, sorted by name, optionally filtered by a
 /// substring of the name.
 pub fn load_all(dir: &Path, filter: Option<&str>) -> Result<Vec<Recording>> {

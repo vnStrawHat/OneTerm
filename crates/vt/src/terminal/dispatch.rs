@@ -17,6 +17,7 @@ use std::time::Instant;
 
 use crate::cell::{Cell, CellContent, Color, NamedColor, Rgb, Semantic, Style};
 use crate::event::{ClipboardKind, VtEvent};
+use crate::graphics::{self, SixelParser};
 use crate::grid::{
     AnchorKind, Charset, DisplayClear, LineClear, Pos, PrintMode, ScrollRegion, ScrollReport,
 };
@@ -381,6 +382,11 @@ impl Handler<'_> {
     fn reset_state(&mut self) {
         self.invalidate_selection(Invalidation::Reset);
         self.state.grid.reset();
+        // Pending images and the in-flight decoder go; the id counter does not,
+        // so a stale id in the view's store can never name a new image. The
+        // placements die through the ordinary release sweep, because the reset
+        // blanked every row they cover.
+        self.state.graphics.reset();
         self.state.active_charset = 0;
         self.state.cursor_style = None;
         self.state.title.reset();
@@ -1296,17 +1302,38 @@ impl Dispatch for Handler<'_> {
         self.state.config.osc_claims.allows_large(code)
     }
 
-    fn dcs_hook(&mut self, _params: &Params, _intermediates: &[u8], _byte: u8) {
-        // Graphics are `US-0078`; until then a DCS is dropped and counted.
+    /// Only Sixel (`DCS q`) is decoded (`US-0080`). Any other final byte clears
+    /// an in-flight decoder, so a non-Sixel DCS arriving mid-Sixel aborts the
+    /// prior unterminated one — parity with the engine being replaced.
+    fn dcs_hook(&mut self, _params: &Params, _intermediates: &[u8], byte: u8) {
         self.state.dispatched = true;
-        self.unhandled();
+        if byte == b'q' {
+            self.state.graphics.parser = Some(SixelParser::new());
+        } else {
+            self.state.graphics.parser = None;
+            self.unhandled();
+        }
     }
 
-    fn dcs_put(&mut self, _byte: u8) {}
+    fn dcs_put(&mut self, byte: u8) {
+        if let Some(parser) = self.state.graphics.parser.as_mut() {
+            parser.put(byte);
+        }
+    }
 
     fn dcs_unhook(&mut self, aborted: bool) {
+        let parser = self.state.graphics.parser.take();
         if aborted {
+            // A `CAN`/`SUB` abort or a payload past `DCS_MAX_BYTES`: the partial
+            // image is discarded and no cell is stamped.
             self.state.stats.aborted_dcs = self.state.stats.aborted_dcs.saturating_add(1);
+            return;
+        }
+        let Some(image) = parser.and_then(SixelParser::finish) else {
+            return;
+        };
+        for report in graphics::place(self.state, image) {
+            self.report(Some(report));
         }
     }
 

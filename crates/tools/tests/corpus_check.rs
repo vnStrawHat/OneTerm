@@ -1,7 +1,9 @@
 //! The parity gate.
 //!
-//! Replays all 45 vendored alacritty reference recordings and compares them,
-//! cell for cell, against the expectations frozen at `US-0072`. It runs inside
+//! Replays all 45 vendored alacritty reference recordings — plus OneTerm's own
+//! recordings under `oneterm/`, which cover behaviour the vendored set never
+//! reaches — and compares them, cell for cell, against the expectations frozen
+//! by the engine being replaced. It runs inside
 //! `cargo test --workspace`, so an expectation that drifts — or a declared
 //! expected difference that has gone stale — fails the build rather than
 //! waiting for someone to run a tool.
@@ -26,9 +28,25 @@ fn run(engine: Engine) {
         "expected the 45 vendored alacritty reference recordings under {}",
         dir.display()
     );
+    check(engine, &recordings);
+}
 
+/// OneTerm's own recordings, for behaviour the vendored set does not reach —
+/// Sixel, today. Same rules: blessed once by the old engine, then frozen.
+fn run_oneterm(engine: Engine) {
+    let dir = corpus::oneterm_dir();
+    let recordings = corpus::load_all(&dir, None).expect("OneTerm's own recordings");
+    assert!(
+        !recordings.is_empty(),
+        "expected OneTerm's own recordings under {}",
+        dir.display()
+    );
+    check(engine, &recordings);
+}
+
+fn check(engine: Engine, recordings: &[corpus::Recording]) {
     let mut failures = Vec::new();
-    for recording in &recordings {
+    for recording in recordings {
         let report = corpus::check_recording(recording, engine)
             .unwrap_or_else(|error| panic!("{}: {error:#}", recording.name));
         if report.passed() {
@@ -60,4 +78,14 @@ fn the_alacritty_reference_corpus_matches_its_frozen_expectations() {
 #[test]
 fn the_new_engine_matches_the_frozen_expectations() {
     run(Engine::New);
+}
+
+#[test]
+fn the_oneterm_corpus_matches_its_frozen_expectations() {
+    run_oneterm(Engine::Old);
+}
+
+#[test]
+fn the_new_engine_matches_the_oneterm_corpus() {
+    run_oneterm(Engine::New);
 }
