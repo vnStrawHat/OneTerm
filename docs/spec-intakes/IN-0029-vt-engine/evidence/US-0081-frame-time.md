@@ -1,5 +1,21 @@
 # US-0081 — Frame time before and after the engine swap
 
+> **Resolved after the verification round.** The engine defect this measurement
+> isolated (§ "What the numbers say", point 2) was fixed upstream as `8f60fc9` and
+> merged into this branch with `feat/vt-engine` @ `cf5660c`. Re-measured on the merged
+> tree with the differential's own in-process bench — 4 MiB of coloured text through
+> 4 KiB chunks, grid 120x30, scrollback 10 000, snapshot after every chunk, `fast-dev`:
+>
+> | | new | old | ratio |
+> | --- | --- | --- | --- |
+> | feed / advance | 97 ms (avg 95 us/chunk) | 54 ms (52 us) | 1.8x |
+> | snapshot | 78 ms (76 us) | 24 ms (23 us) | 3.3x |
+> | **total** | **177 ms** | **79 ms** | **2.2x** |
+>
+> The 62x below is gone. What remains is the shim's own full-viewport legacy-cell
+> rebuild, which `US-0082` deletes, and it is well inside a frame budget. The
+> app-level numbers below are kept as the record of how the defect was found.
+
 Recorded, never gated (`IN-0029.md` acceptance: "no packet's exit criteria contain a
 performance number"). This is a **finding**, not a claim of improvement.
 

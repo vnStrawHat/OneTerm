@@ -354,7 +354,12 @@ for anything.
 
 ### Gaps
 
-1. **The engine's always-on integrity walk is O(live rows x cols), not O(1) (R-28).**
+1. **~~The engine's always-on integrity walk is O(live rows x cols), not O(1) (R-28).~~
+   Fixed upstream and merged in.** `8f60fc9`, in `feat/vt-engine` @ `cf5660c`, bounds the
+   always-on tier and puts the full two-screen walk behind `vt-paranoid`, exactly as R-28
+   says. Re-measured on the merged tree: the old/new ratio for 4 MiB through 4 KiB chunks
+   went from 62x to **2.2x**, and what is left is the shim's own viewport rebuild, which
+   `US-0082` deletes. The original finding, kept because it is how the defect was found:
    `TerminalGrid::assert_integrity` walks both screens' whole history once per
    `Terminal::feed` and once per `RenderState::begin_update`. At the default 10 000-row
    scrollback that is ~6 ms per frame in any debug-assertions build; release builds are
