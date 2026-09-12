@@ -81,7 +81,11 @@ revision; `THIRD-PARTY-NOTICES.md` gains a corpus row as the two fork rows are r
 2. `state.expect` — the OneTerm snapshot the upstream harness never checked
    ([`../research/engine-semantics.md`](../research/engine-semantics.md) § 7.3, trap 44): cursor
    position and shape, the pending-wrap flag, every non-default mode, the colour-override table,
-   the title and title stack, the tab stops, and the scroll region.
+   the **current title**, the tab stops, and the scroll region.
+   **Gap, as built in `US-0072`:** the engine being replaced exposes no title *stack*, only the
+   current title, so `state.expect` cannot carry the stack and `CSI 22 t` / `CSI 23 t` depth is
+   unverified by the corpus. It is covered by `dispatch::tests::title_stack_caps_at_sixteen_dropping_the_oldest`
+   instead, and a later packet may add the field once the new engine is the blessing engine.
 
 **Per-recording expected differences (owner ruling, 2026-09-12).** The engine is correctness-first,
 so some recordings will legitimately differ from expectations blessed by the engine being replaced.
@@ -211,12 +215,19 @@ benchmarks are POSIX shell scripts needing `ps -o tty=`, `/dev/<tty>` and `tput`
 | 2 | parse + grid (`Terminal::feed`) | 160x45 | the real cost centre: the grid half costs 3-8x the parser half |
 | 3 | parse + grid + one `render_update` + `map_colors` per simulated frame | 160x45 | **the primary metric**; the tier that would have caught the per-frame viewport copy |
 | 4 | resize latency at 0 / 10 000 / 100 000 rows of scrollback, 80x24 to 100x40 | its own geometry, deliberately (R-63) | this tier measures an operation, not a stream; it is never compared against tiers 1-3, only against the other engine at the same depth |
-| 5 | RSS after filling N scrollback rows with plain / unicode / heavily styled / mixed content | 160x45 | the memory claim is a design property until this measures it |
+| 5 | Live heap after filling N scrollback rows with plain / unicode / heavily styled / mixed content | 160x45 | the memory claim is a design property until this measures it |
 
-**Tier 5 is a `vt-bench rss` report, not a `#[test]` (R-60):** an RSS assertion inside a unit test
-is unreliable under a harness running other tests in parallel. The unit test
+**Tier 5 is a `vt-bench rss` report, not a `#[test]` (R-60):** a memory assertion inside a unit
+test is unreliable under a harness running other tests in parallel. The unit test
 `grid::tests::unwritten_slots_read_as_blanks` asserts the *logical* property (unwritten slots read
 as blanks and allocate no row); the *physical* property is the bench's job.
+
+**What `US-0072` built, and the gap:** the tier measures **live heap** through a counting
+allocator, not process RSS. Live heap is the number the design's claims are about (bytes per cell,
+lazily allocated slots) and it is portable and deterministic, where RSS on Windows moves with the
+allocator's retained arenas and with anything else in the process. Process RSS is therefore **not**
+measured today; if the retained-memory question ever matters, a `vt-bench rss --process` mode is
+the follow-up. The tier keeps the name `rss` for continuity with the packet that created it.
 
 **Reporting rule.** Every engine number is printed next to the ConPTY transport ceiling from
 `pty-throughput` (about 1.2 MiB/s for a `cmd.exe` producer, about 30 MiB/s for a DOOM-fire-class

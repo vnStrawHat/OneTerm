@@ -347,8 +347,9 @@ the recording risk.
 **Scheduling.** After the owner's correctness-first ruling (2026-09-12), every behaviour
 *correction* lands in its natural packet with a declared expected difference; only **additive
 features** — capabilities the reference never had and no recording exercises — wait for `US-0086`.
-`US-0072` still greps the 45 recordings for every sequence a correction touches and fills the
-"Affected recordings" column with a measured answer.
+`US-0072` has measured the 45 recordings for every sequence a correction or deferred feature
+touches; the "Affected recordings" columns below carry that measurement
+(`evidence/US-0072-recording-risk.md`).
 
 | # | Deviation | Packet | Reason | Recording risk |
 | --- | --- | --- | --- | --- |
@@ -362,21 +363,21 @@ features** — capabilities the reference never had and no recording exercises �
 | D8 | XTVERSION answered | **`US-0086`** | feature detection by modern programs | none — answers are discarded |
 | D9 | LNM tracked but inert | `US-0076` | matches the reference; recorded so it is not read as an oversight | none |
 | D10 | `modifyOtherKeys` level stored and reportable | **`US-0086`** | the reference parses both and implements neither | none |
-| D11 | *superseded* — now correction C11 (blink and overline stored, with a declared expected diff; the cell-level diff mechanism replaces N-03's deferral) | `US-0076` | correctness first (owner ruling, 2026-09-12) | see the corrections table |
-| D12 | Reverse wrap (`? 45`) implemented | **`US-0086`** | cheap; gated on the mode, default off, so trap 1 is unaffected until then (R-08) | **measure in `US-0072`** |
+| D11 | *superseded* — now correction C11 (blink and overline stored) | `US-0076` | correctness first (owner ruling, 2026-09-12); the `US-0072` measurement shows no recording sends SGR 5 / 6 / 53 / 55, so it needs no declared diff at all | see the corrections table |
+| D12 | Reverse wrap (`? 45`) implemented | **`US-0086`** | cheap; gated on the mode, default off, so trap 1 is unaffected until then (R-08) | **measured: none** — six recordings only ever reset `? 45`, none sets it |
 | D13 | DA1 answers `CSI ? 62 ; 4 ; 22 c` | `US-0076` | adds the ANSI-colour claim to today's answer | none — DA answers are discarded by the harness |
 | D14 | Title stack capped at 16, oldest dropped | `US-0076` | 4096 is a memory sink no program needs | none |
 | D15 | Kitty stack overflow pops the right stack (trap 42) | `US-0076` | fixes a reference bug | none |
 
 **Corrections in this file — spec-correct from the start.**
 
-| C | Correction | Trap | Packet | Affected recordings (confirmed in `US-0072`) |
+| C | Correction | Trap | Packet | Affected recordings (**measured in `US-0072`**, `evidence/US-0072-recording-risk.md`) |
 | --- | --- | --- | --- | --- |
-| C5 | `CPR` is region-relative under `DECOM` | 38 | `US-0076` | `vttest_origin_mode_1`, `vttest_origin_mode_2` if either reads back a position; DA/DSR answers are discarded by the harness, so the grid is unaffected |
-| C6 | `RIS` resets the colour overrides | 39 | `US-0076` | `colored_reset`, `grid_reset`, `decaln_reset` if any sets a palette entry before `RIS`; the grep confirms |
-| C7 | `OSC 4` applies complete pairs and ignores a trailing parameter | 26 | `US-0076` | `indexed_256_colors` if it sends an even count; the grep confirms |
-| C9 | `DECSTR` (`CSI ! p`) implemented | — | `US-0076` | none expected; the reference ignores it |
-| C11 | Blink and overline attributes stored (SGR 5 / 6 / 53 / 55) | — | `US-0076` | `sgr`, `underline` — the old engine drops these bits, so the cells differ in `attrs` and the diff is declared |
+| C5 | `CPR` is region-relative under `DECOM` | 38 | `US-0076` | **none**. Eight recordings touch one half or the other and **no recording sends both**: five set `DECOM` without asking for a position, three send `CSI 6 n` without `DECOM`. DSR answers are discarded by the harness anyway |
+| C6 | `RIS` resets the colour overrides | 39 | `US-0076` | **1 recording**: `grid_reset` (one `RIS`, one `OSC 104`). `OSC 104` already empties indices 0-255, so no `state.expect` palette key is expected to move |
+| C7 | `OSC 4` applies complete pairs and ignores a trailing parameter | 26 | `US-0076` | **none of the 45**. `indexed_256_colors` sends 240 well-formed triples, which the old engine already accepts. Free |
+| C9 | `DECSTR` (`CSI ! p`) implemented | — | `US-0076` | **1 recording, and it is the one certain diff in this table**: `grid_reset` sends `CSI ! p`, which the old engine drops, so implementing it **will** change that recording's grid. `US-0076` writes `grid_reset`'s `expected-diffs.toml` naming C9 |
+| C11 | Blink and overline attributes stored (SGR 5 / 6 / 53 / 55) | — | `US-0076` | **none of the 45** — no recording sends those parameters (`sgr` exercises 9, 4 and the colour forms; `underline` exercises `4:0`-`4:3`, 21, 24). **Free, with no declared diff**: N-03's reason for deferring it does not survive the measurement |
 
 Kept deliberately, because they are correct: traps 15, 16, 18, 21, 22, 25, 40 and 43. Mode 2027 is
 deferred whole (R-56), so it is not a deviation — it is unimplemented, and DECRQM says so.

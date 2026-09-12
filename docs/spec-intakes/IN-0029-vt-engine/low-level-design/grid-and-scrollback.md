@@ -375,24 +375,25 @@ Selection invalidation follows the reference and is specified in
 | --- | --- | --- | --- |
 | G1 | `WRAPPED` is a row flag, not a flag on the last cell | `US-0075` | none — a representation change |
 | G2 | `RowId` replaces signed `Line`; no negative indices | `US-0075` | none |
-| G3 | With `DECAWM` off the pending-wrap flag is not set, so `EL 0` erases and `HT` moves (R-09) | `US-0075` | **measure in `US-0072`**: grep for `?7l`; any difference is declared as an expected diff |
+| G3 | With `DECAWM` off the pending-wrap flag is not set, so `EL 0` erases and `HT` moves (R-09) | `US-0075` | **measured**: 4 recordings reset `? 7` — `vttest_origin_mode_1`, `vttest_origin_mode_2`, `vttest_scroll`, `vttest_tab_clear_set`. Observable only through `EL 0` or `HT` while the flag would have been armed, so one or more may need a declared diff |
 | G6 | The ring index is the row id; no `zero` rotation and no free list | `US-0075` | none — removes trap 45 |
 | G7 | One row representation; dual-form rows deferred (R-51) | `US-0075` | none |
 
 **Corrections — spec-correct from the start, with declared expected differences.** Each row below
 is a defect in the engine being replaced, fixed rather than reproduced (owner ruling, 2026-09-12).
-`US-0072`'s scripted grep names the affected recordings and writes the exact cells into that
-recording's `expected-diffs.toml`, so a corrected quirk can never hide a regression: the gate still
-fails on any difference that is not declared.
+`US-0072`'s scripted grep has measured which recordings each correction can touch (below, from
+`evidence/US-0072-recording-risk.md`); the packet that implements a correction writes the exact
+cells into that recording's `expected-diffs.toml`, so a corrected quirk can never hide a
+regression: the gate still fails on any difference that is not declared.
 
-| C | Correction | Trap | Packet | Affected recordings (confirmed in `US-0072`) |
+| C | Correction | Trap | Packet | Affected recordings (**measured in `US-0072`**, `evidence/US-0072-recording-risk.md`) |
 | --- | --- | --- | --- | --- |
-| C1 | `DCH` is a plain shift left by `n` | 19 | `US-0075` | `delete_chars_reset`, only where a count reaches `cols - col`; the grep confirms |
-| C2 | `ED 1` clears row 0 | 11 | `US-0075` | any recording sending `CSI 1 J` with the cursor on row 1; the grep confirms |
-| C3 | A short region scroll rotates, then blanks | 17 | `US-0075` | `region_scroll_down`, `scroll_in_region_up_preserves_history` if either uses a count at or above its region height |
-| C4 | Insert mode repairs wide pairs instead of leaving orphaned spacers | 7 | `US-0075` | `vttest_insert` if it inserts over a wide character |
-| C8 | `? 47` / `? 1047` / `? 1048` implemented | 13 | `US-0076` | `wrapline_alt_toggle`, `alt_reset`, `saved_cursor_alt` if any sends them rather than `1049` |
-| C10 | `CSI ? 5 W` restores the default tab stops | 27 | `US-0076` | none expected; the grep confirms |
+| C1 | `DCH` is a plain shift left by `n` | 19 | `US-0075` | **8 recordings send `DCH`**: `decaln_reset`, `deccolm_reset`, `delete_chars_reset`, `erase_chars_reset`, `insert_blank_reset`, `region_scroll_down`, `scroll_up_reset`, `underline`. The quirk needs `count >= cols - col`, so the large counts are the likely ones — `erase_chars_reset` (max 21), `deccolm_reset` (max 15), `scroll_up_reset` (max 11). The packet writes the exact cells into each affected `expected-diffs.toml` |
+| C2 | `ED 1` clears row 0 | 11 | `US-0075` | **2 recordings**: `vttest_cursor_movement_1`, `vttest_origin_mode_1` |
+| C3 | A short region scroll rotates, then blanks | 17 | `US-0075` | **2 recordings** pair `DECSTBM` with `IL`/`DL`: `vim_24bitcolors_bce` and `vttest_insert`. `vttest_insert`'s 22-row region with counts up to 24 is exactly the "count at or above the region height" case. (The earlier guesses `region_scroll_down` and `scroll_in_region_up_preserves_history` pair no region with a region-scroll primitive) |
+| C4 | Insert mode repairs wide pairs instead of leaving orphaned spacers | 7 | `US-0075` | **1 recording**: `vttest_insert` (IRM set once, one non-ASCII character printed) — possible, not certain |
+| C8 | `? 47` / `? 1047` / `? 1048` implemented | 13 | `US-0076` | **none of the 45** — `wrapline_alt_toggle`, `alt_reset` and `saved_cursor_alt` all use `? 1049`. Free |
+| C10 | `CSI ? 5 W` restores the default tab stops | 27 | `US-0076` | **none of the 45**. Free |
 
 Kept deliberately, because they are correct behaviour or OneTerm product behaviour rather than
 defects: pending wrap and its interaction with `BS`, `EL 0` and `HT` (traps 1, 2, 3); `ED 2`
