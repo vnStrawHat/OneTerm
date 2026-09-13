@@ -14,7 +14,7 @@ documentation means "inspect and preserve current behavior", not "design freely"
 
 OneTerm is a desktop terminal application for SSH, SFTP, and local shells with a Zed-style
 workspace UI (dock area, tabs, split Spaces). It also monitors coding agents through the
-OSC 9;7 proposal ([`docs/osc-agent-status.md`](osc-agent-status.md)). Users are developers who
+OSC 20308 proposal ([`docs/osc-agent-status.md`](osc-agent-status.md)). Users are developers who
 run interactive shells and transfer files against remote hosts; the repository owns the whole
 product: terminal engine glue, backends, UI, persistence, packaging, and the auto-updater.
 

@@ -506,7 +506,7 @@ impl Render for AgentListView {
                     div()
                         .text_xs()
                         .text_color(pal.muted)
-                        .child("Agents that emit OSC 9;7 appear here."),
+                        .child("Agents that emit OSC 20308 appear here."),
                 )
                 .into_any_element();
         }

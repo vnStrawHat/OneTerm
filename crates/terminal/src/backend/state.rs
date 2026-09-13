@@ -74,7 +74,7 @@ pub struct SharedSessionState {
     absolute_line_count: AtomicUsize,
     clear_epoch: AtomicUsize,
     agent_osc_unknown_subcodes: AtomicU64,
-    legacy_agent_osc_logged: AtomicBool,
+    legacy_agent_osc_events: AtomicU64,
 }
 
 /// Handle to a [`SharedSessionState`].
@@ -110,11 +110,18 @@ impl SharedSessionState {
         self.agent_osc_unknown_subcodes.load(Ordering::Relaxed)
     }
 
-    /// Whether this is the **first** `OSC 9;7` of the session, so the caller
-    /// logs the deprecation once rather than once per event
-    /// (`docs/osc-agent-status.md` §3.1, the one-release alias).
-    pub fn legacy_agent_osc_first_use(&self) -> bool {
-        !self.legacy_agent_osc_logged.swap(true, Ordering::Relaxed)
+    /// Count one event that arrived on the deprecated `OSC 9;7` alias and
+    /// return the session total, which is `1` on the first — the alias is
+    /// "parsed identically, counted, and logged once per session"
+    /// (`docs/osc-agent-status.md` §3.1), and one counter serves both: the
+    /// caller logs when this returns `1`.
+    pub fn count_legacy_agent_osc(&self) -> u64 {
+        self.legacy_agent_osc_events.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// How many events this session took on the deprecated alias.
+    pub fn legacy_agent_osc_events(&self) -> u64 {
+        self.legacy_agent_osc_events.load(Ordering::Relaxed)
     }
 
     /// Whether the child/remote is still running.

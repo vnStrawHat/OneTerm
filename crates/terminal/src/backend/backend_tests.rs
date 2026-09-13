@@ -391,16 +391,35 @@ fn unknown_agent_subcodes_are_ignored_and_counted() {
     assert_eq!(f.state.agent_osc_unknown_subcodes(), 3);
 }
 
-/// The alias is logged once per session, not once per event — a still-unported
-/// agent emits thousands (spec §3.1).
+/// The alias is counted, and announced once per session rather than once per
+/// event — a still-unported agent emits thousands (spec §3.1).
 #[test]
-fn the_legacy_alias_is_announced_once_per_session() {
+fn the_legacy_alias_is_counted_and_announced_once_per_session() {
     let f = local(16);
-    assert!(f.state.legacy_agent_osc_first_use());
-    assert!(!f.state.legacy_agent_osc_first_use());
-    assert!(!f.state.legacy_agent_osc_first_use());
-    // A fresh session announces it again.
-    assert!(local(16).state.legacy_agent_osc_first_use());
+    let json = stringify!(
+        {"v":1,"agent":"pi","type":"heartbeat","seq":1,"ts":1700000000000}
+    );
+    let [new, legacy] = crate::osc_agent::AGENT_OSC_PREFIXES;
+
+    // The sequence itself is never counted as the alias.
+    agent_status(&f, new, json);
+    assert_eq!(f.state.legacy_agent_osc_events(), 0);
+
+    // Only the first alias event announces itself, but every one is counted.
+    assert_eq!(f.state.count_legacy_agent_osc(), 1, "the first announces");
+    assert_eq!(f.state.count_legacy_agent_osc(), 2, "the rest only count");
+
+    for seq in 2..5 {
+        let json = format!(
+            "{{\"v\":1,\"agent\":\"pi\",\"type\":\"heartbeat\",
+             \"seq\":{seq},\"ts\":1700000000000}}"
+        );
+        assert!(!agent_status(&f, legacy, &json).is_empty());
+    }
+    assert_eq!(f.state.legacy_agent_osc_events(), 5);
+
+    // A fresh session starts clean and announces again.
+    assert_eq!(local(16).state.legacy_agent_osc_events(), 0);
 }
 
 /// Row bookkeeping is a `RowId`-keyed consumer's business, and nothing above

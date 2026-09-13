@@ -217,9 +217,9 @@ impl<T: PtyTransport> OscRouter<T> {
     /// * an `OSC 20308` sub-code the receiver does not implement is ignored and
     ///   **counted** — `2` and above are reserved, so this is how a future
     ///   extension aimed at an older OneTerm shows up instead of vanishing;
-    /// * `OSC 9;7` is deprecated. It is logged **once**, not once per event: a
-    ///   still-unported agent emits thousands, and the point is to make it
-    ///   diagnosable, not to drown the log.
+    /// * `OSC 9;7` is deprecated. It is counted, and logged **once**, not once
+    ///   per event: a still-unported agent emits thousands, and the point is to
+    ///   make it diagnosable, not to drown the log.
     fn note_agent_osc(&self, code: u32, params: &[&[u8]]) {
         let sub = params.get(1).copied();
         if code == AGENT_OSC && !matches!(sub, Some(b"0" | b"1")) {
@@ -230,7 +230,7 @@ impl<T: PtyTransport> OscRouter<T> {
             );
         } else if code == LEGACY_AGENT_OSC
             && sub == Some(LEGACY_AGENT_OSC_SUB)
-            && self.state.legacy_agent_osc_first_use()
+            && self.state.count_legacy_agent_osc() == 1
         {
             log::debug!(
                 "OscRouter: OSC 9;7 is deprecated and is dropped in the next release — \

@@ -4,7 +4,7 @@ OneTerm is a Terminal application for SSH/SFTP/Local Shell with a **Zed-style wo
 - Connect to remote shells over SSH
 - Browse and transfer files over SFTP
 - Open local shells
-- Monitor coding agents in a live Agent Panel fed by the OSC 9;7 proposal ([spec](docs/osc-agent-status.md)). 
+- Monitor coding agents in a live Agent Panel fed by the OSC 20308 proposal ([spec](docs/osc-agent-status.md)). 
 - Powered by `Rust`, `alacritty_terminal`, `gpui`, `gpui-component`
 
 ---
@@ -16,7 +16,7 @@ OneTerm is a Terminal application for SSH/SFTP/Local Shell with a **Zed-style wo
 | ![Multiple tabs and split Spaces](screenshots/mutiple-tabs-spaces.png) | ![Terminal emulator rendering](screenshots/doom-fire.png) |
 | Multiple sessions across tabs with resizable split Spaces | Terminal emulator — 24-bit colors, box drawing, ANSI/VT |
 | ![SSH & SFTP client](screenshots/ssh-sftp-client.png) | ![Agent Panel](screenshots/agents-panel.png) |
-| SSH connectivity + SFTP file browser with transfer queue | Agent Panel — right-dock fleet view (OSC 9;7) |
+| SSH connectivity + SFTP file browser with transfer queue | Agent Panel — right-dock fleet view (OSC 20308) |
 | ![Semantic highlight](screenshots/semantic-highlight.png) | ![Semantic highlight detail](screenshots/semantic-highlight-2.png) |
 | Semantic highlight via shell integration (OSC 7 / 133) | Semantic highlight detail — CWD, prompt, and output coloring |
 
@@ -80,7 +80,7 @@ OneTerm is a Terminal application for SSH/SFTP/Local Shell with a **Zed-style wo
 
 - Right-dock fleet view of coding agents
 - Currently supports Pi Coding Agent (`pi install npm:@vnstrawhat/pi-oneterm`)
-- Built from the OSC 9;7 proposal and folded into a global Agent Registry
+- Built from the OSC 20308 proposal and folded into a global Agent Registry
 - Shows working, blocked, idle, done, and error
 
 ### 🧩 Layout & UI
@@ -240,7 +240,7 @@ releases also publish a combined `SHA256SUMS`):
 - [`docs/ssh-client-connect.md`](docs/ssh-client-connect.md) — SSH connection / auth design
 - [`docs/sftp-browser-design.md`](docs/sftp-browser-design.md) — SFTP file browser design
 - [`docs/sftp-follow-terminal-cwd/README.md`](docs/sftp-follow-terminal-cwd/README.md) — SFTP-follows-terminal-CWD design
-- [`docs/osc-agent-status.md`](docs/osc-agent-status.md) — OSC 9;7 agent status proposal/spec
+- [`docs/osc-agent-status.md`](docs/osc-agent-status.md) — OSC 20308 agent status proposal/spec
 - [`docs/osc-sequences-checklist.md`](docs/osc-sequences-checklist.md) — OSC sequence support checklist
 - [`docs/auto-update.md`](docs/auto-update.md) — auto-update design
 - [`docs/crash-reporting.md`](docs/crash-reporting.md) — crash reporting and recovery

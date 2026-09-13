@@ -4,7 +4,7 @@
 //! keeps the dependency graph acyclic. It owns:
 //!
 //! - **runtime state** shared across features: [`AppState`] (active SFTP
-//!   backend / cwd source per workspace), [`AgentRegistry`] (the folded OSC 9;7
+//!   backend / cwd source per workspace), [`AgentRegistry`] (the folded agent-status
 //!   agent model behind the Agent Panel), [`CompletionHistory`],
 //!   [`InputChannelRegistry`] (broadcast input channel membership + fan-out);
 //! - **injection**: [`AppServices`] — the single composition-root bundle through

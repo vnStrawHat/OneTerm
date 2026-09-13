@@ -1,6 +1,6 @@
 //! `AgentRegistry` — the aggregated, folded display model behind the Agent Panel.
 //!
-//! OSC 9;7 events arrive as a **stream** of small, single-`type` messages
+//! Agent-status events arrive as a **stream** of small, single-`type` messages
 //! (`state`, `session`, `heartbeat`, `model`, `tool_call`, `file`, `approval` —
 //! see `docs/osc-agent-status.md` §4.2). A useful panel needs the *folded*
 //! history of that stream per agent: the current lifecycle state **and** the
@@ -48,7 +48,7 @@ pub struct AgentStateCounts {
 /// OneTerm's own dock / focus APIs — never OSC (the protocol is
 /// one-directional, `docs/osc-agent-status.md` §6.3).
 ///
-/// The terminal feature registers one per terminal alongside each OSC 9;7
+/// The terminal feature registers one per terminal alongside each agent-status
 /// event ([`AgentRegistry::set_nav`]) and it is dropped with the terminal's
 /// cards ([`AgentRegistry::remove_terminal`]). Type-erased so the registry
 /// (below the feature crates) never learns the terminal panel types.
