@@ -26,12 +26,41 @@ pub struct OscClaims {
 }
 
 impl OscClaims {
+    /// The OSC numbers the engine answers itself, in the order
+    /// `dispatch-and-modes.md` § "OSC" tabulates them.
+    ///
+    /// A native arm runs **before** the claim lookup, so a [`OscClaims::claim`]
+    /// on one of these could never be delivered. Publishing the set is what
+    /// stops a registration being shadowed silently: an embedder can ask, and
+    /// `claim` asserts. `133` is deliberately **not** here — the engine reads
+    /// the shell mark *and* forwards the whole sequence to whoever claimed it.
+    pub const NATIVE: [u32; 14] = [0, 2, 4, 8, 10, 11, 12, 22, 50, 52, 104, 110, 111, 112];
+
     pub fn new() -> OscClaims {
         OscClaims::default()
     }
 
+    /// Whether the engine handles this OSC number itself, so a claim on it can
+    /// never reach the embedder.
+    pub fn is_native(code: u32) -> bool {
+        OscClaims::NATIVE.contains(&code)
+    }
+
     /// Deliver this OSC number to the embedder.
+    ///
+    /// Claiming the same number twice is idempotent — the claim set is a
+    /// bitmap, so there is no handler to shadow and no order to depend on.
+    /// Claiming a [`OscClaims::NATIVE`] number is a **debug assertion**: the
+    /// engine's own arm wins, so the claim is dead and the embedder would
+    /// otherwise never find out. That is the mirror of the rule in
+    /// `dispatch-and-modes.md` — a claimed number whose handler is missing is a
+    /// debug assertion, never a panic.
     pub fn claim(&mut self, code: u32) -> &mut Self {
+        debug_assert!(
+            !OscClaims::is_native(code),
+            "OSC {code} is handled by the engine itself, so this claim can never be \
+             delivered; see dispatch-and-modes.md section OSC"
+        );
         set(&mut self.low, &mut self.high, code);
         self
     }
@@ -40,7 +69,12 @@ impl OscClaims {
     /// [`crate::parser::OSC_LARGE`].
     ///
     /// A **memory ceiling only**: who may write or read the clipboard, and under
-    /// what limits, stays in `crates/terminal/src/security_policy.rs`.
+    /// what limits, stays in `crates/terminal/src/security_policy.rs`. Unlike
+    /// [`OscClaims::claim`] this accepts a [`OscClaims::NATIVE`] number without
+    /// complaint, because the ceiling is the point there — `claim_large(52)`
+    /// buys a large clipboard write, and the delivery half is simply inert
+    /// while the engine answers OSC 52 itself. Ask [`OscClaims::is_native`] if
+    /// the distinction matters to you.
     pub fn claim_large(&mut self, code: u32) -> &mut Self {
         set(&mut self.low, &mut self.high, code);
         set(&mut self.large_low, &mut self.large_high, code);
