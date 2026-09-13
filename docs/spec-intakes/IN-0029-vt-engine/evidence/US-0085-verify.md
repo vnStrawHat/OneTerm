@@ -31,7 +31,7 @@ replaced; `migration.md` retires both at `US-0087`.
 cargo test --workspace                                  green (exit 0)
 cargo test -p oneterm-terminal                          245 passed, 0 failed
 cargo test -p oneterm-terminal --test us0081_parity       5 passed, 2 ignored
-cargo test -p oneterm-terminal-view                     288 passed, 0 failed, 2 ignored
+cargo test -p oneterm-terminal-view                     288 passed, 0 failed, 3 ignored
 cargo clippy --workspace --all-targets -- -D warnings    green
 cargo fmt --all -- --check                              green
 ```
@@ -119,6 +119,23 @@ So **none of the four walks was reproduced and no `US-0085-` screenshot exists**
 
 What stands in for them, and how far it goes:
 
+- **The strongest piece is not mine.**
+  [`US-0085-independent-verify.md`](US-0085-independent-verify.md) § 4 ran the
+  **old** view conversion — `engine_shim::write_row` composed with
+  `frame::Cell::from_indexed`, both copied verbatim from `d3c537b` and built
+  against the real `alacritty_terminal` types — against the **new**
+  `FrameRow::cell` over 46 corpus streams and 15 hand streams (SGR including every
+  underline kind, 256-colour, truecolour, CJK, Hangul, combining marks, ZWJ
+  emoji, ligature-shaped ASCII, OSC 8, wide-at-edge, wrap, alt swap, RIS,
+  scrollback, cursor shapes, Sixel, **Sixel then `cls`**), each chunked at 4 096
+  bytes and again one byte at a time, comparing every cell's character,
+  zero-width followers, both colours, all twelve `CellFlags` bits, hyperlink
+  presence and the derived graphic anchor:
+  **2 822 154 cells, 0 differences** — plus the style, colour and width maps
+  proved pointwise equal in isolation over all 4 096 attribute subsets, all four
+  `CellWidth`s, all 29 `NamedColor`s and all 256 palette entries. That is what
+  retires the deleted `NamedColor::DimBlack` discriminant arithmetic safely, and
+  it covers precisely the file `us0081_parity` does **not** exercise.
 - **The painted output is unchanged, cell for cell.** `us0081_parity` feeds 81
   streams — the 45 alacritty recordings, OneTerm's `sixel_basic` and 35
   hand-written streams covering SGR, 256/truecolor, CJK, emoji, combining marks,

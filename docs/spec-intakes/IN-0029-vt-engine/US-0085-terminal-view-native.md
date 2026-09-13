@@ -53,19 +53,21 @@ else. Concretely:
 
 ## Scope
 
-- [ ] In scope: all of `crates/terminal-view/src/**`; in `crates/terminal` the
+- [x] In scope: all of `crates/terminal-view/src/**`; in `crates/terminal` the
   compatibility surface only — `content.rs`, `engine_shim.rs` (deleted), `model.rs`,
   `session.rs`, `search.rs`, `mouse_encode.rs`, `palette.rs`, `osc_color.rs`,
   `color_classification.rs`, `backend/state.rs`, `lib.rs`, `test_support.rs`,
-  `Cargo.toml`, `tests/us0081_parity.rs`.
-- [ ] In scope (one line, listed): `crates/local-shell/src/session_tests.rs:5` —
+  `Cargo.toml`, `tests/us0081_parity.rs`, **and the `*_tests.rs` modules of the
+  files above** (`content_tests.rs`, `model_tests.rs`), which are the same
+  compilation units.
+- [x] In scope (listed): `crates/local-shell/src/session_tests.rs:5` —
   `use alacritty_terminal::selection::SelectionType;` becomes
   `use oneterm_terminal::SelectionKind as SelectionType;`. The three call sites are
   unchanged because the variant names match. There is no re-export that can avoid
   this: the file imports the type from the fork directly, so the alias has to move
   with the deleted parameter type. `US-0083` deletes `crates/local-shell`'s
   `alacritty_terminal` manifest line and would have had to make the same edit.
-- [ ] Out of scope: anything else in `crates/local-shell` and `crates/ssh`
+- [x] Out of scope: anything else in `crates/local-shell` and `crates/ssh`
   (`US-0083` / `US-0084` own them, concurrently), `crates/tools`, `crates/vt`
   behaviour changes, deleting the fork (`US-0087`), the deferred deviations
   (`US-0086`).
@@ -231,11 +233,20 @@ anywhere in the workspace.
 Full record: [`evidence/US-0085-verify.md`](evidence/US-0085-verify.md) and
 [`evidence/US-0085-measurements.md`](evidence/US-0085-measurements.md).
 
+Independently verified — **merge after minor fixes**, no blocker, no correctness
+defect ([`evidence/US-0085-independent-verify.md`](evidence/US-0085-independent-verify.md)).
+Its § 4 is the packet's strongest evidence and covers what `us0081_parity`
+cannot: the **old** view conversion (`engine_shim::write_row` +
+`Cell::from_indexed`, copied from `d3c537b` and built against the real fork
+types) against the **new** `FrameRow::cell` over 61 streams — **2 822 154 cells,
+0 differences** — with the style, colour and width maps proved pointwise equal in
+isolation. Its five minors (M1-M5) are applied in the commit that carries it.
+
 ```text
 cargo test --workspace                                   green (exit 0)
 cargo test -p oneterm-terminal                           245 passed
 cargo test -p oneterm-terminal --test us0081_parity        5 passed, 2 ignored
-cargo test -p oneterm-terminal-view                      288 passed, 2 ignored
+cargo test -p oneterm-terminal-view                      288 passed, 3 ignored
 cargo clippy --workspace --all-targets -- -D warnings     green
 pwsh scripts/ci-local.ps1                                 green
 cargo build -p oneterm-app --profile fast-dev             Finished in 1m 45s
@@ -259,9 +270,12 @@ cargo build -p oneterm-app --profile fast-dev             Finished in 1m 45s
    reason. The engine-side half of that question — the per-frame snapshot cost —
    is measured before and after on this machine.
 3. `crates/local-shell/src/session_tests.rs` was edited (seven one-line reads of
-   deleted fields plus one import). `US-0083` owns that crate and runs
-   concurrently; the edits are listed line by line in `US-0085-verify.md` § 2 so
-   they can be re-applied if that packet's branch wins the merge.
+   deleted fields plus one import) in a crate `US-0083` owns. **Verified clean:**
+   the independent verifier ran `git merge-tree` against `US-0083`'s branch
+   (`worktree-agent-a20da8012abddb9c7` @ `5f9cc1e`) — no conflict, and the two
+   branches share no changed file at all; that packet never touches
+   `session_tests.rs`. The line-by-line list stays in `US-0085-verify.md` § 2 in
+   case that branch moves before it merges.
 4. One additive engine accessor: `oneterm_vt::Terminal::interner_mut`. Nothing on
    the engine's own paths uses it; it exists so an embedder **test** can write a
    styled cell into a real grid instead of the render state growing a fabrication

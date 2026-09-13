@@ -1,6 +1,6 @@
 //! Rendering internals of the terminal view.
 //!
-//! Bottom-up: `frame` (the only alacritty-typed file) → `metrics` → `glyphs` →
+//! Bottom-up: `frame` (the only engine-typed file) → `metrics` → `glyphs` →
 //! `row_plan` → `plan_cache` → `overlay` / `cursor` → `state` → `element`.
 //! `shapes` is the pure geometry of the code points drawn as quads/paths.
 
