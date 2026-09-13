@@ -156,6 +156,11 @@ Contract, and every clause is a test:
 6. The engine holds no lock and spawns no thread. The caller's lock discipline is the caller's
    (`../high-level-design.md`, "Threading and locking").
 
+As shipped, the drain signature is `OscRouter::drain(&batch, &mut Vec<SessionEvent>)` and
+`TerminalPump::advance` performs it under the lock, with `finish_batch[_blocking](repaint)` sending
+afterwards — so the backend loops keep the shape they already have
+([`migration.md`](migration.md) § "The adapter contract"). The deferred/reliable sink is gone.
+
 The adapter's loop becomes:
 
 ```rust

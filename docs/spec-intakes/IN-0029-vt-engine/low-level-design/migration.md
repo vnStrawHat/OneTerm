@@ -147,9 +147,14 @@ colours from the adapter like every other themed colour.
 ### Per-crate swap detail
 
 **`US-0082` — `crates/terminal`.** `model.rs`, `session.rs`, `content.rs`, `search.rs`, `url.rs`,
-`url_policy.rs`, `palette.rs`, `color_classification.rs`, `osc_color.rs`, `mouse_encode.rs`,
-`logging.rs`, `test_support.rs` and the whole `backend/` module move onto the native API:
-`RowId`, `render_update`, the batch drain, `ColorKey`, `ModeSnapshot`.
+`url_policy.rs`, `palette.rs`, `color_classification.rs`, `osc_color.rs`, `logging.rs`,
+`test_support.rs` and the whole `backend/` module move onto the native API: `RowId`,
+`render_update`, the batch drain, `ColorKey`, `ModeSnapshot`.
+
+**`mouse_encode.rs` moves at `US-0085`, not here.** It takes `TermMode`, and so does
+`TerminalQueryState`, which the crate publishes: converting the encoder while the vocabulary around
+it is still the old one leaves two representations live and rewrites the encoder's fixtures twice.
+It goes when the compatibility surface goes.
 
 **Search, URL detection and the `GridText` snapshot (R-19).** `crates/terminal/src/search.rs:70-148`
 copies every cell of history plus viewport under the lock, once, so the search itself runs
@@ -204,6 +209,43 @@ batch is still draining, before the reliable flush, which both doubles the repai
 and inverts the documented order. The engine still emits `Repaint` — it is the engine's statement
 that something changed — but at the seam it is dropped, because the pump already knows.
 
+### The adapter contract, as `US-0082` shipped it
+
+The shim's `LegacySnapshot` is gone; these four shapes are what `US-0083`, `US-0084` and `US-0085`
+build against.
+
+**`TerminalHandle` — the lock and the demand flag in one place.** `SharedTerminal =
+Arc<TerminalHandle>` wraps `FairMutex<Engine>` plus one `Demand`
+([`damage-and-render-state.md`](damage-and-render-state.md) § "Fairness and reply latency"):
+
+- `lock_for_render()` **raises** the flag, then locks. The render side is already wired —
+  `TerminalModel::snapshot` and `snapshot_into` go through it.
+- `take_render_demand() -> bool` is the **pump's** yield check: call it at a chunk boundary,
+  **after the batch's replies have left** (R-37), and drop the guard when it answers `true`. Asking
+  clears it. `render_demand_raised()` reads without clearing, for diagnostics.
+- `lock()`, `lock_unfair()` and `try_lock_unfair()` still compile at today's call sites.
+
+It is measured, and the difference is not marginal: a pump that honours the flag hands the lock over
+in **one batch / 157 us**; the same pump ignoring it makes the renderer wait **3 800 batches /
+354 ms**. `take_render_demand` has no non-test caller yet — **`US-0083` and `US-0084` own calling
+it**, and until they do that 354 ms stall is today's behaviour, not a regression.
+
+**`TerminalModel::new(term, impl Into<oneterm_vt::ResizePolicy>)`.** The backends pass
+`BottomAnchor` or `KeepViewportTop` through the macro argument they already pass — one token each.
+When both have, `crate::model::ResizePolicy` and its `From` are deleted.
+
+**`OscRouter::drain(&batch, &mut Vec<SessionEvent>)`.** The deferred/reliable sink is gone.
+`TerminalPump::advance` feeds and drains under the lock; `finish_batch[_blocking](repaint)` sends
+afterwards. There is nothing left to move out from under the lock, so the backend loops keep their
+current shape.
+
+**`TerminalContent` owns the `RenderState`, and is no longer `Clone`.** Read the frame through
+`update()`, `rows()` (always the full viewport), `changed()`, `size()`, `render_cursor()`,
+`modes()`, `selection_range()`, `placements()`, `hyperlink(id)`, `scroll_offset()`, and the two-way
+`row_id(display_row)` / `display_row(RowId)`. Losing `Clone` is deliberate: per-view ownership is
+what `DEC-0015` asks for, and it removes the shim-era hazard of two views sharing one watermark.
+Nothing outside `crates/terminal` cloned a content.
+
 ### Debug-build cost at the shim, measured by `US-0081`
 
 The flip is where a debug-build cost becomes visible, because `fast-dev` is how the app is actually
@@ -222,6 +264,20 @@ Release: **90 ms against 43 ms**. The residue is not the engine: it is **the shi
 full-viewport legacy-cell rebuild**, which exists only to produce the old `TerminalContent` shape
 and which `US-0082` deletes. It is well inside a frame budget, and the intake forbids a performance
 number as an exit criterion, so this is recorded, never gated.
+
+**After `US-0082`** (same bench, median of three): total **150.7 ms** new against **83.3 ms** old
+(feed 93 / snapshot 56 versus 55 / 27). With debug assertions off — the release shape — it is
+**100 ms against 78 ms, a ratio of 1.29x**, roughly half the shim era's 2.1x. The gap decomposes as:
+
+| Cost | Size | Owner |
+| --- | ---: | --- |
+| Bounded integrity walk and debug asserts, in `feed` | ~25 ms | not a shippable cost; off in release |
+| Integrity walk inside `render_update` | ~21 ms | same |
+| Engine parse and dispatch above the old engine | ~13 ms | the intake's own engine cost |
+| **The legacy `Cell` rebuild that remains** | **~9 ms** | **`US-0085`** — the only line item a later packet in this intake can still delete |
+
+That last row is the number `US-0085` inherits: about 9 ms, not the 28 ms a reading of the snapshot
+column alone would suggest.
 
 The path to it, kept because it is how two real defects were found:
 
@@ -249,8 +305,8 @@ Deleted outright (code), each in the packet named:
 | `conhost_cursor_row` (the scratch-grid probe) | `crates/terminal/src/model.rs:528-541` | `US-0082` |
 | `LineAccounting` — the whole file | `crates/terminal/src/backend/line_accounting.rs:1-49` | `US-0082` |
 | The deferred/reliable tier of `SessionEventSink` and `flush_reliable[_blocking]` | `crates/terminal/src/backend/event_sink.rs`, driven from `pump.rs:163-178` | `US-0082` |
-| `TermDamageInfo`'s display-line conversion | `crates/terminal/src/content.rs:66-106` | `US-0082` |
-| The per-frame cell clone loop in `refill` | `crates/terminal/src/content.rs:173-222` | `US-0082` |
+| `TermDamageInfo`'s display-line conversion | `crates/terminal/src/content.rs:66-106` | **`US-0085`** — it is part of the compatibility vocabulary the view still reads |
+| The per-frame cell clone loop in `refill` | `crates/terminal/src/content.rs:173-222` | **`US-0085`** — `US-0082` moved it behind `RenderState`, but the legacy `Cell` rebuild survives until the view reads `RenderRow` directly (about 9 ms of the flood below) |
 | The 256/257/258 colour index constants | `crates/terminal/src/osc_color.rs:23-27` | `US-0082` |
 | `NamedColor` discriminant arithmetic | `crates/terminal/src/palette.rs:136`, `crates/terminal-view/src/render/frame.rs:118`, `:121` | `US-0082`, `US-0085` |
 | The second `vte::Parser` in session logging | `crates/terminal/src/logging.rs:8`, `:57-83` | `US-0082` |
@@ -272,6 +328,11 @@ Deleted outright (the fork and its scaffolding), all at `US-0087`:
 | The `alacritty_terminal` git dependency and its comment block | `Cargo.toml:68-76` |
 | The profile overrides for the fork | `Cargo.toml:172`, `Cargo.toml:200` |
 | The `[patch]` block | `Cargo.toml:234-244` |
+**`US-0085` must precede `US-0087`.** `TerminalContent`, `SearchMatch` and `TerminalInfo` still
+publish `alacritty_terminal` value types — the *compatibility surface* — and `crates/terminal-view`
+reads them. They are public API, not an internal detail, so the fork cannot be deleted until the
+view stops consuming them.
+
 | `alacritty_terminal.workspace = true` — the **last** manifest lines, if any survive; each crate's line is deleted by the packet that stops importing the fork: `crates/terminal` at `US-0082`, `crates/local-shell` at `US-0083`, **`crates/ssh` at `US-0084` (its line is already dead — the crate imports nothing from the fork after the shim)**, `crates/terminal-view` at `US-0085`, `crates/tools` at `US-0087` with `vt-diff` | `crates/terminal/Cargo.toml:19`, `crates/local-shell/Cargo.toml:20`, `crates/ssh/Cargo.toml:20`, `crates/terminal-view/Cargo.toml:32`, `crates/tools/Cargo.toml:35` |
 | The two fork rows in the notices header | `scripts/third-party-notices.py:85-86` |
 | The `--full` step running `vendor/refresh.sh --check` | `scripts/ci-local.sh`, `scripts/ci-local.ps1` |
@@ -294,6 +355,21 @@ Rewritten, not deleted: `crates/terminal/src/test_support.rs` (662 lines) and
 | Loopback PTY loop | `crates/local-shell/src/event_loop_tests.rs:196-...` | **Move** to `oneterm-pty` at `US-0071`, unchanged in substance |
 
 Every rewritten or deleted test names, in its packet, what it used to pin and what pins it now.
+
+### Deleted tests, and what pins them now
+
+`US-0082` deleted 26 adapter tests that drove the **old** engine. Nothing was lost; each has a named
+successor, and R-44's condition was met first — the old and the new suite were green in the same
+commit before the deletion.
+
+| Deleted | Count | What pins it now |
+| --- | ---: | --- |
+| `legacy_resize.rs` (`keep_viewport_top_*`, `default_grow_*`) | 15 | `oneterm_vt::reflow::tests::keep_viewport_top_*` — 20 tests, a superset by name, against the new engine. The adapter's own share (that the backend's policy reaches the engine) is `model_tests::resize_grid_applies_the_backend_policy` |
+| `sixel_tests.rs` | 11 | `oneterm_vt::graphics::tests` — 26 tests, landed at `US-0080`. The adapter's share is `model_tests::a_sixel_reaches_the_snapshot_once_with_per_cell_offsets` |
+
+`crates/terminal/tests/us0081_parity.rs` still passes over the same 81 streams with the same
+five-difference allow-list, which is the proof that the **native** frame path produces the snapshot
+the shim produced.
 
 ### Documentation reconciliation (R-46)
 

@@ -211,6 +211,13 @@ everything", and a `Partial` naming every row says the same thing more expensive
 
 ### Fairness and reply latency
 
+**As shipped, the flag lives on `TerminalHandle` beside the lock** (`crates/terminal/src/handle.rs`):
+`lock_for_render()` raises then locks, `take_render_demand()` is the pump's yield check and clears by
+asking, `render_demand_raised()` reads without clearing. Measured: a pump that honours it hands the
+lock over in **one batch / 157 us**; the same pump ignoring it makes the renderer wait **3 800
+batches / 354 ms** ([`migration.md`](migration.md) § "The adapter contract"). Calling it from the
+two backend loops is `US-0083` and `US-0084`'s.
+
 ```rust
 // crates/vt/src/render/demand.rs — ONE atomic, and the only one in the engine
 pub struct Demand(Arc<AtomicBool>);
