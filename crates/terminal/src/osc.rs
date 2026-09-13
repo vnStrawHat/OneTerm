@@ -13,9 +13,13 @@
 
 use std::path::PathBuf;
 
-use crate::osc_agent::{AgentStatusEvent, parse_agent_status};
+use crate::osc_agent::{
+    AGENT_OSC_PARAM, AGENT_PROTOCOL_VERSION, AgentStatusEvent, LEGACY_AGENT_OSC_SUB,
+    parse_agent_status,
+};
 
 use base64::Engine;
+use oneterm_vt::StringTerm;
 
 /// OSC 133 marker kind — marks prompt/command/output boundaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,19 +63,23 @@ pub enum OscPayload {
     Notification(String),
     /// OSC 9;4 — taskbar progress (ConEmu).
     Progress(TerminalProgress),
-    /// OSC 9;7 — coding-agent status event (see `docs/osc-agent-status.md`).
+    /// `OSC 20308;1` — coding-agent status event (see `docs/osc-agent-status.md`),
+    /// or the same event under the deprecated `OSC 9;7` alias (spec §3.1).
     /// The payload is the base64-wrapped JSON event, already parsed +
     /// schema-validated. `seq` dedup is performed by the listener. Boxed to
     /// keep `OscPayload` small (the event is ~248 bytes; this enum is transient).
     AgentStatus(Box<AgentStatusEvent>),
+    /// `OSC 20308;0` — the support query (spec §3.2). Carries nothing: the
+    /// answer is a constant, and the router writes it to the transport.
+    AgentSupportQuery,
 }
 
 /// Parse the OSC parameters forwarded by the engine (`Event::Osc { params, .. }`)
 /// into an [`OscPayload`]. `params[0]` is the OSC number; the rest are the raw
 /// semicolon-separated parameter fields. Returns `None` for OSCs we don't handle.
 ///
-/// Only OSC 7 / 9 / 133 are recognised here — every other OSC is either handled
-/// by the engine directly (title/colors/clipboard/hyperlink) or ignored.
+/// Only OSC 7 / 9 / 133 / 20308 are recognised here — every other OSC is either
+/// handled by the engine directly (title/colors/clipboard/hyperlink) or ignored.
 pub fn parse_osc(params: &[&[u8]]) -> Option<OscPayload> {
     if params.is_empty() {
         return None;
@@ -80,13 +88,22 @@ pub fn parse_osc(params: &[&[u8]]) -> Option<OscPayload> {
     // Debug-trace every OSC the engine forwards, so you can confirm the VT
     // pump delivered it (e.g. `RUST_LOG=oneterm_terminal=trace`). The first
     // param is the OSC number; the second (when present) is the sub-code
-    // (e.g. `7` for OSC 9;7, `4` for OSC 9;4, `A`/`B`/`C`/`D` for OSC 133).
+    // (e.g. `1` for OSC 20308;1, `4` for OSC 9;4, `A`/`B`/`C`/`D` for OSC 133).
     let sub = params
         .get(1)
         .and_then(|p| std::str::from_utf8(p).ok())
         .unwrap_or("");
     log::debug!("OSC recv: {kind};{sub} ({} params)", params.len());
     match kind {
+        // OSC 20308 — the agent channel (`docs/osc-agent-status.md` §3).
+        // Sub-code `0` is the support query, `1` the status event; `2` and
+        // above are reserved, so anything else is ignored (and counted by the
+        // router, which is the only place a per-session counter lives).
+        AGENT_OSC_PARAM => match params.get(1) {
+            Some(sub) if *sub == b"1" => parse_agent_status_param(params.get(2).copied()),
+            Some(sub) if *sub == b"0" => Some(OscPayload::AgentSupportQuery),
+            _ => None,
+        },
         // OSC 7: params = ["7", "file://..."]
         "7" if params.len() >= 2 => {
             let url = std::str::from_utf8(params[1]).ok()?;
@@ -95,30 +112,12 @@ pub fn parse_osc(params: &[&[u8]]) -> Option<OscPayload> {
         // OSC 9: notification (`9;msg`) OR taskbar progress (`9;4;st;pr`).
         // Sub-param "4" = progress, else notify.
         "9" if params.len() >= 2 => {
-            if params[1] == b"7" {
-                // OSC 9;7;<base64-json> — coding-agent status event
-                // (see `docs/osc-agent-status.md`). The third parameter is the
-                // base64-wrapped JSON payload (spec §3.1). Malformed payloads
-                // are dropped silently by `parse_agent_status` (spec §3.3).
-                if let Some(b64) = params.get(2) {
-                    let ev = parse_agent_status(b64);
-                    if let Some(ref ev) = ev {
-                        log::debug!(
-                            "OSC 9;7 parsed: agent={} type={} seq={}",
-                            ev.agent(),
-                            ev.type_name(),
-                            ev.seq()
-                        );
-                    } else {
-                        log::debug!(
-                            "OSC 9;7 dropped: parse_agent_status returned None (bad base64/utf8/json/schema/type)"
-                        );
-                    }
-                    ev.map(|ev| OscPayload::AgentStatus(Box::new(ev)))
-                } else {
-                    log::debug!("OSC 9;7 dropped: no base64 parameter (params had no index 2)");
-                    None
-                }
+            if params[1] == LEGACY_AGENT_OSC_SUB {
+                // OSC 9;7;<base64-json> — the agent channel's **deprecated**
+                // spelling, kept for one release (spec §3.1). Byte-for-byte the
+                // same payload, so it lands in the same parser; the router logs
+                // the deprecation once per session.
+                parse_agent_status_param(params.get(2).copied())
             } else if params[1] == b"4" {
                 // OSC 9;4;state;percent — taskbar progress.
                 let parse = |p: &[u8]| std::str::from_utf8(p).ok()?.parse::<u8>().ok();
@@ -171,6 +170,50 @@ pub fn parse_osc(params: &[&[u8]]) -> Option<OscPayload> {
         }
         _ => None,
     }
+}
+
+/// The agent-status half of both spellings: the base64 third parameter
+/// (spec §3.3 — the payload is always base64-wrapped) → a validated event.
+///
+/// Both `OSC 20308;1` and the deprecated `OSC 9;7` land here, which is what
+/// makes the alias byte-for-byte identical rather than merely similar. Any
+/// malformed payload is dropped silently by `parse_agent_status` (spec §3.5).
+fn parse_agent_status_param(base64_param: Option<&[u8]>) -> Option<OscPayload> {
+    let Some(b64) = base64_param else {
+        log::debug!("agent status dropped: no base64 parameter (params had no index 2)");
+        return None;
+    };
+    let Some(ev) = parse_agent_status(b64) else {
+        log::debug!(
+            "agent status dropped: parse_agent_status returned None \
+             (bad base64/utf8/json/schema/type)"
+        );
+        return None;
+    };
+    log::debug!(
+        "agent status parsed: agent={} type={} seq={}",
+        ev.agent(),
+        ev.type_name(),
+        ev.seq()
+    );
+    Some(OscPayload::AgentStatus(Box::new(ev)))
+}
+
+/// The support-query answer (spec §3.2):
+/// `ESC ] 20308 ; 0 ; <protocol version> ; <name> ; <version> ST`.
+///
+/// Terminated the way the question was terminated — the same rule the OSC
+/// 4/10/11/12 colour replies follow, and the reason the agent may pair the
+/// query with a DA1 request and need no timeout.
+pub fn agent_support_reply(terminator: StringTerm) -> String {
+    let terminator = match terminator {
+        StringTerm::Bel => "\x07",
+        StringTerm::St => "\x1b\\",
+    };
+    format!(
+        "\x1b]{AGENT_OSC_PARAM};0;{AGENT_PROTOCOL_VERSION};OneTerm;{}{terminator}",
+        env!("CARGO_PKG_VERSION")
+    )
 }
 
 /// Parse an OSC 7 URL payload → `PathBuf`. Accepts `file:///path`,
@@ -462,5 +505,83 @@ mod tests {
     #[test]
     fn osc9_4_unknown_state_ignored() {
         assert_eq!(parse_osc(&[b"9", b"4", b"9", b"50"]), None);
+    }
+
+    // ── OSC 20308 agent channel ────────────────────────────────────
+    const AGENT_JSON: &str = stringify!(
+        {"v":1,"agent":"pi","type":"state","seq":9,"ts":1700000000000,"state":"working"}
+    );
+
+    /// The wire spelling and the number cannot drift: one is matched as a
+    /// string parameter, the other is claimed as a `u32`.
+    #[test]
+    fn the_agent_osc_number_and_its_wire_spelling_agree() {
+        assert_eq!(crate::osc_agent::AGENT_OSC.to_string(), AGENT_OSC_PARAM);
+        assert_eq!(crate::osc_agent::LEGACY_AGENT_OSC.to_string(), "9");
+    }
+
+    /// Both spellings produce the *same* payload — the alias is identical, not
+    /// merely similar (spec §3.1).
+    #[test]
+    fn both_encodings_parse_to_the_same_agent_status() {
+        let [new, legacy] = crate::osc_agent::AGENT_OSC_PREFIXES.map(|prefix| {
+            let params = crate::osc_agent::encode_agent_osc_params(prefix, AGENT_JSON);
+            let refs: Vec<&[u8]> = params.iter().map(Vec::as_slice).collect();
+            parse_osc(&refs).expect("both spellings parse")
+        });
+        assert_eq!(new, legacy);
+        match new {
+            OscPayload::AgentStatus(ev) => {
+                assert_eq!(ev.agent(), "pi");
+                assert_eq!(ev.seq(), 9);
+                assert_eq!(ev.type_name(), "state");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn agent_support_query_is_recognised() {
+        assert_eq!(
+            parse_osc(&[b"20308", b"0"]),
+            Some(OscPayload::AgentSupportQuery)
+        );
+        assert_eq!(
+            agent_support_reply(StringTerm::Bel),
+            format!("\x1b]20308;0;1;OneTerm;{}\x07", env!("CARGO_PKG_VERSION"))
+        );
+        assert_eq!(
+            agent_support_reply(StringTerm::St),
+            format!("\x1b]20308;0;1;OneTerm;{}\x1b\\", env!("CARGO_PKG_VERSION"))
+        );
+    }
+
+    /// `2` and above are reserved (spec §3), and a malformed payload on the
+    /// right sub-code is still dropped silently (spec §3.5).
+    #[test]
+    fn unknown_agent_subcodes_and_bad_payloads_are_dropped() {
+        assert_eq!(parse_osc(&[b"20308"]), None);
+        assert_eq!(parse_osc(&[b"20308", b"2", b"x"]), None);
+        assert_eq!(parse_osc(&[b"20308", b"7", b"x"]), None);
+        assert_eq!(parse_osc(&[b"20308", b""]), None);
+        // Right sub-code, no payload / undecodable payload.
+        assert_eq!(parse_osc(&[b"20308", b"1"]), None);
+        assert_eq!(parse_osc(&[b"20308", b"1", b"!!not base64!!"]), None);
+        assert_eq!(parse_osc(&[b"9", b"7", b"!!not base64!!"]), None);
+    }
+
+    /// The alias must not eat OSC 9: notifications and `9;4` progress are
+    /// unrelated sub-codes of the same number and still route the old way.
+    #[test]
+    fn the_alias_does_not_swallow_the_rest_of_osc9() {
+        assert_eq!(
+            parse_osc(&[b"9", b"4", b"1", b"10"]),
+            Some(OscPayload::Progress(TerminalProgress::Set(10)))
+        );
+        assert_eq!(
+            parse_osc(&[b"9", b"71 bottles"]),
+            Some(OscPayload::Notification("71 bottles".into())),
+            "a message that merely starts with 7 is not the alias"
+        );
     }
 }

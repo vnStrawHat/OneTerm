@@ -26,6 +26,7 @@ use oneterm_vt::{Config, Demand, OscClaims, Terminal};
 use parking_lot::{FairMutex, FairMutexGuard};
 
 use crate::backend::GridSize;
+use crate::osc_agent::AGENT_OSC;
 
 /// The terminal both backends and the UI share.
 pub type SharedTerminal = Arc<TerminalHandle>;
@@ -169,14 +170,19 @@ pub fn new_shared_terminal(size: GridSize, scrollback: usize) -> SharedTerminal 
 ///
 /// `OscClaims` is the extension point that replaces the fork's `report_osc`
 /// patch: the engine forwards only what is claimed here, and `crates/terminal`
-/// claims exactly the three numbers it interprets itself — OSC 7 (cwd), OSC 9
-/// (notification, `9;4` progress, `9;7` agent status) and OSC 133 (shell
-/// integration). Everything else the engine either handles natively (title,
-/// colours, hyperlinks, clipboard) or drops and counts, which is what the
-/// engine being replaced did.
+/// claims exactly the four numbers it interprets itself — OSC 7 (cwd), OSC 9
+/// (notification, `9;4` progress, and `9;7` for one more release), OSC 133
+/// (shell integration) and OSC 20308 (the agent channel). Everything else the
+/// engine either handles natively (title, colours, hyperlinks, clipboard) or
+/// drops and counts, which is what the engine being replaced did.
+///
+/// `AGENT_OSC` is above the claim bitmap's 2048-bit range, so it lands in the
+/// sorted overflow list — which is the whole reason the table has one, and the
+/// reason moving the agent protocol to a five-digit number
+/// (`docs/osc-agent-status.md` §2.2) needed no engine change at all.
 fn adapter_config(scrollback: usize) -> Config {
     let mut claims = OscClaims::new();
-    claims.claim(7).claim(9).claim(133);
+    claims.claim(7).claim(9).claim(133).claim(AGENT_OSC);
     // A memory ceiling, not a policy: who may write the clipboard stays in
     // `security_policy.rs`. Without it a legitimate large OSC 52 write is
     // truncated at the 2 KiB inline cap.

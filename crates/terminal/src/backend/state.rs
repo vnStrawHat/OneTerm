@@ -59,7 +59,7 @@ pub struct SessionState {
     pub last_exit_code: Option<i32>,
     /// Theme defaults for colour queries.
     pub default_colors: DefaultColors,
-    /// Last applied `seq` per agent id (OSC 9;7 dedup, spec §4.1 / §8.3),
+    /// Last applied `seq` per agent id (agent-status dedup, spec §4.1 / §8.3),
     /// bounded to `MAX_TRACKED_AGENTS` ids (SEC-04).
     pub last_agent_seq: AgentSeqWatermarks,
 }
@@ -73,6 +73,8 @@ pub struct SharedSessionState {
     tx_bytes: AtomicU64,
     absolute_line_count: AtomicUsize,
     clear_epoch: AtomicUsize,
+    agent_osc_unknown_subcodes: AtomicU64,
+    legacy_agent_osc_logged: AtomicBool,
 }
 
 /// Handle to a [`SharedSessionState`].
@@ -92,6 +94,27 @@ impl SharedSessionState {
         self.inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Count one `OSC 20308` sub-code the receiver does not implement, and
+    /// return the new total (`docs/osc-agent-status.md` §3: `2` and above are
+    /// reserved, so an unknown sub-code is ignored — but not invisibly).
+    pub fn count_unknown_agent_subcode(&self) -> u64 {
+        self.agent_osc_unknown_subcodes
+            .fetch_add(1, Ordering::Relaxed)
+            + 1
+    }
+
+    /// How many unrecognised `OSC 20308` sub-codes this session has dropped.
+    pub fn agent_osc_unknown_subcodes(&self) -> u64 {
+        self.agent_osc_unknown_subcodes.load(Ordering::Relaxed)
+    }
+
+    /// Whether this is the **first** `OSC 9;7` of the session, so the caller
+    /// logs the deprecation once rather than once per event
+    /// (`docs/osc-agent-status.md` §3.1, the one-release alias).
+    pub fn legacy_agent_osc_first_use(&self) -> bool {
+        !self.legacy_agent_osc_logged.swap(true, Ordering::Relaxed)
     }
 
     /// Whether the child/remote is still running.

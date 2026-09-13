@@ -5,9 +5,11 @@
 //!
 //! The engine handles a fixed set of OSC numbers natively; everything else is
 //! delivered to the embedder as [`crate::VtEvent::Osc`] **only if the embedder
-//! claimed it**. That is what replaces the fork's `report_osc` patch: OSC 9;7,
-//! the agent channel, becomes a claim on OSC 9 plus a sub-code match in
-//! `crates/terminal/src/osc_agent/`, with no engine change.
+//! claimed it**. That is what replaces the fork's `report_osc` patch: OSC 20308,
+//! the agent channel, is a claim plus a sub-code match in
+//! `crates/terminal/src/osc_agent/`, with no engine change — and when the
+//! channel moved off `OSC 9;7` in `US-0088`, the engine side of that move was
+//! one number in one call.
 
 /// The bitmap covers `0..2048`, which is every OSC number in common use; larger
 /// numbers fall back to a sorted list, because a bitmap over `u32` would be half

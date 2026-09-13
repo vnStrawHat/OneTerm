@@ -274,54 +274,133 @@ fn osc133_prompt_forwards_and_counts() {
     assert_eq!(f.state.lock().last_exit_code, Some(3));
 }
 
+/// Route one agent-status event under the given wire prefix.
+fn agent_status(f: &Fixture, prefix: [&[u8]; 2], json: &str) -> Vec<SessionEvent> {
+    let params = crate::osc_agent::encode_agent_osc_params(prefix, json);
+    route(&f.router, |batch| {
+        let refs: Vec<&[u8]> = params.iter().map(Vec::as_slice).collect();
+        osc(batch, &refs);
+    })
+}
+
+/// `OSC 20308;1` and the deprecated `OSC 9;7` must reach **the same** handling.
+/// Parametrised rather than copied, so the alias cannot quietly drift away from
+/// the sequence it is supposed to be identical to (spec §3.1).
 #[test]
-fn osc97_agent_status_forwards() {
-    let f = local(16);
+fn agent_status_forwards_under_both_encodings() {
     let json = stringify!(
         {"v":1,"agent":"pi","type":"state",
          "seq":1,"ts":1700000000000,
          "state":"working","message":"hi"}
     );
-    let params = crate::osc_agent::encode_osc97_params(json);
-    let events = route(&f.router, |batch| {
-        let refs: Vec<&[u8]> = params.iter().map(Vec::as_slice).collect();
-        osc(batch, &refs);
-    });
-    match events.first() {
-        Some(SessionEvent::AgentStatus(ev)) => {
-            assert_eq!(ev.agent(), "pi");
-            assert_eq!(ev.seq(), 1);
-            assert_eq!(ev.type_name(), "state");
+    for prefix in crate::osc_agent::AGENT_OSC_PREFIXES {
+        let f = local(16);
+        let events = agent_status(&f, prefix, json);
+        match events.first() {
+            Some(SessionEvent::AgentStatus(ev)) => {
+                assert_eq!(ev.agent(), "pi");
+                assert_eq!(ev.seq(), 1);
+                assert_eq!(ev.type_name(), "state");
+            }
+            other => panic!("{:?}: unexpected {other:?}", prefix[0]),
         }
-        other => panic!("unexpected {other:?}"),
+        assert_eq!(events.len(), 1, "{:?}: exactly one event", prefix[0]);
     }
 }
 
 #[test]
-fn osc97_dedup_drops_stale_seq() {
+fn agent_status_dedup_drops_stale_seq_under_both_encodings() {
+    for prefix in crate::osc_agent::AGENT_OSC_PREFIXES {
+        let f = local(16);
+        let send = |seq: u64| -> Vec<SessionEvent> {
+            let json = format!(
+                "{{\"v\":1,\"agent\":\"pi\",\"type\":\"state\",
+                 \"seq\":{seq},\"ts\":1700000000000,
+                 \"state\":\"working\"}}"
+            );
+            agent_status(&f, prefix, &json)
+        };
+        assert!(matches!(
+            send(5).first(),
+            Some(SessionEvent::AgentStatus(_))
+        ));
+        assert!(send(5).is_empty());
+        assert!(send(3).is_empty());
+        assert!(matches!(
+            send(6).first(),
+            Some(SessionEvent::AgentStatus(_))
+        ));
+    }
+}
+
+/// The two encodings share the `seq` watermark, because they are one protocol:
+/// an agent that emits both (which the spec tells it not to) is deduplicated,
+/// not doubled.
+#[test]
+fn the_alias_shares_the_seq_watermark_with_the_sequence() {
     let f = local(16);
-    let send = |seq: u64| -> Vec<SessionEvent> {
-        let json = format!(
+    let json = |seq: u64| {
+        format!(
             "{{\"v\":1,\"agent\":\"pi\",\"type\":\"state\",
-             \"seq\":{seq},\"ts\":1700000000000,
-             \"state\":\"working\"}}"
-        );
-        let params = crate::osc_agent::encode_osc97_params(&json);
-        route(&f.router, |batch| {
-            let refs: Vec<&[u8]> = params.iter().map(Vec::as_slice).collect();
-            osc(batch, &refs);
-        })
+             \"seq\":{seq},\"ts\":1700000000000,\"state\":\"working\"}}"
+        )
     };
-    assert!(matches!(
-        send(5).first(),
-        Some(SessionEvent::AgentStatus(_))
-    ));
-    assert!(send(5).is_empty());
-    assert!(send(3).is_empty());
-    assert!(matches!(
-        send(6).first(),
-        Some(SessionEvent::AgentStatus(_))
-    ));
+    let [new, legacy] = crate::osc_agent::AGENT_OSC_PREFIXES;
+    assert!(!agent_status(&f, new, &json(1)).is_empty());
+    assert!(
+        agent_status(&f, legacy, &json(1)).is_empty(),
+        "the same seq under the alias is the same event"
+    );
+    assert!(!agent_status(&f, legacy, &json(2)).is_empty());
+}
+
+/// `OSC 20308;0` is answered on the transport, and produces no UI event
+/// (spec §3.2). The reply ends the way the question did.
+#[test]
+fn the_agent_support_query_is_answered_on_the_transport() {
+    for (terminator, tail) in [(StringTerm::Bel, "\x07"), (StringTerm::St, "\x1b\\")] {
+        let f = local(16);
+        let events = route(&f.router, |batch| {
+            batch.push_osc(20308, &[b"20308", b"0"], terminator, false);
+        });
+        assert!(events.is_empty(), "a query is not a UI event");
+        let written = f.transport.take_writes().concat();
+        let expected = format!("\x1b]20308;0;1;OneTerm;{}{tail}", env!("CARGO_PKG_VERSION"));
+        assert_eq!(String::from_utf8_lossy(&written), expected);
+    }
+}
+
+/// `2` and above are reserved (spec §3): ignored, but counted, so a future
+/// extension aimed at a newer OneTerm is visible rather than silent.
+#[test]
+fn unknown_agent_subcodes_are_ignored_and_counted() {
+    let f = local(16);
+    assert_eq!(f.state.agent_osc_unknown_subcodes(), 0);
+    let events = route(&f.router, |batch| {
+        batch.push_osc(
+            20308,
+            &[b"20308", b"2", b"whatever"],
+            StringTerm::Bel,
+            false,
+        );
+        batch.push_osc(20308, &[b"20308", b""], StringTerm::Bel, false);
+        batch.push_osc(20308, &[b"20308"], StringTerm::Bel, false);
+    });
+    assert!(events.is_empty());
+    assert!(f.transport.writes().is_empty(), "and nothing is answered");
+    assert_eq!(f.state.agent_osc_unknown_subcodes(), 3);
+}
+
+/// The alias is logged once per session, not once per event — a still-unported
+/// agent emits thousands (spec §3.1).
+#[test]
+fn the_legacy_alias_is_announced_once_per_session() {
+    let f = local(16);
+    assert!(f.state.legacy_agent_osc_first_use());
+    assert!(!f.state.legacy_agent_osc_first_use());
+    assert!(!f.state.legacy_agent_osc_first_use());
+    // A fresh session announces it again.
+    assert!(local(16).state.legacy_agent_osc_first_use());
 }
 
 /// Row bookkeeping is a `RowId`-keyed consumer's business, and nothing above
