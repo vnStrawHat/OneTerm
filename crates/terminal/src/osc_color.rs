@@ -1,43 +1,44 @@
-//! OSC dynamic-color support (OSC 10/11/12 set/query + OSC 110/111/112 reset).
+//! OSC dynamic-colour support (OSC 4/10/11/12 set/query + OSC 104/110/111/112
+//! reset).
 //!
-//! Alacritty's `Term` already parses these sequences: a *set* stores the color
-//! in `Term.colors[index]`, a *reset* clears it (`None`), and a *query* is
-//! routed out as `Event::ColorRequest(index, format)`. This module provides the
-//! small shared types the backends need to:
+//! The engine applies a *set* to its own override table and reports a *query*
+//! as `VtEvent::ColorQuery { key, terminator }`, leaving the answer to the
+//! embedder because only the embedder owns the theme fallback. This module
+//! holds the two things that needs:
 //!
-//! - **Render** OSC-set colors — read the live fg/bg/cursor overrides from the
-//!   `Term` color table via [`DynamicColors`].
-//! - **Answer queries** — collect pending [`PendingColorQuery`] items in the
-//!   `EventListener`, then reply after the parse batch (when the `Term` lock is
-//!   free to read the current color), falling back to the theme default via
-//!   [`default_color_for_index`].
+//! - **Render** OSC-set colours — [`DynamicColors`], read from the engine's
+//!   override table by [`crate::model::TerminalModel::dynamic_colors`].
+//! - **Answer queries** — a [`PendingColorQuery`] per `?`, queued by the router
+//!   and answered by [`crate::TerminalPump::color_replies`] off the live engine
+//!   colours, falling back to [`default_color_for_key`].
 //!
-//! Reference: alacritty `alacritty/src/event.rs` `TerminalEvent::ColorRequest`
-//! handling + `alacritty_terminal/src/term/color.rs` (`Colors`, index layout).
+//! The colour index space is [`ColorKey`] (`US-0082`). The 256 / 257 / 258
+//! constants the fork used for foreground / background / cursor are **deleted**:
+//! they were three magic numbers three files had to agree on, and the typed key
+//! makes the agreement the compiler's problem. `Rgb` is still the legacy value
+//! type here because `crates/terminal-view`'s `theme/palette.rs` passes and
+//! reads it (`US-0085`).
 
 use std::sync::Arc;
 
 use alacritty_terminal::vte::ansi::Rgb;
+use oneterm_vt::ColorKey;
 
-/// Color-table index of the default foreground (`NamedColor::Foreground`).
-pub const FOREGROUND_INDEX: usize = 256;
-/// Color-table index of the default background (`NamedColor::Background`).
-pub const BACKGROUND_INDEX: usize = 257;
-/// Color-table index of the cursor color (`NamedColor::Cursor`).
-pub const CURSOR_INDEX: usize = 258;
+use crate::backend::DefaultColors;
+use crate::engine_shim::legacy_rgb;
 
-/// Closure that formats an OSC color reply for a resolved color. Produced by
-/// alacritty's `Event::ColorRequest` (it already embeds the OSC prefix +
-/// terminator, e.g. `\x1b]11;rgb:rrrr/gggg/bbbb\x07`).
+/// Closure that formats an OSC colour reply for a resolved colour. Built by the
+/// router from the query's own OSC prefix and string terminator, e.g.
+/// `\x1b]11;rgb:rrrr/gggg/bbbb\x07`.
 pub type ColorFormatter = Arc<dyn Fn(Rgb) -> String + Send + Sync + 'static>;
 
-/// A pending OSC 10/11/12 color *query* (the program asked with `?`) awaiting a
-/// reply. Enqueued by the `EventListener` on `ColorRequest`, drained by the
-/// backend read loop after each parse batch.
+/// A pending OSC 4/10/11/12 colour *query* (the program asked with `?`) awaiting
+/// a reply. Enqueued by the router during a parse batch, answered by the pump
+/// once the engine's colours can be read.
 pub struct PendingColorQuery {
-    /// Color-table index (256 = fg, 257 = bg, 258 = cursor).
-    pub index: usize,
-    /// Formats the reply escape sequence for a resolved color.
+    /// Which colour was asked for.
+    pub key: ColorKey,
+    /// Formats the reply escape sequence for a resolved colour.
     pub format: ColorFormatter,
 }
 
@@ -70,104 +71,135 @@ impl Default for DynamicColors {
     }
 }
 
-/// Pick the theme default color to report for a color-query `index` when the
-/// program never set it via OSC. Handles the full color table:
-/// - `0..=15` → `default_ansi[index]` (theme palette; `None` if not provided yet).
-/// - `16..=255` → the fixed cube/grayscale color.
-/// - `256`/`257`/`258` → foreground/background/cursor default.
+/// Pick the theme default colour to report for a colour query the program never
+/// set via OSC:
+/// - `Palette(0..=15)` → `defaults.ansi[index]` (`None` until the UI sets it).
+/// - `Palette(16..=255)` → the fixed cube/greyscale colour.
+/// - `Foreground` / `Background` / `Cursor` → the theme default.
 ///
 /// Returns `None` when the corresponding default is unset (the caller then skips
-/// the reply, matching alacritty's behavior for an unset cursor color).
-pub fn default_color_for_index(
-    index: usize,
-    default_foreground: Option<Rgb>,
-    default_background: Option<Rgb>,
-    default_cursor: Option<Rgb>,
-    default_ansi: Option<&[Rgb; 16]>,
-) -> Option<Rgb> {
-    match index {
-        0..=15 => default_ansi.map(|ansi| ansi[index]),
-        16..=255 => Some(crate::palette::extended_indexed_color(index as u8)),
-        FOREGROUND_INDEX => default_foreground,
-        BACKGROUND_INDEX => default_background,
-        CURSOR_INDEX => default_cursor,
-        _ => None,
+/// the reply, which is what the engine being replaced did for an unset cursor
+/// colour).
+pub fn default_color_for_key(key: ColorKey, defaults: &DefaultColors) -> Option<Rgb> {
+    match key {
+        ColorKey::Palette(index @ 0..=15) => defaults
+            .ansi
+            .map(|ansi| legacy_rgb(ansi[usize::from(index)])),
+        ColorKey::Palette(index) => Some(crate::palette::extended_indexed_color(index)),
+        ColorKey::Foreground | ColorKey::BrightForeground => defaults.foreground.map(legacy_rgb),
+        ColorKey::Background => defaults.background.map(legacy_rgb),
+        ColorKey::Cursor => defaults.cursor.map(legacy_rgb),
+        // No sequence the engine accepts queries a dim slot, but the key space
+        // covers them, so they answer with the colour they are derived from
+        // rather than falling through to "no reply".
+        ColorKey::DimForeground => defaults.foreground.map(legacy_rgb),
+        ColorKey::Dim(index) => defaults
+            .ansi
+            .map(|ansi| legacy_rgb(ansi[usize::from(index & 7)])),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oneterm_vt::Rgb as VtRgb;
 
     fn rgb(r: u8, g: u8, b: u8) -> Rgb {
         Rgb { r, g, b }
     }
 
+    fn vt(r: u8, g: u8, b: u8) -> VtRgb {
+        VtRgb { r, g, b }
+    }
+
+    fn defaults() -> DefaultColors {
+        DefaultColors {
+            foreground: Some(vt(1, 2, 3)),
+            background: Some(vt(4, 5, 6)),
+            cursor: Some(vt(7, 8, 9)),
+            ansi: None,
+        }
+    }
+
     #[test]
-    fn default_color_maps_indices() {
-        let fg = rgb(1, 2, 3);
-        let bg = rgb(4, 5, 6);
-        let cur = rgb(7, 8, 9);
+    fn default_color_maps_the_three_dynamic_keys() {
+        let defaults = defaults();
         assert_eq!(
-            default_color_for_index(FOREGROUND_INDEX, Some(fg), Some(bg), Some(cur), None),
-            Some(fg)
+            default_color_for_key(ColorKey::Foreground, &defaults),
+            Some(rgb(1, 2, 3))
         );
         assert_eq!(
-            default_color_for_index(BACKGROUND_INDEX, Some(fg), Some(bg), Some(cur), None),
-            Some(bg)
+            default_color_for_key(ColorKey::Background, &defaults),
+            Some(rgb(4, 5, 6))
         );
         assert_eq!(
-            default_color_for_index(CURSOR_INDEX, Some(fg), Some(bg), Some(cur), None),
-            Some(cur)
+            default_color_for_key(ColorKey::Cursor, &defaults),
+            Some(rgb(7, 8, 9))
         );
     }
 
     #[test]
     fn default_color_indexed_palette() {
-        let ansi = [rgb(9, 9, 9); 16];
+        let mut defaults = DefaultColors::default();
         // 0-15 → theme ANSI palette (when provided).
+        defaults.ansi = Some([vt(9, 9, 9); 16]);
         assert_eq!(
-            default_color_for_index(5, None, None, None, Some(&ansi)),
+            default_color_for_key(ColorKey::Palette(5), &defaults),
             Some(rgb(9, 9, 9))
         );
-        // 0-15 without an ANSI palette yet → None (skip reply).
-        assert_eq!(default_color_for_index(5, None, None, None, None), None);
-        // 16-255 → fixed cube/grayscale (theme-independent).
+        // 0-15 without an ANSI palette yet → None (skip the reply).
+        defaults.ansi = None;
+        assert_eq!(default_color_for_key(ColorKey::Palette(5), &defaults), None);
+        // 16-255 → the fixed cube / greyscale ramp (theme-independent).
         assert_eq!(
-            default_color_for_index(16, None, None, None, None),
+            default_color_for_key(ColorKey::Palette(16), &defaults),
             Some(rgb(0, 0, 0))
         );
         assert_eq!(
-            default_color_for_index(231, None, None, None, None),
+            default_color_for_key(ColorKey::Palette(231), &defaults),
             Some(rgb(255, 255, 255))
         );
         assert_eq!(
-            default_color_for_index(232, None, None, None, None),
+            default_color_for_key(ColorKey::Palette(232), &defaults),
             Some(rgb(8, 8, 8))
         );
     }
 
+    /// The typed key is what replaced the 256 / 257 / 258 constants: every key
+    /// the engine can report has to land somewhere, and an unset default still
+    /// means "skip the reply" rather than "reply black".
     #[test]
-    fn default_color_unknown_index_is_none() {
-        assert_eq!(
-            default_color_for_index(999, Some(rgb(1, 1, 1)), None, None, None),
-            None
-        );
+    fn every_color_key_is_answered_or_skipped() {
+        let empty = DefaultColors::default();
+        for key in [
+            ColorKey::Foreground,
+            ColorKey::Background,
+            ColorKey::Cursor,
+            ColorKey::BrightForeground,
+            ColorKey::DimForeground,
+            ColorKey::Dim(3),
+            ColorKey::Palette(0),
+        ] {
+            assert_eq!(
+                default_color_for_key(key, &empty),
+                None,
+                "{key:?} has no theme default yet"
+            );
+        }
+        // Only the fixed part of the palette answers without a theme.
+        assert!(default_color_for_key(ColorKey::Palette(200), &empty).is_some());
     }
 
     #[test]
     fn default_color_unset_is_none() {
-        // Unset cursor default → None → caller skips the reply.
-        assert_eq!(
-            default_color_for_index(
-                CURSOR_INDEX,
-                Some(rgb(1, 1, 1)),
-                Some(rgb(2, 2, 2)),
-                None,
-                None
-            ),
-            None
-        );
+        // Unset cursor default → None → the caller skips the reply.
+        let defaults = DefaultColors {
+            foreground: Some(vt(1, 1, 1)),
+            background: Some(vt(2, 2, 2)),
+            cursor: None,
+            ansi: None,
+        };
+        assert_eq!(default_color_for_key(ColorKey::Cursor, &defaults), None);
     }
 
     #[test]

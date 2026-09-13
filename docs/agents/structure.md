@@ -61,16 +61,19 @@ OneTerm/
 │   │           ├── shell.rs        # LocalShellConfig + ShellKind + resolve_shell + config_dir
 │   │           └── env.rs
 │   │
-│   ├── terminal/                   # Terminal ENGINE (alacritty-coupled, no gpui) — `oneterm-terminal`
-│   │   ├── Cargo.toml              # deps: core, alacritty_terminal, async-channel, base64
+│   ├── terminal/                   # Terminal ADAPTER over `oneterm-vt` (no gpui) — `oneterm-terminal`
+│   │   ├── Cargo.toml              # deps: core, oneterm-vt, parking_lot, async-channel, base64;
+│   │   │                           #   alacritty_terminal runs nothing — it is the compatibility
+│   │   │                           #   surface `crates/terminal-view` reads (US-0085 / US-0087)
 │   │   └── src/
 │   │       ├── lib.rs              # Re-export TerminalSession, SessionEvent, TerminalContent, PtySize…
 │   │       ├── factory.rs          # PtySize (+ PtySize::INITIAL) + SessionFactory trait
 │   │       ├── session.rs          # TerminalSession trait + SessionEvent + CursorBounds + NetStats
+│   │       ├── handle.rs           # TerminalHandle = FairMutex<Terminal> + the render-demand flag
+│   │       ├── engine_shim.rs      # RenderState → the legacy TerminalContent shape (deleted at US-0085)
 │   │       ├── backend/            # Shared backend pump used by ssh + local-shell:
-│   │       │                       #   PtyTransport trait, OscRouter<T> (alacritty EventListener),
-│   │       │                       #   SessionState (title/cwd/clipboard/exit), event_sink, pump,
-│   │       │                       #   line_accounting
+│   │       │                       #   PtyTransport trait, OscRouter<T> (the EventBatch drain),
+│   │       │                       #   SessionState (title/cwd/clipboard/exit), event_sink, pump
 │   │       ├── content.rs / model.rs / palette.rs / key_encode.rs / mouse_encode.rs
 │   │       ├── osc.rs / osc_color.rs / osc_agent/ / url.rs / url_policy.rs / search.rs / paste.rs / security_policy.rs …
 │   │       └── test_support.rs     # FakeTerminalSession + FakePtyTransport (feature "test-support")
@@ -224,7 +227,7 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 | `core` (`oneterm-core`) | _(leaf)_ | domain | Error type, `SftpBackend`, `LocalShellConfig`/`ShellKind`, `SshConfig`/`SshAuthMethod`. No gpui, **no alacritty**. |
 | `highlight` (`oneterm-highlight`) | _(leaf)_ | engine | Semantic syntax-highlighting engine. |
 | `completion` (`oneterm-completion`) | `core` | engine | Terminal auto-completion engine (gpui-free, alacritty-free): catalog model + embedded `assets/**/*.json` catalogs, line parsing + subcommand resolution, matching/ranking, in-session `CompletionHistory`, and secret redaction. See [`../auto-completion.md`](../auto-completion.md). |
-| `terminal` (`oneterm-terminal`) | `core` | engine | Terminal engine (alacritty-coupled, no gpui): `TerminalSession`, `TerminalModel`, events, palette/OSC/key/mouse helpers, and `SessionFactory`. |
+| `terminal` (`oneterm-terminal`) | `core`, `vt` | engine | The adapter over `oneterm-vt` (no gpui): `TerminalSession`, `TerminalModel`, the `TerminalHandle` lock plus the render-demand handshake, the `EventBatch` drain and its delivery policy, the `TerminalContent` frame, palette/OSC/key/mouse helpers, and `SessionFactory`. Still lists `alacritty_terminal`, which runs nothing: it is the value vocabulary the seam publishes until `US-0085`. |
 | `pty` (`oneterm-pty`) | _(leaf)_ | transport | Pseudo-console transport, no grid and no OneTerm dependency: `PseudoConsole` (ConPTY with the bundled `conpty.dll` preferred over `kernel32` — [`DEC-0013`](../decisions/DEC-0013-bundled-conpty-host-and-bump-script.md) — or `openpty`), the `EventedReadWrite` / `EventedPty` / `OnResize` traits the caller's own poll loop drives, and the two poll tokens. |
 | `actions` (`oneterm-actions`) | `core`, gpui | leaf-ui | gpui `Action` structs shared by shell and features; domain placement types come from `core`. |
 | `settings` (`oneterm-settings`) | `core`, gpui, gpui-component | shared | `TerminalConfig`, live `TerminalSettings` (defaults single-sourced from the config), and `UiConfig` including the `Theme` observer that persists `ui_config.json`. |

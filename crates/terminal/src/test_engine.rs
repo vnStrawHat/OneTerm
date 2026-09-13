@@ -1,26 +1,31 @@
-//! The two lines every adapter test needs: build an engine, feed it bytes.
+//! The two lines every adapter test needs: build a terminal, feed it bytes.
 //!
-//! `oneterm_vt::testing` (the design's `terminal_from_text` / `feed`) is
-//! `US-0082`'s row — the tests that would use it still run against the old
-//! engine in this packet — so the adapter keeps its own pair. It is deliberately
-//! not `mock_term`: sizing a grid to its content is a fixture convenience the
-//! new tests do not need, and stating the size makes every assertion about a
-//! row index unambiguous.
+//! `US-0081`'s gap 5 filed a shared `oneterm_vt::testing` module here. It is
+//! declined: `docs/agents/code-style.md` says to extract shared code once
+//! multiple crates need it, and one does. Sizing a grid to its content — the
+//! reference's `mock_term` convenience — is not reproduced either; stating the
+//! size makes every assertion about a row index unambiguous, and the one suite
+//! that wants it (`search`) keeps its own three-line builder.
 
 use std::time::Instant;
 
-use oneterm_vt::EventBatch;
+use oneterm_vt::{EventBatch, Terminal};
 
 use crate::backend::GridSize;
-use crate::engine::Engine;
 
-/// A fresh engine at `size` with the default scrollback.
-pub(crate) fn engine(size: GridSize) -> Engine {
-    Engine::new(size, crate::engine::DEFAULT_SCROLLBACK_LINES)
+/// A fresh terminal at `size` with the default scrollback.
+pub(crate) fn terminal(size: GridSize) -> Terminal {
+    Terminal::new(
+        size.into(),
+        oneterm_vt::Config {
+            scrollback_limit: crate::handle::DEFAULT_SCROLLBACK_LINES as u32,
+            ..oneterm_vt::Config::default()
+        },
+    )
 }
 
 /// Feed one chunk and drop the events.
-pub(crate) fn feed(engine: &mut Engine, bytes: &[u8]) {
+pub(crate) fn feed(term: &mut Terminal, bytes: &[u8]) {
     let mut batch = EventBatch::new();
-    engine.feed(bytes, &mut batch, Instant::now());
+    term.feed(bytes, &mut batch, Instant::now());
 }

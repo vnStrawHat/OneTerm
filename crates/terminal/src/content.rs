@@ -1,30 +1,41 @@
-//! Terminal content snapshot for rendering — framework-agnostic.
+//! The frame: one `Terminal::render_update` into the render state this buffer
+//! owns, plus the legacy shape the view still reads.
 //!
-//! `TerminalContent::refill(&mut Engine)` runs one `Terminal::render_update`
-//! under the adapter lock and reshapes the result — cells, cursor, selection,
-//! mode, scroll offset, damage — into owned data. Rendering only reads the
-//! snapshot and never holds the lock while drawing.
+//! `TerminalContent` **is** the consumer `DEC-0015` describes. It owns the
+//! [`RenderState`] and therefore the damage watermark, so "changed for me"
+//! means changed since *this* buffer last looked, and a second consumer needs
+//! no engine change. The render path reuses one buffer
+//! (`terminal-view/src/render/frame.rs`), so the watermark survives across
+//! frames exactly where it belongs; a freshly built `TerminalContent` reports
+//! `Full`, which is correct by construction rather than by convention.
 //!
-//! The damage the renderer sees is the engine's per-row sequence number read
-//! through this consumer's watermark ([`crate::engine_shim::LegacySnapshot`]),
-//! converted into the display-line shape the view already consumes, so a row
-//! that did not change is not laid out again.
+//! Native reads go through the accessors below — [`TerminalContent::rows`],
+//! [`TerminalContent::changed`], [`TerminalContent::update`],
+//! [`TerminalContent::row_id`]. The public fields are the **compatibility
+//! surface**: the dense `Vec<IndexedCell>` in the reference's signed grid lines
+//! and the `alacritty_terminal` value types around it, which
+//! `crates/terminal-view` reads directly until `US-0085` moves it onto
+//! `RenderRow` / `RenderCell` and deletes them together with
+//! [`crate::engine_shim`].
 //!
-//! The exposed types (`Cell`, `RenderableCursor`, `TermMode`, `SelectionRange`,
-//! `Point`) are still `alacritty_terminal` types: they are the seam's value
-//! vocabulary until `US-0085` moves `crates/terminal-view` onto the engine's
-//! own `RenderRow` / `RenderCell`.
+//! The compatibility cells are refreshed from the tri-state result rather than
+//! rebuilt: nothing at all on `Unchanged`, only [`TerminalContent::changed`] on
+//! a `Partial` that did not scroll, everything on `Full`.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use alacritty_terminal::index::Point;
 use alacritty_terminal::selection::SelectionRange;
 use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::term::graphics::GraphicData;
 use alacritty_terminal::term::{RenderableCursor, TermMode};
-use oneterm_vt::{Attrs, CellWidth, Color, NamedColor, Terminal};
-
-use crate::engine::Engine;
+use oneterm_vt::intern::Hyperlink;
+use oneterm_vt::render::{ModeSnapshot, RenderCursor, RenderPlacement, RenderRow};
+use oneterm_vt::{
+    Attrs, CellWidth, Color, HyperlinkId, NamedColor, RenderState, RenderUpdate, RowId, Size,
+    Terminal,
+};
 
 /// A blank cell = space + default background + no decoration (hyperlink,
 /// underline, inverse…). Matches the UI's `is_blank` definition so the gutter
@@ -97,9 +108,26 @@ pub struct TerminalBounds {
     pub num_cols: usize,
 }
 
-/// Snapshot of all displayable terminal content.
-#[derive(Clone)]
+/// One frame: the engine's render state, plus the legacy view of it.
 pub struct TerminalContent {
+    /// The frame source. Owns this consumer's damage watermark.
+    pub(crate) state: RenderState,
+    /// What the last [`TerminalContent::refill`] did.
+    pub(crate) update: RenderUpdate,
+    /// The display row the previous frame put the cursor on.
+    ///
+    /// The reference damaged both the old and the new cursor row on every
+    /// `damage()` call; the engine reports a cursor move as `Partial` with an
+    /// empty `changed` list, so the two rows are added here instead. Without the
+    /// old row a moved cursor leaves a ghost.
+    pub(crate) last_cursor_row: Option<usize>,
+    /// The scroll offset the compatibility cells were last built against.
+    ///
+    /// `IndexedCell::point.line` is `row_index - display_offset`, so a changed
+    /// offset invalidates every stored point even when no row changed.
+    pub(crate) built_offset: Option<usize>,
+
+    // ── Compatibility surface — `US-0085` deletes all of it ───────────────
     /// All displayed cells (in display order, display_offset already applied).
     pub cells: Vec<IndexedCell>,
     /// The cursor (shape may be `Hidden`).
@@ -125,6 +153,9 @@ pub struct TerminalContent {
 impl std::fmt::Debug for TerminalContent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TerminalContent")
+            .field("update", &self.update)
+            .field("rows", &self.state.rows().len())
+            .field("changed", &self.state.changed().len())
             .field("cells_len", &self.cells.len())
             .field("graphics_len", &self.graphics.len())
             .field("cursor_shape", &self.cursor.shape)
@@ -138,10 +169,15 @@ impl std::fmt::Debug for TerminalContent {
 }
 
 impl Default for TerminalContent {
-    /// An empty snapshot (no cells, hidden cursor, full damage) — the initial
-    /// value for a reusable buffer passed to [`TerminalContent::refill`].
+    /// An empty frame (no rows, no cells, hidden cursor, full damage) — the
+    /// initial value for the reusable buffer passed to
+    /// [`TerminalContent::refill`].
     fn default() -> Self {
         Self {
+            state: RenderState::new(),
+            update: RenderUpdate::Full,
+            last_cursor_row: None,
+            built_offset: None,
             cells: Vec::new(),
             cursor: RenderableCursor {
                 shape: alacritty_terminal::vte::ansi::CursorShape::Hidden,
@@ -162,23 +198,102 @@ impl Default for TerminalContent {
 }
 
 impl TerminalContent {
-    /// Build a snapshot from the engine (the caller handles locking).
+    /// Build a frame from the engine (the caller handles locking).
     ///
     /// Allocating convenience over [`refill`](Self::refill) — the render path
-    /// reuses one buffer via `refill` instead.
-    pub fn from(engine: &mut Engine) -> Self {
+    /// reuses one buffer instead. A fresh buffer has a fresh watermark, so the
+    /// first result is always `Full` and no other consumer's damage moves.
+    pub fn from(term: &mut Terminal) -> Self {
         let mut content = Self::default();
-        content.refill(engine);
+        content.refill(term);
         content
     }
 
-    /// Refill `self` from the engine, reusing the `cells` and dirty-line
-    /// allocations — the steady-state render loop allocates nothing (PERF).
+    /// Refill `self` from the engine, reusing every allocation — the
+    /// steady-state render loop allocates nothing (PERF).
     ///
-    /// Consumes this consumer's damage: the render state's watermark advances,
-    /// so the next call reports only what changed after this one.
-    pub fn refill(&mut self, engine: &mut Engine) {
-        engine.refill(self);
+    /// Advances **this buffer's** watermark: the next call reports only what
+    /// changed after this one.
+    pub fn refill(&mut self, term: &mut Terminal) {
+        crate::engine_shim::refill(self, term, Instant::now());
+    }
+
+    // ── Native accessors ─────────────────────────────────────────────────
+
+    /// What the last [`refill`](Self::refill) did: nothing, a shift plus
+    /// [`changed`](Self::changed), or everything.
+    pub fn update(&self) -> RenderUpdate {
+        self.update
+    }
+
+    /// The full viewport, indexed by display row — always, whatever
+    /// [`update`](Self::update) says (R-15).
+    pub fn rows(&self) -> &[RenderRow] {
+        self.state.rows()
+    }
+
+    /// The display rows the last refill copied.
+    pub fn changed(&self) -> &[u16] {
+        self.state.changed()
+    }
+
+    /// The viewport size in cells.
+    pub fn size(&self) -> Size {
+        self.state.size()
+    }
+
+    /// Where the cursor is and whether it is visible, refreshed every refill.
+    pub fn render_cursor(&self) -> &RenderCursor {
+        self.state.cursor()
+    }
+
+    /// The modes the view reads at paint time, refreshed every refill.
+    pub fn modes(&self) -> ModeSnapshot {
+        self.state.modes()
+    }
+
+    /// The selection in engine coordinates.
+    pub fn selection_range(&self) -> Option<oneterm_vt::SelectionRange> {
+        self.state.selection()
+    }
+
+    /// Live image placements, ids only — the pixels are in
+    /// [`graphics`](Self::graphics), drained once.
+    pub fn placements(&self) -> &[RenderPlacement] {
+        self.state.placements()
+    }
+
+    /// The strings behind a cell's hyperlink id, resolved under the lock.
+    pub fn hyperlink(&self, id: HyperlinkId) -> Option<&Hyperlink> {
+        self.state.hyperlink(id)
+    }
+
+    /// Rows between the viewport and the newest row; `0` is the sticky bottom.
+    pub fn scroll_offset(&self) -> u32 {
+        self.state.scroll_offset()
+    }
+
+    /// The `RowId` of a display row — the half of the two-way translation
+    /// `migration.md` designed that a consumer keying a cache on row identity
+    /// needs (`US-0085`'s `plan_cache`).
+    pub fn row_id(&self, display_row: usize) -> Option<RowId> {
+        self.state.rows().get(display_row).map(|row| row.id)
+    }
+
+    /// The display row a `RowId` currently sits on, or `None` when it has
+    /// scrolled out of the viewport.
+    pub fn display_row(&self, id: RowId) -> Option<usize> {
+        let top = self.state.viewport_top();
+        if id < top {
+            return None;
+        }
+        let row = id.distance(top) as usize;
+        (row < self.state.rows().len()).then_some(row)
+    }
+
+    /// Force the next [`refill`](Self::refill) to rebuild everything.
+    pub fn invalidate(&mut self) {
+        self.state.invalidate();
     }
 
     /// true if the cursor is visible (shape ≠ Hidden).
@@ -192,83 +307,5 @@ impl TerminalContent {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::backend::GridSize;
-    use crate::test_engine::{engine, feed};
-
-    fn snapshot(engine: &mut Engine) -> TerminalContent {
-        TerminalContent::from(engine)
-    }
-
-    #[test]
-    fn snapshot_has_cells_and_bounds() {
-        let mut term = engine(GridSize { cols: 5, lines: 2 });
-        feed(&mut term, b"hello\r\nworld");
-        let snap = snapshot(&mut term);
-        assert_eq!(snap.terminal_bounds.num_cols, 5);
-        assert_eq!(snap.terminal_bounds.num_lines, 2);
-        assert_eq!(snap.cells.len(), 10);
-        assert_eq!(snap.cells[0].cell.c, 'h');
-        assert_eq!(snap.cells[5].cell.c, 'w');
-    }
-
-    #[test]
-    fn snapshot_is_owned_clone() {
-        let mut term = engine(GridSize { cols: 4, lines: 1 });
-        feed(&mut term, b"ab");
-        let snap = snapshot(&mut term);
-        let clone = snap.clone();
-        // Clone does not borrow the engine → the snapshot is truly owned.
-        drop(term);
-        assert!(!clone.cells.is_empty());
-    }
-
-    #[test]
-    fn cursor_visible_default() {
-        let mut term = engine(GridSize { cols: 4, lines: 1 });
-        feed(&mut term, b"x");
-        let snap = snapshot(&mut term);
-        // The cursor is visible at power-on.
-        assert!(snap.cursor_visible());
-        assert_eq!(snap.cursor.point.column.0, 1);
-    }
-
-    #[test]
-    fn damage_full_on_first_snapshot() {
-        // The first snapshot of a fresh render state must be Full.
-        let mut term = engine(GridSize { cols: 5, lines: 2 });
-        feed(&mut term, b"hello");
-        let snap = snapshot(&mut term);
-        assert_eq!(snap.damage, TermDamageInfo::Full);
-    }
-
-    /// TEST-24: a second snapshot with no new output must not report full
-    /// damage; at most the cursor line is dirty.
-    #[test]
-    fn damage_partial_on_unchanged() {
-        let mut term = engine(GridSize { cols: 5, lines: 2 });
-        feed(&mut term, b"hello");
-        let mut content = TerminalContent::default();
-        content.refill(&mut term);
-        let cursor_line = content.cursor.point.line.0 as usize;
-        // Second snapshot — no changes, only cursor damage.
-        content.refill(&mut term);
-        match &content.damage {
-            TermDamageInfo::Partial(lines) => {
-                assert!(
-                    lines.iter().all(|line| *line == cursor_line),
-                    "only the cursor line may be dirty, got {lines:?} (cursor {cursor_line})"
-                );
-            }
-            TermDamageInfo::Full => panic!("unchanged terminal must not report full damage"),
-        }
-    }
-
-    #[test]
-    fn last_content_line_finds_the_last_written_row() {
-        let mut term = engine(GridSize { cols: 8, lines: 5 });
-        feed(&mut term, b"one\r\ntwo\r\n");
-        assert_eq!(last_content_line(&term), 1);
-    }
-}
+#[path = "content_tests.rs"]
+mod tests;

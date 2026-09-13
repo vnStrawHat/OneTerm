@@ -1,18 +1,26 @@
-//! Terminal rendering & input helpers (framework-agnostic).
+//! The terminal adapter: `oneterm-vt` behind `TerminalSession`.
 //!
-//! The engine is `oneterm-vt` (IN-0029). `alacritty_terminal` is still a
-//! dependency, but since `US-0081` it **runs nothing**: what is left is the
-//! value vocabulary of the render snapshot — `TermMode`, `Cell`, `Point`,
-//! `SelectionRange`, the colour types — which `crates/terminal-view` reads
-//! directly. `US-0085` moves the view onto the engine's own types and
-//! `US-0087` deletes the dependency. No GPUI here either way.
+//! Since `US-0082` this crate speaks the engine's vocabulary — `RowId`,
+//! `RenderState`, `EventBatch`, `ColorKey`, `ResizePolicy` — and owns the two
+//! things the engine deliberately does not: the lock ([`TerminalHandle`]) and
+//! the event-delivery policy ([`backend`]).
+//!
+//! `alacritty_terminal` is still a dependency and still **runs nothing**. What
+//! is left of it is one **compatibility surface**: the legacy shape of
+//! [`TerminalContent`] and the value types around it — `TermMode`, `Cell`,
+//! `Point`, `SelectionRange`, `SelectionType`, the colour types — which
+//! `crates/terminal-view` reads directly out of this crate's API. It is named in
+//! exactly five files ([`engine_shim`], [`content`], [`session`], [`palette`],
+//! [`osc_color`]) and nowhere on the native path. `US-0085` moves the view onto
+//! the engine's own types, which is what makes `US-0087`'s manifest deletion
+//! possible. No GPUI here either way.
 
 pub mod backend;
 pub mod color_classification;
 pub mod content;
-pub mod engine;
 pub(crate) mod engine_shim;
 pub mod factory;
+pub mod handle;
 pub mod key_encode;
 pub mod logging;
 pub mod model;
@@ -25,9 +33,6 @@ pub(crate) mod paste;
 pub mod search;
 pub mod security_policy;
 pub mod session;
-#[cfg(test)]
-mod sixel_tests;
-pub mod sync;
 #[cfg(test)]
 pub(crate) mod test_engine;
 #[cfg(any(test, feature = "test-support"))]
@@ -45,14 +50,23 @@ pub use color_classification::{
     is_app_chosen_exact_color, is_decorative_character, is_default_background_color,
 };
 pub use content::{IndexedCell, TermDamageInfo, TerminalContent, last_content_line};
-pub use engine::{DEFAULT_SCROLLBACK_LINES, Engine, SharedTerminal, new_shared_terminal};
 pub use factory::{PtySize, SessionFactory};
+pub use handle::{
+    DEFAULT_SCROLLBACK_LINES, Engine, SharedTerminal, TerminalHandle, new_shared_terminal,
+};
 pub use key_encode::{KeyMods, KeySpec, NamedKey, encode_key};
 pub use logging::{
     TerminalLogController, TerminalLogError, TerminalLogState, local_log_identity, ssh_log_identity,
 };
 pub use model::ResizePolicy;
 pub use mouse_encode::{MouseModifiers, TerminalMouseButton};
+/// The engine vocabulary this crate's own API speaks, re-exported so a consumer
+/// can name what [`TerminalContent`]'s native accessors return without taking a
+/// direct dependency on `oneterm-vt` first (`US-0085`).
+pub use oneterm_vt::{
+    ModeSnapshot, RenderCell, RenderContent, RenderCursor, RenderPlacement, RenderRow,
+    RenderUpdate, RowId, SelectionKind, SeqNo, StyleRun, Terminal,
+};
 pub use osc::{TerminalProgress, encode_osc52};
 pub use osc_agent::{
     AgentPayload, AgentState, AgentStatusEvent, ApprovalChoice, ApprovalEvent, ApprovalKind,
@@ -68,5 +82,4 @@ pub use session::{
     TerminalIme, TerminalInfo, TerminalInput, TerminalLifecycle, TerminalQueryState,
     TerminalRender, TerminalSession, report_generated_input,
 };
-pub use sync::FairMutex;
 pub use url_policy::TargetDecision;

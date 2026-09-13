@@ -333,6 +333,10 @@ impl FakeTerminalSession {
         };
 
         let (cursor_line, cursor_col) = *self.state.cursor.lock().unwrap();
+        // The fake fabricates the compatibility surface directly and leaves the
+        // render state at its default: it has no engine behind it, and every
+        // consumer of a fake session reads the legacy fields. `US-0085` replaces
+        // this whole builder with one that fills `RenderRow`s.
         TerminalContent {
             cells,
             cursor: RenderableCursor {
@@ -349,6 +353,7 @@ impl FakeTerminalSession {
             },
             damage,
             graphics,
+            ..TerminalContent::default()
         }
     }
 }

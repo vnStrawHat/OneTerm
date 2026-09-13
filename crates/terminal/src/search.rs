@@ -17,7 +17,7 @@
 //! character so column positions stay exact, and covers the dominant terminal
 //! use case (commands, logs, paths are ASCII).
 
-use oneterm_vt::{CellWidth, Terminal};
+use oneterm_vt::{CellWidth, RowId, Terminal};
 
 /// Search options.
 ///
@@ -35,6 +35,12 @@ pub struct SearchOptions {
 }
 
 /// One search match in **grid coordinates**.
+///
+/// The signed `line` and [`SearchMatch::display_row`] are the compatibility
+/// surface: `crates/terminal-view/src/terminal_view/search.rs` both constructs
+/// this struct and calls that method, so neither can become a `RowId` before
+/// `US-0085` moves that file. Inside this crate the search is `RowId`-keyed
+/// ([`GridText`]) and the conversion happens once, where a match is published.
 ///
 /// `line` is the signed grid line:
 /// - negative → scrollback history (`-1` = newest history line, just above the viewport top at `display_offset = 0`);
@@ -59,14 +65,23 @@ impl SearchMatch {
 }
 
 /// One `char` per cell for the whole grid (scrollback history + viewport),
-/// copied under the `Term` lock so the search itself can run without it.
+/// copied under the engine lock so the search itself can run without it.
 ///
-/// Rows are stored top-to-bottom starting at `top_line`; each row is exactly
-/// `num_cols` chars, so `chars.len() == rows × num_cols`.
+/// Row identity is the engine's: rows are stored top-to-bottom starting at
+/// [`GridText::oldest`], and the signed grid line a [`SearchMatch`] publishes is
+/// derived from `screen_top` at the end. Each row is exactly `num_cols` chars,
+/// so `chars.len() == rows × num_cols`.
+///
+/// The copy is deliberate (R-19): search is user-initiated and rare, unlike a
+/// per-frame snapshot, and copying once under the lock is what keeps a long
+/// scrollback search off the pump's back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GridText {
-    /// Grid line of the first stored row (the topmost history line).
-    top_line: i32,
+    /// The topmost stored row (the oldest history row).
+    oldest: RowId,
+    /// The row the reference calls `Line(0)`: the viewport top at
+    /// `display_offset == 0`.
+    screen_top: RowId,
     /// Row stride.
     num_cols: usize,
     /// Row-major cell characters. Wide-char spacers are `'\0'`.
@@ -80,12 +95,11 @@ impl GridText {
         let screen = term.screen();
         let graphemes = &term.interner().graphemes;
         let num_cols = usize::from(screen.cols());
-        let oldest = screen.oldest();
-        let rows = (screen.newest().distance(oldest) + 1) as usize;
-        let top_line = -(screen.history_len() as i32);
+        let range = screen.row_range();
+        let rows = range.end.distance(range.start) as usize;
         let mut chars = Vec::with_capacity(rows * num_cols);
         for index in 0..rows {
-            for cell in screen.row(oldest + index as u64).cells() {
+            for cell in screen.row(range.start + index as u64).cells() {
                 // Wide-char spacers carry no visible glyph — use a NUL placeholder so
                 // they cannot be part of a match (the needle never contains NUL). This
                 // keeps the column index aligned with the cell column.
@@ -97,10 +111,16 @@ impl GridText {
             }
         }
         Self {
-            top_line,
+            oldest: range.start,
+            screen_top: screen.screen_top(),
             num_cols,
             chars,
         }
+    }
+
+    /// The `RowId` of the stored row at `index`.
+    fn row_id(&self, index: usize) -> RowId {
+        self.oldest + index as u64
     }
 }
 
@@ -126,8 +146,9 @@ pub(crate) fn search_grid_text(
     }
 
     let mut matches = Vec::new();
-    for (row, line_chars) in text.chars.chunks_exact(text.num_cols).enumerate() {
-        let line = text.top_line + row as i32;
+    for (index, line_chars) in text.chars.chunks_exact(text.num_cols).enumerate() {
+        // The one conversion out of `RowId`, at the point a match is published.
+        let line = crate::engine_shim::row_to_line(text.row_id(index), text.screen_top);
         find_in_line(line_chars, &needle, line, options, &mut matches);
     }
     matches
@@ -218,14 +239,13 @@ fn is_word_boundary(line: &[char], at: usize) -> bool {
 mod tests {
     use super::*;
     use crate::backend::GridSize;
-    use crate::engine::Engine;
 
     /// The `mock_term` contract the eleven tests below were written against:
     /// the grid is sized to the content — columns = the widest line by display
     /// width, rows = the line count — so nothing scrolls and row `0` is the
     /// first line. Lines are separated with `\r\n`, because none of these tests
     /// asks anything about a wrap flag.
-    fn mock_term(text: &str) -> Engine {
+    fn mock_term(text: &str) -> Terminal {
         let lines: Vec<&str> = text.split('\n').collect();
         let cols = lines
             .iter()
@@ -237,12 +257,12 @@ mod tests {
             .max()
             .unwrap_or(1)
             .max(1);
-        let mut engine = crate::test_engine::engine(GridSize {
+        let mut term = crate::test_engine::terminal(GridSize {
             cols,
             lines: lines.len(),
         });
-        crate::test_engine::feed(&mut engine, lines.join("\r\n").as_bytes());
-        engine
+        crate::test_engine::feed(&mut term, lines.join("\r\n").as_bytes());
+        term
     }
 
     #[test]
@@ -344,13 +364,37 @@ mod tests {
         let text = GridText::from_terminal(&term);
         assert_eq!(text.num_cols, usize::from(term.screen().cols()));
         assert_eq!(text.chars.len() % text.num_cols, 0);
-        assert_eq!(text.top_line, -(term.screen().history_len() as i32));
+        // The copy is keyed by RowId: the oldest stored row is the screen top
+        // shifted back by the history depth.
+        assert_eq!(text.oldest, term.screen().oldest());
+        assert_eq!(text.screen_top, term.screen().screen_top());
+        assert_eq!(
+            text.screen_top.distance(text.oldest),
+            u64::from(term.screen().history_len())
+        );
         // Searching the snapshot after the term is gone still yields grid coordinates.
         drop(term);
         let m = search_grid_text(&text, "cd", SearchOptions::default());
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].line, 1);
         assert_eq!(m[0].start_col, 0);
+    }
+
+    /// The history rows keep the negative lines the view converts with
+    /// `display_row`, now derived from `RowId` rather than from a stored `i32`.
+    #[test]
+    fn history_rows_report_negative_grid_lines() {
+        let mut term = crate::test_engine::terminal(GridSize { cols: 6, lines: 2 });
+        crate::test_engine::feed(&mut term, b"alpha\r\nbeta\r\nalpha");
+        let m = search_term(&term, "alpha", SearchOptions::default());
+        assert_eq!(m.len(), 2);
+        assert_eq!(m[0].line, -1, "scrolled into history");
+        assert_eq!(m[1].line, 1);
+        assert_eq!(
+            m[0].display_row(1),
+            0,
+            "one row of scrollback brings it back"
+        );
     }
 
     #[test]

@@ -1,17 +1,20 @@
 //! `SessionEventSink` — delivery policy for `SessionEvent`s.
 //!
-//! Repaint hints (`SessionEvent::Output`) are coalescible: when the bounded
-//! queue is full they are dropped, the UI will repaint on the next one. Every
-//! other event is reliable — never dropped — but `forward` runs from `Term`
-//! callbacks with the `Term` lock held and the UI thread needs that same lock
-//! to drain the queue, so it must never block (CORR-01). Reliable events that
-//! do not fit are kept in a FIFO and delivered by the pump's `flush_reliable`
-//! after the parse batch, once the lock is released; a slow consumer applies
-//! backpressure to the pump only *between* batches.
+//! `SessionEvent::Output` is a coalescible repaint hint: when the bounded queue
+//! is full it is dropped and counted, because the UI will repaint on the next
+//! one. Every other event is reliable and applies backpressure.
+//!
+//! **The deferred tier is gone (`US-0082`).** It existed because the engine
+//! called back *during* parsing with the terminal lock held, so a blocking send
+//! could deadlock against the UI thread that needed the same lock to drain the
+//! queue (CORR-01). Events are values now: [`super::OscRouter::drain`] collects
+//! them and [`super::TerminalPump`] sends them after the guard is dropped, so
+//! the sink can simply block. Deleted with the tier: `deferred_reliable`,
+//! `flush_reliable[_blocking]`, `forward_lifecycle*` and
+//! `has_deferred_reliable`.
 
-use std::collections::VecDeque;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
 
 use async_channel::{Sender, TrySendError};
 use log::warn;
@@ -34,13 +37,10 @@ struct EventQueueCounters {
 }
 
 /// Bounded, policy-aware sender of `SessionEvent`s to the UI. Clone-friendly:
-/// all clones share the deferred queue and the counters.
+/// all clones share the counters.
 #[derive(Clone)]
 pub struct SessionEventSink {
     event_tx: Sender<SessionEvent>,
-    /// Reliable events that did not fit in the event queue. FIFO order among
-    /// reliable events is preserved across deferrals.
-    deferred_reliable: Arc<Mutex<VecDeque<SessionEvent>>>,
     counters: Arc<EventQueueCounters>,
 }
 
@@ -49,7 +49,6 @@ impl SessionEventSink {
     pub fn new(event_tx: Sender<SessionEvent>) -> Self {
         Self {
             event_tx,
-            deferred_reliable: Arc::new(Mutex::new(VecDeque::new())),
             counters: Arc::new(EventQueueCounters::default()),
         }
     }
@@ -62,109 +61,42 @@ impl SessionEventSink {
         }
     }
 
-    fn record_failure<T>(&self, error: &TrySendError<T>) {
-        let counter = match error {
-            TrySendError::Full(_) => &self.counters.event_full,
-            TrySendError::Closed(_) => &self.counters.event_closed,
-        };
-        counter.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Forward a session event according to its delivery policy. Never blocks —
-    /// safe to call from `Term` callbacks with the `Term` lock held. Deferred
-    /// reliable events are delivered by [`Self::flush_reliable_blocking`] /
-    /// [`Self::flush_reliable`], which the pump calls after every parse batch.
-    pub fn forward(&self, ev: SessionEvent) {
-        // `Output` is a coalescible repaint hint; every other event is reliable.
-        if matches!(ev, SessionEvent::Output) {
-            if let Err(error) = self.event_tx.try_send(ev) {
-                self.record_failure(&error);
-                match error {
-                    TrySendError::Full(_) => {
-                        log::debug!("SessionEventSink: coalesced repaint event");
-                    }
-                    TrySendError::Closed(_) => {
-                        warn!("SessionEventSink: event channel is closed");
-                    }
+    /// Post the coalescible repaint hint. Never blocks and never waits: a hint
+    /// that does not fit is dropped, because the next one carries the same
+    /// information.
+    pub fn post_repaint(&self) {
+        if let Err(error) = self.event_tx.try_send(SessionEvent::Output) {
+            match error {
+                TrySendError::Full(_) => {
+                    self.counters.event_full.fetch_add(1, Ordering::Relaxed);
+                    log::debug!("SessionEventSink: coalesced repaint event");
                 }
-            }
-            return;
-        }
-
-        let mut deferred = self
-            .deferred_reliable
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        // Keep FIFO order: once something is deferred, everything after
-        // it queues behind it until the next flush.
-        if !deferred.is_empty() {
-            deferred.push_back(ev);
-            return;
-        }
-        match self.event_tx.try_send(ev) {
-            Ok(()) => {}
-            Err(TrySendError::Full(ev)) => deferred.push_back(ev),
-            Err(error @ TrySendError::Closed(_)) => {
-                self.record_failure(&error);
-                warn!("SessionEventSink: reliable event lost because channel is closed: {error:?}");
+                error @ TrySendError::Closed(_) => self.record_closed(error),
             }
         }
     }
 
-    /// Whether reliable events are waiting for a flush.
-    pub fn has_deferred_reliable(&self) -> bool {
-        !self
-            .deferred_reliable
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .is_empty()
+    /// Deliver a reliable event, waiting for the UI to make room.
+    ///
+    /// Call **without** the terminal lock held — which is where the pump calls
+    /// it, and the reason the deferred tier could be deleted.
+    pub fn send_blocking(&self, event: SessionEvent) {
+        debug_assert!(!matches!(event, SessionEvent::Output));
+        if let Err(error) = self.event_tx.send_blocking(event) {
+            self.record_closed(error);
+        }
     }
 
-    fn pop_deferred_reliable(&self) -> Option<SessionEvent> {
-        self.deferred_reliable
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .pop_front()
+    /// Async variant of [`Self::send_blocking`] for tokio pumps.
+    pub async fn send(&self, event: SessionEvent) {
+        debug_assert!(!matches!(event, SessionEvent::Output));
+        if let Err(error) = self.event_tx.send(event).await {
+            self.record_closed(error);
+        }
     }
 
     fn record_closed(&self, error: impl std::fmt::Debug) {
         self.counters.event_closed.fetch_add(1, Ordering::Relaxed);
-        warn!("SessionEventSink: reliable event lost because channel is closed: {error:?}");
-    }
-
-    /// Deliver deferred reliable events, blocking until the UI makes room.
-    /// Must be called **without** the `Term` lock held (thread-based pumps
-    /// call it after each parse batch and before lifecycle events).
-    pub fn flush_reliable_blocking(&self) {
-        while let Some(ev) = self.pop_deferred_reliable() {
-            if let Err(error) = self.event_tx.send_blocking(ev) {
-                self.record_closed(error);
-            }
-        }
-    }
-
-    /// Async variant of [`Self::flush_reliable_blocking`] for tokio pumps.
-    pub async fn flush_reliable(&self) {
-        while let Some(ev) = self.pop_deferred_reliable() {
-            if let Err(error) = self.event_tx.send(ev).await {
-                self.record_closed(error);
-            }
-        }
-    }
-
-    /// Forward a lifecycle event (`Exited`/`Closed`) and flush every deferred
-    /// reliable event so the transition reaches the UI in order. Call from
-    /// the pump only, without the `Term` lock held.
-    pub fn forward_lifecycle_blocking(&self, ev: SessionEvent) {
-        debug_assert!(!matches!(ev, SessionEvent::Output));
-        self.forward(ev);
-        self.flush_reliable_blocking();
-    }
-
-    /// Async variant of [`Self::forward_lifecycle_blocking`].
-    pub async fn forward_lifecycle(&self, ev: SessionEvent) {
-        debug_assert!(!matches!(ev, SessionEvent::Output));
-        self.forward(ev);
-        self.flush_reliable().await;
+        warn!("SessionEventSink: event lost because the channel is closed: {error:?}");
     }
 }
