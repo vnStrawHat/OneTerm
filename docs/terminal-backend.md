@@ -159,9 +159,11 @@ at a chunk boundary. `US-0082` wired the adapter's half of it:
 - `TerminalHandle::take_render_demand()` is the pump's half: "is a frame waiting for
   me?", cleared by the asking. A read loop calls it at a chunk boundary — **after** that
   batch's reply bytes have left (R-37, § 5.3) — and drops its guard when it answers
-  `true`. Wiring that call into the two read loops is `US-0083` / `US-0084`;
-  `lock_unfair` / `try_lock_unfair` survive as aliases of `lock` / `try_lock` until
-  those loops are rewritten.
+  `true`. `ssh_main_task` does (`US-0084`): it locks per chunk, so its answer to a raised
+  flag is to yield the tokio task before the next chunk relocks. The local loop, which
+  holds the lock while the pipe keeps delivering and is the shape the 354 ms starvation
+  was measured on, is `US-0083`; `lock_unfair` / `try_lock_unfair` survive as aliases of
+  `lock` / `try_lock` until it is rewritten.
 
 ### 5.2. Snapshot vs live borrow (IMPORTANT)
 
@@ -557,8 +559,12 @@ pub fn connect(cfg: SshConfig, initial: PtySize, scrollback: usize)
 - `ssh_main_task` has a third `select!` arm: it serves `HandleRequest`s from the
   forward listeners (one direct-tcpip open per accepted local connection),
   because the connection handle lives only in the task.
-- Reliable events emitted during `processor.advance` are flushed by
-  `TerminalPump::finish_batch().await` after the batch, before the `Output` hint (§5.3).
+- Per data chunk (`US-0084`): `TerminalPump::process_chunk` feeds the engine and drains
+  that batch under the lock — replies out first (R-37) — then, the lock released,
+  `finish_batch(true).await` sends the batch's events before the `Output` hint (§5.3), and
+  the loop asks `SharedTerminal::take_render_demand()` and yields the task when a frame is
+  waiting (§5.1). Nothing in `crates/ssh` names the engine or the fork: the shared pump is
+  the whole of the terminal side.
 - RSA keys authenticate with `rsa-sha2-*` chosen from the server's `server-sig-algs`
   (fallback SHA-512); legacy SHA-1 `ssh-rsa` is never used.
 - Auth: `SshAuthMethod::{None, Password, PrivateKey}` (`crates/core/src/ssh_config.rs`)
