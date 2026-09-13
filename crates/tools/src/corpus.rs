@@ -2,8 +2,9 @@
 //! that turns them into a gate.
 //!
 //! A recording is raw PTY bytes plus the geometry it was captured at. Replaying
-//! it through the engine being replaced produces two expectation files
-//! (`corpus_replay`), which are blessed once at `US-0072` and then frozen:
+//! it through the engine being replaced produced two expectation files, which
+//! were blessed once at `US-0072` and then frozen; `corpus_replay` reproduces
+//! the same two forms from `oneterm-vt`:
 //!
 //! * `grid.expect` — cell-exact, nothing trimmed. Every column of every row,
 //!   including trailing blanks, run-length encoded.
@@ -11,8 +12,8 @@
 //!   cursor, pending wrap, modes, palette overrides, title, tab stops and the
 //!   scroll region (trap 44).
 //!
-//! Because the new engine is built correctness-first, a recording may
-//! legitimately differ. That is declared per recording and **per cell** in an
+//! Because the engine is built correctness-first, a recording may legitimately
+//! differ from what the fork produced. That is declared per recording and **per cell** in an
 //! `expected-diffs.json`, never as a skipped recording. The rules in
 //! [`check`] are what keep the gate a gate: an undeclared difference fails, and
 //! so does a declared window that produces no difference.
@@ -51,27 +52,6 @@ pub const KNOWN_DEVIATIONS: [&str; 31] = [
     "D1", "D2", "D4", "D7", "D8", "D9", "D10", "D12", "D13", "D14", "D15", //
     "G1", "G2", "G3", "G6", "G7",
 ];
-
-/// Which engine produced a replay. The new engine never blesses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Engine {
-    /// The vendored `alacritty_terminal` fork being replaced.
-    Old,
-    /// `oneterm-vt`, once it exists.
-    New,
-}
-
-impl std::str::FromStr for Engine {
-    type Err = anyhow::Error;
-
-    fn from_str(value: &str) -> Result<Self> {
-        match value {
-            "old" => Ok(Self::Old),
-            "new" => Ok(Self::New),
-            other => bail!("unknown engine {other:?} (expected `old` or `new`)"),
-        }
-    }
-}
 
 /// One vendored recording: bytes plus the geometry it was captured at.
 #[derive(Debug, Clone)]
@@ -121,8 +101,8 @@ pub fn alacritty_ref_dir() -> PathBuf {
 ///
 /// Kept apart from `alacritty-ref/` so the vendored set stays exactly what
 /// upstream published, and so its NOTICE keeps covering only those files. Both
-/// directories are gated identically: blessed once by the **old** engine and
-/// then frozen (R-58).
+/// directories are gated identically: blessed once by the engine being replaced
+/// and then frozen (R-58).
 pub fn oneterm_dir() -> PathBuf {
     corpus_root().join("oneterm")
 }
@@ -222,9 +202,9 @@ impl GridExpect {
         let mut out = String::with_capacity(self.rows.len() * 64);
         out.push_str(
             "# OneTerm VT parity expectation: the grid, cell-exact, nothing trimmed.\n\
-             # Blessed by the vendored alacritty_terminal engine at US-0072 and FROZEN.\n\
+             # Blessed by the vendored alacritty fork at US-0072 and FROZEN.\n\
              # Rows are newest first. Each run is `<count>*<content>;<attrs>;<fg>;<bg>;<underline>;<hyperlink>`.\n\
-             # Do not hand-edit: regenerate with `vt-corpus bless --engine old --deviation <id>`.\n",
+             # Do not hand-edit: the engine that blessed these files was deleted at US-0087.\n",
         );
         let _ = writeln!(out, "version {FORMAT_VERSION}");
         let _ = writeln!(out, "columns {}", self.columns);
@@ -795,19 +775,17 @@ fn diff_state(expected: &StateExpect, actual: &StateExpect) -> Vec<Difference> {
         .collect()
 }
 
-/// Replay one recording through `engine` and compare it with the frozen
+/// Replay one recording through the engine and compare it with the frozen
 /// expectations.
 ///
 /// This is the gate: `vt-corpus check` prints its report, and
 /// `crates/tools/tests/corpus_check.rs` asserts on it inside
-/// `cargo test --workspace`, so an expectation that drifts fails the build.
-/// [`Engine::Old`] against the frozen files is the comparator's own self-test;
-/// [`Engine::New`] is `US-0076`'s exit criterion.
-pub fn check_recording(recording: &Recording, engine: Engine) -> Result<CheckReport> {
-    let (grid, state) = match engine {
-        Engine::Old => crate::corpus_replay::replay_old(recording),
-        Engine::New => crate::corpus_replay_new::replay_new(recording),
-    };
+/// `cargo test --workspace`, so an expectation that drifts fails the build. It
+/// was `US-0076`'s exit criterion and it stays the standing one: the files were
+/// blessed by the engine being replaced and frozen, and since `US-0087` nothing
+/// can bless them again.
+pub fn check_recording(recording: &Recording) -> Result<CheckReport> {
+    let (grid, state) = crate::corpus_replay::replay(recording);
     let read = |path: PathBuf| -> Result<String> {
         fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))
     };

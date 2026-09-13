@@ -104,7 +104,7 @@ fn run(command: &str, mib: usize, frames: usize, json: bool) -> String {
     if !json {
         let _ = writeln!(
             out,
-            "# vt-bench — vendored alacritty_terminal + vte (the engine being replaced)\n\n\
+            "# vt-bench — oneterm-vt\n\n\
              Geometry {}x{}, {mib} MiB per fixture, median of {} runs. Recorded, never gated.\n",
             bench::COLS,
             bench::ROWS,
@@ -169,7 +169,7 @@ fn run(command: &str, mib: usize, frames: usize, json: bool) -> String {
         } else {
             let _ = writeln!(
                 out,
-                "## Tier 3: parse, grid and one snapshot build per frame ({frames} frames)\n"
+                "## Tier 3: parse, grid and one render update per frame ({frames} frames)\n"
             );
             let _ = writeln!(out, "| Fixture | us/frame | cells/frame |");
             let _ = writeln!(out, "| --- | ---: | ---: |");
@@ -262,7 +262,7 @@ fn run(command: &str, mib: usize, frames: usize, json: bool) -> String {
             .map(|(key, value)| (key.to_owned(), value))
             .collect();
         return serde_json::to_string_pretty(&serde_json::json!({
-            "engine": "vendored alacritty_terminal + vte",
+            "engine": "oneterm-vt",
             "columns": bench::COLS,
             "lines": bench::ROWS,
             "mib_per_fixture": mib,

@@ -44,12 +44,6 @@ path = "src/bin/vt-corpus.rs"
 [[bin]]
 name = "vt-bench"
 path = "src/bin/vt-bench.rs"
-
-# The old-versus-new differential (IN-0029 R-41/R-43), alive from US-0076 to
-# US-0087: the same bytes into both engines, compared in the `grid.expect` form.
-[[bin]]
-name = "vt-diff"
-path = "src/bin/vt-diff.rs"
 # ---------------------------------------------------------------------------
 
 [dependencies]
@@ -63,12 +57,9 @@ tokio.workspace = true
 rand.workspace = true
 
 # --- IN-0029 / US-0072: the VT benchmark and parity harness -----------------
-# vt-corpus / vt-bench: `alacritty_terminal` is the engine being replaced and
-# the only one that ever blesses an expectation (pty-throughput no longer needs
-# it since US-0071; it goes away with US-0087).
-alacritty_terminal.workspace = true
-# The engine replacing it. `vt-corpus check --engine new` and `vt-diff` replay
-# the same bytes through both and compare in the `grid.expect` form.
+# The engine under test. `vt-corpus check` replays each recording through it and
+# compares the result with the expectations the fork froze at US-0072; `vt-bench`
+# measures the same engine across its five tiers.
 oneterm-vt.workspace = true
 anyhow.workspace = true
 serde = { workspace = true, features = ["derive"] }

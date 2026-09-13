@@ -6,8 +6,8 @@
 //! "Affected recordings" columns are filled with a measured answer instead of a
 //! guess.
 //!
-//! The scan runs at the **parser** level (`vte::Parser` plus a recording
-//! `Perform`), not over raw bytes: a byte search for `\x1b[1J` misses
+//! The scan runs at the **parser** level (`oneterm_vt::parser::Parser` plus a
+//! recording `Dispatch`), not over raw bytes: a byte search for `\x1b[1J` misses
 //! `\x1b[?25l\x1b[1J` split across a chunk boundary, counts `1J` inside an OSC
 //! payload, and cannot tell `SGR 5` from the `5` in `SGR 38;5;n`. The state
 //! machine gets all three right for free.
@@ -23,7 +23,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use alacritty_terminal::vte::{Params, Parser, Perform};
+use oneterm_vt::parser::{Dispatch, OscParams, Params, Parser, StringTerm};
 
 use crate::corpus::Recording;
 
@@ -65,63 +65,60 @@ pub struct Trace {
     pub blink_overline_sgr: BTreeMap<u16, usize>,
 }
 
-impl Perform for Trace {
-    fn print(&mut self, c: char) {
-        if !c.is_ascii() {
-            self.non_ascii_printed += 1;
-        }
+impl Dispatch for Trace {
+    fn print_str(&mut self, text: &str) {
+        self.non_ascii_printed += text.chars().filter(|c| !c.is_ascii()).count();
     }
 
-    fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], ignore: bool, action: char) {
+    fn execute(&mut self, _byte: u8) {}
+
+    fn csi(&mut self, params: &Params, intermediates: &[u8], ignore: bool, action: u8) {
         if ignore {
             return;
         }
         let private = intermediates.first() == Some(&b'?');
-        let first = params.iter().next().and_then(|p| p.first().copied());
+        let first = params.groups().next().and_then(|p| p.first().copied());
 
         match (private, intermediates.first().copied(), action) {
-            (true, _, 'h') => {
-                for param in params.iter().filter_map(|p| p.first().copied()) {
+            (true, _, b'h') => {
+                for param in params.groups().filter_map(|p| p.first().copied()) {
                     *self.private_set.entry(param).or_default() += 1;
                 }
             }
-            (true, _, 'l') => {
-                for param in params.iter().filter_map(|p| p.first().copied()) {
+            (true, _, b'l') => {
+                for param in params.groups().filter_map(|p| p.first().copied()) {
                     *self.private_reset.entry(param).or_default() += 1;
                 }
             }
-            (true, _, 'W') if first == Some(5) => self.tab_stop_resets += 1,
-            (false, Some(b'!'), 'p') => self.soft_resets += 1,
-            (false, None, 'P') => self.delete_chars.push(first.unwrap_or(1).max(1)),
-            (false, None, 'J') if first == Some(1) => self.erase_above += 1,
-            (false, None, 'r') => {
-                let mut values = params.iter().filter_map(|p| p.first().copied());
+            (true, _, b'W') if first == Some(5) => self.tab_stop_resets += 1,
+            (false, Some(b'!'), b'p') => self.soft_resets += 1,
+            (false, None, b'P') => self.delete_chars.push(first.unwrap_or(1).max(1)),
+            (false, None, b'J') if first == Some(1) => self.erase_above += 1,
+            (false, None, b'r') => {
+                let mut values = params.groups().filter_map(|p| p.first().copied());
                 let top = values.next().unwrap_or(0);
                 let bottom = values.next().unwrap_or(0);
                 self.scroll_regions.push((top, bottom));
             }
-            (false, None, action @ ('S' | 'T' | 'L' | 'M')) => {
+            (false, None, action @ (b'S' | b'T' | b'L' | b'M')) => {
                 self.region_scrolls
-                    .push((action, first.unwrap_or(1).max(1)));
+                    .push((action as char, first.unwrap_or(1).max(1)));
             }
-            (false, None, 'h') if first == Some(4) => self.insert_mode_set += 1,
-            (false, None, 'n') if first == Some(6) => self.cursor_position_reports += 1,
-            (false, None, 'm') => self.trace_sgr(params),
+            (false, None, b'h') if first == Some(4) => self.insert_mode_set += 1,
+            (false, None, b'n') if first == Some(6) => self.cursor_position_reports += 1,
+            (false, None, b'm') => self.trace_sgr(params),
             _ => {}
         }
     }
 
-    fn esc_dispatch(&mut self, intermediates: &[u8], ignore: bool, byte: u8) {
+    fn esc(&mut self, intermediates: &[u8], ignore: bool, byte: u8) {
         if !ignore && intermediates.is_empty() && byte == b'c' {
             self.full_resets += 1;
         }
     }
 
-    fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
-        let Some(code) = params.first().and_then(|raw| std::str::from_utf8(raw).ok()) else {
-            return;
-        };
-        let Ok(code) = code.parse::<u16>() else {
+    fn osc(&mut self, code: Option<u32>, params: &OscParams<'_>, _term: StringTerm, _tr: bool) {
+        let Some(code) = code.and_then(|code| u16::try_from(code).ok()) else {
             return;
         };
         if !matches!(code, 4 | 5 | 10..=19 | 104 | 105 | 110..=119) {
@@ -131,18 +128,26 @@ impl Perform for Trace {
         // `OSC 4` carries index/colour pairs after the code, so the engine
         // being replaced requires an odd *total* parameter count and drops the
         // whole sequence otherwise (trap 26). An even total — a trailing
-        // index with no colour — is the case `C7` changes.
+        // index with no colour — is the case `C7` changes. `params` includes
+        // the code as parameter 0, exactly as the reference's did.
         if code == 4 && params.len().is_multiple_of(2) {
             self.osc4_even_arguments += 1;
         }
     }
+
+    fn dcs_hook(&mut self, _params: &Params, _intermediates: &[u8], _byte: u8) {}
+    fn dcs_put(&mut self, _byte: u8) {}
+    fn dcs_unhook(&mut self, _aborted: bool) {}
+    fn apc_start(&mut self, _introducer: u8) {}
+    fn apc_put(&mut self, _byte: u8) {}
+    fn apc_end(&mut self, _aborted: bool) {}
 }
 
 impl Trace {
     /// Walk `SGR` parameters, stepping over the arguments of an extended colour
     /// so `38;5;5` is not read as the blink attribute.
     fn trace_sgr(&mut self, params: &Params) {
-        let flat: Vec<&[u16]> = params.iter().collect();
+        let flat: Vec<&[u16]> = params.groups().collect();
         let mut index = 0;
         while index < flat.len() {
             let group = flat[index];

@@ -20,7 +20,6 @@ on:
       - "docs/**"
       - "scripts/**"
       - "crates/**"
-      - "vendor/**"
       - ".github/**"
   pull_request:
     paths:
@@ -38,7 +37,6 @@ on:
       - "docs/**"
       - "scripts/**"
       - "crates/**"
-      - "vendor/**"
       - ".github/**"
 
 permissions:
@@ -62,10 +60,6 @@ jobs:
           python-version: "3.11"
       - name: Verify workspace policy and crate versions
         run: python scripts/verify-dependency-graph.py
-      - name: Verify vendored forks == pristine + patches
-        # Fetches the pristine vte / alacritty sources (network) and diffs them,
-        # patched, against vendor/**.
-        run: bash vendor/refresh.sh --check
       - name: Validate completion catalogs
         run: python scripts/completion-catalog.py validate
       - name: Verify architecture documentation paths

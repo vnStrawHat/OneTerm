@@ -8,18 +8,15 @@
 //! expected difference that has gone stale — fails the build rather than
 //! waiting for someone to run a tool.
 //!
-//! Two engines, two different jobs:
-//!
-//! * **old against the frozen files** is the comparator's own self-test, which
-//!   `US-0072` owes: it must stay at zero differences forever, because the files
-//!   were blessed by that engine.
-//! * **new against the frozen files** is `US-0076`'s exit criterion, and the one
-//!   that can legitimately differ — but only inside a declared
-//!   `expected-diffs.json` window naming a correction.
+//! This was `US-0076`'s exit criterion and it is the standing one. `oneterm-vt`
+//! may legitimately differ from the fork that blessed these files — but only
+//! inside a declared `expected-diffs.json` window naming a correction. Since
+//! `US-0087` there is no second engine to fall back on: the frozen files are the
+//! whole reference, and nothing can re-bless them.
 
-use oneterm_tools::corpus::{self, Engine};
+use oneterm_tools::corpus;
 
-fn run(engine: Engine) {
+fn run() {
     let dir = corpus::alacritty_ref_dir();
     let recordings = corpus::load_all(&dir, None).expect("the corpus is vendored");
     assert_eq!(
@@ -28,12 +25,13 @@ fn run(engine: Engine) {
         "expected the 45 vendored alacritty reference recordings under {}",
         dir.display()
     );
-    check(engine, &recordings);
+    check(&recordings);
 }
 
 /// OneTerm's own recordings, for behaviour the vendored set does not reach —
-/// Sixel, today. Same rules: blessed once by the old engine, then frozen.
-fn run_oneterm(engine: Engine) {
+/// Sixel, today. Same rules: blessed once by the engine being replaced, then
+/// frozen.
+fn run_oneterm() {
     let dir = corpus::oneterm_dir();
     let recordings = corpus::load_all(&dir, None).expect("OneTerm's own recordings");
     assert!(
@@ -41,13 +39,13 @@ fn run_oneterm(engine: Engine) {
         "expected OneTerm's own recordings under {}",
         dir.display()
     );
-    check(engine, &recordings);
+    check(&recordings);
 }
 
-fn check(engine: Engine, recordings: &[corpus::Recording]) {
+fn check(recordings: &[corpus::Recording]) {
     let mut failures = Vec::new();
     for recording in recordings {
-        let report = corpus::check_recording(recording, engine)
+        let report = corpus::check_recording(recording)
             .unwrap_or_else(|error| panic!("{}: {error:#}", recording.name));
         if report.passed() {
             continue;
@@ -71,21 +69,11 @@ fn check(engine: Engine, recordings: &[corpus::Recording]) {
 }
 
 #[test]
-fn the_alacritty_reference_corpus_matches_its_frozen_expectations() {
-    run(Engine::Old);
+fn the_engine_matches_the_frozen_alacritty_expectations() {
+    run();
 }
 
 #[test]
-fn the_new_engine_matches_the_frozen_expectations() {
-    run(Engine::New);
-}
-
-#[test]
-fn the_oneterm_corpus_matches_its_frozen_expectations() {
-    run_oneterm(Engine::Old);
-}
-
-#[test]
-fn the_new_engine_matches_the_oneterm_corpus() {
-    run_oneterm(Engine::New);
+fn the_engine_matches_the_frozen_oneterm_expectations() {
+    run_oneterm();
 }

@@ -83,8 +83,8 @@ ignore = false
 
 # ── Bans ────────────────────────────────────────────────────────────────────────
 [bans]
-# Duplicate transitive versions come from GPUI, russh, and alacritty; warn until
-# their upstream release families converge (BUILD-07).
+# Duplicate transitive versions come from GPUI and russh; warn until their
+# upstream release families converge (BUILD-07).
 multiple-versions = "warn"
 wildcards = "allow"
 highlight = "all"
@@ -92,7 +92,7 @@ workspace-default-features = "allow"
 external-default-features = "allow"
 # Deliberately excluded designs (docs/agents/dependencies.md §3).
 deny = [
-    { crate = "portable-pty", reason = "local PTY goes through alacritty_terminal::tty (docs/terminal-backend.md)" },
+    { crate = "portable-pty", reason = "local PTY goes through oneterm-pty (docs/terminal-backend.md)" },
     { crate = "openssl-sys", reason = "TLS/crypto is rustls + ring only; no native OpenSSL linkage" },
 ]
 
@@ -124,5 +124,4 @@ unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
     "https://github.com/zed-industries/zed",
-    "https://github.com/zed-industries/alacritty",
 ]

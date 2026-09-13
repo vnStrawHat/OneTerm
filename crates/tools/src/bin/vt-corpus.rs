@@ -1,34 +1,30 @@
 //! The VT parity corpus tool (developer diagnostic, never shipped).
 //!
 //! ```text
-//! vt-corpus check          [--filter <substring>] [--engine old]
-//! vt-corpus bless --engine old [--deviation <id>] [--filter <substring>]
-//! vt-corpus cross-check --grid-json <dir> [--filter <substring>]
+//! vt-corpus check [--filter <substring>] [--engine new] [--dir <corpus dir>]
 //! vt-corpus grep-deviations [--out <file.md>]
 //! ```
 //!
-//! `check` replays every recording through the engine being replaced and
-//! compares it, cell for cell, against the frozen expectations, applying each
-//! recording's declared `expected-diffs.json`. `cargo test -p oneterm-tools`
-//! runs the same comparison, so this binary is for reading the diff, not for
-//! the gate.
+//! `check` replays every recording through `oneterm-vt` and compares it, cell
+//! for cell, against the frozen expectations, applying each recording's declared
+//! `expected-diffs.json`. `cargo test -p oneterm-tools` runs the same
+//! comparison, so this binary is for reading the diff, not for the gate.
 //!
-//! `bless` is the only writer, and it is deliberately awkward: the expectations
-//! were blessed by the **old** engine at `US-0072` and frozen, so overwriting
-//! one needs `--deviation <id>` naming a row in the corrections or deviation
-//! tables of `dispatch-and-modes.md` / `grid-and-scrollback.md`. The new engine
-//! never blesses at all — if it did, the gate would prove self-consistency and
-//! nothing else.
+//! **Nothing blesses any more.** The expectations were produced by the vendored
+//! `alacritty` fork at `US-0072`, reviewed once and frozen; `US-0087` deleted
+//! that engine, so `bless` and the upstream `cross-check` went with it. The
+//! engine under test never blessed and never will — if it did, the gate would
+//! prove self-consistency and nothing else (R-58). A correction that must move a
+//! frozen cell is declared in that recording's `expected-diffs.json` with a
+//! deviation id, which is a reviewable diff with a stated reason.
 
 use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::{Context, Result, bail};
-use oneterm_tools::corpus::{self, Engine, KNOWN_DEVIATIONS, Recording, alacritty_ref_dir};
+use anyhow::{Result, bail};
+use oneterm_tools::corpus::{self, Recording, alacritty_ref_dir};
 use oneterm_tools::corpus_grep;
-use oneterm_tools::corpus_replay;
-use oneterm_tools::corpus_upstream;
 
 fn main() -> ExitCode {
     match run() {
@@ -45,8 +41,6 @@ fn main() -> ExitCode {
 struct Args {
     filter: Option<String>,
     engine: Option<String>,
-    deviation: Option<String>,
-    grid_json: Option<PathBuf>,
     out: Option<PathBuf>,
     /// Which corpus directory to read; the vendored alacritty set by default.
     dir: Option<PathBuf>,
@@ -64,9 +58,7 @@ fn run() -> Result<bool> {
         match flag.as_str() {
             "--filter" => args.filter = Some(value()?),
             "--engine" => args.engine = Some(value()?),
-            "--deviation" => args.deviation = Some(value()?),
             "--dir" => args.dir = Some(PathBuf::from(value()?)),
-            "--grid-json" => args.grid_json = Some(PathBuf::from(value()?)),
             "--out" => args.out = Some(PathBuf::from(value()?)),
             "--help" | "-h" => {
                 print_usage();
@@ -78,8 +70,6 @@ fn run() -> Result<bool> {
 
     match command.as_str() {
         "check" | "replay" => check(&args),
-        "bless" => bless(&args),
-        "cross-check" => cross_check(&args),
         "grep-deviations" => grep_deviations(&args),
         "--help" | "-h" | "help" => {
             print_usage();
@@ -91,13 +81,13 @@ fn run() -> Result<bool> {
 
 fn print_usage() {
     println!(
-        "vt-corpus check          [--filter <substring>] [--engine old|new] [--dir <corpus dir>]\n\
-         vt-corpus bless --engine old [--deviation <id> --filter <recording>] [--dir <corpus dir>]\n\
-         vt-corpus cross-check --grid-json <dir> [--filter <substring>]\n\
+        "vt-corpus check [--filter <substring>] [--engine new] [--dir <corpus dir>]\n\
          vt-corpus grep-deviations [--out <file.md>]\n\
          \n\
          --dir defaults to crates/vt/tests/corpus/alacritty-ref; OneTerm's own\n\
-         recordings live next to it under oneterm/."
+         recordings live next to it under oneterm/.\n\
+         --engine accepts only `new`: the engine that blessed the frozen files\n\
+         was deleted at US-0087. The flag is kept so recorded commands still run."
     );
 }
 
@@ -110,20 +100,25 @@ fn recordings(args: &Args) -> Result<Vec<Recording>> {
     Ok(found)
 }
 
-fn engine(args: &Args) -> Result<Engine> {
-    args.engine
-        .as_deref()
-        .unwrap_or("old")
-        .parse::<Engine>()
-        .context("--engine")
+/// There is one engine left, so the flag only has to reject the one that is
+/// gone — with the reason, rather than "unknown value".
+fn check_engine(args: &Args) -> Result<()> {
+    match args.engine.as_deref() {
+        None | Some("new") => Ok(()),
+        Some("old") => bail!(
+            "the old engine was deleted at US-0087; the frozen expectations are what it \
+             left behind"
+        ),
+        Some(other) => bail!("unknown engine {other:?} (only `new` remains)"),
+    }
 }
 
 fn check(args: &Args) -> Result<bool> {
-    let engine = engine(args)?;
+    check_engine(args)?;
     let mut failed = 0;
     let recordings = recordings(args)?;
     for recording in &recordings {
-        let report = corpus::check_recording(recording, engine)?;
+        let report = corpus::check_recording(recording)?;
         if report.passed() {
             let accepted: usize = report.accepted.values().sum();
             let note = if accepted == 0 {
@@ -150,114 +145,11 @@ fn check(args: &Args) -> Result<bool> {
         }
     }
     println!(
-        "\n{} recordings, {} passed, {failed} failed ({engine:?} engine)",
+        "\n{} recordings, {} passed, {failed} failed",
         recordings.len(),
         recordings.len() - failed
     );
     Ok(failed == 0)
-}
-
-fn bless(args: &Args) -> Result<bool> {
-    match engine(args)? {
-        Engine::New => bail!(
-            "the new engine never blesses: the expectations are what it is measured against, \
-             and a self-blessed gate proves only self-consistency (R-58)"
-        ),
-        Engine::Old => {}
-    }
-    if let Some(deviation) = args.deviation.as_deref() {
-        if !KNOWN_DEVIATIONS.contains(&deviation) {
-            bail!(
-                "unknown deviation id {deviation:?}: it must name a row in the corrections or \
-                 deviation tables of dispatch-and-modes.md or grid-and-scrollback.md"
-            );
-        }
-        // A correction changes named recordings, never all of them. Without
-        // this, one `--deviation` would rewrite all 45 expectations at once and
-        // the reviewable diff the flag exists to produce would be the whole
-        // corpus.
-        if args.filter.is_none() {
-            bail!(
-                "--deviation needs --filter <recording>: re-blessing every recording under one \
-                 deviation id is not a reviewable diff"
-            );
-        }
-    }
-
-    let mut written = 0;
-    for recording in recordings(args)? {
-        let grid_path = recording.grid_expect_path();
-        let state_path = recording.state_expect_path();
-        let frozen = grid_path.exists() || state_path.exists();
-        if frozen && args.deviation.is_none() {
-            bail!(
-                "{} is already blessed and frozen; re-blessing needs --deviation <id> so the \
-                 expectation diff is reviewable with a stated reason",
-                recording.name
-            );
-        }
-
-        let (grid, state) = corpus_replay::replay_old(&recording);
-        fs::write(&grid_path, grid.encode())
-            .with_context(|| format!("writing {}", grid_path.display()))?;
-        fs::write(&state_path, state.encode())
-            .with_context(|| format!("writing {}", state_path.display()))?;
-        written += 1;
-        println!(
-            "blessed {} ({} rows, {} state entries)",
-            recording.name,
-            grid.rows.len(),
-            state.entries.len()
-        );
-    }
-    println!("\n{written} recordings blessed by the vendored engine");
-    Ok(true)
-}
-
-fn cross_check(args: &Args) -> Result<bool> {
-    let dir = args
-        .grid_json
-        .as_deref()
-        .context("cross-check needs --grid-json <dir> holding upstream's <name>.json set")?;
-
-    let mut mismatched = 0;
-    let recordings = recordings(args)?;
-    println!("| Recording | Rows | Result |");
-    println!("| --- | ---: | --- |");
-    for recording in &recordings {
-        let (ours, _) = corpus_replay::replay_old(recording);
-        let theirs = corpus_upstream::load_grid_json(dir, &recording.name)?;
-        let differences = corpus::check(
-            &theirs,
-            &ours,
-            &corpus::StateExpect::default(),
-            &corpus::StateExpect::default(),
-            &corpus::ExpectedDiffs::default(),
-        )?;
-        if differences.passed() {
-            println!("| `{}` | {} | match |", recording.name, ours.rows.len());
-        } else {
-            mismatched += 1;
-            let first = differences
-                .undeclared
-                .first()
-                .map(ToString::to_string)
-                .unwrap_or_default();
-            println!(
-                "| `{}` | {} | **{} differences**, first: {} |",
-                recording.name,
-                ours.rows.len(),
-                differences.undeclared.len(),
-                first
-            );
-        }
-    }
-    println!(
-        "\n{} recordings, {} match upstream `grid.json`, {mismatched} differ",
-        recordings.len(),
-        recordings.len() - mismatched
-    );
-    Ok(mismatched == 0)
 }
 
 fn grep_deviations(args: &Args) -> Result<bool> {
@@ -292,7 +184,8 @@ fn grep_deviations(args: &Args) -> Result<bool> {
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent).ok();
             }
-            fs::write(path, &out).with_context(|| format!("writing {}", path.display()))?;
+            fs::write(path, &out)
+                .map_err(|error| anyhow::anyhow!("writing {}: {error}", path.display()))?;
             println!("wrote {}", path.display());
         }
         None => print!("{out}"),

@@ -5,9 +5,9 @@
 //!
 //! | Tier | What | Geometry |
 //! | --- | --- | --- |
-//! | 1 `parser` | the state machine alone, against a no-op `Handler` | 160x45 |
-//! | 2 `grid` | parse plus grid mutation (`Processor::advance` over a `Term`) | 160x45 |
-//! | 3 `render` | tier 2 plus one snapshot build per simulated frame | 160x45 |
+//! | 1 `parser` | the state machine alone, against a no-op `Dispatch` | 160x45 |
+//! | 2 `grid` | parse plus grid mutation (`Terminal::feed`) | 160x45 |
+//! | 3 `render` | tier 2 plus one `render_update` per simulated frame | 160x45 |
 //! | 4 `resize` | resize latency at three scrollback depths | its own, deliberately |
 //! | 5 `rss` | heap held after filling scrollback with four content kinds | 160x45 |
 //!
@@ -29,10 +29,9 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use alacritty_terminal::event::VoidListener;
-use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::term::{Config, Term, TermDamage};
-use alacritty_terminal::vte::ansi::{Handler, Processor, StdSyncHandler};
+use oneterm_vt::parser::{Dispatch, OscParams, Params, Parser, StringTerm};
+use oneterm_vt::render::RenderState;
+use oneterm_vt::{Config, EventBatch, ResizePolicy, Size, Terminal};
 
 /// Benchmark grid width, matching `pty-throughput`'s geometry.
 pub const COLS: usize = 160;
@@ -270,50 +269,31 @@ fn osc_9_7(target: usize) -> Vec<u8> {
 // Tiers
 // ---------------------------------------------------------------------------
 
-/// A `Handler` with every callback left at its no-op default body, which is
-/// what isolates the state machine from the grid.
-struct NullHandler;
-impl Handler for NullHandler {}
+/// A `Dispatch` that does nothing with anything, which is what isolates the
+/// state machine from the grid.
+struct NullSink;
 
-#[derive(Debug, Clone, Copy)]
-struct BenchSize;
-
-impl Dimensions for BenchSize {
-    fn total_lines(&self) -> usize {
-        ROWS
-    }
-
-    fn screen_lines(&self) -> usize {
-        ROWS
-    }
-
-    fn columns(&self) -> usize {
-        COLS
-    }
+impl Dispatch for NullSink {
+    fn print_str(&mut self, _text: &str) {}
+    fn execute(&mut self, _byte: u8) {}
+    fn esc(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
+    fn csi(&mut self, _params: &Params, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
+    fn osc(&mut self, _code: Option<u32>, _p: &OscParams<'_>, _t: StringTerm, _truncated: bool) {}
+    fn dcs_hook(&mut self, _params: &Params, _intermediates: &[u8], _byte: u8) {}
+    fn dcs_put(&mut self, _byte: u8) {}
+    fn dcs_unhook(&mut self, _aborted: bool) {}
+    fn apc_start(&mut self, _introducer: u8) {}
+    fn apc_put(&mut self, _byte: u8) {}
+    fn apc_end(&mut self, _aborted: bool) {}
 }
 
-#[derive(Debug, Clone, Copy)]
-struct Size {
-    columns: usize,
-    lines: usize,
-}
+const BENCH_SIZE: Size = Size {
+    rows: ROWS as u16,
+    cols: COLS as u16,
+};
 
-impl Dimensions for Size {
-    fn total_lines(&self) -> usize {
-        self.lines
-    }
-
-    fn screen_lines(&self) -> usize {
-        self.lines
-    }
-
-    fn columns(&self) -> usize {
-        self.columns
-    }
-}
-
-fn new_term() -> Term<VoidListener> {
-    Term::new(Config::default(), &BenchSize, VoidListener)
+fn new_term() -> Terminal {
+    Terminal::new(BENCH_SIZE, Config::default())
 }
 
 /// One throughput measurement.
@@ -345,21 +325,28 @@ fn median_throughput(
 /// Tier 1: the state machine with no grid behind it.
 pub fn run_parser(mib: usize) -> Vec<Throughput> {
     tier(mib, |bytes| {
-        let mut handler = NullHandler;
-        let mut processor = Processor::<StdSyncHandler>::new();
+        let mut sink = NullSink;
+        let mut parser = Parser::new();
         let start = Instant::now();
-        processor.advance(&mut handler, bytes);
+        parser.advance(&mut sink, bytes);
         start.elapsed()
     })
 }
 
 /// Tier 2: parse plus grid mutation — the real cost centre.
+///
+/// The event batch is cleared per chunk, as the pump clears it per drain: the
+/// tier measures the feed, not an arena that grows for the length of the run.
 pub fn run_grid(mib: usize) -> Vec<Throughput> {
     tier(mib, |bytes| {
         let mut term = new_term();
-        let mut processor = Processor::<StdSyncHandler>::new();
+        let mut batch = EventBatch::new();
+        let now = Instant::now();
         let start = Instant::now();
-        processor.advance(&mut term, bytes);
+        for chunk in bytes.chunks(64 * 1024) {
+            term.feed(chunk, &mut batch, now);
+            batch.clear();
+        }
         start.elapsed()
     })
 }
@@ -385,47 +372,44 @@ pub struct FrameCost {
     pub cells: usize,
 }
 
-/// Tier 3: tier 2 plus one snapshot build per simulated frame.
+/// Tier 3: tier 2 plus one `render_update` per simulated frame.
 ///
 /// This is the primary metric: it is the tier that would have caught a
 /// per-frame viewport copy, because it is the only one where a bigger viewport
-/// costs anything.
+/// costs anything. The `RenderState` is reused across frames, exactly as the
+/// view reuses its own — a fresh one every frame would measure a `Full` rebuild
+/// and nothing the damage model does.
 pub fn run_render(frames: usize) -> Vec<FrameCost> {
     FIXTURES
         .iter()
         .map(|fixture| {
             let mut term = new_term();
-            let mut processor = Processor::<StdSyncHandler>::new();
-            // Prime a full frame so the snapshot is never over an empty grid.
-            processor.advance(&mut term, &dense_cells(COLS * ROWS * 20));
+            let mut batch = EventBatch::new();
+            let mut render = RenderState::new();
+            let now = Instant::now();
+            // Prime a full frame so the update is never over an empty grid.
+            term.feed(&dense_cells(COLS * ROWS * 20), &mut batch, now);
+            batch.clear();
+            term.render_update(&mut render, now);
 
             // Bytes arriving between paints, as a PTY would deliver them.
             let stream = (fixture.make)(frames * 512 + 1024);
-            let mut cells = Vec::new();
+            let mut cells = 0;
             let mut spent = Duration::ZERO;
             for frame in 0..frames {
                 let start = frame * 512;
-                processor.advance(&mut term, &stream[start..start + 512]);
+                term.feed(&stream[start..start + 512], &mut batch, now);
+                batch.clear();
 
                 let timed = Instant::now();
-                match term.damage() {
-                    TermDamage::Full => {}
-                    TermDamage::Partial(iterator) => for _ in iterator {},
-                }
-                term.reset_damage();
-                let content = term.renderable_content();
-                cells.clear();
-                cells.extend(
-                    content
-                        .display_iter
-                        .map(|indexed| (indexed.point, indexed.cell.clone())),
-                );
+                term.render_update(&mut render, now);
+                cells = render.rows().iter().map(|row| row.cells.len()).sum();
                 spent += timed.elapsed();
             }
             FrameCost {
                 fixture: fixture.name,
                 us_per_frame: spent.as_secs_f64() * 1_000_000.0 / frames as f64,
-                cells: cells.len(),
+                cells,
             }
         })
         .collect()
@@ -451,32 +435,31 @@ pub fn run_resize(depths: &[usize]) -> Vec<ResizeCost> {
     depths
         .iter()
         .map(|&depth| {
-            let small = Size {
-                columns: 80,
-                lines: 24,
-            };
+            let small = Size { rows: 24, cols: 80 };
             let large = Size {
-                columns: 100,
-                lines: 40,
+                rows: 40,
+                cols: 100,
             };
             let config = Config {
-                scrolling_history: depth,
+                scrollback_limit: depth as u32,
                 ..Default::default()
             };
-            let mut term = Term::new(config, &small, VoidListener);
-            let mut processor = Processor::<StdSyncHandler>::new();
+            let mut term = Terminal::new(small, config);
+            let mut batch = EventBatch::new();
+            let now = Instant::now();
             // Fill the history with content that actually has to reflow.
             let filler = long_lines((depth + 24) * 96);
-            processor.advance(&mut term, &filler);
+            term.feed(&filler, &mut batch, now);
+            batch.clear();
 
             let mut grow = Vec::with_capacity(RUNS);
             let mut shrink = Vec::with_capacity(RUNS);
             for _ in 0..RUNS {
                 let start = Instant::now();
-                term.resize(large);
+                term.resize(large, ResizePolicy::BottomAnchor);
                 grow.push(start.elapsed());
                 let start = Instant::now();
-                term.resize(small);
+                term.resize(small, ResizePolicy::BottomAnchor);
                 shrink.push(start.elapsed());
             }
             grow.sort_unstable();
@@ -561,8 +544,12 @@ pub fn run_memory(rows: usize) -> Vec<MemoryCost> {
             let bytes = repeat_to(rows * row().len(), &row());
             let baseline = live_heap_bytes();
             let mut term = new_term();
-            let mut processor = Processor::<StdSyncHandler>::new();
-            processor.advance(&mut term, &bytes);
+            let mut batch = EventBatch::new();
+            let now = Instant::now();
+            for chunk in bytes.chunks(64 * 1024) {
+                term.feed(chunk, &mut batch, now);
+                batch.clear();
+            }
             let held = live_heap_bytes().saturating_sub(baseline);
             // Keep the terminal alive across the measurement.
             drop(term);

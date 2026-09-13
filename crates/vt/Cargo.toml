@@ -31,9 +31,3 @@ unicode-width.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
-# The differential oracle (IN-0029 R-41), retired with the fork at US-0087. The
-# workspace `[patch]` redirects this at vendor/vte, whose two patches touch only
-# `src/ansi.rs` — so `vte::Parser` + `vte::Perform`, the raw state machine this
-# test compares against, are unmodified upstream. `tests/differential.rs`
-# asserts that precondition rather than trusting it.
-vte.workspace = true
