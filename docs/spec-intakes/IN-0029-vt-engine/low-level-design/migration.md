@@ -434,6 +434,20 @@ Rewritten, not deleted: `crates/terminal/src/test_support.rs` (662 lines) and
 
 Every rewritten or deleted test names, in its packet, what it used to pin and what pins it now.
 
+### Cleanup before decommission (`US-0087`)
+
+Two small code items the `US-0086` verification surfaced. Neither is a defect in shipped behaviour
+and neither justifies its own packet; both are one-liners with a test, and `US-0087` is the last
+packet that touches this code, so they ride with it:
+
+| Item | Rule |
+| --- | --- |
+| **Reverse wrap must stay inside the region** | `BS` at column 0 with `? 45` set currently crosses into the previous row wherever the cursor is. xterm confines it to the **scroll region**, and to the origin-mode region when `DECOM` is set: a one-line guard at the crossing site (`crates/vt/src/grid/screen.rs:662`) plus a test that a `DECSTBM` top row does not let `BS` escape upwards |
+| **LNM answers through `inert_state`** | `? 20` is tracked and inert (deviation D9), so it belongs in the same table as `? 9001` rather than answering from the live bit. The `Mode::PRIVATE`-walk test then covers it like every other mode without a reader |
+
+Recorded parity, **not** a cleanup item: `CUB` (`CSI D`) does not reverse-wrap even with `? 45`
+set. The reference applies the mode to `BS` only, and so does this engine.
+
 ### Deleted tests, and what pins them now
 
 `US-0082` deleted 26 adapter tests that drove the **old** engine. Nothing was lost; each has a named
@@ -528,6 +542,6 @@ no line is transcribed, and commit messages keep that separation explicit.
   empty; the old `model.rs` resize suite and the new `reflow::tests` suite both green in the same
   commit, then the old one deleted (R-44).
 - [ ] `US-0085`: `engine_shim.rs` deleted; `plan_cache` keyed on `(RowId, SeqNo)`.
-- [ ] `US-0087`: `test -d vendor` fails; `grep -rn "alacritty_terminal\|vendor/" Cargo.toml .github/workflows/ci.yml scripts/`
+- [ ] `US-0087`: the two cleanup rows above are done, each with its test; `test -d vendor` fails; `grep -rn "alacritty_terminal\|vendor/" Cargo.toml .github/workflows/ci.yml scripts/`
   empty; `python scripts/third-party-notices.py --check`, `python scripts/check-doc-paths.py` and
   `pwsh scripts/ci-local.ps1` all green.

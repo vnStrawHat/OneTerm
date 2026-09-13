@@ -306,7 +306,7 @@ All 48 items from [`../research/engine-semantics.md`](../research/engine-semanti
 | 10 | `ED 3` resets the viewport offset | grid | `grid::tests::ed3_resets_the_viewport_to_the_bottom` |
 | 11 | `ED 1` skips row 0 when the cursor is on row 1 | grid | `grid::tests::ed1_with_cursor_on_row_one_keeps_row_zero` |
 | 12 | `ScreenCleared` scope and ordering | dispatch | `dispatch::tests::screen_cleared_fires_only_for_ed2_ed3_and_ris`, `dispatch::tests::ed3_with_no_history_still_fires_screen_cleared` |
-| 13 | `? 47` / `? 1047` / `? 1048` ignored | grid (G4, `US-0086`) | `grid::tests::alt_screen_47_and_1047_and_1048` |
+| 13 | `? 47` / `? 1047` / `? 1048` ignored | grid (correction C8, shipped at `US-0076`) | `grid::tests::alt_screen_47_and_1047_and_1048` |
 | 14 | `? 1049 h` clobbers the primary DECSC slot | grid | `grid::tests::entering_alt_screen_overwrites_the_saved_cursor`, `grid::tests::leaving_alt_screen_restores_the_entry_cursor` |
 | 15 | Invalid `DECSTBM` is a no-op; valid always homes | grid | `grid::tests::decstbm_invalid_range_is_a_noop_and_valid_homes_the_cursor` |
 | 16 | Cursor outside the scroll region | grid | `grid::tests::linefeed_below_the_region_does_not_scroll`, `grid::tests::insert_and_delete_lines_outside_the_region_are_noops` |

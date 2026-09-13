@@ -163,7 +163,7 @@ accessor, `Terminal::mouse_reporting() -> Option<MouseProtocol>`, replacing the
 | `LineWrap` (DECAWM) | `? 7` | **set** | real | gates `wrapline()` and the wide-char-at-last-column path |
 | `CursorBlink` | `? 12` | reset | real | |
 | `ShowCursor` (DECTCEM) | `? 25` | **set** | real | clearing it makes the reported cursor shape `Hidden` |
-| `ReverseWrap` | `? 45` | reset | **`Reset`** | additive feature D12, `US-0086`. **DECRQM must never answer `Set` for a mode that does nothing**: until the mode has a reader, `CSI ? 45 $ p` answers `Reset` even after `CSI ? 45 h`, the same rule `? 9001` already follows. Answering `Set` tells a program a capability exists when it does not: while reset (the default) `BS` at column 0 is a no-op, which is trap 1; while set it crosses into a `WRAPPED` row ([`grid-and-scrollback.md`](grid-and-scrollback.md), R-08) |
+| `ReverseWrap` | `? 45` | reset | **real** | **shipped** (`US-0086`). `BS` at column 0 crosses into the previous row's last column when that row is `WRAPPED` and the mode is set (R-08 / trap 1), so DECRQM is real because the mode has a reader. The rule it used to illustrate stands and now has one home, `Mode::inert_state` (below): while reset (the default) `BS` at column 0 is a no-op, which is trap 1; while set it crosses into a `WRAPPED` row ([`grid-and-scrollback.md`](grid-and-scrollback.md), R-08) |
 | `MouseClick` | `? 1000` | reset | real | setting any mouse mode clears the other mouse modes first; unsetting clears only that one (the reference's asymmetry, reproduced) |
 | `MouseDrag` | `? 1002` | reset | real | |
 | `MouseMotion` | `? 1003` | reset | real | |
@@ -191,6 +191,13 @@ has room and the DECRQM answer (`NotSupported`, which means "do not use it") is 
 
 DECRQM state values: `0` not recognised, `1` set, `2` reset, `3` permanently set, `4`
 permanently reset.
+
+**The never-`Set` rule has one home: `Mode::inert_state`.** A mode that is accepted but has no
+reader answers `Reset` to `DECRQM` however many times a program sets it — answering `Set` tells the
+program a capability exists when it does not. The rule used to live in hand-written match arms, one
+per inert mode; it is now a single table on `Mode`, and a test walks **every** `Mode::PRIVATE`
+variant against it, so a mode added without a reader cannot quietly start claiming `Set`. `? 9001`
+is the standing example; `? 45` left the list when it got its reader.
 
 ### Answers
 
@@ -304,7 +311,12 @@ query, `1` the status event, `2`+ reserved for OneTerm. `OSC 9` stays claimed fo
 identically, counted, logged once per session — then dropped. Both are sub-code matches in
 `crates/terminal/src/osc_agent/`; the engine only routes the numbers.
 
-A claimed number whose handler is missing is a debug assertion, never a panic.
+A claimed number whose handler is missing is a debug assertion, never a panic — and so is the
+mirror: **the natively handled set is queryable data (`OscClaims::NATIVE`, `is_native`), and a
+`claim` on one of those numbers is a debug assertion** rather than a silent no-op, because it can
+only mean the embedder believes it will receive something the engine handles itself.
+`claim_large` on a native number is *not* an error: it registers the memory ceiling without a dead
+delivery claim, which is what OSC 52 and OSC 8 need. A duplicate `claim` is idempotent.
 
 ### The hyperlink table needs a ladder, and `US-0076` owns it
 
@@ -390,7 +402,7 @@ touches; the "Affected recordings" columns below carry that measurement
 | D9 | LNM tracked but inert | `US-0076` | matches the reference; recorded so it is not read as an oversight | none |
 | D10 | `modifyOtherKeys` level stored and reportable | `US-0076` (implemented) | the reference parses both and implements neither | none |
 | D11 | *superseded* — now correction C11 (blink and overline stored) | `US-0076` | correctness first (owner ruling, 2026-09-12); the `US-0072` measurement shows no recording sends SGR 5 / 6 / 53 / 55, so it needs no declared diff at all | see the corrections table |
-| D12 | Reverse wrap (`? 45`) implemented | **`US-0086`** | cheap; gated on the mode, default off, so trap 1 is unaffected until then (R-08) | **measured: none** — six recordings only ever reset `? 45`, none sets it |
+| D12 | Reverse wrap (`? 45`) implemented | `US-0086` (**done**) | gated on the mode, default off, so trap 1 is unaffected while it is | **measured: none** — six recordings only ever reset `? 45`, none sets it; re-confirmed by the grep and the gate at `US-0086` |
 | D13 | DA1 answers `CSI ? 62 ; 4 ; 22 c` | `US-0076` | adds the ANSI-colour claim to today's answer | none — DA answers are discarded by the harness |
 | D14 | Title stack capped at 16, oldest dropped | `US-0076` | 4096 is a memory sink no program needs | none |
 | D15 | Kitty stack overflow pops the right stack (trap 42) | `US-0076` | fixes a reference bug | none |
@@ -408,8 +420,8 @@ the soft reset's effects are overwritten before the grid is compared.
 | C6 | `RIS` resets the colour overrides | 39 | `US-0076` | **1 recording**: `grid_reset` (one `RIS`, one `OSC 104`). `OSC 104` already empties indices 0-255, so no `state.expect` palette key is expected to move |
 | C7 | `OSC 4` applies complete pairs and ignores a trailing parameter | 26 | `US-0076` | **none of the 45**. `indexed_256_colors` sends 240 well-formed triples, which the old engine already accepts. Free |
 | C9 | `DECSTR` (`CSI ! p`) implemented | — | `US-0076` | **1 recording, and it is the one certain diff in this table**: `grid_reset` sends `CSI ! p`, which the old engine drops, so implementing it **will** change that recording's grid. `US-0076` writes `grid_reset`'s `expected-diffs.json` naming C9 |
-| C15 | An endpoint scrolled out of a scroll-region top kills the selection, where the reference clamps it | — | `US-0078` | see [`selection.md`](selection.md); **to measure in `US-0076`**, expected free (no recording selects) |
-| C13 / C14 | Reflow corrections — a grow keeps the tail below the cursor; a bold trailing blank is kept | — | `US-0077` | see [`grid-and-scrollback.md`](grid-and-scrollback.md) § "Corrections"; both **to measure in `US-0076`** |
+| C15 | An endpoint scrolled out of a scroll-region top kills the selection, where the reference clamps it | — | `US-0078` | see [`selection.md`](selection.md); **measured free** — re-run at `US-0086`: the grep, the parity gate and `vt-diff` over corpus and fixtures all confirm no recording reaches it (no recording selects) |
+| C13 / C14 | Reflow corrections — a grow keeps the tail below the cursor; a bold trailing blank is kept | — | `US-0077` | see [`grid-and-scrollback.md`](grid-and-scrollback.md) § "Corrections"; both **measured free** — re-run at `US-0086`: the grep, the parity gate and `vt-diff` over corpus and fixtures all confirm no recording reaches it |
 | C11 | Blink and overline attributes stored (SGR 5 / 6 / 53 / 55) | — | `US-0076` | **none of the 45** — no recording sends those parameters (`sgr` exercises 9, 4 and the colour forms; `underline` exercises `4:0`-`4:3`, 21, 24). **Free, with no declared diff**: N-03's reason for deferring it does not survive the measurement |
 
 **Two behaviours that look like bugs and are parity, not corrections.** Both follow the vendored
