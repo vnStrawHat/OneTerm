@@ -11,7 +11,7 @@ use oneterm_settings::ColorOverrides;
 use oneterm_terminal::{DynamicColors, TerminalPalette};
 
 use super::contrast::ensure_minimum_contrast;
-use super::palette::{self, ColorTable, hsla_from_vte, vte_from_rgba};
+use super::palette::{self, ColorTable, hsla_from_rgb, rgb_from_rgba};
 use crate::highlight::load_default_styles;
 use crate::render::frame::Color;
 
@@ -77,9 +77,9 @@ pub(crate) fn build_terminal_theme(theme: &Theme) -> TerminalTheme {
         c.foreground.to_rgb()
     };
     let palette = TerminalPalette {
-        foreground: palette::vte_from_rgba(c.foreground.to_rgb()),
-        background: palette::vte_from_rgba(c.background.to_rgb()),
-        cursor: palette::vte_from_rgba(cursor_rgba),
+        foreground: palette::rgb_from_rgba(c.foreground.to_rgb()),
+        background: palette::rgb_from_rgba(c.background.to_rgb()),
+        cursor: palette::rgb_from_rgba(cursor_rgba),
         ansi: palette::ANSI_16,
         indexed: [None; 256],
     };
@@ -111,14 +111,14 @@ pub(crate) fn apply_color_overrides(theme: TerminalTheme, co: &ColorOverrides) -
     let mut t = theme;
     if let Some(fg) = co.foreground {
         t.fg = fg;
-        t.palette.foreground = vte_from_rgba(fg.to_rgb());
+        t.palette.foreground = rgb_from_rgba(fg.to_rgb());
     }
     if let Some(bg) = co.background {
         t.bg = bg;
-        t.palette.background = vte_from_rgba(bg.to_rgb());
+        t.palette.background = rgb_from_rgba(bg.to_rgb());
     }
     if let Some(c) = co.cursor {
-        t.palette.cursor = vte_from_rgba(c.to_rgb());
+        t.palette.cursor = rgb_from_rgba(c.to_rgb());
     }
     if let Some(sel) = co.selection {
         t.selection = sel;
@@ -145,7 +145,7 @@ pub(crate) fn apply_color_overrides(theme: TerminalTheme, co: &ColorOverrides) -
     }
     for (i, color) in co.ansi.iter().enumerate().take(16) {
         if let Some(color) = color {
-            t.palette.ansi[i] = vte_from_rgba(color.to_rgb());
+            t.palette.ansi[i] = rgb_from_rgba(color.to_rgb());
         }
     }
     t.colors = ColorTable::from_palette(&t.palette);
@@ -160,11 +160,11 @@ pub(crate) fn apply_color_overrides(theme: TerminalTheme, co: &ColorOverrides) -
 pub(crate) fn apply_dynamic_colors(mut theme: TerminalTheme, dc: &DynamicColors) -> TerminalTheme {
     if let Some(fg) = dc.foreground {
         theme.palette.foreground = fg;
-        theme.fg = hsla_from_vte(fg);
+        theme.fg = hsla_from_rgb(fg);
     }
     if let Some(bg) = dc.background {
         theme.palette.background = bg;
-        theme.bg = hsla_from_vte(bg);
+        theme.bg = hsla_from_rgb(bg);
         theme.gutter_bg = theme.bg;
     }
     if let Some(cursor) = dc.cursor {

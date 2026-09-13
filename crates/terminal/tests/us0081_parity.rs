@@ -35,8 +35,9 @@ use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::term::{Config, RenderableCursor, Term, TermDamage, TermMode};
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
-use oneterm_terminal::{Engine, GridSize, IndexedCell, TermDamageInfo, TerminalContent};
-use oneterm_vt::EventBatch;
+use oneterm_terminal::{Engine, GridSize, TerminalContent};
+use oneterm_vt::render::{RenderContent, RenderRow};
+use oneterm_vt::{Attrs, CellWidth, EventBatch, RenderUpdate, RowId};
 
 // ─────────────────────────── old side ───────────────────────────
 
@@ -84,19 +85,410 @@ impl Dimensions for Dims {
     }
 }
 
+// ─────────────────── the shape both sides are compared in ───────────────────
+
+/// The pre-`US-0085` `TerminalContent`: the reference's value types, its dense
+/// signed-line cell vector and its damage shape.
+///
+/// `US-0085` deleted it from `crates/terminal` — the view reads `RenderRow`
+/// directly now — so the differential keeps its own copy. That is what lets this
+/// file go on comparing the two engines field by field with the same
+/// five-difference allow-list after the production conversion is gone. It dies
+/// with the fork at `US-0087`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct Bounds {
+    num_lines: usize,
+    num_cols: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Damage {
+    Full,
+    Partial(Vec<usize>),
+}
+
+#[derive(Debug, Clone)]
+struct IndexedCell {
+    point: Point,
+    cell: Cell,
+}
+
+struct LegacyContent {
+    cells: Vec<IndexedCell>,
+    cursor: RenderableCursor,
+    mode: TermMode,
+    display_offset: usize,
+    total_lines: usize,
+    selection: Option<SelectionRange>,
+    terminal_bounds: Bounds,
+    damage: Damage,
+    graphics: Vec<Arc<alacritty_terminal::term::graphics::GraphicData>>,
+    /// The display row the previous frame put the cursor on, for the damage
+    /// translation.
+    last_cursor_row: Option<usize>,
+}
+
+impl Default for LegacyContent {
+    fn default() -> LegacyContent {
+        LegacyContent {
+            cells: Vec::new(),
+            cursor: RenderableCursor {
+                shape: alacritty_terminal::vte::ansi::CursorShape::Hidden,
+                point: Point::default(),
+            },
+            mode: TermMode::empty(),
+            display_offset: 0,
+            total_lines: 0,
+            selection: None,
+            terminal_bounds: Bounds::default(),
+            damage: Damage::Full,
+            graphics: Vec::new(),
+            last_cursor_row: None,
+        }
+    }
+}
+
+impl LegacyContent {
+    fn cursor_visible(&self) -> bool {
+        self.cursor.shape != alacritty_terminal::vte::ansi::CursorShape::Hidden
+    }
+}
+
+// ─────────────────────────── new side ───────────────────────────
+
+/// The engine's own frame, plus the legacy shape derived from it.
+///
+/// The derivation is the `engine_shim::refill` that `US-0085` deleted, moved
+/// here whole. The **measurement** in `flood_bench` times `TerminalContent`
+/// alone, because the conversion below is exactly the cost the packet removed
+/// from the product.
+#[derive(Default)]
+struct NewSide {
+    native: TerminalContent,
+    legacy: LegacyContent,
+}
+
+impl NewSide {
+    fn refill(&mut self, engine: &mut Engine) {
+        self.native.refill(engine);
+        legacy_from_native(&self.native, &mut self.legacy, engine);
+    }
+}
+
+fn legacy_from_native(native: &TerminalContent, out: &mut LegacyContent, engine: &Engine) {
+    let size = native.size();
+    let (rows, cols) = (usize::from(size.rows), usize::from(size.cols));
+    let display_offset = native.scroll_offset() as usize;
+    let screen_top = native.viewport_top() + u64::from(native.scroll_offset());
+
+    out.cells.clear();
+    for (index, row) in native.rows().iter().enumerate() {
+        let line = Line(index as i32 - display_offset as i32);
+        push_row(native, row, line, cols, &mut out.cells);
+    }
+
+    let cursor = native.render_cursor();
+    out.cursor = RenderableCursor {
+        shape: legacy_cursor_shape(native.cursor_shape()),
+        point: Point::new(
+            Line(row_to_line(cursor.id, screen_top)),
+            Column(usize::from(cursor.col)),
+        ),
+    };
+    out.mode = legacy_mode(native.modes());
+    out.display_offset = display_offset;
+    out.selection = native
+        .selection_range()
+        .map(|range| legacy_selection(range, screen_top));
+    out.terminal_bounds = Bounds {
+        num_lines: rows,
+        num_cols: cols,
+    };
+    let screen = engine.screen();
+    out.total_lines = screen.history_len() as usize + usize::from(screen.rows());
+    out.graphics = native
+        .graphics()
+        .iter()
+        .map(|image| {
+            Arc::new(alacritty_terminal::term::graphics::GraphicData {
+                id: alacritty_terminal::term::graphics::GraphicId(image.id.0),
+                width: image.width,
+                height: image.height,
+                rgba: image.rgba.clone(),
+            })
+        })
+        .collect();
+
+    let cursor_row = cursor
+        .row
+        .map(usize::from)
+        .filter(|_| cursor.visible)
+        .filter(|row| *row < rows);
+    out.damage = legacy_damage(
+        native,
+        out.last_cursor_row,
+        cursor_row,
+        std::mem::replace(&mut out.damage, Damage::Full),
+    );
+    out.last_cursor_row = cursor_row;
+}
+
+fn push_row(
+    native: &TerminalContent,
+    row: &RenderRow,
+    line: Line,
+    cols: usize,
+    out: &mut Vec<IndexedCell>,
+) {
+    let base = out.len();
+    let last = row.cells.len().saturating_sub(1);
+    for run in &row.runs {
+        let (fg, bg, attrs) = legacy_style(&run.style);
+        for col in run.cols.start..run.cols.end {
+            let col = usize::from(col);
+            let Some(cell) = row.cells.get(col) else {
+                continue;
+            };
+            let mut legacy = Cell {
+                fg,
+                bg,
+                flags: attrs | width_flag(cell.width),
+                ..Cell::default()
+            };
+            if row.wrapped && col == last {
+                legacy.flags |= alacritty_terminal::term::cell::Flags::WRAPLINE;
+            }
+            match cell.content {
+                RenderContent::Scalar(scalar) => legacy.c = scalar,
+                RenderContent::Cluster { start, len } => {
+                    let cluster = row.cluster(start, len);
+                    if let Some((first, rest)) = cluster.split_first() {
+                        legacy.c = *first;
+                        for follower in rest {
+                            legacy.push_zerowidth(*follower);
+                        }
+                    }
+                }
+            }
+            if let Some(link) = cell.hyperlink.and_then(|id| native.hyperlink(id)) {
+                legacy.set_hyperlink(Some(alacritty_terminal::term::cell::Hyperlink::new(
+                    Some(link.id.as_ref()),
+                    link.uri.to_string(),
+                )));
+            }
+            if let Some(id) = cell.graphic
+                && let Some((across, down)) = native.graphic_offset(id, row.id, col as u16)
+            {
+                legacy.set_graphic(Some(alacritty_terminal::term::graphics::GraphicCell {
+                    id: alacritty_terminal::term::graphics::GraphicId(id.0),
+                    col: across,
+                    row: down,
+                }));
+            }
+            out.push(IndexedCell {
+                point: Point::new(line, Column(col)),
+                cell: legacy,
+            });
+        }
+    }
+    // The engine emits contiguous runs over the whole row; this only guards the
+    // dense shape the comparison assumes.
+    while out.len() - base < cols {
+        let col = out.len() - base;
+        out.push(IndexedCell {
+            point: Point::new(line, Column(col)),
+            cell: Cell::default(),
+        });
+    }
+}
+
+fn legacy_damage(
+    native: &TerminalContent,
+    last_cursor_row: Option<usize>,
+    cursor_row: Option<usize>,
+    previous: Damage,
+) -> Damage {
+    let mut rows = match previous {
+        Damage::Partial(rows) => rows,
+        Damage::Full => Vec::new(),
+    };
+    rows.clear();
+    match native.update() {
+        RenderUpdate::Full => return Damage::Full,
+        RenderUpdate::Partial { scrolled } if scrolled != 0 => return Damage::Full,
+        RenderUpdate::Partial { .. } | RenderUpdate::Unchanged => {}
+    }
+    rows.extend(native.changed().iter().map(|index| usize::from(*index)));
+    for row in [last_cursor_row, cursor_row].into_iter().flatten() {
+        if !rows.contains(&row) {
+            rows.push(row);
+        }
+    }
+    Damage::Partial(rows)
+}
+
+type LegacyStyle = (
+    alacritty_terminal::vte::ansi::Color,
+    alacritty_terminal::vte::ansi::Color,
+    alacritty_terminal::term::cell::Flags,
+);
+
+fn legacy_style(style: &oneterm_vt::Style) -> LegacyStyle {
+    (
+        legacy_color(style.fg),
+        legacy_color(style.bg),
+        legacy_flags(style.attrs),
+    )
+}
+
+fn width_flag(width: CellWidth) -> alacritty_terminal::term::cell::Flags {
+    use alacritty_terminal::term::cell::Flags;
+    match width {
+        CellWidth::Narrow => Flags::empty(),
+        CellWidth::Wide => Flags::WIDE_CHAR,
+        CellWidth::WideSpacer => Flags::WIDE_CHAR_SPACER,
+        CellWidth::LeadingWideSpacer => Flags::LEADING_WIDE_CHAR_SPACER,
+    }
+}
+
+fn legacy_flags(attrs: Attrs) -> alacritty_terminal::term::cell::Flags {
+    use alacritty_terminal::term::cell::Flags;
+    let pairs = [
+        (Attrs::BOLD, Flags::BOLD),
+        (Attrs::DIM, Flags::DIM),
+        (Attrs::ITALIC, Flags::ITALIC),
+        (Attrs::INVERSE, Flags::INVERSE),
+        (Attrs::HIDDEN, Flags::HIDDEN),
+        (Attrs::STRIKEOUT, Flags::STRIKEOUT),
+        (Attrs::UNDERLINE, Flags::UNDERLINE),
+        (Attrs::DOUBLE_UNDERLINE, Flags::DOUBLE_UNDERLINE),
+        (Attrs::UNDERCURL, Flags::UNDERCURL),
+        (Attrs::DOTTED_UNDERLINE, Flags::DOTTED_UNDERLINE),
+        (Attrs::DASHED_UNDERLINE, Flags::DASHED_UNDERLINE),
+    ];
+    let mut flags = Flags::empty();
+    for (engine, legacy) in pairs {
+        if attrs.contains(engine) {
+            flags |= legacy;
+        }
+    }
+    flags
+}
+
+fn legacy_color(color: oneterm_vt::Color) -> alacritty_terminal::vte::ansi::Color {
+    use alacritty_terminal::vte::ansi::{Color as LegacyColor, NamedColor as L, Rgb as LegacyRgb};
+    use oneterm_vt::NamedColor as E;
+    match color {
+        oneterm_vt::Color::Rgb(rgb) => LegacyColor::Spec(LegacyRgb {
+            r: rgb.r,
+            g: rgb.g,
+            b: rgb.b,
+        }),
+        oneterm_vt::Color::Palette(index) => LegacyColor::Indexed(index),
+        oneterm_vt::Color::Named(named) => LegacyColor::Named(match named {
+            E::Black => L::Black,
+            E::Red => L::Red,
+            E::Green => L::Green,
+            E::Yellow => L::Yellow,
+            E::Blue => L::Blue,
+            E::Magenta => L::Magenta,
+            E::Cyan => L::Cyan,
+            E::White => L::White,
+            E::BrightBlack => L::BrightBlack,
+            E::BrightRed => L::BrightRed,
+            E::BrightGreen => L::BrightGreen,
+            E::BrightYellow => L::BrightYellow,
+            E::BrightBlue => L::BrightBlue,
+            E::BrightMagenta => L::BrightMagenta,
+            E::BrightCyan => L::BrightCyan,
+            E::BrightWhite => L::BrightWhite,
+            E::Foreground => L::Foreground,
+            E::Background => L::Background,
+            E::Cursor => L::Cursor,
+            E::BrightForeground => L::BrightForeground,
+            E::DimForeground => L::DimForeground,
+            E::DimBlack => L::DimBlack,
+            E::DimRed => L::DimRed,
+            E::DimGreen => L::DimGreen,
+            E::DimYellow => L::DimYellow,
+            E::DimBlue => L::DimBlue,
+            E::DimMagenta => L::DimMagenta,
+            E::DimCyan => L::DimCyan,
+            E::DimWhite => L::DimWhite,
+        }),
+    }
+}
+
+fn legacy_cursor_shape(
+    shape: oneterm_vt::CursorShape,
+) -> alacritty_terminal::vte::ansi::CursorShape {
+    use alacritty_terminal::vte::ansi::CursorShape as L;
+    use oneterm_vt::CursorShape as E;
+    match shape {
+        E::Block => L::Block,
+        E::Beam => L::Beam,
+        E::Underline => L::Underline,
+        E::HollowBlock => L::HollowBlock,
+        E::Hidden => L::Hidden,
+    }
+}
+
+fn legacy_mode(modes: oneterm_vt::ModeSnapshot) -> TermMode {
+    use oneterm_vt::render::{MouseEncoding, MouseReporting};
+    let mut mode = TermMode::empty();
+    mode.set(TermMode::SHOW_CURSOR, modes.show_cursor);
+    mode.set(TermMode::APP_CURSOR, modes.app_cursor);
+    mode.set(TermMode::APP_KEYPAD, modes.app_keypad);
+    mode.set(TermMode::BRACKETED_PASTE, modes.bracketed_paste);
+    mode.set(TermMode::INSERT, modes.insert);
+    mode.set(TermMode::ALT_SCREEN, modes.alt_screen);
+    mode.set(TermMode::ALTERNATE_SCROLL, modes.alternate_scroll);
+    if let Some(mouse) = modes.mouse {
+        mode |= match mouse.reporting {
+            MouseReporting::Normal => TermMode::MOUSE_REPORT_CLICK,
+            MouseReporting::ButtonEvent => TermMode::MOUSE_DRAG,
+            MouseReporting::AnyEvent => TermMode::MOUSE_MOTION,
+        };
+        match mouse.encoding {
+            MouseEncoding::Default => {}
+            MouseEncoding::Utf8 => mode |= TermMode::UTF8_MOUSE,
+            MouseEncoding::Sgr => mode |= TermMode::SGR_MOUSE,
+        }
+    }
+    mode
+}
+
+fn row_to_line(row: RowId, screen_top: RowId) -> i32 {
+    (row.0 as i64 - screen_top.0 as i64).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
+fn legacy_selection(range: oneterm_vt::SelectionRange, screen_top: RowId) -> SelectionRange {
+    SelectionRange {
+        start: Point::new(
+            Line(row_to_line(range.start.row, screen_top)),
+            Column(usize::from(range.start.col)),
+        ),
+        end: Point::new(
+            Line(row_to_line(range.end.row, screen_top)),
+            Column(usize::from(range.end.col)),
+        ),
+        is_block: range.is_block,
+    }
+}
+
 /// `TerminalContent::refill`, copied verbatim from `3538047:crates/terminal/src/content.rs`.
-fn old_refill<EP: EventListener>(content: &mut TerminalContent, term: &mut Term<EP>) {
+fn old_refill<EP: EventListener>(content: &mut LegacyContent, term: &mut Term<EP>) {
     let num_lines = term.screen_lines();
-    let mut dirty = match std::mem::replace(&mut content.damage, TermDamageInfo::Full) {
-        TermDamageInfo::Partial(previous) => previous,
-        TermDamageInfo::Full => Vec::new(),
+    let mut dirty = match std::mem::replace(&mut content.damage, Damage::Full) {
+        Damage::Partial(previous) => previous,
+        Damage::Full => Vec::new(),
     };
     dirty.clear();
     content.damage = match term.damage() {
-        TermDamage::Full => TermDamageInfo::Full,
+        TermDamage::Full => Damage::Full,
         TermDamage::Partial(iter) => {
             dirty.extend(iter.map(|ldb| ldb.line).filter(|&dl| dl < num_lines));
-            TermDamageInfo::Partial(dirty)
+            Damage::Partial(dirty)
         }
     };
     term.reset_damage();
@@ -119,7 +511,7 @@ fn old_refill<EP: EventListener>(content: &mut TerminalContent, term: &mut Term<
     content.total_lines = term.total_lines();
     content.selection = selection;
     content.graphics = term.take_graphics();
-    content.terminal_bounds = oneterm_terminal::content::TerminalBounds {
+    content.terminal_bounds = Bounds {
         num_lines,
         num_cols: term.columns(),
     };
@@ -201,8 +593,8 @@ fn note(out: &mut BTreeMap<String, (usize, String)>, kind: &str, detail: String)
 }
 
 fn diff_content(
-    old: &TerminalContent,
-    new: &TerminalContent,
+    old: &LegacyContent,
+    new: &LegacyContent,
     out: &mut BTreeMap<String, (usize, String)>,
 ) {
     diff_cells(&old.cells, &new.cells, out);
@@ -275,9 +667,9 @@ fn diff_content(
             ),
         );
     }
-    let damage_kind = |d: &TermDamageInfo| match d {
-        TermDamageInfo::Full => "Full".to_string(),
-        TermDamageInfo::Partial(rows) => {
+    let damage_kind = |d: &Damage| match d {
+        Damage::Full => "Full".to_string(),
+        Damage::Partial(rows) => {
             let mut rows = rows.clone();
             rows.sort_unstable();
             rows.dedup();
@@ -319,7 +711,7 @@ fn diff_content(
 /// whose rendered cells changed since the previous snapshot, plus the cursor
 /// row when the cursor moved? Under-damage leaves stale pixels on screen.
 fn check_damage_sound(
-    content: &TerminalContent,
+    content: &LegacyContent,
     previous: &mut Option<(Vec<String>, usize, Point, bool)>,
     out: &mut BTreeMap<String, (usize, String)>,
 ) {
@@ -353,7 +745,7 @@ fn check_damage_sound(
                 }
             }
         }
-        if let TermDamageInfo::Partial(damaged) = &content.damage {
+        if let Damage::Partial(damaged) = &content.damage {
             let missing: Vec<usize> = changed
                 .iter()
                 .copied()
@@ -505,8 +897,8 @@ fn run_case(case: &Case) -> BTreeMap<String, (usize, String)> {
         case.history,
     );
 
-    let mut old_content = TerminalContent::default();
-    let mut new_content = TerminalContent::default();
+    let mut old_content = LegacyContent::default();
+    let mut new_side = NewSide::default();
     // Previous new-side snapshot, for the damage soundness check.
     let mut previous: Option<(Vec<String>, usize, Point, bool)> = None;
 
@@ -522,9 +914,9 @@ fn run_case(case: &Case) -> BTreeMap<String, (usize, String)> {
         engine.feed(part, &mut batch, Instant::now());
 
         old_refill(&mut old_content, &mut old_term);
-        new_content.refill(&mut engine);
-        diff_content(&old_content, &new_content, &mut diffs);
-        check_damage_sound(&new_content, &mut previous, &mut diffs);
+        new_side.refill(&mut engine);
+        diff_content(&old_content, &new_side.legacy, &mut diffs);
+        check_damage_sound(&new_side.legacy, &mut previous, &mut diffs);
     }
 
     diffs
@@ -618,14 +1010,15 @@ fn damage_soundness_detail() {
             },
             case.history,
         );
-        let mut content = TerminalContent::default();
+        let mut side = NewSide::default();
         let mut prev: Option<Vec<String>> = None;
         let mut prev_offset = 0usize;
         let mut reported = 0;
         for (index, part) in case.bytes.chunks(4096).enumerate() {
             let mut batch = EventBatch::new();
             engine.feed(part, &mut batch, Instant::now());
-            content.refill(&mut engine);
+            side.refill(&mut engine);
+            let content = &side.legacy;
             let cols = content.terminal_bounds.num_cols.max(1);
             let rows: Vec<String> = content
                 .cells
@@ -639,7 +1032,7 @@ fn damage_soundness_detail() {
                 .collect();
             if let Some(previous) = &prev
                 && prev_offset == content.display_offset
-                && let TermDamageInfo::Partial(damaged) = &content.damage
+                && let Damage::Partial(damaged) = &content.damage
             {
                 for row in 0..rows.len() {
                     if rows[row] != previous[row] && !damaged.contains(&row) && reported < 3 {
@@ -687,12 +1080,8 @@ fn selection_and_scroll_parity() {
     let text = b"line one\r\nline two\r\nline three\r\nline four\r\nline five\r\nline six\r\nline seven\r\n";
     feed_both(&mut old_term, &mut processor, &mut engine, text);
 
-    let mut old_content = TerminalContent::default();
-    let mut new_content = TerminalContent::default();
-    let model = |engine: &mut Engine| -> () {
-        let _ = engine;
-    };
-    model(&mut engine);
+    let mut old_content = LegacyContent::default();
+    let mut new_side = NewSide::default();
 
     // 1. scrollback offsets must agree.
     for offset in [0usize, 1, 2, 3] {
@@ -713,9 +1102,9 @@ fn selection_and_scroll_parity() {
         engine.grid_mut().sync_anchors();
 
         old_refill(&mut old_content, &mut old_term);
-        new_content.refill(&mut engine);
+        new_side.refill(&mut engine);
         let mut diffs = BTreeMap::new();
-        diff_content(&old_content, &new_content, &mut diffs);
+        diff_content(&old_content, &new_side.legacy, &mut diffs);
         // Damage differs by construction here (we scrolled the old grid by a
         // different route), so only compare the content-bearing fields.
         diffs.remove("damage");
@@ -747,15 +1136,15 @@ fn selection_and_scroll_parity() {
     engine.selection_update(pos, side);
 
     old_refill(&mut old_content, &mut old_term);
-    new_content.refill(&mut engine);
+    new_side.refill(&mut engine);
     println!("old selection: {:?}", old_content.selection);
-    println!("new selection: {:?}", new_content.selection);
+    println!("new selection: {:?}", new_side.legacy.selection);
     let old_text = old_term.selection_to_string();
     let new_text = engine.selection_text();
     println!("old text: {old_text:?}");
     println!("new text: {new_text:?}");
     assert_eq!(
-        old_content.selection, new_content.selection,
+        old_content.selection, new_side.legacy.selection,
         "selection range"
     );
     assert_eq!(old_text, new_text, "selection text");
@@ -839,11 +1228,11 @@ fn hyperlink_ids_and_sixel_history() {
     let mut engine = Engine::new(GridSize { cols: 10, lines: 2 }, 100);
     let mut batch = EventBatch::new();
     engine.feed(bytes, &mut batch, Instant::now());
-    let mut old_content = TerminalContent::default();
-    let mut new_content = TerminalContent::default();
+    let mut old_content = LegacyContent::default();
+    let mut new_side = NewSide::default();
     old_refill(&mut old_content, &mut old_term);
-    new_content.refill(&mut engine);
-    let ids = |content: &TerminalContent| -> Vec<String> {
+    new_side.refill(&mut engine);
+    let ids = |content: &LegacyContent| -> Vec<String> {
         content
             .cells
             .iter()
@@ -857,7 +1246,7 @@ fn hyperlink_ids_and_sixel_history() {
             .collect()
     };
     println!("old link ids: {:?}", ids(&old_content));
-    println!("new link ids: {:?}", ids(&new_content));
+    println!("new link ids: {:?}", ids(&new_side.legacy));
 
     // (b) where does the Sixel recording's history length diverge?
     let case = corpus_cases()
@@ -958,7 +1347,7 @@ fn flood_bench() {
         listener,
     );
     let mut processor = Processor::<StdSyncHandler>::new();
-    let mut old_content = TerminalContent::default();
+    let mut old_content = LegacyContent::default();
     let (mut old_feed_us, mut old_render_us) = (Vec::new(), Vec::new());
     let start = Instant::now();
     for part in bytes.chunks(4096) {
@@ -1059,20 +1448,27 @@ fn lock_stress_three_threads() {
                     let mut guard = shared.lock();
                     content.refill(&mut guard);
                 }
-                // Integrity of the snapshot itself: dense, in bounds, ordered.
-                let bounds = content.terminal_bounds;
+                // Integrity of the frame itself: the full viewport, every row
+                // the width the state reports, every changed index in range.
+                let size = content.size();
                 assert_eq!(
-                    content.cells.len(),
-                    bounds.num_lines * bounds.num_cols,
-                    "snapshot must stay dense"
+                    content.rows().len(),
+                    usize::from(size.rows),
+                    "rows() must always hold the full viewport"
                 );
-                if let TermDamageInfo::Partial(rows) = &content.damage {
-                    assert!(
-                        rows.iter().all(|row| *row < bounds.num_lines),
-                        "damage row out of bounds: {rows:?} for {bounds:?}"
-                    );
-                }
-                assert!(content.display_offset <= content.total_lines);
+                assert!(
+                    content
+                        .rows()
+                        .iter()
+                        .all(|row| row.cells.len() == usize::from(size.cols)),
+                    "a copied row must be the viewport width"
+                );
+                assert!(
+                    content.changed().iter().all(|index| *index < size.rows),
+                    "changed row out of bounds: {:?} for {size:?}",
+                    content.changed()
+                );
+                assert!(content.scroll_offset() as usize <= content.total_lines());
                 frames += 1;
                 std::thread::yield_now();
             }

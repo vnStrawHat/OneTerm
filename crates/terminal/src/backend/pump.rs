@@ -138,7 +138,6 @@ impl<T: PtyTransport> TerminalPump<T> {
             .filter_map(|query| {
                 let color = term
                     .color(query.key)
-                    .map(crate::engine_shim::legacy_rgb)
                     .or_else(|| default_color_for_key(query.key, &defaults));
                 color.map(|color| (query.format)(color))
             })

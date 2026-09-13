@@ -13,6 +13,9 @@ use std::time::{Duration, Instant};
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FrameStats {
     pub snapshot_calls: u32,
+    /// Frames the engine reported as `Unchanged`: no key scan, no URL scan,
+    /// no layout, no plan rebuilt.
+    pub frames_unchanged: u32,
     pub rows_total: u32,
     pub rows_candidate: u32,
     pub rows_planned: u32,

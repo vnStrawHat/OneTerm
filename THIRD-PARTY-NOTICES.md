@@ -106,7 +106,6 @@ package in the Cargo registry / git checkout.
 | `aes-gcm` | 0.11.0-rc.4 | Apache-2.0 OR MIT | crates.io |
 | `ahash` | 0.8.12 | MIT OR Apache-2.0 | crates.io |
 | `aho-corasick` | 1.1.4 | Unlicense OR MIT | crates.io |
-| `alacritty_terminal` | 0.26.1-dev | Apache-2.0 | vendored fork (vendor/, see section 2) |
 | `aligned` | 0.4.3 | MIT OR Apache-2.0 | crates.io |
 | `aligned-vec` | 0.6.4 | MIT | crates.io |
 | `allocator-api2` | 0.2.21 | MIT OR Apache-2.0 | crates.io |
@@ -247,7 +246,6 @@ package in the Cargo registry / git checkout.
 | `ctor` | 1.0.13 | Apache-2.0 OR MIT | crates.io |
 | `ctr` | 0.10.1 | MIT OR Apache-2.0 | crates.io |
 | `ctutils` | 0.4.2 | Apache-2.0 OR MIT | crates.io |
-| `cursor-icon` | 1.2.0 | MIT OR Apache-2.0 OR Zlib | crates.io |
 | `curve25519-dalek` | 5.0.0-rc.0 | BSD-3-Clause | crates.io |
 | `curve25519-dalek-derive` | 0.1.1 | MIT/Apache-2.0 | crates.io |
 | `dashmap` | 6.2.1 | MIT | crates.io |
@@ -409,7 +407,6 @@ package in the Cargo registry / git checkout.
 | `hkdf` | 0.13.0 | MIT OR Apache-2.0 | crates.io |
 | `hmac` | 0.12.1 | MIT OR Apache-2.0 | crates.io |
 | `hmac` | 0.13.0 | MIT OR Apache-2.0 | crates.io |
-| `home` | 0.5.12 | MIT OR Apache-2.0 | crates.io |
 | `html5ever` | 0.27.0 | MIT OR Apache-2.0 | crates.io |
 | `http` | 1.4.2 | MIT OR Apache-2.0 | crates.io |
 | `http-body` | 1.0.1 | MIT | crates.io |
@@ -502,7 +499,6 @@ package in the Cargo registry / git checkout.
 | `minimal-lexical` | 0.2.1 | MIT/Apache-2.0 | crates.io |
 | `miniz_oxide` | 0.8.9 | MIT OR Zlib OR Apache-2.0 | crates.io |
 | `mio` | 1.2.1 | MIT | crates.io |
-| `miow` | 0.6.1 | MIT OR Apache-2.0 | crates.io |
 | `ml-kem` | 0.3.2 | Apache-2.0 OR MIT | crates.io |
 | `module-lattice` | 0.2.3 | Apache-2.0 OR MIT | crates.io |
 | `moxcms` | 0.8.1 | BSD-3-Clause OR Apache-2.0 | crates.io |
@@ -689,7 +685,6 @@ package in the Cargo registry / git checkout.
 | `rustc-hash` | 2.1.2 | Apache-2.0 OR MIT | crates.io |
 | `rustc_version` | 0.4.1 | MIT OR Apache-2.0 | crates.io |
 | `rustix` | 1.1.4 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | crates.io |
-| `rustix-openpty` | 0.2.0 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | crates.io |
 | `rustls` | 0.23.40 | Apache-2.0 OR ISC OR MIT | crates.io |
 | `rustls-native-certs` | 0.8.4 | Apache-2.0 OR ISC OR MIT | crates.io |
 | `rustls-pki-types` | 1.14.1 | MIT OR Apache-2.0 | crates.io |
@@ -736,7 +731,6 @@ package in the Cargo registry / git checkout.
 | `shellexpand` | 3.1.2 | MIT/Apache-2.0 | crates.io |
 | `shlex` | 1.3.0 | MIT OR Apache-2.0 | crates.io |
 | `shlex` | 2.0.1 | MIT OR Apache-2.0 | crates.io |
-| `signal-hook` | 0.4.4 | MIT OR Apache-2.0 | crates.io |
 | `signal-hook-registry` | 1.4.8 | MIT OR Apache-2.0 | crates.io |
 | `signature` | 3.0.0 | Apache-2.0 OR MIT | crates.io |
 | `simd-adler32` | 0.3.9 | MIT | crates.io |
@@ -866,7 +860,6 @@ package in the Cargo registry / git checkout.
 | `version_check` | 0.9.5 | MIT/Apache-2.0 | crates.io |
 | `vswhom` | 0.1.0 | MIT | crates.io |
 | `vswhom-sys` | 0.1.3 | MIT | crates.io |
-| `vte` | 0.15.0 | Apache-2.0 OR MIT | vendored fork (vendor/, see section 2) |
 | `wait-timeout` | 0.2.1 | MIT/Apache-2.0 | crates.io |
 | `waker-fn` | 1.2.0 | Apache-2.0 OR MIT | crates.io |
 | `walkdir` | 2.5.0 | Unlicense/MIT | crates.io |
@@ -1002,4 +995,4 @@ package in the Cargo registry / git checkout.
 | `zvariant_derive` | 5.12.0 | MIT | crates.io |
 | `zvariant_utils` | 3.4.0 | MIT | crates.io |
 
-_910 third-party packages._
+_903 third-party packages._

@@ -13,9 +13,8 @@ use gpui::{
     MouseUpEvent, Pixels, Point, ScrollDelta, ScrollWheelEvent,
 };
 
-use alacritty_terminal::selection::SelectionType;
 use oneterm_terminal::url_policy::{TargetDecision, validate_target_with_display};
-use oneterm_terminal::{LineRangeCells, MouseModifiers, TerminalMouseButton, TerminalSession};
+use oneterm_terminal::{MouseModifiers, SelectionKind, TerminalMouseButton, TerminalSession};
 
 use crate::render::metrics::GridGeometry;
 use crate::url::{DetectedUrl, URL_WINDOW, UrlHover, detect_url_at};
@@ -295,16 +294,16 @@ impl MouseState {
     }
 }
 
-/// Selection type for a click: Alt is always a block selection, otherwise the
+/// Selection kind for a click: Alt is always a block selection, otherwise the
 /// click count picks character / word / line.
-pub(crate) fn selection_type(click_count: usize, alt: bool) -> SelectionType {
+pub(crate) fn selection_type(click_count: usize, alt: bool) -> SelectionKind {
     if alt {
-        return SelectionType::Block;
+        return SelectionKind::Block;
     }
     match click_count {
-        2 => SelectionType::Semantic,
-        n if n >= 3 => SelectionType::Lines,
-        _ => SelectionType::Simple,
+        2 => SelectionKind::Semantic,
+        n if n >= 3 => SelectionKind::Lines,
+        _ => SelectionKind::Simple,
     }
 }
 
@@ -383,10 +382,10 @@ pub(crate) fn detect_url_at_cell(
     cx: &App,
 ) -> Option<DetectedUrl> {
     let start = row.saturating_sub(URL_WINDOW);
-    let LineRangeCells { cells, num_cols } = session
+    let window = session
         .read(cx)
         .query_line_range_cells(start, URL_WINDOW * 2 + 1);
-    detect_url_at(&cells, num_cols, row - start, col).map(|mut url| {
+    detect_url_at(&window, row - start, col).map(|mut url| {
         url.row += start;
         url
     })

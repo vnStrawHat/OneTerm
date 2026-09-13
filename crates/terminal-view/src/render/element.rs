@@ -334,21 +334,27 @@ impl GridPainter<'_> {
         let m = self.geometry.metrics;
         for row in rows {
             let frame_row = self.frame.row(row);
+            let row_id = frame_row.id();
             for (col, cell) in frame_row.cells().enumerate() {
-                let Some(graphic) = cell.graphic else {
+                let Some(id) = cell.graphic else {
                     continue;
                 };
-                if seen.contains(&graphic.id) {
+                if seen.contains(&id.0) {
                     continue;
                 }
-                seen.push(graphic.id);
-                let Some(stored) = self.graphics.get(graphic.id) else {
+                seen.push(id.0);
+                let Some(stored) = self.graphics.get(id.0) else {
+                    continue;
+                };
+                // The cell names only *which* image (R-21); where it sits
+                // inside that image's own cell grid comes from the placement.
+                let Some((across, down)) = self.frame.graphic_offset(id, row_id, col as u16) else {
                     continue;
                 };
                 let anchor = self.geometry.cell_origin(row, col);
                 let origin = point(
-                    anchor.x - m.cell_width * f32::from(graphic.col),
-                    anchor.y - m.line_height * f32::from(graphic.row),
+                    anchor.x - m.cell_width * f32::from(across),
+                    anchor.y - m.line_height * f32::from(down),
                 );
                 let (vw, vh) = oneterm_terminal::SIXEL_VIRTUAL_CELL;
                 let image_bounds = Bounds {

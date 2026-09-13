@@ -215,7 +215,7 @@ fn middle_click_pastes_unless_the_program_owns_the_mouse(cx: &mut TestAppContext
     );
 
     // The program turned mouse reporting on: the click is its.
-    probe.set_mode(alacritty_terminal::term::TermMode::MOUSE_REPORT_CLICK);
+    probe.set_mouse_reporting(Some(oneterm_terminal::MouseReporting::Normal));
     let outcome = cx.update(|cx| state.down(&event, &session, &inputs(), cx));
     assert_eq!(outcome, MouseOutcome::Handled);
     assert!(matches!(
@@ -239,7 +239,7 @@ fn middle_click_pastes_unless_the_program_owns_the_mouse(cx: &mut TestAppContext
     assert_eq!(outcome, MouseOutcome::Paste);
 
     // Setting off: the middle button is forwarded like any other button.
-    probe.set_mode(alacritty_terminal::term::TermMode::SHOW_CURSOR);
+    probe.set_mouse_reporting(None);
     let off = MouseInputs {
         middle_click_paste: false,
         ..inputs()

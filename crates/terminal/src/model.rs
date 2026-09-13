@@ -2,27 +2,20 @@
 //! and SSH backends.
 //!
 //! Both `LocalSession` and `SshSession` wrap one [`SharedTerminal`] — the
-//! `oneterm-vt` engine plus its legacy render state behind a fair mutex — and
+//! `oneterm-vt` engine behind a fair mutex — and
 //! implement the same terminal-model operations (snapshot, query, scroll,
 //! selection, search, mouse encoding, etc.). This module provides a single
 //! `TerminalModel` that both backends delegate to, so the logic lives in one
 //! place.
 //!
-//! Inside the module every position is a `RowId`. Four published values still
-//! carry the reference's signed grid line — `TerminalQueryState::cursor_line`,
-//! `TerminalInfo::{cursor_line,last_content_line}` and `IndexedCell::point` —
-//! because `crates/terminal-view` reads them; each is converted once, at the
-//! point it is published, and `US-0085` deletes the conversion with the fields.
+//! Every position is a `RowId` or a display row; since `US-0085` nothing here
+//! publishes the reference's signed grid line.
 
-use alacritty_terminal::index::Line;
-use alacritty_terminal::selection::SelectionType;
-use alacritty_terminal::term::TermMode;
-use oneterm_vt::{SelectionKind, Size, Terminal};
+use oneterm_vt::intern::ExtrasId;
+use oneterm_vt::render::MouseReporting;
+use oneterm_vt::{ModeSnapshot, SelectionKind, Size, Terminal};
 
-use crate::content::TerminalContent;
-use crate::engine_shim::{
-    Placements, legacy_cursor_shape, legacy_mode, legacy_rgb, push_grid_row, row_to_line,
-};
+use crate::content::{LineRangeCells, SnapshotCell, TerminalContent};
 use crate::handle::SharedTerminal;
 use crate::mouse_encode::{
     MouseModifiers, TerminalMouseButton, encode_mouse_move, encode_mouse_press,
@@ -30,9 +23,7 @@ use crate::mouse_encode::{
 };
 use crate::osc_color::DynamicColors;
 use crate::search::{GridText, search_grid_text};
-use crate::{
-    IndexedCell, LineRangeCells, SearchMatch, SearchOptions, TerminalInfo, TerminalQueryState,
-};
+use crate::{SearchMatch, SearchOptions, TerminalInfo, TerminalQueryState};
 
 /// How a grow-resize treats the primary grid's scrollback (DEC-0008).
 ///
@@ -62,6 +53,18 @@ impl From<ResizePolicy> for oneterm_vt::ResizePolicy {
         match policy {
             ResizePolicy::Default => oneterm_vt::ResizePolicy::BottomAnchor,
             ResizePolicy::KeepViewportTop => oneterm_vt::ResizePolicy::KeepViewportTop,
+        }
+    }
+}
+
+/// The other direction, so `impl_pty_terminal_session!` accepts the engine's
+/// own name from a backend that has moved to it (`US-0083`, `US-0084`) without
+/// that backend having to depend on `oneterm-vt`.
+impl From<oneterm_vt::ResizePolicy> for ResizePolicy {
+    fn from(policy: oneterm_vt::ResizePolicy) -> ResizePolicy {
+        match policy {
+            oneterm_vt::ResizePolicy::BottomAnchor => ResizePolicy::Default,
+            oneterm_vt::ResizePolicy::KeepViewportTop => ResizePolicy::KeepViewportTop,
         }
     }
 }
@@ -115,16 +118,16 @@ impl TerminalModel {
         out.refill(&mut term);
     }
 
-    /// Compact query state — mode, cursor, viewport size (O(1)).
+    /// Compact query state — modes, cursor, viewport size (O(1)).
     pub fn query_state(&self, alive: bool) -> TerminalQueryState {
         let term = self.term.lock();
         let screen = term.screen();
         let cursor = screen.cursor();
         TerminalQueryState {
-            mode: legacy_mode(term.mode_snapshot()),
-            cursor_line: row_to_line(cursor.pos.row, screen.screen_top()),
+            modes: term.mode_snapshot(),
+            cursor_row: cursor.pos.row.distance(screen.screen_top()) as usize,
             cursor_col: usize::from(cursor.pos.col),
-            cursor_shape: legacy_cursor_shape(term.cursor_style().shape),
+            cursor_shape: term.cursor_style().shape,
             display_offset: screen.scroll_offset() as usize,
             rows: usize::from(screen.rows()),
             cols: usize::from(screen.cols()),
@@ -139,30 +142,7 @@ impl TerminalModel {
     /// of going through a render state, so a URL hover or a completion lookup
     /// never consumes the renderer's damage.
     pub fn query_line_range_cells(&self, start_line: usize, count: usize) -> LineRangeCells {
-        let term = self.term.lock();
-        let screen = term.screen();
-        let num_cols = usize::from(screen.cols());
-        let num_lines = usize::from(screen.rows());
-        if start_line >= num_lines || count == 0 {
-            return LineRangeCells {
-                cells: Vec::new(),
-                num_cols,
-            };
-        }
-        let actual_count = count.min(num_lines - start_line);
-        let offset = screen.scroll_offset() as usize;
-        let top = screen.visible_top();
-        let placements = Placements::new(&term);
-        let mut cells: Vec<IndexedCell> = Vec::with_capacity(actual_count * num_cols);
-        for index in 0..actual_count {
-            let display_line = start_line + index;
-            let row = screen.row(top + display_line as u64);
-            // Published in the reference's signed frame, converted here and
-            // nowhere else in this function.
-            let line = Line(display_line as i32 - offset as i32);
-            push_grid_row(row, term.interner(), &placements, line, &mut cells);
-        }
-        LineRangeCells { cells, num_cols }
+        line_range_cells(&self.term.lock(), start_line, count)
     }
 
     /// Dynamic OSC colors (foreground/background/cursor + 256 indexed).
@@ -172,12 +152,12 @@ impl TerminalModel {
         let term = self.term.lock();
         let mut indexed = [None; 256];
         for (index, slot) in indexed.iter_mut().enumerate() {
-            *slot = term.color(ColorKey::Palette(index as u8)).map(legacy_rgb);
+            *slot = term.color(ColorKey::Palette(index as u8));
         }
         DynamicColors {
-            foreground: term.color(ColorKey::Foreground).map(legacy_rgb),
-            background: term.color(ColorKey::Background).map(legacy_rgb),
-            cursor: term.color(ColorKey::Cursor).map(legacy_rgb),
+            foreground: term.color(ColorKey::Foreground),
+            background: term.color(ColorKey::Background),
+            cursor: term.color(ColorKey::Cursor),
             indexed,
         }
     }
@@ -191,8 +171,9 @@ impl TerminalModel {
         TerminalInfo {
             total_lines,
             absolute_line_count: absolute_line_count.max(total_lines),
-            cursor_line: row_to_line(screen.cursor().pos.row, screen.screen_top()),
-            last_content_line: crate::last_content_line(&term),
+            screen_top: screen.screen_top(),
+            cursor_row: screen.cursor().pos.row.distance(screen.screen_top()) as usize,
+            last_content_row: crate::last_content_row(&term),
             num_lines: usize::from(screen.rows()),
             num_cols: usize::from(screen.cols()),
             display_offset: screen.scroll_offset() as usize,
@@ -200,9 +181,9 @@ impl TerminalModel {
         }
     }
 
-    /// Current terminal mode flags.
-    pub fn mode(&self) -> TermMode {
-        legacy_mode(self.term.lock().mode_snapshot())
+    /// The modes the UI reads (mouse, alt-screen, bracketed paste…).
+    pub fn modes(&self) -> ModeSnapshot {
+        self.term.lock().mode_snapshot()
     }
 
     /// Whether alt-screen mode is active (vim/less/etc.).
@@ -268,10 +249,10 @@ impl TerminalModel {
     // ── Selection ──────────────────────────────────────────────────
 
     /// Start a new selection at (row, col).
-    pub fn start_selection(&self, row: f32, col: f32, sel: SelectionType) {
+    pub fn start_selection(&self, row: f32, col: f32, kind: SelectionKind) {
         let mut term = self.term.lock();
         let (pos, side) = term.hit_test(row, col);
-        term.selection_start(pos, side, selection_kind(sel));
+        term.selection_start(pos, side, kind);
     }
 
     /// Update the existing selection end point (while dragging).
@@ -327,15 +308,15 @@ impl TerminalModel {
         row: f32,
         col: f32,
         button: TerminalMouseButton,
-        sel: SelectionType,
+        kind: SelectionKind,
         mods: MouseModifiers,
     ) -> Option<Vec<u8>> {
-        let mode = self.mode();
-        if mode.intersects(TermMode::MOUSE_MODE) {
-            let bytes = encode_mouse_press(row as usize, col as usize, button, mode, mods);
+        let modes = self.modes();
+        if modes.mouse.is_some() {
+            let bytes = encode_mouse_press(row as usize, col as usize, button, modes, mods);
             Some(bytes)
         } else if matches!(button, TerminalMouseButton::Left) {
-            self.start_selection(row, col, sel);
+            self.start_selection(row, col, kind);
             None
         } else {
             None
@@ -344,9 +325,9 @@ impl TerminalModel {
 
     /// Returns encoded mouse-move bytes if in mouse motion/drag mode.
     pub fn mouse_move(&self, row: f32, col: f32, mods: MouseModifiers) -> Option<Vec<u8>> {
-        let mode = self.mode();
-        if mode.contains(TermMode::MOUSE_MOTION) || mode.contains(TermMode::MOUSE_DRAG) {
-            let bytes = encode_mouse_move(row as usize, col as usize, None, mode, mods);
+        let modes = self.modes();
+        if reports_motion(modes) {
+            let bytes = encode_mouse_move(row as usize, col as usize, None, modes, mods);
             Some(bytes)
         } else {
             None
@@ -356,13 +337,13 @@ impl TerminalModel {
     /// Returns encoded mouse-drag bytes if in mouse mode, otherwise updates
     /// the selection.
     pub fn mouse_drag(&self, row: f32, col: f32, mods: MouseModifiers) -> Option<Vec<u8>> {
-        let mode = self.mode();
-        if mode.intersects(TermMode::MOUSE_MODE) {
+        let modes = self.modes();
+        if modes.mouse.is_some() {
             let bytes = encode_mouse_move(
                 row as usize,
                 col as usize,
                 Some(TerminalMouseButton::Left),
-                mode,
+                modes,
                 mods,
             );
             Some(bytes)
@@ -380,9 +361,9 @@ impl TerminalModel {
         button: TerminalMouseButton,
         mods: MouseModifiers,
     ) -> Option<Vec<u8>> {
-        let mode = self.mode();
-        if mode.intersects(TermMode::MOUSE_MODE) {
-            let bytes = encode_mouse_release(row as usize, col as usize, button, mode, mods);
+        let modes = self.modes();
+        if modes.mouse.is_some() {
+            let bytes = encode_mouse_release(row as usize, col as usize, button, modes, mods);
             Some(bytes)
         } else {
             None
@@ -400,7 +381,6 @@ impl TerminalModel {
         // and the scroll applied without releasing it in between.
         let mut term = self.term.lock();
         let modes = term.mode_snapshot();
-        let mode = legacy_mode(modes);
         let display_offset = term.screen().scroll_offset();
 
         if display_offset > 0 {
@@ -408,8 +388,8 @@ impl TerminalModel {
                 scroll_viewport(&mut term, -scroll_delta);
             }
             None
-        } else if mode.intersects(TermMode::MOUSE_MODE) {
-            let bytes = encode_wheel_event(row as usize, col as usize, delta_y, mode, mods);
+        } else if modes.mouse.is_some() {
+            let bytes = encode_wheel_event(row as usize, col as usize, delta_y, modes, mods);
             Some(bytes)
         } else if modes.alt_screen {
             let key = match (delta_y > 0.0, modes.app_cursor) {
@@ -440,13 +420,61 @@ fn scroll_viewport(term: &mut Terminal, delta: i32) {
     term.grid_mut().sync_anchors();
 }
 
-fn selection_kind(sel: SelectionType) -> SelectionKind {
-    match sel {
-        SelectionType::Simple => SelectionKind::Simple,
-        SelectionType::Block => SelectionKind::Block,
-        SelectionType::Semantic => SelectionKind::Semantic,
-        SelectionType::Lines => SelectionKind::Lines,
+/// Read cells for a range of display lines, straight off the screen.
+///
+/// Damage-free: it reads the rows by `RowId` instead of going through a render
+/// state, so a URL hover or a completion lookup never consumes the renderer's
+/// damage — and never copies a viewport to answer a pointer move.
+pub(crate) fn line_range_cells(term: &Terminal, start_line: usize, count: usize) -> LineRangeCells {
+    let screen = term.screen();
+    let num_cols = usize::from(screen.cols());
+    let num_lines = usize::from(screen.rows());
+    if start_line >= num_lines || count == 0 {
+        return LineRangeCells {
+            num_cols,
+            ..LineRangeCells::default()
+        };
     }
+    let actual_count = count.min(num_lines - start_line);
+    let top = screen.visible_top();
+    let interner = term.interner();
+    let mut cells: Vec<SnapshotCell> = Vec::with_capacity(actual_count * num_cols);
+    let mut links: Vec<(oneterm_vt::HyperlinkId, String)> = Vec::new();
+    for index in 0..actual_count {
+        let row = screen.row(top + (start_line + index) as u64);
+        let wrapped = row.wrapped();
+        let last = row.cells().len().saturating_sub(1);
+        for (col, cell) in row.cells().iter().enumerate() {
+            let hyperlink = (cell.extras_id() != ExtrasId::NONE)
+                .then(|| interner.resolve_extras(cell.extras_id()).hyperlink)
+                .flatten();
+            if let Some(id) = hyperlink
+                && !links.iter().any(|(known, _)| *known == id)
+                && let Some(link) = interner.hyperlinks.resolve(id)
+            {
+                links.push((id, link.uri.to_string()));
+            }
+            cells.push(SnapshotCell {
+                ch: cell.text_char(&interner.graphemes),
+                spacer: cell.width().is_spacer(),
+                wrapline: wrapped && col == last,
+                hyperlink,
+            });
+        }
+    }
+    LineRangeCells {
+        cells,
+        num_cols,
+        links,
+    }
+}
+
+/// `? 1002` and `? 1003` report motion; `? 1000` reports presses only.
+fn reports_motion(modes: ModeSnapshot) -> bool {
+    matches!(
+        modes.mouse.map(|mouse| mouse.reporting),
+        Some(MouseReporting::ButtonEvent | MouseReporting::AnyEvent)
+    )
 }
 
 #[cfg(test)]

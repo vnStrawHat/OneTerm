@@ -210,6 +210,84 @@ impl<'a> Harness<'a> {
     }
 }
 
+/// Frame time and the plan counters under sustained output, off a real GPUI
+/// draw in a headless window.
+///
+/// `US-0085`'s stand-in for "frame time under `yes` and a 10 MB `type`" from the
+/// running app's diagnostics log: the desktop this packet was implemented on was
+/// disconnected, so no window could be presented or captured. Everything the
+/// packet changed is in here — the frame is built from the render state and the
+/// plans are keyed on `(RowId, SeqNo)` — and the counters printed are the same
+/// `FrameStats` the app's log line prints. Run it explicitly:
+///
+/// ```text
+/// cargo test -p oneterm-terminal-view --profile fast-dev frame_time_under_output
+///     -- --ignored --nocapture
+/// ```
+#[gpui::test]
+#[ignore = "measurement, run explicitly"]
+fn frame_time_under_output(cx: &mut TestAppContext) {
+    let mut h = Harness::open(cx, 30, 120, "", inputs());
+    h.first_frame();
+
+    let line =
+        "the quick brown fox jumps over the lazy dog 0123456789 \u{1b}[33mcolour\u{1b}[0m tail\r\n";
+    let mut frames = Vec::new();
+    let mut planned = 0u64;
+    let mut total = 0u64;
+    let mut unchanged = 0u32;
+    // A megabyte of scrolling output in 4 KiB chunks, one drawn frame per chunk.
+    let mut payload = String::new();
+    while payload.len() < 1024 * 1024 {
+        payload.push_str(line);
+    }
+    let bytes = payload.into_bytes();
+    for chunk in bytes.chunks(4096) {
+        h.probe.feed(chunk);
+        let stats = h.draw();
+        frames.push(u64::from(stats.prepaint_us + stats.paint_us));
+        planned += u64::from(stats.rows_planned);
+        total += u64::from(stats.rows_total);
+    }
+    let flood: Vec<u64> = frames.clone();
+
+    // Then sixty idle frames: nothing changed, so the tri-state should cost
+    // nothing at all.
+    frames.clear();
+    for _ in 0..60 {
+        let stats = h.draw();
+        frames.push(u64::from(stats.prepaint_us + stats.paint_us));
+        unchanged += stats.frames_unchanged;
+        assert_eq!(stats.rows_planned, 0, "an idle frame plans nothing");
+        assert_eq!(stats.rows_candidate, 0, "and considers nothing");
+    }
+    assert_eq!(unchanged, 60, "every idle frame was reported Unchanged");
+
+    let report = |name: &str, mut samples: Vec<u64>| {
+        samples.sort_unstable();
+        let n = samples.len();
+        let sum: u64 = samples.iter().sum();
+        println!(
+            "  {name}: n={n} total={} ms avg={} us p50={} us p95={} us max={} us",
+            sum / 1000,
+            sum / n as u64,
+            samples[n / 2],
+            samples[(n * 95) / 100],
+            samples[n - 1],
+        );
+    };
+    println!(
+        "frame time, 1 MiB of scrolling output in 4 KiB chunks, debug_assertions={}",
+        cfg!(debug_assertions)
+    );
+    report("flood (prepaint+paint)", flood.clone());
+    report("idle  (prepaint+paint)", frames);
+    println!(
+        "  rows planned over {} flood frames: {planned} of {total} viewport rows",
+        flood.len(),
+    );
+}
+
 #[gpui::test]
 fn dirty_frame_plans_rows_and_shapes(cx: &mut TestAppContext) {
     let mut h = Harness::open(
@@ -378,10 +456,22 @@ fn cursor_layer_and_gutter_paint(cx: &mut TestAppContext) {
     assert!(geometry.origin.x > geometry.bounds.origin.x + geometry.gutter_width - px(1.0));
 }
 
+/// `frame.rs` is the only file under `render/` allowed to name the engine's own
+/// vocabulary; everything above it speaks the view's `Cell` / `Color` /
+/// `CellFlags`. The needle changed at `US-0085` with the crate the view reads.
 #[test]
-fn render_has_single_alacritty_file() {
+fn render_has_single_engine_file() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/render");
-    let needle = concat!("alacritty", "_terminal");
+    // The engine's *cell* vocabulary. `RenderUpdate` is deliberately not in the
+    // list: the tri-state is the contract the plan cache is written against.
+    // Spelled in halves so this file does not match its own list.
+    let needles = [
+        concat!("Render", "Row"),
+        concat!("Render", "Cell"),
+        concat!("Render", "Content"),
+        concat!("Named", "Color"),
+        concat!("Cell", "Width"),
+    ];
     let mut offenders = Vec::new();
     let entries = std::fs::read_dir(&dir).expect("render dir");
     for entry in entries {
@@ -394,41 +484,29 @@ fn render_has_single_alacritty_file() {
             continue;
         }
         let source = std::fs::read_to_string(&path).expect("read source");
-        if source.contains(needle) {
+        if needles.iter().any(|needle| source.contains(needle)) {
             offenders.push(name.to_string());
         }
     }
     assert!(
         offenders.is_empty(),
-        "only frame.rs may name the engine crate: {offenders:?}"
+        "only frame.rs may name the engine's cell vocabulary: {offenders:?}"
     );
 }
 
-/// A 2 x 2 cell Sixel image: uploaded once, painted once per frame from its
-/// first visible cell, gone when its cells lose their references.
+/// A real Sixel image: uploaded once, painted once per frame from the first
+/// cell that still references it, gone when the screen is cleared.
+///
+/// `US-0085` fed it as a real DCS sequence instead of fabricating a
+/// `GraphicCell` per covered cell: the engine owns the decode, the placement and
+/// the release signal, and the painter derives the per-cell offset from the
+/// placement (R-21).
 #[gpui::test]
 fn sixel_image_paints_once_per_frame(cx: &mut TestAppContext) {
-    use oneterm_terminal::{GraphicCell, GraphicData, GraphicId};
     let mut h = Harness::open(cx, 6, 12, "", inputs_without_cursor());
     let _ = h.first_frame();
-    let id = GraphicId(7);
-    h.probe.push_graphic(std::sync::Arc::new(GraphicData {
-        id,
-        width: 16,
-        height: 16,
-        rgba: vec![255; 16 * 16 * 4],
-    }));
-    for (line, col, row, column) in [(1, 2, 0, 0), (1, 3, 0, 1), (2, 2, 1, 0), (2, 3, 1, 1)] {
-        h.probe.set_graphic(
-            line,
-            col,
-            GraphicCell {
-                id,
-                col: column,
-                row,
-            },
-        );
-    }
+    // Two bands of two columns: 2 x 12 pixels, one virtual 10 x 20 cell.
+    h.probe.push_sixel(None);
     let stats = h.draw();
     assert_eq!((stats.images_uploaded, stats.images), (1, 1), "{stats:?}");
     let stats = h.draw();
@@ -437,6 +515,7 @@ fn sixel_image_paints_once_per_frame(cx: &mut TestAppContext) {
         (0, 1),
         "known id is not re-uploaded: {stats:?}"
     );
+    // `cls`: the cells lose their reference, the engine releases the image.
     h.probe.clear_graphics();
     let stats = h.draw();
     assert_eq!(stats.images, 0, "{stats:?}");

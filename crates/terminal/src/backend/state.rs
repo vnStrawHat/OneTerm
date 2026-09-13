@@ -17,8 +17,7 @@ use crate::osc_agent::AgentSeqWatermarks;
 use crate::session::NetStats;
 
 /// Theme defaults used to answer OSC 10/11/12/4 queries for colours the
-/// program never set. Written by the UI through `set_default_colors`, which
-/// converts from the legacy `Rgb` the view still passes (`US-0085`).
+/// program never set. Written by the UI through `set_default_colors`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DefaultColors {
     /// Default foreground (OSC 10).
@@ -32,21 +31,13 @@ pub struct DefaultColors {
 }
 
 impl DefaultColors {
-    /// Build from the legacy colours `TerminalRender::set_default_colors` still
-    /// takes. The conversion disappears with that signature at `US-0085`.
-    pub fn from_legacy(
-        foreground: alacritty_terminal::vte::ansi::Rgb,
-        background: alacritty_terminal::vte::ansi::Rgb,
-        cursor: alacritty_terminal::vte::ansi::Rgb,
-        ansi: [alacritty_terminal::vte::ansi::Rgb; 16],
-    ) -> DefaultColors {
-        use crate::engine_shim::engine_rgb;
-
+    /// The four colours `TerminalRender::set_default_colors` carries.
+    pub fn new(foreground: Rgb, background: Rgb, cursor: Rgb, ansi: [Rgb; 16]) -> DefaultColors {
         DefaultColors {
-            foreground: Some(engine_rgb(foreground)),
-            background: Some(engine_rgb(background)),
-            cursor: Some(engine_rgb(cursor)),
-            ansi: Some(ansi.map(engine_rgb)),
+            foreground: Some(foreground),
+            background: Some(background),
+            cursor: Some(cursor),
+            ansi: Some(ansi),
         }
     }
 }

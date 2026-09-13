@@ -826,8 +826,8 @@ mod tests {
 
         assert_eq!(after.rows, 30);
         assert_eq!(
-            after.cursor_line,
-            before.cursor_line + 6,
+            after.cursor_row,
+            before.cursor_row + 6,
             "the cursor did not follow the rows pulled out of history"
         );
         assert_eq!(

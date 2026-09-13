@@ -387,6 +387,25 @@ impl Terminal {
         &self.state.interner
     }
 
+    /// The interner, mutably. **Not a supported entry point.**
+    ///
+    /// Additive at `US-0085`, and the only hook an embedder's **test** has for
+    /// writing a styled cell straight into the grid (`grid_mut`) instead of
+    /// driving an SGR stream: the style and extras ids a `Cell` carries are
+    /// meaningless without the table that minted them.
+    ///
+    /// It has exactly one caller in the workspace —
+    /// `oneterm_terminal::test_support::GridFixture::write`, itself behind that
+    /// crate's `test-support` feature — and nothing on the engine's own paths
+    /// reads it. `#[doc(hidden)]` because handing a consumer mutable access to
+    /// the intern tables is not something this crate offers: an id minted
+    /// outside the engine's own write paths has no `assert_integrity` behind it.
+    /// A future caller that is not a test wants a real API instead.
+    #[doc(hidden)]
+    pub fn interner_mut(&mut self) -> &mut Interner {
+        &mut self.state.interner
+    }
+
     pub fn config(&self) -> &Config {
         &self.state.config
     }

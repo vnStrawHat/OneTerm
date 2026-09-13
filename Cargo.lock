@@ -5460,7 +5460,6 @@ dependencies = [
 name = "oneterm-local-shell"
 version = "0.5.2"
 dependencies = [
- "alacritty_terminal",
  "async-channel",
  "log",
  "oneterm-core",
@@ -5551,7 +5550,6 @@ dependencies = [
 name = "oneterm-ssh"
 version = "0.5.2"
 dependencies = [
- "alacritty_terminal",
  "async-channel",
  "futures",
  "log",
@@ -5599,7 +5597,6 @@ dependencies = [
 name = "oneterm-terminal-view"
 version = "0.5.2"
 dependencies = [
- "alacritty_terminal",
  "async-channel",
  "chrono",
  "gpui-base",

@@ -5,7 +5,7 @@ mod tests {
     use oneterm_terminal::{TerminalPalette, resolve_color};
 
     use super::super::contrast::{contrast_ratio, ensure_minimum_contrast};
-    use super::super::palette::{ColorTable, hsla_from_vte, rgba_from_vte, vte_from_rgba};
+    use super::super::palette::{ColorTable, hsla_from_rgb, rgb_from_rgba, rgba_from_rgb};
     use super::super::terminal_theme::DEFAULT_MIN_CONTRAST;
     use super::super::*;
     use crate::render::frame::Color as FrameColor;
@@ -22,9 +22,9 @@ mod tests {
     /// A palette with known fg/bg/cursor over the default ANSI 16.
     fn pal() -> TerminalPalette {
         let mut palette = build_terminal_theme(&gpui_component::Theme::default()).palette;
-        palette.foreground = vte_from_rgba(rgb(200, 200, 200));
-        palette.background = vte_from_rgba(rgb(20, 20, 20));
-        palette.cursor = vte_from_rgba(rgb(255, 255, 0));
+        palette.foreground = rgb_from_rgba(rgb(200, 200, 200));
+        palette.background = rgb_from_rgba(rgb(20, 20, 20));
+        palette.cursor = rgb_from_rgba(rgb(255, 255, 0));
         palette.indexed = [None; 256];
         palette
     }
@@ -49,9 +49,9 @@ mod tests {
 
     #[test]
     fn rgb_roundtrip() {
-        let c = vte_from_rgba(rgb(12, 34, 56));
-        let rgba = rgba_from_vte(c);
-        assert_eq!(vte_from_rgba(rgba), c);
+        let c = rgb_from_rgba(rgb(12, 34, 56));
+        let rgba = rgba_from_rgb(c);
+        assert_eq!(rgb_from_rgba(rgba), c);
         assert!((rgba.g - 34.0 / 255.0).abs() < 0.001);
     }
 
@@ -59,7 +59,7 @@ mod tests {
     fn resolve_named_red_to_hsla() {
         let t = themed_with(pal());
         // The table lookup must equal the engine's palette resolution.
-        let h = hsla_from_vte(resolve_color(&FrameColor::Ansi(1).to_vte(), &t.palette));
+        let h = hsla_from_rgb(resolve_color(&FrameColor::Ansi(1).to_engine(), &t.palette));
         assert_eq!(t.color(FrameColor::Ansi(1)), h);
         let rgba = h.to_rgb();
         assert!((rgba.r - 0xCC as f32 / 255.0).abs() < 0.01);
@@ -71,8 +71,8 @@ mod tests {
         let h = t.color(FrameColor::Rgb(1, 2, 3));
         assert_eq!(
             h,
-            hsla_from_vte(resolve_color(
-                &FrameColor::Rgb(1, 2, 3).to_vte(),
+            hsla_from_rgb(resolve_color(
+                &FrameColor::Rgb(1, 2, 3).to_engine(),
                 &t.palette
             ))
         );
@@ -158,7 +158,7 @@ mod tests {
         let t = apply_color_overrides(plain.clone(), &co);
         assert_eq!(
             t.color(FrameColor::Ansi(0)),
-            hsla_from_vte(t.palette.ansi[0])
+            hsla_from_rgb(t.palette.ansi[0])
         );
         assert_ne!(
             t.color(FrameColor::Ansi(0)),

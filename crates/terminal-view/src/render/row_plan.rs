@@ -79,7 +79,6 @@ pub(crate) struct DecorationSpan {
 #[derive(Default)]
 pub(crate) struct RowPlan {
     /// Hash of the row this plan was built from; `0` = never built.
-    pub hash: u64,
     pub bg: Vec<BgSpan>,
     pub text: Vec<TextRunPlan>,
     pub colors: Vec<ColorSpan>,
@@ -90,18 +89,12 @@ pub(crate) struct RowPlan {
 
 impl RowPlan {
     fn clear(&mut self) {
-        self.hash = 0;
         self.bg.clear();
         self.text.clear();
         self.colors.clear();
         self.cell_starts.clear();
         self.shapes.clear();
         self.decorations.clear();
-    }
-
-    /// Mark the plan stale without dropping its buffers.
-    pub(crate) fn invalidate(&mut self) {
-        self.hash = 0;
     }
 
     pub(crate) fn colors_of(&self, run: &TextRunPlan) -> &[ColorSpan] {
@@ -518,7 +511,6 @@ pub(crate) fn build_row_plan(
         builder.append_to_run(&cell, col16, cols, &style);
     }
     builder.flush_run();
-    plan.hash = row.hash();
 }
 
 #[cfg(test)]
@@ -640,7 +632,6 @@ mod tests {
         assert_eq!(plan.bg.len(), 2, "{:?}", plan.bg);
         assert_eq!((plan.bg[0].col, plan.bg[0].cols), (1, 3));
         assert_eq!((plan.bg[1].col, plan.bg[1].cols), (5, 1));
-        assert_ne!(plan.hash, 0);
     }
 
     #[gpui::test]

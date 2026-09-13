@@ -88,7 +88,7 @@ impl GutterTimestamps {
         // time". The content mark follows the last line **with content**, not
         // just the cursor: TUIs and progress bars that use cursor-up have
         // content BELOW the cursor.
-        let content_row = info.cursor_line.max(info.last_content_line).max(0) as usize;
+        let content_row = info.cursor_row.max(info.last_content_row);
         let content_high = absolute
             .saturating_sub(info.num_lines)
             .saturating_add(content_row + 1)
@@ -136,13 +136,14 @@ mod tests {
 
     /// A 10-row viewport with `history` scrolled-off lines and content down to
     /// `content_row` (0-based screen row).
-    fn info(history: usize, content_row: i32, clear_epoch: usize) -> TerminalInfo {
+    fn info(history: usize, content_row: usize, clear_epoch: usize) -> TerminalInfo {
         let num_lines = 10;
         TerminalInfo {
             total_lines: history + num_lines,
             absolute_line_count: history + num_lines,
-            cursor_line: content_row,
-            last_content_line: content_row,
+            screen_top: oneterm_terminal::RowId(0),
+            cursor_row: content_row,
+            last_content_row: content_row,
             num_lines,
             num_cols: 80,
             display_offset: 0,
