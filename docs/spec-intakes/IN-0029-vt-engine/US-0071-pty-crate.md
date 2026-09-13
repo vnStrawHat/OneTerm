@@ -12,7 +12,7 @@ Created: 2026-09-12
 - [ ] Planned
 - [ ] In progress
 - [x] Implemented
-- [ ] Changed
+- [x] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
@@ -322,6 +322,84 @@ and the bundled `OpenConsole.exe` while OneTerm stayed up.
   shape of hazard the fork has. The drop-order invariant is commented and covered by
   `drop_order_drains_the_output_pipe`, but a consumer that stops reading entirely while output
   continues is not covered by a test.
+
+## Rework (2026-09-13): level-triggered wake
+
+**Why.** `US-0083`'s independent verification (§ 4.3 of `evidence/US-0083-verify.md`, which lands
+with that packet's own merge and is not on this branch yet) found the Windows ring
+registers `PollMode::Level` — `Ring::wake` even keeps the interest registered for it — but
+delivers its wake **edge-once**: `push` posts a completion packet only when `caller_waiting` is
+set, and `read` set that flag only when it found the ring EMPTY. A caller that honours the
+documented contract — read once per readiness, return to the poller — is never woken again and
+parks in `poll.wait` forever with output in hand and no diagnostic. `US-0083` hit it for real
+(three real-shell tests failed) and worked around it caller-side by never leaving its read loop,
+which left the obligation invisible in the type and waiting for the next consumer. This is
+acceptance rework of this packet, not a new `BUG`: the ring was never accepted with edge delivery
+behind a `PollMode::Level` registration.
+
+**What changed.** `crates/pty/src/windows/pipe.rs`, both directions, no new state and no new
+field:
+
+- `PipeReader::read` — one exit path instead of two. After the drain it sets
+  `caller_waiting = (bytes left == 0)` and, when bytes **are** left, posts the packet itself.
+  That closes two holes at once: the caller's buffer filling (the stall above), and a read that
+  drains the ring *exactly*, which previously returned without arming the push-side wake at all.
+- `PipeWriter::write` — the mirror: `caller_waiting = (room left == 0)`, and a post when room
+  remains. Nothing registers writable interest today (`Ring::wake` gates on
+  `registered.event.writable`), so this is contract symmetry rather than an observed defect — but
+  it is the same three lines and the same trap for the next consumer.
+- The module header now states the level-triggered rule instead of leaving it to the caller.
+
+Cost: one extra IOCP packet per read that leaves bytes behind. `left > 0` implies the caller's
+buffer filled, which on ConPTY means a read of ≥ 1 MiB — the `US-0083` verification measured 82 B
+at the median and 9.6 KB at the worst, so the shipped local shell posts none of them.
+
+**Unix already honoured the contract and is unchanged.** `crates/pty/src/unix.rs:232-265`
+registers the pty master fd itself (`poller.add_with_mode(&self.master, interest, mode)`), so
+`PollMode::Level` is epoll/kqueue's own level trigger and bytes left in the kernel buffer
+re-deliver on the next `wait`. Only the Windows ring *emulated* readiness, and the emulation was
+edge-triggered. The two platforms now make the same promise, which is what makes the
+`EventedReadWrite` contract true for a caller written against either.
+
+**Tests** — `crates/pty/src/windows/pipe_tests.rs`, both of which **fail against the pre-rework
+code** (verified by reverting the two bodies with the tests in place):
+
+- `a_reader_left_with_bytes_buffered_is_woken_again` — registers `Level`, drains to arm, lets the
+  child write 32 bytes, waits for the wake, then reads **8 of them** and polls again: the exact
+  "stop reading with bytes buffered" shape. It then drains the remaining 24 exactly and proves a
+  further write still wakes. Pre-rework: `a level-triggered reader was not woken with bytes still
+  buffered`.
+- `a_writer_with_room_left_is_woken_again` — writes 5 bytes into a 4 KiB ring and polls.
+  Pre-rework: `a level-triggered writer was not woken with room still left`.
+
+Both use `std::io::pipe()` for the handle pair, so no child process and no ConPTY is involved;
+they run in 2 s worst case and are deterministic (the helper waits for the pipe thread to hand
+the ring the whole chunk before the partial read).
+
+**Contract text for [`low-level-design/pty.md`](low-level-design/pty.md)**, recorded here for the
+design owner to apply — this packet does not edit the LLD:
+
+> **Readiness is level-triggered on both platforms.** A source registered with `PollMode::Level`
+> re-announces itself for as long as it stays usable: a caller may read once per readiness, or
+> stop reading with bytes still buffered (to yield the engine, or because its buffer filled), and
+> its next `poll.wait` still returns. On Unix that is epoll/kqueue on the pty master fd. On
+> Windows the ring emulates it: `push`/`pull` post a packet when the caller is waiting on a ring
+> that has become usable, and `PipeReader::read` / `PipeWriter::write` re-post when they leave the
+> ring usable and arm the thread-side wake when they leave it unusable. Draining to empty before
+> returning to the poller is therefore an optimisation — one fewer completion packet — never a
+> correctness requirement.
+
+**Verification.** `pwsh scripts/ci-local.ps1` green, exit 0, all ten steps. Raw totals over its
+two test steps: **62 sections, 1921 passed / 0 failed / 13 ignored** — `cargo test --workspace`
+58 / 1552 / 0 / 10 and `vt-paranoid` 4 / 369 / 0 / 3. The base (`feat/vt-engine` @ `26ca48d`) was
+1919 passed, so the delta is exactly the two new tests and nothing else in the workspace moved.
+`cargo test -p oneterm-local-shell` — which drives real `cmd.exe` sessions through this reader —
+three consecutive runs: `30 passed; 0 failed; 0 ignored` each time, no flake.
+
+**Limits.** `crates/local-shell` is untouched: its loop still drains to empty, which is now an
+optimisation rather than the thing holding the session up, and rewriting it belongs to `US-0083`.
+No GUI walk — the change is a transport-internal wake, below anything the UI can observe, and its
+coverage is the real-shell suite above.
 
 ## Handoff
 
