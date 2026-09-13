@@ -90,6 +90,16 @@ engine — a patched fork of `alacritty_terminal` and `vte`, vendored until `US-
 is no longer part of OneTerm: `oneterm-vt` (`crates/vt`) is first-party Apache-2.0 code
 and the recordings above are the only Alacritty-derived material left.
 
+### 2.1 Derived algorithms (no source copied)
+
+| Where | Derived from | Licence | What was taken |
+|---|---|---|---|
+| `crates/vt/src/reflow/columns.rs` | `avt`'s `Reflow` iterator, <https://github.com/asciinema/avt> | Apache-2.0 | The **approach only**: group rows into logical lines on the wrap flag, trim, redistribute at the new width. No `avt` source is copied; the storage, the cell representation and the anchor mechanism are OneTerm's. |
+| `crates/pty/src/windows*.rs` | Alacritty's `alacritty_terminal/src/tty/windows/`, <https://github.com/alacritty/alacritty> | Apache-2.0 | Several fragments and the structure of the Windows backend — the MSVCRT argument escaping (itself adapted from the Rust standard library), the environment-block builder, the child-exit wait callback and the pollable-pipe registration semantics. All modified; each file carries the notice in its header. |
+
+Apache-2.0 § 4(b) notices live in the source headers of the files listed above, which state
+what was changed.
+
 ## 3. Copyleft analysis
 
 Three Zed crates (`zlog`, `ztracing`, `ztracing_macro`) declare `GPL-3.0-or-later`.

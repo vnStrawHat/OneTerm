@@ -9,9 +9,9 @@ Created: 2026-09-13
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
+- [ ] Planned
 - [ ] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -126,8 +126,53 @@ ships, and `THIRD-PARTY-NOTICES.md` saying so is a false attribution.
 
 ### Reconciliation
 
-Filled in at completion: every doc changed, plus the stale lines left in
-design-owned files (`IN-0029.md`, HLD, LLDs) for the design owner.
+**Changed by this packet:**
+
+| Doc | What changed |
+| --- | --- |
+| `THIRD-PARTY-NOTICES.md` (via `scripts/third-party-notices.py`) | § 2's two fork rows and the "pristine upstream plus the listed patch set" prose removed; § 2.1 promoted to § 2 (the corpus row and its `NOTICE` stay); a new § 2.1 "Derived algorithms (no source copied)" added; the `vendored fork` source label replaced |
+| `NOTICE` | the "lightly patched fork of alacritty_terminal and vte" bullet replaced by the corpus attribution; the `avt` reflow bullet added |
+| `docs/license-analysis.md` | the reuse rule, the corpus bullet, a new `avt` bullet, and the fork row in the Zed-crate table |
+| `docs/agents/dependencies.md` | § 1 table and rule 6, § 3's two engine rows, § 4's pointer to the deleted vendor readme |
+| `docs/agents/structure.md` | the `vendor/` subtree, the `crates/terminal` and `crates/tools` manifest notes, the deleted `engine_shim.rs` line, the `corpus_replay` / `corpus_upstream` lines, the `vt` and `tools` responsibility rows, four "alacritty-free" phrasings |
+| `docs/agents/crate-dependency-rules.md` | the L0 paragraph, R6, R7, and two `cargo tree` comments |
+| `docs/terminal-backend.md` | the header, core decisions 2-5, principle 6, § 4 (rewritten), the § 5 compatibility-surface paragraph `US-0085` left stale, the § 6.2 sketch notes, the § 13 risk row and two § 14 rows |
+| `docs/PROJECT.md` | the stack bullets and the vendored-crates invariant |
+| `README.md`, `AGENTS.md` | the "Powered by" line, the VT-rendering bullet, § 4's optional-checks paragraph, the quick-reference row |
+| `docs/README.md`, `scripts/README.md` | the vendor-readme and refresh rows; the `check-doc-paths.py` description |
+| `scripts/check-doc-paths.py` | stops scanning a `vendor/` prefix that cannot exist |
+| Source provenance comments | `crates/{app,core,pty,terminal,vt}` — 20 files; every dangling vendor path became the upstream path it names, so the Apache-2.0 notices in `crates/pty` and the ported-from references in `crates/vt` still resolve |
+
+**Owed since `US-0077` and paid here.** That packet's Gaps recorded the `avt` attribution
+as "assigned to `US-0087`, the packet that already opens both files". `NOTICE` and
+`THIRD-PARTY-NOTICES.md` § 2.1 now carry it, and `docs/license-analysis.md` records why an
+algorithm is not source.
+
+**Deliberately not changed:**
+
+- `docs/archive/**` and `docs/decisions/DEC-*.md` — records of what was true when written.
+- `crates/terminal/src/osc.rs` (3 lines) and `crates/terminal/src/backend/osc_router.rs`
+  (1 line) — `US-0088` owns them. See Handoff.
+- The frozen corpus files (the `grid.expect` headers, the captured `recording` bytes) and
+  `crates/vt/tests/corpus/NOTICE` — the data and its attribution, neither editable.
+
+**For the design owner** (`IN-0029.md`, the HLD and the LLDs are theirs, not this packet's):
+
+| File:line | Now stale |
+| --- | --- |
+| `IN-0029.md:161` | the `US-0087` checkbox is unticked |
+| `high-level-design.md:71` | P31's verification (`test -d vendor` fails) is met |
+| `high-level-design.md:123` | the `vte` row still retires the oracle in the future tense |
+| `high-level-design.md:511` | phase 16's row is met, but lists only `vt-diff` of the old-engine paths |
+| `migration.md:394-417` | the deletion list is executed; `bless` and the `US-0072` cross-check are **not** in it and went too — with the fork gone there is no engine that may bless (R-58), so keeping the subcommand would have meant keeping a writer with nothing behind it |
+| `migration.md:437-449` | both cleanup rows are done |
+| `migration.md:545` | the `US-0087` verification checkbox |
+| `testing-and-bench.md:152-163` | "`vt-corpus bless` refuses to write unless given `--deviation`" — the subcommand is gone; the rule is now "nothing blesses" |
+| `testing-and-bench.md:195`, `:402` | `vt-diff` "alive from `US-0072` to `US-0087`", and the `US-0087` checkbox |
+| `parser.md:336`, `:351` | the oracle's retirement is done; `tests/differential.rs` no longer exists |
+| `reflow-and-resize.md:104` | the notices-generator owner row is discharged |
+| `US-0077-reflow-and-resize.md:465` | the attribution gap is closed |
+| `US-0085-terminal-view-native.md:312` | its Handoff hands `us0081_parity.rs` to this packet; it is deleted |
 
 ## Context
 
@@ -181,17 +226,117 @@ per-capability fork patch) is the choice this packet completes.
   Claude Code inside their own `oneterm.exe`, which is never enumerated or stopped.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
 - [ ] Platform proof
-- [ ] Verify command passed
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-Filled in at completion.
+### The gate
+
+`pwsh scripts/ci-local.ps1` — **exit 0, all ten steps**, 59.8 s warm. Raw totals over its
+two test steps: **58 sections, 1893 passed, 0 failed, 13 ignored**
+(`cargo test --workspace` 55 / 1529 / 0 / 10, and `-p oneterm-vt --features vt-paranoid`
+3 / 364 / 0 / 3).
+
+Individually, all green: `python scripts/verify-dependency-graph.py` (21 packages, 21
+members), `python scripts/check-doc-paths.py` (120 paths in 10 documents),
+`python scripts/third-party-notices.py --check`, `python scripts/check-english.py` (760
+files), `python scripts/completion-catalog.py validate`,
+`python -m unittest scripts/test_check_english.py`.
+`cargo deny check licenses bans advisories` — installed here; **advisories ok, bans ok,
+licenses ok** with the fork's `allow-git` entry removed.
+
+### The engine
+
+- `vt-corpus check --engine new`: **45 / 45**, 0 failed, and `oneterm/sixel_basic` **1 / 1**.
+  No `expected-diffs.json` exists anywhere under the corpus and none was added.
+- `vt-corpus check --engine old`: refuses with "the old engine was deleted at `US-0087`",
+  which is the flag's remaining job.
+- `vt-bench all --mib 2`: all five tiers on `oneterm-vt`. Tier 2 53.5-194.0 MiB/s across
+  the ten fixtures (against the ConPTY transport ceiling of about 1.2 MiB/s for a `cmd.exe`
+  producer), tier 3 1.7-22.8 us/frame at 7 200 cells, tier 4 9 us / 2.6 ms / 27.8 ms to grow
+  at 0 / 10 000 / 100 000 scrollback rows, tier 5 about 1 364 heap bytes per 160-column row
+  for all four content kinds — the packed-cell claim, measured.
+
+### The two cleanup rows
+
+- **Reverse wrap in the region.** `crates/vt/src/grid/screen.rs:667` — the floor at the
+  crossing site is now `row_of_index(self.region.top)` instead of `screen_top()`. With a
+  full-screen region those are the same row, so the history guard is byte-for-byte
+  unchanged; with a `DECSTBM` region the cursor stops at its top row.
+  `grid::tests::reverse_wrap_stays_inside_the_scroll_region` pins three cases: blocked at
+  the region's top, still crossing one row inside it, and crossing again once the region is
+  dropped back to the whole screen.
+- **LNM through `inert_state`.** `Mode::LineFeedNewLine` joined the table (answering
+  `Reset`: stored, unread), and the ANSI `DECRQM` arm in `dispatch.rs` consults it before
+  the live bit. `Mode::ANSI` is the counterpart of `Mode::PRIVATE`, and
+  `decrqm_answers_match_the_mode_table` now walks both: `CSI 20 h` followed by `CSI 20 $p`
+  answers `;2`, and `CSI 4 h` (IRM, which has a reader) still answers `;1`. One test added
+  in total — the walk is where the assertion belongs.
+- Neither row moves a corpus cell: no recording sets `? 45` (measured at `US-0086`) and
+  none queries LNM.
+
+### Before and after
+
+| | Before (`65139c5`) | After |
+| --- | ---: | ---: |
+| `cargo test --workspace`, cold, empty `target/` | 198.4 s | **168.8 s** (-15 %) |
+| test sections / passed / ignored | 58 / 1555 / 12 | 55 / 1529 / 10 |
+| working tree (no `.git`, no `target/`) | 30.8 MiB, 1 384 files | **29.9 MiB, 1 332 files** |
+| tracked files | 1 382 | 1 330 |
+
+`git count-objects -vH` does not shrink — the deleted blobs stay reachable from history —
+so the tree measurement above is the one that means anything. The 26 tests that went are
+the old-engine differential (`us0081_parity.rs`, `differential.rs`,
+`ext_differential.rs`'s oracle half) and the two corpus-gate tests that drove the old
+engine; one test was added.
+
+### Gaps
+
+1. **`grep -rn alacritty_terminal crates/ scripts/ Cargo.toml` is not literally empty**, and
+   cannot be. What is gone is every *dependency* and every dangling `vendor/...` path. What
+   remains is (a) 13 provenance comments naming the upstream file a port or an
+   Apache-2.0-licensed fragment came from — `Alacritty's alacritty_terminal/src/x.rs`, which
+   is a path that exists upstream and whose removal would weaken an attribution; (b) the 46
+   frozen `grid.expect` headers and several captured `recording` bytes, which are data;
+   (c) `crates/vt/tests/corpus/NOTICE`; (d) one line of the notices header saying what was
+   removed. Of those, `crates/terminal/src/backend/osc_router.rs:305` still carries a
+   `vendor/...` path and is the one real leftover — `US-0088` owns that file.
+2. **No E2E and no platform proof.** The packet deletes a build input and two doc-comment
+   families; it changes no UI surface, and the two cleanup rows are proved from the wire.
+   The owner runs Claude Code inside their own `oneterm.exe`, which was never enumerated,
+   driven or stopped.
+3. **`ext_memory_stays_bounded` is still `#[ignore]`d** in its new home
+   (`crates/vt/tests/parser_limits.rs`) and was not run here: its counting allocator is
+   process-wide, so it needs `--test-threads=1` and a quiet machine. It is unchanged apart
+   from the file it lives in and one renamed sink.
+4. **`ext_osc_caps` was deleted rather than moved.** It had no assertions — it printed five
+   payload sizes — and `parser::tests::osc_truncates_at_inline_cap_and_still_dispatches`
+   already asserts the same cap.
+5. **The bench tiers are not comparable across the swap.** The old numbers were the fork's;
+   these are the engine's, on this machine, at `--mib 2`. No number here is a gate (R-29).
 
 ## Handoff
 
-Filled in at completion.
+Branch `worktree-agent-aec9c63d7aab09c7e` off `feat/vt-engine` @ `65139c5`, **not merged
+and not pushed**. Four commits: the packet (pre-code), the deletions, the two cleanup rows,
+the documentation.
+
+**To `US-0088`.** Four comment lines in files you own still name the fork:
+`crates/terminal/src/osc.rs:3`, `:4`, `:6` ("the OSCs vte does not dispatch…", "the OneTerm
+alacritty fork routes them through…", "no second `vte::Parser`") and
+`crates/terminal/src/backend/osc_router.rs:305`, which cites
+`vendor/alacritty_terminal/src/term/mod.rs:1692-1705` — a path that no longer exists. They
+were left untouched on purpose, since you are rewriting those files. Fold them into your
+edit, or open a follow-up.
+
+**To the design owner.** The Reconciliation table above lists thirteen stale lines across
+`IN-0029.md`, the HLD and four LLDs. The one that is a real decision rather than a tick:
+`migration.md`'s deletion list does not mention `vt-corpus bless` or the `US-0072`
+cross-check, and both were deleted here, because with the fork gone no engine may bless
+(R-58) and the cross-check's oracle was the fork. If that reading is wrong, the packet to
+reopen is this one.

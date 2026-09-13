@@ -166,6 +166,11 @@ licence position clean are:
   `alacritty_terminal` / `vte` fork that OneTerm shipped until then was deleted with the
   engine that replaced it (`IN-0029`), so no forked third-party source is linked into any
   binary any more.
+- **An algorithm is not source.** `crates/vt/src/reflow/columns.rs` follows the approach of
+  `avt`'s `Reflow` iterator (Apache-2.0, <https://github.com/asciinema/avt>) — group on the
+  wrap flag, trim, redistribute — written against OneTerm's own cell, row and anchor types
+  with no `avt` source copied. The credit is deliberate and appears in the file header, in
+  `NOTICE` and in `THIRD-PARTY-NOTICES.md` § 2.1 anyway.
 - **The terminal render engine is written from scratch** (see
   [`docs/spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md`](spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md)
   and [`docs/decisions/DEC-0007-terminal-render-engine-cell-glyph-cache-and-quad-shapes.md`](decisions/DEC-0007-terminal-render-engine-cell-glyph-cache-and-quad-shapes.md)),
