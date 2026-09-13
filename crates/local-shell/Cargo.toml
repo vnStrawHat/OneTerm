@@ -18,11 +18,6 @@ workspace = true
 oneterm-core.workspace = true
 oneterm-terminal.workspace = true
 oneterm-pty.workspace = true
-# Nothing in this crate names it: `impl_pty_terminal_session!` expands
-# `::alacritty_terminal::{selection::SelectionType, vte::ansi::Rgb}` in the
-# calling crate, so the line survives until `crates/terminal`'s public trait
-# stops naming them (`US-0085`, then `US-0087`).
-alacritty_terminal.workspace = true
 async-channel.workspace = true
 polling.workspace = true
 log.workspace = true
