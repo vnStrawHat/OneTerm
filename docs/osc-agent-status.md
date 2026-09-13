@@ -190,6 +190,15 @@ reply before it, the terminal does not implement the protocol — no timeout to
 choose, no guess. A terminal that does not parse `20308` drops the query
 silently, which is exactly the behaviour the number was chosen for (§ 2.2).
 
+**This puts a requirement on the receiver, and it is easy to miss:** replies
+must reach the host in the order the sequences that caused them arrived. A
+terminal that batches a chunk of input and answers the sequences it recognises
+natively before the ones an extension handles will emit DA1 first and report
+itself unsupported. OneTerm did exactly that until `US-0088` — its event drain
+wrote every engine-produced reply in a first pass and the extension-produced
+ones in a second. If you implement this protocol on top of an existing engine,
+check that seam.
+
 **Or read `XTVERSION`.** `CSI > 0 q` answers `DCS > | OneTerm(<version>) ST`.
 That identifies the terminal but not the protocol version, so it is the weaker
 signal; use it only if the agent already issues `XTVERSION` for other reasons.
@@ -239,6 +248,17 @@ dropped silently (with a debug log). This prevents a malicious or buggy agent
 from flooding the terminal with multi-megabyte OSCs. Agent status payloads are
 small (< 1 KiB typical, < 4 KiB worst case), so the cap never hits legitimate
 use.
+
+**The cap must also be *reachable*.** A VT parser usually bounds an OSC payload
+well below this — OneTerm's inline bound is 2 KiB, covering the whole payload
+including the `20308;1;` prefix — and cuts anything longer. A receiver that
+leaves the agent channel on that default publishes an 8 KiB cap while silently
+losing everything past ~2 KiB, which is inside the "< 4 KiB worst case" above:
+a large `model` or `approval` event simply disappears. Raise the parser's bound
+for this number, and treat a payload the parser *did* have to cut as a dropped
+event in its own right — never decode it. Truncated base64 can decode to a
+shorter well-formed event that the agent never sent, so it must not reach the
+JSON validator at all.
 
 ### 3.5 Malformed-payload handling
 

@@ -13,7 +13,7 @@ Created: 2026-09-13
 - [ ] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -98,6 +98,12 @@ An unknown `OSC 20308 ; <n>` sub-code is ignored and counted.
   `damage-and-render-state.md` — R-37, the reply-before-yield ordering the support reply
   has to honour.
 - `docs/osc-sequences-checklist.md` — Group G row for 9;7.
+- `docs/agent-panel-display.md` — **added during the acceptance rework, not found by
+  the first pass.** The owning doc for the panel the channel feeds; it quotes the
+  empty-state UI string in `crates/agent-ui/src/view.rs`, so changing that string
+  without it left the doc contradicting the binary.
+- `docs/agents/structure.md`, `docs/decisions/DEC-0014-oneterm-owns-its-vt-engine.md`
+  — same, added during the rework.
 - `docs/agents/error-policy.md` — "optional telemetry/UI refresh": a malformed or
   unknown sequence logs at `debug` and continues; it is never an error. That is already
   what the receiver does and what the new sub-codes must do.
@@ -127,10 +133,32 @@ No contract change, with the reason recorded rather than the file edited:
 
 ### Reconciliation
 
-Docs changed: `docs/osc-agent-status.md`, `docs/osc-sequences-checklist.md`,
-`README.md`, `scripts/README.md`, `docs/README.md`, `docs/PROJECT.md`, `AGENTS.md`.
-The `crates/completion/assets/` no-change reason above was re-checked after
-implementation and still holds.
+Docs changed, first pass: `docs/osc-agent-status.md`,
+`docs/osc-sequences-checklist.md`, `README.md`, `scripts/README.md`,
+`docs/README.md`, `docs/PROJECT.md`, `AGENTS.md`.
+
+Docs changed, acceptance rework — every one of these was **missed** by the first
+pass's own documentation review, which is the review defect behind minor rows 4-7:
+
+- `docs/agent-panel-display.md` — the owning doc for the panel, marked *current* in
+  `docs/README.md`. Six `9;7` references, one of them quoting the empty-state UI
+  string this packet had already changed in code, so the doc and the binary
+  disagreed. It should have been in Owning Docs Reviewed from the start; a scoped
+  grep for `9;7` would have found it, and the first pass only grepped `crates/`,
+  `scripts/` and the four files it expected to change.
+- `docs/agents/structure.md` — required reading for every agent session per
+  `AGENTS.md` § 1.
+- `docs/decisions/DEC-0014-oneterm-owns-its-vt-engine.md` — the decision that
+  *raised* this follow-up; the box is now ticked and points here.
+- `docs/spec-intakes/IN-0029-vt-engine/high-level-design.md` — line 60 only, the
+  renamed-test citation the coordinator named.
+- `docs/osc-agent-status.md` again — § 3.2 gains the reply-ordering requirement and
+  § 3.4 the "the cap must also be reachable" rule. Both are receiver obligations
+  this implementation got wrong, so a spec that asks third parties to implement the
+  protocol has to state them.
+
+The `crates/completion/assets/` no-change reason above was re-checked after the
+rework and still holds.
 
 ## Context
 
@@ -193,18 +221,98 @@ alias are already decided and written down in `docs/osc-agent-status.md` § 2.2 
 - [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
+## Acceptance rework — independent verification, 2026-09-13
+
+An independent verifier returned **PASS-WITH-NOTES** with three major defects
+(`evidence/US-0088-verify.md`). All three were real, all three are fixed here, and
+the verifier's nine end-to-end tests are kept verbatim plus six more. The common
+root cause is worth stating once: **every test this packet originally wrote drove a
+hand-built `EventBatch`**, so the two seams that actually carry the wire contract —
+the engine's OSC parser and the router's reply ordering — were never in the path.
+Both defects lived exactly there.
+
+### 1. The DA1 reply overtook the support reply, defeating our own detection idiom
+
+`OscRouter::drain` ran two passes: every `VtEvent::Reply` first, then everything
+else. The support reply is produced by the embedder in the second pass, so feeding
+the byte string § 3.2 *tells agents to send* — `ESC ] 20308 ; 0 ST` then `ESC [ c` —
+put DA1 on the transport first. An agent following the documented idiom concludes
+OneTerm does not implement the protocol, on the terminal that does.
+
+Fixed by draining in **one pass, in byte order**. R-37 survives intact because it is
+a *latency* rule — a reply must not wait behind the UI — and after `US-0082` the only
+thing a reply can queue behind is a push onto a vector that never leaves the
+function. Two passes were R-37 read as "replies first" when it means "replies
+promptly"; the ordering they broke is a published contract. `§ 3.2` now states the
+requirement explicitly, because a receiver built on any existing engine has this
+seam and will not think to look at it.
+
+The fix is **positional, not "agent reply wins"**: `verify_the_da1_reply_precedes_the_support_reply_when_it_comes_first`
+and `verify_replies_leave_in_byte_order_regardless_of_producer` pin the reverse and a
+three-producer interleave, so a router that simply hoisted the agent reply would fail.
+
+### 2. The published 8 KiB cap was unreachable; the real ceiling was ~2040 bytes
+
+`claim(AGENT_OSC)` leaves the payload bounded by `OSC_INLINE` (2 KiB) — the *whole*
+payload, prefix included. So the contract published 8 KiB while anything past ~2040
+base64 bytes was cut by the parser and then dropped by `parse_agent_status` as
+malformed. That is inside the "< 4 KiB worst case" § 3.4 itself calls legitimate: a
+large `model` or `approval` event vanished with no signal.
+
+Fixed with `claim_large` on **both** spellings — the alias is "parsed identically"
+for one release and that includes its ceiling. The spill is transient (the parser
+doubles into it and shrinks back after each OSC), so the steady-state cost is zero
+and the exposure is the class `claim_large(52)` already accepts. The 8 KiB cap
+itself still lives in `osc_agent`, not in the claim.
+
+Second half of the same defect: the router discarded the parser's `truncated` flag.
+A truncated payload is not a short one, it is a **corrupt** one — cut base64 can
+decode to a shorter well-formed event the agent never sent. It is now dropped before
+anything parses it and counted (`truncated_agent_osc`), separately from the silent
+malformed-payload path, because a payload the *terminal* dropped is the terminal's
+business to report. Scoped to the agent channel on purpose: free-form text degrades
+gracefully when cut (a truncated toast is still a toast), structured data does not.
+
+The verifier's `verify_the_documented_cap_is_reachable_through_the_engine` asserted
+`!survives(2044)` — it pinned the defect as expected behaviour. That assertion is
+now inverted and the test extended to 8192 in and 8196 out; the inversion *is* the
+fix landing, not a weakened test.
+
+### 3. No test covered the production claim
+
+The verifier's tamper test — deleting the claim line — broke **zero** tests, because
+every agent test bypassed `adapter_config`. Re-run after this rework, the same tamper
+now fails **nine** tests, all in `crates/terminal`, the crate that owns
+`adapter_config`. `handle.rs` was restored immediately and the gate re-run on the
+restored tree.
+
+### Minor rows
+
+| Row | Action |
+|---|---|
+| `docs/agent-panel-display.md` — six `9;7` references, including line 173 quoting the empty-state copy this packet changed in `view.rs:509` | fixed; added to the touch list below |
+| `docs/agents/structure.md:120` | fixed |
+| `high-level-design.md:60` cites the renamed test | fixed to `osc_20308_reaches_the_embedder_through_a_claim` |
+| `DEC-0014:149` open follow-up | ticked, with a pointer to this packet |
+| `ESC]020308;0` claimed numerically, dropped by the string match | **root-caused**: `parse_osc` now matches the OSC *number*, not its spelling, fixing 7 / 9 / 133 / 20308 at once. This also deleted `AGENT_OSC_PARAM` — the second source of truth the verifier's nit was really about — so the constant it had to be pinned against is simply gone |
+
+Not changed, and flagged for the design owner instead: `high-level-design.md:193` and
+`:409` describe the router as handling "OSC 7/9/9;4/9;7/133" and are now incomplete
+(no 20308). They are design narrative in a document this packet was told not to edit;
+line 60 was changed only because the coordinator named it.
+
 ## Evidence and Gaps
 
 ### Results
 
-- `pwsh scripts/ci-local.ps1` — **green, exit 0**, all ten steps.
-- Raw totals over the two test steps: **62 sections, 1939 passed / 0 failed / 15
-  ignored** — `cargo test --workspace` 58 sections 1565/0/12 and
+- `pwsh scripts/ci-local.ps1` — **green, exit 0**, all ten steps. *(After the
+  acceptance rework. The pre-rework run was also green at 62/1939/0/15, which is
+  precisely why a green gate is not a verification — see the rework section.)*
+- Raw totals over the two test steps: **62 sections, 1954 passed / 0 failed / 15
+  ignored** — `cargo test --workspace` 58 sections 1580/0/12 and
   `cargo test -p oneterm-vt --features vt-paranoid` 4 sections 374/0/3. `US-0086`
-  recorded 62/1927/0/15, so the delta is **+12 tests, none removed**: 5 in
-  `crates/terminal/src/osc.rs`, 4 in `backend_tests.rs`, 1 in `crates/vt`
-  (`osc_9_7_reaches_the_embedder_through_a_claim` became two), each counted twice
-  where a suite runs in both the plain and the `vt-paranoid` step.
+  recorded 62/1927/0/15, so the delta is **+27 tests, none removed**: 12 from the
+  first pass, 9 from the verifier (kept verbatim) and 6 added by the rework.
 - Recording gate: `vt-corpus check --engine new` — **45 recordings, 45 passed, 0
   failed**. `vt-diff` — **45 recordings, 45 identical, 0 differing**.
   `vt-corpus grep-deviations` reports nothing for either code. Unchanged, as the
@@ -220,7 +328,13 @@ alias are already decided and written down in `docs/osc-agent-status.md` § 2.2 
 | `ESC ] 9 ; 7 ; <b64> ST` | identical, plus one `debug` line per session |
 | `ESC ] 20308 ; 0 ST` | `ESC ] 20308 ; 0 ; 1 ; OneTerm ; <version> ST` written to the transport; no UI event |
 | `ESC ] 20308 ; <n> ST`, `ESC ] 20308 ST` | dropped, `SharedSessionState::agent_osc_unknown_subcodes()` +1 |
+| an agent payload the parser had to cut | dropped **before** parsing, `truncated_agent_osc()` +1 |
+| `ESC ] 020308 ; … ST` (zero-padded) | same arm — the dispatch matches the number, not its spelling |
 | `ESC ] 9 ; 4 ; …`, `ESC ] 9 ; <msg>` | unchanged — progress and notification |
+
+Replies leave the transport in **byte order**, whichever side produced them: the
+engine's DA1/DSR and the embedder's support reply interleave exactly as the input
+asked (`verify_replies_leave_in_byte_order_regardless_of_producer`).
 
 ### GUI check — run, and it is the acceptance evidence
 
@@ -259,19 +373,26 @@ stopped, and both were confirmed alive afterwards.
 
 1. **No platform proof.** Windows only; the change is platform-neutral (parameter
    matching and one `format!`), but it was not exercised on Linux or macOS.
-2. **The alias deletion is not scheduled in code.** `docs/osc-agent-status.md` § 3.1
+2. **The GUI screenshot predates the rework and was not retaken.** Another agent now
+   drives the desktop, so no `oneterm.exe` was launched, enumerated or stopped during
+   the rework. The screenshot still evidences what it was taken for — both spellings
+   producing identical cards — and the verifier noted it could not have exercised
+   defects 1 or 2 anyway, since the demo scripts emit neither a DA1-paired query nor
+   a payload over 2 KiB. Those two are now covered by end-to-end tests through a real
+   `Terminal::feed` and `TerminalPump::advance` instead, which is the stronger proof.
+3. **The alias deletion is not scheduled in code.** `docs/osc-agent-status.md` § 3.1
    says `9;7` is dropped in the release after this one; there is no compile-time or
    test-time reminder that will fire then. The `crates/vt` test
    `osc_9_7_still_reaches_the_embedder_during_the_alias_release` is named for it and
    `dispatch-and-modes.md` reserves "its counterpart asserting the claim is gone in the
    release after", but the counterpart cannot be written until the decision to cut is
    taken.
-3. **No third-party emitter has been ported.** Only OneTerm's own two demo scripts
+4. **No third-party emitter has been ported.** Only OneTerm's own two demo scripts
    emit the sequence today. Any agent that already shipped `9;7` keeps working for one
    release; nothing in this repo can verify that they move.
-4. **The intake's touch list names the completion catalogs; there was nothing there.**
+5. **The intake's touch list names the completion catalogs; there was nothing there.**
    Recorded under Documentation Action rather than silently skipped.
-5. **Two `9;7` byte literals left in the tree on purpose**, both outside this packet's
+6. **Two `9;7` byte literals left in the tree on purpose**, both outside this packet's
    scope and neither reaching a terminal:
    - `crates/tools/src/bench.rs` — the throughput fixture keeps the **name**
      `osc_9_7` because it is the key `US-0072`, `US-0073` and `US-0076` baseline

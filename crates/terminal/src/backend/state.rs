@@ -75,6 +75,7 @@ pub struct SharedSessionState {
     clear_epoch: AtomicUsize,
     agent_osc_unknown_subcodes: AtomicU64,
     legacy_agent_osc_events: AtomicU64,
+    truncated_agent_osc: AtomicU64,
 }
 
 /// Handle to a [`SharedSessionState`].
@@ -122,6 +123,20 @@ impl SharedSessionState {
     /// How many events this session took on the deprecated alias.
     pub fn legacy_agent_osc_events(&self) -> u64 {
         self.legacy_agent_osc_events.load(Ordering::Relaxed)
+    }
+
+    /// Count one agent-status payload the parser had to cut at its cap, and
+    /// return the session total. Separate from the malformed-payload path,
+    /// which is silent by `docs/osc-agent-status.md` §3.5: a payload the
+    /// *terminal* dropped is the terminal's business to report, not the
+    /// agent's mistake.
+    pub fn count_truncated_agent_osc(&self) -> u64 {
+        self.truncated_agent_osc.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// How many agent-status payloads this session lost to the parser's cap.
+    pub fn truncated_agent_osc(&self) -> u64 {
+        self.truncated_agent_osc.load(Ordering::Relaxed)
     }
 
     /// Whether the child/remote is still running.

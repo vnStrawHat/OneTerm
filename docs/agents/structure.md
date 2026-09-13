@@ -117,7 +117,7 @@ OneTerm/
 │   │       ├── commands.rs         # WorkspaceCommands fn-pointer struct (shell → feature inversion, read via AppServices)
 │   │       ├── active_terminal.rs  # ActiveTerminalMetricsProvider (breadcrumb/net stats/local cwd hook, contributed by terminal-view)
 │   │       ├── agent_focus.rs      # AgentFocuser (agent-ui → terminal focus hook, contributed by terminal-view)
-│   │       ├── agent_model.rs      # Folded OSC 9;7 agent card model (+ agent_model_tests.rs)
+│   │       ├── agent_model.rs      # Folded OSC 20308 agent card model (+ agent_model_tests.rs)
 │   │       ├── agent_registry.rs   # AgentRegistry (global Entity): fold/lifecycle/stale/summary behind the Agent Panel
 │   │       ├── completion_history.rs # Process-global CompletionHistory entity (memory completion source)
 │   │       ├── input_channel_registry.rs # InputChannelRegistry (global Entity): per-Space channel membership + input fan-out

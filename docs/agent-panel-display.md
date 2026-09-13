@@ -1,7 +1,7 @@
 # Agent Panel — current display implementation
 
 > Companion to [`docs/osc-agent-status.md`](osc-agent-status.md).
-> That document defines the OSC 9;7 wire protocol and typed payloads. This
+> That document defines the OSC 20308 wire protocol and typed payloads. This
 > document describes what OneTerm currently stores and renders for the Agent
 > Panel.
 >
@@ -35,7 +35,7 @@ internals. It reads the folded display model from `oneterm_state::AgentRegistry`
 
 | Piece | Location | Current status |
 |---|---|---|
-| OSC 9;7 parse + envelope validation | `oneterm_terminal::osc_agent::parse_agent_status` | implemented |
+| OSC 20308 parse + envelope validation | `oneterm_terminal::osc_agent::parse_agent_status` | implemented |
 | Typed event enum | `oneterm_terminal::osc_agent::AgentStatusEvent` | implemented |
 | Per-`(terminal, agent)` `seq` dedup | `oneterm_terminal::osc_agent::should_apply` | implemented by backend listeners |
 | Event delivery to terminal views | `SessionEvent::AgentStatus(Arc<AgentStatusEvent>)` | implemented |
@@ -48,7 +48,7 @@ internals. It reads the folded display model from `oneterm_state::AgentRegistry`
 
 ## 2. Identity & grouping model
 
-An agent reports OSC 9;7 into one terminal view. The panel renders one card per
+An agent reports OSC 20308 into one terminal view. The panel renders one card per
 `(terminal_key, agent_id)` and groups cards by the terminal tab that contains
 that terminal view.
 
@@ -63,7 +63,7 @@ Agent Panel
 | Key | Type | Source | Current use |
 |---|---|---|---|
 | `terminal_key` | `gpui::EntityId` of `TerminalView` | terminal view context | Card identity and click-to-focus target. |
-| `agent_id` | `String` from envelope `agent` | OSC 9;7 event | Card identity. Multiple agents per terminal are supported by the model. |
+| `agent_id` | `String` from envelope `agent` | agent-status event | Card identity. Multiple agents per terminal are supported by the model. |
 | `tab_key` | `gpui::EntityId` of `TerminalPanel` | `SplitContext.panel` | Group cards into tab sections. |
 | `tab_title` | `String` | terminal panel title helper | Rendered as the tab-group header. Renamed tabs update existing cards. |
 | `space_label` | `String` | terminal panel space helper | Stored as `single` for one-space tabs, or `#N` for split tabs. The card renders `single` as `#0`. |
@@ -170,7 +170,7 @@ The current panel is a simple vertical view:
 Current behavior:
 
 1. Empty registry: show the centered empty state `No agents reporting` and
-   `Agents that emit OSC 9;7 appear here.`
+   `Agents that emit OSC 20308 appear here.`
 2. Non-empty registry: show header, filter chips, and a scrolling list.
 3. Tab groups are rendered for groups with at least one card passing the current
    filter.
@@ -315,7 +315,7 @@ are rendered dimmed.
 
 ## 7. Interaction model
 
-OSC 9;7 is one-directional: agent → terminal host. The Agent Panel never replies
+OSC 20308 is one-directional: agent → terminal host. The Agent Panel never replies
 over OSC.
 
 Current implemented interaction:

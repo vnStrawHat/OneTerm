@@ -14,8 +14,7 @@
 use std::path::PathBuf;
 
 use crate::osc_agent::{
-    AGENT_OSC_PARAM, AGENT_PROTOCOL_VERSION, AgentStatusEvent, LEGACY_AGENT_OSC_SUB,
-    parse_agent_status,
+    AGENT_OSC, AGENT_PROTOCOL_VERSION, AgentStatusEvent, LEGACY_AGENT_OSC_SUB, parse_agent_status,
 };
 
 use base64::Engine;
@@ -84,7 +83,14 @@ pub fn parse_osc(params: &[&[u8]]) -> Option<OscPayload> {
     if params.is_empty() {
         return None;
     }
-    let kind = std::str::from_utf8(params[0]).ok()?;
+    // Match the OSC **number**, not its spelling. `params[0]` is raw wire bytes,
+    // and an xterm-derived parser accepts `020308` for `20308`; matching the
+    // string dropped the zero-padded form after the engine had already claimed
+    // and forwarded it by number. Parsing once here is also what keeps
+    // `AGENT_OSC` a single source of truth rather than a `u32` for the claim and
+    // a `&str` for the dispatch. Pre-existing for 7 / 9 / 133, fixed for all
+    // four at once.
+    let kind = std::str::from_utf8(params[0]).ok()?.parse::<u32>().ok()?;
     // Debug-trace every OSC the engine forwards, so you can confirm the VT
     // pump delivered it (e.g. `RUST_LOG=oneterm_terminal=trace`). The first
     // param is the OSC number; the second (when present) is the sub-code
@@ -99,19 +105,19 @@ pub fn parse_osc(params: &[&[u8]]) -> Option<OscPayload> {
         // Sub-code `0` is the support query, `1` the status event; `2` and
         // above are reserved, so anything else is ignored (and counted by the
         // router, which is the only place a per-session counter lives).
-        AGENT_OSC_PARAM => match params.get(1) {
+        AGENT_OSC => match params.get(1) {
             Some(sub) if *sub == b"1" => parse_agent_status_param(params.get(2).copied()),
             Some(sub) if *sub == b"0" => Some(OscPayload::AgentSupportQuery),
             _ => None,
         },
         // OSC 7: params = ["7", "file://..."]
-        "7" if params.len() >= 2 => {
+        7 if params.len() >= 2 => {
             let url = std::str::from_utf8(params[1]).ok()?;
             Some(OscPayload::Cwd(url.to_owned()))
         }
         // OSC 9: notification (`9;msg`) OR taskbar progress (`9;4;st;pr`).
         // Sub-param "4" = progress, else notify.
-        "9" if params.len() >= 2 => {
+        9 if params.len() >= 2 => {
             if params[1] == LEGACY_AGENT_OSC_SUB {
                 // OSC 9;7;<base64-json> — the agent channel's **deprecated**
                 // spelling, kept for one release (spec §3.1). Byte-for-byte the
@@ -149,7 +155,7 @@ pub fn parse_osc(params: &[&[u8]]) -> Option<OscPayload> {
         }
         // OSC 133: shell integration markers.
         // params = ["133", "A" | "B" | "C" | "D"] or ["133", "D", "exit_code"].
-        "133" if params.len() >= 2 => {
+        133 if params.len() >= 2 => {
             let sub = std::str::from_utf8(params[1]).ok()?;
             let marker = match sub {
                 "A" => Osc133Kind::PromptStart,
@@ -211,7 +217,7 @@ pub fn agent_support_reply(terminator: StringTerm) -> String {
         StringTerm::St => "\x1b\\",
     };
     format!(
-        "\x1b]{AGENT_OSC_PARAM};0;{AGENT_PROTOCOL_VERSION};OneTerm;{}{terminator}",
+        "\x1b]{AGENT_OSC};0;{AGENT_PROTOCOL_VERSION};OneTerm;{}{terminator}",
         env!("CARGO_PKG_VERSION")
     )
 }
@@ -512,12 +518,36 @@ mod tests {
         {"v":1,"agent":"pi","type":"state","seq":9,"ts":1700000000000,"state":"working"}
     );
 
-    /// The wire spelling and the number cannot drift: one is matched as a
-    /// string parameter, the other is claimed as a `u32`.
+    /// The test-support prefixes are the numbers the dispatch matches. There is
+    /// no second source of truth left to drift — the match is numeric — but the
+    /// fixtures are still hand-written bytes, so pin them.
     #[test]
-    fn the_agent_osc_number_and_its_wire_spelling_agree() {
-        assert_eq!(crate::osc_agent::AGENT_OSC.to_string(), AGENT_OSC_PARAM);
-        assert_eq!(crate::osc_agent::LEGACY_AGENT_OSC.to_string(), "9");
+    fn the_agent_osc_prefixes_spell_the_claimed_numbers() {
+        let [new, legacy] = crate::osc_agent::AGENT_OSC_PREFIXES;
+        assert_eq!(new[0], crate::osc_agent::AGENT_OSC.to_string().as_bytes());
+        assert_eq!(
+            legacy[0],
+            crate::osc_agent::LEGACY_AGENT_OSC.to_string().as_bytes()
+        );
+        assert_eq!(legacy[1], LEGACY_AGENT_OSC_SUB);
+    }
+
+    /// The claim is numeric and so is the dispatch, so a zero-padded number —
+    /// which xterm-derived parsers accept — reaches the same handler instead of
+    /// being claimed by the engine and then dropped here.
+    #[test]
+    fn a_zero_padded_number_reaches_the_same_arm() {
+        assert_eq!(
+            parse_osc(&[b"020308", b"0"]),
+            Some(OscPayload::AgentSupportQuery)
+        );
+        assert_eq!(
+            parse_osc(&[b"007", b"file:///tmp"]),
+            Some(OscPayload::Cwd("file:///tmp".into()))
+        );
+        // Still not a number, still ignored.
+        assert_eq!(parse_osc(&[b"20308x", b"0"]), None);
+        assert_eq!(parse_osc(&[b"", b"0"]), None);
     }
 
     /// Both spellings produce the *same* payload — the alias is identical, not

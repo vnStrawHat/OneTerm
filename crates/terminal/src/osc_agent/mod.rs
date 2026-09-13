@@ -57,10 +57,6 @@ use serde::Deserialize;
 /// are reserved for future OneTerm extensions.
 pub const AGENT_OSC: u32 = 20308;
 
-/// [`AGENT_OSC`] as it appears on the wire, for matching the first OSC
-/// parameter without re-parsing it. Pinned to [`AGENT_OSC`] by a test.
-pub const AGENT_OSC_PARAM: &str = "20308";
-
 /// The number the channel used before `US-0088`, accepted as a **deprecated
 /// alias for one release** (spec §3.1) and then dropped. `OSC 9` itself stays
 /// claimed for notifications and `9;4` progress, so only the `9;7` sub-code is
@@ -281,10 +277,7 @@ pub fn parse_agent_status_json(json: &str) -> Option<AgentStatusEvent> {
 /// the same handling" is proved by construction rather than by two copies that
 /// can drift apart.
 #[cfg(any(test, feature = "test-support"))]
-pub const AGENT_OSC_PREFIXES: [[&[u8]; 2]; 2] = [
-    [AGENT_OSC_PARAM.as_bytes(), b"1"],
-    [b"9", LEGACY_AGENT_OSC_SUB],
-];
+pub const AGENT_OSC_PREFIXES: [[&[u8]; 2]; 2] = [[b"20308", b"1"], [b"9", LEGACY_AGENT_OSC_SUB]];
 
 /// Build the raw OSC parameter slices for an agent-status event from a JSON
 /// string and one of [`AGENT_OSC_PREFIXES`], for use in downstream listener

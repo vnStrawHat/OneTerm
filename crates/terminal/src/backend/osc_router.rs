@@ -14,9 +14,9 @@
 //!
 //! * [`OscRouter::drain`] runs where the caller already holds the engine lock
 //!   and does only the things that must happen there and cannot wait — write
-//!   every `VtEvent::Reply` to the transport **first** (R-37: conhost blocks for
-//!   up to a second at session start waiting for DA1, which is exactly when a
-//!   burst is arriving), queue colour queries so the pump can answer them off
+//!   every reply to the transport as the batch reaches it (R-37: conhost blocks
+//!   for up to a second at session start waiting for DA1, which is exactly when
+//!   a burst is arriving), queue colour queries so the pump can answer them off
 //!   the live engine colours, and update the `SharedState` caches.
 //! * Everything the UI sees is **appended to the pump's pending vector** and
 //!   sent by [`super::TerminalPump::finish_batch_blocking`] once the guard is
@@ -129,22 +129,30 @@ impl<T: PtyTransport> OscRouter<T> {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Route one parse batch: replies first, then everything in byte order,
-    /// appending the UI-facing events to `out`.
+    /// Route one parse batch in byte order, writing replies to the transport as
+    /// they are reached and appending the UI-facing events to `out`.
     ///
     /// Called with the engine lock held, so nothing here waits on the UI. `out`
     /// is [`super::TerminalPump`]'s pending vector — the pump owns it and
     /// lends it per `advance` — and it is flushed after the guard is dropped.
+    ///
+    /// **One pass, and the order is the contract.** This used to be two passes,
+    /// writing every [`VtEvent::Reply`] before routing anything else, which was
+    /// R-37's "replies first" read literally. R-37 is about *latency* — a reply
+    /// must not wait behind the UI — and one pass still delivers that, because
+    /// everything a reply can now queue behind is a push onto `out`, which never
+    /// blocks and never leaves this function. Nothing here can wait.
+    ///
+    /// What two passes broke is *relative* order between a reply the engine
+    /// produced and one the embedder produced, and that is a published contract:
+    /// `docs/osc-agent-status.md` § 3.2 tells an agent to write
+    /// `ESC ] 20308 ; 0 ST` followed by `ESC [ c` and to conclude "not
+    /// supported" if DA1 comes back first. Hoisting DA1 out of the second pass
+    /// made OneTerm fail its own detection idiom on the terminal that
+    /// implements it. Byte order in, byte order out.
     pub fn drain(&self, batch: &EventBatch, out: &mut Vec<SessionEvent>) {
         for event in batch.iter() {
-            if let VtEvent::Reply(span) = event {
-                self.reply(batch.bytes(*span));
-            }
-        }
-        for event in batch.iter() {
-            if !matches!(event, VtEvent::Reply(_)) {
-                self.handle(batch, event, out);
-            }
+            self.handle(batch, event, out);
         }
     }
 
@@ -183,9 +191,28 @@ impl<T: PtyTransport> OscRouter<T> {
                 code,
                 params,
                 terminator,
-                ..
+                truncated,
             } => {
                 let params: Vec<&[u8]> = batch.params(*params).collect();
+                // A truncated payload is not a short payload, it is a corrupt
+                // one: the base64 was cut mid-stream, so decoding it yields
+                // either an error or — worse — a shorter valid event that the
+                // agent never sent. Drop it before anything parses it, and
+                // count it, so the loss is visible instead of arriving as
+                // "malformed JSON" from a payload that was never malformed.
+                //
+                // Deliberately the agent channel only. Free-form text degrades
+                // gracefully when it is cut (a truncated OSC 9 toast is still a
+                // toast) and OSC 133's markers are far too short to truncate;
+                // structured data does not degrade, it lies.
+                if *truncated && is_agent_osc(*code, &params) {
+                    let count = self.state.count_truncated_agent_osc();
+                    log::debug!(
+                        "OscRouter: agent status dropped, payload truncated by the \
+                         parser's cap ({count} so far)"
+                    );
+                    return;
+                }
                 self.note_agent_osc(*code, &params);
                 match parse_osc(&params) {
                     Some(payload) => self.handle_osc_payload(payload, *terminator, out),
@@ -347,6 +374,17 @@ impl<T: PtyTransport> OscRouter<T> {
             OscPayload::AgentSupportQuery => self.reply(agent_support_reply(terminator).as_bytes()),
         }
     }
+}
+
+/// Whether this OSC carries an agent-status payload, under either spelling.
+///
+/// The support query and the reserved sub-codes are excluded: they carry no
+/// payload worth truncating, and a truncated `20308;<n>` should still be
+/// counted as the unknown sub-code it is.
+fn is_agent_osc(code: u32, params: &[&[u8]]) -> bool {
+    let sub = params.get(1).copied();
+    (code == AGENT_OSC && sub == Some(b"1"))
+        || (code == LEGACY_AGENT_OSC && sub == Some(LEGACY_AGENT_OSC_SUB))
 }
 
 /// The reply the reference formatted inside the engine.

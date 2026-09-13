@@ -26,7 +26,7 @@ use oneterm_vt::{Config, Demand, OscClaims, Terminal};
 use parking_lot::{FairMutex, FairMutexGuard};
 
 use crate::backend::GridSize;
-use crate::osc_agent::AGENT_OSC;
+use crate::osc_agent::{AGENT_OSC, LEGACY_AGENT_OSC};
 
 /// The terminal both backends and the UI share.
 pub type SharedTerminal = Arc<TerminalHandle>;
@@ -176,17 +176,33 @@ pub fn new_shared_terminal(size: GridSize, scrollback: usize) -> SharedTerminal 
 /// engine either handles natively (title, colours, hyperlinks, clipboard) or
 /// drops and counts, which is what the engine being replaced did.
 ///
+/// Claiming OSC 9 **large** also lifts the inline cap on notifications, which
+/// the security policy already truncates to 8 KiB — the parser's spill is
+/// transient, so the cost is a larger buffer while one oversized OSC is being
+/// parsed, the same exposure `claim_large(52)` already accepts.
+///
 /// `AGENT_OSC` is above the claim bitmap's 2048-bit range, so it lands in the
 /// sorted overflow list — which is the whole reason the table has one, and the
 /// reason moving the agent protocol to a five-digit number
 /// (`docs/osc-agent-status.md` §2.2) needed no engine change at all.
 fn adapter_config(scrollback: usize) -> Config {
     let mut claims = OscClaims::new();
-    claims.claim(7).claim(9).claim(133).claim(AGENT_OSC);
+    claims.claim(7).claim(133);
     // A memory ceiling, not a policy: who may write the clipboard stays in
     // `security_policy.rs`. Without it a legitimate large OSC 52 write is
     // truncated at the 2 KiB inline cap.
     claims.claim_large(52);
+    // The agent channel, both spellings, for the same reason — and this one is
+    // a **published** cap: `docs/osc-agent-status.md` § 3.4 tells third-party
+    // agents they may send up to 8 KiB of base64 and calls "< 4 KiB worst case"
+    // legitimate. Plain `claim` bounds the whole payload at `OSC_INLINE`
+    // (2 KiB), prefix included, so the real ceiling was ~2040 base64 bytes and
+    // everything above it was truncated by the parser and then dropped by
+    // `parse_agent_status` as malformed — a silent hole under the number we
+    // publish. The spill is transient (the parser doubles into it and shrinks
+    // back after each OSC), so this costs nothing in the steady state, and the
+    // 8 KiB cap itself is still enforced in `osc_agent`, not here.
+    claims.claim_large(AGENT_OSC).claim_large(LEGACY_AGENT_OSC);
     Config {
         scrollback_limit: scrollback.min(SCROLLBACK_MAX as usize) as u32,
         osc_claims: claims,
