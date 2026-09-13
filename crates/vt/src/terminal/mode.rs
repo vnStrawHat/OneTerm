@@ -191,6 +191,29 @@ impl Mode {
         })
     }
 
+    /// The fixed `DECRQM` answer for a mode the engine **recognises but nothing
+    /// reads**, or `None` for a mode whose state is real.
+    ///
+    /// This is the table behind the rule in `dispatch-and-modes.md`: *DECRQM
+    /// must never answer `Set` for a mode that does nothing.* Answering `Set`
+    /// tells a program a capability exists when it does not, so an inert mode
+    /// answers `NotSupported` when it is not even stored and `Reset` when it is
+    /// stored and simply unread. `? 45` was in this table until `US-0086` gave
+    /// it a reader (`Screen::backspace`), which is exactly when a row leaves.
+    pub const fn inert_state(self) -> Option<ModeState> {
+        Some(match self {
+            // Trap 40: both `h` and `l` act, and the honest answer is still
+            // "not supported", because the width never changes.
+            Mode::DecCoLm => ModeState::NotSupported,
+            // R-56: recognised and inert, and `NotSupported` says so.
+            Mode::GraphemeClusters => ModeState::NotSupported,
+            // R-36: conhost sends `? 9001 h` unprompted, so it is accepted
+            // silently — but the encoding is not implemented.
+            Mode::Win32Input => ModeState::Reset,
+            _ => return None,
+        })
+    }
+
     /// Every mode with a private number, for the DECRQM table test.
     pub const PRIVATE: [Mode; 23] = [
         Mode::AppCursor,

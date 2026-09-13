@@ -648,10 +648,30 @@ impl Screen {
         self.debug_assert_integrity();
     }
 
-    /// Trap 1: a complete no-op at column 0 — the pending wrap is **not**
-    /// cleared there. Reverse wrap (`? 45`) is an additive feature (`US-0086`).
-    pub fn backspace(&mut self) {
+    /// Trap 1: at column 0 this is a complete no-op — the pending wrap is
+    /// **not** cleared there — unless the caller passes `reverse_wrap`, which
+    /// is `Mode::ReverseWrap` (`? 45`, deviation D12).
+    ///
+    /// With reverse wrap on, `BS` at column 0 crosses into the previous row's
+    /// last column, and **only** when that row is `WRAPPED` (R-08): the glyph
+    /// before the cursor is then genuinely there, so the cursor lands on real
+    /// content rather than on an unrelated line. It never crosses above
+    /// [`Screen::screen_top`], because rows in history are not addressable.
+    pub fn backspace(&mut self, reverse_wrap: bool) {
         if self.cursor.pos.col == 0 {
+            if !reverse_wrap || self.cursor.pos.row <= self.screen_top() {
+                return;
+            }
+            let previous = self.cursor.pos.row - 1;
+            if !self.row(previous).wrapped() {
+                return;
+            }
+            self.cursor.pos = Pos {
+                row: previous,
+                col: self.cols - 1,
+            };
+            self.cursor.pending_wrap = false;
+            self.debug_assert_integrity();
             return;
         }
         self.cursor.pos.col -= 1;

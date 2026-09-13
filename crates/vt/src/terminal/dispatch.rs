@@ -346,19 +346,13 @@ impl Handler<'_> {
         let Some(mode) = Mode::from_private(code) else {
             return ModeState::NotSupported;
         };
+        // A mode the engine recognises but nothing reads never answers `Set`.
+        // The rule is a table on `Mode`, not arms here, so a mode that gains a
+        // reader leaves it in one place — which is what `? 45` just did (D12).
+        if let Some(state) = mode.inert_state() {
+            return state;
+        }
         match mode {
-            // Trap 40: both `h` and `l` act, and the honest answer is still
-            // "not supported", because the width never changes.
-            Mode::DecCoLm => ModeState::NotSupported,
-            // R-56: recognised and inert, and `NotSupported` says so.
-            Mode::GraphemeClusters => ModeState::NotSupported,
-            // R-36: accepted silently, but the encoding is not implemented.
-            Mode::Win32Input => ModeState::Reset,
-            // D12, deferred to `US-0086`: the mode is stored, but `backspace` is
-            // unconditional, so nothing reads it. Answering `Set` would tell a
-            // program it may rely on reverse wrap when it may not — the same
-            // reason `? 9001` answers `Reset`. `US-0076` verification, M4.
-            Mode::ReverseWrap => ModeState::Reset,
             Mode::SyncUpdate => self.state.sync.is_set().into(),
             Mode::AltScreen | Mode::AltScreen47 | Mode::AltScreen1047 => {
                 self.state.grid.alt_active().into()
@@ -845,7 +839,11 @@ impl Dispatch for Handler<'_> {
                 let autowrap = self.state.modes.contains(Mode::LineWrap);
                 self.state.grid.put_tab(1, autowrap);
             }
-            0x08 => self.state.grid.screen_mut().backspace(),
+            0x08 => {
+                // Deviation D12: `? 45` is the reader `US-0086` gave the mode.
+                let reverse_wrap = self.state.modes.contains(Mode::ReverseWrap);
+                self.state.grid.screen_mut().backspace(reverse_wrap);
+            }
             0x0d => self.state.grid.screen_mut().carriage_return(),
             0x0a..=0x0c => {
                 let report = self.state.grid.linefeed();
