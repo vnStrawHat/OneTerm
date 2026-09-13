@@ -69,9 +69,10 @@ impl From<ResizePolicy> for oneterm_vt::ResizePolicy {
 /// Shared terminal-model operations backed by the engine.
 ///
 /// Created per call by `impl_pty_terminal_session!` and stored nowhere — it is
-/// two words wide. Every render-path state that must survive between frames
-/// (the damage watermark, the copied rows) lives inside the lock, on
-/// [`crate::engine::Engine`].
+/// two words wide. Every render-path state that must survive between frames —
+/// the damage watermark and the copied rows — lives in the caller's
+/// [`TerminalContent`], which is the buffer the renderer reuses, not in
+/// anything this type or the lock holds.
 pub struct TerminalModel {
     term: SharedTerminal,
     resize_policy: oneterm_vt::ResizePolicy,

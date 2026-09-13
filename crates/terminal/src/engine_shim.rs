@@ -61,6 +61,7 @@ use crate::content::{IndexedCell, TermDamageInfo, TerminalBounds, TerminalConten
 pub(crate) fn refill(content: &mut TerminalContent, term: &mut Terminal, now: Instant) {
     let update = term.render_update(&mut content.state, now);
     content.update = update;
+    refresh_cells(content);
 
     let state = &content.state;
     let size = state.size();
@@ -68,16 +69,6 @@ pub(crate) fn refill(content: &mut TerminalContent, term: &mut Terminal, now: In
     let display_offset = state.scroll_offset() as usize;
     // The reference's `Line(0)`: the viewport top at `display_offset == 0`.
     let screen_top = state.viewport_top() + u64::from(state.scroll_offset());
-
-    refresh_cells(
-        &mut content.cells,
-        &mut content.built_offset,
-        state,
-        update,
-        rows,
-        cols,
-        display_offset,
-    );
 
     let cursor = state.cursor();
     let cursor_line = row_to_line(cursor.id, screen_top);
@@ -128,16 +119,22 @@ pub(crate) fn refill(content: &mut TerminalContent, term: &mut Terminal, now: In
 /// reported `Full` damage. So the cheap path is "the viewport stood still and
 /// only these rows changed", which is the interactive case — a keystroke, a
 /// cursor move, a TUI repainting one line.
-#[allow(clippy::too_many_arguments)]
-fn refresh_cells(
-    cells: &mut Vec<IndexedCell>,
-    built_offset: &mut Option<usize>,
-    state: &RenderState,
-    update: RenderUpdate,
-    rows: usize,
-    cols: usize,
-    display_offset: usize,
-) {
+fn refresh_cells(content: &mut TerminalContent) {
+    // Disjoint field borrows: the render state is read while the vector it feeds
+    // is written, which is why this takes the buffer rather than seven pieces
+    // of it.
+    let TerminalContent {
+        state,
+        update,
+        built_offset,
+        cells,
+        ..
+    } = content;
+    let update = *update;
+    let size = state.size();
+    let (rows, cols) = (usize::from(size.rows), usize::from(size.cols));
+    let display_offset = state.scroll_offset() as usize;
+
     let dense = rows * cols;
     // Already dense at this geometry and offset: every stored `point` is still
     // the right one, so a rebuild writes cells only. That is the flood's case —

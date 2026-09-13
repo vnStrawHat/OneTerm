@@ -18,9 +18,9 @@
 //!   up to a second at session start waiting for DA1, which is exactly when a
 //!   burst is arriving), queue colour queries so the pump can answer them off
 //!   the live engine colours, and update the `SharedState` caches.
-//! * Everything the UI sees is **appended to the caller's vector** and sent by
-//!   [`super::TerminalPump::finish_batch_blocking`] once the guard is dropped.
-//!   That is what let the deferred tier and its deadlock rule go.
+//! * Everything the UI sees is **appended to the pump's pending vector** and
+//!   sent by [`super::TerminalPump::finish_batch_blocking`] once the guard is
+//!   dropped. That is what let the deferred tier and its deadlock rule go.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -133,7 +133,8 @@ impl<T: PtyTransport> OscRouter<T> {
     /// appending the UI-facing events to `out`.
     ///
     /// Called with the engine lock held, so nothing here waits on the UI. `out`
-    /// is the pump's pending vector, flushed after the guard is dropped.
+    /// is [`super::TerminalPump`]'s pending vector — the pump owns it and
+    /// lends it per `advance` — and it is flushed after the guard is dropped.
     pub fn drain(&self, batch: &EventBatch, out: &mut Vec<SessionEvent>) {
         for event in batch.iter() {
             if let VtEvent::Reply(span) = event {

@@ -58,7 +58,8 @@ pub struct TerminalPump<T: PtyTransport> {
     /// high-water mark and stay, which is what makes the steady state
     /// allocation-free.
     batch: EventBatch,
-    /// UI-facing events collected under the lock, sent once it is released.
+    /// UI-facing events collected under the engine lock, sent once it is
+    /// released. **Pump-owned**, lent to [`OscRouter::drain`] per `advance`.
     ///
     /// Several `advance` calls can share one batch boundary — the local read
     /// loop feeds until the pipe is empty before it unlocks — so the events

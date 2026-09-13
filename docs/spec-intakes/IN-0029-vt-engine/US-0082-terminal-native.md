@@ -45,8 +45,9 @@ this packet:
    `IndexedCell::point`), each converted in **one** place. `TerminalContent::{row_id,
    display_row}` is the two-way translation `migration.md` designed and `US-0081` left unbuilt.
 3. **Events are drained as values, and the deferred tier is gone.** `OscRouter::drain` appends
-   `SessionEvent`s to a caller-owned vector; the pump flushes that vector **outside the engine
-   lock** with a blocking send. `SessionEventSink`'s deferred FIFO, `flush_reliable[_blocking]`,
+   `SessionEvent`s to the **pump's** pending vector — owned by `TerminalPump` behind a `Mutex`
+   because the backends hold the pump by `&` at their lifecycle call sites, and lent to the
+   router per `advance`; the pump flushes it **outside the engine lock** with a blocking send. `SessionEventSink`'s deferred FIFO, `flush_reliable[_blocking]`,
    `forward_lifecycle*` and `has_deferred_reliable` are deleted, and with them the CORR-01
    "never block inside a `Term` callback" rule — there is no callback any more.
 4. **`ColorKey` is the colour index space.** `osc_color.rs`'s `FOREGROUND_INDEX` /
@@ -199,12 +200,24 @@ correctly and are not this packet's to edit.
    those four files, which are `US-0085`'s by the N-04 table and by this packet's own "must not
    touch". `migration.md` § "Deletion list" already schedules all five manifest lines at
    `US-0087` and says they become deletable at `US-0085`; that schedule stands. What this packet
-   does instead is **confine** it: after this commit the crate names an `alacritty_terminal`
-   item in exactly five files — `engine_shim.rs` (the conversion, ~330 lines, deleted by
-   `US-0085`), `content.rs` (the compat field declarations), `session.rs` (the trait signatures
-   and the macro), `palette.rs` and `osc_color.rs`. Nothing else, and nothing on the native
-   path. It is a `[dependencies]` line, not a `cfg(test)` one, because the compat surface is
-   public API rather than test code.
+   does instead is **confine** it: every surviving mention is part of the published value
+   vocabulary or the code that converts into it, nothing runs, and nothing sits on the
+   engine-facing path. The file-by-file list is the table under
+   *Evidence → What survives of `alacritty_terminal`, and why* (13 non-test source files, not
+   the five an earlier draft of this paragraph claimed). It stays a `[dependencies]` line rather
+   than a `cfg(test)` one because the compat surface is public API, not test code.
+
+   **Three rows `migration.md` assigns to `US-0082` slip to `US-0085` for this same reason**,
+   declared here so the packet and the LLD disagree on paper rather than only in practice:
+   `migration.md:149` lists `mouse_encode.rs` among the files that "move onto the native API"
+   — it still takes `TermMode`, because `TerminalQueryState` publishes `TermMode` regardless, so
+   converting it now would leave two representations of the same modes in the crate and rewrite
+   a well-tested encoder's fixtures twice; and the deletion-list rows `:252`
+   ("`TermDamageInfo`'s display-line conversion") and `:253` ("the per-frame cell clone loop in
+   `refill`") — both are read by `crates/terminal-view/src/render/frame.rs`, so deleting either
+   is the same consumer change this packet may not make. All three go with `engine_shim.rs` at
+   `US-0085`; the clone loop is at least no longer *per frame* (it runs on `Full` and on the
+   changed rows of a scroll-free `Partial`, never on `Unchanged`).
 2. **`SearchMatch`, `TerminalInfo` and `TerminalQueryState` keep their signed lines.**
    `migration.md`'s tests-that-change table says the search suite's `Line` / `display_offset`
    assertions become `RowId` and that `display_row(display_offset)` is "deleted with the
@@ -332,6 +345,16 @@ No new decision: every choice here is recorded in the intake, the HLD or `migrat
 - Deletion greps clean: `resize_keeping_viewport_top`, `conhost_cursor_row` and
   `LineAccounting` have no definition and no call site in `crates/`.
 - Measurement: [`evidence/US-0082-flood-bench.md`](evidence/US-0082-flood-bench.md).
+- **Independent verification**: [`evidence/US-0082-verify.md`](evidence/US-0082-verify.md) —
+  verdict *merge after fixes*, every finding documentation or labelling, no behaviour defect.
+  It reproduced the totals and the flood table, proved all 26 deleted tests re-covered
+  one-to-one, confirmed the differential blob is byte-identical to `f9af66c`'s and its
+  allow-list unwidened, and measured the demand handshake (see *Handoff*). The six findings
+  F1-F6 are applied in the commit that adds that report: the stale `crate::engine::Engine`
+  doc link in `model.rs`, the "exactly five files" miscount (it is 13; the table is the
+  authority), the three slipped `migration.md` rows now declared as deviations, the
+  debug-tier split in the bench evidence, the crate's only `#[allow]` removed by passing the
+  buffer instead of seven pieces of it, and "caller-owned" corrected to "pump-owned".
 
 ### Measurement
 
@@ -352,21 +375,32 @@ flood is the worst case for the incremental paths — every chunk scrolls the wh
 viewport away, so `changed()` never helps and `Unchanged` never happens — which means
 the interactive gain (a keystroke rebuilds one row, not thirty) is not in the table.
 
+**Most of both gaps is the debug tier.** With `debug_assertions` off the same bench is
+feed 66 / snapshot 34 against old 53 / 25, a **1.29x** ratio: ~25 ms of the feed gap and
+~21 ms of the snapshot gap are the bounded integrity walk, which is `cfg(debug_assertions)`
+-only (`vt::integrity_walk_cost` measures it at ~20 us per `feed` and per `render_update`
+over a 100 000-row history, ×1 025 chunks). What is left for `US-0085` to delete is the
+**~9 ms** legacy-cell rebuild, not the 28 ms the debug column shows. Full attribution and
+the verifier's raw numbers are in the bench evidence.
+
 ### What survives of `alacritty_terminal`, and why
 
-Nothing runs; nothing is on the engine-facing path. What is left is the value vocabulary
-this crate **publishes** and the code that converts into it:
+Nothing runs; nothing is on the engine-facing path. **Thirteen** non-test source files name
+an `alacritty_terminal` item, and every one of them is the value vocabulary this crate
+**publishes** or the code that converts into it:
 
 | File | What it publishes |
 | --- | --- |
 | `engine_shim.rs` | the whole conversion, ~420 lines; `US-0085` deletes the file |
 | `content.rs` | `TerminalContent`'s compatibility fields and their types |
 | `session.rs` | `TerminalQueryState`, `TerminalInfo`, and the `TermMode` / `SelectionType` / `Rgb` in the trait and macro signatures |
-| `palette.rs`, `color_classification.rs`, `osc_color.rs` | `TerminalPalette`, `resolve_color`, `DynamicColors` — `theme/palette.rs`'s API |
-| `mouse_encode.rs`, `model.rs` | `TermMode` in the encoder and the published signed grid line |
+| `palette.rs`, `color_classification.rs`, `osc_color.rs` | `TerminalPalette`, `resolve_color`, `DynamicColors`, the colour predicates — `theme/palette.rs`'s API |
+| `mouse_encode.rs`, `model.rs` | `TermMode` in the encoder, and the published signed grid line |
 | `backend/state.rs` | `DefaultColors::from_legacy`, the one converter at the `set_default_colors` boundary |
+| `backend/osc_router.rs` | the `ColorFormatter` closure's `Rgb`, which is the reply the view's theme fallback is expressed in |
+| `handle.rs` | a doc comment only — why `alacritty_terminal::sync::FairMutex` was not carried over |
 | `lib.rs` | the three graphics re-exports `render/element.rs` reads |
-| `test_support.rs`, tests | the fake fabricates the same shape; `us0081_parity.rs` *is* the old engine |
+| `test_support.rs`, `content_tests.rs`, `model_tests.rs`, `tests/us0081_parity.rs` | the fake fabricates the same shape; the differential *is* the old engine |
 
 Moving any of them means editing `crates/terminal-view`, which is `US-0085`'s.
 
@@ -434,11 +468,13 @@ smaller count would number the top rows from below zero.
    `migration.md` § "Deletion list" already schedules all five manifest lines at
    `US-0087`, and four of them become deletable at `US-0085`. Not a `cfg(test)`
    dependency either, for the same reason — the compat surface is not test code.
-3. **`mouse_encode.rs` still takes `TermMode` rather than `ModeSnapshot`.** Deliberate:
-   `TerminalQueryState` publishes `TermMode` regardless, so converting the encoder now
-   would leave the crate with both representations until `US-0085`, and it would rewrite
-   a well-tested encoder's fixtures twice. `migration.md` has the view's `input/mouse.rs`
-   moving to `ModeSnapshot` at `US-0085`; the encoder's signature flips with its only
+3. **Three rows `migration.md` assigns to `US-0082` slip to `US-0085`** —
+   `mouse_encode.rs` staying on `TermMode` (`:149`), `TermDamageInfo`'s display-line
+   conversion (`:252`) and the cell rebuild in `refill` (`:253`). All three are declared
+   as part of deviation 1 above rather than left as a silent gap; each is compat surface
+   `crates/terminal-view` reads, so touching it is the consumer change this packet may not
+   make. `migration.md` itself moves the view's `input/mouse.rs` to `ModeSnapshot` at
+   `US-0085`, which is where the encoder's signature naturally flips with its only
    external caller.
 4. **`oneterm_vt::testing` and `oneterm_vt::strip` were not added**, closing `US-0081`'s
    gap 5 by declining it: `crates/terminal/src/test_engine.rs` already holds the two
@@ -468,11 +504,30 @@ API they were promised is implemented and tested here:
 | They want | It is | Note |
 | --- | --- | --- |
 | the shared terminal | `SharedTerminal = Arc<TerminalHandle>` (`crates/terminal/src/handle.rs`) | `new_shared_terminal(GridSize, scrollback)` is unchanged; `lock()`, `lock_unfair()`, `try_lock_unfair()` all still compile at today's call sites, the last two as aliases of `lock` / `try_lock` |
-| **the yield check** | `SharedTerminal::take_render_demand() -> bool` | Call it at a chunk boundary, **after** the batch's replies have left (R-37), and drop the guard when it answers `true`. It is cleared by the asking. The render side is already wired: `TerminalModel::snapshot{,_into}` locks through `lock_for_render()`, which raises it. `render_demand_raised()` reads without clearing, for a diagnostics line. |
+| **the yield check** | `SharedTerminal::take_render_demand() -> bool` | Call it at a chunk boundary, **after** the batch's replies have left (R-37), and drop the guard when it answers `true`. It is cleared by the asking. The render side is already wired: `TerminalModel::snapshot{,_into}` locks through `lock_for_render()`, which raises it. `render_demand_raised()` reads without clearing, for a diagnostics line. **Measured — see below.** |
 | the batch drain | already done for them | `TerminalPump::advance(&mut Terminal, bytes)` feeds **and** drains under the lock — replies to the transport, colour queries queued, state caches updated, UI events collected; `finish_batch[_blocking](repaint)` sends them after the guard drops. The deferred sink is gone, so there is nothing left to "move out from under the lock": the loops keep the exact `advance` / `take_color_queries` / `color_replies` / `finish_batch*` shape they have today. |
 | the resize policy through the engine API | `TerminalModel::new(term, impl Into<oneterm_vt::ResizePolicy>)` | Change `$resize_policy` in `impl_pty_terminal_session!` from `ResizePolicy::Default` / `::KeepViewportTop` to `oneterm_vt::ResizePolicy::BottomAnchor` / `::KeepViewportTop` — **one token each**, no change here. When both backends have done it, delete `crate::model::ResizePolicy` and its `From`. |
 | deleting `Engine` | one no-op blocks it | `crates/local-shell/src/event_loop.rs:357` calls `self.term.lock().exit()`. `Engine` is now a `Deref` newtype over `oneterm_vt::Terminal` whose only member is that no-op. Delete the call site and `Engine` goes with it; `lock()` then yields the engine directly. |
 | `crates/ssh`'s dead manifest line | still dead | `US-0081` recorded that no `crates/ssh` source references `alacritty_terminal`; still true. `US-0084` can take the line without waiting for anything. |
+
+**Why `take_render_demand()` is not optional.** The independent verifier measured the
+handshake on the real starvation shape — a pump that takes the lock once and keeps feeding
+while bytes arrive, which is literally `crates/local-shell/src/event_loop.rs:391-420`
+([`evidence/US-0082-verify.md`](evidence/US-0082-verify.md) § 3):
+
+```
+honoured: 1 batches, 156.8µs
+ignored : 3800 batches, 354.4733ms
+```
+
+A read loop that asks at the chunk boundary and breaks hands the lock over within **one
+batch, ~157 µs**. The same loop ignoring the flag makes the renderer wait **3 800 batches,
+~354 ms** — about 2 260x, and it is today's behaviour until `US-0083` / `US-0084` land, because
+`parking_lot`'s fairness cannot help a waiter that a relocking pump keeps beating. The
+adapter half is therefore not just present but demonstrably sufficient; the whole of what is
+left is one `if` in each loop. The engine-level test
+(`crates/vt/src/render/render_tests.rs:785`) uses an unfair `std::sync::Mutex` and does not
+cover this path.
 
 ### What `US-0085` needs
 

@@ -65,11 +65,37 @@ removed is the *waste* inside it:
 
 **2. Feed is unchanged and is not this packet's.** 93 ms before and after, against the old
 engine's 55 ms. The bench calls `Terminal::feed` directly, so nothing the adapter does
-appears in that column; the gap is the engine's, and `IN-0029` records that a debug-build
-gap of this size is expected (`fast-dev` keeps `debug_assertions` on, and the bounded
-integrity tier R-28 shipped still runs). The adapter's own per-chunk cost did drop — the
-`LineAccounting` heuristic scanned every chunk for `\n` under the lock and is gone — but
-that cost sits in `TerminalPump::advance`, which this bench does not call.
+appears in that column — and neither the lock nor the demand handshake contributes to it at
+all. The adapter's own per-chunk cost did drop, because the `LineAccounting` heuristic
+scanned every chunk for `\n` under the lock and is gone, but that cost sits in
+`TerminalPump::advance`, which this bench does not call.
+
+**2a. Most of both gaps is the debug tier, and is off in release.** The independent verifier
+re-ran the identical bench with `CARGO_PROFILE_FAST_DEV_DEBUG_ASSERTIONS=false`
+([`US-0082-verify.md`](US-0082-verify.md) § 4):
+
+```
+flood: 4194344 bytes, grid 120x30, scrollback 10000, debug_assertions=false
+NEW total 103.0446ms   new feed 66 ms   new render_update+snapshot 34 ms
+OLD total  79.6204ms   old advance 53 ms   old damage+snapshot 25 ms
+```
+
+So the release-shaped ratio is **1.29x**, not 1.81x. `cargo test -p oneterm-vt
+integrity_walk_cost` names the source directly — `feed(one line)` 19.5 us and
+`render_update()` 20.2 us over a 100 000-row history, which across the bench's 1 025 chunks
+is ≈ 20 ms on each side. Attribution of the 1.81x column:
+
+| Cost | Size | Owner |
+| --- | ---: | --- |
+| Bounded integrity walk + debug asserts, in `feed` | ~25 ms | not a shippable cost — `testing-and-bench.md`'s tier, already cut three orders of magnitude at `US-0075` / `US-0079`, and `cfg(debug_assertions)`-only |
+| Engine parse and dispatch above the old engine, in `feed` | ~13 ms (66 vs 53) | the engine's, for `IN-0029`; not a migration packet's to remove |
+| The same integrity walk inside `render_update` | ~21 ms | same |
+| **The legacy `Cell` rebuild that remains** | **~9 ms (34 vs 25)** | **`US-0085`** — the only line item a later packet in this intake can still delete |
+| Lock and demand handshake | 0 in this bench | measured separately: honouring `take_render_demand()` hands the lock over in 1 batch / 157 us, ignoring it costs 3 800 batches / 354 ms |
+
+`migration.md`'s shim-era note records the release build at 90 vs 43 ms (2.1x), so this
+packet roughly halved the release ratio as well. The number `US-0085` should aim at is the
+**~9 ms** legacy-cell rebuild, not the 28 ms the debug column shows.
 
 **3. What is left in the snapshot is the compatibility surface itself:** one
 `alacritty_terminal::Cell` built per visible cell, 3 600 of them per chunk here, so the
@@ -78,7 +104,9 @@ build, and the column disappears with it.
 
 ## Caveats
 
-- One machine, `fast-dev`, three runs, medians. Not a benchmark suite; `vt-bench` is.
+- One machine, `fast-dev`, three runs, medians. Not a benchmark suite; `vt-bench` is. The
+  independent verifier reproduced the after column at 148.2 ms (feed 91 / snapshot 55)
+  against 85.2 ms old, i.e. 1.74x — within run-to-run noise of the 1.81x above.
 - The flood is deliberately the worst case for the incremental paths: every chunk scrolls
   the whole viewport away, so `changed()` never helps and `Unchanged` never happens.
 - `debug_assertions` is on in both columns, which is what the app's own development
