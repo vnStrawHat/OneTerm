@@ -10,6 +10,12 @@
 //! MiB/s; a single uncontended lock per 64 KiB chunk is not the limiter, and the
 //! alternative (a lock-free ring crate) is a dependency this crate does not need.
 //!
+//! A ring is **level-triggered**: it posts a packet whenever it is usable and
+//! the caller is not already looking at it, and `read`/`write` re-post when they
+//! leave the ring usable. A caller may therefore stop reading with bytes still
+//! buffered and be woken again, which is what [`PollMode::Level`] promises and
+//! what `crates/local-shell`'s loop relies on.
+//!
 //! The registration semantics — readable/writable gating, clearing a one-shot
 //! interest after posting, and the priming packet on first registration — follow
 //! `alacritty_terminal`'s `tty/windows/blocking.rs`
@@ -216,22 +222,29 @@ fn push(ring: &Ring, data: &[u8]) -> bool {
 }
 
 impl io::Read for PipeReader {
-    /// Never blocks. `Ok(0)` means "nothing buffered", and arms the wake-up that
-    /// the pipe thread fires when the next bytes land.
+    /// Never blocks, and honours [`PollMode::Level`]: the caller is woken again
+    /// whenever the ring is still readable, so it may stop reading with bytes
+    /// buffered — to yield, or because its buffer filled — and be told there is
+    /// more. `Ok(0)` means "nothing buffered".
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let mut bytes = self.ring.lock();
-        let taken = bytes.queue.len().min(buf.len());
-        if taken == 0 {
-            bytes.caller_waiting = true;
-            return Ok(0);
-        }
         let was_full = bytes.queue.len() >= self.ring.capacity;
+        let taken = bytes.queue.len().min(buf.len());
         for (slot, byte) in buf[..taken].iter_mut().zip(bytes.queue.drain(..taken)) {
             *slot = byte;
         }
+        // Left empty: the next `push` owes the caller its packet. Left readable:
+        // post now, because nothing else will — `push` only fires on an armed
+        // ring, so an edge missed here is a session that stalls with output in
+        // hand and no diagnostic.
+        let left = bytes.queue.len();
+        bytes.caller_waiting = left == 0;
         drop(bytes);
         if was_full {
             self.ring.changed.notify_all();
+        }
+        if left > 0 {
+            self.ring.wake();
         }
         Ok(taken)
     }
@@ -306,17 +319,23 @@ fn pull(ring: &Ring, out: &mut Vec<u8>) -> bool {
 impl io::Write for PipeWriter {
     /// Never blocks. A short count (`0` included) leaves the remainder with the
     /// caller, which is how the local-shell loop already handles partial writes.
+    ///
+    /// Level semantics, the mirror of [`PipeReader::read`]: while the ring has
+    /// room the caller is woken again, so it may stop writing and come back.
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let mut bytes = self.ring.lock();
         let room = self.ring.capacity.saturating_sub(bytes.queue.len());
         let taken = room.min(buf.len());
-        if taken == 0 {
-            bytes.caller_waiting = true;
-            return Ok(0);
-        }
         bytes.queue.extend(&buf[..taken]);
+        let room_left = room - taken;
+        bytes.caller_waiting = room_left == 0;
         drop(bytes);
-        self.ring.changed.notify_all();
+        if taken > 0 {
+            self.ring.changed.notify_all();
+        }
+        if room_left > 0 {
+            self.ring.wake();
+        }
         Ok(taken)
     }
 
@@ -390,3 +409,7 @@ fn write_pipe(pipe: &OwnedHandle, mut buf: &[u8]) -> io::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "pipe_tests.rs"]
+mod pipe_tests;
