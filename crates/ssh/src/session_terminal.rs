@@ -15,7 +15,12 @@ oneterm_terminal::impl_pty_terminal_session!(
     SshSession,
     "SshSession",
     SessionKind::Ssh,
-    // The remote PTY reflows and repaints on its side (DEC-0008).
+    // `oneterm_vt::ResizePolicy::BottomAnchor` is what reaches `Terminal::resize`
+    // (DEC-0008: the remote PTY reflows and repaints on its side, so a row grow
+    // pulls scrollback into the viewport top and the cursor follows it down).
+    // The engine value cannot be named here yet — `impl_pty_terminal_session!`
+    // declares `resize_policy()` as returning the adapter enum; see `US-0084`'s
+    // packet, gap 2.
     oneterm_terminal::ResizePolicy::Default,
     close_channel
 );
@@ -37,7 +42,10 @@ impl TerminalSession for SshSession {
             sftp: self
                 .sftp
                 .lock()
-                .unwrap()
+                // A poisoned lock must not take the panel down with it: the
+                // handle behind it is still valid (error-policy.md), and
+                // `SshSession::close_sftp` already reads it this way.
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone()
                 .map(|session| session as Arc<dyn SftpBackend>),
             cwd_source: Some(self.state.clone()),

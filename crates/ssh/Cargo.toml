@@ -17,6 +17,10 @@ workspace = true
 [dependencies]
 oneterm-core.workspace = true
 oneterm-terminal.workspace = true
+# No `crates/ssh` source names the fork (`US-0084`). The line survives because
+# `impl_pty_terminal_session!` expands `::alacritty_terminal` paths into this
+# crate for `TerminalRender::set_default_colors` and `TerminalInput::mouse_down`,
+# whose signatures are the compatibility surface `US-0085` deletes.
 alacritty_terminal.workspace = true
 async-channel.workspace = true
 russh.workspace = true

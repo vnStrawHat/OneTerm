@@ -803,14 +803,36 @@ mod tests {
         (session, cmd_rx)
     }
 
-    /// DEC-0008: the remote PTY reflows and repaints, so SSH keeps alacritty's
-    /// grow-resize semantics.
+    /// DEC-0008: the policy an SSH session hands the engine is
+    /// `oneterm_vt::ResizePolicy::BottomAnchor`, because the remote PTY reflows
+    /// and repaints on its side. Asserted by its behaviour — a row grow pulls
+    /// rows out of scrollback into the top of the viewport and the cursor
+    /// follows them down, where `KeepViewportTop` would leave the cursor where
+    /// it is and add blank rows at the bottom. The engine enum cannot be named
+    /// here (US-0084 gap 2), and its name is not the contract anyway.
     #[test]
-    fn ssh_session_keeps_the_default_grow_policy() {
+    fn ssh_grow_resize_pulls_scrollback_into_the_viewport_top() {
+        use oneterm_terminal::{TerminalInput, TerminalPump, TerminalRender};
+
         let (session, _cmd_rx) = detached_session();
+        let mut pump = TerminalPump::new(session.listener.clone());
+        let output: String = (0..40).map(|index| format!("line {index}\r\n")).collect();
+        pump.process_chunk(&session.term, output.as_bytes());
+
+        let before = session.query_state();
+        assert_eq!(before.rows, 24);
+        session.resize(30, 80).expect("a grow must be accepted");
+        let after = session.query_state();
+
+        assert_eq!(after.rows, 30);
         assert_eq!(
-            session.resize_policy(),
-            oneterm_terminal::ResizePolicy::Default
+            after.cursor_line,
+            before.cursor_line + 6,
+            "the cursor did not follow the rows pulled out of history"
+        );
+        assert_eq!(
+            after.total_lines, before.total_lines,
+            "history was not moved into the viewport, it was added to"
         );
     }
 
