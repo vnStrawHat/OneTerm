@@ -37,6 +37,23 @@ use crate::transport::{LocalListener, LocalTransport};
 /// PTY read buffer size (1 MiB). Heap-allocated: the owner thread's default
 /// 2 MiB stack must not carry it (PERF-21).
 const READ_BUFFER_SIZE: usize = 0x10_0000;
+/// Most bytes taken from the transport in one `read`, and therefore the most
+/// handed to one `pump.advance` — one lock hold.
+///
+/// A frame waits `bytes-per-lock-hold ÷ parse rate`, so an unbounded read is an
+/// unbounded wait on a transport that can deliver one. ConPTY cannot: it hands
+/// this loop 82 bytes at the median and 9.6 KB at its worst, which is why the
+/// local shell never noticed. A socket hands it ~600 KB, and the `US-0083`
+/// verifier measured the difference this cap makes there — a worst-case frame
+/// wait of 22.6 ms down to 2.25 ms, with throughput up rather than down
+/// (`evidence/US-0083-verify.md` § 3.5).
+///
+/// It bounds the **read**, not the loop: the reference's identically-named
+/// constant broke out of the read loop, which stalls this one (see the yield
+/// below). `READ_BUFFER_SIZE` is deliberately left alone — it is what the
+/// contended path accumulates into, and shrinking it spun a test binary at
+/// 100 % CPU in the verifier's measurement.
+const MAX_LOCKED_READ: usize = 0x1_0000;
 /// Poll events collected per `poll.wait` (PTY readable + child watcher).
 const POLL_EVENT_CAPACITY: NonZeroUsize = match NonZeroUsize::new(1024) {
     Some(capacity) => capacity,
@@ -372,12 +389,15 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
                     let parse_start = diagnostics_enabled.then(std::time::Instant::now);
                     #[cfg(feature = "terminal-diagnostics")]
                     let mut lock_started = None;
-                    let mut unprocessed = 0;
+                    let mut unprocessed: usize = 0;
                     let mut processed = 0;
                     let mut terminal = None;
 
                     loop {
-                        match self.pty.reader().read(&mut buf[unprocessed..]) {
+                        let read_end = unprocessed
+                            .saturating_add(MAX_LOCKED_READ)
+                            .min(READ_BUFFER_SIZE);
+                        match self.pty.reader().read(&mut buf[unprocessed..read_end]) {
                             Ok(0) if unprocessed == 0 => break,
                             Ok(got) => unprocessed += got,
                             Err(err) => match err.kind() {
@@ -455,6 +475,24 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
                             // Fair unlock: the engine goes to the frame.
                             drop(guard);
                             self.pump.write_color_replies(replies);
+                            // A yield is a batch boundary, so it ends a batch:
+                            // publish the line count, deliver the events this
+                            // batch collected and post its repaint hint. Without
+                            // this the loop only ever finishes a batch when the
+                            // transport runs dry — which ConPTY does tens of
+                            // thousands of times a second, but a socket under a
+                            // flood does not, leaving the UI with no hints and
+                            // no title/cwd/OSC events for the length of the
+                            // flood. Safe to block here: the guard is gone
+                            // (CORR-01).
+                            self.pump.finish_batch_blocking(true);
+                            // Counted here because the batch ends here; the
+                            // post-loop tally only sees what came after.
+                            #[cfg(feature = "terminal-diagnostics")]
+                            if diagnostics_enabled {
+                                stat_bytes += processed as u64;
+                            }
+                            processed = 0;
                         }
 
                         // Otherwise read on: when the pipe is empty `read` arms

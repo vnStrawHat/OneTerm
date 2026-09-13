@@ -15,7 +15,7 @@ use crate::session::LocalSession;
 /// sees them — `TerminalModel::new` takes `impl Into<oneterm_vt::ResizePolicy>`
 /// and `resize_grid` hands it straight to `Terminal::resize`. Naming the
 /// engine's enum *here* needs an API `crates/terminal` does not offer yet; see
-/// the `US-0083` packet's gap 2.
+/// the `US-0083` packet's gap 1.
 const fn local_resize_policy() -> ResizePolicy {
     if cfg!(windows) {
         ResizePolicy::KeepViewportTop

@@ -485,7 +485,7 @@ fn loop_child_exit_ends_the_session_and_stops_the_thread() {
 /// against `US-0082`'s 157 µs for a 4 KiB in-process chunk. The failing side is
 /// not slower, it never arrives — with the flood running, a loop that ignores
 /// the demand holds the engine until the producer stops.
-const HANDOVER_BOUND: Duration = Duration::from_millis(750);
+const HANDOVER_BOUND: Duration = Duration::from_millis(250);
 
 /// Frames taken while the pump floods. One acquisition could be luck; the
 /// assertion is on the worst of them.
@@ -554,6 +554,25 @@ fn a_flooding_loop_hands_the_engine_to_a_waiting_frame() {
         "the pump never took the engine lock"
     );
 
+    // `lock_for_render()` raises a one-shot flag and *then* blocks, so a pump
+    // asking inside that window consumes the only signal and the frame parks
+    // invisibly — a race in `TerminalHandle`, not in this loop, measured and
+    // recorded as the packet's gap 6. It made this test fail in the workspace
+    // gate, where every other test loads the machine and widens the window.
+    // This watchdog keeps a demand standing at the rate a 60 Hz renderer raises
+    // one anyway, so the test measures the pump's hand-over latency rather than
+    // that race, which has its own owner.
+    let watchdog = {
+        let term = Arc::clone(&running.term);
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                term.demand().raise();
+                std::thread::sleep(Duration::from_millis(16));
+            }
+        })
+    };
+
     // The frames run on their own thread and report through a channel, so a
     // pump that never yields fails on the deadline instead of hanging the run.
     let (report_tx, report_rx) = mpsc::channel();
@@ -580,6 +599,7 @@ fn a_flooding_loop_hands_the_engine_to_a_waiting_frame() {
     stop.store(true, Ordering::Relaxed);
     let _peer = flood.join().unwrap();
     renderer.join().unwrap().expect("the frame thread reports");
+    watchdog.join().unwrap();
     ui.join().unwrap();
 
     let worst = report.unwrap_or_else(|_| {

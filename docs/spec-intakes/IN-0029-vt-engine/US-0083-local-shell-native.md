@@ -56,6 +56,10 @@ inside `crates/local-shell`. See *Evidence and Gaps*.
 - [x] A test drives the **real** `ShellEventLoop::run` with a flooding producer on one thread
   and a `lock_for_render()` waiter on another, and asserts the waiter is served inside a
   bound far below the 354 ms the `US-0082` verifier measured for the ignoring loop.
+- [ ] **Partly met — gap 6.** Every frame that asks is served. A frame whose demand is
+  consumed inside `lock_for_render`'s own raise→block window is not, and starves for the
+  length of the flood; that race is in `crates/terminal` and is measured, recorded and
+  owned there.
 - [x] The loop holds no engine lock it does not need: the `Engine::exit()` no-op call site is
   gone, which frees `crates/terminal` to delete the `Engine` newtype.
 - [x] No local PTY token constants; `oneterm_pty::{PTY_CHILD_EVENT_TOKEN, PTY_READ_WRITE_TOKEN}`
@@ -200,17 +204,58 @@ pause, one thread drains the UI event queue, one thread takes five frames throug
 `lock_for_render()` and reports the worst wait through a channel, so a pump that never
 yields fails on a deadline instead of hanging the suite.
 
-| | worst frame wait |
-|---|---|
-| yield wired (three runs) | **86.2 ms / 107.9 ms / 125.3 ms** |
-| yield disabled (`if false &&`, negative control) | **never** — `no frame reached the engine within 4.75s of a flooding pump`, test fails in 4.99 s |
+**A frame waits `bytes-per-lock-hold ÷ parse rate`.** That identity is the whole story,
+and the first version of this section reported one end of it as if it were a property of
+the loop. Both ends, with the transport named (the ConPTY column is the independent
+verifier's instrumented measurement, `evidence/US-0083-verify.md` § 3.2):
 
-The bound in the test is 750 ms. It is far above `US-0082`'s 157 µs because the two
-measurements are not the same unit of work: `US-0082` fed 4 KiB in-process chunks, while
-one batch here is whatever the socket buffer held (up to the loop's 1 MiB read) parsed at
-`test`-profile opt-level 0. The property the test pins is the one the design states —
-**one batch, not the whole flood** — and the failing side does not arrive at all, so the
-bound only has to sit between "one debug-build batch" and "never".
+| transport | bytes per lock hold | worst frame wait |
+|---|---|---|
+| **real ConPTY** (what this crate ships on), `fast-dev` | p50 **82 B**, max 9.6 KB | **52-59 µs** |
+| loopback TCP fixture, `test` (opt-level 0), before the read cap | p50 ~634 KB | 86.2 / 107.9 / 125.3 ms |
+| loopback TCP fixture, `test`, **after the read cap** | ≤ 64 KiB | **6.0-17.0 ms** (five runs) |
+| yield disabled (negative control, either transport) | — | **never arrives** |
+
+ConPTY hands this loop one 80-column line plus CRLF at the median, so the 1 MiB read
+buffer is never filled and the shipped Windows local shell is some **three orders of
+magnitude** faster than the millisecond figures. Those belong to a *socket* transport —
+which is exactly what `US-0084` is about to write this same `if` against, so they are kept
+here rather than deleted.
+
+The negative control is unchanged and is the important half: `no frame reached the engine
+within 4.75s of a flooding pump`, failing in 4.99 s. The failing side is not slower, it
+never arrives.
+
+The test's bound is **250 ms** (was 750 ms before the read cap). It is far above
+`US-0082`'s 157 µs because the units differ — `US-0082` fed 4 KiB in-process chunks — and
+the property the test pins is the design's: **one batch, not the whole flood**.
+
+### The read cap (verifier MAJOR-2)
+
+`MAX_LOCKED_READ = 64 KiB` bounds the bytes taken in one `read`, and therefore the bytes
+handed to one `pump.advance` — one lock hold. `READ_BUFFER_SIZE` is deliberately
+untouched: it is what the contended path accumulates into, and shrinking it spun a test
+binary at 100 % CPU in the verifier's measurement. A feed-side cap was measured and
+rejected too (it hung).
+
+Loopback, `fast-dev`, 2 s, renderer asking every 16 ms (125-frame ceiling), six runs each:
+
+| | throughput | frames |
+|---|---|---|
+| before the cap | 44.5 / 31.0 / 22.2 MiB/s | 81 / 95 / 91 |
+| **after the cap** | **52.6-54.9 MiB/s** (six runs) | **118-119** (six runs) |
+
+Better on both axes, which matches the verifier's independent 41.4 → 54.2 MiB/s. Suite
+green 3/3 after the change (31 passed each).
+
+**The cap moved a second thing, which the verifier's byte counter could not see.** With
+reads capped, a flooded socket never runs dry, so the inner read loop stopped exiting —
+and `finish_batch` only ran when it exited. The first capped run reported **0 lines
+processed**: no line count, no repaint hint and no title/cwd/OSC event reached the UI for
+the length of the flood. ConPTY hides this (it runs dry tens of thousands of times a
+second), a socket does not. The fix is one line and follows from what a yield *is*: the
+yield now calls `finish_batch_blocking(true)`, because a yield is a batch boundary. Safe
+to block there — the guard is already dropped (CORR-01).
 
 ### Flood throughput
 
@@ -297,7 +342,59 @@ so there is nothing to measure there.
    still true: `publish_child_exit(&self.pump, …)` runs inside the `for event` loop while
    `self.pump` is also borrowed mutably by `advance` in the same scope. Removing the
    mutex means `&mut` pump methods in `crates/terminal`, which is out of scope.
-6. **The hand-over is asserted in wall-clock, not in batches.** The pump's batch count is
+6. **`lock_for_render` can lose its own wake-up — a race in the adapter's handshake
+   (new; found while re-measuring for the verifier's MAJOR-2).** `lock_for_render`
+   raises a **one-shot** flag and *then* blocks on the mutex. A pump that calls
+   `take_render_demand()` in the window between those two steps consumes the only signal
+   the waiter had, and the waiter then parks invisibly: the pump sees a clear flag and
+   keeps the engine until the transport runs dry. **Measured, 3/3**, with a scratch probe
+   that modelled the window (raise, let the pump consume it, then `lock()`): the waiter
+   waited **longer than 5 s** — the whole flood — where a frame that keeps its flag waits
+   11-17 ms. It also showed up once in the wild: one throughput run taken while a
+   `cargo clippy` loaded the machine reported **1 frame instead of 118**, which is the
+   same signature (a descheduled renderer widens the ns window into ms). Six clean runs
+   are 118-119 frames, so it is load-sensitive, not constant. **It then failed the
+   workspace gate**, where every other test loads the machine: `no frame reached the
+   engine within 2.25s of a flooding pump`, with the yield present and working. The test
+   now keeps a demand standing from a watchdog thread at the rate a 60 Hz renderer raises
+   one anyway, so it measures this loop's hand-over latency instead of the adapter's
+   race; a plain `try_lock` poll was tried first and is a *worse* instrument (331-654 ms,
+   because a polling waiter is never queued and so never gets the fair hand-off).
+   **This is the one part of the packet's outcome that is not fully delivered**: the pump
+   yields to every demand it sees, but a demand can be lost before the pump ever sees it.
+   **Not fixable here**: the
+   flag, the raise and the blocking acquire are all `TerminalHandle`'s
+   (`crates/terminal/src/handle.rs`), which this packet must not touch, and a local
+   heuristic (a `yield_now()` after the hand-over) cannot close a window that is
+   milliseconds wide under load. Fix shape for the owner: make the demand a **waiter
+   count released on acquisition** rather than a flag cleared by the asking —
+   `lock_for_render` increments, `take_render_demand` peeks, the waiter decrements once
+   it holds the guard — or have `lock_for_render` re-raise around a `try_lock_for` loop.
+   Owner: `crates/terminal` (`US-0082`'s half of the handshake); `US-0084` inherits the
+   same race the moment it wires the ssh task.
+7. **`PipeReader` claims `PollMode::Level` and delivers edge-once — an `oneterm-pty`
+   defect (verifier MAJOR-3).** `push` posts a completion packet only when
+   `caller_waiting` is set, and `caller_waiting` is set only by a read that finds the ring
+   **empty** (`crates/pty/src/windows/pipe.rs`), while the registration honours Level by
+   keeping the interest. A caller that obeys the documented Level contract — read once per
+   readiness, return to the poller — deadlocks with no diagnostic. That is what stalled
+   the first implementation here; the comment in this crate protects only this one caller.
+   Fix shape (verifier § 4.3), three lines in `PipeReader::read`: after the drain, if the
+   ring was left non-empty, `self.ring.wake()` — making "drain to empty" an optimisation
+   instead of a correctness requirement. Owner: a `US-0071` rework, which the coordinator
+   is opening.
+8. **Control messages starve under a sustained flood on a fast transport (verifier
+   MINOR-4).** `pending_resize`, the input queue and the shutdown flag are read only at
+   the top of the **outer** loop, and the inner read loop runs until the transport is dry.
+   Unreachable on ConPTY (the verifier measured Ctrl-C landing in 101 ms under a 9.6 MB
+   `type`), reachable on a socket (a resize lost for 12 s on the loopback fixture). The
+   read cap shortens each pass but does not change where those three are read. Owner:
+   `US-0084`, which ships on a socket and should test for it.
+9. **Unbacked-off spin on the contended path (verifier MINOR-6).**
+   `None => continue` re-reads and re-tries `try_lock` with no pause while the engine is
+   held, bounded by `READ_BUFFER_SIZE` and cold in practice (0-160 misses per 5 s run).
+   A note, not a defect; `std::hint::spin_loop()` if it ever shows up in a profile.
+10. **The hand-over is asserted in wall-clock, not in batches.** The pump's batch count is
    not observable from outside the loop — `SessionEvent::Output` is coalescible and, in
    the starved case, never sent at all — so "one batch" is pinned as a time bound with
    the negative control proving the other side does not arrive.
@@ -325,6 +422,30 @@ merged, not pushed.** The worktree tool based it on `main` @ `c936ac0`, which ha
 `crates/vt`; `git reset --hard d3c537b` was run before any file was read or written — the
 same correction `US-0076`-`US-0082` recorded.
 
+### Verification round
+
+The independent verifier's report is committed at
+[`evidence/US-0083-verify.md`](evidence/US-0083-verify.md); verdict **merge after fixes**.
+Applied here:
+
+- **MAJOR-1** — the 86-125 ms table was a fixture artifact presented as a loop property.
+  Rewritten above with the real-ConPTY column (52-59 µs) and the attribution.
+- **MAJOR-2** — the capped read, measured: loopback worst wait 86/108/125 →
+  **6.0-17.0 ms**, throughput 22-45 → **52.6-54.9 MiB/s**, frames 81-95 → **118-119**.
+  It surfaced two things the verifier's byte counter could not see: the lost
+  `finish_batch` described above, and gap 6 — both fixed/recorded here.
+- **MAJOR-3**, **MINOR-4**, **MINOR-6** — recorded as gaps 7, 8 and 9 with owners.
+- **MINOR-5** — `session_terminal.rs:14` said "gap 2"; it is gap 1. Fixed.
+- **OBSERVATION-7** (the UTF-8 probe) — left as the verifier left it: no finding, outside
+  this diff, and the engine has a passing test for the property.
+
+The verifier's own confirmations are worth keeping: five consecutive real-shell runs with
+no flake, the `break` stall reproduced exactly on the three named tests, every exit path
+from the shipped read loop proven to leave the ring drained or re-armed, colour replies
+confirmed in arrival order outside the lock, Ctrl-C landing in 101 ms under a real 9.6 MB
+flood, and `fed bytes == ring bytes` exactly, with the ring never exceeding 9.6 KB of its
+1 MiB and never blocking the child.
+
 ### For `US-0084` (`crates/ssh`), which writes the same `if`
 
 - The `alacritty_terminal` manifest line in `crates/ssh/Cargo.toml` is **not** dead, and
@@ -340,3 +461,9 @@ same correction `US-0076`-`US-0082` recorded.
   second (or the pump can park in `finish_batch` with the lock already released and the
   test passes for the wrong reason), take frames on a third and report through a channel
   so a non-yielding pump fails on a deadline instead of hanging.
+- **Take the read cap with you.** ssh ships on a socket, which is the transport where the
+  unbounded lock hold actually costs 100 ms a frame; `MAX_LOCKED_READ` is the two-line
+  version, and the yield must end the batch (`finish_batch`) or a flooded socket leaves
+  the UI with no hints at all. Gaps 8 (control-message starvation) and 6 (the
+  `lock_for_render` race) both bite harder on a socket than on ConPTY — gap 8 is measured
+  at 12 s on a fast transport and is yours to test for.

@@ -164,6 +164,13 @@ at a chunk boundary. `US-0082` wired the adapter's half of it:
   `lock_unfair` / `try_lock_unfair` survive as aliases of `lock` / `try_lock` until it
   lands.
 
+  How long a frame waits is `bytes-per-lock-hold ÷ parse rate`, so the read is capped at
+  `MAX_LOCKED_READ` (64 KiB) — the bytes handed to one `advance`. ConPTY delivers 82 bytes
+  at the median and never notices; a socket delivers ~600 KB per read, where the cap is
+  worth 10x on the worst-case wait (`US-0083`, measured both ways). A yield also **ends
+  the batch** (`finish_batch`), because on a transport that never runs dry that is the
+  only place a batch ever ends, and with it the repaint hint and the batch's events.
+
   The yield gives the engine up **without leaving the read loop**, which is a
   platform constraint rather than a preference: the conout ring re-arms its wake-up
   only when a read finds it empty (`crates/pty/src/windows/pipe.rs`,
@@ -444,10 +451,11 @@ thread — the PTY is created, polled and dropped there. It reads with a
 heap-allocated 1 MiB buffer into `TerminalPump::advance` under a
 `try_lock_unfair` guard (falling back to `lock_unfair` only when the buffer is
 full), answers colour queries with the same guard, then calls
-`finish_batch_blocking`. At each chunk boundary it asks `take_render_demand()`
-and, when a frame is waiting, answers that batch's colour queries and drops the
-guard there (§ 5.1) instead of holding it until the pipe runs dry. The poller
-waits **without a timeout**: every
+`finish_batch_blocking`. Each read takes at most `MAX_LOCKED_READ` (64 KiB), so
+one lock hold is bounded in bytes. At each chunk boundary it asks
+`take_render_demand()` and, when a frame is waiting, answers that batch's colour
+queries, drops the guard and finishes the batch there (§ 5.1) instead of holding
+it until the pipe runs dry. The poller waits **without a timeout**: every
 `ShellNotifier::send` and the child watcher call `poller.notify()`, so an idle
 tab does not wake up. Being generic over the PTY, the loop is unit-tested with a
 loopback-socket PTY (`event_loop_tests.rs`) — no shell is spawned to cover
