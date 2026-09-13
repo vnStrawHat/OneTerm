@@ -197,7 +197,108 @@ the owner runs Claude Code inside their own `oneterm.exe`, which must never be d
 
 ## Evidence and Gaps
 
-Filled in after implementation — see § "Final D / C / G status" and § "Results" below.
+### Results
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Parity gate, alacritty-ref | `vt-corpus check --engine new` | **45 recordings, 45 passed, 0 failed** — unchanged from the pre-edit baseline |
+| Parity gate, OneTerm | `vt-corpus check --engine new --dir crates/vt/tests/corpus/oneterm` | **1 recording, 1 passed, 0 failed** (`sixel_basic`) |
+| `expected-diffs.json` | `Get-ChildItem -Recurse crates/vt/tests/corpus -Filter expected-diffs.json` | **none exist, none added** — as the D12 measurement predicted |
+| Recording risk, D12 | `vt-corpus grep-deviations` | `vttest_cursor_movement_1`, `vttest_insert`, `vttest_origin_mode_1`, `vttest_origin_mode_2`, `vttest_scroll`, `vttest_tab_clear_set` — each **`?45: 0 set, 1 reset`**. Six recordings turn the mode off and none turns it on, so implementing it moves no cell. Risk: **none**, re-measured, not inherited |
+| Differential, corpus | `vt-diff` | 45 recordings, **45 identical**, 0 differing |
+| Differential, bench fixtures | `vt-diff --fixtures` | 10 recordings, **10 identical**, 0 differing |
+| Differential, the `US-0076` verifier families | `vt-diff --dir <family>` over `fam`, `micro`, `repro`, `combo`, `clean`, `clean2`, `widecase`, `zcase`, `fuzz` (120 recordings) | **byte-identical to the pre-edit baseline in eight of nine**; `fam` moved 15/5 → 14/6 — see below |
+| Unit | `cargo test -p oneterm-vt --lib` | 363 passed, 0 failed, 2 ignored |
+| Regression | `pwsh scripts/ci-local.ps1` | **green, exit 0**, all ten steps |
+
+**Raw totals**, over the gate's two test steps: **62 sections, 1927 passed / 0 failed / 15
+ignored** — `cargo test --workspace` 58 sections 1554/0/12, `cargo test -p oneterm-vt --features
+vt-paranoid` 4 sections 373/0/3. Four tests were added and none was rewritten or deleted; the two
+sections that carry `oneterm-vt`'s lib suite each gain those four, which is the whole delta.
+
+### The one new differential divergence, and why it is D12 and nothing else
+
+`fam/f08_mode45` was **identical** before this packet and shows **7 252 differences** after. That
+is the correction arriving: the fixture is 16 414 bytes of nothing but reverse wrap — 360
+`CSI ? 45 h`, 380 `CSI ? 45 l` and 704 `BS` — and the vendored reference does not implement the
+mode at all, so an engine that does must differ from it.
+
+Established **by mutation, not by inspection**, the method `US-0076`'s verifier used: with the
+single read at the `BS` call site forced to `false` and nothing else changed, `fam` returns to
+exactly its baseline 15 identical / 5 differing. The divergence is attributable to D12 alone.
+
+The by-design list therefore gains **no new family** — the existing list keys families by declared
+id, and `D12` is already a declared id in the deviation table and in
+`crates/tools/src/corpus.rs`'s `KNOWN_DEVIATIONS`. The design owner should add the row
+`f08_mode45 → D12` when reconciling. Nothing became unexplained.
+
+### Final D / C / G status, for `US-0087`
+
+**D table (`dispatch-and-modes.md`)**
+
+| Row | Status |
+| --- | --- |
+| D1 typed `Mode` / `ColorKey` | done, `US-0076`; representation only, free |
+| D2 insert mode does not force full damage | done, `US-0076`; free (damage is not compared) |
+| D3, D5, D6, D11 | **superseded** into corrections C8, C10, C9, C11 by the correctness-first ruling; all shipped in `US-0076` |
+| D4 mode 2026 reports its real state | done, `US-0076`; free |
+| D7 DECXCPR, D8 XTVERSION, D10 `modifyOtherKeys` | done in `US-0076` despite the table's `US-0086` column (`evidence/US-0076-verify.md:220`); free — answers are discarded by the harness. Covered by `terminal::tests::da1_da2_dsr_xtversion_answers` |
+| D9 LNM tracked but inert | done, `US-0076`; free. **See Gaps** — its DECRQM answer is the one place the "never Set for an inert mode" rule is not applied |
+| **D12 reverse wrap `? 45`** | **done here.** Measured **free** against the 45 recordings (six reset it, none sets it); one declared differential divergence on the dedicated `f08_mode45` fixture, proved by mutation |
+| D13 DA1 answer, D14 title stack cap, D15 kitty stack overflow | done, `US-0076`; all free |
+
+**C table** — every correction is implemented and **measured free**, with one declared exception
+that also came out free in the end:
+
+| Row | Status |
+| --- | --- |
+| C1, C2, C3, C4, C12 | done `US-0075`; measured free — the gate is 45/45 with no `expected-diffs.json` |
+| C5, C6, C7, C8, C10, C11 | done `US-0076`; measured free |
+| C9 DECSTR | done `US-0076`. Predicted the one certain diff; **measured free** because `RIS` and `OSC 104` precede it in `grid_reset` and the soft reset's effects are overwritten before the grid is compared |
+| C13, C14 | done `US-0077`; **measured free** (`corpus.rs:44-53`). The LLD text still reads "to measure in `US-0076`" — stale, listed under Reconciliation |
+| C15 | done `US-0078`; **measured free** — no recording selects. Same stale text |
+| C16 grapheme cap | done `US-0074`; measured free — no recording or fixture reaches 17 codepoints on one cell |
+
+**G table (`grid-and-scrollback.md`)** — **no row is or ever was assigned to `US-0086`.** G1, G2,
+G6 and G7 are `US-0075` representation changes, all free; G3 was withdrawn; G4 and G5 no longer
+exist in the table (G4 became correction C8 and shipped in `US-0076`).
+
+**Still deferred, with the reason:**
+
+| Item | Reason |
+| --- | --- |
+| `VtEvent::Passthrough` / the echo buffer (R-35) | `parser.md` allows it back in `US-0086` **only if a named consumer exists**. The only candidate is SSH-to-ConPTY bridging, which `IN-0029.md` puts outside this intake. Not triggered, so not built |
+| The bundled ConPTY pair (`IN-0029.md:430`) | same shape: it "returns in `US-0086` only if SSH-to-ConPTY bridging is ever built". Not triggered |
+| Mode 2027 grapheme clusters (R-56) | deferred whole by the design, not a deviation. Recognised, inert, and DECRQM says `NotSupported` — which the new table walk now enforces |
+| `? 69`, `? 80`, `? 1016`, `? 2031`, `? 2048` | each a later intake; unknown, dropped, counted, and `NotSupported` on DECRQM, which is the honest answer |
+
+### Gaps
+
+1. **LNM (`CSI 20 h`) answers `Set` while nothing reads it.** D9 says the mode is tracked and
+   inert, and grepping `crates/` finds no reader outside `mode.rs` itself — yet DECRQM reports the
+   stored bit, because the mode table's LNM row says "real". That is the same shape as `? 45`
+   before this packet and `? 9001` today, and the rule as written ("DECRQM must never answer `Set`
+   for a mode that does nothing") would make it `Reset`. **Not changed here**: the rule is stated
+   against private modes, the mode table explicitly says "real" for LNM, and the reference answers
+   the stored bit too. It is the **design owner's** call — either add `Mode::LineFeedNewLine` to
+   `Mode::inert_state` (one line, and the walk would then cover it) or write down why an ANSI mode
+   is exempt.
+2. **`claim_large` on a native number still registers an inert delivery claim.** `claim_large(52)`
+   sets both bits, the delivery half can never fire, and `crates/terminal`'s
+   `the_adapter_claims_the_osc_numbers_it_routes` pins `is_claimed(52) == true`. Tidying it was
+   tried and reverted: this packet may not touch `crates/terminal`, and breaking a sibling crate's
+   contract test to remove a dead bit is not worth it. The bit is documented as inert and
+   `is_native` is how a caller finds out. Owner: whoever next touches `handle.rs`.
+3. **No E2E and no platform proof.** This packet changes no UI surface and needs no app launch. The
+   owner runs Claude Code inside their own `oneterm.exe`, which was never enumerated, driven or
+   stopped.
+4. **The mode-table walk asserts `inert_state` against itself for the wire value.** It is still a
+   real test — it drives `CSI ? n h` then `CSI ? n $ p` through a real `Terminal` and reads the
+   reply bytes, so a dispatch path that ignored the table fails. What it cannot catch is the table
+   itself being wrong about which modes are inert; that stays a review question, and the
+   `assert_eq!(inert, 3)` line is there so a row appearing or leaving is noticed.
+5. **Owning docs are stale but unedited**, by instruction. The Reconciliation table above is the
+   complete list for the design owner.
 
 ## Handoff
 
