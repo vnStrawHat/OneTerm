@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use alacritty_terminal::selection::SelectionType;
+use oneterm_terminal::SelectionKind as SelectionType;
 use oneterm_terminal::mouse_encode::{MouseModifiers, TerminalMouseButton};
 use oneterm_terminal::{
     SessionKind, TerminalError, TerminalIme, TerminalInput, TerminalLifecycle, TerminalRender,
@@ -52,13 +52,7 @@ fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) -> bool {
 }
 
 fn snapshot_contains(session: &LocalSession, needle: &str) -> bool {
-    session
-        .snapshot()
-        .cells
-        .iter()
-        .map(|indexed| indexed.cell.c)
-        .collect::<String>()
-        .contains(needle)
+    session.snapshot().text().contains(needle)
 }
 
 fn spawn_default() -> LocalSession {
@@ -90,12 +84,7 @@ fn assert_powershell_prompt_emits_cwd(kind: oneterm_core::ShellKind, label: &str
 
     let emitted_cwd = wait_until(Duration::from_secs(15), || session.cwd().is_some());
     // `snapshot()` consumes render damage, which is fine here: no renderer runs.
-    let snapshot = session
-        .snapshot()
-        .cells
-        .iter()
-        .map(|indexed| indexed.cell.c)
-        .collect::<String>();
+    let snapshot = session.snapshot().text();
     assert!(
         emitted_cwd,
         "{label} prompt must emit OSC 7 through the PTY; terminal snapshot: {snapshot}"
@@ -138,8 +127,8 @@ fn local_session_grow_policy_matches_conpty() {
 fn trait_snapshot_bounds() {
     let s = spawn_default();
     let snap = s.snapshot();
-    assert_eq!(snap.terminal_bounds.num_cols, 80);
-    assert_eq!(snap.terminal_bounds.num_lines, 24);
+    assert_eq!(snap.size().cols, 80);
+    assert_eq!(snap.size().rows, 24);
     let _ = s.close();
 }
 
@@ -222,7 +211,7 @@ fn trait_write_resize_no_panic() {
     let s = spawn_default();
     let _ = s.write(b"echo hi\r");
     let _ = s.resize(30, 100);
-    assert_eq!(s.snapshot().terminal_bounds.num_cols, 100);
+    assert_eq!(s.snapshot().size().cols, 100);
     let _ = s.close();
 }
 
@@ -302,20 +291,20 @@ fn mouse_drag_updates_selection_not_mouse_move() {
     // Selection should still be empty (start == end at col 0)
     // to_range returns None for empty simple selection
     assert!(
-        snap.selection.is_none(),
+        snap.selection_range().is_none(),
         "mouse_move should not update selection"
     );
     // mouse_drag should update selection
     s.mouse_drag(0.0, 5.0, MouseModifiers::default());
     let snap2 = s.snapshot();
     assert!(
-        snap2.selection.is_some(),
+        snap2.selection_range().is_some(),
         "mouse_drag should update selection"
     );
-    if let Some(sel) = &snap2.selection {
-        assert_eq!(sel.start.column.0, 0);
+    if let Some(sel) = snap2.selection_range() {
+        assert_eq!(sel.start.col, 0);
         assert!(
-            sel.end.column.0 >= 4,
+            sel.end.col >= 4,
             "end col should be >= 4 after drag to col 5"
         );
     }

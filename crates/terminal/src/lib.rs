@@ -55,8 +55,9 @@ pub use mouse_encode::{MouseModifiers, TerminalMouseButton};
 /// direct dependency on `oneterm-vt` first (`US-0085`).
 pub use oneterm_vt::{
     Attrs, CellWidth, Color, CursorShape, GraphicData, GraphicId, HyperlinkId, ModeSnapshot,
-    NamedColor, RenderCell, RenderContent, RenderCursor, RenderPlacement, RenderRow, RenderUpdate,
-    Rgb, RowId, SelectionKind, SelectionRange, Semantic, SeqNo, Size, Style, StyleRun, Terminal,
+    MouseEncoding, MouseProtocol, MouseReporting, NamedColor, RenderCell, RenderContent,
+    RenderCursor, RenderPlacement, RenderRow, RenderUpdate, Rgb, RowId, SelectionKind,
+    SelectionRange, Semantic, SeqNo, Size, Style, StyleRun, Terminal,
     VIRTUAL_CELL as SIXEL_VIRTUAL_CELL,
 };
 pub use osc::{TerminalProgress, encode_osc52};

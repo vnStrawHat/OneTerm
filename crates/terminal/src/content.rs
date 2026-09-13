@@ -292,6 +292,23 @@ impl TerminalContent {
         (row < self.state.rows().len()).then_some(row)
     }
 
+    /// The visible text, row by row, trailing blanks included — what a log
+    /// line or a test means by "what the screen says".
+    pub fn text(&self) -> String {
+        let mut out = String::new();
+        for row in self.state.rows() {
+            for cell in &row.cells {
+                out.push(match cell.content {
+                    oneterm_vt::RenderContent::Scalar(scalar) => scalar,
+                    oneterm_vt::RenderContent::Cluster { start, len } => {
+                        row.cluster(start, len).first().copied().unwrap_or(' ')
+                    }
+                });
+            }
+        }
+        out
+    }
+
     /// Force the next [`refill`](Self::refill) to rebuild everything.
     pub fn invalidate(&mut self) {
         self.state.invalidate();

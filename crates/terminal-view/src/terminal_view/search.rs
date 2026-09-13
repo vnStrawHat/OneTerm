@@ -126,6 +126,7 @@ impl SearchState {
     /// clamped to the viewport) for the element to paint.
     pub(super) fn visible_highlights_into(
         &self,
+        screen_top: oneterm_terminal::RowId,
         display_offset: usize,
         num_lines: usize,
         num_cols: usize,
@@ -137,7 +138,7 @@ impl SearchState {
         }
         let active = self.active_idx;
         for (i, m) in self.matches.iter().enumerate() {
-            let row = m.display_row(display_offset);
+            let row = m.display_row(screen_top, display_offset);
             if row < 0 || row >= num_lines as i32 {
                 continue;
             }
@@ -276,7 +277,11 @@ impl TerminalView {
             return;
         };
         let info = self.session.read(cx).terminal_info();
-        let Some(desired) = centered_offset(m.line, info.total_lines, info.num_lines) else {
+        let Some(desired) = centered_offset(
+            m.grid_line(info.screen_top),
+            info.total_lines,
+            info.num_lines,
+        ) else {
             return;
         };
         let delta = desired as i32 - info.display_offset as i32;
@@ -429,13 +434,19 @@ impl TerminalView {
 
 #[cfg(test)]
 mod tests {
-    use oneterm_terminal::SearchMatch;
+    use oneterm_terminal::{RowId, SearchMatch};
 
     use super::{SearchHighlight, SearchState, centered_offset};
 
+    /// The row the viewport top sits on at `display_offset == 0`. Far enough
+    /// from zero that a negative grid line is a real row id.
+    const SCREEN_TOP: RowId = RowId(1_000);
+
     fn m(line: i32, start_col: usize, end_col: usize) -> SearchMatch {
+        // The tests speak grid lines, which is what the view still reasons in;
+        // the match itself names the row that holds it.
         SearchMatch {
-            line,
+            row: RowId((SCREEN_TOP.0 as i64 + i64::from(line)) as u64),
             start_col,
             end_col,
         }
@@ -458,7 +469,7 @@ mod tests {
         num_cols: usize,
     ) -> Vec<SearchHighlight> {
         let mut out = Vec::new();
-        s.visible_highlights_into(display_offset, num_lines, num_cols, &mut out);
+        s.visible_highlights_into(SCREEN_TOP, display_offset, num_lines, num_cols, &mut out);
         out
     }
 

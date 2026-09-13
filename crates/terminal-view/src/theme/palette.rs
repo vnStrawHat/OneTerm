@@ -1,97 +1,97 @@
-//! ANSI palette, VteRgb ↔ Rgba conversion, and the per-palette `Color` → `Hsla` table.
+//! ANSI palette, `Rgb` ↔ `Rgba` conversion, and the per-palette `Color` → `Hsla` table.
 
-use alacritty_terminal::vte::ansi::Rgb as VteRgb;
 use gpui::{Hsla, Rgba};
+use oneterm_terminal::Rgb;
 use oneterm_terminal::{TerminalPalette, resolve_color};
 
 use crate::render::frame::{Color as FrameColor, Fnv1a};
 
 /// Fixed ANSI 16-color palette (the Tango color scheme).
-pub(crate) const ANSI_16: [VteRgb; 16] = [
-    VteRgb {
+pub(crate) const ANSI_16: [Rgb; 16] = [
+    Rgb {
         r: 0x00,
         g: 0x00,
         b: 0x00,
     }, // 0 black
-    VteRgb {
+    Rgb {
         r: 0xcc,
         g: 0x00,
         b: 0x00,
     }, // 1 red
-    VteRgb {
+    Rgb {
         r: 0x4e,
         g: 0x9a,
         b: 0x06,
     }, // 2 green
-    VteRgb {
+    Rgb {
         r: 0xc4,
         g: 0xa0,
         b: 0x00,
     }, // 3 yellow
-    VteRgb {
+    Rgb {
         r: 0x34,
         g: 0x65,
         b: 0xa4,
     }, // 4 blue
-    VteRgb {
+    Rgb {
         r: 0x75,
         g: 0x50,
         b: 0x7b,
     }, // 5 magenta
-    VteRgb {
+    Rgb {
         r: 0x06,
         g: 0x98,
         b: 0x9a,
     }, // 6 cyan
-    VteRgb {
+    Rgb {
         r: 0xd3,
         g: 0xd7,
         b: 0xcf,
     }, // 7 white
-    VteRgb {
+    Rgb {
         r: 0x55,
         g: 0x57,
         b: 0x53,
     }, // 8 bright black
-    VteRgb {
+    Rgb {
         r: 0xef,
         g: 0x29,
         b: 0x29,
     }, // 9 bright red
-    VteRgb {
+    Rgb {
         r: 0x8a,
         g: 0xe2,
         b: 0x34,
     }, // 10 bright green
-    VteRgb {
+    Rgb {
         r: 0xfc,
         g: 0xe9,
         b: 0x4f,
     }, // 11 bright yellow
-    VteRgb {
+    Rgb {
         r: 0x72,
         g: 0x9f,
         b: 0xcf,
     }, // 12 bright blue
-    VteRgb {
+    Rgb {
         r: 0xad,
         g: 0x7f,
         b: 0xa8,
     }, // 13 bright magenta
-    VteRgb {
+    Rgb {
         r: 0x34,
         g: 0xe2,
         b: 0xe2,
     }, // 14 bright cyan
-    VteRgb {
+    Rgb {
         r: 0xee,
         g: 0xee,
         b: 0xec,
     }, // 15 bright white
 ];
 
-/// `vte::ansi::Rgb` (u8) → `gpui::Rgba` (0..1, alpha 1).
-pub(crate) fn rgba_from_vte(c: VteRgb) -> Rgba {
+/// The engine's `Rgb` (u8) → `gpui::Rgba` (0..1, alpha 1).
+pub(crate) fn rgba_from_rgb(c: Rgb) -> Rgba {
     Rgba {
         r: c.r as f32 / 255.0,
         g: c.g as f32 / 255.0,
@@ -100,18 +100,18 @@ pub(crate) fn rgba_from_vte(c: VteRgb) -> Rgba {
     }
 }
 
-/// `gpui::Rgba` (0..1) → `vte::ansi::Rgb` (u8).
-pub(crate) fn vte_from_rgba(c: Rgba) -> VteRgb {
-    VteRgb {
+/// `gpui::Rgba` (0..1) → the engine's `Rgb` (u8).
+pub(crate) fn rgb_from_rgba(c: Rgba) -> Rgb {
+    Rgb {
         r: (c.r * 255.0).round().clamp(0.0, 255.0) as u8,
         g: (c.g * 255.0).round().clamp(0.0, 255.0) as u8,
         b: (c.b * 255.0).round().clamp(0.0, 255.0) as u8,
     }
 }
 
-/// `vte::ansi::Rgb` → `gpui::Hsla` (via `Rgba`).
-pub(crate) fn hsla_from_vte(c: VteRgb) -> gpui::Hsla {
-    gpui::Hsla::from(rgba_from_vte(c))
+/// The engine's `Rgb` → `gpui::Hsla` (via `Rgba`).
+pub(crate) fn hsla_from_rgb(c: Rgb) -> gpui::Hsla {
+    gpui::Hsla::from(rgba_from_rgb(c))
 }
 
 /// Every non-truecolor [`FrameColor`] resolved to `Hsla` once per palette, so
@@ -150,7 +150,7 @@ impl ColorTable {
                 Self::BRIGHT_FOREGROUND => FrameColor::BrightForeground,
                 _ => FrameColor::DimForeground,
             };
-            *entry = hsla_from_vte(resolve_color(&color.to_vte(), palette));
+            *entry = hsla_from_rgb(resolve_color(&color.to_engine(), palette));
         }
         let mut h = Fnv1a::new();
         for rgb in [palette.foreground, palette.background, palette.cursor]
@@ -182,7 +182,7 @@ impl ColorTable {
             FrameColor::BrightForeground => Self::BRIGHT_FOREGROUND,
             FrameColor::DimForeground => Self::DIM_FOREGROUND,
             FrameColor::Rgb(r, g, b) => {
-                return Hsla::from(rgba_from_vte(VteRgb { r, g, b }));
+                return Hsla::from(rgba_from_rgb(Rgb { r, g, b }));
             }
         };
         self.entries[index]

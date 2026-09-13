@@ -57,16 +57,15 @@ impl From<ResizePolicy> for oneterm_vt::ResizePolicy {
     }
 }
 
-/// So the engine policy a backend now reads back out of
-/// `impl_pty_terminal_session!` still compares equal to the name that backend's
-/// own test spells today.
-///
-// ponytail: a cross-type `PartialEq` is one compare too clever to keep; it dies
-// with `ResizePolicy` itself the moment `US-0083` and `US-0084` have both passed
-// `oneterm_vt::ResizePolicy` through the macro.
-impl PartialEq<ResizePolicy> for oneterm_vt::ResizePolicy {
-    fn eq(&self, other: &ResizePolicy) -> bool {
-        *self == oneterm_vt::ResizePolicy::from(*other)
+/// The other direction, so `impl_pty_terminal_session!` accepts the engine's
+/// own name from a backend that has moved to it (`US-0083`, `US-0084`) without
+/// that backend having to depend on `oneterm-vt`.
+impl From<oneterm_vt::ResizePolicy> for ResizePolicy {
+    fn from(policy: oneterm_vt::ResizePolicy) -> ResizePolicy {
+        match policy {
+            oneterm_vt::ResizePolicy::BottomAnchor => ResizePolicy::Default,
+            oneterm_vt::ResizePolicy::KeepViewportTop => ResizePolicy::KeepViewportTop,
+        }
     }
 }
 

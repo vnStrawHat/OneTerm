@@ -465,13 +465,13 @@ macro_rules! impl_pty_terminal_session {
 
             /// How this backend grows the grid (DEC-0008).
             ///
-            /// The **engine's** policy: the macro argument may be either
-            /// `oneterm_vt::ResizePolicy::{BottomAnchor, KeepViewportTop}` or
-            /// this crate's `ResizePolicy`, which converts into it. Reading it
-            /// back gives the engine value either way, and the adapter enum
-            /// still compares equal to it, so a backend can move to the engine
-            /// name one token at a time.
-            pub(crate) fn resize_policy(&self) -> ::oneterm_vt::ResizePolicy {
+            /// The macro argument may be either this crate's `ResizePolicy` or
+            /// the engine's `oneterm_vt::ResizePolicy`: both convert, so a
+            /// backend can move to the engine's name without an edit here.
+            /// The value read back is this crate's, because the backends reach
+            /// the engine through this crate and not directly (HLD crate
+            /// layout: `local-shell` depends on `core`, `terminal`, `pty`).
+            pub(crate) fn resize_policy(&self) -> $crate::ResizePolicy {
                 ::core::convert::Into::into($resize_policy)
             }
 
@@ -512,10 +512,10 @@ macro_rules! impl_pty_terminal_session {
 
             fn set_default_colors(
                 &self,
-                foreground: ::oneterm_vt::Rgb,
-                background: ::oneterm_vt::Rgb,
-                cursor: ::oneterm_vt::Rgb,
-                ansi: [::oneterm_vt::Rgb; 16],
+                foreground: $crate::Rgb,
+                background: $crate::Rgb,
+                cursor: $crate::Rgb,
+                ansi: [$crate::Rgb; 16],
             ) {
                 self.state.set_default_colors($crate::DefaultColors::new(
                     foreground, background, cursor, ansi,
@@ -604,7 +604,7 @@ macro_rules! impl_pty_terminal_session {
                 row: f32,
                 col: f32,
                 button: $crate::TerminalMouseButton,
-                kind: ::oneterm_vt::SelectionKind,
+                kind: $crate::SelectionKind,
                 mods: $crate::MouseModifiers,
             ) {
                 if let Some(bytes) = self.model().mouse_down(row, col, button, kind, mods) {

@@ -176,6 +176,13 @@ impl GridFixture {
         grid.sync_anchors();
     }
 
+    /// Move the viewport `rows` rows back towards the bottom.
+    pub fn scroll_forward(&mut self, rows: usize) {
+        let grid = self.term.grid_mut();
+        grid.screen_mut().scroll_viewport(rows as i32);
+        grid.sync_anchors();
+    }
+
     /// Select from `start` to `end`, both in `(screen row, column)`.
     pub fn select(&mut self, start: (usize, usize), end: (usize, usize), kind: SelectionKind) {
         let top = self.term.screen().screen_top();
@@ -196,6 +203,11 @@ impl GridFixture {
             CursorShape::Underline => self.feed(b"\x1b[4 q"),
             CursorShape::Beam => self.feed(b"\x1b[6 q"),
         }
+    }
+
+    /// The damage-free line-range read, as a session would answer it.
+    pub fn line_range_cells(&self, start_line: usize, count: usize) -> LineRangeCells {
+        crate::model::line_range_cells(&self.term, start_line, count)
     }
 
     /// Refill a caller-owned frame buffer.
@@ -262,17 +274,30 @@ pub struct FakeSessionProbe {
 }
 
 impl FakeSessionProbe {
-    /// Replace the text shown by the terminal: the screen is cleared and the
-    /// lines are written from the top.
+    /// Replace the text shown by the terminal.
+    ///
+    /// Only the rows that actually differ are repainted — CUP, the line, then
+    /// `EL` — because that is what a program does, and because clearing the
+    /// whole screen would stamp every row and make "only the changed rows are
+    /// rebuilt" untestable.
     pub fn set_text(&self, text: impl Into<String>) {
         let text = text.into();
+        let mut shown = self.state.shown.lock().unwrap();
+        let new: Vec<&str> = text.lines().collect();
+        let old: Vec<&str> = shown.lines().collect();
         let mut engine = self.state.engine.lock().unwrap();
-        engine.feed(b"\x1b[H\x1b[2J");
-        for (row, line) in text.lines().enumerate() {
+        for row in 0..new.len().max(old.len()) {
+            let (before, after) = (old.get(row).copied(), new.get(row).copied());
+            if before == after {
+                continue;
+            }
             engine.feed(format!("\x1b[{};1H", row + 1).as_bytes());
-            engine.feed(line.as_bytes());
+            engine.feed(after.unwrap_or("").as_bytes());
+            engine.feed(b"\x1b[K");
         }
         engine.feed(b"\x1b[H");
+        drop(engine);
+        *shown = text;
     }
 
     /// Feed raw bytes to the terminal behind the fake.
@@ -380,6 +405,9 @@ pub struct FakeTerminalSession {
 
 struct FakeSessionState {
     engine: Mutex<GridFixture>,
+    /// What `set_text` last painted, so the next call repaints only the rows
+    /// that differ.
+    shown: Mutex<String>,
     writes: Mutex<Vec<Vec<u8>>>,
     input_calls: Mutex<Vec<FakeInputCall>>,
     selection: Mutex<Option<String>>,
@@ -406,6 +434,7 @@ impl FakeTerminalSession {
         let (event_tx, event_rx) = async_channel::bounded(64);
         let state = Arc::new(FakeSessionState {
             engine: Mutex::new(GridFixture::new(rows, cols)),
+            shown: Mutex::new(String::new()),
             writes: Mutex::new(Vec::new()),
             input_calls: Mutex::new(Vec::new()),
             selection: Mutex::new(None),

@@ -378,10 +378,22 @@ fn cursor_layer_and_gutter_paint(cx: &mut TestAppContext) {
     assert!(geometry.origin.x > geometry.bounds.origin.x + geometry.gutter_width - px(1.0));
 }
 
+/// `frame.rs` is the only file under `render/` allowed to name the engine's own
+/// vocabulary; everything above it speaks the view's `Cell` / `Color` /
+/// `CellFlags`. The needle changed at `US-0085` with the crate the view reads.
 #[test]
-fn render_has_single_alacritty_file() {
+fn render_has_single_engine_file() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/render");
-    let needle = concat!("alacritty", "_terminal");
+    // The engine's *cell* vocabulary. `RenderUpdate` is deliberately not in the
+    // list: the tri-state is the contract the plan cache is written against.
+    // Spelled in halves so this file does not match its own list.
+    let needles = [
+        concat!("Render", "Row"),
+        concat!("Render", "Cell"),
+        concat!("Render", "Content"),
+        concat!("Named", "Color"),
+        concat!("Cell", "Width"),
+    ];
     let mut offenders = Vec::new();
     let entries = std::fs::read_dir(&dir).expect("render dir");
     for entry in entries {
@@ -394,41 +406,29 @@ fn render_has_single_alacritty_file() {
             continue;
         }
         let source = std::fs::read_to_string(&path).expect("read source");
-        if source.contains(needle) {
+        if needles.iter().any(|needle| source.contains(needle)) {
             offenders.push(name.to_string());
         }
     }
     assert!(
         offenders.is_empty(),
-        "only frame.rs may name the engine crate: {offenders:?}"
+        "only frame.rs may name the engine's cell vocabulary: {offenders:?}"
     );
 }
 
-/// A 2 x 2 cell Sixel image: uploaded once, painted once per frame from its
-/// first visible cell, gone when its cells lose their references.
+/// A real Sixel image: uploaded once, painted once per frame from the first
+/// cell that still references it, gone when the screen is cleared.
+///
+/// `US-0085` fed it as a real DCS sequence instead of fabricating a
+/// `GraphicCell` per covered cell: the engine owns the decode, the placement and
+/// the release signal, and the painter derives the per-cell offset from the
+/// placement (R-21).
 #[gpui::test]
 fn sixel_image_paints_once_per_frame(cx: &mut TestAppContext) {
-    use oneterm_terminal::{GraphicCell, GraphicData, GraphicId};
     let mut h = Harness::open(cx, 6, 12, "", inputs_without_cursor());
     let _ = h.first_frame();
-    let id = GraphicId(7);
-    h.probe.push_graphic(std::sync::Arc::new(GraphicData {
-        id,
-        width: 16,
-        height: 16,
-        rgba: vec![255; 16 * 16 * 4],
-    }));
-    for (line, col, row, column) in [(1, 2, 0, 0), (1, 3, 0, 1), (2, 2, 1, 0), (2, 3, 1, 1)] {
-        h.probe.set_graphic(
-            line,
-            col,
-            GraphicCell {
-                id,
-                col: column,
-                row,
-            },
-        );
-    }
+    // Two bands of two columns: 2 x 12 pixels, one virtual 10 x 20 cell.
+    h.probe.push_sixel(None);
     let stats = h.draw();
     assert_eq!((stats.images_uploaded, stats.images), (1, 1), "{stats:?}");
     let stats = h.draw();
@@ -437,6 +437,7 @@ fn sixel_image_paints_once_per_frame(cx: &mut TestAppContext) {
         (0, 1),
         "known id is not re-uploaded: {stats:?}"
     );
+    // `cls`: the cells lose their reference, the engine releases the image.
     h.probe.clear_graphics();
     let stats = h.draw();
     assert_eq!(stats.images, 0, "{stats:?}");
