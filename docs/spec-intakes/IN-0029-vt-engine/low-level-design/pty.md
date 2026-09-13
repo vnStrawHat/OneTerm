@@ -80,6 +80,31 @@ Three API defects fixed while moving, each of which OneTerm works around today:
 | The child pid is reached differently per platform (`pty.child().id()` on Unix, `pty.child_watcher().pid()` on Windows) | two cfg'd helper functions (`crates/local-shell/src/event_loop.rs:168-179`) | one `child_pid()` |
 | `setup_env()` sets `TERM` and `COLORTERM` process-globally with `unsafe { env::set_var }` | never called; OneTerm sets them through `Options::env` (`crates/core/src/config/shell.rs`) | not ported |
 
+### Readiness is level-triggered on both platforms
+
+A source registered with `PollMode::Level` **re-announces itself for as long as it stays usable**.
+A caller may read once per readiness and return to the poller, or stop reading with bytes still
+buffered — because it wants to yield the engine, or because its own buffer filled — and its next
+`poll.wait` still returns. Draining to empty before going back to the poller is an optimisation
+(one fewer completion packet), never a correctness requirement.
+
+| Platform | How the promise is kept |
+| --- | --- |
+| Unix | `poller.add_with_mode(&self.master, interest, mode)` registers the **pty master fd itself**, so `PollMode::Level` is epoll's or kqueue's own level trigger and bytes left in the kernel buffer re-deliver on the next `wait` |
+| Windows | The ring **emulates** readiness, so it must re-post: `PipeReader::read` sets `caller_waiting = (bytes left == 0)` and, when bytes **are** left, posts the completion packet itself. `PipeWriter::write` mirrors it with `caller_waiting = (room left == 0)` and a post when room remains |
+
+The Windows half is the one that can be got wrong, and was: delivering edge-once behind a
+`PollMode::Level` registration means a caller that honours the documented contract is never woken
+again and parks in `poll.wait` with output in hand and no diagnostic. Setting the flag only on an
+*empty* ring also left a read that drained the ring exactly without arming the push-side wake at
+all. Both holes close on the one exit path above.
+
+Cost: one extra IOCP packet per read that leaves bytes behind. `left > 0` implies the caller's
+buffer filled, which on ConPTY means a read of about 1 MiB — the measured median is 82 bytes — so
+the shipped local shell posts none of them. The writer side is contract symmetry rather than an
+observed defect: nothing registers writable interest today, but it is the same three lines and the
+same trap for the next consumer.
+
 ### Windows
 
 **The bundled console host is load-bearing and must be preserved.** OneTerm ships Windows
@@ -227,6 +252,14 @@ Listed above. The crate's whole public surface is `Options`, `Shell`, `WindowSiz
 
 `cargo test -p oneterm-pty`
 
+- [ ] `pipe_tests::a_reader_left_with_bytes_buffered_is_woken_again` — registers `Level`, drains to
+  arm, lets the child write 32 bytes, reads **8**, and polls again: the exact "stop reading with
+  bytes buffered" shape. It then drains the remaining 24 exactly and proves a further write still
+  wakes. Fails against edge delivery with "a level-triggered reader was not woken with bytes still
+  buffered".
+- [ ] `pipe_tests::a_writer_with_room_left_is_woken_again` — five bytes into a 4 KiB ring, then a
+  poll. Both tests use `std::io::pipe()`, so no child process and no ConPTY is involved, and both
+  are deterministic.
 - [ ] `pty::tests::loopback_implements_the_evented_contract` — the loopback PTY from
   `crates/local-shell/src/event_loop_tests.rs:270-332`, moved here, proving the traits are
   implementable outside the crate.

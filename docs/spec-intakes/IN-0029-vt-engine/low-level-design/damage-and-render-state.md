@@ -211,6 +211,18 @@ everything", and a `Partial` naming every row says the same thing more expensive
 
 ### Fairness and reply latency
 
+**The flag must not be one-shot.** `take_render_demand` clears by asking, so a renderer whose
+demand is consumed by the pump inside `lock_for_render`'s own raise-then-block window never gets
+served and starves for the length of the flood — measured by `US-0083` as its gap 6. The rule the
+handshake actually needs: **the demand stays observable until the renderer acquires the lock**,
+cleared by the acquisition rather than by the question. Owned as a `US-0082` rework.
+
+**The reader's side of fairness is a bound on the lock hold, not only the flag.** A loop that holds
+the engine across reads must cap the bytes it takes per hold — `MAX_LOCKED_READ = 64 KiB` in
+`crates/local-shell` — or the flag has nowhere to take effect; and **a yield is a batch boundary**,
+so it must end the batch, or a transport that never runs dry emits no repaint hint and no events at
+all ([`migration.md`](migration.md) § "The adapter contract").
+
 **As shipped, the flag lives on `TerminalHandle` beside the lock** (`crates/terminal/src/handle.rs`):
 `lock_for_render()` raises then locks, `take_render_demand()` is the pump's yield check and clears by
 asking, `render_demand_raised()` reads without clearing. Measured: a pump that honours it hands the

@@ -247,6 +247,42 @@ It is measured, and the difference is not marginal: a pump that honours the flag
 in **one batch / 157 us**; the same pump ignoring it makes the renderer wait **3 800 batches /
 354 ms**.
 
+**`US-0083` wired the local-shell half, and it is the one that needed it.** That loop holds the
+engine lock across reads, so the flag alone is not enough: the read itself is capped at
+**`MAX_LOCKED_READ = 64 KiB`**, which bounds the bytes handed to one `pump.advance` and therefore
+one lock hold. `READ_BUFFER_SIZE` is deliberately unchanged — it is what the contended path
+accumulates into, and shrinking it spun a test binary at 100 % CPU.
+
+| Transport | Bytes per lock hold | Worst frame wait |
+| --- | --- | --- |
+| Real ConPTY, `fast-dev` — what ships | p50 **82 B**, max 9.6 KB | **52-59 us** |
+| Loopback TCP fixture, before the cap | p50 ~634 KB | 86-125 ms |
+| Loopback TCP fixture, after the cap | at most 64 KiB | **6-17 ms** |
+| Yield disabled (negative control) | — | **never arrives** |
+
+Throughput improved with the cap rather than regressing: **52.6-54.9 MiB/s**, independently
+reproduced as 41.4 → 54.2 MiB/s.
+
+**A yield is a batch boundary.** Capping reads meant a flooded socket never runs dry, so the inner
+read loop stopped exiting — and `finish_batch` only ran when it exited. The first capped run
+processed zero lines: no line count, no repaint hint and no title, cwd or OSC event reached the UI
+for the length of the flood. ConPTY hides this because it runs dry tens of thousands of times a
+second; a socket does not. The yield therefore calls `finish_batch_blocking(true)`, which is safe
+because the guard is already dropped (CORR-01).
+
+**Staying in the read loop is now only a preference.** It was a workaround for the Windows ring
+delivering readiness edge-once behind a `PollMode::Level` registration; `US-0071`'s rework made the
+ring genuinely level-triggered on both platforms ([`pty.md`](pty.md) § "Readiness is
+level-triggered"), so a loop that returns to the poller with bytes still buffered is woken again.
+Draining before going back is one fewer completion packet, not a correctness requirement.
+
+**Gap 6 — the demand flag is one-shot, and that is a race.** `take_render_demand` clears by asking,
+so a frame whose demand is consumed inside `lock_for_render`'s own raise-then-block window is not
+served and starves for the length of the flood. Every frame that *asks* is served; this one asked
+and lost its flag to the pump. The fix is in `crates/terminal`, not in either backend: **the demand
+must stay observable until the renderer actually acquires the lock**, so the flag is cleared by the
+acquisition rather than by the question. It is owned as a `US-0082` rework.
+
 **`US-0084` wired the SSH half.** `ssh_main_task` calls `take_render_demand()` at the chunk
 boundary, after `finish_batch` has sent the batch's events and after the replies have left, and
 yields rather than dropping a guard — it locks per chunk, so it has no guard to drop, which is a
