@@ -210,6 +210,84 @@ impl<'a> Harness<'a> {
     }
 }
 
+/// Frame time and the plan counters under sustained output, off a real GPUI
+/// draw in a headless window.
+///
+/// `US-0085`'s stand-in for "frame time under `yes` and a 10 MB `type`" from the
+/// running app's diagnostics log: the desktop this packet was implemented on was
+/// disconnected, so no window could be presented or captured. Everything the
+/// packet changed is in here — the frame is built from the render state and the
+/// plans are keyed on `(RowId, SeqNo)` — and the counters printed are the same
+/// `FrameStats` the app's log line prints. Run it explicitly:
+///
+/// ```text
+/// cargo test -p oneterm-terminal-view --profile fast-dev frame_time_under_output
+///     -- --ignored --nocapture
+/// ```
+#[gpui::test]
+#[ignore = "measurement, run explicitly"]
+fn frame_time_under_output(cx: &mut TestAppContext) {
+    let mut h = Harness::open(cx, 30, 120, "", inputs());
+    h.first_frame();
+
+    let line =
+        "the quick brown fox jumps over the lazy dog 0123456789 \u{1b}[33mcolour\u{1b}[0m tail\r\n";
+    let mut frames = Vec::new();
+    let mut planned = 0u64;
+    let mut total = 0u64;
+    let mut unchanged = 0u32;
+    // A megabyte of scrolling output in 4 KiB chunks, one drawn frame per chunk.
+    let mut payload = String::new();
+    while payload.len() < 1024 * 1024 {
+        payload.push_str(line);
+    }
+    let bytes = payload.into_bytes();
+    for chunk in bytes.chunks(4096) {
+        h.probe.feed(chunk);
+        let stats = h.draw();
+        frames.push(u64::from(stats.prepaint_us + stats.paint_us));
+        planned += u64::from(stats.rows_planned);
+        total += u64::from(stats.rows_total);
+    }
+    let flood: Vec<u64> = frames.clone();
+
+    // Then sixty idle frames: nothing changed, so the tri-state should cost
+    // nothing at all.
+    frames.clear();
+    for _ in 0..60 {
+        let stats = h.draw();
+        frames.push(u64::from(stats.prepaint_us + stats.paint_us));
+        unchanged += stats.frames_unchanged;
+        assert_eq!(stats.rows_planned, 0, "an idle frame plans nothing");
+        assert_eq!(stats.rows_candidate, 0, "and considers nothing");
+    }
+    assert_eq!(unchanged, 60, "every idle frame was reported Unchanged");
+
+    let report = |name: &str, mut samples: Vec<u64>| {
+        samples.sort_unstable();
+        let n = samples.len();
+        let sum: u64 = samples.iter().sum();
+        println!(
+            "  {name}: n={n} total={} ms avg={} us p50={} us p95={} us max={} us",
+            sum / 1000,
+            sum / n as u64,
+            samples[n / 2],
+            samples[(n * 95) / 100],
+            samples[n - 1],
+        );
+    };
+    println!(
+        "frame time, 1 MiB of scrolling output in 4 KiB chunks, debug_assertions={}",
+        cfg!(debug_assertions)
+    );
+    report("flood (prepaint+paint)", flood.clone());
+    report("idle  (prepaint+paint)", frames);
+    println!(
+        "  rows planned over {} flood frames: {planned} of {total} viewport rows",
+        flood.len(),
+    );
+}
+
 #[gpui::test]
 fn dirty_frame_plans_rows_and_shapes(cx: &mut TestAppContext) {
     let mut h = Harness::open(

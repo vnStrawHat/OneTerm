@@ -9,9 +9,9 @@ Created: 2026-09-13
 ## Status
 
 <!-- HARNESS:STATUS:BEGIN -->
-- [x] Planned
+- [ ] Planned
 - [ ] In progress
-- [ ] Implemented
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -72,26 +72,32 @@ else. Concretely:
 
 ## Acceptance
 
-- [ ] `grep -rn alacritty_terminal crates/terminal crates/terminal-view` matches
-  only `crates/terminal/tests/us0081_parity.rs` and the `[dev-dependencies]` line
-  that lets it build.
-- [ ] `crates/terminal/src/engine_shim.rs` does not exist.
-- [ ] `plan_cache` is keyed on `(RowId, SeqNo)`; an idle frame plans no row and
-  hashes none, and a scroll replans only the scrolled-in rows.
-- [ ] `RenderUpdate::Unchanged` reaches the plan cache as "nothing to do": no
-  candidate scan, no URL scan, no layout.
-- [ ] Every test in `crates/terminal` and `crates/terminal-view` passes unchanged,
-  or is consciously rewritten with the reason recorded below.
-- [ ] `cargo test -p oneterm-terminal --test us0081_parity` green, with the same
+- [x] `grep -rn alacritty_terminal crates/terminal crates/terminal-view` matches
+  only `crates/terminal/tests/us0081_parity.rs`, the `[dev-dependencies]` line
+  that lets it build, and four comments citing the fork. No **code** in either
+  crate names it.
+- [x] `crates/terminal/src/engine_shim.rs` does not exist.
+- [x] `plan_cache` is keyed on `(RowId, SeqNo)`; an idle frame plans no row and
+  hashes none (there is no hash left), and a scroll replans only the scrolled-in
+  rows.
+- [x] `RenderUpdate::Unchanged` reaches the plan cache as "nothing to do": no
+  candidate scan, no URL scan, no layout — `FrameStats::frames_unchanged`.
+- [x] Every test in `crates/terminal` and `crates/terminal-view` passes unchanged,
+  or is consciously rewritten with the reason recorded in
+  [`evidence/US-0085-verify.md`](evidence/US-0085-verify.md) § 2.
+- [x] `cargo test -p oneterm-terminal --test us0081_parity` green, with the same
   five-difference allow-list.
-- [ ] `pwsh scripts/ci-local.ps1` green.
-- [ ] The four GUI walks reproduced from this worktree's `fast-dev` build with
-  screenshots under `evidence/` prefixed `US-0085-`: IN-0018 render walk (including
-  the render-sampler pixel comparison against the binary built from `main`),
-  IN-0027 font/ligature/fallback walk, IN-0028 Sixel walk (including `cls` and a
-  prompt below an image), US-0071 local-shell walk.
-- [ ] The flood table re-measured (the ~9 ms legacy-cell rebuild gone) and frame
-  time under `yes` for 10 s and `type` of a 10 MB file, old binary versus new.
+- [x] `pwsh scripts/ci-local.ps1` green.
+- [ ] **NOT MET.** The four GUI walks could not be reproduced: `quser` reports
+  session 1 **`Disc`** for the whole packet, so `PrintWindow` returns an all-black
+  bitmap and `CopyFromScreen` fails. No `US-0085-` screenshot exists. The gap and
+  what stands in for it are in `evidence/US-0085-verify.md` § 3.
+- [x] The flood table re-measured, before and after, on this machine
+  ([`evidence/US-0085-measurements.md`](evidence/US-0085-measurements.md)): the
+  snapshot column drops 61 -> 36 ms in `fast-dev` and 38 -> 12 ms in release, more
+  than the ~9 ms `migration.md` attributed to the `Cell` rebuild alone. Frame time
+  under sustained output is measured headless, from the same `FrameStats`
+  counters; **the old-binary comparison for it is part of the GUI gap.**
 
 ## Documentation
 
@@ -139,8 +145,26 @@ owning doc that still describes the *old* consumer shape is IN-0018's HLD.
 
 ### Reconciliation
 
-Before completion, list docs changed or confirm the recorded no-change reason
-remains valid.
+Changed:
+
+- `docs/spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md`
+  — idea 1 amended, idea 3 renamed off the fork, the diagram, two module-map rows,
+  the `RenderState` field table, the whole Invalidation Rules table and deviation
+  8. Commit `0a8b7f3`.
+
+Confirmed unchanged, and why:
+
+- `.../low-level-design/{migration,damage-and-render-state,graphics,selection,
+  events-and-api}.md` — this packet consumed the shapes they already specify;
+  nothing about the engine's behaviour changed. `migration.md`'s `US-0085` row,
+  its deletion list and its cost table all describe what was done.
+- `docs/terminal-backend.md` — § 5's pump layer and § 5.3's resize policy are
+  untouched: no engine, transport or lock path changed.
+- `docs/agents/structure.md`, `crate-dependency-rules.md`, `dependencies.md` — no
+  crate was added or removed and no dependency edge changed. `crates/terminal`'s
+  `alacritty_terminal` moved from `[dependencies]` to `[dev-dependencies]` and
+  `crates/terminal-view` dropped it; both lines are `US-0087`'s to delete, and the
+  dependency-graph script passes as it stands.
 
 ## Context
 
@@ -195,28 +219,85 @@ anywhere in the workspace.
 - The four GUI walks, from this worktree's `fast-dev` build, own process only.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
 - [ ] Platform proof
-- [ ] Verify command passed
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-After implementation, record commands, results, and anything skipped, unavailable,
-partial, or failing.
+Full record: [`evidence/US-0085-verify.md`](evidence/US-0085-verify.md) and
+[`evidence/US-0085-measurements.md`](evidence/US-0085-measurements.md).
+
+```text
+cargo test --workspace                                   green (exit 0)
+cargo test -p oneterm-terminal                           245 passed
+cargo test -p oneterm-terminal --test us0081_parity        5 passed, 2 ignored
+cargo test -p oneterm-terminal-view                      288 passed, 2 ignored
+cargo clippy --workspace --all-targets -- -D warnings     green
+pwsh scripts/ci-local.ps1                                 green
+cargo build -p oneterm-app --profile fast-dev             Finished in 1m 45s
+```
+
+### Gaps
+
+1. **The four GUI walks were not reproduced, and no screenshot exists.** `quser`
+   reports session 1 `Disc` (idle 12:03) throughout. An instance was launched from
+   this worktree's `fast-dev` binary (pid 15516; the owner's 27376 recorded first
+   and never signalled), created a window and stayed alive, but `PrintWindow`
+   returns an all-black bitmap on a disconnected session — the same result the
+   `US-0081` independent verifier recorded. The walks, and with them the
+   **render-sampler pixel comparison against a binary built from `main`**, remain
+   owed and need an Active desktop. `evidence/US-0085-verify.md` § 3 lists what
+   stands in for them (`us0081_parity` over 81 streams through the native path;
+   the headless GPUI draw tests including a real Sixel painted and released) and
+   says plainly how far that goes: what a frame *contains* is proven, what a GPU
+   draws from it is not.
+2. **No old-versus-new frame time from the app's diagnostics log**, for the same
+   reason. The engine-side half of that question — the per-frame snapshot cost —
+   is measured before and after on this machine.
+3. `crates/local-shell/src/session_tests.rs` was edited (seven one-line reads of
+   deleted fields plus one import). `US-0083` owns that crate and runs
+   concurrently; the edits are listed line by line in `US-0085-verify.md` § 2 so
+   they can be re-applied if that packet's branch wins the merge.
+4. One additive engine accessor: `oneterm_vt::Terminal::interner_mut`. Nothing on
+   the engine's own paths uses it; it exists so an embedder **test** can write a
+   styled cell into a real grid instead of the render state growing a fabrication
+   API for a downstream test.
 
 ## Handoff
 
-Worktree `agent-ad731760c1d949455`. The tool based it on `main @c936ac0`, which has
+Worktree `agent-ad731760c1d949455`, branch
+`worktree-agent-ad731760c1d949455`. The tool based it on `main @c936ac0`, which has
 no `crates/vt`; `git reset --hard d3c537b` was run before anything was read or
 written, so the branch is `feat/vt-engine @ d3c537b` plus this packet's commits.
+**Not merged, not pushed.**
 
-`US-0083` (`crates/local-shell`) and `US-0084` (`crates/ssh`) run concurrently.
-The only file this packet touches in their crates is
-`crates/local-shell/src/session_tests.rs:5` (one import line) — flagged above, and
-flagged to `US-0083`, which deletes that crate's `alacritty_terminal` manifest line.
+**To `US-0083` and `US-0084`.** Nothing in `crates/ssh` was touched.
+`crates/local-shell/src/session_tests.rs` needed seven one-line edits (listed in
+`US-0085-verify.md` § 2); everything else in both crates is untouched, and the
+seam now gives you what you asked for:
 
-`US-0087` inherits: `crates/terminal/tests/us0081_parity.rs` and the
-`[dev-dependencies] alacritty_terminal` line that builds it.
+- `impl_pty_terminal_session!` expands **`$crate::` paths only** — no
+  `::oneterm_vt` reaches the caller, so neither backend needs a dependency on
+  `oneterm-vt` to use the macro.
+- its `$resize_policy` argument accepts **either** `oneterm_terminal::ResizePolicy`
+  or `oneterm_vt::ResizePolicy`: both `From` directions exist. `resize_policy()`
+  still reads back as `oneterm_terminal::ResizePolicy`, because that is the only
+  one `crates/local-shell` can name (the HLD's crate layout gives it `core`,
+  `terminal`, `pty`). `local_session_grow_policy_matches_conpty` and
+  `ssh_session_keeps_the_default_grow_policy` compile unchanged.
+- `set_default_colors` takes `$crate::Rgb` and `mouse_down` takes
+  `$crate::SelectionKind`, so both crates can drop their `alacritty_terminal`
+  manifest line whenever they like.
+- `oneterm_terminal` re-exports the engine vocabulary (`Rgb`, `SelectionKind`,
+  `RowId`, `ModeSnapshot`, `CursorShape`, `RenderRow`, …) for exactly this.
+
+**To `US-0087`.** You inherit `crates/terminal/tests/us0081_parity.rs` — which now
+also carries the legacy-snapshot conversion this packet deleted from the product —
+and the `[dev-dependencies] alacritty_terminal` line that builds it. Deleting the
+test deletes the line and the last mention of the fork in these two crates.
+
+**Still owed:** the four GUI walks, on an Active desktop. See Gaps.
