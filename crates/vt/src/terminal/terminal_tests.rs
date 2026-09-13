@@ -492,6 +492,31 @@ fn decrqm_answers_match_the_mode_table() {
         "? 3, ? 2027 and ? 9001 — and `? 45` left the table"
     );
 
+    // The same walk over the ANSI space (`US-0087`). The rule is about readers,
+    // not about which number space a mode lives in, so LNM — tracked and inert
+    // by deviation D9 — answers through `inert_state` exactly like `? 9001`,
+    // and an `h` must not make it `Set`.
+    let mut ansi_inert = 0;
+    for (mode, code) in Mode::ANSI {
+        let mut session = Session::new(10, 3);
+        session.feed(format!("\x1b[{code}h\x1b[{code}$p").as_bytes());
+        let answer = match mode.inert_state() {
+            Some(state) => {
+                ansi_inert += 1;
+                assert_ne!(state, ModeState::Set, "{mode:?} is inert and claims Set");
+                state
+            }
+            // A mode with a reader answers its real state, which `h` just set.
+            None => ModeState::Set,
+        };
+        assert_eq!(
+            session.replies(),
+            format!("\x1b[{code};{}$y", answer as u8),
+            "ANSI mode {code} ({mode:?})"
+        );
+    }
+    assert_eq!(ansi_inert, 1, "LNM is the only inert ANSI mode");
+
     // `? 45` left it at `US-0086`: `Screen::backspace` reads the mode now, so
     // the honest answer is the real state (deviation D12).
     let mut session = Session::new(10, 3);
@@ -507,12 +532,8 @@ fn decrqm_answers_match_the_mode_table() {
     session.feed(b"\x1b[?1l\x1b[?1$p");
     assert_eq!(session.replies(), "\x1b[?1;2$y");
 
-    // ANSI modes, and an unknown number in both spaces.
+    // An unknown number in both spaces.
     let mut session = Session::new(10, 3);
-    session.feed(b"\x1b[4h\x1b[4$p");
-    assert_eq!(session.replies(), "\x1b[4;1$y");
-    session.feed(b"\x1b[20$p");
-    assert_eq!(session.replies(), "\x1b[20;2$y");
     session.feed(b"\x1b[77$p");
     assert_eq!(session.replies(), "\x1b[77;0$y");
     session.feed(b"\x1b[?7777$p");
