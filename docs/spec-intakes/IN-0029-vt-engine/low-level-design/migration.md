@@ -112,8 +112,26 @@ packet's:
 | --- | --- | --- |
 | `US-0081` shim | all of `crates/terminal`; in `crates/local-shell` and `crates/ssh` **only** the type of the shared terminal, its construction call and the `Cargo.toml` line that adds `oneterm-vt` | their read loops, their transports, their resize paths, their tests |
 | `US-0082` `crates/terminal` native | `model.rs`, `session.rs`, `content.rs`, `search.rs`, `url*.rs`, `palette.rs`, `osc_color.rs`, `logging.rs`, `test_support.rs`, `backend/` | any other crate |
-| `US-0083` `local-shell` native | the read loop drains the `EventBatch` instead of the deferred sink; `ResizePolicy::KeepViewportTop` is selected through the engine API rather than through `TerminalModel`; the `oneterm-pty` tokens replace the last local constants; the `alacritty_terminal` manifest line is deleted | `crates/terminal` |
-| `US-0084` `ssh` native | the same three for the tokio task, plus `ResizePolicy::BottomAnchor` selection; the `alacritty_terminal` manifest line is deleted | `crates/terminal` |
+| `US-0083` `local-shell` native | `take_render_demand()` at the chunk boundary and the guard dropped when it answers `true` — the loop that holds the lock across reads, so the one that needs it; the `oneterm-pty` token constants replace the last local ones | `crates/terminal`; **not** the manifest line (see below) |
+| `US-0084` `ssh` native | the same yield check for the tokio task | `crates/terminal`; **not** the manifest line |
+
+**Neither backend can delete its `alacritty_terminal` manifest line, and `US-0084` measured why.**
+Removing it fails with five `E0433`s whose span is the `impl_pty_terminal_session!` *invocation*:
+the macro, in `crates/terminal/src/session.rs`, expands `::alacritty_terminal` paths into each
+backend for the trait's own signatures — four `vte::ansi::Rgb` parameters of `set_default_colors`
+(`:515-518`) and `selection::SelectionType` in `mouse_down` (`:611`). No hand-written impl escapes
+them, and **no `crates/ssh` or `crates/local-shell` source file names the fork**: the only two hits
+per crate are the manifest line and its comment.
+
+The same macro blocks the resize policy: it generates
+`fn resize_policy(&self) -> $crate::model::ResizePolicy`, so although `TerminalModel::new` already
+takes `impl Into<oneterm_vt::ResizePolicy>`, passing the engine's enum is **not** one token in the
+backend — the macro's return type has to change first, in `crates/terminal`.
+
+Both are therefore **`US-0085`'s**, which is where the compatibility surface goes. The backends'
+final act is one line each, deleting the manifest entry once the macro stops expanding the name:
+**assigned to `US-0085`'s Handoff as a two-line follow-up**, not to `US-0087`, so the fork's last
+references leave with the surface that forced them rather than waiting for the decommission.
 | `US-0085` `terminal-view` native | `render/frame.rs`, `plan_cache`, `input/mouse.rs`, `mouse_tests.rs`, `theme/palette.rs`; deletes `engine_shim.rs` | the backends |
 
 None of the five can run behind the old engine, which is exactly why `US-0081` exists: it is the
@@ -227,12 +245,29 @@ Arc<TerminalHandle>` wraps `FairMutex<Engine>` plus one `Demand`
 
 It is measured, and the difference is not marginal: a pump that honours the flag hands the lock over
 in **one batch / 157 us**; the same pump ignoring it makes the renderer wait **3 800 batches /
-354 ms**. `take_render_demand` has no non-test caller yet — **`US-0083` and `US-0084` own calling
-it**, and until they do that 354 ms stall is today's behaviour, not a regression.
+354 ms**.
 
-**`TerminalModel::new(term, impl Into<oneterm_vt::ResizePolicy>)`.** The backends pass
-`BottomAnchor` or `KeepViewportTop` through the macro argument they already pass — one token each.
-When both have, `crate::model::ResizePolicy` and its `From` are deleted.
+**`US-0084` wired the SSH half.** `ssh_main_task` calls `take_render_demand()` at the chunk
+boundary, after `finish_batch` has sent the batch's events and after the replies have left, and
+yields rather than dropping a guard — it locks per chunk, so it has no guard to drop, which is a
+strictly stronger answer. Measured under a loopback flood, a waiting frame gets the engine in
+**394 us**, the same order as the 157 us the handshake bench predicts. The yield is **insurance** in
+that shape: the 354 ms starvation case belongs to the loop that holds the lock across reads, which
+is `crates/local-shell`'s — so **`US-0083` is where the flag stops being insurance and starts being
+the fix**. A mutation check proves the call is load-bearing: commenting it out fails
+`task_tests::the_task_yields_the_engine_to_a_waiting_frame` on the "never took the render demand"
+assertion.
+
+`US-0084` also pinned the resize policy by behaviour rather than by name: a test asserts the
+grid **anchors the bottom row** on a grow, mutation-checked, instead of asserting which enum
+variant was passed.
+
+**`TerminalModel::new(term, impl Into<oneterm_vt::ResizePolicy>)`.** It already accepts the
+engine's enum, but the backends cannot yet pass it: `impl_pty_terminal_session!` generates
+`fn resize_policy(&self) -> $crate::model::ResizePolicy`, so the macro's return type changes first,
+in `crates/terminal`, at `US-0085`. Only then are `crate::model::ResizePolicy` and its `From`
+deleted. Until then each backend keeps its adapter-enum token, and its *behaviour* is pinned by a
+mutation-checked test rather than by the token's name.
 
 **`OscRouter::drain(&batch, &mut Vec<SessionEvent>)`.** The deferred/reliable sink is gone.
 `TerminalPump::advance` feeds and drains under the lock; `finish_batch[_blocking](repaint)` sends
@@ -333,7 +368,7 @@ publish `alacritty_terminal` value types — the *compatibility surface* — and
 reads them. They are public API, not an internal detail, so the fork cannot be deleted until the
 view stops consuming them.
 
-| `alacritty_terminal.workspace = true` — the **last** manifest lines, if any survive; each crate's line is deleted by the packet that stops importing the fork: `crates/terminal` at `US-0082`, `crates/local-shell` at `US-0083`, **`crates/ssh` at `US-0084` (its line is already dead — the crate imports nothing from the fork after the shim)**, `crates/terminal-view` at `US-0085`, `crates/tools` at `US-0087` with `vt-diff` | `crates/terminal/Cargo.toml:19`, `crates/local-shell/Cargo.toml:20`, `crates/ssh/Cargo.toml:20`, `crates/terminal-view/Cargo.toml:32`, `crates/tools/Cargo.toml:35` |
+| `alacritty_terminal.workspace = true` — the **last** manifest lines. No backend source file names the fork; the lines survive only because `impl_pty_terminal_session!` expands `::alacritty_terminal` paths into each backend for the trait's own signatures, which is `crates/terminal`'s to stop. `crates/terminal` deletes its own line when the compatibility surface goes (`US-0085`), and the two backends then delete theirs — one line each, assigned to `US-0085`'s Handoff. `crates/terminal-view` at `US-0085`; `crates/tools` at `US-0087` with `vt-diff` | `crates/terminal/Cargo.toml:19`, `crates/local-shell/Cargo.toml:20`, `crates/ssh/Cargo.toml:20`, `crates/terminal-view/Cargo.toml:32`, `crates/tools/Cargo.toml:35` |
 | The two fork rows in the notices header | `scripts/third-party-notices.py:85-86` |
 | The `--full` step running `vendor/refresh.sh --check` | `scripts/ci-local.sh`, `scripts/ci-local.ps1` |
 | The `vte` dev-dependency and the differential oracle | `crates/vt/Cargo.toml`, `crates/vt/tests/differential.rs` |

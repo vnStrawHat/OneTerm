@@ -159,9 +159,11 @@ at a chunk boundary. `US-0082` wired the adapter's half of it:
 - `TerminalHandle::take_render_demand()` is the pump's half: "is a frame waiting for
   me?", cleared by the asking. A read loop calls it at a chunk boundary — **after** that
   batch's reply bytes have left (R-37, § 5.3) — and drops its guard when it answers
-  `true`. Wiring that call into the two read loops is `US-0083` / `US-0084`;
-  `lock_unfair` / `try_lock_unfair` survive as aliases of `lock` / `try_lock` until
-  those loops are rewritten.
+  `true`. `ssh_main_task` does this as of `US-0084` — it locks per chunk, so it yields
+  instead of dropping a guard, and a waiting frame gets the engine in about 400 us under a
+  flood. `crates/local-shell` is the loop that holds the lock across reads, so it is the one
+  the flag exists for; wiring it is `US-0083`, and `lock_unfair` / `try_lock_unfair` survive
+  as aliases of `lock` / `try_lock` until then.
 
 ### 5.2. Snapshot vs live borrow (IMPORTANT)
 
