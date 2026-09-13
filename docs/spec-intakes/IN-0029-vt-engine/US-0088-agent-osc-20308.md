@@ -79,6 +79,7 @@ An unknown `OSC 20308 ; <n>` sub-code is ignored and counted.
 - [x] `docs/osc-sequences-checklist.md` Group G names 20308 and marks 9;7 deprecated.
 - [x] The 45-recording gate and `vt-diff` are unaffected: no recording carries either
       sequence.
+- [x] The agent panel shows the same status for both encodings, in the running app.
 
 ## Documentation
 
@@ -180,11 +181,14 @@ alias are already decided and written down in `docs/osc-agent-status.md` § 2.2 
   C1 `0x9d` forms) before any edit: 231 files, 0 hits.
 - `python scripts/completion-catalog.py validate`.
 - `pwsh scripts/ci-local.ps1` (the full CI gate).
+- E2E, only if the desktop is Active: one throwaway instance built from this
+  worktree, emitting both spellings, screenshotted under a `US-0088-` prefix. The
+  owner's own instance is never enumerated, driven or stopped.
 
 <!-- HARNESS:PROOF:BEGIN -->
 - [x] Unit proof
 - [x] Integration proof
-- [ ] E2E proof
+- [x] E2E proof
 - [ ] Platform proof
 - [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
@@ -194,13 +198,19 @@ alias are already decided and written down in `docs/osc-agent-status.md` § 2.2 
 ### Results
 
 - `pwsh scripts/ci-local.ps1` — **green, exit 0**, all ten steps.
-- Raw totals over the two test steps: **63 sections, 1941 passed / 0 failed / 15
-  ignored** — `cargo test --workspace` 59 sections 1568/0/12 and `vt-paranoid` 4
-  sections 373/0/3.
-- Recording gate: `vt-corpus check --engine new` 45/45 passed, 0 failed, plus
-  `oneterm/sixel_basic` 1/1/0. `vt-diff` 45/45 identical. Unchanged, as the pre-edit
-  byte scan predicted: neither sequence occurs in any recording.
-- `python scripts/completion-catalog.py validate` — green (inside `ci-local.ps1`).
+- Raw totals over the two test steps: **62 sections, 1939 passed / 0 failed / 15
+  ignored** — `cargo test --workspace` 58 sections 1565/0/12 and
+  `cargo test -p oneterm-vt --features vt-paranoid` 4 sections 374/0/3. `US-0086`
+  recorded 62/1927/0/15, so the delta is **+12 tests, none removed**: 5 in
+  `crates/terminal/src/osc.rs`, 4 in `backend_tests.rs`, 1 in `crates/vt`
+  (`osc_9_7_reaches_the_embedder_through_a_claim` became two), each counted twice
+  where a suite runs in both the plain and the `vt-paranoid` step.
+- Recording gate: `vt-corpus check --engine new` — **45 recordings, 45 passed, 0
+  failed**. `vt-diff` — **45 recordings, 45 identical, 0 differing**.
+  `vt-corpus grep-deviations` reports nothing for either code. Unchanged, as the
+  pre-edit byte scan predicted: neither sequence occurs in any recording.
+- `python scripts/completion-catalog.py validate` — `all catalogs valid` (inside
+  `ci-local.ps1`).
 
 ### What routes where
 
@@ -212,15 +222,43 @@ alias are already decided and written down in `docs/osc-agent-status.md` § 2.2 
 | `ESC ] 20308 ; <n> ST`, `ESC ] 20308 ST` | dropped, `SharedSessionState::agent_osc_unknown_subcodes()` +1 |
 | `ESC ] 9 ; 4 ; …`, `ESC ] 9 ; <msg>` | unchanged — progress and notification |
 
+### GUI check — run, and it is the acceptance evidence
+
+`quser` reported the session **Active**, so the check was run.
+`evidence/US-0088-agent-panel-both-encodings.png`.
+
+Driven **without keystroke injection**, which is what made it safe: a throwaway
+instance was built and launched from this worktree, and because `config_dir()` is
+`target/` in a debug build, it read `<worktree>/target/{terminal.json,ui_config.json}`
+— written for the run and deleted after — rather than anything the owner's instance
+uses. Those files set the right dock to `agent` and the shell to a scratchpad script
+that emits both spellings of the *same* payload as two agent ids. So no window was
+focused, enumerated or typed into.
+
+What the screenshot shows:
+
+| | `new-20308` (via `20308;1`) | `legacy-9-7` (via `9;7`) |
+|---|---|---|
+| state | `working` | `working` |
+| model | anthropic > Claude Opus 5 | anthropic > Claude Opus 5 |
+| context | 42k / 200k, 21% | 42k / 200k, 21% |
+| session | `sid s-new` | `sid s-old` |
+
+Identical in every field except the two the emitter deliberately varied. The panel
+header reads `All 2 · Work 2 · Block 0 · Err 0 · Idle 0 · Done 0` — so the reserved
+`OSC 20308;4` sent between them produced **no card**, and the `OSC 20308;0` support
+reply left through the PTY and was consumed by the shell rather than echoed as stray
+text, which is visible as the clean line after `sent OSC 20308;0`.
+
+**The owner's `oneterm.exe` was never enumerated, driven or stopped.** The two
+pre-existing processes (the owner's `dist` build at pid 27376 and another agent's
+worktree build at 31376) were recorded before launch, only the launched pid 31448 was
+stopped, and both were confirmed alive afterwards.
+
 ### Gaps
 
-1. **No E2E / GUI proof.** `quser` reports the console session `Disc`, so the one
-   permitted GUI check (a shell `echo` of both sequences showing the same agent-panel
-   status, screenshotted under a `US-0088-` prefix) was **not** run and no screenshot
-   exists. The owner's own `oneterm.exe` was never enumerated, driven or stopped. The
-   router-level integration tests prove both encodings produce the identical
-   `SessionEvent`, and nothing above the router distinguishes them, so the panel path
-   is unchanged by construction — but that is an argument, not a screenshot.
+1. **No platform proof.** Windows only; the change is platform-neutral (parameter
+   matching and one `format!`), but it was not exercised on Linux or macOS.
 2. **The alias deletion is not scheduled in code.** `docs/osc-agent-status.md` § 3.1
    says `9;7` is dropped in the release after this one; there is no compile-time or
    test-time reminder that will fire then. The `crates/vt` test
@@ -233,6 +271,17 @@ alias are already decided and written down in `docs/osc-agent-status.md` § 2.2 
    release; nothing in this repo can verify that they move.
 4. **The intake's touch list names the completion catalogs; there was nothing there.**
    Recorded under Documentation Action rather than silently skipped.
+5. **Two `9;7` byte literals left in the tree on purpose**, both outside this packet's
+   scope and neither reaching a terminal:
+   - `crates/tools/src/bench.rs` — the throughput fixture keeps the **name**
+     `osc_9_7` because it is the key `US-0072`, `US-0073` and `US-0076` baseline
+     tables compare against, and what it measures is OSC-payload throughput, which
+     the number does not change. Its stale description was corrected and the reason
+     is a comment on the function.
+   - `crates/terminal/tests/us0081_parity.rs` — the `osc9-agent` case diffs
+     `TerminalContent` (grid state) between the fork and the new engine, where an OSC
+     changes nothing either way; `9;7` is still a live alias, so the case still holds,
+     and the file retires with the fork at `US-0087`.
 
 ## Handoff
 
