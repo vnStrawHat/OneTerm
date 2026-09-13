@@ -591,6 +591,75 @@ fn a_flooding_loop_hands_the_engine_to_a_waiting_frame() {
     );
 }
 
+/// What the hand-over costs when a renderer really is taking frames: the pump
+/// gives the engine up about sixty times a second instead of keeping it for the
+/// whole burst. A measurement, not a gate — run it explicitly:
+///
+/// ```text
+/// cargo test -p oneterm-local-shell --profile fast-dev -- --ignored --nocapture flood_throughput
+/// ```
+#[test]
+#[ignore = "measurement; run it explicitly"]
+fn flood_throughput_while_a_renderer_takes_frames() {
+    const WINDOW: Duration = Duration::from_secs(2);
+    const LINE: usize = 4096;
+
+    let (running, mut peer) = start_loop();
+    let stop = Arc::new(AtomicBool::new(false));
+    let _stop_flood = StopFlood(Arc::clone(&stop));
+
+    let ui = {
+        let events = running.events.clone();
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                while events.try_recv().is_ok() {}
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        })
+    };
+    let flood = {
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            let mut line = vec![b'x'; LINE - 2];
+            line.extend_from_slice(b"\r\n");
+            while !stop.load(Ordering::Relaxed) {
+                peer.output(&line);
+            }
+            peer
+        })
+    };
+    let renderer = {
+        let term = Arc::clone(&running.term);
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            let mut frames = 0u32;
+            while !stop.load(Ordering::Relaxed) {
+                drop(term.lock_for_render());
+                frames += 1;
+                std::thread::sleep(Duration::from_millis(16));
+            }
+            frames
+        })
+    };
+
+    let started = Instant::now();
+    std::thread::sleep(WINDOW);
+    let lines = running.state.absolute_line_count();
+    let elapsed = started.elapsed();
+
+    stop.store(true, Ordering::Relaxed);
+    let _peer = flood.join().unwrap();
+    let frames = renderer.join().unwrap();
+    ui.join().unwrap();
+
+    let mib = (lines * LINE) as f64 / (1024.0 * 1024.0);
+    println!(
+        "flood: {mib:.1} MiB in {elapsed:?} = {:.1} MiB/s, renderer got {frames} frames",
+        mib / elapsed.as_secs_f64()
+    );
+}
+
 #[test]
 fn loop_shutdown_stops_the_thread_without_lifecycle_events() {
     let (mut running, _peer) = start_loop();

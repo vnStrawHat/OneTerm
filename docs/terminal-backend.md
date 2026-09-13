@@ -159,9 +159,18 @@ at a chunk boundary. `US-0082` wired the adapter's half of it:
 - `TerminalHandle::take_render_demand()` is the pump's half: "is a frame waiting for
   me?", cleared by the asking. A read loop calls it at a chunk boundary — **after** that
   batch's reply bytes have left (R-37, § 5.3) — and drops its guard when it answers
-  `true`. Wiring that call into the two read loops is `US-0083` / `US-0084`;
-  `lock_unfair` / `try_lock_unfair` survive as aliases of `lock` / `try_lock` until
-  those loops are rewritten.
+  `true`. The local loop does since `US-0083`
+  (`crates/local-shell/src/event_loop.rs`); the ssh task is `US-0084`'s, and
+  `lock_unfair` / `try_lock_unfair` survive as aliases of `lock` / `try_lock` until it
+  lands.
+
+  The yield gives the engine up **without leaving the read loop**, which is a
+  platform constraint rather than a preference: the conout ring re-arms its wake-up
+  only when a read finds it empty (`crates/pty/src/windows/pipe.rs`,
+  `PipeReader::read` arming `caller_waiting`), so a loop that stops reading while
+  bytes are still buffered parks in `poll.wait` and the session freezes. The loop
+  therefore drops the guard, keeps draining the pipe into its buffer, and re-locks
+  once the frame is done.
 
 ### 5.2. Snapshot vs live borrow (IMPORTANT)
 
@@ -435,11 +444,18 @@ thread — the PTY is created, polled and dropped there. It reads with a
 heap-allocated 1 MiB buffer into `TerminalPump::advance` under a
 `try_lock_unfair` guard (falling back to `lock_unfair` only when the buffer is
 full), answers colour queries with the same guard, then calls
-`finish_batch_blocking`. The poller waits **without a timeout**: every
+`finish_batch_blocking`. At each chunk boundary it asks `take_render_demand()`
+and, when a frame is waiting, answers that batch's colour queries and drops the
+guard there (§ 5.1) instead of holding it until the pipe runs dry. The poller
+waits **without a timeout**: every
 `ShellNotifier::send` and the child watcher call `poller.notify()`, so an idle
 tab does not wake up. Being generic over the PTY, the loop is unit-tested with a
 loopback-socket PTY (`event_loop_tests.rs`) — no shell is spawned to cover
-output parsing, input FIFO, resize, colour replies, child exit and shutdown.
+output parsing, input FIFO, resize, colour replies, child exit, shutdown, and the
+hand-over itself (`a_flooding_loop_hands_the_engine_to_a_waiting_frame` floods the
+loop from one thread while another takes frames). The conout re-arm above is *not*
+reachable through the loopback socket, whose readiness is level-triggered; the
+real-shell tests in `session_tests.rs` are what cover it.
 
 ### 6.3. Windows-specific
 
