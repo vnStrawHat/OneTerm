@@ -563,8 +563,9 @@ pub fn connect(cfg: SshConfig, initial: PtySize, scrollback: usize)
   that batch under the lock — replies out first (R-37) — then, the lock released,
   `finish_batch(true).await` sends the batch's events before the `Output` hint (§5.3), and
   the loop asks `SharedTerminal::take_render_demand()` and yields the task when a frame is
-  waiting (§5.1). Nothing in `crates/ssh` names the engine or the fork: the shared pump is
-  the whole of the terminal side.
+  waiting (§5.1). No `crates/ssh` **source file** names the engine or the fork — the shared
+  pump is the whole of the terminal side; the `alacritty_terminal` manifest line survives
+  only because `impl_pty_terminal_session!` expands the name into this crate (`US-0085`).
 - RSA keys authenticate with `rsa-sha2-*` chosen from the server's `server-sig-algs`
   (fallback SHA-512); legacy SHA-1 `ssh-rsa` is never used.
 - Auth: `SshAuthMethod::{None, Password, PrivateKey}` (`crates/core/src/ssh_config.rs`)

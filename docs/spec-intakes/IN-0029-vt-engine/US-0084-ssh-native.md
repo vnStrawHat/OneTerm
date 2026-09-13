@@ -84,8 +84,9 @@ API wanted and its owner, and both are worked around inside `crates/ssh`: see ga
 - `docs/spec-intakes/IN-0029-vt-engine/IN-0029.md` — the `US-0084` packet line (the three
   changes plus `BottomAnchor` and the manifest deletion).
 - `docs/spec-intakes/IN-0029-vt-engine/low-level-design/migration.md` — the N-04 may-touch
-  table, "The adapter contract, as `US-0082` shipped it", the event-order rule, the
-  deletion list (the manifest-line row naming `crates/ssh` at `US-0084`).
+  table (`:116`, the `US-0084` row), "The adapter contract, as `US-0082` shipped it"
+  (`:230-235`), the event-order rule, and the manifest-line row at `:336` — which sits in
+  the `US-0087` fork-scaffolding table, not in the deletion list at `:302-316`.
 - `docs/spec-intakes/IN-0029-vt-engine/US-0082-terminal-native.md` § Handoff — the adapter
   API table and the measured handshake (honoured 1 batch / 157 µs, ignored 3 800 batches /
   354 ms).
@@ -200,7 +201,7 @@ ownership) are inherited; this packet changes neither.
 the batch, `OscRouter::drain` empties it under the same lock with replies first, and the
 collected events are sent once the guard is dropped. There is no deferred sink left in the
 crate to remove — verified by reading every `SessionEventSink` use in `crates/ssh`
-(`session.rs:232`, the constructor, and nothing else).
+(`session.rs:231`, the constructor, and `:784` in a test helper — nothing else).
 
 ### Tests
 
@@ -256,9 +257,11 @@ the flag assertion is the one carrying the proof.
    *Exact API wanted:* the macro must stop naming `::alacritty_terminal`, which needs those
    two trait signatures to move to `oneterm_vt::Rgb` / `SelectionKind`. *Owner:* `US-0085`
    (it moves `input/mouse.rs` and `theme/palette.rs`, the consumers that pin them).
-   `crates/local-shell` hits the identical wall at `US-0083`. The migration LLD's deletion
-   row and the `US-0081` / `US-0082` notes calling the line "already dead" are right about
-   imports and wrong about macro expansion.
+   `crates/local-shell` hits the identical wall at `US-0083`. The claim this rebuts is
+   `migration.md:116` ("the `alacritty_terminal` manifest line is deleted") and `:336`
+   ("its line is already dead"), plus the same words in `US-0081`'s and `US-0082`'s harness
+   notes: all of them are right about imports and wrong about macro expansion. There is no
+   `crates/ssh` row in the deletion list at `:302-316`.
 2. **`oneterm_vt::ResizePolicy::BottomAnchor` cannot be named by a backend.**
    `TerminalModel::new(term, impl Into<oneterm_vt::ResizePolicy>)` is necessary but not
    sufficient: the macro also generates
@@ -296,6 +299,30 @@ the flag assertion is the one carrying the proof.
    `request_shell`, a sustained flood of at least 256 KiB through the real loop, then
    `pty_close` and the task's teardown block — which covers every step of the asked-for walk
    except the resize and the pixels.
+5. **`TerminalCapabilities` had a pre-existing `unwrap()` on a poisoned lock.**
+   `session_terminal.rs:45` — `self.sftp.lock().unwrap()` inside `capabilities()`, a UI
+   runtime path, identical at `d3c537b` and not on anything this packet changed. It is one
+   line, `crates/ssh` is this packet's may-touch, and `SshSession::close_sftp`
+   (`session.rs:76`) and `OscRouter` (`osc_router.rs:126-129`) already read the same kind of
+   lock the way `error-policy.md` asks, so it was fixed here rather than left for `US-0086`:
+   `unwrap_or_else(PoisonError::into_inner)`. No behaviour change on an unpoisoned lock.
+
+### Verification round
+
+The independent verifier's report is committed at
+[`evidence/US-0084-verify.md`](evidence/US-0084-verify.md). Verdict: **merge after fixes**,
+no code defect. It reproduced the totals to the digit, the negative control to the message
+and the second, the E0433 to the error count, and added two checks this packet had not run —
+a mutation check on the resize policy (flipping the token to `KeepViewportTop` fails the new
+test with `left: 23, right: 29`) and a scratch test showing a `window_change` reaching the
+remote PTY in 47 ms mid-flood, because `take_pending_resize()` is checked above the
+`select!`. Applied from it: **F1** (the § 7 sentence that read as if the manifest line were
+gone), **F3** (the citation now names `migration.md:116` and `:336`; there is no such row in
+the deletion list), **F4** (`session.rs:231`, not `:232`) and **F5** (above). **F2** — three
+statements in `migration.md` this packet measured false — is the design owner's, per the
+coordinator. **F6**, the stale comment at `crates/terminal/src/handle.rs:132-135` that still
+lists `crates/ssh/src/task.rs` as a `lock_unfair` call site, is `US-0083`'s: this packet may
+not edit that crate. **F7** is informational and agrees with gap 3.
 
 ## Handoff
 

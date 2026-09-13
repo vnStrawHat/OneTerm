@@ -42,7 +42,10 @@ impl TerminalSession for SshSession {
             sftp: self
                 .sftp
                 .lock()
-                .unwrap()
+                // A poisoned lock must not take the panel down with it: the
+                // handle behind it is still valid (error-policy.md), and
+                // `SshSession::close_sftp` already reads it this way.
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone()
                 .map(|session| session as Arc<dyn SftpBackend>),
             cwd_source: Some(self.state.clone()),
