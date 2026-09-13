@@ -159,9 +159,27 @@ at a chunk boundary. `US-0082` wired the adapter's half of it:
 - `TerminalHandle::take_render_demand()` is the pump's half: "is a frame waiting for
   me?", cleared by the asking. A read loop calls it at a chunk boundary — **after** that
   batch's reply bytes have left (R-37, § 5.3) — and drops its guard when it answers
-  `true`. Wiring that call into the two read loops is `US-0083` / `US-0084`;
-  `lock_unfair` / `try_lock_unfair` survive as aliases of `lock` / `try_lock` until
-  those loops are rewritten.
+  `true`. Both pumps do: `ssh_main_task` since `US-0084` (it locks per chunk, so its
+  answer to a raised flag is to yield the tokio task before the next chunk relocks; a
+  waiting frame gets the engine in about 400 us under a flood) and the local loop since
+  `US-0083` (`crates/local-shell/src/event_loop.rs`, the shape the 354 ms starvation was
+  measured on). `lock_unfair` / `try_lock_unfair` survive as aliases of `lock` /
+  `try_lock` until the last caller is rewritten.
+
+  How long a frame waits is `bytes-per-lock-hold / parse rate`, so the read is capped at
+  `MAX_LOCKED_READ` (64 KiB), the bytes handed to one `advance`. ConPTY delivers 82 bytes
+  at the median and never notices; a socket delivers ~600 KB per read, where the cap is
+  worth 10x on the worst-case wait (`US-0083`, measured both ways). A yield also **ends
+  the batch** (`finish_batch`), because on a transport that never runs dry that is the
+  only place a batch ever ends, and with it the repaint hint and the batch's events.
+
+  The yield gives the engine up **without leaving the read loop**, which is a
+  platform constraint rather than a preference: the conout ring re-arms its wake-up
+  only when a read finds it empty (`crates/pty/src/windows/pipe.rs`,
+  `PipeReader::read` arming `caller_waiting`), so a loop that stops reading while
+  bytes are still buffered parks in `poll.wait` and the session freezes. The loop
+  therefore drops the guard, keeps draining the pipe into its buffer, and re-locks
+  once the frame is done.
 
 ### 5.2. Snapshot vs live borrow (IMPORTANT)
 
@@ -435,11 +453,19 @@ thread — the PTY is created, polled and dropped there. It reads with a
 heap-allocated 1 MiB buffer into `TerminalPump::advance` under a
 `try_lock_unfair` guard (falling back to `lock_unfair` only when the buffer is
 full), answers colour queries with the same guard, then calls
-`finish_batch_blocking`. The poller waits **without a timeout**: every
+`finish_batch_blocking`. Each read takes at most `MAX_LOCKED_READ` (64 KiB), so
+one lock hold is bounded in bytes. At each chunk boundary it asks
+`take_render_demand()` and, when a frame is waiting, answers that batch's colour
+queries, drops the guard and finishes the batch there (§ 5.1) instead of holding
+it until the pipe runs dry. The poller waits **without a timeout**: every
 `ShellNotifier::send` and the child watcher call `poller.notify()`, so an idle
 tab does not wake up. Being generic over the PTY, the loop is unit-tested with a
 loopback-socket PTY (`event_loop_tests.rs`) — no shell is spawned to cover
-output parsing, input FIFO, resize, colour replies, child exit and shutdown.
+output parsing, input FIFO, resize, colour replies, child exit, shutdown, and the
+hand-over itself (`a_flooding_loop_hands_the_engine_to_a_waiting_frame` floods the
+loop from one thread while another takes frames). The conout re-arm above is *not*
+reachable through the loopback socket, whose readiness is level-triggered; the
+real-shell tests in `session_tests.rs` are what cover it.
 
 ### 6.3. Windows-specific
 
@@ -557,8 +583,13 @@ pub fn connect(cfg: SshConfig, initial: PtySize, scrollback: usize)
 - `ssh_main_task` has a third `select!` arm: it serves `HandleRequest`s from the
   forward listeners (one direct-tcpip open per accepted local connection),
   because the connection handle lives only in the task.
-- Reliable events emitted during `processor.advance` are flushed by
-  `TerminalPump::finish_batch().await` after the batch, before the `Output` hint (§5.3).
+- Per data chunk (`US-0084`): `TerminalPump::process_chunk` feeds the engine and drains
+  that batch under the lock — replies out first (R-37) — then, the lock released,
+  `finish_batch(true).await` sends the batch's events before the `Output` hint (§5.3), and
+  the loop asks `SharedTerminal::take_render_demand()` and yields the task when a frame is
+  waiting (§5.1). No `crates/ssh` **source file** names the engine or the fork — the shared
+  pump is the whole of the terminal side; the `alacritty_terminal` manifest line survives
+  only because `impl_pty_terminal_session!` expands the name into this crate (`US-0085`).
 - RSA keys authenticate with `rsa-sha2-*` chosen from the server's `server-sig-algs`
   (fallback SHA-512); legacy SHA-1 `ssh-rsa` is never used.
 - Auth: `SshAuthMethod::{None, Password, PrivateKey}` (`crates/core/src/ssh_config.rs`)
