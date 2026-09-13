@@ -808,7 +808,9 @@ fn pump_yields_to_the_render_demand_within_a_bounded_number_of_chunks() {
                 // lock to a waiter on unlock, so there a bare yield is enough;
                 // `std::sync::Mutex` is unfair, so the test's pump parks for
                 // well under a frame instead of spinning straight back in.
-                if demand.take() {
+                // The ask takes nothing away: the demand stands until the
+                // renderer holds the lock and releases it itself.
+                if demand.is_raised() {
                     thread::sleep(Duration::from_micros(250));
                 }
             }
@@ -825,6 +827,8 @@ fn pump_yields_to_the_render_demand_within_a_bounded_number_of_chunks() {
     let waiting = Instant::now();
     {
         let mut engine = engine.lock().expect("the engine lock was poisoned");
+        // In, so the pump need not yield for this frame any more.
+        demand.release();
         engine.update(&mut state);
     }
     let waited = waiting.elapsed();
@@ -841,6 +845,9 @@ fn pump_yields_to_the_render_demand_within_a_bounded_number_of_chunks() {
         chunks_waited <= 8,
         "the renderer waited {chunks_waited} chunks, not one"
     );
-    assert!(!demand.is_raised(), "the pump never took the flag");
+    assert!(
+        !demand.is_raised(),
+        "the demand outlived the frame that raised it"
+    );
     assert_eq!(state.rows().len(), 24);
 }

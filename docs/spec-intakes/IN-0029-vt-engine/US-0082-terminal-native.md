@@ -13,7 +13,7 @@ Created: 2026-09-12
 - [ ] In progress
 - [x] Implemented
 - [ ] Changed
-- [ ] Reopened (acceptance rework)
+- [x] Reopened (acceptance rework)
 - [ ] Retired
 <!-- HARNESS:STATUS:END -->
 
@@ -487,7 +487,168 @@ smaller count would number the top rows from below zero.
    `TerminalContent::{row_id, display_row}` is built and tested, waiting for it.
 6. **The pump half of the demand handshake has no caller.** `take_render_demand()` is
    implemented and tested; the `break` that acts on it lives in the two read loops, which
-   are `US-0083` / `US-0084`'s by the N-04 table.
+   are `US-0083` / `US-0084`'s by the N-04 table. **Closed**: both loops call it now, and
+   wiring them exposed a race in the handshake itself, fixed under
+   *Rework (2026-09-13)* below.
+
+## Rework (2026-09-13): race-free render demand
+
+Acceptance rework of this packet, not a new defect: `US-0083` wired the first real caller of
+`take_render_demand()` and found that the adapter half of the handshake could lose a frame's
+wake-up. Recorded there as gap 6, owned here.
+
+### The defect
+
+`lock_for_render()` raised a **one-shot** flag and *then* blocked on the `FairMutex`. A pump
+calling `take_render_demand()` in the window between those two steps consumed the only signal
+that frame had; every later ask answered "nobody is waiting", so the pump kept the engine until
+the transport ran dry and the frame starved for the whole flood. `US-0083` measured it 3/3 at
+**> 5 s**, against 11-17 ms for a frame that keeps its flag, and saw it in the wild twice: one
+throughput run under a loaded machine reported 1 frame instead of 118, and the workspace gate
+failed with `no frame reached the engine within 2.25s of a flooding pump` while the yield was
+present and working. It is nanoseconds wide idle and milliseconds wide under load, which is why
+it survived this packet's own tests.
+
+### The fix
+
+**The waiter clears its own demand, on acquisition; the pump's ask clears nothing.** `Demand`
+becomes a count of waiting renderers instead of a one-bit flag:
+
+```rust
+// crates/vt/src/render/demand.rs
+pub struct Demand(Arc<AtomicUsize>);
+pub fn raise(&self);            // fetch_add   — the renderer, before it blocks
+pub fn release(&self);          // saturating fetch_sub — the renderer, once it is in
+pub fn is_raised(&self) -> bool // load > 0    — the pump, and it takes nothing away
+```
+
+```rust
+// crates/terminal/src/handle.rs
+pub fn lock_for_render(&self) -> FairMutexGuard<'_, Engine> {
+    self.demand.raise();
+    let engine = self.engine.lock();
+    self.demand.release();
+    engine
+}
+pub fn take_render_demand(&self) -> bool { self.demand.is_raised() }
+```
+
+There is no window left: between `raise` and the acquisition the frame is waiting *and*
+visible, so a pump that asks at any point inside it yields — and yields again at the next chunk
+boundary if the frame still has not made it in, which is exactly right. `Demand::take` (the
+clearing swap) is deleted; it has no caller left.
+
+**Why a count and not a level flag cleared on acquisition.** A flag is one line shorter and
+fixes the reported case, but a second waiter is then cleared by the first one's acquisition and
+starves the same way. The count is the same size and has no such edge.
+
+**Both pump loops are untouched**, by design: `take_render_demand() -> bool` keeps its name and
+its meaning ("someone is waiting; yield"), so `crates/local-shell/src/event_loop.rs` and
+`crates/ssh/src/task.rs` read exactly as `US-0083` / `US-0084` wrote them. The one visible
+change for them is that a standing demand now survives more than one ask, so a pump may yield at
+several consecutive boundaries while a frame is queued. That is the intended behaviour and it is
+what the two handshake tests measure.
+
+### Files
+
+| file | change |
+|---|---|
+| `crates/terminal/src/handle.rs` | the fix, the doc contract, two rewritten tests and the new race test |
+| `crates/vt/src/render/demand.rs` | the primitive: `AtomicUsize`, `release()`, `take()` deleted |
+| `crates/vt/src/render/demand.rs`'s test (`crates/vt/src/render/render_tests.rs`) | the engine-level pump model follows the same contract: the renderer releases once it holds the lock, the pump only reads |
+
+Nothing else in the workspace changed; no pump, no LLD.
+
+### The race test
+
+`handle::tests::a_pumps_ask_does_not_consume_a_frame_that_is_still_waiting` reproduces the
+window deterministically rather than racing for it. The pump thread holds the engine for the
+whole test, so once `render_demand_raised()` is true the frame provably has not acquired
+anything: **every** ask in the loop that follows falls inside the raise-to-acquire window. It
+then asserts what the old code could not hold — the demand survives 100 consecutive asks — drops
+the pump's guard once, and requires the frame to arrive and the demand to be gone.
+
+Proved against the old code by restoring the one-shot semantics in a scratch copy of both files:
+
+```
+thread 'handle::tests::a_pumps_ask_does_not_consume_a_frame_that_is_still_waiting' panicked at
+crates\terminal\src\handle.rs:257:13:
+ask 1 lost a frame that is still waiting for the engine
+```
+
+`ask 1` is the second ask: the first one consumed it. Restored immediately afterwards; the
+worktree carries no scratch.
+
+Two existing tests pinned the old semantics and were rewritten, not deleted:
+
+- `a_render_lock_raises_the_demand_until_the_pump_takes_it` -> **`an_uncontended_frame_leaves_no_demand_behind`**.
+  It asserted that an uncontended `lock_for_render()` leaves a flag standing for the pump to
+  take. Under the fix that frame was never blocked, so nothing is waiting and an idle pump must
+  not be asked to yield — which is the property now pinned.
+- `the_demand_crosses_threads` — same property (a raise on one thread is seen on another), but
+  the pump now holds the lock while it observes, because a frame that is not blocked no longer
+  leaves anything behind. It also asserts the frame cleared its own demand.
+
+### Measurements
+
+**The pumps' handshake tests, 3 runs each, unchanged sources, all green:**
+
+| test | runs |
+|---|---|
+| `oneterm-local-shell` `a_flooding_loop_hands_the_engine_to_a_waiting_frame` | ok / ok / ok (0.15 s, 0.18 s, 0.17 s) |
+| `oneterm-ssh` `the_task_yields_the_engine_to_a_waiting_frame` | ok / ok / ok (0.10 s, 0.11 s, 0.11 s) |
+
+**The `US-0082` two-thread shape, re-measured** (scratch test in `handle.rs`, run then deleted,
+as the verifier did): one pump thread takes the lock once and feeds 4 MiB as 1024 x 4 KiB
+chunks, checking the demand at each chunk boundary; the frame starts asking after 8 batches.
+
+| arm | batches waited | wall | runs |
+|---|---|---|---|
+| honoured | **1** | 988.5 us / 872.2 us / 874.1 us | 3/3 |
+| ignored (negative control) | **1016** | 828.6 ms / 886.8 ms / 867.9 ms | 3/3 |
+
+The shape of the `US-0082` result holds after the fix: **one batch against a thousand**. The
+absolute numbers are not comparable with the verifier's `1 batch / 156.8 us` and
+`3800 batches / 354.4 ms` — same 4 MiB, but a different chunk (4094 `x` plus CRLF, so 24 rows of
+scroll work per chunk) at `test` opt-level 0, which makes each batch cost more and therefore
+makes fewer of them fit in the flood. The ratio, which is the property, is 1:1016 here against
+1:3800 there.
+
+### Verification
+
+`pwsh scripts/ci-local.ps1` — **all ten steps passed**, exit 0.
+
+Raw totals over the two test steps: **62 sections: 1921 passed / 0 failed / 14 ignored** —
+`cargo test --workspace` 58 / 1552 / 0 / 11 and `vt-paranoid` 4 / 369 / 0 / 3.
+
+`US-0083` recorded 62 / 1919 / 0 / 14, but off `feat/vt-engine` @ `d3c537b`, which does not
+contain `US-0084`'s ssh merge (`26ca48d`) and its handshake test. Against this rework's own base,
+`1424db0`, the delta is **+1 passed** — the race test — and nothing else in the workspace moved.
+
+One earlier run of the gate died in `rustc` with `memory allocation of 2097152 bytes failed`
+while compiling the `windows` crate. Machine pressure, not this diff: no `rustc` was running and
+19.5 GB of 31.7 GB was free by the time it was looked at, and the re-run with
+`CARGO_BUILD_JOBS=6` was green from the same tree.
+
+No GUI walk — unchanged from gap 1, and the owner's own `oneterm.exe` was never enumerated or
+stopped.
+
+### What the design owner must change (LLDs not edited)
+
+- [`low-level-design/damage-and-render-state.md`](low-level-design/damage-and-render-state.md)
+  section "Fairness and reply latency" (R-37) still documents the shipped primitive as
+  `Demand(Arc<AtomicBool>)` with `raise()` / `take() -> bool` ("swap(false, AcqRel) — the pump,
+  at a chunk boundary"), and says `take_render_demand()` "clears by asking". All three lines are
+  now wrong. The contract to write: `Demand(Arc<AtomicUsize>)`, `raise()` before the block,
+  `release()` on acquisition, `is_raised()` for the pump, and **the asking never clears** — with
+  the reason (the raise-to-block window) kept, because it is the whole point of the shape.
+- [`low-level-design/migration.md`](low-level-design/migration.md) section "The adapter contract,
+  as `US-0082` shipped it" names `TerminalHandle` as part of the frozen seam. The method set and
+  the signatures are unchanged (`lock_for_render`, `take_render_demand() -> bool`,
+  `render_demand_raised()`), so the seam holds; only the sentence describing the clearing needs
+  the same correction if it repeats it.
+- `US-0085` should know that `render_demand_raised()` and `take_render_demand()` are now the same
+  read and one of them can go when the pump loops move.
 
 ## Handoff
 
