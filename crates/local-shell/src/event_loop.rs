@@ -1,15 +1,18 @@
-//! Custom event loop — replacement for `alacritty_terminal::event_loop::EventLoop`.
+//! The local shell's PTY read loop, on the owner thread that also owns the PTY.
 //!
-//! Feeds PTY bytes to the shared [`TerminalPump`] (`ansi::Processor` + OSC
-//! routing + line accounting) in a **single pass**. OSC 7/9/133 and screen
-//! clears (`CSI 2J/3J`, RIS) are surfaced by the OneTerm alacritty fork via
-//! `Event::Osc` / `Event::ClearScreen` and handled by the shared `OscRouter` —
-//! there is no second `vte::Parser`.
+//! Feeds PTY bytes to the shared [`TerminalPump`] in a **single pass**: one
+//! `Terminal::feed` fills an `EventBatch` and `OscRouter::drain` turns it into
+//! replies, state-cache updates and `SessionEvent`s, all under the engine lock;
+//! the events are sent once the guard is dropped. There is no second parser and
+//! no deferred sink.
+//!
+//! The loop holds that guard across consecutive reads, which is what makes a
+//! flood fast and a waiting frame slow — so it asks
+//! [`SharedTerminal::take_render_demand`] at each chunk boundary and hands the
+//! lock over when a frame is waiting (§ 5.1 of `docs/terminal-backend.md`).
 //!
 //! The loop is generic over the PTY (`EventedPty + OnResize`) so tests drive it
 //! with an in-memory transport instead of a real shell (TEST-02).
-//!
-//! Reference: `alacritty_terminal::event_loop::EventLoop`.
 
 use std::borrow::Cow;
 use std::collections::VecDeque;
@@ -31,8 +34,8 @@ use oneterm_terminal::{SharedTerminal, TerminalPump, local_log_identity};
 
 use crate::transport::{LocalListener, LocalTransport};
 
-/// PTY read buffer size (1 MiB — same as alacritty). Heap-allocated: the owner
-/// thread's default 2 MiB stack must not carry it (PERF-21).
+/// PTY read buffer size (1 MiB). Heap-allocated: the owner thread's default
+/// 2 MiB stack must not carry it (PERF-21).
 const READ_BUFFER_SIZE: usize = 0x10_0000;
 /// Poll events collected per `poll.wait` (PTY readable + child watcher).
 const POLL_EVENT_CAPACITY: NonZeroUsize = match NonZeroUsize::new(1024) {
@@ -354,7 +357,9 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
 
                 if event.key == PTY_CHILD_EVENT_TOKEN {
                     if let Some(ChildEvent::Exited(status)) = self.pty.next_child_event() {
-                        self.term.lock().exit();
+                        // Nothing to tell the engine: liveness is
+                        // `SharedSessionState::alive`, and the pump publishes
+                        // the exit itself.
                         publish_child_exit(&self.pump, status);
                         self.deregister_pty();
                         return;
@@ -388,36 +393,73 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
                             },
                         }
 
-                        // Lock terminal.
-                        let terminal = match &mut terminal {
-                            Some(t) => t,
-                            None => {
-                                let guard = match self.term.try_lock_unfair() {
-                                    None if unprocessed >= READ_BUFFER_SIZE => {
-                                        self.term.lock_unfair()
+                        {
+                            // Lock terminal.
+                            let engine = match &mut terminal {
+                                Some(engine) => engine,
+                                None => {
+                                    let guard = match self.term.try_lock_unfair() {
+                                        None if unprocessed >= READ_BUFFER_SIZE => {
+                                            self.term.lock_unfair()
+                                        }
+                                        None => continue,
+                                        Some(guard) => guard,
+                                    };
+                                    #[cfg(feature = "terminal-diagnostics")]
+                                    if diagnostics_enabled {
+                                        lock_started = Some(std::time::Instant::now());
                                     }
-                                    None => continue,
-                                    Some(t) => t,
-                                };
-                                #[cfg(feature = "terminal-diagnostics")]
-                                if diagnostics_enabled {
-                                    lock_started = Some(std::time::Instant::now());
+                                    terminal.insert(guard)
                                 }
-                                terminal.insert(guard)
-                            }
-                        };
+                            };
 
-                        // Feed bytes to Term (parse + absolute line accounting).
-                        self.pump.advance(terminal, &buf[..unprocessed]);
+                            // Feed the chunk to the engine: parse, drain the
+                            // batch, collect this batch's events.
+                            self.pump.advance(engine, &buf[..unprocessed]);
+                        }
 
                         processed += unprocessed;
                         unprocessed = 0;
 
-                        // Do NOT break at MAX_LOCKED_READ — read until the pipe is empty.
-                        // When the pipe is empty, try_read() stores a waker → the reader
-                        // thread notifies when more data arrives → no stalling.
-                        // The Term lock is held while reading, but FairMutex ensures the
-                        // UI can acquire the lock once the event loop releases it.
+                        // Chunk boundary: hand the engine to a waiting frame
+                        // rather than at the end of the burst. A fair mutex
+                        // cannot help a waiter that never sees an unlock, and
+                        // this loop holds its guard until the pipe runs dry —
+                        // the `US-0082` verifier measured a frame waiting
+                        // 3 800 batches / 354 ms that way, against one batch /
+                        // 157 µs when the loop yields.
+                        //
+                        // Two rules shape it. This batch's colour replies leave
+                        // first (R-37): conhost blocks for up to a second on a
+                        // query answer, and that must not queue behind a frame.
+                        // And the yield must not leave the read loop: the conout
+                        // ring re-arms its wake-up only when a read finds it
+                        // empty (`crates/pty/src/windows/pipe.rs`), so a loop
+                        // that stops reading with bytes still buffered parks in
+                        // `poll.wait` and the session freezes. The next pass
+                        // keeps draining the pipe into `buf` and re-locks once
+                        // the frame is done.
+                        if self.term.take_render_demand()
+                            && let Some(guard) = terminal.take()
+                        {
+                            let queries = self.pump.take_color_queries();
+                            let replies = if queries.is_empty() {
+                                Vec::new()
+                            } else {
+                                self.pump.color_replies(&guard, queries)
+                            };
+                            #[cfg(feature = "terminal-diagnostics")]
+                            if diagnostics_enabled && let Some(start) = lock_started.take() {
+                                record_lock_sample(&mut stat_lock_hold_us, start);
+                            }
+                            // Fair unlock: the engine goes to the frame.
+                            drop(guard);
+                            self.pump.write_color_replies(replies);
+                        }
+
+                        // Otherwise read on: when the pipe is empty `read` arms
+                        // the wake-up, the pipe thread posts on the next bytes,
+                        // and the loop parks in `poll.wait`.
                     }
 
                     // Answer OSC 10/11/12 color queries collected during parsing.
