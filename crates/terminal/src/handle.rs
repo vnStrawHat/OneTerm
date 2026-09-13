@@ -11,11 +11,12 @@
 //!
 //! Fairness alone is not enough under sustained output: a pump thread that
 //! unlocks and immediately relocks still beats a sleeping waiter. So the render
-//! path raises a one-bit demand and the read loop tests it at a chunk boundary
+//! path raises a demand and the read loop tests it at a chunk boundary
 //! — **after** that batch's reply bytes have left, never before
 //! (`damage-and-render-state.md` § "Fairness and reply latency", R-37). The
 //! engine owns the flag type and nothing else about it: the policy below is the
-//! adapter's.
+//! adapter's, and the policy is that **the waiter clears its own demand, on
+//! acquisition** — see [`TerminalHandle::lock_for_render`].
 
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -97,7 +98,15 @@ impl TerminalHandle {
 
     /// Acquire for a frame: raise the demand first, so a pump that is mid-burst
     /// gives the lock up at its next chunk boundary instead of at its next
-    /// natural pause.
+    /// natural pause, and drop it again once the frame is actually in.
+    ///
+    /// **The demand is released here, by the waiter, never by the pump's ask**
+    /// (`US-0082` rework, `US-0083` gap 6): raising a one-shot flag and *then*
+    /// blocking leaves a window in which a pump's `take_render_demand()`
+    /// consumes the only signal this frame had, after which the pump sees an
+    /// idle engine and keeps it until the transport runs dry. Holding the
+    /// demand across the acquire closes the window — the frame is either
+    /// waiting and visible, or in.
     ///
     /// Only the snapshot path calls this. `query_state` and `terminal_info` run
     /// on the same thread and are O(1) under the lock, so making them raise the
@@ -105,18 +114,24 @@ impl TerminalHandle {
     /// never wait.
     pub fn lock_for_render(&self) -> FairMutexGuard<'_, Engine> {
         self.demand.raise();
-        self.engine.lock()
+        let engine = self.engine.lock();
+        self.demand.release();
+        engine
     }
 
-    /// The pump's half of the handshake: "is a frame waiting for me?", and the
-    /// flag is cleared by the asking. A read loop calls it at a chunk boundary,
-    /// after the batch's replies have been written, and drops its guard when it
-    /// answers `true`.
+    /// The pump's half of the handshake: "is a frame waiting for me?". A read
+    /// loop calls it at a chunk boundary, after the batch's replies have been
+    /// written, and drops its guard when it answers `true`.
+    ///
+    /// The name is the pump's verb, kept so the two backend loops read the way
+    /// `US-0083` / `US-0084` wrote them; the asking takes nothing away. A
+    /// standing `true` means a frame is still outside the lock, so a pump that
+    /// yields again is right to.
     pub fn take_render_demand(&self) -> bool {
-        self.demand.take()
+        self.demand.is_raised()
     }
 
-    /// Read the flag without clearing it, for diagnostics and tests.
+    /// The same read, spelled for diagnostics and tests.
     pub fn render_demand_raised(&self) -> bool {
         self.demand.is_raised()
     }
@@ -194,17 +209,74 @@ mod tests {
         TerminalHandle::new(GridSize { cols: 20, lines: 4 }, DEFAULT_SCROLLBACK_LINES)
     }
 
-    /// The half of the handshake this packet owns: a frame asks, the pump is
-    /// told once, and the next chunk boundary sees a clear flag.
+    /// The half of the handshake this packet owns: a frame that is not waiting
+    /// leaves nothing standing, so an idle pump is never asked to yield.
     #[test]
-    fn a_render_lock_raises_the_demand_until_the_pump_takes_it() {
+    fn an_uncontended_frame_leaves_no_demand_behind() {
         let handle = handle();
         assert!(!handle.render_demand_raised());
 
         drop(handle.lock_for_render());
-        assert!(handle.render_demand_raised());
-        assert!(handle.take_render_demand(), "the pump is told exactly once");
-        assert!(!handle.take_render_demand());
+        assert!(
+            !handle.take_render_demand(),
+            "the frame was never blocked, so nothing is waiting for the pump"
+        );
+    }
+
+    /// The rework's property, and the race that made it necessary
+    /// (`US-0083` gap 6): `lock_for_render` raises the demand and *then* blocks,
+    /// so a pump asking inside that window used to consume the frame's only
+    /// signal — every later ask said "nobody is waiting" and the pump kept the
+    /// engine until the transport ran dry (measured > 5 s, 3/3).
+    ///
+    /// Deterministic because the pump holds the engine throughout: once the
+    /// raise is visible, the frame provably has not acquired anything, so every
+    /// ask in the loop below falls inside the window. On the one-shot flag this
+    /// fails on the second iteration.
+    #[test]
+    fn a_pumps_ask_does_not_consume_a_frame_that_is_still_waiting() {
+        let handle = Arc::new(handle());
+        let pump = handle.lock();
+
+        let (in_tx, in_rx) = std::sync::mpsc::channel();
+        let frame = {
+            let handle = Arc::clone(&handle);
+            std::thread::spawn(move || {
+                let started = std::time::Instant::now();
+                let guard = handle.lock_for_render();
+                let waited = started.elapsed();
+                drop(guard);
+                in_tx.send(waited)
+            })
+        };
+
+        // The raise has landed and the engine is ours: the frame is inside the
+        // window, by construction.
+        while !handle.render_demand_raised() {
+            std::thread::yield_now();
+        }
+        for ask in 0..100 {
+            assert!(
+                handle.take_render_demand(),
+                "ask {ask} lost a frame that is still waiting for the engine"
+            );
+        }
+
+        // The pump's yield: one batch boundary, one unlock.
+        drop(pump);
+        let waited = in_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the frame never reached the engine after the pump yielded");
+        frame.join().unwrap().expect("the frame thread reports");
+
+        assert!(
+            waited < std::time::Duration::from_secs(5),
+            "the frame waited {waited:?} for one batch boundary"
+        );
+        assert!(
+            !handle.take_render_demand(),
+            "the demand outlived the frame that raised it"
+        );
     }
 
     /// A pump lock must not ask itself to yield.
@@ -216,16 +288,22 @@ mod tests {
         assert!(!handle.take_render_demand());
     }
 
-    /// The demand is a hand-off between threads, so it has to survive one.
+    /// The demand is a hand-off between threads, so it has to survive one: the
+    /// pump asking on this thread sees a frame that raised on another.
     #[test]
     fn the_demand_crosses_threads() {
         let handle = Arc::new(handle());
+        let pump = handle.lock();
         let render = {
             let handle = Arc::clone(&handle);
             std::thread::spawn(move || drop(handle.lock_for_render()))
         };
+        while !handle.take_render_demand() {
+            std::thread::yield_now();
+        }
+        drop(pump);
         render.join().unwrap();
-        assert!(handle.take_render_demand());
+        assert!(!handle.render_demand_raised(), "the frame cleared its own");
     }
 
     #[test]
