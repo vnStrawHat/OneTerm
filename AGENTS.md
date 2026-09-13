@@ -20,7 +20,7 @@ Guide for AI agents (and contributors) when working with the **OneTerm** project
 - Browse and transfer files over SFTP
 - Open local shells
 - Monitor coding agents in a live Agent Panel fed by the OSC 9;7 proposal ([spec](docs/osc-agent-status.md)). 
-- Powered by `Rust`, `alacritty_terminal`, `gpui`, `gpui-component`
+- Powered by `Rust`, `gpui`, `gpui-component` and OneTerm's own VT engine `oneterm-vt`
 
 ---
 
@@ -114,9 +114,8 @@ python scripts/completion-catalog.py validate # completion catalogs vs schema
 python scripts/third-party-notices.py --check # THIRD-PARTY-NOTICES.md matches Cargo.lock
 ```
 
-Optional (need network / extra tools; CI runs them too): `bash vendor/refresh.sh --check`
-(vendored forks == pristine + patches) and `cargo deny check licenses bans advisories`
-(`cargo install cargo-deny`). Pass `--full` to `ci-local` to include both.
+Optional (needs an extra tool; CI runs it too): `cargo deny check licenses bans advisories`
+(`cargo install cargo-deny`). Pass `--full` to `ci-local` to include it.
 
 If any command fails → fix it before reporting completion. Do not report a task done
 with only fmt/clippy/build green.
@@ -130,7 +129,7 @@ with only fmt/clippy/build green.
 | **Crate & dependency rules (R1–R12)** | [`docs/agents/crate-dependency-rules.md`](docs/agents/crate-dependency-rules.md) |
 | Code conventions | [`docs/agents/code-style.md`](docs/agents/code-style.md) |
 | Dependency versions and reference-first research | [`docs/agents/dependencies.md`](docs/agents/dependencies.md) |
-| **Terminal backend design** (local + ssh, `alacritty_terminal` VT engine) | [`docs/terminal-backend.md`](docs/terminal-backend.md) |
+| **Terminal backend design** (local + ssh, the `oneterm-vt` engine) | [`docs/terminal-backend.md`](docs/terminal-backend.md) |
 | **Terminal Split design** (Spaces, split R/L/U/D, drag tab into Space) | [`docs/terminal-split.md`](docs/terminal-split.md) |
 | SSH client connect / auth design | [`docs/ssh-client-connect.md`](docs/ssh-client-connect.md) |
 | SFTP file browser design | [`docs/sftp-browser-design.md`](docs/sftp-browser-design.md) |

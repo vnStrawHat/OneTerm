@@ -56,7 +56,7 @@ fn render_state_build_cost_per_frame() {
         "  50 rows changed : {all_rows:>8.3} us  ({:.1}x)",
         OLD_SNAPSHOT_US / all_rows.max(f64::MIN_POSITIVE)
     );
-    eprintln!("  old full snapshot (alacritty_terminal, measured): {OLD_SNAPSHOT_US:.1} us");
+    eprintln!("  old full snapshot (the fork, measured): {OLD_SNAPSHOT_US:.1} us");
 
     // Recorded, not gated — but the shape of the claim is asserted: the cost
     // scales with change, not with viewport area.

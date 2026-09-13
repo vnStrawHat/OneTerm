@@ -22,10 +22,10 @@ product: terminal engine glue, backends, UI, persistence, packaging, and the aut
 
 - Rust (edition 2024, toolchain pinned in `rust-toolchain.toml`), one Cargo workspace under
   `crates/` (`oneterm-<dir>` packages; graph in `docs/agents/structure.md`).
-- UI: published `gpui-pre` / GPUI Kit 0.6 crates (`docs/agents/dependencies.md`);
-  `alacritty_terminal` and `vte` are vendored terminal forks under `vendor/`
-  (pristine upstream + `vendor/patches/`).
-- Terminal engine: `alacritty_terminal`; local PTY via `oneterm-pty` (`crates/pty`, OneTerm's
+- UI: published `gpui-pre` / GPUI Kit 0.6 crates (`docs/agents/dependencies.md`). There is no
+  `[patch]` section and no vendored third-party source.
+- Terminal engine: `oneterm-vt` (`crates/vt`), OneTerm's own — parser, grid, reflow, selection,
+  damage and graphics, no third-party engine behind it (`IN-0029`, `DEC-0014`); local PTY via `oneterm-pty` (`crates/pty`, OneTerm's
   own transport: Windows ConPTY with the bundled `conpty.dll` / `OpenConsole.exe` preferred over
   `kernel32`, `openpty` on Unix); SSH/SFTP via `russh` + `russh-sftp` on a tokio runtime hidden
   inside `crates/ssh`.
@@ -69,8 +69,8 @@ product: terminal engine glue, backends, UI, persistence, packaging, and the aut
 - Every third-party dependency is declared once in the root `Cargo.toml`
   `[workspace.dependencies]`; the `gpui-pre` pair moves together and the GPUI Kit 0.6 layers
   (`gpui-base`, `gpui-component`, `gpui-kit-assets`) move together.
-- Vendored terminal crates are never hand-edited: `vendor/<crate>` == pristine @ rev +
-  `vendor/patches/` (`bash vendor/refresh.sh --check`).
+- No forked third-party source and no `[patch]` section: a capability the terminal engine
+  lacks is added to `crates/vt` under ordinary review (`DEC-0014`).
 - No secrets are persisted (`ui_config.json`, `terminal.json`, `docks.json`, `ssh_session.json`
   never contain passwords or passphrases).
 - English-only contributor text and code comments (`python scripts/check-english.py`).

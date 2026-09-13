@@ -45,7 +45,7 @@ OneTerm/
 │   │       └── bin/
 │   │           └── oneterm.rs          # Binary → oneterm(.exe) (WINDOWS subsystem in release)
 │   │
-│   ├── core/                       # Domain model — leaf crate (no gpui, no alacritty)
+│   ├── core/                       # Domain model — leaf crate (no gpui, no terminal engine)
 │   │   ├── Cargo.toml              # name = "oneterm-core"
 │   │   └── src/
 │   │       ├── lib.rs              # Re-export AppError, LocalShellConfig, ShellKind, SftpBackend, SshConfig…
@@ -62,15 +62,12 @@ OneTerm/
 │   │           └── env.rs
 │   │
 │   ├── terminal/                   # Terminal ADAPTER over `oneterm-vt` (no gpui) — `oneterm-terminal`
-│   │   ├── Cargo.toml              # deps: core, oneterm-vt, parking_lot, async-channel, base64;
-│   │   │                           #   alacritty_terminal runs nothing — it is the compatibility
-│   │   │                           #   surface `crates/terminal-view` reads (US-0085 / US-0087)
+│   │   ├── Cargo.toml              # deps: core, oneterm-vt, parking_lot, async-channel, base64
 │   │   └── src/
 │   │       ├── lib.rs              # Re-export TerminalSession, SessionEvent, TerminalContent, PtySize…
 │   │       ├── factory.rs          # PtySize (+ PtySize::INITIAL) + SessionFactory trait
 │   │       ├── session.rs          # TerminalSession trait + SessionEvent + CursorBounds + NetStats
 │   │       ├── handle.rs           # TerminalHandle = FairMutex<Terminal> + the render-demand flag
-│   │       ├── engine_shim.rs      # RenderState → the legacy TerminalContent shape (deleted at US-0085)
 │   │       ├── backend/            # Shared backend pump used by ssh + local-shell:
 │   │       │                       #   PtyTransport trait, OscRouter<T> (the EventBatch drain),
 │   │       │                       #   SessionState (title/cwd/clipboard/exit), event_sink, pump
@@ -178,13 +175,12 @@ OneTerm/
 │   │   └── src/
 │   │       ├── lib.rs              # corpus + bench modules (a lib so the parity gate can be a #[test])
 │   │       ├── corpus.rs           # grid.expect / state.expect encoding, expected-diffs.json, the comparison
-│   │       ├── corpus_replay.rs    # replay through the vendored engine — the only thing that ever blesses
-│   │       ├── corpus_upstream.rs  # upstream grid.json → grid.expect (the US-0072 cross-check oracle)
+│   │       ├── corpus_replay.rs    # replay through oneterm-vt into both expectation forms
 │   │       ├── corpus_grep.rs      # which recordings carry each correction's sequences
 │   │       ├── bench.rs            # the five VT benchmark tiers (recorded, never gated)
 │   │       └── bin/                # doom-fire, pty-throughput, sftp-dev-server, vt-corpus, vt-bench
 │   │
-│   └── vt/                         # `oneterm-vt` (IN-0029) — OneTerm's own VT engine, in progress
+│   └── vt/                         # `oneterm-vt` (IN-0029) — OneTerm's own VT engine, the only one
 │       ├── src/
 │       │   ├── lib.rs              # module declarations + public re-exports only
 │       │   ├── cell.rs             # 8-byte packed Cell, CellWidth, Semantic, Style, Attrs, Color
@@ -197,11 +193,6 @@ OneTerm/
 │   ├── refactor/ui-crate-restructure.md   # This restructure's authoritative plan
 │   ├── terminal-backend.md / ssh-client-connect.md / sftp-browser-design.md …
 │   └── agents/{code-style.md, dependencies.md, structure.md (this file)}
-│
-├── vendor/                         # Terminal forks = pristine upstream @ rev + patches/ (see vendor/README.md)
-│   ├── patches/{vte,alacritty_terminal}/   # the ONLY place terminal-fork deltas live
-│   ├── refresh.sh                  # regenerate / --check the vendored trees (CI runs --check)
-│   └── vte/ · alacritty_terminal/  # consumed via [patch]; not workspace members
 │
 └── reference/                      # Pinned GPUI Kit checkout (gitignored, research only)
     └── gpui-kit/                   # longbridge/gpui-kit tag v0.6.0
@@ -224,10 +215,10 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 
 | Crate (package) | Depends on | Layer | Responsibility |
 |---|---|---|---|
-| `core` (`oneterm-core`) | _(leaf)_ | domain | Error type, `SftpBackend`, `LocalShellConfig`/`ShellKind`, `SshConfig`/`SshAuthMethod`. No gpui, **no alacritty**. |
+| `core` (`oneterm-core`) | _(leaf)_ | domain | Error type, `SftpBackend`, `LocalShellConfig`/`ShellKind`, `SshConfig`/`SshAuthMethod`. No gpui, **no terminal engine**. |
 | `highlight` (`oneterm-highlight`) | _(leaf)_ | engine | Semantic syntax-highlighting engine. |
-| `completion` (`oneterm-completion`) | `core` | engine | Terminal auto-completion engine (gpui-free, alacritty-free): catalog model + embedded `assets/**/*.json` catalogs, line parsing + subcommand resolution, matching/ranking, in-session `CompletionHistory`, and secret redaction. See [`../auto-completion.md`](../auto-completion.md). |
-| `terminal` (`oneterm-terminal`) | `core`, `vt` | engine | The adapter over `oneterm-vt` (no gpui): `TerminalSession`, `TerminalModel`, the `TerminalHandle` lock plus the render-demand handshake, the `EventBatch` drain and its delivery policy, the `TerminalContent` frame, palette/OSC/key/mouse helpers, and `SessionFactory`. Still lists `alacritty_terminal`, which runs nothing: it is the value vocabulary the seam publishes until `US-0085`. |
+| `completion` (`oneterm-completion`) | `core` | engine | Terminal auto-completion engine (gpui-free, engine-free): catalog model + embedded `assets/**/*.json` catalogs, line parsing + subcommand resolution, matching/ranking, in-session `CompletionHistory`, and secret redaction. See [`../auto-completion.md`](../auto-completion.md). |
+| `terminal` (`oneterm-terminal`) | `core`, `vt` | engine | The adapter over `oneterm-vt` (no gpui): `TerminalSession`, `TerminalModel`, the `TerminalHandle` lock plus the render-demand handshake, the `EventBatch` drain and its delivery policy, the `TerminalContent` frame, palette/OSC/key/mouse helpers, and `SessionFactory`. |
 | `pty` (`oneterm-pty`) | _(leaf)_ | transport | Pseudo-console transport, no grid and no OneTerm dependency: `PseudoConsole` (ConPTY with the bundled `conpty.dll` preferred over `kernel32` — [`DEC-0013`](../decisions/DEC-0013-bundled-conpty-host-and-bump-script.md) — or `openpty`), the `EventedReadWrite` / `EventedPty` / `OnResize` traits the caller's own poll loop drives, and the two poll tokens. |
 | `actions` (`oneterm-actions`) | `core`, gpui | leaf-ui | gpui `Action` structs shared by shell and features; domain placement types come from `core`. |
 | `settings` (`oneterm-settings`) | `core`, gpui, gpui-component | shared | `TerminalConfig`, live `TerminalSettings` (defaults single-sourced from the config), and `UiConfig` including the `Theme` observer that persists `ui_config.json`. |
@@ -243,15 +234,15 @@ Layers, low → high. An arrow `A → B` means *A depends on B*.
 | `ssh` (`oneterm-ssh`) | `core`, `terminal` | backend | russh client and SFTP; implements `TerminalSession` and `SftpBackend`. |
 | `local-shell` (`oneterm-local-shell`) | `core`, `terminal`, `pty` | backend | Local PTY; implements `TerminalSession` and owns the poll loop over `oneterm-pty`. |
 | `app` (`oneterm-app`) | shell + all five features + shared layers (incl. `update`) + gpui-component + both backends | binary | Only crate that knows every layer. Installs `AppSessionFactory`, initializes features and commands, and opens the window. |
-| `vt` (`oneterm-vt`) | `memchr`, `bitflags`, `rustc-hash`, `unicode-width`, `unicode-segmentation`, `log`; dev-only `proptest` and `vte` (the parser's differential oracle) — **no OneTerm crate**, no gpui | engine | OneTerm's own VT engine (IN-0029), being built packet by packet. Today: the byte-level parser (`src/parser/`, a Williams state machine behind a narrow `Dispatch` trait, with bounded OSC / DCS / APC payloads), the storage layer — the 8-byte packed `Cell`, the per-terminal interned style / extras / grapheme / hyperlink tables, the width rules — and the grid with its scrollback and tracked anchors. `crates/terminal` runs on it since `US-0081`; the `alacritty_terminal` manifest lines survive as the seam's value types until `US-0087`. |
-| `tools` (`oneterm-tools`) | `alacritty_terminal`, `russh`, `russh-sftp`, `tokio`, `polling`, `rand`, `anyhow`, `serde`, `serde_json` — **no OneTerm crate** | diagnostics | Outside the L0-L4 layering, never a dependency of the app. Binaries: `doom-fire`, `pty-throughput`, `sftp-dev-server`, and (IN-0029) `vt-corpus` — the VT parity corpus: bless, check, cross-check, deviation grep — plus `vt-bench`, the five benchmark tiers. `tests/corpus_check.rs` is the parity drift gate that runs in `cargo test --workspace`. |
+| `vt` (`oneterm-vt`) | `memchr`, `bitflags`, `rustc-hash`, `unicode-width`, `unicode-segmentation`, `log`; dev-only `proptest` — **no OneTerm crate**, no gpui | engine | OneTerm's own VT engine (IN-0029), and since `US-0087` the only one: the byte-level parser (`src/parser/`, a Williams state machine behind a narrow `Dispatch` trait, with bounded OSC / DCS / APC payloads), the storage layer — the 8-byte packed `Cell`, the per-terminal interned style / extras / grapheme / hyperlink tables, the width rules — the grid with its scrollback and tracked anchors, reflow, selection, damage / render state and graphics. `crates/terminal` runs on it since `US-0081`. |
+| `tools` (`oneterm-tools`) | `oneterm-vt`, `oneterm-pty`, `russh`, `russh-sftp`, `tokio`, `polling`, `rand`, `anyhow`, `serde`, `serde_json` | diagnostics | Outside the L0-L4 layering, never a dependency of the app; it may only reach down to L0 leaves. Binaries: `doom-fire`, `pty-throughput`, `sftp-dev-server`, and (IN-0029) `vt-corpus` — the VT parity corpus: check and deviation grep — plus `vt-bench`, the five benchmark tiers. `tests/corpus_check.rs` is the parity drift gate that runs in `cargo test --workspace`. |
 
 ## 3.1 Crate & dependency rules
 
 The **hard crate & dependency rules** — the layer diagram, the invariants
 **R1–R12** (no cycle, no UI→backend edge, feature-agnostic shell, no feature
 cross-deps except `session-ui → terminal-view`, `core`/`terminal` stay
-gpui/alacritty-free, …), and the one-shot `cargo tree` verification — live in a
+gpui/engine-free, …), and the one-shot `cargo tree` verification — live in a
 dedicated file:
 
 > 📐 **[`docs/agents/crate-dependency-rules.md`](crate-dependency-rules.md)** — read

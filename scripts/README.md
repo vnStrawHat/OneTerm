@@ -11,12 +11,11 @@ network / extra-tool checks).
 |---|---|---|
 | `ci-local.sh` / `ci-local.ps1` | Run the whole CI quality gate locally, stop at the first failure. Keep both in sync with `ci.yml` and `AGENTS.md` §4. | local (mirrors CI) |
 | `verify-dependency-graph.py` | Enforce `dependency-graph-policy.json` (workspace members, internal edges, backend/feature rules) and that every crate inherits `[workspace.package] version`. | CI |
-| `check-doc-paths.py` | Every back-ticked `crates/`, `docs/`, `scripts/`, `vendor/` path in the current-state docs (`docs/architecture.md`, `docs/agents/*.md`, `docs/README.md`, `README.md`, `AGENTS.md`) must exist. | CI |
+| `check-doc-paths.py` | Every back-ticked `crates/`, `docs/`, `scripts/` path in the current-state docs (`docs/architecture.md`, `docs/agents/*.md`, `docs/README.md`, `README.md`, `AGENTS.md`) must exist. | CI |
 | `check-english.py` (+ `test_check_english.py`) | English-only contributor text (code comments, docs); the unittest file tests the checker itself. | CI |
 | `completion-catalog.py validate` | Validate the completion catalogs under `crates/completion/assets/` against the schema. Other subcommands (`download`, `generate`, `update`) fetch/parse upstream docs (network) — see `docs/auto-completion/07-external-assets-script.md`. `completion-commands.json` is its curated command whitelist. | CI (validate only) |
 | `benchmark-scale.py` | Run the scale benchmarks (slow, manual); `--list` prints the manifest. | manual |
 | `third-party-notices.py --check` | `THIRD-PARTY-NOTICES.md` matches the resolved graph in `Cargo.lock` (offline `cargo metadata`) **and** the bundled ConPTY binaries still hash to `crates/app/assets/conpty-manifest.json`. Without `--check` it rewrites the file — run it after any dependency change or a `bump-conpty.ps1` run. | CI |
-| `../vendor/refresh.sh --check` | Vendored forks == pristine upstream + `vendor/patches/` (network). | CI, `ci-local --full` |
 | `cargo deny check licenses bans advisories` (`../deny.toml`) | Licence / duplicate / advisory policy (needs `cargo install cargo-deny`). | CI, `ci-local --full` |
 
 ## Release

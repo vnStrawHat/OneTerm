@@ -10,7 +10,7 @@
 //! `Full`, which is correct by construction rather than by convention.
 //!
 //! Since `US-0085` there is nothing else in it. The dense `Vec<IndexedCell>`
-//! in the reference's signed grid lines, the `alacritty_terminal` value types
+//! in the reference's signed grid lines, the forked engine's value types
 //! around it and the per-frame rebuild that produced them are gone; the view
 //! reads [`TerminalContent::rows`] and resolves the engine's own
 //! [`RenderRow`] / [`RenderCell`] itself.

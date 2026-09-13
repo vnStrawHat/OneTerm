@@ -3,7 +3,7 @@
 //! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/graphics.md`
 //! section "Sixel decoder".
 //!
-//! Ported from OneTerm's own `vendor/patches/alacritty_terminal/0003`, which is
+//! Ported from OneTerm's own patch 0003 against the vendored fork, which is
 //! first-party code, so no licence question arises. The grammar and every
 //! rounding rule are unchanged from `IN-0028`: the behaviour
 //! `crates/terminal/src/sixel_tests.rs` pins is what this file must reproduce,

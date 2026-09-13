@@ -1,6 +1,6 @@
 //! The ConPTY pseudo-console and the command line it starts.
 //!
-//! `push_escaped_arg` and its test table are adapted from `alacritty_terminal`
+//! `push_escaped_arg` and its test table are adapted from Alacritty
 //! (<https://github.com/alacritty/alacritty>), Copyright the Alacritty
 //! contributors, licensed under the Apache License 2.0 — which in turn adapted
 //! it from the Rust standard library — and are modified for this crate.

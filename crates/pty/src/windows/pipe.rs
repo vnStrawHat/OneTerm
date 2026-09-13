@@ -18,7 +18,7 @@
 //!
 //! The registration semantics — readable/writable gating, clearing a one-shot
 //! interest after posting, and the priming packet on first registration — follow
-//! `alacritty_terminal`'s `tty/windows/blocking.rs`
+//! Alacritty's `alacritty_terminal/src/tty/windows/blocking.rs`
 //! (<https://github.com/alacritty/alacritty>), Copyright the Alacritty
 //! contributors, licensed under the Apache License 2.0, and are modified here:
 //! the `piper` ring and its wakers are replaced by `std` synchronisation.

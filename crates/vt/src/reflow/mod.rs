@@ -4,7 +4,7 @@
 //! the ConPTY contract is `docs/decisions/DEC-0008-local-conpty-grow-resize-keeps-viewport-top.md`
 //! and `docs/terminal-backend.md` § 5.3.
 //!
-//! Replaces `vendor/alacritty_terminal/src/grid/resize.rs` **and**
+//! Replaces Alacritty's `alacritty_terminal/src/grid/resize.rs` **and**
 //! `crates/terminal/src/model.rs`'s `resize_keeping_viewport_top` /
 //! `conhost_cursor_row`, which parked the alternate grid, installed a
 //! placeholder, swapped screens twice and reflowed a scratch grid to guess what

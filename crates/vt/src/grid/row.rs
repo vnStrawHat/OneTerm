@@ -118,7 +118,7 @@ impl Row {
     ///
     /// The reference's own rule: a row is a reflow target only when it is short
     /// **and** carries the wrap flag; everything else it merely grows in place
-    /// (`vendor/alacritty_terminal/src/grid/resize.rs:103-107, 231-238`). The
+    /// (Alacritty's `alacritty_terminal/src/grid/resize.rs:103-107, 231-238`). The
     /// caller has checked that this row is a whole logical line and that nothing
     /// above `keep` is content, so only the width changes — no copy, no
     /// allocation and no hint rescan.

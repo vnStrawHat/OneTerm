@@ -5,7 +5,7 @@ OneTerm is a Terminal application for SSH/SFTP/Local Shell with a **Zed-style wo
 - Browse and transfer files over SFTP
 - Open local shells
 - Monitor coding agents in a live Agent Panel fed by the OSC 9;7 proposal ([spec](docs/osc-agent-status.md)). 
-- Powered by `Rust`, `alacritty_terminal`, `gpui`, `gpui-component`
+- Powered by `Rust`, `gpui`, `gpui-component` and OneTerm's own VT engine `oneterm-vt`
 
 ---
 
@@ -26,7 +26,7 @@ OneTerm is a Terminal application for SSH/SFTP/Local Shell with a **Zed-style wo
 
 ### 🖥️ Terminal emulator
 
-- ANSI / VT rendering via `alacritty_terminal`
+- ANSI / VT parsing and grid via `oneterm-vt`, OneTerm's own engine
 - 24-bit colors, box drawing, and multiple cursor styles
 - Fallback fonts for Nerd Font prompt icons (`font.fallbacks`, defaults to the Nerd Font symbol fonts) and font ligatures (`font.ligatures`, on by default)
 - Mouse selection, middle-click paste (switchable in Settings), search, scrollback, and custom scrollbar

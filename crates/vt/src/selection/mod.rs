@@ -4,7 +4,7 @@
 //! contract: `docs/decisions/DEC-0015-absolute-row-ids-and-incremental-render-state.md`
 //! clause 1.
 //!
-//! Replaces `vendor/alacritty_terminal/src/selection.rs` and the four call
+//! Replaces Alacritty's `alacritty_terminal/src/selection.rs` and the four call
 //! sites of its `Selection::rotate`. **Both endpoints are tracked anchors**
 //! ([`crate::grid::Anchors`]), so a selection moves with its content through a
 //! scroll, an `IL`/`DL` repaint and a reflow by the one mechanism every

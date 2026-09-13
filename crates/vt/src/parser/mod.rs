@@ -7,8 +7,10 @@
 //! The design is
 //! `docs/spec-intakes/IN-0029-vt-engine/low-level-design/parser.md`; the
 //! reference behaviour it deviates from is Paul Williams' table as implemented
-//! by `vte 0.15`, and `tests/differential.rs` holds both engines to the same
-//! action trace apart from the deviations that file lists.
+//! by `vte 0.15`. `tests/differential.rs` held both engines to the same action
+//! trace until the oracle retired with the fork at `US-0087`; what pins the
+//! state machine now is `parser_tests` plus
+//! `props::arbitrary_bytes_never_panic_and_chunking_is_invariant`.
 //!
 //! Every limit here truncates or aborts rather than erroring, because all of
 //! this input is untrusted: there is no useful recovery for "the remote sent an

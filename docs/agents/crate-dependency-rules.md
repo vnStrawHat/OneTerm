@@ -30,11 +30,10 @@ Within L0, `terminal` and `completion` depend on `core` (the pure-domain leaf);
 `highlight` is a leaf, and so are `pty` (`oneterm-pty`, the pseudo-console transport) and
 `vt` (`oneterm-vt`, IN-0029, OneTerm's own VT engine): each depends on **no** OneTerm crate at
 all, which is stricter than R2 requires. `crates/terminal` depends on `vt` since `US-0081`
-(both L0, so R2 holds); it also still lists `alacritty_terminal`, which runs nothing and is
-deleted at `US-0087`. `crates/tools`
+and on nothing else for its engine: the vendored fork went at `US-0087`. `crates/tools`
 (`oneterm-tools`, developer diagnostics: DOOM-fire workload, raw PTY throughput probe, VT
 parity and bench harness) is a workspace member **outside** the layering: nothing depends on
-it, and it may only reach down to L0 leaves (`pty`).
+it, and it may only reach down to L0 leaves (`pty`, `vt`).
 
 ## Invariants
 
@@ -45,8 +44,8 @@ it, and it may only reach down to L0 leaves (`pty`).
 | **R3** | **No UI→backend edge.** No UI crate (shell **or** any feature) may depend on `ssh` / `local-shell`. Only `app` depends on the backends. UI creates sessions through `oneterm_terminal::SessionFactory` (installed by `app`). | Keeps protocol code out of the UI; lets features stay backend-agnostic and testable. | `cargo tree -i oneterm-ssh -e normal` and `cargo tree -i oneterm-local-shell -e normal` must each list **only `oneterm-app`**. |
 | **R4** | **The shell is feature-agnostic.** `workspace` MUST NOT depend on any `*-ui` feature crate or backend. It builds panels **by name** (gpui-component `PanelRegistry`) and drives features via the `oneterm_state::commands::WorkspaceCommands` fn-pointer registry. | The shell must not know which features exist. | `cargo tree -p oneterm-workspace -e normal` shows no `*-ui`, `oneterm-ssh`, or `oneterm-local-shell`. |
 | **R5** | **Features do not cross-depend.** A feature crate MUST NOT depend on another feature's internals — with the **single allowed edge** `session-ui → terminal-view` (opening an SSH session spawns a `TerminalPanel`). Shared cross-feature logic goes in `state`. | Prevents a feature tangle; keeps the one legitimate edge explicit. | `cargo tree -p <feature> -e normal`: the only `*-ui` dep permitted is `session-ui → terminal-view`. |
-| **R6** | **`core` is pure domain.** No `gpui`, no `gpui-component`, no `alacritty_terminal`, no `oneterm-pty`, no `oneterm-vt`. Types + traits (`AppError`, `SftpBackend`, `SshConfig`, `LocalShellConfig`) only. | The domain must not pull in UI or a specific terminal engine. | `cargo tree -p oneterm-core -e normal` shows no `gpui*`, no `alacritty_terminal`, no `oneterm-pty` and no `oneterm-vt`. |
-| **R7** | **The engines and the transport are gpui-free.** `terminal` is alacritty-coupled but MUST NOT depend on `gpui` / `gpui-component`; `completion`, `highlight`, `pty` and `vt` depend on neither `gpui` nor `alacritty_terminal`, and `pty` and `vt` additionally depend on no OneTerm crate. | The engines are reusable and unit-testable without a UI; the transport survives an engine swap. | `cargo tree -p oneterm-terminal -e normal`, `-p oneterm-completion`, `-p oneterm-highlight`, `-p oneterm-pty`, `-p oneterm-vt` show no `gpui*`. |
+| **R6** | **`core` is pure domain.** No `gpui`, no `gpui-component`, no `oneterm-pty`, no `oneterm-vt`. Types + traits (`AppError`, `SftpBackend`, `SshConfig`, `LocalShellConfig`) only. | The domain must not pull in UI or a specific terminal engine. | `cargo tree -p oneterm-core -e normal` shows no `gpui*`, no `oneterm-pty` and no `oneterm-vt`. |
+| **R7** | **The engines and the transport are gpui-free.** `terminal` is coupled to `oneterm-vt` but MUST NOT depend on `gpui` / `gpui-component`; `completion`, `highlight`, `pty` and `vt` depend on no terminal engine at all, and `pty` and `vt` additionally depend on no OneTerm crate. | The engines are reusable and unit-testable without a UI; the transport survives an engine swap. | `cargo tree -p oneterm-terminal -e normal`, `-p oneterm-completion`, `-p oneterm-highlight`, `-p oneterm-pty`, `-p oneterm-vt` show no `gpui*`. |
 | **R8** | **Backends implement traits only.** `ssh` / `local-shell` depend on **only** `core` + `terminal` + `pty` (+ their protocol crates); they implement `TerminalSession` / `SftpBackend` and depend on **no** UI crate. | Backends are swappable behind trait objects. | `cargo tree -p oneterm-ssh -e normal` / `-p oneterm-local-shell` show no UI crate. |
 | **R9** | **`app` is the only omniscient crate.** Only `app` may depend on backends + features + shell together. It installs `AppSessionFactory`, runs each feature's `init()`, and assembles `WorkspaceCommands`. | Single wiring point; everyone else stays layered. | Only `crates/app/Cargo.toml` lists a backend **and** a feature crate. |
 | **R10** | **New shared types go in the lowest crate that needs them.** A type used by two features/shell belongs in `core` / `terminal` / `settings` / `state` (whichever is lowest and fits), never duplicated. | Avoids duplicate/divergent types and up-edges. | Review: is the new type reachable from the lowest common layer? |
@@ -60,9 +59,9 @@ python scripts/verify-dependency-graph.py                   # policy + manifest 
 cargo build --workspace                                   # R1 (no cycle)
 cargo tree -i oneterm-ssh -e normal                       # R3: only oneterm-app
 cargo tree -i oneterm-local-shell -e normal               # R3: only oneterm-app
-cargo tree -p oneterm-core   -e normal                    # R6: no gpui*, no alacritty_terminal
+cargo tree -p oneterm-core   -e normal                    # R6: no gpui*, no oneterm-vt
 cargo tree -p oneterm-terminal -e normal                  # R7: no gpui*
-cargo tree -p oneterm-completion -e normal                # R7: no gpui*, no alacritty_terminal
+cargo tree -p oneterm-completion -e normal                # R7: no gpui*, no oneterm-vt
 cargo tree -p oneterm-pty -e normal                       # R7: no gpui*, no OneTerm crate
 cargo tree -p oneterm-vt -e normal                        # R7: no gpui*, no oneterm-*
 cargo tree -p oneterm-workspace -e normal                 # R4: no *-ui / backend

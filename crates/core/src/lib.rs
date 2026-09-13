@@ -1,9 +1,9 @@
 //! Domain model & business logic for OneTerm.
 //!
-//! Leaf crate: does not depend on `gpui` or `alacritty_terminal`. Contains the
-//! error type, local-shell configuration, and the `SftpBackend` file-transfer
-//! trait. The terminal engine (`TerminalSession` + alacritty coupling) lives in
-//! the separate `oneterm-terminal` crate.
+//! Leaf crate: does not depend on `gpui` or on any terminal engine. Contains
+//! the error type, local-shell configuration, and the `SftpBackend`
+//! file-transfer trait. The terminal adapter (`TerminalSession` over
+//! `oneterm-vt`) lives in the separate `oneterm-terminal` crate.
 
 pub mod config;
 pub mod editor_launcher;
