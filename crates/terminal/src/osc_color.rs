@@ -12,20 +12,17 @@
 //!   and answered by [`crate::TerminalPump::color_replies`] off the live engine
 //!   colours, falling back to [`default_color_for_key`].
 //!
-//! The colour index space is [`ColorKey`] (`US-0082`). The 256 / 257 / 258
-//! constants the fork used for foreground / background / cursor are **deleted**:
-//! they were three magic numbers three files had to agree on, and the typed key
-//! makes the agreement the compiler's problem. `Rgb` is still the legacy value
-//! type here because `crates/terminal-view`'s `theme/palette.rs` passes and
-//! reads it (`US-0085`).
+//! The colour index space is [`ColorKey`] (`US-0082`) and the value type is the
+//! engine's own [`Rgb`] (`US-0085`). The 256 / 257 / 258 constants the fork used
+//! for foreground / background / cursor are **deleted**: they were three magic
+//! numbers three files had to agree on, and the typed key makes the agreement
+//! the compiler's problem.
 
 use std::sync::Arc;
 
-use alacritty_terminal::vte::ansi::Rgb;
-use oneterm_vt::ColorKey;
+use oneterm_vt::{ColorKey, Rgb};
 
 use crate::backend::DefaultColors;
-use crate::engine_shim::legacy_rgb;
 
 /// Closure that formats an OSC colour reply for a resolved colour. Built by the
 /// router from the query's own OSC prefix and string terminator, e.g.
@@ -82,41 +79,32 @@ impl Default for DynamicColors {
 /// colour).
 pub fn default_color_for_key(key: ColorKey, defaults: &DefaultColors) -> Option<Rgb> {
     match key {
-        ColorKey::Palette(index @ 0..=15) => defaults
-            .ansi
-            .map(|ansi| legacy_rgb(ansi[usize::from(index)])),
+        ColorKey::Palette(index @ 0..=15) => defaults.ansi.map(|ansi| ansi[usize::from(index)]),
         ColorKey::Palette(index) => Some(crate::palette::extended_indexed_color(index)),
-        ColorKey::Foreground | ColorKey::BrightForeground => defaults.foreground.map(legacy_rgb),
-        ColorKey::Background => defaults.background.map(legacy_rgb),
-        ColorKey::Cursor => defaults.cursor.map(legacy_rgb),
+        ColorKey::Foreground | ColorKey::BrightForeground => defaults.foreground,
+        ColorKey::Background => defaults.background,
+        ColorKey::Cursor => defaults.cursor,
         // No sequence the engine accepts queries a dim slot, but the key space
         // covers them, so they answer with the colour they are derived from
         // rather than falling through to "no reply".
-        ColorKey::DimForeground => defaults.foreground.map(legacy_rgb),
-        ColorKey::Dim(index) => defaults
-            .ansi
-            .map(|ansi| legacy_rgb(ansi[usize::from(index & 7)])),
+        ColorKey::DimForeground => defaults.foreground,
+        ColorKey::Dim(index) => defaults.ansi.map(|ansi| ansi[usize::from(index & 7)]),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oneterm_vt::Rgb as VtRgb;
 
     fn rgb(r: u8, g: u8, b: u8) -> Rgb {
         Rgb { r, g, b }
     }
 
-    fn vt(r: u8, g: u8, b: u8) -> VtRgb {
-        VtRgb { r, g, b }
-    }
-
     fn defaults() -> DefaultColors {
         DefaultColors {
-            foreground: Some(vt(1, 2, 3)),
-            background: Some(vt(4, 5, 6)),
-            cursor: Some(vt(7, 8, 9)),
+            foreground: Some(rgb(1, 2, 3)),
+            background: Some(rgb(4, 5, 6)),
+            cursor: Some(rgb(7, 8, 9)),
             ansi: None,
         }
     }
@@ -142,7 +130,7 @@ mod tests {
     fn default_color_indexed_palette() {
         let mut defaults = DefaultColors::default();
         // 0-15 → theme ANSI palette (when provided).
-        defaults.ansi = Some([vt(9, 9, 9); 16]);
+        defaults.ansi = Some([rgb(9, 9, 9); 16]);
         assert_eq!(
             default_color_for_key(ColorKey::Palette(5), &defaults),
             Some(rgb(9, 9, 9))
@@ -194,8 +182,8 @@ mod tests {
     fn default_color_unset_is_none() {
         // Unset cursor default → None → the caller skips the reply.
         let defaults = DefaultColors {
-            foreground: Some(vt(1, 1, 1)),
-            background: Some(vt(2, 2, 2)),
+            foreground: Some(rgb(1, 1, 1)),
+            background: Some(rgb(2, 2, 2)),
             cursor: None,
             ansi: None,
         };

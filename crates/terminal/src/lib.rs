@@ -5,20 +5,15 @@
 //! things the engine deliberately does not: the lock ([`TerminalHandle`]) and
 //! the event-delivery policy ([`backend`]).
 //!
-//! `alacritty_terminal` is still a dependency and still **runs nothing**. What
-//! is left of it is one **compatibility surface**: the legacy shape of
-//! [`TerminalContent`] and the value types around it — `TermMode`, `Cell`,
-//! `Point`, `SelectionRange`, `SelectionType`, the colour types — which
-//! `crates/terminal-view` reads directly out of this crate's API. It is named in
-//! exactly five files ([`engine_shim`], [`content`], [`session`], [`palette`],
-//! [`osc_color`]) and nowhere on the native path. `US-0085` moves the view onto
-//! the engine's own types, which is what makes `US-0087`'s manifest deletion
-//! possible. No GPUI here either way.
+//! Since `US-0085` the compatibility surface is gone with it: nothing this
+//! crate publishes names an `alacritty_terminal` type any more, and the fork
+//! survives only as a `[dev-dependencies]` line for `tests/us0081_parity.rs`,
+//! the old-versus-new differential that retires at `US-0087`. No GPUI here
+//! either way.
 
 pub mod backend;
 pub mod color_classification;
 pub mod content;
-pub(crate) mod engine_shim;
 pub mod factory;
 pub mod handle;
 pub mod key_encode;
@@ -39,17 +34,12 @@ pub(crate) mod test_engine;
 pub mod test_support;
 pub mod url_policy;
 
-pub use alacritty_terminal::term::graphics::{
-    GraphicCell, GraphicData, GraphicId, VIRTUAL_CELL as SIXEL_VIRTUAL_CELL,
-};
 pub use backend::{
     DefaultColors, GridSize, OscRouter, PtyTransport, SessionEventSink, SharedSessionState,
     SharedState, TerminalPump,
 };
-pub use color_classification::{
-    is_app_chosen_exact_color, is_decorative_character, is_default_background_color,
-};
-pub use content::{IndexedCell, TermDamageInfo, TerminalContent, last_content_line};
+pub use color_classification::is_decorative_character;
+pub use content::{LineRangeCells, SnapshotCell, TerminalContent, last_content_row};
 pub use factory::{PtySize, SessionFactory};
 pub use handle::{
     DEFAULT_SCROLLBACK_LINES, Engine, SharedTerminal, TerminalHandle, new_shared_terminal,
@@ -64,8 +54,10 @@ pub use mouse_encode::{MouseModifiers, TerminalMouseButton};
 /// can name what [`TerminalContent`]'s native accessors return without taking a
 /// direct dependency on `oneterm-vt` first (`US-0085`).
 pub use oneterm_vt::{
-    ModeSnapshot, RenderCell, RenderContent, RenderCursor, RenderPlacement, RenderRow,
-    RenderUpdate, RowId, SelectionKind, SeqNo, StyleRun, Terminal,
+    Attrs, CellWidth, Color, CursorShape, GraphicData, GraphicId, HyperlinkId, ModeSnapshot,
+    NamedColor, RenderCell, RenderContent, RenderCursor, RenderPlacement, RenderRow, RenderUpdate,
+    Rgb, RowId, SelectionKind, SelectionRange, Semantic, SeqNo, Size, Style, StyleRun, Terminal,
+    VIRTUAL_CELL as SIXEL_VIRTUAL_CELL,
 };
 pub use osc::{TerminalProgress, encode_osc52};
 pub use osc_agent::{
@@ -78,8 +70,8 @@ pub use palette::{TerminalPalette, resolve_color};
 pub use search::{SearchMatch, SearchOptions};
 pub use security_policy::{ClipboardOrigin, TerminalSecurityPolicy};
 pub use session::{
-    LineRangeCells, NetStats, SessionEvent, SessionKind, TerminalCapabilities, TerminalError,
-    TerminalIme, TerminalInfo, TerminalInput, TerminalLifecycle, TerminalQueryState,
-    TerminalRender, TerminalSession, report_generated_input,
+    NetStats, SessionEvent, SessionKind, TerminalCapabilities, TerminalError, TerminalIme,
+    TerminalInfo, TerminalInput, TerminalLifecycle, TerminalQueryState, TerminalRender,
+    TerminalSession, report_generated_input,
 };
 pub use url_policy::TargetDecision;

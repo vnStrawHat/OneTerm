@@ -4,13 +4,13 @@
 //! the grid text under the engine lock ([`GridText::from_terminal`]) and matches
 //! after releasing it ([`search_grid_text`]), so a long scrollback search never
 //! stalls the pump (PERF-04). The copy is kept deliberately (R-19): search is
-//! user-initiated and rare, unlike a per-frame snapshot. Matches are reported in
-//! **grid coordinates**: negative values are scrollback history,
-//! `0..num_lines-1` is the viewport at `display_offset = 0`.
+//! user-initiated and rare, unlike a per-frame snapshot.
 //!
-//! The UI converts a match to a display row with `display_row = line + display_offset`
-//! (see `docs/terminal-backend.md` § coordinate systems) and scrolls the viewport
-//! so the active match is visible.
+//! A match names a **row identity** ([`RowId`]), not a coordinate: `US-0085`
+//! replaced the reference's signed grid line, which went stale the moment new
+//! output scrolled the grid under it. The UI turns one into a display row with
+//! [`SearchMatch::display_row`], against the `screen_top` its
+//! [`crate::TerminalInfo`] carries.
 //!
 //! Matching is **character-based** (one `char` per grid cell). Case-insensitive
 //! mode uses ASCII case-folding (`char::eq_ignore_ascii_case`) — this is 1:1 per
@@ -34,33 +34,37 @@ pub struct SearchOptions {
     pub whole_word: bool,
 }
 
-/// One search match in **grid coordinates**.
-///
-/// The signed `line` and [`SearchMatch::display_row`] are the compatibility
-/// surface: `crates/terminal-view/src/terminal_view/search.rs` both constructs
-/// this struct and calls that method, so neither can become a `RowId` before
-/// `US-0085` moves that file. Inside this crate the search is `RowId`-keyed
-/// ([`GridText`]) and the conversion happens once, where a match is published.
-///
-/// `line` is the signed grid line:
-/// - negative → scrollback history (`-1` = newest history line, just above the viewport top at `display_offset = 0`);
-/// - `0..num_lines-1` → the viewport rows when `display_offset = 0`.
+/// One search match, on the row that holds it.
 ///
 /// `start_col`/`end_col` are column indices, 0-based, `end_col` exclusive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SearchMatch {
-    pub line: i32,
+    /// The row the match sits on. Stable across scrolling and scrollback
+    /// pushes (`DEC-0015`), which is why it is published instead of a line
+    /// number.
+    pub row: RowId,
     pub start_col: usize,
     pub end_col: usize,
 }
 
 impl SearchMatch {
-    /// Display row (0-based from the top of the viewport) for this match, given
-    /// the current scroll offset. May be negative or `>= num_lines` when the
-    /// match is scrolled out of view — the caller should filter.
+    /// The match's row relative to `screen_top` — the viewport top at
+    /// `display_offset == 0`. Negative is scrollback history (`-1` is the
+    /// newest history row).
     #[inline]
-    pub fn display_row(&self, display_offset: usize) -> i32 {
-        self.line + display_offset as i32
+    pub fn grid_line(&self, screen_top: RowId) -> i32 {
+        (self.row.0 as i64 - screen_top.0 as i64).clamp(i64::from(i32::MIN), i64::from(i32::MAX))
+            as i32
+    }
+
+    /// Display row (0-based from the top of the viewport) for this match, given
+    /// `screen_top` and the current scroll offset. May be negative or
+    /// `>= num_lines` when the match is scrolled out of view — the caller
+    /// should filter.
+    #[inline]
+    pub fn display_row(&self, screen_top: RowId, display_offset: usize) -> i32 {
+        self.grid_line(screen_top)
+            .saturating_add(display_offset as i32)
     }
 }
 
@@ -68,9 +72,8 @@ impl SearchMatch {
 /// copied under the engine lock so the search itself can run without it.
 ///
 /// Row identity is the engine's: rows are stored top-to-bottom starting at
-/// [`GridText::oldest`], and the signed grid line a [`SearchMatch`] publishes is
-/// derived from `screen_top` at the end. Each row is exactly `num_cols` chars,
-/// so `chars.len() == rows × num_cols`.
+/// [`GridText::oldest`], which is the [`RowId`] a [`SearchMatch`] carries. Each
+/// row is exactly `num_cols` chars, so `chars.len() == rows × num_cols`.
 ///
 /// The copy is deliberate (R-19): search is user-initiated and rare, unlike a
 /// per-frame snapshot, and copying once under the lock is what keeps a long
@@ -79,9 +82,6 @@ impl SearchMatch {
 pub(crate) struct GridText {
     /// The topmost stored row (the oldest history row).
     oldest: RowId,
-    /// The row the reference calls `Line(0)`: the viewport top at
-    /// `display_offset == 0`.
-    screen_top: RowId,
     /// Row stride.
     num_cols: usize,
     /// Row-major cell characters. Wide-char spacers are `'\0'`.
@@ -112,7 +112,6 @@ impl GridText {
         }
         Self {
             oldest: range.start,
-            screen_top: screen.screen_top(),
             num_cols,
             chars,
         }
@@ -147,9 +146,13 @@ pub(crate) fn search_grid_text(
 
     let mut matches = Vec::new();
     for (index, line_chars) in text.chars.chunks_exact(text.num_cols).enumerate() {
-        // The one conversion out of `RowId`, at the point a match is published.
-        let line = crate::engine_shim::row_to_line(text.row_id(index), text.screen_top);
-        find_in_line(line_chars, &needle, line, options, &mut matches);
+        find_in_line(
+            line_chars,
+            &needle,
+            text.row_id(index),
+            options,
+            &mut matches,
+        );
     }
     matches
 }
@@ -164,12 +167,12 @@ pub(crate) fn search_term(
     search_grid_text(&GridText::from_terminal(term), query, options)
 }
 
-/// Find all (non-overlapping) occurrences of `needle` in a single line's char
-/// buffer, appending matches for `line` to `out`.
+/// Find all (non-overlapping) occurrences of `needle` in a single row's char
+/// buffer, appending matches for `row` to `out`.
 fn find_in_line(
     line: &[char],
     needle: &[char],
-    line_no: i32,
+    row: RowId,
     options: SearchOptions,
     out: &mut Vec<SearchMatch>,
 ) {
@@ -189,7 +192,7 @@ fn find_in_line(
             };
             if ok_word {
                 out.push(SearchMatch {
-                    line: line_no,
+                    row,
                     start_col: col,
                     end_col: col + n,
                 });
@@ -277,7 +280,7 @@ mod tests {
         // Default (case_sensitive=false) → matches "Hello" and "World".
         let m = search_term(&term, "hello", SearchOptions::default());
         assert_eq!(m.len(), 1);
-        assert_eq!(m[0].line, 0);
+        assert_eq!(m[0].row, term.screen().screen_top());
         assert_eq!(m[0].start_col, 0);
         assert_eq!(m[0].end_col, 5);
     }
@@ -310,10 +313,12 @@ mod tests {
     #[test]
     fn multiple_lines_top_to_bottom() {
         let term = mock_term("alpha\nbeta\nalpha");
+        let top = term.screen().screen_top();
         let m = search_term(&term, "alpha", SearchOptions::default());
         assert_eq!(m.len(), 2);
-        assert_eq!(m[0].line, 0);
-        assert_eq!(m[1].line, 2);
+        assert_eq!(m[0].grid_line(top), 0);
+        assert_eq!(m[1].grid_line(top), 2);
+        assert_eq!(m[1].row, top + 2);
     }
 
     #[test]
@@ -346,10 +351,11 @@ mod tests {
     #[test]
     fn match_display_row_conversion() {
         let term = mock_term("hello");
+        let top = term.screen().screen_top();
         let m = search_term(&term, "hello", SearchOptions::default());
         assert_eq!(m.len(), 1);
-        // No scrollback (display_offset = 0) → display row = line.
-        assert_eq!(m[0].display_row(0), 0);
+        // No scrollback (display_offset = 0) → display row = grid line.
+        assert_eq!(m[0].display_row(top, 0), 0);
     }
 
     #[test]
@@ -361,37 +367,39 @@ mod tests {
     #[test]
     fn grid_text_snapshot_matches_live_term_layout() {
         let term = mock_term("ab\ncd");
+        let top = term.screen().screen_top();
         let text = GridText::from_terminal(&term);
         assert_eq!(text.num_cols, usize::from(term.screen().cols()));
         assert_eq!(text.chars.len() % text.num_cols, 0);
         // The copy is keyed by RowId: the oldest stored row is the screen top
         // shifted back by the history depth.
         assert_eq!(text.oldest, term.screen().oldest());
-        assert_eq!(text.screen_top, term.screen().screen_top());
         assert_eq!(
-            text.screen_top.distance(text.oldest),
+            top.distance(text.oldest),
             u64::from(term.screen().history_len())
         );
-        // Searching the snapshot after the term is gone still yields grid coordinates.
+        // Searching the snapshot after the term is gone still names live rows.
         drop(term);
         let m = search_grid_text(&text, "cd", SearchOptions::default());
         assert_eq!(m.len(), 1);
-        assert_eq!(m[0].line, 1);
+        assert_eq!(m[0].row, top + 1);
+        assert_eq!(m[0].grid_line(top), 1);
         assert_eq!(m[0].start_col, 0);
     }
 
-    /// The history rows keep the negative lines the view converts with
-    /// `display_row`, now derived from `RowId` rather than from a stored `i32`.
+    /// A match in history is below `screen_top`, which is what makes its grid
+    /// line negative and what the view's `display_row` adds the offset to.
     #[test]
     fn history_rows_report_negative_grid_lines() {
         let mut term = crate::test_engine::terminal(GridSize { cols: 6, lines: 2 });
         crate::test_engine::feed(&mut term, b"alpha\r\nbeta\r\nalpha");
+        let top = term.screen().screen_top();
         let m = search_term(&term, "alpha", SearchOptions::default());
         assert_eq!(m.len(), 2);
-        assert_eq!(m[0].line, -1, "scrolled into history");
-        assert_eq!(m[1].line, 1);
+        assert_eq!(m[0].grid_line(top), -1, "scrolled into history");
+        assert_eq!(m[1].grid_line(top), 1);
         assert_eq!(
-            m[0].display_row(1),
+            m[0].display_row(top, 1),
             0,
             "one row of scrollback brings it back"
         );

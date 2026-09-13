@@ -387,6 +387,17 @@ impl Terminal {
         &self.state.interner
     }
 
+    /// The interner, mutably.
+    ///
+    /// Additive at `US-0085`, and the only hook an embedder's **test** has for
+    /// writing a styled cell straight into the grid (`grid_mut`) instead of
+    /// driving an SGR stream: the style and extras ids a `Cell` carries are
+    /// meaningless without the table that minted them. Nothing on the engine's
+    /// own paths uses it.
+    pub fn interner_mut(&mut self) -> &mut Interner {
+        &mut self.state.interner
+    }
+
     pub fn config(&self) -> &Config {
         &self.state.config
     }

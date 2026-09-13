@@ -12,15 +12,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use alacritty_terminal::selection::SelectionType;
-use alacritty_terminal::term::TermMode;
-use alacritty_terminal::vte::ansi::Rgb;
 use async_channel::Receiver;
 use oneterm_core::sftp::SftpBackend;
+use oneterm_vt::{CursorShape, ModeSnapshot, Rgb, RowId, SelectionKind};
 
-use crate::IndexedCell;
 use crate::backend::SharedState;
-use crate::content::TerminalContent;
+use crate::content::{LineRangeCells, TerminalContent};
 use crate::logging::TerminalLogController;
 use crate::mouse_encode::{MouseModifiers, TerminalMouseButton};
 use crate::osc::{Osc133Kind, TerminalProgress};
@@ -78,12 +75,17 @@ pub struct TerminalInfo {
     /// scrollback is full and old lines are dropped. Monotonically increasing.
     /// The gutter line number uses this value instead of `total_lines`.
     pub absolute_line_count: usize,
-    /// Cursor line (alacritty Line.0).
-    pub cursor_line: i32,
-    /// Index (0-based, same frame as `cursor_line`) of the last line **with
-    /// content** in the viewport. Used for `line_times` stamping to match the
-    /// gutter region actually rendered (avoids `[--:--:--]` on lines below the cursor).
-    pub last_content_line: i32,
+    /// The row the viewport top sits on at `display_offset == 0`. A
+    /// [`crate::SearchMatch`] is published as a [`RowId`] and becomes a display
+    /// row against this one.
+    pub screen_top: RowId,
+    /// Cursor row, 0-based from the top of the active screen.
+    pub cursor_row: usize,
+    /// Index (0-based, same frame as `cursor_row`) of the last row **with
+    /// content** on the active screen. Used for `line_times` stamping to match
+    /// the gutter region actually rendered (avoids `[--:--:--]` on lines below
+    /// the cursor).
+    pub last_content_row: usize,
     /// Number of visible lines (viewport height).
     pub num_lines: usize,
     /// Number of columns (viewport width).
@@ -103,13 +105,14 @@ pub struct TerminalInfo {
 /// without the O(rows×cols) cost of [`TerminalContent`].
 #[derive(Debug, Clone, Copy)]
 pub struct TerminalQueryState {
-    /// Terminal mode (mouse, alt-screen, bracketed paste, app cursor…).
-    pub mode: TermMode,
-    /// Cursor display position (line.0 = top of viewport, column.0 = left).
-    pub cursor_line: i32,
+    /// Terminal modes (mouse, alt-screen, bracketed paste, app cursor…).
+    pub modes: ModeSnapshot,
+    /// Cursor position on the active screen: row 0 is the viewport top at
+    /// `display_offset == 0`, column 0 the left edge.
+    pub cursor_row: usize,
     pub cursor_col: usize,
-    /// Cursor shape (Hidden, Block, Beam, Underline).
-    pub cursor_shape: alacritty_terminal::vte::ansi::CursorShape,
+    /// Cursor shape (Hidden, Block, Beam, Underline, HollowBlock).
+    pub cursor_shape: CursorShape,
     /// Display offset (0 = at bottom, >0 = scrolled up).
     pub display_offset: usize,
     /// Viewport dimensions.
@@ -199,16 +202,6 @@ impl SessionKind {
     pub const fn is_local(self) -> bool {
         matches!(self, Self::Local)
     }
-}
-
-/// Cells for a window of display lines — see [`TerminalRender::query_line_range_cells`].
-#[derive(Debug, Clone, Default)]
-pub struct LineRangeCells {
-    /// Up to `count × num_cols` cells starting at the requested display line,
-    /// in row-major order. Empty when the range starts below the viewport.
-    pub cells: Vec<IndexedCell>,
-    /// Viewport width in columns; the row stride of `cells`.
-    pub num_cols: usize,
 }
 
 /// Why [`TerminalSession::paste`] did not deliver the text (ERR-04).
@@ -337,14 +330,14 @@ pub trait TerminalInput: Send + Sync {
     /// Scroll to top (display_offset = max) — Shift+Home.
     fn scroll_to_top(&self);
 
-    /// `sel` picks the selection type when not in mouse mode: `Simple` (click),
+    /// `kind` picks the selection type when not in mouse mode: `Simple` (click),
     /// `Semantic` (double-click), `Lines` (triple-click), `Block` (alt-select).
     fn mouse_down(
         &self,
         row: f32,
         col: f32,
         button: TerminalMouseButton,
-        sel: SelectionType,
+        kind: SelectionKind,
         mods: MouseModifiers,
     );
     /// Hover (no button held) — encode mouse motion for app mode (vim/less/htop).
@@ -399,7 +392,7 @@ pub trait TerminalLifecycle: Send + Sync {
 /// the optional [`TerminalCapabilities`].
 ///
 /// Snapshot + input + lifecycle only — does **not** force a shared pump/transport.
-/// `LocalSession` (alacritty tty + EventLoop) and `SshSession` (russh) implement
+/// `LocalSession` (a PTY plus the shared pump) and `SshSession` (russh) implement
 /// it independently. The two backends do not depend on each other.
 pub trait TerminalSession:
     TerminalRender + TerminalInput + TerminalIme + TerminalLifecycle + 'static
@@ -422,7 +415,7 @@ pub trait TerminalSession:
 
     /// Bracketed paste mode is on → wrap the paste in `\x1b[200~...\x1b[201~`.
     fn is_bracketed_paste(&self) -> bool {
-        self.query_state().mode.contains(TermMode::BRACKETED_PASTE)
+        self.query_state().modes.bracketed_paste
     }
 
     /// Paste text into the PTY. Automatically wraps it in bracketed paste markers
@@ -471,8 +464,15 @@ macro_rules! impl_pty_terminal_session {
             }
 
             /// How this backend grows the grid (DEC-0008).
-            pub(crate) fn resize_policy(&self) -> $crate::model::ResizePolicy {
-                $resize_policy
+            ///
+            /// The **engine's** policy: the macro argument may be either
+            /// `oneterm_vt::ResizePolicy::{BottomAnchor, KeepViewportTop}` or
+            /// this crate's `ResizePolicy`, which converts into it. Reading it
+            /// back gives the engine value either way, and the adapter enum
+            /// still compares equal to it, so a backend can move to the engine
+            /// name one token at a time.
+            pub(crate) fn resize_policy(&self) -> ::oneterm_vt::ResizePolicy {
+                ::core::convert::Into::into($resize_policy)
             }
 
             /// Write bytes to the PTY / SSH channel while the session is alive.
@@ -512,18 +512,14 @@ macro_rules! impl_pty_terminal_session {
 
             fn set_default_colors(
                 &self,
-                foreground: ::alacritty_terminal::vte::ansi::Rgb,
-                background: ::alacritty_terminal::vte::ansi::Rgb,
-                cursor: ::alacritty_terminal::vte::ansi::Rgb,
-                ansi: [::alacritty_terminal::vte::ansi::Rgb; 16],
+                foreground: ::oneterm_vt::Rgb,
+                background: ::oneterm_vt::Rgb,
+                cursor: ::oneterm_vt::Rgb,
+                ansi: [::oneterm_vt::Rgb; 16],
             ) {
-                // The seam still takes the legacy colour because
-                // `crates/terminal-view/src/theme/palette.rs` still passes it
-                // (`US-0085`); the cache behind it is the engine's `Rgb`.
-                self.state
-                    .set_default_colors($crate::DefaultColors::from_legacy(
-                        foreground, background, cursor, ansi,
-                    ));
+                self.state.set_default_colors($crate::DefaultColors::new(
+                    foreground, background, cursor, ansi,
+                ));
             }
 
             fn terminal_info(&self) -> $crate::TerminalInfo {
@@ -608,10 +604,10 @@ macro_rules! impl_pty_terminal_session {
                 row: f32,
                 col: f32,
                 button: $crate::TerminalMouseButton,
-                sel: ::alacritty_terminal::selection::SelectionType,
+                kind: ::oneterm_vt::SelectionKind,
                 mods: $crate::MouseModifiers,
             ) {
-                if let Some(bytes) = self.model().mouse_down(row, col, button, sel, mods) {
+                if let Some(bytes) = self.model().mouse_down(row, col, button, kind, mods) {
                     $crate::report_generated_input(
                         concat!($label, " mouse input"),
                         self.pty_write(&bytes),
@@ -762,7 +758,7 @@ mod tests {
         use crate::test_support::FakeTerminalSession;
 
         let (session, probe) = FakeTerminalSession::boxed(24, 80, "");
-        probe.set_mode(TermMode::SHOW_CURSOR | TermMode::BRACKETED_PASTE);
+        probe.feed(b"\x1b[?2004h");
 
         // Embedded end marker must be stripped so it cannot terminate paste mode.
         let vectors = [

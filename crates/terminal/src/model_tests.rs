@@ -5,7 +5,7 @@
 //! (R-44). What is left here is what the *adapter* owns: that the model's
 //! operations reach the engine and come back in the reference's coordinates.
 
-use alacritty_terminal::selection::SelectionType;
+use oneterm_vt::SelectionKind;
 
 use super::{ResizePolicy, TerminalModel};
 use crate::backend::GridSize;
@@ -23,7 +23,7 @@ fn row_text(model: &TerminalModel, line: usize) -> String {
     cells
         .cells
         .iter()
-        .map(|indexed| indexed.cell.c)
+        .map(|cell| cell.ch)
         .collect::<String>()
         .trim_end()
         .to_owned()
@@ -39,7 +39,7 @@ fn has_selection_tracks_selection_state() {
     );
     assert!(!model.has_selection());
 
-    model.start_selection(0.0, 0.0, SelectionType::Simple);
+    model.start_selection(0.0, 0.0, SelectionKind::Simple);
     model.update_selection(0.0, 4.9);
     assert!(model.has_selection());
     assert_eq!(model.selection_text().as_deref(), Some("hello"));
@@ -72,13 +72,13 @@ fn scrolling_back_moves_the_display_offset_not_the_cursor_line() {
     );
     let before = model.query_state(true);
     assert_eq!(before.display_offset, 0);
-    assert_eq!(before.cursor_line, 1);
+    assert_eq!(before.cursor_row, 1);
     assert_eq!(row_text(&model, 0), "three");
 
     model.scroll(1);
     let after = model.query_state(true);
     assert_eq!(after.display_offset, 1);
-    assert_eq!(after.cursor_line, 1, "the cursor did not move");
+    assert_eq!(after.cursor_row, 1, "the cursor did not move");
     assert_eq!(row_text(&model, 0), "two");
 
     model.scroll_to_bottom();
@@ -105,24 +105,23 @@ fn resize_grid_applies_the_backend_policy() {
     assert!(!keep.needs_resize(8, 10));
 
     // conhost keeps the viewport top and leaves the added rows blank.
-    assert_eq!(keep.query_state(true).cursor_line, 4);
+    assert_eq!(keep.query_state(true).cursor_row, 4);
     assert_eq!(row_text(&keep, 0), "line16");
     assert_eq!(row_text(&keep, 4), "prompt>");
     assert_eq!(row_text(&keep, 7), "");
 
     // The reference pulls history into the top and moves the cursor down.
-    assert_eq!(default.query_state(true).cursor_line, 7);
+    assert_eq!(default.query_state(true).cursor_row, 7);
     assert_eq!(row_text(&default, 0), "line13");
     assert_eq!(row_text(&default, 7), "prompt>");
 }
 
-/// The snapshot still hands each decoded image out exactly once, and the cells
-/// it covers still carry the offset inside the image's own cell grid — the
-/// per-cell `GraphicCell { id, col, row }` the painter reads
-/// (`crates/terminal-view/src/render/frame.rs:313-317`). The engine keeps only
-/// the id; the offset is derived from the placement (R-21).
+/// The snapshot still hands each decoded image out exactly once, and the
+/// placement it leaves behind still says which cells the image covers and where
+/// its top-left sits — the geometry the painter reads instead of the per-cell
+/// `GraphicCell { id, col, row }` the reference stored (R-21).
 #[test]
-fn a_sixel_reaches_the_snapshot_once_with_per_cell_offsets() {
+fn a_sixel_reaches_the_snapshot_once_with_its_placement() {
     // Two columns wide and one band tall: `#0;2;100;0;0` makes register 0 red,
     // `~~` fills both columns, so the image is 2x6 pixels = one 10x20 cell.
     let model = model(
@@ -132,45 +131,56 @@ fn a_sixel_reaches_the_snapshot_once_with_per_cell_offsets() {
     );
 
     let first = model.snapshot();
-    assert_eq!(first.graphics.len(), 1, "the image is handed out once");
-    let image = &first.graphics[0];
+    assert_eq!(first.graphics().len(), 1, "the image is handed out once");
+    let image = &first.graphics()[0];
     assert_eq!((image.width, image.height), (2, 6));
 
-    let covered: Vec<_> = first
-        .cells
-        .iter()
-        .filter_map(|indexed| {
-            indexed
-                .cell
-                .graphic()
-                .map(|graphic| (indexed.point.line.0, indexed.point.column.0, graphic))
-        })
-        .collect();
-    assert_eq!(covered.len(), 1, "a 2x6 image covers one virtual cell");
-    let (line, column, graphic) = covered[0];
-    assert_eq!((line, column), (0, 0), "placed at the cursor");
-    assert_eq!((graphic.col, graphic.row), (0, 0), "top-left of the image");
-    assert_eq!(graphic.id, image.id);
+    let placements = first.placements();
+    assert_eq!(placements.len(), 1, "a 2x6 image is one placement");
+    let placement = &placements[0];
+    assert_eq!(placement.id, image.id);
+    assert_eq!(
+        (placement.rows, placement.cols),
+        (1, 1),
+        "a 2x6 image covers one virtual cell"
+    );
+    assert_eq!(
+        first.display_row(placement.row),
+        Some(0),
+        "placed at the cursor"
+    );
+    assert_eq!(placement.col, 0);
+    // The covered cell names the image, and its offset inside the image's own
+    // cell grid is derived from the placement.
+    let cell = first.rows()[0].cells[0];
+    assert_eq!(cell.graphic, Some(image.id));
+    assert_eq!(
+        first.graphic_offset(image.id, placement.row, 0),
+        Some((0, 0)),
+        "top-left of the image"
+    );
 
     // The drain is the adapter's, once per snapshot: a second snapshot still
-    // sees the cells, but not the pixels again.
+    // sees the placement, but not the pixels again.
     let second = model.snapshot();
-    assert!(second.graphics.is_empty(), "handed out exactly once");
-    assert!(second.cells.iter().any(|c| c.cell.graphic().is_some()));
+    assert!(second.graphics().is_empty(), "handed out exactly once");
+    assert_eq!(second.placements().len(), 1);
 }
 
 #[test]
-fn search_reports_matches_in_grid_lines() {
+fn search_reports_matches_on_their_rows() {
     let model = model(
         GridSize { cols: 8, lines: 2 },
         b"alpha\r\nbeta\r\nalpha",
         ResizePolicy::Default,
     );
+    let info = model.terminal_info(0, 0);
     let matches = model.search("alpha", crate::SearchOptions::default());
     assert_eq!(matches.len(), 2);
     // The first match scrolled into history; the second is on the last row.
-    assert_eq!(matches[0].line, -1);
-    assert_eq!(matches[1].line, 1);
+    assert_eq!(matches[0].grid_line(info.screen_top), -1);
+    assert_eq!(matches[1].grid_line(info.screen_top), 1);
+    assert_eq!(matches[1].row, info.screen_top + 1);
     assert_eq!(matches[1].start_col, 0);
     assert_eq!(matches[1].end_col, 5);
 }
