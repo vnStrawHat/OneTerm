@@ -211,17 +211,38 @@ everything", and a `Partial` naming every row says the same thing more expensive
 
 ### Fairness and reply latency
 
-**The flag must not be one-shot.** `take_render_demand` clears by asking, so a renderer whose
-demand is consumed by the pump inside `lock_for_render`'s own raise-then-block window never gets
-served and starves for the length of the flood — measured by `US-0083` as its gap 6. The rule the
-handshake actually needs: **the demand stays observable until the renderer acquires the lock**,
-cleared by the acquisition rather than by the question. Owned as a `US-0082` rework.
+**The demand is a waiter count, and the waiter clears its own.** A one-shot flag consumed by the
+pump's ask loses the frame that raised it: a pump asking in the window between "renderer raises"
+and "renderer acquires the lock" takes the only signal that frame had, every later ask answers
+"nobody is waiting", and the frame starves for the whole flood — measured at over five seconds
+against 11-17 ms for a frame that keeps its signal. The rule:
 
-**The reader's side of fairness is a bound on the lock hold, not only the flag.** A loop that holds
-the engine across reads must cap the bytes it takes per hold — `MAX_LOCKED_READ = 64 KiB` in
-`crates/local-shell` — or the flag has nowhere to take effect; and **a yield is a batch boundary**,
-so it must end the batch, or a transport that never runs dry emits no repaint hint and no events at
-all ([`migration.md`](migration.md) § "The adapter contract").
+```rust
+// crates/vt/src/render/demand.rs — still one atomic, now a count
+pub struct Demand(Arc<AtomicUsize>);
+pub fn raise(&self);             // fetch_add          — the renderer, BEFORE it blocks
+pub fn release(&self);           // saturating sub     — the renderer, ONCE it holds the lock
+pub fn is_raised(&self) -> bool; // load > 0           — the pump; it takes nothing away
+```
+
+- **`lock_for_render()` is raise, lock, release.** Between the raise and the acquisition the frame
+  is both waiting and visible, so there is no window left: a pump that asks anywhere inside it
+  yields, and yields again at the next boundary if the frame still has not got in.
+- **`take_render_demand()` reads without clearing.** The name is kept because both pump loops read
+  exactly as they were written — "someone is waiting, yield" — and the only visible change for them
+  is that a standing demand survives more than one ask, so a pump may yield at several consecutive
+  boundaries while a frame is queued. That is intended.
+- `Demand::take`, the clearing swap, is **deleted**; it has no caller.
+- **A count, not a level flag cleared on acquisition.** A flag is one line shorter and fixes the
+  reported case, but the first waiter's acquisition then clears the second waiter's signal and it
+  starves identically. The count is the same size with no such edge.
+
+The window is pinned deterministically rather than raced for:
+`handle::tests::a_pumps_ask_does_not_consume_a_frame_that_is_still_waiting` holds the engine on the
+pump thread for the whole test, so once the demand is visible the frame provably has not acquired
+anything — then asserts the demand survives **100 consecutive asks**, drops the guard once, and
+requires the frame to arrive and the demand to be gone. Against the one-shot code it fails at
+ask 1.
 
 **As shipped, the flag lives on `TerminalHandle` beside the lock** (`crates/terminal/src/handle.rs`):
 `lock_for_render()` raises then locks, `take_render_demand()` is the pump's yield check and clears by

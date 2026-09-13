@@ -236,16 +236,23 @@ build against.
 Arc<TerminalHandle>` wraps `FairMutex<Engine>` plus one `Demand`
 ([`damage-and-render-state.md`](damage-and-render-state.md) § "Fairness and reply latency"):
 
-- `lock_for_render()` **raises** the flag, then locks. The render side is already wired —
-  `TerminalModel::snapshot` and `snapshot_into` go through it.
+- `Demand` is a **count of waiting renderers**, not a one-shot flag: `raise()` before blocking,
+  `release()` once the lock is held, `is_raised()` to look. `Demand::take` is deleted.
+- `lock_for_render()` is **raise, lock, release** — the waiter clears its own demand, on
+  acquisition. The render side is already wired: `TerminalModel::snapshot` and `snapshot_into` go
+  through it.
 - `take_render_demand() -> bool` is the **pump's** yield check: call it at a chunk boundary,
-  **after the batch's replies have left** (R-37), and drop the guard when it answers `true`. Asking
-  clears it. `render_demand_raised()` reads without clearing, for diagnostics.
+  **after the batch's replies have left** (R-37), and drop the guard when it answers `true`. It
+  **reads without clearing** — the name is kept so both pump loops read unchanged — so a standing
+  demand survives more than one ask and a pump may yield at several consecutive boundaries while a
+  frame is queued. `render_demand_raised()` is the same read, for diagnostics.
 - `lock()`, `lock_unfair()` and `try_lock_unfair()` still compile at today's call sites.
 
-It is measured, and the difference is not marginal: a pump that honours the flag hands the lock over
-in **one batch / 157 us**; the same pump ignoring it makes the renderer wait **3 800 batches /
-354 ms**.
+It is measured, and the difference is not marginal. Re-measured after the count fix, one pump thread
+feeding 4 MiB as 1024 chunks and checking at each boundary: honoured, **1 batch / about 0.9 ms**;
+ignored, **1016 batches / about 850 ms**, 3 of 3 runs each. (The earlier `1 batch / 157 us` against
+`3800 / 354 ms` is the same shape at a different chunk size and optimisation level; the ratio —
+one batch against a thousand — is the property.)
 
 **`US-0083` wired the local-shell half, and it is the one that needed it.** That loop holds the
 engine lock across reads, so the flag alone is not enough: the read itself is capped at
