@@ -1,8 +1,14 @@
-# OSC 9;7 — Agent Status Event
+# OSC 20308 — Agent Status Event
 
 > Protocol specification for a coding-agent status channel carried over an
-> OSC (Operating System Command) escape sequence. Any terminal that parses
-> OSC 9 and any agent that can write bytes to its own stdout can implement it.
+> OSC (Operating System Command) escape sequence. Any terminal that parses OSC
+> and any agent that can write bytes to its own stdout can implement it.
+>
+> **The sequence moved from `OSC 9;7` to `OSC 20308;1` on 2026-09-13**, because
+> `9;7` collides with ConEmu's "run a process" sub-code. See § 2.1 for the
+> collision, § 2.2 for how the new number was chosen, and § 3.1 for the
+> migration and the one-release alias. Everything below the wire format — the
+> payload, the schema, the state machine, the security rules — is unchanged.
 
 ---
 
@@ -23,10 +29,10 @@ channel, not through OSC.
 ### 1.1 Why an OSC and not a sidecar socket
 
 1. **Zero infrastructure.** No socket server, no named pipe, no RPC schema, no
-   per-instance path discovery. Any terminal that already parses OSC 9 gains
-   the monitor backend by adding one parser branch.
+   per-instance path discovery. A terminal gains the monitor backend by adding
+   one parser branch.
 2. **Works across remote shells with no extra work.** An agent running on a
-   remote host emits OSC 9;7 into its stdout; the bytes flow back through the
+   remote host emits the sequence into its stdout; the bytes flow back through the
    SSH channel and hit the host terminal's parser unchanged. A socket would
    need an SSH tunnel or a TCP relay.
 3. **Natural per-terminal multiplexing.** An OSC is emitted by the process
@@ -34,7 +40,7 @@ channel, not through OSC.
    automatically — no `pane_id` / `terminal_id` field is required in the
    payload.
 4. **Zero-config opt-in.** An agent just writes bytes to stdout. No env-var
-   handshake. Terminals that do not implement OSC 9;7 drop it silently (it is
+   handshake. Terminals that do not implement it drop it silently (it is
    a private extension), so the same agent works inside any terminal without
    harm.
 
@@ -42,37 +48,155 @@ channel, not through OSC.
 
 ## 2. Numbering choice
 
-The OSC number space is shared. The choice here is **OSC 9;7** (a sub-code of
-the OSC 9 family).
+The sequence is **`OSC 20308 ; <sub> ; <payload>`**, with `1` as the sub-code for
+an agent-status event. `20308` is `0x4F54`, the two ASCII bytes of `OT`
+(OneTerm) read as one 16-bit value.
 
-| Candidate | Verdict |
+### 2.1 Why the number changed (2026-09-13)
+
+The original choice was `OSC 9;7`, justified in an earlier revision of this
+document as "sub-codes `0..4` are taken (ConEmu misc + progress); `7` is free".
+**That justification was factually wrong.** ConEmu defines twelve sub-codes,
+`9;1` through `9;12`, and **`ESC ] 9 ; 7 ; "cmd" ST` means "run some process
+with arguments"**:
+
+| Sub-code | ConEmu meaning |
 |---|---|
-| `OSC 9;7` (sub-code of OSC 9 family) | **Chosen.** OSC 9 is widely implemented for desktop notifications (`9;msg`) and progress (`9;4;st;pr`). Sub-codes `0..4` are taken (ConEmu misc + progress); `7` is free and reads naturally as "agent event". Unknown terminals ignore it. |
-| `OSC 1337;Agent` | Rejected — 1337 already carries unrelated vendor semantics (inline images, etc.). |
-| `OSC 633;Agent` (VS Code) | Rejected — 633 is VS Code shell-integration-specific. |
-| `OSC 777;…` (urxvt 3-field) | Rejected — would require a new parser branch for the 777 family. |
-| Brand-new number (e.g. `OSC 9001`) | Rejected — breaks the "lives in the OSC 9 family" reading and gains nothing, since compatibility with other terminals is zero either way for a private extension. |
+| `9;1` | Sleep |
+| `9;2` | Show a GUI message box |
+| `9;3` | Change the tab title |
+| `9;4` | Taskbar progress |
+| `9;5` | Wait for a keypress |
+| `9;6` | Execute a GuiMacro |
+| **`9;7`** | **Run some process with arguments** |
+| `9;8` | Output an environment variable |
+| `9;9` | Report the current directory |
+| `9;10` | xterm emulation mode |
+| `9;11` | Comment (ignored) |
+| `9;12` | Treat the cursor position as the prompt start |
 
-**Decision: `OSC 9;7`.** It is a private extension; no other terminal is
-expected to interpret it. Other terminals that already parse OSC 9 will treat
-`9;7` as an unknown notification sub-code and ignore it.
+The consequence is not hypothetical, and it is the wrong way round for a
+Windows-first product: an agent emitting `ESC ] 9 ; 7 ; <base64-json> ST` while
+running under ConEmu or cmder is **asking ConEmu to spawn a process with that
+payload as its command line**. OneTerm itself only ever read the sequence, but
+this protocol asks *third-party agents* to emit it, so the defect ships to every
+terminal those agents run in.
+
+### 2.2 How `20308` was chosen
+
+The OSC number space has no registry: XTerm Control Sequences is the de facto
+reference and everything above it is first-come vendor practice. The requirement
+was therefore a number **no shipping terminal interprets**, with room for this
+project's own sub-codes so a second top-level claim is never needed. Surveyed
+2026-09-13:
+
+| Range | Who has it |
+|---|---|
+| 0-2, 4-19, 21, 22, 46, 50-52, 60-66, 104-119 | xterm |
+| 7 | current directory (Apple Terminal origin, then VTE and everyone) |
+| 8 | hyperlinks |
+| 9, and `9;1`-`9;12` | iTerm2 notifications; ConEmu's sub-code family above; `9;4` progress is widely adopted |
+| 99 | kitty desktop notifications |
+| 133 | FinalTerm / semantic prompts |
+| 440 | mintty audio |
+| 633 | VS Code shell integration |
+| 666 | VTE shell precmd / postexec |
+| 701 | rxvt-unicode locale |
+| 777 | urxvt extensions, adopted by VTE, foot and kitty for notifications |
+| 1337 | iTerm2, and WezTerm, mintty and tmux passthrough after it |
+| 3008 | uapi-group hierarchical context |
+| 5522 | kitty file transfer |
+| 7704, 7721, 7750, 7770, 7771, 7777 | mintty, whose stated band is `7700-7799`; WezTerm shares 7704 / 7770 / 7771 |
+| 30001, 30101 | kitty multiple cursors, text sizing |
+
+**Nothing in the survey touches 10000-29999.** Every four-digit assignment stops
+at 7777 and the only five-digit user is kitty, at 30001 and above. `20308` sits
+in the middle of that gap, is adjacent to no vendor's band so it cannot be
+swallowed by an extension of one, and is derived from the project name rather
+than picked round, which makes an independent terminal choosing it by
+coincidence implausible. An unknown OSC is dropped silently by every terminal in
+the table, so the failure mode elsewhere is *nothing happens* — which is exactly
+what `9;7` failed to be.
+
+Rejected, briefly: `OSC 1337;Agent` (vendor semantics already live there and
+four implementations parse the family); `OSC 633;Agent` (VS Code's);
+`OSC 777;…` (three separate terminals read it as a notification); `OSC 3008` and
+its neighbours (systemd's context registry — squatting beside someone else's
+registry is the `9;7` mistake repeated); any other sub-code of `9` (leaving that
+family is the point).
 
 ---
 
 ## 3. Wire format
 
 ```
-ESC ] 9 ; 7 ; <base64-json> ST
+ESC ] 20308 ; 1 ; <base64-json> ST
 ```
 
 - `ESC ]` = `\x1b]` — OSC opener.
-- `9` — OSC number (the notification/progress family).
-- `7` — sub-code selecting the agent-status event.
+- `20308` — the OSC number (§ 2.2).
+- `1` — sub-code selecting the agent-status event. Sub-code `0` is the support
+  query (§ 3.2); `2` and above are reserved for future OneTerm extensions.
 - `<base64-json>` — the standard-base64 encoding of a UTF-8 JSON object
   (see §4). Base64 contains no `;`, so it survives the VT engine's
   `;`-splitting intact (see §3.1). Must not contain the ST terminator bytes.
 - `ST` — String Terminator. **Use `BEL` (`\x07`)** for maximum compatibility.
   `ESC \` (`\x1b\\`) is also accepted.
+
+### 3.1 Migration, and the deprecated alias
+
+**Timeline.**
+
+| Release | `OSC 20308 ; 1` | `OSC 9 ; 7` |
+|---|---|---|
+| The one that lands `US-0088` | **the sequence**; emitted by agents, read by OneTerm | **accepted as a deprecated alias**: parsed identically, counted, and logged once per session at `debug` so a still-unported agent is diagnosable |
+| The next release after it | the sequence | **dropped** — not parsed, not counted; the bytes reach no handler |
+
+Agents should emit **only** the new sequence. Emitting both doubles every event
+and the host does not deduplicate them. An agent that must support an older
+OneTerm should detect support (§ 3.2) and fall back, not emit both.
+
+The alias exists for one release because the payload, the schema, the state
+machine and the security rules in this document are **unchanged** — only the
+two leading parameters moved — so an agent's port is a one-line change to the
+prefix it writes.
+
+### 3.2 Detecting support
+
+Two ways, and an agent should prefer the first:
+
+**Query the channel.** Emit
+
+```
+ESC ] 20308 ; 0 ST
+```
+
+and a terminal that implements this protocol replies
+
+```
+ESC ] 20308 ; 0 ; 1 ; <name> ; <version> ST
+```
+
+where `1` is the protocol version this document describes. **Pair the query
+with a Device Attributes request so it cannot hang**, which is the same trick
+the kitty keyboard protocol prescribes for the same reason:
+
+```
+ESC ] 20308 ; 0 ST   ESC [ c
+```
+
+Every terminal answers `CSI c`. If the DA1 reply arrives with no `20308`
+reply before it, the terminal does not implement the protocol — no timeout to
+choose, no guess. A terminal that does not parse `20308` drops the query
+silently, which is exactly the behaviour the number was chosen for (§ 2.2).
+
+**Or read `XTVERSION`.** `CSI > 0 q` answers `DCS > | OneTerm(<version>) ST`.
+That identifies the terminal but not the protocol version, so it is the weaker
+signal; use it only if the agent already issues `XTVERSION` for other reasons.
+
+Emitting the sequence blind remains safe — the failure mode in every surveyed
+terminal is that nothing happens — so detection is an optimisation for agents
+that want to skip the work of building events nobody reads.
 
 ### 3.1 The payload is always base64-wrapped
 
@@ -86,12 +210,12 @@ and could not be recovered by the receiver.
 Wire form is therefore **always** base64-wrapped:
 
 ```
-ESC ] 9 ; 7 ; <base64(json)> ST
+ESC ] 20308 ; 1 ; <base64(json)> ST
 ```
 
 - The agent encodes `JSON.stringify(payload)` with standard base64
   (`base64::engine::general_purpose::STANDARD` / `Buffer.from(...).toString("base64")`
-  / equivalent) and writes `\x1b]9;7;<b64>\x07`.
+  / equivalent) and writes `\x1b]20308;1;<b64>\x07`.
 - The receiver detects the `7` sub-code, takes the third parameter,
   base64-decodes it, then JSON-parses the result. There is only one wire form.
 - Trade-off: ~33 % size overhead. Acceptable for status events (typical
@@ -106,7 +230,7 @@ ESC ] 9 ; 7 ; <base64(json)> ST
 
 ### 3.2 Size cap
 
-The receiver **MUST** cap OSC 9;7 payloads at **8 KiB** (measured on the
+The receiver **MUST** cap OSC 20308;1 payloads at **8 KiB** (measured on the
 base64 length, i.e. ~6 KiB of raw JSON after decode). Oversized payloads are
 dropped silently (with a debug log). This prevents a malicious or buggy agent
 from flooding the terminal with multi-megabyte OSCs. Agent status payloads are
@@ -126,7 +250,7 @@ a malformed agent OSC.
 
 ### 4.1 Envelope
 
-Every OSC 9;7 payload is a JSON object with a common envelope:
+Every OSC 20308;1 payload is a JSON object with a common envelope:
 
 ```json
 {
@@ -174,7 +298,7 @@ The tables below list only the type-specific fields.
 #### 4.2.1 `type: "state"` — agent lifecycle state
 
 The core event. The agent is the authority for its own state when it emits
-OSC 9;7 (see §5).
+OSC 20308;1 (see §5).
 
 ```json
 {
@@ -410,7 +534,7 @@ record the outcome.
 ### 4.3 Redaction
 
 Agents frequently handle secrets: API keys in `bash` commands, file contents
-in `read`/`write`, tokens in URLs. To keep OSC 9;7 safe to log and display:
+in `read`/`write`, tokens in URLs. To keep OSC 20308;1 safe to log and display:
 
 1. **`args` on `tool_call` is a summary, not a raw payload.**
    The agent SHOULD truncate to a reasonable length (e.g. 256 chars) and
@@ -429,10 +553,10 @@ avoid writing them to persistent logs at high verbosity.
 
 ## 5. State machine
 
-When an agent emits OSC 9;7, the agent is the **state authority** for its
+When an agent emits OSC 20308;1, the agent is the **state authority** for its
 own lifecycle. The host trusts the reported `state` directly; it does not
-second-guess with screen scanning for agents that emit OSC 9;7. (A host may
-still fall back to screen-scanning for agents that do *not* emit OSC 9;7;
+second-guess with screen scanning for agents that emit OSC 20308;1. (A host may
+still fall back to screen-scanning for agents that do *not* emit OSC 20308;1;
 that is out of scope for this spec. The rule is only that the two must not
 run simultaneously for the same agent, to avoid two competing sources of
 truth.)
@@ -450,7 +574,7 @@ truth.)
 ### 5.2 State-machine rules the agent should implement
 
 These rules are the battle-tested part (they originate from agent-monitor
-integrations that have shipped). An agent emitting OSC 9;7 **should**
+integrations that have shipped). An agent emitting OSC 20308;1 **should**
 replicate them to avoid flicker and false states:
 
 1. **Idle debounce (250 ms).** On `agent_end`, do not emit `idle` immediately.
@@ -461,7 +585,7 @@ replicate them to avoid flicker and false states:
    for 2.5 s, then emit `error` (or `blocked` if the agent re-prompted).
    Avoids a false `idle`/`error` while the agent auto-retries.
 3. **State queue + in-flight coalescing.** Multiple rapid state changes are
-   coalesced into one OSC 9;7 emit carrying the latest `state`/`seq`. Never
+   coalesced into one OSC 20308;1 emit carrying the latest `state`/`seq`. Never
    emit two OSCs concurrently.
 4. **Reload-safe.** On `session_start` with `reason: "reload"`, re-sync
    `agentActive = !isIdle()` and emit the current state. A reload may tear
@@ -479,7 +603,7 @@ replicate them to avoid flicker and false states:
 
 ### 5.3 Staleness
 
-The host tracks `last_event_ts` per (terminal, agent). If no OSC 9;7 arrives
+The host tracks `last_event_ts` per (terminal, agent). If no OSC 20308;1 arrives
 for `stale_threshold_ms` (default 300 000 = 5 min) **and** the terminal
 process is still alive, the card is marked `stale` (grey question-mark
 badge). This catches agents that have frozen without emitting anything. If
@@ -488,7 +612,7 @@ PTY), regardless of the last OSC. The threshold should be configurable.
 
 ### 5.4 Current OneTerm Agent Panel behavior
 
-In OneTerm today, OSC 9;7 events are folded by `oneterm-state::AgentRegistry` and rendered by `crates/agent-ui` as a compact card list. The current panel shows:
+In OneTerm today, OSC 20308;1 events are folded by `oneterm-state::AgentRegistry` and rendered by `crates/agent-ui` as a compact card list. The current panel shows:
 - state badge + liveness summary
 - optional model row and context bar
 - the running tool row, or the most recent finished tool row when no tool is active
@@ -505,15 +629,15 @@ Cards are grouped by terminal tab and sorted by state priority (`blocked → err
 2. **Malformed payloads.** Invalid base64 / UTF-8 / JSON / schema version /
    `type` MUST be dropped silently (§3.3). The terminal must never crash or
    render artefacts on a malformed agent OSC.
-3. **One-directional.** OSC 9;7 carries no reply. A host that wants to act
+3. **One-directional.** OSC 20308;1 carries no reply. A host that wants to act
    on an agent (approve, interrupt) does so through the terminal's input
    channel, not through OSC. This keeps the protocol simple and prevents an
    agent from spoofing host actions.
-4. **Trust.** OSC 9;7 is emitted by the process running inside the terminal.
+4. **Trust.** OSC 20308;1 is emitted by the process running inside the terminal.
    The host already trusts that process with the terminal's input/output;
-   OSC 9;7 adds no new trust boundary. The only new surface is the size cap
+   OSC 20308;1 adds no new trust boundary. The only new surface is the size cap
    above.
-5. **Remote agents.** OSC 9;7 traverses SSH unchanged. A remote agent can
+5. **Remote agents.** OSC 20308;1 traverses SSH unchanged. A remote agent can
    report state to a local host exactly like a local agent. No credentials
    or secrets are involved; the payload is status metadata only.
 6. **Path privacy.** `session.project_dir` can reveal local usernames, mount
@@ -558,7 +682,7 @@ for status events.
 
 ## 8. Test plan (protocol conformance)
 
-A conformance test suite for an OSC 9;7 receiver should cover:
+A conformance test suite for an OSC 20308;1 receiver should cover:
 
 1. **Valid payloads (all base64-wrapped per §3.1):**
    - One valid payload per event type: `state`, `session`, `heartbeat`,

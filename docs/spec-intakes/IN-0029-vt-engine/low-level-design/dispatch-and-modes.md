@@ -291,13 +291,18 @@ numbers are dropped and counted, exactly as the reference drops them (R-35).
 `OSC_LARGE` ([`parser.md`](parser.md), R-55). It is a **memory ceiling only**; who may write or
 read the clipboard, and under what limits, stays in `crates/terminal/src/security_policy.rs`.
 
-`crates/terminal` claims 7, 9, 133 and 633, plus 52 and 8 as large. **OSC 9;7 (the agent
-channel, `docs/osc-agent-status.md`) becomes a claim on OSC 9 and a sub-code match in
-`crates/terminal/src/osc_agent/`** — no engine change, which is the whole point of the
-extension point. Its collision with ConEmu's "run some process with arguments" sub-code
-([`../research/prior-art.md`](../research/prior-art.md) § 6.4) is a defect in
-`docs/osc-agent-status.md` and is **not** solved here; it needs its own packet, and whichever
-sub-code wins is a one-line change to the claim.
+`crates/terminal` claims 7, 9, 133, 633 and **20308**, plus 52 and 8 as large.
+
+**The agent channel is `OSC 20308 ; 1` (`docs/osc-agent-status.md`), and it is a claim, not an
+engine change** — which is the whole point of the extension point. It moved off `OSC 9;7` in
+`US-0088` because `9;7` is ConEmu's "run some process with arguments"
+([`../research/prior-art.md`](../research/prior-art.md) § 6.4): an agent emitting the old sequence
+under ConEmu or cmder asks it to spawn a process with the payload as its command line. `20308` is
+`0x4F54` (`OT`), in the 10000-29999 band no surveyed terminal touches; sub-code `0` is the support
+query, `1` the status event, `2`+ reserved for OneTerm. `OSC 9` stays claimed for notifications and
+`9;4` progress, and for **one release** `9;7` is accepted as a deprecated alias — parsed
+identically, counted, logged once per session — then dropped. Both are sub-code matches in
+`crates/terminal/src/osc_agent/`; the engine only routes the numbers.
 
 A claimed number whose handler is missing is a debug assertion, never a panic.
 
@@ -563,8 +568,10 @@ Every other difference is a defect until a correction id says otherwise.
   behaviour and DECRQM answers `NotSupported`.
 - [ ] `dispatch::tests::claimed_osc_reaches_the_batch_without_allocating_per_osc` — a counting
   allocator.
-- [ ] `dispatch::tests::osc_9_7_reaches_the_embedder_through_a_claim` — the extension point,
+- [ ] `dispatch::tests::osc_20308_reaches_the_embedder_through_a_claim` — the extension point,
   proving no engine change is needed for the agent channel.
+- [ ] `dispatch::tests::osc_9_7_still_reaches_the_embedder_during_the_alias_release` — and its
+  counterpart asserting the claim is gone in the release after.
 - [ ] One byte-feed test per sequence marked supported in `docs/osc-sequences-checklist.md`, so
   the checklist and the engine cannot drift.
 
