@@ -337,7 +337,7 @@ fn pending_wrap_then_backspace() {
     assert!(f.screen().cursor().pending_wrap);
     assert_eq!(f.screen().cursor().pos.col, 3);
 
-    f.grid.screen_mut().backspace();
+    f.grid.screen_mut().backspace(false);
 
     assert!(!f.screen().cursor().pending_wrap);
     assert_eq!(f.screen().cursor().pos.col, 2);
@@ -351,12 +351,60 @@ fn backspace_at_column_zero_is_a_noop() {
     f.goto(0, 0);
     f.grid.screen_mut().cursor_mut().pending_wrap = true;
 
-    f.grid.screen_mut().backspace();
+    f.grid.screen_mut().backspace(false);
 
     assert_eq!(f.screen().cursor().pos.col, 0);
     assert!(
         f.screen().cursor().pending_wrap,
         "trap 1: BS at column 0 does not even clear the flag"
+    );
+    f.integrity();
+}
+
+#[test]
+fn reverse_wrap_crosses_a_wrapped_row() {
+    // Deviation D12 / R-08. `abcd` on a 4-column screen wraps, so row 0 is
+    // WRAPPED and the cursor sits at row 1 column 0.
+    let mut f = fixture(3, 4);
+    f.print("abcde");
+    f.goto(1, 0);
+    assert!(f.screen().row(f.screen().row_of_index(0)).wrapped());
+
+    // Reset (the default) is trap 1: nothing moves.
+    f.grid.screen_mut().backspace(false);
+    assert_eq!(
+        (f.screen().cursor_row_index(), f.screen().cursor().pos.col),
+        (1, 0)
+    );
+
+    // Set: the cursor crosses into the wrapped row's last column.
+    f.grid.screen_mut().backspace(true);
+    assert_eq!(
+        (f.screen().cursor_row_index(), f.screen().cursor().pos.col),
+        (0, 3)
+    );
+    f.integrity();
+
+    // A row that is NOT wrapped is not crossed into, even with the mode set:
+    // the glyph before the cursor is not there, so the previous line is
+    // unrelated content.
+    let mut f = fixture(3, 4);
+    f.print("ab");
+    f.newline();
+    assert!(!f.screen().row(f.screen().row_of_index(0)).wrapped());
+    f.grid.screen_mut().backspace(true);
+    assert_eq!(
+        (f.screen().cursor_row_index(), f.screen().cursor().pos.col),
+        (1, 0)
+    );
+
+    // The top of the screen is never crossed: history is not addressable.
+    let mut f = fixture(3, 4);
+    f.goto(0, 0);
+    f.grid.screen_mut().backspace(true);
+    assert_eq!(
+        (f.screen().cursor_row_index(), f.screen().cursor().pos.col),
+        (0, 0)
     );
     f.integrity();
 }

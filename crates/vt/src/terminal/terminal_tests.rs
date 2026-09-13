@@ -469,17 +469,36 @@ fn decrqm_answers_match_the_mode_table() {
 
     // A mode that is accepted but does nothing must never answer `Set`: that
     // would tell a program it may rely on a capability the engine has not
-    // implemented. `? 9001` (win32 input) and `? 45` (reverse wrap) are both in
-    // that state today, and `? 2027` (grapheme clusters) says `NotSupported`.
-    for code in [45, 9001] {
+    // implemented. The whole table is walked rather than a hand-picked pair, so
+    // a mode added without a reader fails here instead of lying on the wire.
+    let mut inert = 0;
+    for mode in Mode::PRIVATE {
+        let Some(state) = mode.inert_state() else {
+            continue;
+        };
+        inert += 1;
+        assert_ne!(state, ModeState::Set, "{mode:?} is inert and claims Set");
+        let code = mode.private_code().expect("a private mode has a number");
         let mut session = Session::new(10, 3);
         session.feed(format!("\x1b[?{code}h\x1b[?{code}$p").as_bytes());
         assert_eq!(
             session.replies(),
-            format!("\x1b[?{code};2$y"),
-            "mode {code} is stored but unread, so it must answer Reset"
+            format!("\x1b[?{code};{}$y", state as u8),
+            "mode {code} is recognised but unread, so `h` must not make it Set"
         );
     }
+    assert_eq!(
+        inert, 3,
+        "? 3, ? 2027 and ? 9001 — and `? 45` left the table"
+    );
+
+    // `? 45` left it at `US-0086`: `Screen::backspace` reads the mode now, so
+    // the honest answer is the real state (deviation D12).
+    let mut session = Session::new(10, 3);
+    session.feed(b"\x1b[?45h\x1b[?45$p");
+    assert_eq!(session.replies(), "\x1b[?45;1$y");
+    session.feed(b"\x1b[?45l\x1b[?45$p");
+    assert_eq!(session.replies(), "\x1b[?45;2$y");
 
     // And that the answer follows the real state.
     let mut session = Session::new(10, 3);
@@ -498,6 +517,36 @@ fn decrqm_answers_match_the_mode_table() {
     assert_eq!(session.replies(), "\x1b[77;0$y");
     session.feed(b"\x1b[?7777$p");
     assert_eq!(session.replies(), "\x1b[?7777;0$y");
+}
+
+#[test]
+fn reverse_wrap_is_off_by_default_and_crosses_a_wrapped_row_when_set() {
+    // Deviation D12 / R-08, from the wire. Four columns, so "abcde" wraps and
+    // row 0 carries WRAPPED.
+    let mut session = Session::new(4, 3);
+    session.feed(b"abcde");
+    assert_eq!(session.cursor(), (1, 1));
+
+    // Default (reset) — trap 1: `BS` at column 0 is a complete no-op.
+    session.feed(b"\x08\x08");
+    assert_eq!(session.cursor(), (1, 0));
+    session.feed(b"\x08");
+    assert_eq!(session.cursor(), (1, 0), "? 45 is reset, so BS stops here");
+
+    // Set: the cursor crosses into the previous row's last column, and the
+    // glyph it lands on is the one it wrapped away from.
+    session.feed(b"\x1b[?45h\x08");
+    assert_eq!(session.cursor(), (0, 3));
+    assert_eq!(session.row(0), "abcd");
+
+    // Unsetting restores trap 1 immediately.
+    session.feed(b"\x1b[?45l\x1b[2;1H\x08");
+    assert_eq!(session.cursor(), (1, 0));
+
+    // A row that is not WRAPPED is not crossed into even while the mode is set.
+    let mut session = Session::new(4, 3);
+    session.feed(b"ab\r\n\x1b[?45h\x08");
+    assert_eq!(session.cursor(), (1, 0));
 }
 
 #[test]
@@ -1316,6 +1365,55 @@ fn osc_7_reaches_the_embedder_through_a_claim() {
 }
 
 #[test]
+fn a_claim_cannot_be_shadowed_silently() {
+    // The registration table is API (`DEC-0014`), so the three ways a claim can
+    // quietly do nothing are all closed.
+
+    // 1. A duplicate claim is idempotent — a bitmap, so no ordering and no
+    //    handler to shadow. Claiming twice registers exactly what claiming once
+    //    registers, and the second call does not revoke the first.
+    let mut claims = OscClaims::new();
+    claims.claim(633).claim(633);
+    assert!(claims.is_claimed(633));
+    assert!(!claims.allows_large(633));
+    let mut once = OscClaims::new();
+    once.claim(633);
+    assert_eq!(claims, once);
+
+    // 2. The set of natively handled numbers is published, so an embedder can
+    //    ask before it registers instead of finding out from a missing event.
+    for code in OscClaims::NATIVE {
+        assert!(OscClaims::is_native(code), "OSC {code}");
+    }
+    for code in [7, 9, 133, 633, 1337] {
+        assert!(!OscClaims::is_native(code), "OSC {code}");
+    }
+
+    // 3. `claim_large` is the memory ceiling and accepts a native number for
+    //    that reason — `claim_large(52)` buys a large clipboard payload. Its
+    //    delivery half is inert there, which `is_native` is how you find out;
+    //    `crates/terminal` depends on both bits being set, so this is the one
+    //    place a native number may be claimed without an assertion.
+    let mut claims = OscClaims::new();
+    claims.claim_large(52).claim_large(1337);
+    assert!(claims.allows_large(52));
+    assert!(claims.is_claimed(52) && OscClaims::is_native(52));
+    assert!(claims.allows_large(1337));
+    assert!(claims.is_claimed(1337));
+}
+
+/// The fourth way, split out because it is an assertion: a `claim` on a number
+/// the engine answers itself is dead, and dies loudly in debug rather than
+/// leaving the embedder waiting for an event that never comes. Debug only —
+/// a release build carries no `debug_assert!`.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "handled by the engine itself")]
+fn claiming_a_natively_handled_osc_asserts() {
+    OscClaims::new().claim(52);
+}
+
+#[test]
 fn claimed_osc_reaches_the_batch_without_allocating_per_osc() {
     // The fork allocates a `Vec` per OSC parameter plus an outer `Vec` on the
     // hot path. Measured through the batch's own capacities, because a
@@ -1456,6 +1554,9 @@ fn unhandled_sequences_are_counted_not_echoed() {
         b"\x1b\x7b",          // unknown ESC
         b"\x1b]987;body\x07", // unclaimed OSC
         b"\x1bPz;1\x1b\\",    // unknown DCS
+        b"\x1b_body\x1b\\",   // APC — no consumer in v1
+        b"\x1bXbody\x1b\\",   // SOS
+        b"\x1b^body\x1b\\",   // PM
     ];
     for bytes in cases {
         let mut session = Session::new(10, 3);
