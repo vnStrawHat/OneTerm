@@ -526,6 +526,18 @@ Against the 60 / 1935 / 0 / 14 baseline, +5 passed = the three new `plan_cache` 
 new `content_tests` tests. `cargo fmt --all` and
 `cargo clippy --workspace --all-targets -- -D warnings` are clean.
 
+**After the rework** (merge with `main` at `4bb088d` + the eleven adopted verification tests + the
+two fixes), re-run in full:
+
+```
+ci-local: all checks passed.        (exit 0)
+sections: 60  passed: 1956  failed: 0  ignored: 14
+```
+
+Per crate: `oneterm-terminal` 276 passed, `oneterm-terminal-view` 299 passed / 3 ignored. The
++16 over the previous run is the eleven adopted tests plus `US-0090`'s own net test delta from
+the merge.
+
 ### harness.db row
 
 No `harness.db` exists in this worktree, so the status row is recorded here as the snippet to
@@ -542,18 +554,100 @@ db.execute(
 db.commit()
 ```
 
+### Independent verification — FAIL, then rework
+
+The first implementation (`f963a94`) was reviewed by an independent verifier, whose full report is
+[`evidence/US-0092-verify.md`](evidence/US-0092-verify.md) with its own screenshots
+(`US-0092-verify-a-url-heavy.png` … `-f-ctrlclick.png`). Verdict: **FAIL**, two behaviour
+regressions of exactly the class this packet's Acceptance forbids. Both are now fixed on top of a
+merge with `main` at `4bb088d` (which brought `US-0090` in — `Engine` newtype deleted,
+`take_render_demand` gone, `Demand` moved; the only conflict was `handle.rs`, resolved by keeping
+`main`'s signature and re-appending this packet's `lock_for_render` note).
+
+| # | Severity | Site | What was wrong | Fix |
+| --- | --- | --- | --- | --- |
+| 1 | **Major** | `content.rs` | `occ == 0` was read as "blank". `Row::reset` fills the row with the erase template and *then* zeroes `occ` (`crates/vt/src/grid/row.rs:161-171`), so after `CSI 44 m` + `ED` — or any scroll / `IL` / `DL` under a non-default background, which is what every full-screen TUI does — the cells carry `bg = Blue` with `occ == 0`. The old code called that content; the new code skipped it, so the gutter lost timestamps on painted lines: H2's own stated failure mode. | `reset` also sets `flags = DIRTY \| flags_for(template)`, so the row itself records that the template was not plain. The skip now also requires `!flags.intersects(STYLED \| HAS_EXTRAS \| HAS_GRAPHEME)`, and the `..occ` narrowing is gated on the same condition — with a styled erase template the cells *above* `occ* are that template, not blanks, so narrowing was wrong there too. |
+| 2 | **Major (stale render)** | `plan_cache.rs` | A wrapped URL whose head scrolls above the viewport top left a stale underline on its continuation rows. Display row 0's mask is extended into it from the row above, and a scroll moves the viewport boundary with **no** row's `(RowId, SeqNo)` changing — so no row is dirty, no run is rescanned, and the mask that a full rescan would now empty survives. `wraps_prev` cannot express it: the run walk has no `connected(-1)`. | On a `Partial { scrolled != 0 }` frame, display row 0 is seeded into `self.scan` (**not** `self.dirty`) and closed under its wrap run like any other seed. The existing mask-delta compare then decides whether a plan is rebuilt, so a scrolled frame costs one extra rescanned row and no extra plan. |
+| 3 | Minor (note) | comments + LLD | The paraphrase "a row the engine says was never written" is not what `occ` means after a `reset`. | Corrected in `content.rs` and in `damage-and-render-state.md`, which now carries both traps as standing notes for the next consumer of these hints. |
+
+**Tests adopted verbatim from the verifier's worktree** (`git diff` of
+`crates/terminal/src/content_tests.rs` and `crates/terminal-view/src/render/plan_cache.rs`,
+applied with `git apply --3way`). Four of the eleven failed on `f963a94` and pass now:
+
+| test | file | on `f963a94` |
+| --- | --- | --- |
+| `last_content_row_sees_a_background_erased_row` | `content_tests.rs` | **FAIL** (0, want 4) |
+| `last_content_row_sees_a_background_erased_scroll_in` | `content_tests.rs` | **FAIL** (2, want 3) |
+| `last_content_row_default_erase_stays_blank` | `content_tests.rs` | pass (control) |
+| `url_v2_scrolling_the_viewport_keeps_the_masks_exact` | `plan_cache.rs` | **FAIL** (defect 2) |
+| `url_v2_streaming_output_keeps_the_masks_exact` | `plan_cache.rs` | **FAIL** (defect 2) |
+| `url_v2_first_row_of_a_three_row_url_changes` | `plan_cache.rs` | pass |
+| `url_v2_last_row_of_a_three_row_url_changes` | `plan_cache.rs` | pass |
+| `url_v2_delete_and_insert_line_inside_a_wrapped_url` | `plan_cache.rs` | pass |
+| `url_v2_clear_screen_and_alt_screen_swap` | `plan_cache.rs` | pass |
+| `url_v2_resize_rewraps_the_url` | `plan_cache.rs` | pass |
+| `url_v2_wrap_dropped_in_a_frame_that_was_never_rendered` | `plan_cache.rs` | pass |
+
+plus the helper `assert_masks_match_a_full_rescan`, which compares **every** row against a
+from-scratch `url_masks_into` of the same frame — a much stronger invariant than the row counts,
+and the reason defect 2 was caught at all.
+
+**The counted-work numbers are unchanged.** Every figure in the H1 and H2 tables above still
+holds, asserted by the same `assert_eq!`s:
+
+- H1's 45 → 1, 5 → 3 and 3 → 2 are all measured on `Partial { scrolled: 0 }` frames (a row
+  rewritten in place), so the seam seeding does not fire and adds nothing.
+- On a genuinely scrolled frame the seam costs **one extra rescanned row**, closed under its run.
+  `scroll_shifts_plans_and_replans_only_scrolled_in_rows` still asserts `rows_planned == 2` and
+  `rows_candidate == 2`, because row 0 goes into `scan`, not `dirty`, and its mask did not change.
+- H2's 1 800 / 3 600 → 2 / 2 is unchanged: a fresh shell's blank rows carry no content hints, so
+  the added `flags()` condition never fires on them.
+
+**One cross-crate change was needed.** `RowRef::flags()` had been narrowed to `pub(crate)` by
+`US-0090` (it was `pub` at this packet's branch point, which is what the verifier's suggested fix
+assumed). It is `pub` again, with a comment naming `last_content_row` as the consumer and why the
+hints — not `occ` — are what answers "is this row blank". `RowFlags` itself was already `pub` and
+reachable at `oneterm_vt::grid::RowFlags`; no other visibility moved, and no crate edge changed.
+
+### Re-run of the defect-2 GUI leg
+
+Same process discipline: `Get-Process oneterm` enumerated first — pids `2504` and `14804`, the
+owner's own windows, one of which runs their agent session — neither touched, never matched by
+name or title; `Start-Process -PassThru` with `-WorkingDirectory` set to this worktree; my pids
+`16828` and `18216`; `CloseMainWindow()` then `Stop-Process -Id <my pid>` as fallback; both
+pre-existing pids re-checked alive afterwards and mine gone. `target/terminal.json` written for
+the run and deleted after.
+
+Fixture: 200 plain lines, one 706-character URL (`WRAPHEAD https://wrap.test/segment-…tail-end`,
+wrapping onto **five** display rows, 201–205), then 44 plain lines.
+
+- `US-0092-fixed-scroll-back.png` — wheeled back 6 clicks: all five rows of the URL on screen,
+  underline continuous across 201→205 and stopping exactly at `tail-end`. The plain `filler` and
+  `trailer` lines around it are not underlined.
+- `US-0092-fixed-scroll-forward.png` — then wheeled **forward** 5 clicks, so rows 201–203
+  (including the `https://` head) pass above the viewport top and rows 204–205 sit at the top of
+  the screen. They render as **plain text, no underline** — which is what a whole-viewport rescan
+  of that frame produces, and what the code did before this packet. This is the exact position the
+  verifier captured as `US-0092-verify-d-stale-underline.png` with three rows still underlined and
+  no `https://` anywhere on screen.
+
 ### Gaps
 
 - **No timing measurement of either changed site exists, before or after.** Nothing in the
   workspace benchmarks the view; `crates/tools`'s five tiers stop at `render_update` and
   `FrameStats` holds counters, not timers. Both fixes are accepted on counted work, which is a
   fact, and this packet claims no timing win. Confirmed as expected, not discovered.
-- **The GUI check is manual, Windows-only, and partial.** The full-screen-TUI leg, the Ctrl+click
-  open and the drag-selection-across-a-wrapped-URL leg were not run: this session cannot deliver
-  synthetic keyboard or mouse-button input to the window (only posted wheel messages work), and
-  `doom-fire` is not built in this worktree. The wrap-scope risk the packet actually cares about
-  is covered by the wrapped-URL screenshots plus the two wrap-run unit tests; the three unrun
-  legs would need a human at the keyboard.
+- **The GUI check is manual, Windows-only, and partial.** Covered across this packet and the
+  verification: URL-heavy output, the gutter, a wrapped URL across a row boundary, a re-wrap onto
+  five rows after a resize, scroll back **and** scroll forward past the seam, and a drag-select
+  that reached the app. Not covered: the full-screen TUI (`doom-fire` is not built here, and the
+  verifier ran out of budget), and Ctrl+click.
+- **Ctrl+click is not testable from an agent session — this is a harness limit, not a gap in the
+  change.** The verifier established the mechanism: GPUI reads modifier state from the real
+  keyboard via `GetKeyState`, which a posted `WM_KEYDOWN VK_CONTROL` does not set, so a
+  posted-message driver cannot deliver a modified click. It posts cleanly and nothing happens (no
+  browser process appears, no URL-open attempt is logged). Nothing about the change is in
+  question; the input path is simply unreachable without a human at the keyboard.
 - **`lock_for_render` is resolved by H2, not changed.** Recorded above; no lock change was made,
   which is what the packet asked for.
 - **`vt-bench` tier 3 does not cover either changed site.** Recorded as a guard only.
@@ -565,10 +659,13 @@ parallel. One coupling to flag: this packet gives `oneterm_vt::RowRef` an extern
 `crates/terminal/src/content.rs`. If it lands before `US-0090`, `RowRef` must **not** be dropped
 from `crates/vt/src/lib.rs`'s re-export block — `US-0090`'s Context already carries that warning.
 
-**Confirmed on landing.** `crates/terminal/src/content.rs` now calls three `pub` items on
-`oneterm_vt::RowRef` — `is_allocated()`, `occ()` and the existing `cells()`. `US-0090`'s
-visibility pass must keep all three `pub`, and keep `RowRef` re-exported from
-`crates/vt/src/lib.rs`. `RowHeader.occ`'s doc comment (`crates/vt/src/grid/row.rs:61-63`) is now
+**Confirmed on landing, and one item re-widened after the merge.**
+`crates/terminal/src/content.rs` now calls four `pub` items on `oneterm_vt::RowRef` —
+`is_allocated()`, `occ()`, `cells()` and `flags()` — and uses `oneterm_vt::grid::RowFlags`.
+`US-0090` landed first and had narrowed `RowRef::flags()` to `pub(crate)`; the rework restores it
+to `pub` with a comment naming this consumer, because the content hints are the only thing that
+distinguishes a blank `occ == 0` row from one painted by a non-default erase template. Keep all
+four `pub`, and keep `RowRef` re-exported from `crates/vt/src/lib.rs`. `RowHeader.occ`'s doc comment (`crates/vt/src/grid/row.rs:61-63`) is now
 cited by name and line from `content.rs`; if that comment moves, the citation needs updating.
 Nothing else new crosses the crate boundary: `fill_wraps` and `url_masks_rows_into` are
 `pub(crate)` inside `oneterm-terminal-view`, and `url_masks_into` is now `#[cfg(test)]` there.
