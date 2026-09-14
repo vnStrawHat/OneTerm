@@ -6,7 +6,7 @@
 //! it is honoured even when the queue is full. `SshListener` is the shared
 //! `OscRouter` specialised to this transport.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 #[cfg(any(test, feature = "terminal-diagnostics"))]
@@ -14,7 +14,7 @@ use std::sync::atomic::AtomicU64;
 
 use async_channel::{Sender, TrySendError};
 
-use oneterm_terminal::{OscRouter, PtyTransport, TerminalError};
+use oneterm_terminal::{ByteBudget, OscRouter, PtyTransport, TerminalError};
 
 /// The shared batch drain for the SSH session (router + SSH transport).
 pub(crate) type SshListener = OscRouter<SshTransport>;
@@ -78,7 +78,7 @@ pub(crate) struct SshTransport {
     /// close is always honoured even if `Cmd::Close` was dropped.
     closing: Arc<AtomicBool>,
     /// Aggregate bytes reserved by queued or in-flight `Cmd::Write` messages.
-    queued_write_bytes: Arc<AtomicUsize>,
+    queued_write_bytes: Arc<ByteBudget<SSH_COMMAND_BYTE_BUDGET>>,
     /// Latest resize and whether a queue wakeup marker is already pending.
     pending_resize: Arc<Mutex<PendingResize>>,
     /// Diagnostic counters for bounded queue failures.
@@ -92,7 +92,7 @@ impl SshTransport {
         Self {
             cmd_tx,
             closing: Arc::new(AtomicBool::new(false)),
-            queued_write_bytes: Arc::new(AtomicUsize::new(0)),
+            queued_write_bytes: Arc::new(ByteBudget::default()),
             pending_resize: Arc::new(Mutex::new(PendingResize::default())),
             #[cfg(any(test, feature = "terminal-diagnostics"))]
             counters: Arc::new(CommandCounters::default()),
@@ -127,19 +127,9 @@ impl SshTransport {
         self.counters.command_full.fetch_add(1, Ordering::Relaxed);
     }
 
-    fn reserve_write_bytes(&self, additional: usize) -> bool {
-        self.queued_write_bytes
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                current
-                    .checked_add(additional)
-                    .filter(|&next| next <= SSH_COMMAND_BYTE_BUDGET)
-            })
-            .is_ok()
-    }
-
     /// Give back budget once the task delivered (or dropped) a write.
     pub(crate) fn release_write_bytes(&self, bytes: usize) {
-        self.queued_write_bytes.fetch_sub(bytes, Ordering::AcqRel);
+        self.queued_write_bytes.release(bytes);
     }
 
     /// Whether close has been requested. The tokio task checks this flag to
@@ -167,7 +157,7 @@ impl PtyTransport for SshTransport {
         if self.is_closing() {
             return Err(TerminalError::Closed);
         }
-        if !self.reserve_write_bytes(bytes.len()) {
+        if !self.queued_write_bytes.reserve(bytes.len()) {
             self.record_budget_full();
             return Err(TerminalError::QueueFull);
         }

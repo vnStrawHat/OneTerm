@@ -4,6 +4,8 @@
 //!
 //! - [`SessionState`] / [`SharedState`] — title/cwd/clipboard/exit/OSC caches
 //!   read by the `TerminalSession` accessors, written by the router.
+//! - [`ByteBudget`] — the aggregate write-payload cap both backends put in
+//!   front of their bounded command queue; each keeps its own ceiling.
 //! - [`SessionEventSink`] — delivery policy for `SessionEvent`s: repaint hints
 //!   coalesce and are dropped when the queue is full, everything else applies
 //!   backpressure.
@@ -19,12 +21,14 @@
 //!
 //! See `docs/terminal-backend.md` §5.
 
+mod byte_budget;
 mod event_sink;
 mod osc_router;
 mod pump;
 mod state;
 mod transport;
 
+pub use byte_budget::ByteBudget;
 pub use event_sink::{EventQueueDiagnostics, SessionEventSink};
 pub use osc_router::OscRouter;
 pub use pump::{GridSize, TerminalPump};
