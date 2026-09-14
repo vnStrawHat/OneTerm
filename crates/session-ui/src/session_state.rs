@@ -109,6 +109,18 @@ impl SshSessionId {
     pub fn parse(text: &str) -> Option<Self> {
         text.parse::<u64>().ok().map(Self)
     }
+
+    /// The raw id, for a boundary that cannot name this type — the
+    /// `WorkspaceCommands` fn pointers in `oneterm-state` sit below this crate.
+    pub const fn raw(self) -> u64 {
+        self.0
+    }
+
+    /// Rebuild an id that crossed such a boundary. Like [`Self::parse`], this
+    /// does not assert the id exists; the store lookup does.
+    pub const fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
 }
 
 impl fmt::Display for SshSessionId {

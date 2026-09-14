@@ -133,6 +133,10 @@ mod tests {
         ) {
         }
         fn app(_: &mut gpui::App) {}
+        fn saved_sessions(_: &App) -> Vec<(u64, String)> {
+            Vec::new()
+        }
+        fn open_saved_session(_: u64, _: &mut gpui::Window, _: &mut gpui::App) {}
         fn dock(
             _: &gpui::Entity<gpui_component::dock::DockArea>,
             _: &mut gpui::Window,
@@ -142,6 +146,8 @@ mod tests {
         WorkspaceCommands {
             new_terminal_with_shell: terminal,
             open_new_session_dialog: window,
+            saved_ssh_sessions: saved_sessions,
+            open_saved_ssh_session: open_saved_session,
             open_duplicate_ssh_dialog: duplicate_ssh,
             open_settings: app,
             open_about: window,
