@@ -2,10 +2,14 @@
 //! switching and the load → reset-center → save round trip against an
 //! isolated `docks.json`.
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
-use gpui::{Entity, TestAppContext, VisualTestContext, px};
-use gpui_component::dock::{DockArea, DockAreaState, DockLayout, DockPlacement, PanelHandle};
+use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext, px};
+use gpui_component::dock::{
+    DockArea, DockAreaState, DockLayout, DockPlacement, PanelHandle, panel_handle, register_panel,
+};
 use oneterm_actions::RightDockMode;
 use oneterm_core::SftpTableState;
 use oneterm_state::dock_persistence::{read_dock_document_from, update_dock_document_at};
@@ -61,6 +65,22 @@ fn set_right_dock(
             dock_area.toggle_dock(DockPlacement::Right, window, cx);
         }
     });
+}
+
+/// Re-registers [`panel_names::TERMINAL`] with a builder that counts its builds.
+///
+/// Building the real terminal panel is what spawns a local shell, so this count
+/// is the number of shells the code under test would have started (`BUG-0054`).
+fn count_terminal_builds(cx: &mut VisualTestContext) -> Rc<Cell<usize>> {
+    let builds = Rc::new(Cell::new(0));
+    let counter = Rc::clone(&builds);
+    cx.update(|_, cx| {
+        register_panel(cx, panel_names::TERMINAL, move |_, _, cx| {
+            counter.set(counter.get() + 1);
+            panel_handle(cx.new(|cx| NamedPanel::new(panel_names::TERMINAL, cx)))
+        });
+    });
+    builds
 }
 
 /// `(size, open, panel name)` of the right dock.
@@ -300,5 +320,49 @@ fn load_reset_center_and_save_round_trip(cx: &mut TestAppContext) {
     assert_eq!(
         written.sftp_table_state.unwrap().column_widths.get("name"),
         Some(&321.0)
+    );
+}
+
+/// BUG-0054: startup resets the center right after loading it, so `load_layout`
+/// must build none of the persisted center's panels — every built `terminal`
+/// panel spawns a local shell that the reset then discards mid-initialisation.
+#[gpui::test]
+fn load_layout_builds_no_center_panel_and_the_reset_builds_one(cx: &mut TestAppContext) {
+    let dir = temp_dir("center-builds");
+    let path = dir.0.join("docks.json");
+
+    let (source, cx) = dock_area(cx);
+    let saved: DockAreaState = source.update_in(cx, |dock_area, window, cx| {
+        let center = DockLayout::tabs()
+            .panel_view(NamedPanel::view(panel_names::TERMINAL, cx), cx)
+            .panel_view(NamedPanel::view(panel_names::TERMINAL, cx), cx);
+        dock_area.set_center(center, window, cx);
+        let right =
+            DockLayout::tabs().panel_view(NamedPanel::view(panel_names::SSH_CLIENT, cx), cx);
+        dock_area.set_dock(DockPlacement::Right, right, window, cx);
+        dock_area.dump(cx)
+    });
+    persistence::save_state_to(&path, &saved, None, "test-two-center-terminals").unwrap();
+    let document = read_dock_document_from(&path)
+        .unwrap()
+        .expect("document exists");
+
+    let builds = count_terminal_builds(cx);
+    let (target, cx) = cx.add_window_view(|window, cx| {
+        DockArea::new("layout-test-3", Some(MAIN_DOCK_VERSION), window, cx)
+    });
+    cx.update(|window, cx| persistence::load_layout(&target, &document, window, cx).unwrap());
+    assert_eq!(
+        builds.get(),
+        0,
+        "loading the saved layout must build none of the center's terminal panels"
+    );
+
+    cx.update(|window, cx| layout::apply_center_reset(target.downgrade(), window, cx))
+        .expect("dock area alive");
+    assert_eq!(
+        builds.get(),
+        1,
+        "the center reset must build exactly one terminal panel"
     );
 }
