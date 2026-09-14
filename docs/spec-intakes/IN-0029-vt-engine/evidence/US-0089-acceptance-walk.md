@@ -40,14 +40,14 @@ Every PNG below was read back after capture and is named
 | 6d | Drag-select, Ctrl+Shift+C, Ctrl+Shift+V | `06d1-selection.png`, `06d2-paste.png` | Drag paints the selection quad over exactly the dragged span; copy-on-select and `Ctrl+Shift+C` both put `ELECTME-ROW3-ALPHA-BRAVO` on the clipboard over a sentinel; `Ctrl+Shift+V` pastes **the same string** at the prompt | **PASS** |
 | 6e | Wheel scrollback over a `dir /s` flood | `06e1-flood-bottom.png`, `06e2-scrolled-back.png`, `06e3-scrolled-forward.png` | 10 real wheel notches up land mid-listing (`…\drivers\SEP`, `…\UMDF`); 14 notches down move forward again (`…\drivers\wd`). Content consistent in both directions | **PASS** |
 | 6f | 10 MB `type`, window dragged during it | `06f1-10mb-midstream.png`, `06f2-10mb-after.png` | `Responding = True` throughout; the window was moved 16 times mid-stream and the capture taken while moving shows a freshly painted full frame; after the flood the prompt returns and `echo AFTER-10MB` works | **PASS** |
-| 6g | `title foo` → tab title | `06g-title.png` | Tab stays `Terminal`. `title foo`, a raw `OSC 0;…BEL` and a raw `OSC 2;…BEL` all fail to change it — **but an `OSC 9;4;1;50` in the same byte stream did paint the progress bar**, so OSC generally crosses ConPTY and only 0/2 is lost. No `OSC 0`/`OSC 2` ever reaches the app (the debug log shows only `7` and `133`). The wiring above the engine is present (`VtEvent::Title` → `SessionEvent::Title` → `resolve_tab_label`) | **FAIL** (see D1) |
+| 6g | `title foo` → tab title | `06g-title.png`, `US-0089-title-osc-mode.png`, `US-0089-title-app-osc2.png`, `US-0089-title-pty-bytes.txt` | Tab stays `Terminal` **because `layout.tab_title` was at its shipped default `"default"`, which pins the tab to the static label by design**. With `tab_title = "osc"`, `title foo` renames the tab to `foo` and an application-written raw `OSC 2` renames it to `APP-SET-TITLE`. See D1 — re-investigated, **not a defect** | **PASS (by design)** |
 | 6h | `exit` | `06h-exit.png` | `cmd.exe` **and** the bundled `OpenConsole.exe` both leave the process tree; only the app's own `conhost.exe` remains; app alive. The tab and its scrollback stay on screen | **PASS** (tab retained — known limitation) |
 | 7 | Agent panel via OSC 9;7 | `07a-agent-working.png`, `07b-agent-blocked.png` | Right-dock **Agents** panel: `All 1 / Work 1 / Block 0` with a `working` card `claude #0: live`; the seq-2 `blocked` event then flips it to `All 1 / Work 0 / Block 1` with a `blocked` card. Base64 payload per `docs/osc-agent-status.md` §3.1 | **PASS** |
 | 8 | SSH walk | — | `target/ssh_session.json` (main checkout) holds two hosts: `192.168.13.128:22` **unreachable** on both days; `pam.vpbanks.com.vn:4422` reachable but the session record carries **no username and no credentials**, so no shell can be opened. The loopback `sftp-dev-server` answers `shell_request` with `"sftp-dev-server: shell is an echo only; use the SFTP browser."` (`crates/tools/src/bin/sftp-dev-server.rs:102`) — no usable shell channel | **NOT RUN** |
 | 9 | Frame time (diagnostics build) | `09-frame-time-flood.png` | See §9 | **PASS (recorded, not gated)** |
 
-No rendering defect was found in the new engine. The one functional failure (6g) is a
-title-propagation gap that the evidence localizes **outside** the VT engine's parse path.
+No rendering defect was found in the new engine, and no functional one either: the walk's
+single FAIL (6g) was re-investigated afterwards and **withdrawn** — see D1.
 
 ## 3. The render walk, measured rather than eyeballed
 
@@ -79,7 +79,7 @@ IN-0018 reference is present and renders the same way:
 - `bright: B0…B7` vs `normal: N0…N7`, each pair visibly different;
 - wide CJK: `日本語テキスト`, `中文`, `한국어` each 2 columns per glyph, `align2: 日本語|ab中文|cd한국|ef` keeps its column stops;
 - emoji `😀🚀` in colour, 2 cells each, `after-emoji` back on the grid;
-- combining marks (e acute, a diaeresis, o circumflex, n tilde) composed into one cell each.
+- combining marks (`e`+U+0301, `a`+U+0308, `o`+U+0302, `n`+U+0303) each composed into one cell.
 
 One improvement over the reference: IN-0018 recorded `ト` coming through as two U+FFFD
 because it used cmd's `type`; through the PowerShell path it renders correctly here.
@@ -106,18 +106,43 @@ Grid 1920x1032, scrollback at the shipped default.
 
 ## Defects and deviations
 
-**D1 — `title` / `OSC 0` / `OSC 2` never reach the terminal, so the tab title cannot change (step 6g). FAIL.**
-Reproduced three ways in one session: cmd's `title foo`, a raw `ESC ] 0 ; … BEL` and a raw
-`ESC ] 2 ; … BEL`, all through a local `cmd.exe` on the bundled OpenConsole 1.24. The tab
-label stayed `Terminal` every time. The same payload's `ESC ] 9 ; 4 ; 1 ; 50 BEL` **did**
-paint the progress bar, and the app's `OSC recv:` debug log over the whole session lists only
-sub-codes `7` and `133` — never `0` or `2`. The consumer chain above the engine is intact and
-unit-tested (`VtEvent::Title` → `OscRouter::set_title` → `SessionEvent::Title` →
-`TerminalViewEvent::TitleChanged` → `resolve_tab_label`). The evidence therefore points at the
-ConPTY host consuming OSC 0/2 rather than at the VT engine, but that was not proven from
-inside the host and **no previous walk covered `title`**, so this is a new, open observation
-rather than a known limitation. Needs its own BUG packet: either drive the tab title from
-ConPTY's title channel, or confirm and document that a local Windows shell cannot set it.
+**D1 — WITHDRAWN. The tab title works; the walk misread a setting (step 6g).**
+
+The original entry claimed "no `OSC 0`/`OSC 2` ever reaches the app", inferred from the
+`OSC recv:` debug log showing only sub-codes `7` and `133`. That inference was wrong: OSC 0
+and 2 are **natively claimed** by the engine (`OscClaims::NATIVE`,
+`crates/vt/src/terminal/osc.rs:39`) and surface as `VtEvent::Title`, which never passes
+through `parse_osc` and so is never logged by that line.
+
+Root cause, traced layer by layer with evidence:
+
+| Layer | Evidence | Result |
+| --- | --- | --- |
+| Engine | `crates/vt/src/terminal/dispatch.rs:1224` + test `osc_0_and_2_set_the_title` (BEL **and** `ESC \`, `;` rejoin) | parses, emits `VtEvent::Title` |
+| Adapter | `OscRouter::set_title` (`crates/terminal/src/backend/osc_router.rs:282`) + byte-level test `events_from_several_advances_survive_to_one_finish_batch` feeding `\x1b]2;first\x07` | emits `SessionEvent::Title`, updates the `SharedState` cache |
+| View | `crates/terminal-view/src/terminal_view/view.rs:357` → `TerminalViewEvent::TitleChanged`; `terminal_panel.rs:273` re-subscribes every leaf and calls `cx.notify()` | tab strip re-renders |
+| **Setting** | `terminal_panel.rs:362-363`: `TabTitleMode::Default => None`. `TabTitleMode` **defaults to `Default`** (`crates/settings/src/terminal_config/layout.rs:26`), and the walk's `target/terminal.json` had `"tab_title": "default"` | **the live title is deliberately discarded here** |
+| ConPTY | `US-0089-title-pty-bytes.txt`, captured with `pty-throughput` | forwards everything |
+
+With `layout.tab_title = "osc"` the tab renames correctly:
+`title foo` → tab `foo` (`US-0089-title-osc-mode.png`).
+
+A second, real Windows behaviour was uncovered while proving it, and is now recorded in the
+`TabTitleMode` doc comment. The raw PTY capture of an application writing `ESC ] 2 ; RAWOSC2 BEL`
+inside `cmd.exe` reads:
+
+```
+<ESC>]2;RAWOSC2<BEL><ESC>]0;C:\WINDOWS\SYSTEM32\cmd.exe<ESC>\
+```
+
+`cmd.exe` rewrites the console title around every command (`<path> - <command>` while running,
+`<path>` after) and ConPTY forwards each change as its own `OSC 0`, so an application-set title
+inside `cmd` is overwritten by cmd's restore microseconds later — the tab correctly settles on
+`cmd.exe`. Under `powershell`, which leaves the console title alone, the same application-written
+`OSC 2` sticks: `US-0089-title-app-osc2.png` shows the tab reading `APP-SET-TITLE`.
+
+**No code defect at any layer; no packet reopened.** The only changes are this correction and
+the `TabTitleMode` doc comment that records the `cmd.exe` caveat.
 
 **D2 — `exit` leaves the tab open (step 6h). Known limitation, unchanged.**
 `cmd.exe` and the bundled `OpenConsole.exe` are both reaped, which is the part that matters;
