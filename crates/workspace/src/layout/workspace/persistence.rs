@@ -48,6 +48,8 @@ pub(crate) fn load_layout(
         .dock_state::<DockAreaState>()
         .map_err(|error| anyhow::anyhow!("parse dock layout: {error}"))?;
     state.center = PanelState {
+        // Carried over for shape only. `build_node` dispatches on `info`, and
+        // the next `dump` writes "StackPanel" whatever this string held.
         panel_name: state.center.panel_name.clone(),
         children: Vec::new(),
         info: PanelInfo::stack(Vec::new(), Axis::Vertical),

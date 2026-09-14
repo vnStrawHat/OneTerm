@@ -366,3 +366,94 @@ fn load_layout_builds_no_center_panel_and_the_reset_builds_one(cx: &mut TestAppC
         "the center reset must build exactly one terminal panel"
     );
 }
+
+/// BUG-0054 (independent verification): the persisted centre is a *split* of
+/// two tab groups, each holding a terminal, and the document also names a
+/// zoomed panel that only lives in that centre. Loading must build none of
+/// them and must not panic on the resulting empty centre; the zoom restore
+/// must find nothing before the reset and the reset's own terminal after it.
+/// The right dock must survive the load untouched, panel name included.
+#[gpui::test]
+fn load_layout_drops_a_split_centre_and_still_restores_zoom_after_the_reset(
+    cx: &mut TestAppContext,
+) {
+    let dir = temp_dir("split-centre");
+    let path = dir.0.join("docks.json");
+
+    let (source, cx) = dock_area(cx);
+    let saved: DockAreaState = source.update_in(cx, |dock_area, window, cx| {
+        let centre = DockLayout::h_split()
+            .child(
+                DockLayout::tabs()
+                    .panel_view(NamedPanel::view(panel_names::TERMINAL, cx), cx)
+                    .panel_view(NamedPanel::view(panel_names::SFTP, cx), cx),
+                Some(px(400.)),
+            )
+            .child(
+                DockLayout::tabs().panel_view(NamedPanel::view(panel_names::TERMINAL, cx), cx),
+                Some(px(400.)),
+            );
+        dock_area.set_center(centre, window, cx);
+        let right = DockLayout::tabs().panel_view(NamedPanel::view(panel_names::AGENT, cx), cx);
+        dock_area.set_dock(DockPlacement::Right, right, window, cx);
+        dock_area.set_dock_size(DockPlacement::Right, px(464.), window, cx);
+        dock_area.dump(cx)
+    });
+    // The fixture really is a split of two tab groups, not a single group.
+    assert_eq!(saved.center.children.len(), 2);
+    persistence::save_state_to(
+        &path,
+        &saved,
+        Some(panel_names::TERMINAL),
+        "test-split-centre",
+    )
+    .unwrap();
+    let document = read_dock_document_from(&path)
+        .unwrap()
+        .expect("document exists");
+
+    let builds = count_terminal_builds(cx);
+    let (target, cx) = cx.add_window_view(|window, cx| {
+        DockArea::new("layout-test-verify", Some(MAIN_DOCK_VERSION), window, cx)
+    });
+    cx.update(|window, cx| persistence::load_layout(&target, &document, window, cx).unwrap());
+
+    assert_eq!(
+        builds.get(),
+        0,
+        "a split centre's terminals must not be built by the load"
+    );
+    let centre_panels = target.read_with(cx, |dock_area, _| {
+        dock_area
+            .layout(DockPlacement::Center)
+            .expect("centre layout")
+            .panels()
+            .count()
+    });
+    assert_eq!(centre_panels, 0, "the loaded centre must hold no panel");
+    // The empty centre must render without panicking.
+    cx.refresh().unwrap();
+    cx.run_until_parked();
+
+    // The right dock is untouched by the centre drop.
+    assert_eq!(
+        right_dock(&target, cx),
+        (464., true, panel_names::AGENT.to_string())
+    );
+
+    // Nothing to zoom into yet, and asking must not panic.
+    let zoomed_before =
+        cx.update(|window, cx| restore_zoom_in_dock(&target, panel_names::TERMINAL, window, cx));
+    assert!(!zoomed_before);
+    assert!(!target.read_with(cx, |dock_area, _| dock_area.is_zoomed()));
+
+    cx.update(|window, cx| layout::apply_center_reset(target.downgrade(), window, cx))
+        .expect("dock area alive");
+    assert_eq!(builds.get(), 1, "the reset builds exactly one terminal");
+    let zoomed_after =
+        cx.update(|window, cx| restore_zoom_in_dock(&target, panel_names::TERMINAL, window, cx));
+    assert!(
+        zoomed_after,
+        "the saved zoom name must resolve against the reset centre"
+    );
+}

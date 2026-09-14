@@ -58,7 +58,11 @@ and open state, `sftp_table_state` and `zoomed_panel` restore exactly as they do
   after (numbers in Evidence).
 - [x] The right dock keeps its saved panel name, width and open state across
   load → reset → save, and `zoomed_panel` still restores by name.
-  `load_reset_center_and_save_round_trip` passes unchanged.
+  `load_reset_center_and_save_round_trip` (right dock, width, open state,
+  `sftp_table_state`) passes unchanged; the zoom half is
+  `load_layout_drops_a_split_centre_and_still_restores_zoom_after_the_reset`, the only test that
+  drives `restore_zoom_in_dock` through `load_layout` — the saved name resolves against the
+  reset center, and finds nothing (without panicking) on the emptied one before the reset.
 - [x] `pre_migration_fixture_loads_and_saves_without_semantic_drift` still passes untouched. It
   drives `DockArea::load` directly and asserts the full center round-trips, which is the check
   that this fix did not reach into the dock crate's behaviour.
@@ -111,11 +115,15 @@ lifecycle moves.
 Docs changed:
 
 - `docs/gui-layout.md` §Persistence — one sentence added after the existing "Startup intentionally
-  resets the center" claim: `load_layout` drops the document's center subtree (container name
-  kept, no children) before `DockArea::load`, because building a panel starts its session and a
-  `terminal` panel spawns a local shell that the reset would discard.
+  resets the center" claim: `load_layout` replaces the document's center with an empty stack node
+  before `DockArea::load`, because building a panel starts its session and a `terminal` panel
+  spawns a local shell that the reset would discard.
 - `crates/workspace/src/layout/workspace/persistence.rs` — `load_layout` doc comment says the same
   at the seam, and names `BUG-0054` and the `0xc0000142` consequence.
+
+Independent verification: `evidence/BUG-0054-verify.md` (PASS-WITH-NOTES, no code defect). Its
+test `load_layout_drops_a_split_centre_and_still_restores_zoom_after_the_reset` is adopted
+verbatim into `layout_tests.rs`, and its three notes are addressed above and in Gaps.
 
 No change needed, and the recorded reason still holds:
 
@@ -313,6 +321,10 @@ spread was the coarse sampler, as the packet predicted.
 
 ### Gaps
 
+- `load_layout` now drops the center for **any** caller, not just startup. It is `pub(crate)` with
+  one call site today, so nothing else can be surprised by it; a future caller that genuinely
+  wants the saved center would have to take the center back out of `load_layout` rather than call
+  it. The doc comment says so, which is the whole defence.
 - `BUG-0055` is untouched and still open: in the baseline runs both shells survived the app's
   exit in 9 of 10 runs. With the fix there is no discarded session to leak, so the symptom does
   not appear, but the orphan mechanism itself is not fixed here.
