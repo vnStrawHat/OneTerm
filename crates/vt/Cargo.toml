@@ -1,0 +1,33 @@
+[package]
+name = "oneterm-vt"
+description = "OneTerm's VT engine: parser, dispatch, cell/style/grapheme storage, grid, reflow, damage and graphics. Depends on no OneTerm crate and no GPUI."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# The whole-history integrity walk, for the property tests, the fuzz targets and
+# CI (IN-0029 R-28, `testing-and-bench.md` M12). The always-on tier stays O(1);
+# the debug walk at `feed` / `resize` / `render_update` is bounded to the rows
+# the operation touched. This feature widens both back to O(history), which is
+# milliseconds per call at a 100 000-row scrollback — correct to gate on, far
+# too slow to leave on by default. CI passes `--features vt-paranoid`.
+vt-paranoid = []
+
+[dependencies]
+bitflags.workspace = true
+log.workspace = true
+# The ground-state control-byte scan (`memchr3(ESC, LF, CR)`); already in Cargo.lock.
+memchr.workspace = true
+rustc-hash.workspace = true
+unicode-segmentation.workspace = true
+unicode-width.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

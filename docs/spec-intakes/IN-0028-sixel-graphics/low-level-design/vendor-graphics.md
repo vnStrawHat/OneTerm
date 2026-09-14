@@ -3,6 +3,15 @@
 Intake: IN-0028
 HLD: ../high-level-design.md
 Topic: vendor-graphics
+
+> **Superseded in place by `US-0080` (IN-0029).** This describes the vendored
+> patch `vendor/patches/alacritty_terminal/0003`, which still runs the
+> application until the shim lands at `US-0081`/`US-0082`. The same decoder is
+> now first-party code in `crates/vt/src/graphics/`, designed by
+> [`../../IN-0029-vt-engine/low-level-design/graphics.md`](../../IN-0029-vt-engine/low-level-design/graphics.md),
+> which is where the per-cell `GraphicCell { id, col, row }` becomes a bare
+> `GraphicId` plus a tracked placement anchor, and where the release signal the
+> patch has no way to produce is added.
 Date: 2026-09-11
 
 > One concern per file. Keep this focused on implementation-level mechanics for a single area of the HLD so it stays reviewable. Do not restate the whole intake here.

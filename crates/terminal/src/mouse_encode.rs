@@ -1,10 +1,11 @@
 //! Encode mouse events → CSI escape sequences (X10 / X11 / 1005 UTF-8 / SGR-1006).
 //!
-//! Mouse-event encoding with modifier support.
-//! Mode flags (`TermMode::MOUSE_REPORT_CLICK` / `MOUSE_DRAG` / `MOUSE_MOTION` /
-//! `SGR_MOUSE`) decide whether the caller sends; this module only handles encoding.
+//! Mouse-event encoding with modifier support. `ModeSnapshot::mouse` decides
+//! whether the caller sends at all (`? 1000` / `? 1002` / `? 1003`); this module
+//! reads only the **encoding** half of it (`? 1005` / `? 1006`).
 
-use alacritty_terminal::term::TermMode;
+use oneterm_vt::ModeSnapshot;
+use oneterm_vt::render::MouseEncoding;
 
 /// Mouse button for terminal encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,7 +73,7 @@ fn encode(
     x11_code: u8,
     row: usize,
     col: usize,
-    mode: TermMode,
+    modes: ModeSnapshot,
     mods: MouseModifiers,
     terminator: SgrTerminator,
 ) -> Vec<u8> {
@@ -80,7 +81,8 @@ fn encode(
     let row = row.saturating_add(1);
     let col = col.saturating_add(1);
     let mod_mask = mods.mask();
-    if mode.contains(TermMode::SGR_MOUSE) {
+    let encoding = modes.mouse.map(|mouse| mouse.encoding).unwrap_or_default();
+    if encoding == MouseEncoding::Sgr {
         let action = match terminator {
             SgrTerminator::Release => 'm',
             SgrTerminator::Press => 'M',
@@ -94,7 +96,7 @@ fn encode(
     // are the coordinates UTF-8 encoded so positions above 223 are
     // representable (xterm ctlseqs, "UTF-8 Mouse Mode").
     let button_byte = x11_code.saturating_add(32) + mod_mask;
-    let utf8 = mode.contains(TermMode::UTF8_MOUSE);
+    let utf8 = encoding == MouseEncoding::Utf8;
     let mut bytes = vec![0x1b, b'[', b'M', button_byte];
     push_x11_coordinate(&mut bytes, col, utf8);
     push_x11_coordinate(&mut bytes, row, utf8);
@@ -124,7 +126,7 @@ pub fn encode_mouse_press(
     row: usize,
     col: usize,
     button: TerminalMouseButton,
-    mode: TermMode,
+    modes: ModeSnapshot,
     mods: MouseModifiers,
 ) -> Vec<u8> {
     encode(
@@ -132,7 +134,7 @@ pub fn encode_mouse_press(
         button.code(),
         row,
         col,
-        mode,
+        modes,
         mods,
         SgrTerminator::Press,
     )
@@ -143,7 +145,7 @@ pub fn encode_mouse_release(
     row: usize,
     col: usize,
     button: TerminalMouseButton,
-    mode: TermMode,
+    modes: ModeSnapshot,
     mods: MouseModifiers,
 ) -> Vec<u8> {
     // X11 collapses release into a fixed button byte = 3; SGR keeps the original
@@ -153,7 +155,7 @@ pub fn encode_mouse_release(
         3,
         row,
         col,
-        mode,
+        modes,
         mods,
         SgrTerminator::Release,
     )
@@ -164,11 +166,11 @@ pub fn encode_mouse_move(
     row: usize,
     col: usize,
     button: Option<TerminalMouseButton>,
-    mode: TermMode,
+    modes: ModeSnapshot,
     mods: MouseModifiers,
 ) -> Vec<u8> {
     let code = button.map_or(3, TerminalMouseButton::code) + 32;
-    encode(code, code, row, col, mode, mods, SgrTerminator::Press)
+    encode(code, code, row, col, modes, mods, SgrTerminator::Press)
 }
 
 /// Wheel. `delta_y > 0` = scroll up (code 64), `< 0` = scroll down (code 65).
@@ -176,23 +178,42 @@ pub fn encode_wheel_event(
     row: usize,
     col: usize,
     delta_y: f64,
-    mode: TermMode,
+    modes: ModeSnapshot,
     mods: MouseModifiers,
 ) -> Vec<u8> {
     let code = if delta_y > 0.0 { 64 } else { 65 };
-    encode(code, code, row, col, mode, mods, SgrTerminator::Press)
+    encode(code, code, row, col, modes, mods, SgrTerminator::Press)
 }
 
 #[cfg(test)]
 mod tests {
+    use oneterm_vt::render::{MouseProtocol, MouseReporting};
+
     use super::*;
 
-    fn sgr_mode() -> TermMode {
-        TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE
+    /// `? 1000` plus the encoding under test. The engine's encoding is one
+    /// value, not a set of bits: `? 1005` and `? 1006` replace each other
+    /// instead of overlapping, which is what `sgr_wins_over_utf8` now pins.
+    fn reporting(encoding: MouseEncoding) -> ModeSnapshot {
+        ModeSnapshot {
+            mouse: Some(MouseProtocol {
+                reporting: MouseReporting::Normal,
+                encoding,
+            }),
+            ..ModeSnapshot::default()
+        }
     }
 
-    fn x11_mode() -> TermMode {
-        TermMode::MOUSE_REPORT_CLICK
+    fn sgr_mode() -> ModeSnapshot {
+        reporting(MouseEncoding::Sgr)
+    }
+
+    fn x11_mode() -> ModeSnapshot {
+        reporting(MouseEncoding::Default)
+    }
+
+    fn utf8_mode() -> ModeSnapshot {
+        reporting(MouseEncoding::Utf8)
     }
 
     #[test]
@@ -348,7 +369,7 @@ mod tests {
             200,
             200,
             TerminalMouseButton::Left,
-            x11_mode() | TermMode::UTF8_MOUSE,
+            utf8_mode(),
             MouseModifiers::default(),
         );
         assert_eq!(s, [0x1b, b'[', b'M', 0x20, 0xc3, 0xa9, 0xc3, 0xa9]);
@@ -361,7 +382,7 @@ mod tests {
             0,
             0,
             TerminalMouseButton::Left,
-            x11_mode() | TermMode::UTF8_MOUSE,
+            utf8_mode(),
             MouseModifiers::default(),
         );
         assert_eq!(s, b"[M !!");
@@ -374,20 +395,21 @@ mod tests {
             5000,
             5000,
             TerminalMouseButton::Left,
-            x11_mode() | TermMode::UTF8_MOUSE,
+            utf8_mode(),
             MouseModifiers::default(),
         );
         assert_eq!(s, [0x1b, b'[', b'M', 0x20, 0xdf, 0xbf, 0xdf, 0xbf]);
     }
 
     #[test]
-    fn sgr_ignores_utf8_mouse_flag() {
-        // SGR (1006) takes precedence over 1005 — output stays decimal ASCII.
+    fn sgr_wins_over_utf8() {
+        // SGR (1006) replaces 1005 in the engine's one-value encoding, so the
+        // output stays decimal ASCII.
         let s = encode_mouse_press(
             200,
             200,
             TerminalMouseButton::Left,
-            sgr_mode() | TermMode::UTF8_MOUSE,
+            sgr_mode(),
             MouseModifiers::default(),
         );
         assert_eq!(s, b"[<0;201;201M");

@@ -1,4 +1,4 @@
-//! Typed payload structs for OSC 9;7 agent-status events (spec §4.2).
+//! Typed payload structs for OSC 20308 agent-status events (spec §4.2).
 //!
 //! Each `type` maps to one struct here. All structs use `#[serde(default)]`
 //! on optional fields and intentionally do **not** set `deny_unknown_fields`

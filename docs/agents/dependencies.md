@@ -15,8 +15,12 @@ The workspace consumes the published GPUI Kit 0.6 release family from crates.io.
 | `gpui-base` | `gpui-base` | `0.6` | `0.6.0` | Move with all GPUI Kit 0.6 layers. |
 | `gpui-component` | `gpui-component` | `0.6` | `0.6.0` | Move with all GPUI Kit 0.6 layers. |
 | `gpui-kit-assets` | `gpui-kit-assets` | `0.6` | `0.6.0` | Move with all GPUI Kit 0.6 layers; app crate only. |
-| `alacritty_terminal` | Zed's `alacritty` fork | pinned rev | `0.26.1-dev` | Vendored at `vendor/alacritty_terminal`; see [`vendor/README.md`](../../vendor/README.md). |
-| `vte` | crates.io | `0.15.0` | `0.15.0` | Vendored at `vendor/vte`; see [`vendor/README.md`](../../vendor/README.md). |
+
+There is **no terminal-engine dependency**. OneTerm's VT engine is `oneterm-vt`
+(`crates/vt`, `IN-0029`), first-party code with no third-party engine behind it; the
+vendored `alacritty_terminal` / `vte` fork it replaced was deleted at `US-0087`, and with
+it the `[patch]` section and the CI job that proved the vendored trees were pristine
+upstream plus patches. Do not re-add either.
 
 Rules:
 
@@ -25,7 +29,7 @@ Rules:
 3. Do not adopt the `gpui-kit` facade or add GPUI from git without a new decision record. OneTerm intentionally keeps `use gpui::…` and `use gpui_component::…` imports.
 4. Do not add a `[patch]` for the UI layer. Fix compatibility application-side or upstream it.
 5. Cargo profile overrides use package names (`gpui-pre`, `gpui-pre-platform`), not workspace aliases.
-6. The terminal forks are never hand-edited. Every OneTerm delta lives in `vendor/patches/<crate>/`; `bash vendor/refresh.sh --check` proves each tree equals pristine source plus its patches.
+6. There is no `[patch]` section at all any more. A capability the terminal engine lacks is added to `crates/vt` under ordinary review, not to a forked dependency ([`DEC-0014`](../decisions/DEC-0014-oneterm-owns-its-vt-engine.md)).
 
 The governing choice is [`DEC-0006`](../decisions/DEC-0006-depend-on-published-gpui-component-0-6.md).
 
@@ -60,8 +64,9 @@ Every third-party dependency is declared once in root `[workspace.dependencies]`
 |---|---|
 | SSH and SFTP | `russh` (features `ring`, `flate2`, `rsa`), `russh-sftp` |
 | SSH runtime | `tokio`, `tokio-util`, `rand` |
-| Local shell PTY | `alacritty_terminal::tty` + `polling` (do not use `portable-pty`) |
-| Terminal parser / grid | vendored `alacritty_terminal`, which pulls vendored `vte` |
+| Local shell PTY | `oneterm-pty` (OneTerm's own crate) over `polling` + `windows-sys` / `libc` (do not use `portable-pty`) |
+| Terminal parser / grid | `oneterm-vt` (OneTerm's own crate) — see the row below; there is no third-party terminal engine |
+| OneTerm's own VT engine (`oneterm-vt`, IN-0029) | `memchr 2.x` (the parser's ground-state scan for the next escape), `bitflags 2.x` (cell and row attribute flags), `rustc-hash 2.x` (`FxHashMap` for the interners), `unicode-width 0.2.x` (scalar width), `unicode-segmentation 1.x` (grapheme clusters); dev-only: `proptest 1.x`. The parser's `vte 0.15` differential oracle retired with the fork at `US-0087`; what pins the state machine now is `parser::props::arbitrary_bytes_never_panic_and_chunking_is_invariant`, the parser unit suite, and the 46 frozen corpus recordings. All already resolved in `Cargo.lock`, so the graph does not grow; `bitflags` and `rustc-hash` each resolve to two versions, and the engine pins the 2.x line. |
 | Event channel | `async-channel` |
 | Terminal helpers | `base64`, `aho-corasick`, `regex` |
 | Serialization | `serde`, `serde_json` |
@@ -71,10 +76,25 @@ Every third-party dependency is declared once in root `[workspace.dependencies]`
 | Auto-update | `reqwest`, `semver`, `sha2`, `zip`, `tar`, `flate2` |
 | UI helpers | `chrono`, `sysinfo`, `rust-embed` |
 | Terminal graphics | `image` (default features off: only the pixel-buffer types `gpui::RenderImage` takes; same major as GPUI's own `image`) |
-| Windows FFI | `windows-sys 0.59` with a workspace-wide feature union |
-| Build / development | `embed-resource`; diagnostics also use `libc`, `polling`, and `alacritty_terminal`; `futures` (dev-only) feeds russh's in-process SSH agent server in `oneterm-ssh` tests |
+| Windows FFI | `windows-sys 0.59` with a workspace-wide feature union (`Win32_System_Pipes` + `Win32_Security` are `oneterm-pty`'s `CreatePipe`) |
+| Build / development | `embed-resource`; diagnostics also use `libc`, `polling`, and `oneterm-pty`; `futures` (dev-only) feeds russh's in-process SSH agent server in `oneterm-ssh` tests |
 
 Do not re-add without a design decision: `tracing` / `tracing-subscriber`, `directories`, `toml`, `russh-cryptovec`, `ssh-key`, `smol`, or `rust-i18n`.
+
+### `oneterm-pty`'s direct dependencies (`US-0071`)
+
+| Crate | Why | Note |
+|---|---|---|
+| `polling` | the caller's poll loop | **Public**: `Poller`, `Event` and `PollMode` appear in `EventedReadWrite`'s signatures, so a `polling` bump is a breaking change to `oneterm-pty`'s own API. |
+| `windows-sys` | ConPTY, `CreatePipe`, the child-exit wait callback | Windows only, at the workspace pin. |
+| `libc` | `openpty`, `TIOCSCTTY`/`TIOCSWINSZ`, the signal mask | Unix only. |
+| `log` | one `info` line naming the resolved ConPTY host | |
+
+The crate deliberately reproduces `miow` (anonymous pipes), `piper` (the reader/writer ring)
+and `signal-hook` + `rustix-openpty` (Unix child exit) with the platform APIs and `std` instead
+of depending on them: a transport crate must not install a process-global `SIGCHLD` handler, and
+the ring is a `Mutex<VecDeque<u8>>` because a pseudo-console is nowhere near fast enough for the
+lock to matter.
 
 Before adding a dependency, check whether the GPUI Kit release already provides the capability and inspect root `Cargo.toml`. If a new crate is still required, open an issue, add one workspace declaration, and update this table when it introduces a new dependency category.
 
@@ -89,8 +109,6 @@ Treat a GPUI upgrade as one reviewed dependency change:
 5. Update this version table, `deny.toml`, and generated `THIRD-PARTY-NOTICES.md` when the graph changes.
 6. Replace `reference/gpui-kit` with a clean checkout at the exact released tag used for research.
 7. Run `scripts/ci-local.sh --full` (or the PowerShell twin).
-
-The vendored terminal engine follows the separate patch/rebase process in [`vendor/README.md`](../../vendor/README.md).
 
 ## 5. Reference-first research (mandatory)
 

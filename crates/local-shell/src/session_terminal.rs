@@ -5,11 +5,17 @@
 use oneterm_terminal::{ResizePolicy, SessionKind, TerminalCapabilities, TerminalSession};
 
 use crate::session::LocalSession;
-use crate::transport::LocalListener;
 
 /// ConPTY's conhost keeps its viewport top on a grow and addresses later output
 /// in its own coordinates, so the grid must not pull scrollback (DEC-0008). Unix
-/// PTYs leave the reflow to the shell, where alacritty's default is right.
+/// PTYs leave the reflow to the shell, where the engine's bottom-anchored
+/// default is right.
+///
+/// Both variants are `oneterm_vt::ResizePolicy` values by the time the engine
+/// sees them — `TerminalModel::new` takes `impl Into<oneterm_vt::ResizePolicy>`
+/// and `resize_grid` hands it straight to `Terminal::resize`. Naming the
+/// engine's enum *here* needs an API `crates/terminal` does not offer yet; see
+/// the `US-0083` packet's gap 1.
 const fn local_resize_policy() -> ResizePolicy {
     if cfg!(windows) {
         ResizePolicy::KeepViewportTop
@@ -20,7 +26,6 @@ const fn local_resize_policy() -> ResizePolicy {
 
 oneterm_terminal::impl_pty_terminal_session!(
     LocalSession,
-    LocalListener,
     "LocalSession",
     SessionKind::Local,
     local_resize_policy(),

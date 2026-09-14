@@ -4,7 +4,7 @@
 //! (`agent-ui`) stays feature-agnostic (see `docs/agent-panel-display.md` §12):
 //!
 //! 1. Building the per-terminal **navigation target** ([`agent_nav`]) that the
-//!    view stores in the [`oneterm_state::AgentRegistry`] with every OSC 9;7
+//!    view stores in the [`oneterm_state::AgentRegistry`] with every agent-status
 //!    event (ARCH-13: the registry owns the index; there is no separate
 //!    mutable global).
 //! 2. A **focuser** registered with [`oneterm_state::agent_focus`]: the panel

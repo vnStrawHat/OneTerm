@@ -17,7 +17,6 @@ workspace = true
 [dependencies]
 oneterm-core.workspace = true
 oneterm-terminal.workspace = true
-alacritty_terminal.workspace = true
 async-channel.workspace = true
 russh.workspace = true
 tokio.workspace = true

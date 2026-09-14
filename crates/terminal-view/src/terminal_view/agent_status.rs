@@ -1,4 +1,4 @@
-//! OSC 9;7 agent status → the Agent Panel model (`oneterm_state::AgentRegistry`).
+//! OSC 20308 agent status → the Agent Panel model (`oneterm_state::AgentRegistry`).
 //!
 //! The view tags every event with its Tab/Space grouping, registers the
 //! navigation target that focuses this terminal, and reports process death;
@@ -13,7 +13,7 @@ use oneterm_terminal::AgentStatusEvent;
 use super::TerminalView;
 
 impl TerminalView {
-    /// Fold an OSC 9;7 event into the registry and refresh this terminal's
+    /// Fold an agent-status event into the registry and refresh this terminal's
     /// navigation entry. No-op until the registry is available and the panel
     /// has wired up `split_ctx` (always set for a live terminal leaf).
     pub(super) fn push_agent_status(&self, ev: &Arc<AgentStatusEvent>, cx: &mut Context<Self>) {

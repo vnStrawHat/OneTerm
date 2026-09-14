@@ -1,0 +1,220 @@
+[2026-09-12T14:54:19Z WARN  gpui_windows::directx_devices] Failed to get DXGI debug interface. DirectX debugging features will be disabled.
+[2026-09-12T14:54:19Z INFO  gpui_windows::directx_devices] Using GPU: Intel(R) UHD Graphics 770
+[2026-09-12T14:54:19Z INFO  gpui_windows::directx_devices] Created device with Direct3D 11.1 feature level.
+[2026-09-12T14:54:19Z INFO  gpui_windows::direct_write] Use Segoe UI as UI font.
+[2026-09-12T14:54:19Z INFO  oneterm_terminal_view::terminal_view::completion] completion: controller initialized (kind=Cmd, family=Cmd, enabled=true)
+[2026-09-12T14:54:19Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:19Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 45/45 candidate, 45 planned, 0 shaped, 0 glyph hits, 1 url scans, 2 quads, 0 glyphs, 2 layers, prepaint 2224 us, paint 41 us, p95 2265 us, p99 2265 us over 1 frames
+[2026-09-12T14:54:20Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" prompt_found=true visible=false n=0
+[2026-09-12T14:54:22Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" prompt_found=true visible=false n=0
+[2026-09-12T14:54:25Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 1/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 2 quads, 138 glyphs, 2 layers, prepaint 103 us, paint 83 us, p95 3829 us, p99 16390 us over 12 frames
+[2026-09-12T14:54:28Z DEBUG oneterm_terminal_view::completion::controller] completion: 17 suggestion(s) for "e" (token "e")
+[2026-09-12T14:54:28Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="e" prompt_found=true visible=true n=17
+[2026-09-12T14:54:28Z DEBUG oneterm_terminal_view::completion::controller] completion: overlay hidden for "echo meas"
+[2026-09-12T14:54:28Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="echo meas" prompt_found=true visible=false n=0
+[2026-09-12T14:54:28Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="echo measure-star" prompt_found=true visible=false n=0
+[2026-09-12T14:54:29Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="echo measure-start" prompt_found=true visible=false n=0
+[2026-09-12T14:54:29Z DEBUG oneterm_terminal_view::completion::controller] completion: capture → history (Cmd): "echo measure-start"
+[2026-09-12T14:54:29Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" prompt_found=true visible=false n=0
+[2026-09-12T14:54:30Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 1/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 2 quads, 306 glyphs, 2 layers, prepaint 206 us, paint 249 us, p95 3829 us, p99 16390 us over 26 frames
+[2026-09-12T14:54:35Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 1/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 2 quads, 306 glyphs, 2 layers, prepaint 140 us, paint 119 us, p95 3184 us, p99 16390 us over 36 frames
+[2026-09-12T14:54:36Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="for /L " prompt_found=true visible=false n=0
+[2026-09-12T14:54:37Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="for /L %i in (1" prompt_found=true visible=false n=0
+[2026-09-12T14:54:37Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="for /L %i in (1,1,4000" prompt_found=true visible=false n=0
+[2026-09-12T14:54:37Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="for /L %i in (1,1,400000) do @e" prompt_found=true visible=false n=0
+[2026-09-12T14:54:37Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="for /L %i in (1,1,400000) do @echo yyyy" prompt_found=true visible=false n=0
+[2026-09-12T14:54:38Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="for /L %i in (1,1,400000) do @echo yyyyyyyyyyyy" prompt_found=true visible=false n=0
+[2026-09-12T14:54:38Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="for /L %i in (1,1,400000) do @echo yyyyyyyyyyyyyyyyyyyy" prompt_found=true visible=false n=0
+[2026-09-12T14:54:38Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="for /L %i in (1,1,400000) do @echo yyyyyyyyyyyyyyyyyyyyyyyyyyyy" prompt_found=true visible=false n=0
+[2026-09-12T14:54:38Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="for /L %i in (1,1,400000) do @echo yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy" prompt_found=true visible=false n=0
+[2026-09-12T14:54:39Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="for /L %i in (1,1,400000) do @echo yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy" prompt_found=true visible=false n=0
+[2026-09-12T14:54:39Z DEBUG oneterm_terminal_view::completion::controller] completion: capture → history (Cmd): "for /L %i in (1,1,400000) do @echo yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+[2026-09-12T14:54:39Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:39Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:39Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:40Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:40Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:40Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 52/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 2 quads, 2040 glyphs, 2 layers, prepaint 202 us, paint 382 us, p95 3184 us, p99 4254 us over 54 frames
+[2026-09-12T14:54:40Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:40Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:41Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:41Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:41Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:41Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:42Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:42Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:42Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:42Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:43Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:43Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:43Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:43Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:44Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:44Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:44Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:44Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:45Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:45Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:45Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 52/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 2 quads, 2040 glyphs, 2 layers, prepaint 198 us, paint 369 us, p95 2916 us, p99 4254 us over 74 frames
+[2026-09-12T14:54:45Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:45Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:46Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:46Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:46Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:46Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:47Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:47Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:47Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:48Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:48Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:48Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:48Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:49Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:49Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:49Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:49Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:50Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:50Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:50Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:50Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 52/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 2 quads, 2040 glyphs, 2 layers, prepaint 235 us, paint 498 us, p95 2520 us, p99 4254 us over 94 frames
+[2026-09-12T14:54:50Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:51Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:51Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:51Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:51Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:52Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:52Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:52Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:52Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:53Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:53Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:53Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:53Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:54Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:54Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:54Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:54Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:55Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:55Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:55Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:55Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 52/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 2 quads, 2040 glyphs, 2 layers, prepaint 198 us, paint 369 us, p95 2265 us, p99 4254 us over 114 frames
+[2026-09-12T14:54:55Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:56Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:56Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:56Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:56Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:57Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:57Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:57Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:57Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:58Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:58Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:58Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:58Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:59Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:59Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:59Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:54:59Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:00Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:00Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:00Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:00Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 52/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 2 quads, 2040 glyphs, 2 layers, prepaint 199 us, paint 374 us, p95 1807 us, p99 4254 us over 134 frames
+[2026-09-12T14:55:00Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:01Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:01Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:01Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:01Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:02Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:02Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:02Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:02Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:03Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:03Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:03Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:03Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:04Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:04Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:04Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:04Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:05Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:05Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:05Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:05Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 52/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 2 quads, 2040 glyphs, 2 layers, prepaint 207 us, paint 381 us, p95 1570 us, p99 3829 us over 154 frames
+[2026-09-12T14:55:05Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:06Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:06Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:06Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:06Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:07Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:07Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:07Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:07Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:08Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:08Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:08Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:08Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:09Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:09Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:09Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:09Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:10Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:10Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:10Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:10Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 52/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 2 quads, 2040 glyphs, 2 layers, prepaint 230 us, paint 389 us, p95 1266 us, p99 3829 us over 174 frames
+[2026-09-12T14:55:10Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:11Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:11Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:11Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:11Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:12Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:12Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:12Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:12Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:13Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:13Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:13Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:13Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:14Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:14Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:14Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:14Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:15Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:15Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:15Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" gating=false (hidden)
+[2026-09-12T14:55:15Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 52/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 2 quads, 2040 glyphs, 2 layers, prepaint 197 us, paint 375 us, p95 1221 us, p99 3829 us over 194 frames
+[2026-09-12T14:55:16Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="type C:\\Users\\trunglt\\AppData\\Local\\Temp\\claude\\D--TrungKFC-Research-Ru" prompt_found=true visible=false n=0
+[2026-09-12T14:55:16Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="type C:\\Users\\trunglt\\AppData\\Local\\Temp\\claude\\D--TrungKFC-Research-Rust-myTe" prompt_found=true visible=false n=0
+[2026-09-12T14:55:16Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="type C:\\Users\\trunglt\\AppData\\Local\\Temp\\claude\\D--TrungKFC-Research-Rust-myTerm2\\fa2d" prompt_found=true visible=false n=0
+[2026-09-12T14:55:16Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="9c2" gating=false (hidden)
+[2026-09-12T14:55:17Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="9c28-4a69-a" gating=false (hidden)
+[2026-09-12T14:55:17Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="9c28-4a69-a255-ba74" gating=false (hidden)
+[2026-09-12T14:55:17Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="9c28-4a69-a255-ba7479e604cb" gating=false (hidden)
+[2026-09-12T14:55:17Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="9c28-4a69-a255-ba7479e604cb\\scratch" gating=false (hidden)
+[2026-09-12T14:55:18Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="9c28-4a69-a255-ba7479e604cb\\scratchpad\\big1" gating=false (hidden)
+[2026-09-12T14:55:18Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="9c28-4a69-a255-ba7479e604cb\\scratchpad\\big10mb.txt" gating=false (hidden)
+[2026-09-12T14:55:18Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="9c28-4a69-a255-ba7479e604cb\\scratchpad\\big10mb.txt" gating=false (hidden)
+[2026-09-12T14:55:18Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="9c28-4a69-a255-ba7479e604cb\\scratchpad\\big10mb.txt" gating=false (hidden)
+[2026-09-12T14:55:18Z DEBUG oneterm_terminal_view::completion::controller] completion: capture → history (Cmd): "9c28-4a69-a255-ba7479e604cb\\scratchpad\\big10mb.txt"
+[2026-09-12T14:55:18Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" gating=false (hidden)
+[2026-09-12T14:55:19Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" gating=false (hidden)
+[2026-09-12T14:55:19Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="xxxxxxxxxxxxxxxxxxxxxxxx" gating=false (hidden)
+[2026-09-12T14:55:19Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" gating=false (hidden)
+[2026-09-12T14:55:19Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" gating=false (hidden)
+[2026-09-12T14:55:20Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" gating=false (hidden)
+[2026-09-12T14:55:20Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" gating=false (hidden)
+[2026-09-12T14:55:20Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" gating=false (hidden)
+[2026-09-12T14:55:20Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" gating=false (hidden)
+[2026-09-12T14:55:20Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 52/52 candidate, 1 planned, 0 shaped, 1 glyph hits, 1 url scans, 2 quads, 6157 glyphs, 2 layers, prepaint 607 us, paint 1059 us, p95 2066 us, p99 4254 us over 215 frames
+[2026-09-12T14:55:21Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" gating=false (hidden)
+[2026-09-12T14:55:21Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" gating=false (hidden)
+[2026-09-12T14:55:21Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" gating=false (hidden)
+[2026-09-12T14:55:21Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" gating=false (hidden)
+[2026-09-12T14:55:22Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="xxxxxxxx" gating=false (hidden)
+[2026-09-12T14:55:22Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" gating=false (hidden)
+[2026-09-12T14:55:22Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" gating=false (hidden)
+[2026-09-12T14:55:22Z DEBUG oneterm_terminal_view::terminal_view::completion] completion: line="" prompt_found=true visible=false n=0
+[2026-09-12T14:55:25Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 1/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 2 quads, 6088 glyphs, 2 layers, prepaint 168 us, paint 996 us, p95 2066 us, p99 4254 us over 229 frames
+[2026-09-12T14:55:31Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 1/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 2 quads, 6088 glyphs, 2 layers, prepaint 129 us, paint 1025 us, p95 1969 us, p99 4254 us over 239 frames
+[2026-09-12T14:55:36Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 1/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 2 quads, 6088 glyphs, 2 layers, prepaint 133 us, paint 944 us, p95 1969 us, p99 4254 us over 249 frames
+[2026-09-12T14:55:41Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 1/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 2 quads, 6088 glyphs, 2 layers, prepaint 113 us, paint 943 us, p95 1969 us, p99 3829 us over 259 frames
+[2026-09-12T14:55:46Z DEBUG oneterm_terminal_view::render::diagnostics] terminal render: rows 1/52 candidate, 0 planned, 0 shaped, 0 glyph hits, 0 url scans, 2 quads, 6088 glyphs, 2 layers, prepaint 192 us, paint 1094 us, p95 1969 us, p99 3829 us over 269 frames

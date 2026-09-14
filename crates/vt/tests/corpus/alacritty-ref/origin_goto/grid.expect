@@ -1,0 +1,46 @@
+# OneTerm VT parity expectation: the grid, cell-exact, nothing trimmed.
+# Blessed by the vendored alacritty_terminal engine at US-0072 and FROZEN.
+# Rows are newest first. Each run is `<count>*<content>;<attrs>;<fg>;<bg>;<underline>;<hyperlink>`.
+# Do not hand-edit: the engine that blessed these files was deleted at US-0087.
+version 1
+columns 114
+lines 37
+display_offset 0
+rows 37
+row 0 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 1 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 2 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 3 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 4 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 5 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 6 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 7 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 8 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 9 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 10 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 11 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 12 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 13 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 14 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 15 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 16 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 17 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 18 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 19 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 20 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 21 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 22 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 23 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 24 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 25 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 26 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 27 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 28 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 29 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 30 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 31 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 32 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 33 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 34 wrap=0 114*0020;-;nForeground;nBackground;-;-
+row 35 wrap=0 1*0020;-;i0;i9;-;-|1*0055;-;i0;i9;-;-|1*004c;-;i0;i9;-;-|1*0020;-;i0;i9;-;-|1*0020;-;i7;i8;-;-|1*007e;-;i7;i8;-;-|1*002f;-;i7;i8;-;-|1*0070;-;i7;i8;-;-|1*0072;-;i7;i8;-;-|1*006f;-;i7;i8;-;-|1*0067;-;i7;i8;-;-|1*0072;-;i7;i8;-;-|1*0061;-;i7;i8;-;-|2*006d;-;i7;i8;-;-|1*0069;-;i7;i8;-;-|1*006e;-;i7;i8;-;-|1*0067;-;i7;i8;-;-|1*002f;-;i7;i8;-;-|1*0061;-;i7;i8;-;-|1*006c;-;i7;i8;-;-|1*0061;-;i7;i8;-;-|1*0063;-;i7;i8;-;-|1*0072;-;i7;i8;-;-|1*0069;-;i7;i8;-;-|2*0074;-;i7;i8;-;-|1*0079;-;i7;i8;-;-|1*002f;-;i7;i8;-;-|1*0061;-;i7;i8;-;-|1*006c;-;i7;i8;-;-|1*0061;-;i7;i8;-;-|1*0063;-;i7;i8;-;-|1*0072;-;i7;i8;-;-|1*0069;-;i7;i8;-;-|2*0074;-;i7;i8;-;-|1*0079;-;i7;i8;-;-|1*0020;-;i7;i8;-;-|1*0020;-;i0;i9;-;-|1*006f;-;i0;i9;-;-|1*0072;-;i0;i9;-;-|1*0069;-;i0;i9;-;-|1*0067;-;i0;i9;-;-|1*0069;-;i0;i9;-;-|1*006e;-;i0;i9;-;-|1*005f;-;i0;i9;-;-|1*006d;-;i0;i9;-;-|1*006f;-;i0;i9;-;-|1*0064;-;i0;i9;-;-|1*0065;-;i0;i9;-;-|1*0020;-;i0;i9;-;-|1*2191;-;i0;i9;-;-|1*0020;-;i0;i9;-;-|60*0020;-;nForeground;nBackground;-;-
+row 36 wrap=1 1*0048;-;nForeground;nBackground;-;-|1*0065;-;nForeground;nBackground;-;-|1*0072;-;nForeground;nBackground;-;-|1*0065;-;nForeground;nBackground;-;-|1*0025;INVERSE.BOLD;nForeground;nBackground;-;-|108*0020;-;nForeground;nBackground;-;-|1*0020;WRAPLINE;nForeground;nBackground;-;-

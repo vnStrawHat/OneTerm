@@ -15,9 +15,9 @@ publish.workspace = true
 [lints]
 workspace = true
 
-# Diagnostics only — this crate is never a dependency of the app and depends on
-# no OneTerm crate (docs/agents/crate-dependency-rules.md: it sits outside the
-# L0–L4 layering, like a `tools/` directory).
+# Diagnostics only — this crate is never a dependency of the app; it sits
+# outside the L0–L4 layering (docs/agents/crate-dependency-rules.md), like a
+# `tools/` directory, and may only reach down to leaf crates.
 [[bin]]
 name = "doom-fire"
 path = "src/bin/doom-fire.rs"
@@ -30,15 +30,45 @@ path = "src/bin/pty-throughput.rs"
 name = "sftp-dev-server"
 path = "src/bin/sftp-dev-server.rs"
 
+# --- IN-0029 / US-0072: the VT benchmark and parity harness -----------------
+# A library half so the corpus comparison can be both a tool and a `#[test]`
+# (tests/corpus_check.rs is the drift gate that runs in `cargo test --workspace`).
+[lib]
+name = "oneterm_tools"
+path = "src/lib.rs"
+
+[[bin]]
+name = "vt-corpus"
+path = "src/bin/vt-corpus.rs"
+
+[[bin]]
+name = "vt-bench"
+path = "src/bin/vt-bench.rs"
+# ---------------------------------------------------------------------------
+
 [dependencies]
-# pty-throughput: the same PTY path OneTerm uses (alacritty_terminal::tty + polling).
-alacritty_terminal.workspace = true
+# pty-throughput: the same PTY path OneTerm uses (oneterm-pty + polling).
+oneterm-pty.workspace = true
 polling.workspace = true
 # sftp-dev-server: the same SSH/SFTP crates OneTerm's client uses, server side.
 russh.workspace = true
 russh-sftp.workspace = true
 tokio.workspace = true
 rand.workspace = true
+
+# --- IN-0029 / US-0072: the VT benchmark and parity harness -----------------
+# The engine under test. `vt-corpus check` replays each recording through it and
+# compares the result with the expectations the fork froze at US-0072; `vt-bench`
+# measures the same engine across its five tiers.
+oneterm-vt.workspace = true
+anyhow.workspace = true
+serde = { workspace = true, features = ["derive"] }
+# Reads size.json / config.json, writes the bench JSON table, and parses
+# `expected-diffs.json` — the per-recording, cell-level declared differences.
+# JSON rather than TOML because `toml` is on `docs/agents/dependencies.md` § 3's
+# do-not-re-add list and a test harness does not justify reopening it.
+serde_json.workspace = true
+# ---------------------------------------------------------------------------
 
 [target.'cfg(unix)'.dependencies]
 # doom-fire: terminal size detection (TIOCGWINSZ).

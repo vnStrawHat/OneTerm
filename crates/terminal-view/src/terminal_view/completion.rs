@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use gpui::{Anchor, App, Context, IntoElement, ParentElement as _, anchored, deferred, point, px};
 
 use oneterm_core::config::ShellKind;
-use oneterm_terminal::{IndexedCell, SessionKind};
+use oneterm_terminal::{SessionKind, SnapshotCell};
 
 use super::TerminalView;
 use crate::completion::{CompletionController, overlay::CompletionOverlay};
@@ -50,10 +50,10 @@ pub(super) struct CompletionState {
     pub(super) controller: Option<CompletionController>,
     /// Anchor for the overlay: (display line, token-start column) in the grid,
     /// computed during `update_completion`. `None` when hidden.
-    anchor: Option<(i32, usize)>,
+    anchor: Option<(usize, usize)>,
     /// Last cursor (line, col) seen by `update_completion` — skips the grid
     /// read on frames where the cursor did not move (blink ticks).
-    last_cursor: Option<(i32, usize)>,
+    last_cursor: Option<(usize, usize)>,
 }
 
 impl CompletionState {
@@ -84,7 +84,7 @@ impl CompletionState {
 
     /// Anchor the overlay under the start of the token the user is editing
     /// (when visible), otherwise clear the anchor.
-    fn anchor_at(&mut self, cursor: (i32, usize)) {
+    fn anchor_at(&mut self, cursor: (usize, usize)) {
         let Some(c) = self.controller.as_ref() else {
             self.anchor = None;
             return;
@@ -103,32 +103,18 @@ struct CursorCommand {
     line: String,
     /// Whether a shell prompt prefix was detected on the row.
     prompt_found: bool,
-    /// Cursor position `(display_line, column)` the command was read at.
-    anchor: (i32, usize),
+    /// Cursor position `(row, column)` the command was read at.
+    anchor: (usize, usize),
 }
 
 /// Extract the command-input text on the cursor's row (up to the cursor column),
 /// stripped of the shell prompt prefix. `cells` are the cells of the cursor's
-/// display row (any other rows are ignored); `cursor` is the cursor's grid
-/// `(line, column)` as reported by `TerminalQueryState`.
-fn extract_cursor_command(cells: &[IndexedCell], cursor: (i32, usize)) -> CursorCommand {
+/// display row, in column order; `cursor` is the cursor's `(row, column)` as
+/// reported by `TerminalQueryState`.
+fn extract_cursor_command(cells: &[SnapshotCell], cursor: (usize, usize)) -> CursorCommand {
     let (cursor_line, cursor_col) = cursor;
 
-    let mut row: Vec<char> = Vec::new();
-    for ic in cells {
-        if ic.point.line.0 != cursor_line {
-            continue;
-        }
-        let c = ic.point.column.0;
-        if c >= cursor_col {
-            continue;
-        }
-        while row.len() <= c {
-            row.push(' ');
-        }
-        row[c] = ic.cell.c;
-    }
-    let row_str: String = row.into_iter().collect();
+    let row_str: String = cells.iter().take(cursor_col).map(|cell| cell.ch).collect();
     let (command, found) = strip_prompt(&row_str);
     CursorCommand {
         line: command,
@@ -167,9 +153,9 @@ impl TerminalView {
         let query = session.query_state();
         // `query_line_range_cells` addresses display rows; the cursor's grid
         // line is offset by the scroll position.
-        let display_row = (query.cursor_line + query.display_offset as i32).max(0) as usize;
+        let display_row = query.cursor_row + query.display_offset;
         let cells = session.query_line_range_cells(display_row, 1).cells;
-        extract_cursor_command(&cells, (query.cursor_line, query.cursor_col))
+        extract_cursor_command(&cells, (query.cursor_row, query.cursor_col))
     }
 
     /// The shell kind the controller completes for: the configured local
@@ -230,7 +216,7 @@ impl TerminalView {
             let query = session.query_state();
             (
                 session.is_alt_screen(),
-                (query.cursor_line, query.cursor_col),
+                (query.cursor_row, query.cursor_col),
             )
         };
         {
@@ -347,8 +333,7 @@ impl TerminalView {
         let line_height = geometry.metrics.line_height;
         let row_count = count + usize::from(hidden_above > 0) + usize::from(hidden_below > 0);
         let est_height = line_height * (row_count as f32) + px(10.0);
-        let row = line.max(0) as usize;
-        let cell = geometry.cell_origin(row, col);
+        let cell = geometry.cell_origin(line, col);
         let row_bottom = cell.y + line_height;
         let viewport_bottom = geometry.bounds.bottom();
         // `snap_to_window_with_margin` still clamps horizontally on-screen;

@@ -39,7 +39,7 @@ pub(crate) fn init(cx: &mut App) {
     oneterm_sftp_ui::init(cx);
     // Session: SSH session store global + "session" panel.
     oneterm_session_ui::init(cx);
-    // Agent: the global AgentRegistry (folded OSC 9;7 model behind the Agent
+    // Agent: the global AgentRegistry (folded OSC 20308 model behind the Agent
     // Panel) + the "agent" right-dock panel.
     oneterm_agent_ui::init(cx);
     // Settings/About update controls and release-build startup update checks.

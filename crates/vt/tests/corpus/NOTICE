@@ -1,0 +1,53 @@
+OneTerm VT parity corpus
+========================
+
+alacritty-ref/
+--------------
+
+The 45 directories under `alacritty-ref/` are the reference-test captures from the
+Alacritty terminal emulator, reused under the Apache License, Version 2.0.
+
+    Upstream:  https://github.com/alacritty/alacritty
+    Via:       https://github.com/zed-industries/alacritty
+    Revision:  fcf32feacb367b75ec84dd40f041e4fd411d3cc1
+    Path:      alacritty_terminal/tests/ref/<name>/
+    License:   Apache-2.0 (alacritty_terminal/Cargo.toml, repository LICENSE-APACHE)
+
+Copyright 2016 Joe Wilm, The Alacritty Project Contributors.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+these files except in compliance with the License. You may obtain a copy of the
+License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed
+under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+
+Changes made by OneTerm
+-----------------------
+
+* `alacritty.recording` is carried under the name `recording`; its bytes are
+  unmodified.
+* `size.json` and `config.json` are carried unmodified.
+* Upstream's `grid.json` (44 MiB across the 45 directories) is **not** carried.
+  It was used once, at `US-0072`, as the cross-check oracle for the expectation
+  format; the result is recorded in
+  `docs/spec-intakes/IN-0029-vt-engine/evidence/US-0072-cross-check.md`.
+* `grid.expect` and `state.expect` are OneTerm files (Apache-2.0), generated from
+  the recordings by the engine being replaced and frozen at `US-0072`. See
+  `docs/spec-intakes/IN-0029-vt-engine/low-level-design/testing-and-bench.md`.
+* `expected-diffs.json`, where present, is a OneTerm file declaring the cells a
+  deliberate correction is allowed to change.
+
+oneterm/
+--------
+
+Every file under `oneterm/` is a OneTerm file (Apache-2.0), written for
+behaviour the vendored set never reaches. `sixel_basic` covers `DCS q` image
+placement, the VT340 10x20 virtual cell and the conhost cursor rule (`US-0080`,
+`IN-0028`). The recordings are synthetic — hand-written byte streams, not
+captures — and their `grid.expect` / `state.expect` are blessed by the engine
+being replaced and then frozen, exactly like `alacritty-ref/`.

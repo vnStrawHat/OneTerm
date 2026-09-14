@@ -105,8 +105,9 @@ Example: `ESC ] 10 ; ? BEL` → asks for the default foreground color.
 OSC 52 read hands the local clipboard to whatever program is running in the terminal — including a
 remote program over SSH — so OneTerm keeps write and read on separate switches.
 
-- **write**: ✅ always on. `OscSink` parses the base64 payload; the set path goes through the
-  `alacritty_terminal` `ClipboardStore` → `SessionEvent::Clipboard`.
+- **write**: ✅ always on. The VT engine decodes the base64 payload and reports it
+  (`ClipboardStore` → `SessionEvent::Clipboard`); the engine never applies a policy, which stays in
+  `crates/terminal/src/security_policy.rs`.
 - **read** (`52;c;?`): ◐ default **off**. `SessionEvent::ClipboardRead` → the UI replies
   `52;c;<base64>` (`encode_osc52`) **only when** `security.allow_clipboard_read = true`
   (default `false`).
@@ -138,9 +139,11 @@ ESC ] 8 ; ; ST               ← close link
 | ☑ | **7** | Set CWD (file:// URI) | `ESC]7;file://host/path ST` | ✅ — de-facto standard. |
 | ☐ | **9;9** | Set CWD (Windows path) | `ESC]9;9;C:\path ST` | ❌ |
 
-- **OneTerm**: ✅ OSC 7 — `OscSink` parses `file://` → `parse_cwd_url`. **No** 9;9.
-- `alacritty_terminal` does not handle OSC 7, which is why OneTerm parses it itself via `OscSink`
-  in parallel with the VT engine.
+- **OneTerm**: ✅ OSC 7 — `OscRouter` parses `file://` → `parse_cwd_url`. **No** 9;9.
+- No VT engine handles OSC 7 itself. There is exactly **one** parser, not two: the engine forwards
+  the sequence and OneTerm interprets it. Under `alacritty_terminal` that is the fork's
+  `report_osc` hook feeding `OscRouter<T>`; under `oneterm-vt` (IN-0029) it is a `claim(7)` in
+  `Config::osc_claims` feeding `VtEvent::Osc` out of the same `feed` batch.
 
 ---
 
@@ -150,16 +153,28 @@ ESC ] 8 ; ; ST               ← close link
 |:-----:|-----|----------|--------|---------|
 | ☑ | **9** | Desktop notification | `ESC]9;msg ST` | ✅ → toast. |
 | ☑ | **9;4** | Progress bar | `ESC]9;4;state;pct ST` | ✅ — state 0–4. |
-| ☑ | **9;7** | Agent status | see [`osc-agent-status.md`](osc-agent-status.md) | ✅ — OneTerm proposal. |
+| ☑ | **20308;1** | Agent status | see [`osc-agent-status.md`](osc-agent-status.md) | ✅ — OneTerm proposal. |
+| ☑ | **20308;0** | Agent-protocol support query | `ESC]20308;0 ST` → `ESC]20308;0;1;OneTerm;<ver> ST` | ✅ |
+| ☑ | **9;7** | Agent status — **deprecated alias** | see [`osc-agent-status.md`](osc-agent-status.md) § 3.1 | ⚠️ — accepted for one release, then dropped. |
 | ☐ | **9;1/2/3** | ConEmu misc (sleep/msgbox/tabtitle) | `ESC]9;1;ms ST` etc. | ❌ |
 | ☐ | **99** | Extended notification protocol | `ESC]99;i=ID;payload ST` | ❌ |
 | ☐ | **777** | urxvt notification | `ESC]777;notify;title;body ST` | ❌ |
 
 > ✅ **OneTerm**: OSC 9 (notification → toast via `window.push_notification`) and OSC 9;4
-> (progress → thin progress bar at the top edge of the terminal, state 0-4). Forwarded by the vendored
-> `alacritty_terminal` fork's `Event::Osc` hook (upstream drops OSC 9) to `OscRouter` →
-> `OscPayload::Notification`/`Progress` → `SessionEvent`. OSC 9;7 (agent status) is also supported, see
-> [`osc-agent-status.md`](osc-agent-status.md). Still ❌: 9;1/2/3, 99, 777.
+> (progress → thin progress bar at the top edge of the terminal, state 0-4). Forwarded through the
+> engine's OSC registration table (`OscClaims`) to `OscRouter` →
+> `OscPayload::Notification`/`Progress` → `SessionEvent`.
+>
+> **OSC 20308** is the agent channel — see [`osc-agent-status.md`](osc-agent-status.md). Sub-code `1`
+> is the status event and `0` the support query, answered on the transport; `2` and above are
+> reserved, and an unrecognised sub-code is ignored and counted.
+>
+> ⚠️ **OSC 9;7** carried the agent channel until `US-0088` and is kept as a deprecated alias for
+> **one release** — parsed identically, counted, and logged once per session. It is ConEmu's "run
+> some process with arguments" (§ 2.1), which is why it is going away: an agent emitting it under
+> ConEmu or cmder asks that terminal to spawn a process. Agents should emit `20308;1` only.
+>
+> Still ❌: 9;1/2/3, 99, 777.
 
 ---
 
@@ -182,7 +197,10 @@ ESC]133;D;exit ST ← Block end (exit code optional)
 ```
 
 - **OneTerm**: ✅ OSC 133 A/B/C/D (code: `Osc133Kind` enum + exit code). **No** 133;P/633.
-- `alacritty_terminal` does not handle OSC 133, so OneTerm parses it itself via `OscSink`.
+- `alacritty_terminal` does not handle OSC 133 at all, so OneTerm interprets it from the forwarded
+  sequence. `oneterm-vt` additionally records the mark **in the engine**: the A/B/C/D state lands on
+  the cell as `Semantic::{Prompt, Input, Output}` and A and C each register a tracked
+  `AnchorKind::Mark`, so a mark survives a reflow.
 
 ---
 
@@ -266,8 +284,8 @@ ESC]133;D;exit ST ← Block end (exit code optional)
 1. **ST terminator**: Use `BEL` (`\x07`) for maximum compatibility. OSC 8 per spec should use `ESC \`.
 2. **Query response**: an emitter must not block on a query reply — support is uneven across terminals.
 3. **OSC 52 clipboard**: always expect rejection. **write** is common, **read** is rare and usually opt-in.
-4. **OSC 7 CWD**: must be a full `file://` URI (including host). `alacritty_terminal` does not handle OSC 7,
-   so OneTerm parses it itself in parallel with the VT engine.
+4. **OSC 7 CWD**: must be a full `file://` URI (including host). No VT engine interprets OSC 7
+   itself; it is forwarded out of the single VT pass and OneTerm interprets it.
 5. **Shell integration**: 133 (FinalTerm semantics) is the common standard; 633 is a VS Code extension of it.
    Wrap the 4 markers A/B/C/D correctly.
 6. **Color spec**: prefer `rgb:RR/GG/BB` or `rgb:RRRR/GGGG/BBBB`. Avoid `#hex` if you need old-xterm compatibility.
@@ -277,9 +295,13 @@ ESC]133;D;exit ST ← Block end (exit code optional)
 9. **OneTerm** (VT engine = `alacritty_terminal`): supports **OSC 0/2, 7, 8, 52 (base64+query), 133 (A/B/C/D+exit),
    4 (set+query) + 104 (reset), 10/11/12 (set+query) + 110/111/112 (reset), 9 (notification), 9;4 (progress),
    9;7 (agent status)**.
-   - 133/9/9;4 are parsed in parallel via `OscSink` (the VT engine drops OSC 7/9/133); `OscSink` uses a FIFO
-     queue so multiple OSCs in the same read batch are all kept + processed in order.
-   - OSC 8 stored in cell; OSC 52 goes through `EventListener` + `OscSink`.
+   - 7/9/9;4/133 are **forwarded** out of the one VT pass and interpreted by `OscRouter<T>`; there is
+     no second parser. Forwarding is byte-ordered, so multiple OSCs in the same read batch arrive in
+     the order they were written. Under `oneterm-vt` (IN-0029) the same numbers are registered with
+     `OscClaims::claim`, arrive as `VtEvent::Osc` in the `feed` batch, and that batch is a `Vec` in
+     byte order — the ordering promise is a property of the batch, not of a queue.
+   - OSC 8 stored in cell; OSC 52 is decoded by the engine and the **policy** stays in
+     `security_policy.rs`.
    - OSC 4/104 + 10/11/12/110-112: the VT engine already parses these (set → `Term.colors`, reset → clear);
      OneTerm renders via `dynamic_colors()` (`TerminalPalette.indexed` for index 0-255) and answers queries via
      `Event::ColorRequest` (enqueue → reply after parse batch, fallback default palette via `set_default_colors`

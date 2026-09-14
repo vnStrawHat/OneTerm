@@ -1,0 +1,204 @@
+{
+  "columns": 160,
+  "engine": "vendored alacritty_terminal + vte",
+  "lines": 45,
+  "mib_per_fixture": 100,
+  "runs": 3,
+  "tiers": {
+    "tier1_parser": [
+      {
+        "fixture": "plain_ascii",
+        "mib_per_second": 1195.1690149847632,
+        "ns_per_byte": 0.7979409643734849
+      },
+      {
+        "fixture": "long_lines",
+        "mib_per_second": 1384.3642618013084,
+        "ns_per_byte": 0.6888897255736341
+      },
+      {
+        "fixture": "heavy_sgr",
+        "mib_per_second": 372.2662200146689,
+        "ns_per_byte": 2.561807290408115
+      },
+      {
+        "fixture": "tui_redraw",
+        "mib_per_second": 451.9384251260969,
+        "ns_per_byte": 2.1101863957245106
+      },
+      {
+        "fixture": "scroll_region",
+        "mib_per_second": 846.3248569888403,
+        "ns_per_byte": 1.1268419077271945
+      },
+      {
+        "fixture": "cjk_wide",
+        "mib_per_second": 590.498472189468,
+        "ns_per_byte": 1.6150326568503854
+      },
+      {
+        "fixture": "dense_cells",
+        "mib_per_second": 210.24861838778745,
+        "ns_per_byte": 4.535936186973038
+      },
+      {
+        "fixture": "scrolling",
+        "mib_per_second": 708.5137987441205,
+        "ns_per_byte": 1.3460208087643315
+      },
+      {
+        "fixture": "sixel",
+        "mib_per_second": 353.22116441097523,
+        "ns_per_byte": 2.6999353733420213
+      },
+      {
+        "fixture": "osc_9_7",
+        "mib_per_second": 61.567306996965584,
+        "ns_per_byte": 15.489946904016005
+      }
+    ],
+    "tier2_grid": [
+      {
+        "fixture": "plain_ascii",
+        "mib_per_second": 81.98533538393198,
+        "ns_per_byte": 11.632254865339702
+      },
+      {
+        "fixture": "long_lines",
+        "mib_per_second": 100.53677228081439,
+        "ns_per_byte": 9.485825880131635
+      },
+      {
+        "fixture": "heavy_sgr",
+        "mib_per_second": 186.1272897402937,
+        "ns_per_byte": 5.123774798079994
+      },
+      {
+        "fixture": "tui_redraw",
+        "mib_per_second": 136.1855977792337,
+        "ns_per_byte": 7.002754564048852
+      },
+      {
+        "fixture": "scroll_region",
+        "mib_per_second": 107.98779053110354,
+        "ns_per_byte": 8.831316130424621
+      },
+      {
+        "fixture": "cjk_wide",
+        "mib_per_second": 136.2584616718392,
+        "ns_per_byte": 6.999009857479902
+      },
+      {
+        "fixture": "dense_cells",
+        "mib_per_second": 198.00171490608977,
+        "ns_per_byte": 4.816495235198181
+      },
+      {
+        "fixture": "scrolling",
+        "mib_per_second": 112.10219302358078,
+        "ns_per_byte": 8.507186975420222
+      },
+      {
+        "fixture": "sixel",
+        "mib_per_second": 34.47696654202228,
+        "ns_per_byte": 27.66120143556897
+      },
+      {
+        "fixture": "osc_9_7",
+        "mib_per_second": 39.692726746331196,
+        "ns_per_byte": 24.026424853626317
+      }
+    ],
+    "tier3_render": [
+      {
+        "cells": 7200,
+        "fixture": "plain_ascii",
+        "us_per_frame": 37.6805
+      },
+      {
+        "cells": 7200,
+        "fixture": "long_lines",
+        "us_per_frame": 37.13883333333333
+      },
+      {
+        "cells": 7200,
+        "fixture": "heavy_sgr",
+        "us_per_frame": 36.93766666666667
+      },
+      {
+        "cells": 7200,
+        "fixture": "tui_redraw",
+        "us_per_frame": 38.7965
+      },
+      {
+        "cells": 7200,
+        "fixture": "scroll_region",
+        "us_per_frame": 37.15383333333333
+      },
+      {
+        "cells": 7200,
+        "fixture": "cjk_wide",
+        "us_per_frame": 37.2355
+      },
+      {
+        "cells": 7200,
+        "fixture": "dense_cells",
+        "us_per_frame": 35.64566666666667
+      },
+      {
+        "cells": 7200,
+        "fixture": "scrolling",
+        "us_per_frame": 22.652833333333334
+      },
+      {
+        "cells": 7200,
+        "fixture": "sixel",
+        "us_per_frame": 41.91433333333333
+      },
+      {
+        "cells": 7200,
+        "fixture": "osc_9_7",
+        "us_per_frame": 37.897999999999996
+      }
+    ],
+    "tier4_resize": [
+      {
+        "grow_us": 1476.8,
+        "scrollback_rows": 0,
+        "shrink_us": 26.7
+      },
+      {
+        "grow_us": 5984.8,
+        "scrollback_rows": 10000,
+        "shrink_us": 4307.2
+      },
+      {
+        "grow_us": 44836.2,
+        "scrollback_rows": 100000,
+        "shrink_us": 46580.9
+      }
+    ],
+    "tier5_memory": [
+      {
+        "content": "plain",
+        "heap_bytes": 41380491,
+        "heap_bytes_per_row": 4138.0491
+      },
+      {
+        "content": "unicode",
+        "heap_bytes": 41380491,
+        "heap_bytes_per_row": 4138.0491
+      },
+      {
+        "content": "styled",
+        "heap_bytes": 41380491,
+        "heap_bytes_per_row": 4138.0491
+      },
+      {
+        "content": "mixed",
+        "heap_bytes": 41380491,
+        "heap_bytes_per_row": 4138.0491
+      }
+    ]
+  }
+}

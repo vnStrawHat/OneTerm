@@ -1,7 +1,7 @@
 //! OneTerm Agent feature — the **Agent Panel** content.
 //!
 //! A right-dock "fleet view" of coding agents running inside terminals. Agents
-//! report status over OSC 9;7 (`docs/osc-agent-status.md`); `terminal-view`
+//! report status over OSC 20308 (`docs/osc-agent-status.md`); `terminal-view`
 //! folds those events into a global [`oneterm_state::AgentRegistry`], and this
 //! crate renders it: a scrolling column of tab groups, each holding one card per
 //! `(terminal, agent)`. See `docs/agent-panel-display.md`.

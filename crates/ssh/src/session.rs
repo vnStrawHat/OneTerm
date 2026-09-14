@@ -22,8 +22,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
-use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::{Config, Term};
 use async_channel::Receiver;
 use russh::Pty;
 use russh::client;
@@ -38,7 +36,8 @@ use oneterm_core::{
 };
 use oneterm_terminal::{
     ClipboardOrigin, GridSize, OscRouter, PtySize, PtyTransport, SessionEvent, SessionEventSink,
-    SharedSessionState, SharedState, TerminalSecurityPolicy, ssh_log_identity,
+    SharedSessionState, SharedState, SharedTerminal, TerminalSecurityPolicy, new_shared_terminal,
+    ssh_log_identity,
 };
 
 use crate::agent::{local_agent_connector, request_agent_forwarding};
@@ -53,7 +52,7 @@ use crate::tunnel::{ForwardContext, ForwardTable, HANDLE_REQUEST_CAPACITY, start
 
 /// An SSH session whose asynchronous tasks run on the shared SSH runtime.
 pub struct SshSession {
-    pub(crate) term: Arc<FairMutex<Term<SshListener>>>,
+    pub(crate) term: SharedTerminal,
     pub(crate) listener: SshListener,
     pub(crate) event_rx: Mutex<Option<Receiver<SessionEvent>>>,
     pub(crate) state: SharedState,
@@ -242,15 +241,7 @@ pub fn connect(
         cols: initial.cols as usize,
         lines: initial.rows as usize,
     };
-    let term_config = Config {
-        scrolling_history: scrollback_history,
-        ..Default::default()
-    };
-    let term = Arc::new(FairMutex::new(Term::new(
-        term_config,
-        &size,
-        listener.clone(),
-    )));
+    let term = new_shared_terminal(size, scrollback_history);
 
     // ── Connect (block_on) ──────────────────────────────────────────
     let connect_result = runtime.block_on(async {
@@ -794,14 +785,13 @@ mod tests {
             state.clone(),
             ClipboardOrigin::Remote,
         );
-        let term = Arc::new(FairMutex::new(Term::new(
-            Config::default(),
-            &GridSize {
+        let term = new_shared_terminal(
+            GridSize {
                 cols: 80,
                 lines: 24,
             },
-            listener.clone(),
-        )));
+            oneterm_terminal::DEFAULT_SCROLLBACK_LINES,
+        );
         let session = SshSession {
             term,
             listener,
@@ -813,14 +803,36 @@ mod tests {
         (session, cmd_rx)
     }
 
-    /// DEC-0008: the remote PTY reflows and repaints, so SSH keeps alacritty's
-    /// grow-resize semantics.
+    /// DEC-0008: the policy an SSH session hands the engine is
+    /// `oneterm_vt::ResizePolicy::BottomAnchor`, because the remote PTY reflows
+    /// and repaints on its side. Asserted by its behaviour — a row grow pulls
+    /// rows out of scrollback into the top of the viewport and the cursor
+    /// follows them down, where `KeepViewportTop` would leave the cursor where
+    /// it is and add blank rows at the bottom. The engine enum cannot be named
+    /// here (US-0084 gap 2), and its name is not the contract anyway.
     #[test]
-    fn ssh_session_keeps_the_default_grow_policy() {
+    fn ssh_grow_resize_pulls_scrollback_into_the_viewport_top() {
+        use oneterm_terminal::{TerminalInput, TerminalPump, TerminalRender};
+
         let (session, _cmd_rx) = detached_session();
+        let mut pump = TerminalPump::new(session.listener.clone());
+        let output: String = (0..40).map(|index| format!("line {index}\r\n")).collect();
+        pump.process_chunk(&session.term, output.as_bytes());
+
+        let before = session.query_state();
+        assert_eq!(before.rows, 24);
+        session.resize(30, 80).expect("a grow must be accepted");
+        let after = session.query_state();
+
+        assert_eq!(after.rows, 30);
         assert_eq!(
-            session.resize_policy(),
-            oneterm_terminal::ResizePolicy::Default
+            after.cursor_row,
+            before.cursor_row + 6,
+            "the cursor did not follow the rows pulled out of history"
+        );
+        assert_eq!(
+            after.total_lines, before.total_lines,
+            "history was not moved into the viewport, it was added to"
         );
     }
 

@@ -1,31 +1,36 @@
 //! Click-time URL detection — finds the URL under the pointer for Ctrl+Click.
 //!
-//! Works on the `query_line_range_cells` slice around the pointer (a few
-//! rows, never the whole grid), reading cells through the view-owned
-//! [`Cell`] so the engine's cell type stays inside `render/frame.rs`.
+//! Works on the `query_line_range_cells` window around the pointer (a few rows,
+//! never the whole grid). That read is deliberately **not** a frame: it must not
+//! copy a viewport on every pointer move and must not touch the renderer's
+//! damage watermark, so it answers with [`SnapshotCell`] — the narrow owned
+//! shape this file and the completion lookup are the only readers of.
 
-use oneterm_terminal::IndexedCell;
+use oneterm_terminal::{LineRangeCells, SnapshotCell};
 
 use super::{DetectedUrl, PREFIXES, is_trailing_punct};
-use crate::render::frame::{Cell, CellFlags, hyperlink_uri};
 
-/// Find a URL at display `(row, col)` in `cells` (row-major, `num_cols` wide).
+/// Find a URL at display `(row, col)` in `window` (row-major, `num_cols` wide).
 ///
-/// Handles URLs that wrap across display rows: when a row ends with
-/// `WRAPLINE` set and the URL extends to its last column, detection continues
-/// on the next row.
+/// Handles URLs that wrap across display rows: when a row ends with its wrap
+/// flag set and the URL extends to its last column, detection continues on the
+/// next row.
 ///
 /// Check order:
-/// 1. OSC 8 hyperlink — the cell carries a target → the run of cells with the
+/// 1. OSC 8 hyperlink — the cell carries a link → the run of cells with the
 ///    same link on the same row is the URL.
 /// 2. Plain text URL — scan the wrapped row group for `http://`, `https://`,
 ///    `ftp://`, `www.`.
 pub(crate) fn detect_url_at(
-    cells: &[IndexedCell],
-    num_cols: usize,
+    window: &LineRangeCells,
     row: usize,
     col: usize,
 ) -> Option<DetectedUrl> {
+    let cells = &window.cells;
+    let num_cols = window.num_cols;
+    if num_cols == 0 {
+        return None;
+    }
     let line_start = row * num_cols;
     let line_end = (line_start + num_cols).min(cells.len());
     if line_start >= cells.len() {
@@ -35,9 +40,8 @@ pub(crate) fn detect_url_at(
     if col >= n {
         return None;
     }
-    let at = |i: usize| Cell::from_indexed(&cells[i]);
-    let is_spacer = |c: &Cell<'_>| c.flags.contains(CellFlags::WIDE_CHAR_SPACER);
-    let visible_char = |c: &Cell<'_>| match c.ch {
+    let at = |i: usize| -> &SnapshotCell { &cells[i] };
+    let visible_char = |cell: &SnapshotCell| match cell.ch {
         '\0' | '\t' => ' ',
         ch => ch,
     };
@@ -57,11 +61,11 @@ pub(crate) fn detect_url_at(
         // with the target (SEC-03).
         let display_text: String = (line_start + start..=line_start + end)
             .map(at)
-            .filter(|c| !is_spacer(c))
-            .map(|c| c.ch)
+            .filter(|cell| !cell.spacer)
+            .map(|cell| cell.ch)
             .collect();
         return Some(DetectedUrl {
-            url: hyperlink_uri(&cells[line_start + col])?,
+            url: window.hyperlink_uri(target)?.to_string(),
             display_text: Some(display_text),
             row,
             start_col: start,
@@ -70,11 +74,11 @@ pub(crate) fn detect_url_at(
     }
 
     // 2. Plain-text URL — wrap-aware. Find the start of the wrapped row group
-    // (scan backwards for WRAPLINE on the previous row's last cell).
+    // (scan backwards for the wrap flag on the previous row's last cell).
     let mut group_start = row;
     while group_start > 0 {
         let prev_end = group_start * num_cols;
-        if prev_end > 0 && at(prev_end - 1).flags.contains(CellFlags::WRAPLINE) {
+        if prev_end > 0 && at(prev_end - 1).wrapline {
             group_start -= 1;
         } else {
             break;
@@ -99,12 +103,12 @@ pub(crate) fn detect_url_at(
                 break;
             }
             let cell = at(idx);
-            if is_spacer(&cell) {
+            if cell.spacer {
                 continue;
             }
             pos_map.push((current_row, c));
-            chars.push(visible_char(&cell));
-            if c == num_cols - 1 && cell.flags.contains(CellFlags::WRAPLINE) {
+            chars.push(visible_char(cell));
+            if c == num_cols - 1 && cell.wrapline {
                 wraps = true;
             }
         }

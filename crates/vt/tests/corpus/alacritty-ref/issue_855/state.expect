@@ -1,0 +1,27 @@
+# OneTerm VT parity expectation: cursor, modes, palette, title, tab stops,
+# scroll region. Blessed by the vendored engine at US-0072 and FROZEN.
+version 1
+cursor row=28 col=38 shape=Block
+pending_wrap 0
+modes ALTERNATE_SCROLL APP_CURSOR APP_KEYPAD BRACKETED_PASTE LINE_WRAP SHOW_CURSOR URGENCY_HINTS
+title_events 18
+title_event.0 set:jwilm%40jwilm-desk:%20%7E/code/alacritty
+title_event.1 set:tput%20csr%203%207
+title_event.2 set:jwilm%40jwilm-desk:%20%7E/code/alacritty
+title_event.3 set:ls%20--color%3Dtty%20-lh
+title_event.4 set:jwilm%40jwilm-desk:%20%7E/code/alacritty
+title_event.5 set:tput%20cup%2010
+title_event.6 set:jwilm%40jwilm-desk:%20%7E/code/alacritty
+title_event.7 set:ls%20--color%3Dtty%20-lh
+title_event.8 set:jwilm%40jwilm-desk:%20%7E/code/alacritty
+title_event.9 set:jwilm%40jwilm-desk:%20%7E/code/alacritty
+title_event.10 set:jwilm%40jwilm-desk:%20%7E/code/alacritty
+title_event.11 set:jwilm%40jwilm-desk:%20%7E/code/alacritty
+title_event.12 set:jwilm%40jwilm-desk:%20%7E/code/alacritty
+title_event.13 set:jwilm%40jwilm-desk:%20%7E/code/alacritty
+title_event.14 set:ls%20--color%3Dtty
+title_event.15 set:jwilm%40jwilm-desk:%20%7E/code/alacritty
+title_event.16 set:ls%20--color%3Dtty%20-lh
+title_event.17 set:jwilm%40jwilm-desk:%20%7E/code/alacritty
+tab_stops 8,16,24,32,40,48,56,64,72,80,88,96,104
+scroll_region top=3 bottom=7

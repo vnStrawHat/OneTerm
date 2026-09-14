@@ -1,7 +1,7 @@
 //! ConPTY / PTY throughput probe (diagnostic).
 //!
 //! Spawns a child command inside a real pseudoconsole via the same
-//! `alacritty_terminal::tty` path OneTerm uses, then reads from the PTY as fast as
+//! `oneterm-pty` path OneTerm uses, then reads from the PTY as fast as
 //! possible and reports MiB/s over the active window (first byte → last byte).
 //!
 //! This isolates the *transport* (ConPTY relay + reserialization) from OneTerm's
@@ -18,8 +18,9 @@ use std::io::{Read, Write};
 use std::num::NonZeroUsize;
 use std::time::{Duration, Instant};
 
-use alacritty_terminal::event::WindowSize;
-use alacritty_terminal::tty::{self, EventedReadWrite, Options, Shell};
+use oneterm_pty::{
+    EventedReadWrite, Options, PTY_READ_WRITE_TOKEN, PseudoConsole, Shell, WindowSize,
+};
 use polling::{Event as PollEvent, Events, PollMode, Poller};
 
 fn main() {
@@ -33,25 +34,26 @@ fn main() {
 
     let opts = Options {
         shell: Some(Shell::new(program.clone(), child_args.clone())),
-        working_directory: None,
-        drain_on_exit: false,
-        env: Default::default(),
         ..Default::default()
     };
     // Match the DOOM-fire grid so ConPTY's screen-buffer reserialization cost is
     // comparable to the real workload.
     let winsize = WindowSize {
-        num_lines: 45,
-        num_cols: 160,
+        rows: 45,
+        cols: 160,
         cell_width: 0,
         cell_height: 0,
     };
-    let mut pty = tty::new(&opts, winsize, 0).expect("tty::new");
+    let mut pty = PseudoConsole::spawn(&opts, winsize).expect("spawn a pseudo-console");
 
     let poll = std::sync::Arc::new(Poller::new().expect("poller"));
     unsafe {
-        pty.register(&poll, PollEvent::readable(0), PollMode::Level)
-            .expect("register");
+        pty.register(
+            &poll,
+            PollEvent::readable(PTY_READ_WRITE_TOKEN),
+            PollMode::Level,
+        )
+        .expect("register");
     }
     let mut events = Events::with_capacity(NonZeroUsize::new(1024).unwrap());
 

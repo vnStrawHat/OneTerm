@@ -1,4 +1,6 @@
-//! Conformance tests for the OSC 9;7 receiver (spec §8).
+//! Conformance tests for the agent-status receiver (spec §8). The payload is
+//! the same under both wire spellings, so these are encoding-agnostic; the
+//! routing of each spelling is proved in `crate::osc` and `backend_tests`.
 
 use super::*;
 

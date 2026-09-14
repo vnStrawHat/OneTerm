@@ -16,7 +16,7 @@ use async_channel::{Sender, TrySendError};
 
 use oneterm_terminal::{OscRouter, PtyTransport, TerminalError};
 
-/// Alacritty `EventListener` for the SSH session (shared router + SSH transport).
+/// The shared batch drain for the SSH session (router + SSH transport).
 pub(crate) type SshListener = OscRouter<SshTransport>;
 
 /// Maximum queued SSH command messages.
@@ -60,8 +60,8 @@ struct CommandCounters {
     command_closed: AtomicU64,
 }
 
-/// SSH channel transport handle (Arc-shared between `Term`, the session and
-/// the tokio task).
+/// SSH channel transport handle (Arc-shared between the router, the session
+/// and the tokio task).
 #[derive(Clone)]
 pub(crate) struct SshTransport {
     /// Channel sending `Cmd` to the tokio task (sync→async bridge).

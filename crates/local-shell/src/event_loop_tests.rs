@@ -6,9 +6,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::term::Config;
-use alacritty_terminal::tty::{ChildEvent, EventedReadWrite};
+use oneterm_pty::{ChildEvent, EventedReadWrite};
 use oneterm_terminal::{
     ClipboardOrigin, GridSize, OscRouter, SessionEvent, SessionEventSink, SharedSessionState,
 };
@@ -83,14 +81,14 @@ fn local_input_queue_preserves_fifo_order() {
 fn resize_is_latest_value_and_shutdown_is_immediate() {
     let (notifier, receiver, control) = notifier(1);
     let first = WindowSize {
-        num_lines: 24,
-        num_cols: 80,
+        rows: 24,
+        cols: 80,
         cell_width: 0,
         cell_height: 0,
     };
     let latest = WindowSize {
-        num_lines: 40,
-        num_cols: 120,
+        rows: 40,
+        cols: 120,
         cell_width: 0,
         cell_height: 0,
     };
@@ -100,7 +98,7 @@ fn resize_is_latest_value_and_shutdown_is_immediate() {
     notifier.send(ShellMsg::Resize(first)).unwrap();
     notifier.send(ShellMsg::Resize(latest)).unwrap();
     let pending = control.pending_resize.lock().unwrap().take().unwrap();
-    assert_eq!((pending.num_lines, pending.num_cols), (40, 120));
+    assert_eq!((pending.rows, pending.cols), (40, 120));
     assert_eq!(receiver.try_iter().count(), 1);
 
     notifier.send(ShellMsg::Shutdown).unwrap();
@@ -277,7 +275,7 @@ impl EventedReadWrite for LoopbackPty {
         mut interest: PollEvent,
         mode: PollMode,
     ) -> io::Result<()> {
-        interest.key = 0;
+        interest.key = PTY_READ_WRITE_TOKEN;
         unsafe {
             poll.add_with_mode(&self.io, interest, mode)?;
             poll.add_with_mode(
@@ -294,7 +292,7 @@ impl EventedReadWrite for LoopbackPty {
         mut interest: PollEvent,
         mode: PollMode,
     ) -> io::Result<()> {
-        interest.key = 0;
+        interest.key = PTY_READ_WRITE_TOKEN;
         poll.modify_with_mode(&self.io, interest, mode)?;
         poll.modify_with_mode(
             &self.child_signal,
@@ -326,13 +324,14 @@ impl EventedPty for LoopbackPty {
 }
 
 impl OnResize for LoopbackPty {
-    fn on_resize(&mut self, window_size: WindowSize) {
+    fn on_resize(&mut self, window_size: WindowSize) -> io::Result<()> {
         self.resizes.lock().unwrap().push(window_size);
+        Ok(())
     }
 }
 
 struct RunningLoop {
-    term: Arc<FairMutex<Term<LocalListener>>>,
+    term: oneterm_terminal::SharedTerminal,
     notifier: ShellNotifier,
     events: async_channel::Receiver<SessionEvent>,
     state: oneterm_terminal::SharedState,
@@ -342,14 +341,12 @@ struct RunningLoop {
 impl RunningLoop {
     fn screen_text(&self) -> String {
         let term = self.term.lock();
+        let screen = term.screen();
+        let graphemes = &term.interner().graphemes;
         let mut text = String::new();
-        for line in 0..term.screen_lines() {
-            for col in 0..term.columns() {
-                let point = alacritty_terminal::index::Point::new(
-                    alacritty_terminal::index::Line(line as i32),
-                    alacritty_terminal::index::Column(col),
-                );
-                text.push(term.grid()[point].c);
+        for index in 0..screen.rows() {
+            for cell in screen.row(screen.screen_top() + u64::from(index)).cells() {
+                text.push(cell.text_char(graphemes));
             }
         }
         text
@@ -372,16 +369,15 @@ impl Drop for RunningLoop {
 fn start_loop() -> (RunningLoop, LoopbackPeer) {
     let (pty, peer) = loopback_pty();
     let (listener, events, state) = router_and_events();
-    let term = Arc::new(FairMutex::new(Term::new(
-        Config::default(),
-        &GridSize {
+    let term = oneterm_terminal::new_shared_terminal(
+        GridSize {
             cols: 80,
             lines: 24,
         },
-        listener.clone(),
-    )));
-    let (mut event_loop, notifier) = ShellEventLoop::new(pty, term.clone(), listener.clone())
-        .expect("event loop over loopback pty");
+        oneterm_terminal::DEFAULT_SCROLLBACK_LINES,
+    );
+    let poll = std::sync::Arc::new(polling::Poller::new().expect("poller"));
+    let (mut event_loop, notifier) = ShellEventLoop::new(pty, term.clone(), listener.clone(), poll);
     listener.transport().set_notifier(notifier.clone());
     let join = std::thread::Builder::new()
         .name("loopback PTY owner".into())
@@ -448,9 +444,9 @@ fn loop_answers_color_queries_through_the_pty() {
 #[test]
 fn loop_applies_latest_resize_to_the_pty() {
     let (running, peer) = start_loop();
-    let size = |lines, cols| WindowSize {
-        num_lines: lines,
-        num_cols: cols,
+    let size = |rows, cols| WindowSize {
+        rows,
+        cols,
         cell_width: 0,
         cell_height: 0,
     };
@@ -462,7 +458,7 @@ fn loop_applies_latest_resize_to_the_pty() {
         !peer.resizes.lock().unwrap().is_empty()
     }));
     let applied = peer.resizes.lock().unwrap().last().copied().unwrap();
-    assert_eq!((applied.num_lines, applied.num_cols), (30, 100));
+    assert_eq!((applied.rows, applied.cols), (30, 100));
 }
 
 #[test]
@@ -479,6 +475,209 @@ fn loop_child_exit_ends_the_session_and_stops_the_thread() {
         "{events:?}"
     );
     assert_eq!(events.last(), Some(&SessionEvent::Closed));
+}
+
+/// How long a frame may wait for the engine while the pump floods.
+///
+/// Not a stopwatch. The property is "**one batch**, not the whole flood", and a
+/// batch here is whatever the socket buffer held, parsed at `test` profile
+/// opt-level 0: measured worst-of-five at 86 / 108 / 125 ms over three runs,
+/// against `US-0082`'s 157 µs for a 4 KiB in-process chunk. The failing side is
+/// not slower, it never arrives — with the flood running, a loop that ignores
+/// the demand holds the engine until the producer stops.
+const HANDOVER_BOUND: Duration = Duration::from_millis(250);
+
+/// Frames taken while the pump floods. One acquisition could be luck; the
+/// assertion is on the worst of them.
+const FRAMES: u32 = 5;
+
+/// Stops the flood on the way out, including while unwinding: `RunningLoop`'s
+/// drop joins the owner thread, and a thread still reading a fed pipe never
+/// returns to `poll.wait` to see the shutdown flag.
+struct StopFlood(Arc<AtomicBool>);
+
+impl Drop for StopFlood {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
+/// `US-0083`: a pump that reads until the pipe is empty must hand the engine to
+/// a waiting frame at its next chunk boundary instead.
+///
+/// The `US-0082` verifier measured both outcomes on this shape — honoured: one
+/// batch, 157 µs; ignored: 3 800 batches, 354 ms for a *bounded* 4 MiB flood.
+/// The flood below does not stop while the frames are taken, so a loop that
+/// ignores the demand does not hand the lock over at all: a fair mutex cannot
+/// help a waiter that never sees an unlock.
+#[test]
+fn a_flooding_loop_hands_the_engine_to_a_waiting_frame() {
+    let (running, mut peer) = start_loop();
+    let stop = Arc::new(AtomicBool::new(false));
+    let _stop_flood = StopFlood(Arc::clone(&stop));
+
+    // The UI keeps draining. A reliable event arriving on a full queue would
+    // park the pump in `finish_batch_blocking` — with the guard already dropped
+    // — and the frames below would be served for the wrong reason.
+    let ui = {
+        let events = running.events.clone();
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                while events.try_recv().is_ok() {}
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        })
+    };
+
+    let flood = {
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            let mut line = vec![b'x'; 4094];
+            line.extend_from_slice(b"\r\n");
+            while !stop.load(Ordering::Relaxed) {
+                peer.output(&line);
+            }
+            peer
+        })
+    };
+
+    // "The pump is mid-burst": it holds the engine. Nothing the pump publishes
+    // can be the gate — a batch that never ends publishes nothing, which is the
+    // starvation itself. `try_lock` does not raise the demand, so probing here
+    // cannot be what makes the pump yield below.
+    assert!(
+        wait_until(Duration::from_secs(10), || running
+            .term
+            .try_lock()
+            .is_none()),
+        "the pump never took the engine lock"
+    );
+
+    // `lock_for_render()` raises a one-shot flag and *then* blocks, so a pump
+    // asking inside that window consumes the only signal and the frame parks
+    // invisibly — a race in `TerminalHandle`, not in this loop, measured and
+    // recorded as the packet's gap 6. It made this test fail in the workspace
+    // gate, where every other test loads the machine and widens the window.
+    // This watchdog keeps a demand standing at the rate a 60 Hz renderer raises
+    // one anyway, so the test measures the pump's hand-over latency rather than
+    // that race, which has its own owner.
+    let watchdog = {
+        let term = Arc::clone(&running.term);
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                term.demand().raise();
+                std::thread::sleep(Duration::from_millis(16));
+            }
+        })
+    };
+
+    // The frames run on their own thread and report through a channel, so a
+    // pump that never yields fails on the deadline instead of hanging the run.
+    let (report_tx, report_rx) = mpsc::channel();
+    let renderer = {
+        let term = Arc::clone(&running.term);
+        std::thread::spawn(move || {
+            let mut worst = Duration::ZERO;
+            for _ in 0..FRAMES {
+                let started = Instant::now();
+                let frame = term.lock_for_render();
+                worst = worst.max(started.elapsed());
+                drop(frame);
+                // Let the pump take the engine back, so the next frame queues
+                // behind a running batch instead of re-entering an idle mutex.
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            report_tx.send(worst)
+        })
+    };
+
+    let deadline = HANDOVER_BOUND * FRAMES + Duration::from_secs(1);
+    let report = report_rx.recv_timeout(deadline);
+
+    stop.store(true, Ordering::Relaxed);
+    let _peer = flood.join().unwrap();
+    renderer.join().unwrap().expect("the frame thread reports");
+    watchdog.join().unwrap();
+    ui.join().unwrap();
+
+    let worst = report.unwrap_or_else(|_| {
+        panic!("no frame reached the engine within {deadline:?} of a flooding pump")
+    });
+    assert!(
+        worst < HANDOVER_BOUND,
+        "a frame waited {worst:?} behind the flooding pump (bound {HANDOVER_BOUND:?})"
+    );
+}
+
+/// What the hand-over costs when a renderer really is taking frames: the pump
+/// gives the engine up about sixty times a second instead of keeping it for the
+/// whole burst. A measurement, not a gate — run it explicitly:
+///
+/// ```text
+/// cargo test -p oneterm-local-shell --profile fast-dev -- --ignored --nocapture flood_throughput
+/// ```
+#[test]
+#[ignore = "measurement; run it explicitly"]
+fn flood_throughput_while_a_renderer_takes_frames() {
+    const WINDOW: Duration = Duration::from_secs(2);
+    const LINE: usize = 4096;
+
+    let (running, mut peer) = start_loop();
+    let stop = Arc::new(AtomicBool::new(false));
+    let _stop_flood = StopFlood(Arc::clone(&stop));
+
+    let ui = {
+        let events = running.events.clone();
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                while events.try_recv().is_ok() {}
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        })
+    };
+    let flood = {
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            let mut line = vec![b'x'; LINE - 2];
+            line.extend_from_slice(b"\r\n");
+            while !stop.load(Ordering::Relaxed) {
+                peer.output(&line);
+            }
+            peer
+        })
+    };
+    let renderer = {
+        let term = Arc::clone(&running.term);
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            let mut frames = 0u32;
+            while !stop.load(Ordering::Relaxed) {
+                drop(term.lock_for_render());
+                frames += 1;
+                std::thread::sleep(Duration::from_millis(16));
+            }
+            frames
+        })
+    };
+
+    let started = Instant::now();
+    std::thread::sleep(WINDOW);
+    let lines = running.state.absolute_line_count();
+    let elapsed = started.elapsed();
+
+    stop.store(true, Ordering::Relaxed);
+    let _peer = flood.join().unwrap();
+    let frames = renderer.join().unwrap();
+    ui.join().unwrap();
+
+    let mib = (lines * LINE) as f64 / (1024.0 * 1024.0);
+    println!(
+        "flood: {mib:.1} MiB in {elapsed:?} = {:.1} MiB/s, renderer got {frames} frames",
+        mib / elapsed.as_secs_f64()
+    );
 }
 
 #[test]

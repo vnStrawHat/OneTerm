@@ -56,7 +56,7 @@ pub struct UiConfig {
     pub right_dock_mode: RightDockMode,
 
     /// Agent Panel staleness threshold in milliseconds. An agent card with no
-    /// OSC 9;7 event within `max(this, 3 × heartbeat_interval)` (while its
+    /// agent-status event within `max(this, 3 × heartbeat_interval)` (while its
     /// terminal process is alive) is marked "stale" (see
     /// `docs/agent-panel-display.md` §9, `docs/osc-agent-status.md` §5.3).
     /// `None` = the built-in default ([`UiConfig::DEFAULT_AGENT_STALE_THRESHOLD_MS`], 5 min).

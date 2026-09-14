@@ -5,9 +5,9 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use alacritty_terminal::vte::{Parser, Perform};
 use chrono::Local;
 use oneterm_core::{LogWriteMode, TerminalLogConfig};
+use oneterm_vt::parser::{Dispatch, OscParams, Params, Parser, StringTerm};
 
 /// Current state of one terminal logger.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,10 +64,19 @@ struct LineCollector {
     completed: Vec<String>,
 }
 
-impl Perform for LineCollector {
-    fn print(&mut self, character: char) {
-        if !character.is_control() {
-            self.current.push(character);
+/// The escape stripper: printable runs in, sequences dropped.
+///
+/// The session log wants the text a human would have seen, so only `print_str`
+/// and `execute` carry anything; every other callback is the sequence being
+/// discarded. This is what deletes the second parser the adapter used to run
+/// next to the engine's — there is exactly one state machine in the crate now,
+/// and it is the engine's own (`oneterm_vt::parser`).
+impl Dispatch for LineCollector {
+    fn print_str(&mut self, text: &str) {
+        for character in text.chars() {
+            if !character.is_control() {
+                self.current.push(character);
+            }
         }
     }
 
@@ -80,6 +89,31 @@ impl Perform for LineCollector {
             _ => {}
         }
     }
+
+    fn esc(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
+
+    fn csi(&mut self, _params: &Params, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
+
+    fn osc(
+        &mut self,
+        _code: Option<u32>,
+        _params: &OscParams<'_>,
+        _term: StringTerm,
+        _truncated: bool,
+    ) {
+    }
+
+    fn dcs_hook(&mut self, _params: &Params, _intermediates: &[u8], _byte: u8) {}
+
+    fn dcs_put(&mut self, _byte: u8) {}
+
+    fn dcs_unhook(&mut self, _aborted: bool) {}
+
+    fn apc_start(&mut self, _introducer: u8) {}
+
+    fn apc_put(&mut self, _byte: u8) {}
+
+    fn apc_end(&mut self, _aborted: bool) {}
 }
 
 impl LineCollector {

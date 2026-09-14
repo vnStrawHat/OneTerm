@@ -10,6 +10,15 @@ use serde::{Deserialize, Serialize};
 ///   running command / cwd), falling back to the static label when the shell
 ///   hasn't set one. Long executable paths are shortened to their basename
 ///   (e.g. `C:\Windows\system32\cmd.exe` → `cmd.exe`).
+///
+/// Windows caveat (measured in `IN-0029` evidence `US-0089-title-pty-bytes.txt`):
+/// `cmd.exe` rewrites the console title around every command — to
+/// `<path> - <command>` while it runs and back to `<path>` after — and ConPTY
+/// forwards each change as its own `OSC 0`. A title an *application* writes
+/// inside `cmd` is therefore overwritten within microseconds by cmd's own
+/// restore, so only `title <x>` (which sets the console title itself) sticks.
+/// Shells that leave the console title alone, such as `powershell`, keep an
+/// application-set `OSC 0/2` title. This is host behaviour, not a parse gap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TabTitleMode {

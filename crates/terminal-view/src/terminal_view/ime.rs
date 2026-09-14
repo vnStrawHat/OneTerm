@@ -102,7 +102,7 @@ impl EntityInputHandler for TerminalView {
         // grid geometry of the last paint, shifted by the preedit offset.
         let geometry = self.render_state.borrow().geometry?;
         let query = self.session.read(cx).query_state();
-        let row = (query.cursor_line + query.display_offset as i32).max(0) as usize;
+        let row = query.cursor_row + query.display_offset;
         let col = query.cursor_col + range_utf16.start;
         let origin = geometry.cell_origin(row, col);
         let metrics = geometry.metrics;

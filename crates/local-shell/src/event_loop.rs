@@ -1,15 +1,18 @@
-//! Custom event loop — replacement for `alacritty_terminal::event_loop::EventLoop`.
+//! The local shell's PTY read loop, on the owner thread that also owns the PTY.
 //!
-//! Feeds PTY bytes to the shared [`TerminalPump`] (`ansi::Processor` + OSC
-//! routing + line accounting) in a **single pass**. OSC 7/9/133 and screen
-//! clears (`CSI 2J/3J`, RIS) are surfaced by the OneTerm alacritty fork via
-//! `Event::Osc` / `Event::ClearScreen` and handled by the shared `OscRouter` —
-//! there is no second `vte::Parser`.
+//! Feeds PTY bytes to the shared [`TerminalPump`] in a **single pass**: one
+//! `Terminal::feed` fills an `EventBatch` and `OscRouter::drain` turns it into
+//! replies, state-cache updates and `SessionEvent`s, all under the engine lock;
+//! the events are sent once the guard is dropped. There is no second parser and
+//! no deferred sink.
+//!
+//! The loop holds that guard across consecutive reads, which is what makes a
+//! flood fast and a waiting frame slow — so it asks
+//! [`SharedTerminal::take_render_demand`] at each chunk boundary and hands the
+//! lock over when a frame is waiting (§ 5.1 of `docs/terminal-backend.md`).
 //!
 //! The loop is generic over the PTY (`EventedPty + OnResize`) so tests drive it
 //! with an in-memory transport instead of a real shell (TEST-02).
-//!
-//! Reference: `alacritty_terminal::event_loop::EventLoop`.
 
 use std::borrow::Cow;
 use std::collections::VecDeque;
@@ -19,21 +22,38 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 
-use alacritty_terminal::event::{OnResize, WindowSize};
-use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::Term;
-use alacritty_terminal::tty::{self, EventedPty, Options};
 use log::error;
+use oneterm_pty::{
+    ChildEvent, EventedPty, OnResize, Options, PTY_CHILD_EVENT_TOKEN, PTY_READ_WRITE_TOKEN,
+    PseudoConsole, WindowSize,
+};
 use polling::{Event as PollEvent, Events, PollMode, Poller};
 
 use oneterm_core::{TerminalLogConfig, report_best_effort};
-use oneterm_terminal::{TerminalPump, local_log_identity};
+use oneterm_terminal::{SharedTerminal, TerminalPump, local_log_identity};
 
 use crate::transport::{LocalListener, LocalTransport};
 
-/// PTY read buffer size (1 MiB — same as alacritty). Heap-allocated: the owner
-/// thread's default 2 MiB stack must not carry it (PERF-21).
+/// PTY read buffer size (1 MiB). Heap-allocated: the owner thread's default
+/// 2 MiB stack must not carry it (PERF-21).
 const READ_BUFFER_SIZE: usize = 0x10_0000;
+/// Most bytes taken from the transport in one `read`, and therefore the most
+/// handed to one `pump.advance` — one lock hold.
+///
+/// A frame waits `bytes-per-lock-hold ÷ parse rate`, so an unbounded read is an
+/// unbounded wait on a transport that can deliver one. ConPTY cannot: it hands
+/// this loop 82 bytes at the median and 9.6 KB at its worst, which is why the
+/// local shell never noticed. A socket hands it ~600 KB, and the `US-0083`
+/// verifier measured the difference this cap makes there — a worst-case frame
+/// wait of 22.6 ms down to 2.25 ms, with throughput up rather than down
+/// (`evidence/US-0083-verify.md` § 3.5).
+///
+/// It bounds the **read**, not the loop: the reference's identically-named
+/// constant broke out of the read loop, which stalls this one (see the yield
+/// below). `READ_BUFFER_SIZE` is deliberately left alone — it is what the
+/// contended path accumulates into, and shrinking it spun a test binary at
+/// 100 % CPU in the verifier's measurement.
+const MAX_LOCKED_READ: usize = 0x1_0000;
 /// Poll events collected per `poll.wait` (PTY readable + child watcher).
 const POLL_EVENT_CAPACITY: NonZeroUsize = match NonZeroUsize::new(1024) {
     Some(capacity) => capacity,
@@ -54,14 +74,6 @@ fn record_lock_sample(samples: &mut Vec<u64>, started: std::time::Instant) {
         samples.push(started.elapsed().as_micros() as u64);
     }
 }
-
-/// Token used by `alacritty_terminal`'s PTY to signal child (signal) events.
-///
-/// `alacritty_terminal::tty::PTY_CHILD_EVENT_TOKEN` is `pub(crate)` on Unix (only
-/// `pub` on Windows), so it is not accessible from this crate. Its value is fixed
-/// at `1` in alacritty's `tty/unix.rs` and `tty/windows/mod.rs`; the read/write
-/// token is `0`. We mirror that value here.
-const PTY_CHILD_EVENT_TOKEN: usize = 1;
 
 /// Request handed to [`ShellNotifier::send`].
 ///
@@ -158,67 +170,67 @@ impl ShellNotifier {
 /// surfaced via `Event::Osc` / `Event::ClearScreen`, no second parser).
 pub(crate) struct ShellEventLoop<P: EventedPty + OnResize> {
     pty: P,
-    term: std::sync::Arc<FairMutex<Term<LocalListener>>>,
+    term: SharedTerminal,
     pump: TerminalPump<LocalTransport>,
     input_rx: mpsc::Receiver<Cow<'static, [u8]>>,
     poll: std::sync::Arc<Poller>,
     control: std::sync::Arc<ShellControl>,
 }
 
-#[cfg(unix)]
-fn pty_process_id(pty: &tty::Pty) -> io::Result<u32> {
-    Ok(pty.child().id())
-}
-
-#[cfg(windows)]
-fn pty_process_id(pty: &tty::Pty) -> io::Result<u32> {
-    pty.child_watcher()
-        .pid()
-        .map(std::num::NonZeroU32::get)
-        .ok_or_else(|| io::Error::other("ConPTY child process id is unavailable"))
-}
-
-impl ShellEventLoop<tty::Pty> {
+impl ShellEventLoop<PseudoConsole> {
     /// Spawn the PTY owner thread. The PTY is constructed, operated, and dropped there.
     pub(crate) fn spawn_owned(
         opts: Options,
         winsize: WindowSize,
-        term: std::sync::Arc<FairMutex<Term<LocalListener>>>,
+        term: SharedTerminal,
         listener: LocalListener,
         program: PathBuf,
         logging: TerminalLogConfig,
     ) -> io::Result<(ShellNotifier, std::thread::JoinHandle<()>)> {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        // Built before the pseudo-console exists, and on this thread, so that no
+        // fallible step runs while the owner thread holds a live `PseudoConsole`.
+        // Dropping one now serves `CHILD_EXIT_GRACE` (DEC-0016), and the caller
+        // parked in `ready_rx.recv()` below would wait it out before being told
+        // the spawn failed at all.
+        let poll = std::sync::Arc::new(Poller::new()?);
         let join = std::thread::Builder::new()
             .name("PTY owner".into())
             .spawn(move || {
-                let result = tty::new(&opts, winsize, 0).and_then(|pty| {
-                    let pid = pty_process_id(&pty)?;
-                    listener
-                        .logging()
-                        .set_identity(local_log_identity(&program, pid));
-                    if logging.enabled
-                        && let Err(error) = listener.logging().start(&logging)
-                    {
-                        log::warn!("Local terminal automatic logging did not start: {error}");
-                    }
-                    Self::new(pty, term, listener.clone())
-                });
-                match result {
-                    Ok((mut event_loop, notifier)) => {
-                        listener.transport().set_notifier(notifier.clone());
-                        // The spawner may have given up waiting; the loop still
-                        // runs and exits on its own shutdown flag.
-                        report_best_effort("PTY owner ready signal", ready_tx.send(Ok(notifier)));
-                        event_loop.run();
-                    }
+                let pty = match PseudoConsole::spawn(&opts, winsize) {
+                    Ok(pty) => pty,
                     Err(error) => {
                         report_best_effort(
                             "PTY owner spawn-failure signal",
                             ready_tx.send(Err(error.to_string())),
                         );
+                        return;
                     }
+                };
+                let Some(pid) = pty.child_pid() else {
+                    // Report first: `pty` drops at the end of this block, and
+                    // that drop is what waits out the grace period.
+                    report_best_effort(
+                        "PTY owner spawn-failure signal",
+                        ready_tx.send(Err("the PTY child process id is unavailable".to_owned())),
+                    );
+                    return;
+                };
+                listener
+                    .logging()
+                    .set_identity(local_log_identity(&program, pid));
+                if logging.enabled
+                    && let Err(error) = listener.logging().start(&logging)
+                {
+                    log::warn!("Local terminal automatic logging did not start: {error}");
                 }
+
+                let (mut event_loop, notifier) = Self::new(pty, term, listener.clone(), poll);
+                listener.transport().set_notifier(notifier.clone());
+                // The spawner may have given up waiting; the loop still runs and
+                // exits on its own shutdown flag.
+                report_best_effort("PTY owner ready signal", ready_tx.send(Ok(notifier)));
+                event_loop.run();
             })?;
         match ready_rx.recv() {
             Ok(Ok(notifier)) => Ok((notifier, join)),
@@ -237,14 +249,18 @@ impl ShellEventLoop<tty::Pty> {
 }
 
 impl<P: EventedPty + OnResize> ShellEventLoop<P> {
-    /// Create a new event loop around an already-open PTY. Call `run()` on the
-    /// owner thread.
+    /// Create a new event loop around an already-open PTY and a poller the
+    /// caller built. Call `run()` on the owner thread.
+    ///
+    /// Infallible on purpose: the caller owns the PTY by this point, and a
+    /// failure here would drop it — and serve its grace period (DEC-0016) —
+    /// before anyone could be told. `Poller::new` is therefore the caller's.
     pub(crate) fn new(
         pty: P,
-        term: std::sync::Arc<FairMutex<Term<LocalListener>>>,
+        term: SharedTerminal,
         listener: LocalListener,
-    ) -> io::Result<(Self, ShellNotifier)> {
-        let poll = std::sync::Arc::new(Poller::new()?);
+        poll: std::sync::Arc<Poller>,
+    ) -> (Self, ShellNotifier) {
         let control = std::sync::Arc::new(ShellControl::default());
         let (tx, rx) = mpsc::sync_channel(LOCAL_COMMAND_QUEUE_CAPACITY);
         let notifier = ShellNotifier {
@@ -252,7 +268,7 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
             poller: poll.clone(),
             control: control.clone(),
         };
-        Ok((
+        (
             Self {
                 pty,
                 term,
@@ -262,7 +278,7 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
                 control,
             },
             notifier,
-        ))
+        )
     }
 
     /// Run the loop until shutdown or child exit. Blocks the calling thread.
@@ -271,7 +287,7 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
         let mut write_queue: VecDeque<Cow<'static, [u8]>> = VecDeque::new();
 
         // Register PTY with poller.
-        let interest = PollEvent::readable(0);
+        let interest = PollEvent::readable(PTY_READ_WRITE_TOKEN);
         let poll_opts = PollMode::Level;
         if let Err(err) = unsafe { self.pty.register(&self.poll, interest, poll_opts) } {
             error!("ShellEventLoop: register error: {err}");
@@ -325,8 +341,12 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take();
-            if let Some(size) = pending_resize {
-                self.pty.on_resize(size);
+            if let Some(size) = pending_resize
+                && let Err(error) = self.pty.on_resize(size)
+            {
+                // The session is still usable at the old size, so keep it alive
+                // (docs/agents/error-policy.md, transport row).
+                log::warn!("ShellEventLoop: PTY resize failed: {error}");
             }
 
             // Drain queued input (non-blocking). Resize and shutdown never
@@ -368,8 +388,10 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
                 }
 
                 if event.key == PTY_CHILD_EVENT_TOKEN {
-                    if let Some(tty::ChildEvent::Exited(status)) = self.pty.next_child_event() {
-                        self.term.lock().exit();
+                    if let Some(ChildEvent::Exited(status)) = self.pty.next_child_event() {
+                        // Nothing to tell the engine: liveness is
+                        // `SharedSessionState::alive`, and the pump publishes
+                        // the exit itself.
                         publish_child_exit(&self.pump, status);
                         self.deregister_pty();
                         return;
@@ -382,12 +404,15 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
                     let parse_start = diagnostics_enabled.then(std::time::Instant::now);
                     #[cfg(feature = "terminal-diagnostics")]
                     let mut lock_started = None;
-                    let mut unprocessed = 0;
+                    let mut unprocessed: usize = 0;
                     let mut processed = 0;
                     let mut terminal = None;
 
                     loop {
-                        match self.pty.reader().read(&mut buf[unprocessed..]) {
+                        let read_end = unprocessed
+                            .saturating_add(MAX_LOCKED_READ)
+                            .min(READ_BUFFER_SIZE);
+                        match self.pty.reader().read(&mut buf[unprocessed..read_end]) {
                             Ok(0) if unprocessed == 0 => break,
                             Ok(got) => unprocessed += got,
                             Err(err) => match err.kind() {
@@ -403,36 +428,91 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
                             },
                         }
 
-                        // Lock terminal.
-                        let terminal = match &mut terminal {
-                            Some(t) => t,
-                            None => {
-                                let guard = match self.term.try_lock_unfair() {
-                                    None if unprocessed >= READ_BUFFER_SIZE => {
-                                        self.term.lock_unfair()
+                        {
+                            // Lock terminal.
+                            let engine = match &mut terminal {
+                                Some(engine) => engine,
+                                None => {
+                                    let guard = match self.term.try_lock_unfair() {
+                                        None if unprocessed >= READ_BUFFER_SIZE => {
+                                            self.term.lock_unfair()
+                                        }
+                                        None => continue,
+                                        Some(guard) => guard,
+                                    };
+                                    #[cfg(feature = "terminal-diagnostics")]
+                                    if diagnostics_enabled {
+                                        lock_started = Some(std::time::Instant::now());
                                     }
-                                    None => continue,
-                                    Some(t) => t,
-                                };
-                                #[cfg(feature = "terminal-diagnostics")]
-                                if diagnostics_enabled {
-                                    lock_started = Some(std::time::Instant::now());
+                                    terminal.insert(guard)
                                 }
-                                terminal.insert(guard)
-                            }
-                        };
+                            };
 
-                        // Feed bytes to Term (parse + absolute line accounting).
-                        self.pump.advance(terminal, &buf[..unprocessed]);
+                            // Feed the chunk to the engine: parse, drain the
+                            // batch, collect this batch's events.
+                            self.pump.advance(engine, &buf[..unprocessed]);
+                        }
 
                         processed += unprocessed;
                         unprocessed = 0;
 
-                        // Do NOT break at MAX_LOCKED_READ — read until the pipe is empty.
-                        // When the pipe is empty, try_read() stores a waker → the reader
-                        // thread notifies when more data arrives → no stalling.
-                        // The Term lock is held while reading, but FairMutex ensures the
-                        // UI can acquire the lock once the event loop releases it.
+                        // Chunk boundary: hand the engine to a waiting frame
+                        // rather than at the end of the burst. A fair mutex
+                        // cannot help a waiter that never sees an unlock, and
+                        // this loop holds its guard until the pipe runs dry —
+                        // the `US-0082` verifier measured a frame waiting
+                        // 3 800 batches / 354 ms that way, against one batch /
+                        // 157 µs when the loop yields.
+                        //
+                        // Two rules shape it. This batch's colour replies leave
+                        // first (R-37): conhost blocks for up to a second on a
+                        // query answer, and that must not queue behind a frame.
+                        // And the yield must not leave the read loop: the conout
+                        // ring re-arms its wake-up only when a read finds it
+                        // empty (`crates/pty/src/windows/pipe.rs`), so a loop
+                        // that stops reading with bytes still buffered parks in
+                        // `poll.wait` and the session freezes. The next pass
+                        // keeps draining the pipe into `buf` and re-locks once
+                        // the frame is done.
+                        if self.term.take_render_demand()
+                            && let Some(guard) = terminal.take()
+                        {
+                            let queries = self.pump.take_color_queries();
+                            let replies = if queries.is_empty() {
+                                Vec::new()
+                            } else {
+                                self.pump.color_replies(&guard, queries)
+                            };
+                            #[cfg(feature = "terminal-diagnostics")]
+                            if diagnostics_enabled && let Some(start) = lock_started.take() {
+                                record_lock_sample(&mut stat_lock_hold_us, start);
+                            }
+                            // Fair unlock: the engine goes to the frame.
+                            drop(guard);
+                            self.pump.write_color_replies(replies);
+                            // A yield is a batch boundary, so it ends a batch:
+                            // publish the line count, deliver the events this
+                            // batch collected and post its repaint hint. Without
+                            // this the loop only ever finishes a batch when the
+                            // transport runs dry — which ConPTY does tens of
+                            // thousands of times a second, but a socket under a
+                            // flood does not, leaving the UI with no hints and
+                            // no title/cwd/OSC events for the length of the
+                            // flood. Safe to block here: the guard is gone
+                            // (CORR-01).
+                            self.pump.finish_batch_blocking(true);
+                            // Counted here because the batch ends here; the
+                            // post-loop tally only sees what came after.
+                            #[cfg(feature = "terminal-diagnostics")]
+                            if diagnostics_enabled {
+                                stat_bytes += processed as u64;
+                            }
+                            processed = 0;
+                        }
+
+                        // Otherwise read on: when the pipe is empty `read` arms
+                        // the wake-up, the pipe thread posts on the next bytes,
+                        // and the loop parks in `poll.wait`.
                     }
 
                     // Answer OSC 10/11/12 color queries collected during parsing.

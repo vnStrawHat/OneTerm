@@ -1,0 +1,12 @@
+# OneTerm VT parity expectation: cursor, modes, palette, title, tab stops,
+# scroll region. Blessed by the vendored engine at US-0072 and FROZEN.
+version 1
+cursor row=4 col=0 shape=Block
+pending_wrap 0
+modes ALTERNATE_SCROLL LINE_WRAP SHOW_CURSOR URGENCY_HINTS
+title_events 3
+title_event.0 set:kchibisov%40Zodiac:%7E/src/rust/alacritty-workspace/fork
+title_event.1 set:echo%20-e%20%27%5Ce%5B58%3B2%3B255%3B0%3B255m%5Ce%5B4:1mUNDERLINE%5Ce%5B4:2mDOUBLE%5Ce%5B58:5:196m%5Ce%5B4:3mUh%CC%B7%CC%97ERCURL%5Ce%5B4:4mDOTTED%5Ce%5B4:5mDASHED%5Ce%5B59mNOT_COLORED_DASH%5Ce%5B0m%27
+title_event.2 set:kchibisov%40Zodiac:%7E/src/rust/alacritty-workspace/fork
+tab_stops 8,16,24,32,40,48,56,64,72,80,88,96,104,112,120,128,136,144,152,156
+scroll_region top=0 bottom=39

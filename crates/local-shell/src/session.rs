@@ -1,24 +1,22 @@
-//! `LocalSession` — spawn a local shell via `alacritty_terminal::tty` on a
-//! dedicated PTY owner thread (ConPTY on Windows).
+//! `LocalSession` — spawn a local shell via `oneterm-pty` on a dedicated PTY
+//! owner thread (ConPTY on Windows).
 //!
 //! This file holds the spawn path, the struct, and its inherent helpers; the
 //! `TerminalSession` implementation lives in `session_terminal.rs`. See
 //! `docs/terminal-backend.md` §6.2.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
-use alacritty_terminal::event::WindowSize;
-use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::{Config, Term};
-use alacritty_terminal::tty::{Options, Shell};
 use async_channel::Receiver;
+use oneterm_pty::{Options, Shell, WindowSize};
 
 use oneterm_core::config::resolve_shell;
 use oneterm_core::{AppError, LocalShellConfig, TerminalLogConfig, home_dir};
 use oneterm_terminal::{
     ClipboardOrigin, GridSize, OscRouter, PtySize, PtyTransport, SessionEvent, SessionEventSink,
-    SharedSessionState, SharedState, TerminalError, TerminalSecurityPolicy,
+    SharedSessionState, SharedState, SharedTerminal, TerminalError, TerminalSecurityPolicy,
+    new_shared_terminal,
 };
 
 use crate::event_loop::ShellEventLoop;
@@ -26,7 +24,7 @@ use crate::transport::{LocalListener, LocalTransport};
 
 /// A local shell session.
 pub struct LocalSession {
-    pub(crate) term: Arc<FairMutex<Term<LocalListener>>>,
+    pub(crate) term: SharedTerminal,
     pub(crate) listener: LocalListener,
     pub(crate) event_rx: Mutex<Option<Receiver<SessionEvent>>>,
     pub(crate) state: SharedState,
@@ -56,9 +54,11 @@ impl LocalSession {
                 resolved.args,
             )),
             working_directory: cfg.cwd.clone().or_else(home_dir),
-            drain_on_exit: false,
             env: resolved.env,
-            #[cfg(not(windows))]
+            // The engine measures cluster widths with `wcswidth`, so the console
+            // host is asked for the same rule.
+            glyph_width: oneterm_pty::GlyphWidth::WcsWidth,
+            #[cfg(unix)]
             child_signal_mask: None,
             // Escape every argument with the C-runtime rules so user-supplied
             // `Custom` args and the PowerShell `-Command` payload survive
@@ -69,8 +69,8 @@ impl LocalSession {
             escape_args: true,
         };
         let winsize = WindowSize {
-            num_lines: initial.rows,
-            num_cols: initial.cols,
+            rows: initial.rows,
+            cols: initial.cols,
             cell_width: 0,
             cell_height: 0,
         };
@@ -90,15 +90,7 @@ impl LocalSession {
             cols: initial.cols as usize,
             lines: initial.rows as usize,
         };
-        let term_config = Config {
-            scrolling_history: scrollback_history,
-            ..Default::default()
-        };
-        let term = Arc::new(FairMutex::new(Term::new(
-            term_config,
-            &size,
-            listener.clone(),
-        )));
+        let term = new_shared_terminal(size, scrollback_history);
 
         let (_notifier, owner_join) = ShellEventLoop::spawn_owned(
             opts,
@@ -181,9 +173,9 @@ fn reap_owner_thread(join: std::thread::JoinHandle<()>) {
     }
 }
 
-/// The program string handed to alacritty for `resolved.program`.
+/// The program string handed to `oneterm-pty` for `resolved.program`.
 ///
-/// On Windows alacritty joins the program and its arguments into one
+/// On Windows the transport joins the program and its arguments into one
 /// `CreateProcessW` command line with `lpApplicationName = NULL`, so an unquoted
 /// path containing spaces (`C:\Program Files\PowerShell\7\pwsh.exe`) is
 /// resolved ambiguously (CWE-428). `Options::escape_args` only escapes the
@@ -199,7 +191,7 @@ fn program_argument(program: &Path) -> String {
 }
 
 /// Quote one token with the C-runtime command-line rules that `CreateProcessW`
-/// consumers use (the same rules alacritty applies to arguments): wrap in double
+/// consumers use (the same rules `Options::escape_args` applies): wrap in double
 /// quotes when the token is empty or contains whitespace, and double the
 /// backslashes that precede an embedded or closing quote.
 fn quote_windows_argument(token: &str) -> String {
@@ -249,3 +241,7 @@ impl Drop for LocalSession {
 #[cfg(test)]
 #[path = "session_tests.rs"]
 mod session_tests;
+
+#[cfg(all(test, windows))]
+#[path = "session_orphan_tests.rs"]
+mod session_orphan_tests;

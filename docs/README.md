@@ -16,7 +16,6 @@ navigation set free of dead paths).
 | [`HARNESS.md`](HARNESS.md) | Documentation-first workflow (Spec Intake → work packet → change → verify → reconcile). Templates in [`templates/`](templates/). |
 | [`../README.md`](../README.md) | User-facing README: features, build & run, release packaging. |
 | [`../scripts/README.md`](../scripts/README.md) | Every script under `scripts/`, and which ones CI runs. |
-| [`../vendor/README.md`](../vendor/README.md) | Vendored terminal-engine forks (`vte`, `alacritty_terminal`): provenance, patch model, refresh/check. |
 | [`../THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md), [`../NOTICE`](../NOTICE) | Third-party components and licences (generated). |
 
 ## Agent guides — `agents/` (current, mandatory reading before code changes)
@@ -26,7 +25,7 @@ navigation set free of dead paths).
 | [`agents/structure.md`](agents/structure.md) | Directory tree, crate responsibility table, structure conventions. |
 | [`agents/crate-dependency-rules.md`](agents/crate-dependency-rules.md) | Hard crate & dependency rules R1–R12 and their verification commands. |
 | [`agents/code-style.md`](agents/code-style.md) | Rust conventions (mandatory). |
-| [`agents/dependencies.md`](agents/dependencies.md) | Dependency version policy, vendored terminal forks, allowed auxiliary crates, reference-first research. |
+| [`agents/dependencies.md`](agents/dependencies.md) | Dependency version policy, allowed auxiliary crates, reference-first research. |
 | [`agents/error-policy.md`](agents/error-policy.md) | Runtime error handling and recovery rules. |
 | [`agents/persistence.md`](agents/persistence.md) | Persisted files (`terminal.json`, `ui_config.json`, `docks.json`, `ssh_session.json`, …): schema owners and storage mechanics. |
 
@@ -48,7 +47,7 @@ Status is stated in each file's header. "Current" = kept in step with the code;
 | [`sftp-follow-terminal-cwd/`](sftp-follow-terminal-cwd/) | SFTP browser follows the terminal CWD (OSC 7) | historical (shipped state summarised in the header) |
 | [`auto-update.md`](auto-update.md) | GitHub Releases auto-update: check, download, verify, install, rollback | current (implemented; gaps listed) |
 | [`crash-reporting.md`](crash-reporting.md) | Panic / native crash capture and recovery | current |
-| [`osc-agent-status.md`](osc-agent-status.md) | OSC 9;7 agent-status proposal (the wire spec) | current |
+| [`osc-agent-status.md`](osc-agent-status.md) | OSC 20308 agent-status proposal (the wire spec) | current |
 | [`agent-panel-display.md`](agent-panel-display.md) | Agent Panel model, folding, display rules | current |
 | [`osc-sequences-checklist.md`](osc-sequences-checklist.md) | Which OSC sequences OneTerm handles and where | current |
 | [`gui-layout.md`](gui-layout.md) | Original workspace layout design (docks, persistence) | historical |

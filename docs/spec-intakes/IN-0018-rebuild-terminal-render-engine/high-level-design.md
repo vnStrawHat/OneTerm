@@ -15,27 +15,39 @@ The terminal **engine** (`crates/terminal`, alacritty grid) is consumed unchange
 Three ideas drive the design:
 
 1. **One snapshot, per-row plans, one paint layer.** Each frame the element calls
-   `snapshot_into` once, decides which display rows changed (damage + row hash), rebuilds only
-   those rows' `RowPlan`s (background spans, shaped text runs, shape quads, decorations), and
+   `snapshot_into` once, decides which display rows changed, rebuilds only those rows'
+   `RowPlan`s (background spans, shaped text runs, shape quads, decorations), and
    paints every plan inside a single `paint_layer` so the whole grid is one bounds-tree insert
    and a handful of draw calls. An idle terminal shapes nothing and plans nothing.
+
+   **Amended by IN-0029's `US-0085`.** The frame *is* the engine's render state: `Frame` wraps
+   the `TerminalContent` that owns this view's `RenderState`, and a `FrameRow` borrows a
+   `RenderRow` instead of a copied dense cell vector. "Which rows changed" is therefore no
+   longer damage plus a per-row content hash — it is one comparison of `(RowId, SeqNo)`, the
+   row's identity and the engine batch that last changed it. The engine stamps a row only when
+   it really changes and copies it into this state only past this state's watermark, so the key
+   is the verification; a scroll arrives as `Partial { scrolled }` and shifts the plans instead
+   of invalidating them; and a frame the engine reports `Unchanged` skips candidate selection,
+   the URL scan and layout entirely.
 2. **Shapes are geometry, not glyphs.** Box drawing, blocks, shades, braille, and powerline
    code points are built in a center-origin cell space from `Stroke`/`Rect` primitives, mirrored
    by reflection, snapped symmetrically to device pixels, and painted as quads — arcs,
    diagonals and powerline as coverage-anti-aliased quads rasterized on a mirror-exact sample
    grid. They join seamlessly across cells in any font.
-3. **Alacritty stops at `render/frame.rs`.** That file is the only module that names an
-   alacritty type; everything above it works with view-owned `Cell`, `CellFlags`, `Color`,
-   `CursorShape`, `Selection`, and `Damage`.
+3. **The engine stops at `render/frame.rs`.** That file is the only module that names the
+   engine's cell vocabulary; everything above it works with view-owned `Cell`, `CellFlags`,
+   `Color`, `CursorShape` and `Selection`. (IN-0029's `US-0085` replaced the engine behind that
+   seam and deleted `Damage`: the tri-state `RenderUpdate` the render state returns says what a
+   frame did, and `render_has_single_engine_file` is the boundary test.)
 
 ## Diagram
 
 ```text
 crates/terminal (engine, unchanged)             crates/terminal-view (this intake)
 ┌──────────────────────────────┐   snapshot_into   ┌────────────────────────────────────────────┐
-│ Entity<Box<dyn TerminalSession>>│ ───────────────▶ │ render/frame.rs   Frame (view-owned cells)  │
-│  · grid + damage             │   query_state    │      │ damage ∪ cursor row ∪ scroll rotation │
-│  · SessionEvent channel      │ ◀─── write/mouse │ render/plan_cache.rs  hash-verify → rebuild │
+│ Entity<Box<dyn TerminalSession>>│ ───────────────▶ │ render/frame.rs   Frame over RenderState    │
+│  · grid + per-row SeqNo      │   query_state    │      │ (RowId, SeqNo) key + scroll shift     │
+│  · SessionEvent channel      │ ◀─── write/mouse │ render/plan_cache.rs  key differs → rebuild │
 └──────────────────────────────┘                  │      │ RowPlan  (row_plan.rs + shapes.rs +   │
         ▲                                         │      │           glyphs.rs + theme/ + url/)   │
         │ events pump (foreground task)           │ render/element.rs  prepaint: geometry,      │
@@ -130,11 +142,11 @@ no renderer structure, and their tests are the acceptance spec).
 | `src/lib.rs` | module declarations, the 7 public items, `init` | 0050 | 50 |
 | `src/render/mod.rs` | declarations only | 0046 | 20 |
 | `src/render/shapes.rs` + `shapes_tests.rs` | `shape_quads`, `Stroke`/`DeviceRect` (with coverage alpha), mirror/rotate, symmetric snap, coverage rasterizer for arcs/diagonals/powerline | 0046 | 650 + 450 |
-| `src/render/frame.rs` | `Frame`, `FrameRow`, `Cell`, `Color`, `CellFlags`, `CursorShape`, `Selection`, `Damage`; the only alacritty-typed file | 0047 | 320 |
+| `src/render/frame.rs` | `Frame`, `FrameRow`, `Cell`, `Color`, `CellFlags`, `CursorShape`, `Selection`, `RowKey`; the only engine-typed file (`Damage` deleted at IN-0029's `US-0085`, which put the frame on `RenderState`) | 0047 | 320 |
 | `src/render/metrics.rs` | `CellMetrics` (device-snapped cell), `GridGeometry` (origin, padding, gutter, rows/cols, hit-test), `grid_size_for` | 0047 | 220 |
 | `src/render/glyphs.rs` | `GlyphCache`: run text → `ShapedLine` via `shape_line_by_hash`/`force_width`, generation eviction | 0047 | 160 |
 | `src/render/row_plan.rs` | `RowPlan` + `build_row_plan` (bg spans, text runs, shape quads coalesced, decorations, class merge, contrast) | 0047 | 480 |
-| `src/render/plan_cache.rs` | `PlanCache`: candidates (damage ∪ cursor row ∪ mask delta), scroll rotation, hash verify, style-key invalidation | 0047 | 260 |
+| `src/render/plan_cache.rs` | `PlanCache`: `(RowId, SeqNo)` keys, scroll shift, URL mask delta, style-key invalidation (IN-0029 `US-0085`; was damage ∪ cursor row plus a hash verify) | 0047 | 260 |
 | `src/render/state.rs` | `RenderState` (frame, plans, glyphs, geometry, inputs, overlays, scratch, stats) shared by view/element/input | 0047 | 150 |
 | `src/render/element.rs` + `element_tests.rs` | `TerminalElement` (`Element` impl), `PrepaintState`, paint order, IME install hook | 0047 | 380 + 260 |
 | `src/render/cursor.rs` | cursor shape/color resolution, blink gating, hollow vs filled, glyph re-paint | 0047 | 160 |
@@ -207,8 +219,8 @@ input handlers):
 
 | Field | Lifetime / reuse |
 | --- | --- |
-| `frame: Frame` | wraps the reused `TerminalContent`; `snapshot_into` reuses its `cells` and damage buffers |
-| `plans: PlanCache` | one `RowPlan` per display row (color spans flattened per row); vectors cleared, not reallocated, on rebuild; rotated on scroll; `candidate` / `dirty` bitsets, URL mask double buffer and `wraps` scratch |
+| `frame: Frame` | wraps the reused `TerminalContent`, which owns this view's `RenderState` and its damage watermark; `snapshot_into` reuses the copied rows |
+| `plans: PlanCache` | one `RowPlan` per display row (color spans flattened per row); vectors cleared, not reallocated, on rebuild; shifted on scroll; a `RowKey` per row, a `dirty` bitset, the URL mask double buffer and `wraps` scratch |
 | `glyphs: GlyphCache` | `HashMap<RunKey, (ShapedLine, generation)>`, cap 4096; entries unused for 2 generations are evicted when the cap is hit |
 | `geometry: Option<GridGeometry>` | written in prepaint, read by input handlers (hit-test contract) |
 | `inputs: RenderInputs` | written by `TerminalView::render` before the element is built |
@@ -228,12 +240,18 @@ tasks, `last_pushed_palette`, `cached_font`.
 
 | Change | Effect on plans |
 | --- | --- |
-| `Damage::Full` | every row is a candidate; each candidate is re-hashed; only rows whose hash differs from the stored hash are rebuilt |
-| `Damage::Rows(lines)` | listed rows are candidates (hash-verified) |
-| cursor row | always a candidate (catches undamaged echo) |
-| `display_offset` delta `d`, `abs(d) < rows`, grid unchanged | plans and hashes are rotated (`rotate_right(d)` when `d > 0`, i.e. scrolling into history); the `d` scrolled-in rows are candidates; the rest are hash-verified only if damage says so |
-| `abs(d) >= rows`, grid size change, `StyleKey` change (font family/size/weight/features, palette hash, min contrast, semantic enabled, shell profile, show_gutter) | all rows rebuilt (hash check skipped) |
-| URL mask row changed vs previous frame | that row is rebuilt (fixes wrapped-URL continuation rows); the mask is recomputed only when a hash-verified candidate actually changed, so an idle frame (cursor row always a candidate) never rescans |
+Rewritten at IN-0029's `US-0085`: the engine's tri-state and its per-row sequence number
+replace the damage list, the cursor-row candidate and the content hash.
+
+| Change | Effect on plans |
+| --- | --- |
+| `RenderUpdate::Unchanged` | nothing at all: no key scan, no URL scan, no rebuild (`FrameStats::frames_unchanged`) |
+| `RenderUpdate::Full` | every row's key differs, so every row is rebuilt |
+| `RenderUpdate::Partial { scrolled: 0 }` | the rows the engine copied have new `SeqNo`s; only those keys differ, and only they are rebuilt. A cursor move, a selection or a mode change copies no row and rebuilds none |
+| `RenderUpdate::Partial { scrolled: d }`, `abs(d) < rows` | plans and keys are shifted the way the render state shifts its rows (`rotate_left(d)` for `d > 0`); the rows shifted in from off-screen no longer match their key and are rebuilt |
+| `abs(d) >= rows`, generation change (resize, reflow, alt swap, `RIS`), palette epoch change | the engine returns `Full` |
+| grid size change, `StyleKey` change (font family/size/weight/features, palette hash, min contrast, semantic enabled, shell profile, show_gutter), device cell size change | every key is dropped and every row rebuilt |
+| URL mask row changed vs previous frame | that row is rebuilt (fixes wrapped-URL continuation rows); the mask is recomputed only when some row's key actually changed, so an idle frame never rescans |
 | selection, hover, search matches, cursor blink, focus, scrollbar | never touch plans (painted as overlays / cursor layer) |
 | `GlyphCache` | key includes font family/size/weight/style bits, so a style change naturally misses; stale entries age out |
 | gutter | labels are shaped through `GlyphCache` keyed by label text, so unchanged rows hit the cache |
@@ -337,7 +355,7 @@ gutter stamps, search highlights, semantic overlay, shell profile) travels in
 | 5 | contrast luminance exponent 2 (wart 9) | WCAG exponent 2.4 | inventory wart |
 | 6 | settings `min_contrast` 0.0 silently disables enforcement (wart 10) | `min_contrast <= 0.0` keeps the theme default 4.5; `0.0 < v <= 1.0` disables; `> 1.0` is the threshold | inventory wart |
 | 7 | rounded corners via 4×4 supersampled alpha rects; diagonals and most powerline glyphs from the font or as blocks | coverage-anti-aliased quads, as the old engine, but symmetric: 4×4 samples on a mirror-exact grid for rounded corners, `╱╲╳` and all sixteen powerline glyphs, run-length merged | acceptance rework 2026-09-09 — the first cut used GPUI stroked/filled paths, which the DirectX backend paints without anti-aliasing at cell sizes (visible stair steps); quads with coverage alpha are what the old engine did and look smooth |
-| 8 | scroll with `Damage::Full` rebuilt every row | rotation + hash verification rebuilds only changed rows | performance; observable output identical |
+| 8 | scroll with `Damage::Full` rebuilt every row | the engine reports a scroll as a delta and the plans shift with their rows; only the rows shifted in are rebuilt (IN-0029 `US-0085`; the hash verification this deviation originally added is gone with it) | performance; observable output identical |
 | 9 | light stroke thickness `round(cw/6)` etc., independent of the font weight | thickness table in `shapes.md`, scaled by `clamp(weight / 400, 1, 2.25)` for the cell's effective font weight (settings weight, +300 under SGR bold; US-0052); the painted thickness equals the nominal on both axes, a stroke that cannot be centred sits half a pixel toward the top/left (never widens) | symmetric snapping (DEC-0007 item 4, amended 2026-09-09: uniform thickness across axes); bold box frames were thinner than bold text (owner request 2026-09-09) |
 | 10 | URL continuation rows only replanned when themselves damaged | mask delta marks them dirty | correctness of always-on URL underline across wraps |
 

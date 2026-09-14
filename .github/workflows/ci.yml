@@ -20,7 +20,6 @@ on:
       - "docs/**"
       - "scripts/**"
       - "crates/**"
-      - "vendor/**"
       - ".github/**"
   pull_request:
     paths:
@@ -38,7 +37,6 @@ on:
       - "docs/**"
       - "scripts/**"
       - "crates/**"
-      - "vendor/**"
       - ".github/**"
 
 permissions:
@@ -62,10 +60,6 @@ jobs:
           python-version: "3.11"
       - name: Verify workspace policy and crate versions
         run: python scripts/verify-dependency-graph.py
-      - name: Verify vendored forks == pristine + patches
-        # Fetches the pristine vte / alacritty sources (network) and diffs them,
-        # patched, against vendor/**.
-        run: bash vendor/refresh.sh --check
       - name: Validate completion catalogs
         run: python scripts/completion-catalog.py validate
       - name: Verify architecture documentation paths
@@ -127,6 +121,12 @@ jobs:
       # type-checks every target and `cargo test` links them (BUILD-28).
       - name: Test workspace
         run: cargo test --workspace
+      # The VT engine's whole-history integrity walk (IN-0029 R-28). It is
+      # bounded to the rows an operation touched by default, because at a
+      # 100 000-row scrollback the full walk costs milliseconds per `feed`; CI
+      # is where the unbounded invariants are gated.
+      - name: Test the VT engine with the full integrity walk
+        run: cargo test -p oneterm-vt --features vt-paranoid
 
   windows-quality:
     # Windows is the primary platform, so lint and run the whole workspace
@@ -154,6 +154,50 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test workspace
         run: cargo test --workspace
+      # The VT engine's whole-history integrity walk (IN-0029 R-28). It is
+      # bounded to the rows an operation touched by default, because at a
+      # 100 000-row scrollback the full walk costs milliseconds per `feed`; CI
+      # is where the unbounded invariants are gated.
+      - name: Test the VT engine with the full integrity walk
+        run: cargo test -p oneterm-vt --features vt-paranoid
+
+  vt-bench:
+    # The VT engine benchmark (IN-0029). It RECORDS and never gates: at
+    # realistic shell and SSH rates the engine has two to three orders of
+    # magnitude of headroom, so a threshold here would be a flaky test
+    # measuring the runner. `continue-on-error` plus no assertions is the
+    # point — read the artifact, do not let it fail a pull request.
+    name: VT engine benchmark (recorded, never gated)
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Read pinned toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+          [ -n "$channel" ] || { echo "::error::rust-toolchain.toml has no channel"; exit 1; }
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 2026-07-23
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 tag, 2026-07-23
+      - name: Run the five tiers
+        # A smaller byte budget than a local record run: a shared runner is not
+        # the machine the baseline in the packet was measured on, and this job
+        # exists to show a trend, not to replace that measurement.
+        run: >
+          cargo run -p oneterm-tools --release --bin vt-bench --
+          all --mib 25 --out vt-bench.md
+      - name: Publish the table
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: vt-bench-${{ github.sha }}
+          path: vt-bench.md
 
   # Linux and Windows already run `cargo test --workspace` in the two quality
   # gates above; macOS is the only platform without that coverage.

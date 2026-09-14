@@ -6,13 +6,14 @@
 > signatures live in `crates/terminal/src/session.rs`, `crates/terminal/src/backend/`,
 > `crates/local-shell/src/` and `crates/ssh/src/`.
 >
-> Design document for the terminal part: **local shell** + **SSH session**, sharing a
-> renderer based on `alacritty_terminal`. Windows-first priority. Local shell can be
-> `cmd` / `powershell` / `pwsh` / custom.
+> Design document for the terminal part: **local shell** + **SSH session**, sharing one VT
+> engine. Windows-first priority. Local shell can be `cmd` / `powershell` / `pwsh` / custom.
 >
-> **Primary reference**: Zed (`zed-industries/zed`) uses exactly `alacritty_terminal`
-> (tty + `EventLoop` + `FairMutex`) and renders via a custom GPUI Element. This design
-> maps 1:1 to Zed, replacing the chrome layer with `gpui-component`.
+> **The engine is `oneterm-vt` (`crates/vt`), OneTerm's own** (`IN-0029`, `DEC-0014`). The
+> shape below was derived from Zed's use of a patched `alacritty` fork — tty + event loop
+> + `FairMutex` + snapshot — which OneTerm vendored and shipped until `US-0087` deleted it.
+> The architecture survived the swap; the dependency did not, and §4 below records what
+> replaced it.
 >
 > Zed source files referenced (same rev lock `1d217ee39…`):
 > - `crates/terminal/src/terminal.rs` — model + EventLoop + PTY.
@@ -24,12 +25,14 @@
 >    (`PtyTransport`: write / resize / close) and its own read loop; parsing, OSC routing,
 >    event delivery and the state cache come from the shared pump layer in
 >    `oneterm-terminal::backend` (§5.3).
-> 2. **Rendering shares `alacritty_terminal`** via a custom GPUI `Element`.
-> 3. **Local uses `alacritty_terminal::tty` + `EventLoop`** (not `portable-pty`).
-> 4. **`alacritty_terminal` is taken from the `zed-industries/alacritty` fork** @ rev `fcf32feacb367b75ec84dd40f041e4fd411d3cc1`
->    (patched version with `TerminalContent`/`display_iter`/`content()`). This is the rev Zed
->    uses for `gpui` rev `1d217ee39…`, but it is a separate repo — not the zed monorepo.
-> 5. **alacritty concurrency model**: `Arc<FairMutex<Term<EP>>>` + snapshot.
+> 2. **Both sessions share one engine and one custom GPUI `Element`.**
+> 3. **Local uses `oneterm-pty` + OneTerm's own poll loop** (not `portable-pty`, and not
+>    an engine-supplied event loop). `oneterm-pty` owns the ConPTY / `openpty` transport and
+>    nothing else; see `docs/spec-intakes/IN-0029-vt-engine/low-level-design/pty.md`.
+> 4. **The VT engine is first-party** (`crates/vt`): no forked dependency, no `[patch]`, and a
+>    new capability is added under ordinary review (`DEC-0014`).
+> 5. **Concurrency model**: `Arc<FairMutex<Terminal>>` + snapshot. The engine owns no lock;
+>    the adapter in `crates/terminal` does.
 > 6. **The pure kit** (`core`) does not depend on GPUI.
 
 ---
@@ -43,7 +46,7 @@
 | 3 | Shared rendering | A single `TerminalElement` paints the grid for both local and ssh — only needs `&TerminalContent`. |
 | 4 | Snapshot, no lock-while-paint | The pump updates the snapshot; render reads the snapshot, does not hold `FairMutex` while painting. |
 | 5 | Windows-first | Local prefers ConPTY; `cmd`/`pwsh`/`powershell` shells are configurable. |
-| 6 | Strict rev lock | `gpui` + `gpui_platform` at the same zed monorepo rev; `alacritty_terminal` fork `zed-industries/alacritty` rev `fcf32fe…`. |
+| 6 | Strict version lock | `gpui` + `gpui_platform` move together as one release family. The VT engine is first-party, so it has no rev to lock. |
 
 ---
 
@@ -60,8 +63,8 @@
         │ TerminalSession trait (terminal)       │
    ┌────┴────────────────┐               ┌────────┴───────────────┐
    │  local-shell crate  │               │  ssh crate             │  ← INDEPENDENT
-   │  tty::Pty + poll    │               │  russh + shared tokio   │     don't know each other
-   │  loop (ConPTY)      │               │  channel + pty-req      │
+   │  PseudoConsole +    │               │  russh + shared tokio   │     don't know each other
+   │  poll loop (ConPTY) │               │  channel + pty-req      │
    │  LocalTransport     │               │  SshTransport (Cmd)     │
    │  Term<OscRouter<    │               │  Term<OscRouter<        │
    │   LocalTransport>>  │               │   SshTransport>>        │
@@ -69,9 +72,10 @@
         └──────────────┬──────────────────────────┘
                 ┌──────▼──────────┐
                 │ terminal crate  │  backend pump layer: SharedState, SessionEventSink,
-                │ (no GPUI)       │  OscRouter, LineAccounting,
-                │                 │  TerminalPump, PtyTransport; TerminalSession,
-                │                 │  TerminalContent, key/mouse encode, osc, url
+                │ (no GPUI)       │  OscRouter, TerminalPump, PtyTransport;
+                │                 │  TerminalHandle (lock + render demand);
+                │                 │  TerminalSession, TerminalContent,
+                │                 │  key/mouse encode, osc, url
                 └──────┬──────────┘
                 ┌──────▼───────┐
                 │  core crate  │  SshConfig, ShellKind/LocalShellConfig, SftpBackend,
@@ -81,7 +85,7 @@
 
 **Data flow**:
 - Input: `Keystroke` (GPUI) → `core::key_encode` → `Vec<u8>` → `session.write(bytes)` → PTY/channel.
-- Output: PTY/channel → pump (`ShellEventLoop` local / `ssh_main_task` tokio ssh) → `TerminalPump::advance` feeds the per-session printable-output logger and advances the visible terminal under the `Term` lock → `finish_batch` releases the lock and sends one `SessionEvent::Output` → View `cx.notify()` → `TerminalElement` prepaint calls `session.snapshot_into(&mut cache.snapshot)` (short `Term` lock, refills the reusable `TerminalContent` buffer held in `RenderCache` in place — zero steady-state allocation — and consumes damage) and paints from that buffer; `session.snapshot()` remains as the allocating convenience for tests and one-off reads. Logging behavior and file lifecycle are owned by [`terminal-logging.md`](terminal-logging.md).
+- Output: PTY/channel → pump (`ShellEventLoop` local / `ssh_main_task` tokio ssh) → `TerminalPump::advance` feeds the per-session printable-output logger and the engine under the terminal lock, collecting the batch's events → `finish_batch` releases the lock, sends those events and then one `SessionEvent::Output` → View `cx.notify()` → `TerminalElement` prepaint calls `session.snapshot_into(&mut cache.snapshot)` (short lock, one `render_update` into the `RenderState` the reusable `TerminalContent` in `RenderCache` owns — zero steady-state allocation — and advances *that buffer's* damage watermark) and paints from that buffer; `session.snapshot()` remains as the allocating convenience for tests and one-off reads. Logging behavior and file lifecycle are owned by [`terminal-logging.md`](terminal-logging.md).
 
 ---
 
@@ -90,8 +94,8 @@
 | Crate | Terminal role |
 |---|---|
 | `core` | `ShellKind` + `LocalShellConfig` + `SshConfig` (config), `SftpBackend`, `AppError` (leaf, no GPUI). |
-| `terminal` | `TerminalSession` trait + `SessionEvent`, `TerminalContent` snapshot, `TerminalPalette`, printable-output logging controller/parser, `key_encode`/`mouse_encode`/`osc`/`url`, and the **backend pump layer** (`backend` module: `SharedState`, `SessionEventSink`, `OscRouter`, `LineAccounting`, `TerminalPump`, `PtyTransport`) shared by both backends. |
-| `local-shell` | `LocalSession` implementing `TerminalSession`. Spawns a shell via `alacritty_terminal::tty::new` and pumps it with a custom poll loop (`ShellEventLoop<P: EventedPty>`) feeding `TerminalPump`. ConPTY on Windows. `LocalTransport: PtyTransport` (notifier queue). Only `LocalSession` is public. |
+| `terminal` | `TerminalSession` trait + `SessionEvent`, the `TerminalContent` frame, `TerminalPalette`, printable-output logging controller/parser, `key_encode`/`mouse_encode`/`osc`/`url`, the shared terminal handle (`TerminalHandle`: the `parking_lot::FairMutex` around `oneterm_vt::Terminal` plus the render-demand flag), and the **backend pump layer** (`backend` module: `SharedState`, `SessionEventSink`, `OscRouter`, `TerminalPump`, `PtyTransport`) shared by both backends. |
+| `local-shell` | `LocalSession` implementing `TerminalSession`. Spawns a shell via `oneterm_pty::PseudoConsole::spawn` and pumps it with a custom poll loop (`ShellEventLoop<P: EventedPty>`) feeding `TerminalPump`. ConPTY on Windows. `LocalTransport: PtyTransport` (notifier queue). Only `LocalSession` is public. |
 | `ssh` | `SshSession` implementing `TerminalSession`. russh client on the shared tokio runtime; `ssh_main_task` feeds `TerminalPump`. pty-req + shell + `window_change` + exit-status. `SshTransport: PtyTransport` (bounded `Cmd` channel). SFTP task lifetime tied to the connection. Only `SshSession` + `connect` are public. |
 | `terminal-view` | `TerminalElement` (custom `gpui::Element`), `TerminalView` (`Render`; one view type hosts any `TerminalSession`, local or SSH), `TerminalPanel`/`PanelSpec` (dock tab), IME (`EntityInputHandler`), mouse/wheel, font measure, theme → `TerminalPalette`. |
 | `app` | Installs the `SessionFactory` (`AppSessionFactory`) + `WorkspaceCommands` through `AppServices`; only crate that links `ssh`/`local-shell`. |
@@ -102,40 +106,78 @@
 
 ---
 
-## 4. Dependencies & rev lock
+## 4. Dependencies
 
 ```toml
 # root Cargo.toml [workspace.dependencies] (authoritative list: docs/agents/dependencies.md §1/§3)
-alacritty_terminal = { git = "https://github.com/zed-industries/alacritty", rev = "fcf32feacb367b75ec84dd40f041e4fd411d3cc1" }  # redirected to vendor/alacritty_terminal by [patch]
+oneterm-vt = { path = "crates/vt" }   # the VT engine: parser, grid, reflow, selection, damage, graphics
+oneterm-pty = { path = "crates/pty" } # the pseudo-console transport (ConPTY / openpty)
 async-channel = "2"      # event sub (no tokio leaked out)
 russh = { version = "0.61", default-features = false, features = ["ring", "flate2", "rsa"] }  # keys API is russh::keys (russh-keys was merged in)
 russh-sftp = "2.3"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "io-util", "net", "macros", "fs"] }
 ```
 
-> The fork is **vendored**: `vendor/alacritty_terminal` = pristine `fcf32fe` + the
-> patches in `vendor/patches/alacritty_terminal/` (single-pass OSC/clear hook), see
-> [`vendor/README.md`](../vendor/README.md).
-
-> ⚠️ **Mandatory**: `alacritty_terminal` must be taken from the `zed-industries/alacritty` fork @
-> rev `fcf32fe…` (the rev Zed uses for `gpui` rev `1d217ee39…`). NOT the zed monorepo.
-> Using crates.io `0.26` will be **missing** `TerminalContent`/`display_iter`/`content()`/`Block`
-> that rendering needs → won't compile. When changing the `gpui` rev → check the Zed workspace deps
-> to get the matching `alacritty_terminal` rev (the two revs can differ).
+> **There is no third-party terminal engine and no `[patch]` section.** OneTerm shipped a
+> vendored, patched `alacritty_terminal` / `vte` fork until `IN-0029` replaced it with
+> `crates/vt`; `US-0087` deleted the fork, its five patches, its refresh/check CI job and
+> both `[patch]` blocks. A capability the engine lacks is added to `crates/vt` under ordinary
+> review (`DEC-0014`), not to a fork.
 >
-> `portable-pty` is **no longer used** for local (brainstorm decision). `ssh` doesn't need a
-> local PTY — only needs `alacritty_terminal` for the Term grid.
+> `portable-pty` is **no longer used** for local (brainstorm decision), and `deny.toml` bans
+> it. `ssh` needs no local PTY — only the grid, which it gets through `crates/terminal`.
 
 ---
 
-## 5. Concurrency model: `Arc<FairMutex<Term<EP>>>` + snapshot
+## 5. Concurrency model: `Arc<TerminalHandle>` + snapshot
 
 ### 5.1. Why
 
-- The **pump** (local `EventLoop` thread / ssh tokio task) advances Term on another thread.
+- The **pump** (local `EventLoop` thread / ssh tokio task) feeds bytes to the engine on
+  another thread.
 - **Render** (`TerminalElement::paint`) runs on the GPUI main thread.
-- Both need access to the same `Term` ⇒ use `alacritty_terminal::sync::FairMutex`
-  (fair = the main thread doesn't starve for the lock while the pump is busy).
+- Both need access to the same engine ⇒ use a fair mutex (fair = the main thread doesn't
+  starve for the lock while the pump is busy).
+
+Since IN-0029 `US-0081` the engine is `oneterm_vt::Terminal`, which holds **no lock, no
+atomic and no interior mutability** and takes `&mut self`: the synchronisation is the
+embedder's choice, and `crates/terminal` makes it `parking_lot::FairMutex`. The shared
+handle is `oneterm_terminal::SharedTerminal` = `Arc<TerminalHandle>`
+(`crates/terminal/src/handle.rs`), which owns that mutex and one `oneterm_vt::Demand`.
+
+**The demand/yield handshake** the design adds on top of fairness: a fair mutex hands
+the lock over on unlock, but a pump that unlocks and immediately relocks still beats a
+sleeping waiter, so the render path raises a one-bit flag and the read loop asks for it
+at a chunk boundary. `US-0082` wired the adapter's half of it:
+
+- `TerminalHandle::lock_for_render()` raises the demand, then locks. Only the snapshot
+  path calls it — `query_state()` and `terminal_info()` run on the same thread and are
+  O(1) under the lock, so making them raise it would ask the pump to yield several times
+  per frame for reads that never wait.
+- `TerminalHandle::take_render_demand()` is the pump's half: "is a frame waiting for
+  me?", cleared by the asking. A read loop calls it at a chunk boundary — **after** that
+  batch's reply bytes have left (R-37, § 5.3) — and drops its guard when it answers
+  `true`. Both pumps do: `ssh_main_task` since `US-0084` (it locks per chunk, so its
+  answer to a raised flag is to yield the tokio task before the next chunk relocks; a
+  waiting frame gets the engine in about 400 us under a flood) and the local loop since
+  `US-0083` (`crates/local-shell/src/event_loop.rs`, the shape the 354 ms starvation was
+  measured on). `lock_unfair` / `try_lock_unfair` survive as aliases of `lock` /
+  `try_lock` until the last caller is rewritten.
+
+  How long a frame waits is `bytes-per-lock-hold / parse rate`, so the read is capped at
+  `MAX_LOCKED_READ` (64 KiB), the bytes handed to one `advance`. ConPTY delivers 82 bytes
+  at the median and never notices; a socket delivers ~600 KB per read, where the cap is
+  worth 10x on the worst-case wait (`US-0083`, measured both ways). A yield also **ends
+  the batch** (`finish_batch`), because on a transport that never runs dry that is the
+  only place a batch ever ends, and with it the repaint hint and the batch's events.
+
+  The yield gives the engine up **without leaving the read loop**, which is a
+  platform constraint rather than a preference: the conout ring re-arms its wake-up
+  only when a read finds it empty (`crates/pty/src/windows/pipe.rs`,
+  `PipeReader::read` arming `caller_waiting`), so a loop that stops reading while
+  bytes are still buffered parks in `poll.wait` and the session freezes. The loop
+  therefore drops the guard, keeps draining the pipe into its buffer, and re-locks
+  once the frame is done.
 
 ### 5.2. Snapshot vs live borrow (IMPORTANT)
 
@@ -148,80 +190,99 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "io-util",
 **Convention (as implemented)**: there is **no cached `last_content`**. The pump only
 sends the `Output` hint; `TerminalSession::snapshot()` (`TerminalModel::snapshot`,
 `crates/terminal/src/model.rs`) takes the `FairMutex` for the microseconds needed to
-copy `TerminalContent` (and consume the damage), releases it, and the element paints
+copy `TerminalContent` (and advance this consumer's damage watermark), releases it, and the element paints
 from that owned copy — the lock is never held **while painting**. Non-render reads use
 `query_state()` (O(1), no cells) or `query_line_range_cells()` (damage-free,
 O(window×cols)); there is deliberately no damage-free full-grid snapshot — an
 O(rows×cols) clone per event is a footgun. Every one of them is a short lock too, so the pump and the
 UI contend only briefly (see the "never block inside a `Term` callback" rule in §5.3).
 
-The snapshot also carries `graphics`: the Sixel images the vendored `Term` decoded since
-the previous snapshot (`Term::take_graphics`, each image handed out once). Cells reference
-them through `Cell::graphic()` (`GraphicCell { id, col, row }`), so an image scrolls, is
-erased and is resized with its cells; the view keeps the pixels in a bounded store
-(IN-0028, DEC-0012).
+**Damage is a per-row sequence number, not a reset pass.** The engine stamps every row
+it mutates with the batch's `SeqNo`; a consumer keeps a **watermark** and "changed for me"
+is `row.seq > watermark`. Nobody clears anybody else's damage, so a second consumer needs
+no engine change.
+
+**The frame source is the render state, and `TerminalContent` owns it** (`US-0082`). The
+watermark belongs to the buffer the consumer keeps — the one `RenderCache` reuses — so
+`snapshot_into` is one `Terminal::render_update` into it, and a freshly built
+`TerminalContent` reports `Full` by construction instead of consuming somebody else's
+damage. Native reads go through `TerminalContent::{update, rows, changed, size,
+render_cursor, modes, selection_range, placements, row_id, display_row}`.
+
+**There is nothing else on it** since `US-0085`. The dense `Vec<IndexedCell>`, the forked
+engine's value types around it and the per-frame rebuild that produced them are gone; the
+view reads `TerminalContent::rows` and resolves the engine's own `RenderRow` / `RenderCell`
+itself, so a frame that changed nothing copies nothing.
+
+The frame also carries `graphics`: the Sixel images decoded since the previous one (each
+handed out once, drained by the adapter through `Terminal::take_graphics`). Cells
+reference them through `Cell::graphic()` (`GraphicCell { id, col, row }`), whose offset
+inside the image is derived from the engine's placement table (R-21), so an image
+scrolls, is erased and is resized with its cells; the view keeps the pixels in a bounded
+store (IN-0028, DEC-0012).
 
 ```rust
 // Pump (ShellEventLoop / ssh_main_task) — per read chunk:
-pump.advance(&mut *term.lock(), bytes);       // parse under the Term lock
-pump.finish_batch_blocking(true);             // lock released: flush reliable events, then Output
+pump.advance(&mut *term.lock(), bytes);       // feed + drain under the engine lock
+pump.finish_batch_blocking(true);             // lock released: send the batch's events, then Output
 
 // Render (TerminalElement prepaint):
-let content = session.snapshot();             // short Term lock, owned TerminalContent
-// paint from content.cells / content.cursor / content.mode ...
+session.snapshot_into(&mut cache.snapshot);   // short engine lock (raises the render demand)
+// paint from the buffer: content.cells / content.cursor / content.mode ...
 ```
 
-> Do NOT hold the `FairMutex<Term>` across layout/paint work; copy, drop the guard,
-> then paint. `snapshot()` is called exactly once per frame from the render path.
+> Do NOT hold the lock across layout/paint work; copy, drop the guard, then paint.
+> `snapshot_into()` is called exactly once per frame from the render path.
 
 ### 5.3. Shared pump layer (`oneterm_terminal::backend`)
 
-Both backends use the same `EventListener` and the same batch driver; they only
+Both backends use the same event drain and the same batch driver; they only
 provide a transport and a read loop.
 
 | Type | Role |
 |---|---|
 | `PtyTransport` (trait) | The backend half: `pty_write` / `pty_resize` / `pty_close`. Non-blocking, `Clone` (Arc handles). `LocalTransport` wraps the owner-thread notifier queue; `SshTransport` wraps the bounded `Cmd` channel (byte budget, coalesced resize, closing flag). |
-| `SharedState` (`Arc<SharedSessionState>`) | Title / cwd / clipboard / exit code / OSC 133 counters / theme default colours / OSC 9;7 seq watermarks behind one mutex; `alive`, rx/tx bytes, absolute line count and clear epoch as atomics so a parse batch never takes the mutex. Handed to the SFTP browser as `TerminalCapabilities::cwd_source` so it can read the live cwd. |
-| `SessionEventSink` | Delivery policy: `Output` is coalescible (dropped when the 4096-slot queue is full), everything else is reliable. `forward` never blocks — reliable events that do not fit go to a FIFO and `flush_reliable[_blocking]` delivers them after the batch, outside the `Term` lock. `forward_lifecycle*` flushes first so `Exited`/`Closed` arrive in order. Counters (`EventQueueDiagnostics`) for tests/diagnostics. |
-| `OscRouter<T: PtyTransport>` | The `EventListener` installed in `Term`: `Wakeup` → `Output`; `Title`/`ResetTitle` → state + `Title`; OSC 52 store/load gated by `TerminalSecurityPolicy` + `ClipboardOrigin` (remote default off — the same code for both backends, so the policy cannot drift; the policy is the user's, derived from `TerminalSettings` by `terminal-view` and passed through `SessionFactory::{spawn_local, connect_ssh}` into `OscRouter::with_security`); `Event::Osc` (OSC 7/9/133/9;7 from the fork) → state + `Cwd`/`Notification`/`Progress`/`ShellIntegration`/`AgentStatus` (rate limit, seq dedup); `ClearScreen` → clear epoch; `ColorRequest` → the pending colour-query queue, drained by `TerminalPump::color_replies` after the batch (answers come from the live `Term` colours with the theme defaults as fallback); `PtyWrite` → `transport.pty_write`; `Bell`. |
-| `LineAccounting` | Absolute-line counter (gutter numbers keep growing after the scrollback is full). Owned by the pump, published to `SharedState` once per batch. |
-| `TerminalPump<T>` | Owns `ansi::Processor` + `LineAccounting` + a router clone. Per chunk: `advance(term, bytes)` under the `Term` lock (or `process_chunk(&term_arc, bytes)` which also answers colour queries and writes the replies), then `finish_batch[_blocking](repaint)` once the lock is released: publish line count → flush deferred reliable events (backpressure) → `Output`. Lifecycle: `publish_exit*` / `publish_closed*`. |
+| `SharedState` (`Arc<SharedSessionState>`) | Title / cwd / clipboard / exit code / OSC 133 counters / theme default colours / agent-status seq watermarks (OSC 20308) behind one mutex; `alive`, rx/tx bytes, absolute line count and clear epoch as atomics so a parse batch never takes the mutex. Handed to the SFTP browser as `TerminalCapabilities::cwd_source` so it can read the live cwd. |
+| `SessionEventSink` | Delivery policy: `post_repaint()` is coalescible (the hint is dropped and counted when the 4096-slot queue is full), `send_blocking()` / `send()` are reliable and apply backpressure. Counters (`EventQueueDiagnostics`) for tests/diagnostics. The deferred FIFO, `flush_reliable[_blocking]` and `forward_lifecycle*` were deleted at `US-0082`: events are values now, so the drain no longer runs inside a callback and the sink may simply block. |
+| `OscRouter<T: PtyTransport>` | The drain over the `EventBatch` `Terminal::feed` fills — **not** a callback installed in the engine, so nothing runs inside it while the caller holds the lock. `drain(&batch, &mut out)` does only what must happen under the lock and cannot wait, in **one pass in byte order**: a `VtEvent::Reply` goes to the transport in the position the input asked for, whichever side produced it, so a reply never overtakes another reply (conhost blocks up to a second for the DA1 answer at session start, which is a latency requirement, not an ordering one) — `Repaint` dropped (the pump owns the hint); `Title`/`TitleReset` → state cache; OSC 52 store/load gated by `TerminalSecurityPolicy` + `ClipboardOrigin` (remote default off — the same code for both backends, so the policy cannot drift; the policy is the user's, derived from `TerminalSettings` by `terminal-view` and passed through `SessionFactory::{spawn_local, connect_ssh}` into `OscRouter::with_security`); `Osc` (OSC 7/9/133/20308 and, for one release, the deprecated `9;7` alias — the numbers the adapter claims, with `claim_large` on both agent spellings so an 8 KiB payload is not cut at the parser's 2 KiB inline bound) → state + rate limit + seq dedup; `ScreenCleared` → clear epoch; `ColorQuery { key, .. }` → the pending colour-query queue keyed by `ColorKey`, answered by `TerminalPump::color_replies` after the batch from the live engine colours with the theme defaults as fallback. The matching `SessionEvent`s are **appended to `out`**, the pump's pending vector, and sent once the lock is released. `RowsScrolled` / `RowsTrimmed` / `GraphicReleased` are dropped until a `RowId`-keyed consumer exists (`US-0085`). |
+| `TerminalPump<T>` | Owns one reusable `EventBatch`, the pending `SessionEvent` vector, the gutter's line count and a router clone. Per chunk: `advance(term, bytes)` under the engine lock — `Terminal::feed` into the batch, then `OscRouter::drain` — (or `process_chunk(&handle, bytes)` which also answers colour queries and writes the replies), then `finish_batch[_blocking](repaint)` once the lock is released: publish the line count → send the batch's events (backpressure) → `Output`. Lifecycle: `publish_exit*` / `publish_closed*`, each sending everything queued before it first. The gutter's absolute line number is `Terminal::lines_produced()` — output lines, never implicit wraps, never reset by a clear — floored at the rows the grid holds, because the gutter labels display row `i` with `absolute - offset - rows + i`. `LineAccounting` and its heuristic over `total_lines` were deleted at `US-0082`. |
 
 Local (`ShellEventLoop<P>`) uses the blocking variants on the PTY owner thread;
 SSH (`ssh_main_task`) uses the async ones on the tokio runtime. Neither backend
-resizes the `Term` grid from its loop — the UI thread does that in
+resizes the grid from its loop — the UI thread does that in
 `TerminalSession::resize`: `PtyTransport::pty_resize` first, so the process learns
 the new size before any output for it arrives, then `TerminalModel::resize_grid`.
 
-**Resize policy (`ResizePolicy`, DEC-0008).** `Term::resize` anchors the bottom row:
-on a row grow `Grid::grow_lines` pulls `min(history_size, lines_added)` rows out of
-scrollback into the top of the viewport and moves the cursor down by that amount; on a
-column change `grow_columns` joins rows flagged `WRAPLINE` and lets history fill the rows
-that vanished (the cursor keeps its index), and `shrink_columns` splits rows and pushes the
-top rows into history. That matches a Unix PTY or a remote shell, which reflow on their
-side and repaint, so SSH keeps `ResizePolicy::Default`. conhost behind ConPTY does neither
+**Resize policy (`ResizePolicy`, DEC-0008).** Both policies are the engine's own since
+`US-0077`, and since `US-0082` the adapter does nothing but pick one: `TerminalModel::new`
+takes anything convertible into `oneterm_vt::ResizePolicy` and `resize_grid` passes it
+straight to `Terminal::resize`.
+
+`ResizePolicy::BottomAnchor` (this crate's `ResizePolicy::Default`) anchors the bottom
+row: on a row grow it pulls `min(history, lines_added)` rows out of scrollback into the
+top of the viewport and moves the cursor down by that amount; on a column change it joins
+rows flagged wrapped and lets history fill the rows that vanished, or splits rows and
+pushes the top ones into history. That matches a Unix PTY or a remote shell, which reflow
+on their side and repaint, so SSH keeps it. conhost behind ConPTY does neither
 (measured with raw PTY dumps in BUG-0051): after `ResizePseudoConsole` it repaints
 nothing, re-wraps the rows of the old viewport at the new width as if the top row started
 a line, keeps that content at the top, leaves the rows below blank and addresses later
 output with absolute cursor positions (`CUP`) in those coordinates. Long lines reach the
-parser as continuous text (implicit wrap, so alacritty flags them `WRAPLINE`), and after a
-maximize from 33x43 to 52x158 with `ls -lath` output conhost's next `CUP` named row 12
-while the grid cursor sat on row 33 (21 joined rows); a pure widen to 132 columns gave
-row 14 (19 joined); a grow to 49x34 gave row 38 (5 split rows). With the default policy
-typed input therefore lands inside the listing and an exiting alt-screen TUI leaves stale
-rows (IN-0019). Local sessions on Windows select `ResizePolicy::KeepViewportTop`
+parser as continuous text (an implicit wrap, so the engine flags the row wrapped), and
+after a maximize from 33x43 to 52x158 with `ls -lath` output conhost's next `CUP` named
+row 12 while the grid cursor sat on row 33 (21 joined rows); a pure widen to 132 columns
+gave row 14 (19 joined); a grow to 49x34 gave row 38 (5 split rows). With the default
+policy typed input therefore lands inside the listing and an exiting alt-screen TUI leaves
+stale rows (IN-0019). Local sessions on Windows select `ResizePolicy::KeepViewportTop`
 (`crates/local-shell/src/session_terminal.rs`; the policy is a macro argument of
-`impl_pty_terminal_session!`, so it stays with the backend). Under that policy every
-resize goes through `resize_keeping_viewport_top` (`crates/terminal/src/model.rs`):
-`conhost_cursor_row` copies the viewport rows from the top down to the cursor row into a
-history-less scratch grid, reflows it to the new width with the vendored `Grid::resize`
-(so the same code decides which rows join or split) and reads the cursor's distance from
-the top row back; then `Term::resize` runs and the viewport is shifted by the difference
-between alacritty's cursor row and that measured row: `Grid::scroll_up` over the whole
-screen for a positive shift (top rows rotate back into history, bottom rows are cleared),
-a grow-then-shrink of the rows for a negative one (history rows come back, blank bottom
-rows are dropped). Invariants after the correction:
+`impl_pty_terminal_session!`, so it stays with the backend).
+
+`KeepViewportTop` is implemented **inside the engine** (`crates/vt/src/reflow/`): it
+measures conhost's cursor row by reflowing the viewport-top-to-cursor range through the
+same reflow iterator the resize uses, then shifts the viewport by the difference. The
+61-line scratch-grid probe the adapter used to run on top of a bottom-anchored resize —
+`resize_keeping_viewport_top` and `conhost_cursor_row` — is **deleted** (`US-0082`).
+Invariants after the correction, unchanged:
 
 - the cursor row equals the row conhost's next `CUP` names; the saved cursor moves with
   it (clamped to the screen);
@@ -229,35 +290,35 @@ rows are dropped). Invariants after the correction:
   when the top row continued a wrapped line from history the grid shows that line joined
   whole while conhost shows it torn at the old top row, so the top rows may differ;
 - the joined or pulled rows return to scrollback, and blank rows fill the bottom;
-- the pre-resize `display_offset` is kept (clamped to history), so a scrolled-back
-  viewport keeps its top row and extends downward;
-- the correction also applies while the alt screen is active (the primary grid is the
-  inactive one; the alt grid has no history and is left to alacritty), so the shell's
+- the pre-resize scroll offset is kept (clamped to history), so a scrolled-back viewport
+  keeps its top row and extends downward;
+- the correction also applies while the alt screen is active (the primary screen is the
+  inactive one; the alt screen has no history and is bottom-anchored), so the shell's
   prompt lands on its row after the TUI exits;
-- the selection is dropped when rows moved (alacritty had rotated it), and `Term::resize`
-  leaves the whole terminal damaged, so the next snapshot repaints every row;
-- a row shrink and a column shrink with the cursor on the bottom row produce alacritty's
-  own result (the measured shift is zero).
+- a selection whose rows moved is dropped, and a resize invalidates every row, so the
+  next frame repaints the viewport;
+- a row shrink and a column shrink with the cursor on the bottom row produce the
+  bottom-anchored result (the measured shift is zero).
 
 The visible tradeoff is blank rows below the prompt after a maximize instead of recovered
 scrollback; the rows are still in history. Tests:
-`crates/terminal/src/model.rs` (`keep_viewport_top_*`, `default_grow_*`),
+`crates/vt/src/reflow/reflow_tests.rs` (`keep_viewport_top_*`, `default_policy_grow_*`),
+`crates/terminal/src/model_tests.rs::resize_grid_applies_the_backend_policy`,
 `crates/local-shell/src/session_tests.rs::local_session_grow_policy_matches_conpty`,
 `crates/ssh/src/session.rs::ssh_session_keeps_the_default_grow_policy`.
 
-**Never block inside a `Term` callback.** `send_event` runs during
-`Processor::advance` with the `Term` lock held, and the UI thread needs that same
-lock (`snapshot()`, `terminal_info()`) to drain the event queue. The sink
-therefore only `try_send`s from a callback; deferred reliable events are
-delivered by the pump's `finish_batch` after the parse batch, once the lock is
-released (event loop: blocking send; tokio task: `send().await`). Ordering seen by
-the UI: reliable events emitted during a batch → that batch's `Output` hint.
-Lifecycle events (`Exited`/`Closed`) always flush the deferred queue first so
-they arrive in order.
+**Nothing waits on the UI under the engine lock.** The rule used to be "never block
+inside a `Term` callback", because `send_event` ran during `Processor::advance` with the
+lock held while the UI thread needed that same lock to drain the event queue (CORR-01).
+There is no callback any more: `OscRouter::drain` collects `SessionEvent`s into the
+pump's vector, and `finish_batch[_blocking]` sends them **after** the guard is dropped
+(event loop: blocking send; tokio task: `send().await`). Ordering seen by the UI is
+unchanged — the events a batch produced, then that batch's single `Output` hint — and
+lifecycle events (`Exited`/`Closed`) send everything queued before them first.
 
 The layer is testable without a PTY or a network: `test_support::FakePtyTransport`
 records writes, and `crates/terminal/src/backend/backend_tests.rs` drives the pump
-end to end (title/bell ordering, colour replies, deferred flush, lifecycle).
+end to end (title/bell ordering, colour replies, backpressure, lifecycle).
 
 ---
 
@@ -326,14 +387,14 @@ OneTerm's generated prompt integration emits OSC 7 whenever it controls the Wind
 
 The local listener already parses forwarded OSC 7 payloads into `SessionEvent::Cwd` and updates `TerminalSession::cwd()`.
 
-### 6.2. Spawn via `alacritty_terminal::tty`
+### 6.2. Spawn via `oneterm-pty`
 
-> Original design sketch (alacritty `EventLoop` + `ArcSwap` cache). The shipped code
+> Original design sketch (the forked engine's `EventLoop` + an `ArcSwap` cache). The shipped code
 > described below the sketch differs: a custom `ShellEventLoop`, no `last_content`
 > cache, and `LocalTransport`/`OscRouter` from §5.3.
 
 ```rust
-use alacritty_terminal::{event_loop::EventLoop, sync::FairMutex, term::{Config, Term}, tty::{self, Options, Shell, WindowSize}};
+use the_forked_engine::{event_loop::EventLoop, sync::FairMutex, term::{Config, Term}, tty::{self, Options, Shell, WindowSize}};  // historical sketch; the fork is gone
 
 pub struct LocalSession {
     term: Arc<FairMutex<Term<LocalListener>>>,
@@ -375,9 +436,8 @@ impl LocalSession {
 }
 ```
 
-> For the exact `Notifier` API: GPUI Kit does not provide it; read directly from the
-> vendored `alacritty_terminal` source: `event_loop.rs` (`Notifier`, `Msg`),
-> `tty/{mod,unix,windows}.rs`. When implementing, open that crate's source to match signatures.
+> The `Notifier` sketch above described the vendored fork's event loop, which OneTerm never
+> shipped and which no longer exists. The implementation below is the one to read.
 
 **Current implementation** (`crates/local-shell/src/event_loop.rs`): the loop is a
 custom `ShellEventLoop<P: EventedPty + OnResize>` on a dedicated "PTY owner"
@@ -385,16 +445,37 @@ thread — the PTY is created, polled and dropped there. It reads with a
 heap-allocated 1 MiB buffer into `TerminalPump::advance` under a
 `try_lock_unfair` guard (falling back to `lock_unfair` only when the buffer is
 full), answers colour queries with the same guard, then calls
-`finish_batch_blocking`. The poller waits **without a timeout**: every
+`finish_batch_blocking`. Each read takes at most `MAX_LOCKED_READ` (64 KiB), so
+one lock hold is bounded in bytes. At each chunk boundary it asks
+`take_render_demand()` and, when a frame is waiting, answers that batch's colour
+queries, drops the guard and finishes the batch there (§ 5.1) instead of holding
+it until the pipe runs dry. The poller waits **without a timeout**: every
 `ShellNotifier::send` and the child watcher call `poller.notify()`, so an idle
 tab does not wake up. Being generic over the PTY, the loop is unit-tested with a
 loopback-socket PTY (`event_loop_tests.rs`) — no shell is spawned to cover
-output parsing, input FIFO, resize, colour replies, child exit and shutdown.
+output parsing, input FIFO, resize, colour replies, child exit, shutdown, and the
+hand-over itself (`a_flooding_loop_hands_the_engine_to_a_waiting_frame` floods the
+loop from one thread while another takes frames). The conout re-arm above is *not*
+reachable through the loopback socket, whose readiness is level-triggered; the
+real-shell tests in `session_tests.rs` are what cover it.
+
+**Closing a local session** is guaranteed to leave no process behind **while OneTerm is
+running**. The grace period below is served on the detached PTY owner thread, so a session
+still inside it when the application process exits (or is killed) never gets the escalation —
+that hole is recorded under Gaps in `BUG-0055` and is not closed by this design.
+`LocalSession::drop`
+(and `close()`) sends `ShellMsg::Shutdown`, the owner loop deregisters and returns, and the
+`PseudoConsole` is dropped on that thread — `ClosePseudoConsole` first, then the bounded
+wait and, if it is needed, the escalation described in §6.3. The owner thread itself is
+joined by a detached reaper, never by the caller (`CORR-10`). What survives a discarded
+session is measured by `session_orphan_tests.rs`, whose ignored `orphan_liveness_table`
+reproduces the full table on demand.
 
 ### 6.3. Windows-specific
 
-- **ConPTY**: `alacritty_terminal::tty` picks ConPTY automatically on Win10 1809+. No need
-  to hand-code `CreatePseudoConsole`.
+- **ConPTY**: `oneterm-pty` resolves the bundled `conpty.dll` next to the executable first and
+  falls back to `kernel32!CreatePseudoConsole` (Win10 1809+) only when it is missing — DEC-0013.
+  The resolved host is logged once at `info` (`conpty: bundled` / `conpty: system`).
 - **UTF-8**: `Cmd` → `chcp 65001` (via `/K` args). `pwsh`/`powershell` → set env
   `LANG`/`LC_ALL` + (optionally) an init arg `[Console]::OutputEncoding`.
 - **TERM**: always `xterm-256color`, `COLORTERM=truecolor`.
@@ -404,7 +485,23 @@ output parsing, input FIFO, resize, colour replies, child exit and shutdown.
   and never repaints, so scrollback is not pulled in and joined or split wrapped rows
   move the cursor row exactly as they do in conhost.
 - **Ctrl-C**: byte `0x03` → shell handles it. OK.
-- **Child exit**: `tty::Pty` provides `ChildExitWatcher` (race-free) → `SessionEvent::Exited(code)`.
+- **Child exit**: `oneterm-pty` watches the child handle (race-free) and reports
+  `ChildEvent::Exited` on `PTY_CHILD_EVENT_TOKEN` → `SessionEvent::Exited(code)`.
+- **Close**: `ClosePseudoConsole` only *asks* the host to end the session, and a client
+  that had not finished starting when the console went away never processes that request —
+  measured, such a `cmd.exe` was still alive 15 s later (and its console host with it),
+  while a started one exits within 20 ms with `STATUS_CONTROL_C_EXIT`. So
+  `ChildExitWatcher::drop` waits `CHILD_EXIT_GRACE` (2 s) on the child handle after the
+  pseudo-console has closed and terminates the child if it is still running, logging the
+  pid at `warn` first — DEC-0016, BUG-0055. Only this process's own child is touched, and
+  only through its handle: never matching by name is DEC-0005's rule, and reaching no
+  further than our own child is DEC-0016's, stricter. The wait runs on the "PTY owner"
+  thread, which is reaped detached, so no UI thread ever waits for it — and, for the same
+  reason, a session dropped as the application exits is not covered (§6.2).
+- **Busy shells are not terminated**: the host's close request reaches every client on the
+  console, so `cmd.exe` and a foreground grandchild (`ping -t`, `timeout`) both exit with
+  `STATUS_CONTROL_C_EXIT` within ~20 ms, well inside the grace period. A grandchild that
+  detached from the console (`start /b`, a GUI child) survives, as it did before.
 
 ### 6.4. Re-render perf (per Zed)
 
@@ -434,7 +531,7 @@ owner loops use different channel implementations:
   progress, agent, title, working-directory, bell, and lifecycle events use
   reliable bounded-channel delivery: they are never dropped, and a slow consumer
   applies backpressure to the pump — but only *between* parse batches, never
-  while the `Term` lock is held (§5.3). A closed consumer is logged and counted by
+  while the engine lock is held (§5.3). A closed consumer is logged and counted by
   diagnostic builds.
 - Local child exit always ends the session: `alive = false`, then
   `SessionEvent::Exited(code)` (code may be `None` when the platform watcher could
@@ -495,7 +592,7 @@ pub fn connect(cfg: SshConfig, initial: PtySize, scrollback: usize)
   `SshSession::close()` and `Drop` request close for the shell **and** SFTP; the
   two are idempotent.
 - `ssh_main_task` ends in a single teardown block: `channel.close()`,
-  `publish_closed()` (flushes deferred reliable events, then `Closed`), then it
+  `publish_closed()` (sends everything the batch queued, then `Closed`), then it
   cancels the SFTP `CancellationToken` so `sftp_task` exits and
   `SftpBackend::alive()` turns false with the connection (the same token,
   `session_shutdown`, stops the port-forward listeners and relays of
@@ -505,8 +602,12 @@ pub fn connect(cfg: SshConfig, initial: PtySize, scrollback: usize)
 - `ssh_main_task` has a third `select!` arm: it serves `HandleRequest`s from the
   forward listeners (one direct-tcpip open per accepted local connection),
   because the connection handle lives only in the task.
-- Reliable events emitted during `processor.advance` are flushed by
-  `TerminalPump::finish_batch().await` after the batch, before the `Output` hint (§5.3).
+- Per data chunk (`US-0084`): `TerminalPump::process_chunk` feeds the engine and drains
+  that batch under the lock — replies out first (R-37) — then, the lock released,
+  `finish_batch(true).await` sends the batch's events before the `Output` hint (§5.3), and
+  the loop asks `SharedTerminal::take_render_demand()` and yields the task when a frame is
+  waiting (§5.1). No `crates/ssh` **source file** names the engine — the shared pump is the
+  whole of the terminal side, and the fork's last manifest line left with `US-0085`.
 - RSA keys authenticate with `rsa-sha2-*` chosen from the server's `server-sig-algs`
   (fallback SHA-512); legacy SHA-1 `ssh-rsa` is never used.
 - Auth: `SshAuthMethod::{None, Password, PrivateKey}` (`crates/core/src/ssh_config.rs`)
@@ -697,9 +798,10 @@ feature crates read those handles from their GPUI application context.
 undeliverable write is returned to the view, which shows a warning notification
 (ERR-04) instead of dropping the paste silently.
 
-`search` copies the grid text under the `Term` lock (`search::GridText::from_term`) and
-matches after releasing it (`search_grid_text`), so a long scrollback search never stalls
-the pump (PERF-04).
+`search` copies the grid text under the engine lock (`search::GridText::from_terminal`,
+keyed by `RowId`) and matches after releasing it (`search_grid_text`), so a long
+scrollback search never stalls the pump (PERF-04). The signed grid line a `SearchMatch`
+publishes is derived from the copy's `RowId`s once, where the match is produced.
 
 `SessionEvent`: `Output | Title | Cwd | Clipboard | ClipboardRead | ShellIntegration |
 Notification | Progress | AgentStatus | Exited(Option<i32>) | Closed |
@@ -753,10 +855,12 @@ crates/
 │   ├── session_duplicate.rs  # SessionDuplicateConfig (non-secret launch descriptor, §9.1)
 │   └── config/shell.rs       # ShellKind, LocalShellConfig, resolve_shell
 │
-├── terminal/src/             # engine (no GPUI)
+├── terminal/src/             # the engine adapter (no GPUI)
 │   ├── session.rs            # TerminalRender/Input/Ime/Lifecycle + TerminalSession façade, SessionEvent, TerminalCapabilities
-│   ├── model.rs              # TerminalModel<EP>: snapshot / snapshot_into / query_state / input
-│   ├── content.rs            # TerminalContent snapshot struct
+│   ├── handle.rs             # TerminalHandle: the FairMutex + the render-demand flag
+│   ├── model.rs              # TerminalModel: snapshot / snapshot_into / query_state / input
+│   ├── content.rs            # TerminalContent: the RenderState it owns + the legacy shape
+│   ├── engine_shim.rs        # the compatibility conversion (deleted at US-0085)
 │   ├── palette.rs / color_classification.rs / osc_color.rs
 │   ├── key_encode.rs / mouse_encode.rs / paste.rs / search.rs
 │   ├── osc.rs / osc_agent/ / url_policy.rs / security_policy.rs
@@ -764,9 +868,8 @@ crates/
 │   └── backend/              # shared pump layer (§5.3)
 │       ├── transport.rs      # PtyTransport trait
 │       ├── state.rs          # SharedState (title/cwd/clipboard/counters)
-│       ├── event_sink.rs     # SessionEventSink (delivery policy, deferred flush)
-│       ├── osc_router.rs     # OscRouter<T>: EventListener
-│       ├── line_accounting.rs
+│       ├── event_sink.rs     # SessionEventSink (coalescible hint / reliable send)
+│       ├── osc_router.rs     # OscRouter<T>: the EventBatch drain
 │       ├── pump.rs           # TerminalPump<T>
 │       └── backend_tests.rs  # in-memory transport tests
 │
@@ -826,7 +929,6 @@ crates/
 
 | Risk | Mitigation |
 |---|---|
-| `alacritty_terminal` Zed-internal API changes between revs | Pin rev; open the crate source at the rev when implementing to match signatures. |
 | Holding `FairMutex` in paint → jitter | Snapshot pattern (§5.2): short lock to copy, paint from the copy. |
 | Tokio (ssh) vs smol (gpui) runtime conflict | Hidden shared tokio runtime inside `ssh` (2 workers), sync API, bridge via `async_channel`. |
 | Windows cmd codepage not UTF-8 | `chcp 65001` (cmd), env `LANG` (pwsh). Document requires Win10 1903+ for good ConPTY. |
@@ -844,5 +946,4 @@ crates/
 | Render engine + input (current design) | [`docs/spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md`](spec-intakes/IN-0018-rebuild-terminal-render-engine/high-level-design.md) |
 | `Element`/`paint_quad`/`shape_line` | `reference/gpui-kit` (tag `v0.6.0`) |
 | `EntityInputHandler` | `gpui::EntityInputHandler` trait (docs.rs matching rev) |
-| `alacritty_terminal` API | source at rev `fcf32fe…` (`event_loop.rs`, `tty/`, `term.rs`, `sync.rs`) |
-| Vendored fork deltas | [`vendor/README.md`](../vendor/README.md) |
+| VT engine API | `crates/vt/src/` (`terminal/`, `grid/`, `render/`) + the IN-0029 low-level designs |

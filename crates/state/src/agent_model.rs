@@ -1,4 +1,4 @@
-//! Folded agent-card data and OSC 9;7 event application.
+//! Folded agent-card data and agent-status event application.
 //!
 //! This module owns the backend-neutral display model. Global GPUI entity
 //! registration and lifecycle management remain in `agent_registry`.
@@ -64,7 +64,7 @@ fn sanitize_opt(s: &Option<String>, max: usize) -> Option<String> {
 pub enum Lifecycle {
     /// A recent event arrived within the stale window.
     Live,
-    /// No OSC 9;7 for the stale window while the process is alive.
+    /// No agent-status event for the stale window while the process is alive.
     Stale,
     /// The terminal process exited (host-authoritative).
     Ended { exit_code: Option<i32> },

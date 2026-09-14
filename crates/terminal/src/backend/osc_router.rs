@@ -1,23 +1,35 @@
-//! `OscRouter` — the alacritty `EventListener` shared by every backend.
+//! `OscRouter` — the event drain shared by every backend.
 //!
 //! Routes engine events into the state cache + `SessionEvent`s: title, OSC 52
-//! clipboard, OSC 7/9/133 side-channel payloads (`Event::Osc` from the OneTerm
-//! fork), screen clears, colour queries, bell, and PTY responses (`PtyWrite`
-//! → transport). The security policy is applied here for both backends, so
-//! local and SSH cannot drift (SEC-08).
+//! clipboard, OSC 7/9/133 side-channel payloads, screen clears, colour queries,
+//! bell, and terminal replies (`VtEvent::Reply` → transport). The security
+//! policy is applied here for both backends, so local and SSH cannot drift
+//! (SEC-08).
 //!
-//! `Term<OscRouter<T>>` and the pump hold clones of the same router (Arc
-//! fields). `send_event` runs during `Processor::advance` with the `Term` lock
-//! held — it never blocks (see [`SessionEventSink`]).
+//! The engine returns events as values instead of calling back, so this is a
+//! plain function over a drained [`EventBatch`] (`events-and-api.md` § "`feed`
+//! and drain") rather than an `EventListener` installed inside the terminal.
+//!
+//! `US-0082` splits the drain by **what may block**, not by what an event means:
+//!
+//! * [`OscRouter::drain`] runs where the caller already holds the engine lock
+//!   and does only the things that must happen there and cannot wait — write
+//!   every reply to the transport as the batch reaches it (R-37: conhost blocks
+//!   for up to a second at session start waiting for DA1, which is exactly when
+//!   a burst is arriving), queue colour queries so the pump can answer them off
+//!   the live engine colours, and update the `SharedState` caches.
+//! * Everything the UI sees is **appended to the pump's pending vector** and
+//!   sent by [`super::TerminalPump::finish_batch_blocking`] once the guard is
+//!   dropped. That is what let the deferred tier and its deadlock rule go.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use alacritty_terminal::event::{Event, EventListener};
 use log::warn;
+use oneterm_vt::{ColorKey, EventBatch, StringTerm, VtEvent};
 
 use crate::logging::TerminalLogController;
-use crate::osc::{Osc133Kind, OscPayload, parse_cwd_url, parse_osc};
-use crate::osc_agent::should_apply;
+use crate::osc::{Osc133Kind, OscPayload, agent_support_reply, parse_cwd_url, parse_osc};
+use crate::osc_agent::{AGENT_OSC, LEGACY_AGENT_OSC, LEGACY_AGENT_OSC_SUB, should_apply};
 use crate::osc_color::{ColorFormatter, PendingColorQuery};
 use crate::security_policy::{ClipboardOrigin, NotificationRateLimiter, TerminalSecurityPolicy};
 use crate::session::SessionEvent;
@@ -100,15 +112,10 @@ impl<T: PtyTransport> OscRouter<T> {
         !self.lock_color_queries().is_empty()
     }
 
-    /// Forward a session event (see [`SessionEventSink::forward`]).
-    pub fn forward(&self, ev: SessionEvent) {
-        self.events.forward(ev);
-    }
-
     /// Enqueue an OSC colour query; the pump answers it after the batch.
-    pub fn queue_color_query(&self, index: usize, format: ColorFormatter) {
+    pub fn queue_color_query(&self, key: ColorKey, format: ColorFormatter) {
         self.lock_color_queries()
-            .push(PendingColorQuery { index, format });
+            .push(PendingColorQuery { key, format });
     }
 
     /// Drain the pending colour queries.
@@ -122,13 +129,163 @@ impl<T: PtyTransport> OscRouter<T> {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn set_title(&self, title: &str) {
-        let sanitized = self.security.sanitize_title(title);
-        self.state.lock().title = sanitized.clone();
-        self.forward(SessionEvent::Title(sanitized.unwrap_or_default()));
+    /// Route one parse batch in byte order, writing replies to the transport as
+    /// they are reached and appending the UI-facing events to `out`.
+    ///
+    /// Called with the engine lock held, so nothing here waits on the UI. `out`
+    /// is [`super::TerminalPump`]'s pending vector — the pump owns it and
+    /// lends it per `advance` — and it is flushed after the guard is dropped.
+    ///
+    /// **One pass, and the order is the contract.** This used to be two passes,
+    /// writing every [`VtEvent::Reply`] before routing anything else, which was
+    /// R-37's "replies first" read literally. R-37 is about *latency* — a reply
+    /// must not wait behind the UI — and one pass still delivers that, because
+    /// everything a reply can now queue behind is a push onto `out`, which never
+    /// blocks and never leaves this function. Nothing here can wait.
+    ///
+    /// What two passes broke is *relative* order between a reply the engine
+    /// produced and one the embedder produced, and that is a published contract:
+    /// `docs/osc-agent-status.md` § 3.2 tells an agent to write
+    /// `ESC ] 20308 ; 0 ST` followed by `ESC [ c` and to conclude "not
+    /// supported" if DA1 comes back first. Hoisting DA1 out of the second pass
+    /// made OneTerm fail its own detection idiom on the terminal that
+    /// implements it. Byte order in, byte order out.
+    pub fn drain(&self, batch: &EventBatch, out: &mut Vec<SessionEvent>) {
+        for event in batch.iter() {
+            self.handle(batch, event, out);
+        }
     }
 
-    fn store_clipboard(&self, text: String) {
+    /// Route one event. `batch` owns every payload the event points at.
+    fn handle(&self, batch: &EventBatch, event: &VtEvent, out: &mut Vec<SessionEvent>) {
+        match event {
+            // ── Render signal ──────────────────────────────────────────
+            //
+            // Dropped on purpose. The engine appends `Repaint` to every batch
+            // that dispatched anything, but the repaint hint has exactly one
+            // owner and always has: `TerminalPump::finish_batch*`, which posts
+            // it **after** the deferred reliable events so a frame never shows
+            // content before that batch's title, cwd or agent event. Forwarding
+            // it here too would double the hints and put the first one first.
+            VtEvent::Repaint => {}
+            // ── Title (OSC 0/2) ─────────────────────────────────────────
+            VtEvent::Title(span) => self.set_title(batch.str(*span), out),
+            VtEvent::TitleReset => self.set_title("", out),
+            // ── Clipboard (OSC 52) ─────────────────────────────────────
+            VtEvent::ClipboardStore { text, .. } => {
+                self.store_clipboard(batch.str(*text).to_owned(), out)
+            }
+            VtEvent::ClipboardLoad { .. } => {
+                if self.security.allow_clipboard_read(self.clipboard_origin) {
+                    out.push(SessionEvent::ClipboardRead);
+                } else {
+                    log::debug!("OscRouter: OSC 52 clipboard read refused by policy");
+                }
+            }
+            // ── Terminal reply (DA / DSR / DECRQM / XTVERSION) ──────────
+            VtEvent::Reply(span) => self.reply(batch.bytes(*span)),
+            // ── Bell ──────────────────────────────────────────────────
+            VtEvent::Bell => out.push(SessionEvent::Bell),
+            // ── OSC 7/9/133/20308 (the engine's OSC registration table) ─
+            VtEvent::Osc {
+                code,
+                params,
+                terminator,
+                truncated,
+            } => {
+                let params: Vec<&[u8]> = batch.params(*params).collect();
+                // Bookkeeping first, and *before* the truncation guard below:
+                // § 3.1 says the alias is "parsed identically, counted, and
+                // logged once per session", and an event that arrived on `9;7`
+                // arrived on `9;7` whether or not the parser could hold all of
+                // it. Counting it only when it survives would under-report
+                // exactly the agent whose payloads are too big — the one most
+                // worth telling the operator about.
+                self.note_agent_osc(*code, &params);
+                // A truncated payload is not a short payload, it is a corrupt
+                // one: the base64 was cut mid-stream, so decoding it yields
+                // either an error or — worse — a shorter valid event that the
+                // agent never sent. Drop it before anything parses it, and
+                // count it, so the loss is visible instead of arriving as
+                // "malformed JSON" from a payload that was never malformed.
+                //
+                // Deliberately the agent channel only. Free-form text degrades
+                // gracefully when it is cut (a truncated OSC 9 toast is still a
+                // toast) and OSC 133's markers are far too short to truncate;
+                // structured data does not degrade, it lies.
+                if *truncated && is_agent_osc(*code, &params) {
+                    let count = self.state.count_truncated_agent_osc();
+                    log::debug!(
+                        "OscRouter: agent status dropped, payload truncated by the \
+                         parser's cap ({count} so far)"
+                    );
+                    return;
+                }
+                match parse_osc(&params) {
+                    Some(payload) => self.handle_osc_payload(payload, *terminator, out),
+                    None => log::debug!(
+                        "OscRouter: unparsed VtEvent::Osc with {} params",
+                        params.len()
+                    ),
+                }
+            }
+            // ── Screen cleared (CSI 2J/3J, RIS) ─────────────────────────
+            VtEvent::ScreenCleared => self.state.bump_clear_epoch(),
+            // ── OSC 4/10/11/12 colour query (`?`): answered by the pump
+            //    after the batch, when the engine colours can be read ────
+            VtEvent::ColorQuery { key, terminator } => {
+                self.queue_color_query(*key, color_formatter(*key, *terminator));
+            }
+            // ── Row bookkeeping: a `RowId`-keyed consumer's business, and
+            //    nothing above the seam speaks `RowId` until `US-0085` ───
+            VtEvent::RowsScrolled(_) | VtEvent::RowsTrimmed { .. } => {}
+            // ── Graphics: the view's store still evicts by LRU ──────────
+            VtEvent::GraphicReleased(_) => {}
+        }
+    }
+
+    /// The agent channel's bookkeeping, which `parse_osc` cannot do because it
+    /// is a pure function and both facts are per-session
+    /// (`docs/osc-agent-status.md` §3 and §3.1):
+    ///
+    /// * an `OSC 20308` sub-code the receiver does not implement is ignored and
+    ///   **counted** — `2` and above are reserved, so this is how a future
+    ///   extension aimed at an older OneTerm shows up instead of vanishing;
+    /// * `OSC 9;7` is deprecated. It is counted, and logged **once**, not once
+    ///   per event: a still-unported agent emits thousands, and the point is to
+    ///   make it diagnosable, not to drown the log.
+    fn note_agent_osc(&self, code: u32, params: &[&[u8]]) {
+        let sub = params.get(1).copied();
+        if code == AGENT_OSC && !matches!(sub, Some(b"0" | b"1")) {
+            let count = self.state.count_unknown_agent_subcode();
+            log::debug!(
+                "OscRouter: OSC 20308 ignored, unrecognised sub-code {:?} ({count} so far)",
+                sub.map(String::from_utf8_lossy)
+            );
+        } else if code == LEGACY_AGENT_OSC
+            && sub == Some(LEGACY_AGENT_OSC_SUB)
+            && self.state.count_legacy_agent_osc() == 1
+        {
+            log::debug!(
+                "OscRouter: OSC 9;7 is deprecated and is dropped in the next release — \
+                 the agent should emit OSC 20308;1 instead (docs/osc-agent-status.md §3.1)"
+            );
+        }
+    }
+
+    fn reply(&self, bytes: &[u8]) {
+        if let Err(error) = self.transport.pty_write(bytes) {
+            warn!("OscRouter: terminal reply delivery failed: {error}");
+        }
+    }
+
+    fn set_title(&self, title: &str, out: &mut Vec<SessionEvent>) {
+        let sanitized = self.security.sanitize_title(title);
+        self.state.lock().title = sanitized.clone();
+        out.push(SessionEvent::Title(sanitized.unwrap_or_default()));
+    }
+
+    fn store_clipboard(&self, text: String, out: &mut Vec<SessionEvent>) {
         let Some(validated) = self
             .security
             .validate_clipboard_write(&text, self.clipboard_origin)
@@ -138,19 +295,27 @@ impl<T: PtyTransport> OscRouter<T> {
         };
         let validated = validated.to_string();
         self.state.lock().clipboard = Some(validated.clone());
-        self.forward(SessionEvent::Clipboard(Some(validated)));
+        out.push(SessionEvent::Clipboard(Some(validated)));
     }
 
-    /// Handle an OSC forwarded by the engine (`Event::Osc`, OSC 7/9/133) —
-    /// update the state cache and forward the matching `SessionEvent`.
-    fn handle_osc_payload(&self, payload: OscPayload) {
+    /// Handle an OSC forwarded by the engine (OSC 7/9/133/20308) — update the
+    /// state cache and queue the matching `SessionEvent`, or answer it.
+    ///
+    /// `terminator` is the one the sequence itself carried, because a reply has
+    /// to end the way the question did.
+    fn handle_osc_payload(
+        &self,
+        payload: OscPayload,
+        terminator: StringTerm,
+        out: &mut Vec<SessionEvent>,
+    ) {
         match payload {
             OscPayload::Cwd(url) => {
                 let cwd = parse_cwd_url(&url);
                 if let Some(sanitized) = self.security.sanitize_cwd(&cwd.to_string_lossy()) {
                     let path = std::path::PathBuf::from(&sanitized);
                     self.state.lock().cwd = Some(path.clone());
-                    self.forward(SessionEvent::Cwd(path));
+                    out.push(SessionEvent::Cwd(path));
                 }
             }
             OscPayload::ShellIntegration(kind) => {
@@ -166,7 +331,7 @@ impl<T: PtyTransport> OscRouter<T> {
                         _ => {}
                     }
                 }
-                self.forward(SessionEvent::ShellIntegration(kind));
+                out.push(SessionEvent::ShellIntegration(kind));
             }
             OscPayload::Notification(msg) => {
                 let Some(sanitized) = self.security.sanitize_notification(&msg) else {
@@ -178,92 +343,74 @@ impl<T: PtyTransport> OscRouter<T> {
                     .unwrap_or_else(PoisonError::into_inner)
                     .allow();
                 if allowed {
-                    self.forward(SessionEvent::Notification(sanitized));
+                    out.push(SessionEvent::Notification(sanitized));
                 } else {
                     log::debug!("OscRouter: notification rate limit exceeded");
                 }
             }
-            OscPayload::Progress(progress) => self.forward(SessionEvent::Progress(progress)),
+            OscPayload::Progress(progress) => out.push(SessionEvent::Progress(progress)),
             OscPayload::AgentStatus(ev) => {
-                // OSC 9;7 seq dedup (spec §4.1 / §8.3): drop events whose `seq`
-                // is <= the last applied `seq` for the same agent id. `ev` is
-                // boxed on the parse path; unbox into the `Arc` for fan-out.
+                // Agent-status `seq` dedup (spec §4.1 / §8.3): drop events whose
+                // `seq` is <= the last applied `seq` for the same agent id. `ev`
+                // is boxed on the parse path; unbox into the `Arc` for fan-out.
                 let ev = *ev;
                 let apply = should_apply(&mut self.state.lock().last_agent_seq, &ev);
                 if apply {
                     log::debug!(
-                        "OSC 9;7 applied & forwarded: agent={} type={} seq={}",
+                        "agent status applied & forwarded: agent={} type={} seq={}",
                         ev.agent(),
                         ev.type_name(),
                         ev.seq()
                     );
-                    self.forward(SessionEvent::AgentStatus(Arc::new(ev)));
+                    out.push(SessionEvent::AgentStatus(Arc::new(ev)));
                 } else {
                     log::debug!(
-                        "OSC 9;7 dropped by dedup: agent={} type={} seq={}",
+                        "agent status dropped by dedup: agent={} type={} seq={}",
                         ev.agent(),
                         ev.type_name(),
                         ev.seq()
                     );
                 }
             }
+            // `OSC 20308;0` — the support query (spec §3.2). Answered here
+            // rather than in the engine because the engine only routes numbers:
+            // the protocol, its version and the terminal's name are the
+            // embedder's, exactly as the OSC 52 and colour replies are. It
+            // still leaves under the engine guard, before the pump's yield
+            // check and before any UI event is flushed (R-37).
+            OscPayload::AgentSupportQuery => self.reply(agent_support_reply(terminator).as_bytes()),
         }
     }
 }
 
-impl<T: PtyTransport> EventListener for OscRouter<T> {
-    fn send_event(&self, event: Event) {
-        match event {
-            // ── Render signal ──────────────────────────────────────────
-            Event::Wakeup => self.forward(SessionEvent::Output),
-            // ── Title (OSC 0/2) ─────────────────────────────────────────
-            Event::Title(title) => self.set_title(&title),
-            Event::ResetTitle => self.set_title(""),
-            // ── Clipboard (OSC 52) ─────────────────────────────────────
-            Event::ClipboardStore(_, text) => self.store_clipboard(text),
-            Event::ClipboardLoad(_, _) => {
-                if self.security.allow_clipboard_read(self.clipboard_origin) {
-                    self.forward(SessionEvent::ClipboardRead);
-                } else {
-                    log::debug!("OscRouter: OSC 52 clipboard read refused by policy");
-                }
-            }
-            // ── PTY write (OSC/DA response) ─────────────────────────────
-            Event::PtyWrite(text) => {
-                if let Err(error) = self.transport.pty_write(text.as_bytes()) {
-                    warn!("OscRouter: PTY response delivery failed: {error}");
-                }
-            }
-            // ── Process exit (only alacritty's own EventLoop emits this;
-            //    OneTerm pumps publish exit themselves) ─────────────────
-            Event::ChildExit(status) => {
-                let code = status.code();
-                self.state.record_exit(code);
-                self.forward(SessionEvent::Exited(code));
-            }
-            // ── Shutdown: `close()` drives the transport directly ────────
-            Event::Exit => {}
-            // ── Bell ──────────────────────────────────────────────────
-            Event::Bell => self.forward(SessionEvent::Bell),
-            // ── OSC 7/9/133 (fork: Handler::report_osc → Event::Osc) ────
-            Event::Osc { params, .. } => {
-                let refs: Vec<&[u8]> = params.iter().map(|p| p.as_slice()).collect();
-                match parse_osc(&refs) {
-                    Some(payload) => self.handle_osc_payload(payload),
-                    None => {
-                        log::debug!("OscRouter: unparsed Event::Osc with {} params", refs.len())
-                    }
-                }
-            }
-            // ── Screen cleared (CSI 2J/3J, RIS) ─────────────────────────
-            Event::ClearScreen => self.state.bump_clear_epoch(),
-            // ── OSC 10/11/12 colour query (`?`): answered by the pump after
-            //    the batch, when the `Term` colours can be read ───────────
-            Event::ColorRequest(index, format) => self.queue_color_query(index, format),
-            // ── Ignored ─────────────────────────────────────────────────
-            Event::MouseCursorDirty
-            | Event::CursorBlinkingChange
-            | Event::TextAreaSizeRequest(_) => {}
-        }
-    }
+/// Whether this OSC carries an agent-status payload, under either spelling.
+///
+/// The support query and the reserved sub-codes are excluded: they carry no
+/// payload worth truncating, and a truncated `20308;<n>` should still be
+/// counted as the unknown sub-code it is.
+fn is_agent_osc(code: u32, params: &[&[u8]]) -> bool {
+    let sub = params.get(1).copied();
+    (code == AGENT_OSC && sub == Some(b"1"))
+        || (code == LEGACY_AGENT_OSC && sub == Some(LEGACY_AGENT_OSC_SUB))
+}
+
+/// The reply the reference formatted inside the engine.
+///
+/// Byte-for-byte the fork's `dynamic_color_sequence`
+/// (`vendor/alacritty_terminal/src/term/mod.rs:1692-1705`): the OSC prefix the
+/// question used, each channel doubled to 16-bit precision, and the same
+/// terminator the question carried. The engine reports the request and leaves
+/// the formatting here because only the embedder owns the theme fallback.
+fn color_formatter(key: ColorKey, terminator: StringTerm) -> ColorFormatter {
+    let prefix = key.query_prefix();
+    let terminator = match terminator {
+        StringTerm::Bel => "\x07",
+        StringTerm::St => "\x1b\\",
+    };
+    Arc::new(move |color| {
+        format!(
+            "\x1b]{};rgb:{1:02x}{1:02x}/{2:02x}{2:02x}/{3:02x}{3:02x}{4}",
+            prefix, color.r, color.g, color.b, terminator
+        )
+    })
 }

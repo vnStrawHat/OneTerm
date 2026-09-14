@@ -10,7 +10,7 @@ Checked documents (the "current" navigation set — historical records under
 * ``README.md`` and ``AGENTS.md`` at the repository root.
 
 A "path" is any back-ticked token that starts with ``crates/``, ``docs/``,
-``scripts/`` or ``vendor/``. Placeholders (``<name>``, ``*``, ``{a,b}``, ``…``)
+``scripts/``. Placeholders (``<name>``, ``*``, ``{a,b}``, ``…``)
 are skipped.
 
 ``reference/`` is deliberately *not* checked: it holds gitignored local clones of
@@ -33,7 +33,7 @@ DOCUMENTS = [
     ROOT / "AGENTS.md",
     *sorted((ROOT / "docs" / "agents").glob("*.md")),
 ]
-PATH_PATTERN = re.compile(r"`((?:crates|docs|scripts|vendor)/[^`]+)`")
+PATH_PATTERN = re.compile(r"`((?:crates|docs|scripts)/[^`]+)`")
 # Tokens that are templates / globs rather than concrete paths.
 PLACEHOLDER_CHARS = ("<", ">", "*", "{", "}", "…", " ", "|")
 

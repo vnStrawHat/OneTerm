@@ -258,6 +258,7 @@ impl Render for TerminalView {
                 absolute_line_count: info.absolute_line_count,
             };
             self.search.visible_highlights_into(
+                info.screen_top,
                 info.display_offset,
                 info.num_lines,
                 info.num_cols,

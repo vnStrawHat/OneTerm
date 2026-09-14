@@ -1,0 +1,43 @@
+# Linux-only fuzzing for the VT engine (IN-0029 R-47).
+#
+# Deliberately NOT a workspace member: `cargo-fuzz` needs `libfuzzer-sys`,
+# `arbitrary` and a nightly toolchain, libFuzzer is unusable on
+# `x86_64-pc-windows-msvc` — OneTerm's primary and only QA-tested platform — and
+# fuzzing is a scheduled job, never a pull-request gate or a packet exit
+# criterion. The own `[workspace]` table below keeps it out of the root
+# workspace, so `cargo build --workspace` and `cargo fmt --all` never see it.
+#
+#   rustup toolchain install nightly
+#   cargo install cargo-fuzz
+#   cargo +nightly fuzz run parser -- -rss_limit_mb=512
+#
+# The memory limit is the point: the defects this engine designs out are
+# memory-exhaustion defects. Seed the corpus from the parity recordings:
+#
+#   cp ../tests/corpus/alacritty-ref/*/recording fuzz/corpus/parser/
+#
+# On Windows the substitute is `parser::parser_tests::props::
+# arbitrary_bytes_never_panic_and_chunking_is_invariant`, which drives a million
+# pseudo-random bytes through the same entry point on every `cargo test`.
+
+[package]
+name = "oneterm-vt-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+oneterm-vt = { path = ".." }
+
+[[bin]]
+name = "parser"
+path = "fuzz_targets/parser.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

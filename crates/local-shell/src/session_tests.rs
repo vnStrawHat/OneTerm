@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use alacritty_terminal::selection::SelectionType;
+use oneterm_terminal::SelectionKind as SelectionType;
 use oneterm_terminal::mouse_encode::{MouseModifiers, TerminalMouseButton};
 use oneterm_terminal::{
     SessionKind, TerminalError, TerminalIme, TerminalInput, TerminalLifecycle, TerminalRender,
@@ -10,6 +10,7 @@ use oneterm_terminal::{
 };
 
 use crate::session::{LocalSession, quote_windows_argument};
+use oneterm_core::AppError;
 use oneterm_terminal::PtySize;
 
 #[test]
@@ -40,7 +41,7 @@ fn cmd_utf8_command_line_stays_verbatim_under_escaping() {
     }
 }
 
-fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) -> bool {
+pub(super) fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if predicate() {
@@ -52,17 +53,35 @@ fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) -> bool {
 }
 
 fn snapshot_contains(session: &LocalSession, needle: &str) -> bool {
-    session
-        .snapshot()
-        .cells
-        .iter()
-        .map(|indexed| indexed.cell.c)
-        .collect::<String>()
-        .contains(needle)
+    session.snapshot().text().contains(needle)
 }
 
-fn spawn_default() -> LocalSession {
-    let cfg = oneterm_core::LocalShellConfig::default();
+/// Serialises every real-shell spawn in this test binary.
+///
+/// `session_orphan_tests` works out which processes belong to its session by
+/// diffing this process's children around the spawn. Another test's shell
+/// starting inside that window would be adopted by the probe, waited out for
+/// `LIVENESS_BOUND` and then terminated — failing the probe and very likely the
+/// innocent test too. So every spawn here takes this lock, and the probe holds
+/// it across both of its snapshots.
+pub(super) static SPAWN_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub(super) fn lock_spawns() -> std::sync::MutexGuard<'static, ()> {
+    SPAWN_GUARD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Spawn `cfg` while holding [`SPAWN_GUARD`].
+fn spawn_guarded(cfg: oneterm_core::LocalShellConfig) -> Result<LocalSession, AppError> {
+    let _guard = lock_spawns();
+    spawn_unguarded(cfg)
+}
+
+/// Spawn `cfg`. The caller must already hold [`SPAWN_GUARD`].
+pub(super) fn spawn_unguarded(
+    cfg: oneterm_core::LocalShellConfig,
+) -> Result<LocalSession, AppError> {
     LocalSession::spawn(
         cfg,
         PtySize { rows: 24, cols: 80 },
@@ -70,7 +89,10 @@ fn spawn_default() -> LocalSession {
         TerminalSecurityPolicy::default(),
         oneterm_core::TerminalLogConfig::default(),
     )
-    .expect("spawn")
+}
+
+pub(super) fn spawn_default() -> LocalSession {
+    spawn_guarded(oneterm_core::LocalShellConfig::default()).expect("spawn")
 }
 
 #[cfg(windows)]
@@ -79,23 +101,11 @@ fn assert_powershell_prompt_emits_cwd(kind: oneterm_core::ShellKind, label: &str
         kind,
         ..Default::default()
     };
-    let session = LocalSession::spawn(
-        cfg,
-        PtySize { rows: 24, cols: 80 },
-        10_000,
-        TerminalSecurityPolicy::default(),
-        oneterm_core::TerminalLogConfig::default(),
-    )
-    .unwrap_or_else(|error| panic!("spawn {label}: {error}"));
+    let session = spawn_guarded(cfg).unwrap_or_else(|error| panic!("spawn {label}: {error}"));
 
     let emitted_cwd = wait_until(Duration::from_secs(15), || session.cwd().is_some());
     // `snapshot()` consumes render damage, which is fine here: no renderer runs.
-    let snapshot = session
-        .snapshot()
-        .cells
-        .iter()
-        .map(|indexed| indexed.cell.c)
-        .collect::<String>();
+    let snapshot = session.snapshot().text();
     assert!(
         emitted_cwd,
         "{label} prompt must emit OSC 7 through the PTY; terminal snapshot: {snapshot}"
@@ -138,8 +148,8 @@ fn local_session_grow_policy_matches_conpty() {
 fn trait_snapshot_bounds() {
     let s = spawn_default();
     let snap = s.snapshot();
-    assert_eq!(snap.terminal_bounds.num_cols, 80);
-    assert_eq!(snap.terminal_bounds.num_lines, 24);
+    assert_eq!(snap.size().cols, 80);
+    assert_eq!(snap.size().rows, 24);
     let _ = s.close();
 }
 
@@ -189,15 +199,9 @@ fn spawn_failure_is_a_typed_shell_resolution_error() {
         )),
         ..Default::default()
     };
-    let error = LocalSession::spawn(
-        cfg,
-        PtySize { rows: 24, cols: 80 },
-        10_000,
-        TerminalSecurityPolicy::default(),
-        oneterm_core::TerminalLogConfig::default(),
-    )
-    .err()
-    .expect("spawning a missing program must fail");
+    let error = spawn_guarded(cfg)
+        .err()
+        .expect("spawning a missing program must fail");
     match error {
         oneterm_core::AppError::ShellResolution { shell, .. } => {
             assert!(shell.contains("no-such-shell.exe"), "{shell}");
@@ -222,7 +226,7 @@ fn trait_write_resize_no_panic() {
     let s = spawn_default();
     let _ = s.write(b"echo hi\r");
     let _ = s.resize(30, 100);
-    assert_eq!(s.snapshot().terminal_bounds.num_cols, 100);
+    assert_eq!(s.snapshot().size().cols, 100);
     let _ = s.close();
 }
 
@@ -302,20 +306,20 @@ fn mouse_drag_updates_selection_not_mouse_move() {
     // Selection should still be empty (start == end at col 0)
     // to_range returns None for empty simple selection
     assert!(
-        snap.selection.is_none(),
+        snap.selection_range().is_none(),
         "mouse_move should not update selection"
     );
     // mouse_drag should update selection
     s.mouse_drag(0.0, 5.0, MouseModifiers::default());
     let snap2 = s.snapshot();
     assert!(
-        snap2.selection.is_some(),
+        snap2.selection_range().is_some(),
         "mouse_drag should update selection"
     );
-    if let Some(sel) = &snap2.selection {
-        assert_eq!(sel.start.column.0, 0);
+    if let Some(sel) = snap2.selection_range() {
+        assert_eq!(sel.start.col, 0);
         assert!(
-            sel.end.column.0 >= 4,
+            sel.end.col >= 4,
             "end col should be >= 4 after drag to col 5"
         );
     }

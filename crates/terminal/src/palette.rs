@@ -3,9 +3,9 @@
 //! The UI crate (`ui::TerminalTheme`) builds a `TerminalPalette` from the
 //! gpui-component `Theme`, then maps `Rgb` → `gpui::Hsla` when rendering.
 
-use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
+use oneterm_vt::{Color, NamedColor, Rgb};
 
-/// 16-color ANSI palette + fg/bg/cursor to resolve `Color::Named`/`Indexed`.
+/// 16-color ANSI palette + fg/bg/cursor to resolve `Color::Named`/`Palette`.
 ///
 /// `ansi[0..8]` = normal, `ansi[8..16]` = bright. Dim variants (DimBlack…)
 /// are computed by mixing the normal color with `background` at 50% — no need to
@@ -91,50 +91,53 @@ fn indexed_default_color(n: u8, ansi: &[Rgb; 16]) -> Rgb {
 /// - `Named`: 0-15 → `ansi[i]`; `Foreground`/`Background`/`Cursor` directly;
 ///   `Dim*` → dim(normal); `BrightForeground` → `foreground`;
 ///   `DimForeground` → dim(foreground).
-/// - `Spec(rgb)`: returned verbatim (truecolor).
-/// - `Indexed(n)`: 0-15 → `ansi`; 16-231 → 6×6×6 cube; 232-255 → grayscale.
+/// - `Rgb(rgb)`: returned verbatim (truecolor).
+/// - `Palette(n)`: 0-15 → `ansi`; 16-231 → 6×6×6 cube; 232-255 → grayscale.
 pub fn resolve_color(c: &Color, palette: &TerminalPalette) -> Rgb {
     match c {
         Color::Named(nc) => resolve_named(*nc, palette),
-        Color::Spec(rgb) => *rgb,
-        Color::Indexed(n) => resolve_indexed(*n, palette),
+        Color::Rgb(rgb) => *rgb,
+        Color::Palette(n) => resolve_indexed(*n, palette),
     }
 }
 
 fn resolve_named(nc: NamedColor, palette: &TerminalPalette) -> Rgb {
     match nc {
         // 16 ANSI colors — honor OSC 4 overrides.
-        NamedColor::Black
-        | NamedColor::Red
-        | NamedColor::Green
-        | NamedColor::Yellow
-        | NamedColor::Blue
-        | NamedColor::Magenta
-        | NamedColor::Cyan
-        | NamedColor::White
-        | NamedColor::BrightBlack
-        | NamedColor::BrightRed
-        | NamedColor::BrightGreen
-        | NamedColor::BrightYellow
-        | NamedColor::BrightBlue
-        | NamedColor::BrightMagenta
-        | NamedColor::BrightCyan
-        | NamedColor::BrightWhite => palette.ansi_color(nc as usize),
+        NamedColor::Black => palette.ansi_color(0),
+        NamedColor::Red => palette.ansi_color(1),
+        NamedColor::Green => palette.ansi_color(2),
+        NamedColor::Yellow => palette.ansi_color(3),
+        NamedColor::Blue => palette.ansi_color(4),
+        NamedColor::Magenta => palette.ansi_color(5),
+        NamedColor::Cyan => palette.ansi_color(6),
+        NamedColor::White => palette.ansi_color(7),
+        NamedColor::BrightBlack => palette.ansi_color(8),
+        NamedColor::BrightRed => palette.ansi_color(9),
+        NamedColor::BrightGreen => palette.ansi_color(10),
+        NamedColor::BrightYellow => palette.ansi_color(11),
+        NamedColor::BrightBlue => palette.ansi_color(12),
+        NamedColor::BrightMagenta => palette.ansi_color(13),
+        NamedColor::BrightCyan => palette.ansi_color(14),
+        NamedColor::BrightWhite => palette.ansi_color(15),
         NamedColor::Foreground => palette.foreground,
         NamedColor::Background => palette.background,
         NamedColor::Cursor => palette.cursor,
         // Dim variants → dim of the corresponding normal color (using the
         // OSC 4 override if present).
-        NamedColor::DimBlack
-        | NamedColor::DimRed
-        | NamedColor::DimGreen
-        | NamedColor::DimYellow
-        | NamedColor::DimBlue
-        | NamedColor::DimMagenta
-        | NamedColor::DimCyan
-        | NamedColor::DimWhite => {
-            palette.dim(palette.ansi_color(nc as usize - NamedColor::DimBlack as usize))
-        }
+        //
+        // Matched member by member rather than by subtracting discriminants
+        // (`US-0082`): the engine's `NamedColor` orders its variants differently
+        // and an arithmetic mapping is a silent mistranslation waiting for the
+        // seam to flip.
+        NamedColor::DimBlack => palette.dim(palette.ansi_color(0)),
+        NamedColor::DimRed => palette.dim(palette.ansi_color(1)),
+        NamedColor::DimGreen => palette.dim(palette.ansi_color(2)),
+        NamedColor::DimYellow => palette.dim(palette.ansi_color(3)),
+        NamedColor::DimBlue => palette.dim(palette.ansi_color(4)),
+        NamedColor::DimMagenta => palette.dim(palette.ansi_color(5)),
+        NamedColor::DimCyan => palette.dim(palette.ansi_color(6)),
+        NamedColor::DimWhite => palette.dim(palette.ansi_color(7)),
         // No separate bright foreground in the palette.
         NamedColor::BrightForeground => palette.foreground,
         NamedColor::DimForeground => palette.dim(palette.foreground),
@@ -283,54 +286,54 @@ mod tests {
     }
 
     #[test]
-    fn spec_truecolor_passthrough() {
+    fn rgb_truecolor_passthrough() {
         let p = pal();
         assert_eq!(
-            resolve_color(&Color::Spec(Rgb { r: 1, g: 2, b: 3 }), &p),
+            resolve_color(&Color::Rgb(Rgb { r: 1, g: 2, b: 3 }), &p),
             Rgb { r: 1, g: 2, b: 3 }
         );
     }
 
     #[test]
-    fn indexed_low_maps_ansi() {
+    fn palette_low_maps_ansi() {
         let p = pal();
         assert_eq!(
-            resolve_color(&Color::Indexed(2), &p),
+            resolve_color(&Color::Palette(2), &p),
             Rgb { r: 0, g: 200, b: 0 }
         );
     }
 
     #[test]
-    fn indexed_cube_16() {
+    fn palette_cube_16() {
         let p = pal();
         // n=16: r=g=b=0 → (0,0,0).
         assert_eq!(
-            resolve_color(&Color::Indexed(16), &p),
+            resolve_color(&Color::Palette(16), &p),
             Rgb { r: 0, g: 0, b: 0 }
         );
         // n=21: r=0,g=0,b=5 → (0,0,255). 21-16=5 → b=5 → conv(5)=255.
         assert_eq!(
-            resolve_color(&Color::Indexed(21), &p),
+            resolve_color(&Color::Palette(21), &p),
             Rgb { r: 0, g: 0, b: 255 }
         );
         // n=196: 196-16=180 → r=5,g=0,b=0 → (255,0,0).
         assert_eq!(
-            resolve_color(&Color::Indexed(196), &p),
+            resolve_color(&Color::Palette(196), &p),
             Rgb { r: 255, g: 0, b: 0 }
         );
     }
 
     #[test]
-    fn indexed_grayscale() {
+    fn palette_grayscale() {
         let p = pal();
         // n=232: v=8.
         assert_eq!(
-            resolve_color(&Color::Indexed(232), &p),
+            resolve_color(&Color::Palette(232), &p),
             Rgb { r: 8, g: 8, b: 8 }
         );
         // n=255: v = 8 + 10*23 = 238.
         assert_eq!(
-            resolve_color(&Color::Indexed(255), &p),
+            resolve_color(&Color::Palette(255), &p),
             Rgb {
                 r: 238,
                 g: 238,

@@ -7,7 +7,7 @@
 //! [`crate::active_terminal`]); the panel calls [`focus_terminal`] with the
 //! card's `terminal_key`.
 //!
-//! The protocol is one-directional (agent → host; OSC 9;7 §6.3) — this uses
+//! The protocol is one-directional (agent → host; OSC 20308 §6.3) — this uses
 //! OneTerm's own dock / `SpaceTree::set_active` / focus APIs, never OSC.
 
 use gpui::{App, EntityId, Window};

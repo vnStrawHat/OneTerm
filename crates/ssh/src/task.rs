@@ -3,15 +3,11 @@
 //! **`handle` must be kept alive** — dropping `russh::client::Handle` closes the
 //! connection. The handle is moved into the task and held until the session closes.
 
-use std::sync::Arc;
-
-use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::Term;
 use russh::ChannelMsg;
 use tokio_util::sync::CancellationToken;
 
 use oneterm_core::report_best_effort;
-use oneterm_terminal::TerminalPump;
+use oneterm_terminal::{SharedTerminal, TerminalPump};
 
 use crate::handler::SshClientHandler;
 use crate::route::JumpHandles;
@@ -19,12 +15,17 @@ use crate::transport::{Cmd, SshListener, SshTransport};
 use crate::tunnel::{HandleRequest, serve_handle_request};
 
 /// Main tokio task: reads data from the SSH channel + receives commands from the
-/// main thread. Feeds bytes to `Term` through the shared [`TerminalPump`] in a
-/// **single pass**; OSC 7/9/133 and screen clears arrive via `Event::Osc` /
-/// `Event::ClearScreen` (OneTerm alacritty fork) and are handled by the shared
-/// `OscRouter` — no second parser.
+/// main thread. Feeds bytes to the engine through the shared [`TerminalPump`] in
+/// a **single pass**: `Terminal::feed` fills one reusable `EventBatch`, which the
+/// shared `OscRouter` drains under the same lock — replies to the transport
+/// first, OSC 7/9/133 and screen clears into the state cache, UI events collected
+/// — and `finish_batch` sends them once the lock is released. No second parser,
+/// and no callback runs while the lock is held.
 ///
-/// The `Term` grid is resized by the UI thread (`TerminalSession::resize`);
+/// Each chunk ends with the pump's half of the render handshake
+/// ([`SharedTerminal::take_render_demand`], `docs/terminal-backend.md` § 5.1).
+///
+/// The grid is resized by the UI thread (`TerminalSession::resize`);
 /// this task only forwards the coalesced size to the remote PTY (CORR-21).
 ///
 /// **`handle` must be kept alive** — dropping it closes the SSH connection;
@@ -37,7 +38,7 @@ pub(crate) async fn ssh_main_task(
     handle: russh::client::Handle<SshClientHandler>,
     jump_handles: JumpHandles,
     mut channel: russh::Channel<russh::client::Msg>,
-    term: Arc<FairMutex<Term<SshListener>>>,
+    term: SharedTerminal,
     listener: SshListener,
     cmd_rx: async_channel::Receiver<Cmd>,
     mut open_rx: tokio::sync::mpsc::Receiver<HandleRequest>,
@@ -49,8 +50,8 @@ pub(crate) async fn ssh_main_task(
     let state = pump.state().clone();
 
     // Every exit path breaks with a reason and falls through to the single
-    // teardown block below (CORR-11), so `Closed` always follows the deferred
-    // reliable events and the SFTP task always dies with the connection.
+    // teardown block below (CORR-11), so `Closed` always follows the events the
+    // last batch collected and the SFTP task always dies with the connection.
     let reason: &'static str = loop {
         // If close was requested (even if Cmd::Close was dropped due to a
         // full queue), honor the closing flag immediately.
@@ -71,11 +72,21 @@ pub(crate) async fn ssh_main_task(
                         let bytes: &[u8] = data.as_ref();
                         log::debug!("ssh_main_task: recv {} bytes", bytes.len());
                         state.add_rx_bytes(bytes.len() as u64);
-                        // Parse under the Term lock, answer OSC colour queries,
-                        // then (lock released) flush deferred reliable events
-                        // and post the repaint hint.
+                        // Parse and drain the batch under the engine lock,
+                        // answering OSC colour queries, then (lock released)
+                        // send the batch's events and post the repaint hint.
                         pump.process_chunk(&term, bytes);
                         pump.finish_batch(true).await;
+                        // The chunk boundary, and the batch's replies have left
+                        // (R-37): `process_chunk` queued them on the command
+                        // channel this same loop drains. A raised flag means a
+                        // frame is waiting for the engine, so hand the runtime a
+                        // turn — the next chunk would otherwise relock straight
+                        // away, which is the one thing a fair mutex cannot
+                        // prevent.
+                        if term.take_render_demand() {
+                            tokio::task::yield_now().await;
+                        }
                     }
                     Some(ChannelMsg::ExitStatus { exit_status }) => {
                         let code = exit_status as i32;
@@ -139,3 +150,7 @@ pub(crate) async fn ssh_main_task(
     drop(jump_handles);
     log::info!("ssh_main_task: exiting");
 }
+
+#[cfg(test)]
+#[path = "task_tests.rs"]
+mod task_tests;

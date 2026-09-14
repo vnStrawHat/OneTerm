@@ -3,7 +3,7 @@
 #
 # Usage:
 #   scripts/ci-local.sh           # fmt, clippy, test + the Python policy checks
-#   scripts/ci-local.sh --full    # also: vendor/refresh.sh --check (network) + cargo deny
+#   scripts/ci-local.sh --full    # also: cargo deny (needs cargo-deny installed)
 #
 # Stops at the first failing command and prints it. Keep this list in sync with
 # ci.yml and AGENTS.md §4 (scripts/ci-local.ps1 is the PowerShell twin).
@@ -27,6 +27,10 @@ step() {
 step cargo fmt --all -- --check
 step cargo clippy --workspace --all-targets -- -D warnings
 step cargo test --workspace
+# IN-0029 R-28: the VT engine's integrity walk is bounded to the rows an
+# operation touched unless `vt-paranoid` is on. This is where the unbounded
+# whole-history invariants are gated.
+step cargo test -p oneterm-vt --features vt-paranoid
 step python scripts/verify-dependency-graph.py
 step python scripts/check-doc-paths.py
 step python -m unittest scripts/test_check_english.py
@@ -35,7 +39,6 @@ step python scripts/completion-catalog.py validate
 step python scripts/third-party-notices.py --check
 
 if [[ $FULL -eq 1 ]]; then
-  step bash vendor/refresh.sh --check
   if command -v cargo-deny >/dev/null 2>&1; then
     step cargo deny check licenses bans advisories
   else

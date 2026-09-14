@@ -1,6 +1,6 @@
 [package]
 name = "oneterm-local-shell"
-description = "Local shell via PTY for OneTerm (alacritty_terminal::tty)."
+description = "Local shell via PTY for OneTerm (oneterm-pty)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -17,10 +17,15 @@ workspace = true
 [dependencies]
 oneterm-core.workspace = true
 oneterm-terminal.workspace = true
-alacritty_terminal.workspace = true
+oneterm-pty.workspace = true
 async-channel.workspace = true
 polling.workspace = true
 log.workspace = true
 
 [dev-dependencies]
 oneterm-terminal = { workspace = true, features = ["test-support"] }
+
+# Test-only: the BUG-0055 orphan probe watches the processes a spawn added as
+# children of the test process (ToolHelp snapshot + process handle liveness).
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys.workspace = true
