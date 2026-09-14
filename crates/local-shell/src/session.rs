@@ -1,36 +1,34 @@
 //! `LocalSession` — spawn a local shell via `oneterm-pty` on a dedicated PTY
 //! owner thread (ConPTY on Windows).
 //!
-//! This file holds the spawn path, the struct, and its inherent helpers; the
-//! `TerminalSession` implementation lives in `session_terminal.rs`. See
-//! `docs/terminal-backend.md` §6.2.
+//! This file holds the spawn path, the struct, and its inherent helpers. The
+//! session handed to the UI is `oneterm_terminal::PtySession`, which owns a
+//! `LocalSession` as its `PtyOwner` — that half lives in `session_terminal.rs`.
+//! See `docs/terminal-backend.md` §6.2.
 
 use std::path::Path;
 use std::sync::Mutex;
 
-use async_channel::Receiver;
 use oneterm_pty::{Options, Shell, WindowSize};
 
 use oneterm_core::config::resolve_shell;
 use oneterm_core::{AppError, LocalShellConfig, TerminalLogConfig, home_dir};
 use oneterm_terminal::{
-    ClipboardOrigin, GridSize, OscRouter, PtySize, PtyTransport, SessionEvent, SessionEventSink,
-    SharedSessionState, SharedState, SharedTerminal, TerminalError, TerminalSecurityPolicy,
+    ClipboardOrigin, GridSize, OscRouter, PtySession, PtySize, PtyTransport, SessionEvent,
+    SessionEventSink, SessionKind, SharedSessionState, TerminalError, TerminalSecurityPolicy,
     new_shared_terminal,
 };
 
 use crate::event_loop::ShellEventLoop;
+use crate::session_terminal::local_resize_policy;
 use crate::transport::{LocalListener, LocalTransport};
 
-/// A local shell session.
+/// The PTY half of a local shell session: the transport, the shell config it
+/// was spawned with, and the owner thread to reap. `PtySession` owns one of
+/// these and everything else a terminal session does (`session_terminal.rs`).
 pub struct LocalSession {
-    pub(crate) term: SharedTerminal,
     pub(crate) listener: LocalListener,
-    pub(crate) event_rx: Mutex<Option<Receiver<SessionEvent>>>,
-    pub(crate) state: SharedState,
     pub(crate) config: LocalShellConfig,
-    /// IME marked text (compose buffer).
-    pub(crate) marked_text: Mutex<Option<String>>,
     owner_join: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
@@ -43,7 +41,7 @@ impl LocalSession {
         scrollback_history: usize,
         security: TerminalSecurityPolicy,
         logging: TerminalLogConfig,
-    ) -> Result<Self, AppError> {
+    ) -> Result<PtySession<Self>, AppError> {
         let resolved = resolve_shell(&cfg)?;
         // Kept for the spawn-failure error and logging identity: `resolved` is moved into `Options`.
         let program = resolved.program.clone();
@@ -109,15 +107,18 @@ impl LocalSession {
         // — fully silent, no temp file, no script written to the PTY.
         // See crates/core/src/config/shell.rs::resolve_shell().
 
-        Ok(Self {
+        Ok(PtySession::new(
             term,
-            listener,
-            event_rx: Mutex::new(Some(event_rx)),
             state,
-            config: cfg,
-            marked_text: Mutex::new(None),
-            owner_join: Mutex::new(Some(owner_join)),
-        })
+            event_rx,
+            SessionKind::Local,
+            local_resize_policy(),
+            Self {
+                listener,
+                config: cfg,
+                owner_join: Mutex::new(Some(owner_join)),
+            },
+        ))
     }
 
     /// The config this session was spawned with.

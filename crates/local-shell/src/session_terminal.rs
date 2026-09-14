@@ -1,8 +1,8 @@
-//! `impl TerminalSession for LocalSession` — the session kind and PTY
-//! teardown; everything else comes from the shared
-//! `impl_pty_terminal_session!` in `oneterm-terminal`.
+//! `impl PtyOwner for LocalSession` — the PTY writes, the teardown and the one
+//! capability a local shell offers; everything else a `TerminalSession` does
+//! lives once in `oneterm_terminal::PtySession`.
 
-use oneterm_terminal::{ResizePolicy, SessionKind, TerminalCapabilities, TerminalSession};
+use oneterm_terminal::{PtyOwner, PtyTransport, ResizePolicy, TerminalCapabilities, TerminalError};
 
 use crate::session::LocalSession;
 
@@ -10,29 +10,27 @@ use crate::session::LocalSession;
 /// in its own coordinates, so the grid must not pull scrollback (DEC-0008). Unix
 /// PTYs leave the reflow to the shell, where the engine's bottom-anchored
 /// default is right.
-///
-/// Both variants are `oneterm_vt::ResizePolicy` values by the time the engine
-/// sees them — `TerminalModel::new` takes `impl Into<oneterm_vt::ResizePolicy>`
-/// and `resize_grid` hands it straight to `Terminal::resize`. Naming the
-/// engine's enum *here* needs an API `crates/terminal` does not offer yet; see
-/// the `US-0083` packet's gap 1.
-const fn local_resize_policy() -> ResizePolicy {
+pub(crate) const fn local_resize_policy() -> ResizePolicy {
     if cfg!(windows) {
         ResizePolicy::KeepViewportTop
     } else {
-        ResizePolicy::Default
+        ResizePolicy::BottomAnchor
     }
 }
 
-oneterm_terminal::impl_pty_terminal_session!(
-    LocalSession,
-    "LocalSession",
-    SessionKind::Local,
-    local_resize_policy(),
-    shutdown_owner
-);
+impl PtyOwner for LocalSession {
+    fn pty_write(&self, bytes: &[u8]) -> Result<(), TerminalError> {
+        self.transport().pty_write(bytes)
+    }
 
-impl TerminalSession for LocalSession {
+    fn pty_resize(&self, rows: u16, cols: u16) -> Result<(), TerminalError> {
+        self.transport().pty_resize(rows, cols)
+    }
+
+    fn close(&self) -> Result<(), TerminalError> {
+        self.shutdown_owner()
+    }
+
     fn capabilities(&self) -> TerminalCapabilities {
         TerminalCapabilities {
             logging: Some(self.listener.logging().clone()),
