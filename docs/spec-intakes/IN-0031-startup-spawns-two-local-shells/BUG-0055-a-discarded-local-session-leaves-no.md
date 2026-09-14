@@ -10,8 +10,8 @@ Created: 2026-09-14
 
 <!-- HARNESS:STATUS:BEGIN -->
 - [x] Planned
-- [ ] In progress
-- [ ] Implemented
+- [x] In progress
+- [x] Implemented
 - [ ] Changed
 - [ ] Reopened (acceptance rework)
 - [ ] Retired
@@ -50,18 +50,18 @@ failed spawn, and a window closed during startup all reach the same teardown.
 
 ## Acceptance
 
-- [ ] Root cause named in this packet, with the observation that proves it, before any code
+- [x] Root cause named in this packet, with the observation that proves it, before any code
   changes. If the shell turns out to exit correctly and the probe was wrong, that is a valid
   outcome: record it and retire the packet.
-- [ ] A session dropped immediately after spawn — before its shell has finished starting — leaves
+- [x] A session dropped immediately after spawn — before its shell has finished starting — leaves
   no `cmd.exe` and no `OpenConsole.exe` within a bounded wait.
-- [ ] A session dropped after its shell is fully up leaves neither process either (the case that
+- [x] A session dropped after its shell is fully up leaves neither process either (the case that
   already works today; pinned so the fix cannot regress it).
-- [ ] A child that does not exit within the bounded wait is reported at `warn` with its pid, so a
+- [x] A child that does not exit within the bounded wait is reported at `warn` with its pid, so a
   future leak is diagnosable from `~/.OneTerm/logs` instead of Task Manager.
-- [ ] `cargo test -p oneterm-local-shell` and `cargo test -p oneterm-pty` green; the existing
+- [x] `cargo test -p oneterm-local-shell` and `cargo test -p oneterm-pty` green; the existing
   30-test local-shell baseline does not shrink.
-- [ ] `pwsh scripts/ci-local.ps1` exits 0.
+- [x] `pwsh scripts/ci-local.ps1` exits 0.
 
 ## Documentation
 
@@ -82,13 +82,13 @@ failed spawn, and a window closed during startup all reach the same teardown.
 
 ### Documentation Action
 
-To be decided when the mechanism is known; the choice belongs after the diagnosis, not before it.
+**Branch selected by the diagnosis: the orphan is a missing step in teardown, so the update is
+required.** `docs/terminal-backend.md` §6.2 now states what closing a local session guarantees,
+and §6.3 carries the Windows mechanism, the bound and the escalation.
 
-- If the orphan is a missing step in teardown: update required —
-  `docs/terminal-backend.md` §6.2/§6.3 must state what closing a local session guarantees about
-  the child process and its console host.
-- If the child is expected to exit on its own and the probe caught it mid-exit: no contract
-  change, and the packet retires with the measurement recorded.
+`DEC-0016` records the escalation itself: terminating a child process is a side effect on the
+user's machine, which the Decisions section below said would need a decision record before it
+landed.
 
 Reason: `docs/terminal-backend.md` describes the spawn and the owner thread in detail but does not
 state a guarantee about the child on close, so the correct documentation action depends on which
@@ -97,7 +97,21 @@ guessing.
 
 ### Reconciliation
 
-Before completion, list docs changed or confirm the recorded no-change reason remains valid.
+- `docs/terminal-backend.md` §6.2 — new paragraph: closing a local session leaves no process
+  behind, and where the teardown runs.
+- `docs/terminal-backend.md` §6.3 — new **Close** bullet: the measurement, `CHILD_EXIT_GRACE`,
+  the `warn`, the `DEC-0005` scoping and the owner-thread placement.
+- `docs/decisions/DEC-0016-terminate-a-shell-that-outlives-its-pseudo-console.md` — new,
+  status `Proposed` pending the owner's confirmation.
+- `docs/agents/error-policy.md` — reviewed, no change: the escalation is a best-effort cleanup
+  inside a `Drop` with no caller to return a typed error to, which is the "log at `warn` and
+  continue" row, and the message carries the operation and the pid as the review rules require.
+- `crates/pty/src/windows.rs` — reviewed, no change: the `PseudoConsole` field-order invariant
+  is what makes `ChildExitWatcher::drop` the correct place for the wait, and the order is
+  untouched.
+- `docs/agents/crate-dependency-rules.md` — reviewed, no change: the new `windows-sys` entry in
+  `oneterm-local-shell` is a **dev**-dependency, so no crate-graph edge changes and R1–R12 are
+  unaffected.
 
 ## Context
 
@@ -130,28 +144,83 @@ delays after spawn (0 ms, 50 ms, 500 ms, after first output), and record whether
 still alive at increasing waits. That separates "never dies" from "dies late" without touching any
 code.
 
+### Diagnosis: mechanism 1 holds
+
+Measured with `crates/local-shell/src/session_orphan_tests.rs::orphan_liveness_table` on
+Windows 11 26200, `HEAD` (`feat/vt-engine`), the shipped default shell
+`cmd.exe /K chcp 65001 >nul`, no production edit. The probe snapshots the processes the
+spawn adds as children of the test process, opens a handle to each before the drop so the
+pid cannot be recycled, drops the session at the delay, and polls
+`WaitForSingleObject(handle, 0)` every 20 ms up to the bound.
+
+First sweep, bound 5 s, five runs per delay (40 rows):
+
+| drop delay | runs | `cmd.exe` | `conhost.exe` |
+| --- | --- | --- | --- |
+| 0 ms | 5 | alive at 5 s in **5 of 5** | alive at 5 s in 5 of 5 |
+| 50 ms | 5 | exited at 20 ms, `0xc000013a` | exited at 20 ms, `0x0` |
+| 500 ms | 5 | exited at 20–21 ms, `0xc000013a` | exited at 20–21 ms, `0x0` |
+| after first output | 5 | exited at 20 ms, `0xc000013a` | exited at 20 ms, `0x0` |
+
+Second sweep, bound raised to **15 s** to separate "never" from "late", three runs per
+delay (36 rows):
+
+| drop delay | runs | `cmd.exe` outcome |
+| --- | --- | --- |
+| 0 ms | 3 | alive at 15 s in 2; 1 exited at 20 ms with **`0xc0000142`** |
+| 2 ms | 3 | alive at 15 s in 3 of 3 |
+| 5 ms | 3 | alive at 15 s in 3 of 3 |
+| 10 ms | 3 | exited at 20 ms, `0xc000013a` |
+| 20 ms | 3 | exited at 20 ms, `0xc000013a` |
+| 50 ms | 3 | exited at 20 ms, `0xc000013a` |
+
+`conhost.exe` followed its client in every single row: it exited when the client exited and
+survived when the client survived, which is expected — a console host exits with its last
+client. The console host is therefore a consequence of the orphan, not a second defect.
+
+**Mechanism 1 holds; mechanism 2 is ruled out.** A survivor is still alive 15 s after the
+drop, which is 750 times the 20 ms the normal path takes, so it is not "mid-exit". `0xc000013a`
+is `STATUS_CONTROL_C_EXIT` — the host's exit request, processed normally. `0xc0000142` is
+`STATUS_DLL_INIT_FAILED`, the code in the owner's `IN-0031` screenshot, observed here in one
+0 ms run: the same race has three outcomes — the client faults (and Windows raises the dialog),
+or it exits cleanly, or it never processes the request at all and stays forever. The vulnerable
+window closes between 5 ms and 10 ms after spawn on this machine.
+
+Two limits of this measurement, both recorded rather than resolved:
+
+- A `#32770` dialog is owned by `csrss.exe`, not by the client, so the probe cannot see one.
+  That the fault code appears in the exit status is the strongest link to the dialog available
+  from a test.
+- `ConptyApi::resolve` looks for `conpty.dll` next to the running executable, and a test binary
+  has none, so every row above is the **system** console host. The bundled
+  `OpenConsole.exe` (`DEC-0013`) is untested here; see `DEC-0016`'s follow-up.
+
 Constraint to respect: whatever the fix is, it must not join the owner thread on the UI thread —
 `CORR-10` and the detached reaper exist for that reason — and must not reorder `PseudoConsole`'s
 fields.
 
 ## Plan
 
-- [ ] Diagnose first, with no production edit: a focused test in `crates/local-shell` that spawns
+- [x] Diagnose first, with no production edit: a focused test in `crates/local-shell` that spawns
   a real `cmd.exe` session, drops it at a parameterised delay, and polls the child pid for
   liveness up to a bound. Record the table.
-- [ ] From that table, decide which mechanism holds and write it into this packet's Context.
-- [ ] Only then choose the fix. If a bounded wait plus an escalation is needed, it belongs off the
+- [x] From that table, decide which mechanism holds and write it into this packet's Context.
+- [x] Only then choose the fix. If a bounded wait plus an escalation is needed, it belongs off the
   UI thread (the existing reaper thread is the natural owner) and must log the pid it gave up on.
-- [ ] Re-run the diagnosis test as the regression proof, plus `-p oneterm-local-shell`,
+- [x] Re-run the diagnosis test as the regression proof, plus `-p oneterm-local-shell`,
   `-p oneterm-pty`, and `cargo test --workspace`.
-- [ ] Update `docs/terminal-backend.md` per whichever documentation branch the diagnosis selects.
-- [ ] `pwsh scripts/ci-local.ps1`.
+- [x] Update `docs/terminal-backend.md` per whichever documentation branch the diagnosis selects.
+- [x] `pwsh scripts/ci-local.ps1`.
 
 ## Decisions
 
-None yet. If the fix escalates to terminating a child process that will not exit, that is a
-consequential choice about a side effect on a user's machine and needs a `DEC` record before it
-lands — it is not a detail this packet can absorb silently.
+`DEC-0016` — **Terminate a shell that outlives its pseudo-console.** The diagnosis showed the
+survivor never exits, so the fix does escalate to `TerminateProcess`, which is the side effect
+this section said would need a record before it lands. The decision fixes the bound (2 s), the
+owner of the wait (`ChildExitWatcher::drop`, on the PTY owner thread), the `warn` with the pid,
+and the scoping rule inherited from `DEC-0005`: only this process's own child, only through the
+handle it holds for it, never a name match. Its status is `Proposed` until the owner confirms
+terminating a user's shell process is acceptable.
 
 ## Verification Plan
 
@@ -177,33 +246,100 @@ The owner's own running `oneterm.exe` and its shells must never be enumerated fo
 earlier packets in this repository recorded the same constraint.
 
 <!-- HARNESS:PROOF:BEGIN -->
-- [ ] Unit proof
-- [ ] Integration proof
+- [x] Unit proof
+- [x] Integration proof
 - [ ] E2E proof
-- [ ] Platform proof
-- [ ] Verify command passed
+- [x] Platform proof
+- [x] Verify command passed
 <!-- HARNESS:PROOF:END -->
 
 ## Evidence and Gaps
 
-Not implemented, and deliberately not yet diagnosed — the packet exists so the observation is not
-lost while `BUG-0054` is fixed.
+Implemented. The diagnosis in Context ruled mechanism 1 in and mechanism 2 out, so the packet
+took the "missing step in teardown" branch rather than retiring.
 
-Baseline observation (packaged 0.5.2, `dist/oneterm-x86_64-pc-windows-msvc/oneterm.exe`): across
-eight launches with a saved center terminal, two `cmd.exe` children were sampled in five of them
-and both were still alive at the end of a 6–7 s sampling window in three; in one launch two
-`cmd.exe` survived termination of the app pid and had to be killed by hand.
+**Fix.** `ChildExitWatcher::drop` (`crates/pty/src/windows/child.rs`) now waits
+`CHILD_EXIT_GRACE` (2 s) on the process handle it already owns and terminates the child if it
+is still running, logging the pid at `warn` first. The watcher is the last field of
+`PseudoConsole` and the pseudo-console is the first, so the wait runs after
+`ClosePseudoConsole` and before the handle is closed — no field was reordered. The watcher
+drops on the "PTY owner" thread, which `LocalSession::shutdown_owner` hands to a detached
+reaper, so no UI thread waits out the grace period (`CORR-10`). `DEC-0016` carries the
+rationale and the bound. Nothing in `crates/local-shell` needed to change: its teardown already
+delivered `ShellMsg::Shutdown` reliably and the loop already returned on it.
+
+**Independent verification** (separate agent, `2f47366..a3f180e`): PASS WITH NOTES — the
+tamper bites, `ci-local` totals reproduce exactly, and the `warn` line was captured verbatim
+with its pid by a probe that installed a collecting logger (the tests install none, so this
+packet's own runs could not have seen it). Its six notes are addressed in the follow-up
+commit:
+
+| # | Note | Resolution |
+| --- | --- | --- |
+| D2 | The probe adopted **every** new child of the test process, so a sibling test's shell starting inside its 15–25 ms snapshot window would be waited out, reported as an orphan and terminated — a latent CI flake with collateral damage inside the test binary. | `session_tests::SPAWN_GUARD`: every real-shell spawn in the binary takes one lock, and the probe holds it across both snapshots. |
+| D1 | `docs/terminal-backend.md` §6.2 and `DEC-0016` stated the close guarantee unconditionally; it holds only while the app runs, because the grace is served on a detached thread. | Both scoped to "while OneTerm is running"; `DEC-0016` Consequences now names the app-exit hole this packet's Gaps already recorded. |
+| D3 | On the `child_pid() == None` and `Poller::new` failure paths the pseudo-console dropped **before** `ready_tx.send(Err(..))`, so `LocalSession::spawn` on the UI thread could wait out the grace on top of the failure. | `Poller::new` moved ahead of the pseudo-console and out of the owner thread; `ShellEventLoop::new` is now infallible; the remaining failure path reports before the PTY drops. `DEC-0016`'s "no UI thread waits out the grace" is now literally true. |
+| D4 | The regression test asserted only "nothing survived", which a run that never reproduced the orphan also satisfies. | Exit codes are now asserted against `{0x0, 0x1, 0xc000013a, 0xc0000142}`, and the vacuous-pass risk is written into the test's doc comment: `0x1` is the escalation, and a run without one proves only that the orphan did not occur. The ignored `orphan_liveness_table` remains the manual proof. |
+| D5 | `DEC-0016` credited `DEC-0005` with the "own child only" rule, which `DEC-0005` explicitly rejected; there are also two `DEC-0005` files. | Split: never-by-name is inherited from `DEC-0005-terminate-only-oneterm-s-own.md` by filename, own-child-only is named as new and stricter. Same correction in `terminal-backend.md` §6.3 and in `child.rs`. |
+| D6 | `ChildExitWatcher` and the `oneterm-pty` crate doc still described a purely passive object. | Both updated: dropping one is an action with an external side effect. |
+
+The verifier also measured what the packet had not: the caller thread blocks **321 µs** for
+three 0 ms drops and 142 µs for three started ones, so the 2 s is paid entirely by the
+detached owner thread; and a **busy** shell (`ping -t`, `timeout /t 30`) plus its foreground
+grandchild both exit with `0xc000013a` ~20 ms after the close, before and after the fix — the
+escalation never touches them. Both facts are now in `terminal-backend.md` §6.3 and
+`DEC-0016`.
+
+**Regression proof** (`crates/local-shell/src/session_orphan_tests.rs`, Windows only):
+
+| Test | Before the fix | After |
+| --- | --- | --- |
+| `a_session_dropped_before_its_shell_starts_leaves_no_orphan` (0 ms, 5 runs) | FAILED on run 1 — `conhost.exe` pid 18352 alive for 5 s | ok |
+| `a_session_dropped_after_its_shell_is_up_leaves_no_orphan` (after first output) | ok | ok |
+
+The "before" column is a real run with the one call in `ChildExitWatcher::drop` commented out
+and nothing else changed. Five repetitions at 0 ms is what makes the first test deterministic:
+one run in nine survived the race on its own in the diagnosis sweep, so a single-run test could
+pass against the defect.
+
+**Test counts.** `cargo test -p oneterm-local-shell`: 33 passed, 2 ignored (baseline 31 passed
++ 1 ignored; the packet's "30 tests" does not shrink). `cargo test -p oneterm-pty`: 24 passed.
+`pwsh scripts/ci-local.ps1`: exit 0, all ten sections, 60 suites, **1933 passed, 0 failed,
+14 ignored**.
+
+**Processes.** Every process this packet started was a child of its own test process, opened by
+handle before the drop. Across the two sweeps and the pre-fix proof run, **14** orphan pairs had
+to be terminated by the probe — a `cmd.exe` plus the `conhost.exe` serving it, 28 processes:
+5 pairs in the 5 s sweep (0 ms, runs 1–5), 8 in the 15 s sweep (0 ms runs 1 and 3, 2 ms runs
+1–3, 5 ms runs 1–3) and 1 in the pre-fix proof run (0 ms, run 1, `conhost.exe` 18352). Each was
+terminated through the handle the probe opened for that pid. No process was ever
+matched by name, and no pid the probe did not observe being created was touched. The owner's
+own `oneterm.exe` and its shells were never enumerated.
 
 Gaps:
 
-- Mechanism unknown; the two candidates in Context are hypotheses, not findings.
-- The sampler polled at 20–60 ms and cannot distinguish "still alive" from "exiting", which is
-  exactly what the planned liveness table is for.
-- Whether this reproduces on `HEAD` (newer bundled ConPTY 1.24.2607.10001 plus the `crates/pty`
-  transport) is untested; the baseline is from the 0.5.2 package.
+- The bundled `OpenConsole.exe` (`DEC-0013`) is not covered. `ConptyApi::resolve` looks for
+  `conpty.dll` beside the running executable and a test binary has none, so every row above is
+  the system console host. The fix is host-independent (it acts on the client handle), but the
+  timing table is not.
+- The `#32770` dialog cannot be observed from a test: it belongs to `csrss.exe`. The link to it
+  is the `0xc0000142` exit status seen in one 0 ms run, which is the code from the owner's
+  screenshot.
+- No GUI E2E: the app-level walk belongs to `BUG-0054`, and this worktree deliberately does not
+  build `oneterm-app`. The E2E proof box is therefore unticked.
+- A child whose watcher fails to be created at all (`ChildExitWatcher::new` returning an error
+  inside `conpty::spawn`) still leaks — a pre-existing path on a failure that has not been
+  observed, and out of this packet's scope.
+- The regression test can pass vacuously on hardware where `cmd.exe` finishes initialising
+  before the spawn path returns: it would then never exercise the escalation. The exit-code
+  assertion narrows this (a `0x1` proves the path ran) but cannot require one without becoming
+  flaky in the other direction. The ignored `orphan_liveness_table` is the manual proof.
+- App exit is not covered: the reaper thread is detached, so a shell that outlives its
+  pseudo-console during process shutdown can still escape the grace period. `BUG-0054` removes
+  the startup case that produced it.
 
 ## Handoff
 
-Next action: run the liveness diagnosis and write its table into Context before proposing any
-change. Blocked on nothing. Do not implement a fix while the mechanism is still one of two
-hypotheses.
+`DEC-0016` is `Proposed`, not `Accepted`: terminating a user's shell process is a side effect
+the owner should confirm before this merges. Everything else is done — diagnosis, fix,
+regression proof, docs, `pwsh scripts/ci-local.ps1` green.

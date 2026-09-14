@@ -241,3 +241,7 @@ impl Drop for LocalSession {
 #[cfg(test)]
 #[path = "session_tests.rs"]
 mod session_tests;
+
+#[cfg(all(test, windows))]
+#[path = "session_orphan_tests.rs"]
+mod session_orphan_tests;

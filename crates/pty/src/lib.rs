@@ -6,6 +6,13 @@
 //! (`crates/local-shell/src/event_loop.rs`) and reads the PTY when the poller
 //! says it is readable.
 //!
+//! Passive while it lives — **dropping** a pseudo-console is an action with an
+//! external side effect. On Windows it closes the console, waits a bounded
+//! grace period for the child to exit, and terminates that child if it never
+//! does ([`DEC-0016`](../../../docs/decisions/DEC-0016-terminate-a-shell-that-outlives-its-pseudo-console.md)).
+//! The drop therefore blocks, and belongs on the caller's owner thread rather
+//! than on a UI thread.
+//!
 //! Platforms:
 //!
 //! - **Windows** — ConPTY. The bundled `conpty.dll` sitting next to the

@@ -376,8 +376,8 @@ fn start_loop() -> (RunningLoop, LoopbackPeer) {
         },
         oneterm_terminal::DEFAULT_SCROLLBACK_LINES,
     );
-    let (mut event_loop, notifier) = ShellEventLoop::new(pty, term.clone(), listener.clone())
-        .expect("event loop over loopback pty");
+    let poll = std::sync::Arc::new(polling::Poller::new().expect("poller"));
+    let (mut event_loop, notifier) = ShellEventLoop::new(pty, term.clone(), listener.clone(), poll);
     listener.transport().set_notifier(notifier.clone());
     let join = std::thread::Builder::new()
         .name("loopback PTY owner".into())
