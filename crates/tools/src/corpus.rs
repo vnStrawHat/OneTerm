@@ -21,7 +21,6 @@
 //! Design: `docs/spec-intakes/IN-0029-vt-engine/low-level-design/testing-and-bench.md` § 2.
 
 use std::collections::BTreeMap;
-use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -197,31 +196,6 @@ pub struct RowExpect {
 }
 
 impl GridExpect {
-    /// Render the expectation file body.
-    pub fn encode(&self) -> String {
-        let mut out = String::with_capacity(self.rows.len() * 64);
-        out.push_str(
-            "# OneTerm VT parity expectation: the grid, cell-exact, nothing trimmed.\n\
-             # Blessed by the vendored alacritty fork at US-0072 and FROZEN.\n\
-             # Rows are newest first. Each run is `<count>*<content>;<attrs>;<fg>;<bg>;<underline>;<hyperlink>`.\n\
-             # Do not hand-edit: the engine that blessed these files was deleted at US-0087.\n",
-        );
-        let _ = writeln!(out, "version {FORMAT_VERSION}");
-        let _ = writeln!(out, "columns {}", self.columns);
-        let _ = writeln!(out, "lines {}", self.lines);
-        let _ = writeln!(out, "display_offset {}", self.display_offset);
-        let _ = writeln!(out, "rows {}", self.rows.len());
-        for (index, row) in self.rows.iter().enumerate() {
-            let _ = writeln!(
-                out,
-                "row {index} wrap={} {}",
-                u8::from(row.wrap),
-                encode_runs(&row.cells)
-            );
-        }
-        out
-    }
-
     /// Parse an expectation file body.
     pub fn decode(text: &str) -> Result<Self> {
         let mut columns = None;
@@ -295,25 +269,6 @@ impl GridExpect {
     }
 }
 
-/// Run-length encode one row's cell tokens.
-fn encode_runs(cells: &[String]) -> String {
-    let mut out = String::new();
-    let mut index = 0;
-    while index < cells.len() {
-        let token = &cells[index];
-        let mut count = 1;
-        while index + count < cells.len() && &cells[index + count] == token {
-            count += 1;
-        }
-        if !out.is_empty() {
-            out.push('|');
-        }
-        let _ = write!(out, "{count}*{token}");
-        index += count;
-    }
-    out
-}
-
 /// Expand a run-length encoded row back to one token per column.
 fn decode_runs(text: &str) -> Result<Vec<String>> {
     let mut cells = Vec::new();
@@ -351,20 +306,6 @@ impl StateExpect {
     /// Append one entry.
     pub fn push(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.entries.push((key.into(), value.into()));
-    }
-
-    /// Render the expectation file body.
-    pub fn encode(&self) -> String {
-        let mut out = String::new();
-        out.push_str(
-            "# OneTerm VT parity expectation: cursor, modes, palette, title, tab stops,\n\
-             # scroll region. Blessed by the vendored engine at US-0072 and FROZEN.\n",
-        );
-        let _ = writeln!(out, "version {FORMAT_VERSION}");
-        for (key, value) in &self.entries {
-            let _ = writeln!(out, "{key} {value}");
-        }
-        out
     }
 
     /// Parse an expectation file body.

@@ -70,22 +70,33 @@ with the fork. The two cleanup rows `migration.md` § "Cleanup before decommissi
 
 ## Acceptance
 
-- [ ] `vendor/` does not exist and no tracked file references it.
-- [ ] `grep -rn "alacritty_terminal" crates/ scripts/ Cargo.toml` is empty except the
-      `US-0088`-owned files named in Scope.
-- [ ] `cargo tree -p oneterm-app` and `cargo metadata` resolve with no `alacritty_terminal`
-      and no `vte` package.
-- [ ] `pwsh scripts/ci-local.ps1` green, raw totals recorded.
-- [ ] `python scripts/third-party-notices.py --check` green with the two fork rows gone
+- [x] `vendor/` does not exist and no tracked file references it. — `Test-Path vendor` is
+      `False`; the only `vendor/` string left under `crates/` is one comment line in
+      `crates/terminal/src/backend/osc_router.rs`, which `US-0088` owns (Handoff).
+- [x] `grep -rn "alacritty_terminal" crates/ scripts/ Cargo.toml` names no dependency and
+      no dangling path. — What it still prints is provenance comments citing the upstream
+      file a port came from, the frozen corpus data, its `NOTICE`, and one notices line
+      saying what was removed. Enumerated in Gaps 1; the `US-0088`-owned files are in
+      Scope.
+- [x] `cargo tree -p oneterm-app` and `cargo metadata` resolve with no `alacritty_terminal`
+      and no `vte` package. — Both report zero matches; `Cargo.lock` has no `git+` source
+      at all.
+- [x] `pwsh scripts/ci-local.ps1` green, raw totals recorded. — Evidence § "The gate".
+- [x] `python scripts/third-party-notices.py --check` green with the two fork rows gone
       and the corpus test-data row (and its `NOTICE`) intact.
-- [ ] `cargo run -p oneterm-tools --bin vt-corpus -- check --engine new` is 45/45 on
+- [x] `cargo run -p oneterm-tools --bin vt-corpus -- check --engine new` is 45/45 on
       `alacritty-ref/` and 1/1 on `oneterm/sixel_basic`.
-- [ ] `cargo run -p oneterm-tools --release --bin vt-bench -- all --mib 2` reports all
+- [x] `cargo run -p oneterm-tools --release --bin vt-bench -- all --mib 2` reports all
       five tiers against `oneterm-vt`.
-- [ ] Reverse wrap: `BS` at column 0 with `? 45` set does not leave the scroll region,
-      proved by a test that sets `DECSTBM` and shows the cursor stays put.
-- [ ] `DECRQM` for LNM (`CSI 20 $p`) answers `Reset` even after `CSI 20 h`, proved by the
-      same mode-table walk that covers the private inert modes.
+- [x] Reverse wrap: `BS` at column 0 with `? 45` set does not leave the scroll region,
+      proved by a test that sets `DECSTBM` and shows the cursor stays put. —
+      `grid::tests::reverse_wrap_stays_inside_the_scroll_region`, plus three wire-level
+      cases in `crates/vt/tests/us0087_cleanup_rows.rs` including a region top that is not
+      row 0.
+- [x] `DECRQM` for LNM (`CSI 20 $p`) answers `Reset` even after `CSI 20 h`, proved by the
+      same mode-table walk that covers the private inert modes. — `Mode::ANSI` joins
+      `Mode::PRIVATE` in `decrqm_answers_match_the_mode_table`, and the wire tests add the
+      `l` case, the IRM control and an exhaustive `from_ansi` / `Mode::ANSI` cross-check.
 
 ## Documentation
 
@@ -141,6 +152,10 @@ ships, and `THIRD-PARTY-NOTICES.md` saying so is a false attribution.
 | `README.md`, `AGENTS.md` | the "Powered by" line, the VT-rendering bullet, § 4's optional-checks paragraph, the quick-reference row |
 | `docs/README.md`, `scripts/README.md` | the vendor-readme and refresh rows; the `check-doc-paths.py` description |
 | `scripts/check-doc-paths.py` | stops scanning a `vendor/` prefix that cannot exist |
+| `AGENTS.md` § 4 | the tenth gate step (`vt-paranoid`) was missing from the command list |
+| `docs/sftp-browser-design.md` | its crate tree named the fork as the local shell's engine |
+| `deny.toml` | the dead `allow-git` list |
+| `crates/vt/tests/corpus/**/grid.expect` | one comment line in each of 46 frozen files: "regenerate with `vt-corpus bless --engine old`" named a deleted subcommand. No data line moved — proof in Evidence |
 | Source provenance comments | `crates/{app,core,pty,terminal,vt}` — 20 files; every dangling vendor path became the upstream path it names, so the Apache-2.0 notices in `crates/pty` and the ported-from references in `crates/vt` still resolve |
 
 **Owed since `US-0077` and paid here.** That packet's Gaps recorded the `avt` attribution
@@ -153,8 +168,9 @@ algorithm is not source.
 - `docs/archive/**` and `docs/decisions/DEC-*.md` — records of what was true when written.
 - `crates/terminal/src/osc.rs` (3 lines) and `crates/terminal/src/backend/osc_router.rs`
   (1 line) — `US-0088` owns them. See Handoff.
-- The frozen corpus files (the `grid.expect` headers, the captured `recording` bytes) and
-  `crates/vt/tests/corpus/NOTICE` — the data and its attribution, neither editable.
+- Every **data** line of the frozen corpus, the captured `recording` bytes, the
+  `state.expect` files and `crates/vt/tests/corpus/NOTICE` — the gate and its attribution.
+  One `grid.expect` *comment* line was corrected; nothing else in that tree moved.
 
 **For the design owner** (`IN-0029.md`, the HLD and the LLDs are theirs, not this packet's):
 
@@ -173,6 +189,7 @@ algorithm is not source.
 | `reflow-and-resize.md:104` | the notices-generator owner row is discharged |
 | `US-0077-reflow-and-resize.md:465` | the attribution gap is closed |
 | `US-0085-terminal-view-native.md:312` | its Handoff hands `us0081_parity.rs` to this packet; it is deleted |
+| `migration.md` § "Cleanup before decommission" | the reverse-wrap row says "confined to the scroll region"; the guard as written also refuses a cursor parked **above** the region (the verifier's minor 8). That is a deliberate reading — the row above an out-of-region cursor is not the region's to write — but it is behaviour the row does not state. Pinned by `verify_reverse_wrap_above_the_region_is_also_blocked`, and left for the design owner to confirm or narrow |
 
 ## Context
 
@@ -237,10 +254,11 @@ per-capability fork patch) is the choice this packet completes.
 
 ### The gate
 
-`pwsh scripts/ci-local.ps1` — **exit 0, all ten steps**, 59.8 s warm. Raw totals over its
-two test steps: **58 sections, 1893 passed, 0 failed, 13 ignored**
-(`cargo test --workspace` 55 / 1529 / 0 / 10, and `-p oneterm-vt --features vt-paranoid`
-3 / 364 / 0 / 3).
+`pwsh scripts/ci-local.ps1` — **exit 0, all ten steps**, 58.8 s warm. Raw totals over its
+two test steps: **60 sections, 1905 passed, 0 failed, 13 ignored**. (Before the verifier's
+minors: 58 / 1893 / 0 / 13. The delta is the six adopted wire tests, counted once in
+`cargo test --workspace` and once in the `vt-paranoid` run, plus two round-trip tests
+replaced by two literal-fixture decode tests.)
 
 Individually, all green: `python scripts/verify-dependency-graph.py` (21 packages, 21
 members), `python scripts/check-doc-paths.py` (120 paths in 10 documents),
@@ -279,6 +297,35 @@ licenses ok** with the fork's `allow-git` entry removed.
   in total — the walk is where the assertion belongs.
 - Neither row moves a corpus cell: no recording sets `? 45` (measured at `US-0086`) and
   none queries LNM.
+- **`crates/vt/tests/us0087_cleanup_rows.rs`** — six wire-level tests written by the
+  independent verifier and adopted on their finding: reverse wrap blocked at a `DECSTBM`
+  top that is **not** row 0, crossing again once the region is dropped, a cursor parked
+  *above* the region also refused, `DECRQM` for LNM identical before / after `h` / after
+  `l` with IRM as the control, `LNM` set not turning `LF` into `CR`+`LF` (which is *why*
+  the answer must not be `Set`), and an exhaustive cross-check that every code
+  `Mode::from_ansi` recognises appears in the `Mode::ANSI` walk. All six pass. They go
+  through the public API with real bytes, so none of it reuses the unit suites' fixtures.
+
+### The verifier's minors
+
+`PASS-WITH-NOTES`, no blocker, eight minors; six were mine and are fixed in one commit on
+top of `cbc6d7b`:
+
+| # | Fix |
+| --- | --- |
+| 1 | `crates/local-shell/src/transport.rs:16` named an "Alacritty `EventListener`" that no longer exists — reworded to what `LocalListener` is |
+| 2 | `docs/sftp-browser-design.md:98` — `(alacritty_terminal + ConPTY)` → `(oneterm-vt + ConPTY)` |
+| 3 | This packet's nine Acceptance boxes ticked with their evidence; the Handoff commit count corrected |
+| 4 | The 46 frozen `grid.expect` headers still told the reader to `vt-corpus bless --engine old`, a subcommand deleted here. **One comment line** per file: 46 files, 46 insertions, 46 deletions, one distinct line pair, zero non-comment changes, every file `1 1` in `--numstat`; `corpus_check` and both `vt-corpus check` runs re-run green afterwards |
+| 5 | `StateExpect::encode` had no caller and `GridExpect::encode` only its own round trip, so both writers and `encode_runs` are deleted (about 45 lines). The two round-trip tests became **literal-fixture decode tests**: a round trip proves a writer and a reader agree with each other, which says nothing about whether the 46 frozen files still parse, and `decode` is live — it reads every one of them on every gate run |
+| 6 | `deny.toml`'s `allow-git` list was dead (`Cargo.lock` has zero `git+` sources); deleted, leaving `unknown-git = "deny"` as the whole policy |
+| 7 | `AGENTS.md` § 4 listed nine of the ten steps both `ci-local` twins run; `cargo test -p oneterm-vt --features vt-paranoid` added in order |
+
+Minor 8 (reverse wrap is refused *above* the region as well as at its top) and the
+observation that `migration.md`'s deletion list names neither `bless` nor the cross-check
+are the design owner's, per the coordinator; the code is unchanged and the behaviour is
+pinned by `verify_reverse_wrap_above_the_region_is_also_blocked` so a future reader does
+not have to re-derive it.
 
 ### Before and after
 
@@ -316,15 +363,18 @@ engine; one test was added.
    from the file it lives in and one renamed sink.
 4. **`ext_osc_caps` was deleted rather than moved.** It had no assertions — it printed five
    payload sizes — and `parser::tests::osc_truncates_at_inline_cap_and_still_dispatches`
-   already asserts the same cap.
+   already asserts the same cap. The same reasoning retired the two `GridExpect` round-trip
+   tests (verifier minor 5): they proved a writer and a reader agreed with each other, and
+   the writer is now gone, so they were replaced by literal-fixture decode tests that pin
+   the format the 46 frozen files are actually written in.
 5. **The bench tiers are not comparable across the swap.** The old numbers were the fork's;
    these are the engine's, on this machine, at `--mib 2`. No number here is a gate (R-29).
 
 ## Handoff
 
 Branch `worktree-agent-aec9c63d7aab09c7e` off `feat/vt-engine` @ `65139c5`, **not merged
-and not pushed**. Four commits: the packet (pre-code), the deletions, the two cleanup rows,
-the documentation.
+and not pushed**. Six commits: the packet (pre-code), the deletions, the two cleanup rows,
+the documentation, the `avt` attribution plus this evidence, and the verifier's minors.
 
 **To `US-0088`.** Four comment lines in files you own still name the fork:
 `crates/terminal/src/osc.rs:3`, `:4`, `:6` ("the OSCs vte does not dispatch…", "the OneTerm

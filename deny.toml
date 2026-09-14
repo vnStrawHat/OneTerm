@@ -122,6 +122,6 @@ ignore = [
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = [
-    "https://github.com/zed-industries/zed",
-]
+# No allow-git list: since US-0087 removed the vendored terminal fork there is not a
+# single `git+` source in Cargo.lock, so `unknown-git = "deny"` above is the whole
+# policy. Re-add an entry only together with the dependency that needs it.

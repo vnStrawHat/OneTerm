@@ -41,50 +41,72 @@ fn report(expected: &GridExpect, actual: &GridExpect, windows: Vec<DiffWindow>) 
         .expect("windows are well formed")
 }
 
+/// The 46 frozen `grid.expect` files are read by [`GridExpect::decode`] and
+/// written by nothing — the engine that blessed them was deleted at `US-0087`.
+/// So the fixture here is the **file format itself**, spelled out, rather than
+/// a round trip through a writer: a round trip proves the pair is
+/// self-consistent, which says nothing about whether the frozen files still
+/// parse.
 #[test]
-fn run_length_encoding_round_trips_every_column() {
-    let original = GridExpect {
-        columns: 5,
-        lines: 2,
-        display_offset: 3,
-        rows: vec![
-            RowExpect {
-                wrap: true,
-                cells: vec![cell("0041"); 5],
-            },
-            RowExpect {
-                wrap: false,
-                cells: vec![
-                    cell("0042"),
-                    cell("0042"),
-                    cell("0020"),
-                    cell("0042"),
-                    cell("0020"),
-                ],
-            },
-        ],
-    };
+fn the_frozen_grid_format_decodes_including_run_lengths() {
+    let a = cell("0041");
+    let b = cell("0042");
+    let space = cell("0020");
+    let text = format!(
+        "# OneTerm VT parity expectation: the grid, cell-exact, nothing trimmed.\n\
+         # Blessed by the vendored alacritty fork at US-0072 and FROZEN.\n\
+         version 1\n\
+         columns 5\n\
+         lines 2\n\
+         display_offset 3\n\
+         rows 2\n\
+         row 0 wrap=1 5*{a}\n\
+         row 1 wrap=0 2*{b}|1*{space}|1*{b}|1*{space}\n"
+    );
 
-    let decoded = GridExpect::decode(&original.encode()).expect("round trip");
+    let decoded = GridExpect::decode(&text).expect("the frozen format parses");
 
-    assert_eq!(decoded, original);
+    assert_eq!(
+        decoded,
+        GridExpect {
+            columns: 5,
+            lines: 2,
+            display_offset: 3,
+            rows: vec![
+                RowExpect {
+                    wrap: true,
+                    cells: vec![cell("0041"); 5],
+                },
+                RowExpect {
+                    wrap: false,
+                    cells: vec![
+                        cell("0042"),
+                        cell("0042"),
+                        cell("0020"),
+                        cell("0042"),
+                        cell("0020"),
+                    ],
+                },
+            ],
+        }
+    );
 }
 
 #[test]
-fn an_empty_row_round_trips() {
-    let original = GridExpect {
-        columns: 0,
-        lines: 1,
-        display_offset: 0,
-        rows: vec![RowExpect {
-            wrap: false,
-            cells: Vec::new(),
-        }],
-    };
+fn a_zero_column_row_decodes_to_no_cells() {
+    let text = "version 1\ncolumns 0\nlines 1\ndisplay_offset 0\nrows 1\nrow 0 wrap=0 \n";
 
     assert_eq!(
-        GridExpect::decode(&original.encode()).expect("round trip"),
-        original
+        GridExpect::decode(text).expect("an empty run list is not an error"),
+        GridExpect {
+            columns: 0,
+            lines: 1,
+            display_offset: 0,
+            rows: vec![RowExpect {
+                wrap: false,
+                cells: Vec::new(),
+            }],
+        }
     );
 }
 

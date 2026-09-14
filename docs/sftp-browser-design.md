@@ -95,7 +95,7 @@ OneTerm/
 │   ├── app/                       # Binary: main.rs + window.rs
 │   ├── core/                      # Domain model (no GPUI) — TerminalSession trait
 │   ├── ssh/                       # SSH client (russh) — WORKING
-│   ├── local/                     # Local shell (alacritty_terminal + ConPTY)
+│   ├── local/                     # Local shell (oneterm-vt + ConPTY)
 │   └── ui/                        # GPUI + gpui-component — all UI
 └── docs/
 ```
