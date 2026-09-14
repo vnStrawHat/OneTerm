@@ -287,3 +287,46 @@ fn hyperlinks_are_reachable_by_id() {
     let link = content.hyperlink(id).expect("the strings");
     assert_eq!(link.uri.as_ref(), "https://a.test");
 }
+
+/// `US-0092` verification (V1). A row erased with a non-default background —
+/// background-colour erase, which every full-screen TUI uses — is *visually*
+/// non-blank: `is_blank_cell` rejects it because `style.bg` is not
+/// `NamedColor::Background`. But `Row::reset` fills the cells with the erase
+/// template and then sets `occ = 0` (`crates/vt/src/grid/row.rs:161-171`), so
+/// the `occ == 0` skip walks straight past it.
+#[test]
+fn last_content_row_sees_a_background_erased_row() {
+    // `ED Below` from row 0 with a blue erase template: every row below the
+    // cursor is painted blue, and `reset_rows` zeroes their `occ`.
+    let mut term = terminal(GridSize { cols: 8, lines: 5 });
+    feed(&mut term, b"\x1b[44m\x1b[H\x1b[J");
+    assert_eq!(
+        last_content_row(&term),
+        4,
+        "a blue-erased screen is content down to the last row"
+    );
+}
+
+/// Same hazard through the other `reset()` door: a scroll with a background
+/// colour set blanks the incoming row to the erase template.
+#[test]
+fn last_content_row_sees_a_background_erased_scroll_in() {
+    let mut term = terminal(GridSize { cols: 8, lines: 4 });
+    // Fill the screen, then scroll one line in with a red background set.
+    feed(&mut term, b"a\r\nb\r\nc\r\nd");
+    feed(&mut term, b"\x1b[41m\r\n");
+    assert_eq!(
+        last_content_row(&term),
+        3,
+        "the red row scrolled in is content"
+    );
+}
+
+/// The control for the two above: with the default background the same
+/// sequences really are blank, so the skip is right to fire there.
+#[test]
+fn last_content_row_default_erase_stays_blank() {
+    let mut term = terminal(GridSize { cols: 8, lines: 5 });
+    feed(&mut term, b"x\r\n\x1b[H\x1b[J");
+    assert_eq!(last_content_row(&term), 0);
+}
