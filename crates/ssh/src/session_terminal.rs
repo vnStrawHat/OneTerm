@@ -1,41 +1,31 @@
-//! `impl TerminalSession for SshSession` — the SSH capabilities, session kind
-//! and channel teardown; everything else comes from the shared
-//! `impl_pty_terminal_session!` in `oneterm-terminal` (ARCH-05).
+//! `impl PtyOwner for SshSession` — the channel writes, the teardown and the
+//! SSH capabilities; everything else a `TerminalSession` does lives once in
+//! `oneterm_terminal::PtySession` (ARCH-05).
 
 use std::sync::Arc;
 
 use oneterm_core::SftpBackend;
-use oneterm_terminal::{
-    PtyTransport, SessionKind, TerminalCapabilities, TerminalError, TerminalSession,
-};
+use oneterm_terminal::{PtyOwner, PtyTransport, TerminalCapabilities, TerminalError};
 
 use crate::session::SshSession;
 
-oneterm_terminal::impl_pty_terminal_session!(
-    SshSession,
-    "SshSession",
-    SessionKind::Ssh,
-    // `oneterm_vt::ResizePolicy::BottomAnchor` is what reaches `Terminal::resize`
-    // (DEC-0008: the remote PTY reflows and repaints on its side, so a row grow
-    // pulls scrollback into the viewport top and the cursor follows it down).
-    // The engine value cannot be named here yet — `impl_pty_terminal_session!`
-    // declares `resize_policy()` as returning the adapter enum; see `US-0084`'s
-    // packet, gap 2.
-    oneterm_terminal::ResizePolicy::Default,
-    close_channel
-);
+impl PtyOwner for SshSession {
+    fn pty_write(&self, bytes: &[u8]) -> Result<(), TerminalError> {
+        self.transport().pty_write(bytes)
+    }
 
-impl SshSession {
+    fn pty_resize(&self, rows: u16, cols: u16) -> Result<(), TerminalError> {
+        self.transport().pty_resize(rows, cols)
+    }
+
     /// Close the SSH channel. SFTP shares the connection: closing the shell
     /// closes it too (ARCH-28).
-    fn close_channel(&self) -> Result<(), TerminalError> {
+    fn close(&self) -> Result<(), TerminalError> {
         let result = self.transport().pty_close();
         self.close_sftp();
         result
     }
-}
 
-impl TerminalSession for SshSession {
     fn capabilities(&self) -> TerminalCapabilities {
         TerminalCapabilities {
             network_stats: Some(self.state.net_stats()),
