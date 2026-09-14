@@ -6,9 +6,9 @@
 //! here is what the *adapter* owns: that the model's operations reach the
 //! engine and come back in the coordinates the view expects.
 
-use oneterm_vt::SelectionKind;
+use oneterm_vt::{ResizePolicy, SelectionKind};
 
-use super::{ResizePolicy, TerminalModel};
+use super::TerminalModel;
 use crate::backend::GridSize;
 use crate::handle::{DEFAULT_SCROLLBACK_LINES, new_shared_terminal};
 use crate::test_engine::feed;
@@ -36,7 +36,7 @@ fn has_selection_tracks_selection_state() {
     let model = model(
         GridSize { cols: 11, lines: 1 },
         b"hello world",
-        ResizePolicy::Default,
+        ResizePolicy::BottomAnchor,
     );
     assert!(!model.has_selection());
 
@@ -55,7 +55,7 @@ fn select_all_marks_a_selection() {
     let model = model(
         GridSize { cols: 3, lines: 2 },
         b"one\r\ntwo",
-        ResizePolicy::Default,
+        ResizePolicy::BottomAnchor,
     );
     model.select_all();
     assert!(model.has_selection());
@@ -69,7 +69,7 @@ fn scrolling_back_moves_the_display_offset_not_the_cursor_line() {
     let model = model(
         GridSize { cols: 8, lines: 2 },
         b"one\r\ntwo\r\nthree\r\nfour",
-        ResizePolicy::Default,
+        ResizePolicy::BottomAnchor,
     );
     let before = model.query_state(true);
     assert_eq!(before.display_offset, 0);
@@ -99,7 +99,7 @@ fn resize_grid_applies_the_backend_policy() {
     bytes.extend_from_slice(b"prompt>");
 
     let keep = model(size, &bytes, ResizePolicy::KeepViewportTop);
-    let default = model(size, &bytes, ResizePolicy::Default);
+    let default = model(size, &bytes, ResizePolicy::BottomAnchor);
     assert!(keep.needs_resize(8, 10));
     keep.resize_grid(8, 10);
     default.resize_grid(8, 10);
@@ -128,7 +128,7 @@ fn a_sixel_reaches_the_snapshot_once_with_its_placement() {
     let model = model(
         GridSize { cols: 10, lines: 4 },
         b"\x1bPq#0;2;100;0;0~~\x1b\\",
-        ResizePolicy::Default,
+        ResizePolicy::BottomAnchor,
     );
 
     let first = model.snapshot();
@@ -173,7 +173,7 @@ fn search_reports_matches_on_their_rows() {
     let model = model(
         GridSize { cols: 8, lines: 2 },
         b"alpha\r\nbeta\r\nalpha",
-        ResizePolicy::Default,
+        ResizePolicy::BottomAnchor,
     );
     let info = model.terminal_info(0, 0);
     let matches = model.search("alpha", crate::SearchOptions::default());

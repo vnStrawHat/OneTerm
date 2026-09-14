@@ -23,54 +23,10 @@ use crate::osc_color::DynamicColors;
 use crate::search::{GridText, search_grid_text};
 use crate::{SearchMatch, SearchOptions, TerminalInfo, TerminalQueryState};
 
-/// How a grow-resize treats the primary grid's scrollback (DEC-0008).
-///
-/// Chosen by the backend that owns the PTY, because it must agree with whatever
-/// sits on the other side of that PTY. Both are native engine policies since
-/// `US-0077`, and [`TerminalModel::new`] takes anything that converts into one:
-/// this enum survives only because the backends name `ResizePolicy::Default`
-/// through `impl_pty_terminal_session!`, and `US-0083` / `US-0084` replace that
-/// one token each with `oneterm_vt::ResizePolicy::BottomAnchor` /
-/// `::KeepViewportTop`, after which it is deleted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ResizePolicy {
-    /// The reference's behaviour: added rows are pulled from scrollback into the
-    /// top of the viewport and the cursor moves down by the same amount. Right
-    /// for Unix PTYs and SSH, where the remote side reflows and repaints.
-    #[default]
-    Default,
-    /// Existing rows keep their index, added rows are blank at the bottom, the
-    /// cursor row is unchanged and scrollback is untouched. Matches conhost
-    /// behind ConPTY, which keeps its viewport top on a resize and addresses
-    /// later output with absolute cursor positions in its own coordinates.
-    KeepViewportTop,
-}
-
-impl From<ResizePolicy> for oneterm_vt::ResizePolicy {
-    fn from(policy: ResizePolicy) -> oneterm_vt::ResizePolicy {
-        match policy {
-            ResizePolicy::Default => oneterm_vt::ResizePolicy::BottomAnchor,
-            ResizePolicy::KeepViewportTop => oneterm_vt::ResizePolicy::KeepViewportTop,
-        }
-    }
-}
-
-/// The other direction, so `impl_pty_terminal_session!` accepts the engine's
-/// own name from a backend that has moved to it (`US-0083`, `US-0084`) without
-/// that backend having to depend on `oneterm-vt`.
-impl From<oneterm_vt::ResizePolicy> for ResizePolicy {
-    fn from(policy: oneterm_vt::ResizePolicy) -> ResizePolicy {
-        match policy {
-            oneterm_vt::ResizePolicy::BottomAnchor => ResizePolicy::Default,
-            oneterm_vt::ResizePolicy::KeepViewportTop => ResizePolicy::KeepViewportTop,
-        }
-    }
-}
-
 /// Shared terminal-model operations backed by the engine.
 ///
-/// Created per call by `impl_pty_terminal_session!` and stored nowhere — it is
-/// two words wide. Every render-path state that must survive between frames —
+/// Created per call by [`PtySession`](crate::session::PtySession) and stored
+/// nowhere — it is two words wide. Every render-path state that must survive between frames —
 /// the damage watermark and the copied rows — lives in the caller's
 /// [`TerminalContent`], which is the buffer the renderer reuses, not in
 /// anything this type or the lock holds.
@@ -82,9 +38,8 @@ pub struct TerminalModel {
 impl TerminalModel {
     /// Wrap an existing [`SharedTerminal`].
     ///
-    /// Takes anything that converts into the engine's policy, so a backend can
-    /// pass either this crate's [`ResizePolicy`] or `oneterm_vt::ResizePolicy`
-    /// — which is what lets `US-0083` / `US-0084` switch without a change here.
+    /// Takes anything that converts into the engine's policy; the backends pass
+    /// `oneterm_vt::ResizePolicy` directly (`US-0091`).
     pub fn new(term: SharedTerminal, resize_policy: impl Into<oneterm_vt::ResizePolicy>) -> Self {
         Self {
             term,
