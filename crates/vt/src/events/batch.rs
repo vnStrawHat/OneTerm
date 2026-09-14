@@ -14,7 +14,7 @@ use crate::grid::ScrollReport;
 
 /// A batch that held more than this shrinks back afterwards, so one hostile
 /// 8 MiB OSC 52 payload does not keep its arena for the session.
-pub const EVENT_ARENA_SOFT: usize = 1 << 20;
+pub(crate) const EVENT_ARENA_SOFT: usize = 1 << 20;
 
 /// UTF-8 text in the batch's arena. Validated at insert, so reading it back
 /// never fails.
@@ -155,7 +155,7 @@ impl EventBatch {
 
     /// Turn what a scroll primitive did into the events a consumer needs: the
     /// motion between row ids, and the new oldest row when history was trimmed.
-    pub fn push_scroll_report(&mut self, report: &ScrollReport) {
+    pub(crate) fn push_scroll_report(&mut self, report: &ScrollReport) {
         if let Some(scrolled) = report.scrolled {
             self.events.push(VtEvent::RowsScrolled(scrolled));
         }

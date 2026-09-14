@@ -26,6 +26,8 @@ step() {
 
 step cargo fmt --all -- --check
 step cargo clippy --workspace --all-targets -- -D warnings
+# `terminal-diagnostics` guards ~200 lines no other step compiles (`US-0090`).
+step cargo clippy --workspace --all-targets --features oneterm-app/terminal-diagnostics -- -D warnings
 step cargo test --workspace
 # IN-0029 R-28: the VT engine's integrity walk is bounded to the rows an
 # operation touched unless `vt-paranoid` is on. This is where the unbounded

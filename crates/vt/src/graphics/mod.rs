@@ -44,11 +44,11 @@ pub(crate) use sixel::SixelParser;
 pub const VIRTUAL_CELL: (u16, u16) = (10, 20);
 
 /// Largest width or height an image may have. Pixels beyond it are dropped.
-pub const MAX_DIMENSION: u32 = 4096;
+pub(crate) const MAX_DIMENSION: u32 = 4096;
 
 /// The pixel budget one image may occupy while it is being decoded, which both
 /// axes being clamped to [`MAX_DIMENSION`] enforces by construction.
-pub const MAX_PIXEL_BYTES: usize = (MAX_DIMENSION as usize) * (MAX_DIMENSION as usize) * 4;
+pub(crate) const MAX_PIXEL_BYTES: usize = (MAX_DIMENSION as usize) * (MAX_DIMENSION as usize) * 4;
 
 /// Live placements one terminal may hold.
 ///
@@ -56,7 +56,7 @@ pub const MAX_PIXEL_BYTES: usize = (MAX_DIMENSION as usize) * (MAX_DIMENSION as 
 /// the release sweep is linear in live placements, so the count is bounded the
 /// way every other table in the engine is: past the bound the **oldest**
 /// placement is released, which frees the view's texture rather than leaking it.
-pub const MAX_PLACEMENTS: usize = 256;
+pub(crate) const MAX_PLACEMENTS: usize = 256;
 
 /// Decoded image pixels: RGBA8, row-major, stride `width * 4`, **straight
 /// (non-premultiplied) alpha**.

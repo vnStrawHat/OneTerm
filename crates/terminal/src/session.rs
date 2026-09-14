@@ -301,7 +301,7 @@ pub trait TerminalRender: Send + Sync {
     /// grid coordinates (top-to-bottom order). Empty query → empty result.
     ///
     /// Backends snapshot the grid text under the `Term` lock and match outside
-    /// it ([`crate::search`]).
+    /// it (`crate::search`).
     fn search(&self, query: &str, options: SearchOptions) -> Vec<SearchMatch>;
 
     /// The currently selected text (for copy). `None` if there is no selection.

@@ -22,7 +22,7 @@ use crate::intern::{ExtrasId, StyleId};
 pub struct SeqNo(pub u64);
 
 impl SeqNo {
-    pub fn next(self) -> SeqNo {
+    pub(crate) fn next(self) -> SeqNo {
         SeqNo(self.0.saturating_add(1))
     }
 }
@@ -143,7 +143,7 @@ impl Row {
         self
     }
 
-    pub fn header(&self) -> &RowHeader {
+    pub(crate) fn header(&self) -> &RowHeader {
         &self.header
     }
 
@@ -214,7 +214,7 @@ pub(crate) fn flags_for(cell: Cell) -> RowFlags {
 /// degrade to a default-width blank that keeps the cell's style — the
 /// reference's `clear_wide`. A `LeadingWideSpacer` is left alone: it is a
 /// legitimate lone spacer marking a glyph that wrapped to the next row.
-pub fn repair_wide_pairs(cells: &mut [Cell]) {
+pub(crate) fn repair_wide_pairs(cells: &mut [Cell]) {
     for col in 0..cells.len() {
         match cells[col].width() {
             CellWidth::Wide => {
@@ -277,11 +277,11 @@ impl<'a> RowRef<'a> {
 
     /// `SeqNo::default()` for a row that was never written, which is below every
     /// watermark a consumer can hold.
-    pub fn seq(&self) -> SeqNo {
+    pub(crate) fn seq(&self) -> SeqNo {
         self.header.map_or(SeqNo::default(), |header| header.seq)
     }
 
-    pub fn flags(&self) -> RowFlags {
+    pub(crate) fn flags(&self) -> RowFlags {
         self.header.map_or(RowFlags::empty(), |header| header.flags)
     }
 
@@ -317,7 +317,7 @@ pub struct RowMut<'a> {
 }
 
 impl<'a> RowMut<'a> {
-    pub(crate) fn new(row: &'a mut Row, seq: SeqNo) -> RowMut<'a> {
+    pub fn new(row: &'a mut Row, seq: SeqNo) -> RowMut<'a> {
         row.header.seq = seq;
         row.header.flags.insert(RowFlags::DIRTY);
         RowMut { row }
@@ -335,7 +335,7 @@ impl<'a> RowMut<'a> {
     ///
     /// Trap 6, same-row half: this is the reference's `write_at_cursor` repair,
     /// run against the cell being overwritten before the new one lands.
-    pub fn write_repairing(&mut self, col: u16, cell: Cell) {
+    pub(crate) fn write_repairing(&mut self, col: u16, cell: Cell) {
         crate::cell::repair_wide_pair_in_row(&mut self.row.cells, col as usize);
         self.set(col, cell);
     }
@@ -364,7 +364,7 @@ impl<'a> RowMut<'a> {
     /// first columns of a row released the previous row's trailing
     /// `LeadingWideSpacer` and cleared **that row's** wrap flag with it, which
     /// would split a wrapped CJK line on the next reflow.
-    pub fn repair(&mut self, col: u16, cell: Cell) {
+    pub(crate) fn repair(&mut self, col: u16, cell: Cell) {
         let Some(slot) = self.row.cells.get_mut(col as usize) else {
             return;
         };
@@ -396,7 +396,7 @@ impl<'a> RowMut<'a> {
     /// The reference leaves an orphaned spacer here; the integrity assertion
     /// this design mandates ("no `Wide` without its `WideSpacer`") makes the
     /// repair compulsory.
-    pub fn fill(&mut self, range: std::ops::Range<u16>, template: Cell) {
+    pub(crate) fn fill(&mut self, range: std::ops::Range<u16>, template: Cell) {
         let end = (range.end as usize).min(self.row.cells.len());
         let start = (range.start as usize).min(end);
         self.row.cells[start..end].fill(template);
@@ -408,7 +408,7 @@ impl<'a> RowMut<'a> {
 
     /// `DCH`, correction C1: a plain shift left by `n`, not the reference's
     /// `end`-clamped swap.
-    pub fn delete_cells(&mut self, col: u16, n: u16, template: Cell) {
+    pub(crate) fn delete_cells(&mut self, col: u16, n: u16, template: Cell) {
         let cols = self.row.cells.len();
         let col = (col as usize).min(cols);
         let n = (n as usize).min(cols - col);
@@ -424,7 +424,7 @@ impl<'a> RowMut<'a> {
     }
 
     /// `ICH`: shift right from `col` by `n`, filling the opened cells.
-    pub fn insert_cells(&mut self, col: u16, n: u16, template: Cell) {
+    pub(crate) fn insert_cells(&mut self, col: u16, n: u16, template: Cell) {
         let cols = self.row.cells.len();
         let col = (col as usize).min(cols);
         let n = (n as usize).min(cols - col);
@@ -442,7 +442,7 @@ impl<'a> RowMut<'a> {
     /// Insert mode's shift, which moves the whole row right by the glyph width.
     /// Correction C4: the pair the shift splits is repaired rather than left as
     /// an orphaned spacer.
-    pub fn shift_right_from(&mut self, col: u16, n: u16) {
+    pub(crate) fn shift_right_from(&mut self, col: u16, n: u16) {
         let cols = self.row.cells.len();
         let col = (col as usize).min(cols);
         let n = (n as usize).min(cols - col);
@@ -462,7 +462,7 @@ impl<'a> RowMut<'a> {
     /// Declare that a graphic covers part of this row. The grid cannot derive it
     /// (the extras id only resolves through the interner), so the graphics
     /// packet stamps it explicitly.
-    pub fn mark_graphic(&mut self) {
+    pub(crate) fn mark_graphic(&mut self) {
         self.row.header.flags.insert(RowFlags::HAS_GRAPHIC);
     }
 
@@ -477,7 +477,7 @@ impl<'a> RowMut<'a> {
 
 /// Ring-side helpers, kept out of the public surface.
 impl Row {
-    pub(crate) fn id(&self) -> RowId {
+    pub fn id(&self) -> RowId {
         self.header.id
     }
 
@@ -486,7 +486,7 @@ impl Row {
         self
     }
 
-    pub(crate) fn bytes(&self) -> usize {
+    pub fn bytes(&self) -> usize {
         self.heap_bytes()
     }
 }

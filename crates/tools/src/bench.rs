@@ -29,8 +29,8 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use oneterm_vt::RenderState;
 use oneterm_vt::parser::{Dispatch, OscParams, Params, Parser, StringTerm};
-use oneterm_vt::render::RenderState;
 use oneterm_vt::{Config, EventBatch, ResizePolicy, Size, Terminal};
 
 /// Benchmark grid width, matching `pty-throughput`'s geometry.

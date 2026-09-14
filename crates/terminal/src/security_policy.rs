@@ -95,7 +95,7 @@ impl TerminalSecurityPolicy {
     /// - Removes C0 control characters (except tab and newline)
     /// - Removes C1 control characters
     /// - Removes BiDi override/embedding characters
-    /// - Truncates to [`MAX_TITLE_BYTES`] at a UTF-8 boundary
+    /// - Truncates to `MAX_TITLE_BYTES` at a UTF-8 boundary
     /// - Returns `None` if the result is empty
     pub fn sanitize_title(&self, title: &str) -> Option<String> {
         let cleaned = strip_unsafe_chars(title);
@@ -110,7 +110,7 @@ impl TerminalSecurityPolicy {
     /// Sanitize a notification message.
     ///
     /// - Removes C0/C1 controls and BiDi overrides
-    /// - Truncates to [`MAX_NOTIFICATION_BYTES`]
+    /// - Truncates to `MAX_NOTIFICATION_BYTES`
     /// - Returns `None` if the result is empty
     pub fn sanitize_notification(&self, msg: &str) -> Option<String> {
         let cleaned = strip_unsafe_chars(msg);
@@ -124,7 +124,7 @@ impl TerminalSecurityPolicy {
 
     /// Validate a clipboard write payload.
     ///
-    /// - Truncates to [`MAX_CLIPBOARD_BYTES`]
+    /// - Truncates to `MAX_CLIPBOARD_BYTES`
     /// - Returns `None` if it exceeds the limit (reject, don't truncate
     ///   security-sensitive data)
     pub fn validate_clipboard_write<'a>(
@@ -154,7 +154,7 @@ impl TerminalSecurityPolicy {
     ///
     /// - Removes every C0/C1 control (including `\n`, `\r`, `\t` — a path
     ///   never legitimately contains a line break, SEC-07) and BiDi controls
-    /// - Truncates to [`MAX_CWD_BYTES`]
+    /// - Truncates to `MAX_CWD_BYTES`
     pub fn sanitize_cwd(&self, cwd: &str) -> Option<String> {
         let cleaned = strip_control_chars(cwd);
         let truncated = truncate_utf8(&cleaned, MAX_CWD_BYTES);

@@ -23,7 +23,7 @@ use crate::tunnel::{HandleRequest, serve_handle_request};
 /// and no callback runs while the lock is held.
 ///
 /// Each chunk ends with the pump's half of the render handshake
-/// ([`SharedTerminal::take_render_demand`], `docs/terminal-backend.md` § 5.1).
+/// ([`SharedTerminal::render_demand_raised`], `docs/terminal-backend.md` § 5.1).
 ///
 /// The grid is resized by the UI thread (`TerminalSession::resize`);
 /// this task only forwards the coalesced size to the remote PTY (CORR-21).
@@ -84,7 +84,7 @@ pub(crate) async fn ssh_main_task(
                         // turn — the next chunk would otherwise relock straight
                         // away, which is the one thing a fair mutex cannot
                         // prevent.
-                        if term.take_render_demand() {
+                        if term.render_demand_raised() {
                             tokio::task::yield_now().await;
                         }
                     }

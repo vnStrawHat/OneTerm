@@ -8,19 +8,18 @@
 //! consumer can clear another's damage, which is what makes a second consumer
 //! possible without an engine change.
 
-mod demand;
 mod modes;
 mod palette;
 mod row;
 mod state;
 mod sync;
 
-pub use demand::Demand;
 pub use modes::{ModeSnapshot, MouseEncoding, MouseProtocol, MouseReporting};
 pub use palette::Palette;
 pub use row::{RenderCell, RenderContent, RenderRow, StyleRun};
-pub use state::{EngineView, RenderCursor, RenderPlacement, RenderState, RenderUpdate, Watermark};
-pub use sync::{SYNC_REFRESH, SYNC_WATCHDOG, SyncState};
+pub(crate) use state::EngineView;
+pub use state::{RenderCursor, RenderPlacement, RenderState, RenderUpdate};
+pub(crate) use sync::SyncState;
 
 #[cfg(test)]
 #[path = "render_tests.rs"]

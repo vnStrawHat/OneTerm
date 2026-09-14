@@ -41,8 +41,16 @@ struct PendingResize {
     signal_enqueued: bool,
 }
 
-/// Snapshot of SSH command-queue failures (diagnostics and tests).
-#[cfg(any(test, feature = "terminal-diagnostics"))]
+/// Snapshot of SSH command-queue failures.
+///
+/// Test-only, and deliberately so: the counters below are kept under the
+/// `terminal-diagnostics` feature as well, but **nothing reads this snapshot
+/// outside the tests** — the feature has no reporting surface in `crates/ssh`.
+/// `US-0090` put the feature under a CI clippy step, which is what made the
+/// mismatch visible; gating the reader on `test` is the honest description of
+/// who calls it, and it is one line to widen again when a diagnostics build
+/// grows somewhere to show it.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SshCommandDiagnostics {
     /// Command writes rejected because the command queue was full.
@@ -91,8 +99,9 @@ impl SshTransport {
         }
     }
 
-    /// Return the command-queue failure counters.
-    #[cfg(any(test, feature = "terminal-diagnostics"))]
+    /// Return the command-queue failure counters. Test-only — see
+    /// [`SshCommandDiagnostics`].
+    #[cfg(test)]
     pub(crate) fn diagnostics(&self) -> SshCommandDiagnostics {
         SshCommandDiagnostics {
             command_full: self.counters.command_full.load(Ordering::Relaxed),

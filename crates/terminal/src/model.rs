@@ -11,9 +11,7 @@
 //! Every position is a `RowId` or a display row; since `US-0085` nothing here
 //! publishes the reference's signed grid line.
 
-use oneterm_vt::intern::ExtrasId;
-use oneterm_vt::render::MouseReporting;
-use oneterm_vt::{ModeSnapshot, SelectionKind, Size, Terminal};
+use oneterm_vt::{ExtrasId, ModeSnapshot, MouseReporting, SelectionKind, Size, Terminal};
 
 use crate::content::{LineRangeCells, SnapshotCell, TerminalContent};
 use crate::handle::SharedTerminal;

@@ -26,11 +26,10 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
-pub use color::{COLOR_COUNT, ColorKey, ColorOverrides};
-pub use mode::{
-    CursorShape, CursorStyle, FlagApply, KEYBOARD_STACK_MAX, KeyboardFlags, KeyboardStacks, Mode,
-    ModeState, Modes, TITLE_STACK_MAX, TitleState,
-};
+pub use color::ColorKey;
+pub(crate) use color::ColorOverrides;
+pub use mode::{CursorShape, KeyboardFlags, Mode};
+pub(crate) use mode::{CursorStyle, KeyboardStacks, Modes, TitleState};
 pub use osc::OscClaims;
 
 use crate::cell::{Cell, Style};
@@ -49,7 +48,7 @@ use crate::selection::{Selection, SelectionKind, SelectionRange, Side};
 
 /// The theme the engine needs to answer a colour query. The renderer still
 /// resolves final colours itself, including bold-to-bright and dim mixing.
-pub type ThemeColors = Palette;
+pub(crate) type ThemeColors = Palette;
 
 /// Tracked `OSC 133` marks. Bounded because a mark per prompt from a hostile
 /// stream is otherwise unbounded anchor growth; the oldest is released.
@@ -81,7 +80,7 @@ impl Default for Config {
             scrollback_limit: DEFAULT_SCROLLBACK,
             osc_claims: OscClaims::new(),
             default_cursor_style: CursorStyle::default(),
-            semantic_escape_chars: ",│`|:\"' ()[]{}<>\t".to_owned(),
+            semantic_escape_chars: crate::selection::SEMANTIC_ESCAPE_CHARS.to_owned(),
         }
     }
 }

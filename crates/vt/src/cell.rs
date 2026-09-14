@@ -37,7 +37,7 @@ const ID_MASK: u64 = u16::MAX as u64;
 
 /// The widest value the content bits hold: the whole Unicode scalar range
 /// (`0x10FFFF` needs 21 bits) and, disjointly, the grapheme id space.
-pub const CONTENT_LIMIT: u32 = 1 << 21;
+pub(crate) const CONTENT_LIMIT: u32 = 1 << 21;
 
 /// Eight bytes, packed. `Cell::EMPTY` (all zero) is a valid empty cell: a space
 /// with the default style and no extras, so a zeroed row is a blank row and
@@ -148,12 +148,12 @@ impl Cell {
         CellWidth::from_bits((self.0 >> WIDTH_SHIFT) & TWO_BIT_MASK)
     }
 
-    pub fn semantic(self) -> Semantic {
+    pub(crate) fn semantic(self) -> Semantic {
         Semantic::from_bits((self.0 >> SEMANTIC_SHIFT) & TWO_BIT_MASK)
     }
 
     /// DECSCA: stored, not yet honoured by any erase (reserved).
-    pub fn protected(self) -> bool {
+    pub(crate) fn protected(self) -> bool {
         self.0 & (1 << PROTECTED_SHIFT) != 0
     }
 
@@ -216,7 +216,7 @@ impl Cell {
     /// `LeadingWideSpacer` is blank — correctly, since a spacer paints nothing —
     /// yet it is not equal to [`Cell::EMPTY`]. A caller asking "is this cell
     /// identical to a fresh one?" must compare against `Cell::EMPTY` instead.
-    pub fn is_blank(self) -> bool {
+    pub(crate) fn is_blank(self) -> bool {
         matches!(self.content(), CellContent::Scalar(' '))
             && self.style_id() == StyleId::DEFAULT
             && self.extras_id() == ExtrasId::NONE
@@ -227,7 +227,7 @@ impl Cell {
     ///
     /// Takes the interner because the rule inspects the cell's colours and
     /// attributes, which live behind `style_id`, as well as its extras.
-    pub fn is_erasable(self, interner: &Interner) -> bool {
+    pub(crate) fn is_erasable(self, interner: &Interner) -> bool {
         if !matches!(self.content(), CellContent::Scalar(' ' | '\t')) {
             return false;
         }
@@ -273,7 +273,7 @@ impl Cell {
 /// glyph and its grapheme but keeps its style. The cross-row half (a previous
 /// row's trailing `LeadingWideSpacer`) needs a grid and lives with the print
 /// path.
-pub fn repair_wide_pair_in_row(row: &mut [Cell], col: usize) {
+pub(crate) fn repair_wide_pair_in_row(row: &mut [Cell], col: usize) {
     let Some(cell) = row.get(col).copied() else {
         return;
     };

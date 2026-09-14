@@ -1,15 +1,16 @@
-//! Parse side-channel OSC sequences the terminal engine forwards via
-//! `Event::Osc` (OSC 7 cwd, OSC 9 notification/progress, OSC 133 shell
-//! integration). These are the OSCs vte does not dispatch to a dedicated
-//! `Handler` method; the OneTerm alacritty fork routes them through
-//! `Handler::report_osc` → `Event::Osc`, so we parse the VT stream **once**
-//! (no second `vte::Parser`).
+//! Parse the side-channel OSC sequences the engine forwards as
+//! `VtEvent::Osc` (OSC 7 cwd, OSC 9 notification/progress, OSC 133 shell
+//! integration). These are the numbers `crates/terminal` **claims** through
+//! [`crate::handle`]'s `OscClaims`: the engine forwards a claimed number's
+//! payload instead of interpreting it, so the VT stream is parsed **once** and
+//! there is no second parser here.
 //!
 //! OSC 0/2 (title), OSC 4/10/11/12 (colors), OSC 8 (hyperlink) and OSC 52
 //! (clipboard) are handled by the engine itself and surface via their own
-//! events. Screen clears (`CSI 2J/3J`, RIS) arrive as `Event::ClearScreen`.
+//! events. Screen clears (`CSI 2J/3J`, RIS) arrive as
+//! `VtEvent::ScreenCleared`.
 //!
-//! OSC 133 spec: https://gitlab.freedesktop.org/Per_Bothner/specifications/blob/master/proposals/semantic-prompts.md
+//! OSC 133 spec: <https://gitlab.freedesktop.org/Per_Bothner/specifications/blob/master/proposals/semantic-prompts.md>
 
 use std::path::PathBuf;
 
@@ -53,7 +54,7 @@ pub enum TerminalProgress {
 
 /// A captured OSC payload (kind + parsed data).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OscPayload {
+pub(crate) enum OscPayload {
     /// OSC 7 — `file://host/path`.
     Cwd(String),
     /// OSC 133 — shell integration marker (prompt/command boundary).
@@ -79,7 +80,7 @@ pub enum OscPayload {
 ///
 /// Only OSC 7 / 9 / 133 / 20308 are recognised here — every other OSC is either
 /// handled by the engine directly (title/colors/clipboard/hyperlink) or ignored.
-pub fn parse_osc(params: &[&[u8]]) -> Option<OscPayload> {
+pub(crate) fn parse_osc(params: &[&[u8]]) -> Option<OscPayload> {
     if params.is_empty() {
         return None;
     }
@@ -211,7 +212,7 @@ fn parse_agent_status_param(base64_param: Option<&[u8]>) -> Option<OscPayload> {
 /// Terminated the way the question was terminated — the same rule the OSC
 /// 4/10/11/12 colour replies follow, and the reason the agent may pair the
 /// query with a DA1 request and need no timeout.
-pub fn agent_support_reply(terminator: StringTerm) -> String {
+pub(crate) fn agent_support_reply(terminator: StringTerm) -> String {
     let terminator = match terminator {
         StringTerm::Bel => "\x07",
         StringTerm::St => "\x1b\\",
@@ -229,7 +230,7 @@ pub fn agent_support_reply(terminator: StringTerm) -> String {
 /// shells emit it) and a Windows drive path (`file:///C:/Users`) loses the
 /// leading `/` so it becomes `C:/Users` (CORR-46). Invalid percent escapes
 /// and non-UTF-8 sequences are kept verbatim.
-pub fn parse_cwd_url(url: &str) -> PathBuf {
+pub(crate) fn parse_cwd_url(url: &str) -> PathBuf {
     let Some(stripped) = url.strip_prefix("file://") else {
         return PathBuf::from(url);
     };
@@ -281,7 +282,12 @@ fn strip_windows_drive_slash(path: &str) -> &str {
 }
 
 /// Decode an OSC 52 base64 payload → clipboard text. Returns None if base64 is invalid.
-pub fn decode_osc52(base64: &str) -> Option<String> {
+///
+/// Test-only: the engine decodes an incoming OSC 52 itself, so nothing in the
+/// adapter's production path ever decodes one. This is [`encode_osc52`]'s
+/// inverse, and it exists so the round trip can be asserted.
+#[cfg(test)]
+pub(crate) fn decode_osc52(base64: &str) -> Option<String> {
     // OSC 52 allows skipping invalid characters; use the standard engine.
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(base64.trim())

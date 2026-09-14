@@ -10,21 +10,23 @@
 //! the fork itself along with the old-versus-new differential that was its
 //! last consumer. No GPUI here either way.
 
+// Modules nothing outside names by path are the crate's own business; the items
+// other crates use are re-exported below (`US-0090`).
 pub mod backend;
-pub mod color_classification;
-pub mod content;
-pub mod factory;
+pub(crate) mod color_classification;
+pub(crate) mod content;
+pub(crate) mod factory;
 pub mod handle;
-pub mod key_encode;
+pub(crate) mod key_encode;
 pub mod logging;
 pub mod model;
 pub mod mouse_encode;
-pub mod osc;
+pub(crate) mod osc;
 pub mod osc_agent;
-pub mod osc_color;
-pub mod palette;
+pub(crate) mod osc_color;
+pub(crate) mod palette;
 pub(crate) mod paste;
-pub mod search;
+pub(crate) mod search;
 pub mod security_policy;
 pub mod session;
 #[cfg(test)]
@@ -41,7 +43,7 @@ pub use color_classification::is_decorative_character;
 pub use content::{LineRangeCells, SnapshotCell, TerminalContent, last_content_row};
 pub use factory::{PtySize, SessionFactory};
 pub use handle::{
-    DEFAULT_SCROLLBACK_LINES, Engine, SharedTerminal, TerminalHandle, new_shared_terminal,
+    DEFAULT_SCROLLBACK_LINES, Demand, SharedTerminal, TerminalHandle, new_shared_terminal,
 };
 pub use key_encode::{KeyMods, KeySpec, NamedKey, encode_key};
 pub use logging::{
