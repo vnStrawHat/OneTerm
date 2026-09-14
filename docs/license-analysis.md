@@ -155,11 +155,11 @@ licence position clean are:
   the fragments `crates/pty` adapted from Alacritty's Windows backend, each with the notice
   in its own source header.
 - **Vendored test data follows the same rule as vendored source.** The VT parity corpus at
-  `crates/vt/tests/corpus/alacritty-ref/` is 45 reference captures reused from Alacritty
+  `crates/tools/corpus/alacritty-ref/` is 45 reference captures reused from Alacritty
   (Apache-2.0, revision `fcf32feacb367b75ec84dd40f041e4fd411d3cc1`). Only `alacritty.recording`
   (carried as `recording`), `size.json` and `config.json` are taken — 936 KiB; upstream's 44 MiB
   of `grid.json` is deliberately **not** carried, having been used once as a cross-check oracle at
-  `US-0072`. Attribution lives in `crates/vt/tests/corpus/NOTICE` and in
+  `US-0072`. Attribution lives in `crates/tools/corpus/NOTICE` and in
   `THIRD-PARTY-NOTICES.md` § 2. The expectation files next to each recording (`grid.expect`,
   `state.expect`, `expected-diffs.json`) are OneTerm's own work, Apache-2.0. Since `US-0087`
   this corpus is the **only** Alacritty-derived material in the repository: the vendored

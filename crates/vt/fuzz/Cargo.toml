@@ -14,7 +14,7 @@
 # The memory limit is the point: the defects this engine designs out are
 # memory-exhaustion defects. Seed the corpus from the parity recordings:
 #
-#   cp ../tests/corpus/alacritty-ref/*/recording fuzz/corpus/parser/
+#   cp ../../tools/corpus/alacritty-ref/*/recording fuzz/corpus/parser/
 #
 # On Windows the substitute is `parser::parser_tests::props::
 # arbitrary_bytes_never_panic_and_chunking_is_invariant`, which drives a million

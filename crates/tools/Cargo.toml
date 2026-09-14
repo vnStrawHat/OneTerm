@@ -6,7 +6,9 @@ edition.workspace = true
 # doom-fire.rs is a port of DOOM-fire-zig and keeps that project's GPL-3.0 licence
 # (see THIRD-PARTY-NOTICES.md); pty-throughput.rs is OneTerm's own (Apache-2.0).
 # Neither binary is part of a OneTerm release; deny.toml carries a crate-scoped
-# exception for the GPL term.
+# exception for the GPL term. `corpus/` (US-0093) is third-party Apache-2.0 test
+# data carried under its own `corpus/NOTICE`: it is not source, is compiled into
+# nothing, and the GPL term above does not reach it.
 license = "Apache-2.0 AND GPL-3.0-only"
 repository.workspace = true
 rust-version.workspace = true

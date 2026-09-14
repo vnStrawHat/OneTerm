@@ -84,7 +84,7 @@ fn print_usage() {
         "vt-corpus check [--filter <substring>] [--engine new] [--dir <corpus dir>]\n\
          vt-corpus grep-deviations [--out <file.md>]\n\
          \n\
-         --dir defaults to crates/vt/tests/corpus/alacritty-ref; OneTerm's own\n\
+         --dir defaults to crates/tools/corpus/alacritty-ref; OneTerm's own\n\
          recordings live next to it under oneterm/.\n\
          --engine accepts only `new`: the engine that blessed the frozen files\n\
          was deleted at US-0087. The flag is kept so recorded commands still run."

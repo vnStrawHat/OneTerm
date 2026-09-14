@@ -82,13 +82,9 @@ struct ConfigJson {
 
 /// Locate the corpus root from the `oneterm-tools` manifest directory.
 ///
-/// The corpus lives at its final home under `crates/vt/` even though that crate
-/// does not exist yet; data placed there now is zero moves later.
+/// The corpus lives in this crate — the only one that reads it (`US-0093`).
 pub fn corpus_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("crates/tools has a parent")
-        .join("vt/tests/corpus")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus")
 }
 
 /// The 45 vendored alacritty reference recordings, sorted by name.

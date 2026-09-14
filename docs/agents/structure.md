@@ -172,6 +172,9 @@ OneTerm/
 │   │   └── src/                    # lib.rs init() (AgentRegistry::init); view/card render helpers
 │   │
 │   ├── tools/                      # `oneterm-tools` — developer diagnostics, never shipped, no OneTerm dep
+│   │   ├── corpus/                 # the parity corpus (US-0093, next to its only reader):
+│   │   │                           #   NOTICE + alacritty-ref/<name>/ + oneterm/<name>/
+│   │   │                           #   {recording, size.json, config.json, grid.expect, state.expect}
 │   │   └── src/
 │   │       ├── lib.rs              # corpus + bench modules (a lib so the parity gate can be a #[test])
 │   │       ├── corpus.rs           # grid.expect / state.expect encoding, expected-diffs.json, the comparison
@@ -195,8 +198,8 @@ OneTerm/
 │       │   ├── reflow/             # resize policies (BottomAnchor / KeepViewportTop)
 │       │   ├── selection/          # the four selection kinds, anchored so they survive a repaint
 │       │   └── graphics/           # Sixel decode, placements, the virtual cell
-│       └── tests/corpus/           # the parity corpus: NOTICE + alacritty-ref/<name>/
-│                                   #   {recording, size.json, config.json, grid.expect, state.expect}
+│       └── tests/                  # parser_limits.rs, us0087_cleanup_rows.rs
+│                                   #   (the parity corpus moved to crates/tools/corpus/ at US-0093)
 │
 ├── docs/                           # Development documentation
 │   ├── architecture.md             # the crate map — the current-state index
