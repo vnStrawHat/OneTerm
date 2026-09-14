@@ -10,6 +10,7 @@ use oneterm_terminal::{
 };
 
 use crate::session::{LocalSession, quote_windows_argument};
+use oneterm_core::AppError;
 use oneterm_terminal::PtySize;
 
 #[test]
@@ -55,8 +56,32 @@ fn snapshot_contains(session: &LocalSession, needle: &str) -> bool {
     session.snapshot().text().contains(needle)
 }
 
-pub(super) fn spawn_default() -> LocalSession {
-    let cfg = oneterm_core::LocalShellConfig::default();
+/// Serialises every real-shell spawn in this test binary.
+///
+/// `session_orphan_tests` works out which processes belong to its session by
+/// diffing this process's children around the spawn. Another test's shell
+/// starting inside that window would be adopted by the probe, waited out for
+/// `LIVENESS_BOUND` and then terminated — failing the probe and very likely the
+/// innocent test too. So every spawn here takes this lock, and the probe holds
+/// it across both of its snapshots.
+pub(super) static SPAWN_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub(super) fn lock_spawns() -> std::sync::MutexGuard<'static, ()> {
+    SPAWN_GUARD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Spawn `cfg` while holding [`SPAWN_GUARD`].
+fn spawn_guarded(cfg: oneterm_core::LocalShellConfig) -> Result<LocalSession, AppError> {
+    let _guard = lock_spawns();
+    spawn_unguarded(cfg)
+}
+
+/// Spawn `cfg`. The caller must already hold [`SPAWN_GUARD`].
+pub(super) fn spawn_unguarded(
+    cfg: oneterm_core::LocalShellConfig,
+) -> Result<LocalSession, AppError> {
     LocalSession::spawn(
         cfg,
         PtySize { rows: 24, cols: 80 },
@@ -64,7 +89,10 @@ pub(super) fn spawn_default() -> LocalSession {
         TerminalSecurityPolicy::default(),
         oneterm_core::TerminalLogConfig::default(),
     )
-    .expect("spawn")
+}
+
+pub(super) fn spawn_default() -> LocalSession {
+    spawn_guarded(oneterm_core::LocalShellConfig::default()).expect("spawn")
 }
 
 #[cfg(windows)]
@@ -73,14 +101,7 @@ fn assert_powershell_prompt_emits_cwd(kind: oneterm_core::ShellKind, label: &str
         kind,
         ..Default::default()
     };
-    let session = LocalSession::spawn(
-        cfg,
-        PtySize { rows: 24, cols: 80 },
-        10_000,
-        TerminalSecurityPolicy::default(),
-        oneterm_core::TerminalLogConfig::default(),
-    )
-    .unwrap_or_else(|error| panic!("spawn {label}: {error}"));
+    let session = spawn_guarded(cfg).unwrap_or_else(|error| panic!("spawn {label}: {error}"));
 
     let emitted_cwd = wait_until(Duration::from_secs(15), || session.cwd().is_some());
     // `snapshot()` consumes render damage, which is fine here: no renderer runs.
@@ -178,15 +199,9 @@ fn spawn_failure_is_a_typed_shell_resolution_error() {
         )),
         ..Default::default()
     };
-    let error = LocalSession::spawn(
-        cfg,
-        PtySize { rows: 24, cols: 80 },
-        10_000,
-        TerminalSecurityPolicy::default(),
-        oneterm_core::TerminalLogConfig::default(),
-    )
-    .err()
-    .expect("spawning a missing program must fail");
+    let error = spawn_guarded(cfg)
+        .err()
+        .expect("spawning a missing program must fail");
     match error {
         oneterm_core::AppError::ShellResolution { shell, .. } => {
             assert!(shell.contains("no-such-shell.exe"), "{shell}");

@@ -188,38 +188,49 @@ impl ShellEventLoop<PseudoConsole> {
         logging: TerminalLogConfig,
     ) -> io::Result<(ShellNotifier, std::thread::JoinHandle<()>)> {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        // Built before the pseudo-console exists, and on this thread, so that no
+        // fallible step runs while the owner thread holds a live `PseudoConsole`.
+        // Dropping one now serves `CHILD_EXIT_GRACE` (DEC-0016), and the caller
+        // parked in `ready_rx.recv()` below would wait it out before being told
+        // the spawn failed at all.
+        let poll = std::sync::Arc::new(Poller::new()?);
         let join = std::thread::Builder::new()
             .name("PTY owner".into())
             .spawn(move || {
-                let result = PseudoConsole::spawn(&opts, winsize).and_then(|pty| {
-                    let pid = pty.child_pid().ok_or_else(|| {
-                        io::Error::other("the PTY child process id is unavailable")
-                    })?;
-                    listener
-                        .logging()
-                        .set_identity(local_log_identity(&program, pid));
-                    if logging.enabled
-                        && let Err(error) = listener.logging().start(&logging)
-                    {
-                        log::warn!("Local terminal automatic logging did not start: {error}");
-                    }
-                    Self::new(pty, term, listener.clone())
-                });
-                match result {
-                    Ok((mut event_loop, notifier)) => {
-                        listener.transport().set_notifier(notifier.clone());
-                        // The spawner may have given up waiting; the loop still
-                        // runs and exits on its own shutdown flag.
-                        report_best_effort("PTY owner ready signal", ready_tx.send(Ok(notifier)));
-                        event_loop.run();
-                    }
+                let pty = match PseudoConsole::spawn(&opts, winsize) {
+                    Ok(pty) => pty,
                     Err(error) => {
                         report_best_effort(
                             "PTY owner spawn-failure signal",
                             ready_tx.send(Err(error.to_string())),
                         );
+                        return;
                     }
+                };
+                let Some(pid) = pty.child_pid() else {
+                    // Report first: `pty` drops at the end of this block, and
+                    // that drop is what waits out the grace period.
+                    report_best_effort(
+                        "PTY owner spawn-failure signal",
+                        ready_tx.send(Err("the PTY child process id is unavailable".to_owned())),
+                    );
+                    return;
+                };
+                listener
+                    .logging()
+                    .set_identity(local_log_identity(&program, pid));
+                if logging.enabled
+                    && let Err(error) = listener.logging().start(&logging)
+                {
+                    log::warn!("Local terminal automatic logging did not start: {error}");
                 }
+
+                let (mut event_loop, notifier) = Self::new(pty, term, listener.clone(), poll);
+                listener.transport().set_notifier(notifier.clone());
+                // The spawner may have given up waiting; the loop still runs and
+                // exits on its own shutdown flag.
+                report_best_effort("PTY owner ready signal", ready_tx.send(Ok(notifier)));
+                event_loop.run();
             })?;
         match ready_rx.recv() {
             Ok(Ok(notifier)) => Ok((notifier, join)),
@@ -238,14 +249,18 @@ impl ShellEventLoop<PseudoConsole> {
 }
 
 impl<P: EventedPty + OnResize> ShellEventLoop<P> {
-    /// Create a new event loop around an already-open PTY. Call `run()` on the
-    /// owner thread.
+    /// Create a new event loop around an already-open PTY and a poller the
+    /// caller built. Call `run()` on the owner thread.
+    ///
+    /// Infallible on purpose: the caller owns the PTY by this point, and a
+    /// failure here would drop it — and serve its grace period (DEC-0016) —
+    /// before anyone could be told. `Poller::new` is therefore the caller's.
     pub(crate) fn new(
         pty: P,
         term: SharedTerminal,
         listener: LocalListener,
-    ) -> io::Result<(Self, ShellNotifier)> {
-        let poll = std::sync::Arc::new(Poller::new()?);
+        poll: std::sync::Arc<Poller>,
+    ) -> (Self, ShellNotifier) {
         let control = std::sync::Arc::new(ShellControl::default());
         let (tx, rx) = mpsc::sync_channel(LOCAL_COMMAND_QUEUE_CAPACITY);
         let notifier = ShellNotifier {
@@ -253,7 +268,7 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
             poller: poll.clone(),
             control: control.clone(),
         };
-        Ok((
+        (
             Self {
                 pty,
                 term,
@@ -263,7 +278,7 @@ impl<P: EventedPty + OnResize> ShellEventLoop<P> {
                 control,
             },
             notifier,
-        ))
+        )
     }
 
     /// Run the loop until shutdown or child exit. Blocks the calling thread.

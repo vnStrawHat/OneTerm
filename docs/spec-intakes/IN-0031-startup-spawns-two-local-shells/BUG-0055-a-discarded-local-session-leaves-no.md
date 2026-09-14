@@ -268,6 +268,28 @@ reaper, so no UI thread waits out the grace period (`CORR-10`). `DEC-0016` carri
 rationale and the bound. Nothing in `crates/local-shell` needed to change: its teardown already
 delivered `ShellMsg::Shutdown` reliably and the loop already returned on it.
 
+**Independent verification** (separate agent, `2f47366..a3f180e`): PASS WITH NOTES — the
+tamper bites, `ci-local` totals reproduce exactly, and the `warn` line was captured verbatim
+with its pid by a probe that installed a collecting logger (the tests install none, so this
+packet's own runs could not have seen it). Its six notes are addressed in the follow-up
+commit:
+
+| # | Note | Resolution |
+| --- | --- | --- |
+| D2 | The probe adopted **every** new child of the test process, so a sibling test's shell starting inside its 15–25 ms snapshot window would be waited out, reported as an orphan and terminated — a latent CI flake with collateral damage inside the test binary. | `session_tests::SPAWN_GUARD`: every real-shell spawn in the binary takes one lock, and the probe holds it across both snapshots. |
+| D1 | `docs/terminal-backend.md` §6.2 and `DEC-0016` stated the close guarantee unconditionally; it holds only while the app runs, because the grace is served on a detached thread. | Both scoped to "while OneTerm is running"; `DEC-0016` Consequences now names the app-exit hole this packet's Gaps already recorded. |
+| D3 | On the `child_pid() == None` and `Poller::new` failure paths the pseudo-console dropped **before** `ready_tx.send(Err(..))`, so `LocalSession::spawn` on the UI thread could wait out the grace on top of the failure. | `Poller::new` moved ahead of the pseudo-console and out of the owner thread; `ShellEventLoop::new` is now infallible; the remaining failure path reports before the PTY drops. `DEC-0016`'s "no UI thread waits out the grace" is now literally true. |
+| D4 | The regression test asserted only "nothing survived", which a run that never reproduced the orphan also satisfies. | Exit codes are now asserted against `{0x0, 0x1, 0xc000013a, 0xc0000142}`, and the vacuous-pass risk is written into the test's doc comment: `0x1` is the escalation, and a run without one proves only that the orphan did not occur. The ignored `orphan_liveness_table` remains the manual proof. |
+| D5 | `DEC-0016` credited `DEC-0005` with the "own child only" rule, which `DEC-0005` explicitly rejected; there are also two `DEC-0005` files. | Split: never-by-name is inherited from `DEC-0005-terminate-only-oneterm-s-own.md` by filename, own-child-only is named as new and stricter. Same correction in `terminal-backend.md` §6.3 and in `child.rs`. |
+| D6 | `ChildExitWatcher` and the `oneterm-pty` crate doc still described a purely passive object. | Both updated: dropping one is an action with an external side effect. |
+
+The verifier also measured what the packet had not: the caller thread blocks **321 µs** for
+three 0 ms drops and 142 µs for three started ones, so the 2 s is paid entirely by the
+detached owner thread; and a **busy** shell (`ping -t`, `timeout /t 30`) plus its foreground
+grandchild both exit with `0xc000013a` ~20 ms after the close, before and after the fix — the
+escalation never touches them. Both facts are now in `terminal-backend.md` §6.3 and
+`DEC-0016`.
+
 **Regression proof** (`crates/local-shell/src/session_orphan_tests.rs`, Windows only):
 
 | Test | Before the fix | After |
@@ -308,6 +330,10 @@ Gaps:
 - A child whose watcher fails to be created at all (`ChildExitWatcher::new` returning an error
   inside `conpty::spawn`) still leaks — a pre-existing path on a failure that has not been
   observed, and out of this packet's scope.
+- The regression test can pass vacuously on hardware where `cmd.exe` finishes initialising
+  before the spawn path returns: it would then never exercise the escalation. The exit-code
+  assertion narrows this (a `0x1` proves the path ran) but cannot require one without becoming
+  flaky in the other direction. The ignored `orphan_liveness_table` is the manual proof.
 - App exit is not covered: the reaper thread is detached, so a shell that outlives its
   pseudo-console during process shutdown can still escape the grace period. `BUG-0054` removes
   the startup case that produced it.

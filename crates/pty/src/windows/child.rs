@@ -1,4 +1,10 @@
-//! Race-free child-exit notification on Windows.
+//! Race-free child-exit notification on Windows — and, on drop, the last resort
+//! that makes the exit happen.
+//!
+//! Watching is passive while the watcher lives. Dropping it is not: the
+//! pseudo-console has closed by then, and a client that never noticed is
+//! terminated after a bounded grace period (`DEC-0016`). See
+//! [`ChildExitWatcher::terminate_if_still_running`].
 //!
 //! `RegisterWaitForSingleObject` fires a thread-pool callback when the child's
 //! process handle signals — including immediately, for a child that has already
@@ -95,7 +101,9 @@ pub(super) struct ChildExitWatcher {
     events: mpsc::Receiver<ChildEvent>,
     sender: Arc<ChildExitSender>,
     pid: Option<u32>,
-    /// Kept alive for the callback; closed after `UnregisterWaitEx`.
+    /// The child's process handle: kept alive for the callback, then used by
+    /// [`ChildExitWatcher::terminate_if_still_running`] on drop, and closed
+    /// after both.
     process: OwnedHandle,
 }
 
@@ -178,7 +186,9 @@ impl ChildExitWatcher {
     /// (`BUG-0055`).
     ///
     /// Only this child is ever touched, and only through the handle
-    /// `CreateProcessW` returned — never a process matched by name (`DEC-0005`).
+    /// `CreateProcessW` returned. Never matching a process by name is the rule
+    /// `DEC-0005-terminate-only-oneterm-s-own.md` set; restricting the reach to
+    /// this crate's own child is stricter still, and is `DEC-0016`'s own.
     fn terminate_if_still_running(&self) {
         let handle = self.process.as_raw_handle() as HANDLE;
         // SAFETY: the handle is owned by `self` and live until after this call.

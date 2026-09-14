@@ -49,15 +49,23 @@ bounded grace period, OneTerm terminates that child.
   `PseudoConsole` is unchanged.
 - Off the UI thread: the watcher drops on the "PTY owner" thread, which
   `LocalSession::shutdown_owner` hands to a detached reaper (`CORR-10`). No UI
-  thread ever waits out the grace period.
+  thread waits out the grace period. `ShellEventLoop::spawn_owned` builds its
+  `Poller` before the pseudo-console exists and `ShellEventLoop::new` is
+  infallible, so no spawn-failure path drops a live console while
+  `LocalSession::spawn` is parked waiting for the result either.
 - Reported: a child that has to be terminated is logged at `warn` with its pid
   before the call, so a future leak is diagnosable from `~/.OneTerm/logs`.
 - Scope: only this process's own child, only through the handle this process
-  holds for it. Never a process matched by name, and never a pid this process did
-  not create — the same rule `DEC-0005` set for update-time console cleanup.
+  holds for it. Two separate rules, and only one of them is inherited: never
+  matching a process by name comes from
+  `DEC-0005-terminate-only-oneterm-s-own.md`; reaching no further than a child
+  this process created is **new here and stricter** than `DEC-0005`, which
+  deliberately terminates processes it did not create and scopes them by
+  install-directory image path instead.
 
-Future work that touches local-session teardown must keep this guarantee: a
-discarded session leaves no shell process and no console host behind.
+Future work that touches local-session teardown must keep this guarantee: **while
+OneTerm is running**, a discarded session leaves no shell process and no console
+host behind. The qualifier is load-bearing — see Consequences.
 
 ## Alternatives
 
@@ -86,7 +94,19 @@ discarded session leaves no shell process and no console host behind.
   ever does so after that process's pseudo-console is already destroyed, so the
   shell is unusable and unreachable by then, and only for a child it created
   itself. A shell that would have exited cleanly a moment later is never hit —
-  the normal path finishes 100 times inside the grace period.
+  the normal path finishes 100 times inside the grace period, and a **busy**
+  shell is not hit either: the host's close request reaches every client on the
+  console, so `cmd.exe` and a foreground grandchild (`ping -t`, `timeout /t 30`)
+  both exit with `STATUS_CONTROL_C_EXIT` in ~20 ms. A grandchild that detached
+  from the console survives, as it did before this decision.
+- [ ] Limit, not a follow-up to fix here: the guarantee holds only while the
+  application process lives. The grace period is served on a detached owner
+  thread, so a session dropped as OneTerm exits — or when OneTerm is killed —
+  gets no escalation, and the orphan survives exactly as it did before. That is
+  the second half of the `IN-0031` observation ("two `cmd.exe` remained after the
+  app pid had been terminated"). Closing it means either blocking quit on every
+  open session's grace period or reaping at the next startup, which is a
+  different outcome with a different risk profile (`BUG-0055`, Scope).
 - [ ] Follow-up: the grace period is only measured against the system console
   host. The bundled `OpenConsole.exe` (`DEC-0013`) resolves from the executable's
   directory, which a test binary does not have, so the same table has not been

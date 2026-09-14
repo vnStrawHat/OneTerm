@@ -459,7 +459,11 @@ loop from one thread while another takes frames). The conout re-arm above is *no
 reachable through the loopback socket, whose readiness is level-triggered; the
 real-shell tests in `session_tests.rs` are what cover it.
 
-**Closing a local session** is guaranteed to leave no process behind. `LocalSession::drop`
+**Closing a local session** is guaranteed to leave no process behind **while OneTerm is
+running**. The grace period below is served on the detached PTY owner thread, so a session
+still inside it when the application process exits (or is killed) never gets the escalation —
+that hole is recorded under Gaps in `BUG-0055` and is not closed by this design.
+`LocalSession::drop`
 (and `close()`) sends `ShellMsg::Shutdown`, the owner loop deregisters and returns, and the
 `PseudoConsole` is dropped on that thread — `ClosePseudoConsole` first, then the bounded
 wait and, if it is needed, the escalation described in §6.3. The owner thread itself is
@@ -490,8 +494,14 @@ reproduces the full table on demand.
   `ChildExitWatcher::drop` waits `CHILD_EXIT_GRACE` (2 s) on the child handle after the
   pseudo-console has closed and terminates the child if it is still running, logging the
   pid at `warn` first — DEC-0016, BUG-0055. Only this process's own child is touched, and
-  only through its handle (DEC-0005). The wait runs on the "PTY owner" thread, which is
-  reaped detached, so no UI thread ever waits for it.
+  only through its handle: never matching by name is DEC-0005's rule, and reaching no
+  further than our own child is DEC-0016's, stricter. The wait runs on the "PTY owner"
+  thread, which is reaped detached, so no UI thread ever waits for it — and, for the same
+  reason, a session dropped as the application exits is not covered (§6.2).
+- **Busy shells are not terminated**: the host's close request reaches every client on the
+  console, so `cmd.exe` and a foreground grandchild (`ping -t`, `timeout`) both exit with
+  `STATUS_CONTROL_C_EXIT` within ~20 ms, well inside the grace period. A grandchild that
+  detached from the console (`start /b`, a GUI child) survives, as it did before.
 
 ### 6.4. Re-render perf (per Zed)
 
