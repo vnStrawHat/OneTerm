@@ -688,10 +688,10 @@ package in the Cargo registry / git checkout.
 | `rustc-hash` | 2.1.2 | Apache-2.0 OR MIT | crates.io |
 | `rustc_version` | 0.4.1 | MIT OR Apache-2.0 | crates.io |
 | `rustix` | 1.1.4 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | crates.io |
-| `rustls` | 0.23.40 | Apache-2.0 OR ISC OR MIT | crates.io |
+| `rustls` | 0.23.45 | Apache-2.0 OR ISC OR MIT | crates.io |
 | `rustls-native-certs` | 0.8.4 | Apache-2.0 OR ISC OR MIT | crates.io |
 | `rustls-pki-types` | 1.14.1 | MIT OR Apache-2.0 | crates.io |
-| `rustls-webpki` | 0.103.13 | ISC | crates.io |
+| `rustls-webpki` | 0.103.15 | ISC | crates.io |
 | `rustversion` | 1.0.22 | MIT OR Apache-2.0 | crates.io |
 | `rusty-fork` | 0.3.1 | MIT/Apache-2.0 | crates.io |
 | `rustybuzz` | 0.20.1 | MIT | crates.io |
